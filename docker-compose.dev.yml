@@ -1,0 +1,48 @@
+# docker-compose.dev.yml
+# 使用方式：docker compose -f docker-compose.yml -f docker-compose.dev.yml up
+
+services:
+
+  postgres:
+    ports:
+      - "5432:5432"   # 开发时暴露端口，便于 DBeaver/pgAdmin 直连
+
+  redis:
+    ports:
+      - "6379:6379"   # 开发时暴露，便于 RedisInsight 调试
+
+  minio:
+    ports:
+      - "9000:9000"   # S3 API
+      - "9001:9001"   # MinIO 管理控制台（http://localhost:9001）
+
+  api:
+    build:
+      target: builder         # 使用 builder stage（含 devDependencies）
+    command: npm run start:dev  # 热重载
+    volumes:
+      - ./api:/app            # 源码挂载，实时生效
+      - /app/node_modules     # 防止覆盖容器内 node_modules
+    ports:
+      - "3000:3000"           # API 直接暴露，前端开发时可直连
+    environment:
+      NODE_ENV: development
+      # Windows 下 bind mount 不触发 inotify，强制 TS 编译器轮询，使源码热重载生效。
+      TSC_WATCHFILE: PriorityPollingInterval
+      TSC_WATCHDIRECTORY: DynamicPriorityPolling
+      CHOKIDAR_USEPOLLING: "true"
+
+  web:
+    build:
+      target: builder         # 不打包，用 Vite dev server
+    command: npm run dev -- --host 0.0.0.0
+    volumes:
+      - ./web:/app
+      - /app/node_modules
+    ports:
+      - "5173:5173"           # Vite 开发服务器
+    environment:
+      VITE_API_BASE_URL: ""
+      VITE_DEV_PROXY_TARGET: http://api:3000
+      # 配合 vite.config 的 server.watch.usePolling，Windows bind mount 下也能热更新。
+      CHOKIDAR_USEPOLLING: "true"

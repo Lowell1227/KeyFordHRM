@@ -106,6 +106,8 @@ enum DimensionType {
 
 enum TaskStatus {
   pending
+  indicator_drafting
+  indicator_reviewing
   indicator_setting
   indicator_confirming
   self_eval
@@ -172,6 +174,115 @@ enum AppealResult {
   @@map("appeal_result")
 }
 
+enum ImprovementPlanStatus {
+  draft
+  in_progress
+  completed
+
+  @@map("improvement_plan_status")
+}
+
+enum ProbationReviewStatus {
+  pending
+  indicator_setting
+  self_eval
+  manager_scoring
+  closed
+
+  @@map("probation_review_status")
+}
+
+enum ProbationIndicatorType {
+  work_objective
+  values
+
+  @@map("probation_indicator_type")
+}
+
+enum ObjectiveLevel {
+  company
+  department
+  individual
+
+  @@map("objective_level")
+}
+
+enum ObjectiveStatus {
+  draft
+  active
+  archived
+
+  @@map("objective_status")
+}
+
+enum ActionItemStatus {
+  todo
+  in_progress
+  done
+  blocked
+
+  @@map("action_item_status")
+}
+
+enum ConfirmationStatus {
+  draft
+  submitted
+  manager_approved
+  hr_approved
+  approved
+  rejected
+
+  @@map("confirmation_status")
+}
+
+enum VoteResult {
+  pass
+  extend
+  fail
+
+  @@map("vote_result")
+}
+
+enum SignatureBusinessType {
+  assessment_task
+  probation_task
+  interview
+
+  @@map("signature_business_type")
+}
+
+enum SignatureRole {
+  assessor
+  hr
+  assessee
+
+  @@map("signature_role")
+}
+
+enum SignatureMethod {
+  online_confirm
+  handwritten_image
+
+  @@map("signature_method")
+}
+
+enum InterviewMethod {
+  one_on_one
+  phone
+  performance_meeting
+
+  @@map("interview_method")
+}
+
+enum InterviewStatus {
+  pending
+  filled
+  employee_signed
+  closed
+
+  @@map("interview_status")
+}
+
 // ---------------------------------------------------------------------------
 // 核心业务表
 // ---------------------------------------------------------------------------
@@ -190,12 +301,13 @@ model Department {
   createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime    @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  parent   Department?  @relation("DeptTree", fields: [parentId], references: [id], onDelete: SetNull)
-  children Department[] @relation("DeptTree")
-  leader   User?        @relation("DeptLeader", fields: [leaderId], references: [id], onDelete: SetNull)
-  approver User?        @relation("DeptApprover", fields: [approverId], references: [id], onDelete: SetNull)
-  members  User[]       @relation("DeptMembers")
-  tasks    AssessmentTask[]
+  parent     Department?      @relation("DeptTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children   Department[]     @relation("DeptTree")
+  leader     User?            @relation("DeptLeader", fields: [leaderId], references: [id], onDelete: SetNull)
+  approver   User?            @relation("DeptApprover", fields: [approverId], references: [id], onDelete: SetNull)
+  members    User[]           @relation("DeptMembers")
+  tasks      AssessmentTask[]
+  objectives Objective[]      @relation("ObjectiveDepartment")
 
   @@index([parentId])
   @@index([approverId])
@@ -205,55 +317,76 @@ model Department {
 }
 
 model User {
-  id                String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  dingtalkId        String?        @unique @map("dingtalk_id") @db.VarChar(64)
-  dingtalkUnionId   String?        @unique @map("dingtalk_union_id") @db.VarChar(64)
-  name              String         @db.VarChar(50)
-  employeeNo        String?        @unique @map("employee_no") @db.VarChar(30)
-  phone             String?        @db.VarChar(20)
-  email             String?        @db.VarChar(100)
-  avatarUrl         String?        @map("avatar_url") @db.VarChar(500)
-  passwordHash      String?        @map("password_hash") @db.VarChar(100) // 降级方案：账号密码登录
-  deptId            String?        @map("dept_id") @db.Uuid
-  position          String?        @db.VarChar(100)
-  entryDate         DateTime?      @map("entry_date") @db.Date
-  leaveDate         DateTime?      @map("leave_date") @db.Date // 离职日期，用于在岗豁免计算（修正项）
-  employmentType    EmploymentType @default(full_time) @map("employment_type")
-  status            UserStatus     @default(active)
-  directManagerId   String?        @map("direct_manager_id") @db.Uuid
-  dingtalkManagerId String?        @map("dingtalk_manager_id") @db.VarChar(64)
-  sysRole           SysRole        @default(employee) @map("sys_role")
-  isAssessorOnly    Boolean        @default(false) @map("is_assessor_only")
-  canViewAll        Boolean        @default(false) @map("can_view_all") // 全量只读（董事长李宏=true，审批权另由 approver_id 决定）
-  deletedAt         DateTime?      @map("deleted_at") @db.Timestamptz(6)
-  createdAt         DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime       @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dingtalkId         String?        @unique @map("dingtalk_id") @db.VarChar(64)
+  dingtalkUnionId    String?        @unique @map("dingtalk_union_id") @db.VarChar(64)
+  name               String         @db.VarChar(50)
+  employeeNo         String?        @unique @map("employee_no") @db.VarChar(30)
+  phone              String?        @db.VarChar(20)
+  email              String?        @db.VarChar(100)
+  avatarUrl          String?        @map("avatar_url") @db.VarChar(500)
+  passwordHash       String?        @map("password_hash") @db.VarChar(100) // 降级方案：账号密码登录
+  deptId             String?        @map("dept_id") @db.Uuid
+  position           String?        @db.VarChar(100)
+  entryDate          DateTime?      @map("entry_date") @db.Date
+  plannedRegularDate DateTime?      @map("planned_regular_date") @db.Date
+  actualRegularDate  DateTime?      @map("actual_regular_date") @db.Date
+  leaveDate          DateTime?      @map("leave_date") @db.Date // 离职日期，用于在岗豁免计算（修正项）
+  employmentType     EmploymentType @default(full_time) @map("employment_type")
+  status             UserStatus     @default(active)
+  directManagerId    String?        @map("direct_manager_id") @db.Uuid
+  dingtalkManagerId  String?        @map("dingtalk_manager_id") @db.VarChar(64)
+  sysRole            SysRole        @default(employee) @map("sys_role")
+  isAssessorOnly     Boolean        @default(false) @map("is_assessor_only")
+  canViewAll         Boolean        @default(false) @map("can_view_all") // 全量只读（董事长李宏=true，审批权另由 approver_id 决定）
+  deletedAt          DateTime?      @map("deleted_at") @db.Timestamptz(6)
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime       @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   dept          Department? @relation("DeptMembers", fields: [deptId], references: [id], onDelete: SetNull)
   directManager User?       @relation("UserManager", fields: [directManagerId], references: [id], onDelete: SetNull)
   subordinates  User[]      @relation("UserManager")
 
-  ledDepartments      Department[]         @relation("DeptLeader")
-  approvedDepartments Department[]         @relation("DeptApprover")
-  createdIndicators   Indicator[]
-  createdTemplates    AssessmentTemplate[]
-  createdCycles       AssessmentCycle[]
-  employeeTasks       AssessmentTask[]     @relation("TaskEmployee")
-  managedTasks        AssessmentTask[]     @relation("TaskManager")
-  deptHeadTasks       AssessmentTask[]     @relation("TaskDeptHead")
-  approverTasks       AssessmentTask[]     @relation("TaskApprover")
-  vetoedResults       GradeResult[]        @relation("GradeVetoOperator")
-  calibratedResults   GradeResult[]        @relation("GradeHrCalibrator")
-  approvedResults     GradeResult[]        @relation("GradeApprover")
-  flowRecords         FlowRecord[]
-  appeals             Appeal[]             @relation("AppealAppellant")
-  deptResolvedAppeals Appeal[]             @relation("AppealDeptResolver")
-  hrResolvedAppeals   Appeal[]             @relation("AppealHrResolver")
-  archives            PerformanceArchive[]
-  auditLogs           AuditLog[]
-  updatedConfigs      SystemConfig[]
-  notifications       NotificationLog[]    @relation("NotifReceiver")
-  sentNotifications   NotificationLog[]    @relation("NotifSender")
+  ledDepartments                            Department[]              @relation("DeptLeader")
+  approvedDepartments                       Department[]              @relation("DeptApprover")
+  createdIndicators                         Indicator[]
+  createdTemplates                          AssessmentTemplate[]
+  createdCycles                             AssessmentCycle[]
+  employeeTasks                             AssessmentTask[]          @relation("TaskEmployee")
+  managedTasks                              AssessmentTask[]          @relation("TaskManager")
+  deptHeadTasks                             AssessmentTask[]          @relation("TaskDeptHead")
+  approverTasks                             AssessmentTask[]          @relation("TaskApprover")
+  vetoedResults                             GradeResult[]             @relation("GradeVetoOperator")
+  calibratedResults                         GradeResult[]             @relation("GradeHrCalibrator")
+  approvedResults                           GradeResult[]             @relation("GradeApprover")
+  flowRecords                               FlowRecord[]
+  appeals                                   Appeal[]                  @relation("AppealAppellant")
+  deptResolvedAppeals                       Appeal[]                  @relation("AppealDeptResolver")
+  hrResolvedAppeals                         Appeal[]                  @relation("AppealHrResolver")
+  archives                                  PerformanceArchive[]
+  improvementPlans                          ImprovementPlan[]         @relation("ImprovementPlanEmployee")
+  createdImprovementPlans                   ImprovementPlan[]         @relation("ImprovementPlanCreator")
+  auditLogs                                 AuditLog[]
+  signatures                                Signature[]
+  interviewedAsEmployee                     PerformanceInterview[]    @relation("InterviewEmployee")
+  interviewedAsInterviewer                  PerformanceInterview[]    @relation("InterviewInterviewer")
+  probationReviewsAsEmployee                ProbationReview[]         @relation("ProbationReviewEmployee")
+  probationReviewsAsManager                 ProbationReview[]         @relation("ProbationReviewManager")
+  probationReviewsAsHr                      ProbationReview[]         @relation("ProbationReviewHr")
+  createdProbationReviews                   ProbationReview[]         @relation("ProbationReviewCreator")
+  confirmationApplicationsAsEmployee        ConfirmationApplication[] @relation("ConfirmationApplicationEmployee")
+  confirmationApplicationsAsManager         ConfirmationApplication[] @relation("ConfirmationApplicationManager")
+  confirmationApplicationsAsHr              ConfirmationApplication[] @relation("ConfirmationApplicationHr")
+  confirmationApplicationsAsCompanyApprover ConfirmationApplication[] @relation("ConfirmationApplicationCompanyApprover")
+  confirmationApplicationsRejected          ConfirmationApplication[] @relation("ConfirmationApplicationRejectedBy")
+  createdConfirmationApplications           ConfirmationApplication[] @relation("ConfirmationApplicationCreator")
+  ownedObjectives                           Objective[]               @relation("ObjectiveOwner")
+  createdObjectives                         Objective[]               @relation("ObjectiveCreator")
+  assignedActionItems                       ActionItem[]              @relation("ActionItemAssignee")
+  createdActionItems                        ActionItem[]              @relation("ActionItemCreator")
+  updatedConfigs                            SystemConfig[]
+  notifications                             NotificationLog[]         @relation("NotifReceiver")
+  sentNotifications                         NotificationLog[]         @relation("NotifSender")
 
   @@index([deptId])
   @@index([directManagerId])
@@ -270,6 +403,8 @@ model Indicator {
   type            IndicatorType @default(kpi)
   description     String?       @db.Text
   scoringStandard String?       @map("scoring_standard") @db.Text
+  dataSource      String?       @map("data_source") @db.Text
+  dataCaliber     String?       @map("data_caliber") @db.Text
   targetValue     Decimal?      @map("target_value") @db.Decimal(10, 2)
   unit            String?       @db.VarChar(30)
   groupName       String?       @map("group_name") @db.VarChar(100)
@@ -280,23 +415,24 @@ model Indicator {
 
   creator            User?               @relation(fields: [createdBy], references: [id], onDelete: SetNull)
   templateIndicators TemplateIndicator[]
+  objectives         Objective[]
 
   @@map("indicators")
 }
 
 model AssessmentTemplate {
-  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name            String   @db.VarChar(200)
-  description     String?  @db.Text
-  applicableDepts String[] @default([]) @map("applicable_depts") @db.Uuid
-  applicableUsers String[] @default([]) @map("applicable_users") @db.Uuid
-  maxScore        Decimal  @default(100) @map("max_score") @db.Decimal(6, 2)
-  isActive        Boolean  @default(true) @map("is_active")
-  version         Int      @default(1)
-  createdBy       String?  @map("created_by") @db.Uuid
+  id              String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name            String    @db.VarChar(200)
+  description     String?   @db.Text
+  applicableDepts String[]  @default([]) @map("applicable_depts") @db.Uuid
+  applicableUsers String[]  @default([]) @map("applicable_users") @db.Uuid
+  maxScore        Decimal   @default(100) @map("max_score") @db.Decimal(6, 2)
+  isActive        Boolean   @default(true) @map("is_active")
+  version         Int       @default(1)
+  createdBy       String?   @map("created_by") @db.Uuid
   deletedAt       DateTime? @map("deleted_at") @db.Timestamptz(6)
-  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   creator    User?                        @relation(fields: [createdBy], references: [id], onDelete: SetNull)
   dimensions TemplateDimension[]
@@ -327,6 +463,8 @@ model TemplateIndicator {
   name            String   @db.VarChar(200)
   description     String?  @db.Text
   scoringStandard String?  @map("scoring_standard") @db.Text
+  dataSource      String?  @map("data_source") @db.Text
+  dataCaliber     String?  @map("data_caliber") @db.Text
   targetValue     Decimal? @map("target_value") @db.Decimal(10, 2)
   unit            String?  @db.VarChar(30)
   weight          Decimal  @db.Decimal(5, 4)
@@ -341,38 +479,41 @@ model TemplateIndicator {
 }
 
 model AssessmentCycle {
-  id                        String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name                      String      @db.VarChar(100)
-  type                      CycleType   @default(quarterly)
-  startDate                 DateTime    @map("start_date") @db.Date
-  endDate                   DateTime    @map("end_date") @db.Date
-  deadlineIndicatorSetting  DateTime?   @map("deadline_indicator_setting") @db.Date
-  deadlineIndicatorConfirm  DateTime?   @map("deadline_indicator_confirm") @db.Date
-  deadlineSelfEval          DateTime?   @map("deadline_self_eval") @db.Date
-  deadlineManagerScore      DateTime?   @map("deadline_manager_score") @db.Date
-  deadlineHrCalibration     DateTime?   @map("deadline_hr_calibration") @db.Date
-  deadlineApproval          DateTime?   @map("deadline_approval") @db.Date
-  deadlinePublish           DateTime?   @map("deadline_publish") @db.Date
-  deadlineAppeal            DateTime?   @map("deadline_appeal") @db.Date
-  status                    CycleStatus @default(draft)
-  publishVisibleFields      Json        @default("{\"total_score\":true,\"grade\":true,\"indicator_scores\":true,\"manager_comment\":true,\"coefficient\":false}") @map("publish_visible_fields") @db.JsonB
-  gradeAMaxRatio            Decimal     @default(0.20) @map("grade_a_max_ratio") @db.Decimal(4, 3)
-  gradeBMaxRatio            Decimal     @default(0.40) @map("grade_b_max_ratio") @db.Decimal(4, 3)
-  gradeCMaxRatio            Decimal     @default(0.30) @map("grade_c_max_ratio") @db.Decimal(4, 3)
-  gradeDMaxRatio            Decimal     @default(0.10) @map("grade_d_max_ratio") @db.Decimal(4, 3)
-  createdBy                 String?     @map("created_by") @db.Uuid
-  publishedAt               DateTime?   @map("published_at") @db.Timestamptz(6)
-  closedAt                  DateTime?   @map("closed_at") @db.Timestamptz(6)
-  createdAt                 DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt                 DateTime    @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id                       String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                     String      @db.VarChar(100)
+  type                     CycleType   @default(quarterly)
+  startDate                DateTime    @map("start_date") @db.Date
+  endDate                  DateTime    @map("end_date") @db.Date
+  deadlineIndicatorSetting DateTime?   @map("deadline_indicator_setting") @db.Date
+  deadlineIndicatorConfirm DateTime?   @map("deadline_indicator_confirm") @db.Date
+  deadlineSelfEval         DateTime?   @map("deadline_self_eval") @db.Date
+  deadlineManagerScore     DateTime?   @map("deadline_manager_score") @db.Date
+  deadlineHrCalibration    DateTime?   @map("deadline_hr_calibration") @db.Date
+  deadlineApproval         DateTime?   @map("deadline_approval") @db.Date
+  deadlinePublish          DateTime?   @map("deadline_publish") @db.Date
+  deadlineAppeal           DateTime?   @map("deadline_appeal") @db.Date
+  status                   CycleStatus @default(draft)
+  publishVisibleFields     Json        @default("{\"total_score\":true,\"grade\":true,\"indicator_scores\":true,\"manager_comment\":true,\"coefficient\":false}") @map("publish_visible_fields") @db.JsonB
+  gradeAMaxRatio           Decimal     @default(0.20) @map("grade_a_max_ratio") @db.Decimal(4, 3)
+  gradeBMaxRatio           Decimal     @default(0.40) @map("grade_b_max_ratio") @db.Decimal(4, 3)
+  gradeCMaxRatio           Decimal     @default(0.30) @map("grade_c_max_ratio") @db.Decimal(4, 3)
+  gradeDMaxRatio           Decimal     @default(0.10) @map("grade_d_max_ratio") @db.Decimal(4, 3)
+  createdBy                String?     @map("created_by") @db.Uuid
+  publishedAt              DateTime?   @map("published_at") @db.Timestamptz(6)
+  closedAt                 DateTime?   @map("closed_at") @db.Timestamptz(6)
+  createdAt                DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime    @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  creator   User?                        @relation(fields: [createdBy], references: [id], onDelete: SetNull)
-  snapshots AssessmentTemplateSnapshot[]
-  tasks     AssessmentTask[]
-  flowRecords FlowRecord[]
-  appeals   Appeal[]
-  archives  PerformanceArchive[]
-  notifications NotificationLog[]
+  creator               User?                        @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  snapshots             AssessmentTemplateSnapshot[]
+  tasks                 AssessmentTask[]
+  flowRecords           FlowRecord[]
+  appeals               Appeal[]
+  archives              PerformanceArchive[]
+  improvementPlans      ImprovementPlan[]
+  performanceInterviews PerformanceInterview[]
+  notifications         NotificationLog[]
+  objectives            Objective[]
 
   @@index([status])
   @@map("assessment_cycles")
@@ -396,7 +537,7 @@ model AssessmentTemplateSnapshot {
 model AssessmentTask {
   id                   String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   cycleId              String     @map("cycle_id") @db.Uuid
-  snapshotId          String     @map("snapshot_id") @db.Uuid
+  snapshotId           String     @map("snapshot_id") @db.Uuid
   employeeId           String     @map("employee_id") @db.Uuid
   deptId               String?    @map("dept_id") @db.Uuid
   managerId            String?    @map("manager_id") @db.Uuid
@@ -418,20 +559,22 @@ model AssessmentTask {
   createdAt            DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt            DateTime   @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  cycle              AssessmentCycle            @relation(fields: [cycleId], references: [id], onDelete: Restrict)
-  snapshot           AssessmentTemplateSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
-  employee           User                       @relation("TaskEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
-  dept               Department?                @relation(fields: [deptId], references: [id], onDelete: SetNull)
-  manager            User?                      @relation("TaskManager", fields: [managerId], references: [id], onDelete: SetNull)
-  deptHead           User?                      @relation("TaskDeptHead", fields: [deptHeadId], references: [id], onDelete: SetNull)
-  approver           User?                      @relation("TaskApprover", fields: [approverId], references: [id], onDelete: SetNull)
-  indicatorInstances IndicatorInstance[]
-  selfEvalSummary    SelfEvalSummary?
-  managerEvalSummary ManagerEvalSummary?
-  gradeResult        GradeResult?
-  flowRecords        FlowRecord[]
-  appeals            Appeal[]
-  notifications      NotificationLog[]
+  cycle                AssessmentCycle            @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  snapshot             AssessmentTemplateSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+  employee             User                       @relation("TaskEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
+  dept                 Department?                @relation(fields: [deptId], references: [id], onDelete: SetNull)
+  manager              User?                      @relation("TaskManager", fields: [managerId], references: [id], onDelete: SetNull)
+  deptHead             User?                      @relation("TaskDeptHead", fields: [deptHeadId], references: [id], onDelete: SetNull)
+  approver             User?                      @relation("TaskApprover", fields: [approverId], references: [id], onDelete: SetNull)
+  indicatorInstances   IndicatorInstance[]
+  selfEvalSummary      SelfEvalSummary?
+  managerEvalSummary   ManagerEvalSummary?
+  gradeResult          GradeResult?
+  improvementPlan      ImprovementPlan?
+  performanceInterview PerformanceInterview?
+  flowRecords          FlowRecord[]
+  appeals              Appeal[]
+  notifications        NotificationLog[]
 
   @@unique([cycleId, employeeId])
   @@index([cycleId])
@@ -451,6 +594,8 @@ model IndicatorInstance {
   name                String        @db.VarChar(200)
   description         String?       @db.Text
   scoringStandard     String?       @map("scoring_standard") @db.Text
+  dataSource          String?       @map("data_source") @db.Text
+  dataCaliber         String?       @map("data_caliber") @db.Text
   targetValue         Decimal?      @map("target_value") @db.Decimal(10, 2)
   unit                String?       @db.VarChar(30)
   weight              Decimal       @db.Decimal(5, 4)
@@ -500,6 +645,7 @@ model ManagerEvalSummary {
   strengths       String?   @db.Text
   improvements    String?   @db.Text
   developmentPlan String?   @map("development_plan") @db.Text
+  attachments     Json      @default("[]") @db.JsonB
   submittedAt     DateTime? @map("submitted_at") @db.Timestamptz(6)
   createdAt       DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
@@ -561,23 +707,23 @@ model FlowRecord {
 }
 
 model Appeal {
-  id              String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  taskId          String        @map("task_id") @db.Uuid
-  cycleId         String        @map("cycle_id") @db.Uuid
-  appellantId     String        @map("appellant_id") @db.Uuid
-  reason          String        @db.Text
-  attachments     Json          @default("[]") @db.JsonB
-  status          AppealStatus  @default(pending)
-  deptResolution  String?       @map("dept_resolution") @db.Text
-  deptResolvedAt  DateTime?     @map("dept_resolved_at") @db.Timestamptz(6)
-  deptResolverId  String?       @map("dept_resolver_id") @db.Uuid
-  hrResolution    String?       @map("hr_resolution") @db.Text
-  hrResolvedAt    DateTime?     @map("hr_resolved_at") @db.Timestamptz(6)
-  hrResolverId    String?       @map("hr_resolver_id") @db.Uuid
-  finalResult     AppealResult? @map("final_result")
-  appealDeadline  DateTime?     @map("appeal_deadline") @db.Date
-  createdAt       DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id             String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  taskId         String        @map("task_id") @db.Uuid
+  cycleId        String        @map("cycle_id") @db.Uuid
+  appellantId    String        @map("appellant_id") @db.Uuid
+  reason         String        @db.Text
+  attachments    Json          @default("[]") @db.JsonB
+  status         AppealStatus  @default(pending)
+  deptResolution String?       @map("dept_resolution") @db.Text
+  deptResolvedAt DateTime?     @map("dept_resolved_at") @db.Timestamptz(6)
+  deptResolverId String?       @map("dept_resolver_id") @db.Uuid
+  hrResolution   String?       @map("hr_resolution") @db.Text
+  hrResolvedAt   DateTime?     @map("hr_resolved_at") @db.Timestamptz(6)
+  hrResolverId   String?       @map("hr_resolver_id") @db.Uuid
+  finalResult    AppealResult? @map("final_result")
+  appealDeadline DateTime?     @map("appeal_deadline") @db.Date
+  createdAt      DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   task         AssessmentTask  @relation(fields: [taskId], references: [id], onDelete: Cascade)
   cycle        AssessmentCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
@@ -612,6 +758,170 @@ model PerformanceArchive {
   @@map("performance_archives")
 }
 
+model PerformanceInterview {
+  id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  taskId           String           @unique @map("task_id") @db.Uuid
+  cycleId          String           @map("cycle_id") @db.Uuid
+  employeeId       String           @map("employee_id") @db.Uuid
+  interviewerId    String           @map("interviewer_id") @db.Uuid
+  status           InterviewStatus  @default(pending)
+  interviewTime    DateTime?        @map("interview_time") @db.Timestamptz(6)
+  location         String?          @db.VarChar(200)
+  method           InterviewMethod? @map("interview_method")
+  scoreInformed    Boolean          @default(false) @map("score_informed")
+  achievements     String?          @db.Text
+  weaknesses       String?          @db.Text
+  nextGoals        String?          @map("next_goals") @db.Text
+  remediation      String?          @db.Text
+  supportNeeded    String?          @map("support_needed") @db.Text
+  otherMatters     String?          @map("other_matters") @db.Text
+  managerSignedAt  DateTime?        @map("manager_signed_at") @db.Timestamptz(6)
+  employeeSignedAt DateTime?        @map("employee_signed_at") @db.Timestamptz(6)
+  deadline         DateTime?        @map("deadline") @db.Date
+  createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime         @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  task        AssessmentTask  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  cycle       AssessmentCycle @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  employee    User            @relation("InterviewEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
+  interviewer User            @relation("InterviewInterviewer", fields: [interviewerId], references: [id], onDelete: Restrict)
+
+  @@index([cycleId])
+  @@index([employeeId])
+  @@index([interviewerId])
+  @@index([status])
+  @@index([deadline])
+  @@map("performance_interviews")
+}
+
+model ImprovementPlan {
+  id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId      String                @map("employee_id") @db.Uuid
+  cycleId         String                @map("cycle_id") @db.Uuid
+  taskId          String                @unique @map("task_id") @db.Uuid
+  creatorId       String?               @map("creator_id") @db.Uuid
+  improvementNeed String?               @map("improvement_need") @db.Text
+  importance      String?               @map("importance") @db.Text
+  improvementGoal String?               @map("improvement_goal") @db.Text
+  targetDate      DateTime?             @map("target_date") @db.Date
+  measures        Json                  @default("[]") @map("measures") @db.JsonB
+  finalScore      Int?                  @map("final_score")
+  status          ImprovementPlanStatus @default(draft)
+  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime              @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  employee User            @relation("ImprovementPlanEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
+  cycle    AssessmentCycle @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  task     AssessmentTask  @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  creator  User?           @relation("ImprovementPlanCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+
+  @@unique([employeeId, cycleId])
+  @@index([employeeId])
+  @@index([cycleId])
+  @@index([status])
+  @@index([creatorId])
+  @@map("improvement_plans")
+}
+
+model ProbationReview {
+  id                 String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId         String                @map("employee_id") @db.Uuid
+  managerId          String                @map("manager_id") @db.Uuid
+  hrId               String                @map("hr_id") @db.Uuid
+  status             ProbationReviewStatus @default(pending)
+  plannedRegularDate DateTime?             @map("planned_regular_date") @db.Date
+  strengths          String?               @db.Text
+  improvements       String?               @db.Text
+  employeeSignedAt   DateTime?             @map("employee_signed_at") @db.Timestamptz(6)
+  managerSignedAt    DateTime?             @map("manager_signed_at") @db.Timestamptz(6)
+  hrSignedAt         DateTime?             @map("hr_signed_at") @db.Timestamptz(6)
+  completedAt        DateTime?             @map("completed_at") @db.Timestamptz(6)
+  createdBy          String?               @map("created_by") @db.Uuid
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime              @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  employee                 User                       @relation("ProbationReviewEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
+  manager                  User                       @relation("ProbationReviewManager", fields: [managerId], references: [id], onDelete: Restrict)
+  hr                       User                       @relation("ProbationReviewHr", fields: [hrId], references: [id], onDelete: Restrict)
+  creator                  User?                      @relation("ProbationReviewCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  indicators               ProbationReviewIndicator[]
+  confirmationApplications ConfirmationApplication[]
+
+  @@index([employeeId])
+  @@index([managerId])
+  @@index([hrId])
+  @@index([status])
+  @@map("probation_reviews")
+}
+
+model ProbationReviewIndicator {
+  id                String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  probationReviewId String                 @map("probation_review_id") @db.Uuid
+  name              String                 @db.VarChar(200)
+  type              ProbationIndicatorType
+  weight            Decimal                @db.Decimal(5, 4)
+  description       String?                @db.Text
+  targetValue       String?                @map("target_value") @db.VarChar(500)
+  selfScore         Decimal?               @map("self_score") @db.Decimal(6, 2)
+  selfComment       String?                @map("self_comment") @db.Text
+  managerScore      Decimal?               @map("manager_score") @db.Decimal(6, 2)
+  managerComment    String?                @map("manager_comment") @db.Text
+  sortOrder         Int                    @default(0) @map("sort_order")
+  createdAt         DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime               @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  review ProbationReview @relation(fields: [probationReviewId], references: [id], onDelete: Cascade)
+
+  @@index([probationReviewId])
+  @@map("probation_review_indicators")
+}
+
+model ConfirmationApplication {
+  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId        String             @map("employee_id") @db.Uuid
+  probationReviewId String?            @map("probation_review_id") @db.Uuid
+  managerId         String             @map("manager_id") @db.Uuid
+  hrId              String             @map("hr_id") @db.Uuid
+  companyApproverId String             @map("company_approver_id") @db.Uuid
+  status            ConfirmationStatus @default(draft)
+  summary           String?            @db.Text
+  salary            Decimal?           @db.Decimal(12, 2)
+  voteResult        VoteResult?        @map("vote_result")
+  voteParticipants  Json               @default("[]") @map("vote_participants") @db.JsonB
+  voteComment       String?            @map("vote_comment") @db.Text
+  voteMeetingTime   DateTime?          @map("vote_meeting_time") @db.Timestamptz(6)
+  managerComment    String?            @map("manager_comment") @db.Text
+  managerApprovedAt DateTime?          @map("manager_approved_at") @db.Timestamptz(6)
+  hrComment         String?            @map("hr_comment") @db.Text
+  hrApprovedAt      DateTime?          @map("hr_approved_at") @db.Timestamptz(6)
+  companyComment    String?            @map("company_comment") @db.Text
+  companyApprovedAt DateTime?          @map("company_approved_at") @db.Timestamptz(6)
+  rejectedById      String?            @map("rejected_by_id") @db.Uuid
+  rejectedAt        DateTime?          @map("rejected_at") @db.Timestamptz(6)
+  rejectReason      String?            @map("reject_reason") @db.Text
+  actualRegularDate DateTime?          @map("actual_regular_date") @db.Date
+  createdBy         String?            @map("created_by") @db.Uuid
+  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  employee        User             @relation("ConfirmationApplicationEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
+  manager         User             @relation("ConfirmationApplicationManager", fields: [managerId], references: [id], onDelete: Restrict)
+  hr              User             @relation("ConfirmationApplicationHr", fields: [hrId], references: [id], onDelete: Restrict)
+  companyApprover User             @relation("ConfirmationApplicationCompanyApprover", fields: [companyApproverId], references: [id], onDelete: Restrict)
+  rejectedBy      User?            @relation("ConfirmationApplicationRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
+  creator         User?            @relation("ConfirmationApplicationCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  probationReview ProbationReview? @relation(fields: [probationReviewId], references: [id], onDelete: SetNull)
+
+  @@index([employeeId])
+  @@index([managerId])
+  @@index([hrId])
+  @@index([companyApproverId])
+  @@index([status])
+  @@index([probationReviewId])
+  @@index([createdBy])
+  @@map("confirmation_applications")
+}
+
 model AuditLog {
   id         String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId     String?  @map("user_id") @db.Uuid
@@ -630,6 +940,26 @@ model AuditLog {
   @@index([userId])
   @@index([createdAt(sort: Desc)])
   @@map("audit_logs")
+}
+
+model Signature {
+  id               String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  businessType     SignatureBusinessType @map("business_type")
+  businessRecordId String                @map("business_record_id") @db.Uuid
+  role             SignatureRole
+  signerId         String                @map("signer_id") @db.Uuid
+  signedAt         DateTime              @default(now()) @map("signed_at") @db.Timestamptz(6)
+  method           SignatureMethod       @default(online_confirm) @map("method")
+  idempotencyKey   String?               @map("idempotency_key") @db.VarChar(64)
+  imageUrl         String?               @map("image_url") @db.VarChar(500)
+  createdAt        DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  signer User @relation(fields: [signerId], references: [id], onDelete: Restrict)
+
+  @@unique([businessType, businessRecordId, role])
+  @@index([businessType, businessRecordId])
+  @@index([signerId])
+  @@map("signatures")
 }
 
 model SystemConfig {
@@ -668,4 +998,79 @@ model NotificationLog {
   @@index([userId])
   @@index([status])
   @@map("notification_logs")
+}
+
+// -----------------------------------------------------------------------------
+// 目标地图（E1）
+// -----------------------------------------------------------------------------
+
+model Objective {
+  id                 String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title              String          @db.VarChar(200)
+  description        String?         @db.Text
+  level              ObjectiveLevel
+  deptId             String?         @map("dept_id") @db.Uuid
+  ownerId            String?         @map("owner_id") @db.Uuid
+  parentId           String?         @map("parent_id") @db.Uuid
+  cycleId            String?         @map("cycle_id") @db.Uuid
+  weight             Decimal?        @db.Decimal(5, 2)
+  priority           Int             @default(0)
+  progress           Int             @default(0) @db.SmallInt
+  status             ObjectiveStatus @default(active)
+  relatedIndicatorId String?         @map("related_indicator_id") @db.Uuid
+  createdBy          String?         @map("created_by") @db.Uuid
+  createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  dept             Department?      @relation("ObjectiveDepartment", fields: [deptId], references: [id], onDelete: SetNull)
+  owner            User?            @relation("ObjectiveOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  parent           Objective?       @relation("ObjectiveTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children         Objective[]      @relation("ObjectiveTree")
+  cycle            AssessmentCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  relatedIndicator Indicator?       @relation(fields: [relatedIndicatorId], references: [id], onDelete: SetNull)
+  creator          User?            @relation("ObjectiveCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  actionItems      ActionItem[]
+
+  @@index([level])
+  @@index([deptId])
+  @@index([ownerId])
+  @@index([parentId])
+  @@index([cycleId])
+  @@index([status])
+  @@index([relatedIndicatorId])
+  @@index([createdBy])
+  @@map("objectives")
+}
+
+// -----------------------------------------------------------------------------
+// 行动计划（E2）
+// -----------------------------------------------------------------------------
+
+model ActionItem {
+  id          String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  objectiveId String           @map("objective_id") @db.Uuid
+  title       String           @db.VarChar(200)
+  description String?          @db.Text
+  assigneeId  String?          @map("assignee_id") @db.Uuid
+  startDate   DateTime?        @map("start_date") @db.Date
+  dueDate     DateTime?        @map("due_date") @db.Date
+  status      ActionItemStatus @default(todo)
+  parentId    String?          @map("parent_id") @db.Uuid
+  progress    Int              @default(0) @db.SmallInt
+  createdBy   String?          @map("created_by") @db.Uuid
+  createdAt   DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt   DateTime         @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  objective Objective    @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+  assignee  User?        @relation("ActionItemAssignee", fields: [assigneeId], references: [id], onDelete: SetNull)
+  parent    ActionItem?  @relation("ActionItemTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children  ActionItem[] @relation("ActionItemTree")
+  creator   User?        @relation("ActionItemCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+
+  @@index([objectiveId])
+  @@index([assigneeId])
+  @@index([parentId])
+  @@index([status])
+  @@index([createdBy])
+  @@map("action_items")
 }

@@ -1,0 +1,1315 @@
+import type {
+  SysRole,
+  EmploymentType,
+  UserStatus,
+  CompanyCode,
+  CycleType,
+  CycleStatus,
+  IndicatorType,
+  DimensionType,
+  PerfGrade,
+  TaskStatus,
+  AppealStatus,
+  AppealResult,
+  FlowNodeType,
+  FlowAction,
+  SignatureBusinessType,
+  SignatureRole,
+  SignatureMethod,
+  InterviewMethod,
+  InterviewStatus,
+  ImprovementPlanStatus,
+  ProbationReviewStatus,
+  ProbationIndicatorType,
+  ConfirmationStatus,
+  VoteResult,
+  ObjectiveLevel,
+  ObjectiveStatus,
+  ActionItemStatus,
+} from './enums';
+
+/** 后端统一响应包装。 */
+export interface ApiResponse<T> {
+  code: number;
+  message: string;
+  data: T | null;
+  timestamp: number;
+}
+
+/** 分页响应。 */
+export interface Paginated<T> {
+  total: number;
+  page: number;
+  pageSize: number;
+  items: T[];
+}
+
+/** GET /auth/me 当前用户。 */
+export interface CurrentUser {
+  id: string;
+  name: string;
+  employeeNo?: string;
+  phone?: string;
+  deptId: string | null;
+  deptName?: string;
+  deptPath?: string;
+  position?: string;
+  sysRole: SysRole;
+  isAssessorOnly: boolean;
+  canViewAll: boolean;
+  directManagerId?: string | null;
+  directManagerName?: string;
+  avatarUrl?: string;
+}
+
+/** 登录响应。 */
+export interface LoginResult {
+  token: string;
+  expiresIn: number;
+  user: CurrentUser;
+}
+
+// ---------------------------------------------------------------------------
+// 用户 / 部门
+// ---------------------------------------------------------------------------
+
+export interface User {
+  id: string;
+  name: string;
+  employeeNo?: string;
+  phone?: string;
+  email?: string;
+  avatarUrl?: string;
+  deptId?: string | null;
+  deptName?: string;
+  position?: string;
+  entryDate?: string;
+  leaveDate?: string;
+  employmentType: EmploymentType;
+  status: UserStatus;
+  directManagerId?: string | null;
+  directManagerName?: string;
+  sysRole: SysRole;
+  isAssessorOnly: boolean;
+  canViewAll: boolean;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface UserQuery {
+  page?: number;
+  pageSize?: number;
+  deptId?: string;
+  status?: UserStatus;
+  employmentType?: EmploymentType;
+  sysRole?: SysRole;
+  keyword?: string;
+}
+
+export interface UpdateManagerBody {
+  directManagerId: string | null;
+}
+
+export interface UpdateRoleBody {
+  sysRole: SysRole;
+}
+
+export interface SetPasswordBody {
+  password: string;
+}
+
+export interface Department {
+  id: string;
+  dingtalkDeptId?: string;
+  name: string;
+  fullPath?: string;
+  parentId?: string | null;
+  leaderId?: string | null;
+  leaderName?: string;
+  approverId?: string | null;
+  approverName?: string;
+  company: CompanyCode;
+  sortOrder: number;
+  isActive: boolean;
+  memberCount?: number;
+  children?: Department[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface DepartmentQuery {
+  page?: number;
+  pageSize?: number;
+  keyword?: string;
+  company?: CompanyCode;
+  isActive?: boolean;
+  flat?: boolean;
+}
+
+export interface UpdateApproverBody {
+  approverId: string | null;
+}
+
+// ---------------------------------------------------------------------------
+// 指标库
+// ---------------------------------------------------------------------------
+
+export interface Indicator {
+  id: string;
+  name: string;
+  code?: string;
+  category?: string;
+  type: IndicatorType;
+  description?: string;
+  scoringStandard?: string;
+  dataSource?: string;
+  dataCaliber?: string;
+  targetValue?: number;
+  unit?: string;
+  groupName?: string;
+  isActive: boolean;
+  createdBy?: string;
+  createdByName?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface IndicatorQuery {
+  page?: number;
+  pageSize?: number;
+  type?: IndicatorType;
+  category?: string;
+  groupName?: string;
+  keyword?: string;
+  isActive?: boolean;
+}
+
+export interface CreateIndicatorBody {
+  name: string;
+  code?: string;
+  category?: string;
+  type: IndicatorType;
+  description?: string;
+  scoringStandard?: string;
+  dataSource?: string;
+  dataCaliber?: string;
+  targetValue?: number;
+  unit?: string;
+  groupName?: string;
+  isActive?: boolean;
+}
+
+export type UpdateIndicatorBody = Partial<CreateIndicatorBody>;
+
+// ---------------------------------------------------------------------------
+// 考核模板
+// ---------------------------------------------------------------------------
+
+export interface TemplateIndicator {
+  id?: string;
+  indicatorId?: string;
+  name: string;
+  description?: string;
+  scoringStandard?: string;
+  dataSource?: string;
+  dataCaliber?: string;
+  targetValue?: number;
+  unit?: string;
+  weight: number;
+  sortOrder: number;
+}
+
+export interface TemplateDimension {
+  id?: string;
+  name: string;
+  type: DimensionType;
+  weight: number;
+  sortOrder: number;
+  indicators: TemplateIndicator[];
+}
+
+export interface AssessmentTemplate {
+  id: string;
+  name: string;
+  description?: string | null;
+  applicableDepts: string[];
+  applicableUsers: string[];
+  maxScore: number;
+  isActive: boolean;
+  version: number;
+  createdBy?: string;
+  createdByName?: string;
+  dimensions: TemplateDimension[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** GET /templates 列表项（后端返回的轻量视图）。 */
+export interface TemplateListItem {
+  id: string;
+  name: string;
+  description?: string | null;
+  applicableDepts: string[];
+  applicableUsers: string[];
+  maxScore: number;
+  isActive: boolean;
+  version: number;
+  createdAt?: string;
+  updatedAt?: string;
+  dimensionCount: number;
+  indicatorCount: number;
+  isLocked?: boolean;
+  lockedUsageCount?: number;
+}
+
+export interface TemplateQuery {
+  page?: number;
+  pageSize?: number;
+  keyword?: string;
+  isActive?: boolean;
+}
+
+export interface CreateTemplateBody {
+  name: string;
+  description?: string;
+  applicableDepts: string[];
+  applicableUsers: string[];
+  maxScore?: number;
+  isActive?: boolean;
+  dimensions: TemplateDimension[];
+}
+
+export type UpdateTemplateBody = Partial<Omit<CreateTemplateBody, 'dimensions'>> & {
+  dimensions?: TemplateDimension[];
+};
+
+// ---------------------------------------------------------------------------
+// 考核周期
+// ---------------------------------------------------------------------------
+
+export interface PublishVisibleFields {
+  totalScore: boolean;
+  grade: boolean;
+  indicatorScores: boolean;
+  managerComment: boolean;
+  coefficient: boolean;
+}
+
+export interface AssessmentCycle {
+  id: string;
+  name: string;
+  type: CycleType;
+  startDate: string;
+  endDate: string;
+  deadlineIndicatorSetting?: string;
+  deadlineIndicatorConfirm?: string;
+  deadlineSelfEval?: string;
+  deadlineManagerScore?: string;
+  deadlineHrCalibration?: string;
+  deadlineApproval?: string;
+  deadlinePublish?: string;
+  deadlineAppeal?: string;
+  status: CycleStatus;
+  publishVisibleFields: PublishVisibleFields;
+  gradeAMaxRatio: number;
+  gradeBMaxRatio: number;
+  gradeCMaxRatio: number;
+  gradeDMaxRatio: number;
+  createdBy?: string;
+  publishedAt?: string;
+  closedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface CycleQuery {
+  page?: number;
+  pageSize?: number;
+  status?: CycleStatus;
+  type?: CycleType;
+  keyword?: string;
+}
+
+/** POST /cycles 创建周期请求体（对齐 CreateCycleDto）。
+ *  deadline_appeal 由公示时自动计算，前端无需提供。
+ */
+export interface CreateCycleBody {
+  name: string;
+  type: CycleType;
+  startDate: string;
+  endDate: string;
+  deadlineIndicatorSetting?: string;
+  deadlineIndicatorConfirm?: string;
+  deadlineSelfEval?: string;
+  deadlineManagerScore?: string;
+  deadlineHrCalibration?: string;
+  deadlineApproval?: string;
+  deadlinePublish?: string;
+  gradeAMaxRatio?: number;
+  gradeBMaxRatio?: number;
+  gradeCMaxRatio?: number;
+  gradeDMaxRatio?: number;
+  publishVisibleFields?: PublishVisibleFields;
+}
+
+/** PATCH /cycles/:id/deadlines 请求体。 */
+export interface UpdateDeadlinesBody {
+  deadlineIndicatorSetting?: string;
+  deadlineIndicatorConfirm?: string;
+  deadlineSelfEval?: string;
+  deadlineManagerScore?: string;
+  deadlineHrCalibration?: string;
+  deadlineApproval?: string;
+  deadlinePublish?: string;
+}
+
+/** @deprecated 旧版 update 接口（PUT /cycles/:id）已不存在，保留类型避免引用报错。 */
+export type UpdateCycleBody = Partial<CreateCycleBody>;
+
+export interface AssessmentTemplateSnapshot {
+  id: string;
+  cycleId: string;
+  templateId: string;
+  snapshotData: Record<string, unknown>;
+  createdAt: string;
+}
+
+export interface CycleProgress {
+  totalTasks: number;
+  selfEvalDone: number;
+  managerScoreDone: number;
+  hrCalibrated: number;
+  approved: number;
+  published: number;
+  appealed: number;
+  exempted: number;
+}
+
+// ---------------------------------------------------------------------------
+// 考核任务
+// ---------------------------------------------------------------------------
+
+export interface IndicatorInstance {
+  id: string;
+  taskId: string;
+  templateIndicatorId?: string;
+  name: string;
+  description?: string;
+  scoringStandard?: string;
+  dataSource?: string;
+  dataCaliber?: string;
+  targetValue?: number;
+  unit?: string;
+  weight: number;
+  indicatorType: IndicatorType;
+  dimensionName?: string;
+  dimensionWeight: number;
+  actualValue?: string | null;
+  actualNote?: string;
+  selfScore?: number;
+  selfComment?: string;
+  managerScore?: number;
+  managerComment?: string;
+  extraScores?: ExtraScoreItem[];
+  finalScore?: number;
+  sortOrder: number;
+}
+
+export interface ExtraScoreItem {
+  label: string;
+  value: number;
+}
+
+export interface SelfEvalSummary {
+  id?: string;
+  taskId: string;
+  achievements?: string;
+  improvements?: string;
+  suggestions?: string;
+  nextGoals?: string;
+  supportNeeded?: string;
+  attachments?: Attachment[];
+  submittedAt?: string;
+}
+
+export interface ManagerEvalSummary {
+  id?: string;
+  taskId: string;
+  strengths?: string;
+  improvements?: string;
+  developmentPlan?: string;
+  attachments?: Attachment[];
+  submittedAt?: string;
+}
+
+export interface PerformanceInterview {
+  id: string;
+  taskId: string;
+  cycleId: string;
+  employeeId: string;
+  interviewerId: string;
+  status: InterviewStatus;
+  interviewTime?: string | null;
+  location?: string | null;
+  method?: InterviewMethod | null;
+  scoreInformed: boolean;
+  achievements?: string | null;
+  weaknesses?: string | null;
+  nextGoals?: string | null;
+  remediation?: string | null;
+  supportNeeded?: string | null;
+  otherMatters?: string | null;
+  deadline?: string | null;
+  managerSignedAt?: string | null;
+  employeeSignedAt?: string | null;
+  createdAt?: string;
+  updatedAt?: string;
+  // 详情视图附加
+  employeeName?: string | null;
+  deptName?: string | null;
+  interviewerName?: string | null;
+}
+
+export interface UpdateInterviewBody {
+  interviewTime?: string;
+  location?: string;
+  method?: InterviewMethod;
+  scoreInformed?: boolean;
+  achievements?: string;
+  weaknesses?: string;
+  nextGoals?: string;
+  remediation?: string;
+  supportNeeded?: string;
+  otherMatters?: string;
+}
+
+export interface GradeResult {
+  id?: string;
+  taskId: string;
+  calculatedScore?: number;
+  rawGrade?: PerfGrade;
+  calibratedGrade?: PerfGrade;
+  calibrationNote?: string;
+  isVeto: boolean;
+  vetoReason?: string;
+  vetoOperatorId?: string;
+  vetoOperatorName?: string;
+  coefficient?: number;
+  isPublished: boolean;
+  publishedAt?: string;
+  hrCalibratorId?: string;
+  hrCalibratorName?: string;
+  hrCalibratedAt?: string;
+  approverId?: string;
+  approverName?: string;
+  approvedAt?: string;
+  employeeConfirmedAt?: string;
+}
+
+export interface AssessmentTask {
+  id: string;
+  cycleId: string;
+  cycleName?: string;
+  snapshotId: string;
+  employeeId: string;
+  employeeName?: string;
+  employeeNo?: string;
+  deptId?: string | null;
+  deptName?: string;
+  managerId?: string | null;
+  managerName?: string;
+  deptHeadId?: string | null;
+  deptHeadName?: string;
+  approverId?: string | null;
+  approverName?: string;
+  status: TaskStatus;
+  isExempt: boolean;
+  exemptReason?: string;
+  indicatorSetAt?: string;
+  indicatorConfirmedAt?: string;
+  selfEvalSubmittedAt?: string;
+  managerScoredAt?: string;
+  deptReviewedAt?: string;
+  hrCalibratedAt?: string;
+  approvedAt?: string;
+  publishedAt?: string;
+  employeeConfirmedAt?: string;
+  closedAt?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+/** 任务在列表中的轻量视图。 */
+export interface TaskListItem extends AssessmentTask {
+  progress?: number;
+  totalScore?: number;
+  grade?: PerfGrade;
+  rawGrade?: PerfGrade;
+}
+
+export interface TaskDetail extends AssessmentTask {
+  indicatorInstances: IndicatorInstance[];
+  selfEvalSummary?: SelfEvalSummary;
+  managerEvalSummary?: ManagerEvalSummary;
+  gradeResult?: GradeResult;
+  performanceInterview?: PerformanceInterview | null;
+  flowRecords?: FlowRecord[];
+}
+
+export interface TaskQuery {
+  page?: number;
+  pageSize?: number;
+  cycleId?: string;
+  status?: TaskStatus;
+  employeeId?: string;
+  managerId?: string;
+  deptId?: string;
+  keyword?: string;
+}
+
+export interface CreateTaskBody {
+  cycleId: string;
+  employeeId: string;
+}
+
+export interface BatchCreateTaskBody {
+  cycleId: string;
+  employeeIds: string[];
+}
+
+export interface SetIndicatorBody {
+  instances: Pick<
+    IndicatorInstance,
+    | 'templateIndicatorId'
+    | 'name'
+    | 'description'
+    | 'scoringStandard'
+    | 'dataSource'
+    | 'dataCaliber'
+    | 'targetValue'
+    | 'unit'
+    | 'weight'
+    | 'indicatorType'
+    | 'dimensionName'
+    | 'dimensionWeight'
+    | 'sortOrder'
+  >[];
+  action?: 'save' | 'submit';
+  note?: string;
+}
+
+export interface UpdateActualValueBody {
+  indicators: {
+    id: string;
+    actualValue?: string;
+    actualNote?: string;
+  }[];
+}
+
+export interface IndicatorProposalItem {
+  templateIndicatorId?: string;
+  name: string;
+  description?: string;
+  scoringStandard?: string;
+  dataSource?: string;
+  dataCaliber?: string;
+  targetValue?: number;
+  unit?: string;
+  weight?: number;
+  indicatorType?: IndicatorType;
+  dimensionName?: string;
+  dimensionWeight?: number;
+  sortOrder?: number;
+}
+
+export interface SubmitIndicatorProposalBody {
+  items: IndicatorProposalItem[];
+  note?: string;
+}
+
+export interface SubmitIndicatorProposalResult {
+  id: string;
+  submittedAt: string;
+}
+
+export interface SubmitSelfEvalBody {
+  indicators: {
+    id: string;
+    selfScore: number;
+    selfComment?: string;
+  }[];
+  summary: Omit<SelfEvalSummary, 'id' | 'taskId' | 'submittedAt'>;
+}
+
+export interface ManagerScoreIndicatorItem {
+  id: string;
+  managerScore: number;
+  managerComment?: string;
+  extraScores?: ExtraScoreItem[];
+}
+
+export interface SubmitManagerScoreBody {
+  indicators: ManagerScoreIndicatorItem[];
+  evalSummary: Omit<ManagerEvalSummary, 'id' | 'taskId' | 'submittedAt'>;
+  veto?: VetoGradeBody;
+}
+
+export interface DeptReviewBody {
+  action: 'pass' | 'reject';
+  comment?: string;
+}
+
+export interface ExemptTaskBody {
+  isExempt: boolean;
+  reason?: string;
+}
+
+// ---------------------------------------------------------------------------
+// 校准 / 审批 / 公示
+// ---------------------------------------------------------------------------
+
+export interface GradeDistributionEntry {
+  count: number;
+  ratio: number;
+  maxRatio: number;
+  isOverLimit: boolean;
+}
+
+export interface CalibrationCandidate {
+  taskId: string;
+  employeeName: string;
+  deptName?: string;
+  position?: string;
+  // 未到评分阶段的任务这两项为 null（workbench 返回全员在途任务）
+  calculatedScore: number | null;
+  rawGrade: PerfGrade | null;
+  calibratedGrade?: PerfGrade;
+  isVeto?: boolean;
+  managerName?: string;
+}
+
+export interface CalibrationSummary {
+  gradeDistribution: Record<PerfGrade, GradeDistributionEntry>;
+  totalActive: number;
+  pendingCalibration: number;
+}
+
+export interface SubmitCalibrationBody {
+  submit: boolean;
+  calibrations: {
+    taskId: string;
+    calibratedGrade: PerfGrade;
+    calibrationNote?: string;
+    isVeto?: boolean;
+    vetoReason?: string;
+  }[];
+}
+
+export interface VetoGradeBody {
+  isVeto: boolean;
+  vetoReason?: string;
+}
+
+export interface ApprovalTaskView {
+  id: string;
+  cycleId: string;
+  employeeId: string;
+  employeeName: string;
+  position?: string | null;
+  deptId?: string | null;
+  deptName?: string;
+  status: TaskStatus;
+  totalScore: number;
+  rawGrade?: string | null;
+  calibratedGrade?: string | null;
+  isVeto: boolean;
+  approverId?: string | null;
+  approvedAt?: string | null;
+}
+
+export interface SubmitApprovalBody {
+  comment?: string;
+}
+
+export interface PublishBody {
+  visibleFields?: Partial<PublishVisibleFields>;
+}
+
+/** POST /cycles/:id/publish — HR 批量公示结果请求体。 */
+export interface PublishResultsBody {
+  taskIds: string[];
+  sendDingtalkNotification?: boolean;
+}
+
+/** POST /cycles/:id/publish — HR 批量公示结果响应。 */
+export interface PublishResultsResult {
+  cycleId: string;
+  published: number;
+  publishedAt: string;
+  deadlineAppeal: string;
+}
+
+// ---------------------------------------------------------------------------
+// 申诉
+// ---------------------------------------------------------------------------
+
+export interface Attachment {
+  name: string;
+  url: string;
+  size?: number;
+}
+
+/** 申诉列表项（对齐后端 AppealListItem，不含 coefficient）。 */
+export interface AppealListItem {
+  id: string;
+  taskId: string;
+  cycleId: string;
+  status: AppealStatus;
+  reason: string;
+  finalResult: AppealResult | null;
+  hrResolution: string | null;
+  createdAt: string;
+  hrResolvedAt: string | null;
+  appellant: { id: string; name: string } | null;
+  dept: { id: string; name: string | null } | null;
+  cycle: { id: string; name: string } | null;
+}
+
+/** 申诉详情（对齐后端 AppealDetail）。 */
+export interface AppealDetail extends AppealListItem {
+  appellantId: string;
+  attachments: Attachment[];
+  appealDeadline: string | null;
+  updatedAt: string;
+  taskGrade: {
+    calculatedScore: number | null;
+    rawGrade: PerfGrade | null;
+    calibratedGrade: PerfGrade | null;
+  } | null;
+}
+
+/** 旧版完整 Appeal 对象，保留供兼容；新代码优先使用 AppealListItem / AppealDetail。 */
+export interface Appeal {
+  id: string;
+  taskId: string;
+  cycleId: string;
+  cycleName?: string;
+  appellantId: string;
+  appellantName?: string;
+  reason: string;
+  attachments: Attachment[];
+  status: AppealStatus;
+  hrResolution?: string;
+  hrResolvedAt?: string;
+  hrResolverId?: string;
+  hrResolverName?: string;
+  finalResult?: AppealResult;
+  appealDeadline: string;
+  createdAt: string;
+  updatedAt?: string;
+}
+
+export interface AppealQuery {
+  page?: number;
+  pageSize?: number;
+  status?: AppealStatus;
+  cycleId?: string;
+  deptId?: string;
+  keyword?: string;
+}
+
+export interface CreateAppealBody {
+  taskId: string;
+  reason: string;
+  attachments?: Attachment[];
+}
+
+export interface ResolveAppealBody {
+  resolution: string;
+  result: AppealResult;
+  newGrade?: PerfGrade;
+  newGradeNote?: string;
+}
+
+// ---------------------------------------------------------------------------
+// 流程记录
+// ---------------------------------------------------------------------------
+
+export interface FlowRecord {
+  id: string;
+  taskId: string;
+  cycleId: string;
+  nodeType: FlowNodeType;
+  actorId?: string;
+  actorName?: string;
+  action: FlowAction;
+  comment?: string;
+  extraData?: Record<string, unknown>;
+  createdAt: string;
+}
+
+// ---------------------------------------------------------------------------
+// 报表 / 归档
+// ---------------------------------------------------------------------------
+
+/** GET /reports/cycle/:id/summary 汇总明细细项。 */
+export interface ReportSummaryItem {
+  employeeName: string;
+  employeeNo: string | null;
+  deptName: string | null;
+  position: string | null;
+  totalScore: number | null;
+  grade: PerfGrade | null;
+  managerName: string | null;
+}
+
+/** GET /reports/cycle/:id/summary 汇总统计。 */
+export interface ReportSummaryStats {
+  total: number;
+  grades: Record<PerfGrade, { count: number; ratio: number }>;
+}
+
+/** GET /reports/cycle/:id/summary 响应。 */
+export interface ReportSummary {
+  stats: ReportSummaryStats;
+  items: ReportSummaryItem[];
+}
+
+/** GET /reports/cycle/:id/progress 响应。 */
+export interface ReportCycleProgress {
+  byStatus: Record<TaskStatus, number>;
+  overdueByNode: Array<{ node: string; overdueCount: number }>;
+}
+
+/** GET /reports/cycle/:id/grade-list 响应。 */
+export interface GradeListResponse {
+  aList: ReportSummaryItem[];
+  cList: ReportSummaryItem[];
+  dList: ReportSummaryItem[];
+}
+
+/** GET /reports/employee/:id/archive 响应单项。 */
+export interface EmployeeArchiveItem {
+  cycleId: string;
+  cycleName: string;
+  startDate: string;
+  endDate: string;
+  grade: PerfGrade;
+  totalScore: number;
+}
+
+/** GET /reports/cycle/:id/summary 查询参数。 */
+export interface ReportQueryDto {
+  deptId?: string;
+  grade?: PerfGrade;
+  format?: 'json' | 'excel';
+}
+
+// ---------------------------------------------------------------------------
+// 通知
+// ---------------------------------------------------------------------------
+
+export interface Notification {
+  id: string;
+  userId: string;
+  senderId?: string;
+  senderName?: string;
+  taskId?: string;
+  cycleId?: string;
+  type: string;
+  title: string;
+  content?: string;
+  channel: string;
+  status: 'pending' | 'sent' | 'failed';
+  sentAt?: string;
+  createdAt: string;
+}
+
+export interface NotificationQuery {
+  page?: number;
+  pageSize?: number;
+  status?: Notification['status'];
+  unreadOnly?: boolean;
+}
+
+export interface UnreadCount {
+  count: number;
+}
+
+// ---------------------------------------------------------------------------
+// 绩效改进计划
+// ---------------------------------------------------------------------------
+
+export interface ImprovementMeasure {
+  description: string;
+  responsible: string;
+  deadline: string;
+}
+
+export interface ImprovementPlan {
+  id: string;
+  employeeId: string;
+  employeeName?: string;
+  employeeNo?: string;
+  deptName?: string;
+  cycleId: string;
+  cycleName?: string;
+  taskId: string;
+  creatorId: string | null;
+  creatorName?: string;
+  improvementNeed: string | null;
+  importance: string | null;
+  improvementGoal: string | null;
+  targetDate: string | null;
+  measures: ImprovementMeasure[];
+  finalScore: number | null;
+  status: ImprovementPlanStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface ImprovementPlanQuery {
+  page?: number;
+  pageSize?: number;
+  status?: ImprovementPlanStatus;
+  employeeId?: string;
+  cycleId?: string;
+}
+
+export interface FillImprovementPlanBody {
+  improvementNeed: string;
+  importance: string;
+  improvementGoal: string;
+  targetDate: string;
+  measures: ImprovementMeasure[];
+}
+
+export interface CompleteImprovementPlanBody {
+  finalScore: number;
+}
+
+export interface ConsecutiveDWarning {
+  hasWarning: boolean;
+  consecutiveCount: number;
+  archives: Array<{
+    cycleId: string;
+    cycleName: string;
+    grade: PerfGrade;
+    archivedAt: string;
+  }>;
+}
+
+export interface ConsecutiveDWarningItem {
+  employeeId: string;
+  employeeName: string;
+  employeeNo: string | null;
+  deptName: string | null;
+  consecutiveCount: number;
+  archives: Array<{
+    cycleId: string;
+    cycleName: string;
+    grade: PerfGrade;
+    archivedAt: string;
+  }>;
+}
+
+// ---------------------------------------------------------------------------
+// 试用期考核（Probation Review）
+// ---------------------------------------------------------------------------
+
+export interface ProbationReviewIndicator {
+  id: string;
+  name: string;
+  type: ProbationIndicatorType;
+  weight: number;
+  description?: string | null;
+  targetValue?: string | null;
+  selfScore?: number | null;
+  selfComment?: string | null;
+  managerScore?: number | null;
+  managerComment?: string | null;
+  sortOrder: number;
+}
+
+export interface ProbationReview {
+  id: string;
+  status: ProbationReviewStatus;
+  employeeId: string;
+  employee: { id: string; name: string };
+  managerId: string;
+  manager: { id: string; name: string };
+  hrId: string;
+  hr: { id: string; name: string };
+  plannedRegularDate?: string | null;
+  strengths?: string | null;
+  improvements?: string | null;
+  employeeSignedAt?: string | null;
+  managerSignedAt?: string | null;
+  hrSignedAt?: string | null;
+  completedAt?: string | null;
+  indicators: ProbationReviewIndicator[];
+  signatures: Signature[];
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ProbationReviewQuery {
+  page?: number;
+  pageSize?: number;
+  employeeId?: string;
+  managerId?: string;
+  status?: ProbationReviewStatus;
+  keyword?: string;
+}
+
+export interface CreateProbationReviewBody {
+  employeeId: string;
+  managerId: string;
+  plannedRegularDate?: string;
+  indicators?: Array<{
+    name: string;
+    type: ProbationIndicatorType;
+    weight: number;
+    description?: string;
+    targetValue?: string;
+    sortOrder?: number;
+  }>;
+}
+
+export type UpdateProbationReviewBody = Partial<CreateProbationReviewBody>;
+
+export interface SubmitProbationSelfEvalBody {
+  indicators: Array<{ id: string; selfScore: number; selfComment?: string }>;
+}
+
+export interface SubmitProbationManagerScoreBody {
+  indicators: Array<{ id: string; managerScore: number; managerComment?: string }>;
+  strengths?: string;
+  improvements?: string;
+}
+
+export interface ProbationReviewActionResult {
+  id: string;
+  status: ProbationReviewStatus;
+}
+
+// ---------------------------------------------------------------------------
+// 转正申请（Confirmation Application）
+// ---------------------------------------------------------------------------
+
+export interface ConfirmationApplication {
+  id: string;
+  status: ConfirmationStatus;
+  employeeId: string;
+  employee: { id: string; name: string };
+  probationReviewId?: string | null;
+  managerId: string;
+  manager: { id: string; name: string };
+  hrId: string;
+  hr: { id: string; name: string };
+  companyApproverId: string;
+  companyApprover: { id: string; name: string };
+  summary?: string | null;
+  salary?: number | null;
+  voteResult?: VoteResult | null;
+  voteParticipants?: string[];
+  voteComment?: string | null;
+  voteMeetingTime?: string | null;
+  actualRegularDate?: string | null;
+  rejectedBy?: { id: string; name: string } | null;
+  rejectedAt?: string | null;
+  rejectReason?: string | null;
+  steps?: ApprovalStep[];
+  canApprove?: boolean;
+  canReject?: boolean;
+  pendingRole?: 'manager' | 'hr' | 'company' | null;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface ApprovalStep {
+  role: 'manager' | 'hr' | 'company';
+  status: 'pending' | 'approved' | 'rejected';
+  approver: { id: string; name: string } | null;
+  comment: string | null;
+  actedAt: string | null;
+}
+
+export interface ConfirmationQuery {
+  page?: number;
+  pageSize?: number;
+  employeeId?: string;
+  status?: ConfirmationStatus;
+  keyword?: string;
+}
+
+export interface CreateConfirmationBody {
+  employeeId: string;
+  probationReviewId?: string;
+  managerId: string;
+  hrId: string;
+  companyApproverId: string;
+  summary?: string;
+  salary?: number;
+  voteResult?: VoteResult;
+  voteParticipants?: string[];
+  voteComment?: string;
+  voteMeetingTime?: string;
+  actualRegularDate?: string;
+}
+
+export type UpdateConfirmationBody = Partial<CreateConfirmationBody>;
+
+export interface ConfirmationWarning {
+  employeeId: string;
+  employeeName: string;
+  employeeNo: string | null;
+  deptName: string | null;
+  plannedRegularDate: string | null;
+  daysUntil: number | null;
+  hasApplication: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// 三方签字（SignBlock 用）
+// ---------------------------------------------------------------------------
+
+export interface Signature {
+  id: string;
+  businessType: SignatureBusinessType;
+  businessRecordId: string;
+  role: SignatureRole;
+  signerId: string;
+  signerName: string;
+  signedAt: string;
+  method: SignatureMethod;
+  imageUrl?: string | null;
+}
+
+export interface SignatureQuery {
+  businessType: SignatureBusinessType;
+  businessRecordId: string;
+}
+
+export interface CreateSignatureBody {
+  businessType: SignatureBusinessType;
+  businessRecordId: string;
+  role: SignatureRole;
+  method?: SignatureMethod;
+  imageUrl?: string;
+  idempotencyKey?: string;
+}
+
+// ---------------------------------------------------------------------------
+// 目标地图（E1）
+// ---------------------------------------------------------------------------
+
+export interface Objective {
+  id: string;
+  title: string;
+  description: string | null;
+  level: ObjectiveLevel;
+  deptId: string | null;
+  deptName: string | null;
+  ownerId: string | null;
+  ownerName: string | null;
+  parentId: string | null;
+  cycleId: string | null;
+  cycleName: string | null;
+  weight: number | null;
+  priority: number;
+  progress: number;
+  status: ObjectiveStatus;
+  relatedIndicatorId: string | null;
+  relatedIndicatorName: string | null;
+  createdBy: string | null;
+  creatorName: string | null;
+  createdAt: string;
+  updatedAt: string;
+  children?: Objective[];
+}
+
+export interface ObjectiveQuery {
+  page?: number;
+  pageSize?: number;
+  level?: ObjectiveLevel;
+  deptId?: string;
+  ownerId?: string;
+  parentId?: string | null;
+  cycleId?: string;
+  status?: ObjectiveStatus;
+  keyword?: string;
+  flat?: boolean;
+}
+
+export interface CreateObjectiveBody {
+  title: string;
+  description?: string;
+  level: ObjectiveLevel;
+  deptId?: string;
+  ownerId?: string;
+  parentId?: string;
+  cycleId?: string;
+  weight?: number;
+  priority?: number;
+  relatedIndicatorId?: string;
+}
+
+export type UpdateObjectiveBody = Partial<CreateObjectiveBody> & {
+  status?: ObjectiveStatus;
+};
+
+export interface UpdateObjectiveProgressBody {
+  progress: number;
+}
+
+// ---------------------------------------------------------------------------
+// 行动计划（E2）
+// ---------------------------------------------------------------------------
+
+export interface ActionItem {
+  id: string;
+  objectiveId: string;
+  objectiveTitle: string | null;
+  title: string;
+  description: string | null;
+  assigneeId: string | null;
+  assigneeName: string | null;
+  startDate: string | null;
+  dueDate: string | null;
+  status: ActionItemStatus;
+  parentId: string | null;
+  progress: number;
+  createdBy: string | null;
+  creatorName: string | null;
+  createdAt: string;
+  updatedAt: string;
+  children?: ActionItem[];
+}
+
+export interface ActionItemQuery {
+  objectiveId?: string;
+  status?: ActionItemStatus;
+  assigneeId?: string;
+  parentId?: string | null;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface CreateActionItemBody {
+  objectiveId: string;
+  title: string;
+  description?: string;
+  assigneeId?: string;
+  startDate?: string;
+  dueDate?: string;
+  status?: ActionItemStatus;
+  parentId?: string;
+  progress?: number;
+}
+
+export type UpdateActionItemBody = Partial<Omit<CreateActionItemBody, 'objectiveId'>>;
+
+export interface UpdateActionItemProgressBody {
+  progress: number;
+}

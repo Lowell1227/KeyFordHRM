@@ -1,0 +1,366 @@
+:root {
+  --el-color-primary: #5d74f7;
+  --el-color-success: #52c41a;
+  --el-color-warning: #faad14;
+  --el-color-danger: #f5222d;
+  --app-bg: #f3f6ff;
+  --app-card-bg: #ffffff;
+  --grade-a-color: #52c41a;
+  --grade-b-color: #1677ff;
+  --grade-c-color: #faad14;
+  --grade-d-color: #f5222d;
+
+  /* —— 设计令牌（新增，仅追加；全站可复用，目前先用于首页）—— */
+  /* 圆角 */
+  --app-radius-sm: 8px;
+  --app-radius: 8px;
+  --app-radius-lg: 12px;
+  /* 阴影 */
+  --app-shadow: 0 12px 28px rgba(80, 103, 232, 0.07);
+  --app-shadow-hover: 0 16px 32px rgba(80, 103, 232, 0.12);
+  /* 间距 */
+  --app-gap: 16px;
+  /* 文字层级 */
+  --app-text-primary: #1f2329;
+  --app-text-secondary: #646a73;
+  --app-text-tertiary: #8f959e;
+  /* 过渡 */
+  --app-transition: 0.2s ease;
+  /* 渐变图标徽章色板 */
+  --grad-blue: linear-gradient(135deg, #5f7cff, #8ea5ff);
+  --grad-purple: linear-gradient(135deg, #9a71ff, #c397ff);
+  --grad-red: linear-gradient(135deg, #f48a72, #ffb397);
+  --grad-gold: linear-gradient(135deg, #f6dc2c, #fff173);
+  --grad-green: linear-gradient(135deg, #49d8c8, #75ecd8);
+}
+
+html,
+body,
+#app {
+  margin: 0;
+  height: 100%;
+  background: var(--app-bg);
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: var(--app-text-primary);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+.el-button--primary {
+  --el-button-bg-color: #657cff;
+  --el-button-border-color: #657cff;
+  --el-button-hover-bg-color: #5068ee;
+  --el-button-hover-border-color: #5068ee;
+}
+
+.el-radio-button__inner {
+  border: 0 !important;
+  border-radius: 7px !important;
+  box-shadow: none !important;
+}
+
+.el-radio-button:first-child .el-radio-button__inner,
+.el-radio-button:last-child .el-radio-button__inner {
+  border-radius: 7px !important;
+}
+
+.el-radio-group {
+  padding: 3px;
+  border-radius: 9px;
+  background: #f3f5ff;
+}
+
+/* —— 全站细滚动条（6px，常驻淡色细条）—— */
+/* Chrome / Edge / Safari：自定义 webkit 滚动条。
+   关键点：
+   1) 不在 * 上设 scrollbar-width/scrollbar-color，否则 Chromium 会忽略这套
+      webkit 自定义样式、回退到偏粗的原生滚动条；
+   2) 滑块用常驻淡色而非 transparent —— 全透明滑块在 SPA 跳转后的重排路径下
+      会被 Chromium 判定为「无自定义滑块」而回退成原生粗滚动条。 */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #d6d9e0;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #b4b9c4;
+}
+
+::-webkit-scrollbar-corner {
+  background: transparent;
+}
+
+/* Firefox：仅在不支持 ::-webkit-scrollbar 的浏览器生效，避免与上面冲突 */
+@supports not selector(::-webkit-scrollbar) {
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: #c5c9d3 transparent;
+  }
+}
+
+/* —— 全站通用版式工具类（与首页同一套设计令牌）—— */
+
+/* 页面根容器：纵向堆叠 + 统一间距，替代各页零散的 padding/margin。
+   外层 .app-main 已提供 20px 内边距，页面本身不再额外加 padding。 */
+.page-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--app-gap);
+}
+
+/* 清爽表格：去边框、表头浅灰，复刻首页「考核明细」表格观感。
+   用法：<el-table class="app-table">（去掉 border / stripe）。 */
+/* System data-grid style. Inspired by the task indicator table and used across
+   lists, report tables, template grids, and inline editable tables. */
+.el-table,
+.app-table.el-table {
+  --el-table-border-color: #dfe3eb;
+  --el-table-header-bg-color: #f5f7fa;
+  --el-table-row-hover-bg-color: #eef4ff;
+  --el-table-tr-bg-color: #ffffff;
+  overflow: hidden;
+  border: 1px solid #dfe3eb;
+  border-radius: 6px;
+  color: #2f343d;
+  font-size: 12px;
+}
+
+.el-table .el-table__inner-wrapper::before,
+.el-table .el-table__border-left-patch {
+  display: none;
+}
+
+.el-table th.el-table__cell {
+  height: 34px;
+  background: #f5f7fa !important;
+  color: #20242b;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.el-table td.el-table__cell {
+  background: #ffffff;
+  color: #3f4650;
+  font-size: 12px;
+}
+
+.el-table .el-table__row:nth-child(even) td.el-table__cell {
+  background: #f8fafc;
+}
+
+.el-table th.el-table__cell,
+.el-table td.el-table__cell {
+  border-right: 1px solid #dfe3eb;
+  border-bottom: 1px solid #dfe3eb;
+}
+
+.el-table th.el-table__cell:last-child,
+.el-table td.el-table__cell:last-child {
+  border-right: 0;
+}
+
+.el-table .el-table__cell {
+  padding: 4px 0;
+}
+
+.el-table .cell {
+  padding: 0 8px;
+  line-height: 18px;
+}
+
+.el-table .el-input__wrapper,
+.el-table .el-select__wrapper {
+  min-height: 26px;
+  border-radius: 4px;
+  background: #ffffff;
+  box-shadow: 0 0 0 1px #dfe3eb inset;
+  font-size: 12px;
+}
+
+.el-table .el-input__inner,
+.el-table .el-select__placeholder,
+.el-table .el-select__selected-item,
+.el-table .el-button {
+  min-height: 24px;
+  line-height: 24px;
+  font-size: 12px;
+}
+
+.el-table .el-input__count {
+  display: none;
+}
+.app-pager {
+  display: flex;
+  justify-content: flex-end;
+  padding: 14px 20px;
+}
+
+.el-table,
+.el-table__body-wrapper,
+.el-table .el-scrollbar__wrap,
+.el-table .el-scrollbar__view,
+.el-select-dropdown .el-scrollbar__wrap {
+  -webkit-overflow-scrolling: touch;
+}
+
+.el-table .el-scrollbar__bar.is-horizontal {
+  height: 7px;
+}
+
+.el-table .el-scrollbar__bar.is-vertical {
+  width: 7px;
+}
+
+.el-dialog,
+.el-drawer,
+.el-card,
+.el-table,
+.el-tabs,
+.el-form {
+  max-width: 100%;
+}
+
+@media (max-width: 1180px) {
+  :root {
+    --app-gap: 14px;
+  }
+
+  .page-stack {
+    gap: 14px;
+  }
+
+  .el-card__body {
+    padding: 16px;
+  }
+
+  .el-table {
+    font-size: 13px;
+  }
+}
+
+@media (max-width: 768px) {
+  :root {
+    --app-gap: 10px;
+  }
+
+  body {
+    overflow: hidden;
+    font-size: 14px;
+  }
+
+  .page-stack {
+    gap: 10px;
+  }
+
+  .el-card {
+    border-radius: 8px;
+  }
+
+  .el-card__header,
+  .el-card__body {
+    padding: 12px;
+  }
+
+  .el-table {
+    font-size: 12px;
+  }
+
+  .el-table .cell {
+    line-height: 1.45;
+    padding: 0 8px;
+  }
+
+  .el-table__header-wrapper,
+  .el-table__body-wrapper {
+    touch-action: pan-x pan-y;
+  }
+
+  .el-form-item {
+    margin-bottom: 14px;
+  }
+
+  .el-form-item__label {
+    font-size: 13px;
+  }
+
+  .el-input,
+  .el-select,
+  .el-date-editor,
+  .el-input-number {
+    max-width: 100%;
+  }
+
+  .el-button {
+    min-height: 34px;
+    padding: 8px 12px;
+  }
+
+  .el-pagination {
+    justify-content: flex-end;
+    gap: 6px;
+    white-space: normal;
+  }
+
+  .el-pagination .el-pagination__total,
+  .el-pagination .el-pagination__jump {
+    display: none;
+  }
+
+  .app-pager {
+    justify-content: flex-start;
+    overflow-x: auto;
+    padding: 10px 12px;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .el-dialog {
+    width: calc(100vw - 20px) !important;
+    margin: 8vh auto 0 !important;
+  }
+
+  .el-dialog__header {
+    padding: 14px 16px 8px;
+  }
+
+  .el-dialog__body {
+    padding: 12px 16px;
+    max-height: calc(100dvh - 168px);
+    overflow: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .el-dialog__footer {
+    padding: 10px 16px 14px;
+  }
+
+  .el-message {
+    min-width: 0 !important;
+    width: calc(100vw - 24px);
+  }
+}
+
+@media (max-width: 480px) {
+  .el-card__header,
+  .el-card__body {
+    padding: 10px;
+  }
+
+  .el-button {
+    padding-inline: 10px;
+  }
+
+  .el-table .cell {
+    padding: 0 7px;
+  }
+}

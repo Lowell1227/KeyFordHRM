@@ -1,0 +1,61 @@
+# docker-compose.prod.yml
+# 使用方式：docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d
+
+services:
+
+  postgres:
+    # 生产不对外暴露数据库端口
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+
+  redis:
+    deploy:
+      resources:
+        limits:
+          memory: 512m
+
+  api:
+    deploy:
+      resources:
+        limits:
+          memory: 1g
+      restart_policy:
+        condition: on-failure
+        max_attempts: 3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  web:
+    ports:
+      - "80:80"               # 对外暴露 HTTP（SSL 在服务器层面处理）
+    deploy:
+      resources:
+        limits:
+          memory: 256m
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # ── 生产专用：自动备份服务 ─────────────────────────
+  backup:
+    image: postgres:14-alpine
+    restart: "no"            # 仅由 cron 触发，不常驻
+    env_file: .env
+    volumes:
+      - ./deploy/scripts/backup.sh:/backup.sh:ro
+      - backup_data:/backups
+    entrypoint: ["sh", "/backup.sh"]
+    networks:
+      - internal
+    profiles:
+      - backup               # 仅在 --profile backup 时启动
+
+volumes:
+  backup_data:               # 备份文件存储

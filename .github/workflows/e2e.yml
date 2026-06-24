@@ -1,0 +1,133 @@
+name: E2E Tests
+
+on:
+  pull_request:
+    branches: [main, develop]
+  workflow_dispatch:
+
+jobs:
+  layer-a:
+    name: Layer A - Backend API E2E
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+          cache-dependency-path: api/package-lock.json
+
+      - name: Install API dependencies
+        working-directory: ./api
+        run: npm ci
+
+      - name: Run Layer A E2E
+        working-directory: ./api
+        run: npm run test:e2e
+
+      - name: Upload Layer A reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-a-reports
+          path: |
+            api/test-reports/junit-e2e.xml
+            api/test-reports/e2e-report.html
+
+  layer-b:
+    name: Layer B - Frontend Playwright
+    needs: layer-a
+    if: success()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Install API dependencies
+        working-directory: ./api
+        run: npm ci
+
+      - name: Start backend
+        working-directory: ./api
+        run: |
+          npx prisma migrate deploy
+          npx prisma db seed
+          npm run start:dev &
+          npx wait-on http://localhost:3000/api/v1/health --timeout 60000
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hrm_e2e?schema=public
+          SEED_ADMIN_PASSWORD: admin123
+          JWT_SECRET: ci-test-secret
+
+      - name: Seed Playwright data
+        working-directory: ./api
+        run: npx ts-node prisma/seed-e2e-playwright.ts
+        env:
+          DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hrm_e2e?schema=public
+
+      - name: Install Web dependencies
+        working-directory: ./web
+        run: npm ci
+
+      - name: Install Playwright browsers
+        working-directory: ./web
+        run: npx playwright install chromium
+
+      - name: Run Layer B E2E
+        working-directory: ./web
+        run: npm run test:e2e
+        env:
+          PLAYWRIGHT_BASE_URL: http://localhost:5173
+          PLAYWRIGHT_API_BASE_URL: http://localhost:3000/api/v1
+
+      - name: Upload Layer B reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: layer-b-reports
+          path: |
+            web/playwright-report/**
+
+  summary:
+    name: Aggregate E2E Report
+    needs: [layer-a, layer-b]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: 'npm'
+
+      - name: Download Layer A reports
+        uses: actions/download-artifact@v4
+        with:
+          name: layer-a-reports
+          path: ./e2e-report/layer-a
+
+      - name: Download Layer B reports
+        uses: actions/download-artifact@v4
+        with:
+          name: layer-b-reports
+          path: ./e2e-report/layer-b
+
+      - name: Generate summary
+        run: |
+          cd api
+          npx ts-node --project tsconfig.json ../scripts/e2e-summary.ts
+
+      - name: Upload aggregated report
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-summary
+          path: ./e2e-report/summary.md

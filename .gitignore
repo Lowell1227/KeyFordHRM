@@ -1,0 +1,62 @@
+# 依赖
+node_modules/
+**/node_modules/
+
+# 构建产物
+dist/
+**/dist/
+build/
+*.tsbuildinfo
+
+# 环境变量（不入 git）
+.env
+*.local
+
+# 日志
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Prisma 生成产物
+**/prisma/generated/
+
+# 编辑器
+.vscode/*
+!.vscode/extensions.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+.DS_Store
+
+# 测试报告
+coverage/
+e2e-report/
+test-reports/
+playwright-report/
+**/playwright-report/
+web/e2e/auth-state/*.json
+
+# 备份/上传临时
+backups/
+uploads/
+
+# 本地验证截图 / 测试产物（不入 git）
+web/*.png
+web/verify-*
+web/f9-screenshots/
+web/test-results/
+test-results/
+
+# 误建的杂项文件/目录
+nul
+**/nul
+api/api/
+
+# Claude 本机私有设置
+.claude/settings.local.json

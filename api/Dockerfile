@@ -27,8 +27,12 @@ USER appuser
 COPY --from=builder --chown=appuser:appgroup /app/node_modules ./node_modules
 COPY --from=builder --chown=appuser:appgroup /app/dist         ./dist
 COPY --from=builder --chown=appuser:appgroup /app/prisma       ./prisma
+# 运行 `prisma db seed` 需要 package.json(读取 prisma.seed)与 tsconfig(ts-node)
+COPY --from=builder --chown=appuser:appgroup /app/package.json        ./package.json
+COPY --from=builder --chown=appuser:appgroup /app/tsconfig.json       ./tsconfig.json
+COPY --from=builder --chown=appuser:appgroup /app/tsconfig.build.json ./tsconfig.build.json
 
 EXPOSE 3000
 
 # 启动前执行数据库迁移，再启动应用
-CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main.js"]
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/src/main.js"]

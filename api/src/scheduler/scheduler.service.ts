@@ -1,0 +1,338 @@
+import { Injectable, Logger } from '@nestjs/common';
+import { Cron } from '@nestjs/schedule';
+import { AssessmentCycle, CycleStatus, Prisma, TaskStatus } from '@prisma/client';
+import { PrismaService } from '@/prisma/prisma.service';
+import { NotificationsService, TaskReminderNodeType } from '@/notifications/notifications.service';
+import { DingtalkSyncService } from '@/dingtalk/dingtalk-sync.service';
+
+/** 进行中的周期状态（draft/closed 除外）。 */
+const ACTIVE_CYCLE_STATUSES: CycleStatus[] = [
+  'indicator_setting',
+  'self_eval',
+  'manager_score',
+  'hr_calibration',
+  'approval',
+  'published',
+  'appeal',
+];
+
+/** 需要催办的节点配置。 */
+interface ReminderNodeConfig {
+  /** 催办节点类型（传给 NotificationsService）。 */
+  nodeType: TaskReminderNodeType;
+  /** 该节点关注的周期截止日字段（任一临期/超期即触发一次催办）。 */
+  deadlineFields: Array<
+    keyof Pick<
+      AssessmentCycle,
+      | 'deadlineIndicatorConfirm'
+      | 'deadlineSelfEval'
+      | 'deadlineManagerScore'
+      | 'deadlineHrCalibration'
+      | 'deadlineApproval'
+    >
+  >;
+}
+
+const REMINDER_NODES: ReminderNodeConfig[] = [
+  { nodeType: 'employee', deadlineFields: ['deadlineIndicatorConfirm', 'deadlineSelfEval'] },
+  { nodeType: 'manager', deadlineFields: ['deadlineManagerScore'] },
+  { nodeType: 'deptHead', deadlineFields: ['deadlineManagerScore'] },
+  { nodeType: 'approver', deadlineFields: ['deadlineApproval'] },
+];
+
+/** 归档时排除的任务状态。 */
+const CLOSED_TASK_STATUSES: TaskStatus[] = ['closed', 'exempted'];
+
+/**
+ * 定时任务编排服务。
+ *
+ * 三个核心 cron：
+ * 1. 02:00 钉钉组织同步
+ * 2. 09:00 截止日催办
+ * 3. 03:00 自动关周期
+ *
+ * 所有 cron 均包 try/catch，单次失败只记日志不影响下次调度。
+ * 核心逻辑抽成 public 方法，便于单测与手动触发。
+ */
+@Injectable()
+export class SchedulerService {
+  private readonly logger = new Logger(SchedulerService.name);
+
+  constructor(
+    private readonly dingtalkSyncService: DingtalkSyncService,
+    private readonly notificationsService: NotificationsService,
+    private readonly prisma: PrismaService,
+  ) {}
+
+  /** 02:00 钉钉组织同步。 */
+  @Cron('0 2 * * *')
+  async syncDingtalkOrganization(): Promise<void> {
+    try {
+      this.dingtalkSyncService.runSync();
+      this.logger.log('钉钉组织同步定时任务已触发');
+    } catch (err) {
+      this.logger.error('钉钉组织同步定时任务异常', err);
+    }
+  }
+
+  /** 09:00 截止日催办。 */
+  @Cron('0 9 * * *')
+  async sendDeadlineReminders(): Promise<void> {
+    try {
+      await this.runDeadlineReminders();
+      this.logger.log('截止日催办定时任务完成');
+    } catch (err) {
+      this.logger.error('截止日催办定时任务异常', err);
+    }
+  }
+
+  /** 03:00 自动关周期。 */
+  @Cron('0 3 * * *')
+  async autoCloseCycles(): Promise<void> {
+    try {
+      await this.runAutoCloseCycles();
+      this.logger.log('自动关周期定时任务完成');
+    } catch (err) {
+      this.logger.error('自动关周期定时任务异常', err);
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 可测试 / 可手动触发的核心逻辑
+  // ---------------------------------------------------------------------------
+
+  /**
+   * 截止日催办核心逻辑。
+   * 对进行中周期，检查各节点截止日是否已超期或临期，
+   * 若是则按节点类型批量催办（系统调用，不受 D19 单人限频）。
+   * 同一 nodeType 的多个截止日合并为一次 sendBatchReminders，避免重复通知。
+   */
+  async runDeadlineReminders(): Promise<void> {
+    const reminderDays = await this.loadDeadlineReminderDays();
+    const now = new Date();
+
+    const cycles = await this.prisma.assessmentCycle.findMany({
+      where: { status: { in: ACTIVE_CYCLE_STATUSES } },
+      select: {
+        id: true,
+        status: true,
+        deadlineIndicatorConfirm: true,
+        deadlineSelfEval: true,
+        deadlineManagerScore: true,
+        deadlineHrCalibration: true,
+        deadlineApproval: true,
+      },
+    });
+
+    for (const cycle of cycles) {
+      for (const node of REMINDER_NODES) {
+        const shouldRemind = node.deadlineFields.some((field) => {
+          const deadline = cycle[field];
+          return deadline ? this.isOverdueOrNear(deadline, reminderDays, now) : false;
+        });
+
+        if (!shouldRemind) continue;
+
+        try {
+          await this.notificationsService.sendBatchReminders(cycle.id, node.nodeType);
+          this.logger.log(`周期 ${cycle.id} ${node.nodeType} 节点催办已发送`);
+        } catch (err) {
+          this.logger.error(`周期 ${cycle.id} ${node.nodeType} 节点催办失败`, err);
+        }
+      }
+    }
+  }
+
+  /**
+   * 自动关周期核心逻辑。
+   * 申诉截止日已过且处于 published/appeal 的周期：
+   * - 未结任务写入 performance_archives 快照（upsert 幂等）
+   * - 任务状态改为 closed
+   * - 周期改为 closed 并记录 closed_at
+   */
+  async runAutoCloseCycles(): Promise<void> {
+    const today = this.startOfDay(new Date());
+
+    const cycles = await this.prisma.assessmentCycle.findMany({
+      where: {
+        status: { in: ['published', 'appeal'] },
+        deadlineAppeal: { lt: today },
+      },
+      select: { id: true, status: true },
+    });
+
+    if (cycles.length === 0) return;
+
+    for (const cycle of cycles) {
+      try {
+        await this.closeCycle(cycle);
+        this.logger.log(`周期 ${cycle.id} 已自动关闭并归档`);
+      } catch (err) {
+        this.logger.error(`周期 ${cycle.id} 自动关闭失败`, err);
+      }
+    }
+  }
+
+  // ---------------------------------------------------------------------------
+  // 内部辅助
+  // ---------------------------------------------------------------------------
+
+  private async closeCycle(
+    cycle: Pick<AssessmentCycle, 'id'>,
+  ): Promise<void> {
+    const closedAt = new Date();
+
+    await this.prisma.$transaction(
+      async (tx) => {
+        const tasks = await tx.assessmentTask.findMany({
+          where: {
+            cycleId: cycle.id,
+            status: { notIn: CLOSED_TASK_STATUSES },
+          },
+          include: {
+            employee: { select: { name: true } },
+            dept: { select: { name: true } },
+            gradeResult: {
+              select: {
+                calculatedScore: true,
+                rawGrade: true,
+                calibratedGrade: true,
+                coefficient: true,
+              },
+            },
+            indicatorInstances: {
+              select: {
+                name: true,
+                dimensionName: true,
+                weight: true,
+                indicatorType: true,
+                targetValue: true,
+                actualValue: true,
+                selfScore: true,
+                managerScore: true,
+                finalScore: true,
+              },
+            },
+          },
+        });
+
+        for (const task of tasks) {
+          const grade = task.gradeResult?.calibratedGrade ?? task.gradeResult?.rawGrade ?? null;
+          if (!grade) {
+            this.logger.warn(
+              `周期 ${cycle.id} 任务 ${task.id} 无等级，跳过 performance_archives 归档`,
+            );
+          } else {
+            await tx.performanceArchive.upsert({
+              where: {
+                employeeId_cycleId: {
+                  employeeId: task.employeeId,
+                  cycleId: cycle.id,
+                },
+              },
+              create: {
+                employeeId: task.employeeId,
+                cycleId: cycle.id,
+                employeeName: task.employee?.name ?? '',
+                deptName: task.dept?.name ?? null,
+                grade,
+                totalScore: task.gradeResult?.calculatedScore ?? new Prisma.Decimal(0),
+                coefficient: task.gradeResult?.coefficient ?? null,
+                summary: this.buildArchiveSummary(task),
+                archivedAt: closedAt,
+              },
+              update: {
+                employeeName: task.employee?.name ?? '',
+                deptName: task.dept?.name ?? null,
+                grade,
+                totalScore: task.gradeResult?.calculatedScore ?? new Prisma.Decimal(0),
+                coefficient: task.gradeResult?.coefficient ?? null,
+                summary: this.buildArchiveSummary(task),
+                archivedAt: closedAt,
+              },
+            });
+          }
+
+          await tx.assessmentTask.update({
+            where: { id: task.id },
+            data: { status: 'closed', closedAt },
+          });
+        }
+
+        await tx.assessmentCycle.update({
+          where: { id: cycle.id },
+          data: { status: 'closed', closedAt },
+        });
+      },
+      { timeout: 60000, maxWait: 10000 },
+    );
+  }
+
+  private buildArchiveSummary(
+    task: {
+      indicatorInstances: Array<{
+        name: string;
+        dimensionName: string | null;
+        weight: Prisma.Decimal;
+        indicatorType: string;
+        targetValue: Prisma.Decimal | null;
+        actualValue: Prisma.Decimal | null;
+        selfScore: Prisma.Decimal | null;
+        managerScore: Prisma.Decimal | null;
+        finalScore: Prisma.Decimal | null;
+      }>;
+    } & {
+      gradeResult: {
+        calculatedScore: Prisma.Decimal | null;
+        rawGrade: string | null;
+        calibratedGrade: string | null;
+        coefficient: Prisma.Decimal | null;
+      } | null;
+    },
+  ): Prisma.InputJsonValue {
+    return {
+      indicators: task.indicatorInstances.map((ind) => ({
+        name: ind.name,
+        dimensionName: ind.dimensionName,
+        weight: ind.weight.toNumber(),
+        indicatorType: ind.indicatorType,
+        targetValue: ind.targetValue?.toNumber() ?? null,
+        actualValue: ind.actualValue?.toNumber() ?? null,
+        selfScore: ind.selfScore?.toNumber() ?? null,
+        managerScore: ind.managerScore?.toNumber() ?? null,
+        finalScore: ind.finalScore?.toNumber() ?? null,
+      })),
+      calculatedScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
+      rawGrade: task.gradeResult?.rawGrade ?? null,
+      calibratedGrade: task.gradeResult?.calibratedGrade ?? null,
+      coefficient: task.gradeResult?.coefficient?.toNumber() ?? null,
+    } as Prisma.InputJsonValue;
+  }
+
+  private async loadDeadlineReminderDays(): Promise<number> {
+    const config = await this.prisma.systemConfig.findUnique({
+      where: { key: 'deadline_reminder_days' },
+    });
+
+    if (!config) return 3;
+
+    const value = config.value as number | { value?: number } | undefined;
+    if (typeof value === 'number') return value;
+    if (value && typeof value === 'object' && typeof value.value === 'number') {
+      return value.value;
+    }
+    return 3;
+  }
+
+  private isOverdueOrNear(deadline: Date, reminderDays: number, now: Date): boolean {
+    const threshold = this.startOfDay(now);
+    threshold.setDate(threshold.getDate() + reminderDays);
+    return this.startOfDay(deadline).getTime() <= threshold.getTime();
+  }
+
+  private startOfDay(date: Date): Date {
+    const d = new Date(date);
+    d.setHours(0, 0, 0, 0);
+    return d;
+  }
+}
