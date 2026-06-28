@@ -108,27 +108,53 @@ export class DingtalkService {
 
   /**
    * 用前端临时授权码换取 unionId。
-   * 对应钉钉【根据code获取登录用户身份】接口。
+   * OAuth2 code -> userAccessToken -> 当前登录人 unionId。
    */
   async getAuthCodeUnionId(authCode: string): Promise<string> {
-    const token = await this.getAccessToken();
-    const res = await fetch(`https://oapi.dingtalk.com/topapi/user/getbycode?access_token=${token}`, {
+    this.assertConfigured();
+
+    const tokenRes = await fetch('https://api.dingtalk.com/v1.0/oauth2/userAccessToken', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ tmp_auth_code: authCode }),
+      body: JSON.stringify({
+        clientId: this.appKey,
+        clientSecret: this.appSecret,
+        code: authCode,
+        grantType: 'authorization_code',
+      }),
     });
 
-    const data = (await res.json()) as {
-      errcode?: number;
-      errmsg?: string;
-      result?: { unionid?: string; userid?: string };
+    const tokenData = (await tokenRes.json()) as {
+      accessToken?: string;
+      expireIn?: number;
+      code?: string;
+      message?: string;
     };
 
-    if (!res.ok || data.errcode !== 0) {
-      throw new Error(`钉钉 authCode 换 unionId 失败: ${data.errmsg ?? res.statusText} (${data.errcode ?? res.status})`);
+    if (!tokenRes.ok || !tokenData.accessToken) {
+      throw new Error(
+        `钉钉 authCode 换 userAccessToken 失败: ${tokenData.message ?? tokenRes.statusText} (${tokenData.code ?? tokenRes.status})`,
+      );
     }
 
-    const unionId = data.result?.unionid;
+    const userRes = await fetch('https://api.dingtalk.com/v1.0/contact/users/me', {
+      headers: {
+        'x-acs-dingtalk-access-token': tokenData.accessToken,
+      },
+    });
+
+    const userData = (await userRes.json()) as {
+      unionId?: string;
+      unionid?: string;
+      code?: string;
+      message?: string;
+    };
+
+    if (!userRes.ok) {
+      throw new Error(`钉钉获取当前登录人信息失败: ${userData.message ?? userRes.statusText} (${userData.code ?? userRes.status})`);
+    }
+
+    const unionId = userData.unionId ?? userData.unionid;
     if (!unionId) {
       throw new Error('钉钉 authCode 换 unionId 失败：响应中无 unionid');
     }
@@ -160,14 +186,14 @@ export class DingtalkService {
       const data = (await res.json()) as {
         errcode?: number;
         errmsg?: string;
-        result?: { list?: DingtalkDepartment[] };
+        result?: DingtalkDepartment[];
       };
 
       if (!res.ok || data.errcode !== 0) {
         throw new Error(`钉钉拉取部门失败: ${data.errmsg ?? res.statusText} (${data.errcode ?? res.status})`);
       }
 
-      const list = data.result?.list ?? [];
+      const list = data.result ?? [];
       for (const dept of list) {
         result.push(dept);
         queue.push(dept.dept_id);
