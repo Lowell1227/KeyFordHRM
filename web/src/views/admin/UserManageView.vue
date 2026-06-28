@@ -82,6 +82,11 @@ const flattenedDepartments = computed<Department[]>(() => {
 const selectedDept = computed(() => flattenedDepartments.value.find((dept) => dept.id === selectedDeptId.value) ?? null);
 
 const childDeptCount = computed(() => selectedDept.value?.children?.length ?? 0);
+const selectedDeptApproverHint = computed(() => getApproverHint(selectedDept.value));
+const selectedDeptApproverTag = computed(() => getApproverTag(selectedDept.value));
+const selectedDeptApproverSource = computed(() => getApproverSource(selectedDept.value));
+const selectedDeptApproverTrail = computed(() => getApproverTrail(selectedDept.value));
+const selectedDeptIssueBadges = computed(() => getDeptIssueBadges(selectedDept.value));
 
 const orgMembers = ref<ManagedUser[]>([]);
 const orgMemberTotal = ref(0);
@@ -102,10 +107,32 @@ const userQuery = ref<UserQuery>({
 
 const checkUsers = ref<ManagedUser[]>([]);
 const checkLoading = ref(false);
+const issueLevelFilter = ref<'all' | 'danger' | 'warning' | 'info'>('all');
 
-const issueItems = computed(() => {
-  const departmentIssues = flattenedDepartments.value.flatMap((dept) => {
-    const items: Array<{ key: string; type: '部门'; title: string; detail: string; level: 'warning' | 'danger' | 'info' }> = [];
+type IssueItem = {
+  key: string;
+  type: '部门' | '人员';
+  title: string;
+  detail: string;
+  level: 'warning' | 'danger' | 'info';
+  deptId?: string;
+  userId?: string;
+  keyword?: string;
+  targetView: 'org' | 'users';
+  action?: 'open-leader' | 'open-approver';
+};
+
+type DeptIssueBadge = {
+  label: string;
+  level: 'danger' | 'warning' | 'info';
+};
+
+const departmentIssueItems = computed<IssueItem[]>(() =>
+  flattenedDepartments.value.flatMap((dept) => {
+    const items: IssueItem[] = [];
+    const directMemberCount = dept.directMemberCount ?? 0;
+    const hasActiveWorkload = directMemberCount > 0;
+
     if (!dept.leaderId) {
       items.push({
         key: `${dept.id}-leader`,
@@ -113,15 +140,21 @@ const issueItems = computed(() => {
         title: `${dept.name} 未设置组织负责人`,
         detail: '组织负责人就是原来的部门负责人，负责部门管理、绩效复核和管理范围归属。',
         level: 'warning',
+        deptId: dept.id,
+        targetView: 'org',
+        action: 'open-leader',
       });
     }
-    if (!dept.approverId) {
+    if (hasActiveWorkload && !dept.effectiveApproverId) {
       items.push({
         key: `${dept.id}-approver`,
         type: '部门',
-        title: `${dept.name} 未设置流程审批人`,
-        detail: '流程审批人就是原来的部门审批人，绩效流程进入审批节点时会找这个人处理。',
+        title: `${dept.name} 暂未推导出审批责任人`,
+        detail: '这个部门当前已有在职员工，但还没有形成可用审批继承链。请先补齐上级负责人，必要时再做审批覆盖。',
         level: 'danger',
+        deptId: dept.id,
+        targetView: 'org',
+        action: 'open-approver',
       });
     }
     if ((dept.memberCount ?? 0) === 0 && !dept.children?.length) {
@@ -131,13 +164,17 @@ const issueItems = computed(() => {
         title: `${dept.name} 暂无在职人员`,
         detail: '如果是临时部门可以保留，否则建议检查钉钉同步或人员归属。',
         level: 'info',
+        deptId: dept.id,
+        targetView: 'org',
       });
     }
     return items;
-  });
+  }),
+);
 
-  const userIssues = checkUsers.value.flatMap((user) => {
-    const items: Array<{ key: string; type: '人员'; title: string; detail: string; level: 'warning' | 'danger' | 'info' }> = [];
+const userIssueItems = computed<IssueItem[]>(() =>
+  checkUsers.value.flatMap((user) => {
+    const items: IssueItem[] = [];
     if (user.status !== 'resigned' && !user.directManagerId) {
       items.push({
         key: `${user.id}-manager`,
@@ -145,6 +182,9 @@ const issueItems = computed(() => {
         title: `${user.name} 未设置直属主管`,
         detail: `${user.deptName || '未分配部门'} · ${user.position || '岗位待补充'}`,
         level: 'warning',
+        userId: user.id,
+        keyword: user.name,
+        targetView: 'users',
       });
     }
     if (!user.deptId && user.status !== 'resigned') {
@@ -154,6 +194,9 @@ const issueItems = computed(() => {
         title: `${user.name} 未分配部门`,
         detail: '绩效模板匹配和部门统计都依赖部门归属。',
         level: 'danger',
+        userId: user.id,
+        keyword: user.name,
+        targetView: 'users',
       });
     }
     if (user.status === 'resigned' && !['employee'].includes(user.sysRole)) {
@@ -163,13 +206,21 @@ const issueItems = computed(() => {
         title: `${user.name} 已离职但仍保留 ${roleLabels[user.sysRole] ?? user.sysRole} 角色`,
         detail: '建议确认是否需要清理系统权限。',
         level: 'warning',
+        userId: user.id,
+        keyword: user.name,
+        targetView: 'users',
       });
     }
     return items;
-  });
+  }),
+);
 
-  return [...departmentIssues, ...userIssues];
-});
+const issueItems = computed(() => [...departmentIssueItems.value, ...userIssueItems.value]);
+const dangerIssueCount = computed(() => issueItems.value.filter((item) => item.level === 'danger').length);
+const warningIssueCount = computed(() => issueItems.value.filter((item) => item.level === 'warning').length);
+const infoIssueCount = computed(() => issueItems.value.filter((item) => item.level === 'info').length);
+const filteredDepartmentIssueItems = computed(() => filterIssueItems(departmentIssueItems.value));
+const filteredUserIssueItems = computed(() => filterIssueItems(userIssueItems.value));
 
 async function loadDepartments() {
   deptLoading.value = true;
@@ -258,6 +309,124 @@ function resetUserFilters() {
     status: undefined,
   };
   loadUsers();
+}
+
+function getApproverTag(dept: Department | null): string {
+  if (!dept?.effectiveApproverId) return '未推导';
+  switch (dept.effectiveApproverSource) {
+    case 'manual_override':
+      return '手动覆盖';
+    case 'parent_leader':
+      return '上级负责人';
+    case 'ancestor_chain':
+      return '逐级继承';
+    default:
+      return '自动推导';
+  }
+}
+
+function getApproverHint(dept: Department | null): string {
+  if (!dept?.effectiveApproverId) {
+    return '未找到可继承的审批责任人，请补齐上级组织负责人或使用高级覆盖。';
+  }
+
+  if (dept.effectiveApproverSource === 'manual_override') {
+    return '当前使用手动指定的审批覆盖人，适合特殊审批链。';
+  }
+
+  if (dept.effectiveApproverSource === 'parent_leader') {
+    return `默认继承自上一级部门负责人${dept.effectiveApproverDeptName ? `：${dept.effectiveApproverDeptName}` : ''}。`;
+  }
+
+  if (dept.effectiveApproverSource === 'ancestor_chain') {
+    return `当前由上层组织负责人逐级继承${dept.effectiveApproverDeptName ? `，来源：${dept.effectiveApproverDeptName}` : ''}。`;
+  }
+
+  return '审批责任人会按组织层级自动推导。';
+}
+
+function getApproverSource(dept: Department | null): string {
+  if (!dept?.effectiveApproverId) return '来源：未推导';
+  if (dept.effectiveApproverSource === 'manual_override') return '来源：手动审批覆盖';
+  if (dept.effectiveApproverDeptName) return `来源：${dept.effectiveApproverDeptName}`;
+  if (dept.effectiveApproverSource === 'parent_leader') return '来源：上一级组织负责人';
+  if (dept.effectiveApproverSource === 'ancestor_chain') return '来源：上层组织逐级继承';
+  return '来源：自动推导';
+}
+
+function getApproverTrail(dept: Department | null): string[] {
+  if (!dept) return [];
+  if (!dept.effectiveApproverId) {
+    return [dept.name, '未找到可继承的审批责任人'];
+  }
+
+  if (dept.effectiveApproverSource === 'manual_override') {
+    return [dept.name, '手动审批覆盖', dept.effectiveApproverName || '已指定审批责任人'];
+  }
+
+  if (dept.effectiveApproverDeptName) {
+    return [dept.name, dept.effectiveApproverDeptName, dept.effectiveApproverName || '审批责任人'];
+  }
+
+  if (dept.effectiveApproverSource === 'parent_leader') {
+    return [dept.name, '上一级组织负责人', dept.effectiveApproverName || '审批责任人'];
+  }
+
+  if (dept.effectiveApproverSource === 'ancestor_chain') {
+    return [dept.name, '上层组织逐级继承', dept.effectiveApproverName || '审批责任人'];
+  }
+
+  return [dept.name, dept.effectiveApproverName || '审批责任人'];
+}
+
+function getDeptIssueBadges(dept: Department | null): DeptIssueBadge[] {
+  if (!dept) return [];
+
+  const badges: DeptIssueBadge[] = [];
+  const directMemberCount = dept.directMemberCount ?? 0;
+
+  if (directMemberCount > 0 && !dept.effectiveApproverId) {
+    badges.push({ label: '审批未就绪', level: 'danger' });
+  }
+  if (!dept.leaderId) {
+    badges.push({ label: '缺负责人', level: 'warning' });
+  }
+  if ((dept.memberCount ?? 0) === 0 && !dept.children?.length) {
+    badges.push({ label: '空部门', level: 'info' });
+  }
+  return badges;
+}
+
+function getTreeDeptBadge(dept: Department): DeptIssueBadge | null {
+  const [badge] = getDeptIssueBadges(dept);
+  return badge ?? null;
+}
+
+function filterIssueItems(items: IssueItem[]): IssueItem[] {
+  if (issueLevelFilter.value === 'all') return items;
+  return items.filter((item) => item.level === issueLevelFilter.value);
+}
+
+async function jumpToIssue(item: IssueItem) {
+  if (item.targetView === 'org' && item.deptId) {
+    activeView.value = 'org';
+    selectedDeptId.value = item.deptId;
+    orgMemberPage.value = 1;
+    await loadOrgMembers();
+    const dept = flattenedDepartments.value.find((row) => row.id === item.deptId) ?? null;
+    if (dept && item.action === 'open-leader' && isSystemAdmin.value) {
+      openLeaderDialog(dept);
+    }
+    if (dept && item.action === 'open-approver' && isSystemAdmin.value) {
+      openApproverDialog(dept);
+    }
+    return;
+  }
+
+  activeView.value = 'users';
+  userQuery.value.page = 1;
+  userQuery.value.keyword = item.keyword ?? '';
+  await loadUsers();
 }
 
 function refreshCurrentView() {
@@ -365,6 +534,36 @@ async function confirmPassword() {
   }
 }
 
+const leaderDialog = ref({
+  visible: false,
+  deptId: '',
+  deptName: '',
+  leaderId: undefined as string | undefined,
+});
+
+function openLeaderDialog(row: Department) {
+  leaderDialog.value = {
+    visible: true,
+    deptId: row.id,
+    deptName: row.name,
+    leaderId: row.leaderId ?? undefined,
+  };
+}
+
+async function confirmLeader() {
+  if (!leaderDialog.value.deptId) return;
+  try {
+    await departmentsApi.updateLeader(leaderDialog.value.deptId, {
+      leaderId: leaderDialog.value.leaderId ?? null,
+    });
+    ElMessage.success('组织负责人已更新');
+    leaderDialog.value.visible = false;
+    await Promise.all([loadDepartments(), loadOrgMembers(), loadCheckUsers()]);
+  } catch {
+    // 由 HTTP 拦截器展示错误
+  }
+}
+
 const approverDialog = ref({
   visible: false,
   deptId: '',
@@ -387,7 +586,7 @@ async function confirmApprover() {
     await departmentsApi.updateApprover(approverDialog.value.deptId, {
       approverId: approverDialog.value.approverId ?? null,
     });
-    ElMessage.success('流程审批人已更新');
+    ElMessage.success('审批覆盖已更新');
     approverDialog.value.visible = false;
     await Promise.all([loadDepartments(), loadCheckUsers()]);
   } catch {
@@ -413,7 +612,7 @@ onMounted(async () => {
         <div class="page-title">
           <div>
             <h2>组织与人员</h2>
-            <p>按组织查看人员、维护主管和审批人，先把绩效流程的责任关系理清楚。</p>
+            <p>这里先把直属主管和组织负责人维护清楚，审批责任人会按组织层级自动继承，特殊情况再做高级覆盖。</p>
           </div>
           <el-button :icon="Search" @click="refreshCurrentView">刷新</el-button>
         </div>
@@ -453,8 +652,20 @@ onMounted(async () => {
           >
             <template #default="{ data }">
               <div class="dept-node">
-                <span>{{ data.name }}</span>
-                <em>{{ data.memberCount ?? 0 }}</em>
+                <div class="dept-node__content">
+                  <span class="dept-node__name">{{ data.name }}</span>
+                  <div v-if="getTreeDeptBadge(data)" class="dept-node__badges">
+                    <span :class="['dept-node__badge', `is-${getTreeDeptBadge(data)?.level}`]">
+                      {{ getTreeDeptBadge(data)?.label }}
+                    </span>
+                  </div>
+                </div>
+                <div class="dept-node__meta">
+                  <em>{{ data.memberCount ?? 0 }}</em>
+                  <span v-if="getDeptIssueBadges(data).length" class="dept-node__issue-count">
+                    {{ getDeptIssueBadges(data).length }}
+                  </span>
+                </div>
               </div>
             </template>
           </el-tree>
@@ -465,18 +676,26 @@ onMounted(async () => {
             <div>
               <span class="eyebrow">当前部门</span>
               <h3>{{ selectedDept.name }}</h3>
+              <div v-if="selectedDeptIssueBadges.length" class="dept-summary__chips">
+                <span
+                  v-for="badge in selectedDeptIssueBadges"
+                  :key="badge.label"
+                  :class="['dept-summary__chip', `is-${badge.level}`]"
+                >
+                  {{ badge.label }}
+                </span>
+              </div>
             </div>
             <div class="dept-summary__side">
               <span class="dept-path">{{ selectedDept.fullPath || '未维护完整路径' }}</span>
-              <el-button
-                v-if="isSystemAdmin"
-                type="primary"
-                plain
-                size="small"
-                @click="openApproverDialog(selectedDept)"
-              >
-                设置审批人
-              </el-button>
+              <div v-if="isSystemAdmin" class="dept-summary__actions">
+                <el-button type="primary" size="small" @click="openLeaderDialog(selectedDept)">
+                  设置负责人
+                </el-button>
+                <el-button plain size="small" @click="openApproverDialog(selectedDept)">
+                  高级设置
+                </el-button>
+              </div>
             </div>
           </div>
 
@@ -509,25 +728,47 @@ onMounted(async () => {
               <div class="relation-card__label">
                 <span>组织负责人</span>
                 <el-popover trigger="click" placement="top" width="260">
-                  <p class="help-popover-text">管这个部门的人，负责部门日常管理、部门复核和统计范围归属。可以和流程审批人是同一个人。</p>
+                  <p class="help-popover-text">这是部门这条线的主数据，负责部门管理、部门复核和组织范围归属，也是审批链自动继承的重要来源。</p>
                   <template #reference>
                     <el-icon class="inline-help"><QuestionFilled /></el-icon>
                   </template>
                 </el-popover>
               </div>
               <strong>{{ selectedDept.leaderName || '未设置' }}</strong>
+              <small class="relation-card__hint">
+                {{ selectedDept.leaderName ? '这是当前部门的主负责人，会作为下级部门审批链的默认继承来源。' : '请先为当前部门设置组织负责人，审批责任人才会更稳定地自动继承。' }}
+              </small>
             </div>
             <div class="relation-card">
               <div class="relation-card__label">
-                <span>流程审批人</span>
-                <el-popover trigger="click" placement="top" width="270">
-                  <p class="help-popover-text">绩效流程走到审批节点时处理的人。可以与组织负责人相同，也可以设置为更高层审批人。</p>
+                <span>审批责任人</span>
+                <el-popover trigger="click" placement="top" width="300">
+                  <p class="help-popover-text">默认自动继承上一级组织负责人。只有遇到跨组织审批、特殊签批链时，才需要单独设置审批覆盖。</p>
                   <template #reference>
                     <el-icon class="inline-help"><QuestionFilled /></el-icon>
                   </template>
                 </el-popover>
               </div>
-              <strong>{{ selectedDept.approverName || '未设置' }}</strong>
+              <strong>{{ selectedDept.effectiveApproverName || '未推导' }}</strong>
+              <small class="relation-card__hint">{{ selectedDeptApproverTag }} · {{ selectedDeptApproverHint }}</small>
+              <small class="relation-card__subhint">{{ selectedDeptApproverSource }}</small>
+            </div>
+          </div>
+
+          <div class="approver-trail-card">
+            <div class="approver-trail-card__head">
+              <strong>审批继承路径</strong>
+              <span>让当前部门一眼看清责任人是从哪里带出来的</span>
+            </div>
+            <div class="approver-trail">
+              <template v-for="(step, index) in selectedDeptApproverTrail" :key="`${step}-${index}`">
+                <span :class="['approver-trail__step', { 'is-final': index === selectedDeptApproverTrail.length - 1 }]">
+                  {{ step }}
+                </span>
+                <el-icon v-if="index < selectedDeptApproverTrail.length - 1" class="approver-trail__arrow">
+                  <ArrowRight />
+                </el-icon>
+              </template>
             </div>
           </div>
 
@@ -535,26 +776,26 @@ onMounted(async () => {
             <el-collapse-item name="role-guide">
               <template #title>
                 <div class="relation-guide__title">
-                  <strong>角色关系说明</strong>
-                  <span>直属主管、组织负责人、流程审批人分别管人、管部门、管审批节点</span>
+                  <strong>关系说明</strong>
+                  <span>主数据只维护直属主管和组织负责人，审批责任人默认自动继承，特殊场景再做覆盖。</span>
                 </div>
               </template>
               <div class="relation-guide__items">
                 <div>
-                  <b>直属主管 = 管某个人</b>
-                  <span>员工表里每个人都有自己的直属主管。员工评分、自评确认、主管评分时，主要找这个人。</span>
+                  <b>直属主管 = 管人</b>
+                  <span>员工确认、自评、主管评分这些与“人”相关的环节，都按直属主管来走。</span>
                 </div>
                 <div>
-                  <b>组织负责人 = 管这个部门</b>
-                  <span>部门负责人代表这个部门的管理责任。部门复核、部门统计、管理范围通常看这个人。</span>
+                  <b>组织负责人 = 管部门</b>
+                  <span>部门复核、组织归属、统计口径这些与“部门”相关的环节，都以组织负责人为准。</span>
                 </div>
                 <div>
-                  <b>流程审批人 = 管审批节点</b>
-                  <span>绩效流程走到审批节点时才找这个人。可以和组织负责人是同一个人，也可以另设更高层审批人。</span>
+                  <b>审批责任人 = 自动继承</b>
+                  <span>流程进入审批节点时，默认继承上一级组织负责人。只有特殊审批链，才需要手动设置审批覆盖。</span>
                 </div>
               </div>
               <div class="relation-guide__example">
-                例：创意设计部员工先由直属主管评分，再由组织负责人做部门复核；如果流程进入审批节点，则交给流程审批人处理。
+                例：设计部员工先由直属主管处理与评分，再由设计部组织负责人复核；如果流程继续上收审批，则自动交给上一级组织负责人处理。
               </div>
             </el-collapse-item>
           </el-collapse>
@@ -701,18 +942,93 @@ onMounted(async () => {
           <strong>{{ issueItems.length }}</strong>
         </div>
 
+        <div v-if="issueItems.length" class="checks-overview">
+          <button type="button" class="checks-stat is-danger" @click="issueLevelFilter = 'danger'">
+            <span>阻塞项</span>
+            <strong>{{ dangerIssueCount }}</strong>
+            <small>会影响流程正常启动或流转</small>
+          </button>
+          <button type="button" class="checks-stat is-warning" @click="issueLevelFilter = 'warning'">
+            <span>待补项</span>
+            <strong>{{ warningIssueCount }}</strong>
+            <small>建议尽快补齐，避免后续人工兜底</small>
+          </button>
+          <button type="button" class="checks-stat is-info" @click="issueLevelFilter = 'info'">
+            <span>提示项</span>
+            <strong>{{ infoIssueCount }}</strong>
+            <small>不阻塞流程，但建议核对组织完整性</small>
+          </button>
+        </div>
+
+        <div v-if="issueItems.length" class="checks-filter">
+          <span class="checks-filter__label">快速筛选</span>
+          <el-radio-group v-model="issueLevelFilter" size="small">
+            <el-radio-button value="all">全部</el-radio-button>
+            <el-radio-button value="danger">阻塞项</el-radio-button>
+            <el-radio-button value="warning">待补项</el-radio-button>
+            <el-radio-button value="info">提示项</el-radio-button>
+          </el-radio-group>
+        </div>
+
         <el-empty v-if="issueItems.length === 0" description="暂无需要处理的组织配置问题" />
-        <div v-else class="issue-list">
-          <div v-for="item in issueItems" :key="item.key" :class="['issue-item', `is-${item.level}`]">
-            <el-tag :type="item.level === 'danger' ? 'danger' : item.level === 'warning' ? 'warning' : 'info'" effect="plain">
-              {{ item.type }}
-            </el-tag>
-            <div>
-              <strong>{{ item.title }}</strong>
-              <p>{{ item.detail }}</p>
+        <div v-else class="checks-groups">
+          <section class="checks-group">
+            <div class="checks-group__head">
+              <div>
+                <strong>组织问题</strong>
+                <p>优先补齐组织负责人和审批责任继承链。</p>
+              </div>
+              <el-tag effect="plain" type="primary">{{ filteredDepartmentIssueItems.length }}/{{ departmentIssueItems.length }}</el-tag>
             </div>
-            <el-icon><ArrowRight /></el-icon>
-          </div>
+            <div v-if="filteredDepartmentIssueItems.length" class="issue-list">
+              <button
+                v-for="item in filteredDepartmentIssueItems"
+                :key="item.key"
+                type="button"
+                :class="['issue-item', `is-${item.level}`]"
+                @click="jumpToIssue(item)"
+              >
+                <el-tag :type="item.level === 'danger' ? 'danger' : item.level === 'warning' ? 'warning' : 'info'" effect="plain">
+                  {{ item.type }}
+                </el-tag>
+                <div>
+                  <strong>{{ item.title }}</strong>
+                  <p>{{ item.detail }}</p>
+                </div>
+                <el-icon><ArrowRight /></el-icon>
+              </button>
+            </div>
+            <el-empty v-else :description="departmentIssueItems.length ? '当前筛选下没有组织问题' : '组织关系已完整'" :image-size="70" />
+          </section>
+
+          <section class="checks-group">
+            <div class="checks-group__head">
+              <div>
+                <strong>人员问题</strong>
+                <p>检查直属主管、部门归属和离职权限残留。</p>
+              </div>
+              <el-tag effect="plain">{{ filteredUserIssueItems.length }}/{{ userIssueItems.length }}</el-tag>
+            </div>
+            <div v-if="filteredUserIssueItems.length" class="issue-list">
+              <button
+                v-for="item in filteredUserIssueItems"
+                :key="item.key"
+                type="button"
+                :class="['issue-item', `is-${item.level}`]"
+                @click="jumpToIssue(item)"
+              >
+                <el-tag :type="item.level === 'danger' ? 'danger' : item.level === 'warning' ? 'warning' : 'info'" effect="plain">
+                  {{ item.type }}
+                </el-tag>
+                <div>
+                  <strong>{{ item.title }}</strong>
+                  <p>{{ item.detail }}</p>
+                </div>
+                <el-icon><ArrowRight /></el-icon>
+              </button>
+            </div>
+            <el-empty v-else :description="userIssueItems.length ? '当前筛选下没有人员问题' : '人员关系已完整'" :image-size="70" />
+          </section>
         </div>
       </section>
     </ChartCard>
@@ -750,9 +1066,18 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="approverDialog.visible" title="设置流程审批人" width="480px" :close-on-click-modal="false" destroy-on-close>
-      <p class="dialog-tip">为部门 <strong>{{ approverDialog.deptName }}</strong> 指定绩效流程审批人。</p>
-      <UserSelect v-model="approverDialog.approverId" placeholder="搜索姓名或工号选择审批人" />
+    <el-dialog v-model="leaderDialog.visible" title="设置组织负责人" width="480px" :close-on-click-modal="false" destroy-on-close>
+      <p class="dialog-tip">部门 <strong>{{ leaderDialog.deptName }}</strong> 的负责人会参与部门管理，也会作为下级部门审批责任人的默认继承来源。</p>
+      <UserSelect v-model="leaderDialog.leaderId" placeholder="搜索姓名或工号，留空则清空组织负责人" />
+      <template #footer>
+        <el-button @click="leaderDialog.visible = false">取消</el-button>
+        <el-button type="primary" @click="confirmLeader">确认</el-button>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="approverDialog.visible" title="审批覆盖（高级）" width="480px" :close-on-click-modal="false" destroy-on-close>
+      <p class="dialog-tip">部门 <strong>{{ approverDialog.deptName }}</strong> 默认会自动继承上一级组织负责人。只有特殊场景，才需要在这里单独指定审批覆盖人。</p>
+      <UserSelect v-model="approverDialog.approverId" placeholder="搜索姓名或工号，留空则恢复自动继承" />
       <template #footer>
         <el-button @click="approverDialog.visible = false">取消</el-button>
         <el-button type="primary" @click="confirmApprover">确认</el-button>
@@ -858,11 +1183,78 @@ onMounted(async () => {
 
 .dept-node {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: space-between;
   width: 100%;
   gap: 8px;
-  padding-right: 8px;
+  padding: 4px 8px 4px 0;
+}
+
+:deep(.el-tree-node__content) {
+  align-items: flex-start;
+  min-height: 38px;
+  height: auto;
+  padding: 2px 0;
+}
+
+:deep(.el-tree-node__expand-icon) {
+  margin-top: 7px;
+}
+
+.dept-node__content {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 4px;
+}
+
+.dept-node__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: normal;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.dept-node__badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+}
+
+.dept-node__badge {
+  display: inline-flex;
+  align-items: center;
+  min-height: 18px;
+  padding: 0 7px;
+  border-radius: 999px;
+  font-size: 11px;
+  line-height: 18px;
+  white-space: nowrap;
+}
+
+.dept-node__badge.is-danger {
+  background: #fff1f1;
+  color: #df4d4d;
+}
+
+.dept-node__badge.is-warning {
+  background: #fff6e7;
+  color: #c98008;
+}
+
+.dept-node__badge.is-info {
+  background: #eef3ff;
+  color: #5572ef;
+}
+
+.dept-node__meta {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  flex-shrink: 0;
+  padding-top: 2px;
 }
 
 .dept-node em {
@@ -874,6 +1266,20 @@ onMounted(async () => {
   font-style: normal;
   font-size: 12px;
   text-align: center;
+}
+
+.dept-node__issue-count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 4px;
+  border-radius: 999px;
+  background: #fff1f1;
+  color: #df4d4d;
+  font-size: 11px;
+  font-weight: 700;
 }
 
 .org-detail {
@@ -894,6 +1300,13 @@ onMounted(async () => {
   justify-content: flex-end;
   gap: 10px;
   min-width: 0;
+}
+
+.dept-summary__actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 8px;
 }
 
 .dept-path {
@@ -920,6 +1333,38 @@ onMounted(async () => {
   margin: 4px 0;
   color: #172033;
   font-size: 18px;
+}
+
+.dept-summary__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.dept-summary__chip {
+  display: inline-flex;
+  align-items: center;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.dept-summary__chip.is-danger {
+  background: #fff1f1;
+  color: #df4d4d;
+}
+
+.dept-summary__chip.is-warning {
+  background: #fff6e7;
+  color: #c98008;
+}
+
+.dept-summary__chip.is-info {
+  background: #eef3ff;
+  color: #5572ef;
 }
 
 .dept-summary p,
@@ -1098,6 +1543,78 @@ onMounted(async () => {
   color: #8a94a6;
 }
 
+.relation-card__hint {
+  display: block;
+  margin-top: 8px;
+  color: #7b8497;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.relation-card__subhint {
+  display: block;
+  margin-top: 4px;
+  color: #98a1b3;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.approver-trail-card {
+  padding: 14px;
+  margin-bottom: 16px;
+  border: 1px solid #e6ecf7;
+  border-radius: 8px;
+  background: linear-gradient(180deg, #fbfcff 0%, #f7faff 100%);
+}
+
+.approver-trail-card__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.approver-trail-card__head strong {
+  color: #1f2a44;
+  font-size: 15px;
+}
+
+.approver-trail-card__head span {
+  color: #7b8497;
+  font-size: 12px;
+}
+
+.approver-trail {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.approver-trail__step {
+  display: inline-flex;
+  align-items: center;
+  min-height: 34px;
+  padding: 0 12px;
+  border: 1px solid #dfe7f7;
+  border-radius: 999px;
+  background: #fff;
+  color: #52627a;
+  font-size: 13px;
+}
+
+.approver-trail__step.is-final {
+  border-color: #cfdcff;
+  background: #edf3ff;
+  color: #2f63ff;
+  font-weight: 600;
+}
+
+.approver-trail__arrow {
+  color: #a8b2c5;
+}
+
 .table-pagination {
   justify-content: flex-end;
   margin-top: 16px;
@@ -1121,6 +1638,118 @@ onMounted(async () => {
   color: #ff7d00;
 }
 
+.checks-filter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.checks-filter__label {
+  color: #6f7b91;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.checks-overview {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.checks-stat {
+  appearance: none;
+  text-align: left;
+  cursor: pointer;
+  padding: 14px 16px;
+  border: 1px solid #e8edf5;
+  border-radius: 10px;
+  background: #fbfcff;
+}
+
+.checks-stat span,
+.checks-stat small {
+  display: block;
+}
+
+.checks-stat span {
+  color: #7b8497;
+  font-size: 12px;
+}
+
+.checks-stat strong {
+  display: block;
+  margin: 8px 0 6px;
+  color: #1f2a44;
+  font-size: 28px;
+  line-height: 1;
+}
+
+.checks-stat small {
+  color: #98a1b3;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.checks-stat.is-danger {
+  border-color: #ffd6d6;
+  background: #fff8f8;
+}
+
+.checks-stat.is-danger strong {
+  color: #e24d4d;
+}
+
+.checks-stat.is-warning {
+  border-color: #ffe4b3;
+  background: #fffbf4;
+}
+
+.checks-stat.is-warning strong {
+  color: #d38a0a;
+}
+
+.checks-stat.is-info strong {
+  color: #4d6fff;
+}
+
+.checks-stat:hover {
+  box-shadow: 0 10px 24px rgba(47, 99, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+.checks-groups {
+  display: grid;
+  gap: 16px;
+}
+
+.checks-group {
+  padding: 14px;
+  border: 1px solid #e8edf5;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.checks-group__head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.checks-group__head strong {
+  color: #1f2a44;
+  font-size: 15px;
+}
+
+.checks-group__head p {
+  margin: 4px 0 0;
+  color: #7b8497;
+  font-size: 13px;
+}
+
 .issue-list {
   display: grid;
   gap: 10px;
@@ -1135,6 +1764,21 @@ onMounted(async () => {
   border: 1px solid #e8edf5;
   border-radius: 8px;
   background: #fff;
+  width: 100%;
+  text-align: left;
+  cursor: pointer;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease, transform 0.2s ease;
+}
+
+.issue-item:hover {
+  border-color: #cdd9f5;
+  box-shadow: 0 8px 20px rgba(47, 99, 255, 0.08);
+  transform: translateY(-1px);
+}
+
+.issue-item:focus-visible {
+  outline: 2px solid #2f63ff;
+  outline-offset: 2px;
 }
 
 .issue-item.is-danger {
@@ -1178,6 +1822,10 @@ onMounted(async () => {
 
   .light-filter {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .checks-overview {
+    grid-template-columns: 1fr;
   }
 }
 

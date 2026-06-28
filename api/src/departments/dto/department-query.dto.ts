@@ -11,4 +11,9 @@ export class DepartmentQueryDto {
   @IsOptional()
   @IsEnum(CompanyCode)
   company?: CompanyCode;
+
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  isActive?: boolean;
 }

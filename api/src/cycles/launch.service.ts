@@ -6,6 +6,7 @@ import { AuthUser } from '@/common/types/auth.types';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { ExemptService } from './exempt.service';
 import { serializeDecimals } from '@/common/interceptors/response.interceptor';
+import { buildEffectiveApproverMap } from '@/departments/department-relations';
 
 /** 模板匹配所需的模板视图。 */
 interface TemplateView {
@@ -109,8 +110,8 @@ export class LaunchService {
       const usedTemplateIds = Array.from(new Set(matches.map((m) => m.template.id)));
       const snapshots = await this.createSnapshots(tx, cycleId, templates, usedTemplateIds);
 
-      const deptIds = Array.from(new Set(candidates.map((c) => c.deptId).filter(Boolean))) as string[];
-      const deptMap = await this.buildDeptMap(tx, deptIds);
+      const deptMap = await this.buildDeptMap(tx);
+      this.assertLaunchRelations(matches, deptMap);
 
       const ratio = await this.getExemptRatio(tx);
       const snapshotMap = new Map(snapshots.map((s) => [s.templateId, s.id]));
@@ -133,7 +134,7 @@ export class LaunchService {
               deptId: candidate.deptId,
               managerId: candidate.directManagerId,
               deptHeadId: dept?.leaderId ?? null,
-              approverId: dept?.approverId ?? null,
+              approverId: dept?.effectiveApproverId ?? null,
               status: 'exempted',
               isExempt: true,
               exemptReason: `在岗${exempt.onJobDays}天，不足周期1/3`,
@@ -151,7 +152,7 @@ export class LaunchService {
             deptId: candidate.deptId,
             managerId: candidate.directManagerId,
             deptHeadId: dept?.leaderId ?? null,
-            approverId: dept?.approverId ?? null,
+            approverId: dept?.effectiveApproverId ?? null,
             status: 'indicator_drafting',
             isExempt: false,
           },
@@ -310,16 +311,97 @@ export class LaunchService {
   /** 构建部门信息映射（leaderId / approverId）。 */
   private async buildDeptMap(
     tx: Prisma.TransactionClient,
-    deptIds: string[],
-  ): Promise<Map<string, { leaderId: string | null; approverId: string | null }>> {
-    if (deptIds.length === 0) return new Map();
-
+  ): Promise<Map<string, { name: string; leaderId: string | null; effectiveApproverId: string | null }>> {
     const depts = await tx.department.findMany({
-      where: { id: { in: deptIds } },
-      select: { id: true, leaderId: true, approverId: true },
+      select: {
+        id: true,
+        name: true,
+        parentId: true,
+        leaderId: true,
+        leader: { select: { name: true } },
+        approverId: true,
+        approver: { select: { name: true } },
+      },
     });
 
-    return new Map(depts.map((d) => [d.id, { leaderId: d.leaderId, approverId: d.approverId }]));
+    const effectiveApproverMap = buildEffectiveApproverMap(
+      depts.map((dept) => ({
+        id: dept.id,
+        name: dept.name,
+        parentId: dept.parentId ?? null,
+        leaderId: dept.leaderId ?? null,
+        leaderName: dept.leader?.name ?? null,
+        approverId: dept.approverId ?? null,
+        approverName: dept.approver?.name ?? null,
+      })),
+    );
+
+    return new Map(
+      depts.map((dept) => [
+        dept.id,
+        {
+          name: dept.name,
+          leaderId: dept.leaderId ?? null,
+          effectiveApproverId: effectiveApproverMap.get(dept.id)?.effectiveApproverId ?? null,
+        },
+      ]),
+    );
+  }
+
+  private assertLaunchRelations(
+    matches: Array<{ candidate: Candidate; template: TemplateView }>,
+    deptMap: Map<string, { name: string; leaderId: string | null; effectiveApproverId: string | null }>,
+  ): void {
+    const missingDeptUsers = new Set<string>();
+    const missingManagers = new Set<string>();
+    const missingDeptLeaders = new Set<string>();
+    const missingApprovers = new Set<string>();
+
+    for (const { candidate } of matches) {
+      if (!candidate.deptId) {
+        missingDeptUsers.add(candidate.name);
+        continue;
+      }
+
+      const dept = deptMap.get(candidate.deptId);
+      if (!dept) {
+        missingDeptUsers.add(candidate.name);
+        continue;
+      }
+
+      if (!candidate.directManagerId) {
+        missingManagers.add(candidate.name);
+      }
+
+      if (!dept.leaderId) {
+        missingDeptLeaders.add(dept.name);
+      }
+
+      if (!dept.effectiveApproverId) {
+        missingApprovers.add(dept.name);
+      }
+    }
+
+    const messages: string[] = [];
+    if (missingDeptUsers.size > 0) {
+      messages.push(`以下员工未分配部门：${Array.from(missingDeptUsers).join('、')}`);
+    }
+    if (missingManagers.size > 0) {
+      messages.push(`以下员工未设置直属主管：${Array.from(missingManagers).join('、')}`);
+    }
+    if (missingDeptLeaders.size > 0) {
+      messages.push(`以下部门未设置组织负责人：${Array.from(missingDeptLeaders).join('、')}`);
+    }
+    if (missingApprovers.size > 0) {
+      messages.push(`以下部门未能自动推导审批人，请补上级负责人或设置审批覆盖：${Array.from(missingApprovers).join('、')}`);
+    }
+
+    if (messages.length > 0) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: messages.join('；'),
+      });
+    }
   }
 
   /** 读取系统配置的豁免阈值比例。 */

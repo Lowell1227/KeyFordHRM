@@ -2,8 +2,10 @@ import { Injectable, NotFoundException, BadRequestException } from '@nestjs/comm
 import { PrismaService } from '../prisma/prisma.service';
 import { DepartmentQueryDto } from './dto/department-query.dto';
 import { UpdateApproverDto } from './dto/update-approver.dto';
+import { UpdateLeaderDto } from './dto/update-leader.dto';
 import { ERROR_CODE } from '../common/constants/error-codes';
 import { CompanyCode } from '@prisma/client';
+import { buildEffectiveApproverMap } from './department-relations';
 
 export interface DepartmentNode {
   id: string;
@@ -13,6 +15,15 @@ export interface DepartmentNode {
   leaderName: string | null;
   approverId: string | null;
   approverName: string | null;
+  effectiveApproverId?: string | null;
+  effectiveApproverName?: string | null;
+  effectiveApproverSource?: 'manual_override' | 'parent_leader' | 'ancestor_chain' | 'unresolved';
+  effectiveApproverDeptId?: string | null;
+  effectiveApproverDeptName?: string | null;
+  company?: CompanyCode;
+  sortOrder?: number;
+  isActive?: boolean;
+  directMemberCount?: number;
   memberCount: number;
   children?: DepartmentNode[];
 }
@@ -22,9 +33,12 @@ export class DepartmentsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll(query: DepartmentQueryDto): Promise<DepartmentNode[]> {
-    const { flat = false, company } = query;
+    const { flat = false, company, isActive } = query;
 
-    const where = company ? { company: company as CompanyCode } : {};
+    const where = {
+      ...(company ? { company: company as CompanyCode } : {}),
+      ...(typeof isActive === 'boolean' ? { isActive } : {}),
+    };
 
     const departments = await this.prisma.department.findMany({
       where,
@@ -37,6 +51,7 @@ export class DepartmentsService {
         approverId: true,
         company: true,
         sortOrder: true,
+        isActive: true,
         leader: { select: { name: true } },
         approver: { select: { name: true } },
       },
@@ -81,16 +96,41 @@ export class DepartmentsService {
       countMap.set(id, total);
     });
 
-    const baseNodes = departments.map((d) => ({
-      id: d.id,
-      name: d.name,
-      fullPath: d.fullPath,
-      leaderId: d.leaderId,
-      leaderName: d.leader?.name ?? null,
-      approverId: d.approverId,
-      approverName: d.approver?.name ?? null,
-      memberCount: countMap.get(d.id) ?? 0,
-    }));
+    const effectiveApproverMap = buildEffectiveApproverMap(
+      departments.map((d) => ({
+        id: d.id,
+        name: d.name,
+        parentId: d.parentId ?? null,
+        leaderId: d.leaderId ?? null,
+        leaderName: d.leader?.name ?? null,
+        approverId: d.approverId ?? null,
+        approverName: d.approver?.name ?? null,
+      })),
+    );
+
+    const baseNodes = departments.map((d) => {
+      const effectiveApprover = effectiveApproverMap.get(d.id);
+
+      return {
+        id: d.id,
+        name: d.name,
+        fullPath: d.fullPath,
+        leaderId: d.leaderId,
+        leaderName: d.leader?.name ?? null,
+        approverId: d.approverId,
+        approverName: effectiveApprover?.effectiveApproverName ?? d.approver?.name ?? null,
+        effectiveApproverId: effectiveApprover?.effectiveApproverId ?? null,
+        effectiveApproverName: effectiveApprover?.effectiveApproverName ?? null,
+        effectiveApproverSource: effectiveApprover?.effectiveApproverSource ?? 'unresolved',
+        effectiveApproverDeptId: effectiveApprover?.sourceDeptId ?? null,
+        effectiveApproverDeptName: effectiveApprover?.sourceDeptName ?? null,
+        company: d.company,
+        sortOrder: d.sortOrder,
+        isActive: d.isActive,
+        directMemberCount: directCountMap.get(d.id) ?? 0,
+        memberCount: countMap.get(d.id) ?? 0,
+      };
+    });
 
     if (flat) {
       return baseNodes;
@@ -193,6 +233,79 @@ export class DepartmentsService {
       leaderName: updated.leader?.name ?? null,
       approverId: updated.approverId,
       approverName: updated.approver?.name ?? null,
+      directMemberCount: memberCount,
+      memberCount,
+    };
+  }
+
+  async updateLeader(id: string, dto: UpdateLeaderDto): Promise<DepartmentNode> {
+    const department = await this.prisma.department.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        name: true,
+        fullPath: true,
+        leaderId: true,
+        approverId: true,
+        leader: { select: { name: true } },
+        approver: { select: { name: true } },
+      },
+    });
+
+    if (!department) {
+      throw new NotFoundException({
+        code: ERROR_CODE.NOT_FOUND,
+        message: '部门不存在',
+      });
+    }
+
+    const leaderId = dto.leaderId ?? null;
+
+    if (leaderId) {
+      const user = await this.prisma.user.findUnique({
+        where: { id: leaderId },
+        select: { id: true, deletedAt: true },
+      });
+
+      if (!user || user.deletedAt !== null) {
+        throw new BadRequestException({
+          code: ERROR_CODE.PARAM_INVALID,
+          message: '组织负责人不存在或已删除',
+        });
+      }
+    }
+
+    const updated = await this.prisma.department.update({
+      where: { id },
+      data: { leaderId },
+      select: {
+        id: true,
+        name: true,
+        fullPath: true,
+        leaderId: true,
+        approverId: true,
+        leader: { select: { name: true } },
+        approver: { select: { name: true } },
+      },
+    });
+
+    const memberCount = await this.prisma.user.count({
+      where: {
+        deptId: id,
+        deletedAt: null,
+        status: { not: 'resigned' },
+      },
+    });
+
+    return {
+      id: updated.id,
+      name: updated.name,
+      fullPath: updated.fullPath,
+      leaderId: updated.leaderId,
+      leaderName: updated.leader?.name ?? null,
+      approverId: updated.approverId,
+      approverName: updated.approver?.name ?? null,
+      directMemberCount: memberCount,
       memberCount,
     };
   }

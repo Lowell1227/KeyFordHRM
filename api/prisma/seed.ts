@@ -24,19 +24,19 @@ const SYSTEM_CONFIGS: { key: string; value: unknown; description: string }[] = [
 ];
 
 // 顶层部门结构（DDL 5.2），均属孚德主体
-const DEPARTMENTS: { id: string; name: string; parentId: string | null; sortOrder: number }[] = [
-  { id: '00000000-0000-0000-0000-000000000001', name: '杭州孚德品牌管理有限公司', parentId: null, sortOrder: 0 },
+const DEPARTMENTS: { id: string; name: string; parentId: string | null; sortOrder: number; isActive?: boolean }[] = [
+  { id: '00000000-0000-0000-0000-000000000001', name: '杭州孚德品牌管理有限公司', parentId: null, sortOrder: 0, isActive: false },
   { id: '00000000-0000-0000-0000-000000000010', name: '项目中心', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 1 },
-  { id: '00000000-0000-0000-0000-000000000011', name: '孚德北京办公室', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 2 },
-  { id: '00000000-0000-0000-0000-000000000012', name: '供应链中心', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 3 },
+  { id: '00000000-0000-0000-0000-000000000011', name: '北京办公室', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 2 },
+  { id: '00000000-0000-0000-0000-000000000014', name: '销售部', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 3 },
   { id: '00000000-0000-0000-0000-000000000013', name: '创意设计部', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 4 },
-  { id: '00000000-0000-0000-0000-000000000014', name: '销售部', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 5 },
+  { id: '00000000-0000-0000-0000-000000000012', name: '供应链中心', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 5 },
   { id: '00000000-0000-0000-0000-000000000015', name: '数字化运营部', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 6 },
-  { id: '00000000-0000-0000-0000-000000000016', name: '人事部', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 7 },
-  { id: '00000000-0000-0000-0000-000000000017', name: '行政部', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 8 },
-  { id: '00000000-0000-0000-0000-000000000018', name: '财务部', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 9 },
-  { id: '00000000-0000-0000-0000-000000000019', name: '创新业务中心', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 10 },
-  { id: '00000000-0000-0000-0000-000000000020', name: '外援', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 11 },
+  { id: '00000000-0000-0000-0000-000000000016', name: '人事行政部', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 7 },
+  { id: '00000000-0000-0000-0000-000000000018', name: '财务部', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 8 },
+  { id: '00000000-0000-0000-0000-000000000017', name: '行政部', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 98, isActive: false },
+  { id: '00000000-0000-0000-0000-000000000019', name: '创新业务中心', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 99, isActive: false },
+  { id: '00000000-0000-0000-0000-000000000020', name: '外援', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 100, isActive: false },
   { id: '00000000-0000-0000-0000-000000000101', name: '项目一部', parentId: '00000000-0000-0000-0000-000000000010', sortOrder: 1 },
   { id: '00000000-0000-0000-0000-000000000102', name: '项目二部', parentId: '00000000-0000-0000-0000-000000000010', sortOrder: 2 },
   { id: '00000000-0000-0000-0000-000000000103', name: '项目三部', parentId: '00000000-0000-0000-0000-000000000010', sortOrder: 3 },
@@ -50,9 +50,9 @@ const DEPARTMENTS: { id: string; name: string; parentId: string | null; sortOrde
   { id: '00000000-0000-0000-0000-000000000122', name: '供应链管理部', parentId: '00000000-0000-0000-0000-000000000012', sortOrder: 2 },
   { id: '00000000-0000-0000-0000-000000000141', name: '线下零售组', parentId: '00000000-0000-0000-0000-000000000014', sortOrder: 1 },
   { id: '00000000-0000-0000-0000-000000000142', name: 'B2B销售组', parentId: '00000000-0000-0000-0000-000000000014', sortOrder: 2 },
-  { id: '00000000-0000-0000-0000-000000000201', name: '吉客云系统外援', parentId: '00000000-0000-0000-0000-000000000020', sortOrder: 1 },
-  { id: '00000000-0000-0000-0000-000000000202', name: '外援组1', parentId: '00000000-0000-0000-0000-000000000020', sortOrder: 2 },
-  { id: '00000000-0000-0000-0000-000000000203', name: '协泰外援', parentId: '00000000-0000-0000-0000-000000000020', sortOrder: 3 },
+  { id: '00000000-0000-0000-0000-000000000201', name: '吉客云系统外援', parentId: '00000000-0000-0000-0000-000000000020', sortOrder: 1, isActive: false },
+  { id: '00000000-0000-0000-0000-000000000202', name: '外援组1', parentId: '00000000-0000-0000-0000-000000000020', sortOrder: 2, isActive: false },
+  { id: '00000000-0000-0000-0000-000000000203', name: '协泰外援', parentId: '00000000-0000-0000-0000-000000000020', sortOrder: 3, isActive: false },
 ];
 
 async function seedAdminIfNeeded() {
@@ -100,12 +100,13 @@ async function main() {
   for (const dept of DEPARTMENTS) {
     await prisma.department.upsert({
       where: { id: dept.id },
-      update: { name: dept.name, parentId: dept.parentId, sortOrder: dept.sortOrder },
+      update: { name: dept.name, parentId: dept.parentId, sortOrder: dept.sortOrder, isActive: dept.isActive ?? true },
       create: {
         id: dept.id,
         name: dept.name,
         parentId: dept.parentId,
         sortOrder: dept.sortOrder,
+        isActive: dept.isActive ?? true,
         company: CompanyCode.fuede,
       },
     });

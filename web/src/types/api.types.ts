@@ -128,9 +128,15 @@ export interface Department {
   leaderName?: string;
   approverId?: string | null;
   approverName?: string;
+  effectiveApproverId?: string | null;
+  effectiveApproverName?: string | null;
+  effectiveApproverSource?: 'manual_override' | 'parent_leader' | 'ancestor_chain' | 'unresolved';
+  effectiveApproverDeptId?: string | null;
+  effectiveApproverDeptName?: string | null;
   company: CompanyCode;
   sortOrder: number;
   isActive: boolean;
+  directMemberCount?: number;
   memberCount?: number;
   children?: Department[];
   createdAt?: string;
@@ -148,6 +154,10 @@ export interface DepartmentQuery {
 
 export interface UpdateApproverBody {
   approverId: string | null;
+}
+
+export interface UpdateLeaderBody {
+  leaderId: string | null;
 }
 
 // ---------------------------------------------------------------------------

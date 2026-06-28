@@ -3,6 +3,7 @@ import { Prisma } from '@prisma/client';
 import { SysRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuthUser } from '../types/auth.types';
+import { findDepartmentsByEffectiveApprover } from '@/departments/department-relations';
 
 /**
  * 数据权限助手服务。
@@ -74,17 +75,23 @@ export class DataScopeService {
 
     /** VP 角色 → 可见自己作为 approver_id 的部门（含子部门）下的全部成员。 */
     if (viewer.sysRole === SysRole.vp) {
-      const managedDepts = await this.prisma.department.findMany({
-        where: { approverId: viewer.id },
-        select: { id: true },
+      const allDepts = await this.prisma.department.findMany({
+        select: {
+          id: true,
+          name: true,
+          parentId: true,
+          leaderId: true,
+          approverId: true,
+        },
       });
+      const managedDeptIds = findDepartmentsByEffectiveApprover(allDepts, viewer.id);
 
-      if (managedDepts.length === 0) {
+      if (managedDeptIds.length === 0) {
         return { id: viewer.id };
       }
 
       const deptIds = (
-        await Promise.all(managedDepts.map((d) => this.getSubDeptIds(d.id)))
+        await Promise.all(managedDeptIds.map((deptId) => this.getSubDeptIds(deptId)))
       ).flat();
 
       return { deptId: { in: Array.from(new Set(deptIds)) } };
