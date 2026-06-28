@@ -15,8 +15,6 @@ const form = reactive({ employeeNo: '', password: '' });
 
 const DINGTALK_APP_KEY = import.meta.env.VITE_DINGTALK_APP_KEY || 'dinghwbnyktt3oku2jd3';
 const DINGTALK_CORP_ID = import.meta.env.VITE_DINGTALK_CORP_ID || '';
-const DINGTALK_REDIRECT_URI =
-  import.meta.env.VITE_DINGTALK_REDIRECT_URI || 'https://1260cw31az927.vicp.fun/auth/callback';
 
 // —— 测试账号快速登录（仅开发环境，生产构建不包含）——
 // 账号由 `npm run db:seed:dev` 写入，密码统一 000000。
@@ -57,6 +55,10 @@ function redirectAfterLogin() {
   router.replace(target);
 }
 
+function getDingTalkRedirectUri() {
+  return import.meta.env.VITE_DINGTALK_REDIRECT_URI || `${window.location.origin}/auth/callback`;
+}
+
 async function onDingTalkLogin() {
   if (loading.value) return;
 
@@ -92,8 +94,9 @@ async function onDingTalkLogin() {
     return;
   }
 
+  loading.value = true;
   const params = new URLSearchParams({
-    redirect_uri: DINGTALK_REDIRECT_URI,
+    redirect_uri: getDingTalkRedirectUri(),
     response_type: 'code',
     client_id: DINGTALK_APP_KEY,
     scope: 'openid',
