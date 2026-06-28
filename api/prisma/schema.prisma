@@ -406,6 +406,7 @@ model Indicator {
   dataSource      String?       @map("data_source") @db.Text
   dataCaliber     String?       @map("data_caliber") @db.Text
   targetValue     Decimal?      @map("target_value") @db.Decimal(10, 2)
+  targetValueText String?       @map("target_value_text") @db.VarChar(100)
   unit            String?       @db.VarChar(30)
   groupName       String?       @map("group_name") @db.VarChar(100)
   isActive        Boolean       @default(true) @map("is_active")
@@ -466,6 +467,7 @@ model TemplateIndicator {
   dataSource      String?  @map("data_source") @db.Text
   dataCaliber     String?  @map("data_caliber") @db.Text
   targetValue     Decimal? @map("target_value") @db.Decimal(10, 2)
+  targetValueText String?  @map("target_value_text") @db.VarChar(100)
   unit            String?  @db.VarChar(30)
   weight          Decimal  @db.Decimal(5, 4)
   sortOrder       Int      @default(0) @map("sort_order")
@@ -597,6 +599,7 @@ model IndicatorInstance {
   dataSource          String?       @map("data_source") @db.Text
   dataCaliber         String?       @map("data_caliber") @db.Text
   targetValue         Decimal?      @map("target_value") @db.Decimal(10, 2)
+  targetValueText     String?       @map("target_value_text") @db.VarChar(100)
   unit                String?       @db.VarChar(30)
   weight              Decimal       @db.Decimal(5, 4)
   indicatorType       IndicatorType @default(kpi) @map("indicator_type")

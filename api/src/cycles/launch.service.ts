@@ -32,6 +32,7 @@ interface TemplateView {
       dataSource: string | null;
       dataCaliber: string | null;
       targetValue: Prisma.Decimal | null;
+      targetValueText: string | null;
       unit: string | null;
       weight: Prisma.Decimal;
       sortOrder: number;
@@ -286,6 +287,7 @@ export class LaunchService {
             description: ind.description,
             scoringStandard: ind.scoringStandard,
             targetValue: ind.targetValue,
+            targetValueText: ind.targetValueText,
             unit: ind.unit,
             weight: ind.weight,
             sortOrder: ind.sortOrder,
@@ -424,6 +426,7 @@ export class LaunchService {
         dataSource: ind.dataSource,
         dataCaliber: ind.dataCaliber,
         targetValue: ind.targetValue != null ? new Prisma.Decimal(ind.targetValue.toString()) : null,
+        targetValueText: ind.targetValueText,
         unit: ind.unit,
         weight: new Prisma.Decimal(ind.weight.toString()),
         indicatorType: this.resolveIndicatorType(ind.name, dim.type, ind.indicator?.type),

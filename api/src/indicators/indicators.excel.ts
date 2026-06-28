@@ -5,7 +5,7 @@ export const IMPORT_COLUMNS = [
   { key: 'code', header: '编码', width: 20 },
   { key: 'name', header: '名称', width: 30 },
   { key: 'type', header: '类型', width: 15 },
-  { key: 'category', header: '分类', width: 20 },
+  { key: 'category', header: '考核维度', width: 20 },
   { key: 'groupName', header: '分组', width: 20 },
   { key: 'description', header: '描述', width: 40 },
   { key: 'scoringStandard', header: '评分标准', width: 40 },
@@ -26,6 +26,7 @@ export interface ImportRow {
   dataSource?: string;
   dataCaliber?: string;
   targetValue?: number;
+  targetValueText?: string;
   targetValueInvalid?: boolean;
   unit?: string;
 }
@@ -33,19 +34,18 @@ export interface ImportRow {
 const TYPE_TEXT_MAP: Record<string, IndicatorType> = {
   '量化kpi': 'kpi',
   kpi: 'kpi',
+  '非量化kpi': 'attitude',
   '态度行为': 'attitude',
   attitude: 'attitude',
   '加分项': 'bonus',
   bonus: 'bonus',
   '扣分项': 'penalty',
   penalty: 'penalty',
-  '一票否决': 'veto',
-  veto: 'veto',
 };
 
 const ENUM_TO_TEXT_MAP: Record<IndicatorType, string> = {
   kpi: '量化KPI',
-  attitude: '态度行为',
+  attitude: '非量化KPI',
   bonus: '加分项',
   penalty: '扣分项',
   veto: '一票否决',
@@ -99,11 +99,12 @@ export async function parseImportExcel(buffer: Buffer): Promise<ImportRow[]> {
 
     const type = typeText ? typeTextToEnum(String(typeText)) : undefined;
     let targetValue: number | undefined;
+    let targetValueText: string | undefined;
     let targetValueInvalid = false;
     if (targetValueRaw !== undefined && targetValueRaw !== '') {
       const num = Number(targetValueRaw);
       if (Number.isNaN(num)) {
-        targetValueInvalid = true;
+        targetValueText = String(targetValueRaw).trim();
       } else {
         targetValue = num;
       }
@@ -120,6 +121,7 @@ export async function parseImportExcel(buffer: Buffer): Promise<ImportRow[]> {
       dataSource,
       dataCaliber,
       targetValue,
+      targetValueText,
       targetValueInvalid,
       unit,
     });
@@ -140,6 +142,7 @@ export async function buildExportWorkbook(
     dataSource?: string | null;
     dataCaliber?: string | null;
     targetValue?: number | string | null;
+    targetValueText?: string | null;
     unit?: string | null;
   }>,
 ): Promise<ExcelJS.Workbook> {
@@ -163,7 +166,7 @@ export async function buildExportWorkbook(
       scoringStandard: item.scoringStandard ?? '',
       dataSource: item.dataSource ?? '',
       dataCaliber: item.dataCaliber ?? '',
-      targetValue: item.targetValue ?? '',
+      targetValue: item.targetValueText ?? item.targetValue ?? '',
       unit: item.unit ?? '',
     });
   });

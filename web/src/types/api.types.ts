@@ -175,6 +175,7 @@ export interface Indicator {
   dataSource?: string;
   dataCaliber?: string;
   targetValue?: number;
+  targetValueText?: string;
   unit?: string;
   groupName?: string;
   isActive: boolean;
@@ -204,6 +205,7 @@ export interface CreateIndicatorBody {
   dataSource?: string;
   dataCaliber?: string;
   targetValue?: number;
+  targetValueText?: string;
   unit?: string;
   groupName?: string;
   isActive?: boolean;
@@ -224,6 +226,7 @@ export interface TemplateIndicator {
   dataSource?: string;
   dataCaliber?: string;
   targetValue?: number;
+  targetValueText?: string;
   unit?: string;
   weight: number;
   sortOrder: number;
@@ -409,6 +412,7 @@ export interface IndicatorInstance {
   dataSource?: string;
   dataCaliber?: string;
   targetValue?: number;
+  targetValueText?: string;
   unit?: string;
   weight: number;
   indicatorType: IndicatorType;
@@ -597,6 +601,7 @@ export interface SetIndicatorBody {
     | 'dataSource'
     | 'dataCaliber'
     | 'targetValue'
+    | 'targetValueText'
     | 'unit'
     | 'weight'
     | 'indicatorType'
@@ -624,6 +629,7 @@ export interface IndicatorProposalItem {
   dataSource?: string;
   dataCaliber?: string;
   targetValue?: number;
+  targetValueText?: string;
   unit?: string;
   weight?: number;
   indicatorType?: IndicatorType;

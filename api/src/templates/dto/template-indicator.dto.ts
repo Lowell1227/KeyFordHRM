@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNumber, IsUUID, Min, Max } from 'class-validator';
+import { IsString, IsOptional, IsNumber, IsUUID, Min, Max, MaxLength } from 'class-validator';
 
 export class TemplateIndicatorDto {
   @IsOptional()
@@ -27,6 +27,11 @@ export class TemplateIndicatorDto {
   @IsOptional()
   @IsNumber()
   targetValue?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  targetValueText?: string;
 
   @IsOptional()
   @IsString()

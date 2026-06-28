@@ -43,9 +43,9 @@ interface TemplateForm {
 
 const DIMENSION_TYPES: { label: string; value: DimensionType }[] = [
   { label: 'KPI', value: 'kpi' },
-  { label: '工作态度', value: 'attitude' },
+  { label: '非量化KPI', value: 'attitude' },
   { label: '加分项', value: 'bonus' },
-  { label: '减分项', value: 'penalty' },
+  { label: '扣分项', value: 'penalty' },
 ];
 
 const listLoading = ref(false);
@@ -121,7 +121,7 @@ function emptyForm(): TemplateForm {
 
 function createEmptyDimension(type: DimensionType = 'kpi'): EditableDimension {
   return {
-    name: type === 'kpi' ? 'KPI维度' : type === 'attitude' ? '工作态度' : type === 'bonus' ? '加分项' : '减分项',
+    name: type === 'kpi' ? 'KPI维度' : type === 'attitude' ? '非量化KPI' : type === 'bonus' ? '加分项' : '扣分项',
     type,
     weight: 0,
     sortOrder: form.dimensions.length,
@@ -132,6 +132,7 @@ function createEmptyDimension(type: DimensionType = 'kpi'): EditableDimension {
 function createEmptyIndicator(): EditableIndicator {
   return {
     name: '',
+    targetValueText: '',
     weight: 0,
     sortOrder: 0,
   };
@@ -324,6 +325,7 @@ function fromApiTemplate(template: AssessmentTemplate): TemplateForm {
         dataSource: ind.dataSource,
         dataCaliber: ind.dataCaliber,
         targetValue: ind.targetValue != null ? Number(ind.targetValue) : undefined,
+        targetValueText: ind.targetValueText,
         unit: ind.unit,
         weight: toPercentWeight(ind.weight),
         sortOrder: ind.sortOrder ?? iIdx,
@@ -363,6 +365,7 @@ function toApiPayload(formValue: TemplateForm): {
         dataSource: ind.dataSource,
         dataCaliber: ind.dataCaliber,
         targetValue: ind.targetValue,
+        targetValueText: ind.targetValueText,
         unit: ind.unit,
         weight: toApiWeight(ind.weight),
         sortOrder: iIdx,
@@ -406,6 +409,7 @@ function applyLibraryIndicator(dimIndex: number, indicatorIndex: number, indicat
   row.dataSource = indicator.dataSource;
   row.dataCaliber = indicator.dataCaliber;
   row.targetValue = indicator.targetValue;
+  row.targetValueText = indicator.targetValueText;
   row.unit = indicator.unit;
 }
 
@@ -894,7 +898,14 @@ onMounted(() => {
               </el-table-column>
               <el-table-column label="目标值" width="100">
                 <template #default="{ $index }">
+                  <el-input
+                    v-if="dim.indicators[$index].targetValueText"
+                    v-model="dim.indicators[$index].targetValueText"
+                    placeholder="固定值"
+                    :disabled="isView"
+                  />
                   <el-input-number
+                    v-else
                     v-model="dim.indicators[$index].targetValue"
                     :precision="2"
                     controls-position="right"

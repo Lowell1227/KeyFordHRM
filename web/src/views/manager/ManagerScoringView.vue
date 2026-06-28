@@ -78,7 +78,7 @@ const dimensionTotals = computed(() => {
       entry.total += score;
     } else {
       map.set(key, {
-        dimensionName: inst.dimensionName || (inst.indicatorType === 'bonus' ? '加分项' : '减分项'),
+        dimensionName: inst.dimensionName || (inst.indicatorType === 'bonus' ? '加分项' : '扣分项'),
         dimensionType: inst.indicatorType,
         total: score,
       });

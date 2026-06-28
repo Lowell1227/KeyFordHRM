@@ -46,6 +46,11 @@ export class SetIndicatorItemDto {
 
   @IsOptional()
   @IsString()
+  @MaxLength(100)
+  targetValueText?: string;
+
+  @IsOptional()
+  @IsString()
   @MaxLength(30)
   unit?: string;
 

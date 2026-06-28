@@ -38,6 +38,7 @@ interface SelfEvalRow {
   dataSource?: string;
   dataCaliber?: string;
   targetValue?: number;
+  targetValueText?: string;
   unit?: string;
   weight: number;
   dimensionName?: string;
@@ -199,6 +200,7 @@ function initSelfEvalForm() {
       dataSource: inst.dataSource,
       dataCaliber: inst.dataCaliber,
       targetValue: inst.targetValue,
+      targetValueText: inst.targetValueText,
       unit: inst.unit,
       weight: inst.weight,
       dimensionName: inst.dimensionName,
@@ -322,6 +324,7 @@ function createEmptyItem(): SetIndicatorBody['instances'][number] {
     dataSource: '',
     dataCaliber: '',
     targetValue: undefined,
+    targetValueText: '',
     unit: '',
     weight: 1,
     indicatorType: 'kpi',
@@ -343,6 +346,7 @@ function libraryIndicatorToItem(indicator: Indicator, sortOrder: number): SetInd
     dataSource: indicator.dataSource,
     dataCaliber: indicator.dataCaliber,
     targetValue: indicator.targetValue,
+    targetValueText: indicator.targetValueText,
     unit: indicator.unit,
     weight: editableItems.length ? Number((1 / (editableItems.length + 1)).toFixed(4)) : 1,
     indicatorType: indicator.type,
@@ -385,6 +389,7 @@ function templateIndicatorToItem(
     dataSource: indicator.dataSource,
     dataCaliber: indicator.dataCaliber,
     targetValue: indicator.targetValue,
+    targetValueText: indicator.targetValueText,
     unit: indicator.unit,
     weight: indicator.weight,
     indicatorType: toIndicatorType(dimensionType),
@@ -438,6 +443,7 @@ function toEditableItem(instance: IndicatorInstance): SetIndicatorBody['instance
     dataSource: instance.dataSource,
     dataCaliber: instance.dataCaliber,
     targetValue: instance.targetValue,
+    targetValueText: instance.targetValueText,
     unit: instance.unit,
     weight: instance.weight,
     indicatorType: instance.indicatorType,
@@ -466,6 +472,12 @@ function removeItem(index: number) {
 function formatWeightPercent(weight: number | undefined): string {
   const percent = Number(weight ?? 0) * 100;
   return `${Number(percent.toFixed(2))}%`;
+}
+
+function formatTargetValue(row: Pick<IndicatorInstance, 'targetValue' | 'targetValueText' | 'unit'>): string {
+  if (row.targetValueText) return row.targetValueText;
+  if (row.targetValue != null) return `${row.targetValue}${row.unit ? row.unit : ''}`;
+  return '-';
 }
 
 function toPercent(weight: number | undefined): number {
@@ -525,6 +537,7 @@ function trimItem(item: SetIndicatorBody['instances'][number], index: number): S
     dataSource: item.dataSource?.trim() || undefined,
     dataCaliber: item.dataCaliber?.trim() || undefined,
     targetValue: item.targetValue,
+    targetValueText: item.targetValueText?.trim() || undefined,
     unit: item.unit?.trim() || undefined,
     weight: Number(item.weight ?? 0),
     indicatorType: item.indicatorType ?? 'kpi',
@@ -675,7 +688,7 @@ function handleFetchDingtalkWeekly() {
         权重合计：{{ weightTotalPercent.toFixed(2) }}% / 100%
       </div>
 
-      <el-table :data="editableItems" border size="small" class="indicator-table">
+      <el-table :data="editableItems" border size="small" class="indicator-table indicator-table--desktop">
         <el-table-column label="序号" type="index" width="56" fixed="left" />
         <el-table-column label="考核维度" min-width="130">
           <template #default="{ row }">
@@ -740,8 +753,16 @@ function handleFetchDingtalkWeekly() {
         <el-table-column label="目标值" width="150">
           <template #default="{ row }">
             <div class="target-inputs">
-              <el-input-number v-model="row.targetValue" :precision="2" controls-position="right" placeholder="目标" />
-              <el-input v-model="row.unit" placeholder="单位" maxlength="30" />
+              <el-input
+                v-if="row.targetValueText"
+                v-model="row.targetValueText"
+                placeholder="固定值"
+                maxlength="100"
+              />
+              <template v-else>
+                <el-input-number v-model="row.targetValue" :precision="2" controls-position="right" placeholder="目标" />
+                <el-input v-model="row.unit" placeholder="单位" maxlength="30" />
+              </template>
             </div>
           </template>
         </el-table-column>
@@ -751,6 +772,77 @@ function handleFetchDingtalkWeekly() {
           </template>
         </el-table-column>
       </el-table>
+
+      <div class="indicator-mobile-list indicator-mobile-list--editable">
+        <article v-for="(row, index) in editableItems" :key="index" class="indicator-mobile-card">
+          <div class="indicator-mobile-card__header">
+            <span class="indicator-mobile-card__index">#{{ index + 1 }}</span>
+            <el-button :icon="Delete" text type="danger" @click="removeItem(index)">删除</el-button>
+          </div>
+          <div class="indicator-mobile-field">
+            <span>考核维度</span>
+            <el-input v-model="row.dimensionName" placeholder="考核维度" maxlength="100" />
+          </div>
+          <div class="indicator-mobile-field">
+            <span>指标名称</span>
+            <el-input v-model="row.name" placeholder="请输入指标名称" maxlength="100" />
+          </div>
+          <div class="indicator-mobile-field">
+            <span>指标描述</span>
+            <el-input
+              v-model="row.description"
+              placeholder="请输入指标描述，例如：按阶段完成验证"
+              maxlength="300"
+            />
+          </div>
+          <div class="indicator-mobile-field indicator-mobile-field--inline">
+            <span>权重</span>
+            <el-input-number
+              class="weight-input"
+              :model-value="toPercent(row.weight)"
+              :min="0"
+              :max="100"
+              :step="5"
+              :precision="2"
+              controls-position="right"
+              @pointerdown.capture="(event: PointerEvent) => handleWeightControlPointerDown(row, event)"
+              @pointerup.capture="clearWeightHold"
+              @pointerleave.capture="clearWeightHold"
+              @pointercancel.capture="clearWeightHold"
+              @update:model-value="(value?: number) => setWeightPercent(row, value)"
+            >
+              <template #suffix>%</template>
+            </el-input-number>
+          </div>
+          <div class="indicator-mobile-field">
+            <span>评分标准</span>
+            <el-input v-model="row.scoringStandard" placeholder="评分标准" maxlength="300" />
+          </div>
+          <div class="indicator-mobile-field">
+            <span>数据来源</span>
+            <el-input v-model="row.dataSource" placeholder="数据来源" maxlength="100" />
+          </div>
+          <div class="indicator-mobile-field">
+            <span>数据口径</span>
+            <el-input v-model="row.dataCaliber" placeholder="数据口径" maxlength="100" />
+          </div>
+          <div class="indicator-mobile-field">
+            <span>目标值</span>
+            <div class="target-inputs">
+              <el-input
+                v-if="row.targetValueText"
+                v-model="row.targetValueText"
+                placeholder="固定值"
+                maxlength="100"
+              />
+              <template v-else>
+                <el-input-number v-model="row.targetValue" :precision="2" controls-position="right" placeholder="目标" />
+                <el-input v-model="row.unit" placeholder="单位" maxlength="30" />
+              </template>
+            </div>
+          </div>
+        </article>
+      </div>
 
       <div class="edit-footer">
         <div class="indicator-add-toolbar">
@@ -828,73 +920,140 @@ function handleFetchDingtalkWeekly() {
     </template>
 
     <el-empty v-else-if="instances.length === 0" description="主管或HR尚未生成正式考核指标" />
-    <el-table v-else :data="readonlyTableRows" border stripe size="small" class="indicator-table">
-      <el-table-column label="序号" type="index" width="56" />
-      <el-table-column prop="dimensionName" label="考核维度" min-width="120" />
-      <el-table-column label="指标" min-width="360">
-        <template #default="{ row }">
-          <div class="indicator-name">{{ row.name }}</div>
-          <div v-if="row.description" class="indicator-desc">{{ row.description }}</div>
+    <template v-else>
+      <el-table :data="readonlyTableRows" border stripe size="small" class="indicator-table indicator-table--desktop">
+        <el-table-column label="序号" type="index" width="56" />
+        <el-table-column prop="dimensionName" label="考核维度" min-width="120" />
+        <el-table-column label="指标" min-width="360">
+          <template #default="{ row }">
+            <div class="indicator-name">{{ row.name }}</div>
+            <div v-if="row.description" class="indicator-desc">{{ row.description }}</div>
+          </template>
+        </el-table-column>
+        <el-table-column label="权重" width="78">
+          <template #default="{ row }">{{ formatWeightPercent(row.weight) }}</template>
+        </el-table-column>
+        <el-table-column label="评分标准" min-width="160">
+          <template #default="{ row }">{{ row.scoringStandard || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="数据来源" min-width="140">
+          <template #default="{ row }">{{ (row as IndicatorInstance).dataSource || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="数据口径" min-width="140">
+          <template #default="{ row }">{{ (row as IndicatorInstance).dataCaliber || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="目标值" width="120">
+          <template #default="{ row }">
+            {{ formatTargetValue(row as IndicatorInstance) }}
+          </template>
+        </el-table-column>
+        <template v-if="selfEvalMode">
+          <el-table-column label="实际完成值" min-width="190">
+            <template #default="{ row }">
+              <el-input
+                v-model="row.actualValue"
+                :disabled="selfEvalReadonly"
+                placeholder="请输入实际完成值"
+                maxlength="200"
+                show-word-limit
+              />
+            </template>
+          </el-table-column>
+          <el-table-column label="实际完成说明" min-width="300">
+            <template #default="{ row }">
+              <el-input
+                v-model="row.actualNote"
+                :disabled="selfEvalReadonly"
+                placeholder="说明实际完成情况"
+                maxlength="500"
+                show-word-limit
+              />
+            </template>
+          </el-table-column>
+          <el-table-column label="自评分" width="132">
+            <template #default="{ row }">
+              <ScoreInput v-model="row.selfScore" :disabled="selfEvalReadonly" placeholder="0-100" />
+            </template>
+          </el-table-column>
+          <el-table-column label="自评评语" min-width="260">
+            <template #default="{ row }">
+              <el-input
+                v-model="row.selfComment"
+                :disabled="selfEvalReadonly"
+                placeholder="请说明打分依据"
+                maxlength="500"
+                show-word-limit
+              />
+            </template>
+          </el-table-column>
         </template>
-      </el-table-column>
-      <el-table-column label="权重" width="78">
-        <template #default="{ row }">{{ formatWeightPercent(row.weight) }}</template>
-      </el-table-column>
-      <el-table-column label="评分标准" min-width="160">
-        <template #default="{ row }">{{ row.scoringStandard || '-' }}</template>
-      </el-table-column>
-      <el-table-column label="数据来源" min-width="140">
-        <template #default="{ row }">{{ (row as IndicatorInstance).dataSource || '-' }}</template>
-      </el-table-column>
-      <el-table-column label="数据口径" min-width="140">
-        <template #default="{ row }">{{ (row as IndicatorInstance).dataCaliber || '-' }}</template>
-      </el-table-column>
-      <el-table-column label="目标值" width="120">
-        <template #default="{ row }">
-          {{ row.targetValue != null ? `${row.targetValue}${row.unit ? row.unit : ''}` : '-' }}
-        </template>
-      </el-table-column>
-      <template v-if="selfEvalMode">
-        <el-table-column label="实际完成值" min-width="190">
-          <template #default="{ row }">
-            <el-input
-              v-model="row.actualValue"
-              :disabled="selfEvalReadonly"
-              placeholder="请输入实际完成值"
-              maxlength="200"
-              show-word-limit
-            />
+      </el-table>
+
+      <div class="indicator-mobile-list">
+        <article v-for="(row, index) in readonlyTableRows" :key="row.id || index" class="indicator-mobile-card">
+          <div class="indicator-mobile-card__header">
+            <span class="indicator-mobile-card__index">#{{ index + 1 }}</span>
+            <strong>{{ row.name || '未命名指标' }}</strong>
+          </div>
+          <div class="indicator-mobile-meta">
+            <span>{{ row.dimensionName || '未设置维度' }}</span>
+            <span>权重 {{ formatWeightPercent(row.weight) }}</span>
+            <span>目标 {{ formatTargetValue(row as IndicatorInstance) }}</span>
+          </div>
+          <p v-if="row.description" class="indicator-mobile-desc">{{ row.description }}</p>
+          <dl class="indicator-mobile-detail">
+            <div>
+              <dt>评分标准</dt>
+              <dd>{{ row.scoringStandard || '-' }}</dd>
+            </div>
+            <div>
+              <dt>数据来源</dt>
+              <dd>{{ (row as IndicatorInstance).dataSource || '-' }}</dd>
+            </div>
+            <div>
+              <dt>数据口径</dt>
+              <dd>{{ (row as IndicatorInstance).dataCaliber || '-' }}</dd>
+            </div>
+          </dl>
+          <template v-if="selfEvalMode">
+            <div class="indicator-mobile-field">
+              <span>实际完成值</span>
+              <el-input
+                v-model="(row as SelfEvalRow).actualValue"
+                :disabled="selfEvalReadonly"
+                placeholder="请输入实际完成值"
+                maxlength="200"
+                show-word-limit
+              />
+            </div>
+            <div class="indicator-mobile-field">
+              <span>实际完成说明</span>
+              <el-input
+                v-model="(row as SelfEvalRow).actualNote"
+                :disabled="selfEvalReadonly"
+                placeholder="说明实际完成情况"
+                maxlength="500"
+                show-word-limit
+              />
+            </div>
+            <div class="indicator-mobile-field">
+              <span>自评分</span>
+              <ScoreInput v-model="(row as SelfEvalRow).selfScore" :disabled="selfEvalReadonly" placeholder="0-100" />
+            </div>
+            <div class="indicator-mobile-field">
+              <span>自评评语</span>
+              <el-input
+                v-model="(row as SelfEvalRow).selfComment"
+                :disabled="selfEvalReadonly"
+                placeholder="请说明打分依据"
+                maxlength="500"
+                show-word-limit
+              />
+            </div>
           </template>
-        </el-table-column>
-        <el-table-column label="实际完成说明" min-width="300">
-          <template #default="{ row }">
-            <el-input
-              v-model="row.actualNote"
-              :disabled="selfEvalReadonly"
-              placeholder="说明实际完成情况"
-              maxlength="500"
-              show-word-limit
-            />
-          </template>
-        </el-table-column>
-        <el-table-column label="自评分" width="132">
-          <template #default="{ row }">
-            <ScoreInput v-model="row.selfScore" :disabled="selfEvalReadonly" placeholder="0-100" />
-          </template>
-        </el-table-column>
-        <el-table-column label="自评评语" min-width="260">
-          <template #default="{ row }">
-            <el-input
-              v-model="row.selfComment"
-              :disabled="selfEvalReadonly"
-              placeholder="请说明打分依据"
-              maxlength="500"
-              show-word-limit
-            />
-          </template>
-        </el-table-column>
-      </template>
-    </el-table>
+        </article>
+      </div>
+    </template>
 
     <div v-if="selfEvalMode" class="self-eval-inline">
       <div class="self-eval-inline__header">
@@ -1061,6 +1220,10 @@ function handleFetchDingtalkWeekly() {
   --el-table-header-bg-color: #f5f7fa;
   --el-table-row-hover-bg-color: #f7f9fc;
   --el-table-tr-bg-color: #ffffff;
+}
+
+.indicator-mobile-list {
+  display: none;
 }
 
 .indicator-table :deep(.el-table__inner-wrapper::before),
@@ -1400,5 +1563,175 @@ function handleFetchDingtalkWeekly() {
   margin-top: 6px;
   white-space: pre-wrap;
   color: var(--el-text-color-regular);
+}
+
+@media (max-width: 768px) {
+  .actions,
+  .snapshot-toolbar,
+  .snapshot-toolbar__actions,
+  .indicator-add-toolbar {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .actions .el-button,
+  .snapshot-toolbar__actions .el-button,
+  .indicator-add-toolbar .el-button {
+    width: 100%;
+    min-height: 44px;
+    margin-left: 0;
+  }
+
+  .snapshot-desc {
+    width: 100%;
+    font-size: 13px;
+    line-height: 20px;
+  }
+
+  .indicator-table--desktop {
+    display: none;
+  }
+
+  .indicator-mobile-list {
+    display: grid;
+    gap: 12px;
+  }
+
+  .indicator-mobile-card {
+    padding: 14px;
+    border: 1px solid #dfe3eb;
+    border-radius: 8px;
+    background: #fff;
+    box-shadow: 0 8px 20px rgba(31, 45, 61, 0.05);
+  }
+
+  .indicator-mobile-card__header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 12px;
+  }
+
+  .indicator-mobile-card__header strong {
+    min-width: 0;
+    flex: 1;
+    color: #1f2937;
+    font-size: 15px;
+    line-height: 22px;
+    word-break: break-word;
+  }
+
+  .indicator-mobile-card__index {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 30px;
+    height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    color: #2f63ff;
+    background: #edf3ff;
+    font-size: 12px;
+    font-weight: 700;
+  }
+
+  .indicator-mobile-meta {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+
+  .indicator-mobile-meta span {
+    display: inline-flex;
+    align-items: center;
+    min-height: 24px;
+    padding: 0 8px;
+    border-radius: 999px;
+    color: #596275;
+    background: #f4f6fa;
+    font-size: 12px;
+  }
+
+  .indicator-mobile-desc {
+    margin: 0 0 12px;
+    color: #4b5563;
+    font-size: 13px;
+    line-height: 20px;
+    word-break: break-word;
+  }
+
+  .indicator-mobile-detail {
+    display: grid;
+    gap: 8px;
+    margin: 0 0 12px;
+  }
+
+  .indicator-mobile-detail div {
+    display: grid;
+    gap: 4px;
+    padding: 10px;
+    border-radius: 6px;
+    background: #f8fafc;
+  }
+
+  .indicator-mobile-detail dt,
+  .indicator-mobile-field > span {
+    color: #8a94a6;
+    font-size: 12px;
+    font-weight: 600;
+  }
+
+  .indicator-mobile-detail dd {
+    margin: 0;
+    color: #273244;
+    font-size: 13px;
+    line-height: 20px;
+    word-break: break-word;
+  }
+
+  .indicator-mobile-field {
+    display: grid;
+    gap: 6px;
+    margin-top: 10px;
+  }
+
+  .indicator-mobile-field--inline {
+    grid-template-columns: 72px minmax(0, 1fr);
+    align-items: center;
+  }
+
+  .indicator-mobile-card :deep(.el-input__wrapper),
+  .indicator-mobile-card :deep(.el-select__wrapper),
+  .indicator-mobile-card :deep(.el-input-number) {
+    min-height: 44px;
+  }
+
+  .indicator-mobile-card :deep(.el-input__inner),
+  .indicator-mobile-card :deep(.el-button) {
+    min-height: 40px;
+    font-size: 14px;
+  }
+
+  .target-inputs {
+    grid-template-columns: minmax(0, 1fr) 72px;
+  }
+
+  .template-select,
+  .template-select--inline {
+    width: 100%;
+  }
+
+  .edit-footer :deep(.el-textarea__inner),
+  .summary-form :deep(.el-textarea__inner) {
+    min-height: 88px;
+  }
+
+  .self-eval-inline__header {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 8px;
+  }
 }
 </style>

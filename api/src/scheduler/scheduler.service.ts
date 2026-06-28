@@ -207,6 +207,7 @@ export class SchedulerService {
                 weight: true,
                 indicatorType: true,
                 targetValue: true,
+                targetValueText: true,
                 actualValue: true,
                 selfScore: true,
                 managerScore: true,
@@ -276,6 +277,7 @@ export class SchedulerService {
         weight: Prisma.Decimal;
         indicatorType: string;
         targetValue: Prisma.Decimal | null;
+        targetValueText: string | null;
         actualValue: Prisma.Decimal | null;
         selfScore: Prisma.Decimal | null;
         managerScore: Prisma.Decimal | null;
@@ -297,6 +299,7 @@ export class SchedulerService {
         weight: ind.weight.toNumber(),
         indicatorType: ind.indicatorType,
         targetValue: ind.targetValue?.toNumber() ?? null,
+        targetValueText: ind.targetValueText,
         actualValue: ind.actualValue?.toNumber() ?? null,
         selfScore: ind.selfScore?.toNumber() ?? null,
         managerScore: ind.managerScore?.toNumber() ?? null,

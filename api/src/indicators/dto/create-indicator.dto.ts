@@ -1,4 +1,4 @@
-import { IsString, IsOptional, IsNotEmpty, IsEnum, IsBoolean, IsNumber } from 'class-validator';
+import { IsString, IsOptional, IsNotEmpty, IsEnum, IsBoolean, IsNumber, MaxLength } from 'class-validator';
 import { IndicatorType } from '@prisma/client';
 
 export class CreateIndicatorDto {
@@ -36,6 +36,11 @@ export class CreateIndicatorDto {
   @IsOptional()
   @IsNumber()
   targetValue?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  targetValueText?: string;
 
   @IsOptional()
   @IsString()

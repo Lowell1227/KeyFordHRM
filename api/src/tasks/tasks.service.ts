@@ -42,6 +42,7 @@ export interface TaskDetail extends TaskListItem {
     dataSource: string | null;
     dataCaliber: string | null;
     targetValue: number | null;
+    targetValueText: string | null;
     unit: string | null;
     weight: number;
     indicatorType: string;
@@ -992,6 +993,8 @@ export class TasksService {
           scoringStandard: item.scoringStandard?.trim() || legacyStandard || undefined,
           dataSource: item.dataSource?.trim() || undefined,
           dataCaliber: item.dataCaliber?.trim() || undefined,
+          targetValue: item.targetValue,
+          targetValueText: item.targetValueText?.trim() || undefined,
           unit: item.unit?.trim() || undefined,
           indicatorType: item.indicatorType ?? 'kpi',
           dimensionName: item.dimensionName?.trim() || 'KPI维度',
@@ -1025,6 +1028,7 @@ export class TasksService {
         dataSource: item.dataSource || null,
         dataCaliber: item.dataCaliber || null,
         targetValue: item.targetValue != null ? new Prisma.Decimal(item.targetValue.toString()) : null,
+        targetValueText: item.targetValueText || null,
         unit: item.unit || null,
         weight: new Prisma.Decimal((item.weight ?? 0).toString()),
         indicatorType: item.indicatorType ?? 'kpi',
@@ -1057,6 +1061,7 @@ export class TasksService {
         dataSource: ind.dataSource,
         dataCaliber: ind.dataCaliber,
         targetValue: ind.targetValue?.toNumber() ?? null,
+        targetValueText: ind.targetValueText,
         unit: ind.unit,
         weight: ind.weight.toNumber(),
         indicatorType: ind.indicatorType,
