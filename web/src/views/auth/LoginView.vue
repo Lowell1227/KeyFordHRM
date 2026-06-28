@@ -13,6 +13,11 @@ const showPasswordForm = ref(!isDingTalkEnv.value);
 const loading = ref(false);
 const form = reactive({ employeeNo: '', password: '' });
 
+const DINGTALK_APP_KEY = import.meta.env.VITE_DINGTALK_APP_KEY || 'dinghwbnyktt3oku2jd3';
+const DINGTALK_CORP_ID = import.meta.env.VITE_DINGTALK_CORP_ID || '';
+const DINGTALK_REDIRECT_URI =
+  import.meta.env.VITE_DINGTALK_REDIRECT_URI || 'https://1260cw31az927.vicp.fun/auth/callback';
+
 // —— 测试账号快速登录（仅开发环境，生产构建不包含）——
 // 账号由 `npm run db:seed:dev` 写入，密码统一 000000。
 const isDev = import.meta.env.DEV;
@@ -53,7 +58,48 @@ function redirectAfterLogin() {
 }
 
 async function onDingTalkLogin() {
-  ElMessage.info('钉钉免密登录将在钉钉集成模块接入后启用');
+  if (loading.value) return;
+
+  if (isDingTalkEnv.value) {
+    if (!DINGTALK_CORP_ID) {
+      ElMessage.error('缺少钉钉企业 CorpId 配置，请联系管理员检查 VITE_DINGTALK_CORP_ID');
+      return;
+    }
+    if (typeof dd === 'undefined' || !dd.requestAuthCode) {
+      ElMessage.error('钉钉 JSAPI 未加载，请在钉钉客户端内重新打开页面');
+      return;
+    }
+
+    loading.value = true;
+    dd.requestAuthCode({
+      corpId: DINGTALK_CORP_ID,
+      onSuccess: async (res) => {
+        try {
+          await auth.loginWithDingTalk(res.code);
+          redirectAfterLogin();
+        } catch {
+          ElMessage.error('钉钉登录失败，请确认账号已开通或改用账号密码登录');
+        } finally {
+          loading.value = false;
+        }
+      },
+      onFail: (err) => {
+        console.error('DingTalk requestAuthCode failed', err);
+        ElMessage.error('获取钉钉授权失败，请稍后重试');
+        loading.value = false;
+      },
+    });
+    return;
+  }
+
+  const params = new URLSearchParams({
+    redirect_uri: DINGTALK_REDIRECT_URI,
+    response_type: 'code',
+    client_id: DINGTALK_APP_KEY,
+    scope: 'openid',
+    prompt: 'consent',
+  });
+  window.location.href = `https://login.dingtalk.com/oauth2/auth?${params.toString()}`;
 }
 
 async function onPasswordLogin() {
@@ -80,7 +126,7 @@ async function onPasswordLogin() {
   <el-card class="login-card">
     <img src="/logo.png" alt="KAYFORD 孚德" class="login-logo" />
     <h2 class="title">绩效管理系统</h2>
-    <el-button type="primary" size="large" class="dingtalk-btn" @click="onDingTalkLogin">
+    <el-button type="primary" size="large" class="dingtalk-btn" :loading="loading" @click="onDingTalkLogin">
       钉钉一键登录
     </el-button>
 
