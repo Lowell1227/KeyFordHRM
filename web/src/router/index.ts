@@ -55,7 +55,7 @@ const routes: RouteRecordRaw[] = [
     path: '/appeals',
     name: 'Appeals',
     component: () => import('@/views/appeals/AppealsView.vue'),
-    meta: { requiresAuth: true, title: '申诉处理', roles: ['hr', 'system_admin'] },
+    meta: { requiresAuth: true, title: '申诉计划', roles: ['hr', 'system_admin'] },
   },
   {
     path: '/publish',
@@ -113,7 +113,7 @@ const routes: RouteRecordRaw[] = [
     path: '/tasks',
     name: 'MyTasks',
     component: () => import('@/views/task/TaskListView.vue'),
-    meta: { requiresAuth: true, title: '我的绩效' },
+    meta: { requiresAuth: true, title: '绩效考核' },
   },
   {
     path: '/tasks/:id',
