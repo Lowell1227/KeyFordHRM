@@ -1,5 +1,6 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { createHmac } from 'crypto';
 
 /** 钉钉 access_token 缓存项。 */
 interface TokenCacheEntry {
@@ -108,55 +109,110 @@ export class DingtalkService {
 
   /**
    * 用前端临时授权码换取 unionId。
-   * OAuth2 code -> userAccessToken -> 当前登录人 unionId。
+   * 扫码网页登录优先走 sns/getuserinfo_bycode；
+   * 钉钉容器内免登 code 回退到 topapi/v2/user/getuserinfo。
    */
   async getAuthCodeUnionId(authCode: string): Promise<string> {
     this.assertConfigured();
 
-    const tokenRes = await fetch('https://api.dingtalk.com/v1.0/oauth2/userAccessToken', {
+    try {
+      return await this.getUnionIdBySnsCode(authCode);
+    } catch (snsErr) {
+      const snsMessage = snsErr instanceof Error ? snsErr.message : String(snsErr);
+      this.logger.warn(`sns/getuserinfo_bycode 失败，尝试回退企业免登接口: ${snsMessage}`);
+    }
+
+    return this.getUnionIdByAppAuthCode(authCode);
+  }
+
+  private async getUnionIdBySnsCode(authCode: string): Promise<string> {
+    const timestamp = Date.now().toString();
+    const signContent = `${timestamp}\n${this.appSecret}`;
+    const signature = createHmac('sha256', this.appSecret!).update(signContent).digest('base64url');
+    const url = new URL('https://oapi.dingtalk.com/sns/getuserinfo_bycode');
+    url.searchParams.set('accessKey', this.appKey!);
+    url.searchParams.set('timestamp', timestamp);
+    url.searchParams.set('signature', signature);
+
+    const res = await fetch(url.toString(), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        clientId: this.appKey,
-        clientSecret: this.appSecret,
-        code: authCode,
-        grantType: 'authorization_code',
+        tmp_auth_code: authCode,
       }),
     });
 
-    const tokenData = (await tokenRes.json()) as {
-      accessToken?: string;
-      expireIn?: number;
-      code?: string;
-      message?: string;
+    const data = (await res.json()) as {
+      errcode?: number;
+      errmsg?: string;
+      user_info?: { unionid?: string; unionId?: string };
+      userInfo?: { unionid?: string; unionId?: string };
     };
 
-    if (!tokenRes.ok || !tokenData.accessToken) {
-      throw new Error(
-        `钉钉 authCode 换 userAccessToken 失败: ${tokenData.message ?? tokenRes.statusText} (${tokenData.code ?? tokenRes.status})`,
-      );
+    if (!res.ok || data.errcode !== 0) {
+      throw new Error(`钉钉 sns authCode 换 unionId 失败: ${data.errmsg ?? res.statusText} (${data.errcode ?? res.status})`);
     }
 
-    const userRes = await fetch('https://api.dingtalk.com/v1.0/contact/users/me', {
-      headers: {
-        'x-acs-dingtalk-access-token': tokenData.accessToken,
-      },
+    const unionId = data.user_info?.unionid ?? data.user_info?.unionId ?? data.userInfo?.unionid ?? data.userInfo?.unionId;
+    if (!unionId) {
+      throw new Error('钉钉 sns authCode 换 unionId 失败：响应中无 unionid');
+    }
+
+    return unionId;
+  }
+
+  private async getUnionIdByAppAuthCode(authCode: string): Promise<string> {
+    const token = await this.getAccessToken();
+    const res = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/getuserinfo?access_token=${token}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code: authCode }),
     });
 
-    const userData = (await userRes.json()) as {
-      unionId?: string;
-      unionid?: string;
-      code?: string;
-      message?: string;
+    const data = (await res.json()) as {
+      errcode?: number;
+      errmsg?: string;
+      result?: { unionid?: string; unionId?: string; userid?: string };
     };
 
-    if (!userRes.ok) {
-      throw new Error(`钉钉获取当前登录人信息失败: ${userData.message ?? userRes.statusText} (${userData.code ?? userRes.status})`);
+    if (!res.ok || data.errcode !== 0) {
+      throw new Error(`钉钉 app authCode 换 unionId 失败: ${data.errmsg ?? res.statusText} (${data.errcode ?? res.status})`);
     }
 
-    const unionId = userData.unionId ?? userData.unionid;
+    const unionId = data.result?.unionid ?? data.result?.unionId;
+    if (unionId) {
+      return unionId;
+    }
+
+    const userId = data.result?.userid;
+    if (!userId) {
+      throw new Error('钉钉 app authCode 换 unionId 失败：响应中无 unionid / userid');
+    }
+
+    return this.getUnionIdByUserId(userId, token);
+  }
+
+  private async getUnionIdByUserId(userId: string, token?: string): Promise<string> {
+    const accessToken = token ?? (await this.getAccessToken());
+    const res = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/get?access_token=${accessToken}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ userid: userId, language: 'zh_CN' }),
+    });
+
+    const data = (await res.json()) as {
+      errcode?: number;
+      errmsg?: string;
+      result?: { unionid?: string; unionId?: string };
+    };
+
+    if (!res.ok || data.errcode !== 0) {
+      throw new Error(`钉钉按 userid 获取 unionId 失败: ${data.errmsg ?? res.statusText} (${data.errcode ?? res.status})`);
+    }
+
+    const unionId = data.result?.unionid ?? data.result?.unionId;
     if (!unionId) {
-      throw new Error('钉钉 authCode 换 unionId 失败：响应中无 unionid');
+      throw new Error('钉钉按 userid 获取 unionId 失败：响应中无 unionid');
     }
 
     return unionId;
