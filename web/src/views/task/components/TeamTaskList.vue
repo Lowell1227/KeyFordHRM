@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { Check, Close, View } from '@element-plus/icons-vue';
 import type { TableInstance } from 'element-plus';
 import EmptyState from '@/components/common/EmptyState.vue';
@@ -12,6 +12,12 @@ export interface TeamTaskVersion {
   updatedAt: string;
 }
 
+export interface TeamTaskListHandle {
+  clearSelection: () => Promise<void>;
+  retainSelection: (taskIds: string[]) => Promise<void>;
+  focusList: () => Promise<void>;
+}
+
 const props = withDefaults(
   defineProps<{
     items: TeamTaskListItem[];
@@ -22,11 +28,15 @@ const props = withDefaults(
     stageState?: TeamStageState;
     selectedTaskId?: string;
     loading?: boolean;
+    error?: boolean;
+    batchBusy?: boolean;
   }>(),
   {
     selectedTaskId: undefined,
     stageState: undefined,
     loading: false,
+    error: false,
+    batchBusy: false,
   },
 );
 
@@ -38,10 +48,15 @@ const emit = defineEmits<{
 }>();
 
 const tableRef = ref<TableInstance>();
+const rootRef = ref<HTMLElement>();
 const selectedRows = ref<TeamTaskListItem[]>([]);
+const containerWidth = ref(typeof window === 'undefined' ? 0 : window.innerWidth);
+let resizeObserver: ResizeObserver | undefined;
+let reconcilingSelection = false;
 const showBatchCommands = computed(
   () => props.stage === 'goal-review' && props.stageState === 'pending',
 );
+const compactColumns = computed(() => containerWidth.value > 0 && containerWidth.value < 980);
 const selectedVersions = computed<TeamTaskVersion[]>(() =>
   selectedRows.value.map((item) => ({ taskId: item.id, updatedAt: item.updatedAt })),
 );
@@ -70,39 +85,88 @@ function asTeamTask(row: unknown): TeamTaskListItem {
   return row as TeamTaskListItem;
 }
 
+function isEligible(item: TeamTaskListItem): boolean {
+  return showBatchCommands.value && item.stageState === 'pending';
+}
+
 function onSelectionChange(rows: TeamTaskListItem[]) {
-  selectedRows.value = rows;
+  if (reconcilingSelection) return;
+  selectedRows.value = rows.filter(isEligible);
 }
 
-function clearSelection() {
+async function syncSelection(taskIds: ReadonlySet<string>) {
+  await nextTick();
+  const eligibleRows = props.items.filter((item) => isEligible(item) && taskIds.has(item.id));
+  reconcilingSelection = true;
   tableRef.value?.clearSelection();
-  selectedRows.value = [];
+  for (const row of eligibleRows) tableRef.value?.toggleRowSelection(row, true);
+  selectedRows.value = eligibleRows;
+  await nextTick();
+  reconcilingSelection = false;
 }
 
-watch(showBatchCommands, (enabled) => {
-  if (!enabled) clearSelection();
+async function clearSelection() {
+  await syncSelection(new Set());
+}
+
+async function retainSelection(taskIds: string[]) {
+  await syncSelection(new Set(taskIds));
+}
+
+async function pruneSelection() {
+  await syncSelection(new Set(selectedRows.value.map((item) => item.id)));
+}
+
+async function focusList() {
+  await nextTick();
+  rootRef.value?.focus();
+}
+
+watch(
+  () => [props.items, props.page, props.stage, props.stageState] as const,
+  () => void pruneSelection(),
+);
+
+onMounted(() => {
+  if (!rootRef.value) return;
+  resizeObserver = new ResizeObserver(([entry]) => {
+    containerWidth.value = entry?.contentRect.width ?? 0;
+  });
+  resizeObserver.observe(rootRef.value);
 });
 
-defineExpose({ clearSelection });
+onBeforeUnmount(() => resizeObserver?.disconnect());
+
+defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList });
 </script>
 
 <template>
-  <section class="team-task-list" data-testid="team-task-list">
+  <section
+    ref="rootRef"
+    class="team-task-list"
+    data-testid="team-task-list"
+    tabindex="-1"
+  >
     <header class="team-task-list__header">
       <div class="team-task-list__summary">
         <strong>团队成员</strong>
-        <span>{{ total }} 人</span>
+        <span>{{ total }} 项任务</span>
       </div>
 
       <div v-if="showBatchCommands" class="team-task-list__batch">
-        <span v-if="selectedRows.length" class="team-task-list__selected">
+        <span
+          v-if="selectedRows.length"
+          class="team-task-list__selected"
+          data-testid="team-selected-count"
+        >
           已选 {{ selectedRows.length }} 项
         </span>
         <el-button
           data-testid="team-batch-reject"
           size="small"
           :icon="Close"
-          :disabled="selectedRows.length === 0"
+          :disabled="selectedRows.length === 0 || batchBusy"
+          :loading="batchBusy"
           @click="emit('batch-reject', selectedVersions)"
         >
           批量驳回
@@ -112,7 +176,8 @@ defineExpose({ clearSelection });
           type="primary"
           size="small"
           :icon="Check"
-          :disabled="selectedRows.length === 0"
+          :disabled="selectedRows.length === 0 || batchBusy"
+          :loading="batchBusy"
           @click="emit('batch-approve', selectedVersions)"
         >
           批量通过
@@ -120,7 +185,11 @@ defineExpose({ clearSelection });
       </div>
     </header>
 
-    <div v-loading="loading" class="team-task-list__table-wrap">
+    <div
+      v-loading="loading"
+      class="team-task-list__table-wrap"
+      data-testid="team-task-table-wrap"
+    >
       <el-table
         ref="tableRef"
         class="app-table team-task-list__table"
@@ -134,10 +203,10 @@ defineExpose({ clearSelection });
         <el-table-column
           v-if="showBatchCommands"
           type="selection"
-          width="44"
-          reserve-selection
+          width="40"
+          :selectable="isEligible"
         />
-        <el-table-column label="员工" min-width="190">
+        <el-table-column label="员工" :min-width="compactColumns ? 150 : 190">
           <template #default="{ row }">
             <button
               type="button"
@@ -150,16 +219,28 @@ defineExpose({ clearSelection });
               </el-avatar>
               <span class="member-cell__copy">
                 <strong>{{ row.employeeName }}</strong>
-                <small>{{ row.employeeNo || '-' }}<span v-if="row.position"> · {{ row.position }}</span></small>
+                <small>
+                  {{ row.employeeNo || '-' }}<span v-if="row.position"> · {{ row.position }}</span>
+                  <template v-if="compactColumns">
+                    <span v-if="row.deptName"> · {{ row.deptName }}</span>
+                    <span v-if="row.cycleName"> · {{ row.cycleName }}</span>
+                  </template>
+                </small>
               </span>
             </button>
           </template>
         </el-table-column>
-        <el-table-column prop="deptName" label="部门" min-width="130">
+        <el-table-column v-if="!compactColumns" prop="deptName" label="部门" min-width="130">
           <template #default="{ row }">{{ row.deptName || '-' }}</template>
         </el-table-column>
-        <el-table-column prop="cycleName" label="考核周期" min-width="140" show-overflow-tooltip />
-        <el-table-column label="任务状态" min-width="170">
+        <el-table-column
+          v-if="!compactColumns"
+          prop="cycleName"
+          label="考核周期"
+          min-width="140"
+          show-overflow-tooltip
+        />
+        <el-table-column label="任务状态" :min-width="compactColumns ? 120 : 170">
           <template #default="{ row }">
             <div class="team-task-list__status">
               <StatusBadge :status="row.status" size="small" />
@@ -169,17 +250,17 @@ defineExpose({ clearSelection });
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="结果" width="88" align="right">
+        <el-table-column v-if="!compactColumns" label="结果" width="88" align="right">
           <template #default="{ row }">
             <span v-if="row.totalScore !== null">{{ row.totalScore }}</span>
             <span v-else-if="row.rawGrade">{{ row.rawGrade }}</span>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column label="更新日期" width="112">
+        <el-table-column v-if="!compactColumns" label="更新日期" width="112">
           <template #default="{ row }">{{ row.updatedAt.slice(0, 10) }}</template>
         </el-table-column>
-        <el-table-column width="50" fixed="right" align="center">
+        <el-table-column :width="compactColumns ? 40 : 50" fixed="right" align="center">
           <template #default="{ row }">
             <el-tooltip content="查看成员" placement="top">
               <el-button
@@ -195,7 +276,9 @@ defineExpose({ clearSelection });
         </el-table-column>
       </el-table>
 
-      <EmptyState v-if="!loading && items.length === 0" description="暂无匹配成员" />
+      <div v-if="!loading && !error && items.length === 0" data-testid="team-task-empty">
+        <EmptyState description="暂无匹配任务" />
+      </div>
     </div>
 
     <footer v-if="total > 0" class="team-task-list__footer">
@@ -222,6 +305,11 @@ defineExpose({ clearSelection });
   border: 1px solid #e2e6ed;
   border-radius: 7px;
   overflow: hidden;
+  outline: none;
+}
+
+.team-task-list:focus-visible {
+  box-shadow: 0 0 0 2px #91caff inset;
 }
 
 .team-task-list__header {
@@ -339,11 +427,7 @@ defineExpose({ clearSelection });
 
   .team-task-list__table-wrap {
     min-height: 340px;
-    overflow-x: auto;
-  }
-
-  .team-task-list__table {
-    min-width: 850px;
+    overflow-x: hidden;
   }
 
   .team-task-list__footer {

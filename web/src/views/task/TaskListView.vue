@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, onMounted, watch } from 'vue';
+import { computed, nextTick, ref, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Calendar, DocumentChecked, RefreshLeft, Search, UserFilled } from '@element-plus/icons-vue';
@@ -12,13 +12,19 @@ import EmptyState from '@/components/common/EmptyState.vue';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
 import PerformanceContextPanel from '@/components/performance/PerformanceContextPanel.vue';
 import TeamTaskList, {
+  type TeamTaskListHandle,
   type TeamTaskVersion,
 } from './components/TeamTaskList.vue';
-import TeamMemberRail from './components/TeamMemberRail.vue';
+import TeamMemberRail, {
+  type TeamMemberRailHandle,
+} from './components/TeamMemberRail.vue';
 import type {
   AssessmentCycle,
+  BatchReviewResult,
+  TaskDetail,
   TaskListItem,
   TaskQuery,
+  TeamTaskListItem,
   TeamTaskPage,
 } from '@/types/api.types';
 import type { TaskStatus, TeamStageState, TeamTaskStage } from '@/types/enums';
@@ -43,8 +49,30 @@ const teamLoading = ref(false);
 const teamError = ref('');
 const teamKeyword = ref(workspaceQuery.state.value.keyword ?? '');
 const teamPageSize = 20;
-const teamListRef = ref<{ clearSelection: () => void }>();
+const teamListRef = ref<TeamTaskListHandle>();
+const teamMemberRailRef = ref<TeamMemberRailHandle>();
+const hydratedTeamTask = ref<TeamTaskListItem>();
+const teamDetailLoading = ref(false);
+const teamDetailError = ref('');
+const teamBatchBusy = ref(false);
 let teamRequestSerial = 0;
+let teamDetailRequestSerial = 0;
+
+interface TeamBatchDisplayItem {
+  taskId: string;
+  label: string;
+  reason?: string;
+}
+
+interface TeamBatchDisplayResult {
+  actionLabel: string;
+  level: 'success' | 'warning' | 'error';
+  succeeded: TeamBatchDisplayItem[];
+  failed: TeamBatchDisplayItem[];
+  requestError?: string;
+}
+
+const teamBatchResult = ref<TeamBatchDisplayResult>();
 
 function emptyTeamPage(): TeamTaskPage {
   return {
@@ -73,9 +101,11 @@ const isManagerCapable = computed(() => auth.isManager);
 const activeScope = computed<'mine' | 'team'>(() =>
   isManagerCapable.value && workspaceQuery.state.value.scope === 'team' ? 'team' : 'mine',
 );
-const selectedTeamTask = computed(() =>
-  teamPage.value.items.find((item) => item.id === workspaceQuery.state.value.taskId),
-);
+const selectedTeamTask = computed(() => {
+  const taskId = workspaceQuery.state.value.taskId;
+  return teamPage.value.items.find((item) => item.id === taskId)
+    ?? (hydratedTeamTask.value?.id === taskId ? hydratedTeamTask.value : undefined);
+});
 const teamEmployeeOptions = computed(() => {
   const departmentId = workspaceQuery.state.value.deptId;
   if (!departmentId) return teamPage.value.facets.employees;
@@ -203,16 +233,112 @@ async function loadList() {
   }
 }
 
-async function loadTeam() {
+function teamContextKey(): string {
+  const state = workspaceQuery.state.value;
+  return JSON.stringify([
+    state.scope,
+    state.stage,
+    state.cycleId,
+    state.deptId,
+    state.employeeId,
+    state.stageState,
+    state.keyword,
+    state.page ?? 1,
+  ]);
+}
+
+function detailStageState(detail: TaskDetail, stage: TeamTaskStage): TeamStageState {
+  if (detail.isExempt || detail.status === 'exempted') return 'exempted';
+  if (stage === 'goal-review') {
+    if (detail.status === 'indicator_reviewing') return 'pending';
+    if (['pending', 'indicator_drafting', 'indicator_setting'].includes(detail.status)) {
+      return 'not_started';
+    }
+    return 'completed';
+  }
+  if (detail.status === 'manager_scoring') return 'pending';
+  if ([
+    'indicator_drafting',
+    'pending',
+    'indicator_reviewing',
+    'indicator_setting',
+    'indicator_confirming',
+    'self_eval',
+  ].includes(detail.status)) return 'not_started';
+  return 'completed';
+}
+
+function toTeamTaskItem(detail: TaskDetail, stage: TeamTaskStage): TeamTaskListItem {
+  return {
+    id: detail.id,
+    cycleId: detail.cycleId,
+    cycleName: detail.cycleName ?? '-',
+    employeeId: detail.employeeId,
+    employeeName: detail.employeeName ?? '-',
+    deptId: detail.deptId ?? null,
+    deptName: detail.deptName ?? null,
+    managerId: detail.managerId ?? null,
+    status: detail.status,
+    totalScore: detail.gradeResult?.calculatedScore ?? null,
+    rawGrade: detail.gradeResult?.rawGrade ?? null,
+    updatedAt: detail.updatedAt ?? '',
+    employeeNo: detail.employeeNo ?? null,
+    avatarUrl: null,
+    position: null,
+    stageState: detailStageState(detail, stage),
+  };
+}
+
+function httpErrorMessage(error: unknown, fallback: string): string {
+  const candidate = error as {
+    message?: string;
+    response?: { data?: { message?: string | string[] } };
+  };
+  const responseMessage = candidate.response?.data?.message;
+  if (Array.isArray(responseMessage)) return responseMessage.join('；');
+  return responseMessage || candidate.message || fallback;
+}
+
+async function hydrateSelectedTeamTask(response: TeamTaskPage) {
+  const taskId = workspaceQuery.state.value.taskId;
+  const requestId = ++teamDetailRequestSerial;
+  teamDetailError.value = '';
+  if (!taskId || response.items.some((item) => item.id === taskId)) {
+    hydratedTeamTask.value = undefined;
+    teamDetailLoading.value = false;
+    return;
+  }
+
+  teamDetailLoading.value = true;
+  try {
+    const detail = await tasksApi.findOne(taskId);
+    if (requestId !== teamDetailRequestSerial || workspaceQuery.state.value.taskId !== taskId) return;
+    hydratedTeamTask.value = toTeamTaskItem(detail, workspaceQuery.state.value.stage);
+  } catch (error) {
+    if (requestId !== teamDetailRequestSerial || workspaceQuery.state.value.taskId !== taskId) return;
+    hydratedTeamTask.value = undefined;
+    teamDetailError.value = httpErrorMessage(error, '所选任务加载失败');
+  } finally {
+    if (requestId === teamDetailRequestSerial) teamDetailLoading.value = false;
+  }
+}
+
+interface LoadTeamOptions {
+  preserveSelectionIds?: string[];
+  expectedContextKey?: string;
+}
+
+async function loadTeam(options: LoadTeamOptions = {}) {
   if (activeScope.value !== 'team') return;
   const requestId = ++teamRequestSerial;
   const state = workspaceQuery.state.value;
+  const requestedPage = state.page ?? 1;
   teamLoading.value = true;
   teamError.value = '';
   try {
     const response = await tasksApi.findTeam({
       stage: state.stage,
-      page: state.page ?? 1,
+      page: requestedPage,
       pageSize: teamPageSize,
       cycleId: state.cycleId,
       deptId: state.deptId,
@@ -220,11 +346,26 @@ async function loadTeam() {
       stageState: state.stageState,
       keyword: state.keyword,
     });
-    if (requestId === teamRequestSerial) teamPage.value = response;
+    if (requestId !== teamRequestSerial) return;
+    teamPage.value = response;
+    if (response.page !== requestedPage) {
+      await teamListRef.value?.clearSelection();
+      await workspaceQuery.update({ page: response.page > 1 ? response.page : undefined });
+      return;
+    }
+    await nextTick();
+    if (
+      options.preserveSelectionIds
+      && options.expectedContextKey === teamContextKey()
+    ) {
+      await teamListRef.value?.retainSelection(options.preserveSelectionIds);
+    }
+    await hydrateSelectedTeamTask(response);
   } catch {
     if (requestId === teamRequestSerial) {
       teamPage.value = emptyTeamPage();
       teamError.value = '团队任务加载失败';
+      hydratedTeamTask.value = undefined;
     }
   } finally {
     if (requestId === teamRequestSerial) teamLoading.value = false;
@@ -330,25 +471,31 @@ function goDetail(row: unknown) {
   router.push({ name: 'TaskDetail', params: { id: item.id } });
 }
 
+async function updateTeamContext(patch: Parameters<typeof workspaceQuery.update>[0]) {
+  await teamListRef.value?.clearSelection();
+  teamBatchResult.value = undefined;
+  await workspaceQuery.update(patch);
+}
+
 function setScope(scope: 'mine' | 'team') {
   if (scope === activeScope.value) return;
-  void workspaceQuery.update({ scope, taskId: undefined, employeeId: undefined });
+  void updateTeamContext({ scope, taskId: undefined, employeeId: undefined });
 }
 
 function setTeamStage(stage: TeamTaskStage) {
-  void workspaceQuery.update({ stage, stageState: undefined, taskId: undefined });
+  void updateTeamContext({ stage, stageState: undefined, taskId: undefined });
 }
 
 function setTeamStageState(stageState: TeamStageState | undefined) {
-  void workspaceQuery.update({ stageState, taskId: undefined });
+  void updateTeamContext({ stageState, taskId: undefined });
 }
 
 function setTeamCycle(value: string) {
-  void workspaceQuery.update({ cycleId: value || undefined, taskId: undefined });
+  void updateTeamContext({ cycleId: value || undefined, taskId: undefined });
 }
 
 function setTeamDepartment(value: string) {
-  void workspaceQuery.update({
+  void updateTeamContext({
     deptId: value || undefined,
     employeeId: undefined,
     taskId: undefined,
@@ -356,16 +503,16 @@ function setTeamDepartment(value: string) {
 }
 
 function setTeamEmployee(value: string) {
-  void workspaceQuery.update({ employeeId: value || undefined, taskId: undefined });
+  void updateTeamContext({ employeeId: value || undefined, taskId: undefined });
 }
 
 function applyTeamSearch() {
-  void workspaceQuery.update({ keyword: teamKeyword.value.trim() || undefined, taskId: undefined });
+  void updateTeamContext({ keyword: teamKeyword.value.trim() || undefined, taskId: undefined });
 }
 
 function resetTeamFilters() {
   teamKeyword.value = '';
-  void workspaceQuery.update({
+  void updateTeamContext({
     cycleId: undefined,
     deptId: undefined,
     employeeId: undefined,
@@ -375,12 +522,90 @@ function resetTeamFilters() {
   });
 }
 
-function selectTeamTask(payload: { taskId: string; employeeId: string }) {
-  void workspaceQuery.update({ taskId: payload.taskId });
+function changeTeamPage(nextPage: number) {
+  void updateTeamContext({ page: nextPage, taskId: undefined });
 }
 
-function closeTeamMember() {
-  void workspaceQuery.update({ taskId: undefined });
+function isMobileViewport(): boolean {
+  return window.matchMedia('(max-width: 768px)').matches;
+}
+
+async function selectTeamTask(payload: { taskId: string; employeeId: string }) {
+  await workspaceQuery.update({ taskId: payload.taskId });
+  await nextTick();
+  if (isMobileViewport()) await teamMemberRailRef.value?.focusHeading();
+}
+
+async function closeTeamMember() {
+  await workspaceQuery.update({ taskId: undefined });
+  await nextTick();
+  if (isMobileViewport()) await teamListRef.value?.focusList();
+}
+
+function batchItemLabels(tasks: TeamTaskVersion[]): Map<string, string> {
+  return new Map(tasks.map(({ taskId }) => {
+    const item = teamPage.value.items.find((candidate) => candidate.id === taskId);
+    return [taskId, item?.employeeName ?? taskId];
+  }));
+}
+
+async function applyBatchResult(
+  actionLabel: string,
+  result: BatchReviewResult,
+  labels: Map<string, string>,
+  contextKey: string,
+) {
+  if (contextKey !== teamContextKey()) return;
+  const succeeded = result.succeeded.map(({ taskId }) => ({
+    taskId,
+    label: labels.get(taskId) ?? taskId,
+  }));
+  const failed = result.failed.map(({ taskId, reason }) => ({
+    taskId,
+    label: labels.get(taskId) ?? taskId,
+    reason,
+  }));
+  const level: TeamBatchDisplayResult['level'] = succeeded.length === 0
+    ? 'error'
+    : failed.length > 0 ? 'warning' : 'success';
+  teamBatchResult.value = { actionLabel, level, succeeded, failed };
+
+  if (succeeded.length === 0) {
+    ElMessage.error(`${actionLabel}失败，共 ${failed.length} 项`);
+  } else if (failed.length > 0) {
+    ElMessage.warning(`${actionLabel}完成：成功 ${succeeded.length} 项，失败 ${failed.length} 项`);
+  } else {
+    ElMessage.success(`${actionLabel}成功 ${succeeded.length} 项`);
+  }
+
+  await loadTeam({
+    preserveSelectionIds: failed.map(({ taskId }) => taskId),
+    expectedContextKey: contextKey,
+  });
+}
+
+async function handleBatchRequestError(
+  actionLabel: string,
+  tasks: TeamTaskVersion[],
+  labels: Map<string, string>,
+  contextKey: string,
+  error: unknown,
+) {
+  if (contextKey !== teamContextKey()) return;
+  const message = httpErrorMessage(error, `${actionLabel}请求失败`);
+  const failed = tasks.map(({ taskId }) => ({
+    taskId,
+    label: labels.get(taskId) ?? taskId,
+    reason: message,
+  }));
+  teamBatchResult.value = {
+    actionLabel,
+    level: 'error',
+    succeeded: [],
+    failed,
+    requestError: message,
+  };
+  await teamListRef.value?.retainSelection(failed.map(({ taskId }) => taskId));
 }
 
 async function approveTeamTasks(tasks: TeamTaskVersion[]) {
@@ -390,12 +615,21 @@ async function approveTeamTasks(tasks: TeamTaskVersion[]) {
       cancelButtonText: '取消',
       type: 'warning',
     });
-    const result = await tasksApi.batchApproveIndicators({ tasks });
-    ElMessage.success(`已通过 ${result.succeeded.length} 项`);
-    teamListRef.value?.clearSelection();
-    await loadTeam();
   } catch (error) {
     if (error === 'cancel' || error === 'close') return;
+    throw error;
+  }
+
+  const labels = batchItemLabels(tasks);
+  const contextKey = teamContextKey();
+  teamBatchBusy.value = true;
+  try {
+    const result = await tasksApi.batchApproveIndicators({ tasks });
+    await applyBatchResult('批量通过', result, labels, contextKey);
+  } catch (error) {
+    await handleBatchRequestError('批量通过', tasks, labels, contextKey, error);
+  } finally {
+    teamBatchBusy.value = false;
   }
 }
 
@@ -408,10 +642,17 @@ async function rejectTeamTasks(tasks: TeamTaskVersion[]) {
       inputErrorMessage: '请输入驳回原因',
       type: 'warning',
     });
-    const result = await tasksApi.batchRejectIndicators({ tasks, reason: value.trim() });
-    ElMessage.success(`已驳回 ${result.succeeded.length} 项`);
-    teamListRef.value?.clearSelection();
-    await loadTeam();
+    const labels = batchItemLabels(tasks);
+    const contextKey = teamContextKey();
+    teamBatchBusy.value = true;
+    try {
+      const result = await tasksApi.batchRejectIndicators({ tasks, reason: value.trim() });
+      await applyBatchResult('批量驳回', result, labels, contextKey);
+    } catch (error) {
+      await handleBatchRequestError('批量驳回', tasks, labels, contextKey, error);
+    } finally {
+      teamBatchBusy.value = false;
+    }
   } catch (error) {
     if (error === 'cancel' || error === 'close') return;
   }
@@ -444,10 +685,12 @@ watch(
     keyword: workspaceQuery.state.value.keyword,
     page: workspaceQuery.state.value.page,
   }),
-  (current, previous) => {
+  async (current, previous) => {
     if (!previous) return;
-    if (current.scope === 'team') void loadTeam();
-    else if (previous.scope !== 'mine') void loadList();
+    await teamListRef.value?.clearSelection();
+    teamBatchResult.value = undefined;
+    if (current.scope === 'team') await loadTeam();
+    else if (previous.scope !== 'mine') await loadList();
   },
 );
 
@@ -455,6 +698,26 @@ watch(
   () => workspaceQuery.state.value.keyword,
   (keyword) => {
     teamKeyword.value = keyword ?? '';
+  },
+);
+
+watch(
+  () => workspaceQuery.state.value.taskId,
+  (taskId) => {
+    if (!taskId) {
+      teamDetailRequestSerial += 1;
+      hydratedTeamTask.value = undefined;
+      teamDetailError.value = '';
+      teamDetailLoading.value = false;
+      return;
+    }
+    if (
+      activeScope.value === 'team'
+      && !teamLoading.value
+      && !teamPage.value.items.some((item) => item.id === taskId)
+    ) {
+      void hydrateSelectedTeamTask(teamPage.value);
+    }
   },
 );
 </script>
@@ -581,53 +844,65 @@ watch(
               <el-icon><Calendar /></el-icon>
               <span>筛选范围</span>
             </div>
-            <el-select
-              data-testid="team-cycle-filter"
-              :model-value="workspaceQuery.state.value.cycleId || ''"
-              placeholder="全部考核周期"
-              clearable
-              @change="setTeamCycle"
-            >
-              <el-option label="全部考核周期" value="" />
-              <el-option
-                v-for="cycle in cycles"
-                :key="cycle.id"
-                :label="cycle.name"
-                :value="cycle.id"
-              />
-            </el-select>
-            <el-select
-              data-testid="team-department-filter"
-              :model-value="workspaceQuery.state.value.deptId || ''"
-              placeholder="全部部门"
-              clearable
-              filterable
-              @change="setTeamDepartment"
-            >
-              <el-option label="全部部门" value="" />
-              <el-option
-                v-for="department in teamPage.facets.departments"
-                :key="department.id"
-                :label="department.name"
-                :value="department.id"
-              />
-            </el-select>
-            <el-select
-              data-testid="team-employee-filter"
-              :model-value="workspaceQuery.state.value.employeeId || ''"
-              placeholder="全部员工"
-              clearable
-              filterable
-              @change="setTeamEmployee"
-            >
-              <el-option label="全部员工" value="" />
-              <el-option
-                v-for="employee in teamEmployeeOptions"
-                :key="employee.id"
-                :label="employee.employeeNo ? `${employee.name} · ${employee.employeeNo}` : employee.name"
-                :value="employee.id"
-              />
-            </el-select>
+            <label class="team-filter-control">
+              <span>考核周期</span>
+              <el-select
+                data-testid="team-cycle-filter"
+                aria-label="考核周期"
+                :model-value="workspaceQuery.state.value.cycleId || ''"
+                placeholder="全部考核周期"
+                clearable
+                @change="setTeamCycle"
+              >
+                <el-option label="全部考核周期" value="" />
+                <el-option
+                  v-for="cycle in cycles"
+                  :key="cycle.id"
+                  :label="cycle.name"
+                  :value="cycle.id"
+                />
+              </el-select>
+            </label>
+            <label class="team-filter-control">
+              <span>部门</span>
+              <el-select
+                data-testid="team-department-filter"
+                aria-label="部门"
+                :model-value="workspaceQuery.state.value.deptId || ''"
+                placeholder="全部部门"
+                clearable
+                filterable
+                @change="setTeamDepartment"
+              >
+                <el-option label="全部部门" value="" />
+                <el-option
+                  v-for="department in teamPage.facets.departments"
+                  :key="department.id"
+                  :label="department.name"
+                  :value="department.id"
+                />
+              </el-select>
+            </label>
+            <label class="team-filter-control">
+              <span>员工</span>
+              <el-select
+                data-testid="team-employee-filter"
+                aria-label="员工"
+                :model-value="workspaceQuery.state.value.employeeId || ''"
+                placeholder="全部员工"
+                clearable
+                filterable
+                @change="setTeamEmployee"
+              >
+                <el-option label="全部员工" value="" />
+                <el-option
+                  v-for="employee in teamEmployeeOptions"
+                  :key="employee.id"
+                  :label="employee.employeeNo ? `${employee.name} · ${employee.employeeNo}` : employee.name"
+                  :value="employee.id"
+                />
+              </el-select>
+            </label>
           </div>
 
           <div class="team-context__section">
@@ -735,16 +1010,20 @@ watch(
 
     <div v-else class="team-workspace">
       <section class="team-toolbar" aria-label="团队任务筛选">
-        <el-input
-          v-model="teamKeyword"
-          data-testid="team-keyword-filter"
-          clearable
-          placeholder="搜索姓名或工号"
-          @clear="applyTeamSearch"
-          @keyup.enter="applyTeamSearch"
-        >
-          <template #prefix><el-icon><Search /></el-icon></template>
-        </el-input>
+        <label class="team-search-control">
+          <span>搜索</span>
+          <el-input
+            v-model="teamKeyword"
+            data-testid="team-keyword-filter"
+            aria-label="搜索姓名或工号"
+            clearable
+            placeholder="搜索姓名或工号"
+            @clear="applyTeamSearch"
+            @keyup.enter="applyTeamSearch"
+          >
+            <template #prefix><el-icon><Search /></el-icon></template>
+          </el-input>
+        </label>
         <el-button type="primary" :icon="Search" @click="applyTeamSearch">搜索</el-button>
         <el-tooltip content="重置筛选" placement="top">
           <el-button
@@ -768,9 +1047,50 @@ watch(
         :closable="false"
       >
         <template #default>
-          <el-button size="small" @click="loadTeam">重试</el-button>
+          <el-button size="small" @click="loadTeam()">重试</el-button>
         </template>
       </el-alert>
+
+      <section
+        v-if="teamBatchResult"
+        class="team-batch-result"
+        :class="`is-${teamBatchResult.level}`"
+        data-testid="team-batch-result"
+        :aria-label="`${teamBatchResult.actionLabel}结果`"
+      >
+        <header>
+          <strong>{{ teamBatchResult.actionLabel }}结果</strong>
+          <span>
+            <template v-if="teamBatchResult.succeeded.length">
+              成功 {{ teamBatchResult.succeeded.length }} 项<span v-if="teamBatchResult.failed.length">，</span>
+            </template>
+            <template v-if="teamBatchResult.failed.length">失败 {{ teamBatchResult.failed.length }} 项</template>
+          </span>
+        </header>
+        <p v-if="teamBatchResult.requestError" class="team-batch-result__request-error">
+          {{ teamBatchResult.requestError }}
+        </p>
+        <div class="team-batch-result__groups">
+          <div
+            v-if="teamBatchResult.succeeded.length"
+            class="team-batch-result__group is-succeeded"
+            data-testid="team-batch-succeeded"
+          >
+            <strong>成功</strong>
+            <span v-for="item in teamBatchResult.succeeded" :key="item.taskId">{{ item.label }}</span>
+          </div>
+          <div
+            v-if="teamBatchResult.failed.length"
+            class="team-batch-result__group is-failed"
+            data-testid="team-batch-failed"
+          >
+            <strong>失败</strong>
+            <span v-for="item in teamBatchResult.failed" :key="item.taskId">
+              {{ item.label }}<template v-if="item.reason">：{{ item.reason }}</template>
+            </span>
+          </div>
+        </div>
+      </section>
 
       <div class="team-layout" :class="{ 'has-detail': workspaceQuery.state.value.taskId }">
         <TeamTaskList
@@ -783,18 +1103,22 @@ watch(
           :stage-state="workspaceQuery.state.value.stageState"
           :selected-task-id="workspaceQuery.state.value.taskId"
           :loading="teamLoading"
+          :error="Boolean(teamError)"
+          :batch-busy="teamBatchBusy"
           @task-selected="selectTeamTask"
           @batch-approve="approveTeamTasks"
           @batch-reject="rejectTeamTasks"
-          @page-change="workspaceQuery.update({ page: $event, taskId: undefined })"
+          @page-change="changeTeamPage"
         />
 
         <TeamMemberRail
           v-if="workspaceQuery.state.value.taskId"
+          ref="teamMemberRailRef"
           :task="selectedTeamTask"
           :task-id="workspaceQuery.state.value.taskId"
           :stage="workspaceQuery.state.value.stage"
-          :loading="teamLoading && !selectedTeamTask"
+          :loading="teamDetailLoading"
+          :error="teamDetailError"
           @close="closeTeamMember"
         />
       </div>
@@ -1064,6 +1388,21 @@ watch(
   width: 100%;
 }
 
+.team-filter-control,
+.team-search-control {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.team-filter-control > span,
+.team-search-control > span {
+  color: #70798a;
+  font-size: 12px;
+  font-weight: 600;
+}
+
 .team-count-tabs {
   display: flex;
   flex-direction: column;
@@ -1110,6 +1449,7 @@ watch(
   min-width: 0;
   min-height: 100%;
   padding: 12px;
+  container-type: inline-size;
 }
 
 .team-toolbar {
@@ -1124,7 +1464,11 @@ watch(
   background: #fff;
 }
 
-.team-toolbar :deep(.el-input) {
+.team-search-control {
+  width: min(320px, 100%);
+}
+
+.team-search-control :deep(.el-input) {
   width: min(320px, 100%);
 }
 
@@ -1143,6 +1487,69 @@ watch(
   margin-bottom: 10px;
 }
 
+.team-batch-result {
+  margin-bottom: 10px;
+  padding: 10px 12px;
+  border: 1px solid #d9dfe8;
+  border-left-width: 3px;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.team-batch-result.is-success {
+  border-left-color: #389e0d;
+}
+
+.team-batch-result.is-warning {
+  border-left-color: #d48806;
+}
+
+.team-batch-result.is-error {
+  border-left-color: #cf1322;
+}
+
+.team-batch-result header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #30384b;
+  font-size: 13px;
+}
+
+.team-batch-result__request-error {
+  margin: 8px 0 0;
+  color: #a8071a;
+  font-size: 12px;
+}
+
+.team-batch-result__groups {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 8px;
+}
+
+.team-batch-result__group {
+  min-width: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px 10px;
+  padding: 7px 9px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+
+.team-batch-result__group.is-succeeded {
+  color: #237804;
+  background: #f0f9eb;
+}
+
+.team-batch-result__group.is-failed {
+  color: #a8071a;
+  background: #fff1f0;
+}
+
 .team-layout {
   min-width: 0;
   display: grid;
@@ -1152,7 +1559,18 @@ watch(
 }
 
 .team-layout.has-detail {
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(620px, 1fr) minmax(288px, 320px);
+}
+
+@container (max-width: 960px) {
+  .team-layout.has-detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .team-layout.has-detail :deep(.team-member-rail) {
+    width: 100%;
+    min-height: 390px;
+  }
 }
 
 .empty-wrap {
@@ -1203,7 +1621,7 @@ watch(
   }
 
   .team-context__filters .task-context__label,
-  .team-context__filters :deep(.el-select:first-of-type) {
+  .team-context__filters .team-filter-control:first-of-type {
     grid-column: 1 / -1;
   }
 
@@ -1225,13 +1643,21 @@ watch(
     flex-wrap: wrap;
   }
 
-  .team-toolbar :deep(.el-input) {
+  .team-search-control {
     width: calc(100% - 92px);
+  }
+
+  .team-search-control :deep(.el-input) {
+    width: 100%;
   }
 
   .team-toolbar__scope {
     width: 100%;
     margin-left: 0;
+  }
+
+  .team-batch-result__groups {
+    grid-template-columns: minmax(0, 1fr);
   }
 
   .team-layout.has-detail {

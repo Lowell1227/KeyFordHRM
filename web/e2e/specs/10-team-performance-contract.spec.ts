@@ -6,6 +6,7 @@ import type {
   IndicatorInstance,
   IndicatorReferenceItem,
   Paginated,
+  TaskDetail,
   TeamTaskPage,
 } from '../../src/types/api.types';
 import {
@@ -19,6 +20,11 @@ const apiResponse = (data: unknown) => ({
   data,
   timestamp: Date.now(),
 });
+
+const shouldCaptureTask7Evidence = () => (
+  (globalThis as { process?: { env?: Record<string, string | undefined> } })
+    .process?.env?.TASK7_CAPTURE_EVIDENCE === '1'
+);
 
 const teamPageFixture: TeamTaskPage = {
   total: 3,
@@ -94,6 +100,41 @@ const teamPageFixture: TeamTaskPage = {
   },
 };
 
+const offPageTaskFixture: TaskDetail = {
+  id: 'task-off-page',
+  cycleId: 'cycle-1',
+  cycleName: '2026 H1',
+  snapshotId: 'snapshot-1',
+  employeeId: 'employee-off-page',
+  employeeName: 'Off Page Member',
+  deptId: 'dept-2',
+  deptName: 'Operations',
+  managerId: 'manager-1',
+  status: 'indicator_reviewing',
+  isExempt: false,
+  updatedAt: '2026-08-06T00:00:00.000Z',
+  indicatorInstances: [],
+};
+
+function teamPageWith(
+  items: TeamTaskPage['items'],
+  options: { page?: number; total?: number } = {},
+): TeamTaskPage {
+  return {
+    ...teamPageFixture,
+    page: options.page ?? 1,
+    total: options.total ?? items.length,
+    items,
+    counts: {
+      all: options.total ?? items.length,
+      notStarted: 0,
+      pending: options.total ?? items.length,
+      completed: 0,
+      exempted: 0,
+    },
+  };
+}
+
 async function mockTaskWorkspaceIdentity(page: import('@playwright/test').Page, sysRole: 'manager' | 'employee') {
   await page.route('**/api/v1/auth/me', (route) => route.fulfill({
     contentType: 'application/json',
@@ -109,7 +150,19 @@ async function mockTaskWorkspaceIdentity(page: import('@playwright/test').Page, 
   }));
   await page.route('**/api/v1/cycles**', (route) => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 50, items: [] })),
+    body: JSON.stringify(apiResponse({
+      total: 1,
+      page: 1,
+      pageSize: 50,
+      items: [{
+        id: 'cycle-1',
+        name: '2026 H1',
+        type: 'semi_annual',
+        status: 'in_progress',
+        startDate: '2026-01-01',
+        endDate: '2026-06-30',
+      }],
+    })),
   }));
   await page.route('**/api/v1/tasks/mine**', (route) => route.fulfill({
     contentType: 'application/json',
@@ -179,6 +232,243 @@ test.describe('team list manager workspace', () => {
       .toBe('manager-eval');
   });
 
+  test('selection is page-local and clears on search, department, employee, cycle, and page changes', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    const requests: URL[] = [];
+    await page.route('**/api/v1/tasks/team**', (route) => {
+      const url = new URL(route.request().url());
+      requests.push(url);
+      const pageNumber = Number(url.searchParams.get('page') || 1);
+      const items = pageNumber === 2 ? [teamPageFixture.items[2]] : teamPageFixture.items.slice(0, 2);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPageWith(items, { page: pageNumber, total: 21 }))),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending');
+
+    await expect(page.getByRole('combobox', { name: '考核周期' })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: '部门' })).toBeVisible();
+    await expect(page.getByRole('combobox', { name: '员工' })).toBeVisible();
+    await expect(page.getByLabel('搜索姓名或工号')).toBeVisible();
+
+    const selectAda = async () => {
+      await page.getByRole('row').filter({ hasText: 'Ada Chen' }).locator('.el-checkbox').click();
+      await expect(page.getByTestId('team-selected-count')).toContainText('1');
+    };
+
+    await selectAda();
+    await page.getByRole('button', { name: '主管评分', exact: true }).click();
+    await expect(page).toHaveURL(/stage=manager-eval/);
+    await expect(page.getByTestId('team-batch-approve')).toHaveCount(0);
+    await page.getByRole('button', { name: '指标审核', exact: true }).click();
+    await page.getByTestId('team-count-pending').click();
+    await expect(page.getByTestId('team-batch-approve')).toBeDisabled();
+
+    await selectAda();
+    await page.getByLabel('搜索姓名或工号').fill('Ada');
+    await page.getByLabel('搜索姓名或工号').press('Enter');
+    await expect(page.getByTestId('team-batch-approve')).toBeDisabled();
+
+    await page.getByRole('combobox', { name: '部门' }).click();
+    await page.getByRole('option', { name: 'Engineering', exact: true }).click();
+    await expect(page).toHaveURL(/deptId=dept-1/);
+    await expect(page.getByTestId('team-batch-approve')).toBeDisabled();
+
+    await page.getByRole('combobox', { name: '员工' }).click();
+    await page.getByRole('option', { name: /Ada Chen/ }).click();
+    await expect(page).toHaveURL(/employeeId=employee-1/);
+
+    await page.getByTestId('team-cycle-filter').click();
+    await page.getByRole('option', { name: '2026 H1', exact: true }).click();
+    await expect(page).toHaveURL(/cycleId=cycle-1/);
+    await selectAda();
+    await page.getByTestId('team-count-completed').click();
+    await expect(page.getByTestId('team-batch-approve')).toHaveCount(0);
+    await page.getByTestId('team-count-pending').click();
+    await expect(page.getByTestId('team-batch-approve')).toBeDisabled();
+
+    await page.getByTestId('team-keyword-filter').fill('');
+    await page.getByTestId('team-keyword-filter').press('Enter');
+    await page.getByTestId('team-department-filter').click();
+    await page.getByRole('option', { name: '全部部门', exact: true }).click();
+    await page.getByTestId('team-employee-filter').click();
+    await page.getByRole('option', { name: '全部员工', exact: true }).click();
+    await selectAda();
+    await page.locator('.team-task-list__footer .btn-next').click();
+    await expect(page).toHaveURL(/page=2/);
+    await expect(page.getByTestId('team-task-row-task-3')).toBeVisible();
+    await expect(page.getByTestId('team-batch-approve')).toBeDisabled();
+    await expect.poll(() => requests[requests.length - 1]?.searchParams.get('page')).toBe('2');
+  });
+
+  test('partial batch result clears succeeded rows and preserves visible failed rows', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    let afterBatch = false;
+    let batchAttempt = 0;
+    await page.route('**/api/v1/tasks/team/indicator-review/batch-approve', (route) => {
+      batchAttempt += 1;
+      afterBatch = true;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(batchAttempt === 1 ? {
+          succeeded: [{ taskId: 'task-1', status: 'indicator_confirming' }],
+          failed: [{ taskId: 'task-2', reason: '任务已被其他操作更新' }],
+        } : {
+          succeeded: [{ taskId: 'task-2', status: 'indicator_confirming' }],
+          failed: [],
+        })),
+      });
+    });
+    await page.route('**/api/v1/tasks/team**', (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPageWith(
+          afterBatch ? [teamPageFixture.items[1]] : teamPageFixture.items.slice(0, 2),
+        ))),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending');
+    await page.getByRole('row').filter({ hasText: 'Ada Chen' }).locator('.el-checkbox').click();
+    await page.getByRole('row').filter({ hasText: 'Grace Lin' }).locator('.el-checkbox').click();
+    await page.getByTestId('team-batch-approve').click();
+    await page.getByRole('button', { name: '通过', exact: true }).click();
+
+    const result = page.getByTestId('team-batch-result');
+    await expect(result.getByTestId('team-batch-succeeded')).toContainText('Ada Chen');
+    await expect(result.getByTestId('team-batch-failed')).toContainText('Grace Lin');
+    await expect(result.getByTestId('team-batch-failed')).toContainText('任务已被其他操作更新');
+    await expect(page.getByTestId('team-selected-count')).toContainText('1');
+    await expect(page.getByRole('row').filter({ hasText: 'Grace Lin' }).locator('.el-checkbox')).toBeChecked();
+
+    await page.getByTestId('team-batch-approve').click();
+    await page.getByRole('button', { name: '通过', exact: true }).click();
+    await expect(page.getByTestId('team-batch-result')).toContainText('成功 1 项');
+    await expect(page.getByTestId('team-batch-approve')).toBeDisabled();
+  });
+
+  test('total and HTTP batch failures remain selected and never report zero success', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    let batchAttempt = 0;
+    await page.route('**/api/v1/tasks/team/indicator-review/batch-approve', (route) => {
+      batchAttempt += 1;
+      if (batchAttempt === 1) {
+        return route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify(apiResponse({
+            succeeded: [],
+            failed: [{ taskId: 'task-1', reason: '版本冲突' }],
+          })),
+        });
+      }
+      return route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 503, message: '审核服务不可用', data: null, timestamp: Date.now() }),
+      });
+    });
+    await page.route('**/api/v1/tasks/team**', (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPageWith([teamPageFixture.items[0]]))),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending');
+    await page.getByRole('row').filter({ hasText: 'Ada Chen' }).locator('.el-checkbox').click();
+    await page.getByTestId('team-batch-approve').click();
+    await page.getByRole('button', { name: '通过', exact: true }).click();
+    await expect(page.getByTestId('team-batch-result')).toContainText('版本冲突');
+    await expect(page.getByTestId('team-selected-count')).toContainText('1');
+    await expect(page.locator('.el-message--success')).toHaveCount(0);
+    await expect(page.locator('.el-message--error')).toBeVisible();
+
+    await page.getByTestId('team-batch-approve').click();
+    await page.getByRole('button', { name: '通过', exact: true }).click();
+    await expect(page.getByTestId('team-batch-result')).toContainText('审核服务不可用');
+    await expect(page.getByTestId('team-selected-count')).toContainText('1');
+    await expect(page.locator('.el-message--success')).toHaveCount(0);
+  });
+
+  test('latest team request wins when an older response finishes last', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    let releaseFirst: (() => void) | undefined;
+    const firstRequest = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    await page.route('**/api/v1/tasks/team**', async (route) => {
+      const url = new URL(route.request().url());
+      if (!url.searchParams.get('keyword')) {
+        await firstRequest;
+        return route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify(apiResponse(teamPageWith([teamPageFixture.items[0]]))),
+        });
+      }
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPageWith([teamPageFixture.items[1]]))),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending');
+    await page.getByTestId('team-keyword-filter').fill('Grace');
+    await page.getByTestId('team-keyword-filter').press('Enter');
+    await expect(page.getByTestId('team-task-row-task-2')).toBeVisible();
+    releaseFirst?.();
+    await page.waitForTimeout(100);
+    await expect(page.getByTestId('team-task-row-task-2')).toBeVisible();
+    await expect(page.getByTestId('team-task-row-task-1')).toHaveCount(0);
+  });
+
+  test('deep-link refresh safely hydrates a selected task outside the current page', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    await page.route('**/api/v1/tasks/task-off-page', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(offPageTaskFixture)),
+    }));
+    await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(teamPageWith([teamPageFixture.items[0]], { total: 21 }))),
+    }));
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-off-page&page=2');
+    await expect(page.getByTestId('team-member-rail')).toContainText('Off Page Member');
+    await page.reload();
+    await expect(page.getByTestId('team-member-rail')).toContainText('Off Page Member');
+    await expect(page).toHaveURL(/taskId=task-off-page/);
+  });
+
+  test('returned page is canonicalized and error state excludes empty state', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    let shouldFail = false;
+    await page.route('**/api/v1/tasks/team**', (route) => {
+      if (shouldFail) {
+        return route.fulfill({
+          status: 500,
+          contentType: 'application/json',
+          body: JSON.stringify({ code: 500, message: '团队任务不可用', data: null, timestamp: Date.now() }),
+        });
+      }
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPageWith([teamPageFixture.items[2]], { page: 2, total: 21 }))),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&page=99');
+    await expect(page).toHaveURL(/page=2/);
+    shouldFail = true;
+    await page.getByTestId('team-keyword-filter').fill('failure');
+    await page.getByTestId('team-keyword-filter').press('Enter');
+    await expect(page.getByText('团队任务加载失败')).toBeVisible();
+    await expect(page.getByTestId('team-task-empty')).toHaveCount(0);
+  });
+
   for (const viewport of [
     { name: 'desktop', width: 1440, height: 900 },
     { name: 'mobile', width: 390, height: 844 },
@@ -200,11 +490,32 @@ test.describe('team list manager workspace', () => {
 
       await page.getByTestId('team-task-row-task-1').click();
       await expect(page.getByTestId('team-member-rail')).toBeVisible();
+      if (shouldCaptureTask7Evidence()) {
+        await page.screenshot({
+          path: `../.superpowers/sdd/2026-08-08-manager-team-performance-workspace/task-7-review-${viewport.name}-detail.png`,
+          fullPage: true,
+        });
+      }
       if (viewport.name === 'mobile') {
         await expect(page.getByTestId('team-task-list')).toBeHidden();
+        await expect(page.getByTestId('team-member-heading')).toBeFocused();
+        await page.getByRole('button', { name: '关闭成员详情' }).click();
+        await expect(page.getByTestId('team-task-list')).toBeFocused();
+        if (shouldCaptureTask7Evidence()) {
+          await page.screenshot({
+            path: '../.superpowers/sdd/2026-08-08-manager-team-performance-workspace/task-7-review-mobile-list.png',
+            fullPage: true,
+          });
+        }
       } else {
         await expect(page.getByTestId('team-task-list')).toBeVisible();
       }
+
+      const tableFit = await page.getByTestId('team-task-table-wrap').evaluate((element) => ({
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      }));
+      expect(tableFit.scrollWidth).toBeLessThanOrEqual(tableFit.clientWidth + 2);
     });
   }
 });

@@ -1,8 +1,13 @@
 <script setup lang="ts">
+import { nextTick, ref } from 'vue';
 import { Close } from '@element-plus/icons-vue';
 import StatusBadge from '@/components/common/StatusBadge.vue';
 import type { TeamTaskListItem } from '@/types/api.types';
 import type { TeamTaskStage } from '@/types/enums';
+
+export interface TeamMemberRailHandle {
+  focusHeading: () => Promise<void>;
+}
 
 withDefaults(
   defineProps<{
@@ -10,23 +15,40 @@ withDefaults(
     taskId?: string;
     stage: TeamTaskStage;
     loading?: boolean;
+    error?: string;
   }>(),
   {
     task: undefined,
     taskId: undefined,
     loading: false,
+    error: '',
   },
 );
 
 defineEmits<{
   close: [];
 }>();
+
+const headingRef = ref<HTMLElement>();
+
+async function focusHeading() {
+  await nextTick();
+  headingRef.value?.focus();
+}
+
+defineExpose<TeamMemberRailHandle>({ focusHeading });
 </script>
 
 <template>
   <aside class="team-member-rail" data-testid="team-member-rail">
     <header class="team-member-rail__header">
-      <h2>成员详情</h2>
+      <h2
+        ref="headingRef"
+        data-testid="team-member-heading"
+        tabindex="-1"
+      >
+        成员详情
+      </h2>
       <el-tooltip content="关闭" placement="top">
         <el-button
           text
@@ -40,6 +62,13 @@ defineEmits<{
 
     <div class="team-member-rail__body">
       <el-skeleton v-if="loading" animated :rows="7" />
+
+      <el-result
+        v-else-if="error"
+        icon="error"
+        title="成员详情加载失败"
+        :sub-title="error"
+      />
 
       <template v-else-if="task">
         <section class="member-profile">
@@ -114,6 +143,11 @@ defineEmits<{
   color: #20283a;
   font-size: 15px;
   font-weight: 650;
+  outline: none;
+}
+
+.team-member-rail__header h2:focus-visible {
+  color: #155cc3;
 }
 
 .team-member-rail__body {
