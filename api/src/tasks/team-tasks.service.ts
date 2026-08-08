@@ -282,8 +282,9 @@ export class TeamTasksService {
     const processedTaskIds = new Set<string>();
 
     for (const taskRef of taskRefs) {
-      if (processedTaskIds.has(taskRef.taskId)) continue;
-      processedTaskIds.add(taskRef.taskId);
+      const taskId = taskRef.taskId.toLowerCase();
+      if (processedTaskIds.has(taskId)) continue;
+      processedTaskIds.add(taskId);
 
       try {
         const status = await this.reviewTask(taskRef, viewer, action, batchId, comment);

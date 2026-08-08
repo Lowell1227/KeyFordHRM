@@ -22,7 +22,7 @@ export class BatchTaskRefDto {
 export class BatchIndicatorReviewDto {
   @IsArray()
   @ArrayNotEmpty()
-  @ArrayUnique((task: BatchTaskRefDto) => task.taskId)
+  @ArrayUnique((task: BatchTaskRefDto) => task.taskId.toLowerCase())
   @ValidateNested({ each: true })
   @Type(() => BatchTaskRefDto)
   tasks!: BatchTaskRefDto[];

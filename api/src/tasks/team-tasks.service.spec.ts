@@ -98,7 +98,7 @@ describe("TeamTasksService", () => {
           updatedAt: "2026-08-08T08:00:00.000Z",
         }),
         Object.assign(new BatchTaskRefDto(), {
-          taskId: "7c7b6515-c70c-4afe-9b4b-96e9926c5316",
+          taskId: "7C7B6515-C70C-4AFE-9B4B-96E9926C5316",
           updatedAt: "2026-08-08T08:00:01.000Z",
         }),
       ],
@@ -351,21 +351,22 @@ describe("TeamTasksService", () => {
   });
 
   it("defensively processes a duplicate task id only once", async () => {
+    const taskId = "7c7b6515-c70c-4afe-9b4b-96e9926c5316";
     mockSuccessfulReviewTransaction();
-    prisma.assessmentTask.findUnique.mockResolvedValue(makeReviewTask("duplicate-task"));
+    prisma.assessmentTask.findUnique.mockResolvedValue(makeReviewTask(taskId));
 
     const result = await service.batchApprove(
       {
         tasks: [
-          { taskId: "duplicate-task", updatedAt: "2026-08-08T08:00:00.000Z" },
-          { taskId: "duplicate-task", updatedAt: "2026-08-08T08:00:00.000Z" },
+          { taskId, updatedAt: "2026-08-08T08:00:00.000Z" },
+          { taskId: taskId.toUpperCase(), updatedAt: "2026-08-08T08:00:00.000Z" },
         ],
       },
       managerViewer,
     );
 
     expect(result).toEqual({
-      succeeded: [{ taskId: "duplicate-task", status: "indicator_confirming" }],
+      succeeded: [{ taskId, status: "indicator_confirming" }],
       failed: [],
     });
     expect(prisma.assessmentTask.findUnique).toHaveBeenCalledTimes(1);
