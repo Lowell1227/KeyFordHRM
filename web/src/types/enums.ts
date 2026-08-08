@@ -38,7 +38,20 @@ export type TaskStatus =
   | 'closed'
   | 'exempted';
 
+export type TeamTaskStage = 'goal-review' | 'manager-eval';
+
+export type TeamStageState = 'not_started' | 'pending' | 'completed' | 'exempted';
+
 export type IndicatorType = 'kpi' | 'attitude' | 'bonus' | 'penalty' | 'veto';
+
+export type IndicatorVisibilityScope =
+  | 'company'
+  | 'department'
+  | 'department_tree'
+  | 'direct_reports'
+  | 'all_reports'
+  | 'supervisors'
+  | 'custom';
 
 export type DimensionType = 'kpi' | 'attitude' | 'bonus' | 'penalty';
 

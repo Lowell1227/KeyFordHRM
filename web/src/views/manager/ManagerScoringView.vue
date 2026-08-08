@@ -225,7 +225,7 @@ function handleAttachmentsChange(attachments: Attachment[]) {
 
 async function handleSubmit() {
   const task = selectedTask.value;
-  if (!task || !canEditCurrent.value) return;
+  if (!task || !task.updatedAt || !canEditCurrent.value) return;
 
   // 校验所有指标已打分
   for (const inst of editableInstances.value) {
@@ -263,6 +263,7 @@ async function handleSubmit() {
   submitting.value = true;
   try {
     const body = {
+      expectedUpdatedAt: task.updatedAt,
       indicators: editableInstances.value.map((inst) => ({
         id: inst.id,
         managerScore: inst._managerScoreInput as number,

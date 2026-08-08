@@ -184,9 +184,10 @@ async function handleRejectIndicators(reason: string) {
   }
 }
 
-async function handleSaveIndicators(body: SetIndicatorBody) {
-  const id = task.value?.id;
-  if (!id) return;
+async function handleSaveIndicators(body: Omit<SetIndicatorBody, 'expectedUpdatedAt'>) {
+  const currentTask = task.value;
+  const id = currentTask?.id;
+  if (!id || !currentTask.updatedAt) return;
   if (!body.instances.length) {
     ElMessage.warning('请至少保留一条指标');
     return;
@@ -195,7 +196,10 @@ async function handleSaveIndicators(body: SetIndicatorBody) {
   try {
     const beforeStatus = task.value?.status;
     const wasSelf = permission.isTaskSelf.value;
-    const savedTask = await tasksApi.setIndicators(id, body);
+    const savedTask = await tasksApi.setIndicators(id, {
+      ...body,
+      expectedUpdatedAt: currentTask.updatedAt,
+    });
     if (body.action === 'save') {
       ElMessage.success('指标已保存');
       await loadDetail();

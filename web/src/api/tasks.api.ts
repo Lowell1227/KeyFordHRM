@@ -4,6 +4,13 @@ import type {
   TaskListItem,
   TaskDetail,
   TaskQuery,
+  TeamTaskQuery,
+  TeamTaskPage,
+  BatchReviewResult,
+  BatchIndicatorReviewBody,
+  BatchRejectIndicatorReviewBody,
+  IndicatorReferenceItem,
+  ReferenceIndicatorQuery,
   CreateTaskBody,
   BatchCreateTaskBody,
   SetIndicatorBody,
@@ -12,6 +19,8 @@ import type {
   SubmitIndicatorProposalBody,
   SubmitIndicatorProposalResult,
   SubmitManagerScoreBody,
+  SaveManagerEvaluationDraftBody,
+  WithdrawManagerScoreBody,
   DeptReviewBody,
   ExemptTaskBody,
   FlowRecord,
@@ -50,6 +59,26 @@ export const tasksApi = {
   /** GET /tasks/mine — 我的任务列表 */
   findMine(query?: Omit<TaskQuery, 'employeeId'>): Promise<Paginated<TaskListItem>> {
     return apiGet('/tasks/mine', query as Record<string, unknown>);
+  },
+
+  /** GET /tasks/team — 主管团队任务工作台。 */
+  findTeam(query: TeamTaskQuery): Promise<TeamTaskPage> {
+    return apiGet('/tasks/team', query as unknown as Record<string, unknown>);
+  },
+
+  /** GET /tasks/reference-indicators — 可见参考指标。 */
+  findReferenceIndicators(query?: ReferenceIndicatorQuery): Promise<Paginated<IndicatorReferenceItem>> {
+    return apiGet('/tasks/reference-indicators', query as Record<string, unknown>);
+  },
+
+  /** POST /tasks/team/indicator-review/batch-approve — 批量通过指标审核。 */
+  batchApproveIndicators(body: BatchIndicatorReviewBody): Promise<BatchReviewResult> {
+    return apiPost('/tasks/team/indicator-review/batch-approve', body);
+  },
+
+  /** POST /tasks/team/indicator-review/batch-reject — 批量驳回指标审核。 */
+  batchRejectIndicators(body: BatchRejectIndicatorReviewBody): Promise<BatchReviewResult> {
+    return apiPost('/tasks/team/indicator-review/batch-reject', body);
   },
 
   /** GET /tasks/:id — 详情 */
@@ -114,6 +143,16 @@ export const tasksApi = {
   /** POST /tasks/:id/manager-score — 提交主管评分 */
   submitManagerScore(id: string, body: SubmitManagerScoreBody): Promise<TaskActionResult> {
     return apiPost(`/tasks/${id}/manager-score`, body);
+  },
+
+  /** PUT /tasks/:id/manager-evaluation-draft — 保存主管评分草稿。 */
+  saveManagerEvaluationDraft(id: string, body: SaveManagerEvaluationDraftBody): Promise<TaskActionResult> {
+    return apiPut(`/tasks/${id}/manager-evaluation-draft`, body);
+  },
+
+  /** POST /tasks/:id/manager-score/withdraw — 撤回主管评分。 */
+  withdrawManagerScore(id: string, body: WithdrawManagerScoreBody): Promise<TaskActionResult> {
+    return apiPost(`/tasks/${id}/manager-score/withdraw`, body);
   },
 
   // 部门审核

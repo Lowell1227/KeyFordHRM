@@ -6,6 +6,7 @@ import type {
   CycleType,
   CycleStatus,
   IndicatorType,
+  IndicatorVisibilityScope,
   DimensionType,
   PerfGrade,
   TaskStatus,
@@ -26,6 +27,8 @@ import type {
   ObjectiveLevel,
   ObjectiveStatus,
   ActionItemStatus,
+  TeamTaskStage,
+  TeamStageState,
 } from './enums';
 
 /** 后端统一响应包装。 */
@@ -427,6 +430,15 @@ export interface IndicatorInstance {
   extraScores?: ExtraScoreItem[];
   finalScore?: number;
   sortOrder: number;
+  visibilityScope: IndicatorVisibilityScope;
+  visibleDepartmentIds: string[];
+  visibleUserIds: string[];
+  alignedObjectives: Array<{
+    id: string;
+    title: string;
+    level: ObjectiveLevel;
+    ownerId: string;
+  }>;
 }
 
 export interface ExtraScoreItem {
@@ -581,6 +593,70 @@ export interface TaskQuery {
   keyword?: string;
 }
 
+export interface TeamTaskQuery {
+  page?: number;
+  pageSize?: number;
+  stage: TeamTaskStage;
+  stageState?: TeamStageState;
+  cycleId?: string;
+  deptId?: string;
+  employeeId?: string;
+  keyword?: string;
+}
+
+export interface TeamTaskPage extends Paginated<
+  TaskListItem & {
+    employeeNo: string | null;
+    avatarUrl: string | null;
+    position: string | null;
+    stageState: TeamStageState;
+  }
+> {
+  counts: {
+    all: number;
+    notStarted: number;
+    pending: number;
+    completed: number;
+    exempted: number;
+  };
+  facets: {
+    departments: Array<{ id: string; name: string }>;
+    employees: Array<{
+      id: string;
+      name: string;
+      employeeNo: string | null;
+      deptId: string | null;
+    }>;
+  };
+}
+
+export interface BatchReviewResult {
+  succeeded: Array<{ taskId: string; status: TaskStatus }>;
+  failed: Array<{ taskId: string; reason: string }>;
+}
+
+export interface IndicatorReferenceItem {
+  id: string;
+  taskId: string;
+  cycleId: string;
+  employeeId: string;
+  employeeName: string;
+  name: string;
+  weight: number;
+  visibilityScope: IndicatorVisibilityScope;
+}
+
+export interface TaskWorkspaceQuery {
+  scope: 'mine' | 'team';
+  stage: TeamTaskStage;
+  cycleId?: string;
+  deptId?: string;
+  employeeId?: string;
+  taskId?: string;
+  stageState?: TeamStageState;
+  keyword?: string;
+}
+
 export interface CreateTaskBody {
   cycleId: string;
   employeeId: string;
@@ -592,23 +668,29 @@ export interface BatchCreateTaskBody {
 }
 
 export interface SetIndicatorBody {
-  instances: Pick<
-    IndicatorInstance,
-    | 'templateIndicatorId'
-    | 'name'
-    | 'description'
-    | 'scoringStandard'
-    | 'dataSource'
-    | 'dataCaliber'
-    | 'targetValue'
-    | 'targetValueText'
-    | 'unit'
-    | 'weight'
-    | 'indicatorType'
-    | 'dimensionName'
-    | 'dimensionWeight'
-    | 'sortOrder'
-  >[];
+  expectedUpdatedAt: string;
+  instances: Array<
+    Pick<
+      IndicatorInstance,
+      | 'templateIndicatorId'
+      | 'name'
+      | 'description'
+      | 'scoringStandard'
+      | 'dataSource'
+      | 'dataCaliber'
+      | 'targetValue'
+      | 'targetValueText'
+      | 'unit'
+      | 'weight'
+      | 'indicatorType'
+      | 'dimensionName'
+      | 'dimensionWeight'
+      | 'sortOrder'
+      | 'visibilityScope'
+      | 'visibleDepartmentIds'
+      | 'visibleUserIds'
+    > & { alignedObjectiveIds: string[] }
+  >;
   action?: 'save' | 'submit';
   note?: string;
 }
@@ -665,9 +747,41 @@ export interface ManagerScoreIndicatorItem {
 }
 
 export interface SubmitManagerScoreBody {
+  expectedUpdatedAt: string;
   indicators: ManagerScoreIndicatorItem[];
   evalSummary: Omit<ManagerEvalSummary, 'id' | 'taskId' | 'submittedAt'>;
   veto?: VetoGradeBody;
+}
+
+export interface SaveManagerEvaluationDraftBody {
+  expectedUpdatedAt: string;
+  indicators: Array<{
+    id: string;
+    managerScore?: number;
+    managerComment?: string;
+    extraScores?: ExtraScoreItem[];
+  }>;
+  evalSummary: Omit<ManagerEvalSummary, 'id' | 'taskId' | 'submittedAt'>;
+}
+
+export interface WithdrawManagerScoreBody {
+  expectedUpdatedAt: string;
+}
+
+export interface BatchIndicatorReviewBody {
+  tasks: Array<{ taskId: string; updatedAt: string }>;
+}
+
+export interface BatchRejectIndicatorReviewBody extends BatchIndicatorReviewBody {
+  reason: string;
+}
+
+export interface ReferenceIndicatorQuery {
+  page?: number;
+  pageSize?: number;
+  cycleId?: string;
+  ownerId?: string;
+  keyword?: string;
 }
 
 export interface DeptReviewBody {

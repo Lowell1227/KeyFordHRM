@@ -66,7 +66,7 @@ describe('08-negative-boundary', () => {
     const res = await app.http
       .post(`/api/v1/tasks/${task.id}/manager-score`)
       .set('Authorization', `Bearer ${mgrToken}`)
-      .send({ indicators: [], evalSummary: {} })
+      .send({ expectedUpdatedAt: task.updatedAt.toISOString(), indicators: [], evalSummary: {} })
       .expect(409);
     expect(res.body.code).toBe(4009);
   });
@@ -185,7 +185,7 @@ describe('08-negative-boundary', () => {
     const res = await app.http
       .post(`/api/v1/tasks/${task.id}/manager-score`)
       .set('Authorization', `Bearer ${mgrToken}`)
-      .send({ indicators: [], evalSummary: {} })
+      .send({ expectedUpdatedAt: task.updatedAt.toISOString(), indicators: [], evalSummary: {} })
       .expect(403);
     expect(res.body.code).toBe(4003);
   });

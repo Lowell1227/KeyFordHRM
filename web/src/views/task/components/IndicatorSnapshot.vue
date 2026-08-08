@@ -71,7 +71,7 @@ const props = defineProps<{
 }>();
 
 const emit = defineEmits<{
-  (e: 'save', body: SetIndicatorBody): void;
+  (e: 'save', body: Omit<SetIndicatorBody, 'expectedUpdatedAt'>): void;
   (e: 'confirm'): void;
   (e: 'reject', reason: string): void;
   (e: 'submit-self-eval', body: SubmitSelfEvalBody, actualValues: ActualValueItem[]): void;
@@ -331,6 +331,10 @@ function createEmptyItem(): SetIndicatorBody['instances'][number] {
     dimensionName: 'KPI维度',
     dimensionWeight: 1,
     sortOrder: 0,
+    visibilityScope: 'supervisors',
+    visibleDepartmentIds: [],
+    visibleUserIds: [],
+    alignedObjectiveIds: [],
   };
 }
 
@@ -353,6 +357,10 @@ function libraryIndicatorToItem(indicator: Indicator, sortOrder: number): SetInd
     dimensionName: indicator.category || indicator.groupName || 'KPI维度',
     dimensionWeight: 1,
     sortOrder,
+    visibilityScope: 'supervisors',
+    visibleDepartmentIds: [],
+    visibleUserIds: [],
+    alignedObjectiveIds: [],
   };
 }
 
@@ -396,6 +404,10 @@ function templateIndicatorToItem(
     dimensionName,
     dimensionWeight,
     sortOrder,
+    visibilityScope: 'supervisors',
+    visibleDepartmentIds: [],
+    visibleUserIds: [],
+    alignedObjectiveIds: [],
   };
 }
 
@@ -450,6 +462,10 @@ function toEditableItem(instance: IndicatorInstance): SetIndicatorBody['instance
     dimensionName: instance.dimensionName || 'KPI维度',
     dimensionWeight: instance.dimensionWeight,
     sortOrder: instance.sortOrder,
+    visibilityScope: instance.visibilityScope,
+    visibleDepartmentIds: [...instance.visibleDepartmentIds],
+    visibleUserIds: [...instance.visibleUserIds],
+    alignedObjectiveIds: instance.alignedObjectives.map((objective) => objective.id),
   };
 }
 
@@ -544,6 +560,10 @@ function trimItem(item: SetIndicatorBody['instances'][number], index: number): S
     dimensionName: item.dimensionName?.trim() || 'KPI维度',
     dimensionWeight: Number(item.dimensionWeight ?? 1),
     sortOrder: index,
+    visibilityScope: item.visibilityScope,
+    visibleDepartmentIds: [...item.visibleDepartmentIds],
+    visibleUserIds: [...item.visibleUserIds],
+    alignedObjectiveIds: [...item.alignedObjectiveIds],
   };
 }
 
@@ -551,7 +571,7 @@ onBeforeUnmount(() => {
   clearWeightHold();
 });
 
-function buildIndicatorBody(action: 'save' | 'submit'): SetIndicatorBody | null {
+function buildIndicatorBody(action: 'save' | 'submit'): Omit<SetIndicatorBody, 'expectedUpdatedAt'> | null {
   const instances = editableItems.map(trimItem).filter((item) => item.name);
   if (!instances.length) {
     ElMessage.warning('请至少填写一条指标');

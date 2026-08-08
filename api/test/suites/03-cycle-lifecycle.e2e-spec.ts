@@ -167,10 +167,15 @@ describe('03-cycle-lifecycle', () => {
       .expect(200);
 
     // 3. 主管评分
+    const managerScoreVersion = await app.prisma.assessmentTask.findUniqueOrThrow({
+      where: { id: task.id },
+      select: { updatedAt: true },
+    });
     const scoreRes = await app.http
       .post(`/api/v1/tasks/${task.id}/manager-score`)
       .set('Authorization', `Bearer ${mgrToken}`)
       .send({
+        expectedUpdatedAt: managerScoreVersion.updatedAt.toISOString(),
         indicators: instances
           .filter((i) => i.indicatorType !== 'veto')
           .map((i) => ({ id: i.id, managerScore: 85, managerComment: '主管评语' })),
@@ -250,10 +255,15 @@ describe('03-cycle-lifecycle', () => {
       })
       .expect(200);
 
+    const managerScoreVersion = await app.prisma.assessmentTask.findUniqueOrThrow({
+      where: { id: task.id },
+      select: { updatedAt: true },
+    });
     await app.http
       .post(`/api/v1/tasks/${task.id}/manager-score`)
       .set('Authorization', `Bearer ${mgrToken}`)
       .send({
+        expectedUpdatedAt: managerScoreVersion.updatedAt.toISOString(),
         indicators: task.indicatorInstances
           .filter((i) => i.indicatorType !== 'veto')
           .map((i) => ({ id: i.id, managerScore: 85 })),
@@ -290,10 +300,15 @@ describe('03-cycle-lifecycle', () => {
         summary: {},
       })
       .expect(200);
+    const managerScoreVersion = await app.prisma.assessmentTask.findUniqueOrThrow({
+      where: { id: task.id },
+      select: { updatedAt: true },
+    });
     await app.http
       .post(`/api/v1/tasks/${task.id}/manager-score`)
       .set('Authorization', `Bearer ${mgrToken}`)
       .send({
+        expectedUpdatedAt: managerScoreVersion.updatedAt.toISOString(),
         indicators: task.indicatorInstances.filter((i) => i.indicatorType !== 'veto').map((i) => ({ id: i.id, managerScore: 85 })),
         evalSummary: {},
       })

@@ -107,10 +107,15 @@ describe('09-scale-128', () => {
     const startScore = Date.now();
     for (const task of tasks) {
       if (!task.managerId) continue;
+      const managerScoreVersion = await app.prisma.assessmentTask.findUniqueOrThrow({
+        where: { id: task.id },
+        select: { updatedAt: true },
+      });
       await app.http
         .post(`/api/v1/tasks/${task.id}/manager-score`)
         .set('Authorization', `Bearer ${mgrTokens[task.managerId]}`)
         .send({
+          expectedUpdatedAt: managerScoreVersion.updatedAt.toISOString(),
           indicators: task.indicatorInstances
             .filter((i) => i.indicatorType !== 'veto')
             .map((i) => ({ id: i.id, managerScore: 85 })),

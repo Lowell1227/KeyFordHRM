@@ -93,6 +93,10 @@ describe('04-scoring-algorithm', () => {
     const mgrToken = await login(app.http, { employeeNo: 'MGR001', password: 'test123' });
 
     await progressToManagerScoring(task.id, empToken);
+    const managerScoreVersion = await app.prisma.assessmentTask.findUniqueOrThrow({
+      where: { id: task.id },
+      select: { updatedAt: true },
+    });
 
     const scoreMap: Record<string, number> = {
       指标A: 90,
@@ -109,7 +113,7 @@ describe('04-scoring-algorithm', () => {
     await app.http
       .post(`/api/v1/tasks/${task.id}/manager-score`)
       .set('Authorization', `Bearer ${mgrToken}`)
-      .send({ indicators, evalSummary: {} })
+      .send({ expectedUpdatedAt: managerScoreVersion.updatedAt.toISOString(), indicators, evalSummary: {} })
       .expect(200);
 
     const gradeResult = await app.prisma.gradeResult.findUnique({ where: { taskId: task.id } });
@@ -126,6 +130,10 @@ describe('04-scoring-algorithm', () => {
     const mgrToken = await login(app.http, { employeeNo: 'MGR001', password: 'test123' });
 
     await progressToManagerScoring(task.id, empToken);
+    const managerScoreVersion = await app.prisma.assessmentTask.findUniqueOrThrow({
+      where: { id: task.id },
+      select: { updatedAt: true },
+    });
 
     const indicators = task.indicatorInstances
       .filter((i) => i.indicatorType !== 'veto')
@@ -135,6 +143,7 @@ describe('04-scoring-algorithm', () => {
       .post(`/api/v1/tasks/${task.id}/manager-score`)
       .set('Authorization', `Bearer ${mgrToken}`)
       .send({
+        expectedUpdatedAt: managerScoreVersion.updatedAt.toISOString(),
         indicators,
         evalSummary: {},
         veto: { isVeto: true, vetoReason: '重大失误' },
@@ -238,10 +247,15 @@ describe('04-scoring-algorithm', () => {
         })
         .expect(200);
 
+      const managerScoreVersion = await app.prisma.assessmentTask.findUniqueOrThrow({
+        where: { id: task.id },
+        select: { updatedAt: true },
+      });
       await app.http
         .post(`/api/v1/tasks/${task.id}/manager-score`)
         .set('Authorization', `Bearer ${mgrToken}`)
         .send({
+          expectedUpdatedAt: managerScoreVersion.updatedAt.toISOString(),
           indicators: task.indicatorInstances
             .filter((i) => i.indicatorType !== 'veto')
             .map((i) => ({ id: i.id, managerScore: 95 })),
