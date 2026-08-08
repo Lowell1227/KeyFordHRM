@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 import type { Router } from 'vue-router';
-import { createTasksApi } from '../../src/api/tasks.api';
+import { createTasksApi, type TasksApiClient } from '../../src/api/tasks.api';
 import type {
   BatchReviewResult,
   IndicatorInstance,
@@ -142,7 +142,7 @@ test('uses the six team workspace API contracts without a server or login', asyn
         deptId: null,
         deptName: null,
         managerId: 'manager-1',
-        status: 'self_evaluation',
+        status: 'self_eval',
         totalScore: null,
         rawGrade: null,
         updatedAt: '2026-08-09T00:00:00.000Z',
@@ -171,31 +171,48 @@ test('uses the six team workspace API contracts without a server or login', asyn
         employeeName: 'Ada',
         name: 'Delivery',
         weight: 100,
-        visibilityScope: 'public',
+        visibilityScope: 'supervisors',
       },
     ],
   };
-  const reviewResult: BatchReviewResult = {
-    succeeded: [{ taskId: 'task-1', status: 'indicator_setting' }],
+  const approvalResult: BatchReviewResult = {
+    succeeded: [{ taskId: 'task-1', status: 'indicator_confirming' }],
+    failed: [],
+  };
+  const rejectionResult: BatchReviewResult = {
+    succeeded: [{ taskId: 'task-1', status: 'indicator_drafting' }],
     failed: [],
   };
   const alignedObjective: Pick<IndicatorInstance, 'alignedObjectives'> = {
     alignedObjectives: [{ id: 'objective-1', title: 'Ship', level: 'company', ownerId: null }],
   };
   const calls: Array<{ method: string; url: string; body?: unknown; params?: unknown }> = [];
-  const responses = [teamPage, referencePage, reviewResult, reviewResult, { id: 'task-1', status: 'manager_scoring' }, { id: 'task-1', status: 'self_evaluation' }];
-  const client = {
-    get: async (url: string, config?: { params?: unknown }) => {
+  const responses: unknown[] = [
+    teamPage,
+    referencePage,
+    approvalResult,
+    rejectionResult,
+    { id: 'task-1', status: 'manager_scoring' },
+    { id: 'task-1', status: 'manager_scoring' },
+  ];
+  const client: TasksApiClient = {
+    get: async (url, config) => {
       calls.push({ method: 'GET', url, params: config?.params });
       return responses.shift();
     },
-    post: async (url: string, body?: unknown) => {
+    post: async (url, body) => {
       calls.push({ method: 'POST', url, body });
       return responses.shift();
     },
-    put: async (url: string, body?: unknown) => {
+    put: async (url, body) => {
       calls.push({ method: 'PUT', url, body });
       return responses.shift();
+    },
+    patch: async (url, body) => {
+      throw new Error(`Unexpected PATCH ${url}: ${String(body)}`);
+    },
+    delete: async (url) => {
+      throw new Error(`Unexpected DELETE ${url}`);
     },
   };
   const api = createTasksApi(client);
@@ -220,11 +237,11 @@ test('uses the six team workspace API contracts without a server or login', asyn
 
   expect(team.items[0].employeeNo).toBeNull();
   expect(team.items[0].deptId).toBeNull();
-  expect(references.items[0].visibilityScope).toBe('public');
-  expect(approved.succeeded[0].status).toBe('indicator_setting');
-  expect(rejected.failed).toEqual([]);
+  expect(references.items[0].visibilityScope).toBe('supervisors');
+  expect(approved.succeeded[0].status).toBe('indicator_confirming');
+  expect(rejected.succeeded[0].status).toBe('indicator_drafting');
   expect(draft).toEqual({ id: 'task-1', status: 'manager_scoring' });
-  expect(withdrawn).toEqual({ id: 'task-1', status: 'self_evaluation' });
+  expect(withdrawn).toEqual({ id: 'task-1', status: 'manager_scoring' });
   expect(alignedObjective.alignedObjectives[0].ownerId).toBeNull();
   expect(calls).toEqual([
     { method: 'GET', url: '/tasks/team', params: { stage: 'manager-eval', stageState: 'pending' } },

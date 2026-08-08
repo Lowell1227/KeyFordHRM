@@ -64,3 +64,17 @@ Addressed the Task 6 review findings without adding Task 7 UI.
 - `api`: `npx jest src/tasks/tasks.service.spec.ts --runInBand` passed 40/40.
 - `api`: `npx jest --config ./test/jest-e2e.json --runInBand test/suites/09-scale-128.e2e-spec.ts` compiled the changed scale test and reached the existing launch-fixture validation failure before any manager-score request: managers, HR, approver, and the department leader are missing required relationships. This is outside Task 6 and was not changed.
 - `git diff --check` passed.
+
+## Contract Type-Check Re-Review Fix
+
+- Added `web/tsconfig.contracts.json` and updated `npm run test:contracts` to run `vue-tsc --noEmit -p tsconfig.contracts.json` before Playwright. The compiler project includes the Task 6 contract spec, which the normal web tsconfig intentionally excludes.
+- Typed the contract mock as `TasksApiClient` and supplied its `patch` and `delete` methods.
+- Corrected fixtures to the backend-aligned enum values: `self_eval`, `supervisors`, `indicator_confirming`, `indicator_drafting`, and `manager_scoring` for score withdrawal.
+- Negative control: temporarily setting the reference indicator visibility scope to `public` caused the dedicated command's TypeScript phase to fail with `TS2322: Type '"public"' is not assignable to type 'IndicatorVisibilityScope'`. The valid fixture was restored before commit.
+
+### Re-Review Verification
+
+- `web`: `npm run test:contracts` passed, including the dedicated TypeScript check and Playwright 6/6.
+- `web`: `npm run type-check` passed.
+- `web`: `npm run build` passed.
+- `git diff --check` passed.
