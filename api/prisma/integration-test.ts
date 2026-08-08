@@ -169,7 +169,12 @@ async function main() {
   const mgrToken = await login('MGR001', 'test123');
   {
     const managerInstances = await prisma.indicatorInstance.findMany({ where: { taskId: managerTask.id } });
+    const managerScoreVersion = await prisma.assessmentTask.findUniqueOrThrow({
+      where: { id: managerTask.id },
+      select: { updatedAt: true },
+    });
     const managerBody = {
+      expectedUpdatedAt: managerScoreVersion.updatedAt.toISOString(),
       indicators: managerInstances.filter((i) => i.indicatorType !== 'veto').map((inst) => ({
         id: inst.id,
         managerScore: 88,

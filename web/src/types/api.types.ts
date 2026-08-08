@@ -437,7 +437,7 @@ export interface IndicatorInstance {
     id: string;
     title: string;
     level: ObjectiveLevel;
-    ownerId: string;
+    ownerId: string | null;
   }>;
 }
 
@@ -604,14 +604,27 @@ export interface TeamTaskQuery {
   keyword?: string;
 }
 
-export interface TeamTaskPage extends Paginated<
-  TaskListItem & {
-    employeeNo: string | null;
-    avatarUrl: string | null;
-    position: string | null;
-    stageState: TeamStageState;
-  }
-> {
+/** GET /tasks/team item; only fields returned by TeamTasksService.toListItem. */
+export interface TeamTaskListItem {
+  id: string;
+  cycleId: string;
+  cycleName: string;
+  employeeId: string;
+  employeeName: string;
+  deptId: string | null;
+  deptName: string | null;
+  managerId: string | null;
+  status: TaskStatus;
+  totalScore: number | null;
+  rawGrade: string | null;
+  updatedAt: string;
+  employeeNo: string | null;
+  avatarUrl: string | null;
+  position: string | null;
+  stageState: TeamStageState;
+}
+
+export interface TeamTaskPage extends Paginated<TeamTaskListItem> {
   counts: {
     all: number;
     notStarted: number;
@@ -655,6 +668,7 @@ export interface TaskWorkspaceQuery {
   taskId?: string;
   stageState?: TeamStageState;
   keyword?: string;
+  page?: number;
 }
 
 export interface CreateTaskBody {

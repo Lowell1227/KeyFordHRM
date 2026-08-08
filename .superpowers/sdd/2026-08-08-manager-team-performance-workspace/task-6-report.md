@@ -45,3 +45,22 @@ Implemented on `main`.
 
 - The prescribed web Playwright command runs existing global login setup first and cannot reach the local API at `localhost:3000`; it times out waiting for `/dashboard` before this pure contract spec loads.
 - The targeted lifecycle/scoring E2E suites (`03-cycle-lifecycle` and `04-scoring-algorithm`) currently fail before manager scoring. Their role factory leaves HR, manager, department head, and approver without direct managers, which the current launch validation rejects. This is unrelated to Task 6's request bodies; the negative boundary suite passed after the updated token was supplied.
+
+## Review Fix Commit
+
+Addressed the Task 6 review findings without adding Task 7 UI.
+
+- Added fresh `expectedUpdatedAt` reads to the remaining manager-score callers in `web/e2e/specs/05-multi-role-happy-path.spec.ts` and `api/prisma/integration-test.ts`. A repository-wide caller search confirmed every direct `/tasks/:id/manager-score` submission now supplies the version token; the existing manager page and all lifecycle, scoring, boundary, and scale callers already did so.
+- Mapped `TeamTaskListItem` directly to `TeamTasksService.toListItem`, retaining nullable `employeeNo`, and changed aligned-objective `ownerId` to `string | null`.
+- Added a committed no-server contract harness: `npm run test:contracts`. Its six tests cover all six Task 6 API paths, request and response shapes, nullable fields, invalid `stageState`, stable query serialization, unknown-key removal, no-op `router.replace`, and page reset for filter changes.
+- Moved the scale test's task-version reads into one `findMany`/`Map` before the manager-score timer.
+
+### Review Verification
+
+- `web`: `npm run type-check` passed.
+- `web`: `npm run build` passed.
+- `web`: `npm run test:contracts` passed 6/6 without API or login setup.
+- `api`: `npm run build` passed.
+- `api`: `npx jest src/tasks/tasks.service.spec.ts --runInBand` passed 40/40.
+- `api`: `npx jest --config ./test/jest-e2e.json --runInBand test/suites/09-scale-128.e2e-spec.ts` compiled the changed scale test and reached the existing launch-fixture validation failure before any manager-score request: managers, HR, approver, and the department leader are missing required relationships. This is outside Task 6 and was not changed.
+- `git diff --check` passed.

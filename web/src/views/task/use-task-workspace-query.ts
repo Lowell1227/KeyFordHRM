@@ -17,12 +17,26 @@ const stageStates = new Set<NonNullable<TaskWorkspaceQuery['stageState']>>([
   'completed',
   'exempted',
 ]);
+const filterKeys = ['scope', 'stage', 'cycleId', 'deptId', 'employeeId', 'stageState', 'keyword'] as const;
 
 function firstNonEmptyValue(value: LocationQueryValue | LocationQueryValue[] | undefined): string | undefined {
   const firstValue = Array.isArray(value) ? value[0] : value;
   if (typeof firstValue !== 'string') return undefined;
   const normalized = firstValue.trim();
   return normalized || undefined;
+}
+
+function parsePage(value: LocationQueryValue | LocationQueryValue[] | undefined): number | undefined {
+  const normalized = firstNonEmptyValue(value);
+  if (!normalized || !/^\d+$/.test(normalized)) return undefined;
+  const page = Number(normalized);
+  return Number.isSafeInteger(page) && page > 0 ? page : undefined;
+}
+
+function toLocationQueryPatch(patch: Partial<TaskWorkspaceQuery>): LocationQuery {
+  return Object.fromEntries(
+    Object.entries(patch).map(([key, value]) => [key, typeof value === 'number' ? String(value) : value]),
+  );
 }
 
 function toStableQuery(state: TaskWorkspaceQuery): Record<string, string> {
@@ -35,6 +49,8 @@ function toStableQuery(state: TaskWorkspaceQuery): Record<string, string> {
     const value = state[key];
     if (value) query[key] = value;
   }
+
+  if (state.page) query.page = String(state.page);
 
   return query;
 }
@@ -68,6 +84,7 @@ export function parseTaskWorkspaceQuery(query: LocationQuery): TaskWorkspaceQuer
         ? (stageState as NonNullable<TaskWorkspaceQuery['stageState']>)
         : undefined,
     keyword: firstNonEmptyValue(query.keyword),
+    page: parsePage(query.page),
   };
 }
 
@@ -76,7 +93,14 @@ export function updateTaskWorkspaceQuery(
   current: LocationQuery,
   patch: Partial<TaskWorkspaceQuery>,
 ): Promise<NavigationFailure | void | undefined> {
-  const next = toStableQuery(parseTaskWorkspaceQuery({ ...current, ...patch }));
+  const currentState = parseTaskWorkspaceQuery(current);
+  const nextState = parseTaskWorkspaceQuery({ ...current, ...toLocationQueryPatch(patch) });
+  const filterChanged = filterKeys.some(
+    (key) => key in patch && currentState[key] !== nextState[key],
+  );
+  if (filterChanged) nextState.page = undefined;
+
+  const next = toStableQuery(nextState);
   if (matchesStableQuery(current, next)) return Promise.resolve(undefined);
   return router.replace({ query: next });
 }

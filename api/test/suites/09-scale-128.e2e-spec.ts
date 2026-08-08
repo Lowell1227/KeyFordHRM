@@ -104,18 +104,27 @@ describe('09-scale-128', () => {
       mgrTokens[mgrId] = await login(app.http, { employeeNo: mgr.employeeNo!, password: 'test123' });
     }
 
+    const managerTaskIds = tasks.filter((task) => task.managerId).map((task) => task.id);
+    const managerScoreVersions = new Map(
+      (
+        await app.prisma.assessmentTask.findMany({
+          where: { id: { in: managerTaskIds } },
+          select: { id: true, updatedAt: true },
+        })
+      ).map((task) => [task.id, task.updatedAt]),
+    );
+    expect(managerScoreVersions.size).toBe(managerTaskIds.length);
+
     const startScore = Date.now();
     for (const task of tasks) {
       if (!task.managerId) continue;
-      const managerScoreVersion = await app.prisma.assessmentTask.findUniqueOrThrow({
-        where: { id: task.id },
-        select: { updatedAt: true },
-      });
+      const managerScoreVersion = managerScoreVersions.get(task.id);
+      if (!managerScoreVersion) throw new Error(`Missing manager score version for task ${task.id}`);
       await app.http
         .post(`/api/v1/tasks/${task.id}/manager-score`)
         .set('Authorization', `Bearer ${mgrTokens[task.managerId]}`)
         .send({
-          expectedUpdatedAt: managerScoreVersion.updatedAt.toISOString(),
+          expectedUpdatedAt: managerScoreVersion.toISOString(),
           indicators: task.indicatorInstances
             .filter((i) => i.indicatorType !== 'veto')
             .map((i) => ({ id: i.id, managerScore: 85 })),

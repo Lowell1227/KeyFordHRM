@@ -103,6 +103,7 @@ test.describe('05-multi-role-happy-path', () => {
 
     detail = await api('GET', `/tasks/${task!.id}`, managerToken);
     const scoreResult = await api('POST', `/tasks/${task!.id}/manager-score`, managerToken, {
+      expectedUpdatedAt: detail.updatedAt,
       indicators: detail.indicatorInstances
         .filter((item: { indicatorType: string }) => item.indicatorType !== 'veto')
         .map((item: { id: string }) => ({ id: item.id, managerScore: 86, managerComment: 'manager score ok' })),
