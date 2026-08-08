@@ -92,7 +92,14 @@ const routes: RouteRecordRaw[] = [
   {
     path: '/manager/scoring',
     name: 'ManagerScoring',
-    component: () => import('@/views/manager/ManagerScoringView.vue'),
+    redirect: (to) => ({
+      path: '/tasks',
+      query: {
+        ...to.query,
+        scope: 'team',
+        stage: 'manager-eval',
+      },
+    }),
     meta: {
       requiresAuth: true,
       title: '团队绩效',

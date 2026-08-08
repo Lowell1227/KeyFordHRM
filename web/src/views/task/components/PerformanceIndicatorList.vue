@@ -31,10 +31,12 @@ const props = withDefaults(
     rows: PerformanceIndicatorRow[];
     invalidIndicatorIds?: string[];
     weightTotal?: number;
+    secondaryColumnLabel?: string;
   }>(),
   {
     invalidIndicatorIds: () => [],
     weightTotal: undefined,
+    secondaryColumnLabel: '可见范围',
   },
 );
 
@@ -170,7 +172,7 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
     <div class="indicator-grid indicator-grid--header" aria-hidden="true">
       <span>指标</span>
       <span>权重</span>
-      <span>可见范围</span>
+      <span>{{ secondaryColumnLabel }}</span>
       <span>状态</span>
       <span />
     </div>

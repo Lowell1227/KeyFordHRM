@@ -24,6 +24,7 @@ import GoalReviewWorkspace, {
   type GoalReviewSavePayload,
   type GoalReviewWorkspaceHandle,
 } from './components/GoalReviewWorkspace.vue';
+import ManagerEvaluationWorkspace from './components/ManagerEvaluationWorkspace.vue';
 import type {
   AssessmentCycle,
   BatchReviewResult,
@@ -789,6 +790,15 @@ async function rejectSingleGoalReview(payload: GoalReviewRejectPayload) {
   );
 }
 
+function handleManagerEvaluationTaskUpdated(detail: TaskDetail) {
+  const mapped = toTeamTaskItem(detail, 'manager-eval');
+  const index = teamPage.value.items.findIndex((item) => item.id === detail.id);
+  const previousStageState = index >= 0 ? teamPage.value.items[index].stageState : undefined;
+  if (index >= 0) teamPage.value.items.splice(index, 1, mapped);
+  if (hydratedTeamTask.value?.id === detail.id) hydratedTeamTask.value = mapped;
+  if (previousStageState && previousStageState !== mapped.stageState) void loadTeam();
+}
+
 onMounted(async () => {
   const cyclesRequest = loadCycles();
   if (activeScope.value === 'team') {
@@ -1231,6 +1241,8 @@ watch(
           'has-detail': workspaceQuery.state.value.taskId,
           'is-goal-review': workspaceQuery.state.value.taskId
             && workspaceQuery.state.value.stage === 'goal-review',
+          'is-manager-eval': workspaceQuery.state.value.taskId
+            && workspaceQuery.state.value.stage === 'manager-eval',
         }"
       >
         <TeamTaskList
@@ -1274,6 +1286,15 @@ watch(
               @save="saveSingleGoalReview"
               @approve="approveSingleGoalReview"
               @reject="rejectSingleGoalReview"
+            />
+          </template>
+          <template
+            v-else-if="workspaceQuery.state.value.stage === 'manager-eval' && selectedTeamTask"
+            #workspace
+          >
+            <ManagerEvaluationWorkspace
+              :task-id="workspaceQuery.state.value.taskId"
+              @task-updated="handleManagerEvaluationTaskUpdated"
             />
           </template>
         </TeamMemberRail>
@@ -1718,11 +1739,13 @@ watch(
   grid-template-columns: minmax(620px, 1fr) minmax(288px, 320px);
 }
 
-.team-layout.has-detail.is-goal-review {
+.team-layout.has-detail.is-goal-review,
+.team-layout.has-detail.is-manager-eval {
   grid-template-columns: minmax(0, 1fr);
 }
 
-.team-layout.has-detail.is-goal-review :deep(.team-member-rail) {
+.team-layout.has-detail.is-goal-review :deep(.team-member-rail),
+.team-layout.has-detail.is-manager-eval :deep(.team-member-rail) {
   width: 100%;
 }
 

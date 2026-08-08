@@ -31,6 +31,11 @@ const shouldCaptureTask8Evidence = () => (
     .process?.env?.TASK8_CAPTURE_EVIDENCE === '1'
 );
 
+const shouldCaptureTask9Evidence = () => (
+  (globalThis as { process?: { env?: Record<string, string | undefined> } })
+    .process?.env?.TASK9_CAPTURE_EVIDENCE === '1'
+);
+
 const teamPageFixture: TeamTaskPage = {
   total: 3,
   page: 1,
@@ -226,6 +231,220 @@ function graceGoalReviewDetail(): TaskDetail {
     name: index === 0 ? 'Grace delivery target' : indicator.name,
   }));
   return detail;
+}
+
+function managerEvaluationDetail(
+  status: TaskDetail['status'] = 'manager_scoring',
+  options: { managerScoredAt?: string; id?: string; employeeName?: string } = {},
+): TaskDetail {
+  const detail = structuredClone(goalReviewDetailFixture);
+  detail.id = options.id ?? 'task-2';
+  detail.employeeId = detail.id === 'task-1' ? 'employee-1' : 'employee-2';
+  detail.employeeName = options.employeeName ?? (detail.id === 'task-1' ? 'Ada Chen' : 'Grace Lin');
+  detail.employeeNo = detail.id === 'task-1' ? 'E001' : 'E002';
+  detail.status = status;
+  detail.updatedAt = '2026-08-09T01:00:00.000Z';
+  detail.managerScoredAt = options.managerScoredAt;
+  detail.indicatorInstances = detail.indicatorInstances.map((indicator, index) => ({
+    ...indicator,
+    taskId: detail.id,
+    id: `ind-${index + 1}`,
+    actualValue: index === 0 ? 'Released on schedule' : '2 playbooks adopted',
+    actualNote: index === 0 ? 'No critical production defects' : 'Reviewed by the team',
+    selfScore: index === 0 ? 86 : 91,
+    selfComment: index === 0 ? 'Delivered the planned release and resolved launch risks.' : 'Shared both playbooks.',
+    managerScore: status === 'manager_scoring' ? undefined : index === 0 ? 88 : 90,
+    managerComment: status === 'manager_scoring' ? undefined : 'Results verified with the delivery record.',
+    extraScores: status === 'manager_scoring' ? [] : [{ label: 'Cross-team support', value: 1 }],
+  }));
+  detail.selfEvalSummary = {
+    taskId: detail.id,
+    achievements: 'Completed the portal release and improved delivery routines.',
+    improvements: 'Escalate cross-team dependencies earlier.',
+    suggestions: 'Keep the weekly release review.',
+    nextGoals: 'Improve customer adoption.',
+    supportNeeded: 'Analytics support.',
+    attachments: [{ name: 'self-review.pdf', url: '/files/self-review.pdf' }],
+    submittedAt: '2026-08-09T00:30:00.000Z',
+  };
+  detail.managerEvalSummary = status === 'manager_scoring'
+    ? { taskId: detail.id, strengths: '', improvements: '', developmentPlan: '', attachments: [] }
+    : {
+        taskId: detail.id,
+        strengths: 'Reliable delivery ownership.',
+        improvements: 'Escalate dependencies earlier.',
+        developmentPlan: 'Lead the next cross-team release.',
+        attachments: [],
+        submittedAt: '2026-08-09T01:10:00.000Z',
+      };
+  if (status !== 'manager_scoring') {
+    detail.gradeResult = {
+      taskId: detail.id,
+      calculatedScore: 89.2,
+      rawGrade: 'B',
+      isVeto: false,
+      isPublished: false,
+    };
+  }
+  return detail;
+}
+
+function managerEvaluationTeamPage(details: TaskDetail[]): TeamTaskPage {
+  const items = details.map((detail) => ({
+    id: detail.id,
+    cycleId: detail.cycleId,
+    cycleName: detail.cycleName ?? '-',
+    employeeId: detail.employeeId,
+    employeeName: detail.employeeName ?? '-',
+    deptId: detail.deptId ?? null,
+    deptName: detail.deptName ?? null,
+    managerId: detail.managerId ?? null,
+    status: detail.status,
+    totalScore: detail.gradeResult?.calculatedScore ?? null,
+    rawGrade: detail.gradeResult?.rawGrade ?? null,
+    updatedAt: detail.updatedAt ?? '',
+    employeeNo: detail.employeeNo ?? null,
+    avatarUrl: null,
+    position: detail.id === 'task-1' ? 'Senior Engineer' : 'Product Manager',
+    stageState: detail.status === 'manager_scoring' ? 'pending' as const : 'completed' as const,
+  }));
+  return {
+    ...teamPageWith(items),
+    facets: teamPageFixture.facets,
+    counts: {
+      all: items.length,
+      notStarted: 0,
+      pending: items.filter((item) => item.stageState === 'pending').length,
+      completed: items.filter((item) => item.stageState === 'completed').length,
+      exempted: 0,
+    },
+  };
+}
+
+interface ManagerEvaluationMockOptions {
+  details?: TaskDetail[];
+  draftGate?: Promise<void>;
+  submitGate?: Promise<void>;
+  withdrawError?: string;
+}
+
+async function mockManagerEvaluationWorkspace(
+  page: import('@playwright/test').Page,
+  options: ManagerEvaluationMockOptions = {},
+) {
+  await mockTaskWorkspaceIdentity(page, 'manager');
+  const initialDetails = options.details ?? [managerEvaluationDetail()];
+  const details = new Map(initialDetails.map((detail) => [detail.id, structuredClone(detail)]));
+  const draftBodies: unknown[] = [];
+  const submitBodies: unknown[] = [];
+  const withdrawBodies: unknown[] = [];
+  let version = 1;
+
+  const advanceVersion = (detail: TaskDetail) => {
+    version += 1;
+    detail.updatedAt = `2026-08-09T01:00:${String(version).padStart(2, '0')}.000Z`;
+  };
+  const taskIdFromUrl = (url: string) => new URL(url).pathname.split('/tasks/')[1]?.split('/')[0] ?? '';
+
+  await page.route('**/api/v1/tasks/team**', (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(managerEvaluationTeamPage([...details.values()]))),
+    });
+  });
+  await page.route('**/api/v1/tasks/*/manager-evaluation-draft', async (route) => {
+    const body = route.request().postDataJSON() as {
+      indicators: Array<{ id: string; managerScore?: number; managerComment?: string; extraScores?: Array<{ label: string; value: number }> }>;
+      evalSummary: TaskDetail['managerEvalSummary'];
+    };
+    draftBodies.push(body);
+    if (options.draftGate) await options.draftGate;
+    const taskId = taskIdFromUrl(route.request().url());
+    const detail = details.get(taskId)!;
+    for (const item of body.indicators) {
+      const indicator = detail.indicatorInstances.find((candidate) => candidate.id === item.id)!;
+      indicator.managerScore = item.managerScore;
+      indicator.managerComment = item.managerComment;
+      indicator.extraScores = item.extraScores ?? [];
+    }
+    detail.managerEvalSummary = { taskId, ...body.evalSummary };
+    advanceVersion(detail);
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ id: taskId, status: 'manager_scoring' })),
+    });
+  });
+  await page.route('**/api/v1/tasks/*/manager-score/withdraw', async (route) => {
+    const body = route.request().postDataJSON();
+    withdrawBodies.push(body);
+    if (options.withdrawError) {
+      return route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 'CONFLICT', message: options.withdrawError, data: null }),
+      });
+    }
+    const taskId = taskIdFromUrl(route.request().url());
+    const detail = details.get(taskId)!;
+    detail.status = 'manager_scoring';
+    detail.managerScoredAt = undefined;
+    if (detail.managerEvalSummary) detail.managerEvalSummary.submittedAt = undefined;
+    advanceVersion(detail);
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ id: taskId, status: 'manager_scoring' })),
+    });
+  });
+  await page.route('**/api/v1/tasks/*/manager-score', async (route) => {
+    const body = route.request().postDataJSON() as {
+      indicators: Array<{ id: string; managerScore: number; managerComment?: string; extraScores?: Array<{ label: string; value: number }> }>;
+      evalSummary: TaskDetail['managerEvalSummary'];
+    };
+    submitBodies.push(body);
+    if (options.submitGate) await options.submitGate;
+    const taskId = taskIdFromUrl(route.request().url());
+    const detail = details.get(taskId)!;
+    for (const item of body.indicators) {
+      const indicator = detail.indicatorInstances.find((candidate) => candidate.id === item.id)!;
+      indicator.managerScore = item.managerScore;
+      indicator.managerComment = item.managerComment;
+      indicator.extraScores = item.extraScores ?? [];
+      indicator.finalScore = item.managerScore + (item.extraScores?.reduce((sum, extra) => sum + extra.value, 0) ?? 0);
+    }
+    detail.managerEvalSummary = {
+      taskId,
+      ...body.evalSummary,
+      submittedAt: '2026-08-09T01:10:00.000Z',
+    };
+    detail.status = 'dept_review';
+    detail.managerScoredAt = '2026-08-09T01:10:00.000Z';
+    detail.gradeResult = {
+      taskId,
+      calculatedScore: 89.2,
+      rawGrade: 'B',
+      isVeto: false,
+      isPublished: false,
+    };
+    advanceVersion(detail);
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ id: taskId, status: 'dept_review' })),
+    });
+  });
+  await page.route('**/api/v1/tasks/*', (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    const taskId = taskIdFromUrl(route.request().url());
+    if (taskId === 'team') return route.fallback();
+    const detail = details.get(taskId);
+    if (!detail) return route.fulfill({ status: 404, body: JSON.stringify({ message: 'Task not found' }) });
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(structuredClone(detail))),
+    });
+  });
+
+  return { details, draftBodies, submitBodies, withdrawBodies };
 }
 
 function teamPageWith(
@@ -1422,6 +1641,288 @@ test.describe('team list manager workspace', () => {
       expect(tableFit.scrollWidth).toBeLessThanOrEqual(tableFit.clientWidth + 2);
     });
   }
+});
+
+test.describe('manager evaluation workspace', () => {
+  test.use({
+    baseURL: 'http://localhost:5173',
+    storageState: 'e2e/auth-state/manager.json',
+  });
+
+  test('manager evaluation shows self evidence beside editable manager fields and saves a versioned draft', async ({ page }) => {
+    const mocked = await mockManagerEvaluationWorkspace(page);
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    await expect(page.getByTestId('employee-self-comment-ind-1')).toBeVisible();
+    await expect(page.getByTestId('employee-self-comment-ind-1')).toContainText('Delivered the planned release');
+    await page.getByTestId('manager-score-ind-1').fill('88');
+    await page.getByTestId('manager-comment-ind-1').fill('按期完成，协作良好');
+    await page.getByTestId('manager-evaluation-save').click();
+
+    await expect(page.getByTestId('manager-evaluation-feedback')).toContainText('草稿已保存');
+    await expect.poll(() => mocked.draftBodies.length).toBe(1);
+    const body = mocked.draftBodies[0] as {
+      expectedUpdatedAt: string;
+      indicators: Array<{ id: string; managerScore?: number; managerComment?: string }>;
+    };
+    expect(body.expectedUpdatedAt).toBe('2026-08-09T01:00:00.000Z');
+    expect(body.indicators.find((indicator) => indicator.id === 'ind-1')).toEqual(expect.objectContaining({
+      managerScore: 88,
+      managerComment: '按期完成，协作良好',
+    }));
+    expect(mocked.details.get('task-2')?.status).toBe('manager_scoring');
+  });
+
+  test('manager evaluation focuses the first empty extra-score reason before saving', async ({ page }) => {
+    const mocked = await mockManagerEvaluationWorkspace(page);
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    await page.getByTestId('manager-score-ind-1').fill('88');
+    await page.getByTestId('manager-extra-add-ind-1').click();
+    await page.getByTestId('manager-extra-value-ind-1-0').fill('2');
+    await page.getByTestId('manager-evaluation-save').click();
+
+    await expect(page.getByTestId('manager-extra-reason-ind-1-0')).toBeFocused();
+    await expect(page.getByTestId('manager-evaluation-feedback')).toContainText('请填写加减分原因');
+    expect(mocked.draftBodies).toHaveLength(0);
+
+    await page.getByTestId('manager-extra-reason-ind-1-0').fill('跨部门发布支持');
+    await page.getByTestId('manager-evaluation-save').click();
+    await expect(page.getByTestId('manager-evaluation-feedback')).toContainText('草稿已保存');
+    const body = mocked.draftBodies[0] as {
+      indicators: Array<{ id: string; extraScores?: Array<{ label: string; value: number }> }>;
+    };
+    expect(body.indicators.find((indicator) => indicator.id === 'ind-1')?.extraScores).toEqual([
+      { label: '跨部门发布支持', value: 2 },
+    ]);
+  });
+
+  test('manager evaluation acknowledges a delayed save version without replacing newer edits', async ({ page }) => {
+    let releaseDraft!: () => void;
+    const draftGate = new Promise<void>((resolve) => {
+      releaseDraft = resolve;
+    });
+    const mocked = await mockManagerEvaluationWorkspace(page, { draftGate });
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    await page.getByTestId('manager-score-ind-1').fill('88');
+    await page.getByTestId('manager-comment-ind-1').fill('First draft');
+    await page.getByTestId('manager-evaluation-save').click();
+    await expect.poll(() => mocked.draftBodies.length).toBe(1);
+
+    await page.getByTestId('manager-comment-ind-1').fill('Newer local draft');
+    releaseDraft();
+    await expect(page.getByTestId('manager-evaluation-feedback')).toContainText('当前修改尚未保存');
+    await expect(page.getByTestId('manager-comment-ind-1')).toHaveValue('Newer local draft');
+
+    await page.getByTestId('manager-evaluation-save').click();
+    await expect.poll(() => mocked.draftBodies.length).toBe(2);
+    const secondBody = mocked.draftBodies[1] as { expectedUpdatedAt: string };
+    expect(secondBody.expectedUpdatedAt).toBe('2026-08-09T01:00:02.000Z');
+  });
+
+  test('manager evaluation final submit reloads the task as read-only with total and grade', async ({ page }) => {
+    const mocked = await mockManagerEvaluationWorkspace(page);
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.getByTestId('indicator-expand-all').click();
+    await page.getByTestId('manager-score-ind-1').fill('88');
+    await page.getByTestId('manager-score-ind-2').fill('90');
+    await page.getByTestId('manager-strengths').fill('Reliable delivery ownership.');
+    await page.getByTestId('manager-evaluation-submit').click();
+    await expect(page.getByRole('dialog')).toHaveCount(1);
+    await page.getByRole('button', { name: '确认提交', exact: true }).click();
+
+    await expect(page.getByTestId('manager-evaluation-feedback')).toContainText('评估已提交');
+    await expect(page.getByTestId('manager-score-ind-1')).toBeDisabled();
+    await expect(page.getByTestId('manager-evaluation-save')).toHaveCount(0);
+    await expect(page.getByTestId('manager-evaluation-submit')).toHaveCount(0);
+    await expect(page.getByTestId('manager-evaluation-total')).toContainText('89.2');
+    await expect(page.getByTestId('manager-evaluation-grade')).toContainText('良好');
+    await expect(page.getByTestId('manager-evaluation-withdraw')).toBeVisible();
+    expect(mocked.submitBodies).toHaveLength(1);
+    expect((mocked.submitBodies[0] as { expectedUpdatedAt: string }).expectedUpdatedAt)
+      .toBe('2026-08-09T01:00:00.000Z');
+  });
+
+  test('manager evaluation locks editable fields while final submit is pending', async ({ page }) => {
+    let releaseSubmit!: () => void;
+    const submitGate = new Promise<void>((resolve) => {
+      releaseSubmit = resolve;
+    });
+    const mocked = await mockManagerEvaluationWorkspace(page, { submitGate });
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.getByTestId('indicator-expand-all').click();
+    await page.getByTestId('manager-score-ind-1').fill('88');
+    await page.getByTestId('manager-score-ind-2').fill('90');
+    await page.getByTestId('manager-evaluation-submit').click();
+    await page.getByRole('button', { name: '确认提交', exact: true }).click();
+    await expect.poll(() => mocked.submitBodies.length).toBe(1);
+
+    await expect(page.getByTestId('manager-score-ind-1')).toBeDisabled();
+    await expect(page.getByTestId('manager-comment-ind-1')).toBeDisabled();
+    await expect(page.getByTestId('manager-strengths')).toBeDisabled();
+    releaseSubmit();
+    await expect(page.getByTestId('manager-evaluation-feedback')).toContainText('评估已提交');
+  });
+
+  test('manager evaluation withdrawal restores editable saved values after server approval', async ({ page }) => {
+    const detail = managerEvaluationDetail('hr_calibration', {
+      managerScoredAt: '2026-08-09T01:10:00.000Z',
+    });
+    const mocked = await mockManagerEvaluationWorkspace(page, { details: [detail] });
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await expect(page.getByTestId('manager-evaluation-withdraw')).toBeVisible();
+    await page.getByTestId('manager-evaluation-withdraw').click();
+    await page.getByRole('button', { name: '确认撤回', exact: true }).click();
+
+    await expect(page.getByTestId('manager-evaluation-feedback')).toContainText('评估已撤回');
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    await expect(page.getByTestId('manager-score-ind-1')).toBeEnabled();
+    await expect(page.getByTestId('manager-score-ind-1')).toHaveValue('88');
+    await expect(page.getByTestId('manager-evaluation-save')).toBeVisible();
+    expect(mocked.withdrawBodies).toEqual([{ expectedUpdatedAt: '2026-08-09T01:00:00.000Z' }]);
+  });
+
+  test('manager evaluation shows the server reason when withdrawal is blocked', async ({ page }) => {
+    const detail = managerEvaluationDetail('dept_review', {
+      managerScoredAt: '2026-08-09T01:10:00.000Z',
+    });
+    await mockManagerEvaluationWorkspace(page, {
+      details: [detail],
+      withdrawError: '下一节点已处理，不能撤回主管评分',
+    });
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.getByTestId('manager-evaluation-withdraw').click();
+    await page.getByRole('button', { name: '确认撤回', exact: true }).click();
+
+    await expect(page.getByTestId('manager-evaluation-feedback')).toContainText('下一节点已处理，不能撤回主管评分');
+    await expect(page.locator('.el-message--error')).toContainText('下一节点已处理，不能撤回主管评分');
+    await expect(page.getByTestId('manager-evaluation-withdraw')).toBeVisible();
+  });
+
+  test('manager evaluation hides withdrawal before a formal manager submission', async ({ page }) => {
+    await mockManagerEvaluationWorkspace(page, {
+      details: [managerEvaluationDetail('dept_review')],
+    });
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await expect(page.getByTestId('manager-evaluation-withdraw')).toHaveCount(0);
+    await expect(page.getByTestId('manager-score-ind-1')).toBeDisabled();
+  });
+
+  test('manager evaluation guards selected-member route changes while the draft is dirty', async ({ page }) => {
+    const grace = managerEvaluationDetail();
+    const ada = managerEvaluationDetail('manager_scoring', {
+      id: 'task-1',
+      employeeName: 'Ada Chen',
+    });
+    await mockManagerEvaluationWorkspace(page, { details: [grace, ada] });
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    await page.getByTestId('manager-score-ind-1').fill('88');
+
+    await page.getByTestId('team-task-row-task-1').click();
+    await expect(page.getByRole('dialog')).toContainText('存在未保存的主管评价');
+    await page.getByRole('button', { name: '继续编辑', exact: true }).click();
+    await expect(page).toHaveURL(/taskId=task-2/);
+    await expect(page.getByTestId('manager-score-ind-1')).toHaveValue('88');
+
+    await page.getByTestId('team-task-row-task-1').click();
+    await page.getByRole('button', { name: '放弃修改', exact: true }).click();
+    await expect(page).toHaveURL(/taskId=task-1/);
+    await expect(page.getByTestId('team-member-rail')).toContainText('Ada Chen');
+  });
+
+  for (const viewport of [
+    { name: 'desktop', width: 1440, height: 900 },
+    { name: 'mobile', width: 390, height: 844 },
+  ]) {
+    test(`manager evaluation keeps comparison grids stable at ${viewport.name} width`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await mockManagerEvaluationWorkspace(page);
+      await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+      await page.getByTestId('indicator-toggle-ind-1').click();
+
+      const geometry = await page.evaluate(() => {
+        const self = document.querySelector<HTMLElement>('[data-testid="employee-self-comment-ind-1"]')!
+          .closest<HTMLElement>('.evaluation-column')!;
+        const manager = document.querySelector<HTMLElement>('[data-testid="manager-comment-ind-1"]')!
+          .closest<HTMLElement>('.evaluation-column')!;
+        const selfRect = self.getBoundingClientRect();
+        const managerRect = manager.getBoundingClientRect();
+        return {
+          selfLeft: selfRect.left,
+          selfTop: selfRect.top,
+          selfBottom: selfRect.bottom,
+          managerLeft: managerRect.left,
+          managerTop: managerRect.top,
+        };
+      });
+      if (viewport.name === 'desktop') {
+        expect(geometry.managerLeft).toBeGreaterThan(geometry.selfLeft);
+        expect(Math.abs(geometry.managerTop - geometry.selfTop)).toBeLessThanOrEqual(1);
+      } else {
+        expect(geometry.managerTop).toBeGreaterThanOrEqual(geometry.selfBottom - 1);
+      }
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow).toBeLessThanOrEqual(8);
+      const rowFit = await page.locator('[data-testid^="indicator-row-"]').evaluateAll((rows) => rows.map((row) => ({
+        clientWidth: row.clientWidth,
+        scrollWidth: row.scrollWidth,
+      })));
+      expect(rowFit.every(({ clientWidth, scrollWidth }) => scrollWidth <= clientWidth + 2)).toBe(true);
+
+      if (shouldCaptureTask9Evidence()) {
+        await page.mouse.move(1, 1);
+        await page.waitForTimeout(300);
+        await page.screenshot({
+          path: `../.superpowers/sdd/2026-08-08-manager-team-performance-workspace/task-9-${viewport.name}.png`,
+          fullPage: true,
+          animations: 'disabled',
+        });
+        await page.locator('.manager-evaluation__summary').scrollIntoViewIfNeeded();
+        await page.waitForTimeout(200);
+        await page.screenshot({
+          path: `../.superpowers/sdd/2026-08-08-manager-team-performance-workspace/task-9-${viewport.name}-summary.png`,
+          fullPage: false,
+          animations: 'disabled',
+        });
+      }
+    });
+  }
+});
+
+test.describe('manager scoring compatibility redirect', () => {
+  test.use({
+    baseURL: 'http://localhost:5173',
+    storageState: 'e2e/auth-state/manager.json',
+  });
+
+  test('redirect preserves manager scoring cycle and task deep links', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(managerEvaluationTeamPage([managerEvaluationDetail()]))),
+    }));
+    await page.route('**/api/v1/tasks/task-2', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(managerEvaluationDetail())),
+    }));
+
+    await page.goto('/manager/scoring?cycleId=cycle-1&taskId=task-2&stageState=pending');
+    await expect(page).toHaveURL(/\/tasks\?/);
+    const url = new URL(page.url());
+    expect(url.searchParams.get('scope')).toBe('team');
+    expect(url.searchParams.get('stage')).toBe('manager-eval');
+    expect(url.searchParams.get('cycleId')).toBe('cycle-1');
+    expect(url.searchParams.get('taskId')).toBe('task-2');
+    expect(url.searchParams.get('stageState')).toBe('pending');
+    await expect(
+      page.locator('.app-sidebar .menu-link').filter({ hasText: '团队绩效' }),
+    ).toHaveClass(/is-active/);
+  });
 });
 
 test.describe('team list employee visibility', () => {

@@ -69,7 +69,7 @@ const menus = computed<MenuItem[]>(() => {
       group: 'performance',
     },
     {
-      path: '/manager/scoring',
+      path: '/tasks?scope=team&stage=manager-eval',
       title: '团队绩效',
       icon: UserFilled,
       roles: ['manager', 'dept_head', 'vp', 'hr', 'system_admin'],
@@ -200,6 +200,16 @@ function navigate(path: string) {
   router.push(path);
 }
 
+function isMenuActive(path: string): boolean {
+  const target = router.resolve(path);
+  if (target.path !== activePath.value) return false;
+  if (target.path === '/tasks') {
+    if (target.query.scope === 'team') return route.query.scope === 'team';
+    return route.query.scope !== 'team';
+  }
+  return Object.entries(target.query).every(([key, value]) => route.query[key] === value);
+}
+
 function handleRailClick(item: RailItem) {
   if (!item.open) {
     ElMessage.info(`${item.title}模块未开放`);
@@ -250,7 +260,7 @@ function toggleGroup(key: string) {
           <button
             v-if="group.key === 'home'"
             class="menu-link menu-link--home"
-            :class="{ 'is-active': activePath === group.items[0].path }"
+            :class="{ 'is-active': isMenuActive(group.items[0].path) }"
             type="button"
             @click="navigate(group.items[0].path)"
           >
@@ -277,7 +287,7 @@ function toggleGroup(key: string) {
                 :key="menu.path"
                 class="menu-link"
                 :class="[
-                  { 'is-active': activePath === menu.path },
+                  { 'is-active': isMenuActive(menu.path) },
                   menu.accent ? `menu-link--${menu.accent}` : '',
                 ]"
                 type="button"
