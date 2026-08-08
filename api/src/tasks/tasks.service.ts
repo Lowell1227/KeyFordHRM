@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AssessmentTask, IndicatorVisibilityScope, ObjectiveLevel, Prisma, SysRole, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DataScopeService } from '@/common/services/data-scope.service';
@@ -12,6 +12,8 @@ import { TaskQueryDto } from './dto/task-query.dto';
 import { UpdateActualValueDto } from './dto/update-actual-value.dto';
 import { SubmitSelfEvalDto } from './dto/submit-self-eval.dto';
 import { SubmitManagerScoreDto } from './dto/submit-manager-score.dto';
+import { SaveManagerEvaluationDraftDto } from './dto/save-manager-evaluation-draft.dto';
+import { WithdrawManagerScoreDto } from './dto/withdraw-manager-score.dto';
 import { DeptReviewDto } from './dto/dept-review.dto';
 import { SubmitIndicatorProposalDto } from './dto/submit-indicator-proposal.dto';
 import { SetIndicatorItemDto, SetIndicatorsDto } from './dto/set-indicators.dto';
@@ -38,6 +40,7 @@ export interface TaskListItem {
 
 /** 任务详情。 */
 export interface TaskDetail extends TaskListItem {
+  managerScoredAt: Date | null;
   indicatorInstances: Array<{
     id: string;
     name: string;
@@ -58,6 +61,7 @@ export interface TaskDetail extends TaskListItem {
     selfComment: string | null;
     managerScore: number | null;
     managerComment: string | null;
+    extraScores: Array<{ label: string; value: number }>;
     finalScore: number | null;
     sortOrder: number;
     visibilityScope: IndicatorVisibilityScope;
@@ -144,6 +148,8 @@ interface PublishVisibleFields {
 
 @Injectable()
 export class TasksService {
+  private readonly logger = new Logger(TasksService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly dataScope: DataScopeService,
@@ -733,14 +739,106 @@ export class TasksService {
     return { id: task.id, status: task.managerId ? 'manager_scoring' : 'hr_calibration' };
   }
 
+  /** PUT /tasks/:id/manager-evaluation-draft */
+  async saveManagerEvaluationDraft(
+    id: string,
+    dto: SaveManagerEvaluationDraftDto,
+    viewer: AuthUser,
+  ): Promise<{ id: string; status: TaskStatus }> {
+    const task = await this.getTaskOrThrow(id, { snapshot: { select: { snapshotData: true } } });
+    this.assertManager(task, viewer);
+    this.assertManagerScoring(task);
+    assertTaskVersion(task.updatedAt, dto.expectedUpdatedAt);
+
+    const snapshotData = (task.snapshot?.snapshotData ?? {}) as { maxScore?: number };
+    const maxScore = typeof snapshotData.maxScore === 'number' ? snapshotData.maxScore : 100;
+    for (const item of dto.indicators ?? []) {
+      if (item.managerScore !== undefined) {
+        this.scoringService.validateScore(item.managerScore, maxScore);
+      }
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      const claimedUpdatedAt = await claimTaskVersion(tx, task.id, dto.expectedUpdatedAt);
+
+      for (const item of dto.indicators ?? []) {
+        const data: Prisma.IndicatorInstanceUpdateInput = {};
+        if (item.managerScore !== undefined) data.managerScore = item.managerScore;
+        if (item.managerComment !== undefined) data.managerComment = item.managerComment;
+        if (item.extraScores !== undefined) {
+          data.extraScores = item.extraScores as unknown as Prisma.InputJsonValue;
+        }
+        if (Object.keys(data).length > 0) {
+          await tx.indicatorInstance.update({
+            where: { id: item.id, taskId: task.id },
+            data,
+          });
+        }
+      }
+
+      const summaryData: Prisma.ManagerEvalSummaryUncheckedUpdateInput = {};
+      if (dto.evalSummary.strengths !== undefined) {
+        summaryData.strengths = dto.evalSummary.strengths || null;
+      }
+      if (dto.evalSummary.improvements !== undefined) {
+        summaryData.improvements = dto.evalSummary.improvements || null;
+      }
+      if (dto.evalSummary.developmentPlan !== undefined) {
+        summaryData.developmentPlan = dto.evalSummary.developmentPlan || null;
+      }
+      if (dto.evalSummary.attachments !== undefined) {
+        summaryData.attachments = dto.evalSummary.attachments as Prisma.InputJsonValue;
+      }
+
+      await tx.managerEvalSummary.upsert({
+        where: { taskId: task.id },
+        create: {
+          taskId: task.id,
+          strengths: dto.evalSummary.strengths ?? null,
+          improvements: dto.evalSummary.improvements ?? null,
+          developmentPlan: dto.evalSummary.developmentPlan ?? null,
+          attachments: (dto.evalSummary.attachments as Prisma.InputJsonValue) ?? [],
+          submittedAt: null,
+        },
+        update: { ...summaryData, submittedAt: null },
+      });
+
+      await tx.assessmentTask.update({
+        where: { id: task.id },
+        data: { updatedAt: claimedUpdatedAt },
+      });
+      await tx.flowRecord.create({
+        data: {
+          taskId: task.id,
+          cycleId: task.cycleId,
+          nodeType: 'manager_score',
+          actorId: viewer.id,
+          action: 'comment',
+          extraData: { type: 'manager_evaluation_draft_saved' },
+        },
+      });
+    });
+
+    return { id: task.id, status: 'manager_scoring' };
+  }
+
   /** POST /tasks/:id/manager-score */
   async submitManagerScore(
     id: string,
     dto: SubmitManagerScoreDto,
     viewer: AuthUser,
   ): Promise<{ id: string; status: TaskStatus }> {
-    const task = await this.getTaskOrThrow(id, { snapshot: { select: { snapshotData: true } } });
+    const task = (await this.getTaskOrThrow(id, {
+      snapshot: { select: { snapshotData: true } },
+      indicatorInstances: { select: { id: true, indicatorType: true } },
+    })) as AssessmentTask & {
+      snapshot?: { snapshotData: Prisma.JsonValue };
+      indicatorInstances: Array<{ id: string; indicatorType: string }>;
+    };
     this.assertManager(task, viewer);
+    this.assertManagerScoring(task);
+    assertTaskVersion(task.updatedAt, dto.expectedUpdatedAt);
+    this.assertCompleteManagerScores(task.indicatorInstances, dto);
 
     const snapshotData = (task.snapshot?.snapshotData ?? {}) as { maxScore?: number };
     const maxScore = typeof snapshotData.maxScore === 'number' ? snapshotData.maxScore : 100;
@@ -753,8 +851,11 @@ export class TasksService {
     }
 
     const targetStatus = task.managerId === task.deptHeadId ? 'hr_calibration' : 'dept_review';
+    const submittedAt = new Date();
 
     await this.prisma.$transaction(async (tx) => {
+      const claimedUpdatedAt = await claimTaskVersion(tx, task.id, dto.expectedUpdatedAt);
+
       for (const item of dto.indicators) {
         this.scoringService.validateScore(item.managerScore, maxScore);
         const extraSum = item.extraScores?.reduce((sum, e) => sum + e.value, 0) ?? 0;
@@ -778,14 +879,14 @@ export class TasksService {
           improvements: dto.evalSummary.improvements ?? null,
           developmentPlan: dto.evalSummary.developmentPlan ?? null,
           attachments: (dto.evalSummary.attachments as Prisma.InputJsonValue) ?? [],
-          submittedAt: new Date(),
+          submittedAt,
         },
         update: {
           strengths: dto.evalSummary.strengths ?? null,
           improvements: dto.evalSummary.improvements ?? null,
           developmentPlan: dto.evalSummary.developmentPlan ?? null,
           attachments: (dto.evalSummary.attachments as Prisma.InputJsonValue) ?? [],
-          submittedAt: new Date(),
+          submittedAt,
         },
       });
 
@@ -828,27 +929,103 @@ export class TasksService {
         action: 'submit',
         targetStatus,
         actorId: viewer.id,
-        taskUpdate: { managerScoredAt: new Date() },
+        taskUpdate: { managerScoredAt: submittedAt, updatedAt: claimedUpdatedAt },
       });
     });
 
-    const notifyUserId = targetStatus === 'hr_calibration' ? null : task.deptHeadId;
-    if (notifyUserId) {
-      await this.notificationsService.create({
-        userId: notifyUserId,
-        senderId: viewer.id,
-        cycleId: task.cycleId,
-        taskId: task.id,
-        type: 'manager_score_submitted',
-        title: '主管评分待复核',
-        content: '主管已完成评分，请进行部门负责人复核。',
-      });
-    } else {
-      // 主管即部门负责人，直接到 HR 校准：通知 HR（这里发给 cycle.createdBy 作为经办人，或泛化通知 HR 角色）
-      await this.notifyHr(task, viewer, '主管评分待 HR 校准', '主管已完成评分，请进行 HR 校准。');
+    try {
+      const notifyUserId = targetStatus === 'hr_calibration' ? null : task.deptHeadId;
+      if (notifyUserId) {
+        await this.notificationsService.create({
+          userId: notifyUserId,
+          senderId: viewer.id,
+          cycleId: task.cycleId,
+          taskId: task.id,
+          type: 'manager_score_submitted',
+          title: '主管评分待复核',
+          content: '主管已完成评分，请进行部门负责人复核。',
+        });
+      } else {
+        await this.notifyHr(task, viewer, '主管评分待 HR 校准', '主管已完成评分，请进行 HR 校准。');
+      }
+    } catch (error) {
+      this.logger.error(
+        `manager score notification failed for task ${task.id}`,
+        error instanceof Error ? error.stack ?? error.message : String(error),
+      );
     }
 
     return { id: task.id, status: targetStatus };
+  }
+
+  /** POST /tasks/:id/manager-score/withdraw */
+  async withdrawManagerScore(
+    id: string,
+    dto: WithdrawManagerScoreDto,
+    viewer: AuthUser,
+  ): Promise<{ id: string; status: TaskStatus }> {
+    const task = await this.getTaskOrThrow(id);
+    this.assertManager(task, viewer);
+
+    const directNextStatus = task.managerId === task.deptHeadId ? 'hr_calibration' : 'dept_review';
+    if (task.status !== directNextStatus || !task.managerScoredAt) {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: '当前状态不允许撤回主管评分',
+      });
+    }
+    if (task.deptReviewedAt || task.hrCalibratedAt) {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: '下一节点已处理，不能撤回主管评分',
+      });
+    }
+    assertTaskVersion(task.updatedAt, dto.expectedUpdatedAt);
+
+    await this.prisma.$transaction(async (tx) => {
+      const claimedUpdatedAt = await claimTaskVersion(tx, task.id, dto.expectedUpdatedAt);
+      const downstreamRecord = await tx.flowRecord.findFirst({
+        where: {
+          taskId: task.id,
+          createdAt: { gt: task.managerScoredAt! },
+          nodeType: {
+            in: ['dept_review', 'hr_calibration', 'approval', 'publish', 'employee_confirm', 'appeal'],
+          },
+        },
+        select: { id: true },
+      });
+      if (downstreamRecord) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '下一节点已处理，不能撤回主管评分',
+        });
+      }
+
+      await tx.assessmentTask.update({
+        where: { id: task.id },
+        data: {
+          status: 'manager_scoring',
+          managerScoredAt: null,
+          updatedAt: claimedUpdatedAt,
+        },
+      });
+      await tx.managerEvalSummary.update({
+        where: { taskId: task.id },
+        data: { submittedAt: null },
+      });
+      await tx.flowRecord.create({
+        data: {
+          taskId: task.id,
+          cycleId: task.cycleId,
+          nodeType: 'manager_score',
+          actorId: viewer.id,
+          action: 'withdraw',
+          extraData: { type: 'manager_score_withdrawn' },
+        },
+      });
+    });
+
+    return { id: task.id, status: 'manager_scoring' };
   }
 
   /** POST /tasks/:id/dept-review */
@@ -949,6 +1126,41 @@ export class TasksService {
   private assertManager(task: AssessmentTask, viewer: AuthUser): void {
     if (task.managerId !== viewer.id) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅主管本人可操作' });
+    }
+  }
+
+  private assertManagerScoring(task: AssessmentTask): void {
+    if (task.status !== 'manager_scoring') {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: '当前状态不允许保存或提交主管评分',
+      });
+    }
+  }
+
+  private assertCompleteManagerScores(
+    indicators: Array<{ id: string; indicatorType: string }>,
+    dto: SubmitManagerScoreDto,
+  ): void {
+    const expectedIds = indicators
+      .filter((indicator) => indicator.indicatorType !== 'veto')
+      .map((indicator) => indicator.id);
+    const submittedIds = (dto.indicators ?? []).map((indicator) => indicator.id);
+    const submittedIdSet = new Set(submittedIds);
+    const isComplete =
+      submittedIds.length === submittedIdSet.size &&
+      submittedIds.length === expectedIds.length &&
+      expectedIds.every((indicatorId) => submittedIdSet.has(indicatorId)) &&
+      dto.indicators.every(
+        (indicator) =>
+          typeof indicator.managerScore === 'number' && Number.isFinite(indicator.managerScore),
+      );
+
+    if (!isComplete) {
+      throw new ConflictException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '请为每一项考核指标填写主管评分',
+      });
     }
   }
 
@@ -1131,6 +1343,7 @@ export class TasksService {
       deptName: task.dept?.name ?? null,
       managerId: task.managerId,
       status: task.status,
+      managerScoredAt: task.managerScoredAt,
       totalScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
       rawGrade: task.gradeResult?.rawGrade ?? null,
       updatedAt: task.updatedAt,
@@ -1154,6 +1367,7 @@ export class TasksService {
         selfComment: ind.selfComment,
         managerScore: ind.managerScore?.toNumber() ?? null,
         managerComment: ind.managerComment,
+        extraScores: Array.isArray(ind.extraScores) ? ind.extraScores : [],
         finalScore: ind.finalScore?.toNumber() ?? null,
         sortOrder: ind.sortOrder,
         visibilityScope: ind.visibilityScope ?? IndicatorVisibilityScope.supervisors,
@@ -1262,6 +1476,7 @@ export class TasksService {
       const maskedInd = { ...ind };
       if (!visible.indicator_scores) {
         maskedInd.managerScore = null;
+        maskedInd.extraScores = [];
         maskedInd.finalScore = null;
       }
       if (!visible.manager_comment) {
@@ -1290,6 +1505,7 @@ export class TasksService {
       ...ind,
       managerScore: null,
       managerComment: null,
+      extraScores: [],
       finalScore: null,
     }));
 

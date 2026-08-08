@@ -16,6 +16,8 @@ import { TaskQueryDto } from './dto/task-query.dto';
 import { UpdateActualValueDto } from './dto/update-actual-value.dto';
 import { SubmitSelfEvalDto } from './dto/submit-self-eval.dto';
 import { SubmitManagerScoreDto } from './dto/submit-manager-score.dto';
+import { SaveManagerEvaluationDraftDto } from './dto/save-manager-evaluation-draft.dto';
+import { WithdrawManagerScoreDto } from './dto/withdraw-manager-score.dto';
 import { DeptReviewDto } from './dto/dept-review.dto';
 import { RejectIndicatorsDto } from './dto/reject-indicators.dto';
 import { SubmitIndicatorProposalDto } from './dto/submit-indicator-proposal.dto';
@@ -151,6 +153,25 @@ export class TasksController {
   }
 
   /** POST /tasks/:id/manager-score — 主管评分。 */
+  @Put(':id/manager-evaluation-draft')
+  saveManagerEvaluationDraft(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: SaveManagerEvaluationDraftDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.tasksService.saveManagerEvaluationDraft(id, dto, viewer);
+  }
+
+  @Post(':id/manager-score/withdraw')
+  @HttpCode(200)
+  withdrawManagerScore(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: WithdrawManagerScoreDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.tasksService.withdrawManagerScore(id, dto, viewer);
+  }
+
   @Post(':id/manager-score')
   @HttpCode(200)
   submitManagerScore(

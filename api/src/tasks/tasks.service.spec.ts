@@ -11,6 +11,9 @@ import { AuthUser } from '@/common/types/auth.types';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { IndicatorVisibilityService } from './indicator-visibility.service';
 import { ObjectivesService } from '@/objectives/objectives.service';
+import { plainToInstance } from 'class-transformer';
+import { validate } from 'class-validator';
+import { SubmitManagerScoreDto } from './dto/submit-manager-score.dto';
 
 describe('TasksService', () => {
   let service: TasksService;
@@ -26,7 +29,9 @@ describe('TasksService', () => {
       deleteMany: jest.Mock;
       create: jest.Mock;
     };
-    flowRecord: { create: jest.Mock };
+    managerEvalSummary: { upsert: jest.Mock; update: jest.Mock };
+    gradeResult: { upsert: jest.Mock };
+    flowRecord: { create: jest.Mock; findFirst: jest.Mock };
     systemConfig: { findUnique: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -34,10 +39,25 @@ describe('TasksService', () => {
   let notificationsService: { create: jest.Mock };
   let indicatorVisibility: { validateSelection: jest.Mock };
   let objectivesService: { findVisibleByIds: jest.Mock };
+  let scoringService: {
+    validateScore: jest.Mock;
+    toScorableIndicator: jest.Mock;
+    calcTaskTotal: jest.Mock;
+    calcRawGrade: jest.Mock;
+  };
+  let flowService: { transitionTx: jest.Mock };
   let transactionClient: {
     assessmentTask: { update: jest.Mock; updateMany: jest.Mock };
-    indicatorInstance: { deleteMany: jest.Mock; create: jest.Mock };
-    flowRecord: { create: jest.Mock };
+    indicatorInstance: {
+      update: jest.Mock;
+      findMany: jest.Mock;
+      deleteMany: jest.Mock;
+      create: jest.Mock;
+    };
+    managerEvalSummary: { upsert: jest.Mock; update: jest.Mock };
+    gradeResult: { upsert: jest.Mock };
+    systemConfig: { findUnique: jest.Mock };
+    flowRecord: { create: jest.Mock; findFirst: jest.Mock };
   };
 
   beforeEach(async () => {
@@ -46,8 +66,16 @@ describe('TasksService', () => {
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
-      indicatorInstance: { deleteMany: jest.fn(), create: jest.fn() },
-      flowRecord: { create: jest.fn() },
+      indicatorInstance: {
+        update: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
+        deleteMany: jest.fn(),
+        create: jest.fn(),
+      },
+      managerEvalSummary: { upsert: jest.fn(), update: jest.fn() },
+      gradeResult: { upsert: jest.fn() },
+      systemConfig: { findUnique: jest.fn().mockResolvedValue(null) },
+      flowRecord: { create: jest.fn(), findFirst: jest.fn().mockResolvedValue(null) },
     };
     prisma = {
       assessmentTask: {
@@ -61,7 +89,9 @@ describe('TasksService', () => {
         deleteMany: jest.fn(),
         create: jest.fn(),
       },
-      flowRecord: { create: jest.fn() },
+      managerEvalSummary: transactionClient.managerEvalSummary,
+      gradeResult: transactionClient.gradeResult,
+      flowRecord: transactionClient.flowRecord,
       systemConfig: { findUnique: jest.fn() },
       $transaction: jest.fn(async (cb) => cb(transactionClient)),
     };
@@ -74,6 +104,13 @@ describe('TasksService', () => {
       validateSelection: jest.fn().mockResolvedValue(undefined),
     };
     objectivesService = { findVisibleByIds: jest.fn().mockResolvedValue([]) };
+    scoringService = {
+      validateScore: jest.fn(),
+      toScorableIndicator: jest.fn((indicator) => indicator),
+      calcTaskTotal: jest.fn().mockReturnValue({ totalScore: 88, rawGrade: 'B', dimensionScores: [] }),
+      calcRawGrade: jest.fn().mockReturnValue('B'),
+    };
+    flowService = { transitionTx: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -81,8 +118,8 @@ describe('TasksService', () => {
         { provide: PrismaService, useValue: prisma },
         { provide: DataScopeService, useValue: dataScope },
         { provide: NotificationsService, useValue: notificationsService },
-        { provide: ScoringService, useValue: {} },
-        { provide: FlowService, useValue: {} },
+        { provide: ScoringService, useValue: scoringService },
+        { provide: FlowService, useValue: flowService },
         { provide: IndicatorVisibilityService, useValue: indicatorVisibility },
         { provide: ObjectivesService, useValue: objectivesService },
       ],
@@ -143,12 +180,27 @@ describe('TasksService', () => {
       selfComment: '自评备注',
       managerScore: new Prisma.Decimal(85),
       managerComment: '主管评语',
+      extraScores: [{ label: 'Stretch', value: 2 }],
       finalScore: new Prisma.Decimal(85),
       createdAt: new Date(),
       updatedAt: new Date(),
       ...overrides,
     } as IndicatorInstance;
   }
+
+  describe('manager evaluation DTO validation', () => {
+    it('requires a score on every final indicator item', async () => {
+      const dto = plainToInstance(SubmitManagerScoreDto, {
+        expectedUpdatedAt: '2026-08-08T08:00:00.000Z',
+        indicators: [{ id: '11111111-1111-4111-8111-111111111111' }],
+        evalSummary: {},
+      });
+
+      const errors = await validate(dto);
+
+      expect(JSON.stringify(errors)).toContain('managerScore');
+    });
+  });
 
   function buildFullTask(status: TaskStatus, publishVisibleFields: Prisma.JsonValue = null) {
     return {
@@ -200,6 +252,7 @@ describe('TasksService', () => {
       expect(ind.selfComment).toBe('自评备注');
       expect(ind.managerScore).toBeNull();
       expect(ind.managerComment).toBeNull();
+      expect(ind.extraScores).toEqual([]);
       expect(ind.finalScore).toBeNull();
     });
 
@@ -222,19 +275,26 @@ describe('TasksService', () => {
       expect(ind.selfScore).toBe(80);
       expect(ind.managerScore).toBeNull();
       expect(ind.finalScore).toBeNull();
+      expect(ind.extraScores).toEqual([]);
       expect(ind.managerComment).toBeNull();
       expect(result.managerEvalSummary).toBeNull();
       expect(result.gradeResult?.coefficient).toBeNull();
     });
 
     it('非员工查看不受 D18 遮蔽影响', async () => {
-      prisma.assessmentTask.findUnique.mockResolvedValue(buildFullTask('manager_scoring'));
+      const managerScoredAt = new Date('2026-08-08T07:55:00.000Z');
+      const task = buildFullTask('manager_scoring');
+      task.managerScoredAt = managerScoredAt;
+      task.indicatorInstances[0].extraScores = [{ label: 'Stretch', value: 2 }];
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
 
       const result = await service.findOne('task-1', makeViewer({ id: 'mgr-1' }));
 
       expect(result.totalScore).toBe(85);
+      expect(result.managerScoredAt).toEqual(managerScoredAt);
       expect(result.indicatorInstances[0].managerScore).toBe(85);
       expect(result.indicatorInstances[0].finalScore).toBe(85);
+      expect(result.indicatorInstances[0].extraScores).toEqual([{ label: 'Stretch', value: 2 }]);
     });
 
     it('无权限查看抛 403', async () => {
@@ -450,6 +510,395 @@ describe('TasksService', () => {
 
       expect(indicatorVisibility.validateSelection).not.toHaveBeenCalled();
       expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('manager evaluation draft', () => {
+    const updatedAt = new Date('2026-08-08T08:00:00.000Z');
+
+    it('saves only supplied indicator fields and summary text without grading or transitioning', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...makeTask('manager_scoring'),
+        updatedAt,
+      });
+
+      const result = await service.saveManagerEvaluationDraft(
+        'task-1',
+        {
+          expectedUpdatedAt: updatedAt.toISOString(),
+          indicators: [
+            { id: 'ind-1', managerScore: 88 },
+            { id: 'ind-2', managerComment: 'Needs stronger follow-through' },
+          ],
+          evalSummary: { strengths: 'Reliable delivery' },
+        },
+        makeViewer({ id: 'mgr-1', sysRole: SysRole.manager }),
+      );
+
+      expect(result).toEqual({ id: 'task-1', status: 'manager_scoring' });
+      expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
+        where: { id: 'task-1', updatedAt },
+        data: { updatedAt: expect.any(Date) },
+      });
+      expect(transactionClient.indicatorInstance.update).toHaveBeenNthCalledWith(1, {
+        where: { id: 'ind-1', taskId: 'task-1' },
+        data: { managerScore: 88 },
+      });
+      expect(transactionClient.indicatorInstance.update).toHaveBeenNthCalledWith(2, {
+        where: { id: 'ind-2', taskId: 'task-1' },
+        data: { managerComment: 'Needs stronger follow-through' },
+      });
+      expect(transactionClient.managerEvalSummary.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({ taskId: 'task-1', submittedAt: null }),
+          update: expect.objectContaining({ submittedAt: null }),
+        }),
+      );
+      expect(transactionClient.assessmentTask.update).toHaveBeenCalledWith({
+        where: { id: 'task-1' },
+        data: { updatedAt: expect.any(Date) },
+      });
+      expect(transactionClient.flowRecord.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          taskId: 'task-1',
+          action: 'comment',
+          extraData: { type: 'manager_evaluation_draft_saved' },
+        }),
+      });
+      expect(transactionClient.gradeResult.upsert).not.toHaveBeenCalled();
+      expect(flowService.transitionTx).not.toHaveBeenCalled();
+      expect(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+        transactionClient.indicatorInstance.update.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('rejects a draft from anyone other than the assigned manager', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({ ...makeTask('manager_scoring'), updatedAt });
+
+      await expect(
+        service.saveManagerEvaluationDraft(
+          'task-1',
+          { expectedUpdatedAt: updatedAt.toISOString(), indicators: [], evalSummary: {} },
+          makeViewer({ id: 'other-manager', sysRole: SysRole.manager }),
+        ),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects a draft outside manager_scoring', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({ ...makeTask('dept_review'), updatedAt });
+
+      await expect(
+        service.saveManagerEvaluationDraft(
+          'task-1',
+          { expectedUpdatedAt: updatedAt.toISOString(), indicators: [], evalSummary: {} },
+          makeViewer({ id: 'mgr-1', sysRole: SysRole.manager }),
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects a stale draft before transactional writes', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({ ...makeTask('manager_scoring'), updatedAt });
+
+      await expect(
+        service.saveManagerEvaluationDraft(
+          'task-1',
+          { expectedUpdatedAt: '2026-08-08T07:59:59.000Z', indicators: [], evalSummary: {} },
+          makeViewer({ id: 'mgr-1', sysRole: SysRole.manager }),
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('final manager evaluation', () => {
+    const updatedAt = new Date('2026-08-08T08:00:00.000Z');
+    const manager = () => makeViewer({ id: 'mgr-1', sysRole: SysRole.manager });
+    const submittedIndicators = [
+      { id: 'ind-1', managerScore: 88, managerComment: 'Met expectations' },
+      { id: 'ind-2', managerScore: 92, managerComment: 'Strong ownership' },
+    ];
+
+    function scoringTask(status: TaskStatus = 'manager_scoring') {
+      return {
+        ...makeTask(status),
+        updatedAt,
+        snapshot: { snapshotData: { maxScore: 100 } },
+        indicatorInstances: [
+          { id: 'ind-1', indicatorType: 'kpi' },
+          { id: 'ind-2', indicatorType: 'attitude' },
+          { id: 'veto-1', indicatorType: 'veto' },
+        ],
+      };
+    }
+
+    it('claims the task version, persists every score, calculates the total, and transitions once', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(scoringTask());
+      transactionClient.indicatorInstance.findMany.mockResolvedValue([
+        makeIndicator({ id: 'ind-1', managerScore: new Prisma.Decimal(88), finalScore: new Prisma.Decimal(88) }),
+        makeIndicator({ id: 'ind-2', managerScore: new Prisma.Decimal(92), finalScore: new Prisma.Decimal(92) }),
+      ]);
+
+      const result = await service.submitManagerScore(
+        'task-1',
+        {
+          expectedUpdatedAt: updatedAt.toISOString(),
+          indicators: submittedIndicators,
+          evalSummary: { strengths: 'Strong execution' },
+        },
+        manager(),
+      );
+
+      expect(result).toEqual({ id: 'task-1', status: 'dept_review' });
+      expect(scoringService.validateScore).toHaveBeenCalledTimes(2);
+      expect(scoringService.calcTaskTotal).toHaveBeenCalledTimes(1);
+      expect(transactionClient.gradeResult.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({ calculatedScore: 88, rawGrade: 'B' }),
+          update: expect.objectContaining({ calculatedScore: 88, rawGrade: 'B' }),
+        }),
+      );
+      expect(flowService.transitionTx).toHaveBeenCalledWith(
+        transactionClient,
+        expect.objectContaining({
+          action: 'submit',
+          targetStatus: 'dept_review',
+          taskUpdate: expect.objectContaining({
+            managerScoredAt: expect.any(Date),
+            updatedAt: expect.any(Date),
+          }),
+        }),
+      );
+      expect(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+        transactionClient.indicatorInstance.update.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('rejects final submission when any non-veto indicator score is omitted', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(scoringTask());
+
+      await expect(
+        service.submitManagerScore(
+          'task-1',
+          {
+            expectedUpdatedAt: updatedAt.toISOString(),
+            indicators: [submittedIndicators[0]],
+            evalSummary: {},
+          },
+          manager(),
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects final submission outside manager_scoring', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(scoringTask('dept_review'));
+
+      await expect(
+        service.submitManagerScore(
+          'task-1',
+          {
+            expectedUpdatedAt: updatedAt.toISOString(),
+            indicators: submittedIndicators,
+            evalSummary: {},
+          },
+          manager(),
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects final submission with a stale task version', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(scoringTask());
+
+      await expect(
+        service.submitManagerScore(
+          'task-1',
+          {
+            expectedUpdatedAt: '2026-08-08T07:59:59.000Z',
+            indicators: submittedIndicators,
+            evalSummary: {},
+          },
+          manager(),
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('keeps a committed final submission successful when notification delivery fails', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(scoringTask());
+      transactionClient.indicatorInstance.findMany.mockResolvedValue([
+        makeIndicator({ id: 'ind-1' }),
+        makeIndicator({ id: 'ind-2' }),
+      ]);
+      notificationsService.create.mockRejectedValue(new Error('notification unavailable'));
+      jest.spyOn((service as any).logger, 'error').mockImplementation(() => undefined);
+
+      await expect(
+        service.submitManagerScore(
+          'task-1',
+          {
+            expectedUpdatedAt: updatedAt.toISOString(),
+            indicators: submittedIndicators,
+            evalSummary: {},
+          },
+          manager(),
+        ),
+      ).resolves.toEqual({ id: 'task-1', status: 'dept_review' });
+    });
+  });
+
+  describe('manager evaluation withdrawal', () => {
+    const updatedAt = new Date('2026-08-08T08:00:00.000Z');
+    const managerScoredAt = new Date('2026-08-08T07:55:00.000Z');
+    const manager = () => makeViewer({ id: 'mgr-1', sysRole: SysRole.manager });
+
+    function withdrawableTask(status: TaskStatus = 'dept_review') {
+      return {
+        ...makeTask(status),
+        deptHeadId: status === 'hr_calibration' ? 'mgr-1' : 'head-1',
+        updatedAt,
+        managerScoredAt,
+        deptReviewedAt: null,
+        hrCalibratedAt: null,
+      } as AssessmentTask;
+    }
+
+    it.each(['dept_review', 'hr_calibration'] as TaskStatus[])(
+      'withdraws from untouched %s while preserving evaluation data',
+      async (status) => {
+        prisma.assessmentTask.findUnique.mockResolvedValue(withdrawableTask(status));
+
+        const result = await service.withdrawManagerScore(
+          'task-1',
+          { expectedUpdatedAt: updatedAt.toISOString() },
+          manager(),
+        );
+
+        expect(result).toEqual({ id: 'task-1', status: 'manager_scoring' });
+        expect(transactionClient.flowRecord.findFirst).toHaveBeenCalledWith({
+          where: {
+            taskId: 'task-1',
+            createdAt: { gt: managerScoredAt },
+            nodeType: {
+              in: ['dept_review', 'hr_calibration', 'approval', 'publish', 'employee_confirm', 'appeal'],
+            },
+          },
+          select: { id: true },
+        });
+        expect(transactionClient.assessmentTask.update).toHaveBeenCalledWith({
+          where: { id: 'task-1' },
+          data: {
+            status: 'manager_scoring',
+            managerScoredAt: null,
+            updatedAt: expect.any(Date),
+          },
+        });
+        expect(transactionClient.managerEvalSummary.update).toHaveBeenCalledWith({
+          where: { taskId: 'task-1' },
+          data: { submittedAt: null },
+        });
+        expect(transactionClient.flowRecord.create).toHaveBeenCalledWith({
+          data: {
+            taskId: 'task-1',
+            cycleId: 'cycle-1',
+            nodeType: 'manager_score',
+            actorId: 'mgr-1',
+            action: 'withdraw',
+            extraData: { type: 'manager_score_withdrawn' },
+          },
+        });
+        expect(transactionClient.indicatorInstance.update).not.toHaveBeenCalled();
+        expect(transactionClient.gradeResult.upsert).not.toHaveBeenCalled();
+        expect(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+          transactionClient.flowRecord.findFirst.mock.invocationCallOrder[0],
+        );
+      },
+    );
+
+    it('rejects withdrawal by the wrong manager', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(withdrawableTask());
+
+      await expect(
+        service.withdrawManagerScore(
+          'task-1',
+          { expectedUpdatedAt: updatedAt.toISOString() },
+          makeViewer({ id: 'other-manager', sysRole: SysRole.manager }),
+        ),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects withdrawal with a stale task version', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(withdrawableTask());
+
+      await expect(
+        service.withdrawManagerScore(
+          'task-1',
+          { expectedUpdatedAt: '2026-08-08T07:59:59.000Z' },
+          manager(),
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects withdrawal from any status other than the immediate next node', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(withdrawableTask('approval'));
+
+      await expect(
+        service.withdrawManagerScore(
+          'task-1',
+          { expectedUpdatedAt: updatedAt.toISOString() },
+          manager(),
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it.each(['deptReviewedAt', 'hrCalibratedAt'] as const)(
+      'rejects withdrawal when %s records downstream processing',
+      async (field) => {
+        prisma.assessmentTask.findUnique.mockResolvedValue({
+          ...withdrawableTask('hr_calibration'),
+          [field]: new Date('2026-08-08T07:57:00.000Z'),
+        });
+
+        await expect(
+          service.withdrawManagerScore(
+            'task-1',
+            { expectedUpdatedAt: updatedAt.toISOString() },
+            manager(),
+          ),
+        ).rejects.toThrow(ConflictException);
+
+        expect(prisma.$transaction).not.toHaveBeenCalled();
+      },
+    );
+
+    it('rejects withdrawal when a downstream flow action exists after manager scoring', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(withdrawableTask());
+      transactionClient.flowRecord.findFirst.mockResolvedValue({ id: 'flow-1' });
+
+      await expect(
+        service.withdrawManagerScore(
+          'task-1',
+          { expectedUpdatedAt: updatedAt.toISOString() },
+          manager(),
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(transactionClient.assessmentTask.update).not.toHaveBeenCalled();
+      expect(transactionClient.flowRecord.create).not.toHaveBeenCalled();
     });
   });
 

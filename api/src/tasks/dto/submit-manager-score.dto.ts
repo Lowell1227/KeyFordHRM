@@ -1,69 +1,46 @@
-import { Type } from 'class-transformer';
+import { Type } from "class-transformer";
 import {
-  IsBoolean,
+  IsArray,
+  IsDateString,
+  IsDefined,
   IsNumber,
   IsOptional,
-  IsString,
-  IsUUID,
   Max,
   Min,
   ValidateNested,
-} from 'class-validator';
-import { VetoDto } from '@/calibration/dto/veto.dto';
+} from "class-validator";
+import { VetoDto } from "@/calibration/dto/veto.dto";
+import {
+  ExtraScoreItemDto,
+  ManagerEvalSummaryDto,
+  ManagerEvaluationIndicatorBaseDto,
+} from "./save-manager-evaluation-draft.dto";
 
-/** 单条加减分项。 */
-export class ExtraScoreItemDto {
-  @IsString()
-  label!: string;
-
-  @IsNumber()
-  value!: number;
-}
+export {
+  ExtraScoreItemDto,
+  ManagerEvalSummaryDto,
+} from "./save-manager-evaluation-draft.dto";
 
 /** 单条指标主管评分项。 */
-export class ManagerScoreIndicatorItemDto {
-  @IsUUID()
-  id!: string;
-
+export class ManagerScoreIndicatorItemDto extends ManagerEvaluationIndicatorBaseDto {
   @IsNumber()
   @Min(0)
   @Max(100)
   managerScore!: number;
-
-  @IsOptional()
-  @IsString()
-  managerComment?: string;
-
-  @IsOptional()
-  @ValidateNested({ each: true })
-  @Type(() => ExtraScoreItemDto)
-  extraScores?: ExtraScoreItemDto[];
-}
-
-/** 主管总体评价。 */
-export class ManagerEvalSummaryDto {
-  @IsOptional()
-  @IsString()
-  strengths?: string;
-
-  @IsOptional()
-  @IsString()
-  improvements?: string;
-
-  @IsOptional()
-  @IsString()
-  developmentPlan?: string;
-
-  @IsOptional()
-  attachments?: unknown[];
 }
 
 /** POST /tasks/:id/manager-score 请求体。 */
 export class SubmitManagerScoreDto {
+  @IsDateString()
+  expectedUpdatedAt!: string;
+
+  @IsArray()
+  @IsDefined()
   @ValidateNested({ each: true })
   @Type(() => ManagerScoreIndicatorItemDto)
   indicators!: ManagerScoreIndicatorItemDto[];
 
+  @IsDefined()
   @ValidateNested()
   @Type(() => ManagerEvalSummaryDto)
   evalSummary!: ManagerEvalSummaryDto;
