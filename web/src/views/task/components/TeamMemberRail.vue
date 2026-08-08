@@ -40,7 +40,11 @@ defineExpose<TeamMemberRailHandle>({ focusHeading });
 </script>
 
 <template>
-  <aside class="team-member-rail" data-testid="team-member-rail">
+  <aside
+    class="team-member-rail"
+    :class="{ 'is-goal-review': stage === 'goal-review' }"
+    data-testid="team-member-rail"
+  >
     <header class="team-member-rail__header">
       <h2
         ref="headingRef"
@@ -100,13 +104,15 @@ defineExpose<TeamMemberRailHandle>({ focusHeading });
           </div>
         </dl>
 
-        <section class="member-detail-shell">
-          <h3>{{ stage === 'goal-review' ? '指标审核' : '主管评分' }}</h3>
-          <el-empty
-            :image-size="54"
-            :description="stage === 'goal-review' ? '暂无指标明细' : '暂无评分明细'"
-          />
-        </section>
+        <slot name="workspace">
+          <section class="member-detail-shell">
+            <h3>{{ stage === 'goal-review' ? '指标审核' : '主管评分' }}</h3>
+            <el-empty
+              :image-size="54"
+              :description="stage === 'goal-review' ? '暂无指标明细' : '暂无评分明细'"
+            />
+          </section>
+        </slot>
       </template>
 
       <el-empty v-else :image-size="64" description="未找到所选成员" />
@@ -125,6 +131,10 @@ defineExpose<TeamMemberRailHandle>({ focusHeading });
   border: 1px solid #dfe4ec;
   border-radius: 7px;
   overflow: hidden;
+}
+
+.team-member-rail.is-goal-review {
+  width: 100%;
 }
 
 .team-member-rail__header {

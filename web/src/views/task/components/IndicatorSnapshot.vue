@@ -1,11 +1,14 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Check, Close, Delete, Plus } from '@element-plus/icons-vue';
 import RejectModal from './RejectModal.vue';
 import ScoreInput from '@/components/common/ScoreInput.vue';
 import FileUpload from '@/components/common/FileUpload.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import PerformanceIndicatorList, {
+  type PerformanceIndicatorRow,
+} from './PerformanceIndicatorList.vue';
 import { indicatorsApi } from '@/api/indicators.api';
 import { templatesApi } from '@/api/templates.api';
 import { uploadApi } from '@/api/upload.api';
@@ -102,6 +105,7 @@ const selfEvalForm = reactive({
   supportNeeded: '',
   attachments: [] as Attachment[],
 });
+const snapshotValidationIds = ref<string[]>([]);
 
 const indicatorOptions = computed(() => {
   const keyword = indicatorSearchKeyword.value.trim().toLowerCase();
@@ -157,6 +161,61 @@ const operationRecords = computed(() =>
 const readonlyTableRows = computed<Array<IndicatorInstance | SelfEvalRow>>(() =>
   props.selfEvalMode ? selfEvalRows : props.instances,
 );
+
+const editableRowIds = computed(() => editableItems.map((_, index) => (
+  props.instances[index]?.id ?? `draft-indicator-${index + 1}`
+)));
+const latestIndicatorRejection = computed(() => [...(props.flowRecords ?? [])]
+  .filter((record) => record.action === 'reject')
+  .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]);
+const rejectedSnapshotIndicatorId = computed(() => (
+  latestIndicatorRejection.value
+    ? (props.canEdit ? editableRowIds.value[0] : props.instances[0]?.id)
+    : undefined
+));
+const snapshotRevealIds = computed(() => {
+  const ids = [...snapshotValidationIds.value];
+  if (rejectedSnapshotIndicatorId.value && !ids.includes(rejectedSnapshotIndicatorId.value)) {
+    ids.push(rejectedSnapshotIndicatorId.value);
+  }
+  return ids;
+});
+const editableDisclosureRows = computed<PerformanceIndicatorRow[]>(() => editableItems.map((item, index) => ({
+  id: editableRowIds.value[index],
+  name: item.name,
+  weight: item.weight,
+  visibilityScope: item.visibilityScope,
+  statusLabel: latestIndicatorRejection.value ? '待修改' : '草稿',
+  description: item.description,
+  scoringStandard: item.scoringStandard,
+  dataSource: item.dataSource,
+  dataCaliber: item.dataCaliber,
+  targetValue: item.targetValue,
+  targetValueText: item.targetValueText,
+  unit: item.unit,
+  alignedObjectives: props.instances[index]?.alignedObjectives ?? [],
+  rejectionReason: editableRowIds.value[index] === rejectedSnapshotIndicatorId.value
+    ? latestIndicatorRejection.value?.comment
+    : undefined,
+})));
+const readonlyDisclosureRows = computed<PerformanceIndicatorRow[]>(() => props.instances.map((item) => ({
+  id: item.id,
+  name: item.name,
+  weight: item.weight,
+  visibilityScope: item.visibilityScope,
+  statusLabel: latestIndicatorRejection.value ? '已驳回' : '已提交',
+  description: item.description,
+  scoringStandard: item.scoringStandard,
+  dataSource: item.dataSource,
+  dataCaliber: item.dataCaliber,
+  targetValue: item.targetValue,
+  targetValueText: item.targetValueText,
+  unit: item.unit,
+  alignedObjectives: item.alignedObjectives,
+  rejectionReason: item.id === rejectedSnapshotIndicatorId.value
+    ? latestIndicatorRejection.value?.comment
+    : undefined,
+})));
 
 watch(
   () => [props.instances, props.selfEvalSummary],
@@ -571,14 +630,40 @@ onBeforeUnmount(() => {
   clearWeightHold();
 });
 
+function revealSnapshotIndicator(index: number) {
+  const indicatorId = editableRowIds.value[index];
+  if (!indicatorId) return;
+  snapshotValidationIds.value = [];
+  void nextTick(() => {
+    snapshotValidationIds.value = [indicatorId];
+  });
+}
+
 function buildIndicatorBody(action: 'save' | 'submit'): Omit<SetIndicatorBody, 'expectedUpdatedAt'> | null {
   const instances = editableItems.map(trimItem).filter((item) => item.name);
   if (!instances.length) {
+    revealSnapshotIndicator(0);
     ElMessage.warning('请至少填写一条指标');
     return null;
   }
+  const emptyCustomIndex = editableItems.findIndex((item) => (
+    item.visibilityScope === 'custom'
+    && item.visibleDepartmentIds.length === 0
+    && item.visibleUserIds.length === 0
+  ));
+  if (emptyCustomIndex >= 0) {
+    revealSnapshotIndicator(emptyCustomIndex);
+    ElMessage.warning('自定义可见范围至少选择一个部门或员工');
+    return null;
+  }
   if (isWeightOverLimit.value) {
+    revealSnapshotIndicator(0);
     ElMessage.warning(`指标权重合计不能超过 100%，当前为 ${weightTotalPercent.value.toFixed(2)}%。`);
+    return null;
+  }
+  if (action === 'submit' && Math.abs(weightTotalPercent.value - 100) > 0.01) {
+    revealSnapshotIndicator(0);
+    ElMessage.warning(`提交指标前权重合计必须为 100%，当前为 ${weightTotalPercent.value.toFixed(2)}%。`);
     return null;
   }
   return {
@@ -704,165 +789,90 @@ function handleFetchDingtalkWeekly() {
     </div>
 
     <template v-if="canEdit">
-      <div class="weight-summary" :class="{ 'weight-summary--danger': isWeightOverLimit }">
-        权重合计：{{ weightTotalPercent.toFixed(2) }}% / 100%
-      </div>
-
-      <el-table :data="editableItems" border size="small" class="indicator-table indicator-table--desktop">
-        <el-table-column label="序号" type="index" width="56" fixed="left" />
-        <el-table-column label="考核维度" min-width="130">
-          <template #default="{ row }">
-            <el-input v-model="row.dimensionName" placeholder="考核维度" maxlength="100" />
-          </template>
-        </el-table-column>
-        <el-table-column label="指标" min-width="680">
-          <template #default="{ row }">
-            <div class="indicator-editor">
-              <div class="indicator-fields">
-                <div class="indicator-field">
-                  <span class="indicator-field__label">指标名称</span>
-                  <el-input v-model="row.name" placeholder="请输入指标名称" maxlength="100" />
-                </div>
-                <div class="indicator-field">
-                  <span class="indicator-field__label">指标描述</span>
-                  <el-input
-                    v-model="row.description"
-                    placeholder="请输入指标描述，例如：按阶段完成验证"
-                    maxlength="300"
-                  />
-                </div>
+      <PerformanceIndicatorList
+        :rows="editableDisclosureRows"
+        :invalid-indicator-ids="snapshotRevealIds"
+        :weight-total="weightTotalPercent / 100"
+      >
+        <template #details="{ index }">
+          <div class="snapshot-disclosure-editor">
+            <div class="snapshot-disclosure-editor__commands">
+              <el-tooltip content="删除指标" placement="top">
+                <el-button
+                  text
+                  circle
+                  type="danger"
+                  :icon="Delete"
+                  :aria-label="`删除指标 ${editableItems[index].name || index + 1}`"
+                  @click="removeItem(index)"
+                />
+              </el-tooltip>
+            </div>
+            <label>
+              <span>考核维度</span>
+              <el-input v-model="editableItems[index].dimensionName" placeholder="考核维度" maxlength="100" />
+            </label>
+            <label class="is-wide">
+              <span>指标名称</span>
+              <el-input v-model="editableItems[index].name" placeholder="请输入指标名称" maxlength="100" />
+            </label>
+            <label class="is-wide">
+              <span>指标描述</span>
+              <el-input
+                v-model="editableItems[index].description"
+                type="textarea"
+                :rows="2"
+                placeholder="请输入指标描述，例如：按阶段完成验证"
+                maxlength="300"
+              />
+            </label>
+            <label>
+              <span>权重</span>
+              <el-input-number
+                class="weight-input"
+                :model-value="toPercent(editableItems[index].weight)"
+                :min="0"
+                :max="100"
+                :step="5"
+                :precision="2"
+                controls-position="right"
+                @pointerdown.capture="(event: PointerEvent) => handleWeightControlPointerDown(editableItems[index], event)"
+                @pointerup.capture="clearWeightHold"
+                @pointerleave.capture="clearWeightHold"
+                @pointercancel.capture="clearWeightHold"
+                @update:model-value="(value?: number) => setWeightPercent(editableItems[index], value)"
+              />
+            </label>
+            <label class="is-wide">
+              <span>评分标准</span>
+              <el-input v-model="editableItems[index].scoringStandard" placeholder="评分标准" maxlength="300" />
+            </label>
+            <label>
+              <span>数据来源</span>
+              <el-input v-model="editableItems[index].dataSource" placeholder="数据来源" maxlength="100" />
+            </label>
+            <label>
+              <span>数据口径</span>
+              <el-input v-model="editableItems[index].dataCaliber" placeholder="数据口径" maxlength="100" />
+            </label>
+            <label class="is-wide">
+              <span>目标值</span>
+              <div class="target-inputs">
+                <el-input
+                  v-if="editableItems[index].targetValueText"
+                  v-model="editableItems[index].targetValueText"
+                  placeholder="固定值"
+                  maxlength="100"
+                />
+                <template v-else>
+                  <el-input-number v-model="editableItems[index].targetValue" :precision="2" controls-position="right" placeholder="目标" />
+                  <el-input v-model="editableItems[index].unit" placeholder="单位" maxlength="30" />
+                </template>
               </div>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="权重" width="104">
-          <template #default="{ row }">
-            <el-input-number
-              class="weight-input"
-              :model-value="toPercent(row.weight)"
-              :min="0"
-              :max="100"
-              :step="5"
-              :precision="2"
-              controls-position="right"
-              @pointerdown.capture="(event: PointerEvent) => handleWeightControlPointerDown(row, event)"
-              @pointerup.capture="clearWeightHold"
-              @pointerleave.capture="clearWeightHold"
-              @pointercancel.capture="clearWeightHold"
-              @update:model-value="(value?: number) => setWeightPercent(row, value)"
-            >
-              <template #suffix>%</template>
-            </el-input-number>
-          </template>
-        </el-table-column>
-        <el-table-column label="评分标准" min-width="170">
-          <template #default="{ row }">
-            <el-input v-model="row.scoringStandard" placeholder="评分标准" maxlength="300" />
-          </template>
-        </el-table-column>
-        <el-table-column label="数据来源" min-width="130">
-          <template #default="{ row }">
-            <el-input v-model="row.dataSource" placeholder="数据来源" maxlength="100" />
-          </template>
-        </el-table-column>
-        <el-table-column label="数据口径" min-width="150">
-          <template #default="{ row }">
-            <el-input v-model="row.dataCaliber" placeholder="数据口径" maxlength="100" />
-          </template>
-        </el-table-column>
-        <el-table-column label="目标值" width="150">
-          <template #default="{ row }">
-            <div class="target-inputs">
-              <el-input
-                v-if="row.targetValueText"
-                v-model="row.targetValueText"
-                placeholder="固定值"
-                maxlength="100"
-              />
-              <template v-else>
-                <el-input-number v-model="row.targetValue" :precision="2" controls-position="right" placeholder="目标" />
-                <el-input v-model="row.unit" placeholder="单位" maxlength="30" />
-              </template>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="76" fixed="right">
-          <template #default="{ $index }">
-            <el-button :icon="Delete" text type="danger" @click="removeItem($index)">删除</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
-
-      <div class="indicator-mobile-list indicator-mobile-list--editable">
-        <article v-for="(row, index) in editableItems" :key="index" class="indicator-mobile-card">
-          <div class="indicator-mobile-card__header">
-            <span class="indicator-mobile-card__index">#{{ index + 1 }}</span>
-            <el-button :icon="Delete" text type="danger" @click="removeItem(index)">删除</el-button>
+            </label>
           </div>
-          <div class="indicator-mobile-field">
-            <span>考核维度</span>
-            <el-input v-model="row.dimensionName" placeholder="考核维度" maxlength="100" />
-          </div>
-          <div class="indicator-mobile-field">
-            <span>指标名称</span>
-            <el-input v-model="row.name" placeholder="请输入指标名称" maxlength="100" />
-          </div>
-          <div class="indicator-mobile-field">
-            <span>指标描述</span>
-            <el-input
-              v-model="row.description"
-              placeholder="请输入指标描述，例如：按阶段完成验证"
-              maxlength="300"
-            />
-          </div>
-          <div class="indicator-mobile-field indicator-mobile-field--inline">
-            <span>权重</span>
-            <el-input-number
-              class="weight-input"
-              :model-value="toPercent(row.weight)"
-              :min="0"
-              :max="100"
-              :step="5"
-              :precision="2"
-              controls-position="right"
-              @pointerdown.capture="(event: PointerEvent) => handleWeightControlPointerDown(row, event)"
-              @pointerup.capture="clearWeightHold"
-              @pointerleave.capture="clearWeightHold"
-              @pointercancel.capture="clearWeightHold"
-              @update:model-value="(value?: number) => setWeightPercent(row, value)"
-            >
-              <template #suffix>%</template>
-            </el-input-number>
-          </div>
-          <div class="indicator-mobile-field">
-            <span>评分标准</span>
-            <el-input v-model="row.scoringStandard" placeholder="评分标准" maxlength="300" />
-          </div>
-          <div class="indicator-mobile-field">
-            <span>数据来源</span>
-            <el-input v-model="row.dataSource" placeholder="数据来源" maxlength="100" />
-          </div>
-          <div class="indicator-mobile-field">
-            <span>数据口径</span>
-            <el-input v-model="row.dataCaliber" placeholder="数据口径" maxlength="100" />
-          </div>
-          <div class="indicator-mobile-field">
-            <span>目标值</span>
-            <div class="target-inputs">
-              <el-input
-                v-if="row.targetValueText"
-                v-model="row.targetValueText"
-                placeholder="固定值"
-                maxlength="100"
-              />
-              <template v-else>
-                <el-input-number v-model="row.targetValue" :precision="2" controls-position="right" placeholder="目标" />
-                <el-input v-model="row.unit" placeholder="单位" maxlength="30" />
-              </template>
-            </div>
-          </div>
-        </article>
-      </div>
+        </template>
+      </PerformanceIndicatorList>
 
       <div class="edit-footer">
         <div class="indicator-add-toolbar">
@@ -941,7 +951,13 @@ function handleFetchDingtalkWeekly() {
 
     <el-empty v-else-if="instances.length === 0" description="主管或HR尚未生成正式考核指标" />
     <template v-else>
-      <el-table :data="readonlyTableRows" border stripe size="small" class="indicator-table indicator-table--desktop">
+      <PerformanceIndicatorList
+        v-if="!selfEvalMode"
+        :rows="readonlyDisclosureRows"
+        :invalid-indicator-ids="snapshotRevealIds"
+      />
+
+      <el-table v-else :data="readonlyTableRows" border stripe size="small" class="indicator-table indicator-table--desktop">
         <el-table-column label="序号" type="index" width="56" />
         <el-table-column prop="dimensionName" label="考核维度" min-width="120" />
         <el-table-column label="指标" min-width="360">
@@ -1009,7 +1025,7 @@ function handleFetchDingtalkWeekly() {
         </template>
       </el-table>
 
-      <div class="indicator-mobile-list">
+      <div v-if="selfEvalMode" class="indicator-mobile-list">
         <article v-for="(row, index) in readonlyTableRows" :key="row.id || index" class="indicator-mobile-card">
           <div class="indicator-mobile-card__header">
             <span class="indicator-mobile-card__index">#{{ index + 1 }}</span>
@@ -1364,6 +1380,36 @@ function handleFetchDingtalkWeekly() {
   margin-bottom: 10px;
 }
 
+.snapshot-disclosure-editor {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px 12px;
+}
+
+.snapshot-disclosure-editor__commands {
+  grid-column: 1 / -1;
+  display: flex;
+  justify-content: flex-end;
+  min-height: 24px;
+}
+
+.snapshot-disclosure-editor label {
+  min-width: 0;
+  display: grid;
+  align-content: start;
+  gap: 5px;
+  color: #687386;
+  font-size: 11px;
+}
+
+.snapshot-disclosure-editor label.is-wide {
+  grid-column: 1 / -1;
+}
+
+.snapshot-disclosure-editor :deep(.el-input-number) {
+  width: 100%;
+}
+
 .indicator-editor {
   overflow: hidden;
   border: 1px solid #dfe3eb;
@@ -1586,6 +1632,15 @@ function handleFetchDingtalkWeekly() {
 }
 
 @media (max-width: 768px) {
+  .snapshot-disclosure-editor {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .snapshot-disclosure-editor__commands,
+  .snapshot-disclosure-editor label.is-wide {
+    grid-column: auto;
+  }
+
   .actions,
   .snapshot-toolbar,
   .snapshot-toolbar__actions,

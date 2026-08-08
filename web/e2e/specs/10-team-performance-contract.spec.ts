@@ -26,6 +26,11 @@ const shouldCaptureTask7Evidence = () => (
     .process?.env?.TASK7_CAPTURE_EVIDENCE === '1'
 );
 
+const shouldCaptureTask8Evidence = () => (
+  (globalThis as { process?: { env?: Record<string, string | undefined> } })
+    .process?.env?.TASK8_CAPTURE_EVIDENCE === '1'
+);
+
 const teamPageFixture: TeamTaskPage = {
   total: 3,
   page: 1,
@@ -116,6 +121,98 @@ const offPageTaskFixture: TaskDetail = {
   indicatorInstances: [],
 };
 
+const goalReviewDetailFixture: TaskDetail = {
+  id: 'task-1',
+  cycleId: 'cycle-1',
+  cycleName: '2026 H1',
+  snapshotId: 'snapshot-1',
+  employeeId: 'employee-1',
+  employeeName: 'Ada Chen',
+  employeeNo: 'E001',
+  deptId: 'dept-1',
+  deptName: 'Engineering',
+  managerId: 'manager-1',
+  status: 'indicator_reviewing',
+  isExempt: false,
+  updatedAt: '2026-08-09T00:00:00.000Z',
+  indicatorInstances: [
+    {
+      id: 'ind-1',
+      taskId: 'task-1',
+      name: 'Delivery quality',
+      description: 'Ship the customer portal without critical defects.',
+      scoringStandard: 'Accepted on schedule',
+      dataSource: 'Release report',
+      dataCaliber: 'Production release',
+      targetValue: 1,
+      unit: 'release',
+      weight: 0.6,
+      indicatorType: 'kpi',
+      dimensionName: 'Delivery',
+      dimensionWeight: 1,
+      sortOrder: 0,
+      visibilityScope: 'supervisors',
+      visibleDepartmentIds: [],
+      visibleUserIds: [],
+      alignedObjectives: [
+        { id: 'objective-1', title: 'Launch the customer portal', level: 'company', ownerId: null },
+      ],
+    },
+    {
+      id: 'ind-2',
+      taskId: 'task-1',
+      name: 'Team enablement',
+      description: 'Improve delivery playbooks for the engineering team.',
+      scoringStandard: 'Two adopted playbooks',
+      dataSource: 'Team review',
+      dataCaliber: 'Adopted documents',
+      targetValue: 2,
+      unit: 'playbooks',
+      weight: 0.4,
+      indicatorType: 'kpi',
+      dimensionName: 'Collaboration',
+      dimensionWeight: 1,
+      sortOrder: 1,
+      visibilityScope: 'department',
+      visibleDepartmentIds: [],
+      visibleUserIds: [],
+      alignedObjectives: [],
+    },
+  ],
+  flowRecords: [
+    {
+      id: 'flow-1',
+      taskId: 'task-1',
+      cycleId: 'cycle-1',
+      nodeType: 'indicator_setting',
+      actorId: 'employee-1',
+      actorName: 'Ada Chen',
+      action: 'submit',
+      comment: 'Ready for review',
+      extraData: { type: 'indicator_employee_submitted', count: 2 },
+      createdAt: '2026-08-09T08:00:00.000Z',
+    },
+  ],
+};
+
+const referenceIndicatorFixture: Paginated<IndicatorReferenceItem> = {
+  total: 1,
+  page: 1,
+  pageSize: 20,
+  items: [
+    {
+      id: 'reference-1',
+      taskId: 'task-reference',
+      cycleId: 'cycle-1',
+      employeeId: 'employee-1',
+      employeeName: 'Ada Chen',
+      name: 'Prior delivery target',
+      weight: 0.5,
+      visibilityScope: 'supervisors',
+    },
+  ],
+};
+
 function teamPageWith(
   items: TeamTaskPage['items'],
   options: { page?: number; total?: number } = {},
@@ -168,6 +265,31 @@ async function mockTaskWorkspaceIdentity(page: import('@playwright/test').Page, 
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
   }));
+}
+
+async function mockGoalReviewWorkspace(
+  page: import('@playwright/test').Page,
+  detail: TaskDetail = goalReviewDetailFixture,
+) {
+  await mockTaskWorkspaceIdentity(page, 'manager');
+  await page.route('**/api/v1/tasks/reference-indicators**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse(referenceIndicatorFixture)),
+  }));
+  await page.route(`**/api/v1/tasks/${detail.id}`, (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(detail)),
+    });
+  });
+  await page.route('**/api/v1/tasks/team**', (route) => {
+    if (route.request().method() !== 'GET') return route.fallback();
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(teamPageWith([teamPageFixture.items[0]]))),
+    });
+  });
 }
 
 test.describe('team list manager workspace', () => {
@@ -574,6 +696,267 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('team-task-empty')).toHaveCount(0);
   });
 
+  test('goal review keeps rows compact, edits all visibility scopes, and uses scoped references', async ({ page }) => {
+    const referenceRequests: URL[] = [];
+    let savedBody: Record<string, unknown> | undefined;
+    await mockGoalReviewWorkspace(page);
+    page.on('request', (request) => {
+      if (request.url().includes('/tasks/reference-indicators')) {
+        referenceRequests.push(new URL(request.url()));
+      }
+    });
+    await page.route('**/api/v1/tasks/task-1/indicators', (route) => {
+      savedBody = route.request().postDataJSON() as Record<string, unknown>;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          ...goalReviewDetailFixture,
+          updatedAt: '2026-08-09T00:00:01.000Z',
+        })),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+
+    await expect(page.getByTestId('goal-review-workspace')).toBeVisible();
+    await expect(page.getByTestId('indicator-details-ind-1')).toBeHidden();
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
+    await page.getByTestId('indicator-expand-all').click();
+    await expect(page.getByTestId('indicator-details-ind-2')).toBeVisible();
+
+    await page.getByTestId('indicator-visibility-ind-1').click();
+    for (const label of [
+      '全公司可见',
+      '部门内可见',
+      '部门及下级可见',
+      '直接下级可见',
+      '所有下级可见',
+      '仅上级可见',
+      '自定义范围',
+    ]) {
+      await expect(page.getByRole('option', { name: label, exact: true })).toBeVisible();
+    }
+    await page.getByRole('option', { name: '自定义范围', exact: true }).click();
+    await page.getByTestId('visibility-departments').click();
+    await page.getByRole('option', { name: 'Engineering', exact: true }).click();
+    await page.getByTestId('visibility-users').click();
+    await page.getByRole('option', { name: /Ada Chen/ }).click();
+    await expect(page.getByTestId('visibility-department-count')).toContainText('1');
+    await expect(page.getByTestId('visibility-user-count')).toContainText('1');
+
+    await expect(page.getByTestId('reference-aligned-objectives')).toContainText('Launch the customer portal');
+    await expect(page.getByTestId('reference-indicator-picker')).toContainText('Prior delivery target');
+    await expect.poll(() => referenceRequests[referenceRequests.length - 1]?.searchParams.get('cycleId')).toBe('cycle-1');
+    await expect.poll(() => referenceRequests[referenceRequests.length - 1]?.searchParams.get('ownerId')).toBe('employee-1');
+    await page.getByTestId('reference-flow-tab').click();
+    await expect(page.getByTestId('reference-flow-history')).toContainText('Ready for review');
+    expect(referenceRequests.every((url) => url.pathname.endsWith('/tasks/reference-indicators'))).toBe(true);
+
+    await page.getByTestId('goal-review-save').click();
+    await expect.poll(() => savedBody).toEqual(expect.objectContaining({
+      expectedUpdatedAt: '2026-08-09T00:00:00.000Z',
+      action: 'save',
+    }));
+    const instances = savedBody?.instances as Array<Record<string, unknown>>;
+    expect(instances[0]).toEqual(expect.objectContaining({
+      visibilityScope: 'custom',
+      visibleDepartmentIds: ['dept-1'],
+      visibleUserIds: ['employee-1'],
+    }));
+  });
+
+  test('goal review blocks invalid weight approval and focuses the first invalid indicator', async ({ page }) => {
+    const invalidDetail = structuredClone(goalReviewDetailFixture);
+    invalidDetail.indicatorInstances[0].weight = 0.5;
+    let approvalCalls = 0;
+    await mockGoalReviewWorkspace(page, invalidDetail);
+    await page.route('**/api/v1/tasks/team/indicator-review/batch-approve', (route) => {
+      approvalCalls += 1;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ succeeded: [], failed: [] })),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await expect(page.getByTestId('indicator-weight-total')).toContainText('90%');
+    await page.getByTestId('goal-review-approve').click();
+
+    expect(approvalCalls).toBe(0);
+    await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
+    await expect(page.getByTestId('indicator-row-ind-1')).toBeFocused();
+    await expect(page.locator('.el-message--error')).toContainText('100%');
+  });
+
+  test('goal review reuses complete outcome handling for single approve and reject', async ({ page }) => {
+    let approveAttempt = 0;
+    let rejectionBody: Record<string, unknown> | undefined;
+    await mockGoalReviewWorkspace(page);
+    await page.route('**/api/v1/tasks/team/indicator-review/batch-approve', (route) => {
+      approveAttempt += 1;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(approveAttempt === 1 ? {
+          succeeded: [],
+          failed: [{ taskId: 'task-1', reason: '任务已被其他操作更新' }],
+        } : {
+          succeeded: [{ taskId: 'task-1', status: 'indicator_confirming' }],
+          failed: [],
+        })),
+      });
+    });
+    await page.route('**/api/v1/tasks/team/indicator-review/batch-reject', (route) => {
+      rejectionBody = route.request().postDataJSON() as Record<string, unknown>;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          succeeded: [{ taskId: 'task-1', status: 'indicator_drafting' }],
+          failed: [],
+        })),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.getByTestId('goal-review-approve').click();
+    await page.getByRole('button', { name: '通过', exact: true }).click();
+    await expect(page.getByTestId('team-batch-result')).toContainText('任务已被其他操作更新');
+    await expect(page.getByTestId('team-selected-count')).toContainText('1');
+    await expect(page.locator('.el-message--success')).toHaveCount(0);
+
+    await page.getByTestId('goal-review-approve').click();
+    await page.getByRole('button', { name: '通过', exact: true }).click();
+    await expect(page.getByTestId('team-batch-result')).toContainText('成功 1 项');
+    await expect(page.getByTestId('team-selected-count')).toHaveCount(0);
+    await expect(page.getByTestId('team-batch-approve')).toBeDisabled();
+
+    await page.getByTestId('goal-review-reject').click();
+    await page.getByRole('button', { name: '驳回', exact: true }).click();
+    await expect(page.locator('.el-message-box__errormsg')).toHaveText('请输入驳回原因');
+    expect(rejectionBody).toBeUndefined();
+    await page.getByRole('textbox', { name: '请输入驳回原因' }).fill('目标口径需要补充');
+    await page.getByRole('button', { name: '驳回', exact: true }).click();
+    await expect.poll(() => rejectionBody).toEqual({
+      tasks: [{ taskId: 'task-1', updatedAt: '2026-08-09T00:00:00.000Z' }],
+      reason: '目标口径需要补充',
+    });
+  });
+
+  test('goal review ignores a stale save response after selecting another member', async ({ page }) => {
+    const secondDetail = structuredClone(goalReviewDetailFixture);
+    secondDetail.id = 'task-2';
+    secondDetail.employeeId = 'employee-2';
+    secondDetail.employeeName = 'Grace Lin';
+    secondDetail.employeeNo = 'E002';
+    secondDetail.indicatorInstances = secondDetail.indicatorInstances.map((indicator, index) => ({
+      ...indicator,
+      id: `task-2-ind-${index + 1}`,
+      taskId: 'task-2',
+      name: index === 0 ? 'Grace delivery target' : indicator.name,
+    }));
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    await mockGoalReviewWorkspace(page);
+    await page.route('**/api/v1/tasks/task-2', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(secondDetail)),
+    }));
+    await page.route('**/api/v1/tasks/task-1/indicators', async (route) => {
+      await saveGate;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          ...goalReviewDetailFixture,
+          updatedAt: '2026-08-09T00:00:01.000Z',
+        })),
+      });
+    });
+    await page.route('**/api/v1/tasks/team**', (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPageWith(teamPageFixture.items.slice(0, 2)))),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await expect(page.getByTestId('goal-review-workspace')).toContainText('Delivery quality');
+    await page.getByTestId('goal-review-save').click();
+    await page.getByTestId('team-task-row-task-2').click();
+    await expect(page.getByTestId('team-member-rail')).toContainText('Grace Lin');
+    await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
+
+    releaseSave();
+    await page.waitForTimeout(100);
+    await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
+    await expect(page.getByTestId('goal-review-workspace')).not.toContainText('Delivery quality');
+  });
+
+  test('goal review automatically opens and focuses a rejected indicator', async ({ page }) => {
+    const rejectedDetail = structuredClone(goalReviewDetailFixture);
+    rejectedDetail.flowRecords = [
+      ...(rejectedDetail.flowRecords ?? []),
+      {
+        id: 'flow-reject',
+        taskId: 'task-1',
+        cycleId: 'cycle-1',
+        nodeType: 'indicator_setting',
+        actorId: 'manager-1',
+        actorName: 'Test Manager',
+        action: 'reject',
+        comment: '目标口径需要补充',
+        extraData: { type: 'indicator_review_rejected' },
+        createdAt: '2026-08-09T09:00:00.000Z',
+      },
+    ];
+    await mockGoalReviewWorkspace(page, rejectedDetail);
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+
+    await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
+    await expect(page.getByTestId('indicator-row-ind-1')).toBeFocused();
+    await expect(page.getByTestId('indicator-details-ind-1')).toContainText('目标口径需要补充');
+  });
+
+  for (const viewport of [
+    { name: 'desktop', width: 1440, height: 900 },
+    { name: 'mobile', width: 390, height: 844 },
+  ]) {
+    test(`goal review keeps stable indicator dimensions at ${viewport.name} width`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await mockGoalReviewWorkspace(page);
+      await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+
+      const indicatorRows = page.locator('[data-testid^="indicator-row-"]');
+      await expect(indicatorRows).toHaveCount(2);
+      const columns = await indicatorRows.evaluateAll((rows) =>
+        rows.map((row) => getComputedStyle(row).gridTemplateColumns),
+      );
+      expect(new Set(columns).size).toBe(1);
+      const rowFit = await indicatorRows.evaluateAll((rows) => rows.map((row) => ({
+        clientWidth: row.clientWidth,
+        scrollWidth: row.scrollWidth,
+      })));
+      expect(rowFit.every(({ clientWidth, scrollWidth }) => scrollWidth <= clientWidth + 2)).toBe(true);
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow).toBeLessThanOrEqual(8);
+
+      await page.getByTestId('indicator-toggle-ind-1').click();
+      await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
+      if (shouldCaptureTask8Evidence()) {
+        await page.screenshot({
+          path: `../.superpowers/sdd/2026-08-08-manager-team-performance-workspace/task-8-${viewport.name}.png`,
+          fullPage: false,
+          animations: 'disabled',
+        });
+      }
+    });
+  }
+
   for (const viewport of [
     { name: 'desktop', width: 1440, height: 900 },
     { name: 'mobile', width: 390, height: 844 },
@@ -637,6 +1020,48 @@ test.describe('team list employee visibility', () => {
 
     await expect(page.getByTestId('task-scope-team')).toHaveCount(0);
     await expect(page.getByTestId('task-surface')).toBeVisible();
+  });
+
+  test('employee goal review snapshot uses disclosure and focuses the latest rejection', async ({ page }) => {
+    const employeeDetail = structuredClone(goalReviewDetailFixture);
+    employeeDetail.id = 'task-employee';
+    employeeDetail.indicatorInstances.forEach((indicator) => {
+      indicator.taskId = employeeDetail.id;
+    });
+    employeeDetail.status = 'indicator_drafting';
+    employeeDetail.flowRecords = [{
+      id: 'flow-employee-reject',
+      taskId: employeeDetail.id,
+      cycleId: 'cycle-1',
+      nodeType: 'indicator_setting',
+      actorId: 'manager-1',
+      actorName: 'Test Manager',
+      action: 'reject',
+      comment: '请补充验收口径',
+      extraData: { type: 'indicator_review_rejected' },
+      createdAt: '2026-08-09T10:00:00.000Z',
+    }];
+    await mockTaskWorkspaceIdentity(page, 'employee');
+    await page.route('**/api/v1/indicators**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+    }));
+    await page.route('**/api/v1/templates**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+    }));
+    await page.route('**/api/v1/tasks/task-employee', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(employeeDetail)),
+    }));
+
+    await page.goto('/tasks/task-employee');
+
+    await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
+    await expect(page.getByTestId('indicator-row-ind-1')).toBeFocused();
+    await expect(page.getByTestId('indicator-details-ind-1')).toContainText('请补充验收口径');
+    await page.getByTestId('indicator-collapse-all').click();
+    await expect(page.getByTestId('indicator-details-ind-1')).toBeHidden();
   });
 });
 

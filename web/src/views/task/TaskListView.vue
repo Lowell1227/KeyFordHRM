@@ -18,6 +18,12 @@ import TeamTaskList, {
 import TeamMemberRail, {
   type TeamMemberRailHandle,
 } from './components/TeamMemberRail.vue';
+import GoalReviewWorkspace, {
+  type GoalReviewActionPayload,
+  type GoalReviewRejectPayload,
+  type GoalReviewSavePayload,
+  type GoalReviewWorkspaceHandle,
+} from './components/GoalReviewWorkspace.vue';
 import type {
   AssessmentCycle,
   BatchReviewResult,
@@ -51,6 +57,7 @@ const teamKeyword = ref(workspaceQuery.state.value.keyword ?? '');
 const teamPageSize = 20;
 const teamListRef = ref<TeamTaskListHandle>();
 const teamMemberRailRef = ref<TeamMemberRailHandle>();
+const goalReviewRef = ref<GoalReviewWorkspaceHandle>();
 const hydratedTeamTask = ref<TeamTaskListItem>();
 const teamDetailLoading = ref(false);
 const teamDetailError = ref('');
@@ -619,6 +626,44 @@ async function handleBatchRequestError(
   await teamListRef.value?.retainSelection(failed.map(({ taskId }) => taskId));
 }
 
+async function executeTeamApproval(tasks: TeamTaskVersion[], actionLabel: string) {
+  const labels = batchItemLabels(tasks);
+  const contextKey = teamContextKey();
+  teamBatchBusy.value = true;
+  try {
+    const result = await tasksApi.batchApproveIndicators({ tasks });
+    await applyBatchResult(actionLabel, result, labels, contextKey);
+    if (tasks.some(({ taskId }) => taskId === workspaceQuery.state.value.taskId)) {
+      await goalReviewRef.value?.reload();
+    }
+  } catch (error) {
+    await handleBatchRequestError(actionLabel, tasks, labels, contextKey, error);
+  } finally {
+    teamBatchBusy.value = false;
+  }
+}
+
+async function executeTeamRejection(
+  tasks: TeamTaskVersion[],
+  reason: string,
+  actionLabel: string,
+) {
+  const labels = batchItemLabels(tasks);
+  const contextKey = teamContextKey();
+  teamBatchBusy.value = true;
+  try {
+    const result = await tasksApi.batchRejectIndicators({ tasks, reason });
+    await applyBatchResult(actionLabel, result, labels, contextKey);
+    if (tasks.some(({ taskId }) => taskId === workspaceQuery.state.value.taskId)) {
+      await goalReviewRef.value?.reload();
+    }
+  } catch (error) {
+    await handleBatchRequestError(actionLabel, tasks, labels, contextKey, error);
+  } finally {
+    teamBatchBusy.value = false;
+  }
+}
+
 async function approveTeamTasks(tasks: TeamTaskVersion[]) {
   try {
     await ElMessageBox.confirm(`确认通过选中的 ${tasks.length} 项指标审核？`, '批量通过', {
@@ -631,17 +676,7 @@ async function approveTeamTasks(tasks: TeamTaskVersion[]) {
     throw error;
   }
 
-  const labels = batchItemLabels(tasks);
-  const contextKey = teamContextKey();
-  teamBatchBusy.value = true;
-  try {
-    const result = await tasksApi.batchApproveIndicators({ tasks });
-    await applyBatchResult('批量通过', result, labels, contextKey);
-  } catch (error) {
-    await handleBatchRequestError('批量通过', tasks, labels, contextKey, error);
-  } finally {
-    teamBatchBusy.value = false;
-  }
+  await executeTeamApproval(tasks, '批量通过');
 }
 
 async function rejectTeamTasks(tasks: TeamTaskVersion[]) {
@@ -653,20 +688,48 @@ async function rejectTeamTasks(tasks: TeamTaskVersion[]) {
       inputErrorMessage: '请输入驳回原因',
       type: 'warning',
     });
-    const labels = batchItemLabels(tasks);
-    const contextKey = teamContextKey();
-    teamBatchBusy.value = true;
-    try {
-      const result = await tasksApi.batchRejectIndicators({ tasks, reason: value.trim() });
-      await applyBatchResult('批量驳回', result, labels, contextKey);
-    } catch (error) {
-      await handleBatchRequestError('批量驳回', tasks, labels, contextKey, error);
-    } finally {
-      teamBatchBusy.value = false;
-    }
+    await executeTeamRejection(tasks, value.trim(), '批量驳回');
   } catch (error) {
     if (error === 'cancel' || error === 'close') return;
   }
+}
+
+async function saveSingleGoalReview(payload: GoalReviewSavePayload) {
+  const contextKey = teamContextKey();
+  teamBatchBusy.value = true;
+  try {
+    const updatedTask = await tasksApi.setIndicators(payload.taskId, {
+      ...payload.body,
+      expectedUpdatedAt: payload.expectedUpdatedAt,
+    });
+    if (
+      contextKey !== teamContextKey()
+      || workspaceQuery.state.value.taskId !== payload.taskId
+    ) return;
+    goalReviewRef.value?.acceptTask(updatedTask);
+    const listItem = teamPage.value.items.find((item) => item.id === payload.taskId);
+    if (listItem && updatedTask.updatedAt) listItem.updatedAt = updatedTask.updatedAt;
+    ElMessage.success('指标修改已保存');
+  } catch (error) {
+    ElMessage.error(httpErrorMessage(error, '指标修改保存失败'));
+  } finally {
+    teamBatchBusy.value = false;
+  }
+}
+
+async function approveSingleGoalReview(payload: GoalReviewActionPayload) {
+  await executeTeamApproval(
+    [{ taskId: payload.taskId, updatedAt: payload.expectedUpdatedAt }],
+    '单项通过',
+  );
+}
+
+async function rejectSingleGoalReview(payload: GoalReviewRejectPayload) {
+  await executeTeamRejection(
+    [{ taskId: payload.taskId, updatedAt: payload.expectedUpdatedAt }],
+    payload.reason,
+    '单项驳回',
+  );
 }
 
 onMounted(async () => {
@@ -1103,7 +1166,14 @@ watch(
         </div>
       </section>
 
-      <div class="team-layout" :class="{ 'has-detail': workspaceQuery.state.value.taskId }">
+      <div
+        class="team-layout"
+        :class="{
+          'has-detail': workspaceQuery.state.value.taskId,
+          'is-goal-review': workspaceQuery.state.value.taskId
+            && workspaceQuery.state.value.stage === 'goal-review',
+        }"
+      >
         <TeamTaskList
           ref="teamListRef"
           :items="teamPage.items"
@@ -1131,7 +1201,23 @@ watch(
           :loading="teamMemberLoading"
           :error="teamMemberError"
           @close="closeTeamMember"
-        />
+        >
+          <template
+            v-if="workspaceQuery.state.value.stage === 'goal-review' && selectedTeamTask"
+            #workspace
+          >
+            <GoalReviewWorkspace
+              ref="goalReviewRef"
+              :task-id="workspaceQuery.state.value.taskId"
+              :departments="teamPage.facets.departments"
+              :users="teamPage.facets.employees"
+              :busy="teamBatchBusy"
+              @save="saveSingleGoalReview"
+              @approve="approveSingleGoalReview"
+              @reject="rejectSingleGoalReview"
+            />
+          </template>
+        </TeamMemberRail>
       </div>
     </div>
   </PerformanceWorkspace>
@@ -1571,6 +1657,14 @@ watch(
 
 .team-layout.has-detail {
   grid-template-columns: minmax(620px, 1fr) minmax(288px, 320px);
+}
+
+.team-layout.has-detail.is-goal-review {
+  grid-template-columns: minmax(0, 1fr);
+}
+
+.team-layout.has-detail.is-goal-review :deep(.team-member-rail) {
+  width: 100%;
 }
 
 @container (max-width: 960px) {
