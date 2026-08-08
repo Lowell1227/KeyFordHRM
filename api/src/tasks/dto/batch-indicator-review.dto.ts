@@ -22,7 +22,10 @@ export class BatchTaskRefDto {
 export class BatchIndicatorReviewDto {
   @IsArray()
   @ArrayNotEmpty()
-  @ArrayUnique((task: BatchTaskRefDto) => task.taskId.toLowerCase())
+  @ArrayUnique((task: BatchTaskRefDto) => {
+    const taskId = task?.taskId;
+    return typeof taskId === "string" ? taskId.toLowerCase() : taskId;
+  })
   @ValidateNested({ each: true })
   @Type(() => BatchTaskRefDto)
   tasks!: BatchTaskRefDto[];

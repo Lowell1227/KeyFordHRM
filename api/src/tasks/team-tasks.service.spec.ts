@@ -112,6 +112,26 @@ describe("TeamTasksService", () => {
     );
   });
 
+  it.each([
+    ["a missing task id", undefined],
+    ["a non-string task id", 123],
+  ])("reports %s through class-validator instead of throwing", async (_label, taskId) => {
+    const task = Object.assign(new BatchTaskRefDto(), {
+      updatedAt: "2026-08-08T08:00:00.000Z",
+    }) as unknown as { taskId?: unknown; updatedAt: string };
+    if (taskId !== undefined) task.taskId = taskId;
+    const dto = Object.assign(new BatchIndicatorReviewDto(), {
+      tasks: [task as unknown as BatchTaskRefDto],
+    });
+
+    const errors = await validate(dto);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].children?.[0].children?.[0].constraints).toEqual(
+      expect.objectContaining({ isUuid: expect.any(String) }),
+    );
+  });
+
   it("keeps every requested filter within the current manager scope", async () => {
     const query = Object.assign(new TeamTaskQueryDto(), {
       page: 2,
