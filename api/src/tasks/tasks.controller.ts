@@ -20,10 +20,15 @@ import { DeptReviewDto } from './dto/dept-review.dto';
 import { RejectIndicatorsDto } from './dto/reject-indicators.dto';
 import { SubmitIndicatorProposalDto } from './dto/submit-indicator-proposal.dto';
 import { SetIndicatorsDto } from './dto/set-indicators.dto';
+import { TeamTaskQueryDto } from './dto/team-task-query.dto';
+import { TeamTasksService } from './team-tasks.service';
 
 @Controller('tasks')
 export class TasksController {
-  constructor(private readonly tasksService: TasksService) {}
+  constructor(
+    private readonly tasksService: TasksService,
+    private readonly teamTasksService: TeamTasksService,
+  ) {}
 
   /** GET /tasks — 列表查询。 */
   @Get()
@@ -35,6 +40,11 @@ export class TasksController {
   @Get('mine')
   findMine(@Query() dto: TaskQueryDto, @CurrentUser() viewer: AuthUser) {
     return this.tasksService.findMine(dto, viewer);
+  }
+
+  @Get('team')
+  findTeam(@Query() dto: TeamTaskQueryDto, @CurrentUser() viewer: AuthUser) {
+    return this.teamTasksService.findAll(dto, viewer);
   }
 
   /** GET /tasks/:id — 详情。 */
