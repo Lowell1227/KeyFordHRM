@@ -13,6 +13,217 @@ import {
   updateTaskWorkspaceQuery,
 } from '../../src/views/task/use-task-workspace-query';
 
+const apiResponse = (data: unknown) => ({
+  code: 0,
+  message: 'success',
+  data,
+  timestamp: Date.now(),
+});
+
+const teamPageFixture: TeamTaskPage = {
+  total: 3,
+  page: 1,
+  pageSize: 20,
+  items: [
+    {
+      id: 'task-1',
+      cycleId: 'cycle-1',
+      cycleName: '2026 H1',
+      employeeId: 'employee-1',
+      employeeName: 'Ada Chen',
+      deptId: 'dept-1',
+      deptName: 'Engineering',
+      managerId: 'manager-1',
+      status: 'indicator_reviewing',
+      totalScore: null,
+      rawGrade: null,
+      updatedAt: '2026-08-09T00:00:00.000Z',
+      employeeNo: 'E001',
+      avatarUrl: null,
+      position: 'Senior Engineer',
+      stageState: 'pending',
+    },
+    {
+      id: 'task-2',
+      cycleId: 'cycle-1',
+      cycleName: '2026 H1',
+      employeeId: 'employee-2',
+      employeeName: 'Grace Lin',
+      deptId: 'dept-1',
+      deptName: 'Engineering',
+      managerId: 'manager-1',
+      status: 'indicator_reviewing',
+      totalScore: null,
+      rawGrade: null,
+      updatedAt: '2026-08-08T00:00:00.000Z',
+      employeeNo: 'E002',
+      avatarUrl: null,
+      position: 'Product Manager',
+      stageState: 'pending',
+    },
+    {
+      id: 'task-3',
+      cycleId: 'cycle-1',
+      cycleName: '2026 H1',
+      employeeId: 'employee-3',
+      employeeName: 'Lin Wei',
+      deptId: 'dept-2',
+      deptName: 'Operations',
+      managerId: 'manager-1',
+      status: 'indicator_confirming',
+      totalScore: null,
+      rawGrade: null,
+      updatedAt: '2026-08-07T00:00:00.000Z',
+      employeeNo: 'E003',
+      avatarUrl: null,
+      position: 'Operations Lead',
+      stageState: 'completed',
+    },
+  ],
+  counts: { all: 3, notStarted: 0, pending: 2, completed: 1, exempted: 0 },
+  facets: {
+    departments: [
+      { id: 'dept-1', name: 'Engineering' },
+      { id: 'dept-2', name: 'Operations' },
+    ],
+    employees: [
+      { id: 'employee-1', name: 'Ada Chen', employeeNo: 'E001', deptId: 'dept-1' },
+      { id: 'employee-2', name: 'Grace Lin', employeeNo: 'E002', deptId: 'dept-1' },
+      { id: 'employee-3', name: 'Lin Wei', employeeNo: 'E003', deptId: 'dept-2' },
+    ],
+  },
+};
+
+async function mockTaskWorkspaceIdentity(page: import('@playwright/test').Page, sysRole: 'manager' | 'employee') {
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      id: `${sysRole}-1`,
+      name: sysRole === 'manager' ? 'Test Manager' : 'Test Employee',
+      deptId: 'dept-1',
+      deptName: 'Engineering',
+      sysRole,
+      isAssessorOnly: false,
+      canViewAll: false,
+    })),
+  }));
+  await page.route('**/api/v1/cycles**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 50, items: [] })),
+  }));
+  await page.route('**/api/v1/tasks/mine**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+  }));
+}
+
+test.describe('team list manager workspace', () => {
+  test.use({
+    baseURL: 'http://localhost:5173',
+    storageState: 'e2e/auth-state/manager.json',
+  });
+
+  test('team list exposes filters, counts, and selected member URL state', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(teamPageFixture)),
+    }));
+
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1');
+
+    await expect(page.getByTestId('task-scope-team')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('team-count-pending')).toContainText('2');
+    await expect(page.getByTestId('team-department-filter')).toBeVisible();
+    await expect(page.getByTestId('team-employee-filter')).toBeVisible();
+    await page.getByTestId('team-task-row-task-1').click();
+    await expect(page).toHaveURL(/taskId=task-1/);
+    await expect(page.getByTestId('team-member-rail')).toContainText('Ada Chen');
+  });
+
+  test('team list applies URL filters and limits batch commands to pending goal reviews', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    const teamRequests: URL[] = [];
+    await page.route('**/api/v1/tasks/team**', (route) => {
+      teamRequests.push(new URL(route.request().url()));
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPageFixture)),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1');
+    await page.getByTestId('team-count-pending').click();
+
+    await expect(page).toHaveURL(/stageState=pending/);
+    await expect(page.getByTestId('team-batch-approve')).toBeDisabled();
+    await expect(page.getByTestId('team-batch-reject')).toBeDisabled();
+
+    const adaRow = page.getByRole('row').filter({ hasText: 'Ada Chen' });
+    await adaRow.locator('.el-checkbox').click();
+    await expect(page.getByTestId('team-batch-approve')).toBeEnabled();
+    await expect(page.getByTestId('team-batch-reject')).toBeEnabled();
+
+    await page.getByTestId('team-keyword-filter').fill('Ada');
+    await page.getByTestId('team-keyword-filter').press('Enter');
+    await expect(page).toHaveURL(/keyword=Ada/);
+    await expect
+      .poll(() => teamRequests[teamRequests.length - 1]?.searchParams.get('keyword'))
+      .toBe('Ada');
+
+    await page.locator('.team-stage-tabs').getByRole('button', { name: '主管评分' }).click();
+    await expect(page).toHaveURL(/stage=manager-eval/);
+    await expect(page.getByTestId('team-batch-approve')).toHaveCount(0);
+    await expect
+      .poll(() => teamRequests[teamRequests.length - 1]?.searchParams.get('stage'))
+      .toBe('manager-eval');
+  });
+
+  for (const viewport of [
+    { name: 'desktop', width: 1440, height: 900 },
+    { name: 'mobile', width: 390, height: 844 },
+  ]) {
+    test(`team list has no document overflow at ${viewport.name} width`, async ({ page }) => {
+      await page.setViewportSize({ width: viewport.width, height: viewport.height });
+      await mockTaskWorkspaceIdentity(page, 'manager');
+      await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPageFixture)),
+      }));
+
+      await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending');
+      await expect(page.getByTestId('team-task-list')).toBeVisible();
+      const overflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(overflow).toBeLessThanOrEqual(8);
+
+      await page.getByTestId('team-task-row-task-1').click();
+      await expect(page.getByTestId('team-member-rail')).toBeVisible();
+      if (viewport.name === 'mobile') {
+        await expect(page.getByTestId('team-task-list')).toBeHidden();
+      } else {
+        await expect(page.getByTestId('team-task-list')).toBeVisible();
+      }
+    });
+  }
+});
+
+test.describe('team list employee visibility', () => {
+  test.use({
+    baseURL: 'http://localhost:5173',
+    storageState: 'e2e/auth-state/employee.json',
+  });
+
+  test('employee storage state does not expose team scope', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'employee');
+    await page.goto('/tasks?scope=team&stage=goal-review');
+
+    await expect(page.getByTestId('task-scope-team')).toHaveCount(0);
+    await expect(page.getByTestId('task-surface')).toBeVisible();
+  });
+});
+
 test('normalizes team workspace query', () => {
   expect(
     parseTaskWorkspaceQuery({

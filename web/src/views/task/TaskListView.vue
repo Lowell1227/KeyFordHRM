@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { computed, ref, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
-import { Calendar, DocumentChecked, UserFilled } from '@element-plus/icons-vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { Calendar, DocumentChecked, RefreshLeft, Search, UserFilled } from '@element-plus/icons-vue';
 import { tasksApi } from '@/api/tasks.api';
 import { cyclesApi } from '@/api/cycles.api';
 import { usePagination } from '@/composables/usePagination';
@@ -11,23 +11,53 @@ import StatusBadge from '@/components/common/StatusBadge.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
 import PerformanceContextPanel from '@/components/performance/PerformanceContextPanel.vue';
-import type { TaskListItem, AssessmentCycle, TaskQuery } from '@/types/api.types';
-import type { TaskStatus } from '@/types/enums';
+import TeamTaskList, {
+  type TeamTaskVersion,
+} from './components/TeamTaskList.vue';
+import TeamMemberRail from './components/TeamMemberRail.vue';
+import type {
+  AssessmentCycle,
+  TaskListItem,
+  TaskQuery,
+  TeamTaskPage,
+} from '@/types/api.types';
+import type { TaskStatus, TeamStageState, TeamTaskStage } from '@/types/enums';
 import {
   TASK_STATUS_STAGE,
   getTaskStageState,
   type TaskStageKey as MappedTaskStageKey,
   type TaskStageState,
 } from './task-stage';
+import { useTaskWorkspaceQuery } from './use-task-workspace-query';
 
 const router = useRouter();
 const auth = useAuthStore();
+const workspaceQuery = useTaskWorkspaceQuery();
 
 const list = ref<TaskListItem[]>([]);
 const loading = ref(false);
 const cycles = ref<AssessmentCycle[]>([]);
 const selectedCycleId = ref<string>('');
 const quickFilter = ref<'all' | 'pending' | 'cycle'>('all');
+const teamLoading = ref(false);
+const teamError = ref('');
+const teamKeyword = ref(workspaceQuery.state.value.keyword ?? '');
+const teamPageSize = 20;
+const teamListRef = ref<{ clearSelection: () => void }>();
+let teamRequestSerial = 0;
+
+function emptyTeamPage(): TeamTaskPage {
+  return {
+    total: 0,
+    page: 1,
+    pageSize: teamPageSize,
+    items: [],
+    counts: { all: 0, notStarted: 0, pending: 0, completed: 0, exempted: 0 },
+    facets: { departments: [], employees: [] },
+  };
+}
+
+const teamPage = ref<TeamTaskPage>(emptyTeamPage());
 type TaskStageKey = 'all' | 'goal-setting' | 'goal-confirmation' | 'self-eval' | 'result';
 
 const selectedStage = ref<TaskStageKey>('all');
@@ -39,6 +69,34 @@ const taskStages = [
 ] as const;
 
 const selectedCycle = computed(() => cycles.value.find((cycle) => cycle.id === selectedCycleId.value) ?? null);
+const isManagerCapable = computed(() => auth.isManager);
+const activeScope = computed<'mine' | 'team'>(() =>
+  isManagerCapable.value && workspaceQuery.state.value.scope === 'team' ? 'team' : 'mine',
+);
+const selectedTeamTask = computed(() =>
+  teamPage.value.items.find((item) => item.id === workspaceQuery.state.value.taskId),
+);
+const teamEmployeeOptions = computed(() => {
+  const departmentId = workspaceQuery.state.value.deptId;
+  if (!departmentId) return teamPage.value.facets.employees;
+  return teamPage.value.facets.employees.filter((employee) => employee.deptId === departmentId);
+});
+const teamStageTabs: Array<{ key: TeamTaskStage; label: string }> = [
+  { key: 'goal-review', label: '指标审核' },
+  { key: 'manager-eval', label: '主管评分' },
+];
+const teamCountTabs = computed<Array<{
+  key: TeamStageState | undefined;
+  label: string;
+  count: number;
+  testId: string;
+}>>(() => [
+  { key: undefined, label: '全部', count: teamPage.value.counts.all, testId: 'all' },
+  { key: 'not_started', label: '未开始', count: teamPage.value.counts.notStarted, testId: 'not-started' },
+  { key: 'pending', label: '待处理', count: teamPage.value.counts.pending, testId: 'pending' },
+  { key: 'completed', label: '已完成', count: teamPage.value.counts.completed, testId: 'completed' },
+  { key: 'exempted', label: '已豁免', count: teamPage.value.counts.exempted, testId: 'exempted' },
+]);
 const allowedPerformanceSections = computed(() =>
   auth.user?.sysRole === 'employee'
     ? (['tasks'] as const)
@@ -145,6 +203,34 @@ async function loadList() {
   }
 }
 
+async function loadTeam() {
+  if (activeScope.value !== 'team') return;
+  const requestId = ++teamRequestSerial;
+  const state = workspaceQuery.state.value;
+  teamLoading.value = true;
+  teamError.value = '';
+  try {
+    const response = await tasksApi.findTeam({
+      stage: state.stage,
+      page: state.page ?? 1,
+      pageSize: teamPageSize,
+      cycleId: state.cycleId,
+      deptId: state.deptId,
+      employeeId: state.employeeId,
+      stageState: state.stageState,
+      keyword: state.keyword,
+    });
+    if (requestId === teamRequestSerial) teamPage.value = response;
+  } catch {
+    if (requestId === teamRequestSerial) {
+      teamPage.value = emptyTeamPage();
+      teamError.value = '团队任务加载失败';
+    }
+  } finally {
+    if (requestId === teamRequestSerial) teamLoading.value = false;
+  }
+}
+
 async function fetchAllMine(
   query: Omit<TaskQuery, 'employeeId' | 'page' | 'pageSize'>,
 ): Promise<TaskListItem[]> {
@@ -244,16 +330,133 @@ function goDetail(row: unknown) {
   router.push({ name: 'TaskDetail', params: { id: item.id } });
 }
 
+function setScope(scope: 'mine' | 'team') {
+  if (scope === activeScope.value) return;
+  void workspaceQuery.update({ scope, taskId: undefined, employeeId: undefined });
+}
+
+function setTeamStage(stage: TeamTaskStage) {
+  void workspaceQuery.update({ stage, stageState: undefined, taskId: undefined });
+}
+
+function setTeamStageState(stageState: TeamStageState | undefined) {
+  void workspaceQuery.update({ stageState, taskId: undefined });
+}
+
+function setTeamCycle(value: string) {
+  void workspaceQuery.update({ cycleId: value || undefined, taskId: undefined });
+}
+
+function setTeamDepartment(value: string) {
+  void workspaceQuery.update({
+    deptId: value || undefined,
+    employeeId: undefined,
+    taskId: undefined,
+  });
+}
+
+function setTeamEmployee(value: string) {
+  void workspaceQuery.update({ employeeId: value || undefined, taskId: undefined });
+}
+
+function applyTeamSearch() {
+  void workspaceQuery.update({ keyword: teamKeyword.value.trim() || undefined, taskId: undefined });
+}
+
+function resetTeamFilters() {
+  teamKeyword.value = '';
+  void workspaceQuery.update({
+    cycleId: undefined,
+    deptId: undefined,
+    employeeId: undefined,
+    stageState: undefined,
+    keyword: undefined,
+    taskId: undefined,
+  });
+}
+
+function selectTeamTask(payload: { taskId: string; employeeId: string }) {
+  void workspaceQuery.update({ taskId: payload.taskId });
+}
+
+function closeTeamMember() {
+  void workspaceQuery.update({ taskId: undefined });
+}
+
+async function approveTeamTasks(tasks: TeamTaskVersion[]) {
+  try {
+    await ElMessageBox.confirm(`确认通过选中的 ${tasks.length} 项指标审核？`, '批量通过', {
+      confirmButtonText: '通过',
+      cancelButtonText: '取消',
+      type: 'warning',
+    });
+    const result = await tasksApi.batchApproveIndicators({ tasks });
+    ElMessage.success(`已通过 ${result.succeeded.length} 项`);
+    teamListRef.value?.clearSelection();
+    await loadTeam();
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return;
+  }
+}
+
+async function rejectTeamTasks(tasks: TeamTaskVersion[]) {
+  try {
+    const { value } = await ElMessageBox.prompt('请输入驳回原因', '批量驳回', {
+      confirmButtonText: '驳回',
+      cancelButtonText: '取消',
+      inputPattern: /\S+/,
+      inputErrorMessage: '请输入驳回原因',
+      type: 'warning',
+    });
+    const result = await tasksApi.batchRejectIndicators({ tasks, reason: value.trim() });
+    ElMessage.success(`已驳回 ${result.succeeded.length} 项`);
+    teamListRef.value?.clearSelection();
+    await loadTeam();
+  } catch (error) {
+    if (error === 'cancel' || error === 'close') return;
+  }
+}
+
 onMounted(async () => {
-  await loadCycles();
-  selectedCycleId.value = '';
-  quickFilter.value = 'all';
-  await loadList();
+  const cyclesRequest = loadCycles();
+  if (activeScope.value === 'team') {
+    await Promise.all([cyclesRequest, loadTeam()]);
+  } else {
+    await cyclesRequest;
+    selectedCycleId.value = '';
+    quickFilter.value = 'all';
+    await loadList();
+  }
 });
 
 watch(pageSize, () => {
   page.value = 1;
 });
+
+watch(
+  () => ({
+    scope: activeScope.value,
+    stage: workspaceQuery.state.value.stage,
+    cycleId: workspaceQuery.state.value.cycleId,
+    deptId: workspaceQuery.state.value.deptId,
+    employeeId: workspaceQuery.state.value.employeeId,
+    stageState: workspaceQuery.state.value.stageState,
+    keyword: workspaceQuery.state.value.keyword,
+    page: workspaceQuery.state.value.page,
+  }),
+  (current, previous) => {
+    if (!previous) return;
+    if (current.scope === 'team') void loadTeam();
+    else if (previous.scope !== 'mine') void loadList();
+  },
+);
+
+watch(
+  () => workspaceQuery.state.value.keyword,
+  (keyword) => {
+    teamKeyword.value = keyword ?? '';
+  },
+);
 </script>
 
 <template>
@@ -263,11 +466,31 @@ watch(pageSize, () => {
     :sections="allowedPerformanceSections"
   >
     <template #toolbar>
-      <el-tag type="info" effect="plain">{{ selectedCycleName }}</el-tag>
+      <div v-if="isManagerCapable" class="task-scope-switch" aria-label="任务范围">
+        <button
+          type="button"
+          data-testid="task-scope-mine"
+          :class="{ 'is-active': activeScope === 'mine' }"
+          :aria-pressed="activeScope === 'mine'"
+          @click="setScope('mine')"
+        >
+          我的任务
+        </button>
+        <button
+          type="button"
+          data-testid="task-scope-team"
+          :class="{ 'is-active': activeScope === 'team' }"
+          :aria-pressed="activeScope === 'team'"
+          @click="setScope('team')"
+        >
+          团队绩效
+        </button>
+      </div>
+      <el-tag v-if="activeScope === 'mine'" type="info" effect="plain">{{ selectedCycleName }}</el-tag>
     </template>
 
     <template #context>
-      <PerformanceContextPanel title="绩效阶段">
+      <PerformanceContextPanel v-if="activeScope === 'mine'" title="绩效阶段">
         <div data-testid="task-context" class="task-context">
           <div class="task-context__cycle">
             <div class="task-context__label">
@@ -331,9 +554,107 @@ watch(pageSize, () => {
           </div>
         </div>
       </PerformanceContextPanel>
+
+      <PerformanceContextPanel v-else title="团队范围" collapsible>
+        <div data-testid="team-task-context" class="team-context">
+          <div class="team-context__section">
+            <div class="task-context__label">
+              <el-icon><DocumentChecked /></el-icon>
+              <span>工作阶段</span>
+            </div>
+            <div class="team-stage-tabs">
+              <button
+                v-for="stage in teamStageTabs"
+                :key="stage.key"
+                type="button"
+                :class="{ 'is-active': workspaceQuery.state.value.stage === stage.key }"
+                :aria-pressed="workspaceQuery.state.value.stage === stage.key"
+                @click="setTeamStage(stage.key)"
+              >
+                {{ stage.label }}
+              </button>
+            </div>
+          </div>
+
+          <div class="team-context__section team-context__filters">
+            <div class="task-context__label">
+              <el-icon><Calendar /></el-icon>
+              <span>筛选范围</span>
+            </div>
+            <el-select
+              data-testid="team-cycle-filter"
+              :model-value="workspaceQuery.state.value.cycleId || ''"
+              placeholder="全部考核周期"
+              clearable
+              @change="setTeamCycle"
+            >
+              <el-option label="全部考核周期" value="" />
+              <el-option
+                v-for="cycle in cycles"
+                :key="cycle.id"
+                :label="cycle.name"
+                :value="cycle.id"
+              />
+            </el-select>
+            <el-select
+              data-testid="team-department-filter"
+              :model-value="workspaceQuery.state.value.deptId || ''"
+              placeholder="全部部门"
+              clearable
+              filterable
+              @change="setTeamDepartment"
+            >
+              <el-option label="全部部门" value="" />
+              <el-option
+                v-for="department in teamPage.facets.departments"
+                :key="department.id"
+                :label="department.name"
+                :value="department.id"
+              />
+            </el-select>
+            <el-select
+              data-testid="team-employee-filter"
+              :model-value="workspaceQuery.state.value.employeeId || ''"
+              placeholder="全部员工"
+              clearable
+              filterable
+              @change="setTeamEmployee"
+            >
+              <el-option label="全部员工" value="" />
+              <el-option
+                v-for="employee in teamEmployeeOptions"
+                :key="employee.id"
+                :label="employee.employeeNo ? `${employee.name} · ${employee.employeeNo}` : employee.name"
+                :value="employee.id"
+              />
+            </el-select>
+          </div>
+
+          <div class="team-context__section">
+            <div class="task-context__label">
+              <el-icon><UserFilled /></el-icon>
+              <span>处理状态</span>
+            </div>
+            <div class="team-count-tabs">
+              <button
+                v-for="item in teamCountTabs"
+                :key="item.testId"
+                type="button"
+                :data-testid="`team-count-${item.testId}`"
+                :class="{ 'is-active': workspaceQuery.state.value.stageState === item.key }"
+                :aria-pressed="workspaceQuery.state.value.stageState === item.key"
+                @click="setTeamStageState(item.key)"
+              >
+                <span>{{ item.label }}</span>
+                <strong>{{ item.count }}</strong>
+              </button>
+            </div>
+          </div>
+        </div>
+      </PerformanceContextPanel>
     </template>
 
-    <div class="task-list page-stack">
+    <div v-if="activeScope === 'mine'" class="task-list page-stack">
       <section data-testid="task-surface" class="performance-surface">
         <header class="task-surface__header">
           <div class="task-surface__title">
@@ -410,6 +731,73 @@ watch(pageSize, () => {
           />
         </div>
       </section>
+    </div>
+
+    <div v-else class="team-workspace">
+      <section class="team-toolbar" aria-label="团队任务筛选">
+        <el-input
+          v-model="teamKeyword"
+          data-testid="team-keyword-filter"
+          clearable
+          placeholder="搜索姓名或工号"
+          @clear="applyTeamSearch"
+          @keyup.enter="applyTeamSearch"
+        >
+          <template #prefix><el-icon><Search /></el-icon></template>
+        </el-input>
+        <el-button type="primary" :icon="Search" @click="applyTeamSearch">搜索</el-button>
+        <el-tooltip content="重置筛选" placement="top">
+          <el-button
+            class="team-toolbar__reset"
+            :icon="RefreshLeft"
+            aria-label="重置筛选"
+            @click="resetTeamFilters"
+          />
+        </el-tooltip>
+        <span class="team-toolbar__scope">
+          {{ workspaceQuery.state.value.stage === 'goal-review' ? '指标审核' : '主管评分' }}
+        </span>
+      </section>
+
+      <el-alert
+        v-if="teamError"
+        class="team-error"
+        :title="teamError"
+        type="error"
+        show-icon
+        :closable="false"
+      >
+        <template #default>
+          <el-button size="small" @click="loadTeam">重试</el-button>
+        </template>
+      </el-alert>
+
+      <div class="team-layout" :class="{ 'has-detail': workspaceQuery.state.value.taskId }">
+        <TeamTaskList
+          ref="teamListRef"
+          :items="teamPage.items"
+          :total="teamPage.total"
+          :page="teamPage.page"
+          :page-size="teamPage.pageSize"
+          :stage="workspaceQuery.state.value.stage"
+          :stage-state="workspaceQuery.state.value.stageState"
+          :selected-task-id="workspaceQuery.state.value.taskId"
+          :loading="teamLoading"
+          @task-selected="selectTeamTask"
+          @batch-approve="approveTeamTasks"
+          @batch-reject="rejectTeamTasks"
+          @page-change="workspaceQuery.update({ page: $event, taskId: undefined })"
+        />
+
+        <TeamMemberRail
+          v-if="workspaceQuery.state.value.taskId"
+          :task="selectedTeamTask"
+          :task-id="workspaceQuery.state.value.taskId"
+          :stage="workspaceQuery.state.value.stage"
+          :loading="teamLoading && !selectedTeamTask"
+          @close="closeTeamMember"
+        />
+      </div>
     </div>
   </PerformanceWorkspace>
 </template>
@@ -591,6 +979,182 @@ watch(pageSize, () => {
   flex-shrink: 0;
 }
 
+.task-scope-switch {
+  min-width: 0;
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid #dfe4ec;
+  border-radius: 6px;
+  background: #f6f8fb;
+}
+
+.task-scope-switch button,
+.team-stage-tabs button,
+.team-count-tabs button {
+  border: 0;
+  color: #596376;
+  background: transparent;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.task-scope-switch button {
+  min-height: 28px;
+  padding: 0 11px;
+  border-radius: 4px;
+  white-space: nowrap;
+}
+
+.task-scope-switch button.is-active {
+  color: #172033;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(24 35 55 / 12%);
+  font-weight: 650;
+}
+
+.team-context {
+  min-width: 0;
+}
+
+.team-context__section {
+  padding: 2px 4px 14px;
+  border-bottom: 1px solid #edf0f4;
+}
+
+.team-context__section + .team-context__section {
+  padding-top: 14px;
+}
+
+.team-context__section:last-child {
+  border-bottom: 0;
+}
+
+.team-stage-tabs {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  padding: 2px;
+  border: 1px solid #dfe4ec;
+  border-radius: 6px;
+  background: #f6f8fb;
+}
+
+.team-stage-tabs button {
+  min-height: 30px;
+  border-radius: 4px;
+}
+
+.team-stage-tabs button.is-active {
+  color: #155cc3;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(24 35 55 / 10%);
+  font-weight: 650;
+}
+
+.team-context__filters {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.team-context__filters .task-context__label {
+  margin-bottom: 1px;
+}
+
+.team-context__filters :deep(.el-select) {
+  width: 100%;
+}
+
+.team-count-tabs {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.team-count-tabs button {
+  min-height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 10px;
+  border-radius: 5px;
+  text-align: left;
+}
+
+.team-count-tabs button:hover {
+  background: #f2f6fc;
+}
+
+.team-count-tabs button.is-active {
+  color: #155cc3;
+  background: #e8f2ff;
+  font-weight: 650;
+}
+
+.team-count-tabs strong {
+  min-width: 24px;
+  padding: 2px 6px;
+  border-radius: 4px;
+  color: #70798a;
+  background: #edf0f4;
+  font-size: 11px;
+  text-align: center;
+}
+
+.team-count-tabs button.is-active strong {
+  color: #155cc3;
+  background: #fff;
+}
+
+.team-workspace {
+  min-width: 0;
+  min-height: 100%;
+  padding: 12px;
+}
+
+.team-toolbar {
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 10px;
+  padding: 8px 10px;
+  border: 1px solid #e2e6ed;
+  border-radius: 7px;
+  background: #fff;
+}
+
+.team-toolbar :deep(.el-input) {
+  width: min(320px, 100%);
+}
+
+.team-toolbar__reset {
+  flex-shrink: 0;
+}
+
+.team-toolbar__scope {
+  margin-left: auto;
+  color: #70798a;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.team-error {
+  margin-bottom: 10px;
+}
+
+.team-layout {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 10px;
+  align-items: stretch;
+}
+
+.team-layout.has-detail {
+  grid-template-columns: minmax(0, 1fr) 320px;
+}
+
 .empty-wrap {
   padding: 32px 0;
 }
@@ -599,6 +1163,10 @@ watch(pageSize, () => {
   .task-list {
     min-height: auto;
     padding: 10px;
+  }
+
+  .task-scope-switch button {
+    padding: 0 8px;
   }
 
   .task-context__cycle {
@@ -627,6 +1195,51 @@ watch(pageSize, () => {
 
   .task-surface__title h2 {
     font-size: 16px;
+  }
+
+  .team-context__filters {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .team-context__filters .task-context__label,
+  .team-context__filters :deep(.el-select:first-of-type) {
+    grid-column: 1 / -1;
+  }
+
+  .team-count-tabs {
+    flex-flow: row wrap;
+  }
+
+  .team-count-tabs button {
+    min-width: 108px;
+    flex: 1;
+  }
+
+  .team-workspace {
+    min-height: auto;
+    padding: 10px;
+  }
+
+  .team-toolbar {
+    flex-wrap: wrap;
+  }
+
+  .team-toolbar :deep(.el-input) {
+    width: calc(100% - 92px);
+  }
+
+  .team-toolbar__scope {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .team-layout.has-detail {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .team-layout.has-detail :deep(.team-task-list) {
+    display: none;
   }
 }
 </style>
