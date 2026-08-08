@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed, nextTick, reactive, ref, watch } from 'vue';
-import { onBeforeRouteUpdate } from 'vue-router';
+import { computed, nextTick, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { onBeforeRouteLeave, onBeforeRouteUpdate } from 'vue-router';
 import { Check, Delete, Plus, Refresh, RefreshLeft, Select } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { tasksApi } from '@/api/tasks.api';
+import { tasksApi, type TaskActionResult } from '@/api/tasks.api';
 import { uploadApi } from '@/api/upload.api';
 import FileUpload from '@/components/common/FileUpload.vue';
 import GradeTag from '@/components/common/GradeTag.vue';
@@ -336,17 +336,17 @@ function normalizedExtraScores(indicator: EditableIndicator): ExtraScoreItem[] {
 function buildDraftIndicators(): SaveManagerEvaluationDraftBody['indicators'] {
   return draftIndicators.map((indicator) => ({
     id: indicator.id,
-    managerScore: indicator.managerScoreInput ?? undefined,
-    managerComment: indicator.managerCommentInput.trim() || undefined,
+    managerScore: indicator.managerScoreInput,
+    managerComment: indicator.managerCommentInput.trim(),
     extraScores: normalizedExtraScores(indicator),
   }));
 }
 
 function buildSummary(): Omit<ManagerEvalSummary, 'id' | 'taskId' | 'submittedAt'> {
   return {
-    strengths: summaryForm.strengths.trim() || undefined,
-    improvements: summaryForm.improvements.trim() || undefined,
-    developmentPlan: summaryForm.developmentPlan.trim() || undefined,
+    strengths: summaryForm.strengths.trim(),
+    improvements: summaryForm.improvements.trim(),
+    developmentPlan: summaryForm.developmentPlan.trim(),
     attachments: summaryForm.attachments.map((attachment) => ({ ...attachment })),
   };
 }
@@ -382,6 +382,24 @@ function acknowledgeLatestTask(nextTask: TaskDetail, context: OperationContext):
   return 'version-only';
 }
 
+function acknowledgeMutationResult(
+  result: TaskActionResult,
+  context: OperationContext,
+): 'replaced' | 'version-only' | 'ignored' {
+  if (!isCurrentOperation(context) || result.id !== context.taskId || !task.value) return 'ignored';
+  task.value = {
+    ...task.value,
+    status: result.status,
+    updatedAt: result.updatedAt ?? task.value.updatedAt,
+  };
+  emit('taskUpdated', task.value);
+  if (context.draftRevision === draftRevision.value) {
+    dirty.value = false;
+    return 'replaced';
+  }
+  return 'version-only';
+}
+
 async function handleSave() {
   const currentTask = task.value;
   if (!currentTask?.updatedAt || !canEdit.value || operation.value) return;
@@ -390,20 +408,30 @@ async function handleSave() {
   operation.value = 'save';
   setFeedback('info', '正在保存草稿');
   try {
-    await tasksApi.saveManagerEvaluationDraft(currentTask.id, {
+    const result = await tasksApi.saveManagerEvaluationDraft(currentTask.id, {
       expectedUpdatedAt: currentTask.updatedAt,
       indicators: buildDraftIndicators(),
       evalSummary: buildSummary(),
     });
     if (!isCurrentOperation(context)) return;
-    const latestTask = await tasksApi.findOne(currentTask.id);
-    const acknowledgement = acknowledgeLatestTask(latestTask, context);
-    if (acknowledgement === 'replaced') {
-      setFeedback('success', '草稿已保存');
-      ElMessage.success('草稿已保存');
-    } else if (acknowledgement === 'version-only') {
-      setFeedback('warning', '先前草稿已保存，当前修改尚未保存');
-      ElMessage.warning('先前草稿已保存，当前修改尚未保存');
+    try {
+      const latestTask = await tasksApi.findOne(currentTask.id);
+      const acknowledgement = acknowledgeLatestTask(latestTask, context);
+      if (acknowledgement === 'replaced') {
+        setFeedback('success', '草稿已保存');
+        ElMessage.success('草稿已保存');
+      } else if (acknowledgement === 'version-only') {
+        setFeedback('warning', '先前草稿已保存，当前修改尚未保存');
+        ElMessage.warning('先前草稿已保存，当前修改尚未保存');
+      }
+    } catch (refreshError) {
+      const acknowledgement = acknowledgeMutationResult(result, context);
+      if (acknowledgement === 'ignored') return;
+      const message = acknowledgement === 'replaced'
+        ? `草稿已保存，但最新详情加载失败：${httpErrorMessage(refreshError, '请重新加载')}`
+        : `先前草稿已保存，当前修改尚未保存；最新详情加载失败：${httpErrorMessage(refreshError, '请重新加载')}`;
+      setFeedback('warning', message);
+      ElMessage.warning(message);
     }
   } catch (error) {
     if (!isCurrentOperation(context)) return;
@@ -486,14 +514,21 @@ async function handleWithdraw() {
   operation.value = 'withdraw';
   setFeedback('info', '正在撤回评估');
   try {
-    await tasksApi.withdrawManagerScore(currentTask.id, {
+    const result = await tasksApi.withdrawManagerScore(currentTask.id, {
       expectedUpdatedAt: currentTask.updatedAt,
     });
     if (!isCurrentOperation(context)) return;
-    const latestTask = await tasksApi.findOne(currentTask.id);
-    if (acknowledgeLatestTask(latestTask, context) === 'ignored') return;
-    setFeedback('success', '评估已撤回，可继续编辑草稿');
-    ElMessage.success('评估已撤回');
+    try {
+      const latestTask = await tasksApi.findOne(currentTask.id);
+      if (acknowledgeLatestTask(latestTask, context) === 'ignored') return;
+      setFeedback('success', '评估已撤回，可继续编辑草稿');
+      ElMessage.success('评估已撤回');
+    } catch (refreshError) {
+      if (acknowledgeMutationResult(result, context) === 'ignored') return;
+      const message = `评估已撤回，但最新详情加载失败：${httpErrorMessage(refreshError, '请重新加载')}`;
+      setFeedback('warning', message);
+      ElMessage.warning(message);
+    }
   } catch (error) {
     if (!isCurrentOperation(context)) return;
     const message = httpErrorMessage(error, '主管评估撤回失败');
@@ -503,7 +538,7 @@ async function handleWithdraw() {
   }
 }
 
-onBeforeRouteUpdate(async () => {
+async function confirmDiscardChanges(): Promise<boolean> {
   if (!dirty.value) return true;
   try {
     await ElMessageBox.confirm('存在未保存的主管评价，确定放弃修改并离开当前员工？', '放弃未保存修改？', {
@@ -517,7 +552,19 @@ onBeforeRouteUpdate(async () => {
     if (error === 'cancel' || error === 'close') return false;
     throw error;
   }
-});
+}
+
+function handleBeforeUnload(event: BeforeUnloadEvent) {
+  if (!dirty.value) return;
+  event.preventDefault();
+  event.returnValue = '';
+}
+
+onBeforeRouteUpdate(confirmDiscardChanges);
+onBeforeRouteLeave(confirmDiscardChanges);
+
+onMounted(() => window.addEventListener('beforeunload', handleBeforeUnload));
+onUnmounted(() => window.removeEventListener('beforeunload', handleBeforeUnload));
 
 watch(
   () => props.taskId,

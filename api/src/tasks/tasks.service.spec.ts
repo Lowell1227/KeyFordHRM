@@ -236,6 +236,27 @@ describe('TasksService', () => {
       await expect(validate(dto)).resolves.toEqual([]);
       expect(dto.indicators[0].extraScores?.[0].label).toBe('Stretch');
     });
+
+    it('accepts an explicit null draft score and empty clearable text', async () => {
+      const dto = plainToInstance(SaveManagerEvaluationDraftDto, {
+        expectedUpdatedAt: '2026-08-08T08:00:00.000Z',
+        indicators: [
+          {
+            id: '11111111-1111-4111-8111-111111111111',
+            managerScore: null,
+            managerComment: '',
+          },
+        ],
+        evalSummary: {
+          strengths: '',
+          improvements: '',
+          developmentPlan: '',
+        },
+      });
+
+      await expect(validate(dto)).resolves.toEqual([]);
+      expect(dto.indicators[0].managerScore).toBeNull();
+    });
   });
 
   function buildFullTask(status: TaskStatus, publishVisibleFields: Prisma.JsonValue = null) {
@@ -588,7 +609,11 @@ describe('TasksService', () => {
         makeViewer({ id: 'mgr-1', sysRole: SysRole.manager }),
       );
 
-      expect(result).toEqual({ id: 'task-1', status: 'manager_scoring' });
+      expect(result).toEqual(expect.objectContaining({
+        id: 'task-1',
+        status: 'manager_scoring',
+        updatedAt: expect.any(String),
+      }));
       expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
         where: { id: 'task-1', updatedAt },
         data: { updatedAt: expect.any(Date) },
@@ -623,6 +648,48 @@ describe('TasksService', () => {
       expect(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
         transactionClient.indicatorInstance.update.mock.invocationCallOrder[0],
       );
+    });
+
+    it('persists explicit clears and returns the claimed task version', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...makeTask('manager_scoring'),
+        updatedAt,
+      });
+
+      const result = await service.saveManagerEvaluationDraft(
+        'task-1',
+        {
+          expectedUpdatedAt: updatedAt.toISOString(),
+          indicators: [
+            { id: 'ind-1', managerScore: null, managerComment: '' },
+          ],
+          evalSummary: {
+            strengths: '',
+            improvements: '',
+            developmentPlan: '',
+          },
+        },
+        makeViewer({ id: 'mgr-1', sysRole: SysRole.manager }),
+      );
+
+      const claimedUpdatedAt = transactionClient.assessmentTask.updateMany.mock.calls[0][0].data.updatedAt as Date;
+      expect(result).toEqual({
+        id: 'task-1',
+        status: 'manager_scoring',
+        updatedAt: claimedUpdatedAt.toISOString(),
+      });
+      expect(scoringService.validateScore).not.toHaveBeenCalled();
+      expect(transactionClient.indicatorInstance.update).toHaveBeenCalledWith({
+        where: { id: 'ind-1', taskId: 'task-1' },
+        data: { managerScore: null, managerComment: '' },
+      });
+      expect(transactionClient.managerEvalSummary.upsert).toHaveBeenCalledWith(expect.objectContaining({
+        update: expect.objectContaining({
+          strengths: null,
+          improvements: null,
+          developmentPlan: null,
+        }),
+      }));
     });
 
     it('rejects a draft from anyone other than the assigned manager', async () => {
@@ -913,7 +980,11 @@ describe('TasksService', () => {
           manager(),
         );
 
-        expect(result).toEqual({ id: 'task-1', status: 'manager_scoring' });
+        expect(result).toEqual(expect.objectContaining({
+          id: 'task-1',
+          status: 'manager_scoring',
+          updatedAt: expect.any(String),
+        }));
         expect(transactionClient.flowRecord.findFirst).toHaveBeenCalledWith({
           where: {
             taskId: 'task-1',
@@ -1093,7 +1164,11 @@ describe('TasksService', () => {
           { expectedUpdatedAt: updatedAt.toISOString() },
           manager(),
         ),
-      ).resolves.toEqual({ id: 'task-1', status: 'manager_scoring' });
+      ).resolves.toEqual(expect.objectContaining({
+        id: 'task-1',
+        status: 'manager_scoring',
+        updatedAt: expect.any(String),
+      }));
 
       expect(transactionClient.gradeResult.upsert).not.toHaveBeenCalled();
     });

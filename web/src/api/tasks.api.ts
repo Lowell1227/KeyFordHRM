@@ -39,7 +39,7 @@ export interface TasksApiClient {
   delete(url: string): Promise<unknown>;
 }
 
-export type TaskActionResult = { id: string; status: TaskStatus };
+export type TaskActionResult = { id: string; status: TaskStatus; updatedAt?: string };
 
 export function createTasksApi(client: TasksApiClient) {
   const apiGet = <T>(

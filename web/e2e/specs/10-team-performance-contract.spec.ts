@@ -326,6 +326,8 @@ interface ManagerEvaluationMockOptions {
   draftGate?: Promise<void>;
   submitGate?: Promise<void>;
   withdrawError?: string;
+  draftRefreshError?: string;
+  withdrawRefreshError?: string;
 }
 
 async function mockManagerEvaluationWorkspace(
@@ -338,6 +340,9 @@ async function mockManagerEvaluationWorkspace(
   const draftBodies: unknown[] = [];
   const submitBodies: unknown[] = [];
   const withdrawBodies: unknown[] = [];
+  const pendingDetailErrors = new Map<string, string>();
+  let draftRefreshError = options.draftRefreshError;
+  let withdrawRefreshError = options.withdrawRefreshError;
   let version = 1;
 
   const advanceVersion = (detail: TaskDetail) => {
@@ -355,7 +360,7 @@ async function mockManagerEvaluationWorkspace(
   });
   await page.route('**/api/v1/tasks/*/manager-evaluation-draft', async (route) => {
     const body = route.request().postDataJSON() as {
-      indicators: Array<{ id: string; managerScore?: number; managerComment?: string; extraScores?: Array<{ label: string; value: number }> }>;
+      indicators: Array<{ id: string; managerScore?: number | null; managerComment?: string | null; extraScores?: Array<{ label: string; value: number }> }>;
       evalSummary: TaskDetail['managerEvalSummary'];
     };
     draftBodies.push(body);
@@ -364,15 +369,23 @@ async function mockManagerEvaluationWorkspace(
     const detail = details.get(taskId)!;
     for (const item of body.indicators) {
       const indicator = detail.indicatorInstances.find((candidate) => candidate.id === item.id)!;
-      indicator.managerScore = item.managerScore;
-      indicator.managerComment = item.managerComment;
+      indicator.managerScore = item.managerScore ?? undefined;
+      indicator.managerComment = item.managerComment ?? undefined;
       indicator.extraScores = item.extraScores ?? [];
     }
     detail.managerEvalSummary = { taskId, ...body.evalSummary };
     advanceVersion(detail);
+    if (draftRefreshError) {
+      pendingDetailErrors.set(taskId, draftRefreshError);
+      draftRefreshError = undefined;
+    }
     return route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ id: taskId, status: 'manager_scoring' })),
+      body: JSON.stringify(apiResponse({
+        id: taskId,
+        status: 'manager_scoring',
+        updatedAt: detail.updatedAt,
+      })),
     });
   });
   await page.route('**/api/v1/tasks/*/manager-score/withdraw', async (route) => {
@@ -391,9 +404,17 @@ async function mockManagerEvaluationWorkspace(
     detail.managerScoredAt = undefined;
     if (detail.managerEvalSummary) detail.managerEvalSummary.submittedAt = undefined;
     advanceVersion(detail);
+    if (withdrawRefreshError) {
+      pendingDetailErrors.set(taskId, withdrawRefreshError);
+      withdrawRefreshError = undefined;
+    }
     return route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ id: taskId, status: 'manager_scoring' })),
+      body: JSON.stringify(apiResponse({
+        id: taskId,
+        status: 'manager_scoring',
+        updatedAt: detail.updatedAt,
+      })),
     });
   });
   await page.route('**/api/v1/tasks/*/manager-score', async (route) => {
@@ -429,13 +450,22 @@ async function mockManagerEvaluationWorkspace(
     advanceVersion(detail);
     return route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ id: taskId, status: 'dept_review' })),
+      body: JSON.stringify(apiResponse({ id: taskId, status: 'dept_review', updatedAt: detail.updatedAt })),
     });
   });
   await page.route('**/api/v1/tasks/*', (route) => {
     if (route.request().method() !== 'GET') return route.fallback();
     const taskId = taskIdFromUrl(route.request().url());
     if (taskId === 'team') return route.fallback();
+    const detailError = pendingDetailErrors.get(taskId);
+    if (detailError) {
+      pendingDetailErrors.delete(taskId);
+      return route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 'DETAIL_REFRESH_FAILED', message: detailError, data: null }),
+      });
+    }
     const detail = details.get(taskId);
     if (!detail) return route.fulfill({ status: 404, body: JSON.stringify({ message: 'Task not found' }) });
     return route.fulfill({
@@ -1674,6 +1704,44 @@ test.describe('manager evaluation workspace', () => {
     expect(mocked.details.get('task-2')?.status).toBe('manager_scoring');
   });
 
+  test('manager evaluation draft explicitly clears existing scores, comments, and summary text', async ({ page }) => {
+    const detail = managerEvaluationDetail();
+    detail.indicatorInstances[0].managerScore = 88;
+    detail.indicatorInstances[0].managerComment = 'Existing manager comment';
+    detail.managerEvalSummary = {
+      taskId: detail.id,
+      strengths: 'Existing strengths',
+      improvements: 'Existing improvements',
+      developmentPlan: 'Existing development plan',
+      attachments: [],
+    };
+    const mocked = await mockManagerEvaluationWorkspace(page, { details: [detail] });
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    await page.getByTestId('manager-score-ind-1').fill('');
+    await page.getByTestId('manager-comment-ind-1').fill('');
+    await page.getByTestId('manager-strengths').fill('');
+    await page.getByTestId('manager-improvements').fill('');
+    await page.getByTestId('manager-development-plan').fill('');
+    await page.getByTestId('manager-evaluation-save').click();
+
+    await expect(page.getByTestId('manager-evaluation-feedback')).toContainText('草稿已保存');
+    const body = mocked.draftBodies[0] as {
+      indicators: Array<{ id: string; managerScore?: number | null; managerComment?: string }>;
+      evalSummary: { strengths?: string; improvements?: string; developmentPlan?: string };
+    };
+    expect(body.indicators.find((indicator) => indicator.id === 'ind-1')).toEqual(expect.objectContaining({
+      managerScore: null,
+      managerComment: '',
+    }));
+    expect(body.evalSummary).toEqual(expect.objectContaining({
+      strengths: '',
+      improvements: '',
+      developmentPlan: '',
+    }));
+  });
+
   test('manager evaluation focuses the first empty extra-score reason before saving', async ({ page }) => {
     const mocked = await mockManagerEvaluationWorkspace(page);
     await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
@@ -1720,6 +1788,24 @@ test.describe('manager evaluation workspace', () => {
     await expect.poll(() => mocked.draftBodies.length).toBe(2);
     const secondBody = mocked.draftBodies[1] as { expectedUpdatedAt: string };
     expect(secondBody.expectedUpdatedAt).toBe('2026-08-09T01:00:02.000Z');
+  });
+
+  test('manager evaluation keeps a successful draft acknowledgement when detail refresh fails', async ({ page }) => {
+    const mocked = await mockManagerEvaluationWorkspace(page, {
+      draftRefreshError: '详情服务暂时不可用',
+    });
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    await page.getByTestId('manager-score-ind-1').fill('88');
+    await page.getByTestId('manager-evaluation-save').click();
+
+    await expect(page.getByTestId('manager-evaluation-feedback'))
+      .toContainText('草稿已保存，但最新详情加载失败');
+    await page.getByTestId('manager-comment-ind-1').fill('继续编辑');
+    await page.getByTestId('manager-evaluation-save').click();
+    await expect.poll(() => mocked.draftBodies.length).toBe(2);
+    expect((mocked.draftBodies[1] as { expectedUpdatedAt: string }).expectedUpdatedAt)
+      .toBe('2026-08-09T01:00:02.000Z');
   });
 
   test('manager evaluation final submit reloads the task as read-only with total and grade', async ({ page }) => {
@@ -1784,6 +1870,29 @@ test.describe('manager evaluation workspace', () => {
     expect(mocked.withdrawBodies).toEqual([{ expectedUpdatedAt: '2026-08-09T01:00:00.000Z' }]);
   });
 
+  test('manager evaluation keeps a successful withdrawal acknowledgement when detail refresh fails', async ({ page }) => {
+    const detail = managerEvaluationDetail('hr_calibration', {
+      managerScoredAt: '2026-08-09T01:10:00.000Z',
+    });
+    const mocked = await mockManagerEvaluationWorkspace(page, {
+      details: [detail],
+      withdrawRefreshError: '详情服务暂时不可用',
+    });
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.getByTestId('manager-evaluation-withdraw').click();
+    await page.getByRole('button', { name: '确认撤回', exact: true }).click();
+
+    await expect(page.getByTestId('manager-evaluation-feedback'))
+      .toContainText('评估已撤回，但最新详情加载失败');
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    await expect(page.getByTestId('manager-score-ind-1')).toBeEnabled();
+    await page.getByTestId('manager-comment-ind-1').fill('撤回后继续编辑');
+    await page.getByTestId('manager-evaluation-save').click();
+    await expect.poll(() => mocked.draftBodies.length).toBe(1);
+    expect((mocked.draftBodies[0] as { expectedUpdatedAt: string }).expectedUpdatedAt)
+      .toBe('2026-08-09T01:00:02.000Z');
+  });
+
   test('manager evaluation shows the server reason when withdrawal is blocked', async ({ page }) => {
     const detail = managerEvaluationDetail('dept_review', {
       managerScoredAt: '2026-08-09T01:10:00.000Z',
@@ -1831,6 +1940,42 @@ test.describe('manager evaluation workspace', () => {
     await page.getByRole('button', { name: '放弃修改', exact: true }).click();
     await expect(page).toHaveURL(/taskId=task-1/);
     await expect(page.getByTestId('team-member-rail')).toContainText('Ada Chen');
+  });
+
+  test('manager evaluation guards leaving tasks and continues the confirmed navigation once', async ({ page }) => {
+    await mockManagerEvaluationWorkspace(page);
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    await page.getByTestId('manager-score-ind-1').fill('88');
+
+    await page.getByRole('link', { name: '目标地图', exact: true }).click();
+    await expect(page.getByRole('dialog')).toContainText('存在未保存的主管评价');
+    await page.getByRole('button', { name: '继续编辑', exact: true }).click();
+    await expect(page).toHaveURL(/\/tasks\?/);
+
+    await page.getByRole('link', { name: '目标地图', exact: true }).click();
+    await page.getByRole('button', { name: '放弃修改', exact: true }).click();
+    await expect(page).toHaveURL(/\/objectives(?:\?|$)/);
+    await expect(page.getByRole('dialog')).toHaveCount(0);
+  });
+
+  test('manager evaluation registers beforeunload protection only while the draft is dirty', async ({ page }) => {
+    await mockManagerEvaluationWorkspace(page);
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    const dispatchBeforeUnload = () => page.evaluate(() => {
+      const event = new Event('beforeunload', { cancelable: true });
+      window.dispatchEvent(event);
+      return event.defaultPrevented;
+    });
+
+    await expect.poll(dispatchBeforeUnload).toBe(false);
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    await page.getByTestId('manager-score-ind-1').fill('88');
+    await expect.poll(dispatchBeforeUnload).toBe(true);
+
+    await page.getByTestId('manager-evaluation-save').click();
+    await expect(page.getByTestId('manager-evaluation-feedback')).toContainText('草稿已保存');
+    await expect.poll(dispatchBeforeUnload).toBe(false);
   });
 
   for (const viewport of [

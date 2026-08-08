@@ -66,3 +66,10 @@ All captures use deterministic mocked manager data and were inspected at origina
 - Confirmed blocked withdrawal keeps the current read-only detail and exposes the backend reason once globally and inline.
 - Confirmed the redirect preserves `cycleId`, `taskId`, and other query keys, and source code no longer imports or links to the obsolete view.
 - Confirmed no front-end total or grade recalculation was introduced; displayed results remain backend-owned.
+
+## Fix Round 1
+
+- Added a shared dirty-draft guard for same-route task changes and route exits, plus a `beforeunload` handler that only prevents refresh or close while unsaved changes exist.
+- Draft requests now preserve explicit clear operations: `managerScore: null` clears a score, while empty comments and summary text clear their persisted values. Final submission validation is unchanged.
+- Draft save and withdrawal now return the transaction-claimed `updatedAt`. If the follow-up detail refresh fails after a successful mutation, the workspace retains the acknowledged version and status, reports a warning, and allows the next write without a stale-version conflict.
+- Verification: API focused tests `60/60`; web contracts `61/61`; API build, web type-check, web production build, and `git diff --check` passed.

@@ -750,7 +750,7 @@ export class TasksService {
     id: string,
     dto: SaveManagerEvaluationDraftDto,
     viewer: AuthUser,
-  ): Promise<{ id: string; status: TaskStatus }> {
+  ): Promise<{ id: string; status: TaskStatus; updatedAt: string }> {
     const task = await this.getTaskOrThrow(id, { snapshot: { select: { snapshotData: true } } });
     this.assertManager(task, viewer);
     this.assertManagerScoring(task);
@@ -759,12 +759,12 @@ export class TasksService {
     const snapshotData = (task.snapshot?.snapshotData ?? {}) as { maxScore?: number };
     const maxScore = typeof snapshotData.maxScore === 'number' ? snapshotData.maxScore : 100;
     for (const item of dto.indicators ?? []) {
-      if (item.managerScore !== undefined) {
+      if (item.managerScore != null) {
         this.scoringService.validateScore(item.managerScore, maxScore);
       }
     }
 
-    await this.prisma.$transaction(async (tx) => {
+    const claimedUpdatedAt = await this.prisma.$transaction(async (tx) => {
       const claimedUpdatedAt = await claimTaskVersion(tx, task.id, dto.expectedUpdatedAt);
 
       for (const item of dto.indicators ?? []) {
@@ -823,9 +823,10 @@ export class TasksService {
           extraData: { type: 'manager_evaluation_draft_saved' },
         },
       });
+      return claimedUpdatedAt;
     });
 
-    return { id: task.id, status: 'manager_scoring' };
+    return { id: task.id, status: 'manager_scoring', updatedAt: claimedUpdatedAt.toISOString() };
   }
 
   /** POST /tasks/:id/manager-score */
@@ -983,7 +984,7 @@ export class TasksService {
     id: string,
     dto: WithdrawManagerScoreDto,
     viewer: AuthUser,
-  ): Promise<{ id: string; status: TaskStatus }> {
+  ): Promise<{ id: string; status: TaskStatus; updatedAt: string }> {
     const task = await this.getTaskOrThrow(id);
     this.assertManager(task, viewer);
 
@@ -1002,7 +1003,7 @@ export class TasksService {
     }
     assertTaskVersion(task.updatedAt, dto.expectedUpdatedAt);
 
-    await this.prisma.$transaction(async (tx) => {
+    const claimedUpdatedAt = await this.prisma.$transaction(async (tx) => {
       const claimedUpdatedAt = await claimTaskVersion(tx, task.id, dto.expectedUpdatedAt, directNextStatus);
       const downstreamRecord = await tx.flowRecord.findFirst({
         where: {
@@ -1075,9 +1076,10 @@ export class TasksService {
           extraData: { type: 'manager_score_withdrawn' },
         },
       });
+      return claimedUpdatedAt;
     });
 
-    return { id: task.id, status: 'manager_scoring' };
+    return { id: task.id, status: 'manager_scoring', updatedAt: claimedUpdatedAt.toISOString() };
   }
 
   /** POST /tasks/:id/dept-review */
@@ -1108,7 +1110,7 @@ export class TasksService {
     }
 
     // reject
-    await this.prisma.$transaction(async (tx) => {
+    const claimedUpdatedAt = await this.prisma.$transaction(async (tx) => {
       const claimedUpdatedAt = await claimTaskVersion(
         tx,
         task.id,

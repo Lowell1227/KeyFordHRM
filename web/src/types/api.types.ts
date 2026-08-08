@@ -771,7 +771,7 @@ export interface SaveManagerEvaluationDraftBody {
   expectedUpdatedAt: string;
   indicators: Array<{
     id: string;
-    managerScore?: number;
+    managerScore?: number | null;
     managerComment?: string;
     extraScores?: ExtraScoreItem[];
   }>;

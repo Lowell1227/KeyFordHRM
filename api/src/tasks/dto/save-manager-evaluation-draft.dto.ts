@@ -61,7 +61,7 @@ export class ManagerEvaluationDraftIndicatorDto extends ManagerEvaluationIndicat
   @IsNumber()
   @Min(0)
   @Max(100)
-  managerScore?: number;
+  managerScore?: number | null;
 }
 
 export class SaveManagerEvaluationDraftDto {
