@@ -61,9 +61,13 @@ const goalReviewRef = ref<GoalReviewWorkspaceHandle>();
 const hydratedTeamTask = ref<TeamTaskListItem>();
 const teamDetailLoading = ref(false);
 const teamDetailError = ref('');
-const teamBatchBusy = ref(false);
+const teamBatchRequestBusy = ref(false);
+const teamSingleRequestBusy = ref(false);
+const teamBatchBusy = computed(() => teamBatchRequestBusy.value || teamSingleRequestBusy.value);
 let teamRequestSerial = 0;
 let teamDetailRequestSerial = 0;
+let singleOperationSerial = 0;
+let latestSaveOperationToken = '';
 
 interface TeamBatchDisplayItem {
   taskId: string;
@@ -629,7 +633,7 @@ async function handleBatchRequestError(
 async function executeTeamApproval(tasks: TeamTaskVersion[], actionLabel: string) {
   const labels = batchItemLabels(tasks);
   const contextKey = teamContextKey();
-  teamBatchBusy.value = true;
+  teamBatchRequestBusy.value = true;
   try {
     const result = await tasksApi.batchApproveIndicators({ tasks });
     await applyBatchResult(actionLabel, result, labels, contextKey);
@@ -639,7 +643,7 @@ async function executeTeamApproval(tasks: TeamTaskVersion[], actionLabel: string
   } catch (error) {
     await handleBatchRequestError(actionLabel, tasks, labels, contextKey, error);
   } finally {
-    teamBatchBusy.value = false;
+    teamBatchRequestBusy.value = false;
   }
 }
 
@@ -650,7 +654,7 @@ async function executeTeamRejection(
 ) {
   const labels = batchItemLabels(tasks);
   const contextKey = teamContextKey();
-  teamBatchBusy.value = true;
+  teamBatchRequestBusy.value = true;
   try {
     const result = await tasksApi.batchRejectIndicators({ tasks, reason });
     await applyBatchResult(actionLabel, result, labels, contextKey);
@@ -660,7 +664,7 @@ async function executeTeamRejection(
   } catch (error) {
     await handleBatchRequestError(actionLabel, tasks, labels, contextKey, error);
   } finally {
-    teamBatchBusy.value = false;
+    teamBatchRequestBusy.value = false;
   }
 }
 
@@ -696,39 +700,82 @@ async function rejectTeamTasks(tasks: TeamTaskVersion[]) {
 
 async function saveSingleGoalReview(payload: GoalReviewSavePayload) {
   const contextKey = teamContextKey();
-  teamBatchBusy.value = true;
+  const requestId = ++singleOperationSerial;
+  latestSaveOperationToken = payload.operationToken;
+  teamSingleRequestBusy.value = true;
   try {
     const updatedTask = await tasksApi.setIndicators(payload.taskId, {
       ...payload.body,
       expectedUpdatedAt: payload.expectedUpdatedAt,
     });
     if (
-      contextKey !== teamContextKey()
+      requestId !== singleOperationSerial
+      || latestSaveOperationToken !== payload.operationToken
+      || contextKey !== teamContextKey()
       || workspaceQuery.state.value.taskId !== payload.taskId
     ) return;
-    goalReviewRef.value?.acceptTask(updatedTask);
+    const accepted = goalReviewRef.value?.acceptSavedTask(updatedTask, {
+      operationToken: payload.operationToken,
+      draftRevision: payload.draftRevision,
+    });
+    if (!accepted) return;
     const listItem = teamPage.value.items.find((item) => item.id === payload.taskId);
     if (listItem && updatedTask.updatedAt) listItem.updatedAt = updatedTask.updatedAt;
     ElMessage.success('指标修改已保存');
   } catch (error) {
-    ElMessage.error(httpErrorMessage(error, '指标修改保存失败'));
+    if (
+      requestId === singleOperationSerial
+      && latestSaveOperationToken === payload.operationToken
+      && contextKey === teamContextKey()
+      && workspaceQuery.state.value.taskId === payload.taskId
+    ) ElMessage.error(httpErrorMessage(error, '指标修改保存失败'));
   } finally {
-    teamBatchBusy.value = false;
+    if (requestId === singleOperationSerial) teamSingleRequestBusy.value = false;
+  }
+}
+
+async function executeSingleGoalReview(
+  task: TeamTaskVersion,
+  actionLabel: string,
+  submit: () => Promise<BatchReviewResult>,
+) {
+  const requestId = ++singleOperationSerial;
+  const contextKey = teamContextKey();
+  const labels = batchItemLabels([task]);
+  teamSingleRequestBusy.value = true;
+  const isCurrentRequest = () => (
+    requestId === singleOperationSerial
+    && contextKey === teamContextKey()
+    && workspaceQuery.state.value.taskId === task.taskId
+  );
+  try {
+    const result = await submit();
+    if (!isCurrentRequest()) return;
+    await applyBatchResult(actionLabel, result, labels, contextKey);
+    if (isCurrentRequest()) await goalReviewRef.value?.reload();
+  } catch (error) {
+    if (!isCurrentRequest()) return;
+    await handleBatchRequestError(actionLabel, [task], labels, contextKey, error);
+  } finally {
+    if (requestId === singleOperationSerial) teamSingleRequestBusy.value = false;
   }
 }
 
 async function approveSingleGoalReview(payload: GoalReviewActionPayload) {
-  await executeTeamApproval(
-    [{ taskId: payload.taskId, updatedAt: payload.expectedUpdatedAt }],
+  const task = { taskId: payload.taskId, updatedAt: payload.expectedUpdatedAt };
+  await executeSingleGoalReview(
+    task,
     '单项通过',
+    () => tasksApi.batchApproveIndicators({ tasks: [task] }),
   );
 }
 
 async function rejectSingleGoalReview(payload: GoalReviewRejectPayload) {
-  await executeTeamRejection(
-    [{ taskId: payload.taskId, updatedAt: payload.expectedUpdatedAt }],
-    payload.reason,
+  const task = { taskId: payload.taskId, updatedAt: payload.expectedUpdatedAt };
+  await executeSingleGoalReview(
+    task,
     '单项驳回',
+    () => tasksApi.batchRejectIndicators({ tasks: [task], reason: payload.reason }),
   );
 }
 
@@ -778,6 +825,9 @@ watch(
 watch(
   () => workspaceQuery.state.value.taskId,
   (taskId) => {
+    singleOperationSerial += 1;
+    latestSaveOperationToken = '';
+    teamSingleRequestBusy.value = false;
     if (!taskId) {
       teamDetailRequestSerial += 1;
       hydratedTeamTask.value = undefined;

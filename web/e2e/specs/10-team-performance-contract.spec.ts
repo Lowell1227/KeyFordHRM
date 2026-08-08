@@ -213,6 +213,21 @@ const referenceIndicatorFixture: Paginated<IndicatorReferenceItem> = {
   ],
 };
 
+function graceGoalReviewDetail(): TaskDetail {
+  const detail = structuredClone(goalReviewDetailFixture);
+  detail.id = 'task-2';
+  detail.employeeId = 'employee-2';
+  detail.employeeName = 'Grace Lin';
+  detail.employeeNo = 'E002';
+  detail.indicatorInstances = detail.indicatorInstances.map((indicator, index) => ({
+    ...indicator,
+    id: `task-2-ind-${index + 1}`,
+    taskId: 'task-2',
+    name: index === 0 ? 'Grace delivery target' : indicator.name,
+  }));
+  return detail;
+}
+
 function teamPageWith(
   items: TeamTaskPage['items'],
   options: { page?: number; total?: number } = {},
@@ -720,7 +735,22 @@ test.describe('team list manager workspace', () => {
 
     await expect(page.getByTestId('goal-review-workspace')).toBeVisible();
     await expect(page.getByTestId('indicator-details-ind-1')).toBeHidden();
+    const disclosure = page.getByTestId('indicator-toggle-ind-1');
+    const disclosureName = page.getByTestId('indicator-name-ind-1');
+    const disclosureRegion = page.getByTestId('indicator-details-ind-1');
+    await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
+    await expect(disclosureName).toHaveAttribute('aria-expanded', 'false');
+    const disclosureRegionId = await disclosureRegion.getAttribute('id');
+    const disclosureNameId = await disclosureName.getAttribute('id');
+    expect(disclosureRegionId).toBeTruthy();
+    expect(disclosureNameId).toBeTruthy();
+    await expect(disclosure).toHaveAttribute('aria-controls', disclosureRegionId!);
+    await expect(disclosureName).toHaveAttribute('aria-controls', disclosureRegionId!);
+    await expect(disclosureRegion).toHaveAttribute('role', 'region');
+    await expect(disclosureRegion).toHaveAttribute('aria-labelledby', disclosureNameId!);
     await page.getByTestId('indicator-toggle-ind-1').click();
+    await expect(disclosure).toHaveAttribute('aria-expanded', 'true');
+    await expect(disclosureName).toHaveAttribute('aria-expanded', 'true');
     await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
     await page.getByTestId('indicator-expand-all').click();
     await expect(page.getByTestId('indicator-details-ind-2')).toBeVisible();
@@ -745,12 +775,35 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('visibility-department-count')).toContainText('1');
     await expect(page.getByTestId('visibility-user-count')).toContainText('1');
 
-    await expect(page.getByTestId('reference-aligned-objectives')).toContainText('Launch the customer portal');
+    const objectiveTab = page.getByRole('tab', { name: '对齐目标' });
+    const historyTab = page.getByRole('tab', { name: '流程历史' });
+    const objectivePanel = page.getByTestId('reference-aligned-objectives');
+    const historyPanel = page.getByTestId('reference-flow-history');
+    await expect(page.getByRole('tablist', { name: '参考信息' })).toBeVisible();
+    await expect(objectiveTab).toHaveAttribute('aria-selected', 'true');
+    await expect(objectiveTab).toHaveAttribute('tabindex', '0');
+    await expect(historyTab).toHaveAttribute('aria-selected', 'false');
+    await expect(historyTab).toHaveAttribute('tabindex', '-1');
+    await expect(objectivePanel).toHaveAttribute('role', 'tabpanel');
+    await expect(objectivePanel).toHaveAttribute('aria-labelledby', await objectiveTab.getAttribute('id') ?? '');
+    await expect(objectiveTab).toHaveAttribute('aria-controls', await objectivePanel.getAttribute('id') ?? '');
+    await expect(objectivePanel).toContainText('Launch the customer portal');
     await expect(page.getByTestId('reference-indicator-picker')).toContainText('Prior delivery target');
     await expect.poll(() => referenceRequests[referenceRequests.length - 1]?.searchParams.get('cycleId')).toBe('cycle-1');
     await expect.poll(() => referenceRequests[referenceRequests.length - 1]?.searchParams.get('ownerId')).toBe('employee-1');
-    await page.getByTestId('reference-flow-tab').click();
-    await expect(page.getByTestId('reference-flow-history')).toContainText('Ready for review');
+    await objectiveTab.press('ArrowRight');
+    await expect(historyTab).toBeFocused();
+    await expect(historyTab).toHaveAttribute('aria-selected', 'true');
+    await expect(historyPanel).toHaveAttribute('role', 'tabpanel');
+    await expect(historyPanel).toHaveAttribute('aria-labelledby', await historyTab.getAttribute('id') ?? '');
+    await expect(historyTab).toHaveAttribute('aria-controls', await historyPanel.getAttribute('id') ?? '');
+    await expect(historyPanel).toContainText('Ready for review');
+    await historyTab.press('ArrowLeft');
+    await expect(objectiveTab).toBeFocused();
+    await objectiveTab.press('End');
+    await expect(historyTab).toBeFocused();
+    await historyTab.press('Home');
+    await expect(objectiveTab).toBeFocused();
     expect(referenceRequests.every((url) => url.pathname.endsWith('/tasks/reference-indicators'))).toBe(true);
 
     await page.getByTestId('goal-review-save').click();
@@ -766,28 +819,31 @@ test.describe('team list manager workspace', () => {
     }));
   });
 
-  test('goal review blocks invalid weight approval and focuses the first invalid indicator', async ({ page }) => {
-    const invalidDetail = structuredClone(goalReviewDetailFixture);
-    invalidDetail.indicatorInstances[0].weight = 0.5;
-    let approvalCalls = 0;
-    await mockGoalReviewWorkspace(page, invalidDetail);
-    await page.route('**/api/v1/tasks/team/indicator-review/batch-approve', (route) => {
-      approvalCalls += 1;
-      return route.fulfill({
-        contentType: 'application/json',
-        body: JSON.stringify(apiResponse({ succeeded: [], failed: [] })),
+  for (const totalPercent of [90, 99.99, 100.01]) {
+    test(`goal review blocks ${totalPercent.toFixed(2)}% approval and focuses the first invalid indicator`, async ({ page }) => {
+      const invalidDetail = structuredClone(goalReviewDetailFixture);
+      invalidDetail.indicatorInstances[0].weight = (totalPercent - 40) / 100;
+      let approvalCalls = 0;
+      await mockGoalReviewWorkspace(page, invalidDetail);
+      await page.route('**/api/v1/tasks/team/indicator-review/batch-approve', (route) => {
+        approvalCalls += 1;
+        return route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify(apiResponse({ succeeded: [], failed: [] })),
+        });
       });
+
+      await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+      await expect(page.getByTestId('indicator-weight-total')).toContainText(`${totalPercent.toFixed(2)}%`);
+      await page.getByTestId('goal-review-approve').click();
+
+      expect(approvalCalls).toBe(0);
+      await expect(page.getByRole('dialog')).toHaveCount(0);
+      await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
+      await expect(page.getByTestId('indicator-row-ind-1')).toBeFocused();
+      await expect(page.locator('.el-message--error')).toContainText('100%');
     });
-
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
-    await expect(page.getByTestId('indicator-weight-total')).toContainText('90%');
-    await page.getByTestId('goal-review-approve').click();
-
-    expect(approvalCalls).toBe(0);
-    await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
-    await expect(page.getByTestId('indicator-row-ind-1')).toBeFocused();
-    await expect(page.locator('.el-message--error')).toContainText('100%');
-  });
+  }
 
   test('goal review reuses complete outcome handling for single approve and reject', async ({ page }) => {
     let approveAttempt = 0;
@@ -842,18 +898,61 @@ test.describe('team list manager workspace', () => {
     });
   });
 
+  for (const action of ['approve', 'reject'] as const) {
+    test(`delayed Ada single ${action} cannot affect Grace`, async ({ page }) => {
+      const graceDetail = graceGoalReviewDetail();
+      let releaseResponse!: () => void;
+      const responseGate = new Promise<void>((resolve) => {
+        releaseResponse = resolve;
+      });
+      await mockGoalReviewWorkspace(page);
+      await page.route('**/api/v1/tasks/task-2', (route) => route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(graceDetail)),
+      }));
+      await page.route('**/api/v1/tasks/team**', (route) => {
+        if (route.request().method() !== 'GET') return route.fallback();
+        return route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify(apiResponse(teamPageWith(teamPageFixture.items.slice(0, 2)))),
+        });
+      });
+      await page.route(`**/api/v1/tasks/team/indicator-review/batch-${action}`, async (route) => {
+        await responseGate;
+        return route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify(apiResponse({
+            succeeded: [{ taskId: 'task-1', status: action === 'approve' ? 'indicator_confirming' : 'indicator_drafting' }],
+            failed: [],
+          })),
+        });
+      });
+
+      await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+      if (action === 'approve') {
+        await page.getByTestId('goal-review-approve').click();
+        await page.getByRole('button', { name: '通过', exact: true }).click();
+      } else {
+        await page.getByTestId('goal-review-reject').click();
+        await page.getByRole('textbox', { name: '请输入驳回原因' }).fill('目标需要重写');
+        await page.getByRole('button', { name: '驳回', exact: true }).click();
+      }
+
+      await page.getByTestId('team-task-row-task-2').click();
+      await expect(page.getByTestId('team-member-rail')).toContainText('Grace Lin');
+      await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
+      releaseResponse();
+      await page.waitForTimeout(100);
+
+      await expect(page.getByTestId('team-member-rail')).toContainText('Grace Lin');
+      await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
+      await expect(page.getByTestId('team-batch-result')).toHaveCount(0);
+      await expect(page.locator('.el-message--success')).toHaveCount(0);
+    });
+  }
+
   test('goal review ignores a stale save response after selecting another member', async ({ page }) => {
-    const secondDetail = structuredClone(goalReviewDetailFixture);
-    secondDetail.id = 'task-2';
-    secondDetail.employeeId = 'employee-2';
-    secondDetail.employeeName = 'Grace Lin';
-    secondDetail.employeeNo = 'E002';
-    secondDetail.indicatorInstances = secondDetail.indicatorInstances.map((indicator, index) => ({
-      ...indicator,
-      id: `task-2-ind-${index + 1}`,
-      taskId: 'task-2',
-      name: index === 0 ? 'Grace delivery target' : indicator.name,
-    }));
+    const secondDetail = graceGoalReviewDetail();
     let releaseSave!: () => void;
     const saveGate = new Promise<void>((resolve) => {
       releaseSave = resolve;
@@ -894,6 +993,111 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('goal-review-workspace')).not.toContainText('Delivery quality');
   });
 
+  test('old A save cannot overwrite newer A draft after A to B to A', async ({ page }) => {
+    const graceDetail = graceGoalReviewDetail();
+    const saveBodies: Array<Record<string, unknown>> = [];
+    let releaseFirstSave!: () => void;
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    await mockGoalReviewWorkspace(page);
+    await page.route('**/api/v1/tasks/task-2', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(graceDetail)),
+    }));
+    await page.route('**/api/v1/tasks/team**', (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPageWith(teamPageFixture.items.slice(0, 2)))),
+      });
+    });
+    await page.route('**/api/v1/tasks/task-1/indicators', async (route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      saveBodies.push(body);
+      if (saveBodies.length === 1) {
+        await firstSaveGate;
+        const staleTask = structuredClone(goalReviewDetailFixture);
+        staleTask.updatedAt = '2026-08-09T00:00:01.000Z';
+        staleTask.indicatorInstances[0].name = 'Stale saved Ada target';
+        return route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify(apiResponse(staleTask)),
+        });
+      }
+      const currentTask = structuredClone(goalReviewDetailFixture);
+      currentTask.updatedAt = '2026-08-09T00:00:02.000Z';
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(currentTask)),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
+    await nameInput.fill('Ada first save');
+    await page.getByTestId('goal-review-save').click();
+
+    await page.getByTestId('team-task-row-task-2').click();
+    await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
+    await page.getByTestId('team-task-row-task-1').click();
+    await expect(page.getByTestId('goal-review-workspace')).toContainText('Delivery quality');
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    const newerNameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
+    await newerNameInput.fill('Ada newer unsaved draft');
+
+    releaseFirstSave();
+    await page.waitForTimeout(100);
+    await expect(newerNameInput).toHaveValue('Ada newer unsaved draft');
+    await expect(page.getByTestId('goal-review-workspace')).not.toContainText('Stale saved Ada target');
+
+    await page.getByTestId('goal-review-save').click();
+    await expect.poll(() => saveBodies.length).toBe(2);
+    expect(saveBodies[1]).toEqual(expect.objectContaining({
+      expectedUpdatedAt: '2026-08-09T00:00:00.000Z',
+    }));
+    const instances = saveBodies[1].instances as Array<Record<string, unknown>>;
+    expect(instances[0].name).toBe('Ada newer unsaved draft');
+  });
+
+  test('save response cannot overwrite a newer same-task draft revision', async ({ page }) => {
+    const saveBodies: Array<Record<string, unknown>> = [];
+    let releaseFirstSave!: () => void;
+    const firstSaveGate = new Promise<void>((resolve) => {
+      releaseFirstSave = resolve;
+    });
+    await mockGoalReviewWorkspace(page);
+    await page.route('**/api/v1/tasks/task-1/indicators', async (route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      saveBodies.push(body);
+      if (saveBodies.length === 1) await firstSaveGate;
+      const response = structuredClone(goalReviewDetailFixture);
+      response.updatedAt = `2026-08-09T00:00:0${saveBodies.length}.000Z`;
+      response.indicatorInstances[0].name = 'Server save response';
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(response)),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
+    await nameInput.fill('Draft at save start');
+    await page.getByTestId('goal-review-save').click();
+    await nameInput.fill('Newer local revision');
+    releaseFirstSave();
+
+    await page.waitForTimeout(100);
+    await expect(nameInput).toHaveValue('Newer local revision');
+    await page.getByTestId('goal-review-save').click();
+    await expect.poll(() => saveBodies.length).toBe(2);
+    expect(saveBodies[1]).toEqual(expect.objectContaining({
+      expectedUpdatedAt: '2026-08-09T00:00:00.000Z',
+    }));
+  });
+
   test('goal review automatically opens and focuses a rejected indicator', async ({ page }) => {
     const rejectedDetail = structuredClone(goalReviewDetailFixture);
     rejectedDetail.flowRecords = [
@@ -919,6 +1123,79 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('indicator-row-ind-1')).toBeFocused();
     await expect(page.getByTestId('indicator-details-ind-1')).toContainText('目标口径需要补充');
   });
+
+  for (const containerWidth of [970, 1024]) {
+    test(`goal review stacks before controls overlap at ${containerWidth}px effective width`, async ({ page }) => {
+      await page.setViewportSize({ width: 1800, height: 1100 });
+      await mockGoalReviewWorkspace(page);
+      await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+
+      await page.getByTestId('goal-review-workspace').evaluate((element, width) => {
+        const workspace = element as HTMLElement;
+        const rail = workspace.closest<HTMLElement>('.team-member-rail');
+        const layout = workspace.closest<HTMLElement>('.team-layout');
+        if (layout) layout.style.width = `${width + 34}px`;
+        if (rail) rail.style.width = `${width + 34}px`;
+      }, containerWidth);
+
+      const geometry = await page.evaluate(() => {
+        const workspace = document.querySelector<HTMLElement>('[data-testid="goal-review-workspace"]')!;
+        const reference = document.querySelector<HTMLElement>('[data-testid="performance-reference-panel"]')!;
+        const main = document.querySelector<HTMLElement>('.goal-review__main')!;
+        const workspaceRect = workspace.getBoundingClientRect();
+        const referenceRect = reference.getBoundingClientRect();
+        const mainRect = main.getBoundingClientRect();
+        return {
+          workspaceWidth: workspaceRect.width,
+          referenceBottom: referenceRect.bottom,
+          mainTop: mainRect.top,
+        };
+      });
+      expect(Math.abs(geometry.workspaceWidth - containerWidth)).toBeLessThanOrEqual(1);
+      expect(geometry.referenceBottom).toBeLessThanOrEqual(geometry.mainTop + 1);
+
+      for (const testId of [
+        'indicator-expand-all',
+        'indicator-visibility-ind-1',
+        'indicator-toggle-ind-1',
+      ]) {
+        const control = page.getByTestId(testId);
+        await control.scrollIntoViewIfNeeded();
+        await expect(control).toBeVisible();
+        const isTopmostHitTarget = await control.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const hit = document.elementFromPoint(rect.left + rect.width / 2, rect.top + rect.height / 2);
+          return Boolean(hit && (hit === element || element.contains(hit)));
+        });
+        expect(isTopmostHitTarget).toBe(true);
+      }
+
+      await page.getByTestId('indicator-expand-all').click();
+      await expect(page.getByTestId('indicator-details-ind-2')).toBeVisible();
+      await page.getByTestId('indicator-visibility-ind-1').click();
+      await expect(page.getByRole('option', { name: '仅上级可见', exact: true })).toBeVisible();
+      await page.keyboard.press('Escape');
+      await page.getByTestId('indicator-toggle-ind-1').click();
+      await expect(page.getByTestId('indicator-details-ind-1')).toBeHidden();
+
+      const indicatorRows = page.locator('[data-testid^="indicator-row-"]');
+      const rowFit = await indicatorRows.evaluateAll((rows) => rows.map((row) => ({
+        clientWidth: row.clientWidth,
+        scrollWidth: row.scrollWidth,
+      })));
+      expect(rowFit.every(({ clientWidth, scrollWidth }) => scrollWidth <= clientWidth + 2)).toBe(true);
+
+      if (shouldCaptureTask8Evidence()) {
+        await page.mouse.move(1, 1);
+        await page.waitForTimeout(500);
+        await page.screenshot({
+          path: `../.superpowers/sdd/2026-08-08-manager-team-performance-workspace/task-8-container-${containerWidth}.png`,
+          fullPage: false,
+          animations: 'disabled',
+        });
+      }
+    });
+  }
 
   for (const viewport of [
     { name: 'desktop', width: 1440, height: 900 },

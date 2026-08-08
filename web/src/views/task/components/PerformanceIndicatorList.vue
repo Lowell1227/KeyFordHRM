@@ -2,6 +2,7 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import { ArrowDown, ArrowUp } from '@element-plus/icons-vue';
 import type { IndicatorVisibilityScope, ObjectiveLevel } from '@/types/enums';
+import { normalizeDisplayedWeightTotal } from '../indicator-weight';
 
 export interface PerformanceIndicatorRow {
   id: string;
@@ -45,8 +46,8 @@ const totalWeight = computed(() => props.weightTotal ?? props.rows.reduce(
   (sum, row) => sum + Number(row.weight || 0),
   0,
 ));
-const totalPercent = computed(() => Number((totalWeight.value * 100).toFixed(2)));
-const hasValidWeight = computed(() => Math.abs(totalWeight.value - 1) <= 0.0001);
+const displayedWeightTotal = computed(() => normalizeDisplayedWeightTotal(totalWeight.value));
+const hasValidWeight = computed(() => displayedWeightTotal.value.isExactlyOneHundredPercent);
 const allExpanded = computed(() => (
   props.rows.length > 0 && props.rows.every((row) => expandedIds.value.has(row.id))
 ));
@@ -65,8 +66,24 @@ function visibilityScopeLabel(scope: IndicatorVisibilityScope): string {
   return visibilityLabels[scope];
 }
 
+function safeDisclosureId(id: string): string {
+  return encodeURIComponent(id);
+}
+
+function disclosureNameId(id: string): string {
+  return `indicator-name-${safeDisclosureId(id)}`;
+}
+
+function disclosureRegionId(id: string): string {
+  return `indicator-details-${safeDisclosureId(id)}`;
+}
+
 function isExpanded(id: string): boolean {
   return expandedIds.value.has(id);
+}
+
+function ariaExpanded(id: string): 'true' | 'false' {
+  return isExpanded(id) ? 'true' : 'false';
 }
 
 function setExpanded(next: Set<string>) {
@@ -174,7 +191,15 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
           :data-indicator-row-id="row.id"
           tabindex="-1"
         >
-          <button class="indicator-row__name" type="button" @click="toggleIndicator(row.id)">
+          <button
+            :id="disclosureNameId(row.id)"
+            class="indicator-row__name"
+            type="button"
+            :data-testid="`indicator-name-${row.id}`"
+            :aria-expanded="ariaExpanded(row.id)"
+            :aria-controls="disclosureRegionId(row.id)"
+            @click="toggleIndicator(row.id)"
+          >
             <span class="indicator-row__index">{{ index + 1 }}</span>
             <span>{{ row.name || '未命名指标' }}</span>
           </button>
@@ -186,22 +211,32 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
           </div>
           <span class="indicator-row__status">{{ row.statusLabel || '-' }}</span>
           <el-tooltip :content="isExpanded(row.id) ? '收起指标' : '展开指标'" placement="top">
-            <el-button
-              text
-              circle
-              :icon="isExpanded(row.id) ? ArrowUp : ArrowDown"
-              :data-testid="`indicator-toggle-${row.id}`"
-              :aria-label="`${isExpanded(row.id) ? '收起' : '展开'}指标 ${row.name}`"
-              :aria-expanded="isExpanded(row.id)"
-              @click="toggleIndicator(row.id)"
-            />
+            <span class="indicator-row__toggle-wrap">
+              <button
+                type="button"
+                class="indicator-row__toggle"
+                :data-testid="`indicator-toggle-${row.id}`"
+                :aria-label="`${isExpanded(row.id) ? '收起' : '展开'}指标 ${row.name}`"
+                :aria-expanded="ariaExpanded(row.id)"
+                :aria-controls="disclosureRegionId(row.id)"
+                @click="toggleIndicator(row.id)"
+              >
+                <el-icon>
+                  <ArrowUp v-if="isExpanded(row.id)" />
+                  <ArrowDown v-else />
+                </el-icon>
+              </button>
+            </span>
           </el-tooltip>
         </div>
 
         <div
+          :id="disclosureRegionId(row.id)"
           v-show="isExpanded(row.id)"
           class="indicator-details"
           :data-testid="`indicator-details-${row.id}`"
+          role="region"
+          :aria-labelledby="disclosureNameId(row.id)"
         >
           <div v-if="row.rejectionReason" class="indicator-details__rejection" role="status">
             <strong>驳回原因</strong>
@@ -246,7 +281,7 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
       :aria-invalid="!hasValidWeight"
     >
       <span>权重合计</span>
-      <strong>{{ totalPercent }}%</strong>
+      <strong>{{ displayedWeightTotal.percentText }}%</strong>
       <span>/ 100%</span>
     </footer>
   </section>
@@ -356,6 +391,31 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
   color: #667287;
   background: #fff;
   font-size: 11px;
+}
+
+.indicator-row__toggle-wrap,
+.indicator-row__toggle {
+  width: 32px;
+  height: 32px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.indicator-row__toggle {
+  padding: 0;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #606b7d;
+  cursor: pointer;
+}
+
+.indicator-row__toggle:hover,
+.indicator-row__toggle:focus-visible {
+  background: #eef2f6;
+  color: #245f9e;
+  outline: none;
 }
 
 .indicator-row__weight,

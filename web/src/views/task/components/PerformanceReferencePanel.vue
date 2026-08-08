@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, useId, watch } from 'vue';
 import { Aim, Clock, Search } from '@element-plus/icons-vue';
 import { tasksApi } from '@/api/tasks.api';
 import { FLOW_NODE_LABELS, OBJECTIVE_LEVEL_LABELS } from '@/types/enums';
@@ -20,11 +20,50 @@ const props = withDefaults(
   },
 );
 
-const activeTab = ref<'objectives' | 'history'>('objectives');
+type ReferenceTab = 'objectives' | 'history';
+
+const activeTab = ref<ReferenceTab>('objectives');
+const tabIdPrefix = useId();
+const objectiveTabRef = ref<HTMLButtonElement>();
+const historyTabRef = ref<HTMLButtonElement>();
 const references = ref<IndicatorReferenceItem[]>([]);
 const selectedReferenceId = ref('');
 const referenceLoading = ref(false);
 let referenceRequestSerial = 0;
+const tabOrder: ReferenceTab[] = ['objectives', 'history'];
+
+function tabId(tab: ReferenceTab): string {
+  return `${tabIdPrefix}-reference-tab-${tab}`;
+}
+
+function panelId(tab: ReferenceTab): string {
+  return `${tabIdPrefix}-reference-panel-${tab}`;
+}
+
+function tabElement(tab: ReferenceTab): HTMLButtonElement | undefined {
+  return tab === 'objectives' ? objectiveTabRef.value : historyTabRef.value;
+}
+
+function activateTab(tab: ReferenceTab, focus = false) {
+  activeTab.value = tab;
+  if (focus) void nextTick(() => tabElement(tab)?.focus());
+}
+
+function ariaSelected(tab: ReferenceTab): 'true' | 'false' {
+  return activeTab.value === tab ? 'true' : 'false';
+}
+
+function handleTabKeydown(event: KeyboardEvent, currentTab: ReferenceTab) {
+  const currentIndex = tabOrder.indexOf(currentTab);
+  let nextTab: ReferenceTab | undefined;
+  if (event.key === 'ArrowRight') nextTab = tabOrder[(currentIndex + 1) % tabOrder.length];
+  if (event.key === 'ArrowLeft') nextTab = tabOrder[(currentIndex - 1 + tabOrder.length) % tabOrder.length];
+  if (event.key === 'Home') nextTab = tabOrder[0];
+  if (event.key === 'End') nextTab = tabOrder[tabOrder.length - 1];
+  if (!nextTab) return;
+  event.preventDefault();
+  activateTab(nextTab, true);
+}
 
 const alignedObjectives = computed(() => {
   const byId = new Map<string, IndicatorInstance['alignedObjectives'][number]>();
@@ -107,22 +146,32 @@ watch(
   <aside class="performance-reference" data-testid="performance-reference-panel">
     <div class="performance-reference__tabs" role="tablist" aria-label="参考信息">
       <button
+        :id="tabId('objectives')"
+        ref="objectiveTabRef"
         type="button"
         role="tab"
-        :aria-selected="activeTab === 'objectives'"
+        :aria-selected="ariaSelected('objectives')"
+        :aria-controls="panelId('objectives')"
+        :tabindex="activeTab === 'objectives' ? 0 : -1"
         :class="{ 'is-active': activeTab === 'objectives' }"
-        @click="activeTab = 'objectives'"
+        @click="activateTab('objectives')"
+        @keydown="handleTabKeydown($event, 'objectives')"
       >
         <el-icon><Aim /></el-icon>
         <span>对齐目标</span>
       </button>
       <button
+        :id="tabId('history')"
+        ref="historyTabRef"
         type="button"
         role="tab"
         data-testid="reference-flow-tab"
-        :aria-selected="activeTab === 'history'"
+        :aria-selected="ariaSelected('history')"
+        :aria-controls="panelId('history')"
+        :tabindex="activeTab === 'history' ? 0 : -1"
         :class="{ 'is-active': activeTab === 'history' }"
-        @click="activeTab = 'history'"
+        @click="activateTab('history')"
+        @keydown="handleTabKeydown($event, 'history')"
       >
         <el-icon><Clock /></el-icon>
         <span>流程历史</span>
@@ -130,9 +179,13 @@ watch(
     </div>
 
     <section
-      v-if="activeTab === 'objectives'"
+      :id="panelId('objectives')"
+      v-show="activeTab === 'objectives'"
       class="performance-reference__body"
       data-testid="reference-aligned-objectives"
+      role="tabpanel"
+      :aria-labelledby="tabId('objectives')"
+      tabindex="0"
     >
       <div class="reference-picker" data-testid="reference-indicator-picker">
         <label for="reference-indicator-select">员工目标</label>
@@ -174,9 +227,13 @@ watch(
     </section>
 
     <section
-      v-else
+      :id="panelId('history')"
+      v-show="activeTab === 'history'"
       class="performance-reference__body"
       data-testid="reference-flow-history"
+      role="tabpanel"
+      :aria-labelledby="tabId('history')"
+      tabindex="0"
     >
       <ol v-if="sortedFlowRecords.length" class="flow-history">
         <li v-for="record in sortedFlowRecords" :key="record.id">

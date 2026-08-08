@@ -14,8 +14,14 @@ import IndicatorVisibilityEditor, {
   type VisibilityUserOption,
 } from './IndicatorVisibilityEditor.vue';
 import PerformanceReferencePanel from './PerformanceReferencePanel.vue';
+import { normalizeDisplayedWeightTotal } from '../indicator-weight';
 
-export interface GoalReviewSavePayload {
+export interface GoalReviewSaveIdentity {
+  operationToken: string;
+  draftRevision: number;
+}
+
+export interface GoalReviewSavePayload extends GoalReviewSaveIdentity {
   taskId: string;
   expectedUpdatedAt: string;
   body: Omit<SetIndicatorBody, 'expectedUpdatedAt'>;
@@ -32,7 +38,7 @@ export interface GoalReviewRejectPayload extends GoalReviewActionPayload {
 
 export interface GoalReviewWorkspaceHandle {
   reload: () => Promise<void>;
-  acceptTask: (task: TaskDetail) => void;
+  acceptSavedTask: (task: TaskDetail, identity: GoalReviewSaveIdentity) => boolean;
 }
 
 const props = withDefaults(
@@ -62,6 +68,10 @@ const draftIndicators = reactive<IndicatorInstance[]>([]);
 const validationIndicatorIds = ref<string[]>([]);
 const dirtyIndicatorIds = ref(new Set<string>());
 let requestSerial = 0;
+let taskSessionSerial = 0;
+let saveOperationSerial = 0;
+let latestSaveOperationToken = '';
+const draftRevision = ref(0);
 
 const latestRejection = computed(() => [...(task.value?.flowRecords ?? [])]
   .filter((record) => record.action === 'reject')
@@ -80,7 +90,8 @@ const totalWeight = computed(() => draftIndicators.reduce(
   (sum, indicator) => sum + Number(indicator.weight || 0),
   0,
 ));
-const hasValidWeight = computed(() => Math.abs(totalWeight.value - 1) <= 0.0001);
+const displayedWeightTotal = computed(() => normalizeDisplayedWeightTotal(totalWeight.value));
+const hasValidWeight = computed(() => displayedWeightTotal.value.isExactlyOneHundredPercent);
 const reviewRows = computed<PerformanceIndicatorRow[]>(() => draftIndicators.map((indicator) => ({
   id: indicator.id,
   name: indicator.name,
@@ -109,7 +120,7 @@ function cloneIndicators(indicators: IndicatorInstance[]) {
   }));
 }
 
-function acceptTask(nextTask: TaskDetail) {
+function replaceDraft(nextTask: TaskDetail) {
   task.value = nextTask;
   draftIndicators.splice(
     0,
@@ -118,17 +129,37 @@ function acceptTask(nextTask: TaskDetail) {
   );
   validationIndicatorIds.value = [];
   dirtyIndicatorIds.value = new Set();
+  draftRevision.value = 0;
+}
+
+function acceptSavedTask(nextTask: TaskDetail, identity: GoalReviewSaveIdentity): boolean {
+  if (
+    nextTask.id !== props.taskId
+    || task.value?.id !== nextTask.id
+    || identity.operationToken !== latestSaveOperationToken
+    || identity.draftRevision !== draftRevision.value
+  ) return false;
+  replaceDraft(nextTask);
+  latestSaveOperationToken = '';
+  return true;
 }
 
 async function loadTask() {
   const taskId = props.taskId;
   const requestId = ++requestSerial;
+  const taskSession = ++taskSessionSerial;
+  latestSaveOperationToken = '';
+  draftRevision.value = 0;
   loading.value = true;
   error.value = '';
   try {
     const response = await tasksApi.findOne(taskId);
-    if (requestId !== requestSerial || props.taskId !== taskId) return;
-    acceptTask(response);
+    if (
+      requestId !== requestSerial
+      || taskSession !== taskSessionSerial
+      || props.taskId !== taskId
+    ) return;
+    replaceDraft(response);
   } catch (loadError) {
     if (requestId !== requestSerial) return;
     const candidate = loadError as { message?: string; response?: { data?: { message?: string } } };
@@ -144,6 +175,7 @@ function markDirty(indicatorId: string) {
   const next = new Set(dirtyIndicatorIds.value);
   next.add(indicatorId);
   dirtyIndicatorIds.value = next;
+  draftRevision.value += 1;
 }
 
 function updateVisibility(index: number, selection: IndicatorVisibilitySelection) {
@@ -236,9 +268,13 @@ function toSaveItem(indicator: IndicatorInstance, index: number): SetIndicatorBo
 
 function handleSave() {
   if (!task.value?.updatedAt || !validateIndicators(false)) return;
+  const operationToken = `${taskSessionSerial}:${++saveOperationSerial}`;
+  latestSaveOperationToken = operationToken;
   emit('save', {
     taskId: task.value.id,
     expectedUpdatedAt: task.value.updatedAt,
+    operationToken,
+    draftRevision: draftRevision.value,
     body: {
       instances: draftIndicators.map(toSaveItem),
       action: 'save',
@@ -297,7 +333,7 @@ watch(
   { immediate: true },
 );
 
-defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acceptTask });
+defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acceptSavedTask });
 </script>
 
 <template>
@@ -465,12 +501,14 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acceptTask });
           </PerformanceIndicatorList>
         </div>
 
-        <PerformanceReferencePanel
-          :cycle-id="task.cycleId"
-          :employee-id="task.employeeId"
-          :indicators="task.indicatorInstances"
-          :flow-records="task.flowRecords"
-        />
+        <div class="goal-review__reference">
+          <PerformanceReferencePanel
+            :cycle-id="task.cycleId"
+            :employee-id="task.employeeId"
+            :indicators="task.indicatorInstances"
+            :flow-records="task.flowRecords"
+          />
+        </div>
       </div>
     </template>
 
@@ -482,6 +520,7 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acceptTask });
 .goal-review {
   min-width: 0;
   border-top: 1px solid #e5e9ef;
+  container: goal-review / inline-size;
 }
 
 .goal-review__loading {
@@ -528,11 +567,22 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acceptTask });
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
+  grid-template-areas: "main reference";
 }
 
 .goal-review__main {
+  grid-area: main;
   min-width: 0;
   padding: 12px 14px 16px;
+}
+
+.goal-review__reference {
+  grid-area: reference;
+  min-width: 0;
+}
+
+.goal-review__reference :deep(.performance-reference) {
+  height: 100%;
 }
 
 .goal-review-editor {
@@ -561,13 +611,21 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acceptTask });
   width: 100%;
 }
 
-@media (max-width: 960px) {
+@container goal-review (max-width: 1024px) {
   .goal-review__layout {
     grid-template-columns: minmax(0, 1fr);
+    grid-template-areas:
+      "reference"
+      "main";
+  }
+
+  .goal-review__reference :deep(.performance-reference) {
+    border-top: 1px solid #e2e6ec;
+    border-left: 0;
   }
 }
 
-@media (max-width: 620px) {
+@container goal-review (max-width: 620px) {
   .goal-review__header {
     align-items: flex-start;
     padding: 9px 10px;
