@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import {
   Plus,
   EditPen,
@@ -26,10 +26,11 @@ import type {
   CreateActionItemBody,
 } from '@/types/api.types';
 import EmptyState from '@/components/common/EmptyState.vue';
-import ChartCard from '@/components/common/ChartCard.vue';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
+import PerformanceContextPanel from '@/components/performance/PerformanceContextPanel.vue';
 
 const route = useRoute();
+const router = useRouter();
 const auth = useAuthStore();
 
 // ---------------------------------------------------------------------------
@@ -42,6 +43,7 @@ const objectives = ref<Objective[]>([]);
 const users = ref<User[]>([]);
 
 const activeTab = ref<'list' | 'kanban'>('list');
+const objectiveKeyword = ref('');
 
 const filters = reactive<{
   objectiveId: string;
@@ -56,6 +58,16 @@ const filters = reactive<{
 const selectedObjective = computed(
   () => objectives.value.find((o) => o.id === filters.objectiveId) ?? null,
 );
+
+const filteredObjectives = computed(() => {
+  const keyword = objectiveKeyword.value.trim().toLowerCase();
+  if (!keyword) return objectives.value;
+  return objectives.value.filter((objective) =>
+    [objective.title, objective.ownerName, objective.deptName]
+      .filter(Boolean)
+      .some((value) => String(value).toLowerCase().includes(keyword)),
+  );
+});
 
 /** 仅管理者可写：vp/chairman 等只读角色隐藏所有增改删入口，得到纯只读视图。 */
 const canManage = computed(() =>
@@ -104,7 +116,11 @@ const kanbanByStatus = computed<Record<ActionItemStatus, ActionItem[]>>(() => {
 onMounted(async () => {
   await loadObjectives();
   await loadUsers();
-  if (filters.objectiveId) loadTree();
+  if (!filters.objectiveId && objectives.value.length > 0) {
+    chooseObjective(objectives.value[0].id);
+  } else if (filters.objectiveId) {
+    loadTree();
+  }
 });
 
 watch(() => filters.objectiveId, (val) => {
@@ -131,6 +147,11 @@ async function loadObjectives() {
   } catch {
     objectives.value = [];
   }
+}
+
+function chooseObjective(objectiveId: string) {
+  filters.objectiveId = objectiveId;
+  router.replace({ query: { ...route.query, objectiveId: objectiveId || undefined } });
 }
 
 async function loadUsers() {
@@ -355,78 +376,81 @@ function dueDateDisplay(date: string | null): string {
 </script>
 
 <template>
-  <PerformanceWorkspace title="目标跟进" active-section="tracking" :show-context="false">
-    <div class="action-items-view page-stack">
-    <!-- 头部 -->
-    <ChartCard>
-      <template #title>
-        <span class="panel-title">
-          <span>行动计划</span>
-          <el-tag type="info" size="small" effect="plain">选做模块 · 不与考核算分挂钩</el-tag>
-        </span>
-      </template>
-      <template #extra>
-        <el-button
-          v-if="canManage"
-          type="primary"
-          :icon="Plus"
-          :disabled="!filters.objectiveId"
-          data-testid="action-item-create"
-          @click="openCreate()"
-        >
-          新建行动项
-        </el-button>
-      </template>
+  <PerformanceWorkspace title="目标跟进" active-section="tracking">
+    <template #toolbar>
+      <el-button
+        v-if="canManage"
+        type="primary"
+        :icon="Plus"
+        :disabled="!filters.objectiveId"
+        data-testid="action-item-create"
+        @click="openCreate()"
+      >
+        新建行动项
+      </el-button>
+    </template>
 
-      <!-- 筛选行 -->
-      <el-form :inline="true" class="filter-form">
-        <el-form-item label="目标">
-          <el-select
-            v-model="filters.objectiveId"
-            data-testid="action-objective-select"
-            placeholder="选择目标（必填）"
-            filterable
+    <template #context>
+      <PerformanceContextPanel title="目标列表">
+        <div data-testid="tracking-context" class="tracking-context">
+          <el-input
+            v-model="objectiveKeyword"
+            data-testid="tracking-objective-search"
+            placeholder="搜索目标"
             clearable
-            style="width: 260px"
-          >
-            <el-option
-              v-for="o in objectives"
-              :key="o.id"
-              :label="o.title"
-              :value="o.id"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="状态">
-          <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 140px">
-            <el-option
-              v-for="s in statusOptions"
-              :key="s"
-              :label="statusLabel(s)"
-              :value="s"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-button :icon="RefreshRight" @click="loadTree">刷新</el-button>
-        </el-form-item>
-      </el-form>
+          />
 
-      <!-- 选中目标摘要 -->
-      <div v-if="selectedObjective" class="objective-hint">
-        当前目标：<strong>{{ selectedObjective.title }}</strong>
-        <el-progress
-          :percentage="selectedObjective.progress"
-          :stroke-width="8"
-          style="width: 180px; display: inline-flex; margin-left: 16px;"
-        />
-        <el-tag size="small" style="margin-left: 8px;">{{ selectedObjective.progress }}%</el-tag>
-      </div>
-    </ChartCard>
+          <div class="tracking-context__list">
+            <button
+              v-for="objective in filteredObjectives"
+              :key="objective.id"
+              type="button"
+              :class="[
+                'objective-context-item',
+                { 'is-active': objective.id === filters.objectiveId },
+              ]"
+              :aria-pressed="objective.id === filters.objectiveId"
+              @click="chooseObjective(objective.id)"
+            >
+              <span class="objective-context-item__title">{{ objective.title }}</span>
+              <span class="objective-context-item__meta">
+                {{ objective.ownerName || objective.deptName || '未指定负责人' }}
+                <span>{{ objective.progress }}%</span>
+              </span>
+            </button>
 
-    <!-- 内容区：列表 / 看板 -->
-    <ChartCard :padded="activeTab === 'kanban'">
-      <template #extra>
+            <div v-if="filteredObjectives.length === 0" class="tracking-context__empty">
+              暂无可跟进目标
+            </div>
+          </div>
+        </div>
+      </PerformanceContextPanel>
+    </template>
+
+    <div class="action-items-view page-stack">
+      <section data-testid="tracking-surface" class="performance-surface">
+        <div class="tracking-surface__header">
+          <div class="tracking-surface__summary">
+            <span class="tracking-surface__eyebrow">当前目标</span>
+            <strong>{{ selectedObjective?.title || '请选择目标' }}</strong>
+            <el-progress
+              v-if="selectedObjective"
+              :percentage="selectedObjective.progress"
+              :stroke-width="7"
+              class="tracking-surface__progress"
+            />
+          </div>
+
+          <div class="tracking-surface__controls">
+            <el-select v-model="filters.status" placeholder="全部状态" clearable class="status-filter">
+              <el-option
+                v-for="status in statusOptions"
+                :key="status"
+                :label="statusLabel(status)"
+                :value="status"
+              />
+            </el-select>
+            <el-button :icon="RefreshRight" @click="loadTree">刷新</el-button>
         <el-radio-group v-model="activeTab" size="small">
           <el-radio-button value="list">
             <el-icon><List /></el-icon> 列表
@@ -435,7 +459,8 @@ function dueDateDisplay(date: string | null): string {
             <el-icon><Grid /></el-icon> 看板
           </el-radio-button>
         </el-radio-group>
-      </template>
+          </div>
+        </div>
 
       <!-- 列表视图 -->
       <el-table
@@ -584,7 +609,7 @@ function dueDateDisplay(date: string | null): string {
           style="grid-column: 1 / -1;"
         />
       </div>
-    </ChartCard>
+      </section>
 
     <!-- 新建 / 编辑弹窗 -->
     <el-dialog v-model="dialogVisible" data-testid="action-item-dialog" :title="dialogTitle" width="600px" destroy-on-close>
@@ -684,24 +709,133 @@ function dueDateDisplay(date: string | null): string {
 </template>
 
 <style scoped>
-.panel-title {
-  display: inline-flex;
+.action-items-view {
+  min-width: 0;
+  min-height: 100%;
+  padding: 16px;
+}
+
+.tracking-context {
+  min-width: 0;
+}
+
+.tracking-context__list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 10px;
+}
+
+.objective-context-item {
+  width: 100%;
+  min-width: 0;
+  min-height: 58px;
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 5px;
+  padding: 8px 10px;
+  border: 0;
+  border-radius: 6px;
+  color: #30384b;
+  background: transparent;
+  text-align: left;
+  cursor: pointer;
+}
+
+.objective-context-item:hover {
+  background: #f2f6fc;
+}
+
+.objective-context-item.is-active {
+  color: #155cc3;
+  background: #e6f2ff;
+}
+
+.objective-context-item__title {
+  width: 100%;
+  overflow: hidden;
+  font-size: 13px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.objective-context-item__meta {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  color: #7b8495;
+  font-size: 12px;
+}
+
+.tracking-context__empty {
+  padding: 28px 8px;
+  color: #8c95a5;
+  font-size: 13px;
+  text-align: center;
+}
+
+.performance-surface {
+  min-width: 0;
+  min-height: 500px;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #e2e6ed;
+  border-radius: 7px;
+}
+
+.tracking-surface__header {
+  min-height: 68px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  border-bottom: 1px solid #e8ebf0;
+}
+
+.tracking-surface__summary {
+  min-width: 0;
+  display: flex;
   align-items: center;
   gap: 10px;
 }
 
-/* 卡片内边距已由 ChartCard 控制，去掉 el-form-item 默认下边距避免双重留白 */
-.filter-form :deep(.el-form-item) {
-  margin-bottom: 0;
+.tracking-surface__summary strong {
+  max-width: 300px;
+  overflow: hidden;
+  color: #20283a;
+  font-size: 15px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.objective-hint {
-  margin-top: 12px;
-  font-size: 13px;
-  color: var(--el-text-color-secondary);
+.tracking-surface__eyebrow {
+  flex-shrink: 0;
+  color: #7b8495;
+  font-size: 12px;
+}
+
+.tracking-surface__progress {
+  width: 150px;
+}
+
+.tracking-surface__controls {
+  min-width: 0;
   display: flex;
   align-items: center;
-  gap: 4px;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.status-filter {
+  width: 130px;
+}
+
+.performance-surface :deep(.el-table) {
+  border: 0;
+  border-radius: 0;
 }
 
 .item-title-row {
@@ -816,5 +950,55 @@ function dueDateDisplay(date: string | null): string {
 .progress-item-title {
   margin-bottom: 16px;
   font-weight: 500;
+}
+
+@media (max-width: 768px) {
+  .action-items-view {
+    min-height: auto;
+    padding: 10px;
+  }
+
+  .tracking-context__list {
+    flex-direction: row;
+    overflow-x: auto;
+  }
+
+  .objective-context-item {
+    width: 210px;
+    min-width: 210px;
+  }
+
+  .tracking-surface__header {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .tracking-surface__summary,
+  .tracking-surface__controls {
+    width: 100%;
+  }
+
+  .tracking-surface__summary {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .tracking-surface__controls {
+    justify-content: flex-start;
+    overflow-x: auto;
+  }
+
+  .tracking-surface__progress {
+    width: 100%;
+  }
+
+  .performance-surface {
+    min-height: 420px;
+    overflow-x: auto;
+  }
+
+  .kanban-board {
+    min-width: 880px;
+  }
 }
 </style>

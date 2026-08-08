@@ -31,4 +31,12 @@ test.describe('09-performance-workspace manager shell', () => {
     await expect(page.getByTestId('objective-map-surface')).toBeVisible();
     await expect(page.getByTestId('objective-create')).toBeVisible();
   });
+
+  test('target tracking exposes objective context and action workspace', async ({ page }) => {
+    await page.goto('/action-items');
+
+    await expect(page.getByTestId('tracking-context')).toBeVisible();
+    await expect(page.getByTestId('tracking-objective-search')).toBeVisible();
+    await expect(page.getByTestId('tracking-surface')).toBeVisible();
+  });
 });
