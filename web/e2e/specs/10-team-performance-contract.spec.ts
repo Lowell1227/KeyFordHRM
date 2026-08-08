@@ -443,6 +443,111 @@ test.describe('team list manager workspace', () => {
     await expect(page).toHaveURL(/taskId=task-off-page/);
   });
 
+  test('current-page deep link remains loading until the delayed team response resolves', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    let releaseTeam!: () => void;
+    const teamGate = new Promise<void>((resolve) => {
+      releaseTeam = resolve;
+    });
+    await page.route('**/api/v1/tasks/team**', async (route) => {
+      await teamGate;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPageWith([teamPageFixture.items[0]]))),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    const rail = page.getByTestId('team-member-rail');
+    await expect(rail.locator('.el-skeleton')).toBeVisible();
+    await expect(rail.getByText('未找到所选成员')).toHaveCount(0);
+    await expect(rail.getByText('成员详情加载失败')).toHaveCount(0);
+
+    releaseTeam();
+    await expect(rail).toContainText('Ada Chen');
+    await expect(rail.locator('.el-skeleton')).toHaveCount(0);
+    await expect(rail.getByText('未找到所选成员')).toHaveCount(0);
+    await expect(rail.getByText('成员详情加载失败')).toHaveCount(0);
+  });
+
+  test('off-page deep link stays loading through delayed hydration and renders only its error', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    let releaseTeam!: () => void;
+    let releaseDetail!: () => void;
+    let markDetailStarted!: () => void;
+    const teamGate = new Promise<void>((resolve) => {
+      releaseTeam = resolve;
+    });
+    const detailGate = new Promise<void>((resolve) => {
+      releaseDetail = resolve;
+    });
+    const detailStarted = new Promise<void>((resolve) => {
+      markDetailStarted = resolve;
+    });
+    await page.route('**/api/v1/tasks/task-off-page', async (route) => {
+      markDetailStarted();
+      await detailGate;
+      return route.fulfill({
+        status: 503,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 503, message: '成员详情服务不可用', data: null, timestamp: Date.now() }),
+      });
+    });
+    await page.route('**/api/v1/tasks/team**', async (route) => {
+      await teamGate;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPageWith([teamPageFixture.items[0]], { total: 21 }))),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-off-page');
+    const rail = page.getByTestId('team-member-rail');
+    await expect(rail.locator('.el-skeleton')).toBeVisible();
+    await expect(rail.getByText('未找到所选成员')).toHaveCount(0);
+
+    releaseTeam();
+    await detailStarted;
+    await expect(rail.locator('.el-skeleton')).toBeVisible();
+    await expect(rail.getByText('未找到所选成员')).toHaveCount(0);
+
+    releaseDetail();
+    await expect(rail.getByText('成员详情加载失败')).toBeVisible();
+    await expect(rail).toContainText('成员详情服务不可用');
+    await expect(rail.locator('.el-skeleton')).toHaveCount(0);
+    await expect(rail.getByText('未找到所选成员')).toHaveCount(0);
+  });
+
+  test('off-page not-found appears only after successful empty hydration settles', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    let releaseDetail!: () => void;
+    const detailGate = new Promise<void>((resolve) => {
+      releaseDetail = resolve;
+    });
+    await page.route('**/api/v1/tasks/task-missing', async (route) => {
+      await detailGate;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(null)),
+      });
+    });
+    await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(teamPageWith([teamPageFixture.items[0]], { total: 21 }))),
+    }));
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-missing');
+    const rail = page.getByTestId('team-member-rail');
+    await expect(rail.locator('.el-skeleton')).toBeVisible();
+    await expect(rail.getByText('未找到所选成员')).toHaveCount(0);
+    await expect(rail.getByText('成员详情加载失败')).toHaveCount(0);
+
+    releaseDetail();
+    await expect(rail.getByText('未找到所选成员')).toBeVisible();
+    await expect(rail.locator('.el-skeleton')).toHaveCount(0);
+    await expect(rail.getByText('成员详情加载失败')).toHaveCount(0);
+  });
+
   test('returned page is canonicalized and error state excludes empty state', async ({ page }) => {
     await mockTaskWorkspaceIdentity(page, 'manager');
     let shouldFail = false;
@@ -478,7 +583,7 @@ test.describe('team list manager workspace', () => {
       await mockTaskWorkspaceIdentity(page, 'manager');
       await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
         contentType: 'application/json',
-        body: JSON.stringify(apiResponse(teamPageFixture)),
+        body: JSON.stringify(apiResponse(teamPageWith(teamPageFixture.items.slice(0, 2)))),
       }));
 
       await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending');

@@ -106,6 +106,15 @@ const selectedTeamTask = computed(() => {
   return teamPage.value.items.find((item) => item.id === taskId)
     ?? (hydratedTeamTask.value?.id === taskId ? hydratedTeamTask.value : undefined);
 });
+const teamMemberLoading = computed(() => Boolean(
+  workspaceQuery.state.value.taskId
+  && !selectedTeamTask.value
+  && (teamLoading.value || teamDetailLoading.value),
+));
+const teamMemberError = computed(() => {
+  if (selectedTeamTask.value || teamMemberLoading.value) return '';
+  return teamDetailError.value || teamError.value;
+});
 const teamEmployeeOptions = computed(() => {
   const departmentId = workspaceQuery.state.value.deptId;
   if (!departmentId) return teamPage.value.facets.employees;
@@ -313,7 +322,9 @@ async function hydrateSelectedTeamTask(response: TeamTaskPage) {
   try {
     const detail = await tasksApi.findOne(taskId);
     if (requestId !== teamDetailRequestSerial || workspaceQuery.state.value.taskId !== taskId) return;
-    hydratedTeamTask.value = toTeamTaskItem(detail, workspaceQuery.state.value.stage);
+    hydratedTeamTask.value = detail
+      ? toTeamTaskItem(detail, workspaceQuery.state.value.stage)
+      : undefined;
   } catch (error) {
     if (requestId !== teamDetailRequestSerial || workspaceQuery.state.value.taskId !== taskId) return;
     hydratedTeamTask.value = undefined;
@@ -1117,8 +1128,8 @@ watch(
           :task="selectedTeamTask"
           :task-id="workspaceQuery.state.value.taskId"
           :stage="workspaceQuery.state.value.stage"
-          :loading="teamDetailLoading"
-          :error="teamDetailError"
+          :loading="teamMemberLoading"
+          :error="teamMemberError"
           @close="closeTeamMember"
         />
       </div>
