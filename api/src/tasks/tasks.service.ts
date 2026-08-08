@@ -1,5 +1,5 @@
 import { ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { AssessmentTask, Prisma, SysRole, TaskStatus } from '@prisma/client';
+import { AssessmentTask, IndicatorVisibilityScope, ObjectiveLevel, Prisma, SysRole, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DataScopeService } from '@/common/services/data-scope.service';
 import { NotificationsService } from '@/notifications/notifications.service';
@@ -15,6 +15,10 @@ import { SubmitManagerScoreDto } from './dto/submit-manager-score.dto';
 import { DeptReviewDto } from './dto/dept-review.dto';
 import { SubmitIndicatorProposalDto } from './dto/submit-indicator-proposal.dto';
 import { SetIndicatorItemDto, SetIndicatorsDto } from './dto/set-indicators.dto';
+import { ObjectivesService } from '@/objectives/objectives.service';
+import { IndicatorReferenceItem, IndicatorVisibilityService } from './indicator-visibility.service';
+import { ReferenceIndicatorQueryDto } from './dto/reference-indicator-query.dto';
+import { assertTaskVersion } from './task-version';
 
 /** 任务列表项。 */
 export interface TaskListItem {
@@ -56,6 +60,15 @@ export interface TaskDetail extends TaskListItem {
     managerComment: string | null;
     finalScore: number | null;
     sortOrder: number;
+    visibilityScope: IndicatorVisibilityScope;
+    visibleDepartmentIds: string[];
+    visibleUserIds: string[];
+    alignedObjectives: Array<{
+      id: string;
+      title: string;
+      level: ObjectiveLevel;
+      ownerId: string | null;
+    }>;
   }>;
   selfEvalSummary: {
     achievements: string | null;
@@ -137,6 +150,8 @@ export class TasksService {
     private readonly scoringService: ScoringService,
     private readonly flowService: FlowService,
     private readonly notificationsService: NotificationsService,
+    private readonly indicatorVisibility: IndicatorVisibilityService,
+    private readonly objectivesService: ObjectivesService,
   ) {}
 
   /** GET /tasks — 角色过滤 + 分页。 */
@@ -252,6 +267,13 @@ export class TasksService {
     return paginated(items, total, dto);
   }
 
+  findReferenceIndicators(
+    dto: ReferenceIndicatorQueryDto,
+    viewer: AuthUser,
+  ): Promise<Paginated<IndicatorReferenceItem>> {
+    return this.indicatorVisibility.findVisibleReferences(dto, viewer);
+  }
+
   /** GET /tasks/:id — 权限校验 + D18 遮蔽。 */
   async findOne(id: string, viewer: AuthUser): Promise<TaskDetail> {
     const task = await this.prisma.assessmentTask.findUnique({
@@ -259,7 +281,20 @@ export class TasksService {
       include: {
         employee: { select: { name: true } },
         dept: { select: { name: true } },
-        indicatorInstances: { orderBy: { sortOrder: 'asc' } },
+        indicatorInstances: {
+          orderBy: { sortOrder: 'asc' },
+          include: {
+            visibleDepartments: { select: { departmentId: true } },
+            visibleUsers: { select: { userId: true } },
+            objectiveAlignments: {
+              include: {
+                objective: {
+                  select: { id: true, title: true, level: true, ownerId: true },
+                },
+              },
+            },
+          },
+        },
         selfEvalSummary: true,
         managerEvalSummary: true,
         gradeResult: true,
@@ -278,7 +313,15 @@ export class TasksService {
 
     this.assertCanView(task, viewer);
 
-    const detail = this.buildTaskDetail(task);
+    const alignedObjectiveIds = [
+      ...new Set(
+        task.indicatorInstances.flatMap((indicator) =>
+          (indicator.objectiveAlignments ?? []).map((alignment) => alignment.objectiveId),
+        ),
+      ),
+    ];
+    const visibleObjectives = await this.objectivesService.findVisibleByIds(alignedObjectiveIds, viewer);
+    const detail = this.buildTaskDetail(task, new Set(visibleObjectives.map((objective) => objective.id)));
 
     // D18：员工本人需区分公示前/公示后
     const isEmployee = viewer.id === task.employeeId;
@@ -461,6 +504,7 @@ export class TasksService {
   /** PUT /tasks/:id/indicators */
   async setIndicators(id: string, dto: SetIndicatorsDto, viewer: AuthUser): Promise<TaskDetail> {
     const task = await this.getTaskOrThrow(id);
+    assertTaskVersion(task.updatedAt, dto.expectedUpdatedAt);
     const isEmployee = task.employeeId === viewer.id;
     const isManager = task.managerId === viewer.id;
     const isAdmin = viewer.sysRole === SysRole.hr || viewer.sysRole === SysRole.system_admin;
@@ -481,6 +525,10 @@ export class TasksService {
     const validItems = this.normalizeIndicatorItems(dto.instances ?? []);
     if (!validItems.length) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '请至少保留一条指标' });
+    }
+
+    for (const item of validItems) {
+      await this.indicatorVisibility.validateSelection(item, task, viewer);
     }
 
     const note = dto.note?.trim() || undefined;
@@ -987,19 +1035,23 @@ export class TasksService {
       const legacyTarget = (item as SetIndicatorItemDto & { target?: string }).target?.trim();
       const legacyStandard = (item as SetIndicatorItemDto & { standard?: string }).standard?.trim();
       valid.push({
-          templateIndicatorId: item.templateIndicatorId,
-          name,
-          description: item.description?.trim() || legacyTarget || undefined,
-          scoringStandard: item.scoringStandard?.trim() || legacyStandard || undefined,
-          dataSource: item.dataSource?.trim() || undefined,
-          dataCaliber: item.dataCaliber?.trim() || undefined,
-          targetValue: item.targetValue,
-          targetValueText: item.targetValueText?.trim() || undefined,
-          unit: item.unit?.trim() || undefined,
-          indicatorType: item.indicatorType ?? 'kpi',
-          dimensionName: item.dimensionName?.trim() || 'KPI维度',
-          dimensionWeight: item.dimensionWeight ?? 1,
-          sortOrder: item.sortOrder ?? index,
+        templateIndicatorId: item.templateIndicatorId,
+        name,
+        description: item.description?.trim() || legacyTarget || undefined,
+        scoringStandard: item.scoringStandard?.trim() || legacyStandard || undefined,
+        dataSource: item.dataSource?.trim() || undefined,
+        dataCaliber: item.dataCaliber?.trim() || undefined,
+        targetValue: item.targetValue,
+        targetValueText: item.targetValueText?.trim() || undefined,
+        unit: item.unit?.trim() || undefined,
+        indicatorType: item.indicatorType ?? 'kpi',
+        dimensionName: item.dimensionName?.trim() || 'KPI维度',
+        dimensionWeight: item.dimensionWeight ?? 1,
+        sortOrder: item.sortOrder ?? index,
+        visibilityScope: item.visibilityScope ?? IndicatorVisibilityScope.supervisors,
+        visibleDepartmentIds: [...new Set(item.visibleDepartmentIds ?? [])],
+        visibleUserIds: [...new Set(item.visibleUserIds ?? [])],
+        alignedObjectiveIds: [...new Set(item.alignedObjectiveIds ?? [])],
       });
     }
 
@@ -1018,28 +1070,56 @@ export class TasksService {
   ): Promise<void> {
     await tx.indicatorInstance.deleteMany({ where: { taskId } });
     if (!items.length) return;
-    await tx.indicatorInstance.createMany({
-      data: items.map((item, index) => ({
-        taskId,
-        templateIndicatorId: item.templateIndicatorId || null,
-        name: item.name.trim(),
-        description: item.description || null,
-        scoringStandard: item.scoringStandard || null,
-        dataSource: item.dataSource || null,
-        dataCaliber: item.dataCaliber || null,
-        targetValue: item.targetValue != null ? new Prisma.Decimal(item.targetValue.toString()) : null,
-        targetValueText: item.targetValueText || null,
-        unit: item.unit || null,
-        weight: new Prisma.Decimal((item.weight ?? 0).toString()),
-        indicatorType: item.indicatorType ?? 'kpi',
-        dimensionName: item.dimensionName || null,
-        dimensionWeight: new Prisma.Decimal((item.dimensionWeight ?? 1).toString()),
-        sortOrder: item.sortOrder ?? index,
-      })),
-    });
+    for (const [index, item] of items.entries()) {
+      await tx.indicatorInstance.create({
+        data: {
+          task: { connect: { id: taskId } },
+          templateIndicator: item.templateIndicatorId ? { connect: { id: item.templateIndicatorId } } : undefined,
+          name: item.name.trim(),
+          description: item.description || null,
+          scoringStandard: item.scoringStandard || null,
+          dataSource: item.dataSource || null,
+          dataCaliber: item.dataCaliber || null,
+          targetValue: item.targetValue != null ? new Prisma.Decimal(item.targetValue.toString()) : null,
+          targetValueText: item.targetValueText || null,
+          unit: item.unit || null,
+          weight: new Prisma.Decimal((item.weight ?? 0).toString()),
+          indicatorType: item.indicatorType ?? 'kpi',
+          dimensionName: item.dimensionName || null,
+          dimensionWeight: new Prisma.Decimal((item.dimensionWeight ?? 1).toString()),
+          sortOrder: item.sortOrder ?? index,
+          visibilityScope: item.visibilityScope,
+          visibleDepartments: item.visibleDepartmentIds.length
+            ? {
+                createMany: {
+                  data: item.visibleDepartmentIds.map((departmentId) => ({
+                    departmentId,
+                  })),
+                },
+              }
+            : undefined,
+          visibleUsers: item.visibleUserIds.length
+            ? {
+                createMany: {
+                  data: item.visibleUserIds.map((userId) => ({ userId })),
+                },
+              }
+            : undefined,
+          objectiveAlignments: item.alignedObjectiveIds.length
+            ? {
+                createMany: {
+                  data: item.alignedObjectiveIds.map((objectiveId) => ({
+                    objectiveId,
+                  })),
+                },
+              }
+            : undefined,
+        },
+      });
+    }
   }
 
-  private buildTaskDetail(task: any): TaskDetail {
+  private buildTaskDetail(task: any, visibleObjectiveIds = new Set<string>()): TaskDetail {
     return {
       id: task.id,
       cycleId: task.cycleId,
@@ -1075,6 +1155,17 @@ export class TasksService {
         managerComment: ind.managerComment,
         finalScore: ind.finalScore?.toNumber() ?? null,
         sortOrder: ind.sortOrder,
+        visibilityScope: ind.visibilityScope ?? IndicatorVisibilityScope.supervisors,
+        visibleDepartmentIds: (ind.visibleDepartments ?? []).map((row: { departmentId: string }) => row.departmentId),
+        visibleUserIds: (ind.visibleUsers ?? []).map((row: { userId: string }) => row.userId),
+        alignedObjectives: (ind.objectiveAlignments ?? [])
+          .filter((alignment: { objectiveId: string }) => visibleObjectiveIds.has(alignment.objectiveId))
+          .map(({ objective }: any) => ({
+            id: objective.id,
+            title: objective.title,
+            level: objective.level,
+            ownerId: objective.ownerId,
+          })),
       })),
       selfEvalSummary: task.selfEvalSummary
         ? {

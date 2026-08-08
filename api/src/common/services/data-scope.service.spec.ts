@@ -31,6 +31,9 @@ describe('DataScopeService', () => {
             department: {
               findMany: jest.fn(),
             },
+            user: {
+              findMany: jest.fn(),
+            },
           },
         },
       ],
@@ -90,7 +93,15 @@ describe('DataScopeService', () => {
     it('vp 返回其审批部门（含子部门）的成员范围', async () => {
       jest
         .spyOn(prisma.department, 'findMany')
-        .mockResolvedValueOnce([{ id: 'd1' }] as any)
+        .mockResolvedValueOnce([
+          {
+            id: 'd1',
+            name: 'Department 1',
+            parentId: null,
+            leaderId: null,
+            approverId: 'vp-1',
+          },
+        ] as any)
         .mockResolvedValueOnce([
           { id: 'd1', parentId: null },
           { id: 'd2', parentId: 'd1' },
@@ -147,6 +158,48 @@ describe('DataScopeService', () => {
         makeUser({ sysRole: SysRole.employee, id: 'assessor-1', isAssessorOnly: true }),
       );
       expect(filter).toEqual({ id: 'assessor-1' });
+    });
+  });
+
+  describe('getAncestorDeptIds', () => {
+    it('returns the current department and every ancestor once', async () => {
+      jest.spyOn(prisma.department, 'findMany').mockResolvedValue([
+        { id: 'd1', parentId: null },
+        { id: 'd2', parentId: 'd1' },
+        { id: 'd3', parentId: 'd2' },
+      ] as any);
+
+      await expect(service.getAncestorDeptIds('d3')).resolves.toEqual(['d3', 'd2', 'd1']);
+    });
+
+    it('stops when a department cycle is encountered', async () => {
+      jest.spyOn(prisma.department, 'findMany').mockResolvedValue([
+        { id: 'd1', parentId: 'd2' },
+        { id: 'd2', parentId: 'd1' },
+      ] as any);
+
+      await expect(service.getAncestorDeptIds('d1')).resolves.toEqual(['d1', 'd2']);
+    });
+  });
+
+  describe('getManagerChainIds', () => {
+    it('returns the direct manager followed by all higher managers', async () => {
+      jest.spyOn(prisma.user, 'findMany').mockResolvedValue([
+        { id: 'u1', directManagerId: 'u2' },
+        { id: 'u2', directManagerId: 'u3' },
+        { id: 'u3', directManagerId: null },
+      ] as any);
+
+      await expect(service.getManagerChainIds('u1')).resolves.toEqual(['u2', 'u3']);
+    });
+
+    it('stops without returning the viewer when a manager cycle is encountered', async () => {
+      jest.spyOn(prisma.user, 'findMany').mockResolvedValue([
+        { id: 'u1', directManagerId: 'u2' },
+        { id: 'u2', directManagerId: 'u1' },
+      ] as any);
+
+      await expect(service.getManagerChainIds('u1')).resolves.toEqual(['u2']);
     });
   });
 });

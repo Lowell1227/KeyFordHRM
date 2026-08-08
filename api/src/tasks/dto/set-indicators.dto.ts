@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsDateString,
   IsEnum,
   IsIn,
   IsNumber,
@@ -12,7 +13,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { IndicatorType } from '@prisma/client';
+import { IndicatorType, IndicatorVisibilityScope } from '@prisma/client';
 
 export class SetIndicatorItemDto {
   @IsOptional()
@@ -81,9 +82,27 @@ export class SetIndicatorItemDto {
   @Type(() => Number)
   @IsNumber()
   sortOrder?: number;
+
+  @IsEnum(IndicatorVisibilityScope)
+  visibilityScope!: IndicatorVisibilityScope;
+
+  @IsArray()
+  @IsUUID('4', { each: true })
+  visibleDepartmentIds: string[] = [];
+
+  @IsArray()
+  @IsUUID('4', { each: true })
+  visibleUserIds: string[] = [];
+
+  @IsArray()
+  @IsUUID('4', { each: true })
+  alignedObjectiveIds: string[] = [];
 }
 
 export class SetIndicatorsDto {
+  @IsDateString()
+  expectedUpdatedAt!: string;
+
   @IsArray()
   @ValidateNested({ each: true })
   @Type(() => SetIndicatorItemDto)

@@ -48,6 +48,42 @@ export class DataScopeService {
     return result;
   }
 
+  async getAncestorDeptIds(deptId: string): Promise<string[]> {
+    const allDepts = await this.prisma.department.findMany({
+      select: { id: true, parentId: true },
+    });
+    const parentById = new Map(allDepts.map((dept) => [dept.id, dept.parentId]));
+    const result: string[] = [];
+    const visited = new Set<string>();
+    let currentId: string | null | undefined = deptId;
+
+    while (currentId && !visited.has(currentId)) {
+      visited.add(currentId);
+      result.push(currentId);
+      currentId = parentById.get(currentId);
+    }
+
+    return result;
+  }
+
+  async getManagerChainIds(userId: string): Promise<string[]> {
+    const allUsers = await this.prisma.user.findMany({
+      select: { id: true, directManagerId: true },
+    });
+    const managerByUserId = new Map(allUsers.map((user) => [user.id, user.directManagerId]));
+    const result: string[] = [];
+    const visited = new Set<string>([userId]);
+    let managerId = managerByUserId.get(userId);
+
+    while (managerId && !visited.has(managerId)) {
+      visited.add(managerId);
+      result.push(managerId);
+      managerId = managerByUserId.get(managerId);
+    }
+
+    return result;
+  }
+
   /**
    * 返回 viewer 能看到的在职用户的 Prisma UserWhereInput 过滤条件。
    *

@@ -112,6 +112,35 @@ export class ObjectivesService {
     return this.buildForest(objectives.map((o) => this.mapToNode(o)));
   }
 
+  async assertVisibleIds(ids: string[], viewer: AuthUser): Promise<void> {
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return;
+
+    const visibilityWhere = await this.buildWhere({}, viewer);
+    const count = await this.prisma.objective.count({
+      where: { AND: [visibilityWhere, { id: { in: uniqueIds } }] },
+    });
+    if (count !== uniqueIds.length) {
+      throw new ForbiddenException({
+        code: ERROR_CODE.FORBIDDEN,
+        message: '无权访问所选目标',
+      });
+    }
+  }
+
+  async findVisibleByIds(ids: string[], viewer: AuthUser): Promise<ObjectiveNode[]> {
+    const uniqueIds = [...new Set(ids)];
+    if (uniqueIds.length === 0) return [];
+
+    const visibilityWhere = await this.buildWhere({}, viewer);
+    const objectives = await this.prisma.objective.findMany({
+      where: { AND: [visibilityWhere, { id: { in: uniqueIds } }] },
+      include: objectiveIncludeDef,
+      orderBy: [{ level: 'asc' }, { priority: 'desc' }, { createdAt: 'desc' }],
+    });
+    return objectives.map((objective) => this.mapToNode(objective));
+  }
+
   /** GET /objectives/:id — 详情。 */
   async findOne(id: string, viewer: AuthUser): Promise<ObjectiveNode> {
     const objective = await this.prisma.objective.findUnique({

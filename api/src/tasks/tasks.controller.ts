@@ -22,6 +22,7 @@ import { SubmitIndicatorProposalDto } from './dto/submit-indicator-proposal.dto'
 import { SetIndicatorsDto } from './dto/set-indicators.dto';
 import { TeamTaskQueryDto } from './dto/team-task-query.dto';
 import { TeamTasksService } from './team-tasks.service';
+import { ReferenceIndicatorQueryDto } from './dto/reference-indicator-query.dto';
 
 @Controller('tasks')
 export class TasksController {
@@ -48,6 +49,14 @@ export class TasksController {
   }
 
   /** GET /tasks/:id — 详情。 */
+  @Get('reference-indicators')
+  findReferenceIndicators(
+    @Query() dto: ReferenceIndicatorQueryDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.tasksService.findReferenceIndicators(dto, viewer);
+  }
+
   @Get(':id')
   findOne(
     @Param('id', ParseUUIDPipe) id: string,

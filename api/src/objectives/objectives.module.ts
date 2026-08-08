@@ -8,5 +8,6 @@ import { ObjectivesService } from './objectives.service';
   imports: [PrismaModule, DataScopeModule],
   controllers: [ObjectivesController],
   providers: [ObjectivesService],
+  exports: [ObjectivesService],
 })
 export class ObjectivesModule {}

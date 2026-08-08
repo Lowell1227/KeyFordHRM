@@ -1,7 +1,7 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
 import { AssessmentTask, IndicatorInstance, Prisma, SysRole, TaskStatus } from '@prisma/client';
-import { TasksService } from './tasks.service';
+import { TaskDetail, TasksService } from './tasks.service';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DataScopeService } from '@/common/services/data-scope.service';
 import { NotificationsService } from '@/notifications/notifications.service';
@@ -9,30 +9,68 @@ import { ScoringService } from './scoring.service';
 import { FlowService } from './flow.service';
 import { AuthUser } from '@/common/types/auth.types';
 import { ERROR_CODE } from '@/common/constants/error-codes';
+import { IndicatorVisibilityService } from './indicator-visibility.service';
+import { ObjectivesService } from '@/objectives/objectives.service';
 
 describe('TasksService', () => {
   let service: TasksService;
   let prisma: {
-    assessmentTask: { findUnique: jest.Mock; count: jest.Mock; findMany: jest.Mock };
-    indicatorInstance: { findMany: jest.Mock };
+    assessmentTask: {
+      findUnique: jest.Mock;
+      count: jest.Mock;
+      findMany: jest.Mock;
+      update: jest.Mock;
+    };
+    indicatorInstance: {
+      findMany: jest.Mock;
+      deleteMany: jest.Mock;
+      create: jest.Mock;
+    };
+    flowRecord: { create: jest.Mock };
     systemConfig: { findUnique: jest.Mock };
     $transaction: jest.Mock;
   };
   let dataScope: { getVisibleEmployeeFilter: jest.Mock; getSubDeptIds: jest.Mock };
   let notificationsService: { create: jest.Mock };
+  let indicatorVisibility: { validateSelection: jest.Mock };
+  let objectivesService: { findVisibleByIds: jest.Mock };
+  let transactionClient: {
+    assessmentTask: { update: jest.Mock };
+    indicatorInstance: { deleteMany: jest.Mock; create: jest.Mock };
+    flowRecord: { create: jest.Mock };
+  };
 
   beforeEach(async () => {
+    transactionClient = {
+      assessmentTask: { update: jest.fn() },
+      indicatorInstance: { deleteMany: jest.fn(), create: jest.fn() },
+      flowRecord: { create: jest.fn() },
+    };
     prisma = {
-      assessmentTask: { findUnique: jest.fn(), count: jest.fn(), findMany: jest.fn() },
-      indicatorInstance: { findMany: jest.fn() },
+      assessmentTask: {
+        findUnique: jest.fn(),
+        count: jest.fn(),
+        findMany: jest.fn(),
+        update: jest.fn(),
+      },
+      indicatorInstance: {
+        findMany: jest.fn(),
+        deleteMany: jest.fn(),
+        create: jest.fn(),
+      },
+      flowRecord: { create: jest.fn() },
       systemConfig: { findUnique: jest.fn() },
-      $transaction: jest.fn(async (cb) => cb(prisma)),
+      $transaction: jest.fn(async (cb) => cb(transactionClient)),
     };
     dataScope = {
       getVisibleEmployeeFilter: jest.fn().mockResolvedValue({}),
       getSubDeptIds: jest.fn().mockResolvedValue([]),
     };
     notificationsService = { create: jest.fn() };
+    indicatorVisibility = {
+      validateSelection: jest.fn().mockResolvedValue(undefined),
+    };
+    objectivesService = { findVisibleByIds: jest.fn().mockResolvedValue([]) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -42,6 +80,8 @@ describe('TasksService', () => {
         { provide: NotificationsService, useValue: notificationsService },
         { provide: ScoringService, useValue: {} },
         { provide: FlowService, useValue: {} },
+        { provide: IndicatorVisibilityService, useValue: indicatorVisibility },
+        { provide: ObjectivesService, useValue: objectivesService },
       ],
     }).compile();
 
@@ -206,6 +246,138 @@ describe('TasksService', () => {
       prisma.assessmentTask.findUnique.mockResolvedValue(null);
 
       await expect(service.findOne('task-1', makeViewer())).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('visibility persistence and aligned objectives', () => {
+    const updatedAt = new Date('2026-08-08T08:00:00.000Z');
+
+    it('returns only aligned objectives that remain visible to the viewer', async () => {
+      const task = buildFullTask('indicator_reviewing');
+      task.indicatorInstances = [
+        {
+          ...makeIndicator(),
+          visibilityScope: 'custom',
+          visibleDepartments: [{ departmentId: 'dept-2' }],
+          visibleUsers: [{ userId: 'user-2' }],
+          objectiveAlignments: [
+            {
+              objectiveId: 'objective-1',
+              objective: {
+                id: 'objective-1',
+                title: 'Visible objective',
+                level: 'department',
+                ownerId: 'owner-1',
+              },
+            },
+            {
+              objectiveId: 'objective-2',
+              objective: {
+                id: 'objective-2',
+                title: 'Protected objective',
+                level: 'individual',
+                ownerId: 'owner-2',
+              },
+            },
+          ],
+        } as any,
+      ];
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+      objectivesService.findVisibleByIds.mockResolvedValue([{ id: 'objective-1' }]);
+
+      const result = await service.findOne('task-1', makeViewer({ id: 'mgr-1' }));
+
+      expect(objectivesService.findVisibleByIds).toHaveBeenCalledWith(
+        ['objective-1', 'objective-2'],
+        expect.objectContaining({ id: 'mgr-1' }),
+      );
+      expect(result.indicatorInstances[0]).toMatchObject({
+        visibilityScope: 'custom',
+        visibleDepartmentIds: ['dept-2'],
+        visibleUserIds: ['user-2'],
+        alignedObjectives: [
+          {
+            id: 'objective-1',
+            title: 'Visible objective',
+            level: 'department',
+            ownerId: 'owner-1',
+          },
+        ],
+      });
+    });
+
+    it('persists deduplicated visibility and objective relations inside the transaction', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...makeTask('indicator_reviewing'),
+        updatedAt,
+      });
+      jest.spyOn(service, 'findOne').mockResolvedValue({ id: 'task-1' } as TaskDetail);
+
+      await service.setIndicators(
+        'task-1',
+        {
+          expectedUpdatedAt: updatedAt.toISOString(),
+          action: 'save',
+          instances: [
+            {
+              name: 'Revenue',
+              weight: 1,
+              visibilityScope: 'custom',
+              visibleDepartmentIds: ['dept-2', 'dept-2'],
+              visibleUserIds: ['user-2', 'user-2'],
+              alignedObjectiveIds: ['objective-1', 'objective-1'],
+            },
+          ],
+        } as any,
+        makeViewer({ id: 'mgr-1', sysRole: SysRole.manager }),
+      );
+
+      expect(indicatorVisibility.validateSelection).toHaveBeenCalledWith(
+        expect.objectContaining({
+          visibilityScope: 'custom',
+          visibleDepartmentIds: ['dept-2'],
+          visibleUserIds: ['user-2'],
+          alignedObjectiveIds: ['objective-1'],
+        }),
+        expect.objectContaining({ id: 'task-1' }),
+        expect.objectContaining({ id: 'mgr-1' }),
+      );
+      expect(transactionClient.indicatorInstance.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({
+            visibilityScope: 'custom',
+            visibleDepartments: {
+              createMany: { data: [{ departmentId: 'dept-2' }] },
+            },
+            visibleUsers: { createMany: { data: [{ userId: 'user-2' }] } },
+            objectiveAlignments: {
+              createMany: { data: [{ objectiveId: 'objective-1' }] },
+            },
+          }),
+        }),
+      );
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('rejects a stale task version before validation or transactional writes', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...makeTask('indicator_reviewing'),
+        updatedAt,
+      });
+
+      await expect(
+        service.setIndicators(
+          'task-1',
+          {
+            expectedUpdatedAt: '2026-08-08T07:59:59.000Z',
+            instances: [{ name: 'Revenue', weight: 1, visibilityScope: 'company' }],
+          } as any,
+          makeViewer({ id: 'mgr-1', sysRole: SysRole.manager }),
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(indicatorVisibility.validateSelection).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
     });
   });
 
