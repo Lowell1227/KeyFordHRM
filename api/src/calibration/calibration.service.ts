@@ -6,6 +6,7 @@ import { AuthUser } from '@/common/types/auth.types';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { FlowService } from '@/tasks/flow.service';
 import { CalibrateGradesDto, CalibrationItemDto } from './dto/calibrate-grades.dto';
+import { claimTaskVersion } from '@/tasks/task-version';
 
 /** 等级分布单项。 */
 export interface GradeDistributionEntry {
@@ -109,6 +110,7 @@ export class CalibrationService {
 
     await this.prisma.$transaction(
       async (tx) => {
+        const claimedVersions = new Map<string, Date>();
         for (const item of dto.calibrations) {
           const task = taskMap.get(item.taskId);
           if (!task) {
@@ -120,6 +122,12 @@ export class CalibrationService {
 
           const veto = normalizeVeto(item);
           const coefficient = coefficients[veto.grade];
+          if (!claimedVersions.has(task.id)) {
+            claimedVersions.set(
+              task.id,
+              await claimTaskVersion(tx, task.id, task.updatedAt.toISOString(), 'hr_calibration'),
+            );
+          }
 
           await tx.gradeResult.upsert({
             where: { taskId: task.id },
@@ -164,13 +172,22 @@ export class CalibrationService {
           }
 
           for (const task of hrCalibrationTasks) {
+            let claimedUpdatedAt = claimedVersions.get(task.id);
+            if (!claimedUpdatedAt) {
+              claimedUpdatedAt = await claimTaskVersion(
+                tx,
+                task.id,
+                task.updatedAt.toISOString(),
+                'hr_calibration',
+              );
+            }
             await this.flowService.transitionTx(tx, {
               task,
               action: 'submit',
               targetStatus: 'approval',
               actorId: viewer.id,
               comment: 'HR 校准完成，提交审批',
-              taskUpdate: { hrCalibratedAt: new Date() },
+              taskUpdate: { hrCalibratedAt: new Date(), updatedAt: claimedUpdatedAt },
             });
           }
 

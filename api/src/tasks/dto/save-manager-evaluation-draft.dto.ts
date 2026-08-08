@@ -1,8 +1,9 @@
-import { Type } from "class-transformer";
+import { Transform, Type } from "class-transformer";
 import {
   IsArray,
   IsDateString,
   IsDefined,
+  IsNotEmpty,
   IsNumber,
   IsOptional,
   IsString,
@@ -13,7 +14,9 @@ import {
 } from "class-validator";
 
 export class ExtraScoreItemDto {
+  @Transform(({ value }) => (typeof value === "string" ? value.trim() : value))
   @IsString()
+  @IsNotEmpty()
   label!: string;
 
   @IsNumber()

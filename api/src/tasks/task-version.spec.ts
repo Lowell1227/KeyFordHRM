@@ -1,6 +1,6 @@
 import { ConflictException } from '@nestjs/common';
 import { ERROR_CODE } from '@/common/constants/error-codes';
-import { assertTaskVersion } from './task-version';
+import { assertTaskVersion, claimTaskVersion } from './task-version';
 
 describe('assertTaskVersion', () => {
   it('accepts the same instant after ISO normalization', () => {
@@ -22,5 +22,27 @@ describe('assertTaskVersion', () => {
         code: ERROR_CODE.CONFLICT,
       });
     }
+  });
+});
+
+describe('claimTaskVersion', () => {
+  it('atomically claims both the expected version and current status', async () => {
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+
+    await claimTaskVersion(
+      { assessmentTask: { updateMany } } as any,
+      'task-1',
+      '2026-08-08T08:00:00.000Z',
+      'dept_review',
+    );
+
+    expect(updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'task-1',
+        updatedAt: new Date('2026-08-08T08:00:00.000Z'),
+        status: 'dept_review',
+      },
+      data: { updatedAt: expect.any(Date) },
+    });
   });
 });

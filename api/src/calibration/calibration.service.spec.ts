@@ -128,14 +128,31 @@ describe('CalibrationService core', () => {
 
 describe('CalibrationService DI', () => {
   let service: CalibrationService;
+  let prisma: any;
+  let transactionClient: any;
+  let flowService: { transitionTx: jest.Mock };
 
   beforeEach(async () => {
+    transactionClient = {
+      assessmentTask: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        findMany: jest.fn(),
+      },
+      gradeResult: { upsert: jest.fn() },
+    };
+    prisma = {
+      assessmentCycle: { findUnique: jest.fn() },
+      assessmentTask: { findMany: jest.fn() },
+      systemConfig: { findUnique: jest.fn().mockResolvedValue(null) },
+      $transaction: jest.fn(async (callback: (tx: any) => unknown) => callback(transactionClient)),
+    };
+    flowService = { transitionTx: jest.fn() };
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         CalibrationService,
-        { provide: PrismaService, useValue: { $transaction: jest.fn() } },
-        { provide: FlowService, useValue: {} },
-        { provide: NotificationsService, useValue: {} },
+        { provide: PrismaService, useValue: prisma },
+        { provide: FlowService, useValue: flowService },
+        { provide: NotificationsService, useValue: { create: jest.fn() } },
       ],
     }).compile();
 
@@ -144,5 +161,102 @@ describe('CalibrationService DI', () => {
 
   it('should be defined', () => {
     expect(service).toBeDefined();
+  });
+
+  it('claims the current HR-calibration status and version before saving a draft', async () => {
+    const updatedAt = new Date('2026-08-08T08:00:00.000Z');
+    const task = {
+      id: '11111111-1111-4111-8111-111111111111',
+      cycleId: 'cycle-1',
+      status: 'hr_calibration',
+      updatedAt,
+      isExempt: false,
+      employeeId: 'emp-1',
+      managerId: 'mgr-1',
+      deptHeadId: 'head-1',
+      approverId: 'vp-1',
+      gradeResult: { calculatedScore: new Prisma.Decimal(88), rawGrade: 'B' },
+    };
+    prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', name: 'Cycle', ...makeCycle() });
+    prisma.assessmentTask.findMany
+      .mockResolvedValueOnce([task])
+      .mockResolvedValueOnce([
+        {
+          ...task,
+          employee: { name: 'Employee', position: null },
+          dept: { name: 'Department' },
+          manager: { name: 'Manager' },
+          gradeResult: { ...task.gradeResult, calibratedGrade: 'B', isVeto: false },
+        },
+      ]);
+
+    await service.calibrateGrades(
+      'cycle-1',
+      {
+        submit: false,
+        calibrations: [{ taskId: task.id, calibratedGrade: 'B', calibrationNote: 'Draft' }],
+      },
+      { id: 'hr-1' } as any,
+    );
+
+    expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
+      where: { id: task.id, updatedAt, status: 'hr_calibration' },
+      data: { updatedAt: expect.any(Date) },
+    });
+    expect(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      transactionClient.gradeResult.upsert.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('uses the claimed HR-calibration version for the submit transition', async () => {
+    const updatedAt = new Date('2026-08-08T08:00:00.000Z');
+    const task = {
+      id: '11111111-1111-4111-8111-111111111111',
+      cycleId: 'cycle-1',
+      status: 'hr_calibration',
+      updatedAt,
+      isExempt: false,
+      employeeId: 'emp-1',
+      managerId: 'mgr-1',
+      deptHeadId: 'head-1',
+      approverId: null,
+      gradeResult: { calculatedScore: new Prisma.Decimal(88), rawGrade: 'B', calibratedGrade: 'B' },
+    };
+    prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', name: 'Cycle', ...makeCycle() });
+    prisma.assessmentTask.findMany
+      .mockResolvedValueOnce([task])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([
+        {
+          ...task,
+          employee: { name: 'Employee', position: null },
+          dept: { name: 'Department' },
+          manager: { name: 'Manager' },
+          gradeResult: { ...task.gradeResult, isVeto: false },
+        },
+      ]);
+    transactionClient.assessmentTask.findMany.mockResolvedValue([task]);
+
+    await service.calibrateGrades(
+      'cycle-1',
+      { submit: true, calibrations: [{ taskId: task.id, calibratedGrade: 'B' }] },
+      { id: 'hr-1' } as any,
+    );
+
+    expect(flowService.transitionTx).toHaveBeenCalledWith(
+      transactionClient,
+      expect.objectContaining({
+        task,
+        action: 'submit',
+        targetStatus: 'approval',
+        taskUpdate: expect.objectContaining({
+          hrCalibratedAt: expect.any(Date),
+          updatedAt: expect.any(Date),
+        }),
+      }),
+    );
+    expect(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+      flowService.transitionTx.mock.invocationCallOrder[0],
+    );
   });
 });

@@ -14,6 +14,7 @@ import { ObjectivesService } from '@/objectives/objectives.service';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { SubmitManagerScoreDto } from './dto/submit-manager-score.dto';
+import { SaveManagerEvaluationDraftDto } from './dto/save-manager-evaluation-draft.dto';
 
 describe('TasksService', () => {
   let service: TasksService;
@@ -24,13 +25,14 @@ describe('TasksService', () => {
       findMany: jest.Mock;
       update: jest.Mock;
     };
+    assessmentCycle: { findUnique: jest.Mock };
     indicatorInstance: {
       findMany: jest.Mock;
       deleteMany: jest.Mock;
       create: jest.Mock;
     };
     managerEvalSummary: { upsert: jest.Mock; update: jest.Mock };
-    gradeResult: { upsert: jest.Mock };
+    gradeResult: { upsert: jest.Mock; findUnique: jest.Mock };
     flowRecord: { create: jest.Mock; findFirst: jest.Mock };
     systemConfig: { findUnique: jest.Mock };
     $transaction: jest.Mock;
@@ -55,7 +57,7 @@ describe('TasksService', () => {
       create: jest.Mock;
     };
     managerEvalSummary: { upsert: jest.Mock; update: jest.Mock };
-    gradeResult: { upsert: jest.Mock };
+    gradeResult: { upsert: jest.Mock; findUnique: jest.Mock };
     systemConfig: { findUnique: jest.Mock };
     flowRecord: { create: jest.Mock; findFirst: jest.Mock };
   };
@@ -73,7 +75,7 @@ describe('TasksService', () => {
         create: jest.fn(),
       },
       managerEvalSummary: { upsert: jest.fn(), update: jest.fn() },
-      gradeResult: { upsert: jest.fn() },
+      gradeResult: { upsert: jest.fn(), findUnique: jest.fn().mockResolvedValue(null) },
       systemConfig: { findUnique: jest.fn().mockResolvedValue(null) },
       flowRecord: { create: jest.fn(), findFirst: jest.fn().mockResolvedValue(null) },
     };
@@ -84,6 +86,7 @@ describe('TasksService', () => {
         findMany: jest.fn(),
         update: jest.fn(),
       },
+      assessmentCycle: { findUnique: jest.fn().mockResolvedValue(null) },
       indicatorInstance: {
         findMany: jest.fn(),
         deleteMany: jest.fn(),
@@ -200,6 +203,39 @@ describe('TasksService', () => {
 
       expect(JSON.stringify(errors)).toContain('managerScore');
     });
+
+    it('rejects an extra-score label containing only whitespace', async () => {
+      const dto = plainToInstance(SaveManagerEvaluationDraftDto, {
+        expectedUpdatedAt: '2026-08-08T08:00:00.000Z',
+        indicators: [
+          {
+            id: '11111111-1111-4111-8111-111111111111',
+            extraScores: [{ label: '   ', value: 2 }],
+          },
+        ],
+        evalSummary: {},
+      });
+
+      const errors = await validate(dto);
+
+      expect(JSON.stringify(errors)).toContain('label');
+    });
+
+    it('trims a valid extra-score label before validation', async () => {
+      const dto = plainToInstance(SaveManagerEvaluationDraftDto, {
+        expectedUpdatedAt: '2026-08-08T08:00:00.000Z',
+        indicators: [
+          {
+            id: '11111111-1111-4111-8111-111111111111',
+            extraScores: [{ label: '  Stretch  ', value: 2 }],
+          },
+        ],
+        evalSummary: {},
+      });
+
+      await expect(validate(dto)).resolves.toEqual([]);
+      expect(dto.indicators[0].extraScores?.[0].label).toBe('Stretch');
+    });
   });
 
   function buildFullTask(status: TaskStatus, publishVisibleFields: Prisma.JsonValue = null) {
@@ -227,6 +263,11 @@ describe('TasksService', () => {
         calculatedScore: new Prisma.Decimal(85),
         rawGrade: 'B',
         calibratedGrade: null,
+        calibrationNote: null,
+        isVeto: true,
+        vetoReason: 'Policy breach',
+        vetoOperatorId: 'mgr-1',
+        vetoOperator: { id: 'mgr-1', name: 'Manager A' },
         coefficient: new Prisma.Decimal(1.0),
         isPublished: true,
         employeeConfirmedAt: null,
@@ -279,6 +320,12 @@ describe('TasksService', () => {
       expect(ind.managerComment).toBeNull();
       expect(result.managerEvalSummary).toBeNull();
       expect(result.gradeResult?.coefficient).toBeNull();
+      expect(result.gradeResult).toMatchObject({
+        isVeto: false,
+        vetoReason: null,
+        vetoOperatorId: null,
+        vetoOperatorName: null,
+      });
     });
 
     it('非员工查看不受 D18 遮蔽影响', async () => {
@@ -295,6 +342,12 @@ describe('TasksService', () => {
       expect(result.indicatorInstances[0].managerScore).toBe(85);
       expect(result.indicatorInstances[0].finalScore).toBe(85);
       expect(result.indicatorInstances[0].extraScores).toEqual([{ label: 'Stretch', value: 2 }]);
+      expect(result.gradeResult).toMatchObject({
+        isVeto: true,
+        vetoReason: 'Policy breach',
+        vetoOperatorId: 'mgr-1',
+        vetoOperatorName: 'Manager A',
+      });
     });
 
     it('无权限查看抛 403', async () => {
@@ -658,8 +711,30 @@ describe('TasksService', () => {
       expect(scoringService.calcTaskTotal).toHaveBeenCalledTimes(1);
       expect(transactionClient.gradeResult.upsert).toHaveBeenCalledWith(
         expect.objectContaining({
-          create: expect.objectContaining({ calculatedScore: 88, rawGrade: 'B' }),
-          update: expect.objectContaining({ calculatedScore: 88, rawGrade: 'B' }),
+          create: expect.objectContaining({
+            calculatedScore: 88,
+            rawGrade: 'B',
+            calibratedGrade: null,
+            calibrationNote: null,
+            coefficient: null,
+            hrCalibratorId: null,
+            hrCalibratedAt: null,
+            isVeto: false,
+            vetoReason: null,
+            vetoOperatorId: null,
+          }),
+          update: expect.objectContaining({
+            calculatedScore: 88,
+            rawGrade: 'B',
+            calibratedGrade: null,
+            calibrationNote: null,
+            coefficient: null,
+            hrCalibratorId: null,
+            hrCalibratedAt: null,
+            isVeto: false,
+            vetoReason: null,
+            vetoOperatorId: null,
+          }),
         }),
       );
       expect(flowService.transitionTx).toHaveBeenCalledWith(
@@ -675,6 +750,62 @@ describe('TasksService', () => {
       );
       expect(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
         transactionClient.indicatorInstance.update.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('rejects a veto before grading when the task has no veto indicator', async () => {
+      const task = scoringTask();
+      task.indicatorInstances = task.indicatorInstances.filter((indicator) => indicator.indicatorType !== 'veto');
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+
+      await expect(
+        service.submitManagerScore(
+          'task-1',
+          {
+            expectedUpdatedAt: updatedAt.toISOString(),
+            indicators: submittedIndicators,
+            evalSummary: {},
+            veto: { isVeto: true, vetoReason: 'Policy breach' },
+          },
+          manager(),
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(scoringService.validateScore).not.toHaveBeenCalled();
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('preserves a valid manager veto while clearing stale HR calibration ownership', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(scoringTask());
+      transactionClient.indicatorInstance.findMany.mockResolvedValue([
+        makeIndicator({ id: 'ind-1' }),
+        makeIndicator({ id: 'ind-2' }),
+      ]);
+
+      await service.submitManagerScore(
+        'task-1',
+        {
+          expectedUpdatedAt: updatedAt.toISOString(),
+          indicators: submittedIndicators,
+          evalSummary: {},
+          veto: { isVeto: true, vetoReason: ' Policy breach ' },
+        },
+        manager(),
+      );
+
+      expect(transactionClient.gradeResult.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          update: expect.objectContaining({
+            calibratedGrade: 'D',
+            calibrationNote: null,
+            coefficient: null,
+            hrCalibratorId: null,
+            hrCalibratedAt: null,
+            isVeto: true,
+            vetoReason: 'Policy breach',
+            vetoOperatorId: 'mgr-1',
+          }),
+        }),
       );
     });
 
@@ -793,6 +924,18 @@ describe('TasksService', () => {
           },
           select: { id: true },
         });
+        expect(transactionClient.gradeResult.findUnique).toHaveBeenCalledWith({
+          where: { taskId: 'task-1' },
+          select: {
+            calibratedGrade: true,
+            calibrationNote: true,
+            coefficient: true,
+            hrCalibratorId: true,
+            hrCalibratedAt: true,
+            isVeto: true,
+            vetoOperatorId: true,
+          },
+        });
         expect(transactionClient.assessmentTask.update).toHaveBeenCalledWith({
           where: { id: 'task-1' },
           data: {
@@ -899,6 +1042,113 @@ describe('TasksService', () => {
 
       expect(transactionClient.assessmentTask.update).not.toHaveBeenCalled();
       expect(transactionClient.flowRecord.create).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['hrCalibratedAt', { hrCalibratedAt: new Date('2026-08-08T07:57:00.000Z') }],
+      ['hrCalibratorId', { hrCalibratorId: 'hr-1' }],
+      ['coefficient', { coefficient: new Prisma.Decimal(1.2) }],
+      ['calibrationNote', { calibrationNote: 'Draft note' }],
+      ['calibratedGrade', { calibratedGrade: 'A' }],
+    ])('rejects withdrawal when GradeResult contains the HR %s signal', async (_signal, gradeResult) => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(withdrawableTask('hr_calibration'));
+      transactionClient.gradeResult.findUnique.mockResolvedValue({
+        calibratedGrade: null,
+        calibrationNote: null,
+        coefficient: null,
+        hrCalibratorId: null,
+        hrCalibratedAt: null,
+        isVeto: false,
+        vetoOperatorId: null,
+        ...gradeResult,
+      });
+
+      await expect(
+        service.withdrawManagerScore(
+          'task-1',
+          { expectedUpdatedAt: updatedAt.toISOString() },
+          manager(),
+        ),
+      ).rejects.toThrow(ConflictException);
+
+      expect(transactionClient.assessmentTask.update).not.toHaveBeenCalled();
+      expect(transactionClient.flowRecord.create).not.toHaveBeenCalled();
+    });
+
+    it('allows withdrawal of manager-owned veto state so it can be restored as a draft', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(withdrawableTask('hr_calibration'));
+      transactionClient.gradeResult.findUnique.mockResolvedValue({
+        calibratedGrade: 'D',
+        calibrationNote: null,
+        coefficient: null,
+        hrCalibratorId: null,
+        hrCalibratedAt: null,
+        isVeto: true,
+        vetoOperatorId: 'mgr-1',
+      });
+
+      await expect(
+        service.withdrawManagerScore(
+          'task-1',
+          { expectedUpdatedAt: updatedAt.toISOString() },
+          manager(),
+        ),
+      ).resolves.toEqual({ id: 'task-1', status: 'manager_scoring' });
+
+      expect(transactionClient.gradeResult.upsert).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('department review transition claim', () => {
+    it('claims the current department-review status and version before transitioning', async () => {
+      const updatedAt = new Date('2026-08-08T08:00:00.000Z');
+      prisma.assessmentTask.findUnique.mockResolvedValue({ ...makeTask('dept_review'), updatedAt });
+
+      await service.deptReview(
+        'task-1',
+        { action: 'approve', comment: 'Approved' },
+        makeViewer({ id: 'head-1', sysRole: SysRole.manager }),
+      );
+
+      expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
+        where: { id: 'task-1', updatedAt, status: 'dept_review' },
+        data: { updatedAt: expect.any(Date) },
+      });
+      expect(flowService.transitionTx).toHaveBeenCalledWith(
+        transactionClient,
+        expect.objectContaining({
+          action: 'approve',
+          targetStatus: 'hr_calibration',
+          taskUpdate: expect.objectContaining({ updatedAt: expect.any(Date) }),
+        }),
+      );
+      expect(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+        flowService.transitionTx.mock.invocationCallOrder[0],
+      );
+    });
+
+    it('also claims the current status and version before rejecting', async () => {
+      const updatedAt = new Date('2026-08-08T08:00:00.000Z');
+      prisma.assessmentTask.findUnique.mockResolvedValue({ ...makeTask('dept_review'), updatedAt });
+
+      await service.deptReview(
+        'task-1',
+        { action: 'reject', comment: 'Revise' },
+        makeViewer({ id: 'head-1', sysRole: SysRole.manager }),
+      );
+
+      expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
+        where: { id: 'task-1', updatedAt, status: 'dept_review' },
+        data: { updatedAt: expect.any(Date) },
+      });
+      expect(flowService.transitionTx).toHaveBeenCalledWith(
+        transactionClient,
+        expect.objectContaining({
+          action: 'reject',
+          targetStatus: 'manager_scoring',
+          taskUpdate: expect.objectContaining({ updatedAt: expect.any(Date) }),
+        }),
+      );
     });
   });
 

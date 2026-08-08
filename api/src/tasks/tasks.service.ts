@@ -95,6 +95,10 @@ export interface TaskDetail extends TaskListItem {
     rawGrade: string | null;
     calibratedGrade: string | null;
     coefficient: number | null;
+    isVeto: boolean;
+    vetoReason: string | null;
+    vetoOperatorId: string | null;
+    vetoOperatorName: string | null;
     isPublished: boolean;
     employeeConfirmedAt: Date | null;
   } | null;
@@ -303,7 +307,9 @@ export class TasksService {
         },
         selfEvalSummary: true,
         managerEvalSummary: true,
-        gradeResult: true,
+        gradeResult: {
+          include: { vetoOperator: { select: { id: true, name: true } } },
+        },
         performanceInterview: true,
         flowRecords: {
           orderBy: { createdAt: 'desc' },
@@ -849,6 +855,12 @@ export class TasksService {
         message: '一票否决必须填写原因',
       });
     }
+    if (dto.veto?.isVeto && !task.indicatorInstances.some((indicator) => indicator.indicatorType === 'veto')) {
+      throw new ConflictException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '当前考核任务不包含一票否决指标',
+      });
+    }
 
     const targetStatus = task.managerId === task.deptHeadId ? 'hr_calibration' : 'dept_review';
     const submittedAt = new Date();
@@ -903,6 +915,14 @@ export class TasksService {
         scoreResult.rawGrade = 'D';
       }
 
+      const vetoReason = dto.veto?.isVeto ? dto.veto.vetoReason!.trim() : null;
+      const resetCalibration = {
+        calibratedGrade: dto.veto?.isVeto ? ('D' as const) : null,
+        calibrationNote: null,
+        coefficient: null,
+        hrCalibratorId: null,
+        hrCalibratedAt: null,
+      };
       await tx.gradeResult.upsert({
         where: { taskId: id },
         create: {
@@ -910,17 +930,17 @@ export class TasksService {
           calculatedScore: scoreResult.totalScore,
           rawGrade: scoreResult.rawGrade,
           isVeto: dto.veto?.isVeto ?? false,
-          vetoReason: dto.veto?.isVeto ? (dto.veto.vetoReason ?? null) : null,
+          vetoReason,
           vetoOperatorId: dto.veto?.isVeto ? viewer.id : null,
-          calibratedGrade: dto.veto?.isVeto ? 'D' : undefined,
+          ...resetCalibration,
         },
         update: {
           calculatedScore: scoreResult.totalScore,
           rawGrade: scoreResult.rawGrade,
           isVeto: dto.veto?.isVeto ?? false,
-          vetoReason: dto.veto?.isVeto ? (dto.veto.vetoReason ?? null) : null,
+          vetoReason,
           vetoOperatorId: dto.veto?.isVeto ? viewer.id : null,
-          calibratedGrade: dto.veto?.isVeto ? 'D' : undefined,
+          ...resetCalibration,
         },
       });
 
@@ -983,7 +1003,7 @@ export class TasksService {
     assertTaskVersion(task.updatedAt, dto.expectedUpdatedAt);
 
     await this.prisma.$transaction(async (tx) => {
-      const claimedUpdatedAt = await claimTaskVersion(tx, task.id, dto.expectedUpdatedAt);
+      const claimedUpdatedAt = await claimTaskVersion(tx, task.id, dto.expectedUpdatedAt, directNextStatus);
       const downstreamRecord = await tx.flowRecord.findFirst({
         where: {
           taskId: task.id,
@@ -998,6 +1018,38 @@ export class TasksService {
         throw new ConflictException({
           code: ERROR_CODE.CONFLICT,
           message: '下一节点已处理，不能撤回主管评分',
+        });
+      }
+
+      const gradeResult = await tx.gradeResult.findUnique({
+        where: { taskId: task.id },
+        select: {
+          calibratedGrade: true,
+          calibrationNote: true,
+          coefficient: true,
+          hrCalibratorId: true,
+          hrCalibratedAt: true,
+          isVeto: true,
+          vetoOperatorId: true,
+        },
+      });
+      const managerOwnedVeto =
+        gradeResult?.isVeto === true &&
+        gradeResult.vetoOperatorId === task.managerId &&
+        gradeResult.calibratedGrade === 'D';
+      const hasHrCalibrationActivity =
+        gradeResult != null &&
+        (gradeResult.hrCalibratedAt != null ||
+          gradeResult.hrCalibratorId != null ||
+          gradeResult.coefficient != null ||
+          gradeResult.calibrationNote != null ||
+          (gradeResult.calibratedGrade != null && !managerOwnedVeto) ||
+          (gradeResult.isVeto && !managerOwnedVeto) ||
+          (!gradeResult.isVeto && gradeResult.vetoOperatorId != null));
+      if (hasHrCalibrationActivity) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: 'HR 已开始校准，不能撤回主管评分',
         });
       }
 
@@ -1035,13 +1087,19 @@ export class TasksService {
 
     if (dto.action === 'approve') {
       await this.prisma.$transaction(async (tx) => {
+        const claimedUpdatedAt = await claimTaskVersion(
+          tx,
+          task.id,
+          task.updatedAt.toISOString(),
+          'dept_review',
+        );
         await this.flowService.transitionTx(tx, {
           task,
           action: 'approve',
           targetStatus: 'hr_calibration',
           actorId: viewer.id,
           comment: dto.comment,
-          taskUpdate: { deptReviewedAt: new Date() },
+          taskUpdate: { deptReviewedAt: new Date(), updatedAt: claimedUpdatedAt },
         });
       });
 
@@ -1051,13 +1109,19 @@ export class TasksService {
 
     // reject
     await this.prisma.$transaction(async (tx) => {
+      const claimedUpdatedAt = await claimTaskVersion(
+        tx,
+        task.id,
+        task.updatedAt.toISOString(),
+        'dept_review',
+      );
       await this.flowService.transitionTx(tx, {
         task,
         action: 'reject',
         targetStatus: 'manager_scoring',
         actorId: viewer.id,
         comment: dto.comment,
-        taskUpdate: { deptReviewedAt: null },
+        taskUpdate: { deptReviewedAt: null, updatedAt: claimedUpdatedAt },
       });
     });
 
@@ -1408,6 +1472,10 @@ export class TasksService {
             rawGrade: task.gradeResult.rawGrade,
             calibratedGrade: task.gradeResult.calibratedGrade,
             coefficient: task.gradeResult.coefficient?.toNumber() ?? null,
+            isVeto: task.gradeResult.isVeto,
+            vetoReason: task.gradeResult.vetoReason,
+            vetoOperatorId: task.gradeResult.vetoOperatorId,
+            vetoOperatorName: task.gradeResult.vetoOperator?.name ?? null,
             isPublished: task.gradeResult.isPublished,
             employeeConfirmedAt: task.gradeResult.employeeConfirmedAt,
           }
@@ -1487,6 +1555,12 @@ export class TasksService {
 
     if (!visible.manager_comment) {
       masked.managerEvalSummary = null;
+      if (masked.gradeResult) {
+        masked.gradeResult.isVeto = false;
+        masked.gradeResult.vetoReason = null;
+        masked.gradeResult.vetoOperatorId = null;
+        masked.gradeResult.vetoOperatorName = null;
+      }
     }
 
     return masked;

@@ -1,5 +1,5 @@
 import { ConflictException } from '@nestjs/common';
-import { Prisma } from '@prisma/client';
+import { Prisma, TaskStatus } from '@prisma/client';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 
 export function assertTaskVersion(updatedAt: Date, expectedUpdatedAt: string): void {
@@ -20,11 +20,12 @@ export async function claimTaskVersion(
   tx: Prisma.TransactionClient,
   taskId: string,
   expectedUpdatedAt: string,
+  expectedStatus?: TaskStatus,
 ): Promise<Date> {
   const expected = new Date(expectedUpdatedAt);
   const claimedUpdatedAt = new Date(Math.max(Date.now(), expected.getTime() + 1));
   const claimed = await tx.assessmentTask.updateMany({
-    where: { id: taskId, updatedAt: expected },
+    where: { id: taskId, updatedAt: expected, ...(expectedStatus ? { status: expectedStatus } : {}) },
     data: { updatedAt: claimedUpdatedAt },
   });
 
