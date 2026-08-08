@@ -18,7 +18,7 @@ import { SetIndicatorItemDto, SetIndicatorsDto } from './dto/set-indicators.dto'
 import { ObjectivesService } from '@/objectives/objectives.service';
 import { IndicatorReferenceItem, IndicatorVisibilityService } from './indicator-visibility.service';
 import { ReferenceIndicatorQueryDto } from './dto/reference-indicator-query.dto';
-import { assertTaskVersion } from './task-version';
+import { assertTaskVersion, taskVersionConflict } from './task-version';
 
 /** 任务列表项。 */
 export interface TaskListItem {
@@ -535,12 +535,13 @@ export class TasksService {
     let submittedToReview = false;
     let approvedForEmployeeConfirm = false;
     await this.prisma.$transaction(async (tx) => {
+      const claimedUpdatedAt = await this.claimTaskVersion(tx, task.id, dto.expectedUpdatedAt);
       await this.replaceIndicatorInstances(tx, task.id, validItems);
 
       if (action === 'save') {
         await tx.assessmentTask.update({
           where: { id: task.id },
-          data: { updatedAt: new Date() },
+          data: { updatedAt: claimedUpdatedAt },
         });
         await tx.flowRecord.create({
           data: {
@@ -573,7 +574,7 @@ export class TasksService {
             count: validItems.length,
           },
           taskUpdate: {
-            updatedAt: new Date(),
+            updatedAt: claimedUpdatedAt,
           },
         });
         submittedToReview = true;
@@ -595,7 +596,7 @@ export class TasksService {
           taskUpdate: {
             indicatorSetAt: new Date(),
             indicatorConfirmedAt: null,
-            updatedAt: new Date(),
+            updatedAt: claimedUpdatedAt,
           },
         });
         approvedForEmployeeConfirm = true;
@@ -1061,6 +1062,22 @@ export class TasksService {
       weight: item.weight ?? defaultWeight,
       sortOrder: item.sortOrder ?? index,
     }));
+  }
+
+  private async claimTaskVersion(
+    tx: Prisma.TransactionClient,
+    taskId: string,
+    expectedUpdatedAt: string,
+  ): Promise<Date> {
+    const expected = new Date(expectedUpdatedAt);
+    const claimedUpdatedAt = new Date(Math.max(Date.now(), expected.getTime() + 1));
+    const claimed = await tx.assessmentTask.updateMany({
+      where: { id: taskId, updatedAt: expected },
+      data: { updatedAt: claimedUpdatedAt },
+    });
+
+    if (claimed.count !== 1) throw taskVersionConflict();
+    return claimedUpdatedAt;
   }
 
   private async replaceIndicatorInstances(

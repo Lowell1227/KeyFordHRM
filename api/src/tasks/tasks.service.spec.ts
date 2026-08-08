@@ -35,14 +35,17 @@ describe('TasksService', () => {
   let indicatorVisibility: { validateSelection: jest.Mock };
   let objectivesService: { findVisibleByIds: jest.Mock };
   let transactionClient: {
-    assessmentTask: { update: jest.Mock };
+    assessmentTask: { update: jest.Mock; updateMany: jest.Mock };
     indicatorInstance: { deleteMany: jest.Mock; create: jest.Mock };
     flowRecord: { create: jest.Mock };
   };
 
   beforeEach(async () => {
     transactionClient = {
-      assessmentTask: { update: jest.fn() },
+      assessmentTask: {
+        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       indicatorInstance: { deleteMany: jest.fn(), create: jest.fn() },
       flowRecord: { create: jest.fn() },
     };
@@ -356,7 +359,76 @@ describe('TasksService', () => {
           }),
         }),
       );
+      expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
+        where: { id: 'task-1', updatedAt },
+        data: { updatedAt: expect.any(Date) },
+      });
+      expect(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0]).toBeLessThan(
+        transactionClient.indicatorInstance.deleteMany.mock.invocationCallOrder[0],
+      );
       expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    });
+
+    it('allows only one concurrent replacement to commit for the same task version', async () => {
+      const task = { ...makeTask('indicator_reviewing'), updatedAt };
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+      jest.spyOn(service, 'findOne').mockResolvedValue({ id: 'task-1' } as TaskDetail);
+
+      let storedVersion = updatedAt.toISOString();
+      const committedIndicators: string[] = [];
+      prisma.$transaction.mockImplementation(async (callback) => {
+        const stagedIndicators: string[] = [];
+        const tx = {
+          assessmentTask: {
+            updateMany: jest.fn(async ({ where, data }) => {
+              const expected = (where.updatedAt as Date).toISOString();
+              if (expected !== storedVersion) return { count: 0 };
+              storedVersion = (data.updatedAt as Date).toISOString();
+              return { count: 1 };
+            }),
+            update: jest.fn().mockResolvedValue(task),
+          },
+          indicatorInstance: {
+            deleteMany: jest.fn(),
+            create: jest.fn(async ({ data }) => {
+              stagedIndicators.push(data.name);
+            }),
+          },
+          flowRecord: { create: jest.fn() },
+        };
+
+        const result = await callback(tx);
+        committedIndicators.push(...stagedIndicators);
+        return result;
+      });
+
+      const dto = {
+        expectedUpdatedAt: updatedAt.toISOString(),
+        action: 'save' as const,
+        instances: [
+          {
+            name: 'Revenue',
+            weight: 1,
+            visibilityScope: 'company' as const,
+            visibleDepartmentIds: [],
+            visibleUserIds: [],
+            alignedObjectiveIds: [],
+          },
+        ],
+      };
+
+      const results = await Promise.allSettled([
+        service.setIndicators('task-1', dto, makeViewer({ id: 'mgr-1', sysRole: SysRole.manager })),
+        service.setIndicators('task-1', dto, makeViewer({ id: 'mgr-1', sysRole: SysRole.manager })),
+      ]);
+
+      expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+      const rejected = results.find((result) => result.status === 'rejected') as PromiseRejectedResult;
+      expect(rejected.reason).toBeInstanceOf(ConflictException);
+      expect((rejected.reason as ConflictException).getResponse()).toMatchObject({
+        code: ERROR_CODE.CONFLICT,
+      });
+      expect(committedIndicators).toEqual(['Revenue']);
     });
 
     it('rejects a stale task version before validation or transactional writes', async () => {
