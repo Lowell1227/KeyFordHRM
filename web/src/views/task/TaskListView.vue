@@ -9,6 +9,7 @@ import { usePagination } from '@/composables/usePagination';
 import StatusBadge from '@/components/common/StatusBadge.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
 import type { TaskListItem, AssessmentCycle } from '@/types/api.types';
 import type { TaskStatus } from '@/types/enums';
 
@@ -187,7 +188,8 @@ watch([page, pageSize], () => {
 </script>
 
 <template>
-  <div class="task-list page-stack">
+  <PerformanceWorkspace title="绩效待办" active-section="tasks" :show-context="false">
+    <div class="task-list page-stack">
     <ChartCard>
       <div class="task-summary">
         <div>
@@ -275,7 +277,8 @@ watch([page, pageSize], () => {
         />
       </div>
     </ChartCard>
-  </div>
+    </div>
+  </PerformanceWorkspace>
 </template>
 
 <style scoped>

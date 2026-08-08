@@ -53,7 +53,7 @@ const menus = computed<MenuItem[]>(() => {
   // 结果审批：审批权由 task.approver_id 决定，菜单仅按常见审批角色收敛可见范围。
   const all: MenuItem[] = [
     { path: '/dashboard', title: '首页', icon: HomeFilled, group: 'home' },
-    { path: '/tasks', title: '绩效考核', icon: EditPen, group: 'mine' },
+    { path: '/tasks', title: '绩效待办', icon: EditPen, group: 'mine' },
     {
       path: '/objectives',
       title: '目标地图',
@@ -63,7 +63,7 @@ const menus = computed<MenuItem[]>(() => {
     },
     {
       path: '/action-items',
-      title: '行动计划',
+      title: '目标跟进',
       icon: List,
       roles: ['manager', 'dept_head', 'vp', 'hr', 'chairman', 'system_admin'],
       group: 'performance',

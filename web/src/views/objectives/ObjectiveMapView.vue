@@ -33,6 +33,7 @@ import type {
 } from '@/types/api.types';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -317,7 +318,8 @@ async function removeRow(row: Objective) {
 </script>
 
 <template>
-  <div class="objective-map page-stack">
+  <PerformanceWorkspace title="目标地图" active-section="map" :show-context="false">
+    <div class="objective-map page-stack">
     <ChartCard>
       <template #title>
         <span class="panel-title">
@@ -555,7 +557,8 @@ async function removeRow(row: Objective) {
         </el-button>
       </template>
     </el-dialog>
-  </div>
+    </div>
+  </PerformanceWorkspace>
 </template>
 
 <style scoped>

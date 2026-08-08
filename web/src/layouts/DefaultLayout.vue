@@ -1,6 +1,12 @@
 <script setup lang="ts">
+import { computed } from 'vue';
+import { useRoute } from 'vue-router';
 import AppHeader from '@/components/layout/AppHeader.vue';
 import AppSidebar from '@/components/layout/AppSidebar.vue';
+
+const route = useRoute();
+const workspacePaths = new Set(['/action-items', '/objectives', '/tasks']);
+const isPerformanceWorkspace = computed(() => workspacePaths.has(route.path));
 </script>
 
 <template>
@@ -8,7 +14,7 @@ import AppSidebar from '@/components/layout/AppSidebar.vue';
     <AppSidebar />
     <el-container class="app-content">
       <AppHeader />
-      <el-main class="app-main">
+      <el-main class="app-main" :class="{ 'app-main--workspace': isPerformanceWorkspace }">
         <slot />
       </el-main>
     </el-container>
@@ -42,6 +48,11 @@ import AppSidebar from '@/components/layout/AppSidebar.vue';
   overscroll-behavior: contain;
 }
 
+.app-main--workspace {
+  padding: 0;
+  overflow: hidden;
+}
+
 @media (max-width: 1180px) {
   .app-main {
     padding: 14px;
@@ -66,6 +77,12 @@ import AppSidebar from '@/components/layout/AppSidebar.vue';
     min-height: 0;
     padding: 10px;
     overflow: auto;
+  }
+
+
+  .app-main--workspace {
+    padding: 0;
+    overflow: hidden;
   }
 }
 </style>

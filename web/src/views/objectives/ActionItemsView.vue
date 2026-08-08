@@ -27,6 +27,7 @@ import type {
 } from '@/types/api.types';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
 
 const route = useRoute();
 const auth = useAuthStore();
@@ -354,7 +355,8 @@ function dueDateDisplay(date: string | null): string {
 </script>
 
 <template>
-  <div class="action-items-view page-stack">
+  <PerformanceWorkspace title="目标跟进" active-section="tracking" :show-context="false">
+    <div class="action-items-view page-stack">
     <!-- 头部 -->
     <ChartCard>
       <template #title>
@@ -677,7 +679,8 @@ function dueDateDisplay(date: string | null): string {
         </el-button>
       </template>
     </el-dialog>
-  </div>
+    </div>
+  </PerformanceWorkspace>
 </template>
 
 <style scoped>

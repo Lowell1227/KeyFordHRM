@@ -113,7 +113,7 @@ const routes: RouteRecordRaw[] = [
     path: '/tasks',
     name: 'MyTasks',
     component: () => import('@/views/task/TaskListView.vue'),
-    meta: { requiresAuth: true, title: '绩效考核' },
+    meta: { requiresAuth: true, title: '绩效待办' },
   },
   {
     path: '/tasks/:id',
@@ -209,7 +209,7 @@ const routes: RouteRecordRaw[] = [
     component: () => import('@/views/objectives/ActionItemsView.vue'),
     meta: {
       requiresAuth: true,
-      title: '行动计划',
+      title: '目标跟进',
       roles: ['manager', 'dept_head', 'vp', 'hr', 'chairman', 'system_admin'],
     },
   },

@@ -71,6 +71,8 @@ declare module 'vue' {
     GradeDistChart: typeof import('./src/components/charts/GradeDistChart.vue')['default']
     GradeTag: typeof import('./src/components/common/GradeTag.vue')['default']
     NotificationBell: typeof import('./src/components/layout/NotificationBell.vue')['default']
+    PerformanceContextPanel: typeof import('./src/components/performance/PerformanceContextPanel.vue')['default']
+    PerformanceWorkspace: typeof import('./src/components/performance/PerformanceWorkspace.vue')['default']
     ProgressBar: typeof import('./src/components/common/ProgressBar.vue')['default']
     ProgressPieChart: typeof import('./src/components/charts/ProgressPieChart.vue')['default']
     RouterLink: typeof import('vue-router')['RouterLink']
