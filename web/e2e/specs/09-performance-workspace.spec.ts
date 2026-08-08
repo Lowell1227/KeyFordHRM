@@ -22,4 +22,13 @@ test.describe('09-performance-workspace manager shell', () => {
       );
     });
   }
+
+  test('objective map exposes compact filters and one continuous data surface', async ({ page }) => {
+    await page.goto('/objectives');
+
+    await expect(page.getByTestId('objective-map-toolbar')).toBeVisible();
+    await expect(page.getByTestId('objective-level-filter')).toBeVisible();
+    await expect(page.getByTestId('objective-map-surface')).toBeVisible();
+    await expect(page.getByTestId('objective-create')).toBeVisible();
+  });
 });

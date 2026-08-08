@@ -9,6 +9,10 @@ import {
   CollectionTag,
   Aim,
   List,
+  User as UserIcon,
+  OfficeBuilding,
+  ScaleToOriginal,
+  Star,
 } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useAuthStore } from '@/stores/auth.store';
@@ -32,7 +36,6 @@ import type {
   CreateObjectiveBody,
 } from '@/types/api.types';
 import EmptyState from '@/components/common/EmptyState.vue';
-import ChartCard from '@/components/common/ChartCard.vue';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
 
 const auth = useAuthStore();
@@ -53,8 +56,6 @@ const filters = reactive<{ cycleId: string; level: ObjectiveLevel | '' }>({
 const canManage = computed(() =>
   ['system_admin', 'hr', 'dept_head', 'manager'].includes(auth.user?.sysRole ?? ''),
 );
-
-const levelOptions: ObjectiveLevel[] = ['company', 'department', 'individual'];
 
 function defaultLevelForCreate(): ObjectiveLevel {
   const role = auth.user?.sysRole;
@@ -319,48 +320,46 @@ async function removeRow(row: Objective) {
 
 <template>
   <PerformanceWorkspace title="目标地图" active-section="map" :show-context="false">
+    <template #toolbar>
+      <el-button
+        v-if="canManage"
+        data-testid="objective-create"
+        type="primary"
+        :icon="Plus"
+        @click="openCreate"
+      >
+        新建目标
+      </el-button>
+    </template>
+
     <div class="objective-map page-stack">
-    <ChartCard>
-      <template #title>
-        <span class="panel-title">
-          <span>目标地图</span>
-          <el-tag type="info" size="small" effect="plain">独立模块 · 不与考核算分挂钩</el-tag>
-        </span>
-      </template>
-      <template #extra>
-        <el-button v-if="canManage" data-testid="objective-create" type="primary" :icon="Plus" @click="openCreate">
-          新建目标
-        </el-button>
-      </template>
-
-      <el-form :inline="true" class="filter-form">
-        <el-form-item label="考核周期">
-          <el-select v-model="filters.cycleId" placeholder="全部周期" clearable style="width: 200px">
-            <el-option
-              v-for="c in cycles"
-              :key="c.id"
-              :label="c.name"
-              :value="c.id"
-            />
+      <div data-testid="objective-map-toolbar" class="objective-map__toolbar">
+        <div class="objective-map__period">
+          <span class="objective-map__filter-label">周期</span>
+          <el-select
+            v-model="filters.cycleId"
+            aria-label="考核周期"
+            placeholder="全部周期"
+            clearable
+            class="objective-map__cycle-select"
+          >
+            <el-option v-for="c in cycles" :key="c.id" :label="c.name" :value="c.id" />
           </el-select>
-        </el-form-item>
-        <el-form-item label="目标层级">
-          <el-select v-model="filters.level" placeholder="全部层级" clearable style="width: 160px">
-            <el-option
-              v-for="l in levelOptions"
-              :key="l"
-              :label="levelLabel(l)"
-              :value="l"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item>
-          <el-button :icon="RefreshRight" @click="loadTree">刷新</el-button>
-        </el-form-item>
-      </el-form>
-    </ChartCard>
+        </div>
 
-    <ChartCard :padded="false">
+        <el-radio-group v-model="filters.level" data-testid="objective-level-filter">
+          <el-radio-button value="">全部目标</el-radio-button>
+          <el-radio-button value="company">公司目标</el-radio-button>
+          <el-radio-button value="department">部门目标</el-radio-button>
+          <el-radio-button value="individual">个人目标</el-radio-button>
+        </el-radio-group>
+
+        <div class="objective-map__toolbar-spacer" />
+        <el-tag type="info" size="small" effect="plain">独立目标模块</el-tag>
+        <el-button :icon="RefreshRight" @click="loadTree">刷新</el-button>
+      </div>
+
+      <section data-testid="objective-map-surface" class="performance-surface">
       <el-table
         v-loading="loading"
         class="app-table"
@@ -383,8 +382,12 @@ async function removeRow(row: Objective) {
         <el-table-column label="负责人 / 部门" width="180">
           <template #default="scope">
             <div class="meta-cell">
-              <span v-if="(scope.row as Objective).ownerName">👤 {{ (scope.row as Objective).ownerName }}</span>
-              <span v-if="(scope.row as Objective).deptName">🏢 {{ (scope.row as Objective).deptName }}</span>
+              <span v-if="(scope.row as Objective).ownerName" class="meta-line">
+                <el-icon><UserIcon /></el-icon>{{ (scope.row as Objective).ownerName }}
+              </span>
+              <span v-if="(scope.row as Objective).deptName" class="meta-line">
+                <el-icon><OfficeBuilding /></el-icon>{{ (scope.row as Objective).deptName }}
+              </span>
               <span v-if="!(scope.row as Objective).ownerName && !(scope.row as Objective).deptName">-</span>
             </div>
           </template>
@@ -395,8 +398,12 @@ async function removeRow(row: Objective) {
         <el-table-column label="权重 / 优先级" width="120">
           <template #default="scope">
             <div class="meta-cell">
-              <span v-if="(scope.row as Objective).weight != null">⚖️ {{ (scope.row as Objective).weight }}</span>
-              <span v-if="(scope.row as Objective).priority">⭐ {{ (scope.row as Objective).priority }}</span>
+              <span v-if="(scope.row as Objective).weight != null" class="meta-line">
+                <el-icon><ScaleToOriginal /></el-icon>{{ (scope.row as Objective).weight }}
+              </span>
+              <span v-if="(scope.row as Objective).priority" class="meta-line">
+                <el-icon><Star /></el-icon>{{ (scope.row as Objective).priority }}
+              </span>
               <span v-if="(scope.row as Objective).weight == null && !(scope.row as Objective).priority">-</span>
             </div>
           </template>
@@ -441,7 +448,7 @@ async function removeRow(row: Objective) {
       </el-table>
 
       <EmptyState v-if="!loading && treeData.length === 0" description="暂无目标，点击右上角新建" />
-    </ChartCard>
+      </section>
 
     <!-- 新建 / 编辑弹窗 -->
     <el-dialog v-model="dialogVisible" data-testid="objective-dialog" :title="dialogTitle" width="640px" destroy-on-close>
@@ -562,15 +569,56 @@ async function removeRow(row: Objective) {
 </template>
 
 <style scoped>
-.panel-title {
-  display: inline-flex;
-  align-items: center;
-  gap: 10px;
+.objective-map {
+  min-width: 0;
+  min-height: 100%;
+  padding: 16px;
 }
 
-/* 卡片内边距已由 ChartCard 控制，去掉 el-form-item 默认下边距避免双重留白 */
-.filter-form :deep(.el-form-item) {
-  margin-bottom: 0;
+.objective-map__toolbar {
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 10px;
+  background: #fff;
+  border: 1px solid #e2e6ed;
+  border-radius: 7px;
+}
+
+.objective-map__period {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.objective-map__filter-label {
+  color: #697386;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.objective-map__cycle-select {
+  width: 220px;
+}
+
+.objective-map__toolbar-spacer {
+  flex: 1;
+}
+
+.performance-surface {
+  min-width: 0;
+  min-height: 420px;
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid #e2e6ed;
+  border-radius: 7px;
+}
+
+.performance-surface :deep(.el-table) {
+  border: 0;
+  border-radius: 0;
 }
 
 .objective-title {
@@ -601,8 +649,54 @@ async function removeRow(row: Objective) {
   font-size: 13px;
 }
 
+.meta-line {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.meta-line .el-icon {
+  color: #8791a4;
+}
+
 .progress-row-title {
   margin-bottom: 16px;
   font-weight: 500;
+}
+
+@media (max-width: 768px) {
+  .objective-map {
+    min-height: auto;
+    padding: 10px;
+  }
+
+  .objective-map__toolbar {
+    align-items: stretch;
+    flex-direction: column;
+    overflow: hidden;
+  }
+
+  .objective-map__period,
+  .objective-map__cycle-select {
+    width: 100%;
+  }
+
+  .objective-map__toolbar :deep(.el-radio-group) {
+    width: max-content;
+    max-width: none;
+  }
+
+  .objective-map__toolbar :deep(.el-radio-group) {
+    overflow-x: auto;
+  }
+
+  .objective-map__toolbar-spacer {
+    display: none;
+  }
+
+  .performance-surface {
+    min-height: 360px;
+    overflow-x: auto;
+  }
 }
 </style>
