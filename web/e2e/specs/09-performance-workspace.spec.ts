@@ -40,3 +40,19 @@ test.describe('09-performance-workspace manager shell', () => {
     await expect(page.getByTestId('tracking-surface')).toBeVisible();
   });
 });
+
+test.describe('09-performance-workspace employee tasks', () => {
+  test.use({ storageState: 'e2e/auth-state/employee.json' });
+
+  test('performance tasks expose cycle and stage navigation', async ({ page }) => {
+    await page.goto('/tasks');
+
+    await expect(page.getByTestId('task-context')).toBeVisible();
+    await expect(page.getByTestId('task-cycle-filter')).toBeVisible();
+    const stage = page.getByTestId('task-stage-self-eval');
+    await expect(stage).toBeVisible();
+    await stage.click();
+    await expect(stage).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('task-surface')).toBeVisible();
+  });
+});
