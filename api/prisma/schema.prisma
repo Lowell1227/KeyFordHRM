@@ -154,8 +154,21 @@ enum FlowAction {
   reject
   transfer
   comment
+  withdraw
 
   @@map("flow_action")
+}
+
+enum IndicatorVisibilityScope {
+  company
+  department
+  department_tree
+  direct_reports
+  all_reports
+  supervisors
+  custom
+
+  @@map("indicator_visibility_scope")
 }
 
 enum AppealStatus {
@@ -301,13 +314,14 @@ model Department {
   createdAt      DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime    @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  parent     Department?      @relation("DeptTree", fields: [parentId], references: [id], onDelete: SetNull)
-  children   Department[]     @relation("DeptTree")
-  leader     User?            @relation("DeptLeader", fields: [leaderId], references: [id], onDelete: SetNull)
-  approver   User?            @relation("DeptApprover", fields: [approverId], references: [id], onDelete: SetNull)
-  members    User[]           @relation("DeptMembers")
-  tasks      AssessmentTask[]
-  objectives Objective[]      @relation("ObjectiveDepartment")
+  parent                         Department?                     @relation("DeptTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children                       Department[]                    @relation("DeptTree")
+  leader                         User?                           @relation("DeptLeader", fields: [leaderId], references: [id], onDelete: SetNull)
+  approver                       User?                           @relation("DeptApprover", fields: [approverId], references: [id], onDelete: SetNull)
+  members                        User[]                          @relation("DeptMembers")
+  tasks                          AssessmentTask[]
+  objectives                     Objective[]                     @relation("ObjectiveDepartment")
+  indicatorVisibilityDepartments IndicatorVisibilityDepartment[]
 
   @@index([parentId])
   @@index([approverId])
@@ -360,6 +374,7 @@ model User {
   calibratedResults                         GradeResult[]             @relation("GradeHrCalibrator")
   approvedResults                           GradeResult[]             @relation("GradeApprover")
   flowRecords                               FlowRecord[]
+  indicatorVisibilityUsers                  IndicatorVisibilityUser[]
   appeals                                   Appeal[]                  @relation("AppealAppellant")
   deptResolvedAppeals                       Appeal[]                  @relation("AppealDeptResolver")
   hrResolvedAppeals                         Appeal[]                  @relation("AppealHrResolver")
@@ -590,38 +605,75 @@ model AssessmentTask {
 }
 
 model IndicatorInstance {
-  id                  String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  taskId              String        @map("task_id") @db.Uuid
-  templateIndicatorId String?       @map("template_indicator_id") @db.Uuid
-  name                String        @db.VarChar(200)
-  description         String?       @db.Text
-  scoringStandard     String?       @map("scoring_standard") @db.Text
-  dataSource          String?       @map("data_source") @db.Text
-  dataCaliber         String?       @map("data_caliber") @db.Text
-  targetValue         Decimal?      @map("target_value") @db.Decimal(10, 2)
-  targetValueText     String?       @map("target_value_text") @db.VarChar(100)
-  unit                String?       @db.VarChar(30)
-  weight              Decimal       @db.Decimal(5, 4)
-  indicatorType       IndicatorType @default(kpi) @map("indicator_type")
-  dimensionName       String?       @map("dimension_name") @db.VarChar(100)
-  dimensionWeight     Decimal       @map("dimension_weight") @db.Decimal(5, 4)
-  actualValue         Decimal?      @map("actual_value") @db.Decimal(10, 2)
-  actualNote          String?       @map("actual_note") @db.Text
-  selfScore           Decimal?      @map("self_score") @db.Decimal(6, 2)
-  selfComment         String?       @map("self_comment") @db.Text
-  managerScore        Decimal?      @map("manager_score") @db.Decimal(6, 2)
-  managerComment      String?       @map("manager_comment") @db.Text
-  extraScores         Json          @default("[]") @map("extra_scores") @db.JsonB
-  finalScore          Decimal?      @map("final_score") @db.Decimal(6, 2)
-  sortOrder           Int           @default(0) @map("sort_order")
-  createdAt           DateTime      @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt           DateTime      @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id                  String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  taskId              String                   @map("task_id") @db.Uuid
+  templateIndicatorId String?                  @map("template_indicator_id") @db.Uuid
+  name                String                   @db.VarChar(200)
+  description         String?                  @db.Text
+  scoringStandard     String?                  @map("scoring_standard") @db.Text
+  dataSource          String?                  @map("data_source") @db.Text
+  dataCaliber         String?                  @map("data_caliber") @db.Text
+  targetValue         Decimal?                 @map("target_value") @db.Decimal(10, 2)
+  targetValueText     String?                  @map("target_value_text") @db.VarChar(100)
+  unit                String?                  @db.VarChar(30)
+  weight              Decimal                  @db.Decimal(5, 4)
+  indicatorType       IndicatorType            @default(kpi) @map("indicator_type")
+  dimensionName       String?                  @map("dimension_name") @db.VarChar(100)
+  dimensionWeight     Decimal                  @map("dimension_weight") @db.Decimal(5, 4)
+  visibilityScope     IndicatorVisibilityScope @default(supervisors) @map("visibility_scope")
+  actualValue         Decimal?                 @map("actual_value") @db.Decimal(10, 2)
+  actualNote          String?                  @map("actual_note") @db.Text
+  selfScore           Decimal?                 @map("self_score") @db.Decimal(6, 2)
+  selfComment         String?                  @map("self_comment") @db.Text
+  managerScore        Decimal?                 @map("manager_score") @db.Decimal(6, 2)
+  managerComment      String?                  @map("manager_comment") @db.Text
+  extraScores         Json                     @default("[]") @map("extra_scores") @db.JsonB
+  finalScore          Decimal?                 @map("final_score") @db.Decimal(6, 2)
+  sortOrder           Int                      @default(0) @map("sort_order")
+  createdAt           DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  task              AssessmentTask     @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  templateIndicator TemplateIndicator? @relation(fields: [templateIndicatorId], references: [id], onDelete: SetNull)
+  task                AssessmentTask                  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  templateIndicator   TemplateIndicator?              @relation(fields: [templateIndicatorId], references: [id], onDelete: SetNull)
+  visibleDepartments  IndicatorVisibilityDepartment[]
+  visibleUsers        IndicatorVisibilityUser[]
+  objectiveAlignments IndicatorObjectiveAlignment[]
 
   @@index([taskId])
   @@map("indicator_instances")
+}
+
+model IndicatorVisibilityDepartment {
+  indicatorInstanceId String            @map("indicator_instance_id") @db.Uuid
+  departmentId        String            @map("department_id") @db.Uuid
+  indicatorInstance   IndicatorInstance @relation(fields: [indicatorInstanceId], references: [id], onDelete: Cascade)
+  department          Department        @relation(fields: [departmentId], references: [id], onDelete: Cascade)
+
+  @@id([indicatorInstanceId, departmentId])
+  @@index([departmentId])
+  @@map("indicator_visibility_departments")
+}
+
+model IndicatorVisibilityUser {
+  indicatorInstanceId String            @map("indicator_instance_id") @db.Uuid
+  userId              String            @map("user_id") @db.Uuid
+  indicatorInstance   IndicatorInstance @relation(fields: [indicatorInstanceId], references: [id], onDelete: Cascade)
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@id([indicatorInstanceId, userId])
+  @@index([userId])
+  @@map("indicator_visibility_users")
+}
+
+model IndicatorObjectiveAlignment {
+  indicatorInstanceId String            @map("indicator_instance_id") @db.Uuid
+  objectiveId         String            @map("objective_id") @db.Uuid
+  indicatorInstance   IndicatorInstance @relation(fields: [indicatorInstanceId], references: [id], onDelete: Cascade)
+  objective           Objective         @relation(fields: [objectiveId], references: [id], onDelete: Cascade)
+
+  @@id([indicatorInstanceId, objectiveId])
+  @@index([objectiveId])
+  @@map("indicator_objective_alignments")
 }
 
 model SelfEvalSummary {
@@ -1025,14 +1077,15 @@ model Objective {
   createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  dept             Department?      @relation("ObjectiveDepartment", fields: [deptId], references: [id], onDelete: SetNull)
-  owner            User?            @relation("ObjectiveOwner", fields: [ownerId], references: [id], onDelete: SetNull)
-  parent           Objective?       @relation("ObjectiveTree", fields: [parentId], references: [id], onDelete: SetNull)
-  children         Objective[]      @relation("ObjectiveTree")
-  cycle            AssessmentCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
-  relatedIndicator Indicator?       @relation(fields: [relatedIndicatorId], references: [id], onDelete: SetNull)
-  creator          User?            @relation("ObjectiveCreator", fields: [createdBy], references: [id], onDelete: SetNull)
-  actionItems      ActionItem[]
+  dept                         Department?                   @relation("ObjectiveDepartment", fields: [deptId], references: [id], onDelete: SetNull)
+  owner                        User?                         @relation("ObjectiveOwner", fields: [ownerId], references: [id], onDelete: SetNull)
+  parent                       Objective?                    @relation("ObjectiveTree", fields: [parentId], references: [id], onDelete: SetNull)
+  children                     Objective[]                   @relation("ObjectiveTree")
+  cycle                        AssessmentCycle?              @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  relatedIndicator             Indicator?                    @relation(fields: [relatedIndicatorId], references: [id], onDelete: SetNull)
+  creator                      User?                         @relation("ObjectiveCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  actionItems                  ActionItem[]
+  indicatorObjectiveAlignments IndicatorObjectiveAlignment[]
 
   @@index([level])
   @@index([deptId])
