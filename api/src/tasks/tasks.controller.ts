@@ -23,6 +23,10 @@ import { SetIndicatorsDto } from './dto/set-indicators.dto';
 import { TeamTaskQueryDto } from './dto/team-task-query.dto';
 import { TeamTasksService } from './team-tasks.service';
 import { ReferenceIndicatorQueryDto } from './dto/reference-indicator-query.dto';
+import {
+  BatchIndicatorReviewDto,
+  BatchRejectIndicatorReviewDto,
+} from './dto/batch-indicator-review.dto';
 
 @Controller('tasks')
 export class TasksController {
@@ -46,6 +50,24 @@ export class TasksController {
   @Get('team')
   findTeam(@Query() dto: TeamTaskQueryDto, @CurrentUser() viewer: AuthUser) {
     return this.teamTasksService.findAll(dto, viewer);
+  }
+
+  @Post('team/indicator-review/batch-approve')
+  @HttpCode(200)
+  batchApproveIndicatorReview(
+    @Body() dto: BatchIndicatorReviewDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.teamTasksService.batchApprove(dto, viewer);
+  }
+
+  @Post('team/indicator-review/batch-reject')
+  @HttpCode(200)
+  batchRejectIndicatorReview(
+    @Body() dto: BatchRejectIndicatorReviewDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.teamTasksService.batchReject(dto, viewer);
   }
 
   /** GET /tasks/:id — 详情。 */

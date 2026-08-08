@@ -1,4 +1,5 @@
 import { ConflictException } from '@nestjs/common';
+import { Prisma } from '@prisma/client';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 
 export function assertTaskVersion(updatedAt: Date, expectedUpdatedAt: string): void {
@@ -13,4 +14,20 @@ export function taskVersionConflict(): ConflictException {
     code: ERROR_CODE.CONFLICT,
     message: '任务已被其他操作更新，请刷新后重试',
   });
+}
+
+export async function claimTaskVersion(
+  tx: Prisma.TransactionClient,
+  taskId: string,
+  expectedUpdatedAt: string,
+): Promise<Date> {
+  const expected = new Date(expectedUpdatedAt);
+  const claimedUpdatedAt = new Date(Math.max(Date.now(), expected.getTime() + 1));
+  const claimed = await tx.assessmentTask.updateMany({
+    where: { id: taskId, updatedAt: expected },
+    data: { updatedAt: claimedUpdatedAt },
+  });
+
+  if (claimed.count !== 1) throw taskVersionConflict();
+  return claimedUpdatedAt;
 }

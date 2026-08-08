@@ -1,10 +1,27 @@
-import { Injectable } from "@nestjs/common";
+import {
+  BadRequestException,
+  ConflictException,
+  ForbiddenException,
+  HttpException,
+  Injectable,
+  NotFoundException,
+} from "@nestjs/common";
+import { randomUUID } from "crypto";
 import { Prisma, TaskStatus } from "@prisma/client";
 import { Paginated } from "@/common/dto/pagination.dto";
+import { ERROR_CODE } from "@/common/constants/error-codes";
 import { AuthUser } from "@/common/types/auth.types";
+import { NotificationsService } from "@/notifications/notifications.service";
 import { PrismaService } from "@/prisma/prisma.service";
 import type { TaskListItem } from "./tasks.service";
+import {
+  BatchIndicatorReviewDto,
+  BatchRejectIndicatorReviewDto,
+  BatchTaskRefDto,
+} from "./dto/batch-indicator-review.dto";
 import { TeamTaskQueryDto } from "./dto/team-task-query.dto";
+import { FlowService } from "./flow.service";
+import { assertTaskVersion, claimTaskVersion } from "./task-version";
 import {
   getTeamStageState,
   getTeamStageStatuses,
@@ -40,9 +57,32 @@ export interface TeamTaskPage extends Paginated<TeamTaskListItem> {
   };
 }
 
+export interface BatchReviewResult {
+  succeeded: Array<{ taskId: string; status: TaskStatus }>;
+  failed: Array<{ taskId: string; reason: string }>;
+}
+
+type ReviewTask = Prisma.AssessmentTaskGetPayload<{
+  select: {
+    id: true;
+    cycleId: true;
+    employeeId: true;
+    managerId: true;
+    deptHeadId: true;
+    approverId: true;
+    status: true;
+    updatedAt: true;
+    indicatorInstances: { select: { weight: true } };
+  };
+}>;
+
 @Injectable()
 export class TeamTasksService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly flowService: FlowService,
+    private readonly notificationsService: NotificationsService,
+  ) {}
 
   async findAll(
     dto: TeamTaskQueryDto,
@@ -125,6 +165,28 @@ export class TeamTasksService {
     };
   }
 
+  async batchApprove(
+    dto: BatchIndicatorReviewDto,
+    viewer: AuthUser,
+  ): Promise<BatchReviewResult> {
+    return this.reviewBatch(dto.tasks, viewer, "approve");
+  }
+
+  async batchReject(
+    dto: BatchRejectIndicatorReviewDto,
+    viewer: AuthUser,
+  ): Promise<BatchReviewResult> {
+    const reason = dto.reason?.trim();
+    if (!reason) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: "请填写驳回原因",
+      });
+    }
+
+    return this.reviewBatch(dto.tasks, viewer, "reject", reason);
+  }
+
   private withFilters(
     authorizedWhere: Prisma.AssessmentTaskWhereInput,
     dto: TeamTaskQueryDto,
@@ -204,5 +266,140 @@ export class TeamTasksService {
       position: task.employee.position,
       stageState: getTeamStageState(task.status, stage),
     };
+  }
+
+  private async reviewBatch(
+    taskRefs: BatchTaskRefDto[],
+    viewer: AuthUser,
+    action: "approve" | "reject",
+    comment?: string,
+  ): Promise<BatchReviewResult> {
+    const batchId = randomUUID();
+    const result: BatchReviewResult = { succeeded: [], failed: [] };
+
+    for (const taskRef of taskRefs) {
+      try {
+        const status = await this.reviewTask(taskRef, viewer, action, batchId, comment);
+        result.succeeded.push({ taskId: taskRef.taskId, status });
+      } catch (error) {
+        if (!(error instanceof HttpException)) throw error;
+        result.failed.push({ taskId: taskRef.taskId, reason: this.exceptionReason(error) });
+      }
+    }
+
+    return result;
+  }
+
+  private async reviewTask(
+    taskRef: BatchTaskRefDto,
+    viewer: AuthUser,
+    action: "approve" | "reject",
+    batchId: string,
+    comment?: string,
+  ): Promise<TaskStatus> {
+    const task = await this.prisma.assessmentTask.findUnique({
+      where: { id: taskRef.taskId },
+      select: {
+        id: true,
+        cycleId: true,
+        employeeId: true,
+        managerId: true,
+        deptHeadId: true,
+        approverId: true,
+        status: true,
+        updatedAt: true,
+        indicatorInstances: { select: { weight: true } },
+      },
+    });
+
+    if (!task) {
+      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: "考核任务不存在" });
+    }
+
+    this.assertCanReview(task, viewer);
+    assertTaskVersion(task.updatedAt, taskRef.updatedAt);
+    this.assertValidIndicators(task);
+
+    const targetStatus: TaskStatus =
+      action === "approve" ? "indicator_confirming" : "indicator_drafting";
+    const extraData = {
+      type: action === "approve" ? "indicator_review_approved" : "indicator_review_rejected",
+      source: "manager",
+      batchId,
+    };
+
+    await this.prisma.$transaction(async (tx) => {
+      const claimedUpdatedAt = await claimTaskVersion(tx, task.id, taskRef.updatedAt);
+      await this.flowService.transitionTx(tx, {
+        task,
+        action: action === "approve" ? "submit" : "reject",
+        targetStatus,
+        actorId: viewer.id,
+        comment,
+        extraData,
+        taskUpdate:
+          action === "approve"
+            ? { indicatorSetAt: new Date(), indicatorConfirmedAt: null, updatedAt: claimedUpdatedAt }
+            : { indicatorConfirmedAt: null, updatedAt: claimedUpdatedAt },
+      });
+    });
+
+    await this.notificationsService.create({
+      userId: task.employeeId,
+      senderId: viewer.id,
+      cycleId: task.cycleId,
+      taskId: task.id,
+      type: "indicator_setting_notice",
+      title: action === "approve" ? "考核指标待确认" : "指标被驳回",
+      content:
+        action === "approve"
+          ? "主管已审核本周期正式考核指标，请进入“我的绩效”确认。"
+          : `主管已驳回考核指标：${comment}，请重新调整。`,
+    });
+
+    return targetStatus;
+  }
+
+  private assertCanReview(task: ReviewTask, viewer: AuthUser): void {
+    if (task.managerId !== viewer.id) {
+      throw new ForbiddenException({
+        code: ERROR_CODE.FORBIDDEN,
+        message: "无权审核该员工目标",
+      });
+    }
+    if (task.status !== "indicator_reviewing") {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: "当前状态不允许审核目标",
+      });
+    }
+  }
+
+  private assertValidIndicators(task: ReviewTask): void {
+    if (!task.indicatorInstances.length) {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: "请至少保留一条指标",
+      });
+    }
+
+    const totalWeight = task.indicatorInstances.reduce(
+      (sum, indicator) => sum.plus(indicator.weight),
+      new Prisma.Decimal(0),
+    );
+    if (totalWeight.minus(1).abs().greaterThan(0.0001)) {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: "目标权重合计必须为100%",
+      });
+    }
+  }
+
+  private exceptionReason(error: HttpException): string {
+    const response = error.getResponse();
+    if (typeof response === "string") return response;
+    const message = (response as { message?: unknown }).message;
+    if (typeof message === "string") return message;
+    return error.message;
   }
 }
