@@ -94,6 +94,31 @@ All four images were captured at original resolution from deterministic mocked d
 ### Remediation Self-Review
 
 - Confirmed all changes stay within Task 8 goal review, shared disclosure, reference panel, parent request handling, deterministic contracts, and this report.
-- Confirmed parent list versions and success/error UI update only after the component accepts the matching save identity.
+- Confirmed parent list versions and success/error UI update only for the matching save identity.
 - Confirmed single-action invalidation is separate from batch busy state, preserving Task 7 batch behavior.
 - Confirmed no Task 9 manager evaluation form or route behavior was implemented.
+
+## Second Review Remediation (2026-08-09)
+
+### Fixed Review Findings
+
+- Delayed save handling now separates server-version acknowledgement from draft replacement. The latest response for a task always advances the workspace and parent optimistic-lock baseline, while a replacement of indicator fields still requires the original task session and unchanged draft revision.
+- Save ordering is scoped per task in both the workspace and parent view. A response from an older operation cannot regress a newer acknowledged timestamp, including A-to-B-to-A navigation and same-task edits made while a request is pending.
+- Employee indicator submission now uses the shared `normalizeDisplayedWeightTotal` contract. Displayed totals of `99.99%` and `100.01%` both block submission, expand the first indicator, and focus its disclosure row.
+- Goal review editing is now limited to non-exempt tasks whose actual detail status is `indicator_reviewing`. Completed, exempted, not-started, and other task statuses render the same indicator disclosure as read-only detail without save, approve, reject, or visibility-editing controls.
+
+### Regression Evidence
+
+- RED: delayed A-to-B-to-A and same-task save tests showed the next save still sent the pre-save `updatedAt`; the newer local fields were already protected but the committed server version was discarded.
+- RED: an employee `99.99%` floating composition submitted successfully under the prior raw tolerance check.
+- RED: completed, exempted, pending, and manager-scoring detail fixtures still exposed review actions and editable fields.
+- GREEN: 10 focused race, parent-baseline, status, and floating-weight browser regressions passed.
+- GREEN: `npm run test:contracts` passed 44/44, including the existing Task 7 partial/total/HTTP batch retention cases and the prior responsive/accessibility contracts.
+- GREEN: `npm run type-check` passed.
+- GREEN: `npm run build` passed with 2,574 modules transformed. The existing third-party pure-annotation and chunk-size warnings remain unchanged.
+
+### Visual And Scope Review
+
+- No layout CSS or geometry changed in this remediation, so the four original-resolution Task 8 captures remain current. The 970px/1024px hit-testing and desktop/mobile geometry regressions pass in the full contract suite.
+- Self-review confirmed the parent list timestamp can advance without replacing newer workspace fields, the next editor save and parent batch action both use the acknowledged version, and only the latest operation for that task may apply it.
+- The Task 10 local database blocker documented above remains unchanged. No migration command, permission bypass, schema change, Task 9 form, or manager-evaluation route work was performed.

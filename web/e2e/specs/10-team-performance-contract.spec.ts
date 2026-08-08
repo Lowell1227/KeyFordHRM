@@ -1045,20 +1045,24 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('goal-review-workspace')).toContainText('Delivery quality');
     await page.getByTestId('indicator-toggle-ind-1').click();
     const newerNameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
+    const newerDescriptionInput = page.getByTestId('indicator-details-ind-1').locator('textarea').first();
     await newerNameInput.fill('Ada newer unsaved draft');
+    await newerDescriptionInput.fill('Newer A to B to A description');
 
     releaseFirstSave();
     await page.waitForTimeout(100);
     await expect(newerNameInput).toHaveValue('Ada newer unsaved draft');
+    await expect(newerDescriptionInput).toHaveValue('Newer A to B to A description');
     await expect(page.getByTestId('goal-review-workspace')).not.toContainText('Stale saved Ada target');
 
     await page.getByTestId('goal-review-save').click();
     await expect.poll(() => saveBodies.length).toBe(2);
     expect(saveBodies[1]).toEqual(expect.objectContaining({
-      expectedUpdatedAt: '2026-08-09T00:00:00.000Z',
+      expectedUpdatedAt: '2026-08-09T00:00:01.000Z',
     }));
     const instances = saveBodies[1].instances as Array<Record<string, unknown>>;
     expect(instances[0].name).toBe('Ada newer unsaved draft');
+    expect(instances[0].description).toBe('Newer A to B to A description');
   });
 
   test('save response cannot overwrite a newer same-task draft revision', async ({ page }) => {
@@ -1094,9 +1098,144 @@ test.describe('team list manager workspace', () => {
     await page.getByTestId('goal-review-save').click();
     await expect.poll(() => saveBodies.length).toBe(2);
     expect(saveBodies[1]).toEqual(expect.objectContaining({
-      expectedUpdatedAt: '2026-08-09T00:00:00.000Z',
+      expectedUpdatedAt: '2026-08-09T00:00:01.000Z',
     }));
   });
+
+  test('delayed save acknowledgement advances the parent task version', async ({ page }) => {
+    let releaseSave!: () => void;
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    let approvalBody: Record<string, unknown> | undefined;
+    await mockGoalReviewWorkspace(page);
+    await page.route('**/api/v1/tasks/task-1/indicators', async (route) => {
+      await saveGate;
+      const response = structuredClone(goalReviewDetailFixture);
+      response.updatedAt = '2026-08-09T00:00:01.000Z';
+      response.indicatorInstances[0].name = 'Server save response';
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(response)),
+      });
+    });
+    await page.route('**/api/v1/tasks/team/indicator-review/batch-approve', (route) => {
+      approvalBody = route.request().postDataJSON() as Record<string, unknown>;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          succeeded: [{ taskId: 'task-1', status: 'indicator_confirming' }],
+          failed: [],
+        })),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
+    await nameInput.fill('Draft at save start');
+    await page.getByTestId('goal-review-save').click();
+    await nameInput.fill('Newer local revision');
+    releaseSave();
+
+    await expect(nameInput).toHaveValue('Newer local revision');
+    const adaRow = page.getByRole('row').filter({ hasText: 'Ada Chen' });
+    await adaRow.locator('.el-checkbox').click();
+    await page.getByTestId('team-batch-approve').click();
+    await page.getByRole('button', { name: '通过', exact: true }).click();
+
+    await expect.poll(() => approvalBody).toEqual({
+      tasks: [{ taskId: 'task-1', updatedAt: '2026-08-09T00:00:01.000Z' }],
+    });
+  });
+
+  test('older save operation cannot regress an acknowledged newer version', async ({ page }) => {
+    const graceDetail = graceGoalReviewDetail();
+    const saveBodies: Array<Record<string, unknown>> = [];
+    let releaseOldSave!: () => void;
+    const oldSaveGate = new Promise<void>((resolve) => {
+      releaseOldSave = resolve;
+    });
+    await mockGoalReviewWorkspace(page);
+    await page.route('**/api/v1/tasks/task-2', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(graceDetail)),
+    }));
+    await page.route('**/api/v1/tasks/team**', (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPageWith(teamPageFixture.items.slice(0, 2)))),
+      });
+    });
+    await page.route('**/api/v1/tasks/task-1/indicators', async (route) => {
+      const body = route.request().postDataJSON() as Record<string, unknown>;
+      saveBodies.push(body);
+      const response = structuredClone(goalReviewDetailFixture);
+      if (saveBodies.length === 1) {
+        await oldSaveGate;
+        response.updatedAt = '2026-08-09T00:00:01.000Z';
+        response.indicatorInstances[0].name = 'Older operation response';
+      } else if (saveBodies.length === 2) {
+        response.updatedAt = '2026-08-09T00:00:02.000Z';
+        response.indicatorInstances[0].name = 'Newer operation response';
+      } else {
+        response.updatedAt = '2026-08-09T00:00:03.000Z';
+      }
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(response)),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.getByTestId('goal-review-save').click();
+    await page.getByTestId('team-task-row-task-2').click();
+    await page.getByTestId('team-task-row-task-1').click();
+    await expect(page.getByTestId('goal-review-workspace')).toContainText('Delivery quality');
+    await page.getByTestId('goal-review-save').click();
+    await expect.poll(() => saveBodies.length).toBe(2);
+    releaseOldSave();
+    await page.waitForTimeout(100);
+
+    await page.getByTestId('indicator-toggle-ind-1').click();
+    const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
+    await nameInput.fill('Draft after newer acknowledgement');
+    await page.getByTestId('goal-review-save').click();
+    await expect.poll(() => saveBodies.length).toBe(3);
+    expect(saveBodies[2]).toEqual(expect.objectContaining({
+      expectedUpdatedAt: '2026-08-09T00:00:02.000Z',
+    }));
+    const instances = saveBodies[2].instances as Array<Record<string, unknown>>;
+    expect(instances[0].name).toBe('Draft after newer acknowledgement');
+  });
+
+  for (const scenario of [
+    { name: 'completed', status: 'indicator_confirming' as const, isExempt: false },
+    { name: 'exempted', status: 'exempted' as const, isExempt: true },
+    { name: 'not-started', status: 'pending' as const, isExempt: false },
+    { name: 'other', status: 'manager_scoring' as const, isExempt: false },
+  ]) {
+    test(`goal review renders ${scenario.name} task as read-only without actions`, async ({ page }) => {
+      const detail = structuredClone(goalReviewDetailFixture);
+      detail.status = scenario.status;
+      detail.isExempt = scenario.isExempt;
+      await mockGoalReviewWorkspace(page, detail);
+
+      await page.goto('/tasks?scope=team&stage=goal-review&taskId=task-1');
+      await expect(page.getByTestId('goal-review-workspace')).toBeVisible();
+      await expect(page.getByTestId('goal-review-save')).toHaveCount(0);
+      await expect(page.getByTestId('goal-review-approve')).toHaveCount(0);
+      await expect(page.getByTestId('goal-review-reject')).toHaveCount(0);
+      await expect(page.getByTestId('indicator-visibility-ind-1')).toHaveCount(0);
+
+      await page.getByTestId('indicator-toggle-ind-1').click();
+      const details = page.getByTestId('indicator-details-ind-1');
+      await expect(details).toBeVisible();
+      await expect(details).toContainText('Ship the customer portal without critical defects.');
+      await expect(details.locator('input, textarea, button')).toHaveCount(0);
+    });
+  }
 
   test('goal review automatically opens and focuses a rejected indicator', async ({ page }) => {
     const rejectedDetail = structuredClone(goalReviewDetailFixture);
@@ -1340,6 +1479,56 @@ test.describe('team list employee visibility', () => {
     await page.getByTestId('indicator-collapse-all').click();
     await expect(page.getByTestId('indicator-details-ind-1')).toBeHidden();
   });
+
+  for (const totalPercent of [99.99, 100.01]) {
+    test(`employee submission blocks floating ${totalPercent.toFixed(2)}% and focuses the first indicator`, async ({ page }) => {
+      const employeeDetail = structuredClone(goalReviewDetailFixture);
+      employeeDetail.id = 'task-employee';
+      employeeDetail.status = 'indicator_drafting';
+      employeeDetail.flowRecords = [];
+      const thirdIndicator = structuredClone(employeeDetail.indicatorInstances[1]);
+      thirdIndicator.id = 'ind-3';
+      thirdIndicator.name = 'Customer adoption';
+      const weights = totalPercent === 99.99
+        ? [0.0001, 0.0002, 0.9996]
+        : [0.0001, 0.0002, 0.9998];
+      employeeDetail.indicatorInstances = [
+        { ...employeeDetail.indicatorInstances[0], taskId: employeeDetail.id, weight: weights[0] },
+        { ...employeeDetail.indicatorInstances[1], taskId: employeeDetail.id, weight: weights[1] },
+        { ...thirdIndicator, taskId: employeeDetail.id, weight: weights[2] },
+      ];
+      let submitCalls = 0;
+      await mockTaskWorkspaceIdentity(page, 'employee');
+      await page.route('**/api/v1/indicators**', (route) => route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+      }));
+      await page.route('**/api/v1/templates**', (route) => route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+      }));
+      await page.route('**/api/v1/tasks/task-employee/indicators', (route) => {
+        submitCalls += 1;
+        return route.fulfill({
+          contentType: 'application/json',
+          body: JSON.stringify(apiResponse(employeeDetail)),
+        });
+      });
+      await page.route('**/api/v1/tasks/task-employee', (route) => route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(employeeDetail)),
+      }));
+
+      await page.goto('/tasks/task-employee');
+      await expect(page.getByTestId('indicator-weight-total')).toContainText(`${totalPercent.toFixed(2)}%`);
+      await page.getByRole('button', { name: '提交主管审核', exact: true }).click();
+
+      expect(submitCalls).toBe(0);
+      await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
+      await expect(page.getByTestId('indicator-row-ind-1')).toBeFocused();
+      await expect(page.locator('.el-message--warning')).toContainText('100%');
+    });
+  }
 });
 
 test('normalizes team workspace query', () => {

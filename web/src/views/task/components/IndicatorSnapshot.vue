@@ -26,6 +26,7 @@ import type {
 } from '@/types/api.types';
 import type { DimensionType, IndicatorType } from '@/types/enums';
 import { isValidScore } from '@/utils/score';
+import { normalizeDisplayedWeightTotal } from '../indicator-weight';
 
 export interface ActualValueItem {
   id: string;
@@ -142,7 +143,10 @@ const weightTotalPercent = computed(() =>
   editableItems.reduce((sum, item) => sum + Number(item.weight ?? 0) * 100, 0),
 );
 
-const isWeightOverLimit = computed(() => weightTotalPercent.value > 100.0001);
+const displayedWeightTotal = computed(() => (
+  normalizeDisplayedWeightTotal(weightTotalPercent.value / 100)
+));
+const isWeightOverLimit = computed(() => displayedWeightTotal.value.hundredths > 10_000);
 
 const indicatorOperationNodeTypes = ['indicator_setting', 'indicator_confirm'];
 
@@ -658,12 +662,12 @@ function buildIndicatorBody(action: 'save' | 'submit'): Omit<SetIndicatorBody, '
   }
   if (isWeightOverLimit.value) {
     revealSnapshotIndicator(0);
-    ElMessage.warning(`指标权重合计不能超过 100%，当前为 ${weightTotalPercent.value.toFixed(2)}%。`);
+    ElMessage.warning(`指标权重合计不能超过 100%，当前为 ${displayedWeightTotal.value.percentText}%。`);
     return null;
   }
-  if (action === 'submit' && Math.abs(weightTotalPercent.value - 100) > 0.01) {
+  if (action === 'submit' && !displayedWeightTotal.value.isExactlyOneHundredPercent) {
     revealSnapshotIndicator(0);
-    ElMessage.warning(`提交指标前权重合计必须为 100%，当前为 ${weightTotalPercent.value.toFixed(2)}%。`);
+    ElMessage.warning(`提交指标前权重合计必须为 100%，当前为 ${displayedWeightTotal.value.percentText}%。`);
     return null;
   }
   return {

@@ -21,6 +21,8 @@ export interface GoalReviewSaveIdentity {
   draftRevision: number;
 }
 
+export type GoalReviewSaveAcknowledgement = 'replaced' | 'version-acknowledged' | 'ignored';
+
 export interface GoalReviewSavePayload extends GoalReviewSaveIdentity {
   taskId: string;
   expectedUpdatedAt: string;
@@ -38,7 +40,10 @@ export interface GoalReviewRejectPayload extends GoalReviewActionPayload {
 
 export interface GoalReviewWorkspaceHandle {
   reload: () => Promise<void>;
-  acceptSavedTask: (task: TaskDetail, identity: GoalReviewSaveIdentity) => boolean;
+  acknowledgeSavedTask: (
+    task: TaskDetail,
+    identity: GoalReviewSaveIdentity,
+  ) => GoalReviewSaveAcknowledgement;
 }
 
 const props = withDefaults(
@@ -70,8 +75,13 @@ const dirtyIndicatorIds = ref(new Set<string>());
 let requestSerial = 0;
 let taskSessionSerial = 0;
 let saveOperationSerial = 0;
-let latestSaveOperationToken = '';
 const draftRevision = ref(0);
+const pendingSaveOperations = new Map<string, {
+  taskId: string;
+  taskSession: number;
+  draftRevision: number;
+}>();
+const latestSaveOperationByTask = new Map<string, string>();
 
 const latestRejection = computed(() => [...(task.value?.flowRecords ?? [])]
   .filter((record) => record.action === 'reject')
@@ -92,6 +102,9 @@ const totalWeight = computed(() => draftIndicators.reduce(
 ));
 const displayedWeightTotal = computed(() => normalizeDisplayedWeightTotal(totalWeight.value));
 const hasValidWeight = computed(() => displayedWeightTotal.value.isExactlyOneHundredPercent);
+const isReviewable = computed(() => (
+  task.value?.status === 'indicator_reviewing' && !task.value.isExempt
+));
 const reviewRows = computed<PerformanceIndicatorRow[]>(() => draftIndicators.map((indicator) => ({
   id: indicator.id,
   name: indicator.name,
@@ -132,23 +145,36 @@ function replaceDraft(nextTask: TaskDetail) {
   draftRevision.value = 0;
 }
 
-function acceptSavedTask(nextTask: TaskDetail, identity: GoalReviewSaveIdentity): boolean {
+function acknowledgeSavedTask(
+  nextTask: TaskDetail,
+  identity: GoalReviewSaveIdentity,
+): GoalReviewSaveAcknowledgement {
+  const operation = pendingSaveOperations.get(identity.operationToken);
+  pendingSaveOperations.delete(identity.operationToken);
   if (
-    nextTask.id !== props.taskId
-    || task.value?.id !== nextTask.id
-    || identity.operationToken !== latestSaveOperationToken
-    || identity.draftRevision !== draftRevision.value
-  ) return false;
-  replaceDraft(nextTask);
-  latestSaveOperationToken = '';
-  return true;
+    !operation
+    || operation.taskId !== nextTask.id
+    || operation.draftRevision !== identity.draftRevision
+    || latestSaveOperationByTask.get(nextTask.id) !== identity.operationToken
+  ) return 'ignored';
+  if (nextTask.id !== props.taskId || task.value?.id !== nextTask.id) return 'ignored';
+
+  if (
+    operation.taskSession === taskSessionSerial
+    && operation.draftRevision === draftRevision.value
+  ) {
+    replaceDraft(nextTask);
+    return 'replaced';
+  }
+
+  if (nextTask.updatedAt) task.value = { ...task.value, updatedAt: nextTask.updatedAt };
+  return 'version-acknowledged';
 }
 
 async function loadTask() {
   const taskId = props.taskId;
   const requestId = ++requestSerial;
   const taskSession = ++taskSessionSerial;
-  latestSaveOperationToken = '';
   draftRevision.value = 0;
   loading.value = true;
   error.value = '';
@@ -267,9 +293,16 @@ function toSaveItem(indicator: IndicatorInstance, index: number): SetIndicatorBo
 }
 
 function handleSave() {
-  if (!task.value?.updatedAt || !validateIndicators(false)) return;
+  if (!isReviewable.value || !task.value?.updatedAt || !validateIndicators(false)) return;
   const operationToken = `${taskSessionSerial}:${++saveOperationSerial}`;
-  latestSaveOperationToken = operationToken;
+  const supersededToken = latestSaveOperationByTask.get(task.value.id);
+  if (supersededToken) pendingSaveOperations.delete(supersededToken);
+  pendingSaveOperations.set(operationToken, {
+    taskId: task.value.id,
+    taskSession: taskSessionSerial,
+    draftRevision: draftRevision.value,
+  });
+  latestSaveOperationByTask.set(task.value.id, operationToken);
   emit('save', {
     taskId: task.value.id,
     expectedUpdatedAt: task.value.updatedAt,
@@ -283,7 +316,7 @@ function handleSave() {
 }
 
 async function handleApprove() {
-  if (!task.value?.updatedAt || !validateIndicators(true)) return;
+  if (!isReviewable.value || !task.value?.updatedAt || !validateIndicators(true)) return;
   if (dirtyIndicatorIds.value.size > 0) {
     revealInvalid([...dirtyIndicatorIds.value][0], '请先保存指标修改再通过审核');
     return;
@@ -305,7 +338,7 @@ async function handleApprove() {
 }
 
 async function handleReject() {
-  if (!task.value?.updatedAt) return;
+  if (!isReviewable.value || !task.value?.updatedAt) return;
   try {
     const { value } = await ElMessageBox.prompt('请输入驳回原因', '驳回指标审核', {
       confirmButtonText: '驳回',
@@ -333,7 +366,7 @@ watch(
   { immediate: true },
 );
 
-defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acceptSavedTask });
+defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask });
 </script>
 
 <template>
@@ -361,7 +394,7 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acceptSavedTask });
           <h3>指标审核</h3>
           <span>{{ task.indicatorInstances.length }} 项 · {{ task.cycleName || '-' }}</span>
         </div>
-        <div class="goal-review__actions">
+        <div v-if="isReviewable" class="goal-review__actions">
           <el-tooltip content="保存修改" placement="top">
             <el-button
               :icon="Select"
@@ -401,7 +434,7 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acceptSavedTask });
             :invalid-indicator-ids="indicatorIdsToReveal"
             :weight-total="totalWeight"
           >
-            <template #visibility="{ index }">
+            <template v-if="isReviewable" #visibility="{ index }">
               <IndicatorVisibilityEditor
                 :model-value="{
                   visibilityScope: draftIndicators[index].visibilityScope,
@@ -416,7 +449,7 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acceptSavedTask });
               />
             </template>
 
-            <template #details="{ index }">
+            <template v-if="isReviewable" #details="{ index }">
               <div class="goal-review-editor">
                 <label class="goal-review-editor__wide">
                   <span>指标名称</span>

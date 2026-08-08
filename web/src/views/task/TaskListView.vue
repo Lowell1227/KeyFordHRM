@@ -67,7 +67,11 @@ const teamBatchBusy = computed(() => teamBatchRequestBusy.value || teamSingleReq
 let teamRequestSerial = 0;
 let teamDetailRequestSerial = 0;
 let singleOperationSerial = 0;
-let latestSaveOperationToken = '';
+let saveRequestSerial = 0;
+const latestSaveRequestByTask = new Map<string, {
+  requestId: number;
+  operationToken: string;
+}>();
 
 interface TeamBatchDisplayItem {
   taskId: string;
@@ -699,38 +703,44 @@ async function rejectTeamTasks(tasks: TeamTaskVersion[]) {
 }
 
 async function saveSingleGoalReview(payload: GoalReviewSavePayload) {
-  const contextKey = teamContextKey();
-  const requestId = ++singleOperationSerial;
-  latestSaveOperationToken = payload.operationToken;
+  const busyRequestId = ++singleOperationSerial;
+  const requestId = ++saveRequestSerial;
+  latestSaveRequestByTask.set(payload.taskId, {
+    requestId,
+    operationToken: payload.operationToken,
+  });
   teamSingleRequestBusy.value = true;
+  const isLatestTaskSave = () => {
+    const latest = latestSaveRequestByTask.get(payload.taskId);
+    return latest?.requestId === requestId && latest.operationToken === payload.operationToken;
+  };
   try {
     const updatedTask = await tasksApi.setIndicators(payload.taskId, {
       ...payload.body,
       expectedUpdatedAt: payload.expectedUpdatedAt,
     });
-    if (
-      requestId !== singleOperationSerial
-      || latestSaveOperationToken !== payload.operationToken
-      || contextKey !== teamContextKey()
-      || workspaceQuery.state.value.taskId !== payload.taskId
-    ) return;
-    const accepted = goalReviewRef.value?.acceptSavedTask(updatedTask, {
+    if (!isLatestTaskSave() || updatedTask.id !== payload.taskId) return;
+    const listItem = teamPage.value.items.find((item) => item.id === payload.taskId);
+    if (listItem && updatedTask.updatedAt) listItem.updatedAt = updatedTask.updatedAt;
+    if (hydratedTeamTask.value?.id === payload.taskId && updatedTask.updatedAt) {
+      hydratedTeamTask.value.updatedAt = updatedTask.updatedAt;
+    }
+    if (workspaceQuery.state.value.taskId !== payload.taskId) return;
+    const acknowledgement = goalReviewRef.value?.acknowledgeSavedTask(updatedTask, {
       operationToken: payload.operationToken,
       draftRevision: payload.draftRevision,
     });
-    if (!accepted) return;
-    const listItem = teamPage.value.items.find((item) => item.id === payload.taskId);
-    if (listItem && updatedTask.updatedAt) listItem.updatedAt = updatedTask.updatedAt;
-    ElMessage.success('指标修改已保存');
+    if (acknowledgement === 'replaced') ElMessage.success('指标修改已保存');
+    if (acknowledgement === 'version-acknowledged') {
+      ElMessage.success('先前修改已保存，当前草稿仍有未保存内容');
+    }
   } catch (error) {
     if (
-      requestId === singleOperationSerial
-      && latestSaveOperationToken === payload.operationToken
-      && contextKey === teamContextKey()
+      isLatestTaskSave()
       && workspaceQuery.state.value.taskId === payload.taskId
     ) ElMessage.error(httpErrorMessage(error, '指标修改保存失败'));
   } finally {
-    if (requestId === singleOperationSerial) teamSingleRequestBusy.value = false;
+    if (busyRequestId === singleOperationSerial) teamSingleRequestBusy.value = false;
   }
 }
 
@@ -826,7 +836,6 @@ watch(
   () => workspaceQuery.state.value.taskId,
   (taskId) => {
     singleOperationSerial += 1;
-    latestSaveOperationToken = '';
     teamSingleRequestBusy.value = false;
     if (!taskId) {
       teamDetailRequestSerial += 1;
