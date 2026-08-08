@@ -1,7 +1,13 @@
 import "reflect-metadata";
+import { Logger } from "@nestjs/common";
 import { Prisma, SysRole, TaskStatus } from "@prisma/client";
+import { validate } from "class-validator";
 import { PrismaService } from "@/prisma/prisma.service";
 import { AuthUser } from "@/common/types/auth.types";
+import {
+  BatchIndicatorReviewDto,
+  BatchTaskRefDto,
+} from "./dto/batch-indicator-review.dto";
 import { TeamTaskQueryDto } from "./dto/team-task-query.dto";
 import { TeamTasksService } from "./team-tasks.service";
 
@@ -83,6 +89,28 @@ describe("TeamTasksService", () => {
     }));
     return tx;
   }
+
+  it("rejects duplicate task ids during batch DTO validation", async () => {
+    const dto = Object.assign(new BatchIndicatorReviewDto(), {
+      tasks: [
+        Object.assign(new BatchTaskRefDto(), {
+          taskId: "7c7b6515-c70c-4afe-9b4b-96e9926c5316",
+          updatedAt: "2026-08-08T08:00:00.000Z",
+        }),
+        Object.assign(new BatchTaskRefDto(), {
+          taskId: "7c7b6515-c70c-4afe-9b4b-96e9926c5316",
+          updatedAt: "2026-08-08T08:00:01.000Z",
+        }),
+      ],
+    });
+
+    const errors = await validate(dto);
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].constraints).toEqual(
+      expect.objectContaining({ arrayUnique: expect.any(String) }),
+    );
+  });
 
   it("keeps every requested filter within the current manager scope", async () => {
     const query = Object.assign(new TeamTaskQueryDto(), {
@@ -320,6 +348,187 @@ describe("TeamTasksService", () => {
         type: "indicator_setting_notice",
       }),
     );
+  });
+
+  it("defensively processes a duplicate task id only once", async () => {
+    mockSuccessfulReviewTransaction();
+    prisma.assessmentTask.findUnique.mockResolvedValue(makeReviewTask("duplicate-task"));
+
+    const result = await service.batchApprove(
+      {
+        tasks: [
+          { taskId: "duplicate-task", updatedAt: "2026-08-08T08:00:00.000Z" },
+          { taskId: "duplicate-task", updatedAt: "2026-08-08T08:00:00.000Z" },
+        ],
+      },
+      managerViewer,
+    );
+
+    expect(result).toEqual({
+      succeeded: [{ taskId: "duplicate-task", status: "indicator_confirming" }],
+      failed: [],
+    });
+    expect(prisma.assessmentTask.findUnique).toHaveBeenCalledTimes(1);
+    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a committed task successful when its notification fails", async () => {
+    mockSuccessfulReviewTransaction();
+    prisma.assessmentTask.findUnique.mockResolvedValue(makeReviewTask("notified-task"));
+    notificationsService.create.mockRejectedValue(new Error("provider credential failure"));
+    const loggerError = jest.spyOn(Logger.prototype, "error").mockImplementation();
+
+    try {
+      const result = await service.batchApprove(
+        { tasks: [{ taskId: "notified-task", updatedAt: "2026-08-08T08:00:00.000Z" }] },
+        managerViewer,
+      );
+
+      expect(result).toEqual({
+        succeeded: [{ taskId: "notified-task", status: "indicator_confirming" }],
+        failed: [],
+      });
+      expect(loggerError).toHaveBeenCalledWith(
+        expect.stringContaining("notification"),
+        expect.any(String),
+      );
+    } finally {
+      loggerError.mockRestore();
+    }
+  });
+
+  it("contains an unexpected transaction failure and continues to the next task", async () => {
+    const secondTransaction = {
+      assessmentTask: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      flowRecord: { create: jest.fn() },
+    };
+    prisma.$transaction
+      .mockRejectedValueOnce(new Error("database connection string leaked"))
+      .mockImplementationOnce((callback) => callback(secondTransaction));
+    flowService.transitionTx.mockImplementation(async (_tx, input) => ({
+      oldStatus: input.task.status,
+      newStatus: input.targetStatus,
+      nodeType: "indicator_setting",
+    }));
+    prisma.assessmentTask.findUnique
+      .mockResolvedValueOnce(makeReviewTask("broken-task"))
+      .mockResolvedValueOnce(makeReviewTask("next-task"));
+    const loggerError = jest.spyOn(Logger.prototype, "error").mockImplementation();
+
+    try {
+      const result = await service.batchApprove(
+        {
+          tasks: [
+            { taskId: "broken-task", updatedAt: "2026-08-08T08:00:00.000Z" },
+            { taskId: "next-task", updatedAt: "2026-08-08T08:00:00.000Z" },
+          ],
+        },
+        managerViewer,
+      );
+
+      expect(result).toEqual({
+        succeeded: [{ taskId: "next-task", status: "indicator_confirming" }],
+        failed: [{ taskId: "broken-task", reason: "任务处理失败，请稍后重试" }],
+      });
+      expect(loggerError).toHaveBeenCalledWith(
+        expect.stringContaining("batch review"),
+        expect.any(String),
+      );
+    } finally {
+      loggerError.mockRestore();
+    }
+  });
+
+  it("records an atomic claim conflict and then processes the next task", async () => {
+    const transactions = [
+      {
+        assessmentTask: { updateMany: jest.fn().mockResolvedValue({ count: 0 }) },
+        flowRecord: { create: jest.fn() },
+      },
+      {
+        assessmentTask: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+        flowRecord: { create: jest.fn() },
+      },
+    ];
+    prisma.$transaction.mockImplementation((callback) => callback(transactions[prisma.$transaction.mock.calls.length - 1]));
+    flowService.transitionTx.mockImplementation(async (_tx, input) => ({
+      oldStatus: input.task.status,
+      newStatus: input.targetStatus,
+      nodeType: "indicator_setting",
+    }));
+    prisma.assessmentTask.findUnique
+      .mockResolvedValueOnce(makeReviewTask("conflict-task"))
+      .mockResolvedValueOnce(makeReviewTask("next-task"));
+
+    const result = await service.batchApprove(
+      {
+        tasks: [
+          { taskId: "conflict-task", updatedAt: "2026-08-08T08:00:00.000Z" },
+          { taskId: "next-task", updatedAt: "2026-08-08T08:00:00.000Z" },
+        ],
+      },
+      managerViewer,
+    );
+
+    expect(result).toEqual({
+      succeeded: [{ taskId: "next-task", status: "indicator_confirming" }],
+      failed: [{ taskId: "conflict-task", reason: "任务已被其他操作更新，请刷新后重试" }],
+    });
+    expect(prisma.$transaction).toHaveBeenCalledTimes(2);
+    expect(flowService.transitionTx).toHaveBeenCalledTimes(1);
+  });
+
+  it("claims the task version before the flow transition writes", async () => {
+    const writeOrder: string[] = [];
+    const transaction = {
+      assessmentTask: {
+        updateMany: jest.fn().mockImplementation(async () => {
+          writeOrder.push("claim");
+          return { count: 1 };
+        }),
+      },
+      flowRecord: { create: jest.fn() },
+    };
+    prisma.$transaction.mockImplementation((callback) => callback(transaction));
+    flowService.transitionTx.mockImplementation(async (_tx, input) => {
+      writeOrder.push("transition");
+      return {
+        oldStatus: input.task.status,
+        newStatus: input.targetStatus,
+        nodeType: "indicator_setting",
+      };
+    });
+    prisma.assessmentTask.findUnique.mockResolvedValue(makeReviewTask("ordered-task"));
+
+    await service.batchApprove(
+      { tasks: [{ taskId: "ordered-task", updatedAt: "2026-08-08T08:00:00.000Z" }] },
+      managerViewer,
+    );
+
+    expect(writeOrder).toEqual(["claim", "transition"]);
+  });
+
+  it("uses one batch id for every successful flow transition in a request", async () => {
+    mockSuccessfulReviewTransaction();
+    prisma.assessmentTask.findUnique
+      .mockResolvedValueOnce(makeReviewTask("task-1"))
+      .mockResolvedValueOnce(makeReviewTask("task-2"));
+
+    await service.batchApprove(
+      {
+        tasks: [
+          { taskId: "task-1", updatedAt: "2026-08-08T08:00:00.000Z" },
+          { taskId: "task-2", updatedAt: "2026-08-08T08:00:00.000Z" },
+        ],
+      },
+      managerViewer,
+    );
+
+    const batchIds = flowService.transitionTx.mock.calls.map(
+      ([, input]) => input.extraData.batchId,
+    );
+    expect(batchIds).toHaveLength(2);
+    expect(new Set(batchIds).size).toBe(1);
   });
 
   it.each([

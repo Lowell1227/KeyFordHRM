@@ -1,6 +1,7 @@
 import { Type } from "class-transformer";
 import {
   ArrayNotEmpty,
+  ArrayUnique,
   IsArray,
   IsISO8601,
   IsNotEmpty,
@@ -21,6 +22,7 @@ export class BatchTaskRefDto {
 export class BatchIndicatorReviewDto {
   @IsArray()
   @ArrayNotEmpty()
+  @ArrayUnique((task: BatchTaskRefDto) => task.taskId)
   @ValidateNested({ each: true })
   @Type(() => BatchTaskRefDto)
   tasks!: BatchTaskRefDto[];

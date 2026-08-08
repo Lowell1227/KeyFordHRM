@@ -4,6 +4,7 @@ import {
   ForbiddenException,
   HttpException,
   Injectable,
+  Logger,
   NotFoundException,
 } from "@nestjs/common";
 import { randomUUID } from "crypto";
@@ -78,6 +79,8 @@ type ReviewTask = Prisma.AssessmentTaskGetPayload<{
 
 @Injectable()
 export class TeamTasksService {
+  private readonly logger = new Logger(TeamTasksService.name);
+
   constructor(
     private readonly prisma: PrismaService,
     private readonly flowService: FlowService,
@@ -276,14 +279,20 @@ export class TeamTasksService {
   ): Promise<BatchReviewResult> {
     const batchId = randomUUID();
     const result: BatchReviewResult = { succeeded: [], failed: [] };
+    const processedTaskIds = new Set<string>();
 
     for (const taskRef of taskRefs) {
+      if (processedTaskIds.has(taskRef.taskId)) continue;
+      processedTaskIds.add(taskRef.taskId);
+
       try {
         const status = await this.reviewTask(taskRef, viewer, action, batchId, comment);
         result.succeeded.push({ taskId: taskRef.taskId, status });
       } catch (error) {
-        if (!(error instanceof HttpException)) throw error;
-        result.failed.push({ taskId: taskRef.taskId, reason: this.exceptionReason(error) });
+        result.failed.push({
+          taskId: taskRef.taskId,
+          reason: this.reviewFailureReason(taskRef.taskId, error),
+        });
       }
     }
 
@@ -344,18 +353,7 @@ export class TeamTasksService {
       });
     });
 
-    await this.notificationsService.create({
-      userId: task.employeeId,
-      senderId: viewer.id,
-      cycleId: task.cycleId,
-      taskId: task.id,
-      type: "indicator_setting_notice",
-      title: action === "approve" ? "考核指标待确认" : "指标被驳回",
-      content:
-        action === "approve"
-          ? "主管已审核本周期正式考核指标，请进入“我的绩效”确认。"
-          : `主管已驳回考核指标：${comment}，请重新调整。`,
-    });
+    await this.notifyReviewedEmployee(task, viewer, action, comment);
 
     return targetStatus;
   }
@@ -401,5 +399,44 @@ export class TeamTasksService {
     const message = (response as { message?: unknown }).message;
     if (typeof message === "string") return message;
     return error.message;
+  }
+
+  private reviewFailureReason(taskId: string, error: unknown): string {
+    if (error instanceof HttpException && error.getStatus() < 500) {
+      return this.exceptionReason(error);
+    }
+
+    this.logger.error(
+      `batch review failed for task ${taskId}`,
+      error instanceof Error ? error.stack ?? error.message : String(error),
+    );
+    return "任务处理失败，请稍后重试";
+  }
+
+  private async notifyReviewedEmployee(
+    task: ReviewTask,
+    viewer: AuthUser,
+    action: "approve" | "reject",
+    comment?: string,
+  ): Promise<void> {
+    try {
+      await this.notificationsService.create({
+        userId: task.employeeId,
+        senderId: viewer.id,
+        cycleId: task.cycleId,
+        taskId: task.id,
+        type: "indicator_setting_notice",
+        title: action === "approve" ? "考核指标待确认" : "指标被驳回",
+        content:
+          action === "approve"
+            ? "主管已审核本周期正式考核指标，请进入“我的绩效”确认。"
+            : `主管已驳回考核指标：${comment}，请重新调整。`,
+      });
+    } catch (error) {
+      this.logger.error(
+        `batch review notification failed for task ${task.id}`,
+        error instanceof Error ? error.stack ?? error.message : String(error),
+      );
+    }
   }
 }
