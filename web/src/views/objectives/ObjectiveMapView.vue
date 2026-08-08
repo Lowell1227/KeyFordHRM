@@ -333,7 +333,8 @@ async function removeRow(row: Objective) {
     </template>
 
     <div class="objective-map page-stack">
-      <div data-testid="objective-map-toolbar" class="objective-map__toolbar">
+      <section data-testid="objective-map-surface" class="performance-surface">
+        <div data-testid="objective-map-toolbar" class="objective-map__toolbar">
         <div class="objective-map__period">
           <span class="objective-map__filter-label">周期</span>
           <el-select
@@ -355,19 +356,17 @@ async function removeRow(row: Objective) {
         </el-radio-group>
 
         <div class="objective-map__toolbar-spacer" />
-        <el-tag type="info" size="small" effect="plain">独立目标模块</el-tag>
         <el-button :icon="RefreshRight" @click="loadTree">刷新</el-button>
       </div>
 
-      <section data-testid="objective-map-surface" class="performance-surface">
-      <el-table
-        v-loading="loading"
-        class="app-table"
-        :data="(treeData as Objective[])"
-        row-key="id"
-        default-expand-all
-        :tree-props="{ children: 'children' }"
-      >
+        <el-table
+          v-loading="loading"
+          class="app-table"
+          :data="(treeData as Objective[])"
+          row-key="id"
+          default-expand-all
+          :tree-props="{ children: 'children' }"
+        >
         <el-table-column label="目标" min-width="280">
           <template #default="scope">
             <div class="objective-title">
@@ -445,9 +444,9 @@ async function removeRow(row: Objective) {
             </el-button>
           </template>
         </el-table-column>
-      </el-table>
+        </el-table>
 
-      <EmptyState v-if="!loading && treeData.length === 0" description="暂无目标，点击右上角新建" />
+        <EmptyState v-if="!loading && treeData.length === 0" description="暂无目标，点击右上角新建" />
       </section>
 
     <!-- 新建 / 编辑弹窗 -->
@@ -583,8 +582,7 @@ async function removeRow(row: Objective) {
   gap: 10px;
   padding: 8px 10px;
   background: #fff;
-  border: 1px solid #e2e6ed;
-  border-radius: 7px;
+  border-bottom: 1px solid #e2e6ed;
 }
 
 .objective-map__period {

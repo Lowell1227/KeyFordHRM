@@ -83,16 +83,32 @@ const kanbanColumns: { status: ActionItemStatus; label: string }[] = [
   { status: 'blocked', label: '阻塞' },
 ];
 
-/** 所有叶节点的平铺列表（用于看板）。 */
+function matchesFilters(item: ActionItem): boolean {
+  const statusMatches = !filters.status || item.status === filters.status;
+  const assigneeMatches = !filters.assigneeId || item.assigneeId === filters.assigneeId;
+  return statusMatches && assigneeMatches;
+}
+
+function filterTree(nodes: ActionItem[]): ActionItem[] {
+  return nodes.flatMap((item) => {
+    const children = filterTree(item.children ?? []);
+    if (!matchesFilters(item) && children.length === 0) return [];
+    return [{ ...item, children }];
+  });
+}
+
+const filteredTreeData = computed<ActionItem[]>(() => filterTree(treeData.value));
+
+/** 筛选后的平铺列表（用于看板，层级父节点只作为列表上下文保留）。 */
 const flatItems = computed<ActionItem[]>(() => {
   const result: ActionItem[] = [];
   const walk = (nodes: ActionItem[]) => {
     nodes.forEach((n) => {
-      if (!filters.status || n.status === filters.status) result.push(n);
+      if (matchesFilters(n)) result.push(n);
       if (n.children) walk(n.children);
     });
   };
-  walk(treeData.value);
+  walk(filteredTreeData.value);
   return result;
 });
 
@@ -442,12 +458,32 @@ function dueDateDisplay(date: string | null): string {
           </div>
 
           <div class="tracking-surface__controls">
-            <el-select v-model="filters.status" placeholder="全部状态" clearable class="status-filter">
+            <el-select
+              v-model="filters.status"
+              data-testid="tracking-status-filter"
+              placeholder="全部状态"
+              clearable
+              class="status-filter"
+            >
               <el-option
                 v-for="status in statusOptions"
                 :key="status"
                 :label="statusLabel(status)"
                 :value="status"
+              />
+            </el-select>
+            <el-select
+              v-model="filters.assigneeId"
+              data-testid="tracking-assignee-filter"
+              placeholder="全部负责人"
+              clearable
+              class="assignee-filter"
+            >
+              <el-option
+                v-for="user in users"
+                :key="user.id"
+                :label="user.name"
+                :value="user.id"
               />
             </el-select>
             <el-button :icon="RefreshRight" @click="loadTree">刷新</el-button>
@@ -467,7 +503,7 @@ function dueDateDisplay(date: string | null): string {
         v-if="activeTab === 'list'"
         v-loading="loading"
         class="app-table"
-        :data="treeData"
+        :data="filteredTreeData"
         row-key="id"
         default-expand-all
         :tree-props="{ children: 'children' }"
@@ -546,8 +582,10 @@ function dueDateDisplay(date: string | null): string {
       </el-table>
 
       <EmptyState
-        v-if="activeTab === 'list' && !loading && treeData.length === 0"
-        :description="filters.objectiveId ? '该目标下暂无行动项，点击右上角新建' : '请先选择一个目标'"
+        v-if="activeTab === 'list' && !loading && filteredTreeData.length === 0"
+        :description="filters.objectiveId
+          ? (filters.status || filters.assigneeId ? '没有符合筛选条件的行动项' : '该目标下暂无行动项，点击右上角新建')
+          : '请先选择一个目标'"
       />
 
       <!-- 看板视图 -->
@@ -788,9 +826,10 @@ function dueDateDisplay(date: string | null): string {
 .tracking-surface__header {
   min-height: 68px;
   display: flex;
-  align-items: center;
+  align-items: stretch;
+  flex-direction: column;
   justify-content: space-between;
-  gap: 16px;
+  gap: 10px;
   padding: 10px 14px;
   border-bottom: 1px solid #e8ebf0;
 }
@@ -826,11 +865,16 @@ function dueDateDisplay(date: string | null): string {
   display: flex;
   align-items: center;
   justify-content: flex-end;
+  flex-wrap: wrap;
   gap: 8px;
 }
 
 .status-filter {
   width: 130px;
+}
+
+.assignee-filter {
+  width: 150px;
 }
 
 .performance-surface :deep(.el-table) {

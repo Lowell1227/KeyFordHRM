@@ -1,22 +1,30 @@
 <script setup lang="ts">
+import { computed } from 'vue';
+
 type PerformanceSection = 'tracking' | 'map' | 'tasks';
 
-withDefaults(
+const props = withDefaults(
   defineProps<{
     title: string;
     activeSection: PerformanceSection;
     showContext?: boolean;
+    sections?: readonly PerformanceSection[];
   }>(),
   {
     showContext: true,
+    sections: () => ['tracking', 'map', 'tasks'],
   },
 );
 
-const sections = [
+const allSections = [
   { key: 'tracking', label: '目标跟进', to: '/action-items' },
   { key: 'map', label: '目标地图', to: '/objectives' },
   { key: 'tasks', label: '绩效待办', to: '/tasks' },
 ] as const;
+
+const visibleSections = computed(() =>
+  allSections.filter((section) => props.sections.includes(section.key)),
+);
 </script>
 
 <template>
@@ -35,7 +43,7 @@ const sections = [
         data-testid="performance-secondary-nav"
       >
         <RouterLink
-          v-for="section in sections"
+          v-for="section in visibleSections"
           :key="section.key"
           :to="section.to"
           class="performance-workspace__nav-link"
@@ -50,9 +58,9 @@ const sections = [
         <slot name="context" />
       </aside>
 
-      <main class="performance-workspace__content">
+      <section class="performance-workspace__content" aria-label="绩效工作区内容">
         <slot />
-      </main>
+      </section>
     </div>
   </section>
 </template>

@@ -6,14 +6,22 @@ import { Calendar, DocumentChecked, UserFilled } from '@element-plus/icons-vue';
 import { tasksApi } from '@/api/tasks.api';
 import { cyclesApi } from '@/api/cycles.api';
 import { usePagination } from '@/composables/usePagination';
+import { useAuthStore } from '@/stores/auth.store';
 import StatusBadge from '@/components/common/StatusBadge.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
 import PerformanceContextPanel from '@/components/performance/PerformanceContextPanel.vue';
-import type { TaskListItem, AssessmentCycle } from '@/types/api.types';
+import type { TaskListItem, AssessmentCycle, TaskQuery } from '@/types/api.types';
 import type { TaskStatus } from '@/types/enums';
+import {
+  TASK_STATUS_STAGE,
+  getTaskStageState,
+  type TaskStageKey as MappedTaskStageKey,
+  type TaskStageState,
+} from './task-stage';
 
 const router = useRouter();
+const auth = useAuthStore();
 
 const list = ref<TaskListItem[]>([]);
 const loading = ref(false);
@@ -21,7 +29,6 @@ const cycles = ref<AssessmentCycle[]>([]);
 const selectedCycleId = ref<string>('');
 const quickFilter = ref<'all' | 'pending' | 'cycle'>('all');
 type TaskStageKey = 'all' | 'goal-setting' | 'goal-confirmation' | 'self-eval' | 'result';
-type TaskStageState = 'pending' | 'progress' | 'completed' | 'not-started';
 
 const selectedStage = ref<TaskStageKey>('all');
 const taskStages = [
@@ -32,6 +39,11 @@ const taskStages = [
 ] as const;
 
 const selectedCycle = computed(() => cycles.value.find((cycle) => cycle.id === selectedCycleId.value) ?? null);
+const allowedPerformanceSections = computed(() =>
+  auth.user?.sysRole === 'employee'
+    ? (['tasks'] as const)
+    : (['tracking', 'map', 'tasks'] as const),
+);
 const selectedCycleName = computed(() => {
   if (quickFilter.value === 'all') return '全部考核周期';
   if (quickFilter.value === 'pending') return '仅看待办';
@@ -41,27 +53,20 @@ const selectedCycleName = computed(() => {
 const {
   page,
   pageSize,
-  total,
   pageSizeOptions,
   reset: resetPagination,
-  withParams,
 } = usePagination({ defaultPageSize: 10 });
 
 const pendingStatuses: TaskStatus[] = ['indicator_drafting', 'indicator_confirming', 'self_eval', 'published', 'appealing'];
-const goalSettingStatuses: TaskStatus[] = ['indicator_drafting', 'indicator_reviewing', 'indicator_setting'];
-const selfEvalStatuses: TaskStatus[] = ['self_eval', 'manager_scoring', 'dept_review', 'hr_calibration', 'approval'];
-const completedStatuses: TaskStatus[] = ['confirmed', 'closed'];
 
-function stageForStatus(status: TaskStatus): Exclude<TaskStageKey, 'all'> {
-  if (goalSettingStatuses.includes(status)) return 'goal-setting';
-  if (status === 'indicator_confirming') return 'goal-confirmation';
-  if (selfEvalStatuses.includes(status)) return 'self-eval';
-  return 'result';
-}
+const filteredTasks = computed(() => {
+  if (selectedStage.value === 'all') return list.value;
+  return list.value.filter((task) => TASK_STATUS_STAGE[task.status] === selectedStage.value);
+});
 
 const visibleTasks = computed(() => {
-  if (selectedStage.value === 'all') return list.value;
-  return list.value.filter((task) => stageForStatus(task.status) === selectedStage.value);
+  const start = (page.value - 1) * pageSize.value;
+  return filteredTasks.value.slice(start, start + pageSize.value);
 });
 
 const selectedStageLabel = computed(() => {
@@ -69,16 +74,13 @@ const selectedStageLabel = computed(() => {
   return taskStages.find((stage) => stage.key === selectedStage.value)?.label ?? '绩效任务';
 });
 
-const visibleTotal = computed(() =>
-  selectedStage.value === 'all' ? total.value : visibleTasks.value.length,
-);
+const visibleTotal = computed(() => filteredTasks.value.length);
 
-function stageState(stage: Exclude<TaskStageKey, 'all'>): TaskStageState {
-  const matchingTasks = list.value.filter((task) => stageForStatus(task.status) === stage);
-  if (matchingTasks.length === 0) return 'not-started';
-  if (matchingTasks.some((task) => isPending(task.status))) return 'pending';
-  if (matchingTasks.every((task) => completedStatuses.includes(task.status))) return 'completed';
-  return 'progress';
+function stageState(stage: MappedTaskStageKey): TaskStageState {
+  const statuses = list.value
+    .filter((task) => TASK_STATUS_STAGE[task.status] === stage)
+    .map((task) => task.status);
+  return getTaskStageState(statuses);
 }
 
 function stageStateLabel(state: TaskStageState): string {
@@ -127,30 +129,37 @@ async function loadCycles() {
 async function loadList() {
   loading.value = true;
   try {
-    const baseParams = withParams({
+    const baseParams = {
       cycleId: quickFilter.value === 'cycle' ? selectedCycleId.value || undefined : undefined,
-    } as Record<string, unknown>);
-
-    if (quickFilter.value === 'pending') {
-      const results = await Promise.all(
-        pendingStatuses.map((status) => tasksApi.findMine({ ...baseParams, status })),
-      );
-      const merged = results.flatMap((res) => res.items ?? []);
-      const unique = Array.from(new Map(merged.map((item) => [item.id, item])).values());
-      list.value = sortTasksByCycleDesc(unique);
-      total.value = unique.length;
-    } else {
-      const res = await tasksApi.findMine(baseParams);
-      list.value = sortTasksByCycleDesc(res.items ?? []);
-      total.value = res.total ?? 0;
-    }
+    } satisfies Omit<TaskQuery, 'employeeId' | 'page' | 'pageSize'>;
+    const scopedTasks = await fetchAllMine(baseParams);
+    const filtered = quickFilter.value === 'pending'
+      ? scopedTasks.filter((task) => pendingStatuses.includes(task.status))
+      : scopedTasks;
+    list.value = sortTasksByCycleDesc(filtered);
   } catch {
     list.value = [];
-    total.value = 0;
     ElMessage.error('获取绩效任务失败');
   } finally {
     loading.value = false;
   }
+}
+
+async function fetchAllMine(
+  query: Omit<TaskQuery, 'employeeId' | 'page' | 'pageSize'>,
+): Promise<TaskListItem[]> {
+  const items: TaskListItem[] = [];
+  let currentPage = 1;
+
+  while (true) {
+    const response = await tasksApi.findMine({ ...query, page: currentPage, pageSize: 100 });
+    const batch = response.items ?? [];
+    items.push(...batch);
+    if (batch.length === 0 || items.length >= (response.total ?? 0)) break;
+    currentPage += 1;
+  }
+
+  return Array.from(new Map(items.map((item) => [item.id, item])).values());
 }
 
 function onCycleChange(value: string) {
@@ -242,13 +251,17 @@ onMounted(async () => {
   await loadList();
 });
 
-watch([page, pageSize], () => {
-  loadList();
+watch(pageSize, () => {
+  page.value = 1;
 });
 </script>
 
 <template>
-  <PerformanceWorkspace title="绩效待办" active-section="tasks">
+  <PerformanceWorkspace
+    title="绩效待办"
+    active-section="tasks"
+    :sections="allowedPerformanceSections"
+  >
     <template #toolbar>
       <el-tag type="info" effect="plain">{{ selectedCycleName }}</el-tag>
     </template>
@@ -328,7 +341,7 @@ watch([page, pageSize], () => {
             <h2>{{ selectedStageLabel }}</h2>
           </div>
           <div class="task-surface__summary">
-            共 {{ visibleTasks.length }} 项
+            共 {{ visibleTotal }} 项
           </div>
         </header>
 
