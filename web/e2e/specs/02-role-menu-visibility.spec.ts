@@ -21,12 +21,11 @@ test.describe('02-role-menu-visibility HR', () => {
   test('HR sees full admin menus', async ({ page }) => {
     await page.goto('/dashboard');
     const dashboard = new DashboardPage(page);
-    await expect(dashboard.menuItem('考核周期')).toBeVisible();
-    await expect(dashboard.menuItem('考核模板')).toBeVisible();
+    await expect(dashboard.menuItem('绩效计划制定')).toBeVisible();
     await expect(dashboard.menuItem('指标库')).toBeVisible();
-    await expect(dashboard.menuItem('绩效校准')).toBeVisible();
+    await expect(dashboard.menuItem('绩效评定')).toBeVisible();
     await expect(dashboard.menuItem('结果公示')).toBeVisible();
-    await expect(dashboard.menuItem('申诉处理')).toBeVisible();
+    await expect(dashboard.menuItem('申诉计划')).toBeVisible();
     await expect(dashboard.menuItem('用户管理')).toBeVisible();
   });
 });

@@ -56,3 +56,22 @@ test.describe('09-performance-workspace employee tasks', () => {
     await expect(page.getByTestId('task-surface')).toBeVisible();
   });
 });
+
+test.describe('09-performance-workspace responsive layout', () => {
+  test.use({ storageState: 'e2e/auth-state/manager.json' });
+
+  test('performance workspace is usable at mobile width', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/objectives');
+
+    const overflow = await page.evaluate(
+      () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    );
+    const sidebarHeight = await page.locator('.app-sidebar').evaluate(
+      (element) => element.getBoundingClientRect().height,
+    );
+    await expect(page.getByTestId('performance-secondary-nav')).toBeVisible();
+    expect(overflow).toBeLessThanOrEqual(8);
+    expect(sidebarHeight).toBeLessThanOrEqual(120);
+  });
+});

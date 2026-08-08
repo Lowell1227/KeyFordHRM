@@ -630,6 +630,8 @@ function toggleGroup(key: string) {
   .menu-panel {
     width: 100%;
     min-width: 0;
+    height: 50px;
+    flex-shrink: 0;
   }
 
   .menu-brand {
@@ -638,10 +640,11 @@ function toggleGroup(key: string) {
 
   .menu-scroll {
     display: flex;
+    align-items: center;
     gap: 8px;
     overflow-x: auto;
     overflow-y: hidden;
-    padding: 8px 10px 9px;
+    padding: 7px 10px;
     -webkit-overflow-scrolling: touch;
     scroll-snap-type: x proximity;
     scrollbar-width: none;
@@ -652,21 +655,40 @@ function toggleGroup(key: string) {
   }
 
   .menu-group {
-    min-width: 142px;
+    min-width: max-content;
+    display: flex;
+    align-items: center;
     margin-bottom: 0;
     scroll-snap-align: start;
   }
 
-  .menu-group__title,
+  .menu-group__title {
+    display: none;
+  }
+
+  .menu-group__items {
+    display: flex !important;
+    align-items: center;
+    gap: 4px;
+    padding-top: 0;
+  }
+
   .menu-link {
+    width: auto;
+    min-width: max-content;
     height: 34px;
+    margin: 0;
     font-size: 12px;
+  }
+
+  .menu-more {
+    display: none;
   }
 }
 
 @media (max-width: 480px) {
   .menu-group {
-    min-width: 132px;
+    min-width: max-content;
   }
 
   .menu-group__title,
