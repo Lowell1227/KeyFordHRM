@@ -574,7 +574,7 @@ model AssessmentTask {
   employeeConfirmedAt  DateTime?  @map("employee_confirmed_at") @db.Timestamptz(6)
   closedAt             DateTime?  @map("closed_at") @db.Timestamptz(6)
   createdAt            DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt            DateTime   @default(now()) @map("updated_at") @db.Timestamptz(6)
+  updatedAt            DateTime   @default(now()) @map("updated_at") @db.Timestamptz(3)
 
   cycle                AssessmentCycle            @relation(fields: [cycleId], references: [id], onDelete: Restrict)
   snapshot             AssessmentTemplateSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
