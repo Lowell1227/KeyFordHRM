@@ -30,7 +30,7 @@ const visibleSections = computed(() =>
 <template>
   <section class="performance-workspace">
     <header class="performance-workspace__header">
-      <h1>{{ title }}</h1>
+      <h1 data-testid="performance-workspace-title">{{ title }}</h1>
       <div class="performance-workspace__toolbar">
         <slot name="toolbar" />
       </div>

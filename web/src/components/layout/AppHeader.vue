@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ArrowDown, ChatDotRound, House, Search } from '@element-plus/icons-vue';
+import { ArrowDown } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth.store';
 import UserAvatar from '@/components/common/UserAvatar.vue';
+import { PERFORMANCE_WORKSPACE_PATHS } from '@/router/performance-workspace';
 import NotificationBell from './NotificationBell.vue';
 
 const auth = useAuthStore();
@@ -12,7 +13,7 @@ const route = useRoute();
 
 const userName = computed(() => auth.user?.name ?? '未登录');
 const pageTitle = computed(() => (route.meta.title as string) ?? '孚德绩效管理');
-const keyword = ref('');
+const isPerformanceWorkspace = computed(() => PERFORMANCE_WORKSPACE_PATHS.has(route.path));
 
 function onLogout() {
   auth.logout();
@@ -22,24 +23,13 @@ function onLogout() {
 
 <template>
   <el-header class="app-header">
-    <div class="app-header__left">
-      <div class="page-crumb">
-        <el-icon><House /></el-icon>
+    <div v-if="!isPerformanceWorkspace" class="app-header__left">
+      <div class="page-title" data-testid="app-route-title">
         <span>{{ pageTitle }}</span>
       </div>
     </div>
 
     <div class="app-header__right">
-      <el-input
-        v-model="keyword"
-        class="header-search"
-        placeholder="搜索"
-        :prefix-icon="Search"
-        clearable
-      />
-      <el-badge :value="3" class="header-action">
-        <el-icon><ChatDotRound /></el-icon>
-      </el-badge>
       <NotificationBell />
 
       <el-dropdown @command="onLogout">
@@ -76,7 +66,7 @@ function onLogout() {
   min-width: 0;
 }
 
-.page-crumb {
+.page-title {
   display: flex;
   align-items: center;
   gap: 8px;
@@ -86,7 +76,7 @@ function onLogout() {
   min-width: 0;
 }
 
-.page-crumb span {
+.page-title span {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -97,27 +87,6 @@ function onLogout() {
   align-items: center;
   gap: 14px;
   flex-shrink: 0;
-}
-
-.header-search {
-  width: 138px;
-}
-
-.header-search :deep(.el-input__wrapper) {
-  border-radius: 18px;
-  background: #f9fbff;
-  box-shadow: inset 0 0 0 1px #c9cfdf;
-  padding: 0 12px;
-}
-
-.header-action {
-  width: 28px;
-  height: 28px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  color: #596076;
-  cursor: pointer;
 }
 
 .user-chip {
@@ -145,7 +114,7 @@ function onLogout() {
     padding: 0 10px;
   }
 
-  .page-crumb {
+  .page-title {
     max-width: calc(100vw - 136px);
     font-size: 13px;
     gap: 6px;
@@ -155,21 +124,13 @@ function onLogout() {
     gap: 9px;
   }
 
-  .header-search {
-    display: none;
-  }
-
   .user-name {
     display: none;
   }
 }
 
 @media (max-width: 420px) {
-  .header-action {
-    display: none;
-  }
-
-  .page-crumb {
+  .page-title {
     max-width: calc(100vw - 92px);
   }
 }

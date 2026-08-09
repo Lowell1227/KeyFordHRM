@@ -3,10 +3,10 @@ import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import AppHeader from '@/components/layout/AppHeader.vue';
 import AppSidebar from '@/components/layout/AppSidebar.vue';
+import { PERFORMANCE_WORKSPACE_PATHS } from '@/router/performance-workspace';
 
 const route = useRoute();
-const workspacePaths = new Set(['/action-items', '/objectives', '/tasks']);
-const isPerformanceWorkspace = computed(() => workspacePaths.has(route.path));
+const isPerformanceWorkspace = computed(() => PERFORMANCE_WORKSPACE_PATHS.has(route.path));
 </script>
 
 <template>

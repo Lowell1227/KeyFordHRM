@@ -67,3 +67,30 @@ test.describe('11-navigation-entrypoints navigation active state', () => {
     await expect(performanceGroup).toHaveAttribute('aria-expanded', 'false');
   });
 });
+
+test.describe('11-navigation-entrypoints header', () => {
+  test.use({ storageState: 'e2e/auth-state/manager.json' });
+
+  test('performance workspace keeps one local title and only working header actions', async ({ page }) => {
+    await page.goto('/tasks');
+
+    await expect(page.getByPlaceholder('搜索')).toHaveCount(0);
+    await expect(page.locator('.app-header .header-action')).toHaveCount(0);
+    await expect(page.getByTestId('performance-workspace-title')).toHaveCount(1);
+    await expect(page.getByTestId('app-route-title')).toHaveCount(0);
+    await expect(page.getByTestId('app-notifications')).toBeVisible();
+    await expect(page.getByTestId('header-user-menu')).toBeVisible();
+  });
+
+});
+
+test.describe('11-navigation-entrypoints non-workspace header', () => {
+  test.use({ storageState: 'e2e/auth-state/hr.json' });
+
+  test('non-workspace pages retain one plain route title', async ({ page }) => {
+    await page.goto('/reports');
+
+    await expect(page.getByTestId('app-route-title')).toHaveText('报表分析');
+    await expect(page.getByTestId('app-route-title')).toHaveCount(1);
+  });
+});

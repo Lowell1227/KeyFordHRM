@@ -83,7 +83,7 @@ function markAllRead() {
     @show="onOpenPopover"
   >
     <template #reference>
-      <el-badge :value="badgeValue" :max="99" class="notification-bell">
+      <el-badge data-testid="app-notifications" :value="badgeValue" :max="99" class="notification-bell">
         <el-icon :size="20"><Bell /></el-icon>
       </el-badge>
     </template>
