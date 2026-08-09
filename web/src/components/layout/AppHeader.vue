@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { ArrowDown } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth.store';
 import UserAvatar from '@/components/common/UserAvatar.vue';
-import { PERFORMANCE_WORKSPACE_PATHS } from '@/router/performance-workspace';
+import { isPerformanceWorkspacePath } from '@/router/performance-workspace';
 import NotificationBell from './NotificationBell.vue';
 
 const auth = useAuthStore();
@@ -13,7 +13,7 @@ const route = useRoute();
 
 const userName = computed(() => auth.user?.name ?? '未登录');
 const pageTitle = computed(() => (route.meta.title as string) ?? '孚德绩效管理');
-const isPerformanceWorkspace = computed(() => PERFORMANCE_WORKSPACE_PATHS.has(route.path));
+const isPerformanceWorkspace = computed(() => isPerformanceWorkspacePath(route.path));
 
 function onLogout() {
   auth.logout();
@@ -86,6 +86,7 @@ function onLogout() {
   display: flex;
   align-items: center;
   gap: 14px;
+  margin-left: auto;
   flex-shrink: 0;
 }
 

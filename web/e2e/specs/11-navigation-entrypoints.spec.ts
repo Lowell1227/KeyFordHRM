@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { buildNavigation } from '../../src/router/navigation';
+import { isPerformanceWorkspacePath } from '../../src/router/performance-workspace';
 import { routes } from '../../src/router/routes';
 import { DashboardPage } from '../page-objects/dashboard.page';
 
@@ -71,6 +72,23 @@ test.describe('11-navigation-entrypoints navigation active state', () => {
 test.describe('11-navigation-entrypoints header', () => {
   test.use({ storageState: 'e2e/auth-state/manager.json' });
 
+  test('classifies canonical and trailing-slash workspace paths exactly', () => {
+    for (const path of [
+      '/tasks',
+      '/tasks////',
+      '/objectives',
+      '/objectives//',
+      '/action-items',
+      '/action-items///',
+    ]) {
+      expect(isPerformanceWorkspacePath(path)).toBe(true);
+    }
+
+    for (const path of ['/tasks/task-1', '/tasks-extra', '/performance/tasks']) {
+      expect(isPerformanceWorkspacePath(path)).toBe(false);
+    }
+  });
+
   test('performance workspace keeps one local title and only working header actions', async ({ page }) => {
     await page.goto('/tasks');
 
@@ -82,6 +100,49 @@ test.describe('11-navigation-entrypoints header', () => {
     await expect(page.getByTestId('header-user-menu')).toBeVisible();
   });
 
+  test('normalizes trailing slashes without treating task details or prefixes as workspaces', async ({ page }) => {
+    for (const path of ['/tasks/', '/objectives/', '/action-items/']) {
+      await page.goto(path);
+
+      await expect(page.locator('.app-main')).toHaveClass(/app-main--workspace/);
+      await expect(page.getByTestId('performance-workspace-title')).toHaveCount(1);
+      await expect(page.getByTestId('app-route-title')).toHaveCount(0);
+    }
+
+    await page.goto('/tasks/not-a-workspace');
+
+    await expect(page.locator('.app-main')).not.toHaveClass(/app-main--workspace/);
+    await expect(page.getByTestId('performance-workspace-title')).toHaveCount(0);
+    await expect(page.getByTestId('app-route-title')).toHaveCount(1);
+  });
+
+  test('keeps notifications and user menu right-aligned without overlap at 390px', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto('/tasks/');
+
+    await expect(page.getByTestId('app-notifications')).toBeVisible();
+    await expect(page.getByTestId('header-user-menu')).toBeVisible();
+
+    const layout = await page.evaluate(() => {
+      const header = document.querySelector('.app-header')?.getBoundingClientRect();
+      const actions = document.querySelector('.app-header__right')?.getBoundingClientRect();
+      const notifications = document.querySelector('[data-testid="app-notifications"]')?.getBoundingClientRect();
+      const userMenu = document.querySelector('[data-testid="header-user-menu"]')?.getBoundingClientRect();
+
+      if (!header || !actions || !notifications || !userMenu) return null;
+
+      return {
+        rightGap: header.right - actions.right,
+        controlsOverlap: notifications.right > userMenu.left,
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      };
+    });
+
+    expect(layout).not.toBeNull();
+    expect(layout?.rightGap).toBeLessThanOrEqual(12);
+    expect(layout?.controlsOverlap).toBe(false);
+    expect(layout?.overflow).toBeLessThanOrEqual(0);
+  });
 });
 
 test.describe('11-navigation-entrypoints non-workspace header', () => {

@@ -3,10 +3,10 @@ import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import AppHeader from '@/components/layout/AppHeader.vue';
 import AppSidebar from '@/components/layout/AppSidebar.vue';
-import { PERFORMANCE_WORKSPACE_PATHS } from '@/router/performance-workspace';
+import { isPerformanceWorkspacePath } from '@/router/performance-workspace';
 
 const route = useRoute();
-const isPerformanceWorkspace = computed(() => PERFORMANCE_WORKSPACE_PATHS.has(route.path));
+const isPerformanceWorkspace = computed(() => isPerformanceWorkspacePath(route.path));
 </script>
 
 <template>
