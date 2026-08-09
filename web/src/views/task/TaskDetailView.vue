@@ -41,6 +41,17 @@ const flowNodes = computed(() => flow.flowNodes.value);
 const flowActions = computed(() => flow.actions.value);
 const flowCurrentNode = computed(() => flow.currentNode.value);
 
+function safeTaskListReturnTo(value: unknown): string | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (typeof raw !== 'string' || !raw.startsWith('/tasks')) return null;
+  try {
+    const parsed = new URL(raw, window.location.origin);
+    return parsed.pathname === '/tasks' ? `${parsed.pathname}${parsed.search}` : null;
+  } catch {
+    return null;
+  }
+}
+
 const flowActiveIndex = computed(() => {
   const nodes = flowNodes.value;
   const current = flowCurrentNode.value;
@@ -155,7 +166,7 @@ watch(
 );
 
 function goBack() {
-  router.push({ name: 'MyTasks' });
+  router.push(safeTaskListReturnTo(route.query.returnTo) ?? { name: 'MyTasks' });
 }
 
 async function handleConfirmIndicators() {
@@ -250,7 +261,7 @@ async function handleConfirmResult() {
 <template>
   <div v-loading="loading" class="task-detail page-stack">
     <div class="task-detail__header">
-      <el-button :icon="ArrowLeft" link @click="goBack">返回列表</el-button>
+      <el-button data-testid="task-detail-return" :icon="ArrowLeft" link @click="goBack">返回列表</el-button>
       <span class="task-detail__title">任务详情</span>
     </div>
 

@@ -521,12 +521,20 @@ function teamPageWith(
   };
 }
 
-async function mockTaskWorkspaceIdentity(page: import('@playwright/test').Page, sysRole: 'manager' | 'employee') {
+type WorkspaceTestRole = 'manager' | 'employee' | 'dept_head' | 'hr';
+
+async function mockTaskWorkspaceIdentity(page: import('@playwright/test').Page, sysRole: WorkspaceTestRole) {
+  const userIdByRole: Record<WorkspaceTestRole, string> = {
+    manager: 'manager-1',
+    employee: 'employee-1',
+    dept_head: 'dept-head-1',
+    hr: 'hr-1',
+  };
   await page.route('**/api/v1/auth/me', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({
-      id: `${sysRole}-1`,
-      name: sysRole === 'manager' ? 'Test Manager' : 'Test Employee',
+      id: userIdByRole[sysRole],
+      name: `Test ${sysRole}`,
       deptId: 'dept-1',
       deptName: 'Engineering',
       sysRole,
@@ -836,7 +844,7 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('team-task-row-task-1')).toHaveCount(0);
   });
 
-  test('deep-link refresh safely hydrates a selected task outside the current page', async ({ page }) => {
+  test('assigned manager deep-link refresh safely hydrates a selected task outside the current page', async ({ page }) => {
     await mockTaskWorkspaceIdentity(page, 'manager');
     await page.route('**/api/v1/tasks/task-off-page', (route) => route.fulfill({
       contentType: 'application/json',
@@ -852,6 +860,50 @@ test.describe('team list manager workspace', () => {
     await page.reload();
     await expect(page.getByTestId('team-member-rail')).toContainText('Off Page Member');
     await expect(page).toHaveURL(/taskId=task-off-page/);
+  });
+
+  for (const role of ['dept_head', 'hr'] as const) {
+    test(`team deep link rejects an off-page task not assigned to ${role}`, async ({ page }) => {
+      await mockTaskWorkspaceIdentity(page, role);
+      await page.route('**/api/v1/tasks/task-off-page', (route) => route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(offPageTaskFixture)),
+      }));
+      await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPageWith([], { total: 0 }))),
+      }));
+
+      await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-off-page');
+
+      await expect(page).not.toHaveURL(/taskId=task-off-page/);
+      await expect(page.getByTestId('team-member-rail')).toHaveCount(0);
+      await expect(page.getByTestId('goal-review-workspace')).toHaveCount(0);
+      await expect(page.locator('.el-message--warning')).toContainText('无权访问非直属员工的团队任务');
+    });
+  }
+
+  test('goal review keeps a non-direct current-page task read-only even if a stale list response includes it', async ({ page }) => {
+    const nonDirectTask = structuredClone(goalReviewDetailFixture);
+    nonDirectTask.managerId = 'other-manager';
+    const pageItem = structuredClone(teamPageFixture.items[0]);
+    pageItem.managerId = 'other-manager';
+    await mockTaskWorkspaceIdentity(page, 'hr');
+    await page.route('**/api/v1/tasks/task-1', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(nonDirectTask)),
+    }));
+    await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(teamPageWith([pageItem]))),
+    }));
+
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+
+    await expect(page.getByTestId('goal-review-workspace')).toBeVisible();
+    await expect(page.getByTestId('goal-review-save')).toHaveCount(0);
+    await expect(page.getByTestId('goal-review-approve')).toHaveCount(0);
+    await expect(page.getByTestId('goal-review-reject')).toHaveCount(0);
   });
 
   test('current-page deep link remains loading until the delayed team response resolves', async ({ page }) => {

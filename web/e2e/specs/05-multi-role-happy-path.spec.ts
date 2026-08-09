@@ -106,13 +106,18 @@ test.describe('05-multi-role-happy-path', () => {
     await expect(page.getByTestId('manager-strengths')).toHaveValue('Real browser draft acceptance');
     await expect(scoreInputs.first()).toHaveValue('86');
 
-    await page.goto(`/tasks/${target!.id}`);
-    await expect(page).toHaveURL(new RegExp(`/tasks/${target!.id}$`));
+    await page.getByTestId('team-member-view-detail').click();
+    await expect(page).toHaveURL(new RegExp(`/tasks/${target!.id}\\?returnTo=`));
     await expect(page.locator('.task-detail')).toBeVisible();
-    await page.goBack();
+    await page.getByTestId('task-detail-return').click();
     await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
     expectWorkspaceQuery(page.url(), target!);
     await expect(page.getByTestId('manager-strengths')).toHaveValue('Real browser draft acceptance');
+
+    await page.goto(`/tasks/${target!.id}?returnTo=https%3A%2F%2Fexample.com`);
+    await expect(page.locator('.task-detail')).toBeVisible();
+    await page.getByTestId('task-detail-return').click();
+    await expect(page).toHaveURL(/\/tasks$/);
 
     const teamAfterRefresh = await api('GET', `/tasks/team?stage=manager-eval&cycleId=${target!.cycleId}`, managerToken);
     const permittedEmployeeIds = new Set(teamAfterRefresh.facets.employees.map((employee: { id: string }) => employee.id));

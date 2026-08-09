@@ -3,6 +3,7 @@ import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { Check, Close, Refresh, Select } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { tasksApi } from '@/api/tasks.api';
+import { useAuthStore } from '@/stores/auth.store';
 import type { IndicatorInstance, SetIndicatorBody, TaskDetail } from '@/types/api.types';
 import type { IndicatorVisibilityScope } from '@/types/enums';
 import PerformanceIndicatorList, {
@@ -67,6 +68,7 @@ const emit = defineEmits<{
 }>();
 
 const task = ref<TaskDetail>();
+const auth = useAuthStore();
 const loading = ref(false);
 const error = ref('');
 const draftIndicators = reactive<IndicatorInstance[]>([]);
@@ -103,7 +105,9 @@ const totalWeight = computed(() => draftIndicators.reduce(
 const displayedWeightTotal = computed(() => normalizeDisplayedWeightTotal(totalWeight.value));
 const hasValidWeight = computed(() => displayedWeightTotal.value.isExactlyOneHundredPercent);
 const isReviewable = computed(() => (
-  task.value?.status === 'indicator_reviewing' && !task.value.isExempt
+  task.value?.status === 'indicator_reviewing'
+  && !task.value.isExempt
+  && Boolean(auth.user?.id && task.value.managerId === auth.user.id)
 ));
 const reviewRows = computed<PerformanceIndicatorRow[]>(() => draftIndicators.map((indicator) => ({
   id: indicator.id,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, onMounted, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Calendar, DocumentChecked, RefreshLeft, Search, UserFilled } from '@element-plus/icons-vue';
 import { tasksApi } from '@/api/tasks.api';
@@ -44,6 +44,7 @@ import {
 import { useTaskWorkspaceQuery } from './use-task-workspace-query';
 
 const router = useRouter();
+const route = useRoute();
 const auth = useAuthStore();
 const workspaceQuery = useTaskWorkspaceQuery();
 
@@ -314,6 +315,19 @@ function toTeamTaskItem(detail: TaskDetail, stage: TeamTaskStage): TeamTaskListI
   };
 }
 
+function isAssignedTeamManager(detail: Pick<TaskDetail, 'managerId'>): boolean {
+  return Boolean(auth.user?.id && detail.managerId === auth.user.id);
+}
+
+async function denyTeamTaskAccess(taskId: string) {
+  if (workspaceQuery.state.value.taskId !== taskId) return;
+  const message = '无权访问非直属员工的团队任务';
+  hydratedTeamTask.value = undefined;
+  teamDetailError.value = message;
+  await workspaceQuery.update({ taskId: undefined });
+  ElMessage.warning(message);
+}
+
 function httpErrorMessage(error: unknown, fallback: string): string {
   const candidate = error as {
     message?: string;
@@ -338,9 +352,15 @@ async function hydrateSelectedTeamTask(response: TeamTaskPage) {
   try {
     const detail = await tasksApi.findOne(taskId);
     if (requestId !== teamDetailRequestSerial || workspaceQuery.state.value.taskId !== taskId) return;
-    hydratedTeamTask.value = detail
-      ? toTeamTaskItem(detail, workspaceQuery.state.value.stage)
-      : undefined;
+    if (!detail) {
+      hydratedTeamTask.value = undefined;
+      return;
+    }
+    if (!isAssignedTeamManager(detail)) {
+      await denyTeamTaskAccess(taskId);
+      return;
+    }
+    hydratedTeamTask.value = toTeamTaskItem(detail, workspaceQuery.state.value.stage);
   } catch (error) {
     if (requestId !== teamDetailRequestSerial || workspaceQuery.state.value.taskId !== taskId) return;
     hydratedTeamTask.value = undefined;
@@ -493,9 +513,29 @@ function asTask(row: unknown): TaskListItem {
   return row as TaskListItem;
 }
 
+function taskListReturnTo(): string {
+  return route.fullPath === '/tasks' || route.fullPath.startsWith('/tasks?')
+    ? route.fullPath
+    : '/tasks';
+}
+
 function goDetail(row: unknown) {
   const item = row as TaskListItem;
-  router.push({ name: 'TaskDetail', params: { id: item.id } });
+  router.push({
+    name: 'TaskDetail',
+    params: { id: item.id },
+    query: { returnTo: taskListReturnTo() },
+  });
+}
+
+function goSelectedTeamDetail() {
+  const item = selectedTeamTask.value;
+  if (!item || !auth.user?.id || item.managerId !== auth.user.id) return;
+  router.push({
+    name: 'TaskDetail',
+    params: { id: item.id },
+    query: { returnTo: taskListReturnTo() },
+  });
 }
 
 async function updateTeamContext(patch: Parameters<typeof workspaceQuery.update>[0]) {
@@ -750,6 +790,12 @@ async function executeSingleGoalReview(
   actionLabel: string,
   submit: () => Promise<BatchReviewResult>,
 ) {
+  const item = teamPage.value.items.find((candidate) => candidate.id === task.taskId)
+    ?? (hydratedTeamTask.value?.id === task.taskId ? hydratedTeamTask.value : undefined);
+  if (!item || !auth.user?.id || item.managerId !== auth.user.id) {
+    ElMessage.warning('无权处理非直属员工的团队任务');
+    return;
+  }
   const requestId = ++singleOperationSerial;
   const contextKey = teamContextKey();
   const labels = batchItemLabels([task]);
@@ -1257,6 +1303,7 @@ watch(
           :loading="teamLoading"
           :error="Boolean(teamError)"
           :batch-busy="teamBatchBusy"
+          :current-manager-id="auth.user?.id"
           @task-selected="selectTeamTask"
           @batch-approve="approveTeamTasks"
           @batch-reject="rejectTeamTasks"
@@ -1272,6 +1319,7 @@ watch(
           :loading="teamMemberLoading"
           :error="teamMemberError"
           @close="closeTeamMember"
+          @view-detail="goSelectedTeamDetail"
         >
           <template
             v-if="workspaceQuery.state.value.stage === 'goal-review' && selectedTeamTask"

@@ -30,6 +30,7 @@ const props = withDefaults(
     loading?: boolean;
     error?: boolean;
     batchBusy?: boolean;
+    currentManagerId?: string;
   }>(),
   {
     selectedTaskId: undefined,
@@ -37,6 +38,7 @@ const props = withDefaults(
     loading: false,
     error: false,
     batchBusy: false,
+    currentManagerId: undefined,
   },
 );
 
@@ -86,7 +88,9 @@ function asTeamTask(row: unknown): TeamTaskListItem {
 }
 
 function isEligible(item: TeamTaskListItem): boolean {
-  return showBatchCommands.value && item.stageState === 'pending';
+  return showBatchCommands.value
+    && item.stageState === 'pending'
+    && Boolean(props.currentManagerId && item.managerId === props.currentManagerId);
 }
 
 function onSelectionChange(rows: TeamTaskListItem[]) {

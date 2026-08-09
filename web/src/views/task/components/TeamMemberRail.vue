@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { nextTick, ref } from 'vue';
-import { Close } from '@element-plus/icons-vue';
+import { Close, DocumentChecked } from '@element-plus/icons-vue';
 import StatusBadge from '@/components/common/StatusBadge.vue';
 import type { TeamTaskListItem } from '@/types/api.types';
 import type { TeamTaskStage } from '@/types/enums';
@@ -27,6 +27,7 @@ withDefaults(
 
 defineEmits<{
   close: [];
+  'view-detail': [];
 }>();
 
 const headingRef = ref<HTMLElement>();
@@ -53,15 +54,27 @@ defineExpose<TeamMemberRailHandle>({ focusHeading });
       >
         成员详情
       </h2>
-      <el-tooltip content="关闭" placement="top">
-        <el-button
-          text
-          circle
-          :icon="Close"
-          aria-label="关闭成员详情"
-          @click="$emit('close')"
-        />
-      </el-tooltip>
+      <div class="team-member-rail__actions">
+        <el-tooltip v-if="task" content="查看任务详情" placement="top">
+          <el-button
+            text
+            circle
+            :icon="DocumentChecked"
+            data-testid="team-member-view-detail"
+            aria-label="查看任务详情"
+            @click="$emit('view-detail')"
+          />
+        </el-tooltip>
+        <el-tooltip content="关闭" placement="top">
+          <el-button
+            text
+            circle
+            :icon="Close"
+            aria-label="关闭成员详情"
+            @click="$emit('close')"
+          />
+        </el-tooltip>
+      </div>
     </header>
 
     <div class="team-member-rail__body">
@@ -154,6 +167,11 @@ defineExpose<TeamMemberRailHandle>({ focusHeading });
   font-size: 15px;
   font-weight: 650;
   outline: none;
+}
+
+.team-member-rail__actions {
+  display: flex;
+  align-items: center;
 }
 
 .team-member-rail__header h2:focus-visible {
