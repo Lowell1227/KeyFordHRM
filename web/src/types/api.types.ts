@@ -1057,16 +1057,18 @@ export interface ReportQueryDto {
 export interface Notification {
   id: string;
   userId: string;
-  senderId?: string;
-  senderName?: string;
-  taskId?: string;
-  cycleId?: string;
+  senderId: string | null;
+  senderName: string | null;
+  taskId: string | null;
+  cycleId: string | null;
   type: string;
   title: string;
-  content?: string;
+  content: string | null;
   channel: string;
   status: 'pending' | 'sent' | 'failed';
-  sentAt?: string;
+  isRead: boolean;
+  readAt: string | null;
+  sentAt: string | null;
   createdAt: string;
 }
 
@@ -1228,7 +1230,11 @@ export interface SubmitProbationSelfEvalBody {
 }
 
 export interface SubmitProbationManagerScoreBody {
-  indicators: Array<{ id: string; managerScore: number; managerComment?: string }>;
+  indicators: Array<{
+    id: string;
+    managerScore: number;
+    managerComment?: string;
+  }>;
   strengths?: string;
   improvements?: string;
 }

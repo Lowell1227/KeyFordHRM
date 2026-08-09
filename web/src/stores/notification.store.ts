@@ -1,6 +1,8 @@
 import { defineStore } from 'pinia';
 import { notificationsApi } from '@/api/notifications.api';
-import type { Notification, UnreadCount } from '@/types/api.types';
+import type { Notification } from '@/types/api.types';
+
+const pendingReadRequests = new Map<string, Promise<Notification>>();
 
 export const useNotificationStore = defineStore('notification', {
   state: () => ({
@@ -27,28 +29,52 @@ export const useNotificationStore = defineStore('notification', {
     async fetchRecent() {
       this.loading = true;
       try {
-        const res = await notificationsApi.findAll({ unreadOnly: true, pageSize: 10 });
+        const res = await notificationsApi.findAll({ page: 1, pageSize: 10 });
         this.notifications = res.items;
-        this.unreadCount = res.items.filter((n) => n.status !== 'sent').length;
       } finally {
         this.loading = false;
       }
     },
 
-    async markAsRead(id: string) {
+    async markAsRead(id: string): Promise<Notification | undefined> {
       const item = this.notifications.find((notification) => notification.id === id);
-      if (item?.status === 'sent') return;
-      await notificationsApi.markAsRead(id);
-      this.unreadCount = Math.max(0, this.unreadCount - 1);
-      if (item) item.status = 'sent';
+      if (item?.isRead) return item;
+
+      const inFlight = pendingReadRequests.get(id);
+      if (inFlight) return inFlight;
+
+      const request = notificationsApi.markAsRead(id);
+      pendingReadRequests.set(id, request);
+      try {
+        const updated = await request;
+        const current = this.notifications.find((notification) => notification.id === id);
+        const transitionedToRead = Boolean(current && !current.isRead && updated.isRead);
+        if (current) {
+          current.isRead = updated.isRead;
+          current.readAt = updated.readAt;
+        }
+        if (transitionedToRead) {
+          this.unreadCount = Math.max(0, this.unreadCount - 1);
+        }
+        return updated;
+      } finally {
+        if (pendingReadRequests.get(id) === request) {
+          pendingReadRequests.delete(id);
+        }
+      }
     },
 
     async markAllAsRead() {
-      await notificationsApi.markAllAsRead();
+      const result = await notificationsApi.markAllAsRead();
+      const readAt = new Date().toISOString();
       this.unreadCount = 0;
       this.notifications.forEach((n) => {
-        n.status = 'sent';
+        if (!n.isRead) {
+          n.isRead = true;
+          n.readAt = readAt;
+        }
       });
+      return result;
     },
 
     increment(count = 1) {

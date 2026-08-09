@@ -17,6 +17,8 @@ const E2E_PASSWORD = "000000";
 const E2E_CYCLE_PREFIX = "E2E-acceptance-";
 const E2E_TEMPLATE_PREFIX = "E2E-template-";
 const E2E_TEMPLATE_MARKER = "E2E_FIXTURE: manager team workspace acceptance";
+const E2E_ACTIONABLE_NOTIFICATION_ID =
+  "00000000-0000-4000-8000-000000000411";
 
 const ROOT_DEPARTMENT = {
   dingtalkDeptId: "E2E_DEPT_ROOT",
@@ -315,7 +317,7 @@ async function main() {
     approver,
     TaskStatus.self_eval,
   );
-  await createTaskWithStatus(
+  const actionableNotificationTask = await createTaskWithStatus(
     cycles[`${E2E_CYCLE_PREFIX}manager-score`],
     hr.id,
     employee1,
@@ -367,6 +369,40 @@ async function main() {
     true,
     PerfGrade.C,
   );
+
+  await prisma.notificationLog.upsert({
+    where: { id: E2E_ACTIONABLE_NOTIFICATION_ID },
+    update: {
+      userId: manager.id,
+      senderId: employee1.id,
+      taskId: actionableNotificationTask.id,
+      cycleId: actionableNotificationTask.cycleId,
+      type: "self_eval_submitted",
+      title: "员工自评待评",
+      content: "员工已提交自评，请进行主管评价。",
+      channel: "dingtalk",
+      status: "sent",
+      isRead: false,
+      readAt: null,
+      sentAt: new Date(),
+      createdAt: new Date(),
+    },
+    create: {
+      id: E2E_ACTIONABLE_NOTIFICATION_ID,
+      userId: manager.id,
+      senderId: employee1.id,
+      taskId: actionableNotificationTask.id,
+      cycleId: actionableNotificationTask.cycleId,
+      type: "self_eval_submitted",
+      title: "员工自评待评",
+      content: "员工已提交自评，请进行主管评价。",
+      channel: "dingtalk",
+      status: "sent",
+      isRead: false,
+      readAt: null,
+      sentAt: new Date(),
+    },
+  });
 
   console.log("✓ E2E acceptance fixtures created");
   console.log(
@@ -567,6 +603,8 @@ async function createTaskWithStatus(
       data: { hrCalibratedAt: new Date() },
     });
   }
+
+  return task;
 }
 
 function inferIndicatorType(name: string): IndicatorType {

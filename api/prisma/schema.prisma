@@ -1040,6 +1040,8 @@ model NotificationLog {
   content   String?   @db.Text
   channel   String    @default("dingtalk") @db.VarChar(20)
   status    String    @default("pending") @db.VarChar(20)
+  isRead    Boolean   @default(false) @map("is_read")
+  readAt    DateTime? @map("read_at") @db.Timestamptz(6)
   extraData Json?     @map("extra_data") @db.JsonB
   sentAt    DateTime? @map("sent_at") @db.Timestamptz(6)
   errorMsg  String?   @map("error_msg") @db.Text
@@ -1051,6 +1053,7 @@ model NotificationLog {
   cycle  AssessmentCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
 
   @@index([userId])
+  @@index([userId, isRead, createdAt])
   @@index([status])
   @@map("notification_logs")
 }

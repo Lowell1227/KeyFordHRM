@@ -19,6 +19,8 @@ const apiResponse = (data: unknown) => ({
   timestamp: Date.now(),
 });
 
+const E2E_ACTIONABLE_NOTIFICATION_ID = '00000000-0000-4000-8000-000000000411';
+
 const taskItem = (overrides: Partial<TaskListItem> = {}): TaskListItem => ({
   id: 'task-default',
   cycleId: 'cycle-default',
@@ -77,12 +79,18 @@ const teamPage = (pending: number, stage: 'goal-review' | 'manager-eval' = 'goal
 const notificationItem = (overrides: Partial<Notification> = {}): Notification => ({
   id: 'notification-default',
   userId: 'manager-1',
+  senderId: null,
+  senderName: null,
   taskId: 'task-default',
+  cycleId: null,
   type: 'task_reminder',
   title: 'Performance task',
   content: 'Please review the task',
-  channel: 'in_app',
-  status: 'pending',
+  channel: 'dingtalk',
+  status: 'sent',
+  isRead: false,
+  readAt: null,
+  sentAt: '2026-08-01T00:00:00.000Z',
   createdAt: '2026-08-01T00:00:00.000Z',
   ...overrides,
 });
@@ -494,47 +502,103 @@ test.describe('11-navigation-entrypoints non-workspace header', () => {
 
 test.describe('11-navigation-entrypoints notification task links', () => {
   test('resolves supervisor notifications only for direct-manager workspace roles', () => {
-    expect(resolveNotificationTarget(
-      notificationItem({ id: 'indicator', taskId: 'task-1', type: 'indicator_setting_notice' }),
-      'manager',
-    )).toEqual({
+    expect(
+      resolveNotificationTarget(
+        notificationItem({
+          id: 'indicator',
+          taskId: 'task-1',
+          type: 'indicator_setting_notice',
+        }),
+        'manager',
+      ),
+    ).toEqual({
       path: '/tasks',
       query: { scope: 'team', stage: 'goal-review', taskId: 'task-1' },
     });
-    expect(resolveNotificationTarget(
-      notificationItem({ id: 'self-eval', taskId: 'task-2', type: 'self_eval_submitted' }),
-      'dept_head',
-    )).toEqual({
+    expect(
+      resolveNotificationTarget(
+        notificationItem({
+          id: 'self-eval',
+          taskId: 'task-2',
+          type: 'self_eval_submitted',
+        }),
+        'dept_head',
+      ),
+    ).toEqual({
       path: '/tasks',
       query: { scope: 'team', stage: 'manager-eval', taskId: 'task-2' },
     });
-    expect(resolveNotificationTarget(
-      notificationItem({ id: 'hr-indicator', taskId: 'task-3', type: 'indicator_setting_notice' }),
-      'hr',
-    )).toEqual({ name: 'TaskDetail', params: { id: 'task-3' } });
+    expect(
+      resolveNotificationTarget(
+        notificationItem({
+          id: 'hr-indicator',
+          taskId: 'task-3',
+          type: 'indicator_setting_notice',
+        }),
+        'hr',
+      ),
+    ).toEqual({ name: 'TaskDetail', params: { id: 'task-3' } });
+    expect(
+      resolveNotificationTarget(
+        notificationItem({
+          id: 'unknown',
+          taskId: 'task-4',
+          type: 'future_notification_type',
+        }),
+        'manager',
+      ),
+    ).toEqual({ name: 'TaskDetail', params: { id: 'task-4' } });
   });
 
   test('returns no command when a notification has no task', () => {
-    expect(resolveNotificationTarget(notificationItem({ taskId: undefined }), 'manager')).toBeNull();
+    expect(resolveNotificationTarget(notificationItem({ taskId: null }), 'manager')).toBeNull();
   });
 
   test.use({ storageState: 'e2e/auth-state/manager.json' });
 
   test('marks an unread notification then opens the matching goal review workspace', async ({ page }) => {
     let marked = 0;
-    await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ count: 1 })),
-    }));
-    await page.route('**/api/v1/notifications?**', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 10, items: [
-        notificationItem({ id: 'notification-goal', taskId: 'task-goal', type: 'indicator_setting_notice' }),
-      ] })),
-    }));
+    await page.route('**/api/v1/notifications/unread-count', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ count: 1 })),
+      }),
+    );
+    await page.route('**/api/v1/notifications?**', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(
+          apiResponse({
+            total: 1,
+            page: 1,
+            pageSize: 10,
+            items: [
+              notificationItem({
+                id: 'notification-goal',
+                taskId: 'task-goal',
+                type: 'indicator_setting_notice',
+              }),
+            ],
+          }),
+        ),
+      }),
+    );
     await page.route('**/api/v1/notifications/notification-goal/read', (route) => {
       marked += 1;
-      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ id: 'notification-goal' })) });
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(
+          apiResponse(
+            notificationItem({
+              id: 'notification-goal',
+              taskId: 'task-goal',
+              type: 'indicator_setting_notice',
+              isRead: true,
+              readAt: '2026-08-09T09:00:00.000Z',
+            }),
+          ),
+        ),
+      });
     });
 
     await page.goto('/tasks');
@@ -551,6 +615,21 @@ test.describe('11-navigation-entrypoints notification task links', () => {
       ['stage', 'goal-review'],
       ['taskId', 'task-goal'],
     ]);
+    const notificationState = await page.evaluate(async () => {
+      const storeModulePath = '/src/stores/notification.store.ts';
+      const { useNotificationStore } = await import(storeModulePath);
+      const store = useNotificationStore();
+      return {
+        unreadCount: store.unreadCount,
+        item: store.notifications.find((notification: Notification) => notification.id === 'notification-goal'),
+      };
+    });
+    expect(notificationState.unreadCount).toBe(0);
+    expect(notificationState.item).toMatchObject({
+      status: 'sent',
+      isRead: true,
+      readAt: '2026-08-09T09:00:00.000Z',
+    });
     await expect(row).toBeHidden();
   });
 
@@ -560,16 +639,31 @@ test.describe('11-navigation-entrypoints notification task links', () => {
     const readGate = new Promise<void>((resolve) => {
       releaseRead = resolve;
     });
-    await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ count: 1 })),
-    }));
-    await page.route('**/api/v1/notifications?**', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 10, items: [
-        notificationItem({ id: 'notification-evaluation', taskId: 'task-evaluation', type: 'self_eval_submitted' }),
-      ] })),
-    }));
+    await page.route('**/api/v1/notifications/unread-count', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ count: 1 })),
+      }),
+    );
+    await page.route('**/api/v1/notifications?**', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(
+          apiResponse({
+            total: 1,
+            page: 1,
+            pageSize: 10,
+            items: [
+              notificationItem({
+                id: 'notification-evaluation',
+                taskId: 'task-evaluation',
+                type: 'self_eval_submitted',
+              }),
+            ],
+          }),
+        ),
+      }),
+    );
     await page.route('**/api/v1/notifications/notification-evaluation/read', async (route) => {
       markAttempts += 1;
       await readGate;
@@ -595,16 +689,31 @@ test.describe('11-navigation-entrypoints notification task links', () => {
   });
 
   test('keeps notifications without a task non-actionable', async ({ page }) => {
-    await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ count: 1 })),
-    }));
-    await page.route('**/api/v1/notifications?**', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 10, items: [
-        notificationItem({ id: 'notification-info', taskId: undefined, type: 'system_notice' }),
-      ] })),
-    }));
+    await page.route('**/api/v1/notifications/unread-count', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ count: 1 })),
+      }),
+    );
+    await page.route('**/api/v1/notifications?**', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(
+          apiResponse({
+            total: 1,
+            page: 1,
+            pageSize: 10,
+            items: [
+              notificationItem({
+                id: 'notification-info',
+                taskId: null,
+                type: 'system_notice',
+              }),
+            ],
+          }),
+        ),
+      }),
+    );
 
     await page.goto('/tasks');
     await page.getByTestId('app-notifications').click();
@@ -615,30 +724,49 @@ test.describe('11-navigation-entrypoints notification task links', () => {
     expect(new URL(page.url()).pathname).toBe('/tasks');
   });
 
-  test('supports Space activation for a readable task notification', async ({ page }) => {
+  test('supports single Enter and Space activation for a readable task notification', async ({ page }) => {
     let markAttempts = 0;
-    await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ count: 0 })),
-    }));
-    await page.route('**/api/v1/notifications?**', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 10, items: [
-        notificationItem({ id: 'notification-detail', taskId: 'task-detail', type: 'result_published', status: 'sent' }),
-      ] })),
-    }));
+    await page.route('**/api/v1/notifications/unread-count', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ count: 0 })),
+      }),
+    );
+    await page.route('**/api/v1/notifications?**', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(
+          apiResponse({
+            total: 1,
+            page: 1,
+            pageSize: 10,
+            items: [
+              notificationItem({
+                id: 'notification-detail',
+                taskId: 'task-detail',
+                type: 'result_published',
+                isRead: true,
+                readAt: '2026-08-01T01:00:00.000Z',
+              }),
+            ],
+          }),
+        ),
+      }),
+    );
     await page.route('**/api/v1/notifications/notification-detail/read', (route) => {
       markAttempts += 1;
       return route.fulfill({ status: 500 });
     });
 
-    await page.goto('/tasks');
-    await page.getByTestId('app-notifications').click();
-    const row = page.getByTestId('notification-item-notification-detail');
-    await row.press('Space');
+    for (const key of ['Enter', 'Space']) {
+      await page.goto('/tasks');
+      await page.getByTestId('app-notifications').click();
+      const row = page.getByTestId('notification-item-notification-detail');
+      await row.press(key);
+      await expect(page).toHaveURL(/\/tasks\/task-detail$/);
+    }
 
     expect(markAttempts).toBe(0);
-    await expect(page).toHaveURL(/\/tasks\/task-detail$/);
   });
 
   test('reports a rejected router call as a failed notification navigation', async () => {
@@ -649,18 +777,230 @@ test.describe('11-navigation-entrypoints notification task links', () => {
     await expect(navigateNotificationTarget(target, () => Promise.reject(new Error('route failed')))).resolves.toBe(false);
   });
 
+  test('exposes a focusable notification button for Enter and Space', async ({ page }) => {
+    await page.route('**/api/v1/notifications/unread-count', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ count: 0 })),
+      }),
+    );
+    await page.route('**/api/v1/notifications?**', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 10, items: [] })),
+      }),
+    );
+
+    await page.goto('/tasks');
+    const trigger = page.getByTestId('app-notifications');
+    await expect(trigger).toHaveRole('button');
+    await expect(trigger).toHaveAttribute('aria-label', '通知');
+    await trigger.focus();
+    await trigger.press('Enter');
+    await expect(page.locator('.notification-popover')).toBeVisible();
+    await trigger.press('Space');
+    await expect(page.locator('.notification-popover')).toBeHidden();
+  });
+
+  test('serializes activation globally so a later row cannot replace an in-flight target', async ({ page }) => {
+    let releaseFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const marked: string[] = [];
+    const items = [
+      notificationItem({
+        id: 'notification-first',
+        taskId: 'task-first',
+        type: 'indicator_setting_notice',
+      }),
+      notificationItem({
+        id: 'notification-second',
+        taskId: 'task-second',
+        type: 'self_eval_submitted',
+      }),
+    ];
+    await page.route('**/api/v1/notifications/unread-count', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ count: 2 })),
+      }),
+    );
+    await page.route('**/api/v1/notifications?**', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ total: 2, page: 1, pageSize: 10, items })),
+      }),
+    );
+    await page.route('**/api/v1/notifications/*/read', async (route) => {
+      const pathParts = new URL(route.request().url()).pathname.split('/');
+      const id = pathParts[pathParts.length - 2] ?? '';
+      marked.push(id);
+      if (id === 'notification-first') await firstGate;
+      const source = items.find((item) => item.id === id);
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(
+          apiResponse({
+            ...source,
+            isRead: true,
+            readAt: '2026-08-09T09:00:00.000Z',
+          }),
+        ),
+      });
+    });
+
+    await page.goto('/tasks');
+    await page.getByTestId('app-notifications').click();
+    const first = page.getByTestId('notification-item-notification-first');
+    const second = page.getByTestId('notification-item-notification-second');
+    await first.click();
+    await expect(first).toBeDisabled();
+    await expect(second).toBeDisabled();
+    await second.click({ force: true });
+    expect(marked).toEqual(['notification-first']);
+
+    releaseFirst();
+    await expect(page).toHaveURL(/scope=team&stage=goal-review&taskId=task-first/);
+    expect(marked).toEqual(['notification-first']);
+  });
+
+  test('does not navigate or warn when an old activation settles after unmount', async ({ page }) => {
+    let releaseRead!: () => void;
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    const item = notificationItem({
+      id: 'notification-unmount',
+      taskId: 'task-unmount',
+    });
+    await page.route('**/api/v1/notifications/unread-count', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ count: 1 })),
+      }),
+    );
+    await page.route('**/api/v1/notifications?**', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 10, items: [item] })),
+      }),
+    );
+    await page.route('**/api/v1/notifications/notification-unmount/read', async (route) => {
+      await readGate;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(
+          apiResponse({
+            ...item,
+            isRead: true,
+            readAt: '2026-08-09T09:00:00.000Z',
+          }),
+        ),
+      });
+    });
+
+    await page.goto('/tasks');
+    await page.getByTestId('app-notifications').click();
+    await page.getByTestId('notification-item-notification-unmount').click();
+    await page.getByTestId('header-user-menu').click();
+    await page.getByTestId('header-logout').click();
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.getByTestId('app-notifications')).toBeHidden();
+
+    releaseRead();
+    await page.waitForTimeout(100);
+    await expect(page).toHaveURL(/\/login$/);
+    await expect(page.locator('.el-message')).toHaveCount(0);
+  });
+
+  test('clears the global busy state and closes the popover when routing fails', async ({ page }) => {
+    const item = notificationItem({
+      id: 'notification-route-failure',
+      taskId: 'task-route-failure',
+      type: 'result_published',
+      isRead: true,
+      readAt: '2026-08-09T09:00:00.000Z',
+    });
+    await page.route('**/api/v1/notifications/unread-count', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ count: 0 })),
+      }),
+    );
+    await page.route('**/api/v1/notifications?**', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 10, items: [item] })),
+      }),
+    );
+    await page.route('**/*TaskDetailView*', (route) => route.abort());
+
+    await page.goto('/tasks');
+    const trigger = page.getByTestId('app-notifications');
+    await trigger.click();
+    await page.getByTestId('notification-item-notification-route-failure').click();
+
+    await expect(page).toHaveURL(/\/tasks$/);
+    await expect(page.locator('.el-message--warning')).toBeVisible();
+    await expect(page.locator('.notification-popover')).toBeHidden();
+    await expect(trigger).toBeEnabled();
+  });
+
+  test('smokes the real authenticated list and mark-one API without notification interception', async ({ page }) => {
+    await page.goto('/tasks');
+    const listResponsePromise = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return response.request().method() === 'GET' && url.pathname === '/api/v1/notifications';
+    });
+    await page.getByTestId('app-notifications').click();
+    const listResponse = await listResponsePromise;
+    expect(listResponse.ok()).toBe(true);
+
+    const row = page.getByTestId(`notification-item-${E2E_ACTIONABLE_NOTIFICATION_ID}`);
+    await expect(row).toBeVisible();
+    const markResponsePromise = page.waitForResponse(
+      (response) => response.request().method() === 'PATCH' && new URL(response.url()).pathname === `/api/v1/notifications/${E2E_ACTIONABLE_NOTIFICATION_ID}/read`,
+    );
+    await row.click();
+    const markResponse = await markResponsePromise;
+    expect(markResponse.ok()).toBe(true);
+    const body = await markResponse.json();
+    expect(body.data).toMatchObject({
+      id: E2E_ACTIONABLE_NOTIFICATION_ID,
+      channel: 'dingtalk',
+      status: 'sent',
+      isRead: true,
+    });
+  });
+
   test('keeps the notification popover inside a 390px viewport', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ count: 1 })),
-    }));
-    await page.route('**/api/v1/notifications?**', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 10, items: [
-        notificationItem({ id: 'notification-mobile', taskId: 'task-mobile', type: 'indicator_setting_notice' }),
-      ] })),
-    }));
+    await page.route('**/api/v1/notifications/unread-count', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ count: 1 })),
+      }),
+    );
+    await page.route('**/api/v1/notifications?**', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(
+          apiResponse({
+            total: 1,
+            page: 1,
+            pageSize: 10,
+            items: [
+              notificationItem({
+                id: 'notification-mobile',
+                taskId: 'task-mobile',
+                type: 'indicator_setting_notice',
+              }),
+            ],
+          }),
+        ),
+      }),
+    );
 
     await page.goto('/tasks');
     await page.getByTestId('app-notifications').click();
@@ -677,6 +1017,9 @@ test.describe('11-navigation-entrypoints notification task links', () => {
     expect(layout.overflow).toBeLessThanOrEqual(0);
     expect(layout.left).toBeGreaterThanOrEqual(0);
     expect(layout.right).toBeLessThanOrEqual(390);
-    await page.screenshot({ path: '../.superpowers/sdd/2026-08-08-navigation-dashboard-notifications/task-4-mobile.png', fullPage: true });
+    await page.screenshot({
+      path: '../.superpowers/sdd/2026-08-08-navigation-dashboard-notifications/task-4-mobile.png',
+      fullPage: true,
+    });
   });
 });

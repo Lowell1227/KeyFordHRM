@@ -14,7 +14,9 @@ const router = useRouter();
 const POLL_INTERVAL = 60_000;
 let timer: ReturnType<typeof setInterval> | null = null;
 const popoverVisible = ref(false);
-const processingIds = ref(new Set<string>());
+const activeNotificationId = ref<string | null>(null);
+let activationSerial = 0;
+let componentMounted = false;
 
 const badgeValue = computed(() => (store.unreadCount > 0 ? store.unreadCount : undefined));
 
@@ -51,11 +53,14 @@ function onVisibilityChange() {
 }
 
 onMounted(() => {
+  componentMounted = true;
   startPolling();
   document.addEventListener('visibilitychange', onVisibilityChange);
 });
 
 onUnmounted(() => {
+  componentMounted = false;
+  activationSerial += 1;
   stopPolling();
   document.removeEventListener('visibilitychange', onVisibilityChange);
 });
@@ -86,63 +91,61 @@ function notificationTarget(item: (typeof store.recent)[number]) {
 }
 
 function isProcessing(id: string) {
-  return processingIds.value.has(id);
+  return activeNotificationId.value === id;
 }
 
-function setProcessing(id: string, active: boolean) {
-  const next = new Set(processingIds.value);
-  if (active) next.add(id);
-  else next.delete(id);
-  processingIds.value = next;
+function isCurrentActivation(serial: number) {
+  return componentMounted && activationSerial === serial;
 }
 
 async function openNotification(item: (typeof store.recent)[number]) {
   const target = notificationTarget(item);
-  if (!target || isProcessing(item.id)) return;
+  if (!target || activeNotificationId.value !== null) return;
 
-  setProcessing(item.id, true);
+  const serial = ++activationSerial;
+  activeNotificationId.value = item.id;
   try {
-    if (item.status !== 'sent') {
+    if (!item.isRead) {
       try {
         await store.markAsRead(item.id);
       } catch {
+        if (!isCurrentActivation(serial)) return;
         ElMessage.warning('标记通知已读失败，仍将继续跳转');
       }
     }
 
+    if (!isCurrentActivation(serial)) return;
     const navigationSucceeded = await navigateNotificationTarget(target, (location) => router.push(location));
+    if (!isCurrentActivation(serial)) return;
     if (!navigationSucceeded) {
       ElMessage.warning('页面跳转未完成，请稍后重试');
     }
   } catch {
+    if (!isCurrentActivation(serial)) return;
     ElMessage.warning('页面跳转失败，请稍后重试');
   } finally {
-    popoverVisible.value = false;
-    setProcessing(item.id, false);
+    if (isCurrentActivation(serial)) {
+      popoverVisible.value = false;
+      activeNotificationId.value = null;
+    }
   }
 }
 </script>
 
 <template>
-  <el-popover
-    v-model:visible="popoverVisible"
-    placement="bottom-end"
-    :width="320"
-    trigger="click"
-    @show="onOpenPopover"
-  >
+  <el-popover v-model:visible="popoverVisible" placement="bottom-end" :width="320" trigger="click" @show="onOpenPopover">
     <template #reference>
-      <el-badge data-testid="app-notifications" :value="badgeValue" :max="99" class="notification-bell">
-        <el-icon :size="20"><Bell /></el-icon>
-      </el-badge>
+      <button type="button" class="notification-bell" data-testid="app-notifications" aria-label="通知">
+        <el-badge :value="badgeValue" :max="99" class="notification-bell__badge">
+          <el-icon :size="20"><Bell /></el-icon>
+        </el-badge>
+      </button>
     </template>
 
     <div class="notification-popover">
       <div class="notification-popover__header">
         <span>通知</span>
-        <el-button v-if="store.hasUnread" link type="primary" size="small" @click="markAllRead">
-          全部已读
-        </el-button>
+        <el-button v-if="store.hasUnread" link type="primary" size="small" @click="markAllRead"> 全部已读 </el-button>
       </div>
 
       <el-scrollbar max-height="320px">
@@ -154,26 +157,23 @@ async function openNotification(item: (typeof store.recent)[number]) {
               type="button"
               role="button"
               class="notification-popover__item notification-popover__item--actionable"
-              :class="{ 'is-unread': item.status !== 'sent' }"
+              :class="{ 'is-unread': !item.isRead }"
               :data-testid="`notification-item-${item.id}`"
-              :disabled="isProcessing(item.id)"
+              :disabled="activeNotificationId !== null"
               :aria-busy="isProcessing(item.id) || undefined"
               @click="openNotification(item)"
-              @keydown.enter.prevent="openNotification(item)"
-              @keydown.space.prevent="openNotification(item)"
             >
               <div class="notification-popover__title">{{ item.title }}</div>
-              <div class="notification-popover__content">{{ item.content }}</div>
+              <div class="notification-popover__content">
+                {{ item.content }}
+              </div>
               <div class="notification-popover__time">{{ item.createdAt }}</div>
             </button>
-            <div
-              v-else
-              class="notification-popover__item"
-              :class="{ 'is-unread': item.status !== 'sent' }"
-              :data-testid="`notification-item-${item.id}`"
-            >
+            <div v-else class="notification-popover__item" :class="{ 'is-unread': !item.isRead }" :data-testid="`notification-item-${item.id}`">
               <div class="notification-popover__title">{{ item.title }}</div>
-              <div class="notification-popover__content">{{ item.content }}</div>
+              <div class="notification-popover__content">
+                {{ item.content }}
+              </div>
               <div class="notification-popover__time">{{ item.createdAt }}</div>
             </div>
           </template>
@@ -191,13 +191,26 @@ async function openNotification(item: (typeof store.recent)[number]) {
   justify-content: center;
   width: 36px;
   height: 36px;
+  padding: 0;
+  border: 0;
   border-radius: 50%;
+  background: transparent;
+  color: inherit;
   cursor: pointer;
   transition: background 0.2s;
 }
 
 .notification-bell:hover {
   background: var(--el-fill-color-light);
+}
+
+.notification-bell:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+}
+
+.notification-bell__badge {
+  display: inline-flex;
 }
 
 .notification-popover__header {

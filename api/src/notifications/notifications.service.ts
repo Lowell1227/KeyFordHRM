@@ -1,8 +1,36 @@
 import { ConflictException, Inject, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { TaskStatus } from '@prisma/client';
+import { Prisma, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
+import { paginated, Paginated } from '@/common/dto/pagination.dto';
+import { NotificationQueryDto } from './dto/notification-query.dto';
 import { MESSAGE_PUSH_PROVIDER, MessagePushProvider } from './message-push.provider';
+
+const notificationInboxInclude = {
+  sender: { select: { name: true } },
+} satisfies Prisma.NotificationLogInclude;
+
+type NotificationWithSender = Prisma.NotificationLogGetPayload<{
+  include: typeof notificationInboxInclude;
+}>;
+
+export interface NotificationInboxItem {
+  id: string;
+  userId: string;
+  senderId: string | null;
+  senderName: string | null;
+  taskId: string | null;
+  cycleId: string | null;
+  type: string;
+  title: string;
+  content: string | null;
+  channel: string;
+  status: string;
+  isRead: boolean;
+  readAt: Date | null;
+  sentAt: Date | null;
+  createdAt: Date;
+}
 
 /** 催办节点类型 → task 处理人字段映射。 */
 export type TaskReminderNodeType = 'employee' | 'manager' | 'deptHead' | 'approver';
@@ -37,6 +65,69 @@ export class NotificationsService {
     private readonly pushProvider: MessagePushProvider,
   ) {}
 
+  async findInbox(userId: string, query: NotificationQueryDto): Promise<Paginated<NotificationInboxItem>> {
+    const where: Prisma.NotificationLogWhereInput = { userId };
+    if (query.unreadOnly) where.isRead = false;
+    if (query.status) where.status = query.status;
+
+    const [total, rows] = await Promise.all([
+      this.prisma.notificationLog.count({ where }),
+      this.prisma.notificationLog.findMany({
+        where,
+        include: notificationInboxInclude,
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        skip: query.skip,
+        take: query.take,
+      }),
+    ]);
+
+    return paginated(
+      rows.map((row) => this.toInboxItem(row)),
+      total,
+      query,
+    );
+  }
+
+  async getUnreadCount(userId: string): Promise<{ count: number }> {
+    const count = await this.prisma.notificationLog.count({
+      where: { userId, isRead: false },
+    });
+    return { count };
+  }
+
+  async markAsRead(id: string, userId: string): Promise<NotificationInboxItem> {
+    const existing = await this.findOwnedNotification(id, userId);
+    if (!existing) {
+      throw new NotFoundException({
+        code: ERROR_CODE.NOT_FOUND,
+        message: '通知不存在',
+      });
+    }
+    if (existing.isRead) return this.toInboxItem(existing);
+
+    await this.prisma.notificationLog.updateMany({
+      where: { id, userId, isRead: false },
+      data: { isRead: true, readAt: new Date() },
+    });
+
+    const updated = await this.findOwnedNotification(id, userId);
+    if (!updated) {
+      throw new NotFoundException({
+        code: ERROR_CODE.NOT_FOUND,
+        message: '通知不存在',
+      });
+    }
+    return this.toInboxItem(updated);
+  }
+
+  async markAllAsRead(userId: string): Promise<{ marked: number }> {
+    const result = await this.prisma.notificationLog.updateMany({
+      where: { userId, isRead: false },
+      data: { isRead: true, readAt: new Date() },
+    });
+    return { marked: result.count };
+  }
+
   /**
    * 底层创建通知：先写 pending 日志，再调 provider.push；
    * 成功改 sent + sent_at + externalId，失败改 failed + error_msg。
@@ -65,6 +156,8 @@ export class NotificationsService {
         content,
         status: 'pending',
         channel: 'dingtalk',
+        isRead: false,
+        readAt: null,
       },
     });
 
@@ -98,6 +191,33 @@ export class NotificationsService {
     }
 
     return log.id;
+  }
+
+  private findOwnedNotification(id: string, userId: string) {
+    return this.prisma.notificationLog.findFirst({
+      where: { id, userId },
+      include: notificationInboxInclude,
+    });
+  }
+
+  private toInboxItem(row: NotificationWithSender): NotificationInboxItem {
+    return {
+      id: row.id,
+      userId: row.userId,
+      senderId: row.senderId,
+      senderName: row.sender?.name ?? null,
+      taskId: row.taskId,
+      cycleId: row.cycleId,
+      type: row.type,
+      title: row.title,
+      content: row.content,
+      channel: row.channel,
+      status: row.status,
+      isRead: row.isRead,
+      readAt: row.readAt,
+      sentAt: row.sentAt,
+      createdAt: row.createdAt,
+    };
   }
 
   /**

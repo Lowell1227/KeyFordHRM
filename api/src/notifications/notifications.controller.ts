@@ -1,39 +1,30 @@
-import { Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Controller, Get, Param, ParseUUIDPipe, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
-import { PrismaService } from '@/prisma/prisma.service';
-import { PaginationDto } from '@/common/dto/pagination.dto';
+import { NotificationQueryDto } from './dto/notification-query.dto';
+import { NotificationsService } from './notifications.service';
 
-/** 通知接口（先提供前端需要的桩，未读逻辑后续接入真实推送日志）。 */
 @Controller('notifications')
 export class NotificationsController {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly notificationsService: NotificationsService) {}
 
-  /** GET /notifications/unread-count — 当前用户未读通知数。 */
   @Get('unread-count')
-  async getUnreadCount(@CurrentUser() viewer: AuthUser) {
-    // TODO: 等 notification_logs 增加 is_read 字段后改为真实计数
-    return { count: 0 };
+  getUnreadCount(@CurrentUser() viewer: AuthUser) {
+    return this.notificationsService.getUnreadCount(viewer.id);
   }
 
-  /** GET /notifications — 通知列表。 */
   @Get()
-  async findAll(@Query() dto: PaginationDto, @CurrentUser() viewer: AuthUser) {
-    // TODO: 接入真实通知数据
-    return { items: [], total: 0, page: dto.page, pageSize: dto.pageSize };
+  findAll(@Query() query: NotificationQueryDto, @CurrentUser() viewer: AuthUser) {
+    return this.notificationsService.findInbox(viewer.id, query);
   }
 
-  /** PATCH /notifications/:id/read — 标记单条已读。 */
   @Patch(':id/read')
-  async markAsRead(@Param('id') id: string, @CurrentUser() viewer: AuthUser) {
-    // TODO: 等 is_read 字段后真实更新
-    return { id, read: true };
+  markAsRead(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() viewer: AuthUser) {
+    return this.notificationsService.markAsRead(id, viewer.id);
   }
 
-  /** POST /notifications/read-all — 全部已读。 */
   @Post('read-all')
-  async markAllAsRead(@CurrentUser() viewer: AuthUser) {
-    // TODO: 等 is_read 字段后真实更新
-    return { marked: 0 };
+  markAllAsRead(@CurrentUser() viewer: AuthUser) {
+    return this.notificationsService.markAllAsRead(viewer.id);
   }
 }
