@@ -1,11 +1,12 @@
-import { FixtureFactory } from './fixture-factory';
-import { SysRole } from '@prisma/client';
+import { FixtureFactory } from "./fixture-factory";
+import { SysRole } from "@prisma/client";
 
 export interface BulkFixtureResult {
   employeeIds: string[];
   managerIds: string[];
   exemptEmployeeId: string;
   deptId: string;
+  deptHeadId: string;
 }
 
 /**
@@ -13,10 +14,20 @@ export interface BulkFixtureResult {
  *
  * 员工均匀挂在各位主管下，部门与主管均使用同一个 seed dept。
  */
-export async function createBulkFixture(factory: FixtureFactory): Promise<BulkFixtureResult> {
+export async function createBulkFixture(
+  factory: FixtureFactory,
+): Promise<BulkFixtureResult> {
   const dept = await factory.getSeedDept();
   const employeeIds: string[] = [];
   const managerIds: string[] = [];
+  const deptHead = await factory.createUser({
+    employeeNo: "BULK-HEAD",
+    name: "规模测试部门负责人",
+    sysRole: SysRole.dept_head,
+    deptId: dept.id,
+    isAssessorOnly: true,
+  });
+  await factory.updateDeptLeader(dept.id, deptHead.id);
 
   const managerCount = 10;
   const employeesPerManager = 12;
@@ -24,10 +35,11 @@ export async function createBulkFixture(factory: FixtureFactory): Promise<BulkFi
 
   for (let m = 1; m <= managerCount; m++) {
     const manager = await factory.createUser({
-      employeeNo: `MGR${String(m).padStart(3, '0')}`,
+      employeeNo: `MGR${String(m).padStart(3, "0")}`,
       name: `主管${m}`,
       sysRole: SysRole.manager,
       deptId: dept.id,
+      directManagerId: deptHead.id,
     });
     managerIds.push(manager.id);
 
@@ -35,7 +47,7 @@ export async function createBulkFixture(factory: FixtureFactory): Promise<BulkFi
       const idx = (m - 1) * employeesPerManager + e;
       if (idx > targetCount) break;
       const emp = await factory.createUser({
-        employeeNo: `EMP${String(idx).padStart(3, '0')}`,
+        employeeNo: `EMP${String(idx).padStart(3, "0")}`,
         name: `员工${idx}`,
         sysRole: SysRole.employee,
         deptId: dept.id,
@@ -49,7 +61,7 @@ export async function createBulkFixture(factory: FixtureFactory): Promise<BulkFi
   while (employeeIds.length < targetCount) {
     const idx = employeeIds.length + 1;
     const emp = await factory.createUser({
-      employeeNo: `EMP${String(idx).padStart(3, '0')}`,
+      employeeNo: `EMP${String(idx).padStart(3, "0")}`,
       name: `员工${idx}`,
       sysRole: SysRole.employee,
       deptId: dept.id,
@@ -60,14 +72,20 @@ export async function createBulkFixture(factory: FixtureFactory): Promise<BulkFi
 
   // 豁免员工：在周期快结束时入职，在岗天数 < 1/3
   const exemptEmp = await factory.createUser({
-    employeeNo: 'EXEMPT001',
-    name: '豁免员工',
+    employeeNo: "EXEMPT001",
+    name: "豁免员工",
     sysRole: SysRole.employee,
     deptId: dept.id,
     directManagerId: managerIds[0],
-    entryDate: new Date('2026-03-20'),
+    entryDate: new Date("2026-03-20"),
   });
   employeeIds.push(exemptEmp.id);
 
-  return { employeeIds, managerIds, exemptEmployeeId: exemptEmp.id, deptId: dept.id };
+  return {
+    employeeIds,
+    managerIds,
+    exemptEmployeeId: exemptEmp.id,
+    deptId: dept.id,
+    deptHeadId: deptHead.id,
+  };
 }
