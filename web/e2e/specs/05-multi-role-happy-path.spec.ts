@@ -1,4 +1,4 @@
-import { test, expect } from '@playwright/test';
+import { expect, test } from '@playwright/test';
 
 const API_BASE = process.env.PLAYWRIGHT_API_BASE_URL || 'http://localhost:3000/api/v1';
 
@@ -33,112 +33,65 @@ async function fetchAll<T>(token: string, path: string): Promise<T[]> {
   }
 }
 
-function formatRunLabel(value = new Date()): string {
-  const pad = (num: number) => String(num).padStart(2, '0');
-  return `${value.getFullYear()}${pad(value.getMonth() + 1)}${pad(value.getDate())}-${pad(value.getHours())}${pad(value.getMinutes())}`;
-}
-
 test.describe('05-multi-role-happy-path', () => {
-  test('runs full lifecycle from HR launch to employee confirmation', async () => {
-    const hrToken = await login('HR001');
-    const employeeToken = await login('EMP001');
-    const managerToken = await login('MGR001');
-    const approverToken = await login('VP001');
+  test.use({ storageState: 'e2e/auth-state/manager.json' });
 
-    const users = await fetchAll<{ id: string; employeeNo?: string }>(hrToken, '/users');
-    const employee = users.find((user) => user.employeeNo === 'EMP001');
-    expect(employee).toBeTruthy();
-
-    const runLabel = formatRunLabel();
-    await api('POST', '/templates', hrToken, {
-      name: `2026年二季度绩效模板（全流程验证 ${runLabel}）`,
-      applicableDepts: [],
-      applicableUsers: users.map((user) => user.id),
-      maxScore: 100,
-      isActive: true,
-      dimensions: [
-        {
-          name: 'KPI',
-          type: 'kpi',
-          weight: 0.7,
-          sortOrder: 0,
-          indicators: [{ name: 'KPI A', weight: 1, sortOrder: 0 }],
-        },
-        {
-          name: 'Attitude',
-          type: 'attitude',
-          weight: 0.3,
-          sortOrder: 1,
-          indicators: [{ name: 'Attitude A', weight: 1, sortOrder: 0 }],
-        },
-      ],
-    });
-
-    const cycle = await api('POST', '/cycles', hrToken, {
-      name: `2026年二季度绩效考核（全流程验证 ${runLabel}）`,
-      type: 'quarterly',
-      startDate: '2026-04-01',
-      endDate: '2026-06-30',
-    });
-
-    const launch = await api('POST', `/cycles/${cycle.id}/launch`, hrToken);
-    expect(launch.activeTasks).toBeGreaterThan(0);
-
-    const tasks = await fetchAll<{ id: string; employeeId: string; status: string }>(
-      hrToken,
-      `/tasks?cycleId=${cycle.id}`,
+  test('manager saves a real employee evaluation draft, refreshes, and restores the team workspace URL', async ({ page }) => {
+    const [hrToken, managerToken] = await Promise.all([login('HR001'), login('MGR001')]);
+    const [allTasks, cycles, managerTasks] = await Promise.all([
+      fetchAll<{
+        id: string;
+        cycleId: string;
+        employeeId: string;
+        status: string;
+      }>(hrToken, '/tasks'),
+      fetchAll<{ id: string; name: string }>(hrToken, '/cycles'),
+      fetchAll<{
+        id: string;
+        cycleId: string;
+        employeeId: string;
+        status: string;
+      }>(managerToken, '/tasks/team?stage=manager-eval'),
+    ]);
+    const acceptanceCycleIds = new Set(
+      cycles
+        .filter((cycle) => cycle.name.startsWith('E2E-acceptance-'))
+        .map((cycle) => cycle.id),
     );
-    const task = tasks.find((item) => item.employeeId === employee!.id);
-    expect(task?.status).toBe('indicator_setting');
+    const target = managerTasks.find(
+      (task) => task.status === 'manager_scoring' && acceptanceCycleIds.has(task.cycleId),
+    );
+    expect(target).toBeTruthy();
+    expect(allTasks.some((task) => task.id === target!.id)).toBe(true);
 
-    await api('POST', `/tasks/${task!.id}/indicators/confirm`, employeeToken);
+    const detail = await api('GET', `/tasks/${target!.id}`, managerToken);
+    expect(detail.status).toBe('manager_scoring');
 
-    let detail = await api('GET', `/tasks/${task!.id}`, employeeToken);
-    await api('POST', `/tasks/${task!.id}/self-eval`, employeeToken, {
-      indicators: detail.indicatorInstances
-        .filter((item: { indicatorType: string }) => item.indicatorType !== 'veto')
-        .map((item: { id: string }) => ({ id: item.id, selfScore: 82, selfComment: 'self eval ok' })),
-      summary: { achievements: 'completed key objectives' },
-    });
+    const url = `/tasks?scope=team&stage=manager-eval&cycleId=${target!.cycleId}&employeeId=${target!.employeeId}&taskId=${target!.id}`;
+    await page.goto(url);
+    await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
+    await expect(page.getByTestId('team-member-rail')).toBeVisible();
+    await page.getByTestId('indicator-expand-all').click();
 
-    detail = await api('GET', `/tasks/${task!.id}`, managerToken);
-    const scoreResult = await api('POST', `/tasks/${task!.id}/manager-score`, managerToken, {
-      expectedUpdatedAt: detail.updatedAt,
-      indicators: detail.indicatorInstances
-        .filter((item: { indicatorType: string }) => item.indicatorType !== 'veto')
-        .map((item: { id: string }) => ({ id: item.id, managerScore: 86, managerComment: 'manager score ok' })),
-      evalSummary: { strengths: 'stable delivery' },
-    });
-
-    if (scoreResult.status === 'dept_review') {
-      const review = await api('POST', `/tasks/${task!.id}/dept-review`, managerToken, {
-        action: 'approve',
-        comment: 'dept review ok',
-      });
-      expect(review.status).toBe('hr_calibration');
-    } else {
-      expect(scoreResult.status).toBe('hr_calibration');
+    const scoreInputs = page.locator('[data-testid^="manager-score-"]');
+    await expect(scoreInputs.first()).toBeVisible();
+    for (let index = 0; index < await scoreInputs.count(); index += 1) {
+      await scoreInputs.nth(index).fill(String(86 + index));
     }
+    await page.getByTestId('manager-strengths').fill('Real browser draft acceptance');
+    await page.getByTestId('manager-evaluation-save').click();
+    await expect(page.getByTestId('manager-evaluation-feedback')).toContainText('草稿已保存');
 
-    const calibration = await api('POST', `/cycles/${cycle.id}/calibration`, hrToken, {
-      submit: true,
-      calibrations: [{ taskId: task!.id, calibratedGrade: 'B', calibrationNote: 'calibration ok' }],
-    });
-    expect(calibration.submit).toBe(true);
+    await page.reload();
+    await expect(page).toHaveURL(new RegExp(`taskId=${target!.id}`));
+    await expect(page).toHaveURL(new RegExp(`cycleId=${target!.cycleId}`));
+    await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
+    await expect(page.getByTestId('manager-strengths')).toHaveValue('Real browser draft acceptance');
+    await expect(scoreInputs.first()).toHaveValue('86');
 
-    const approval = await api('POST', `/cycles/${cycle.id}/approval`, approverToken, {
-      taskIds: [task!.id],
-      comment: 'approval ok',
-    });
-    expect(approval.approved).toBe(1);
-
-    const publish = await api('POST', `/cycles/${cycle.id}/publish`, hrToken, {
-      taskIds: [task!.id],
-      sendDingtalkNotification: false,
-    });
-    expect(publish.published).toBe(1);
-
-    const confirmation = await api('POST', `/tasks/${task!.id}/employee-confirm`, employeeToken);
-    expect(confirmation.status).toBe('confirmed');
+    const teamAfterRefresh = await api('GET', `/tasks/team?stage=manager-eval&cycleId=${target!.cycleId}`, managerToken);
+    const permittedEmployeeIds = new Set(teamAfterRefresh.facets.employees.map((employee: { id: string }) => employee.id));
+    expect(permittedEmployeeIds.has(target!.employeeId)).toBe(true);
+    expect(teamAfterRefresh.items.every((task: { employeeId: string }) => permittedEmployeeIds.has(task.employeeId))).toBe(true);
   });
 });

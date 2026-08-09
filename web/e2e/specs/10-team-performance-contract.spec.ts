@@ -21,6 +21,31 @@ const apiResponse = (data: unknown) => ({
   timestamp: Date.now(),
 });
 
+test.describe('team performance real API smoke', () => {
+  test.use({
+    baseURL: 'http://localhost:5173',
+    storageState: 'e2e/auth-state/manager.json',
+  });
+
+  test('opens the API-authorized manager evaluation task without route mocking', async ({ page }) => {
+    const responsePromise = page.waitForResponse((response) => (
+      response.url().includes('/api/v1/tasks/team')
+      && new URL(response.url()).searchParams.get('stage') === 'manager-eval'
+      && response.status() === 200
+    ));
+    await page.goto('/tasks?scope=team&stage=manager-eval&stageState=pending');
+    const response = await (await responsePromise).json() as {
+      data: { items: Array<{ id: string; cycleId: string; employeeId: string; status: string }> };
+    };
+    const task = response.data.items.find((item) => item.status === 'manager_scoring');
+    expect(task).toBeTruthy();
+
+    await page.goto(`/tasks?scope=team&stage=manager-eval&stageState=pending&cycleId=${task!.cycleId}&employeeId=${task!.employeeId}&taskId=${task!.id}`);
+    await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
+    await expect(page.getByTestId('team-member-rail')).toBeVisible();
+  });
+});
+
 const shouldCaptureTask7Evidence = () => (
   (globalThis as { process?: { env?: Record<string, string | undefined> } })
     .process?.env?.TASK7_CAPTURE_EVIDENCE === '1'

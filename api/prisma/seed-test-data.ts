@@ -2,16 +2,40 @@ import { PrismaClient, SysRole, CycleStatus, TaskStatus, IndicatorType, Dimensio
 import * as bcrypt from 'bcrypt';
 
 const prisma = new PrismaClient();
+const E2E_CYCLE_PREFIX = 'E2E-acceptance-';
+const E2E_TEMPLATE_PREFIX = 'E2E-template-';
+
+const CYCLE_NAMES = [
+  `${E2E_CYCLE_PREFIX}indicator-confirm`,
+  `${E2E_CYCLE_PREFIX}indicator-reject`,
+  `${E2E_CYCLE_PREFIX}goal-review`,
+  `${E2E_CYCLE_PREFIX}self-eval`,
+  `${E2E_CYCLE_PREFIX}manager-score`,
+  `${E2E_CYCLE_PREFIX}hr-calibration`,
+  `${E2E_CYCLE_PREFIX}approval`,
+];
 
 async function main() {
-  const passwordHash = await bcrypt.hash('test123', 10);
+  // Keep the browser global setup and seeded acceptance accounts on one credential.
+  const passwordHash = await bcrypt.hash('000000', 10);
   const dept = await prisma.department.findFirst({ where: { parentId: { not: null } } });
   if (!dept) throw new Error('缺少部门数据，请先跑基础 seed');
+
+  const oldCycles = await prisma.assessmentCycle.findMany({
+    where: { name: { startsWith: E2E_CYCLE_PREFIX } },
+    select: { id: true },
+  });
+  for (const cycle of oldCycles) {
+    await prisma.assessmentTask.deleteMany({ where: { cycleId: cycle.id } });
+    await prisma.assessmentTemplateSnapshot.deleteMany({ where: { cycleId: cycle.id } });
+    await prisma.assessmentCycle.delete({ where: { id: cycle.id } });
+  }
+  await prisma.assessmentTemplate.deleteMany({ where: { name: { startsWith: E2E_TEMPLATE_PREFIX } } });
 
   // 创建测试账号
   const employee1 = await prisma.user.upsert({
     where: { employeeNo: 'EMP001' },
-    update: {},
+    update: { passwordHash, sysRole: SysRole.employee, status: 'active', deptId: dept.id, position: '专员' },
     create: {
       employeeNo: 'EMP001',
       name: '测试员工甲',
@@ -24,7 +48,7 @@ async function main() {
   });
   const employee2 = await prisma.user.upsert({
     where: { employeeNo: 'EMP002' },
-    update: {},
+    update: { passwordHash, sysRole: SysRole.employee, status: 'active', deptId: dept.id, position: '专员' },
     create: {
       employeeNo: 'EMP002',
       name: '测试员工乙',
@@ -37,7 +61,7 @@ async function main() {
   });
   const manager = await prisma.user.upsert({
     where: { employeeNo: 'MGR001' },
-    update: {},
+    update: { passwordHash, sysRole: SysRole.manager, status: 'active', deptId: dept.id, position: '主管' },
     create: {
       employeeNo: 'MGR001',
       name: '测试主管',
@@ -50,7 +74,7 @@ async function main() {
   });
   const hr = await prisma.user.upsert({
     where: { employeeNo: 'HR001' },
-    update: {},
+    update: { passwordHash, sysRole: SysRole.hr, status: 'active', deptId: dept.id, position: 'HR', canViewAll: true },
     create: {
       employeeNo: 'HR001',
       name: '测试HR',
@@ -64,7 +88,7 @@ async function main() {
   });
   const vp = await prisma.user.upsert({
     where: { employeeNo: 'VP001' },
-    update: {},
+    update: { passwordHash, sysRole: SysRole.vp, status: 'active', deptId: dept.id, position: 'VP' },
     create: {
       employeeNo: 'VP001',
       name: '测试VP',
@@ -80,9 +104,8 @@ async function main() {
   await prisma.user.update({ where: { id: employee2.id }, data: { directManagerId: manager.id } });
 
   // 创建周期
-  const cycleNames = ['指标确认-确认', '指标确认-退回', '自评周期', '主管评分周期', 'HR校准周期', '审批周期'];
   const cycles: Record<string, any> = {};
-  for (const name of cycleNames) {
+  for (const name of CYCLE_NAMES) {
     cycles[name] = await prisma.assessmentCycle.create({
       data: {
         name,
@@ -104,42 +127,47 @@ async function main() {
 
   // 指标确认-确认：EMP001
   taskMap['indicatorConfirm'] = await createTaskWithStatus(
-    cycles['指标确认-确认'], hr.id, employee1, manager, vp, TaskStatus.indicator_confirming,
+    cycles[`${E2E_CYCLE_PREFIX}indicator-confirm`], hr.id, employee1, manager, vp, TaskStatus.indicator_confirming,
   );
 
   // 指标确认-退回：EMP002
   taskMap['indicatorReject'] = await createTaskWithStatus(
-    cycles['指标确认-退回'], hr.id, employee2, manager, vp, TaskStatus.indicator_confirming,
+    cycles[`${E2E_CYCLE_PREFIX}indicator-reject`], hr.id, employee2, manager, vp, TaskStatus.indicator_confirming,
+  );
+
+  // Manager goal-review workspace: EMP001 has a submitted indicator awaiting direct-manager review.
+  taskMap['goalReview'] = await createTaskWithStatus(
+    cycles[`${E2E_CYCLE_PREFIX}goal-review`], hr.id, employee1, manager, vp, TaskStatus.indicator_reviewing,
   );
 
   // 自评周期：EMP001
   taskMap['selfEval'] = await createTaskWithStatus(
-    cycles['自评周期'], hr.id, employee1, manager, vp, TaskStatus.self_eval,
+    cycles[`${E2E_CYCLE_PREFIX}self-eval`], hr.id, employee1, manager, vp, TaskStatus.self_eval,
   );
 
   // 主管评分周期：EMP001，先模拟主管已评过分
   taskMap['managerScore'] = await createTaskWithStatus(
-    cycles['主管评分周期'], hr.id, employee1, manager, vp, TaskStatus.manager_scoring, true,
+    cycles[`${E2E_CYCLE_PREFIX}manager-score`], hr.id, employee1, manager, vp, TaskStatus.manager_scoring, true,
   );
 
   // HR校准周期：EMP001、EMP002 都已经理评分
   taskMap['calibration1'] = await createTaskWithStatus(
-    cycles['HR校准周期'], hr.id, employee1, manager, vp, TaskStatus.hr_calibration, true,
+    cycles[`${E2E_CYCLE_PREFIX}hr-calibration`], hr.id, employee1, manager, vp, TaskStatus.hr_calibration, true,
   );
   taskMap['calibration2'] = await createTaskWithStatus(
-    cycles['HR校准周期'], hr.id, employee2, manager, vp, TaskStatus.hr_calibration, true,
+    cycles[`${E2E_CYCLE_PREFIX}hr-calibration`], hr.id, employee2, manager, vp, TaskStatus.hr_calibration, true,
   );
 
   // 审批周期：EMP001、EMP002 都已校准
   taskMap['approval1'] = await createTaskWithStatus(
-    cycles['审批周期'], hr.id, employee1, manager, vp, TaskStatus.approval, true, 'B',
+    cycles[`${E2E_CYCLE_PREFIX}approval`], hr.id, employee1, manager, vp, TaskStatus.approval, true, 'B',
   );
   taskMap['approval2'] = await createTaskWithStatus(
-    cycles['审批周期'], hr.id, employee2, manager, vp, TaskStatus.approval, true, 'C',
+    cycles[`${E2E_CYCLE_PREFIX}approval`], hr.id, employee2, manager, vp, TaskStatus.approval, true, 'C',
   );
 
   console.log('✓ 测试数据创建完成');
-  console.log('  员工 EMP001(甲) / EMP002(乙) / 主管 MGR001 / HR HR001 / VP VP001  密码均为 test123');
+  console.log('  员工 EMP001(甲) / EMP002(乙) / 主管 MGR001 / HR HR001 / VP VP001  密码均为 000000');
 }
 
 async function createTaskWithStatus(
@@ -155,7 +183,7 @@ async function createTaskWithStatus(
   // 每个周期创建一个独立模板
   const template = await prisma.assessmentTemplate.create({
     data: {
-      name: `模板-${cycle.name}`,
+      name: `${E2E_TEMPLATE_PREFIX}${cycle.name}`,
       maxScore: 100,
       isActive: true,
       createdBy: hrId,
@@ -197,13 +225,13 @@ async function createTaskWithStatus(
                 {
                   name: '加分项',
                   scoringStandard: '突出贡献加分',
-                  weight: 0.2,
+                  weight: 0.1999,
                   sortOrder: 0,
                 },
                 {
                   name: '一票否决项',
                   scoringStandard: '重大失误一票否决',
-                  weight: 0,
+                  weight: 0.0001,
                   sortOrder: 1,
                 },
               ],

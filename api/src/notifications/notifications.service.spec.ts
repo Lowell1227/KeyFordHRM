@@ -214,7 +214,7 @@ describe('NotificationsService', () => {
   describe('sendBatchReminders', () => {
     it('不受 D19 限频约束，只给当前处于该节点的任务处理人发通知', async () => {
       prisma.assessmentTask.findMany = jest.fn().mockResolvedValue([
-        { id: 't1', cycleId: 'c1', status: 'manager_scoring', employeeId: 'e1', managerId: 'm1', deptHeadId: null, approverId: null },
+        { id: 't1', cycleId: 'c1', status: 'indicator_reviewing', employeeId: 'e1', managerId: 'm1', deptHeadId: null, approverId: null },
         { id: 't2', cycleId: 'c1', status: 'manager_scoring', employeeId: 'e2', managerId: 'm2', deptHeadId: null, approverId: null },
         { id: 't3', cycleId: 'c1', status: 'dept_review', employeeId: 'e3', managerId: null, deptHeadId: null, approverId: null },
       ] as any);
@@ -229,7 +229,7 @@ describe('NotificationsService', () => {
         expect.objectContaining({
           where: expect.objectContaining({
             cycleId: 'c1',
-            status: { in: ['manager_scoring'] },
+            status: { in: ['indicator_reviewing', 'manager_scoring'] },
           }),
         }),
       );
@@ -256,7 +256,7 @@ describe('NotificationsService', () => {
         expect.objectContaining({
           where: expect.objectContaining({
             cycleId: 'c1',
-            status: { in: ['manager_scoring'] },
+            status: { in: ['indicator_reviewing', 'manager_scoring'] },
           }),
         }),
       );

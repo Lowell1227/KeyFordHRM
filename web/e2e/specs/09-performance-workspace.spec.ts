@@ -15,6 +15,28 @@ const apiResponse = (data: unknown) => ({
 test.describe('09-performance-workspace manager shell', () => {
   test.use({ storageState: 'e2e/auth-state/manager.json' });
 
+  test('team employee selector exposes only the direct-manager API facet', async ({ page }) => {
+    const teamResponse = page.waitForResponse((response) => (
+      response.url().includes('/api/v1/tasks/team')
+      && new URL(response.url()).searchParams.get('stage') === 'manager-eval'
+      && response.status() === 200
+    ));
+    await page.goto('/tasks?scope=team&stage=manager-eval');
+    const payload = await (await teamResponse).json() as {
+      data: { facets: { employees: Array<{ name: string }> } };
+    };
+    const allowedNames = new Set(payload.data.facets.employees.map((employee) => employee.name));
+
+    await page.getByTestId('team-employee-filter').click();
+    const options = await page.locator('.el-select-dropdown__item:visible').allTextContents();
+    expect(options.length).toBeGreaterThan(0);
+    const renderedEmployeeNames = options
+      .map((option) => option.trim())
+      .filter((option) => option !== '全部员工')
+      .map((option) => option.split(' · ')[0]);
+    expect(new Set(renderedEmployeeNames)).toEqual(allowedNames);
+  });
+
   for (const entry of [
     { path: '/action-items', current: '目标跟进' },
     { path: '/objectives', current: '目标地图' },
