@@ -60,7 +60,7 @@ describe('NotificationsService', () => {
       const log = { id: 'log-1' };
       jest.spyOn(prisma.user, 'findUnique').mockResolvedValue(user as any);
       jest.spyOn(prisma.notificationLog, 'create').mockResolvedValue(log as any);
-      jest.spyOn(prisma.notificationLog, 'update').mockResolvedValue({} as any);
+      jest.spyOn(prisma.notificationLog, 'updateMany').mockResolvedValue({ count: 1 } as any);
       jest.spyOn(pushProvider, 'push').mockResolvedValue({ channel: 'dingtalk', externalId: 'ext-1' });
 
       const id = await service.create({
@@ -79,7 +79,7 @@ describe('NotificationsService', () => {
       expect(pushProvider.push).toHaveBeenCalledWith(
         expect.objectContaining({ userId: 'u-1', dingtalkId: 'dt-1', title: '标题', content: '内容' }),
       );
-      expect(prisma.notificationLog.update).toHaveBeenCalledWith({
+      expect(prisma.notificationLog.updateMany).toHaveBeenCalledWith({
         where: { id: 'log-1' },
         data: {
           status: 'sent',
@@ -88,6 +88,7 @@ describe('NotificationsService', () => {
           extraData: { externalId: 'ext-1' },
         },
       });
+      expect(prisma.notificationLog.update).not.toHaveBeenCalled();
     });
 
     it('provider 失败时不抛异常，改状态为 failed 并记 error_msg', async () => {
@@ -95,7 +96,7 @@ describe('NotificationsService', () => {
       const log = { id: 'log-2' };
       jest.spyOn(prisma.user, 'findUnique').mockResolvedValue(user as any);
       jest.spyOn(prisma.notificationLog, 'create').mockResolvedValue(log as any);
-      jest.spyOn(prisma.notificationLog, 'update').mockResolvedValue({} as any);
+      jest.spyOn(prisma.notificationLog, 'updateMany').mockResolvedValue({ count: 1 } as any);
       jest.spyOn(pushProvider, 'push').mockRejectedValue(new Error('push broken'));
 
       const id = await service.create({
@@ -106,10 +107,11 @@ describe('NotificationsService', () => {
       });
 
       expect(id).toBe('log-2');
-      expect(prisma.notificationLog.update).toHaveBeenCalledWith({
+      expect(prisma.notificationLog.updateMany).toHaveBeenCalledWith({
         where: { id: 'log-2' },
         data: { status: 'failed', errorMsg: 'push broken' },
       });
+      expect(prisma.notificationLog.update).not.toHaveBeenCalled();
     });
 
     it('接收用户不存在时返回 null', async () => {

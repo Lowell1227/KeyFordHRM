@@ -196,7 +196,7 @@ export class NotificationsService {
         content,
       });
 
-      await this.prisma.notificationLog.update({
+      await this.prisma.notificationLog.updateMany({
         where: { id: log.id },
         data: {
           status: 'sent',
@@ -208,7 +208,7 @@ export class NotificationsService {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       this.logger.error(`消息推送失败: ${message}`, error instanceof Error ? error.stack : undefined);
-      await this.prisma.notificationLog.update({
+      await this.prisma.notificationLog.updateMany({
         where: { id: log.id },
         data: {
           status: 'failed',
