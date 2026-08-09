@@ -43,7 +43,7 @@ export async function createUsers(adminToken: string) {
   const dept = deptRes.data.items[0];
 
   const hr = await api('POST', '/users', adminToken, {
-    employeeNo: 'HR001',
+    employeeNo: 'E2E_API_HR',
     name: '测试HR',
     sysRole: 'hr',
     deptId: dept.id,
@@ -51,7 +51,7 @@ export async function createUsers(adminToken: string) {
   });
 
   const manager = await api('POST', '/users', adminToken, {
-    employeeNo: 'MGR001',
+    employeeNo: 'E2E_API_MGR',
     name: '测试主管',
     sysRole: 'manager',
     deptId: dept.id,
@@ -59,7 +59,7 @@ export async function createUsers(adminToken: string) {
   });
 
   const employee = await api('POST', '/users', adminToken, {
-    employeeNo: 'EMP001',
+    employeeNo: 'E2E_API_EMP',
     name: '测试员工',
     sysRole: 'employee',
     deptId: dept.id,
@@ -68,7 +68,7 @@ export async function createUsers(adminToken: string) {
   });
 
   const approver = await api('POST', '/users', adminToken, {
-    employeeNo: 'VP001',
+    employeeNo: 'E2E_API_APPROVER',
     name: '测试VP',
     sysRole: 'vp',
     deptId: dept.id,
@@ -83,7 +83,7 @@ export async function createUsers(adminToken: string) {
 
 export async function createTemplate(hrToken: string, deptId: string) {
   return api('POST', '/templates', hrToken, {
-    name: '2026年一季度绩效模板（自动化验证）',
+    name: 'E2E-API-2026年一季度绩效模板（自动化验证）',
     applicableDepts: [deptId],
     applicableUsers: [],
     dimensions: [
@@ -110,7 +110,7 @@ export async function createTemplate(hrToken: string, deptId: string) {
 
 export async function createCycle(hrToken: string) {
   return api('POST', '/cycles', hrToken, {
-    name: '2026年一季度绩效考核（自动化验证）',
+    name: 'E2E-API-2026年一季度绩效考核（自动化验证）',
     type: 'quarterly',
     startDate: '2026-01-01',
     endDate: '2026-03-31',

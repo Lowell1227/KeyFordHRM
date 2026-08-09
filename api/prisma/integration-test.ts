@@ -50,19 +50,19 @@ async function api(method: string, path: string, token: string, body?: unknown):
 async function main() {
   const results: TestResult[] = [];
 
-  const emp1 = await prisma.user.findUnique({ where: { employeeNo: 'EMP001' } });
-  const emp2 = await prisma.user.findUnique({ where: { employeeNo: 'EMP002' } });
-  const mgr = await prisma.user.findUnique({ where: { employeeNo: 'MGR001' } });
-  const hr = await prisma.user.findUnique({ where: { employeeNo: 'HR001' } });
-  const vp = await prisma.user.findUnique({ where: { employeeNo: 'VP001' } });
+  const emp1 = await prisma.user.findUnique({ where: { employeeNo: 'E2E_EMP' } });
+  const emp2 = await prisma.user.findUnique({ where: { employeeNo: 'E2E_EMP_B' } });
+  const mgr = await prisma.user.findUnique({ where: { employeeNo: 'E2E_MGR' } });
+  const hr = await prisma.user.findUnique({ where: { employeeNo: 'E2E_HR' } });
+  const vp = await prisma.user.findUnique({ where: { employeeNo: 'E2E_APPROVER' } });
   if (!emp1 || !emp2 || !mgr || !hr || !vp) throw new Error('测试账号未找到');
 
-  const indicatorConfirmCycle = await prisma.assessmentCycle.findFirst({ where: { name: '指标确认-确认' } });
-  const indicatorRejectCycle = await prisma.assessmentCycle.findFirst({ where: { name: '指标确认-退回' } });
-  const selfEvalCycle = await prisma.assessmentCycle.findFirst({ where: { name: '自评周期' } });
-  const managerCycle = await prisma.assessmentCycle.findFirst({ where: { name: '主管评分周期' } });
-  const calibrationCycle = await prisma.assessmentCycle.findFirst({ where: { name: 'HR校准周期' } });
-  const approvalCycle = await prisma.assessmentCycle.findFirst({ where: { name: '审批周期' } });
+  const indicatorConfirmCycle = await prisma.assessmentCycle.findFirst({ where: { name: 'E2E-acceptance-indicator-confirm' } });
+  const indicatorRejectCycle = await prisma.assessmentCycle.findFirst({ where: { name: 'E2E-acceptance-indicator-reject' } });
+  const selfEvalCycle = await prisma.assessmentCycle.findFirst({ where: { name: 'E2E-acceptance-self-eval' } });
+  const managerCycle = await prisma.assessmentCycle.findFirst({ where: { name: 'E2E-acceptance-manager-score' } });
+  const calibrationCycle = await prisma.assessmentCycle.findFirst({ where: { name: 'E2E-acceptance-hr-calibration' } });
+  const approvalCycle = await prisma.assessmentCycle.findFirst({ where: { name: 'E2E-acceptance-approval' } });
 
   const indicatorConfirmTask = await prisma.assessmentTask.findFirst({ where: { cycleId: indicatorConfirmCycle?.id, employeeId: emp1.id } });
   const indicatorRejectTask = await prisma.assessmentTask.findFirst({ where: { cycleId: indicatorRejectCycle?.id, employeeId: emp2.id } });
@@ -78,13 +78,13 @@ async function main() {
   }
 
   // ========== F3: 员工 ==========
-  const empToken = await login('EMP001', 'test123');
+  const empToken = await login('E2E_EMP', '000000');
 
   // 1. 确认指标
   {
     const { status, json } = await api('POST', `/tasks/${indicatorConfirmTask.id}/indicators/confirm`, empToken);
     results.push({
-      actor: '员工 EMP001',
+      actor: '员工 E2E_EMP',
       scenario: '① 确认指标',
       method: 'POST',
       url: `/tasks/${indicatorConfirmTask.id}/indicators/confirm`,
@@ -95,13 +95,13 @@ async function main() {
     });
   }
 
-  // 2. 退回指标（用 EMP002 登录）
-  const emp2Token = await login('EMP002', 'test123');
+  // 2. 退回指标（用 E2E_EMP_B 登录）
+  const emp2Token = await login('E2E_EMP_B', '000000');
   {
     const body = { comment: '指标不合理，请修改' };
     const { status, json } = await api('POST', `/tasks/${indicatorRejectTask.id}/indicators/reject`, emp2Token, body);
     results.push({
-      actor: '员工 EMP002',
+      actor: '员工 E2E_EMP_B',
       scenario: '① 退回指标',
       method: 'POST',
       url: `/tasks/${indicatorRejectTask.id}/indicators/reject`,
@@ -138,7 +138,7 @@ async function main() {
   {
     const { status, json } = await api('PUT', `/tasks/${selfEvalTask.id}/actual-value`, empToken, { indicators: actualValues });
     results.push({
-      actor: '员工 EMP001',
+      actor: '员工 E2E_EMP',
       scenario: '① 自评-更新实际完成值',
       method: 'PUT',
       url: `/tasks/${selfEvalTask.id}/actual-value`,
@@ -153,7 +153,7 @@ async function main() {
   {
     const { status, json } = await api('POST', `/tasks/${selfEvalTask.id}/self-eval`, empToken, selfEvalBody);
     results.push({
-      actor: '员工 EMP001',
+      actor: '员工 E2E_EMP',
       scenario: '① 自评-提交自评',
       method: 'POST',
       url: `/tasks/${selfEvalTask.id}/self-eval`,
@@ -166,7 +166,7 @@ async function main() {
   }
 
   // ========== F4: 主管 ==========
-  const mgrToken = await login('MGR001', 'test123');
+  const mgrToken = await login('E2E_MGR', '000000');
   {
     const managerInstances = await prisma.indicatorInstance.findMany({ where: { taskId: managerTask.id } });
     const managerScoreVersion = await prisma.assessmentTask.findUniqueOrThrow({
@@ -191,7 +191,7 @@ async function main() {
 
     const { status, json } = await api('POST', `/tasks/${managerTask.id}/manager-score`, mgrToken, managerBody);
     results.push({
-      actor: '主管 MGR001',
+      actor: '主管 E2E_MGR',
       scenario: '② 主管评分+加减分+一票否决',
       method: 'POST',
       url: `/tasks/${managerTask.id}/manager-score`,
@@ -204,12 +204,12 @@ async function main() {
   }
 
   // ========== F5: HR 校准 ==========
-  const hrToken = await login('HR001', 'test123');
+  const hrToken = await login('E2E_HR', '000000');
 
   {
     const { status, json } = await api('GET', `/cycles/${calibrationCycle!.id}/calibration`, hrToken);
     results.push({
-      actor: 'HR HR001',
+      actor: 'HR E2E_HR',
       scenario: '③ 校准-获取工作台',
       method: 'GET',
       url: `/cycles/${calibrationCycle!.id}/calibration`,
@@ -223,7 +223,7 @@ async function main() {
   {
     const { status, json } = await api('GET', `/cycles/${calibrationCycle!.id}/grade-distribution`, hrToken);
     results.push({
-      actor: 'HR HR001',
+      actor: 'HR E2E_HR',
       scenario: '③ 校准-获取等级分布',
       method: 'GET',
       url: `/cycles/${calibrationCycle!.id}/grade-distribution`,
@@ -254,7 +254,7 @@ async function main() {
     };
     const { status, json } = await api('POST', `/cycles/${calibrationCycle!.id}/calibration`, hrToken, calibBody);
     results.push({
-      actor: 'HR HR001',
+      actor: 'HR E2E_HR',
       scenario: '③ 校准-提交校准（触发分布告警）',
       method: 'POST',
       url: `/cycles/${calibrationCycle!.id}/calibration`,
@@ -267,12 +267,12 @@ async function main() {
   }
 
   // ========== F6: VP 审批 ==========
-  const vpToken = await login('VP001', 'test123');
+  const vpToken = await login('E2E_APPROVER', '000000');
 
   {
     const { status, json } = await api('GET', `/cycles/${approvalCycle!.id}/approval`, vpToken);
     results.push({
-      actor: 'VP VP001',
+      actor: '审批人 E2E_APPROVER',
       scenario: '④ 审批-获取审批列表',
       method: 'GET',
       url: `/cycles/${approvalCycle!.id}/approval`,
@@ -287,7 +287,7 @@ async function main() {
     const approveBody = { taskIds: [approvalTask1.id], comment: '同意' };
     const { status, json } = await api('POST', `/cycles/${approvalCycle!.id}/approval`, vpToken, approveBody);
     results.push({
-      actor: 'VP VP001',
+      actor: '审批人 E2E_APPROVER',
       scenario: '④ 审批-批量通过',
       method: 'POST',
       url: `/cycles/${approvalCycle!.id}/approval`,
@@ -303,7 +303,7 @@ async function main() {
     const rejectBody = { comment: '数据存疑，请重新校准' };
     const { status, json } = await api('POST', `/tasks/${approvalTask2.id}/approval/reject`, vpToken, rejectBody);
     results.push({
-      actor: 'VP VP001',
+      actor: '审批人 E2E_APPROVER',
       scenario: '④ 审批-单条退回',
       method: 'POST',
       url: `/tasks/${approvalTask2.id}/approval/reject`,

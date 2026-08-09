@@ -68,7 +68,7 @@ jobs:
 
       - name: Seed Playwright data
         working-directory: ./api
-        run: npx ts-node prisma/seed-e2e-playwright.ts
+        run: npx ts-node prisma/seed-test-data.ts
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hrm_e2e?schema=public
 
@@ -86,6 +86,7 @@ jobs:
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:5173
           PLAYWRIGHT_API_BASE_URL: http://localhost:3000/api/v1
+          PLAYWRIGHT_PREPARE_ACCEPTANCE_DATA: '0'
 
       - name: Upload Layer B reports
         if: always()

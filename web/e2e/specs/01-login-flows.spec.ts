@@ -1,5 +1,6 @@
 import { test, expect } from '@playwright/test';
 import { LoginPage } from '../page-objects/login.page';
+import { ACCEPTANCE_ACCOUNTS, ACCEPTANCE_PASSWORD } from '../fixtures/acceptance-accounts';
 
 test.describe('01-login-flows', () => {
   test.use({ storageState: { cookies: [], origins: [] } });
@@ -7,14 +8,14 @@ test.describe('01-login-flows', () => {
   test('local password login success', async ({ page }) => {
     const login = new LoginPage(page);
     await login.goto();
-    await login.loginWithPassword('EMP001', '000000');
+    await login.loginWithPassword(ACCEPTANCE_ACCOUNTS.employee, ACCEPTANCE_PASSWORD);
     await expect(page).toHaveURL(/\/dashboard$/);
   });
 
   test('invalid password shows error', async ({ page }) => {
     const login = new LoginPage(page);
     await login.goto();
-    await login.employeeNoInput.fill('EMP001');
+    await login.employeeNoInput.fill(ACCEPTANCE_ACCOUNTS.employee);
     await login.passwordInput.fill('wrong');
     await login.submitButton.click();
     await expect(page.locator('.el-message--error')).toContainText('工号或密码错误');
@@ -23,7 +24,7 @@ test.describe('01-login-flows', () => {
   test('refresh keeps login', async ({ page, context }) => {
     const login = new LoginPage(page);
     await login.goto();
-    await login.loginWithPassword('EMP001', '000000');
+    await login.loginWithPassword(ACCEPTANCE_ACCOUNTS.employee, ACCEPTANCE_PASSWORD);
     await page.reload();
     await expect(page).toHaveURL(/\/dashboard$/);
   });
@@ -36,7 +37,7 @@ test.describe('01-login-flows', () => {
   test('logout removes auth', async ({ page, context }) => {
     const login = new LoginPage(page);
     await login.goto();
-    await login.loginWithPassword('EMP001', '000000');
+    await login.loginWithPassword(ACCEPTANCE_ACCOUNTS.employee, ACCEPTANCE_PASSWORD);
     await page.getByTestId('header-user-menu').click();
     await page.getByTestId('header-logout').click();
     await expect(page).toHaveURL(/\/login$/);

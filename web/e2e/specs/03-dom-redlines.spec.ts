@@ -1,4 +1,5 @@
 import { test, expect } from '@playwright/test';
+import { ACCEPTANCE_ACCOUNTS, ACCEPTANCE_PASSWORD } from '../fixtures/acceptance-accounts';
 
 const API_BASE = process.env.PLAYWRIGHT_API_BASE_URL || 'http://localhost:3000/api/v1';
 
@@ -17,7 +18,7 @@ async function api(method: string, path: string, token?: string, body?: unknown)
 }
 
 async function login(employeeNo: string) {
-  const data = await api('POST', '/auth/login', undefined, { employeeNo, password: '000000' });
+  const data = await api('POST', '/auth/login', undefined, { employeeNo, password: ACCEPTANCE_PASSWORD });
   return data.token as string;
 }
 
@@ -51,11 +52,11 @@ function formatRunLabel(value = new Date()): string {
 }
 
 async function prepareEmployeeTask() {
-  const hrToken = await login('HR001');
-  const users = await api('GET', '/users?page=1&pageSize=10&keyword=EMP001', hrToken);
+  const hrToken = await login(ACCEPTANCE_ACCOUNTS.hr);
+  const users = await api('GET', `/users?page=1&pageSize=10&keyword=${ACCEPTANCE_ACCOUNTS.employee}`, hrToken);
   const allUsers = await fetchAllUsers(hrToken);
   const employee = users.items[0];
-  if (!employee) throw new Error('EMP001 not found');
+  if (!employee) throw new Error(`${ACCEPTANCE_ACCOUNTS.employee} not found`);
   const userIds = allUsers.map((user) => user.id);
 
   const runLabel = formatRunLabel();
@@ -91,7 +92,7 @@ async function prepareEmployeeTask() {
   await api('POST', `/cycles/${cycle.id}/launch`, hrToken);
   const tasks = await fetchAllTasks(hrToken, cycle.id);
   const task = tasks.find((item) => item.employeeId === employee.id);
-  if (!task) throw new Error('EMP001 task was not created');
+  if (!task) throw new Error(`${ACCEPTANCE_ACCOUNTS.employee} task was not created`);
   return task.id as string;
 }
 
@@ -120,7 +121,7 @@ test.describe('03-dom-redlines employee pages', () => {
   });
 
   test('pre-publish task detail hides manager scores from employee', async ({ page }) => {
-    const employeeToken = await login('EMP001');
+    const employeeToken = await login(ACCEPTANCE_ACCOUNTS.employee);
     const taskDetail = await api('GET', `/tasks/${taskId}`, employeeToken);
 
     await page.goto(`/tasks/${taskId}`);

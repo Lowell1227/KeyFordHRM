@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
 import path from 'node:path';
+import { ACCEPTANCE_ACCOUNTS, ACCEPTANCE_PASSWORD } from './fixtures/acceptance-accounts';
 
 const API_BASE = process.env.PLAYWRIGHT_API_BASE_URL || 'http://localhost:3000/api/v1';
 const WEB_BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
@@ -17,11 +18,11 @@ interface Role {
 }
 
 const ROLES: Role[] = [
-  { name: 'admin', employeeNo: 'ADMIN', password: '000000' },
-  { name: 'hr', employeeNo: 'HR001', password: '000000' },
-  { name: 'employee', employeeNo: 'EMP001', password: '000000' },
-  { name: 'manager', employeeNo: 'MGR001', password: '000000' },
-  { name: 'approver', employeeNo: 'VP001', password: '000000' },
+  { name: 'admin', employeeNo: ACCEPTANCE_ACCOUNTS.admin, password: ACCEPTANCE_PASSWORD },
+  { name: 'hr', employeeNo: ACCEPTANCE_ACCOUNTS.hr, password: ACCEPTANCE_PASSWORD },
+  { name: 'employee', employeeNo: ACCEPTANCE_ACCOUNTS.employee, password: ACCEPTANCE_PASSWORD },
+  { name: 'manager', employeeNo: ACCEPTANCE_ACCOUNTS.manager, password: ACCEPTANCE_PASSWORD },
+  { name: 'approver', employeeNo: ACCEPTANCE_ACCOUNTS.vp, password: ACCEPTANCE_PASSWORD },
 ];
 
 async function loginAndSaveState(role: Role) {

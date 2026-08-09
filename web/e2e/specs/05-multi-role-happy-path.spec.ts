@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { ACCEPTANCE_ACCOUNTS, ACCEPTANCE_PASSWORD } from '../fixtures/acceptance-accounts';
 
 const API_BASE = process.env.PLAYWRIGHT_API_BASE_URL || 'http://localhost:3000/api/v1';
 
@@ -19,7 +20,7 @@ async function api(method: string, path: string, token?: string, body?: unknown)
 }
 
 async function login(employeeNo: string) {
-  const data = await api('POST', '/auth/login', undefined, { employeeNo, password: '000000' });
+  const data = await api('POST', '/auth/login', undefined, { employeeNo, password: ACCEPTANCE_PASSWORD });
   return data.token as string;
 }
 
@@ -50,7 +51,10 @@ test.describe('05-multi-role-happy-path', () => {
   test.use({ storageState: 'e2e/auth-state/manager.json' });
 
   test('manager draft survives refresh and a real TaskDetail round-trip restores the team workspace URL', async ({ page }) => {
-    const [hrToken, managerToken] = await Promise.all([login('HR001'), login('MGR001')]);
+    const [hrToken, managerToken] = await Promise.all([
+      login(ACCEPTANCE_ACCOUNTS.hr),
+      login(ACCEPTANCE_ACCOUNTS.manager),
+    ]);
     const [allTasks, cycles, managerTasks] = await Promise.all([
       fetchAll<{
         id: string;

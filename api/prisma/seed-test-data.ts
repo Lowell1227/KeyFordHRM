@@ -1,9 +1,35 @@
-import { PrismaClient, SysRole, CycleStatus, TaskStatus, IndicatorType, DimensionType, PerfGrade } from '@prisma/client';
-import * as bcrypt from 'bcrypt';
+import {
+  PrismaClient,
+  SysRole,
+  CycleStatus,
+  TaskStatus,
+  IndicatorType,
+  DimensionType,
+  PerfGrade,
+  type AssessmentCycle,
+  type Department,
+  type User,
+} from "@prisma/client";
+import * as bcrypt from "bcrypt";
 
 const prisma = new PrismaClient();
-const E2E_CYCLE_PREFIX = 'E2E-acceptance-';
-const E2E_TEMPLATE_PREFIX = 'E2E-template-';
+const E2E_PASSWORD = "000000";
+const E2E_CYCLE_PREFIX = "E2E-acceptance-";
+const E2E_TEMPLATE_PREFIX = "E2E-template-";
+const E2E_TEMPLATE_MARKER = "E2E_FIXTURE: manager team workspace acceptance";
+
+const ROOT_DEPARTMENT = {
+  dingtalkDeptId: "E2E_DEPT_ROOT",
+  name: "E2E 验收组织",
+  fullPath: "E2E_FIXTURE_ROOT",
+  sortOrder: 9000,
+};
+const TEAM_DEPARTMENT = {
+  dingtalkDeptId: "E2E_DEPT_TEAM",
+  name: "E2E 验收团队",
+  fullPath: "E2E_FIXTURE_ROOT/E2E_FIXTURE_TEAM",
+  sortOrder: 9010,
+};
 
 const CYCLE_NAMES = [
   `${E2E_CYCLE_PREFIX}indicator-confirm`,
@@ -15,103 +41,234 @@ const CYCLE_NAMES = [
   `${E2E_CYCLE_PREFIX}approval`,
 ];
 
-async function main() {
-  // Keep the browser global setup and seeded acceptance accounts on one credential.
-  const passwordHash = await bcrypt.hash('000000', 10);
-  const dept = await prisma.department.findFirst({ where: { parentId: { not: null } } });
-  if (!dept) throw new Error('缺少部门数据，请先跑基础 seed');
+type DepartmentFixture = typeof ROOT_DEPARTMENT;
 
-  const oldCycles = await prisma.assessmentCycle.findMany({
-    where: { name: { startsWith: E2E_CYCLE_PREFIX } },
-    select: { id: true },
+interface UserFixture {
+  employeeNo: string;
+  name: string;
+  sysRole: SysRole;
+  position: string;
+  canViewAll?: boolean;
+}
+
+function fixtureEmail(employeeNo: string) {
+  return `${employeeNo.toLowerCase().replaceAll("_", "-")}@fixture.e2e.invalid`;
+}
+
+function collisionError(entity: string, key: string) {
+  return new Error(
+    `E2E fixture collision: ${entity} ${key} exists without the expected fixture marker`,
+  );
+}
+
+async function ensureDepartment(
+  fixture: DepartmentFixture,
+  parentId: string | null,
+): Promise<Department> {
+  const existing = await prisma.department.findUnique({
+    where: { dingtalkDeptId: fixture.dingtalkDeptId },
   });
-  for (const cycle of oldCycles) {
+  if (
+    existing &&
+    (existing.name !== fixture.name ||
+      existing.fullPath !== fixture.fullPath ||
+      existing.parentId !== parentId)
+  ) {
+    throw collisionError("department", fixture.dingtalkDeptId);
+  }
+
+  const data = {
+    name: fixture.name,
+    fullPath: fixture.fullPath,
+    parentId,
+    sortOrder: fixture.sortOrder,
+    isActive: true,
+  };
+  if (existing) {
+    return prisma.department.update({ where: { id: existing.id }, data });
+  }
+  return prisma.department.create({
+    data: { dingtalkDeptId: fixture.dingtalkDeptId, ...data },
+  });
+}
+
+async function ensureUser(
+  fixture: UserFixture,
+  deptId: string,
+  passwordHash: string,
+  directManagerId: string | null = null,
+): Promise<User> {
+  const email = fixtureEmail(fixture.employeeNo);
+  const existing = await prisma.user.findUnique({
+    where: { employeeNo: fixture.employeeNo },
+  });
+  if (existing && existing.email !== email) {
+    throw collisionError("user", fixture.employeeNo);
+  }
+
+  const data = {
+    name: fixture.name,
+    email,
+    passwordHash,
+    sysRole: fixture.sysRole,
+    status: "active" as const,
+    deptId,
+    position: fixture.position,
+    directManagerId,
+    canViewAll: fixture.canViewAll ?? false,
+    isAssessorOnly: false,
+    deletedAt: null,
+  };
+  if (existing) {
+    return prisma.user.update({ where: { id: existing.id }, data });
+  }
+  return prisma.user.create({
+    data: { employeeNo: fixture.employeeNo, ...data },
+  });
+}
+
+async function removeOwnedAssessmentFixtures(hrId: string) {
+  const cycles = await prisma.assessmentCycle.findMany({
+    where: { name: { in: CYCLE_NAMES } },
+    select: { id: true, name: true, createdBy: true },
+  });
+  const foreignCycle = cycles.find((cycle) => cycle.createdBy !== hrId);
+  if (foreignCycle) throw collisionError("assessment cycle", foreignCycle.name);
+
+  for (const cycle of cycles) {
     await prisma.assessmentTask.deleteMany({ where: { cycleId: cycle.id } });
-    await prisma.assessmentTemplateSnapshot.deleteMany({ where: { cycleId: cycle.id } });
+    await prisma.assessmentTemplateSnapshot.deleteMany({
+      where: { cycleId: cycle.id },
+    });
     await prisma.assessmentCycle.delete({ where: { id: cycle.id } });
   }
-  await prisma.assessmentTemplate.deleteMany({ where: { name: { startsWith: E2E_TEMPLATE_PREFIX } } });
 
-  // 创建测试账号
-  const employee1 = await prisma.user.upsert({
-    where: { employeeNo: 'EMP001' },
-    update: { passwordHash, sysRole: SysRole.employee, status: 'active', deptId: dept.id, position: '专员' },
-    create: {
-      employeeNo: 'EMP001',
-      name: '测试员工甲',
-      passwordHash,
-      sysRole: SysRole.employee,
-      status: 'active',
-      deptId: dept.id,
-      position: '专员',
-    },
+  const templateNames = CYCLE_NAMES.map(
+    (name) => `${E2E_TEMPLATE_PREFIX}${name}`,
+  );
+  const templates = await prisma.assessmentTemplate.findMany({
+    where: { name: { in: templateNames } },
+    select: { id: true, name: true, description: true, createdBy: true },
   });
-  const employee2 = await prisma.user.upsert({
-    where: { employeeNo: 'EMP002' },
-    update: { passwordHash, sysRole: SysRole.employee, status: 'active', deptId: dept.id, position: '专员' },
-    create: {
-      employeeNo: 'EMP002',
-      name: '测试员工乙',
-      passwordHash,
-      sysRole: SysRole.employee,
-      status: 'active',
-      deptId: dept.id,
-      position: '专员',
-    },
-  });
-  const manager = await prisma.user.upsert({
-    where: { employeeNo: 'MGR001' },
-    update: { passwordHash, sysRole: SysRole.manager, status: 'active', deptId: dept.id, position: '主管' },
-    create: {
-      employeeNo: 'MGR001',
-      name: '测试主管',
-      passwordHash,
-      sysRole: SysRole.manager,
-      status: 'active',
-      deptId: dept.id,
-      position: '主管',
-    },
-  });
-  const hr = await prisma.user.upsert({
-    where: { employeeNo: 'HR001' },
-    update: { passwordHash, sysRole: SysRole.hr, status: 'active', deptId: dept.id, position: 'HR', canViewAll: true },
-    create: {
-      employeeNo: 'HR001',
-      name: '测试HR',
-      passwordHash,
-      sysRole: SysRole.hr,
-      status: 'active',
-      deptId: dept.id,
-      position: 'HR',
+  const foreignTemplate = templates.find(
+    (template) =>
+      template.createdBy !== hrId ||
+      template.description !== E2E_TEMPLATE_MARKER,
+  );
+  if (foreignTemplate)
+    throw collisionError("assessment template", foreignTemplate.name);
+  if (templates.length > 0) {
+    await prisma.assessmentTemplate.deleteMany({
+      where: { id: { in: templates.map((template) => template.id) } },
+    });
+  }
+}
+
+async function main() {
+  const passwordHash = await bcrypt.hash(E2E_PASSWORD, 10);
+  const rootDept = await ensureDepartment(ROOT_DEPARTMENT, null);
+  const teamDept = await ensureDepartment(TEAM_DEPARTMENT, rootDept.id);
+
+  await ensureUser(
+    {
+      employeeNo: "E2E_ADMIN",
+      name: "E2E 系统管理员",
+      sysRole: SysRole.system_admin,
+      position: "E2E_SYSTEM_ADMIN",
       canViewAll: true,
     },
-  });
-  const vp = await prisma.user.upsert({
-    where: { employeeNo: 'VP001' },
-    update: { passwordHash, sysRole: SysRole.vp, status: 'active', deptId: dept.id, position: 'VP' },
-    create: {
-      employeeNo: 'VP001',
-      name: '测试VP',
-      passwordHash,
-      sysRole: SysRole.vp,
-      status: 'active',
-      deptId: dept.id,
-      position: 'VP',
+    rootDept.id,
+    passwordHash,
+  );
+  const hr = await ensureUser(
+    {
+      employeeNo: "E2E_HR",
+      name: "E2E 验收 HR",
+      sysRole: SysRole.hr,
+      position: "E2E_HR",
+      canViewAll: true,
     },
+    teamDept.id,
+    passwordHash,
+  );
+  const manager = await ensureUser(
+    {
+      employeeNo: "E2E_MGR",
+      name: "E2E 直属主管",
+      sysRole: SysRole.manager,
+      position: "E2E_MANAGER",
+    },
+    teamDept.id,
+    passwordHash,
+  );
+  const deptHead = await ensureUser(
+    {
+      employeeNo: "E2E_DEPT_HEAD",
+      name: "E2E 部门负责人",
+      sysRole: SysRole.dept_head,
+      position: "E2E_DEPT_HEAD",
+    },
+    teamDept.id,
+    passwordHash,
+  );
+  await ensureUser(
+    {
+      employeeNo: "E2E_VP",
+      name: "E2E 分管领导",
+      sysRole: SysRole.vp,
+      position: "E2E_VP",
+      canViewAll: true,
+    },
+    rootDept.id,
+    passwordHash,
+  );
+  const approver = await ensureUser(
+    {
+      employeeNo: "E2E_APPROVER",
+      name: "E2E 审批人",
+      sysRole: SysRole.vp,
+      position: "E2E_APPROVER",
+    },
+    rootDept.id,
+    passwordHash,
+  );
+  const employee1 = await ensureUser(
+    {
+      employeeNo: "E2E_EMP",
+      name: "E2E 员工甲",
+      sysRole: SysRole.employee,
+      position: "E2E_EMPLOYEE",
+    },
+    teamDept.id,
+    passwordHash,
+    manager.id,
+  );
+  const employee2 = await ensureUser(
+    {
+      employeeNo: "E2E_EMP_B",
+      name: "E2E 员工乙",
+      sysRole: SysRole.employee,
+      position: "E2E_EMPLOYEE",
+    },
+    teamDept.id,
+    passwordHash,
+    manager.id,
+  );
+
+  await prisma.department.update({
+    where: { id: teamDept.id },
+    data: { leaderId: deptHead.id, approverId: approver.id },
   });
+  await removeOwnedAssessmentFixtures(hr.id);
 
-  await prisma.user.update({ where: { id: employee1.id }, data: { directManagerId: manager.id } });
-  await prisma.user.update({ where: { id: employee2.id }, data: { directManagerId: manager.id } });
-
-  // 创建周期
-  const cycles: Record<string, any> = {};
+  const cycles: Record<string, AssessmentCycle> = {};
   for (const name of CYCLE_NAMES) {
     cycles[name] = await prisma.assessmentCycle.create({
       data: {
         name,
-        type: 'quarterly',
-        startDate: new Date('2026-01-01'),
-        endDate: new Date('2026-03-31'),
+        type: "quarterly",
+        startDate: new Date("2026-01-01"),
+        endDate: new Date("2026-03-31"),
         status: CycleStatus.draft,
         createdBy: hr.id,
         gradeAMaxRatio: 0.2,
@@ -122,93 +279,143 @@ async function main() {
     });
   }
 
-  // 创建快照和任务（每个周期独立模板，避免快照唯一约束）
-  const taskMap: Record<string, any> = {};
-
-  // 指标确认-确认：EMP001
-  taskMap['indicatorConfirm'] = await createTaskWithStatus(
-    cycles[`${E2E_CYCLE_PREFIX}indicator-confirm`], hr.id, employee1, manager, vp, TaskStatus.indicator_confirming,
+  await createTaskWithStatus(
+    cycles[`${E2E_CYCLE_PREFIX}indicator-confirm`],
+    hr.id,
+    employee1,
+    manager,
+    deptHead,
+    approver,
+    TaskStatus.indicator_confirming,
+  );
+  await createTaskWithStatus(
+    cycles[`${E2E_CYCLE_PREFIX}indicator-reject`],
+    hr.id,
+    employee2,
+    manager,
+    deptHead,
+    approver,
+    TaskStatus.indicator_confirming,
+  );
+  await createTaskWithStatus(
+    cycles[`${E2E_CYCLE_PREFIX}goal-review`],
+    hr.id,
+    employee1,
+    manager,
+    deptHead,
+    approver,
+    TaskStatus.indicator_reviewing,
+  );
+  await createTaskWithStatus(
+    cycles[`${E2E_CYCLE_PREFIX}self-eval`],
+    hr.id,
+    employee1,
+    manager,
+    deptHead,
+    approver,
+    TaskStatus.self_eval,
+  );
+  await createTaskWithStatus(
+    cycles[`${E2E_CYCLE_PREFIX}manager-score`],
+    hr.id,
+    employee1,
+    manager,
+    deptHead,
+    approver,
+    TaskStatus.manager_scoring,
+    true,
+  );
+  await createTaskWithStatus(
+    cycles[`${E2E_CYCLE_PREFIX}hr-calibration`],
+    hr.id,
+    employee1,
+    manager,
+    deptHead,
+    approver,
+    TaskStatus.hr_calibration,
+    true,
+  );
+  await createTaskWithStatus(
+    cycles[`${E2E_CYCLE_PREFIX}hr-calibration`],
+    hr.id,
+    employee2,
+    manager,
+    deptHead,
+    approver,
+    TaskStatus.hr_calibration,
+    true,
+  );
+  await createTaskWithStatus(
+    cycles[`${E2E_CYCLE_PREFIX}approval`],
+    hr.id,
+    employee1,
+    manager,
+    deptHead,
+    approver,
+    TaskStatus.approval,
+    true,
+    PerfGrade.B,
+  );
+  await createTaskWithStatus(
+    cycles[`${E2E_CYCLE_PREFIX}approval`],
+    hr.id,
+    employee2,
+    manager,
+    deptHead,
+    approver,
+    TaskStatus.approval,
+    true,
+    PerfGrade.C,
   );
 
-  // 指标确认-退回：EMP002
-  taskMap['indicatorReject'] = await createTaskWithStatus(
-    cycles[`${E2E_CYCLE_PREFIX}indicator-reject`], hr.id, employee2, manager, vp, TaskStatus.indicator_confirming,
+  console.log("✓ E2E acceptance fixtures created");
+  console.log(
+    "  E2E_ADMIN / E2E_HR / E2E_MGR / E2E_EMP / E2E_VP / E2E_APPROVER; password 000000",
   );
-
-  // Manager goal-review workspace: EMP001 has a submitted indicator awaiting direct-manager review.
-  taskMap['goalReview'] = await createTaskWithStatus(
-    cycles[`${E2E_CYCLE_PREFIX}goal-review`], hr.id, employee1, manager, vp, TaskStatus.indicator_reviewing,
-  );
-
-  // 自评周期：EMP001
-  taskMap['selfEval'] = await createTaskWithStatus(
-    cycles[`${E2E_CYCLE_PREFIX}self-eval`], hr.id, employee1, manager, vp, TaskStatus.self_eval,
-  );
-
-  // 主管评分周期：EMP001，先模拟主管已评过分
-  taskMap['managerScore'] = await createTaskWithStatus(
-    cycles[`${E2E_CYCLE_PREFIX}manager-score`], hr.id, employee1, manager, vp, TaskStatus.manager_scoring, true,
-  );
-
-  // HR校准周期：EMP001、EMP002 都已经理评分
-  taskMap['calibration1'] = await createTaskWithStatus(
-    cycles[`${E2E_CYCLE_PREFIX}hr-calibration`], hr.id, employee1, manager, vp, TaskStatus.hr_calibration, true,
-  );
-  taskMap['calibration2'] = await createTaskWithStatus(
-    cycles[`${E2E_CYCLE_PREFIX}hr-calibration`], hr.id, employee2, manager, vp, TaskStatus.hr_calibration, true,
-  );
-
-  // 审批周期：EMP001、EMP002 都已校准
-  taskMap['approval1'] = await createTaskWithStatus(
-    cycles[`${E2E_CYCLE_PREFIX}approval`], hr.id, employee1, manager, vp, TaskStatus.approval, true, 'B',
-  );
-  taskMap['approval2'] = await createTaskWithStatus(
-    cycles[`${E2E_CYCLE_PREFIX}approval`], hr.id, employee2, manager, vp, TaskStatus.approval, true, 'C',
-  );
-
-  console.log('✓ 测试数据创建完成');
-  console.log('  员工 EMP001(甲) / EMP002(乙) / 主管 MGR001 / HR HR001 / VP VP001  密码均为 000000');
 }
 
 async function createTaskWithStatus(
-  cycle: any,
+  cycle: AssessmentCycle,
   hrId: string,
-  employee: any,
-  manager: any,
-  approver: any,
+  employee: User,
+  manager: User,
+  deptHead: User,
+  approver: User,
   status: TaskStatus,
-  hasManagerScore: boolean = false,
+  hasManagerScore = false,
   calibratedGrade?: PerfGrade,
 ) {
-  // 每个周期创建一个独立模板
   const template = await prisma.assessmentTemplate.create({
     data: {
       name: `${E2E_TEMPLATE_PREFIX}${cycle.name}`,
+      description: E2E_TEMPLATE_MARKER,
+      applicableDepts: employee.deptId ? [employee.deptId] : [],
+      applicableUsers: [employee.id],
       maxScore: 100,
       isActive: true,
       createdBy: hrId,
       dimensions: {
         create: [
           {
-            name: '业绩维度',
+            name: "业绩维度",
             type: DimensionType.kpi,
             weight: 0.8,
             sortOrder: 0,
             indicators: {
               create: [
                 {
-                  name: '销售额完成率',
-                  scoringStandard: '按实际销售额/目标销售额 * 100 评分',
+                  name: "销售额完成率",
+                  scoringStandard: "按实际销售额/目标销售额 * 100 评分",
                   targetValue: 100,
-                  unit: '%',
+                  unit: "%",
                   weight: 0.5,
                   sortOrder: 0,
                 },
                 {
-                  name: '客户满意度',
-                  scoringStandard: '按客户评分',
+                  name: "客户满意度",
+                  scoringStandard: "按客户评分",
                   targetValue: 90,
-                  unit: '分',
+                  unit: "分",
                   weight: 0.3,
                   sortOrder: 1,
                 },
@@ -216,21 +423,21 @@ async function createTaskWithStatus(
             },
           },
           {
-            name: '加减分',
+            name: "加减分",
             type: DimensionType.bonus,
             weight: 0.2,
             sortOrder: 1,
             indicators: {
               create: [
                 {
-                  name: '加分项',
-                  scoringStandard: '突出贡献加分',
+                  name: "加分项",
+                  scoringStandard: "突出贡献加分",
                   weight: 0.1999,
                   sortOrder: 0,
                 },
                 {
-                  name: '一票否决项',
-                  scoringStandard: '重大失误一票否决',
+                  name: "一票否决项",
+                  scoringStandard: "重大失误一票否决",
                   weight: 0.0001,
                   sortOrder: 1,
                 },
@@ -241,27 +448,25 @@ async function createTaskWithStatus(
       },
     },
     include: {
-      dimensions: {
-        include: { indicators: true },
-      },
+      dimensions: { include: { indicators: true } },
     },
   });
 
   const snapshotData = {
     maxScore: template.maxScore,
-    dimensions: template.dimensions.map((d: any) => ({
-      id: d.id,
-      name: d.name,
-      type: d.type,
-      weight: d.weight,
-      indicators: d.indicators.map((ind: any) => ({
-        id: ind.id,
-        name: ind.name,
-        scoringStandard: ind.scoringStandard,
-        targetValue: ind.targetValue,
-        unit: ind.unit,
-        weight: ind.weight,
-        indicatorType: inferIndicatorType(ind.name),
+    dimensions: template.dimensions.map((dimension) => ({
+      id: dimension.id,
+      name: dimension.name,
+      type: dimension.type,
+      weight: dimension.weight,
+      indicators: dimension.indicators.map((indicator) => ({
+        id: indicator.id,
+        name: indicator.name,
+        scoringStandard: indicator.scoringStandard,
+        targetValue: indicator.targetValue,
+        unit: indicator.unit,
+        weight: indicator.weight,
+        indicatorType: inferIndicatorType(indicator.name),
       })),
     })),
   };
@@ -281,84 +486,99 @@ async function createTaskWithStatus(
       employeeId: employee.id,
       deptId: employee.deptId,
       managerId: manager.id,
-      deptHeadId: manager.id,
+      deptHeadId: deptHead.id,
       approverId: approver.id,
       status,
     },
   });
 
-  const instances: any[] = [];
-  let sortOrder = 0;
-  for (const dim of snapshotData.dimensions) {
-    for (const ind of dim.indicators) {
-      instances.push({
+  const instances = snapshotData.dimensions.flatMap(
+    (dimension, dimensionIndex) =>
+      dimension.indicators.map((indicator, indicatorIndex) => ({
         taskId: task.id,
-        templateIndicatorId: ind.id,
-        name: ind.name,
-        description: ind.scoringStandard,
-        scoringStandard: ind.scoringStandard,
-        targetValue: ind.targetValue,
-        unit: ind.unit,
-        weight: ind.weight,
-        indicatorType: ind.indicatorType,
-        dimensionName: dim.name,
-        dimensionWeight: dim.weight,
-        sortOrder: sortOrder++,
-      });
-    }
-  }
+        templateIndicatorId: indicator.id,
+        name: indicator.name,
+        description: indicator.scoringStandard,
+        scoringStandard: indicator.scoringStandard,
+        targetValue: indicator.targetValue,
+        unit: indicator.unit,
+        weight: indicator.weight,
+        indicatorType: indicator.indicatorType,
+        dimensionName: dimension.name,
+        dimensionWeight: dimension.weight,
+        sortOrder: dimensionIndex * 100 + indicatorIndex,
+      })),
+  );
   await prisma.indicatorInstance.createMany({ data: instances });
 
   if (hasManagerScore) {
     await prisma.indicatorInstance.updateMany({
       where: { taskId: task.id },
-      data: { managerScore: 85, managerComment: '主管评语' },
+      data: { managerScore: 85, managerComment: "主管评语" },
     });
     await prisma.managerEvalSummary.create({
       data: {
         taskId: task.id,
-        strengths: '业绩稳定',
-        improvements: '需加强协作',
+        strengths: "业绩稳定",
+        improvements: "需加强协作",
       },
     });
   }
 
-  if (status === 'hr_calibration' || status === 'approval') {
-    const calculatedScore = status === 'approval' ? (calibratedGrade === 'A' ? 95 : calibratedGrade === 'B' ? 85 : calibratedGrade === 'C' ? 75 : 55) : 85;
+  if (status === TaskStatus.hr_calibration || status === TaskStatus.approval) {
+    const calculatedScore =
+      status === TaskStatus.approval
+        ? calibratedGrade === PerfGrade.A
+          ? 95
+          : calibratedGrade === PerfGrade.B
+            ? 85
+            : calibratedGrade === PerfGrade.C
+              ? 75
+              : 55
+        : 85;
     await prisma.gradeResult.create({
       data: {
         taskId: task.id,
         calculatedScore,
-        rawGrade: calculatedScore >= 90 ? PerfGrade.A : calculatedScore >= 75 ? PerfGrade.B : calculatedScore >= 60 ? PerfGrade.C : PerfGrade.D,
+        rawGrade:
+          calculatedScore >= 90
+            ? PerfGrade.A
+            : calculatedScore >= 75
+              ? PerfGrade.B
+              : calculatedScore >= 60
+                ? PerfGrade.C
+                : PerfGrade.D,
         coefficient: 1.0,
       },
     });
   }
 
-  if (status === 'approval' && calibratedGrade) {
+  if (status === TaskStatus.approval && calibratedGrade) {
     await prisma.gradeResult.update({
       where: { taskId: task.id },
-      data: { calibratedGrade, calibrationNote: '校准说明', hrCalibratedAt: new Date() },
+      data: {
+        calibratedGrade,
+        calibrationNote: "校准说明",
+        hrCalibratedAt: new Date(),
+      },
     });
     await prisma.assessmentTask.update({
       where: { id: task.id },
       data: { hrCalibratedAt: new Date() },
     });
   }
-
-  return task;
 }
 
 function inferIndicatorType(name: string): IndicatorType {
-  if (name.includes('否决')) return IndicatorType.veto;
-  if (name.includes('加分')) return IndicatorType.bonus;
-  if (name.includes('减分')) return IndicatorType.penalty;
+  if (name.includes("否决")) return IndicatorType.veto;
+  if (name.includes("加分")) return IndicatorType.bonus;
+  if (name.includes("减分")) return IndicatorType.penalty;
   return IndicatorType.kpi;
 }
 
 main()
-  .catch((e) => {
-    console.error(e);
+  .catch((error) => {
+    console.error(error);
     process.exit(1);
   })
   .finally(async () => {

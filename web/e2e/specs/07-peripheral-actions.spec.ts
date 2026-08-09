@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { ACCEPTANCE_ACCOUNTS, ACCEPTANCE_PASSWORD } from '../fixtures/acceptance-accounts';
 
 const API_BASE = process.env.PLAYWRIGHT_API_BASE_URL || 'http://localhost:3000/api/v1';
 
@@ -19,7 +20,7 @@ async function api(method: string, path: string, token?: string, body?: unknown)
 }
 
 async function login(employeeNo: string) {
-  const data = await api('POST', '/auth/login', undefined, { employeeNo, password: '000000' });
+  const data = await api('POST', '/auth/login', undefined, { employeeNo, password: ACCEPTANCE_PASSWORD });
   return data.token as string;
 }
 
@@ -74,7 +75,7 @@ test.describe('07-peripheral-actions objectives and action items', () => {
     await expect(page.getByTestId('objective-dialog')).toBeVisible();
     await page.keyboard.press('Escape');
 
-    const hrToken = await login('HR001');
+    const hrToken = await login(ACCEPTANCE_ACCOUNTS.hr);
     const objective = await api('POST', '/objectives', hrToken, {
       title: `E2E action item objective ${Date.now()}`,
       level: 'company',
@@ -98,7 +99,7 @@ test.describe('07-peripheral-actions objectives and action items', () => {
     await expect(page.getByTestId('objective-dialog')).not.toBeVisible();
     await expect(page.getByText(objectiveTitle)).toBeVisible();
 
-    const hrToken = await login('HR001');
+    const hrToken = await login(ACCEPTANCE_ACCOUNTS.hr);
     const objectives = await api('GET', '/objectives?flat=true&page=1&pageSize=100', hrToken);
     const objective = objectives.items.find((item: { title: string }) => item.title === objectiveTitle);
     expect(objective).toBeTruthy();
@@ -123,7 +124,7 @@ test.describe('07-peripheral-actions reports', () => {
   });
 
   test('HR report export returns an Excel file', async ({ request }) => {
-    const hrToken = await login('HR001');
+    const hrToken = await login(ACCEPTANCE_ACCOUNTS.hr);
     const cycles = await api('GET', '/cycles?page=1&pageSize=20', hrToken);
     expect(cycles.items.length).toBeGreaterThan(0);
 
