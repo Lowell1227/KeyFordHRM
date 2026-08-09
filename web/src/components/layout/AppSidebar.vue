@@ -1,185 +1,30 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
-import {
-  HomeFilled,
-  UserFilled,
-  OfficeBuilding,
-  List,
-  Calendar,
-  EditPen,
-  ScaleToOriginal,
-  Finished,
-  MessageBox,
-  TrendCharts,
-  Notification,
-  ChatDotRound,
-  Warning,
-  Aim,
-  Briefcase,
-  Files,
-  Clock,
-  Money,
-  ArrowDown,
-} from '@element-plus/icons-vue';
+import { ArrowDown, Briefcase, HomeFilled, Setting, UserFilled } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth.store';
+import { buildNavigation } from '@/router/navigation';
+import { routes } from '@/router/routes';
+import type { NavigationGroup, NavigationModule, NavigationModuleKey } from '@/router/navigation.types';
+
+const COLLAPSED_GROUPS_KEY = 'kayford.sidebar.collapsedGroups';
 
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 
-type MenuGroupKey = 'home' | 'templateIndicator' | 'performance' | 'mine' | 'people' | 'report';
-
-interface MenuItem {
-  path: string;
-  title: string;
-  icon: any;
-  roles?: string[];
-  group: MenuGroupKey;
-  accent?: 'gold' | 'blue' | 'green' | 'red' | 'purple';
-}
-
-interface RailItem {
-  key: string;
-  title: string;
-  icon: any;
-  open: boolean;
-  route?: string;
-}
-
-const menus = computed<MenuItem[]>(() => {
-  // 菜单是粗过滤，真正鉴权以页面/接口为准。
-  // 结果审批：审批权由 task.approver_id 决定，菜单仅按常见审批角色收敛可见范围。
-  const all: MenuItem[] = [
-    { path: '/dashboard', title: '首页', icon: HomeFilled, group: 'home' },
-    { path: '/tasks', title: '绩效待办', icon: EditPen, group: 'mine' },
-    {
-      path: '/objectives',
-      title: '目标地图',
-      icon: Aim,
-      roles: ['manager', 'dept_head', 'vp', 'hr', 'chairman', 'system_admin'],
-      group: 'performance',
-    },
-    {
-      path: '/action-items',
-      title: '目标跟进',
-      icon: List,
-      roles: ['manager', 'dept_head', 'vp', 'hr', 'chairman', 'system_admin'],
-      group: 'performance',
-    },
-    {
-      path: '/tasks?scope=team&stage=manager-eval',
-      title: '团队绩效',
-      icon: UserFilled,
-      roles: ['manager', 'dept_head', 'vp', 'hr', 'system_admin'],
-      group: 'performance',
-    },
-    {
-      path: '/cycles',
-      title: '绩效计划制定',
-      icon: Calendar,
-      roles: ['hr', 'system_admin'],
-      group: 'performance',
-      accent: 'gold',
-    },
-    {
-      path: '/calibration',
-      title: '绩效评定',
-      icon: ScaleToOriginal,
-      roles: ['hr', 'system_admin'],
-      group: 'performance',
-      accent: 'blue',
-    },
-    {
-      path: '/interviews',
-      title: '绩效面谈',
-      icon: ChatDotRound,
-      roles: ['manager', 'dept_head', 'vp', 'hr', 'system_admin'],
-      group: 'performance',
-    },
-    { path: '/improvement-plans', title: '绩效改进计划', icon: Warning, group: 'performance' },
-    {
-      path: '/publish',
-      title: '结果公示',
-      icon: Notification,
-      roles: ['hr', 'system_admin'],
-      group: 'performance',
-    },
-    { path: '/appeals', title: '申诉计划', icon: MessageBox, roles: ['hr', 'system_admin'], group: 'performance' },
-    { path: '/indicators', title: '指标库', icon: OfficeBuilding, roles: ['hr', 'system_admin'], group: 'templateIndicator' },
-    {
-      path: '/probation-reviews/manage',
-      title: '试用期考核管理',
-      icon: Calendar,
-      roles: ['hr', 'system_admin'],
-      group: 'people',
-    },
-    {
-      path: '/probation-reviews/manager',
-      title: '试用期评分',
-      icon: UserFilled,
-      roles: ['manager', 'dept_head', 'vp', 'hr', 'system_admin'],
-      group: 'people',
-    },
-    { path: '/probation-reviews/mine', title: '试用期考核', icon: EditPen, group: 'mine' },
-    {
-      path: '/confirmation-applications/manage',
-      title: '转正申请管理',
-      icon: Calendar,
-      roles: ['hr', 'system_admin'],
-      group: 'people',
-    },
-    {
-      path: '/confirmation-applications/approvals',
-      title: '转正审批台',
-      icon: Finished,
-      roles: ['manager', 'dept_head', 'vp', 'hr', 'chairman', 'system_admin'],
-      group: 'people',
-    },
-    { path: '/confirmation-applications/mine', title: '转正申请', icon: EditPen, group: 'mine' },
-    { path: '/reports', title: '报表分析', icon: TrendCharts, roles: ['hr', 'system_admin', 'vp', 'chairman'], group: 'report' },
-    { path: '/users', title: '用户管理', icon: UserFilled, roles: ['hr', 'system_admin'], group: 'people' },
-  ];
-  return all.filter((m) => {
-    if (!m.roles) return true;
-    return auth.user && m.roles.includes(auth.user.sysRole);
-  });
-});
-
-const isHrAdmin = computed(() => ['system_admin', 'hr'].includes(auth.user?.sysRole ?? ''));
-
-const railItems = computed<RailItem[]>(() => {
-  const all: RailItem[] = [
-    { key: 'workbench', title: '工作台', icon: HomeFilled, open: false },
-    { key: 'task', title: '任务', icon: Finished, open: false },
-    { key: 'project', title: '项目', icon: Files, open: false },
-    { key: 'performance', title: '绩效', icon: Briefcase, open: true, route: '/dashboard' },
-    { key: 'attendance', title: '考勤', icon: Clock, open: false },
-    { key: 'salary', title: '薪酬', icon: Money, open: false },
-  ];
-  return isHrAdmin.value ? all : all.filter((item) => item.open);
-});
-
-const groupedMenus = computed(() => {
-  const visible = menus.value;
-  return [
-    { key: 'home', title: '', items: visible.filter((m) => m.group === 'home') },
-    { key: 'mine', title: '我的绩效', items: visible.filter((m) => m.group === 'mine') },
-    { key: 'performance', title: '绩效管理', items: visible.filter((m) => m.group === 'performance') },
-    { key: 'templateIndicator', title: '模板指标', items: visible.filter((m) => m.group === 'templateIndicator') },
-    { key: 'people', title: '人员流程', items: visible.filter((m) => m.group === 'people') },
-    { key: 'report', title: '报表分析', items: visible.filter((m) => m.group === 'report') },
-  ].filter((g) => g.items.length);
-});
-
-const COLLAPSED_GROUPS_KEY = 'kayford.sidebar.collapsedGroups';
+const moduleIcons: Record<NavigationModuleKey, Component> = {
+  workbench: HomeFilled,
+  performance: Briefcase,
+  people: UserFilled,
+  analysis: Setting,
+};
 
 function readCollapsedGroups(): Record<string, boolean> {
   try {
     const raw = localStorage.getItem(COLLAPSED_GROUPS_KEY);
     if (!raw) return {};
-    const parsed = JSON.parse(raw);
+    const parsed: unknown = JSON.parse(raw);
     if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
     return Object.fromEntries(
       Object.entries(parsed).filter(([, value]) => typeof value === 'boolean'),
@@ -194,111 +39,108 @@ function saveCollapsedGroups(value: Record<string, boolean>) {
 }
 
 const collapsedGroups = ref<Record<string, boolean>>(readCollapsedGroups());
-const activePath = computed(() => route.path);
+const navigation = computed(() => (auth.user ? buildNavigation(routes, auth.user) : []));
+const activeNavigationModule = computed(() => {
+  const matched = [...route.matched].reverse().find((record) => record.meta.navigation);
+  return matched?.meta.navigation?.module;
+});
+const activeModule = computed<NavigationModule | undefined>(() =>
+  navigation.value.find((module) => module.key === activeNavigationModule.value) ?? navigation.value[0],
+);
+const validCollapseKeys = computed(() =>
+  navigation.value.flatMap((module) => module.groups.map(collapseKey)),
+);
+
+watch(
+  validCollapseKeys,
+  (keys) => {
+    if (!auth.user) return;
+    const keySet = new Set(keys);
+    const normalized = Object.fromEntries(
+      Object.entries(collapsedGroups.value).filter(([key]) => keySet.has(key)),
+    );
+    if (JSON.stringify(normalized) !== JSON.stringify(collapsedGroups.value)) {
+      collapsedGroups.value = normalized;
+      saveCollapsedGroups(normalized);
+    }
+  },
+  { immediate: true },
+);
+
+function collapseKey(group: NavigationGroup): string {
+  return group.key;
+}
+
+function isCollapsed(group: NavigationGroup): boolean {
+  return Boolean(collapsedGroups.value[collapseKey(group)]);
+}
+
+function toggleGroup(group: NavigationGroup) {
+  const key = collapseKey(group);
+  collapsedGroups.value = { ...collapsedGroups.value, [key]: !collapsedGroups.value[key] };
+  saveCollapsedGroups(collapsedGroups.value);
+}
 
 function navigate(path: string) {
   router.push(path);
 }
 
 function isMenuActive(path: string): boolean {
-  const target = router.resolve(path);
-  if (target.path !== activePath.value) return false;
-  if (target.path === '/tasks') {
-    if (target.query.scope === 'team') return route.query.scope === 'team';
-    return route.query.scope !== 'team';
-  }
-  return Object.entries(target.query).every(([key, value]) => route.query[key] === value);
-}
-
-function handleRailClick(item: RailItem) {
-  if (!item.open) {
-    ElMessage.info(`${item.title}模块未开放`);
-    return;
-  }
-  if (item.route) navigate(item.route);
-}
-
-function toggleGroup(key: string) {
-  collapsedGroups.value[key] = !collapsedGroups.value[key];
-  saveCollapsedGroups(collapsedGroups.value);
+  return router.resolve(path).path === route.path;
 }
 </script>
 
 <template>
-  <aside class="app-sidebar">
-    <nav class="app-rail" aria-label="主模块">
-      <div class="rail-logo" aria-label="KAYFORD 孚德">
-        <img src="/kayford-logo.jpg" alt="KAYFORD 孚德" />
+  <aside class="app-sidebar" aria-label="系统导航">
+    <nav class="app-rail" aria-label="一级模块">
+      <div class="rail-logo" aria-label="KAYFORD 尚德">
+        <img src="/kayford-logo.jpg" alt="KAYFORD 尚德" />
       </div>
       <button
-        v-for="item in railItems"
-        :key="item.key"
+        v-for="module in navigation"
+        :key="module.key"
         class="rail-item"
-        :class="{ 'is-active': item.key === 'performance', 'is-locked': !item.open }"
+        :class="{ 'is-active': module.key === activeModule?.key }"
+        :data-testid="`nav-module-${module.key}`"
         type="button"
-        :aria-disabled="!item.open"
-        @click="handleRailClick(item)"
+        @click="navigate(module.defaultPath)"
       >
-        <span class="rail-icon">
-          <el-icon><component :is="item.icon" /></el-icon>
-        </span>
-        <span>{{ item.title }}</span>
-        <span v-if="!item.open" class="rail-watermark">未开放</span>
+        <span class="rail-icon"><el-icon><component :is="moduleIcons[module.key]" /></el-icon></span>
+        <span>{{ module.label }}</span>
       </button>
     </nav>
 
-    <div class="menu-panel">
+    <div v-if="activeModule" class="menu-panel">
       <div class="menu-brand">
-        <span class="menu-brand__mark">
-          <el-icon><Briefcase /></el-icon>
-        </span>
-        <span>绩效</span>
+        <span class="menu-brand__mark"><el-icon><component :is="moduleIcons[activeModule.key]" /></el-icon></span>
+        <span>{{ activeModule.label }}</span>
       </div>
 
       <div class="menu-scroll">
-        <section v-for="group in groupedMenus" :key="group.key" class="menu-group">
+        <section v-for="group in activeModule.groups" :key="group.key" class="menu-group">
           <button
-            v-if="group.key === 'home'"
-            class="menu-link menu-link--home"
-            :class="{ 'is-active': isMenuActive(group.items[0].path) }"
+            v-if="group.label"
+            class="menu-group__title"
             type="button"
-            @click="navigate(group.items[0].path)"
+            :aria-expanded="!isCollapsed(group)"
+            @click="toggleGroup(group)"
           >
-            <el-icon><component :is="group.items[0].icon" /></el-icon>
-            <span>{{ group.items[0].title }}</span>
+            <span>{{ group.label }}</span>
+            <el-icon class="menu-arrow" :class="{ 'is-collapsed': isCollapsed(group) }"><ArrowDown /></el-icon>
           </button>
-
-          <template v-else>
+          <div v-show="!isCollapsed(group)" class="menu-group__items">
             <button
-              class="menu-group__title"
+              v-for="item in group.items"
+              :key="String(item.name)"
+              class="menu-link"
+              :class="{ 'is-active': isMenuActive(item.path) }"
               type="button"
-              :aria-expanded="!collapsedGroups[group.key]"
-              @click="toggleGroup(group.key)"
+              @click="navigate(item.path)"
             >
-              <el-icon><component :is="group.items[0].icon" /></el-icon>
-              <span>{{ group.title }}</span>
-              <el-icon class="menu-arrow" :class="{ 'is-collapsed': collapsedGroups[group.key] }">
-                <ArrowDown />
-              </el-icon>
+              <span class="menu-dot" />
+              <span>{{ item.label }}</span>
             </button>
-            <div v-show="!collapsedGroups[group.key]" class="menu-group__items">
-              <button
-                v-for="menu in group.items"
-                :key="menu.path"
-                class="menu-link"
-                :class="[
-                  { 'is-active': isMenuActive(menu.path) },
-                  menu.accent ? `menu-link--${menu.accent}` : '',
-                ]"
-                type="button"
-                @click="navigate(menu.path)"
-              >
-                <span class="menu-dot" />
-                <span>{{ menu.title }}</span>
-                <span class="menu-more">...</span>
-              </button>
-            </div>
-          </template>
+          </div>
         </section>
       </div>
     </div>
@@ -307,122 +149,75 @@ function toggleGroup(key: string) {
 
 <style scoped>
 .app-sidebar {
-  width: 228px;
-  flex-shrink: 0;
+  width: 244px;
   height: 100%;
+  flex-shrink: 0;
   display: flex;
   background: #fff;
-  box-shadow: 16px 0 30px rgba(91, 119, 255, 0.05);
+  border-right: 1px solid #e6eaf2;
   z-index: 2;
 }
 
 .app-rail {
-  width: 58px;
-  min-width: 58px;
-  padding: 14px 8px 16px;
-  background: linear-gradient(180deg, #8268ff 0%, #356bff 100%);
+  width: 72px;
+  min-width: 72px;
+  padding: 14px 8px;
+  box-sizing: border-box;
+  background: #455fc6;
   display: flex;
   flex-direction: column;
-  gap: 14px;
-  box-sizing: border-box;
+  gap: 10px;
 }
 
 .rail-logo {
   width: 42px;
   height: 42px;
-  border-radius: 12px;
-  background: rgba(255, 255, 255, 0.96);
-  box-shadow: 0 10px 18px rgba(24, 35, 104, 0.22);
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  margin: 0 auto 8px;
+  border-radius: 8px;
   overflow: hidden;
-  flex-shrink: 0;
+  background: #fff;
 }
 
 .rail-logo img {
-  width: 36px;
-  height: 36px;
+  width: 100%;
+  height: 100%;
   object-fit: contain;
   display: block;
 }
 
 .rail-item {
-  position: relative;
+  width: 56px;
+  min-height: 58px;
+  margin: 0 auto;
+  padding: 6px 2px;
   border: 0;
+  border-radius: 6px;
   background: transparent;
-  color: rgba(255, 255, 255, 0.86);
-  font-size: 11px;
-  line-height: 1.2;
+  color: #dfe7ff;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 7px;
-  padding: 0;
+  justify-content: center;
+  gap: 5px;
+  font-size: 11px;
+  line-height: 16px;
   cursor: pointer;
 }
 
-.rail-item.is-locked {
-  cursor: not-allowed;
-}
-
-.rail-item.is-locked::after {
-  content: '';
-  position: absolute;
-  inset: -4px -5px;
-  border-radius: 6px;
-  background: rgba(27, 42, 112, 0.1);
-  opacity: 0;
-  transition: opacity 0.18s;
-}
-
-.rail-item.is-locked:hover::after {
-  opacity: 1;
+.rail-item:hover,
+.rail-item.is-active {
+  color: #314aab;
+  background: #fff;
 }
 
 .rail-icon {
-  width: 32px;
-  height: 32px;
-  border-radius: 10px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  display: inline-flex;
   font-size: 18px;
 }
 
-.rail-item.is-active .rail-icon {
-  background: #fff;
-  color: #5b62ff;
-  box-shadow: 0 8px 18px rgba(31, 35, 41, 0.14);
-}
-
-.rail-watermark {
-  position: absolute;
-  left: 8px;
-  top: -4px;
-  z-index: 3;
-  width: 42px;
-  height: 18px;
-  border: 1px solid rgba(255, 255, 255, 0.82);
-  border-radius: 3px;
-  color: #fff;
-  background: rgba(31, 49, 136, 0.5);
-  font-size: 9px;
-  line-height: 16px;
-  text-align: center;
-  transform: rotate(-12deg);
-  pointer-events: none;
-  opacity: 0.78;
-  box-sizing: border-box;
-}
-
-.rail-item.is-locked:hover .rail-watermark {
-  opacity: 1;
-}
-
 .menu-panel {
-  width: 170px;
-  min-width: 170px;
+  width: 172px;
+  min-width: 172px;
   display: flex;
   flex-direction: column;
   background: #fff;
@@ -430,32 +225,32 @@ function toggleGroup(key: string) {
 
 .menu-brand {
   height: 58px;
+  padding: 0 16px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 0 18px;
+  gap: 8px;
+  color: #202b4d;
   font-weight: 700;
-  color: #2d3558;
-  box-sizing: border-box;
+  border-bottom: 1px solid #edf0f5;
 }
 
 .menu-brand__mark {
-  width: 19px;
-  height: 19px;
+  width: 20px;
+  height: 20px;
+  color: #3b70d9;
+  background: #eaf1ff;
+  border-radius: 5px;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 5px;
-  color: #5d82ff;
-  background: #edf2ff;
-  font-size: 13px;
 }
 
 .menu-scroll {
   flex: 1;
   min-height: 0;
   overflow-y: auto;
-  padding: 10px 10px 18px;
+  padding: 10px;
 }
 
 .menu-group {
@@ -465,38 +260,33 @@ function toggleGroup(key: string) {
 .menu-group__title,
 .menu-link {
   width: 100%;
-  height: 38px;
+  min-height: 36px;
+  padding: 0 10px;
   border: 0;
-  border-radius: 2px;
+  border-radius: 4px;
+  box-sizing: border-box;
   display: flex;
   align-items: center;
-  gap: 9px;
-  padding: 0 11px;
-  color: #646b86;
+  gap: 8px;
+  color: #5e6783;
   background: transparent;
-  font-size: 13px;
   text-align: left;
-  box-sizing: border-box;
+  font-size: 13px;
 }
 
 .menu-group__title {
-  color: #343a57;
+  color: #343d5e;
   font-weight: 700;
   cursor: pointer;
 }
 
 .menu-group__title:hover {
-  background: #f5f7ff;
-}
-
-.menu-group__items {
-  padding-top: 2px;
+  background: #f4f6fb;
 }
 
 .menu-arrow {
   margin-left: auto;
-  color: #9da6c0;
-  font-size: 12px;
+  color: #9ca6c0;
   transition: transform 0.18s;
 }
 
@@ -504,207 +294,62 @@ function toggleGroup(key: string) {
   transform: rotate(-90deg);
 }
 
+.menu-group__items {
+  padding-top: 2px;
+}
+
 .menu-link {
-  cursor: pointer;
   margin: 2px 0;
-  transition: background 0.18s, color 0.18s;
+  cursor: pointer;
 }
 
 .menu-link:hover,
 .menu-link.is-active {
-  color: #5067e8;
-  background: #eef2ff;
-}
-
-.menu-link--home {
-  font-weight: 700;
+  color: #2f67d1;
+  background: #edf4ff;
 }
 
 .menu-dot {
-  width: 7px;
-  height: 7px;
+  width: 6px;
+  height: 6px;
   border-radius: 50%;
-  background: #9aa8ff;
   flex-shrink: 0;
+  background: #9eb5e9;
 }
 
-.menu-link--gold .menu-dot {
-  background: #ffc247;
-}
-
-.menu-link--blue .menu-dot {
-  background: #5d78ff;
-}
-
-.menu-link--green .menu-dot {
-  background: #91d569;
-}
-
-.menu-link--red .menu-dot {
-  background: #ff6f91;
-}
-
-.menu-link--purple .menu-dot {
-  background: #a779ff;
-}
-
-.menu-more {
-  margin-left: auto;
-  color: #aeb5c8;
-  letter-spacing: 1px;
-}
-
-.menu-link:not(:hover):not(.is-active) .menu-more {
-  opacity: 0;
+.menu-link.is-active .menu-dot {
+  background: currentcolor;
 }
 
 @media (max-width: 1180px) {
-  .app-sidebar {
-    width: 210px;
-  }
-
-  .app-rail {
-    width: 54px;
-    min-width: 54px;
-    padding-inline: 7px;
-    gap: 12px;
-  }
-
-  .rail-icon {
-    width: 30px;
-    height: 30px;
-  }
-
-  .menu-panel {
-    width: 156px;
-    min-width: 156px;
-  }
-
-  .menu-group__title,
-  .menu-link {
-    height: 36px;
-    gap: 8px;
-    padding-inline: 9px;
-    font-size: 12px;
-  }
+  .app-sidebar { width: 218px; }
+  .app-rail { width: 62px; min-width: 62px; padding-inline: 5px; }
+  .rail-item { width: 50px; font-size: 10px; }
+  .menu-panel { width: 156px; min-width: 156px; }
 }
 
 @media (max-width: 768px) {
-  .app-sidebar {
-    width: 100%;
-    height: auto;
-    flex-direction: column;
-  }
-
+  .app-sidebar { width: 100%; height: auto; flex-direction: column; }
   .app-rail {
     width: 100%;
     min-width: 0;
     height: 58px;
     padding: 7px 10px;
     flex-direction: row;
-    justify-content: flex-start;
-    gap: 10px;
     overflow-x: auto;
-    overflow-y: hidden;
-    -webkit-overflow-scrolling: touch;
     scrollbar-width: none;
   }
-
-  .app-rail::-webkit-scrollbar {
-    display: none;
-  }
-
-  .rail-logo {
-    display: none;
-  }
-
-  .rail-item {
-    min-width: 46px;
-    flex-shrink: 0;
-    gap: 4px;
-    font-size: 10px;
-  }
-
-  .rail-icon {
-    width: 30px;
-    height: 30px;
-    border-radius: 9px;
-  }
-
-  .rail-watermark {
-    left: 50%;
-    top: -1px;
-    transform: translateX(-50%) rotate(-12deg);
-  }
-
-  .menu-panel {
-    width: 100%;
-    min-width: 0;
-    height: 50px;
-    flex-shrink: 0;
-  }
-
-  .menu-brand {
-    display: none;
-  }
-
-  .menu-scroll {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    overflow-x: auto;
-    overflow-y: hidden;
-    padding: 7px 10px;
-    -webkit-overflow-scrolling: touch;
-    scroll-snap-type: x proximity;
-    scrollbar-width: none;
-  }
-
-  .menu-scroll::-webkit-scrollbar {
-    display: none;
-  }
-
-  .menu-group {
-    min-width: max-content;
-    display: flex;
-    align-items: center;
-    margin-bottom: 0;
-    scroll-snap-align: start;
-  }
-
-  .menu-group__title {
-    display: none;
-  }
-
-  .menu-group__items {
-    display: flex !important;
-    align-items: center;
-    gap: 4px;
-    padding-top: 0;
-  }
-
-  .menu-link {
-    width: auto;
-    min-width: max-content;
-    height: 34px;
-    margin: 0;
-    font-size: 12px;
-  }
-
-  .menu-more {
-    display: none;
-  }
-}
-
-@media (max-width: 480px) {
-  .menu-group {
-    min-width: max-content;
-  }
-
-  .menu-group__title,
-  .menu-link {
-    padding-inline: 8px;
-    gap: 7px;
-  }
+  .app-rail::-webkit-scrollbar { display: none; }
+  .rail-logo { display: none; }
+  .rail-item { min-width: 54px; min-height: 44px; margin: 0; flex-direction: row; font-size: 12px; }
+  .rail-icon { font-size: 16px; }
+  .menu-panel { width: 100%; min-width: 0; height: 48px; flex-direction: row; }
+  .menu-brand { display: none; }
+  .menu-scroll { display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; padding: 6px 10px; scrollbar-width: none; }
+  .menu-scroll::-webkit-scrollbar { display: none; }
+  .menu-group { min-width: max-content; margin: 0; }
+  .menu-group__title { display: none; }
+  .menu-group__items { display: flex !important; gap: 4px; padding: 0; }
+  .menu-link { width: auto; min-height: 32px; margin: 0; white-space: nowrap; }
 }
 </style>

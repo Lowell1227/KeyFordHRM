@@ -12,7 +12,27 @@ export class DashboardPage {
   }
 
   menuItem(title: string): Locator {
-    return this.sidebar.getByText(title);
+    return this.sidebar.locator('.menu-link', { hasText: title });
+  }
+
+  groupTitle(title: string): Locator {
+    return this.sidebar.locator('.menu-group__title', { hasText: title });
+  }
+
+  railItem(title: string): Locator {
+    return this.sidebar.locator('.app-rail .rail-item', { hasText: title });
+  }
+
+  navigationModules(): Locator {
+    return this.sidebar.locator('[data-testid^="nav-module-"]');
+  }
+
+  module(key: string): Locator {
+    return this.sidebar.getByTestId(`nav-module-${key}`);
+  }
+
+  async openModule(key: string) {
+    await this.module(key).click();
   }
 
   async hasMenu(title: string): Promise<boolean> {

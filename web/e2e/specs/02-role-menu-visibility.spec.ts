@@ -2,35 +2,85 @@ import { test, expect } from '@playwright/test';
 import { DashboardPage } from '../page-objects/dashboard.page';
 import { ReportsPage } from '../page-objects/reports.page';
 
-test.describe('02-role-menu-visibility employee', () => {
+const unopenedModules = ['任务', '项目', '考勤', '薪酬'];
+
+async function expectModules(page: DashboardPage, labels: string[]) {
+  await expect(page.navigationModules()).toHaveText(labels);
+  for (const title of unopenedModules) {
+    await expect(page.railItem(title)).toHaveCount(0);
+  }
+}
+
+test.describe('02-role-menu-visibility navigation employee', () => {
   test.use({ storageState: 'e2e/auth-state/employee.json' });
 
-  test('employee sees only 首页 and 我的绩效', async ({ page }) => {
-    await page.goto('/dashboard');
+  test('employee navigation shows only functional modules', async ({ page }) => {
     const dashboard = new DashboardPage(page);
-    await expect(dashboard.menuItem('首页')).toBeVisible();
-    await expect(dashboard.menuItem('我的绩效')).toBeVisible();
-    await expect(dashboard.menuItem('考核周期')).not.toBeVisible();
-    await expect(dashboard.menuItem('绩效校准')).not.toBeVisible();
+    await dashboard.goto();
+
+    await expectModules(dashboard, ['工作台', '绩效', '人员流程']);
+    await dashboard.openModule('performance');
+    await expect(dashboard.menuItem('绩效工作台')).toBeVisible();
+    await expect(dashboard.menuItem('目标跟进')).toHaveCount(0);
+    await expect(dashboard.menuItem('目标地图')).toHaveCount(0);
+    await expect(dashboard.menuItem('团队绩效')).toHaveCount(0);
+    await expect(dashboard.module('analysis')).toHaveCount(0);
   });
 });
 
-test.describe('02-role-menu-visibility HR', () => {
+test.describe('02-role-menu-visibility navigation manager', () => {
+  test.use({ storageState: 'e2e/auth-state/manager.json' });
+
+  test('manager navigation keeps team work inside the performance workspace', async ({ page }) => {
+    const dashboard = new DashboardPage(page);
+    await dashboard.goto();
+
+    await expectModules(dashboard, ['工作台', '绩效', '人员流程']);
+    await dashboard.openModule('performance');
+    await expect(dashboard.menuItem('绩效工作台')).toBeVisible();
+    await expect(dashboard.menuItem('绩效面谈')).toBeVisible();
+    await expect(dashboard.menuItem('团队绩效')).toHaveCount(0);
+    await expect(dashboard.module('analysis')).toHaveCount(0);
+  });
+});
+
+test.describe('02-role-menu-visibility navigation HR', () => {
   test.use({ storageState: 'e2e/auth-state/hr.json' });
 
-  test('HR sees full admin menus', async ({ page }) => {
-    await page.goto('/dashboard');
+  test('HR navigation shows configuration through analysis and settings', async ({ page }) => {
     const dashboard = new DashboardPage(page);
-    await expect(dashboard.menuItem('绩效计划制定')).toBeVisible();
+    await dashboard.goto();
+
+    await expectModules(dashboard, ['工作台', '绩效', '人员流程', '分析与设置']);
+    await dashboard.openModule('performance');
+    await expect(dashboard.menuItem('周期与计划')).toBeVisible();
+    await expect(dashboard.menuItem('绩效校准')).toBeVisible();
+    await dashboard.openModule('analysis');
+    await expect(dashboard.groupTitle('指标与模板')).toBeVisible();
     await expect(dashboard.menuItem('指标库')).toBeVisible();
-    await expect(dashboard.menuItem('绩效评定')).toBeVisible();
-    await expect(dashboard.menuItem('结果公示')).toBeVisible();
-    await expect(dashboard.menuItem('申诉计划')).toBeVisible();
+    await expect(dashboard.menuItem('考核模板')).toBeVisible();
     await expect(dashboard.menuItem('用户管理')).toBeVisible();
   });
 });
 
-test.describe('02-role-menu-visibility VP', () => {
+test.describe('02-role-menu-visibility navigation approver', () => {
+  test.use({ storageState: 'e2e/auth-state/approver.json' });
+
+  test('VP sees result approval without HR configuration', async ({ page }) => {
+    const dashboard = new DashboardPage(page);
+    await dashboard.goto();
+
+    await expectModules(dashboard, ['工作台', '绩效', '人员流程', '分析与设置']);
+    await dashboard.openModule('performance');
+    await expect(dashboard.menuItem('结果审批')).toBeVisible();
+    await dashboard.openModule('analysis');
+    await expect(dashboard.menuItem('周期与计划')).toHaveCount(0);
+    await expect(dashboard.menuItem('指标与模板')).toHaveCount(0);
+    await expect(dashboard.menuItem('用户管理')).toHaveCount(0);
+  });
+});
+
+test.describe('02-role-menu-visibility VP reports', () => {
   test.use({ storageState: 'e2e/auth-state/approver.json' });
 
   test('VP sees only 汇总 tab in reports', async ({ page }) => {
