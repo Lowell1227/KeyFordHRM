@@ -1,8 +1,14 @@
-import { chromium, FullConfig } from '@playwright/test';
+import { chromium, type FullConfig } from '@playwright/test';
+import { execFileSync } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { mkdir } from 'node:fs/promises';
+import path from 'node:path';
 
 const API_BASE = process.env.PLAYWRIGHT_API_BASE_URL || 'http://localhost:3000/api/v1';
 const WEB_BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
+const PREPARE_ACCEPTANCE_DATA = !['0', 'false'].includes(
+  (process.env.PLAYWRIGHT_PREPARE_ACCEPTANCE_DATA || '').toLowerCase(),
+);
 
 interface Role {
   name: string;
@@ -33,21 +39,61 @@ async function loginAndSaveState(role: Role) {
   await browser.close();
 }
 
-export default async function globalSetup(config: FullConfig) {
-  await mkdir('e2e/auth-state', { recursive: true });
+function isLoopbackUrl(value: string) {
+  const hostname = new URL(value).hostname.toLowerCase();
+  return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(hostname);
+}
 
-  // 后端可能尚未启动，简单轮询 health
-  let retries = 30;
-  while (retries > 0) {
-    try {
-      const res = await fetch(`${API_BASE}/health`);
-      if (res.ok) break;
-    } catch {
-      // ignore
-    }
-    retries--;
-    await new Promise((r) => setTimeout(r, 1000));
+function findRepoRoot() {
+  const candidates = [path.resolve(process.cwd(), '..'), process.cwd()];
+  const repoRoot = candidates.find((candidate) => existsSync(path.join(candidate, 'docker-compose.yml')));
+  if (!repoRoot) throw new Error('Playwright setup could not locate docker-compose.yml');
+  return repoRoot;
+}
+
+function prepareAcceptanceData() {
+  if (!PREPARE_ACCEPTANCE_DATA) {
+    console.log('[playwright setup] acceptance data preparation disabled');
+    return;
   }
+  if (process.env.NODE_ENV === 'production') {
+    throw new Error('Playwright acceptance data preparation is disabled in production');
+  }
+  const allowRemote = process.env.PLAYWRIGHT_ALLOW_REMOTE_DATA_SETUP === '1';
+  if ((!isLoopbackUrl(API_BASE) || !isLoopbackUrl(WEB_BASE)) && !allowRemote) {
+    throw new Error('Refusing to prepare acceptance data for non-local URLs without PLAYWRIGHT_ALLOW_REMOTE_DATA_SETUP=1');
+  }
+
+  const repoRoot = findRepoRoot();
+  const runInApi = (args: string[]) => execFileSync(
+    'docker',
+    ['compose', 'exec', '-T', 'api', ...args],
+    { cwd: repoRoot, env: process.env, stdio: 'inherit' },
+  );
+
+  console.log('[playwright setup] applying API migrations');
+  runInApi(['npx', 'prisma', 'migrate', 'deploy']);
+  console.log('[playwright setup] seeding idempotent E2E acceptance data');
+  runInApi(['npx', 'ts-node', 'prisma/seed-test-data.ts']);
+}
+
+async function waitForApiHealth() {
+  for (let attempt = 1; attempt <= 30; attempt++) {
+    try {
+      const response = await fetch(`${API_BASE}/health`);
+      if (response.ok) return;
+    } catch {
+      // The API container may still be starting after migration.
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  throw new Error(`API health check did not become ready: ${API_BASE}/health`);
+}
+
+export default async function globalSetup(_config: FullConfig) {
+  await mkdir('e2e/auth-state', { recursive: true });
+  prepareAcceptanceData();
+  await waitForApiHealth();
 
   for (const role of ROLES) {
     await loginAndSaveState(role);

@@ -18,6 +18,7 @@
     "@element-plus/icons-vue": "^2.3.1",
     "axios": "^1.7.7",
     "dayjs": "^1.11.13",
+    "dingtalk-jsapi": "3.2.9",
     "echarts": "^5.5.1",
     "element-plus": "^2.8.4",
     "pinia": "^2.2.4",

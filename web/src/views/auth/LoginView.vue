@@ -3,6 +3,7 @@ import { computed, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores/auth.store';
+import { loadDingTalkJsApi } from '@/utils/dingtalk-jsapi';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -15,14 +16,6 @@ const form = reactive({ employeeNo: '', password: '' });
 
 const DINGTALK_APP_KEY = import.meta.env.VITE_DINGTALK_APP_KEY || 'dinghwbnyktt3oku2jd3';
 const DINGTALK_CORP_ID = import.meta.env.VITE_DINGTALK_CORP_ID || '';
-const DINGTALK_JSAPI_URL = 'https://g.alicdn.com/dingding/dingtalk-jsapi/2.15.6/dingtalk.open.js';
-type DingTalkJsApi = {
-  requestAuthCode: (options: {
-    corpId: string;
-    onSuccess: (result: { code: string }) => void;
-    onFail: (error: unknown) => void;
-  }) => void;
-};
 
 // —— 测试账号快速登录（仅开发环境，生产构建不包含）——
 // 账号由 `npm run db:seed:dev` 写入，密码统一 000000。
@@ -67,29 +60,6 @@ function getDingTalkRedirectUri() {
   return import.meta.env.VITE_DINGTALK_REDIRECT_URI || `${window.location.origin}/auth/callback`;
 }
 
-function getDingTalkJsApi(): DingTalkJsApi | undefined {
-  return (window as Window & { dd?: DingTalkJsApi }).dd;
-}
-
-async function ensureDingTalkJsApi(): Promise<boolean> {
-  if (getDingTalkJsApi()?.requestAuthCode) return true;
-
-  return new Promise((resolve) => {
-    const existing = document.querySelector<HTMLScriptElement>('script[data-dingtalk-jsapi]');
-    const script = existing ?? document.createElement('script');
-    const settle = () => resolve(!!getDingTalkJsApi()?.requestAuthCode);
-
-    script.addEventListener('load', settle, { once: true });
-    script.addEventListener('error', () => resolve(false), { once: true });
-    if (!existing) {
-      script.src = DINGTALK_JSAPI_URL;
-      script.async = true;
-      script.dataset.dingtalkJsapi = 'true';
-      document.head.append(script);
-    }
-  });
-}
-
 async function onDingTalkLogin() {
   if (loading.value) return;
 
@@ -98,33 +68,46 @@ async function onDingTalkLogin() {
       ElMessage.error('缺少钉钉企业 CorpId 配置，请联系管理员检查 VITE_DINGTALK_CORP_ID');
       return;
     }
-    if (!await ensureDingTalkJsApi()) {
+    let dingTalkJsApi;
+    try {
+      dingTalkJsApi = await loadDingTalkJsApi();
+    } catch {
       ElMessage.error('钉钉 JSAPI 未加载，请在钉钉客户端内重新打开页面');
       return;
     }
 
-    const dingTalkJsApi = getDingTalkJsApi();
-    if (!dingTalkJsApi) return;
-
     loading.value = true;
-    dingTalkJsApi.requestAuthCode({
-      corpId: DINGTALK_CORP_ID,
-      onSuccess: async (res) => {
-        try {
-          await auth.loginWithDingTalk(res.code);
-          redirectAfterLogin();
-        } catch {
-          ElMessage.error('钉钉登录失败，请确认账号已开通或改用账号密码登录');
-        } finally {
-          loading.value = false;
-        }
-      },
-      onFail: (err) => {
-        console.error('DingTalk requestAuthCode failed', err);
-        ElMessage.error('获取钉钉授权失败，请稍后重试');
+    let authSettled = false;
+    const onSuccess = async (res: { code: string }) => {
+      if (authSettled) return;
+      authSettled = true;
+      try {
+        await auth.loginWithDingTalk(res.code);
+        redirectAfterLogin();
+      } catch {
+        ElMessage.error('钉钉登录失败，请确认账号已开通或改用账号密码登录');
+      } finally {
         loading.value = false;
-      },
-    });
+      }
+    };
+    const onFail = (err: unknown) => {
+      if (authSettled) return;
+      authSettled = true;
+      console.error('DingTalk requestAuthCode failed', err);
+      ElMessage.error('获取钉钉授权失败，请稍后重试');
+      loading.value = false;
+    };
+    try {
+      const result = dingTalkJsApi.requestAuthCode({
+        corpId: DINGTALK_CORP_ID,
+        clientId: DINGTALK_APP_KEY,
+        onSuccess,
+        onFail,
+      });
+      if (result && typeof result.then === 'function') void result.then(onSuccess, onFail);
+    } catch (error) {
+      onFail(error);
+    }
     return;
   }
 

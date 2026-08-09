@@ -201,7 +201,10 @@ describe('Manager team performance workspace', () => {
       })
       .expect(200);
     expect(batch.body.data.succeeded).toEqual([{ taskId: taskA.id, status: TaskStatus.indicator_confirming }]);
-    expect(batch.body.data.failed).toEqual([expect.objectContaining({ taskId: taskB.id })]);
+    expect(batch.body.data.failed).toEqual([{
+      taskId: taskB.id,
+      reason: '任务已被其他操作更新，请刷新后重试',
+    }]);
     const approvedFlow = await app.prisma.flowRecord.findFirstOrThrow({
       where: { taskId: taskA.id, nodeType: 'indicator_setting', action: 'submit' },
       orderBy: { createdAt: 'desc' },

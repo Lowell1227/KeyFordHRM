@@ -33,10 +33,23 @@ async function fetchAll<T>(token: string, path: string): Promise<T[]> {
   }
 }
 
+function expectWorkspaceQuery(
+  currentUrl: string,
+  expected: { cycleId: string; employeeId: string; id: string },
+) {
+  const url = new URL(currentUrl);
+  expect(url.pathname).toBe('/tasks');
+  expect(url.searchParams.get('scope')).toBe('team');
+  expect(url.searchParams.get('stage')).toBe('manager-eval');
+  expect(url.searchParams.get('cycleId')).toBe(expected.cycleId);
+  expect(url.searchParams.get('employeeId')).toBe(expected.employeeId);
+  expect(url.searchParams.get('taskId')).toBe(expected.id);
+}
+
 test.describe('05-multi-role-happy-path', () => {
   test.use({ storageState: 'e2e/auth-state/manager.json' });
 
-  test('manager saves a real employee evaluation draft, refreshes, and restores the team workspace URL', async ({ page }) => {
+  test('manager draft survives refresh and a real TaskDetail round-trip restores the team workspace URL', async ({ page }) => {
     const [hrToken, managerToken] = await Promise.all([login('HR001'), login('MGR001')]);
     const [allTasks, cycles, managerTasks] = await Promise.all([
       fetchAll<{
@@ -88,6 +101,14 @@ test.describe('05-multi-role-happy-path', () => {
     await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
     await expect(page.getByTestId('manager-strengths')).toHaveValue('Real browser draft acceptance');
     await expect(scoreInputs.first()).toHaveValue('86');
+
+    await page.goto(`/tasks/${target!.id}`);
+    await expect(page).toHaveURL(new RegExp(`/tasks/${target!.id}$`));
+    await expect(page.locator('.task-detail')).toBeVisible();
+    await page.goBack();
+    await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
+    expectWorkspaceQuery(page.url(), target!);
+    await expect(page.getByTestId('manager-strengths')).toHaveValue('Real browser draft acceptance');
 
     const teamAfterRefresh = await api('GET', `/tasks/team?stage=manager-eval&cycleId=${target!.cycleId}`, managerToken);
     const permittedEmployeeIds = new Set(teamAfterRefresh.facets.employees.map((employee: { id: string }) => employee.id));
