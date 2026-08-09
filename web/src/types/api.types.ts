@@ -998,6 +998,7 @@ export interface FlowRecord {
 
 /** GET /reports/cycle/:id/summary 汇总明细细项。 */
 export interface ReportSummaryItem {
+  taskId?: string;
   employeeName: string;
   employeeNo: string | null;
   deptName: string | null;

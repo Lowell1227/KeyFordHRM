@@ -135,6 +135,7 @@ describe('ReportsService', () => {
       expect(summary.stats.grades.A).toEqual({ count: 2, ratio: 2 / 3 });
       expect(summary.stats.grades.C).toEqual({ count: 1, ratio: 1 / 3 });
       expect(summary.items).toHaveLength(3);
+      expect(summary.items[0]).toMatchObject({ taskId: 't1' });
       expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({ cycleId: 'cycle-1', isExempt: false }),

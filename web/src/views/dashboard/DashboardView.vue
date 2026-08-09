@@ -1,23 +1,36 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { Aim, DocumentChecked, Medal, TrendCharts, Warning, WalletFilled } from '@element-plus/icons-vue';
+import { DocumentChecked, Medal, TrendCharts, WalletFilled } from '@element-plus/icons-vue';
 import { cyclesApi } from '@/api/cycles.api';
 import { reportsApi } from '@/api/reports.api';
+import { tasksApi } from '@/api/tasks.api';
 import { useAuthStore } from '@/stores/auth.store';
 import StatCard from '@/components/common/StatCard.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import EmptyState from '@/components/common/EmptyState.vue';
 import DonutScoreChart from '@/components/charts/DonutScoreChart.vue';
 import DeptResultChart from '@/components/charts/DeptResultChart.vue';
 import { getGradeLabel, getGradeStyle } from '@/utils/grade';
-import type { AssessmentCycle, ReportSummary } from '@/types/api.types';
-import type { PerfGrade } from '@/types/enums';
+import { TASK_STATUS_STAGE, type TaskStageKey } from '@/views/task/task-stage';
+import type { AssessmentCycle, ReportSummary, TaskListItem } from '@/types/api.types';
+import type { PerfGrade, TeamTaskStage } from '@/types/enums';
 
 const auth = useAuthStore();
 const router = useRouter();
 
 const isEmployee = computed(() => auth.user?.sysRole === 'employee');
 const userRole = computed(() => auth.user?.sysRole ?? '');
+const userId = computed(() => auth.user?.id ?? '');
+const isDirectManager = computed(() => userRole.value === 'manager');
+const canOpenManagementTask = computed(() => [
+  'manager',
+  'dept_head',
+  'vp',
+  'chairman',
+  'hr',
+  'system_admin',
+].includes(userRole.value));
 const summaryScopeLabel = computed(() => {
   if (auth.user?.canViewAll || userRole.value === 'hr' || userRole.value === 'system_admin') return '全公司';
   if (userRole.value === 'vp' || userRole.value === 'chairman') return '分管范围';
@@ -40,29 +53,112 @@ const cycles = ref<AssessmentCycle[]>([]);
 const selectedCycleId = ref('');
 const summary = ref<ReportSummary | null>(null);
 
-const employeeCards = [
-  {
-    title: '我的绩效',
-    desc: '查看当前考核任务，按状态进入自评、结果确认或历史记录。',
-    icon: DocumentChecked,
-    path: '/tasks',
-    type: 'primary',
-  },
-  {
-    title: '绩效面谈',
-    desc: '结果发布后查看面谈安排和沟通记录。',
-    icon: Aim,
-    path: '/tasks',
-    type: 'success',
-  },
-  {
-    title: '申诉说明',
-    desc: '发布后如对结果有异议，可在任务详情中提交申诉。',
-    icon: Warning,
-    path: '/tasks',
-    type: 'warning',
-  },
-];
+const personalTask = ref<TaskListItem | null>(null);
+const personalTaskLoading = ref(false);
+const personalTaskError = ref(false);
+const teamPending = ref<Record<TeamTaskStage, number | null>>({
+  'goal-review': null,
+  'manager-eval': null,
+});
+const teamLoading = ref<Record<TeamTaskStage, boolean>>({
+  'goal-review': false,
+  'manager-eval': false,
+});
+const teamErrors = ref<Record<TeamTaskStage, boolean>>({
+  'goal-review': false,
+  'manager-eval': false,
+});
+let taskEntryRequestSerial = 0;
+
+const taskStageLabels: Record<TaskStageKey, string> = {
+  'goal-setting': '目标制定',
+  'goal-confirmation': '目标确认',
+  'self-eval': '自评',
+  result: '结果确认',
+};
+
+const personalTaskStageLabel = computed(() => {
+  const task = personalTask.value;
+  return task ? taskStageLabels[TASK_STATUS_STAGE[task.status]] : '';
+});
+
+function latestOpenTask(items: TaskListItem[]): TaskListItem | null {
+  return items.find((task) => !['closed', 'exempted'].includes(task.status)) ?? null;
+}
+
+function resetTaskEntries() {
+  personalTask.value = null;
+  personalTaskError.value = false;
+  teamPending.value = { 'goal-review': null, 'manager-eval': null };
+  teamErrors.value = { 'goal-review': false, 'manager-eval': false };
+}
+
+async function loadTaskEntries() {
+  const requestId = ++taskEntryRequestSerial;
+  const loadPersonal = isEmployee.value || isDirectManager.value;
+  const loadTeam = isDirectManager.value;
+  resetTaskEntries();
+  personalTaskLoading.value = loadPersonal;
+  teamLoading.value = { 'goal-review': loadTeam, 'manager-eval': loadTeam };
+
+  const personalResultPromise = loadPersonal
+    ? tasksApi.findMine({ page: 1, pageSize: 20 })
+      .then((value) => ({ value, failed: false }))
+      .catch(() => ({ value: null, failed: true }))
+    : Promise.resolve(null);
+  const goalReviewResultPromise = loadTeam
+    ? tasksApi.findTeam({ page: 1, pageSize: 1, stage: 'goal-review' })
+      .then((value) => ({ value, failed: false }))
+      .catch(() => ({ value: null, failed: true }))
+    : Promise.resolve(null);
+  const managerEvaluationResultPromise = loadTeam
+    ? tasksApi.findTeam({ page: 1, pageSize: 1, stage: 'manager-eval' })
+      .then((value) => ({ value, failed: false }))
+      .catch(() => ({ value: null, failed: true }))
+    : Promise.resolve(null);
+
+  const [personalResult, goalReviewResult, managerEvaluationResult] = await Promise.all([
+    personalResultPromise,
+    goalReviewResultPromise,
+    managerEvaluationResultPromise,
+  ]);
+  if (requestId !== taskEntryRequestSerial) return;
+
+  if (personalResult) {
+    personalTaskLoading.value = false;
+    if (!personalResult.failed && personalResult.value) {
+      personalTask.value = latestOpenTask(personalResult.value.items);
+    } else {
+      personalTaskError.value = true;
+    }
+  }
+
+  if (goalReviewResult) {
+    teamLoading.value = { ...teamLoading.value, 'goal-review': false };
+    if (!goalReviewResult.failed && goalReviewResult.value) {
+      teamPending.value = { ...teamPending.value, 'goal-review': goalReviewResult.value.counts.pending };
+    } else {
+      teamErrors.value = { ...teamErrors.value, 'goal-review': true };
+    }
+  }
+
+  if (managerEvaluationResult) {
+    teamLoading.value = { ...teamLoading.value, 'manager-eval': false };
+    if (!managerEvaluationResult.failed && managerEvaluationResult.value) {
+      teamPending.value = { ...teamPending.value, 'manager-eval': managerEvaluationResult.value.counts.pending };
+    } else {
+      teamErrors.value = { ...teamErrors.value, 'manager-eval': true };
+    }
+  }
+}
+
+function openTask(taskId: string) {
+  void router.push({ name: 'TaskDetail', params: { id: taskId }, query: { returnTo: '/tasks' } });
+}
+
+function openTeamWorkspace(stage: TeamTaskStage) {
+  void router.push({ path: '/tasks', query: { scope: 'team', stage } });
+}
 
 const selectedCycle = computed(() => cycles.value.find((cycle) => cycle.id === selectedCycleId.value));
 
@@ -166,6 +262,7 @@ const passRate = computed(() => {
 const tableRows = computed(() =>
   summaryItems.value.map((item) => ({
     ...item,
+    taskId: item.taskId ?? null,
     avatar: item.employeeName.slice(0, 1) || '员',
     cycle: selectedCycle.value?.name ?? '-',
   })),
@@ -212,6 +309,18 @@ watch(
   { immediate: true },
 );
 
+watch(
+  [userRole, userId],
+  () => {
+    void loadTaskEntries();
+  },
+  { immediate: true },
+);
+
+onUnmounted(() => {
+  taskEntryRequestSerial += 1;
+});
+
 function avatarColor(name: string): string {
   const colors = ['#2a9d8f', '#457b9d', '#e76f51', '#7b2cbf', '#f4a261'];
   let sum = 0;
@@ -226,40 +335,86 @@ function avatarColor(name: string): string {
       <section class="employee-hero">
         <div>
           <h2>{{ auth.user?.name || '员工' }}，这里是你的绩效工作台</h2>
-          <p>员工首页只保留个人待办入口，不展示公司或部门绩效大盘。</p>
+          <p>只展示当前可继续处理的绩效任务。</p>
         </div>
-        <el-button type="primary" :icon="DocumentChecked" @click="router.push('/tasks')">
-          进入我的绩效
-        </el-button>
       </section>
 
-      <div class="employee-actions">
-        <button
-          v-for="item in employeeCards"
-          :key="item.title"
-          class="employee-action"
-          type="button"
-          @click="router.push(item.path)"
-        >
-          <el-icon :class="`action-icon action-icon--${item.type}`"><component :is="item.icon" /></el-icon>
-          <span class="action-title">{{ item.title }}</span>
-          <span class="action-desc">{{ item.desc }}</span>
-        </button>
-      </div>
-
-      <ChartCard>
-        <template #title>当前说明</template>
-        <el-alert
-          title="绩效任务由HR发起，员工无需手动新建。进入“我的绩效”后，系统会按任务状态显示自评、确认结果或申诉入口。"
-          type="info"
-          :closable="false"
-          show-icon
-        />
-      </ChartCard>
+      <section class="task-entry-card" data-testid="employee-current-task">
+        <template v-if="personalTaskLoading">
+          <el-skeleton :rows="2" animated />
+        </template>
+        <template v-else-if="personalTaskError">
+          <el-alert title="当前任务暂时无法加载，请稍后重试。" type="warning" :closable="false" show-icon />
+        </template>
+        <template v-else-if="personalTask">
+          <div class="task-entry-card__main">
+            <span class="task-entry-card__eyebrow">当前阶段</span>
+            <strong>{{ personalTaskStageLabel }}</strong>
+            <span class="task-entry-card__meta">{{ personalTask.cycleName || '当前考核周期' }}</span>
+          </div>
+          <el-button data-testid="employee-current-task-open" type="primary" @click="openTask(personalTask.id)">
+            查看任务
+          </el-button>
+        </template>
+        <EmptyState v-else description="HR 发起考核任务后，会在这里显示你的待办。" />
+      </section>
     </template>
 
     <template v-else>
       <div v-loading="dashboardLoading" class="dashboard-admin">
+      <section v-if="isDirectManager" class="manager-task-entry" aria-label="团队绩效待办">
+        <article class="task-entry-card task-entry-card--personal">
+          <template v-if="personalTaskLoading">
+            <el-skeleton :rows="2" animated />
+          </template>
+          <template v-else-if="personalTaskError">
+            <el-alert title="个人任务暂时无法加载。" type="warning" :closable="false" />
+          </template>
+          <template v-else-if="personalTask">
+            <div class="task-entry-card__main">
+              <span class="task-entry-card__eyebrow">我的任务</span>
+              <strong>{{ personalTaskStageLabel }}</strong>
+              <span class="task-entry-card__meta">{{ personalTask.cycleName || '当前考核周期' }}</span>
+            </div>
+            <el-button text type="primary" @click="openTask(personalTask.id)">查看</el-button>
+          </template>
+          <div v-else class="task-entry-card__empty">当前没有个人绩效任务</div>
+        </article>
+
+        <article class="task-entry-card">
+          <template v-if="teamLoading['goal-review']">
+            <el-skeleton :rows="2" animated />
+          </template>
+          <template v-else-if="teamErrors['goal-review']">
+            <el-alert title="目标审核待办暂时无法加载。" type="warning" :closable="false" />
+          </template>
+          <template v-else>
+            <div class="task-entry-card__main">
+              <span class="task-entry-card__eyebrow">团队待办</span>
+              <strong data-testid="manager-goal-review-count">{{ teamPending['goal-review'] }}</strong>
+              <span class="task-entry-card__meta">目标审核</span>
+            </div>
+            <el-button data-testid="manager-goal-review-open" text type="primary" @click="openTeamWorkspace('goal-review')">处理</el-button>
+          </template>
+        </article>
+
+        <article class="task-entry-card">
+          <template v-if="teamLoading['manager-eval']">
+            <el-skeleton :rows="2" animated />
+          </template>
+          <template v-else-if="teamErrors['manager-eval']">
+            <el-alert title="上级评价待办暂时无法加载。" type="warning" :closable="false" />
+          </template>
+          <template v-else>
+            <div class="task-entry-card__main">
+              <span class="task-entry-card__eyebrow">团队待办</span>
+              <strong data-testid="manager-evaluation-count">{{ teamPending['manager-eval'] }}</strong>
+              <span class="task-entry-card__meta">上级评价</span>
+            </div>
+            <el-button data-testid="manager-evaluation-open" text type="primary" @click="openTeamWorkspace('manager-eval')">处理</el-button>
+          </template>
+        </article>
+      </section>
       <section class="dashboard-top">
         <div class="kpi-grid">
           <StatCard
@@ -353,8 +508,17 @@ function avatarColor(name: string): string {
             </template>
           </el-table-column>
           <el-table-column label="操作" min-width="90" align="center">
-            <template #default>
-              <el-button link type="primary" size="small">查看</el-button>
+            <template #default="{ row }">
+              <el-button
+                v-if="row.taskId && canOpenManagementTask"
+                :data-testid="`dashboard-task-open-${row.taskId}`"
+                link
+                type="primary"
+                size="small"
+                @click="openTask(row.taskId)"
+              >
+                查看
+              </el-button>
             </template>
           </el-table-column>
         </el-table>
@@ -418,6 +582,64 @@ function avatarColor(name: string): string {
 .employee-hero p {
   margin: 0;
   color: var(--app-text-secondary);
+}
+
+.task-entry-card,
+.manager-task-entry {
+  display: grid;
+  gap: 12px;
+}
+
+.task-entry-card {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  min-height: 92px;
+  padding: 18px 20px;
+  background: var(--app-card-bg);
+  border: 1px solid var(--app-border-color);
+  border-radius: var(--app-radius);
+  box-sizing: border-box;
+}
+
+.task-entry-card :deep(.el-skeleton) {
+  grid-column: 1 / -1;
+}
+
+.task-entry-card :deep(.el-alert),
+.task-entry-card .empty-state {
+  grid-column: 1 / -1;
+}
+
+.task-entry-card .empty-state {
+  padding: 0;
+}
+
+.task-entry-card__main {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.task-entry-card__eyebrow,
+.task-entry-card__meta,
+.task-entry-card__empty {
+  color: var(--app-text-secondary);
+  font-size: 13px;
+}
+
+.task-entry-card__main strong {
+  color: var(--app-text-primary);
+  font-size: 18px;
+  line-height: 1.25;
+}
+
+.manager-task-entry {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.manager-task-entry .task-entry-card {
+  min-height: 112px;
+  box-shadow: var(--app-shadow);
 }
 
 .employee-actions {
@@ -622,11 +844,23 @@ function avatarColor(name: string): string {
   .employee-actions {
     grid-template-columns: 1fr;
   }
+
+  .manager-task-entry {
+    grid-template-columns: 1fr;
+  }
 }
 
 @media (max-width: 560px) {
   .kpi-grid {
     grid-template-columns: 1fr;
+  }
+
+  .task-entry-card {
+    padding: 16px;
+  }
+
+  .task-entry-card__main strong {
+    font-size: 17px;
   }
 }
 </style>

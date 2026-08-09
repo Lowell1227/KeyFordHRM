@@ -31,6 +31,30 @@ export class DashboardPage {
     return this.sidebar.getByTestId(`nav-module-${key}`);
   }
 
+  currentEmployeeTask(): Locator {
+    return this.page.getByTestId('employee-current-task');
+  }
+
+  currentEmployeeTaskOpen(): Locator {
+    return this.page.getByTestId('employee-current-task-open');
+  }
+
+  managerGoalReviewCount(): Locator {
+    return this.page.getByTestId('manager-goal-review-count');
+  }
+
+  managerGoalReviewOpen(): Locator {
+    return this.page.getByTestId('manager-goal-review-open');
+  }
+
+  managerEvaluationCount(): Locator {
+    return this.page.getByTestId('manager-evaluation-count');
+  }
+
+  managementTaskOpen(taskId: string): Locator {
+    return this.page.getByTestId(`dashboard-task-open-${taskId}`);
+  }
+
   async openModule(key: string) {
     await this.module(key).click();
   }

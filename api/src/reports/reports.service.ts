@@ -16,8 +16,10 @@ import {
 
 const GRADES: PerfGrade[] = ['A', 'B', 'C', 'D'];
 
-/** 汇总报表单项。 */
-export type ReportSummaryItem = ReportItem;
+/** 汇总报表单项。任务 ID 仅供 JSON 工作台详情入口使用，不参与导出列。 */
+export interface ReportSummaryItem extends ReportItem {
+  taskId: string;
+}
 
 /** 汇总报表统计。 */
 export interface ReportSummaryStats {
@@ -405,6 +407,7 @@ export class ReportsService {
   private mapToSummaryItem(task: TaskWithResult): ReportSummaryItem {
     const gradeResult = task.gradeResult;
     return {
+      taskId: task.id,
       employeeName: task.employee.name,
       employeeNo: task.employee.employeeNo ?? null,
       deptName: task.dept?.name ?? null,
