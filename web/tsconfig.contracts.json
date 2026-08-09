@@ -9,7 +9,8 @@
     "src/**/*.d.ts",
     "src/**/*.tsx",
     "src/**/*.vue",
-    "e2e/specs/10-team-performance-contract.spec.ts"
+    "e2e/specs/10-team-performance-contract.spec.ts",
+    "e2e/specs/11-navigation-entrypoints.spec.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }

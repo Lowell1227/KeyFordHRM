@@ -3,6 +3,12 @@ import { buildNavigation } from '../../src/router/navigation';
 import { isPerformanceWorkspacePath } from '../../src/router/performance-workspace';
 import { routes } from '../../src/router/routes';
 import { DashboardPage } from '../page-objects/dashboard.page';
+import type {
+  Paginated,
+  TaskListItem,
+  TeamTaskListItem,
+  TeamTaskPage,
+} from '../../src/types/api.types';
 
 const apiResponse = (data: unknown) => ({
   code: 0,
@@ -11,11 +17,57 @@ const apiResponse = (data: unknown) => ({
   timestamp: Date.now(),
 });
 
-const emptyTeamPage = (pending: number) => ({
+const taskItem = (overrides: Partial<TaskListItem> = {}): TaskListItem => ({
+  id: 'task-default',
+  cycleId: 'cycle-default',
+  cycleName: '2026 Q3',
+  snapshotId: 'snapshot-default',
+  employeeId: 'employee-1',
+  employeeName: 'Employee',
+  status: 'indicator_confirming',
+  isExempt: false,
+  createdAt: '2026-08-01T00:00:00.000Z',
+  updatedAt: '2026-08-01T00:00:00.000Z',
+  ...overrides,
+});
+
+const taskPage = (items: TaskListItem[]): Paginated<TaskListItem> => ({
+  total: items.length,
+  page: 1,
+  pageSize: 20,
+  items,
+});
+
+const teamTaskItem = (overrides: Partial<TeamTaskListItem> = {}): TeamTaskListItem => ({
+  id: 'team-task-default',
+  cycleId: 'cycle-default',
+  cycleName: '2026 Q3',
+  employeeId: 'employee-1',
+  employeeName: 'Employee',
+  deptId: 'dept-1',
+  deptName: 'Engineering',
+  managerId: 'manager-1',
+  status: 'indicator_reviewing',
+  totalScore: null,
+  rawGrade: null,
+  updatedAt: '2026-08-01T00:00:00.000Z',
+  employeeNo: 'E-1',
+  avatarUrl: null,
+  position: 'Engineer',
+  stageState: 'pending',
+  ...overrides,
+});
+
+const teamPage = (pending: number, stage: 'goal-review' | 'manager-eval' = 'goal-review'): TeamTaskPage => ({
   total: pending,
   page: 1,
   pageSize: 1,
-  items: [],
+  items: pending > 0
+    ? [teamTaskItem({
+      id: `${stage}-task-1`,
+      status: stage === 'goal-review' ? 'indicator_reviewing' : 'manager_scoring',
+    })]
+    : [],
   counts: { all: pending, notStarted: 0, pending, completed: 0, exempted: 0 },
   facets: { departments: [], employees: [] },
 });
@@ -88,18 +140,16 @@ test.describe('11-navigation-entrypoints navigation active state', () => {
 test.describe('11-navigation-entrypoints dashboard task entry points', () => {
   test.use({ storageState: 'e2e/auth-state/employee.json' });
 
-  test('employee opens the latest active personal task from the dashboard', async ({ page }) => {
+  test('employee skips newer terminal tasks and opens the latest active personal task', async ({ page }) => {
+    const items = [
+      taskItem({ id: 'task-confirmed', cycleId: 'cycle-3', cycleName: '2026 Q4', status: 'confirmed' }),
+      taskItem({ id: 'task-active', cycleId: 'cycle-2', cycleName: '2026 Q3', status: 'indicator_confirming' }),
+      taskItem({ id: 'task-closed', cycleId: 'cycle-1', cycleName: '2026 Q2', status: 'closed' }),
+      taskItem({ id: 'task-exempted', cycleId: 'cycle-0', cycleName: '2026 Q1', status: 'exempted', isExempt: true }),
+    ];
     await page.route('**/api/v1/tasks/mine**', (route) => route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse({
-        total: 2,
-        page: 1,
-        pageSize: 20,
-        items: [
-          { id: 'task-1', cycleId: 'cycle-1', cycleName: '2026 Q3', employeeId: 'employee-1', status: 'indicator_confirming', isExempt: false },
-          { id: 'task-closed', cycleId: 'cycle-0', cycleName: '2026 Q2', employeeId: 'employee-1', status: 'closed', isExempt: false },
-        ],
-      })),
+      body: JSON.stringify(apiResponse(taskPage(items))),
     }));
 
     const dashboard = new DashboardPage(page);
@@ -107,7 +157,9 @@ test.describe('11-navigation-entrypoints dashboard task entry points', () => {
 
     await expect(dashboard.currentEmployeeTask()).toContainText('目标确认');
     await dashboard.currentEmployeeTaskOpen().click();
-    await expect(page).toHaveURL(/\/tasks\/task-1\?returnTo=/);
+    const destination = new URL(page.url());
+    expect(destination.pathname).toBe('/tasks/task-active');
+    expect([...destination.searchParams.entries()]).toEqual([['returnTo', '/tasks']]);
   });
 });
 
@@ -117,13 +169,13 @@ test.describe('11-navigation-entrypoints manager dashboard task entry points', (
   test('manager sees true pending counts and opens the matching team workspace', async ({ page }) => {
     await page.route('**/api/v1/tasks/mine**', (route) => route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
+      body: JSON.stringify(apiResponse(taskPage([]))),
     }));
     await page.route('**/api/v1/tasks/team**', (route) => {
       const stage = new URL(route.request().url()).searchParams.get('stage');
       return route.fulfill({
         contentType: 'application/json',
-        body: JSON.stringify(apiResponse(emptyTeamPage(stage === 'goal-review' ? 3 : 2))),
+        body: JSON.stringify(apiResponse(teamPage(stage === 'goal-review' ? 3 : 2, stage === 'manager-eval' ? 'manager-eval' : 'goal-review'))),
       });
     });
     await page.route('**/api/v1/cycles**', (route) => route.fulfill({
@@ -137,17 +189,117 @@ test.describe('11-navigation-entrypoints manager dashboard task entry points', (
     await expect(dashboard.managerGoalReviewCount()).toHaveText('3');
     await expect(dashboard.managerEvaluationCount()).toHaveText('2');
     await dashboard.managerGoalReviewOpen().click();
-    await expect(page).toHaveURL(/\/tasks\?scope=team&stage=goal-review/);
+    const destination = new URL(page.url());
+    expect(destination.pathname).toBe('/tasks');
+    expect([...destination.searchParams.entries()]).toEqual([
+      ['scope', 'team'],
+      ['stage', 'goal-review'],
+    ]);
+  });
+
+  test('each manager task request settles independently when another request is slow or fails', async ({ page }) => {
+    let releaseManagerEvaluation!: () => void;
+    const managerEvaluationGate = new Promise<void>((resolve) => {
+      releaseManagerEvaluation = resolve;
+    });
+    await page.route('**/api/v1/tasks/mine**', (route) => route.fulfill({ status: 500 }));
+    await page.route('**/api/v1/tasks/team**', async (route) => {
+      const stage = new URL(route.request().url()).searchParams.get('stage');
+      if (stage === 'manager-eval') await managerEvaluationGate;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPage(stage === 'goal-review' ? 4 : 2, stage === 'manager-eval' ? 'manager-eval' : 'goal-review'))),
+      });
+    });
+    await page.route('**/api/v1/cycles**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 50, items: [] })),
+    }));
+
+    const dashboard = new DashboardPage(page);
+    await dashboard.goto();
+
+    await expect(dashboard.managerGoalReviewCount()).toHaveText('4', { timeout: 1_500 });
+    await expect(dashboard.managerPersonalTask()).toHaveAttribute('data-state', 'error');
+    await expect(dashboard.managerEvaluationCard()).toHaveAttribute('aria-busy', 'true');
+    await expect(dashboard.managerEvaluationCount()).toHaveCount(0);
+
+    releaseManagerEvaluation();
+    await expect(dashboard.managerEvaluationCount()).toHaveText('2');
+  });
+
+  test('role identity changes ignore late responses from the previous request generation', async ({ page }) => {
+    let releaseFirstGeneration!: () => void;
+    const firstGenerationGate = new Promise<void>((resolve) => {
+      releaseFirstGeneration = resolve;
+    });
+    let personalCalls = 0;
+    const teamCalls: Record<string, number> = { 'goal-review': 0, 'manager-eval': 0 };
+
+    await page.route('**/api/v1/tasks/mine**', async (route) => {
+      personalCalls += 1;
+      const firstGeneration = personalCalls === 1;
+      if (firstGeneration) await firstGenerationGate;
+      const item = taskItem({
+        id: firstGeneration ? 'task-old' : 'task-new',
+        cycleName: firstGeneration ? 'Old cycle' : 'New cycle',
+        status: 'self_eval',
+      });
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(taskPage([item]))),
+      });
+    });
+    await page.route('**/api/v1/tasks/team**', async (route) => {
+      const stage = new URL(route.request().url()).searchParams.get('stage') as 'goal-review' | 'manager-eval';
+      teamCalls[stage] += 1;
+      const firstGeneration = teamCalls[stage] === 1;
+      if (firstGeneration) await firstGenerationGate;
+      const pending = firstGeneration ? (stage === 'goal-review' ? 1 : 2) : (stage === 'goal-review' ? 22 : 33);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPage(pending, stage))),
+      });
+    });
+    await page.route('**/api/v1/cycles**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 50, items: [] })),
+    }));
+
+    const dashboard = new DashboardPage(page);
+    await dashboard.goto();
+    await expect.poll(() => personalCalls).toBe(1);
+    await expect.poll(() => teamCalls['goal-review']).toBe(1);
+    await expect.poll(() => teamCalls['manager-eval']).toBe(1);
+
+    await page.evaluate(async () => {
+      const storeModulePath = '/src/stores/auth.store.ts';
+      const { useAuthStore } = await import(storeModulePath);
+      const store = useAuthStore();
+      if (!store.user) throw new Error('Expected a loaded manager identity');
+      store.user = { ...store.user, id: 'manager-second-generation' };
+    });
+
+    await expect(dashboard.managerPersonalTask()).toContainText('New cycle');
+    await expect(dashboard.managerGoalReviewCount()).toHaveText('22');
+    await expect(dashboard.managerEvaluationCount()).toHaveText('33');
+
+    const oldPersonalResponse = page.waitForResponse((response) => response.url().includes('/api/v1/tasks/mine'));
+    releaseFirstGeneration();
+    await oldPersonalResponse;
+    await expect(dashboard.managerPersonalTask()).toContainText('New cycle');
+    await expect(dashboard.managerGoalReviewCount()).toHaveText('22');
+    await expect(dashboard.managerEvaluationCount()).toHaveText('33');
   });
 
   test('management rows expose a detail command only for real task ids', async ({ page }) => {
     await page.route('**/api/v1/tasks/mine**', (route) => route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
+      body: JSON.stringify(apiResponse(taskPage([]))),
     }));
     await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse(emptyTeamPage(0))),
+      body: JSON.stringify(apiResponse(teamPage(0))),
     }));
     await page.route('**/api/v1/cycles**', (route) => route.fulfill({
       contentType: 'application/json',
@@ -175,7 +327,9 @@ test.describe('11-navigation-entrypoints manager dashboard task entry points', (
     await expect(dashboard.managementTaskOpen('task-7')).toBeVisible();
     await expect(page.getByTestId('dashboard-task-open-undefined')).toHaveCount(0);
     await dashboard.managementTaskOpen('task-7').click();
-    await expect(page).toHaveURL(/\/tasks\/task-7\?returnTo=/);
+    const destination = new URL(page.url());
+    expect(destination.pathname).toBe('/tasks/task-7');
+    expect([...destination.searchParams.entries()]).toEqual([['returnTo', '/tasks']]);
   });
 });
 
@@ -206,16 +360,13 @@ test.describe('11-navigation-entrypoints dashboard task layout', () => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.route('**/api/v1/tasks/mine**', (route) => route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse({
-        total: 1,
-        page: 1,
-        pageSize: 20,
-        items: [{ id: 'task-1', cycleId: 'cycle-1', cycleName: '2026 Q3', employeeId: 'manager-1', status: 'self_eval', isExempt: false }],
-      })),
+      body: JSON.stringify(apiResponse(taskPage([
+        taskItem({ id: 'task-1', cycleId: 'cycle-1', cycleName: '2026 Q3', employeeId: 'manager-1', status: 'self_eval' }),
+      ]))),
     }));
     await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse(emptyTeamPage(12))),
+      body: JSON.stringify(apiResponse(teamPage(12))),
     }));
     await page.route('**/api/v1/cycles**', (route) => route.fulfill({
       contentType: 'application/json',

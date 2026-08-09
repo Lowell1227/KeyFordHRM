@@ -12,7 +12,11 @@ import EmptyState from '@/components/common/EmptyState.vue';
 import DonutScoreChart from '@/components/charts/DonutScoreChart.vue';
 import DeptResultChart from '@/components/charts/DeptResultChart.vue';
 import { getGradeLabel, getGradeStyle } from '@/utils/grade';
-import { TASK_STATUS_STAGE, type TaskStageKey } from '@/views/task/task-stage';
+import {
+  isTerminalTaskStatus,
+  TASK_STATUS_STAGE,
+  type TaskStageKey,
+} from '@/views/task/task-stage';
 import type { AssessmentCycle, ReportSummary, TaskListItem } from '@/types/api.types';
 import type { PerfGrade, TeamTaskStage } from '@/types/enums';
 
@@ -83,7 +87,7 @@ const personalTaskStageLabel = computed(() => {
 });
 
 function latestOpenTask(items: TaskListItem[]): TaskListItem | null {
-  return items.find((task) => !['closed', 'exempted'].includes(task.status)) ?? null;
+  return items.find((task) => !isTerminalTaskStatus(task.status)) ?? null;
 }
 
 function resetTaskEntries() {
@@ -93,7 +97,41 @@ function resetTaskEntries() {
   teamErrors.value = { 'goal-review': false, 'manager-eval': false };
 }
 
-async function loadTaskEntries() {
+function isCurrentTaskEntryRequest(requestId: number): boolean {
+  return requestId === taskEntryRequestSerial;
+}
+
+async function loadPersonalTask(requestId: number) {
+  try {
+    const response = await tasksApi.findMine({ page: 1, pageSize: 20 });
+    if (!isCurrentTaskEntryRequest(requestId)) return;
+    personalTask.value = latestOpenTask(response.items);
+  } catch {
+    if (!isCurrentTaskEntryRequest(requestId)) return;
+    personalTaskError.value = true;
+  } finally {
+    if (isCurrentTaskEntryRequest(requestId)) {
+      personalTaskLoading.value = false;
+    }
+  }
+}
+
+async function loadTeamTaskCount(requestId: number, stage: TeamTaskStage) {
+  try {
+    const response = await tasksApi.findTeam({ page: 1, pageSize: 1, stage });
+    if (!isCurrentTaskEntryRequest(requestId)) return;
+    teamPending.value = { ...teamPending.value, [stage]: response.counts.pending };
+  } catch {
+    if (!isCurrentTaskEntryRequest(requestId)) return;
+    teamErrors.value = { ...teamErrors.value, [stage]: true };
+  } finally {
+    if (isCurrentTaskEntryRequest(requestId)) {
+      teamLoading.value = { ...teamLoading.value, [stage]: false };
+    }
+  }
+}
+
+function loadTaskEntries() {
   const requestId = ++taskEntryRequestSerial;
   const loadPersonal = isEmployee.value || isDirectManager.value;
   const loadTeam = isDirectManager.value;
@@ -101,54 +139,15 @@ async function loadTaskEntries() {
   personalTaskLoading.value = loadPersonal;
   teamLoading.value = { 'goal-review': loadTeam, 'manager-eval': loadTeam };
 
-  const personalResultPromise = loadPersonal
-    ? tasksApi.findMine({ page: 1, pageSize: 20 })
-      .then((value) => ({ value, failed: false }))
-      .catch(() => ({ value: null, failed: true }))
-    : Promise.resolve(null);
-  const goalReviewResultPromise = loadTeam
-    ? tasksApi.findTeam({ page: 1, pageSize: 1, stage: 'goal-review' })
-      .then((value) => ({ value, failed: false }))
-      .catch(() => ({ value: null, failed: true }))
-    : Promise.resolve(null);
-  const managerEvaluationResultPromise = loadTeam
-    ? tasksApi.findTeam({ page: 1, pageSize: 1, stage: 'manager-eval' })
-      .then((value) => ({ value, failed: false }))
-      .catch(() => ({ value: null, failed: true }))
-    : Promise.resolve(null);
-
-  const [personalResult, goalReviewResult, managerEvaluationResult] = await Promise.all([
-    personalResultPromise,
-    goalReviewResultPromise,
-    managerEvaluationResultPromise,
-  ]);
-  if (requestId !== taskEntryRequestSerial) return;
-
-  if (personalResult) {
+  if (loadPersonal) {
+    void loadPersonalTask(requestId);
+  } else {
     personalTaskLoading.value = false;
-    if (!personalResult.failed && personalResult.value) {
-      personalTask.value = latestOpenTask(personalResult.value.items);
-    } else {
-      personalTaskError.value = true;
-    }
   }
 
-  if (goalReviewResult) {
-    teamLoading.value = { ...teamLoading.value, 'goal-review': false };
-    if (!goalReviewResult.failed && goalReviewResult.value) {
-      teamPending.value = { ...teamPending.value, 'goal-review': goalReviewResult.value.counts.pending };
-    } else {
-      teamErrors.value = { ...teamErrors.value, 'goal-review': true };
-    }
-  }
-
-  if (managerEvaluationResult) {
-    teamLoading.value = { ...teamLoading.value, 'manager-eval': false };
-    if (!managerEvaluationResult.failed && managerEvaluationResult.value) {
-      teamPending.value = { ...teamPending.value, 'manager-eval': managerEvaluationResult.value.counts.pending };
-    } else {
-      teamErrors.value = { ...teamErrors.value, 'manager-eval': true };
-    }
+  if (loadTeam) {
+    void loadTeamTaskCount(requestId, 'goal-review');
+    void loadTeamTaskCount(requestId, 'manager-eval');
   }
 }
 
@@ -312,7 +311,7 @@ watch(
 watch(
   [userRole, userId],
   () => {
-    void loadTaskEntries();
+    loadTaskEntries();
   },
   { immediate: true },
 );
@@ -363,7 +362,12 @@ function avatarColor(name: string): string {
     <template v-else>
       <div v-loading="dashboardLoading" class="dashboard-admin">
       <section v-if="isDirectManager" class="manager-task-entry" aria-label="团队绩效待办">
-        <article class="task-entry-card task-entry-card--personal">
+        <article
+          class="task-entry-card task-entry-card--personal"
+          data-testid="manager-personal-task"
+          :data-state="personalTaskLoading ? 'loading' : personalTaskError ? 'error' : personalTask ? 'ready' : 'empty'"
+          :aria-busy="personalTaskLoading"
+        >
           <template v-if="personalTaskLoading">
             <el-skeleton :rows="2" animated />
           </template>
@@ -381,7 +385,12 @@ function avatarColor(name: string): string {
           <div v-else class="task-entry-card__empty">当前没有个人绩效任务</div>
         </article>
 
-        <article class="task-entry-card">
+        <article
+          class="task-entry-card"
+          data-testid="manager-goal-review-card"
+          :data-state="teamLoading['goal-review'] ? 'loading' : teamErrors['goal-review'] ? 'error' : 'ready'"
+          :aria-busy="teamLoading['goal-review']"
+        >
           <template v-if="teamLoading['goal-review']">
             <el-skeleton :rows="2" animated />
           </template>
@@ -398,7 +407,12 @@ function avatarColor(name: string): string {
           </template>
         </article>
 
-        <article class="task-entry-card">
+        <article
+          class="task-entry-card"
+          data-testid="manager-evaluation-card"
+          :data-state="teamLoading['manager-eval'] ? 'loading' : teamErrors['manager-eval'] ? 'error' : 'ready'"
+          :aria-busy="teamLoading['manager-eval']"
+        >
           <template v-if="teamLoading['manager-eval']">
             <el-skeleton :rows="2" animated />
           </template>

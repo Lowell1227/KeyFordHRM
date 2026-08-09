@@ -1,4 +1,4 @@
-import { Page, Locator } from '@playwright/test';
+import type { Page, Locator } from '@playwright/test';
 
 export class DashboardPage {
   readonly sidebar: Locator;
@@ -45,6 +45,18 @@ export class DashboardPage {
 
   managerGoalReviewOpen(): Locator {
     return this.page.getByTestId('manager-goal-review-open');
+  }
+
+  managerPersonalTask(): Locator {
+    return this.page.getByTestId('manager-personal-task');
+  }
+
+  managerGoalReviewCard(): Locator {
+    return this.page.getByTestId('manager-goal-review-card');
+  }
+
+  managerEvaluationCard(): Locator {
+    return this.page.getByTestId('manager-evaluation-card');
   }
 
   managerEvaluationCount(): Locator {

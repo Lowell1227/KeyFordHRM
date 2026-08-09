@@ -2142,7 +2142,7 @@ test.describe('manager scoring compatibility redirect', () => {
     expect(url.searchParams.get('taskId')).toBe('task-2');
     expect(url.searchParams.get('stageState')).toBe('pending');
     await expect(
-      page.locator('.app-sidebar .menu-link').filter({ hasText: '团队绩效' }),
+      page.locator('.app-sidebar .menu-link').filter({ hasText: '绩效工作台' }),
     ).toHaveClass(/is-active/);
   });
 });

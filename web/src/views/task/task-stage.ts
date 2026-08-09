@@ -21,7 +21,7 @@ export const TASK_STATUS_STAGE: Record<TaskStatus, TaskStageKey> = {
   exempted: 'result',
 };
 
-const completedStatuses = new Set<TaskStatus>(['confirmed', 'closed', 'exempted']);
+const terminalTaskStatuses = new Set<TaskStatus>(['confirmed', 'closed', 'exempted']);
 const actionableStatuses = new Set<TaskStatus>([
   'indicator_drafting',
   'indicator_confirming',
@@ -30,11 +30,15 @@ const actionableStatuses = new Set<TaskStatus>([
   'appealing',
 ]);
 
+export function isTerminalTaskStatus(status: TaskStatus): boolean {
+  return terminalTaskStatuses.has(status);
+}
+
 export function getTaskStageState(statuses: TaskStatus[]): TaskStageState {
   if (statuses.length === 0 || statuses.every((status) => status === 'pending')) {
     return 'not-started';
   }
-  if (statuses.every((status) => completedStatuses.has(status))) return 'completed';
+  if (statuses.every(isTerminalTaskStatus)) return 'completed';
   if (statuses.some((status) => actionableStatuses.has(status))) return 'pending';
   return 'progress';
 }
