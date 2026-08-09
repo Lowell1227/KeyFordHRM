@@ -17,8 +17,7 @@ const E2E_PASSWORD = "000000";
 const E2E_CYCLE_PREFIX = "E2E-acceptance-";
 const E2E_TEMPLATE_PREFIX = "E2E-template-";
 const E2E_TEMPLATE_MARKER = "E2E_FIXTURE: manager team workspace acceptance";
-const E2E_ACTIONABLE_NOTIFICATION_ID =
-  "00000000-0000-4000-8000-000000000411";
+const E2E_ACTIONABLE_NOTIFICATION_ID = "00000000-0000-4000-8000-000000000411";
 
 const ROOT_DEPARTMENT = {
   dingtalkDeptId: "E2E_DEPT_ROOT",
@@ -224,6 +223,17 @@ async function main() {
     rootDept.id,
     passwordHash,
   );
+  await ensureUser(
+    {
+      employeeNo: "E2E_CHAIRMAN",
+      name: "E2E 董事长",
+      sysRole: SysRole.chairman,
+      position: "E2E_CHAIRMAN",
+      canViewAll: true,
+    },
+    rootDept.id,
+    passwordHash,
+  );
   const approver = await ensureUser(
     {
       employeeNo: "E2E_APPROVER",
@@ -406,7 +416,7 @@ async function main() {
 
   console.log("✓ E2E acceptance fixtures created");
   console.log(
-    "  E2E_ADMIN / E2E_HR / E2E_MGR / E2E_EMP / E2E_VP / E2E_APPROVER; password 000000",
+    "  E2E_ADMIN / E2E_HR / E2E_MGR / E2E_EMP / E2E_VP / E2E_CHAIRMAN / E2E_APPROVER; password 000000",
   );
 }
 

@@ -1,14 +1,18 @@
-import { chromium, type FullConfig } from '@playwright/test';
-import { execFileSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
-import { mkdir } from 'node:fs/promises';
-import path from 'node:path';
-import { ACCEPTANCE_ACCOUNTS, ACCEPTANCE_PASSWORD } from './fixtures/acceptance-accounts';
+import { chromium, type FullConfig } from "@playwright/test";
+import { execFileSync } from "node:child_process";
+import { existsSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import path from "node:path";
+import {
+  ACCEPTANCE_ACCOUNTS,
+  ACCEPTANCE_PASSWORD,
+} from "./fixtures/acceptance-accounts";
 
-const API_BASE = process.env.PLAYWRIGHT_API_BASE_URL || 'http://localhost:3000/api/v1';
-const WEB_BASE = process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173';
-const PREPARE_ACCEPTANCE_DATA = !['0', 'false'].includes(
-  (process.env.PLAYWRIGHT_PREPARE_ACCEPTANCE_DATA || '').toLowerCase(),
+const API_BASE =
+  process.env.PLAYWRIGHT_API_BASE_URL || "http://localhost:3000/api/v1";
+const WEB_BASE = process.env.PLAYWRIGHT_BASE_URL || "http://localhost:5173";
+const PREPARE_ACCEPTANCE_DATA = !["0", "false"].includes(
+  (process.env.PLAYWRIGHT_PREPARE_ACCEPTANCE_DATA || "").toLowerCase(),
 );
 
 interface Role {
@@ -18,11 +22,36 @@ interface Role {
 }
 
 const ROLES: Role[] = [
-  { name: 'admin', employeeNo: ACCEPTANCE_ACCOUNTS.admin, password: ACCEPTANCE_PASSWORD },
-  { name: 'hr', employeeNo: ACCEPTANCE_ACCOUNTS.hr, password: ACCEPTANCE_PASSWORD },
-  { name: 'employee', employeeNo: ACCEPTANCE_ACCOUNTS.employee, password: ACCEPTANCE_PASSWORD },
-  { name: 'manager', employeeNo: ACCEPTANCE_ACCOUNTS.manager, password: ACCEPTANCE_PASSWORD },
-  { name: 'approver', employeeNo: ACCEPTANCE_ACCOUNTS.vp, password: ACCEPTANCE_PASSWORD },
+  {
+    name: "admin",
+    employeeNo: ACCEPTANCE_ACCOUNTS.admin,
+    password: ACCEPTANCE_PASSWORD,
+  },
+  {
+    name: "hr",
+    employeeNo: ACCEPTANCE_ACCOUNTS.hr,
+    password: ACCEPTANCE_PASSWORD,
+  },
+  {
+    name: "employee",
+    employeeNo: ACCEPTANCE_ACCOUNTS.employee,
+    password: ACCEPTANCE_PASSWORD,
+  },
+  {
+    name: "manager",
+    employeeNo: ACCEPTANCE_ACCOUNTS.manager,
+    password: ACCEPTANCE_PASSWORD,
+  },
+  {
+    name: "approver",
+    employeeNo: ACCEPTANCE_ACCOUNTS.vp,
+    password: ACCEPTANCE_PASSWORD,
+  },
+  {
+    name: "chairman",
+    employeeNo: ACCEPTANCE_ACCOUNTS.chairman,
+    password: ACCEPTANCE_PASSWORD,
+  },
 ];
 
 async function loginAndSaveState(role: Role) {
@@ -30,7 +59,7 @@ async function loginAndSaveState(role: Role) {
   const context = await browser.newContext();
   const page = await context.newPage();
 
-  await page.goto(new URL('/login', WEB_BASE).toString());
+  await page.goto(new URL("/login", WEB_BASE).toString());
   await page.locator('[data-testid="login-employee-no"]').fill(role.employeeNo);
   await page.locator('[data-testid="login-password"]').fill(role.password);
   await page.locator('[data-testid="login-submit"]').click();
@@ -42,40 +71,48 @@ async function loginAndSaveState(role: Role) {
 
 function isLoopbackUrl(value: string) {
   const hostname = new URL(value).hostname.toLowerCase();
-  return ['localhost', '127.0.0.1', '::1', '[::1]'].includes(hostname);
+  return ["localhost", "127.0.0.1", "::1", "[::1]"].includes(hostname);
 }
 
 function findRepoRoot() {
-  const candidates = [path.resolve(process.cwd(), '..'), process.cwd()];
-  const repoRoot = candidates.find((candidate) => existsSync(path.join(candidate, 'docker-compose.yml')));
-  if (!repoRoot) throw new Error('Playwright setup could not locate docker-compose.yml');
+  const candidates = [path.resolve(process.cwd(), ".."), process.cwd()];
+  const repoRoot = candidates.find((candidate) =>
+    existsSync(path.join(candidate, "docker-compose.yml")),
+  );
+  if (!repoRoot)
+    throw new Error("Playwright setup could not locate docker-compose.yml");
   return repoRoot;
 }
 
 function prepareAcceptanceData() {
   if (!PREPARE_ACCEPTANCE_DATA) {
-    console.log('[playwright setup] acceptance data preparation disabled');
+    console.log("[playwright setup] acceptance data preparation disabled");
     return;
   }
-  if (process.env.NODE_ENV === 'production') {
-    throw new Error('Playwright acceptance data preparation is disabled in production');
+  if (process.env.NODE_ENV === "production") {
+    throw new Error(
+      "Playwright acceptance data preparation is disabled in production",
+    );
   }
-  const allowRemote = process.env.PLAYWRIGHT_ALLOW_REMOTE_DATA_SETUP === '1';
+  const allowRemote = process.env.PLAYWRIGHT_ALLOW_REMOTE_DATA_SETUP === "1";
   if ((!isLoopbackUrl(API_BASE) || !isLoopbackUrl(WEB_BASE)) && !allowRemote) {
-    throw new Error('Refusing to prepare acceptance data for non-local URLs without PLAYWRIGHT_ALLOW_REMOTE_DATA_SETUP=1');
+    throw new Error(
+      "Refusing to prepare acceptance data for non-local URLs without PLAYWRIGHT_ALLOW_REMOTE_DATA_SETUP=1",
+    );
   }
 
   const repoRoot = findRepoRoot();
-  const runInApi = (args: string[]) => execFileSync(
-    'docker',
-    ['compose', 'exec', '-T', 'api', ...args],
-    { cwd: repoRoot, env: process.env, stdio: 'inherit' },
-  );
+  const runInApi = (args: string[]) =>
+    execFileSync("docker", ["compose", "exec", "-T", "api", ...args], {
+      cwd: repoRoot,
+      env: process.env,
+      stdio: "inherit",
+    });
 
-  console.log('[playwright setup] applying API migrations');
-  runInApi(['npx', 'prisma', 'migrate', 'deploy']);
-  console.log('[playwright setup] seeding idempotent E2E acceptance data');
-  runInApi(['npx', 'ts-node', 'prisma/seed-test-data.ts']);
+  console.log("[playwright setup] applying API migrations");
+  runInApi(["npx", "prisma", "migrate", "deploy"]);
+  console.log("[playwright setup] seeding idempotent E2E acceptance data");
+  runInApi(["npx", "ts-node", "prisma/seed-test-data.ts"]);
 }
 
 async function waitForApiHealth() {
@@ -92,7 +129,7 @@ async function waitForApiHealth() {
 }
 
 export default async function globalSetup(_config: FullConfig) {
-  await mkdir('e2e/auth-state', { recursive: true });
+  await mkdir("e2e/auth-state", { recursive: true });
   prepareAcceptanceData();
   await waitForApiHealth();
 

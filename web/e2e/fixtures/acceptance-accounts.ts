@@ -8,5 +8,6 @@ export const ACCEPTANCE_ACCOUNTS = {
   employee: "E2E_EMP",
   employeeB: "E2E_EMP_B",
   vp: "E2E_VP",
+  chairman: "E2E_CHAIRMAN",
   approver: "E2E_APPROVER",
 } as const;
