@@ -1,6 +1,7 @@
 import { test, expect } from '@playwright/test';
 import { buildNavigation } from '../../src/router/navigation';
 import { isPerformanceWorkspacePath } from '../../src/router/performance-workspace';
+import { navigateNotificationTarget, resolveNotificationTarget } from '../../src/components/layout/notification-target';
 import { routes } from '../../src/router/routes';
 import { DashboardPage } from '../page-objects/dashboard.page';
 import type {
@@ -8,6 +9,7 @@ import type {
   TaskListItem,
   TeamTaskListItem,
   TeamTaskPage,
+  Notification,
 } from '../../src/types/api.types';
 
 const apiResponse = (data: unknown) => ({
@@ -70,6 +72,19 @@ const teamPage = (pending: number, stage: 'goal-review' | 'manager-eval' = 'goal
     : [],
   counts: { all: pending, notStarted: 0, pending, completed: 0, exempted: 0 },
   facets: { departments: [], employees: [] },
+});
+
+const notificationItem = (overrides: Partial<Notification> = {}): Notification => ({
+  id: 'notification-default',
+  userId: 'manager-1',
+  taskId: 'task-default',
+  type: 'task_reminder',
+  title: 'Performance task',
+  content: 'Please review the task',
+  channel: 'in_app',
+  status: 'pending',
+  createdAt: '2026-08-01T00:00:00.000Z',
+  ...overrides,
 });
 
 test.describe('11-navigation-entrypoints navigation tree', () => {
@@ -474,5 +489,194 @@ test.describe('11-navigation-entrypoints non-workspace header', () => {
 
     await expect(page.getByTestId('app-route-title')).toHaveText('报表分析');
     await expect(page.getByTestId('app-route-title')).toHaveCount(1);
+  });
+});
+
+test.describe('11-navigation-entrypoints notification task links', () => {
+  test('resolves supervisor notifications only for direct-manager workspace roles', () => {
+    expect(resolveNotificationTarget(
+      notificationItem({ id: 'indicator', taskId: 'task-1', type: 'indicator_setting_notice' }),
+      'manager',
+    )).toEqual({
+      path: '/tasks',
+      query: { scope: 'team', stage: 'goal-review', taskId: 'task-1' },
+    });
+    expect(resolveNotificationTarget(
+      notificationItem({ id: 'self-eval', taskId: 'task-2', type: 'self_eval_submitted' }),
+      'dept_head',
+    )).toEqual({
+      path: '/tasks',
+      query: { scope: 'team', stage: 'manager-eval', taskId: 'task-2' },
+    });
+    expect(resolveNotificationTarget(
+      notificationItem({ id: 'hr-indicator', taskId: 'task-3', type: 'indicator_setting_notice' }),
+      'hr',
+    )).toEqual({ name: 'TaskDetail', params: { id: 'task-3' } });
+  });
+
+  test('returns no command when a notification has no task', () => {
+    expect(resolveNotificationTarget(notificationItem({ taskId: undefined }), 'manager')).toBeNull();
+  });
+
+  test.use({ storageState: 'e2e/auth-state/manager.json' });
+
+  test('marks an unread notification then opens the matching goal review workspace', async ({ page }) => {
+    let marked = 0;
+    await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ count: 1 })),
+    }));
+    await page.route('**/api/v1/notifications?**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 10, items: [
+        notificationItem({ id: 'notification-goal', taskId: 'task-goal', type: 'indicator_setting_notice' }),
+      ] })),
+    }));
+    await page.route('**/api/v1/notifications/notification-goal/read', (route) => {
+      marked += 1;
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ id: 'notification-goal' })) });
+    });
+
+    await page.goto('/tasks');
+    await page.getByTestId('app-notifications').click();
+    const row = page.getByTestId('notification-item-notification-goal');
+    await expect(row).toHaveAttribute('role', 'button');
+    await row.click();
+
+    expect(marked).toBe(1);
+    const destination = new URL(page.url());
+    expect(destination.pathname).toBe('/tasks');
+    expect([...destination.searchParams.entries()]).toEqual([
+      ['scope', 'team'],
+      ['stage', 'goal-review'],
+      ['taskId', 'task-goal'],
+    ]);
+    await expect(row).toBeHidden();
+  });
+
+  test('continues navigation after an unread-mark failure and ignores duplicate activation', async ({ page }) => {
+    let markAttempts = 0;
+    let releaseRead!: () => void;
+    const readGate = new Promise<void>((resolve) => {
+      releaseRead = resolve;
+    });
+    await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ count: 1 })),
+    }));
+    await page.route('**/api/v1/notifications?**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 10, items: [
+        notificationItem({ id: 'notification-evaluation', taskId: 'task-evaluation', type: 'self_eval_submitted' }),
+      ] })),
+    }));
+    await page.route('**/api/v1/notifications/notification-evaluation/read', async (route) => {
+      markAttempts += 1;
+      await readGate;
+      await route.fulfill({ status: 500, body: 'read failed' });
+    });
+
+    await page.goto('/tasks');
+    await page.getByTestId('app-notifications').click();
+    const row = page.getByTestId('notification-item-notification-evaluation');
+    await row.click();
+    await row.press('Enter');
+    expect(markAttempts).toBe(1);
+
+    releaseRead();
+    await expect(page.locator('.el-message--warning')).toContainText('仍将继续跳转');
+    const destination = new URL(page.url());
+    expect(destination.pathname).toBe('/tasks');
+    expect([...destination.searchParams.entries()]).toEqual([
+      ['scope', 'team'],
+      ['stage', 'manager-eval'],
+      ['taskId', 'task-evaluation'],
+    ]);
+  });
+
+  test('keeps notifications without a task non-actionable', async ({ page }) => {
+    await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ count: 1 })),
+    }));
+    await page.route('**/api/v1/notifications?**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 10, items: [
+        notificationItem({ id: 'notification-info', taskId: undefined, type: 'system_notice' }),
+      ] })),
+    }));
+
+    await page.goto('/tasks');
+    await page.getByTestId('app-notifications').click();
+    const row = page.getByTestId('notification-item-notification-info');
+    await expect(row).not.toHaveAttribute('role');
+    await expect(row).not.toHaveAttribute('tabindex');
+    await row.click({ force: true });
+    expect(new URL(page.url()).pathname).toBe('/tasks');
+  });
+
+  test('supports Space activation for a readable task notification', async ({ page }) => {
+    let markAttempts = 0;
+    await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ count: 0 })),
+    }));
+    await page.route('**/api/v1/notifications?**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 10, items: [
+        notificationItem({ id: 'notification-detail', taskId: 'task-detail', type: 'result_published', status: 'sent' }),
+      ] })),
+    }));
+    await page.route('**/api/v1/notifications/notification-detail/read', (route) => {
+      markAttempts += 1;
+      return route.fulfill({ status: 500 });
+    });
+
+    await page.goto('/tasks');
+    await page.getByTestId('app-notifications').click();
+    const row = page.getByTestId('notification-item-notification-detail');
+    await row.press('Space');
+
+    expect(markAttempts).toBe(0);
+    await expect(page).toHaveURL(/\/tasks\/task-detail$/);
+  });
+
+  test('reports a rejected router call as a failed notification navigation', async () => {
+    const target = resolveNotificationTarget(notificationItem({ taskId: 'task-error' }), 'employee');
+    expect(target).not.toBeNull();
+    if (!target) return;
+
+    await expect(navigateNotificationTarget(target, () => Promise.reject(new Error('route failed')))).resolves.toBe(false);
+  });
+
+  test('keeps the notification popover inside a 390px viewport', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ count: 1 })),
+    }));
+    await page.route('**/api/v1/notifications?**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 10, items: [
+        notificationItem({ id: 'notification-mobile', taskId: 'task-mobile', type: 'indicator_setting_notice' }),
+      ] })),
+    }));
+
+    await page.goto('/tasks');
+    await page.getByTestId('app-notifications').click();
+    await expect(page.getByTestId('notification-item-notification-mobile')).toBeVisible();
+
+    const layout = await page.evaluate(() => {
+      const popover = document.querySelector('.notification-popover')?.parentElement?.getBoundingClientRect();
+      return {
+        overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+        left: popover?.left,
+        right: popover?.right,
+      };
+    });
+    expect(layout.overflow).toBeLessThanOrEqual(0);
+    expect(layout.left).toBeGreaterThanOrEqual(0);
+    expect(layout.right).toBeLessThanOrEqual(390);
+    await page.screenshot({ path: '../.superpowers/sdd/2026-08-08-navigation-dashboard-notifications/task-4-mobile.png', fullPage: true });
   });
 });

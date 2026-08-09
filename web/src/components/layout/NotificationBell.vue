@@ -1,14 +1,20 @@
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
+import { useRouter } from 'vue-router';
+import { ElMessage } from 'element-plus';
 import { Bell } from '@element-plus/icons-vue';
 import { useNotificationStore } from '@/stores/notification.store';
 import { useAuthStore } from '@/stores/auth.store';
+import { navigateNotificationTarget, resolveNotificationTarget } from './notification-target';
 
 const store = useNotificationStore();
 const auth = useAuthStore();
+const router = useRouter();
 
 const POLL_INTERVAL = 60_000;
 let timer: ReturnType<typeof setInterval> | null = null;
+const popoverVisible = ref(false);
+const processingIds = ref(new Set<string>());
 
 const badgeValue = computed(() => (store.unreadCount > 0 ? store.unreadCount : undefined));
 
@@ -73,10 +79,53 @@ function onOpenPopover() {
 function markAllRead() {
   store.markAllAsRead();
 }
+
+function notificationTarget(item: (typeof store.recent)[number]) {
+  const role = auth.user?.sysRole;
+  return role ? resolveNotificationTarget(item, role) : null;
+}
+
+function isProcessing(id: string) {
+  return processingIds.value.has(id);
+}
+
+function setProcessing(id: string, active: boolean) {
+  const next = new Set(processingIds.value);
+  if (active) next.add(id);
+  else next.delete(id);
+  processingIds.value = next;
+}
+
+async function openNotification(item: (typeof store.recent)[number]) {
+  const target = notificationTarget(item);
+  if (!target || isProcessing(item.id)) return;
+
+  setProcessing(item.id, true);
+  try {
+    if (item.status !== 'sent') {
+      try {
+        await store.markAsRead(item.id);
+      } catch {
+        ElMessage.warning('标记通知已读失败，仍将继续跳转');
+      }
+    }
+
+    const navigationSucceeded = await navigateNotificationTarget(target, (location) => router.push(location));
+    if (!navigationSucceeded) {
+      ElMessage.warning('页面跳转未完成，请稍后重试');
+    }
+  } catch {
+    ElMessage.warning('页面跳转失败，请稍后重试');
+  } finally {
+    popoverVisible.value = false;
+    setProcessing(item.id, false);
+  }
+}
 </script>
 
 <template>
   <el-popover
+    v-model:visible="popoverVisible"
     placement="bottom-end"
     :width="320"
     trigger="click"
@@ -99,16 +148,35 @@ function markAllRead() {
       <el-scrollbar max-height="320px">
         <div v-if="store.loading" class="notification-popover__empty">加载中...</div>
         <template v-else-if="store.recent.length">
-          <div
-            v-for="item in store.recent"
-            :key="item.id"
-            class="notification-popover__item"
-            :class="{ 'is-unread': item.status !== 'sent' }"
-          >
-            <div class="notification-popover__title">{{ item.title }}</div>
-            <div class="notification-popover__content">{{ item.content }}</div>
-            <div class="notification-popover__time">{{ item.createdAt }}</div>
-          </div>
+          <template v-for="item in store.recent" :key="item.id">
+            <button
+              v-if="notificationTarget(item)"
+              type="button"
+              role="button"
+              class="notification-popover__item notification-popover__item--actionable"
+              :class="{ 'is-unread': item.status !== 'sent' }"
+              :data-testid="`notification-item-${item.id}`"
+              :disabled="isProcessing(item.id)"
+              :aria-busy="isProcessing(item.id) || undefined"
+              @click="openNotification(item)"
+              @keydown.enter.prevent="openNotification(item)"
+              @keydown.space.prevent="openNotification(item)"
+            >
+              <div class="notification-popover__title">{{ item.title }}</div>
+              <div class="notification-popover__content">{{ item.content }}</div>
+              <div class="notification-popover__time">{{ item.createdAt }}</div>
+            </button>
+            <div
+              v-else
+              class="notification-popover__item"
+              :class="{ 'is-unread': item.status !== 'sent' }"
+              :data-testid="`notification-item-${item.id}`"
+            >
+              <div class="notification-popover__title">{{ item.title }}</div>
+              <div class="notification-popover__content">{{ item.content }}</div>
+              <div class="notification-popover__time">{{ item.createdAt }}</div>
+            </div>
+          </template>
         </template>
         <div v-else class="notification-popover__empty">暂无新通知</div>
       </el-scrollbar>
@@ -142,14 +210,35 @@ function markAllRead() {
 }
 
 .notification-popover__item {
+  display: block;
+  width: 100%;
   padding: 12px 16px;
   border-bottom: 1px solid var(--el-border-color-lighter);
-  cursor: pointer;
+  border-left: 0;
+  border-right: 0;
+  border-top: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
   transition: background 0.2s;
 }
 
-.notification-popover__item:hover {
+.notification-popover__item--actionable {
+  cursor: pointer;
+}
+
+.notification-popover__item--actionable:hover {
   background: var(--el-fill-color-light);
+}
+
+.notification-popover__item--actionable:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: -2px;
+}
+
+.notification-popover__item--actionable:disabled {
+  cursor: wait;
 }
 
 .notification-popover__item.is-unread {

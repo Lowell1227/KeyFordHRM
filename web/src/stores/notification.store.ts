@@ -36,9 +36,10 @@ export const useNotificationStore = defineStore('notification', {
     },
 
     async markAsRead(id: string) {
+      const item = this.notifications.find((notification) => notification.id === id);
+      if (item?.status === 'sent') return;
       await notificationsApi.markAsRead(id);
       this.unreadCount = Math.max(0, this.unreadCount - 1);
-      const item = this.notifications.find((n) => n.id === id);
       if (item) item.status = 'sent';
     },
 
