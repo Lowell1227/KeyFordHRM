@@ -32,6 +32,18 @@ export interface NotificationInboxItem {
   createdAt: Date;
 }
 
+export interface NotificationReadResult extends NotificationInboxItem {
+  unreadCount: number;
+}
+
+export interface MarkAllNotificationsReadResult {
+  marked: number;
+  readAt: Date;
+  unreadCount: number;
+}
+
+type NotificationInboxClient = Pick<Prisma.TransactionClient, 'notificationLog'>;
+
 /** 催办节点类型 → task 处理人字段映射。 */
 export type TaskReminderNodeType = 'employee' | 'manager' | 'deptHead' | 'approver';
 
@@ -95,37 +107,52 @@ export class NotificationsService {
     return { count };
   }
 
-  async markAsRead(id: string, userId: string): Promise<NotificationInboxItem> {
-    const existing = await this.findOwnedNotification(id, userId);
-    if (!existing) {
-      throw new NotFoundException({
-        code: ERROR_CODE.NOT_FOUND,
-        message: '通知不存在',
-      });
-    }
-    if (existing.isRead) return this.toInboxItem(existing);
+  async markAsRead(id: string, userId: string): Promise<NotificationReadResult> {
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await this.findOwnedNotification(tx, id, userId);
+      if (!existing) {
+        throw new NotFoundException({
+          code: ERROR_CODE.NOT_FOUND,
+          message: '通知不存在',
+        });
+      }
 
-    await this.prisma.notificationLog.updateMany({
-      where: { id, userId, isRead: false },
-      data: { isRead: true, readAt: new Date() },
+      let notification = existing;
+      if (!existing.isRead) {
+        await tx.notificationLog.updateMany({
+          where: { id, userId, isRead: false },
+          data: { isRead: true, readAt: new Date() },
+        });
+
+        const updated = await this.findOwnedNotification(tx, id, userId);
+        if (!updated) {
+          throw new NotFoundException({
+            code: ERROR_CODE.NOT_FOUND,
+            message: '通知不存在',
+          });
+        }
+        notification = updated;
+      }
+
+      const unreadCount = await tx.notificationLog.count({
+        where: { userId, isRead: false },
+      });
+      return { ...this.toInboxItem(notification), unreadCount };
     });
-
-    const updated = await this.findOwnedNotification(id, userId);
-    if (!updated) {
-      throw new NotFoundException({
-        code: ERROR_CODE.NOT_FOUND,
-        message: '通知不存在',
-      });
-    }
-    return this.toInboxItem(updated);
   }
 
-  async markAllAsRead(userId: string): Promise<{ marked: number }> {
-    const result = await this.prisma.notificationLog.updateMany({
-      where: { userId, isRead: false },
-      data: { isRead: true, readAt: new Date() },
+  async markAllAsRead(userId: string): Promise<MarkAllNotificationsReadResult> {
+    return this.prisma.$transaction(async (tx) => {
+      const readAt = new Date();
+      const result = await tx.notificationLog.updateMany({
+        where: { userId, isRead: false },
+        data: { isRead: true, readAt },
+      });
+      const unreadCount = await tx.notificationLog.count({
+        where: { userId, isRead: false },
+      });
+      return { marked: result.count, readAt, unreadCount };
     });
-    return { marked: result.count };
   }
 
   /**
@@ -193,8 +220,8 @@ export class NotificationsService {
     return log.id;
   }
 
-  private findOwnedNotification(id: string, userId: string) {
-    return this.prisma.notificationLog.findFirst({
+  private findOwnedNotification(client: NotificationInboxClient, id: string, userId: string) {
+    return client.notificationLog.findFirst({
       where: { id, userId },
       include: notificationInboxInclude,
     });

@@ -1,5 +1,12 @@
 import http from './http';
-import type { Paginated, Notification, NotificationQuery, UnreadCount } from '@/types/api.types';
+import type {
+  MarkAllNotificationsReadResult,
+  Notification,
+  NotificationQuery,
+  NotificationReadResult,
+  Paginated,
+  UnreadCount,
+} from '@/types/api.types';
 
 function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
   return http.get(url, { params }) as unknown as Promise<T>;
@@ -25,12 +32,12 @@ export const notificationsApi = {
   },
 
   /** PATCH /notifications/:id/read — 标记已读 */
-  markAsRead(id: string): Promise<Notification> {
+  markAsRead(id: string): Promise<NotificationReadResult> {
     return apiPatch(`/notifications/${id}/read`);
   },
 
   /** POST /notifications/read-all — 全部已读 */
-  markAllAsRead(): Promise<{ marked: number }> {
+  markAllAsRead(): Promise<MarkAllNotificationsReadResult> {
     return apiPost('/notifications/read-all');
   },
 };

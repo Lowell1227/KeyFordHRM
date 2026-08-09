@@ -101,6 +101,16 @@ describe('Notification inbox', () => {
       .expect(200);
     expect(initialUnread.body.data).toEqual({ count: 2 });
 
+    const explicitFalse = await app.http
+      .get('/api/v1/notifications?unreadOnly=false&page=1&pageSize=10')
+      .set(authHeader(ownerToken))
+      .expect(200);
+    expect(explicitFalse.body.data.total).toBe(2);
+    await app.http
+      .get('/api/v1/notifications?unreadOnly=garbage&page=1&pageSize=10')
+      .set(authHeader(ownerToken))
+      .expect(400);
+
     const firstRead = await app.http
       .patch(`/api/v1/notifications/${newer.id}/read`)
       .set(authHeader(ownerToken))
@@ -109,6 +119,7 @@ describe('Notification inbox', () => {
       id: newer.id,
       status: 'sent',
       isRead: true,
+      unreadCount: 1,
     });
     expect(firstRead.body.data.readAt).toEqual(expect.any(String));
     const firstReadAt = firstRead.body.data.readAt;
@@ -122,6 +133,7 @@ describe('Notification inbox', () => {
       status: 'sent',
       isRead: true,
       readAt: firstReadAt,
+      unreadCount: 1,
     });
 
     const ownerCannotReadForeign = await app.http
@@ -137,9 +149,17 @@ describe('Notification inbox', () => {
     expect(unreadOnly.body.data.items.map((item: { id: string }) => item.id)).toEqual([older.id]);
 
     const markedAll = await app.http.post('/api/v1/notifications/read-all').set(authHeader(ownerToken)).expect(201);
-    expect(markedAll.body.data).toEqual({ marked: 1 });
+    expect(markedAll.body.data).toEqual({
+      marked: 1,
+      readAt: expect.any(String),
+      unreadCount: 0,
+    });
     const repeatedAll = await app.http.post('/api/v1/notifications/read-all').set(authHeader(ownerToken)).expect(201);
-    expect(repeatedAll.body.data).toEqual({ marked: 0 });
+    expect(repeatedAll.body.data).toEqual({
+      marked: 0,
+      readAt: expect.any(String),
+      unreadCount: 0,
+    });
 
     const finalUnread = await app.http
       .get('/api/v1/notifications/unread-count')
@@ -160,5 +180,54 @@ describe('Notification inbox', () => {
     expect(rows[0].isRead).toBe(true);
     expect(rows[1].isRead).toBe(true);
     expect(rows[2].isRead).toBe(false);
+
+    const indexes = await app.prisma.$queryRaw<Array<{ indexname: string; indexdef: string }>>`
+      SELECT indexname, indexdef
+      FROM pg_indexes
+      WHERE schemaname = 'public'
+        AND tablename = 'notification_logs'
+        AND indexname IN (
+          'notification_logs_inbox_recent_idx',
+          'notification_logs_inbox_unread_idx'
+        )
+      ORDER BY indexname
+    `;
+    expect(indexes).toEqual([
+      expect.objectContaining({
+        indexname: 'notification_logs_inbox_recent_idx',
+        indexdef: expect.stringMatching(/\(user_id, created_at DESC, id DESC\)/),
+      }),
+      expect.objectContaining({
+        indexname: 'notification_logs_inbox_unread_idx',
+        indexdef: expect.stringMatching(/\(user_id, is_read, created_at DESC, id DESC\)/),
+      }),
+    ]);
+
+    await app.prisma.notificationLog.createMany({
+      data: Array.from({ length: 64 }, (_, index) => ({
+        userId: owner.id,
+        type: 'read_history',
+        title: `Read history ${index}`,
+        channel: 'system',
+        status: 'sent',
+        isRead: true,
+        readAt: new Date('2026-08-09T14:00:00.000Z'),
+        createdAt: new Date(2026, 7, 9, 14, 0, index),
+      })),
+    });
+    await app.prisma.$executeRawUnsafe('ANALYZE "notification_logs"');
+
+    const plans = await app.prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe('SET LOCAL enable_seqscan = off');
+      const recent = await tx.$queryRawUnsafe<Array<{ 'QUERY PLAN': string }>>(
+        `EXPLAIN (COSTS OFF) SELECT id FROM notification_logs WHERE user_id = '${owner.id}' ORDER BY created_at DESC, id DESC LIMIT 10`,
+      );
+      const unread = await tx.$queryRawUnsafe<Array<{ 'QUERY PLAN': string }>>(
+        `EXPLAIN (COSTS OFF) SELECT id FROM notification_logs WHERE user_id = '${owner.id}' AND is_read = false ORDER BY created_at DESC, id DESC LIMIT 10`,
+      );
+      return { recent, unread };
+    });
+    expect(plans.recent.map((row) => row['QUERY PLAN']).join('\n')).toContain('notification_logs_inbox_recent_idx');
+    expect(plans.unread.map((row) => row['QUERY PLAN']).join('\n')).toContain('notification_logs_inbox_unread_idx');
   });
 });

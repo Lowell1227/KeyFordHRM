@@ -1053,7 +1053,8 @@ model NotificationLog {
   cycle  AssessmentCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
 
   @@index([userId])
-  @@index([userId, isRead, createdAt])
+  @@index([userId, createdAt(sort: Desc), id(sort: Desc)], map: "notification_logs_inbox_recent_idx")
+  @@index([userId, isRead, createdAt(sort: Desc), id(sort: Desc)], map: "notification_logs_inbox_unread_idx")
   @@index([status])
   @@map("notification_logs")
 }

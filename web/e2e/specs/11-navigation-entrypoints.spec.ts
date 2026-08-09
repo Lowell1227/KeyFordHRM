@@ -180,6 +180,7 @@ test.describe('11-navigation-entrypoints dashboard task entry points', () => {
 
     await expect(dashboard.currentEmployeeTask()).toContainText('目标确认');
     await dashboard.currentEmployeeTaskOpen().click();
+    await expect(page).toHaveURL(/\/tasks\/task-active\?returnTo=\/tasks$/);
     const destination = new URL(page.url());
     expect(destination.pathname).toBe('/tasks/task-active');
     expect([...destination.searchParams.entries()]).toEqual([['returnTo', '/tasks']]);
@@ -350,6 +351,7 @@ test.describe('11-navigation-entrypoints manager dashboard task entry points', (
     await expect(dashboard.managementTaskOpen('task-7')).toBeVisible();
     await expect(page.getByTestId('dashboard-task-open-undefined')).toHaveCount(0);
     await dashboard.managementTaskOpen('task-7').click();
+    await expect(page).toHaveURL(/\/tasks\/task-7\?returnTo=\/tasks$/);
     const destination = new URL(page.url());
     expect(destination.pathname).toBe('/tasks/task-7');
     expect([...destination.searchParams.entries()]).toEqual([['returnTo', '/tasks']]);
@@ -588,15 +590,16 @@ test.describe('11-navigation-entrypoints notification task links', () => {
       return route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify(
-          apiResponse(
-            notificationItem({
+          apiResponse({
+            ...notificationItem({
               id: 'notification-goal',
               taskId: 'task-goal',
               type: 'indicator_setting_notice',
               isRead: true,
               readAt: '2026-08-09T09:00:00.000Z',
             }),
-          ),
+            unreadCount: 0,
+          }),
         ),
       });
     });
@@ -845,6 +848,7 @@ test.describe('11-navigation-entrypoints notification task links', () => {
             ...source,
             isRead: true,
             readAt: '2026-08-09T09:00:00.000Z',
+            unreadCount: 1,
           }),
         ),
       });
@@ -895,6 +899,7 @@ test.describe('11-navigation-entrypoints notification task links', () => {
             ...item,
             isRead: true,
             readAt: '2026-08-09T09:00:00.000Z',
+            unreadCount: 0,
           }),
         ),
       });
@@ -945,6 +950,252 @@ test.describe('11-navigation-entrypoints notification task links', () => {
     await expect(page.locator('.el-message--warning')).toBeVisible();
     await expect(page.locator('.notification-popover')).toBeHidden();
     await expect(trigger).toBeEnabled();
+  });
+
+  test('isolates delayed list responses across notification user sessions', async ({ page }) => {
+    let releaseFirst!: () => void;
+    let announceFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const firstRequested = new Promise<void>((resolve) => {
+      announceFirst = resolve;
+    });
+    let requestNumber = 0;
+    await page.route('**/api/v1/notifications/unread-count', (route) =>
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ count: 0 })) }),
+    );
+    await page.route('**/api/v1/notifications?**', async (route) => {
+      const currentRequest = ++requestNumber;
+      if (currentRequest === 1) {
+        announceFirst();
+        await firstGate;
+      }
+      const userId = currentRequest === 1 ? 'user-a' : 'user-b';
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(
+          apiResponse({
+            total: 1,
+            page: 1,
+            pageSize: 10,
+            items: [notificationItem({ id: `notification-${userId}`, userId })],
+          }),
+        ),
+      });
+    });
+
+    await page.goto('/tasks');
+    await page.evaluate(async () => {
+      const storeModulePath = '/src/stores/notification.store.ts';
+      const { useNotificationStore } = await import(storeModulePath);
+      const store = useNotificationStore();
+      store.setSession('user-a');
+      const state = window as typeof window & { __oldNotificationFetch?: Promise<void> };
+      state.__oldNotificationFetch = store.fetchRecent();
+    });
+    await firstRequested;
+
+    await page.evaluate(async () => {
+      const storeModulePath = '/src/stores/notification.store.ts';
+      const { useNotificationStore } = await import(storeModulePath);
+      const store = useNotificationStore();
+      store.setSession('user-b');
+      await store.fetchRecent();
+    });
+    releaseFirst();
+    await page.evaluate(async () => {
+      const state = window as typeof window & { __oldNotificationFetch?: Promise<void> };
+      await state.__oldNotificationFetch;
+    });
+
+    const state = await page.evaluate(async () => {
+      const storeModulePath = '/src/stores/notification.store.ts';
+      const { useNotificationStore } = await import(storeModulePath);
+      const store = useNotificationStore();
+      return {
+        sessionUserId: store.sessionUserId,
+        ids: store.notifications.map((item: Notification) => item.id),
+      };
+    });
+    expect(state).toEqual({ sessionUserId: 'user-b', ids: ['notification-user-b'] });
+  });
+
+  test('resets notification state synchronously when auth logs out', async ({ page }) => {
+    await page.route('**/api/v1/notifications/unread-count', (route) =>
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ count: 1 })) }),
+    );
+    await page.route('**/api/v1/notifications?**', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(
+          apiResponse({ total: 1, page: 1, pageSize: 10, items: [notificationItem({ id: 'logout-notification' })] }),
+        ),
+      }),
+    );
+
+    await page.goto('/tasks');
+    await page.getByTestId('app-notifications').click();
+    await expect(page.getByTestId('notification-item-logout-notification')).toBeVisible();
+
+    const state = await page.evaluate(async () => {
+      const authModulePath = '/src/stores/auth.store.ts';
+      const notificationModulePath = '/src/stores/notification.store.ts';
+      const [{ useAuthStore }, { useNotificationStore }] = await Promise.all([
+        import(authModulePath),
+        import(notificationModulePath),
+      ]);
+      const auth = useAuthStore();
+      const store = useNotificationStore();
+      const beforeGeneration = store.generation;
+      auth.logout();
+      return {
+        beforeGeneration,
+        generation: store.generation,
+        sessionUserId: store.sessionUserId,
+        unreadCount: store.unreadCount,
+        notifications: store.notifications.length,
+      };
+    });
+    expect(state.sessionUserId).toBeNull();
+    expect(state.generation).toBeGreaterThan(state.beforeGeneration);
+    expect(state).toMatchObject({ unreadCount: 0, notifications: 0 });
+  });
+
+  test('does not let an old unread poll overwrite an authoritative mark response', async ({ page }) => {
+    const item = notificationItem({ id: 'poll-race', userId: 'poll-user' });
+    await page.route('**/api/v1/notifications/unread-count', (route) =>
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ count: 2 })) }),
+    );
+    await page.route('**/api/v1/notifications?**', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 10, items: [] })),
+      }),
+    );
+    await page.route('**/api/v1/notifications/poll-race/read', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(
+          apiResponse({
+            ...item,
+            isRead: true,
+            readAt: '2026-08-09T12:00:00.000Z',
+            unreadCount: 1,
+          }),
+        ),
+      }),
+    );
+    await page.goto('/tasks');
+
+    await page.unroute('**/api/v1/notifications/unread-count');
+    let releasePoll!: () => void;
+    let announcePoll!: () => void;
+    const pollGate = new Promise<void>((resolve) => {
+      releasePoll = resolve;
+    });
+    const pollRequested = new Promise<void>((resolve) => {
+      announcePoll = resolve;
+    });
+    await page.route('**/api/v1/notifications/unread-count', async (route) => {
+      announcePoll();
+      await pollGate;
+      await route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ count: 8 })) });
+    });
+
+    await page.evaluate(async (seed) => {
+      const storeModulePath = '/src/stores/notification.store.ts';
+      const { useNotificationStore } = await import(storeModulePath);
+      const store = useNotificationStore();
+      store.setSession(seed.userId);
+      store.$patch({ unreadCount: 2, notifications: [seed] });
+      const state = window as typeof window & { __oldUnreadPoll?: Promise<number> };
+      state.__oldUnreadPoll = store.fetchUnreadCount();
+    }, item);
+    await pollRequested;
+    await page.evaluate(async () => {
+      const storeModulePath = '/src/stores/notification.store.ts';
+      const { useNotificationStore } = await import(storeModulePath);
+      await useNotificationStore().markAsRead('poll-race');
+    });
+    releasePoll();
+    await page.evaluate(async () => {
+      const state = window as typeof window & { __oldUnreadPoll?: Promise<number> };
+      await state.__oldUnreadPoll;
+    });
+
+    const state = await page.evaluate(async () => {
+      const storeModulePath = '/src/stores/notification.store.ts';
+      const { useNotificationStore } = await import(storeModulePath);
+      const store = useNotificationStore();
+      return { unreadCount: store.unreadCount, item: store.notifications[0] };
+    });
+    expect(state.unreadCount).toBe(1);
+    expect(state.item).toMatchObject({ isRead: true, readAt: '2026-08-09T12:00:00.000Z' });
+  });
+
+  test('retains the previous unread count and exposes a failed unread request', async ({ page }) => {
+    await page.route('**/api/v1/notifications/unread-count', (route) =>
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ count: 0 })) }),
+    );
+    await page.goto('/tasks');
+    await page.unroute('**/api/v1/notifications/unread-count');
+    await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({ status: 500, body: 'failed' }));
+
+    const state = await page.evaluate(async () => {
+      const storeModulePath = '/src/stores/notification.store.ts';
+      const { useNotificationStore } = await import(storeModulePath);
+      const store = useNotificationStore();
+      store.unreadCount = 7;
+      let rejected = false;
+      try {
+        await store.fetchUnreadCount();
+      } catch {
+        rejected = true;
+      }
+      return { rejected, unreadCount: store.unreadCount, unreadError: store.unreadError };
+    });
+    expect(state.rejected).toBe(true);
+    expect(state.unreadCount).toBe(7);
+    expect(state.unreadError).toEqual(expect.any(String));
+  });
+
+  test('uses authoritative mark-all time and unread count from the server', async ({ page }) => {
+    const serverReadAt = '2026-08-09T13:00:00.000Z';
+    const items = [notificationItem({ id: 'mark-all-1' }), notificationItem({ id: 'mark-all-2' })];
+    await page.route('**/api/v1/notifications/unread-count', (route) =>
+      route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ count: 0 })) }),
+    );
+    await page.route('**/api/v1/notifications/read-all', (route) =>
+      route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ marked: 2, readAt: serverReadAt, unreadCount: 1 })),
+      }),
+    );
+    await page.goto('/tasks');
+
+    const state = await page.evaluate(async ({ readAt, seedItems }) => {
+      const storeModulePath = '/src/stores/notification.store.ts';
+      const { useNotificationStore } = await import(storeModulePath);
+      const store = useNotificationStore();
+      store.$patch({
+        unreadCount: 3,
+        notifications: seedItems,
+      });
+      const result = await store.markAllAsRead();
+      return {
+        result,
+        unreadCount: store.unreadCount,
+        rows: store.notifications.map((item: Notification) => ({ isRead: item.isRead, readAt: item.readAt })),
+        readAt,
+      };
+    }, { readAt: serverReadAt, seedItems: items });
+    expect(state.result).toEqual({ marked: 2, readAt: serverReadAt, unreadCount: 1 });
+    expect(state.unreadCount).toBe(1);
+    expect(state.rows).toEqual([
+      { isRead: true, readAt: serverReadAt },
+      { isRead: true, readAt: serverReadAt },
+    ]);
   });
 
   test('smokes the real authenticated list and mark-one API without notification interception', async ({ page }) => {

@@ -1,12 +1,22 @@
 import { defineStore } from 'pinia';
 import { notificationsApi } from '@/api/notifications.api';
-import type { Notification } from '@/types/api.types';
+import type { Notification, NotificationReadResult } from '@/types/api.types';
 
-const pendingReadRequests = new Map<string, Promise<Notification>>();
+const pendingReadRequests = new Map<string, Promise<NotificationReadResult>>();
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
 
 export const useNotificationStore = defineStore('notification', {
   state: () => ({
+    sessionUserId: null as string | null,
+    generation: 0,
+    unreadRequestSerial: 0,
+    recentRequestSerial: 0,
+    mutationSerial: 0,
     unreadCount: 0,
+    unreadError: null as string | null,
     notifications: [] as Notification[],
     loading: false,
   }),
@@ -17,67 +27,151 @@ export const useNotificationStore = defineStore('notification', {
   },
 
   actions: {
-    async fetchUnreadCount() {
+    setSession(userId: string | null) {
+      if (this.sessionUserId === userId) return;
+
+      this.generation += 1;
+      this.sessionUserId = userId;
+      this.unreadRequestSerial += 1;
+      this.recentRequestSerial += 1;
+      this.mutationSerial += 1;
+      this.unreadCount = 0;
+      this.unreadError = null;
+      this.notifications = [];
+      this.loading = false;
+    },
+
+    invalidateQueries() {
+      this.unreadRequestSerial += 1;
+      this.recentRequestSerial += 1;
+      this.loading = false;
+    },
+
+    async fetchUnreadCount(): Promise<number> {
+      const userId = this.sessionUserId;
+      if (!userId) return this.unreadCount;
+
+      const generation = this.generation;
+      const requestSerial = ++this.unreadRequestSerial;
       try {
         const res = await notificationsApi.getUnreadCount();
-        this.unreadCount = res.count;
-      } catch {
-        this.unreadCount = 0;
+        if (
+          this.generation === generation &&
+          this.sessionUserId === userId &&
+          this.unreadRequestSerial === requestSerial
+        ) {
+          this.unreadCount = res.count;
+          this.unreadError = null;
+        }
+        return res.count;
+      } catch (error) {
+        if (
+          this.generation === generation &&
+          this.sessionUserId === userId &&
+          this.unreadRequestSerial === requestSerial
+        ) {
+          this.unreadError = errorMessage(error);
+        }
+        throw error;
       }
     },
 
-    async fetchRecent() {
+    async fetchRecent(): Promise<Notification[]> {
+      const userId = this.sessionUserId;
+      if (!userId) return this.notifications;
+
+      const generation = this.generation;
+      const requestSerial = ++this.recentRequestSerial;
       this.loading = true;
       try {
         const res = await notificationsApi.findAll({ page: 1, pageSize: 10 });
-        this.notifications = res.items;
+        if (
+          this.generation === generation &&
+          this.sessionUserId === userId &&
+          this.recentRequestSerial === requestSerial
+        ) {
+          this.notifications = res.items;
+        }
+        return res.items;
       } finally {
-        this.loading = false;
+        if (
+          this.generation === generation &&
+          this.sessionUserId === userId &&
+          this.recentRequestSerial === requestSerial
+        ) {
+          this.loading = false;
+        }
       }
     },
 
-    async markAsRead(id: string): Promise<Notification | undefined> {
+    async markAsRead(id: string): Promise<NotificationReadResult | undefined> {
       const item = this.notifications.find((notification) => notification.id === id);
-      if (item?.isRead) return item;
+      if (item?.isRead) return { ...item, unreadCount: this.unreadCount };
 
-      const inFlight = pendingReadRequests.get(id);
+      const userId = this.sessionUserId;
+      if (!userId) return undefined;
+
+      const generation = this.generation;
+      const pendingKey = `${generation}:${id}`;
+      const inFlight = pendingReadRequests.get(pendingKey);
       if (inFlight) return inFlight;
 
+      const mutationSerial = ++this.mutationSerial;
+      this.invalidateQueries();
       const request = notificationsApi.markAsRead(id);
-      pendingReadRequests.set(id, request);
+      pendingReadRequests.set(pendingKey, request);
       try {
         const updated = await request;
-        const current = this.notifications.find((notification) => notification.id === id);
-        const transitionedToRead = Boolean(current && !current.isRead && updated.isRead);
-        if (current) {
-          current.isRead = updated.isRead;
-          current.readAt = updated.readAt;
-        }
-        if (transitionedToRead) {
-          this.unreadCount = Math.max(0, this.unreadCount - 1);
+        if (
+          this.generation === generation &&
+          this.sessionUserId === userId &&
+          this.mutationSerial === mutationSerial
+        ) {
+          this.invalidateQueries();
+          const index = this.notifications.findIndex((notification) => notification.id === id);
+          if (index >= 0) {
+            const { unreadCount: _unreadCount, ...notification } = updated;
+            this.notifications.splice(index, 1, notification);
+          }
+          this.unreadCount = updated.unreadCount;
+          this.unreadError = null;
         }
         return updated;
       } finally {
-        if (pendingReadRequests.get(id) === request) {
-          pendingReadRequests.delete(id);
+        if (pendingReadRequests.get(pendingKey) === request) {
+          pendingReadRequests.delete(pendingKey);
         }
       }
     },
 
     async markAllAsRead() {
+      const userId = this.sessionUserId;
+      if (!userId) return undefined;
+
+      const generation = this.generation;
+      const mutationSerial = ++this.mutationSerial;
+      this.invalidateQueries();
       const result = await notificationsApi.markAllAsRead();
-      const readAt = new Date().toISOString();
-      this.unreadCount = 0;
-      this.notifications.forEach((n) => {
-        if (!n.isRead) {
-          n.isRead = true;
-          n.readAt = readAt;
-        }
-      });
+      if (
+        this.generation === generation &&
+        this.sessionUserId === userId &&
+        this.mutationSerial === mutationSerial
+      ) {
+        this.invalidateQueries();
+        this.unreadCount = result.unreadCount;
+        this.unreadError = null;
+        this.notifications.forEach((notification) => {
+          if (!notification.isRead) {
+            notification.isRead = true;
+            notification.readAt = result.readAt;
+          }
+        });
+      }
       return result;
     },
 
     increment(count = 1) {
+      this.unreadRequestSerial += 1;
       this.unreadCount += count;
     },
   },

@@ -21,13 +21,14 @@ let componentMounted = false;
 const badgeValue = computed(() => (store.unreadCount > 0 ? store.unreadCount : undefined));
 
 function fetchIfLoggedIn() {
-  if (auth.isLoggedIn) {
-    store.fetchUnreadCount();
+  const userId = auth.user?.id;
+  if (auth.isLoggedIn && userId && store.sessionUserId === userId) {
+    void store.fetchUnreadCount().catch(() => undefined);
   }
 }
 
 function startPolling() {
-  if (!auth.isLoggedIn || timer) return;
+  if (!componentMounted || !auth.isLoggedIn || !auth.user?.id || timer) return;
   fetchIfLoggedIn();
   timer = setInterval(() => {
     if (!document.hidden) {
@@ -65,24 +66,33 @@ onUnmounted(() => {
   document.removeEventListener('visibilitychange', onVisibilityChange);
 });
 
-// 退出登录时立即停止轮询，防止登出后仍发请求
 watch(
-  () => auth.isLoggedIn,
-  (loggedIn) => {
-    if (loggedIn) {
+  () => auth.user?.id ?? null,
+  (userId) => {
+    stopPolling();
+    store.setSession(userId);
+    activationSerial += 1;
+    activeNotificationId.value = null;
+    popoverVisible.value = false;
+    if (userId) {
       startPolling();
     } else {
       stopPolling();
     }
   },
+  { immediate: true, flush: 'sync' },
 );
 
 function onOpenPopover() {
-  store.fetchRecent();
+  void store.fetchRecent().catch(() => undefined);
 }
 
-function markAllRead() {
-  store.markAllAsRead();
+async function markAllRead() {
+  try {
+    await store.markAllAsRead();
+  } catch {
+    ElMessage.warning('标记全部已读失败，请稍后重试');
+  }
 }
 
 function notificationTarget(item: (typeof store.recent)[number]) {

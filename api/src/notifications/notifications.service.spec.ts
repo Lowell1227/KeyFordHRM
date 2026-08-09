@@ -8,6 +8,7 @@ import { ERROR_CODE } from '@/common/constants/error-codes';
 /** 构造一个可被 jest.spyOn mock 的 PrismaService。 */
 function makePrismaMock() {
   return {
+    $transaction: jest.fn(),
     user: { findUnique: jest.fn() },
     notificationLog: {
       create: jest.fn(),
@@ -33,6 +34,9 @@ describe('NotificationsService', () => {
 
   beforeEach(async () => {
     prisma = makePrismaMock();
+    (prisma.$transaction as unknown as jest.Mock).mockImplementation(
+      async (callback: (tx: PrismaService) => unknown) => callback(prisma),
+    );
     pushProvider = makePushProviderMock();
 
     const module: TestingModule = await Test.createTestingModule({
@@ -209,6 +213,7 @@ describe('NotificationsService', () => {
           readAt: new Date('2026-08-09T09:00:00.000Z'),
         });
       prisma.notificationLog.updateMany = jest.fn().mockResolvedValue({ count: 1 });
+      prisma.notificationLog.count = jest.fn().mockResolvedValue(0);
 
       const result = await (service as any).markAsRead('notification-1', viewerId);
 
@@ -216,7 +221,11 @@ describe('NotificationsService', () => {
         where: { id: 'notification-1', userId: viewerId, isRead: false },
         data: { isRead: true, readAt: expect.any(Date) },
       });
-      expect(result).toMatchObject({ status: 'sent', isRead: true });
+      expect(result).toMatchObject({ status: 'sent', isRead: true, unreadCount: 0 });
+      expect(prisma.notificationLog.count).toHaveBeenCalledWith({
+        where: { userId: viewerId, isRead: false },
+      });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     });
 
     it('keeps an owned read notification idempotent and rejects a foreign id as not found', async () => {
@@ -231,23 +240,28 @@ describe('NotificationsService', () => {
           sender: null,
         })
         .mockResolvedValueOnce(null);
+      prisma.notificationLog.count = jest.fn().mockResolvedValue(0);
 
       const existing = await (service as any).markAsRead('notification-read', viewerId);
-      expect(existing).toMatchObject({ status: 'failed', isRead: true });
+      expect(existing).toMatchObject({ status: 'failed', isRead: true, unreadCount: 0 });
       expect(prisma.notificationLog.updateMany).not.toHaveBeenCalled();
       await expect((service as any).markAsRead('foreign-notification', viewerId)).rejects.toThrow(NotFoundException);
     });
 
     it('marks all and only the viewer unread notifications', async () => {
       prisma.notificationLog.updateMany = jest.fn().mockResolvedValue({ count: 2 });
+      prisma.notificationLog.count = jest.fn().mockResolvedValue(1);
 
-      await expect((service as any).markAllAsRead(viewerId)).resolves.toEqual({
-        marked: 2,
-      });
+      const result = await (service as any).markAllAsRead(viewerId);
+      expect(result).toEqual({ marked: 2, readAt: expect.any(Date), unreadCount: 1 });
       expect(prisma.notificationLog.updateMany).toHaveBeenCalledWith({
         where: { userId: viewerId, isRead: false },
         data: { isRead: true, readAt: expect.any(Date) },
       });
+      expect(prisma.notificationLog.count).toHaveBeenCalledWith({
+        where: { userId: viewerId, isRead: false },
+      });
+      expect(prisma.$transaction).toHaveBeenCalledTimes(1);
     });
   });
 

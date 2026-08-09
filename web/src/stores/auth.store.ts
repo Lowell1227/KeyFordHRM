@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import { authApi } from '@/api/auth.api';
+import { useNotificationStore } from '@/stores/notification.store';
 import type { CurrentUser } from '@/types/api.types';
 
 const TOKEN_KEY = 'token';
@@ -45,9 +46,12 @@ export const useAuthStore = defineStore('auth', {
       this.expiresAt = Date.now() + expiresIn * 1000;
       localStorage.setItem(TOKEN_KEY, token);
       localStorage.setItem(EXPIRES_AT_KEY, String(this.expiresAt));
+      useNotificationStore().setSession(user.id);
     },
     async fetchMe() {
-      this.user = await authApi.getMe();
+      const user = await authApi.getMe();
+      this.user = user;
+      useNotificationStore().setSession(user.id);
     },
     /**
      * 启动期 hydration：token 已存在但 user 为空时，拉取当前用户信息。
@@ -65,6 +69,7 @@ export const useAuthStore = defineStore('auth', {
       }
     },
     logout() {
+      useNotificationStore().setSession(null);
       this.token = null;
       this.user = null;
       this.expiresAt = null;

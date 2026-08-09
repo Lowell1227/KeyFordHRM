@@ -1083,6 +1083,16 @@ export interface UnreadCount {
   count: number;
 }
 
+export interface NotificationReadResult extends Notification {
+  unreadCount: number;
+}
+
+export interface MarkAllNotificationsReadResult {
+  marked: number;
+  readAt: string;
+  unreadCount: number;
+}
+
 // ---------------------------------------------------------------------------
 // 绩效改进计划
 // ---------------------------------------------------------------------------
