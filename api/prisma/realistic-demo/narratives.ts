@@ -45,20 +45,38 @@ export function generateInterviewNarrative(
 
 export function generateImprovementNarrative(
   indicators: WorkflowNarrativeSource[],
+  targetDate: Date,
 ): Pick<
   Prisma.ImprovementPlanCreateManyInput,
   "improvementNeed" | "importance" | "improvementGoal" | "measures"
 > {
   const weakest = weakestIndicator(indicators);
+  const measureDeadline = (daysBeforeTarget: number): string => {
+    const value = new Date(targetDate);
+    value.setUTCDate(value.getUTCDate() - daysBeforeTarget);
+    return value.toISOString().slice(0, 10);
+  };
   return {
     improvementNeed: `${weakest.name}得分偏低，需提升计划拆解、执行跟踪和结果复盘。`,
     importance:
       "该项直接影响岗位核心交付和团队协作质量，需在本改进周期内闭环。",
     improvementGoal: `${weakest.name}相关成果达到岗位合格标准，并连续两次通过主管复核。`,
     measures: [
-      { sequence: 1, action: `拆解${weakest.name}月度目标`, owner: "employee" },
-      { sequence: 2, action: "每两周提交进展证据", owner: "employee" },
-      { sequence: 3, action: "主管月末复核并书面反馈", owner: "manager" },
+      {
+        description: `拆解${weakest.name}月度目标并确认验收口径`,
+        responsible: "员工本人",
+        deadline: measureDeadline(42),
+      },
+      {
+        description: "提交阶段进展证据并对偏差进行复盘",
+        responsible: "员工本人",
+        deadline: measureDeadline(21),
+      },
+      {
+        description: "完成最终复核并形成书面反馈",
+        responsible: "直属主管",
+        deadline: measureDeadline(0),
+      },
     ],
   };
 }

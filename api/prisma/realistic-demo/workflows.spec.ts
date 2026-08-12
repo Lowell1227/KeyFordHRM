@@ -72,6 +72,14 @@ describe("generateWorkflows", () => {
     expect(workflows.confirmations).toHaveLength(7);
     expect(workflows.notifications).toHaveLength(48);
     expect(workflows.auditLogs).toHaveLength(14);
+    expect(
+      workflows.signatures.filter((row) => row.businessType === "interview"),
+    ).toHaveLength(459);
+    expect(
+      workflows.signatures.filter(
+        (row) => row.businessType === "probation_task",
+      ),
+    ).toHaveLength(21);
   });
 
   it("uses only interview states and signatures reachable through the real service", () => {
@@ -186,14 +194,9 @@ describe("generateWorkflows", () => {
       } else {
         expect(appeal.finalResult).toBeNull();
         expect(task.status).toBe("appealing");
-        expect(appeal.attachments).toEqual([
-          {
-            name: "复核说明（演示）",
-            source: DEMO_CONFIG.source,
-            stateOrigin: "historical_migration",
-          },
-        ]);
+        expect(appeal.reason).toContain("历史迁移");
       }
+      expect(appeal.attachments).toEqual([]);
       if (appeal.finalResult === "modified") {
         const grade = performance.gradeResults.find(
           (row) => row.taskId === task.id,
@@ -207,7 +210,8 @@ describe("generateWorkflows", () => {
         )!;
         const prior = audit.oldValue as { calibratedGrade: string };
         const changed = audit.newValue as { calibratedGrade: string };
-        expect(prior.calibratedGrade).not.toBe(changed.calibratedGrade);
+        expect(prior.calibratedGrade).toBe("C");
+        expect(changed.calibratedGrade).toBe("B");
         expect(grade.calibratedGrade).toBe(changed.calibratedGrade);
         expect(archive.grade).toBe(changed.calibratedGrade);
         expect(Number(archive.coefficient)).toBe(Number(grade.coefficient));
@@ -243,6 +247,26 @@ describe("generateWorkflows", () => {
         expect(plan.improvementNeed).toContain(indicators[0].name);
         expect(plan.improvementGoal?.trim()).toBeTruthy();
         expect(Array.isArray(plan.measures)).toBe(true);
+        const measures = plan.measures as Array<Record<string, unknown>>;
+        expect(measures).toHaveLength(3);
+        for (const measure of measures) {
+          expect(Object.keys(measure).sort()).toEqual([
+            "deadline",
+            "description",
+            "responsible",
+          ]);
+          expect(String(measure.description).trim()).toBeTruthy();
+          expect(String(measure.responsible).trim()).toBeTruthy();
+          expect(Number.isNaN(Date.parse(String(measure.deadline)))).toBe(
+            false,
+          );
+          expect(millis(String(measure.deadline))).toBeGreaterThanOrEqual(
+            millis(plan.createdAt),
+          );
+          expect(millis(String(measure.deadline))).toBeLessThanOrEqual(
+            millis(plan.targetDate),
+          );
+        }
       }
       if (plan.status === "completed") {
         expect(plan.finalScore).not.toBeNull();
@@ -261,6 +285,27 @@ describe("generateWorkflows", () => {
         ),
       ).toHaveLength(2);
     }
+    const completedScores = workflows.improvementPlans
+      .filter((row) => row.status === "completed")
+      .map((row) => row.finalScore!);
+    expect(completedScores).toHaveLength(7);
+    expect(completedScores.every((score) => score >= 1 && score <= 10)).toBe(
+      true,
+    );
+    expect(new Set(completedScores).size).toBeGreaterThan(1);
+  });
+
+  it("keeps completed improvement scores inside the real 1-10 input contract", () => {
+    const { workflows } = buildWorkflowFixture();
+    const completedScores = workflows.improvementPlans
+      .filter((row) => row.status === "completed")
+      .map((row) => row.finalScore!);
+
+    expect(completedScores).toHaveLength(7);
+    expect(completedScores.every((score) => score >= 1 && score <= 10)).toBe(
+      true,
+    );
+    expect(new Set(completedScores).size).toBeGreaterThan(1);
   });
 
   it("models current and historical probation outcomes through real state contracts", () => {
@@ -403,6 +448,10 @@ describe("generateWorkflows", () => {
       expect(millis(row.createdAt)).toBeLessThanOrEqual(
         DEMO_CONFIG.asOf.getTime(),
       );
+      if (row.entityType === "appeal") {
+        const actor = first.users.find((user) => user.id === row.userId)!;
+        expect(["hr", "system_admin"]).toContain(actor.sysRole);
+      }
     }
     expect(
       first.workflows.notifications.every(
@@ -426,6 +475,33 @@ describe("generateWorkflows", () => {
         (row) => row.weight instanceof Prisma.Decimal,
       ),
     ).toBe(true);
+  });
+
+  it("links every task notification to a task the receiver can open", () => {
+    const fixture = buildWorkflowFixture();
+    const taskById = new Map(
+      fixture.performance.tasks.map((task) => [task.id!, task]),
+    );
+    const taskNotifications = fixture.workflows.notifications.filter(
+      (row) => row.taskId,
+    );
+    const inaccessible = taskNotifications.filter((row) => {
+      const receiver = fixture.users.find((user) => user.id === row.userId)!;
+      const task = taskById.get(row.taskId!)!;
+      return !(
+        task.employeeId === receiver.id ||
+        task.managerId === receiver.id ||
+        task.deptHeadId === receiver.id ||
+        task.approverId === receiver.id ||
+        receiver.sysRole === "hr" ||
+        receiver.sysRole === "system_admin" ||
+        receiver.canViewAll === true
+      );
+    });
+
+    expect(taskNotifications).toHaveLength(32);
+    expect(taskNotifications.filter((row) => !row.isRead)).toHaveLength(16);
+    expect(inaccessible).toEqual([]);
   });
 
   it("never fabricates a completed workflow event after the observation instant", () => {

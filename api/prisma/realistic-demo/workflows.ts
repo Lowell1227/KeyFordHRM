@@ -358,18 +358,16 @@ function generateAppeals(
         cycleId: task.cycleId,
         appellantId: task.employeeId,
         reason:
-          definition.result === "modified"
-            ? "业务数据归集口径存在偏差，申请按原始凭证复核。"
-            : "对部分评分依据存在疑问，申请复核证据与评价标准。",
-        attachments: [
-          {
-            name: "复核说明（演示）",
-            source: DEMO_CONFIG.source,
-            ...(definition.status === "resolved"
-              ? {}
-              : { stateOrigin: "historical_migration" }),
-          },
-        ],
+          definition.status !== "resolved"
+            ? `本记录为历史迁移中间状态；${
+                definition.status === "dept_processing"
+                  ? "部门正在复核业务事实与评分证据。"
+                  : "部门复核已完成，HR 正在复核评分口径。"
+              }`
+            : definition.result === "modified"
+              ? "业务数据归集口径存在偏差，申请按原始凭证复核。"
+              : "对部分评分依据存在疑问，申请复核证据与评价标准。",
+        attachments: [],
         status: definition.status,
         deptResolution: definition.deptResolvedAt
           ? "部门已核对原始交付证据和岗位评分标准。"
@@ -474,7 +472,7 @@ function generateAppeals(
 
       audits.push({
         id: context.own("audit-log", context.id("audit-log", `appeal:${id}`)),
-        userId: definition.status === "resolved" ? hrId : task.employeeId,
+        userId: hrId,
         action:
           definition.status === "resolved" ? "resolve_appeal" : "create_appeal",
         entityType: "appeal",
@@ -491,6 +489,7 @@ function generateAppeals(
         newValue: {
           source: DEMO_CONFIG.source,
           actor: "realistic-demo-seed",
+          appellantId: task.employeeId,
           status: definition.status,
           result: definition.result,
           calibratedGrade: finalGrade,
@@ -550,9 +549,18 @@ function generateImprovementPlans(
           : "in_progress";
       const createdAt =
         cycleName === "2026-Q1" ? utcDate("2026-04-16") : utcDate("2026-07-16");
-      const narrative = generateImprovementNarrative(
-        taskIndicators(performance, task.id!),
-      );
+      const targetDate =
+        status === "draft"
+          ? null
+          : cycleName === "2026-Q1"
+            ? utcDate("2026-06-30")
+            : utcDate("2026-10-15");
+      const narrative = targetDate
+        ? generateImprovementNarrative(
+            taskIndicators(performance, task.id!),
+            targetDate,
+          )
+        : null;
       return {
         id: context.own(
           "improvement-plan",
@@ -562,17 +570,12 @@ function generateImprovementPlans(
         cycleId: task.cycleId,
         taskId: task.id!,
         creatorId: isDraft ? null : task.managerId,
-        improvementNeed: isDraft ? null : narrative.improvementNeed,
-        importance: isDraft ? null : narrative.importance,
-        improvementGoal: isDraft ? null : narrative.improvementGoal,
-        targetDate:
-          status === "draft"
-            ? null
-            : cycleName === "2026-Q1"
-              ? utcDate("2026-06-30")
-              : utcDate("2026-10-15"),
-        measures: isDraft ? [] : narrative.measures,
-        finalScore: isCompleted ? 76 + (index % 8) : null,
+        improvementNeed: narrative?.improvementNeed ?? null,
+        importance: narrative?.importance ?? null,
+        improvementGoal: narrative?.improvementGoal ?? null,
+        targetDate,
+        measures: narrative?.measures ?? [],
+        finalScore: isCompleted ? 6 + (index % 5) : null,
         status,
         createdAt,
         updatedAt: isCompleted ? utcDate("2026-06-30") : createdAt,
@@ -862,8 +865,12 @@ function generateNotifications(
     DEMO_CONFIG.acceptanceEmployeeNos.hr,
   ).id!;
   const q3Cycle = cycle(performance, "2026-Q3");
+  const q2Cycle = cycle(performance, "2026-Q2");
   const q3Tasks = performance.tasks.filter(
     (task) => task.cycleId === q3Cycle.id,
+  );
+  const q2Tasks = performance.tasks.filter(
+    (task) => task.cycleId === q2Cycle.id,
   );
   const acceptanceUsers = Object.values(DEMO_CONFIG.acceptanceEmployeeNos).map(
     (employeeNo) => userByEmployeeNo(people, employeeNo),
@@ -871,7 +878,8 @@ function generateNotifications(
   return acceptanceUsers.flatMap((user, userIndex) => {
     const ownTask = q3Tasks.find((task) => task.employeeId === user.id);
     const primaryTask = ownTask ?? q3Tasks[userIndex];
-    const secondaryTask = q3Tasks[(userIndex + 17) % q3Tasks.length];
+    const secondaryTask =
+      q2Tasks.find((task) => task.employeeId === user.id) ?? primaryTask;
     const definitions = [
       {
         type: "task_reminder",
