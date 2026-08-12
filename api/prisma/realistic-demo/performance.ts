@@ -603,23 +603,23 @@ function cycleRows(context: DemoContext, hrId: string) {
         ? [
             "2026-08-15",
             "2026-08-20",
-            "2026-09-15",
-            "2026-09-20",
-            "2026-09-24",
-            "2026-09-26",
-            "2026-09-28",
-            "2026-09-30",
+            "2026-10-05",
+            "2026-10-10",
+            "2026-10-15",
+            "2026-10-18",
+            "2026-10-20",
+            "2026-11-05",
           ]
         : definition.key === "2026-ANNUAL-LEADERS"
           ? [
               "2026-07-10",
               "2026-07-15",
-              "2026-12-01",
-              "2026-12-05",
-              "2026-12-10",
-              "2026-12-15",
-              "2026-12-20",
-              "2026-12-31",
+              "2027-01-05",
+              "2027-01-10",
+              "2027-01-15",
+              "2027-01-18",
+              "2027-01-20",
+              "2027-02-05",
             ]
           : definition.key === "2026-Q2"
             ? [
@@ -1112,7 +1112,11 @@ export function generatePerformance(
           indicators: instances,
           calculatedScore,
           performanceIndex: performanceScore,
-          rawGrade: runtimeScore.rawGrade,
+          rawGrade: scoring.calcRawGrade(calculatedScore, {
+            A: 90,
+            B: 75,
+            C: 60,
+          }),
         };
         const records = completedByCycle.get(definition.key) ?? [];
         records.push(record);

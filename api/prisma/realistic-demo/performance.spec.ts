@@ -231,15 +231,17 @@ describe("generatePerformance", () => {
 
     expect(complete).toHaveLength(241);
     for (const task of complete) {
+      const persistedGrade = gradeFor(bundle, task.id!);
       const runtimeScore = runtimeTaskScore(
         task.id!,
         bundle.indicatorInstances,
       );
-      expect(runtimeScore.totalScore).toBeCloseTo(
-        Number(gradeFor(bundle, task.id!).calculatedScore),
-        2,
+      expect(Number(runtimeScore.totalScore.toFixed(2))).toBe(
+        Number(persistedGrade.calculatedScore),
       );
-      expect(runtimeScore.rawGrade).toBe(gradeFor(bundle, task.id!).rawGrade);
+      expect(rawGrade(Number(persistedGrade.calculatedScore))).toBe(
+        persistedGrade.rawGrade,
+      );
       expect(millis(task.indicatorSetAt)).toBeLessThanOrEqual(
         millis(task.indicatorConfirmedAt),
       );
@@ -552,9 +554,7 @@ describe("generatePerformance", () => {
     const bundle = buildPerformanceFixture();
     for (const key of ["2026-Q3", "2026-ANNUAL-LEADERS"] as const) {
       const cycle = bundle.cycles.find((row) => row.name === key)!;
-      const deadlines = [
-        cycle.deadlineIndicatorSetting,
-        cycle.deadlineIndicatorConfirm,
+      const postCycleDeadlines = [
         cycle.deadlineSelfEval,
         cycle.deadlineManagerScore,
         cycle.deadlineHrCalibration,
@@ -562,15 +562,18 @@ describe("generatePerformance", () => {
         cycle.deadlinePublish,
         cycle.deadlineAppeal,
       ];
+      const millisecondsPerDay = 24 * 60 * 60 * 1000;
+      const selfDelay =
+        (millis(cycle.deadlineSelfEval) - millis(cycle.endDate)) /
+        millisecondsPerDay;
+      expect(selfDelay).toBeGreaterThan(0);
+      expect(selfDelay).toBeLessThanOrEqual(5);
+      const deadlineTimes = postCycleDeadlines.map(millis);
       expect(
-        deadlines.every((date) => millis(date) >= millis(cycle.startDate)),
+        deadlineTimes
+          .slice(1)
+          .every((date, index) => date > deadlineTimes[index]),
       ).toBe(true);
-      expect(
-        deadlines.every((date) => millis(date) <= millis(cycle.endDate)),
-      ).toBe(true);
-      expect(millis(cycle.deadlineSelfEval)).toBeGreaterThan(
-        DEMO_CONFIG.asOf.getTime(),
-      );
     }
     const completed = bundle.indicatorInstances.filter(
       (indicator) => indicator.managerScore != null,
