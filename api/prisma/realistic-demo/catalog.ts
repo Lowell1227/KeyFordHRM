@@ -45,6 +45,8 @@ const MANAGER_INDICATOR: IndicatorDefinition = {
     "达成2项且成效明显100分；达成2项90分；达成1项80分；无落地成果60分",
 };
 
+const MANAGER_SYS_ROLES = new Set(["hr", "manager", "dept_head", "vp"]);
+
 const FAMILY_DEFINITIONS: Record<JobFamily, FamilyDefinition> = {
   projectProduct: {
     label: "项目与产品",
@@ -455,6 +457,14 @@ function templateRows(
   libraryById: Map<string, Prisma.IndicatorCreateManyInput>,
 ): GeneratedTemplate {
   const variant = manager ? "manager" : "employee";
+  const applicableDepts = [
+    ...definition.departmentIds,
+    ...(family === "projectProduct"
+      ? people.departments.flatMap((department) =>
+          department.id ? [department.id] : [],
+        )
+      : []),
+  ];
   const templateId = context.own(
     "template",
     context.id("template", `${family}-${variant}`),
@@ -464,16 +474,18 @@ function templateRows(
       (user) =>
         user.id &&
         user.status !== "resigned" &&
+        user.sysRole !== "system_admin" &&
         user.deptId !== null &&
         user.deptId !== undefined &&
-        definition.departmentIds.includes(user.deptId),
+        applicableDepts.includes(user.deptId) &&
+        MANAGER_SYS_ROLES.has(user.sysRole ?? "") === manager,
     )
     .map((user) => user.id!);
   const template: Prisma.AssessmentTemplateCreateManyInput = {
     id: templateId,
     name: `2026真实演示-${definition.label}-${manager ? "管理者" : "员工"}`,
     description: `realistic-demo-v1；${definition.label}${manager ? "管理者" : "员工"}绩效模板`,
-    applicableDepts: definition.departmentIds,
+    applicableDepts,
     applicableUsers: eligibleUsers,
     maxScore: 100,
     isActive: true,
@@ -540,7 +552,21 @@ function templateRows(
       const library = libraryById.get(row.indicatorId!);
       if (!library)
         throw new Error(`missing indicator library row ${row.indicatorId}`);
-      return { ...library, ...row };
+      return {
+        id: row.id,
+        dimensionId: row.dimensionId,
+        indicatorId: row.indicatorId,
+        name: library.name,
+        description: library.description,
+        scoringStandard: library.scoringStandard,
+        dataSource: library.dataSource,
+        dataCaliber: library.dataCaliber,
+        targetValue: library.targetValue,
+        targetValueText: library.targetValueText,
+        unit: library.unit,
+        weight: row.weight,
+        sortOrder: row.sortOrder,
+      } satisfies Prisma.TemplateIndicatorCreateManyInput;
     }),
   };
 }
