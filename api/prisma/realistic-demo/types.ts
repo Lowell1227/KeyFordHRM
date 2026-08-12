@@ -1,15 +1,35 @@
-import type { Prisma } from '@prisma/client';
+import type { Prisma } from "@prisma/client";
 
 export type DemoEntityKind =
-  | 'department' | 'user' | 'indicator' | 'template' | 'dimension'
-  | 'template-indicator' | 'cycle' | 'snapshot' | 'task' | 'indicator-instance'
-  | 'self-eval' | 'manager-eval' | 'grade' | 'flow' | 'archive' | 'objective'
-  | 'action-item' | 'interview' | 'appeal' | 'improvement-plan'
-  | 'probation-review' | 'probation-indicator' | 'confirmation'
-  | 'signature' | 'notification' | 'audit-log';
+  | "department"
+  | "user"
+  | "indicator"
+  | "template"
+  | "dimension"
+  | "template-indicator"
+  | "cycle"
+  | "snapshot"
+  | "task"
+  | "indicator-instance"
+  | "self-eval"
+  | "manager-eval"
+  | "grade"
+  | "flow"
+  | "archive"
+  | "objective"
+  | "action-item"
+  | "interview"
+  | "appeal"
+  | "improvement-plan"
+  | "probation-review"
+  | "probation-indicator"
+  | "confirmation"
+  | "signature"
+  | "notification"
+  | "audit-log";
 
 export interface DemoManifest {
-  source: 'realistic-demo-v1';
+  source: "realistic-demo-v1";
   asOf: Date;
   ownedIds: Record<DemoEntityKind, string[]>;
   acceptanceEmployeeNos: Record<string, string>;
@@ -46,8 +66,25 @@ export interface DemoRowSets {
   auditLogs: Prisma.AuditLogCreateManyInput[];
 }
 
+export interface PeopleBundle {
+  departments: Prisma.DepartmentCreateManyInput[];
+  users: Prisma.UserCreateManyInput[];
+  baseDepartmentAssertions: Array<{ id: string; expectedName: string }>;
+  departmentLeadership: RealisticDemoDataset["departmentLeadership"];
+  managerIds: string[];
+  managerByUserId: Map<string, string>;
+  deptHeadByDepartmentId: Map<string, string>;
+  approverByDepartmentId: Map<string, string>;
+  storyUserIds: Record<string, string>;
+  acceptanceEmployeeNos: Record<string, string>;
+}
+
 export interface RealisticDemoDataset {
   rows: DemoRowSets;
-  departmentLeadership: Array<{ id: string; leaderId: string | null; approverId: string | null }>;
+  departmentLeadership: Array<{
+    id: string;
+    leaderId: string | null;
+    approverId: string | null;
+  }>;
   manifest: DemoManifest;
 }
