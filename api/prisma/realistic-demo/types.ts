@@ -79,6 +79,32 @@ export interface PeopleBundle {
   acceptanceEmployeeNos: Record<string, string>;
 }
 
+export type JobFamily =
+  | "projectProduct"
+  | "supplyChain"
+  | "salesRetail"
+  | "ecommerce"
+  | "creative"
+  | "customerSupport"
+  | "functions";
+
+export interface GeneratedTemplate {
+  template: Prisma.AssessmentTemplateCreateManyInput;
+  dimensions: Prisma.TemplateDimensionCreateManyInput[];
+  indicators: Prisma.TemplateIndicatorCreateManyInput[];
+}
+
+export interface CatalogBundle {
+  indicators: Prisma.IndicatorCreateManyInput[];
+  templates: Prisma.AssessmentTemplateCreateManyInput[];
+  dimensions: Prisma.TemplateDimensionCreateManyInput[];
+  templateIndicators: Prisma.TemplateIndicatorCreateManyInput[];
+  templateIdByJobFamily: Map<JobFamily, string>;
+  managerTemplateIdByJobFamily: Map<JobFamily, string>;
+  templateForFamily(family: JobFamily): GeneratedTemplate;
+  managerTemplateForFamily(family: JobFamily): GeneratedTemplate;
+}
+
 export interface RealisticDemoDataset {
   rows: DemoRowSets;
   departmentLeadership: Array<{
