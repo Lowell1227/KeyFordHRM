@@ -1,13 +1,17 @@
 import { createDemoContext } from "./context";
+import { DEMO_CONFIG } from "./config";
 import type { Prisma } from "@prisma/client";
+import type { PeopleBundle } from "./types";
 
-// Kept as a dynamic import for the first red run: the feature module does not exist yet.
+const ACCEPTANCE_PASSWORD_HASH = "__ACCEPTANCE_PASSWORD_HASH__";
+
+// A test-only module override makes the approved missing-export RED reproducible.
+const peopleModulePath = process.env.REALISTIC_DEMO_PEOPLE_MODULE ?? "./people";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
-const { generatePeople } = require("./people") as {
-  generatePeople?: (context: ReturnType<typeof createDemoContext>) => {
-    users: Prisma.UserCreateManyInput[];
-    managerIds: string[];
-  };
+const { generatePeople } = require(peopleModulePath) as {
+  generatePeople?: (
+    context: ReturnType<typeof createDemoContext>,
+  ) => PeopleBundle;
 };
 
 function countBy<T extends Record<string, unknown>>(
@@ -47,6 +51,28 @@ function managerTeamSizes(users: Prisma.UserCreateManyInput[]): number[] {
       );
   }
   return [...counts.values()];
+}
+
+function serializablePeopleBundle(people: {
+  departments: Prisma.DepartmentCreateManyInput[];
+  users: Prisma.UserCreateManyInput[];
+  departmentLeadership: Array<{
+    id: string;
+    leaderId: string | null;
+    approverId: string | null;
+  }>;
+  managerIds: string[];
+  managerByUserId: Map<string, string>;
+  storyUserIds: Record<string, string>;
+}): string {
+  return JSON.stringify({
+    departments: people.departments,
+    users: people.users,
+    departmentLeadership: people.departmentLeadership,
+    managerIds: people.managerIds,
+    managerByUserId: [...people.managerByUserId],
+    storyUserIds: people.storyUserIds,
+  });
 }
 
 describe("generatePeople", () => {
@@ -117,5 +143,52 @@ describe("generatePeople", () => {
       "2026Q2": 4,
       "2026Q3": 4,
     });
+  });
+
+  it("locks deterministic persona, department, sentinel, and ownership metadata", () => {
+    const firstContext = createDemoContext();
+    const people = generatePeople!(firstContext);
+    const second = generatePeople!(createDemoContext());
+    const current = people.users.filter(
+      (user) => user.status !== "resigned" && user.sysRole !== "system_admin",
+    );
+
+    expect(serializablePeopleBundle(people)).toBe(
+      serializablePeopleBundle(second),
+    );
+    expect(people.baseDepartmentAssertions).toEqual(
+      DEMO_CONFIG.baseDepartments,
+    );
+    expect(people.departments).toHaveLength(1);
+    expect(firstContext.manifest.ownedIds.department).toEqual(
+      people.departments.map((department) => department.id),
+    );
+    expect(firstContext.manifest.ownedIds.user).toEqual(
+      people.users.map((user) => user.id),
+    );
+    expect(
+      Object.fromEntries(
+        Object.entries(DEMO_CONFIG.storyEmployeeNos).map(
+          ([key, employeeNo]) => [key, firstContext.id("user", employeeNo)],
+        ),
+      ),
+    ).toEqual(people.storyUserIds);
+    expect(
+      people.users
+        .filter((user) => user.passwordHash === ACCEPTANCE_PASSWORD_HASH)
+        .map((user) => user.employeeNo)
+        .sort(),
+    ).toEqual(Object.values(DEMO_CONFIG.acceptanceEmployeeNos).sort());
+    expect(
+      current.filter(
+        (user) => user.deptId === "00000000-0000-0000-0000-000000001011",
+      ),
+    ).toHaveLength(8);
+    expect(
+      current.filter(
+        (user) => user.deptId === "00000000-0000-0000-0000-000000000121",
+      ),
+    ).toHaveLength(14);
+    expect(firstContext.manifest.asOf).toEqual(DEMO_CONFIG.asOf);
   });
 });
