@@ -6,7 +6,17 @@ import type { PeopleBundle } from "./types";
 const ACCEPTANCE_PASSWORD_HASH = "__ACCEPTANCE_PASSWORD_HASH__";
 
 // A test-only module override makes the approved missing-export RED reproducible.
-const peopleModulePath = process.env.REALISTIC_DEMO_PEOPLE_MODULE ?? "./people";
+const MISSING_EXPORT_FIXTURE_MODULE = "./people.missing-export.fixture";
+const peopleModuleOverride = process.env.REALISTIC_DEMO_PEOPLE_MODULE;
+if (
+  peopleModuleOverride !== undefined &&
+  peopleModuleOverride !== MISSING_EXPORT_FIXTURE_MODULE
+) {
+  throw new Error(
+    `REALISTIC_DEMO_PEOPLE_MODULE must be unset or ${MISSING_EXPORT_FIXTURE_MODULE}; received ${peopleModuleOverride}`,
+  );
+}
+const peopleModulePath = peopleModuleOverride ?? "./people";
 // eslint-disable-next-line @typescript-eslint/no-var-requires
 const { generatePeople } = require(peopleModulePath) as {
   generatePeople?: (
