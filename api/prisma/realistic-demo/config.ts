@@ -77,7 +77,7 @@ export const DEMO_CONFIG = {
     consecutiveLowPerformerB: "FD210105",
     appealModified: "FD210106",
     appealMaintained: "FD210107",
-    lateEntryExempt: "FD210108",
+    lateEntryExempt: "FD300118",
     transferredEmployee: "FD210109",
   },
   q1: {
@@ -99,4 +99,7 @@ export const DEMO_CONFIG = {
     },
   },
   annualLeaderTaskCount: 12,
+  gradeCoefficient: { A: 1.2, B: 1, C: 0.8, D: 0.6 },
+  objectiveCount: { company: 1, department: 9, individual: 18 },
+  actionItemCount: 56,
 } as const;

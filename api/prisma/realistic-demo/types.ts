@@ -105,6 +105,22 @@ export interface CatalogBundle {
   managerTemplateForFamily(family: JobFamily): GeneratedTemplate;
 }
 
+export interface PerformanceBundle {
+  cycles: Prisma.AssessmentCycleCreateManyInput[];
+  snapshots: Prisma.AssessmentTemplateSnapshotCreateManyInput[];
+  tasks: Prisma.AssessmentTaskCreateManyInput[];
+  indicatorInstances: Prisma.IndicatorInstanceCreateManyInput[];
+  selfEvaluations: Prisma.SelfEvalSummaryCreateManyInput[];
+  managerEvaluations: Prisma.ManagerEvalSummaryCreateManyInput[];
+  gradeResults: Prisma.GradeResultCreateManyInput[];
+  flowRecords: Prisma.FlowRecordCreateManyInput[];
+  archives: Prisma.PerformanceArchiveCreateManyInput[];
+  objectives: Prisma.ObjectiveCreateManyInput[];
+  actionItems: Prisma.ActionItemCreateManyInput[];
+  storyUserIds: Record<string, string>;
+  employeeNoByUserId: Map<string, string>;
+}
+
 export interface RealisticDemoDataset {
   rows: DemoRowSets;
   departmentLeadership: Array<{

@@ -113,7 +113,7 @@ function employeeNumber(index: number): string {
     [5, DEMO_CONFIG.storyEmployeeNos.consecutiveLowPerformerB],
     [6, DEMO_CONFIG.storyEmployeeNos.appealModified],
     [8, DEMO_CONFIG.storyEmployeeNos.appealMaintained],
-    [9, DEMO_CONFIG.storyEmployeeNos.lateEntryExempt],
+    [9, "FD210108"],
     [10, DEMO_CONFIG.storyEmployeeNos.transferredEmployee],
     [102, DEMO_CONFIG.acceptanceEmployeeNos.hr],
     [116, DEMO_CONFIG.acceptanceEmployeeNos.probation],
@@ -123,6 +123,8 @@ function employeeNumber(index: number): string {
 }
 
 function entryDate(index: number): Date {
+  if (index === 9) return new Date(Date.UTC(2026, 4, 31));
+  if (index === 122) return new Date(Date.UTC(2025, 9, 10));
   if (index < 116)
     return new Date(Date.UTC(2025, index % 12, (index % 24) + 1));
   const cohortMonth = [0, 1, 2, 2, 3, 4, 5, 5, 6, 6, 7, 7][index - 116];

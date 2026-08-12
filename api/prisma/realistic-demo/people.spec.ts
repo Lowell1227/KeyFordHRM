@@ -153,6 +153,16 @@ describe("generatePeople", () => {
       "2026Q2": 4,
       "2026Q3": 4,
     });
+    expect(
+      current.find((user) => user.employeeNo === "FD100002"),
+    ).toMatchObject({
+      entryDate: new Date("2025-10-10T00:00:00.000Z"),
+    });
+    expect(
+      current.find((user) => user.employeeNo === "FD210108"),
+    ).toMatchObject({
+      entryDate: new Date("2026-05-31T00:00:00.000Z"),
+    });
   });
 
   it("locks deterministic persona, department, sentinel, and ownership metadata", () => {
@@ -183,6 +193,15 @@ describe("generatePeople", () => {
         ),
       ),
     ).toEqual(people.storyUserIds);
+    expect(DEMO_CONFIG.storyEmployeeNos.lateEntryExempt).toBe("FD300118");
+    expect(
+      people.users.find(
+        (user) => user.id === people.storyUserIds.lateEntryExempt,
+      ),
+    ).toMatchObject({
+      employeeNo: "FD300118",
+      entryDate: new Date("2026-03-19T00:00:00.000Z"),
+    });
     expect(
       people.users
         .filter((user) => user.passwordHash === ACCEPTANCE_PASSWORD_HASH)
