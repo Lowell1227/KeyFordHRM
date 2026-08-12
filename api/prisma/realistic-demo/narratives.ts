@@ -6,6 +6,63 @@ export interface NarrativeRows {
   managerEvaluation: Prisma.ManagerEvalSummaryCreateManyInput;
 }
 
+interface WorkflowNarrativeSource {
+  name: string;
+  finalScore?: unknown;
+}
+
+function weakestIndicator(
+  indicators: WorkflowNarrativeSource[],
+): WorkflowNarrativeSource {
+  if (indicators.length === 0)
+    throw new Error("workflow narrative requires at least one indicator");
+  return [...indicators].sort(
+    (left, right) => Number(left.finalScore) - Number(right.finalScore),
+  )[0];
+}
+
+export function generateInterviewNarrative(
+  indicators: WorkflowNarrativeSource[],
+): Pick<
+  Prisma.PerformanceInterviewCreateManyInput,
+  | "achievements"
+  | "weaknesses"
+  | "nextGoals"
+  | "remediation"
+  | "supportNeeded"
+  | "otherMatters"
+> {
+  const weakest = weakestIndicator(indicators);
+  return {
+    achievements: "已完成周期重点工作，并形成可复核的交付证据。",
+    weaknesses: `${weakest.name}是本周期相对薄弱项，需要加强过程控制。`,
+    nextGoals: `下一周期优先提升${weakest.name}，按月检查阶段成果。`,
+    remediation: `围绕${weakest.name}设置双周里程碑，由主管跟踪偏差并及时纠正。`,
+    supportNeeded: "需要主管协调跨团队资源，并提供双周反馈。",
+    otherMatters: "员工已了解最终成绩、评价依据及申诉渠道。",
+  };
+}
+
+export function generateImprovementNarrative(
+  indicators: WorkflowNarrativeSource[],
+): Pick<
+  Prisma.ImprovementPlanCreateManyInput,
+  "improvementNeed" | "importance" | "improvementGoal" | "measures"
+> {
+  const weakest = weakestIndicator(indicators);
+  return {
+    improvementNeed: `${weakest.name}得分偏低，需提升计划拆解、执行跟踪和结果复盘。`,
+    importance:
+      "该项直接影响岗位核心交付和团队协作质量，需在本改进周期内闭环。",
+    improvementGoal: `${weakest.name}相关成果达到岗位合格标准，并连续两次通过主管复核。`,
+    measures: [
+      { sequence: 1, action: `拆解${weakest.name}月度目标`, owner: "employee" },
+      { sequence: 2, action: "每两周提交进展证据", owner: "employee" },
+      { sequence: 3, action: "主管月末复核并书面反馈", owner: "manager" },
+    ],
+  };
+}
+
 export function generateNarratives(
   context: DemoContext,
   taskId: string,

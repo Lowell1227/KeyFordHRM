@@ -121,6 +121,24 @@ export interface PerformanceBundle {
   employeeNoByUserId: Map<string, string>;
 }
 
+export interface WorkflowBundle {
+  interviews: Prisma.PerformanceInterviewCreateManyInput[];
+  q1Interviews: Prisma.PerformanceInterviewCreateManyInput[];
+  q2Interviews: Prisma.PerformanceInterviewCreateManyInput[];
+  appeals: Prisma.AppealCreateManyInput[];
+  q1Appeals: Prisma.AppealCreateManyInput[];
+  q2Appeals: Prisma.AppealCreateManyInput[];
+  improvementPlans: Prisma.ImprovementPlanCreateManyInput[];
+  q1ImprovementPlans: Prisma.ImprovementPlanCreateManyInput[];
+  q2ImprovementPlans: Prisma.ImprovementPlanCreateManyInput[];
+  probationReviews: Prisma.ProbationReviewCreateManyInput[];
+  probationIndicators: Prisma.ProbationReviewIndicatorCreateManyInput[];
+  confirmations: Prisma.ConfirmationApplicationCreateManyInput[];
+  signatures: Prisma.SignatureCreateManyInput[];
+  notifications: Prisma.NotificationLogCreateManyInput[];
+  auditLogs: Prisma.AuditLogCreateManyInput[];
+}
+
 export interface RealisticDemoDataset {
   rows: DemoRowSets;
   departmentLeadership: Array<{
