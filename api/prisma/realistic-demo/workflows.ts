@@ -493,6 +493,9 @@ function generateAppeals(
           status: definition.status,
           result: definition.result,
           calibratedGrade: finalGrade,
+          ...(definition.status === "resolved"
+            ? {}
+            : { stateOrigin: "historical_migration" }),
         },
         ipAddress: "127.0.0.1",
         userAgent: "realistic-demo-seed",
@@ -865,12 +868,8 @@ function generateNotifications(
     DEMO_CONFIG.acceptanceEmployeeNos.hr,
   ).id!;
   const q3Cycle = cycle(performance, "2026-Q3");
-  const q2Cycle = cycle(performance, "2026-Q2");
   const q3Tasks = performance.tasks.filter(
     (task) => task.cycleId === q3Cycle.id,
-  );
-  const q2Tasks = performance.tasks.filter(
-    (task) => task.cycleId === q2Cycle.id,
   );
   const acceptanceUsers = Object.values(DEMO_CONFIG.acceptanceEmployeeNos).map(
     (employeeNo) => userByEmployeeNo(people, employeeNo),
@@ -878,22 +877,21 @@ function generateNotifications(
   return acceptanceUsers.flatMap((user, userIndex) => {
     const ownTask = q3Tasks.find((task) => task.employeeId === user.id);
     const primaryTask = ownTask ?? q3Tasks[userIndex];
-    const secondaryTask =
-      q2Tasks.find((task) => task.employeeId === user.id) ?? primaryTask;
+    const secondaryTask = primaryTask;
     const definitions = [
       {
         type: "task_reminder",
         title: "待处理：绩效任务",
-        content: "请在截止时间前完成当前绩效节点。",
+        content: "请根据当前任务状态完成待办操作，并保存进展。",
         task: primaryTask,
         isRead: false,
         status: "sent",
         createdAt: utcDate("2026-08-10"),
       },
       {
-        type: "task_deadline",
-        title: "待处理：任务即将到期",
-        content: "请核对任务材料并及时提交。",
+        type: "task_evidence",
+        title: "待处理：补充阶段证据",
+        content: "请核对当前阶段成果，并补充进展说明或交付证据。",
         task: secondaryTask,
         isRead: false,
         status: "sent",

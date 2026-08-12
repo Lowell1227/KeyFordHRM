@@ -219,6 +219,24 @@ describe("generateWorkflows", () => {
     }
   });
 
+  it("persists a queryable origin marker for both migrated appeal states", () => {
+    const { workflows } = buildWorkflowFixture();
+    const migrated = workflows.appeals.filter((row) =>
+      ["dept_processing", "hr_processing"].includes(row.status!),
+    );
+
+    expect(migrated).toHaveLength(2);
+    for (const appeal of migrated) {
+      const audit = workflows.auditLogs.find(
+        (row) => row.entityType === "appeal" && row.entityId === appeal.id,
+      );
+      expect(audit).toBeDefined();
+      expect(audit!.newValue).toMatchObject({
+        stateOrigin: "historical_migration",
+      });
+    }
+  });
+
   it("creates one service-compatible improvement plan for every final D", () => {
     const { workflows, performance } = buildWorkflowFixture();
     const finalDTaskIds = performance.gradeResults
@@ -502,6 +520,43 @@ describe("generateWorkflows", () => {
     expect(taskNotifications).toHaveLength(32);
     expect(taskNotifications.filter((row) => !row.isRead)).toHaveLength(16);
     expect(inaccessible).toEqual([]);
+  });
+
+  it("keeps all unread actions on active Q3 work without expired-deadline claims", () => {
+    const fixture = buildWorkflowFixture();
+    const q3Cycle = fixture.performance.cycles.find(
+      (row) => row.name === "2026-Q3",
+    )!;
+    const taskById = new Map(
+      fixture.performance.tasks.map((task) => [task.id!, task]),
+    );
+    const actionable = fixture.workflows.notifications.filter(
+      (row) => !row.isRead && row.taskId,
+    );
+    const allowedStatuses = new Set([
+      "indicator_setting",
+      "indicator_confirming",
+      "self_eval",
+    ]);
+    const forbiddenPastDeadlineClaim = /即将到期|逾期|已过期|截止时间前/;
+
+    expect(actionable).toHaveLength(16);
+    expect(actionable.filter((row) => row.cycleId !== q3Cycle.id)).toEqual([]);
+    expect(
+      actionable.filter(
+        (row) => !allowedStatuses.has(taskById.get(row.taskId!)!.status!),
+      ),
+    ).toEqual([]);
+    expect(
+      actionable.filter(
+        (row) => millis(row.createdAt) > DEMO_CONFIG.asOf.getTime(),
+      ),
+    ).toEqual([]);
+    expect(
+      actionable.filter((row) =>
+        forbiddenPastDeadlineClaim.test(`${row.title} ${row.content ?? ""}`),
+      ),
+    ).toEqual([]);
   });
 
   it("never fabricates a completed workflow event after the observation instant", () => {
