@@ -2,6 +2,7 @@ import { createDemoContext } from "./context";
 import { generatePeople } from "./people";
 import { generateCatalog } from "./catalog";
 import { LaunchService } from "../../src/cycles/launch.service";
+import { validateTemplateWeights } from "../../src/templates/templates.validation";
 import type { Prisma } from "@prisma/client";
 
 const KPI_NAMES = {
@@ -118,8 +119,23 @@ describe("generateCatalog", () => {
             (total, indicator) => total + numberWeight(indicator.weight),
             0,
           ),
-        ).toBeCloseTo(numberWeight(dimension.weight), 6);
+        ).toBeCloseTo(1, 6);
       }
+      expect(
+        validateTemplateWeights(
+          template.dimensions.map((dimension) => ({
+            name: dimension.name,
+            type: dimension.type,
+            weight: numberWeight(dimension.weight),
+            indicators: template.indicators
+              .filter((indicator) => indicator.dimensionId === dimension.id)
+              .map((indicator) => ({
+                name: indicator.name,
+                weight: numberWeight(indicator.weight),
+              })),
+          })),
+        ),
+      ).toEqual({ valid: true });
       for (const indicator of template.indicators) {
         expect(indicator.dataSource).not.toHaveLength(0);
         expect(indicator.dataCaliber).not.toHaveLength(0);
@@ -238,6 +254,21 @@ describe("generateCatalog", () => {
         ["kpi", 0.8],
         ["attitude", 0.2],
       ]);
+      expect(
+        validateTemplateWeights(
+          managerTemplate.dimensions.map((dimension) => ({
+            name: dimension.name,
+            type: dimension.type,
+            weight: numberWeight(dimension.weight),
+            indicators: managerTemplate.indicators
+              .filter((indicator) => indicator.dimensionId === dimension.id)
+              .map((indicator) => ({
+                name: indicator.name,
+                weight: numberWeight(indicator.weight),
+              })),
+          })),
+        ),
+      ).toEqual({ valid: true });
     }
   });
 

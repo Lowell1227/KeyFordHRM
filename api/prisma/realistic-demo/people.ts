@@ -263,6 +263,7 @@ export function generatePeople(context: DemoContext): PeopleBundle {
     throw new Error(
       `current person slots must equal 128; received ${slots.length}`,
     );
+  [slots[10], slots[60]] = [slots[60], slots[10]];
 
   const acceptanceNumbers = new Set<string>(
     Object.values(DEMO_CONFIG.acceptanceEmployeeNos),

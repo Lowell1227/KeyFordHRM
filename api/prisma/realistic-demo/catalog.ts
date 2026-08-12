@@ -530,7 +530,7 @@ function templateRows(
       id,
       dimensionId: kpiDimensionId,
       indicatorId,
-      weight: 0.16,
+      weight: 0.2,
       sortOrder: index + 1,
     };
   });
@@ -541,7 +541,7 @@ function templateRows(
     ),
     dimensionId: attitudeDimensionId,
     indicatorId: attitudeIndicatorId,
-    weight: 0.2,
+    weight: 1,
     sortOrder: 1,
   });
 

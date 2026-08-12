@@ -5,6 +5,7 @@ import {
   type TaskStatus,
 } from "@prisma/client";
 import { ExemptService } from "../../src/cycles/exempt.service";
+import { ScoringService } from "../../src/tasks/scoring.service";
 import { DEMO_CONFIG } from "./config";
 import type { DemoContext } from "./context";
 import { generateNarratives } from "./narratives";
@@ -62,6 +63,7 @@ interface CompletedRecord {
   indicators: Prisma.IndicatorInstanceCreateManyInput[];
   calculatedScore: number;
   performanceIndex: number;
+  rawGrade: PerfGrade;
 }
 
 const TOP_DEPARTMENT_BY_CHILD = new Map<string, string>([
@@ -139,6 +141,16 @@ export function calculateIndicatorScore(
   return Math.max(0, Math.min(100, Math.round(ratio * 10000) / 100));
 }
 
+const LOWER_IS_BETTER_INDICATORS = new Set([
+  "坏账控制",
+  "首次响应时效",
+  "投诉升级控制",
+]);
+
+export function isHigherBetterIndicator(name: string): boolean {
+  return !LOWER_IS_BETTER_INDICATORS.has(name);
+}
+
 export function rawGrade(score: number): PerfGrade {
   if (score >= 90) return PerfGrade.A;
   if (score >= 75) return PerfGrade.B;
@@ -188,8 +200,11 @@ function templateForEmployee(
   cycleKey: CycleKey,
   transferredEmployeeId: string,
 ): GeneratedTemplate {
-  if (cycleKey === "2026-Q3" && employee.id === transferredEmployeeId)
-    return catalog.templateForFamily("supplyChain");
+  if (employee.id === transferredEmployeeId) {
+    return cycleKey === "2026-Q1" || cycleKey === "2026-Q2"
+      ? catalog.templateForFamily("projectProduct")
+      : catalog.templateForFamily("supplyChain");
+  }
   const template = catalog.templates.find((row) => {
     const applicableUsers = Array.isArray(row.applicableUsers)
       ? row.applicableUsers
@@ -330,11 +345,26 @@ function createIndicatorRows(
       score == null
         ? null
         : clamp(score + offsets[index % offsets.length], 0, 100);
-    const actual = desired == null ? null : round2((target * desired) / 100);
+    const higherIsBetter = isHigherBetterIndicator(indicator.name);
+    const actual =
+      desired == null
+        ? null
+        : round2(
+            higherIsBetter
+              ? (target * desired) / 100
+              : (target * 100) / Math.max(desired, 0.0001),
+          );
     const finalScore =
       actual == null || target <= 0
         ? null
-        : calculateIndicatorScore(target, actual);
+        : calculateIndicatorScore(target, actual, higherIsBetter);
+    const selfScore = (() => {
+      if (finalScore == null) return null;
+      const variant = stableNumber(`${taskId}:${indicator.id}:self`) % 20;
+      if (variant === 0) return finalScore;
+      if (variant === 1) return clamp(finalScore - 2, 0, 100);
+      return clamp(finalScore + 2 + (variant % 5), 0, 100);
+    })();
     return {
       id: context.own(
         "indicator-instance",
@@ -360,10 +390,7 @@ function createIndicatorRows(
       actualValue: actual == null ? null : new Prisma.Decimal(actual),
       actualNote:
         actual == null ? null : `${indicator.name}按模板数据口径完成周期核验。`,
-      selfScore:
-        finalScore == null
-          ? null
-          : new Prisma.Decimal(clamp(finalScore + 1, 0, 100)),
+      selfScore: selfScore == null ? null : new Prisma.Decimal(selfScore),
       selfComment:
         finalScore == null ? null : `${indicator.name}已完成自评并附交付说明。`,
       managerScore: finalScore == null ? null : new Prisma.Decimal(finalScore),
@@ -400,7 +427,11 @@ function addFlow(
     cycleId: task.cycleId,
     nodeType,
     actorId: actorId ?? null,
-    action: nodeType === "publish" ? "approve" : "submit",
+    action: ["dept_review", "approval", "publish", "employee_confirm"].includes(
+      nodeType,
+    )
+      ? "approve"
+      : "submit",
     comment: `${nodeType}节点已按演示业务路径完成。`,
     extraData: { source: DEMO_CONFIG.source },
     createdAt,
@@ -567,36 +598,75 @@ function cycleRows(context: DemoContext, hrId: string) {
     const completed = definition.key === "2026-Q1";
     const published =
       definition.key === "2026-Q1" || definition.key === "2026-Q2";
+    const deadlines =
+      definition.key === "2026-Q3"
+        ? [
+            "2026-08-15",
+            "2026-08-20",
+            "2026-09-15",
+            "2026-09-20",
+            "2026-09-24",
+            "2026-09-26",
+            "2026-09-28",
+            "2026-09-30",
+          ]
+        : definition.key === "2026-ANNUAL-LEADERS"
+          ? [
+              "2026-07-10",
+              "2026-07-15",
+              "2026-12-01",
+              "2026-12-05",
+              "2026-12-10",
+              "2026-12-15",
+              "2026-12-20",
+              "2026-12-31",
+            ]
+          : definition.key === "2026-Q2"
+            ? [
+                "2026-04-10",
+                "2026-04-15",
+                "2026-07-03",
+                "2026-07-06",
+                "2026-07-11",
+                "2026-07-13",
+                "2026-07-15",
+                "2026-07-31",
+              ]
+            : definition.key === "2026-Q1"
+              ? [
+                  "2026-01-10",
+                  "2026-01-15",
+                  "2026-04-03",
+                  "2026-04-06",
+                  "2026-04-11",
+                  "2026-04-13",
+                  "2026-04-15",
+                  "2026-04-30",
+                ]
+              : [
+                  "2025-01-10",
+                  "2025-01-15",
+                  "2025-12-01",
+                  "2025-12-05",
+                  "2025-12-10",
+                  "2025-12-15",
+                  "2025-12-20",
+                  "2025-12-31",
+                ];
     return {
       id,
       name: definition.key,
       type: definition.type,
       startDate: utcDate(definition.start),
       endDate: utcDate(definition.end),
-      deadlineIndicatorSetting: utcDate(
-        definition.key === "2026-Q2" ? "2026-04-10" : "2026-01-10",
-      ),
-      deadlineIndicatorConfirm: utcDate(
-        definition.key === "2026-Q2" ? "2026-04-15" : "2026-01-15",
-      ),
-      deadlineSelfEval: utcDate(
-        definition.key === "2026-Q1" ? "2026-04-03" : "2026-07-03",
-      ),
-      deadlineManagerScore: utcDate(
-        definition.key === "2026-Q1" ? "2026-04-06" : "2026-07-06",
-      ),
-      deadlineHrCalibration: utcDate(
-        definition.key === "2026-Q1" ? "2026-04-11" : "2026-07-11",
-      ),
-      deadlineApproval: utcDate(
-        definition.key === "2026-Q1" ? "2026-04-13" : "2026-07-13",
-      ),
-      deadlinePublish: utcDate(
-        definition.key === "2026-Q1" ? "2026-04-15" : "2026-07-15",
-      ),
-      deadlineAppeal: utcDate(
-        definition.key === "2026-Q1" ? "2026-04-30" : "2026-07-31",
-      ),
+      deadlineIndicatorSetting: utcDate(deadlines[0]),
+      deadlineIndicatorConfirm: utcDate(deadlines[1]),
+      deadlineSelfEval: utcDate(deadlines[2]),
+      deadlineManagerScore: utcDate(deadlines[3]),
+      deadlineHrCalibration: utcDate(deadlines[4]),
+      deadlineApproval: utcDate(deadlines[5]),
+      deadlinePublish: utcDate(deadlines[6]),
+      deadlineAppeal: utcDate(deadlines[7]),
       status: definition.status,
       publishVisibleFields: {
         total_score: true,
@@ -633,7 +703,6 @@ function createObjectives(
   const objectives: Prisma.ObjectiveCreateManyInput[] = [];
   const actionItems: Prisma.ActionItemCreateManyInput[] = [];
   const vpId = people.users.find((user) => user.sysRole === "vp")!.id!;
-  const q3Id = cycleIdByKey.get("2026-Q3")!;
   const annualId = cycleIdByKey.get("2026-ANNUAL-LEADERS")!;
   const companyId = context.own(
     "objective",
@@ -645,7 +714,7 @@ function createObjectives(
     description: "聚焦客户价值、经营质量、人才培养和跨部门协同。",
     level: "company",
     ownerId: vpId,
-    cycleId: q3Id,
+    cycleId: annualId,
     weight: new Prisma.Decimal(100),
     priority: 1,
     progress: 58,
@@ -669,7 +738,7 @@ function createObjectives(
         deptId: leadership.id,
         ownerId: leadership.leaderId,
         parentId: companyId,
-        cycleId: q3Id,
+        cycleId: annualId,
         weight: new Prisma.Decimal(100),
         priority: index + 1,
         progress: 40 + (index % 5) * 8,
@@ -709,7 +778,7 @@ function createObjectives(
       deptId: owner.deptId,
       ownerId: owner.id,
       parentId,
-      cycleId: index < annualLeaders.length ? annualId : q3Id,
+      cycleId: annualId,
       weight: new Prisma.Decimal(100),
       priority: (index % 3) + 1,
       progress: 35 + (index % 6) * 9,
@@ -791,7 +860,15 @@ export function generatePerformance(
   const archives: Prisma.PerformanceArchiveCreateManyInput[] = [];
   const completedByCycle = new Map<string, CompletedRecord[]>();
   const exemption = new ExemptService();
+  const scoring = new ScoringService(null as never);
   const transferredEmployeeId = people.storyUserIds.transferredEmployee;
+  const historicalTransferDeptId = "00000000-0000-0000-0000-000000001021";
+  const historicalTransferPeer = currentUsers.find(
+    (user) => user.deptId === historicalTransferDeptId,
+  );
+  const historicalTransferManagerId = historicalTransferPeer
+    ? people.managerByUserId.get(historicalTransferPeer.id!)
+    : undefined;
   const q3SettingIds = new Set([
     ...currentUsers.slice(-4).map((user) => user.id!),
     transferredEmployeeId,
@@ -845,10 +922,12 @@ export function generatePerformance(
     const snapshotByTemplateId = new Map<string, string>();
     let nonExemptIndex = 0;
     for (const [employeeIndex, employee] of candidates.entries()) {
-      const effectiveDeptId =
-        definition.key === "2026-Q3" && employee.id === transferredEmployeeId
-          ? "00000000-0000-0000-0000-000000000121"
-          : employee.deptId;
+      const isHistoricalTransferTask =
+        employee.id === transferredEmployeeId &&
+        (definition.key === "2026-Q1" || definition.key === "2026-Q2");
+      const effectiveDeptId = isHistoricalTransferTask
+        ? historicalTransferDeptId
+        : employee.deptId;
       const template = templateForEmployee(
         catalog,
         employee,
@@ -933,10 +1012,21 @@ export function generatePerformance(
       const approverId = leadershipDept
         ? (people.approverByDepartmentId.get(leadershipDept) ?? vpId)
         : vpId;
+      const managerId =
+        (isHistoricalTransferTask
+          ? historicalTransferManagerId
+          : people.managerByUserId.get(employee.id!)) ??
+        (deptHeadId && deptHeadId !== employee.id ? deptHeadId : null) ??
+        (approverId && approverId !== employee.id ? approverId : null) ??
+        hrId;
       const lastBusinessTimestamp =
-        (completed && !exemptResult.isExempt
-          ? times.publish
-          : indicatorConfirmedAt) ??
+        (definition.key === "2026-Q1" && !exemptResult.isExempt
+          ? times.close
+          : definition.key === "2026-Q2" && status === "confirmed"
+            ? times.employee
+            : completed && !exemptResult.isExempt
+              ? times.publish
+              : indicatorConfirmedAt) ??
         indicatorSetAt ??
         taskCreatedAt;
       const task: Prisma.AssessmentTaskCreateManyInput = {
@@ -945,10 +1035,7 @@ export function generatePerformance(
         snapshotId,
         employeeId: employee.id!,
         deptId: effectiveDeptId ?? null,
-        managerId:
-          people.managerByUserId.get(employee.id!) ??
-          employee.directManagerId ??
-          null,
+        managerId,
         deptHeadId,
         approverId,
         status,
@@ -995,18 +1082,27 @@ export function generatePerformance(
       indicatorInstances.push(...instances);
       createTaskFlows(context, flowRecords, task, hrId);
       if (completed && performanceScore != null) {
-        const calculatedScore = round2(
-          instances.reduce(
-            (sum, indicator) =>
-              sum + Number(indicator.finalScore) * Number(indicator.weight),
-            0,
-          ),
+        const runtimeScore = scoring.calcTaskTotal(
+          instances.map((indicator) => ({
+            id: indicator.id!,
+            name: indicator.name,
+            indicatorType: indicator.indicatorType!,
+            dimensionName: indicator.dimensionName!,
+            dimensionType:
+              indicator.indicatorType === "attitude" ? "attitude" : "kpi",
+            dimensionWeight: Number(indicator.dimensionWeight),
+            weight: Number(indicator.weight),
+            managerScore: Number(indicator.managerScore),
+            finalScore: Number(indicator.finalScore),
+          })),
         );
+        const calculatedScore = round2(runtimeScore.totalScore);
         const narrative = generateNarratives(
           context,
           taskId,
           instances,
           times.self!,
+          times.manager!,
         );
         selfEvaluations.push(narrative.selfEvaluation);
         managerEvaluations.push(narrative.managerEvaluation);
@@ -1016,6 +1112,7 @@ export function generatePerformance(
           indicators: instances,
           calculatedScore,
           performanceIndex: performanceScore,
+          rawGrade: runtimeScore.rawGrade,
         };
         const records = completedByCycle.get(definition.key) ?? [];
         records.push(record);
@@ -1036,7 +1133,7 @@ export function generatePerformance(
     const grades = calibratedGrades(records, cycleKey, people.storyUserIds);
     for (const record of records) {
       const calibratedGrade = grades.get(record.task.id!)!;
-      const calculatedRawGrade = rawGrade(record.calculatedScore);
+      const calculatedRawGrade = record.rawGrade;
       const publishedAt = record.task.publishedAt as Date;
       gradeResults.push({
         id: context.own("grade", context.id("grade", record.task.id!)),
@@ -1110,7 +1207,8 @@ export function generatePerformance(
       totalScore: new Prisma.Decimal(score),
       coefficient: new Prisma.Decimal(DEMO_CONFIG.gradeCoefficient[grade]),
       summary: {
-        source: DEMO_CONFIG.source,
+        source: "legacy-import",
+        datasetSource: DEMO_CONFIG.source,
         legacySequence: index + 1,
         note: "旧制历史绩效档案，仅用于连续趋势查询。",
       },

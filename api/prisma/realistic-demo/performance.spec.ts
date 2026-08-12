@@ -1,4 +1,5 @@
 import { PerfGrade, Prisma } from "@prisma/client";
+import { ScoringService } from "../../src/tasks/scoring.service";
 import { generateCatalog } from "./catalog";
 import { DEMO_CONFIG } from "./config";
 import { createDemoContext } from "./context";
@@ -6,6 +7,7 @@ import { generatePeople } from "./people";
 import {
   calculateIndicatorScore,
   generatePerformance,
+  isHigherBetterIndicator,
   rawGrade,
 } from "./performance";
 import type { PerformanceBundle } from "./types";
@@ -61,17 +63,27 @@ function gradeFor(bundle: PerformanceBundle, taskId: string) {
   return grade;
 }
 
-function recalculateTaskScore(
+function runtimeTaskScore(
   taskId: string,
   indicators: PerformanceBundle["indicatorInstances"],
-): number {
-  return indicators
-    .filter((indicator) => indicator.taskId === taskId)
-    .reduce(
-      (sum, indicator) =>
-        sum + Number(indicator.finalScore) * Number(indicator.weight),
-      0,
-    );
+): ReturnType<ScoringService["calcTaskTotal"]> {
+  const service = new ScoringService(null as never);
+  return service.calcTaskTotal(
+    indicators
+      .filter((indicator) => indicator.taskId === taskId)
+      .map((indicator) => ({
+        id: indicator.id!,
+        name: indicator.name,
+        indicatorType: indicator.indicatorType!,
+        dimensionName: indicator.dimensionName!,
+        dimensionType:
+          indicator.indicatorType === "attitude" ? "attitude" : "kpi",
+        dimensionWeight: Number(indicator.dimensionWeight),
+        weight: Number(indicator.weight),
+        managerScore: Number(indicator.managerScore),
+        finalScore: Number(indicator.finalScore),
+      })),
+  );
 }
 
 function taskForStory(
@@ -219,9 +231,15 @@ describe("generatePerformance", () => {
 
     expect(complete).toHaveLength(241);
     for (const task of complete) {
-      expect(
-        recalculateTaskScore(task.id!, bundle.indicatorInstances),
-      ).toBeCloseTo(Number(gradeFor(bundle, task.id!).calculatedScore), 2);
+      const runtimeScore = runtimeTaskScore(
+        task.id!,
+        bundle.indicatorInstances,
+      );
+      expect(runtimeScore.totalScore).toBeCloseTo(
+        Number(gradeFor(bundle, task.id!).calculatedScore),
+        2,
+      );
+      expect(runtimeScore.rawGrade).toBe(gradeFor(bundle, task.id!).rawGrade);
       expect(millis(task.indicatorSetAt)).toBeLessThanOrEqual(
         millis(task.indicatorConfirmedAt),
       );
@@ -274,6 +292,52 @@ describe("generatePerformance", () => {
         "publish",
         ...(task.employeeConfirmedAt ? ["employee_confirm" as const] : []),
       ]);
+      const actionByNode = Object.fromEntries(
+        bundle.flowRecords
+          .filter((flow) => flow.taskId === task.id)
+          .map((flow) => [flow.nodeType, flow.action]),
+      );
+      expect(actionByNode).toEqual({
+        indicator_setting: "submit",
+        indicator_confirm: "submit",
+        self_eval: "submit",
+        manager_score: "submit",
+        dept_review: "approve",
+        hr_calibration: "submit",
+        approval: "approve",
+        publish: "approve",
+        ...(task.employeeConfirmedAt ? { employee_confirm: "approve" } : {}),
+      });
+      expect(task.managerId).not.toBeNull();
+      expect(
+        bundle.flowRecords
+          .filter((flow) => flow.taskId === task.id)
+          .every((flow) => flow.actorId != null),
+      ).toBe(true);
+      expect(millis(task.updatedAt)).toBe(
+        Math.max(
+          ...[
+            task.indicatorSetAt,
+            task.indicatorConfirmedAt,
+            task.selfEvalSubmittedAt,
+            task.managerScoredAt,
+            task.deptReviewedAt,
+            task.hrCalibratedAt,
+            task.approvedAt,
+            task.publishedAt,
+            task.employeeConfirmedAt,
+            task.closedAt,
+          ]
+            .filter((value): value is string | Date => value != null)
+            .map(millis),
+        ),
+      );
+      expect(
+        millis(
+          bundle.managerEvaluations.find((row) => row.taskId === task.id)!
+            .submittedAt,
+        ),
+      ).toBe(millis(task.managerScoredAt));
     }
 
     expect(bundle.snapshots).toHaveLength(
@@ -312,12 +376,37 @@ describe("generatePerformance", () => {
     expect(calculateIndicatorScore(100, 72)).toBe(72);
     expect(calculateIndicatorScore(5, 4, false)).toBe(100);
     expect(calculateIndicatorScore(5, 10, false)).toBe(50);
+    expect(isHigherBetterIndicator("首次响应时效")).toBe(false);
+    expect(isHigherBetterIndicator("投诉升级控制")).toBe(false);
+    expect(isHigherBetterIndicator("坏账控制")).toBe(false);
+    expect(isHigherBetterIndicator("客户满意度")).toBe(true);
     expect(rawGrade(90)).toBe(PerfGrade.A);
     expect(rawGrade(75)).toBe(PerfGrade.B);
     expect(rawGrade(60)).toBe(PerfGrade.C);
     expect(rawGrade(59.99)).toBe(PerfGrade.D);
 
     const bundle = buildPerformanceFixture();
+    const lowerIsBetter = bundle.indicatorInstances.filter(
+      (indicator) =>
+        ["首次响应时效", "投诉升级控制", "坏账控制"].includes(indicator.name) &&
+        indicator.managerScore != null,
+    );
+    expect(lowerIsBetter.length).toBeGreaterThan(0);
+    expect(
+      lowerIsBetter
+        .map((indicator) => ({
+          name: indicator.name,
+          actual: Number(indicator.actualValue),
+          target: Number(indicator.targetValue),
+          stored: Number(indicator.finalScore),
+          recalculated: calculateIndicatorScore(
+            Number(indicator.targetValue),
+            Number(indicator.actualValue),
+            false,
+          ),
+        }))
+        .filter((row) => Math.abs(row.stored - row.recalculated) > 0.05),
+    ).toEqual([]);
     const coefficient = { A: 1.2, B: 1, C: 0.8, D: 0.6 };
     for (const grade of bundle.gradeResults) {
       expect(Number(grade.coefficient)).toBe(
@@ -389,6 +478,18 @@ describe("generatePerformance", () => {
         departmentObjectiveIds.has(objective.parentId!),
       ),
     ).toBe(true);
+    const objectiveById = new Map(
+      bundle.objectives.map((objective) => [objective.id!, objective]),
+    );
+    expect(
+      bundle.objectives
+        .filter((objective) => objective.parentId)
+        .every(
+          (objective) =>
+            objective.cycleId ===
+            objectiveById.get(objective.parentId!)!.cycleId,
+        ),
+    ).toBe(true);
     const objectiveIds = new Set(
       bundle.objectives.map((objective) => objective.id),
     );
@@ -421,6 +522,80 @@ describe("generatePerformance", () => {
     expect(
       taskForStory(bundle, "transferredEmployee", "2026-Q3").deptId,
     ).not.toBe(taskForStory(bundle, "transferredEmployee", "2026-Q2").deptId);
+    const context = createDemoContext();
+    const people = generatePeople(context);
+    const catalog = generateCatalog(context, people);
+    const current = generatePerformance(context, people, catalog);
+    const transferredId = people.storyUserIds.transferredEmployee;
+    const currentPerson = people.users.find(
+      (user) => user.id === transferredId,
+    )!;
+    const q2 = taskForStory(current, "transferredEmployee", "2026-Q2");
+    const q3 = taskForStory(current, "transferredEmployee", "2026-Q3");
+    expect(q3).toMatchObject({
+      deptId: currentPerson.deptId,
+      managerId: people.managerByUserId.get(transferredId),
+    });
+    expect(q2.deptId).not.toBe(currentPerson.deptId);
+    expect(q2.managerId).not.toBe(q3.managerId);
+    expect(
+      current.snapshots.find((snapshot) => snapshot.id === q2.snapshotId)
+        ?.templateId,
+    ).toBe(catalog.templateIdByJobFamily.get("projectProduct"));
+    expect(
+      current.snapshots.find((snapshot) => snapshot.id === q3.snapshotId)
+        ?.templateId,
+    ).toBe(catalog.templateIdByJobFamily.get("supplyChain"));
+  });
+
+  it("uses cycle-specific legal deadlines and varied deterministic self scores", () => {
+    const bundle = buildPerformanceFixture();
+    for (const key of ["2026-Q3", "2026-ANNUAL-LEADERS"] as const) {
+      const cycle = bundle.cycles.find((row) => row.name === key)!;
+      const deadlines = [
+        cycle.deadlineIndicatorSetting,
+        cycle.deadlineIndicatorConfirm,
+        cycle.deadlineSelfEval,
+        cycle.deadlineManagerScore,
+        cycle.deadlineHrCalibration,
+        cycle.deadlineApproval,
+        cycle.deadlinePublish,
+        cycle.deadlineAppeal,
+      ];
+      expect(
+        deadlines.every((date) => millis(date) >= millis(cycle.startDate)),
+      ).toBe(true);
+      expect(
+        deadlines.every((date) => millis(date) <= millis(cycle.endDate)),
+      ).toBe(true);
+      expect(millis(cycle.deadlineSelfEval)).toBeGreaterThan(
+        DEMO_CONFIG.asOf.getTime(),
+      );
+    }
+    const completed = bundle.indicatorInstances.filter(
+      (indicator) => indicator.managerScore != null,
+    );
+    const deltas = completed.map(
+      (indicator) =>
+        Number(indicator.selfScore) - Number(indicator.managerScore),
+    );
+    expect(deltas.some((delta) => delta === 0)).toBe(true);
+    expect(deltas.some((delta) => delta < 0)).toBe(true);
+    expect(
+      completed.some(
+        (indicator) =>
+          Number(indicator.selfScore) === 100 &&
+          Number(indicator.managerScore) < 100,
+      ),
+    ).toBe(true);
+    expect(
+      completed.filter(
+        (indicator) =>
+          Number(indicator.selfScore) === 100 ||
+          (Number(indicator.selfScore) - Number(indicator.managerScore) >= 2 &&
+            Number(indicator.selfScore) - Number(indicator.managerScore) <= 6),
+      ).length / completed.length,
+    ).toBeGreaterThanOrEqual(0.85);
   });
 
   it("is deterministic without ambient dates or cross-run ownership drift", () => {
@@ -444,6 +619,21 @@ describe("generatePerformance", () => {
       first.gradeResults.every(
         (grade) => grade.calculatedScore instanceof Prisma.Decimal,
       ),
+    ).toBe(true);
+    const legacyId = cycleId(first, "2025-LEGACY");
+    expect(
+      first.archives
+        .filter((archive) => archive.cycleId === legacyId)
+        .every((archive) => {
+          const summary = archive.summary as {
+            source: string;
+            datasetSource: string;
+          };
+          return (
+            summary.source === "legacy-import" &&
+            summary.datasetSource === DEMO_CONFIG.source
+          );
+        }),
     ).toBe(true);
   });
 });

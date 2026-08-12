@@ -10,7 +10,8 @@ export function generateNarratives(
   context: DemoContext,
   taskId: string,
   indicators: Prisma.IndicatorInstanceCreateManyInput[],
-  submittedAt: Date,
+  selfSubmittedAt: Date,
+  managerSubmittedAt: Date,
 ): NarrativeRows {
   if (indicators.length === 0)
     throw new Error(
@@ -21,7 +22,7 @@ export function generateNarratives(
   );
   const lowest = ordered[0];
   const highest = ordered[ordered.length - 1];
-  const createdAt = new Date(submittedAt);
+  const createdAt = new Date(selfSubmittedAt);
 
   return {
     selfEvaluation: {
@@ -33,7 +34,7 @@ export function generateNarratives(
       nextGoals: `下一周期优先提升${lowest.name}，同时巩固${highest.name}的稳定产出。`,
       supportNeeded: `需要直属主管协调跨团队资源，并对${lowest.name}提供双周反馈。`,
       attachments: [],
-      submittedAt,
+      submittedAt: selfSubmittedAt,
       createdAt,
       updatedAt: createdAt,
     },
@@ -44,9 +45,9 @@ export function generateNarratives(
       improvements: `${lowest.name}得分相对较低，需要提升计划拆解与过程纠偏。`,
       developmentPlan: `围绕${lowest.name}制定月度里程碑，由主管每两周检查一次证据和进展。`,
       attachments: [],
-      submittedAt,
+      submittedAt: managerSubmittedAt,
       createdAt,
-      updatedAt: createdAt,
+      updatedAt: managerSubmittedAt,
     },
   };
 }
