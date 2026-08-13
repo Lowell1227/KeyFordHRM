@@ -116,6 +116,135 @@ describe("realistic demo transactional persistence", () => {
     }
   });
 
+  it("rejects swapped deterministic evidence before deleting any owned row", async () => {
+    const passwordHash = await integrationHashPromise;
+    const before = await persistRealisticDemoDataset(
+      app.prisma,
+      dataset,
+      passwordHash,
+    );
+    const [firstExpected, secondExpected] = dataset.rows.users.slice(0, 2);
+    const [firstCycle, secondCycle] = dataset.rows.cycles.slice(0, 2);
+
+    await app.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: firstExpected.id },
+        data: {
+          employeeNo: "SEED-CONTROL-SWAP",
+          email: "seed-control-swap@example.invalid",
+        },
+      });
+      await tx.user.update({
+        where: { id: secondExpected.id },
+        data: {
+          employeeNo: firstExpected.employeeNo,
+          email: firstExpected.email,
+        },
+      });
+      await tx.user.update({
+        where: { id: firstExpected.id },
+        data: {
+          employeeNo: secondExpected.employeeNo,
+          email: secondExpected.email,
+        },
+      });
+      await tx.assessmentCycle.update({
+        where: { id: firstCycle.id },
+        data: { name: secondCycle.name },
+      });
+    });
+
+    try {
+      await expect(
+        persistRealisticDemoDataset(app.prisma, dataset, passwordHash),
+      ).rejects.toThrow(/collision/i);
+      expect(
+        await app.prisma.assessmentTask.count({
+          where: { id: { in: dataset.manifest.ownedIds.task } },
+        }),
+      ).toBe(before.counts.task);
+    } finally {
+      await app.prisma.$transaction(async (tx) => {
+        await tx.user.update({
+          where: { id: firstExpected.id },
+          data: {
+            employeeNo: "SEED-CONTROL-SWAP",
+            email: "seed-control-swap@example.invalid",
+          },
+        });
+        await tx.user.update({
+          where: { id: secondExpected.id },
+          data: {
+            employeeNo: secondExpected.employeeNo,
+            email: secondExpected.email,
+          },
+        });
+        await tx.user.update({
+          where: { id: firstExpected.id },
+          data: {
+            employeeNo: firstExpected.employeeNo,
+            email: firstExpected.email,
+          },
+        });
+        await tx.assessmentCycle.update({
+          where: { id: firstCycle.id },
+          data: { name: firstCycle.name },
+        });
+      });
+    }
+  });
+
+  it("rejects exact cycle and objective evidence bound to the wrong deterministic ID", async () => {
+    const passwordHash = await integrationHashPromise;
+    const before = await persistRealisticDemoDataset(
+      app.prisma,
+      dataset,
+      passwordHash,
+    );
+    const [firstCycle, secondCycle] = dataset.rows.cycles.slice(0, 2);
+    const [firstObjective, secondObjective] = dataset.rows.objectives.slice(
+      0,
+      2,
+    );
+
+    await app.prisma.assessmentCycle.update({
+      where: { id: firstCycle.id },
+      data: { name: secondCycle.name },
+    });
+    await expect(
+      persistRealisticDemoDataset(app.prisma, dataset, passwordHash),
+    ).rejects.toThrow(/collision.*cycle/i);
+    expect(
+      await app.prisma.assessmentTask.count({
+        where: { id: { in: dataset.manifest.ownedIds.task } },
+      }),
+    ).toBe(before.counts.task);
+    await app.prisma.assessmentCycle.update({
+      where: { id: firstCycle.id },
+      data: { name: firstCycle.name },
+    });
+
+    await app.prisma.objective.update({
+      where: { id: firstObjective.id },
+      data: { title: secondObjective.title },
+    });
+    try {
+      await expect(
+        persistRealisticDemoDataset(app.prisma, dataset, passwordHash),
+      ).rejects.toThrow(/collision.*objective/i);
+      expect(
+        await app.prisma.assessmentTask.count({
+          where: { id: { in: dataset.manifest.ownedIds.task } },
+        }),
+      ).toBe(before.counts.task);
+    } finally {
+      await app.prisma.objective.update({
+        where: { id: firstObjective.id },
+        data: { title: firstObjective.title },
+      });
+    }
+  });
+
   it("rolls back every deletion when an insert fails inside the transaction", async () => {
     const passwordHash = await integrationHashPromise;
     const before = await persistRealisticDemoDataset(
@@ -169,6 +298,91 @@ describe("realistic demo transactional persistence", () => {
     expect(
       await app.prisma.user.findUnique({ where: { id: control.id } }),
     ).not.toBeNull();
+  });
+
+  it("verify rejects owned-to-owned rewiring and leadership swaps without writing", async () => {
+    await persistRealisticDemoDataset(
+      app.prisma,
+      dataset,
+      await integrationHashPromise,
+    );
+    const selfEvaluation = dataset.rows.selfEvaluations[0];
+    const taskWithoutSelfEvaluation = dataset.rows.tasks.find(
+      ({ id }) =>
+        !dataset.rows.selfEvaluations.some(({ taskId }) => taskId === id),
+    )!;
+    const [firstLeadership, secondLeadership] =
+      dataset.departmentLeadership.slice(0, 2);
+
+    await app.prisma.selfEvalSummary.update({
+      where: { id: selfEvaluation.id },
+      data: { taskId: taskWithoutSelfEvaluation.id },
+    });
+    await app.prisma.department.update({
+      where: { id: firstLeadership.id },
+      data: {
+        leaderId: secondLeadership.leaderId,
+        approverId: secondLeadership.approverId,
+      },
+    });
+
+    try {
+      await expect(
+        verifyRealisticDemoData(app.prisma, dataset.manifest),
+      ).rejects.toThrow(/mismatch|collision/i);
+      expect(
+        await app.prisma.selfEvalSummary.findUnique({
+          where: { id: selfEvaluation.id },
+        }),
+      ).toMatchObject({ taskId: taskWithoutSelfEvaluation.id });
+    } finally {
+      await app.prisma.selfEvalSummary.update({
+        where: { id: selfEvaluation.id },
+        data: { taskId: selfEvaluation.taskId },
+      });
+      await app.prisma.department.update({
+        where: { id: firstLeadership.id },
+        data: {
+          leaderId: firstLeadership.leaderId,
+          approverId: firstLeadership.approverId,
+        },
+      });
+    }
+    await expect(
+      verifyRealisticDemoData(app.prisma, dataset.manifest),
+    ).resolves.toMatchObject({ total: 7513 });
+  });
+
+  it("verify independently rejects an owned self-evaluation rewired to another owned task", async () => {
+    await persistRealisticDemoDataset(
+      app.prisma,
+      dataset,
+      await integrationHashPromise,
+    );
+    const selfEvaluation = dataset.rows.selfEvaluations[0];
+    const taskWithoutSelfEvaluation = dataset.rows.tasks.find(
+      ({ id }) =>
+        !dataset.rows.selfEvaluations.some(({ taskId }) => taskId === id),
+    )!;
+    await app.prisma.selfEvalSummary.update({
+      where: { id: selfEvaluation.id },
+      data: { taskId: taskWithoutSelfEvaluation.id },
+    });
+    try {
+      await expect(
+        verifyRealisticDemoData(app.prisma, dataset.manifest),
+      ).rejects.toThrow(/mismatch.*self-eval/i);
+      expect(
+        await app.prisma.selfEvalSummary.findUnique({
+          where: { id: selfEvaluation.id },
+        }),
+      ).toMatchObject({ taskId: taskWithoutSelfEvaluation.id });
+    } finally {
+      await app.prisma.selfEvalSummary.update({
+        where: { id: selfEvaluation.id },
+        data: { taskId: selfEvaluation.taskId },
+      });
+    }
   });
 
   it("keeps dry-run read-only and exercises gated CLI write, verify, and cleanup", async () => {

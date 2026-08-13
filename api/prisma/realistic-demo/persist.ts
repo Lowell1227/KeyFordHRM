@@ -3,6 +3,7 @@ import { ACCEPTANCE_PASSWORD_HASH } from "./people";
 import {
   assertOwnedOrAbsent,
   inspectOwnedRows,
+  verifyOwnedRows,
   type OwnedInspection,
 } from "./ownership";
 import type {
@@ -258,7 +259,7 @@ export async function verifyRealisticDemoData(
   prisma: DbClient,
   manifest: DemoManifest,
 ): Promise<DatabaseDemoSummary> {
-  const inspection = await assertOwnedOrAbsent(prisma, manifest);
+  const inspection = await verifyOwnedRows(prisma, manifest);
   for (const kind of Object.keys(manifest.ownedIds) as DemoEntityKind[]) {
     const expected = manifest.ownedIds[kind].length;
     if (inspection.counts[kind] !== expected) {
