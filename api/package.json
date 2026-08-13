@@ -23,7 +23,11 @@
     "db:seed": "prisma db seed",
     "db:seed:dev": "ts-node prisma/seed-dev-users.ts",
     "db:seed:demo": "ts-node prisma/seed-demo-history.ts",
-    "test:seed:realistic": "jest --config prisma/realistic-demo/jest.config.js --runInBand"
+    "test:seed:realistic": "jest --config prisma/realistic-demo/jest.config.js --runInBand",
+    "db:seed:realistic:preview": "ts-node -r tsconfig-paths/register prisma/seed-realistic-demo.ts --dry-run",
+    "db:seed:realistic": "ts-node -r tsconfig-paths/register prisma/seed-realistic-demo.ts",
+    "db:seed:realistic:verify": "ts-node -r tsconfig-paths/register prisma/verify-realistic-demo.ts",
+    "db:seed:realistic:clean": "ts-node -r tsconfig-paths/register prisma/clean-realistic-demo.ts"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
