@@ -213,6 +213,25 @@ const ENTITY: Record<
 
 let expectedDatasetCache: RealisticDemoDataset | undefined;
 
+function assertRecordMatches(
+  path: string,
+  actual: Record<string, string | number>,
+  expected: Record<string, string | number>,
+): void {
+  const keys = [
+    ...new Set([...Object.keys(actual), ...Object.keys(expected)]),
+  ].sort();
+  for (const key of keys) {
+    if (
+      !Object.prototype.hasOwnProperty.call(actual, key) ||
+      !Object.prototype.hasOwnProperty.call(expected, key) ||
+      actual[key] !== expected[key]
+    ) {
+      throw new Error(`realistic demo manifest mismatch field=${path}.${key}`);
+    }
+  }
+}
+
 function expectedDataset(manifest: DemoManifest): RealisticDemoDataset {
   expectedDatasetCache ??= generateRealisticDemoDataset();
   const expected = expectedDatasetCache;
@@ -232,6 +251,21 @@ function expectedDataset(manifest: DemoManifest): RealisticDemoDataset {
       throw new Error(`realistic demo manifest ID mismatch kind=${kind}`);
     }
   }
+  assertRecordMatches(
+    "acceptanceEmployeeNos",
+    manifest.acceptanceEmployeeNos,
+    expected.manifest.acceptanceEmployeeNos,
+  );
+  assertRecordMatches(
+    "storyUserIds",
+    manifest.storyUserIds,
+    expected.manifest.storyUserIds,
+  );
+  assertRecordMatches(
+    "expectedCounts",
+    manifest.expectedCounts,
+    expected.manifest.expectedCounts,
+  );
   return expected;
 }
 
