@@ -1,4 +1,5 @@
 import { Prisma } from "@prisma/client";
+import { runInNewContext } from "node:vm";
 import { generateRealisticDemoDataset } from "./generate";
 import { summarizeRealisticDemoDataset } from "./report";
 import {
@@ -264,6 +265,42 @@ describe("realistic demo dataset orchestration", () => {
 
     invalidJson.rows.notifications[0].extraData = Prisma.DbNull;
     expect(() => validateRealisticDemoDataset(invalidJson)).not.toThrow();
+  });
+
+  it("enforces top-level Prisma Json null semantics without rejecting legal nullable values", () => {
+    const dataset = generateRealisticDemoDataset();
+    const notification = dataset.rows.notifications[0];
+    const originalExtraData = notification.extraData;
+
+    notification.extraData = null as never;
+    expect(() => validateRealisticDemoDataset(dataset)).toThrow(
+      /rule=Prisma InputJsonValue.*extraData/,
+    );
+
+    notification.extraData = originalExtraData;
+    notification.content = null;
+    expect(() => validateRealisticDemoDataset(dataset)).not.toThrow();
+
+    notification.extraData = Prisma.DbNull;
+    expect(() => validateRealisticDemoDataset(dataset)).not.toThrow();
+    notification.extraData = Prisma.JsonNull;
+    expect(() => validateRealisticDemoDataset(dataset)).not.toThrow();
+    notification.extraData = { nested: null };
+    expect(() => validateRealisticDemoDataset(dataset)).not.toThrow();
+    notification.extraData = runInNewContext("({ nested: null })") as never;
+    expect(() => validateRealisticDemoDataset(dataset)).not.toThrow();
+
+    const snapshot = dataset.rows.snapshots[0];
+    snapshot.snapshotData = Prisma.JsonNull;
+    expect(() => validateRealisticDemoDataset(dataset)).not.toThrow();
+    snapshot.snapshotData = Prisma.DbNull as never;
+    expect(() => validateRealisticDemoDataset(dataset)).toThrow(
+      /rule=Prisma InputJsonValue.*snapshotData/,
+    );
+    snapshot.snapshotData = Prisma.AnyNull as never;
+    expect(() => validateRealisticDemoDataset(dataset)).toThrow(
+      /rule=Prisma InputJsonValue.*snapshotData/,
+    );
   });
 
   it("requires the exact unique approved leadership departments", () => {

@@ -348,7 +348,7 @@ function validatePrismaShapes(
               "non-null",
             );
           }
-          continue;
+          if (field.type !== "Json") continue;
         }
         let valid = true;
         if (field.isList) {
@@ -420,6 +420,7 @@ function invalidInputJsonPath(
   requiredField: boolean,
   root: string,
 ): string | null {
+  if (value === null) return root;
   if (value === Prisma.JsonNull) return null;
   if (value === Prisma.DbNull) return requiredField ? root : null;
   if (value === Prisma.AnyNull) return root;
