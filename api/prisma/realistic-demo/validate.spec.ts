@@ -158,9 +158,11 @@ describe("realistic demo dataset orchestration", () => {
     const q2CycleId = wrongQ2Status.rows.cycles.find(
       (cycle) => cycle.name === "2026-Q2",
     )!.id;
-    wrongQ2Status.rows.tasks.find(
+    const mutatedQ2Task = wrongQ2Status.rows.tasks.find(
       (task) => task.cycleId === q2CycleId && task.status === "confirmed",
-    )!.status = "closed";
+    )!;
+    mutatedQ2Task.status = "closed";
+    mutatedQ2Task.closedAt = mutatedQ2Task.updatedAt;
     expect(() => validateRealisticDemoDataset(wrongQ2Status)).toThrow(
       /rule=Q2 status quota/,
     );
@@ -225,5 +227,157 @@ describe("realistic demo dataset orchestration", () => {
         /^path=[^ ]+ rule=[^ ](?:.*) actual=.* expected=.*$/,
       );
     }
+  });
+
+  it("rejects required nulls and non-JSON values at the Prisma boundary", () => {
+    const nullName = generateRealisticDemoDataset();
+    nullName.rows.indicators[0].name = null as never;
+    expect(() => validateRealisticDemoDataset(nullName)).toThrow(
+      /rule=Prisma required field null.*name/,
+    );
+
+    const nullSnapshot = generateRealisticDemoDataset();
+    nullSnapshot.rows.snapshots[0].snapshotData = null as never;
+    expect(() => validateRealisticDemoDataset(nullSnapshot)).toThrow(
+      /rule=Prisma required field null.*snapshotData/,
+    );
+
+    const invalidJson = generateRealisticDemoDataset();
+    invalidJson.rows.notifications[0].extraData = {
+      generatedAt: new Date("2026-08-01T00:00:00.000Z"),
+    } as never;
+    expect(() => validateRealisticDemoDataset(invalidJson)).toThrow(
+      /rule=Prisma InputJsonValue.*generatedAt/,
+    );
+
+    invalidJson.rows.notifications[0].extraData = { count: 1n } as never;
+    expect(() => validateRealisticDemoDataset(invalidJson)).toThrow(
+      /rule=Prisma InputJsonValue.*count/,
+    );
+
+    const cyclic: Record<string, unknown> = {};
+    cyclic.self = cyclic;
+    invalidJson.rows.notifications[0].extraData = cyclic as never;
+    expect(() => validateRealisticDemoDataset(invalidJson)).toThrow(
+      /rule=Prisma InputJsonValue.*cycle/,
+    );
+
+    invalidJson.rows.notifications[0].extraData = Prisma.DbNull;
+    expect(() => validateRealisticDemoDataset(invalidJson)).not.toThrow();
+  });
+
+  it("requires the exact unique approved leadership departments", () => {
+    const duplicate = generateRealisticDemoDataset();
+    duplicate.departmentLeadership[1].id = duplicate.departmentLeadership[0].id;
+    expect(() => validateRealisticDemoDataset(duplicate)).toThrow(
+      /rule=department leadership IDs/,
+    );
+
+    const unknown = generateRealisticDemoDataset();
+    unknown.departmentLeadership[0].id = "00000000-0000-0000-0000-000000009999";
+    expect(() => validateRealisticDemoDataset(unknown)).toThrow(
+      /rule=department leadership IDs/,
+    );
+  });
+
+  it("requires state timestamps, published grades, and ordered flow evidence", () => {
+    const missingPublishedAt = generateRealisticDemoDataset();
+    missingPublishedAt.rows.tasks.find(
+      (task) => task.status === "closed",
+    )!.publishedAt = null;
+    expect(() => validateRealisticDemoDataset(missingPublishedAt)).toThrow(
+      /rule=task status timestamps.*publishedAt/,
+    );
+
+    const unpublishedGrade = generateRealisticDemoDataset();
+    const publishedTask = unpublishedGrade.rows.tasks.find(
+      (task) => task.status === "published",
+    )!;
+    unpublishedGrade.rows.gradeResults.find(
+      (grade) => grade.taskId === publishedTask.id,
+    )!.isPublished = false;
+    expect(() => validateRealisticDemoDataset(unpublishedGrade)).toThrow(
+      /rule=published grade evidence/,
+    );
+
+    const wrongFlow = generateRealisticDemoDataset();
+    const closed = wrongFlow.rows.tasks.find(
+      (task) => task.status === "closed",
+    )!;
+    wrongFlow.rows.flowRecords.find(
+      (flow) => flow.taskId === closed.id,
+    )!.action = "approve";
+    expect(() => validateRealisticDemoDataset(wrongFlow)).toThrow(
+      /rule=ordered flow evidence/,
+    );
+  });
+
+  it("requires appeal terminal evidence and exactly one business audit", () => {
+    const missingResult = generateRealisticDemoDataset();
+    missingResult.rows.appeals.find(
+      (appeal) =>
+        appeal.status === "resolved" &&
+        !Object.values(missingResult.manifest.storyUserIds).includes(
+          appeal.appellantId,
+        ),
+    )!.finalResult = null;
+    expect(() => validateRealisticDemoDataset(missingResult)).toThrow(
+      /rule=appeal state evidence/,
+    );
+
+    const duplicateAudit = generateRealisticDemoDataset();
+    duplicateAudit.rows.auditLogs[8].entityId =
+      duplicateAudit.rows.auditLogs[7].entityId;
+    expect(() => validateRealisticDemoDataset(duplicateAudit)).toThrow(
+      /rule=confirmation audit cardinality/,
+    );
+  });
+
+  it("binds workflow actors and notification cycles to their subjects", () => {
+    const wrongSigner = generateRealisticDemoDataset();
+    const closedInterview = wrongSigner.rows.interviews.find(
+      (interview) => interview.status === "closed",
+    )!;
+    wrongSigner.rows.signatures.find(
+      (signature) =>
+        signature.businessRecordId === closedInterview.id &&
+        signature.role === "assessee",
+    )!.signerId = closedInterview.interviewerId;
+    expect(() => validateRealisticDemoDataset(wrongSigner)).toThrow(
+      /rule=interview signature subject/,
+    );
+
+    const wrongConfirmation = generateRealisticDemoDataset();
+    const confirmation = wrongConfirmation.rows.confirmations[0];
+    const review = wrongConfirmation.rows.probationReviews.find(
+      (row) => row.id === confirmation.probationReviewId,
+    )!;
+    confirmation.managerId = review.hrId;
+    expect(() => validateRealisticDemoDataset(wrongConfirmation)).toThrow(
+      /rule=confirmation review subjects/,
+    );
+
+    const wrongNotificationCycle = generateRealisticDemoDataset();
+    const linkedNotification = wrongNotificationCycle.rows.notifications.find(
+      (notification) => notification.taskId,
+    )!;
+    const linkedTask = wrongNotificationCycle.rows.tasks.find(
+      (task) => task.id === linkedNotification.taskId,
+    )!;
+    linkedNotification.cycleId = wrongNotificationCycle.rows.cycles.find(
+      (cycle) => cycle.id !== linkedTask.cycleId,
+    )!.id;
+    expect(() => validateRealisticDemoDataset(wrongNotificationCycle)).toThrow(
+      /rule=notification task cycle/,
+    );
+  });
+
+  it("requires every approved story manifest binding and its business evidence", () => {
+    const invalid = generateRealisticDemoDataset();
+    invalid.manifest.storyUserIds.lateEntryExempt =
+      invalid.manifest.storyUserIds.stableContributor;
+    expect(() => validateRealisticDemoDataset(invalid)).toThrow(
+      /rule=story manifest binding.*lateEntryExempt/,
+    );
   });
 });

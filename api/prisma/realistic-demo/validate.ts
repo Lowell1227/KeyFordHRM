@@ -109,6 +109,59 @@ const FLOW_COUNT_BY_STATUS: Record<string, number> = {
   exempted: 0,
 };
 
+const TASK_TIMESTAMP_FIELDS = [
+  "indicatorSetAt",
+  "indicatorConfirmedAt",
+  "selfEvalSubmittedAt",
+  "managerScoredAt",
+  "deptReviewedAt",
+  "hrCalibratedAt",
+  "approvedAt",
+  "publishedAt",
+  "employeeConfirmedAt",
+  "closedAt",
+] as const;
+
+const REACHED_TIMESTAMP_COUNT: Record<string, number> = {
+  indicator_setting: 0,
+  indicator_confirming: 1,
+  self_eval: 2,
+  published: 8,
+  appealing: 8,
+  confirmed: 9,
+  closed: 10,
+  exempted: 0,
+};
+
+const BASE_FLOW_EVIDENCE: Record<string, Array<[string, string]>> = {
+  indicator_setting: [],
+  indicator_confirming: [["indicator_setting", "submit"]],
+  self_eval: [
+    ["indicator_setting", "submit"],
+    ["indicator_confirm", "submit"],
+  ],
+  published: [
+    ["indicator_setting", "submit"],
+    ["indicator_confirm", "submit"],
+    ["self_eval", "submit"],
+    ["manager_score", "submit"],
+    ["dept_review", "approve"],
+    ["hr_calibration", "submit"],
+    ["approval", "approve"],
+    ["publish", "approve"],
+  ],
+  appealing: [],
+  confirmed: [],
+  closed: [],
+  exempted: [],
+};
+BASE_FLOW_EVIDENCE.appealing = [...BASE_FLOW_EVIDENCE.published];
+BASE_FLOW_EVIDENCE.confirmed = [
+  ...BASE_FLOW_EVIDENCE.published,
+  ["employee_confirm", "approve"],
+];
+BASE_FLOW_EVIDENCE.closed = [...BASE_FLOW_EVIDENCE.confirmed];
+
 const GRADE_COEFFICIENT: Record<string, number> = {
   A: 1.2,
   B: 1,
@@ -285,7 +338,18 @@ function validatePrismaShapes(
         (candidate) => candidate.kind !== "object",
       )) {
         const value = row[field.name];
-        if (value === null || value === undefined) continue;
+        if (value === undefined) continue;
+        if (value === null) {
+          if (field.isRequired) {
+            fail(
+              rowPath(index, row, modelName),
+              "Prisma required field null",
+              field.name,
+              "non-null",
+            );
+          }
+          continue;
+        }
         let valid = true;
         if (field.isList) {
           valid = Array.isArray(value);
@@ -319,10 +383,23 @@ function validatePrismaShapes(
                 value !== "" &&
                 Number.isFinite(Number(value));
               break;
-            case "Json":
-              valid =
-                typeof value !== "function" && typeof value !== "undefined";
+            case "Json": {
+              const invalidPath = invalidInputJsonPath(
+                value,
+                field.isRequired,
+                field.name,
+              );
+              if (invalidPath) {
+                fail(
+                  rowPath(index, row, modelName),
+                  "Prisma InputJsonValue",
+                  invalidPath,
+                  "JSON primitive, array, plain object, or Prisma JSON null",
+                );
+              }
+              valid = true;
               break;
+            }
           }
         }
         if (!valid) {
@@ -336,6 +413,58 @@ function validatePrismaShapes(
       }
     }
   }
+}
+
+function invalidInputJsonPath(
+  value: unknown,
+  requiredField: boolean,
+  root: string,
+): string | null {
+  if (value === Prisma.JsonNull) return null;
+  if (value === Prisma.DbNull) return requiredField ? root : null;
+  if (value === Prisma.AnyNull) return root;
+  const active = new Set<object>();
+  const visit = (candidate: unknown, path: string): string | null => {
+    if (
+      candidate === null ||
+      typeof candidate === "string" ||
+      typeof candidate === "boolean"
+    ) {
+      return null;
+    }
+    if (typeof candidate === "number") {
+      return Number.isFinite(candidate) ? null : path;
+    }
+    if (
+      typeof candidate === "undefined" ||
+      typeof candidate === "bigint" ||
+      typeof candidate === "symbol" ||
+      typeof candidate === "function"
+    ) {
+      return path;
+    }
+    if (!candidate || typeof candidate !== "object") return path;
+    if (active.has(candidate)) return `${path}.[cycle]`;
+    const prototype = Object.getPrototypeOf(candidate);
+    if (
+      !Array.isArray(candidate) &&
+      prototype !== null &&
+      prototype?.constructor?.name !== "Object"
+    ) {
+      return path;
+    }
+    active.add(candidate);
+    const entries = Array.isArray(candidate)
+      ? candidate.map((item, arrayIndex) => [String(arrayIndex), item] as const)
+      : Object.entries(candidate);
+    for (const [key, item] of entries) {
+      const invalid = visit(item, `${path}.${key}`);
+      if (invalid) return invalid;
+    }
+    active.delete(candidate);
+    return null;
+  };
+  return visit(value, root);
 }
 
 function validateIdentity(
@@ -690,6 +819,26 @@ function validatePopulation(
       9,
     );
   }
+  const expectedLeadershipIds = [
+    "00000000-0000-0000-0000-000000000010",
+    "00000000-0000-0000-0000-000000000011",
+    "00000000-0000-0000-0000-000000000012",
+    "00000000-0000-0000-0000-000000000013",
+    "00000000-0000-0000-0000-000000000014",
+    "00000000-0000-0000-0000-000000000015",
+    "00000000-0000-0000-0000-000000000016",
+    "00000000-0000-0000-0000-000000000018",
+    ...(dataset.rows.departments as AnyRow[]).map((row) => row.id),
+  ];
+  const leadershipIds = dataset.departmentLeadership.map((row) => row.id);
+  if (!sameMembers(leadershipIds, expectedLeadershipIds)) {
+    fail(
+      "global/global/department-leadership",
+      "department leadership IDs",
+      leadershipIds,
+      expectedLeadershipIds,
+    );
+  }
   for (const leadership of dataset.departmentLeadership) {
     for (const [role, userId] of [
       ["leader", leadership.leaderId],
@@ -865,6 +1014,30 @@ function validateTasksAndScores(
     if (snapshot.cycleId !== task.cycleId) {
       fail(path, "snapshot cycle consistency", snapshot.cycleId, task.cycleId);
     }
+    const reachedTimestampCount = REACHED_TIMESTAMP_COUNT[task.status];
+    if (reachedTimestampCount === undefined) {
+      fail(
+        path,
+        "supported task status",
+        task.status,
+        Object.keys(REACHED_TIMESTAMP_COUNT),
+      );
+    }
+    const missingReached = TASK_TIMESTAMP_FIELDS.slice(
+      0,
+      reachedTimestampCount,
+    ).filter((field) => !task[field]);
+    const forbiddenReached = TASK_TIMESTAMP_FIELDS.slice(
+      reachedTimestampCount,
+    ).filter((field) => Boolean(task[field]));
+    if (missingReached.length > 0 || forbiddenReached.length > 0) {
+      fail(
+        path,
+        "task status timestamps",
+        `missing=${missingReached.join(",")};forbidden=${forbiddenReached.join(",")}`,
+        task.status,
+      );
+    }
     if (user.status === "resigned" || user.sysRole === "system_admin") {
       fail(
         path,
@@ -961,6 +1134,43 @@ function validateTasksAndScores(
     if (flows.length !== expectedFlowCount) {
       fail(path, "flow reached state", flows.length, expectedFlowCount);
     }
+    const appealEvidence: Array<[string, string]> =
+      appeal?.status === "resolved"
+        ? [
+            ["appeal", "submit"],
+            ["appeal", "approve"],
+            ["appeal", "approve"],
+          ]
+        : appeal?.status === "hr_processing"
+          ? [
+              ["appeal", "submit"],
+              ["appeal", "approve"],
+            ]
+          : appeal?.status === "dept_processing"
+            ? [["appeal", "submit"]]
+            : [];
+    const expectedFlowEvidence = [
+      ...(BASE_FLOW_EVIDENCE[task.status] ?? []),
+      ...appealEvidence,
+    ];
+    const actualFlowEvidence = flows.map(
+      (flow) => [flow.nodeType, flow.action] as [string, string],
+    );
+    if (
+      actualFlowEvidence.length !== expectedFlowEvidence.length ||
+      actualFlowEvidence.some(
+        (entry, flowIndex) =>
+          entry[0] !== expectedFlowEvidence[flowIndex][0] ||
+          entry[1] !== expectedFlowEvidence[flowIndex][1],
+      )
+    ) {
+      fail(
+        path,
+        "ordered flow evidence",
+        actualFlowEvidence,
+        expectedFlowEvidence,
+      );
+    }
     for (const flow of flows) {
       if (flow.cycleId !== task.cycleId || !flow.actorId) {
         fail(path, "flow task cycle actor", flow, "matching cycle and actor");
@@ -969,6 +1179,26 @@ function validateTasksAndScores(
 
     const grade = gradeByTask.get(task.id);
     if (grade) {
+      if (
+        !["published", "appealing", "confirmed", "closed"].includes(
+          task.status,
+        ) ||
+        grade.isPublished !== true ||
+        !grade.publishedAt ||
+        date(grade.publishedAt)?.getTime() !== date(task.publishedAt)?.getTime()
+      ) {
+        fail(
+          path,
+          "published grade evidence",
+          {
+            taskStatus: task.status,
+            isPublished: grade.isPublished,
+            gradePublishedAt: grade.publishedAt,
+            taskPublishedAt: task.publishedAt,
+          },
+          "published task and synchronized published grade",
+        );
+      }
       if (!selfByTask.has(task.id) || !managerByTask.has(task.id)) {
         fail(path, "completed evaluation summaries", false, true);
       }
@@ -1018,6 +1248,30 @@ function validateTasksAndScores(
   const q1 = cycleByName.get("2026-Q1")!;
   const q2 = cycleByName.get("2026-Q2")!;
   const q3 = cycleByName.get("2026-Q3")!;
+  const expectedStoryKeys = Object.keys(DEMO_CONFIG.storyEmployeeNos);
+  const actualStoryKeys = Object.keys(dataset.manifest.storyUserIds);
+  if (!sameMembers(actualStoryKeys, expectedStoryKeys)) {
+    fail(
+      "story/global/manifest",
+      "story manifest keys",
+      actualStoryKeys,
+      expectedStoryKeys,
+    );
+  }
+  for (const [story, employeeNo] of Object.entries(
+    DEMO_CONFIG.storyEmployeeNos,
+  )) {
+    const userId = dataset.manifest.storyUserIds[story];
+    const user = index.users.get(userId);
+    if (!user || user.employeeNo !== employeeNo) {
+      fail(
+        `story/${story}/manifest`,
+        "story manifest binding",
+        `${story}:${user?.employeeNo ?? userId}`,
+        `${story}:${employeeNo}`,
+      );
+    }
+  }
   const exactExempt = (cycle: AnyRow, expected: string[]) => {
     const employeeNumbers = (taskRowsByCycle.get(cycle.id) ?? [])
       .filter((task) => task.isExempt)
@@ -1125,6 +1379,7 @@ function validateTasksAndScores(
   };
   const storyGrades: Array<[string, string, string]> = [
     ["excellentManager", "A", "A"],
+    ["stableContributor", "B", "B"],
     ["lowPerformer", "C", "D"],
     ["consecutiveLowPerformerA", "D", "D"],
     ["consecutiveLowPerformerB", "D", "D"],
@@ -1137,6 +1392,47 @@ function validateTasksAndScores(
         q2Grade,
       ]);
     }
+  }
+  const appealForStory = (story: string, cycle: AnyRow): AnyRow | undefined => {
+    const task = (taskRowsByCycle.get(cycle.id) ?? []).find(
+      (row) => row.employeeId === dataset.manifest.storyUserIds[story],
+    );
+    return task
+      ? (dataset.rows.appeals as AnyRow[]).find(
+          (appeal) => appeal.taskId === task.id,
+        )
+      : undefined;
+  };
+  if (appealForStory("appealModified", q2)?.finalResult !== "modified") {
+    fail(
+      "story/appealModified/appeal",
+      "fixed appeal story",
+      appealForStory("appealModified", q2)?.finalResult,
+      "modified",
+    );
+  }
+  for (const cycle of [q1, q2]) {
+    if (
+      appealForStory("appealMaintained", cycle)?.finalResult !== "maintained"
+    ) {
+      fail(
+        "story/appealMaintained/appeal",
+        "fixed appeal story",
+        appealForStory("appealMaintained", cycle)?.finalResult,
+        `maintained in ${cycle.name}`,
+      );
+    }
+  }
+  const lateEntryTask = (taskRowsByCycle.get(q1.id) ?? []).find(
+    (task) => task.employeeId === dataset.manifest.storyUserIds.lateEntryExempt,
+  );
+  if (!lateEntryTask?.isExempt || lateEntryTask.status !== "exempted") {
+    fail(
+      "story/lateEntryExempt/task",
+      "fixed exemption story",
+      lateEntryTask?.status,
+      "FD300118 exempted in Q1",
+    );
   }
   const transferredId = dataset.manifest.storyUserIds.transferredEmployee;
   const transferredQ2 = (taskRowsByCycle.get(q2.id) ?? []).find(
@@ -1344,12 +1640,12 @@ function validateArchivesAndWorkflows(
     }
   }
 
-  const auditByEntity = new Map(
-    (dataset.rows.auditLogs as AnyRow[]).map((audit) => [
-      audit.entityId,
-      audit,
-    ]),
-  );
+  const auditsByEntity = new Map<string, AnyRow[]>();
+  for (const audit of dataset.rows.auditLogs as AnyRow[]) {
+    const rows = auditsByEntity.get(audit.entityId) ?? [];
+    rows.push(audit);
+    auditsByEntity.set(audit.entityId, rows);
+  }
   const appealStatus = countBy(dataset.rows.appeals as AnyRow[], "status");
   const expectedAppealStatus = {
     resolved: 5,
@@ -1370,20 +1666,102 @@ function validateArchivesAndWorkflows(
     const archive = archiveByEmployeeCycle.get(
       `${task.employeeId}:${task.cycleId}`,
     )!;
-    const audit = auditByEntity.get(appeal.id);
+    const audits = auditsByEntity.get(appeal.id) ?? [];
     if (
       appeal.cycleId !== task.cycleId ||
-      appeal.appellantId !== task.employeeId ||
-      !audit
+      appeal.appellantId !== task.employeeId
     ) {
       fail(
         rowPath(index, appeal, "appeal"),
-        "appeal task audit consistency",
+        "appeal task consistency",
         appeal,
-        "same task/cycle/employee and audit",
+        "same task/cycle/employee",
       );
     }
+    const hasDeptEvidence =
+      Boolean(appeal.deptResolution) &&
+      Boolean(appeal.deptResolvedAt) &&
+      Boolean(appeal.deptResolverId);
+    const hasHrEvidence =
+      Boolean(appeal.hrResolution) &&
+      Boolean(appeal.hrResolvedAt) &&
+      Boolean(appeal.hrResolverId);
+    const appealStateValid =
+      (appeal.status === "resolved" &&
+        hasDeptEvidence &&
+        hasHrEvidence &&
+        ["maintained", "modified"].includes(appeal.finalResult)) ||
+      (appeal.status === "dept_processing" &&
+        !hasDeptEvidence &&
+        !hasHrEvidence &&
+        appeal.finalResult === null) ||
+      (appeal.status === "hr_processing" &&
+        hasDeptEvidence &&
+        !hasHrEvidence &&
+        appeal.finalResult === null);
+    if (!appealStateValid) {
+      fail(
+        rowPath(index, appeal, "appeal"),
+        "appeal state evidence",
+        {
+          status: appeal.status,
+          finalResult: appeal.finalResult,
+          hasDeptEvidence,
+          hasHrEvidence,
+        },
+        "state-specific resolver, resolution, timestamp, and result",
+      );
+    }
+    const appealChronology = [
+      appeal.createdAt,
+      appeal.deptResolvedAt,
+      appeal.hrResolvedAt,
+    ]
+      .filter(Boolean)
+      .map((value) => date(value)!.getTime());
+    if (
+      appealChronology.some(
+        (value, position) =>
+          position > 0 && value < appealChronology[position - 1],
+      )
+    ) {
+      fail(
+        rowPath(index, appeal, "appeal"),
+        "appeal chronology",
+        appealChronology,
+        "created <= department <= HR",
+      );
+    }
+    if (audits.length !== 1) {
+      fail(
+        rowPath(index, appeal, "appeal"),
+        "appeal audit cardinality",
+        audits.length,
+        1,
+      );
+    }
+    const audit = audits[0];
     const newValue = audit.newValue as AnyRow;
+    const auditActor = index.users.get(audit.userId);
+    const expectedAction =
+      appeal.status === "resolved" ? "resolve_appeal" : "create_appeal";
+    if (
+      audit.entityType !== "appeal" ||
+      audit.action !== expectedAction ||
+      !auditActor ||
+      !["hr", "system_admin"].includes(auditActor.sysRole) ||
+      !newValue ||
+      newValue.status !== appeal.status ||
+      newValue.result !== appeal.finalResult ||
+      newValue.appellantId !== appeal.appellantId
+    ) {
+      fail(
+        rowPath(index, appeal, "appeal"),
+        "appeal audit evidence",
+        audit,
+        `${expectedAction} by HR with matching state`,
+      );
+    }
     if (
       newValue.calibratedGrade !== grade.calibratedGrade ||
       archive.grade !== grade.calibratedGrade
@@ -1456,6 +1834,32 @@ function validateArchivesAndWorkflows(
         { status: interview.status, roles },
         expectedRoles,
       );
+    }
+    for (const signature of signatures) {
+      const expectedSigner =
+        signature.role === "assessor"
+          ? interview.interviewerId
+          : interview.employeeId;
+      const expectedSignedAt =
+        signature.role === "assessor"
+          ? interview.managerSignedAt
+          : interview.employeeSignedAt;
+      if (
+        signature.signerId !== expectedSigner ||
+        date(signature.signedAt)?.getTime() !==
+          date(expectedSignedAt)?.getTime()
+      ) {
+        fail(
+          rowPath(index, interview, "interview"),
+          "interview signature subject",
+          {
+            role: signature.role,
+            signerId: signature.signerId,
+            signedAt: signature.signedAt,
+          },
+          { signerId: expectedSigner, signedAt: expectedSignedAt },
+        );
+      }
     }
   }
   if (
@@ -1539,19 +1943,61 @@ function validateArchivesAndWorkflows(
         null,
       );
     }
+    for (const signature of signatures) {
+      const subjectByRole: Record<string, [string, unknown]> = {
+        assessee: [review.employeeId, review.employeeSignedAt],
+        assessor: [review.managerId, review.managerSignedAt],
+        hr: [review.hrId, review.hrSignedAt],
+      };
+      const expectedSubject = subjectByRole[signature.role];
+      if (
+        !expectedSubject ||
+        signature.signerId !== expectedSubject[0] ||
+        date(signature.signedAt)?.getTime() !==
+          date(expectedSubject[1])?.getTime()
+      ) {
+        fail(
+          rowPath(index, review, "probation-review"),
+          "probation signature subject",
+          signature,
+          expectedSubject,
+        );
+      }
+    }
   }
 
-  const reviewIds = new Set(
-    (dataset.rows.probationReviews as AnyRow[]).map((row) => row.id),
+  const reviewsById = new Map(
+    (dataset.rows.probationReviews as AnyRow[]).map((row) => [row.id, row]),
   );
   for (const confirmation of dataset.rows.confirmations as AnyRow[]) {
     const user = index.users.get(confirmation.employeeId)!;
-    if (!reviewIds.has(confirmation.probationReviewId)) {
+    const review = reviewsById.get(confirmation.probationReviewId);
+    if (!review) {
       fail(
         rowPath(index, confirmation, "confirmation"),
         "confirmation review relation",
         confirmation.probationReviewId,
         "probation review",
+      );
+    }
+    if (
+      confirmation.employeeId !== review.employeeId ||
+      confirmation.managerId !== review.managerId ||
+      confirmation.hrId !== review.hrId
+    ) {
+      fail(
+        rowPath(index, confirmation, "confirmation"),
+        "confirmation review subjects",
+        {
+          employeeId: confirmation.employeeId,
+          managerId: confirmation.managerId,
+          hrId: confirmation.hrId,
+        },
+        {
+          employeeId: review.employeeId,
+          managerId: review.managerId,
+          hrId: review.hrId,
+        },
       );
     }
     const expected =
@@ -1574,6 +2020,93 @@ function validateArchivesAndWorkflows(
           actual: Boolean(confirmation.actualRegularDate),
         },
         expected,
+      );
+    }
+    const terminalStateValid =
+      (confirmation.status === "approved" &&
+        Boolean(confirmation.companyApprovedAt) &&
+        !confirmation.rejectedById &&
+        !confirmation.rejectedAt &&
+        !confirmation.rejectReason) ||
+      (confirmation.status === "rejected" &&
+        !confirmation.companyApprovedAt &&
+        Boolean(confirmation.rejectedById) &&
+        Boolean(confirmation.rejectedAt) &&
+        Boolean(confirmation.rejectReason));
+    if (!terminalStateValid) {
+      fail(
+        rowPath(index, confirmation, "confirmation"),
+        "confirmation terminal evidence",
+        {
+          status: confirmation.status,
+          companyApprovedAt: confirmation.companyApprovedAt,
+          rejectedById: confirmation.rejectedById,
+          rejectedAt: confirmation.rejectedAt,
+          rejectReason: confirmation.rejectReason,
+        },
+        "approved or rejected terminal fields",
+      );
+    }
+    const terminalAt =
+      confirmation.status === "approved"
+        ? confirmation.companyApprovedAt
+        : confirmation.rejectedAt;
+    const chronology = [
+      confirmation.createdAt,
+      confirmation.managerApprovedAt,
+      confirmation.hrApprovedAt,
+      terminalAt,
+    ].map((value) => date(value)?.getTime() ?? Number.NaN);
+    if (
+      chronology.some((value) => Number.isNaN(value)) ||
+      chronology.some(
+        (value, position) => position > 0 && value < chronology[position - 1],
+      )
+    ) {
+      fail(
+        rowPath(index, confirmation, "confirmation"),
+        "confirmation chronology",
+        chronology,
+        "created <= manager <= HR <= terminal",
+      );
+    }
+    const audits = auditsByEntity.get(confirmation.id) ?? [];
+    if (audits.length !== 1) {
+      fail(
+        rowPath(index, confirmation, "confirmation"),
+        "confirmation audit cardinality",
+        audits.length,
+        1,
+      );
+    }
+    const audit = audits[0];
+    const oldValue = audit.oldValue as AnyRow;
+    const newValue = audit.newValue as AnyRow;
+    const expectedAction =
+      confirmation.status === "approved"
+        ? "approve_confirmation"
+        : "reject_confirmation";
+    const expectedActor =
+      confirmation.status === "approved"
+        ? confirmation.companyApproverId
+        : confirmation.rejectedById;
+    if (
+      audit.entityType !== "confirmation_application" ||
+      audit.action !== expectedAction ||
+      audit.userId !== expectedActor ||
+      oldValue?.status !== "hr_approved" ||
+      newValue?.status !== confirmation.status ||
+      newValue?.voteResult !== confirmation.voteResult ||
+      (confirmation.actualRegularDate
+        ? date(newValue?.actualRegularDate)?.getTime() !==
+          date(confirmation.actualRegularDate)?.getTime()
+        : newValue?.actualRegularDate !== null)
+    ) {
+      fail(
+        rowPath(index, confirmation, "confirmation"),
+        "confirmation audit evidence",
+        audit,
+        `${expectedAction} by terminal approver with matching state`,
       );
     }
   }
@@ -1648,6 +2181,17 @@ function validateArchivesAndWorkflows(
           "unread actionable task access",
           { accessible, cycle: cycle.name, status: task.status },
           "accessible active Q3 task",
+        );
+      }
+    }
+    if (notification.taskId) {
+      const task = index.tasks.get(notification.taskId)!;
+      if (notification.cycleId !== task.cycleId) {
+        fail(
+          rowPath(index, notification, "notification"),
+          "notification task cycle",
+          notification.cycleId,
+          task.cycleId,
         );
       }
     }
@@ -1745,8 +2289,8 @@ export function validateRealisticDemoDataset(
   validateRelations(dataset, index);
   validatePopulation(dataset, index);
   validateCatalog(dataset, index);
-  validateTasksAndScores(dataset, index);
   validateTime(dataset, index);
+  validateTasksAndScores(dataset, index);
   validateArchivesAndWorkflows(dataset, index);
   validateSensitiveJson(dataset, index);
 }
