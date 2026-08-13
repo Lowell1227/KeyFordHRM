@@ -148,3 +148,28 @@ export interface RealisticDemoDataset {
   }>;
   manifest: DemoManifest;
 }
+
+export interface RealisticDemoSummary {
+  source: DemoManifest["source"];
+  asOf: string;
+  currentPeople: number;
+  resignedPeople: number;
+  systemAdmins: number;
+  departments: number;
+  indicators: number;
+  templates: number;
+  cycles: number;
+  q1Tasks: number;
+  q1Exempt: number;
+  q1Graded: number;
+  q2Tasks: number;
+  q2Exempt: number;
+  q2Graded: number;
+  q3Tasks: number;
+  annualLeaderTasks: number;
+  archives: number;
+  appeals: number;
+  improvementPlans: number;
+  probationReviews: number;
+  notifications: number;
+}
