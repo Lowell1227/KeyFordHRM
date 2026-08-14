@@ -117,7 +117,7 @@ test.describe('05-multi-role-happy-path', () => {
     await page.goto(`/tasks/${target!.id}?returnTo=https%3A%2F%2Fexample.com`);
     await expect(page.locator('.task-detail')).toBeVisible();
     await page.getByTestId('task-detail-return').click();
-    await expect(page).toHaveURL(/\/tasks$/);
+    await expect(page).toHaveURL(/scope=team.*stage=goal-review.*stageState=pending/);
 
     const teamAfterRefresh = await api('GET', `/tasks/team?stage=manager-eval&cycleId=${target!.cycleId}`, managerToken);
     const permittedEmployeeIds = new Set(teamAfterRefresh.facets.employees.map((employee: { id: string }) => employee.id));

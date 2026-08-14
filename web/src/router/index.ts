@@ -24,6 +24,23 @@ router.beforeEach(async (to) => {
 
   if (!auth.isLoggedIn) return { name: 'Login', query: { redirect: to.fullPath } };
 
+  if (
+    to.name === 'MyTasks'
+    && auth.user?.sysRole === 'manager'
+    && Object.keys(to.query).length === 0
+  ) {
+    return {
+      name: 'MyTasks',
+      query: {
+        scope: 'team',
+        stage: 'goal-review',
+        stageState: 'pending',
+      },
+      hash: to.hash,
+      replace: true,
+    };
+  }
+
   const requiredRoles = to.meta.roles;
   if (requiredRoles && auth.user && !requiredRoles.includes(auth.user.sysRole)) {
     ElMessage.warning('无权访问该页面');
