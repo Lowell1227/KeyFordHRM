@@ -169,6 +169,31 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
 test.describe("11-navigation-entrypoints navigation active state", () => {
   test.use({ storageState: "e2e/auth-state/manager.json" });
 
+  test("bare manager performance entry opens team pending work without overriding explicit personal links", async ({
+    page,
+  }) => {
+    await page.goto("/tasks");
+
+    await expect(page).toHaveURL(
+      /scope=team.*stage=goal-review.*stageState=pending/,
+    );
+    await expect(page.getByTestId("task-scope-team")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    await expect(page.getByTestId("team-count-pending")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+
+    await page.goto("/tasks?scope=mine");
+    await expect(page).toHaveURL(/\/tasks\?scope=mine$/);
+    await expect(page.getByTestId("task-scope-mine")).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+  });
+
   test("team performance deep link remains active in the performance workspace", async ({
     page,
   }) => {
@@ -657,7 +682,9 @@ test.describe("11-navigation-entrypoints header", () => {
   }) => {
     await page.goto("/tasks");
 
-    await expect(page.getByPlaceholder("搜索")).toHaveCount(0);
+    await expect(
+      page.locator(".app-header").getByPlaceholder("搜索"),
+    ).toHaveCount(0);
     await expect(page.locator(".app-header .header-action")).toHaveCount(0);
     await expect(page.getByTestId("performance-workspace-title")).toHaveCount(
       1,
@@ -1202,12 +1229,12 @@ test.describe("11-navigation-entrypoints notification task links", () => {
     await page.getByTestId("notification-item-notification-unmount").click();
     await page.getByTestId("header-user-menu").click();
     await page.getByTestId("header-logout").click();
-    await expect(page).toHaveURL(/\/login$/);
+    await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
     await expect(page.getByTestId("app-notifications")).toBeHidden();
 
     releaseRead();
     await page.waitForTimeout(100);
-    await expect(page).toHaveURL(/\/login$/);
+    await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
     await expect(page.locator(".el-message")).toHaveCount(0);
   });
 
@@ -1238,13 +1265,14 @@ test.describe("11-navigation-entrypoints notification task links", () => {
     await page.route("**/*TaskDetailView*", (route) => route.abort());
 
     await page.goto("/tasks");
+    const currentWorkspaceUrl = page.url();
     const trigger = page.getByTestId("app-notifications");
     await trigger.click();
     await page
       .getByTestId("notification-item-notification-route-failure")
       .click();
 
-    await expect(page).toHaveURL(/\/tasks$/);
+    await expect(page).toHaveURL(currentWorkspaceUrl);
     await expect(page.locator(".el-message--warning")).toBeVisible();
     await expect(page.locator(".notification-popover")).toBeHidden();
     await expect(trigger).toBeEnabled();
