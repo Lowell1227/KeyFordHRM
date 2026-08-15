@@ -449,7 +449,8 @@ function handleCycleChange(event: Event) {
 }
 
 @media (min-width: 769px) and (max-width: 1180px) {
-  .goal-indicator-grid {
+  .goal-indicator-grid.goal-indicator-table-head,
+  .goal-indicator-grid.goal-indicator-row {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px 12px;
   }

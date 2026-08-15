@@ -645,6 +645,23 @@ test.describe('09-performance-workspace tracking behavior', () => {
     await expect(page.getByRole('button', { name: '自定义列' })).toBeVisible();
   });
 
+  for (const width of [900, 1024]) {
+    test(`keeps four optional indicator columns inside the surface at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await mockGoalTrackingShell(page);
+      await page.goto('/action-items');
+
+      const surface = page.getByTestId('goal-tracking-surface');
+      const surfaceBox = await surface.boundingBox();
+      const weightBox = await surface.getByRole('columnheader', { name: '权重' }).boundingBox();
+      expect(surfaceBox).not.toBeNull();
+      expect(weightBox).not.toBeNull();
+      expect(Math.ceil(weightBox!.x + weightBox!.width)).toBeLessThanOrEqual(
+        Math.ceil(surfaceBox!.x + surfaceBox!.width),
+      );
+    });
+  }
+
   test('employee sees the reference goal-tracking workspace for self and manager', async ({ page }) => {
     await page.route('**/api/v1/auth/me', (route) => route.fulfill({
       contentType: 'application/json',
