@@ -133,14 +133,14 @@ function stageStateLabel(state: TeamStageState): string {
 }
 
 .team-task-workspace__bar {
-  min-height: 58px;
+  min-height: 52px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 0 18px;
+  padding: 0 20px;
   background: #fff;
-  border-bottom: 1px solid #e3e7ee;
+  border-bottom: 1px solid #edf0f5;
 }
 
 .team-task-workspace__back {
@@ -186,7 +186,7 @@ function stageStateLabel(state: TeamStageState): string {
   min-height: 0;
   flex: 1;
   display: grid;
-  grid-template-columns: 164px minmax(0, 1fr);
+  grid-template-columns: 160px minmax(0, 1fr);
 }
 
 .team-task-workspace__members {
@@ -195,20 +195,20 @@ function stageStateLabel(state: TeamStageState): string {
   padding: 10px 8px;
   overflow-y: auto;
   background: #fff;
-  border-right: 1px solid #e3e7ee;
+  border-right: 1px solid #e8ecf2;
 }
 
 .team-task-workspace__member {
   width: 100%;
   min-width: 0;
-  min-height: 52px;
+  min-height: 42px;
   display: flex;
   align-items: center;
   gap: 8px;
   margin: 0 0 4px;
-  padding: 7px 8px;
+  padding: 4px 8px;
   border: 0;
-  border-radius: 7px;
+  border-radius: 8px;
   color: #30384b;
   text-align: left;
   background: transparent;
@@ -250,7 +250,7 @@ function stageStateLabel(state: TeamStageState): string {
 .team-task-workspace__main {
   min-width: 0;
   min-height: 0;
-  padding: 14px;
+  padding: 16px;
   overflow: auto;
 }
 
@@ -259,11 +259,12 @@ function stageStateLabel(state: TeamStageState): string {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 12px;
-  padding: 14px 16px;
-  border: 1px solid #e8ebf0;
-  border-radius: 10px;
+  margin-bottom: 14px;
+  padding: 12px 16px;
+  border: 0;
+  border-radius: 14px;
   background: #fff;
+  box-shadow: 0 1px 2px rgb(31 45 61 / 4%);
 }
 
 .team-task-workspace__identity {

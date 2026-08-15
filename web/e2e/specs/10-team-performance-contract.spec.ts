@@ -628,6 +628,37 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('team-task-list')).toBeVisible();
   });
 
+  test('full-page manager workspace keeps the reference shell compact and low-chrome', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await mockGoalReviewWorkspace(page);
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+
+    const geometry = await page.getByTestId('team-task-workspace').evaluate((element) => {
+      const bar = element.querySelector<HTMLElement>('.team-task-workspace__bar')!;
+      const members = element.querySelector<HTMLElement>('.team-task-workspace__members')!;
+      const member = element.querySelector<HTMLElement>('.team-task-workspace__member')!;
+      const profile = element.querySelector<HTMLElement>('.team-task-workspace__profile')!;
+      const shellStyle = getComputedStyle(element);
+      const profileStyle = getComputedStyle(profile);
+      return {
+        barHeight: bar.getBoundingClientRect().height,
+        memberRailWidth: members.getBoundingClientRect().width,
+        memberHeight: member.getBoundingClientRect().height,
+        profileRadius: Number.parseFloat(profileStyle.borderRadius),
+        profileBorderWidth: Number.parseFloat(profileStyle.borderTopWidth),
+        shellBackground: shellStyle.backgroundColor,
+      };
+    });
+
+    expect(geometry.barHeight).toBeLessThanOrEqual(52);
+    expect(geometry.memberRailWidth).toBeGreaterThanOrEqual(156);
+    expect(geometry.memberRailWidth).toBeLessThanOrEqual(164);
+    expect(geometry.memberHeight).toBeLessThanOrEqual(44);
+    expect(geometry.profileRadius).toBeGreaterThanOrEqual(12);
+    expect(geometry.profileBorderWidth).toBe(0);
+    expect(geometry.shellBackground).not.toBe('rgb(255, 255, 255)');
+  });
+
   test('team list renders employee business columns and explicit row actions on desktop', async ({ page }) => {
     await page.setViewportSize({ width: 1920, height: 1080 });
     await mockTaskWorkspaceIdentity(page, 'manager');
