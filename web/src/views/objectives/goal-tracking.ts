@@ -53,8 +53,7 @@ export function parseVisibleColumns(raw: string | null): GoalTrackingColumn[] {
   try {
     const parsed: unknown = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [...GOAL_TRACKING_COLUMNS];
-    return parsed.filter((value): value is GoalTrackingColumn =>
-      GOAL_TRACKING_COLUMNS.includes(value as GoalTrackingColumn));
+    return GOAL_TRACKING_COLUMNS.filter((column) => parsed.includes(column));
   } catch {
     return [...GOAL_TRACKING_COLUMNS];
   }

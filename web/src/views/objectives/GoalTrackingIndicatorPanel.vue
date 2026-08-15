@@ -164,7 +164,11 @@ function handleCycleChange(event: Event) {
             role="cell"
             aria-label="最新进展"
           >
-            <span class="tracking-indicators__latest">{{ item.latestProgress?.title ?? '暂无进展' }}</span>
+            <span class="tracking-indicators__latest">
+              {{ item.latestProgress
+                ? `${item.latestProgress.title} · ${item.latestProgress.progress}%`
+                : '暂无进展' }}
+            </span>
           </div>
           <div v-if="visibleColumns.includes('status')" class="goal-indicator-cell" data-label="状态" role="cell" aria-label="状态">
             <span>{{ goalTrackingStatus(item) }}</span>

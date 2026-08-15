@@ -563,6 +563,88 @@ test.describe('09-performance-workspace tracking behavior', () => {
     expect(retainedState).toEqual({ itemIds: [], loading: true, error: '' });
   });
 
+  test('does not resume initial cycle loading after the page unmounts', async ({ page }) => {
+    await authenticateMockSession(page);
+    await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(trackingUser)),
+    }));
+    await page.route('**/api/v1/tasks/mine?**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
+    }));
+    let announceCycles!: () => void;
+    let releaseCycles!: () => void;
+    let fulfilledCycles = 0;
+    const cyclesStarted = new Promise<void>((resolve) => { announceCycles = resolve; });
+    const cyclesGate = new Promise<void>((resolve) => { releaseCycles = resolve; });
+    await page.route('**/api/v1/cycles?**', async (route) => {
+      announceCycles();
+      await cyclesGate;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          total: 2, page: 1, pageSize: 100, items: trackingCycles,
+        })),
+      });
+      fulfilledCycles += 1;
+    });
+    let trackingRequests = 0;
+    page.on('request', (request) => {
+      if (request.url().includes('/api/v1/objectives/tracking')) trackingRequests += 1;
+    });
+
+    await page.goto('/action-items');
+    await cyclesStarted;
+    await page.evaluate(() => {
+      type VueInstance = {
+        parent?: VueInstance;
+        setupState?: Record<string, unknown>;
+      };
+      const surface = document.querySelector('[data-testid="goal-tracking-surface"]') as
+        (Element & { __vueParentComponent?: VueInstance }) | null;
+      let instance = surface?.__vueParentComponent;
+      while (instance && !instance.setupState?.workspace) instance = instance.parent;
+      if (!instance?.setupState?.workspace) throw new Error('Goal tracking workspace was not found');
+      (window as typeof window & { __retainedGoalTrackingWorkspace?: unknown })
+        .__retainedGoalTrackingWorkspace = instance.setupState.workspace;
+    });
+
+    await page.getByRole('link', { name: '绩效待办' }).click();
+    await expect(page).toHaveURL(/\/tasks$/);
+    releaseCycles();
+    await expect.poll(() => fulfilledCycles).toBeGreaterThan(0);
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+
+    await expect(page).toHaveURL(/\/tasks$/);
+    expect(trackingRequests).toBe(0);
+    const retainedState = await page.evaluate(() => {
+      type RetainedWorkspace = {
+        cycles: { value: Array<{ id: string }> };
+        cyclesLoading: { value: boolean };
+        selectedPersonId: { value: string };
+        selectedCycleId: { value: string };
+      };
+      const workspace = (window as typeof window & { __retainedGoalTrackingWorkspace?: unknown })
+        .__retainedGoalTrackingWorkspace as RetainedWorkspace | undefined;
+      if (!workspace) throw new Error('Retained goal tracking workspace was not found');
+      return {
+        cycleIds: workspace.cycles.value.map((cycle) => cycle.id),
+        cyclesLoading: workspace.cyclesLoading.value,
+        selectedPersonId: workspace.selectedPersonId.value,
+        selectedCycleId: workspace.selectedCycleId.value,
+      };
+    });
+    expect(retainedState).toEqual({
+      cycleIds: [],
+      cyclesLoading: true,
+      selectedPersonId: '',
+      selectedCycleId: '',
+    });
+  });
+
   test('persists people groups and custom columns across refresh', async ({ page }) => {
     await mockGoalTrackingShell(page);
     await page.goto('/action-items');
@@ -691,7 +773,8 @@ test.describe('09-performance-workspace tracking behavior', () => {
         totalWeight: 100,
         items: [
           { id: 'objective-1', title: '产品项目', ownerId: 'employee-1', ownerName: '刘伟', cycleId: 'cycle-1', cycleName: '2026 第二季度', priority: 2, status: 'active', progress: 0, weight: 50, latestProgress: null },
-          { id: 'objective-2', title: '新产品', ownerId: 'employee-1', ownerName: '刘伟', cycleId: 'cycle-1', cycleName: '2026 第二季度', priority: 1, status: 'active', progress: 35, weight: 50, latestProgress: { id: 'item-2', title: '完成需求评审', progress: 35, updatedAt: '2026-08-15T08:00:00.000Z' } },
+          { id: 'objective-2', title: '新产品', ownerId: 'employee-1', ownerName: '刘伟', cycleId: 'cycle-1', cycleName: '2026 第二季度', priority: 1, status: 'active', progress: 35, weight: 50, latestProgress: { id: 'item-2', title: '完成方案评审', progress: 60, updatedAt: '2026-08-15T08:00:00.000Z' } },
+          { id: 'objective-3', title: '启动目标', ownerId: 'employee-1', ownerName: '刘伟', cycleId: 'cycle-1', cycleName: '2026 第二季度', priority: 3, status: 'active', progress: 0, weight: 0, latestProgress: { id: 'item-3', title: '启动准备', progress: 0, updatedAt: '2026-08-14T08:00:00.000Z' } },
         ],
       })),
     }));
@@ -707,7 +790,8 @@ test.describe('09-performance-workspace tracking behavior', () => {
     await expect(page.getByTestId('goal-tracking-surface')).toContainText('考核指标');
     await expect(page.getByText('产品项目')).toBeVisible();
     await expect(page.getByText('暂无进展')).toBeVisible();
-    await expect(page.getByText('完成需求评审')).toBeVisible();
+    await expect(page.getByText('完成方案评审 · 60%', { exact: true })).toBeVisible();
+    await expect(page.getByText('启动准备 · 0%', { exact: true })).toBeVisible();
     await expect(page.getByText('维度权重：100%')).toBeVisible();
     await expect(page.getByText('创建群聊')).toHaveCount(0);
     await expect(page.getByTestId('action-item-create')).toHaveCount(0);

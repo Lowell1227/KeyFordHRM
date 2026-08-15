@@ -26,13 +26,21 @@ export function useGoalTracking() {
   const highlightedObjectiveId = ref('');
   let requestSerial = 0;
   let navigationGeneration = 0;
+  let lifecycleGeneration = 0;
+  let disposed = false;
+
+  function captureLifecycle() {
+    const generation = lifecycleGeneration;
+    return () => !disposed && generation === lifecycleGeneration;
+  }
 
   const peopleGroups = computed(() => auth.user ? buildTrackingPeople(auth.user) : []);
   const people = computed(() => peopleGroups.value.flatMap((group) => group.people));
   const selectedPerson = computed(() =>
     people.value.find((person) => person.id === selectedPersonId.value) ?? people.value[0] ?? null);
 
-  async function writeQuery(mode: 'push' | 'replace') {
+  async function writeQuery(mode: 'push' | 'replace', commitGuard = captureLifecycle()) {
+    if (!commitGuard()) return;
     const navigate = mode === 'push' ? router.push : router.replace;
     await navigate({
       query: {
@@ -42,9 +50,13 @@ export function useGoalTracking() {
     });
   }
 
-  async function resolveObjectiveDeepLink(objectiveId: string) {
+  async function resolveObjectiveDeepLink(
+    objectiveId: string,
+    lifecycleGuard = captureLifecycle(),
+  ) {
     const generation = ++navigationGeneration;
-    const isCurrent = () => generation === navigationGeneration;
+    const isCurrent = () => lifecycleGuard() && generation === navigationGeneration;
+    if (!isCurrent()) return true;
     let objective: GoalTrackingItem | undefined;
     try {
       const deepLink = await objectivesApi.getTracking({ objectiveId });
@@ -68,15 +80,15 @@ export function useGoalTracking() {
     selectedPersonId.value = objective.ownerId;
     selectedCycleId.value = objective.cycleId;
     highlightedObjectiveId.value = objective.id;
-    await writeQuery('replace');
+    await writeQuery('replace', isCurrent);
     if (!isCurrent()) return true;
     await loadTracking(isCurrent);
     if (!isCurrent()) return true;
     return true;
   }
 
-  async function loadTracking(commitGuard: () => boolean = () => true) {
-    if (!selectedPersonId.value || !selectedCycleId.value) return;
+  async function loadTracking(commitGuard = captureLifecycle()) {
+    if (!commitGuard() || !selectedPersonId.value || !selectedCycleId.value) return;
     const serial = ++requestSerial;
     const canCommit = () => serial === requestSerial && commitGuard();
     result.value = { totalWeight: 0, items: [] };
@@ -95,25 +107,30 @@ export function useGoalTracking() {
     }
   }
 
-  async function loadCycles() {
+  async function loadCycles(commitGuard = captureLifecycle()) {
+    if (!commitGuard()) return;
     cyclesLoading.value = true;
     cyclesError.value = '';
     try {
       const page = await cyclesApi.findAll({ page: 1, pageSize: 100 });
-      cycles.value = page.items;
+      if (commitGuard()) cycles.value = page.items;
     } catch {
-      cycles.value = [];
-      cyclesError.value = '考核周期加载失败';
+      if (commitGuard()) {
+        cycles.value = [];
+        cyclesError.value = '考核周期加载失败';
+      }
     } finally {
-      cyclesLoading.value = false;
+      if (commitGuard()) cyclesLoading.value = false;
     }
   }
 
-  async function normalizeSelectionAndLoad() {
+  async function normalizeSelectionAndLoad(commitGuard = captureLifecycle()) {
+    if (!commitGuard()) return;
     const objectiveId = typeof route.query.objectiveId === 'string'
       ? route.query.objectiveId
       : '';
-    if (objectiveId && await resolveObjectiveDeepLink(objectiveId)) return;
+    if (objectiveId && await resolveObjectiveDeepLink(objectiveId, commitGuard)) return;
+    if (!commitGuard()) return;
 
     const defaultCycle = selectDefaultTrackingCycle(cycles.value);
     selectedPersonId.value = typeof route.query.employeeId === 'string'
@@ -124,37 +141,47 @@ export function useGoalTracking() {
       && cycles.value.some((cycle) => cycle.id === route.query.cycleId)
       ? route.query.cycleId
       : defaultCycle?.id ?? '';
-    await writeQuery('replace');
-    await loadTracking();
+    await writeQuery('replace', commitGuard);
+    if (!commitGuard()) return;
+    await loadTracking(commitGuard);
   }
 
   async function retryCycles() {
-    await loadCycles();
-    if (cyclesError.value) return;
-    await normalizeSelectionAndLoad();
+    const isCurrent = captureLifecycle();
+    await loadCycles(isCurrent);
+    if (!isCurrent() || cyclesError.value) return;
+    await normalizeSelectionAndLoad(isCurrent);
   }
 
   async function selectPerson(id: string) {
+    const isCurrent = captureLifecycle();
+    if (!isCurrent()) return;
     navigationGeneration += 1;
     notice.value = '';
     highlightedObjectiveId.value = '';
     selectedPersonId.value = id;
-    await writeQuery('push');
-    await loadTracking();
+    await writeQuery('push', isCurrent);
+    if (!isCurrent()) return;
+    await loadTracking(isCurrent);
   }
 
   async function selectCycle(id: string) {
+    const isCurrent = captureLifecycle();
+    if (!isCurrent()) return;
     navigationGeneration += 1;
     notice.value = '';
     highlightedObjectiveId.value = '';
     selectedCycleId.value = id;
-    await writeQuery('push');
-    await loadTracking();
+    await writeQuery('push', isCurrent);
+    if (!isCurrent()) return;
+    await loadTracking(isCurrent);
   }
 
   watch(
     () => [route.query.employeeId, route.query.cycleId] as const,
     async ([employeeId, cycleId]) => {
+      const isCurrent = captureLifecycle();
+      if (!isCurrent()) return;
       if (typeof employeeId !== 'string' || typeof cycleId !== 'string') return;
       if (!people.value.some((person) => person.id === employeeId)) return;
       if (!cycles.value.some((cycle) => cycle.id === cycleId)) return;
@@ -162,18 +189,22 @@ export function useGoalTracking() {
       navigationGeneration += 1;
       selectedPersonId.value = employeeId;
       selectedCycleId.value = cycleId;
-      await loadTracking();
+      await loadTracking(isCurrent);
     },
   );
 
   onMounted(async () => {
+    const isCurrent = captureLifecycle();
     await auth.ensureLoaded();
-    await loadCycles();
-    if (cyclesError.value) return;
-    await normalizeSelectionAndLoad();
+    if (!isCurrent()) return;
+    await loadCycles(isCurrent);
+    if (!isCurrent() || cyclesError.value) return;
+    await normalizeSelectionAndLoad(isCurrent);
   });
 
   onBeforeUnmount(() => {
+    disposed = true;
+    lifecycleGeneration += 1;
     navigationGeneration += 1;
     requestSerial += 1;
   });

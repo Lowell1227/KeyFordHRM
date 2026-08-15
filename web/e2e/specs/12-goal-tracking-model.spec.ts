@@ -71,6 +71,10 @@ test('maps objective status from archive and progress semantics', () => {
 test('validates persisted visible columns and collapse booleans', () => {
   expect(parseVisibleColumns('["status","weight","unknown"]'))
     .toEqual(['status', 'weight']);
+  expect(parseVisibleColumns('["status","status","weight"]'))
+    .toEqual(['status', 'weight']);
+  expect(parseVisibleColumns('["weight","unknown","status"]'))
+    .toEqual(['status', 'weight']);
   expect(parseVisibleColumns('{broken')).toEqual([
     'latestProgress', 'status', 'progress', 'weight',
   ]);
