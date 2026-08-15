@@ -1884,6 +1884,21 @@ test.describe('manager evaluation workspace', () => {
     storageState: 'e2e/auth-state/manager.json',
   });
 
+  test('manager evaluation uses the shared flat table with scoring-specific columns', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await mockManagerEvaluationWorkspace(page);
+    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+
+    const table = page.getByTestId('performance-review-table');
+    for (const label of ['名称', '权重', '指标描述', '员工自评', '主管评分']) {
+      await expect(table.getByRole('columnheader', { name: label, exact: true })).toBeVisible();
+    }
+    await expect(page.getByTestId('manager-score-ind-1')).toBeVisible();
+    await expect(page.getByTestId('manager-comment-ind-1')).toBeVisible();
+    await expect(page.getByTestId('indicator-toggle-ind-1')).toHaveCount(0);
+    await expect(page.getByTestId('manager-evaluation-summary-card')).toBeVisible();
+  });
+
   test('manager evaluation shows self evidence beside editable manager fields and saves a versioned draft', async ({ page }) => {
     const mocked = await mockManagerEvaluationWorkspace(page);
     await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
@@ -1893,8 +1908,6 @@ test.describe('manager evaluation workspace', () => {
     await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
     await expect(page.getByTestId('goal-review-workspace')).toHaveCount(0);
 
-    await page.getByTestId('indicator-toggle-ind-1').click();
-    await expect(page.getByText('员工自评', { exact: true }).first()).toBeVisible();
     await expect(page.getByTestId('manager-score-ind-1')).toBeVisible();
     await expect(page.getByTestId('employee-self-comment-ind-1')).toBeVisible();
     await expect(page.getByTestId('employee-self-comment-ind-1')).toContainText('Delivered the planned release');
@@ -1930,7 +1943,6 @@ test.describe('manager evaluation workspace', () => {
     const mocked = await mockManagerEvaluationWorkspace(page, { details: [detail] });
     await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
 
-    await page.getByTestId('indicator-toggle-ind-1').click();
     await page.getByTestId('manager-score-ind-1').fill('');
     await page.getByTestId('manager-comment-ind-1').fill('');
     await page.getByTestId('manager-strengths').fill('');
@@ -1957,7 +1969,6 @@ test.describe('manager evaluation workspace', () => {
   test('manager evaluation focuses the first empty extra-score reason before saving', async ({ page }) => {
     const mocked = await mockManagerEvaluationWorkspace(page);
     await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
-    await page.getByTestId('indicator-toggle-ind-1').click();
     await page.getByTestId('manager-score-ind-1').fill('88');
     await page.getByTestId('manager-extra-add-ind-1').click();
     await page.getByTestId('manager-extra-value-ind-1-0').fill('2');
@@ -1985,7 +1996,6 @@ test.describe('manager evaluation workspace', () => {
     });
     const mocked = await mockManagerEvaluationWorkspace(page, { draftGate });
     await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
-    await page.getByTestId('indicator-toggle-ind-1').click();
     await page.getByTestId('manager-score-ind-1').fill('88');
     await page.getByTestId('manager-comment-ind-1').fill('First draft');
     await page.getByTestId('manager-evaluation-save').click();
@@ -2007,7 +2017,6 @@ test.describe('manager evaluation workspace', () => {
       draftRefreshError: '详情服务暂时不可用',
     });
     await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
-    await page.getByTestId('indicator-toggle-ind-1').click();
     await page.getByTestId('manager-score-ind-1').fill('88');
     await page.getByTestId('manager-evaluation-save').click();
 
@@ -2023,7 +2032,6 @@ test.describe('manager evaluation workspace', () => {
   test('manager evaluation final submit reloads the task as read-only with total and grade', async ({ page }) => {
     const mocked = await mockManagerEvaluationWorkspace(page);
     await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
-    await page.getByTestId('indicator-expand-all').click();
     await page.getByTestId('manager-score-ind-1').fill('88');
     await page.getByTestId('manager-score-ind-2').fill('90');
     await page.getByTestId('manager-strengths').fill('Reliable delivery ownership.');
@@ -2050,7 +2058,6 @@ test.describe('manager evaluation workspace', () => {
     });
     const mocked = await mockManagerEvaluationWorkspace(page, { submitGate });
     await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
-    await page.getByTestId('indicator-expand-all').click();
     await page.getByTestId('manager-score-ind-1').fill('88');
     await page.getByTestId('manager-score-ind-2').fill('90');
     await page.getByTestId('manager-evaluation-submit').click();
@@ -2075,7 +2082,6 @@ test.describe('manager evaluation workspace', () => {
     await page.getByRole('button', { name: '确认撤回', exact: true }).click();
 
     await expect(page.getByTestId('manager-evaluation-feedback')).toContainText('评估已撤回');
-    await page.getByTestId('indicator-toggle-ind-1').click();
     await expect(page.getByTestId('manager-score-ind-1')).toBeEnabled();
     await expect(page.getByTestId('manager-score-ind-1')).toHaveValue('88');
     await expect(page.getByTestId('manager-evaluation-save')).toBeVisible();
@@ -2096,7 +2102,6 @@ test.describe('manager evaluation workspace', () => {
 
     await expect(page.getByTestId('manager-evaluation-feedback'))
       .toContainText('评估已撤回，但最新详情加载失败');
-    await page.getByTestId('indicator-toggle-ind-1').click();
     await expect(page.getByTestId('manager-score-ind-1')).toBeEnabled();
     await page.getByTestId('manager-comment-ind-1').fill('撤回后继续编辑');
     await page.getByTestId('manager-evaluation-save').click();
@@ -2139,7 +2144,6 @@ test.describe('manager evaluation workspace', () => {
     });
     await mockManagerEvaluationWorkspace(page, { details: [grace, ada] });
     await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
-    await page.getByTestId('indicator-toggle-ind-1').click();
     await page.getByTestId('manager-score-ind-1').fill('88');
 
     await page.getByTestId('team-task-row-task-1').click();
@@ -2158,7 +2162,6 @@ test.describe('manager evaluation workspace', () => {
   test('manager evaluation guards returning to the team list and continues once confirmed', async ({ page }) => {
     await mockManagerEvaluationWorkspace(page);
     await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
-    await page.getByTestId('indicator-toggle-ind-1').click();
     await page.getByTestId('manager-score-ind-1').fill('88');
 
     await page.getByTestId('team-task-workspace-back').click();
@@ -2184,7 +2187,6 @@ test.describe('manager evaluation workspace', () => {
     });
 
     await expect.poll(dispatchBeforeUnload).toBe(false);
-    await page.getByTestId('indicator-toggle-ind-1').click();
     await page.getByTestId('manager-score-ind-1').fill('88');
     await expect.poll(dispatchBeforeUnload).toBe(true);
 
@@ -2201,8 +2203,8 @@ test.describe('manager evaluation workspace', () => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await mockManagerEvaluationWorkspace(page);
       await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
-      await page.getByTestId('indicator-toggle-ind-1').click();
-
+      await expect(page.getByTestId('employee-self-comment-ind-1')).toBeVisible();
+      await expect(page.getByTestId('manager-comment-ind-1')).toBeVisible();
       const geometry = await page.evaluate(() => {
         const self = document.querySelector<HTMLElement>('[data-testid="employee-self-comment-ind-1"]')!
           .closest<HTMLElement>('.evaluation-column')!;

@@ -18,9 +18,10 @@ import type {
   SubmitManagerScoreBody,
   TaskDetail,
 } from '@/types/api.types';
-import PerformanceIndicatorList, {
-  type PerformanceIndicatorRow,
-} from './PerformanceIndicatorList.vue';
+import type { PerformanceIndicatorRow } from './PerformanceIndicatorList.vue';
+import PerformanceReviewTable, {
+  type PerformanceReviewColumn,
+} from './PerformanceReviewTable.vue';
 
 interface EditableIndicator extends IndicatorInstance {
   managerScoreInput: number | null;
@@ -112,6 +113,13 @@ const evaluationRows = computed<PerformanceIndicatorRow[]>(() => draftIndicators
   unit: indicator.unit,
   alignedObjectives: indicator.alignedObjectives,
 })));
+const managerEvaluationColumns: PerformanceReviewColumn[] = [
+  { key: 'indicator', label: '名称', width: 'minmax(150px, .8fr)' },
+  { key: 'weight', label: '权重', width: '68px' },
+  { key: 'description', label: '指标描述', width: 'minmax(230px, 1.15fr)' },
+  { key: 'primary', label: '员工自评', width: 'minmax(190px, .95fr)' },
+  { key: 'secondary', label: '主管评分', width: 'minmax(240px, 1.2fr)' },
+];
 
 function cloneIndicators(indicators: IndicatorInstance[]): EditableIndicator[] {
   return indicators.map((indicator) => ({
@@ -602,10 +610,11 @@ defineExpose<ManagerEvaluationWorkspaceHandle>({ reload: () => loadTask(false) }
     </el-result>
 
     <template v-else-if="task">
+      <section class="manager-evaluation__indicators">
       <header class="manager-evaluation__header">
         <div class="manager-evaluation__heading">
           <div>
-            <h3>主管评估</h3>
+            <h3>考核指标</h3>
             <span>{{ task.indicatorInstances.length }} 项 · {{ task.cycleName || '-' }}</span>
           </div>
           <StatusBadge :status="task.status" size="small" />
@@ -657,26 +666,26 @@ defineExpose<ManagerEvaluationWorkspaceHandle>({ reload: () => loadTask(false) }
         {{ feedback.message }}
       </div>
 
-      <div class="manager-evaluation__body">
-        <PerformanceIndicatorList
+        <PerformanceReviewTable
           :rows="evaluationRows"
+          :columns="managerEvaluationColumns"
           :invalid-indicator-ids="validationIndicatorIds"
-          secondary-column-label="自评概况"
         >
-          <template #visibility="{ index }">
-            <span class="manager-evaluation__self-summary">
-              {{ draftIndicators[index].selfScore ?? '-' }} 分 ·
-              {{ draftIndicators[index].selfComment || '无自评说明' }}
-            </span>
+          <template #cell-indicator="{ row, index }">
+            <div class="manager-cell manager-cell--name">
+              <span class="manager-cell__index">{{ index + 1 }}</span>
+              <strong>{{ row.name || '未命名指标' }}</strong>
+            </div>
           </template>
 
-          <template #details="{ index }">
-            <div class="manager-indicator-detail">
-              <dl class="manager-indicator-detail__facts">
-                <div>
-                  <dt>指标描述</dt>
-                  <dd>{{ draftIndicators[index].description || '-' }}</dd>
-                </div>
+          <template #cell-weight="{ row }">
+            <span>{{ Number((row.weight * 100).toFixed(2)) }}%</span>
+          </template>
+
+          <template #cell-description="{ index }">
+            <div class="manager-cell__description">
+              <p>{{ draftIndicators[index].description || '-' }}</p>
+              <dl>
                 <div>
                   <dt>目标值</dt>
                   <dd>
@@ -686,130 +695,127 @@ defineExpose<ManagerEvaluationWorkspaceHandle>({ reload: () => loadTask(false) }
                         : '-') }}
                   </dd>
                 </div>
-                <div>
-                  <dt>实际完成</dt>
-                  <dd>{{ draftIndicators[index].actualValue || '-' }}</dd>
-                </div>
-                <div>
-                  <dt>完成说明</dt>
-                  <dd>{{ draftIndicators[index].actualNote || '-' }}</dd>
-                </div>
+                <div><dt>实际完成</dt><dd>{{ draftIndicators[index].actualValue || '-' }}</dd></div>
+                <div><dt>完成说明</dt><dd>{{ draftIndicators[index].actualNote || '-' }}</dd></div>
+                <div><dt>评分标准</dt><dd>{{ draftIndicators[index].scoringStandard || '-' }}</dd></div>
               </dl>
-
-              <div class="manager-indicator-detail__comparison">
-                <section class="evaluation-column is-self" aria-label="员工自评">
-                  <header>
-                    <strong>员工自评</strong>
-                    <span>{{ draftIndicators[index].selfScore ?? '-' }} 分</span>
-                  </header>
-                  <div
-                    class="evaluation-column__comment"
-                    :data-testid="`employee-self-comment-${draftIndicators[index].id}`"
-                  >
-                    {{ draftIndicators[index].selfComment || '暂无自评说明' }}
-                  </div>
-                </section>
-
-                <section class="evaluation-column is-manager" aria-label="主管评价">
-                  <header>
-                    <strong>主管评价</strong>
-                    <span>{{ canEditForm ? '可编辑' : '只读' }}</span>
-                  </header>
-                  <label>
-                    <span>主管评分</span>
-                    <input
-                      class="manager-field manager-field--score"
-                      type="number"
-                      min="0"
-                      max="100"
-                      step="0.1"
-                      inputmode="decimal"
-                      :value="draftIndicators[index].managerScoreInput ?? ''"
-                      :data-testid="`manager-score-${draftIndicators[index].id}`"
-                      :disabled="!canEditForm"
-                      @input="handleScoreInput(draftIndicators[index], $event)"
-                    >
-                  </label>
-                  <label>
-                    <span>主管评语</span>
-                    <textarea
-                      class="manager-field manager-field--comment"
-                      rows="3"
-                      maxlength="500"
-                      :value="draftIndicators[index].managerCommentInput"
-                      :data-testid="`manager-comment-${draftIndicators[index].id}`"
-                      :disabled="!canEditForm"
-                      @input="handleCommentInput(draftIndicators[index], $event)"
-                    />
-                  </label>
-                </section>
-              </div>
-
-              <section class="manager-indicator-detail__extras" aria-label="加减分明细">
-                <header>
-                  <div>
-                    <strong>加减分明细</strong>
-                    <span>{{ draftIndicators[index].extraScoresInput.length }} 条</span>
-                  </div>
-                  <el-tooltip v-if="canEditForm" content="添加加减分" placement="top">
-                    <el-button
-                      text
-                      circle
-                      :icon="Plus"
-                      :data-testid="`manager-extra-add-${draftIndicators[index].id}`"
-                      :aria-label="`为 ${draftIndicators[index].name} 添加加减分`"
-                      @click="addExtraScore(draftIndicators[index])"
-                    />
-                  </el-tooltip>
-                </header>
-                <div
-                  v-for="(extra, extraIndex) in draftIndicators[index].extraScoresInput"
-                  :key="`${draftIndicators[index].id}-${extraIndex}`"
-                  class="manager-extra-row"
-                >
-                  <label>
-                    <span>原因</span>
-                    <input
-                      class="manager-field"
-                      type="text"
-                      maxlength="200"
-                      :value="extra.label"
-                      :data-testid="`manager-extra-reason-${draftIndicators[index].id}-${extraIndex}`"
-                      :disabled="!canEditForm"
-                      @input="handleExtraReasonInput(extra, $event)"
-                    >
-                  </label>
-                  <label>
-                    <span>分值</span>
-                    <input
-                      class="manager-field"
-                      type="number"
-                      step="0.1"
-                      inputmode="decimal"
-                      :value="Number.isFinite(extra.value) ? extra.value : ''"
-                      :data-testid="`manager-extra-value-${draftIndicators[index].id}-${extraIndex}`"
-                      :disabled="!canEditForm"
-                      @input="handleExtraValueInput(extra, $event)"
-                    >
-                  </label>
-                  <el-tooltip v-if="canEditForm" content="删除加减分" placement="top">
-                    <el-button
-                      text
-                      circle
-                      type="danger"
-                      :icon="Delete"
-                      :aria-label="`删除第 ${extraIndex + 1} 条加减分`"
-                      @click="removeExtraScore(draftIndicators[index], extraIndex)"
-                    />
-                  </el-tooltip>
-                </div>
-                <p v-if="draftIndicators[index].extraScoresInput.length === 0">暂无加减分</p>
-              </section>
             </div>
           </template>
-        </PerformanceIndicatorList>
 
-        <section class="manager-evaluation__summary" aria-label="综合评价">
+          <template #cell-primary="{ index }">
+            <section class="evaluation-column is-self" aria-label="员工自评">
+              <strong>{{ draftIndicators[index].selfScore ?? '-' }} 分</strong>
+              <div
+                class="evaluation-column__comment"
+                :data-testid="`employee-self-comment-${draftIndicators[index].id}`"
+              >
+                {{ draftIndicators[index].selfComment || '暂无自评说明' }}
+              </div>
+            </section>
+          </template>
+
+          <template #cell-secondary="{ index }">
+            <section class="evaluation-column is-manager" aria-label="主管评价">
+              <label>
+                <span>主管评分</span>
+                <input
+                  class="manager-field manager-field--score"
+                  type="number"
+                  min="0"
+                  max="100"
+                  step="0.1"
+                  inputmode="decimal"
+                  :value="draftIndicators[index].managerScoreInput ?? ''"
+                  :data-testid="`manager-score-${draftIndicators[index].id}`"
+                  :disabled="!canEditForm"
+                  @input="handleScoreInput(draftIndicators[index], $event)"
+                >
+              </label>
+              <label>
+                <span>主管评语</span>
+                <textarea
+                  class="manager-field manager-field--comment"
+                  rows="3"
+                  maxlength="500"
+                  :value="draftIndicators[index].managerCommentInput"
+                  :data-testid="`manager-comment-${draftIndicators[index].id}`"
+                  :disabled="!canEditForm"
+                  @input="handleCommentInput(draftIndicators[index], $event)"
+                />
+              </label>
+            </section>
+          </template>
+
+          <template #row-extra="{ index }">
+            <section class="manager-indicator-detail__extras" aria-label="加减分明细">
+              <header>
+                <div>
+                  <strong>加减分明细</strong>
+                  <span>{{ draftIndicators[index].extraScoresInput.length }} 条</span>
+                </div>
+                <el-tooltip v-if="canEditForm" content="添加加减分" placement="top">
+                  <el-button
+                    text
+                    circle
+                    :icon="Plus"
+                    :data-testid="`manager-extra-add-${draftIndicators[index].id}`"
+                    :aria-label="`为 ${draftIndicators[index].name} 添加加减分`"
+                    @click="addExtraScore(draftIndicators[index])"
+                  />
+                </el-tooltip>
+              </header>
+              <div
+                v-for="(extra, extraIndex) in draftIndicators[index].extraScoresInput"
+                :key="`${draftIndicators[index].id}-${extraIndex}`"
+                class="manager-extra-row"
+              >
+                <label>
+                  <span>原因</span>
+                  <input
+                    class="manager-field"
+                    type="text"
+                    maxlength="200"
+                    :value="extra.label"
+                    :data-testid="`manager-extra-reason-${draftIndicators[index].id}-${extraIndex}`"
+                    :disabled="!canEditForm"
+                    @input="handleExtraReasonInput(extra, $event)"
+                  >
+                </label>
+                <label>
+                  <span>分值</span>
+                  <input
+                    class="manager-field"
+                    type="number"
+                    step="0.1"
+                    inputmode="decimal"
+                    :value="Number.isFinite(extra.value) ? extra.value : ''"
+                    :data-testid="`manager-extra-value-${draftIndicators[index].id}-${extraIndex}`"
+                    :disabled="!canEditForm"
+                    @input="handleExtraValueInput(extra, $event)"
+                  >
+                </label>
+                <el-tooltip v-if="canEditForm" content="删除加减分" placement="top">
+                  <el-button
+                    text
+                    circle
+                    type="danger"
+                    :icon="Delete"
+                    :aria-label="`删除第 ${extraIndex + 1} 条加减分`"
+                    @click="removeExtraScore(draftIndicators[index], extraIndex)"
+                  />
+                </el-tooltip>
+              </div>
+              <p v-if="draftIndicators[index].extraScoresInput.length === 0">暂无加减分</p>
+            </section>
+          </template>
+        </PerformanceReviewTable>
+      </section>
+
+        <section
+          class="manager-evaluation__summary"
+          data-testid="manager-evaluation-summary-card"
+          aria-label="综合评价"
+        >
           <header>
             <div>
               <h4>综合评价</h4>
@@ -903,7 +909,6 @@ defineExpose<ManagerEvaluationWorkspaceHandle>({ reload: () => loadTask(false) }
             </section>
           </div>
         </section>
-      </div>
     </template>
 
     <el-empty v-else :image-size="52" description="暂无主管评价详情" />
@@ -1315,6 +1320,191 @@ defineExpose<ManagerEvaluationWorkspaceHandle>({ reload: () => loadTask(false) }
 
   .manager-extra-row :deep(.el-button) {
     justify-self: end;
+  }
+}
+
+.manager-evaluation {
+  display: grid;
+  gap: 14px;
+  border-top: 0;
+}
+
+.manager-evaluation__indicators,
+.manager-evaluation__summary {
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(31 45 61 / 4%);
+}
+
+.manager-evaluation__header {
+  min-height: 62px;
+  padding: 8px 18px;
+  border-bottom: 0;
+}
+
+.manager-evaluation__heading h3 {
+  color: #20283a;
+  font-size: 18px;
+}
+
+.manager-evaluation__feedback {
+  border-top: 1px solid #edf0f5;
+  border-bottom-color: #edf0f5;
+}
+
+.manager-evaluation__indicators :deep(.performance-review-table) {
+  border-top: 1px solid #edf0f5;
+}
+
+.manager-cell,
+.manager-cell__description,
+.manager-cell__description dl,
+.manager-cell__description dl div {
+  min-width: 0;
+}
+
+.manager-cell--name {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.manager-cell__index {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  color: #1677ff;
+  background: #e8f3ff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.manager-cell--name strong {
+  color: #273247;
+  font-size: 14px;
+}
+
+.manager-cell__description > p {
+  margin: 0 0 10px;
+  white-space: pre-wrap;
+}
+
+.manager-cell__description dl {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 12px;
+  margin: 0;
+}
+
+.manager-cell__description dt {
+  margin-bottom: 2px;
+  color: #8a94a6;
+  font-size: 11px;
+}
+
+.manager-cell__description dd {
+  margin: 0;
+  color: #5f6a7d;
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.evaluation-column {
+  padding: 0;
+}
+
+.evaluation-column.is-manager {
+  border-left: 0;
+}
+
+.evaluation-column.is-self > strong {
+  display: inline-block;
+  margin-bottom: 8px;
+  color: #273247;
+}
+
+.evaluation-column__comment {
+  min-height: 0;
+}
+
+.manager-indicator-detail__extras {
+  padding: 12px;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.manager-evaluation__summary {
+  margin-top: 0;
+  padding: 0 18px 18px;
+}
+
+.manager-evaluation__summary > header {
+  min-height: 58px;
+}
+
+.manager-evaluation__summary h4 {
+  color: #20283a;
+  font-size: 18px;
+}
+
+.manager-summary-grid {
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
+  gap: 24px;
+  border-top-color: #edf0f5;
+}
+
+.employee-summary,
+.manager-summary {
+  padding: 16px 0 0;
+}
+
+.manager-summary {
+  padding-left: 24px;
+  border-left-color: #edf0f5;
+}
+
+@container manager-evaluation (max-width: 760px) {
+  .manager-evaluation__header {
+    align-items: flex-start;
+    flex-direction: column;
+    padding: 12px;
+  }
+
+  .manager-evaluation__actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .manager-summary-grid,
+  .manager-cell__description dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .manager-summary {
+    padding-left: 0;
+    border-top: 1px solid #edf0f5;
+    border-left: 0;
+  }
+
+  .manager-extra-row {
+    grid-template-columns: minmax(0, 1fr) 96px 34px;
+  }
+}
+
+@container manager-evaluation (max-width: 430px) {
+  .manager-evaluation__summary {
+    padding-inline: 12px;
+  }
+
+  .manager-extra-row {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 </style>
