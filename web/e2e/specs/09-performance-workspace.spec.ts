@@ -282,6 +282,41 @@ async function installDelayedObjectiveResolutionRoutes(page: Page) {
   return { normalTrackingOwners, objectiveLookupStarted };
 }
 
+async function installDelayedDeepLinkLoadRoutes(page: Page) {
+  await authenticateMockSession(page);
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse(trackingUser)),
+  }));
+  await page.route('**/api/v1/cycles?**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 2, page: 1, pageSize: 100, items: trackingCycles })),
+  }));
+  await page.route('**/api/v1/tasks/mine?**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
+  }));
+  let announceTrackingLoad!: () => void;
+  const trackingLoadStarted = new Promise<void>((resolve) => { announceTrackingLoad = resolve; });
+  await page.route('**/api/v1/objectives/tracking?**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('objectiveId') === 'objective-1') {
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(trackingRows.self)),
+      });
+      return;
+    }
+    announceTrackingLoad();
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(trackingRows.self)),
+    });
+  });
+  return { trackingLoadStarted };
+}
+
 test.describe('09-performance-workspace read-only leadership', () => {
   test.use({ storageState: 'e2e/auth-state/approver.json' });
 
@@ -476,6 +511,54 @@ test.describe('09-performance-workspace tracking behavior', () => {
     await expect(page.locator('.tracking-indicators__notice')).toHaveCount(0);
     await expect(page.locator('.tracking-indicators__row.is-highlighted')).toHaveCount(0);
     expect(requests.normalTrackingOwners).toEqual(['manager-1']);
+  });
+
+  test('rejects a deep-link tracking load after the page unmounts', async ({ page }) => {
+    const requests = await installDelayedDeepLinkLoadRoutes(page);
+    const trackingResponse = page.waitForResponse((response) => {
+      const url = new URL(response.url());
+      return url.pathname.endsWith('/objectives/tracking')
+        && url.searchParams.get('ownerId') === 'employee-1';
+    });
+    await page.goto('/action-items?objectiveId=objective-1');
+    await requests.trackingLoadStarted;
+    await page.evaluate(() => {
+      type VueInstance = {
+        parent?: VueInstance;
+        setupState?: Record<string, unknown>;
+      };
+      const surface = document.querySelector('[data-testid="goal-tracking-surface"]') as
+        (Element & { __vueParentComponent?: VueInstance }) | null;
+      let instance = surface?.__vueParentComponent;
+      while (instance && !instance.setupState?.workspace) instance = instance.parent;
+      if (!instance?.setupState?.workspace) throw new Error('Goal tracking workspace was not found');
+      (window as typeof window & { __retainedGoalTrackingWorkspace?: unknown })
+        .__retainedGoalTrackingWorkspace = instance.setupState.workspace;
+    });
+
+    await page.getByRole('link', { name: '绩效待办' }).click();
+    await expect(page).toHaveURL(/\/tasks$/);
+    await trackingResponse;
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+
+    const retainedState = await page.evaluate(() => {
+      type RetainedWorkspace = {
+        result: { value: typeof trackingRows.self };
+        loading: { value: boolean };
+        error: { value: string };
+      };
+      const workspace = (window as typeof window & { __retainedGoalTrackingWorkspace?: unknown })
+        .__retainedGoalTrackingWorkspace as RetainedWorkspace | undefined;
+      if (!workspace) throw new Error('Retained goal tracking workspace was not found');
+      return {
+        itemIds: workspace.result.value.items.map((item) => item.id),
+        loading: workspace.loading.value,
+        error: workspace.error.value,
+      };
+    });
+    expect(retainedState).toEqual({ itemIds: [], loading: true, error: '' });
   });
 
   test('employee sees the reference goal-tracking workspace for self and manager', async ({ page }) => {

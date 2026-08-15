@@ -68,14 +68,15 @@ export function useGoalTracking() {
     highlightedObjectiveId.value = objective.id;
     await writeQuery('replace');
     if (!isCurrent()) return true;
-    await loadTracking();
+    await loadTracking(isCurrent);
     if (!isCurrent()) return true;
     return true;
   }
 
-  async function loadTracking() {
+  async function loadTracking(commitGuard: () => boolean = () => true) {
     if (!selectedPersonId.value || !selectedCycleId.value) return;
     const serial = ++requestSerial;
+    const canCommit = () => serial === requestSerial && commitGuard();
     loading.value = true;
     error.value = '';
     try {
@@ -83,11 +84,11 @@ export function useGoalTracking() {
         ownerId: selectedPersonId.value,
         cycleId: selectedCycleId.value,
       });
-      if (serial === requestSerial) result.value = next;
+      if (canCommit()) result.value = next;
     } catch {
-      if (serial === requestSerial) error.value = '考核指标加载失败';
+      if (canCommit()) error.value = '考核指标加载失败';
     } finally {
-      if (serial === requestSerial) loading.value = false;
+      if (canCommit()) loading.value = false;
     }
   }
 
@@ -146,6 +147,7 @@ export function useGoalTracking() {
 
   onBeforeUnmount(() => {
     navigationGeneration += 1;
+    requestSerial += 1;
   });
 
   return {
