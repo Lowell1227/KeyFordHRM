@@ -1724,10 +1724,32 @@ test.describe('team list manager workspace', () => {
   }
 
   for (const viewport of [
-    { name: 'desktop', width: 1440, height: 900 },
-    { name: 'mobile', width: 390, height: 844 },
+    {
+      name: 'desktop',
+      width: 1920,
+      height: 1080,
+      visibleHeaders: ['员工', '部门', '职位', '考核周期', '任务状态', '结果', '更新日期', '操作'],
+      hiddenHeaders: [],
+      secondaryText: 'E001',
+    },
+    {
+      name: 'medium',
+      width: 1440,
+      height: 900,
+      visibleHeaders: ['员工', '部门', '职位', '任务状态', '操作'],
+      hiddenHeaders: ['考核周期', '结果', '更新日期'],
+      secondaryText: 'E001 · 2026 H1',
+    },
+    {
+      name: 'mobile',
+      width: 390,
+      height: 844,
+      visibleHeaders: ['员工', '任务状态', '操作'],
+      hiddenHeaders: ['部门', '职位', '考核周期', '结果', '更新日期'],
+      secondaryText: 'E001 · Engineering · Senior Engineer · 2026 H1',
+    },
   ]) {
-    test(`team list has no document overflow at ${viewport.name} width`, async ({ page }) => {
+    test(`team list presents responsive employee columns at ${viewport.name} width`, async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await mockTaskWorkspaceIdentity(page, 'manager');
       await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
@@ -1737,6 +1759,25 @@ test.describe('team list manager workspace', () => {
 
       await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending');
       await expect(page.getByTestId('team-task-list')).toBeVisible();
+      for (const heading of viewport.visibleHeaders) {
+        await expect(page.getByRole('columnheader', { name: heading, exact: true })).toBeVisible();
+      }
+      for (const heading of viewport.hiddenHeaders) {
+        await expect(page.getByRole('columnheader', { name: heading, exact: true })).toHaveCount(0);
+      }
+      await expect(
+        page.getByTestId('team-task-row-task-1').locator('.member-cell__meta'),
+      ).toHaveText(viewport.secondaryText);
+
+      const density = await page.getByTestId('team-task-list').evaluate((element) => ({
+        headerHeight: element.querySelector('th.el-table__cell')?.getBoundingClientRect().height ?? 0,
+        rowHeight: element.querySelector('tr.el-table__row')?.getBoundingClientRect().height ?? 0,
+      }));
+      expect(density.headerHeight).toBeGreaterThanOrEqual(40);
+      expect(density.headerHeight).toBeLessThanOrEqual(48);
+      expect(density.rowHeight).toBeGreaterThanOrEqual(48);
+      expect(density.rowHeight).toBeLessThanOrEqual(56);
+
       const overflow = await page.evaluate(
         () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
       );

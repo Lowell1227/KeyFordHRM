@@ -74,12 +74,6 @@ function stageStateLabel(state: TeamStageState): string {
   return labels[state];
 }
 
-function stageStateType(state: TeamStageState): 'info' | 'warning' | 'success' {
-  if (state === 'pending') return 'warning';
-  if (state === 'completed') return 'success';
-  return 'info';
-}
-
 function taskActionLabel(item: TeamTaskListItem): string {
   return item.stageState === 'pending' ? '处理' : '查看';
 }
@@ -215,7 +209,7 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
           width="40"
           :selectable="isEligible"
         />
-        <el-table-column label="员工" :min-width="mediumColumns ? 150 : 190">
+        <el-table-column label="员工" :min-width="narrowColumns ? 132 : mediumColumns ? 150 : 190">
           <template #default="{ row }">
             <button
               type="button"
@@ -223,17 +217,23 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
               :data-testid="`team-task-row-${row.id}`"
               @click.stop="selectTask(asTeamTask(row))"
             >
-              <el-avatar :size="32" :src="row.avatarUrl || undefined">
+              <el-avatar :size="28" :src="row.avatarUrl || undefined">
                 {{ row.employeeName.slice(0, 1) }}
               </el-avatar>
               <span class="member-cell__copy">
                 <strong>{{ row.employeeName }}</strong>
-                <small class="member-cell__meta">{{ row.employeeNo || '-' }}</small>
+                <small class="member-cell__meta">
+                  {{ row.employeeNo || '-' }}<template v-if="mediumColumns">
+                    <span v-if="narrowColumns && row.deptName"> · {{ row.deptName }}</span>
+                    <span v-if="narrowColumns && row.position"> · {{ row.position }}</span>
+                    <span v-if="row.cycleName"> · {{ row.cycleName }}</span>
+                  </template>
+                </small>
               </span>
             </button>
           </template>
         </el-table-column>
-        <el-table-column v-if="!mediumColumns" prop="deptName" label="部门" min-width="120">
+        <el-table-column v-if="!narrowColumns" prop="deptName" label="部门" min-width="120">
           <template #default="{ row }">{{ row.deptName || '-' }}</template>
         </el-table-column>
         <el-table-column v-if="!narrowColumns" prop="position" label="职位" min-width="120">
@@ -246,13 +246,13 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
           min-width="130"
           show-overflow-tooltip
         />
-        <el-table-column label="任务状态" :min-width="mediumColumns ? 120 : 170">
+        <el-table-column label="任务状态" :min-width="narrowColumns ? 96 : mediumColumns ? 120 : 170">
           <template #default="{ row }">
             <div class="team-task-list__status">
               <StatusBadge :status="row.status" size="small" />
-              <el-tag :type="stageStateType(row.stageState)" effect="plain" size="small">
+              <small :class="`is-${row.stageState}`">
                 {{ stageStateLabel(row.stageState) }}
-              </el-tag>
+              </small>
             </div>
           </template>
         </el-table-column>
@@ -266,7 +266,7 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
         <el-table-column v-if="!mediumColumns" label="更新日期" width="112">
           <template #default="{ row }">{{ row.updatedAt.slice(0, 10) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="72" fixed="right" align="center">
+        <el-table-column label="操作" :width="narrowColumns ? 56 : 72" fixed="right" align="center">
           <template #default="{ row }">
             <el-button
               class="team-task-list__action"
@@ -359,6 +359,20 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
   width: 100%;
 }
 
+.team-task-list :deep(.el-table__header-wrapper th.el-table__cell) {
+  height: 44px;
+  background: #f7f9fc !important;
+}
+
+.team-task-list :deep(.el-table__body td.el-table__cell) {
+  height: 52px;
+  padding: 5px 0;
+}
+
+.team-task-list :deep(.el-table__row:nth-child(even) td.el-table__cell) {
+  background: #fff;
+}
+
 .team-task-list :deep(.el-table__row) {
   cursor: pointer;
 }
@@ -369,6 +383,7 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
 }
 
 .member-cell {
+  width: 100%;
   max-width: 100%;
   display: flex;
   align-items: center;
@@ -406,6 +421,33 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
   font-size: 11px;
 }
 
+.team-task-list__status {
+  min-width: 0;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.team-task-list__status small {
+  color: #7a8495;
+  font-size: 11px;
+  line-height: 14px;
+}
+
+.team-task-list__status small.is-pending {
+  color: #ad6800;
+}
+
+.team-task-list__status small.is-completed {
+  color: #389e0d;
+}
+
+.team-task-list__action {
+  min-height: 28px;
+  padding: 0 4px;
+  font-weight: 600;
+}
+
 .team-task-list__footer {
   min-height: 52px;
   flex-shrink: 0;
@@ -434,6 +476,13 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
   .team-task-list__table-wrap {
     min-height: 340px;
     overflow-x: hidden;
+  }
+
+  .member-cell__meta {
+    display: -webkit-box;
+    white-space: normal;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
   }
 
   .team-task-list__footer {
