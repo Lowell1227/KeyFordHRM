@@ -1341,12 +1341,12 @@ test.describe('team list manager workspace', () => {
 
       await page.getByTestId('team-task-row-task-2').click();
       await expect(page.getByTestId('team-task-workspace')).toContainText('Grace Lin');
-      await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
+      await expect(page.getByLabel('指标名称').first()).toHaveValue('Grace delivery target');
       releaseResponse();
       await page.waitForTimeout(100);
 
       await expect(page.getByTestId('team-task-workspace')).toContainText('Grace Lin');
-      await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
+      await expect(page.getByLabel('指标名称').first()).toHaveValue('Grace delivery target');
       await expect(page.getByTestId('team-batch-result')).toHaveCount(0);
       await expect(page.locator('.el-message--success')).toHaveCount(0);
     });
