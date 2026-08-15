@@ -1644,6 +1644,14 @@ test.describe("11-navigation-entrypoints notification task links", () => {
       }),
     );
     await page.goto("/tasks");
+    await expect.poll(() => page.evaluate(async () => {
+      const authStoreModulePath = "/src/stores/auth.store.ts";
+      const notificationStoreModulePath = "/src/stores/notification.store.ts";
+      const { useAuthStore } = await import(authStoreModulePath);
+      const { useNotificationStore } = await import(notificationStoreModulePath);
+      const userId = useAuthStore().user?.id;
+      return Boolean(userId && useNotificationStore().sessionUserId === userId);
+    })).toBe(true);
 
     const state = await page.evaluate(
       async ({ readAt, seedItems }) => {
