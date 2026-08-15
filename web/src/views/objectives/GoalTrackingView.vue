@@ -28,12 +28,15 @@ const sections = computed(() => auth.user?.sysRole === 'employee'
         :cycles="workspace.cycles.value"
         :selected-cycle-id="workspace.selectedCycleId.value"
         :result="workspace.result.value"
+        :cycles-loading="workspace.cyclesLoading.value"
+        :cycles-error="workspace.cyclesError.value"
         :loading="workspace.loading.value"
         :error="workspace.error.value"
         :notice="workspace.notice.value"
         :highlighted-objective-id="workspace.highlightedObjectiveId.value"
         @cycle-change="workspace.selectCycle"
-        @retry="workspace.retry"
+        @retry-cycles="workspace.retryCycles"
+        @retry-indicators="workspace.retry"
       />
     </div>
   </PerformanceWorkspace>
@@ -42,13 +45,14 @@ const sections = computed(() => auth.user?.sysRole === 'employee'
 <style scoped>
 .goal-tracking-view {
   min-height: 100%;
-  padding: 0 24px 24px;
+  padding: 16px 22px;
+  background: #f4f6fb;
 }
 
 @media (max-width: 768px) {
   .goal-tracking-view {
-    min-height: 420px;
-    padding: 0 12px 16px;
+    min-height: auto;
+    padding: 10px;
   }
 }
 </style>

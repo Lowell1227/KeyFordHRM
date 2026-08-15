@@ -18,6 +18,8 @@ export function useGoalTracking() {
   const selectedPersonId = ref('');
   const selectedCycleId = ref('');
   const result = ref<GoalTrackingResult>({ totalWeight: 0, items: [] });
+  const cyclesLoading = ref(false);
+  const cyclesError = ref('');
   const loading = ref(false);
   const error = ref('');
   const notice = ref('');
@@ -77,6 +79,7 @@ export function useGoalTracking() {
     if (!selectedPersonId.value || !selectedCycleId.value) return;
     const serial = ++requestSerial;
     const canCommit = () => serial === requestSerial && commitGuard();
+    result.value = { totalWeight: 0, items: [] };
     loading.value = true;
     error.value = '';
     try {
@@ -90,6 +93,45 @@ export function useGoalTracking() {
     } finally {
       if (canCommit()) loading.value = false;
     }
+  }
+
+  async function loadCycles() {
+    cyclesLoading.value = true;
+    cyclesError.value = '';
+    try {
+      const page = await cyclesApi.findAll({ page: 1, pageSize: 100 });
+      cycles.value = page.items;
+    } catch {
+      cycles.value = [];
+      cyclesError.value = '考核周期加载失败';
+    } finally {
+      cyclesLoading.value = false;
+    }
+  }
+
+  async function normalizeSelectionAndLoad() {
+    const objectiveId = typeof route.query.objectiveId === 'string'
+      ? route.query.objectiveId
+      : '';
+    if (objectiveId && await resolveObjectiveDeepLink(objectiveId)) return;
+
+    const defaultCycle = selectDefaultTrackingCycle(cycles.value);
+    selectedPersonId.value = typeof route.query.employeeId === 'string'
+      && people.value.some((person) => person.id === route.query.employeeId)
+      ? route.query.employeeId
+      : auth.user?.id ?? '';
+    selectedCycleId.value = typeof route.query.cycleId === 'string'
+      && cycles.value.some((cycle) => cycle.id === route.query.cycleId)
+      ? route.query.cycleId
+      : defaultCycle?.id ?? '';
+    await writeQuery('replace');
+    await loadTracking();
+  }
+
+  async function retryCycles() {
+    await loadCycles();
+    if (cyclesError.value) return;
+    await normalizeSelectionAndLoad();
   }
 
   async function selectPerson(id: string) {
@@ -126,23 +168,9 @@ export function useGoalTracking() {
 
   onMounted(async () => {
     await auth.ensureLoaded();
-    const page = await cyclesApi.findAll({ page: 1, pageSize: 100 });
-    cycles.value = page.items;
-    const defaultCycle = selectDefaultTrackingCycle(cycles.value);
-    const objectiveId = typeof route.query.objectiveId === 'string'
-      ? route.query.objectiveId
-      : '';
-    if (objectiveId && await resolveObjectiveDeepLink(objectiveId)) return;
-    selectedPersonId.value = typeof route.query.employeeId === 'string'
-      && people.value.some((person) => person.id === route.query.employeeId)
-      ? route.query.employeeId
-      : auth.user?.id ?? '';
-    selectedCycleId.value = typeof route.query.cycleId === 'string'
-      && cycles.value.some((cycle) => cycle.id === route.query.cycleId)
-      ? route.query.cycleId
-      : defaultCycle?.id ?? '';
-    await writeQuery('replace');
-    await loadTracking();
+    await loadCycles();
+    if (cyclesError.value) return;
+    await normalizeSelectionAndLoad();
   });
 
   onBeforeUnmount(() => {
@@ -152,7 +180,7 @@ export function useGoalTracking() {
 
   return {
     cycles, peopleGroups, selectedPerson, selectedPersonId, selectedCycleId,
-    result, loading, error, notice, highlightedObjectiveId,
-    selectPerson, selectCycle, retry: loadTracking,
+    result, cyclesLoading, cyclesError, loading, error, notice, highlightedObjectiveId,
+    selectPerson, selectCycle, retryCycles, retry: loadTracking,
   };
 }

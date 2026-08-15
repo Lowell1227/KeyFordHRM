@@ -1,6 +1,9 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import type { GoalTrackingPeopleGroup } from './goal-tracking';
+import { parseCollapsedPeopleGroups } from './goal-tracking';
+
+const COLLAPSED_KEY = 'kayford.goalTracking.collapsedPeopleGroups';
 
 const props = defineProps<{
   groups: GoalTrackingPeopleGroup[];
@@ -8,11 +11,17 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{ select: [id: string] }>();
 const keyword = ref('');
+const collapsed = ref(parseCollapsedPeopleGroups(localStorage.getItem(COLLAPSED_KEY)));
 const filteredGroups = computed(() => props.groups.map((group) => ({
   ...group,
   people: group.people.filter((person) => person.name.includes(keyword.value.trim())),
 })));
 const noMatches = computed(() => filteredGroups.value.every((group) => group.people.length === 0));
+
+function toggleGroup(key: 'self' | 'manager') {
+  collapsed.value = { ...collapsed.value, [key]: !collapsed.value[key] };
+  localStorage.setItem(COLLAPSED_KEY, JSON.stringify(collapsed.value));
+}
 </script>
 
 <template>
@@ -29,23 +38,42 @@ const noMatches = computed(() => filteredGroups.value.every((group) => group.peo
     </label>
 
     <div class="tracking-people__groups">
-      <section v-for="group in filteredGroups" :key="group.key" class="tracking-people__group">
-        <h2>{{ group.label }}</h2>
-        <button
-          v-for="person in group.people"
-          :key="person.id"
-          type="button"
-          class="tracking-people__person"
-          :class="{ 'is-selected': person.id === selectedId }"
-          :aria-pressed="person.id === selectedId"
-          @click="emit('select', person.id)"
-        >
-          <span class="tracking-people__avatar" aria-hidden="true">
-            <img v-if="person.avatarUrl" :src="person.avatarUrl" alt="">
-            <span v-else>{{ person.name.slice(0, 1) }}</span>
-          </span>
-          <span>{{ person.name }}</span>
-        </button>
+      <section
+        v-for="group in filteredGroups"
+        :key="group.key"
+        class="tracking-people__group"
+        :data-testid="`goal-tracking-group-${group.key}`"
+        :data-collapsed="String(Boolean(collapsed[group.key]))"
+      >
+        <h2>
+          <button
+            type="button"
+            class="tracking-people__group-toggle"
+            :aria-expanded="!collapsed[group.key]"
+            :aria-label="`${collapsed[group.key] ? '展开' : '收起'}${group.label}`"
+            @click="toggleGroup(group.key)"
+          >
+            <span>{{ group.label }}</span>
+            <span class="tracking-people__chevron" aria-hidden="true">⌃</span>
+          </button>
+        </h2>
+        <div v-show="!collapsed[group.key]" class="goal-people-list">
+          <button
+            v-for="person in group.people"
+            :key="person.id"
+            type="button"
+            class="goal-person-item tracking-people__person"
+            :class="{ 'is-active': person.id === selectedId, 'is-selected': person.id === selectedId }"
+            :aria-pressed="person.id === selectedId"
+            @click="emit('select', person.id)"
+          >
+            <span class="tracking-people__avatar" aria-hidden="true">
+              <img v-if="person.avatarUrl" :src="person.avatarUrl" alt="">
+              <span v-else>{{ person.name.slice(0, 1) }}</span>
+            </span>
+            <span>{{ person.name }}</span>
+          </button>
+        </div>
       </section>
       <p v-if="noMatches" class="tracking-people__empty">未找到匹配人员</p>
     </div>
@@ -102,9 +130,36 @@ const noMatches = computed(() => filteredGroups.value.every((group) => group.peo
   display: flex;
   align-items: center;
   margin: 0 8px 4px;
+}
+
+.tracking-people__group-toggle {
+  width: 100%;
+  min-height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0;
+  border: 0;
   color: #344056;
+  background: transparent;
+  font: inherit;
   font-size: 14px;
   font-weight: 600;
+  cursor: pointer;
+}
+
+.tracking-people__group-toggle:focus-visible {
+  outline: 2px solid #4d91ff;
+  outline-offset: 2px;
+}
+
+.tracking-people__chevron {
+  color: #8995aa;
+  transition: transform .2s ease;
+}
+
+[data-collapsed="true"] .tracking-people__chevron {
+  transform: rotate(180deg);
 }
 
 .tracking-people__person {
@@ -113,10 +168,10 @@ const noMatches = computed(() => filteredGroups.value.every((group) => group.peo
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 5px 12px 5px 28px;
+  padding: 6px 10px;
   border: 0;
-  border-radius: 7px;
-  color: #35415a;
+  border-radius: 8px;
+  color: #32405d;
   background: transparent;
   font: inherit;
   font-size: 14px;
@@ -125,11 +180,12 @@ const noMatches = computed(() => filteredGroups.value.every((group) => group.peo
 }
 
 .tracking-people__person:hover {
-  background: #f1f6fc;
+  background: #f2f7fc;
 }
 
+.tracking-people__person.is-active,
 .tracking-people__person.is-selected {
-  color: #2576dd;
+  color: #2f77dc;
   background: #dceeff;
 }
 
@@ -175,5 +231,29 @@ const noMatches = computed(() => filteredGroups.value.every((group) => group.peo
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+
+@media (max-width: 768px) {
+  .tracking-people {
+    height: auto;
+    padding: 10px;
+    overflow: visible;
+  }
+
+  .tracking-people__groups {
+    min-width: 0;
+  }
+
+  .goal-people-list {
+    display: flex;
+    gap: 8px;
+    overflow-x: auto;
+    overscroll-behavior-inline: contain;
+  }
+
+  .goal-person-item {
+    width: 190px;
+    min-width: 190px;
+  }
 }
 </style>

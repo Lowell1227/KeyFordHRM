@@ -561,6 +561,90 @@ test.describe('09-performance-workspace tracking behavior', () => {
     expect(retainedState).toEqual({ itemIds: [], loading: true, error: '' });
   });
 
+  test('persists people groups and custom columns across refresh', async ({ page }) => {
+    await mockGoalTrackingShell(page);
+    await page.goto('/action-items');
+    const managerGroup = page.getByTestId('goal-tracking-group-manager');
+    await managerGroup.getByRole('button', { name: '收起直接上级' }).click();
+    await page.getByRole('button', { name: '自定义列' }).click();
+    await expect(page.getByRole('checkbox', { name: '序号' })).toHaveCount(0);
+    await expect(page.getByRole('checkbox', { name: '指标名称' })).toHaveCount(0);
+    await page.getByRole('checkbox', { name: '最新进展' }).uncheck();
+    await page.reload();
+    await expect(managerGroup).toHaveAttribute('data-collapsed', 'true');
+    await expect(page.getByRole('columnheader', { name: '最新进展' })).toHaveCount(0);
+    expect(await page.evaluate(() => localStorage.getItem('kayford.goalTracking.visibleColumns')))
+      .not.toContain('latestProgress');
+  });
+
+  test('shows the no-cycle state without requesting indicators', async ({ page }) => {
+    let trackingRequests = 0;
+    page.on('request', (request) => {
+      if (request.url().includes('/api/v1/objectives/tracking')) trackingRequests += 1;
+    });
+    await mockGoalTrackingShell(page, { cycles: [] });
+    await page.goto('/action-items');
+    await expect(page.getByText('暂无可用考核周期')).toBeVisible();
+    expect(trackingRequests).toBe(0);
+  });
+
+  test('shows the no-indicators state for an empty successful response', async ({ page }) => {
+    await mockGoalTrackingShell(page, { tracking: { totalWeight: 0, items: [] } });
+    await page.goto('/action-items');
+    await expect(page.getByText('暂无考核指标')).toBeVisible();
+  });
+
+  test('retries cycle loading after a cycle request fails', async ({ page }) => {
+    await mockGoalTrackingShell(page);
+    let cycleCalls = 0;
+    await page.route('**/api/v1/cycles?**', (route) => {
+      cycleCalls += 1;
+      return cycleCalls === 1
+        ? route.fulfill({ status: 500 })
+        : route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify(apiResponse({
+              total: trackingCycles.length, page: 1, pageSize: 100, items: trackingCycles,
+            })),
+          });
+    });
+    await page.goto('/action-items');
+    await expect(page.getByText('考核周期加载失败')).toBeVisible();
+    await page.getByRole('button', { name: '重新加载周期' }).click();
+    await expect(page.getByTestId('goal-tracking-cycle')).toContainText('2026 第二季度');
+  });
+
+  test('retries indicator loading and replaces the failed state', async ({ page }) => {
+    await mockGoalTrackingShell(page);
+    let trackingCalls = 0;
+    await page.route('**/api/v1/objectives/tracking?**', (route) => {
+      trackingCalls += 1;
+      return trackingCalls === 1
+        ? route.fulfill({ status: 500 })
+        : route.fulfill({
+            contentType: 'application/json',
+            body: JSON.stringify(apiResponse(trackingRows.self)),
+          });
+    });
+    await page.goto('/action-items');
+    await expect(page.getByText('考核指标加载失败')).toBeVisible();
+    await page.getByRole('button', { name: '重新加载指标' }).click();
+    await expect(page.getByText('本人目标')).toBeVisible();
+    await expect(page.getByText('考核指标加载失败')).toHaveCount(0);
+  });
+
+  test('goal tracking remains usable without document overflow at 390x844', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await mockGoalTrackingShell(page);
+    await page.goto('/action-items');
+    const overflow = await page.evaluate(() =>
+      document.documentElement.scrollWidth - document.documentElement.clientWidth);
+    expect(overflow).toBeLessThanOrEqual(1);
+    await expect(page.getByTestId('goal-tracking-person-search')).toBeVisible();
+    await expect(page.getByTestId('goal-tracking-cycle')).toBeVisible();
+    await expect(page.getByRole('button', { name: '自定义列' })).toBeVisible();
+  });
+
   test('employee sees the reference goal-tracking workspace for self and manager', async ({ page }) => {
     await page.route('**/api/v1/auth/me', (route) => route.fulfill({
       contentType: 'application/json',
