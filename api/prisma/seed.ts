@@ -27,7 +27,7 @@ const SYSTEM_CONFIGS: { key: string; value: unknown; description: string }[] = [
 const DEPARTMENTS: { id: string; name: string; parentId: string | null; sortOrder: number; isActive?: boolean }[] = [
   { id: '00000000-0000-0000-0000-000000000001', name: '杭州孚德品牌管理有限公司', parentId: null, sortOrder: 0, isActive: false },
   { id: '00000000-0000-0000-0000-000000000010', name: '项目中心', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 1 },
-  { id: '00000000-0000-0000-0000-000000000011', name: '北京办公室', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 2 },
+  { id: '00000000-0000-0000-0000-000000000011', name: '孚德北京办公室', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 2 },
   { id: '00000000-0000-0000-0000-000000000014', name: '销售部', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 3 },
   { id: '00000000-0000-0000-0000-000000000013', name: '创意设计部', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 4 },
   { id: '00000000-0000-0000-0000-000000000012', name: '供应链中心', parentId: '00000000-0000-0000-0000-000000000001', sortOrder: 5 },
