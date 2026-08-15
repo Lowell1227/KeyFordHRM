@@ -87,7 +87,7 @@ test.describe('05-multi-role-happy-path', () => {
     const url = `/tasks?scope=team&stage=manager-eval&cycleId=${target!.cycleId}&employeeId=${target!.employeeId}&taskId=${target!.id}`;
     await page.goto(url);
     await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
-    await expect(page.getByTestId('team-member-rail')).toBeVisible();
+    await expect(page.getByTestId('team-task-workspace')).toBeVisible();
     await page.getByTestId('indicator-expand-all').click();
 
     const scoreInputs = page.locator('[data-testid^="manager-score-"]');

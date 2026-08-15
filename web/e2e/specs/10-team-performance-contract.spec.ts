@@ -42,7 +42,7 @@ test.describe('team performance real API smoke', () => {
 
     await page.goto(`/tasks?scope=team&stage=manager-eval&stageState=pending&cycleId=${task!.cycleId}&employeeId=${task!.employeeId}&taskId=${task!.id}`);
     await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
-    await expect(page.getByTestId('team-member-rail')).toBeVisible();
+    await expect(page.getByTestId('team-task-workspace')).toBeVisible();
   });
 });
 
@@ -894,9 +894,9 @@ test.describe('team list manager workspace', () => {
     }));
 
     await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-off-page&page=2');
-    await expect(page.getByTestId('team-member-rail')).toContainText('Off Page Member');
+    await expect(page.getByTestId('team-task-workspace')).toContainText('Off Page Member');
     await page.reload();
-    await expect(page.getByTestId('team-member-rail')).toContainText('Off Page Member');
+    await expect(page.getByTestId('team-task-workspace')).toContainText('Off Page Member');
     await expect(page).toHaveURL(/taskId=task-off-page/);
   });
 
@@ -915,7 +915,7 @@ test.describe('team list manager workspace', () => {
       await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-off-page');
 
       await expect(page).not.toHaveURL(/taskId=task-off-page/);
-      await expect(page.getByTestId('team-member-rail')).toHaveCount(0);
+      await expect(page.getByTestId('team-task-workspace')).toHaveCount(0);
       await expect(page.getByTestId('goal-review-workspace')).toHaveCount(0);
       await expect(page.locator('.el-message--warning')).toContainText('无权访问非直属员工的团队任务');
     });
@@ -959,16 +959,16 @@ test.describe('team list manager workspace', () => {
     });
 
     await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
-    const rail = page.getByTestId('team-member-rail');
-    await expect(rail.locator('.el-skeleton')).toBeVisible();
-    await expect(rail.getByText('未找到所选成员')).toHaveCount(0);
-    await expect(rail.getByText('成员详情加载失败')).toHaveCount(0);
+    const workspace = page.getByTestId('team-task-workspace');
+    await expect(workspace.locator('.el-skeleton')).toBeVisible();
+    await expect(workspace.getByText('未找到所选员工')).toHaveCount(0);
+    await expect(workspace.getByText('员工绩效加载失败')).toHaveCount(0);
 
     releaseTeam();
-    await expect(rail).toContainText('Ada Chen');
-    await expect(rail.locator('.el-skeleton')).toHaveCount(0);
-    await expect(rail.getByText('未找到所选成员')).toHaveCount(0);
-    await expect(rail.getByText('成员详情加载失败')).toHaveCount(0);
+    await expect(workspace).toContainText('Ada Chen');
+    await expect(workspace.locator('.el-skeleton')).toHaveCount(0);
+    await expect(workspace.getByText('未找到所选员工')).toHaveCount(0);
+    await expect(workspace.getByText('员工绩效加载失败')).toHaveCount(0);
   });
 
   test('off-page deep link stays loading through delayed hydration and renders only its error', async ({ page }) => {
@@ -1003,20 +1003,20 @@ test.describe('team list manager workspace', () => {
     });
 
     await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-off-page');
-    const rail = page.getByTestId('team-member-rail');
-    await expect(rail.locator('.el-skeleton')).toBeVisible();
-    await expect(rail.getByText('未找到所选成员')).toHaveCount(0);
+    const workspace = page.getByTestId('team-task-workspace');
+    await expect(workspace.locator('.el-skeleton')).toBeVisible();
+    await expect(workspace.getByText('未找到所选员工')).toHaveCount(0);
 
     releaseTeam();
     await detailStarted;
-    await expect(rail.locator('.el-skeleton')).toBeVisible();
-    await expect(rail.getByText('未找到所选成员')).toHaveCount(0);
+    await expect(workspace.locator('.el-skeleton')).toBeVisible();
+    await expect(workspace.getByText('未找到所选员工')).toHaveCount(0);
 
     releaseDetail();
-    await expect(rail.getByText('成员详情加载失败')).toBeVisible();
-    await expect(rail).toContainText('成员详情服务不可用');
-    await expect(rail.locator('.el-skeleton')).toHaveCount(0);
-    await expect(rail.getByText('未找到所选成员')).toHaveCount(0);
+    await expect(workspace.getByText('员工绩效加载失败')).toBeVisible();
+    await expect(workspace).toContainText('成员详情服务不可用');
+    await expect(workspace.locator('.el-skeleton')).toHaveCount(0);
+    await expect(workspace.getByText('未找到所选员工')).toHaveCount(0);
   });
 
   test('off-page not-found appears only after successful empty hydration settles', async ({ page }) => {
@@ -1038,15 +1038,15 @@ test.describe('team list manager workspace', () => {
     }));
 
     await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-missing');
-    const rail = page.getByTestId('team-member-rail');
-    await expect(rail.locator('.el-skeleton')).toBeVisible();
-    await expect(rail.getByText('未找到所选成员')).toHaveCount(0);
-    await expect(rail.getByText('成员详情加载失败')).toHaveCount(0);
+    const workspace = page.getByTestId('team-task-workspace');
+    await expect(workspace.locator('.el-skeleton')).toBeVisible();
+    await expect(workspace.getByText('未找到所选员工')).toHaveCount(0);
+    await expect(workspace.getByText('员工绩效加载失败')).toHaveCount(0);
 
     releaseDetail();
-    await expect(rail.getByText('未找到所选成员')).toBeVisible();
-    await expect(rail.locator('.el-skeleton')).toHaveCount(0);
-    await expect(rail.getByText('成员详情加载失败')).toHaveCount(0);
+    await expect(workspace.getByText('未找到所选员工')).toBeVisible();
+    await expect(workspace.locator('.el-skeleton')).toHaveCount(0);
+    await expect(workspace.getByText('员工绩效加载失败')).toHaveCount(0);
   });
 
   test('returned page is canonicalized and error state excludes empty state', async ({ page }) => {
@@ -1240,15 +1240,14 @@ test.describe('team list manager workspace', () => {
     await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
     await page.getByTestId('goal-review-approve').click();
     await page.getByRole('button', { name: '通过', exact: true }).click();
-    await expect(page.getByTestId('team-batch-result')).toContainText('任务已被其他操作更新');
-    await expect(page.getByTestId('team-selected-count')).toContainText('1');
+    await expect(page.locator('.el-message--error')).toContainText('任务已被其他操作更新');
+    await expect(page.getByTestId('team-task-list')).toHaveCount(0);
     await expect(page.locator('.el-message--success')).toHaveCount(0);
 
     await page.getByTestId('goal-review-approve').click();
     await page.getByRole('button', { name: '通过', exact: true }).click();
-    await expect(page.getByTestId('team-batch-result')).toContainText('成功 1 项');
-    await expect(page.getByTestId('team-selected-count')).toHaveCount(0);
-    await expect(page.getByTestId('team-batch-approve')).toBeDisabled();
+    await expect(page.locator('.el-message--success')).toContainText('单项通过成功 1 项');
+    await expect(page.getByTestId('team-task-list')).toHaveCount(0);
 
     await page.getByTestId('goal-review-reject').click();
     await page.getByRole('button', { name: '驳回', exact: true }).click();
@@ -1303,12 +1302,12 @@ test.describe('team list manager workspace', () => {
       }
 
       await page.getByTestId('team-task-row-task-2').click();
-      await expect(page.getByTestId('team-member-rail')).toContainText('Grace Lin');
+      await expect(page.getByTestId('team-task-workspace')).toContainText('Grace Lin');
       await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
       releaseResponse();
       await page.waitForTimeout(100);
 
-      await expect(page.getByTestId('team-member-rail')).toContainText('Grace Lin');
+      await expect(page.getByTestId('team-task-workspace')).toContainText('Grace Lin');
       await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
       await expect(page.getByTestId('team-batch-result')).toHaveCount(0);
       await expect(page.locator('.el-message--success')).toHaveCount(0);
@@ -1348,7 +1347,7 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('goal-review-workspace')).toContainText('Delivery quality');
     await page.getByTestId('goal-review-save').click();
     await page.getByTestId('team-task-row-task-2').click();
-    await expect(page.getByTestId('team-member-rail')).toContainText('Grace Lin');
+    await expect(page.getByTestId('team-task-workspace')).toContainText('Grace Lin');
     await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
 
     releaseSave();
@@ -1466,11 +1465,12 @@ test.describe('team list manager workspace', () => {
     }));
   });
 
-  test('delayed save acknowledgement advances the parent task version', async ({ page }) => {
+  test('delayed save acknowledgement uses the refreshed task version after returning', async ({ page }) => {
     let releaseSave!: () => void;
     const saveGate = new Promise<void>((resolve) => {
       releaseSave = resolve;
     });
+    let saveAcknowledged = false;
     let approvalBody: Record<string, unknown> | undefined;
     await mockGoalReviewWorkspace(page);
     await page.route('**/api/v1/tasks/task-1/indicators', async (route) => {
@@ -1478,9 +1478,19 @@ test.describe('team list manager workspace', () => {
       const response = structuredClone(goalReviewDetailFixture);
       response.updatedAt = '2026-08-09T00:00:01.000Z';
       response.indicatorInstances[0].name = 'Server save response';
+      saveAcknowledged = true;
       return route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify(apiResponse(response)),
+      });
+    });
+    await page.route('**/api/v1/tasks/team**', (route) => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      const item = structuredClone(teamPageFixture.items[0]);
+      if (saveAcknowledged) item.updatedAt = '2026-08-09T00:00:01.000Z';
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(teamPageWith([item]))),
       });
     });
     await page.route('**/api/v1/tasks/team/indicator-review/batch-approve', (route) => {
@@ -1503,6 +1513,9 @@ test.describe('team list manager workspace', () => {
     releaseSave();
 
     await expect(nameInput).toHaveValue('Newer local revision');
+    await expect(page.locator('.el-message--success')).toContainText('先前修改已保存');
+    await page.getByTestId('team-task-workspace-back').click();
+    await expect(page.getByTestId('team-task-list')).toBeVisible();
     const adaRow = page.getByRole('row').filter({ hasText: 'Ada Chen' });
     await adaRow.locator('.el-checkbox').click();
     await page.getByTestId('team-batch-approve').click();
@@ -1635,10 +1648,8 @@ test.describe('team list manager workspace', () => {
 
       await page.getByTestId('goal-review-workspace').evaluate((element, width) => {
         const workspace = element as HTMLElement;
-        const rail = workspace.closest<HTMLElement>('.team-member-rail');
-        const layout = workspace.closest<HTMLElement>('.team-layout');
-        if (layout) layout.style.width = `${width + 34}px`;
-        if (rail) rail.style.width = `${width + 34}px`;
+        const content = workspace.closest<HTMLElement>('.team-task-workspace__content');
+        if (content) content.style.width = `${width}px`;
       }, containerWidth);
 
       const geometry = await page.evaluate(() => {
@@ -1797,34 +1808,36 @@ test.describe('team list manager workspace', () => {
       );
       expect(overflow).toBeLessThanOrEqual(8);
 
+      const tableFit = await page.getByTestId('team-task-table-wrap').evaluate((element) => ({
+        clientWidth: element.clientWidth,
+        scrollWidth: element.scrollWidth,
+      }));
+      expect(tableFit.scrollWidth).toBeLessThanOrEqual(tableFit.clientWidth + 2);
+
       await page.getByTestId('team-task-row-task-1').click();
-      await expect(page.getByTestId('team-member-rail')).toBeVisible();
+      await expect(page.getByTestId('team-task-workspace')).toBeVisible();
+      await expect(page.getByTestId('team-task-list')).toHaveCount(0);
       if (shouldCaptureTask7Evidence()) {
         await page.screenshot({
           path: `../.superpowers/sdd/2026-08-08-manager-team-performance-workspace/task-7-review-${viewport.name}-detail.png`,
           fullPage: true,
         });
       }
-      if (viewport.name === 'mobile') {
-        await expect(page.getByTestId('team-task-list')).toBeHidden();
-        await expect(page.getByTestId('team-member-heading')).toBeFocused();
-        await page.getByRole('button', { name: '关闭成员详情' }).click();
-        await expect(page.getByTestId('team-task-list')).toBeFocused();
-        if (shouldCaptureTask7Evidence()) {
-          await page.screenshot({
-            path: '../.superpowers/sdd/2026-08-08-manager-team-performance-workspace/task-7-review-mobile-list.png',
-            fullPage: true,
-          });
-        }
-      } else {
-        await expect(page.getByTestId('team-task-list')).toBeVisible();
-      }
 
-      const tableFit = await page.getByTestId('team-task-table-wrap').evaluate((element) => ({
-        clientWidth: element.clientWidth,
-        scrollWidth: element.scrollWidth,
-      }));
-      expect(tableFit.scrollWidth).toBeLessThanOrEqual(tableFit.clientWidth + 2);
+      const detailOverflow = await page.evaluate(
+        () => document.documentElement.scrollWidth - document.documentElement.clientWidth,
+      );
+      expect(detailOverflow).toBeLessThanOrEqual(8);
+
+      await page.getByTestId('team-task-workspace-back').click();
+      await expect(page.getByTestId('team-task-list')).toBeVisible();
+      await expect(page.getByTestId('team-task-list')).toBeFocused();
+      if (viewport.name === 'mobile' && shouldCaptureTask7Evidence()) {
+        await page.screenshot({
+          path: '../.superpowers/sdd/2026-08-08-manager-team-performance-workspace/task-7-review-mobile-list.png',
+          fullPage: true,
+        });
+      }
     });
   }
 });

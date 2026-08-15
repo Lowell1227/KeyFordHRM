@@ -705,7 +705,8 @@ async function applyBatchResult(
   teamBatchResult.value = { actionLabel, level, succeeded, failed };
 
   if (succeeded.length === 0) {
-    ElMessage.error(`${actionLabel}失败，共 ${failed.length} 项`);
+    const reasons = [...new Set(failed.map((item) => item.reason).filter(Boolean))].join('；');
+    ElMessage.error(`${actionLabel}失败，共 ${failed.length} 项${reasons ? `：${reasons}` : ''}`);
   } else if (failed.length > 0) {
     ElMessage.warning(`${actionLabel}完成：成功 ${succeeded.length} 项，失败 ${failed.length} 项`);
   } else {
