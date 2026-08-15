@@ -1285,7 +1285,6 @@ watch(
 
         <div class="team-toolbar">
           <label class="team-search-control">
-            <span>搜索</span>
             <el-input
               v-model="teamKeyword"
               data-testid="team-keyword-filter"
@@ -1298,9 +1297,7 @@ watch(
               <template #prefix><el-icon><Search /></el-icon></template>
             </el-input>
           </label>
-          <el-button type="primary" :icon="Search" @click="applyTeamSearch">搜索</el-button>
           <label class="team-filter-control">
-            <span>部门</span>
             <el-select
               data-testid="team-department-filter"
               aria-label="部门"
@@ -1320,7 +1317,6 @@ watch(
             </el-select>
           </label>
           <label class="team-filter-control">
-            <span>员工</span>
             <el-select
               data-testid="team-employee-filter"
               aria-label="员工"
@@ -1665,21 +1661,6 @@ watch(
   border-top: 1px solid #edf0f4;
 }
 
-.team-filter-control,
-.team-search-control {
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 5px;
-}
-
-.team-filter-control > span,
-.team-search-control > span {
-  color: #70798a;
-  font-size: 12px;
-  font-weight: 600;
-}
-
 .team-count-tabs {
   display: flex;
   flex-direction: column;
@@ -1741,16 +1722,13 @@ watch(
 }
 
 .team-workspace__header {
-  min-height: 68px;
+  min-height: 56px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 10px;
-  padding: 10px 14px;
-  border: 1px solid #e2e6ed;
-  border-radius: 7px;
-  background: #fff;
+  margin-bottom: 4px;
+  padding: 4px 2px 8px;
 }
 
 .team-workspace__header > div {
@@ -1769,42 +1747,46 @@ watch(
 }
 
 .team-workspace__filters {
-  margin-bottom: 10px;
-  padding: 10px;
-  border: 1px solid #e2e6ed;
-  border-radius: 7px;
-  background: #fff;
+  margin-bottom: 8px;
+  padding: 10px 12px;
+  border: 1px solid #e7ebf2;
+  border-radius: 8px;
+  background: #f8fafc;
 }
 
 .team-toolbar {
-  min-height: 50px;
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(150px, 180px) minmax(170px, 200px) 32px;
   align-items: center;
-  flex-wrap: wrap;
   gap: 8px;
-  margin-top: 10px;
-  padding-top: 10px;
+  margin-top: 8px;
+  padding-top: 8px;
   border-top: 1px solid #edf0f4;
 }
 
+.team-filter-control,
 .team-search-control {
-  width: min(280px, 100%);
-}
-
-.team-search-control :deep(.el-input) {
+  min-width: 0;
   width: 100%;
 }
 
-.team-toolbar .team-filter-control {
-  width: min(190px, 100%);
-}
-
+.team-search-control :deep(.el-input),
 .team-toolbar .team-filter-control :deep(.el-select) {
   width: 100%;
 }
 
+.team-toolbar :deep(.el-input__wrapper),
+.team-toolbar :deep(.el-select__wrapper) {
+  background: #fff;
+}
+
 .team-toolbar__reset {
+  width: 32px;
+  height: 32px;
   flex-shrink: 0;
+  justify-self: end;
+  margin: 0;
+  padding: 0;
 }
 
 .team-error {
@@ -1878,7 +1860,7 @@ watch(
   min-width: 0;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  gap: 10px;
+  gap: 8px;
   align-items: stretch;
 }
 
@@ -1904,6 +1886,30 @@ watch(
   .team-layout.has-detail :deep(.team-member-rail) {
     width: 100%;
     min-height: 390px;
+  }
+}
+
+@container (max-width: 760px) {
+  .team-toolbar {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px;
+  }
+
+  .team-search-control {
+    grid-column: 1 / -1;
+  }
+}
+
+@container (max-width: 520px) {
+  .team-toolbar {
+    grid-template-columns: minmax(0, 1fr) 32px;
+  }
+
+  .team-toolbar .team-filter-control {
+    grid-column: 1 / -1;
+  }
+
+  .team-toolbar__reset {
+    grid-column: 2;
   }
 }
 
@@ -1963,22 +1969,6 @@ watch(
     align-items: flex-start;
     flex-direction: column;
     gap: 4px;
-  }
-
-  .team-toolbar {
-    flex-wrap: wrap;
-  }
-
-  .team-search-control {
-    width: 100%;
-  }
-
-  .team-search-control :deep(.el-input) {
-    width: 100%;
-  }
-
-  .team-toolbar .team-filter-control {
-    width: 100%;
   }
 
   .team-batch-result__groups {

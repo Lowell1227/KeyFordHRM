@@ -699,18 +699,17 @@ test.describe("11-navigation-entrypoints dashboard task layout", () => {
       const groupRects = Array.from(
         document.querySelectorAll<HTMLElement>(".manager-task-group"),
       ).map((group) => group.getBoundingClientRect());
-      const department = document
-        .querySelector<HTMLElement>("[data-testid='team-department-filter']")
-        ?.getBoundingClientRect();
-      const employee = document
-        .querySelector<HTMLElement>("[data-testid='team-employee-filter']")
-        ?.getBoundingClientRect();
+      const filterControls = Array.from(
+        document.querySelectorAll<HTMLElement>(
+          '.team-toolbar > .team-search-control, .team-toolbar > .team-filter-control',
+        ),
+      ).map((control) => control.getBoundingClientRect());
       return {
         overflow:
           document.documentElement.scrollWidth -
           document.documentElement.clientWidth,
         groupTops: groupRects.map((rect) => rect.top),
-        filterWidths: [department?.width ?? 0, employee?.width ?? 0],
+        filterWidths: filterControls.map((rect) => rect.width),
       };
     });
     expect(layout.groupTops[1]).toBeGreaterThan(layout.groupTops[0] ?? 0);

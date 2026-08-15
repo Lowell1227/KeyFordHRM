@@ -611,6 +611,9 @@ test.describe('team list manager workspace', () => {
     await expect(filters.getByTestId('team-department-filter')).toBeVisible();
     await expect(filters.getByTestId('team-employee-filter')).toBeVisible();
     await expect(filters.getByTestId('team-count-pending')).toContainText('2');
+    await expect(filters.getByRole('button', { name: '搜索', exact: true })).toHaveCount(0);
+    await expect(filters.locator('.team-search-control > span')).toHaveCount(0);
+    await expect(filters.locator('.team-filter-control > span')).toHaveCount(0);
     await expect(page.getByTestId('manager-team-stage-goal-review')).toContainText('2');
     await page.getByTestId('team-task-row-task-1').click();
     await expect(page).toHaveURL(/taskId=task-1/);
