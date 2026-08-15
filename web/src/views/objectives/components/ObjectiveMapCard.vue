@@ -8,6 +8,7 @@ const props = defineProps<{
   objective: Objective;
   display: ObjectiveMapDisplayOptions;
   canManage: boolean;
+  canTrack: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -70,7 +71,7 @@ function handleCommand(command: 'edit' | 'progress' | 'track' | 'remove') {
           <el-dropdown-menu>
             <el-dropdown-item command="edit">编辑目标</el-dropdown-item>
             <el-dropdown-item command="progress">更新进度</el-dropdown-item>
-            <el-dropdown-item command="track">目标跟进</el-dropdown-item>
+            <el-dropdown-item v-if="canTrack" command="track">目标跟进</el-dropdown-item>
             <el-dropdown-item divided command="remove">删除目标</el-dropdown-item>
           </el-dropdown-menu>
         </template>

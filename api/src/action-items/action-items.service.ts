@@ -13,6 +13,7 @@ import { CreateActionItemDto } from './dto/create-action-item.dto';
 import { UpdateActionItemDto } from './dto/update-action-item.dto';
 import { UpdateProgressDto } from './dto/update-progress.dto';
 import { ActionItemQueryDto } from './dto/action-item-query.dto';
+import { buildActionItemVisibilityWhere } from './action-item-visibility';
 
 const actionItemInclude = {
   assignee: { select: { id: true, name: true } },
@@ -235,14 +236,7 @@ export class ActionItemsService {
     }
 
     // 非管理员只能看到自己负责或创建的行动项，或其目标下的公开行动项。
-    if (!this.isAdminLike(viewer)) {
-      where.OR = [
-        { assigneeId: viewer.id },
-        { createdBy: viewer.id },
-        { objective: { ownerId: viewer.id } },
-        { objective: { level: 'company' } },
-      ];
-    }
+    Object.assign(where, buildActionItemVisibilityWhere(viewer));
 
     return where;
   }

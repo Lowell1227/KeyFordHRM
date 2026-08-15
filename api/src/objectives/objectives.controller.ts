@@ -19,6 +19,7 @@ import { CreateObjectiveDto } from './dto/create-objective.dto';
 import { UpdateObjectiveDto } from './dto/update-objective.dto';
 import { UpdateProgressDto } from './dto/update-progress.dto';
 import { ObjectiveQueryDto } from './dto/objective-query.dto';
+import { GoalTrackingQueryDto } from './dto/goal-tracking-query.dto';
 
 /**
  * 目标地图接口。改为「管理者+」可见：读对所有非 employee 角色开放，
@@ -52,6 +53,23 @@ export class ObjectivesController {
   }
 
   /** GET /objectives/:id — 详情。 */
+  @Get('tracking')
+  @Roles(
+    SysRole.employee,
+    SysRole.manager,
+    SysRole.dept_head,
+    SysRole.vp,
+    SysRole.hr,
+    SysRole.chairman,
+    SysRole.system_admin,
+  )
+  findTracking(
+    @Query() query: GoalTrackingQueryDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.objectivesService.findTracking(query, viewer);
+  }
+
   @Get(':id')
   findOne(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,

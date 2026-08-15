@@ -12,6 +12,7 @@ const props = defineProps<{
   loading: boolean;
   error: string;
   canManage: boolean;
+  canTrack: (objective: Objective) => boolean;
 }>();
 
 const emit = defineEmits<{
@@ -177,6 +178,7 @@ defineExpose({ fitToView });
         :objective="node.objective"
         :display="display"
         :can-manage="canManage"
+        :can-track="canTrack(node.objective)"
         :style="{ left: `${node.x}px`, top: `${node.y}px` }"
         @open="emit('open', $event)"
         @edit="emit('edit', $event)"

@@ -5,7 +5,6 @@ import {
   Plus,
   Delete,
   Aim,
-  List,
 } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useAuthStore } from '@/stores/auth.store';
@@ -255,7 +254,16 @@ function openDetail(objective: Objective) {
   detailVisible.value = true;
 }
 
+function canOpenTracking(objective: Objective) {
+  return Boolean(
+    objective.ownerId
+    && objective.cycleId
+    && [auth.user?.id, auth.user?.directManagerId].includes(objective.ownerId),
+  );
+}
+
 function openTracking(objective: Objective) {
+  if (!canOpenTracking(objective)) return;
   detailVisible.value = false;
   router.push({ path: '/action-items', query: { objectiveId: objective.id } });
 }
@@ -483,6 +491,7 @@ async function removeRow(row: Objective) {
           :loading="loading"
           :error="loadError"
           :can-manage="canManage"
+          :can-track="canOpenTracking"
           @retry="loadTree"
           @open="openDetail"
           @edit="openEdit"
@@ -545,7 +554,7 @@ async function removeRow(row: Objective) {
         </div>
         <template #footer>
           <div v-if="selectedObjective" class="objective-detail__actions">
-            <el-button @click="trackFromDetail">目标跟进</el-button>
+            <el-button v-if="canOpenTracking(selectedObjective)" @click="trackFromDetail">目标跟进</el-button>
             <template v-if="canManage">
               <el-button @click="progressFromDetail">更新进度</el-button>
               <el-button @click="editFromDetail">编辑目标</el-button>

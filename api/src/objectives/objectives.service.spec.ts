@@ -10,6 +10,7 @@ describe('ObjectivesService visibility helpers', () => {
   let service: ObjectivesService;
   let prisma: {
     objective: { count: jest.Mock; findMany: jest.Mock };
+    actionItem: { findMany: jest.Mock };
     user: { findMany: jest.Mock };
   };
   let dataScope: { getVisibleEmployeeFilter: jest.Mock };
@@ -50,6 +51,7 @@ describe('ObjectivesService visibility helpers', () => {
   beforeEach(() => {
     prisma = {
       objective: { count: jest.fn(), findMany: jest.fn() },
+      actionItem: { findMany: jest.fn() },
       user: {
         findMany: jest.fn().mockResolvedValue([{ id: 'manager-1' }, { id: 'employee-1' }]),
       },
@@ -129,5 +131,94 @@ describe('ObjectivesService visibility helpers', () => {
         },
       }),
     );
+  });
+
+  it('returns visible owner-cycle objectives with one latest progress summary', async () => {
+    prisma.objective.findMany.mockResolvedValue([visibleObjective]);
+    prisma.actionItem.findMany.mockResolvedValue([
+      {
+        id: 'action-latest',
+        objectiveId: 'objective-visible',
+        title: '完成方案评审',
+        progress: 60,
+        updatedAt: new Date('2026-08-15T08:00:00.000Z'),
+      },
+      {
+        id: 'action-older',
+        objectiveId: 'objective-visible',
+        title: '旧进展',
+        progress: 30,
+        updatedAt: new Date('2026-08-14T08:00:00.000Z'),
+      },
+    ]);
+
+    const result = await service.findTracking(
+      { ownerId: 'employee-1', cycleId: 'cycle-1' },
+      viewer,
+    );
+
+    expect(prisma.objective.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        ownerId: 'employee-1',
+        cycleId: 'cycle-1',
+        OR: expect.any(Array),
+      }),
+      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+    }));
+    expect(prisma.actionItem.findMany).toHaveBeenCalledWith({
+      where: {
+        AND: [
+          {
+            OR: [
+              { assigneeId: viewer.id },
+              { createdBy: viewer.id },
+              { objective: { ownerId: viewer.id } },
+              { objective: { level: 'company' } },
+            ],
+          },
+          { objectiveId: { in: ['objective-visible'] } },
+        ],
+      },
+      orderBy: { updatedAt: 'desc' },
+      select: {
+        id: true,
+        objectiveId: true,
+        title: true,
+        progress: true,
+        updatedAt: true,
+      },
+    });
+    expect(result).toEqual({
+      totalWeight: 50,
+      items: [expect.objectContaining({
+        id: 'objective-visible',
+        latestProgress: {
+          id: 'action-latest',
+          title: '完成方案评审',
+          progress: 60,
+          updatedAt: new Date('2026-08-15T08:00:00.000Z'),
+        },
+      })],
+    });
+  });
+
+  it('resolves a deep link through the same visibility predicate', async () => {
+    prisma.objective.findMany.mockResolvedValue([]);
+
+    await service.findTracking({ objectiveId: 'objective-visible' }, viewer);
+
+    expect(prisma.objective.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        AND: [
+          expect.objectContaining({ OR: expect.any(Array) }),
+          { id: 'objective-visible' },
+        ],
+      },
+    }));
+  });
+
+  it('rejects tracking requests without a deep link or owner-cycle pair', async () => {
+    await expect(service.findTracking({ ownerId: 'employee-1' }, viewer))
+      .rejects.toMatchObject({ response: expect.objectContaining({ message: '请选择人员和考核周期' }) });
   });
 });

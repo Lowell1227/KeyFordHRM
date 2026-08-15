@@ -5,6 +5,8 @@ import type {
   CreateObjectiveBody,
   UpdateObjectiveBody,
   UpdateObjectiveProgressBody,
+  GoalTrackingQuery,
+  GoalTrackingResult,
   Paginated,
 } from '@/types/api.types';
 
@@ -16,6 +18,10 @@ export const objectivesApi = {
   /** GET /objectives/tree — 目标地图树。 */
   getTree(cycleId?: string): Promise<Objective[]> {
     return apiGet('/objectives/tree', cycleId ? { cycleId } : undefined);
+  },
+
+  getTracking(query: GoalTrackingQuery): Promise<GoalTrackingResult> {
+    return apiGet('/objectives/tracking', query as Record<string, unknown>);
   },
 
   /** GET /objectives — 列表（默认树）。 */

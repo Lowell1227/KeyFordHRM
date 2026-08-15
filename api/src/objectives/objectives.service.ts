@@ -14,6 +14,8 @@ import { CreateObjectiveDto } from './dto/create-objective.dto';
 import { UpdateObjectiveDto } from './dto/update-objective.dto';
 import { UpdateProgressDto } from './dto/update-progress.dto';
 import { ObjectiveQueryDto } from './dto/objective-query.dto';
+import { GoalTrackingQueryDto } from './dto/goal-tracking-query.dto';
+import { buildActionItemVisibilityWhere } from '@/action-items/action-item-visibility';
 
 /** include 定义（字面量，便于 Prisma 推导类型）。 */
 const objectiveIncludeDef = {
@@ -25,6 +27,41 @@ const objectiveIncludeDef = {
 } as const;
 
 type ObjectiveWithRelations = Prisma.ObjectiveGetPayload<{ include: typeof objectiveIncludeDef }>;
+
+const goalTrackingInclude = {
+  owner: { select: { id: true, name: true } },
+  cycle: { select: { id: true, name: true } },
+} as const;
+
+type GoalTrackingObjective = Prisma.ObjectiveGetPayload<{
+  include: typeof goalTrackingInclude;
+}>;
+
+export interface GoalTrackingLatestProgress {
+  id: string;
+  title: string;
+  progress: number;
+  updatedAt: Date;
+}
+
+export interface GoalTrackingItem {
+  id: string;
+  title: string;
+  ownerId: string | null;
+  ownerName: string | null;
+  cycleId: string | null;
+  cycleName: string | null;
+  priority: number;
+  status: ObjectiveStatus;
+  progress: number;
+  weight: number | null;
+  latestProgress: GoalTrackingLatestProgress | null;
+}
+
+export interface GoalTrackingResult {
+  totalWeight: number;
+  items: GoalTrackingItem[];
+}
 
 /** 目标树节点。 */
 export interface ObjectiveNode {
@@ -110,6 +147,80 @@ export class ObjectivesService {
       orderBy: [{ level: 'asc' }, { priority: 'desc' }, { createdAt: 'desc' }],
     });
     return this.buildForest(objectives.map((o) => this.mapToNode(o)));
+  }
+
+  async findTracking(
+    query: GoalTrackingQueryDto,
+    viewer: AuthUser,
+  ): Promise<GoalTrackingResult> {
+    if (!query.objectiveId && (!query.ownerId || !query.cycleId)) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '请选择人员和考核周期',
+      });
+    }
+
+    const visibilityWhere = await this.buildWhere(
+      query.objectiveId
+        ? {}
+        : { ownerId: query.ownerId, cycleId: query.cycleId },
+      viewer,
+    );
+    const where = query.objectiveId
+      ? { AND: [visibilityWhere, { id: query.objectiveId }] }
+      : visibilityWhere;
+    const objectives = await this.prisma.objective.findMany({
+      where,
+      include: goalTrackingInclude,
+      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
+    });
+    const objectiveIds = objectives.map((objective) => objective.id);
+    const visibleActions = objectiveIds.length === 0
+      ? []
+      : await this.prisma.actionItem.findMany({
+          where: {
+            AND: [
+              buildActionItemVisibilityWhere(viewer),
+              { objectiveId: { in: objectiveIds } },
+            ],
+          },
+          orderBy: { updatedAt: 'desc' },
+          select: {
+            id: true,
+            objectiveId: true,
+            title: true,
+            progress: true,
+            updatedAt: true,
+          },
+        });
+    const latestByObjective = new Map<string, GoalTrackingLatestProgress>();
+    for (const action of visibleActions) {
+      if (!latestByObjective.has(action.objectiveId)) {
+        latestByObjective.set(action.objectiveId, {
+          id: action.id,
+          title: action.title,
+          progress: action.progress,
+          updatedAt: action.updatedAt,
+        });
+      }
+    }
+    const items = objectives.map((objective: GoalTrackingObjective): GoalTrackingItem => ({
+      id: objective.id,
+      title: objective.title,
+      ownerId: objective.ownerId,
+      ownerName: objective.owner?.name ?? null,
+      cycleId: objective.cycleId,
+      cycleName: objective.cycle?.name ?? null,
+      priority: objective.priority,
+      status: objective.status,
+      progress: objective.progress,
+      weight: objective.weight?.toNumber() ?? null,
+      latestProgress: latestByObjective.get(objective.id) ?? null,
+    }));
+    return {
+      totalWeight: items.reduce((sum, item) => sum + (item.weight ?? 0), 0),
+      items,
+    };
   }
 
   async assertVisibleIds(ids: string[], viewer: AuthUser): Promise<void> {

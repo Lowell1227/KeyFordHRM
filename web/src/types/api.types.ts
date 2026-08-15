@@ -1424,6 +1424,38 @@ export interface UpdateObjectiveProgressBody {
   progress: number;
 }
 
+export interface GoalTrackingLatestProgress {
+  id: string;
+  title: string;
+  progress: number;
+  updatedAt: string;
+}
+
+export interface GoalTrackingItem {
+  id: string;
+  title: string;
+  ownerId: string | null;
+  ownerName: string | null;
+  cycleId: string | null;
+  cycleName: string | null;
+  priority: number;
+  status: ObjectiveStatus;
+  progress: number;
+  weight: number | null;
+  latestProgress: GoalTrackingLatestProgress | null;
+}
+
+export interface GoalTrackingResult {
+  totalWeight: number;
+  items: GoalTrackingItem[];
+}
+
+export interface GoalTrackingQuery {
+  ownerId?: string;
+  cycleId?: string;
+  objectiveId?: string;
+}
+
 // ---------------------------------------------------------------------------
 // 行动计划（E2）
 // ---------------------------------------------------------------------------

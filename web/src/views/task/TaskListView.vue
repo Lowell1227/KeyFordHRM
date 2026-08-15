@@ -165,7 +165,7 @@ const teamCountTabs = computed<Array<{
 ]);
 const allowedPerformanceSections = computed(() =>
   auth.user?.sysRole === 'employee'
-    ? (['tasks'] as const)
+    ? (['tracking', 'tasks'] as const)
     : (['tracking', 'map', 'tasks'] as const),
 );
 const selectedCycleName = computed(() => {

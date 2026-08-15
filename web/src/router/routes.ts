@@ -257,8 +257,8 @@ export const routes: RouteRecordRaw[] = [
   {
     path: '/action-items',
     name: 'ActionItems',
-    component: () => import('@/views/objectives/ActionItemsView.vue'),
-    meta: { requiresAuth: true, title: '目标跟进', roles: ['manager', 'dept_head', 'vp', 'hr', 'chairman', 'system_admin'] },
+    component: () => import('@/views/objectives/GoalTrackingView.vue'),
+    meta: { requiresAuth: true, title: '目标跟进', roles: ['employee', 'manager', 'dept_head', 'vp', 'hr', 'chairman', 'system_admin'] },
   },
   {
     path: '/:pathMatch(.*)*',

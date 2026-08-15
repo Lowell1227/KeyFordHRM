@@ -31,6 +31,7 @@ test.describe("06-role-page-smoke employee", () => {
 
   for (const path of [
     "/dashboard",
+    "/action-items",
     "/tasks",
     "/probation-reviews/mine",
     "/confirmation-applications/mine",
