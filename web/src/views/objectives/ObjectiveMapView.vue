@@ -3,15 +3,9 @@ import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import {
   Plus,
-  EditPen,
   Delete,
-  CollectionTag,
   Aim,
   List,
-  User as UserIcon,
-  OfficeBuilding,
-  ScaleToOriginal,
-  Star,
 } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { useAuthStore } from '@/stores/auth.store';
@@ -34,12 +28,14 @@ import type {
   User,
   CreateObjectiveBody,
 } from '@/types/api.types';
-import EmptyState from '@/components/common/EmptyState.vue';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
 import ObjectiveMapFilters from './components/ObjectiveMapFilters.vue';
 import ObjectiveMapDisplaySettings from './components/ObjectiveMapDisplaySettings.vue';
+import ObjectiveMapCanvas from './components/ObjectiveMapCanvas.vue';
 import {
   countObjectivesByScope,
+  layoutObjectives,
+  selectObjectiveScope,
   type ObjectiveMapActorContext,
   type ObjectiveMapScope,
 } from './objective-map-layout';
@@ -64,6 +60,9 @@ const filters = reactive<{ cycleId: string }>({
   cycleId: '',
 });
 const selectedScope = ref<ObjectiveMapScope>('team');
+const selectedObjective = ref<Objective | null>(null);
+const detailVisible = ref(false);
+const loadError = ref('');
 const display = ref(parseObjectiveMapDisplay(
   typeof window === 'undefined'
     ? null
@@ -81,16 +80,15 @@ function defaultLevelForCreate(): ObjectiveLevel {
   return 'company';
 }
 
-onMounted(() => {
-  loadTree();
-  loadCycles();
+onMounted(async () => {
   // 部门/指标/用户列表仅用于「新建·编辑目标」弹窗，普通员工无管理权限、不会打开弹窗，
   // 因此不预加载——既省请求，也避免触发越权 403。
   if (canManage.value) {
-    loadDepartments();
-    loadIndicators();
-    loadUsers();
+    await Promise.all([loadDepartments(), loadIndicators(), loadUsers(), loadCycles()]);
+  } else {
+    await loadCycles();
   }
+  await loadTree();
 });
 
 watch(() => filters.cycleId, loadTree);
@@ -98,6 +96,7 @@ watch(display, (value) => saveObjectiveMapDisplay(value), { deep: true });
 
 async function loadTree() {
   loading.value = true;
+  loadError.value = '';
   try {
     const params: Record<string, unknown> = {};
     if (filters.cycleId) params.cycleId = filters.cycleId;
@@ -105,6 +104,7 @@ async function loadTree() {
     treeData.value = Array.isArray(res) ? res : res.items;
   } catch {
     treeData.value = [];
+    loadError.value = '目标数据加载失败，请稍后重试';
   } finally {
     loading.value = false;
   }
@@ -194,13 +194,28 @@ const actorContext = computed<ObjectiveMapActorContext>(() => ({
 }));
 
 const scopeCounts = computed(() => countObjectivesByScope(treeData.value, actorContext.value));
+const scopedObjectives = computed(() => selectObjectiveScope(
+  treeData.value,
+  selectedScope.value,
+  actorContext.value,
+));
+const canvasLayout = computed(() => layoutObjectives(scopedObjectives.value, display.value));
+
+let scopeInitialized = false;
 
 watch(scopeCounts, (counts) => {
-  if (counts[selectedScope.value] > 0) return;
+  const hasAnyScope = Object.values(counts).some((count) => count > 0);
+  if (!hasAnyScope) return;
   const role = auth.user?.sysRole;
   const order: ObjectiveMapScope[] = role === 'manager'
     ? ['team', 'mine', 'organization', 'other']
     : ['mine', 'organization', 'other', 'team'];
+  if (!scopeInitialized) {
+    selectedScope.value = order.find((scope) => counts[scope] > 0) ?? selectedScope.value;
+    scopeInitialized = true;
+    return;
+  }
+  if (counts[selectedScope.value] > 0) return;
   selectedScope.value = order.find((scope) => counts[scope] > 0) ?? selectedScope.value;
 }, { deep: true, immediate: true });
 
@@ -218,6 +233,15 @@ function statusLabel(status: ObjectiveStatus): string {
 
 function formatProgress(progress: number): string {
   return `${progress ?? 0}%`;
+}
+
+function openDetail(objective: Objective) {
+  selectedObjective.value = objective;
+  detailVisible.value = true;
+}
+
+function openTracking(objective: Objective) {
+  router.push({ path: '/action-items', query: { objectiveId: objective.id } });
 }
 
 // ---------------------------------------------------------------------------
@@ -413,95 +437,33 @@ async function removeRow(row: Objective) {
           <ObjectiveMapDisplaySettings v-model="display" />
         </div>
 
-        <el-table
-          v-loading="loading"
-          class="app-table"
-          :data="(treeData as Objective[])"
-          row-key="id"
-          default-expand-all
-          :tree-props="{ children: 'children' }"
-        >
-        <el-table-column label="目标" min-width="280">
-          <template #default="scope">
-            <div class="objective-title">
-              <el-tag size="small" effect="plain" class="level-tag">
-                {{ levelLabel((scope.row as Objective).level) }}
-              </el-tag>
-              <span class="title-text">{{ (scope.row as Objective).title }}</span>
-            </div>
-            <div v-if="(scope.row as Objective).description" class="objective-desc">{{ (scope.row as Objective).description }}</div>
-          </template>
-        </el-table-column>
-        <el-table-column label="负责人 / 部门" width="180">
-          <template #default="scope">
-            <div class="meta-cell">
-              <span v-if="(scope.row as Objective).ownerName" class="meta-line">
-                <el-icon><UserIcon /></el-icon>{{ (scope.row as Objective).ownerName }}
-              </span>
-              <span v-if="(scope.row as Objective).deptName" class="meta-line">
-                <el-icon><OfficeBuilding /></el-icon>{{ (scope.row as Objective).deptName }}
-              </span>
-              <span v-if="!(scope.row as Objective).ownerName && !(scope.row as Objective).deptName">-</span>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="周期" width="140">
-          <template #default="scope">{{ (scope.row as Objective).cycleName || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="权重 / 优先级" width="120">
-          <template #default="scope">
-            <div class="meta-cell">
-              <span v-if="(scope.row as Objective).weight != null" class="meta-line">
-                <el-icon><ScaleToOriginal /></el-icon>{{ (scope.row as Objective).weight }}
-              </span>
-              <span v-if="(scope.row as Objective).priority" class="meta-line">
-                <el-icon><Star /></el-icon>{{ (scope.row as Objective).priority }}
-              </span>
-              <span v-if="(scope.row as Objective).weight == null && !(scope.row as Objective).priority">-</span>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column label="进度" width="160">
-          <template #default="scope">
-            <el-progress :percentage="(scope.row as Objective).progress" :stroke-width="10" />
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="100">
-          <template #default="scope">
-            <el-tag :type="statusType((scope.row as Objective).status) as any" size="small">
-              {{ statusLabel((scope.row as Objective).status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="关联指标" min-width="140">
-          <template #default="scope">{{ (scope.row as Objective).relatedIndicatorName || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="260" fixed="right">
-          <template #default="scope">
-            <el-button v-if="canManage" link type="primary" :icon="EditPen" size="small" @click="openEdit(scope.row as Objective)">
-              编辑
-            </el-button>
-            <el-button v-if="canManage" link type="primary" :icon="Aim" size="small" @click="openProgress(scope.row as Objective)">
-              进度
-            </el-button>
-            <el-button
-              link
-              type="success"
-              :icon="List"
-              size="small"
-              @click="router.push({ path: '/action-items', query: { objectiveId: (scope.row as Objective).id } })"
-            >
-              行动计划
-            </el-button>
-            <el-button v-if="canManage" link type="danger" :icon="Delete" size="small" @click="removeRow(scope.row as Objective)">
-              删除
-            </el-button>
-          </template>
-        </el-table-column>
-        </el-table>
-
-        <EmptyState v-if="!loading && treeData.length === 0" description="暂无目标，点击右上角新建" />
+        <ObjectiveMapCanvas
+          :layout="canvasLayout"
+          :display="display"
+          :loading="loading"
+          :error="loadError"
+          :can-manage="canManage"
+          @retry="loadTree"
+          @open="openDetail"
+          @edit="openEdit"
+          @progress="openProgress"
+          @track="openTracking"
+          @remove="removeRow"
+        />
       </section>
+
+      <el-drawer
+        v-model="detailVisible"
+        data-testid="objective-map-detail"
+        title="目标详情"
+        size="420px"
+      >
+        <div v-if="selectedObjective" class="objective-detail">
+          <h2>{{ selectedObjective.title }}</h2>
+          <p>{{ selectedObjective.ownerName || selectedObjective.deptName || '未指定负责人' }}</p>
+          <strong>{{ formatProgress(selectedObjective.progress) }}</strong>
+        </div>
+      </el-drawer>
 
     <!-- 新建 / 编辑弹窗 -->
     <el-dialog v-model="dialogVisible" data-testid="objective-dialog" :title="dialogTitle" width="640px" destroy-on-close>

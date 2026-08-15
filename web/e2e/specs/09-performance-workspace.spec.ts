@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import {
   TASK_STATUS_STAGE,
   getTaskStageState,
@@ -22,6 +22,107 @@ const apiResponse = (data: unknown) => ({
   data,
   timestamp: Date.now(),
 });
+
+function objectiveMapTreeFixture(): Objective[] {
+  const company = objectiveFixture({
+    id: 'company-1',
+    title: '提升年度经营质量',
+    level: 'company',
+    ownerId: 'vp-1',
+    ownerName: '褚浩然',
+    progress: 58,
+  });
+  const department = objectiveFixture({
+    id: 'department-1',
+    title: '提升产品与服务交付质量',
+    level: 'department',
+    parentId: 'company-1',
+    deptId: 'dept-1',
+    deptName: '孚德北京办公室',
+    ownerId: 'manager-1',
+    ownerName: '周强',
+    progress: 56,
+  });
+  const individual = objectiveFixture({
+    id: 'individual-1',
+    title: '用户问题支持',
+    level: 'individual',
+    parentId: 'department-1',
+    deptId: 'dept-1',
+    deptName: '孚德北京办公室',
+    ownerId: 'employee-1',
+    ownerName: '刘伟',
+    progress: 30,
+  });
+  const mine = objectiveFixture({
+    id: 'manager-goal-1',
+    title: '团队关键交付目标',
+    level: 'individual',
+    parentId: 'department-1',
+    deptId: 'dept-1',
+    deptName: '孚德北京办公室',
+    ownerId: 'manager-1',
+    ownerName: '周强',
+    progress: 70,
+  });
+  return [{ ...company, children: [{ ...department, children: [individual, mine] }] }];
+}
+
+async function routeObjectiveMap(page: Page, role: 'manager' | 'vp' = 'manager') {
+  const user = role === 'manager'
+    ? {
+        id: 'manager-1', name: '周强', employeeNo: 'E2E_MGR', deptId: 'dept-1',
+        deptName: '孚德北京办公室', sysRole: 'manager', isAssessorOnly: false, canViewAll: false,
+      }
+    : {
+        id: 'vp-1', name: '褚浩然', employeeNo: 'E2E_VP', deptId: null,
+        deptName: '孚德集团', sysRole: 'vp', isAssessorOnly: false, canViewAll: true,
+      };
+
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse(user)),
+  }));
+  await page.route('**/api/v1/users/manager-1/subordinates', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([{
+      id: 'employee-1', name: '刘伟', employeeNo: 'EMP-001', deptId: 'dept-1',
+      deptName: '孚德北京办公室', employmentType: 'full_time', status: 'active',
+      sysRole: 'employee', isAssessorOnly: false, canViewAll: false,
+    }])),
+  }));
+  await page.route('**/api/v1/departments**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([{
+      id: 'dept-1', name: '孚德北京办公室', leaderId: 'manager-1', company: 'kayford',
+      sortOrder: 1, isActive: true,
+    }])),
+  }));
+  await page.route('**/api/v1/cycles**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      total: 1, page: 1, pageSize: 100,
+      items: [{
+        id: 'cycle-1', name: '2026 年度', type: 'annual', status: 'active',
+        startDate: '2026-01-01', endDate: '2026-12-31',
+        publishVisibleFields: {
+          totalScore: true, grade: true, indicatorScores: true,
+          managerComment: true, coefficient: true,
+        },
+        gradeAMaxRatio: 0.2, gradeBMaxRatio: 0.4,
+        gradeCMaxRatio: 0.3, gradeDMaxRatio: 0.1,
+      }],
+    })),
+  }));
+  await page.route('**/api/v1/indicators**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+  }));
+  await page.route('**/api/v1/objectives**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse(objectiveMapTreeFixture())),
+  }));
+}
 
 test.describe('09-performance-workspace manager shell', () => {
   test.use({ storageState: 'e2e/auth-state/manager.json' });
@@ -99,6 +200,58 @@ test.describe('09-performance-workspace manager shell', () => {
     await expect(page.getByRole('checkbox', { name: '显示负责人' })).not.toBeChecked();
   });
 
+  test('objective cards render the team alignment chain and management actions', async ({ page }) => {
+    await routeObjectiveMap(page);
+    await page.goto('/objectives');
+
+    await expect(page.getByTestId('objective-map-scope-team')).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('objective-map-card-company-1')).toContainText('提升年度经营质量');
+    await expect(page.getByTestId('objective-map-card-department-1')).toContainText('提升产品与服务交付质量');
+    const card = page.getByTestId('objective-map-card-individual-1');
+    await expect(card).toContainText('个人');
+    await expect(card).toContainText('刘伟');
+    await expect(card).toContainText('用户问题支持');
+    await expect(card).toContainText('30%');
+    await card.focus();
+    await card.press('Enter');
+    await expect(page.getByTestId('objective-map-detail')).toContainText('用户问题支持');
+    await page.keyboard.press('Escape');
+
+    await card.getByRole('button', { name: '更多操作' }).click();
+    await expect(page.getByRole('menuitem', { name: '编辑目标' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: '更新进度' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: '目标跟进' })).toBeVisible();
+    await expect(page.getByRole('menuitem', { name: '删除目标' })).toBeVisible();
+  });
+
+  test('objective canvas draws real edges and supports zoom, pan, and fit', async ({ page }) => {
+    await routeObjectiveMap(page);
+    await page.goto('/objectives');
+
+    const canvas = page.getByTestId('objective-map-canvas');
+    await expect(canvas).toBeVisible();
+    await expect(page.getByTestId('objective-map-edges').locator('path')).toHaveCount(2);
+    await expect(page.getByTestId('objective-map-zoom-value')).toHaveText('100%');
+
+    await page.getByRole('button', { name: '放大目标地图' }).click();
+    await expect(page.getByTestId('objective-map-zoom-value')).toHaveText('110%');
+    await page.getByRole('button', { name: '缩小目标地图' }).click();
+    await expect(page.getByTestId('objective-map-zoom-value')).toHaveText('100%');
+
+    const before = await page.getByTestId('objective-map-world').getAttribute('style');
+    const box = await canvas.boundingBox();
+    expect(box).not.toBeNull();
+    await page.mouse.move(box!.x + box!.width - 40, box!.y + box!.height - 60);
+    await page.mouse.down();
+    await page.mouse.move(box!.x + box!.width - 100, box!.y + box!.height - 110);
+    await page.mouse.up();
+    const after = await page.getByTestId('objective-map-world').getAttribute('style');
+    expect(after).not.toBe(before);
+
+    await page.getByRole('button', { name: '定位全部目标' }).click();
+    await expect(page.getByTestId('objective-map-card-company-1')).toBeInViewport();
+  });
+
   test('target tracking exposes objective context and action workspace', async ({ page }) => {
     await page.goto('/action-items');
 
@@ -120,6 +273,17 @@ test.describe('09-performance-workspace read-only leadership', () => {
     await page.goto('/action-items');
     await expect(page.getByTestId('tracking-surface')).toBeVisible();
     await expect(page.getByTestId('action-item-create')).toHaveCount(0);
+  });
+
+  test('VP can inspect objective cards without management actions', async ({ page }) => {
+    await routeObjectiveMap(page, 'vp');
+    await page.goto('/objectives');
+
+    const card = page.getByTestId('objective-map-card-individual-1');
+    await expect(card).toBeVisible();
+    await expect(card.getByRole('button', { name: '更多操作' })).toHaveCount(0);
+    await card.press('Enter');
+    await expect(page.getByTestId('objective-map-detail')).toContainText('用户问题支持');
   });
 });
 
