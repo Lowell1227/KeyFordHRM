@@ -1106,6 +1106,27 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('team-task-empty')).toHaveCount(0);
   });
 
+  test('goal review presents every business row in a flat reference-style table', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await mockGoalReviewWorkspace(page);
+    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+
+    const table = page.getByTestId('performance-review-table');
+    for (const label of ['名称', '权重', '指标描述', '对齐', '可见范围']) {
+      await expect(table.getByRole('columnheader', { name: label, exact: true })).toBeVisible();
+    }
+    await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
+    await expect(page.getByTestId('indicator-details-ind-2')).toBeVisible();
+    await expect(page.getByTestId('indicator-toggle-ind-1')).toHaveCount(0);
+    await expect(page.getByTestId('indicator-expand-all')).toHaveCount(0);
+    await expect(page.getByTestId('indicator-visibility-ind-1')).toBeVisible();
+
+    await expect(page.getByTestId('goal-review-reference-open')).toBeVisible();
+    await expect(page.getByTestId('performance-reference-panel')).toHaveCount(0);
+    await page.getByTestId('goal-review-reference-open').click();
+    await expect(page.getByTestId('performance-reference-panel')).toBeVisible();
+  });
+
   test('goal review keeps rows compact, edits all visibility scopes, and uses scoped references', async ({ page }) => {
     const referenceRequests: URL[] = [];
     let savedBody: Record<string, unknown> | undefined;
@@ -1129,26 +1150,9 @@ test.describe('team list manager workspace', () => {
     await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
 
     await expect(page.getByTestId('goal-review-workspace')).toBeVisible();
-    await expect(page.getByTestId('indicator-details-ind-1')).toBeHidden();
-    const disclosure = page.getByTestId('indicator-toggle-ind-1');
-    const disclosureName = page.getByTestId('indicator-name-ind-1');
-    const disclosureRegion = page.getByTestId('indicator-details-ind-1');
-    await expect(disclosure).toHaveAttribute('aria-expanded', 'false');
-    await expect(disclosureName).toHaveAttribute('aria-expanded', 'false');
-    const disclosureRegionId = await disclosureRegion.getAttribute('id');
-    const disclosureNameId = await disclosureName.getAttribute('id');
-    expect(disclosureRegionId).toBeTruthy();
-    expect(disclosureNameId).toBeTruthy();
-    await expect(disclosure).toHaveAttribute('aria-controls', disclosureRegionId!);
-    await expect(disclosureName).toHaveAttribute('aria-controls', disclosureRegionId!);
-    await expect(disclosureRegion).toHaveAttribute('role', 'region');
-    await expect(disclosureRegion).toHaveAttribute('aria-labelledby', disclosureNameId!);
-    await page.getByTestId('indicator-toggle-ind-1').click();
-    await expect(disclosure).toHaveAttribute('aria-expanded', 'true');
-    await expect(disclosureName).toHaveAttribute('aria-expanded', 'true');
     await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
-    await page.getByTestId('indicator-expand-all').click();
     await expect(page.getByTestId('indicator-details-ind-2')).toBeVisible();
+    await expect(page.getByTestId('indicator-toggle-ind-1')).toHaveCount(0);
 
     await page.getByTestId('indicator-visibility-ind-1').click();
     for (const label of [
@@ -1170,6 +1174,7 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('visibility-department-count')).toContainText('1');
     await expect(page.getByTestId('visibility-user-count')).toContainText('1');
 
+    await page.getByTestId('goal-review-reference-open').click();
     const objectiveTab = page.getByRole('tab', { name: '对齐目标' });
     const historyTab = page.getByRole('tab', { name: '流程历史' });
     const objectivePanel = page.getByTestId('reference-aligned-objectives');
@@ -1200,6 +1205,8 @@ test.describe('team list manager workspace', () => {
     await historyTab.press('Home');
     await expect(objectiveTab).toBeFocused();
     expect(referenceRequests.every((url) => url.pathname.endsWith('/tasks/reference-indicators'))).toBe(true);
+    await page.keyboard.press('Escape');
+    await expect(page.getByRole('dialog', { name: '参考信息' })).toBeHidden();
 
     await page.getByTestId('goal-review-save').click();
     await expect.poll(() => savedBody).toEqual(expect.objectContaining({
@@ -1375,16 +1382,15 @@ test.describe('team list manager workspace', () => {
     });
 
     await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
-    await expect(page.getByTestId('goal-review-workspace')).toContainText('Delivery quality');
+    await expect(page.getByLabel('指标名称').first()).toHaveValue('Delivery quality');
     await page.getByTestId('goal-review-save').click();
     await page.getByTestId('team-task-row-task-2').click();
     await expect(page.getByTestId('team-task-workspace')).toContainText('Grace Lin');
-    await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
+    await expect(page.getByLabel('指标名称').first()).toHaveValue('Grace delivery target');
 
     releaseSave();
     await page.waitForTimeout(100);
-    await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
-    await expect(page.getByTestId('goal-review-workspace')).not.toContainText('Delivery quality');
+    await expect(page.getByLabel('指标名称').first()).toHaveValue('Grace delivery target');
   });
 
   test('old A save cannot overwrite newer A draft after A to B to A', async ({ page }) => {
@@ -1428,16 +1434,14 @@ test.describe('team list manager workspace', () => {
     });
 
     await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
-    await page.getByTestId('indicator-toggle-ind-1').click();
     const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
     await nameInput.fill('Ada first save');
     await page.getByTestId('goal-review-save').click();
 
     await page.getByTestId('team-task-row-task-2').click();
-    await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
+    await expect(page.getByLabel('指标名称').first()).toHaveValue('Grace delivery target');
     await page.getByTestId('team-task-row-task-1').click();
-    await expect(page.getByTestId('goal-review-workspace')).toContainText('Delivery quality');
-    await page.getByTestId('indicator-toggle-ind-1').click();
+    await expect(page.getByLabel('指标名称').first()).toHaveValue('Delivery quality');
     const newerNameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
     const newerDescriptionInput = page.getByTestId('indicator-details-ind-1').locator('textarea').first();
     await newerNameInput.fill('Ada newer unsaved draft');
@@ -1447,7 +1451,7 @@ test.describe('team list manager workspace', () => {
     await page.waitForTimeout(100);
     await expect(newerNameInput).toHaveValue('Ada newer unsaved draft');
     await expect(newerDescriptionInput).toHaveValue('Newer A to B to A description');
-    await expect(page.getByTestId('goal-review-workspace')).not.toContainText('Stale saved Ada target');
+    await expect(newerNameInput).not.toHaveValue('Stale saved Ada target');
 
     await page.getByTestId('goal-review-save').click();
     await expect.poll(() => saveBodies.length).toBe(2);
@@ -1480,7 +1484,6 @@ test.describe('team list manager workspace', () => {
     });
 
     await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
-    await page.getByTestId('indicator-toggle-ind-1').click();
     const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
     await nameInput.fill('Draft at save start');
     await page.getByTestId('goal-review-save').click();
@@ -1536,7 +1539,6 @@ test.describe('team list manager workspace', () => {
     });
 
     await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
-    await page.getByTestId('indicator-toggle-ind-1').click();
     const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
     await nameInput.fill('Draft at save start');
     await page.getByTestId('goal-review-save').click();
@@ -1600,13 +1602,12 @@ test.describe('team list manager workspace', () => {
     await page.getByTestId('goal-review-save').click();
     await page.getByTestId('team-task-row-task-2').click();
     await page.getByTestId('team-task-row-task-1').click();
-    await expect(page.getByTestId('goal-review-workspace')).toContainText('Delivery quality');
+    await expect(page.getByLabel('指标名称').first()).toHaveValue('Delivery quality');
     await page.getByTestId('goal-review-save').click();
     await expect.poll(() => saveBodies.length).toBe(2);
     releaseOldSave();
     await page.waitForTimeout(100);
 
-    await page.getByTestId('indicator-toggle-ind-1').click();
     const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
     await nameInput.fill('Draft after newer acknowledgement');
     await page.getByTestId('goal-review-save').click();
@@ -1637,7 +1638,6 @@ test.describe('team list manager workspace', () => {
       await expect(page.getByTestId('goal-review-reject')).toHaveCount(0);
       await expect(page.getByTestId('indicator-visibility-ind-1')).toHaveCount(0);
 
-      await page.getByTestId('indicator-toggle-ind-1').click();
       const details = page.getByTestId('indicator-details-ind-1');
       await expect(details).toBeVisible();
       await expect(details).toContainText('Ship the customer portal without critical defects.');
@@ -1683,26 +1683,18 @@ test.describe('team list manager workspace', () => {
         if (content) content.style.width = `${width}px`;
       }, containerWidth);
 
-      const geometry = await page.evaluate(() => {
-        const workspace = document.querySelector<HTMLElement>('[data-testid="goal-review-workspace"]')!;
-        const reference = document.querySelector<HTMLElement>('[data-testid="performance-reference-panel"]')!;
-        const main = document.querySelector<HTMLElement>('.goal-review__main')!;
-        const workspaceRect = workspace.getBoundingClientRect();
-        const referenceRect = reference.getBoundingClientRect();
-        const mainRect = main.getBoundingClientRect();
-        return {
-          workspaceWidth: workspaceRect.width,
-          referenceBottom: referenceRect.bottom,
-          mainTop: mainRect.top,
-        };
-      });
-      expect(Math.abs(geometry.workspaceWidth - containerWidth)).toBeLessThanOrEqual(1);
-      expect(geometry.referenceBottom).toBeLessThanOrEqual(geometry.mainTop + 1);
+      const workspaceWidth = await page.getByTestId('goal-review-workspace').evaluate(
+        (element) => element.getBoundingClientRect().width,
+      );
+      expect(Math.abs(workspaceWidth - containerWidth)).toBeLessThanOrEqual(1);
+      await expect(page.getByTestId('performance-reference-panel')).toHaveCount(0);
+      await expect(page.getByTestId('performance-review-table').locator('[role="columnheader"]'))
+        .toHaveCount(5);
 
       for (const testId of [
-        'indicator-expand-all',
         'indicator-visibility-ind-1',
-        'indicator-toggle-ind-1',
+        'goal-review-reference-open',
+        'goal-review-save',
       ]) {
         const control = page.getByTestId(testId);
         await control.scrollIntoViewIfNeeded();
@@ -1715,13 +1707,11 @@ test.describe('team list manager workspace', () => {
         expect(isTopmostHitTarget).toBe(true);
       }
 
-      await page.getByTestId('indicator-expand-all').click();
       await expect(page.getByTestId('indicator-details-ind-2')).toBeVisible();
       await page.getByTestId('indicator-visibility-ind-1').click();
       await expect(page.getByRole('option', { name: '仅上级可见', exact: true })).toBeVisible();
       await page.keyboard.press('Escape');
-      await page.getByTestId('indicator-toggle-ind-1').click();
-      await expect(page.getByTestId('indicator-details-ind-1')).toBeHidden();
+      await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
 
       const indicatorRows = page.locator('[data-testid^="indicator-row-"]');
       const rowFit = await indicatorRows.evaluateAll((rows) => rows.map((row) => ({
@@ -1753,10 +1743,13 @@ test.describe('team list manager workspace', () => {
 
       const indicatorRows = page.locator('[data-testid^="indicator-row-"]');
       await expect(indicatorRows).toHaveCount(2);
-      const columns = await indicatorRows.evaluateAll((rows) =>
-        rows.map((row) => getComputedStyle(row).gridTemplateColumns),
-      );
-      expect(new Set(columns).size).toBe(1);
+      const tableHeaders = page.getByTestId('performance-review-table').locator('[role="columnheader"]');
+      if (viewport.name === 'desktop') {
+        await expect(tableHeaders).toHaveCount(5);
+        await expect(tableHeaders.first()).toBeVisible();
+      } else {
+        await expect(tableHeaders.first()).toBeHidden();
+      }
       const rowFit = await indicatorRows.evaluateAll((rows) => rows.map((row) => ({
         clientWidth: row.clientWidth,
         scrollWidth: row.scrollWidth,
@@ -1767,7 +1760,6 @@ test.describe('team list manager workspace', () => {
       );
       expect(overflow).toBeLessThanOrEqual(8);
 
-      await page.getByTestId('indicator-toggle-ind-1').click();
       await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
       if (shouldCaptureTask8Evidence()) {
         await page.screenshot({

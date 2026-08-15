@@ -6,9 +6,10 @@ import { tasksApi } from '@/api/tasks.api';
 import { useAuthStore } from '@/stores/auth.store';
 import type { IndicatorInstance, SetIndicatorBody, TaskDetail } from '@/types/api.types';
 import type { IndicatorVisibilityScope } from '@/types/enums';
-import PerformanceIndicatorList, {
-  type PerformanceIndicatorRow,
-} from './PerformanceIndicatorList.vue';
+import type { PerformanceIndicatorRow } from './PerformanceIndicatorList.vue';
+import PerformanceReviewTable, {
+  type PerformanceReviewColumn,
+} from './PerformanceReviewTable.vue';
 import IndicatorVisibilityEditor, {
   type IndicatorVisibilitySelection,
   type VisibilityDepartmentOption,
@@ -71,6 +72,7 @@ const task = ref<TaskDetail>();
 const auth = useAuthStore();
 const loading = ref(false);
 const error = ref('');
+const referenceOpen = ref(false);
 const draftIndicators = reactive<IndicatorInstance[]>([]);
 const validationIndicatorIds = ref<string[]>([]);
 const dirtyIndicatorIds = ref(new Set<string>());
@@ -104,6 +106,22 @@ const totalWeight = computed(() => draftIndicators.reduce(
 ));
 const displayedWeightTotal = computed(() => normalizeDisplayedWeightTotal(totalWeight.value));
 const hasValidWeight = computed(() => displayedWeightTotal.value.isExactlyOneHundredPercent);
+const goalReviewColumns: PerformanceReviewColumn[] = [
+  { key: 'indicator', label: '名称', width: 'minmax(170px, .95fr)' },
+  { key: 'weight', label: '权重', width: '88px' },
+  { key: 'description', label: '指标描述', width: 'minmax(320px, 1.55fr)' },
+  { key: 'primary', label: '对齐', width: 'minmax(150px, .75fr)' },
+  { key: 'secondary', label: '可见范围', width: 'minmax(180px, .85fr)' },
+];
+const visibilityScopeLabels: Record<IndicatorVisibilityScope, string> = {
+  company: '全公司可见',
+  department: '部门内可见',
+  department_tree: '部门及下级可见',
+  direct_reports: '直接下级可见',
+  all_reports: '所有下级可见',
+  supervisors: '仅上级可见',
+  custom: '自定义范围',
+};
 const isReviewable = computed(() => (
   task.value?.status === 'indicator_reviewing'
   && !task.value.isExempt
@@ -395,158 +413,199 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
     <template v-else-if="task">
       <header class="goal-review__header">
         <div>
-          <h3>指标审核</h3>
+          <h3>考核指标</h3>
           <span>{{ task.indicatorInstances.length }} 项 · {{ task.cycleName || '-' }}</span>
         </div>
-        <div v-if="isReviewable" class="goal-review__actions">
-          <el-tooltip content="保存修改" placement="top">
-            <el-button
-              :icon="Select"
-              data-testid="goal-review-save"
-              aria-label="保存指标修改"
-              :loading="busy"
-              @click="handleSave"
-            />
-          </el-tooltip>
-          <el-tooltip content="通过审核" placement="top">
-            <el-button
-              type="success"
-              :icon="Check"
-              data-testid="goal-review-approve"
-              aria-label="通过指标审核"
-              :loading="busy"
-              @click="handleApprove"
-            />
-          </el-tooltip>
-          <el-tooltip content="驳回审核" placement="top">
-            <el-button
-              type="danger"
-              :icon="Close"
-              data-testid="goal-review-reject"
-              aria-label="驳回指标审核"
-              :loading="busy"
-              @click="handleReject"
-            />
-          </el-tooltip>
+        <div class="goal-review__actions">
+          <el-button
+            data-testid="goal-review-reference-open"
+            @click="referenceOpen = true"
+          >
+            参考信息
+          </el-button>
+          <template v-if="isReviewable">
+            <el-tooltip content="保存修改" placement="top">
+              <el-button
+                :icon="Select"
+                data-testid="goal-review-save"
+                aria-label="保存指标修改"
+                :loading="busy"
+                @click="handleSave"
+              />
+            </el-tooltip>
+            <el-tooltip content="通过审核" placement="top">
+              <el-button
+                type="success"
+                :icon="Check"
+                data-testid="goal-review-approve"
+                aria-label="通过指标审核"
+                :loading="busy"
+                @click="handleApprove"
+              />
+            </el-tooltip>
+            <el-tooltip content="驳回审核" placement="top">
+              <el-button
+                type="danger"
+                :icon="Close"
+                data-testid="goal-review-reject"
+                aria-label="驳回指标审核"
+                :loading="busy"
+                @click="handleReject"
+              />
+            </el-tooltip>
+          </template>
         </div>
       </header>
 
-      <div class="goal-review__layout">
-        <div class="goal-review__main">
-          <PerformanceIndicatorList
-            :rows="reviewRows"
-            :invalid-indicator-ids="indicatorIdsToReveal"
-            :weight-total="totalWeight"
-          >
-            <template v-if="isReviewable" #visibility="{ index }">
-              <IndicatorVisibilityEditor
-                :model-value="{
-                  visibilityScope: draftIndicators[index].visibilityScope,
-                  visibleDepartmentIds: draftIndicators[index].visibleDepartmentIds,
-                  visibleUserIds: draftIndicators[index].visibleUserIds,
-                }"
-                :indicator-id="draftIndicators[index].id"
-                :departments="departments"
-                :users="users"
-                :disabled="busy"
-                @update:model-value="updateVisibility(index, $event)"
+      <PerformanceReviewTable
+        :rows="reviewRows"
+        :columns="goalReviewColumns"
+        :invalid-indicator-ids="indicatorIdsToReveal"
+        :weight-total="totalWeight"
+      >
+        <template #cell-indicator="{ index }">
+          <div class="goal-review-cell goal-review-cell--name">
+            <span class="goal-review-cell__index">{{ index + 1 }}</span>
+            <div>
+              <el-input
+                v-if="isReviewable"
+                v-model="draftIndicators[index].name"
+                maxlength="100"
+                aria-label="指标名称"
+                @input="markDirty(draftIndicators[index].id)"
               />
-            </template>
+              <strong v-else>{{ draftIndicators[index].name || '未命名指标' }}</strong>
+              <label v-if="isReviewable" class="goal-review-cell__compact-field">
+                <span>考核维度</span>
+                <el-input
+                  v-model="draftIndicators[index].dimensionName"
+                  maxlength="100"
+                  @input="markDirty(draftIndicators[index].id)"
+                />
+              </label>
+              <small v-else>{{ draftIndicators[index].dimensionName || '未设置维度' }}</small>
+            </div>
+          </div>
+        </template>
 
-            <template v-if="isReviewable" #details="{ index }">
-              <div class="goal-review-editor">
-                <label class="goal-review-editor__wide">
-                  <span>指标名称</span>
-                  <el-input
-                    v-model="draftIndicators[index].name"
-                    maxlength="100"
-                    @input="markDirty(draftIndicators[index].id)"
-                  />
-                </label>
-                <label>
-                  <span>考核维度</span>
-                  <el-input
-                    v-model="draftIndicators[index].dimensionName"
-                    maxlength="100"
-                    @input="markDirty(draftIndicators[index].id)"
-                  />
-                </label>
-                <label>
-                  <span>权重</span>
-                  <el-input-number
-                    :model-value="Number((draftIndicators[index].weight * 100).toFixed(2))"
-                    :min="0"
-                    :max="100"
-                    :step="5"
-                    :precision="2"
-                    controls-position="right"
-                    @update:model-value="setWeightPercent(draftIndicators[index], $event)"
-                  />
-                </label>
-                <label class="goal-review-editor__wide">
-                  <span>指标描述</span>
-                  <el-input
-                    v-model="draftIndicators[index].description"
-                    type="textarea"
-                    :rows="2"
-                    maxlength="300"
-                    @input="markDirty(draftIndicators[index].id)"
-                  />
-                </label>
-                <label>
-                  <span>目标值</span>
-                  <el-input
-                    v-model="draftIndicators[index].targetValueText"
-                    maxlength="100"
-                    @input="markDirty(draftIndicators[index].id)"
-                  />
-                </label>
-                <label>
-                  <span>单位</span>
-                  <el-input
-                    v-model="draftIndicators[index].unit"
-                    maxlength="30"
-                    @input="markDirty(draftIndicators[index].id)"
-                  />
-                </label>
-                <label class="goal-review-editor__wide">
-                  <span>评分标准</span>
-                  <el-input
-                    v-model="draftIndicators[index].scoringStandard"
-                    maxlength="300"
-                    @input="markDirty(draftIndicators[index].id)"
-                  />
-                </label>
-                <label>
-                  <span>数据来源</span>
-                  <el-input
-                    v-model="draftIndicators[index].dataSource"
-                    maxlength="100"
-                    @input="markDirty(draftIndicators[index].id)"
-                  />
-                </label>
-                <label>
-                  <span>完成口径</span>
-                  <el-input
-                    v-model="draftIndicators[index].dataCaliber"
-                    maxlength="100"
-                    @input="markDirty(draftIndicators[index].id)"
-                  />
-                </label>
-              </div>
-            </template>
-          </PerformanceIndicatorList>
-        </div>
-
-        <div class="goal-review__reference">
-          <PerformanceReferencePanel
-            :cycle-id="task.cycleId"
-            :employee-id="task.employeeId"
-            :indicators="task.indicatorInstances"
-            :flow-records="task.flowRecords"
+        <template #cell-weight="{ index }">
+          <el-input-number
+            v-if="isReviewable"
+            :model-value="Number((draftIndicators[index].weight * 100).toFixed(2))"
+            :min="0"
+            :max="100"
+            :step="5"
+            :precision="2"
+            controls-position="right"
+            aria-label="权重"
+            @update:model-value="setWeightPercent(draftIndicators[index], $event)"
           />
-        </div>
-      </div>
+          <span v-else>{{ Number((draftIndicators[index].weight * 100).toFixed(2)) }}%</span>
+        </template>
+
+        <template #cell-description="{ index }">
+          <div class="goal-review-cell__stack">
+            <el-input
+              v-if="isReviewable"
+              v-model="draftIndicators[index].description"
+              type="textarea"
+              :rows="2"
+              maxlength="300"
+              aria-label="指标描述"
+              @input="markDirty(draftIndicators[index].id)"
+            />
+            <p v-else>{{ draftIndicators[index].description || '-' }}</p>
+
+            <div class="goal-review-cell__facts">
+              <label>
+                <span>目标值</span>
+                <el-input
+                  v-if="isReviewable"
+                  v-model="draftIndicators[index].targetValueText"
+                  maxlength="100"
+                  @input="markDirty(draftIndicators[index].id)"
+                />
+                <strong v-else>{{ draftIndicators[index].targetValueText || '-' }}</strong>
+              </label>
+              <label>
+                <span>单位</span>
+                <el-input
+                  v-if="isReviewable"
+                  v-model="draftIndicators[index].unit"
+                  maxlength="30"
+                  @input="markDirty(draftIndicators[index].id)"
+                />
+                <strong v-else>{{ draftIndicators[index].unit || '-' }}</strong>
+              </label>
+              <label class="is-wide">
+                <span>评分标准</span>
+                <el-input
+                  v-if="isReviewable"
+                  v-model="draftIndicators[index].scoringStandard"
+                  maxlength="300"
+                  @input="markDirty(draftIndicators[index].id)"
+                />
+                <strong v-else>{{ draftIndicators[index].scoringStandard || '-' }}</strong>
+              </label>
+              <label>
+                <span>数据来源</span>
+                <el-input
+                  v-if="isReviewable"
+                  v-model="draftIndicators[index].dataSource"
+                  maxlength="100"
+                  @input="markDirty(draftIndicators[index].id)"
+                />
+                <strong v-else>{{ draftIndicators[index].dataSource || '-' }}</strong>
+              </label>
+              <label>
+                <span>完成口径</span>
+                <el-input
+                  v-if="isReviewable"
+                  v-model="draftIndicators[index].dataCaliber"
+                  maxlength="100"
+                  @input="markDirty(draftIndicators[index].id)"
+                />
+                <strong v-else>{{ draftIndicators[index].dataCaliber || '-' }}</strong>
+              </label>
+            </div>
+          </div>
+        </template>
+
+        <template #cell-primary="{ row }">
+          <span>{{ row.alignedObjectives?.map((objective) => objective.title).join('、') || '-' }}</span>
+        </template>
+
+        <template #cell-secondary="{ index }">
+          <IndicatorVisibilityEditor
+            v-if="isReviewable"
+            :model-value="{
+              visibilityScope: draftIndicators[index].visibilityScope,
+              visibleDepartmentIds: draftIndicators[index].visibleDepartmentIds,
+              visibleUserIds: draftIndicators[index].visibleUserIds,
+            }"
+            :indicator-id="draftIndicators[index].id"
+            :departments="departments"
+            :users="users"
+            :disabled="busy"
+            @update:model-value="updateVisibility(index, $event)"
+          />
+          <span v-else>{{ visibilityScopeLabels[draftIndicators[index].visibilityScope] }}</span>
+        </template>
+      </PerformanceReviewTable>
+
+      <el-drawer
+        v-model="referenceOpen"
+        title="参考信息"
+        size="430px"
+        class="goal-review-reference-drawer"
+      >
+        <PerformanceReferencePanel
+          :cycle-id="task.cycleId"
+          :employee-id="task.employeeId"
+          :indicators="task.indicatorInstances"
+          :flow-records="task.flowRecords"
+        />
+      </el-drawer>
     </template>
 
     <el-empty v-else :image-size="52" description="暂无指标审核详情" />
@@ -556,7 +615,10 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
 <style scoped>
 .goal-review {
   min-width: 0;
-  border-top: 1px solid #e5e9ef;
+  overflow: hidden;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(31 45 61 / 4%);
   container: goal-review / inline-size;
 }
 
@@ -566,13 +628,12 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
 }
 
 .goal-review__header {
-  min-height: 54px;
+  min-height: 62px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 14px;
-  border-bottom: 1px solid #e5e9ef;
+  padding: 0 18px;
 }
 
 .goal-review__header > div:first-child {
@@ -584,8 +645,8 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
 
 .goal-review__header h3 {
   margin: 0;
-  color: #273247;
-  font-size: 14px;
+  color: #20283a;
+  font-size: 18px;
 }
 
 .goal-review__header span {
@@ -600,72 +661,110 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
   gap: 6px;
 }
 
-.goal-review__layout {
+.goal-review-cell,
+.goal-review-cell--name,
+.goal-review-cell--name > div,
+.goal-review-cell__stack,
+.goal-review-cell__compact-field,
+.goal-review-cell__facts label {
   min-width: 0;
+}
+
+.goal-review-cell--name {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.goal-review-cell--name > div,
+.goal-review-cell__stack,
+.goal-review-cell__compact-field,
+.goal-review-cell__facts label {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(230px, 280px);
-  grid-template-areas: "main reference";
-}
-
-.goal-review__main {
-  grid-area: main;
-  min-width: 0;
-  padding: 12px 14px 16px;
-}
-
-.goal-review__reference {
-  grid-area: reference;
-  min-width: 0;
-}
-
-.goal-review__reference :deep(.performance-reference) {
-  height: 100%;
-}
-
-.goal-review-editor {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px 12px;
-}
-
-.goal-review-editor label {
-  min-width: 0;
-  display: grid;
-  align-content: start;
   gap: 5px;
 }
 
-.goal-review-editor label > span {
-  color: #687386;
+.goal-review-cell__index {
+  width: 24px;
+  height: 24px;
+  flex: 0 0 24px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 7px;
+  color: #1677ff;
+  background: #e8f3ff;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.goal-review-cell--name strong {
+  color: #273247;
+  font-size: 14px;
+}
+
+.goal-review-cell--name small,
+.goal-review-cell__compact-field > span,
+.goal-review-cell__facts label > span {
+  color: #8a94a6;
   font-size: 11px;
 }
 
-.goal-review-editor__wide {
+.goal-review-cell__compact-field {
+  margin-top: 8px;
+}
+
+.goal-review-cell__stack p {
+  margin: 0;
+  white-space: pre-wrap;
+}
+
+.goal-review-cell__facts {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.goal-review-cell__facts .is-wide {
   grid-column: 1 / -1;
 }
 
-.goal-review-editor :deep(.el-input-number) {
+.goal-review-cell__facts strong {
+  color: #5f6a7d;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.goal-review :deep(.performance-review-table) {
+  border-top: 1px solid #edf0f5;
+}
+
+.goal-review :deep(.performance-review-table .el-input-number),
+.goal-review :deep(.performance-review-table .el-input),
+.goal-review :deep(.performance-review-table .el-select) {
   width: 100%;
+  max-width: 100%;
 }
 
-@container goal-review (max-width: 1024px) {
-  .goal-review__layout {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-areas:
-      "reference"
-      "main";
-  }
-
-  .goal-review__reference :deep(.performance-reference) {
-    border-top: 1px solid #e2e6ec;
-    border-left: 0;
-  }
+.goal-review :deep(.performance-review-table .el-input__wrapper),
+.goal-review :deep(.performance-review-table .el-textarea__inner) {
+  box-shadow: 0 0 0 1px #e4e9f1 inset;
 }
 
-@container goal-review (max-width: 620px) {
+:global(.goal-review-reference-drawer .el-drawer__body) {
+  padding: 0;
+}
+
+:global(.goal-review-reference-drawer .performance-reference) {
+  min-height: 100%;
+  border-left: 0;
+}
+
+@container goal-review (max-width: 720px) {
   .goal-review__header {
     align-items: flex-start;
-    padding: 9px 10px;
+    padding: 12px;
   }
 
   .goal-review__header > div:first-child {
@@ -674,18 +773,16 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
   }
 
   .goal-review__actions {
+    flex-wrap: wrap;
+    justify-content: flex-end;
     gap: 2px;
   }
 
-  .goal-review__main {
-    padding: 8px;
-  }
-
-  .goal-review-editor {
+  .goal-review-cell__facts {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .goal-review-editor__wide {
+  .goal-review-cell__facts .is-wide {
     grid-column: auto;
   }
 }
