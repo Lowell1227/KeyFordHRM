@@ -66,13 +66,23 @@ test.describe('09-performance-workspace manager shell', () => {
     await expect(page.getByTestId('objective-create')).toBeVisible();
   });
 
-  test('target tracking exposes objective context and action workspace', async ({ page }) => {
+  test('target tracking exposes people context and indicator workspace', async ({ page }) => {
     await page.goto('/action-items');
 
-    await expect(page.getByTestId('tracking-context')).toBeVisible();
-    await expect(page.getByTestId('tracking-objective-search')).toBeVisible();
-    await expect(page.getByTestId('tracking-assignee-filter')).toBeVisible();
-    await expect(page.getByTestId('tracking-surface')).toBeVisible();
+    await expect(page.getByTestId('goal-tracking-people')).toBeVisible();
+    await expect(page.getByTestId('goal-tracking-person-search')).toBeVisible();
+    const surface = page.getByTestId('goal-tracking-surface');
+    await expect(surface).toBeVisible();
+    for (const column of ['考核指标', '最新进展', '状态', '进展', '权重']) {
+      await expect(surface.getByRole('columnheader', { name: column, exact: true })).toBeVisible();
+    }
+    const surfaceBox = await surface.boundingBox();
+    const weightBox = await surface.getByRole('columnheader', { name: '权重' }).boundingBox();
+    expect(surfaceBox).not.toBeNull();
+    expect(weightBox).not.toBeNull();
+    expect(Math.ceil(weightBox!.x + weightBox!.width)).toBeLessThanOrEqual(
+      Math.ceil(surfaceBox!.x + surfaceBox!.width),
+    );
   });
 });
 
@@ -85,7 +95,7 @@ test.describe('09-performance-workspace read-only leadership', () => {
     await expect(page.getByTestId('objective-create')).toHaveCount(0);
 
     await page.goto('/action-items');
-    await expect(page.getByTestId('tracking-surface')).toBeVisible();
+    await expect(page.getByTestId('goal-tracking-surface')).toBeVisible();
     await expect(page.getByTestId('action-item-create')).toHaveCount(0);
   });
 });
@@ -97,8 +107,8 @@ test.describe('09-performance-workspace employee tasks', () => {
     await page.goto('/tasks');
 
     const nav = page.getByTestId('performance-secondary-nav');
+    await expect(nav.getByRole('link', { name: '目标跟进' })).toBeVisible();
     await expect(nav.getByRole('link', { name: '绩效待办' })).toBeVisible();
-    await expect(nav.getByRole('link', { name: '目标跟进' })).toHaveCount(0);
     await expect(nav.getByRole('link', { name: '目标地图' })).toHaveCount(0);
   });
 
@@ -182,37 +192,63 @@ test.describe('09-performance-workspace stage semantics', () => {
 });
 
 test.describe('09-performance-workspace tracking behavior', () => {
-  test.use({ storageState: 'e2e/auth-state/manager.json' });
+  test.use({ storageState: 'e2e/auth-state/employee.json' });
 
-  test('restores objective from URL and applies the same status filter to list rows', async ({ page }) => {
-    const objectives = [
-      { id: 'obj-1', title: '第一目标', progress: 10, ownerName: '测试主管' },
-      { id: 'obj-2', title: '第二目标', progress: 50, ownerName: '测试主管' },
-    ];
-    const actionItems = [
-      { id: 'item-todo', objectiveId: 'obj-2', title: '待办行动项', status: 'todo', progress: 0, children: [] },
-      { id: 'item-done', objectiveId: 'obj-2', title: '已完成行动项', status: 'done', progress: 100, children: [] },
-    ];
-
-    await page.route('**/api/v1/objectives?**', (route) => route.fulfill({
+  test('employee sees the reference goal-tracking workspace for self and manager', async ({ page }) => {
+    await page.route('**/api/v1/auth/me', (route) => route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse(objectives)),
+      body: JSON.stringify(apiResponse({
+        id: 'employee-1', name: '刘伟', sysRole: 'employee', deptId: 'dept-1',
+        isAssessorOnly: false, canViewAll: false,
+        directManagerId: 'manager-1', directManagerName: '林治',
+      })),
     }));
-    await page.route('**/api/v1/action-items/tree?**', (route) => route.fulfill({
+    await page.route('**/api/v1/cycles?**', (route) => route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse(actionItems)),
+      body: JSON.stringify(apiResponse({
+        total: 1, page: 1, pageSize: 100,
+        items: [{
+          id: 'cycle-1', name: '2026 第二季度', type: 'quarterly',
+          startDate: '2026-04-01', endDate: '2026-06-30', status: 'self_eval',
+          publishVisibleFields: {}, gradeAMaxRatio: 0.2, gradeBMaxRatio: 0.4,
+          gradeCMaxRatio: 0.3, gradeDMaxRatio: 0.1,
+        }],
+      })),
+    }));
+    await page.route('**/api/v1/objectives/tracking?**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({
+        totalWeight: 100,
+        items: [
+          { id: 'objective-1', title: '产品项目', ownerId: 'employee-1', ownerName: '刘伟', cycleId: 'cycle-1', cycleName: '2026 第二季度', priority: 2, status: 'active', progress: 0, weight: 50, latestProgress: null },
+          { id: 'objective-2', title: '新产品', ownerId: 'employee-1', ownerName: '刘伟', cycleId: 'cycle-1', cycleName: '2026 第二季度', priority: 1, status: 'active', progress: 35, weight: 50, latestProgress: { id: 'item-2', title: '完成需求评审', progress: 35, updatedAt: '2026-08-15T08:00:00.000Z' } },
+        ],
+      })),
     }));
 
-    await page.goto('/action-items?objectiveId=obj-2');
-    await expect(page.getByRole('button', { name: /第二目标/ })).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByText('待办行动项')).toBeVisible();
-    await expect(page.getByText('已完成行动项')).toBeVisible();
+    await page.goto('/action-items');
 
-    await page.getByTestId('tracking-status-filter').click();
-    await page.getByRole('option', { name: '已完成' }).click();
-
-    await expect(page.getByText('已完成行动项')).toBeVisible();
-    await expect(page.getByText('待办行动项')).toHaveCount(0);
+    await expect(page.getByTestId('performance-workspace-title')).toHaveText('目标跟进');
+    const peoplePanel = page.getByTestId('goal-tracking-people');
+    await expect(peoplePanel).toContainText('我');
+    await expect(peoplePanel).toContainText('直接上级');
+    await expect(peoplePanel.getByRole('button', { name: /刘伟/ })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('goal-tracking-cycle')).toContainText('2026 第二季度');
+    await expect(page.getByTestId('goal-tracking-surface')).toContainText('考核指标');
+    await expect(page.getByText('产品项目')).toBeVisible();
+    await expect(page.getByText('暂无进展')).toBeVisible();
+    await expect(page.getByText('完成需求评审')).toBeVisible();
+    await expect(page.getByText('维度权重：100%')).toBeVisible();
+    await expect(page.getByText('创建群聊')).toHaveCount(0);
+    await expect(page.getByTestId('action-item-create')).toHaveCount(0);
+    for (const obsoleteControl of ['全部状态', '全部负责人', '刷新', '列表', '看板', '新建行动项']) {
+      await expect(page.getByText(obsoleteControl, { exact: true })).toHaveCount(0);
+    }
+    await page.getByTestId('goal-tracking-person-search').fill('林治');
+    await expect(peoplePanel.getByRole('button', { name: /林治/ })).toBeVisible();
+    await expect(peoplePanel.getByRole('button', { name: /刘伟/ })).toHaveCount(0);
+    await page.getByTestId('goal-tracking-person-search').fill('不存在');
+    await expect(page.getByText('未找到匹配人员')).toBeVisible();
   });
 });
 
