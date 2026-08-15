@@ -141,4 +141,16 @@ const scopes: Array<{ key: ObjectiveMapScope; label: string }> = [
   outline: 2px solid #195dcc;
   outline-offset: 2px;
 }
+
+@media (max-width: 1360px) {
+  .objective-map-filters {
+    width: 100%;
+    min-width: 0;
+    box-sizing: border-box;
+    justify-content: flex-start;
+    overflow-x: auto;
+    overflow-y: hidden;
+    overscroll-behavior-inline: contain;
+  }
+}
 </style>

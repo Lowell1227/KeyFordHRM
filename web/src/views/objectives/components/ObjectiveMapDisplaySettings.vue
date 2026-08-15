@@ -114,4 +114,10 @@ function updateOption(key: keyof ObjectiveMapDisplayOptions, value: unknown) {
 .objective-map-display-settings__panel :deep(.el-checkbox) {
   margin-right: 0;
 }
+
+@media (max-width: 768px) {
+  .objective-map-display-settings {
+    min-height: 44px;
+  }
+}
 </style>

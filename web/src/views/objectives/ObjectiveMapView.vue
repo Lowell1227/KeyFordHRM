@@ -681,92 +681,43 @@ async function removeRow(row: Objective) {
 
 <style scoped>
 .objective-map {
+  height: 100%;
   min-width: 0;
-  min-height: 100%;
-  padding: 16px;
+  min-height: 0;
+  box-sizing: border-box;
+  gap: 0;
+  padding: 0;
 }
 
 .objective-map__toolbar {
-  min-height: 50px;
+  position: absolute;
+  z-index: 8;
+  top: 16px;
+  right: 24px;
+  left: 24px;
+  min-width: 0;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
   gap: 10px;
-  padding: 8px 10px;
-  background: #fff;
-  border-bottom: 1px solid #e2e6ed;
-}
-
-.objective-map__period {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.objective-map__filter-label {
-  color: #697386;
-  font-size: 13px;
-  font-weight: 600;
-}
-
-.objective-map__cycle-select {
-  width: 220px;
+  pointer-events: none;
 }
 
 .objective-map__toolbar-spacer {
   flex: 1;
 }
 
+.objective-map__toolbar > * {
+  pointer-events: auto;
+}
+
 .performance-surface {
+  position: relative;
+  width: 100%;
+  height: 100%;
   min-width: 0;
-  min-height: 420px;
+  min-height: 520px;
   overflow: hidden;
-  background: #fff;
-  border: 1px solid #e2e6ed;
-  border-radius: 7px;
-}
-
-.performance-surface :deep(.el-table) {
-  border: 0;
-  border-radius: 0;
-}
-
-.objective-title {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.level-tag {
-  flex-shrink: 0;
-}
-
-.title-text {
-  font-weight: 500;
-}
-
-.objective-desc {
-  margin-top: 4px;
-  font-size: 12px;
-  color: var(--el-text-color-secondary);
-  line-height: 1.4;
-}
-
-.meta-cell {
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-  font-size: 13px;
-}
-
-.meta-line {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.meta-line .el-icon {
-  color: #8791a4;
+  background: #f3f6fc;
 }
 
 .progress-row-title {
@@ -822,39 +773,38 @@ async function removeRow(row: Objective) {
   margin-left: 0;
 }
 
-@media (max-width: 768px) {
-  .objective-map {
-    min-height: auto;
-    padding: 10px;
-  }
-
+@media (max-width: 1360px) {
   .objective-map__toolbar {
-    align-items: stretch;
+    align-items: flex-end;
     flex-direction: column;
+    gap: 8px;
     overflow: hidden;
-  }
-
-  .objective-map__period,
-  .objective-map__cycle-select {
-    width: 100%;
-  }
-
-  .objective-map__toolbar :deep(.el-radio-group) {
-    width: max-content;
-    max-width: none;
-  }
-
-  .objective-map__toolbar :deep(.el-radio-group) {
-    overflow-x: auto;
   }
 
   .objective-map__toolbar-spacer {
     display: none;
   }
+}
+
+@media (max-width: 768px) {
+  .objective-map {
+    height: auto;
+    min-height: 520px;
+  }
+
+  .objective-map__toolbar {
+    top: 10px;
+    right: 10px;
+    left: 10px;
+    align-items: flex-end;
+    flex-direction: column;
+    gap: 8px;
+    overflow: hidden;
+  }
 
   .performance-surface {
-    min-height: 360px;
-    overflow-x: auto;
+    min-height: 520px;
+    overflow: hidden;
   }
 }
 </style>

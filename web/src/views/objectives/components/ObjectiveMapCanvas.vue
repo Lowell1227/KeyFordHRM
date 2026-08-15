@@ -216,7 +216,7 @@ defineExpose({ fitToView });
   width: 100%;
   min-width: 0;
   height: 100%;
-  min-height: 460px;
+  min-height: 520px;
   overflow: hidden;
   background: #f3f6fc;
   cursor: grab;
@@ -329,6 +329,17 @@ defineExpose({ fitToView });
 @media (prefers-reduced-motion: reduce) {
   .objective-map-canvas__world {
     transition: none;
+  }
+}
+
+@media (max-width: 768px) {
+  .objective-map-canvas {
+    min-height: 420px;
+  }
+
+  .objective-map-canvas__controls {
+    left: 10px;
+    bottom: 10px;
   }
 }
 </style>

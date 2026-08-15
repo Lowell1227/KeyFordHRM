@@ -683,6 +683,62 @@ test.describe('09-performance-workspace tracking behavior', () => {
 test.describe('09-performance-workspace responsive layout', () => {
   test.use({ storageState: 'e2e/auth-state/manager.json' });
 
+  test('objective map responsive layout keeps floating controls and a card reachable', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await routeObjectiveMap(page);
+    await page.goto('/objectives');
+
+    const surface = page.getByTestId('objective-map-surface');
+    const canvas = page.getByTestId('objective-map-canvas');
+    await expect(page.getByTestId('objective-map-filters')).toBeVisible();
+    await expect(page.getByTestId('objective-map-display-settings')).toBeVisible();
+    await expect(canvas).toBeVisible();
+    await expect(page.getByRole('button', { name: '定位全部目标' })).toBeVisible();
+    await expect(page.getByTestId('objective-map-card-individual-1')).toBeVisible();
+    expect(await surface.evaluate((element) => getComputedStyle(element).overflowX)).toBe('hidden');
+    expect(await canvas.evaluate((element) => element.getBoundingClientRect().height)).toBeGreaterThanOrEqual(420);
+  });
+
+  test('objective map accessibility supports focus, keyboard detail, and reduced motion', async ({ page }) => {
+    await page.emulateMedia({ reducedMotion: 'reduce' });
+    await routeObjectiveMap(page);
+    await page.goto('/objectives');
+
+    const scope = page.getByTestId('objective-map-scope-team');
+    await scope.focus();
+    await expect(scope).toHaveCSS('outline-width', '2px');
+
+    const card = page.getByTestId('objective-map-card-individual-1');
+    await card.focus();
+    await expect(card).toHaveCSS('outline-width', '2px');
+    await card.press('Enter');
+    await expect(page.getByTestId('objective-map-detail')).toBeVisible();
+    await page.keyboard.press('Escape');
+    await expect(page.getByTestId('objective-map-detail')).not.toBeVisible();
+    await expect(page.getByTestId('objective-map-world')).toHaveCSS('transition-duration', '0s');
+  });
+
+  test('objective map desktop controls float over the full canvas', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await routeObjectiveMap(page);
+    await page.goto('/objectives');
+
+    await expect(page.getByTestId('objective-map-toolbar')).toHaveCSS('position', 'absolute');
+    await expect(page.getByTestId('objective-map-canvas')).toHaveCSS('background-color', 'rgb(243, 246, 252)');
+  });
+
+  test('objective map medium layout keeps display settings inside the canvas', async ({ page }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await routeObjectiveMap(page);
+    await page.goto('/objectives');
+
+    const surfaceBox = await page.getByTestId('objective-map-surface').boundingBox();
+    const settingsBox = await page.getByTestId('objective-map-display-settings').boundingBox();
+    expect(surfaceBox).not.toBeNull();
+    expect(settingsBox).not.toBeNull();
+    expect(settingsBox!.x + settingsBox!.width).toBeLessThanOrEqual(surfaceBox!.x + surfaceBox!.width);
+  });
+
   for (const path of ['/objectives', '/action-items', '/tasks']) {
     test(`${path} is usable at mobile width`, async ({ page }) => {
       await page.setViewportSize({ width: 390, height: 844 });
