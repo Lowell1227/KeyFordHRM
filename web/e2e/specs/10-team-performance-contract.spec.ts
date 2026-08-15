@@ -595,14 +595,11 @@ test.describe('team list manager workspace', () => {
     storageState: 'e2e/auth-state/manager.json',
   });
 
-  test('team list exposes filters, counts, and selected member URL state', async ({ page }) => {
-    await mockTaskWorkspaceIdentity(page, 'manager');
-    await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(apiResponse(teamPageFixture)),
-    }));
+  test('manager opens goal review in a full-page team workspace and returns to the exact list', async ({ page }) => {
+    await mockGoalReviewWorkspace(page);
 
-    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1');
+    const listUrl = '/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&keyword=Ada';
+    await page.goto(listUrl);
 
     const navigation = page.getByTestId('manager-task-navigation');
     const filters = page.getByTestId('team-workspace-filters');
@@ -610,14 +607,25 @@ test.describe('team list manager workspace', () => {
     await expect(navigation.getByTestId('team-employee-filter')).toHaveCount(0);
     await expect(filters.getByTestId('team-department-filter')).toBeVisible();
     await expect(filters.getByTestId('team-employee-filter')).toBeVisible();
-    await expect(filters.getByTestId('team-count-pending')).toContainText('2');
+    await expect(filters.getByTestId('team-count-pending')).toContainText('1');
     await expect(filters.getByRole('button', { name: '搜索', exact: true })).toHaveCount(0);
     await expect(filters.locator('.team-search-control > span')).toHaveCount(0);
     await expect(filters.locator('.team-filter-control > span')).toHaveCount(0);
-    await expect(page.getByTestId('manager-team-stage-goal-review')).toContainText('2');
+    await expect(page.getByTestId('manager-team-stage-goal-review')).toContainText('1');
     await page.getByTestId('team-task-row-task-1').click();
     await expect(page).toHaveURL(/taskId=task-1/);
-    await expect(page.getByTestId('team-member-rail')).toContainText('Ada Chen');
+    await expect(page.getByTestId('team-task-workspace')).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: '指标审核', exact: true })).toBeVisible();
+    await expect(page.getByTestId('team-task-workspace')).toContainText('Ada Chen');
+    await expect(page.getByTestId('goal-review-workspace')).toBeVisible();
+    await expect(page.getByTestId('manager-evaluation-workspace')).toHaveCount(0);
+    await expect(page.getByTestId('team-workspace-filters')).toHaveCount(0);
+    await expect(page.getByTestId('team-task-list')).toHaveCount(0);
+
+    await page.goBack();
+    await expect(page).toHaveURL(listUrl);
+    await expect(page.getByTestId('team-workspace-filters')).toBeVisible();
+    await expect(page.getByTestId('team-task-list')).toBeVisible();
   });
 
   test('team list renders employee business columns and explicit row actions on desktop', async ({ page }) => {

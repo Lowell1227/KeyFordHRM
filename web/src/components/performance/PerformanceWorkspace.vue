@@ -7,10 +7,14 @@ const props = withDefaults(
   defineProps<{
     title: string;
     activeSection: PerformanceSection;
+    showHeader?: boolean;
+    showNavigation?: boolean;
     showContext?: boolean;
     sections?: readonly PerformanceSection[];
   }>(),
   {
+    showHeader: true,
+    showNavigation: true,
     showContext: true,
     sections: () => ['tracking', 'map', 'tasks'],
   },
@@ -29,15 +33,22 @@ const visibleSections = computed(() =>
 
 <template>
   <section class="performance-workspace">
-    <header class="performance-workspace__header">
+    <header v-if="showHeader" class="performance-workspace__header">
       <h1 data-testid="performance-workspace-title">{{ title }}</h1>
       <div class="performance-workspace__toolbar">
         <slot name="toolbar" />
       </div>
     </header>
 
-    <div class="performance-workspace__body">
+    <div
+      class="performance-workspace__body"
+      :class="{
+        'without-navigation': !showNavigation,
+        'without-context': !showContext,
+      }"
+    >
       <nav
+        v-if="showNavigation"
         class="performance-workspace__nav"
         aria-label="绩效功能"
         data-testid="performance-secondary-nav"
@@ -169,6 +180,18 @@ const visibleSections = computed(() =>
   grid-template-columns: 148px minmax(0, 1fr);
 }
 
+.performance-workspace__body.without-context {
+  grid-template-columns: 148px minmax(0, 1fr);
+}
+
+.performance-workspace__body.without-navigation {
+  grid-template-columns: 256px minmax(0, 1fr);
+}
+
+.performance-workspace__body.without-navigation.without-context {
+  grid-template-columns: minmax(0, 1fr);
+}
+
 @media (max-width: 900px) {
   .performance-workspace__body {
     grid-template-columns: 132px 220px minmax(0, 1fr);
@@ -176,6 +199,18 @@ const visibleSections = computed(() =>
 
   .performance-workspace__body:not(:has(.performance-workspace__context)) {
     grid-template-columns: 132px minmax(0, 1fr);
+  }
+
+  .performance-workspace__body.without-context {
+    grid-template-columns: 132px minmax(0, 1fr);
+  }
+
+  .performance-workspace__body.without-navigation {
+    grid-template-columns: 220px minmax(0, 1fr);
+  }
+
+  .performance-workspace__body.without-navigation.without-context {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 

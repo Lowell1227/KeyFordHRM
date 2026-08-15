@@ -15,9 +15,7 @@ import TeamTaskList, {
   type TeamTaskListHandle,
   type TeamTaskVersion,
 } from './components/TeamTaskList.vue';
-import TeamMemberRail, {
-  type TeamMemberRailHandle,
-} from './components/TeamMemberRail.vue';
+import TeamTaskWorkspaceShell from './components/TeamTaskWorkspaceShell.vue';
 import GoalReviewWorkspace, {
   type GoalReviewActionPayload,
   type GoalReviewRejectPayload,
@@ -58,7 +56,6 @@ const teamError = ref('');
 const teamKeyword = ref(workspaceQuery.state.value.keyword ?? '');
 const teamPageSize = 20;
 const teamListRef = ref<TeamTaskListHandle>();
-const teamMemberRailRef = ref<TeamMemberRailHandle>();
 const goalReviewRef = ref<GoalReviewWorkspaceHandle>();
 const hydratedTeamTask = ref<TeamTaskListItem>();
 const teamDetailLoading = ref(false);
@@ -123,10 +120,18 @@ const isManagerCapable = computed(() => auth.isManager);
 const activeScope = computed<'mine' | 'team'>(() =>
   isManagerCapable.value && workspaceQuery.state.value.scope === 'team' ? 'team' : 'mine',
 );
+const isTeamTaskWorkspace = computed(
+  () => activeScope.value === 'team' && Boolean(workspaceQuery.state.value.taskId),
+);
 const selectedTeamTask = computed(() => {
   const taskId = workspaceQuery.state.value.taskId;
   return teamPage.value.items.find((item) => item.id === taskId)
     ?? (hydratedTeamTask.value?.id === taskId ? hydratedTeamTask.value : undefined);
+});
+const workspaceMembers = computed(() => {
+  const current = selectedTeamTask.value;
+  if (current && !teamPage.value.items.some((item) => item.id === current.id)) return [current];
+  return teamPage.value.items;
 });
 const teamMemberLoading = computed(() => Boolean(
   workspaceQuery.state.value.taskId
@@ -579,16 +584,6 @@ function goDetail(row: unknown) {
   });
 }
 
-function goSelectedTeamDetail() {
-  const item = selectedTeamTask.value;
-  if (!item || !auth.user?.id || item.managerId !== auth.user.id) return;
-  router.push({
-    name: 'TaskDetail',
-    params: { id: item.id },
-    query: { returnTo: taskListReturnTo() },
-  });
-}
-
 async function updateTeamContext(patch: Parameters<typeof workspaceQuery.update>[0]) {
   await teamListRef.value?.clearSelection();
   teamBatchResult.value = undefined;
@@ -663,20 +658,22 @@ function changeTeamPage(nextPage: number) {
   void updateTeamContext({ page: nextPage, taskId: undefined });
 }
 
-function isMobileViewport(): boolean {
-  return window.matchMedia('(max-width: 768px)').matches;
-}
-
 async function selectTeamTask(payload: { taskId: string; employeeId: string }) {
-  await workspaceQuery.update({ taskId: payload.taskId });
-  await nextTick();
-  if (isMobileViewport()) await teamMemberRailRef.value?.focusHeading();
+  await router.push({
+    path: route.path,
+    query: { ...route.query, taskId: payload.taskId },
+  });
 }
 
-async function closeTeamMember() {
+async function switchTeamTask(taskId: string) {
+  if (taskId === workspaceQuery.state.value.taskId) return;
+  await workspaceQuery.update({ taskId });
+}
+
+async function closeTeamTaskWorkspace() {
   await workspaceQuery.update({ taskId: undefined });
   await nextTick();
-  if (isMobileViewport()) await teamListRef.value?.focusList();
+  await teamListRef.value?.focusList();
 }
 
 function batchItemLabels(tasks: TeamTaskVersion[]): Map<string, string> {
@@ -1009,6 +1006,9 @@ watch(
     title="绩效待办"
     active-section="tasks"
     :sections="allowedPerformanceSections"
+    :show-header="!isTeamTaskWorkspace"
+    :show-navigation="!isTeamTaskWorkspace"
+    :show-context="!isTeamTaskWorkspace"
   >
     <template #toolbar>
       <el-tag v-if="activeScope === 'mine'" type="info" effect="plain">{{ selectedCycleName }}</el-tag>
@@ -1175,7 +1175,36 @@ watch(
       </PerformanceContextPanel>
     </template>
 
-    <div v-if="activeScope === 'mine'" class="task-list page-stack">
+    <TeamTaskWorkspaceShell
+      v-if="isTeamTaskWorkspace"
+      :stage="workspaceQuery.state.value.stage"
+      :members="workspaceMembers"
+      :task="selectedTeamTask"
+      :loading="teamMemberLoading"
+      :error="teamMemberError"
+      @back="closeTeamTaskWorkspace"
+      @retry="loadTeam"
+      @member-selected="switchTeamTask"
+    >
+      <GoalReviewWorkspace
+        v-if="workspaceQuery.state.value.stage === 'goal-review' && selectedTeamTask"
+        ref="goalReviewRef"
+        :task-id="workspaceQuery.state.value.taskId || ''"
+        :departments="teamPage.facets.departments"
+        :users="teamPage.facets.employees"
+        :busy="teamBatchBusy"
+        @save="saveSingleGoalReview"
+        @approve="approveSingleGoalReview"
+        @reject="rejectSingleGoalReview"
+      />
+      <ManagerEvaluationWorkspace
+        v-else-if="workspaceQuery.state.value.stage === 'manager-eval' && selectedTeamTask"
+        :task-id="workspaceQuery.state.value.taskId || ''"
+        @task-updated="handleManagerEvaluationTaskUpdated"
+      />
+    </TeamTaskWorkspaceShell>
+
+    <div v-else-if="activeScope === 'mine'" class="task-list page-stack">
       <section data-testid="task-surface" class="performance-surface">
         <header class="task-surface__header">
           <div class="task-surface__title">
@@ -1400,16 +1429,7 @@ watch(
         </div>
       </section>
 
-      <div
-        class="team-layout"
-        :class="{
-          'has-detail': workspaceQuery.state.value.taskId,
-          'is-goal-review': workspaceQuery.state.value.taskId
-            && workspaceQuery.state.value.stage === 'goal-review',
-          'is-manager-eval': workspaceQuery.state.value.taskId
-            && workspaceQuery.state.value.stage === 'manager-eval',
-        }"
-      >
+      <div class="team-layout">
         <TeamTaskList
           ref="teamListRef"
           :items="teamPage.items"
@@ -1429,42 +1449,6 @@ watch(
           @page-change="changeTeamPage"
         />
 
-        <TeamMemberRail
-          v-if="workspaceQuery.state.value.taskId"
-          ref="teamMemberRailRef"
-          :task="selectedTeamTask"
-          :task-id="workspaceQuery.state.value.taskId"
-          :stage="workspaceQuery.state.value.stage"
-          :loading="teamMemberLoading"
-          :error="teamMemberError"
-          @close="closeTeamMember"
-          @view-detail="goSelectedTeamDetail"
-        >
-          <template
-            v-if="workspaceQuery.state.value.stage === 'goal-review' && selectedTeamTask"
-            #workspace
-          >
-            <GoalReviewWorkspace
-              ref="goalReviewRef"
-              :task-id="workspaceQuery.state.value.taskId"
-              :departments="teamPage.facets.departments"
-              :users="teamPage.facets.employees"
-              :busy="teamBatchBusy"
-              @save="saveSingleGoalReview"
-              @approve="approveSingleGoalReview"
-              @reject="rejectSingleGoalReview"
-            />
-          </template>
-          <template
-            v-else-if="workspaceQuery.state.value.stage === 'manager-eval' && selectedTeamTask"
-            #workspace
-          >
-            <ManagerEvaluationWorkspace
-              :task-id="workspaceQuery.state.value.taskId"
-              @task-updated="handleManagerEvaluationTaskUpdated"
-            />
-          </template>
-        </TeamMemberRail>
       </div>
     </div>
   </PerformanceWorkspace>
@@ -1864,31 +1848,6 @@ watch(
   align-items: stretch;
 }
 
-.team-layout.has-detail {
-  grid-template-columns: minmax(620px, 1fr) minmax(288px, 320px);
-}
-
-.team-layout.has-detail.is-goal-review,
-.team-layout.has-detail.is-manager-eval {
-  grid-template-columns: minmax(0, 1fr);
-}
-
-.team-layout.has-detail.is-goal-review :deep(.team-member-rail),
-.team-layout.has-detail.is-manager-eval :deep(.team-member-rail) {
-  width: 100%;
-}
-
-@container (max-width: 960px) {
-  .team-layout.has-detail {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .team-layout.has-detail :deep(.team-member-rail) {
-    width: 100%;
-    min-height: 390px;
-  }
-}
-
 @container (max-width: 760px) {
   .team-toolbar {
     grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) 32px;
@@ -1975,12 +1934,5 @@ watch(
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .team-layout.has-detail {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .team-layout.has-detail :deep(.team-task-list) {
-    display: none;
-  }
 }
 </style>
