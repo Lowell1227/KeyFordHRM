@@ -28,7 +28,9 @@ test.describe('09-performance-workspace manager shell', () => {
     const allowedNames = new Set(payload.data.facets.employees.map((employee) => employee.name));
 
     await page.getByTestId('team-employee-filter').click();
-    const options = await page.locator('.el-select-dropdown__item:visible').allTextContents();
+    const visibleOptions = page.locator('.el-select-dropdown__item:visible');
+    await expect(visibleOptions.first()).toBeVisible();
+    const options = await visibleOptions.allTextContents();
     expect(options.length).toBeGreaterThan(0);
     const renderedEmployeeNames = options
       .map((option) => option.trim())

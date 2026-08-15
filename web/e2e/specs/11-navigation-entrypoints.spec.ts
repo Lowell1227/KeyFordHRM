@@ -339,12 +339,15 @@ test.describe("11-navigation-entrypoints manager dashboard task entry points", (
     await expect(dashboard.managerGoalReviewCount()).toHaveText("3");
     await expect(dashboard.managerEvaluationCount()).toHaveText("2");
     await dashboard.managerGoalReviewOpen().click();
+    await expect(page).toHaveURL((url) =>
+      url.pathname === "/tasks" &&
+      url.searchParams.get("scope") === "team" &&
+      url.searchParams.get("stage") === "goal-review",
+    );
     const destination = new URL(page.url());
     expect(destination.pathname).toBe("/tasks");
-    expect([...destination.searchParams.entries()]).toEqual([
-      ["scope", "team"],
-      ["stage", "goal-review"],
-    ]);
+    expect(destination.searchParams.get("scope")).toBe("team");
+    expect(destination.searchParams.get("stage")).toBe("goal-review");
   });
 
   test("each manager task request settles independently when another request is slow or fails", async ({
@@ -954,13 +957,17 @@ test.describe("11-navigation-entrypoints notification task links", () => {
     await row.click();
 
     expect(marked).toBe(1);
+    await expect(page).toHaveURL((url) =>
+      url.pathname === "/tasks" &&
+      url.searchParams.get("scope") === "team" &&
+      url.searchParams.get("stage") === "goal-review" &&
+      url.searchParams.get("taskId") === "task-goal",
+    );
     const destination = new URL(page.url());
     expect(destination.pathname).toBe("/tasks");
-    expect([...destination.searchParams.entries()]).toEqual([
-      ["scope", "team"],
-      ["stage", "goal-review"],
-      ["taskId", "task-goal"],
-    ]);
+    expect(destination.searchParams.get("scope")).toBe("team");
+    expect(destination.searchParams.get("stage")).toBe("goal-review");
+    expect(destination.searchParams.get("taskId")).toBe("task-goal");
     const notificationState = await page.evaluate(async () => {
       const storeModulePath = "/src/stores/notification.store.ts";
       const { useNotificationStore } = await import(storeModulePath);
@@ -1330,6 +1337,12 @@ test.describe("11-navigation-entrypoints notification task links", () => {
     await page.route("**/*TaskDetailView*", (route) => route.abort());
 
     await page.goto("/tasks");
+    await expect(page).toHaveURL((url) =>
+      url.pathname === "/tasks" &&
+      url.searchParams.get("scope") === "team" &&
+      url.searchParams.get("stage") === "goal-review" &&
+      url.searchParams.get("stageState") === "pending",
+    );
     const currentWorkspaceUrl = page.url();
     const trigger = page.getByTestId("app-notifications");
     await trigger.click();
