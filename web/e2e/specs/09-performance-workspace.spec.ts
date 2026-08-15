@@ -248,6 +248,40 @@ async function installDelayedTrackingRoutes(page: Page) {
   return { selfStarted, managerFulfilled, releaseSelf };
 }
 
+async function installDelayedObjectiveResolutionRoutes(page: Page) {
+  await authenticateMockSession(page);
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse(trackingUser)),
+  }));
+  await page.route('**/api/v1/cycles?**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 2, page: 1, pageSize: 100, items: trackingCycles })),
+  }));
+  let announceObjectiveLookup!: () => void;
+  const objectiveLookupStarted = new Promise<void>((resolve) => { announceObjectiveLookup = resolve; });
+  const normalTrackingOwners: string[] = [];
+  await page.route('**/api/v1/objectives/tracking?**', async (route) => {
+    const url = new URL(route.request().url());
+    if (url.searchParams.get('objectiveId') === 'objective-1') {
+      announceObjectiveLookup();
+      await new Promise((resolve) => setTimeout(resolve, 1000));
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(trackingRows.self)),
+      });
+      return;
+    }
+    const ownerId = url.searchParams.get('ownerId') ?? '';
+    normalTrackingOwners.push(ownerId);
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(ownerId === 'manager-1' ? trackingRows.manager : trackingRows.self)),
+    });
+  });
+  return { normalTrackingOwners, objectiveLookupStarted };
+}
+
 test.describe('09-performance-workspace read-only leadership', () => {
   test.use({ storageState: 'e2e/auth-state/approver.json' });
 
@@ -418,6 +452,30 @@ test.describe('09-performance-workspace tracking behavior', () => {
     requests.releaseSelf();
     await expect(page.getByTestId('goal-tracking-surface')).toContainText('上级目标');
     await expect(page.getByTestId('goal-tracking-surface')).not.toContainText('本人旧目标');
+  });
+
+  test('ignores a slow objective deep link after the user changes person', async ({ page }) => {
+    const requests = await installDelayedObjectiveResolutionRoutes(page);
+    const objectiveResponse = page.waitForResponse((response) =>
+      new URL(response.url()).searchParams.get('objectiveId') === 'objective-1');
+    await page.goto('/action-items?objectiveId=objective-1');
+    await requests.objectiveLookupStarted;
+    const peoplePanel = page.getByTestId('goal-tracking-people');
+    await peoplePanel.getByRole('button', { name: /林治/ }).click();
+    await page.getByTestId('goal-tracking-cycle').selectOption('cycle-2');
+    await objectiveResponse;
+    await page.evaluate(() => new Promise<void>((resolve) => {
+      requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+    }));
+
+    await expect(peoplePanel.getByRole('button', { name: /林治/ }))
+      .toHaveAttribute('aria-pressed', 'true');
+    await expect(page).toHaveURL(/employeeId=manager-1.*cycleId=cycle-2/);
+    await expect(page).not.toHaveURL(/objectiveId=/);
+    await expect(page.getByTestId('goal-tracking-surface')).toContainText('上级目标');
+    await expect(page.locator('.tracking-indicators__notice')).toHaveCount(0);
+    await expect(page.locator('.tracking-indicators__row.is-highlighted')).toHaveCount(0);
+    expect(requests.normalTrackingOwners).toEqual(['manager-1']);
   });
 
   test('employee sees the reference goal-tracking workspace for self and manager', async ({ page }) => {

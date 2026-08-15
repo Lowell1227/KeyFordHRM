@@ -1,4 +1,4 @@
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { cyclesApi } from '@/api/cycles.api';
 import { objectivesApi } from '@/api/objectives.api';
@@ -23,6 +23,7 @@ export function useGoalTracking() {
   const notice = ref('');
   const highlightedObjectiveId = ref('');
   let requestSerial = 0;
+  let navigationGeneration = 0;
 
   const peopleGroups = computed(() => auth.user ? buildTrackingPeople(auth.user) : []);
   const people = computed(() => peopleGroups.value.flatMap((group) => group.people));
@@ -40,11 +41,15 @@ export function useGoalTracking() {
   }
 
   async function resolveObjectiveDeepLink(objectiveId: string) {
+    const generation = ++navigationGeneration;
+    const isCurrent = () => generation === navigationGeneration;
     let objective: GoalTrackingItem | undefined;
     try {
       const deepLink = await objectivesApi.getTracking({ objectiveId });
+      if (!isCurrent()) return true;
       objective = deepLink.items[0];
     } catch {
+      if (!isCurrent()) return true;
       notice.value = '无法定位该目标所属人员和考核周期';
       return false;
     }
@@ -62,7 +67,9 @@ export function useGoalTracking() {
     selectedCycleId.value = objective.cycleId;
     highlightedObjectiveId.value = objective.id;
     await writeQuery('replace');
+    if (!isCurrent()) return true;
     await loadTracking();
+    if (!isCurrent()) return true;
     return true;
   }
 
@@ -85,6 +92,7 @@ export function useGoalTracking() {
   }
 
   async function selectPerson(id: string) {
+    navigationGeneration += 1;
     notice.value = '';
     highlightedObjectiveId.value = '';
     selectedPersonId.value = id;
@@ -93,6 +101,7 @@ export function useGoalTracking() {
   }
 
   async function selectCycle(id: string) {
+    navigationGeneration += 1;
     notice.value = '';
     highlightedObjectiveId.value = '';
     selectedCycleId.value = id;
@@ -107,6 +116,7 @@ export function useGoalTracking() {
       if (!people.value.some((person) => person.id === employeeId)) return;
       if (!cycles.value.some((cycle) => cycle.id === cycleId)) return;
       if (employeeId === selectedPersonId.value && cycleId === selectedCycleId.value) return;
+      navigationGeneration += 1;
       selectedPersonId.value = employeeId;
       selectedCycleId.value = cycleId;
       await loadTracking();
@@ -132,6 +142,10 @@ export function useGoalTracking() {
       : defaultCycle?.id ?? '';
     await writeQuery('replace');
     await loadTracking();
+  });
+
+  onBeforeUnmount(() => {
+    navigationGeneration += 1;
   });
 
   return {
