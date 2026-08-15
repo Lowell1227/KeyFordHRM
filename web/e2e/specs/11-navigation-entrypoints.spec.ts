@@ -169,7 +169,7 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
 test.describe("11-navigation-entrypoints navigation active state", () => {
   test.use({ storageState: "e2e/auth-state/manager.json" });
 
-  test("bare manager performance entry opens team pending work without overriding explicit personal links", async ({
+  test("manager performance entry exposes stacked personal and team stages without a scope filter", async ({
     page,
   }) => {
     await page.goto("/tasks");
@@ -177,18 +177,28 @@ test.describe("11-navigation-entrypoints navigation active state", () => {
     await expect(page).toHaveURL(
       /scope=team.*stage=goal-review.*stageState=pending/,
     );
-    await expect(page.getByTestId("task-scope-team")).toHaveAttribute(
-      "aria-pressed",
-      "true",
-    );
-    await expect(page.getByTestId("team-count-pending")).toHaveAttribute(
+    const navigation = page.getByTestId("manager-task-navigation");
+    const groups = navigation.locator(".manager-task-group");
+    await expect(groups).toHaveCount(2);
+    await expect(groups.nth(0)).toContainText("我的绩效待办");
+    await expect(groups.nth(1)).toContainText("我团队的绩效待办");
+    await expect(page.getByTestId("task-scope-mine")).toHaveCount(0);
+    await expect(page.getByTestId("task-scope-team")).toHaveCount(0);
+
+    await page.getByTestId("task-stage-self-eval").click();
+    await expect(page).toHaveURL(/scope=mine/);
+    await expect(page.getByTestId("task-stage-self-eval")).toHaveAttribute(
       "aria-pressed",
       "true",
     );
 
-    await page.goto("/tasks?scope=mine");
-    await expect(page).toHaveURL(/\/tasks\?scope=mine$/);
-    await expect(page.getByTestId("task-scope-mine")).toHaveAttribute(
+    await page.getByTestId("manager-team-stage-manager-eval").click();
+    await expect(page).toHaveURL(
+      /scope=team.*stage=manager-eval.*stageState=pending/,
+    );
+    await expect(
+      page.getByTestId("manager-team-stage-manager-eval"),
+    ).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -650,6 +660,62 @@ test.describe("11-navigation-entrypoints dashboard task layout", () => {
       path: "../.superpowers/sdd/2026-08-08-navigation-dashboard-notifications/task-3-mobile.png",
       fullPage: true,
     });
+  });
+
+  test("manager task navigation stays stacked and filters fit at 390px", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.route("**/api/v1/tasks/mine**", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(apiResponse(taskPage([]))),
+      }),
+    );
+    await page.route("**/api/v1/tasks/team**", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(apiResponse(teamPage(2))),
+      }),
+    );
+    await page.route("**/api/v1/cycles**", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(
+          apiResponse({ total: 0, page: 1, pageSize: 50, items: [] }),
+        ),
+      }),
+    );
+
+    await page.goto("/tasks");
+    const groups = page
+      .getByTestId("manager-task-navigation")
+      .locator(".manager-task-group");
+    await expect(groups).toHaveCount(2);
+    await expect(page.getByTestId("task-scope-mine")).toHaveCount(0);
+    await expect(page.getByTestId("task-scope-team")).toHaveCount(0);
+
+    const layout = await page.evaluate(() => {
+      const groupRects = Array.from(
+        document.querySelectorAll<HTMLElement>(".manager-task-group"),
+      ).map((group) => group.getBoundingClientRect());
+      const department = document
+        .querySelector<HTMLElement>("[data-testid='team-department-filter']")
+        ?.getBoundingClientRect();
+      const employee = document
+        .querySelector<HTMLElement>("[data-testid='team-employee-filter']")
+        ?.getBoundingClientRect();
+      return {
+        overflow:
+          document.documentElement.scrollWidth -
+          document.documentElement.clientWidth,
+        groupTops: groupRects.map((rect) => rect.top),
+        filterWidths: [department?.width ?? 0, employee?.width ?? 0],
+      };
+    });
+    expect(layout.groupTops[1]).toBeGreaterThan(layout.groupTops[0] ?? 0);
+    expect(layout.filterWidths.every((width) => width >= 320)).toBe(true);
+    expect(layout.overflow).toBeLessThanOrEqual(1);
   });
 });
 

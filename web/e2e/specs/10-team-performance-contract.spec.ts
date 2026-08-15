@@ -604,10 +604,14 @@ test.describe('team list manager workspace', () => {
 
     await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1');
 
-    await expect(page.getByTestId('task-scope-team')).toHaveAttribute('aria-pressed', 'true');
-    await expect(page.getByTestId('team-count-pending')).toContainText('2');
-    await expect(page.getByTestId('team-department-filter')).toBeVisible();
-    await expect(page.getByTestId('team-employee-filter')).toBeVisible();
+    const navigation = page.getByTestId('manager-task-navigation');
+    const filters = page.getByTestId('team-workspace-filters');
+    await expect(navigation.getByTestId('team-department-filter')).toHaveCount(0);
+    await expect(navigation.getByTestId('team-employee-filter')).toHaveCount(0);
+    await expect(filters.getByTestId('team-department-filter')).toBeVisible();
+    await expect(filters.getByTestId('team-employee-filter')).toBeVisible();
+    await expect(filters.getByTestId('team-count-pending')).toContainText('2');
+    await expect(page.getByTestId('manager-team-stage-goal-review')).toContainText('2');
     await page.getByTestId('team-task-row-task-1').click();
     await expect(page).toHaveURL(/taskId=task-1/);
     await expect(page.getByTestId('team-member-rail')).toContainText('Ada Chen');
@@ -643,7 +647,7 @@ test.describe('team list manager workspace', () => {
       .poll(() => teamRequests[teamRequests.length - 1]?.searchParams.get('keyword'))
       .toBe('Ada');
 
-    await page.locator('.team-stage-tabs').getByRole('button', { name: '主管评分' }).click();
+    await page.getByTestId('manager-team-stage-manager-eval').click();
     await expect(page).toHaveURL(/stage=manager-eval/);
     await expect(page.getByTestId('team-batch-approve')).toHaveCount(0);
     await expect
@@ -678,10 +682,10 @@ test.describe('team list manager workspace', () => {
     };
 
     await selectAda();
-    await page.getByRole('button', { name: '主管评分', exact: true }).click();
+    await page.getByTestId('manager-team-stage-manager-eval').click();
     await expect(page).toHaveURL(/stage=manager-eval/);
     await expect(page.getByTestId('team-batch-approve')).toHaveCount(0);
-    await page.getByRole('button', { name: '指标审核', exact: true }).click();
+    await page.getByTestId('manager-team-stage-goal-review').click();
     await page.getByTestId('team-count-pending').click();
     await expect(page.getByTestId('team-batch-approve')).toBeDisabled();
 
