@@ -66,31 +66,11 @@ test.describe('07-peripheral-actions HR dialogs', () => {
   });
 });
 
-test.describe('07-peripheral-actions objectives and action items', () => {
+test.describe('07-peripheral-actions objectives and goal tracking', () => {
   test.use({ storageState: 'e2e/auth-state/hr.json' });
 
-  test('HR can open objective and action item creation dialogs', async ({ page }) => {
-    await page.goto('/objectives');
-    await page.getByTestId('objective-create').click();
-    await expect(page.getByTestId('objective-dialog')).toBeVisible();
-    await page.keyboard.press('Escape');
-
-    const hrToken = await login(ACCEPTANCE_ACCOUNTS.hr);
-    const objective = await api('POST', '/objectives', hrToken, {
-      title: `E2E action item objective ${Date.now()}`,
-      level: 'company',
-      priority: 1,
-    });
-
-    await page.goto(`/action-items?objectiveId=${objective.id}`);
-    await expect(page.getByTestId('action-item-create')).toBeEnabled();
-    await page.getByTestId('action-item-create').click();
-    await expect(page.getByTestId('action-item-dialog')).toBeVisible();
-  });
-
-  test('HR can create objective and action item from UI', async ({ page }) => {
+  test('HR can create an objective from UI', async ({ page }) => {
     const objectiveTitle = `E2E UI objective ${Date.now()}`;
-    const itemTitle = `E2E UI action ${Date.now()}`;
 
     await page.goto('/objectives');
     await page.getByTestId('objective-create').click();
@@ -103,14 +83,26 @@ test.describe('07-peripheral-actions objectives and action items', () => {
     const objectives = await api('GET', '/objectives?flat=true&page=1&pageSize=100', hrToken);
     const objective = objectives.items.find((item: { title: string }) => item.title === objectiveTitle);
     expect(objective).toBeTruthy();
+  });
+
+  test('HR can create an owned objective and open its goal-tracking deep link', async ({ page }) => {
+    const token = await login(ACCEPTANCE_ACCOUNTS.hr);
+    const me = await api('GET', '/auth/me', token);
+    const cycles = await api('GET', '/cycles?page=1&pageSize=1', token);
+    const objective = await api('POST', '/objectives', token, {
+      title: `E2E goal tracking objective ${Date.now()}`,
+      level: 'individual',
+      ownerId: me.id,
+      deptId: me.deptId,
+      cycleId: cycles.items[0].id,
+      priority: 1,
+    });
 
     await page.goto(`/action-items?objectiveId=${objective.id}`);
-    await expect(page.getByTestId('action-item-create')).toBeEnabled();
-    await page.getByTestId('action-item-create').click();
-    await page.getByTestId('action-item-title').fill(itemTitle);
-    await page.getByTestId('action-item-save').click();
-    await expect(page.getByTestId('action-item-dialog')).not.toBeVisible();
-    await expect(page.getByText(itemTitle)).toBeVisible();
+
+    await expect(page.getByTestId('goal-tracking-surface')).toBeVisible();
+    await expect(page.getByTestId(`goal-tracking-row-${objective.id}`))
+      .toHaveClass(/is-highlighted/);
   });
 });
 

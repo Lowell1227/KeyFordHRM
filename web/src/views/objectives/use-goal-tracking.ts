@@ -1,9 +1,13 @@
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { cyclesApi } from '@/api/cycles.api';
 import { objectivesApi } from '@/api/objectives.api';
 import { useAuthStore } from '@/stores/auth.store';
-import type { AssessmentCycle, GoalTrackingResult } from '@/types/api.types';
+import type {
+  AssessmentCycle,
+  GoalTrackingItem,
+  GoalTrackingResult,
+} from '@/types/api.types';
 import { buildTrackingPeople, selectDefaultTrackingCycle } from './goal-tracking';
 
 export function useGoalTracking() {
@@ -16,6 +20,8 @@ export function useGoalTracking() {
   const result = ref<GoalTrackingResult>({ totalWeight: 0, items: [] });
   const loading = ref(false);
   const error = ref('');
+  const notice = ref('');
+  const highlightedObjectiveId = ref('');
   let requestSerial = 0;
 
   const peopleGroups = computed(() => auth.user ? buildTrackingPeople(auth.user) : []);
@@ -23,13 +29,41 @@ export function useGoalTracking() {
   const selectedPerson = computed(() =>
     people.value.find((person) => person.id === selectedPersonId.value) ?? people.value[0] ?? null);
 
-  async function replaceQuery() {
-    await router.replace({
+  async function writeQuery(mode: 'push' | 'replace') {
+    const navigate = mode === 'push' ? router.push : router.replace;
+    await navigate({
       query: {
         employeeId: selectedPersonId.value || undefined,
         cycleId: selectedCycleId.value || undefined,
       },
     });
+  }
+
+  async function resolveObjectiveDeepLink(objectiveId: string) {
+    let objective: GoalTrackingItem | undefined;
+    try {
+      const deepLink = await objectivesApi.getTracking({ objectiveId });
+      objective = deepLink.items[0];
+    } catch {
+      notice.value = '无法定位该目标所属人员和考核周期';
+      return false;
+    }
+    if (
+      !objective?.ownerId
+      || !objective.cycleId
+      || !people.value.some((person) => person.id === objective.ownerId)
+      || !cycles.value.some((cycle) => cycle.id === objective.cycleId)
+    ) {
+      notice.value = '无法定位该目标所属人员和考核周期';
+      return false;
+    }
+    notice.value = '';
+    selectedPersonId.value = objective.ownerId;
+    selectedCycleId.value = objective.cycleId;
+    highlightedObjectiveId.value = objective.id;
+    await writeQuery('replace');
+    await loadTracking();
+    return true;
   }
 
   async function loadTracking() {
@@ -51,22 +85,43 @@ export function useGoalTracking() {
   }
 
   async function selectPerson(id: string) {
+    notice.value = '';
+    highlightedObjectiveId.value = '';
     selectedPersonId.value = id;
-    await replaceQuery();
+    await writeQuery('push');
     await loadTracking();
   }
 
   async function selectCycle(id: string) {
+    notice.value = '';
+    highlightedObjectiveId.value = '';
     selectedCycleId.value = id;
-    await replaceQuery();
+    await writeQuery('push');
     await loadTracking();
   }
+
+  watch(
+    () => [route.query.employeeId, route.query.cycleId] as const,
+    async ([employeeId, cycleId]) => {
+      if (typeof employeeId !== 'string' || typeof cycleId !== 'string') return;
+      if (!people.value.some((person) => person.id === employeeId)) return;
+      if (!cycles.value.some((cycle) => cycle.id === cycleId)) return;
+      if (employeeId === selectedPersonId.value && cycleId === selectedCycleId.value) return;
+      selectedPersonId.value = employeeId;
+      selectedCycleId.value = cycleId;
+      await loadTracking();
+    },
+  );
 
   onMounted(async () => {
     await auth.ensureLoaded();
     const page = await cyclesApi.findAll({ page: 1, pageSize: 100 });
     cycles.value = page.items;
     const defaultCycle = selectDefaultTrackingCycle(cycles.value);
+    const objectiveId = typeof route.query.objectiveId === 'string'
+      ? route.query.objectiveId
+      : '';
+    if (objectiveId && await resolveObjectiveDeepLink(objectiveId)) return;
     selectedPersonId.value = typeof route.query.employeeId === 'string'
       && people.value.some((person) => person.id === route.query.employeeId)
       ? route.query.employeeId
@@ -75,12 +130,13 @@ export function useGoalTracking() {
       && cycles.value.some((cycle) => cycle.id === route.query.cycleId)
       ? route.query.cycleId
       : defaultCycle?.id ?? '';
-    await replaceQuery();
+    await writeQuery('replace');
     await loadTracking();
   });
 
   return {
     cycles, peopleGroups, selectedPerson, selectedPersonId, selectedCycleId,
-    result, loading, error, selectPerson, selectCycle, retry: loadTracking,
+    result, loading, error, notice, highlightedObjectiveId,
+    selectPerson, selectCycle, retry: loadTracking,
   };
 }

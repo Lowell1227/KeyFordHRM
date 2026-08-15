@@ -30,6 +30,8 @@ const sections = computed(() => auth.user?.sysRole === 'employee'
         :result="workspace.result.value"
         :loading="workspace.loading.value"
         :error="workspace.error.value"
+        :notice="workspace.notice.value"
+        :highlighted-objective-id="workspace.highlightedObjectiveId.value"
         @cycle-change="workspace.selectCycle"
         @retry="workspace.retry"
       />

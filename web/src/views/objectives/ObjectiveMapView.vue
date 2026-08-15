@@ -154,6 +154,18 @@ function formatProgress(progress: number): string {
   return `${progress ?? 0}%`;
 }
 
+function canOpenTracking(row: Objective) {
+  return Boolean(
+    row.ownerId
+    && row.cycleId
+    && [auth.user?.id, auth.user?.directManagerId].includes(row.ownerId),
+  );
+}
+
+function openTracking(row: Objective) {
+  router.push({ path: '/action-items', query: { objectiveId: row.id } });
+}
+
 // ---------------------------------------------------------------------------
 // 表单弹窗
 // ---------------------------------------------------------------------------
@@ -431,13 +443,14 @@ async function removeRow(row: Objective) {
               进度
             </el-button>
             <el-button
+              v-if="canOpenTracking(scope.row as Objective)"
               link
               type="success"
               :icon="List"
               size="small"
-              @click="router.push({ path: '/action-items', query: { objectiveId: (scope.row as Objective).id } })"
+              @click="openTracking(scope.row as Objective)"
             >
-              行动计划
+              目标跟进
             </el-button>
             <el-button v-if="canManage" link type="danger" :icon="Delete" size="small" @click="removeRow(scope.row as Objective)">
               删除

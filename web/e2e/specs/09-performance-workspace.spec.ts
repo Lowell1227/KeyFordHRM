@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 import {
   TASK_STATUS_STAGE,
   getTaskStageState,
@@ -66,6 +66,51 @@ test.describe('09-performance-workspace manager shell', () => {
     await expect(page.getByTestId('objective-create')).toBeVisible();
   });
 
+  test('objective map only offers a goal-tracking deep link for a resolvable owner and cycle', async ({ page }) => {
+    await authenticateMockSession(page);
+    await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ ...trackingUser, sysRole: 'manager' })),
+    }));
+    await page.route('**/api/v1/cycles?**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 2, page: 1, pageSize: 100, items: trackingCycles })),
+    }));
+    await page.route('**/api/v1/departments**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse([])),
+    }));
+    await page.route('**/api/v1/indicators?**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+    }));
+    await page.route('**/api/v1/users/employee-1/subordinates', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse([])),
+    }));
+    await page.route(/\/api\/v1\/objectives(?:\?.*)?$/, (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({
+        total: 2,
+        page: 1,
+        pageSize: 100,
+        items: [
+          { id: 'objective-2', title: '可跟进上级目标', description: null, level: 'individual', deptId: 'dept-1', deptName: '产品部', ownerId: 'manager-1', ownerName: '林治', parentId: null, cycleId: 'cycle-2', cycleName: '2026 第二季度', weight: 60, priority: 1, progress: 40, status: 'active', relatedIndicatorId: null, relatedIndicatorName: null, createdBy: 'manager-1', creatorName: '林治', createdAt: '2026-04-01T00:00:00.000Z', updatedAt: '2026-04-01T00:00:00.000Z' },
+          { id: 'objective-outsider', title: '不可跟进外部目标', description: null, level: 'individual', deptId: 'dept-2', deptName: '其他部门', ownerId: 'outsider', ownerName: '外部人员', parentId: null, cycleId: 'cycle-2', cycleName: '2026 第二季度', weight: 40, priority: 1, progress: 10, status: 'active', relatedIndicatorId: null, relatedIndicatorName: null, createdBy: 'outsider', creatorName: '外部人员', createdAt: '2026-04-01T00:00:00.000Z', updatedAt: '2026-04-01T00:00:00.000Z' },
+        ],
+      })),
+    }));
+
+    await page.goto('/objectives');
+
+    const permittedRow = page.locator('.el-table__row').filter({ hasText: '可跟进上级目标' });
+    const forbiddenRow = page.locator('.el-table__row').filter({ hasText: '不可跟进外部目标' });
+    await expect(permittedRow.getByRole('button', { name: '目标跟进' })).toBeVisible();
+    await expect(forbiddenRow.getByRole('button', { name: '目标跟进' })).toHaveCount(0);
+    await permittedRow.getByRole('button', { name: '目标跟进' }).click();
+    await expect(page).toHaveURL(/\/action-items\?objectiveId=objective-2/);
+  });
+
   test('target tracking exposes people context and indicator workspace', async ({ page }) => {
     await page.goto('/action-items');
 
@@ -101,6 +146,107 @@ test.describe('09-performance-workspace manager shell', () => {
     });
   }
 });
+
+const trackingUser = {
+  id: 'employee-1', name: '刘伟', sysRole: 'employee', deptId: 'dept-1',
+  isAssessorOnly: false, canViewAll: false,
+  directManagerId: 'manager-1', directManagerName: '林治',
+};
+const trackingCycles = [
+  { id: 'cycle-1', name: '2026 第一季度', type: 'quarterly', startDate: '2026-01-01', endDate: '2026-03-31', status: 'self_eval', publishVisibleFields: {}, gradeAMaxRatio: 0.2, gradeBMaxRatio: 0.4, gradeCMaxRatio: 0.3, gradeDMaxRatio: 0.1 },
+  { id: 'cycle-2', name: '2026 第二季度', type: 'quarterly', startDate: '2026-04-01', endDate: '2026-06-30', status: 'manager_score', publishVisibleFields: {}, gradeAMaxRatio: 0.2, gradeBMaxRatio: 0.4, gradeCMaxRatio: 0.3, gradeDMaxRatio: 0.1 },
+];
+const trackingRows = {
+  self: { totalWeight: 50, items: [{ id: 'objective-1', title: '本人目标', ownerId: 'employee-1', ownerName: '刘伟', cycleId: 'cycle-2', cycleName: '2026 第二季度', priority: 1, status: 'active', progress: 20, weight: 50, latestProgress: null }] },
+  manager: { totalWeight: 60, items: [{ id: 'objective-2', title: '上级目标', ownerId: 'manager-1', ownerName: '林治', cycleId: 'cycle-2', cycleName: '2026 第二季度', priority: 1, status: 'active', progress: 40, weight: 60, latestProgress: null }] },
+};
+
+async function authenticateMockSession(page: Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'mock-goal-tracking-token');
+    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+  });
+  await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse(0)),
+  }));
+}
+
+async function mockGoalTrackingShell(
+  page: Page,
+  overrides: {
+    cycles?: typeof trackingCycles;
+    tracking?: typeof trackingRows.self;
+    deepLinkObjectiveId?: string;
+    deepLinkResult?: typeof trackingRows.self;
+  } = {},
+) {
+  await authenticateMockSession(page);
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse(trackingUser)),
+  }));
+  await page.route('**/api/v1/cycles?**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      total: (overrides.cycles ?? trackingCycles).length,
+      page: 1,
+      pageSize: 100,
+      items: overrides.cycles ?? trackingCycles,
+    })),
+  }));
+  await page.route('**/api/v1/objectives/tracking?**', (route) => {
+    const url = new URL(route.request().url());
+    const objectiveId = url.searchParams.get('objectiveId');
+    const ownerId = url.searchParams.get('ownerId');
+    const data = objectiveId === overrides.deepLinkObjectiveId
+      ? overrides.deepLinkResult ?? trackingRows.manager
+      : overrides.tracking ?? (ownerId === 'manager-1' ? trackingRows.manager : trackingRows.self);
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(data)),
+    });
+  });
+}
+
+async function installDelayedTrackingRoutes(page: Page) {
+  await authenticateMockSession(page);
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse(trackingUser)),
+  }));
+  await page.route('**/api/v1/cycles?**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 2, page: 1, pageSize: 100, items: trackingCycles })),
+  }));
+  let announceSelf!: () => void;
+  let releaseSelf!: () => void;
+  let announceManager!: () => void;
+  const selfStarted = new Promise<void>((resolve) => { announceSelf = resolve; });
+  const selfGate = new Promise<void>((resolve) => { releaseSelf = resolve; });
+  const managerFulfilled = new Promise<void>((resolve) => { announceManager = resolve; });
+  await page.route('**/api/v1/objectives/tracking?**', async (route) => {
+    const ownerId = new URL(route.request().url()).searchParams.get('ownerId');
+    if (ownerId === 'employee-1') {
+      announceSelf();
+      await selfGate;
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          totalWeight: 50,
+          items: [{ ...trackingRows.self.items[0], title: '本人旧目标' }],
+        })),
+      });
+      return;
+    }
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(trackingRows.manager)),
+    });
+    announceManager();
+  });
+  return { selfStarted, managerFulfilled, releaseSelf };
+}
 
 test.describe('09-performance-workspace read-only leadership', () => {
   test.use({ storageState: 'e2e/auth-state/approver.json' });
@@ -209,6 +355,70 @@ test.describe('09-performance-workspace stage semantics', () => {
 
 test.describe('09-performance-workspace tracking behavior', () => {
   test.use({ storageState: 'e2e/auth-state/employee.json' });
+
+  test('restores person and cycle from URL and follows browser history', async ({ page }) => {
+    await mockGoalTrackingShell(page);
+    const peoplePanel = page.getByTestId('goal-tracking-people');
+    await page.goto('/action-items?employeeId=manager-1&cycleId=cycle-2');
+    await expect(peoplePanel.getByRole('button', { name: /林治/ })).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('goal-tracking-cycle')).toContainText('2026 第二季度');
+    await peoplePanel.getByRole('button', { name: /刘伟/ }).click();
+    await expect(page).toHaveURL(/employeeId=employee-1/);
+    await page.goBack();
+    await expect(peoplePanel.getByRole('button', { name: /林治/ })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('switches cycle and reloads indicators for the selected person', async ({ page }) => {
+    await mockGoalTrackingShell(page);
+    await page.goto('/action-items?employeeId=manager-1&cycleId=cycle-2');
+    const cycleRequest = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return url.pathname.endsWith('/objectives/tracking')
+        && url.searchParams.get('ownerId') === 'manager-1'
+        && url.searchParams.get('cycleId') === 'cycle-1';
+    });
+    await page.getByTestId('goal-tracking-cycle').selectOption('cycle-1');
+    await cycleRequest;
+    await expect(page).toHaveURL(/employeeId=manager-1.*cycleId=cycle-1/);
+  });
+
+  test('canonicalizes an objective deep link and highlights the resolved row', async ({ page }) => {
+    await mockGoalTrackingShell(page, { deepLinkObjectiveId: 'objective-2' });
+    await page.goto('/action-items?objectiveId=objective-2');
+    await expect(page).toHaveURL(/employeeId=manager-1.*cycleId=cycle-2/);
+    await expect(page.getByTestId('goal-tracking-row-objective-2')).toHaveClass(/is-highlighted/);
+  });
+
+  test('falls back safely when an objective deep link is missing or invisible', async ({ page }) => {
+    await mockGoalTrackingShell(page, {
+      deepLinkObjectiveId: 'objective-missing',
+      deepLinkResult: { totalWeight: 0, items: [] },
+    });
+    await page.goto('/action-items?objectiveId=objective-missing');
+    await expect(page.getByText('无法定位该目标所属人员和考核周期')).toBeVisible();
+    await expect(page).toHaveURL(/employeeId=employee-1/);
+    await expect(page).toHaveURL(/cycleId=cycle-2/);
+  });
+
+  test('normalizes invalid person and cycle query values to safe defaults', async ({ page }) => {
+    await mockGoalTrackingShell(page);
+    await page.goto('/action-items?employeeId=outsider&cycleId=missing');
+    await expect(page).toHaveURL(/employeeId=employee-1/);
+    await expect(page).toHaveURL(/cycleId=cycle-2/);
+    await expect(page.getByTestId('goal-tracking-people').getByRole('button', { name: /刘伟/ }))
+      .toHaveAttribute('aria-pressed', 'true');
+  });
+
+  test('ignores a slow response after the user changes person', async ({ page }) => {
+    const requests = await installDelayedTrackingRoutes(page);
+    await page.goto('/action-items');
+    await requests.selfStarted;
+    await page.getByRole('button', { name: /林治/ }).click();
+    await requests.managerFulfilled;
+    requests.releaseSelf();
+    await expect(page.getByTestId('goal-tracking-surface')).toContainText('上级目标');
+    await expect(page.getByTestId('goal-tracking-surface')).not.toContainText('本人旧目标');
+  });
 
   test('employee sees the reference goal-tracking workspace for self and manager', async ({ page }) => {
     await page.route('**/api/v1/auth/me', (route) => route.fulfill({

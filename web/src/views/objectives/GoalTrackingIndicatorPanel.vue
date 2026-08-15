@@ -9,6 +9,8 @@ defineProps<{
   result: GoalTrackingResult;
   loading: boolean;
   error: string;
+  notice: string;
+  highlightedObjectiveId: string;
 }>();
 const emit = defineEmits<{
   cycleChange: [cycleId: string];
@@ -46,6 +48,10 @@ function handleCycleChange(event: Event) {
       </div>
     </header>
 
+    <p v-if="notice" class="tracking-indicators__notice" role="status">
+      {{ notice }}
+    </p>
+
     <div
       class="tracking-indicators__table"
       data-testid="goal-tracking-surface"
@@ -81,6 +87,8 @@ function handleCycleChange(event: Event) {
           v-for="(item, index) in result.items"
           :key="item.id"
           class="goal-indicator-grid tracking-indicators__row"
+          :class="{ 'is-highlighted': item.id === highlightedObjectiveId }"
+          :data-testid="`goal-tracking-row-${item.id}`"
           role="row"
         >
           <div class="tracking-indicators__objective" role="cell" aria-label="考核指标">
@@ -176,6 +184,16 @@ function handleCycleChange(event: Event) {
   background: #fff;
 }
 
+.tracking-indicators__notice {
+  margin: 0 0 10px;
+  padding: 8px 12px;
+  border: 1px solid #f3d39b;
+  border-radius: 8px;
+  color: #9a6400;
+  background: #fff8e8;
+  font-size: 13px;
+}
+
 .tracking-indicators__title {
   min-height: 50px;
   display: flex;
@@ -214,6 +232,11 @@ function handleCycleChange(event: Event) {
   padding: 0 28px;
   color: #59667d;
   font-size: 13px;
+}
+
+.tracking-indicators__row.is-highlighted {
+  background: #eef7ff;
+  box-shadow: inset 3px 0 #4b96ed;
 }
 
 .tracking-indicators__row + .tracking-indicators__row {
