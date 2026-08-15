@@ -5,7 +5,6 @@ import {
   Plus,
   EditPen,
   Delete,
-  RefreshRight,
   CollectionTag,
   Aim,
   List,
@@ -37,6 +36,18 @@ import type {
 } from '@/types/api.types';
 import EmptyState from '@/components/common/EmptyState.vue';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
+import ObjectiveMapFilters from './components/ObjectiveMapFilters.vue';
+import ObjectiveMapDisplaySettings from './components/ObjectiveMapDisplaySettings.vue';
+import {
+  countObjectivesByScope,
+  type ObjectiveMapActorContext,
+  type ObjectiveMapScope,
+} from './objective-map-layout';
+import {
+  OBJECTIVE_MAP_DISPLAY_STORAGE_KEY,
+  parseObjectiveMapDisplay,
+  saveObjectiveMapDisplay,
+} from './objective-map-settings';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -47,11 +58,17 @@ const cycles = ref<AssessmentCycle[]>([]);
 const departments = ref<Department[]>([]);
 const indicators = ref<Indicator[]>([]);
 const users = ref<User[]>([]);
+const directReports = ref<User[]>([]);
 
-const filters = reactive<{ cycleId: string; level: ObjectiveLevel | '' }>({
+const filters = reactive<{ cycleId: string }>({
   cycleId: '',
-  level: '',
 });
+const selectedScope = ref<ObjectiveMapScope>('team');
+const display = ref(parseObjectiveMapDisplay(
+  typeof window === 'undefined'
+    ? null
+    : window.localStorage.getItem(OBJECTIVE_MAP_DISPLAY_STORAGE_KEY),
+));
 
 const canManage = computed(() =>
   ['system_admin', 'hr', 'dept_head', 'manager'].includes(auth.user?.sysRole ?? ''),
@@ -76,14 +93,14 @@ onMounted(() => {
   }
 });
 
-watch(() => [filters.cycleId, filters.level], loadTree);
+watch(() => filters.cycleId, loadTree);
+watch(display, (value) => saveObjectiveMapDisplay(value), { deep: true });
 
 async function loadTree() {
   loading.value = true;
   try {
     const params: Record<string, unknown> = {};
     if (filters.cycleId) params.cycleId = filters.cycleId;
-    if (filters.level) params.level = filters.level;
     const res = await objectivesApi.findAll(params);
     treeData.value = Array.isArray(res) ? res : res.items;
   } catch {
@@ -126,6 +143,7 @@ async function loadUsers() {
     // 主管看下属、HR/管理员看全员、其余角色至少能选到自己——按角色取可分配人选，避免越权 403。
     if (u.sysRole === 'manager' && u.id) {
       const subs = await usersApi.getSubordinates(u.id);
+      directReports.value = subs;
       users.value = [...subs, u as User];
     } else if (u.sysRole === 'hr' || u.sysRole === 'system_admin') {
       const res = await usersApi.findAll({ page: 1, pageSize: 100 });
@@ -134,9 +152,57 @@ async function loadUsers() {
       users.value = [u as User];
     }
   } catch {
+    directReports.value = [];
     users.value = [];
   }
 }
+
+function flattenDepartments(items: readonly Department[]): Department[] {
+  return items.flatMap((department) => [
+    department,
+    ...flattenDepartments(department.children ?? []),
+  ]);
+}
+
+const managedDepartmentIds = computed(() => {
+  const currentUserId = auth.user?.id;
+  if (!currentUserId) return [];
+  const flat = flattenDepartments(departments.value);
+  const childrenByParent = new Map<string, Department[]>();
+  flat.forEach((department) => {
+    if (!department.parentId) return;
+    const children = childrenByParent.get(department.parentId) ?? [];
+    children.push(department);
+    childrenByParent.set(department.parentId, children);
+  });
+  const ids = new Set(flat.filter((department) => department.leaderId === currentUserId).map((department) => department.id));
+  const appendChildren = (departmentId: string) => {
+    for (const child of childrenByParent.get(departmentId) ?? []) {
+      if (ids.has(child.id)) continue;
+      ids.add(child.id);
+      appendChildren(child.id);
+    }
+  };
+  [...ids].forEach(appendChildren);
+  return [...ids];
+});
+
+const actorContext = computed<ObjectiveMapActorContext>(() => ({
+  userId: auth.user?.id ?? '',
+  teamOwnerIds: directReports.value.map((user) => user.id),
+  managedDeptIds: managedDepartmentIds.value,
+}));
+
+const scopeCounts = computed(() => countObjectivesByScope(treeData.value, actorContext.value));
+
+watch(scopeCounts, (counts) => {
+  if (counts[selectedScope.value] > 0) return;
+  const role = auth.user?.sysRole;
+  const order: ObjectiveMapScope[] = role === 'manager'
+    ? ['team', 'mine', 'organization', 'other']
+    : ['mine', 'organization', 'other', 'team'];
+  selectedScope.value = order.find((scope) => counts[scope] > 0) ?? selectedScope.value;
+}, { deep: true, immediate: true });
 
 function levelLabel(level: ObjectiveLevel): string {
   return OBJECTIVE_LEVEL_LABELS[level] ?? level;
@@ -335,29 +401,17 @@ async function removeRow(row: Objective) {
     <div class="objective-map page-stack">
       <section data-testid="objective-map-surface" class="performance-surface">
         <div data-testid="objective-map-toolbar" class="objective-map__toolbar">
-        <div class="objective-map__period">
-          <span class="objective-map__filter-label">周期</span>
-          <el-select
-            v-model="filters.cycleId"
-            aria-label="考核周期"
-            placeholder="全部周期"
-            clearable
-            class="objective-map__cycle-select"
-          >
-            <el-option v-for="c in cycles" :key="c.id" :label="c.name" :value="c.id" />
-          </el-select>
+          <ObjectiveMapFilters
+            :cycles="cycles"
+            :cycle-id="filters.cycleId"
+            :scope="selectedScope"
+            :scope-counts="scopeCounts"
+            @update:cycle-id="filters.cycleId = $event"
+            @update:scope="selectedScope = $event"
+          />
+          <div class="objective-map__toolbar-spacer" />
+          <ObjectiveMapDisplaySettings v-model="display" />
         </div>
-
-        <el-radio-group v-model="filters.level" data-testid="objective-level-filter">
-          <el-radio-button value="">全部目标</el-radio-button>
-          <el-radio-button value="company">公司目标</el-radio-button>
-          <el-radio-button value="department">部门目标</el-radio-button>
-          <el-radio-button value="individual">个人目标</el-radio-button>
-        </el-radio-group>
-
-        <div class="objective-map__toolbar-spacer" />
-        <el-button :icon="RefreshRight" @click="loadTree">刷新</el-button>
-      </div>
 
         <el-table
           v-loading="loading"

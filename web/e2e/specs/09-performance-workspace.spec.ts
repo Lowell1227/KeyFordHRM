@@ -8,6 +8,11 @@ import {
   layoutObjectives,
   selectObjectiveScope,
 } from '../../src/views/objectives/objective-map-layout';
+import {
+  DEFAULT_OBJECTIVE_MAP_DISPLAY,
+  OBJECTIVE_MAP_DISPLAY_STORAGE_KEY,
+  parseObjectiveMapDisplay,
+} from '../../src/views/objectives/objective-map-settings';
 import type { Objective } from '../../src/types/api.types';
 import type { TaskStatus } from '../../src/types/enums';
 
@@ -67,9 +72,31 @@ test.describe('09-performance-workspace manager shell', () => {
     await page.goto('/objectives');
 
     await expect(page.getByTestId('objective-map-toolbar')).toBeVisible();
-    await expect(page.getByTestId('objective-level-filter')).toBeVisible();
+    await expect(page.getByTestId('objective-map-filters')).toBeVisible();
     await expect(page.getByTestId('objective-map-surface')).toBeVisible();
     await expect(page.getByTestId('objective-create')).toBeVisible();
+  });
+
+  test('objective map exposes reference-style floating controls', async ({ page }) => {
+    await page.goto('/dashboard');
+    await page.evaluate((storageKey) => localStorage.removeItem(storageKey), OBJECTIVE_MAP_DISPLAY_STORAGE_KEY);
+    await page.goto('/objectives');
+
+    await expect(page.getByTestId('objective-map-filters')).toBeVisible();
+    await expect(page.getByRole('button', { name: '我的目标', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '我团队成员的目标', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '我负责组织的目标', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '其他目标', exact: true })).toBeVisible();
+    await expect(page.getByText('排序：按对齐数量')).toBeVisible();
+
+    await page.getByTestId('objective-map-display-settings').click();
+    const ownerSetting = page.getByRole('checkbox', { name: '显示负责人' });
+    await expect(ownerSetting).toBeChecked();
+    await page.getByText('显示负责人', { exact: true }).click();
+    await expect(ownerSetting).not.toBeChecked();
+    await page.reload();
+    await page.getByTestId('objective-map-display-settings').click();
+    await expect(page.getByRole('checkbox', { name: '显示负责人' })).not.toBeChecked();
   });
 
   test('target tracking exposes objective context and action workspace', async ({ page }) => {
@@ -321,6 +348,32 @@ test.describe('09-performance-workspace objective map layout model', () => {
     });
     expect(compact.nodes.map((node) => node.objective.id)).toEqual(['mine']);
     expect(compact.nodes[0].y).toBeGreaterThanOrEqual(0);
+  });
+});
+
+test.describe('09-performance-workspace objective map display settings model', () => {
+  test('accepts a complete boolean payload', () => {
+    const parsed = parseObjectiveMapDisplay(JSON.stringify({
+      showCompany: false,
+      showDepartment: true,
+      showOwner: false,
+      showProgress: true,
+      showConnections: false,
+    }));
+
+    expect(parsed).toEqual({
+      showCompany: false,
+      showDepartment: true,
+      showOwner: false,
+      showProgress: true,
+      showConnections: false,
+    });
+  });
+
+  test('falls back for malformed or incomplete storage', () => {
+    expect(parseObjectiveMapDisplay('{bad json')).toEqual(DEFAULT_OBJECTIVE_MAP_DISPLAY);
+    expect(parseObjectiveMapDisplay(JSON.stringify({ showCompany: false })))
+      .toEqual(DEFAULT_OBJECTIVE_MAP_DISPLAY);
   });
 });
 
