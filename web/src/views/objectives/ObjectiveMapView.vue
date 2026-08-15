@@ -94,19 +94,22 @@ onMounted(async () => {
 watch(() => filters.cycleId, loadTree);
 watch(display, (value) => saveObjectiveMapDisplay(value), { deep: true });
 
+let treeRequestSequence = 0;
+
 async function loadTree() {
+  const requestSequence = ++treeRequestSequence;
   loading.value = true;
   loadError.value = '';
   try {
-    const params: Record<string, unknown> = {};
-    if (filters.cycleId) params.cycleId = filters.cycleId;
-    const res = await objectivesApi.findAll(params);
-    treeData.value = Array.isArray(res) ? res : res.items;
+    const res = await objectivesApi.getTree(filters.cycleId || undefined);
+    if (requestSequence !== treeRequestSequence) return;
+    treeData.value = res;
   } catch {
+    if (requestSequence !== treeRequestSequence) return;
     treeData.value = [];
     loadError.value = '目标数据加载失败，请稍后重试';
   } finally {
-    loading.value = false;
+    if (requestSequence === treeRequestSequence) loading.value = false;
   }
 }
 
@@ -114,6 +117,15 @@ async function loadCycles() {
   try {
     const res = await cyclesApi.findAll({ page: 1, pageSize: 100 });
     cycles.value = res.items;
+    if (!filters.cycleId) {
+      const today = new Date().toISOString().slice(0, 10);
+      const currentCycle = res.items.find((cycle) => (
+        cycle.startDate <= today
+        && cycle.endDate >= today
+        && cycle.status !== 'closed'
+      ));
+      filters.cycleId = currentCycle?.id ?? '';
+    }
   } catch {
     cycles.value = [];
   }
@@ -223,8 +235,11 @@ function levelLabel(level: ObjectiveLevel): string {
   return OBJECTIVE_LEVEL_LABELS[level] ?? level;
 }
 
-function statusType(status: ObjectiveStatus): string {
-  return OBJECTIVE_STATUS_META[status]?.type ?? 'info';
+function statusType(status: ObjectiveStatus): 'info' | 'primary' | 'success' | 'warning' | 'danger' {
+  const type = OBJECTIVE_STATUS_META[status]?.type;
+  return type === 'primary' || type === 'success' || type === 'warning' || type === 'danger'
+    ? type
+    : 'info';
 }
 
 function statusLabel(status: ObjectiveStatus): string {
@@ -241,7 +256,32 @@ function openDetail(objective: Objective) {
 }
 
 function openTracking(objective: Objective) {
+  detailVisible.value = false;
   router.push({ path: '/action-items', query: { objectiveId: objective.id } });
+}
+
+function editFromDetail() {
+  if (!selectedObjective.value) return;
+  detailVisible.value = false;
+  openEdit(selectedObjective.value);
+}
+
+function progressFromDetail() {
+  if (!selectedObjective.value) return;
+  detailVisible.value = false;
+  openProgress(selectedObjective.value);
+}
+
+function trackFromDetail() {
+  if (!selectedObjective.value) return;
+  openTracking(selectedObjective.value);
+}
+
+function removeFromDetail() {
+  if (!selectedObjective.value) return;
+  const objective = selectedObjective.value;
+  detailVisible.value = false;
+  removeRow(objective);
 }
 
 // ---------------------------------------------------------------------------
@@ -356,7 +396,7 @@ async function submitForm() {
       ElMessage.success('目标已创建');
     }
     dialogVisible.value = false;
-    loadTree();
+    await loadTree();
   } finally {
     submitting.value = false;
   }
@@ -384,7 +424,7 @@ async function submitProgress() {
     await objectivesApi.updateProgress(progressRow.value.id, { progress: progressValue.value });
     ElMessage.success('进度已更新');
     progressDialogVisible.value = false;
-    loadTree();
+    await loadTree();
   } finally {
     progressSubmitting.value = false;
   }
@@ -401,7 +441,7 @@ async function removeRow(row: Objective) {
     });
     await objectivesApi.remove(row.id);
     ElMessage.success('目标已删除');
-    loadTree();
+    await loadTree();
   } catch {
     // 取消删除
   }
@@ -459,10 +499,60 @@ async function removeRow(row: Objective) {
         size="420px"
       >
         <div v-if="selectedObjective" class="objective-detail">
-          <h2>{{ selectedObjective.title }}</h2>
-          <p>{{ selectedObjective.ownerName || selectedObjective.deptName || '未指定负责人' }}</p>
-          <strong>{{ formatProgress(selectedObjective.progress) }}</strong>
+          <div class="objective-detail__hero">
+            <el-tag effect="plain">{{ levelLabel(selectedObjective.level) }}</el-tag>
+            <h2>{{ selectedObjective.title }}</h2>
+            <p>{{ selectedObjective.description || '-' }}</p>
+          </div>
+          <dl class="objective-detail__grid">
+            <div>
+              <dt>负责人</dt>
+              <dd>{{ selectedObjective.ownerName || '未指定负责人' }}</dd>
+            </div>
+            <div>
+              <dt>所属部门</dt>
+              <dd>{{ selectedObjective.deptName || '-' }}</dd>
+            </div>
+            <div>
+              <dt>周期</dt>
+              <dd>{{ selectedObjective.cycleName || '-' }}</dd>
+            </div>
+            <div>
+              <dt>权重</dt>
+              <dd>{{ selectedObjective.weight == null ? '-' : `${selectedObjective.weight}%` }}</dd>
+            </div>
+            <div>
+              <dt>优先级</dt>
+              <dd>优先级 {{ selectedObjective.priority }}</dd>
+            </div>
+            <div>
+              <dt>进度</dt>
+              <dd>{{ formatProgress(selectedObjective.progress) }}</dd>
+            </div>
+            <div>
+              <dt>状态</dt>
+              <dd>
+                <el-tag :type="statusType(selectedObjective.status)" effect="light">
+                  {{ statusLabel(selectedObjective.status) }}
+                </el-tag>
+              </dd>
+            </div>
+            <div>
+              <dt>关联指标</dt>
+              <dd>{{ selectedObjective.relatedIndicatorName || '-' }}</dd>
+            </div>
+          </dl>
         </div>
+        <template #footer>
+          <div v-if="selectedObjective" class="objective-detail__actions">
+            <el-button @click="trackFromDetail">目标跟进</el-button>
+            <template v-if="canManage">
+              <el-button @click="progressFromDetail">更新进度</el-button>
+              <el-button @click="editFromDetail">编辑目标</el-button>
+              <el-button type="danger" plain @click="removeFromDetail">删除目标</el-button>
+            </template>
+          </div>
+        </template>
       </el-drawer>
 
     <!-- 新建 / 编辑弹窗 -->
@@ -569,7 +659,13 @@ async function removeRow(row: Objective) {
     </el-dialog>
 
     <!-- 进度更新弹窗 -->
-    <el-dialog v-model="progressDialogVisible" title="更新进度" width="400px" destroy-on-close>
+    <el-dialog
+      v-model="progressDialogVisible"
+      data-testid="objective-progress-dialog"
+      title="更新进度"
+      width="400px"
+      destroy-on-close
+    >
       <div v-if="progressRow" class="progress-row-title">{{ progressRow.title }}</div>
       <el-slider v-model="progressValue" :max="100" show-input />
       <template #footer>
@@ -676,6 +772,54 @@ async function removeRow(row: Objective) {
 .progress-row-title {
   margin-bottom: 16px;
   font-weight: 500;
+}
+
+.objective-detail__hero h2 {
+  margin: 14px 0 8px;
+  color: #202b42;
+  font-size: 21px;
+  line-height: 1.35;
+}
+
+.objective-detail__hero p {
+  margin: 0;
+  color: #69758b;
+  line-height: 1.7;
+}
+
+.objective-detail__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 18px 20px;
+  margin: 28px 0 0;
+}
+
+.objective-detail__grid div {
+  min-width: 0;
+}
+
+.objective-detail__grid dt {
+  margin-bottom: 6px;
+  color: #939cad;
+  font-size: 12px;
+}
+
+.objective-detail__grid dd {
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: #2e394e;
+  font-size: 14px;
+}
+
+.objective-detail__actions {
+  display: flex;
+  justify-content: flex-end;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.objective-detail__actions :deep(.el-button + .el-button) {
+  margin-left: 0;
 }
 
 @media (max-width: 768px) {

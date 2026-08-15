@@ -46,13 +46,18 @@ function objectiveMapTreeFixture(): Objective[] {
   const individual = objectiveFixture({
     id: 'individual-1',
     title: '用户问题支持',
+    description: '持续响应客户反馈并按期关闭支持工单。',
     level: 'individual',
     parentId: 'department-1',
     deptId: 'dept-1',
     deptName: '孚德北京办公室',
     ownerId: 'employee-1',
     ownerName: '刘伟',
+    weight: 40,
+    priority: 2,
     progress: 30,
+    relatedIndicatorId: 'indicator-1',
+    relatedIndicatorName: '支持工单按期关闭率',
   });
   const mine = objectiveFixture({
     id: 'manager-goal-1',
@@ -224,6 +229,99 @@ test.describe('09-performance-workspace manager shell', () => {
     await expect(page.getByRole('menuitem', { name: '删除目标' })).toBeVisible();
   });
 
+  test('objective scope switching keeps visible ancestors and removes teammate-only goals', async ({ page }) => {
+    await routeObjectiveMap(page);
+    await page.goto('/objectives');
+
+    await page.getByTestId('objective-map-scope-mine').click();
+    await expect(page.getByTestId('objective-map-card-company-1')).toBeVisible();
+    await expect(page.getByTestId('objective-map-card-department-1')).toBeVisible();
+    await expect(page.getByTestId('objective-map-card-manager-goal-1')).toBeVisible();
+    await expect(page.getByTestId('objective-map-card-individual-1')).toHaveCount(0);
+    await expect(page.getByTestId('objective-map-surface').locator('.el-table')).toHaveCount(0);
+  });
+
+  test('objective detail exposes all business fields and manager operations', async ({ page }) => {
+    await routeObjectiveMap(page);
+    await page.goto('/objectives');
+
+    const card = page.getByTestId('objective-map-card-individual-1');
+    await card.click();
+    const detail = page.getByTestId('objective-map-detail');
+    await expect(detail).toContainText('用户问题支持');
+    await expect(detail).toContainText('持续响应客户反馈并按期关闭支持工单。');
+    await expect(detail).toContainText('个人');
+    await expect(detail).toContainText('刘伟');
+    await expect(detail).toContainText('孚德北京办公室');
+    await expect(detail).toContainText('2026 年度');
+    await expect(detail).toContainText('40%');
+    await expect(detail).toContainText('优先级 2');
+    await expect(detail).toContainText('30%');
+    await expect(detail).toContainText('进行中');
+    await expect(detail).toContainText('支持工单按期关闭率');
+
+    await detail.getByRole('button', { name: '编辑目标' }).click();
+    await expect(page.getByTestId('objective-dialog')).toBeVisible();
+    await expect(page.getByTestId('objective-title')).toHaveValue('用户问题支持');
+    await page.keyboard.press('Escape');
+
+    await card.getByRole('button', { name: '更多操作' }).click();
+    await page.getByRole('menuitem', { name: '更新进度' }).click();
+    await expect(page.getByTestId('objective-progress-dialog')).toBeVisible();
+    await page.keyboard.press('Escape');
+
+    await card.getByRole('button', { name: '更多操作' }).click();
+    await page.getByRole('menuitem', { name: '删除目标' }).click();
+    await expect(page.getByRole('dialog', { name: '删除确认' })).toBeVisible();
+    await page.getByRole('button', { name: '取消' }).click();
+
+    await card.getByRole('button', { name: '更多操作' }).click();
+    await page.getByRole('menuitem', { name: '目标跟进' }).click();
+    await expect(page).toHaveURL(/\/action-items\?objectiveId=individual-1/);
+  });
+
+  test('objective map ignores a stale cycle response', async ({ page }) => {
+    await routeObjectiveMap(page);
+    let oldCycleRequested = false;
+    await page.unroute('**/api/v1/cycles**');
+    await page.route('**/api/v1/cycles**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({
+        total: 2, page: 1, pageSize: 100,
+        items: [
+          { id: 'cycle-old', name: '旧周期', type: 'annual', status: 'published', startDate: '2026-01-01', endDate: '2026-12-31', publishVisibleFields: {}, gradeAMaxRatio: 0.2, gradeBMaxRatio: 0.4, gradeCMaxRatio: 0.3, gradeDMaxRatio: 0.1 },
+          { id: 'cycle-new', name: '新周期', type: 'annual', status: 'draft', startDate: '2027-01-01', endDate: '2027-12-31', publishVisibleFields: {}, gradeAMaxRatio: 0.2, gradeBMaxRatio: 0.4, gradeCMaxRatio: 0.3, gradeDMaxRatio: 0.1 },
+        ],
+      })),
+    }));
+    await page.unroute('**/api/v1/objectives**');
+    await page.route('**/api/v1/objectives/tree**', async (route) => {
+      const cycleId = new URL(route.request().url()).searchParams.get('cycleId');
+      if (cycleId === 'cycle-old') {
+        oldCycleRequested = true;
+        await new Promise((resolve) => setTimeout(resolve, 350));
+      }
+      const title = cycleId === 'cycle-new' ? '新周期目标' : '旧周期目标';
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse([objectiveFixture({
+          id: cycleId === 'cycle-new' ? 'new-goal' : 'old-goal',
+          title,
+          level: 'individual',
+          ownerId: 'manager-1',
+        })])),
+      });
+    });
+
+    await page.goto('/objectives');
+    await expect.poll(() => oldCycleRequested).toBe(true);
+    await page.getByTestId('objective-map-filters').locator('.el-select').click();
+    await page.getByRole('option', { name: '新周期' }).click();
+    await expect(page.getByText('新周期目标')).toBeVisible();
+    await page.waitForTimeout(450);
+    await expect(page.getByText('旧周期目标')).toHaveCount(0);
+  });
+
   test('objective canvas draws real edges and supports zoom, pan, and fit', async ({ page }) => {
     await routeObjectiveMap(page);
     await page.goto('/objectives');
@@ -283,7 +381,13 @@ test.describe('09-performance-workspace read-only leadership', () => {
     await expect(card).toBeVisible();
     await expect(card.getByRole('button', { name: '更多操作' })).toHaveCount(0);
     await card.press('Enter');
-    await expect(page.getByTestId('objective-map-detail')).toContainText('用户问题支持');
+    const detail = page.getByTestId('objective-map-detail');
+    await expect(detail).toContainText('用户问题支持');
+    await expect(detail.getByRole('button', { name: '编辑目标' })).toHaveCount(0);
+    await expect(detail.getByRole('button', { name: '更新进度' })).toHaveCount(0);
+    await expect(detail.getByRole('button', { name: '删除目标' })).toHaveCount(0);
+    await detail.getByRole('button', { name: '目标跟进' }).click();
+    await expect(page).toHaveURL(/\/action-items\?objectiveId=individual-1/);
   });
 });
 

@@ -97,7 +97,7 @@ test.describe('07-peripheral-actions objectives and action items', () => {
     await page.getByTestId('objective-title').fill(objectiveTitle);
     await page.getByTestId('objective-save').click();
     await expect(page.getByTestId('objective-dialog')).not.toBeVisible();
-    await expect(page.getByText(objectiveTitle)).toBeVisible();
+    await expect(page.getByTestId('objective-map-canvas').getByText(objectiveTitle)).toBeVisible();
 
     const hrToken = await login(ACCEPTANCE_ACCOUNTS.hr);
     const objectives = await api('GET', '/objectives?flat=true&page=1&pageSize=100', hrToken);
