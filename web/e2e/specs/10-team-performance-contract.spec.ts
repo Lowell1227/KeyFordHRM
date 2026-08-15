@@ -1763,7 +1763,7 @@ test.describe('team list manager workspace', () => {
       height: 900,
       visibleHeaders: ['员工', '部门', '职位', '任务状态', '操作'],
       hiddenHeaders: ['考核周期', '结果', '更新日期'],
-      secondaryText: 'E001 · 2026 H1',
+      secondaryText: 'E001 · 2026年第二季度绩效考核（全流程验证 20260620-1200-20）',
     },
     {
       name: 'mobile',
@@ -1771,15 +1771,17 @@ test.describe('team list manager workspace', () => {
       height: 844,
       visibleHeaders: ['员工', '任务状态', '操作'],
       hiddenHeaders: ['部门', '职位', '考核周期', '结果', '更新日期'],
-      secondaryText: 'E001 · Engineering · Senior Engineer · 2026 H1',
+      secondaryText: 'E001 · Engineering · Senior Engineer · 2026年第二季度绩效考核（全流程验证 20260620-1200-20）',
     },
   ]) {
     test(`team list presents responsive employee columns at ${viewport.name} width`, async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await mockTaskWorkspaceIdentity(page, 'manager');
+      const responsiveItems = structuredClone(teamPageFixture.items.slice(0, 2));
+      responsiveItems[0].cycleName = '2026年第二季度绩效考核（全流程验证 20260620-1200-20）';
       await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
         contentType: 'application/json',
-        body: JSON.stringify(apiResponse(teamPageWith(teamPageFixture.items.slice(0, 2)))),
+        body: JSON.stringify(apiResponse(teamPageWith(responsiveItems))),
       }));
 
       await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending');
@@ -1817,6 +1819,17 @@ test.describe('team list manager workspace', () => {
       await page.getByTestId('team-task-row-task-1').click();
       await expect(page.getByTestId('team-task-workspace')).toBeVisible();
       await expect(page.getByTestId('team-task-list')).toHaveCount(0);
+      const detailHeaderFit = await page.getByTestId('team-task-workspace').evaluate((element) => {
+        const heading = element.querySelector('h1');
+        const bar = element.querySelector('.team-task-workspace__bar');
+        return {
+          headingHeight: heading?.getBoundingClientRect().height ?? 0,
+          barClientWidth: (bar as HTMLElement | null)?.clientWidth ?? 0,
+          barScrollWidth: (bar as HTMLElement | null)?.scrollWidth ?? 0,
+        };
+      });
+      expect(detailHeaderFit.headingHeight).toBeLessThanOrEqual(30);
+      expect(detailHeaderFit.barScrollWidth).toBeLessThanOrEqual(detailHeaderFit.barClientWidth + 2);
       if (shouldCaptureTask7Evidence()) {
         await page.screenshot({
           path: `../.superpowers/sdd/2026-08-08-manager-team-performance-workspace/task-7-review-${viewport.name}-detail.png`,

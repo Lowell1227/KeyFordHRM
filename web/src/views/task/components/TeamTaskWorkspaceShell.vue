@@ -146,21 +146,39 @@ function stageStateLabel(state: TeamStageState): string {
 .team-task-workspace__back {
   width: 34px;
   height: 34px;
+  flex-shrink: 0;
   padding: 0;
 }
 
 .team-task-workspace__title {
   min-width: 0;
+  flex: 1;
   display: flex;
   align-items: center;
   gap: 8px;
 }
 
 .team-task-workspace__title h1 {
+  flex-shrink: 0;
   margin: 0;
   color: #172033;
   font-size: 18px;
   line-height: 1.3;
+  white-space: nowrap;
+}
+
+.team-task-workspace__title :deep(.el-tag) {
+  min-width: 0;
+  flex: 1 1 auto;
+  justify-content: flex-start;
+  overflow: hidden;
+}
+
+.team-task-workspace__title :deep(.el-tag__content) {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .team-task-workspace__layout {
