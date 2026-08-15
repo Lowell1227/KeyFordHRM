@@ -643,6 +643,12 @@ test.describe('team list manager workspace', () => {
     }
     await expect(page.getByRole('button', { name: '处理 Ada Chen', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '查看 Lin Wei', exact: true })).toBeVisible();
+
+    await page.getByRole('button', { name: '处理 Ada Chen', exact: true }).click();
+    await expect(page.getByTestId('team-task-workspace')).toContainText('Ada Chen');
+    await expect(page.getByTestId('team-task-list')).toHaveCount(0);
+    await page.getByTestId('team-task-workspace-back').click();
+    await expect(page.getByTestId('team-task-list')).toBeVisible();
   });
 
   test('team list applies URL filters and limits batch commands to pending goal reviews', async ({ page }) => {
@@ -1833,7 +1839,14 @@ test.describe('manager evaluation workspace', () => {
     const mocked = await mockManagerEvaluationWorkspace(page);
     await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
 
+    await expect(page.getByTestId('team-task-workspace')).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: '主管评分', exact: true })).toBeVisible();
+    await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
+    await expect(page.getByTestId('goal-review-workspace')).toHaveCount(0);
+
     await page.getByTestId('indicator-toggle-ind-1').click();
+    await expect(page.getByText('员工自评', { exact: true }).first()).toBeVisible();
+    await expect(page.getByTestId('manager-score-ind-1')).toBeVisible();
     await expect(page.getByTestId('employee-self-comment-ind-1')).toBeVisible();
     await expect(page.getByTestId('employee-self-comment-ind-1')).toContainText('Delivered the planned release');
     await page.getByTestId('manager-score-ind-1').fill('88');
@@ -2089,23 +2102,26 @@ test.describe('manager evaluation workspace', () => {
     await page.getByTestId('team-task-row-task-1').click();
     await page.getByRole('button', { name: '放弃修改', exact: true }).click();
     await expect(page).toHaveURL(/taskId=task-1/);
-    await expect(page.getByTestId('team-member-rail')).toContainText('Ada Chen');
+    await expect(page.getByTestId('team-task-workspace')).toContainText('Ada Chen');
+    await expect(page.getByTestId('team-task-row-task-1')).toHaveAttribute('aria-current', 'true');
   });
 
-  test('manager evaluation guards leaving tasks and continues the confirmed navigation once', async ({ page }) => {
+  test('manager evaluation guards returning to the team list and continues once confirmed', async ({ page }) => {
     await mockManagerEvaluationWorkspace(page);
     await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
     await page.getByTestId('indicator-toggle-ind-1').click();
     await page.getByTestId('manager-score-ind-1').fill('88');
 
-    await page.getByRole('link', { name: '目标地图', exact: true }).click();
+    await page.getByTestId('team-task-workspace-back').click();
     await expect(page.getByRole('dialog')).toContainText('存在未保存的主管评价');
     await page.getByRole('button', { name: '继续编辑', exact: true }).click();
-    await expect(page).toHaveURL(/\/tasks\?/);
+    await expect(page).toHaveURL(/taskId=task-2/);
+    await expect(page.getByTestId('manager-score-ind-1')).toHaveValue('88');
 
-    await page.getByRole('link', { name: '目标地图', exact: true }).click();
+    await page.getByTestId('team-task-workspace-back').click();
     await page.getByRole('button', { name: '放弃修改', exact: true }).click();
-    await expect(page).toHaveURL(/\/objectives(?:\?|$)/);
+    await expect(page).not.toHaveURL(/taskId=/);
+    await expect(page.getByTestId('team-task-list')).toBeVisible();
     await expect(page.getByRole('dialog')).toHaveCount(0);
   });
 
