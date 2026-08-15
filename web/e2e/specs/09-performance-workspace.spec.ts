@@ -3,6 +3,12 @@ import {
   TASK_STATUS_STAGE,
   getTaskStageState,
 } from '../../src/views/task/task-stage';
+import {
+  countObjectivesByScope,
+  layoutObjectives,
+  selectObjectiveScope,
+} from '../../src/views/objectives/objective-map-layout';
+import type { Objective } from '../../src/types/api.types';
 import type { TaskStatus } from '../../src/types/enums';
 
 const apiResponse = (data: unknown) => ({
@@ -178,6 +184,143 @@ test.describe('09-performance-workspace stage semantics', () => {
     expect(TASK_STATUS_STAGE.exempted).toBe('result');
     expect(getTaskStageState(['exempted'])).toBe('completed');
     expect(getTaskStageState(['pending'])).toBe('not-started');
+  });
+});
+
+function objectiveFixture(
+  value: Partial<Objective> & Pick<Objective, 'id' | 'title' | 'level'>,
+): Objective {
+  return {
+    description: null,
+    deptId: null,
+    deptName: null,
+    ownerId: null,
+    ownerName: null,
+    parentId: null,
+    cycleId: 'cycle-1',
+    cycleName: '2026 年度',
+    weight: 100,
+    priority: 1,
+    progress: 50,
+    status: 'active',
+    relatedIndicatorId: null,
+    relatedIndicatorName: null,
+    createdBy: null,
+    creatorName: null,
+    createdAt: '2026-08-01T00:00:00.000Z',
+    updatedAt: '2026-08-01T00:00:00.000Z',
+    ...value,
+  };
+}
+
+test.describe('09-performance-workspace objective map layout model', () => {
+  const company = objectiveFixture({
+    id: 'company',
+    title: '提升年度经营质量',
+    level: 'company',
+    ownerId: 'vp-1',
+  });
+  const department = objectiveFixture({
+    id: 'department',
+    title: '研发交付目标',
+    level: 'department',
+    parentId: 'company',
+    deptId: 'dept-1',
+    ownerId: 'manager-1',
+  });
+  const mine = objectiveFixture({
+    id: 'mine',
+    title: '我的交付目标',
+    level: 'individual',
+    parentId: 'department',
+    deptId: 'dept-1',
+    ownerId: 'manager-1',
+  });
+  const teammate = objectiveFixture({
+    id: 'teammate',
+    title: '成员交付目标',
+    level: 'individual',
+    parentId: 'department',
+    deptId: 'dept-1',
+    ownerId: 'employee-1',
+  });
+  const otherDepartment = objectiveFixture({
+    id: 'other-department',
+    title: '其他部门目标',
+    level: 'department',
+    parentId: 'company',
+    deptId: 'dept-2',
+    ownerId: 'manager-2',
+  });
+  const outsider = objectiveFixture({
+    id: 'outsider',
+    title: '其他成员目标',
+    level: 'individual',
+    parentId: 'other-department',
+    deptId: 'dept-2',
+    ownerId: 'employee-2',
+  });
+  const roots: Objective[] = [{
+    ...company,
+    children: [{ ...department, children: [mine, teammate] }],
+  }];
+  const extendedRoots: Objective[] = [{
+    ...company,
+    children: [
+      { ...department, children: [mine, teammate] },
+      { ...otherDepartment, children: [outsider] },
+    ],
+  }];
+  const actor = {
+    userId: 'manager-1',
+    teamOwnerIds: ['employee-1'],
+    managedDeptIds: ['dept-1'],
+  };
+
+  test('keeps visible ancestors when selecting my and team objectives', () => {
+    expect(selectObjectiveScope(roots, 'mine', actor).map((item) => item.id).sort())
+      .toEqual(['company', 'department', 'mine']);
+    expect(selectObjectiveScope(roots, 'team', actor).map((item) => item.id).sort())
+      .toEqual(['company', 'department', 'teammate']);
+    expect(countObjectivesByScope(roots, actor).team).toBe(1);
+  });
+
+  test('separates managed organization objectives from other visible objectives', () => {
+    expect(selectObjectiveScope(extendedRoots, 'organization', actor).map((item) => item.id).sort())
+      .toEqual(['company', 'department', 'mine', 'teammate']);
+    expect(selectObjectiveScope(extendedRoots, 'other', actor).map((item) => item.id).sort())
+      .toEqual(['company', 'other-department', 'outsider']);
+  });
+
+  test('positions three levels without overlap and connects only real parents', () => {
+    const layout = layoutObjectives([company, department, mine, teammate], {
+      showCompany: true,
+      showDepartment: true,
+    });
+    expect(layout.edges.map((edge) => edge.id).sort()).toEqual([
+      'company->department',
+      'department->mine',
+      'department->teammate',
+    ]);
+    const byId = new Map(layout.nodes.map((node) => [node.objective.id, node]));
+    expect(byId.get('company')!.y).toBeLessThan(byId.get('department')!.y);
+    expect(byId.get('department')!.y).toBeLessThan(byId.get('mine')!.y);
+    expect(byId.get('mine')!.x).not.toBe(byId.get('teammate')!.x);
+  });
+
+  test('does not invent hidden ancestors and compacts disabled levels', () => {
+    const orphan = { ...teammate, parentId: 'hidden-department' };
+    expect(layoutObjectives([orphan], {
+      showCompany: true,
+      showDepartment: true,
+    }).edges).toEqual([]);
+
+    const compact = layoutObjectives([company, department, mine], {
+      showCompany: false,
+      showDepartment: false,
+    });
+    expect(compact.nodes.map((node) => node.objective.id)).toEqual(['mine']);
+    expect(compact.nodes[0].y).toBeGreaterThanOrEqual(0);
   });
 });
 
