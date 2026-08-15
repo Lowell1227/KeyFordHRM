@@ -620,6 +620,23 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('team-member-rail')).toContainText('Ada Chen');
   });
 
+  test('team list renders employee business columns and explicit row actions on desktop', async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(teamPageFixture)),
+    }));
+
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1');
+
+    for (const heading of ['员工', '部门', '职位', '考核周期', '任务状态', '结果', '更新日期', '操作']) {
+      await expect(page.getByRole('columnheader', { name: heading, exact: true })).toBeVisible();
+    }
+    await expect(page.getByRole('button', { name: '处理 Ada Chen', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '查看 Lin Wei', exact: true })).toBeVisible();
+  });
+
   test('team list applies URL filters and limits batch commands to pending goal reviews', async ({ page }) => {
     await mockTaskWorkspaceIdentity(page, 'manager');
     const teamRequests: URL[] = [];

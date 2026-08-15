@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { Check, Close, View } from '@element-plus/icons-vue';
+import { Check, Close } from '@element-plus/icons-vue';
 import type { TableInstance } from 'element-plus';
 import EmptyState from '@/components/common/EmptyState.vue';
 import StatusBadge from '@/components/common/StatusBadge.vue';
@@ -58,7 +58,8 @@ let reconcilingSelection = false;
 const showBatchCommands = computed(
   () => props.stage === 'goal-review' && props.stageState === 'pending',
 );
-const compactColumns = computed(() => containerWidth.value > 0 && containerWidth.value < 980);
+const mediumColumns = computed(() => containerWidth.value > 0 && containerWidth.value < 980);
+const narrowColumns = computed(() => containerWidth.value > 0 && containerWidth.value < 640);
 const selectedVersions = computed<TeamTaskVersion[]>(() =>
   selectedRows.value.map((item) => ({ taskId: item.id, updatedAt: item.updatedAt })),
 );
@@ -77,6 +78,10 @@ function stageStateType(state: TeamStageState): 'info' | 'warning' | 'success' {
   if (state === 'pending') return 'warning';
   if (state === 'completed') return 'success';
   return 'info';
+}
+
+function taskActionLabel(item: TeamTaskListItem): string {
+  return item.stageState === 'pending' ? '处理' : '查看';
 }
 
 function selectTask(item: TeamTaskListItem) {
@@ -210,7 +215,7 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
           width="40"
           :selectable="isEligible"
         />
-        <el-table-column label="员工" :min-width="compactColumns ? 150 : 190">
+        <el-table-column label="员工" :min-width="mediumColumns ? 150 : 190">
           <template #default="{ row }">
             <button
               type="button"
@@ -223,28 +228,25 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
               </el-avatar>
               <span class="member-cell__copy">
                 <strong>{{ row.employeeName }}</strong>
-                <small>
-                  {{ row.employeeNo || '-' }}<span v-if="row.position"> · {{ row.position }}</span>
-                  <template v-if="compactColumns">
-                    <span v-if="row.deptName"> · {{ row.deptName }}</span>
-                    <span v-if="row.cycleName"> · {{ row.cycleName }}</span>
-                  </template>
-                </small>
+                <small class="member-cell__meta">{{ row.employeeNo || '-' }}</small>
               </span>
             </button>
           </template>
         </el-table-column>
-        <el-table-column v-if="!compactColumns" prop="deptName" label="部门" min-width="130">
+        <el-table-column v-if="!mediumColumns" prop="deptName" label="部门" min-width="120">
           <template #default="{ row }">{{ row.deptName || '-' }}</template>
         </el-table-column>
+        <el-table-column v-if="!narrowColumns" prop="position" label="职位" min-width="120">
+          <template #default="{ row }">{{ row.position || '-' }}</template>
+        </el-table-column>
         <el-table-column
-          v-if="!compactColumns"
+          v-if="!mediumColumns"
           prop="cycleName"
           label="考核周期"
-          min-width="140"
+          min-width="130"
           show-overflow-tooltip
         />
-        <el-table-column label="任务状态" :min-width="compactColumns ? 120 : 170">
+        <el-table-column label="任务状态" :min-width="mediumColumns ? 120 : 170">
           <template #default="{ row }">
             <div class="team-task-list__status">
               <StatusBadge :status="row.status" size="small" />
@@ -254,28 +256,28 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
             </div>
           </template>
         </el-table-column>
-        <el-table-column v-if="!compactColumns" label="结果" width="88" align="right">
+        <el-table-column v-if="!mediumColumns" label="结果" width="88" align="right">
           <template #default="{ row }">
             <span v-if="row.totalScore !== null">{{ row.totalScore }}</span>
             <span v-else-if="row.rawGrade">{{ row.rawGrade }}</span>
             <span v-else>-</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="!compactColumns" label="更新日期" width="112">
+        <el-table-column v-if="!mediumColumns" label="更新日期" width="112">
           <template #default="{ row }">{{ row.updatedAt.slice(0, 10) }}</template>
         </el-table-column>
-        <el-table-column :width="compactColumns ? 40 : 50" fixed="right" align="center">
+        <el-table-column label="操作" width="72" fixed="right" align="center">
           <template #default="{ row }">
-            <el-tooltip content="查看成员" placement="top">
-              <el-button
-                class="team-task-list__view"
-                text
-                circle
-                :icon="View"
-                :aria-label="`查看${row.employeeName}`"
-                @click.stop="selectTask(asTeamTask(row))"
-              />
-            </el-tooltip>
+            <el-button
+              class="team-task-list__action"
+              link
+              type="primary"
+              size="small"
+              :aria-label="`${taskActionLabel(asTeamTask(row))} ${row.employeeName}`"
+              @click.stop="selectTask(asTeamTask(row))"
+            >
+              {{ taskActionLabel(asTeamTask(row)) }}
+            </el-button>
           </template>
         </el-table-column>
       </el-table>
