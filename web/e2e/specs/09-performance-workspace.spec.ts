@@ -84,6 +84,22 @@ test.describe('09-performance-workspace manager shell', () => {
       Math.ceil(surfaceBox!.x + surfaceBox!.width),
     );
   });
+
+  for (const width of [900, 1024]) {
+    test(`target tracking keeps every indicator column inside the surface at ${width}px`, async ({ page }) => {
+      await page.setViewportSize({ width, height: 800 });
+      await page.goto('/action-items');
+
+      const surface = page.getByTestId('goal-tracking-surface');
+      const surfaceBox = await surface.boundingBox();
+      const weightBox = await surface.getByRole('columnheader', { name: '权重' }).boundingBox();
+      expect(surfaceBox).not.toBeNull();
+      expect(weightBox).not.toBeNull();
+      expect(Math.ceil(weightBox!.x + weightBox!.width)).toBeLessThanOrEqual(
+        Math.ceil(surfaceBox!.x + surfaceBox!.width),
+      );
+    });
+  }
 });
 
 test.describe('09-performance-workspace read-only leadership', () => {
