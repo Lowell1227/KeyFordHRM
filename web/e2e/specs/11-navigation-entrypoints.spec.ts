@@ -339,15 +339,20 @@ test.describe("11-navigation-entrypoints manager dashboard task entry points", (
     await expect(dashboard.managerGoalReviewCount()).toHaveText("3");
     await expect(dashboard.managerEvaluationCount()).toHaveText("2");
     await dashboard.managerGoalReviewOpen().click();
-    await expect(page).toHaveURL((url) =>
-      url.pathname === "/tasks" &&
-      url.searchParams.get("scope") === "team" &&
-      url.searchParams.get("stage") === "goal-review",
-    );
+    await expect(page).toHaveURL((url) => {
+      const query = [...url.searchParams.entries()];
+      return url.pathname === "/tasks" &&
+        query.length === 2 &&
+        url.searchParams.get("scope") === "team" &&
+        url.searchParams.get("stage") === "goal-review";
+    });
     const destination = new URL(page.url());
     expect(destination.pathname).toBe("/tasks");
-    expect(destination.searchParams.get("scope")).toBe("team");
-    expect(destination.searchParams.get("stage")).toBe("goal-review");
+    expect([...destination.searchParams.entries()]).toEqual([
+      ["scope", "team"],
+      ["stage", "goal-review"],
+    ]);
+    await expect(page.getByTestId("team-count-pending")).toContainText("3");
   });
 
   test("each manager task request settles independently when another request is slow or fails", async ({
