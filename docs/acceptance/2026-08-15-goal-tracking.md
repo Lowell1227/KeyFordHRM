@@ -6,7 +6,7 @@
 - Frontend contract tests: PASS（74/74）
 - Frontend type-check: PASS
 - Frontend production build: PASS
-- Affected Playwright suites: PASS（119/119，0 flaky）
+- Affected Playwright suites: PASS（120/120，0 flaky）
 - 历史 `objectiveId` 深链定位与安全回退：由上述最终 Playwright 套件覆盖；本轮真实浏览器截图流程未另行手工重复。
 
 ## 真实角色检查
