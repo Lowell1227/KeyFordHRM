@@ -121,7 +121,11 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
     expect(modules.map((module) => module.label)).toEqual([
       "工作台",
       "绩效",
-      "人员流程",
+      "试用期与转正",
+    ]);
+    const people = modules.find((module) => module.key === "people");
+    expect(people?.groups.map((group) => group.label)).toEqual([
+      "试用期与转正",
     ]);
     expect(JSON.stringify(modules)).not.toContain("团队绩效");
     expect(JSON.stringify(modules)).not.toContain("考勤");
@@ -137,7 +141,7 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
     expect(modules.map((module) => module.label)).toEqual([
       "工作台",
       "绩效",
-      "人员流程",
+      "试用期与转正",
       "分析与设置",
     ]);
     const analysis = modules.find((module) => module.key === "analysis");

@@ -13,7 +13,7 @@ export type NavigationUser = Pick<{ sysRole: SysRole; canViewAll: boolean }, 'sy
 const moduleDefinitions: Record<NavigationModuleKey, Pick<NavigationModule, 'label' | 'order'>> = {
   workbench: { label: '工作台', order: 10 },
   performance: { label: '绩效', order: 20 },
-  people: { label: '人员流程', order: 30 },
+  people: { label: '试用期与转正', order: 30 },
   analysis: { label: '分析与设置', order: 40 },
 };
 

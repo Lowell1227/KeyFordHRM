@@ -180,7 +180,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '试用期考核管理',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'people', label: '试用期考核管理', order: 10, group: 'people', groupLabel: '人员流程' },
+      navigation: { module: 'people', label: '试用期考核管理', order: 10, group: 'people', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -191,7 +191,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '试用期评分',
       roles: ['manager', 'dept_head', 'vp', 'hr', 'system_admin'],
-      navigation: { module: 'people', label: '试用期评分', order: 20, group: 'people', groupLabel: '人员流程' },
+      navigation: { module: 'people', label: '试用期评分', order: 20, group: 'people', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -201,7 +201,7 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '我的试用期考核',
-      navigation: { module: 'people', label: '我的试用期考核', order: 30, group: 'people', groupLabel: '人员流程' },
+      navigation: { module: 'people', label: '我的试用期考核', order: 30, group: 'people', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -218,7 +218,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '转正申请管理',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'people', label: '转正申请管理', order: 40, group: 'people', groupLabel: '人员流程' },
+      navigation: { module: 'people', label: '转正申请管理', order: 40, group: 'people', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -229,7 +229,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '转正审批台',
       roles: ['manager', 'dept_head', 'vp', 'hr', 'chairman', 'system_admin'],
-      navigation: { module: 'people', label: '转正审批台', order: 50, group: 'people', groupLabel: '人员流程' },
+      navigation: { module: 'people', label: '转正审批台', order: 50, group: 'people', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -239,7 +239,7 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '我的转正申请',
-      navigation: { module: 'people', label: '我的转正申请', order: 60, group: 'people', groupLabel: '人员流程' },
+      navigation: { module: 'people', label: '我的转正申请', order: 60, group: 'people', groupLabel: '试用期与转正' },
     },
   },
   {

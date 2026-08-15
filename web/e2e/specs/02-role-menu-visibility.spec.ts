@@ -20,7 +20,7 @@ test.describe("02-role-menu-visibility navigation employee", () => {
     const dashboard = new DashboardPage(page);
     await dashboard.goto();
 
-    await expectModules(dashboard, ["工作台", "绩效", "人员流程"]);
+    await expectModules(dashboard, ["工作台", "绩效", "试用期与转正"]);
     await dashboard.openModule("performance");
     await expect(dashboard.menuItem("绩效工作台")).toBeVisible();
     await expect(dashboard.menuItem("目标跟进")).toHaveCount(0);
@@ -39,7 +39,7 @@ test.describe("02-role-menu-visibility navigation manager", () => {
     const dashboard = new DashboardPage(page);
     await dashboard.goto();
 
-    await expectModules(dashboard, ["工作台", "绩效", "人员流程"]);
+    await expectModules(dashboard, ["工作台", "绩效", "试用期与转正"]);
     await dashboard.openModule("performance");
     await expect(dashboard.menuItem("绩效工作台")).toBeVisible();
     await expect(dashboard.menuItem("绩效面谈")).toBeVisible();
@@ -60,7 +60,7 @@ test.describe("02-role-menu-visibility navigation HR", () => {
     await expectModules(dashboard, [
       "工作台",
       "绩效",
-      "人员流程",
+      "试用期与转正",
       "分析与设置",
     ]);
     await dashboard.openModule("performance");
@@ -84,7 +84,7 @@ test.describe("02-role-menu-visibility navigation approver", () => {
     await expectModules(dashboard, [
       "工作台",
       "绩效",
-      "人员流程",
+      "试用期与转正",
       "分析与设置",
     ]);
     await dashboard.openModule("performance");
@@ -108,7 +108,7 @@ test.describe("02-role-menu-visibility navigation chairman", () => {
     await expectModules(dashboard, [
       "工作台",
       "绩效",
-      "人员流程",
+      "试用期与转正",
       "分析与设置",
     ]);
     await dashboard.openModule("performance");
@@ -135,7 +135,7 @@ test.describe("02-role-menu-visibility navigation system administrator", () => {
     await expectModules(dashboard, [
       "工作台",
       "绩效",
-      "人员流程",
+      "试用期与转正",
       "分析与设置",
     ]);
     await dashboard.openModule("performance");
