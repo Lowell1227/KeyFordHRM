@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import dayjs from 'dayjs';
 import { cyclesApi } from '@/api/cycles.api';
 import { departmentsApi } from '@/api/departments.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
+import CycleCompactTable from './components/CycleCompactTable.vue';
+import { cycleStatusGroup } from './cycle-management';
 import { useAuthStore } from '@/stores/auth.store';
 import { usePagination } from '@/composables/usePagination';
 import { formatDate } from '@/utils/date';
@@ -16,6 +19,8 @@ import type {
   PublishVisibleFields,
   LaunchPreflightResult,
   Department,
+  CycleQuery,
+  CycleStatusGroup,
 } from '@/types/api.types';
 import type { CycleStatus, CycleType } from '@/types/enums';
 
@@ -31,6 +36,12 @@ const CYCLE_STATUS_OPTIONS: { label: string; value: CycleStatus }[] = [
   { label: '已公示', value: 'published' },
   { label: '申诉中', value: 'appeal' },
   { label: '已关闭', value: 'closed' },
+];
+
+const CYCLE_STATUS_GROUPS: { label: string; value: CycleStatusGroup }[] = [
+  { label: '待处理', value: 'attention' },
+  { label: '进行中', value: 'active' },
+  { label: '已结束', value: 'finished' },
 ];
 
 const CYCLE_TYPE_OPTIONS: { label: string; value: CycleType }[] = [
@@ -67,14 +78,6 @@ const STATUS_LABEL: Record<CycleStatus, string> = {
   published: '已公示',
   appeal: '申诉中',
   closed: '已关闭',
-};
-
-const TYPE_LABEL: Record<CycleType, string> = {
-  monthly: '月度',
-  quarterly: '季度',
-  annual: '年度',
-  probation: '试用期',
-  custom: '自定义',
 };
 
 const DEADLINE_FIELDS = [
@@ -114,18 +117,35 @@ const GRADE_RATIO_FIELDS = [
 
 const listLoading = ref(false);
 const auth = useAuthStore();
+const route = useRoute();
+const router = useRouter();
 const departments = ref<Department[]>([]);
 const submitting = ref(false);
 const launchingId = ref<string | null>(null);
 const cycles = ref<AssessmentCycle[]>([]);
 
-const statusFilter = ref<CycleStatus | ''>('');
-const typeFilter = ref<CycleType | ''>('');
-const keyword = ref('');
+const initialStatus = CYCLE_STATUS_OPTIONS.some((item) => item.value === route.query.status)
+  ? route.query.status as CycleStatus
+  : '';
+const initialType = CYCLE_TYPE_OPTIONS.some((item) => item.value === route.query.type)
+  ? route.query.type as CycleType
+  : '';
+const initialGroup = CYCLE_STATUS_GROUPS.some((item) => item.value === route.query.group)
+  ? route.query.group as CycleStatusGroup
+  : initialStatus
+    ? cycleStatusGroup(initialStatus)
+    : 'attention';
+
+const statusGroup = ref<CycleStatusGroup>(initialGroup);
+const statusFilter = ref<CycleStatus | ''>(initialStatus);
+const typeFilter = ref<CycleType | ''>(initialType);
+const keyword = ref(typeof route.query.keyword === 'string' ? route.query.keyword : '');
 
 const { page, pageSize, total, pageSizeOptions, withParams, onChange } = usePagination({
   defaultPageSize: 10,
 });
+const initialPage = Number(route.query.page);
+if (Number.isInteger(initialPage) && initialPage > 0) page.value = initialPage;
 
 const createDialogVisible = ref(false);
 const editDialogVisible = ref(false);
@@ -194,9 +214,6 @@ const createRules = {
   hrOwnerId: [{ required: true, message: '请选择本周期 HR 负责人', trigger: 'change' }],
 };
 
-const canPreflight = computed(() => (cycle: AssessmentCycle) =>
-  ['draft', 'launch_blocked'].includes(cycle.status),
-);
 const canOpenImmediately = computed(() => {
   const value = preflight.value?.cycle.goalSettingOpenAt;
   return Boolean(value && (
@@ -567,12 +584,35 @@ async function handleView(cycle: AssessmentCycle) {
   }
 }
 
-function buildQuery() {
-  const query: { status?: CycleStatus; type?: CycleType; keyword?: string } = {};
+function handlePrimaryCycleAction(cycle: AssessmentCycle) {
+  if (['draft', 'launch_blocked'].includes(cycle.status)) {
+    void handlePreflight(cycle);
+    return;
+  }
+  void handleView(cycle);
+}
+
+function buildQuery(): CycleQuery {
+  const query: CycleQuery & Record<string, unknown> = {};
   if (statusFilter.value) query.status = statusFilter.value;
+  else query.group = statusGroup.value;
   if (typeFilter.value) query.type = typeFilter.value;
   if (keyword.value.trim()) query.keyword = keyword.value.trim();
   return withParams(query);
+}
+
+async function syncListRoute() {
+  const query = { ...route.query };
+  query.group = statusGroup.value;
+  if (statusFilter.value) query.status = statusFilter.value;
+  else delete query.status;
+  if (typeFilter.value) query.type = typeFilter.value;
+  else delete query.type;
+  if (keyword.value.trim()) query.keyword = keyword.value.trim();
+  else delete query.keyword;
+  if (page.value > 1) query.page = String(page.value);
+  else delete query.page;
+  await router.replace({ query });
 }
 
 async function loadCycles() {
@@ -590,20 +630,40 @@ async function loadCycles() {
   }
 }
 
-function handleSearch() {
+async function handleSearch() {
   page.value = 1;
-  loadCycles();
+  await syncListRoute();
+  await loadCycles();
 }
 
-function handleReset() {
+async function handleReset() {
+  statusGroup.value = 'attention';
   statusFilter.value = '';
   typeFilter.value = '';
   keyword.value = '';
   page.value = 1;
-  loadCycles();
+  await syncListRoute();
+  await loadCycles();
 }
 
-onChange(loadCycles);
+async function selectStatusGroup(group: CycleStatusGroup) {
+  if (statusGroup.value === group && !statusFilter.value) return;
+  statusGroup.value = group;
+  statusFilter.value = '';
+  page.value = 1;
+  await syncListRoute();
+  await loadCycles();
+}
+
+async function handleStatusFilterChange(status: CycleStatus | '') {
+  if (status) statusGroup.value = cycleStatusGroup(status);
+  await handleSearch();
+}
+
+onChange(() => {
+  void syncListRoute();
+  void loadCycles();
+});
 
 onMounted(() => {
   loadCycles();
@@ -623,8 +683,29 @@ onMounted(() => {
         <el-button data-testid="cycle-create" type="primary" @click="openCreateDialog">新建周期</el-button>
       </template>
 
-      <div class="filter-row">
-        <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width: 160px" @change="handleSearch">
+      <div class="cycle-list-toolbar">
+        <div class="cycle-group-tabs" aria-label="周期状态分组">
+          <button
+            v-for="group in CYCLE_STATUS_GROUPS"
+            :key="group.value"
+            type="button"
+            :data-testid="`cycle-group-${group.value}`"
+            :class="{ 'is-active': statusGroup === group.value }"
+            :aria-pressed="statusGroup === group.value"
+            @click="selectStatusGroup(group.value)"
+          >
+            {{ group.label }}
+          </button>
+        </div>
+
+        <div class="filter-row">
+        <el-select
+          v-model="statusFilter"
+          placeholder="精确状态"
+          clearable
+          style="width: 160px"
+          @change="handleStatusFilterChange"
+        >
           <el-option v-for="opt in CYCLE_STATUS_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
         </el-select>
         <el-select v-model="typeFilter" placeholder="全部类型" clearable style="width: 160px" @change="handleSearch">
@@ -639,77 +720,20 @@ onMounted(() => {
         />
         <el-button type="primary" plain @click="handleSearch">查询</el-button>
         <el-button @click="handleReset">重置</el-button>
+        </div>
       </div>
-      <el-alert
-        class="launch-guide"
-        type="info"
-        :closable="false"
-        show-icon
-        title="新季度开启：创建草稿 → 开放检查 → 预约开放"
-        description="系统默认在季度开始前 10 天开放目标制定；只有检查通过后才能预约，开放后员工才会看到该季度。"
-      />
     </ChartCard>
 
     <ChartCard :padded="false">
-      <el-table v-loading="listLoading" class="app-table" :data="cycles" row-key="id">
-        <el-table-column prop="name" label="周期名称" min-width="180" />
-        <el-table-column prop="type" label="类型" width="100">
-          <template #default="{ row }">
-            {{ TYPE_LABEL[(row as AssessmentCycle).type] }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="status" label="状态" width="120">
-          <template #default="{ row }">
-            <el-tag :type="STATUS_TAG_TYPE[(row as AssessmentCycle).status] as any" size="small">
-              {{ STATUS_LABEL[(row as AssessmentCycle).status] }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="起止日期" min-width="200">
-          <template #default="{ row }">
-            {{ formatDate((row as AssessmentCycle).startDate) }} ~ {{ formatDate((row as AssessmentCycle).endDate) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="目标开放" min-width="150">
-          <template #default="{ row }">
-            {{ formatDateTimeForMessage((row as AssessmentCycle).goalSettingOpenAt) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="250" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="handleView(row as AssessmentCycle)">查看</el-button>
-            <el-button
-              link
-              type="primary"
-              size="small"
-              :disabled="['scheduled', 'launch_blocked'].includes((row as AssessmentCycle).status)"
-              @click="openEditDeadlines(row as AssessmentCycle)"
-            >
-              改截止日
-            </el-button>
-            <el-button
-              v-if="['scheduled', 'launch_blocked'].includes((row as AssessmentCycle).status)"
-              link
-              type="danger"
-              size="small"
-              :loading="launchingId === (row as AssessmentCycle).id"
-              @click="handleCancelSchedule(row as AssessmentCycle)"
-            >
-              取消预约
-            </el-button>
-            <el-button
-              v-if="canPreflight(row as AssessmentCycle)"
-              link
-              type="success"
-              size="small"
-              :disabled="!canPreflight(row as AssessmentCycle)"
-              @click="handlePreflight(row as AssessmentCycle)"
-            >
-              {{ (row as AssessmentCycle).status === 'launch_blocked' ? '重新检查' : '开放检查' }}
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+      <CycleCompactTable
+        :cycles="cycles"
+        :loading="listLoading"
+        :launching-id="launchingId"
+        @open="handleView"
+        @primary="handlePrimaryCycleAction"
+        @edit-deadlines="openEditDeadlines"
+        @cancel-schedule="handleCancelSchedule"
+      />
 
       <div class="app-pager">
         <el-pagination
@@ -1028,15 +1052,49 @@ onMounted(() => {
 </template>
 
 <style scoped>
+.cycle-list-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+}
+
+.cycle-group-tabs {
+  display: inline-flex;
+  gap: 4px;
+  padding: 4px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+}
+
+.cycle-group-tabs button {
+  min-width: 76px;
+  padding: 7px 14px;
+  color: var(--el-text-color-secondary);
+  font: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+}
+
+.cycle-group-tabs button:hover {
+  color: var(--el-color-primary);
+}
+
+.cycle-group-tabs button.is-active {
+  color: var(--el-color-primary);
+  font-weight: 600;
+  background: #fff;
+  box-shadow: 0 1px 3px rgb(15 23 42 / 8%);
+}
+
 .filter-row {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
-}
-
-.launch-guide {
-  margin-top: 16px;
 }
 
 .form-tip {

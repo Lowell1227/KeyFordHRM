@@ -6,6 +6,7 @@ export default defineConfig({
     '10-team-performance-contract.spec.ts',
     '12-goal-tracking-model.spec.ts',
     '13-cycle-first-performance-context.spec.ts',
+    '14-cycle-management-compact.spec.ts',
   ],
   workers: 1,
 });
