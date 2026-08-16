@@ -87,4 +87,3 @@ git diff --check
 ```
 
 Then verify desktop and 390x844 browser behavior: five labels only, cycle switching updates the query and content, legacy hidden-cycle URL normalizes, no horizontal overflow, and no console errors.
-
