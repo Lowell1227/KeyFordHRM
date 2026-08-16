@@ -32,6 +32,8 @@ const TRACKING_ROLES = [
   SysRole.system_admin,
 ] as const;
 
+export const TRACKING_INDICATOR_UUID_PIPE = new ParseUUIDPipe();
+
 /**
  * 目标地图接口。改为「管理者+」可见：读对所有非 employee 角色开放，
  * 写仍由各方法限定 system_admin / hr / dept_head / manager。
@@ -76,7 +78,7 @@ export class ObjectivesController {
   @Get('tracking/indicators/:id')
   @Roles(...TRACKING_ROLES)
   findTrackingIndicator(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', TRACKING_INDICATOR_UUID_PIPE) id: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.objectivesService.findTrackingIndicator(id, viewer);
@@ -86,7 +88,7 @@ export class ObjectivesController {
   @HttpCode(200)
   @Roles(...TRACKING_ROLES)
   updateTrackingIndicatorProgress(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', TRACKING_INDICATOR_UUID_PIPE) id: string,
     @Body() dto: UpdateIndicatorProgressDto,
     @CurrentUser() viewer: AuthUser,
   ) {

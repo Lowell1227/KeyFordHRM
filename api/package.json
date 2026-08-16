@@ -27,7 +27,11 @@
     "db:seed:realistic:preview": "ts-node -r tsconfig-paths/register prisma/seed-realistic-demo.ts --dry-run",
     "db:seed:realistic": "ts-node -r tsconfig-paths/register prisma/seed-realistic-demo.ts",
     "db:seed:realistic:verify": "ts-node -r tsconfig-paths/register prisma/verify-realistic-demo.ts",
-    "db:seed:realistic:clean": "ts-node -r tsconfig-paths/register prisma/clean-realistic-demo.ts"
+    "db:seed:realistic:clean": "ts-node -r tsconfig-paths/register prisma/clean-realistic-demo.ts",
+    "test:seed:goal-tracking": "jest --config prisma/goal-tracking-demo/jest.config.js --runInBand",
+    "db:seed:goal-tracking:preview": "ts-node -r tsconfig-paths/register prisma/seed-goal-tracking-demo.ts --dry-run",
+    "db:seed:goal-tracking": "ts-node -r tsconfig-paths/register prisma/seed-goal-tracking-demo.ts",
+    "db:seed:goal-tracking:verify": "ts-node -r tsconfig-paths/register prisma/seed-goal-tracking-demo.ts --verify"
   },
   "prisma": {
     "seed": "ts-node prisma/seed.ts"
