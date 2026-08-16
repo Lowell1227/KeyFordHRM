@@ -5,9 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Calendar, DocumentChecked, RefreshLeft, Search, UserFilled } from '@element-plus/icons-vue';
 import { tasksApi } from '@/api/tasks.api';
 import { cyclesApi } from '@/api/cycles.api';
-import { usePagination } from '@/composables/usePagination';
 import { useAuthStore } from '@/stores/auth.store';
-import StatusBadge from '@/components/common/StatusBadge.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
 import PerformanceContextPanel from '@/components/performance/PerformanceContextPanel.vue';
@@ -106,9 +104,9 @@ function emptyTeamPage(): TeamTaskPage {
 }
 
 const teamPage = ref<TeamTaskPage>(emptyTeamPage());
-type TaskStageKey = 'all' | 'goal-setting' | 'goal-confirmation' | 'self-eval' | 'result';
+type TaskStageKey = MappedTaskStageKey;
 
-const selectedStage = ref<TaskStageKey>('all');
+const selectedStage = ref<TaskStageKey>('goal-setting');
 const taskStages = [
   { key: 'goal-setting', label: '目标制定' },
   { key: 'goal-confirmation', label: '目标确认' },
@@ -171,37 +169,35 @@ const allowedPerformanceSections = computed(() =>
 );
 const selectedCycleName = computed(() => selectedCycle.value?.name ?? '暂无考核周期');
 
-const {
-  page,
-  pageSize,
-  pageSizeOptions,
-  reset: resetPagination,
-} = usePagination({ defaultPageSize: 10 });
-
-const pendingStatuses: TaskStatus[] = ['indicator_drafting', 'indicator_confirming', 'self_eval', 'published', 'appealing'];
-
-const filteredTasks = computed(() => {
-  if (selectedStage.value === 'all') return list.value;
-  return list.value.filter((task) => TASK_STATUS_STAGE[task.status] === selectedStage.value);
-});
-
-const visibleTasks = computed(() => {
-  const start = (page.value - 1) * pageSize.value;
-  return filteredTasks.value.slice(start, start + pageSize.value);
-});
+const personalTask = computed(() => list.value[0] ?? null);
 
 const selectedStageLabel = computed(() => {
-  if (selectedStage.value === 'all') return '全部绩效任务';
   return taskStages.find((stage) => stage.key === selectedStage.value)?.label ?? '绩效任务';
 });
 
-const visibleTotal = computed(() => filteredTasks.value.length);
+const taskStageOrder: MappedTaskStageKey[] = [
+  'goal-setting',
+  'goal-confirmation',
+  'self-eval',
+  'result',
+];
+
+function taskStageState(status: TaskStatus, stage: MappedTaskStageKey): TaskStageState {
+  const currentStage = TASK_STATUS_STAGE[status];
+  const currentIndex = taskStageOrder.indexOf(currentStage);
+  const stageIndex = taskStageOrder.indexOf(stage);
+  if (stageIndex < currentIndex) return 'completed';
+  if (stageIndex > currentIndex) return 'not-started';
+  return getTaskStageState([status]);
+}
 
 function stageState(stage: MappedTaskStageKey): TaskStageState {
-  const statuses = list.value
-    .filter((task) => TASK_STATUS_STAGE[task.status] === stage)
-    .map((task) => task.status);
-  return getTaskStageState(statuses);
+  if (list.value.length === 0) return 'not-started';
+  const states = list.value.map((task) => taskStageState(task.status, stage));
+  if (states.includes('pending')) return 'pending';
+  if (states.includes('progress')) return 'progress';
+  if (states.every((state) => state === 'completed')) return 'completed';
+  return 'not-started';
 }
 
 function stageStateLabel(state: TaskStageState): string {
@@ -216,7 +212,6 @@ function stageStateLabel(state: TaskStageState): string {
 
 function selectStage(stage: TaskStageKey) {
   selectedStage.value = stage;
-  resetPagination();
 }
 
 function getCycleTime(cycleId: string): number {
@@ -524,8 +519,7 @@ async function fetchAllMine(
 
 function onCycleChange(value: string) {
   if (!value || value === workspaceQuery.state.value.cycleId) return;
-  selectedStage.value = 'all';
-  resetPagination();
+  selectedStage.value = 'goal-setting';
   selectedCycleId.value = value;
   void updateTeamContext({
     cycleId: value,
@@ -537,60 +531,13 @@ function onCycleChange(value: string) {
   });
 }
 
-function actionText(status: TaskStatus): string {
-  const map: Partial<Record<TaskStatus, string>> = {
-    indicator_drafting: '填写指标',
-    indicator_reviewing: '查看审核进度',
-    indicator_setting: '查看/补充指标',
-    indicator_confirming: '确认指标',
-    self_eval: '去自评',
-    published: '查看结果',
-    confirmed: '查看记录',
-    appealing: '查看申诉',
-    closed: '查看归档',
-  };
-  return map[status] ?? '进入详情';
-}
-
-function handlerText(status: TaskStatus): string {
-  const map: Partial<Record<TaskStatus, string>> = {
-    indicator_drafting: '员工填写指标',
-    indicator_reviewing: '主管审核指标',
-    indicator_setting: '主管/HR制定；员工可先补充建议',
-    indicator_confirming: '员工确认',
-    self_eval: '员工自评',
-    manager_scoring: '主管评分',
-    dept_review: '部门负责人审核',
-    hr_calibration: 'HR校准',
-    approval: '分管总审批',
-    published: '员工查看结果',
-    confirmed: '已完成确认',
-    appealing: '申诉处理中',
-    closed: '已归档',
-  };
-  return map[status] ?? '查看详情';
-}
-
-function isPending(status: TaskStatus): boolean {
-  return pendingStatuses.includes(status);
-}
-
-function taskDisplayName(row: TaskListItem): string {
-  return row.cycleName ? `${row.cycleName} · 个人绩效` : '个人绩效任务';
-}
-
-function asTask(row: unknown): TaskListItem {
-  return row as TaskListItem;
-}
-
 function taskListReturnTo(): string {
   return route.fullPath === '/tasks' || route.fullPath.startsWith('/tasks?')
     ? route.fullPath
     : '/tasks';
 }
 
-function goDetail(row: unknown) {
-  const item = row as TaskListItem;
+function goDetail(item: TaskListItem) {
   router.push({
     name: 'TaskDetail',
     params: { id: item.id },
@@ -928,18 +875,11 @@ onMounted(async () => {
       loadTeamStageSummaries(),
     ]);
   } else {
-    if (isManagerCapable.value && selectedStage.value === 'all') {
-      selectedStage.value = 'goal-setting';
-    }
     await Promise.all([
       loadList(),
       isManagerCapable.value ? loadTeamStageSummaries() : Promise.resolve(),
     ]);
   }
-});
-
-watch(pageSize, () => {
-  page.value = 1;
 });
 
 watch(
@@ -1155,17 +1095,6 @@ watch(
 
             <div class="task-stage-list">
               <button
-                type="button"
-                class="task-stage-item"
-                :class="{ 'is-active': selectedStage === 'all' }"
-                :aria-pressed="selectedStage === 'all'"
-                @click="selectStage('all')"
-              >
-                <span>全部阶段</span>
-                <span class="task-stage-item__count">{{ list.length }}</span>
-              </button>
-
-              <button
                 v-for="stage in taskStages"
                 :key="stage.key"
                 type="button"
@@ -1218,81 +1147,46 @@ watch(
       />
     </TeamTaskWorkspaceShell>
 
-    <div v-else-if="activeScope === 'mine'" class="task-list page-stack">
-      <section data-testid="task-surface" class="performance-surface">
-        <header class="task-surface__header">
-          <div class="task-surface__title">
-            <span>{{ selectedCycleName }}</span>
-            <h2>{{ selectedStageLabel }}</h2>
+    <div v-else-if="activeScope === 'mine'" class="task-list personal-task-surface">
+      <h2 class="personal-task-surface__title">{{ selectedStageLabel }}</h2>
+
+      <section data-testid="task-surface" v-loading="loading">
+        <article
+          v-if="personalTask"
+          class="personal-task-card"
+          data-testid="personal-task-card"
+          @click="goDetail(personalTask)"
+        >
+          <div class="personal-task-card__identity">
+            <span class="personal-task-card__icon" aria-hidden="true">
+              <el-icon><DocumentChecked /></el-icon>
+            </span>
+            <div>
+              <strong>{{ selectedStageLabel }}</strong>
+              <el-tag v-if="personalTask.isExempt" type="info" size="small">已豁免</el-tag>
+            </div>
           </div>
-          <div class="task-surface__summary">
-            共 {{ visibleTotal }} 项
-          </div>
-        </header>
 
-        <el-table v-loading="loading" class="app-table" :data="visibleTasks" @row-click="goDetail">
-          <el-table-column label="任务名称" min-width="180">
-            <template #default="{ row }">
-              <div class="task-name">
-                <div class="task-name__main">
-                  <span>{{ taskDisplayName(asTask(row)) }}</span>
-                  <el-tag v-if="asTask(row).isExempt" type="info" size="small" class="exempt-tag">已豁免</el-tag>
-                </div>
-                <div class="task-name__sub">
-                  {{ asTask(row).employeeName || '-' }}<span v-if="asTask(row).deptName"> / {{ asTask(row).deptName }}</span>
-                </div>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="考核周期" min-width="200" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span class="cycle-cell">{{ asTask(row).cycleName || '未关联周期' }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="状态" width="190">
-            <template #default="{ row }">
-              <div class="status-cell">
-                <StatusBadge :status="row.status" size="small" />
-                <el-tag
-                  :type="isPending(asTask(row).status) ? 'warning' : 'info'"
-                  effect="plain"
-                  size="small"
-                >
-                  {{ isPending(asTask(row).status) ? '待处理' : '无需处理' }}
-                </el-tag>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="处理人/说明" min-width="220" show-overflow-tooltip>
-            <template #default="{ row }">
-              <span class="handler-cell">{{ handlerText(asTask(row).status) }}</span>
-            </template>
-          </el-table-column>
-          <el-table-column label="当前动作" width="130" fixed="right">
-            <template #default="{ row }">
-              <el-button type="primary" size="small" :icon="DocumentChecked" @click.stop="goDetail(row)">
-                {{ actionText(row.status) }}
-              </el-button>
-            </template>
-          </el-table-column>
-        </el-table>
+          <span
+            class="personal-task-card__state"
+            :class="`is-${stageState(selectedStage)}`"
+          >
+            {{ personalTask.isExempt && selectedStage === 'result'
+              ? '已豁免'
+              : stageStateLabel(stageState(selectedStage)) }}
+          </span>
 
-        <div v-if="!loading && visibleTasks.length === 0" class="empty-wrap">
-          <EmptyState
-            :description="selectedStage === 'all'
-              ? '暂无绩效任务。请等待HR发起考核周期后再处理。'
-              : '该阶段暂无绩效任务。'"
-          />
-        </div>
+          <el-button
+            type="primary"
+            data-testid="personal-task-detail"
+            @click.stop="goDetail(personalTask)"
+          >
+            查看详情
+          </el-button>
+        </article>
 
-        <div v-if="visibleTotal > 0" class="app-pager">
-          <el-pagination
-            v-model:current-page="page"
-            v-model:page-size="pageSize"
-            :page-sizes="pageSizeOptions"
-            :total="visibleTotal"
-            layout="total, sizes, prev, pager, next"
-          />
+        <div v-else-if="!loading" class="empty-wrap">
+          <EmptyState description="暂无绩效任务。请等待HR发起考核周期后再查看。" />
         </div>
       </section>
     </div>
@@ -1559,90 +1453,85 @@ watch(
   background: #e8f7df;
 }
 
-.performance-surface {
-  min-width: 0;
+.personal-task-surface {
   min-height: 500px;
-  overflow: hidden;
-  background: #fff;
-  border: 1px solid #e2e6ed;
-  border-radius: 7px;
 }
 
-.performance-surface :deep(.el-table) {
-  border: 0;
-  border-radius: 0;
-}
-
-.performance-surface :deep(.el-table__row) {
-  cursor: pointer;
-}
-
-.task-surface__header {
-  min-height: 72px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 10px 16px;
-  border-bottom: 1px solid #e8ebf0;
-}
-
-.task-surface__title span {
-  color: #7b8495;
-  font-size: 12px;
-}
-
-.task-surface__title h2 {
-  margin: 4px 0 0;
+.personal-task-surface__title {
+  margin: 0 0 12px;
   color: #20283a;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: 700;
 }
 
-.task-surface__summary {
-  flex-shrink: 0;
-  color: #6f7889;
-  font-size: 13px;
+.personal-task-card {
+  min-height: 72px;
+  display: grid;
+  grid-template-columns: minmax(220px, 1fr) minmax(120px, 0.65fr) auto;
+  align-items: center;
+  gap: 20px;
+  padding: 14px 18px;
+  border: 1px solid #e2e6ed;
+  border-radius: 10px;
+  background: #fff;
+  cursor: pointer;
+  transition: border-color 0.18s ease, box-shadow 0.18s ease;
 }
 
-.status-cell {
+.personal-task-card:hover {
+  border-color: #9fc8ff;
+  box-shadow: 0 4px 14px rgba(30, 102, 204, 0.09);
+}
+
+.personal-task-card__identity {
+  min-width: 0;
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 6px;
+  gap: 12px;
 }
 
-.task-name {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.task-name__main {
+.personal-task-card__identity > div {
+  min-width: 0;
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--app-text-primary);
-  font-weight: 600;
 }
 
-.task-name__sub {
-  color: var(--app-text-secondary);
-  font-size: 12px;
+.personal-task-card__identity strong {
+  color: #25324a;
+  font-size: 15px;
+  font-weight: 650;
 }
 
-.cycle-cell {
-  color: var(--app-text-primary);
-  font-weight: 500;
+.personal-task-card__icon {
+  width: 36px;
+  height: 36px;
+  flex: 0 0 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 9px;
+  color: #2775df;
+  background: #eaf3ff;
+  font-size: 20px;
 }
 
-.handler-cell {
-  color: var(--app-text-secondary);
+.personal-task-card__state {
+  justify-self: center;
+  color: #7b8495;
   font-size: 13px;
 }
 
-.exempt-tag {
-  flex-shrink: 0;
+.personal-task-card__state.is-pending {
+  color: #d46b08;
+}
+
+.personal-task-card__state.is-progress {
+  color: #155cc3;
+}
+
+.personal-task-card__state.is-completed {
+  color: #389e0d;
 }
 
 .team-count-tabs button {
@@ -1910,18 +1799,29 @@ watch(
     min-width: 168px;
   }
 
-  .performance-surface {
+  .personal-task-surface {
     min-height: 420px;
-    overflow-x: auto;
   }
 
-  .task-surface__header {
-    width: 100%;
-    min-width: 320px;
-  }
-
-  .task-surface__title h2 {
+  .personal-task-surface__title {
     font-size: 16px;
+  }
+
+  .personal-task-card {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+    padding: 12px;
+  }
+
+  .personal-task-card__state {
+    grid-column: 1;
+    justify-self: start;
+    margin-left: 48px;
+  }
+
+  .personal-task-card > .el-button {
+    grid-column: 2;
+    grid-row: 1 / 3;
   }
 
   .team-count-tabs {

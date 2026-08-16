@@ -644,7 +644,7 @@ test.describe('09-performance-workspace employee tasks', () => {
     await expect(page.getByTestId('task-surface')).toBeVisible();
   });
 
-  test('stage filtering includes matching tasks beyond the first ten records', async ({ page }) => {
+  test('compact personal stage navigation remains stable beyond the first API page', async ({ page }) => {
     const tasks = Array.from({ length: 12 }, (_, index) => ({
       id: `mock-task-${index + 1}`,
       cycleId: 'mock-cycle',
@@ -686,8 +686,9 @@ test.describe('09-performance-workspace employee tasks', () => {
     await page.goto('/tasks');
     await page.getByTestId('task-stage-self-eval').click();
 
-    await expect(page.getByText('Mock Cycle · 个人绩效')).toBeVisible();
-    await expect(page.getByText('共 1 项')).toBeVisible();
+    await expect(page.getByTestId('personal-task-card')).toContainText('自评');
+    await expect(page.getByTestId('personal-task-detail')).toHaveText('查看详情');
+    await expect(page.getByRole('columnheader')).toHaveCount(0);
   });
 });
 

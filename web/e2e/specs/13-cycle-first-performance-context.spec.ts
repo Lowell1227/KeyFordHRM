@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import type { AssessmentCycle } from '../../src/types/api.types';
+import type { AssessmentCycle, TaskListItem } from '../../src/types/api.types';
 import {
   localDateKey,
   orderPerformanceCycles,
@@ -89,6 +89,7 @@ async function mockTaskCycleShell(
   page: import('@playwright/test').Page,
   cycleItems: AssessmentCycle[],
   taskRequests: URL[],
+  personalTasks: TaskListItem[] = [],
 ) {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-cycle-context-token');
@@ -124,7 +125,12 @@ async function mockTaskCycleShell(
     taskRequests.push(new URL(route.request().url()));
     return route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+      body: JSON.stringify(apiResponse({
+        total: personalTasks.length,
+        page: 1,
+        pageSize: 100,
+        items: personalTasks,
+      })),
     });
   });
   await page.route('**/api/v1/tasks/team**', (route) => {
@@ -200,6 +206,45 @@ test.describe('cycle-first task contracts', () => {
 
     await expect(page.getByText('暂无考核周期').first()).toBeVisible();
     expect(taskRequests).toHaveLength(0);
+  });
+
+  test('renders every personal stage as one compact detail card', async ({ page }) => {
+    const taskRequests: URL[] = [];
+    const currentCycle = cycle('current', '2026-07-01', '2026-09-30');
+    const personalTask: TaskListItem = {
+      id: 'personal-task-1',
+      cycleId: currentCycle.id,
+      cycleName: currentCycle.name,
+      employeeId: 'manager-1',
+      employeeName: 'Cycle Manager',
+      status: 'self_eval',
+      isExempt: false,
+      updatedAt: '2026-08-16T00:00:00.000Z',
+    };
+    await mockTaskCycleShell(page, [currentCycle], taskRequests, [personalTask]);
+
+    await page.goto('/tasks?scope=mine');
+
+    const card = page.getByTestId('personal-task-card');
+    await expect(card).toContainText('目标制定');
+    await expect(card).toContainText('已完成');
+    await expect(page.getByRole('columnheader')).toHaveCount(0);
+    await expect(page.locator('.app-pager')).toHaveCount(0);
+
+    await page.getByTestId('task-stage-goal-confirmation').click();
+    await expect(card).toContainText('目标确认');
+    await expect(card).toContainText('已完成');
+
+    await page.getByTestId('task-stage-self-eval').click();
+    await expect(card).toContainText('自评');
+    await expect(card).toContainText('待处理');
+
+    await page.getByTestId('task-stage-result').click();
+    await expect(card).toContainText('结果确认');
+    await expect(card).toContainText('未开始');
+
+    await page.getByTestId('personal-task-detail').click();
+    await expect(page).toHaveURL(/\/tasks\/personal-task-1/);
   });
 });
 
