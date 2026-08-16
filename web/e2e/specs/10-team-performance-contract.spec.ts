@@ -28,19 +28,32 @@ test.describe('team performance real API smoke', () => {
   });
 
   test('opens the API-authorized manager evaluation task without route mocking', async ({ page }) => {
+    const cyclesResponse = page.waitForResponse((response) => (
+      response.url().includes('/api/v1/cycles/mine') && response.status() === 200
+    ));
+    await page.goto('/tasks?scope=team&stage=manager-eval&stageState=pending');
+    const cyclesPayload = await (await cyclesResponse).json() as {
+      data: Array<{ id: string; name: string }>;
+    };
+    const managerScoreCycle = cyclesPayload.data.find(
+      (cycle) => cycle.name === 'E2E-acceptance-manager-score',
+    );
+    expect(managerScoreCycle).toBeDefined();
+
     const responsePromise = page.waitForResponse((response) => (
       response.url().includes('/api/v1/tasks/team')
       && new URL(response.url()).searchParams.get('stage') === 'manager-eval'
+      && new URL(response.url()).searchParams.get('cycleId') === managerScoreCycle!.id
       && response.status() === 200
     ));
-    await page.goto('/tasks?scope=team&stage=manager-eval&stageState=pending');
+    await page.goto(`/tasks?scope=team&stage=manager-eval&stageState=pending&cycleId=${managerScoreCycle!.id}`);
     const response = await (await responsePromise).json() as {
       data: { items: Array<{ id: string; cycleId: string; employeeId: string; status: string }> };
     };
     const task = response.data.items.find((item) => item.status === 'manager_scoring');
     expect(task).toBeTruthy();
 
-    await page.goto(`/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&stageState=pending&cycleId=${task!.cycleId}&employeeId=${task!.employeeId}&taskId=${task!.id}`);
+    await page.goto(`/tasks?scope=team&stage=manager-eval&stageState=pending&cycleId=${task!.cycleId}&employeeId=${task!.employeeId}&taskId=${task!.id}`);
     await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
     await expect(page.getByTestId('team-task-workspace')).toBeVisible();
   });
