@@ -171,6 +171,7 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
 
     <div class="indicator-grid indicator-grid--header" aria-hidden="true">
       <span>指标</span>
+      <span>指标描述</span>
       <span>权重</span>
       <span>{{ secondaryColumnLabel }}</span>
       <span>状态</span>
@@ -205,6 +206,9 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
             <span class="indicator-row__index">{{ index + 1 }}</span>
             <span>{{ row.name || '未命名指标' }}</span>
           </button>
+          <span class="indicator-row__description" :title="row.description || ''">
+            {{ row.description || '-' }}
+          </span>
           <span class="indicator-row__weight">{{ Number((row.weight * 100).toFixed(2)) }}%</span>
           <div class="indicator-row__visibility" @click.stop>
             <slot name="visibility" :row="row" :index="index">
@@ -313,7 +317,7 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
 
 .indicator-grid {
   display: grid;
-  grid-template-columns: minmax(180px, 1fr) 70px minmax(140px, 180px) 82px 38px;
+  grid-template-columns: minmax(170px, 0.9fr) minmax(230px, 1.35fr) 70px minmax(130px, 170px) 82px 38px;
   align-items: center;
   gap: 10px;
 }
@@ -421,11 +425,21 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
 }
 
 .indicator-row__weight,
+.indicator-row__description,
 .indicator-row__status,
 .indicator-row__visibility {
   min-width: 0;
   color: #596579;
   font-size: 12px;
+}
+
+.indicator-row__description {
+  display: -webkit-box;
+  overflow: hidden;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 
 .indicator-row__visibility > span,
@@ -504,6 +518,7 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
     grid-template-columns: minmax(0, 1fr) 58px 36px;
     grid-template-areas:
       "name weight command"
+      "description description description"
       "visibility visibility status";
     gap: 5px 8px;
   }
@@ -524,6 +539,11 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
   .indicator-row__weight {
     grid-area: weight;
     text-align: right;
+  }
+
+  .indicator-row__description {
+    grid-area: description;
+    padding-left: 33px;
   }
 
   .indicator-row__visibility {

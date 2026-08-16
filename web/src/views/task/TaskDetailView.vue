@@ -28,6 +28,7 @@ const route = useRoute();
 const router = useRouter();
 const taskStore = useTaskStore();
 const authStore = useAuthStore();
+const PERFORMANCE_REFERENCE_ENABLED = false;
 
 const cycle = ref<AssessmentCycle | null>(null);
 const cycleLoading = ref(false);
@@ -352,7 +353,10 @@ async function handleRemind() {
         </div>
       </section>
 
-      <div class="performance-detail__workspace">
+      <div
+        class="performance-detail__workspace"
+        :class="{ 'has-reference': PERFORMANCE_REFERENCE_ENABLED }"
+      >
         <section class="performance-detail__main">
           <ExemptView v-if="task.isExempt" :task="task" />
 
@@ -454,7 +458,7 @@ async function handleRemind() {
           />
         </section>
 
-        <aside class="reference-card">
+        <aside v-if="PERFORMANCE_REFERENCE_ENABLED" class="reference-card">
           <div class="reference-card__title">参考信息</div>
           <PerformanceReferencePanel
             :cycle-id="task.cycleId"
@@ -580,9 +584,13 @@ async function handleRemind() {
 .performance-detail__workspace {
   min-width: 0;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  grid-template-columns: minmax(0, 1fr);
   align-items: start;
   gap: 14px;
+}
+
+.performance-detail__workspace.has-reference {
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
 }
 
 .performance-detail__main {
@@ -667,7 +675,7 @@ async function handleRemind() {
 }
 
 @media (max-width: 1180px) {
-  .performance-detail__workspace {
+  .performance-detail__workspace.has-reference {
     grid-template-columns: 1fr;
   }
 }

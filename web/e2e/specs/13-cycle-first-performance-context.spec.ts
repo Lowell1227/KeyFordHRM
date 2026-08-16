@@ -273,7 +273,7 @@ test.describe('cycle-first task contracts', () => {
     await expect(page).toHaveURL(/\/tasks\/personal-task-1/);
   });
 
-  test('opens personal work in the dedicated performance detail layout', async ({ page }) => {
+  test('shows indicator descriptions without the dormant reference panel', async ({ page }) => {
     const taskRequests: URL[] = [];
     const currentCycle = cycle('current', '2026-07-01', '2026-09-30');
     const personalDetail: TaskDetail = {
@@ -318,8 +318,10 @@ test.describe('cycle-first task contracts', () => {
     await expect(detail.getByTestId('performance-cycle-badge')).toHaveText('2026-Q3');
     await expect(detail.getByTestId('performance-employee-summary')).toContainText('Cycle Manager');
     await expect(detail.getByText('考核指标', { exact: true })).toBeVisible();
-    await expect(detail.getByText('参考信息', { exact: true })).toBeVisible();
-    await expect(detail.getByTestId('performance-reference-panel')).toBeVisible();
+    await expect(detail.locator('.indicator-grid--header')).toContainText('指标描述');
+    await expect(detail.getByTestId('indicator-row-indicator-1')).toContainText('Complete the agreed delivery objectives.');
+    await expect(detail.getByText('参考信息', { exact: true })).toHaveCount(0);
+    await expect(detail.getByTestId('performance-reference-panel')).toHaveCount(0);
     await expect(detail.getByText('任务详情', { exact: true })).toHaveCount(0);
     await expect(detail.getByText('人员信息', { exact: true })).toHaveCount(0);
     await expect(detail.locator('.el-steps')).toHaveCount(0);
