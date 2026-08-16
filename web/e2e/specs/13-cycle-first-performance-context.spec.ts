@@ -316,7 +316,7 @@ const emptyReportSummary = {
 
 async function authenticateCyclePage(
   page: import('@playwright/test').Page,
-  role: 'manager' | 'hr',
+  role: 'manager' | 'hr' | 'vp',
 ) {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-report-cycle-token');
@@ -441,4 +441,104 @@ test('management dashboard uses the nearest eligible result cycle', async ({ pag
 
   await expect(page.getByTestId('dashboard-result-cycle')).toHaveText('current-result');
   expect(summaryCycles).toEqual(['current-result']);
+});
+
+async function mockLifecycleCycleShell(
+  page: import('@playwright/test').Page,
+  kind: 'calibration' | 'approval' | 'publish',
+  cycleItems: AssessmentCycle[],
+  businessCycles: string[],
+) {
+  await authenticateCyclePage(page, kind === 'approval' ? 'vp' : 'hr');
+  await page.route('**/api/v1/cycles**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      total: cycleItems.length,
+      page: 1,
+      pageSize: 100,
+      items: cycleItems,
+    })),
+  }));
+
+  if (kind === 'calibration') {
+    await page.route('**/api/v1/cycles/*/calibration**', (route) => {
+      const match = new URL(route.request().url()).pathname.match(/\/cycles\/([^/]+)\/calibration/);
+      if (match?.[1]) businessCycles.push(match[1]);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          gradeDistribution: {},
+          totalActive: 0,
+          pendingCalibration: 0,
+          items: [],
+        })),
+      });
+    });
+  } else if (kind === 'approval') {
+    await page.route('**/api/v1/cycles/*/approval**', (route) => {
+      const match = new URL(route.request().url()).pathname.match(/\/cycles\/([^/]+)\/approval/);
+      if (match?.[1]) businessCycles.push(match[1]);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse([])),
+      });
+    });
+  } else {
+    await page.route('**/api/v1/tasks**', (route) => {
+      const cycleId = new URL(route.request().url()).searchParams.get('cycleId');
+      if (cycleId) businessCycles.push(cycleId);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
+      });
+    });
+  }
+}
+
+test.describe('cycle-first lifecycle workbench contracts', () => {
+  test.use({ baseURL: 'http://localhost:5173' });
+
+  for (const entry of [
+    { kind: 'calibration' as const, path: '/calibration', testId: 'calibration-cycle-select' },
+    { kind: 'approval' as const, path: '/approval', testId: 'approval-cycle-select' },
+    { kind: 'publish' as const, path: '/publish', testId: 'publish-cycle-select' },
+  ]) {
+    test(`${entry.kind} selects the nearest eligible cycle before loading work`, async ({ page }) => {
+      const businessCycles: string[] = [];
+      await mockLifecycleCycleShell(page, entry.kind, [
+        cycle('past-eligible', '2026-01-01', '2026-03-31'),
+        cycle('current-eligible', '2026-07-01', '2026-09-30'),
+      ], businessCycles);
+
+      await page.goto(entry.path);
+
+      await expect(page).toHaveURL(/cycleId=current-eligible/);
+      await expect(page.getByTestId(entry.testId)).toContainText('current-eligible');
+      await expect.poll(() => businessCycles.length).toBe(1);
+      expect(businessCycles).toEqual(['current-eligible']);
+    });
+  }
+
+  test('keeps an eligible historical approval deep link', async ({ page }) => {
+    const businessCycles: string[] = [];
+    await mockLifecycleCycleShell(page, 'approval', [
+      cycle('current-eligible', '2026-07-01', '2026-09-30'),
+      cycle('past-eligible', '2026-01-01', '2026-03-31'),
+    ], businessCycles);
+
+    await page.goto('/approval?cycleId=past-eligible');
+
+    await expect(page.getByTestId('approval-cycle-select')).toContainText('past-eligible');
+    expect(businessCycles).toEqual(['past-eligible']);
+  });
+
+  test('does not load calibration work without an eligible cycle', async ({ page }) => {
+    const businessCycles: string[] = [];
+    await mockLifecycleCycleShell(page, 'calibration', [], businessCycles);
+
+    await page.goto('/calibration');
+
+    await expect(page.getByText('暂无可校准的考核周期')).toBeVisible();
+    expect(businessCycles).toHaveLength(0);
+  });
 });

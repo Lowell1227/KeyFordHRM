@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { cyclesApi } from '@/api/cycles.api';
 import { tasksApi } from '@/api/tasks.api';
@@ -11,14 +12,20 @@ import { usePagination } from '@/composables/usePagination';
 import { formatScore } from '@/utils/score';
 import type { AssessmentCycle, TaskListItem } from '@/types/api.types';
 import type { TaskStatus } from '@/types/enums';
+import { resolvePerformanceCycle } from '@/utils/performance-cycle';
+
+const route = useRoute();
+const router = useRouter();
 
 const cycles = ref<AssessmentCycle[]>([]);
-const selectedCycleId = ref<string | null>(null);
+const selectedCycleId = ref('');
 const tasks = ref<TaskListItem[]>([]);
 const loading = ref(false);
 const publishing = ref(false);
 const selectedTaskIds = ref<string[]>([]);
 const sendDingtalk = ref(false);
+let publishReady = false;
+let publishCycleSyncing = false;
 
 const tableRef = ref<any>(null);
 
@@ -51,12 +58,39 @@ async function loadCycles() {
   try {
     const res = await cyclesApi.findAll({ status: 'approval' });
     cycles.value = res.items;
-    if (cycles.value.length > 0 && !selectedCycleId.value) {
-      selectedCycleId.value = cycles.value[0].id;
-    }
   } catch {
     cycles.value = [];
   }
+}
+
+async function normalizePublishCycle() {
+  const requestedCycleId = typeof route.query.cycleId === 'string'
+    ? route.query.cycleId
+    : undefined;
+  const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+  cycles.value = resolved.orderedCycles;
+  selectedCycleId.value = resolved.selectedCycle?.id ?? '';
+
+  if (selectedCycleId.value && requestedCycleId !== selectedCycleId.value) {
+    await router.replace({ query: { ...route.query, cycleId: selectedCycleId.value } });
+  } else if (!selectedCycleId.value && requestedCycleId) {
+    const query = { ...route.query };
+    delete query.cycleId;
+    await router.replace({ query });
+  }
+}
+
+function clearPublishState() {
+  tasks.value = [];
+  total.value = 0;
+  selectedTaskIds.value = [];
+  tableRef.value?.clearSelection();
+  sendDingtalk.value = false;
+}
+
+async function selectPublishCycle(cycleId: string) {
+  if (!cycleId || cycleId === selectedCycleId.value) return;
+  await router.push({ query: { ...route.query, cycleId } });
 }
 
 async function loadTasks() {
@@ -90,19 +124,43 @@ function refreshList() {
   loadTasks();
 }
 
-watch(selectedCycleId, () => {
-  resetPagination();
-  refreshList();
-});
+watch(
+  () => route.query.cycleId,
+  async (cycleId) => {
+    if (!publishReady) return;
+    const requestedCycleId = typeof cycleId === 'string' ? cycleId : undefined;
+    const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+    const canonicalCycleId = resolved.selectedCycle?.id ?? '';
+    if (canonicalCycleId && requestedCycleId !== canonicalCycleId) {
+      await router.replace({ query: { ...route.query, cycleId: canonicalCycleId } });
+      return;
+    }
+    if (!canonicalCycleId && requestedCycleId) {
+      const query = { ...route.query };
+      delete query.cycleId;
+      await router.replace({ query });
+      return;
+    }
+    if (selectedCycleId.value === canonicalCycleId) return;
+    publishCycleSyncing = true;
+    clearPublishState();
+    selectedCycleId.value = canonicalCycleId;
+    resetPagination();
+    publishCycleSyncing = false;
+    await loadTasks();
+  },
+);
 
 watch([page, pageSize], () => {
+  if (!publishReady || publishCycleSyncing) return;
   loadTasks();
 });
 
-onMounted(() => {
-  loadCycles().then(() => {
-    if (selectedCycleId.value) loadTasks();
-  });
+onMounted(async () => {
+  await loadCycles();
+  await normalizePublishCycle();
+  publishReady = true;
+  await loadTasks();
 });
 
 function onSelectionChange(rows: TaskListItem[]) {
@@ -161,11 +219,14 @@ async function handlePublish() {
       <template #extra>
         <div class="publish-view__toolbar">
           <el-select
-            v-model="selectedCycleId"
-            placeholder="选择考核周期"
+            :model-value="selectedCycleId"
+            data-testid="publish-cycle-select"
+            :placeholder="cycles.length ? '选择考核周期' : '暂无考核周期'"
             style="width: 260px"
             :disabled="cycles.length === 0"
+            @change="selectPublishCycle"
           >
+            <el-option v-if="cycles.length === 0" label="暂无考核周期" value="" disabled />
             <el-option
               v-for="cycle in cycles"
               :key="cycle.id"

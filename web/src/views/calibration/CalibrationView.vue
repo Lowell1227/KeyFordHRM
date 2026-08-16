@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { calibrationApi } from '@/api/calibration.api';
 import { cyclesApi } from '@/api/cycles.api';
@@ -7,9 +8,11 @@ import { useCycleStore } from '@/stores/cycle.store';
 import GradeTag from '@/components/common/GradeTag.vue';
 import GradeDistChart from '@/components/charts/GradeDistChart.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import EmptyState from '@/components/common/EmptyState.vue';
 import type { CalibrationCandidate, CalibrationSummary, AssessmentCycle } from '@/types/api.types';
 import type { PerfGrade } from '@/types/enums';
 import { GRADE_LABELS } from '@/utils/grade';
+import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 
 interface LocalEdit {
   calibratedGrade: PerfGrade;
@@ -22,6 +25,8 @@ type SortField = 'calculatedScore' | 'rawGrade' | 'employeeName';
 type SortOrder = 'asc' | 'desc';
 
 const cycleStore = useCycleStore();
+const route = useRoute();
+const router = useRouter();
 
 const cycles = ref<AssessmentCycle[]>([]);
 const selectedCycleId = ref<string>('');
@@ -38,6 +43,7 @@ const sortOrder = ref<SortOrder>('desc');
 
 const batchGrade = ref<PerfGrade>('B');
 const batchNote = ref('');
+let calibrationReady = false;
 
 const GRADES: PerfGrade[] = ['A', 'B', 'C', 'D'];
 
@@ -174,16 +180,48 @@ async function loadCycles() {
   try {
     const res = await cyclesApi.findAll({ status: 'hr_calibration' });
     cycles.value = res.items;
-    if (cycles.value.length > 0 && !selectedCycleId.value) {
-      selectedCycleId.value = cycles.value[0].id;
-    }
   } catch (e) {
+    cycles.value = [];
     ElMessage.error(e instanceof Error ? e.message : '获取可校准周期失败');
   }
 }
 
+async function normalizeCalibrationCycle() {
+  const requestedCycleId = typeof route.query.cycleId === 'string'
+    ? route.query.cycleId
+    : undefined;
+  const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+  cycles.value = resolved.orderedCycles;
+  selectedCycleId.value = resolved.selectedCycle?.id ?? '';
+
+  if (selectedCycleId.value && requestedCycleId !== selectedCycleId.value) {
+    await router.replace({ query: { ...route.query, cycleId: selectedCycleId.value } });
+  } else if (!selectedCycleId.value && requestedCycleId) {
+    const query = { ...route.query };
+    delete query.cycleId;
+    await router.replace({ query });
+  }
+}
+
+function clearCalibrationState() {
+  candidates.value = [];
+  summary.value = null;
+  selectedTaskIds.value = [];
+  edits.value = {};
+  batchNote.value = '';
+  deptFilter.value = '';
+}
+
+async function selectCalibrationCycle(cycleId: string) {
+  if (!cycleId || cycleId === selectedCycleId.value) return;
+  await router.push({ query: { ...route.query, cycleId } });
+}
+
 async function loadCandidates() {
-  if (!selectedCycleId.value) return;
+  if (!selectedCycleId.value) {
+    clearCalibrationState();
+    return;
+  }
   loading.value = true;
   try {
     const res = await calibrationApi.getWorkbench(selectedCycleId.value);
@@ -269,18 +307,37 @@ async function toggleVeto(taskId: string, candidate: CalibrationCandidate) {
   ElMessage.success(next ? '已标记一票否决' : '已取消一票否决');
 }
 
-watch(selectedCycleId, () => {
-  loadCandidates();
-  cycleStore.setCurrent(selectedCycle.value);
-});
-
-onMounted(() => {
-  loadCycles().then(() => {
-    if (selectedCycleId.value) {
-      loadCandidates();
-      cycleStore.setCurrent(selectedCycle.value);
+watch(
+  () => route.query.cycleId,
+  async (cycleId) => {
+    if (!calibrationReady) return;
+    const requestedCycleId = typeof cycleId === 'string' ? cycleId : undefined;
+    const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+    const canonicalCycleId = resolved.selectedCycle?.id ?? '';
+    if (canonicalCycleId && requestedCycleId !== canonicalCycleId) {
+      await router.replace({ query: { ...route.query, cycleId: canonicalCycleId } });
+      return;
     }
-  });
+    if (!canonicalCycleId && requestedCycleId) {
+      const query = { ...route.query };
+      delete query.cycleId;
+      await router.replace({ query });
+      return;
+    }
+    if (selectedCycleId.value === canonicalCycleId) return;
+    clearCalibrationState();
+    selectedCycleId.value = canonicalCycleId;
+    cycleStore.setCurrent(selectedCycle.value);
+    await loadCandidates();
+  },
+);
+
+onMounted(async () => {
+  await loadCycles();
+  await normalizeCalibrationCycle();
+  calibrationReady = true;
+  cycleStore.setCurrent(selectedCycle.value);
+  await loadCandidates();
 });
 </script>
 
@@ -290,11 +347,15 @@ onMounted(() => {
       <template #title>绩效校准工作台</template>
       <template #extra>
         <el-select
-          v-model="selectedCycleId"
-          placeholder="选择考核周期"
+          :model-value="selectedCycleId"
+          data-testid="calibration-cycle-select"
+          :placeholder="cycles.length ? '选择考核周期' : '暂无考核周期'"
           style="width: 280px"
           :loading="loading"
+          :disabled="cycles.length === 0"
+          @change="selectCalibrationCycle"
         >
+          <el-option v-if="cycles.length === 0" label="暂无考核周期" value="" disabled />
           <el-option
             v-for="cycle in cycles"
             :key="cycle.id"
@@ -314,7 +375,9 @@ onMounted(() => {
       </div>
     </ChartCard>
 
-    <el-row :gutter="16" class="middle-row">
+    <EmptyState v-if="!selectedCycle" description="暂无可校准的考核周期" />
+
+    <el-row v-else :gutter="16" class="middle-row">
       <el-col :xs="24" :md="14">
         <ChartCard class="chart-card">
           <template #title>当前等级分布</template>

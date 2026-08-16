@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { approvalApi } from '@/api/approval.api';
 import { cyclesApi } from '@/api/cycles.api';
@@ -7,13 +8,18 @@ import GradeTag from '@/components/common/GradeTag.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import type { ApprovalTaskView, AssessmentCycle } from '@/types/api.types';
+import { resolvePerformanceCycle } from '@/utils/performance-cycle';
+
+const route = useRoute();
+const router = useRouter();
 
 const cycles = ref<AssessmentCycle[]>([]);
-const selectedCycleId = ref<string | null>(null);
+const selectedCycleId = ref('');
 const tasks = ref<ApprovalTaskView[]>([]);
 const loading = ref(false);
 const submitting = ref(false);
 const selectedTaskIds = ref<string[]>([]);
+let approvalReady = false;
 
 const selectedCycle = computed(() =>
   cycles.value.find((c) => c.id === selectedCycleId.value),
@@ -32,12 +38,42 @@ async function loadCycles() {
   try {
     const res = await cyclesApi.findAll({ status: 'approval' });
     cycles.value = res.items;
-    if (cycles.value.length > 0 && !selectedCycleId.value) {
-      selectedCycleId.value = cycles.value[0].id;
-    }
   } catch {
     cycles.value = [];
   }
+}
+
+async function normalizeApprovalCycle() {
+  const requestedCycleId = typeof route.query.cycleId === 'string'
+    ? route.query.cycleId
+    : undefined;
+  const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+  cycles.value = resolved.orderedCycles;
+  selectedCycleId.value = resolved.selectedCycle?.id ?? '';
+
+  if (selectedCycleId.value && requestedCycleId !== selectedCycleId.value) {
+    await router.replace({ query: { ...route.query, cycleId: selectedCycleId.value } });
+  } else if (!selectedCycleId.value && requestedCycleId) {
+    const query = { ...route.query };
+    delete query.cycleId;
+    await router.replace({ query });
+  }
+}
+
+function clearApprovalState() {
+  tasks.value = [];
+  selectedTaskIds.value = [];
+  rejectDialog.value = {
+    visible: false,
+    mode: 'single',
+    taskId: undefined,
+    comment: '',
+  };
+}
+
+async function selectApprovalCycle(cycleId: string) {
+  if (!cycleId || cycleId === selectedCycleId.value) return;
+  await router.push({ query: { ...route.query, cycleId } });
 }
 
 async function loadTasks() {
@@ -60,14 +96,35 @@ function refreshList() {
   loadTasks();
 }
 
-watch(selectedCycleId, () => {
-  refreshList();
-});
+watch(
+  () => route.query.cycleId,
+  async (cycleId) => {
+    if (!approvalReady) return;
+    const requestedCycleId = typeof cycleId === 'string' ? cycleId : undefined;
+    const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+    const canonicalCycleId = resolved.selectedCycle?.id ?? '';
+    if (canonicalCycleId && requestedCycleId !== canonicalCycleId) {
+      await router.replace({ query: { ...route.query, cycleId: canonicalCycleId } });
+      return;
+    }
+    if (!canonicalCycleId && requestedCycleId) {
+      const query = { ...route.query };
+      delete query.cycleId;
+      await router.replace({ query });
+      return;
+    }
+    if (selectedCycleId.value === canonicalCycleId) return;
+    clearApprovalState();
+    selectedCycleId.value = canonicalCycleId;
+    await loadTasks();
+  },
+);
 
-onMounted(() => {
-  loadCycles().then(() => {
-    if (selectedCycleId.value) loadTasks();
-  });
+onMounted(async () => {
+  await loadCycles();
+  await normalizeApprovalCycle();
+  approvalReady = true;
+  await loadTasks();
 });
 
 function onSelectionChange(rows: ApprovalTaskView[]) {
@@ -200,11 +257,14 @@ function handleBatchReject() {
       <template #extra>
         <div class="approval-view__toolbar">
           <el-select
-            v-model="selectedCycleId"
-            placeholder="选择考核周期"
+            :model-value="selectedCycleId"
+            data-testid="approval-cycle-select"
+            :placeholder="cycles.length ? '选择考核周期' : '暂无考核周期'"
             style="width: 260px"
             :disabled="cycles.length === 0"
+            @change="selectApprovalCycle"
           >
+            <el-option v-if="cycles.length === 0" label="暂无考核周期" value="" disabled />
             <el-option
               v-for="cycle in cycles"
               :key="cycle.id"
