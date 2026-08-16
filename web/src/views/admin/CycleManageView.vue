@@ -150,6 +150,7 @@ if (Number.isInteger(initialPage) && initialPage > 0) page.value = initialPage;
 
 const createDialogVisible = ref(false);
 const advancedCreateVisible = ref(false);
+const createInitialSnapshot = ref('');
 const editDialogVisible = ref(false);
 const editingCycle = ref<AssessmentCycle | null>(null);
 const preflightLoading = ref(false);
@@ -188,6 +189,10 @@ const createForm = reactive({
   gradeDMaxRatio: 10,
   publishVisibleFields: { ...DEFAULT_VISIBLE_FIELDS },
 });
+
+function createFormSnapshot(): string {
+  return JSON.stringify(createForm);
+}
 
 const editForm = reactive<Record<DeadlineKey, Date | undefined>>({
   deadlineIndicatorSetting: undefined,
@@ -258,6 +263,7 @@ function resetCreateForm() {
   resetAutoFilledCreateDeadlines();
   createFormRef.value?.resetFields?.();
   presetNextQuarter();
+  createInitialSnapshot.value = createFormSnapshot();
 }
 
 function presetNextQuarter() {
@@ -283,6 +289,36 @@ function presetNextQuarter() {
 function openCreateDialog() {
   resetCreateForm();
   createDialogVisible.value = true;
+}
+
+async function confirmDiscardCreateChanges(): Promise<boolean> {
+  if (createFormSnapshot() === createInitialSnapshot.value) return true;
+  try {
+    await ElMessageBox.confirm(
+      '当前周期信息尚未保存，关闭后本次修改将丢失。',
+      '放弃未保存内容？',
+      {
+        confirmButtonText: '继续关闭',
+        cancelButtonText: '返回编辑',
+        type: 'warning',
+      },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function requestCloseCreateDialog() {
+  if (!await confirmDiscardCreateChanges()) return;
+  createDialogVisible.value = false;
+  resetCreateForm();
+}
+
+async function handleCreateBeforeClose(done: () => void) {
+  if (!await confirmDiscardCreateChanges()) return;
+  resetCreateForm();
+  done();
 }
 
 function formatDateTimeLocal(value: Date | undefined | null): string | undefined {
@@ -834,7 +870,15 @@ onMounted(() => {
     </ChartCard>
 
     <!-- 新建周期 -->
-    <el-dialog v-model="createDialogVisible" data-testid="cycle-create-dialog" title="新建考核周期" width="760px" destroy-on-close>
+    <el-dialog
+      v-model="createDialogVisible"
+      class="cycle-create-dialog"
+      data-testid="cycle-create-dialog"
+      title="新建考核周期"
+      width="760px"
+      destroy-on-close
+      :before-close="handleCreateBeforeClose"
+    >
       <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="120px">
         <el-row :gutter="16">
           <el-col :span="12">
@@ -991,7 +1035,7 @@ onMounted(() => {
       </el-form>
 
       <template #footer>
-        <el-button @click="createDialogVisible = false">取消</el-button>
+        <el-button @click="requestCloseCreateDialog">取消</el-button>
         <el-button data-testid="cycle-create-save-draft" :loading="submitting" @click="handleCreate(false)">保存草稿</el-button>
         <el-button data-testid="cycle-create-and-check" type="primary" :loading="submitting" @click="handleCreate(true)">
           创建并开放检查
@@ -1169,5 +1213,61 @@ onMounted(() => {
 
 :deep(.el-input-number .el-input__inner) {
   text-align: left;
+}
+
+@media (max-width: 767px) {
+  .cycle-list-toolbar,
+  .filter-row {
+    align-items: stretch;
+  }
+
+  .cycle-group-tabs {
+    width: 100%;
+  }
+
+  .cycle-group-tabs button {
+    flex: 1;
+    min-width: 0;
+    padding-inline: 8px;
+  }
+
+  .filter-row > :deep(.el-select),
+  .filter-row > :deep(.el-input) {
+    width: 100% !important;
+  }
+
+  :global(.cycle-create-dialog) {
+    width: calc(100% - 24px) !important;
+    margin-top: 12px !important;
+  }
+
+  .cycle-create-dialog :deep(.el-col-12) {
+    max-width: 100%;
+    flex: 0 0 100%;
+  }
+
+  .cycle-create-dialog :deep(.el-form-item) {
+    display: block;
+  }
+
+  .cycle-create-dialog :deep(.el-form-item__label) {
+    width: auto !important;
+    justify-content: flex-start;
+  }
+
+  .cycle-create-dialog :deep(.el-form-item__content) {
+    margin-left: 0 !important;
+  }
+
+  .cycle-plan-summary {
+    grid-template-columns: 1fr;
+    margin-left: 0;
+  }
+
+  .advanced-create-toggle {
+    align-items: flex-start;
+    width: 100%;
+    margin-left: 0;
+  }
 }
 </style>

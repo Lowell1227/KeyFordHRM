@@ -278,4 +278,37 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByRole('button', { name: '立即开放' })).toBeVisible();
     await expect(page.getByRole('button', { name: '按开放时间预约' })).toBeVisible();
   });
+
+  test('keeps list, creation, and workspace primary actions usable at 390px', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await mockCyclePage(page);
+    await page.goto('/cycles?group=attention');
+
+    await expect(page.getByTestId('cycle-compact-card-cycle-draft')).toBeVisible();
+    await expect(page.getByTestId('cycle-primary-mobile-cycle-draft')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+
+    await page.getByTestId('cycle-create').click();
+    await expect(page.getByTestId('cycle-create-and-check')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.getByRole('button', { name: '取消' }).click();
+
+    await page.getByTestId('cycle-compact-card-cycle-draft').click();
+    await expect(page.getByTestId('cycle-workspace-back')).toBeVisible();
+    await expect(page.getByTestId('cycle-current-action')).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+  });
+
+  test('warns before discarding edits from the compact creation form', async ({ page }) => {
+    await mockCyclePage(page);
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    await page.getByPlaceholder('如 2026 Q2 季度考核').fill('临时修改的周期名称');
+    await page.getByTestId('cycle-create-dialog').getByRole('button', { name: '取消', exact: true }).click();
+
+    await expect(page.getByRole('dialog', { name: '放弃未保存内容？' })).toBeVisible();
+    await page.getByRole('button', { name: '继续关闭' }).click();
+    await expect(page.getByTestId('cycle-create-dialog')).not.toBeVisible();
+  });
 });

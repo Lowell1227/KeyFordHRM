@@ -150,6 +150,63 @@ function handleMore(command: string, cycle: AssessmentCycle) {
       </template>
     </el-table-column>
   </el-table>
+
+  <section v-loading="loading" class="cycle-mobile-list" aria-label="周期列表">
+    <article
+      v-for="cycle in cycles"
+      :key="cycle.id"
+      :data-testid="`cycle-compact-card-${cycle.id}`"
+      class="cycle-mobile-card"
+      role="button"
+      tabindex="0"
+      @click="emit('open', cycle)"
+      @keyup.enter="emit('open', cycle)"
+    >
+      <header>
+        <div>
+          <strong>{{ cycle.name }}</strong>
+          <span>{{ TYPE_LABEL[cycle.type] }} · {{ formatDate(cycle.startDate) }}–{{ formatDate(cycle.endDate) }}</span>
+        </div>
+        <el-tag :type="STATUS_TAG_TYPE[cycle.status]" size="small">{{ STATUS_LABEL[cycle.status] }}</el-tag>
+      </header>
+      <div class="cycle-mobile-card__next">
+        <span>下一步</span>
+        <strong>{{ cycleNextStep(cycle).label }}</strong>
+        <small v-if="formatNextTime(cycleNextStep(cycle).time)">{{ formatNextTime(cycleNextStep(cycle).time) }}</small>
+      </div>
+      <footer @click.stop>
+        <el-button
+          :data-testid="`cycle-primary-mobile-${cycle.id}`"
+          type="primary"
+          size="small"
+          :loading="launchingId === cycle.id"
+          @click="emit('primary', cycle)"
+        >
+          {{ cyclePrimaryActionLabel(cycle.status) }}
+        </el-button>
+        <el-dropdown trigger="click" @command="handleMore($event as string, cycle)">
+          <el-button :icon="MoreFilled" text aria-label="更多操作" />
+          <template #dropdown>
+            <el-dropdown-menu>
+              <el-dropdown-item
+                command="deadlines"
+                :disabled="['scheduled', 'launch_blocked'].includes(cycle.status)"
+              >
+                修改截止日
+              </el-dropdown-item>
+              <el-dropdown-item
+                v-if="['scheduled', 'launch_blocked'].includes(cycle.status)"
+                command="cancel-schedule"
+                divided
+              >
+                取消预约
+              </el-dropdown-item>
+            </el-dropdown-menu>
+          </template>
+        </el-dropdown>
+      </footer>
+    </article>
+  </section>
 </template>
 
 <style scoped>
@@ -200,5 +257,56 @@ function handleMore(command: string, cycle: AssessmentCycle) {
   display: flex;
   align-items: center;
   gap: 4px;
+}
+
+.cycle-mobile-list {
+  display: none;
+}
+
+@media (max-width: 767px) {
+  .cycle-compact-table {
+    display: none;
+  }
+
+  .cycle-mobile-list {
+    display: grid;
+    gap: 10px;
+    padding: 12px;
+  }
+
+  .cycle-mobile-card {
+    display: grid;
+    gap: 14px;
+    padding: 14px;
+    background: #fff;
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 10px;
+    cursor: pointer;
+  }
+
+  .cycle-mobile-card > header,
+  .cycle-mobile-card > footer {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 12px;
+  }
+
+  .cycle-mobile-card > header > div,
+  .cycle-mobile-card__next {
+    display: grid;
+    gap: 4px;
+  }
+
+  .cycle-mobile-card > header span,
+  .cycle-mobile-card__next span,
+  .cycle-mobile-card__next small {
+    color: var(--el-text-color-secondary);
+    font-size: 12px;
+  }
+
+  .cycle-mobile-card__next strong {
+    font-size: 14px;
+  }
 }
 </style>

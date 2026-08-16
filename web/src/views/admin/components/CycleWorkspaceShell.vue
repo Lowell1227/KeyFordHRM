@@ -495,4 +495,54 @@ function blockerActionLabel(code: string): string {
   margin: 0;
   color: var(--el-text-color-secondary);
 }
+
+@media (max-width: 767px) {
+  .cycle-workspace__header {
+    align-items: flex-start;
+    padding: 14px 12px;
+  }
+
+  .cycle-workspace__identity {
+    align-items: flex-start;
+  }
+
+  .cycle-workspace__identity h1 {
+    font-size: 18px;
+  }
+
+  .cycle-workspace__header-actions {
+    display: none;
+  }
+
+  .cycle-stage-strip {
+    margin: 12px;
+    padding: 14px;
+  }
+
+  .cycle-workspace__main,
+  .cycle-workspace__surface {
+    margin: 0 12px;
+  }
+
+  .cycle-current-action {
+    padding: 16px;
+  }
+
+  .cycle-current-action__heading,
+  .cycle-preflight-blockers article,
+  .cycle-preflight-empty {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .cycle-current-action__heading > .el-button,
+  .cycle-preflight-blockers article .el-button,
+  .cycle-preflight-empty .el-button {
+    width: 100%;
+  }
+
+  .cycle-stat-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
 </style>
