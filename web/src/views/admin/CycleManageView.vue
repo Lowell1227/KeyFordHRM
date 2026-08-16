@@ -8,6 +8,7 @@ import { departmentsApi } from '@/api/departments.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
 import CycleCompactTable from './components/CycleCompactTable.vue';
+import CycleWorkspaceShell from './components/CycleWorkspaceShell.vue';
 import { cycleStatusGroup } from './cycle-management';
 import { useAuthStore } from '@/stores/auth.store';
 import { usePagination } from '@/composables/usePagination';
@@ -151,13 +152,14 @@ const createDialogVisible = ref(false);
 const advancedCreateVisible = ref(false);
 const editDialogVisible = ref(false);
 const editingCycle = ref<AssessmentCycle | null>(null);
-const preflightDialogVisible = ref(false);
 const preflightLoading = ref(false);
+const preflightError = ref('');
 const preflightCycle = ref<AssessmentCycle | null>(null);
 const preflight = ref<LaunchPreflightResult | null>(null);
-const detailDialogVisible = ref(false);
 const detailLoading = ref(false);
+const detailError = ref('');
 const cycleDetail = ref<AssessmentCycle | null>(null);
+const isCycleWorkspace = computed(() => typeof route.query.cycleId === 'string' && route.query.cycleId.length > 0);
 
 const createFormRef = ref<InstanceType<typeof import('element-plus')['ElForm']> | null>(null);
 const editFormRef = ref<InstanceType<typeof import('element-plus')['ElForm']> | null>(null);
@@ -396,8 +398,7 @@ async function handleCreate(runPreflight = false) {
     resetCreateForm();
     await loadCycles();
     if (runPreflight) {
-      await router.push({ query: { ...route.query, cycleId: created.id } });
-      await handlePreflight(created);
+      await openCycleWorkspace(created, true);
     }
   } catch {
     // 写请求失败已由 HTTP 拦截器显示后端业务文案，这里只负责收起 loading。
@@ -473,6 +474,7 @@ async function handleUpdateDeadlines() {
     editDialogVisible.value = false;
     editingCycle.value = null;
     await loadCycles();
+    if (isCycleWorkspace.value && cycleDetail.value) await loadCycleDetail(cycleDetail.value.id);
   } catch (e) {
     // 写请求失败已由 HTTP 拦截器提示，这里只负责收起 loading，避免重复弹出 Axios 英文错误。
   } finally {
@@ -520,8 +522,9 @@ async function handleLaunch(cycle: AssessmentCycle) {
       overrideReason,
     });
     ElMessage.success('目标制定已开放，员工可查看本期任务');
-    preflightDialogVisible.value = false;
+    preflight.value = null;
     await loadCycles();
+    await loadCycleDetail(cycle.id);
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '发起周期失败');
   } finally {
@@ -532,12 +535,12 @@ async function handleLaunch(cycle: AssessmentCycle) {
 async function handlePreflight(cycle: AssessmentCycle) {
   preflightCycle.value = cycle;
   preflight.value = null;
-  preflightDialogVisible.value = true;
+  preflightError.value = '';
   preflightLoading.value = true;
   try {
     preflight.value = await cyclesApi.preflight(cycle.id);
-  } catch {
-    preflightDialogVisible.value = false;
+  } catch (error) {
+    preflightError.value = error instanceof Error ? error.message : '开放检查失败，请重试';
   } finally {
     preflightLoading.value = false;
   }
@@ -550,8 +553,9 @@ async function handleSchedule() {
   try {
     await cyclesApi.schedule(cycle.id, preflight.value.planHash!);
     ElMessage.success(`已预约，将于 ${formatDateTimeForMessage(preflight.value.cycle.goalSettingOpenAt)} 自动开放`);
-    preflightDialogVisible.value = false;
+    preflight.value = null;
     await loadCycles();
+    await loadCycleDetail(cycle.id);
   } finally {
     launchingId.value = null;
   }
@@ -572,30 +576,84 @@ async function handleCancelSchedule(cycle: AssessmentCycle) {
     await cyclesApi.cancelSchedule(cycle.id);
     ElMessage.success('已恢复为草稿');
     await loadCycles();
+    if (isCycleWorkspace.value) await loadCycleDetail(cycle.id);
   } finally {
     launchingId.value = null;
   }
 }
 
-async function handleView(cycle: AssessmentCycle) {
-  detailDialogVisible.value = true;
+async function loadCycleDetail(cycleId: string) {
   detailLoading.value = true;
-  cycleDetail.value = cycle;
+  detailError.value = '';
   try {
-    cycleDetail.value = await cyclesApi.findOne(cycle.id);
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '获取周期详情失败');
+    cycleDetail.value = await cyclesApi.findOne(cycleId);
+  } catch (error) {
+    detailError.value = error instanceof Error ? error.message : '获取周期详情失败';
   } finally {
     detailLoading.value = false;
   }
 }
 
+async function openCycleWorkspace(cycle: AssessmentCycle, runPreflight = false) {
+  cycleDetail.value = cycle;
+  preflight.value = null;
+  preflightError.value = '';
+  if (route.query.cycleId !== cycle.id) {
+    await router.push({ query: { ...route.query, cycleId: cycle.id } });
+  }
+  await loadCycleDetail(cycle.id);
+  if (runPreflight) await handlePreflight(cycleDetail.value ?? cycle);
+}
+
+async function closeCycleWorkspace() {
+  const query = { ...route.query };
+  delete query.cycleId;
+  preflight.value = null;
+  preflightError.value = '';
+  cycleDetail.value = null;
+  await router.replace({ query });
+}
+
+function handleView(cycle: AssessmentCycle) {
+  void openCycleWorkspace(cycle);
+}
+
+function retryCycleDetail() {
+  if (typeof route.query.cycleId === 'string') void loadCycleDetail(route.query.cycleId);
+}
+
+function handleWorkspacePreflight() {
+  if (cycleDetail.value) void handlePreflight(cycleDetail.value);
+}
+
+function handleWorkspaceLaunch() {
+  if (cycleDetail.value) void handleLaunch(cycleDetail.value);
+}
+
+function handleWorkspaceEditDeadlines() {
+  if (cycleDetail.value) openEditDeadlines(cycleDetail.value);
+}
+
+function handleWorkspaceCancelSchedule() {
+  if (cycleDetail.value) void handleCancelSchedule(cycleDetail.value);
+}
+
+function handleResolvePreflightBlocker(code: string) {
+  const path = code.startsWith('TEMPLATE_') || code === 'NO_ACTIVE_TEMPLATES'
+    ? '/templates'
+    : code === 'ORGANIZATION_RELATION_INVALID'
+      ? '/users'
+      : '';
+  if (!path) return;
+  void router.push({ path, query: { returnTo: route.fullPath } });
+}
+
 function handlePrimaryCycleAction(cycle: AssessmentCycle) {
   if (['draft', 'launch_blocked'].includes(cycle.status)) {
-    void handlePreflight(cycle);
+    void openCycleWorkspace(cycle, true);
     return;
   }
-  void handleView(cycle);
+  void openCycleWorkspace(cycle);
 }
 
 function buildQuery(): CycleQuery {
@@ -673,6 +731,7 @@ onChange(() => {
 
 onMounted(() => {
   loadCycles();
+  if (typeof route.query.cycleId === 'string') void loadCycleDetail(route.query.cycleId);
   departmentsApi.findAll({ flat: true }).then((items) => {
     departments.value = items;
   }).catch(() => {
@@ -683,6 +742,27 @@ onMounted(() => {
 
 <template>
   <div class="cycle-manage-view page-stack">
+    <CycleWorkspaceShell
+      v-if="isCycleWorkspace"
+      :cycle="cycleDetail"
+      :loading="detailLoading"
+      :error="detailError"
+      :preflight="preflight"
+      :preflight-loading="preflightLoading"
+      :preflight-error="preflightError"
+      :launching="launchingId === cycleDetail?.id"
+      :can-open-immediately="canOpenImmediately"
+      @back="closeCycleWorkspace"
+      @retry="retryCycleDetail"
+      @preflight="handleWorkspacePreflight"
+      @launch="handleWorkspaceLaunch"
+      @schedule="handleSchedule"
+      @edit-deadlines="handleWorkspaceEditDeadlines"
+      @cancel-schedule="handleWorkspaceCancelSchedule"
+      @resolve-blocker="handleResolvePreflightBlocker"
+    />
+
+    <template v-else>
     <ChartCard>
       <template #title>考核周期管理</template>
       <template #extra>
@@ -752,80 +832,6 @@ onMounted(() => {
         />
       </div>
     </ChartCard>
-
-    <el-dialog v-model="detailDialogVisible" title="周期详情" width="720px" destroy-on-close>
-      <div v-loading="detailLoading">
-        <el-descriptions v-if="cycleDetail" :column="2" border>
-          <el-descriptions-item label="周期">
-            {{ cycleDetail.name }}
-          </el-descriptions-item>
-          <el-descriptions-item label="状态">
-            <el-tag :type="STATUS_TAG_TYPE[cycleDetail.status] as any" size="small">
-              {{ STATUS_LABEL[cycleDetail.status] }}
-            </el-tag>
-          </el-descriptions-item>
-          <el-descriptions-item label="考核期间">
-            {{ formatDate(cycleDetail.startDate) }} ~ {{ formatDate(cycleDetail.endDate) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="目标制定开放">
-            {{ formatDateTimeForMessage(cycleDetail.goalSettingOpenAt) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="HR 负责人">
-            {{ cycleDetail.hrOwner?.name || '未设置' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="目标提交截止">
-            {{ formatDateTimeForMessage(cycleDetail.deadlineIndicatorSetting) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="目标确认截止">
-            {{ formatDateTimeForMessage(cycleDetail.deadlineIndicatorConfirm) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="自评开放">
-            {{ formatDateTimeForMessage(cycleDetail.selfEvalOpenAt) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="自评截止">
-            {{ formatDateTimeForMessage(cycleDetail.deadlineSelfEval) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="开放方式">
-            {{ cycleDetail.openSource === 'scheduled' ? '预约自动开放' : cycleDetail.openSource === 'manual' ? 'HR 手动开放' : '尚未开放' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="实际开放时间">
-            {{ formatDateTimeForMessage(cycleDetail.openedAt) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="参与任务">
-            {{ cycleDetail.taskStats?.total ?? 0 }} 人
-          </el-descriptions-item>
-          <el-descriptions-item label="模板快照">
-            {{ cycleDetail.snapshotCount ?? 0 }} 个
-          </el-descriptions-item>
-          <el-descriptions-item label="目标未提交">
-            {{ cycleDetail.taskStats?.unsubmitted ?? 0 }} 人
-          </el-descriptions-item>
-          <el-descriptions-item label="待主管审核">
-            {{ cycleDetail.taskStats?.pendingManagerReview ?? 0 }} 人
-          </el-descriptions-item>
-          <el-descriptions-item label="待员工确认">
-            {{ cycleDetail.taskStats?.pendingEmployeeConfirmation ?? 0 }} 人
-          </el-descriptions-item>
-          <el-descriptions-item label="目标已完成">
-            {{ cycleDetail.taskStats?.goalCompleted ?? 0 }} 人
-          </el-descriptions-item>
-          <el-descriptions-item label="已豁免">
-            {{ cycleDetail.taskStats?.exempted ?? 0 }} 人
-          </el-descriptions-item>
-          <el-descriptions-item label="已逾期">
-            <el-text :type="cycleDetail.taskStats?.overdue ? 'danger' : 'success'">
-              {{ cycleDetail.taskStats?.overdue ?? 0 }} 人
-            </el-text>
-          </el-descriptions-item>
-          <el-descriptions-item v-if="cycleDetail.launchBlockedReason" label="开放受阻原因" :span="2">
-            <el-text type="danger">{{ cycleDetail.launchBlockedReason }}</el-text>
-          </el-descriptions-item>
-        </el-descriptions>
-      </div>
-      <template #footer>
-        <el-button @click="detailDialogVisible = false">关闭</el-button>
-      </template>
-    </el-dialog>
 
     <!-- 新建周期 -->
     <el-dialog v-model="createDialogVisible" data-testid="cycle-create-dialog" title="新建考核周期" width="760px" destroy-on-close>
@@ -992,66 +998,7 @@ onMounted(() => {
         </el-button>
       </template>
     </el-dialog>
-
-    <el-dialog v-model="preflightDialogVisible" title="目标制定开放检查" width="1000px" destroy-on-close>
-      <div v-loading="preflightLoading" class="preflight-content">
-        <template v-if="preflight">
-          <el-alert
-            :type="preflight.ready ? 'success' : 'error'"
-            :closable="false"
-            show-icon
-            :title="preflight.ready ? '检查通过，可预约开放' : '检查未通过，请先处理阻断项'"
-          />
-          <el-descriptions :column="3" border class="preflight-summary">
-            <el-descriptions-item label="周期">{{ preflight.cycle.name }}</el-descriptions-item>
-            <el-descriptions-item label="参与人数">{{ preflight.participantCount }}</el-descriptions-item>
-            <el-descriptions-item label="匹配模板">{{ preflight.templateCount }}</el-descriptions-item>
-            <el-descriptions-item label="目标开放" :span="3">
-              {{ formatDateTimeForMessage(preflight.cycle.goalSettingOpenAt) }}
-            </el-descriptions-item>
-          </el-descriptions>
-          <div v-if="preflight.blockers.length" class="preflight-blockers">
-            <div v-for="blocker in preflight.blockers" :key="blocker.code" class="preflight-blocker">
-              <strong>{{ blocker.code }}</strong>
-              <span>{{ blocker.message }}</span>
-            </div>
-          </div>
-          <el-table v-else :data="preflight.participants" size="small" max-height="420">
-            <el-table-column prop="employeeName" label="员工" min-width="100" />
-            <el-table-column prop="deptName" label="部门" min-width="140" show-overflow-tooltip />
-            <el-table-column prop="managerName" label="直属主管" min-width="110">
-              <template #default="{ row }">{{ row.managerName || '未设置' }}</template>
-            </el-table-column>
-            <el-table-column prop="templateName" label="匹配模板" min-width="180" show-overflow-tooltip />
-            <el-table-column label="豁免" min-width="220">
-              <template #default="{ row }">
-                <el-tag v-if="row.isExempt" type="warning" size="small">已豁免</el-tag>
-                <span v-else>否</span>
-                <span v-if="row.exemptReason" class="exempt-reason">{{ row.exemptReason }}</span>
-              </template>
-            </el-table-column>
-          </el-table>
-        </template>
-      </div>
-      <template #footer>
-        <el-button @click="preflightDialogVisible = false">关闭</el-button>
-        <el-button
-          v-if="preflight?.ready && preflightCycle && canOpenImmediately"
-          :loading="launchingId === preflightCycle.id"
-          @click="handleLaunch(preflightCycle)"
-        >
-          立即开放
-        </el-button>
-        <el-button
-          v-if="preflight?.ready"
-          type="primary"
-          :loading="launchingId === preflightCycle?.id"
-          @click="handleSchedule"
-        >
-          按开放时间预约
-        </el-button>
-      </template>
-    </el-dialog>
+    </template>
 
     <!-- 修改截止日 -->
     <el-dialog v-model="editDialogVisible" title="修改节点截止日" width="560px" destroy-on-close>

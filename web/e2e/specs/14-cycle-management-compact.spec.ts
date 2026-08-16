@@ -62,6 +62,39 @@ const readyPreflight: LaunchPreflightResult = {
   warnings: [],
 };
 
+const blockedPreflight: LaunchPreflightResult = {
+  ...readyPreflight,
+  ready: false,
+  planHash: null,
+  participants: [{
+    employeeId: 'employee-1',
+    employeeName: '林晓',
+    deptId: 'sales',
+    deptName: '销售部',
+    managerId: 'manager-1',
+    managerName: '周强',
+    deptHeadId: 'manager-1',
+    approverId: 'approver-1',
+    templateId: '',
+    templateName: '未匹配',
+    templateVersion: 0,
+    isExempt: false,
+    exemptReason: null,
+  }],
+  blockers: [{
+    code: 'TEMPLATE_UNCOVERED',
+    message: '1 名员工未匹配到绩效模板',
+  }],
+};
+
+const immediatelyOpenablePreflight: LaunchPreflightResult = {
+  ...readyPreflight,
+  cycle: {
+    ...readyPreflight.cycle,
+    goalSettingOpenAt: '2026-01-01T09:00:00.000Z',
+  },
+};
+
 interface CycleMockOptions {
   createBodies?: unknown[];
   preflightRequests?: string[];
@@ -196,6 +229,53 @@ test.describe('compact cycle management list', () => {
 
     await expect(page).toHaveURL(/cycleId=cycle-draft/);
     expect(createBodies).toHaveLength(1);
-    expect(preflightRequests).toEqual(['cycle-draft']);
+    await expect.poll(() => preflightRequests).toEqual(['cycle-draft']);
+  });
+
+  test('opens a full-page five-stage workspace and restores list context on return', async ({ page }) => {
+    await mockCyclePage(page);
+    await page.goto('/cycles?group=attention&keyword=2026&page=2');
+
+    await page.getByRole('button', { name: '2026 Q4 季度考核' }).click();
+
+    await expect(page).toHaveURL(/cycleId=cycle-draft/);
+    await expect(page.getByTestId('cycle-workspace')).toBeVisible();
+    await expect(page.getByTestId('cycle-current-action')).toBeVisible();
+    for (let index = 0; index < 5; index += 1) {
+      await expect(page.getByTestId(`cycle-stage-${index}`)).toBeVisible();
+    }
+    await expect(page.getByRole('columnheader', { name: '周期' })).toHaveCount(0);
+
+    await page.getByTestId('cycle-workspace-back').click();
+    await expect(page).not.toHaveURL(/cycleId=/);
+    await expect(page).toHaveURL(/keyword=2026/);
+    await expect(page).toHaveURL(/page=2/);
+    await expect(page.getByRole('columnheader', { name: '周期' })).toBeVisible();
+  });
+
+  test('shows only business blockers first and provides a returnable fix path', async ({ page }) => {
+    await mockCyclePage(page, [], { preflight: blockedPreflight });
+    await page.goto('/cycles?group=attention&keyword=2026');
+
+    await page.getByTestId('cycle-primary-cycle-draft').click();
+
+    await expect(page.getByTestId('cycle-preflight-blockers')).toContainText('1 名员工未匹配到绩效模板');
+    await expect(page.getByText('TEMPLATE_UNCOVERED')).toHaveCount(0);
+    await expect(page.getByText('林晓')).not.toBeVisible();
+    await page.getByRole('button', { name: '去配置模板' }).click();
+    await expect(page).toHaveURL((url) => (
+      url.pathname === '/templates'
+      && (url.searchParams.get('returnTo') || '').includes('/cycles?')
+    ));
+  });
+
+  test('keeps the existing immediate and scheduled opening choices when checks pass', async ({ page }) => {
+    await mockCyclePage(page, [], { preflight: immediatelyOpenablePreflight });
+    await page.goto('/cycles?group=attention');
+
+    await page.getByTestId('cycle-primary-cycle-draft').click();
+
+    await expect(page.getByRole('button', { name: '立即开放' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '按开放时间预约' })).toBeVisible();
   });
 });
