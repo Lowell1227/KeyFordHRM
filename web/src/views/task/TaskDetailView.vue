@@ -8,8 +8,8 @@ import { tasksApi } from '@/api/tasks.api';
 import { cyclesApi } from '@/api/cycles.api';
 import { useTaskFlow } from '@/composables/useTaskFlow';
 import { usePermission } from '@/composables/usePermission';
-import TaskInfoCard from './components/TaskInfoCard.vue';
 import IndicatorSnapshot, { type ActualValueItem } from './components/IndicatorSnapshot.vue';
+import PerformanceReferencePanel from './components/PerformanceReferencePanel.vue';
 import ExemptView from './components/ExemptView.vue';
 import ScoreMask from './components/ScoreMask.vue';
 import InterviewCard from './components/InterviewCard.vue';
@@ -22,6 +22,7 @@ import { formatScore } from '@/utils/score';
 import type { AssessmentCycle, TaskDetail, SetIndicatorBody, SubmitSelfEvalBody } from '@/types/api.types';
 import type { SignatureRole } from '@/types/enums';
 import { TASK_STATUS_META } from '@/types/enums';
+import { TASK_STATUS_STAGE } from './task-stage';
 
 const route = useRoute();
 const router = useRouter();
@@ -51,9 +52,7 @@ const workflowContext = computed(() => {
 const flow = useTaskFlow({ task, cycle });
 const permission = usePermission({ task, cycle });
 
-const flowNodes = computed(() => flow.flowNodes.value);
 const flowActions = computed(() => flow.actions.value);
-const flowCurrentNode = computed(() => flow.currentNode.value);
 
 function safeTaskListReturnTo(value: unknown): string | null {
   const raw = Array.isArray(value) ? value[0] : value;
@@ -66,10 +65,27 @@ function safeTaskListReturnTo(value: unknown): string | null {
   }
 }
 
-const flowActiveIndex = computed(() => {
-  const nodes = flowNodes.value;
-  const current = flowCurrentNode.value;
-  return nodes.findIndex((n) => n.key === current);
+const performanceStageTitle = computed(() => {
+  const status = task.value?.status;
+  if (!status) return '绩效详情';
+  return {
+    'goal-setting': '目标制定',
+    'goal-confirmation': '目标确认',
+    'self-eval': '自评',
+    result: '结果确认',
+  }[TASK_STATUS_STAGE[status]];
+});
+
+const performanceCycleName = computed(() => task.value?.cycleName || cycle.value?.name || '本期绩效');
+const employeeInitial = computed(() => (task.value?.employeeName || '绩').slice(0, 1));
+const employeeMeta = computed(() => {
+  const current = task.value;
+  if (!current) return [];
+  return [
+    current.employeeNo ? `工号 ${current.employeeNo}` : '',
+    current.deptName || '',
+    current.managerName ? `直属主管 ${current.managerName}` : '',
+  ].filter(Boolean);
 });
 
 const canEditIndicators = computed(() => {
@@ -110,15 +126,6 @@ const showResultView = computed(() => {
 const reminderOnCooldown = computed(() => {
   const value = workflowContext.value.reminderAvailableAt;
   return Boolean(value && new Date(value).getTime() > Date.now());
-});
-
-const workflowDeadlineText = computed(() => {
-  const value = workflowContext.value.currentDeadline;
-  if (!value) return '暂无截止时间';
-  const date = new Date(value);
-  return Number.isNaN(date.getTime())
-    ? value
-    : date.toLocaleString('zh-CN', { hour12: false });
 });
 
 const indicatorSnapshotDescription = computed(() => {
@@ -300,31 +307,27 @@ async function handleRemind() {
 </script>
 
 <template>
-  <div v-loading="loading" class="task-detail page-stack">
-    <div class="task-detail__header">
-      <el-button data-testid="task-detail-return" :icon="ArrowLeft" link @click="goBack">返回列表</el-button>
-      <span class="task-detail__title">任务详情</span>
-    </div>
-
+  <div
+    v-loading="loading"
+    class="performance-detail"
+    data-testid="personal-performance-detail"
+  >
     <template v-if="task">
-      <TaskInfoCard :task="task" :cycle="cycle" />
-
-      <ChartCard class="workflow-state-card">
-        <div class="workflow-state">
-          <div>
-            <div class="workflow-state__eyebrow">{{ task.cycleName || cycle?.name || '本期绩效' }} · 当前状态</div>
-            <div class="workflow-state__title">{{ workflowContext.statusLabel }}</div>
-            <div class="workflow-state__meta">
-              <span v-if="workflowContext.currentHandler">
-                当前处理人：{{ workflowContext.currentHandler.name }}
-              </span>
-              <span v-else>当前无需人工处理</span>
-              <span>时间：{{ workflowDeadlineText }}</span>
-            </div>
-          </div>
+      <header class="performance-detail__topbar">
+        <el-button
+          data-testid="task-detail-return"
+          :icon="ArrowLeft"
+          link
+          aria-label="返回绩效待办"
+          @click="goBack"
+        />
+        <div class="performance-detail__heading">
+          <span data-testid="performance-stage-title">{{ performanceStageTitle }}</span>
+          <small data-testid="performance-cycle-badge">{{ performanceCycleName }}</small>
+        </div>
+        <div class="performance-detail__topbar-actions">
           <el-button
             v-if="workflowContext.canRemind"
-            type="primary"
             plain
             :loading="reminding"
             :disabled="reminderOnCooldown"
@@ -332,120 +335,135 @@ async function handleRemind() {
           >
             {{ reminderOnCooldown ? '24小时内已催办' : '催办' }}
           </el-button>
-        </div>
-      </ChartCard>
-
-      <ChartCard class="flow-card">
-        <el-steps :active="flowActiveIndex" finish-status="success">
-          <el-step v-for="node in flowNodes" :key="node.key" :title="node.label" />
-        </el-steps>
-      </ChartCard>
-
-      <!-- 豁免任务 -->
-      <ExemptView v-if="task.isExempt" :task="task" />
-
-      <!-- 正式考核指标：所有非豁免任务常驻展示 -->
-      <IndicatorSnapshot
-        v-else
-        title="本周期指标"
-        :instances="task.indicatorInstances"
-        :can-edit="canEditIndicators"
-        :can-confirm="task.status === 'indicator_confirming' && flowActions.canConfirmIndicator && !canEditIndicators"
-        :can-reject="canRejectIndicators"
-        confirm-label="确认指标"
-        :reject-label="rejectIndicatorLabel"
-        :description="indicatorSnapshotDescription"
-        :dept-id="task.deptId"
-        :employee-id="task.employeeId"
-        :can-use-template="canEditIndicators"
-        :flow-records="task.flowRecords"
-        :loading="actionLoading"
-        :save-label="indicatorSaveLabel"
-        :submit-label="indicatorSubmitLabel"
-        :split-save-actions="splitIndicatorSaveActions"
-        :self-eval-mode="task.status === 'self_eval'"
-        :self-eval-readonly="!permission.canEditSelfEval.value"
-        :self-eval-summary="task.selfEvalSummary"
-        @save="handleSaveIndicators"
-        @confirm="handleConfirmIndicators"
-        @reject="handleRejectIndicators"
-        @submit-self-eval="handleSubmitSelfEval"
-      />
-
-      <ChartCard v-if="showResultView" class="result-view">
-        <template #title>结果查看</template>
-        <template #extra>
           <StatusBadge :status="task.status" size="small" />
-        </template>
-
-        <el-descriptions :column="2" border size="small">
-          <el-descriptions-item v-if="permission.canViewTotalScore.value" label="计算总分">
-            {{ formatScore(task.gradeResult?.calculatedScore) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="绩效等级">
-            <template v-if="permission.canViewCalibration.value">
-              <GradeTag :grade="task.gradeResult?.calibratedGrade ?? task.gradeResult?.rawGrade" size="small" />
-            </template>
-            <ScoreMask v-else :message="permission.maskMessage.value" />
-          </el-descriptions-item>
-          <el-descriptions-item label="主管评语">
-            <template v-if="permission.canViewManagerComment.value">
-              <div v-if="task.managerEvalSummary" class="manager-summary">
-                <div v-if="task.managerEvalSummary.strengths" class="manager-summary__block">
-                  <div class="manager-summary__label">优势反馈</div>
-                  <div class="manager-summary__content">{{ task.managerEvalSummary.strengths }}</div>
-                </div>
-                <div v-if="task.managerEvalSummary.improvements" class="manager-summary__block">
-                  <div class="manager-summary__label">待改进项</div>
-                  <div class="manager-summary__content">{{ task.managerEvalSummary.improvements }}</div>
-                </div>
-                <div v-if="task.managerEvalSummary.developmentPlan" class="manager-summary__block">
-                  <div class="manager-summary__label">发展计划</div>
-                  <div class="manager-summary__content">{{ task.managerEvalSummary.developmentPlan }}</div>
-                </div>
-                <div v-if="task.managerEvalSummary.attachments?.length" class="manager-summary__block">
-                  <div class="manager-summary__label">附件</div>
-                  <ul class="manager-summary__attachments">
-                    <li v-for="att in task.managerEvalSummary.attachments" :key="att.url">
-                      <a :href="att.url" target="_blank" rel="noopener">{{ att.name }}</a>
-                    </li>
-                  </ul>
-                </div>
-              </div>
-              <span v-else>-</span>
-            </template>
-            <ScoreMask v-else :message="permission.maskMessage.value" />
-          </el-descriptions-item>
-        </el-descriptions>
-
-        <div v-if="permission.canConfirmResult.value" class="result-actions">
-          <el-button type="primary" :loading="actionLoading" @click="handleConfirmResult">
-            确认结果
-          </el-button>
         </div>
+      </header>
 
-        <div v-if="!permission.isPublished.value" class="result-view__mask">
-          <ScoreMask :message="permission.maskMessage.value" />
+      <section class="employee-summary" data-testid="performance-employee-summary">
+        <div class="employee-summary__avatar">{{ employeeInitial }}</div>
+        <div class="employee-summary__body">
+          <div class="employee-summary__name-line">
+            <strong>{{ task.employeeName || '绩效员工' }}</strong>
+            <span>个人绩效</span>
+          </div>
+          <div v-if="employeeMeta.length" class="employee-summary__meta">
+            <span v-for="item in employeeMeta" :key="item">{{ item }}</span>
+          </div>
         </div>
-      </ChartCard>
+      </section>
 
-      <!-- 考核表三方签字（A3）：考核人 + HR + 被考核人 -->
-      <SignBlock
-        v-if="['published','confirmed','appealing','closed'].includes(task.status)"
-        class="sign-block-card"
-        business-type="assessment_task"
-        :business-record-id="task.id"
-        :role="signatureRole"
-        title="考核表三方签字"
-      />
+      <div class="performance-detail__workspace">
+        <section class="performance-detail__main">
+          <ExemptView v-if="task.isExempt" :task="task" />
 
-      <!-- 绩效面谈（A1） -->
-      <InterviewCard
-        v-if="['published','confirmed','appealing','closed'].includes(task.status)"
-        :task="task"
-        :interview="task.performanceInterview"
-        @refresh="loadDetail"
-      />
+          <IndicatorSnapshot
+            v-else
+            title="考核指标"
+            :instances="task.indicatorInstances"
+            :can-edit="canEditIndicators"
+            :can-confirm="task.status === 'indicator_confirming' && flowActions.canConfirmIndicator && !canEditIndicators"
+            :can-reject="canRejectIndicators"
+            confirm-label="确认指标"
+            :reject-label="rejectIndicatorLabel"
+            :description="indicatorSnapshotDescription"
+            :dept-id="task.deptId"
+            :employee-id="task.employeeId"
+            :can-use-template="canEditIndicators"
+            :flow-records="task.flowRecords"
+            :loading="actionLoading"
+            :save-label="indicatorSaveLabel"
+            :submit-label="indicatorSubmitLabel"
+            :split-save-actions="splitIndicatorSaveActions"
+            :self-eval-mode="task.status === 'self_eval'"
+            :self-eval-readonly="!permission.canEditSelfEval.value"
+            :self-eval-summary="task.selfEvalSummary"
+            @save="handleSaveIndicators"
+            @confirm="handleConfirmIndicators"
+            @reject="handleRejectIndicators"
+            @submit-self-eval="handleSubmitSelfEval"
+          />
+
+          <ChartCard v-if="showResultView" class="result-view">
+            <template #title>结果信息</template>
+
+            <el-descriptions :column="2" border size="small">
+              <el-descriptions-item v-if="permission.canViewTotalScore.value" label="计算总分">
+                {{ formatScore(task.gradeResult?.calculatedScore) }}
+              </el-descriptions-item>
+              <el-descriptions-item label="绩效等级">
+                <template v-if="permission.canViewCalibration.value">
+                  <GradeTag :grade="task.gradeResult?.calibratedGrade ?? task.gradeResult?.rawGrade" size="small" />
+                </template>
+                <ScoreMask v-else :message="permission.maskMessage.value" />
+              </el-descriptions-item>
+              <el-descriptions-item label="主管评语">
+                <template v-if="permission.canViewManagerComment.value">
+                  <div v-if="task.managerEvalSummary" class="manager-summary">
+                    <div v-if="task.managerEvalSummary.strengths" class="manager-summary__block">
+                      <div class="manager-summary__label">优势反馈</div>
+                      <div class="manager-summary__content">{{ task.managerEvalSummary.strengths }}</div>
+                    </div>
+                    <div v-if="task.managerEvalSummary.improvements" class="manager-summary__block">
+                      <div class="manager-summary__label">待改进项</div>
+                      <div class="manager-summary__content">{{ task.managerEvalSummary.improvements }}</div>
+                    </div>
+                    <div v-if="task.managerEvalSummary.developmentPlan" class="manager-summary__block">
+                      <div class="manager-summary__label">发展计划</div>
+                      <div class="manager-summary__content">{{ task.managerEvalSummary.developmentPlan }}</div>
+                    </div>
+                    <div v-if="task.managerEvalSummary.attachments?.length" class="manager-summary__block">
+                      <div class="manager-summary__label">附件</div>
+                      <ul class="manager-summary__attachments">
+                        <li v-for="att in task.managerEvalSummary.attachments" :key="att.url">
+                          <a :href="att.url" target="_blank" rel="noopener">{{ att.name }}</a>
+                        </li>
+                      </ul>
+                    </div>
+                  </div>
+                  <span v-else>-</span>
+                </template>
+                <ScoreMask v-else :message="permission.maskMessage.value" />
+              </el-descriptions-item>
+            </el-descriptions>
+
+            <div v-if="permission.canConfirmResult.value" class="result-actions">
+              <el-button type="primary" :loading="actionLoading" @click="handleConfirmResult">
+                确认结果
+              </el-button>
+            </div>
+
+            <div v-if="!permission.isPublished.value" class="result-view__mask">
+              <ScoreMask :message="permission.maskMessage.value" />
+            </div>
+          </ChartCard>
+
+          <SignBlock
+            v-if="['published','confirmed','appealing','closed'].includes(task.status)"
+            class="sign-block-card"
+            business-type="assessment_task"
+            :business-record-id="task.id"
+            :role="signatureRole"
+            title="考核表三方签字"
+          />
+
+          <InterviewCard
+            v-if="['published','confirmed','appealing','closed'].includes(task.status)"
+            :task="task"
+            :interview="task.performanceInterview"
+            @refresh="loadDetail"
+          />
+        </section>
+
+        <aside class="reference-card">
+          <div class="reference-card__title">参考信息</div>
+          <PerformanceReferencePanel
+            :cycle-id="task.cycleId"
+            :employee-id="task.employeeId"
+            :indicators="task.indicatorInstances"
+            :flow-records="task.flowRecords"
+          />
+        </aside>
+      </div>
     </template>
 
     <div v-else-if="taskStore.error" class="error-state">
@@ -455,72 +473,150 @@ async function handleRemind() {
 </template>
 
 <style scoped>
-.task-detail__header {
+.performance-detail {
+  min-height: 100%;
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 18px;
+  background: #f4f6fb;
+}
+
+.performance-detail__topbar {
+  min-height: 42px;
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 10px;
 }
 
-.task-detail__title {
-  font-size: 16px;
-  font-weight: 600;
-}
-
-.flow-card :deep(.el-step__head.is-success),
-.flow-card :deep(.el-step__title.is-success) {
-  color: #16a34a;
-  border-color: #16a34a;
-}
-
-.workflow-state {
+.performance-detail__heading {
+  min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 20px;
+  gap: 10px;
 }
 
-.workflow-state__eyebrow,
-.workflow-state__meta {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
+.performance-detail__heading > span {
+  color: #1f2937;
+  font-size: 19px;
+  font-weight: 700;
 }
 
-.workflow-state__title {
-  margin: 6px 0;
-  color: var(--el-text-color-primary);
+.performance-detail__heading small {
+  padding: 4px 9px;
+  border-radius: 4px;
+  background: #eaf2ff;
+  color: #3675d3;
+  font-size: 12px;
+}
+
+.performance-detail__topbar-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.employee-summary {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 18px 20px;
+  border: 1px solid #edf0f5;
+  border-radius: 14px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(31 45 61 / 4%);
+}
+
+.employee-summary__avatar {
+  display: grid;
+  width: 46px;
+  height: 46px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 9px;
+  background: linear-gradient(145deg, #596ddd, #4458c9);
+  color: #fff;
   font-size: 18px;
-  font-weight: 600;
+  font-weight: 700;
 }
 
-.workflow-state__meta {
+.employee-summary__body {
+  min-width: 0;
+}
+
+.employee-summary__name-line,
+.employee-summary__meta {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
+}
+
+.employee-summary__name-line {
+  gap: 9px;
+}
+
+.employee-summary__name-line strong {
+  color: #20283a;
+  font-size: 19px;
+}
+
+.employee-summary__name-line > span {
+  padding: 3px 8px;
+  border-radius: 4px;
+  background: #eef3ff;
+  color: #4968d8;
+  font-size: 11px;
+}
+
+.employee-summary__meta {
   gap: 8px 20px;
+  margin-top: 7px;
+  color: #7a8495;
+  font-size: 12px;
 }
 
-.flow-card :deep(.el-step__head.is-process),
-.flow-card :deep(.el-step__title.is-process) {
-  color: #1f2937;
-  border-color: #1f2937;
+.performance-detail__workspace {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
+  align-items: start;
+  gap: 14px;
 }
 
-.flow-card :deep(.el-step__head.is-wait),
-.flow-card :deep(.el-step__title.is-wait) {
-  color: #9ca3af;
-  border-color: #9ca3af;
+.performance-detail__main {
+  min-width: 0;
+  display: grid;
+  gap: 14px;
 }
 
-.flow-card :deep(.el-step__title.is-process) {
-  font-weight: 600;
+.performance-detail__main :deep(.chart-card),
+.reference-card {
+  border: 1px solid #edf0f5;
+  border-radius: 14px;
+  box-shadow: 0 1px 2px rgb(31 45 61 / 4%);
 }
 
-.flow-card :deep(.el-step__head.is-success .el-step__line) {
-  background-color: #16a34a;
+.reference-card {
+  min-width: 0;
+  overflow: hidden;
+  background: #fff;
 }
 
-.flow-card :deep(.el-step__head.is-process .el-step__line),
-.flow-card :deep(.el-step__head.is-wait .el-step__line) {
-  background-color: #d1d5db;
+.reference-card__title {
+  min-height: 50px;
+  display: flex;
+  align-items: center;
+  padding: 0 16px;
+  border-bottom: 1px solid #edf0f5;
+  color: #20283a;
+  font-size: 16px;
+  font-weight: 700;
+}
+
+.reference-card :deep(.performance-reference) {
+  border-left: 0;
 }
 
 .result-actions {
@@ -568,5 +664,33 @@ async function handleRemind() {
 
 .error-state {
   padding: 48px 0;
+}
+
+@media (max-width: 1180px) {
+  .performance-detail__workspace {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .performance-detail {
+    padding: 12px;
+  }
+
+  .performance-detail__topbar {
+    align-items: flex-start;
+  }
+
+  .performance-detail__heading {
+    flex-wrap: wrap;
+  }
+
+  .performance-detail__topbar-actions {
+    align-self: center;
+  }
+
+  .employee-summary {
+    padding: 15px;
+  }
 }
 </style>

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import type { AssessmentCycle, TaskListItem } from '../../src/types/api.types';
+import type { AssessmentCycle, TaskDetail, TaskListItem } from '../../src/types/api.types';
 import {
   localDateKey,
   orderPerformanceCycles,
@@ -90,6 +90,7 @@ async function mockTaskCycleShell(
   cycleItems: AssessmentCycle[],
   taskRequests: URL[],
   personalTasks: TaskListItem[] = [],
+  personalDetail?: TaskDetail,
 ) {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-cycle-context-token');
@@ -111,11 +112,24 @@ async function mockTaskCycleShell(
       canViewAll: false,
     })),
   }));
+  await page.route('**/api/v1/indicators**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+  }));
+  await page.route('**/api/v1/templates**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+  }));
   await page.route('**/api/v1/cycles**', (route) => {
     const path = new URL(route.request().url()).pathname;
+    const requestedCycleId = path.endsWith('/cycles/mine')
+      ? undefined
+      : path.match(/\/cycles\/([^/]+)$/)?.[1];
     const data = path.endsWith('/cycles/mine')
       ? cycleItems
-      : { total: cycleItems.length, page: 1, pageSize: 50, items: cycleItems };
+      : requestedCycleId
+        ? cycleItems.find((item) => item.id === requestedCycleId)
+        : { total: cycleItems.length, page: 1, pageSize: 50, items: cycleItems };
     return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify(apiResponse(data)),
@@ -150,6 +164,18 @@ async function mockTaskCycleShell(
   await page.route('**/api/v1/tasks/*', (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/tasks/mine') || path.endsWith('/tasks/team')) return route.fallback();
+    if (path.endsWith('/tasks/reference-indicators')) {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
+      });
+    }
+    if (personalDetail && path.endsWith(`/tasks/${personalDetail.id}`)) {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(personalDetail)),
+      });
+    }
     return route.fulfill({
       status: 404,
       contentType: 'application/json',
@@ -245,6 +271,58 @@ test.describe('cycle-first task contracts', () => {
 
     await page.getByTestId('personal-task-detail').click();
     await expect(page).toHaveURL(/\/tasks\/personal-task-1/);
+  });
+
+  test('opens personal work in the dedicated performance detail layout', async ({ page }) => {
+    const taskRequests: URL[] = [];
+    const currentCycle = cycle('current', '2026-07-01', '2026-09-30');
+    const personalDetail: TaskDetail = {
+      id: 'personal-task-1',
+      cycleId: currentCycle.id,
+      cycleName: '2026-Q3',
+      snapshotId: 'snapshot-1',
+      employeeId: 'manager-1',
+      employeeName: 'Cycle Manager',
+      employeeNo: 'MGR001',
+      deptId: 'dept-1',
+      deptName: 'Engineering',
+      managerId: 'manager-2',
+      managerName: 'Direct Manager',
+      status: 'indicator_setting',
+      isExempt: false,
+      updatedAt: '2026-08-16T00:00:00.000Z',
+      indicatorInstances: [
+        {
+          id: 'indicator-1',
+          taskId: 'personal-task-1',
+          name: 'Delivery quality',
+          description: 'Complete the agreed delivery objectives.',
+          weight: 1,
+          indicatorType: 'kpi',
+          sortOrder: 0,
+          visibilityScope: 'supervisors',
+          visibleDepartmentIds: [],
+          visibleUserIds: [],
+          alignedObjectives: [],
+        },
+      ],
+      flowRecords: [],
+    };
+    await mockTaskCycleShell(page, [currentCycle], taskRequests, [], personalDetail);
+
+    await page.goto('/tasks/personal-task-1?returnTo=%2Ftasks%3Fscope%3Dmine');
+
+    const detail = page.getByTestId('personal-performance-detail');
+    await expect(detail).toBeVisible();
+    await expect(detail.getByTestId('performance-stage-title')).toHaveText('目标制定');
+    await expect(detail.getByTestId('performance-cycle-badge')).toHaveText('2026-Q3');
+    await expect(detail.getByTestId('performance-employee-summary')).toContainText('Cycle Manager');
+    await expect(detail.getByText('考核指标', { exact: true })).toBeVisible();
+    await expect(detail.getByText('参考信息', { exact: true })).toBeVisible();
+    await expect(detail.getByTestId('performance-reference-panel')).toBeVisible();
+    await expect(detail.getByText('任务详情', { exact: true })).toHaveCount(0);
+    await expect(detail.getByText('人员信息', { exact: true })).toHaveCount(0);
+    await expect(detail.locator('.el-steps')).toHaveCount(0);
   });
 });
 
