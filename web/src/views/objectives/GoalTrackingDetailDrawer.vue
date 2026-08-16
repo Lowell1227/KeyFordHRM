@@ -353,7 +353,7 @@ function changeActionLabel(action: string) {
       <section id="goal-detail-info" class="goal-detail__card goal-detail__section">
         <h3>指标详情</h3>
         <div class="goal-detail__description">
-          <span>指标内容</span>
+          <span>指标描述</span>
           <p>{{ displayDescription || '暂未填写' }}</p>
         </div>
       </section>

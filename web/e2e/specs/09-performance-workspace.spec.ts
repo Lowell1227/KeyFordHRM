@@ -1373,7 +1373,7 @@ test.describe('09-performance-workspace tracking behavior', () => {
     await expect(drawer.getByRole('heading', { name: 'GMV 达成率' })).toBeVisible();
     await expect(drawer).toContainText('有效权重 16%');
     await expect(drawer).toContainText('完成首轮投放');
-    await expect(drawer.getByText('指标内容', { exact: true })).toBeVisible();
+    await expect(drawer.getByText('指标描述', { exact: true })).toBeVisible();
     await expect(drawer).toContainText('销售、门店与B2B：跟进季度 GMV 达成情况');
     await expect(drawer).not.toContainText('realistic-demo-v1');
     await expect(drawer.getByText('指标类型', { exact: true })).toHaveCount(0);
