@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import type { AssessmentCycle } from '../../src/types/api.types';
+import type { AssessmentCycle, LaunchPreflightResult } from '../../src/types/api.types';
 import {
   cyclePrimaryActionLabel,
   cycleStageIndex,
@@ -46,9 +46,32 @@ const draftCycle: AssessmentCycle = {
   gradeDMaxRatio: 0.1,
 };
 
+const readyPreflight: LaunchPreflightResult = {
+  ready: true,
+  planHash: 'ready-plan-hash',
+  cycle: {
+    id: draftCycle.id,
+    name: draftCycle.name,
+    status: draftCycle.status,
+    goalSettingOpenAt: draftCycle.goalSettingOpenAt,
+  },
+  participantCount: 128,
+  templateCount: 9,
+  participants: [],
+  blockers: [],
+  warnings: [],
+};
+
+interface CycleMockOptions {
+  createBodies?: unknown[];
+  preflightRequests?: string[];
+  preflight?: LaunchPreflightResult;
+}
+
 async function mockCyclePage(
   page: import('@playwright/test').Page,
   cycleRequests: URL[] = [],
+  options: CycleMockOptions = {},
 ) {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-cycle-management-token');
@@ -75,9 +98,42 @@ async function mockCyclePage(
     contentType: 'application/json',
     body: JSON.stringify(apiResponse([])),
   }));
+  await page.route('**/api/v1/users**', (route) => {
+    const user = {
+      id: 'hr-1',
+      name: '姚瑶',
+      employeeNo: 'HR001',
+      sysRole: 'hr',
+      status: 'active',
+      deptId: 'hr-dept',
+      deptName: '人力资源部',
+    };
+    const data = new URL(route.request().url()).pathname.endsWith('/users/hr-1')
+      ? user
+      : { total: 1, page: 1, pageSize: 50, items: [user] };
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(data)),
+    });
+  });
   await page.route('**/api/v1/cycles**', (route) => {
     const url = new URL(route.request().url());
     cycleRequests.push(url);
+    if (route.request().method() === 'POST' && url.pathname.endsWith('/cycles')) {
+      options.createBodies?.push(route.request().postDataJSON());
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(draftCycle)),
+      });
+    }
+    const preflightId = url.pathname.match(/\/cycles\/([^/]+)\/preflight$/)?.[1];
+    if (preflightId) {
+      options.preflightRequests?.push(preflightId);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(options.preflight ?? readyPreflight)),
+      });
+    }
     const requestedId = url.pathname.match(/\/cycles\/([^/]+)$/)?.[1];
     const data = requestedId
       ? draftCycle
@@ -113,5 +169,33 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByRole('columnheader', { name: '操作' })).toBeVisible();
     await expect(page.getByTestId('cycle-primary-cycle-draft')).toHaveText('开放检查');
     expect(cycleRequests.some((url) => url.searchParams.get('group') === 'attention')).toBe(true);
+  });
+
+  test('keeps generated schedule and result rules collapsed until HR opens advanced settings', async ({ page }) => {
+    await mockCyclePage(page);
+    await page.goto('/cycles?group=attention');
+
+    await page.getByTestId('cycle-create').click();
+
+    await expect(page.getByTestId('cycle-create-advanced')).toBeVisible();
+    await expect(page.getByTestId('cycle-advanced-fields')).not.toBeVisible();
+    await page.getByTestId('cycle-create-advanced').click();
+    await expect(page.getByTestId('cycle-advanced-fields')).toBeVisible();
+    await expect(page.getByTestId('cycle-create-save-draft')).toBeVisible();
+    await expect(page.getByTestId('cycle-create-and-check')).toBeVisible();
+  });
+
+  test('creates a draft and immediately enters its open-check context', async ({ page }) => {
+    const createBodies: unknown[] = [];
+    const preflightRequests: string[] = [];
+    await mockCyclePage(page, [], { createBodies, preflightRequests });
+    await page.goto('/cycles?group=attention');
+
+    await page.getByTestId('cycle-create').click();
+    await page.getByTestId('cycle-create-and-check').click();
+
+    await expect(page).toHaveURL(/cycleId=cycle-draft/);
+    expect(createBodies).toHaveLength(1);
+    expect(preflightRequests).toEqual(['cycle-draft']);
   });
 });

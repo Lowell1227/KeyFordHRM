@@ -148,6 +148,7 @@ const initialPage = Number(route.query.page);
 if (Number.isInteger(initialPage) && initialPage > 0) page.value = initialPage;
 
 const createDialogVisible = ref(false);
+const advancedCreateVisible = ref(false);
 const editDialogVisible = ref(false);
 const editingCycle = ref<AssessmentCycle | null>(null);
 const preflightDialogVisible = ref(false);
@@ -229,6 +230,7 @@ function resetAutoFilledCreateDeadlines() {
 }
 
 function resetCreateForm() {
+  advancedCreateVisible.value = false;
   createForm.name = '';
   createForm.type = 'quarterly';
   createForm.startDate = undefined;
@@ -372,7 +374,7 @@ function buildCreateBody(): CreateCycleBody {
   return body;
 }
 
-async function handleCreate() {
+async function handleCreate(runPreflight = false) {
   if (!createFormRef.value) return;
   try {
     await createFormRef.value.validate();
@@ -388,11 +390,15 @@ async function handleCreate() {
 
   submitting.value = true;
   try {
-    await cyclesApi.create(buildCreateBody());
+    const created = await cyclesApi.create(buildCreateBody());
     ElMessage.success('已创建周期草稿，请完成开放检查');
     createDialogVisible.value = false;
     resetCreateForm();
     await loadCycles();
+    if (runPreflight) {
+      await router.push({ query: { ...route.query, cycleId: created.id } });
+      await handlePreflight(created);
+    }
   } catch {
     // 写请求失败已由 HTTP 拦截器显示后端业务文案，这里只负责收起 loading。
   } finally {
@@ -844,11 +850,10 @@ onMounted(() => {
           type="success"
           :closable="false"
           show-icon
-          title="已按下一季度自动生成建议时间"
-          description="目标制定默认在周期开始前 10 天开放，自评默认在周期结束后第 1 天开放，所有时间均可调整。"
+          title="常规周期已自动生成时间计划"
+          description="目标制定默认提前 10 天开放，自评默认在周期结束后第 1 天开放；需要例外时再展开高级设置。"
         />
 
-        <el-divider content-position="left">负责人和参与范围</el-divider>
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="HR 负责人" prop="hrOwnerId">
@@ -869,32 +874,6 @@ onMounted(() => {
             </el-form-item>
           </el-col>
         </el-row>
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="额外参与人员">
-              <UserSelect v-model="createForm.participantUserIds" multiple status="active" placeholder="按需补充参与人员" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="明确豁免人员">
-              <UserSelect v-model="createForm.explicitExemptUserIds" multiple status="active" placeholder="按需设置本周期豁免" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <p class="form-tip">参与部门和人员均不选择时默认覆盖全公司；明确豁免人员仍会生成可查看原因的豁免任务。</p>
-
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="目标开放时间">
-              <el-date-picker v-model="createForm.goalSettingOpenAt" type="datetime" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="自评开放时间">
-              <el-date-picker v-model="createForm.selfEvalOpenAt" type="datetime" style="width: 100%" />
-            </el-form-item>
-          </el-col>
-        </el-row>
 
         <el-row :gutter="16">
           <el-col :span="12">
@@ -908,57 +887,109 @@ onMounted(() => {
             </el-form-item>
           </el-col>
         </el-row>
-
-        <el-divider content-position="left">各节点截止日期</el-divider>
-        <el-row :gutter="16">
-          <el-col v-for="field in DEADLINE_FIELDS" :key="field.key" :span="12">
-            <el-form-item :label="field.label">
-              <el-date-picker
-                v-model="createForm[field.key]"
-                type="datetime"
-                :placeholder="`选择${field.label}`"
-                style="width: 100%"
-                @change="handleCreateDeadlineChange(field.key)"
-              />
-            </el-form-item>
-          </el-col>
-        </el-row>
-
-        <el-divider content-position="left">等级上限比例（%）</el-divider>
-        <el-row :gutter="16">
-          <el-col v-for="field in GRADE_RATIO_FIELDS" :key="field.key" :span="12">
-            <el-form-item :label="field.label">
-              <el-input-number
-                v-model="createForm[field.key]"
-                :min="0"
-                :max="100"
-                :precision="1"
-                :step="1"
-                style="width: 100%"
-                controls-position="right"
-              />
-            </el-form-item>
-          </el-col>
-        </el-row>
-
-        <el-divider content-position="left">公示可见字段</el-divider>
-        <el-form-item label="员工可见内容">
-          <div class="checkbox-list">
-            <el-checkbox
-              v-for="opt in VISIBLE_FIELD_OPTIONS"
-              :key="opt.key"
-              v-model="createForm.publishVisibleFields[opt.key]"
-            >
-              {{ opt.label }}
-            </el-checkbox>
+        <div class="cycle-plan-summary" data-testid="cycle-plan-summary">
+          <div>
+            <span>目标制定开放</span>
+            <strong>{{ formatDateTimeForMessage(createForm.goalSettingOpenAt) }}</strong>
           </div>
-          <p class="form-tip">「绩效系数」默认不勾选，员工默认不可见；HR 可按需开启。</p>
-        </el-form-item>
+          <div>
+            <span>员工自评开放</span>
+            <strong>{{ formatDateTimeForMessage(createForm.selfEvalOpenAt) }}</strong>
+          </div>
+          <el-tag size="small" type="success" effect="light">默认计划</el-tag>
+        </div>
+
+        <button
+          type="button"
+          class="advanced-create-toggle"
+          data-testid="cycle-create-advanced"
+          :aria-expanded="advancedCreateVisible"
+          @click="advancedCreateVisible = !advancedCreateVisible"
+        >
+          <span>{{ advancedCreateVisible ? '收起高级设置' : '高级设置' }}</span>
+          <small>参与例外、时间节点、等级比例、公示范围</small>
+        </button>
+
+        <div v-show="advancedCreateVisible" data-testid="cycle-advanced-fields" class="advanced-create-fields">
+          <el-divider content-position="left">参与范围例外</el-divider>
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="额外参与人员">
+                <UserSelect v-model="createForm.participantUserIds" multiple status="active" placeholder="按需补充参与人员" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="明确豁免人员">
+                <UserSelect v-model="createForm.explicitExemptUserIds" multiple status="active" placeholder="按需设置本周期豁免" />
+              </el-form-item>
+            </el-col>
+          </el-row>
+          <p class="form-tip">参与部门和人员均不选择时默认覆盖全公司；明确豁免人员仍会生成可查看原因的豁免任务。</p>
+
+          <el-divider content-position="left">开放与截止时间</el-divider>
+          <el-row :gutter="16">
+            <el-col :span="12">
+              <el-form-item label="目标开放时间">
+                <el-date-picker v-model="createForm.goalSettingOpenAt" type="datetime" style="width: 100%" />
+              </el-form-item>
+            </el-col>
+            <el-col :span="12">
+              <el-form-item label="自评开放时间">
+                <el-date-picker v-model="createForm.selfEvalOpenAt" type="datetime" style="width: 100%" />
+              </el-form-item>
+            </el-col>
+            <el-col v-for="field in DEADLINE_FIELDS" :key="field.key" :span="12">
+              <el-form-item :label="field.label">
+                <el-date-picker
+                  v-model="createForm[field.key]"
+                  type="datetime"
+                  :placeholder="`选择${field.label}`"
+                  style="width: 100%"
+                  @change="handleCreateDeadlineChange(field.key)"
+                />
+              </el-form-item>
+            </el-col>
+          </el-row>
+
+          <el-divider content-position="left">等级上限比例（%）</el-divider>
+          <el-row :gutter="16">
+            <el-col v-for="field in GRADE_RATIO_FIELDS" :key="field.key" :span="12">
+              <el-form-item :label="field.label">
+                <el-input-number
+                  v-model="createForm[field.key]"
+                  :min="0"
+                  :max="100"
+                  :precision="1"
+                  :step="1"
+                  style="width: 100%"
+                  controls-position="right"
+                />
+              </el-form-item>
+            </el-col>
+          </el-row>
+
+          <el-divider content-position="left">公示可见字段</el-divider>
+          <el-form-item label="员工可见内容">
+            <div class="checkbox-list">
+              <el-checkbox
+                v-for="opt in VISIBLE_FIELD_OPTIONS"
+                :key="opt.key"
+                v-model="createForm.publishVisibleFields[opt.key]"
+              >
+                {{ opt.label }}
+              </el-checkbox>
+            </div>
+            <p class="form-tip">「绩效系数」默认不勾选，员工默认不可见；HR 可按需开启。</p>
+          </el-form-item>
+        </div>
       </el-form>
 
       <template #footer>
         <el-button @click="createDialogVisible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="handleCreate">确认创建</el-button>
+        <el-button data-testid="cycle-create-save-draft" :loading="submitting" @click="handleCreate(false)">保存草稿</el-button>
+        <el-button data-testid="cycle-create-and-check" type="primary" :loading="submitting" @click="handleCreate(true)">
+          创建并开放检查
+        </el-button>
       </template>
     </el-dialog>
 
@@ -1095,6 +1126,58 @@ onMounted(() => {
   flex-wrap: wrap;
   align-items: center;
   gap: 12px;
+}
+
+.cycle-plan-summary {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+  align-items: center;
+  gap: 16px;
+  margin: 4px 0 16px 120px;
+  padding: 12px 14px;
+  background: var(--el-color-success-light-9);
+  border: 1px solid var(--el-color-success-light-7);
+  border-radius: 8px;
+}
+
+.cycle-plan-summary > div {
+  display: grid;
+  gap: 3px;
+}
+
+.cycle-plan-summary span,
+.advanced-create-toggle small {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.cycle-plan-summary strong {
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+}
+
+.advanced-create-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: calc(100% - 120px);
+  margin: 0 0 8px 120px;
+  padding: 11px 14px;
+  color: var(--el-color-primary);
+  font: inherit;
+  text-align: left;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  cursor: pointer;
+}
+
+.advanced-create-toggle span {
+  font-weight: 600;
+}
+
+.advanced-create-fields {
+  padding-top: 4px;
 }
 
 .form-tip {
