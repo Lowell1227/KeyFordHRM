@@ -409,8 +409,8 @@ const trackingUser = {
   directManagerId: 'manager-1', directManagerName: '林治',
 };
 const trackingCycles = [
-  { id: 'cycle-1', name: '2026 第一季度', type: 'quarterly', startDate: '2026-01-01', endDate: '2026-03-31', status: 'self_eval', publishVisibleFields: {}, gradeAMaxRatio: 0.2, gradeBMaxRatio: 0.4, gradeCMaxRatio: 0.3, gradeDMaxRatio: 0.1 },
-  { id: 'cycle-2', name: '2026 第二季度', type: 'quarterly', startDate: '2026-04-01', endDate: '2026-06-30', status: 'manager_score', publishVisibleFields: {}, gradeAMaxRatio: 0.2, gradeBMaxRatio: 0.4, gradeCMaxRatio: 0.3, gradeDMaxRatio: 0.1 },
+  { id: 'cycle-1', name: '2026-Q1', type: 'quarterly', startDate: '2026-01-01', endDate: '2026-03-31', status: 'self_eval', publishVisibleFields: {}, gradeAMaxRatio: 0.2, gradeBMaxRatio: 0.4, gradeCMaxRatio: 0.3, gradeDMaxRatio: 0.1 },
+  { id: 'cycle-2', name: '2026-Q2', type: 'quarterly', startDate: '2026-04-01', endDate: '2026-06-30', status: 'manager_score', publishVisibleFields: {}, gradeAMaxRatio: 0.2, gradeBMaxRatio: 0.4, gradeCMaxRatio: 0.3, gradeDMaxRatio: 0.1 },
 ];
 const trackingRows = {
   self: { totalWeight: 50, items: [{ id: 'objective-1', title: '本人目标', ownerId: 'employee-1', ownerName: '刘伟', cycleId: 'cycle-2', cycleName: '2026 第二季度', priority: 1, status: 'active', progress: 20, weight: 50, latestProgress: null }] },
@@ -860,6 +860,38 @@ test.describe('09-performance-workspace objective map display settings model', (
 test.describe('09-performance-workspace tracking behavior', () => {
   test.use({ storageState: 'e2e/auth-state/employee.json' });
 
+  test('shows only formal real quarters and normalizes a hidden validation cycle', async ({ page }) => {
+    const formalAndValidationCycles = [
+      { ...trackingCycles[0], id: 'canonical-q1', status: 'closed' },
+      { ...trackingCycles[1], id: 'canonical-q2' },
+      { ...trackingCycles[1], id: 'canonical-q3', name: '2026-Q3', startDate: '2026-07-01', endDate: '2026-09-30', status: 'self_eval' },
+      { ...trackingCycles[0], id: 'history-q4', name: '2025 Q4 绩效考核（历史）', startDate: '2025-10-01', endDate: '2025-12-31', status: 'published' },
+      { ...trackingCycles[0], id: 'history-q3', name: '2025 Q3 绩效考核（历史）', startDate: '2025-07-01', endDate: '2025-09-30', status: 'published' },
+      { ...trackingCycles[1], id: 'validation-cycle', name: '2026年二季度绩效考核（全流程验证 20260620-1037-15）' },
+      { ...trackingCycles[0], id: 'annual-cycle', name: '2026年度绩效考核', type: 'annual' },
+    ];
+    await mockGoalTrackingShell(page, { cycles: formalAndValidationCycles });
+    const trackingRequest = page.waitForRequest((request) => {
+      const url = new URL(request.url());
+      return url.pathname.endsWith('/objectives/tracking')
+        && url.searchParams.get('cycleId') === 'canonical-q3';
+    });
+
+    await page.goto('/action-items?employeeId=employee-1&cycleId=validation-cycle');
+
+    const cycleSelect = page.getByTestId('goal-tracking-cycle');
+    await expect(cycleSelect.locator('option')).toHaveText([
+      '2026 第三季度',
+      '2026 第二季度',
+      '2026 第一季度',
+      '2025 第四季度',
+      '2025 第三季度',
+    ]);
+    await expect(cycleSelect).toHaveValue('canonical-q3');
+    await expect(page).toHaveURL(/cycleId=canonical-q3/);
+    await trackingRequest;
+  });
+
   test('restores person and cycle from URL and follows browser history', async ({ page }) => {
     await mockGoalTrackingShell(page);
     const peoplePanel = page.getByTestId('goal-tracking-people');
@@ -1180,6 +1212,7 @@ test.describe('09-performance-workspace tracking behavior', () => {
   }
 
   test('employee sees the reference goal-tracking workspace for self and manager', async ({ page }) => {
+    await authenticateMockSession(page);
     await page.route('**/api/v1/auth/me', (route) => route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify(apiResponse({
@@ -1193,7 +1226,7 @@ test.describe('09-performance-workspace tracking behavior', () => {
       body: JSON.stringify(apiResponse({
         total: 1, page: 1, pageSize: 100,
         items: [{
-          id: 'cycle-1', name: '2026 第二季度', type: 'quarterly',
+          id: 'cycle-1', name: '2026-Q2', type: 'quarterly',
           startDate: '2026-04-01', endDate: '2026-06-30', status: 'self_eval',
           publishVisibleFields: {}, gradeAMaxRatio: 0.2, gradeBMaxRatio: 0.4,
           gradeCMaxRatio: 0.3, gradeDMaxRatio: 0.1,

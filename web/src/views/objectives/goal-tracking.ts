@@ -18,6 +18,27 @@ const ACTIVE_CYCLE_STATUSES = new Set([
   'hr_calibration', 'approval', 'appeal',
 ]);
 
+type GoalTrackingQuarter = {
+  year: number;
+  quarter: 1 | 2 | 3 | 4;
+  priority: number;
+};
+
+function parseGoalTrackingQuarter(cycle: AssessmentCycle): GoalTrackingQuarter | null {
+  if (cycle.type !== 'quarterly') return null;
+
+  const standard = /^(\d{4})-Q([1-4])$/.exec(cycle.name);
+  const historical = /^(\d{4}) Q([1-4]) 绩效考核（历史）$/.exec(cycle.name);
+  const match = standard ?? historical;
+  if (!match) return null;
+
+  return {
+    year: Number(match[1]),
+    quarter: Number(match[2]) as GoalTrackingQuarter['quarter'],
+    priority: standard ? 2 : 1,
+  };
+}
+
 export function buildTrackingPeople(user: CurrentUser): GoalTrackingPeopleGroup[] {
   const groups: GoalTrackingPeopleGroup[] = [{
     key: 'self',
@@ -38,6 +59,33 @@ export function selectDefaultTrackingCycle(cycles: AssessmentCycle[]) {
   const sorted = [...cycles].sort((left, right) =>
     right.startDate.localeCompare(left.startDate));
   return sorted.find((cycle) => ACTIVE_CYCLE_STATUSES.has(cycle.status)) ?? sorted[0] ?? null;
+}
+
+export function selectGoalTrackingCycles(cycles: AssessmentCycle[]): AssessmentCycle[] {
+  const selected = new Map<string, { cycle: AssessmentCycle; quarter: GoalTrackingQuarter }>();
+
+  for (const cycle of cycles) {
+    const quarter = parseGoalTrackingQuarter(cycle);
+    if (!quarter) continue;
+    const key = `${quarter.year}-Q${quarter.quarter}`;
+    const existing = selected.get(key);
+    if (!existing || quarter.priority > existing.quarter.priority) {
+      selected.set(key, { cycle, quarter });
+    }
+  }
+
+  return [...selected.values()]
+    .sort((left, right) =>
+      right.quarter.year - left.quarter.year
+      || right.quarter.quarter - left.quarter.quarter)
+    .map(({ cycle }) => cycle);
+}
+
+export function formatGoalTrackingCycleName(cycle: AssessmentCycle): string {
+  const quarter = parseGoalTrackingQuarter(cycle);
+  if (!quarter) return cycle.name;
+  const quarterNames = ['', '第一季度', '第二季度', '第三季度', '第四季度'];
+  return `${quarter.year} ${quarterNames[quarter.quarter]}`;
 }
 
 export function goalTrackingStatus(item: { status: ObjectiveStatus; progress: number }) {
