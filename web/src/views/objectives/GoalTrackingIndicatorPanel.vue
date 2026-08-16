@@ -3,6 +3,7 @@ import { ref } from 'vue';
 import type { AssessmentCycle, GoalTrackingResult } from '@/types/api.types';
 import {
   GOAL_TRACKING_COLUMNS,
+  formatGoalTrackingCycleName,
   goalTrackingStatus,
   parseVisibleColumns,
   type GoalTrackingColumn,
@@ -68,7 +69,7 @@ function handleCycleChange(event: Event) {
           >
             <option v-if="cycles.length === 0" value="">暂无考核周期</option>
             <option v-for="cycle in cycles" :key="cycle.id" :value="cycle.id">
-              {{ cycle.name }}
+              {{ formatGoalTrackingCycleName(cycle) }}
             </option>
           </select>
         </label>

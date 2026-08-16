@@ -8,7 +8,11 @@ import type {
   GoalTrackingItem,
   GoalTrackingResult,
 } from '@/types/api.types';
-import { buildTrackingPeople, selectDefaultTrackingCycle } from './goal-tracking';
+import {
+  buildTrackingPeople,
+  selectDefaultTrackingCycle,
+  selectGoalTrackingCycles,
+} from './goal-tracking';
 
 export function useGoalTracking() {
   const route = useRoute();
@@ -113,7 +117,7 @@ export function useGoalTracking() {
     cyclesError.value = '';
     try {
       const page = await cyclesApi.findAll({ page: 1, pageSize: 100 });
-      if (commitGuard()) cycles.value = page.items;
+      if (commitGuard()) cycles.value = selectGoalTrackingCycles(page.items);
     } catch {
       if (commitGuard()) {
         cycles.value = [];
