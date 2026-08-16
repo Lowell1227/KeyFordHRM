@@ -237,6 +237,15 @@ enum ActionItemStatus {
   @@map("action_item_status")
 }
 
+enum IndicatorProgressHealth {
+  on_track
+  at_risk
+  blocked
+  completed
+
+  @@map("indicator_progress_health")
+}
+
 enum ConfirmationStatus {
   draft
   submitted
@@ -399,6 +408,7 @@ model User {
   createdObjectives                         Objective[]               @relation("ObjectiveCreator")
   assignedActionItems                       ActionItem[]              @relation("ActionItemAssignee")
   createdActionItems                        ActionItem[]              @relation("ActionItemCreator")
+  createdIndicatorProgressUpdates           IndicatorProgressUpdate[] @relation("IndicatorProgressCreator")
   updatedConfigs                            SystemConfig[]
   notifications                             NotificationLog[]         @relation("NotifReceiver")
   sentNotifications                         NotificationLog[]         @relation("NotifSender")
@@ -638,9 +648,28 @@ model IndicatorInstance {
   visibleDepartments  IndicatorVisibilityDepartment[]
   visibleUsers        IndicatorVisibilityUser[]
   objectiveAlignments IndicatorObjectiveAlignment[]
+  progressUpdates     IndicatorProgressUpdate[]
 
   @@index([taskId])
   @@map("indicator_instances")
+}
+
+model IndicatorProgressUpdate {
+  id                  String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  indicatorInstanceId String                  @map("indicator_instance_id") @db.Uuid
+  progress            Int                     @db.SmallInt
+  healthStatus        IndicatorProgressHealth @map("health_status")
+  content             String                  @db.Text
+  attachments         Json                    @default("[]") @db.JsonB
+  createdBy           String                  @map("created_by") @db.Uuid
+  createdAt           DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  indicatorInstance IndicatorInstance @relation(fields: [indicatorInstanceId], references: [id], onDelete: Cascade)
+  creator           User              @relation("IndicatorProgressCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+
+  @@index([indicatorInstanceId, createdAt(sort: Desc)])
+  @@index([createdBy])
+  @@map("indicator_progress_updates")
 }
 
 model IndicatorVisibilityDepartment {

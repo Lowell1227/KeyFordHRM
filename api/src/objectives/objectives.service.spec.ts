@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { ObjectiveLevel, ObjectiveStatus, Prisma, SysRole } from '@prisma/client';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { DataScopeService } from '@/common/services/data-scope.service';
@@ -11,7 +11,12 @@ describe('ObjectivesService visibility helpers', () => {
   let prisma: {
     objective: { count: jest.Mock; findMany: jest.Mock };
     actionItem: { findMany: jest.Mock };
-    user: { findMany: jest.Mock };
+    user: { findMany: jest.Mock; findUnique: jest.Mock };
+    assessmentTask: { findUnique: jest.Mock };
+    indicatorInstance: { findUnique: jest.Mock; findFirst: jest.Mock };
+    indicatorProgressUpdate: { findFirst: jest.Mock; create: jest.Mock };
+    auditLog: { create: jest.Mock; findMany: jest.Mock };
+    $transaction: jest.Mock;
   };
   let dataScope: { getVisibleEmployeeFilter: jest.Mock };
 
@@ -54,7 +59,13 @@ describe('ObjectivesService visibility helpers', () => {
       actionItem: { findMany: jest.fn() },
       user: {
         findMany: jest.fn().mockResolvedValue([{ id: 'manager-1' }, { id: 'employee-1' }]),
+        findUnique: jest.fn().mockResolvedValue({ directManagerId: null }),
       },
+      assessmentTask: { findUnique: jest.fn() },
+      indicatorInstance: { findUnique: jest.fn(), findFirst: jest.fn() },
+      indicatorProgressUpdate: { findFirst: jest.fn(), create: jest.fn() },
+      auditLog: { create: jest.fn(), findMany: jest.fn() },
+      $transaction: jest.fn(async (callback: (tx: unknown) => unknown) => callback(prisma)),
     };
     dataScope = {
       getVisibleEmployeeFilter: jest.fn().mockResolvedValue({
@@ -133,73 +144,458 @@ describe('ObjectivesService visibility helpers', () => {
     );
   });
 
-  it('returns visible owner-cycle objectives with one latest progress summary', async () => {
-    prisma.objective.findMany.mockResolvedValue([visibleObjective]);
-    prisma.actionItem.findMany.mockResolvedValue([
-      {
-        id: 'action-latest',
-        objectiveId: 'objective-visible',
-        title: '完成方案评审',
-        progress: 60,
-        updatedAt: new Date('2026-08-15T08:00:00.000Z'),
-      },
-      {
-        id: 'action-older',
-        objectiveId: 'objective-visible',
-        title: '旧进展',
-        progress: 30,
-        updatedAt: new Date('2026-08-14T08:00:00.000Z'),
-      },
-    ]);
+  it('returns the employee-cycle assessment indicators with effective weights', async () => {
+    prisma.assessmentTask.findUnique.mockResolvedValue({
+      id: 'task-1',
+      employeeId: 'manager-1',
+      cycleId: 'cycle-1',
+      status: 'self_eval',
+      selfEvalSubmittedAt: null,
+      employee: { id: 'manager-1', name: 'Manager' },
+      cycle: { id: 'cycle-1', name: '2026-Q3' },
+      indicatorInstances: [
+        {
+          id: 'indicator-revenue',
+          taskId: 'task-1',
+          name: 'GMV 达成率',
+          description: '按季度预算跟进 GMV 达成',
+          scoringStandard: '达到预算目标得满分',
+          dataSource: '经营报表',
+          dataCaliber: '财务确认口径',
+          targetValue: null,
+          targetValueText: '完成季度预算的 100%',
+          unit: '%',
+          weight: new Prisma.Decimal('0.20'),
+          indicatorType: 'kpi',
+          dimensionName: '工作目标',
+          dimensionWeight: new Prisma.Decimal('0.80'),
+          visibilityScope: 'supervisors',
+          actualValue: null,
+          actualNote: null,
+          sortOrder: 0,
+          updatedAt: new Date('2026-08-08T08:00:00.000Z'),
+          objectiveAlignments: [],
+          progressUpdates: [
+            {
+              id: 'progress-1',
+              progress: 45,
+              healthStatus: 'on_track',
+              content: '首轮方案已经完成评审',
+              attachments: [],
+              createdAt: new Date('2026-08-15T08:00:00.000Z'),
+              creator: { id: 'manager-1', name: 'Manager' },
+            },
+          ],
+        },
+        {
+          id: 'indicator-attitude',
+          taskId: 'task-1',
+          name: '工作态度与协作',
+          description: null,
+          scoringStandard: null,
+          dataSource: null,
+          dataCaliber: null,
+          targetValue: new Prisma.Decimal('100'),
+          targetValueText: null,
+          unit: '分',
+          weight: new Prisma.Decimal('1'),
+          indicatorType: 'attitude',
+          dimensionName: '工作态度',
+          dimensionWeight: new Prisma.Decimal('0.20'),
+          visibilityScope: 'supervisors',
+          actualValue: null,
+          actualNote: null,
+          sortOrder: 1,
+          updatedAt: new Date('2026-08-08T08:00:00.000Z'),
+          objectiveAlignments: [],
+          progressUpdates: [],
+        },
+      ],
+    });
 
     const result = await service.findTracking(
-      { ownerId: 'employee-1', cycleId: 'cycle-1' },
+      { ownerId: 'manager-1', cycleId: 'cycle-1' },
       viewer,
     );
 
-    expect(prisma.objective.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({
-        ownerId: 'employee-1',
-        cycleId: 'cycle-1',
-        OR: expect.any(Array),
-      }),
-      orderBy: [{ priority: 'desc' }, { createdAt: 'asc' }],
-    }));
-    expect(prisma.actionItem.findMany).toHaveBeenCalledWith({
+    expect(prisma.assessmentTask.findUnique).toHaveBeenCalledWith({
       where: {
-        AND: [
-          {
-            OR: [
-              { assigneeId: viewer.id },
-              { createdBy: viewer.id },
-              { objective: { ownerId: viewer.id } },
-              { objective: { level: 'company' } },
-            ],
-          },
-          { objectiveId: { in: ['objective-visible'] } },
-        ],
+        cycleId_employeeId: {
+          cycleId: 'cycle-1',
+          employeeId: 'manager-1',
+        },
       },
-      orderBy: { updatedAt: 'desc' },
-      select: {
-        id: true,
-        objectiveId: true,
-        title: true,
-        progress: true,
-        updatedAt: true,
-      },
+      include: expect.objectContaining({
+        indicatorInstances: expect.objectContaining({
+          orderBy: { sortOrder: 'asc' },
+        }),
+      }),
     });
     expect(result).toEqual({
-      totalWeight: 50,
-      items: [expect.objectContaining({
-        id: 'objective-visible',
+      taskId: 'task-1',
+      taskStatus: 'self_eval',
+      canEdit: true,
+      totalWeight: 36,
+      items: [
+        expect.objectContaining({
+        id: 'indicator-revenue',
+        title: 'GMV 达成率',
+        weight: 16,
+        progress: 45,
         latestProgress: {
-          id: 'action-latest',
-          title: '完成方案评审',
-          progress: 60,
+          id: 'progress-1',
+          content: '首轮方案已经完成评审',
+          progress: 45,
+          healthStatus: 'on_track',
+          createdBy: 'manager-1',
+          creatorName: 'Manager',
+          attachments: [],
           updatedAt: new Date('2026-08-15T08:00:00.000Z'),
         },
-      })],
+      }),
+        expect.objectContaining({
+          id: 'indicator-attitude',
+          title: '工作态度与协作',
+          weight: 20,
+          progress: 0,
+          latestProgress: null,
+        }),
+      ],
     });
+  });
+
+  it('shows only explicitly shareable direct-manager indicators and keeps them read-only', async () => {
+    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'director-1' });
+    prisma.assessmentTask.findUnique.mockResolvedValue({
+      id: 'task-manager',
+      employeeId: 'director-1',
+      cycleId: 'cycle-1',
+      status: 'self_eval',
+      selfEvalSubmittedAt: null,
+      employee: { id: 'director-1', name: 'Director' },
+      cycle: { id: 'cycle-1', name: '2026-Q3' },
+      indicatorInstances: [],
+    });
+
+    const result = await service.findTracking(
+      { ownerId: 'director-1', cycleId: 'cycle-1' },
+      viewer,
+    );
+
+    expect(prisma.user.findUnique).toHaveBeenCalledWith({
+      where: { id: viewer.id },
+      select: { directManagerId: true },
+    });
+    expect(prisma.assessmentTask.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+      include: expect.objectContaining({
+        indicatorInstances: expect.objectContaining({
+          where: {
+            OR: expect.arrayContaining([
+              { visibilityScope: 'company' },
+              { visibilityScope: 'direct_reports' },
+              { visibilityScope: 'all_reports' },
+              { visibleUsers: { some: { userId: viewer.id } } },
+            ]),
+          },
+        }),
+      }),
+    }));
+    expect(result.canEdit).toBe(false);
+  });
+
+  it('rejects an arbitrary tracking owner before loading their task', async () => {
+    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'director-1' });
+
+    await expect(service.findTracking(
+      { ownerId: 'unrelated-user', cycleId: 'cycle-1' },
+      viewer,
+    )).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(prisma.assessmentTask.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('appends an employee progress update and its audit record without overwriting history', async () => {
+    prisma.indicatorInstance.findUnique.mockResolvedValue({
+      id: 'indicator-1',
+      name: 'GMV 达成率',
+      task: {
+        id: 'task-1',
+        employeeId: viewer.id,
+        status: 'self_eval',
+        selfEvalSubmittedAt: null,
+      },
+    });
+    prisma.indicatorProgressUpdate.findFirst.mockResolvedValue(null);
+    prisma.indicatorProgressUpdate.create.mockResolvedValue({
+      id: 'progress-1',
+      indicatorInstanceId: 'indicator-1',
+      progress: 45,
+      healthStatus: 'on_track',
+      content: '首轮方案已经完成评审',
+      attachments: [{ name: 'review.pdf', url: '/files/review.pdf', size: 1024 }],
+      createdBy: viewer.id,
+      createdAt: new Date('2026-08-16T08:00:00.000Z'),
+      creator: { id: viewer.id, name: viewer.name },
+    });
+
+    const result = await (service as any).updateIndicatorProgress(
+      'indicator-1',
+      {
+        progress: 45,
+        healthStatus: 'on_track',
+        content: '首轮方案已经完成评审',
+        attachments: [{ name: 'review.pdf', url: '/files/review.pdf', size: 1024 }],
+        expectedLatestUpdateAt: null,
+      },
+      viewer,
+    );
+
+    expect(prisma.indicatorProgressUpdate.create).toHaveBeenCalledWith({
+      data: {
+        indicatorInstanceId: 'indicator-1',
+        progress: 45,
+        healthStatus: 'on_track',
+        content: '首轮方案已经完成评审',
+        attachments: [{ name: 'review.pdf', url: '/files/review.pdf', size: 1024 }],
+        createdBy: viewer.id,
+      },
+      include: { creator: { select: { id: true, name: true } } },
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: viewer.id,
+        action: 'progress_update',
+        entityType: 'indicator_instance',
+        entityId: 'indicator-1',
+        oldValue: Prisma.JsonNull,
+        newValue: expect.objectContaining({ progress: 45, healthStatus: 'on_track' }),
+      }),
+    });
+    expect(result).toEqual(expect.objectContaining({
+      id: 'progress-1',
+      progress: 45,
+      creatorName: viewer.name,
+    }));
+  });
+
+  it('does not let a viewer update another employee indicator', async () => {
+    prisma.indicatorInstance.findUnique.mockResolvedValue({
+      id: 'indicator-manager',
+      name: '管理目标',
+      task: {
+        id: 'task-manager',
+        employeeId: 'director-1',
+        status: 'self_eval',
+        selfEvalSubmittedAt: null,
+      },
+    });
+
+    await expect((service as any).updateIndicatorProgress(
+      'indicator-manager',
+      { progress: 30, healthStatus: 'on_track', content: '尝试代改', attachments: [] },
+      viewer,
+    )).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(prisma.indicatorProgressUpdate.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { status: 'closed', selfEvalSubmittedAt: null },
+    { status: 'self_eval', selfEvalSubmittedAt: new Date('2026-08-16T07:00:00.000Z') },
+  ])('does not append progress after the task is locked: %o', async (taskState) => {
+    prisma.indicatorInstance.findUnique.mockResolvedValue({
+      id: 'indicator-1',
+      name: 'GMV 达成率',
+      task: { id: 'task-1', employeeId: viewer.id, ...taskState },
+    });
+
+    await expect((service as any).updateIndicatorProgress(
+      'indicator-1',
+      { progress: 80, healthStatus: 'on_track', content: '迟到更新', attachments: [] },
+      viewer,
+    )).rejects.toBeInstanceOf(ConflictException);
+
+    expect(prisma.indicatorProgressUpdate.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects a stale editor instead of overwriting a newer progress update', async () => {
+    prisma.indicatorInstance.findUnique.mockResolvedValue({
+      id: 'indicator-1',
+      name: 'GMV 达成率',
+      task: {
+        id: 'task-1',
+        employeeId: viewer.id,
+        status: 'self_eval',
+        selfEvalSubmittedAt: null,
+      },
+    });
+    prisma.indicatorProgressUpdate.findFirst.mockResolvedValue({
+      id: 'progress-newer',
+      progress: 55,
+      healthStatus: 'at_risk',
+      createdAt: new Date('2026-08-16T09:00:00.000Z'),
+    });
+
+    await expect((service as any).updateIndicatorProgress(
+      'indicator-1',
+      {
+        progress: 60,
+        healthStatus: 'on_track',
+        content: '旧编辑器提交',
+        attachments: [],
+        expectedLatestUpdateAt: '2026-08-16T08:00:00.000Z',
+      },
+      viewer,
+    )).rejects.toBeInstanceOf(ConflictException);
+
+    expect(prisma.indicatorProgressUpdate.create).not.toHaveBeenCalled();
+  });
+
+  it('returns real indicator details, immutable progress history, and audited changes', async () => {
+    prisma.indicatorInstance.findFirst.mockResolvedValue({
+      id: 'indicator-1',
+      taskId: 'task-1',
+      name: 'GMV 达成率',
+      description: '跟进季度 GMV',
+      scoringStandard: '达到预算目标得满分',
+      dataSource: '经营报表',
+      dataCaliber: '财务确认口径',
+      targetValue: null,
+      targetValueText: '完成季度预算的 100%',
+      unit: '%',
+      weight: new Prisma.Decimal('0.20'),
+      indicatorType: 'kpi',
+      dimensionName: '工作目标',
+      dimensionWeight: new Prisma.Decimal('0.80'),
+      visibilityScope: 'supervisors',
+      actualValue: new Prisma.Decimal('96'),
+      actualNote: '截至季度末完成预算的 96%',
+      sortOrder: 0,
+      createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-08-16T08:00:00.000Z'),
+      task: {
+        id: 'task-1',
+        employeeId: viewer.id,
+        status: 'self_eval',
+        selfEvalSubmittedAt: null,
+        employee: { id: viewer.id, name: viewer.name },
+        cycle: { id: 'cycle-1', name: '2026-Q3' },
+      },
+      objectiveAlignments: [
+        { objective: { id: 'objective-1', title: '提升经营质量', level: 'company', ownerId: 'vp-1' } },
+      ],
+      progressUpdates: [
+        {
+          id: 'progress-2',
+          progress: 60,
+          healthStatus: 'at_risk',
+          content: '渠道转化低于预期，已调整投放',
+          attachments: [],
+          createdAt: new Date('2026-08-16T08:00:00.000Z'),
+          creator: { id: viewer.id, name: viewer.name },
+        },
+        {
+          id: 'progress-1',
+          progress: 40,
+          healthStatus: 'on_track',
+          content: '完成首轮投放',
+          attachments: [],
+          createdAt: new Date('2026-08-01T08:00:00.000Z'),
+          creator: { id: viewer.id, name: viewer.name },
+        },
+      ],
+    });
+    prisma.auditLog.findMany.mockResolvedValue([
+      {
+        id: 'audit-1',
+        action: 'indicator_updated',
+        oldValue: { targetValueText: '完成季度预算的 95%' },
+        newValue: { targetValueText: '完成季度预算的 100%' },
+        createdAt: new Date('2026-07-15T08:00:00.000Z'),
+        user: { id: 'manager-1', name: 'Manager' },
+      },
+    ]);
+
+    const result = await (service as any).findTrackingIndicator('indicator-1', viewer);
+
+    expect(result).toEqual(expect.objectContaining({
+      id: 'indicator-1',
+      title: 'GMV 达成率',
+      targetValueText: '完成季度预算的 100%',
+      actualValue: 96,
+      actualNote: '截至季度末完成预算的 96%',
+      weight: 16,
+      canEdit: true,
+      alignedObjectives: [
+        { id: 'objective-1', title: '提升经营质量', level: 'company', ownerId: 'vp-1' },
+      ],
+      progressUpdates: [
+        expect.objectContaining({ id: 'progress-2', progress: 60, creatorName: viewer.name }),
+        expect.objectContaining({ id: 'progress-1', progress: 40, creatorName: viewer.name }),
+      ],
+      changeRecords: [
+        expect.objectContaining({ id: 'audit-1', action: 'indicator_updated', actorName: 'Manager' }),
+      ],
+    }));
+  });
+
+  it('opens a shareable direct-manager indicator as read-only without exposing edit authority', async () => {
+    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'director-1' });
+    prisma.indicatorInstance.findFirst.mockResolvedValue({
+      id: 'indicator-manager',
+      taskId: 'task-manager',
+      name: '团队交付质量',
+      description: null,
+      scoringStandard: null,
+      dataSource: null,
+      dataCaliber: null,
+      targetValue: null,
+      targetValueText: '重大项目按期交付',
+      unit: null,
+      weight: new Prisma.Decimal('1'),
+      indicatorType: 'kpi',
+      dimensionName: '工作目标',
+      dimensionWeight: new Prisma.Decimal('1'),
+      visibilityScope: 'direct_reports',
+      actualValue: null,
+      actualNote: null,
+      sortOrder: 0,
+      createdAt: new Date('2026-07-01T00:00:00.000Z'),
+      updatedAt: new Date('2026-08-16T08:00:00.000Z'),
+      task: {
+        id: 'task-manager',
+        employeeId: 'director-1',
+        status: 'self_eval',
+        selfEvalSubmittedAt: null,
+        employee: { id: 'director-1', name: 'Director' },
+        cycle: { id: 'cycle-1', name: '2026-Q3' },
+      },
+      objectiveAlignments: [],
+      progressUpdates: [],
+    });
+    prisma.auditLog.findMany.mockResolvedValue([]);
+
+    const result = await (service as any).findTrackingIndicator('indicator-manager', viewer);
+
+    expect(prisma.indicatorInstance.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        AND: [
+          { id: 'indicator-manager' },
+          {
+            OR: expect.arrayContaining([
+              { task: { employeeId: viewer.id } },
+              {
+                AND: [
+                  { task: { employeeId: 'director-1' } },
+                  { visibilityScope: 'direct_reports' },
+                ],
+              },
+            ]),
+          },
+        ],
+      },
+    }));
+    expect(result.canEdit).toBe(false);
   });
 
   it('resolves a deep link through the same visibility predicate', async () => {

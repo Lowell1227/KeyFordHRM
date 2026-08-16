@@ -20,6 +20,17 @@ import { UpdateObjectiveDto } from './dto/update-objective.dto';
 import { UpdateProgressDto } from './dto/update-progress.dto';
 import { ObjectiveQueryDto } from './dto/objective-query.dto';
 import { GoalTrackingQueryDto } from './dto/goal-tracking-query.dto';
+import { UpdateIndicatorProgressDto } from './dto/update-indicator-progress.dto';
+
+const TRACKING_ROLES = [
+  SysRole.employee,
+  SysRole.manager,
+  SysRole.dept_head,
+  SysRole.vp,
+  SysRole.hr,
+  SysRole.chairman,
+  SysRole.system_admin,
+] as const;
 
 /**
  * 目标地图接口。改为「管理者+」可见：读对所有非 employee 角色开放，
@@ -54,20 +65,36 @@ export class ObjectivesController {
 
   /** GET /objectives/:id — 详情。 */
   @Get('tracking')
-  @Roles(
-    SysRole.employee,
-    SysRole.manager,
-    SysRole.dept_head,
-    SysRole.vp,
-    SysRole.hr,
-    SysRole.chairman,
-    SysRole.system_admin,
-  )
+  @Roles(...TRACKING_ROLES)
   findTracking(
     @Query() query: GoalTrackingQueryDto,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.objectivesService.findTracking(query, viewer);
+  }
+
+  @Get('tracking/indicators/:id')
+  @Roles(...TRACKING_ROLES)
+  findTrackingIndicator(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.objectivesService.findTrackingIndicator(id, viewer);
+  }
+
+  @Patch('tracking/indicators/:id/progress')
+  @HttpCode(200)
+  @Roles(...TRACKING_ROLES)
+  updateTrackingIndicatorProgress(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: UpdateIndicatorProgressDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.objectivesService.updateIndicatorProgress(
+      id,
+      { ...dto, attachments: dto.attachments ?? [] },
+      viewer,
+    );
   }
 
   @Get(':id')

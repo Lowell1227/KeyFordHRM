@@ -1,10 +1,18 @@
 import {
   BadRequestException,
+  ConflictException,
   ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { ObjectiveLevel, ObjectiveStatus, Prisma, SysRole } from '@prisma/client';
+import {
+  IndicatorProgressHealth,
+  ObjectiveLevel,
+  ObjectiveStatus,
+  Prisma,
+  SysRole,
+  TaskStatus,
+} from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DataScopeService } from '@/common/services/data-scope.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
@@ -39,14 +47,31 @@ type GoalTrackingObjective = Prisma.ObjectiveGetPayload<{
 
 export interface GoalTrackingLatestProgress {
   id: string;
-  title: string;
+  title?: string;
+  content?: string;
   progress: number;
+  healthStatus?: 'on_track' | 'at_risk' | 'blocked' | 'completed';
+  attachments?: unknown[];
+  createdBy?: string;
+  creatorName?: string;
   updatedAt: Date;
 }
 
 export interface GoalTrackingItem {
   id: string;
   title: string;
+  taskId?: string;
+  description?: string | null;
+  scoringStandard?: string | null;
+  dataSource?: string | null;
+  dataCaliber?: string | null;
+  targetValue?: number | null;
+  targetValueText?: string | null;
+  unit?: string | null;
+  indicatorType?: string;
+  dimensionName?: string | null;
+  dimensionWeight?: number;
+  visibilityScope?: string;
   ownerId: string | null;
   ownerName: string | null;
   cycleId: string | null;
@@ -59,8 +84,19 @@ export interface GoalTrackingItem {
 }
 
 export interface GoalTrackingResult {
+  taskId?: string | null;
+  taskStatus?: TaskStatus | null;
+  canEdit?: boolean;
   totalWeight: number;
   items: GoalTrackingItem[];
+}
+
+export interface UpdateIndicatorProgressInput {
+  progress: number;
+  healthStatus: IndicatorProgressHealth;
+  content: string;
+  attachments: Array<{ name: string; url: string; size?: number }>;
+  expectedLatestUpdateAt?: string | null;
 }
 
 /** 目标树节点。 */
@@ -160,6 +196,10 @@ export class ObjectivesService {
       });
     }
 
+    if (!query.objectiveId) {
+      return this.findIndicatorTracking(query.ownerId!, query.cycleId!, viewer);
+    }
+
     const visibilityWhere = await this.buildWhere(
       query.objectiveId
         ? {}
@@ -220,6 +260,363 @@ export class ObjectivesService {
     return {
       totalWeight: items.reduce((sum, item) => sum + (item.weight ?? 0), 0),
       items,
+    };
+  }
+
+  private async findIndicatorTracking(
+    ownerId: string,
+    cycleId: string,
+    viewer: AuthUser,
+  ): Promise<GoalTrackingResult> {
+    let indicatorWhere: Prisma.IndicatorInstanceWhereInput | undefined;
+    if (ownerId !== viewer.id) {
+      const viewerRecord = await this.prisma.user.findUnique({
+        where: { id: viewer.id },
+        select: { directManagerId: true },
+      });
+      if (viewerRecord?.directManagerId !== ownerId) {
+        throw new ForbiddenException({
+          code: ERROR_CODE.FORBIDDEN,
+          message: '无权查看该员工的考核指标',
+        });
+      }
+      indicatorWhere = {
+        OR: [
+          { visibilityScope: 'company' },
+          { visibilityScope: 'direct_reports' },
+          { visibilityScope: 'all_reports' },
+          ...(viewer.deptId
+            ? [
+                { visibilityScope: 'department', task: { deptId: viewer.deptId } },
+                { visibleDepartments: { some: { departmentId: viewer.deptId } } },
+              ] satisfies Prisma.IndicatorInstanceWhereInput[]
+            : []),
+          { visibleUsers: { some: { userId: viewer.id } } },
+        ],
+      };
+    }
+
+    const task = await this.prisma.assessmentTask.findUnique({
+      where: { cycleId_employeeId: { cycleId, employeeId: ownerId } },
+      include: {
+        employee: { select: { id: true, name: true } },
+        cycle: { select: { id: true, name: true } },
+        indicatorInstances: {
+          ...(indicatorWhere ? { where: indicatorWhere } : {}),
+          orderBy: { sortOrder: 'asc' },
+          include: {
+            objectiveAlignments: {
+              include: {
+                objective: {
+                  select: { id: true, title: true, level: true, ownerId: true },
+                },
+              },
+            },
+            progressUpdates: {
+              orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+              take: 1,
+              include: { creator: { select: { id: true, name: true } } },
+            },
+          },
+        },
+      },
+    });
+
+    if (!task) {
+      return { taskId: null, taskStatus: null, canEdit: false, totalWeight: 0, items: [] };
+    }
+
+    const editableStatuses = new Set<TaskStatus>([
+      TaskStatus.indicator_setting,
+      TaskStatus.indicator_confirming,
+      TaskStatus.self_eval,
+    ]);
+    const canEdit = task.employeeId === viewer.id
+      && task.selfEvalSubmittedAt == null
+      && editableStatuses.has(task.status);
+    const items = task.indicatorInstances.map((indicator) => {
+      const latest = indicator.progressUpdates[0] ?? null;
+      const weight = Math.round(
+        indicator.dimensionWeight.toNumber() * indicator.weight.toNumber() * 10_000,
+      ) / 100;
+      return {
+        id: indicator.id,
+        taskId: indicator.taskId,
+        title: indicator.name,
+        description: indicator.description,
+        scoringStandard: indicator.scoringStandard,
+        dataSource: indicator.dataSource,
+        dataCaliber: indicator.dataCaliber,
+        targetValue: indicator.targetValue?.toNumber() ?? null,
+        targetValueText: indicator.targetValueText,
+        unit: indicator.unit,
+        indicatorType: indicator.indicatorType,
+        dimensionName: indicator.dimensionName,
+        dimensionWeight: indicator.dimensionWeight.toNumber() * 100,
+        visibilityScope: indicator.visibilityScope,
+        ownerId: task.employee.id,
+        ownerName: task.employee.name,
+        cycleId: task.cycle.id,
+        cycleName: task.cycle.name,
+        priority: -indicator.sortOrder,
+        status: ObjectiveStatus.active,
+        progress: latest?.progress ?? 0,
+        weight,
+        latestProgress: latest
+          ? {
+              id: latest.id,
+              content: latest.content,
+              progress: latest.progress,
+              healthStatus: latest.healthStatus,
+              attachments: Array.isArray(latest.attachments) ? latest.attachments : [],
+              createdBy: latest.creator.id,
+              creatorName: latest.creator.name,
+              updatedAt: latest.createdAt,
+            }
+          : null,
+      } satisfies GoalTrackingItem;
+    });
+
+    return {
+      taskId: task.id,
+      taskStatus: task.status,
+      canEdit,
+      totalWeight: Math.round(items.reduce((sum, item) => sum + (item.weight ?? 0), 0) * 100) / 100,
+      items,
+    };
+  }
+
+  async updateIndicatorProgress(
+    indicatorId: string,
+    input: UpdateIndicatorProgressInput,
+    viewer: AuthUser,
+  ) {
+    const indicator = await this.prisma.indicatorInstance.findUnique({
+      where: { id: indicatorId },
+      include: {
+        task: {
+          select: {
+            id: true,
+            employeeId: true,
+            status: true,
+            selfEvalSubmittedAt: true,
+          },
+        },
+      },
+    });
+    if (!indicator) {
+      throw new NotFoundException({
+        code: ERROR_CODE.NOT_FOUND,
+        message: '考核指标不存在',
+      });
+    }
+    if (indicator.task.employeeId !== viewer.id) {
+      throw new ForbiddenException({
+        code: ERROR_CODE.FORBIDDEN,
+        message: '只能更新本人的考核指标进展',
+      });
+    }
+    const editableStatuses = new Set<TaskStatus>([
+      TaskStatus.indicator_setting,
+      TaskStatus.indicator_confirming,
+      TaskStatus.self_eval,
+    ]);
+    if (!editableStatuses.has(indicator.task.status) || indicator.task.selfEvalSubmittedAt) {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: '当前考核阶段不允许更新进展',
+      });
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const latest = await tx.indicatorProgressUpdate.findFirst({
+        where: { indicatorInstanceId: indicatorId },
+        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      });
+      if (input.expectedLatestUpdateAt !== undefined) {
+        const actualLatestUpdateAt = latest?.createdAt.toISOString() ?? null;
+        if (actualLatestUpdateAt !== input.expectedLatestUpdateAt) {
+          throw new ConflictException({
+            code: ERROR_CODE.CONFLICT,
+            message: '进展已被更新，请刷新后重试',
+          });
+        }
+      }
+      const created = await tx.indicatorProgressUpdate.create({
+        data: {
+          indicatorInstanceId: indicatorId,
+          progress: input.progress,
+          healthStatus: input.healthStatus,
+          content: input.content,
+          attachments: input.attachments as Prisma.InputJsonValue,
+          createdBy: viewer.id,
+        },
+        include: { creator: { select: { id: true, name: true } } },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: viewer.id,
+          action: 'progress_update',
+          entityType: 'indicator_instance',
+          entityId: indicatorId,
+          oldValue: latest
+            ? ({
+                progress: latest.progress,
+                healthStatus: latest.healthStatus,
+                updatedAt: latest.createdAt.toISOString(),
+              } satisfies Prisma.InputJsonObject)
+            : Prisma.JsonNull,
+          newValue: {
+            progress: created.progress,
+            healthStatus: created.healthStatus,
+            content: created.content,
+            attachments: created.attachments,
+            updatedAt: created.createdAt.toISOString(),
+          },
+        },
+      });
+      return {
+        id: created.id,
+        progress: created.progress,
+        healthStatus: created.healthStatus,
+        content: created.content,
+        attachments: Array.isArray(created.attachments) ? created.attachments : [],
+        createdBy: created.creator.id,
+        creatorName: created.creator.name,
+        updatedAt: created.createdAt,
+      };
+    });
+  }
+
+  async findTrackingIndicator(indicatorId: string, viewer: AuthUser) {
+    const viewerRecord = await this.prisma.user.findUnique({
+      where: { id: viewer.id },
+      select: { directManagerId: true },
+    });
+    const ownerVisibility: Prisma.IndicatorInstanceWhereInput[] = [
+      { task: { employeeId: viewer.id } },
+    ];
+    if (viewerRecord?.directManagerId) {
+      const managerId = viewerRecord.directManagerId;
+      ownerVisibility.push(
+        { AND: [{ task: { employeeId: managerId } }, { visibilityScope: 'company' }] },
+        { AND: [{ task: { employeeId: managerId } }, { visibilityScope: 'direct_reports' }] },
+        { AND: [{ task: { employeeId: managerId } }, { visibilityScope: 'all_reports' }] },
+        {
+          AND: [
+            { task: { employeeId: managerId } },
+            { visibleUsers: { some: { userId: viewer.id } } },
+          ],
+        },
+      );
+      if (viewer.deptId) {
+        ownerVisibility.push(
+          {
+            AND: [
+              { task: { employeeId: managerId } },
+              { visibilityScope: 'department', task: { deptId: viewer.deptId } },
+            ],
+          },
+          {
+            AND: [
+              { task: { employeeId: managerId } },
+              { visibleDepartments: { some: { departmentId: viewer.deptId } } },
+            ],
+          },
+        );
+      }
+    }
+    const indicator = await this.prisma.indicatorInstance.findFirst({
+      where: { AND: [{ id: indicatorId }, { OR: ownerVisibility }] },
+      include: {
+        task: {
+          include: {
+            employee: { select: { id: true, name: true } },
+            cycle: { select: { id: true, name: true } },
+          },
+        },
+        objectiveAlignments: {
+          include: {
+            objective: {
+              select: { id: true, title: true, level: true, ownerId: true },
+            },
+          },
+        },
+        progressUpdates: {
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          include: { creator: { select: { id: true, name: true } } },
+        },
+      },
+    });
+    if (!indicator) {
+      throw new NotFoundException({
+        code: ERROR_CODE.NOT_FOUND,
+        message: '考核指标不存在或不可见',
+      });
+    }
+
+    const changeRecords = await this.prisma.auditLog.findMany({
+      where: { entityType: 'indicator_instance', entityId: indicator.id },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      include: { user: { select: { id: true, name: true } } },
+    });
+    const editableStatuses = new Set<TaskStatus>([
+      TaskStatus.indicator_setting,
+      TaskStatus.indicator_confirming,
+      TaskStatus.self_eval,
+    ]);
+    const effectiveWeight = Math.round(
+      indicator.dimensionWeight.toNumber() * indicator.weight.toNumber() * 10_000,
+    ) / 100;
+
+    return {
+      id: indicator.id,
+      taskId: indicator.taskId,
+      title: indicator.name,
+      description: indicator.description,
+      scoringStandard: indicator.scoringStandard,
+      dataSource: indicator.dataSource,
+      dataCaliber: indicator.dataCaliber,
+      targetValue: indicator.targetValue?.toNumber() ?? null,
+      targetValueText: indicator.targetValueText,
+      unit: indicator.unit,
+      indicatorType: indicator.indicatorType,
+      dimensionName: indicator.dimensionName,
+      dimensionWeight: indicator.dimensionWeight.toNumber() * 100,
+      weight: effectiveWeight,
+      visibilityScope: indicator.visibilityScope,
+      actualValue: indicator.actualValue?.toNumber() ?? null,
+      actualNote: indicator.actualNote,
+      ownerId: indicator.task.employee.id,
+      ownerName: indicator.task.employee.name,
+      cycleId: indicator.task.cycle.id,
+      cycleName: indicator.task.cycle.name,
+      taskStatus: indicator.task.status,
+      canEdit: indicator.task.employeeId === viewer.id
+        && indicator.task.selfEvalSubmittedAt == null
+        && editableStatuses.has(indicator.task.status),
+      alignedObjectives: indicator.objectiveAlignments.map(({ objective }) => objective),
+      progressUpdates: indicator.progressUpdates.map((progress) => ({
+        id: progress.id,
+        progress: progress.progress,
+        healthStatus: progress.healthStatus,
+        content: progress.content,
+        attachments: Array.isArray(progress.attachments) ? progress.attachments : [],
+        createdBy: progress.creator.id,
+        creatorName: progress.creator.name,
+        updatedAt: progress.createdAt,
+      })),
+      changeRecords: changeRecords.map((record) => ({
+        id: record.id,
+        action: record.action,
+        oldValue: record.oldValue,
+        newValue: record.newValue,
+        actorId: record.user?.id ?? null,
+        actorName: record.user?.name ?? null,
+        createdAt: record.createdAt,
+      })),
+      createdAt: indicator.createdAt,
+      updatedAt: indicator.updatedAt,
     };
   }
 

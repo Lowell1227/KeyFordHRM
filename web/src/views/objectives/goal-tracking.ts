@@ -88,7 +88,17 @@ export function formatGoalTrackingCycleName(cycle: AssessmentCycle): string {
   return `${quarter.year} ${quarterNames[quarter.quarter]}`;
 }
 
-export function goalTrackingStatus(item: { status: ObjectiveStatus; progress: number }) {
+export type GoalTrackingHealthStatus = 'on_track' | 'at_risk' | 'blocked' | 'completed';
+
+export function goalTrackingStatus(item: {
+  status?: ObjectiveStatus;
+  progress: number;
+  healthStatus?: GoalTrackingHealthStatus | null;
+}) {
+  if (item.healthStatus === 'on_track') return '正常';
+  if (item.healthStatus === 'at_risk') return '存在风险';
+  if (item.healthStatus === 'blocked') return '已阻塞';
+  if (item.healthStatus === 'completed') return '已完成';
   if (item.status === 'archived') return '已归档';
   if (item.status === 'draft') return '未开始';
   if (item.progress >= 100) return '已完成';

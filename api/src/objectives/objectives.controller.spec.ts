@@ -18,4 +18,24 @@ describe('ObjectivesController tracking access', () => {
       SysRole.system_admin,
     ]);
   });
+
+  it('exposes indicator detail and progress routes to every authenticated role', () => {
+    const methods = [
+      (ObjectivesController.prototype as any).findTrackingIndicator,
+      (ObjectivesController.prototype as any).updateTrackingIndicatorProgress,
+    ];
+
+    for (const method of methods) {
+      expect(typeof method).toBe('function');
+      expect(Reflect.getMetadata(ROLES_KEY, method)).toEqual([
+        SysRole.employee,
+        SysRole.manager,
+        SysRole.dept_head,
+        SysRole.vp,
+        SysRole.hr,
+        SysRole.chairman,
+        SysRole.system_admin,
+      ]);
+    }
+  });
 });

@@ -125,6 +125,14 @@ test('maps objective status from archive and progress semantics', () => {
   expect(goalTrackingStatus({ status: 'archived', progress: 60 })).toBe('已归档');
 });
 
+test('maps indicator progress health independently from assessment lifecycle state', () => {
+  expect(goalTrackingStatus({ progress: 0, healthStatus: null } as any)).toBe('未开始');
+  expect(goalTrackingStatus({ progress: 35, healthStatus: 'on_track' } as any)).toBe('正常');
+  expect(goalTrackingStatus({ progress: 60, healthStatus: 'at_risk' } as any)).toBe('存在风险');
+  expect(goalTrackingStatus({ progress: 70, healthStatus: 'blocked' } as any)).toBe('已阻塞');
+  expect(goalTrackingStatus({ progress: 100, healthStatus: 'completed' } as any)).toBe('已完成');
+});
+
 test('validates persisted visible columns and collapse booleans', () => {
   expect(parseVisibleColumns('["status","weight","unknown"]'))
     .toEqual(['status', 'weight']);

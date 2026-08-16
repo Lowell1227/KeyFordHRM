@@ -35,6 +35,7 @@ const emit = defineEmits<{
   cycleChange: [cycleId: string];
   retryCycles: [];
   retryIndicators: [];
+  openIndicator: [indicatorId: string];
 }>();
 
 function setColumn(column: GoalTrackingColumn, visible: boolean) {
@@ -155,7 +156,14 @@ function handleCycleChange(event: Event) {
           <div class="goal-indicator-cell" data-label="指标名称" role="cell" aria-label="考核指标">
             <span class="tracking-indicators__objective">
               <span class="goal-indicator-index" aria-hidden="true">{{ index + 1 }}</span>
-              <strong>{{ item.title }}</strong>
+              <button
+                type="button"
+                class="tracking-indicators__objective-button"
+                :data-testid="`goal-tracking-indicator-button-${item.id}`"
+                @click="emit('openIndicator', item.id)"
+              >
+                {{ item.title }}
+              </button>
             </span>
           </div>
           <div
@@ -167,12 +175,16 @@ function handleCycleChange(event: Event) {
           >
             <span class="tracking-indicators__latest">
               {{ item.latestProgress
-                ? `${item.latestProgress.title} · ${item.latestProgress.progress}%`
+                ? `${item.latestProgress.content || item.latestProgress.title || '已更新进展'} · ${item.latestProgress.progress}%`
                 : '暂无进展' }}
             </span>
           </div>
           <div v-if="visibleColumns.includes('status')" class="goal-indicator-cell" data-label="状态" role="cell" aria-label="状态">
-            <span>{{ goalTrackingStatus(item) }}</span>
+            <span>{{ goalTrackingStatus({
+              status: item.status,
+              progress: item.progress,
+              healthStatus: item.latestProgress?.healthStatus,
+            }) }}</span>
           </div>
           <div v-if="visibleColumns.includes('progress')" class="goal-indicator-cell" data-label="进展" role="cell" aria-label="进展">
             <span>{{ item.progress }}%</span>
@@ -411,6 +423,33 @@ function handleCycleChange(event: Event) {
   color: #3f8cff;
   background: #eaf4ff;
   font-size: 12px;
+}
+
+.tracking-indicators__objective-button {
+  min-width: 0;
+  padding: 2px 4px;
+  overflow: hidden;
+  border: 0;
+  border-radius: 4px;
+  color: #344056;
+  background: transparent;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.tracking-indicators__objective-button:hover {
+  color: #1885f2;
+  background: #edf6ff;
+}
+
+.tracking-indicators__objective-button:focus-visible {
+  outline: 2px solid #4d91ff;
+  outline-offset: 2px;
 }
 
 .tracking-indicators__objective strong {

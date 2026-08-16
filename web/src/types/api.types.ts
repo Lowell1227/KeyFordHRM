@@ -1426,14 +1426,33 @@ export interface UpdateObjectiveProgressBody {
 
 export interface GoalTrackingLatestProgress {
   id: string;
-  title: string;
+  title?: string;
+  content?: string;
   progress: number;
+  healthStatus?: GoalTrackingHealthStatus;
+  attachments?: Attachment[];
+  createdBy?: string;
+  creatorName?: string;
   updatedAt: string;
 }
+
+export type GoalTrackingHealthStatus = 'on_track' | 'at_risk' | 'blocked' | 'completed';
 
 export interface GoalTrackingItem {
   id: string;
   title: string;
+  taskId?: string;
+  description?: string | null;
+  scoringStandard?: string | null;
+  dataSource?: string | null;
+  dataCaliber?: string | null;
+  targetValue?: number | null;
+  targetValueText?: string | null;
+  unit?: string | null;
+  indicatorType?: IndicatorType;
+  dimensionName?: string | null;
+  dimensionWeight?: number;
+  visibilityScope?: IndicatorVisibilityScope;
   ownerId: string | null;
   ownerName: string | null;
   cycleId: string | null;
@@ -1446,8 +1465,46 @@ export interface GoalTrackingItem {
 }
 
 export interface GoalTrackingResult {
+  taskId?: string | null;
+  taskStatus?: TaskStatus | null;
+  canEdit?: boolean;
   totalWeight: number;
   items: GoalTrackingItem[];
+}
+
+export interface GoalTrackingChangeRecord {
+  id: string;
+  action: string;
+  oldValue: Record<string, unknown> | null;
+  newValue: Record<string, unknown> | null;
+  actorId: string | null;
+  actorName: string | null;
+  createdAt: string;
+}
+
+export interface GoalTrackingIndicatorDetail extends GoalTrackingItem {
+  taskStatus: TaskStatus;
+  canEdit: boolean;
+  actualValue: number | null;
+  actualNote: string | null;
+  alignedObjectives: Array<{
+    id: string;
+    title: string;
+    level: ObjectiveLevel;
+    ownerId: string | null;
+  }>;
+  progressUpdates: GoalTrackingLatestProgress[];
+  changeRecords: GoalTrackingChangeRecord[];
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface UpdateGoalTrackingProgressBody {
+  progress: number;
+  healthStatus: GoalTrackingHealthStatus;
+  content: string;
+  attachments: Attachment[];
+  expectedLatestUpdateAt?: string | null;
 }
 
 export interface GoalTrackingQuery {

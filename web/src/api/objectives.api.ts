@@ -7,6 +7,9 @@ import type {
   UpdateObjectiveProgressBody,
   GoalTrackingQuery,
   GoalTrackingResult,
+  GoalTrackingIndicatorDetail,
+  GoalTrackingLatestProgress,
+  UpdateGoalTrackingProgressBody,
   Paginated,
 } from '@/types/api.types';
 
@@ -22,6 +25,20 @@ export const objectivesApi = {
 
   getTracking(query: GoalTrackingQuery): Promise<GoalTrackingResult> {
     return apiGet('/objectives/tracking', query as Record<string, unknown>);
+  },
+
+  getTrackingIndicator(id: string): Promise<GoalTrackingIndicatorDetail> {
+    return apiGet(`/objectives/tracking/indicators/${id}`);
+  },
+
+  updateTrackingIndicatorProgress(
+    id: string,
+    body: UpdateGoalTrackingProgressBody,
+  ): Promise<GoalTrackingLatestProgress> {
+    return http.patch(
+      `/objectives/tracking/indicators/${id}/progress`,
+      body,
+    ) as unknown as Promise<GoalTrackingLatestProgress>;
   },
 
   /** GET /objectives — 列表（默认树）。 */

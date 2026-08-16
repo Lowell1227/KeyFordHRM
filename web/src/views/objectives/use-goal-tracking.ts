@@ -43,13 +43,20 @@ export function useGoalTracking() {
   const selectedPerson = computed(() =>
     people.value.find((person) => person.id === selectedPersonId.value) ?? people.value[0] ?? null);
 
-  async function writeQuery(mode: 'push' | 'replace', commitGuard = captureLifecycle()) {
+  async function writeQuery(
+    mode: 'push' | 'replace',
+    commitGuard = captureLifecycle(),
+    preserveIndicator = false,
+  ) {
     if (!commitGuard()) return;
     const navigate = mode === 'push' ? router.push : router.replace;
     await navigate({
       query: {
         employeeId: selectedPersonId.value || undefined,
         cycleId: selectedCycleId.value || undefined,
+        indicatorId: preserveIndicator && typeof route.query.indicatorId === 'string'
+          ? route.query.indicatorId
+          : undefined,
       },
     });
   }
@@ -145,7 +152,7 @@ export function useGoalTracking() {
       && cycles.value.some((cycle) => cycle.id === route.query.cycleId)
       ? route.query.cycleId
       : defaultCycle?.id ?? '';
-    await writeQuery('replace', commitGuard);
+    await writeQuery('replace', commitGuard, true);
     if (!commitGuard()) return;
     await loadTracking(commitGuard);
   }

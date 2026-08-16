@@ -1270,6 +1270,149 @@ test.describe('09-performance-workspace tracking behavior', () => {
     await page.getByTestId('goal-tracking-person-search').fill('不存在');
     await expect(page.getByText('未找到匹配人员')).toBeVisible();
   });
+
+  test('employee opens a real indicator drawer and appends a progress update', async ({ page }) => {
+    await mockGoalTrackingShell(page);
+    const listResult = {
+      taskId: 'task-1',
+      taskStatus: 'self_eval',
+      canEdit: true,
+      totalWeight: 16,
+      items: [{
+        id: 'indicator-1', taskId: 'task-1', title: 'GMV 达成率',
+        ownerId: 'employee-1', ownerName: '刘伟', cycleId: 'cycle-2', cycleName: '2026-Q2',
+        priority: 0, status: 'active', progress: 40, healthStatus: 'on_track', weight: 16,
+        latestProgress: {
+          id: 'progress-1', content: '完成首轮投放', progress: 40, healthStatus: 'on_track',
+          attachments: [], createdBy: 'employee-1', creatorName: '刘伟',
+          updatedAt: '2026-08-01T08:00:00.000Z',
+        },
+      }],
+    };
+    const detailResult = {
+      ...listResult.items[0],
+      description: '跟进季度 GMV 达成情况',
+      scoringStandard: '达到预算目标得满分',
+      dataSource: '经营报表',
+      dataCaliber: '财务确认口径',
+      targetValue: null,
+      targetValueText: '完成季度预算的 100%',
+      unit: '%',
+      indicatorType: 'kpi',
+      dimensionName: '工作目标',
+      dimensionWeight: 80,
+      visibilityScope: 'supervisors',
+      actualValue: null,
+      actualNote: null,
+      taskStatus: 'self_eval',
+      canEdit: true,
+      alignedObjectives: [{ id: 'objective-1', title: '提升经营质量', level: 'company', ownerId: 'vp-1' }],
+      progressUpdates: [listResult.items[0].latestProgress],
+      changeRecords: [],
+      createdAt: '2026-07-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T08:00:00.000Z',
+    };
+    await page.route('**/api/v1/objectives/tracking?**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(listResult)),
+    }));
+    await page.route('**/api/v1/objectives/tracking/indicators/indicator-1', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(detailResult)),
+    }));
+    let submittedBody: Record<string, unknown> | null = null;
+    await page.route('**/api/v1/objectives/tracking/indicators/indicator-1/progress', async (route) => {
+      submittedBody = route.request().postDataJSON() as Record<string, unknown>;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          id: 'progress-2', progress: 55, healthStatus: 'at_risk',
+          content: '渠道转化低于预期，已调整投放', attachments: [],
+          createdBy: 'employee-1', creatorName: '刘伟', updatedAt: '2026-08-16T09:00:00.000Z',
+        })),
+      });
+    });
+
+    await page.goto('/action-items?employeeId=employee-1&cycleId=cycle-2');
+    await page.getByTestId('goal-tracking-indicator-button-indicator-1').click();
+
+    const drawer = page.getByTestId('goal-tracking-detail');
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByRole('heading', { name: 'GMV 达成率' })).toBeVisible();
+    await expect(drawer).toContainText('完成季度预算的 100%');
+    await expect(drawer).toContainText('有效权重 16%');
+    await expect(drawer).toContainText('完成首轮投放');
+    await drawer.getByRole('button', { name: '更新进展' }).click();
+
+    const form = drawer.getByTestId('goal-tracking-progress-form');
+    await form.getByLabel('进展状态').selectOption('at_risk');
+    await form.getByLabel('完成进度').fill('55');
+    await form.getByLabel('进展说明').fill('渠道转化低于预期，已调整投放');
+    await form.getByRole('button', { name: '更新进度' }).click();
+
+    await expect.poll(() => submittedBody).toEqual({
+      progress: 55,
+      healthStatus: 'at_risk',
+      content: '渠道转化低于预期，已调整投放',
+      attachments: [],
+      expectedLatestUpdateAt: '2026-08-01T08:00:00.000Z',
+    });
+    await expect(form).not.toBeVisible();
+    await expect(drawer).toContainText('渠道转化低于预期，已调整投放');
+  });
+
+  test('indicator drawer follows browser history and keeps direct-manager details read-only', async ({ page }) => {
+    await mockGoalTrackingShell(page);
+    const managerList = {
+      taskId: 'task-manager', taskStatus: 'self_eval', canEdit: false, totalWeight: 20,
+      items: [{
+        id: 'indicator-manager', taskId: 'task-manager', title: '团队交付质量',
+        ownerId: 'manager-1', ownerName: '林治', cycleId: 'cycle-2', cycleName: '2026-Q2',
+        priority: 0, status: 'active', progress: 30, weight: 20,
+        latestProgress: null,
+      }],
+    };
+    await page.route('**/api/v1/objectives/tracking?**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(managerList)),
+    }));
+    await page.route('**/api/v1/objectives/tracking/indicators/indicator-manager', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({
+        ...managerList.items[0],
+        description: '保障团队关键项目按期交付', scoringStandard: null,
+        dataSource: '项目周报', dataCaliber: '按验收完成时间统计',
+        targetValue: null, targetValueText: '重大项目按期交付', unit: null,
+        indicatorType: 'kpi', dimensionName: '工作目标', dimensionWeight: 100,
+        visibilityScope: 'direct_reports', actualValue: null, actualNote: null,
+        taskStatus: 'self_eval', canEdit: false, alignedObjectives: [],
+        progressUpdates: [], changeRecords: [],
+        createdAt: '2026-07-01T00:00:00.000Z', updatedAt: '2026-08-01T08:00:00.000Z',
+      })),
+    }));
+
+    await page.goto('/action-items?employeeId=manager-1&cycleId=cycle-2');
+    await page.getByTestId('goal-tracking-indicator-button-indicator-manager').click();
+    await expect(page).toHaveURL(/indicatorId=indicator-manager/);
+    const drawer = page.getByTestId('goal-tracking-detail');
+    await expect(drawer).toBeVisible();
+    await expect(drawer.getByRole('button', { name: '更新进展' })).toHaveCount(0);
+
+    await page.goBack();
+    await expect(drawer).not.toBeVisible();
+    await page.goForward();
+    await expect(page).toHaveURL(/indicatorId=indicator-manager/);
+    await expect(drawer).toBeVisible();
+
+    const reloadTracking = page.waitForResponse((response) => (
+      response.url().includes('/api/v1/objectives/tracking?')
+      && response.status() === 200
+    ));
+    await page.reload();
+    await reloadTracking;
+    await expect(page).toHaveURL(/indicatorId=indicator-manager/);
+    await expect(drawer).toBeVisible();
+  });
 });
 
 test.describe('09-performance-workspace responsive layout', () => {
