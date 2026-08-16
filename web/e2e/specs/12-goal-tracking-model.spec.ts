@@ -67,7 +67,7 @@ test('builds only self and direct-manager people groups', () => {
   }).map((group) => group.key)).toEqual(['self']);
 });
 
-test('chooses the newest in-flight cycle before drafts and closed cycles', () => {
+test('chooses the date-current cycle regardless of lifecycle status', () => {
   const cycle = (
     id: string,
     name: string,
@@ -89,11 +89,11 @@ test('chooses the newest in-flight cycle before drafts and closed cycles', () =>
     gradeDMaxRatio: 0.1,
   });
   const selected = selectDefaultTrackingCycle([
-    cycle('draft', '草稿', 'draft', '2026-08-01', '2026-09-01'),
+    cycle('current', '当前周期', 'draft', '2026-08-01', '2026-09-01'),
     cycle('active-old', '进行中一', 'self_eval', '2026-01-01', '2026-03-31'),
     cycle('active-new', '进行中二', 'manager_score', '2026-04-01', '2026-06-30'),
-  ]);
-  expect(selected?.id).toBe('active-new');
+  ], '2026-08-16');
+  expect(selected?.id).toBe('current');
 });
 
 test('curates formal goal-tracking quarters and formats reference labels', () => {

@@ -202,3 +202,101 @@ test.describe('cycle-first task contracts', () => {
     expect(taskRequests).toHaveLength(0);
   });
 });
+
+async function mockObjectiveCycleShell(
+  page: import('@playwright/test').Page,
+  cycleItems: AssessmentCycle[],
+  treeCycles: Array<string | null>,
+) {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'mock-objective-cycle-token');
+    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+  });
+  await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse(0)),
+  }));
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      id: 'manager-1',
+      name: 'Cycle Manager',
+      deptId: 'dept-1',
+      deptName: 'Engineering',
+      sysRole: 'manager',
+      isAssessorOnly: false,
+      canViewAll: false,
+    })),
+  }));
+  await page.route('**/api/v1/cycles**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      total: cycleItems.length,
+      page: 1,
+      pageSize: 100,
+      items: cycleItems,
+    })),
+  }));
+  await page.route('**/api/v1/departments**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([])),
+  }));
+  await page.route('**/api/v1/indicators**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+  }));
+  await page.route('**/api/v1/users/manager-1/subordinates', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([])),
+  }));
+  await page.route('**/api/v1/objectives/tree**', (route) => {
+    treeCycles.push(new URL(route.request().url()).searchParams.get('cycleId'));
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse([])),
+    });
+  });
+}
+
+test.describe('cycle-first objective map contracts', () => {
+  test.use({ baseURL: 'http://localhost:5173' });
+
+  test('writes the current cycle before requesting the objective tree', async ({ page }) => {
+    const treeCycles: Array<string | null> = [];
+    await mockObjectiveCycleShell(page, [
+      cycle('past', '2026-01-01', '2026-03-31'),
+      cycle('current', '2026-07-01', '2026-09-30'),
+    ], treeCycles);
+
+    await page.goto('/objectives');
+
+    await expect(page).toHaveURL(/cycleId=current/);
+    await expect.poll(() => treeCycles.length).toBe(1);
+    expect(treeCycles).toEqual(['current']);
+  });
+
+  test('preserves a valid historical objective cycle and offers no all-cycle option', async ({ page }) => {
+    const treeCycles: Array<string | null> = [];
+    await mockObjectiveCycleShell(page, [
+      cycle('past', '2026-01-01', '2026-03-31'),
+      cycle('current', '2026-07-01', '2026-09-30'),
+    ], treeCycles);
+
+    await page.goto('/objectives?cycleId=past');
+
+    await expect(page).toHaveURL(/cycleId=past/);
+    await page.getByTestId('objective-map-cycle').click();
+    await expect(page.locator('.el-select-dropdown__item').filter({ hasText: '全部周期' })).toHaveCount(0);
+    expect(treeCycles.every((cycleId) => cycleId === 'past')).toBe(true);
+  });
+
+  test('does not request an objective tree when no cycle is available', async ({ page }) => {
+    const treeCycles: Array<string | null> = [];
+    await mockObjectiveCycleShell(page, [], treeCycles);
+
+    await page.goto('/objectives');
+
+    await expect(page.getByText('暂无考核周期').first()).toBeVisible();
+    expect(treeCycles).toHaveLength(0);
+  });
+});

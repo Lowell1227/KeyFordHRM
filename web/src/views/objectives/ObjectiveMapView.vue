@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted, watch } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import {
   Plus,
   Delete,
@@ -43,8 +43,10 @@ import {
   parseObjectiveMapDisplay,
   saveObjectiveMapDisplay,
 } from './objective-map-settings';
+import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 
 const auth = useAuthStore();
+const route = useRoute();
 const router = useRouter();
 
 const treeData = ref<Objective[]>([]);
@@ -62,6 +64,7 @@ const selectedScope = ref<ObjectiveMapScope>('team');
 const selectedObjective = ref<Objective | null>(null);
 const detailVisible = ref(false);
 const loadError = ref('');
+let objectiveMapReady = false;
 const display = ref(parseObjectiveMapDisplay(
   typeof window === 'undefined'
     ? null
@@ -87,20 +90,51 @@ onMounted(async () => {
   } else {
     await loadCycles();
   }
-  await loadTree();
+  await normalizeObjectiveCycle();
+  objectiveMapReady = true;
+  if (filters.cycleId) await loadTree();
 });
 
-watch(() => filters.cycleId, loadTree);
 watch(display, (value) => saveObjectiveMapDisplay(value), { deep: true });
+watch(
+  () => route.query.cycleId,
+  async (cycleId) => {
+    if (!objectiveMapReady) return;
+    const requestedCycleId = typeof cycleId === 'string' ? cycleId : undefined;
+    const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+    const canonicalCycleId = resolved.selectedCycle?.id ?? '';
+    if (canonicalCycleId && requestedCycleId !== canonicalCycleId) {
+      await router.replace({ query: { ...route.query, cycleId: canonicalCycleId } });
+      return;
+    }
+    if (!canonicalCycleId && requestedCycleId) {
+      const query = { ...route.query };
+      delete query.cycleId;
+      await router.replace({ query });
+      return;
+    }
+    if (filters.cycleId === canonicalCycleId) return;
+    filters.cycleId = canonicalCycleId;
+    selectedObjective.value = null;
+    detailVisible.value = false;
+    await loadTree();
+  },
+);
 
 let treeRequestSequence = 0;
 
 async function loadTree() {
+  if (!filters.cycleId) {
+    treeData.value = [];
+    loading.value = false;
+    loadError.value = '';
+    return;
+  }
   const requestSequence = ++treeRequestSequence;
   loading.value = true;
   loadError.value = '';
   try {
-    const res = await objectivesApi.getTree(filters.cycleId || undefined);
+    const res = await objectivesApi.getTree(filters.cycleId);
     if (requestSequence !== treeRequestSequence) return;
     treeData.value = res;
   } catch {
@@ -116,18 +150,31 @@ async function loadCycles() {
   try {
     const res = await cyclesApi.findAll({ page: 1, pageSize: 100 });
     cycles.value = res.items;
-    if (!filters.cycleId) {
-      const today = new Date().toISOString().slice(0, 10);
-      const currentCycle = res.items.find((cycle) => (
-        cycle.startDate <= today
-        && cycle.endDate >= today
-        && cycle.status !== 'closed'
-      ));
-      filters.cycleId = currentCycle?.id ?? '';
-    }
   } catch {
     cycles.value = [];
   }
+}
+
+async function normalizeObjectiveCycle() {
+  const requestedCycleId = typeof route.query.cycleId === 'string'
+    ? route.query.cycleId
+    : undefined;
+  const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+  cycles.value = resolved.orderedCycles;
+  filters.cycleId = resolved.selectedCycle?.id ?? '';
+
+  if (filters.cycleId && requestedCycleId !== filters.cycleId) {
+    await router.replace({ query: { ...route.query, cycleId: filters.cycleId } });
+  } else if (!filters.cycleId && requestedCycleId) {
+    const query = { ...route.query };
+    delete query.cycleId;
+    await router.replace({ query });
+  }
+}
+
+async function selectObjectiveCycle(cycleId: string) {
+  if (!cycleId || cycleId === filters.cycleId) return;
+  await router.push({ query: { ...route.query, cycleId } });
 }
 
 async function loadDepartments() {
@@ -478,7 +525,7 @@ async function removeRow(row: Objective) {
             :cycle-id="filters.cycleId"
             :scope="selectedScope"
             :scope-counts="scopeCounts"
-            @update:cycle-id="filters.cycleId = $event"
+            @update:cycle-id="selectObjectiveCycle"
             @update:scope="selectedScope = $event"
           />
           <div class="objective-map__toolbar-spacer" />

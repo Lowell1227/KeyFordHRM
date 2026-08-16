@@ -1,5 +1,6 @@
 import type { AssessmentCycle, CurrentUser } from '@/types/api.types';
 import type { ObjectiveStatus } from '@/types/enums';
+import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 
 export const GOAL_TRACKING_COLUMNS = [
   'latestProgress', 'status', 'progress', 'weight',
@@ -12,11 +13,6 @@ export type GoalTrackingPeopleGroup = {
   label: '我' | '直接上级';
   people: GoalTrackingPerson[];
 };
-
-const ACTIVE_CYCLE_STATUSES = new Set([
-  'indicator_setting', 'self_eval', 'manager_score',
-  'hr_calibration', 'approval', 'appeal',
-]);
 
 type GoalTrackingQuarter = {
   year: number;
@@ -55,10 +51,8 @@ export function buildTrackingPeople(user: CurrentUser): GoalTrackingPeopleGroup[
   return groups;
 }
 
-export function selectDefaultTrackingCycle(cycles: AssessmentCycle[]) {
-  const sorted = [...cycles].sort((left, right) =>
-    right.startDate.localeCompare(left.startDate));
-  return sorted.find((cycle) => ACTIVE_CYCLE_STATUSES.has(cycle.status)) ?? sorted[0] ?? null;
+export function selectDefaultTrackingCycle(cycles: AssessmentCycle[], today?: string) {
+  return resolvePerformanceCycle(cycles, undefined, today).selectedCycle;
 }
 
 export function selectGoalTrackingCycles(cycles: AssessmentCycle[]): AssessmentCycle[] {

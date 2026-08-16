@@ -548,6 +548,10 @@ async function installDelayedDeepLinkLoadRoutes(page: Page) {
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 2, page: 1, pageSize: 100, items: trackingCycles })),
   }));
+  await page.route('**/api/v1/cycles/mine', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse(trackingCycles)),
+  }));
   await page.route('**/api/v1/tasks/mine?**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
@@ -630,13 +634,22 @@ test.describe('09-performance-workspace employee tasks', () => {
   test('stage filtering includes matching tasks beyond the first ten records', async ({ page }) => {
     const tasks = Array.from({ length: 12 }, (_, index) => ({
       id: `mock-task-${index + 1}`,
-      cycleId: `mock-cycle-${index + 1}`,
-      cycleName: `Mock Cycle ${index + 1}`,
+      cycleId: 'mock-cycle',
+      cycleName: 'Mock Cycle',
       employeeId: 'mock-employee',
       employeeName: '测试员工',
       status: index === 10 ? 'self_eval' : index === 11 ? 'confirmed' : 'indicator_setting',
       isExempt: false,
       updatedAt: `2026-08-${String(index + 1).padStart(2, '0')}T00:00:00.000Z`,
+    }));
+
+    await page.route('**/api/v1/cycles/mine', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse([{
+        id: 'mock-cycle', name: 'Mock Cycle', type: 'quarterly', status: 'self_eval',
+        startDate: '2026-07-01', endDate: '2026-09-30', publishVisibleFields: {},
+        gradeAMaxRatio: 0.2, gradeBMaxRatio: 0.4, gradeCMaxRatio: 0.3, gradeDMaxRatio: 0.1,
+      }])),
     }));
 
     await page.route('**/api/v1/tasks/mine**', async (route) => {
@@ -660,7 +673,7 @@ test.describe('09-performance-workspace employee tasks', () => {
     await page.goto('/tasks');
     await page.getByTestId('task-stage-self-eval').click();
 
-    await expect(page.getByText('Mock Cycle 11 · 个人绩效')).toBeVisible();
+    await expect(page.getByText('Mock Cycle · 个人绩效')).toBeVisible();
     await expect(page.getByText('共 1 项')).toBeVisible();
   });
 });
@@ -673,6 +686,7 @@ test.describe('09-performance-workspace stage semantics', () => {
       'indicator_reviewing',
       'indicator_setting',
       'indicator_confirming',
+      'goal_confirmed',
       'self_eval',
       'manager_scoring',
       'dept_review',
@@ -1004,7 +1018,7 @@ test.describe('09-performance-workspace tracking behavior', () => {
     });
 
     await page.getByRole('link', { name: '绩效待办' }).click();
-    await expect(page).toHaveURL(/\/tasks$/);
+    await expect(page).toHaveURL(/\/tasks\?.*cycleId=cycle-2/);
     await trackingResponse;
     await page.evaluate(() => new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
@@ -1054,6 +1068,10 @@ test.describe('09-performance-workspace tracking behavior', () => {
       });
       fulfilledCycles += 1;
     });
+    await page.route('**/api/v1/cycles/mine', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(trackingCycles)),
+    }));
     let trackingRequests = 0;
     page.on('request', (request) => {
       if (request.url().includes('/api/v1/objectives/tracking')) trackingRequests += 1;
@@ -1076,14 +1094,14 @@ test.describe('09-performance-workspace tracking behavior', () => {
     });
 
     await page.getByRole('link', { name: '绩效待办' }).click();
-    await expect(page).toHaveURL(/\/tasks$/);
+    await expect(page).toHaveURL(/\/tasks\?.*cycleId=cycle-2/);
     releaseCycles();
     await expect.poll(() => fulfilledCycles).toBeGreaterThan(0);
     await page.evaluate(() => new Promise<void>((resolve) => {
       requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
     }));
 
-    await expect(page).toHaveURL(/\/tasks$/);
+    await expect(page).toHaveURL(/\/tasks\?.*cycleId=cycle-2/);
     expect(trackingRequests).toBe(0);
     const retainedState = await page.evaluate(() => {
       type RetainedWorkspace = {

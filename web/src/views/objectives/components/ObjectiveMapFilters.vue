@@ -30,12 +30,14 @@ const scopes: Array<{ key: ObjectiveMapScope; label: string }> = [
       <span class="objective-map-filters__cycle-label">周期：</span>
       <el-select
         :model-value="cycleId"
+        data-testid="objective-map-cycle"
         aria-label="目标周期"
-        placeholder="全部周期"
-        clearable
+        :placeholder="cycles.length ? '选择考核周期' : '暂无考核周期'"
+        :disabled="cycles.length === 0"
         class="objective-map-filters__cycle-select"
         @update:model-value="emit('update:cycleId', String($event ?? ''))"
       >
+        <el-option v-if="cycles.length === 0" label="暂无考核周期" value="" disabled />
         <el-option v-for="cycle in cycles" :key="cycle.id" :label="cycle.name" :value="cycle.id" />
       </el-select>
     </div>
