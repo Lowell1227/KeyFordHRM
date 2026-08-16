@@ -40,6 +40,7 @@ import {
   type TaskStageState,
 } from './task-stage';
 import { useTaskWorkspaceQuery } from './use-task-workspace-query';
+import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 
 const router = useRouter();
 const route = useRoute();
@@ -50,7 +51,6 @@ const list = ref<TaskListItem[]>([]);
 const loading = ref(false);
 const cycles = ref<AssessmentCycle[]>([]);
 const selectedCycleId = ref<string>('');
-const quickFilter = ref<'all' | 'pending' | 'cycle'>('all');
 const teamLoading = ref(false);
 const teamError = ref('');
 const teamKeyword = ref(workspaceQuery.state.value.keyword ?? '');
@@ -72,6 +72,7 @@ let teamDetailRequestSerial = 0;
 let teamStageSummaryRequestSerial = 0;
 let singleOperationSerial = 0;
 let saveRequestSerial = 0;
+let taskWorkspaceReady = false;
 const latestSaveRequestByTask = new Map<string, {
   requestId: number;
   operationToken: string;
@@ -168,11 +169,7 @@ const allowedPerformanceSections = computed(() =>
     ? (['tracking', 'tasks'] as const)
     : (['tracking', 'map', 'tasks'] as const),
 );
-const selectedCycleName = computed(() => {
-  if (quickFilter.value === 'all') return '全部考核周期';
-  if (quickFilter.value === 'pending') return '仅看待办';
-  return selectedCycle.value?.name ?? '暂无考核周期';
-});
+const selectedCycleName = computed(() => selectedCycle.value?.name ?? '暂无考核周期');
 
 const {
   page,
@@ -239,15 +236,36 @@ function sortTasksByCycleDesc(items: TaskListItem[]) {
 
 async function loadCycles() {
   try {
-    const res = await cyclesApi.findMine();
-    cycles.value = [...res].sort((a, b) => {
-      const aTime = new Date(a.startDate || a.endDate || '').getTime();
-      const bTime = new Date(b.startDate || b.endDate || '').getTime();
-      return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
-    });
+    cycles.value = await cyclesApi.findMine();
   } catch {
     cycles.value = [];
   }
+}
+
+async function normalizeTaskCycle(): Promise<string> {
+  const requestedCycleId = workspaceQuery.state.value.cycleId;
+  const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+  cycles.value = resolved.orderedCycles;
+  const cycleId = resolved.selectedCycle?.id ?? '';
+  selectedCycleId.value = cycleId;
+
+  if (cycleId && requestedCycleId !== cycleId) {
+    await workspaceQuery.update({
+      cycleId,
+      employeeId: undefined,
+      taskId: undefined,
+      page: undefined,
+    });
+  } else if (!cycleId && requestedCycleId) {
+    await workspaceQuery.update({
+      cycleId: undefined,
+      employeeId: undefined,
+      taskId: undefined,
+      page: undefined,
+    });
+  }
+
+  return cycleId;
 }
 
 interface LoadListOptions {
@@ -255,16 +273,18 @@ interface LoadListOptions {
 }
 
 async function loadList(options: LoadListOptions = {}) {
+  if (!selectedCycleId.value) {
+    list.value = [];
+    loading.value = false;
+    return;
+  }
   loading.value = true;
   try {
     const baseParams = {
-      cycleId: quickFilter.value === 'cycle' ? selectedCycleId.value || undefined : undefined,
+      cycleId: selectedCycleId.value,
     } satisfies Omit<TaskQuery, 'employeeId' | 'page' | 'pageSize'>;
     const scopedTasks = await fetchAllMine(baseParams);
-    const filtered = quickFilter.value === 'pending'
-      ? scopedTasks.filter((task) => pendingStatuses.includes(task.status))
-      : scopedTasks;
-    list.value = sortTasksByCycleDesc(filtered);
+    list.value = sortTasksByCycleDesc(scopedTasks);
   } catch {
     list.value = [];
     if (!options.silent) ElMessage.error('获取绩效任务失败');
@@ -392,6 +412,12 @@ interface LoadTeamOptions {
 
 async function loadTeam(options: LoadTeamOptions = {}) {
   if (activeScope.value !== 'team') return;
+  if (!selectedCycleId.value) {
+    teamPage.value = emptyTeamPage();
+    teamError.value = '';
+    teamLoading.value = false;
+    return;
+  }
   const requestId = ++teamRequestSerial;
   const state = workspaceQuery.state.value;
   const requestedPage = state.page ?? 1;
@@ -402,7 +428,7 @@ async function loadTeam(options: LoadTeamOptions = {}) {
       stage: state.stage,
       page: requestedPage,
       pageSize: teamPageSize,
-      cycleId: state.cycleId,
+      cycleId: selectedCycleId.value,
       deptId: state.deptId,
       employeeId: state.employeeId,
       stageState: state.stageState,
@@ -440,11 +466,14 @@ async function loadTeam(options: LoadTeamOptions = {}) {
 
 async function loadTeamStageSummaries() {
   if (!isManagerCapable.value) return;
+  if (!selectedCycleId.value) {
+    teamStagePendingCounts.value = { 'goal-review': undefined, 'manager-eval': undefined };
+    return;
+  }
   const requestId = ++teamStageSummaryRequestSerial;
   const state = workspaceQuery.state.value;
-  const personalCycleId = quickFilter.value === 'cycle' ? selectedCycleId.value : undefined;
   const filters = {
-    cycleId: activeScope.value === 'team' ? state.cycleId : personalCycleId,
+    cycleId: selectedCycleId.value,
     deptId: state.deptId,
     employeeId: state.employeeId,
   };
@@ -494,34 +523,18 @@ async function fetchAllMine(
 }
 
 function onCycleChange(value: string) {
-  selectedStage.value = 'all';
-  if (value === '__pending__') {
-    showPendingTasks();
-    return;
-  }
-  if (!value) {
-    showAllCycles();
-    return;
-  }
-  quickFilter.value = 'cycle';
-  resetPagination();
-  loadList();
-}
-
-function showAllCycles() {
-  quickFilter.value = 'all';
-  selectedCycleId.value = '';
+  if (!value || value === workspaceQuery.state.value.cycleId) return;
   selectedStage.value = 'all';
   resetPagination();
-  loadList();
-}
-
-function showPendingTasks() {
-  quickFilter.value = 'pending';
-  selectedCycleId.value = '__pending__';
-  selectedStage.value = 'all';
-  resetPagination();
-  loadList();
+  selectedCycleId.value = value;
+  void updateTeamContext({
+    cycleId: value,
+    deptId: undefined,
+    employeeId: undefined,
+    taskId: undefined,
+    keyword: undefined,
+    page: undefined,
+  });
 }
 
 function actionText(status: TaskStatus): string {
@@ -613,18 +626,8 @@ function setTeamStageState(stageState: TeamStageState | undefined) {
   void updateTeamContext({ stageState, taskId: undefined });
 }
 
-function setTeamCycle(value: string) {
-  void updateTeamContext({ cycleId: value || undefined, taskId: undefined });
-}
-
 function onManagerCycleChange(value: string) {
-  if (activeScope.value === 'team') {
-    setTeamCycle(value);
-    return;
-  }
-  selectedCycleId.value = value;
   onCycleChange(value);
-  void loadTeamStageSummaries();
 }
 
 function setTeamDepartment(value: string) {
@@ -646,7 +649,7 @@ function applyTeamSearch() {
 function resetTeamFilters() {
   teamKeyword.value = '';
   void updateTeamContext({
-    cycleId: undefined,
+    cycleId: selectedCycleId.value,
     deptId: undefined,
     employeeId: undefined,
     stageState: undefined,
@@ -915,9 +918,10 @@ function handleManagerEvaluationTaskUpdated(detail: TaskDetail) {
 }
 
 onMounted(async () => {
-  const cyclesRequest = loadCycles();
+  await loadCycles();
+  await normalizeTaskCycle();
+  taskWorkspaceReady = true;
   if (activeScope.value === 'team') {
-    await cyclesRequest;
     await Promise.all([
       loadTeam(),
       isManagerCapable.value ? loadList({ silent: true }) : Promise.resolve(),
@@ -927,9 +931,6 @@ onMounted(async () => {
     if (isManagerCapable.value && selectedStage.value === 'all') {
       selectedStage.value = 'goal-setting';
     }
-    await cyclesRequest;
-    selectedCycleId.value = '';
-    quickFilter.value = 'all';
     await Promise.all([
       loadList(),
       isManagerCapable.value ? loadTeamStageSummaries() : Promise.resolve(),
@@ -953,7 +954,19 @@ watch(
     page: workspaceQuery.state.value.page,
   }),
   async (current, previous) => {
-    if (!previous) return;
+    if (!previous || !taskWorkspaceReady) return;
+    const resolved = resolvePerformanceCycle(cycles.value, current.cycleId);
+    const canonicalCycleId = resolved.selectedCycle?.id ?? '';
+    selectedCycleId.value = canonicalCycleId;
+    if (canonicalCycleId && current.cycleId !== canonicalCycleId) {
+      await workspaceQuery.update({
+        cycleId: canonicalCycleId,
+        employeeId: undefined,
+        taskId: undefined,
+        page: undefined,
+      });
+      return;
+    }
     await teamListRef.value?.clearSelection();
     teamBatchResult.value = undefined;
     const summaryFiltersChanged = current.cycleId !== previous.cycleId
@@ -1025,16 +1038,14 @@ watch(
               <span>考核周期</span>
             </div>
             <el-select
-              :model-value="activeScope === 'team'
-                ? workspaceQuery.state.value.cycleId || ''
-                : selectedCycleId"
+              :model-value="selectedCycleId"
               :data-testid="activeScope === 'team' ? 'team-cycle-filter' : 'task-cycle-filter'"
               aria-label="考核周期"
-              placeholder="选择考核周期"
+              :placeholder="cycles.length ? '选择考核周期' : '暂无考核周期'"
+              :disabled="cycles.length === 0"
               @change="onManagerCycleChange"
             >
-              <el-option label="全部考核周期" value="" />
-              <el-option v-if="activeScope === 'mine'" label="仅看待办任务" value="__pending__" />
+              <el-option v-if="cycles.length === 0" label="暂无考核周期" value="" disabled />
               <el-option
                 v-for="cycle in cycles"
                 :key="cycle.id"
@@ -1121,11 +1132,12 @@ watch(
             <el-select
               v-model="selectedCycleId"
               data-testid="task-cycle-filter"
-              placeholder="选择考核周期"
+              aria-label="考核周期"
+              :placeholder="cycles.length ? '选择考核周期' : '暂无考核周期'"
+              :disabled="cycles.length === 0"
               @change="onCycleChange"
             >
-              <el-option label="全部考核周期" value="" />
-              <el-option label="仅看待办任务" value="__pending__" />
+              <el-option v-if="cycles.length === 0" label="暂无考核周期" value="" disabled />
               <el-option
                 v-for="cycle in cycles"
                 :key="cycle.id"

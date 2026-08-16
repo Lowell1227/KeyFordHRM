@@ -40,7 +40,7 @@ test.describe('team performance real API smoke', () => {
     const task = response.data.items.find((item) => item.status === 'manager_scoring');
     expect(task).toBeTruthy();
 
-    await page.goto(`/tasks?scope=team&stage=manager-eval&stageState=pending&cycleId=${task!.cycleId}&employeeId=${task!.employeeId}&taskId=${task!.id}`);
+    await page.goto(`/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&stageState=pending&cycleId=${task!.cycleId}&employeeId=${task!.employeeId}&taskId=${task!.id}`);
     await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
     await expect(page.getByTestId('team-task-workspace')).toBeVisible();
   });
@@ -524,6 +524,14 @@ function teamPageWith(
 type WorkspaceTestRole = 'manager' | 'employee' | 'dept_head' | 'hr';
 
 async function mockTaskWorkspaceIdentity(page: import('@playwright/test').Page, sysRole: WorkspaceTestRole) {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'mock-team-performance-token');
+    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+  });
+  await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse(0)),
+  }));
   const userIdByRole: Record<WorkspaceTestRole, string> = {
     manager: 'manager-1',
     employee: 'employee-1',
@@ -563,6 +571,23 @@ async function mockTaskWorkspaceIdentity(page: import('@playwright/test').Page, 
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
   }));
+  await page.route('**/api/v1/tasks/*', (route) => {
+    const path = new URL(route.request().url()).pathname;
+    if (path.endsWith('/tasks/mine') || path.endsWith('/tasks/team')) return route.fallback();
+    const taskId = path.split('/tasks/')[1]?.split('/')[0] ?? 'task-1';
+    const detail = structuredClone(goalReviewDetailFixture);
+    detail.id = taskId;
+    detail.employeeId = taskId === 'task-2' ? 'employee-2' : 'employee-1';
+    detail.employeeName = taskId === 'task-2' ? 'Grace Lin' : 'Ada Chen';
+    detail.indicatorInstances = detail.indicatorInstances.map((indicator) => ({
+      ...indicator,
+      taskId,
+    }));
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(detail)),
+    });
+  });
 }
 
 async function mockGoalReviewWorkspace(
@@ -632,7 +657,7 @@ test.describe('team list manager workspace', () => {
   test('full-page manager workspace keeps the reference shell compact and low-chrome', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await mockGoalReviewWorkspace(page);
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
 
     const geometry = await page.getByTestId('team-task-workspace').evaluate((element) => {
       const bar = element.querySelector<HTMLElement>('.team-task-workspace__bar')!;
@@ -925,7 +950,7 @@ test.describe('team list manager workspace', () => {
       body: JSON.stringify(apiResponse(teamPageWith([teamPageFixture.items[0]], { total: 21 }))),
     }));
 
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-off-page&page=2');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-off-page&page=2');
     await expect(page.getByTestId('team-task-workspace')).toContainText('Off Page Member');
     await page.reload();
     await expect(page.getByTestId('team-task-workspace')).toContainText('Off Page Member');
@@ -944,7 +969,7 @@ test.describe('team list manager workspace', () => {
         body: JSON.stringify(apiResponse(teamPageWith([], { total: 0 }))),
       }));
 
-      await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-off-page');
+      await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-off-page');
 
       await expect(page).not.toHaveURL(/taskId=task-off-page/);
       await expect(page.getByTestId('team-task-workspace')).toHaveCount(0);
@@ -968,7 +993,7 @@ test.describe('team list manager workspace', () => {
       body: JSON.stringify(apiResponse(teamPageWith([pageItem]))),
     }));
 
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
 
     await expect(page.getByTestId('goal-review-workspace')).toBeVisible();
     await expect(page.getByTestId('goal-review-save')).toHaveCount(0);
@@ -994,7 +1019,7 @@ test.describe('team list manager workspace', () => {
       });
     });
 
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
     const workspace = page.getByTestId('team-task-workspace');
     await expect(workspace.locator('.el-skeleton')).toBeVisible();
     await expect(workspace.getByText('未找到所选员工')).toHaveCount(0);
@@ -1038,7 +1063,7 @@ test.describe('team list manager workspace', () => {
       });
     });
 
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-off-page');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-off-page');
     const workspace = page.getByTestId('team-task-workspace');
     await expect(workspace.locator('.el-skeleton')).toBeVisible();
     await expect(workspace.getByText('未找到所选员工')).toHaveCount(0);
@@ -1073,7 +1098,7 @@ test.describe('team list manager workspace', () => {
       body: JSON.stringify(apiResponse(teamPageWith([teamPageFixture.items[0]], { total: 21 }))),
     }));
 
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-missing');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-missing');
     const workspace = page.getByTestId('team-task-workspace');
     await expect(workspace.locator('.el-skeleton')).toBeVisible();
     await expect(workspace.getByText('未找到所选员工')).toHaveCount(0);
@@ -1114,7 +1139,7 @@ test.describe('team list manager workspace', () => {
   test('goal review presents every business row in a flat reference-style table', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await mockGoalReviewWorkspace(page);
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
 
     const table = page.getByTestId('performance-review-table');
     for (const label of ['名称', '权重', '指标描述', '对齐', '可见范围']) {
@@ -1152,7 +1177,7 @@ test.describe('team list manager workspace', () => {
       });
     });
 
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
 
     await expect(page.getByTestId('goal-review-workspace')).toBeVisible();
     await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
@@ -1240,7 +1265,7 @@ test.describe('team list manager workspace', () => {
         });
       });
 
-      await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+      await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
       await expect(page.getByTestId('indicator-weight-total')).toContainText(`${totalPercent.toFixed(2)}%`);
       await page.getByTestId('goal-review-approve').click();
 
@@ -1280,7 +1305,7 @@ test.describe('team list manager workspace', () => {
       });
     });
 
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
     await page.getByTestId('goal-review-approve').click();
     await page.getByRole('button', { name: '通过', exact: true }).click();
     await expect(page.locator('.el-message--error')).toContainText('任务已被其他操作更新');
@@ -1334,7 +1359,7 @@ test.describe('team list manager workspace', () => {
         });
       });
 
-      await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+      await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
       if (action === 'approve') {
         await page.getByTestId('goal-review-approve').click();
         await page.getByRole('button', { name: '通过', exact: true }).click();
@@ -1386,7 +1411,7 @@ test.describe('team list manager workspace', () => {
       });
     });
 
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
     await expect(page.getByLabel('指标名称').first()).toHaveValue('Delivery quality');
     await page.getByTestId('goal-review-save').click();
     await page.getByTestId('team-task-row-task-2').click();
@@ -1438,7 +1463,7 @@ test.describe('team list manager workspace', () => {
       });
     });
 
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
     const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
     await nameInput.fill('Ada first save');
     await page.getByTestId('goal-review-save').click();
@@ -1488,7 +1513,7 @@ test.describe('team list manager workspace', () => {
       });
     });
 
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
     const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
     await nameInput.fill('Draft at save start');
     await page.getByTestId('goal-review-save').click();
@@ -1543,7 +1568,7 @@ test.describe('team list manager workspace', () => {
       });
     });
 
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
     const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
     await nameInput.fill('Draft at save start');
     await page.getByTestId('goal-review-save').click();
@@ -1603,7 +1628,7 @@ test.describe('team list manager workspace', () => {
       });
     });
 
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
     await page.getByTestId('goal-review-save').click();
     await page.getByTestId('team-task-row-task-2').click();
     await page.getByTestId('team-task-row-task-1').click();
@@ -1636,7 +1661,7 @@ test.describe('team list manager workspace', () => {
       detail.isExempt = scenario.isExempt;
       await mockGoalReviewWorkspace(page, detail);
 
-      await page.goto('/tasks?scope=team&stage=goal-review&taskId=task-1');
+      await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&taskId=task-1');
       await expect(page.getByTestId('goal-review-workspace')).toBeVisible();
       await expect(page.getByTestId('goal-review-save')).toHaveCount(0);
       await expect(page.getByTestId('goal-review-approve')).toHaveCount(0);
@@ -1669,7 +1694,7 @@ test.describe('team list manager workspace', () => {
     ];
     await mockGoalReviewWorkspace(page, rejectedDetail);
 
-    await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
 
     await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
     await expect(page.getByTestId('indicator-row-ind-1')).toBeFocused();
@@ -1680,7 +1705,7 @@ test.describe('team list manager workspace', () => {
     test(`goal review stacks before controls overlap at ${containerWidth}px effective width`, async ({ page }) => {
       await page.setViewportSize({ width: 1800, height: 1100 });
       await mockGoalReviewWorkspace(page);
-      await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+      await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
 
       await page.getByTestId('goal-review-workspace').evaluate((element, width) => {
         const workspace = element as HTMLElement;
@@ -1744,7 +1769,7 @@ test.describe('team list manager workspace', () => {
     test(`goal review keeps stable indicator dimensions at ${viewport.name} width`, async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await mockGoalReviewWorkspace(page);
-      await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending&taskId=task-1');
+      await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
 
       const indicatorRows = page.locator('[data-testid^="indicator-row-"]');
       await expect(indicatorRows).toHaveCount(2);
@@ -1892,7 +1917,7 @@ test.describe('manager evaluation workspace', () => {
   test('manager evaluation uses the shared flat table with scoring-specific columns', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await mockManagerEvaluationWorkspace(page);
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
 
     const table = page.getByTestId('performance-review-table');
     for (const label of ['名称', '权重', '指标描述', '员工自评', '主管评分']) {
@@ -1906,7 +1931,7 @@ test.describe('manager evaluation workspace', () => {
 
   test('manager evaluation shows self evidence beside editable manager fields and saves a versioned draft', async ({ page }) => {
     const mocked = await mockManagerEvaluationWorkspace(page);
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
 
     await expect(page.getByTestId('team-task-workspace')).toBeVisible();
     await expect(page.getByRole('heading', { level: 1, name: '主管评分', exact: true })).toBeVisible();
@@ -1946,7 +1971,7 @@ test.describe('manager evaluation workspace', () => {
       attachments: [],
     };
     const mocked = await mockManagerEvaluationWorkspace(page, { details: [detail] });
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
 
     await page.getByTestId('manager-score-ind-1').fill('');
     await page.getByTestId('manager-comment-ind-1').fill('');
@@ -1973,7 +1998,7 @@ test.describe('manager evaluation workspace', () => {
 
   test('manager evaluation focuses the first empty extra-score reason before saving', async ({ page }) => {
     const mocked = await mockManagerEvaluationWorkspace(page);
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
     await page.getByTestId('manager-score-ind-1').fill('88');
     await page.getByTestId('manager-extra-add-ind-1').click();
     await page.getByTestId('manager-extra-value-ind-1-0').fill('2');
@@ -2000,7 +2025,7 @@ test.describe('manager evaluation workspace', () => {
       releaseDraft = resolve;
     });
     const mocked = await mockManagerEvaluationWorkspace(page, { draftGate });
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
     await page.getByTestId('manager-score-ind-1').fill('88');
     await page.getByTestId('manager-comment-ind-1').fill('First draft');
     await page.getByTestId('manager-evaluation-save').click();
@@ -2021,7 +2046,7 @@ test.describe('manager evaluation workspace', () => {
     const mocked = await mockManagerEvaluationWorkspace(page, {
       draftRefreshError: '详情服务暂时不可用',
     });
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
     await page.getByTestId('manager-score-ind-1').fill('88');
     await page.getByTestId('manager-evaluation-save').click();
 
@@ -2036,7 +2061,7 @@ test.describe('manager evaluation workspace', () => {
 
   test('manager evaluation final submit reloads the task as read-only with total and grade', async ({ page }) => {
     const mocked = await mockManagerEvaluationWorkspace(page);
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
     await page.getByTestId('manager-score-ind-1').fill('88');
     await page.getByTestId('manager-score-ind-2').fill('90');
     await page.getByTestId('manager-strengths').fill('Reliable delivery ownership.');
@@ -2062,7 +2087,7 @@ test.describe('manager evaluation workspace', () => {
       releaseSubmit = resolve;
     });
     const mocked = await mockManagerEvaluationWorkspace(page, { submitGate });
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
     await page.getByTestId('manager-score-ind-1').fill('88');
     await page.getByTestId('manager-score-ind-2').fill('90');
     await page.getByTestId('manager-evaluation-submit').click();
@@ -2081,7 +2106,7 @@ test.describe('manager evaluation workspace', () => {
       managerScoredAt: '2026-08-09T01:10:00.000Z',
     });
     const mocked = await mockManagerEvaluationWorkspace(page, { details: [detail] });
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
     await expect(page.getByTestId('manager-evaluation-withdraw')).toBeVisible();
     await page.getByTestId('manager-evaluation-withdraw').click();
     await page.getByRole('button', { name: '确认撤回', exact: true }).click();
@@ -2101,7 +2126,7 @@ test.describe('manager evaluation workspace', () => {
       details: [detail],
       withdrawRefreshError: '详情服务暂时不可用',
     });
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
     await page.getByTestId('manager-evaluation-withdraw').click();
     await page.getByRole('button', { name: '确认撤回', exact: true }).click();
 
@@ -2123,7 +2148,7 @@ test.describe('manager evaluation workspace', () => {
       details: [detail],
       withdrawError: '下一节点已处理，不能撤回主管评分',
     });
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
     await page.getByTestId('manager-evaluation-withdraw').click();
     await page.getByRole('button', { name: '确认撤回', exact: true }).click();
 
@@ -2136,7 +2161,7 @@ test.describe('manager evaluation workspace', () => {
     await mockManagerEvaluationWorkspace(page, {
       details: [managerEvaluationDetail('dept_review')],
     });
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
     await expect(page.getByTestId('manager-evaluation-withdraw')).toHaveCount(0);
     await expect(page.getByTestId('manager-score-ind-1')).toBeDisabled();
   });
@@ -2148,7 +2173,7 @@ test.describe('manager evaluation workspace', () => {
       employeeName: 'Ada Chen',
     });
     await mockManagerEvaluationWorkspace(page, { details: [grace, ada] });
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
     await page.getByTestId('manager-score-ind-1').fill('88');
 
     await page.getByTestId('team-task-row-task-1').click();
@@ -2166,7 +2191,7 @@ test.describe('manager evaluation workspace', () => {
 
   test('manager evaluation guards returning to the team list and continues once confirmed', async ({ page }) => {
     await mockManagerEvaluationWorkspace(page);
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
     await page.getByTestId('manager-score-ind-1').fill('88');
 
     await page.getByTestId('team-task-workspace-back').click();
@@ -2184,7 +2209,7 @@ test.describe('manager evaluation workspace', () => {
 
   test('manager evaluation registers beforeunload protection only while the draft is dirty', async ({ page }) => {
     await mockManagerEvaluationWorkspace(page);
-    await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
     const dispatchBeforeUnload = () => page.evaluate(() => {
       const event = new Event('beforeunload', { cancelable: true });
       window.dispatchEvent(event);
@@ -2207,7 +2232,7 @@ test.describe('manager evaluation workspace', () => {
     test(`manager evaluation keeps comparison grids stable at ${viewport.name} width`, async ({ page }) => {
       await page.setViewportSize({ width: viewport.width, height: viewport.height });
       await mockManagerEvaluationWorkspace(page);
-      await page.goto('/tasks?scope=team&stage=manager-eval&taskId=task-2');
+      await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
       await expect(page.getByTestId('employee-self-comment-ind-1')).toBeVisible();
       await expect(page.getByTestId('manager-comment-ind-1')).toBeVisible();
       const geometry = await page.evaluate(() => {
