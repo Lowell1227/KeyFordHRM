@@ -76,10 +76,11 @@ export class CyclesService {
   /** GET /cycles — 查询周期列表。 */
   async findAll(query: CycleQueryDto, viewer: AuthUser) {
     const canManageCycles = viewer.sysRole === SysRole.hr || viewer.sysRole === SysRole.system_admin;
+    const visibleTaskWhere = this.visibleTaskWhere(viewer);
     const where: Prisma.AssessmentCycleWhereInput = {
       ...(query.status && { status: query.status }),
       ...(!canManageCycles && { status: { notIn: ['draft', 'scheduled', 'launch_blocked'] } }),
-      ...(!canManageCycles && { tasks: { some: { employeeId: viewer.id } } }),
+      ...(!canManageCycles && { tasks: { some: visibleTaskWhere } }),
       ...(query.type && { type: query.type }),
       ...(query.keyword
         ? { name: { contains: query.keyword, mode: 'insensitive' } }
@@ -99,16 +100,17 @@ export class CyclesService {
     return paginated(items, total, query);
   }
 
-  /** GET /cycles/mine — 员工仅查看已开放且已生成本人任务的周期。 */
+  /** GET /cycles/mine — 查看已开放且与本人或直属团队任务相关的周期。 */
   async findMine(viewer: AuthUser) {
+    const visibleTaskWhere = this.visibleTaskWhere(viewer);
     return this.prisma.assessmentCycle.findMany({
       where: {
         status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
-        tasks: { some: { employeeId: viewer.id } },
+        tasks: { some: visibleTaskWhere },
       },
       include: {
         tasks: {
-          where: { employeeId: viewer.id },
+          where: visibleTaskWhere,
           select: { id: true, status: true, isExempt: true },
           take: 1,
         },
@@ -134,17 +136,18 @@ export class CyclesService {
     }
 
     if (!canManageCycles) {
-      const hasOwnTask = await this.prisma.assessmentTask.count({
-        where: { cycleId: id, employeeId: viewer!.id },
+      const visibleTaskWhere = this.visibleTaskWhere(viewer!);
+      const hasVisibleTask = await this.prisma.assessmentTask.count({
+        where: { cycleId: id, ...visibleTaskWhere },
       });
-      if (hasOwnTask === 0) {
+      if (hasVisibleTask === 0) {
         throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权查看该周期' });
       }
     }
 
     const taskWhere: Prisma.AssessmentTaskWhereInput = canManageCycles
       ? { cycleId: id }
-      : { cycleId: id, employeeId: viewer!.id };
+      : { cycleId: id, ...this.visibleTaskWhere(viewer!) };
 
     const [snapshotCount, totalTasks, taskStatusCounts] = await Promise.all([
       this.prisma.assessmentTemplateSnapshot.count({ where: { cycleId: id } }),
@@ -252,6 +255,27 @@ export class CyclesService {
       });
     }
     return owner.id;
+  }
+
+  /** 普通员工只关联本人任务；具备团队工作台的角色同时关联其直属团队任务。 */
+  private visibleTaskWhere(viewer: AuthUser): Prisma.AssessmentTaskWhereInput {
+    const directTeamRoles: SysRole[] = [
+      SysRole.manager,
+      SysRole.dept_head,
+      SysRole.vp,
+      SysRole.hr,
+      SysRole.system_admin,
+    ];
+    const canReviewDirectTeam = directTeamRoles.includes(viewer.sysRole);
+
+    return canReviewDirectTeam
+      ? {
+          OR: [
+            { employeeId: viewer.id },
+            { managerId: viewer.id },
+          ],
+        }
+      : { employeeId: viewer.id };
   }
 
   /** 校验创建时的日期与截止日关系。 */

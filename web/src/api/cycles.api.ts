@@ -28,7 +28,7 @@ export const cyclesApi = {
     return apiGet('/cycles', query as Record<string, unknown>);
   },
 
-  /** GET /cycles/mine — 已开放且包含本人任务的周期 */
+  /** GET /cycles/mine — 已开放且与本人或直属团队任务相关的周期 */
   findMine(): Promise<AssessmentCycle[]> {
     return apiGet('/cycles/mine');
   },

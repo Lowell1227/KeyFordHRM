@@ -109,6 +109,82 @@ describe('CyclesService', () => {
     });
   });
 
+  it('returns cycles where the current user is the direct manager of a task', async () => {
+    prisma.assessmentCycle.findMany.mockResolvedValue([{
+      id: 'cycle-1',
+      name: '2027年第一季度',
+      status: 'indicator_setting',
+      tasks: [{ id: 'task-1', status: 'indicator_reviewing', isExempt: false }],
+    }]);
+    const manager = { ...creator, id: 'manager-1', sysRole: SysRole.manager } as AuthUser;
+    const visibleCycles = service as unknown as {
+      findMine: (viewer: AuthUser) => Promise<unknown[]>;
+    };
+
+    await expect(visibleCycles.findMine(manager)).resolves.toHaveLength(1);
+    expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith({
+      where: {
+        status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
+        tasks: {
+          some: {
+            OR: [
+              { employeeId: manager.id },
+              { managerId: manager.id },
+            ],
+          },
+        },
+      },
+      include: {
+        tasks: {
+          where: {
+            OR: [
+              { employeeId: manager.id },
+              { managerId: manager.id },
+            ],
+          },
+          select: { id: true, status: true, isExempt: true },
+          take: 1,
+        },
+      },
+      orderBy: { startDate: 'desc' },
+    });
+  });
+
+  it('allows a direct manager to open a cycle that only contains team tasks', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue({
+      id: 'cycle-1',
+      status: 'indicator_setting',
+      deadlineIndicatorSetting: null,
+      deadlineIndicatorConfirm: null,
+    });
+    prisma.assessmentTask.count.mockResolvedValueOnce(1).mockResolvedValueOnce(1);
+    prisma.assessmentTask.groupBy.mockResolvedValue([]);
+    prisma.assessmentTemplateSnapshot.count.mockResolvedValue(1);
+    const manager = { ...creator, id: 'manager-1', sysRole: SysRole.manager } as AuthUser;
+
+    await expect(service.findOne('cycle-1', manager)).resolves.toEqual(
+      expect.objectContaining({ id: 'cycle-1' }),
+    );
+    expect(prisma.assessmentTask.count).toHaveBeenNthCalledWith(1, {
+      where: {
+        cycleId: 'cycle-1',
+        OR: [
+          { employeeId: manager.id },
+          { managerId: manager.id },
+        ],
+      },
+    });
+    expect(prisma.assessmentTask.count).toHaveBeenNthCalledWith(2, {
+      where: {
+        cycleId: 'cycle-1',
+        OR: [
+          { employeeId: manager.id },
+          { managerId: manager.id },
+        ],
+      },
+    });
+  });
+
   it('scopes the general cycle list to the current employee task', async () => {
     prisma.assessmentCycle.count.mockResolvedValue(1);
     prisma.assessmentCycle.findMany.mockResolvedValue([]);
@@ -121,6 +197,27 @@ describe('CyclesService', () => {
         status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
         tasks: { some: { employeeId: employee.id } },
       }),
+    }));
+  });
+
+  it('scopes the general cycle list to the current manager own or direct-team tasks', async () => {
+    prisma.assessmentCycle.count.mockResolvedValue(1);
+    prisma.assessmentCycle.findMany.mockResolvedValue([]);
+    const manager = { ...creator, id: 'manager-1', sysRole: SysRole.manager } as AuthUser;
+
+    await service.findAll({ page: 1, pageSize: 20, skip: 0, take: 20 } as any, manager);
+
+    const taskScope = {
+      OR: [
+        { employeeId: manager.id },
+        { managerId: manager.id },
+      ],
+    };
+    expect(prisma.assessmentCycle.count).toHaveBeenCalledWith({
+      where: expect.objectContaining({ tasks: { some: taskScope } }),
+    });
+    expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ tasks: { some: taskScope } }),
     }));
   });
 

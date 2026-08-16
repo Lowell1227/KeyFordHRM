@@ -42,6 +42,16 @@ const CYCLE_NAMES = [
   `${E2E_CYCLE_PREFIX}approval`,
 ];
 
+const CYCLE_STATUS_BY_NAME: Record<string, CycleStatus> = {
+  [`${E2E_CYCLE_PREFIX}indicator-confirm`]: CycleStatus.indicator_setting,
+  [`${E2E_CYCLE_PREFIX}indicator-reject`]: CycleStatus.indicator_setting,
+  [`${E2E_CYCLE_PREFIX}goal-review`]: CycleStatus.indicator_setting,
+  [`${E2E_CYCLE_PREFIX}self-eval`]: CycleStatus.self_eval,
+  [`${E2E_CYCLE_PREFIX}manager-score`]: CycleStatus.manager_score,
+  [`${E2E_CYCLE_PREFIX}hr-calibration`]: CycleStatus.hr_calibration,
+  [`${E2E_CYCLE_PREFIX}approval`]: CycleStatus.approval,
+};
+
 type DepartmentFixture = typeof ROOT_DEPARTMENT;
 
 interface UserFixture {
@@ -281,7 +291,7 @@ async function main() {
         type: "quarterly",
         startDate: new Date("2026-01-01"),
         endDate: new Date("2026-03-31"),
-        status: CycleStatus.draft,
+        status: CYCLE_STATUS_BY_NAME[name],
         createdBy: hr.id,
         gradeAMaxRatio: 0.2,
         gradeBMaxRatio: 0.4,

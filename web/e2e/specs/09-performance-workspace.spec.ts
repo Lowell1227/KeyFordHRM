@@ -133,12 +133,25 @@ test.describe('09-performance-workspace manager shell', () => {
   test.use({ storageState: 'e2e/auth-state/manager.json' });
 
   test('team employee selector exposes only the direct-manager API facet', async ({ page }) => {
+    const cyclesResponse = page.waitForResponse((response) => (
+      response.url().includes('/api/v1/cycles/mine') && response.status() === 200
+    ));
+    await page.goto('/tasks?scope=team&stage=manager-eval');
+    const cyclesPayload = await (await cyclesResponse).json() as {
+      data: Array<{ id: string; name: string }>;
+    };
+    const managerScoreCycle = cyclesPayload.data.find(
+      (cycle) => cycle.name === 'E2E-acceptance-manager-score',
+    );
+    expect(managerScoreCycle).toBeDefined();
+
     const teamResponse = page.waitForResponse((response) => (
       response.url().includes('/api/v1/tasks/team')
       && new URL(response.url()).searchParams.get('stage') === 'manager-eval'
+      && new URL(response.url()).searchParams.get('cycleId') === managerScoreCycle!.id
       && response.status() === 200
     ));
-    await page.goto('/tasks?scope=team&stage=manager-eval');
+    await page.goto(`/tasks?scope=team&stage=manager-eval&cycleId=${managerScoreCycle!.id}`);
     const payload = await (await teamResponse).json() as {
       data: { facets: { employees: Array<{ name: string }> } };
     };
