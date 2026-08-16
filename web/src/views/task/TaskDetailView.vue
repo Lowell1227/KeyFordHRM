@@ -15,14 +15,18 @@ import ScoreMask from './components/ScoreMask.vue';
 import InterviewCard from './components/InterviewCard.vue';
 import SignBlock from '@/components/common/SignBlock.vue';
 import GradeTag from '@/components/common/GradeTag.vue';
-import StatusBadge from '@/components/common/StatusBadge.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import { useAuthStore } from '@/stores/auth.store';
 import { formatScore } from '@/utils/score';
 import type { AssessmentCycle, TaskDetail, SetIndicatorBody, SubmitSelfEvalBody } from '@/types/api.types';
 import type { SignatureRole } from '@/types/enums';
 import { TASK_STATUS_META } from '@/types/enums';
-import { TASK_STATUS_STAGE } from './task-stage';
+import {
+  TASK_STATUS_STAGE,
+  getTaskStageStateForStatus,
+  type TaskStageKey,
+  type TaskStageState,
+} from './task-stage';
 
 const route = useRoute();
 const router = useRouter();
@@ -55,6 +59,27 @@ const permission = usePermission({ task, cycle });
 
 const flowActions = computed(() => flow.actions.value);
 
+const performanceStageLabels: Record<TaskStageKey, string> = {
+  'goal-setting': '目标制定',
+  'goal-confirmation': '目标确认',
+  'self-eval': '自评',
+  result: '结果确认',
+};
+
+const performanceStageCardTitles: Record<TaskStageKey, string> = {
+  'goal-setting': '考核指标',
+  'goal-confirmation': '指标确认',
+  'self-eval': '员工自评',
+  result: '结果信息',
+};
+
+function asTaskStage(value: unknown): TaskStageKey | null {
+  const raw = Array.isArray(value) ? value[0] : value;
+  return typeof raw === 'string' && Object.prototype.hasOwnProperty.call(performanceStageLabels, raw)
+    ? raw as TaskStageKey
+    : null;
+}
+
 function safeTaskListReturnTo(value: unknown): string | null {
   const raw = Array.isArray(value) ? value[0] : value;
   if (typeof raw !== 'string' || !raw.startsWith('/tasks')) return null;
@@ -66,16 +91,36 @@ function safeTaskListReturnTo(value: unknown): string | null {
   }
 }
 
-const performanceStageTitle = computed(() => {
+const currentPerformanceStage = computed<TaskStageKey | null>(() => {
   const status = task.value?.status;
-  if (!status) return '绩效详情';
-  return {
-    'goal-setting': '目标制定',
-    'goal-confirmation': '目标确认',
-    'self-eval': '自评',
-    result: '结果确认',
-  }[TASK_STATUS_STAGE[status]];
+  return status ? TASK_STATUS_STAGE[status] : null;
 });
+
+const requestedPerformanceStage = computed<TaskStageKey>(() =>
+  asTaskStage(route.query.stage) ?? currentPerformanceStage.value ?? 'goal-setting',
+);
+
+const performanceStageTitle = computed(() => performanceStageLabels[requestedPerformanceStage.value]);
+const performanceStageCardTitle = computed(() => performanceStageCardTitles[requestedPerformanceStage.value]);
+const performanceStageState = computed<TaskStageState>(() => {
+  const status = task.value?.status;
+  return status
+    ? getTaskStageStateForStatus(status, requestedPerformanceStage.value)
+    : 'not-started';
+});
+const performanceStageStateLabel = computed(() => {
+  if (task.value?.isExempt && requestedPerformanceStage.value === 'result') return '已豁免';
+  return {
+    pending: '待处理',
+    progress: '处理中',
+    completed: '已完成',
+    'not-started': '未开始',
+  }[performanceStageState.value];
+});
+const isCurrentPerformanceStage = computed(() =>
+  requestedPerformanceStage.value === currentPerformanceStage.value,
+);
+const showPerformanceStageContent = computed(() => performanceStageState.value !== 'not-started');
 
 const performanceCycleName = computed(() => task.value?.cycleName || cycle.value?.name || '本期绩效');
 const employeeInitial = computed(() => (task.value?.employeeName || '绩').slice(0, 1));
@@ -91,7 +136,12 @@ const employeeMeta = computed(() => {
 
 const canEditIndicators = computed(() => {
   const t = task.value;
-  if (!t || t.isExempt) return false;
+  if (
+    !t
+    || t.isExempt
+    || requestedPerformanceStage.value !== 'goal-setting'
+    || !isCurrentPerformanceStage.value
+  ) return false;
   if (t.status === 'indicator_drafting') {
     return permission.isTaskSelf.value || permission.isAdminLike.value;
   }
@@ -113,43 +163,22 @@ const indicatorSubmitLabel = computed(() => indicatorSaveLabel.value);
 const splitIndicatorSaveActions = computed(() => canEditIndicators.value);
 const canRejectIndicators = computed(() => {
   const t = task.value;
-  if (!t || t.isExempt) return false;
+  if (!t || t.isExempt || !isCurrentPerformanceStage.value) return false;
   if (t.status === 'indicator_reviewing') return permission.isTaskManager.value || permission.isAdminLike.value;
+  if (t.status === 'indicator_confirming') return permission.isTaskSelf.value;
   return false;
 });
-const rejectIndicatorLabel = computed(() => (canRejectIndicators.value ? '退回员工修改' : '退回主管调整'));
+const rejectIndicatorLabel = computed(() =>
+  task.value?.status === 'indicator_confirming' ? '退回修改' : '退回员工修改',
+);
 
 const showResultView = computed(() => {
-  const status = task.value?.status;
-  return !!status && !['indicator_drafting', 'indicator_reviewing', 'indicator_setting', 'indicator_confirming', 'goal_confirmed', 'self_eval'].includes(status);
+  return requestedPerformanceStage.value === 'result' && showPerformanceStageContent.value;
 });
 
 const reminderOnCooldown = computed(() => {
   const value = workflowContext.value.reminderAvailableAt;
   return Boolean(value && new Date(value).getTime() > Date.now());
-});
-
-const indicatorSnapshotDescription = computed(() => {
-  const t = task.value;
-  if (!t) return '';
-  if (t.status === 'indicator_drafting' || t.status === 'indicator_setting') {
-    return '请添加本期的绩效指标，和您的主管进行确认。';
-  }
-  if (t.status === 'indicator_reviewing') {
-    return permission.isTaskSelf.value
-      ? '已提交主管审核，主管审核通过后将回到您这里确认。'
-      : '请审核员工提交的本期绩效指标，可保存调整、审核通过或退回员工修改。';
-  }
-  if (t.status === 'indicator_confirming') {
-    if (permission.isTaskSelf.value) {
-      return '请核对主管审核后的本期绩效指标，确认后进入自评。';
-    }
-    return '请核对本期绩效指标。如有异议，可退回主管调整。';
-  }
-  if (t.status === 'self_eval') {
-    return '请在指标表中填写实际完成值、自评分和自评说明，并提交自评。';
-  }
-  return '本期绩效指标如下。';
 });
 
 /**
@@ -328,7 +357,7 @@ async function handleRemind() {
         </div>
         <div class="performance-detail__topbar-actions">
           <el-button
-            v-if="workflowContext.canRemind"
+            v-if="workflowContext.canRemind && isCurrentPerformanceStage"
             plain
             :loading="reminding"
             :disabled="reminderOnCooldown"
@@ -336,7 +365,13 @@ async function handleRemind() {
           >
             {{ reminderOnCooldown ? '24小时内已催办' : '催办' }}
           </el-button>
-          <StatusBadge :status="task.status" size="small" />
+          <span
+            class="performance-stage-state"
+            :class="`is-${performanceStageState}`"
+            data-testid="performance-stage-state"
+          >
+            {{ performanceStageStateLabel }}
+          </span>
         </div>
       </header>
 
@@ -358,18 +393,26 @@ async function handleRemind() {
         :class="{ 'has-reference': PERFORMANCE_REFERENCE_ENABLED }"
       >
         <section class="performance-detail__main">
-          <ExemptView v-if="task.isExempt" :task="task" />
+          <ChartCard
+            v-if="!showPerformanceStageContent"
+            class="stage-unavailable-card"
+            data-testid="performance-stage-unavailable"
+          >
+            <template #title>{{ performanceStageCardTitle }}</template>
+            <el-empty description="当前环节尚未开始" :image-size="72" />
+          </ChartCard>
+
+          <ExemptView v-else-if="task.isExempt" :task="task" />
 
           <IndicatorSnapshot
-            v-else
-            title="考核指标"
+            v-else-if="requestedPerformanceStage !== 'result'"
+            :title="performanceStageCardTitle"
             :instances="task.indicatorInstances"
             :can-edit="canEditIndicators"
-            :can-confirm="task.status === 'indicator_confirming' && flowActions.canConfirmIndicator && !canEditIndicators"
+            :can-confirm="requestedPerformanceStage === 'goal-confirmation' && isCurrentPerformanceStage && flowActions.canConfirmIndicator && !canEditIndicators"
             :can-reject="canRejectIndicators"
             confirm-label="确认指标"
             :reject-label="rejectIndicatorLabel"
-            :description="indicatorSnapshotDescription"
             :dept-id="task.deptId"
             :employee-id="task.employeeId"
             :can-use-template="canEditIndicators"
@@ -378,8 +421,8 @@ async function handleRemind() {
             :save-label="indicatorSaveLabel"
             :submit-label="indicatorSubmitLabel"
             :split-save-actions="splitIndicatorSaveActions"
-            :self-eval-mode="task.status === 'self_eval'"
-            :self-eval-readonly="!permission.canEditSelfEval.value"
+            :self-eval-mode="requestedPerformanceStage === 'self-eval'"
+            :self-eval-readonly="!isCurrentPerformanceStage || !permission.canEditSelfEval.value"
             :self-eval-summary="task.selfEvalSummary"
             @save="handleSaveIndicators"
             @confirm="handleConfirmIndicators"
@@ -389,6 +432,11 @@ async function handleRemind() {
 
           <ChartCard v-if="showResultView" class="result-view">
             <template #title>结果信息</template>
+            <template #extra v-if="permission.canConfirmResult.value && isCurrentPerformanceStage">
+              <el-button type="primary" :loading="actionLoading" @click="handleConfirmResult">
+                确认结果
+              </el-button>
+            </template>
 
             <el-descriptions :column="2" border size="small">
               <el-descriptions-item v-if="permission.canViewTotalScore.value" label="计算总分">
@@ -430,19 +478,13 @@ async function handleRemind() {
               </el-descriptions-item>
             </el-descriptions>
 
-            <div v-if="permission.canConfirmResult.value" class="result-actions">
-              <el-button type="primary" :loading="actionLoading" @click="handleConfirmResult">
-                确认结果
-              </el-button>
-            </div>
-
             <div v-if="!permission.isPublished.value" class="result-view__mask">
               <ScoreMask :message="permission.maskMessage.value" />
             </div>
           </ChartCard>
 
           <SignBlock
-            v-if="['published','confirmed','appealing','closed'].includes(task.status)"
+            v-if="requestedPerformanceStage === 'result' && ['published','confirmed','appealing','closed'].includes(task.status)"
             class="sign-block-card"
             business-type="assessment_task"
             :business-record-id="task.id"
@@ -451,7 +493,7 @@ async function handleRemind() {
           />
 
           <InterviewCard
-            v-if="['published','confirmed','appealing','closed'].includes(task.status)"
+            v-if="requestedPerformanceStage === 'result' && ['published','confirmed','appealing','closed'].includes(task.status)"
             :task="task"
             :interview="task.performanceInterview"
             @refresh="loadDetail"
@@ -519,6 +561,29 @@ async function handleRemind() {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+.performance-stage-state {
+  display: inline-flex;
+  min-height: 26px;
+  align-items: center;
+  padding: 0 10px;
+  border-radius: 5px;
+  background: #eef2f7;
+  color: #738096;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.performance-stage-state.is-pending,
+.performance-stage-state.is-progress {
+  background: #fff3df;
+  color: #d78a17;
+}
+
+.performance-stage-state.is-completed {
+  background: #eaf8ee;
+  color: #35a45b;
 }
 
 .employee-summary {
@@ -627,10 +692,8 @@ async function handleRemind() {
   border-left: 0;
 }
 
-.result-actions {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 16px;
+.stage-unavailable-card :deep(.el-empty) {
+  min-height: 220px;
 }
 
 .result-view__mask {

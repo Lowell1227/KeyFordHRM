@@ -30,10 +30,9 @@ import type {
   TeamTaskListItem,
   TeamTaskPage,
 } from '@/types/api.types';
-import type { TaskStatus, TeamStageState, TeamTaskStage } from '@/types/enums';
+import type { TeamStageState, TeamTaskStage } from '@/types/enums';
 import {
-  TASK_STATUS_STAGE,
-  getTaskStageState,
+  getTaskStageStateForStatus,
   type TaskStageKey as MappedTaskStageKey,
   type TaskStageState,
 } from './task-stage';
@@ -175,25 +174,9 @@ const selectedStageLabel = computed(() => {
   return taskStages.find((stage) => stage.key === selectedStage.value)?.label ?? '绩效任务';
 });
 
-const taskStageOrder: MappedTaskStageKey[] = [
-  'goal-setting',
-  'goal-confirmation',
-  'self-eval',
-  'result',
-];
-
-function taskStageState(status: TaskStatus, stage: MappedTaskStageKey): TaskStageState {
-  const currentStage = TASK_STATUS_STAGE[status];
-  const currentIndex = taskStageOrder.indexOf(currentStage);
-  const stageIndex = taskStageOrder.indexOf(stage);
-  if (stageIndex < currentIndex) return 'completed';
-  if (stageIndex > currentIndex) return 'not-started';
-  return getTaskStageState([status]);
-}
-
 function stageState(stage: MappedTaskStageKey): TaskStageState {
   if (list.value.length === 0) return 'not-started';
-  const states = list.value.map((task) => taskStageState(task.status, stage));
+  const states = list.value.map((task) => getTaskStageStateForStatus(task.status, stage));
   if (states.includes('pending')) return 'pending';
   if (states.includes('progress')) return 'progress';
   if (states.every((state) => state === 'completed')) return 'completed';
@@ -541,7 +524,7 @@ function goDetail(item: TaskListItem) {
   router.push({
     name: 'TaskDetail',
     params: { id: item.id },
-    query: { returnTo: taskListReturnTo() },
+    query: { stage: selectedStage.value, returnTo: taskListReturnTo() },
   });
 }
 

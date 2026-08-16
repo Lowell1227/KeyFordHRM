@@ -3,6 +3,13 @@ import type { TaskStatus } from '@/types/enums';
 export type TaskStageKey = 'goal-setting' | 'goal-confirmation' | 'self-eval' | 'result';
 export type TaskStageState = 'pending' | 'progress' | 'completed' | 'not-started';
 
+export const TASK_STAGE_ORDER: TaskStageKey[] = [
+  'goal-setting',
+  'goal-confirmation',
+  'self-eval',
+  'result',
+];
+
 export const TASK_STATUS_STAGE: Record<TaskStatus, TaskStageKey> = {
   pending: 'goal-setting',
   indicator_drafting: 'goal-setting',
@@ -42,4 +49,13 @@ export function getTaskStageState(statuses: TaskStatus[]): TaskStageState {
   if (statuses.every((status) => isTerminalTaskStatus(status) || status === 'goal_confirmed')) return 'completed';
   if (statuses.some((status) => actionableStatuses.has(status))) return 'pending';
   return 'progress';
+}
+
+export function getTaskStageStateForStatus(status: TaskStatus, stage: TaskStageKey): TaskStageState {
+  const currentStage = TASK_STATUS_STAGE[status];
+  const currentIndex = TASK_STAGE_ORDER.indexOf(currentStage);
+  const stageIndex = TASK_STAGE_ORDER.indexOf(stage);
+  if (stageIndex < currentIndex) return 'completed';
+  if (stageIndex > currentIndex) return 'not-started';
+  return getTaskStageState([status]);
 }

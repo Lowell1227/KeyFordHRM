@@ -58,7 +58,6 @@ const props = defineProps<{
   canConfirm: boolean;
   canReject?: boolean;
   title?: string;
-  description?: string;
   deptId?: string | null;
   employeeId?: string | null;
   canUseTemplate?: boolean;
@@ -782,28 +781,33 @@ function handleFetchDingtalkWeekly() {
   <ChartCard class="indicator-snapshot">
     <template #title>{{ title || '考核指标明细' }}</template>
     <template #extra>
-      <div v-if="canConfirm || canReject" class="actions">
-        <el-button v-if="canConfirm" type="success" :icon="Check" :loading="loading" @click="handleConfirm">
+      <div
+        v-if="canEdit || canConfirm || canReject || (selfEvalMode && !selfEvalReadonly)"
+        class="actions"
+        data-testid="performance-stage-actions"
+      >
+        <template v-if="canEdit">
+          <el-button v-if="splitSaveActions" :loading="loading" @click="handleSave('save')">保存</el-button>
+          <el-button type="primary" :loading="loading" @click="handleSave('submit')">
+            {{ submitLabel || saveLabel || '提交' }}
+          </el-button>
+        </template>
+        <el-button v-if="canReject" plain type="danger" :icon="Close" :loading="loading" @click="rejectVisible = true">
+          {{ rejectLabel || '退回指标' }}
+        </el-button>
+        <el-button v-if="canConfirm" type="primary" :icon="Check" :loading="loading" @click="handleConfirm">
           {{ confirmLabel || '确认指标' }}
         </el-button>
-        <el-button v-if="canConfirm || canReject" type="danger" :icon="Close" :loading="loading" @click="rejectVisible = true">
-          {{ rejectLabel || '退回指标' }}
+        <el-button
+          v-if="selfEvalMode && !selfEvalReadonly"
+          type="primary"
+          :loading="loading"
+          @click="handleSubmitSelfEval"
+        >
+          提交自评
         </el-button>
       </div>
     </template>
-
-    <div v-if="description || canEdit" class="snapshot-toolbar">
-      <div v-if="description" class="snapshot-desc">{{ description }}</div>
-      <div v-if="canEdit" class="snapshot-toolbar__actions">
-        <template v-if="splitSaveActions">
-          <el-button :loading="loading" @click="handleSave('save')">保存</el-button>
-          <el-button type="primary" :loading="loading" @click="handleSave('submit')">{{ submitLabel || saveLabel || '提交' }}</el-button>
-        </template>
-        <el-button v-else class="snapshot-toolbar__save" type="primary" :loading="loading" @click="handleSave('submit')">
-        {{ saveLabel || '保存指标' }}
-        </el-button>
-      </div>
-    </div>
 
     <template v-if="canEdit">
       <PerformanceIndicatorList
@@ -1215,9 +1219,6 @@ function handleFetchDingtalkWeekly() {
           </el-col>
         </el-row>
       </el-form>
-      <div v-if="!selfEvalReadonly" class="self-eval-inline__actions">
-        <el-button type="primary" :loading="loading" @click="handleSubmitSelfEval">提交自评</el-button>
-      </div>
     </div>
 
     <div v-if="operationRecords.length" class="proposal-history">
@@ -1243,32 +1244,6 @@ function handleFetchDingtalkWeekly() {
 <style scoped>
 .actions {
   display: flex;
-  gap: 8px;
-}
-
-.snapshot-toolbar {
-  display: flex;
-  gap: 16px;
-  align-items: flex-start;
-  justify-content: space-between;
-  margin-bottom: 10px;
-}
-
-.snapshot-desc {
-  flex: 1;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.snapshot-toolbar__save {
-  flex: 0 0 auto;
-  min-width: 120px;
-}
-
-.snapshot-toolbar__actions {
-  display: flex;
-  flex: 0 0 auto;
   gap: 8px;
 }
 
@@ -1691,25 +1666,16 @@ function handleFetchDingtalkWeekly() {
   }
 
   .actions,
-  .snapshot-toolbar,
-  .snapshot-toolbar__actions,
   .indicator-add-toolbar {
     align-items: stretch;
     flex-direction: column;
   }
 
   .actions .el-button,
-  .snapshot-toolbar__actions .el-button,
   .indicator-add-toolbar .el-button {
     width: 100%;
     min-height: 44px;
     margin-left: 0;
-  }
-
-  .snapshot-desc {
-    width: 100%;
-    font-size: 13px;
-    line-height: 20px;
   }
 
   .indicator-table--desktop {

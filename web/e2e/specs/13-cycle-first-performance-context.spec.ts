@@ -270,7 +270,71 @@ test.describe('cycle-first task contracts', () => {
     await expect(card).toContainText('未开始');
 
     await page.getByTestId('personal-task-detail').click();
-    await expect(page).toHaveURL(/\/tasks\/personal-task-1/);
+    await expect(page).toHaveURL(/\/tasks\/personal-task-1\?.*stage=result/);
+  });
+
+  test('opens the requested personal stage with matching state content and actions', async ({ page }) => {
+    const taskRequests: URL[] = [];
+    const currentCycle = cycle('current', '2026-07-01', '2026-09-30');
+    const personalDetail: TaskDetail = {
+      id: 'personal-task-1',
+      cycleId: currentCycle.id,
+      cycleName: '2026-Q3',
+      snapshotId: 'snapshot-1',
+      employeeId: 'manager-1',
+      employeeName: 'Cycle Manager',
+      employeeNo: 'MGR001',
+      deptId: 'dept-1',
+      deptName: 'Engineering',
+      managerId: 'manager-2',
+      managerName: 'Direct Manager',
+      status: 'self_eval',
+      isExempt: false,
+      updatedAt: '2026-08-16T00:00:00.000Z',
+      indicatorInstances: [
+        {
+          id: 'indicator-1',
+          taskId: 'personal-task-1',
+          name: 'Delivery quality',
+          description: 'Complete the agreed delivery objectives.',
+          weight: 1,
+          dimensionWeight: 1,
+          indicatorType: 'kpi',
+          sortOrder: 0,
+          visibilityScope: 'supervisors',
+          visibleDepartmentIds: [],
+          visibleUserIds: [],
+          alignedObjectives: [],
+        },
+      ],
+      flowRecords: [],
+    };
+    await mockTaskCycleShell(page, [currentCycle], taskRequests, [], personalDetail);
+
+    await page.goto('/tasks/personal-task-1?stage=goal-setting&returnTo=%2Ftasks%3Fscope%3Dmine');
+    const detail = page.getByTestId('personal-performance-detail');
+    await expect(detail.getByTestId('performance-stage-title')).toHaveText('目标制定');
+    await expect(detail.getByTestId('performance-stage-state')).toHaveText('已完成');
+    await expect(detail.getByText('请添加本期的绩效指标，和您的主管进行确认。')).toHaveCount(0);
+    await expect(detail.getByRole('button', { name: '提交主管审核' })).toHaveCount(0);
+
+    await page.goto('/tasks/personal-task-1?stage=goal-confirmation&returnTo=%2Ftasks%3Fscope%3Dmine');
+    await expect(detail.getByTestId('performance-stage-title')).toHaveText('目标确认');
+    await expect(detail.getByTestId('performance-stage-state')).toHaveText('已完成');
+    await expect(detail.getByText('指标确认', { exact: true })).toBeVisible();
+    await expect(detail.getByRole('button', { name: '确认指标' })).toHaveCount(0);
+
+    await page.goto('/tasks/personal-task-1?stage=self-eval&returnTo=%2Ftasks%3Fscope%3Dmine');
+    await expect(detail.getByTestId('performance-stage-title')).toHaveText('自评');
+    await expect(detail.getByTestId('performance-stage-state')).toHaveText('待处理');
+    await expect(detail.getByText('员工自评', { exact: true }).first()).toBeVisible();
+    await expect(detail.getByRole('button', { name: '提交自评' })).toBeVisible();
+
+    await page.goto('/tasks/personal-task-1?stage=result&returnTo=%2Ftasks%3Fscope%3Dmine');
+    await expect(detail.getByTestId('performance-stage-title')).toHaveText('结果确认');
+    await expect(detail.getByTestId('performance-stage-state')).toHaveText('未开始');
+    await expect(detail.getByText('当前环节尚未开始')).toBeVisible();
+    await expect(detail.getByRole('button', { name: '确认结果' })).toHaveCount(0);
   });
 
   test('keeps personal indicator editing compact with advanced fields on demand', async ({ page }) => {
