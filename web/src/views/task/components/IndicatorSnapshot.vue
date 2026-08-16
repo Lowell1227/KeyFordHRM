@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
-import { Check, Close, Delete, Plus } from '@element-plus/icons-vue';
+import { ArrowDown, ArrowUp, Check, Close, Delete, Plus } from '@element-plus/icons-vue';
 import RejectModal from './RejectModal.vue';
 import ScoreInput from '@/components/common/ScoreInput.vue';
 import FileUpload from '@/components/common/FileUpload.vue';
@@ -107,6 +107,7 @@ const selfEvalForm = reactive({
   attachments: [] as Attachment[],
 });
 const snapshotValidationIds = ref<string[]>([]);
+const advancedSettingIds = ref(new Set<string>());
 
 const indicatorOptions = computed(() => {
   const keyword = indicatorSearchKeyword.value.trim().toLowerCase();
@@ -202,6 +203,17 @@ const editableDisclosureRows = computed<PerformanceIndicatorRow[]>(() => editabl
     ? latestIndicatorRejection.value?.comment
     : undefined,
 })));
+
+function hasAdvancedSettings(id: string): boolean {
+  return advancedSettingIds.value.has(id);
+}
+
+function toggleAdvancedSettings(id: string) {
+  const next = new Set(advancedSettingIds.value);
+  if (next.has(id)) next.delete(id);
+  else next.add(id);
+  advancedSettingIds.value = next;
+}
 const readonlyDisclosureRows = computed<PerformanceIndicatorRow[]>(() => props.instances.map((item) => ({
   id: item.id,
   name: item.name,
@@ -236,6 +248,7 @@ watch(
       ...(instances.length ? instances.map(toEditableItem) : [createEmptyItem()]),
     );
     note.value = '';
+    advancedSettingIds.value = new Set();
   },
   { immediate: true, deep: true },
 );
@@ -798,9 +811,21 @@ function handleFetchDingtalkWeekly() {
         :invalid-indicator-ids="snapshotRevealIds"
         :weight-total="weightTotalPercent / 100"
       >
-        <template #details="{ index }">
-          <div class="snapshot-disclosure-editor">
-            <div class="snapshot-disclosure-editor__commands">
+        <template #details="{ row, index }">
+          <div
+            class="snapshot-compact-editor"
+            :data-testid="`indicator-compact-editor-${row.id}`"
+          >
+            <div class="snapshot-compact-editor__commands">
+              <el-button
+                text
+                type="primary"
+                :icon="hasAdvancedSettings(row.id) ? ArrowUp : ArrowDown"
+                :data-testid="`indicator-more-settings-${row.id}`"
+                @click="toggleAdvancedSettings(row.id)"
+              >
+                {{ hasAdvancedSettings(row.id) ? '收起更多' : '更多设置' }}
+              </el-button>
               <el-tooltip content="删除指标" placement="top">
                 <el-button
                   text
@@ -812,68 +837,77 @@ function handleFetchDingtalkWeekly() {
                 />
               </el-tooltip>
             </div>
-            <label>
-              <span>考核维度</span>
-              <el-input v-model="editableItems[index].dimensionName" placeholder="考核维度" maxlength="100" />
-            </label>
-            <label class="is-wide">
-              <span>指标名称</span>
-              <el-input v-model="editableItems[index].name" placeholder="请输入指标名称" maxlength="100" />
-            </label>
-            <label class="is-wide">
-              <span>指标描述</span>
-              <el-input
-                v-model="editableItems[index].description"
-                type="textarea"
-                :rows="2"
-                placeholder="请输入指标描述，例如：按阶段完成验证"
-                maxlength="300"
-              />
-            </label>
-            <label>
-              <span>权重</span>
-              <el-input-number
-                class="weight-input"
-                :model-value="toPercent(editableItems[index].weight)"
-                :min="0"
-                :max="100"
-                :step="5"
-                :precision="2"
-                controls-position="right"
-                @pointerdown.capture="(event: PointerEvent) => handleWeightControlPointerDown(editableItems[index], event)"
-                @pointerup.capture="clearWeightHold"
-                @pointerleave.capture="clearWeightHold"
-                @pointercancel.capture="clearWeightHold"
-                @update:model-value="(value?: number) => setWeightPercent(editableItems[index], value)"
-              />
-            </label>
-            <label class="is-wide">
-              <span>评分标准</span>
-              <el-input v-model="editableItems[index].scoringStandard" placeholder="评分标准" maxlength="300" />
-            </label>
-            <label>
-              <span>数据来源</span>
-              <el-input v-model="editableItems[index].dataSource" placeholder="数据来源" maxlength="100" />
-            </label>
-            <label>
-              <span>数据口径</span>
-              <el-input v-model="editableItems[index].dataCaliber" placeholder="数据口径" maxlength="100" />
-            </label>
-            <label class="is-wide">
-              <span>目标值</span>
-              <div class="target-inputs">
-                <el-input
-                  v-if="editableItems[index].targetValueText"
-                  v-model="editableItems[index].targetValueText"
-                  placeholder="固定值"
-                  maxlength="100"
+            <div class="snapshot-compact-editor__primary">
+              <label>
+                <span>指标名称</span>
+                <el-input v-model="editableItems[index].name" placeholder="请输入指标名称" maxlength="100" />
+              </label>
+              <label>
+                <span>权重</span>
+                <el-input-number
+                  class="weight-input"
+                  :model-value="toPercent(editableItems[index].weight)"
+                  :min="0"
+                  :max="100"
+                  :step="5"
+                  :precision="2"
+                  controls-position="right"
+                  @pointerdown.capture="(event: PointerEvent) => handleWeightControlPointerDown(editableItems[index], event)"
+                  @pointerup.capture="clearWeightHold"
+                  @pointerleave.capture="clearWeightHold"
+                  @pointercancel.capture="clearWeightHold"
+                  @update:model-value="(value?: number) => setWeightPercent(editableItems[index], value)"
                 />
-                <template v-else>
-                  <el-input-number v-model="editableItems[index].targetValue" :precision="2" controls-position="right" placeholder="目标" />
-                  <el-input v-model="editableItems[index].unit" placeholder="单位" maxlength="30" />
-                </template>
-              </div>
-            </label>
+              </label>
+              <label class="is-wide">
+                <span>指标描述</span>
+                <el-input
+                  v-model="editableItems[index].description"
+                  type="textarea"
+                  :rows="2"
+                  placeholder="请输入指标描述，例如：按阶段完成验证"
+                  maxlength="300"
+                />
+              </label>
+            </div>
+
+            <div
+              v-if="hasAdvancedSettings(row.id)"
+              class="snapshot-compact-editor__advanced"
+              :data-testid="`indicator-advanced-settings-${row.id}`"
+            >
+              <label>
+                <span>考核维度</span>
+                <el-input v-model="editableItems[index].dimensionName" placeholder="考核维度" maxlength="100" />
+              </label>
+              <label>
+                <span>目标值</span>
+                <div class="target-inputs">
+                  <el-input
+                    v-if="editableItems[index].targetValueText"
+                    v-model="editableItems[index].targetValueText"
+                    placeholder="固定值"
+                    maxlength="100"
+                  />
+                  <template v-else>
+                    <el-input-number v-model="editableItems[index].targetValue" :precision="2" controls-position="right" placeholder="目标" />
+                    <el-input v-model="editableItems[index].unit" placeholder="单位" maxlength="30" />
+                  </template>
+                </div>
+              </label>
+              <label class="is-wide">
+                <span>评分标准</span>
+                <el-input v-model="editableItems[index].scoringStandard" placeholder="评分标准" maxlength="300" />
+              </label>
+              <label>
+                <span>数据来源</span>
+                <el-input v-model="editableItems[index].dataSource" placeholder="数据来源" maxlength="100" />
+              </label>
+              <label>
+                <span>数据口径</span>
+                <el-input v-model="editableItems[index].dataCaliber" placeholder="数据口径" maxlength="100" />
+              </label>
+            </div>
           </div>
         </template>
       </PerformanceIndicatorList>
@@ -1384,20 +1418,31 @@ function handleFetchDingtalkWeekly() {
   margin-bottom: 10px;
 }
 
-.snapshot-disclosure-editor {
+.snapshot-compact-editor {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.snapshot-compact-editor__commands {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+}
+
+.snapshot-compact-editor__primary,
+.snapshot-compact-editor__advanced {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px;
   gap: 10px 12px;
 }
 
-.snapshot-disclosure-editor__commands {
-  grid-column: 1 / -1;
-  display: flex;
-  justify-content: flex-end;
-  min-height: 24px;
+.snapshot-compact-editor__advanced {
+  padding-top: 12px;
+  border-top: 1px dashed #dfe4ec;
 }
 
-.snapshot-disclosure-editor label {
+.snapshot-compact-editor label {
   min-width: 0;
   display: grid;
   align-content: start;
@@ -1406,11 +1451,11 @@ function handleFetchDingtalkWeekly() {
   font-size: 11px;
 }
 
-.snapshot-disclosure-editor label.is-wide {
+.snapshot-compact-editor label.is-wide {
   grid-column: 1 / -1;
 }
 
-.snapshot-disclosure-editor :deep(.el-input-number) {
+.snapshot-compact-editor :deep(.el-input-number) {
   width: 100%;
 }
 
@@ -1636,12 +1681,12 @@ function handleFetchDingtalkWeekly() {
 }
 
 @media (max-width: 768px) {
-  .snapshot-disclosure-editor {
+  .snapshot-compact-editor__primary,
+  .snapshot-compact-editor__advanced {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .snapshot-disclosure-editor__commands,
-  .snapshot-disclosure-editor label.is-wide {
+  .snapshot-compact-editor label.is-wide {
     grid-column: auto;
   }
 

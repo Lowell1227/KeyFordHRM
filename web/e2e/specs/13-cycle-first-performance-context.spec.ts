@@ -273,7 +273,7 @@ test.describe('cycle-first task contracts', () => {
     await expect(page).toHaveURL(/\/tasks\/personal-task-1/);
   });
 
-  test('shows indicator descriptions without the dormant reference panel', async ({ page }) => {
+  test('keeps personal indicator editing compact with advanced fields on demand', async ({ page }) => {
     const taskRequests: URL[] = [];
     const currentCycle = cycle('current', '2026-07-01', '2026-09-30');
     const personalDetail: TaskDetail = {
@@ -297,6 +297,10 @@ test.describe('cycle-first task contracts', () => {
           taskId: 'personal-task-1',
           name: 'Delivery quality',
           description: 'Complete the agreed delivery objectives.',
+          scoringStandard: 'Accepted on schedule',
+          dataSource: 'Release report',
+          dataCaliber: 'Production release',
+          targetValueText: 'One accepted release',
           weight: 1,
           indicatorType: 'kpi',
           sortOrder: 0,
@@ -325,6 +329,22 @@ test.describe('cycle-first task contracts', () => {
     await expect(detail.getByText('任务详情', { exact: true })).toHaveCount(0);
     await expect(detail.getByText('人员信息', { exact: true })).toHaveCount(0);
     await expect(detail.locator('.el-steps')).toHaveCount(0);
+
+    await detail.getByTestId('indicator-name-indicator-1').click();
+    const compactEditor = detail.getByTestId('indicator-compact-editor-indicator-1');
+    await expect(compactEditor).toBeVisible();
+    await expect(compactEditor.getByText('指标名称', { exact: true })).toBeVisible();
+    await expect(compactEditor.getByText('指标描述', { exact: true })).toBeVisible();
+    await expect(compactEditor.getByText('权重', { exact: true })).toBeVisible();
+    await expect(detail.getByTestId('indicator-advanced-settings-indicator-1')).toHaveCount(0);
+
+    await detail.getByTestId('indicator-more-settings-indicator-1').click();
+    const advancedSettings = detail.getByTestId('indicator-advanced-settings-indicator-1');
+    await expect(advancedSettings).toBeVisible();
+    await expect(advancedSettings.getByText('评分标准', { exact: true })).toBeVisible();
+    await expect(advancedSettings.getByText('数据来源', { exact: true })).toBeVisible();
+    await expect(advancedSettings.getByText('数据口径', { exact: true })).toBeVisible();
+    await expect(advancedSettings.getByText('目标值', { exact: true })).toBeVisible();
   });
 });
 
