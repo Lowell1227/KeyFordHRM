@@ -1,12 +1,12 @@
 import { Injectable, BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { Prisma, SysRole } from '@prisma/client';
+import { CycleStatus, Prisma, SysRole } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { PaginationDto, paginated } from '@/common/dto/pagination.dto';
 import { CreateCycleDto } from './dto/create-cycle.dto';
 import { UpdateDeadlinesDto } from './dto/update-deadlines.dto';
-import { CycleQueryDto } from './dto/cycle-query.dto';
+import { CycleQueryDto, CycleStatusGroup } from './dto/cycle-query.dto';
 
 const DEADLINE_FIELDS = [
   'deadlineIndicatorSetting',
@@ -19,6 +19,21 @@ const DEADLINE_FIELDS = [
 ] as const;
 
 type DeadlineField = (typeof DEADLINE_FIELDS)[number];
+
+const CYCLE_STATUS_GROUPS: Record<CycleStatusGroup, CycleStatus[]> = {
+  [CycleStatusGroup.attention]: [CycleStatus.draft, CycleStatus.launch_blocked],
+  [CycleStatusGroup.active]: [
+    CycleStatus.scheduled,
+    CycleStatus.indicator_setting,
+    CycleStatus.self_eval,
+    CycleStatus.manager_score,
+    CycleStatus.hr_calibration,
+    CycleStatus.approval,
+    CycleStatus.published,
+    CycleStatus.appeal,
+  ],
+  [CycleStatusGroup.finished]: [CycleStatus.closed],
+};
 
 @Injectable()
 export class CyclesService {
@@ -79,6 +94,7 @@ export class CyclesService {
     const visibleTaskWhere = this.visibleTaskWhere(viewer);
     const where: Prisma.AssessmentCycleWhereInput = {
       ...(query.status && { status: query.status }),
+      ...(!query.status && query.group && { status: { in: CYCLE_STATUS_GROUPS[query.group] } }),
       ...(!canManageCycles && { status: { notIn: ['draft', 'scheduled', 'launch_blocked'] } }),
       ...(!canManageCycles && { tasks: { some: visibleTaskWhere } }),
       ...(query.type && { type: query.type }),

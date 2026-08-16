@@ -368,8 +368,11 @@ export interface CycleQuery {
   pageSize?: number;
   status?: CycleStatus;
   type?: CycleType;
+  group?: CycleStatusGroup;
   keyword?: string;
 }
+
+export type CycleStatusGroup = 'attention' | 'active' | 'finished';
 
 /** POST /cycles 创建周期请求体（对齐 CreateCycleDto）。
  *  deadline_appeal 由公示时自动计算，前端无需提供。

@@ -221,6 +221,43 @@ describe('CyclesService', () => {
     }));
   });
 
+  it('filters the cycle list by the attention status group', async () => {
+    prisma.assessmentCycle.count.mockResolvedValue(0);
+    prisma.assessmentCycle.findMany.mockResolvedValue([]);
+
+    await service.findAll({
+      page: 1,
+      pageSize: 20,
+      skip: 0,
+      take: 20,
+      group: 'attention',
+    } as any, creator);
+
+    const expectedWhere = { status: { in: ['draft', 'launch_blocked'] } };
+    expect(prisma.assessmentCycle.count).toHaveBeenCalledWith({ where: expectedWhere });
+    expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expectedWhere,
+    }));
+  });
+
+  it('uses an exact cycle status instead of the broader status group', async () => {
+    prisma.assessmentCycle.count.mockResolvedValue(0);
+    prisma.assessmentCycle.findMany.mockResolvedValue([]);
+
+    await service.findAll({
+      page: 1,
+      pageSize: 20,
+      skip: 0,
+      take: 20,
+      group: 'attention',
+      status: 'scheduled',
+    } as any, creator);
+
+    expect(prisma.assessmentCycle.count).toHaveBeenCalledWith({
+      where: { status: 'scheduled' },
+    });
+  });
+
   it('does not expose organization-wide task counts to an employee', async () => {
     prisma.assessmentCycle.findUnique.mockResolvedValue({
       id: 'cycle-1',
