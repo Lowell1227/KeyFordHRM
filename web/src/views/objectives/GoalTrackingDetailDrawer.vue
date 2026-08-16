@@ -16,6 +16,7 @@ const detail = ref<GoalTrackingIndicatorDetail | null>(null);
 const loading = ref(false);
 const loadError = ref('');
 const editing = ref(false);
+const dataNotesOpen = ref(false);
 const submitting = ref(false);
 const uploading = ref(false);
 const fileInput = ref<HTMLInputElement>();
@@ -36,9 +37,16 @@ const form = reactive<{
 
 const opened = computed(() => Boolean(props.indicatorId));
 const latestProgress = computed(() => detail.value?.progressUpdates[0] ?? null);
+const displayDescription = computed(() => (
+  detail.value?.description?.trim().replace(/^realistic-demo-v\d+\s*[；;:：]\s*/i, '') ?? ''
+));
+const hasDataNotes = computed(() => Boolean(
+  detail.value?.dataSource?.trim() || detail.value?.dataCaliber?.trim(),
+));
 
 watch(() => props.indicatorId, (indicatorId) => {
   editing.value = false;
+  dataNotesOpen.value = false;
   if (!indicatorId) {
     detail.value = null;
     return;
@@ -207,16 +215,6 @@ function visibilityLabel(scope?: string) {
   }[scope ?? 'supervisors'] ?? '按权限可见';
 }
 
-function indicatorTypeLabel(type?: string) {
-  return {
-    kpi: '量化 KPI',
-    attitude: '非量化 KPI',
-    bonus: '加分项',
-    penalty: '扣分项',
-    veto: '一票否决',
-  }[type ?? ''] ?? type ?? '-';
-}
-
 function changeActionLabel(action: string) {
   return {
     progress_update: '更新指标进展',
@@ -365,22 +363,33 @@ function changeActionLabel(action: string) {
 
       <section id="goal-detail-info" class="goal-detail__card goal-detail__section">
         <h3>指标详情</h3>
-        <dl class="goal-detail__facts">
-          <div class="is-wide"><dt>指标描述</dt><dd>{{ detail.description || '暂未填写' }}</dd></div>
+        <div class="goal-detail__description">
+          <span>指标说明</span>
+          <p>{{ displayDescription || '暂未填写' }}</p>
+        </div>
+        <dl class="goal-detail__primary-facts">
           <div><dt>目标值</dt><dd>{{ formatTarget(detail) }}</dd></div>
-          <div><dt>指标类型</dt><dd>{{ indicatorTypeLabel(detail.indicatorType) }}</dd></div>
-          <div class="is-wide"><dt>评分标准</dt><dd>{{ detail.scoringStandard || '暂未填写' }}</dd></div>
-          <div><dt>数据来源</dt><dd>{{ detail.dataSource || '-' }}</dd></div>
-          <div><dt>数据口径</dt><dd>{{ detail.dataCaliber || '-' }}</dd></div>
-          <div v-if="detail.actualValue != null || detail.actualNote" class="is-wide">
+          <div v-if="detail.actualValue != null || detail.actualNote">
             <dt>周期结果</dt>
             <dd>{{ detail.actualValue == null ? '' : `${detail.actualValue}${detail.unit ?? ''}` }} {{ detail.actualNote }}</dd>
           </div>
-          <div v-if="detail.alignedObjectives.length" class="is-wide">
-            <dt>关联目标</dt>
-            <dd>{{ detail.alignedObjectives.map((item) => item.title).join('、') }}</dd>
-          </div>
+          <div class="is-wide"><dt>评分标准</dt><dd>{{ detail.scoringStandard || '暂未填写' }}</dd></div>
         </dl>
+        <div v-if="hasDataNotes" class="goal-detail__data-notes">
+          <button
+            type="button"
+            :aria-expanded="dataNotesOpen"
+            aria-controls="goal-detail-data-notes"
+            @click="dataNotesOpen = !dataNotesOpen"
+          >
+            {{ dataNotesOpen ? '收起数据说明' : '查看数据说明' }}
+            <span aria-hidden="true">⌄</span>
+          </button>
+          <dl v-if="dataNotesOpen" id="goal-detail-data-notes">
+            <div v-if="detail.dataSource"><dt>数据来源</dt><dd>{{ detail.dataSource }}</dd></div>
+            <div v-if="detail.dataCaliber"><dt>数据口径</dt><dd>{{ detail.dataCaliber }}</dd></div>
+          </dl>
+        </div>
       </section>
 
       <section id="goal-detail-changes" class="goal-detail__card goal-detail__section">
@@ -708,28 +717,72 @@ function changeActionLabel(action: string) {
   font-size: 13px;
 }
 
-.goal-detail__facts {
+.goal-detail__primary-facts {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 16px 24px;
-  margin: 0;
+  gap: 14px 24px;
+  padding-top: 14px;
+  margin: 14px 0 0;
+  border-top: 1px solid #edf0f5;
 }
 
-.goal-detail__facts .is-wide {
+.goal-detail__primary-facts .is-wide {
   grid-column: 1 / -1;
 }
 
-.goal-detail__facts dt {
+.goal-detail__description span,
+.goal-detail__primary-facts dt,
+.goal-detail__data-notes dt {
   margin-bottom: 5px;
   color: #98a2b4;
   font-size: 12px;
 }
 
-.goal-detail__facts dd {
+.goal-detail__description p,
+.goal-detail__primary-facts dd,
+.goal-detail__data-notes dd {
   margin: 0;
   color: #3a465c;
   line-height: 1.7;
   white-space: pre-wrap;
+}
+
+.goal-detail__description p {
+  margin-top: 5px;
+}
+
+.goal-detail__data-notes {
+  margin-top: 14px;
+}
+
+.goal-detail__data-notes > button {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  color: #637087;
+  background: transparent;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.goal-detail__data-notes > button span {
+  transition: transform 0.2s ease;
+}
+
+.goal-detail__data-notes > button[aria-expanded='true'] span {
+  transform: rotate(180deg);
+}
+
+.goal-detail__data-notes dl {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px 24px;
+  padding: 14px;
+  margin: 10px 0 0;
+  border-radius: 8px;
+  background: #f7f9fc;
 }
 
 .goal-detail__state {
@@ -775,11 +828,12 @@ function changeActionLabel(action: string) {
   }
 
   .progress-editor__fields,
-  .goal-detail__facts {
+  .goal-detail__primary-facts,
+  .goal-detail__data-notes dl {
     grid-template-columns: 1fr;
   }
 
-  .goal-detail__facts .is-wide {
+  .goal-detail__primary-facts .is-wide {
     grid-column: auto;
   }
 

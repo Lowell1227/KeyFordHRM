@@ -1323,7 +1323,7 @@ test.describe('09-performance-workspace tracking behavior', () => {
     };
     const detailResult = {
       ...listResult.items[0],
-      description: '跟进季度 GMV 达成情况',
+      description: 'realistic-demo-v1；销售、门店与B2B：跟进季度 GMV 达成情况',
       scoringStandard: '达到预算目标得满分',
       dataSource: '经营报表',
       dataCaliber: '财务确认口径',
@@ -1374,6 +1374,13 @@ test.describe('09-performance-workspace tracking behavior', () => {
     await expect(drawer).toContainText('完成季度预算的 100%');
     await expect(drawer).toContainText('有效权重 16%');
     await expect(drawer).toContainText('完成首轮投放');
+    await expect(drawer).toContainText('销售、门店与B2B：跟进季度 GMV 达成情况');
+    await expect(drawer).not.toContainText('realistic-demo-v1');
+    await expect(drawer.getByText('指标类型', { exact: true })).toHaveCount(0);
+    await expect(drawer.getByText('经营报表', { exact: true })).toBeHidden();
+    await drawer.getByRole('button', { name: '查看数据说明' }).click();
+    await expect(drawer.getByText('经营报表', { exact: true })).toBeVisible();
+    await expect(drawer.getByText('财务确认口径', { exact: true })).toBeVisible();
     await drawer.getByRole('button', { name: '更新进展' }).click();
 
     const form = drawer.getByTestId('goal-tracking-progress-form');
