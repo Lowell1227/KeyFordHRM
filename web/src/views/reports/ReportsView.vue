@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, watch, onMounted } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { reportsApi } from '@/api/reports.api';
 import { cyclesApi } from '@/api/cycles.api';
@@ -29,6 +30,7 @@ import type { PerfGrade, TaskStatus, CycleStatus } from '@/types/enums';
 import { TASK_STATUS_META } from '@/types/enums';
 import { GRADE_LABELS } from '@/utils/grade';
 import dayjs from 'dayjs';
+import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 
 const CYCLE_STATUS_LABELS: Record<CycleStatus, string> = {
   draft: '草稿',
@@ -45,6 +47,8 @@ const CYCLE_STATUS_LABELS: Record<CycleStatus, string> = {
 };
 
 const auth = useAuthStore();
+const route = useRoute();
+const router = useRouter();
 const { download: downloadExport, loading: exporting } = useExport({
   filename: 'reports-export.xlsx',
 });
@@ -85,6 +89,8 @@ const archiveLoading = ref(false);
 const archiveData = ref<EmployeeArchiveItem[]>([]);
 const userOptions = ref<User[]>([]);
 let userSearchTimer: number | undefined;
+let reportsReady = false;
+let reportCycleSyncing = false;
 
 const isAdminLike = computed(() => ['hr', 'system_admin'].includes(auth.user?.sysRole ?? ''));
 const canViewAdminTabs = computed(() => isAdminLike.value);
@@ -169,11 +175,25 @@ async function loadCycles() {
   try {
     const res = await cyclesApi.findAll({});
     cycles.value = res.items;
-    if (cycles.value.length > 0 && !selectedCycleId.value) {
-      selectedCycleId.value = cycles.value[0].id;
-    }
   } catch {
     cycles.value = [];
+  }
+}
+
+async function normalizeReportCycle() {
+  const requestedCycleId = typeof route.query.cycleId === 'string'
+    ? route.query.cycleId
+    : undefined;
+  const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+  cycles.value = resolved.orderedCycles;
+  selectedCycleId.value = resolved.selectedCycle?.id ?? '';
+
+  if (selectedCycleId.value && requestedCycleId !== selectedCycleId.value) {
+    await router.replace({ query: { ...route.query, cycleId: selectedCycleId.value } });
+  } else if (!selectedCycleId.value && requestedCycleId) {
+    const query = { ...route.query };
+    delete query.cycleId;
+    await router.replace({ query });
   }
 }
 
@@ -292,16 +312,51 @@ function onArchiveEmployeeChange(val: string) {
   loadArchive();
 }
 
-watch(selectedCycleId, () => {
-  summary.value = null;
-  progress.value = null;
-  gradeList.value = null;
-  if (activeTab.value === 'summary') loadSummary();
-  else if (activeTab.value === 'progress') loadProgress();
-  else if (activeTab.value === 'gradeList') loadGradeList();
-});
+async function loadActiveReport() {
+  if (!selectedCycleId.value) return;
+  if (activeTab.value === 'summary') await loadSummary();
+  else if (activeTab.value === 'progress') await loadProgress();
+  else if (activeTab.value === 'gradeList') await loadGradeList();
+}
+
+async function selectReportCycle(cycleId: string) {
+  if (!cycleId || cycleId === selectedCycleId.value) return;
+  await router.push({ query: { ...route.query, cycleId } });
+}
+
+watch(
+  () => route.query.cycleId,
+  async (cycleId) => {
+    if (!reportsReady) return;
+    const requestedCycleId = typeof cycleId === 'string' ? cycleId : undefined;
+    const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+    const canonicalCycleId = resolved.selectedCycle?.id ?? '';
+    if (canonicalCycleId && requestedCycleId !== canonicalCycleId) {
+      await router.replace({ query: { ...route.query, cycleId: canonicalCycleId } });
+      return;
+    }
+    if (!canonicalCycleId && requestedCycleId) {
+      const query = { ...route.query };
+      delete query.cycleId;
+      await router.replace({ query });
+      return;
+    }
+    if (selectedCycleId.value === canonicalCycleId) return;
+    reportCycleSyncing = true;
+    selectedCycleId.value = canonicalCycleId;
+    deptFilter.value = '';
+    archiveEmployeeId.value = '';
+    archiveData.value = [];
+    reportCycleSyncing = false;
+    summary.value = null;
+    progress.value = null;
+    gradeList.value = null;
+    await loadActiveReport();
+  },
+);
 
 watch(activeTab, (tab) => {
+  if (!reportsReady || !selectedCycleId.value) return;
   if (tab === 'summary') loadSummary();
   if (tab === 'progress') loadProgress();
   if (tab === 'gradeList') loadGradeList();
@@ -309,13 +364,18 @@ watch(activeTab, (tab) => {
 });
 
 watch(deptFilter, () => {
+  if (!reportsReady || reportCycleSyncing) return;
   loadSummary();
 });
 
-onMounted(() => {
-  loadCycles();
-  loadDepartments();
-  loadSummary();
+onMounted(async () => {
+  await Promise.all([loadCycles(), loadDepartments()]);
+  await normalizeReportCycle();
+  reportsReady = true;
+  summary.value = null;
+  progress.value = null;
+  gradeList.value = null;
+  await loadActiveReport();
 });
 </script>
 
@@ -326,12 +386,15 @@ onMounted(() => {
       <template #extra>
           <div class="header-tools">
             <el-select
-              v-model="selectedCycleId"
+              :model-value="selectedCycleId"
               data-testid="report-cycle-select"
-              placeholder="选择考核周期"
+              :placeholder="cycles.length ? '选择考核周期' : '暂无考核周期'"
               style="width: 280px"
               :loading="loading"
+              :disabled="cycles.length === 0"
+              @change="selectReportCycle"
             >
+              <el-option v-if="cycles.length === 0" label="暂无考核周期" value="" disabled />
               <el-option
                 v-for="cycle in cycles"
                 :key="cycle.id"

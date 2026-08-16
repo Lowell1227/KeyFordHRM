@@ -12,6 +12,7 @@ import EmptyState from '@/components/common/EmptyState.vue';
 import DonutScoreChart from '@/components/charts/DonutScoreChart.vue';
 import DeptResultChart from '@/components/charts/DeptResultChart.vue';
 import { getGradeLabel, getGradeStyle } from '@/utils/grade';
+import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 import {
   isTerminalTaskStatus,
   TASK_STATUS_STAGE,
@@ -277,7 +278,8 @@ function displayGrade(grade: PerfGrade | null): string {
 
 function pickDefaultCycle(items: AssessmentCycle[]): AssessmentCycle | undefined {
   const resultStatuses = ['published', 'appeal', 'closed'];
-  return items.find((cycle) => resultStatuses.includes(cycle.status)) ?? items[0];
+  const eligibleCycles = items.filter((cycle) => resultStatuses.includes(cycle.status));
+  return resolvePerformanceCycle(eligibleCycles).selectedCycle ?? undefined;
 }
 
 async function loadDashboardData() {
@@ -455,7 +457,9 @@ function avatarColor(name: string): string {
       <section class="dashboard-middle">
         <ChartCard :title="deptChartTitle">
           <template #extra>
-            <span class="cycle-name">{{ selectedCycle?.name || '暂无考核周期' }}</span>
+            <span class="cycle-name" data-testid="dashboard-result-cycle">
+              {{ selectedCycle?.name || '暂无考核周期' }}
+            </span>
           </template>
           <DeptResultChart :categories="deptCategories" :series="deptSeries" :height="deptChartHeight" />
         </ChartCard>

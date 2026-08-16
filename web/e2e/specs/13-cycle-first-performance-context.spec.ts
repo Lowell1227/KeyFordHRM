@@ -300,3 +300,145 @@ test.describe('cycle-first objective map contracts', () => {
     expect(treeCycles).toHaveLength(0);
   });
 });
+
+const emptyReportSummary = {
+  stats: {
+    total: 0,
+    grades: {
+      A: { count: 0, ratio: 0 },
+      B: { count: 0, ratio: 0 },
+      C: { count: 0, ratio: 0 },
+      D: { count: 0, ratio: 0 },
+    },
+  },
+  items: [],
+};
+
+async function authenticateCyclePage(
+  page: import('@playwright/test').Page,
+  role: 'manager' | 'hr',
+) {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'mock-report-cycle-token');
+    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+  });
+  await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse(0)),
+  }));
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      id: `${role}-1`,
+      name: `Cycle ${role}`,
+      deptId: 'dept-1',
+      deptName: 'Engineering',
+      sysRole: role,
+      isAssessorOnly: false,
+      canViewAll: role === 'hr',
+    })),
+  }));
+}
+
+async function mockReportCycleShell(
+  page: import('@playwright/test').Page,
+  cycleItems: AssessmentCycle[],
+  summaryCycles: string[],
+) {
+  await authenticateCyclePage(page, 'hr');
+  await page.route('**/api/v1/cycles**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      total: cycleItems.length,
+      page: 1,
+      pageSize: 100,
+      items: cycleItems,
+    })),
+  }));
+  await page.route('**/api/v1/departments**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([])),
+  }));
+  await page.route('**/api/v1/reports/cycle/*/summary**', (route) => {
+    const match = new URL(route.request().url()).pathname.match(/\/reports\/cycle\/([^/]+)\/summary/);
+    if (match?.[1]) summaryCycles.push(match[1]);
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(emptyReportSummary)),
+    });
+  });
+}
+
+test.describe('cycle-first report contracts', () => {
+  test.use({ baseURL: 'http://localhost:5173' });
+
+  test('canonicalizes one report cycle before loading summary data', async ({ page }) => {
+    const summaryCycles: string[] = [];
+    await mockReportCycleShell(page, [
+      cycle('current', '2026-07-01', '2026-09-30'),
+      cycle('past', '2026-01-01', '2026-03-31'),
+    ], summaryCycles);
+
+    await page.goto('/reports');
+
+    await expect(page).toHaveURL(/cycleId=current/);
+    await expect.poll(() => summaryCycles.length).toBe(1);
+    expect(summaryCycles).toEqual(['current']);
+  });
+
+  test('preserves a valid historical report cycle', async ({ page }) => {
+    const summaryCycles: string[] = [];
+    await mockReportCycleShell(page, [
+      cycle('current', '2026-07-01', '2026-09-30'),
+      cycle('past', '2026-01-01', '2026-03-31'),
+    ], summaryCycles);
+
+    await page.goto('/reports?cycleId=past');
+
+    await expect(page.getByTestId('report-cycle-select')).toContainText('past');
+    await expect.poll(() => summaryCycles.length).toBe(1);
+    expect(summaryCycles).toEqual(['past']);
+  });
+});
+
+test('management dashboard uses the nearest eligible result cycle', async ({ page }) => {
+  const summaryCycles: string[] = [];
+  await authenticateCyclePage(page, 'manager');
+  const cycleItems = [
+    { ...cycle('recent-result', '2026-04-01', '2026-06-30'), status: 'closed' as const },
+    { ...cycle('current-non-result', '2026-07-01', '2026-09-30'), status: 'self_eval' as const },
+    { ...cycle('current-result', '2026-07-15', '2026-09-15'), status: 'published' as const },
+  ];
+  await page.route('**/api/v1/cycles**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: cycleItems.length, page: 1, pageSize: 50, items: cycleItems })),
+  }));
+  await page.route('**/api/v1/tasks/mine**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
+  }));
+  await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      total: 0,
+      page: 1,
+      pageSize: 1,
+      items: [],
+      counts: { all: 0, notStarted: 0, pending: 0, completed: 0, exempted: 0 },
+      facets: { departments: [], employees: [] },
+    })),
+  }));
+  await page.route('**/api/v1/reports/cycle/*/summary**', (route) => {
+    const match = new URL(route.request().url()).pathname.match(/\/reports\/cycle\/([^/]+)\/summary/);
+    if (match?.[1]) summaryCycles.push(match[1]);
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(emptyReportSummary)),
+    });
+  });
+
+  await page.goto('http://localhost:5173/dashboard');
+
+  await expect(page.getByTestId('dashboard-result-cycle')).toHaveText('current-result');
+  expect(summaryCycles).toEqual(['current-result']);
+});
