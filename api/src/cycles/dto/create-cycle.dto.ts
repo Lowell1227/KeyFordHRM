@@ -6,6 +6,8 @@ import {
   IsDate,
   IsObject,
   IsNumber,
+  IsArray,
+  IsUUID,
   Min,
   Max,
 } from 'class-validator';
@@ -29,6 +31,35 @@ export class CreateCycleDto {
   @Type(() => Date)
   @IsDate()
   endDate: Date;
+
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  goalSettingOpenAt?: Date;
+
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  selfEvalOpenAt?: Date;
+
+  @IsOptional()
+  @IsUUID()
+  hrOwnerId?: string;
+
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  participantDeptIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  participantUserIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  explicitExemptUserIds?: string[];
 
   @IsOptional()
   @Type(() => Date)

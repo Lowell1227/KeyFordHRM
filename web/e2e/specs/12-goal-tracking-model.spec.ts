@@ -9,6 +9,13 @@ import {
   selectDefaultTrackingCycle,
   selectGoalTrackingCycles,
 } from '../../src/views/objectives/goal-tracking';
+import { getTaskStageState, TASK_STATUS_STAGE } from '../../src/views/task/task-stage';
+
+test('目标确认后该环节显示已完成，但不提前开放自评', () => {
+  expect(TASK_STATUS_STAGE.goal_confirmed).toBe('goal-confirmation');
+  expect(getTaskStageState(['goal_confirmed'])).toBe('completed');
+  expect(TASK_STATUS_STAGE.goal_confirmed).not.toBe('self-eval');
+});
 
 function makeCycle(
   id: string,

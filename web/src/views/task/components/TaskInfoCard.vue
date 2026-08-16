@@ -23,6 +23,9 @@ const weightTotal = computed(() => {
 
 const deadlineText = computed(() => {
   if (props.task.isExempt) return '已豁免';
+  if (props.task.workflowContext?.currentDeadline) {
+    return formatDate(props.task.workflowContext.currentDeadline);
+  }
   const cycle = props.cycle;
   if (!cycle) return '未设置';
 
@@ -32,6 +35,7 @@ const deadlineText = computed(() => {
     case 'indicator_reviewing':
     case 'indicator_setting':
     case 'indicator_confirming':
+    case 'goal_confirmed':
       value = cycle.deadlineIndicatorConfirm;
       break;
     case 'self_eval':

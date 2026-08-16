@@ -317,6 +317,8 @@ export interface AssessmentCycle {
   type: CycleType;
   startDate: string;
   endDate: string;
+  goalSettingOpenAt?: string;
+  selfEvalOpenAt?: string;
   deadlineIndicatorSetting?: string;
   deadlineIndicatorConfirm?: string;
   deadlineSelfEval?: string;
@@ -332,6 +334,29 @@ export interface AssessmentCycle {
   gradeCMaxRatio: number;
   gradeDMaxRatio: number;
   createdBy?: string;
+  hrOwnerId?: string;
+  hrOwner?: { id: string; name: string } | null;
+  participantDeptIds?: string[];
+  participantUserIds?: string[];
+  explicitExemptUserIds?: string[];
+  scheduledAt?: string;
+  scheduledById?: string;
+  openedAt?: string;
+  openedById?: string;
+  openSource?: 'manual' | 'scheduled';
+  launchBlockedAt?: string;
+  launchBlockedReason?: string;
+  snapshotCount?: number;
+  taskStats?: {
+    total: number;
+    unsubmitted: number;
+    pendingManagerReview: number;
+    pendingEmployeeConfirmation: number;
+    goalCompleted: number;
+    exempted: number;
+    overdue: number;
+    byStatus: Partial<Record<TaskStatus, number>>;
+  };
   publishedAt?: string;
   closedAt?: string;
   createdAt?: string;
@@ -354,6 +379,12 @@ export interface CreateCycleBody {
   type: CycleType;
   startDate: string;
   endDate: string;
+  goalSettingOpenAt?: string;
+  selfEvalOpenAt?: string;
+  hrOwnerId?: string;
+  participantDeptIds?: string[];
+  participantUserIds?: string[];
+  explicitExemptUserIds?: string[];
   deadlineIndicatorSetting?: string;
   deadlineIndicatorConfirm?: string;
   deadlineSelfEval?: string;
@@ -574,12 +605,52 @@ export interface TaskListItem extends AssessmentTask {
 }
 
 export interface TaskDetail extends AssessmentTask {
+  workflowContext?: TaskWorkflowContext;
   indicatorInstances: IndicatorInstance[];
   selfEvalSummary?: SelfEvalSummary;
   managerEvalSummary?: ManagerEvalSummary;
   gradeResult?: GradeResult;
   performanceInterview?: PerformanceInterview | null;
   flowRecords?: FlowRecord[];
+}
+
+export interface TaskWorkflowContext {
+  stage: 'goal_setting' | 'self_eval' | 'review' | 'result' | 'completed';
+  statusLabel: string;
+  currentHandler: {
+    id: string;
+    name: string;
+    nodeType: 'employee' | 'manager' | 'deptHead' | 'hr' | 'approver';
+  } | null;
+  currentDeadline: string | null;
+  canRemind: boolean;
+  reminderNodeType: 'employee' | 'manager' | 'deptHead' | 'hr' | 'approver' | null;
+  reminderAvailableAt: string | null;
+}
+
+export interface LaunchPreflightResult {
+  ready: boolean;
+  planHash: string | null;
+  cycle: Pick<AssessmentCycle, 'id' | 'name' | 'status' | 'goalSettingOpenAt'>;
+  participantCount: number;
+  templateCount: number;
+  participants: Array<{
+    employeeId: string;
+    employeeName: string;
+    deptId: string | null;
+    deptName: string | null;
+    managerId: string | null;
+    managerName: string | null;
+    deptHeadId: string | null;
+    approverId: string | null;
+    templateId: string;
+    templateName: string;
+    templateVersion: number;
+    isExempt: boolean;
+    exemptReason: string | null;
+  }>;
+  blockers: Array<{ code: string; message: string }>;
+  warnings: Array<{ code: string; message: string }>;
 }
 
 export interface TaskQuery {

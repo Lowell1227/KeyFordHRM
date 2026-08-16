@@ -261,6 +261,8 @@ export class TeamTasksService {
       deptName: task.dept?.name ?? null,
       managerId: task.managerId,
       status: task.status as TaskStatus,
+      isExempt: task.isExempt,
+      exemptReason: task.exemptReason,
       totalScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
       rawGrade: task.gradeResult?.rawGrade ?? null,
       updatedAt: task.updatedAt,

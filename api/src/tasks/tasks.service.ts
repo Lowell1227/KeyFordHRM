@@ -2,7 +2,7 @@ import { ConflictException, ForbiddenException, Injectable, Logger, NotFoundExce
 import { AssessmentTask, IndicatorVisibilityScope, ObjectiveLevel, Prisma, SysRole, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DataScopeService } from '@/common/services/data-scope.service';
-import { NotificationsService } from '@/notifications/notifications.service';
+import { NotificationsService, TaskReminderNodeType } from '@/notifications/notifications.service';
 import { AuthUser } from '@/common/types/auth.types';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { Paginated, paginated } from '@/common/dto/pagination.dto';
@@ -33,6 +33,8 @@ export interface TaskListItem {
   deptName: string | null;
   managerId: string | null;
   status: TaskStatus;
+  isExempt: boolean;
+  exemptReason: string | null;
   totalScore: number | null;
   rawGrade: string | null;
   updatedAt: Date;
@@ -40,6 +42,7 @@ export interface TaskListItem {
 
 /** 任务详情。 */
 export interface TaskDetail extends TaskListItem {
+  workflowContext: TaskWorkflowContext;
   managerScoredAt: Date | null;
   indicatorInstances: Array<{
     id: string;
@@ -133,6 +136,20 @@ export interface TaskDetail extends TaskListItem {
   }>;
 }
 
+export interface TaskWorkflowContext {
+  stage: 'goal_setting' | 'self_eval' | 'review' | 'result' | 'completed';
+  statusLabel: string;
+  currentHandler: {
+    id: string;
+    name: string;
+    nodeType: TaskReminderNodeType;
+  } | null;
+  currentDeadline: Date | null;
+  canRemind: boolean;
+  reminderNodeType: TaskReminderNodeType | null;
+  reminderAvailableAt: Date | null;
+}
+
 /** D18 默认可见字段（与 schema 默认值保持一致）。 */
 const DEFAULT_PUBLISH_VISIBLE_FIELDS: PublishVisibleFields = {
   total_score: true,
@@ -224,6 +241,8 @@ export class TasksService {
       deptName: t.dept?.name ?? null,
       managerId: t.managerId,
       status: t.status,
+      isExempt: t.isExempt,
+      exemptReason: t.exemptReason,
       totalScore: t.gradeResult?.calculatedScore?.toNumber() ?? null,
       rawGrade: t.gradeResult?.rawGrade ?? null,
       updatedAt: t.updatedAt,
@@ -269,6 +288,8 @@ export class TasksService {
       deptName: t.dept?.name ?? null,
       managerId: t.managerId,
       status: t.status,
+      isExempt: t.isExempt,
+      exemptReason: t.exemptReason,
       totalScore: t.gradeResult?.calculatedScore?.toNumber() ?? null,
       rawGrade: t.gradeResult?.rawGrade ?? null,
       updatedAt: t.updatedAt,
@@ -291,6 +312,9 @@ export class TasksService {
       include: {
         employee: { select: { name: true } },
         dept: { select: { name: true } },
+        manager: { select: { id: true, name: true } },
+        deptHead: { select: { id: true, name: true } },
+        approver: { select: { id: true, name: true } },
         indicatorInstances: {
           orderBy: { sortOrder: 'asc' },
           include: {
@@ -315,7 +339,23 @@ export class TasksService {
           orderBy: { createdAt: 'desc' },
           include: { actor: { select: { name: true } } },
         },
-        cycle: { select: { publishVisibleFields: true } },
+        cycle: {
+          select: {
+            name: true,
+            hrOwnerId: true,
+            hrOwner: { select: { id: true, name: true } },
+            publishVisibleFields: true,
+            selfEvalOpenAt: true,
+            deadlineIndicatorSetting: true,
+            deadlineIndicatorConfirm: true,
+            deadlineSelfEval: true,
+            deadlineManagerScore: true,
+            deadlineHrCalibration: true,
+            deadlineApproval: true,
+            deadlinePublish: true,
+            deadlineAppeal: true,
+          },
+        },
       },
     });
 
@@ -334,6 +374,7 @@ export class TasksService {
     ];
     const visibleObjectives = await this.objectivesService.findVisibleByIds(alignedObjectiveIds, viewer);
     const detail = this.buildTaskDetail(task, new Set(visibleObjectives.map((objective) => objective.id)));
+    detail.workflowContext = await this.buildWorkflowContext(task, viewer);
 
     // D18：员工本人需区分公示前/公示后
     const isEmployee = viewer.id === task.employeeId;
@@ -351,6 +392,34 @@ export class TasksService {
     return detail;
   }
 
+  /** 催办当前非本人处理的环节，节点与收件人由后端根据任务状态唯一确定。 */
+  async remindCurrentHandler(
+    id: string,
+    viewer: AuthUser,
+  ): Promise<{ sent: true; nodeType: TaskReminderNodeType }> {
+    const task = await this.getTaskOrThrow(id, {
+      cycle: { select: { hrOwnerId: true, hrOwner: { select: { id: true, name: true } } } },
+    }) as AssessmentTask & { cycle: { hrOwnerId: string | null; hrOwner: { id: string; name: string } | null } };
+    this.assertCanView(task, viewer);
+
+    const target = this.resolveReminderTarget(task);
+    if (!target) {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: '当前状态无可催办处理人',
+      });
+    }
+    if (!this.canViewerRemind(task, viewer, target.nodeType, target.handlerId)) {
+      throw new ForbiddenException({
+        code: ERROR_CODE.FORBIDDEN,
+        message: '无权催办该环节或不能催办自己',
+      });
+    }
+
+    await this.notificationsService.sendTaskReminder(id, target.nodeType, viewer.id);
+    return { sent: true, nodeType: target.nodeType };
+  }
+
   /** POST /tasks/:id/indicators/confirm */
   async confirmIndicators(id: string, viewer: AuthUser): Promise<{ id: string; status: TaskStatus }> {
     const task = await this.getTaskOrThrow(id);
@@ -362,12 +431,20 @@ export class TasksService {
       });
     }
 
+    const cycle = await this.prisma.assessmentCycle.findUnique({
+      where: { id: task.cycleId },
+      select: { selfEvalOpenAt: true },
+    });
+    const now = new Date();
+    const targetStatus: TaskStatus = !cycle?.selfEvalOpenAt || cycle.selfEvalOpenAt <= now
+      ? 'self_eval'
+      : 'goal_confirmed';
     const result = await this.flowService.transition({
       task,
       action: 'submit',
-      targetStatus: 'self_eval',
+      targetStatus,
       actorId: viewer.id,
-      taskUpdate: { indicatorConfirmedAt: new Date() },
+      taskUpdate: { indicatorConfirmedAt: now },
     });
 
     await this.notificationsService.create({
@@ -376,8 +453,10 @@ export class TasksService {
       cycleId: task.cycleId,
       taskId: task.id,
       type: 'indicator_confirmed',
-      title: '指标已确认，请进行自评',
-      content: '您的考核指标已确认，请及时完成自评。',
+      title: targetStatus === 'self_eval' ? '指标已确认，请进行自评' : '指标已确认',
+      content: targetStatus === 'self_eval'
+        ? '您的考核指标已确认，请及时完成自评。'
+        : '您的考核指标已确认，自评将在规定时间开放。',
     });
 
     return { id: task.id, status: result.newStatus };
@@ -677,6 +756,14 @@ export class TasksService {
   async submitSelfEval(id: string, dto: SubmitSelfEvalDto, viewer: AuthUser): Promise<{ id: string; status: TaskStatus }> {
     const task = await this.getTaskOrThrow(id, { snapshot: { select: { snapshotData: true } } });
     this.assertEmployee(task, viewer);
+    if (task.status !== 'self_eval') {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: task.status === 'goal_confirmed'
+          ? '自评尚未开放，请在开放时间后操作'
+          : '当前状态不允许提交自评',
+      });
+    }
 
     const snapshotData = (task.snapshot?.snapshotData ?? {}) as { maxScore?: number };
     const maxScore = typeof snapshotData.maxScore === 'number' ? snapshotData.maxScore : 100;
@@ -1287,14 +1374,14 @@ export class TasksService {
     title: string,
     content: string,
   ): Promise<void> {
-    // 先尝试通知周期创建人
+    // 通知周期明确指定的 HR 负责人。
     const cycle = await this.prisma.assessmentCycle.findUnique({
       where: { id: task.cycleId },
-      select: { createdBy: true },
+      select: { hrOwnerId: true },
     });
-    if (cycle?.createdBy) {
+    if (cycle?.hrOwnerId) {
       await this.notificationsService.create({
-        userId: cycle.createdBy,
+        userId: cycle.hrOwnerId,
         senderId: sender.id,
         cycleId: task.cycleId,
         taskId: task.id,
@@ -1409,10 +1496,21 @@ export class TasksService {
       deptName: task.dept?.name ?? null,
       managerId: task.managerId,
       status: task.status,
+      isExempt: task.isExempt,
+      exemptReason: task.exemptReason,
       managerScoredAt: task.managerScoredAt,
       totalScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
       rawGrade: task.gradeResult?.rawGrade ?? null,
       updatedAt: task.updatedAt,
+      workflowContext: {
+        stage: 'goal_setting',
+        statusLabel: '',
+        currentHandler: null,
+        currentDeadline: null,
+        canRemind: false,
+        reminderNodeType: null,
+        reminderAvailableAt: null,
+      },
       indicatorInstances: task.indicatorInstances.map((ind: any) => ({
         id: ind.id,
         name: ind.name,
@@ -1514,6 +1612,135 @@ export class TasksService {
         createdAt: fr.createdAt,
       })),
     };
+  }
+
+  private async buildWorkflowContext(task: any, viewer: AuthUser): Promise<TaskWorkflowContext> {
+    const target = this.resolveReminderTarget(task);
+    const canRemind = Boolean(
+      target && this.canViewerRemind(task, viewer, target.nodeType, target.handlerId),
+    );
+    const reminderAvailableAt = canRemind && target
+      ? await this.notificationsService.getReminderCooldownUntil(
+          task.id,
+          target.nodeType,
+          target.handlerId,
+        )
+      : null;
+
+    const statusLabels: Partial<Record<TaskStatus, string>> = {
+      pending: '待开始',
+      indicator_drafting: '待制定目标',
+      indicator_reviewing: '待主管审核目标',
+      indicator_setting: '目标制定中',
+      indicator_confirming: '待员工确认目标',
+      goal_confirmed: '目标已确认，待自评开放',
+      self_eval: '待员工自评',
+      manager_scoring: '待主管评估',
+      dept_review: '待部门复核',
+      hr_calibration: '待 HR 校准',
+      approval: '待审批',
+      published: '结果已发布，待员工确认',
+      confirmed: '结果已确认',
+      appealing: '申诉处理中',
+      closed: '已完成',
+      exempted: '已豁免',
+    };
+
+    return {
+      stage: this.resolveBusinessStage(task.status),
+      statusLabel: statusLabels[task.status as TaskStatus] ?? task.status,
+      currentHandler: target
+        ? {
+            id: target.handlerId,
+            name: this.resolveHandlerName(task, target.nodeType),
+            nodeType: target.nodeType,
+          }
+        : null,
+      currentDeadline: this.resolveCurrentDeadline(task),
+      canRemind,
+      reminderNodeType: target?.nodeType ?? null,
+      reminderAvailableAt,
+    };
+  }
+
+  private resolveReminderTarget(
+    task: Pick<AssessmentTask, 'status' | 'employeeId' | 'managerId' | 'deptHeadId' | 'approverId'> & {
+      cycle?: { hrOwnerId?: string | null };
+    },
+  ): { nodeType: TaskReminderNodeType; handlerId: string } | null {
+    const mapping: Partial<Record<TaskStatus, TaskReminderNodeType>> = {
+      indicator_drafting: 'employee',
+      indicator_reviewing: 'manager',
+      indicator_setting: 'manager',
+      indicator_confirming: 'employee',
+      self_eval: 'employee',
+      manager_scoring: 'manager',
+      dept_review: 'deptHead',
+      hr_calibration: 'hr',
+      approval: 'approver',
+      published: 'employee',
+      appealing: 'deptHead',
+    };
+    const nodeType = mapping[task.status];
+    if (!nodeType) return null;
+    const handlerId = nodeType === 'employee'
+      ? task.employeeId
+      : nodeType === 'manager'
+        ? task.managerId
+        : nodeType === 'deptHead'
+          ? task.deptHeadId
+          : nodeType === 'hr'
+            ? task.cycle?.hrOwnerId ?? null
+            : task.approverId;
+    return handlerId ? { nodeType, handlerId } : null;
+  }
+
+  private canViewerRemind(
+    task: Pick<AssessmentTask, 'employeeId' | 'managerId' | 'deptHeadId'>,
+    viewer: AuthUser,
+    nodeType: TaskReminderNodeType,
+    handlerId: string,
+  ): boolean {
+    if (handlerId === viewer.id) return false;
+    if (viewer.sysRole === SysRole.hr || viewer.sysRole === SysRole.system_admin) return true;
+    if (viewer.id === task.employeeId) return true;
+    if (viewer.id === task.managerId) return nodeType === 'employee';
+    return viewer.id === task.deptHeadId;
+  }
+
+  private resolveHandlerName(task: any, nodeType: TaskReminderNodeType): string {
+    if (nodeType === 'employee') return task.employee?.name ?? '员工';
+    if (nodeType === 'manager') return task.manager?.name ?? '直属主管';
+    if (nodeType === 'deptHead') return task.deptHead?.name ?? '部门负责人';
+    if (nodeType === 'hr') return task.cycle?.hrOwner?.name ?? 'HR 负责人';
+    return task.approver?.name ?? '审批人';
+  }
+
+  private resolveBusinessStage(status: TaskStatus): TaskWorkflowContext['stage'] {
+    if (['pending', 'indicator_drafting', 'indicator_reviewing', 'indicator_setting', 'indicator_confirming', 'goal_confirmed'].includes(status)) return 'goal_setting';
+    if (status === 'self_eval') return 'self_eval';
+    if (['manager_scoring', 'dept_review', 'hr_calibration', 'approval'].includes(status)) return 'review';
+    if (['published', 'appealing'].includes(status)) return 'result';
+    return 'completed';
+  }
+
+  private resolveCurrentDeadline(task: any): Date | null {
+    const cycle = task.cycle ?? {};
+    const deadlines: Partial<Record<TaskStatus, Date | null | undefined>> = {
+      indicator_drafting: cycle.deadlineIndicatorSetting,
+      indicator_reviewing: cycle.deadlineIndicatorSetting,
+      indicator_setting: cycle.deadlineIndicatorSetting,
+      indicator_confirming: cycle.deadlineIndicatorConfirm,
+      goal_confirmed: cycle.selfEvalOpenAt,
+      self_eval: cycle.deadlineSelfEval,
+      manager_scoring: cycle.deadlineManagerScore,
+      dept_review: cycle.deadlineHrCalibration,
+      hr_calibration: cycle.deadlineHrCalibration,
+      approval: cycle.deadlineApproval,
+      published: cycle.deadlinePublish,
+      appealing: cycle.deadlineAppeal,
+    };
+    return deadlines[task.status as TaskStatus] ?? null;
   }
 
   private parsePublishVisibleFields(value: Prisma.JsonValue): PublishVisibleFields {

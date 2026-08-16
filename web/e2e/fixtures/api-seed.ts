@@ -123,5 +123,8 @@ export async function getTaskByEmployee(cycleId: string, employeeNo: string, hrT
 }
 
 export async function launchCycle(cycleId: string, hrToken: string) {
-  return api('POST', `/cycles/${cycleId}/launch`, hrToken);
+  const checked = await api('GET', `/cycles/${cycleId}/preflight`, hrToken);
+  return api('POST', `/cycles/${cycleId}/launch`, hrToken, {
+    expectedPlanHash: checked.data.planHash,
+  });
 }

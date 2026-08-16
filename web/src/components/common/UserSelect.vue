@@ -6,7 +6,7 @@
 import { ref, watch, onMounted } from 'vue';
 import { usersApi } from '@/api/users.api';
 import type { User } from '@/types/api.types';
-import type { UserStatus } from '@/types/enums';
+import type { SysRole, UserStatus } from '@/types/enums';
 
 const props = withDefaults(
   defineProps<{
@@ -14,6 +14,7 @@ const props = withDefaults(
     multiple?: boolean;
     placeholder?: string;
     status?: UserStatus;
+    sysRole?: SysRole;
     disabledIds?: string[];
     clearable?: boolean;
   }>(),
@@ -41,7 +42,13 @@ function mergeOptions(list: User[]) {
 async function search(keyword: string) {
   loading.value = true;
   try {
-    const res = await usersApi.findAll({ page: 1, pageSize: 50, keyword: keyword || undefined, status: props.status });
+    const res = await usersApi.findAll({
+      page: 1,
+      pageSize: 50,
+      keyword: keyword || undefined,
+      status: props.status,
+      sysRole: props.sysRole,
+    });
     mergeOptions(res.items);
   } catch {
     /* 错误由 http 拦截器处理 */

@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common';
 import { SchedulerService } from './scheduler.service';
+import { CyclesModule } from '@/cycles/cycles.module';
 
 /**
  * 定时任务模块。
@@ -7,6 +8,7 @@ import { SchedulerService } from './scheduler.service';
  * 与全局 provider：DingtalkSyncService、NotificationsService、PrismaService。
  */
 @Module({
+  imports: [CyclesModule],
   providers: [SchedulerService],
   exports: [SchedulerService],
 })

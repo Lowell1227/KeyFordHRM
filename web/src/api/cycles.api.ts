@@ -7,6 +7,7 @@ import type {
   UpdateDeadlinesBody,
   PublishResultsBody,
   PublishResultsResult,
+  LaunchPreflightResult,
 } from '@/types/api.types';
 
 function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
@@ -25,6 +26,11 @@ export const cyclesApi = {
   /** GET /cycles — 查询周期列表（hr/system_admin/vp/chairman 可访问） */
   findAll(query?: CycleQuery): Promise<Paginated<AssessmentCycle>> {
     return apiGet('/cycles', query as Record<string, unknown>);
+  },
+
+  /** GET /cycles/mine — 已开放且包含本人任务的周期 */
+  findMine(): Promise<AssessmentCycle[]> {
+    return apiGet('/cycles/mine');
   },
 
   /** GET /cycles/:id — 周期详情 */
@@ -49,8 +55,26 @@ export const cyclesApi = {
    * POST /cycles/:id/launch — 发起周期。
    * 会为全员生成考核任务并绑定模板快照，可能耗时较长，调用方需加 loading。
    */
-  launch(id: string): Promise<AssessmentCycle> {
-    return apiPost(`/cycles/${id}/launch`);
+  launch(id: string, body: { expectedPlanHash: string; overrideReason?: string }): Promise<AssessmentCycle> {
+    return apiPost(`/cycles/${id}/launch`, body);
+  },
+
+  preflight(id: string): Promise<LaunchPreflightResult> {
+    return apiGet(`/cycles/${id}/preflight`);
+  },
+
+  schedule(id: string, expectedPlanHash: string): Promise<{
+    cycleId: string;
+    status: 'scheduled';
+    goalSettingOpenAt: string | null;
+    participantCount: number;
+    templateCount: number;
+  }> {
+    return apiPost(`/cycles/${id}/schedule`, { expectedPlanHash });
+  },
+
+  cancelSchedule(id: string): Promise<AssessmentCycle> {
+    return apiPost(`/cycles/${id}/schedule/cancel`);
   },
 
   /** POST /cycles/:id/publish — HR 批量公示结果 */

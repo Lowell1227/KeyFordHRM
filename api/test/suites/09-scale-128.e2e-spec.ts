@@ -10,6 +10,11 @@ describe("09-scale-128", () => {
   let factory: FixtureFactory;
   let launchService: LaunchService;
 
+  async function launchChecked(cycleId: string, operator: Parameters<LaunchService['launch']>[1]) {
+    const checked = await launchService.preflight(cycleId);
+    return launchService.launch(cycleId, operator, { expectedPlanHash: checked.planHash! });
+  }
+
   beforeAll(async () => {
     app = await buildTestApp();
     factory = new FixtureFactory(app.prisma);
@@ -60,7 +65,7 @@ describe("09-scale-128", () => {
     });
 
     const start = Date.now();
-    const result = await launchService.launch(cycle.id, {
+    const result = await launchChecked(cycle.id, {
       id: hr.id,
       name: "HR",
       sysRole: SysRole.hr,
@@ -95,7 +100,7 @@ describe("09-scale-128", () => {
       createdBy: hr.id,
       status: CycleStatus.draft,
     });
-    await launchService.launch(cycle.id, {
+    await launchChecked(cycle.id, {
       id: hr.id,
       name: "HR",
       sysRole: SysRole.hr,

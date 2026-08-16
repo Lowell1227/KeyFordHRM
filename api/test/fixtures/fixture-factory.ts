@@ -267,6 +267,7 @@ export class FixtureFactory {
         deadlinePublish: input.deadlinePublish ?? null,
         deadlineAppeal: input.deadlineAppeal ?? null,
         createdBy: input.createdBy,
+        hrOwnerId: input.createdBy,
         gradeAMaxRatio: new Prisma.Decimal(input.gradeAMaxRatio ?? 0.2),
         gradeBMaxRatio: new Prisma.Decimal(input.gradeBMaxRatio ?? 0.4),
         gradeCMaxRatio: new Prisma.Decimal(input.gradeCMaxRatio ?? 0.3),
@@ -286,6 +287,7 @@ export class FixtureFactory {
 
   async launchCycle(cycleId: string, operatorId: string, launchService?: LaunchService) {
     if (launchService) {
+      const checked = await launchService.preflight(cycleId);
       return launchService.launch(cycleId, {
         id: operatorId,
         name: 'operator',
@@ -293,7 +295,7 @@ export class FixtureFactory {
         deptId: null,
         isAssessorOnly: false,
         canViewAll: false,
-      });
+      }, { expectedPlanHash: checked.planHash! });
     }
 
     return this.prisma.assessmentCycle.update({

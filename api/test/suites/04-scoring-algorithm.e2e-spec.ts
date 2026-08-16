@@ -10,6 +10,11 @@ describe("04-scoring-algorithm", () => {
   let factory: FixtureFactory;
   let launchService: LaunchService;
 
+  async function launchChecked(cycleId: string, operator: Parameters<LaunchService['launch']>[1]) {
+    const checked = await launchService.preflight(cycleId);
+    return launchService.launch(cycleId, operator, { expectedPlanHash: checked.planHash! });
+  }
+
   beforeAll(async () => {
     app = await buildTestApp();
     factory = new FixtureFactory(app.prisma);
@@ -90,7 +95,7 @@ describe("04-scoring-algorithm", () => {
       createdBy: hrId,
       status: CycleStatus.draft,
     });
-    await launchService.launch(cycle.id, {
+    await launchChecked(cycle.id, {
       id: hrId,
       name: "HR",
       sysRole: SysRole.hr,
@@ -133,10 +138,10 @@ describe("04-scoring-algorithm", () => {
   }
 
   it("算分=82：A90 B80 C70 + bonus5 - penalty2", async () => {
-    const { hr, manager, employee } = await createRoleSet();
+    const { dept, hr, manager, employee } = await createRoleSet();
     const { task } = await launchCycleForEmployee(
       hr.id,
-      (await factory.getSeedDept()).id,
+      dept.id,
       employee.id,
     );
 
@@ -191,10 +196,10 @@ describe("04-scoring-algorithm", () => {
   });
 
   it("一票否决→等级D（不看分）", async () => {
-    const { hr, manager, employee } = await createRoleSet();
+    const { dept, hr, manager, employee } = await createRoleSet();
     const { task } = await launchCycleForEmployee(
       hr.id,
-      (await factory.getSeedDept()).id,
+      dept.id,
       employee.id,
     );
 
@@ -257,7 +262,7 @@ describe("04-scoring-algorithm", () => {
       createdBy: hr.id,
       status: CycleStatus.draft,
     });
-    const launchResult = await launchService.launch(cycle.id, {
+    const launchResult = await launchChecked(cycle.id, {
       id: hr.id,
       name: "HR",
       sysRole: SysRole.hr,
@@ -310,7 +315,7 @@ describe("04-scoring-algorithm", () => {
       status: CycleStatus.draft,
       gradeAMaxRatio: 0.2,
     });
-    await launchService.launch(cycle.id, {
+    await launchChecked(cycle.id, {
       id: hr.id,
       name: "HR",
       sysRole: SysRole.hr,

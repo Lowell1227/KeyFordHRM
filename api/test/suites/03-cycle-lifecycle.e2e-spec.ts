@@ -10,6 +10,11 @@ describe("03-cycle-lifecycle", () => {
   let factory: FixtureFactory;
   let launchService: LaunchService;
 
+  async function launchChecked(cycleId: string, operator: Parameters<LaunchService['launch']>[1]) {
+    const checked = await launchService.preflight(cycleId);
+    return launchService.launch(cycleId, operator, { expectedPlanHash: checked.planHash! });
+  }
+
   beforeAll(async () => {
     app = await buildTestApp();
     factory = new FixtureFactory(app.prisma);
@@ -97,7 +102,7 @@ describe("03-cycle-lifecycle", () => {
       deadlinePublish: new Date("2026-02-15"),
     });
 
-    const launchResult = await launchService.launch(cycle.id, {
+    const launchResult = await launchChecked(cycle.id, {
       id: hrId,
       name: "HR",
       sysRole: SysRole.hr,

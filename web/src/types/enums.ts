@@ -12,6 +12,8 @@ export type CycleType = 'quarterly' | 'monthly' | 'annual' | 'probation' | 'cust
 
 export type CycleStatus =
   | 'draft'
+  | 'scheduled'
+  | 'launch_blocked'
   | 'indicator_setting'
   | 'self_eval'
   | 'manager_score'
@@ -27,6 +29,7 @@ export type TaskStatus =
   | 'indicator_reviewing'
   | 'indicator_setting'
   | 'indicator_confirming'
+  | 'goal_confirmed'
   | 'self_eval'
   | 'manager_scoring'
   | 'dept_review'
@@ -138,6 +141,7 @@ export const TASK_STATUS_META: Record<TaskStatus, { label: string; type: string 
   indicator_reviewing: { label: '待主管审核指标', type: 'warning' },
   indicator_setting: { label: '指标制定中', type: 'warning' },
   indicator_confirming: { label: '待员工确认指标', type: 'warning' },
+  goal_confirmed: { label: '目标已确认', type: 'success' },
   self_eval: { label: '员工自评中', type: 'primary' },
   manager_scoring: { label: '主管评分中', type: 'primary' },
   dept_review: { label: '部门审核中', type: 'primary' },

@@ -3,12 +3,14 @@ import { SchedulerService } from './scheduler.service';
 import { DingtalkSyncService } from '@/dingtalk/dingtalk-sync.service';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { PrismaService } from '@/prisma/prisma.service';
+import { LaunchService } from '@/cycles/launch.service';
 
 describe('SchedulerService', () => {
   let service: SchedulerService;
   let dingtalkSyncService: jest.Mocked<DingtalkSyncService>;
   let notificationsService: jest.Mocked<NotificationsService>;
   let prisma: any;
+  let launchService: { launch: jest.Mock };
 
   beforeEach(async () => {
     const dingtalkSyncMock = {
@@ -17,6 +19,7 @@ describe('SchedulerService', () => {
 
     const notificationsMock = {
       sendBatchReminders: jest.fn().mockResolvedValue([]),
+      create: jest.fn().mockResolvedValue({ id: 'notification-1' }),
     } as unknown as jest.Mocked<NotificationsService>;
 
     prisma = {
@@ -34,6 +37,7 @@ describe('SchedulerService', () => {
       performanceArchive: { upsert: jest.fn() },
       $transaction: jest.fn(async (fn: (tx: any) => Promise<unknown>, _options?: unknown) => fn(prisma)),
     };
+    launchService = { launch: jest.fn().mockResolvedValue({ activeTasks: 1 }) };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -41,6 +45,7 @@ describe('SchedulerService', () => {
         { provide: DingtalkSyncService, useValue: dingtalkSyncMock },
         { provide: NotificationsService, useValue: notificationsMock },
         { provide: PrismaService, useValue: prisma },
+        { provide: LaunchService, useValue: launchService },
       ],
     }).compile();
 
@@ -286,6 +291,68 @@ describe('SchedulerService', () => {
         where: { id: cycleId },
         data: { status: 'closed', closedAt: expect.any(Date) },
       });
+    });
+  });
+
+  describe('quarter opening orchestration', () => {
+    it('opens every scheduled cycle whose goal-setting opening time has arrived', async () => {
+      const now = new Date('2026-12-22T09:00:00.000Z');
+      jest.useFakeTimers().setSystemTime(now);
+      prisma.assessmentCycle.findMany.mockResolvedValue([{
+        id: 'cycle-q1',
+        scheduledById: '11111111-1111-4111-8111-111111111111',
+      }]);
+
+      await (service as unknown as { runScheduledCycleOpenings: () => Promise<void> })
+        .runScheduledCycleOpenings();
+
+      expect(launchService.launch).toHaveBeenCalledWith(
+        'cycle-q1',
+        expect.objectContaining({ id: '11111111-1111-4111-8111-111111111111' }),
+        { source: 'scheduled', now },
+      );
+      jest.useRealTimers();
+    });
+
+    it('opens self evaluation only for goal-confirmed tasks when its opening time arrives', async () => {
+      const now = new Date('2027-04-01T00:00:00.000Z');
+      jest.useFakeTimers().setSystemTime(now);
+      prisma.assessmentCycle.findMany.mockResolvedValue([{ id: 'cycle-q1' }]);
+
+      await (service as unknown as { runSelfEvalOpenings: () => Promise<void> })
+        .runSelfEvalOpenings();
+
+      expect(prisma.assessmentTask.updateMany).toHaveBeenCalledWith({
+        where: { cycleId: 'cycle-q1', status: 'goal_confirmed' },
+        data: { status: 'self_eval' },
+      });
+      expect(prisma.assessmentCycle.update).toHaveBeenCalledWith({
+        where: { id: 'cycle-q1' },
+        data: { status: 'self_eval' },
+      });
+      jest.useRealTimers();
+    });
+
+    it('notifies the assigned HR owner when an automatic opening becomes blocked', async () => {
+      const now = new Date('2026-12-22T09:00:00.000Z');
+      jest.useFakeTimers().setSystemTime(now);
+      prisma.assessmentCycle.findMany.mockResolvedValue([{
+        id: 'cycle-q1',
+        scheduledById: 'scheduler-operator',
+        hrOwnerId: 'hr-owner-1',
+      }]);
+      launchService.launch.mockRejectedValue(new Error('template drift'));
+      prisma.assessmentCycle.updateMany.mockResolvedValue({ count: 1 });
+      prisma.auditLog = { create: jest.fn() };
+
+      await service.runScheduledCycleOpenings();
+
+      expect(notificationsService.create).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'hr-owner-1',
+        cycleId: 'cycle-q1',
+        type: 'cycle_launch_blocked',
+      }));
+      jest.useRealTimers();
     });
   });
 });

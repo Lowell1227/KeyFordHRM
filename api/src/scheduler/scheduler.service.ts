@@ -4,6 +4,8 @@ import { AssessmentCycle, CycleStatus, Prisma, TaskStatus } from '@prisma/client
 import { PrismaService } from '@/prisma/prisma.service';
 import { NotificationsService, TaskReminderNodeType } from '@/notifications/notifications.service';
 import { DingtalkSyncService } from '@/dingtalk/dingtalk-sync.service';
+import { LaunchService } from '@/cycles/launch.service';
+import { AuthUser } from '@/common/types/auth.types';
 
 /** 进行中的周期状态（draft/closed 除外）。 */
 const ACTIVE_CYCLE_STATUSES: CycleStatus[] = [
@@ -62,7 +64,28 @@ export class SchedulerService {
     private readonly dingtalkSyncService: DingtalkSyncService,
     private readonly notificationsService: NotificationsService,
     private readonly prisma: PrismaService,
+    private readonly launchService: LaunchService,
   ) {}
+
+  /** 每 5 分钟检查预约开放的绩效周期。 */
+  @Cron('*/5 * * * *')
+  async openScheduledCycles(): Promise<void> {
+    try {
+      await this.runScheduledCycleOpenings();
+    } catch (err) {
+      this.logger.error('预约开放绩效周期定时任务异常', err);
+    }
+  }
+
+  /** 每 5 分钟检查自评开放时间。 */
+  @Cron('*/5 * * * *')
+  async openSelfEvaluations(): Promise<void> {
+    try {
+      await this.runSelfEvalOpenings();
+    } catch (err) {
+      this.logger.error('开放绩效自评定时任务异常', err);
+    }
+  }
 
   /** 02:00 钉钉组织同步。 */
   @Cron('0 2 * * *')
@@ -170,6 +193,89 @@ export class SchedulerService {
       } catch (err) {
         this.logger.error(`周期 ${cycle.id} 自动关闭失败`, err);
       }
+    }
+  }
+
+  async runScheduledCycleOpenings(): Promise<void> {
+    const now = new Date();
+    const cycles = await this.prisma.assessmentCycle.findMany({
+      where: {
+        status: 'scheduled',
+        goalSettingOpenAt: { lte: now },
+      },
+      select: { id: true, scheduledById: true, hrOwnerId: true },
+    });
+
+    for (const cycle of cycles) {
+      const operator = {
+        id: cycle.scheduledById ?? '00000000-0000-4000-8000-000000000000',
+        name: '系统定时任务',
+        sysRole: 'system_admin',
+        deptId: null,
+        isAssessorOnly: true,
+        canViewAll: true,
+      } as AuthUser;
+      try {
+        await this.launchService.launch(cycle.id, operator, { source: 'scheduled', now });
+        this.logger.log(`周期 ${cycle.id} 已按预约开放目标制定`);
+      } catch (error) {
+        const blocked = await this.prisma.$transaction(async (tx) => {
+          const result = await tx.assessmentCycle.updateMany({
+            where: { id: cycle.id, status: 'scheduled', openedAt: null },
+            data: {
+              status: 'launch_blocked',
+              launchBlockedAt: now,
+              launchBlockedReason: this.errorMessage(error),
+            },
+          });
+          if (result.count === 1) {
+            await tx.auditLog.create({
+              data: {
+                userId: cycle.scheduledById,
+                action: 'cycle_goal_setting_open_failed',
+                entityType: 'assessment_cycle',
+                entityId: cycle.id,
+                newValue: { reason: this.errorMessage(error), blockedAt: now.toISOString() },
+              },
+            });
+          }
+          return result;
+        });
+        if (blocked.count === 1 && cycle.hrOwnerId) {
+          await this.notificationsService.create({
+            userId: cycle.hrOwnerId,
+            cycleId: cycle.id,
+            type: 'cycle_launch_blocked',
+            title: '季度目标开放受阻',
+            content: `预约开放未完成：${this.errorMessage(error)}。请重新执行开放检查。`,
+          });
+        }
+        this.logger.error(`周期 ${cycle.id} 预约开放受阻`, error);
+      }
+    }
+  }
+
+  async runSelfEvalOpenings(): Promise<void> {
+    const now = new Date();
+    const cycles = await this.prisma.assessmentCycle.findMany({
+      where: {
+        status: 'indicator_setting',
+        selfEvalOpenAt: { lte: now },
+      },
+      select: { id: true },
+    });
+
+    for (const cycle of cycles) {
+      await this.prisma.$transaction(async (tx) => {
+        await tx.assessmentTask.updateMany({
+          where: { cycleId: cycle.id, status: 'goal_confirmed' },
+          data: { status: 'self_eval' },
+        });
+        await tx.assessmentCycle.update({
+          where: { id: cycle.id },
+          data: { status: 'self_eval' },
+        });
+      });
     }
   }
 
@@ -337,5 +443,16 @@ export class SchedulerService {
     const d = new Date(date);
     d.setHours(0, 0, 0, 0);
     return d;
+  }
+
+  private errorMessage(error: unknown): string {
+    if (error && typeof error === 'object' && 'getResponse' in error) {
+      const response = (error as { getResponse: () => unknown }).getResponse();
+      if (response && typeof response === 'object' && 'message' in response) {
+        return String(response.message);
+      }
+      return String(response);
+    }
+    return error instanceof Error ? error.message : '开放检查失败';
   }
 }

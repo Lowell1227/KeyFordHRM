@@ -542,22 +542,23 @@ async function mockTaskWorkspaceIdentity(page: import('@playwright/test').Page, 
       canViewAll: false,
     })),
   }));
-  await page.route('**/api/v1/cycles**', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify(apiResponse({
-      total: 1,
-      page: 1,
-      pageSize: 50,
-      items: [{
+  await page.route('**/api/v1/cycles**', (route) => {
+    const items = [{
         id: 'cycle-1',
         name: '2026 H1',
         type: 'semi_annual',
         status: 'in_progress',
         startDate: '2026-01-01',
         endDate: '2026-06-30',
-      }],
-    })),
-  }));
+      }];
+    const data = new URL(route.request().url()).pathname.endsWith('/cycles/mine')
+      ? items
+      : { total: 1, page: 1, pageSize: 50, items };
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(data)),
+    });
+  });
   await page.route('**/api/v1/tasks/mine**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
@@ -977,6 +978,10 @@ test.describe('team list manager workspace', () => {
 
   test('current-page deep link remains loading until the delayed team response resolves', async ({ page }) => {
     await mockTaskWorkspaceIdentity(page, 'manager');
+    await page.route('**/api/v1/tasks/task-1', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(goalReviewDetailFixture)),
+    }));
     let releaseTeam!: () => void;
     const teamGate = new Promise<void>((resolve) => {
       releaseTeam = resolve;
@@ -997,7 +1002,7 @@ test.describe('team list manager workspace', () => {
 
     releaseTeam();
     await expect(workspace).toContainText('Ada Chen');
-    await expect(workspace.locator('.el-skeleton')).toHaveCount(0);
+    await expect(workspace.locator('.el-skeleton')).toHaveCount(0, { timeout: 15_000 });
     await expect(workspace.getByText('未找到所选员工')).toHaveCount(0);
     await expect(workspace.getByText('员工绩效加载失败')).toHaveCount(0);
   });
@@ -2575,6 +2580,7 @@ test('uses the six team workspace API contracts without a server or login', asyn
     rejectionResult,
     { id: 'task-1', status: 'manager_scoring' },
     { id: 'task-1', status: 'manager_scoring' },
+    { sent: true, nodeType: 'manager' },
   ];
   const client: TasksApiClient = {
     get: async (url, config) => {
@@ -2615,6 +2621,7 @@ test('uses the six team workspace API contracts without a server or login', asyn
   const withdrawn = await api.withdrawManagerScore('task-1', {
     expectedUpdatedAt: '2026-08-09T00:00:01.000Z',
   });
+  const reminded = await api.remindCurrentHandler('task-1');
 
   expect(team.items[0].employeeNo).toBeNull();
   expect(team.items[0].deptId).toBeNull();
@@ -2623,6 +2630,7 @@ test('uses the six team workspace API contracts without a server or login', asyn
   expect(rejected.succeeded[0].status).toBe('indicator_drafting');
   expect(draft).toEqual({ id: 'task-1', status: 'manager_scoring' });
   expect(withdrawn).toEqual({ id: 'task-1', status: 'manager_scoring' });
+  expect(reminded).toEqual({ sent: true, nodeType: 'manager' });
   expect(alignedObjective.alignedObjectives[0].ownerId).toBeNull();
   expect(calls).toEqual([
     { method: 'GET', url: '/tasks/team', params: { stage: 'manager-eval', stageState: 'pending' } },
@@ -2631,5 +2639,6 @@ test('uses the six team workspace API contracts without a server or login', asyn
     { method: 'POST', url: '/tasks/team/indicator-review/batch-reject', body: { tasks: [{ taskId: 'task-1', updatedAt: '2026-08-09T00:00:00.000Z' }], reason: 'Needs evidence' } },
     { method: 'PUT', url: '/tasks/task-1/manager-evaluation-draft', body: { expectedUpdatedAt: '2026-08-09T00:00:00.000Z', indicators: [{ id: 'indicator-1', managerScore: 95, managerComment: 'Strong delivery' }], evalSummary: { strengths: 'Execution' } } },
     { method: 'POST', url: '/tasks/task-1/manager-score/withdraw', body: { expectedUpdatedAt: '2026-08-09T00:00:01.000Z' } },
+    { method: 'POST', url: '/tasks/task-1/remind', body: undefined },
   ]);
 });

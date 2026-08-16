@@ -9,6 +9,7 @@ import { ERROR_CODE } from '@/common/constants/error-codes';
 function makePrismaMock() {
   return {
     $transaction: jest.fn(),
+    $executeRaw: jest.fn().mockResolvedValue(1),
     user: { findUnique: jest.fn() },
     notificationLog: {
       create: jest.fn(),
@@ -19,6 +20,7 @@ function makePrismaMock() {
       findFirst: jest.fn(),
     },
     assessmentTask: { findUnique: jest.fn(), findMany: jest.fn() },
+    auditLog: { create: jest.fn() },
     appeal: { findUnique: jest.fn() },
   } as unknown as PrismaService;
 }
@@ -285,12 +287,12 @@ describe('NotificationsService', () => {
       jest.spyOn(prisma.notificationLog, 'update').mockResolvedValue({} as any);
     });
 
-    it('同一 sender 当日第二次催办应抛 4029', async () => {
-      const countMock = jest
+    it('同一任务、节点、收件人 24 小时内第二次催办应抛 4029', async () => {
+      const findFirstMock = jest
         .fn()
-        .mockResolvedValueOnce(0) // 第一次放行
-        .mockResolvedValueOnce(1); // 第二次命中限频
-      jest.spyOn(prisma.notificationLog, 'count').mockImplementation(countMock);
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce({ createdAt: new Date() });
+      jest.spyOn(prisma.notificationLog, 'findFirst').mockImplementation(findFirstMock);
 
       // 第一次成功
       await service.sendTaskReminder(taskId, 'manager', senderId);
@@ -298,41 +300,42 @@ describe('NotificationsService', () => {
       await expect(service.sendTaskReminder(taskId, 'manager', senderId)).rejects.toMatchObject({
         response: {
           code: ERROR_CODE.RATE_LIMITED,
-          message: '今日已催办过，每人每天最多催办1次',
+          message: '该环节 24 小时内已催办过',
         },
       });
-      expect(countMock).toHaveBeenCalledTimes(2);
-      expect(countMock).toHaveBeenLastCalledWith(
+      expect(findFirstMock).toHaveBeenCalledTimes(2);
+      expect(findFirstMock).toHaveBeenLastCalledWith(
         expect.objectContaining({
           where: expect.objectContaining({
-            senderId,
+            taskId,
+            userId: 'mgr-1',
             type: 'task_reminder',
+            extraData: { path: ['nodeType'], equals: 'manager' },
             createdAt: expect.objectContaining({ gte: expect.any(Date) }),
           }),
         }),
       );
     });
 
-    it('不同 sender 催办应放行', async () => {
-      jest.spyOn(prisma.notificationLog, 'count').mockResolvedValue(0);
+    it('不同 sender 对同一任务节点和收件人仍受限频', async () => {
+      jest.spyOn(prisma.notificationLog, 'findFirst').mockResolvedValue({ createdAt: new Date() } as any);
 
-      const id = await service.sendTaskReminder(taskId, 'manager', 'other-sender');
-      expect(id).toBe('log-x');
+      await expect(service.sendTaskReminder(taskId, 'manager', 'other-sender')).rejects.toMatchObject({
+        response: { code: ERROR_CODE.RATE_LIMITED },
+      });
     });
 
-    it('跨天（昨日记录）应放行', async () => {
-      jest.spyOn(prisma.notificationLog, 'count').mockResolvedValue(0);
+    it('超过 24 小时应放行', async () => {
+      jest.spyOn(prisma.notificationLog, 'findFirst').mockResolvedValue(null);
 
       const id = await service.sendTaskReminder(taskId, 'manager', senderId);
       expect(id).toBe('log-x');
-      const gteArg = (prisma.notificationLog.count as jest.Mock).mock.calls[0][0].where.createdAt.gte;
-      expect(gteArg.getHours()).toBe(0);
-      expect(gteArg.getMinutes()).toBe(0);
-      expect(gteArg.getSeconds()).toBe(0);
+      const gteArg = (prisma.notificationLog.findFirst as jest.Mock).mock.calls[0][0].where.createdAt.gte;
+      expect(Date.now() - gteArg.getTime()).toBeGreaterThanOrEqual(24 * 60 * 60 * 1000 - 1000);
     });
 
     it('应正确解析各 nodeType 收件人', async () => {
-      jest.spyOn(prisma.notificationLog, 'count').mockResolvedValue(0);
+      jest.spyOn(prisma.notificationLog, 'findFirst').mockResolvedValue(null);
 
       const cases: { nodeType: TaskReminderNodeType; userId: string }[] = [
         { nodeType: 'employee', userId: 'emp-1' },
@@ -344,13 +347,36 @@ describe('NotificationsService', () => {
       for (const c of cases) {
         await service.sendTaskReminder(taskId, c.nodeType, senderId);
         expect(prisma.notificationLog.create).toHaveBeenLastCalledWith(
-          expect.objectContaining({ data: expect.objectContaining({ userId: c.userId }) }),
+          expect.objectContaining({
+            data: expect.objectContaining({
+              userId: c.userId,
+              extraData: { nodeType: c.nodeType },
+            }),
+          }),
         );
       }
     });
 
+    it('HR 节点始终催办周期指定的 HR 负责人', async () => {
+      jest.spyOn(prisma.assessmentTask, 'findUnique').mockResolvedValue({
+        id: taskId,
+        cycleId: 'cycle-1',
+        employeeId: 'emp-1',
+        managerId: 'mgr-1',
+        deptHeadId: 'head-1',
+        approverId: 'vp-1',
+        cycle: { hrOwnerId: 'hr-owner-1' },
+      } as any);
+      jest.spyOn(prisma.notificationLog, 'findFirst').mockResolvedValue(null);
+
+      await service.sendTaskReminder(taskId, 'hr', senderId);
+
+      expect(prisma.notificationLog.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ userId: 'hr-owner-1', extraData: { nodeType: 'hr' } }),
+      }));
+    });
+
     it('节点处理人为空时应抛 NOT_FOUND', async () => {
-      jest.spyOn(prisma.notificationLog, 'count').mockResolvedValue(0);
       jest.spyOn(prisma.assessmentTask, 'findUnique').mockResolvedValue({
         id: taskId,
         cycleId: 'cycle-1',
@@ -365,7 +391,29 @@ describe('NotificationsService', () => {
   });
 
   describe('sendBatchReminders', () => {
-    it('不受 D19 限频约束，只给当前处于该节点的任务处理人发通知', async () => {
+    it('批量 HR 催办只发送给周期指定的 HR 负责人', async () => {
+      prisma.assessmentTask.findMany = jest.fn().mockResolvedValue([{
+        id: 't-hr',
+        cycleId: 'c1',
+        status: 'hr_calibration',
+        employeeId: 'e1',
+        managerId: 'm1',
+        deptHeadId: 'h1',
+        approverId: 'a1',
+        cycle: { hrOwnerId: 'hr-owner-1' },
+      }] as any);
+      jest.spyOn(prisma.user, 'findUnique').mockResolvedValue({ dingtalkId: null } as any);
+      jest.spyOn(prisma.notificationLog, 'findFirst').mockResolvedValue(null);
+      jest.spyOn(prisma.notificationLog, 'create').mockResolvedValue({ id: 'log-hr' } as any);
+      jest.spyOn(prisma.notificationLog, 'update').mockResolvedValue({} as any);
+
+      await service.sendBatchReminders('c1', 'hr');
+
+      expect(prisma.notificationLog.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ userId: 'hr-owner-1' }),
+      }));
+    });
+    it('与人工催办共用限频，只给当前处于该节点的任务处理人发通知', async () => {
       prisma.assessmentTask.findMany = jest.fn().mockResolvedValue([
         { id: 't1', cycleId: 'c1', status: 'indicator_reviewing', employeeId: 'e1', managerId: 'm1', deptHeadId: null, approverId: null },
         { id: 't2', cycleId: 'c1', status: 'manager_scoring', employeeId: 'e2', managerId: 'm2', deptHeadId: null, approverId: null },

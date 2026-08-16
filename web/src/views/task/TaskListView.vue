@@ -239,8 +239,8 @@ function sortTasksByCycleDesc(items: TaskListItem[]) {
 
 async function loadCycles() {
   try {
-    const res = await cyclesApi.findAll({ pageSize: 50 });
-    cycles.value = [...(res.items ?? [])].sort((a, b) => {
+    const res = await cyclesApi.findMine();
+    cycles.value = [...res].sort((a, b) => {
       const aTime = new Date(a.startDate || a.endDate || '').getTime();
       const bTime = new Date(b.startDate || b.endDate || '').getTime();
       return (Number.isFinite(bTime) ? bTime : 0) - (Number.isFinite(aTime) ? aTime : 0);
@@ -303,6 +303,7 @@ function detailStageState(detail: TaskDetail, stage: TeamTaskStage): TeamStageSt
     'indicator_reviewing',
     'indicator_setting',
     'indicator_confirming',
+    'goal_confirmed',
     'self_eval',
   ].includes(detail.status)) return 'not_started';
   return 'completed';

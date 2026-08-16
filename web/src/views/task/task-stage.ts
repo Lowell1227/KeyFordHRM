@@ -9,6 +9,7 @@ export const TASK_STATUS_STAGE: Record<TaskStatus, TaskStageKey> = {
   indicator_reviewing: 'goal-setting',
   indicator_setting: 'goal-setting',
   indicator_confirming: 'goal-confirmation',
+  goal_confirmed: 'goal-confirmation',
   self_eval: 'self-eval',
   manager_scoring: 'result',
   dept_review: 'result',
@@ -38,7 +39,7 @@ export function getTaskStageState(statuses: TaskStatus[]): TaskStageState {
   if (statuses.length === 0 || statuses.every((status) => status === 'pending')) {
     return 'not-started';
   }
-  if (statuses.every(isTerminalTaskStatus)) return 'completed';
+  if (statuses.every((status) => isTerminalTaskStatus(status) || status === 'goal_confirmed')) return 'completed';
   if (statuses.some((status) => actionableStatuses.has(status))) return 'pending';
   return 'progress';
 }

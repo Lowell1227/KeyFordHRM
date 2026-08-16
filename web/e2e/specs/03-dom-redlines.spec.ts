@@ -89,7 +89,8 @@ async function prepareEmployeeTask() {
     startDate: '2026-01-01',
     endDate: '2026-03-31',
   });
-  await api('POST', `/cycles/${cycle.id}/launch`, hrToken);
+  const checked = await api('GET', `/cycles/${cycle.id}/preflight`, hrToken);
+  await api('POST', `/cycles/${cycle.id}/launch`, hrToken, { expectedPlanHash: checked.planHash });
   const tasks = await fetchAllTasks(hrToken, cycle.id);
   const task = tasks.find((item) => item.employeeId === employee.id);
   if (!task) throw new Error(`${ACCEPTANCE_ACCOUNTS.employee} task was not created`);

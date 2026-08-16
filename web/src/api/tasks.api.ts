@@ -102,6 +102,14 @@ export function createTasksApi(client: TasksApiClient) {
       return apiGet(`/tasks/${id}`);
     },
 
+    /** POST /tasks/:id/remind — 催办当前处理人 */
+    remindCurrentHandler(id: string): Promise<{
+      sent: true;
+      nodeType: 'employee' | 'manager' | 'deptHead' | 'approver';
+    }> {
+      return apiPost(`/tasks/${id}/remind`);
+    },
+
     /** POST /tasks — 创建单个任务 */
     create(body: CreateTaskBody): Promise<TaskListItem> {
       return apiPost("/tasks", body);

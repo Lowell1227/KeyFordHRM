@@ -21,6 +21,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import { formatScore } from '@/utils/score';
 import type { AssessmentCycle, TaskDetail, SetIndicatorBody, SubmitSelfEvalBody } from '@/types/api.types';
 import type { SignatureRole } from '@/types/enums';
+import { TASK_STATUS_META } from '@/types/enums';
 
 const route = useRoute();
 const router = useRouter();
@@ -30,9 +31,22 @@ const authStore = useAuthStore();
 const cycle = ref<AssessmentCycle | null>(null);
 const cycleLoading = ref(false);
 const actionLoading = ref(false);
+const reminding = ref(false);
 
 const task = computed(() => taskStore.detail);
 const loading = computed(() => taskStore.loading || cycleLoading.value);
+const workflowContext = computed(() => {
+  const current = task.value;
+  return current?.workflowContext ?? {
+    stage: 'goal_setting' as const,
+    statusLabel: current ? TASK_STATUS_META[current.status].label : '-',
+    currentHandler: null,
+    currentDeadline: null,
+    canRemind: false,
+    reminderNodeType: null,
+    reminderAvailableAt: null,
+  };
+});
 
 const flow = useTaskFlow({ task, cycle });
 const permission = usePermission({ task, cycle });
@@ -90,7 +104,21 @@ const rejectIndicatorLabel = computed(() => (canRejectIndicators.value ? '退回
 
 const showResultView = computed(() => {
   const status = task.value?.status;
-  return !!status && !['indicator_drafting', 'indicator_reviewing', 'indicator_setting', 'indicator_confirming', 'self_eval'].includes(status);
+  return !!status && !['indicator_drafting', 'indicator_reviewing', 'indicator_setting', 'indicator_confirming', 'goal_confirmed', 'self_eval'].includes(status);
+});
+
+const reminderOnCooldown = computed(() => {
+  const value = workflowContext.value.reminderAvailableAt;
+  return Boolean(value && new Date(value).getTime() > Date.now());
+});
+
+const workflowDeadlineText = computed(() => {
+  const value = workflowContext.value.currentDeadline;
+  if (!value) return '暂无截止时间';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? value
+    : date.toLocaleString('zh-CN', { hour12: false });
 });
 
 const indicatorSnapshotDescription = computed(() => {
@@ -256,6 +284,19 @@ async function handleConfirmResult() {
     actionLoading.value = false;
   }
 }
+
+async function handleRemind() {
+  const id = task.value?.id;
+  if (!id) return;
+  reminding.value = true;
+  try {
+    await tasksApi.remindCurrentHandler(id);
+    ElMessage.success('已催办当前处理人');
+    await loadDetail();
+  } finally {
+    reminding.value = false;
+  }
+}
 </script>
 
 <template>
@@ -267,6 +308,32 @@ async function handleConfirmResult() {
 
     <template v-if="task">
       <TaskInfoCard :task="task" :cycle="cycle" />
+
+      <ChartCard class="workflow-state-card">
+        <div class="workflow-state">
+          <div>
+            <div class="workflow-state__eyebrow">{{ task.cycleName || cycle?.name || '本期绩效' }} · 当前状态</div>
+            <div class="workflow-state__title">{{ workflowContext.statusLabel }}</div>
+            <div class="workflow-state__meta">
+              <span v-if="workflowContext.currentHandler">
+                当前处理人：{{ workflowContext.currentHandler.name }}
+              </span>
+              <span v-else>当前无需人工处理</span>
+              <span>时间：{{ workflowDeadlineText }}</span>
+            </div>
+          </div>
+          <el-button
+            v-if="workflowContext.canRemind"
+            type="primary"
+            plain
+            :loading="reminding"
+            :disabled="reminderOnCooldown"
+            @click="handleRemind"
+          >
+            {{ reminderOnCooldown ? '24小时内已催办' : '催办' }}
+          </el-button>
+        </div>
+      </ChartCard>
 
       <ChartCard class="flow-card">
         <el-steps :active="flowActiveIndex" finish-status="success">
@@ -403,6 +470,32 @@ async function handleConfirmResult() {
 .flow-card :deep(.el-step__title.is-success) {
   color: #16a34a;
   border-color: #16a34a;
+}
+
+.workflow-state {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 20px;
+}
+
+.workflow-state__eyebrow,
+.workflow-state__meta {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.workflow-state__title {
+  margin: 6px 0;
+  color: var(--el-text-color-primary);
+  font-size: 18px;
+  font-weight: 600;
+}
+
+.workflow-state__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px 20px;
 }
 
 .flow-card :deep(.el-step__head.is-process),

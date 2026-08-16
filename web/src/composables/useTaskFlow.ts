@@ -29,6 +29,8 @@ function statusToNode(status: TaskStatus): FlowNodeType {
       return 'indicator_setting';
     case 'indicator_confirming':
       return 'indicator_confirm';
+    case 'goal_confirmed':
+      return 'self_eval';
     case 'self_eval':
       return 'self_eval';
     case 'manager_scoring':
@@ -63,6 +65,8 @@ function getNodeStatus(
   if (task?.status === 'closed' || task?.status === 'exempted') {
     return nodeIndex <= currentIndex ? 'done' : 'pending';
   }
+
+  if (task?.status === 'goal_confirmed' && node === 'self_eval') return 'pending';
 
   if (nodeIndex < currentIndex) return 'done';
   if (nodeIndex === currentIndex) return 'active';

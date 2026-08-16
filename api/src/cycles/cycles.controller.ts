@@ -8,10 +8,9 @@ import { LaunchService } from './launch.service';
 import { CreateCycleDto } from './dto/create-cycle.dto';
 import { UpdateDeadlinesDto } from './dto/update-deadlines.dto';
 import { CycleQueryDto } from './dto/cycle-query.dto';
+import { LaunchCycleDto, ScheduleCycleDto } from './dto/launch-cycle.dto';
 
-// 读接口（GET 列表 / 详情）对所有已登录用户开放：周期名称、起止日、等级上限属于
-// 非敏感的参考数据，员工/主管的「我的绩效」「目标地图」等页面都需要它来做周期筛选。
-// 写接口（创建 / 改截止日 / 发起）逐一限制 hr/system_admin。
+// 管理员可以查看全量周期；其他角色只能读取已开放周期，避免草稿和预约信息泄露。
 @Controller('cycles')
 export class CyclesController {
   constructor(
@@ -26,13 +25,18 @@ export class CyclesController {
   }
 
   @Get()
-  findAll(@Query() query: CycleQueryDto) {
-    return this.cyclesService.findAll(query);
+  findAll(@Query() query: CycleQueryDto, @CurrentUser() user: AuthUser) {
+    return this.cyclesService.findAll(query, user);
+  }
+
+  @Get('mine')
+  findMine(@CurrentUser() user: AuthUser) {
+    return this.cyclesService.findMine(user);
   }
 
   @Get(':id')
-  findOne(@Param('id', ParseUUIDPipe) id: string) {
-    return this.cyclesService.findOne(id);
+  findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.cyclesService.findOne(id, user);
   }
 
   @Patch(':id/deadlines')
@@ -40,16 +44,43 @@ export class CyclesController {
   updateDeadlines(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDeadlinesDto,
+    @CurrentUser() user: AuthUser,
   ) {
-    return this.cyclesService.updateDeadlines(id, dto);
+    return this.cyclesService.updateDeadlines(id, dto, user);
+  }
+
+  @Get(':id/preflight')
+  @Roles(SysRole.hr, SysRole.system_admin)
+  preflight(@Param('id', ParseUUIDPipe) id: string) {
+    return this.launchService.preflight(id);
+  }
+
+  @Post(':id/schedule')
+  @Roles(SysRole.hr, SysRole.system_admin)
+  schedule(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ScheduleCycleDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.launchService.schedule(id, user, dto.expectedPlanHash);
+  }
+
+  @Post(':id/schedule/cancel')
+  @Roles(SysRole.hr, SysRole.system_admin)
+  cancelSchedule(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.launchService.cancelSchedule(id, user);
   }
 
   @Post(':id/launch')
   @Roles(SysRole.hr, SysRole.system_admin)
   launch(
     @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: LaunchCycleDto,
     @CurrentUser() user: AuthUser,
   ) {
-    return this.launchService.launch(id, user);
+    return this.launchService.launch(id, user, {
+      expectedPlanHash: dto.expectedPlanHash,
+      overrideReason: dto.overrideReason,
+    });
   }
 }

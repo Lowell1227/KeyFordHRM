@@ -38,7 +38,11 @@ describe('TasksService', () => {
     $transaction: jest.Mock;
   };
   let dataScope: { getVisibleEmployeeFilter: jest.Mock; getSubDeptIds: jest.Mock };
-  let notificationsService: { create: jest.Mock };
+  let notificationsService: {
+    create: jest.Mock;
+    sendTaskReminder: jest.Mock;
+    getReminderCooldownUntil: jest.Mock;
+  };
   let indicatorVisibility: { validateSelection: jest.Mock };
   let objectivesService: { findVisibleByIds: jest.Mock };
   let scoringService: {
@@ -47,7 +51,7 @@ describe('TasksService', () => {
     calcTaskTotal: jest.Mock;
     calcRawGrade: jest.Mock;
   };
-  let flowService: { transitionTx: jest.Mock };
+  let flowService: { transition: jest.Mock; transitionTx: jest.Mock };
   let transactionClient: {
     assessmentTask: { update: jest.Mock; updateMany: jest.Mock };
     indicatorInstance: {
@@ -102,7 +106,11 @@ describe('TasksService', () => {
       getVisibleEmployeeFilter: jest.fn().mockResolvedValue({}),
       getSubDeptIds: jest.fn().mockResolvedValue([]),
     };
-    notificationsService = { create: jest.fn() };
+    notificationsService = {
+      create: jest.fn(),
+      sendTaskReminder: jest.fn().mockResolvedValue('notification-1'),
+      getReminderCooldownUntil: jest.fn().mockResolvedValue(null),
+    };
     indicatorVisibility = {
       validateSelection: jest.fn().mockResolvedValue(undefined),
     };
@@ -113,7 +121,7 @@ describe('TasksService', () => {
       calcTaskTotal: jest.fn().mockReturnValue({ totalScore: 88, rawGrade: 'B', dimensionScores: [] }),
       calcRawGrade: jest.fn().mockReturnValue('B'),
     };
-    flowService = { transitionTx: jest.fn() };
+    flowService = { transition: jest.fn(), transitionTx: jest.fn() };
 
     const module: TestingModule = await Test.createTestingModule({
       providers: [
@@ -299,6 +307,64 @@ describe('TasksService', () => {
   }
 
   describe('findOne', () => {
+    it('returns the exemption flag and reason for an exempt employee task', async () => {
+      const task: any = buildFullTask('exempted');
+      task.isExempt = true;
+      task.exemptReason = 'HR 在本周期中明确设置为豁免';
+      task.indicatorInstances = [];
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+
+      const result = await service.findOne('task-1', makeViewer({ id: 'emp-1' }));
+
+      expect(result).toMatchObject({
+        status: 'exempted',
+        isExempt: true,
+        exemptReason: 'HR 在本周期中明确设置为豁免',
+      });
+    });
+
+    it('返回当前处理人、截止时间与催办能力', async () => {
+      const deadline = new Date('2026-12-29T00:00:00.000Z');
+      const task: any = buildFullTask('indicator_reviewing');
+      task.manager = { id: 'mgr-1', name: '王主管' };
+      task.deptHead = { id: 'head-1', name: '李负责人' };
+      task.approver = { id: 'vp-1', name: '陈审批人' };
+      task.cycle = {
+        ...task.cycle,
+        name: '2027 Q1',
+        deadlineIndicatorSetting: deadline,
+      };
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+
+      const result = await service.findOne('task-1', makeViewer({ id: 'emp-1' }));
+
+      expect(result.workflowContext).toMatchObject({
+        stage: 'goal_setting',
+        statusLabel: '待主管审核目标',
+        currentHandler: { id: 'mgr-1', name: '王主管', nodeType: 'manager' },
+        currentDeadline: deadline,
+        canRemind: true,
+        reminderNodeType: 'manager',
+      });
+    });
+
+    it('目标确认后、自评未开放时清晰标识等待状态', async () => {
+      const selfEvalOpenAt = new Date('2027-04-01T00:00:00.000Z');
+      const task: any = buildFullTask('goal_confirmed');
+      task.cycle = { ...task.cycle, name: '2027 Q1', selfEvalOpenAt };
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+
+      const result = await service.findOne('task-1', makeViewer({ id: 'emp-1' }));
+
+      expect(result.workflowContext).toMatchObject({
+        stage: 'goal_setting',
+        statusLabel: '目标已确认，待自评开放',
+        currentHandler: null,
+        currentDeadline: selfEvalOpenAt,
+        canRemind: false,
+      });
+    });
+
     it('员工本人在公示前看不到主管评分、final_score、总分、等级', async () => {
       prisma.assessmentTask.findUnique.mockResolvedValue(buildFullTask('manager_scoring'));
 
@@ -383,6 +449,56 @@ describe('TasksService', () => {
       prisma.assessmentTask.findUnique.mockResolvedValue(null);
 
       await expect(service.findOne('task-1', makeViewer())).rejects.toThrow(NotFoundException);
+    });
+  });
+
+  describe('remindCurrentHandler', () => {
+    it('员工可催办当前审核目标的主管', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('indicator_reviewing'));
+
+      await expect(
+        service.remindCurrentHandler('task-1', makeViewer({ id: 'emp-1' })),
+      ).resolves.toEqual({ sent: true, nodeType: 'manager' });
+      expect(notificationsService.sendTaskReminder).toHaveBeenCalledWith(
+        'task-1',
+        'manager',
+        'emp-1',
+      );
+    });
+
+    it('当前处理人不能催办自己', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('indicator_reviewing'));
+
+      await expect(
+        service.remindCurrentHandler(
+          'task-1',
+          makeViewer({ id: 'mgr-1', sysRole: SysRole.manager }),
+        ),
+      ).rejects.toThrow(ForbiddenException);
+    });
+
+    it('目标已确认等待自评开放时不可催办', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('goal_confirmed'));
+
+      await expect(
+        service.remindCurrentHandler('task-1', makeViewer({ id: 'emp-1' })),
+      ).rejects.toThrow(ConflictException);
+    });
+
+    it('员工可催办当前负责校准的 HR', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...makeTask('hr_calibration'),
+        cycle: { hrOwnerId: 'hr-1', hrOwner: { id: 'hr-1', name: '王小华' } },
+      } as any);
+
+      await expect(
+        service.remindCurrentHandler('task-1', makeViewer({ id: 'emp-1' })),
+      ).resolves.toEqual({ sent: true, nodeType: 'hr' });
+      expect(notificationsService.sendTaskReminder).toHaveBeenCalledWith(
+        'task-1',
+        'hr',
+        'emp-1',
+      );
     });
   });
 
@@ -1240,6 +1356,51 @@ describe('TasksService', () => {
       } catch (err) {
         expect((err as ConflictException).getResponse()).toMatchObject({ code: ERROR_CODE.CONFLICT });
       }
+    });
+  });
+
+  describe('goal confirmation self-evaluation gate', () => {
+    it('keeps a confirmed goal waiting when self evaluation has not opened', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('indicator_confirming'));
+      prisma.assessmentCycle.findUnique.mockResolvedValue({
+        selfEvalOpenAt: new Date('2027-04-01T00:00:00.000Z'),
+      });
+      flowService.transition.mockResolvedValue({ newStatus: 'goal_confirmed' });
+      jest.useFakeTimers().setSystemTime(new Date('2026-12-28T08:00:00.000Z'));
+
+      await expect(service.confirmIndicators('task-1', makeViewer({ id: 'emp-1' })))
+        .resolves.toEqual({ id: 'task-1', status: 'goal_confirmed' });
+      expect(flowService.transition).toHaveBeenCalledWith(expect.objectContaining({
+        targetStatus: 'goal_confirmed',
+        taskUpdate: { indicatorConfirmedAt: new Date('2026-12-28T08:00:00.000Z') },
+      }));
+      jest.useRealTimers();
+    });
+
+    it('keeps legacy cycles without an explicit self-evaluation opening time on the original direct flow', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('indicator_confirming'));
+      prisma.assessmentCycle.findUnique.mockResolvedValue({ selfEvalOpenAt: null });
+      flowService.transition.mockResolvedValue({ newStatus: 'self_eval' });
+
+      await expect(service.confirmIndicators('task-1', makeViewer({ id: 'emp-1' })))
+        .resolves.toEqual({ id: 'task-1', status: 'self_eval' });
+      expect(flowService.transition).toHaveBeenCalledWith(expect.objectContaining({
+        targetStatus: 'self_eval',
+      }));
+    });
+
+    it('rejects self evaluation writes while the task is still waiting to open', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...makeTask('goal_confirmed'),
+        snapshot: { snapshotData: { maxScore: 100 } },
+      });
+
+      await expect(service.submitSelfEval(
+        'task-1',
+        { indicators: [], summary: {} },
+        makeViewer({ id: 'emp-1' }),
+      )).rejects.toThrow(ConflictException);
+      expect(transactionClient.indicatorInstance.update).not.toHaveBeenCalled();
     });
   });
 });

@@ -63,6 +63,8 @@ enum SysRole {
 
 enum CycleStatus {
   draft
+  scheduled
+  launch_blocked
   indicator_setting
   self_eval
   manager_score
@@ -110,6 +112,7 @@ enum TaskStatus {
   indicator_reviewing
   indicator_setting
   indicator_confirming
+  goal_confirmed
   self_eval
   manager_scoring
   dept_review
@@ -374,7 +377,8 @@ model User {
   approvedDepartments                       Department[]              @relation("DeptApprover")
   createdIndicators                         Indicator[]
   createdTemplates                          AssessmentTemplate[]
-  createdCycles                             AssessmentCycle[]
+  createdCycles                             AssessmentCycle[]          @relation("CycleCreator")
+  hrOwnedCycles                             AssessmentCycle[]          @relation("CycleHrOwner")
   employeeTasks                             AssessmentTask[]          @relation("TaskEmployee")
   managedTasks                              AssessmentTask[]          @relation("TaskManager")
   deptHeadTasks                             AssessmentTask[]          @relation("TaskDeptHead")
@@ -511,6 +515,8 @@ model AssessmentCycle {
   type                     CycleType   @default(quarterly)
   startDate                DateTime    @map("start_date") @db.Date
   endDate                  DateTime    @map("end_date") @db.Date
+  goalSettingOpenAt        DateTime?   @map("goal_setting_open_at") @db.Timestamptz(6)
+  selfEvalOpenAt           DateTime?   @map("self_eval_open_at") @db.Timestamptz(6)
   deadlineIndicatorSetting DateTime?   @map("deadline_indicator_setting") @db.Date
   deadlineIndicatorConfirm DateTime?   @map("deadline_indicator_confirm") @db.Date
   deadlineSelfEval         DateTime?   @map("deadline_self_eval") @db.Date
@@ -526,12 +532,26 @@ model AssessmentCycle {
   gradeCMaxRatio           Decimal     @default(0.30) @map("grade_c_max_ratio") @db.Decimal(4, 3)
   gradeDMaxRatio           Decimal     @default(0.10) @map("grade_d_max_ratio") @db.Decimal(4, 3)
   createdBy                String?     @map("created_by") @db.Uuid
+  hrOwnerId                String?     @map("hr_owner_id") @db.Uuid
+  participantDeptIds       String[]    @default([]) @map("participant_dept_ids") @db.Uuid
+  participantUserIds       String[]    @default([]) @map("participant_user_ids") @db.Uuid
+  explicitExemptUserIds    String[]    @default([]) @map("explicit_exempt_user_ids") @db.Uuid
+  scheduledAt              DateTime?   @map("scheduled_at") @db.Timestamptz(6)
+  scheduledById            String?     @map("scheduled_by_id") @db.Uuid
+  launchPlan               Json?       @map("launch_plan") @db.JsonB
+  launchPlanHash           String?     @map("launch_plan_hash") @db.VarChar(64)
+  openedAt                 DateTime?   @map("opened_at") @db.Timestamptz(6)
+  openedById               String?     @map("opened_by_id") @db.Uuid
+  openSource               String?     @map("open_source") @db.VarChar(20)
+  launchBlockedAt          DateTime?   @map("launch_blocked_at") @db.Timestamptz(6)
+  launchBlockedReason      String?     @map("launch_blocked_reason") @db.Text
   publishedAt              DateTime?   @map("published_at") @db.Timestamptz(6)
   closedAt                 DateTime?   @map("closed_at") @db.Timestamptz(6)
   createdAt                DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt                DateTime    @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  creator               User?                        @relation(fields: [createdBy], references: [id], onDelete: SetNull)
+  creator               User?                        @relation("CycleCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  hrOwner               User?                        @relation("CycleHrOwner", fields: [hrOwnerId], references: [id], onDelete: SetNull)
   snapshots             AssessmentTemplateSnapshot[]
   tasks                 AssessmentTask[]
   flowRecords           FlowRecord[]
@@ -543,6 +563,9 @@ model AssessmentCycle {
   objectives            Objective[]
 
   @@index([status])
+  @@index([status, goalSettingOpenAt])
+  @@index([status, selfEvalOpenAt])
+  @@index([hrOwnerId])
   @@map("assessment_cycles")
 }
 

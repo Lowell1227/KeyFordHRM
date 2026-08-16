@@ -117,6 +117,27 @@ describe('FlowService', () => {
     });
   });
 
+  describe('目标确认等待自评', () => {
+    it('员工确认目标后进入 goal_confirmed，而不是提前开放自评', async () => {
+      tx.assessmentTask.update.mockResolvedValue({
+        ...makeTask('indicator_confirming'),
+        status: 'goal_confirmed',
+      });
+
+      const result = await service.transition({
+        task: makeTask('indicator_confirming'),
+        action: 'submit',
+        targetStatus: 'goal_confirmed',
+        actorId: 'emp-1',
+      });
+
+      expect(result.newStatus).toBe('goal_confirmed');
+      expect(tx.flowRecord.create).toHaveBeenCalledWith(expect.objectContaining({
+        data: expect.objectContaining({ nodeType: 'indicator_confirm' }),
+      }));
+    });
+  });
+
   describe('主管即部门负责人路径', () => {
     it('manager_scoring → hr_calibration 合法', async () => {
       tx.assessmentTask.update.mockResolvedValue({ ...makeTask('manager_scoring'), status: 'hr_calibration' });

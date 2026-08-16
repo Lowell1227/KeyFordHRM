@@ -89,6 +89,16 @@ export class TasksController {
     return this.tasksService.findOne(id, viewer);
   }
 
+  /** POST /tasks/:id/remind — 催办当前环节处理人。 */
+  @Post(':id/remind')
+  @HttpCode(200)
+  remindCurrentHandler(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.tasksService.remindCurrentHandler(id, viewer);
+  }
+
   /** POST /tasks/:id/indicators/confirm — 员工确认指标。 */
   @Post(':id/indicators/confirm')
   @HttpCode(200)

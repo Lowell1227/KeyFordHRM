@@ -10,6 +10,11 @@ describe("05-data-redlines", () => {
   let factory: FixtureFactory;
   let launchService: LaunchService;
 
+  async function launchChecked(cycleId: string, operator: Parameters<LaunchService['launch']>[1]) {
+    const checked = await launchService.preflight(cycleId);
+    return launchService.launch(cycleId, operator, { expectedPlanHash: checked.planHash! });
+  }
+
   beforeAll(async () => {
     app = await buildTestApp();
     factory = new FixtureFactory(app.prisma);
@@ -200,7 +205,7 @@ describe("05-data-redlines", () => {
       createdBy: hr.id,
       applicableDepts: [dept.id],
     });
-    await launchService.launch(cycle.id, {
+    await launchChecked(cycle.id, {
       id: hr.id,
       name: "HR",
       sysRole: SysRole.hr,
@@ -234,7 +239,7 @@ describe("05-data-redlines", () => {
       createdBy: hr.id,
       applicableDepts: [dept.id],
     });
-    await launchService.launch(cycle.id, {
+    await launchChecked(cycle.id, {
       id: hr.id,
       name: "HR",
       sysRole: SysRole.hr,
@@ -283,7 +288,7 @@ describe("05-data-redlines", () => {
       createdBy: hr.id,
       applicableDepts: [dept.id],
     });
-    await launchService.launch(cycle.id, {
+    await launchChecked(cycle.id, {
       id: hr.id,
       name: "HR",
       sysRole: SysRole.hr,
