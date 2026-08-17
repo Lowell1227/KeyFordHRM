@@ -356,6 +356,10 @@ function changeActionLabel(action: string) {
           <span>指标描述</span>
           <p>{{ displayDescription || '暂未填写' }}</p>
         </div>
+        <div class="goal-detail__scoring-standard">
+          <span>评分标准</span>
+          <p>{{ detail.scoringStandard || '暂未填写' }}</p>
+        </div>
       </section>
 
       <section id="goal-detail-changes" class="goal-detail__card goal-detail__section">
@@ -683,17 +687,25 @@ function changeActionLabel(action: string) {
   font-size: 13px;
 }
 
-.goal-detail__description span {
+.goal-detail__description span,
+.goal-detail__scoring-standard span {
   margin-bottom: 5px;
   color: #98a2b4;
   font-size: 12px;
 }
 
-.goal-detail__description p {
+.goal-detail__description p,
+.goal-detail__scoring-standard p {
   margin: 5px 0 0;
   color: #3a465c;
   line-height: 1.7;
   white-space: pre-wrap;
+}
+
+.goal-detail__scoring-standard {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #edf0f5;
 }
 
 .goal-detail__state {

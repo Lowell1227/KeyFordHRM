@@ -399,13 +399,14 @@ test.describe('cycle-first task contracts', () => {
     await expect(compactEditor).toBeVisible();
     await expect(compactEditor.getByText('指标名称', { exact: true })).toBeVisible();
     await expect(compactEditor.getByText('指标描述', { exact: true })).toBeVisible();
+    await expect(compactEditor.getByText('评分标准', { exact: true })).toBeVisible();
+    await expect(compactEditor.locator('textarea').nth(1)).toHaveValue('Accepted on schedule');
     await expect(compactEditor.getByText('权重', { exact: true })).toBeVisible();
     await expect(detail.getByTestId('indicator-advanced-settings-indicator-1')).toHaveCount(0);
 
     await detail.getByTestId('indicator-more-settings-indicator-1').click();
     const advancedSettings = detail.getByTestId('indicator-advanced-settings-indicator-1');
     await expect(advancedSettings).toBeVisible();
-    await expect(advancedSettings.getByText('评分标准', { exact: true })).toBeVisible();
     await expect(advancedSettings.getByText('数据来源', { exact: true })).toBeVisible();
     await expect(advancedSettings.getByText('数据口径', { exact: true })).toBeVisible();
     await expect(advancedSettings.getByText('目标值', { exact: true })).toBeVisible();

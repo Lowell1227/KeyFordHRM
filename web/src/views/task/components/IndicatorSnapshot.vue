@@ -873,6 +873,16 @@ function handleFetchDingtalkWeekly() {
                   maxlength="300"
                 />
               </label>
+              <label class="is-wide">
+                <span>评分标准</span>
+                <el-input
+                  v-model="editableItems[index].scoringStandard"
+                  type="textarea"
+                  :rows="2"
+                  placeholder="请输入评分标准，例如：按期验收100分，延期按规则扣分"
+                  maxlength="300"
+                />
+              </label>
             </div>
 
             <div
@@ -898,10 +908,6 @@ function handleFetchDingtalkWeekly() {
                     <el-input v-model="editableItems[index].unit" placeholder="单位" maxlength="30" />
                   </template>
                 </div>
-              </label>
-              <label class="is-wide">
-                <span>评分标准</span>
-                <el-input v-model="editableItems[index].scoringStandard" placeholder="评分标准" maxlength="300" />
               </label>
               <label>
                 <span>数据来源</span>

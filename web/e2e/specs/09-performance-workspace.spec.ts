@@ -1378,7 +1378,8 @@ test.describe('09-performance-workspace tracking behavior', () => {
     await expect(drawer).not.toContainText('realistic-demo-v1');
     await expect(drawer.getByText('指标类型', { exact: true })).toHaveCount(0);
     await expect(drawer.getByText('目标值', { exact: true })).toHaveCount(0);
-    await expect(drawer.getByText('评分标准', { exact: true })).toHaveCount(0);
+    await expect(drawer.getByText('评分标准', { exact: true })).toBeVisible();
+    await expect(drawer.getByText('达到预算目标得满分', { exact: true })).toBeVisible();
     await expect(drawer.getByText('经营报表', { exact: true })).toHaveCount(0);
     await expect(drawer.getByText('财务确认口径', { exact: true })).toHaveCount(0);
     await expect(drawer.getByRole('button', { name: '查看数据说明' })).toHaveCount(0);

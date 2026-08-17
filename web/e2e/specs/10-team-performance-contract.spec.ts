@@ -1163,6 +1163,13 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('indicator-toggle-ind-1')).toHaveCount(0);
     await expect(page.getByTestId('indicator-expand-all')).toHaveCount(0);
     await expect(page.getByTestId('indicator-visibility-ind-1')).toBeVisible();
+    await expect(page.getByTestId('indicator-details-ind-1').getByText('评分标准', { exact: true })).toBeVisible();
+    await expect(
+      page.getByTestId('indicator-details-ind-1')
+        .locator('label')
+        .filter({ hasText: '评分标准' })
+        .locator('input'),
+    ).toHaveValue('Accepted on schedule');
 
     await expect(page.getByTestId('goal-review-reference-open')).toBeVisible();
     await expect(page.getByTestId('performance-reference-panel')).toHaveCount(0);
