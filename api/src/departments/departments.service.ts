@@ -4,7 +4,7 @@ import { DepartmentQueryDto } from './dto/department-query.dto';
 import { UpdateApproverDto } from './dto/update-approver.dto';
 import { UpdateLeaderDto } from './dto/update-leader.dto';
 import { ERROR_CODE } from '../common/constants/error-codes';
-import { CompanyCode } from '@prisma/client';
+import { AccountType, CompanyCode } from '@prisma/client';
 import { buildEffectiveApproverMap } from './department-relations';
 
 export interface DepartmentNode {
@@ -72,6 +72,7 @@ export class DepartmentsService {
       where: {
         deptId: { in: deptIds },
         deletedAt: null,
+        accountType: AccountType.employee,
         status: { not: 'resigned' },
       },
       _count: { _all: true },

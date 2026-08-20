@@ -161,12 +161,15 @@ function isMenuActive(path: string): boolean {
 .app-rail {
   width: 72px;
   min-width: 72px;
+  min-height: 0;
   padding: 14px 8px;
   box-sizing: border-box;
   background: #455fc6;
   display: flex;
   flex-direction: column;
   gap: 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
 }
 
 .rail-logo {
@@ -337,6 +340,7 @@ function isMenuActive(path: string): boolean {
     padding: 7px 10px;
     flex-direction: row;
     overflow-x: auto;
+    overflow-y: hidden;
     scrollbar-width: none;
   }
   .app-rail::-webkit-scrollbar { display: none; }

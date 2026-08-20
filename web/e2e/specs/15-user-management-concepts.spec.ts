@@ -361,3 +361,84 @@ test('opens one employee archive with employment history, contracts and an ident
     pageWidth: document.documentElement.scrollWidth,
   }))).toEqual({ drawerWidth: 390, pageWidth: 390 });
 });
+
+test('department tree, organization detail and archive drawer scroll independently on desktop', async ({ page }) => {
+  const departments = Array.from({ length: 24 }, (_, index) => ({
+    id: `dept-${index}`,
+    name: `部门${String(index + 1).padStart(2, '0')}`,
+    parentId: null,
+    company: 'fuede',
+    sortOrder: index,
+    isActive: true,
+    directMemberCount: 1,
+    memberCount: 1,
+    children: [],
+  }));
+  const employee = {
+    id: 'employee-scroll', employeeNo: '001', name: '滚动测试员工', deptId: 'dept-0', deptName: '部门01',
+    position: '专员', employmentType: 'full_time', status: 'active', directManagerId: null,
+    directManagerName: null, sysRole: 'employee', isAssessorOnly: false, canViewAll: false,
+    dingtalkBindingState: 'unbound',
+  };
+  const archive = {
+    ...employee,
+    entryDate: '2024-01-01T00:00:00.000Z',
+    dept: { id: 'dept-0', name: '部门01', fullPath: '孚德 / 部门01', company: 'fuede' },
+    directManager: null,
+    employeeProfile: {},
+    employmentHistory: Array.from({ length: 12 }, (_, index) => ({
+      id: `employment-${index}`,
+      company: 'fuede', position: `岗位${index + 1}`, jobGrade: null, jobFamily: null,
+      workLocation: '杭州', employeeStatus: 'active', effectiveFrom: '2024-01-01T00:00:00.000Z',
+      effectiveTo: null, changeType: 'transfer', dept: { id: 'dept-0', name: '部门01', fullPath: '孚德 / 部门01' },
+      directManager: null,
+    })),
+    employeeContracts: [],
+    dingtalkBinding: null,
+  };
+
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'mock-admin-token');
+    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+  });
+  await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse(0)),
+  }));
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      id: 'admin-1', name: '系统管理员', deptId: null, sysRole: 'system_admin', isAssessorOnly: false, canViewAll: true,
+    })),
+  }));
+  await page.route('**/api/v1/departments**', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse(departments)),
+  }));
+  await page.route('**/api/v1/users**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 20, items: [employee] })),
+  }));
+  await page.route('**/api/v1/employee-archives/employee-scroll', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse(archive)),
+  }));
+
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.goto('http://localhost:5173/users');
+
+  for (const selector of ['.app-rail', '.menu-scroll']) {
+    await expect.poll(() => page.locator(selector).evaluate((element) => getComputedStyle(element).overflowY)).toBe('auto');
+  }
+
+  for (const selector of ['.org-tree-panel', '.org-detail']) {
+    await expect.poll(() => page.locator(selector).evaluate((element) => ({
+      overflowY: getComputedStyle(element).overflowY,
+      scrollable: element.scrollHeight > element.clientHeight,
+    }))).toEqual({ overflowY: 'auto', scrollable: true });
+  }
+
+  await page.getByRole('button', { name: '查看档案' }).first().click();
+  const drawerBody = page.locator('.employee-archive-drawer .el-drawer__body');
+  await expect.poll(() => drawerBody.evaluate((element) => ({
+    overflowY: getComputedStyle(element).overflowY,
+    scrollable: element.scrollHeight > element.clientHeight,
+  }))).toEqual({ overflowY: 'auto', scrollable: true });
+});

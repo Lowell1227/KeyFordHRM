@@ -43,6 +43,12 @@ describe('UsersService', () => {
         id: 'employee-1',
         dingtalkBindingState: 'disabled',
       }));
+      expect((service as any).prisma.user.count).toHaveBeenCalledWith({
+        where: expect.objectContaining({
+          accountType: 'employee',
+          status: { not: 'resigned' },
+        }),
+      });
     });
   });
 

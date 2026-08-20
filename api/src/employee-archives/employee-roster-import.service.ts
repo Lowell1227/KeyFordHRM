@@ -1,11 +1,23 @@
 import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createCipheriv, createHash, createHmac, randomBytes } from 'node:crypto';
-import { CompanyCode, EmploymentType, Prisma, UserStatus } from '@prisma/client';
+import {
+  AccountType,
+  CompanyCode,
+  EmploymentType,
+  ExternalIdentityStatus,
+  Prisma,
+  UserStatus,
+} from '@prisma/client';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { parseEmployeeRosterExcel, ParsedEmployeeRosterRow } from './employee-roster.excel';
+import {
+  buildRosterOrganizationPlan,
+  mapRosterCompany,
+  rosterOrganizationKeyForRow,
+} from './employee-roster-organization';
 
 export type EmployeeRosterImportMode = 'full' | 'incremental';
 
@@ -16,12 +28,24 @@ export interface EmployeeRosterPreviewSummary {
   blockingErrorCount: number;
   warningCount: number;
   missingFromFullRosterCount: number;
+  desiredDepartmentCount: number;
 }
 
 interface PreviewSource {
   mode: EmployeeRosterImportMode;
   fileName: string;
   fileHash: string;
+}
+
+interface ExistingRosterUser {
+  id: string;
+  employeeNo: string | null;
+  name: string;
+  deptId: string | null;
+  position: string | null;
+  status: UserStatus;
+  dept: { name: string; fullPath: string | null } | null;
+  externalIdentityBindings?: Array<{ status: ExternalIdentityStatus }>;
 }
 
 @Injectable()
@@ -97,11 +121,16 @@ export class EmployeeRosterImportService {
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '该批次已被其他操作处理' });
       }
 
+      const organizationIds = batch.mode === 'full'
+        ? await this.synchronizeFullRosterOrganization(tx, rows)
+        : undefined;
+
       const userIdByRow = new Map<number, string>();
       for (const importRow of actionableRows) {
         const raw = rawByRowNumber.get(importRow.rowNumber)!;
-        const normalized = this.normalizedEmployee(importRow.normalizedValue);
+        const normalized = this.normalizedEmployee(importRow.normalizedValue, organizationIds);
         const commonData = {
+          employeeNo: raw.employee.employeeNo!,
           name: raw.employee.name!,
           phone: raw.profile.phone,
           deptId: normalized.deptId,
@@ -111,11 +140,14 @@ export class EmployeeRosterImportService {
           actualRegularDate: raw.employee.actualRegularDate,
           employmentType: normalized.employmentType,
           status: normalized.employeeStatus,
+          accountType: AccountType.employee,
+          leaveDate: null,
         };
         const isIncrementalUpdate = batch.mode === 'incremental' && importRow.action === 'update';
         const updateData: Prisma.UserUncheckedUpdateInput = isIncrementalUpdate
           ? this.withoutNullish({
             name: raw.employee.name,
+            employeeNo: raw.employee.employeeNo,
             phone: raw.profile.phone,
             deptId: normalized.deptId,
             position: raw.employee.position,
@@ -124,13 +156,13 @@ export class EmployeeRosterImportService {
             actualRegularDate: raw.employee.actualRegularDate,
             employmentType: raw.employee.employmentTypeText ? normalized.employmentType : undefined,
             status: raw.employee.employeeStatusText ? normalized.employeeStatus : undefined,
+            accountType: AccountType.employee,
           }) as Prisma.UserUncheckedUpdateInput
           : commonData;
 
         if (importRow.action === 'create') {
           const created = await tx.user.create({
             data: {
-              employeeNo: raw.employee.employeeNo!,
               ...commonData,
             },
             select: { id: true },
@@ -163,7 +195,7 @@ export class EmployeeRosterImportService {
       const unresolvedManagerNames = [...new Set(managerNames.filter((name) => !managerByName.has(name)))];
       const managerCandidates = unresolvedManagerNames.length
         ? await tx.user.findMany({
-          where: { name: { in: unresolvedManagerNames }, deletedAt: null },
+          where: { name: { in: unresolvedManagerNames }, deletedAt: null, accountType: AccountType.employee },
           select: { id: true, name: true },
         })
         : [];
@@ -179,7 +211,7 @@ export class EmployeeRosterImportService {
       const yesterday = new Date(today.getTime() - 86_400_000);
       for (const importRow of actionableRows) {
         const raw = rawByRowNumber.get(importRow.rowNumber)!;
-        const normalized = this.normalizedEmployee(importRow.normalizedValue);
+        const normalized = this.normalizedEmployee(importRow.normalizedValue, organizationIds);
         const userId = userIdByRow.get(importRow.rowNumber)!;
         const isIncrementalUpdate = batch.mode === 'incremental' && importRow.action === 'update';
         const current = await tx.employmentRecord.findFirst({
@@ -312,6 +344,50 @@ export class EmployeeRosterImportService {
         });
       }
 
+      let resigned = 0;
+      if (batch.mode === 'full') {
+        const missingRows = batch.rows.filter((row) => row.action === 'possible_resignation' && row.matchedUserId);
+        for (const missingRow of missingRows) {
+          const userId = missingRow.matchedUserId!;
+          const archived = await tx.user.updateMany({
+            where: { id: userId, accountType: AccountType.employee, status: { not: UserStatus.resigned } },
+            data: { status: UserStatus.resigned, leaveDate: today, directManagerId: null },
+          });
+          if (archived.count !== 1) continue;
+          resigned++;
+          const currentEmployment = await tx.employmentRecord.findFirst({
+            where: {
+              userId,
+              effectiveFrom: { lte: today },
+              OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }],
+            },
+            orderBy: { effectiveFrom: 'desc' },
+            select: { id: true },
+          });
+          if (currentEmployment) {
+            await tx.employmentRecord.update({
+              where: { id: currentEmployment.id },
+              data: {
+                effectiveTo: today,
+                employeeStatus: UserStatus.resigned,
+                leaveDate: today,
+                changeType: 'departure',
+                reason: '未出现在已确认的全量花名册',
+              },
+            });
+          }
+          await tx.externalIdentityBinding.updateMany({
+            where: { userId, status: ExternalIdentityStatus.enabled, endedAt: null },
+            data: {
+              status: ExternalIdentityStatus.disabled,
+              disabledAt: new Date(),
+              disabledById: operator.id,
+              disabledReason: '员工未出现在已确认的全量花名册',
+            },
+          });
+        }
+      }
+
       const created = actionableRows.filter((row) => row.action === 'create').length;
       const updated = actionableRows.filter((row) => row.action === 'update').length;
       await tx.employeeImportBatch.update({
@@ -320,7 +396,7 @@ export class EmployeeRosterImportService {
           status: 'completed',
           confirmedById: operator.id,
           confirmedAt: new Date(),
-          summary: this.toJson({ ...(batch.summary as object), created, updated }),
+          summary: this.toJson({ ...(batch.summary as object), created, updated, resigned }),
         },
       });
       await tx.auditLog.create({
@@ -329,10 +405,12 @@ export class EmployeeRosterImportService {
           action: 'confirm_employee_roster_import',
           entityType: 'employee_import_batch',
           entityId: batchId,
-          newValue: { mode: batch.mode, created, updated, fileHashVerified: true },
+          newValue: { mode: batch.mode, created, updated, resigned, fileHashVerified: true },
         },
       });
-      return { batchId, status: 'completed' as const, created, updated };
+      return batch.mode === 'full'
+        ? { batchId, status: 'completed' as const, created, updated, resigned }
+        : { batchId, status: 'completed' as const, created, updated };
     }, { timeout: 60_000 });
   }
 
@@ -349,18 +427,35 @@ export class EmployeeRosterImportService {
       select: { id: true },
     });
 
+    const organizationPlan = source.mode === 'full' ? buildRosterOrganizationPlan(rows) : [];
     const [existingUsers, departments] = await Promise.all([
       this.prisma.user.findMany({
-        where: { deletedAt: null, employeeNo: { not: null } },
-        select: { id: true, employeeNo: true, name: true, deptId: true, status: true },
+        where: { deletedAt: null, accountType: AccountType.employee },
+        select: {
+          id: true,
+          employeeNo: true,
+          name: true,
+          deptId: true,
+          position: true,
+          status: true,
+          dept: { select: { name: true, fullPath: true } },
+          externalIdentityBindings: {
+            where: { status: ExternalIdentityStatus.enabled, endedAt: null },
+            select: { status: true },
+            take: 1,
+          },
+        },
       }),
       this.prisma.department.findMany({
-        where: { isActive: true },
+        where: source.mode === 'full' ? {} : { isActive: true },
         select: { id: true, name: true, fullPath: true, company: true },
       }),
     ]);
 
-    const existingByNo = new Map(existingUsers.map((user) => [user.employeeNo!, user]));
+    const existingByNo = new Map<string, ExistingRosterUser>();
+    for (const user of existingUsers) {
+      if (user.employeeNo) existingByNo.set(user.employeeNo, user);
+    }
     const fileNumberCounts = new Map<string, number>();
     const fileNameCounts = new Map<string, number>();
     const existingNameCounts = new Map<string, number>();
@@ -380,7 +475,7 @@ export class EmployeeRosterImportService {
     let updateCount = 0;
     let blockingErrorCount = 0;
     let warningCount = 0;
-    const seenNumbers = new Set<string>();
+    const matchedUserIds = new Set<string>();
     const persistedRows: Prisma.EmployeeImportRowCreateManyInput[] = [];
 
     for (const row of rows) {
@@ -404,11 +499,18 @@ export class EmployeeRosterImportService {
         }
       }
 
-      const existing = employeeNo ? existingByNo.get(employeeNo) : undefined;
+      const existing = this.matchExistingEmployee(row, existingByNo, existingUsers, warnings, errors);
+      if (existing) matchedUserIds.add(existing.id);
       let company = this.mapCompany(row.employee.companyText, warnings);
-      const deptId = this.matchDepartment(row, company, departments, warnings, existing?.deptId ?? null);
-      if (!deptId) errors.push('部门路径未匹配到 HRM 组织');
-      if (!row.employee.companyText) {
+      const organizationKey = source.mode === 'full' ? rosterOrganizationKeyForRow(row) : null;
+      const deptId = source.mode === 'full'
+        ? null
+        : this.matchDepartment(row, company, departments, warnings, existing?.deptId ?? null);
+      if (source.mode === 'full' && !organizationKey) {
+        errors.push('所属公司和部门路径不能为空');
+      }
+      if (source.mode === 'incremental' && !deptId) errors.push('部门路径未匹配到 HRM 组织');
+      if (source.mode === 'incremental' && !row.employee.companyText) {
         const matchedDepartment = deptId ? departments.find((dept) => dept.id === deptId) : undefined;
         if (matchedDepartment) {
           company = matchedDepartment.company;
@@ -421,7 +523,11 @@ export class EmployeeRosterImportService {
       const employeeStatus = this.mapEmployeeStatus(row.employee.employeeStatusText, warnings);
 
       if (existing && row.employee.name && existing.name !== row.employee.name) {
-        warnings.push(`同工号姓名变化：${existing.name} → ${row.employee.name}`);
+        if (existing.externalIdentityBindings?.some((binding) => binding.status === ExternalIdentityStatus.enabled)) {
+          errors.push(`同工号姓名变化且现有账号已绑定钉钉：${existing.name} → ${row.employee.name}，请先核验身份`);
+        } else {
+          warnings.push(`同工号姓名变化：${existing.name} → ${row.employee.name}`);
+        }
       }
 
       const action = errors.length > 0 ? 'blocked' : existing ? 'update' : 'create';
@@ -429,7 +535,6 @@ export class EmployeeRosterImportService {
       if (action === 'create') createCount++;
       if (action === 'update') updateCount++;
       warningCount += warnings.length;
-      if (employeeNo) seenNumbers.add(employeeNo);
 
       persistedRows.push({
         batchId: batch.id,
@@ -439,6 +544,7 @@ export class EmployeeRosterImportService {
             ...row.employee,
             company,
             deptId,
+            organizationKey,
             employmentType,
             employeeStatus,
           },
@@ -456,8 +562,7 @@ export class EmployeeRosterImportService {
     const missing = source.mode === 'full'
       ? existingUsers.filter((user) => (
         user.status !== UserStatus.resigned
-        && user.employeeNo
-        && !seenNumbers.has(user.employeeNo)
+        && !matchedUserIds.has(user.id)
       ))
       : [];
     for (const [index, user] of missing.entries()) {
@@ -468,7 +573,7 @@ export class EmployeeRosterImportService {
         matchedUserId: user.id,
         diffs: this.toJson([]),
         errors: this.toJson([]),
-        warnings: this.toJson(['员工未出现在本次全量花名册；仅列为疑似离职，不自动离职']),
+        warnings: this.toJson(['员工未出现在本次全量花名册；确认全量导入后将归档为离职']),
         action: 'possible_resignation',
       });
       warningCount++;
@@ -485,6 +590,7 @@ export class EmployeeRosterImportService {
       blockingErrorCount,
       warningCount,
       missingFromFullRosterCount: missing.length,
+      desiredDepartmentCount: organizationPlan.length,
     };
     const canConfirm = blockingErrorCount === 0;
     await this.prisma.employeeImportBatch.update({
@@ -497,6 +603,70 @@ export class EmployeeRosterImportService {
     });
 
     return { batchId: batch.id, canConfirm, summary };
+  }
+
+  private async synchronizeFullRosterOrganization(
+    tx: Prisma.TransactionClient,
+    rows: ParsedEmployeeRosterRow[],
+  ): Promise<Map<string, string>> {
+    const plan = buildRosterOrganizationPlan(rows);
+    if (plan.length === 0) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '全量花名册没有可用的公司和部门路径' });
+    }
+
+    const existingDepartments = await tx.department.findMany({
+      select: { id: true, fullPath: true },
+    });
+    const existingByPath = new Map<string, { id: string }>();
+    for (const department of existingDepartments) {
+      if (!department.fullPath) continue;
+      const path = this.normalizeOrgPath(department.fullPath);
+      if (!existingByPath.has(path)) existingByPath.set(path, department);
+    }
+
+    const idsByKey = new Map<string, string>();
+    for (const node of plan) {
+      const parentId = node.parentKey ? idsByKey.get(node.parentKey) : null;
+      if (node.parentKey && !parentId) {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: `组织上级缺失：${node.fullPath}` });
+      }
+      const existing = existingByPath.get(this.normalizeOrgPath(node.fullPath));
+      if (existing) {
+        await tx.department.update({
+          where: { id: existing.id },
+          data: {
+            name: node.name,
+            fullPath: node.fullPath,
+            parentId,
+            company: node.company,
+            sortOrder: node.sortOrder,
+            isActive: true,
+            dingtalkDeptId: null,
+          },
+        });
+        idsByKey.set(node.key, existing.id);
+      } else {
+        const created = await tx.department.create({
+          data: {
+            name: node.name,
+            fullPath: node.fullPath,
+            parentId,
+            company: node.company,
+            sortOrder: node.sortOrder,
+            isActive: true,
+          },
+          select: { id: true },
+        });
+        idsByKey.set(node.key, created.id);
+      }
+    }
+
+    const desiredIds = [...idsByKey.values()];
+    await tx.department.updateMany({
+      where: { id: { notIn: desiredIds } },
+      data: { isActive: false },
+    });
+    return idsByKey;
   }
 
   private matchDepartment(
@@ -550,13 +720,53 @@ export class EmployeeRosterImportService {
     return null;
   }
 
+  private matchExistingEmployee(
+    row: ParsedEmployeeRosterRow,
+    existingByNo: Map<string, ExistingRosterUser>,
+    existingUsers: ExistingRosterUser[],
+    warnings: string[],
+    errors: string[],
+  ): ExistingRosterUser | undefined {
+    const employeeNo = row.employee.employeeNo;
+    if (!employeeNo) return undefined;
+    const exact = existingByNo.get(employeeNo);
+    if (exact) return exact;
+
+    const normalizedName = this.normalizeRosterPersonName(row.employee.name ?? '');
+    if (!normalizedName) return undefined;
+    let candidates = existingUsers.filter((user) => (
+      !user.employeeNo
+      && this.normalizeRosterPersonName(user.name) === normalizedName
+    ));
+    if (candidates.length > 1) {
+      const leaf = row.employee.departmentPath.at(-1);
+      const departmentMatches = leaf
+        ? candidates.filter((user) => user.dept?.name === leaf || user.dept?.fullPath?.split('/').at(-1)?.trim() === leaf)
+        : [];
+      if (departmentMatches.length > 0) candidates = departmentMatches;
+    }
+    if (candidates.length > 1 && row.employee.position) {
+      const positionMatches = candidates.filter((user) => user.position === row.employee.position);
+      if (positionMatches.length > 0) candidates = positionMatches;
+    }
+    if (candidates.length === 1) {
+      warnings.push(`现有账号缺少工号，已按姓名和任职唯一匹配 ${candidates[0].name}，确认后补写工号`);
+      return candidates[0];
+    }
+    if (candidates.length > 1) {
+      errors.push(`工号 ${employeeNo} 未找到，但姓名“${row.employee.name}”存在多个无工号账号，无法唯一匹配`);
+    }
+    return undefined;
+  }
+
   private mapCompany(value: string | null, warnings: string[]): CompanyCode {
     const text = value ?? '';
-    if (text.includes('北京孚德')) return CompanyCode.beijing_fuede;
-    if (text.includes('孚德体育')) return CompanyCode.fuede_sports;
-    if (text.includes('梵丝宝') || text.includes('凡思堡')) return CompanyCode.fansibao;
     if (text.includes('/') || text.includes('协程')) warnings.push(`所属公司“${text}”按孚德主体系映射，请 HR 确认`);
-    return CompanyCode.fuede;
+    return mapRosterCompany(text);
+  }
+
+  private normalizeRosterPersonName(value: string): string {
+    return value.trim().replace(/[（(][男女][）)]$/, '').trim();
   }
 
   private normalizeOrgPath(value: string): string {
@@ -615,7 +825,7 @@ export class EmployeeRosterImportService {
     return Array.isArray(value) && value.length > 0;
   }
 
-  private normalizedEmployee(value: Prisma.JsonValue): {
+  private normalizedEmployee(value: Prisma.JsonValue, organizationIds?: Map<string, string>): {
     company: CompanyCode;
     deptId: string;
     employmentType: EmploymentType;
@@ -624,12 +834,14 @@ export class EmployeeRosterImportService {
     const employee = value && typeof value === 'object' && !Array.isArray(value)
       ? (value as Record<string, any>).employee
       : null;
-    if (!employee?.deptId) {
+    const deptId = employee?.deptId
+      ?? (employee?.organizationKey ? organizationIds?.get(employee.organizationKey as string) : undefined);
+    if (!deptId) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '预检组织映射缺失，请重新预检' });
     }
     return {
       company: employee.company as CompanyCode,
-      deptId: employee.deptId as string,
+      deptId,
       employmentType: employee.employmentType as EmploymentType,
       employeeStatus: employee.employeeStatus as UserStatus,
     };

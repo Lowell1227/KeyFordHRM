@@ -9,6 +9,7 @@ export interface EmployeeRosterPreviewSummary {
   blockingErrorCount: number;
   warningCount: number;
   missingFromFullRosterCount: number;
+  desiredDepartmentCount: number;
 }
 
 export interface EmployeeRosterPreviewResult {
@@ -22,6 +23,7 @@ export interface EmployeeRosterConfirmResult {
   status: 'completed';
   created: number;
   updated: number;
+  resigned?: number;
 }
 
 export interface EmployeeRosterImportRow {

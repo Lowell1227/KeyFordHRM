@@ -1,4 +1,5 @@
 import {
+  AccountType,
   PrismaClient,
   SysRole,
   CycleStatus,
@@ -128,6 +129,7 @@ async function ensureUser(
     directManagerId,
     canViewAll: fixture.canViewAll ?? false,
     isAssessorOnly: false,
+    accountType: AccountType.test,
     deletedAt: null,
   };
   if (existing) {

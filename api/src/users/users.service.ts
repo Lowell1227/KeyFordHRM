@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { ExternalIdentityProvider, SysRole, UserStatus, EmploymentType } from '@prisma/client';
+import { AccountType, ExternalIdentityProvider, SysRole, UserStatus, EmploymentType } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DataScopeService } from '@/common/services/data-scope.service';
 import { PaginationDto, paginated, Paginated } from '@/common/dto/pagination.dto';
@@ -86,7 +86,10 @@ export class UsersService {
 
   /** GET /users — 查询用户列表 */
   async findAll(dto: UserQueryDto, viewer: AuthUser): Promise<Paginated<UserListItem>> {
-    const where: Prisma.UserWhereInput = { deletedAt: null };
+    const where: Prisma.UserWhereInput = {
+      deletedAt: null,
+      accountType: AccountType.employee,
+    };
 
     // 部门过滤（含子部门）
     if (dto.deptId) {
@@ -97,6 +100,8 @@ export class UsersService {
     // 状态过滤
     if (dto.status) {
       where.status = dto.status;
+    } else {
+      where.status = { not: UserStatus.resigned };
     }
 
     // 用工类型过滤

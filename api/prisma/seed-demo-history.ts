@@ -1,4 +1,5 @@
 import {
+  AccountType,
   ActionItemStatus,
   CompanyCode,
   CycleStatus,
@@ -130,6 +131,7 @@ async function ensureUsers(password: string) {
         position: user.position,
         deptId: deptMap.get(user.deptName),
         status: 'active',
+        accountType: AccountType.test,
         canViewAll: user.canViewAll ?? false,
         deletedAt: null,
         dingtalkId: null,
@@ -147,6 +149,7 @@ async function ensureUsers(password: string) {
         position: user.position,
         deptId: deptMap.get(user.deptName),
         status: 'active',
+        accountType: AccountType.test,
         canViewAll: user.canViewAll ?? false,
         dingtalkId: null,
         dingtalkUnionId: null,

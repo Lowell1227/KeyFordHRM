@@ -57,6 +57,113 @@ function row(rowNumber: number, employeeNo: string, name: string): ParsedEmploye
 }
 
 describe('EmployeeRosterImportService', () => {
+  it('全量预检以花名册生成组织方案，缺少现有部门时不阻断确认', async () => {
+    const persistedRows: any[] = [];
+    const prisma = {
+      user: { findMany: jest.fn().mockResolvedValue([]) },
+      department: { findMany: jest.fn().mockResolvedValue([]) },
+      employeeImportBatch: {
+        create: jest.fn().mockResolvedValue({ id: 'batch-new-org' }),
+        update: jest.fn(async ({ data }: any) => ({ id: 'batch-new-org', ...data })),
+      },
+      employeeImportRow: {
+        createMany: jest.fn(async ({ data }: any) => {
+          persistedRows.push(...data);
+          return { count: data.length };
+        }),
+      },
+    };
+    const service = new EmployeeRosterImportService(prisma as any);
+    const rosterRow = row(2, '001', '李宏');
+    rosterRow.employee.companyText = '孚德';
+    rosterRow.employee.departmentPath = ['总经办'];
+
+    const result = await service.createPreviewFromRows(
+      [rosterRow],
+      { mode: 'full', fileName: '花名册.xlsx', fileHash: 'hash-new-org' },
+      { id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null, isAssessorOnly: false, canViewAll: true },
+    );
+
+    expect(result).toMatchObject({
+      canConfirm: true,
+      summary: { desiredDepartmentCount: 2, blockingErrorCount: 0 },
+    });
+    expect(persistedRows[0].normalizedValue.employee).toEqual(expect.objectContaining({
+      organizationKey: expect.any(String),
+      deptId: null,
+    }));
+  });
+
+  it('存量员工工号为空时按唯一姓名和部门匹配，避免创建重复人员', async () => {
+    const persistedRows: any[] = [];
+    const prisma = {
+      user: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'legacy-wang', employeeNo: null, name: '王琳', position: '平面设计师',
+          deptId: 'legacy-design', status: 'active', accountType: 'employee',
+          dept: { name: '创意设计部', fullPath: '创意设计部' },
+        }]),
+      },
+      department: { findMany: jest.fn().mockResolvedValue([]) },
+      employeeImportBatch: {
+        create: jest.fn().mockResolvedValue({ id: 'batch-match-legacy' }),
+        update: jest.fn(async ({ data }: any) => ({ id: 'batch-match-legacy', ...data })),
+      },
+      employeeImportRow: {
+        createMany: jest.fn(async ({ data }: any) => {
+          persistedRows.push(...data);
+          return { count: data.length };
+        }),
+      },
+    };
+    const service = new EmployeeRosterImportService(prisma as any);
+    const rosterRow = row(2, '286', '王琳（男）');
+    rosterRow.employee.companyText = '孚德';
+    rosterRow.employee.departmentPath = ['创意设计部'];
+    rosterRow.employee.position = '平面设计师';
+
+    const result = await service.createPreviewFromRows(
+      [rosterRow],
+      { mode: 'full', fileName: '花名册.xlsx', fileHash: 'hash-match-legacy' },
+      { id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null, isAssessorOnly: false, canViewAll: true },
+    );
+
+    expect(result.summary).toMatchObject({ createCount: 0, updateCount: 1 });
+    expect(persistedRows[0]).toEqual(expect.objectContaining({
+      matchedUserId: 'legacy-wang',
+      action: 'update',
+    }));
+  });
+
+  it('同工号姓名变化且账号已绑定钉钉时阻断导入，避免把真实身份换给另一人', async () => {
+    const prisma = {
+      user: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'bound-user', employeeNo: '001', name: '原姓名', position: '专员',
+          deptId: 'dept-old', status: 'active', accountType: 'employee', dept: null,
+          externalIdentityBindings: [{ status: 'enabled' }],
+        }]),
+      },
+      department: { findMany: jest.fn().mockResolvedValue([]) },
+      employeeImportBatch: {
+        create: jest.fn().mockResolvedValue({ id: 'batch-bound-rename' }),
+        update: jest.fn(async ({ data }: any) => ({ id: 'batch-bound-rename', ...data })),
+      },
+      employeeImportRow: { createMany: jest.fn().mockResolvedValue({ count: 1 }) },
+    };
+    const service = new EmployeeRosterImportService(prisma as any);
+    const rosterRow = row(2, '001', '新姓名');
+    rosterRow.employee.departmentPath = ['总经办'];
+
+    const result = await service.createPreviewFromRows(
+      [rosterRow],
+      { mode: 'full', fileName: '花名册.xlsx', fileHash: 'hash-bound-rename' },
+      { id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null, isAssessorOnly: false, canViewAll: true },
+    );
+
+    expect(result).toMatchObject({ canConfirm: false, summary: { blockingErrorCount: 1 } });
+  });
+
   it('全量预检只保存批次差异，不写员工正式数据，并把文件缺行列为疑似离职', async () => {
     const persistedRows: any[] = [];
     const prisma = {
@@ -420,6 +527,108 @@ describe('EmployeeRosterImportService', () => {
       where: { id: 'batch-3' },
       data: expect.objectContaining({ status: 'completed', confirmedById: 'hr-1' }),
     });
+  });
+
+  it('全量确认同步花名册组织、停用旧组织并把缺行正式员工归档为离职', async () => {
+    const parsed = row(2, '001', '李宏');
+    parsed.employee.companyText = '孚德';
+    parsed.employee.departmentPath = ['总经办'];
+    const departmentCreate = jest.fn()
+      .mockResolvedValueOnce({ id: 'dept-company' })
+      .mockResolvedValueOnce({ id: 'dept-executive' });
+    const transactionUserUpdate = jest.fn();
+    const transactionUserUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const tx = {
+      employeeImportBatch: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockResolvedValue({ id: 'batch-full', status: 'completed' }),
+      },
+      employeeImportRow: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      department: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'dept-old', fullPath: '外援', name: '外援' }]),
+        create: departmentCreate,
+        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      user: {
+        create: jest.fn(),
+        update: transactionUserUpdate,
+        updateMany: transactionUserUpdateMany,
+        findMany: jest.fn().mockResolvedValue([]),
+      },
+      externalIdentityBinding: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      employeeProfile: { upsert: jest.fn().mockResolvedValue({ id: 'profile-1' }) },
+      employmentRecord: {
+        findFirst: jest.fn()
+          .mockResolvedValueOnce(null)
+          .mockResolvedValueOnce({ id: 'missing-employment', effectiveFrom: new Date('2024-01-01T00:00:00.000Z') }),
+        create: jest.fn().mockResolvedValue({ id: 'employment-1' }),
+        update: jest.fn().mockResolvedValue({ id: 'employment-updated' }),
+      },
+      employeeContract: { createMany: jest.fn() },
+      auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-1' }) },
+    };
+    const prisma = {
+      employeeImportBatch: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'batch-full',
+          fileHash: 'hash-full',
+          mode: 'full',
+          status: 'ready_to_confirm',
+          summary: {},
+          rows: [
+            {
+              rowNumber: 2,
+              action: 'update',
+              matchedUserId: 'user-001',
+              errors: [],
+              normalizedValue: {
+                employee: {
+                  company: 'fuede',
+                  organizationKey: JSON.stringify(['孚德', '总经办']),
+                  deptId: null,
+                  employmentType: 'full_time',
+                  employeeStatus: 'active',
+                },
+              },
+            },
+            {
+              rowNumber: 4,
+              action: 'possible_resignation',
+              matchedUserId: 'user-missing',
+              errors: [],
+              normalizedValue: { employeeNo: null, name: '旧员工' },
+            },
+          ],
+        }),
+      },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new EmployeeRosterImportService(prisma as any);
+    const operator = {
+      id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null, isAssessorOnly: false, canViewAll: true,
+    };
+
+    const result = await service.confirmFromRows('batch-full', [parsed], 'hash-full', operator);
+
+    expect(result).toEqual(expect.objectContaining({ created: 0, updated: 1, resigned: 1 }));
+    expect(departmentCreate).toHaveBeenCalledTimes(2);
+    expect(tx.department.updateMany).toHaveBeenCalledWith({
+      where: { id: { notIn: ['dept-company', 'dept-executive'] } },
+      data: { isActive: false },
+    });
+    expect(transactionUserUpdate).toHaveBeenCalledWith({
+      where: { id: 'user-001' },
+      data: expect.objectContaining({ employeeNo: '001', deptId: 'dept-executive', status: 'active' }),
+    });
+    expect(transactionUserUpdateMany).toHaveBeenCalledWith({
+      where: { id: 'user-missing', accountType: 'employee', status: { not: 'resigned' } },
+      data: expect.objectContaining({ status: 'resigned', directManagerId: null }),
+    });
+    expect(tx.externalIdentityBinding.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ userId: 'user-missing', status: 'enabled' }),
+      data: expect.objectContaining({ status: 'disabled' }),
+    }));
   });
 
   it('增量确认不会用空单元格清空旧档案和任职字段', async () => {

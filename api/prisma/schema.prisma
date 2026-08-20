@@ -49,6 +49,14 @@ enum CompanyCode {
   @@map("company_code")
 }
 
+enum AccountType {
+  employee
+  service
+  test
+
+  @@map("account_type")
+}
+
 enum SysRole {
   system_admin
   hr
@@ -371,6 +379,7 @@ model User {
   entryDate          DateTime?      @map("entry_date") @db.Date
   plannedRegularDate DateTime?      @map("planned_regular_date") @db.Date
   actualRegularDate  DateTime?      @map("actual_regular_date") @db.Date
+  accountType        AccountType    @default(employee) @map("account_type")
   leaveDate          DateTime?      @map("leave_date") @db.Date // 离职日期，用于在岗豁免计算（修正项）
   employmentType     EmploymentType @default(full_time) @map("employment_type")
   status             UserStatus     @default(active)
@@ -447,6 +456,7 @@ model User {
   @@index([deptId])
   @@index([directManagerId])
   @@index([status])
+  @@index([accountType])
   @@index([dingtalkId])
   @@map("users")
 }

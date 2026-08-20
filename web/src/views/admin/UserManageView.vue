@@ -736,7 +736,7 @@ async function confirmRosterImport() {
   if (!file || !result?.canConfirm) return;
   try {
     await ElMessageBox.confirm(
-      `将按预检结果写入正式员工档案：新增 ${result.summary.createCount} 人、更新 ${result.summary.updateCount} 人。确认后不可直接撤销。`,
+      `将按花名册重建 ${result.summary.desiredDepartmentCount} 个组织节点，新增 ${result.summary.createCount} 人、更新 ${result.summary.updateCount} 人、归档离职 ${result.summary.missingFromFullRosterCount} 人。确认后不可直接撤销。`,
       '确认写入员工主数据',
       { confirmButtonText: '确认导入', cancelButtonText: '返回检查', type: 'warning' },
     );
@@ -747,7 +747,7 @@ async function confirmRosterImport() {
   rosterImportDialog.value.confirming = true;
   try {
     const confirmed = await employeeArchivesApi.confirmRoster(result.batchId, file);
-    ElMessage.success(`导入完成：新增 ${confirmed.created} 人，更新 ${confirmed.updated} 人`);
+    ElMessage.success(`导入完成：新增 ${confirmed.created} 人，更新 ${confirmed.updated} 人，归档离职 ${confirmed.resigned ?? 0} 人`);
     rosterImportDialog.value.visible = false;
     await Promise.all([loadDepartments(), loadUsers(), loadCheckUsers()]);
   } catch {
@@ -1340,9 +1340,10 @@ onMounted(async () => {
           <div><span>文件员工</span><strong>{{ rosterImportDialog.result.summary.totalRows }}</strong></div>
           <div><span>拟新增</span><strong>{{ rosterImportDialog.result.summary.createCount }}</strong></div>
           <div><span>拟更新</span><strong>{{ rosterImportDialog.result.summary.updateCount }}</strong></div>
+          <div><span>组织节点</span><strong>{{ rosterImportDialog.result.summary.desiredDepartmentCount }}</strong></div>
           <div class="is-danger"><span>阻断行</span><strong>{{ rosterImportDialog.result.summary.blockingErrorCount }}</strong></div>
           <div class="is-warning"><span>提醒</span><strong>{{ rosterImportDialog.result.summary.warningCount }}</strong></div>
-          <div><span>疑似离职</span><strong>{{ rosterImportDialog.result.summary.missingFromFullRosterCount }}</strong></div>
+          <div><span>将归档离职</span><strong>{{ rosterImportDialog.result.summary.missingFromFullRosterCount }}</strong></div>
         </div>
         <div v-if="rosterIssueRows.length" class="roster-preview__issues">
           <div class="roster-preview__issues-head">
@@ -1522,6 +1523,13 @@ onMounted(async () => {
 
 :global(.employee-archive-drawer) {
   max-width: 100%;
+}
+
+:global(.employee-archive-drawer .el-drawer__body) {
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .employee-archive {
@@ -1768,6 +1776,27 @@ onMounted(async () => {
   box-shadow: 0 4px 12px rgba(42, 77, 158, 0.1);
 }
 
+.user-manage-view {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.user-manage-view :deep(.chart-card),
+.user-manage-view :deep(.chart-card__body) {
+  min-height: 0;
+}
+
+.user-manage-view :deep(.chart-card__body) {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.view-switch {
+  flex: 0 0 auto;
+}
+
 .issue-dot {
   min-width: 18px;
   height: 18px;
@@ -1780,6 +1809,9 @@ onMounted(async () => {
 }
 
 .org-layout {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
   display: grid;
   grid-template-columns: minmax(260px, 320px) minmax(0, 1fr);
   gap: 18px;
@@ -1795,7 +1827,15 @@ onMounted(async () => {
 
 .org-tree-panel {
   padding: 14px;
-  min-height: 560px;
+  min-height: 0;
+}
+
+.org-tree-panel,
+.org-detail {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
+  -webkit-overflow-scrolling: touch;
 }
 
 .panel-head,
@@ -2376,6 +2416,7 @@ onMounted(async () => {
 @media (max-width: 1200px) {
   .org-layout {
     grid-template-columns: 1fr;
+    grid-template-rows: minmax(220px, 36%) minmax(0, 1fr);
   }
 
   .org-tree-panel {
@@ -2404,6 +2445,29 @@ onMounted(async () => {
 }
 
 @media (max-width: 768px) {
+  .user-manage-view {
+    height: auto;
+    overflow: visible;
+  }
+
+  .user-manage-view :deep(.chart-card__body) {
+    display: block;
+    overflow: visible;
+  }
+
+  .org-layout {
+    display: grid;
+    grid-template-rows: none;
+    min-height: auto;
+    overflow: visible;
+  }
+
+  .org-tree-panel,
+  .org-detail {
+    overflow: visible;
+    scrollbar-gutter: auto;
+  }
+
   .page-title,
   .dept-summary {
     flex-direction: column;
