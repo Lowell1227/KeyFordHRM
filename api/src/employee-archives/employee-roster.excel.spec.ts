@@ -59,4 +59,32 @@ describe('parseEmployeeRosterExcel', () => {
     expect((rows[0].employee as any).age).toBeUndefined();
     expect((rows[0].employee as any).tenure).toBeUndefined();
   });
+
+  it('出生日期公式缓存被 ExcelJS 读成无效日期时，按身份证中的合法日期恢复', async () => {
+    const workbook = new ExcelJS.Workbook();
+    const sheet = workbook.addWorksheet('Sheet1');
+    sheet.addRow(Array.from({ length: 48 }, (_, index) => `字段${index + 1}`));
+
+    const values = Array(48).fill(null);
+    values[0] = '张三';
+    values[1] = '007';
+    values[2] = '孚德';
+    values[3] = '项目中心';
+    values[6] = '项目经理';
+    values[10] = new Date('2024-01-02T00:00:00.000Z');
+    values[36] = '330100199005060011';
+    sheet.addRow(values);
+
+    const birthDateCell = sheet.getRow(2).getCell(21);
+    birthDateCell.value = {
+      formula: 'TEXT(MID(AK2,7,8),"0000-00-00")',
+      result: '1990-05-06',
+    };
+    birthDateCell.numFmt = 'mm-dd-yy';
+
+    const buffer = Buffer.from(await workbook.xlsx.writeBuffer());
+    const rows = await parseEmployeeRosterExcel(buffer);
+
+    expect(rows[0].profile.birthDate?.toISOString()).toBe('1990-05-06T00:00:00.000Z');
+  });
 });

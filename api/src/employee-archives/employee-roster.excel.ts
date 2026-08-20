@@ -110,7 +110,7 @@ export async function parseEmployeeRosterExcel(buffer: Buffer): Promise<ParsedEm
       profile: {
         phone: readText(row, 19),
         gender: readText(row, 20),
-        birthDate: readDate(row, 21),
+        birthDate: readBirthDate(row),
         ethnicity: readText(row, 24),
         education: readText(row, 25),
         professionalTitle: readText(row, 26),
@@ -224,7 +224,9 @@ function readInteger(row: ExcelJS.Row, column: number): number | null {
 
 function readDate(row: ExcelJS.Row, column: number): Date | null {
   const raw = unwrapFormula(row.getCell(column).value);
-  if (raw instanceof Date) return startOfUtcDay(raw);
+  if (raw instanceof Date) {
+    return Number.isNaN(raw.getTime()) ? null : startOfUtcDay(raw);
+  }
   if (typeof raw === 'number' && Number.isFinite(raw)) {
     return new Date(Date.UTC(1899, 11, 30) + Math.floor(raw) * 86_400_000);
   }
@@ -232,6 +234,27 @@ function readDate(row: ExcelJS.Row, column: number): Date | null {
   if (!text) return null;
   const parsed = new Date(text);
   return Number.isNaN(parsed.getTime()) ? null : startOfUtcDay(parsed);
+}
+
+function readBirthDate(row: ExcelJS.Row): Date | null {
+  const cellValue = readDate(row, 21);
+  if (cellValue) return cellValue;
+
+  const idNumber = readText(row, 37)?.replace(/\s+/g, '');
+  const match = idNumber
+    ? /^\d{6}(\d{4})(\d{2})(\d{2})\d{3}[\dXx]$/.exec(idNumber)
+    : null;
+  if (!match) return null;
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const candidate = new Date(Date.UTC(year, month - 1, day));
+  return candidate.getUTCFullYear() === year
+    && candidate.getUTCMonth() === month - 1
+    && candidate.getUTCDate() === day
+    ? candidate
+    : null;
 }
 
 function unwrapFormula(value: ExcelJS.CellValue): ExcelJS.CellValue {
