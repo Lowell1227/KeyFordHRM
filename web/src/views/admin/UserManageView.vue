@@ -21,6 +21,7 @@ import {
 } from '@/api/employee-archives.api';
 import { usersApi } from '@/api/users.api';
 import ChartCard from '@/components/common/ChartCard.vue';
+import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
 import { useAuthStore } from '@/stores/auth.store';
 import type { Department, User as ManagedUser, UserQuery } from '@/types/api.types';
@@ -935,36 +936,39 @@ onMounted(async () => {
       </section>
 
       <section v-else-if="activeView === 'users'" class="directory-view">
-        <div class="light-filter">
-          <el-input
-            v-model="userQuery.keyword"
-            :prefix-icon="Search"
-            placeholder="搜索姓名或工号"
-            clearable
-            class="filter-keyword"
-            @keyup.enter="onUserQueryChange"
-          />
-          <el-tree-select
-            v-model="userQuery.deptId"
-            :data="departments"
-            node-key="id"
-            :props="{ label: 'name', children: 'children' }"
-            placeholder="全部部门"
-            clearable
-            filterable
-          />
-          <el-select v-model="userQuery.status" placeholder="全部状态" clearable>
-            <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-          </el-select>
-          <el-select v-model="userQuery.sysRole" placeholder="全部角色" clearable>
-            <el-option v-for="opt in sysRoleOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-          </el-select>
-          <el-button type="primary" @click="onUserQueryChange">查询</el-button>
-          <el-button @click="resetUserFilters">重置</el-button>
-        </div>
+        <CollapsibleFilterPanel class="roster-filter-panel">
+          <div class="light-filter">
+            <el-input
+              v-model="userQuery.keyword"
+              :prefix-icon="Search"
+              placeholder="搜索姓名或工号"
+              clearable
+              class="filter-keyword"
+              @keyup.enter="onUserQueryChange"
+            />
+            <el-tree-select
+              v-model="userQuery.deptId"
+              :data="departments"
+              node-key="id"
+              :props="{ label: 'name', children: 'children' }"
+              placeholder="全部部门"
+              clearable
+              filterable
+            />
+            <el-select v-model="userQuery.status" placeholder="全部状态" clearable>
+              <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+            </el-select>
+            <el-select v-model="userQuery.sysRole" placeholder="全部角色" clearable>
+              <el-option v-for="opt in sysRoleOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+            </el-select>
+            <el-button type="primary" @click="onUserQueryChange">查询</el-button>
+            <el-button @click="resetUserFilters">重置</el-button>
+          </div>
+        </CollapsibleFilterPanel>
 
-        <el-table v-loading="userLoading" :data="userList" row-key="id" class="app-table compact-table">
-          <el-table-column label="人员" min-width="180">
+        <div class="directory-table-region">
+          <el-table v-loading="userLoading" :data="userList" row-key="id" height="100%" class="app-table compact-table">
+            <el-table-column label="人员" min-width="180">
             <template #default="{ row }">
               <div class="person-cell">
                 <span class="avatar">{{ (row as ManagedUser).name.slice(0, 1) }}</span>
@@ -1015,8 +1019,9 @@ onMounted(async () => {
                 密码
               </el-button>
             </template>
-          </el-table-column>
-        </el-table>
+            </el-table-column>
+          </el-table>
+        </div>
         <el-pagination
           v-model:current-page="userQuery.page"
           v-model:page-size="userQuery.pageSize"
@@ -2069,11 +2074,29 @@ onMounted(async () => {
   grid-template-columns: minmax(260px, 1.5fr) repeat(3, minmax(160px, 1fr)) auto auto;
   gap: 12px;
   align-items: center;
-  padding: 14px;
-  margin-bottom: 16px;
-  border: 1px solid #e8edf5;
-  border-radius: 8px;
-  background: #fbfcff;
+  padding: 0;
+  margin: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.directory-view {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.directory-table-region {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.directory-table-region :deep(.el-table) {
+  height: 100%;
 }
 
 .person-cell {
@@ -2105,6 +2128,7 @@ onMounted(async () => {
 }
 
 .table-pagination {
+  flex: 0 0 auto;
   justify-content: flex-end;
   margin-top: 16px;
 }
@@ -2391,6 +2415,19 @@ onMounted(async () => {
     grid-template-rows: none;
     min-height: auto;
     overflow: visible;
+  }
+
+  .directory-view {
+    display: block;
+    overflow: visible;
+  }
+
+  .directory-table-region {
+    overflow: visible;
+  }
+
+  .directory-table-region :deep(.el-table) {
+    height: auto;
   }
 
   .org-tree-panel,

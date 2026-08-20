@@ -119,6 +119,31 @@ body,
   gap: var(--app-gap);
 }
 
+.page-stack.app-list-page {
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.app-list-page > .chart-card {
+  flex: 0 0 auto;
+  height: auto;
+  min-height: 0;
+}
+
+.app-list-page > .list-result-card {
+  flex: 1;
+}
+
+.list-result-card .el-table {
+  flex: 1;
+  min-height: 0;
+}
+
+.list-result-card .cycle-compact-table {
+  height: 100%;
+}
+
 /* 清爽表格：去边框、表头浅灰，复刻首页「考核明细」表格观感。
    用法：<el-table class="app-table">（去掉 border / stripe）。 */
 /* System data-grid style. Inspired by the task indicator table and used across
@@ -202,8 +227,31 @@ body,
 }
 .app-pager {
   display: flex;
+  flex: 0 0 auto;
   justify-content: flex-end;
   padding: 14px 20px;
+}
+
+.el-dialog {
+  display: flex;
+  max-height: calc(100dvh - 48px);
+  flex-direction: column;
+}
+
+.el-dialog__header,
+.el-dialog__footer,
+.el-drawer__header,
+.el-drawer__footer {
+  flex: 0 0 auto;
+}
+
+.el-dialog__body,
+.el-drawer__body {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
 }
 
 .el-table,
@@ -261,6 +309,15 @@ body,
 
   .page-stack {
     gap: 10px;
+  }
+
+  .page-stack.app-list-page {
+    height: auto;
+    overflow: visible;
+  }
+
+  .app-list-page .list-result-card .el-table {
+    height: auto !important;
   }
 
   .el-card {

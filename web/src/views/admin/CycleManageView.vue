@@ -6,6 +6,7 @@ import dayjs from 'dayjs';
 import { cyclesApi } from '@/api/cycles.api';
 import { departmentsApi } from '@/api/departments.api';
 import ChartCard from '@/components/common/ChartCard.vue';
+import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
 import CycleCompactTable from './components/CycleCompactTable.vue';
@@ -810,7 +811,7 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="cycle-manage-view page-stack">
+  <div class="cycle-manage-view page-stack" :class="{ 'app-list-page': !isCycleWorkspace }">
     <CycleWorkspaceShell
       v-if="isCycleWorkspace"
       :cycle="cycleDetail"
@@ -832,13 +833,14 @@ onMounted(() => {
     />
 
     <template v-else>
-    <ChartCard>
+    <ChartCard class="list-page-header-card">
       <template #title>考核周期管理</template>
       <template #extra>
         <el-button data-testid="cycle-create" type="primary" @click="openCreateDialog">新建周期</el-button>
       </template>
 
-      <div class="cycle-list-toolbar">
+      <CollapsibleFilterPanel title="周期筛选" class="page-filter-panel">
+        <div class="cycle-list-toolbar">
         <div class="cycle-group-tabs" aria-label="周期状态分组">
           <button
             v-for="group in CYCLE_STATUS_GROUPS"
@@ -876,10 +878,11 @@ onMounted(() => {
         <el-button type="primary" plain @click="handleSearch">查询</el-button>
         <el-button @click="handleReset">重置</el-button>
         </div>
-      </div>
+        </div>
+      </CollapsibleFilterPanel>
     </ChartCard>
 
-    <ChartCard :padded="false">
+    <ChartCard :padded="false" class="list-result-card">
       <CycleCompactTable
         v-if="listLoading || cycles.length > 0"
         :cycles="cycles"

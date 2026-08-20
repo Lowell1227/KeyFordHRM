@@ -9,6 +9,7 @@ import { departmentsApi } from '@/api/departments.api';
 import { usersApi } from '@/api/users.api';
 import DeptTree from '@/components/common/DeptTree.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import { formatDateTime } from '@/utils/date';
 import type {
   AssessmentTemplate,
@@ -523,8 +524,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="template-manage-view page-stack">
-    <ChartCard>
+  <div class="template-manage-view page-stack app-list-page">
+    <ChartCard class="list-page-header-card">
       <template #title>考核模板</template>
       <template #extra>
         <el-button
@@ -539,7 +540,8 @@ onMounted(() => {
         <el-button type="primary" :icon="Plus" data-testid="template-create" @click="openCreate">新建模板</el-button>
       </template>
 
-      <div class="filter-row">
+      <CollapsibleFilterPanel class="page-filter-panel">
+        <div class="filter-row">
         <el-input
           v-model="query.keyword"
           placeholder="搜索模板名称"
@@ -558,14 +560,16 @@ onMounted(() => {
           <el-option label="停用" :value="false" />
         </el-select>
         <el-button type="primary" @click="query.page = 1; loadList()">查询</el-button>
-      </div>
+        </div>
+      </CollapsibleFilterPanel>
     </ChartCard>
 
-    <ChartCard :padded="false">
+    <ChartCard :padded="false" class="list-result-card">
       <el-table
         v-loading="listLoading"
         class="app-table"
         :data="templates"
+        height="100%"
         row-key="id"
         @selection-change="handleSelectionChange"
       >

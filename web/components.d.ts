@@ -10,6 +10,7 @@ declare module 'vue' {
     AppHeader: typeof import('./src/components/layout/AppHeader.vue')['default']
     AppSidebar: typeof import('./src/components/layout/AppSidebar.vue')['default']
     ChartCard: typeof import('./src/components/common/ChartCard.vue')['default']
+    CollapsibleFilterPanel: typeof import('./src/components/common/CollapsibleFilterPanel.vue')['default']
     DeptResultChart: typeof import('./src/components/charts/DeptResultChart.vue')['default']
     DeptTree: typeof import('./src/components/common/DeptTree.vue')['default']
     DonutScoreChart: typeof import('./src/components/charts/DonutScoreChart.vue')['default']

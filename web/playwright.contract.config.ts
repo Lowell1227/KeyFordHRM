@@ -12,6 +12,7 @@ export default defineConfig({
     '17-cycle-launch-entry-ux.spec.ts',
     '18-dashboard-report-business-clarity.spec.ts',
     '19-test-account-quick-login.spec.ts',
+    '21-unified-list-workspace.spec.ts',
   ],
   workers: 1,
 });

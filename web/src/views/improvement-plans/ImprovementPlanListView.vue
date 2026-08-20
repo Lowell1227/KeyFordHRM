@@ -9,6 +9,7 @@ import { IMPROVEMENT_PLAN_STATUS_META } from '@/types/enums';
 import { formatDate } from '@/utils/date';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import type { ImprovementPlan } from '@/types/api.types';
 import type { ImprovementPlanStatus } from '@/types/enums';
 
@@ -91,14 +92,15 @@ function formatMeasuresCount(row: any): string {
 </script>
 
 <template>
-  <div class="improvement-plan-list page-stack">
-    <ChartCard class="header-card">
+  <div class="improvement-plan-list page-stack app-list-page">
+    <ChartCard class="header-card list-page-header-card">
       <template #title>绩效改进计划</template>
       <template #extra>
         <el-tag v-if="!isManagerOrHR" type="info" size="small">仅展示我的改进计划</el-tag>
       </template>
 
-      <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
+      <CollapsibleFilterPanel class="page-filter-panel">
+        <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
         <el-form-item label="状态">
           <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
             <el-option
@@ -121,11 +123,12 @@ function formatMeasuresCount(row: any): string {
           <el-button type="primary" :icon="Search" @click="onSearch">查询</el-button>
           <el-button :icon="RefreshRight" @click="onReset">重置</el-button>
         </el-form-item>
-      </el-form>
+        </el-form>
+      </CollapsibleFilterPanel>
     </ChartCard>
 
-    <ChartCard :padded="false">
-      <el-table v-loading="loading" :data="list" class="app-table" @row-click="goDetail">
+    <ChartCard :padded="false" class="list-result-card">
+      <el-table v-loading="loading" :data="list" height="100%" class="app-table" @row-click="goDetail">
         <el-table-column label="员工" min-width="140">
           <template #default="{ row }">
             <div class="employee-cell">

@@ -54,15 +54,15 @@ function statusType(status: string): string {
 </script>
 
 <template>
-  <div class="confirmation-mine page-stack">
-    <ChartCard class="header-card">
+  <div class="confirmation-mine page-stack app-list-page">
+    <ChartCard class="header-card list-page-header-card">
       <template #title>我的转正申请</template>
 
       <p class="tip">此处展示与您相关的转正申请进度，转正薪资等敏感信息不对员工本人展示。</p>
     </ChartCard>
 
-    <ChartCard :padded="false">
-      <el-table v-loading="loading" :data="list" class="app-table">
+    <ChartCard :padded="false" class="list-result-card">
+      <el-table v-loading="loading" :data="list" height="100%" class="app-table">
         <el-table-column label="状态" width="130">
           <template #default="{ row }">
             <el-tag :type="statusType((row as ConfirmationApplication).status) as any" size="small">

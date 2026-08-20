@@ -9,6 +9,7 @@ import { usePagination } from '@/composables/usePagination';
 import { PROBATION_STATUS_META } from '@/types/enums';
 import { formatDate } from '@/utils/date';
 import ChartCard from '@/components/common/ChartCard.vue';
+import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import type { ProbationReview } from '@/types/api.types';
 import type { ProbationReviewStatus } from '@/types/enums';
 
@@ -141,14 +142,15 @@ function actionLabel(row: ProbationReview): string {
 </script>
 
 <template>
-  <div class="probation-list page-stack">
-    <ChartCard>
+  <div class="probation-list page-stack app-list-page">
+    <ChartCard class="list-page-header-card">
       <template #title>{{ titleMap[mode] }}</template>
       <template #extra>
         <slot name="header-extra" />
       </template>
 
-      <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
+      <CollapsibleFilterPanel class="page-filter-panel">
+        <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
         <el-form-item label="状态">
           <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
             <el-option
@@ -171,11 +173,12 @@ function actionLabel(row: ProbationReview): string {
           <el-button type="primary" :icon="Search" @click="onSearch">查询</el-button>
           <el-button :icon="RefreshRight" @click="onReset">重置</el-button>
         </el-form-item>
-      </el-form>
+        </el-form>
+      </CollapsibleFilterPanel>
     </ChartCard>
 
-    <ChartCard :padded="false">
-      <el-table v-loading="loading" :data="list" class="app-table"
+    <ChartCard :padded="false" class="list-result-card">
+      <el-table v-loading="loading" :data="list" height="100%" class="app-table"
         >
         <el-table-column label="员工" min-width="140">
           <template #default="{ row }">{{ (row as ProbationReview).employee?.name || '-' }}</template>

@@ -9,6 +9,7 @@ import { INTERVIEW_METHOD_LABELS, INTERVIEW_STATUS_LABELS } from '@/types/enums'
 import { formatDate, isOverdue, daysUntilDeadline } from '@/utils/date';
 import InterviewDrawer from './InterviewDrawer.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import type { PerformanceInterview } from '@/types/api.types';
 import type { InterviewStatus } from '@/types/enums';
 
@@ -92,41 +93,43 @@ function statusLabel(status: InterviewStatus): string {
 </script>
 
 <template>
-  <div class="interview-list page-stack">
-    <ChartCard>
+  <div class="interview-list page-stack app-list-page">
+    <ChartCard class="list-page-header-card">
       <template #title>绩效面谈工作台</template>
       <template #extra>
         <el-tag type="info" size="small">仅展示需由我面谈的记录</el-tag>
       </template>
 
-      <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
-        <el-form-item label="状态">
-          <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
-            <el-option
-              v-for="s in statusOptions"
-              :key="s"
-              :label="statusLabel(s)"
-              :value="s"
+      <CollapsibleFilterPanel class="page-filter-panel">
+        <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
+          <el-form-item label="状态">
+            <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
+              <el-option
+                v-for="s in statusOptions"
+                :key="s"
+                :label="statusLabel(s)"
+                :value="s"
+              />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="姓名/工号">
+            <el-input
+              v-model="filters.keyword"
+              placeholder="请输入姓名或工号"
+              clearable
+              style="width: 220px"
             />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="姓名/工号">
-          <el-input
-            v-model="filters.keyword"
-            placeholder="请输入姓名或工号"
-            clearable
-            style="width: 220px"
-          />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :icon="Search" @click="onSearch">查询</el-button>
-          <el-button :icon="RefreshRight" @click="onReset">重置</el-button>
-        </el-form-item>
-      </el-form>
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" :icon="Search" @click="onSearch">查询</el-button>
+            <el-button :icon="RefreshRight" @click="onReset">重置</el-button>
+          </el-form-item>
+        </el-form>
+      </CollapsibleFilterPanel>
     </ChartCard>
 
-    <ChartCard :padded="false" class="list-card">
-      <el-table v-loading="loading" class="app-table" :data="list">
+    <ChartCard :padded="false" class="list-card list-result-card">
+      <el-table v-loading="loading" class="app-table" :data="list" height="100%">
         <el-table-column label="员工" min-width="160">
           <template #default="{ row }">
             <div class="employee-cell">

@@ -213,8 +213,8 @@ async function handlePublish() {
 </script>
 
 <template>
-  <div class="publish-view page-stack">
-    <ChartCard>
+  <div class="publish-view page-stack" :class="{ 'app-list-page': selectedCycle }">
+    <ChartCard class="list-page-header-card">
       <template #title>结果公示发布台</template>
       <template #extra>
         <div class="publish-view__toolbar">
@@ -269,13 +269,14 @@ async function handlePublish() {
       </div>
     </ChartCard>
 
-    <ChartCard v-if="selectedCycle" :padded="false">
+    <ChartCard v-if="selectedCycle" :padded="false" class="list-result-card">
       <template #default>
         <el-table
           ref="tableRef"
           class="app-table"
           v-loading="loading"
           :data="tasks"
+          height="100%"
           row-key="id"
           :row-class-name="rowClassName"
           @selection-change="onSelectionChange"

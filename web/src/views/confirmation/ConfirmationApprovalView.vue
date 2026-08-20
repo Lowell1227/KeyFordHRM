@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { confirmationApi } from '@/api/confirmation.api';
 import ChartCard from '@/components/common/ChartCard.vue';
+import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import { usePagination } from '@/composables/usePagination';
 import { CONFIRMATION_STATUS_META, VOTE_RESULT_LABELS } from '@/types/enums';
 import { formatDate } from '@/utils/date';
@@ -86,11 +87,12 @@ function pendingLabel(row: ConfirmationApplication): string {
 </script>
 
 <template>
-  <div class="confirmation-approval page-stack">
-    <ChartCard class="header-card">
+  <div class="confirmation-approval page-stack app-list-page">
+    <ChartCard class="header-card list-page-header-card">
       <template #title>转正审批台</template>
 
-      <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
+      <CollapsibleFilterPanel class="page-filter-panel">
+        <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
         <el-form-item label="姓名">
           <el-input v-model="filters.keyword" placeholder="请输入姓名" clearable style="width: 220px" />
         </el-form-item>
@@ -98,11 +100,12 @@ function pendingLabel(row: ConfirmationApplication): string {
           <el-button type="primary" @click="onSearch">查询</el-button>
           <el-button @click="onReset">重置</el-button>
         </el-form-item>
-      </el-form>
+        </el-form>
+      </CollapsibleFilterPanel>
     </ChartCard>
 
-    <ChartCard :padded="false">
-      <el-table v-loading="loading" :data="list" class="app-table">
+    <ChartCard :padded="false" class="list-result-card">
+      <el-table v-loading="loading" :data="list" height="100%" class="app-table">
         <el-table-column label="员工" min-width="120">
           <template #default="{ row }">{{ (row as ConfirmationApplication).employee?.name }}</template>
         </el-table-column>

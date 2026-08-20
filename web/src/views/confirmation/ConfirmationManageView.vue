@@ -6,6 +6,7 @@ import { Plus, Warning } from '@element-plus/icons-vue';
 import { confirmationApi } from '@/api/confirmation.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import { usePagination } from '@/composables/usePagination';
 import {
   CONFIRMATION_STATUS_META,
@@ -221,9 +222,9 @@ function voteType(result?: string | null): string {
 </script>
 
 <template>
-  <div class="confirmation-manage page-stack">
+  <div class="confirmation-manage page-stack app-list-page">
     <!-- 预警卡片 -->
-    <ChartCard class="warning-card">
+    <ChartCard class="warning-card list-auxiliary-card">
       <template #title>
         <span class="warning-title">
           <el-icon class="warning-icon"><Warning /></el-icon>
@@ -249,13 +250,14 @@ function voteType(result?: string | null): string {
       </el-table>
     </ChartCard>
 
-    <ChartCard class="header-card">
+    <ChartCard class="header-card list-page-header-card">
       <template #title>转正申请管理</template>
       <template #extra>
         <el-button data-testid="confirmation-create" type="primary" :icon="Plus" @click="openCreate">发起转正申请</el-button>
       </template>
 
-      <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
+      <CollapsibleFilterPanel class="page-filter-panel">
+        <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
         <el-form-item label="状态">
           <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
             <el-option
@@ -273,11 +275,12 @@ function voteType(result?: string | null): string {
           <el-button type="primary" @click="onSearch">查询</el-button>
           <el-button @click="onReset">重置</el-button>
         </el-form-item>
-      </el-form>
+        </el-form>
+      </CollapsibleFilterPanel>
     </ChartCard>
 
-    <ChartCard :padded="false">
-      <el-table v-loading="loading" :data="list" class="app-table">
+    <ChartCard :padded="false" class="list-result-card">
+      <el-table v-loading="loading" :data="list" height="100%" class="app-table">
         <el-table-column label="员工" min-width="120">
           <template #default="{ row }">{{ (row as ConfirmationApplication).employee?.name }}</template>
         </el-table-column>

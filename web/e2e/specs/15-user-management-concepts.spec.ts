@@ -47,6 +47,128 @@ test('uses concise and consistent organization relationship concepts', async () 
   expect(source).not.toContain('title="设置审批覆盖"');
 });
 
+test('keeps the employee roster pager visible while the table scrolls independently', async ({ page }) => {
+  const employees = Array.from({ length: 45 }, (_, index) => ({
+    id: `employee-${index + 1}`,
+    name: `员工${String(index + 1).padStart(2, '0')}`,
+    employeeNo: String(index + 1).padStart(3, '0'),
+    deptId: 'dept-hr',
+    deptName: '人事行政部',
+    position: '专员',
+    employmentType: 'full_time',
+    status: 'active',
+    directManagerId: 'manager-1',
+    directManagerName: '直属主管',
+    sysRole: 'employee',
+    isAssessorOnly: false,
+    canViewAll: false,
+    dingtalkBindingState: 'unbound',
+  }));
+  const requestedPages: number[] = [];
+
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'mock-admin-token');
+    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+  });
+  await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse(0)),
+  }));
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      id: 'admin-1', name: '系统管理员', deptId: null, sysRole: 'system_admin', isAssessorOnly: false, canViewAll: true,
+    })),
+  }));
+  await page.route('**/api/v1/departments**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([{
+      id: 'dept-hr', name: '人事行政部', parentId: null, company: 'fuede', sortOrder: 1, isActive: true,
+      directMemberCount: employees.length, memberCount: employees.length, children: [],
+    }])),
+  }));
+  await page.route('**/api/v1/users**', (route) => {
+    const url = new URL(route.request().url());
+    const requestedPage = Number(url.searchParams.get('page') ?? 1);
+    const pageSize = Number(url.searchParams.get('pageSize') ?? 20);
+    requestedPages.push(requestedPage);
+    const start = (requestedPage - 1) * pageSize;
+    const items = employees.slice(start, start + pageSize);
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: employees.length, page: requestedPage, pageSize, items })),
+    });
+  });
+
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.goto(`${webBaseUrl}/users`);
+  await page.getByRole('button', { name: '员工名册' }).click();
+
+  const roster = page.locator('.directory-view');
+  const tableBody = roster.locator('.el-table__body-wrapper .el-scrollbar__wrap');
+  const pager = roster.locator('.el-pagination');
+  await expect(roster.getByText('员工01', { exact: true })).toBeVisible();
+  await expect.poll(() => tableBody.evaluate((element) => ({
+    overflowY: getComputedStyle(element).overflowY,
+    scrollable: element.scrollHeight > element.clientHeight,
+  }))).toEqual({ overflowY: 'auto', scrollable: true });
+  await expect.poll(() => pager.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return bounds.top >= 0 && bounds.bottom <= window.innerHeight;
+  })).toBe(true);
+
+  await pager.locator('.btn-next').click();
+  await expect.poll(() => requestedPages).toContain(2);
+  await expect(roster.getByText('员工21', { exact: true })).toBeVisible();
+});
+
+test('collapses and restores roster filters without hiding the result workspace', async ({ page }) => {
+  const employee = {
+    id: 'employee-1', name: '员工01', employeeNo: '001', deptId: 'dept-hr', deptName: '人事行政部',
+    position: '专员', employmentType: 'full_time', status: 'active', directManagerId: 'manager-1',
+    directManagerName: '直属主管', sysRole: 'employee', isAssessorOnly: false, canViewAll: false,
+    dingtalkBindingState: 'unbound',
+  };
+
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'mock-admin-token');
+    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+  });
+  await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse(0)),
+  }));
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      id: 'admin-1', name: '系统管理员', deptId: null, sysRole: 'system_admin', isAssessorOnly: false, canViewAll: true,
+    })),
+  }));
+  await page.route('**/api/v1/departments**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([{
+      id: 'dept-hr', name: '人事行政部', parentId: null, company: 'fuede', sortOrder: 1, isActive: true,
+      directMemberCount: 1, memberCount: 1, children: [],
+    }])),
+  }));
+  await page.route('**/api/v1/users**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 20, items: [employee] })),
+  }));
+
+  await page.setViewportSize({ width: 1440, height: 800 });
+  await page.goto(`${webBaseUrl}/users`);
+  await page.getByRole('button', { name: '员工名册' }).click();
+
+  const roster = page.locator('.directory-view');
+  const filterInput = roster.getByPlaceholder('搜索姓名或工号');
+  await expect(filterInput).toBeVisible();
+  await roster.getByRole('button', { name: '收起筛选' }).click();
+  await expect(filterInput).toBeHidden();
+  await expect(roster.getByText('员工01', { exact: true })).toBeVisible();
+  await expect(roster.locator('.el-pagination')).toBeVisible();
+  await roster.getByRole('button', { name: '展开筛选' }).click();
+  await expect(filterInput).toBeVisible();
+});
+
 test('filters direct-manager candidates by employee name', async ({ page }) => {
   const employee = {
     id: 'employee-yu',

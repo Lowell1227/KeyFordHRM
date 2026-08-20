@@ -10,6 +10,7 @@ import FileUpload from '@/components/common/FileUpload.vue';
 import DeptTree from '@/components/common/DeptTree.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import { usePagination } from '@/composables/usePagination';
 import { formatDateTime } from '@/utils/date';
 import type {
@@ -302,14 +303,15 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
 </script>
 
 <template>
-  <div class="appeals-view page-stack">
-    <ChartCard>
+  <div class="appeals-view page-stack app-list-page">
+    <ChartCard class="list-page-header-card">
       <template #title>申诉处理</template>
       <template #extra>
         <el-button type="primary" @click="openCreateDialog">录入申诉</el-button>
       </template>
 
-      <div class="appeals-view__filters">
+      <CollapsibleFilterPanel class="page-filter-panel">
+        <div class="appeals-view__filters">
         <el-select
           v-model="filters.cycleId"
           placeholder="考核周期"
@@ -351,11 +353,12 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
 
         <el-button type="primary" :loading="loading" @click="search">查询</el-button>
         <el-button @click="resetFilters">重置</el-button>
-      </div>
+        </div>
+      </CollapsibleFilterPanel>
     </ChartCard>
 
-    <ChartCard :padded="false">
-      <el-table v-loading="loading" :data="appeals" row-key="id" class="app-table">
+    <ChartCard :padded="false" class="list-result-card">
+      <el-table v-loading="loading" :data="appeals" row-key="id" height="100%" class="app-table">
         <el-table-column prop="appellant.name" label="员工" min-width="120">
           <template #default="{ row }">
             {{ row.appellant?.name ?? '-' }}

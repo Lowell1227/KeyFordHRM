@@ -5,6 +5,7 @@ import { Plus, Download, Upload, Document } from '@element-plus/icons-vue';
 import type { UploadFile } from 'element-plus';
 import { indicatorsApi } from '@/api/indicators.api';
 import ChartCard from '@/components/common/ChartCard.vue';
+import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import { useExport } from '@/composables/useExport';
 import { usePagination } from '@/composables/usePagination';
 import type { Indicator, IndicatorQuery, CreateIndicatorBody } from '@/types/api.types';
@@ -449,9 +450,10 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="indicator-library-view page-stack">
-    <ChartCard class="filter-card">
-      <el-form :model="queryForm" class="query-form">
+  <div class="indicator-library-view page-stack app-list-page">
+    <ChartCard class="filter-card list-page-header-card">
+      <CollapsibleFilterPanel title="指标筛选" class="page-filter-panel">
+        <el-form :model="queryForm" class="query-form">
         <div class="filter-panel">
           <el-form-item label="关键词" class="query-item query-item--keyword">
             <el-input
@@ -525,10 +527,11 @@ onMounted(() => {
             </el-form-item>
           </div>
         </div>
-      </el-form>
+        </el-form>
+      </CollapsibleFilterPanel>
     </ChartCard>
 
-    <ChartCard :padded="false">
+    <ChartCard :padded="false" class="list-result-card">
       <template #title>指标库</template>
       <template #extra>
         <div class="table-actions">
@@ -539,7 +542,7 @@ onMounted(() => {
         </div>
       </template>
 
-      <el-table v-loading="loading" class="app-table" :data="list" row-key="id">
+      <el-table v-loading="loading" class="app-table" :data="list" row-key="id" height="100%">
         <el-table-column prop="name" label="指标名称" min-width="180" show-overflow-tooltip />
         <el-table-column prop="code" label="编码" min-width="140" show-overflow-tooltip />
         <el-table-column prop="type" label="类型" width="110">
