@@ -154,7 +154,12 @@ export interface Department {
   approverName?: string;
   effectiveApproverId?: string | null;
   effectiveApproverName?: string | null;
-  effectiveApproverSource?: 'manual_override' | 'parent_leader' | 'ancestor_chain' | 'unresolved';
+  effectiveApproverSource?:
+    | 'manual_override'
+    | 'leader_manager'
+    | 'parent_leader'
+    | 'ancestor_chain'
+    | 'unresolved';
   effectiveApproverDeptId?: string | null;
   effectiveApproverDeptName?: string | null;
   company: CompanyCode;

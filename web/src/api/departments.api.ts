@@ -20,7 +20,7 @@ export const departmentsApi = {
     return apiGet('/departments/tree', query as Record<string, unknown>);
   },
 
-  /** PATCH /departments/:id/leader — 更新部门组织负责人 */
+  /** PATCH /departments/:id/leader — 更新部门负责人 */
   updateLeader(id: string, body: UpdateLeaderBody): Promise<Department> {
     return apiPatch(`/departments/${id}/leader`, body);
   },

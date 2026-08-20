@@ -17,7 +17,12 @@ export interface DepartmentNode {
   approverName: string | null;
   effectiveApproverId?: string | null;
   effectiveApproverName?: string | null;
-  effectiveApproverSource?: 'manual_override' | 'parent_leader' | 'ancestor_chain' | 'unresolved';
+  effectiveApproverSource?:
+    | 'manual_override'
+    | 'leader_manager'
+    | 'parent_leader'
+    | 'ancestor_chain'
+    | 'unresolved';
   effectiveApproverDeptId?: string | null;
   effectiveApproverDeptName?: string | null;
   company?: CompanyCode;
@@ -52,7 +57,13 @@ export class DepartmentsService {
         company: true,
         sortOrder: true,
         isActive: true,
-        leader: { select: { name: true } },
+        leader: {
+          select: {
+            name: true,
+            directManagerId: true,
+            directManager: { select: { name: true } },
+          },
+        },
         approver: { select: { name: true } },
       },
       orderBy: { sortOrder: 'asc' },
@@ -104,6 +115,8 @@ export class DepartmentsService {
         parentId: d.parentId ?? null,
         leaderId: d.leaderId ?? null,
         leaderName: d.leader?.name ?? null,
+        leaderDirectManagerId: d.leader?.directManagerId ?? null,
+        leaderDirectManagerName: d.leader?.directManager?.name ?? null,
         approverId: d.approverId ?? null,
         approverName: d.approver?.name ?? null,
       })),
@@ -271,7 +284,7 @@ export class DepartmentsService {
       if (!user || user.deletedAt !== null) {
         throw new BadRequestException({
           code: ERROR_CODE.PARAM_INVALID,
-          message: '组织负责人不存在或已删除',
+          message: '部门负责人不存在或已删除',
         });
       }
     }

@@ -682,7 +682,7 @@ export class EmployeeRosterImportService {
       if (node.leaderName && !leaderId) {
         throw new ConflictException({
           code: ERROR_CODE.CONFLICT,
-          message: `组织负责人无法唯一匹配：${node.fullPath} → ${node.leaderName}`,
+          message: `部门负责人无法唯一匹配：${node.fullPath} → ${node.leaderName}`,
         });
       }
       await tx.department.update({

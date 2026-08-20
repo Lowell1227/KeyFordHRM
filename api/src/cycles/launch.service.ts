@@ -832,7 +832,13 @@ export class LaunchService {
         name: true,
         parentId: true,
         leaderId: true,
-        leader: { select: { name: true } },
+        leader: {
+          select: {
+            name: true,
+            directManagerId: true,
+            directManager: { select: { name: true } },
+          },
+        },
         approverId: true,
         approver: { select: { name: true } },
       },
@@ -845,6 +851,8 @@ export class LaunchService {
         parentId: dept.parentId ?? null,
         leaderId: dept.leaderId ?? null,
         leaderName: dept.leader?.name ?? null,
+        leaderDirectManagerId: dept.leader?.directManagerId ?? null,
+        leaderDirectManagerName: dept.leader?.directManager?.name ?? null,
         approverId: dept.approverId ?? null,
         approverName: dept.approver?.name ?? null,
       })),
@@ -904,10 +912,12 @@ export class LaunchService {
       messages.push(`以下员工未设置直属主管：${Array.from(missingManagers).join('、')}`);
     }
     if (missingDeptLeaders.size > 0) {
-      messages.push(`以下部门未设置组织负责人：${Array.from(missingDeptLeaders).join('、')}`);
+      messages.push(`以下部门未设置部门负责人：${Array.from(missingDeptLeaders).join('、')}`);
     }
     if (missingApprovers.size > 0) {
-      messages.push(`以下部门未能自动推导审批人，请补上级负责人或设置审批覆盖：${Array.from(missingApprovers).join('、')}`);
+      messages.push(
+        `以下部门未设置最终业务审批人，请补齐部门负责人及其直属主管；最高层级可手动设置：${Array.from(missingApprovers).join('、')}`,
+      );
     }
 
     if (messages.length > 0) {

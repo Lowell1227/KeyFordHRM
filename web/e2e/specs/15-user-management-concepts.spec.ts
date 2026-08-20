@@ -13,6 +13,8 @@ const apiResponse = (data: unknown) => ({
   timestamp: Date.now(),
 });
 
+const webBaseUrl = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173';
+
 test('uses concise and consistent organization relationship concepts', async () => {
   const source = await readFile(viewPath, 'utf8');
 
@@ -20,13 +22,20 @@ test('uses concise and consistent organization relationship concepts', async () 
     '人员设置',
     '直属主管',
     '系统权限',
-    '设置组织负责人',
-    '绩效结果审批人',
-    '指定审批人',
+    '设置部门负责人',
+    '最终业务审批人',
+    '设置最终业务审批人',
+    '待处理事项',
   ]) {
     expect(source).toContain(label);
   }
 
+  expect(source).not.toContain('HRM 花名册是组织、人员和任职的唯一依据');
+  expect(source).not.toContain('审批未就绪');
+  expect(source).not.toContain('未推导');
+  expect(source).not.toContain('审批人来源');
+  expect(source).not.toContain('绩效结果审批人');
+  expect(source).not.toContain('组织负责人');
   expect(source).not.toContain('openManagerDialog');
   expect(source).not.toContain('openRoleDialog');
   expect(source).not.toContain('该员工的系统角色');
@@ -99,8 +108,8 @@ test('filters direct-manager candidates by employee name', async ({ page }) => {
       directMemberCount: 1,
       memberCount: 1,
       effectiveApproverId: 'approver-yao',
-      effectiveApproverName: '姚瑶',
-      effectiveApproverSource: 'manual_override',
+      effectiveApproverName: '郭志浩',
+      effectiveApproverSource: 'leader_manager',
       children: [],
     }])),
   }));
@@ -118,14 +127,13 @@ test('filters direct-manager candidates by employee name', async ({ page }) => {
     });
   });
 
-  await page.goto('http://localhost:5173/users');
-  const approverCard = page.locator('.relation-card').filter({ hasText: '绩效结果审批人' });
-  await expect(approverCard).toContainText('审批该部门员工经 HR 校准后的绩效结果');
-  await expect(page.getByRole('button', { name: '指定审批人' })).toBeVisible();
-  const approverSource = page.locator('.approver-trail-card');
-  await expect(approverSource).toContainText('审批人来源');
-  await expect(approverSource).toContainText('手动指定');
-  await expect(approverSource).not.toContainText('审批覆盖');
+  await page.goto(`${webBaseUrl}/users`);
+  const approverCard = page.locator('.relation-card').filter({ hasText: '最终业务审批人' });
+  await expect(approverCard).toContainText('郭志浩');
+  await expect(approverCard).toContainText('自动取部门负责人的直属主管');
+  await expect(approverCard).toContainText('HR 只负责校准');
+  await expect(page.getByRole('button', { name: '设置最终业务审批人' })).toBeVisible();
+  await expect(page.locator('.approver-trail-card')).toHaveCount(0);
   await page.getByRole('button', { name: '人员设置' }).click();
   const dialog = page.getByRole('dialog', { name: '人员设置' });
   await expect(dialog).toBeVisible();
@@ -219,7 +227,7 @@ test('uses one person settings dialog and shows manager access before saving', a
     });
   });
 
-  await page.goto('http://localhost:5173/users');
+  await page.goto(`${webBaseUrl}/users`);
   await expect(page.getByRole('columnheader', { name: '岗位', exact: true })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: '系统角色', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '人员设置' }).click();
@@ -347,7 +355,7 @@ test('opens one employee archive with employment history, contracts and an ident
     contentType: 'application/json', body: JSON.stringify(apiResponse(archive)),
   }));
 
-  await page.goto('http://localhost:5173/users');
+  await page.goto(`${webBaseUrl}/users`);
   await page.getByRole('button', { name: '员工名册' }).click();
   await page.getByRole('button', { name: '查看档案' }).click();
 
@@ -385,6 +393,15 @@ test('department tree, organization detail and archive drawer scroll independent
     directManagerName: null, sysRole: 'employee', isAssessorOnly: false, canViewAll: false,
     dingtalkBindingState: 'unbound',
   };
+  const orgMembers = [
+    employee,
+    ...Array.from({ length: 11 }, (_, index) => ({
+      ...employee,
+      id: `employee-scroll-${index + 2}`,
+      employeeNo: String(index + 2).padStart(3, '0'),
+      name: `滚动测试员工${index + 2}`,
+    })),
+  ];
   const archive = {
     ...employee,
     entryDate: '2024-01-01T00:00:00.000Z',
@@ -420,14 +437,14 @@ test('department tree, organization detail and archive drawer scroll independent
   }));
   await page.route('**/api/v1/users**', (route) => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 20, items: [employee] })),
+    body: JSON.stringify(apiResponse({ total: orgMembers.length, page: 1, pageSize: 20, items: orgMembers })),
   }));
   await page.route('**/api/v1/employee-archives/employee-scroll', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse(archive)),
   }));
 
   await page.setViewportSize({ width: 1440, height: 800 });
-  await page.goto('http://localhost:5173/users');
+  await page.goto(`${webBaseUrl}/users`);
 
   for (const selector of ['.app-rail', '.menu-scroll']) {
     await expect.poll(() => page.locator(selector).evaluate((element) => getComputedStyle(element).overflowY)).toBe('auto');

@@ -4,12 +4,15 @@ export interface DepartmentRelationRecord {
   parentId: string | null;
   leaderId: string | null;
   leaderName?: string | null;
+  leaderDirectManagerId?: string | null;
+  leaderDirectManagerName?: string | null;
   approverId: string | null;
   approverName?: string | null;
 }
 
 export type EffectiveApproverSource =
   | 'manual_override'
+  | 'leader_manager'
   | 'parent_leader'
   | 'ancestor_chain'
   | 'unresolved';
@@ -54,6 +57,18 @@ export function buildEffectiveApproverMap(
 
     const parent = current.parentId ? deptMap.get(current.parentId) : null;
     if (!parent) {
+      if (current.leaderDirectManagerId) {
+        const info: EffectiveApproverInfo = {
+          effectiveApproverId: current.leaderDirectManagerId,
+          effectiveApproverName: current.leaderDirectManagerName ?? null,
+          effectiveApproverSource: 'leader_manager',
+          sourceDeptId: current.id,
+          sourceDeptName: current.name ?? null,
+        };
+        memo.set(deptId, info);
+        return info;
+      }
+
       const info = unresolved();
       memo.set(deptId, info);
       return info;

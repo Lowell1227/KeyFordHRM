@@ -126,7 +126,6 @@ const flattenedDepartments = computed<Department[]>(() => {
 const selectedDept = computed(() => flattenedDepartments.value.find((dept) => dept.id === selectedDeptId.value) ?? null);
 
 const childDeptCount = computed(() => selectedDept.value?.children?.length ?? 0);
-const selectedDeptApproverTrail = computed(() => getApproverTrail(selectedDept.value));
 const selectedDeptIssueBadges = computed(() => getDeptIssueBadges(selectedDept.value));
 
 const orgMembers = ref<ManagedUser[]>([]);
@@ -178,8 +177,8 @@ const departmentIssueItems = computed<IssueItem[]>(() =>
       items.push({
         key: `${dept.id}-leader`,
         type: '部门',
-        title: `${dept.name} 未设置组织负责人`,
-        detail: '组织负责人就是原来的部门负责人，负责部门管理、绩效复核和管理范围归属。',
+        title: `${dept.name} 未设置部门负责人`,
+        detail: '部门负责人负责本部门管理和绩效复核。',
         level: 'warning',
         deptId: dept.id,
         targetView: 'org',
@@ -190,8 +189,8 @@ const departmentIssueItems = computed<IssueItem[]>(() =>
       items.push({
         key: `${dept.id}-approver`,
         type: '部门',
-        title: `${dept.name} 暂未推导出绩效结果审批人`,
-        detail: '当前部门已有在职员工，请先补齐上级组织负责人；跨组织等特殊场景可手动指定审批人。',
+        title: `${dept.name} 未设置最终业务审批人`,
+        detail: '当前部门有在职员工，但没有可自动匹配的业务上级。请补齐部门负责人及其直属主管；最高层级可手动设置。',
         level: 'danger',
         deptId: dept.id,
         targetView: 'org',
@@ -352,29 +351,29 @@ function resetUserFilters() {
   loadUsers();
 }
 
-function getApproverTrail(dept: Department | null): string[] {
-  if (!dept) return [];
+function getFinalApproverRule(dept: Department | null): string {
+  if (!dept) return '';
   if (!dept.effectiveApproverId) {
-    return [dept.name, '未找到绩效结果审批人'];
+    return '没有可自动匹配的业务上级，请手动设置';
   }
 
   if (dept.effectiveApproverSource === 'manual_override') {
-    return [dept.name, '手动指定', dept.effectiveApproverName || '已指定审批人'];
+    return '已手动设置；HR 只负责校准';
   }
 
-  if (dept.effectiveApproverDeptName) {
-    return [dept.name, dept.effectiveApproverDeptName, dept.effectiveApproverName || '绩效结果审批人'];
+  if (dept.effectiveApproverSource === 'leader_manager') {
+    return '自动取部门负责人的直属主管；HR 只负责校准';
   }
 
   if (dept.effectiveApproverSource === 'parent_leader') {
-    return [dept.name, '上一级组织负责人', dept.effectiveApproverName || '绩效结果审批人'];
+    return '自动取上一级部门负责人；HR 只负责校准';
   }
 
   if (dept.effectiveApproverSource === 'ancestor_chain') {
-    return [dept.name, '上层组织逐级继承', dept.effectiveApproverName || '绩效结果审批人'];
+    return `自动取${dept.effectiveApproverDeptName || '上级部门'}负责人；HR 只负责校准`;
   }
 
-  return [dept.name, dept.effectiveApproverName || '绩效结果审批人'];
+  return '由业务负责人审批；HR 只负责校准';
 }
 
 function getDeptIssueBadges(dept: Department | null): DeptIssueBadge[] {
@@ -384,7 +383,7 @@ function getDeptIssueBadges(dept: Department | null): DeptIssueBadge[] {
   const directMemberCount = dept.directMemberCount ?? 0;
 
   if (directMemberCount > 0 && !dept.effectiveApproverId) {
-    badges.push({ label: '审批未就绪', level: 'danger' });
+    badges.push({ label: '缺最终审批人', level: 'danger' });
   }
   if (!dept.leaderId) {
     badges.push({ label: '缺负责人', level: 'warning' });
@@ -631,7 +630,7 @@ async function confirmLeader() {
     await departmentsApi.updateLeader(leaderDialog.value.deptId, {
       leaderId: leaderDialog.value.leaderId ?? null,
     });
-    ElMessage.success('组织负责人已更新');
+    ElMessage.success('部门负责人已更新');
     leaderDialog.value.visible = false;
     await Promise.all([loadDepartments(), loadOrgMembers(), loadCheckUsers()]);
   } catch {
@@ -661,7 +660,7 @@ async function confirmApprover() {
     await departmentsApi.updateApprover(approverDialog.value.deptId, {
       approverId: approverDialog.value.approverId ?? null,
     });
-    ElMessage.success('绩效结果审批人已更新');
+    ElMessage.success('最终业务审批人已更新');
     approverDialog.value.visible = false;
     await Promise.all([loadDepartments(), loadCheckUsers()]);
   } catch {
@@ -775,7 +774,6 @@ onMounted(async () => {
         <div class="page-title">
           <div>
             <h2>员工档案</h2>
-            <p>HRM 花名册是组织、人员和任职的唯一依据；钉钉仅用于登录关联和消息通知。</p>
           </div>
           <div class="page-title__actions">
             <el-button type="primary" :icon="UploadFilled" @click="openRosterImportDialog">导入花名册</el-button>
@@ -787,7 +785,7 @@ onMounted(async () => {
       <div class="view-switch">
         <button :class="{ active: activeView === 'org' }" type="button" @click="activeView = 'org'">
           <el-icon><OfficeBuilding /></el-icon>
-          组织任职
+          组织架构
         </button>
         <button :class="{ active: activeView === 'users' }" type="button" @click="activeView = 'users'">
           <el-icon><UserFilled /></el-icon>
@@ -795,7 +793,7 @@ onMounted(async () => {
         </button>
         <button :class="{ active: activeView === 'checks' }" type="button" @click="activeView = 'checks'">
           <el-icon><Warning /></el-icon>
-          数据检查
+          待处理事项
           <span v-if="issueItems.length" class="issue-dot">{{ issueItems.length }}</span>
         </button>
       </div>
@@ -856,10 +854,10 @@ onMounted(async () => {
               <span class="dept-path">{{ selectedDept.fullPath || '未维护完整路径' }}</span>
               <div v-if="isSystemAdmin" class="dept-summary__actions">
                 <el-button type="primary" size="small" @click="openLeaderDialog(selectedDept)">
-                  设置组织负责人
+                  设置部门负责人
                 </el-button>
                 <el-button plain size="small" @click="openApproverDialog(selectedDept)">
-                  指定审批人
+                  设置最终业务审批人
                 </el-button>
               </div>
             </div>
@@ -875,30 +873,14 @@ onMounted(async () => {
               <strong>{{ childDeptCount }} 个</strong>
             </div>
             <div class="relation-card">
-              <span class="relation-card__label">组织负责人</span>
+              <span class="relation-card__label">部门负责人</span>
               <strong>{{ selectedDept.leaderName || '未设置' }}</strong>
-              <small>{{ selectedDept.leaderName ? '负责部门复核与组织范围' : '未设置将影响部门复核' }}</small>
+              <small>{{ selectedDept.leaderName ? '负责本部门管理和绩效复核' : '未设置将影响部门复核' }}</small>
             </div>
             <div class="relation-card">
-              <span class="relation-card__label">绩效结果审批人</span>
-              <strong>{{ selectedDept.effectiveApproverName || '未推导' }}</strong>
-              <small>审批该部门员工经 HR 校准后的绩效结果</small>
-            </div>
-          </div>
-
-          <div class="approver-trail-card">
-            <div class="approver-trail-card__head">
-              <strong>审批人来源</strong>
-            </div>
-            <div class="approver-trail">
-              <template v-for="(step, index) in selectedDeptApproverTrail" :key="`${step}-${index}`">
-                <span :class="['approver-trail__step', { 'is-final': index === selectedDeptApproverTrail.length - 1 }]">
-                  {{ step }}
-                </span>
-                <el-icon v-if="index < selectedDeptApproverTrail.length - 1" class="approver-trail__arrow">
-                  <ArrowRight />
-                </el-icon>
-              </template>
+              <span class="relation-card__label">最终业务审批人</span>
+              <strong>{{ selectedDept.effectiveApproverName || '未设置' }}</strong>
+              <small>{{ getFinalApproverRule(selectedDept) }}</small>
             </div>
           </div>
 
@@ -1050,7 +1032,7 @@ onMounted(async () => {
       <section v-else class="checks-view" v-loading="checkLoading || deptLoading">
         <div class="checks-summary">
           <div>
-            <h3>员工主数据检查</h3>
+            <h3>员工档案待处理事项</h3>
             <p>优先处理会影响绩效流程流转的问题。</p>
           </div>
           <strong>{{ issueItems.length }}</strong>
@@ -1090,7 +1072,7 @@ onMounted(async () => {
             <div class="checks-group__head">
               <div>
                 <strong>组织问题</strong>
-                <p>优先补齐组织负责人和绩效结果审批人的自动继承链。</p>
+                <p>优先补齐部门负责人、直属主管和最终业务审批人。</p>
               </div>
               <el-tag effect="plain" type="primary">{{ filteredDepartmentIssueItems.length }}/{{ departmentIssueItems.length }}</el-tag>
             </div>
@@ -1457,18 +1439,18 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="leaderDialog.visible" title="设置组织负责人" width="480px" :close-on-click-modal="false" destroy-on-close>
-      <p class="dialog-tip">组织负责人负责部门复核与组织范围，也是下级部门绩效结果审批人的默认来源。</p>
-      <UserSelect v-model="leaderDialog.leaderId" placeholder="搜索姓名或工号，留空则清空组织负责人" />
+    <el-dialog v-model="leaderDialog.visible" title="设置部门负责人" width="480px" :close-on-click-modal="false" destroy-on-close>
+      <p class="dialog-tip">部门负责人负责本部门管理和绩效复核，也是下级部门最终业务审批人的默认来源。</p>
+      <UserSelect v-model="leaderDialog.leaderId" placeholder="搜索姓名或工号，留空则清空部门负责人" />
       <template #footer>
         <el-button @click="leaderDialog.visible = false">取消</el-button>
         <el-button type="primary" @click="confirmLeader">确认</el-button>
       </template>
     </el-dialog>
 
-    <el-dialog v-model="approverDialog.visible" title="指定绩效结果审批人" width="480px" :close-on-click-modal="false" destroy-on-close>
-      <p class="dialog-tip">系统默认从上级组织负责人自动推导。仅在跨组织等特殊场景中，为 <strong>{{ approverDialog.deptName }}</strong> 手动指定；清空后恢复自动推导。</p>
-      <UserSelect v-model="approverDialog.approverId" placeholder="搜索姓名或工号，留空则恢复自动继承" />
+    <el-dialog v-model="approverDialog.visible" title="设置最终业务审批人" width="480px" :close-on-click-modal="false" destroy-on-close>
+      <p class="dialog-tip">二级及以下部门默认由上一级部门负责人审批；一级部门默认由部门负责人的直属主管审批。HR 只负责校准，跨部门或最高层级可手动设置。</p>
+      <UserSelect v-model="approverDialog.approverId" placeholder="搜索姓名或工号，留空则恢复自动匹配" />
       <template #footer>
         <el-button @click="approverDialog.visible = false">取消</el-button>
         <el-button type="primary" @click="confirmApprover">确认</el-button>
@@ -2120,57 +2102,6 @@ onMounted(async () => {
 .person-cell small {
   margin-top: 2px;
   color: #8a94a6;
-}
-
-.approver-trail-card {
-  padding: 14px;
-  margin-bottom: 16px;
-  border: 1px solid #e6ecf7;
-  border-radius: 8px;
-  background: linear-gradient(180deg, #fbfcff 0%, #f7faff 100%);
-}
-
-.approver-trail-card__head {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.approver-trail-card__head strong {
-  color: #1f2a44;
-  font-size: 15px;
-}
-
-.approver-trail {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.approver-trail__step {
-  display: inline-flex;
-  align-items: center;
-  min-height: 34px;
-  padding: 0 12px;
-  border: 1px solid #dfe7f7;
-  border-radius: 999px;
-  background: #fff;
-  color: #52627a;
-  font-size: 13px;
-}
-
-.approver-trail__step.is-final {
-  border-color: #cfdcff;
-  background: #edf3ff;
-  color: #2f63ff;
-  font-weight: 600;
-}
-
-.approver-trail__arrow {
-  color: #a8b2c5;
 }
 
 .table-pagination {
