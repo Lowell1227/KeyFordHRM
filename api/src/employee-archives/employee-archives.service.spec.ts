@@ -2,6 +2,37 @@ import { CompanyCode, EmploymentType, SysRole, UserStatus } from '@prisma/client
 import { EmployeeArchivesService } from './employee-archives.service';
 
 describe('EmployeeArchivesService', () => {
+  it('员工档案的当前所属公司来自有效任职记录而不是部门元数据', async () => {
+    const archive = {
+      id: 'user-1',
+      name: '员工甲',
+      dept: { id: 'dept-1', name: '项目一部', fullPath: '项目中心 / 项目一部', company: CompanyCode.fuede },
+      directManager: null,
+      employeeProfile: null,
+      employmentHistory: [{
+        id: 'employment-current',
+        company: CompanyCode.beijing_fuede,
+        effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
+        effectiveTo: null,
+        dept: { id: 'dept-1', name: '项目一部', fullPath: '项目中心 / 项目一部' },
+        directManager: null,
+      }],
+      externalIdentityBindings: [],
+      employeeContracts: [],
+    };
+    const prisma = {
+      user: { findUnique: jest.fn().mockResolvedValue(archive) },
+    };
+    const service = new EmployeeArchivesService(prisma as any);
+
+    const result = await service.findOne('user-1');
+
+    expect(result.currentEmployment).toEqual(expect.objectContaining({
+      id: 'employment-current',
+      company: CompanyCode.beijing_fuede,
+    }));
+  });
+
   it('updates the single profile owned by an existing employee instead of creating a second employee record', async () => {
     const user = {
       id: '10000000-0000-4000-8000-000000000001',

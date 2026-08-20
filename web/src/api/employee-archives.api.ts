@@ -58,6 +58,7 @@ export interface EmployeeArchive {
   entryDate: string | null;
   dept: { id: string; name: string; fullPath: string | null; company: string } | null;
   directManager: { id: string; name: string; employeeNo: string | null } | null;
+  currentEmployment: { id: string; company: string } | null;
   employeeProfile: {
     phone: string | null;
     gender: string | null;

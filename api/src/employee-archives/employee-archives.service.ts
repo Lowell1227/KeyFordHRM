@@ -107,8 +107,14 @@ export class EmployeeArchivesService {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '员工不存在' });
     }
     const [dingtalkBinding] = archive.externalIdentityBindings;
+    const now = new Date();
+    const currentEmployment = archive.employmentHistory.find((record) => (
+      record.effectiveFrom <= now
+      && (!record.effectiveTo || record.effectiveTo >= now)
+    )) ?? null;
     return {
       ...archive,
+      currentEmployment,
       dingtalkBindingState: !dingtalkBinding ? 'unbound' : dingtalkBinding.status,
       dingtalkBinding: dingtalkBinding ?? null,
       externalIdentityBindings: undefined,

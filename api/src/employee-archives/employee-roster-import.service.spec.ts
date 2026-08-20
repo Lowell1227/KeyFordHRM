@@ -86,10 +86,10 @@ describe('EmployeeRosterImportService', () => {
 
     expect(result).toMatchObject({
       canConfirm: true,
-      summary: { desiredDepartmentCount: 2, blockingErrorCount: 0 },
+      summary: { desiredDepartmentCount: 1, blockingErrorCount: 0 },
     });
     expect(persistedRows[0].normalizedValue.employee).toEqual(expect.objectContaining({
-      organizationKey: expect.any(String),
+      organizationKey: JSON.stringify(['总经办']),
       deptId: null,
     }));
   });
@@ -302,7 +302,7 @@ describe('EmployeeRosterImportService', () => {
     expect(result.summary.blockingErrorCount).toBe(2);
   });
 
-  it('组织路径唯一时允许跨公司编码匹配，并把公司差异列为提醒', async () => {
+  it('组织路径唯一时直接匹配，部门元数据中的公司编码不影响员工公司', async () => {
     const prisma = {
       user: { findMany: jest.fn().mockResolvedValue([]) },
       department: {
@@ -331,10 +331,10 @@ describe('EmployeeRosterImportService', () => {
 
     expect(result.canConfirm).toBe(true);
     expect(result.summary.blockingErrorCount).toBe(0);
-    expect(result.summary.warningCount).toBeGreaterThan(0);
+    expect(result.summary.warningCount).toBe(0);
   });
 
-  it('所属公司为空但部门唯一时，从 HRM 部门推导公司并列为提醒', async () => {
+  it('所属公司为空时不能从合并后的部门元数据反推公司', async () => {
     const persistedRows: any[] = [];
     const prisma = {
       user: { findMany: jest.fn().mockResolvedValue([]) },
@@ -368,10 +368,12 @@ describe('EmployeeRosterImportService', () => {
       operator,
     );
 
-    expect(result.canConfirm).toBe(true);
-    expect(result.summary.blockingErrorCount).toBe(0);
-    expect(result.summary.warningCount).toBeGreaterThan(0);
-    expect(persistedRows[0].normalizedValue.employee.company).toBe('fuede_sports');
+    expect(result.canConfirm).toBe(false);
+    expect(result.summary.blockingErrorCount).toBe(1);
+    expect(persistedRows[0]).toEqual(expect.objectContaining({
+      action: 'blocked',
+      errors: expect.arrayContaining(['所属公司不能为空']),
+    }));
   });
 
   it('HRM 存在同名部门时，存量员工沿用自己的当前部门并列为提醒', async () => {
@@ -533,9 +535,7 @@ describe('EmployeeRosterImportService', () => {
     const parsed = row(2, '001', '李宏');
     parsed.employee.companyText = '孚德';
     parsed.employee.departmentPath = ['总经办'];
-    const departmentCreate = jest.fn()
-      .mockResolvedValueOnce({ id: 'dept-company' })
-      .mockResolvedValueOnce({ id: 'dept-executive' });
+    const departmentCreate = jest.fn().mockResolvedValueOnce({ id: 'dept-executive' });
     const transactionUserUpdate = jest.fn();
     const transactionUserUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
     const tx = {
@@ -585,7 +585,7 @@ describe('EmployeeRosterImportService', () => {
               normalizedValue: {
                 employee: {
                   company: 'fuede',
-                  organizationKey: JSON.stringify(['孚德', '总经办']),
+                  organizationKey: JSON.stringify(['总经办']),
                   deptId: null,
                   employmentType: 'full_time',
                   employeeStatus: 'active',
@@ -612,10 +612,14 @@ describe('EmployeeRosterImportService', () => {
     const result = await service.confirmFromRows('batch-full', [parsed], 'hash-full', operator);
 
     expect(result).toEqual(expect.objectContaining({ created: 0, updated: 1, resigned: 1 }));
-    expect(departmentCreate).toHaveBeenCalledTimes(2);
+    expect(departmentCreate).toHaveBeenCalledTimes(1);
     expect(tx.department.updateMany).toHaveBeenCalledWith({
-      where: { id: { notIn: ['dept-company', 'dept-executive'] } },
+      where: { id: { notIn: ['dept-executive'] } },
       data: { isActive: false },
+    });
+    expect(tx.department.update).toHaveBeenCalledWith({
+      where: { id: 'dept-executive' },
+      data: { leaderId: 'user-001' },
     });
     expect(transactionUserUpdate).toHaveBeenCalledWith({
       where: { id: 'user-001' },

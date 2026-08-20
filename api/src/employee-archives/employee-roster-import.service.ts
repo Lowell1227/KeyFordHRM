@@ -206,6 +206,14 @@ export class EmployeeRosterImportService {
       for (const [name, userIds] of existingManagerIdsByName) {
         if (userIds.length === 1) managerByName.set(name, userIds[0]);
       }
+      if (batch.mode === 'full' && organizationIds) {
+        await this.synchronizeFullRosterOrganizationLeaders(
+          tx,
+          rows,
+          organizationIds,
+          managerByName,
+        );
+      }
 
       const today = this.startOfUtcDay(new Date());
       const yesterday = new Date(today.getTime() - 86_400_000);
@@ -506,19 +514,9 @@ export class EmployeeRosterImportService {
       const deptId = source.mode === 'full'
         ? null
         : this.matchDepartment(row, company, departments, warnings, existing?.deptId ?? null);
-      if (source.mode === 'full' && !organizationKey) {
-        errors.push('所属公司和部门路径不能为空');
-      }
+      if (!row.employee.companyText?.trim()) errors.push('所属公司不能为空');
+      if (source.mode === 'full' && !organizationKey) errors.push('部门路径不能为空');
       if (source.mode === 'incremental' && !deptId) errors.push('部门路径未匹配到 HRM 组织');
-      if (source.mode === 'incremental' && !row.employee.companyText) {
-        const matchedDepartment = deptId ? departments.find((dept) => dept.id === deptId) : undefined;
-        if (matchedDepartment) {
-          company = matchedDepartment.company;
-          warnings.push('所属公司为空，已按唯一匹配的 HRM 部门推导，请 HR 确认');
-        } else {
-          errors.push('所属公司不能为空');
-        }
-      }
       const employmentType = this.mapEmploymentType(row.employee.employmentTypeText, warnings);
       const employeeStatus = this.mapEmployeeStatus(row.employee.employeeStatusText, warnings);
 
@@ -611,7 +609,7 @@ export class EmployeeRosterImportService {
   ): Promise<Map<string, string>> {
     const plan = buildRosterOrganizationPlan(rows);
     if (plan.length === 0) {
-      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '全量花名册没有可用的公司和部门路径' });
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '全量花名册没有可用的部门路径' });
     }
 
     const existingDepartments = await tx.department.findMany({
@@ -669,6 +667,31 @@ export class EmployeeRosterImportService {
     return idsByKey;
   }
 
+  private async synchronizeFullRosterOrganizationLeaders(
+    tx: Prisma.TransactionClient,
+    rows: ParsedEmployeeRosterRow[],
+    organizationIds: Map<string, string>,
+    userIdsByName: Map<string, string>,
+  ): Promise<void> {
+    for (const node of buildRosterOrganizationPlan(rows)) {
+      const departmentId = organizationIds.get(node.key);
+      if (!departmentId) {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: `组织映射缺失：${node.fullPath}` });
+      }
+      const leaderId = node.leaderName ? userIdsByName.get(node.leaderName) : null;
+      if (node.leaderName && !leaderId) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: `组织负责人无法唯一匹配：${node.fullPath} → ${node.leaderName}`,
+        });
+      }
+      await tx.department.update({
+        where: { id: departmentId },
+        data: { leaderId: leaderId ?? null },
+      });
+    }
+  }
+
   private matchDepartment(
     row: ParsedEmployeeRosterRow,
     company: CompanyCode,
@@ -689,12 +712,7 @@ export class EmployeeRosterImportService {
       : exactPath.length === 1
         ? exactPath[0]
         : null;
-    if (matched) {
-      if (matched.company !== company) {
-        warnings.push(`组织路径已匹配，但花名册公司与部门公司编码不同，请 HR 确认`);
-      }
-      return matched.id;
-    }
+    if (matched) return matched.id;
     const currentExact = currentDeptId
       ? exactPath.find((dept) => dept.id === currentDeptId)
       : undefined;

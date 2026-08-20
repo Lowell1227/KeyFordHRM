@@ -8,18 +8,20 @@ function rosterRow(
   rowNumber: number,
   companyText: string,
   departmentPath: string[],
+  name = `员工${rowNumber}`,
+  managerName: string | null = null,
 ): ParsedEmployeeRosterRow {
   return {
     rowNumber,
     employee: {
-      name: `员工${rowNumber}`,
+      name,
       employeeNo: String(rowNumber).padStart(3, "0"),
       companyText,
       departmentPath,
       position: "专员",
       jobGrade: null,
       jobFamily: null,
-      managerName: null,
+      managerName,
       entryDate: new Date("2024-01-01T00:00:00.000Z"),
       workLocation: "杭州",
       employmentTypeText: "全职",
@@ -63,27 +65,24 @@ function rosterRow(
 }
 
 describe("buildRosterOrganizationPlan", () => {
-  it("把所属公司和一至三级部门合并为唯一树，并让常规主组织排在前面", () => {
+  it("忽略所属公司并按完整部门路径合并唯一组织树", () => {
     const rows = [
       rosterRow(2, "凡思堡", ["销售部", "电商组"]),
       rosterRow(3, "孚德", ["项目中心", "项目一部"]),
       rosterRow(4, "孚德", ["总经办"]),
-      rosterRow(5, "孚德", ["项目中心", "项目一部"]),
+      rosterRow(5, "北京孚德", ["项目中心", "项目一部"]),
       rosterRow(6, "北京孚德", ["孚德北京办公室"]),
     ];
 
     const plan = buildRosterOrganizationPlan(rows);
 
     expect(plan.map(({ fullPath }) => fullPath)).toEqual([
-      "孚德",
-      "孚德 / 总经办",
-      "孚德 / 项目中心",
-      "孚德 / 项目中心 / 项目一部",
-      "北京孚德",
-      "北京孚德 / 孚德北京办公室",
-      "凡思堡",
-      "凡思堡 / 销售部",
-      "凡思堡 / 销售部 / 电商组",
+      "总经办",
+      "销售部",
+      "销售部 / 电商组",
+      "项目中心",
+      "项目中心 / 项目一部",
+      "孚德北京办公室",
     ]);
     expect(plan).toEqual(
       expect.arrayContaining([
@@ -94,6 +93,33 @@ describe("buildRosterOrganizationPlan", () => {
         }),
       ]),
     );
+    expect(rosterOrganizationKeyForRow(rows[1])).toBe(
+      JSON.stringify(["项目中心", "项目一部"]),
+    );
     expect(new Set(plan.map(({ key }) => key)).size).toBe(plan.length);
+  });
+
+  it("根据部门内外的直属上级关系推导每个组织负责人", () => {
+    const rows = [
+      rosterRow(2, "孚德", ["总经办"], "李宏"),
+      rosterRow(3, "孚德", ["总经办"], "郭志浩", "李宏"),
+      rosterRow(4, "北京孚德", ["项目中心", "项目一部"], "苏萌", "郭志浩"),
+      rosterRow(5, "孚德", ["项目中心", "项目一部"], "项目专员", "苏萌"),
+      rosterRow(6, "孚德", ["项目中心", "项目管理和运营部"], "李雨陶", "郭志浩"),
+      rosterRow(7, "凡思堡", ["项目中心", "项目管理和运营部"], "劳祐茹", "郭志浩"),
+      rosterRow(8, "孚德体育文化", ["销售部", "线下零售组"], "唐廷磊", "莫天飞"),
+    ];
+
+    const leaders = new Map(
+      buildRosterOrganizationPlan(rows).map((node) => [node.fullPath, node.leaderName]),
+    );
+
+    expect(Object.fromEntries(leaders)).toMatchObject({
+      "总经办": "李宏",
+      "项目中心": "郭志浩",
+      "项目中心 / 项目一部": "苏萌",
+      "项目中心 / 项目管理和运营部": "郭志浩",
+      "销售部 / 线下零售组": "莫天飞",
+    });
   });
 });

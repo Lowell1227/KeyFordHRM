@@ -1181,7 +1181,7 @@ onMounted(async () => {
               </div>
             </div>
             <div class="employee-archive__facts">
-              <div><span>所属公司</span><strong>{{ companyLabels[employeeArchiveDrawer.data.dept?.company || ''] || '待确认' }}</strong></div>
+              <div><span>所属公司</span><strong>{{ companyLabels[employeeArchiveDrawer.data.currentEmployment?.company || employeeArchiveDrawer.data.employmentHistory[0]?.company || ''] || '待确认' }}</strong></div>
               <div><span>部门</span><strong>{{ employeeArchiveDrawer.data.dept?.fullPath || employeeArchiveDrawer.data.dept?.name || '未设置' }}</strong></div>
               <div><span>岗位</span><strong>{{ employeeArchiveDrawer.data.position || '未设置' }}</strong></div>
               <div><span>直属上级</span><strong>{{ employeeArchiveDrawer.data.directManager?.name || '未设置' }}</strong></div>

@@ -7,6 +7,7 @@ export interface RosterOrganizationNode {
   name: string;
   fullPath: string;
   company: CompanyCode;
+  leaderName: string | null;
   depth: number;
   sortOrder: number;
 }
@@ -14,17 +15,6 @@ export interface RosterOrganizationNode {
 type RawRosterOrganizationNode = Omit<RosterOrganizationNode, "sortOrder"> & {
   firstSeen: number;
 };
-
-const COMPANY_ORDER = [
-  "孚德",
-  "孚德体育文化",
-  "孚德体育",
-  "北京孚德",
-  "凡思堡",
-  "梵丝宝",
-  "协程",
-  "孚德/协程",
-];
 
 const DEPARTMENT_ORDER = [
   "总经办",
@@ -53,10 +43,50 @@ export function rosterOrganizationKeyForRow(
   row: ParsedEmployeeRosterRow,
   departmentLevel = row.employee.departmentPath.length,
 ): string | null {
-  const company = row.employee.companyText?.trim();
   const departmentPath = row.employee.departmentPath.slice(0, departmentLevel);
-  if (!company || departmentPath.length === 0) return null;
-  return rosterOrganizationKey([company, ...departmentPath]);
+  if (departmentPath.length === 0) return null;
+  return rosterOrganizationKey(departmentPath);
+}
+
+function inferLeaderName(
+  rows: readonly ParsedEmployeeRosterRow[],
+  departmentPath: readonly string[],
+): string | null {
+  const members = rows.filter((row) => departmentPath.every(
+    (segment, index) => row.employee.departmentPath[index]?.trim() === segment,
+  ));
+  const memberNames = new Set(
+    members
+      .map((row) => row.employee.name?.trim())
+      .filter((name): name is string => Boolean(name)),
+  );
+  const internalManagerNames = new Set(
+    members
+      .map((row) => row.employee.managerName?.trim())
+      .filter((name): name is string => typeof name === "string" && memberNames.has(name)),
+  );
+  const boundaryMembers = members.filter((row) => {
+    const name = row.employee.name?.trim();
+    if (!name) return false;
+    const managerName = row.employee.managerName?.trim();
+    return !managerName || !memberNames.has(managerName);
+  });
+
+  if (boundaryMembers.length === 1) {
+    const boundary = boundaryMembers[0];
+    const name = boundary.employee.name!.trim();
+    const managerName = boundary.employee.managerName?.trim();
+    if (!managerName || internalManagerNames.has(name)) return name;
+  }
+
+  const externalManagerNames = new Set(
+    boundaryMembers
+      .map((row) => row.employee.managerName?.trim())
+      .filter((name): name is string => Boolean(name)),
+  );
+  return externalManagerNames.size === 1
+    ? [...externalManagerNames][0]
+    : null;
 }
 
 export function buildRosterOrganizationPlan(
@@ -68,10 +98,7 @@ export function buildRosterOrganizationPlan(
   for (const row of rows) {
     const companyText = row.employee.companyText?.trim();
     if (!companyText || row.employee.departmentPath.length === 0) continue;
-    const segments = [
-      companyText,
-      ...row.employee.departmentPath.map((segment) => segment.trim()),
-    ];
+    const segments = row.employee.departmentPath.map((segment) => segment.trim());
     for (let depth = 0; depth < segments.length; depth++) {
       const currentSegments = segments.slice(0, depth + 1);
       const key = rosterOrganizationKey(currentSegments);
@@ -85,6 +112,7 @@ export function buildRosterOrganizationPlan(
         name: currentSegments.at(-1)!,
         fullPath: currentSegments.join(" / "),
         company: mapRosterCompany(companyText),
+        leaderName: null,
         depth,
         firstSeen: firstSeen++,
       });
@@ -105,12 +133,7 @@ export function buildRosterOrganizationPlan(
     left: RawRosterOrganizationNode,
     right: RawRosterOrganizationNode,
   ) => {
-    const preferred =
-      left.depth === 0
-        ? COMPANY_ORDER
-        : left.depth === 1
-          ? DEPARTMENT_ORDER
-          : [];
+    const preferred = left.depth === 0 ? DEPARTMENT_ORDER : [];
     const leftRank = preferred.indexOf(left.name);
     const rightRank = preferred.indexOf(right.name);
     if (leftRank !== rightRank) {
@@ -131,7 +154,14 @@ export function buildRosterOrganizationPlan(
     );
     children.forEach((node, sortOrder) => {
       const { firstSeen: _firstSeen, ...planned } = node;
-      result.push({ ...planned, sortOrder });
+      result.push({
+        ...planned,
+        leaderName: inferLeaderName(
+          rows,
+          planned.fullPath.split(" / "),
+        ),
+        sortOrder,
+      });
       append(node.key);
     });
   };

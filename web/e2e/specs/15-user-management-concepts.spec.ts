@@ -296,6 +296,10 @@ test('opens one employee archive with employment history, contracts and an ident
       dept: { id: 'dept-hr', name: '人事部', fullPath: '职能中心/人事部' },
       directManager: { id: 'manager-fang', name: '方园', employeeNo: '002' },
     }],
+    currentEmployment: {
+      id: 'employment-current',
+      company: 'fansibao',
+    },
     employeeContracts: [{
       id: 'contract-1',
       contractType: 'contract',
@@ -350,6 +354,7 @@ test('opens one employee archive with employment history, contracts and an ident
   const drawer = page.getByRole('dialog', { name: '员工档案' });
   await expect(drawer).toBeVisible();
   await expect(drawer).toContainText('当前任职');
+  await expect(drawer.locator('.employee-archive__facts > div').filter({ hasText: '所属公司' }).first()).toContainText('凡思堡');
   await expect(drawer).toContainText('任职历史');
   await expect(drawer).toContainText('劳动合同');
   await expect(drawer).toContainText('仅影响钉钉登录和消息通知，不读取或同步钉钉组织');
