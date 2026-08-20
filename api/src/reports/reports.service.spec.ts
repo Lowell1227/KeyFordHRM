@@ -143,6 +143,34 @@ describe('ReportsService', () => {
       );
     });
 
+    it('未出结果任务单独统计且等级占比只以已出结果人数为分母', async () => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      prisma.assessmentTask.findMany.mockResolvedValue([
+        makeTask({
+          id: 't1',
+          gradeResult: { calculatedScore: new Prisma.Decimal(92), rawGrade: 'A', calibratedGrade: null },
+        }),
+        makeTask({
+          id: 't2',
+          gradeResult: { calculatedScore: new Prisma.Decimal(50), rawGrade: 'D', calibratedGrade: null },
+        }),
+        makeTask({ id: 't3', gradeResult: null }),
+      ]);
+
+      const result = await service.getCycleSummary('cycle-1', {}, makeViewer({ sysRole: SysRole.hr }));
+
+      const summary = result as Exclude<typeof result, StreamableFile>;
+      expect(summary.stats).toMatchObject({
+        total: 3,
+        resulted: 2,
+        pending: 1,
+        qualified: 1,
+        qualifiedRate: 0.5,
+      });
+      expect(summary.stats.grades.A).toEqual({ count: 1, ratio: 0.5 });
+      expect(summary.stats.grades.D).toEqual({ count: 1, ratio: 0.5 });
+    });
+
     it('VP 查看汇总：只返回 approver_id 等于自己的任务', async () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
       prisma.assessmentTask.findMany.mockResolvedValue([
@@ -292,6 +320,38 @@ describe('ReportsService', () => {
       expect(rows).toHaveLength(jsonSummary.items.length);
       expect(rows[0].employeeName).toBe(jsonSummary.items[0].employeeName);
       expect(rows[0].grade).toBe(jsonSummary.items[0].grade);
+    });
+
+    it('format=excel 的统计页区分应参评、已出结果、待出结果和已出结果合格率', async () => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      prisma.assessmentTask.findMany.mockResolvedValue([
+        makeTask({
+          gradeResult: { calculatedScore: new Prisma.Decimal(90), rawGrade: 'A', calibratedGrade: null },
+        }),
+        makeTask({ id: 'task-pending', gradeResult: null }),
+      ]);
+
+      const excelResult = await service.getCycleSummary(
+        'cycle-1',
+        { format: ReportFormat.excel },
+        makeViewer({ sysRole: SysRole.hr }),
+      );
+      const buffer = await streamToBuffer((excelResult as StreamableFile).getStream());
+      const workbook = new ExcelJS.Workbook();
+      await workbook.xlsx.load(buffer as any);
+      const statsSheet = workbook.getWorksheet('统计');
+
+      const statistics = new Map<string, unknown>();
+      statsSheet?.eachRow((row, rowNumber) => {
+        if (rowNumber === 1) return;
+        const cells = row.values as unknown[];
+        statistics.set(String(cells[1]), cells[2]);
+      });
+
+      expect(statistics.get('应参评')).toBe(2);
+      expect(statistics.get('已出结果')).toBe(1);
+      expect(statistics.get('待出结果')).toBe(1);
+      expect(statistics.get('已出结果合格率')).toBe('100.0%');
     });
 
     it('cycle 不存在抛 404', async () => {

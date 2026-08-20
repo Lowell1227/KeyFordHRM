@@ -1,4 +1,4 @@
-import { test, expect } from "@playwright/test";
+import { test, expect, type Page } from "@playwright/test";
 import { buildNavigation } from "../../src/router/navigation";
 import { isPerformanceWorkspacePath } from "../../src/router/performance-workspace";
 import {
@@ -8,6 +8,7 @@ import {
 import { routes } from "../../src/router/routes";
 import { DashboardPage } from "../page-objects/dashboard.page";
 import type {
+  AssessmentCycle,
   Paginated,
   TaskListItem,
   TeamTaskListItem,
@@ -90,6 +91,26 @@ const teamPage = (
   facets: { departments: [], employees: [] },
 });
 
+const workspaceCycle: AssessmentCycle = {
+  id: "cycle-default",
+  name: "2026-Q3",
+  type: "quarterly",
+  startDate: "2026-07-01",
+  endDate: "2026-09-30",
+  status: "self_eval",
+  publishVisibleFields: {
+    totalScore: true,
+    grade: true,
+    indicatorScores: true,
+    managerComment: true,
+    coefficient: false,
+  },
+  gradeAMaxRatio: 0.2,
+  gradeBMaxRatio: 0.4,
+  gradeCMaxRatio: 0.3,
+  gradeDMaxRatio: 0.1,
+};
+
 const notificationItem = (
   overrides: Partial<Notification> = {},
 ): Notification => ({
@@ -98,7 +119,7 @@ const notificationItem = (
   senderId: null,
   senderName: null,
   taskId: "task-default",
-  cycleId: null,
+  cycleId: workspaceCycle.id,
   type: "task_reminder",
   title: "Performance task",
   content: "Please review the task",
@@ -110,6 +131,27 @@ const notificationItem = (
   createdAt: "2026-08-01T00:00:00.000Z",
   ...overrides,
 });
+
+async function mockTaskWorkspaceContext(page: Page) {
+  await page.route("**/api/v1/cycles/mine", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(apiResponse([workspaceCycle])),
+    }),
+  );
+  await page.route("**/api/v1/tasks/mine**", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(apiResponse(taskPage([]))),
+    }),
+  );
+  await page.route("**/api/v1/tasks/team**", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(apiResponse(teamPage(0))),
+    }),
+  );
+}
 
 test.describe("11-navigation-entrypoints navigation tree", () => {
   test("employee navigation excludes administration and unopened modules", () => {
@@ -308,6 +350,7 @@ test.describe("11-navigation-entrypoints manager dashboard task entry points", (
   test("manager sees true pending counts and opens the matching team workspace", async ({
     page,
   }) => {
+    await mockTaskWorkspaceContext(page);
     await page.route("**/api/v1/tasks/mine**", (route) =>
       route.fulfill({
         contentType: "application/json",
@@ -328,15 +371,6 @@ test.describe("11-navigation-entrypoints manager dashboard task entry points", (
         ),
       });
     });
-    await page.route("**/api/v1/cycles**", (route) =>
-      route.fulfill({
-        contentType: "application/json",
-        body: JSON.stringify(
-          apiResponse({ total: 0, page: 1, pageSize: 50, items: [] }),
-        ),
-      }),
-    );
-
     const dashboard = new DashboardPage(page);
     await dashboard.goto();
 
@@ -346,15 +380,17 @@ test.describe("11-navigation-entrypoints manager dashboard task entry points", (
     await expect(page).toHaveURL((url) => {
       const query = [...url.searchParams.entries()];
       return url.pathname === "/tasks" &&
-        query.length === 2 &&
+        query.length === 3 &&
         url.searchParams.get("scope") === "team" &&
-        url.searchParams.get("stage") === "goal-review";
+        url.searchParams.get("stage") === "goal-review" &&
+        url.searchParams.get("cycleId") === workspaceCycle.id;
     });
     const destination = new URL(page.url());
     expect(destination.pathname).toBe("/tasks");
     expect([...destination.searchParams.entries()]).toEqual([
       ["scope", "team"],
       ["stage", "goal-review"],
+      ["cycleId", workspaceCycle.id],
     ]);
     await expect(page.getByTestId("team-count-pending")).toContainText("3");
   });
@@ -863,8 +899,24 @@ test.describe("11-navigation-entrypoints notification task links", () => {
       ),
     ).toEqual({
       path: "/tasks",
-      query: { scope: "team", stage: "goal-review", taskId: "task-1" },
+      query: {
+        scope: "team",
+        stage: "goal-review",
+        cycleId: workspaceCycle.id,
+        taskId: "task-1",
+      },
     });
+    expect(
+      resolveNotificationTarget(
+        notificationItem({
+          id: "legacy-indicator",
+          taskId: "task-legacy",
+          cycleId: null,
+          type: "indicator_setting_notice",
+        }),
+        "manager",
+      ),
+    ).toEqual({ name: "TaskDetail", params: { id: "task-legacy" } });
     expect(
       resolveNotificationTarget(
         notificationItem({
@@ -876,7 +928,12 @@ test.describe("11-navigation-entrypoints notification task links", () => {
       ),
     ).toEqual({
       path: "/tasks",
-      query: { scope: "team", stage: "manager-eval", taskId: "task-2" },
+      query: {
+        scope: "team",
+        stage: "manager-eval",
+        cycleId: workspaceCycle.id,
+        taskId: "task-2",
+      },
     });
     expect(
       resolveNotificationTarget(
@@ -911,6 +968,7 @@ test.describe("11-navigation-entrypoints notification task links", () => {
   test("marks an unread notification then opens the matching goal review workspace", async ({
     page,
   }) => {
+    await mockTaskWorkspaceContext(page);
     let marked = 0;
     await page.route("**/api/v1/notifications/unread-count", (route) =>
       route.fulfill({
@@ -970,12 +1028,14 @@ test.describe("11-navigation-entrypoints notification task links", () => {
       url.pathname === "/tasks" &&
       url.searchParams.get("scope") === "team" &&
       url.searchParams.get("stage") === "goal-review" &&
+      url.searchParams.get("cycleId") === workspaceCycle.id &&
       url.searchParams.get("taskId") === "task-goal",
     );
     const destination = new URL(page.url());
     expect(destination.pathname).toBe("/tasks");
     expect(destination.searchParams.get("scope")).toBe("team");
     expect(destination.searchParams.get("stage")).toBe("goal-review");
+    expect(destination.searchParams.get("cycleId")).toBe(workspaceCycle.id);
     expect(destination.searchParams.get("taskId")).toBe("task-goal");
     const notificationState = await page.evaluate(async () => {
       const storeModulePath = "/src/stores/notification.store.ts";
@@ -1001,6 +1061,7 @@ test.describe("11-navigation-entrypoints notification task links", () => {
   test("continues navigation after an unread-mark failure and ignores duplicate activation", async ({
     page,
   }) => {
+    await mockTaskWorkspaceContext(page);
     let markAttempts = 0;
     let releaseRead!: () => void;
     const readGate = new Promise<void>((resolve) => {
@@ -1056,6 +1117,7 @@ test.describe("11-navigation-entrypoints notification task links", () => {
     expect([...destination.searchParams.entries()]).toEqual([
       ["scope", "team"],
       ["stage", "manager-eval"],
+      ["cycleId", workspaceCycle.id],
       ["taskId", "task-evaluation"],
     ]);
   });
@@ -1195,6 +1257,7 @@ test.describe("11-navigation-entrypoints notification task links", () => {
   test("serializes activation globally so a later row cannot replace an in-flight target", async ({
     page,
   }) => {
+    await mockTaskWorkspaceContext(page);
     let releaseFirst!: () => void;
     const firstGate = new Promise<void>((resolve) => {
       releaseFirst = resolve;
@@ -1256,8 +1319,12 @@ test.describe("11-navigation-entrypoints notification task links", () => {
     expect(marked).toEqual(["notification-first"]);
 
     releaseFirst();
-    await expect(page).toHaveURL(
-      /scope=team&stage=goal-review&taskId=task-first/,
+    await expect(page).toHaveURL((url) =>
+      url.pathname === "/tasks" &&
+      url.searchParams.get("scope") === "team" &&
+      url.searchParams.get("stage") === "goal-review" &&
+      url.searchParams.get("cycleId") === workspaceCycle.id &&
+      url.searchParams.get("taskId") === "task-first",
     );
     expect(marked).toEqual(["notification-first"]);
   });
@@ -1322,6 +1389,7 @@ test.describe("11-navigation-entrypoints notification task links", () => {
   test("clears the global busy state and closes the popover when routing fails", async ({
     page,
   }) => {
+    await mockTaskWorkspaceContext(page);
     const item = notificationItem({
       id: "notification-route-failure",
       taskId: "task-route-failure",
@@ -1350,6 +1418,7 @@ test.describe("11-navigation-entrypoints notification task links", () => {
       url.pathname === "/tasks" &&
       url.searchParams.get("scope") === "team" &&
       url.searchParams.get("stage") === "goal-review" &&
+      url.searchParams.get("cycleId") === workspaceCycle.id &&
       url.searchParams.get("stageState") === "pending",
     );
     const currentWorkspaceUrl = page.url();

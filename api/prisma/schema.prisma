@@ -61,6 +61,19 @@ enum SysRole {
   @@map("sys_role")
 }
 
+enum ExternalIdentityProvider {
+  dingtalk
+
+  @@map("external_identity_provider")
+}
+
+enum ExternalIdentityStatus {
+  enabled
+  disabled
+
+  @@map("external_identity_status")
+}
+
 enum CycleStatus {
   draft
   scheduled
@@ -334,6 +347,7 @@ model Department {
   tasks                          AssessmentTask[]
   objectives                     Objective[]                     @relation("ObjectiveDepartment")
   indicatorVisibilityDepartments IndicatorVisibilityDepartment[]
+  employmentRecords              EmploymentRecord[]
 
   @@index([parentId])
   @@index([approverId])
@@ -416,12 +430,211 @@ model User {
   updatedConfigs                            SystemConfig[]
   notifications                             NotificationLog[]         @relation("NotifReceiver")
   sentNotifications                         NotificationLog[]         @relation("NotifSender")
+  employeeProfile                          EmployeeProfile?
+  employmentHistory                        EmploymentRecord[]        @relation("EmployeeEmployment")
+  managedEmploymentHistory                 EmploymentRecord[]        @relation("EmploymentManager")
+  createdEmploymentHistory                 EmploymentRecord[]        @relation("EmploymentCreator")
+  externalIdentityBindings                 ExternalIdentityBinding[] @relation("ExternalIdentityEmployee")
+  boundExternalIdentities                  ExternalIdentityBinding[] @relation("ExternalIdentityBoundBy")
+  disabledExternalIdentities               ExternalIdentityBinding[] @relation("ExternalIdentityDisabledBy")
+  endedExternalIdentities                  ExternalIdentityBinding[] @relation("ExternalIdentityEndedBy")
+  operatedEmployeeImports                  EmployeeImportBatch[]     @relation("EmployeeImportOperator")
+  confirmedEmployeeImports                 EmployeeImportBatch[]     @relation("EmployeeImportConfirmer")
+  matchedEmployeeImportRows                EmployeeImportRow[]
+  employeeContracts                        EmployeeContract[]        @relation("EmployeeContractOwner")
+  createdEmployeeContracts                 EmployeeContract[]        @relation("EmployeeContractCreator")
 
   @@index([deptId])
   @@index([directManagerId])
   @@index([status])
   @@index([dingtalkId])
   @@map("users")
+}
+
+model EmployeeProfile {
+  id                       String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                   String    @unique @map("user_id") @db.Uuid
+  phone                    String?   @db.VarChar(20)
+  gender                   String?   @db.VarChar(20)
+  birthDate                DateTime? @map("birth_date") @db.Date
+  ethnicity                String?   @db.VarChar(50)
+  education                String?   @db.VarChar(50)
+  professionalTitle        String?   @map("professional_title") @db.VarChar(100)
+  school                   String?   @db.VarChar(200)
+  graduationDate           DateTime? @map("graduation_date") @db.Date
+  major                    String?   @db.VarChar(150)
+  maritalStatus            String?   @map("marital_status") @db.VarChar(30)
+  childrenStatus           String?   @map("children_status") @db.VarChar(30)
+  childrenCount            Int?      @map("children_count")
+  politicalStatus          String?   @map("political_status") @db.VarChar(50)
+  nativePlace              String?   @map("native_place") @db.VarChar(150)
+  householdType            String?   @map("household_type") @db.VarChar(100)
+  idAddress                String?   @map("id_address") @db.Text
+  idNumberEncrypted        Bytes?    @map("id_number_encrypted") @db.ByteA
+  idNumberFingerprint      String?   @map("id_number_fingerprint") @db.VarChar(128)
+  currentAddress           String?   @map("current_address") @db.Text
+  emergencyContactName     String?   @map("emergency_contact_name") @db.VarChar(100)
+  emergencyContactRelation String?   @map("emergency_contact_relation") @db.VarChar(50)
+  emergencyContactPhone    String?   @map("emergency_contact_phone") @db.VarChar(30)
+  socialSecurityStatus     String?   @map("social_security_status") @db.VarChar(100)
+  socialSecurityStartDate  DateTime? @map("social_security_start_date") @db.Date
+  housingFundStatus        String?   @map("housing_fund_status") @db.VarChar(100)
+  housingFundStartDate     DateTime? @map("housing_fund_start_date") @db.Date
+  bankName                 String?   @map("bank_name") @db.VarChar(100)
+  bankBranch               String?   @map("bank_branch") @db.VarChar(200)
+  bankAccountEncrypted     Bytes?    @map("bank_account_encrypted") @db.ByteA
+  bankAccountFingerprint   String?   @map("bank_account_fingerprint") @db.VarChar(128)
+  createdAt                DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user User @relation(fields: [userId], references: [id], onDelete: Restrict)
+
+  @@map("employee_profiles")
+}
+
+model EmployeeContract {
+  id                       String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                   String    @map("user_id") @db.Uuid
+  contractType             String    @map("contract_type") @db.VarChar(30)
+  sequence                 Int       @default(0)
+  name                     String?   @db.VarChar(150)
+  signingCompany           String?   @map("signing_company") @db.VarChar(150)
+  signedAt                 DateTime? @map("signed_at") @db.Date
+  effectiveFrom            DateTime? @map("effective_from") @db.Date
+  expiresAt                DateTime? @map("expires_at") @db.Date
+  termType                 String?   @map("term_type") @db.VarChar(100)
+  originalCompany          String?   @map("original_company") @db.VarChar(150)
+  newCompany               String?   @map("new_company") @db.VarChar(150)
+  confidentialityAgreement String?   @map("confidentiality_agreement") @db.VarChar(50)
+  nonCompeteAgreement      String?   @map("non_compete_agreement") @db.VarChar(50)
+  portraitAgreement        String?   @map("portrait_agreement") @db.VarChar(50)
+  attachmentRef            String?   @map("attachment_ref") @db.VarChar(500)
+  sourceBatchId            String?   @map("source_batch_id") @db.Uuid
+  createdById              String?   @map("created_by_id") @db.Uuid
+  createdAt                DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user      User  @relation("EmployeeContractOwner", fields: [userId], references: [id], onDelete: Restrict)
+  createdBy User? @relation("EmployeeContractCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([userId, expiresAt])
+  @@index([sourceBatchId])
+  @@map("employee_contracts")
+}
+
+model EmploymentRecord {
+  id                 String         @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId             String         @map("user_id") @db.Uuid
+  effectiveFrom      DateTime       @map("effective_from") @db.Date
+  effectiveTo        DateTime?      @map("effective_to") @db.Date
+  company            CompanyCode
+  deptId             String?        @map("dept_id") @db.Uuid
+  position           String?        @db.VarChar(100)
+  jobGrade           String?        @map("job_grade") @db.VarChar(30)
+  jobFamily          String?        @map("job_family") @db.VarChar(100)
+  directManagerId    String?        @map("direct_manager_id") @db.Uuid
+  workLocation       String?        @map("work_location") @db.VarChar(100)
+  employmentType     EmploymentType @default(full_time) @map("employment_type")
+  employeeStatus     UserStatus     @default(active) @map("employee_status")
+  entryDate          DateTime?      @map("entry_date") @db.Date
+  plannedRegularDate DateTime?      @map("planned_regular_date") @db.Date
+  actualRegularDate  DateTime?      @map("actual_regular_date") @db.Date
+  leaveDate          DateTime?      @map("leave_date") @db.Date
+  probationMonths    Int?           @map("probation_months")
+  changeType         String         @map("change_type") @db.VarChar(40)
+  reason             String?        @db.Text
+  sourceType         String?        @map("source_type") @db.VarChar(30)
+  sourceBatchId      String?        @map("source_batch_id") @db.Uuid
+  createdById        String?        @map("created_by_id") @db.Uuid
+  createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime       @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user          User        @relation("EmployeeEmployment", fields: [userId], references: [id], onDelete: Restrict)
+  dept          Department? @relation(fields: [deptId], references: [id], onDelete: Restrict)
+  directManager User?       @relation("EmploymentManager", fields: [directManagerId], references: [id], onDelete: Restrict)
+  createdBy     User?       @relation("EmploymentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+
+  @@index([userId, effectiveFrom])
+  @@index([deptId, effectiveFrom])
+  @@index([directManagerId, effectiveFrom])
+  @@map("employment_records")
+}
+
+model ExternalIdentityBinding {
+  id               String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  provider         ExternalIdentityProvider @default(dingtalk)
+  userId           String                   @map("user_id") @db.Uuid
+  externalUserId   String?                  @map("external_user_id") @db.VarChar(128)
+  externalUnionId  String                   @map("external_union_id") @db.VarChar(128)
+  status           ExternalIdentityStatus   @default(enabled)
+  boundAt          DateTime                 @default(now()) @map("bound_at") @db.Timestamptz(6)
+  boundById        String?                  @map("bound_by_id") @db.Uuid
+  disabledAt       DateTime?                @map("disabled_at") @db.Timestamptz(6)
+  disabledById     String?                  @map("disabled_by_id") @db.Uuid
+  disabledReason   String?                  @map("disabled_reason") @db.Text
+  endedAt          DateTime?                @map("ended_at") @db.Timestamptz(6)
+  endedById        String?                  @map("ended_by_id") @db.Uuid
+  endedReason      String?                  @map("ended_reason") @db.Text
+  lastLoginAt      DateTime?                @map("last_login_at") @db.Timestamptz(6)
+  createdAt        DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user       User  @relation("ExternalIdentityEmployee", fields: [userId], references: [id], onDelete: Restrict)
+  boundBy    User? @relation("ExternalIdentityBoundBy", fields: [boundById], references: [id], onDelete: SetNull)
+  disabledBy User? @relation("ExternalIdentityDisabledBy", fields: [disabledById], references: [id], onDelete: SetNull)
+  endedBy    User? @relation("ExternalIdentityEndedBy", fields: [endedById], references: [id], onDelete: SetNull)
+
+  @@index([userId, provider])
+  @@index([provider, externalUnionId])
+  @@map("external_identity_bindings")
+}
+
+model EmployeeImportBatch {
+  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  mode             String    @db.VarChar(20)
+  originalFileName String    @map("original_file_name") @db.VarChar(255)
+  fileHash         String    @map("file_hash") @db.VarChar(128)
+  templateVersion  String    @default("roster-2026-08") @map("template_version") @db.VarChar(40)
+  parserVersion    String    @default("1") @map("parser_version") @db.VarChar(40)
+  status           String    @default("uploaded") @db.VarChar(30)
+  operatorId       String    @map("operator_id") @db.Uuid
+  confirmedById    String?   @map("confirmed_by_id") @db.Uuid
+  confirmedAt      DateTime? @map("confirmed_at") @db.Timestamptz(6)
+  summary          Json      @default("{}") @db.JsonB
+  errorSummary     Json?     @map("error_summary") @db.JsonB
+  retainedUntil    DateTime? @map("retained_until") @db.Timestamptz(6)
+  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  operator  User                @relation("EmployeeImportOperator", fields: [operatorId], references: [id], onDelete: Restrict)
+  confirmer User?               @relation("EmployeeImportConfirmer", fields: [confirmedById], references: [id], onDelete: SetNull)
+  rows      EmployeeImportRow[]
+
+  @@index([operatorId, createdAt(sort: Desc)])
+  @@index([status, createdAt(sort: Desc)])
+  @@map("employee_import_batches")
+}
+
+model EmployeeImportRow {
+  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId          String   @map("batch_id") @db.Uuid
+  rowNumber        Int      @map("row_number")
+  normalizedValue  Json     @map("normalized_value") @db.JsonB
+  matchedUserId    String?  @map("matched_user_id") @db.Uuid
+  diffs            Json     @default("[]") @db.JsonB
+  errors           Json     @default("[]") @db.JsonB
+  warnings         Json     @default("[]") @db.JsonB
+  action           String   @db.VarChar(30)
+  manualMapping    Json?    @map("manual_mapping") @db.JsonB
+  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt        DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  batch       EmployeeImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  matchedUser User?               @relation(fields: [matchedUserId], references: [id], onDelete: SetNull)
+
+  @@index([batchId, rowNumber])
+  @@index([matchedUserId])
+  @@map("employee_import_rows")
 }
 
 model Indicator {

@@ -16,7 +16,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: "npm"
           cache-dependency-path: api/package-lock.json
 
       - name: Install API dependencies
@@ -41,6 +41,20 @@ jobs:
     needs: layer-a
     if: success()
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:14-alpine
+        env:
+          POSTGRES_DB: hrm_e2e
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d hrm_e2e"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
     steps:
       - uses: actions/checkout@v4
 
@@ -48,7 +62,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: "npm"
 
       - name: Install API dependencies
         working-directory: ./api
@@ -60,7 +74,13 @@ jobs:
           npx prisma migrate deploy
           npx prisma db seed
           npm run start:dev &
-          npx wait-on http://localhost:3000/api/v1/health --timeout 60000
+          for attempt in {1..30}; do
+            if curl --fail --silent http://localhost:3000/api/v1/health > /dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          curl --fail http://localhost:3000/api/v1/health
         env:
           DATABASE_URL: postgresql://postgres:postgres@localhost:5432/hrm_e2e?schema=public
           SEED_ADMIN_PASSWORD: admin123
@@ -76,6 +96,21 @@ jobs:
         working-directory: ./web
         run: npm ci
 
+      - name: Start frontend
+        working-directory: ./web
+        run: |
+          npm run dev -- --host 0.0.0.0 &
+          for attempt in {1..30}; do
+            if curl --fail --silent http://localhost:5173 > /dev/null; then
+              break
+            fi
+            sleep 2
+          done
+          curl --fail http://localhost:5173
+        env:
+          VITE_API_BASE_URL: ""
+          VITE_DEV_PROXY_TARGET: http://localhost:3000
+
       - name: Install Playwright browsers
         working-directory: ./web
         run: npx playwright install chromium
@@ -86,7 +121,7 @@ jobs:
         env:
           PLAYWRIGHT_BASE_URL: http://localhost:5173
           PLAYWRIGHT_API_BASE_URL: http://localhost:3000/api/v1
-          PLAYWRIGHT_PREPARE_ACCEPTANCE_DATA: '0'
+          PLAYWRIGHT_PREPARE_ACCEPTANCE_DATA: "0"
 
       - name: Upload Layer B reports
         if: always()
@@ -108,7 +143,7 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: 20
-          cache: 'npm'
+          cache: "npm"
 
       - name: Download Layer A reports
         uses: actions/download-artifact@v4

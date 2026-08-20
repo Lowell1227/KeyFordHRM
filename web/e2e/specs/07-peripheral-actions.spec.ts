@@ -85,24 +85,35 @@ test.describe('07-peripheral-actions objectives and goal tracking', () => {
     expect(objective).toBeTruthy();
   });
 
-  test('HR can create an owned objective and open its goal-tracking deep link', async ({ page }) => {
+  test('HR can open an owned objective in its goal-tracking context', async ({ page }) => {
     const token = await login(ACCEPTANCE_ACCOUNTS.hr);
     const me = await api('GET', '/auth/me', token);
-    const cycles = await api('GET', '/cycles?page=1&pageSize=1', token);
+    const cycles = await api('GET', '/cycles?page=1&pageSize=100', token);
+    const cycle = cycles.items.find((item: { name: string; type: string }) => (
+      item.type === 'quarterly' && /^\d{4}-Q[1-4]$/.test(item.name)
+    ));
+    if (!cycle) throw new Error('goal tracking requires a canonical quarterly cycle');
     const objective = await api('POST', '/objectives', token, {
       title: `E2E goal tracking objective ${Date.now()}`,
       level: 'individual',
       ownerId: me.id,
       deptId: me.deptId,
-      cycleId: cycles.items[0].id,
+      cycleId: cycle.id,
       priority: 1,
     });
 
     await page.goto(`/action-items?objectiveId=${objective.id}`);
 
     await expect(page.getByTestId('goal-tracking-surface')).toBeVisible();
-    await expect(page.getByTestId(`goal-tracking-row-${objective.id}`))
-      .toHaveClass(/is-highlighted/);
+    await expect(page).toHaveURL((url) => (
+      url.pathname === '/action-items'
+      && url.searchParams.get('employeeId') === me.id
+      && url.searchParams.get('cycleId') === cycle.id
+      && !url.searchParams.has('objectiveId')
+    ));
+    await expect(page.getByTestId('goal-tracking-people')
+      .getByRole('button', { name: new RegExp(me.name) }))
+      .toHaveAttribute('aria-pressed', 'true');
   });
 });
 

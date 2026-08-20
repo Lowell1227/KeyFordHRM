@@ -4,7 +4,7 @@ import { Check, Close } from '@element-plus/icons-vue';
 import type { TableInstance } from 'element-plus';
 import EmptyState from '@/components/common/EmptyState.vue';
 import StatusBadge from '@/components/common/StatusBadge.vue';
-import type { TeamTaskListItem } from '@/types/api.types';
+import type { DirectReport, TeamTaskListItem } from '@/types/api.types';
 import type { TeamStageState, TeamTaskStage } from '@/types/enums';
 
 export interface TeamTaskVersion {
@@ -21,6 +21,8 @@ export interface TeamTaskListHandle {
 const props = withDefaults(
   defineProps<{
     items: TeamTaskListItem[];
+    roster?: DirectReport[];
+    hasCycle?: boolean;
     total: number;
     page: number;
     pageSize: number;
@@ -34,6 +36,8 @@ const props = withDefaults(
   }>(),
   {
     selectedTaskId: undefined,
+    roster: () => [],
+    hasCycle: false,
     stageState: undefined,
     loading: false,
     error: false,
@@ -55,8 +59,15 @@ const selectedRows = ref<TeamTaskListItem[]>([]);
 const containerWidth = ref(typeof window === 'undefined' ? 0 : window.innerWidth);
 let resizeObserver: ResizeObserver | undefined;
 let reconcilingSelection = false;
+const showRosterOnly = computed(
+  () => !props.hasCycle && props.items.length === 0 && props.roster.length > 0,
+);
+const memberCount = computed(() => {
+  if (props.roster.length > 0) return props.roster.length;
+  return new Set(props.items.map((item) => item.employeeId)).size;
+});
 const showBatchCommands = computed(
-  () => props.stage === 'goal-review' && props.stageState === 'pending',
+  () => !showRosterOnly.value && props.stage === 'goal-review' && props.stageState === 'pending',
 );
 const mediumColumns = computed(() => containerWidth.value > 0 && containerWidth.value < 980);
 const narrowColumns = computed(() => containerWidth.value > 0 && containerWidth.value < 640);
@@ -153,7 +164,7 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
     <header class="team-task-list__header">
       <div class="team-task-list__summary">
         <strong>团队成员</strong>
-        <span>{{ total }} 项任务</span>
+        <span>{{ memberCount }} 人 · {{ total }} 项任务</span>
       </div>
 
       <div v-if="showBatchCommands" class="team-task-list__batch">
@@ -194,12 +205,14 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
       data-testid="team-task-table-wrap"
     >
       <el-table
+        v-if="!showRosterOnly"
         ref="tableRef"
         class="app-table team-task-list__table"
         :data="items"
         row-key="id"
         highlight-current-row
         :current-row-key="selectedTaskId"
+        empty-text=" "
         @selection-change="onSelectionChange"
         @row-click="selectTask"
       >
@@ -282,8 +295,43 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
         </el-table-column>
       </el-table>
 
-      <div v-if="!loading && !error && items.length === 0" data-testid="team-task-empty">
-        <EmptyState description="暂无匹配任务" />
+      <el-table
+        v-else
+        class="app-table team-task-list__table team-task-list__roster"
+        :data="roster"
+        row-key="id"
+      >
+        <el-table-column label="员工" :min-width="narrowColumns ? 150 : 210">
+          <template #default="{ row }">
+            <div class="member-cell" :data-testid="`direct-report-row-${row.id}`">
+              <el-avatar :size="28" :src="row.avatarUrl || undefined">
+                {{ row.name.slice(0, 1) }}
+              </el-avatar>
+              <span class="member-cell__copy">
+                <strong>{{ row.name }}</strong>
+                <small>{{ row.employeeNo || '工号待补充' }}</small>
+              </span>
+            </div>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="!narrowColumns" label="部门" min-width="120">
+          <template #default="{ row }">{{ row.deptName || '-' }}</template>
+        </el-table-column>
+        <el-table-column v-if="!narrowColumns" label="职位" min-width="140">
+          <template #default="{ row }">{{ row.position || '-' }}</template>
+        </el-table-column>
+        <el-table-column label="任务状态" :min-width="narrowColumns ? 110 : 150">
+          <template #default>
+            <el-tag type="info" size="small">待发起考核</el-tag>
+          </template>
+        </el-table-column>
+      </el-table>
+
+      <div
+        v-if="!loading && !error && items.length === 0 && roster.length === 0"
+        data-testid="team-task-empty"
+      >
+        <EmptyState :description="hasCycle ? '暂无匹配任务' : '暂无直属员工'" />
       </div>
     </div>
 
@@ -375,6 +423,10 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
 
 .team-task-list :deep(.el-table__row) {
   cursor: pointer;
+}
+
+.team-task-list__roster :deep(.el-table__row) {
+  cursor: default;
 }
 
 .team-task-list :deep(.el-table__row:hover .member-cell strong),

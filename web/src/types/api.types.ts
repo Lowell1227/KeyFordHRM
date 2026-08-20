@@ -97,6 +97,20 @@ export interface User {
   canViewAll: boolean;
   createdAt?: string;
   updatedAt?: string;
+  dingtalkBindingState?: 'unbound' | 'enabled' | 'disabled';
+}
+
+export interface DirectReport {
+  id: string;
+  employeeNo: string | null;
+  name: string;
+  avatarUrl: string | null;
+  deptId: string | null;
+  deptName: string | null;
+  position: string | null;
+  sysRole: SysRole;
+  status: UserStatus;
+  directManagerId: string | null;
 }
 
 export interface UserQuery {
@@ -111,6 +125,13 @@ export interface UserQuery {
 
 export interface UpdateManagerBody {
   directManagerId: string | null;
+  grantManagerRole?: boolean;
+}
+
+export interface UpdateUserSettingsBody {
+  directManagerId?: string | null;
+  sysRole?: SysRole;
+  grantManagerRole?: boolean;
 }
 
 export interface UpdateRoleBody {
@@ -1085,6 +1106,10 @@ export interface ReportSummaryItem {
 /** GET /reports/cycle/:id/summary 汇总统计。 */
 export interface ReportSummaryStats {
   total: number;
+  resulted: number;
+  pending: number;
+  qualified: number;
+  qualifiedRate: number;
   grades: Record<PerfGrade, { count: number; ratio: number }>;
 }
 

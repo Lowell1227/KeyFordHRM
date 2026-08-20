@@ -17,4 +17,10 @@ app.config.errorHandler = (err, instance, info) => {
 app.use(createPinia());
 app.use(router);
 app.use(ElementPlus, { locale: zhCn });
-app.mount('#app');
+
+async function bootstrap() {
+  await router.isReady();
+  app.mount('#app');
+}
+
+void bootstrap();

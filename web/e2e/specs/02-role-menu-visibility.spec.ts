@@ -151,12 +151,12 @@ test.describe("02-role-menu-visibility navigation system administrator", () => {
 test.describe("02-role-menu-visibility VP reports", () => {
   test.use({ storageState: "e2e/auth-state/approver.json" });
 
-  test("VP sees only 汇总 tab in reports", async ({ page }) => {
+  test("VP sees only 结果概览 tab in reports", async ({ page }) => {
     const reports = new ReportsPage(page);
     await reports.goto();
-    await expect(reports.tab("汇总")).toBeVisible();
-    await expect(reports.tab("进度")).not.toBeVisible();
-    await expect(reports.tab("A/D名单")).not.toBeVisible();
+    await expect(reports.tab("结果概览")).toBeVisible();
+    await expect(reports.tab("流程进度")).not.toBeVisible();
+    await expect(reports.tab("重点关注")).not.toBeVisible();
     await expect(reports.tab("导出")).not.toBeVisible();
   });
 });

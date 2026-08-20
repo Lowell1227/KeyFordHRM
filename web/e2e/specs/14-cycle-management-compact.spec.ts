@@ -149,6 +149,10 @@ async function mockCyclePage(
       body: JSON.stringify(apiResponse(data)),
     });
   });
+  await page.route('**/api/v1/templates**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
+  }));
   await page.route('**/api/v1/cycles**', (route) => {
     const url = new URL(route.request().url());
     cycleRequests.push(url);

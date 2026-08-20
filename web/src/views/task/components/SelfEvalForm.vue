@@ -141,13 +141,6 @@ async function handleUpload(files: File[]) {
   }
 }
 
-/** 从钉钉周报拉取完成情况（轻量接缝）：拉不到则静默跳过。 */
-async function handleFetchDingtalkWeekly(inst: InstanceFormItem) {
-  // TODO: 接入钉钉周报接口后，调用后端 /dingtalk/weekly 并回填 actualValue / actualNote。
-  // 当前无接口，仅做按钮占位与错误静默。
-  ElMessage.info('暂无钉钉周报数据，可继续手动填写。');
-}
-
 function getOriginalInstance(id: string): IndicatorInstance | undefined {
   return props.instances.find((i) => i.id === id);
 }
@@ -201,7 +194,7 @@ function handleAttachmentsChange(attachments: Attachment[]) {
                 />
               </el-form-item>
             </el-col>
-            <el-col :span="12">
+            <el-col :span="16">
               <el-form-item label="实际完成说明">
                 <el-input
                   v-model="inst.actualNote"
@@ -210,19 +203,6 @@ function handleAttachmentsChange(attachments: Attachment[]) {
                   maxlength="500"
                   show-word-limit
                 />
-              </el-form-item>
-            </el-col>
-            <el-col :span="4" class="dingtalk-col">
-              <el-form-item label=" ">
-                <el-button
-                  v-if="!readonly"
-                  type="primary"
-                  link
-                  size="small"
-                  @click="handleFetchDingtalkWeekly(inst)"
-                >
-                  从钉钉周报拉取
-                </el-button>
               </el-form-item>
             </el-col>
           </el-row>

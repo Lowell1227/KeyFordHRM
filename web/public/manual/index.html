@@ -1,0 +1,679 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta
+      name="description"
+      content="孚德绩效管理系统操作与验收手册，面向公司人事、主管、员工及审批人提供图文操作指引和验收清单。"
+    />
+    <meta property="og:title" content="孚德绩效管理系统｜操作与验收手册" />
+    <meta
+      property="og:description"
+      content="覆盖组织人员、指标模板、绩效周期、校准审批、公示报表、试用期与转正的完整图文验收路径。"
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/manual/assets/og.png" />
+    <meta name="theme-color" content="#3157d5" />
+    <title>孚德绩效管理系统｜操作与验收手册</title>
+    <link rel="icon" href="../brand/logo-2025.png" />
+    <link rel="stylesheet" href="assets/manual.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">跳到正文</a>
+
+    <button class="mobile-nav-toggle" type="button" aria-controls="manual-sidebar" aria-expanded="false">
+      <span aria-hidden="true">☰</span>
+      手册目录
+    </button>
+
+    <div class="site-shell">
+      <aside class="sidebar" id="manual-sidebar" aria-label="手册目录">
+        <div class="brand-block">
+          <img src="../brand/logo-2025-horizontal-inverse.png" alt="KAYFORD 孚德" />
+          <div>
+            <strong>绩效管理系统</strong>
+            <span>操作与验收手册</span>
+          </div>
+        </div>
+
+        <div class="sidebar-progress" aria-live="polite">
+          <div class="progress-copy">
+            <span>验收完成度</span>
+            <strong id="progress-label">0%</strong>
+          </div>
+          <div class="progress-track" aria-hidden="true">
+            <span id="progress-bar"></span>
+          </div>
+          <small id="progress-detail">尚未勾选验收项</small>
+        </div>
+
+        <nav class="toc">
+          <a href="#start"><span>00</span>使用说明</a>
+          <a href="#prepare"><span>01</span>验收准备与登录</a>
+          <a href="#workbench"><span>02</span>工作台与导航</a>
+          <a href="#organization"><span>03</span>组织与人员</a>
+          <a href="#configuration"><span>04</span>指标与模板</a>
+          <a href="#cycle"><span>05</span>周期创建与发起</a>
+          <a href="#performance"><span>06</span>员工与主管协同</a>
+          <a href="#result"><span>07</span>校准、审批与公示</a>
+          <a href="#analysis"><span>08</span>申诉与报表</a>
+          <a href="#probation"><span>09</span>试用期与转正</a>
+          <a href="#signoff"><span>10</span>验收结论与记录</a>
+        </nav>
+
+        <div class="sidebar-actions">
+          <a class="button button-primary" href="../login">进入绩效系统</a>
+          <button class="button button-secondary" id="print-manual" type="button">打印 / 导出 PDF</button>
+        </div>
+
+        <p class="sidebar-meta">版本 V1.0<br />更新日期：2026-08-19</p>
+      </aside>
+
+      <main id="main-content">
+        <section class="hero" id="start">
+          <div class="hero-copy">
+            <p class="eyebrow">HR OPERATIONS · BUSINESS ACCEPTANCE</p>
+            <h1>孚德绩效管理系统<br /><span>操作与验收手册</span></h1>
+            <p class="hero-lead">
+              面向公司人事的图文操作指引。按本手册顺序完成一次跨角色业务闭环，验收重点是
+              <strong>“看得见、做得了、结果对”</strong>，而不只是菜单是否存在。
+            </p>
+            <div class="hero-actions">
+              <a class="button button-primary" href="#prepare">开始验收</a>
+              <a class="button button-ghost" href="#signoff">查看验收清单</a>
+            </div>
+            <div class="hero-stats" aria-label="手册范围">
+              <div><strong>4</strong><span>类验收角色</span></div>
+              <div><strong>10</strong><span>个业务章节</span></div>
+              <div><strong>20</strong><span>张系统实图</span></div>
+            </div>
+          </div>
+          <figure class="hero-visual">
+            <img src="assets/og.png" alt="孚德绩效管理系统操作与验收手册封面" />
+          </figure>
+        </section>
+
+        <section class="manual-section section-intro" aria-labelledby="manual-positioning">
+          <div class="section-heading compact-heading">
+            <p class="section-kicker">使用说明</p>
+            <h2 id="manual-positioning">先明确谁来验、验什么</h2>
+          </div>
+
+          <div class="lead-callout">
+            <div class="callout-icon" aria-hidden="true">✓</div>
+            <div>
+              <strong>推荐组织方式</strong>
+              <p>
+                由 HR 担任验收主持人，准备员工、直属主管、审批人各 1 名协同操作。涉及“提交、审批、公示”的动作，必须使用验收周期，禁止直接操作正在运行的正式绩效周期。
+              </p>
+            </div>
+          </div>
+
+          <div class="role-grid">
+            <article class="role-card role-hr">
+              <span class="role-badge">主验收人</span>
+              <h3>HR / 系统管理员</h3>
+              <p>维护组织人员、指标模板和周期，完成校准、公示、申诉、报表、试用期与转正管理。</p>
+            </article>
+            <article class="role-card">
+              <span class="role-badge">协同角色</span>
+              <h3>直属主管</h3>
+              <p>确认团队范围，完成指标审核、主管评分、绩效面谈和试用期评分。</p>
+            </article>
+            <article class="role-card">
+              <span class="role-badge">协同角色</span>
+              <h3>员工</h3>
+              <p>查看个人任务，确认指标、提交自评、查看结果和个人改进事项。</p>
+            </article>
+            <article class="role-card">
+              <span class="role-badge">协同角色</span>
+              <h3>审批人 / 分管领导</h3>
+              <p>仅处理授权范围内的绩效结果和转正申请，核对退回与通过后的状态流转。</p>
+            </article>
+          </div>
+
+          <div class="info-strip">
+            <strong>截图说明</strong>
+            <span>本手册截图来自当前验收环境。截图中的姓名、工号、周期和数据仅用于演示，正式环境以实际授权数据为准。</span>
+          </div>
+        </section>
+
+        <section class="manual-section" id="prepare" aria-labelledby="prepare-title">
+          <div class="section-heading">
+            <p class="section-kicker">01 · BEFORE YOU START</p>
+            <h2 id="prepare-title">验收准备与登录</h2>
+            <p>先把账号、组织关系和验收数据准备好，再开始跨角色流程。缺少任何一个关键关系，后续待办会自然为空。</p>
+          </div>
+
+          <div class="step-layout">
+            <div class="step-copy">
+              <h3>1.1 验收前置条件</h3>
+              <ol class="steps">
+                <li><strong>确定验收窗口。</strong>通知参与人验收开始和结束时间，避免与真实业务操作混用。</li>
+                <li><strong>准备四类账号。</strong>HR、员工、员工的直属主管、员工所属部门的审批人。</li>
+                <li><strong>核对组织关系。</strong>员工必须有直属主管；部门必须有负责人和结果审批人。</li>
+                <li><strong>使用专用数据。</strong>周期建议命名为“[验收] 年份-季度-日期”，模板和指标也使用明显的验收前缀。</li>
+                <li><strong>记录初始状态。</strong>截图或记录参与人数、周期状态和各角色待办数量，便于问题回溯。</li>
+              </ol>
+            </div>
+            <div class="acceptance-box">
+              <h3>准备检查</h3>
+              <label><input class="accept-check" type="checkbox" data-check="prepare-accounts" /> 四类角色账号均可登录</label>
+              <label><input class="accept-check" type="checkbox" data-check="prepare-manager" /> 员工直属主管关系正确</label>
+              <label><input class="accept-check" type="checkbox" data-check="prepare-approver" /> 部门负责人和审批人已配置</label>
+              <label><input class="accept-check" type="checkbox" data-check="prepare-data" /> 已创建独立验收数据范围</label>
+            </div>
+          </div>
+
+          <article class="operation-card">
+            <div class="operation-copy">
+              <span class="step-number">01</span>
+              <div>
+                <h3>登录系统</h3>
+                <p>公司员工点击“选择钉钉账号/组织登录”，按钉钉授权流程进入。多组织账号需要在授权页选择应用所属企业。</p>
+                <ul class="result-list">
+                  <li><strong>正常结果：</strong>登录后进入个人工作台，右上角显示本人姓名。</li>
+                  <li><strong>管理员备用入口：</strong>仅由管理员展开并使用，不向普通员工分发账号密码。</li>
+                  <li><strong>失败记录：</strong>保存页面提示、发生时间、所选企业和浏览器版本。</li>
+                </ul>
+              </div>
+            </div>
+            <figure class="screenshot-card">
+              <button class="image-button" type="button" data-image="assets/screens/login.png" data-caption="登录页：员工优先使用钉钉授权登录">
+                <img src="assets/screens/login.png" alt="孚德绩效管理系统登录页" loading="lazy" />
+                <span>点击放大</span>
+              </button>
+              <figcaption>图 1　员工优先使用钉钉授权登录；管理员入口为备用方式。</figcaption>
+            </figure>
+          </article>
+        </section>
+
+        <section class="manual-section" id="workbench" aria-labelledby="workbench-title">
+          <div class="section-heading">
+            <p class="section-kicker">02 · ROLE WORKBENCH</p>
+            <h2 id="workbench-title">工作台与角色导航</h2>
+            <p>工作台是当前角色的业务入口。HR 首屏重点是高频动作和最近结果摘要，不需要从完整人员表开始查找。</p>
+          </div>
+
+          <article class="operation-card reverse">
+            <div class="operation-copy">
+              <span class="step-number">02</span>
+              <div>
+                <h3>核对 HR 工作台</h3>
+                <ol class="steps small-steps">
+                  <li>确认左侧出现“工作台、绩效、试用期与转正、分析与设置”四个一级模块。</li>
+                  <li>确认常用入口包含“周期与计划、绩效校准、结果公示、申诉管理”。</li>
+                  <li>核对最近周期的应参评、已出结果、待出结果和合格率口径。</li>
+                  <li>点击任一入口后，应进入对应页面；浏览器刷新后仍停留在当前页面。</li>
+                </ol>
+                <div class="pass-criteria"><strong>通过标准</strong> 当前角色只看到有权限的入口，点击可处理，刷新不丢失页面。</div>
+              </div>
+            </div>
+            <figure class="screenshot-card">
+              <button class="image-button" type="button" data-image="assets/screens/hr-dashboard.png" data-caption="HR 工作台：常用入口与最近结果摘要">
+                <img src="assets/screens/hr-dashboard.png" alt="HR 工作台" loading="lazy" />
+                <span>点击放大</span>
+              </button>
+              <figcaption>图 2　HR 工作台将高频业务动作集中在首屏。</figcaption>
+            </figure>
+          </article>
+
+          <div class="inline-checks">
+            <label><input class="accept-check" type="checkbox" data-check="nav-role" /> 菜单与当前角色匹配</label>
+            <label><input class="accept-check" type="checkbox" data-check="nav-entry" /> 常用入口均可进入</label>
+            <label><input class="accept-check" type="checkbox" data-check="nav-refresh" /> 刷新后页面与登录状态正常</label>
+          </div>
+        </section>
+
+        <section class="manual-section" id="organization" aria-labelledby="organization-title">
+          <div class="section-heading">
+            <p class="section-kicker">03 · ORGANIZATION</p>
+            <h2 id="organization-title">组织与人员</h2>
+            <p>组织关系决定任务归属和审批范围。验收时先核对身份与关系，再判断“为什么看不到待办”。</p>
+          </div>
+
+          <article class="operation-card">
+            <div class="operation-copy">
+              <span class="step-number">03</span>
+              <div>
+                <h3>核对部门与人员关系</h3>
+                <ol class="steps small-steps">
+                  <li>进入“分析与设置 → 用户管理”，先看“配置检查”是否存在待处理项。</li>
+                  <li>在组织视图中选择员工所属部门，核对部门人数、下级部门、组织负责人和绩效结果审批人。</li>
+                  <li>在人员名册中搜索验收员工，进入“人员设置”，核对系统角色、直属主管和在职状态。</li>
+                  <li>切换到主管账号，确认团队列表只包含其授权范围内的员工。</li>
+                </ol>
+                <div class="warning-note"><strong>重点：</strong>组织负责人、直属主管、结果审批人是不同概念，不要用系统角色代替业务关系。</div>
+              </div>
+            </div>
+            <figure class="screenshot-card">
+              <button class="image-button" type="button" data-image="assets/screens/user-management.png" data-caption="组织与人员：部门架构、配置检查和人员关系">
+                <img src="assets/screens/user-management.png" alt="用户管理中的组织与人员页面" loading="lazy" />
+                <span>点击放大</span>
+              </button>
+              <figcaption>图 3　组织视图同时呈现部门负责人、审批人和人员关系。</figcaption>
+            </figure>
+          </article>
+
+          <div class="inline-checks">
+            <label><input class="accept-check" type="checkbox" data-check="org-head" /> 部门负责人配置正确</label>
+            <label><input class="accept-check" type="checkbox" data-check="org-manager" /> 员工直属主管配置正确</label>
+            <label><input class="accept-check" type="checkbox" data-check="org-approver" /> 结果审批人配置正确</label>
+          </div>
+        </section>
+
+        <section class="manual-section" id="configuration" aria-labelledby="configuration-title">
+          <div class="section-heading">
+            <p class="section-kicker">04 · INDICATORS & TEMPLATES</p>
+            <h2 id="configuration-title">指标库与考核模板</h2>
+            <p>指标库解决“评什么”，考核模板解决“哪些岗位用什么组合和权重”。先配置指标，再配置模板。</p>
+          </div>
+
+          <div class="two-column-operations">
+            <article class="mini-operation">
+              <div class="mini-heading"><span>4.1</span><h3>维护指标库</h3></div>
+              <ol class="steps small-steps">
+                <li>进入“分析与设置 → 指标库”，按名称、编码、类型、维度或分组查询。</li>
+                <li>新建指标时填写指标名称、编码、类型、考核维度、目标值、指标说明和评分标准。</li>
+                <li>保存后重新查询，确认指标可被检索；停用后不应再用于新模板。</li>
+                <li>需要批量维护时，先下载模板，再导入并核对成功、失败条数。</li>
+              </ol>
+              <figure class="screenshot-card compact-shot">
+                <button class="image-button" type="button" data-image="assets/screens/indicator-library.png" data-caption="指标库：筛选、新建、导入和导出入口">
+                  <img src="assets/screens/indicator-library.png" alt="指标库页面" loading="lazy" />
+                  <span>点击放大</span>
+                </button>
+                <figcaption>图 4　指标库支持查询、新建、导入和导出。</figcaption>
+              </figure>
+            </article>
+
+            <article class="mini-operation">
+              <div class="mini-heading"><span>4.2</span><h3>配置考核模板</h3></div>
+              <ol class="steps small-steps">
+                <li>进入“分析与设置 → 考核模板”，新建或复制一个验收模板。</li>
+                <li>按业务部门或岗位配置维度、指标、权重和适用范围。</li>
+                <li>确认维度权重合计为 100%，维度内指标权重也符合规则。</li>
+                <li>保存后检查模板状态和适用人员；缺失模板的参与人会阻断周期开放检查。</li>
+              </ol>
+              <figure class="screenshot-card compact-shot">
+                <button class="image-button" type="button" data-image="assets/screens/template-management.png" data-caption="考核模板：岗位适用范围与指标组合">
+                  <img src="assets/screens/template-management.png" alt="考核模板页面" loading="lazy" />
+                  <span>点击放大</span>
+                </button>
+                <figcaption>图 5　模板配置决定人员适用范围和考核指标组合。</figcaption>
+              </figure>
+            </article>
+          </div>
+
+          <div class="inline-checks">
+            <label><input class="accept-check" type="checkbox" data-check="indicator-create" /> 验收指标可查询</label>
+            <label><input class="accept-check" type="checkbox" data-check="template-weight" /> 模板权重校验正确</label>
+            <label><input class="accept-check" type="checkbox" data-check="template-scope" /> 模板适用范围正确</label>
+          </div>
+        </section>
+
+        <section class="manual-section" id="cycle" aria-labelledby="cycle-title">
+          <div class="section-heading">
+            <p class="section-kicker">05 · PERFORMANCE CYCLE</p>
+            <h2 id="cycle-title">绩效周期创建与发起</h2>
+            <p>周期发起不是简单的“保存并通知”。系统会先检查参与人、组织关系、模板覆盖、豁免和任务快照，检查失败时不得形成半开放状态。</p>
+          </div>
+
+          <article class="operation-card reverse">
+            <div class="operation-copy">
+              <span class="step-number">05</span>
+              <div>
+                <h3>创建并开放验收周期</h3>
+                <ol class="steps small-steps">
+                  <li>进入“绩效 → 周期与计划”，点击“新建周期”。</li>
+                  <li>填写周期名称、周期类型、起止日期和各流程节点截止时间。</li>
+                  <li>选择全公司或指定部门，确认参与范围；再检查等级分布上限和结果可见字段。</li>
+                  <li>保存草稿后，在“待发起”列表找到验收周期，点击“开放检查”。</li>
+                  <li>如果检查失败，按提示修复组织关系或模板覆盖后重新检查；不要绕过提示直接改数据。</li>
+                  <li>检查通过后确认开放，分别登录员工和主管账号核对任务数量。</li>
+                </ol>
+                <div class="pass-criteria"><strong>通过标准</strong> 周期由草稿进入运行状态；每名参与员工只有 1 个周期任务，主管归属与当前直属主管一致。</div>
+              </div>
+            </div>
+            <figure class="screenshot-card">
+              <button class="image-button" type="button" data-image="assets/screens/cycle-management.png" data-caption="周期与计划：按状态管理周期并执行开放检查">
+                <img src="assets/screens/cycle-management.png" alt="周期与计划页面" loading="lazy" />
+                <span>点击放大</span>
+              </button>
+              <figcaption>图 6　待发起周期先执行开放检查，再进入正式运行。</figcaption>
+            </figure>
+          </article>
+
+          <div class="inline-checks">
+            <label><input class="accept-check" type="checkbox" data-check="cycle-create" /> 验收周期保存成功</label>
+            <label><input class="accept-check" type="checkbox" data-check="cycle-preflight" /> 开放检查结果符合预期</label>
+            <label><input class="accept-check" type="checkbox" data-check="cycle-tasks" /> 员工和主管任务数量正确</label>
+          </div>
+        </section>
+
+        <section class="manual-section" id="performance" aria-labelledby="performance-title">
+          <div class="section-heading">
+            <p class="section-kicker">06 · CROSS-ROLE WORKFLOW</p>
+            <h2 id="performance-title">员工与主管协同验收</h2>
+            <p>这一章要用真实角色完成操作。HR 负责观察状态流转，不代替员工或主管提交。</p>
+          </div>
+
+          <div class="workflow-line" aria-label="绩效任务主流程">
+            <span>指标制定</span><b>→</b><span>员工确认</span><b>→</b><span>员工自评</span><b>→</b><span>主管评分</span><b>→</b><span>HR 校准</span><b>→</b><span>审批公示</span>
+          </div>
+
+          <div class="two-column-operations">
+            <article class="mini-operation">
+              <div class="mini-heading"><span>6.1</span><h3>员工操作</h3></div>
+              <ol class="steps small-steps">
+                <li>员工进入“绩效 → 绩效工作台”，选择当前验收周期。</li>
+                <li>在“我的绩效待办”中打开任务，核对指标名称、说明、评分标准和权重。</li>
+                <li>先完成指标确认；进入自评阶段后逐项填写自评分和事实说明。</li>
+                <li>保存草稿并刷新页面，确认内容仍在；随后提交自评。</li>
+                <li>提交后员工不得提前看到主管分数、总分或等级。</li>
+              </ol>
+              <figure class="screenshot-card compact-shot">
+                <button class="image-button" type="button" data-image="assets/screens/employee-tasks.png" data-caption="员工绩效工作台：个人待办与阶段导航">
+                  <img src="assets/screens/employee-tasks.png" alt="员工绩效工作台" loading="lazy" />
+                  <span>点击放大</span>
+                </button>
+                <figcaption>图 7　员工只处理本人任务，并按阶段完成确认和自评。</figcaption>
+              </figure>
+            </article>
+
+            <article class="mini-operation">
+              <div class="mini-heading"><span>6.2</span><h3>主管操作</h3></div>
+              <ol class="steps small-steps">
+                <li>主管进入“绩效 → 绩效工作台”，切换到“我的团队绩效待办”。</li>
+                <li>确认团队成员范围只包含当前授权人员，不能看到无关部门员工。</li>
+                <li>打开员工任务，逐项填写主管评分和评价；需要时记录加减分或一票否决依据。</li>
+                <li>保存草稿、刷新复核，再提交主管评分。</li>
+                <li>核对任务进入下一阶段，员工不再出现在待评分列表中。</li>
+              </ol>
+              <figure class="screenshot-card compact-shot">
+                <button class="image-button" type="button" data-image="assets/screens/manager-team-tasks.png" data-caption="主管团队绩效待办：仅显示授权团队成员">
+                  <img src="assets/screens/manager-team-tasks.png" alt="主管团队绩效待办" loading="lazy" />
+                  <span>点击放大</span>
+                </button>
+                <figcaption>图 8　主管待办范围以周期任务中的主管归属为准。</figcaption>
+              </figure>
+            </article>
+          </div>
+
+          <div class="inline-checks">
+            <label><input class="accept-check" type="checkbox" data-check="employee-confirm" /> 员工确认与自评可完成</label>
+            <label><input class="accept-check" type="checkbox" data-check="employee-mask" /> 公示前分数和等级被正确遮蔽</label>
+            <label><input class="accept-check" type="checkbox" data-check="manager-scope" /> 主管团队范围正确</label>
+            <label><input class="accept-check" type="checkbox" data-check="manager-submit" /> 主管评分后状态正确推进</label>
+          </div>
+        </section>
+
+        <section class="manual-section" id="result" aria-labelledby="result-title">
+          <div class="section-heading">
+            <p class="section-kicker">07 · RESULT GOVERNANCE</p>
+            <h2 id="result-title">绩效校准、结果审批与公示</h2>
+            <p>HR 负责结果口径和分布治理，审批人负责授权范围内决策，公示则是员工可见结果的正式出口。</p>
+          </div>
+
+          <div class="result-stack">
+            <article class="wide-operation">
+              <div class="wide-copy">
+                <span class="step-number">7.1</span>
+                <div>
+                  <h3>HR 绩效校准</h3>
+                  <p>选择验收周期，核对当前等级分布、分布告警和校准名单。需要调整时填写校准等级与说明；超过等级上限时系统应明确告警，但是否提交按公司制度执行。</p>
+                  <div class="pass-criteria"><strong>核对点</strong> 计算分、原始等级、校准等级和说明清晰；一票否决人员保持 D；提交后进入审批阶段。</div>
+                </div>
+              </div>
+              <figure class="screenshot-card">
+                <button class="image-button" type="button" data-image="assets/screens/calibration.png" data-caption="绩效校准：等级分布、告警与校准名单">
+                  <img src="assets/screens/calibration.png" alt="绩效校准工作台" loading="lazy" />
+                  <span>点击放大</span>
+                </button>
+                <figcaption>图 9　分布告警用于提醒，校准动作必须留下业务说明。</figcaption>
+              </figure>
+            </article>
+
+            <article class="wide-operation">
+              <div class="wide-copy">
+                <span class="step-number">7.2</span>
+                <div>
+                  <h3>审批人处理结果</h3>
+                  <p>审批人进入“结果审批”，选择验收周期，仅查看本人被授权的任务。验证单条退回必须填写意见，批量通过需要二次确认；退回后任务应回到 HR 校准。</p>
+                  <div class="pass-criteria"><strong>通过标准</strong> 非审批人看不到审批内容；审批范围、通过和退回后的状态均正确。</div>
+                </div>
+              </div>
+              <figure class="screenshot-card">
+                <button class="image-button" type="button" data-image="assets/screens/approval.png" data-caption="结果审批：审批人只处理授权范围">
+                  <img src="assets/screens/approval.png" alt="结果审批页面" loading="lazy" />
+                  <span>点击放大</span>
+                </button>
+                <figcaption>图 10　审批资格来自部门业务授权，不由菜单角色自动扩大。</figcaption>
+              </figure>
+            </article>
+
+            <article class="wide-operation">
+              <div class="wide-copy">
+                <span class="step-number">7.3</span>
+                <div>
+                  <h3>HR 发布公示</h3>
+                  <p>回到“结果公示”，选择已审批任务，核对人员范围后发布。发布属于对员工可见的正式动作，必须二次确认；未审批任务应被系统拒绝。</p>
+                  <div class="warning-note"><strong>风险提示：</strong>正式环境公示前，请由 HR 再次确认周期、人数和可见字段，避免误发布。</div>
+                </div>
+              </div>
+              <figure class="screenshot-card">
+                <button class="image-button" type="button" data-image="assets/screens/result-publish.png" data-caption="结果公示：核对审批状态后发布">
+                  <img src="assets/screens/result-publish.png" alt="结果公示页面" loading="lazy" />
+                  <span>点击放大</span>
+                </button>
+                <figcaption>图 11　只有已完成审批的结果可以进入公示。</figcaption>
+              </figure>
+            </article>
+          </div>
+
+          <div class="inline-checks">
+            <label><input class="accept-check" type="checkbox" data-check="calibration" /> 校准及分布告警正确</label>
+            <label><input class="accept-check" type="checkbox" data-check="approval-scope" /> 审批范围与状态流转正确</label>
+            <label><input class="accept-check" type="checkbox" data-check="publish" /> 仅已审批结果可公示</label>
+            <label><input class="accept-check" type="checkbox" data-check="employee-result" /> 员工公示后可见正确字段</label>
+          </div>
+        </section>
+
+        <section class="manual-section" id="analysis" aria-labelledby="analysis-title">
+          <div class="section-heading">
+            <p class="section-kicker">08 · APPEALS & REPORTS</p>
+            <h2 id="analysis-title">申诉管理与报表分析</h2>
+            <p>申诉是结果发布后的正式记录；报表用于观察结果和进度。两者都必须保持周期口径一致。</p>
+          </div>
+
+          <div class="two-column-operations">
+            <article class="mini-operation">
+              <div class="mini-heading"><span>8.1</span><h3>记录和处理申诉</h3></div>
+              <ol class="steps small-steps">
+                <li>进入“绩效 → 申诉管理”，选择已公示的员工任务并录入申诉事实。</li>
+                <li>处理时选择维持原判或改判；改判必须填写新等级和处理说明。</li>
+                <li>提交后核对员工结果、档案和申诉记录保持一致。</li>
+                <li>申诉页面用于正式留痕，不应出现未定义的多级流转入口。</li>
+              </ol>
+              <figure class="screenshot-card compact-shot">
+                <button class="image-button" type="button" data-image="assets/screens/appeals.png" data-caption="申诉管理：记录事实、结论与处理说明">
+                  <img src="assets/screens/appeals.png" alt="申诉管理页面" loading="lazy" />
+                  <span>点击放大</span>
+                </button>
+                <figcaption>图 12　申诉处理结果需要可追溯并与最终绩效结果一致。</figcaption>
+              </figure>
+            </article>
+
+            <article class="mini-operation">
+              <div class="mini-heading"><span>8.2</span><h3>核对报表口径</h3></div>
+              <ol class="steps small-steps">
+                <li>进入“分析与设置 → 报表分析”，先选择验收周期。</li>
+                <li>核对应参评、已出结果、待出结果和已出结果合格率。</li>
+                <li>查看结果概览、流程进度、重点关注和员工趋势。</li>
+                <li>执行 Excel 导出，核对人数、等级和页面口径一致。</li>
+              </ol>
+              <div class="definition-note">
+                <strong>口径说明</strong>
+                <p>合格率与等级占比只按“已出结果人员”计算；未出结果人员不计为不合格。部门平均分也应排除未评分人员。</p>
+              </div>
+              <figure class="screenshot-card compact-shot">
+                <button class="image-button" type="button" data-image="assets/screens/reports.png" data-caption="报表分析：结果、进度、重点关注和员工趋势">
+                  <img src="assets/screens/reports.png" alt="报表分析页面" loading="lazy" />
+                  <span>点击放大</span>
+                </button>
+                <figcaption>图 13　报表先明确周期和结果口径，再进行分析或导出。</figcaption>
+              </figure>
+            </article>
+          </div>
+
+          <div class="inline-checks">
+            <label><input class="accept-check" type="checkbox" data-check="appeal" /> 申诉记录与结果同步</label>
+            <label><input class="accept-check" type="checkbox" data-check="report-count" /> 报表人数和口径正确</label>
+            <label><input class="accept-check" type="checkbox" data-check="report-export" /> Excel 导出内容一致</label>
+          </div>
+        </section>
+
+        <section class="manual-section" id="probation" aria-labelledby="probation-title">
+          <div class="section-heading">
+            <p class="section-kicker">09 · PROBATION & CONFIRMATION</p>
+            <h2 id="probation-title">试用期考核与转正</h2>
+            <p>“试用期与转正”是人员生命周期模块，不是个人主页。HR、主管、员工和审批人从同一业务记录分别完成自己的动作。</p>
+          </div>
+
+          <div class="probation-flow">
+            <div><span>HR</span><strong>发起试用期考核</strong><small>配置指标与计划转正日期</small></div>
+            <b>→</b>
+            <div><span>员工</span><strong>自评与签字</strong><small>查看进度并提交本人材料</small></div>
+            <b>→</b>
+            <div><span>主管</span><strong>评分与建议</strong><small>完成直属员工考核</small></div>
+            <b>→</b>
+            <div><span>HR / 审批人</span><strong>归档与转正审批</strong><small>形成可追溯结论</small></div>
+          </div>
+
+          <article class="operation-card">
+            <div class="operation-copy">
+              <span class="step-number">09</span>
+              <div>
+                <h3>完成试用期与转正验收</h3>
+                <ol class="steps small-steps">
+                  <li>HR 进入“试用期考核管理”，按姓名和状态查询，发起一条验收考核。</li>
+                  <li>核对员工、主管、HR、计划转正日期、指标和当前状态。</li>
+                  <li>员工进入“我的试用期考核”，主管进入“试用期评分”，分别完成自评和评分。</li>
+                  <li>流程结束后检查签字和归档状态，再由员工提交转正申请。</li>
+                  <li>HR 在“转正申请管理”核对材料，审批人在“转正审批台”完成授权范围内审批。</li>
+                  <li>退回时必须填写意见；通过后员工和 HR 看到相同的最终状态。</li>
+                </ol>
+              </div>
+            </div>
+            <figure class="screenshot-card">
+              <button class="image-button" type="button" data-image="assets/screens/probation-management.png" data-caption="试用期考核管理：按状态跟踪每名员工">
+                <img src="assets/screens/probation-management.png" alt="试用期考核管理页面" loading="lazy" />
+                <span>点击放大</span>
+              </button>
+              <figcaption>图 14　HR 从管理台发起、跟踪并归档试用期考核。</figcaption>
+            </figure>
+          </article>
+
+          <div class="image-pair">
+            <figure class="screenshot-card compact-shot">
+              <button class="image-button" type="button" data-image="assets/screens/confirmation-management.png" data-caption="转正申请管理：HR 核对申请材料与状态">
+                <img src="assets/screens/confirmation-management.png" alt="转正申请管理页面" loading="lazy" />
+                <span>点击放大</span>
+              </button>
+              <figcaption>图 15　HR 统一查看和管理转正申请。</figcaption>
+            </figure>
+            <figure class="screenshot-card compact-shot">
+              <button class="image-button" type="button" data-image="assets/screens/confirmation-approval.png" data-caption="转正审批台：审批人处理授权范围内申请">
+                <img src="assets/screens/confirmation-approval.png" alt="转正审批台" loading="lazy" />
+                <span>点击放大</span>
+              </button>
+              <figcaption>图 16　审批人只处理本人授权范围内的转正申请。</figcaption>
+            </figure>
+          </div>
+
+          <div class="inline-checks">
+            <label><input class="accept-check" type="checkbox" data-check="probation-start" /> HR 可发起并跟踪考核</label>
+            <label><input class="accept-check" type="checkbox" data-check="probation-roles" /> 员工和主管动作正确</label>
+            <label><input class="accept-check" type="checkbox" data-check="confirmation" /> 转正申请与审批闭环正确</label>
+          </div>
+        </section>
+
+        <section class="manual-section signoff-section" id="signoff" aria-labelledby="signoff-title">
+          <div class="section-heading">
+            <p class="section-kicker">10 · ACCEPTANCE SIGN-OFF</p>
+            <h2 id="signoff-title">验收结论与问题记录</h2>
+            <p>所有关键流程需要同时满足页面可见、动作可执行、状态和数据正确，才能判定通过。</p>
+          </div>
+
+          <div class="signoff-grid">
+            <article class="final-checklist">
+              <h3>最终验收清单</h3>
+              <label><input class="accept-check" type="checkbox" data-check="final-login" /> 四类账号均可正常登录和退出</label>
+              <label><input class="accept-check" type="checkbox" data-check="final-permission" /> 菜单、人员范围和审批范围符合授权</label>
+              <label><input class="accept-check" type="checkbox" data-check="final-cycle" /> 周期开放检查和任务生成正确</label>
+              <label><input class="accept-check" type="checkbox" data-check="final-workflow" /> 员工、主管、HR、审批人完成主流程</label>
+              <label><input class="accept-check" type="checkbox" data-check="final-result" /> 校准、审批、公示和结果可见性正确</label>
+              <label><input class="accept-check" type="checkbox" data-check="final-report" /> 报表与导出数据口径一致</label>
+              <label><input class="accept-check" type="checkbox" data-check="final-people" /> 试用期与转正流程闭环正确</label>
+              <label><input class="accept-check" type="checkbox" data-check="final-console" /> 操作过程无阻断性页面错误</label>
+              <button class="text-button" id="reset-progress" type="button">清空本机勾选记录</button>
+            </article>
+
+            <article class="decision-card">
+              <h3>判定建议</h3>
+              <div class="decision-row pass"><strong>通过</strong><span>关键流程全部完成，数据与权限符合制度，可进入试运行。</span></div>
+              <div class="decision-row conditional"><strong>有条件通过</strong><span>不影响主流程的问题已登记，并有明确修复人与复验日期。</span></div>
+              <div class="decision-row fail"><strong>不通过</strong><span>存在权限越界、数据错误、流程阻断、误公示或无法追溯的问题。</span></div>
+            </article>
+          </div>
+
+          <article class="issue-template">
+            <div class="issue-heading">
+              <div>
+                <h3>问题记录模板</h3>
+                <p>发现问题时不要只写“页面不对”，请按下面字段记录。</p>
+              </div>
+              <button class="button button-secondary" id="copy-issue" type="button">复制模板</button>
+            </div>
+            <pre id="issue-copy">【问题标题】
+【发生时间】
+【验收环境 / 页面地址】
+【登录角色 / 姓名】
+【所属周期 / 员工】
+【操作步骤】1.  2.  3.
+【预期结果】
+【实际结果】
+【影响范围】单人 / 部门 / 全公司
+【附件】页面截图、错误提示、导出文件</pre>
+          </article>
+
+          <div class="signature-block">
+            <div><span>验收单位 / 部门</span><b></b></div>
+            <div><span>HR 验收人</span><b></b></div>
+            <div><span>业务负责人</span><b></b></div>
+            <div><span>验收日期</span><b></b></div>
+            <div class="signature-wide"><span>最终结论与备注</span><b></b></div>
+          </div>
+        </section>
+
+        <footer>
+          <img src="../kayford-logo.jpg" alt="" />
+          <div>
+            <strong>孚德绩效管理系统</strong>
+            <span>操作与验收手册 · V1.0 · 2026-08-19</span>
+          </div>
+          <a href="#start">返回顶部 ↑</a>
+        </footer>
+      </main>
+    </div>
+
+    <dialog class="image-dialog" id="image-dialog">
+      <button class="dialog-close" type="button" aria-label="关闭大图">×</button>
+      <img id="dialog-image" alt="" />
+      <p id="dialog-caption"></p>
+    </dialog>
+
+    <script src="assets/manual.js"></script>
+  </body>
+</html>

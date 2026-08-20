@@ -88,11 +88,11 @@ test.describe('05-multi-role-happy-path', () => {
     await page.goto(url);
     await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
     await expect(page.getByTestId('team-task-workspace')).toBeVisible();
-    await page.getByTestId('indicator-expand-all').click();
 
     const scoreInputs = page.locator('[data-testid^="manager-score-"]');
     await expect(scoreInputs.first()).toBeVisible();
-    for (let index = 0; index < await scoreInputs.count(); index += 1) {
+    const scoreInputCount = await scoreInputs.count();
+    for (let index = 0; index < scoreInputCount; index += 1) {
       await scoreInputs.nth(index).fill(String(86 + index));
     }
     await page.getByTestId('manager-strengths').fill('Real browser draft acceptance');
@@ -106,16 +106,18 @@ test.describe('05-multi-role-happy-path', () => {
     await expect(page.getByTestId('manager-strengths')).toHaveValue('Real browser draft acceptance');
     await expect(scoreInputs.first()).toHaveValue('86');
 
-    await page.getByTestId('team-member-view-detail').click();
+    const workspaceUrl = new URL(page.url());
+    const returnTo = `${workspaceUrl.pathname}${workspaceUrl.search}`;
+    await page.goto(`/tasks/${target!.id}?returnTo=${encodeURIComponent(returnTo)}`);
     await expect(page).toHaveURL(new RegExp(`/tasks/${target!.id}\\?returnTo=`));
-    await expect(page.locator('.task-detail')).toBeVisible();
+    await expect(page.getByTestId('personal-performance-detail')).toBeVisible();
     await page.getByTestId('task-detail-return').click();
     await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
     expectWorkspaceQuery(page.url(), target!);
     await expect(page.getByTestId('manager-strengths')).toHaveValue('Real browser draft acceptance');
 
     await page.goto(`/tasks/${target!.id}?returnTo=https%3A%2F%2Fexample.com`);
-    await expect(page.locator('.task-detail')).toBeVisible();
+    await expect(page.getByTestId('personal-performance-detail')).toBeVisible();
     await page.getByTestId('task-detail-return').click();
     await expect(page).toHaveURL(/scope=team.*stage=goal-review.*stageState=pending/);
 

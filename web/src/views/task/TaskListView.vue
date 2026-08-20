@@ -5,6 +5,7 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { Calendar, DocumentChecked, RefreshLeft, Search, UserFilled } from '@element-plus/icons-vue';
 import { tasksApi } from '@/api/tasks.api';
 import { cyclesApi } from '@/api/cycles.api';
+import { usersApi } from '@/api/users.api';
 import { useAuthStore } from '@/stores/auth.store';
 import EmptyState from '@/components/common/EmptyState.vue';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
@@ -24,6 +25,7 @@ import ManagerEvaluationWorkspace from './components/ManagerEvaluationWorkspace.
 import type {
   AssessmentCycle,
   BatchReviewResult,
+  DirectReport,
   TaskDetail,
   TaskListItem,
   TaskQuery,
@@ -50,6 +52,8 @@ const cycles = ref<AssessmentCycle[]>([]);
 const selectedCycleId = ref<string>('');
 const teamLoading = ref(false);
 const teamError = ref('');
+const teamRoster = ref<DirectReport[]>([]);
+const teamRosterError = ref('');
 const teamKeyword = ref(workspaceQuery.state.value.keyword ?? '');
 const teamPageSize = 20;
 const teamListRef = ref<TeamTaskListHandle>();
@@ -102,6 +106,34 @@ function emptyTeamPage(): TeamTaskPage {
   };
 }
 
+function rosterFacets(): TeamTaskPage['facets'] {
+  const departments = Array.from(
+    new Map(
+      teamRoster.value
+        .filter((employee) => employee.deptId && employee.deptName)
+        .map((employee) => [employee.deptId as string, {
+          id: employee.deptId as string,
+          name: employee.deptName as string,
+        }]),
+    ).values(),
+  ).sort((a, b) => a.name.localeCompare(b.name, 'zh-CN'));
+
+  return {
+    departments,
+    employees: teamRoster.value.map((employee) => ({
+      id: employee.id,
+      name: employee.name,
+      employeeNo: employee.employeeNo,
+      deptId: employee.deptId,
+    })),
+  };
+}
+
+function withRosterFacets(page: TeamTaskPage): TeamTaskPage {
+  if (teamRoster.value.length === 0) return page;
+  return { ...page, facets: rosterFacets() };
+}
+
 const teamPage = ref<TeamTaskPage>(emptyTeamPage());
 type TaskStageKey = MappedTaskStageKey;
 
@@ -144,6 +176,17 @@ const teamEmployeeOptions = computed(() => {
   const departmentId = workspaceQuery.state.value.deptId;
   if (!departmentId) return teamPage.value.facets.employees;
   return teamPage.value.facets.employees.filter((employee) => employee.deptId === departmentId);
+});
+const filteredTeamRoster = computed(() => {
+  const state = workspaceQuery.state.value;
+  const keyword = (state.keyword ?? '').trim().toLocaleLowerCase();
+  return teamRoster.value.filter((employee) => {
+    if (state.deptId && employee.deptId !== state.deptId) return false;
+    if (state.employeeId && employee.id !== state.employeeId) return false;
+    if (!keyword) return true;
+    return employee.name.toLocaleLowerCase().includes(keyword)
+      || (employee.employeeNo ?? '').toLocaleLowerCase().includes(keyword);
+  });
 });
 const teamStageTabs: Array<{ key: TeamTaskStage; label: string }> = [
   { key: 'goal-review', label: '指标审核' },
@@ -217,6 +260,18 @@ async function loadCycles() {
     cycles.value = await cyclesApi.findMine();
   } catch {
     cycles.value = [];
+  }
+}
+
+async function loadTeamRoster() {
+  if (!isManagerCapable.value || !auth.user?.id) return;
+  teamRosterError.value = '';
+  try {
+    teamRoster.value = await usersApi.getSubordinates(auth.user.id);
+    teamPage.value = withRosterFacets(teamPage.value);
+  } catch {
+    teamRoster.value = [];
+    teamRosterError.value = '直属员工加载失败';
   }
 }
 
@@ -373,6 +428,13 @@ async function hydrateSelectedTeamTask(response: TeamTaskPage) {
       await denyTeamTaskAccess(taskId);
       return;
     }
+    if (
+      detail.cycleId !== selectedCycleId.value
+      && cycles.value.some((cycle) => cycle.id === detail.cycleId)
+    ) {
+      await workspaceQuery.update({ cycleId: detail.cycleId, taskId });
+      return;
+    }
     hydratedTeamTask.value = toTeamTaskItem(detail, workspaceQuery.state.value.stage);
   } catch (error) {
     if (requestId !== teamDetailRequestSerial || workspaceQuery.state.value.taskId !== taskId) return;
@@ -391,8 +453,8 @@ interface LoadTeamOptions {
 async function loadTeam(options: LoadTeamOptions = {}) {
   if (activeScope.value !== 'team') return;
   if (!selectedCycleId.value) {
-    teamPage.value = emptyTeamPage();
-    teamError.value = '';
+    teamPage.value = withRosterFacets(emptyTeamPage());
+    teamError.value = teamRosterError.value;
     teamLoading.value = false;
     return;
   }
@@ -413,7 +475,7 @@ async function loadTeam(options: LoadTeamOptions = {}) {
       keyword: state.keyword,
     });
     if (requestId !== teamRequestSerial) return;
-    teamPage.value = response;
+    teamPage.value = withRosterFacets(response);
     teamStagePendingCounts.value = {
       ...teamStagePendingCounts.value,
       [state.stage]: response.counts.pending,
@@ -433,7 +495,7 @@ async function loadTeam(options: LoadTeamOptions = {}) {
     await hydrateSelectedTeamTask(response);
   } catch {
     if (requestId === teamRequestSerial) {
-      teamPage.value = emptyTeamPage();
+      teamPage.value = withRosterFacets(emptyTeamPage());
       teamError.value = '团队任务加载失败';
       hydratedTeamTask.value = undefined;
     }
@@ -848,7 +910,10 @@ function handleManagerEvaluationTaskUpdated(detail: TaskDetail) {
 }
 
 onMounted(async () => {
-  await loadCycles();
+  await Promise.all([
+    loadCycles(),
+    isManagerCapable.value ? loadTeamRoster() : Promise.resolve(),
+  ]);
   await normalizeTaskCycle();
   taskWorkspaceReady = true;
   if (activeScope.value === 'team') {
@@ -1324,6 +1389,8 @@ watch(
         <TeamTaskList
           ref="teamListRef"
           :items="teamPage.items"
+          :roster="filteredTeamRoster"
+          :has-cycle="Boolean(selectedCycleId)"
           :total="teamPage.total"
           :page="teamPage.page"
           :page-size="teamPage.pageSize"

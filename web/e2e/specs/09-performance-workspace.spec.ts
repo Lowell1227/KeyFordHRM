@@ -946,11 +946,12 @@ test.describe('09-performance-workspace tracking behavior', () => {
     await expect(page).toHaveURL(/employeeId=manager-1.*cycleId=cycle-1/);
   });
 
-  test('canonicalizes an objective deep link and highlights the resolved row', async ({ page }) => {
+  test('canonicalizes an objective deep link to its owner and cycle context', async ({ page }) => {
     await mockGoalTrackingShell(page, { deepLinkObjectiveId: 'objective-2' });
     await page.goto('/action-items?objectiveId=objective-2');
     await expect(page).toHaveURL(/employeeId=manager-1.*cycleId=cycle-2/);
-    await expect(page.getByTestId('goal-tracking-row-objective-2')).toHaveClass(/is-highlighted/);
+    await expect(page).not.toHaveURL(/objectiveId=/);
+    await expect(page.locator('.tracking-indicators__row.is-highlighted')).toHaveCount(0);
   });
 
   test('falls back safely when an objective deep link is missing or invisible', async ({ page }) => {

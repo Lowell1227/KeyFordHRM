@@ -24,6 +24,10 @@ export interface ReportSummaryItem extends ReportItem {
 /** 汇总报表统计。 */
 export interface ReportSummaryStats {
   total: number;
+  resulted: number;
+  pending: number;
+  qualified: number;
+  qualifiedRate: number;
   grades: Record<PerfGrade, { count: number; ratio: number }>;
 }
 
@@ -393,15 +397,22 @@ export class ReportsService {
       }
     }
 
+    const resulted = GRADES.reduce((sum, grade) => sum + counts[grade], 0);
+    const pending = Math.max(0, total - resulted);
+    const qualified = counts.A + counts.B + counts.C;
+    const qualifiedRate = resulted === 0 ? 0 : qualified / resulted;
     const grades = {} as Record<PerfGrade, { count: number; ratio: number }>;
     for (const grade of GRADES) {
       grades[grade] = {
         count: counts[grade],
-        ratio: total === 0 ? 0 : counts[grade] / total,
+        ratio: resulted === 0 ? 0 : counts[grade] / resulted,
       };
     }
 
-    return { stats: { total, grades }, items };
+    return {
+      stats: { total, resulted, pending, qualified, qualifiedRate, grades },
+      items,
+    };
   }
 
   private mapToSummaryItem(task: TaskWithResult): ReportSummaryItem {

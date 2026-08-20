@@ -17,9 +17,9 @@ export const GRADE_LIST_COLUMNS = SUMMARY_COLUMNS;
 
 /** 汇总报表统计页列定义。 */
 const STATS_COLUMNS = [
-  { key: 'grade', header: '等级', width: 10 },
-  { key: 'count', header: '人数', width: 12 },
-  { key: 'ratio', header: '比例', width: 12 },
+  { key: 'metric', header: '统计项', width: 22 },
+  { key: 'value', header: '数值', width: 15 },
+  { key: 'note', header: '口径说明', width: 36 },
 ] as const;
 
 /** 报表明细项（JSON 与 Excel 同源）。 */
@@ -36,6 +36,10 @@ export interface ReportItem {
 export interface SummaryExcelData {
   stats: {
     total: number;
+    resulted: number;
+    pending: number;
+    qualified: number;
+    qualifiedRate: number;
     grades: Record<PerfGrade, { count: number; ratio: number }>;
   };
   items: ReportItem[];
@@ -79,16 +83,24 @@ export async function buildSummaryWorkbook(data: SummaryExcelData): Promise<Exce
     width: col.width,
   }));
 
+  statsSheet.addRow({ metric: '应参评', value: data.stats.total, note: '本周期应参加绩效评估的人数' });
+  statsSheet.addRow({ metric: '已出结果', value: data.stats.resulted, note: '已有最终绩效等级的人数' });
+  statsSheet.addRow({ metric: '待出结果', value: data.stats.pending, note: '尚未形成最终绩效等级的人数' });
+  statsSheet.addRow({
+    metric: '已出结果合格率',
+    value: `${(data.stats.qualifiedRate * 100).toFixed(1)}%`,
+    note: 'A/B/C 人数 ÷ 已出结果人数；未出结果不计为不合格',
+  });
+
   const grades: PerfGrade[] = ['A', 'B', 'C', 'D'];
   for (const grade of grades) {
     const entry = data.stats.grades[grade];
     statsSheet.addRow({
-      grade,
-      count: entry?.count ?? 0,
-      ratio: entry?.ratio != null ? `${(entry.ratio * 100).toFixed(1)}%` : '0.0%',
+      metric: `${grade} 等级人数`,
+      value: entry?.count ?? 0,
+      note: `占已出结果人数 ${entry?.ratio != null ? `${(entry.ratio * 100).toFixed(1)}%` : '0.0%'}`,
     });
   }
-  statsSheet.addRow({ grade: '合计', count: data.stats.total, ratio: '100.0%' });
 
   addItemsWorksheet(workbook, data.items, '明细');
 

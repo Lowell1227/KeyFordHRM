@@ -1,34 +1,38 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores/auth.store';
 import { loadDingTalkJsApi } from '@/utils/dingtalk-jsapi';
+import { dingtalkLoginErrorMessage } from '@/utils/dingtalk-login-error';
+import { authApi, type TestAccount } from '@/api/auth.api';
 
 const auth = useAuthStore();
 const router = useRouter();
 const route = useRoute();
 
 const isDingTalkEnv = computed(() => navigator.userAgent.includes('DingTalk'));
-const showPasswordForm = ref(!isDingTalkEnv.value);
+const dingtalkButtonText = computed(() => (
+  isDingTalkEnv.value ? '钉钉内免登' : '选择钉钉账号/组织登录'
+));
+const showPasswordForm = ref(false);
 const loading = ref(false);
 const form = reactive({ employeeNo: '', password: '' });
 
 const DINGTALK_APP_KEY = import.meta.env.VITE_DINGTALK_APP_KEY || 'dinghwbnyktt3oku2jd3';
 const DINGTALK_CORP_ID = import.meta.env.VITE_DINGTALK_CORP_ID || '';
 
-// —— 测试账号快速登录（仅开发环境，生产构建不包含）——
-// 账号由 `npm run db:seed:dev` 写入，密码统一 000000。
-const isDev = import.meta.env.DEV;
-const quickAccounts = [
-  { role: '系统管理员', employeeNo: 'ADMIN', type: 'danger' },
-  { role: 'HR', employeeNo: 'HR001', type: 'warning' },
-  { role: 'VP', employeeNo: 'VP001', type: 'primary' },
-  { role: '主管', employeeNo: 'MGR001', type: 'success' },
-  { role: '员工', employeeNo: 'EMP001', type: 'info' },
-] as const;
-const QUICK_PASSWORD = '000000';
+const testAccounts = ref<TestAccount[]>([]);
 const quickLoadingNo = ref<string | null>(null);
+
+onMounted(async () => {
+  try {
+    const result = await authApi.getTestAccounts();
+    testAccounts.value = result.enabled ? result.accounts : [];
+  } catch {
+    testAccounts.value = [];
+  }
+});
 
 function isAuthFailure(err: unknown): boolean {
   return (err as { response?: { status?: number } })?.response?.status === 401;
@@ -38,14 +42,10 @@ async function quickLogin(employeeNo: string) {
   if (loading.value || quickLoadingNo.value) return;
   quickLoadingNo.value = employeeNo;
   try {
-    await auth.loginWithPassword(employeeNo, QUICK_PASSWORD);
+    await auth.loginWithTestAccount(employeeNo);
     redirectAfterLogin();
-  } catch (err) {
-    // 401（账号不存在/密码不对）拦截器不弹提示，这里给出可操作的指引；
-    // 其它错误（网络等）已由 http 拦截层提示，避免重复弹窗。
-    if (isAuthFailure(err)) {
-      ElMessage.error(`${employeeNo} 登录失败：请先运行 npm run db:seed:dev 写入测试账号`);
-    }
+  } catch {
+    ElMessage.error('测试账号暂不可用，请联系系统管理员检查测试数据');
   } finally {
     quickLoadingNo.value = null;
   }
@@ -82,10 +82,10 @@ async function onDingTalkLogin() {
       if (authSettled) return;
       authSettled = true;
       try {
-        await auth.loginWithDingTalk(res.code);
+        await auth.loginWithDingTalk(res.code, 'internal');
         redirectAfterLogin();
-      } catch {
-        ElMessage.error('钉钉登录失败，请确认账号已开通或改用账号密码登录');
+      } catch (error) {
+        ElMessage.error(dingtalkLoginErrorMessage(error));
       } finally {
         loading.value = false;
       }
@@ -116,8 +116,9 @@ async function onDingTalkLogin() {
     redirect_uri: getDingTalkRedirectUri(),
     response_type: 'code',
     client_id: DINGTALK_APP_KEY,
-    scope: 'openid',
+    scope: 'openid corpid',
     prompt: 'consent',
+    corpId: DINGTALK_CORP_ID,
   });
   window.location.href = `https://login.dingtalk.com/oauth2/auth?${params.toString()}`;
 }
@@ -144,14 +145,25 @@ async function onPasswordLogin() {
 
 <template>
   <el-card class="login-card">
-    <img src="/logo.png" alt="KAYFORD 孚德" class="login-logo" />
+    <img src="/brand/logo-2025.png" alt="KAYFORD 孚德" class="login-logo" />
     <h2 class="title">绩效管理系统</h2>
     <el-button type="primary" size="large" class="dingtalk-btn" :loading="loading" @click="onDingTalkLogin">
-      钉钉一键登录
+      {{ dingtalkButtonText }}
     </el-button>
 
+    <p class="login-guidance">公司员工请使用钉钉账号登录；新浏览器首次使用需完成钉钉授权</p>
+    <p class="org-guidance">多组织账号请在钉钉授权页选择应用所属企业</p>
+    <a
+      class="manual-link"
+      href="/manual/index.html"
+      target="_blank"
+      rel="noopener noreferrer"
+    >
+      查看系统操作与验收手册
+    </a>
+
     <el-divider>
-      <span class="other" @click="showPasswordForm = !showPasswordForm">其他方式登录</span>
+      <span class="other" @click="showPasswordForm = !showPasswordForm">管理员账号登录</span>
     </el-divider>
 
     <el-form v-show="showPasswordForm" @submit.prevent="onPasswordLogin">
@@ -164,20 +176,22 @@ async function onPasswordLogin() {
       <el-button type="primary" :loading="loading" class="full" native-type="submit" data-testid="login-submit">登录</el-button>
     </el-form>
 
-    <div v-if="isDev" class="quick-login">
-      <el-divider><span class="quick-login__hint">测试账号快速登录（仅开发环境）</span></el-divider>
+    <div v-if="testAccounts.length" class="quick-login" data-testid="test-account-login">
+      <el-divider><span class="quick-login__hint">测试账号快捷登录</span></el-divider>
       <div class="quick-login__grid">
         <el-button
-          v-for="acc in quickAccounts"
+          v-for="acc in testAccounts"
           :key="acc.employeeNo"
-          :type="acc.type"
           plain
-          size="small"
+          class="quick-login__account"
           :loading="quickLoadingNo === acc.employeeNo"
           :disabled="!!quickLoadingNo && quickLoadingNo !== acc.employeeNo"
+          data-testid="test-account-login-button"
           @click="quickLogin(acc.employeeNo)"
         >
-          {{ acc.role }}
+          <span class="quick-login__role">{{ acc.roleLabel }}</span>
+          <span class="quick-login__name">{{ acc.name }}</span>
+          <span class="quick-login__no">{{ acc.employeeNo }}</span>
         </el-button>
       </div>
     </div>
@@ -186,7 +200,7 @@ async function onPasswordLogin() {
 
 <style scoped>
 .login-card {
-  width: 360px;
+  width: 420px;
   padding: 12px;
 }
 .login-logo {
@@ -207,6 +221,33 @@ async function onPasswordLogin() {
 .full {
   width: 100%;
 }
+.login-guidance,
+.org-guidance {
+  margin: 10px 0 0;
+  text-align: center;
+  color: var(--app-text-secondary, #646a73);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.org-guidance {
+  color: var(--el-color-warning-dark-2, #b88230);
+}
+.manual-link {
+  display: block;
+  width: fit-content;
+  margin: 12px auto 0;
+  color: var(--el-color-primary);
+  font-size: 13px;
+  text-decoration: none;
+}
+.manual-link:hover {
+  text-decoration: underline;
+}
+.manual-link:focus-visible {
+  outline: 2px solid var(--el-color-primary-light-5);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
 .other {
   cursor: pointer;
   color: #909399;
@@ -216,16 +257,46 @@ async function onPasswordLogin() {
   margin-top: 8px;
 }
 .quick-login__hint {
-  color: #c0c4cc;
+  color: var(--app-text-secondary, #646a73);
   font-size: 12px;
 }
 .quick-login__grid {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 8px;
-  justify-content: center;
 }
-.quick-login__grid .el-button {
+.quick-login__account.el-button {
   margin: 0;
+  height: 48px;
+  padding: 6px 10px;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  grid-template-rows: auto auto;
+  column-gap: 8px;
+  text-align: left;
+}
+.quick-login__role {
+  grid-row: 1 / 3;
+  align-self: center;
+  min-width: 48px;
+  color: var(--el-color-primary);
+  font-weight: 600;
+}
+.quick-login__name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.quick-login__no {
+  color: var(--app-text-tertiary, #8f959e);
+  font-size: 11px;
+}
+@media (max-width: 520px) {
+  .login-card {
+    width: calc(100vw - 32px);
+  }
+  .quick-login__grid {
+    grid-template-columns: 1fr;
+  }
 }
 </style>

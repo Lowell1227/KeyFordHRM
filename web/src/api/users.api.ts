@@ -1,9 +1,11 @@
 import http from './http';
 import type {
   Paginated,
+  DirectReport,
   User,
   UserQuery,
   UpdateManagerBody,
+  UpdateUserSettingsBody,
   UpdateRoleBody,
   SetPasswordBody,
 } from '@/types/api.types';
@@ -36,6 +38,11 @@ export const usersApi = {
     return apiPatch(`/users/${id}/manager`, body);
   },
 
+  /** PATCH /users/:id/settings — 统一更新人员关系与系统权限 */
+  updateSettings(id: string, body: UpdateUserSettingsBody): Promise<User> {
+    return apiPatch(`/users/${id}/settings`, body);
+  },
+
   /** PATCH /users/:id/role — 更新系统角色 */
   updateRole(id: string, body: UpdateRoleBody): Promise<User> {
     return apiPatch(`/users/${id}/role`, body);
@@ -47,7 +54,7 @@ export const usersApi = {
   },
 
   /** GET /users/:id/subordinates — 获取下属列表 */
-  getSubordinates(id: string): Promise<User[]> {
+  getSubordinates(id: string): Promise<DirectReport[]> {
     return apiGet(`/users/${id}/subordinates`);
   },
 };

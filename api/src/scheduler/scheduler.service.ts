@@ -3,7 +3,6 @@ import { Cron } from '@nestjs/schedule';
 import { AssessmentCycle, CycleStatus, Prisma, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { NotificationsService, TaskReminderNodeType } from '@/notifications/notifications.service';
-import { DingtalkSyncService } from '@/dingtalk/dingtalk-sync.service';
 import { LaunchService } from '@/cycles/launch.service';
 import { AuthUser } from '@/common/types/auth.types';
 
@@ -48,10 +47,7 @@ const CLOSED_TASK_STATUSES: TaskStatus[] = ['closed', 'exempted'];
 /**
  * 定时任务编排服务。
  *
- * 三个核心 cron：
- * 1. 02:00 钉钉组织同步
- * 2. 09:00 截止日催办
- * 3. 03:00 自动关周期
+ * 核心 cron 包括截止日催办、自动关周期和周期节点开放。
  *
  * 所有 cron 均包 try/catch，单次失败只记日志不影响下次调度。
  * 核心逻辑抽成 public 方法，便于单测与手动触发。
@@ -61,7 +57,6 @@ export class SchedulerService {
   private readonly logger = new Logger(SchedulerService.name);
 
   constructor(
-    private readonly dingtalkSyncService: DingtalkSyncService,
     private readonly notificationsService: NotificationsService,
     private readonly prisma: PrismaService,
     private readonly launchService: LaunchService,
@@ -84,17 +79,6 @@ export class SchedulerService {
       await this.runSelfEvalOpenings();
     } catch (err) {
       this.logger.error('开放绩效自评定时任务异常', err);
-    }
-  }
-
-  /** 02:00 钉钉组织同步。 */
-  @Cron('0 2 * * *')
-  async syncDingtalkOrganization(): Promise<void> {
-    try {
-      this.dingtalkSyncService.runSync();
-      this.logger.log('钉钉组织同步定时任务已触发');
-    } catch (err) {
-      this.logger.error('钉钉组织同步定时任务异常', err);
     }
   }
 

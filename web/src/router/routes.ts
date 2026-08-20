@@ -118,9 +118,9 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/admin/UserManageView.vue'),
     meta: {
       requiresAuth: true,
-      title: '用户管理',
+      title: '员工档案',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'analysis', label: '用户管理', order: 40 },
+      navigation: { module: 'analysis', label: '员工档案', order: 40 },
     },
   },
   {

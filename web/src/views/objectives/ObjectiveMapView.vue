@@ -23,6 +23,7 @@ import type {
   Objective,
   Department,
   AssessmentCycle,
+  DirectReport,
   Indicator,
   User,
   CreateObjectiveBody,
@@ -49,13 +50,19 @@ const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 
+interface ObjectiveUserOption {
+  id: string;
+  name: string;
+  employeeNo?: string | null;
+}
+
 const treeData = ref<Objective[]>([]);
 const loading = ref(false);
 const cycles = ref<AssessmentCycle[]>([]);
 const departments = ref<Department[]>([]);
 const indicators = ref<Indicator[]>([]);
-const users = ref<User[]>([]);
-const directReports = ref<User[]>([]);
+const users = ref<ObjectiveUserOption[]>([]);
+const directReports = ref<DirectReport[]>([]);
 
 const filters = reactive<{ cycleId: string }>({
   cycleId: '',
@@ -312,7 +319,10 @@ function canOpenTracking(objective: Objective) {
 function openTracking(objective: Objective) {
   if (!canOpenTracking(objective)) return;
   detailVisible.value = false;
-  router.push({ path: '/action-items', query: { objectiveId: objective.id } });
+  router.push({
+    path: '/action-items',
+    query: { employeeId: objective.ownerId, cycleId: objective.cycleId },
+  });
 }
 
 function editFromDetail() {

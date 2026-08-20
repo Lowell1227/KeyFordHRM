@@ -1,22 +1,16 @@
 import { Test, TestingModule } from '@nestjs/testing';
 import { SchedulerService } from './scheduler.service';
-import { DingtalkSyncService } from '@/dingtalk/dingtalk-sync.service';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { PrismaService } from '@/prisma/prisma.service';
 import { LaunchService } from '@/cycles/launch.service';
 
 describe('SchedulerService', () => {
   let service: SchedulerService;
-  let dingtalkSyncService: jest.Mocked<DingtalkSyncService>;
   let notificationsService: jest.Mocked<NotificationsService>;
   let prisma: any;
   let launchService: { launch: jest.Mock };
 
   beforeEach(async () => {
-    const dingtalkSyncMock = {
-      runSync: jest.fn(),
-    } as unknown as jest.Mocked<DingtalkSyncService>;
-
     const notificationsMock = {
       sendBatchReminders: jest.fn().mockResolvedValue([]),
       create: jest.fn().mockResolvedValue({ id: 'notification-1' }),
@@ -42,7 +36,6 @@ describe('SchedulerService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SchedulerService,
-        { provide: DingtalkSyncService, useValue: dingtalkSyncMock },
         { provide: NotificationsService, useValue: notificationsMock },
         { provide: PrismaService, useValue: prisma },
         { provide: LaunchService, useValue: launchService },
@@ -50,27 +43,11 @@ describe('SchedulerService', () => {
     }).compile();
 
     service = module.get<SchedulerService>(SchedulerService);
-    dingtalkSyncService = module.get(DingtalkSyncService);
     notificationsService = module.get(NotificationsService);
   });
 
   afterEach(() => {
     jest.clearAllMocks();
-  });
-
-  describe('syncDingtalkOrganization', () => {
-    it('应触发钉钉组织同步', () => {
-      service.syncDingtalkOrganization();
-      expect(dingtalkSyncService.runSync).toHaveBeenCalled();
-    });
-
-    it('同步异常应被吞掉并记录日志', () => {
-      dingtalkSyncService.runSync.mockImplementation(() => {
-        throw new Error('sync error');
-      });
-      expect(() => service.syncDingtalkOrganization()).not.toThrow();
-      expect(dingtalkSyncService.runSync).toHaveBeenCalled();
-    });
   });
 
   describe('runDeadlineReminders', () => {

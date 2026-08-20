@@ -15,9 +15,12 @@ import {
   TaskStatus,
 } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
+import { TEST_ACCOUNT_MANIFEST } from '../src/auth/test-accounts';
+import { requireDemoHistorySeed } from './demo-history/guards';
+import { ACCEPTANCE_TASK_PLAN, TEST_ACCEPTANCE_CYCLE_NAME } from './demo-history/acceptance-plan';
 
 const prisma = new PrismaClient();
-const password = '000000';
+const DEMO_ROOT_DEPARTMENT = '测试组织（演示）';
 
 type DemoUser = {
   employeeNo: string;
@@ -29,37 +32,44 @@ type DemoUser = {
   canViewAll?: boolean;
 };
 
-const users: DemoUser[] = [
-  { employeeNo: 'ADMIN', name: '系统管理员', role: SysRole.system_admin, position: '系统管理员', deptName: '人力资源部', canViewAll: true },
-  { employeeNo: 'HR001', name: '姚瑶', role: SysRole.hr, position: 'HRBP', deptName: '人力资源部', canViewAll: true },
-  { employeeNo: 'VP001', name: '李宏', role: SysRole.vp, position: '分管副总', deptName: '总经办', canViewAll: true },
-  { employeeNo: 'MGR001', name: '周强', role: SysRole.manager, position: '研发主管', deptName: '研发部' },
-  { employeeNo: 'EMP001', name: '张晨', role: SysRole.employee, position: '后端工程师', deptName: '研发部', managerNo: 'MGR001' },
-  { employeeNo: 'EMP002', name: '陈明', role: SysRole.employee, position: '前端工程师', deptName: '研发部', managerNo: 'MGR001' },
-  { employeeNo: 'EMP003', name: '王敏', role: SysRole.employee, position: '销售经理', deptName: '销售部', managerNo: 'MGR001' },
-  { employeeNo: 'EMP004', name: '刘洋', role: SysRole.employee, position: '运营专员', deptName: '运营部', managerNo: 'MGR001' },
-];
+const demoProfile: Record<string, Omit<DemoUser, 'employeeNo' | 'name' | 'role'>> = {
+  ADMIN: { position: '测试系统管理员', deptName: '测试人力资源部', canViewAll: true },
+  HR001: { position: '测试 HRBP', deptName: '测试人力资源部', managerNo: 'VP001', canViewAll: true },
+  VP001: { position: '测试分管副总', deptName: '测试总经办', managerNo: 'ADMIN', canViewAll: true },
+  MGR001: { position: '测试研发主管', deptName: '测试研发部', managerNo: 'VP001' },
+  EMP001: { position: '测试后端工程师', deptName: '测试研发部', managerNo: 'MGR001' },
+  EMP002: { position: '测试前端工程师', deptName: '测试研发部', managerNo: 'MGR001' },
+  EMP003: { position: '测试销售经理', deptName: '测试销售部', managerNo: 'MGR001' },
+  EMP004: { position: '测试运营专员', deptName: '测试运营部', managerNo: 'MGR001' },
+};
+
+const users: DemoUser[] = TEST_ACCOUNT_MANIFEST.map((account) => ({
+  employeeNo: account.employeeNo,
+  name: account.name,
+  role: account.sysRole as SysRole,
+  ...demoProfile[account.employeeNo],
+}));
 
 const cycleSpecs = [
-  { name: '2025 Q3 绩效考核（历史）', start: '2025-07-01', end: '2025-09-30' },
-  { name: '2025 Q4 绩效考核（历史）', start: '2025-10-01', end: '2025-12-31' },
-  { name: '2026 Q1 绩效考核（演示）', start: '2026-01-01', end: '2026-03-31' },
+  { name: '测试·2025 Q3 绩效考核（历史）', start: '2025-07-01', end: '2025-09-30' },
+  { name: '测试·2025 Q4 绩效考核（历史）', start: '2025-10-01', end: '2025-12-31' },
+  { name: '测试·2026 Q1 绩效考核（历史）', start: '2026-01-01', end: '2026-03-31' },
 ];
 
 const scoreBook: Record<string, Array<{ no: string; score: number; grade: PerfGrade; confirmed: boolean }>> = {
-  '2025 Q3 绩效考核（历史）': [
+  '测试·2025 Q3 绩效考核（历史）': [
     { no: 'EMP001', score: 84, grade: PerfGrade.B, confirmed: true },
     { no: 'EMP002', score: 91, grade: PerfGrade.A, confirmed: true },
     { no: 'EMP003', score: 88, grade: PerfGrade.B, confirmed: true },
     { no: 'EMP004', score: 72, grade: PerfGrade.C, confirmed: true },
   ],
-  '2025 Q4 绩效考核（历史）': [
+  '测试·2025 Q4 绩效考核（历史）': [
     { no: 'EMP001', score: 87, grade: PerfGrade.B, confirmed: true },
     { no: 'EMP002', score: 89, grade: PerfGrade.B, confirmed: true },
     { no: 'EMP003', score: 94, grade: PerfGrade.A, confirmed: true },
     { no: 'EMP004', score: 68, grade: PerfGrade.C, confirmed: true },
   ],
-  '2026 Q1 绩效考核（演示）': [
+  '测试·2026 Q1 绩效考核（历史）': [
     { no: 'EMP001', score: 86, grade: PerfGrade.B, confirmed: false },
     { no: 'EMP002', score: 92, grade: PerfGrade.A, confirmed: true },
     { no: 'EMP003', score: 78, grade: PerfGrade.C, confirmed: false },
@@ -76,7 +86,9 @@ function gradeCoefficient(grade: PerfGrade): number {
 }
 
 async function ensureDepartment(name: string, parentId?: string | null) {
-  const existing = await prisma.department.findFirst({ where: { name } });
+  const existing = await prisma.department.findFirst({
+    where: { name, parentId: parentId ?? null, dingtalkDeptId: null },
+  });
   if (existing) return existing;
   return prisma.department.create({
     data: {
@@ -88,9 +100,18 @@ async function ensureDepartment(name: string, parentId?: string | null) {
   });
 }
 
-async function ensureUsers() {
+async function ensureUsers(password: string) {
+  const existingAccounts = await prisma.user.findMany({
+    where: { employeeNo: { in: users.map((user) => user.employeeNo) } },
+    select: { employeeNo: true, dingtalkId: true, dingtalkUnionId: true },
+  });
+  const collision = existingAccounts.find((user) => user.dingtalkId || user.dingtalkUnionId);
+  if (collision) {
+    throw new Error(`测试工号 ${collision.employeeNo} 已绑定真实钉钉身份，已停止演示数据写入`);
+  }
+
   const passwordHash = await bcrypt.hash(password, 10);
-  const root = await ensureDepartment('孚德集团');
+  const root = await ensureDepartment(DEMO_ROOT_DEPARTMENT);
   const deptMap = new Map<string, string>();
 
   for (const deptName of new Set(users.map((u) => u.deptName))) {
@@ -111,6 +132,12 @@ async function ensureUsers() {
         status: 'active',
         canViewAll: user.canViewAll ?? false,
         deletedAt: null,
+        dingtalkId: null,
+        dingtalkUnionId: null,
+        dingtalkManagerId: null,
+        directManagerId: null,
+        phone: null,
+        email: null,
       },
       create: {
         employeeNo: user.employeeNo,
@@ -121,6 +148,8 @@ async function ensureUsers() {
         deptId: deptMap.get(user.deptName),
         status: 'active',
         canViewAll: user.canViewAll ?? false,
+        dingtalkId: null,
+        dingtalkUnionId: null,
       },
     });
     created.set(user.employeeNo, saved);
@@ -141,24 +170,50 @@ async function ensureUsers() {
   const hr = created.get('HR001');
   const vp = created.get('VP001');
   const manager = created.get('MGR001');
-  if (hr) await prisma.department.updateMany({ where: { name: '人力资源部' }, data: { leaderId: hr.id } });
-  if (manager) await prisma.department.updateMany({ where: { name: '研发部' }, data: { leaderId: manager.id } });
-  if (vp) await prisma.department.updateMany({ where: { name: { in: ['研发部', '销售部', '运营部'] } }, data: { approverId: vp.id } });
+  if (hr) await prisma.department.updateMany({ where: { name: '测试人力资源部', parentId: root.id }, data: { leaderId: hr.id } });
+  if (manager) await prisma.department.updateMany({ where: { name: '测试研发部', parentId: root.id }, data: { leaderId: manager.id } });
+  if (vp) await prisma.department.updateMany({ where: { name: { in: ['测试研发部', '测试销售部', '测试运营部'] }, parentId: root.id }, data: { approverId: vp.id } });
 
   return created;
 }
 
+async function isolateFixedTestAccounts(
+  userMap: Map<string, Awaited<ReturnType<typeof prisma.user.upsert>>>,
+) {
+  const employeeIds = [...userMap.values()].map((user) => user.id);
+  const nonTestCycles = await prisma.assessmentCycle.findMany({
+    where: { name: { not: { startsWith: '测试·' } } },
+    select: { id: true, participantUserIds: true },
+  });
+
+  for (const cycle of nonTestCycles) {
+    await prisma.performanceArchive.deleteMany({
+      where: { cycleId: cycle.id, employeeId: { in: employeeIds } },
+    });
+    await prisma.assessmentTask.deleteMany({
+      where: { cycleId: cycle.id, employeeId: { in: employeeIds } },
+    });
+    const participantUserIds = cycle.participantUserIds.filter((id) => !employeeIds.includes(id));
+    if (participantUserIds.length !== cycle.participantUserIds.length) {
+      await prisma.assessmentCycle.update({
+        where: { id: cycle.id },
+        data: { participantUserIds },
+      });
+    }
+  }
+}
+
 async function ensureTemplate(hrId: string) {
   const existing = await prisma.assessmentTemplate.findFirst({
-    where: { name: '演示绩效模板' },
+    where: { name: '测试·固定账号绩效模板' },
     include: { dimensions: { include: { indicators: true } } },
   });
   if (existing) return existing;
 
   return prisma.assessmentTemplate.create({
     data: {
-      name: '演示绩效模板',
-      description: '演示用：业绩、能力态度、加减分组合模板',
+      name: '测试·固定账号绩效模板',
+      description: '仅用于固定测试账号验收：业绩、能力态度、加减分组合模板',
       applicableDepts: [],
       applicableUsers: [],
       maxScore: 100,
@@ -248,6 +303,289 @@ async function ensureSnapshot(cycleId: string, template: Awaited<ReturnType<type
       snapshotData,
     },
   });
+}
+
+async function ensureAcceptanceCycle(
+  userMap: Map<string, Awaited<ReturnType<typeof prisma.user.upsert>>>,
+) {
+  const hr = userMap.get('HR001')!;
+  const participantUserIds = ACCEPTANCE_TASK_PLAN.map((item) => userMap.get(item.employeeNo)!.id);
+  const existing = await prisma.assessmentCycle.findFirst({ where: { name: TEST_ACCEPTANCE_CYCLE_NAME } });
+  if (existing && existing.createdBy !== hr.id) {
+    throw new Error(`测试周期 ${TEST_ACCEPTANCE_CYCLE_NAME} 已被非测试数据占用`);
+  }
+
+  const data = {
+    type: 'quarterly' as const,
+    startDate: date('2026-07-01'),
+    endDate: date('2026-09-30'),
+    goalSettingOpenAt: date('2026-07-01'),
+    selfEvalOpenAt: date('2026-09-20'),
+    deadlineIndicatorSetting: date('2026-07-08'),
+    deadlineIndicatorConfirm: date('2026-07-12'),
+    deadlineSelfEval: date('2026-09-24'),
+    deadlineManagerScore: date('2026-09-26'),
+    deadlineHrCalibration: date('2026-09-27'),
+    deadlineApproval: date('2026-09-28'),
+    deadlinePublish: date('2026-09-29'),
+    status: CycleStatus.manager_score,
+    createdBy: hr.id,
+    hrOwnerId: hr.id,
+    participantDeptIds: [],
+    participantUserIds,
+    explicitExemptUserIds: [],
+    openedAt: date('2026-07-01'),
+    openSource: 'demo-seed',
+    gradeAMaxRatio: 0.2,
+    gradeBMaxRatio: 0.4,
+    gradeCMaxRatio: 0.3,
+    gradeDMaxRatio: 0.1,
+  };
+
+  return existing
+    ? prisma.assessmentCycle.update({ where: { id: existing.id }, data })
+    : prisma.assessmentCycle.create({ data: { name: TEST_ACCEPTANCE_CYCLE_NAME, ...data } });
+}
+
+function statusHasSelfEvaluation(status: TaskStatus): boolean {
+  return ([
+    TaskStatus.manager_scoring,
+    TaskStatus.dept_review,
+    TaskStatus.hr_calibration,
+    TaskStatus.approval,
+    TaskStatus.published,
+    TaskStatus.confirmed,
+    TaskStatus.closed,
+  ] as TaskStatus[]).includes(status);
+}
+
+function statusHasManagerEvaluation(status: TaskStatus): boolean {
+  return ([
+    TaskStatus.dept_review,
+    TaskStatus.hr_calibration,
+    TaskStatus.approval,
+    TaskStatus.published,
+    TaskStatus.confirmed,
+    TaskStatus.closed,
+  ] as TaskStatus[]).includes(status);
+}
+
+async function ensureAcceptanceTask(args: {
+  cycle: Awaited<ReturnType<typeof ensureAcceptanceCycle>>;
+  template: Awaited<ReturnType<typeof ensureTemplate>>;
+  snapshotId: string;
+  employee: Awaited<ReturnType<typeof prisma.user.upsert>>;
+  manager: Awaited<ReturnType<typeof prisma.user.upsert>>;
+  hrId: string;
+  approverId: string;
+  status: TaskStatus;
+}) {
+  const hasSelfEvaluation = statusHasSelfEvaluation(args.status);
+  const hasManagerEvaluation = statusHasManagerEvaluation(args.status);
+  const isPublished = ([TaskStatus.published, TaskStatus.confirmed, TaskStatus.closed] as TaskStatus[]).includes(args.status);
+  const indicatorSetAt = args.status === TaskStatus.indicator_drafting ? null : date('2026-07-05');
+  const indicatorConfirmedAt = ([
+    TaskStatus.goal_confirmed,
+    TaskStatus.self_eval,
+    TaskStatus.manager_scoring,
+    TaskStatus.dept_review,
+    TaskStatus.hr_calibration,
+    TaskStatus.approval,
+    TaskStatus.published,
+    TaskStatus.confirmed,
+    TaskStatus.closed,
+  ] as TaskStatus[]).includes(args.status) ? date('2026-07-10') : null;
+
+  const existing = await prisma.assessmentTask.findFirst({
+    where: { cycleId: args.cycle.id, employeeId: args.employee.id },
+  });
+  const taskData = {
+    snapshotId: args.snapshotId,
+    deptId: args.employee.deptId,
+    managerId: args.manager.id,
+    deptHeadId: args.manager.id,
+    approverId: args.approverId,
+    status: args.status,
+    indicatorSetAt,
+    indicatorConfirmedAt,
+    selfEvalSubmittedAt: hasSelfEvaluation ? date('2026-09-22') : null,
+    managerScoredAt: hasManagerEvaluation ? date('2026-09-25') : null,
+    hrCalibratedAt: isPublished ? date('2026-09-27') : null,
+    approvedAt: isPublished ? date('2026-09-28') : null,
+    publishedAt: isPublished ? date('2026-09-29') : null,
+    employeeConfirmedAt: args.status === TaskStatus.confirmed ? date('2026-09-30') : null,
+  };
+  const task = existing
+    ? await prisma.assessmentTask.update({ where: { id: existing.id }, data: taskData })
+    : await prisma.assessmentTask.create({
+        data: {
+          cycleId: args.cycle.id,
+          employeeId: args.employee.id,
+          ...taskData,
+        },
+      });
+
+  await prisma.indicatorInstance.deleteMany({ where: { taskId: task.id } });
+  const indicators = args.template.dimensions.flatMap((dimension, dimensionIndex) =>
+    dimension.indicators.map((indicator, indicatorIndex) => ({
+      taskId: task.id,
+      templateIndicatorId: indicator.id,
+      name: indicator.name,
+      description: `测试验收指标：${indicator.name}`,
+      scoringStandard: indicator.scoringStandard,
+      dataSource: '测试验收数据源',
+      dataCaliber: '仅用于固定测试账号验收，不纳入真实员工统计',
+      targetValue: indicator.targetValue,
+      targetValueText: indicator.targetValue ? `${indicator.targetValue}${indicator.unit ?? ''}` : null,
+      unit: indicator.unit,
+      weight: indicator.weight,
+      indicatorType: indicator.name.includes('加分') ? IndicatorType.bonus : IndicatorType.kpi,
+      dimensionName: dimension.name,
+      dimensionWeight: dimension.weight,
+      actualValue: hasSelfEvaluation ? 86 : null,
+      actualNote: hasSelfEvaluation ? '测试员工已填写本周期完成情况。' : null,
+      selfScore: hasSelfEvaluation ? 86 : null,
+      selfComment: hasSelfEvaluation ? '按计划完成测试项目里程碑，并补齐过程记录。' : null,
+      managerScore: hasManagerEvaluation ? 85 : null,
+      managerComment: hasManagerEvaluation ? '交付稳定，建议继续提升跨团队协同。' : null,
+      finalScore: isPublished ? 85 : null,
+      sortOrder: dimensionIndex * 100 + indicatorIndex,
+    })),
+  );
+  await prisma.indicatorInstance.createMany({ data: indicators });
+
+  await prisma.selfEvalSummary.deleteMany({ where: { taskId: task.id } });
+  if (hasSelfEvaluation) {
+    await prisma.selfEvalSummary.create({
+      data: {
+        taskId: task.id,
+        achievements: '完成测试周期核心目标，可用于主管评分页面验收。',
+        improvements: '后续继续优化风险识别与跨团队沟通。',
+        nextGoals: '完成下一阶段测试项目交付。',
+        supportNeeded: '需要主管协调跨部门测试资源。',
+        submittedAt: date('2026-09-22'),
+      },
+    });
+  }
+
+  await prisma.managerEvalSummary.deleteMany({ where: { taskId: task.id } });
+  if (hasManagerEvaluation) {
+    await prisma.managerEvalSummary.create({
+      data: {
+        taskId: task.id,
+        strengths: '目标完成稳定，关键事项推进清晰。',
+        improvements: '建议提前识别依赖和交付风险。',
+        developmentPlan: '下一周期增加阶段复盘和知识分享。',
+        submittedAt: date('2026-09-25'),
+      },
+    });
+  }
+
+  await prisma.gradeResult.deleteMany({ where: { taskId: task.id } });
+  if (isPublished) {
+    await prisma.gradeResult.create({
+      data: {
+        taskId: task.id,
+        calculatedScore: 85,
+        rawGrade: PerfGrade.B,
+        calibratedGrade: PerfGrade.B,
+        calibrationNote: '测试验收数据：校准通过。',
+        coefficient: 1,
+        isPublished: true,
+        publishedAt: date('2026-09-29'),
+        hrCalibratorId: args.hrId,
+        hrCalibratedAt: date('2026-09-27'),
+        approverId: args.approverId,
+        approvedAt: date('2026-09-28'),
+      },
+    });
+  }
+
+  await prisma.flowRecord.deleteMany({ where: { taskId: task.id } });
+  const flowRecords: Array<{
+    taskId: string;
+    cycleId: string;
+    nodeType: FlowNodeType;
+    actorId: string;
+    action: FlowAction;
+    comment: string;
+  }> = [];
+  if (indicatorSetAt) {
+    flowRecords.push({
+      taskId: task.id,
+      cycleId: args.cycle.id,
+      nodeType: FlowNodeType.indicator_setting,
+      actorId: args.employee.id,
+      action: FlowAction.submit,
+      comment: '测试员工提交目标',
+    });
+  }
+  if (hasSelfEvaluation) {
+    flowRecords.push({
+      taskId: task.id,
+      cycleId: args.cycle.id,
+      nodeType: FlowNodeType.self_eval,
+      actorId: args.employee.id,
+      action: FlowAction.submit,
+      comment: '测试员工提交自评',
+    });
+  }
+  if (hasManagerEvaluation) {
+    flowRecords.push({
+      taskId: task.id,
+      cycleId: args.cycle.id,
+      nodeType: FlowNodeType.manager_score,
+      actorId: args.manager.id,
+      action: FlowAction.submit,
+      comment: '测试主管完成评分',
+    });
+  }
+  if (flowRecords.length) await prisma.flowRecord.createMany({ data: flowRecords });
+
+  if (isPublished) {
+    await prisma.performanceArchive.upsert({
+      where: { employeeId_cycleId: { employeeId: args.employee.id, cycleId: args.cycle.id } },
+      update: {
+        employeeName: args.employee.name,
+        grade: PerfGrade.B,
+        totalScore: 85,
+        coefficient: 1,
+        summary: { source: 'demo-acceptance', status: args.status },
+      },
+      create: {
+        employeeId: args.employee.id,
+        cycleId: args.cycle.id,
+        employeeName: args.employee.name,
+        grade: PerfGrade.B,
+        totalScore: 85,
+        coefficient: 1,
+        summary: { source: 'demo-acceptance', status: args.status },
+      },
+    });
+  }
+}
+
+async function ensureAcceptanceData(
+  userMap: Map<string, Awaited<ReturnType<typeof prisma.user.upsert>>>,
+  template: Awaited<ReturnType<typeof ensureTemplate>>,
+) {
+  const cycle = await ensureAcceptanceCycle(userMap);
+  const snapshot = await ensureSnapshot(cycle.id, template);
+  const hr = userMap.get('HR001')!;
+  const approver = userMap.get('VP001')!;
+
+  for (const plan of ACCEPTANCE_TASK_PLAN) {
+    await ensureAcceptanceTask({
+      cycle,
+      template,
+      snapshotId: snapshot.id,
+      employee: userMap.get(plan.employeeNo)!,
+      manager: userMap.get(plan.managerNo)!,
+      hrId: hr.id,
+      approverId: approver.id,
+      status: plan.status,
+    });
+  }
 }
 
 async function ensureTask(args: {
@@ -473,13 +811,15 @@ async function ensureObjectives(userMap: Map<string, Awaited<ReturnType<typeof p
   const hr = userMap.get('HR001')!;
   const manager = userMap.get('MGR001')!;
   const emp1 = userMap.get('EMP001')!;
-  const rdDept = await prisma.department.findFirstOrThrow({ where: { name: '研发部' } });
+  const rdDept = await prisma.department.findFirstOrThrow({ where: { name: '测试研发部' } });
 
-  await prisma.objective.deleteMany({ where: { title: { startsWith: '演示-' } } });
+  await prisma.objective.deleteMany({
+    where: { OR: [{ title: { startsWith: '测试演示-' } }, { title: { startsWith: '演示-' } }] },
+  });
 
   const company = await prisma.objective.create({
     data: {
-      title: '演示-提升核心产品交付质量',
+      title: '测试演示-提升核心产品交付质量',
       description: '公司级目标：聚焦交付质量、客户满意度和稳定性。',
       level: ObjectiveLevel.company,
       status: ObjectiveStatus.active,
@@ -491,7 +831,7 @@ async function ensureObjectives(userMap: Map<string, Awaited<ReturnType<typeof p
   });
   const department = await prisma.objective.create({
     data: {
-      title: '演示-研发部关键项目按期上线',
+      title: '测试演示-研发部关键项目按期上线',
       description: '部门级目标：关键项目按期上线，线上缺陷率下降。',
       level: ObjectiveLevel.department,
       parentId: company.id,
@@ -505,7 +845,7 @@ async function ensureObjectives(userMap: Map<string, Awaited<ReturnType<typeof p
   });
   const personal = await prisma.objective.create({
     data: {
-      title: '演示-张晨负责模块完成灰度发布',
+      title: '测试演示-张辰负责模块完成灰度发布',
       description: '个人级目标：完成核心模块灰度、监控和复盘。',
       level: ObjectiveLevel.individual,
       parentId: department.id,
@@ -523,7 +863,7 @@ async function ensureObjectives(userMap: Map<string, Awaited<ReturnType<typeof p
     data: [
       {
         objectiveId: personal.id,
-        title: '演示-完成接口联调',
+        title: '测试演示-完成接口联调',
         description: '与前端完成核心流程联调。',
         assigneeId: emp1.id,
         status: ActionItemStatus.done,
@@ -532,7 +872,7 @@ async function ensureObjectives(userMap: Map<string, Awaited<ReturnType<typeof p
       },
       {
         objectiveId: personal.id,
-        title: '演示-补齐发布监控',
+        title: '测试演示-补齐发布监控',
         description: '补齐异常告警和上线观察记录。',
         assigneeId: emp1.id,
         status: ActionItemStatus.in_progress,
@@ -544,11 +884,15 @@ async function ensureObjectives(userMap: Map<string, Awaited<ReturnType<typeof p
 }
 
 async function main() {
-  const userMap = await ensureUsers();
+  const { password } = requireDemoHistorySeed(process.env);
+  const userMap = await ensureUsers(password);
+  await isolateFixedTestAccounts(userMap);
   const hr = userMap.get('HR001')!;
   const manager = userMap.get('MGR001')!;
   const approver = userMap.get('VP001')!;
   const template = await ensureTemplate(hr.id);
+
+  await ensureAcceptanceData(userMap, template);
 
   for (const spec of cycleSpecs) {
     const cycle = await ensureCycle(spec, hr.id);
@@ -569,7 +913,7 @@ async function main() {
   }
 
   await ensureObjectives(userMap);
-  console.log(`Demo history seeded. Accounts password: ${password}`);
+  console.log('Demo history seeded. Fixed test accounts: 8. Password was supplied at runtime and was not logged.');
 }
 
 main()

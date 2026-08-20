@@ -4,6 +4,7 @@ import { UsersService } from './users.service';
 import { UserQueryDto } from './dto/user-query.dto';
 import { UpdateManagerDto } from './dto/update-manager.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
+import { UpdateUserSettingsDto } from './dto/update-user-settings.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
 import { Roles } from '@/common/decorators/roles.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
@@ -44,8 +45,20 @@ export class UsersController {
   updateManager(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: UpdateManagerDto,
+    @CurrentUser() operator: AuthUser,
   ) {
-    return this.usersService.updateManager(id, dto);
+    return this.usersService.updateManager(id, dto, operator);
+  }
+
+  /** PATCH /users/:id/settings — 统一更新直属主管与系统权限（system_admin / HR） */
+  @Patch(':id/settings')
+  @Roles(SysRole.system_admin, SysRole.hr)
+  updateSettings(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: UpdateUserSettingsDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.usersService.updateSettings(id, dto, operator);
   }
 
   /** PATCH /users/:id/role — 更新系统角色（system_admin） */

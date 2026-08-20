@@ -1,16 +1,12 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
-import { DocumentChecked, Medal, TrendCharts, WalletFilled } from '@element-plus/icons-vue';
 import { cyclesApi } from '@/api/cycles.api';
 import { reportsApi } from '@/api/reports.api';
 import { tasksApi } from '@/api/tasks.api';
 import { useAuthStore } from '@/stores/auth.store';
-import StatCard from '@/components/common/StatCard.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
-import DonutScoreChart from '@/components/charts/DonutScoreChart.vue';
-import DeptResultChart from '@/components/charts/DeptResultChart.vue';
 import { getGradeLabel, getGradeStyle } from '@/utils/grade';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 import {
@@ -36,22 +32,7 @@ const canOpenManagementTask = computed(() => [
   'hr',
   'system_admin',
 ].includes(userRole.value));
-const summaryScopeLabel = computed(() => {
-  if (auth.user?.canViewAll || userRole.value === 'hr' || userRole.value === 'system_admin') return '全公司';
-  if (userRole.value === 'vp' || userRole.value === 'chairman') return '分管范围';
-  if (userRole.value === 'dept_head') return '负责部门';
-  if (userRole.value === 'manager') return '我的团队';
-  return '可见范围';
-});
-const deptChartTitle = computed(() => `${summaryScopeLabel.value}及部门等级分布`);
-
 const GRADES: PerfGrade[] = ['A', 'B', 'C', 'D'];
-const GRADE_COLORS: Record<PerfGrade, string> = {
-  A: '#5574f7',
-  B: '#45d7c5',
-  C: '#f8d84a',
-  D: '#f15c8b',
-};
 
 const dashboardLoading = ref(false);
 const cycles = ref<AssessmentCycle[]>([]);
@@ -85,6 +66,18 @@ const taskStageLabels: Record<TaskStageKey, string> = {
 const personalTaskStageLabel = computed(() => {
   const task = personalTask.value;
   return task ? taskStageLabels[TASK_STATUS_STAGE[task.status]] : '';
+});
+
+const personalTaskActionLabel = computed(() => {
+  const task = personalTask.value;
+  if (!task) return '查看任务';
+  const actionLabels: Record<TaskStageKey, string> = {
+    'goal-setting': '继续制定目标',
+    'goal-confirmation': '确认绩效目标',
+    'self-eval': '填写绩效自评',
+    result: '查看并确认结果',
+  };
+  return actionLabels[TASK_STATUS_STAGE[task.status]];
 });
 
 function latestOpenTask(items: TaskListItem[]): TaskListItem | null {
@@ -174,89 +167,51 @@ const gradeCounts = computed<Record<PerfGrade, number>>(() => {
 });
 
 const totalCount = computed(() => summary.value?.stats.total ?? summaryItems.value.length);
-
-const averageScore = computed(() => {
-  const scores = summaryItems.value
-    .map((item) => item.totalScore)
-    .filter((score): score is number => typeof score === 'number');
-  if (scores.length === 0) return '-';
-  const avg = scores.reduce((sum, score) => sum + score, 0) / scores.length;
-  return avg.toFixed(2);
-});
-
-function ratioOf(grade: PerfGrade): number {
-  return summary.value?.stats.grades[grade]?.ratio ?? 0;
-}
+const resultedCount = computed(() =>
+  summary.value?.stats.resulted
+  ?? GRADES.reduce((total, grade) => total + gradeCounts.value[grade], 0),
+);
+const pendingCount = computed(() =>
+  summary.value?.stats.pending ?? Math.max(0, totalCount.value - resultedCount.value),
+);
+const qualifiedCount = computed(() =>
+  summary.value?.stats.qualified
+  ?? gradeCounts.value.A + gradeCounts.value.B + gradeCounts.value.C,
+);
+const qualifiedRate = computed(() =>
+  summary.value?.stats.qualifiedRate
+  ?? (resultedCount.value === 0 ? 0 : qualifiedCount.value / resultedCount.value),
+);
+const canOpenReports = computed(() =>
+  ['hr', 'system_admin', 'vp', 'chairman'].includes(userRole.value),
+);
 
 function formatPercent(value: number): number {
   return Number((value * 100).toFixed(1));
 }
 
-const kpis = computed(() => [
-  { label: '参评人数', value: totalCount.value, unit: '人', delta: null, icon: DocumentChecked, gradient: 'blue' as const },
-  { label: '平均绩效', value: averageScore.value, unit: averageScore.value === '-' ? '' : '分', delta: null, icon: TrendCharts, gradient: 'purple' as const },
-  { label: 'A（优秀）占比', value: formatPercent(ratioOf('A')), unit: '%', delta: null, icon: WalletFilled, gradient: 'red' as const },
-  { label: 'D（不合格）占比', value: formatPercent(ratioOf('D')), unit: '%', delta: null, icon: Medal, gradient: 'gold' as const },
-]);
+interface DashboardQuickAction {
+  label: string;
+  description: string;
+  path: string;
+}
 
-const gradeDistribution = computed(() =>
-  GRADES.map((grade) => ({
-    name: `${grade}${getGradeLabel(grade)}`,
-    value: gradeCounts.value[grade],
-    color: GRADE_COLORS[grade],
-  })),
-);
-
-const deptGradeRows = computed(() => {
-  const deptMap = new Map<string, { deptName: string; total: number; counts: Record<PerfGrade, number> }>();
-  for (const item of summaryItems.value) {
-    const deptName = item.deptName || '未分配部门';
-    if (!deptMap.has(deptName)) {
-      deptMap.set(deptName, {
-        deptName,
-        total: 0,
-        counts: { A: 0, B: 0, C: 0, D: 0 },
-      });
-    }
-    const row = deptMap.get(deptName)!;
-    row.total += 1;
-    if (item.grade) row.counts[item.grade] += 1;
+const roleQuickActions = computed<DashboardQuickAction[]>(() => {
+  if (userRole.value === 'hr' || userRole.value === 'system_admin') {
+    return [
+      { label: '周期与计划', description: '发起周期、检查节点与参与范围', path: '/cycles' },
+      { label: '绩效校准', description: '核对等级分布并完成校准', path: '/calibration' },
+      { label: '结果公示', description: '确认审批状态并发布结果', path: '/publish' },
+      { label: '申诉管理', description: '集中处理员工绩效申诉', path: '/appeals' },
+    ];
   }
-
-  return [
-    {
-      deptName: summaryScopeLabel.value,
-      total: totalCount.value,
-      counts: gradeCounts.value,
-    },
-    ...Array.from(deptMap.values()).sort((a, b) => b.total - a.total),
-  ];
-});
-
-const deptCategories = computed(() => deptGradeRows.value.map((row) => row.deptName));
-
-const deptSeries = computed(() =>
-  GRADES.map((grade) => ({
-    name: `${grade}${getGradeLabel(grade)}`,
-    color: GRADE_COLORS[grade],
-    data: deptGradeRows.value.map((row) => row.counts[grade]),
-  })),
-);
-
-const deptChartHeight = computed(() => Math.min(420, Math.max(280, deptGradeRows.value.length * 34 + 58)));
-
-const passRate = computed(() => {
-  const total = totalCount.value;
-  const qualifiedCount = gradeCounts.value.A + gradeCounts.value.B + gradeCounts.value.C;
-  return {
-    rate: total === 0 ? 0 : Number(((qualifiedCount / total) * 100).toFixed(1)),
-    segments: [
-      { label: 'A优秀', value: formatPercent(ratioOf('A')), count: gradeCounts.value.A, color: GRADE_COLORS.A },
-      { label: 'B良好', value: formatPercent(ratioOf('B')), count: gradeCounts.value.B, color: GRADE_COLORS.B },
-      { label: 'C待改进', value: formatPercent(ratioOf('C')), count: gradeCounts.value.C, color: GRADE_COLORS.C },
-      { label: 'D不合格', value: formatPercent(ratioOf('D')), count: gradeCounts.value.D, color: GRADE_COLORS.D },
-    ],
-  };
+  if (userRole.value === 'vp' || userRole.value === 'chairman') {
+    return [
+      { label: '结果审批', description: '处理待审批的绩效结果', path: '/approval' },
+      { label: '报表分析', description: '查看分管范围结果与重点关注', path: '/reports' },
+    ];
+  }
+  return [];
 });
 
 const tableRows = computed(() =>
@@ -267,6 +222,15 @@ const tableRows = computed(() =>
     cycle: selectedCycle.value?.name ?? '-',
   })),
 );
+const previewRows = computed(() => tableRows.value.slice(0, 5));
+
+function openReports() {
+  void router.push({ path: '/reports', query: selectedCycleId.value ? { cycleId: selectedCycleId.value } : {} });
+}
+
+function openRoute(path: string) {
+  void router.push(path);
+}
 
 function displayScore(score: number | null): string {
   return score == null ? '-' : `${score.toFixed(2)}分`;
@@ -354,7 +318,7 @@ function avatarColor(name: string): string {
             <span class="task-entry-card__meta">{{ personalTask.cycleName || '当前考核周期' }}</span>
           </div>
           <el-button data-testid="employee-current-task-open" type="primary" @click="openTask(personalTask.id)">
-            查看任务
+            {{ personalTaskActionLabel }}
           </el-button>
         </template>
         <EmptyState v-else description="HR 发起考核任务后，会在这里显示你的待办。" />
@@ -364,6 +328,12 @@ function avatarColor(name: string): string {
     <template v-else>
       <div v-loading="dashboardLoading" class="dashboard-admin">
       <section v-if="isDirectManager" class="manager-task-entry" aria-label="团队绩效待办">
+        <header class="manager-task-entry__header">
+          <div>
+            <h2>当前周期待办</h2>
+            <p>优先处理团队当前阶段任务；下方结果区仅展示最近已发布周期。</p>
+          </div>
+        </header>
         <article
           class="task-entry-card task-entry-card--personal"
           data-testid="manager-personal-task"
@@ -405,7 +375,9 @@ function avatarColor(name: string): string {
               <strong data-testid="manager-goal-review-count">{{ teamPending['goal-review'] }}</strong>
               <span class="task-entry-card__meta">目标审核</span>
             </div>
-            <el-button data-testid="manager-goal-review-open" text type="primary" @click="openTeamWorkspace('goal-review')">处理</el-button>
+            <el-button data-testid="manager-goal-review-open" text type="primary" @click="openTeamWorkspace('goal-review')">
+              {{ teamPending['goal-review'] === 0 ? '查看全部' : '处理' }}
+            </el-button>
           </template>
         </article>
 
@@ -427,75 +399,58 @@ function avatarColor(name: string): string {
               <strong data-testid="manager-evaluation-count">{{ teamPending['manager-eval'] }}</strong>
               <span class="task-entry-card__meta">上级评价</span>
             </div>
-            <el-button data-testid="manager-evaluation-open" text type="primary" @click="openTeamWorkspace('manager-eval')">处理</el-button>
+            <el-button data-testid="manager-evaluation-open" text type="primary" @click="openTeamWorkspace('manager-eval')">
+              {{ teamPending['manager-eval'] === 0 ? '查看全部' : '处理' }}
+            </el-button>
           </template>
         </article>
       </section>
-      <section class="dashboard-top">
-        <div class="kpi-grid">
-          <StatCard
-            v-for="k in kpis"
-            :key="k.label"
-            :label="k.label"
-            :value="k.value"
-            :unit="k.unit"
-            :delta="k.delta"
-            :icon="k.icon"
-            :gradient="k.gradient"
-          />
+
+      <section v-if="roleQuickActions.length" class="quick-actions" data-testid="dashboard-quick-actions">
+        <header class="quick-actions__header">
+          <h2>常用工作入口</h2>
+          <p>按当前角色展示高频业务动作。</p>
+        </header>
+        <div class="quick-actions__grid">
+          <button
+            v-for="action in roleQuickActions"
+            :key="action.path"
+            class="quick-action"
+            type="button"
+            @click="openRoute(action.path)"
+          >
+            <span class="quick-action__label">{{ action.label }}</span>
+            <span class="quick-action__description">{{ action.description }}</span>
+            <span class="quick-action__link">进入 →</span>
+          </button>
         </div>
-        <ChartCard class="grade-card" title="等级分布">
-          <DonutScoreChart
-            :data="gradeDistribution"
-            :center-value="`${totalCount}人`"
-            center-label="参评人数"
-            :height="190"
-          />
-        </ChartCard>
       </section>
 
-      <section class="dashboard-middle">
-        <ChartCard :title="deptChartTitle">
-          <template #extra>
-            <span class="cycle-name" data-testid="dashboard-result-cycle">
-              {{ selectedCycle?.name || '暂无考核周期' }}
-            </span>
-          </template>
-          <DeptResultChart :categories="deptCategories" :series="deptSeries" :height="deptChartHeight" />
-        </ChartCard>
-
-        <ChartCard class="pass-rate-card" title="绩效考核合格率">
-          <div class="pass-rate">
-            <div class="pass-rate__big">{{ passRate.rate }}%</div>
-            <div class="pass-rate__bar">
-              <span
-                v-for="s in passRate.segments"
-                :key="s.label"
-                class="pass-rate__seg"
-                :style="{ width: `${s.value}%`, background: s.color }"
-              />
-            </div>
-            <div class="pass-rate__percent">
-              <span v-for="s in passRate.segments" :key="s.label">{{ s.value }}%</span>
-            </div>
-            <div class="pass-rate__stats">
-              <div v-for="s in passRate.segments" :key="s.label" class="pass-rate__stat">
-                <span class="pass-rate__badge" :style="{ background: s.color }">
-                  <el-icon><Medal /></el-icon>
-                </span>
-                  <div class="pass-rate__count">{{ s.count }}</div>
-                  <div class="pass-rate__label">{{ s.label }}</div>
-              </div>
-            </div>
+      <section class="result-summary" data-testid="dashboard-result-summary">
+        <div class="result-summary__heading">
+          <div>
+            <span class="result-summary__eyebrow">最近已发布结果</span>
+            <h2 data-testid="dashboard-result-cycle">{{ selectedCycle?.name || '暂无已发布周期' }}</h2>
           </div>
-        </ChartCard>
+          <el-button v-if="canOpenReports" type="primary" plain @click="openReports">查看完整报表</el-button>
+        </div>
+        <div class="result-summary__metrics">
+          <div><span>应参评</span><strong>{{ totalCount }}</strong><small>人</small></div>
+          <div><span>已出结果</span><strong>{{ resultedCount }}</strong><small>人</small></div>
+          <div class="is-warning"><span>待出结果</span><strong>{{ pendingCount }}</strong><small>人</small></div>
+          <div><span>已出结果合格率</span><strong>{{ formatPercent(qualifiedRate) }}</strong><small>%</small></div>
+        </div>
+        <p class="result-summary__note">合格率与等级占比仅按已出结果人员计算，未出结果人员不会被计为不合格。</p>
       </section>
 
-      <ChartCard class="detail-card" :padded="false">
-        <el-table :data="tableRows" style="width: 100%" class="dash-table">
+      <ChartCard class="detail-card" title="最近结果预览（前 5 人）" :padded="false">
+        <template #extra>
+          <el-button v-if="canOpenReports" link type="primary" @click="openReports">查看全部</el-button>
+        </template>
+        <el-table :data="previewRows" style="width: 100%" class="dash-table">
           <el-table-column label="考核人员" min-width="150">
             <template #default="{ row }">
-              <div class="cell-user">
+              <div class="cell-user" data-testid="dashboard-result-preview-row">
                 <span class="cell-avatar" :style="{ background: avatarColor(row.employeeName) }">
                   {{ row.avatar }}
                 </span>
@@ -556,26 +511,6 @@ function avatarColor(name: string): string {
 .dashboard-admin {
   display: flex;
   flex-direction: column;
-  gap: 14px;
-}
-
-.dashboard-top,
-.dashboard-middle {
-  display: grid;
-  gap: 14px;
-}
-
-.dashboard-top {
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
-}
-
-.dashboard-middle {
-  grid-template-columns: minmax(0, 1fr) minmax(360px, 420px);
-}
-
-.kpi-grid {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 14px;
 }
 
@@ -655,147 +590,179 @@ function avatarColor(name: string): string {
   grid-template-columns: repeat(3, minmax(0, 1fr));
 }
 
+.manager-task-entry__header {
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.manager-task-entry__header h2 {
+  margin: 0 0 4px;
+  color: var(--app-text-primary);
+  font-size: 18px;
+}
+
+.manager-task-entry__header p {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: 13px;
+}
+
 .manager-task-entry .task-entry-card {
   min-height: 112px;
   box-shadow: var(--app-shadow);
 }
 
-.employee-actions {
+.quick-actions {
+  padding: 18px 20px 20px;
+  background: var(--app-card-bg);
+  border: 1px solid var(--app-border-color);
+  border-radius: var(--app-radius);
+  box-shadow: var(--app-shadow);
+}
+
+.quick-actions__header {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.quick-actions__header h2 {
+  margin: 0;
+  color: var(--app-text-primary);
+  font-size: 17px;
+}
+
+.quick-actions__header p {
+  margin: 0;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+}
+
+.quick-actions__grid {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+}
+
+.quick-action {
+  min-width: 0;
+  padding: 14px;
+  text-align: left;
+  background: #f8faff;
+  border: 1px solid #e4eaf4;
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color var(--app-transition), transform var(--app-transition), box-shadow var(--app-transition);
+}
+
+.quick-action:hover,
+.quick-action:focus-visible {
+  border-color: var(--el-color-primary-light-5);
+  box-shadow: 0 6px 18px rgb(64 111 222 / 10%);
+  outline: none;
+  transform: translateY(-1px);
+}
+
+.quick-action__label,
+.quick-action__description,
+.quick-action__link {
+  display: block;
+}
+
+.quick-action__label {
+  color: var(--app-text-primary);
+  font-size: 15px;
+  font-weight: 700;
+}
+
+.quick-action__description {
+  min-height: 36px;
+  margin-top: 6px;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.quick-action__link {
+  margin-top: 10px;
+  color: var(--el-color-primary);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.result-summary {
+  padding: 20px;
+  background: linear-gradient(135deg, #f6f9ff 0%, #fff 58%, #f2fbf8 100%);
+  border: 1px solid #dce6f5;
+  border-radius: var(--app-radius);
+  box-shadow: var(--app-shadow);
+}
+
+.result-summary__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   gap: 16px;
 }
 
-.employee-action {
-  display: grid;
-  grid-template-columns: 40px 1fr;
-  grid-template-areas:
-    "icon title"
-    "icon desc";
-  gap: 4px 12px;
-  padding: 18px;
-  text-align: left;
-  background: #fff;
-  border: 1px solid var(--app-border-color);
-  border-radius: var(--app-radius);
-  cursor: pointer;
-}
-
-.employee-action:hover {
-  border-color: var(--el-color-primary);
-}
-
-.action-icon {
-  grid-area: icon;
-  width: 40px;
-  height: 40px;
-  border-radius: 8px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 20px;
-}
-
-.action-icon--primary {
-  color: #1d4ed8;
-  background: #e0ecff;
-}
-
-.action-icon--success {
-  color: #047857;
-  background: #dcfce7;
-}
-
-.action-icon--warning {
-  color: #b45309;
-  background: #fef3c7;
-}
-
-.action-title {
-  grid-area: title;
-  font-weight: 700;
-  color: var(--app-text-primary);
-}
-
-.action-desc {
-  grid-area: desc;
+.result-summary__eyebrow {
   color: var(--app-text-secondary);
-  font-size: 13px;
-  line-height: 1.45;
-}
-
-.pass-rate {
-  min-height: 250px;
-  padding: 10px 16px 0;
-  display: flex;
-  flex-direction: column;
-}
-
-.pass-rate__big {
-  font-size: 48px;
-  font-weight: 300;
-  color: var(--app-text-primary);
-  line-height: 1;
-  margin-bottom: 24px;
-}
-
-.pass-rate__bar {
-  display: flex;
-  height: 8px;
-  border-radius: 8px;
-  overflow: hidden;
-  gap: 3px;
-}
-
-.pass-rate__seg {
-  height: 100%;
-  border-radius: 8px;
-}
-
-.pass-rate__percent {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 12px;
-  color: #5e6478;
-  font-size: 11px;
-}
-
-.pass-rate__stats {
-  display: flex;
-  justify-content: space-between;
-  margin-top: auto;
-  padding-top: 34px;
-}
-
-.pass-rate__stat {
-  text-align: center;
-  min-width: 70px;
-}
-
-.pass-rate__badge {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-  color: #fff;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  margin-bottom: 8px;
-}
-
-.pass-rate__count {
-  font-size: 20px;
-  font-weight: 700;
-  color: var(--app-text-primary);
-}
-
-.pass-rate__label {
   font-size: 12px;
-  color: var(--app-text-secondary);
-  margin-top: 4px;
 }
 
-.cycle-name,
+.result-summary__heading h2 {
+  margin: 4px 0 0;
+  color: var(--app-text-primary);
+  font-size: 19px;
+}
+
+.result-summary__metrics {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 18px;
+}
+
+.result-summary__metrics > div {
+  padding: 14px 16px;
+  background: rgb(255 255 255 / 82%);
+  border: 1px solid #e5eaf2;
+  border-radius: 10px;
+}
+
+.result-summary__metrics span {
+  display: block;
+  margin-bottom: 6px;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+}
+
+.result-summary__metrics strong {
+  color: var(--app-text-primary);
+  font-size: 26px;
+  line-height: 1;
+}
+
+.result-summary__metrics small {
+  margin-left: 3px;
+  color: var(--app-text-secondary);
+}
+
+.result-summary__metrics .is-warning strong {
+  color: var(--el-color-warning-dark-2);
+}
+
+.result-summary__note {
+  margin: 12px 0 0;
+  color: var(--app-text-secondary);
+  font-size: 12px;
+}
+
 .cell-sub {
   color: var(--app-text-secondary);
   font-size: 12px;
@@ -837,20 +804,11 @@ function avatarColor(name: string): string {
 }
 
 @media (max-width: 900px) {
-  .dashboard-top,
-  .dashboard-middle {
-    grid-template-columns: 1fr;
+  .quick-actions__grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .pass-rate {
-    padding-inline: 4px;
-  }
-
-  .pass-rate__big {
-    font-size: 42px;
-  }
-
-  .kpi-grid {
+  .result-summary__metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
@@ -859,18 +817,19 @@ function avatarColor(name: string): string {
     flex-direction: column;
   }
 
-  .employee-actions {
-    grid-template-columns: 1fr;
-  }
-
   .manager-task-entry {
     grid-template-columns: 1fr;
   }
 }
 
 @media (max-width: 560px) {
-  .kpi-grid {
+  .quick-actions__grid {
     grid-template-columns: 1fr;
+  }
+
+  .quick-actions__header {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .task-entry-card {
@@ -879,6 +838,19 @@ function avatarColor(name: string): string {
 
   .task-entry-card__main strong {
     font-size: 17px;
+  }
+
+  .result-summary {
+    padding: 16px;
+  }
+
+  .result-summary__heading {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .result-summary__metrics {
+    grid-template-columns: 1fr;
   }
 }
 </style>

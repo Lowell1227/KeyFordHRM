@@ -93,8 +93,8 @@ function isMenuActive(path: string): boolean {
 <template>
   <aside class="app-sidebar" aria-label="系统导航">
     <nav class="app-rail" aria-label="一级模块">
-      <div class="rail-logo" aria-label="KAYFORD 尚德">
-        <img src="/kayford-logo.jpg" alt="KAYFORD 尚德" />
+      <div class="rail-logo" aria-label="KAYFORD 孚德">
+        <img src="/brand/logo-2025-inverse.png" alt="KAYFORD 孚德" />
       </div>
       <button
         v-for="module in navigation"
@@ -170,12 +170,12 @@ function isMenuActive(path: string): boolean {
 }
 
 .rail-logo {
-  width: 42px;
-  height: 42px;
+  width: 56px;
+  height: 36px;
   margin: 0 auto 8px;
-  border-radius: 8px;
-  overflow: hidden;
-  background: #fff;
+  display: flex;
+  align-items: center;
+  justify-content: center;
 }
 
 .rail-logo img {

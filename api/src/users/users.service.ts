@@ -1,6 +1,6 @@
 import { ForbiddenException, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
-import { SysRole, UserStatus, EmploymentType } from '@prisma/client';
+import { ExternalIdentityProvider, SysRole, UserStatus, EmploymentType } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DataScopeService } from '@/common/services/data-scope.service';
 import { PaginationDto, paginated, Paginated } from '@/common/dto/pagination.dto';
@@ -9,6 +9,7 @@ import { ERROR_CODE } from '@/common/constants/error-codes';
 import { UserQueryDto } from './dto/user-query.dto';
 import { UpdateManagerDto } from './dto/update-manager.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
+import { UpdateUserSettingsDto } from './dto/update-user-settings.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
 import * as bcrypt from 'bcrypt';
 
@@ -31,6 +32,7 @@ export interface UserListItem {
   isAssessorOnly: boolean;
   canViewAll: boolean;
   entryDate: Date | null;
+  dingtalkBindingState: 'unbound' | 'enabled' | 'disabled';
 }
 
 /** 用户详情字段 */
@@ -66,6 +68,13 @@ export interface UserSummary {
   status: UserStatus;
   deptId: string | null;
   directManagerId: string | null;
+}
+
+/** Direct report roster item used by manager workspaces. */
+export interface DirectReportItem extends UserSummary {
+  avatarUrl: string | null;
+  deptName: string | null;
+  position: string | null;
 }
 
 @Injectable()
@@ -123,6 +132,11 @@ export class UsersService {
         include: {
           dept: { select: { name: true } },
           directManager: { select: { name: true } },
+          externalIdentityBindings: {
+            where: { provider: ExternalIdentityProvider.dingtalk, endedAt: null },
+            select: { status: true },
+            take: 1,
+          },
         },
         orderBy: { createdAt: 'desc' },
       }),
@@ -146,6 +160,7 @@ export class UsersService {
       isAssessorOnly: u.isAssessorOnly,
       canViewAll: u.canViewAll,
       entryDate: u.entryDate,
+      dingtalkBindingState: u.externalIdentityBindings[0]?.status ?? 'unbound',
     }));
 
     return paginated(items, total, dto);
@@ -222,7 +237,7 @@ export class UsersService {
    * GET /users/:id/subordinates — 某人的直接下属列表（主管选人用）。
    * 仅本人 / HR / system_admin / canViewAll 可查，避免泄露组织结构。
    */
-  async findSubordinates(managerId: string, viewer: AuthUser): Promise<UserSummary[]> {
+  async findSubordinates(managerId: string, viewer: AuthUser): Promise<DirectReportItem[]> {
     const privileged =
       viewer.id === managerId ||
       viewer.sysRole === SysRole.hr ||
@@ -245,18 +260,38 @@ export class UsersService {
         id: true,
         employeeNo: true,
         name: true,
+        avatarUrl: true,
         sysRole: true,
         status: true,
         deptId: true,
+        dept: { select: { name: true } },
+        position: true,
         directManagerId: true,
       },
       orderBy: { name: 'asc' },
     });
-    return subs.map((u) => this.toSummary(u));
+    return subs.map((u) => ({
+      ...this.toSummary(u),
+      avatarUrl: u.avatarUrl,
+      deptName: u.dept?.name ?? null,
+      position: u.position,
+    }));
   }
 
   /** PATCH /users/:id/manager — 更新直属主管 */
-  async updateManager(id: string, dto: UpdateManagerDto): Promise<UserSummary> {
+  async updateManager(id: string, dto: UpdateManagerDto, operator?: AuthUser): Promise<UserSummary> {
+    return this.updateSettings(
+      id,
+      {
+        directManagerId: dto.directManagerId ?? null,
+        grantManagerRole: dto.grantManagerRole,
+      },
+      operator,
+    );
+  }
+
+  /** PATCH /users/:id/settings — 统一更新人员关系与系统权限 */
+  async updateSettings(id: string, dto: UpdateUserSettingsDto, operator?: AuthUser): Promise<UserSummary> {
     const targetUser = await this.prisma.user.findUnique({
       where: { id, deletedAt: null },
     });
@@ -267,9 +302,33 @@ export class UsersService {
       });
     }
 
-    const directManagerId = dto.directManagerId ?? null;
+    if (dto.sysRole !== undefined && operator?.sysRole !== SysRole.system_admin) {
+      throw new ForbiddenException({
+        code: ERROR_CODE.FORBIDDEN,
+        message: '仅系统管理员可以设置系统权限',
+      });
+    }
 
-    if (directManagerId) {
+    const directManagerId = dto.directManagerId !== undefined
+      ? dto.directManagerId ?? null
+      : targetUser.directManagerId;
+    let newManager: { id: string; sysRole: SysRole } | null = null;
+
+    if (dto.grantManagerRole && operator?.sysRole !== SysRole.system_admin) {
+      throw new ForbiddenException({
+        code: ERROR_CODE.FORBIDDEN,
+        message: '仅系统管理员可以同时开通主管权限',
+      });
+    }
+
+    if (dto.grantManagerRole && !directManagerId) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '开通主管权限时必须指定直属主管',
+      });
+    }
+
+    if ((dto.directManagerId !== undefined || dto.grantManagerRole) && directManagerId) {
       if (directManagerId === id) {
         throw new BadRequestException({
           code: ERROR_CODE.PARAM_INVALID,
@@ -277,8 +336,9 @@ export class UsersService {
         });
       }
 
-      const newManager = await this.prisma.user.findUnique({
+      newManager = await this.prisma.user.findUnique({
         where: { id: directManagerId, deletedAt: null },
+        select: { id: true, sysRole: true },
       });
       if (!newManager) {
         throw new BadRequestException({
@@ -309,9 +369,26 @@ export class UsersService {
       }
     }
 
-    const updated = await this.prisma.user.update({
-      where: { id },
-      data: { directManagerId },
+    const updateData: Prisma.UserUncheckedUpdateInput = {};
+    if (dto.directManagerId !== undefined) {
+      updateData.directManagerId = directManagerId;
+    }
+    if (dto.sysRole !== undefined) {
+      updateData.sysRole = dto.sysRole;
+    }
+
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const assignedUser = await tx.user.update({
+          where: { id },
+          data: updateData,
+      });
+      if (dto.grantManagerRole && newManager?.sysRole === SysRole.employee) {
+        await tx.user.update({
+          where: { id: newManager.id },
+          data: { sysRole: SysRole.manager },
+        });
+      }
+      return assignedUser;
     });
 
     return this.toSummary(updated);

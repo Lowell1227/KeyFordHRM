@@ -91,6 +91,7 @@ async function mockTaskCycleShell(
   taskRequests: URL[],
   personalTasks: TaskListItem[] = [],
   personalDetail?: TaskDetail,
+  directReports: Array<Record<string, unknown>> = [],
 ) {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-cycle-context-token');
@@ -111,6 +112,10 @@ async function mockTaskCycleShell(
       isAssessorOnly: false,
       canViewAll: false,
     })),
+  }));
+  await page.route('**/api/v1/users/manager-1/subordinates', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse(directReports)),
   }));
   await page.route('**/api/v1/indicators**', (route) => route.fulfill({
     contentType: 'application/json',
@@ -234,6 +239,46 @@ test.describe('cycle-first task contracts', () => {
     expect(taskRequests).toHaveLength(0);
   });
 
+  test('shows the real direct-report roster when no performance cycle exists', async ({ page }) => {
+    const taskRequests: URL[] = [];
+    await mockTaskCycleShell(page, [], taskRequests, [], undefined, [
+      {
+        id: 'employee-1',
+        name: '俞丹',
+        employeeNo: null,
+        avatarUrl: null,
+        deptId: 'hr-dept',
+        deptName: '人事部',
+        position: '人事专员',
+        sysRole: 'employee',
+        status: 'active',
+        directManagerId: 'manager-1',
+      },
+      {
+        id: 'employee-2',
+        name: '方园',
+        employeeNo: null,
+        avatarUrl: null,
+        deptId: 'hr-dept',
+        deptName: '人事部',
+        position: 'HRBP',
+        sysRole: 'employee',
+        status: 'active',
+        directManagerId: 'manager-1',
+      },
+    ]);
+
+    await page.goto('/tasks?scope=team&stage=goal-review');
+
+    const list = page.getByTestId('team-task-list');
+    await expect(list).toContainText('团队成员');
+    await expect(list).toContainText('2 人');
+    await expect(list).toContainText('俞丹');
+    await expect(list).toContainText('方园');
+    await expect(list).toContainText('待发起考核');
+    expect(taskRequests).toHaveLength(0);
+  });
+
   test('renders every personal stage as one compact detail card', async ({ page }) => {
     const taskRequests: URL[] = [];
     const currentCycle = cycle('current', '2026-07-01', '2026-09-30');
@@ -329,6 +374,7 @@ test.describe('cycle-first task contracts', () => {
     await expect(detail.getByTestId('performance-stage-state')).toHaveText('待处理');
     await expect(detail.getByText('员工自评', { exact: true }).first()).toBeVisible();
     await expect(detail.getByRole('button', { name: '提交自评' })).toBeVisible();
+    await expect(detail.getByRole('button', { name: '从钉钉周报拉取' })).toHaveCount(0);
 
     await page.goto('/tasks/personal-task-1?stage=result&returnTo=%2Ftasks%3Fscope%3Dmine');
     await expect(detail.getByTestId('performance-stage-title')).toHaveText('结果确认');

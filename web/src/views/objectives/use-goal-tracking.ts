@@ -90,7 +90,7 @@ export function useGoalTracking() {
     notice.value = '';
     selectedPersonId.value = objective.ownerId;
     selectedCycleId.value = objective.cycleId;
-    highlightedObjectiveId.value = objective.id;
+    highlightedObjectiveId.value = '';
     await writeQuery('replace', isCurrent);
     if (!isCurrent()) return true;
     await loadTracking(isCurrent);

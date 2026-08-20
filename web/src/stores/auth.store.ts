@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import { authApi } from '@/api/auth.api';
+import type { DingTalkLoginMode } from '@/api/auth.api';
 import { useNotificationStore } from '@/stores/notification.store';
 import type { CurrentUser } from '@/types/api.types';
 
@@ -32,12 +33,16 @@ export const useAuthStore = defineStore('auth', {
     canAccessAdmin: (s) => ['hr', 'system_admin'].includes(s.user?.sysRole ?? ''),
   },
   actions: {
-    async loginWithDingTalk(authCode: string) {
-      const res = await authApi.dingtalkLogin(authCode);
+    async loginWithDingTalk(authCode: string, loginMode: DingTalkLoginMode) {
+      const res = await authApi.dingtalkLogin(authCode, loginMode);
       this.setSession(res.token, res.user, res.expiresIn);
     },
     async loginWithPassword(employeeNo: string, password: string) {
       const res = await authApi.localLogin(employeeNo, password);
+      this.setSession(res.token, res.user, res.expiresIn);
+    },
+    async loginWithTestAccount(employeeNo: string) {
+      const res = await authApi.testLogin(employeeNo);
       this.setSession(res.token, res.user, res.expiresIn);
     },
     setSession(token: string, user: CurrentUser, expiresIn: number) {

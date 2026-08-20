@@ -26,6 +26,7 @@ const emit = defineEmits<{ 'update:modelValue': [v: string | string[] | undefine
 const options = ref<User[]>([]);
 const loading = ref(false);
 const inner = ref<string | string[] | null | undefined>(props.modelValue);
+let searchRequestId = 0;
 
 watch(
   () => props.modelValue,
@@ -39,21 +40,38 @@ function mergeOptions(list: User[]) {
   options.value = Array.from(map.values());
 }
 
+function replaceSearchOptions(list: User[]) {
+  const selectedIds = new Set(
+    (Array.isArray(inner.value) ? inner.value : inner.value ? [inner.value] : []),
+  );
+  const selectedOptions = options.value.filter((user) => selectedIds.has(user.id));
+  const map = new Map(selectedOptions.map((user) => [user.id, user]));
+  list.forEach((user) => map.set(user.id, user));
+  options.value = Array.from(map.values());
+}
+
+function optionLabel(user: User): string {
+  const identity = user.employeeNo ? `${user.name} (${user.employeeNo})` : user.name;
+  return [identity, user.deptName, user.position].filter(Boolean).join(' · ');
+}
+
 async function search(keyword: string) {
+  const requestId = ++searchRequestId;
   loading.value = true;
   try {
     const res = await usersApi.findAll({
       page: 1,
       pageSize: 50,
-      keyword: keyword || undefined,
+      keyword: keyword.trim() || undefined,
       status: props.status,
       sysRole: props.sysRole,
     });
-    mergeOptions(res.items);
+    if (requestId !== searchRequestId) return;
+    replaceSearchOptions(res.items);
   } catch {
     /* 错误由 http 拦截器处理 */
   } finally {
-    loading.value = false;
+    if (requestId === searchRequestId) loading.value = false;
   }
 }
 
@@ -92,7 +110,7 @@ onMounted(() => {
     <el-option
       v-for="u in options"
       :key="u.id"
-      :label="`${u.name}${u.employeeNo ? ' (' + u.employeeNo + ')' : ''}`"
+      :label="optionLabel(u)"
       :value="u.id"
       :disabled="disabledIds?.includes(u.id)"
     />

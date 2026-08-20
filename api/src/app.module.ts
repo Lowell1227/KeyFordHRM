@@ -31,6 +31,7 @@ import { ObjectivesModule } from './objectives/objectives.module';
 import { ActionItemsModule } from './action-items/action-items.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
+import { EmployeeArchivesModule } from './employee-archives/employee-archives.module';
 
 /**
  * 根模块。
@@ -57,6 +58,7 @@ import { RolesGuard } from './common/guards/roles.guard';
     DataScopeModule,
     DepartmentsModule,
     UsersModule,
+    EmployeeArchivesModule,
     HealthModule,
     AuthModule,
     IndicatorsModule,

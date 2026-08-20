@@ -115,6 +115,10 @@ curl http://localhost:3000/api/v1/health
 
 ## 实现进度
 
+## 真实演示数据
+
+尚未上线的本机 Docker `hrm` 环境可按[真实演示数据运行手册](docs/operations/realistic-demo-data.md)执行预览、受控写入、验证、密码轮换与清理。共享验收密码必须在运行时安全提供，不得写入仓库。
+
 - [x] Step 1 monorepo 骨架（api/web 目录、配置、Dockerfile）
 - [x] Step 2 Docker compose（postgres/redis/minio/api/web）
 - [x] Step 3 Prisma schema（对照 DDL）+ seed + 约束补充 SQL

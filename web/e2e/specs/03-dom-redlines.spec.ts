@@ -22,78 +22,14 @@ async function login(employeeNo: string) {
   return data.token as string;
 }
 
-async function fetchAllUsers(token: string) {
-  const pageSize = 100;
-  const users: { id: string }[] = [];
-  let page = 1;
-  while (true) {
-    const data = await api('GET', `/users?page=${page}&pageSize=${pageSize}`, token);
-    users.push(...data.items);
-    if (users.length >= data.total || data.items.length === 0) return users;
-    page += 1;
-  }
-}
-
-async function fetchAllTasks(token: string, cycleId: string) {
-  const pageSize = 100;
-  const tasks: { id: string; employeeId: string }[] = [];
-  let page = 1;
-  while (true) {
-    const data = await api('GET', `/tasks?cycleId=${cycleId}&page=${page}&pageSize=${pageSize}`, token);
-    tasks.push(...data.items);
-    if (tasks.length >= data.total || data.items.length === 0) return tasks;
-    page += 1;
-  }
-}
-
-function formatRunLabel(value = new Date()): string {
-  const pad = (num: number) => String(num).padStart(2, '0');
-  return `${value.getFullYear()}${pad(value.getMonth() + 1)}${pad(value.getDate())}-${pad(value.getHours())}${pad(value.getMinutes())}`;
-}
-
 async function prepareEmployeeTask() {
   const hrToken = await login(ACCEPTANCE_ACCOUNTS.hr);
   const users = await api('GET', `/users?page=1&pageSize=10&keyword=${ACCEPTANCE_ACCOUNTS.employee}`, hrToken);
-  const allUsers = await fetchAllUsers(hrToken);
-  const employee = users.items[0];
+  const employee = users.items.find((item: { employeeNo: string }) => item.employeeNo === ACCEPTANCE_ACCOUNTS.employee);
   if (!employee) throw new Error(`${ACCEPTANCE_ACCOUNTS.employee} not found`);
-  const userIds = allUsers.map((user) => user.id);
-
-  const runLabel = formatRunLabel();
-  await api('POST', '/templates', hrToken, {
-    name: `2026年一季度绩效模板（公示前权限验证 ${runLabel}）`,
-    applicableDepts: [],
-    applicableUsers: userIds,
-    maxScore: 100,
-    isActive: true,
-    dimensions: [
-      {
-        name: 'KPI',
-        type: 'kpi',
-        weight: 0.6,
-        sortOrder: 0,
-        indicators: [{ name: 'KPI A', weight: 1, sortOrder: 0 }],
-      },
-      {
-        name: 'Attitude',
-        type: 'attitude',
-        weight: 0.4,
-        sortOrder: 1,
-        indicators: [{ name: 'Attitude A', weight: 1, sortOrder: 0 }],
-      },
-    ],
-  });
-  const cycle = await api('POST', '/cycles', hrToken, {
-    name: `2026年一季度绩效考核（公示前权限验证 ${runLabel}）`,
-    type: 'quarterly',
-    startDate: '2026-01-01',
-    endDate: '2026-03-31',
-  });
-  const checked = await api('GET', `/cycles/${cycle.id}/preflight`, hrToken);
-  await api('POST', `/cycles/${cycle.id}/launch`, hrToken, { expectedPlanHash: checked.planHash });
-  const tasks = await fetchAllTasks(hrToken, cycle.id);
-  const task = tasks.find((item) => item.employeeId === employee.id);
-  if (!task) throw new Error(`${ACCEPTANCE_ACCOUNTS.employee} task was not created`);
+  const tasks = await api('GET', '/tasks?status=manager_scoring&page=1&pageSize=100', hrToken);
+  const task = tasks.items.find((item: { employeeId: string }) => item.employeeId === employee.id);
+  if (!task) throw new Error(`${ACCEPTANCE_ACCOUNTS.employee} seeded manager-scoring task not found`);
   return task.id as string;
 }
 
@@ -134,8 +70,9 @@ test.describe('03-dom-redlines employee pages', () => {
       expect(inst.finalScore).toBeNull();
     }
 
-    await expect(page.locator('text=计算总分')).not.toBeVisible();
-    await expect(page.locator('text=绩效等级')).not.toBeVisible();
+    await expect(
+      page.getByText('公示结果尚未发布，评分、总分及等级将在公示后开放查看。').first(),
+    ).toBeVisible();
     await expect(page.locator('text=系数')).not.toBeVisible();
   });
 });

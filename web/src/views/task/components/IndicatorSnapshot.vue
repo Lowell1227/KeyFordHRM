@@ -772,9 +772,6 @@ function handleAttachmentsChange(attachments: Attachment[]) {
   selfEvalForm.attachments = attachments;
 }
 
-function handleFetchDingtalkWeekly() {
-  ElMessage.info('暂无钉钉周报数据，可继续手动填写。');
-}
 </script>
 
 <template>
@@ -1142,9 +1139,6 @@ function handleFetchDingtalkWeekly() {
     <div v-if="selfEvalMode" class="self-eval-inline">
       <div class="self-eval-inline__header">
         <div class="proposal-history__title">员工自评</div>
-        <el-button v-if="!selfEvalReadonly" type="primary" link @click="handleFetchDingtalkWeekly">
-          从钉钉周报拉取
-        </el-button>
       </div>
       <el-form label-position="top" class="summary-form">
         <el-row :gutter="12">

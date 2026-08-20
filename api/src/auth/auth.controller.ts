@@ -5,6 +5,7 @@ import { CurrentUser } from '../common/decorators/current-user.decorator';
 import { AuthUser } from '../common/types/auth.types';
 import { LocalLoginDto } from './dto/local-login.dto';
 import { DingTalkLoginDto } from './dto/dingtalk-login.dto';
+import { TestLoginDto } from './dto/test-login.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -30,5 +31,20 @@ export class AuthController {
   @HttpCode(200)
   async dingtalk(@Body() dto: DingTalkLoginDto) {
     return this.authService.dingtalkLogin(dto);
+  }
+
+  /** 登录页可展示的受控测试身份；开关关闭时返回空列表。 */
+  @Public()
+  @Get('test-accounts')
+  async testAccounts() {
+    return this.authService.getTestAccounts();
+  }
+
+  /** 仅在显式开关开启时允许固定测试账号免密登录。 */
+  @Public()
+  @Post('test-login')
+  @HttpCode(200)
+  async testLogin(@Body() dto: TestLoginDto) {
+    return this.authService.testLogin(dto);
   }
 }

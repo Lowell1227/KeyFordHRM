@@ -1,7 +1,7 @@
-import { Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { User } from '@prisma/client';
+import { ExternalIdentityProvider, ExternalIdentityStatus, User, UserStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { DingtalkService } from '../dingtalk/dingtalk.service';
@@ -9,6 +9,8 @@ import { ERROR_CODE } from '../common/constants/error-codes';
 import { JwtPayload } from '../common/types/auth.types';
 import { LocalLoginDto } from './dto/local-login.dto';
 import { DingTalkLoginDto } from './dto/dingtalk-login.dto';
+import { TestLoginDto } from './dto/test-login.dto';
+import { findTestAccount, TEST_ACCOUNT_MANIFEST } from './test-accounts';
 
 /** 登录成功响应。 */
 export interface LoginResponse {
@@ -58,12 +60,91 @@ export class AuthService {
       });
     }
 
+    await this.assertCurrentEmployment(user.id);
     return this.issueToken(user);
   }
 
   /** 钉钉免密登录（结构占位）。 */
   async dingtalkLogin(dto: DingTalkLoginDto): Promise<LoginResponse> {
-    const user = await this.resolveUserByAuthCode(dto.authCode);
+    const user = await this.resolveUserByAuthCode(dto.authCode, dto.loginMode);
+    return this.issueToken(user);
+  }
+
+  /** 返回由后端开关控制的固定测试身份，不向浏览器下发任何密码。 */
+  async getTestAccounts() {
+    if (!this.isTestQuickLoginEnabled()) {
+      return { enabled: false, accounts: [] };
+    }
+
+    const users = await this.prisma.user.findMany({
+      where: {
+        employeeNo: { in: TEST_ACCOUNT_MANIFEST.map((account) => account.employeeNo) },
+        deletedAt: null,
+        status: { not: 'resigned' },
+        dingtalkId: null,
+        dingtalkUnionId: null,
+        passwordHash: { not: null },
+      },
+      select: {
+        employeeNo: true,
+        name: true,
+        sysRole: true,
+      },
+    });
+
+    const eligible = new Map(
+      users
+        .map((user) => {
+          const expected = user.employeeNo ? findTestAccount(user.employeeNo) : undefined;
+          if (!expected || user.name !== expected.name || user.sysRole !== expected.sysRole) return null;
+          return [expected.employeeNo, {
+            employeeNo: expected.employeeNo,
+            name: expected.name,
+            sysRole: expected.sysRole,
+            roleLabel: expected.roleLabel,
+          }] as const;
+        })
+        .filter((item): item is NonNullable<typeof item> => item !== null),
+    );
+
+    return {
+      enabled: true,
+      accounts: TEST_ACCOUNT_MANIFEST
+        .map((account) => eligible.get(account.employeeNo))
+        .filter((account): account is NonNullable<typeof account> => Boolean(account)),
+    };
+  }
+
+  /** 仅为已隔离、无钉钉身份的固定测试账号签发令牌。 */
+  async testLogin(dto: TestLoginDto): Promise<LoginResponse> {
+    if (!this.isTestQuickLoginEnabled()) {
+      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '测试快捷登录未启用' });
+    }
+
+    const expected = findTestAccount(dto.employeeNo);
+    if (!expected) {
+      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '测试账号不存在' });
+    }
+
+    const user = await this.prisma.user.findFirst({
+      where: {
+        employeeNo: dto.employeeNo,
+        deletedAt: null,
+        status: { not: 'resigned' },
+      },
+      include: { dept: true },
+    });
+
+    if (!user) {
+      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '测试账号不存在' });
+    }
+    if (user.dingtalkId || user.dingtalkUnionId) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '该工号已绑定真实钉钉身份' });
+    }
+    if (!user.passwordHash || user.name !== expected.name || user.sysRole !== expected.sysRole) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '账号不是受控测试身份' });
+    }
+
     return this.issueToken(user);
   }
 
@@ -104,24 +185,60 @@ export class AuthService {
 
   /**
    * 根据钉钉 authCode 解析用户：
-   * 调钉钉 API 换 unionId → 查 users.dingtalk_unionId → 命中返回 User，未命中抛 4004。
+   * 调钉钉 API 换 unionId → 查当前启用身份关联 → 校验权威任职 → 返回 User。
    */
-  private async resolveUserByAuthCode(authCode: string): Promise<User> {
-    const unionId = await this.dingtalk.getAuthCodeUnionId(authCode);
+  private async resolveUserByAuthCode(authCode: string, loginMode: DingTalkLoginDto['loginMode']): Promise<User> {
+    const unionId = await this.dingtalk.getAuthCodeUnionId(authCode, loginMode);
 
-    const user = await this.prisma.user.findFirst({
-      where: { dingtalkUnionId: unionId, deletedAt: null },
-      include: { dept: true },
+    const binding = await this.prisma.externalIdentityBinding.findFirst({
+      where: {
+        provider: ExternalIdentityProvider.dingtalk,
+        externalUnionId: unionId,
+        status: ExternalIdentityStatus.enabled,
+        endedAt: null,
+        user: { deletedAt: null },
+      },
+      include: {
+        user: { include: { dept: true } },
+      },
     });
 
-    if (!user) {
+    if (!binding) {
       throw new NotFoundException({
         code: ERROR_CODE.NOT_FOUND,
         message: '账号未开通',
       });
     }
 
-    return user;
+    await this.assertCurrentEmployment(binding.userId);
+
+    await this.prisma.externalIdentityBinding.update({
+      where: { id: binding.id },
+      data: { lastLoginAt: new Date() },
+    });
+
+    return binding.user;
+  }
+
+  /** 所有真实登录方式都以员工主数据中的当前有效任职作为准入依据。 */
+  private async assertCurrentEmployment(userId: string): Promise<void> {
+    const now = new Date();
+    const currentEmployment = await this.prisma.employmentRecord.findFirst({
+      where: {
+        userId,
+        effectiveFrom: { lte: now },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }],
+        employeeStatus: { not: UserStatus.resigned },
+      },
+      select: { id: true },
+    });
+
+    if (!currentEmployment) {
+      throw new UnauthorizedException({
+        code: ERROR_CODE.UNAUTHORIZED,
+        message: '当前无有效任职，无法登录',
+      });
+    }
   }
 
   /** 签发 JWT 并组装登录响应（供本地登录与钉钉登录复用）。 */
@@ -155,6 +272,10 @@ export class AuthService {
   private resolveExpiresInSeconds(): number {
     const raw = this.config.get<string>('JWT_EXPIRES_IN', '8h');
     return parseExpiresIn(raw);
+  }
+
+  private isTestQuickLoginEnabled(): boolean {
+    return this.config.get<string>('ENABLE_TEST_QUICK_LOGIN', 'false') === 'true';
   }
 }
 
