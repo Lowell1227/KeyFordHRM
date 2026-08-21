@@ -54,6 +54,13 @@ interface Candidate {
   leaveDate: Date | null;
 }
 
+interface LaunchDepartment {
+  name: string;
+  parentId: string | null;
+  leaderId: string | null;
+  effectiveApproverId: string | null;
+}
+
 /** launch 返回结果。 */
 export interface LaunchResult {
   cycleId: string;
@@ -413,6 +420,7 @@ export class LaunchService {
       for (const { candidate, template } of matches) {
         const snapshotId = snapshotMap.get(template.id)!;
         const dept = candidate.deptId ? deptMap.get(candidate.deptId) : null;
+        const manager = this.resolveLaunchManager(candidate, dept);
 
         const exempt = this.resolveExemption(candidate, cycle, ratio);
 
@@ -423,7 +431,7 @@ export class LaunchService {
               snapshotId,
               employeeId: candidate.id,
               deptId: candidate.deptId,
-              managerId: candidate.directManagerId,
+              managerId: manager.id,
               deptHeadId: dept?.leaderId ?? null,
               approverId: dept?.effectiveApproverId ?? null,
               status: 'exempted',
@@ -433,7 +441,7 @@ export class LaunchService {
           });
           exemptedTasks++;
           exemptEmployeeIds.add(candidate.id);
-          if (candidate.directManagerId) exemptManagerIds.add(candidate.directManagerId);
+          if (manager.id) exemptManagerIds.add(manager.id);
           continue;
         }
 
@@ -443,7 +451,7 @@ export class LaunchService {
             snapshotId,
             employeeId: candidate.id,
             deptId: candidate.deptId,
-            managerId: candidate.directManagerId,
+            managerId: manager.id,
             deptHeadId: dept?.leaderId ?? null,
             approverId: dept?.effectiveApproverId ?? null,
             status: 'indicator_drafting',
@@ -454,8 +462,8 @@ export class LaunchService {
         await this.createIndicatorInstances(tx, task.id, template);
         activeEmployeeIds.add(candidate.id);
 
-        if (candidate.directManagerId) {
-          activeManagerIds.add(candidate.directManagerId);
+        if (manager.id) {
+          activeManagerIds.add(manager.id);
         }
       }
 
@@ -695,7 +703,7 @@ export class LaunchService {
       participantUserIds: string[];
       explicitExemptUserIds: string[];
     },
-    deptMap: Map<string, { name: string; leaderId: string | null; effectiveApproverId: string | null }>,
+    deptMap: Map<string, LaunchDepartment>,
     exemptRatio: number,
   ) {
     const templateHashes = new Map<string, string>();
@@ -715,14 +723,15 @@ export class LaunchService {
 
     const participants = matches.map(({ candidate, template }) => {
       const dept = candidate.deptId ? deptMap.get(candidate.deptId) : null;
+      const manager = this.resolveLaunchManager(candidate, dept);
       const exempt = this.resolveExemption(candidate, cycle, exemptRatio);
       return {
         employeeId: candidate.id,
         employeeName: candidate.name,
         deptId: candidate.deptId,
         deptName: dept?.name ?? null,
-        managerId: candidate.directManagerId,
-        managerName: candidate.directManager?.name ?? null,
+        managerId: manager.id,
+        managerName: manager.name,
         deptHeadId: dept?.leaderId ?? null,
         approverId: dept?.effectiveApproverId ?? null,
         entryDate: candidate.entryDate?.toISOString() ?? null,
@@ -851,7 +860,7 @@ export class LaunchService {
   /** 构建部门信息映射（leaderId / approverId）。 */
   private async buildDeptMap(
     tx: Prisma.TransactionClient,
-  ): Promise<Map<string, { name: string; leaderId: string | null; effectiveApproverId: string | null }>> {
+  ): Promise<Map<string, LaunchDepartment>> {
     const depts = await tx.department.findMany({
       select: {
         id: true,
@@ -889,6 +898,7 @@ export class LaunchService {
         dept.id,
         {
           name: dept.name,
+          parentId: dept.parentId ?? null,
           leaderId: dept.leaderId ?? null,
           effectiveApproverId: effectiveApproverMap.get(dept.id)?.effectiveApproverId ?? null,
         },
@@ -898,7 +908,7 @@ export class LaunchService {
 
   private assertLaunchRelations(
     matches: Array<{ candidate: Candidate; template: TemplateView }>,
-    deptMap: Map<string, { name: string; leaderId: string | null; effectiveApproverId: string | null }>,
+    deptMap: Map<string, LaunchDepartment>,
   ): void {
     const missingDeptUsers = new Set<string>();
     const missingManagers = new Set<string>();
@@ -917,7 +927,7 @@ export class LaunchService {
         continue;
       }
 
-      if (!candidate.directManagerId) {
+      if (!this.resolveLaunchManager(candidate, dept).id) {
         missingManagers.add(candidate.name);
       }
 
@@ -952,6 +962,23 @@ export class LaunchService {
         message: messages.join('；'),
       });
     }
+  }
+
+  /** 最高层级部门负责人没有上级，发起新周期时由本人承接主管任务。 */
+  private resolveLaunchManager(
+    candidate: Candidate,
+    dept: LaunchDepartment | null | undefined,
+  ): { id: string | null; name: string | null } {
+    if (candidate.directManagerId) {
+      return {
+        id: candidate.directManagerId,
+        name: candidate.directManager?.name ?? null,
+      };
+    }
+    if (dept?.parentId === null && dept.leaderId === candidate.id) {
+      return { id: candidate.id, name: candidate.name };
+    }
+    return { id: null, name: null };
   }
 
   /** 读取系统配置的豁免阈值比例。 */

@@ -168,6 +168,93 @@ describe('LaunchService preflight', () => {
     }));
   });
 
+  it('treats a root department leader without a direct manager as self-managed in preflight', async () => {
+    const topLeader = {
+      ...candidate,
+      name: '李宏',
+      directManagerId: null,
+      directManager: null,
+    };
+    tx.user.findMany.mockResolvedValue([topLeader]);
+    tx.department.findMany.mockResolvedValue([{
+      id: candidate.deptId,
+      name: '总经办',
+      parentId: null,
+      leaderId: candidate.id,
+      leader: { name: '李宏', directManagerId: null, directManager: null },
+      approverId: candidate.id,
+      approver: { name: '李宏' },
+    }]);
+    tx.assessmentTemplate.findMany.mockResolvedValue([
+      template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+    ]);
+
+    await expect(service.preflight('55555555-5555-4555-8555-555555555555'))
+      .resolves.toEqual(expect.objectContaining({
+        ready: true,
+        participants: [expect.objectContaining({
+          employeeId: candidate.id,
+          managerId: candidate.id,
+          managerName: '李宏',
+        })],
+      }));
+  });
+
+  it('still blocks an ordinary employee without a direct manager', async () => {
+    tx.user.findMany.mockResolvedValue([{
+      ...candidate,
+      directManagerId: null,
+      directManager: null,
+    }]);
+    tx.assessmentTemplate.findMany.mockResolvedValue([
+      template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+    ]);
+
+    await expect(service.preflight('55555555-5555-4555-8555-555555555555'))
+      .resolves.toEqual(expect.objectContaining({
+        ready: false,
+        blockers: [expect.objectContaining({
+          code: 'ORGANIZATION_RELATION_INVALID',
+          message: expect.stringContaining('以下员工未设置直属主管：测试员工'),
+        })],
+      }));
+  });
+
+  it('creates a new-cycle task for the root leader with the leader as task manager', async () => {
+    const topLeader = {
+      ...candidate,
+      name: '李宏',
+      directManagerId: null,
+      directManager: null,
+    };
+    tx.user.findMany.mockResolvedValue([topLeader]);
+    tx.department.findMany.mockResolvedValue([{
+      id: candidate.deptId,
+      name: '总经办',
+      parentId: null,
+      leaderId: candidate.id,
+      leader: { name: '李宏', directManagerId: null, directManager: null },
+      approverId: candidate.id,
+      approver: { name: '李宏' },
+    }]);
+    tx.assessmentTemplate.findMany.mockResolvedValue([
+      template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+    ]);
+    const checked = await service.preflight('55555555-5555-4555-8555-555555555555');
+
+    await service.launch('55555555-5555-4555-8555-555555555555', operator, {
+      now: new Date('2026-12-23T00:00:00.000Z'),
+      expectedPlanHash: checked.planHash!,
+    });
+
+    expect(tx.assessmentTask.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        employeeId: candidate.id,
+        managerId: candidate.id,
+      }),
+    });
+  });
+
   it('keeps explicitly selected test accounts eligible without admitting every test account', async () => {
     tx.assessmentCycle.findUnique.mockResolvedValue({
       id: '55555555-5555-4555-8555-555555555555',
