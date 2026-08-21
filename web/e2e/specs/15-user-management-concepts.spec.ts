@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
+import { isTopLevelDepartmentLeader } from '../../src/utils/organization-relations';
 
 const viewPath = fileURLToPath(
   new URL('../../src/views/admin/UserManageView.vue', import.meta.url),
@@ -45,6 +46,31 @@ test('uses concise and consistent organization relationship concepts', async () 
   expect(source).not.toContain('审批责任人');
   expect(source).not.toContain('关系说明');
   expect(source).not.toContain('title="设置审批覆盖"');
+});
+
+test('recognizes only the root department leader as exempt from a direct manager', () => {
+  const departments = [
+    { id: 'dept-root', parentId: null, leaderId: 'leader-root' },
+    { id: 'dept-child', parentId: 'dept-root', leaderId: 'leader-child' },
+  ];
+
+  expect(isTopLevelDepartmentLeader({
+    id: 'leader-root',
+    deptId: 'dept-root',
+    directManagerId: null,
+  }, departments)).toBe(true);
+
+  expect(isTopLevelDepartmentLeader({
+    id: 'leader-child',
+    deptId: 'dept-child',
+    directManagerId: null,
+  }, departments)).toBe(false);
+
+  expect(isTopLevelDepartmentLeader({
+    id: 'employee-root',
+    deptId: 'dept-root',
+    directManagerId: null,
+  }, departments)).toBe(false);
 });
 
 test('keeps the employee roster pager visible while the table scrolls independently', async ({ page }) => {

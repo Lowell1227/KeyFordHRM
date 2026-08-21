@@ -27,6 +27,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import type { Department, User as ManagedUser, UserQuery } from '@/types/api.types';
 import type { SysRole, UserStatus } from '@/types/enums';
 import { formatDate, formatDateTime } from '@/utils/date';
+import { isTopLevelDepartmentLeader } from '@/utils/organization-relations';
 
 const auth = useAuthStore();
 
@@ -216,7 +217,8 @@ const departmentIssueItems = computed<IssueItem[]>(() =>
 const userIssueItems = computed<IssueItem[]>(() =>
   checkUsers.value.flatMap((user) => {
     const items: IssueItem[] = [];
-    if (user.status !== 'resigned' && !user.directManagerId) {
+    const isTopLeader = isTopLevelDepartmentLeader(user, flattenedDepartments.value);
+    if (user.status !== 'resigned' && !user.directManagerId && !isTopLeader) {
       items.push({
         key: `${user.id}-manager`,
         type: '人员',
