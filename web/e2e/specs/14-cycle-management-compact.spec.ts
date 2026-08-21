@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import type { AssessmentCycle, LaunchPreflightResult } from '../../src/types/api.types';
 import {
   cyclePrimaryActionLabel,
+  cycleNextStep,
   cycleStageIndex,
   cycleStatusGroup,
 } from '../../src/views/admin/cycle-management';
@@ -186,7 +187,9 @@ test('maps cycle states to the compact group, action, and five-stage workflow', 
   expect(cycleStatusGroup('draft')).toBe('attention');
   expect(cycleStatusGroup('manager_score')).toBe('active');
   expect(cycleStatusGroup('closed')).toBe('finished');
+  expect(cyclePrimaryActionLabel('draft')).toBe('发起前检查');
   expect(cyclePrimaryActionLabel('launch_blocked')).toBe('重新检查');
+  expect(cycleNextStep({ ...draftCycle, status: 'launch_blocked' }).label).toBe('处理发起阻断项');
   expect(cycleStageIndex('approval')).toBe(3);
 });
 
@@ -204,7 +207,7 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByRole('columnheader', { name: '当前状态' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: '下一步' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: '操作' })).toBeVisible();
-    await expect(page.getByTestId('cycle-primary-cycle-draft')).toHaveText('开放检查');
+    await expect(page.getByTestId('cycle-primary-cycle-draft')).toHaveText('发起前检查');
     expect(cycleRequests.some((url) => url.searchParams.get('group') === 'attention')).toBe(true);
   });
 

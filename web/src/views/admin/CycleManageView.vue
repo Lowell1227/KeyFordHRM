@@ -30,7 +30,7 @@ import type { CycleStatus, CycleType } from '@/types/enums';
 const CYCLE_STATUS_OPTIONS: { label: string; value: CycleStatus }[] = [
   { label: '草稿', value: 'draft' },
   { label: '待开放', value: 'scheduled' },
-  { label: '开放受阻', value: 'launch_blocked' },
+  { label: '发起受阻', value: 'launch_blocked' },
   { label: '指标制定中', value: 'indicator_setting' },
   { label: '员工自评中', value: 'self_eval' },
   { label: '主管评分中', value: 'manager_score' },
@@ -72,7 +72,7 @@ const STATUS_TAG_TYPE: Record<CycleStatus, 'primary' | 'success' | 'warning' | '
 const STATUS_LABEL: Record<CycleStatus, string> = {
   draft: '草稿',
   scheduled: '待开放',
-  launch_blocked: '开放受阻',
+  launch_blocked: '发起受阻',
   indicator_setting: '指标制定中',
   self_eval: '员工自评中',
   manager_score: '主管评分中',
@@ -184,6 +184,11 @@ const gradeRatioSummary = computed(() => (
   `A ${createForm.gradeAMaxRatio}% · B ${createForm.gradeBMaxRatio}% · C ${createForm.gradeCMaxRatio}% · D ${createForm.gradeDMaxRatio}%`
 ));
 const visibleFieldCount = computed(() => Object.values(createForm.publishVisibleFields).filter(Boolean).length);
+const hrOwnerSummary = computed(() => {
+  if (!createForm.hrOwnerId) return '待选择';
+  if (createForm.hrOwnerId === auth.user?.id) return auth.user.name;
+  return '已指定';
+});
 
 const createFormRef = ref<InstanceType<typeof import('element-plus')['ElForm']> | null>(null);
 const editFormRef = ref<InstanceType<typeof import('element-plus')['ElForm']> | null>(null);
@@ -383,6 +388,10 @@ function handleCreateScheduleChange() {
   createScheduleCustomized.value = true;
 }
 
+function handleCreatePeriodChange() {
+  if (!createScheduleCustomized.value) applyDefaultCreateSchedule();
+}
+
 function getCreateDeadlineValidationMessage(): string | null {
   if (createForm.startDate && createForm.endDate && !dayjs(createForm.endDate).isAfter(createForm.startDate)) {
     return `结束日期必须晚于开始日期（${formatDate(createForm.startDate)}）。`;
@@ -463,7 +472,7 @@ async function handleCreate(runPreflight = false) {
   submitting.value = true;
   try {
     const created = await cyclesApi.create(buildCreateBody());
-    ElMessage.success(runPreflight ? '周期草稿已保存，正在进入开放检查' : '周期草稿已保存');
+    ElMessage.success(runPreflight ? '周期草稿已保存，正在进入发起前检查' : '周期草稿已保存');
     createDialogVisible.value = false;
     resetCreateForm();
     await loadCycles();
@@ -610,7 +619,7 @@ async function handlePreflight(cycle: AssessmentCycle) {
   try {
     preflight.value = await cyclesApi.preflight(cycle.id);
   } catch (error) {
-    preflightError.value = error instanceof Error ? error.message : '开放检查失败，请重试';
+    preflightError.value = error instanceof Error ? error.message : '发起前检查失败，请重试';
   } finally {
     preflightLoading.value = false;
   }
@@ -925,12 +934,20 @@ onMounted(() => {
       v-model="createDialogVisible"
       class="cycle-create-dialog"
       data-testid="cycle-create-dialog"
-      title="创建绩效周期 · 基本信息"
-      width="760px"
+      title="创建绩效周期"
+      width="900px"
       destroy-on-close
       :before-close="handleCreateBeforeClose"
     >
-      <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="120px">
+      <ol class="cycle-create-flow" data-testid="cycle-create-flow" aria-label="绩效周期发起流程">
+        <li class="is-current"><span>1</span><div><strong>创建周期</strong><small>填写关键设置</small></div></li>
+        <li><span>2</span><div><strong>发起前检查</strong><small>核对人员与模板</small></div></li>
+        <li><span>3</span><div><strong>通知员工</strong><small>确认后正式发起</small></div></li>
+      </ol>
+
+      <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="104px">
+        <div class="cycle-create-layout">
+          <section class="cycle-create-main" aria-label="周期关键设置">
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="周期名称" prop="name">
@@ -945,15 +962,6 @@ onMounted(() => {
             </el-form-item>
           </el-col>
         </el-row>
-
-        <el-alert
-          class="deadline-alert"
-          type="info"
-          :closable="false"
-          show-icon
-          title="系统已按默认规则生成计划"
-          description="目标制定默认提前 10 天开放，自评默认在周期结束后第 1 天开放；需要例外时再展开高级设置。"
-        />
 
         <el-row :gutter="16">
           <el-col :span="12">
@@ -998,12 +1006,24 @@ onMounted(() => {
         <el-row :gutter="16">
           <el-col :span="12">
             <el-form-item label="开始日期" prop="startDate">
-              <el-date-picker v-model="createForm.startDate" type="date" placeholder="选择开始日期" style="width: 100%" />
+              <el-date-picker
+                v-model="createForm.startDate"
+                type="date"
+                placeholder="选择开始日期"
+                style="width: 100%"
+                @change="handleCreatePeriodChange"
+              />
             </el-form-item>
           </el-col>
           <el-col :span="12">
             <el-form-item label="结束日期" prop="endDate">
-              <el-date-picker v-model="createForm.endDate" type="date" placeholder="选择结束日期" style="width: 100%" />
+              <el-date-picker
+                v-model="createForm.endDate"
+                type="date"
+                placeholder="选择结束日期"
+                style="width: 100%"
+                @change="handleCreatePeriodChange"
+              />
             </el-form-item>
           </el-col>
         </el-row>
@@ -1024,7 +1044,14 @@ onMounted(() => {
             <span>员工自评开放</span>
             <strong>{{ formatDateTimeForMessage(createForm.selfEvalOpenAt) }}</strong>
           </div>
-          <el-tag size="small" type="info" effect="light">默认计划</el-tag>
+          <el-tag size="small" :type="createScheduleCustomized ? 'warning' : 'info'" effect="light">
+            {{ createScheduleCustomized ? '自定义计划' : '默认计划' }}
+          </el-tag>
+          <p>
+            {{ createScheduleCustomized
+              ? '已保留自定义时间节点；可在高级设置中恢复默认计划。'
+              : '系统已根据考核期间自动生成目标制定、自评和审批节点。' }}
+          </p>
         </div>
 
         <button
@@ -1035,7 +1062,7 @@ onMounted(() => {
           @click="advancedCreateVisible = !advancedCreateVisible"
         >
           <span>{{ advancedCreateVisible ? '收起高级设置' : '高级设置' }}</span>
-          <small>参与例外、时间节点、等级比例、公示范围</small>
+          <small>{{ createScheduleCustomized ? '时间计划已自定义' : '通常无需修改' }}</small>
         </button>
 
         <div v-show="advancedCreateVisible" data-testid="cycle-advanced-fields" class="advanced-create-fields">
@@ -1155,16 +1182,33 @@ onMounted(() => {
             </el-collapse-item>
           </el-collapse>
         </div>
+          </section>
+
+          <aside class="cycle-create-summary" data-testid="cycle-create-summary" aria-label="创建摘要">
+            <h3>本次将创建</h3>
+            <dl>
+              <div><dt>考核期间</dt><dd>{{ formatDate(createForm.startDate) }} – {{ formatDate(createForm.endDate) }}</dd></div>
+              <div><dt>考核范围</dt><dd>{{ participantScopeSummary }}</dd></div>
+              <div><dt>HR 负责人</dt><dd>{{ hrOwnerSummary }}</dd></div>
+              <div><dt>时间计划</dt><dd>{{ createScheduleCustomized ? '已自定义' : '系统自动生成' }}</dd></div>
+              <div><dt>绩效模板</dt><dd>模板将在下一步自动匹配检查</dd></div>
+            </dl>
+            <p v-if="createScheduleCustomized" class="cycle-create-summary__warning">
+              时间节点已自定义，修改考核期间不会覆盖这些节点。
+            </p>
+            <p class="cycle-create-summary__notice">当前仅保存草稿，不会通知员工。</p>
+          </aside>
+        </div>
       </el-form>
 
       <template #footer>
         <div class="cycle-create-footer">
-          <p data-testid="cycle-create-impact-hint">下一步只检查参与范围和配置，不会立即通知员工</p>
+          <p data-testid="cycle-create-impact-hint">检查通过并确认发起后，员工才会收到通知</p>
           <div>
             <el-button @click="requestCloseCreateDialog">取消</el-button>
-            <el-button data-testid="cycle-create-save-draft" :loading="submitting" @click="handleCreate(false)">保存草稿</el-button>
+            <el-button data-testid="cycle-create-save-draft" :loading="submitting" @click="handleCreate(false)">仅保存草稿</el-button>
             <el-button data-testid="cycle-create-and-check" type="primary" :loading="submitting" @click="handleCreate(true)">
-              下一步：开放检查
+              保存并进行发起检查
             </el-button>
           </div>
         </div>
@@ -1251,17 +1295,102 @@ onMounted(() => {
   min-height: 220px;
 }
 
+.cycle-create-flow {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0;
+  margin: 0 8px 20px;
+  padding: 0;
+  list-style: none;
+}
+
+.cycle-create-flow li {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  color: var(--el-text-color-secondary);
+}
+
+.cycle-create-flow li:not(:last-child)::after {
+  position: absolute;
+  top: 15px;
+  right: 14px;
+  left: 132px;
+  height: 1px;
+  content: '';
+  background: var(--el-border-color-light);
+}
+
+.cycle-create-flow li > span {
+  display: grid;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  font-size: 13px;
+  background: var(--el-fill-color);
+  border-radius: 50%;
+}
+
+.cycle-create-flow li > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.cycle-create-flow strong {
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+}
+
+.cycle-create-flow small {
+  overflow: hidden;
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.cycle-create-flow li.is-current > span {
+  color: #fff;
+  background: var(--el-color-primary);
+}
+
+.cycle-create-flow li.is-current strong {
+  color: var(--el-color-primary);
+}
+
+.cycle-create-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 238px;
+  align-items: start;
+  gap: 20px;
+}
+
+.cycle-create-main {
+  min-width: 0;
+}
+
 .cycle-plan-summary {
   position: relative;
   display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
+  grid-template-columns: repeat(2, minmax(0, 1fr));
   align-items: center;
   gap: 12px;
-  margin: 4px 0 16px 120px;
+  margin: 4px 0 16px 104px;
   padding: 12px 88px 12px 14px;
   background: var(--el-fill-color-lighter);
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
+}
+
+.cycle-plan-summary > p {
+  grid-column: 1 / -1;
+  margin: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.45;
 }
 
 .cycle-plan-summary > div {
@@ -1291,8 +1420,8 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  width: calc(100% - 120px);
-  margin: 0 0 8px 120px;
+  width: calc(100% - 104px);
+  margin: 0 0 8px 104px;
   padding: 11px 14px;
   color: var(--el-color-primary);
   font: inherit;
@@ -1317,8 +1446,64 @@ onMounted(() => {
 }
 
 .advanced-create-groups {
-  margin-left: 120px;
+  margin-left: 104px;
   border-top: 0;
+}
+
+.cycle-create-summary {
+  position: sticky;
+  top: 0;
+  padding: 16px;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+}
+
+.cycle-create-summary h3 {
+  margin: 0 0 14px;
+  font-size: 15px;
+}
+
+.cycle-create-summary dl,
+.cycle-create-summary dl > div {
+  display: grid;
+  gap: 6px;
+}
+
+.cycle-create-summary dl {
+  gap: 12px;
+  margin: 0;
+}
+
+.cycle-create-summary dt {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.cycle-create-summary dd {
+  margin: 0;
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.cycle-create-summary__warning,
+.cycle-create-summary__notice {
+  margin: 14px 0 0;
+  padding: 10px;
+  font-size: 12px;
+  line-height: 1.5;
+  border-radius: 7px;
+}
+
+.cycle-create-summary__warning {
+  color: var(--el-color-warning-dark-2);
+  background: var(--el-color-warning-light-9);
+}
+
+.cycle-create-summary__notice {
+  color: var(--el-color-success-dark-2);
+  background: var(--el-color-success-light-9);
 }
 
 .advanced-create-groups :deep(.el-collapse-item__header) {
@@ -1473,21 +1658,51 @@ onMounted(() => {
     margin-top: 12px !important;
   }
 
-  .cycle-create-dialog :deep(.el-col-12) {
+  .cycle-create-flow {
+    margin-inline: 0;
+  }
+
+  .cycle-create-flow li {
+    align-items: flex-start;
+    gap: 6px;
+  }
+
+  .cycle-create-flow li:not(:last-child)::after {
+    display: none;
+  }
+
+  .cycle-create-flow li > span {
+    width: 24px;
+    height: 24px;
+  }
+
+  .cycle-create-flow small {
+    display: none;
+  }
+
+  .cycle-create-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .cycle-create-summary {
+    position: static;
+  }
+
+  :global(.cycle-create-dialog .el-col-12) {
     max-width: 100%;
     flex: 0 0 100%;
   }
 
-  .cycle-create-dialog :deep(.el-form-item) {
+  :global(.cycle-create-dialog .el-form-item) {
     display: block;
   }
 
-  .cycle-create-dialog :deep(.el-form-item__label) {
+  :global(.cycle-create-dialog .el-form-item__label) {
     width: auto !important;
     justify-content: flex-start;
   }
 
-  .cycle-create-dialog :deep(.el-form-item__content) {
+  :global(.cycle-create-dialog .el-form-item__content) {
     margin-left: 0 !important;
   }
 

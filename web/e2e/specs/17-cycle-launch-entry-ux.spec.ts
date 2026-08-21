@@ -118,18 +118,22 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.locator('.app-pager')).toHaveCount(0);
   });
 
-  test('explains the preflight step and makes company scope explicit', async ({ page }) => {
+  test('uses plain launch language and makes company scope explicit', async ({ page }) => {
     const createBodies: unknown[] = [];
     await mockCycleLaunchPage(page, { cycles: [], createBodies });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
 
-    await expect(page.getByRole('dialog', { name: '创建绩效周期 · 基本信息' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: '创建绩效周期' })).toBeVisible();
+    await expect(page.getByTestId('cycle-create-flow')).toContainText('创建周期');
+    await expect(page.getByTestId('cycle-create-flow')).toContainText('发起前检查');
+    await expect(page.getByTestId('cycle-create-flow')).toContainText('通知员工');
     await expect(page.getByRole('radio', { name: '全公司' })).toBeChecked();
     await expect(page.getByTestId('cycle-plan-summary')).toContainText('周期开始');
     await expect(page.getByTestId('cycle-plan-summary')).toContainText('周期结束');
-    await expect(page.getByTestId('cycle-create-and-check')).toHaveText('下一步：开放检查');
-    await expect(page.getByTestId('cycle-create-impact-hint')).toContainText('不会立即通知员工');
+    await expect(page.getByTestId('cycle-create-summary')).toContainText('模板将在下一步自动匹配检查');
+    await expect(page.getByTestId('cycle-create-and-check')).toHaveText('保存并进行发起检查');
+    await expect(page.getByTestId('cycle-create-impact-hint')).toContainText('确认发起后');
 
     await page.getByTestId('cycle-scope-departments').click();
     await page.getByTestId('cycle-scope-department-select').click();
@@ -138,6 +142,33 @@ test.describe('cycle launch entry UX', () => {
 
     await expect.poll(() => createBodies).toHaveLength(1);
     expect(createBodies[0]).toMatchObject({ participantDeptIds: ['sales'] });
+  });
+
+  test('recalculates the default plan when HR changes the assessment period', async ({ page }) => {
+    await mockCycleLaunchPage(page, { cycles: [] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    const dialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    const startDateInput = dialog.getByPlaceholder('选择开始日期');
+    await startDateInput.fill('2026-11-01');
+    await startDateInput.press('Enter');
+
+    await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-10-22 09:00');
+  });
+
+  test('labels the plan clearly after HR customizes a generated time node', async ({ page }) => {
+    await mockCycleLaunchPage(page, { cycles: [] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+    await page.getByTestId('cycle-create-advanced').click();
+    await page.getByTestId('cycle-advanced-schedule').click();
+
+    const goalOpenInput = page.getByTestId('cycle-advanced-fields').locator('.el-date-editor input').first();
+    await goalOpenInput.fill('2026-09-20 09:00:00');
+    await goalOpenInput.press('Enter');
+
+    await expect(page.getByTestId('cycle-plan-summary')).toContainText('自定义计划');
   });
 
   test('keeps four advanced groups collapsed with useful summaries', async ({ page }) => {
@@ -161,6 +192,10 @@ test.describe('cycle launch entry UX', () => {
     await mockCycleLaunchPage(page, { cycles: [] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
+    const firstRowColumns = page.getByRole('dialog', { name: '创建绩效周期' }).locator('.el-row').first().locator('.el-col-12');
+    const nameColumn = await firstRowColumns.nth(0).boundingBox();
+    const typeColumn = await firstRowColumns.nth(1).boundingBox();
+    expect(typeColumn?.y).toBeGreaterThanOrEqual((nameColumn?.y ?? 0) + (nameColumn?.height ?? 0) - 1);
     await page.getByTestId('cycle-create-advanced').click();
     await page.getByTestId('cycle-advanced-schedule').click();
 

@@ -30,7 +30,7 @@ const STAGE_INDEX: Record<CycleStatus, number> = {
 };
 
 const PRIMARY_ACTION_LABEL: Record<CycleStatus, string> = {
-  draft: '开放检查',
+  draft: '发起前检查',
   launch_blocked: '重新检查',
   scheduled: '查看预约',
   indicator_setting: '查看进度',
@@ -63,9 +63,9 @@ export function cyclePrimaryActionLabel(status: CycleStatus): string {
 export function cycleNextStep(cycle: AssessmentCycle): CycleNextStep {
   switch (cycle.status) {
     case 'draft':
-      return { label: '待完成开放检查', time: cycle.goalSettingOpenAt };
+      return { label: '待完成发起前检查', time: cycle.goalSettingOpenAt };
     case 'launch_blocked':
-      return { label: '处理开放阻断项', time: cycle.goalSettingOpenAt };
+      return { label: '处理发起阻断项', time: cycle.goalSettingOpenAt };
     case 'scheduled':
       return { label: '目标制定开放', time: cycle.goalSettingOpenAt };
     case 'indicator_setting':

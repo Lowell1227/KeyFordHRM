@@ -46,7 +46,7 @@ const nextStep = computed(() => props.cycle ? cycleNextStep(props.cycle) : null)
 const STATUS_LABEL: Record<CycleStatus, string> = {
   draft: '草稿',
   scheduled: '待开放',
-  launch_blocked: '开放受阻',
+  launch_blocked: '发起受阻',
   indicator_setting: '指标制定中',
   self_eval: '员工自评中',
   manager_score: '主管评分中',
@@ -178,7 +178,7 @@ function blockerActionLabel(code: string): string {
               type="error"
               :closable="false"
               show-icon
-              title="开放检查失败"
+              title="发起前检查失败"
               :description="preflightError"
             >
               <template #default><el-button size="small" @click="emit('preflight')">重新检查</el-button></template>
@@ -189,7 +189,7 @@ function blockerActionLabel(code: string): string {
                 :type="preflight.ready ? 'success' : 'error'"
                 :closable="false"
                 show-icon
-                :title="preflight.ready ? '开放检查通过' : '请先处理阻断项'"
+                :title="preflight.ready ? '发起前检查通过' : '请先处理阻断项'"
               />
               <div class="cycle-preflight-summary">
                 <span><strong>{{ preflight.participantCount }}</strong> 名参与员工</span>
@@ -247,7 +247,7 @@ function blockerActionLabel(code: string): string {
 
             <div v-else class="cycle-preflight-empty">
               <p>检查参与人员、直属主管和绩效模板是否已准备完成。</p>
-              <el-button type="primary" @click="emit('preflight')">开始开放检查</el-button>
+              <el-button type="primary" @click="emit('preflight')">开始发起前检查</el-button>
             </div>
           </section>
         </section>
