@@ -13,6 +13,7 @@ export default defineConfig({
     '18-dashboard-report-business-clarity.spec.ts',
     '19-test-account-quick-login.spec.ts',
     '21-unified-list-workspace.spec.ts',
+    '22-template-global-weight-contract.spec.ts',
   ],
   workers: 1,
 });

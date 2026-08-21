@@ -11,6 +11,11 @@ import DeptTree from '@/components/common/DeptTree.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import { formatDateTime } from '@/utils/date';
+import {
+  isWeightComplete,
+  sumWeights,
+  validateTemplateWeightsPercent,
+} from './template-weights';
 import type {
   AssessmentTemplate,
   TemplateListItem,
@@ -88,7 +93,7 @@ const userMap = computed(() => {
   return map;
 });
 
-const weightError = computed(() => validateWeights(form.dimensions));
+const weightError = computed(() => validateTemplateWeightsPercent(form.dimensions));
 
 const coreDimensionWeightTotal = computed(() =>
   sumWeights(form.dimensions.filter((dim) => dim.type === 'kpi' || dim.type === 'attitude')),
@@ -139,28 +144,6 @@ function createEmptyIndicator(): EditableIndicator {
   };
 }
 
-function validateWeights(dimensions: EditableDimension[]): string | null {
-  const coreDimensions = dimensions.filter((d) => d.type === 'kpi' || d.type === 'attitude');
-  if (coreDimensions.length === 0) return null; // 没有核心维度时不校验
-
-  const coreWeightSum = coreDimensions.reduce((sum, d) => sum + (Number(d.weight) || 0), 0);
-  if (Math.abs(coreWeightSum - 100) > 0.01) {
-    return `维度权重合计应为 100%，当前 ${coreWeightSum.toFixed(2)}%`;
-  }
-
-  for (const dim of coreDimensions) {
-    const indicatorSum = dim.indicators.reduce((sum, i) => sum + (Number(i.weight) || 0), 0);
-    if (Math.abs(indicatorSum - 100) > 0.01) {
-      return `维度「${dim.name || '未命名'}」的指标权重合计应为 100%，当前 ${indicatorSum.toFixed(2)}%`;
-    }
-  }
-  return null;
-}
-
-function sumWeights(items: Array<{ weight?: number }>): number {
-  return Number(items.reduce((sum, item) => sum + (Number(item.weight) || 0), 0).toFixed(2));
-}
-
 function indicatorWeightTotal(dim: EditableDimension): number {
   return sumWeights(dim.indicators);
 }
@@ -169,12 +152,8 @@ function formatWeightTotal(value: number): string {
   return `${value.toFixed(2)}%`;
 }
 
-function isWeightComplete(value: number): boolean {
-  return Math.abs(value - 100) <= 0.01;
-}
-
-function totalTagType(value: number): 'success' | 'danger' {
-  return isWeightComplete(value) ? 'success' : 'danger';
+function totalTagType(value: number, target = 100): 'success' | 'danger' {
+  return isWeightComplete(value, target) ? 'success' : 'danger';
 }
 
 function formatScope(row: TemplateListItem): string {
@@ -823,8 +802,8 @@ onMounted(() => {
                     :disabled="isView"
                   />
                   <div class="dimension-weight-total">
-                    <el-tag size="small" :type="totalTagType(indicatorWeightTotal(dim))" effect="plain">
-                      本维度指标合计：{{ formatWeightTotal(indicatorWeightTotal(dim)) }} / 100%
+                    <el-tag size="small" :type="totalTagType(indicatorWeightTotal(dim), Number(dim.weight) || 0)" effect="plain">
+                      指标合计：{{ formatWeightTotal(indicatorWeightTotal(dim)) }} / 维度权重 {{ formatWeightTotal(Number(dim.weight) || 0) }}
                     </el-tag>
                   </div>
                 </div>

@@ -336,9 +336,7 @@ export class ObjectivesService {
       && editableStatuses.has(task.status);
     const items = task.indicatorInstances.map((indicator) => {
       const latest = indicator.progressUpdates[0] ?? null;
-      const weight = Math.round(
-        indicator.dimensionWeight.toNumber() * indicator.weight.toNumber() * 10_000,
-      ) / 100;
+      const weight = Math.round(indicator.weight.toNumber() * 10_000) / 100;
       return {
         id: indicator.id,
         taskId: indicator.taskId,
@@ -565,9 +563,7 @@ export class ObjectivesService {
       TaskStatus.indicator_confirming,
       TaskStatus.self_eval,
     ]);
-    const effectiveWeight = Math.round(
-      indicator.dimensionWeight.toNumber() * indicator.weight.toNumber() * 10_000,
-    ) / 100;
+    const effectiveWeight = Math.round(indicator.weight.toNumber() * 10_000) / 100;
 
     return {
       id: indicator.id,

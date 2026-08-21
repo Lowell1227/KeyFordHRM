@@ -30,8 +30,11 @@ export function validateTemplateWeights(dimensions: DimensionInput[]): WeightVal
   for (const dim of coreDimensions) {
     const indicators = dim.indicators ?? [];
     const indicatorWeightSum = indicators.reduce((sum, i) => sum + i.weight, 0);
-    if (Math.abs(indicatorWeightSum - 1) > TOLERANCE) {
-      return { valid: false, message: `维度“${dim.name}”内指标权重之和必须等于 1` };
+    if (Math.abs(indicatorWeightSum - dim.weight) > TOLERANCE) {
+      return {
+        valid: false,
+        message: `维度“${dim.name}”内指标权重之和必须等于该维度权重 ${dim.weight}`,
+      };
     }
   }
 

@@ -64,22 +64,22 @@ describe('ScoringService', () => {
   });
 
   describe('calcDimensionScore', () => {
-    it('kpi 维度：Σ(final_score × weight) × dimensionWeight', () => {
+    it('kpi 维度按指标最终权重直接汇总，不重复乘维度权重', () => {
       const indicators = [
-        { weight: 0.6, finalScore: 80 },
-        { weight: 0.4, finalScore: 90 },
+        { weight: 0.45, finalScore: 80 },
+        { weight: 0.25, finalScore: 90 },
       ];
-      // (80*0.6 + 90*0.4) * 0.8 = (48+36)*0.8 = 67.2
-      expect(service.calcDimensionScore('kpi' as DimensionType, 0.8, indicators)).toBeCloseTo(67.2, 5);
+      // 80*0.45 + 90*0.25 = 58.5
+      expect(service.calcDimensionScore('kpi' as DimensionType, 0.7, indicators)).toBeCloseTo(58.5, 5);
     });
 
-    it('attitude 维度加权正确', () => {
+    it('attitude 维度按指标最终权重直接汇总', () => {
       const indicators = [
-        { weight: 0.5, finalScore: 70 },
-        { weight: 0.5, finalScore: 80 },
+        { weight: 0.2, finalScore: 70 },
+        { weight: 0.1, finalScore: 80 },
       ];
-      // (70*0.5 + 80*0.5) * 0.2 = 75*0.2 = 15
-      expect(service.calcDimensionScore('attitude' as DimensionType, 0.2, indicators)).toBeCloseTo(15, 5);
+      // 70*0.2 + 80*0.1 = 22
+      expect(service.calcDimensionScore('attitude' as DimensionType, 0.3, indicators)).toBeCloseTo(22, 5);
     });
 
     it('bonus 维度直加，不乘任何权重', () => {
@@ -100,17 +100,25 @@ describe('ScoringService', () => {
   });
 
   describe('calcTaskTotal', () => {
-    it('kpi 80% + attitude 20% 加权正确', () => {
+    it('所有核心指标最终权重合计 100% 时直接得到总分', () => {
       const indicators: ScorableIndicator[] = [
-        makeIndicator({ dimensionType: 'kpi', dimensionWeight: 0.8, weight: 0.6, finalScore: 80 }),
-        makeIndicator({ dimensionType: 'kpi', dimensionWeight: 0.8, weight: 0.4, finalScore: 90 }),
-        makeIndicator({ dimensionType: 'attitude', dimensionWeight: 0.2, weight: 1, finalScore: 75 }),
+        makeIndicator({ dimensionType: 'kpi', dimensionWeight: 0.7, weight: 0.45, finalScore: 80 }),
+        makeIndicator({ dimensionType: 'kpi', dimensionWeight: 0.7, weight: 0.25, finalScore: 90 }),
+        makeIndicator({ dimensionType: 'attitude', dimensionWeight: 0.3, weight: 0.2, finalScore: 75 }),
+        makeIndicator({ dimensionType: 'attitude', dimensionWeight: 0.3, weight: 0.1, finalScore: 90 }),
       ];
       const result = service.calcTaskTotal(indicators);
-      // kpi: (80*0.6 + 90*0.4)*0.8 = 67.2
-      // attitude: 75*1*0.2 = 15
-      expect(result.totalScore).toBeCloseTo(82.2, 5);
+      // 80*0.45 + 90*0.25 + 75*0.2 + 90*0.1 = 82.5
+      expect(result.totalScore).toBeCloseTo(82.5, 5);
       expect(result.rawGrade).toBe('B');
+    });
+
+    it('混合加扣分维度中的核心指标也不重复乘维度权重', () => {
+      const indicators: ScorableIndicator[] = [
+        makeIndicator({ dimensionName: '混合维度', dimensionType: 'kpi', dimensionWeight: 0.7, weight: 0.7, finalScore: 80 }),
+        makeIndicator({ dimensionName: '混合维度', dimensionType: 'bonus', indicatorType: 'bonus', dimensionWeight: 0.7, weight: 0, finalScore: 5 }),
+      ];
+      expect(service.calcTaskTotal(indicators).totalScore).toBeCloseTo(61, 5);
     });
 
     it('bonus 直加、penalty 直扣、均不乘维度权重', () => {

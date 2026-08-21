@@ -82,7 +82,7 @@ export class ScoringService {
   /** 计算单个维度得分。 */
   calcDimensionScore(
     dimensionType: DimensionType,
-    dimensionWeight: number,
+    _dimensionWeight: number,
     indicators: Array<{ weight: number; finalScore: number }>,
   ): number {
     if (dimensionType === 'bonus') {
@@ -94,9 +94,8 @@ export class ScoringService {
       return -indicators.reduce((sum, ind) => sum + ind.finalScore, 0);
     }
 
-    // kpi / attitude：Σ(指标 final_score × 指标 weight) × 维度 weight
-    const weightedSum = indicators.reduce((sum, ind) => sum + ind.finalScore * ind.weight, 0);
-    return weightedSum * dimensionWeight;
+    // kpi / attitude：指标 weight 已是相对总分的最终权重，不再重复乘维度权重
+    return indicators.reduce((sum, ind) => sum + ind.finalScore * ind.weight, 0);
   }
 
   /**
@@ -117,7 +116,7 @@ export class ScoringService {
         ? nonVetoIndicators.reduce((sum, ind) => {
             if (ind.indicatorType === 'penalty') return sum - ind.finalScore;
             if (ind.indicatorType === 'bonus') return sum + ind.finalScore;
-            return sum + ind.finalScore * ind.weight * ind.dimensionWeight;
+            return sum + ind.finalScore * ind.weight;
           }, 0)
         : this.calcDimensionScore(
             group[0].dimensionType,
