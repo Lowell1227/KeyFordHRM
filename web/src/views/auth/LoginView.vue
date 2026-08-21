@@ -24,6 +24,7 @@ const DINGTALK_CORP_ID = import.meta.env.VITE_DINGTALK_CORP_ID || '';
 
 const testAccounts = ref<TestAccount[]>([]);
 const quickLoadingNo = ref<string | null>(null);
+const showTestAccounts = ref(false);
 
 onMounted(async () => {
   try {
@@ -176,23 +177,37 @@ async function onPasswordLogin() {
       <el-button type="primary" :loading="loading" class="full" native-type="submit" data-testid="login-submit">登录</el-button>
     </el-form>
 
-    <div v-if="testAccounts.length" class="quick-login" data-testid="test-account-login">
-      <el-divider><span class="quick-login__hint">测试账号快捷登录</span></el-divider>
-      <div class="quick-login__grid">
-        <el-button
-          v-for="acc in testAccounts"
-          :key="acc.employeeNo"
-          plain
-          class="quick-login__account"
-          :loading="quickLoadingNo === acc.employeeNo"
-          :disabled="!!quickLoadingNo && quickLoadingNo !== acc.employeeNo"
-          data-testid="test-account-login-button"
-          @click="quickLogin(acc.employeeNo)"
+    <div v-if="testAccounts.length" class="quick-login-entry">
+      <el-divider>
+        <button
+          type="button"
+          class="quick-login__toggle"
+          data-testid="test-account-login-toggle"
+          :aria-expanded="showTestAccounts"
+          @click="showTestAccounts = !showTestAccounts"
         >
-          <span class="quick-login__role">{{ acc.roleLabel }}</span>
-          <span class="quick-login__name">{{ acc.name }}</span>
-          <span class="quick-login__no">{{ acc.employeeNo }}</span>
-        </el-button>
+          验收账号登录（{{ testAccounts.length }}个角色）
+          <span aria-hidden="true">{{ showTestAccounts ? '收起' : '展开' }}</span>
+        </button>
+      </el-divider>
+      <div v-show="showTestAccounts" class="quick-login" data-testid="test-account-login">
+        <p class="quick-login__boundary">仅用于测试组织与测试数据，不关联钉钉和真实员工</p>
+        <div class="quick-login__grid">
+          <el-button
+            v-for="acc in testAccounts"
+            :key="acc.employeeNo"
+            plain
+            class="quick-login__account"
+            :loading="quickLoadingNo === acc.employeeNo"
+            :disabled="!!quickLoadingNo && quickLoadingNo !== acc.employeeNo"
+            data-testid="test-account-login-button"
+            @click="quickLogin(acc.employeeNo)"
+          >
+            <span class="quick-login__role">{{ acc.roleLabel }}</span>
+            <span class="quick-login__name">{{ acc.name }}</span>
+            <span class="quick-login__no">{{ acc.employeeNo }}</span>
+          </el-button>
+        </div>
       </div>
     </div>
   </el-card>
@@ -253,12 +268,34 @@ async function onPasswordLogin() {
   color: #909399;
   font-size: 13px;
 }
-.quick-login {
+.quick-login-entry {
   margin-top: 8px;
 }
-.quick-login__hint {
+.quick-login__toggle {
+  border: 0;
+  padding: 2px 4px;
+  background: transparent;
+  color: var(--el-color-primary);
+  cursor: pointer;
+  font: inherit;
+  font-size: 13px;
+}
+.quick-login__toggle span {
+  margin-left: 4px;
+  color: var(--app-text-tertiary, #8f959e);
+  font-size: 12px;
+}
+.quick-login__toggle:focus-visible {
+  outline: 2px solid var(--el-color-primary-light-5);
+  outline-offset: 2px;
+  border-radius: 3px;
+}
+.quick-login__boundary {
+  margin: 0 0 10px;
+  text-align: center;
   color: var(--app-text-secondary, #646a73);
   font-size: 12px;
+  line-height: 1.5;
 }
 .quick-login__grid {
   display: grid;
