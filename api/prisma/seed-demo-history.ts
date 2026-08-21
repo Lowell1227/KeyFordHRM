@@ -206,19 +206,28 @@ async function isolateFixedTestAccounts(
   }
 }
 
-async function ensureTemplate(hrId: string) {
+async function ensureTemplate(hrId: string, applicableUserIds: string[]) {
   const existing = await prisma.assessmentTemplate.findFirst({
     where: { name: '测试·固定账号绩效模板' },
     include: { dimensions: { include: { indicators: true } } },
   });
-  if (existing) return existing;
+  if (existing) {
+    return prisma.assessmentTemplate.update({
+      where: { id: existing.id },
+      data: {
+        applicableDepts: [],
+        applicableUsers: applicableUserIds,
+      },
+      include: { dimensions: { include: { indicators: true } } },
+    });
+  }
 
   return prisma.assessmentTemplate.create({
     data: {
       name: '测试·固定账号绩效模板',
       description: '仅用于固定测试账号验收：业绩、能力态度、加减分组合模板',
       applicableDepts: [],
-      applicableUsers: [],
+      applicableUsers: applicableUserIds,
       maxScore: 100,
       isActive: true,
       createdBy: hrId,
@@ -893,7 +902,10 @@ async function main() {
   const hr = userMap.get('HR001')!;
   const manager = userMap.get('MGR001')!;
   const approver = userMap.get('VP001')!;
-  const template = await ensureTemplate(hr.id);
+  const template = await ensureTemplate(
+    hr.id,
+    [...userMap.values()].map((user) => user.id),
+  );
 
   await ensureAcceptanceData(userMap, template);
 

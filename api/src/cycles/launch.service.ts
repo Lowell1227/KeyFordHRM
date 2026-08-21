@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { IndicatorType, Prisma } from '@prisma/client';
+import { AccountType, IndicatorType, Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
@@ -512,11 +512,25 @@ export class LaunchService {
     const participantUserIds = cycle.participantUserIds ?? [];
     const explicitExemptUserIds = cycle.explicitExemptUserIds ?? [];
     const hasScopedParticipants = participantDeptIds.length > 0 || participantUserIds.length > 0;
+    const explicitlyIncludedUserIds = [...new Set([
+      ...participantUserIds,
+      ...explicitExemptUserIds,
+    ])];
     return tx.user.findMany({
       where: {
         deletedAt: null,
         status: { not: 'resigned' },
         isAssessorOnly: false,
+        ...(explicitlyIncludedUserIds.length === 0
+          ? { accountType: AccountType.employee }
+          : {
+              AND: [{
+                OR: [
+                  { accountType: AccountType.employee },
+                  { id: { in: explicitlyIncludedUserIds } },
+                ],
+              }],
+            }),
         ...(hasScopedParticipants && {
           OR: [
             ...(participantDeptIds.length > 0 ? [{ deptId: { in: participantDeptIds } }] : []),
@@ -570,6 +584,26 @@ export class LaunchService {
   ): { matches: Array<{ candidate: Candidate; template: TemplateView }>; uncovered: Candidate[] } {
     const matches: Array<{ candidate: Candidate; template: TemplateView }> = [];
     const uncovered: Candidate[] = [];
+    const companyTemplates = templates.filter((template) =>
+      template.applicableUsers.length === 0 && template.applicableDepts.length === 0,
+    );
+    if (companyTemplates.length > 1) {
+      const affectedCount = candidates.filter((candidate) => {
+        const hasPersonTemplate = templates.some((template) =>
+          template.applicableUsers.includes(candidate.id),
+        );
+        const hasDepartmentTemplate = Boolean(candidate.deptId) && templates.some((template) =>
+          template.applicableDepts.includes(candidate.deptId!),
+        );
+        return !hasPersonTemplate && !hasDepartmentTemplate;
+      }).length;
+      if (affectedCount > 0) {
+        throw new BadRequestException({
+          code: ERROR_CODE.PARAM_INVALID,
+          message: `存在 ${companyTemplates.length} 套启用的公司默认模板，影响 ${affectedCount} 名员工：${companyTemplates.map((template) => template.name).join('、')}`,
+        });
+      }
+    }
 
     for (const candidate of candidates) {
       const personTemplates = templates.filter((template) =>
@@ -592,21 +626,13 @@ export class LaunchService {
         });
       }
 
-      const companyTemplates = personTemplates.length === 0 && departmentTemplates.length === 0
-        ? templates.filter((template) =>
-          template.applicableUsers.length === 0 && template.applicableDepts.length === 0,
-        )
+      const candidateCompanyTemplates = personTemplates.length === 0 && departmentTemplates.length === 0
+        ? companyTemplates
         : [];
-      if (companyTemplates.length > 1) {
-        throw new BadRequestException({
-          code: ERROR_CODE.PARAM_INVALID,
-          message: `员工“${candidate.name}”匹配到多个公司默认模板：${companyTemplates.map((template) => template.name).join('、')}`,
-        });
-      }
 
       const template = personTemplates[0]
         ?? departmentTemplates[0]
-        ?? companyTemplates[0];
+        ?? candidateCompanyTemplates[0];
 
       if (template) {
         matches.push({ candidate, template });

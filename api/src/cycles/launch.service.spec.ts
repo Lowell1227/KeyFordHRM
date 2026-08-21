@@ -1,4 +1,4 @@
-import { Prisma, SysRole } from '@prisma/client';
+import { AccountType, Prisma, SysRole } from '@prisma/client';
 import { LaunchService } from './launch.service';
 import { AuthUser } from '@/common/types/auth.types';
 
@@ -69,6 +69,9 @@ describe('LaunchService preflight', () => {
           endDate: new Date('2027-03-31T00:00:00.000Z'),
           goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
           hrOwnerId: operator.id,
+          participantDeptIds: [],
+          participantUserIds: [],
+          explicitExemptUserIds: [],
         }),
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -130,6 +133,70 @@ describe('LaunchService preflight', () => {
         response: { message: expect.stringContaining('匹配到多个人员模板') },
       });
     expect(tx.assessmentTask.create).not.toHaveBeenCalled();
+  });
+
+  it('reports all company-default templates and the affected employee count', async () => {
+    const first = template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
+    const second = template('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
+    first.name = '公司模板 A';
+    second.name = '公司模板 B';
+    first.applicableUsers = [];
+    second.applicableUsers = [];
+    tx.assessmentTemplate.findMany.mockResolvedValue([first, second]);
+
+    await expect(service.preflight('55555555-5555-4555-8555-555555555555'))
+      .resolves.toEqual(expect.objectContaining({
+        ready: false,
+        blockers: expect.arrayContaining([{
+          code: 'TEMPLATE_AMBIGUOUS',
+          message: '存在 2 套启用的公司默认模板，影响 1 名员工：公司模板 A、公司模板 B',
+        }]),
+      }));
+  });
+
+  it('limits an unscoped cycle to employee accounts', async () => {
+    tx.assessmentTemplate.findMany.mockResolvedValue([
+      template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+    ]);
+
+    await service.preflight('55555555-5555-4555-8555-555555555555');
+
+    expect(tx.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        accountType: AccountType.employee,
+      }),
+    }));
+  });
+
+  it('keeps explicitly selected test accounts eligible without admitting every test account', async () => {
+    tx.assessmentCycle.findUnique.mockResolvedValue({
+      id: '55555555-5555-4555-8555-555555555555',
+      name: '测试·验收周期',
+      status: 'draft',
+      startDate: new Date('2027-01-01T00:00:00.000Z'),
+      endDate: new Date('2027-03-31T00:00:00.000Z'),
+      goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
+      hrOwnerId: operator.id,
+      participantDeptIds: [],
+      participantUserIds: [candidate.id],
+      explicitExemptUserIds: [],
+    });
+    tx.assessmentTemplate.findMany.mockResolvedValue([
+      template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+    ]);
+
+    await service.preflight('55555555-5555-4555-8555-555555555555');
+
+    expect(tx.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        AND: expect.arrayContaining([{
+          OR: [
+            { accountType: AccountType.employee },
+            { id: { in: [candidate.id] } },
+          ],
+        }]),
+      }),
+    }));
   });
 
   it('blocks launch when a matched template no longer has valid weights', async () => {
