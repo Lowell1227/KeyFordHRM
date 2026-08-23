@@ -20,10 +20,39 @@ export interface EmployeeRosterPreviewResult {
 
 export interface EmployeeRosterConfirmResult {
   batchId: string;
-  status: 'completed';
-  created: number;
-  updated: number;
-  resigned?: number;
+  status: 'pending_review' | 'completed';
+  submitted: number;
+}
+
+export type EmployeeReviewStatus = 'not_required' | 'pending' | 'approved' | 'rejected';
+export type EmployeeReviewScope = 'profile' | 'performance';
+
+export interface EmployeeDataReview {
+  id: string;
+  userId: string | null;
+  employeeNo: string | null;
+  employeeName: string;
+  sourceType: string;
+  profileReviewStatus: EmployeeReviewStatus;
+  performanceReviewStatus: EmployeeReviewStatus;
+  validationErrors: string[];
+  baseValue: Record<string, any>;
+  proposedValue: Record<string, any>;
+  rejectedReason?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface EmployeeDataReviewPage {
+  total: number;
+  page: number;
+  pageSize: number;
+  items: EmployeeDataReview[];
+}
+
+export interface EmployeeReviewBatchResult {
+  succeeded: Array<{ requestId: string; scopes: EmployeeReviewScope[] }>;
+  failed: Array<{ requestId: string; reason: string }>;
 }
 
 export interface EmployeeRosterImportRow {
@@ -57,8 +86,9 @@ export interface EmployeeArchive {
   position: string | null;
   entryDate: string | null;
   dept: { id: string; name: string; fullPath: string | null; company: string } | null;
-  directManager: { id: string; name: string; employeeNo: string | null } | null;
-  currentEmployment: { id: string; company: string } | null;
+  performanceManager: { id: string; name: string; employeeNo: string | null } | null;
+  rosterManager: { id: string; name: string; employeeNo: string | null } | null;
+  currentEmployment: { id: string; company: string; directManager?: { id: string; name: string; employeeNo: string | null } | null } | null;
   employeeProfile: {
     phone: string | null;
     gender: string | null;
@@ -92,6 +122,8 @@ export interface EmployeeArchive {
     signedAt: string | null;
     expiresAt: string | null;
     termType: string | null;
+    isActive: boolean;
+    endedAt: string | null;
   }>;
   dingtalkBindingState: 'unbound' | 'enabled' | 'disabled';
   dingtalkBinding: {
@@ -134,5 +166,26 @@ export const employeeArchivesApi = {
 
   getRosterBatch(batchId: string): Promise<EmployeeRosterImportBatch> {
     return http.get(`/employee-archives/imports/${batchId}`) as unknown as Promise<EmployeeRosterImportBatch>;
+  },
+
+  listReviews(params: {
+    page?: number;
+    pageSize?: number;
+    status?: 'pending' | 'approved' | 'rejected' | 'all';
+    keyword?: string;
+  } = {}): Promise<EmployeeDataReviewPage> {
+    return http.get('/employee-archives/reviews/list', { params }) as unknown as Promise<EmployeeDataReviewPage>;
+  },
+
+  approveReviews(requestIds: string[], scopes: EmployeeReviewScope[]): Promise<EmployeeReviewBatchResult> {
+    return http.post('/employee-archives/reviews/approve', { requestIds, scopes }) as unknown as Promise<EmployeeReviewBatchResult>;
+  },
+
+  proposePerformanceManager(userId: string, managerId: string | null): Promise<EmployeeDataReview> {
+    return http.post(`/employee-archives/${userId}/performance-manager-review`, { managerId }) as unknown as Promise<EmployeeDataReview>;
+  },
+
+  setPendingPerformanceManager(requestId: string, managerId: string): Promise<EmployeeDataReview> {
+    return http.patch(`/employee-archives/reviews/${requestId}/performance-manager`, { managerId }) as unknown as Promise<EmployeeDataReview>;
   },
 };

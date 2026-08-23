@@ -33,132 +33,148 @@ describe('EmployeeArchivesService', () => {
     }));
   });
 
-  it('updates the single profile owned by an existing employee instead of creating a second employee record', async () => {
+  it('档案字段修改只生成待审核版本，正式档案在审核前保持不变', async () => {
     const user = {
       id: '10000000-0000-4000-8000-000000000001',
       employeeNo: '001',
-      name: '李宏',
-      phone: '18600000000',
-      email: null,
-      avatarUrl: null,
-      deletedAt: null,
-    };
-    const profiles = new Map<string, Record<string, unknown>>();
-    const tx = {
-      employeeProfile: {
-        upsert: jest.fn(async ({ where, create, update }: any) => {
-          const existing = profiles.get(where.userId);
-          const saved = existing
-            ? { ...existing, ...update, userId: where.userId }
-            : { id: 'profile-1', ...create };
-          profiles.set(where.userId, saved);
-          return saved;
-        }),
-      },
-      user: {
-        update: jest.fn(async ({ data }: any) => ({ ...user, ...data })),
-      },
-      auditLog: {
-        create: jest.fn(async ({ data }: any) => ({ id: 'audit-1', ...data })),
-      },
-    };
-    const prisma = {
-      user: { findUnique: jest.fn().mockResolvedValue(user) },
-      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
-    };
-    const service = new EmployeeArchivesService(prisma as any);
-    const operator = {
-      id: '20000000-0000-4000-8000-000000000001',
-      name: 'HR',
-      sysRole: SysRole.hr,
-      deptId: null,
-      isAssessorOnly: false,
-      canViewAll: true,
-    };
-
-    await service.upsertProfile(user.id, { phone: '13700000001', gender: 'female' }, operator);
-    const result = await service.upsertProfile(user.id, { phone: '13700000002', gender: 'female' }, operator);
-
-    expect(profiles.size).toBe(1);
-    expect(profiles.get(user.id)).toEqual(expect.objectContaining({
-      id: 'profile-1',
-      userId: user.id,
-      phone: '13700000002',
-      gender: 'female',
-    }));
-    expect(result).toEqual(expect.objectContaining({
-      userId: user.id,
-      phone: '13700000002',
-    }));
-  });
-
-  it('creates one current employment segment and projects it onto the existing user', async () => {
-    const user = {
-      id: '10000000-0000-4000-8000-000000000001',
-      employeeNo: '001',
-      deletedAt: null,
-    };
-    const tx = {
-      employmentRecord: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        create: jest.fn(async ({ data }: any) => ({ id: 'employment-1', ...data })),
-      },
-      user: {
-        update: jest.fn(async ({ data }: any) => ({ ...user, ...data })),
-      },
-      auditLog: {
-        create: jest.fn(async ({ data }: any) => ({ id: 'audit-1', ...data })),
-      },
-    };
-    const prisma = {
-      user: { findUnique: jest.fn().mockResolvedValue(user) },
-      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
-    };
-    const service = new EmployeeArchivesService(prisma as any);
-    const operator = {
-      id: '20000000-0000-4000-8000-000000000001',
-      name: 'HR',
-      sysRole: SysRole.hr,
-      deptId: null,
-      isAssessorOnly: false,
-      canViewAll: true,
-    };
-
-    const result = await service.createEmploymentRecord(user.id, {
-      effectiveFrom: new Date('2026-01-01T00:00:00.000Z'),
-      effectiveTo: null,
-      company: CompanyCode.fuede,
-      deptId: '30000000-0000-4000-8000-000000000001',
-      position: '董事长',
-      jobGrade: null,
-      jobFamily: '管理',
-      directManagerId: null,
-      workLocation: '杭州',
-      employmentType: EmploymentType.full_time,
-      employeeStatus: UserStatus.active,
-      entryDate: new Date('2001-01-01T00:00:00.000Z'),
+      name: '员工甲',
+      phone: '13800000000',
+      deptId: 'dept-1',
+      position: '专员',
+      entryDate: new Date('2024-01-01T00:00:00.000Z'),
       plannedRegularDate: null,
       actualRegularDate: null,
       leaveDate: null,
-      probationMonths: null,
-      changeType: 'hire',
-      reason: '花名册初始化',
-      sourceType: 'manual',
-      sourceBatchId: null,
-    }, operator);
+      employmentType: 'full_time',
+      status: 'active',
+      directManagerId: 'performance-manager-1',
+      deletedAt: null,
+      employeeProfile: { gender: '女', phone: '13800000000' },
+      employmentHistory: [{
+        company: 'fuede', deptId: 'dept-1', position: '专员', jobGrade: 'P3', jobFamily: '职能',
+        directManagerId: 'roster-manager-1', workLocation: '杭州', probationMonths: null,
+      }],
+    };
+    const reviewCreate = jest.fn().mockResolvedValue({ id: 'profile-review', profileReviewStatus: 'pending' });
+    const profileUpsert = jest.fn();
+    const userUpdate = jest.fn();
+    const prisma = {
+      user: { findUnique: jest.fn().mockResolvedValue(user) },
+      employeeDataChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: reviewCreate,
+      },
+      employeeProfile: { upsert: profileUpsert },
+      $transaction: jest.fn(),
+    };
+    const service = new EmployeeArchivesService(prisma as any);
+    const operator = {
+      id: '20000000-0000-4000-8000-000000000001', name: 'HR', sysRole: SysRole.hr,
+      deptId: null, isAssessorOnly: false, canViewAll: true,
+    };
 
-    expect(tx.employmentRecord.create).toHaveBeenCalledTimes(1);
-    expect(tx.user.update).toHaveBeenCalledWith({
-      where: { id: user.id },
+    const result = await service.upsertProfile(user.id, { phone: '13900000000', gender: '女' }, operator);
+
+    expect(result).toEqual(expect.objectContaining({ id: 'profile-review', profileReviewStatus: 'pending' }));
+    expect(reviewCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        deptId: '30000000-0000-4000-8000-000000000001',
-        position: '董事长',
-        directManagerId: null,
-        employmentType: EmploymentType.full_time,
-        status: UserStatus.active,
+        userId: user.id,
+        sourceType: 'manual_profile_change',
+        profileReviewStatus: 'pending',
+        performanceReviewStatus: 'not_required',
+        proposedValue: expect.objectContaining({
+          profile: expect.objectContaining({ phone: '13900000000', gender: '女' }),
+        }),
       }),
     });
-    expect(result).toEqual(expect.objectContaining({ id: 'employment-1', userId: user.id }));
+    expect(profileUpsert).not.toHaveBeenCalled();
+    expect(userUpdate).not.toHaveBeenCalled();
+  });
+
+  it('同一员工连续修改档案时合并到同一条待审核记录', async () => {
+    const user = {
+      id: '10000000-0000-4000-8000-000000000001', employeeNo: '001', name: '李宏',
+      phone: '18600000000', deptId: 'dept-1', position: '董事长',
+      entryDate: new Date('2001-01-01T00:00:00.000Z'), plannedRegularDate: null,
+      actualRegularDate: null, leaveDate: null, employmentType: 'full_time', status: 'active',
+      directManagerId: null, deletedAt: null, employeeProfile: { phone: '18600000000', gender: '男' },
+      employmentHistory: [{ company: 'fuede', deptId: 'dept-1', position: '董事长', directManagerId: null }],
+    };
+    const pending = { id: 'review-profile', userId: user.id, profileReviewStatus: 'pending' };
+    const reviewUpdate = jest.fn().mockResolvedValue({ ...pending, proposedValue: { profile: { phone: '13700000002' } } });
+    const prisma = {
+      user: { findUnique: jest.fn().mockResolvedValue(user) },
+      employeeDataChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(pending),
+        update: reviewUpdate,
+      },
+    };
+    const service = new EmployeeArchivesService(prisma as any);
+    const operator = {
+      id: '20000000-0000-4000-8000-000000000001', name: 'HR', sysRole: SysRole.hr,
+      deptId: null, isAssessorOnly: false, canViewAll: true,
+    };
+
+    const result = await service.upsertProfile(user.id, { phone: '13700000002', gender: '男' }, operator);
+
+    expect(result).toEqual(expect.objectContaining({ id: 'review-profile' }));
+    expect(reviewUpdate).toHaveBeenCalledWith({
+      where: { id: 'review-profile' },
+      data: expect.objectContaining({
+        proposedValue: expect.objectContaining({
+          profile: expect.objectContaining({ phone: '13700000002', gender: '男' }),
+        }),
+      }),
+    });
+  });
+
+  it('新增任职记录只生成基础档案待审核版本', async () => {
+    const user = {
+      id: '10000000-0000-4000-8000-000000000001', employeeNo: '001', name: '李宏',
+      phone: null, deptId: null, position: null, entryDate: new Date('2001-01-01T00:00:00.000Z'),
+      plannedRegularDate: null, actualRegularDate: null, leaveDate: null, employmentType: 'full_time',
+      status: 'active', directManagerId: null, deletedAt: null, employeeProfile: null, employmentHistory: [],
+    };
+    const reviewCreate = jest.fn().mockResolvedValue({ id: 'employment-review', profileReviewStatus: 'pending' });
+    const employmentCreate = jest.fn();
+    const userUpdate = jest.fn();
+    const prisma = {
+      user: { findUnique: jest.fn().mockResolvedValue(user) },
+      employmentRecord: { findFirst: jest.fn().mockResolvedValue(null), create: employmentCreate },
+      employeeDataChangeRequest: { create: reviewCreate },
+    };
+    const service = new EmployeeArchivesService(prisma as any);
+    const operator = {
+      id: '20000000-0000-4000-8000-000000000001', name: 'HR', sysRole: SysRole.hr,
+      deptId: null, isAssessorOnly: false, canViewAll: true,
+    };
+
+    const result = await service.createEmploymentRecord(user.id, {
+      effectiveFrom: new Date('2026-01-01T00:00:00.000Z'), effectiveTo: null, company: CompanyCode.fuede,
+      deptId: '30000000-0000-4000-8000-000000000001', position: '董事长', jobGrade: null,
+      jobFamily: '管理', directManagerId: null, workLocation: '杭州',
+      employmentType: EmploymentType.full_time, employeeStatus: UserStatus.active,
+      entryDate: new Date('2001-01-01T00:00:00.000Z'), plannedRegularDate: null, actualRegularDate: null,
+      leaveDate: null, probationMonths: null, changeType: 'hire', reason: '花名册初始化',
+      sourceType: 'manual', sourceBatchId: null,
+    }, operator);
+
+    expect(result).toEqual(expect.objectContaining({ id: 'employment-review', profileReviewStatus: 'pending' }));
+    expect(reviewCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: user.id, sourceType: 'manual_employment_change', profileReviewStatus: 'pending',
+        performanceReviewStatus: 'not_required',
+        proposedValue: expect.objectContaining({
+          employee: expect.objectContaining({
+            deptId: '30000000-0000-4000-8000-000000000001',
+            position: '董事长',
+            managerId: null,
+          }),
+        }),
+      }),
+    });
+    expect(employmentCreate).not.toHaveBeenCalled();
+    expect(userUpdate).not.toHaveBeenCalled();
   });
 
   it('rejects an employment segment that overlaps existing history', async () => {
@@ -177,6 +193,7 @@ describe('EmployeeArchivesService', () => {
     };
     const prisma = {
       user: { findUnique: jest.fn().mockResolvedValue(user) },
+      employmentRecord: tx.employmentRecord,
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const service = new EmployeeArchivesService(prisma as any);

@@ -451,7 +451,48 @@ describe('EmployeeRosterImportService', () => {
     expect(result.summary.blockingErrorCount).toBe(1);
   });
 
-  it('确认时校验同一文件，并在一个事务中创建账号、档案、任职和合同', async () => {
+  it('同一花名册中有无效员工时仍允许提交其他有效员工', async () => {
+    const persistedRows: any[] = [];
+    const prisma = {
+      user: { findMany: jest.fn().mockResolvedValue([]) },
+      department: { findMany: jest.fn().mockResolvedValue([]) },
+      employeeImportBatch: {
+        create: jest.fn().mockResolvedValue({ id: 'batch-partial-valid' }),
+        update: jest.fn(async ({ data }: any) => ({ id: 'batch-partial-valid', ...data })),
+      },
+      employeeImportRow: {
+        createMany: jest.fn(async ({ data }: any) => {
+          persistedRows.push(...data);
+          return { count: data.length };
+        }),
+      },
+    };
+    const service = new EmployeeRosterImportService(prisma as any);
+    const valid = row(2, '001', '有效员工');
+    valid.employee.departmentPath = ['项目中心'];
+    const invalid = row(3, '002', '无效员工');
+    invalid.employee.departmentPath = ['项目中心'];
+    invalid.employee.managerName = '不存在主管';
+    const operator = {
+      id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null, isAssessorOnly: false, canViewAll: true,
+    };
+
+    const result = await service.createPreviewFromRows(
+      [valid, invalid],
+      { mode: 'full', fileName: '花名册.xlsx', fileHash: 'hash-partial-valid' },
+      operator,
+    );
+
+    expect(result.canConfirm).toBe(true);
+    expect(result.summary).toMatchObject({ createCount: 1, blockingErrorCount: 1 });
+    expect(persistedRows.map((item) => item.action)).toEqual(['create', 'blocked']);
+    expect(prisma.employeeImportBatch.update).toHaveBeenCalledWith({
+      where: { id: 'batch-partial-valid' },
+      data: expect.objectContaining({ status: 'ready_to_confirm' }),
+    });
+  });
+
+  it('确认花名册后只生成待审核变更，未审核前不改正式员工数据', async () => {
     const parsed = row(2, '002', '新员工');
     parsed.profile.phone = '13800000000';
     parsed.profile.gender = '男';
@@ -471,9 +512,13 @@ describe('EmployeeRosterImportService', () => {
     const tx = {
       employeeImportBatch: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-        update: jest.fn().mockResolvedValue({ id: 'batch-3', status: 'completed' }),
+        update: jest.fn().mockResolvedValue({ id: 'batch-3', status: 'pending_review' }),
       },
       employeeImportRow: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      employeeDataChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'review-1' }),
+      },
       user: {
         create: jest.fn(async ({ data }: any) => ({ id: 'new-user-002', ...data })),
         update: jest.fn(),
@@ -520,30 +565,181 @@ describe('EmployeeRosterImportService', () => {
 
     const result = await service.confirmFromRows('batch-3', [parsed], 'hash-3', operator);
 
-    expect(result).toEqual({ batchId: 'batch-3', status: 'completed', created: 1, updated: 0 });
-    expect(tx.user.create).toHaveBeenCalledTimes(1);
-    expect(tx.employeeProfile.upsert).toHaveBeenCalledTimes(1);
-    expect(tx.employmentRecord.create).toHaveBeenCalledTimes(1);
-    expect(tx.employeeContract.createMany).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({ batchId: 'batch-3', status: 'pending_review', submitted: 1 });
+    expect(tx.employeeDataChangeRequest.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        sourceType: 'employee_roster_import',
+        sourceBatchId: 'batch-3',
+        sourceRowNumber: 2,
+        employeeNo: '002',
+        employeeName: '新员工',
+        profileReviewStatus: 'pending',
+        performanceReviewStatus: 'pending',
+      }),
+    });
+    expect(tx.user.create).not.toHaveBeenCalled();
+    expect(tx.employeeProfile.upsert).not.toHaveBeenCalled();
+    expect(tx.employmentRecord.create).not.toHaveBeenCalled();
+    expect(tx.employeeContract.createMany).not.toHaveBeenCalled();
     expect(tx.employeeImportBatch.update).toHaveBeenCalledWith({
       where: { id: 'batch-3' },
-      data: expect.objectContaining({ status: 'completed', confirmedById: 'hr-1' }),
+      data: expect.objectContaining({ status: 'pending_review', confirmedById: 'hr-1' }),
     });
   });
 
-  it('全量确认同步花名册组织、停用旧组织并把缺行正式员工归档为离职', async () => {
+  it('花名册直属主管变化只作为差异提示，不覆盖已审核的绩效直属上级', async () => {
+    const parsed = row(2, '001', '存量员工');
+    parsed.employee.managerName = '花名册新主管';
+    const reviewCreate = jest.fn().mockResolvedValue({ id: 'review-existing' });
+    const officialUserUpdate = jest.fn();
+    const tx = {
+      employeeImportBatch: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockResolvedValue({ id: 'batch-existing', status: 'pending_review' }),
+      },
+      employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: reviewCreate },
+      user: {
+        findUnique: jest.fn().mockResolvedValue({ directManagerId: 'performance-manager-approved' }),
+        update: officialUserUpdate,
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-existing' }) },
+    };
+    const prisma = {
+      employeeImportBatch: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'batch-existing',
+          fileHash: 'hash-existing',
+          mode: 'incremental',
+          status: 'ready_to_confirm',
+          summary: {},
+          rows: [{
+            rowNumber: 2,
+            action: 'update',
+            matchedUserId: 'employee-existing',
+            errors: [],
+            normalizedValue: {
+              employee: {
+                company: 'fuede',
+                deptId: 'dept-project',
+                employmentType: 'full_time',
+                employeeStatus: 'active',
+              },
+            },
+          }],
+        }),
+      },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new EmployeeRosterImportService(prisma as any);
+    const operator = {
+      id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null, isAssessorOnly: false, canViewAll: true,
+    };
+
+    await service.confirmFromRows('batch-existing', [parsed], 'hash-existing', operator);
+
+    expect(reviewCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        performanceReviewStatus: 'not_required',
+        proposedValue: expect.objectContaining({
+          performance: {
+            managerId: 'performance-manager-approved',
+            suggestedRosterManagerName: '花名册新主管',
+          },
+        }),
+      }),
+    });
+    expect(officialUserUpdate).not.toHaveBeenCalled();
+  });
+
+  it('重复确认与正式档案一致的花名册时不生成无效待审核记录', async () => {
+    const parsed = row(2, '001', '存量员工');
+    parsed.employee.managerName = '花名册主管';
+    parsed.contracts = [{
+      sequence: 0, kind: 'contract', name: '劳动合同',
+      signedAt: new Date('2024-01-01T00:00:00.000Z'),
+      expiresAt: new Date('2026-12-31T00:00:00.000Z'), termText: '3年',
+      originalCompany: null, newCompany: null, confidentialityAgreement: '已签',
+      nonCompeteAgreement: '无', portraitAgreement: '已签',
+    }];
+    const today = new Date('2026-08-24T00:00:00.000Z');
+    const reviewCreate = jest.fn();
+    const tx = {
+      employeeImportBatch: {
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn(async ({ data }: any) => ({ id: 'batch-unchanged', ...data })),
+      },
+      employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: reviewCreate },
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'employee-existing', employeeNo: '001', name: '存量员工', phone: null,
+          deptId: 'dept-project', position: '项目经理', entryDate: new Date('2024-01-01T00:00:00.000Z'),
+          plannedRegularDate: null, actualRegularDate: null, leaveDate: null,
+          employmentType: 'full_time', status: 'active', directManagerId: 'performance-manager-approved',
+          employeeProfile: null,
+          employeeContracts: [{
+            contractType: 'contract', sequence: 0, name: '劳动合同',
+            signedAt: new Date('2024-01-01T00:00:00.000Z'),
+            expiresAt: new Date('2026-12-31T00:00:00.000Z'), termType: '3年',
+            originalCompany: null, newCompany: null, confidentialityAgreement: '已签',
+            nonCompeteAgreement: '无', portraitAgreement: '已签',
+          }],
+          dept: { parentId: null, leaderId: null },
+          employmentHistory: [{
+            company: 'fuede', jobGrade: 'P4', jobFamily: '项目管理', directManagerId: 'roster-manager',
+            directManager: { id: 'roster-manager', name: '花名册主管' }, workLocation: '杭州',
+            probationMonths: null, effectiveFrom: today, effectiveTo: null,
+          }],
+        }),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-unchanged' }) },
+    };
+    const prisma = {
+      employeeImportBatch: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'batch-unchanged', fileHash: 'hash-unchanged', mode: 'incremental',
+          status: 'ready_to_confirm', summary: {},
+          rows: [{
+            rowNumber: 2, action: 'update', matchedUserId: 'employee-existing', errors: [],
+            normalizedValue: {
+              employee: {
+                company: 'fuede', deptId: 'dept-project', employmentType: 'full_time', employeeStatus: 'active',
+              },
+            },
+          }],
+        }),
+      },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new EmployeeRosterImportService(prisma as any);
+    const operator = {
+      id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null, isAssessorOnly: false, canViewAll: true,
+    };
+
+    const result = await service.confirmFromRows('batch-unchanged', [parsed], 'hash-unchanged', operator);
+
+    expect(result).toEqual({ batchId: 'batch-unchanged', status: 'completed', submitted: 0 });
+    expect(reviewCreate).not.toHaveBeenCalled();
+    expect(tx.employeeImportBatch.update).toHaveBeenCalledWith({
+      where: { id: 'batch-unchanged' },
+      data: expect.objectContaining({ status: 'completed' }),
+    });
+  });
+
+  it('全量确认只暂存组织方案，并把文件缺行员工提交为待审核停用', async () => {
     const parsed = row(2, '001', '李宏');
     parsed.employee.companyText = '孚德';
     parsed.employee.departmentPath = ['总经办'];
     const departmentCreate = jest.fn().mockResolvedValueOnce({ id: 'dept-executive' });
     const transactionUserUpdate = jest.fn();
     const transactionUserUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const reviewCreate = jest.fn().mockResolvedValue({ id: 'review-full' });
     const tx = {
       employeeImportBatch: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn().mockResolvedValue({ id: 'batch-full', status: 'completed' }),
       },
       employeeImportRow: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
+      employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: reviewCreate },
       department: {
         findMany: jest.fn().mockResolvedValue([{ id: 'dept-old', fullPath: '外援', name: '外援' }]),
         create: departmentCreate,
@@ -555,6 +751,23 @@ describe('EmployeeRosterImportService', () => {
         update: transactionUserUpdate,
         updateMany: transactionUserUpdateMany,
         findMany: jest.fn().mockResolvedValue([]),
+        findUnique: jest.fn()
+          .mockResolvedValueOnce({
+            employeeNo: '001', name: '李宏', phone: null, deptId: 'dept-executive', position: '董事长',
+            entryDate: new Date('2024-01-01T00:00:00.000Z'), plannedRegularDate: null,
+            actualRegularDate: null, leaveDate: null, employmentType: 'full_time', status: 'active',
+            directManagerId: null, employeeProfile: null, employmentHistory: [],
+          })
+          .mockResolvedValueOnce({
+            employeeNo: null, name: '旧员工', phone: null, deptId: 'dept-old', position: '旧岗位',
+            entryDate: new Date('2023-01-01T00:00:00.000Z'), plannedRegularDate: null,
+            actualRegularDate: null, leaveDate: null, employmentType: 'full_time', status: 'active',
+            directManagerId: null, employeeProfile: null, employmentHistory: [{
+              id: 'missing-employment', effectiveFrom: new Date('2023-01-01T00:00:00.000Z'),
+              company: 'fuede', jobGrade: null, jobFamily: null, directManagerId: null,
+              workLocation: null, probationMonths: null,
+            }],
+          }),
       },
       externalIdentityBinding: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       employeeProfile: { upsert: jest.fn().mockResolvedValue({ id: 'profile-1' }) },
@@ -611,32 +824,38 @@ describe('EmployeeRosterImportService', () => {
 
     const result = await service.confirmFromRows('batch-full', [parsed], 'hash-full', operator);
 
-    expect(result).toEqual(expect.objectContaining({ created: 0, updated: 1, resigned: 1 }));
-    expect(departmentCreate).toHaveBeenCalledTimes(1);
-    expect(tx.department.updateMany).toHaveBeenCalledWith({
-      where: { id: { notIn: ['dept-executive'] } },
-      data: { isActive: false },
+    expect(result).toEqual({ batchId: 'batch-full', status: 'pending_review', submitted: 2 });
+    expect(departmentCreate).not.toHaveBeenCalled();
+    expect(tx.department.updateMany).not.toHaveBeenCalled();
+    expect(reviewCreate).toHaveBeenCalledTimes(2);
+    expect(reviewCreate).toHaveBeenNthCalledWith(1, {
+      data: expect.objectContaining({
+        proposedValue: expect.objectContaining({
+          employee: expect.objectContaining({
+            organizationPath: ['总经办'],
+            organizationLeaderPaths: [['总经办']],
+          }),
+        }),
+      }),
     });
-    expect(tx.department.update).toHaveBeenCalledWith({
-      where: { id: 'dept-executive' },
-      data: { leaderId: 'user-001' },
+    expect(reviewCreate).toHaveBeenLastCalledWith({
+      data: expect.objectContaining({
+        userId: 'user-missing',
+        profileReviewStatus: 'pending',
+        performanceReviewStatus: 'not_required',
+        proposedValue: expect.objectContaining({
+          employee: expect.objectContaining({ employeeStatus: 'resigned' }),
+        }),
+      }),
     });
-    expect(transactionUserUpdate).toHaveBeenCalledWith({
-      where: { id: 'user-001' },
-      data: expect.objectContaining({ employeeNo: '001', deptId: 'dept-executive', status: 'active' }),
-    });
-    expect(transactionUserUpdateMany).toHaveBeenCalledWith({
-      where: { id: 'user-missing', accountType: 'employee', status: { not: 'resigned' } },
-      data: expect.objectContaining({ status: 'resigned', directManagerId: null }),
-    });
-    expect(tx.externalIdentityBinding.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ userId: 'user-missing', status: 'enabled' }),
-      data: expect.objectContaining({ status: 'disabled' }),
-    }));
+    expect(transactionUserUpdate).not.toHaveBeenCalled();
+    expect(transactionUserUpdateMany).not.toHaveBeenCalled();
+    expect(tx.externalIdentityBinding.updateMany).not.toHaveBeenCalled();
   });
 
   it('增量确认不会用空单元格清空旧档案和任职字段', async () => {
     const parsed = row(2, '001', '李宏');
+    parsed.employee.position = '高级项目经理';
     parsed.employee.jobGrade = null;
     parsed.employee.jobFamily = null;
     parsed.employee.managerName = null;
@@ -658,6 +877,25 @@ describe('EmployeeRosterImportService', () => {
         create: jest.fn(),
         update: jest.fn(),
         findMany: jest.fn().mockResolvedValue([]),
+        findUnique: jest.fn().mockResolvedValue({
+          employeeNo: '001', name: '李宏', phone: '13800000000', deptId: 'dept-project', position: '项目经理',
+          entryDate: new Date('2024-01-01T00:00:00.000Z'),
+          plannedRegularDate: new Date('2024-04-01T00:00:00.000Z'),
+          actualRegularDate: new Date('2024-04-01T00:00:00.000Z'), leaveDate: null,
+          employmentType: 'full_time', status: 'active', directManagerId: 'manager-1', employeeProfile: null,
+          employmentHistory: [{
+            id: 'employment-current', effectiveFrom: today, company: 'fuede', deptId: 'dept-project',
+            position: '项目经理', jobGrade: 'P5', jobFamily: '项目管理', directManagerId: 'manager-1',
+            workLocation: '杭州', employmentType: 'full_time', employeeStatus: 'active',
+            entryDate: new Date('2024-01-01T00:00:00.000Z'),
+            plannedRegularDate: new Date('2024-04-01T00:00:00.000Z'),
+            actualRegularDate: new Date('2024-04-01T00:00:00.000Z'), probationMonths: 3,
+          }],
+        }),
+      },
+      employeeDataChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'review-4' }),
       },
       employeeProfile: { upsert: jest.fn() },
       employmentRecord: {
@@ -716,22 +954,18 @@ describe('EmployeeRosterImportService', () => {
 
     await service.confirmFromRows('batch-4', [parsed], 'hash-4', operator);
 
-    const projectionUpdate = tx.user.update.mock.calls.find(([call]) => 'name' in call.data)?.[0];
-    expect(projectionUpdate.data).not.toHaveProperty('phone');
-    expect(projectionUpdate.data).not.toHaveProperty('plannedRegularDate');
-    expect(projectionUpdate.data).not.toHaveProperty('actualRegularDate');
+    const reviewData = tx.employeeDataChangeRequest.create.mock.calls[0][0].data;
+    expect(reviewData.proposedValue.employee).toEqual(expect.objectContaining({
+      phone: '13800000000',
+      jobGrade: 'P5',
+      jobFamily: '项目管理',
+      workLocation: '杭州',
+      plannedRegularDate: '2024-04-01T00:00:00.000Z',
+      actualRegularDate: '2024-04-01T00:00:00.000Z',
+      probationMonths: 3,
+    }));
+    expect(tx.user.update).not.toHaveBeenCalled();
     expect(tx.employeeProfile.upsert).not.toHaveBeenCalled();
-    expect(tx.employmentRecord.update).toHaveBeenCalledWith({
-      where: { id: 'employment-current' },
-      data: expect.objectContaining({
-        jobGrade: 'P5',
-        jobFamily: '项目管理',
-        directManagerId: 'manager-1',
-        workLocation: '杭州',
-        plannedRegularDate: new Date('2024-04-01T00:00:00.000Z'),
-        actualRegularDate: new Date('2024-04-01T00:00:00.000Z'),
-        probationMonths: 3,
-      }),
-    });
+    expect(tx.employmentRecord.update).not.toHaveBeenCalled();
   });
 });

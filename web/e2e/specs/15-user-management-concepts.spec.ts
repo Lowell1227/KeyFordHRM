@@ -16,6 +16,13 @@ const apiResponse = (data: unknown) => ({
 
 const webBaseUrl = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173';
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/employee-archives/reviews/list**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
+  }));
+});
+
 test('uses concise and consistent organization relationship concepts', async () => {
   const source = await readFile(viewPath, 'utf8');
 
@@ -48,7 +55,7 @@ test('uses concise and consistent organization relationship concepts', async () 
   expect(source).not.toContain('title="设置审批覆盖"');
 });
 
-test('recognizes only the root department leader as exempt from a direct manager', () => {
+test('recognizes only the root department leader as eligible to have no performance manager', () => {
   const departments = [
     { id: 'dept-root', parentId: null, leaderId: 'leader-root' },
     { id: 'dept-child', parentId: 'dept-root', leaderId: 'leader-child' },
@@ -57,7 +64,7 @@ test('recognizes only the root department leader as exempt from a direct manager
   expect(isTopLevelDepartmentLeader({
     id: 'leader-root',
     deptId: 'dept-root',
-    directManagerId: null,
+    directManagerId: 'legacy-manager',
   }, departments)).toBe(true);
 
   expect(isTopLevelDepartmentLeader({
@@ -94,7 +101,7 @@ test('keeps the employee roster pager visible while the table scrolls independen
 
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-admin-token');
-    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+    localStorage.setItem('expiresAt', String(Date.now() + 10 * 60_000));
   });
   await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse(0)),
@@ -157,7 +164,7 @@ test('collapses and restores roster filters without hiding the result workspace'
 
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-admin-token');
-    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+    localStorage.setItem('expiresAt', String(Date.now() + 10 * 60_000));
   });
   await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse(0)),
@@ -227,7 +234,7 @@ test('filters direct-manager candidates by employee name', async ({ page }) => {
 
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-admin-token');
-    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+    localStorage.setItem('expiresAt', String(Date.now() + 10 * 60_000));
   });
   await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
     contentType: 'application/json',
@@ -278,14 +285,14 @@ test('filters direct-manager candidates by employee name', async ({ page }) => {
   await page.goto(`${webBaseUrl}/users`);
   const approverCard = page.locator('.relation-card').filter({ hasText: '最终业务审批人' });
   await expect(approverCard).toContainText('郭志浩');
-  await expect(approverCard).toContainText('自动取部门负责人的直属主管');
+  await expect(approverCard).toContainText('自动取部门负责人的绩效直属上级');
   await expect(approverCard).toContainText('HR 只负责校准');
   await expect(page.getByRole('button', { name: '设置最终业务审批人' })).toBeVisible();
   await expect(page.locator('.approver-trail-card')).toHaveCount(0);
   await page.getByRole('button', { name: '人员设置' }).click();
   const dialog = page.getByRole('dialog', { name: '人员设置' });
   await expect(dialog).toBeVisible();
-  const input = dialog.locator('.el-form-item').filter({ hasText: '直属主管' }).locator('.el-select input');
+  const input = dialog.locator('.el-form-item').filter({ hasText: '绩效直属上级' }).locator('.el-select input');
   await input.fill('方园');
   await expect.poll(() => searchedKeywords).toContain('方园');
 
@@ -317,11 +324,11 @@ test('uses one person settings dialog and shows manager access before saving', a
     name: '方园',
     position: 'HRBP',
   };
-  let settingsBody: unknown;
+  let performanceReviewBody: unknown;
 
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-admin-token');
-    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+    localStorage.setItem('expiresAt', String(Date.now() + 10 * 60_000));
   });
   await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
     contentType: 'application/json',
@@ -362,18 +369,27 @@ test('uses one person settings dialog and shows manager access before saving', a
     });
   });
   await page.route('**/api/v1/users/**', async (route) => {
-    if (route.request().method() === 'PATCH') {
-      settingsBody = route.request().postDataJSON();
-      return route.fulfill({
-        contentType: 'application/json',
-        body: JSON.stringify(apiResponse({ ...employee, directManagerId: manager.id })),
-      });
-    }
     return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify(apiResponse(manager)),
     });
   });
+  await page.route('**/api/v1/employee-archives/employee-yu/performance-manager-review', (route) => {
+    performanceReviewBody = route.request().postDataJSON();
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({
+        id: 'review-manager-change',
+        userId: employee.id,
+        profileReviewStatus: 'not_required',
+        performanceReviewStatus: 'pending',
+      })),
+    });
+  });
+  await page.route('**/api/v1/employee-archives/reviews/list**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 20, items: [] })),
+  }));
 
   await page.goto(`${webBaseUrl}/users`);
   await expect(page.getByRole('columnheader', { name: '岗位', exact: true })).toBeVisible();
@@ -383,17 +399,15 @@ test('uses one person settings dialog and shows manager access before saving', a
   await expect(dialog.getByText('余焱玲的岗位', { exact: true })).toBeVisible();
   await expect(dialog.locator('.el-form-item').filter({ hasText: '余焱玲的岗位' })).toContainText('人事专员');
   await expect(dialog.getByText('余焱玲的系统角色', { exact: true })).toBeVisible();
-  await dialog.locator('.el-form-item').filter({ hasText: '直属主管' }).locator('.el-select').click();
+  await dialog.locator('.el-form-item').filter({ hasText: '绩效直属上级' }).locator('.el-select').click();
   await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '方园' }).click();
   await expect(dialog).toContainText('方园的主管权限');
-  await expect(dialog).toContainText('未开通，保存时一并开通');
-  await expect(dialog).toContainText('保存时将把系统角色升级为主管，岗位 HRBP 保持不变');
-  await dialog.getByRole('button', { name: '保存设置' }).click();
+  await expect(dialog).toContainText('未开通，绩效关系审核通过时自动开通');
+  await expect(dialog).toContainText('绩效关系审核通过时将把系统角色升级为主管，岗位 HRBP 保持不变');
+  await dialog.getByRole('button', { name: '提交审核' }).click();
 
-  await expect.poll(() => settingsBody).toEqual({
-    directManagerId: manager.id,
-    sysRole: 'employee',
-    grantManagerRole: true,
+  await expect.poll(() => performanceReviewBody).toEqual({
+    managerId: manager.id,
   });
 
   await page.getByRole('button', { name: '员工名册' }).click();
@@ -426,7 +440,8 @@ test('opens one employee archive with employment history, contracts and an ident
     ...employee,
     entryDate: '2024-01-01T00:00:00.000Z',
     dept: { id: 'dept-hr', name: '人事部', fullPath: '职能中心/人事部', company: 'fuede' },
-    directManager: { id: 'manager-fang', name: '方园', employeeNo: '002' },
+    performanceManager: { id: 'manager-fang', name: '方园', employeeNo: '002' },
+    rosterManager: { id: 'manager-fang', name: '方园', employeeNo: '002' },
     employeeProfile: {
       phone: '138****0000',
       gender: '女',
@@ -477,7 +492,7 @@ test('opens one employee archive with employment history, contracts and an ident
 
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-admin-token');
-    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+    localStorage.setItem('expiresAt', String(Date.now() + 10 * 60_000));
   });
   await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse(0)),
@@ -554,7 +569,8 @@ test('department tree, organization detail and archive drawer scroll independent
     ...employee,
     entryDate: '2024-01-01T00:00:00.000Z',
     dept: { id: 'dept-0', name: '部门01', fullPath: '孚德 / 部门01', company: 'fuede' },
-    directManager: null,
+    performanceManager: null,
+    rosterManager: null,
     employeeProfile: {},
     employmentHistory: Array.from({ length: 12 }, (_, index) => ({
       id: `employment-${index}`,
@@ -569,7 +585,7 @@ test('department tree, organization detail and archive drawer scroll independent
 
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-admin-token');
-    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+    localStorage.setItem('expiresAt', String(Date.now() + 10 * 60_000));
   });
   await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse(0)),

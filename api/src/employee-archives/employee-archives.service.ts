@@ -115,6 +115,9 @@ export class EmployeeArchivesService {
     return {
       ...archive,
       currentEmployment,
+      performanceManager: archive.directManager,
+      rosterManager: currentEmployment?.directManager ?? null,
+      directManager: undefined,
       dingtalkBindingState: !dingtalkBinding ? 'unbound' : dingtalkBinding.status,
       dingtalkBinding: dingtalkBinding ?? null,
       externalIdentityBindings: undefined,
@@ -124,6 +127,13 @@ export class EmployeeArchivesService {
   async upsertProfile(userId: string, input: UpsertEmployeeProfileInput, operator: AuthUser) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId, deletedAt: null },
+      include: {
+        employeeProfile: true,
+        employmentHistory: {
+          orderBy: { effectiveFrom: 'desc' },
+          take: 1,
+        },
+      },
     });
 
     if (!user) {
@@ -133,49 +143,64 @@ export class EmployeeArchivesService {
       });
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      const profile = await tx.employeeProfile.upsert({
-        where: { userId },
-        create: {
-          userId,
-          phone: input.phone,
-          gender: input.gender,
-        },
-        update: {
-          phone: input.phone,
-          gender: input.gender,
-        },
+    const currentEmployment = user.employmentHistory[0] ?? null;
+    const currentProfile = this.profileReviewData(user.employeeProfile);
+    const proposedProfile = {
+      ...currentProfile,
+      ...(input.phone !== undefined ? { phone: input.phone } : {}),
+      ...(input.gender !== undefined ? { gender: input.gender } : {}),
+    };
+    const employee = this.employeeReviewData(user, currentEmployment, input.phone);
+    const pending = await this.prisma.employeeDataChangeRequest.findFirst({
+      where: { userId, sourceType: 'manual_profile_change', profileReviewStatus: 'pending' },
+      orderBy: { createdAt: 'desc' },
+    });
+    const data = {
+      baseValue: this.toJson({
+        employee: this.employeeReviewData(user, currentEmployment),
+        profile: currentProfile,
+        profileExists: user.employeeProfile !== null,
+        performance: { managerId: user.directManagerId },
+      }),
+      proposedValue: this.toJson({
+        employee,
+        profile: proposedProfile,
+        contracts: [],
+        performance: { managerId: user.directManagerId },
+      }),
+      validationErrors: this.toJson([]),
+      createdById: operator.id,
+      rejectedReason: null,
+    };
+    if (pending) {
+      return this.prisma.employeeDataChangeRequest.update({
+        where: { id: pending.id },
+        data,
       });
-
-      if (input.phone !== undefined) {
-        await tx.user.update({
-          where: { id: userId },
-          data: { phone: input.phone },
-        });
-      }
-
-      await tx.auditLog.create({
-        data: {
-          userId: operator.id,
-          action: 'upsert_employee_profile',
-          entityType: 'employee_profile',
-          entityId: profile.id,
-          oldValue: Prisma.JsonNull,
-          newValue: {
-            userId,
-            phone: input.phone ?? null,
-            gender: input.gender ?? null,
-          },
-        },
-      });
-
-      return profile;
+    }
+    return this.prisma.employeeDataChangeRequest.create({
+      data: {
+        userId,
+        employeeNo: user.employeeNo,
+        employeeName: user.name,
+        sourceType: 'manual_profile_change',
+        ...data,
+        profileReviewStatus: 'pending',
+        performanceReviewStatus: 'not_required',
+      },
     });
   }
 
   async createEmploymentRecord(userId: string, input: CreateEmploymentRecordInput, operator: AuthUser) {
     const user = await this.prisma.user.findUnique({
       where: { id: userId, deletedAt: null },
+      include: {
+        employeeProfile: true,
+        employmentHistory: {
+          orderBy: { effectiveFrom: 'desc' },
+          take: 1,
+        },
+      },
     });
 
     if (!user) {
@@ -185,73 +210,71 @@ export class EmployeeArchivesService {
       });
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      const overlap = await tx.employmentRecord.findFirst({
-        where: {
-          userId,
-          effectiveFrom: { lte: input.effectiveTo ?? new Date('9999-12-31T00:00:00.000Z') },
-          OR: [
-            { effectiveTo: null },
-            { effectiveTo: { gte: input.effectiveFrom } },
-          ],
-        },
-        select: { id: true },
+    const overlap = await this.prisma.employmentRecord.findFirst({
+      where: {
+        userId,
+        effectiveFrom: { lte: input.effectiveTo ?? new Date('9999-12-31T00:00:00.000Z') },
+        OR: [
+          { effectiveTo: null },
+          { effectiveTo: { gte: input.effectiveFrom } },
+        ],
+      },
+      select: { id: true },
+    });
+    if (overlap) {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: '任职生效区间与现有记录重叠',
       });
+    }
 
-      if (overlap) {
-        throw new ConflictException({
-          code: ERROR_CODE.CONFLICT,
-          message: '任职生效区间与现有记录重叠',
-        });
-      }
-
-      const employment = await tx.employmentRecord.create({
-        data: {
-          userId,
-          ...input,
-          createdById: operator.id,
-        },
-      });
-
-      if (this.isCurrentEmployment(input)) {
-        await tx.user.update({
-          where: { id: userId },
-          data: {
-            deptId: input.deptId,
-            position: input.position,
-            directManagerId: input.directManagerId,
-            entryDate: input.entryDate,
-            plannedRegularDate: input.plannedRegularDate,
-            actualRegularDate: input.actualRegularDate,
-            leaveDate: input.leaveDate,
-            employmentType: input.employmentType,
-            status: input.employeeStatus,
-          },
-        });
-      }
-
-      await tx.auditLog.create({
-        data: {
-          userId: operator.id,
-          action: 'create_employment_record',
-          entityType: 'employment_record',
-          entityId: employment.id,
-          oldValue: Prisma.JsonNull,
-          newValue: {
-            userId,
-            effectiveFrom: input.effectiveFrom.toISOString(),
-            effectiveTo: input.effectiveTo?.toISOString() ?? null,
-            company: input.company,
-            deptId: input.deptId ?? null,
-            position: input.position ?? null,
-            directManagerId: input.directManagerId ?? null,
-            employeeStatus: input.employeeStatus,
-            changeType: input.changeType,
-          },
-        },
-      });
-
-      return employment;
+    const currentEmployment = user.employmentHistory[0] ?? null;
+    const baseEmployee = this.employeeReviewData(user, currentEmployment);
+    const proposedEmployee = {
+      ...baseEmployee,
+      company: input.company,
+      deptId: input.deptId ?? null,
+      position: input.position ?? null,
+      jobGrade: input.jobGrade ?? null,
+      jobFamily: input.jobFamily ?? null,
+      managerId: input.directManagerId ?? null,
+      workLocation: input.workLocation ?? null,
+      employmentType: input.employmentType,
+      employeeStatus: input.employeeStatus,
+      entryDate: input.entryDate ?? user.entryDate ?? null,
+      plannedRegularDate: input.plannedRegularDate ?? null,
+      actualRegularDate: input.actualRegularDate ?? null,
+      leaveDate: input.leaveDate ?? null,
+      probationMonths: input.probationMonths ?? null,
+      effectiveFrom: input.effectiveFrom,
+      effectiveTo: input.effectiveTo ?? null,
+      changeType: input.changeType,
+    };
+    const profile = this.profileReviewData(user.employeeProfile);
+    return this.prisma.employeeDataChangeRequest.create({
+      data: {
+        userId,
+        employeeNo: user.employeeNo,
+        employeeName: user.name,
+        sourceType: 'manual_employment_change',
+        sourceBatchId: input.sourceBatchId ?? null,
+        baseValue: this.toJson({
+          employee: baseEmployee,
+          profile,
+          profileExists: user.employeeProfile !== null,
+          performance: { managerId: user.directManagerId },
+        }),
+        proposedValue: this.toJson({
+          employee: proposedEmployee,
+          profile,
+          contracts: [],
+          performance: { managerId: user.directManagerId },
+        }),
+        profileReviewStatus: 'pending',
+        performanceReviewStatus: 'not_required',
+        validationErrors: this.toJson([]),
+        createdById: operator.id,
+      },
     });
   }
 
@@ -357,8 +380,40 @@ export class EmployeeArchivesService {
     });
   }
 
-  private isCurrentEmployment(input: CreateEmploymentRecordInput): boolean {
-    const now = new Date();
-    return input.effectiveFrom <= now && (!input.effectiveTo || input.effectiveTo >= now);
+  private employeeReviewData(
+    user: Record<string, any>,
+    employment: Record<string, any> | null,
+    phoneOverride?: string | null,
+  ): Record<string, unknown> {
+    return {
+      employeeNo: user.employeeNo,
+      name: user.name,
+      phone: phoneOverride !== undefined ? phoneOverride : user.phone,
+      company: employment?.company ?? CompanyCode.fuede,
+      deptId: user.deptId ?? employment?.deptId ?? null,
+      position: user.position ?? employment?.position ?? null,
+      jobGrade: employment?.jobGrade ?? null,
+      jobFamily: employment?.jobFamily ?? null,
+      managerId: employment?.directManagerId ?? null,
+      workLocation: employment?.workLocation ?? null,
+      employmentType: user.employmentType ?? employment?.employmentType ?? EmploymentType.full_time,
+      employeeStatus: user.status ?? employment?.employeeStatus ?? UserStatus.active,
+      entryDate: user.entryDate ?? employment?.entryDate ?? null,
+      plannedRegularDate: user.plannedRegularDate ?? employment?.plannedRegularDate ?? null,
+      actualRegularDate: user.actualRegularDate ?? employment?.actualRegularDate ?? null,
+      leaveDate: user.leaveDate ?? employment?.leaveDate ?? null,
+      probationMonths: employment?.probationMonths ?? null,
+    };
+  }
+
+  private profileReviewData(profile: Record<string, unknown> | null | undefined): Record<string, unknown> {
+    if (!profile) return {};
+    return Object.fromEntries(
+      Object.entries(profile).filter(([key]) => !['id', 'userId', 'createdAt', 'updatedAt'].includes(key)),
+    );
+  }
+
+  private toJson(value: unknown): Prisma.InputJsonValue {
+    return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
   }
 }

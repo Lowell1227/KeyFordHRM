@@ -6,6 +6,7 @@ import {
   ParseUUIDPipe,
   Patch,
   Post,
+  Query,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -22,7 +23,14 @@ import {
   UpdateEmployeeProfileDto,
 } from './dto/employee-archive.dto';
 import { EmployeeArchivesService } from './employee-archives.service';
+import { EmployeeDataReviewsService } from './employee-data-reviews.service';
 import { EmployeeRosterImportService } from './employee-roster-import.service';
+import {
+  ApproveEmployeeDataReviewsDto,
+  EmployeeDataReviewQueryDto,
+  ProposePerformanceManagerDto,
+  SetPendingPerformanceManagerDto,
+} from './dto/employee-data-review.dto';
 
 @Controller('employee-archives')
 @Roles(SysRole.hr, SysRole.system_admin)
@@ -30,7 +38,39 @@ export class EmployeeArchivesController {
   constructor(
     private readonly archives: EmployeeArchivesService,
     private readonly imports: EmployeeRosterImportService,
+    private readonly reviews: EmployeeDataReviewsService,
   ) {}
+
+  @Get('reviews/list')
+  findReviews(@Query() dto: EmployeeDataReviewQueryDto) {
+    return this.reviews.findAll(dto);
+  }
+
+  @Post('reviews/approve')
+  approveReviews(
+    @Body() dto: ApproveEmployeeDataReviewsDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.reviews.approveBatch(dto, operator);
+  }
+
+  @Patch('reviews/:requestId/performance-manager')
+  setPendingPerformanceManager(
+    @Param('requestId', new ParseUUIDPipe({ version: '4' })) requestId: string,
+    @Body() dto: SetPendingPerformanceManagerDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.reviews.setPendingPerformanceManager(requestId, dto.managerId, operator);
+  }
+
+  @Post(':id/performance-manager-review')
+  proposePerformanceManager(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: ProposePerformanceManagerDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.reviews.proposePerformanceManager(id, dto, operator);
+  }
 
   @Get(':id')
   findOne(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {

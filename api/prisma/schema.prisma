@@ -396,62 +396,66 @@ model User {
   directManager User?       @relation("UserManager", fields: [directManagerId], references: [id], onDelete: SetNull)
   subordinates  User[]      @relation("UserManager")
 
-  ledDepartments                            Department[]              @relation("DeptLeader")
-  approvedDepartments                       Department[]              @relation("DeptApprover")
+  ledDepartments                            Department[]                @relation("DeptLeader")
+  approvedDepartments                       Department[]                @relation("DeptApprover")
   createdIndicators                         Indicator[]
   createdTemplates                          AssessmentTemplate[]
-  createdCycles                             AssessmentCycle[]          @relation("CycleCreator")
-  hrOwnedCycles                             AssessmentCycle[]          @relation("CycleHrOwner")
-  employeeTasks                             AssessmentTask[]          @relation("TaskEmployee")
-  managedTasks                              AssessmentTask[]          @relation("TaskManager")
-  deptHeadTasks                             AssessmentTask[]          @relation("TaskDeptHead")
-  approverTasks                             AssessmentTask[]          @relation("TaskApprover")
-  vetoedResults                             GradeResult[]             @relation("GradeVetoOperator")
-  calibratedResults                         GradeResult[]             @relation("GradeHrCalibrator")
-  approvedResults                           GradeResult[]             @relation("GradeApprover")
+  createdCycles                             AssessmentCycle[]           @relation("CycleCreator")
+  hrOwnedCycles                             AssessmentCycle[]           @relation("CycleHrOwner")
+  employeeTasks                             AssessmentTask[]            @relation("TaskEmployee")
+  managedTasks                              AssessmentTask[]            @relation("TaskManager")
+  deptHeadTasks                             AssessmentTask[]            @relation("TaskDeptHead")
+  approverTasks                             AssessmentTask[]            @relation("TaskApprover")
+  vetoedResults                             GradeResult[]               @relation("GradeVetoOperator")
+  calibratedResults                         GradeResult[]               @relation("GradeHrCalibrator")
+  approvedResults                           GradeResult[]               @relation("GradeApprover")
   flowRecords                               FlowRecord[]
   indicatorVisibilityUsers                  IndicatorVisibilityUser[]
-  appeals                                   Appeal[]                  @relation("AppealAppellant")
-  deptResolvedAppeals                       Appeal[]                  @relation("AppealDeptResolver")
-  hrResolvedAppeals                         Appeal[]                  @relation("AppealHrResolver")
+  appeals                                   Appeal[]                    @relation("AppealAppellant")
+  deptResolvedAppeals                       Appeal[]                    @relation("AppealDeptResolver")
+  hrResolvedAppeals                         Appeal[]                    @relation("AppealHrResolver")
   archives                                  PerformanceArchive[]
-  improvementPlans                          ImprovementPlan[]         @relation("ImprovementPlanEmployee")
-  createdImprovementPlans                   ImprovementPlan[]         @relation("ImprovementPlanCreator")
+  improvementPlans                          ImprovementPlan[]           @relation("ImprovementPlanEmployee")
+  createdImprovementPlans                   ImprovementPlan[]           @relation("ImprovementPlanCreator")
   auditLogs                                 AuditLog[]
   signatures                                Signature[]
-  interviewedAsEmployee                     PerformanceInterview[]    @relation("InterviewEmployee")
-  interviewedAsInterviewer                  PerformanceInterview[]    @relation("InterviewInterviewer")
-  probationReviewsAsEmployee                ProbationReview[]         @relation("ProbationReviewEmployee")
-  probationReviewsAsManager                 ProbationReview[]         @relation("ProbationReviewManager")
-  probationReviewsAsHr                      ProbationReview[]         @relation("ProbationReviewHr")
-  createdProbationReviews                   ProbationReview[]         @relation("ProbationReviewCreator")
-  confirmationApplicationsAsEmployee        ConfirmationApplication[] @relation("ConfirmationApplicationEmployee")
-  confirmationApplicationsAsManager         ConfirmationApplication[] @relation("ConfirmationApplicationManager")
-  confirmationApplicationsAsHr              ConfirmationApplication[] @relation("ConfirmationApplicationHr")
-  confirmationApplicationsAsCompanyApprover ConfirmationApplication[] @relation("ConfirmationApplicationCompanyApprover")
-  confirmationApplicationsRejected          ConfirmationApplication[] @relation("ConfirmationApplicationRejectedBy")
-  createdConfirmationApplications           ConfirmationApplication[] @relation("ConfirmationApplicationCreator")
-  ownedObjectives                           Objective[]               @relation("ObjectiveOwner")
-  createdObjectives                         Objective[]               @relation("ObjectiveCreator")
-  assignedActionItems                       ActionItem[]              @relation("ActionItemAssignee")
-  createdActionItems                        ActionItem[]              @relation("ActionItemCreator")
-  createdIndicatorProgressUpdates           IndicatorProgressUpdate[] @relation("IndicatorProgressCreator")
+  interviewedAsEmployee                     PerformanceInterview[]      @relation("InterviewEmployee")
+  interviewedAsInterviewer                  PerformanceInterview[]      @relation("InterviewInterviewer")
+  probationReviewsAsEmployee                ProbationReview[]           @relation("ProbationReviewEmployee")
+  probationReviewsAsManager                 ProbationReview[]           @relation("ProbationReviewManager")
+  probationReviewsAsHr                      ProbationReview[]           @relation("ProbationReviewHr")
+  createdProbationReviews                   ProbationReview[]           @relation("ProbationReviewCreator")
+  confirmationApplicationsAsEmployee        ConfirmationApplication[]   @relation("ConfirmationApplicationEmployee")
+  confirmationApplicationsAsManager         ConfirmationApplication[]   @relation("ConfirmationApplicationManager")
+  confirmationApplicationsAsHr              ConfirmationApplication[]   @relation("ConfirmationApplicationHr")
+  confirmationApplicationsAsCompanyApprover ConfirmationApplication[]   @relation("ConfirmationApplicationCompanyApprover")
+  confirmationApplicationsRejected          ConfirmationApplication[]   @relation("ConfirmationApplicationRejectedBy")
+  createdConfirmationApplications           ConfirmationApplication[]   @relation("ConfirmationApplicationCreator")
+  ownedObjectives                           Objective[]                 @relation("ObjectiveOwner")
+  createdObjectives                         Objective[]                 @relation("ObjectiveCreator")
+  assignedActionItems                       ActionItem[]                @relation("ActionItemAssignee")
+  createdActionItems                        ActionItem[]                @relation("ActionItemCreator")
+  createdIndicatorProgressUpdates           IndicatorProgressUpdate[]   @relation("IndicatorProgressCreator")
   updatedConfigs                            SystemConfig[]
-  notifications                             NotificationLog[]         @relation("NotifReceiver")
-  sentNotifications                         NotificationLog[]         @relation("NotifSender")
-  employeeProfile                          EmployeeProfile?
-  employmentHistory                        EmploymentRecord[]        @relation("EmployeeEmployment")
-  managedEmploymentHistory                 EmploymentRecord[]        @relation("EmploymentManager")
-  createdEmploymentHistory                 EmploymentRecord[]        @relation("EmploymentCreator")
-  externalIdentityBindings                 ExternalIdentityBinding[] @relation("ExternalIdentityEmployee")
-  boundExternalIdentities                  ExternalIdentityBinding[] @relation("ExternalIdentityBoundBy")
-  disabledExternalIdentities               ExternalIdentityBinding[] @relation("ExternalIdentityDisabledBy")
-  endedExternalIdentities                  ExternalIdentityBinding[] @relation("ExternalIdentityEndedBy")
-  operatedEmployeeImports                  EmployeeImportBatch[]     @relation("EmployeeImportOperator")
-  confirmedEmployeeImports                 EmployeeImportBatch[]     @relation("EmployeeImportConfirmer")
-  matchedEmployeeImportRows                EmployeeImportRow[]
-  employeeContracts                        EmployeeContract[]        @relation("EmployeeContractOwner")
-  createdEmployeeContracts                 EmployeeContract[]        @relation("EmployeeContractCreator")
+  notifications                             NotificationLog[]           @relation("NotifReceiver")
+  sentNotifications                         NotificationLog[]           @relation("NotifSender")
+  employeeProfile                           EmployeeProfile?
+  employmentHistory                         EmploymentRecord[]          @relation("EmployeeEmployment")
+  managedEmploymentHistory                  EmploymentRecord[]          @relation("EmploymentManager")
+  createdEmploymentHistory                  EmploymentRecord[]          @relation("EmploymentCreator")
+  externalIdentityBindings                  ExternalIdentityBinding[]   @relation("ExternalIdentityEmployee")
+  boundExternalIdentities                   ExternalIdentityBinding[]   @relation("ExternalIdentityBoundBy")
+  disabledExternalIdentities                ExternalIdentityBinding[]   @relation("ExternalIdentityDisabledBy")
+  endedExternalIdentities                   ExternalIdentityBinding[]   @relation("ExternalIdentityEndedBy")
+  operatedEmployeeImports                   EmployeeImportBatch[]       @relation("EmployeeImportOperator")
+  confirmedEmployeeImports                  EmployeeImportBatch[]       @relation("EmployeeImportConfirmer")
+  matchedEmployeeImportRows                 EmployeeImportRow[]
+  employeeChangeRequests                    EmployeeDataChangeRequest[] @relation("EmployeeChangeSubject")
+  createdEmployeeChangeRequests             EmployeeDataChangeRequest[] @relation("EmployeeChangeCreatedBy")
+  profileReviewedEmployeeChanges            EmployeeDataChangeRequest[] @relation("EmployeeProfileReviewedBy")
+  performanceReviewedEmployeeChanges        EmployeeDataChangeRequest[] @relation("EmployeePerformanceReviewedBy")
+  employeeContracts                         EmployeeContract[]          @relation("EmployeeContractOwner")
+  createdEmployeeContracts                  EmployeeContract[]          @relation("EmployeeContractCreator")
 
   @@index([deptId])
   @@index([directManagerId])
@@ -518,6 +522,8 @@ model EmployeeContract {
   confidentialityAgreement String?   @map("confidentiality_agreement") @db.VarChar(50)
   nonCompeteAgreement      String?   @map("non_compete_agreement") @db.VarChar(50)
   portraitAgreement        String?   @map("portrait_agreement") @db.VarChar(50)
+  isActive                 Boolean   @default(true) @map("is_active")
+  endedAt                  DateTime? @map("ended_at") @db.Timestamptz(6)
   attachmentRef            String?   @map("attachment_ref") @db.VarChar(500)
   sourceBatchId            String?   @map("source_batch_id") @db.Uuid
   createdById              String?   @map("created_by_id") @db.Uuid
@@ -528,6 +534,7 @@ model EmployeeContract {
   createdBy User? @relation("EmployeeContractCreator", fields: [createdById], references: [id], onDelete: SetNull)
 
   @@index([userId, expiresAt])
+  @@index([userId, isActive, expiresAt])
   @@index([sourceBatchId])
   @@map("employee_contracts")
 }
@@ -571,23 +578,23 @@ model EmploymentRecord {
 }
 
 model ExternalIdentityBinding {
-  id               String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  provider         ExternalIdentityProvider @default(dingtalk)
-  userId           String                   @map("user_id") @db.Uuid
-  externalUserId   String?                  @map("external_user_id") @db.VarChar(128)
-  externalUnionId  String                   @map("external_union_id") @db.VarChar(128)
-  status           ExternalIdentityStatus   @default(enabled)
-  boundAt          DateTime                 @default(now()) @map("bound_at") @db.Timestamptz(6)
-  boundById        String?                  @map("bound_by_id") @db.Uuid
-  disabledAt       DateTime?                @map("disabled_at") @db.Timestamptz(6)
-  disabledById     String?                  @map("disabled_by_id") @db.Uuid
-  disabledReason   String?                  @map("disabled_reason") @db.Text
-  endedAt          DateTime?                @map("ended_at") @db.Timestamptz(6)
-  endedById        String?                  @map("ended_by_id") @db.Uuid
-  endedReason      String?                  @map("ended_reason") @db.Text
-  lastLoginAt      DateTime?                @map("last_login_at") @db.Timestamptz(6)
-  createdAt        DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id              String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  provider        ExternalIdentityProvider @default(dingtalk)
+  userId          String                   @map("user_id") @db.Uuid
+  externalUserId  String?                  @map("external_user_id") @db.VarChar(128)
+  externalUnionId String                   @map("external_union_id") @db.VarChar(128)
+  status          ExternalIdentityStatus   @default(enabled)
+  boundAt         DateTime                 @default(now()) @map("bound_at") @db.Timestamptz(6)
+  boundById       String?                  @map("bound_by_id") @db.Uuid
+  disabledAt      DateTime?                @map("disabled_at") @db.Timestamptz(6)
+  disabledById    String?                  @map("disabled_by_id") @db.Uuid
+  disabledReason  String?                  @map("disabled_reason") @db.Text
+  endedAt         DateTime?                @map("ended_at") @db.Timestamptz(6)
+  endedById       String?                  @map("ended_by_id") @db.Uuid
+  endedReason     String?                  @map("ended_reason") @db.Text
+  lastLoginAt     DateTime?                @map("last_login_at") @db.Timestamptz(6)
+  createdAt       DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   user       User  @relation("ExternalIdentityEmployee", fields: [userId], references: [id], onDelete: Restrict)
   boundBy    User? @relation("ExternalIdentityBoundBy", fields: [boundById], references: [id], onDelete: SetNull)
@@ -616,28 +623,65 @@ model EmployeeImportBatch {
   createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  operator  User                @relation("EmployeeImportOperator", fields: [operatorId], references: [id], onDelete: Restrict)
-  confirmer User?               @relation("EmployeeImportConfirmer", fields: [confirmedById], references: [id], onDelete: SetNull)
-  rows      EmployeeImportRow[]
+  operator       User                        @relation("EmployeeImportOperator", fields: [operatorId], references: [id], onDelete: Restrict)
+  confirmer      User?                       @relation("EmployeeImportConfirmer", fields: [confirmedById], references: [id], onDelete: SetNull)
+  rows           EmployeeImportRow[]
+  changeRequests EmployeeDataChangeRequest[]
 
   @@index([operatorId, createdAt(sort: Desc)])
   @@index([status, createdAt(sort: Desc)])
   @@map("employee_import_batches")
 }
 
+model EmployeeDataChangeRequest {
+  id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                  String?   @map("user_id") @db.Uuid
+  employeeNo              String?   @map("employee_no") @db.VarChar(30)
+  employeeName            String    @map("employee_name") @db.VarChar(50)
+  sourceType              String    @map("source_type") @db.VarChar(40)
+  sourceBatchId           String?   @map("source_batch_id") @db.Uuid
+  sourceRowNumber         Int?      @map("source_row_number")
+  baseValue               Json      @default("{}") @map("base_value") @db.JsonB
+  proposedValue           Json      @map("proposed_value") @db.JsonB
+  profileReviewStatus     String    @default("pending") @map("profile_review_status") @db.VarChar(20)
+  performanceReviewStatus String    @default("not_required") @map("performance_review_status") @db.VarChar(20)
+  validationErrors        Json      @default("[]") @map("validation_errors") @db.JsonB
+  createdById             String    @map("created_by_id") @db.Uuid
+  profileReviewedById     String?   @map("profile_reviewed_by_id") @db.Uuid
+  profileReviewedAt       DateTime? @map("profile_reviewed_at") @db.Timestamptz(6)
+  performanceReviewedById String?   @map("performance_reviewed_by_id") @db.Uuid
+  performanceReviewedAt   DateTime? @map("performance_reviewed_at") @db.Timestamptz(6)
+  rejectedReason          String?   @map("rejected_reason") @db.Text
+  appliedAt               DateTime? @map("applied_at") @db.Timestamptz(6)
+  createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user                  User?                @relation("EmployeeChangeSubject", fields: [userId], references: [id], onDelete: SetNull)
+  sourceBatch           EmployeeImportBatch? @relation(fields: [sourceBatchId], references: [id], onDelete: SetNull)
+  createdBy             User                 @relation("EmployeeChangeCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  profileReviewedBy     User?                @relation("EmployeeProfileReviewedBy", fields: [profileReviewedById], references: [id], onDelete: SetNull)
+  performanceReviewedBy User?                @relation("EmployeePerformanceReviewedBy", fields: [performanceReviewedById], references: [id], onDelete: SetNull)
+
+  @@unique([sourceBatchId, sourceRowNumber])
+  @@index([profileReviewStatus, createdAt(sort: Desc)])
+  @@index([performanceReviewStatus, createdAt(sort: Desc)])
+  @@index([userId, createdAt(sort: Desc)])
+  @@map("employee_data_change_requests")
+}
+
 model EmployeeImportRow {
-  id               String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  batchId          String   @map("batch_id") @db.Uuid
-  rowNumber        Int      @map("row_number")
-  normalizedValue  Json     @map("normalized_value") @db.JsonB
-  matchedUserId    String?  @map("matched_user_id") @db.Uuid
-  diffs            Json     @default("[]") @db.JsonB
-  errors           Json     @default("[]") @db.JsonB
-  warnings         Json     @default("[]") @db.JsonB
-  action           String   @db.VarChar(30)
-  manualMapping    Json?    @map("manual_mapping") @db.JsonB
-  createdAt        DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id              String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  batchId         String   @map("batch_id") @db.Uuid
+  rowNumber       Int      @map("row_number")
+  normalizedValue Json     @map("normalized_value") @db.JsonB
+  matchedUserId   String?  @map("matched_user_id") @db.Uuid
+  diffs           Json     @default("[]") @db.JsonB
+  errors          Json     @default("[]") @db.JsonB
+  warnings        Json     @default("[]") @db.JsonB
+  action          String   @db.VarChar(30)
+  manualMapping   Json?    @map("manual_mapping") @db.JsonB
+  createdAt       DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   batch       EmployeeImportBatch @relation(fields: [batchId], references: [id], onDelete: Cascade)
   matchedUser User?               @relation(fields: [matchedUserId], references: [id], onDelete: SetNull)

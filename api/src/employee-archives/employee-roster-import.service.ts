@@ -96,18 +96,18 @@ export class EmployeeRosterImportService {
     if (!batch) {
       throw new BadRequestException({ code: ERROR_CODE.NOT_FOUND, message: '导入批次不存在' });
     }
-    if (batch.status !== 'ready_to_confirm') {
+    if (!['ready_to_confirm', 'needs_resolution'].includes(batch.status)) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '该批次当前不可确认' });
     }
     if (batch.fileHash !== fileHash) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '确认文件与预检文件不一致' });
     }
-    if (batch.rows.some((row) => row.action === 'blocked' || this.hasItems(row.errors))) {
-      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '批次仍有阻断项，不能确认' });
-    }
-
     const rawByRowNumber = new Map(rows.map((row) => [row.rowNumber, row]));
     const actionableRows = batch.rows.filter((row) => row.action === 'create' || row.action === 'update');
+    const hasBlockedRows = batch.rows.some((row) => row.action === 'blocked' || this.hasItems(row.errors));
+    if (actionableRows.length === 0 && hasBlockedRows) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '没有可提交审核的有效员工行' });
+    }
     if (actionableRows.some((row) => !rawByRowNumber.has(row.rowNumber))) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '确认文件行结构与预检不一致' });
     }
@@ -121,172 +121,134 @@ export class EmployeeRosterImportService {
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '该批次已被其他操作处理' });
       }
 
-      const organizationIds = batch.mode === 'full'
-        ? await this.synchronizeFullRosterOrganization(tx, rows)
-        : undefined;
-
-      const userIdByRow = new Map<number, string>();
-      for (const importRow of actionableRows) {
-        const raw = rawByRowNumber.get(importRow.rowNumber)!;
-        const normalized = this.normalizedEmployee(importRow.normalizedValue, organizationIds);
-        const commonData = {
-          employeeNo: raw.employee.employeeNo!,
-          name: raw.employee.name!,
-          phone: raw.profile.phone,
-          deptId: normalized.deptId,
-          position: raw.employee.position,
-          entryDate: raw.employee.entryDate,
-          plannedRegularDate: raw.employee.plannedRegularDate,
-          actualRegularDate: raw.employee.actualRegularDate,
-          employmentType: normalized.employmentType,
-          status: normalized.employeeStatus,
-          accountType: AccountType.employee,
-          leaveDate: null,
-        };
-        const isIncrementalUpdate = batch.mode === 'incremental' && importRow.action === 'update';
-        const updateData: Prisma.UserUncheckedUpdateInput = isIncrementalUpdate
-          ? this.withoutNullish({
-            name: raw.employee.name,
-            employeeNo: raw.employee.employeeNo,
-            phone: raw.profile.phone,
-            deptId: normalized.deptId,
-            position: raw.employee.position,
-            entryDate: raw.employee.entryDate,
-            plannedRegularDate: raw.employee.plannedRegularDate,
-            actualRegularDate: raw.employee.actualRegularDate,
-            employmentType: raw.employee.employmentTypeText ? normalized.employmentType : undefined,
-            status: raw.employee.employeeStatusText ? normalized.employeeStatus : undefined,
-            accountType: AccountType.employee,
-          }) as Prisma.UserUncheckedUpdateInput
-          : commonData;
-
-        if (importRow.action === 'create') {
-          const created = await tx.user.create({
-            data: {
-              ...commonData,
-            },
-            select: { id: true },
-          });
-          userIdByRow.set(importRow.rowNumber, created.id);
-        } else {
-          if (!importRow.matchedUserId) {
-            throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: `第 ${importRow.rowNumber} 行未匹配员工` });
-          }
-          await tx.user.update({ where: { id: importRow.matchedUserId }, data: updateData });
-          userIdByRow.set(importRow.rowNumber, importRow.matchedUserId);
-        }
-      }
-
-      const managerNames = rows
-        .map((row) => row.employee.managerName)
-        .filter((name): name is string => Boolean(name));
-      const managerByName = new Map<string, string>();
-      const rosterUserIdsByName = new Map<string, string[]>();
-      for (const importRow of actionableRows) {
-        const raw = rawByRowNumber.get(importRow.rowNumber)!;
-        const userId = userIdByRow.get(importRow.rowNumber)!;
-        const name = raw.employee.name;
-        if (!name) continue;
-        rosterUserIdsByName.set(name, [...(rosterUserIdsByName.get(name) ?? []), userId]);
-      }
-      for (const [name, userIds] of rosterUserIdsByName) {
-        if (userIds.length === 1) managerByName.set(name, userIds[0]);
-      }
-      const unresolvedManagerNames = [...new Set(managerNames.filter((name) => !managerByName.has(name)))];
-      const managerCandidates = unresolvedManagerNames.length
-        ? await tx.user.findMany({
-          where: { name: { in: unresolvedManagerNames }, deletedAt: null, accountType: AccountType.employee },
-          select: { id: true, name: true },
+      const organizationSourceRows = batch.mode === 'full' && hasBlockedRows
+        ? actionableRows.map((row) => rawByRowNumber.get(row.rowNumber)!).filter(Boolean)
+        : rows;
+      const organizationPlan = batch.mode === 'full' ? buildRosterOrganizationPlan(organizationSourceRows) : [];
+      const currentOrganizationDepartments = batch.mode === 'full'
+        ? await tx.department.findMany({
+          select: {
+            fullPath: true,
+            name: true,
+            company: true,
+            sortOrder: true,
+            isActive: true,
+          },
         })
         : [];
-      const existingManagerIdsByName = new Map<string, string[]>();
-      for (const manager of managerCandidates) {
-        existingManagerIdsByName.set(manager.name, [...(existingManagerIdsByName.get(manager.name) ?? []), manager.id]);
+      const desiredOrganizationPaths = new Set(organizationPlan.map((node) => this.normalizeOrgPath(node.fullPath)));
+      const organizationNeedsReview = batch.mode === 'full' && (
+        organizationPlan.some((node) => {
+          const currentNode = currentOrganizationDepartments.find((department) => (
+            department.fullPath
+            && this.normalizeOrgPath(department.fullPath) === this.normalizeOrgPath(node.fullPath)
+          ));
+          return !currentNode
+            || currentNode.name !== node.name
+            || currentNode.company !== node.company
+            || currentNode.sortOrder !== node.sortOrder
+            || !currentNode.isActive;
+        })
+        || currentOrganizationDepartments.some((department) => (
+          department.isActive
+          && department.fullPath
+          && !desiredOrganizationPaths.has(this.normalizeOrgPath(department.fullPath))
+        ))
+      );
+      const organizationReviewCarrierRow = organizationNeedsReview ? actionableRows[0]?.rowNumber : null;
+      const topLevelLeaderNames = new Set(
+        organizationPlan
+          .filter((node) => node.depth === 0 && node.leaderName)
+          .map((node) => node.leaderName!),
+      );
+      const leaderDepartmentPathsByName = new Map<string, string[][]>();
+      for (const node of organizationPlan) {
+        if (!node.leaderName) continue;
+        const paths = leaderDepartmentPathsByName.get(node.leaderName) ?? [];
+        paths.push(node.fullPath.split(' / '));
+        leaderDepartmentPathsByName.set(node.leaderName, paths);
       }
-      for (const [name, userIds] of existingManagerIdsByName) {
-        if (userIds.length === 1) managerByName.set(name, userIds[0]);
-      }
-      if (batch.mode === 'full' && organizationIds) {
-        await this.synchronizeFullRosterOrganizationLeaders(
-          tx,
-          rows,
-          organizationIds,
-          managerByName,
-        );
-      }
-
-      const today = this.startOfUtcDay(new Date());
-      const yesterday = new Date(today.getTime() - 86_400_000);
+      let submitted = 0;
       for (const importRow of actionableRows) {
         const raw = rawByRowNumber.get(importRow.rowNumber)!;
-        const normalized = this.normalizedEmployee(importRow.normalizedValue, organizationIds);
-        const userId = userIdByRow.get(importRow.rowNumber)!;
+        const normalized = this.normalizedEmployee(importRow.normalizedValue);
+        const current = importRow.matchedUserId
+          ? await tx.user.findUnique({
+            where: { id: importRow.matchedUserId },
+            select: {
+              employeeNo: true,
+              name: true,
+              phone: true,
+              deptId: true,
+              position: true,
+              entryDate: true,
+              plannedRegularDate: true,
+              actualRegularDate: true,
+              leaveDate: true,
+              employmentType: true,
+              status: true,
+              directManagerId: true,
+              employeeProfile: true,
+              employeeContracts: {
+                where: { isActive: true },
+                select: {
+                  contractType: true,
+                  sequence: true,
+                  name: true,
+                  signedAt: true,
+                  expiresAt: true,
+                  termType: true,
+                  originalCompany: true,
+                  newCompany: true,
+                  confidentialityAgreement: true,
+                  nonCompeteAgreement: true,
+                  portraitAgreement: true,
+                },
+              },
+              dept: { select: { parentId: true, leaderId: true, fullPath: true } },
+              employmentHistory: {
+                where: {
+                  effectiveFrom: { lte: new Date() },
+                  OR: [{ effectiveTo: null }, { effectiveTo: { gte: new Date() } }],
+                },
+                orderBy: { effectiveFrom: 'desc' },
+                take: 1,
+                include: {
+                  directManager: { select: { id: true, name: true } },
+                },
+              },
+            },
+          })
+          : null;
+        const currentEmployment = current?.employmentHistory?.[0];
         const isIncrementalUpdate = batch.mode === 'incremental' && importRow.action === 'update';
-        const current = await tx.employmentRecord.findFirst({
-          where: {
-            userId,
-            effectiveFrom: { lte: today },
-            OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }],
-          },
-          orderBy: { effectiveFrom: 'desc' },
-          select: {
-            id: true,
-            effectiveFrom: true,
-            company: true,
-            deptId: true,
-            position: true,
-            jobGrade: true,
-            jobFamily: true,
-            directManagerId: true,
-            workLocation: true,
-            employmentType: true,
-            employeeStatus: true,
-            entryDate: true,
-            plannedRegularDate: true,
-            actualRegularDate: true,
-            probationMonths: true,
-          },
-        });
-        if (raw.employee.managerName && !managerByName.has(raw.employee.managerName)) {
-          throw new ConflictException({
-            code: ERROR_CODE.CONFLICT,
-            message: `第 ${importRow.rowNumber} 行直属上级无法唯一匹配，请重新预检`,
-          });
+        const organizationPath = batch.mode === 'full' ? raw.employee.departmentPath : [];
+        const targetFullPath = organizationPath.join(' / ');
+        const currentDepartmentMatches = Boolean(
+          current?.dept?.fullPath
+          && this.normalizeOrgPath(current.dept.fullPath) === this.normalizeOrgPath(targetFullPath),
+        );
+        const organizationLeaderPaths = leaderDepartmentPathsByName.get(raw.employee.name ?? '') ?? [];
+        const requiredOrganizationFullPaths = new Set<string>();
+        for (const path of [organizationPath, ...organizationLeaderPaths]) {
+          path.forEach((_, index) => requiredOrganizationFullPaths.add(path.slice(0, index + 1).join(' / ')));
         }
-        const directManagerId = isIncrementalUpdate && !raw.employee.managerName
-          ? current?.directManagerId ?? null
-          : raw.employee.managerName
-            ? managerByName.get(raw.employee.managerName) ?? null
-            : null;
-
-        if (!isIncrementalUpdate || raw.employee.managerName) {
-          await tx.user.update({ where: { id: userId }, data: { directManagerId } });
-        }
-        const profileData = this.profileData(raw.profile);
-        const profileUpdateData = isIncrementalUpdate ? this.withoutNullish(profileData) : profileData;
-        if (!isIncrementalUpdate || Object.keys(profileUpdateData).length > 0) {
-          await tx.employeeProfile.upsert({
-            where: { userId },
-            create: { userId, ...profileUpdateData },
-            update: profileUpdateData,
-          });
-        }
-
-        const recordData = {
+        const organizationNodes = organizationPlan.filter((node) => requiredOrganizationFullPaths.has(node.fullPath));
+        const organizationEnsurePaths = importRow.rowNumber === organizationReviewCarrierRow
+          ? organizationPlan.map((node) => node.fullPath.split(' / '))
+          : [];
+        const proposedEmployee = {
+          ...raw.employee,
+          name: raw.employee.name ?? current?.name ?? null,
+          employeeNo: raw.employee.employeeNo ?? current?.employeeNo ?? null,
+          phone: isIncrementalUpdate && raw.profile.phone == null ? current?.phone ?? null : raw.profile.phone,
           company: normalized.company,
-          deptId: normalized.deptId,
-          position: raw.employee.position,
-          jobGrade: isIncrementalUpdate && raw.employee.jobGrade == null ? current?.jobGrade ?? null : raw.employee.jobGrade,
-          jobFamily: isIncrementalUpdate && raw.employee.jobFamily == null ? current?.jobFamily ?? null : raw.employee.jobFamily,
-          directManagerId,
-          workLocation: isIncrementalUpdate && raw.employee.workLocation == null ? current?.workLocation ?? null : raw.employee.workLocation,
-          employmentType: isIncrementalUpdate && !raw.employee.employmentTypeText
-            ? current?.employmentType ?? normalized.employmentType
-            : normalized.employmentType,
-          employeeStatus: isIncrementalUpdate && !raw.employee.employeeStatusText
-            ? current?.employeeStatus ?? normalized.employeeStatus
-            : normalized.employeeStatus,
-          entryDate: raw.employee.entryDate,
+          deptId: normalized.deptId ?? (currentDepartmentMatches ? current?.deptId ?? null : null),
+          position: isIncrementalUpdate && raw.employee.position == null ? current?.position ?? null : raw.employee.position,
+          jobGrade: isIncrementalUpdate && raw.employee.jobGrade == null ? currentEmployment?.jobGrade ?? null : raw.employee.jobGrade,
+          jobFamily: isIncrementalUpdate && raw.employee.jobFamily == null ? currentEmployment?.jobFamily ?? null : raw.employee.jobFamily,
+          workLocation: isIncrementalUpdate && raw.employee.workLocation == null ? currentEmployment?.workLocation ?? null : raw.employee.workLocation,
+          entryDate: isIncrementalUpdate && raw.employee.entryDate == null ? current?.entryDate ?? null : raw.employee.entryDate,
           plannedRegularDate: isIncrementalUpdate && raw.employee.plannedRegularDate == null
             ? current?.plannedRegularDate ?? null
             : raw.employee.plannedRegularDate,
@@ -294,131 +256,289 @@ export class EmployeeRosterImportService {
             ? current?.actualRegularDate ?? null
             : raw.employee.actualRegularDate,
           probationMonths: isIncrementalUpdate && raw.employee.probationMonths == null
-            ? current?.probationMonths ?? null
+            ? currentEmployment?.probationMonths ?? null
             : raw.employee.probationMonths,
-          reason: '花名册导入确认',
-          sourceType: 'employee_roster_import',
-          sourceBatchId: batchId,
-          createdById: operator.id,
+          employmentType: isIncrementalUpdate && !raw.employee.employmentTypeText
+            ? current?.employmentType ?? normalized.employmentType
+            : normalized.employmentType,
+          employeeStatus: isIncrementalUpdate && !raw.employee.employeeStatusText
+            ? current?.status ?? normalized.employeeStatus
+            : normalized.employeeStatus,
+          ...(batch.mode === 'full'
+            ? {
+              organizationPath,
+              organizationLeaderPaths,
+              organizationNodes: importRow.rowNumber === organizationReviewCarrierRow ? organizationPlan : organizationNodes,
+              organizationEnsurePaths,
+            }
+            : {}),
         };
-        const effectiveTo = recordData.employeeStatus === UserStatus.resigned ? today : null;
-        if (!current) {
-          await tx.employmentRecord.create({
-            data: {
-              userId,
-              effectiveFrom: importRow.action === 'create' ? raw.employee.entryDate! : today,
-              effectiveTo,
-              changeType: importRow.action === 'create' ? 'hire' : 'data_correction',
-              ...recordData,
+        const parsedProfile = this.profileData(raw.profile);
+        const currentProfile = this.profileReviewData(current?.employeeProfile);
+        const proposedProfile = isIncrementalUpdate
+          ? { ...currentProfile, ...this.withoutNullish(parsedProfile) }
+          : parsedProfile;
+        const approvedPerformanceManagerId = current?.directManagerId ?? null;
+        const isTopLevelLeader = !approvedPerformanceManagerId
+          && !raw.employee.managerName
+          && (
+            topLevelLeaderNames.has(raw.employee.name ?? '')
+            || (
+              current?.dept?.parentId === null
+              && current.dept.leaderId === importRow.matchedUserId
+            )
+          );
+        const needsPerformanceReview = !approvedPerformanceManagerId && !isTopLevelLeader;
+        const currentEmployee = current ? {
+          employeeNo: current.employeeNo,
+          name: current.name,
+          phone: current.phone,
+          company: currentEmployment?.company ?? normalized.company,
+          deptId: current.deptId,
+          position: current.position,
+          jobGrade: currentEmployment?.jobGrade ?? null,
+          jobFamily: currentEmployment?.jobFamily ?? null,
+          managerName: currentEmployment?.directManager?.name ?? null,
+          workLocation: currentEmployment?.workLocation ?? null,
+          entryDate: current.entryDate,
+          plannedRegularDate: current.plannedRegularDate,
+          actualRegularDate: current.actualRegularDate,
+          leaveDate: current.leaveDate,
+          probationMonths: currentEmployment?.probationMonths ?? null,
+          employmentType: current.employmentType,
+          employeeStatus: current.status,
+        } : null;
+        const employeeReviewKeys = [
+          'employeeNo', 'name', 'phone', 'company', 'deptId', 'position', 'jobGrade', 'jobFamily',
+          'managerName', 'workLocation', 'entryDate', 'plannedRegularDate', 'actualRegularDate',
+          'leaveDate', 'probationMonths', 'employmentType', 'employeeStatus',
+        ];
+        const leaderFullPaths = organizationLeaderPaths.map((path) => path.join(' / '));
+        const currentLeaderDepartments = leaderFullPaths.length > 0
+          ? await tx.department.findMany({
+            where: { name: { in: organizationLeaderPaths.map((path) => path.at(-1)!) } },
+            select: { fullPath: true, leaderId: true },
+          })
+          : [];
+        const currentOrganizationLeaders = Object.fromEntries(leaderFullPaths.map((fullPath) => [
+          fullPath,
+          currentLeaderDepartments.find((department) => (
+            department.fullPath
+            && this.normalizeOrgPath(department.fullPath) === this.normalizeOrgPath(fullPath)
+          ))?.leaderId ?? null,
+        ]));
+        const needsLeaderReview = leaderFullPaths.some((fullPath) => (
+          currentOrganizationLeaders[fullPath]
+            !== importRow.matchedUserId
+        ));
+        const needsProfileReview = !current
+          || !this.sameReviewRecord(currentEmployee, proposedEmployee, employeeReviewKeys)
+          || !this.sameReviewRecord(currentProfile, proposedProfile)
+          || !this.sameContractSet(current?.employeeContracts ?? [], raw.contracts)
+          || needsLeaderReview
+          || importRow.rowNumber === organizationReviewCarrierRow;
+        if (!needsProfileReview && !needsPerformanceReview) continue;
+        const validationErrors = !needsPerformanceReview || raw.employee.managerName
+          ? []
+          : ['绩效直属上级待设置'];
+        const proposedValue = this.toJson({
+          employee: proposedEmployee,
+          profile: proposedProfile,
+          contracts: raw.contracts,
+          performance: approvedPerformanceManagerId
+            ? {
+              managerId: approvedPerformanceManagerId,
+              suggestedRosterManagerName: raw.employee.managerName,
+            }
+            : {
+              managerName: raw.employee.managerName,
+              suggestedRosterManagerName: raw.employee.managerName,
             },
-          });
-        } else if (this.startOfUtcDay(current.effectiveFrom) < today) {
-          await tx.employmentRecord.update({ where: { id: current.id }, data: { effectiveTo: yesterday } });
-          await tx.employmentRecord.create({
-            data: { userId, effectiveFrom: today, effectiveTo, changeType: 'data_correction', ...recordData },
-          });
-        } else {
-          await tx.employmentRecord.update({
-            where: { id: current.id },
-            data: { effectiveTo, changeType: 'data_correction', ...recordData },
-          });
-        }
-
-        if (raw.contracts.length > 0) {
-          await tx.employeeContract.createMany({
-            data: raw.contracts.map((contract) => ({
-              userId,
-              contractType: contract.kind,
-              sequence: contract.sequence,
-              name: contract.name,
-              signingCompany: raw.employee.companyText,
-              signedAt: contract.signedAt,
-              effectiveFrom: contract.signedAt,
-              expiresAt: contract.expiresAt,
-              termType: contract.termText,
-              originalCompany: contract.originalCompany,
-              newCompany: contract.newCompany,
-              confidentialityAgreement: contract.confidentialityAgreement,
-              nonCompeteAgreement: contract.nonCompeteAgreement,
-              portraitAgreement: contract.portraitAgreement,
-              sourceBatchId: batchId,
-              createdById: operator.id,
-            })),
-          });
-        }
-        await tx.employeeImportRow.updateMany({
-          where: { batchId, rowNumber: importRow.rowNumber },
-          data: { matchedUserId: userId },
         });
+        const equivalentPending = await tx.employeeDataChangeRequest.findFirst({
+          where: {
+            sourceType: 'employee_roster_import',
+            ...(importRow.matchedUserId
+              ? { userId: importRow.matchedUserId }
+              : { userId: null, employeeNo: raw.employee.employeeNo }),
+            OR: [
+              { profileReviewStatus: 'pending' },
+              { performanceReviewStatus: 'pending' },
+            ],
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+        if (equivalentPending && this.sameChangeProposal(equivalentPending.proposedValue, proposedValue)) {
+          continue;
+        }
+        await tx.employeeDataChangeRequest.create({
+          data: {
+            userId: importRow.matchedUserId,
+            employeeNo: raw.employee.employeeNo,
+            employeeName: raw.employee.name!,
+            sourceType: 'employee_roster_import',
+            sourceBatchId: batchId,
+            sourceRowNumber: importRow.rowNumber,
+            baseValue: this.toJson(current ? {
+              employee: currentEmployee,
+              profile: currentProfile,
+              profileExists: current.employeeProfile !== null,
+              contracts: current.employeeContracts,
+              performance: { managerId: current.directManagerId },
+              organizationLeaders: currentOrganizationLeaders,
+            } : {}),
+            proposedValue,
+            profileReviewStatus: needsProfileReview ? 'pending' : 'not_required',
+            performanceReviewStatus: needsPerformanceReview ? 'pending' : 'not_required',
+            validationErrors: this.toJson(validationErrors),
+            createdById: operator.id,
+          },
+        });
+        submitted += 1;
       }
 
-      let resigned = 0;
-      if (batch.mode === 'full') {
-        const missingRows = batch.rows.filter((row) => row.action === 'possible_resignation' && row.matchedUserId);
-        for (const missingRow of missingRows) {
-          const userId = missingRow.matchedUserId!;
-          const archived = await tx.user.updateMany({
-            where: { id: userId, accountType: AccountType.employee, status: { not: UserStatus.resigned } },
-            data: { status: UserStatus.resigned, leaveDate: today, directManagerId: null },
-          });
-          if (archived.count !== 1) continue;
-          resigned++;
-          const currentEmployment = await tx.employmentRecord.findFirst({
-            where: {
-              userId,
-              effectiveFrom: { lte: today },
-              OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }],
-            },
-            orderBy: { effectiveFrom: 'desc' },
-            select: { id: true },
-          });
-          if (currentEmployment) {
-            await tx.employmentRecord.update({
-              where: { id: currentEmployment.id },
-              data: {
-                effectiveTo: today,
-                employeeStatus: UserStatus.resigned,
-                leaveDate: today,
-                changeType: 'departure',
-                reason: '未出现在已确认的全量花名册',
+      if (batch.mode === 'full' && !hasBlockedRows) {
+        const today = this.startOfUtcDay(new Date());
+        for (const missingRow of batch.rows.filter((row) => row.action === 'possible_resignation' && row.matchedUserId)) {
+          const current = await tx.user.findUnique({
+            where: { id: missingRow.matchedUserId! },
+            select: {
+              employeeNo: true,
+              name: true,
+              phone: true,
+              deptId: true,
+              position: true,
+              entryDate: true,
+              plannedRegularDate: true,
+              actualRegularDate: true,
+              leaveDate: true,
+              employmentType: true,
+              status: true,
+              directManagerId: true,
+              employeeProfile: true,
+              employeeContracts: {
+                where: { isActive: true },
+                select: {
+                  contractType: true,
+                  sequence: true,
+                  name: true,
+                  signedAt: true,
+                  expiresAt: true,
+                  termType: true,
+                  originalCompany: true,
+                  newCompany: true,
+                  confidentialityAgreement: true,
+                  nonCompeteAgreement: true,
+                  portraitAgreement: true,
+                },
               },
-            });
-          }
-          await tx.externalIdentityBinding.updateMany({
-            where: { userId, status: ExternalIdentityStatus.enabled, endedAt: null },
-            data: {
-              status: ExternalIdentityStatus.disabled,
-              disabledAt: new Date(),
-              disabledById: operator.id,
-              disabledReason: '员工未出现在已确认的全量花名册',
+              employmentHistory: {
+                where: {
+                  effectiveFrom: { lte: today },
+                  OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }],
+                },
+                orderBy: { effectiveFrom: 'desc' },
+                take: 1,
+              },
             },
           });
+          const employment = current?.employmentHistory?.[0];
+          if (!current || !employment) continue;
+          const profile = this.profileReviewData(current.employeeProfile);
+          const employee = {
+            employeeNo: current.employeeNo,
+            name: current.name,
+            phone: current.phone,
+            company: employment.company,
+            deptId: current.deptId,
+            position: current.position,
+            jobGrade: employment.jobGrade,
+            jobFamily: employment.jobFamily,
+            managerId: employment.directManagerId,
+            workLocation: employment.workLocation,
+            entryDate: current.entryDate,
+            plannedRegularDate: current.plannedRegularDate,
+            actualRegularDate: current.actualRegularDate,
+            leaveDate: today,
+            probationMonths: employment.probationMonths,
+            employmentType: current.employmentType,
+            employeeStatus: UserStatus.resigned,
+          };
+          const proposedValue = this.toJson({
+            employee,
+            profile,
+            contracts: [],
+            performance: { managerId: current.directManagerId },
+          });
+          const equivalentPending = await tx.employeeDataChangeRequest.findFirst({
+            where: {
+              userId: missingRow.matchedUserId,
+              sourceType: 'employee_roster_import',
+              profileReviewStatus: 'pending',
+            },
+            orderBy: { createdAt: 'desc' },
+          });
+          if (equivalentPending && this.sameChangeProposal(equivalentPending.proposedValue, proposedValue)) {
+            continue;
+          }
+          await tx.employeeDataChangeRequest.create({
+            data: {
+              userId: missingRow.matchedUserId,
+              employeeNo: current.employeeNo,
+              employeeName: current.name,
+              sourceType: 'employee_roster_import',
+              sourceBatchId: batchId,
+              sourceRowNumber: missingRow.rowNumber,
+              baseValue: this.toJson({
+                employee: { ...employee, leaveDate: current.leaveDate, employeeStatus: current.status },
+                profile,
+                profileExists: current.employeeProfile !== null,
+                contracts: current.employeeContracts,
+                performance: { managerId: current.directManagerId },
+              }),
+              proposedValue,
+              profileReviewStatus: 'pending',
+              performanceReviewStatus: 'not_required',
+              validationErrors: this.toJson([]),
+              createdById: operator.id,
+            },
+          });
+          submitted += 1;
         }
       }
 
-      const created = actionableRows.filter((row) => row.action === 'create').length;
-      const updated = actionableRows.filter((row) => row.action === 'update').length;
       await tx.employeeImportBatch.update({
         where: { id: batchId },
         data: {
-          status: 'completed',
+          status: submitted > 0 ? 'pending_review' : 'completed',
           confirmedById: operator.id,
           confirmedAt: new Date(),
-          summary: this.toJson({ ...(batch.summary as object), created, updated, resigned }),
+          summary: this.toJson({
+            ...(batch.summary as object),
+            submitted,
+            ...(batch.mode === 'full' ? { organizationPlan } : {}),
+          }),
         },
       });
       await tx.auditLog.create({
         data: {
           userId: operator.id,
-          action: 'confirm_employee_roster_import',
+          action: 'submit_employee_roster_review',
           entityType: 'employee_import_batch',
           entityId: batchId,
-          newValue: { mode: batch.mode, created, updated, resigned, fileHashVerified: true },
+          newValue: {
+            mode: batch.mode,
+            submitted,
+            fileHashVerified: true,
+          },
         },
       });
-      return batch.mode === 'full'
-        ? { batchId, status: 'completed' as const, created, updated, resigned }
-        : { batchId, status: 'completed' as const, created, updated };
+      return {
+        batchId,
+        status: submitted > 0 ? 'pending_review' as const : 'completed' as const,
+        submitted,
+      };
+
     }, { timeout: 60_000 });
   }
 
@@ -571,7 +691,11 @@ export class EmployeeRosterImportService {
         matchedUserId: user.id,
         diffs: this.toJson([]),
         errors: this.toJson([]),
-        warnings: this.toJson(['员工未出现在本次全量花名册；确认全量导入后将归档为离职']),
+        warnings: this.toJson([
+          blockingErrorCount > 0
+            ? '员工未出现在本次全量花名册；因本批次存在问题行，本次不会自动归档离职'
+            : '员工未出现在本次全量花名册；确认并审核通过后将归档为离职',
+        ]),
         action: 'possible_resignation',
       });
       warningCount++;
@@ -590,106 +714,18 @@ export class EmployeeRosterImportService {
       missingFromFullRosterCount: missing.length,
       desiredDepartmentCount: organizationPlan.length,
     };
-    const canConfirm = blockingErrorCount === 0;
+    const canConfirm = createCount + updateCount > 0
+      || (blockingErrorCount === 0 && missing.length > 0);
     await this.prisma.employeeImportBatch.update({
       where: { id: batch.id },
       data: {
         status: canConfirm ? 'ready_to_confirm' : 'needs_resolution',
-        summary: this.toJson(summary),
+        summary: this.toJson({ ...summary, organizationPlan }),
         errorSummary: this.toJson({ blockingErrorCount, warningCount }),
       },
     });
 
     return { batchId: batch.id, canConfirm, summary };
-  }
-
-  private async synchronizeFullRosterOrganization(
-    tx: Prisma.TransactionClient,
-    rows: ParsedEmployeeRosterRow[],
-  ): Promise<Map<string, string>> {
-    const plan = buildRosterOrganizationPlan(rows);
-    if (plan.length === 0) {
-      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '全量花名册没有可用的部门路径' });
-    }
-
-    const existingDepartments = await tx.department.findMany({
-      select: { id: true, fullPath: true },
-    });
-    const existingByPath = new Map<string, { id: string }>();
-    for (const department of existingDepartments) {
-      if (!department.fullPath) continue;
-      const path = this.normalizeOrgPath(department.fullPath);
-      if (!existingByPath.has(path)) existingByPath.set(path, department);
-    }
-
-    const idsByKey = new Map<string, string>();
-    for (const node of plan) {
-      const parentId = node.parentKey ? idsByKey.get(node.parentKey) : null;
-      if (node.parentKey && !parentId) {
-        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: `组织上级缺失：${node.fullPath}` });
-      }
-      const existing = existingByPath.get(this.normalizeOrgPath(node.fullPath));
-      if (existing) {
-        await tx.department.update({
-          where: { id: existing.id },
-          data: {
-            name: node.name,
-            fullPath: node.fullPath,
-            parentId,
-            company: node.company,
-            sortOrder: node.sortOrder,
-            isActive: true,
-            dingtalkDeptId: null,
-          },
-        });
-        idsByKey.set(node.key, existing.id);
-      } else {
-        const created = await tx.department.create({
-          data: {
-            name: node.name,
-            fullPath: node.fullPath,
-            parentId,
-            company: node.company,
-            sortOrder: node.sortOrder,
-            isActive: true,
-          },
-          select: { id: true },
-        });
-        idsByKey.set(node.key, created.id);
-      }
-    }
-
-    const desiredIds = [...idsByKey.values()];
-    await tx.department.updateMany({
-      where: { id: { notIn: desiredIds } },
-      data: { isActive: false },
-    });
-    return idsByKey;
-  }
-
-  private async synchronizeFullRosterOrganizationLeaders(
-    tx: Prisma.TransactionClient,
-    rows: ParsedEmployeeRosterRow[],
-    organizationIds: Map<string, string>,
-    userIdsByName: Map<string, string>,
-  ): Promise<void> {
-    for (const node of buildRosterOrganizationPlan(rows)) {
-      const departmentId = organizationIds.get(node.key);
-      if (!departmentId) {
-        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: `组织映射缺失：${node.fullPath}` });
-      }
-      const leaderId = node.leaderName ? userIdsByName.get(node.leaderName) : null;
-      if (node.leaderName && !leaderId) {
-        throw new ConflictException({
-          code: ERROR_CODE.CONFLICT,
-          message: `部门负责人无法唯一匹配：${node.fullPath} → ${node.leaderName}`,
-        });
-      }
-      await tx.department.update({
-        where: { id: departmentId },
-        data: { leaderId: leaderId ?? null },
-      });
-    }
   }
 
   private matchDepartment(
@@ -843,18 +879,17 @@ export class EmployeeRosterImportService {
     return Array.isArray(value) && value.length > 0;
   }
 
-  private normalizedEmployee(value: Prisma.JsonValue, organizationIds?: Map<string, string>): {
+  private normalizedEmployee(value: Prisma.JsonValue): {
     company: CompanyCode;
-    deptId: string;
+    deptId: string | null;
     employmentType: EmploymentType;
     employeeStatus: UserStatus;
   } {
     const employee = value && typeof value === 'object' && !Array.isArray(value)
       ? (value as Record<string, any>).employee
       : null;
-    const deptId = employee?.deptId
-      ?? (employee?.organizationKey ? organizationIds?.get(employee.organizationKey as string) : undefined);
-    if (!deptId) {
+    const deptId = employee?.deptId ?? null;
+    if (!deptId && !employee?.organizationKey) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '预检组织映射缺失，请重新预检' });
     }
     return {
@@ -902,10 +937,83 @@ export class EmployeeRosterImportService {
     };
   }
 
+  private profileReviewData(profile: Record<string, unknown> | null | undefined): Record<string, unknown> {
+    if (!profile) return {};
+    return Object.fromEntries(
+      Object.entries(profile).filter(([key]) => !['id', 'userId', 'createdAt', 'updatedAt'].includes(key)),
+    );
+  }
+
   private withoutNullish<T extends Record<string, unknown>>(value: T): Partial<T> {
     return Object.fromEntries(
       Object.entries(value).filter(([, item]) => item !== null && item !== undefined),
     ) as Partial<T>;
+  }
+
+  private sameReviewRecord(
+    left: Record<string, unknown> | null,
+    right: Record<string, unknown>,
+    selectedKeys?: string[],
+  ): boolean {
+    if (!left) return false;
+    const ignoredKeys = new Set(['idNumberEncrypted', 'bankAccountEncrypted']);
+    const keys = selectedKeys ?? [...new Set([...Object.keys(left), ...Object.keys(right)])];
+    return keys
+      .filter((key) => !ignoredKeys.has(key))
+      .every((key) => this.comparableValue(left[key]) === this.comparableValue(right[key]));
+  }
+
+  private comparableValue(value: unknown): string {
+    if (value === undefined || value === null || value === '') return 'null';
+    if (value instanceof Date) return value.toISOString();
+    if (Buffer.isBuffer(value)) return value.toString('base64');
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
+  }
+
+  private sameContractSet(
+    current: Array<Record<string, unknown>>,
+    proposed: ParsedEmployeeRosterRow['contracts'],
+  ): boolean {
+    const normalize = (contract: Record<string, unknown>) => ({
+      contractType: contract.contractType ?? contract.kind ?? 'contract',
+      sequence: contract.sequence ?? 0,
+      name: contract.name ?? null,
+      signedAt: this.comparableValue(contract.signedAt),
+      expiresAt: this.comparableValue(contract.expiresAt),
+      termType: contract.termType ?? contract.termText ?? null,
+      originalCompany: contract.originalCompany ?? null,
+      newCompany: contract.newCompany ?? null,
+      confidentialityAgreement: contract.confidentialityAgreement ?? null,
+      nonCompeteAgreement: contract.nonCompeteAgreement ?? null,
+      portraitAgreement: contract.portraitAgreement ?? null,
+    });
+    const sortKey = (contract: ReturnType<typeof normalize>) => `${contract.contractType}:${contract.sequence}`;
+    const left = current.map((item) => normalize(item)).sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+    const right = proposed
+      .map((item) => normalize(item as unknown as Record<string, unknown>))
+      .sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+    return JSON.stringify(left) === JSON.stringify(right);
+  }
+
+  private sameChangeProposal(left: unknown, right: unknown): boolean {
+    const normalize = (value: unknown, key?: string): unknown => {
+      if (key === 'idNumberEncrypted' || key === 'bankAccountEncrypted') return undefined;
+      if (value === undefined || value === null || value === '') return null;
+      if (value instanceof Date) return value.toISOString();
+      if (Buffer.isBuffer(value)) return undefined;
+      if (Array.isArray(value)) return value.map((item) => normalize(item));
+      if (typeof value === 'object') {
+        return Object.fromEntries(
+          Object.entries(value as Record<string, unknown>)
+            .sort(([leftKey], [rightKey]) => leftKey.localeCompare(rightKey))
+            .map(([childKey, childValue]) => [childKey, normalize(childValue, childKey)])
+            .filter(([, childValue]) => childValue !== undefined),
+        );
+      }
+      return value;
+    };
+    return JSON.stringify(normalize(left)) === JSON.stringify(normalize(right));
   }
 
   private encryptAndFingerprint(value: string | null): { encrypted: Buffer; fingerprint: string } | null {
