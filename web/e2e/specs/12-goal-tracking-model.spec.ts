@@ -10,6 +10,7 @@ import {
   selectGoalTrackingCycles,
 } from '../../src/views/objectives/goal-tracking';
 import { getTaskStageState, TASK_STATUS_STAGE } from '../../src/views/task/task-stage';
+import { buildIndicatorVersionHistory } from '../../src/views/objectives/indicator-version-history';
 
 test('目标确认后该环节显示已完成，但不提前开放自评', () => {
   expect(TASK_STATUS_STAGE.goal_confirmed).toBe('goal-confirmation');
@@ -138,6 +139,44 @@ test('maps indicator progress health independently from assessment lifecycle sta
   expect(goalTrackingStatus({ progress: 60, healthStatus: 'at_risk' } as any)).toBe('存在风险');
   expect(goalTrackingStatus({ progress: 70, healthStatus: 'blocked' } as any)).toBe('已阻塞');
   expect(goalTrackingStatus({ progress: 100, healthStatus: 'completed' } as any)).toBe('已完成');
+});
+
+test('keeps execution updates out of formal indicator versions and shows only changed fields', () => {
+  const versions = buildIndicatorVersionHistory([
+    {
+      id: 'progress', taskId: 'task-1', cycleId: 'cycle-1',
+      action: 'progress_update', oldValue: null, newValue: { progress: 60 },
+      actorId: 'employee-1', actorName: '刘伟', createdAt: '2026-08-20T08:00:00.000Z',
+    },
+    {
+      id: 'unsupported-delete', taskId: 'task-1', cycleId: 'cycle-1',
+      action: 'indicator_deleted', oldValue: { version: 2 }, newValue: { version: 3 },
+      actorId: 'manager-1', actorName: '林治', createdAt: '2026-08-19T08:00:00.000Z',
+    },
+    {
+      id: 'v2', taskId: 'task-1', cycleId: 'cycle-1',
+      action: 'indicator_updated',
+      oldValue: { version: 1, name: '产品上线', description: '完成开发', weight: 0.5 },
+      newValue: { version: 2, name: '产品上线', description: '完成开发及验收', weight: 0.5, reason: '增加验收要求' },
+      actorId: 'manager-1', actorName: '林治', createdAt: '2026-08-18T08:00:00.000Z',
+    },
+    {
+      id: 'v1', taskId: 'task-1', cycleId: 'cycle-1',
+      action: 'indicator_baseline_confirmed', oldValue: null,
+      newValue: { version: 1, name: '产品上线', description: '完成开发', weight: 0.5 },
+      actorId: 'employee-1', actorName: '刘伟', createdAt: '2026-07-01T08:00:00.000Z',
+    },
+  ] as any);
+
+  expect(versions.map((version) => [version.id, version.version, version.isCurrent]))
+    .toEqual([['v2', 2, true], ['v1', 1, false]]);
+  expect(versions[0].changes).toEqual([{
+    field: 'description',
+    label: '指标描述',
+    before: '完成开发',
+    after: '完成开发及验收',
+  }]);
+  expect(versions[0].reason).toBe('增加验收要求');
 });
 
 test('validates persisted visible columns and collapse booleans', () => {

@@ -554,7 +554,13 @@ export class ObjectivesService {
     }
 
     const changeRecords = await this.prisma.auditLog.findMany({
-      where: { entityType: 'indicator_instance', entityId: indicator.id },
+      where: {
+        entityType: 'indicator_instance',
+        entityId: indicator.id,
+        action: {
+          in: ['indicator_baseline_confirmed', 'indicator_updated'],
+        },
+      },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       include: { user: { select: { id: true, name: true } } },
     });

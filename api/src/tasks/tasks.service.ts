@@ -1,5 +1,5 @@
 import { ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { AssessmentTask, IndicatorVisibilityScope, ObjectiveLevel, Prisma, SysRole, TaskStatus } from '@prisma/client';
+import { AssessmentTask, IndicatorInstance, IndicatorVisibilityScope, ObjectiveLevel, Prisma, SysRole, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DataScopeService } from '@/common/services/data-scope.service';
 import { NotificationsService, TaskReminderNodeType } from '@/notifications/notifications.service';
@@ -21,6 +21,12 @@ import { ObjectivesService } from '@/objectives/objectives.service';
 import { IndicatorReferenceItem, IndicatorVisibilityService } from './indicator-visibility.service';
 import { ReferenceIndicatorQueryDto } from './dto/reference-indicator-query.dto';
 import { assertTaskVersion, claimTaskVersion } from './task-version';
+
+type IndicatorBaselineSource = IndicatorInstance & {
+  visibleDepartments: Array<{ departmentId: string }>;
+  visibleUsers: Array<{ userId: string }>;
+  objectiveAlignments: Array<{ objectiveId: string }>;
+};
 
 /** 任务列表项。 */
 export interface TaskListItem {
@@ -439,12 +445,60 @@ export class TasksService {
     const targetStatus: TaskStatus = !cycle?.selfEvalOpenAt || cycle.selfEvalOpenAt <= now
       ? 'self_eval'
       : 'goal_confirmed';
-    const result = await this.flowService.transition({
-      task,
-      action: 'submit',
-      targetStatus,
-      actorId: viewer.id,
-      taskUpdate: { indicatorConfirmedAt: now },
+    const result = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.assessmentTask.updateMany({
+        where: { id: task.id, status: TaskStatus.indicator_confirming },
+        data: { indicatorConfirmedAt: now },
+      });
+      if (claimed.count !== 1) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '目标已确认或状态已变化，请刷新后重试',
+        });
+      }
+
+      const indicators = await tx.indicatorInstance.findMany({
+        where: { taskId: task.id },
+        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+        include: {
+          visibleDepartments: {
+            orderBy: { departmentId: 'asc' },
+            select: { departmentId: true },
+          },
+          visibleUsers: {
+            orderBy: { userId: 'asc' },
+            select: { userId: true },
+          },
+          objectiveAlignments: {
+            orderBy: { objectiveId: 'asc' },
+            select: { objectiveId: true },
+          },
+        },
+      });
+      if (indicators.length > 0) {
+        await tx.auditLog.createMany({
+          data: indicators.map((indicator) => ({
+            userId: viewer.id,
+            action: 'indicator_baseline_confirmed',
+            entityType: 'indicator_instance',
+            entityId: indicator.id,
+            oldValue: Prisma.JsonNull,
+            newValue: this.buildIndicatorBaseline(indicator),
+          })),
+        });
+      }
+      return this.flowService.transitionTx(tx, {
+        task,
+        action: 'submit',
+        targetStatus,
+        actorId: viewer.id,
+        extraData: {
+          type: 'indicator_baseline_confirmed',
+          version: 1,
+          count: indicators.length,
+        },
+        taskUpdate: { indicatorConfirmedAt: now },
+      });
     });
 
     await this.notificationsService.create({
@@ -487,14 +541,25 @@ export class TasksService {
       });
     }
 
-    const result = await this.flowService.transition({
-      task,
-      action: 'reject',
-      targetStatus,
-      actorId: viewer.id,
-      comment,
-      extraData: { reason: comment },
-      taskUpdate: { indicatorConfirmedAt: null },
+    const result = await this.prisma.$transaction(async (tx) => {
+      const claimedUpdatedAt = await claimTaskVersion(
+        tx,
+        task.id,
+        task.updatedAt.toISOString(),
+        task.status,
+      );
+      return this.flowService.transitionTx(tx, {
+        task,
+        action: 'reject',
+        targetStatus,
+        actorId: viewer.id,
+        comment,
+        extraData: { reason: comment },
+        taskUpdate: {
+          indicatorConfirmedAt: null,
+          updatedAt: claimedUpdatedAt,
+        },
+      });
     });
 
     if (isEmployee && task.managerId) {
@@ -1611,6 +1676,41 @@ export class TasksService {
         extraData: fr.extraData,
         createdAt: fr.createdAt,
       })),
+    };
+  }
+
+  /**
+   * 员工最终确认时形成正式基线。这里只保存指标结构字段，执行进展、评分和草稿
+   * 继续走各自记录，避免把一次确认放大成整张考核表的冗余快照。
+   */
+  private buildIndicatorBaseline(indicator: IndicatorBaselineSource): Prisma.InputJsonObject {
+    return {
+      version: 1,
+      taskId: indicator.taskId,
+      templateIndicatorId: indicator.templateIndicatorId,
+      name: indicator.name,
+      description: indicator.description ?? null,
+      scoringStandard: indicator.scoringStandard ?? null,
+      dataSource: indicator.dataSource ?? null,
+      dataCaliber: indicator.dataCaliber ?? null,
+      targetValue: indicator.targetValue?.toNumber?.() ?? null,
+      targetValueText: indicator.targetValueText ?? null,
+      unit: indicator.unit ?? null,
+      weight: indicator.weight?.toNumber?.() ?? Number(indicator.weight ?? 0),
+      indicatorType: indicator.indicatorType,
+      dimensionName: indicator.dimensionName ?? null,
+      dimensionWeight: indicator.dimensionWeight?.toNumber?.() ?? Number(indicator.dimensionWeight ?? 0),
+      visibilityScope: indicator.visibilityScope ?? IndicatorVisibilityScope.supervisors,
+      visibleDepartmentIds: indicator.visibleDepartments
+        .map((item) => item.departmentId)
+        .sort(),
+      visibleUserIds: indicator.visibleUsers
+        .map((item) => item.userId)
+        .sort(),
+      alignedObjectiveIds: indicator.objectiveAlignments
+        .map((item) => item.objectiveId)
+        .sort(),
+      sortOrder: indicator.sortOrder,
     };
   }
 

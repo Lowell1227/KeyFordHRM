@@ -34,6 +34,7 @@ describe('TasksService', () => {
     managerEvalSummary: { upsert: jest.Mock; update: jest.Mock };
     gradeResult: { upsert: jest.Mock; findUnique: jest.Mock };
     flowRecord: { create: jest.Mock; findFirst: jest.Mock };
+    auditLog: { createMany: jest.Mock };
     systemConfig: { findUnique: jest.Mock };
     $transaction: jest.Mock;
   };
@@ -64,6 +65,7 @@ describe('TasksService', () => {
     gradeResult: { upsert: jest.Mock; findUnique: jest.Mock };
     systemConfig: { findUnique: jest.Mock };
     flowRecord: { create: jest.Mock; findFirst: jest.Mock };
+    auditLog: { createMany: jest.Mock };
   };
 
   beforeEach(async () => {
@@ -82,6 +84,7 @@ describe('TasksService', () => {
       gradeResult: { upsert: jest.fn(), findUnique: jest.fn().mockResolvedValue(null) },
       systemConfig: { findUnique: jest.fn().mockResolvedValue(null) },
       flowRecord: { create: jest.fn(), findFirst: jest.fn().mockResolvedValue(null) },
+      auditLog: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
     };
     prisma = {
       assessmentTask: {
@@ -99,6 +102,7 @@ describe('TasksService', () => {
       managerEvalSummary: transactionClient.managerEvalSummary,
       gradeResult: transactionClient.gradeResult,
       flowRecord: transactionClient.flowRecord,
+      auditLog: transactionClient.auditLog,
       systemConfig: { findUnique: jest.fn() },
       $transaction: jest.fn(async (cb) => cb(transactionClient)),
     };
@@ -1360,33 +1364,147 @@ describe('TasksService', () => {
   });
 
   describe('goal confirmation self-evaluation gate', () => {
+    it('creates the approved V1 baseline only when the employee confirms the goal', async () => {
+      const confirmedAt = new Date('2026-12-28T08:00:00.000Z');
+      prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('indicator_confirming'));
+      prisma.assessmentCycle.findUnique.mockResolvedValue({ selfEvalOpenAt: new Date('2027-04-01T00:00:00.000Z') });
+      transactionClient.indicatorInstance.findMany.mockResolvedValue([
+        {
+          ...makeIndicator({
+            id: 'ind-1',
+            name: '产品按期上线',
+            description: '完成产品开发和客户验证',
+            targetValue: new Prisma.Decimal(3),
+            weight: new Prisma.Decimal(0.6),
+          }),
+          templateIndicatorId: 'template-ind-1',
+          visibleDepartments: [{ departmentId: 'dept-2' }, { departmentId: 'dept-1' }],
+          visibleUsers: [{ userId: 'user-2' }, { userId: 'user-1' }],
+          objectiveAlignments: [{ objectiveId: 'objective-2' }, { objectiveId: 'objective-1' }],
+        },
+      ]);
+      flowService.transitionTx.mockResolvedValue({ newStatus: 'goal_confirmed' });
+      jest.useFakeTimers().setSystemTime(confirmedAt);
+
+      await service.confirmIndicators('task-1', makeViewer({ id: 'emp-1' }));
+
+      expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
+        where: { id: 'task-1', status: TaskStatus.indicator_confirming },
+        data: { indicatorConfirmedAt: confirmedAt },
+      });
+      expect(transactionClient.indicatorInstance.findMany).toHaveBeenCalledWith({
+        where: { taskId: 'task-1' },
+        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+        include: {
+          visibleDepartments: {
+            orderBy: { departmentId: 'asc' },
+            select: { departmentId: true },
+          },
+          visibleUsers: {
+            orderBy: { userId: 'asc' },
+            select: { userId: true },
+          },
+          objectiveAlignments: {
+            orderBy: { objectiveId: 'asc' },
+            select: { objectiveId: true },
+          },
+        },
+      });
+      expect(transactionClient.auditLog.createMany).toHaveBeenCalledWith({
+        data: [{
+          userId: 'emp-1',
+          action: 'indicator_baseline_confirmed',
+          entityType: 'indicator_instance',
+          entityId: 'ind-1',
+          oldValue: Prisma.JsonNull,
+          newValue: expect.objectContaining({
+            version: 1,
+            name: '产品按期上线',
+            description: '完成产品开发和客户验证',
+            targetValue: 3,
+            weight: 0.6,
+            templateIndicatorId: 'template-ind-1',
+            visibleDepartmentIds: ['dept-1', 'dept-2'],
+            visibleUserIds: ['user-1', 'user-2'],
+            alignedObjectiveIds: ['objective-1', 'objective-2'],
+          }),
+        }],
+      });
+      expect(flowService.transitionTx).toHaveBeenCalledWith(
+        transactionClient,
+        expect.objectContaining({
+          targetStatus: 'goal_confirmed',
+          taskUpdate: { indicatorConfirmedAt: confirmedAt },
+        }),
+      );
+      jest.useRealTimers();
+    });
+
+    it('rejects a repeated confirmation before writing another V1 baseline', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('indicator_confirming'));
+      prisma.assessmentCycle.findUnique.mockResolvedValue({ selfEvalOpenAt: null });
+      transactionClient.assessmentTask.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await expect(
+        service.confirmIndicators('task-1', makeViewer({ id: 'emp-1' })),
+      ).rejects.toThrow(ConflictException);
+
+      expect(transactionClient.auditLog.createMany).not.toHaveBeenCalled();
+      expect(flowService.transitionTx).not.toHaveBeenCalled();
+    });
+
+    it('does not let a stale rejection overwrite a concurrently confirmed baseline', async () => {
+      const staleTask = makeTask('indicator_confirming');
+      prisma.assessmentTask.findUnique.mockResolvedValue(staleTask);
+      transactionClient.assessmentTask.updateMany.mockResolvedValueOnce({ count: 0 });
+
+      await expect(
+        service.rejectIndicators('task-1', '需要调整', makeViewer({ id: 'emp-1' })),
+      ).rejects.toThrow(ConflictException);
+
+      expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
+        where: {
+          id: 'task-1',
+          updatedAt: staleTask.updatedAt,
+          status: TaskStatus.indicator_confirming,
+        },
+        data: { updatedAt: expect.any(Date) },
+      });
+      expect(flowService.transitionTx).not.toHaveBeenCalled();
+      expect(flowService.transition).not.toHaveBeenCalled();
+    });
+
     it('keeps a confirmed goal waiting when self evaluation has not opened', async () => {
       prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('indicator_confirming'));
       prisma.assessmentCycle.findUnique.mockResolvedValue({
         selfEvalOpenAt: new Date('2027-04-01T00:00:00.000Z'),
       });
-      flowService.transition.mockResolvedValue({ newStatus: 'goal_confirmed' });
+      flowService.transitionTx.mockResolvedValue({ newStatus: 'goal_confirmed' });
       jest.useFakeTimers().setSystemTime(new Date('2026-12-28T08:00:00.000Z'));
 
       await expect(service.confirmIndicators('task-1', makeViewer({ id: 'emp-1' })))
         .resolves.toEqual({ id: 'task-1', status: 'goal_confirmed' });
-      expect(flowService.transition).toHaveBeenCalledWith(expect.objectContaining({
-        targetStatus: 'goal_confirmed',
-        taskUpdate: { indicatorConfirmedAt: new Date('2026-12-28T08:00:00.000Z') },
-      }));
+      expect(flowService.transitionTx).toHaveBeenCalledWith(
+        transactionClient,
+        expect.objectContaining({
+          targetStatus: 'goal_confirmed',
+          taskUpdate: { indicatorConfirmedAt: new Date('2026-12-28T08:00:00.000Z') },
+        }),
+      );
       jest.useRealTimers();
     });
 
     it('keeps legacy cycles without an explicit self-evaluation opening time on the original direct flow', async () => {
       prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('indicator_confirming'));
       prisma.assessmentCycle.findUnique.mockResolvedValue({ selfEvalOpenAt: null });
-      flowService.transition.mockResolvedValue({ newStatus: 'self_eval' });
+      flowService.transitionTx.mockResolvedValue({ newStatus: 'self_eval' });
 
       await expect(service.confirmIndicators('task-1', makeViewer({ id: 'emp-1' })))
         .resolves.toEqual({ id: 'task-1', status: 'self_eval' });
-      expect(flowService.transition).toHaveBeenCalledWith(expect.objectContaining({
-        targetStatus: 'self_eval',
-      }));
+      expect(flowService.transitionTx).toHaveBeenCalledWith(
+        transactionClient,
+        expect.objectContaining({ targetStatus: 'self_eval' }),
+      );
     });
 
     it('rejects self evaluation writes while the task is still waiting to open', async () => {

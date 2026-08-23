@@ -1341,7 +1341,19 @@ test.describe('09-performance-workspace tracking behavior', () => {
       canEdit: true,
       alignedObjectives: [{ id: 'objective-1', title: '提升经营质量', level: 'company', ownerId: 'vp-1' }],
       progressUpdates: [listResult.items[0].latestProgress],
-      changeRecords: [],
+      changeRecords: [
+        {
+          id: 'audit-v2', action: 'indicator_updated',
+          oldValue: { version: 1, targetValueText: '完成季度预算的 95%', description: '跟进季度 GMV 达成情况' },
+          newValue: { version: 2, targetValueText: '完成季度预算的 100%', description: '覆盖销售、门店与 B2B' },
+          actorId: 'manager-1', actorName: '林治', createdAt: '2026-08-10T08:00:00.000Z',
+        },
+        {
+          id: 'audit-v1', action: 'indicator_baseline_confirmed', oldValue: null,
+          newValue: { version: 1, targetValueText: '完成季度预算的 95%', description: '跟进季度 GMV 达成情况' },
+          actorId: 'employee-1', actorName: '刘伟', createdAt: '2026-07-01T08:00:00.000Z',
+        },
+      ],
       createdAt: '2026-07-01T00:00:00.000Z',
       updatedAt: '2026-08-01T08:00:00.000Z',
     };
@@ -1374,16 +1386,23 @@ test.describe('09-performance-workspace tracking behavior', () => {
     await expect(drawer.getByRole('heading', { name: 'GMV 达成率' })).toBeVisible();
     await expect(drawer).toContainText('有效权重 16%');
     await expect(drawer).toContainText('完成首轮投放');
-    await expect(drawer.getByText('指标描述', { exact: true })).toBeVisible();
-    await expect(drawer).toContainText('销售、门店与B2B：跟进季度 GMV 达成情况');
-    await expect(drawer).not.toContainText('realistic-demo-v1');
-    await expect(drawer.getByText('指标类型', { exact: true })).toHaveCount(0);
-    await expect(drawer.getByText('目标值', { exact: true })).toHaveCount(0);
-    await expect(drawer.getByText('评分标准', { exact: true })).toBeVisible();
-    await expect(drawer.getByText('达到预算目标得满分', { exact: true })).toBeVisible();
-    await expect(drawer.getByText('经营报表', { exact: true })).toHaveCount(0);
-    await expect(drawer.getByText('财务确认口径', { exact: true })).toHaveCount(0);
+    const infoSection = drawer.locator('#goal-detail-info');
+    await expect(infoSection.getByText('指标描述', { exact: true })).toBeVisible();
+    await expect(infoSection).toContainText('销售、门店与B2B：跟进季度 GMV 达成情况');
+    await expect(infoSection).not.toContainText('realistic-demo-v1');
+    await expect(infoSection.getByText('指标类型', { exact: true })).toHaveCount(0);
+    await expect(infoSection.getByText('目标值', { exact: true })).toHaveCount(0);
+    await expect(infoSection.getByText('评分标准', { exact: true })).toBeVisible();
+    await expect(infoSection.getByText('达到预算目标得满分', { exact: true })).toBeVisible();
+    await expect(infoSection.getByText('经营报表', { exact: true })).toHaveCount(0);
+    await expect(infoSection.getByText('财务确认口径', { exact: true })).toHaveCount(0);
     await expect(drawer.getByRole('button', { name: '查看数据说明' })).toHaveCount(0);
+    await expect(drawer.getByTestId('indicator-version-audit-v2')).toContainText('V2 · 当前版本');
+    await expect(drawer.getByTestId('indicator-version-audit-v2')).toContainText('目标值');
+    await expect(drawer.getByTestId('indicator-version-audit-v2')).toContainText('完成季度预算的 95%');
+    await expect(drawer.getByTestId('indicator-version-audit-v2')).toContainText('完成季度预算的 100%');
+    await expect(drawer.getByTestId('indicator-version-audit-v1')).toContainText('V1 · 审批基线');
+    await expect(drawer.getByTestId('indicator-version-audit-v1')).not.toContainText('更新指标进展');
     await drawer.getByRole('button', { name: '更新进展' }).click();
 
     const form = drawer.getByTestId('goal-tracking-progress-form');

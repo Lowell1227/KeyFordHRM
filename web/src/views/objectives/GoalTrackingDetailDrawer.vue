@@ -8,6 +8,7 @@ import type {
   GoalTrackingHealthStatus,
   GoalTrackingIndicatorDetail,
 } from '@/types/api.types';
+import { buildIndicatorVersionHistory } from './indicator-version-history';
 
 const props = defineProps<{ indicatorId: string }>();
 const emit = defineEmits<{ close: []; updated: [] }>();
@@ -36,6 +37,7 @@ const form = reactive<{
 
 const opened = computed(() => Boolean(props.indicatorId));
 const latestProgress = computed(() => detail.value?.progressUpdates[0] ?? null);
+const indicatorVersions = computed(() => buildIndicatorVersionHistory(detail.value?.changeRecords ?? []));
 const displayDescription = computed(() => (
   detail.value?.description?.trim().replace(/^realistic-demo-v\d+\s*[；;:：]\s*/i, '') ?? ''
 ));
@@ -204,14 +206,6 @@ function visibilityLabel(scope?: string) {
   }[scope ?? 'supervisors'] ?? '按权限可见';
 }
 
-function changeActionLabel(action: string) {
-  return {
-    progress_update: '更新指标进展',
-    indicator_created: '创建考核指标',
-    indicator_updated: '调整考核指标',
-    indicator_deleted: '删除考核指标',
-  }[action] ?? action;
-}
 </script>
 
 <template>
@@ -363,14 +357,43 @@ function changeActionLabel(action: string) {
       </section>
 
       <section id="goal-detail-changes" class="goal-detail__card goal-detail__section">
-        <h3>指标变更记录</h3>
-        <ol v-if="detail.changeRecords.length" class="goal-change-list">
-          <li v-for="record in detail.changeRecords" :key="record.id">
-            <strong>{{ formatDate(record.createdAt) }}</strong>
-            <p>{{ record.actorName || '系统' }} · {{ changeActionLabel(record.action) }}</p>
+        <div class="goal-detail__section-title">
+          <div>
+            <h3>指标版本</h3>
+            <p class="goal-change-list__hint">只记录审批基线和正式变更，草稿与自动保存不生成版本。</p>
+          </div>
+          <span v-if="indicatorVersions.length" class="goal-change-list__current">
+            当前 V{{ indicatorVersions[0].version }}
+          </span>
+        </div>
+        <ol v-if="indicatorVersions.length" class="goal-change-list">
+          <li
+            v-for="version in indicatorVersions"
+            :key="version.id"
+            :data-testid="`indicator-version-${version.id}`"
+          >
+            <details :open="version.isCurrent && version.changes.length > 0">
+              <summary>
+                <span class="goal-change-list__version">
+                  V{{ version.version }} · {{ version.isBaseline ? '审批基线' : version.isCurrent ? '当前版本' : '历史版本' }}<template v-if="version.isBaseline && version.isCurrent">（当前）</template>
+                </span>
+                <span class="goal-change-list__meta">
+                  {{ version.actorName }} · {{ formatDate(version.createdAt) }}
+                </span>
+              </summary>
+              <div v-if="version.changes.length" class="goal-change-list__diffs">
+                <div v-for="change in version.changes" :key="change.field" class="goal-change-list__diff">
+                  <strong>{{ change.label }}</strong>
+                  <div><span>变更前</span><p>{{ change.before }}</p></div>
+                  <div><span>变更后</span><p>{{ change.after }}</p></div>
+                </div>
+              </div>
+              <p v-else class="goal-change-list__baseline">{{ version.emptyMessage }}</p>
+              <p v-if="version.reason" class="goal-change-list__reason">变更原因：{{ version.reason }}</p>
+            </details>
           </li>
         </ol>
-        <p v-else class="goal-detail__empty">暂无指标变更记录</p>
+        <p v-else class="goal-detail__empty">目标确认后将自动形成审批基线 V1</p>
       </section>
     </article>
   </el-drawer>
@@ -486,6 +509,109 @@ function changeActionLabel(action: string) {
   font-size: 18px;
 }
 
+.goal-change-list__hint {
+  margin: -8px 0 0;
+  color: #8a95a8;
+  font-size: 12px;
+}
+
+.goal-change-list__current {
+  padding: 4px 9px;
+  border-radius: 999px;
+  color: #278557;
+  background: #eaf7f0;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.goal-change-list {
+  display: grid;
+  gap: 10px;
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.goal-change-list > li {
+  overflow: hidden;
+  border: 1px solid #e6eaf1;
+  border-radius: 10px;
+  background: #fff;
+}
+
+.goal-change-list summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.goal-change-list summary::-webkit-details-marker {
+  display: none;
+}
+
+.goal-change-list__version {
+  color: #276ed8;
+  font-weight: 600;
+}
+
+.goal-change-list__meta {
+  color: #8a95a8;
+  font-size: 12px;
+  text-align: right;
+}
+
+.goal-change-list__diffs {
+  display: grid;
+  gap: 12px;
+  padding: 0 14px 14px;
+}
+
+.goal-change-list__diff {
+  display: grid;
+  grid-template-columns: 88px 1fr 1fr;
+  gap: 8px;
+}
+
+.goal-change-list__diff > strong {
+  padding-top: 9px;
+  font-size: 13px;
+}
+
+.goal-change-list__diff > div {
+  padding: 8px 10px;
+  border-radius: 7px;
+  background: #f7f9fc;
+}
+
+.goal-change-list__diff > div:last-child {
+  background: #eef8f3;
+}
+
+.goal-change-list__diff span {
+  color: #9aa4b5;
+  font-size: 11px;
+}
+
+.goal-change-list__diff p,
+.goal-change-list__baseline,
+.goal-change-list__reason {
+  margin: 4px 0 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.goal-change-list__baseline,
+.goal-change-list__reason {
+  margin: 0;
+  padding: 0 14px 14px;
+  color: #687386;
+  font-size: 13px;
+}
+
 .goal-detail__section-title button {
   border: 0;
   color: #8a95a8;
@@ -590,8 +716,7 @@ function changeActionLabel(action: string) {
 }
 
 .progress-editor__attachments,
-.goal-progress-timeline,
-.goal-change-list {
+.goal-progress-timeline {
   padding: 0;
   margin: 12px 0 0;
   list-style: none;
@@ -613,15 +738,13 @@ function changeActionLabel(action: string) {
   background: transparent;
 }
 
-.goal-progress-timeline li,
-.goal-change-list li {
+.goal-progress-timeline li {
   position: relative;
   padding: 0 0 20px 22px;
   border-left: 1px dashed #cbd9ec;
 }
 
-.goal-progress-timeline li:last-child,
-.goal-change-list li:last-child {
+.goal-progress-timeline li:last-child {
   padding-bottom: 0;
   border-left-color: transparent;
 }
@@ -667,8 +790,7 @@ function changeActionLabel(action: string) {
   background: #ffeaea;
 }
 
-.goal-progress-timeline p,
-.goal-change-list p {
+.goal-progress-timeline p {
   margin: 6px 0 0;
   color: #4d5a70;
   line-height: 1.7;
@@ -748,6 +870,22 @@ function changeActionLabel(action: string) {
     gap: 18px;
     overflow-x: auto;
     white-space: nowrap;
+  }
+
+  .goal-change-list summary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .goal-change-list__meta {
+    text-align: left;
+  }
+
+  .goal-change-list__diff {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .goal-change-list__diff > strong {
+    padding-top: 0;
   }
 
   .progress-editor__fields {

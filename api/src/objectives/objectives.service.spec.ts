@@ -518,6 +518,16 @@ describe('ObjectivesService visibility helpers', () => {
 
     const result = await (service as any).findTrackingIndicator('indicator-1', viewer);
 
+    expect(prisma.auditLog.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        entityType: 'indicator_instance',
+        entityId: 'indicator-1',
+        action: {
+          in: ['indicator_baseline_confirmed', 'indicator_updated'],
+        },
+      },
+    }));
+
     expect(result).toEqual(expect.objectContaining({
       id: 'indicator-1',
       title: 'GMV 达成率',
