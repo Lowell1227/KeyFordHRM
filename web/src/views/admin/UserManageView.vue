@@ -5,6 +5,7 @@ import {
   ArrowRight,
   Key,
   OfficeBuilding,
+  QuestionFilled,
   Search,
   Setting,
   UserFilled,
@@ -745,14 +746,6 @@ const selectedManagerRelationChanged = computed(() =>
   personSettingsDialog.value.selectedManager?.id !== personSettingsDialog.value.originalDirectManagerId,
 );
 
-const selectedManagerAccessText = computed(() => {
-  const manager = personSettingsDialog.value.selectedManager;
-  if (!manager) return '';
-  return selectedManagerRelationChanged.value
-    ? '绩效直属上级关系：提交后待 HR 审核'
-    : '绩效直属上级关系：已生效';
-});
-
 async function confirmPersonSettings() {
   if (!personSettingsDialog.value.userId) return;
   if (!personSettingsDialog.value.directManagerId && !personSettingsDialog.value.isTopLevelLeader) {
@@ -790,6 +783,11 @@ async function confirmPersonSettings() {
       ElMessage.success('系统权限已更新');
     }
     personSettingsDialog.value.visible = false;
+    if (performanceRelationChanged) {
+      activeView.value = 'users';
+      rosterWorkspace.value = 'reviews';
+      reviewQuery.value.status = 'pending';
+    }
     await Promise.all([loadReviews(), loadUsers(), loadOrgMembers(), loadCheckUsers()]);
   } catch {
     // 由 HTTP 拦截器展示错误
@@ -1800,45 +1798,75 @@ onMounted(async () => {
     <el-dialog v-model="personSettingsDialog.visible" title="人员设置" width="520px" :close-on-click-modal="false" destroy-on-close>
       <div class="person-settings__summary">
         <span class="avatar">{{ personSettingsDialog.userName.slice(0, 1) }}</span>
-        <div>
-          <strong>{{ personSettingsDialog.userName }}</strong>
+        <div class="person-settings__summary-content">
+          <div class="person-settings__summary-title">
+            <strong>{{ personSettingsDialog.userName }}</strong>
+            <el-tag size="small" type="info" effect="plain">{{ personSettingsDialog.position }}</el-tag>
+            <el-select
+              v-if="isSystemAdmin"
+              v-model="personSettingsDialog.sysRole"
+              aria-label="系统权限"
+              size="small"
+              class="person-settings__permission-select"
+            >
+              <el-option v-for="opt in sysRoleOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+            </el-select>
+            <el-tag v-else size="small" effect="plain">{{ roleLabels[personSettingsDialog.sysRole] }}</el-tag>
+            <el-tag v-if="personSettingsDialog.canViewAll" size="small" type="info" effect="plain">全量只读</el-tag>
+            <el-tooltip
+              content="岗位来自 HRM 当前有效任职记录；系统权限由系统管理员维护。“全量只读”只扩大查看范围，不授予业务审批或处理权限。"
+              placement="top"
+            >
+              <button type="button" class="person-settings__help" aria-label="岗位和系统权限说明">
+                <el-icon><QuestionFilled /></el-icon>
+              </button>
+            </el-tooltip>
+          </div>
           <small>{{ personSettingsDialog.deptName }}</small>
         </div>
       </div>
       <el-form label-position="top" class="person-settings__form">
-        <el-form-item :label="`${personSettingsDialog.userName}的岗位`">
-          <div class="person-settings__readonly">
-            {{ personSettingsDialog.position }}
-            <small>来自 HRM 当前有效任职记录</small>
-          </div>
-        </el-form-item>
-        <el-form-item label="绩效直属上级">
+        <el-form-item>
+          <template #label>
+            <span class="person-settings__label">
+              绩效直属上级
+              <el-tooltip
+                content="用于绩效目标审核、主管评分和待办归属；与花名册直属主管相互独立。变更提交后由 HR 在“员工名册 > 待审核变更”中审核；审核通过前原关系继续生效，且不会改变岗位或系统权限。"
+                placement="top"
+              >
+                <button type="button" class="person-settings__help" aria-label="绩效直属上级说明">
+                  <el-icon><QuestionFilled /></el-icon>
+                </button>
+              </el-tooltip>
+            </span>
+          </template>
           <UserSelect
             v-model="personSettingsDialog.directManagerId"
             placeholder="搜索姓名或工号选择绩效直属上级"
             :disabled-ids="[personSettingsDialog.userId]"
           />
-          <div class="person-settings__field-tip">用于绩效目标审核、评分和待办归属；花名册直属主管只在员工档案中展示。</div>
         </el-form-item>
         <div v-if="personSettingsDialog.selectedManager" class="person-settings__manager-access">
-          <span>{{ personSettingsDialog.selectedManager.name }}的{{ selectedManagerAccessText }}</span>
           <el-tag
             :type="selectedManagerRelationChanged ? 'warning' : 'success'"
             effect="light"
+            size="small"
           >
-            {{ selectedManagerRelationChanged ? '关系待审核' : '已生效' }}
+            {{ selectedManagerRelationChanged ? '提交后待 HR 审核' : '已生效' }}
           </el-tag>
+          <span v-if="selectedManagerRelationChanged">审核入口：员工名册 &gt; 待审核变更</span>
         </div>
-        <el-alert
-          v-if="personSettingsDialog.selectedManager && selectedManagerRelationChanged"
-          type="info"
-          :closable="false"
-          show-icon
-          :title="`${personSettingsDialog.selectedManager.name}将成为${personSettingsDialog.userName}的绩效直属上级`"
-          :description="`审核通过后，${personSettingsDialog.selectedManager.name}将作为${personSettingsDialog.userName}的绩效直属上级，获得${personSettingsDialog.userName}相关绩效目标审核、主管评分和待办处理权限；系统权限“${systemPermissionLabel(personSettingsDialog.selectedManager)}”和岗位“${personSettingsDialog.selectedManager.position || '未设置'}”保持不变。`"
-          class="person-settings__alert"
-        />
-        <el-form-item label="当前业务身份">
+        <el-form-item>
+          <template #label>
+            <span class="person-settings__label">
+              当前业务身份
+              <el-tooltip content="由组织关系和当前业务记录自动计算，不能在这里手工指定。" placement="top">
+                <button type="button" class="person-settings__help" aria-label="业务身份说明">
+                  <el-icon><QuestionFilled /></el-icon>
+                </button>
+              </el-tooltip>
+            </span>
+          </template>
           <div class="person-settings__readonly">
             <div v-if="personSettingsDialog.businessIdentities.length" class="business-identity-tags">
               <el-tag
@@ -1851,18 +1879,7 @@ onMounted(async () => {
               </el-tag>
             </div>
             <span v-else>无业务责任</span>
-            <small>由组织关系和业务记录自动计算</small>
           </div>
-        </el-form-item>
-        <el-form-item :label="`${personSettingsDialog.userName}的系统权限`">
-          <el-select v-if="isSystemAdmin" v-model="personSettingsDialog.sysRole" placeholder="选择系统权限" style="width: 100%">
-            <el-option v-for="opt in sysRoleOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-          </el-select>
-          <div v-else class="person-settings__readonly">
-            {{ roleLabels[personSettingsDialog.sysRole] }}
-            <small>由系统管理员维护</small>
-          </div>
-          <div v-if="personSettingsDialog.canViewAll" class="person-settings__field-tip">另有“全量只读”查看范围，仅扩大查看范围，不授予业务审批或处理权限。</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -2774,32 +2791,76 @@ onMounted(async () => {
   border-bottom: 1px solid #edf1f7;
 }
 
+.person-settings__summary-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.person-settings__summary-title {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
 .person-settings__summary strong,
-.person-settings__summary small {
+.person-settings__summary-content > small {
   display: block;
 }
 
-.person-settings__summary small {
+.person-settings__summary-content > small {
   margin-top: 4px;
   color: #8993a6;
+}
+
+.person-settings__permission-select {
+  width: 112px;
+}
+
+.person-settings__permission-select :deep(.el-select__wrapper) {
+  min-height: 24px;
+  border-radius: 6px;
+}
+
+.person-settings__help {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #98a2b3;
+  cursor: help;
+}
+
+.person-settings__help:hover,
+.person-settings__help:focus-visible {
+  color: #2f63ff;
+  background: #eef3ff;
+  outline: none;
+}
+
+.person-settings__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .person-settings__form {
   margin-top: 18px;
 }
 
-.person-settings__alert {
-  margin: -2px 0 18px;
-}
-
 .person-settings__manager-access {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin: -4px 0 16px;
-  color: #52627a;
-  font-size: 13px;
+  gap: 8px;
+  min-height: 28px;
+  margin: -6px 0 14px;
+  color: #7b8497;
+  font-size: 12px;
 }
 
 .person-settings__readonly {
@@ -2809,17 +2870,6 @@ onMounted(async () => {
   width: 100%;
   min-height: 32px;
   color: #344054;
-}
-
-.person-settings__readonly small {
-  color: #98a1b3;
-}
-
-.person-settings__field-tip {
-  margin-top: 8px;
-  color: #8993a6;
-  font-size: 12px;
-  line-height: 1.6;
 }
 
 .roster-workspace-switch {
