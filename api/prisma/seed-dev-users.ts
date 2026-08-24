@@ -24,9 +24,9 @@ const DEV_USERS: Array<{
 }> = [
   { employeeNo: 'ADMIN', name: '系统管理员', sysRole: SysRole.system_admin, canViewAll: true },
   { employeeNo: 'HR001', name: '测试HR', sysRole: SysRole.hr, canViewAll: true },
-  { employeeNo: 'MGR001', name: '测试主管', sysRole: SysRole.manager },
+  { employeeNo: 'MGR001', name: '测试主管', sysRole: SysRole.employee },
   { employeeNo: 'EMP001', name: '测试员工甲', sysRole: SysRole.employee },
-  { employeeNo: 'VP001', name: '测试VP', sysRole: SysRole.vp },
+  { employeeNo: 'VP001', name: '测试VP', sysRole: SysRole.employee },
 ];
 
 const DEV_PASSWORD = '000000';

@@ -13,6 +13,11 @@ const emptyCapabilities = {
   canViewPerformanceApproval: false,
   canOperatePerformanceApproval: false,
   canHandleHrCycle: false,
+  canHandleInterviews: false,
+  canHandleProbationReviews: false,
+  canHandleConfirmationApprovals: false,
+  canViewReports: false,
+  canManageObjectives: false,
   identities: [],
 };
 
@@ -30,7 +35,7 @@ test('dynamic approval identity exposes the approval entry to an employee', () =
   expect(JSON.stringify(modules)).toContain('结果审批');
 });
 
-test('explicit capabilities replace legacy VP entry while missing payload keeps fallback', () => {
+test('explicit capabilities replace legacy roles and missing payload grants no business entry', () => {
   const explicit = buildNavigation(routes, {
     sysRole: 'vp',
     canViewAll: false,
@@ -42,7 +47,24 @@ test('explicit capabilities replace legacy VP entry while missing payload keeps 
   });
 
   expect(JSON.stringify(explicit)).not.toContain('结果审批');
-  expect(JSON.stringify(legacy)).toContain('结果审批');
+  expect(JSON.stringify(legacy)).not.toContain('结果审批');
+});
+
+test('record responsibilities open their own work entries without changing system permission', () => {
+  const modules = buildNavigation(routes, {
+    sysRole: 'employee',
+    canViewAll: false,
+    businessCapabilities: {
+      ...emptyCapabilities,
+      canHandleInterviews: true,
+      canHandleProbationReviews: true,
+      canHandleConfirmationApprovals: true,
+    },
+  });
+
+  expect(JSON.stringify(modules)).toContain('绩效面谈');
+  expect(JSON.stringify(modules)).toContain('试用期评分');
+  expect(JSON.stringify(modules)).toContain('转正审批台');
 });
 
 test('team capability opens the team route without changing base role', () => {

@@ -26,7 +26,7 @@ import ChartCard from '@/components/common/ChartCard.vue';
 import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
 import { useAuthStore } from '@/stores/auth.store';
-import type { Department, User as ManagedUser, UserQuery } from '@/types/api.types';
+import type { BusinessIdentity, Department, SystemPermission, User as ManagedUser, UserQuery } from '@/types/api.types';
 import type { SysRole, UserStatus } from '@/types/enums';
 import { formatDate, formatDateTime } from '@/utils/date';
 import { isTopLevelDepartmentLeader } from '@/utils/organization-relations';
@@ -75,12 +75,18 @@ const isSystemAdmin = computed(() => auth.user?.sysRole === 'system_admin');
 
 const roleLabels: Record<SysRole, string> = {
   system_admin: '系统管理员',
-  hr: 'HR',
-  chairman: '董事长',
-  vp: '副总裁',
-  dept_head: '部门负责人',
-  manager: '主管',
-  employee: '员工',
+  hr: 'HR 管理员',
+  chairman: '标准用户',
+  vp: '标准用户',
+  dept_head: '标准用户',
+  manager: '标准用户',
+  employee: '标准用户',
+};
+
+const systemPermissionLabels: Record<SystemPermission, string> = {
+  system_admin: '系统管理员',
+  hr_admin: 'HR 管理员',
+  standard_user: '标准用户',
 };
 
 const statusLabels: Record<UserStatus, string> = {
@@ -97,13 +103,25 @@ const statusTagType: Record<UserStatus, 'success' | 'warning' | 'info'> = {
 
 const sysRoleOptions: { label: string; value: SysRole }[] = [
   { label: '系统管理员', value: 'system_admin' },
-  { label: 'HR', value: 'hr' },
-  { label: '董事长', value: 'chairman' },
-  { label: '副总裁', value: 'vp' },
-  { label: '部门负责人', value: 'dept_head' },
-  { label: '主管', value: 'manager' },
-  { label: '员工', value: 'employee' },
+  { label: 'HR 管理员', value: 'hr' },
+  { label: '标准用户', value: 'employee' },
 ];
+
+function normalizeSystemRole(user: Pick<ManagedUser, 'sysRole' | 'systemPermission'>): SysRole {
+  if (user.systemPermission === 'system_admin' || user.sysRole === 'system_admin') return 'system_admin';
+  if (user.systemPermission === 'hr_admin' || user.sysRole === 'hr') return 'hr';
+  return 'employee';
+}
+
+function systemPermissionLabel(user: Pick<ManagedUser, 'sysRole' | 'systemPermission'>): string {
+  return user.systemPermission
+    ? systemPermissionLabels[user.systemPermission]
+    : roleLabels[user.sysRole];
+}
+
+function businessIdentityText(identity: BusinessIdentity): string {
+  return `${identity.label}（${identity.count}）`;
+}
 
 const statusOptions: { label: string; value: UserStatus }[] = [
   { label: '在职', value: 'active' },
@@ -255,11 +273,11 @@ const userIssueItems = computed<IssueItem[]>(() =>
         targetView: 'users',
       });
     }
-    if (user.status === 'resigned' && !['employee'].includes(user.sysRole)) {
+    if (user.status === 'resigned' && ['hr', 'system_admin'].includes(user.sysRole)) {
       items.push({
         key: `${user.id}-role`,
         type: '人员',
-        title: `${user.name} 已离职但仍保留 ${roleLabels[user.sysRole] ?? user.sysRole} 角色`,
+        title: `${user.name} 已离职但仍保留 ${systemPermissionLabel(user)}权限`,
         detail: '建议确认是否需要清理系统权限。',
         level: 'warning',
         userId: user.id,
@@ -675,6 +693,8 @@ const personSettingsDialog = ref({
   directManagerId: undefined as string | undefined,
   originalSysRole: 'employee' as SysRole,
   sysRole: 'employee' as SysRole,
+  businessIdentities: [] as BusinessIdentity[],
+  canViewAll: false,
   isTopLevelLeader: false,
   selectedManager: null as ManagedUser | null,
   saving: false,
@@ -690,8 +710,10 @@ function openPersonSettingsDialog(row: ManagedUser) {
     position: row.position || '未设置岗位',
     originalDirectManagerId: row.directManagerId ?? undefined,
     directManagerId: row.directManagerId ?? undefined,
-    originalSysRole: row.sysRole,
-    sysRole: row.sysRole,
+    originalSysRole: normalizeSystemRole(row),
+    sysRole: normalizeSystemRole(row),
+    businessIdentities: row.businessIdentities ?? [],
+    canViewAll: row.canViewAll,
     isTopLevelLeader: isTopLevelDepartmentLeader(row, flattenedDepartments.value),
     selectedManager: null,
     saving: false,
@@ -761,11 +783,11 @@ async function confirmPersonSettings() {
     }
     await Promise.all(actions);
     if (performanceRelationChanged && systemRoleChanged) {
-      ElMessage.success('系统角色已更新；绩效直属上级变更已提交 HR 审核');
+      ElMessage.success('系统权限已更新；绩效直属上级变更已提交 HR 审核');
     } else if (performanceRelationChanged) {
       ElMessage.success('绩效直属上级变更已提交 HR 审核');
     } else {
-      ElMessage.success('系统角色已更新');
+      ElMessage.success('系统权限已更新');
     }
     personSettingsDialog.value.visible = false;
     await Promise.all([loadReviews(), loadUsers(), loadOrgMembers(), loadCheckUsers()]);
@@ -1117,8 +1139,26 @@ onMounted(async () => {
             <el-table-column label="岗位" min-width="140" show-overflow-tooltip>
               <template #default="{ row }">{{ (row as ManagedUser).position || '未设置' }}</template>
             </el-table-column>
-            <el-table-column label="系统角色" width="120">
-              <template #default="{ row }">{{ roleLabels[(row as ManagedUser).sysRole] }}</template>
+            <el-table-column label="系统权限" width="150">
+              <template #default="{ row }">
+                <div>{{ systemPermissionLabel(row as ManagedUser) }}</div>
+                <el-tag v-if="(row as ManagedUser).canViewAll" size="small" type="info" effect="plain">全量只读</el-tag>
+              </template>
+            </el-table-column>
+            <el-table-column label="业务身份" min-width="220">
+              <template #default="{ row }">
+                <div v-if="(row as ManagedUser).businessIdentities?.length" class="business-identity-tags">
+                  <el-tag
+                    v-for="identity in (row as ManagedUser).businessIdentities"
+                    :key="identity.type"
+                    size="small"
+                    effect="plain"
+                  >
+                    {{ businessIdentityText(identity) }}
+                  </el-tag>
+                </div>
+                <span v-else class="muted-text">无业务责任</span>
+              </template>
             </el-table-column>
             <el-table-column label="绩效直属上级" min-width="140">
               <template #default="{ row }">{{ (row as ManagedUser).directManagerName || '未设置' }}</template>
@@ -1189,7 +1229,7 @@ onMounted(async () => {
             <el-select v-model="userQuery.status" placeholder="全部状态" clearable>
               <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
             </el-select>
-            <el-select v-model="userQuery.sysRole" placeholder="全部角色" clearable>
+            <el-select v-model="userQuery.sysRole" placeholder="全部系统权限" clearable>
               <el-option v-for="opt in sysRoleOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
             </el-select>
             <el-button type="primary" @click="onUserQueryChange">查询</el-button>
@@ -1217,8 +1257,26 @@ onMounted(async () => {
           <el-table-column label="绩效直属上级" min-width="140">
             <template #default="{ row }">{{ (row as ManagedUser).directManagerName || '未设置' }}</template>
           </el-table-column>
-          <el-table-column label="系统角色" width="120">
-            <template #default="{ row }">{{ roleLabels[(row as ManagedUser).sysRole] }}</template>
+          <el-table-column label="系统权限" width="150">
+            <template #default="{ row }">
+              <div>{{ systemPermissionLabel(row as ManagedUser) }}</div>
+              <el-tag v-if="(row as ManagedUser).canViewAll" size="small" type="info" effect="plain">全量只读</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="业务身份" min-width="220">
+            <template #default="{ row }">
+              <div v-if="(row as ManagedUser).businessIdentities?.length" class="business-identity-tags">
+                <el-tag
+                  v-for="identity in (row as ManagedUser).businessIdentities"
+                  :key="identity.type"
+                  size="small"
+                  effect="plain"
+                >
+                  {{ businessIdentityText(identity) }}
+                </el-tag>
+              </div>
+              <span v-else class="muted-text">无业务责任</span>
+            </template>
           </el-table-column>
           <el-table-column label="钉钉登录" width="130">
             <template #default="{ row }">
@@ -1777,10 +1835,26 @@ onMounted(async () => {
           :closable="false"
           show-icon
           :title="`${personSettingsDialog.selectedManager.name}将成为${personSettingsDialog.userName}的绩效直属上级`"
-          :description="`审核通过后，${personSettingsDialog.selectedManager.name}将作为${personSettingsDialog.userName}的绩效直属上级，获得${personSettingsDialog.userName}相关绩效目标审核、主管评分和待办处理权限；系统角色“${roleLabels[personSettingsDialog.selectedManager.sysRole]}”和岗位“${personSettingsDialog.selectedManager.position || '未设置'}”保持不变。`"
+          :description="`审核通过后，${personSettingsDialog.selectedManager.name}将作为${personSettingsDialog.userName}的绩效直属上级，获得${personSettingsDialog.userName}相关绩效目标审核、主管评分和待办处理权限；系统权限“${systemPermissionLabel(personSettingsDialog.selectedManager)}”和岗位“${personSettingsDialog.selectedManager.position || '未设置'}”保持不变。`"
           class="person-settings__alert"
         />
-        <el-form-item :label="`${personSettingsDialog.userName}的系统角色`">
+        <el-form-item label="当前业务身份">
+          <div class="person-settings__readonly">
+            <div v-if="personSettingsDialog.businessIdentities.length" class="business-identity-tags">
+              <el-tag
+                v-for="identity in personSettingsDialog.businessIdentities"
+                :key="identity.type"
+                size="small"
+                effect="plain"
+              >
+                {{ businessIdentityText(identity) }}
+              </el-tag>
+            </div>
+            <span v-else>无业务责任</span>
+            <small>由组织关系和业务记录自动计算</small>
+          </div>
+        </el-form-item>
+        <el-form-item :label="`${personSettingsDialog.userName}的系统权限`">
           <el-select v-if="isSystemAdmin" v-model="personSettingsDialog.sysRole" placeholder="选择系统权限" style="width: 100%">
             <el-option v-for="opt in sysRoleOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
           </el-select>
@@ -1788,6 +1862,7 @@ onMounted(async () => {
             {{ roleLabels[personSettingsDialog.sysRole] }}
             <small>由系统管理员维护</small>
           </div>
+          <div v-if="personSettingsDialog.canViewAll" class="person-settings__field-tip">另有“全量只读”查看范围，仅扩大查看范围，不授予业务审批或处理权限。</div>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -2481,6 +2556,17 @@ onMounted(async () => {
 .person-cell strong,
 .person-cell small {
   display: block;
+}
+
+.business-identity-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.muted-text {
+  color: #98a1b3;
+  font-size: 12px;
 }
 
 .person-cell small {

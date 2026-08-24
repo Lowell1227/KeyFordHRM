@@ -887,7 +887,7 @@ test.describe("11-navigation-entrypoints non-workspace header", () => {
 });
 
 test.describe("11-navigation-entrypoints notification task links", () => {
-  test("resolves supervisor notifications only for direct-manager workspace roles", () => {
+  test("resolves supervisor notifications from the actual team capability", () => {
     expect(
       resolveNotificationTarget(
         notificationItem({
@@ -895,7 +895,7 @@ test.describe("11-navigation-entrypoints notification task links", () => {
           taskId: "task-1",
           type: "indicator_setting_notice",
         }),
-        "manager",
+        true,
       ),
     ).toEqual({
       path: "/tasks",
@@ -914,7 +914,7 @@ test.describe("11-navigation-entrypoints notification task links", () => {
           cycleId: null,
           type: "indicator_setting_notice",
         }),
-        "manager",
+        true,
       ),
     ).toEqual({ name: "TaskDetail", params: { id: "task-legacy" } });
     expect(
@@ -924,7 +924,7 @@ test.describe("11-navigation-entrypoints notification task links", () => {
           taskId: "task-2",
           type: "self_eval_submitted",
         }),
-        "dept_head",
+        true,
       ),
     ).toEqual({
       path: "/tasks",
@@ -942,7 +942,7 @@ test.describe("11-navigation-entrypoints notification task links", () => {
           taskId: "task-3",
           type: "indicator_setting_notice",
         }),
-        "hr",
+        false,
       ),
     ).toEqual({ name: "TaskDetail", params: { id: "task-3" } });
     expect(
@@ -952,14 +952,14 @@ test.describe("11-navigation-entrypoints notification task links", () => {
           taskId: "task-4",
           type: "future_notification_type",
         }),
-        "manager",
+        true,
       ),
     ).toEqual({ name: "TaskDetail", params: { id: "task-4" } });
   });
 
   test("returns no command when a notification has no task", () => {
     expect(
-      resolveNotificationTarget(notificationItem({ taskId: null }), "manager"),
+      resolveNotificationTarget(notificationItem({ taskId: null }), true),
     ).toBeNull();
   });
 
@@ -1213,7 +1213,7 @@ test.describe("11-navigation-entrypoints notification task links", () => {
   test("reports a rejected router call as a failed notification navigation", async () => {
     const target = resolveNotificationTarget(
       notificationItem({ taskId: "task-error" }),
-      "employee",
+      false,
     );
     expect(target).not.toBeNull();
     if (!target) return;

@@ -16,14 +16,14 @@ const userName = computed(() => auth.user?.name ?? '未登录');
 const pageTitle = computed(() => (route.meta.title as string) ?? '孚德绩效管理');
 const isPerformanceWorkspace = computed(() => isPerformanceWorkspacePath(route.path));
 const businessIdentities = computed(() => auth.user?.businessCapabilities?.identities ?? []);
-const systemRoleLabel = computed(() => {
+const systemPermissionLabel = computed(() => {
   const labels: Record<string, string> = {
-    employee: '员工',
-    manager: '主管',
-    dept_head: '部门负责人',
-    vp: '高管',
-    hr: 'HR',
-    chairman: '董事长',
+    employee: '标准用户',
+    manager: '标准用户',
+    dept_head: '标准用户',
+    vp: '标准用户',
+    hr: 'HR 管理员',
+    chairman: '标准用户',
     system_admin: '系统管理员',
   };
   return labels[auth.user?.sysRole ?? ''] ?? auth.user?.sysRole ?? '未设置';
@@ -56,7 +56,8 @@ function onLogout() {
           <el-dropdown-menu>
             <div class="account-summary" data-testid="header-account-summary">
               <strong>{{ userName }}</strong>
-              <span class="account-summary__role">系统角色：{{ systemRoleLabel }}</span>
+              <span class="account-summary__role">系统权限：{{ systemPermissionLabel }}</span>
+              <span v-if="auth.user?.canViewAll" class="account-summary__identity">查看范围：全量只读</span>
               <template v-if="businessIdentities.length">
                 <span class="account-summary__label">当前业务身份</span>
                 <span

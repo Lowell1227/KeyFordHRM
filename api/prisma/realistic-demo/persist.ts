@@ -215,9 +215,12 @@ function replacePasswordSentinels(
 ): DemoRowSets {
   let replaced = 0;
   const users = dataset.rows.users.map((user) => {
-    if (user.passwordHash !== ACCEPTANCE_PASSWORD_HASH) return user;
+    const normalizedSysRole = normalizePersistedSystemPermission(user.sysRole);
+    if (user.passwordHash !== ACCEPTANCE_PASSWORD_HASH) {
+      return { ...user, sysRole: normalizedSysRole };
+    }
     replaced += 1;
-    return { ...user, passwordHash };
+    return { ...user, sysRole: normalizedSysRole, passwordHash };
   });
   if (replaced !== 8) {
     throw new Error(
@@ -225,6 +228,12 @@ function replacePasswordSentinels(
     );
   }
   return { ...dataset.rows, users };
+}
+
+export function normalizePersistedSystemPermission(
+  sysRole: Prisma.UserCreateManyInput['sysRole'],
+): NonNullable<Prisma.UserCreateManyInput['sysRole']> {
+  return sysRole === 'system_admin' || sysRole === 'hr' ? sysRole : 'employee';
 }
 
 async function insertDatasetRows(

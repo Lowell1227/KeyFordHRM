@@ -308,13 +308,13 @@ export class ImprovementPlansService {
       });
     }
 
-    // 直接主管
-    if (viewer.sysRole === SysRole.manager && employee.directManagerId === viewer.id) {
+    // 绩效直属上级关系本身授予管理能力，不依赖账号的旧主管角色。
+    if (employee.directManagerId === viewer.id) {
       return;
     }
 
-    // 部门负责人
-    if (viewer.sysRole === SysRole.dept_head && employee.deptId) {
+    // 部门负责人关系本身授予负责部门及其下级部门的管理能力。
+    if (employee.deptId) {
       const managedDepts = await this.prisma.department.findMany({
         where: { leaderId: viewer.id },
         select: { id: true },

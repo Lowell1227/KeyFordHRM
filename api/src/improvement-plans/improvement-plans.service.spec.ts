@@ -138,6 +138,27 @@ describe('ImprovementPlansService', () => {
   });
 
   describe('fill', () => {
+    it('普通员工只要是记录对应员工的绩效直属上级即可填写', async () => {
+      prisma.improvementPlan.findUnique.mockResolvedValue(makePlan({ status: 'draft' }));
+      prisma.user.findUnique.mockResolvedValue({ directManagerId: 'viewer-1', deptId: 'dept-1' });
+      prisma.improvementPlan.update.mockResolvedValue(makePlan({
+        status: 'in_progress',
+        creatorId: 'viewer-1',
+      }));
+
+      await expect(service.fill(
+        'plan-1',
+        {
+          improvementNeed: 'need',
+          importance: 'high',
+          improvementGoal: 'goal',
+          targetDate: '2026-07-01',
+          measures: [],
+        },
+        makeViewer({ sysRole: 'employee' as any }),
+      )).resolves.toEqual(expect.objectContaining({ status: 'in_progress' }));
+    });
+
     it('填写 draft 计划后状态变为 in_progress', async () => {
       prisma.improvementPlan.findUnique.mockResolvedValue(makePlan({ status: 'draft' }));
       prisma.improvementPlan.update.mockResolvedValue(

@@ -66,8 +66,15 @@ export interface BusinessCapabilities {
   canViewPerformanceApproval: boolean;
   canOperatePerformanceApproval: boolean;
   canHandleHrCycle: boolean;
+  canHandleInterviews: boolean;
+  canHandleProbationReviews: boolean;
+  canHandleConfirmationApprovals: boolean;
+  canViewReports: boolean;
+  canManageObjectives: boolean;
   identities: BusinessIdentity[];
 }
+
+export type SystemPermission = 'standard_user' | 'hr_admin' | 'system_admin';
 
 export interface CurrentUser {
   id: string;
@@ -79,6 +86,8 @@ export interface CurrentUser {
   deptPath?: string;
   position?: string;
   sysRole: SysRole;
+  systemPermission?: SystemPermission;
+  businessIdentities?: BusinessIdentity[];
   isAssessorOnly: boolean;
   canViewAll: boolean;
   directManagerId?: string | null;
@@ -115,6 +124,8 @@ export interface User {
   directManagerId?: string | null;
   directManagerName?: string;
   sysRole: SysRole;
+  systemPermission?: SystemPermission;
+  businessIdentities?: BusinessIdentity[];
   isAssessorOnly: boolean;
   canViewAll: boolean;
   createdAt?: string;

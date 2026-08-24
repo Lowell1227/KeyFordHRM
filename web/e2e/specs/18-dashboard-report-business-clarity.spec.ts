@@ -18,6 +18,11 @@ const emptyCapabilities = {
   canViewPerformanceApproval: false,
   canOperatePerformanceApproval: false,
   canHandleHrCycle: false,
+  canHandleInterviews: false,
+  canHandleProbationReviews: false,
+  canHandleConfirmationApprovals: false,
+  canViewReports: false,
+  canManageObjectives: false,
   identities: [],
 };
 
@@ -26,6 +31,13 @@ async function mockIdentity(
   role: 'employee' | 'hr' | 'manager',
   businessCapabilities?: typeof emptyCapabilities,
 ) {
+  const capabilities = businessCapabilities ?? {
+    ...emptyCapabilities,
+    canManageTeam: role === 'manager',
+    canHandleInterviews: role === 'manager' || role === 'hr',
+    canViewReports: role === 'manager' || role === 'hr',
+    canManageObjectives: role === 'manager' || role === 'hr',
+  };
   await page.addInitScript(() => {
     localStorage.setItem('token', 'business-clarity-token');
     localStorage.setItem('expiresAt', String(Date.now() + 60_000));
@@ -34,6 +46,10 @@ async function mockIdentity(
     contentType: 'application/json',
     body: JSON.stringify(apiResponse(0)),
   }));
+  await page.route('**/api/v1/tasks/mine**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
+  }));
   await page.route('**/api/v1/auth/me', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({
@@ -41,10 +57,10 @@ async function mockIdentity(
       name: role === 'hr' ? 'HR用户' : role === 'manager' ? '周主管' : '动态业务负责人',
       deptId: 'dept-1',
       deptName: '研发部',
-      sysRole: role,
+      sysRole: role === 'manager' ? 'employee' : role,
       isAssessorOnly: false,
       canViewAll: role === 'hr',
-      ...(businessCapabilities ? { businessCapabilities } : {}),
+      businessCapabilities: capabilities,
     })),
   }));
 }

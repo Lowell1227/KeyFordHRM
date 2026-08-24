@@ -3,10 +3,7 @@ import type { CurrentUser } from '@/types/api.types';
 type ApprovalPermissionUser = Pick<CurrentUser, 'sysRole' | 'businessCapabilities'>;
 
 export function canOperatePerformanceApproval(user: ApprovalPermissionUser): boolean {
-  if (user.businessCapabilities) {
-    return user.businessCapabilities.canOperatePerformanceApproval;
-  }
-  return ['vp', 'chairman', 'system_admin'].includes(user.sysRole);
+  return Boolean(user.businessCapabilities?.canOperatePerformanceApproval);
 }
 
 export function canOperatePerformanceApprovalTask(

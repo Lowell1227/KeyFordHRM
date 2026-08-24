@@ -27,8 +27,8 @@ export function canAccessRoute(
   user: NavigationUser,
 ): boolean {
   const capability = route.meta?.capability;
-  if (capability && user.businessCapabilities) {
-    return user.businessCapabilities[capability];
+  if (capability) {
+    return Boolean(user.businessCapabilities?.[capability]);
   }
   const roles = route.meta?.roles;
   return !roles || roles.includes(user.sysRole);

@@ -171,23 +171,33 @@ describe('ReportsService', () => {
       expect(summary.stats.grades.D).toEqual({ count: 1, ratio: 0.5 });
     });
 
-    it('VP 查看汇总：只返回 approver_id 等于自己的任务', async () => {
+    it('标准用户按动态数据范围和历史任务责任查看汇总', async () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
       prisma.assessmentTask.findMany.mockResolvedValue([
         makeTask({ id: 't1', approverId: 'vp-1', gradeResult: { calculatedScore: new Prisma.Decimal(90), rawGrade: 'A', calibratedGrade: null } }),
       ]);
+      dataScope.getVisibleEmployeeFilter.mockResolvedValue({ id: 'vp-1' });
 
       const result = await service.getCycleSummary(
         'cycle-1',
         {},
-        makeViewer({ id: 'vp-1', sysRole: SysRole.vp }),
+        makeViewer({ id: 'vp-1', sysRole: SysRole.employee }),
       );
 
       const summary = result as Exclude<typeof result, StreamableFile>;
       expect(summary.items).toHaveLength(1);
       expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ approverId: 'vp-1' }),
+          where: expect.objectContaining({
+            AND: [{
+              OR: [
+                { employee: { id: 'vp-1' } },
+                { managerId: 'vp-1' },
+                { deptHeadId: 'vp-1' },
+                { approverId: 'vp-1' },
+              ],
+            }],
+          }),
         }),
       );
     });

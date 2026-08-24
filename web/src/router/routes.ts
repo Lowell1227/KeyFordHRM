@@ -97,7 +97,6 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '结果审批',
-      roles: ['vp', 'chairman', 'system_admin'],
       capability: 'canViewPerformanceApproval',
       navigation: { module: 'performance', label: '结果审批', order: 60, group: 'performance', groupLabel: '绩效管理' },
     },
@@ -109,7 +108,7 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '报表分析',
-      roles: ['hr', 'system_admin', 'vp', 'chairman'],
+      capability: 'canViewReports',
       navigation: { module: 'analysis', label: '报表分析', order: 10 },
     },
   },
@@ -131,7 +130,6 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '团队绩效',
-      roles: ['manager', 'dept_head', 'vp', 'hr', 'system_admin'],
       capability: 'canManageTeam',
     },
   },
@@ -142,7 +140,7 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '绩效面谈',
-      roles: ['manager', 'dept_head', 'vp', 'hr', 'system_admin'],
+      capability: 'canHandleInterviews',
       navigation: { module: 'performance', label: '绩效面谈', order: 40, group: 'performance', groupLabel: '绩效管理' },
     },
   },
@@ -196,7 +194,7 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '试用期评分',
-      roles: ['manager', 'dept_head', 'vp', 'hr', 'system_admin'],
+      capability: 'canHandleProbationReviews',
       navigation: { module: 'people', label: '试用期评分', order: 20, group: 'people', groupLabel: '试用期与转正' },
     },
   },
@@ -234,7 +232,7 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '转正审批台',
-      roles: ['manager', 'dept_head', 'vp', 'hr', 'chairman', 'system_admin'],
+      capability: 'canHandleConfirmationApprovals',
       navigation: { module: 'people', label: '转正审批台', order: 50, group: 'people', groupLabel: '试用期与转正' },
     },
   },
@@ -258,13 +256,13 @@ export const routes: RouteRecordRaw[] = [
     path: '/objectives',
     name: 'ObjectiveMap',
     component: () => import('@/views/objectives/ObjectiveMapView.vue'),
-    meta: { requiresAuth: true, title: '目标地图', roles: ['manager', 'dept_head', 'vp', 'hr', 'chairman', 'system_admin'] },
+    meta: { requiresAuth: true, title: '目标地图' },
   },
   {
     path: '/action-items',
     name: 'ActionItems',
     component: () => import('@/views/objectives/GoalTrackingView.vue'),
-    meta: { requiresAuth: true, title: '目标跟进', roles: ['employee', 'manager', 'dept_head', 'vp', 'hr', 'chairman', 'system_admin'] },
+    meta: { requiresAuth: true, title: '目标跟进' },
   },
   {
     path: '/:pathMatch(.*)*',

@@ -106,13 +106,11 @@ export function usePermission(ctx?: PermissionContext) {
       return publishVisibleFields.value.indicatorScores ?? true;
     }
 
-    // 主管/部门负责人/HR/审批人/管理员：评分阶段开始后即可见
+    // 主管/部门负责人/HR/管理员：评分阶段开始后即可见。业务身份以任务快照为准。
     return (
       isTaskManager.value ||
       isTaskDeptHead.value ||
-      isAdminLike.value ||
-      user.value.sysRole === 'vp' ||
-      user.value.sysRole === 'chairman'
+      isAdminLike.value
     );
   });
 

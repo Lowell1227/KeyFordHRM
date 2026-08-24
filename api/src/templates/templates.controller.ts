@@ -29,39 +29,40 @@ class DeleteTemplatesDto {
 }
 
 @Controller('templates')
-@Roles(SysRole.hr, SysRole.system_admin)
 export class TemplatesController {
   constructor(private readonly templatesService: TemplatesService) {}
 
   @Post()
+  @Roles(SysRole.hr, SysRole.system_admin)
   @HttpCode(200)
   create(@Body() dto: CreateTemplateDto, @CurrentUser() user: AuthUser) {
     return this.templatesService.create(dto, user);
   }
 
   @Get()
-  @Roles(SysRole.system_admin, SysRole.hr, SysRole.chairman, SysRole.vp, SysRole.dept_head, SysRole.manager, SysRole.employee)
   findAll(@Query() query: TemplateQueryDto) {
     return this.templatesService.findAll(query);
   }
 
   @Delete()
+  @Roles(SysRole.hr, SysRole.system_admin)
   removeMany(@Body() dto: DeleteTemplatesDto) {
     return this.templatesService.removeMany(dto.ids);
   }
 
   @Get(':id')
-  @Roles(SysRole.system_admin, SysRole.hr, SysRole.chairman, SysRole.vp, SysRole.dept_head, SysRole.manager, SysRole.employee)
   findOne(@Param('id', ParseUUIDPipe) id: string) {
     return this.templatesService.findOne(id);
   }
 
   @Put(':id')
+  @Roles(SysRole.hr, SysRole.system_admin)
   update(@Param('id', ParseUUIDPipe) id: string, @Body() dto: UpdateTemplateDto) {
     return this.templatesService.update(id, dto);
   }
 
   @Post(':id/duplicate')
+  @Roles(SysRole.hr, SysRole.system_admin)
   @HttpCode(200)
   duplicate(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
     return this.templatesService.duplicate(id, user);

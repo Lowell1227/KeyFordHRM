@@ -12,7 +12,6 @@ export class ReportsController {
 
   /** GET /reports/cycle/:id/summary — 周期汇总报表（JSON/Excel）。 */
   @Get('cycle/:id/summary')
-  @Roles(SysRole.hr, SysRole.system_admin, SysRole.vp, SysRole.chairman, SysRole.dept_head, SysRole.manager)
   getCycleSummary(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Query() dto: ReportQueryDto,

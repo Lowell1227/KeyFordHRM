@@ -845,36 +845,11 @@ export class ObjectivesService {
     // 主管/部门负责人额外看到其数据范围内的目标；HR/system_admin 看全部。
     if (!this.isAdminLike(viewer)) {
       const scope = await this.dataScope.getVisibleEmployeeFilter(viewer);
-      const visibleOwnerIds: string[] = [];
-
-      if ('id' in scope && typeof scope.id === 'string') {
-        visibleOwnerIds.push(scope.id);
-      }
-
-      if (viewer.sysRole === SysRole.manager) {
-        const subordinates = await this.prisma.user.findMany({
-          where: scope,
-          select: { id: true },
-        });
-        visibleOwnerIds.push(...subordinates.map((u) => u.id));
-      }
-
-      if (viewer.sysRole === SysRole.dept_head) {
-        const deptIdFilter = scope.deptId;
-        const deptIds: string[] = [];
-        if (typeof deptIdFilter === 'string') {
-          deptIds.push(deptIdFilter);
-        } else if (deptIdFilter && 'in' in deptIdFilter && Array.isArray(deptIdFilter.in)) {
-          deptIds.push(...(deptIdFilter.in as string[]));
-        }
-        if (deptIds.length > 0) {
-          const deptMembers = await this.prisma.user.findMany({
-            where: { deptId: { in: deptIds } },
-            select: { id: true },
-          });
-          visibleOwnerIds.push(...deptMembers.map((u) => u.id));
-        }
-      }
+      const visibleOwners = await this.prisma.user.findMany({
+        where: scope,
+        select: { id: true },
+      });
+      const visibleOwnerIds = visibleOwners.map((user) => user.id);
 
       const uniqueIds = [...new Set(visibleOwnerIds)].filter(Boolean);
       where.OR = [
@@ -989,8 +964,17 @@ export class ObjectivesService {
   private async assertCanCreate(dto: CreateObjectiveDto, viewer: AuthUser): Promise<void> {
     if (this.isAdminLike(viewer)) return;
 
-    // 部门负责人可在管辖部门下建部门/个人目标。
-    if (viewer.sysRole === SysRole.dept_head && dto.deptId) {
+    // 绩效直属上级关系可为直属下属建个人目标。
+    if (dto.ownerId) {
+      const employee = await this.prisma.user.findUnique({
+        where: { id: dto.ownerId },
+        select: { directManagerId: true },
+      });
+      if (employee?.directManagerId === viewer.id) return;
+    }
+
+    // 部门负责人关系可在管辖部门下建部门/个人目标。
+    if (dto.deptId) {
       const managedDepts = await this.prisma.department.findMany({
         where: { leaderId: viewer.id },
         select: { id: true },
@@ -1001,18 +985,8 @@ export class ObjectivesService {
       if (managedDeptIds.includes(dto.deptId)) return;
     }
 
-    // 主管可为下属建个人目标。
-    if (viewer.sysRole === SysRole.manager && dto.ownerId) {
-      const employee = await this.prisma.user.findUnique({
-        where: { id: dto.ownerId },
-        select: { directManagerId: true },
-      });
-      if (employee?.directManagerId === viewer.id) return;
-    }
-
-    // 普通员工只能为自己建个人目标。
+    // 负责人可以为自己建个人目标。
     if (
-      viewer.sysRole === SysRole.employee &&
       dto.level === ObjectiveLevel.individual &&
       dto.ownerId === viewer.id
     ) {
@@ -1032,8 +1006,8 @@ export class ObjectivesService {
     if (this.isAdminLike(viewer)) return;
     if (objective.createdBy === viewer.id) return;
 
-    // 部门负责人可管理部门/个人目标所在部门（含子部门）。
-    if (viewer.sysRole === SysRole.dept_head && objective.deptId) {
+    // 部门负责人关系可管理部门/个人目标所在部门（含子部门）。
+    if (objective.deptId) {
       const managedDepts = await this.prisma.department.findMany({
         where: { leaderId: viewer.id },
         select: { id: true },
@@ -1044,8 +1018,8 @@ export class ObjectivesService {
       if (managedDeptIds.includes(objective.deptId)) return;
     }
 
-    // 主管可管理下属个人目标。
-    if (viewer.sysRole === SysRole.manager && objective.ownerId) {
+    // 绩效直属上级关系可管理直属下属个人目标。
+    if (objective.ownerId) {
       const employee = await this.prisma.user.findUnique({
         where: { id: objective.ownerId },
         select: { directManagerId: true },

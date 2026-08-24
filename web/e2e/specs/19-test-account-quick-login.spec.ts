@@ -17,8 +17,8 @@ test.describe('受控测试账号快捷登录', () => {
           data: {
             enabled: true,
             accounts: [
-              { employeeNo: 'HR001', name: '测试·姚遥', sysRole: 'hr', roleLabel: 'HR' },
-              { employeeNo: 'MGR001', name: '测试·周强明', sysRole: 'manager', roleLabel: '主管' },
+              { employeeNo: 'HR001', name: '测试·姚遥', sysRole: 'hr', roleLabel: 'HR 管理员' },
+              { employeeNo: 'MGR001', name: '测试·周强明', sysRole: 'employee', roleLabel: '绩效直属上级场景' },
             ],
           },
         }),

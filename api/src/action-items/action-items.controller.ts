@@ -10,8 +10,6 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { SysRole } from '@prisma/client';
-import { Roles } from '@/common/decorators/roles.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import { ActionItemsService } from './action-items.service';
@@ -25,14 +23,6 @@ import { ActionItemQueryDto } from './dto/action-item-query.dto';
  * 写限 system_admin / hr / dept_head / manager。
  */
 @Controller('action-items')
-@Roles(
-  SysRole.manager,
-  SysRole.dept_head,
-  SysRole.vp,
-  SysRole.hr,
-  SysRole.chairman,
-  SysRole.system_admin,
-)
 export class ActionItemsController {
   constructor(private readonly service: ActionItemsService) {}
 
@@ -62,14 +52,12 @@ export class ActionItemsController {
 
   /** POST /action-items — 创建。 */
   @Post()
-  @Roles(SysRole.system_admin, SysRole.hr, SysRole.dept_head, SysRole.manager)
   create(@Body() dto: CreateActionItemDto, @CurrentUser() viewer: AuthUser) {
     return this.service.create(dto, viewer);
   }
 
   /** PATCH /action-items/:id — 更新。 */
   @Patch(':id')
-  @Roles(SysRole.system_admin, SysRole.hr, SysRole.dept_head, SysRole.manager)
   update(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: UpdateActionItemDto,
@@ -81,7 +69,6 @@ export class ActionItemsController {
   /** PATCH /action-items/:id/progress — 更新进度（同时汇总到目标进度）。 */
   @Patch(':id/progress')
   @HttpCode(200)
-  @Roles(SysRole.system_admin, SysRole.hr, SysRole.dept_head, SysRole.manager)
   updateProgress(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: UpdateProgressDto,
@@ -92,7 +79,6 @@ export class ActionItemsController {
 
   /** DELETE /action-items/:id — 删除。 */
   @Delete(':id')
-  @Roles(SysRole.system_admin, SysRole.hr, SysRole.dept_head, SysRole.manager)
   remove(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @CurrentUser() viewer: AuthUser,

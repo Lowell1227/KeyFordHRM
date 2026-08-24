@@ -10,8 +10,6 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { SysRole } from '@prisma/client';
-import { Roles } from '@/common/decorators/roles.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import { ObjectivesService } from './objectives.service';
@@ -22,31 +20,13 @@ import { ObjectiveQueryDto } from './dto/objective-query.dto';
 import { GoalTrackingQueryDto } from './dto/goal-tracking-query.dto';
 import { UpdateIndicatorProgressDto } from './dto/update-indicator-progress.dto';
 
-const TRACKING_ROLES = [
-  SysRole.employee,
-  SysRole.manager,
-  SysRole.dept_head,
-  SysRole.vp,
-  SysRole.hr,
-  SysRole.chairman,
-  SysRole.system_admin,
-] as const;
-
 export const TRACKING_INDICATOR_UUID_PIPE = new ParseUUIDPipe();
 
 /**
  * 目标地图接口。改为「管理者+」可见：读对所有非 employee 角色开放，
- * 写仍由各方法限定 system_admin / hr / dept_head / manager。
+ * 写权限由服务按实际业务关系校验，不再由遗留系统角色决定。
  */
 @Controller('objectives')
-@Roles(
-  SysRole.manager,
-  SysRole.dept_head,
-  SysRole.vp,
-  SysRole.hr,
-  SysRole.chairman,
-  SysRole.system_admin,
-)
 export class ObjectivesController {
   constructor(private readonly objectivesService: ObjectivesService) {}
 
@@ -67,7 +47,6 @@ export class ObjectivesController {
 
   /** GET /objectives/:id — 详情。 */
   @Get('tracking')
-  @Roles(...TRACKING_ROLES)
   findTracking(
     @Query() query: GoalTrackingQueryDto,
     @CurrentUser() viewer: AuthUser,
@@ -76,7 +55,6 @@ export class ObjectivesController {
   }
 
   @Get('tracking/indicators/:id')
-  @Roles(...TRACKING_ROLES)
   findTrackingIndicator(
     @Param('id', TRACKING_INDICATOR_UUID_PIPE) id: string,
     @CurrentUser() viewer: AuthUser,
@@ -86,7 +64,6 @@ export class ObjectivesController {
 
   @Patch('tracking/indicators/:id/progress')
   @HttpCode(200)
-  @Roles(...TRACKING_ROLES)
   updateTrackingIndicatorProgress(
     @Param('id', TRACKING_INDICATOR_UUID_PIPE) id: string,
     @Body() dto: UpdateIndicatorProgressDto,
@@ -110,14 +87,12 @@ export class ObjectivesController {
   /** POST /objectives — 创建。 */
   @Post()
   @HttpCode(200)
-  @Roles(SysRole.system_admin, SysRole.hr, SysRole.dept_head, SysRole.manager)
   create(@Body() dto: CreateObjectiveDto, @CurrentUser() viewer: AuthUser) {
     return this.objectivesService.create(dto, viewer);
   }
 
   /** PATCH /objectives/:id — 更新。 */
   @Patch(':id')
-  @Roles(SysRole.system_admin, SysRole.hr, SysRole.dept_head, SysRole.manager)
   update(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: UpdateObjectiveDto,
@@ -139,7 +114,6 @@ export class ObjectivesController {
 
   /** DELETE /objectives/:id — 删除。 */
   @Delete(':id')
-  @Roles(SysRole.system_admin, SysRole.hr, SysRole.dept_head, SysRole.manager)
   remove(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @CurrentUser() viewer: AuthUser,

@@ -61,7 +61,7 @@ export class UsersController {
     return this.usersService.updateSettings(id, dto, operator);
   }
 
-  /** PATCH /users/:id/role — 更新系统角色（system_admin） */
+  /** PATCH /users/:id/role — 更新系统权限（system_admin，旧路径保留兼容） */
   @Patch(':id/role')
   @Roles(SysRole.system_admin)
   updateRole(

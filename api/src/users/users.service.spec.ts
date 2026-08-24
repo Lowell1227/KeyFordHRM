@@ -1,6 +1,10 @@
 import { EmploymentType, SysRole, UserStatus } from '@prisma/client';
 import { UsersService } from './users.service';
 
+const noBusinessIdentities = {
+  getIdentitySummariesForUsers: jest.fn().mockResolvedValue(new Map()),
+};
+
 describe('UsersService', () => {
   describe('findAll', () => {
     it('员工列表一人一行，并返回钉钉关联三态', async () => {
@@ -32,6 +36,14 @@ describe('UsersService', () => {
           },
         } as any,
         { getVisibleEmployeeFilter: jest.fn().mockResolvedValue({}) } as any,
+        {
+          getIdentitySummariesForUsers: jest.fn().mockResolvedValue(new Map([
+            ['employee-1', [
+              { type: 'department_leader', label: '部门负责人', count: 1 },
+              { type: 'performance_approver', label: '最终业务审批人', count: 2 },
+            ]],
+          ])),
+        } as any,
       );
 
       const result = await service.findAll({ page: 1, pageSize: 20, skip: 0, take: 20 } as any, {
@@ -42,6 +54,11 @@ describe('UsersService', () => {
       expect(result.items[0]).toEqual(expect.objectContaining({
         id: 'employee-1',
         dingtalkBindingState: 'disabled',
+        systemPermission: 'standard_user',
+        businessIdentities: [
+          { type: 'department_leader', label: '部门负责人', count: 1 },
+          { type: 'performance_approver', label: '最终业务审批人', count: 2 },
+        ],
       }));
       expect((service as any).prisma.user.count).toHaveBeenCalledWith({
         where: expect.objectContaining({
@@ -74,6 +91,7 @@ describe('UsersService', () => {
           $transaction: transaction,
         } as any,
         {} as any,
+        noBusinessIdentities as any,
       );
 
       await expect((service.updateManager as any)(
@@ -109,7 +127,7 @@ describe('UsersService', () => {
         $transaction: jest.fn(async (callback: (tx: unknown) => unknown) => callback({
           user: { update: jest.fn().mockResolvedValue({ ...target, directManagerId: 'manager-1' }) },
         })),
-      } as any, {} as any);
+      } as any, {} as any, noBusinessIdentities as any);
 
       await expect((service as any).updateSettings(
         'employee-1',
@@ -123,7 +141,7 @@ describe('UsersService', () => {
       });
     });
 
-    it('keeps an explicit system role change independent from the performance relationship', async () => {
+    it('rejects legacy business roles as system permissions', async () => {
       const target = {
         id: 'employee-1',
         employeeNo: null,
@@ -145,33 +163,21 @@ describe('UsersService', () => {
           })),
         } as any,
         {} as any,
+        noBusinessIdentities as any,
       );
 
-      const result = await (service as any).updateSettings(
+      await expect((service as any).updateSettings(
         target.id,
+        { sysRole: SysRole.manager },
         {
-          sysRole: SysRole.manager,
+          id: 'admin-1', name: '系统管理员', sysRole: SysRole.system_admin,
+          deptId: null, isAssessorOnly: false, canViewAll: true,
         },
-        {
-          id: 'admin-1',
-          name: '系统管理员',
-          sysRole: SysRole.system_admin,
-          deptId: null,
-          isAssessorOnly: false,
-          canViewAll: true,
-        },
-      );
-
-      expect(transactionUpdate).toHaveBeenNthCalledWith(1, {
-        where: { id: target.id },
-        data: {
-          sysRole: SysRole.manager,
-        },
+      )).rejects.toMatchObject({
+        response: { message: '系统权限仅支持标准用户、HR 管理员或系统管理员' },
       });
-      expect(transactionUpdate).toHaveBeenCalledTimes(1);
-      expect(result).toEqual(expect.objectContaining({
-        sysRole: SysRole.manager,
-      }));
+
+      expect(transactionUpdate).not.toHaveBeenCalled();
     });
   });
 
@@ -194,6 +200,7 @@ describe('UsersService', () => {
       const service = new UsersService(
         { user: { findMany } } as any,
         {} as any,
+        noBusinessIdentities as any,
       );
 
       const result = await service.findSubordinates('manager-1', {

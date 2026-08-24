@@ -33,7 +33,7 @@ export const usersApi = {
     return apiPatch(`/users/${id}/settings`, body);
   },
 
-  /** PATCH /users/:id/role — 更新系统角色 */
+  /** PATCH /users/:id/role — 更新系统权限（旧路径保留兼容） */
   updateRole(id: string, body: UpdateRoleBody): Promise<User> {
     return apiPatch(`/users/${id}/role`, body);
   },

@@ -1,18 +1,15 @@
 import { isNavigationFailure, type RouteLocationRaw, type Router } from 'vue-router';
 import type { Notification } from '@/types/api.types';
-import type { SysRole } from '@/types/enums';
-
-const DIRECT_MANAGER_ROLES = new Set<SysRole>(['manager', 'dept_head']);
 
 export function resolveNotificationTarget(
   notification: Pick<Notification, 'taskId' | 'cycleId' | 'type'>,
-  role: SysRole,
+  canManageTeam: boolean,
 ): RouteLocationRaw | null {
   const taskId = notification.taskId;
   if (!taskId) return null;
   const cycleId = notification.cycleId || undefined;
 
-  if (DIRECT_MANAGER_ROLES.has(role) && cycleId) {
+  if (canManageTeam && cycleId) {
     if (notification.type === 'indicator_setting_notice') {
       return {
         path: '/tasks',

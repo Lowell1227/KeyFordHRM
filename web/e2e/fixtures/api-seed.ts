@@ -53,7 +53,7 @@ export async function createUsers(adminToken: string) {
   const manager = await api('POST', '/users', adminToken, {
     employeeNo: 'E2E_API_MGR',
     name: '测试主管',
-    sysRole: 'manager',
+    sysRole: 'employee',
     deptId: dept.id,
     password: 'test123',
   });
@@ -70,14 +70,12 @@ export async function createUsers(adminToken: string) {
   const approver = await api('POST', '/users', adminToken, {
     employeeNo: 'E2E_API_APPROVER',
     name: '测试VP',
-    sysRole: 'vp',
+    sysRole: 'employee',
     deptId: dept.id,
     password: 'test123',
   });
 
   await api('PATCH', `/departments/${dept.id}/approver`, adminToken, { approverId: approver.data.id });
-  await api('PATCH', `/users/${manager.data.id}/role`, adminToken, { sysRole: 'manager' });
-
   return { dept, hr: hr.data, manager: manager.data, employee: employee.data, approver: approver.data };
 }
 

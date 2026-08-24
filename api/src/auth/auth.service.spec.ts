@@ -13,7 +13,7 @@ const eligibleUser = {
   id: 'test-manager-id',
   employeeNo: 'MGR001',
   name: '测试·周强明',
-  sysRole: 'manager',
+  sysRole: 'employee',
   status: 'active',
   dingtalkId: null,
   dingtalkUnionId: null,
@@ -56,6 +56,11 @@ function createService(enabled: boolean) {
       canViewPerformanceApproval: false,
       canOperatePerformanceApproval: false,
       canHandleHrCycle: false,
+      canHandleInterviews: false,
+      canHandleProbationReviews: false,
+      canHandleConfirmationApprovals: false,
+      canViewReports: true,
+      canManageObjectives: true,
       identities: [{ type: 'performance_manager', label: '绩效直属上级', count: 1 }],
     }),
   };
@@ -91,8 +96,8 @@ describe('AuthService test quick login', () => {
       accounts: [{
         employeeNo: 'MGR001',
         name: '测试·周强明',
-        sysRole: 'manager',
-        roleLabel: '主管',
+        sysRole: 'employee',
+        roleLabel: '绩效直属上级场景',
       }],
     });
   });
@@ -122,7 +127,9 @@ describe('AuthService test quick login', () => {
       user: {
         id: 'test-manager-id',
         name: '测试·周强明',
-        sysRole: 'manager',
+        sysRole: 'employee',
+        systemPermission: 'standard_user',
+        canViewAll: false,
         businessCapabilities: expect.objectContaining({ canManageTeam: true }),
       },
     });
@@ -145,6 +152,7 @@ describe('AuthService current user capabilities', () => {
 
     await expect(service.getMe(eligibleUser.id)).resolves.toMatchObject({
       id: eligibleUser.id,
+      systemPermission: 'standard_user',
       businessCapabilities: expect.objectContaining({ canManageTeam: true }),
     });
     expect(businessCapabilities.getForUser).toHaveBeenCalledWith(expect.objectContaining({ id: eligibleUser.id }));

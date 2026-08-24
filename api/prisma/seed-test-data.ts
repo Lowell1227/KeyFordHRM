@@ -208,7 +208,7 @@ async function main() {
     {
       employeeNo: "E2E_MGR",
       name: "E2E 直属主管",
-      sysRole: SysRole.manager,
+      sysRole: SysRole.employee,
       position: "E2E_MANAGER",
     },
     teamDept.id,
@@ -218,7 +218,7 @@ async function main() {
     {
       employeeNo: "E2E_DEPT_HEAD",
       name: "E2E 部门负责人",
-      sysRole: SysRole.dept_head,
+      sysRole: SysRole.employee,
       position: "E2E_DEPT_HEAD",
     },
     teamDept.id,
@@ -228,7 +228,7 @@ async function main() {
     {
       employeeNo: "E2E_VP",
       name: "E2E 分管领导",
-      sysRole: SysRole.vp,
+      sysRole: SysRole.employee,
       position: "E2E_VP",
       canViewAll: true,
     },
@@ -239,7 +239,7 @@ async function main() {
     {
       employeeNo: "E2E_CHAIRMAN",
       name: "E2E 董事长",
-      sysRole: SysRole.chairman,
+      sysRole: SysRole.employee,
       position: "E2E_CHAIRMAN",
       canViewAll: true,
     },
@@ -250,7 +250,7 @@ async function main() {
     {
       employeeNo: "E2E_APPROVER",
       name: "E2E 审批人",
-      sysRole: SysRole.vp,
+      sysRole: SysRole.employee,
       position: "E2E_APPROVER",
     },
     rootDept.id,

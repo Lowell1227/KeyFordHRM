@@ -8,5 +8,6 @@ import { BusinessCapabilitiesService } from './business-capabilities.service';
   imports: [DingtalkModule],
   controllers: [AuthController],
   providers: [AuthService, BusinessCapabilitiesService],
+  exports: [BusinessCapabilitiesService],
 })
 export class AuthModule {}

@@ -13,6 +13,14 @@ import { TestLoginDto } from './dto/test-login.dto';
 import { findTestAccount, TEST_ACCOUNT_MANIFEST } from './test-accounts';
 import { BusinessCapabilities, BusinessCapabilitiesService } from './business-capabilities.service';
 
+type SystemPermission = 'standard_user' | 'hr_admin' | 'system_admin';
+
+function toSystemPermission(sysRole: string): SystemPermission {
+  if (sysRole === 'system_admin') return 'system_admin';
+  if (sysRole === 'hr') return 'hr_admin';
+  return 'standard_user';
+}
+
 /** 登录成功响应。 */
 export interface LoginResponse {
   token: string;
@@ -21,8 +29,12 @@ export interface LoginResponse {
     id: string;
     name: string;
     sysRole: string;
+    systemPermission: SystemPermission;
+    deptId: string | null;
     deptName: string | null;
     avatarUrl: string | null;
+    isAssessorOnly: boolean;
+    canViewAll: boolean;
     businessCapabilities: BusinessCapabilities;
   };
 }
@@ -180,6 +192,7 @@ export class AuthService {
       deptPath: user.dept?.fullPath ?? null,
       position: user.position,
       sysRole: user.sysRole,
+      systemPermission: toSystemPermission(user.sysRole),
       isAssessorOnly: user.isAssessorOnly,
       canViewAll: user.canViewAll,
       directManagerId: user.directManagerId,
@@ -269,8 +282,12 @@ export class AuthService {
         id: user.id,
         name: user.name,
         sysRole: user.sysRole,
+        systemPermission: toSystemPermission(user.sysRole),
+        deptId: user.deptId,
         deptName: user.dept?.name ?? null,
         avatarUrl: user.avatarUrl,
+        isAssessorOnly: user.isAssessorOnly,
+        canViewAll: user.canViewAll,
         businessCapabilities,
       },
     };

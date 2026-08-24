@@ -60,6 +60,7 @@ async function loginAndSaveState(role: Role) {
   const page = await context.newPage();
 
   await page.goto(new URL("/login", WEB_BASE).toString());
+  await page.locator('[data-testid="password-login-toggle"]').click();
   await page.locator('[data-testid="login-employee-no"]').fill(role.employeeNo);
   await page.locator('[data-testid="login-password"]').fill(role.password);
   await page.locator('[data-testid="login-submit"]').click();

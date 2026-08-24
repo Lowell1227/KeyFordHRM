@@ -8,8 +8,6 @@ import {
   Post,
   Query,
 } from '@nestjs/common';
-import { SysRole } from '@prisma/client';
-import { Roles } from '@/common/decorators/roles.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import { ImprovementPlansService } from './improvement-plans.service';
@@ -43,7 +41,6 @@ export class ImprovementPlansController {
   /** POST /improvement-plans/:id/fill — 主管/HR 填写。 */
   @Post(':id/fill')
   @HttpCode(200)
-  @Roles(SysRole.hr, SysRole.system_admin, SysRole.manager, SysRole.dept_head)
   fill(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: FillImprovementPlanDto,
@@ -55,7 +52,6 @@ export class ImprovementPlansController {
   /** POST /improvement-plans/:id/complete — 主管/HR 录最终评分。 */
   @Post(':id/complete')
   @HttpCode(200)
-  @Roles(SysRole.hr, SysRole.system_admin, SysRole.manager, SysRole.dept_head)
   complete(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: CompleteImprovementPlanDto,
@@ -66,7 +62,6 @@ export class ImprovementPlansController {
 
   /** GET /improvement-plans/employee/:employeeId/consecutive-d-warning */
   @Get('employee/:employeeId/consecutive-d-warning')
-  @Roles(SysRole.hr, SysRole.system_admin, SysRole.vp, SysRole.chairman)
   getConsecutiveDWarning(
     @Param('employeeId', new ParseUUIDPipe({ version: '4' })) employeeId: string,
   ) {

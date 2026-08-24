@@ -33,7 +33,9 @@ const {
 } = usePagination({ defaultPageSize: 10 });
 
 const isManagerOrHR = computed(() =>
-  ['hr', 'system_admin', 'manager', 'dept_head'].includes(auth.user?.sysRole ?? ''),
+  ['hr', 'system_admin'].includes(auth.user?.sysRole ?? '')
+  || Boolean(auth.user?.businessCapabilities?.canManageTeam)
+  || Boolean(auth.user?.businessCapabilities?.canReviewDepartment),
 );
 
 const statusOptions: ImprovementPlanStatus[] = ['draft', 'in_progress', 'completed'];

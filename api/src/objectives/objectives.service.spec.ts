@@ -9,7 +9,7 @@ import { ObjectivesService } from './objectives.service';
 describe('ObjectivesService visibility helpers', () => {
   let service: ObjectivesService;
   let prisma: {
-    objective: { count: jest.Mock; findMany: jest.Mock };
+    objective: { count: jest.Mock; findMany: jest.Mock; create: jest.Mock };
     actionItem: { findMany: jest.Mock };
     user: { findMany: jest.Mock; findUnique: jest.Mock };
     assessmentTask: { findUnique: jest.Mock };
@@ -55,7 +55,7 @@ describe('ObjectivesService visibility helpers', () => {
 
   beforeEach(() => {
     prisma = {
-      objective: { count: jest.fn(), findMany: jest.fn() },
+      objective: { count: jest.fn(), findMany: jest.fn(), create: jest.fn() },
       actionItem: { findMany: jest.fn() },
       user: {
         findMany: jest.fn().mockResolvedValue([{ id: 'manager-1' }, { id: 'employee-1' }]),
@@ -262,6 +262,21 @@ describe('ObjectivesService visibility helpers', () => {
         }),
       ],
     });
+  });
+
+  it('lets a standard user create an individual objective for their direct report', async () => {
+    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'manager-1' });
+    prisma.objective.create.mockResolvedValue(visibleObjective);
+
+    await expect(service.create({
+      title: 'Visible objective',
+      level: ObjectiveLevel.individual,
+      ownerId: 'employee-1',
+      deptId: 'dept-1',
+      cycleId: 'cycle-1',
+    } as any, { ...viewer, sysRole: SysRole.employee })).resolves.toEqual(
+      expect.objectContaining({ id: 'objective-visible' }),
+    );
   });
 
   it('shows only explicitly shareable direct-manager indicators and keeps them read-only', async () => {

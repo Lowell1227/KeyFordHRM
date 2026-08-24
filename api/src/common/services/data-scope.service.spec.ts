@@ -29,7 +29,7 @@ describe('DataScopeService', () => {
           provide: PrismaService,
           useValue: {
             department: {
-              findMany: jest.fn(),
+              findMany: jest.fn().mockResolvedValue([]),
             },
             user: {
               findMany: jest.fn(),
@@ -90,70 +90,110 @@ describe('DataScopeService', () => {
       expect(filter).toEqual({});
     });
 
-    it('vp 返回其审批部门（含子部门）的成员范围', async () => {
-      jest
-        .spyOn(prisma.department, 'findMany')
-        .mockResolvedValueOnce([
-          {
-            id: 'd1',
-            name: 'Department 1',
-            parentId: null,
-            leaderId: null,
-            approverId: 'vp-1',
-          },
-        ] as any)
-        .mockResolvedValueOnce([
-          { id: 'd1', parentId: null },
+    it('遗留 vp 值不授予权限，只按实际审批关系返回部门范围', async () => {
+      jest.spyOn(prisma.department, 'findMany').mockResolvedValue([
+          { id: 'd1', name: 'Department 1', parentId: null, leaderId: null, approverId: 'vp-1' },
           { id: 'd2', parentId: 'd1' },
           { id: 'd3', parentId: null },
         ] as any);
 
       const filter = await service.getVisibleEmployeeFilter(makeUser({ sysRole: SysRole.vp, id: 'vp-1' }));
-      expect(filter).toEqual({ deptId: { in: expect.arrayContaining(['d1', 'd2']) } });
-      expect((filter as any).deptId.in).toHaveLength(2);
+      expect(filter).toEqual({
+        OR: [
+          { id: 'vp-1' },
+          { directManagerId: 'vp-1' },
+          { deptId: { in: expect.arrayContaining(['d1', 'd2']) } },
+        ],
+      });
     });
 
     it('vp 未担任任何部门审批人时只能看自己', async () => {
       jest.spyOn(prisma.department, 'findMany').mockResolvedValue([] as any);
 
       const filter = await service.getVisibleEmployeeFilter(makeUser({ sysRole: SysRole.vp, id: 'vp-1' }));
-      expect(filter).toEqual({ id: 'vp-1' });
+      expect(filter).toEqual({ OR: [{ id: 'vp-1' }, { directManagerId: 'vp-1' }] });
     });
 
-    it('dept_head 返回其负责部门（含子部门）的成员范围', async () => {
-      jest
-        .spyOn(prisma.department, 'findMany')
-        .mockResolvedValueOnce([{ id: 'd1' }] as any)
-        .mockResolvedValueOnce([
-          { id: 'd1', parentId: null },
+    it('遗留 dept_head 值不授予权限，只按实际负责人关系返回部门范围', async () => {
+      jest.spyOn(prisma.department, 'findMany').mockResolvedValue([
+          { id: 'd1', parentId: null, leaderId: 'head-1', approverId: null },
           { id: 'd2', parentId: 'd1' },
         ] as any);
 
       const filter = await service.getVisibleEmployeeFilter(makeUser({ sysRole: SysRole.dept_head, id: 'head-1' }));
-      expect(filter).toEqual({ deptId: { in: expect.arrayContaining(['d1', 'd2']) } });
-      expect((filter as any).deptId.in).toHaveLength(2);
+      expect(filter).toEqual({
+        OR: [
+          { id: 'head-1' },
+          { directManagerId: 'head-1' },
+          { deptId: { in: ['d1', 'd2'] } },
+        ],
+      });
     });
 
     it('dept_head 未负责任何部门时只能看自己', async () => {
       jest.spyOn(prisma.department, 'findMany').mockResolvedValue([] as any);
 
       const filter = await service.getVisibleEmployeeFilter(makeUser({ sysRole: SysRole.dept_head, id: 'head-1' }));
-      expect(filter).toEqual({ id: 'head-1' });
+      expect(filter).toEqual({ OR: [{ id: 'head-1' }, { directManagerId: 'head-1' }] });
     });
 
     it('manager 返回直接下属及自己', async () => {
       const filter = await service.getVisibleEmployeeFilter(makeUser({ sysRole: SysRole.manager, id: 'mgr-1' }));
       expect(filter).toEqual({
-        OR: [{ directManagerId: 'mgr-1' }, { id: 'mgr-1' }],
+        OR: [{ id: 'mgr-1' }, { directManagerId: 'mgr-1' }],
       });
     });
 
-    it('普通 employee 只能看自己', async () => {
+    it('普通 employee 没有业务关系时只能看自己', async () => {
+      jest.spyOn(prisma.department, 'findMany').mockResolvedValue([] as any);
+
       const filter = await service.getVisibleEmployeeFilter(makeUser({ sysRole: SysRole.employee, id: 'emp-1' }));
-      expect(filter).toEqual({ id: 'emp-1' });
+      expect(filter).toEqual({
+        OR: [{ id: 'emp-1' }, { directManagerId: 'emp-1' }],
+      });
+    });
+
+    it('普通 employee 按直属上级、部门负责人和最终审批人关系合并可见范围', async () => {
+      jest.spyOn(prisma.department, 'findMany').mockResolvedValue([
+        {
+          id: 'led-dept',
+          name: '销售部',
+          parentId: null,
+          leaderId: 'employee-manager',
+          approverId: null,
+        },
+        {
+          id: 'approved-dept',
+          name: '运营部',
+          parentId: null,
+          leaderId: 'other-leader',
+          approverId: 'employee-manager',
+        },
+        {
+          id: 'child-dept',
+          name: '运营一组',
+          parentId: 'approved-dept',
+          leaderId: null,
+          approverId: null,
+        },
+      ] as any);
+
+      const filter = await service.getVisibleEmployeeFilter(makeUser({
+        sysRole: SysRole.employee,
+        id: 'employee-manager',
+      }));
+
+      expect(filter).toEqual({
+        OR: [
+          { id: 'employee-manager' },
+          { directManagerId: 'employee-manager' },
+          { deptId: { in: ['led-dept', 'approved-dept', 'child-dept'] } },
+        ],
+      });
     });
 
     it('assessor_only 只能看自己', async () => {
+      jest.spyOn(prisma.department, 'findMany').mockResolvedValue([] as any);
       const filter = await service.getVisibleEmployeeFilter(
         makeUser({ sysRole: SysRole.employee, id: 'assessor-1', isAssessorOnly: true }),
       );

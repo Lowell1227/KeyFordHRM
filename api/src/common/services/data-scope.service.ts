@@ -8,7 +8,7 @@ import { findDepartmentsByEffectiveApprover } from '@/departments/department-rel
 /**
  * 数据权限助手服务。
  *
- * 负责根据当前用户的角色与部门关系，计算其可见的在职员工范围，
+ * 负责根据当前用户的系统权限与实时业务关系，计算其可见的在职员工范围，
  * 以及递归收集部门及其所有后代部门。
  */
 @Injectable()
@@ -87,13 +87,11 @@ export class DataScopeService {
   /**
    * 返回 viewer 能看到的在职用户的 Prisma UserWhereInput 过滤条件。
    *
-   * 规则按 PRD 3.2：
+   * 规则：
    * - system_admin 或 canViewAll === true → 全量 {}
    * - SysRole.hr → 全量 {}
-   * - SysRole.vp → viewer.id 作为 departments.approver_id 的部门（含子部门）的全部成员
-   * - SysRole.dept_head → viewer.id 作为 departments.leader_id 的部门（含子部门）的全部成员
-   * - SysRole.manager → directManagerId = viewer.id 的用户，加上 viewer 自己
-   * - 其他（employee / assessor） → 仅自己
+   * - 其他账号按实时关系合并：本人、直属下属、负责部门、最终审批范围
+   * - assessor_only 始终仅看本人
    *
    * @param viewer - 当前登录用户（AuthUser）
    * @returns Prisma.UserWhereInput 对象，可直接传入 Prisma 查询的 where 参数
@@ -109,56 +107,62 @@ export class DataScopeService {
       return {};
     }
 
-    /** VP 角色 → 可见自己作为 approver_id 的部门（含子部门）下的全部成员。 */
-    if (viewer.sysRole === SysRole.vp) {
-      const allDepts = await this.prisma.department.findMany({
-        select: {
-          id: true,
-          name: true,
-          parentId: true,
-          leaderId: true,
-          approverId: true,
+    if (viewer.isAssessorOnly) return { id: viewer.id };
+
+    const departments = await this.prisma.department.findMany({
+      where: { isActive: true },
+      select: {
+        id: true,
+        name: true,
+        parentId: true,
+        leaderId: true,
+        approverId: true,
+        leader: {
+          select: {
+            name: true,
+            directManagerId: true,
+            directManager: { select: { name: true } },
+          },
         },
-      });
-      const managedDeptIds = findDepartmentsByEffectiveApprover(allDepts, viewer.id);
+        approver: { select: { name: true } },
+      },
+    });
 
-      if (managedDeptIds.length === 0) {
-        return { id: viewer.id };
-      }
-
-      const deptIds = (
-        await Promise.all(managedDeptIds.map((deptId) => this.getSubDeptIds(deptId)))
-      ).flat();
-
-      return { deptId: { in: Array.from(new Set(deptIds)) } };
+    const relations = departments.map((department) => ({
+      id: department.id,
+      name: department.name,
+      parentId: department.parentId,
+      leaderId: department.leaderId,
+      leaderName: department.leader?.name ?? null,
+      leaderDirectManagerId: department.leader?.directManagerId ?? null,
+      leaderDirectManagerName: department.leader?.directManager?.name ?? null,
+      approverId: department.approverId,
+      approverName: department.approver?.name ?? null,
+    }));
+    const scopeRoots = new Set([
+      ...relations.filter((department) => department.leaderId === viewer.id).map((department) => department.id),
+      ...findDepartmentsByEffectiveApprover(relations, viewer.id),
+    ]);
+    const children = new Map<string, string[]>();
+    for (const department of relations) {
+      if (!department.parentId) continue;
+      children.set(department.parentId, [...(children.get(department.parentId) ?? []), department.id]);
+    }
+    const departmentIds = new Set<string>();
+    const queue = [...scopeRoots];
+    while (queue.length > 0) {
+      const departmentId = queue.shift()!;
+      if (departmentIds.has(departmentId)) continue;
+      departmentIds.add(departmentId);
+      queue.push(...(children.get(departmentId) ?? []));
     }
 
-    /** 部门负责人 → 可见自己作为 leader_id 的部门（含子部门）下的全部成员。 */
-    if (viewer.sysRole === SysRole.dept_head) {
-      const managedDepts = await this.prisma.department.findMany({
-        where: { leaderId: viewer.id },
-        select: { id: true },
-      });
-
-      if (managedDepts.length === 0) {
-        return { id: viewer.id };
-      }
-
-      const deptIds = (
-        await Promise.all(managedDepts.map((d) => this.getSubDeptIds(d.id)))
-      ).flat();
-
-      return { deptId: { in: Array.from(new Set(deptIds)) } };
-    }
-
-    /** 经理 → 可见自己的直接下属以及自己。 */
-    if (viewer.sysRole === SysRole.manager) {
-      return {
-        OR: [{ directManagerId: viewer.id }, { id: viewer.id }],
-      };
-    }
-
-    /** 普通员工 / 评估员 → 仅可见自己。 */
-    return { id: viewer.id };
+    return {
+      OR: [
+        { id: viewer.id },
+        { directManagerId: viewer.id },
+        ...(departmentIds.size > 0 ? [{ deptId: { in: [...departmentIds] } }] : []),
+      ],
+    };
   }
 }

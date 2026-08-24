@@ -1,5 +1,5 @@
 import { SysRole } from '@prisma/client';
-import { IsBoolean, IsEnum, IsOptional, IsUUID } from 'class-validator';
+import { IsBoolean, IsIn, IsOptional, IsUUID } from 'class-validator';
 
 export class UpdateUserSettingsDto {
   @IsOptional()
@@ -7,7 +7,7 @@ export class UpdateUserSettingsDto {
   directManagerId?: string | null;
 
   @IsOptional()
-  @IsEnum(SysRole)
+  @IsIn([SysRole.employee, SysRole.hr, SysRole.system_admin])
   sysRole?: SysRole;
 
   @IsOptional()

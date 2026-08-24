@@ -291,14 +291,12 @@ export class ActionItemsService {
     if (item.createdBy === viewer.id) return;
     if (item.assigneeId === viewer.id) return;
 
-    if (viewer.sysRole === SysRole.manager || viewer.sysRole === SysRole.dept_head) {
-      const assigneeIsSubordinate = item.assigneeId
-        ? await this.prisma.user.count({
-            where: { id: item.assigneeId, directManagerId: viewer.id },
-          })
-        : 0;
-      if (assigneeIsSubordinate > 0) return;
-    }
+    const assigneeIsSubordinate = item.assigneeId
+      ? await this.prisma.user.count({
+          where: { id: item.assigneeId, directManagerId: viewer.id },
+        })
+      : 0;
+    if (assigneeIsSubordinate > 0) return;
 
     throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权操作该行动项' });
   }

@@ -11,7 +11,25 @@ import { UpdateManagerDto } from './dto/update-manager.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
 import { UpdateUserSettingsDto } from './dto/update-user-settings.dto';
 import { SetPasswordDto } from './dto/set-password.dto';
+import {
+  BusinessCapabilitiesService,
+  BusinessIdentity,
+} from '@/auth/business-capabilities.service';
 import * as bcrypt from 'bcrypt';
+
+export type SystemPermission = 'standard_user' | 'hr_admin' | 'system_admin';
+
+const EDITABLE_SYSTEM_ROLES = new Set<SysRole>([
+  SysRole.employee,
+  SysRole.hr,
+  SysRole.system_admin,
+]);
+
+export function toSystemPermission(sysRole: SysRole): SystemPermission {
+  if (sysRole === SysRole.system_admin) return 'system_admin';
+  if (sysRole === SysRole.hr) return 'hr_admin';
+  return 'standard_user';
+}
 
 /** 用户列表项字段（参考后端文档 3.2） */
 export interface UserListItem {
@@ -25,6 +43,8 @@ export interface UserListItem {
   deptName: string | null;
   position: string | null;
   sysRole: SysRole;
+  systemPermission: SystemPermission;
+  businessIdentities: BusinessIdentity[];
   status: UserStatus;
   employmentType: EmploymentType;
   directManagerId: string | null;
@@ -48,6 +68,8 @@ export interface UserDetail {
   deptPath: string | null;
   position: string | null;
   sysRole: SysRole;
+  systemPermission: SystemPermission;
+  businessIdentities: BusinessIdentity[];
   status: UserStatus;
   employmentType: EmploymentType;
   directManagerId: string | null;
@@ -82,6 +104,7 @@ export class UsersService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly dataScope: DataScopeService,
+    private readonly businessCapabilities: BusinessCapabilitiesService,
   ) {}
 
   /** GET /users — 查询用户列表 */
@@ -109,9 +132,11 @@ export class UsersService {
       where.employmentType = dto.employmentType;
     }
 
-    // 系统角色过滤
+    // 系统权限过滤（employee 同时兼容尚未归一化的历史业务角色值）
     if (dto.sysRole) {
-      where.sysRole = dto.sysRole;
+      where.sysRole = dto.sysRole === SysRole.employee
+        ? { notIn: [SysRole.hr, SysRole.system_admin] }
+        : dto.sysRole;
     }
 
     // 关键词过滤（name / employeeNo 不区分大小写）
@@ -147,6 +172,9 @@ export class UsersService {
       }),
     ]);
 
+    const identitiesByUser = await this.businessCapabilities.getIdentitySummariesForUsers(
+      users.map((user) => user.id),
+    );
     const items: UserListItem[] = users.map((u) => ({
       id: u.id,
       employeeNo: u.employeeNo,
@@ -158,6 +186,8 @@ export class UsersService {
       deptName: u.dept?.name ?? null,
       position: u.position,
       sysRole: u.sysRole,
+      systemPermission: toSystemPermission(u.sysRole),
+      businessIdentities: identitiesByUser.get(u.id) ?? [],
       status: u.status,
       employmentType: u.employmentType,
       directManagerId: u.directManagerId,
@@ -214,6 +244,7 @@ export class UsersService {
       });
     }
 
+    const identities = await this.businessCapabilities.getIdentitySummariesForUsers([user.id]);
     return {
       id: user.id,
       employeeNo: user.employeeNo,
@@ -226,6 +257,8 @@ export class UsersService {
       deptPath: user.dept?.fullPath ?? null,
       position: user.position,
       sysRole: user.sysRole,
+      systemPermission: toSystemPermission(user.sysRole),
+      businessIdentities: identities.get(user.id) ?? [],
       status: user.status,
       employmentType: user.employmentType,
       directManagerId: user.directManagerId,
@@ -319,6 +352,13 @@ export class UsersService {
       });
     }
 
+    if (dto.sysRole !== undefined && !EDITABLE_SYSTEM_ROLES.has(dto.sysRole)) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '系统权限仅支持标准用户、HR 管理员或系统管理员',
+      });
+    }
+
     const updateData: Prisma.UserUncheckedUpdateInput = {};
     if (dto.sysRole !== undefined) {
       updateData.sysRole = dto.sysRole;
@@ -335,7 +375,7 @@ export class UsersService {
     return this.toSummary(updated);
   }
 
-  /** PATCH /users/:id/role — 更新系统角色 */
+  /** PATCH /users/:id/role — 更新系统权限（旧路由兼容）。 */
   async updateRole(id: string, dto: UpdateRoleDto): Promise<UserSummary> {
     const targetUser = await this.prisma.user.findUnique({
       where: { id, deletedAt: null },
@@ -344,6 +384,13 @@ export class UsersService {
       throw new NotFoundException({
         code: ERROR_CODE.NOT_FOUND,
         message: '用户不存在',
+      });
+    }
+
+    if (!EDITABLE_SYSTEM_ROLES.has(dto.sysRole)) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '系统权限仅支持标准用户、HR 管理员或系统管理员',
       });
     }
 

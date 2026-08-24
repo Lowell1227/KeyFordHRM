@@ -388,7 +388,7 @@ export class InterviewsService {
     interview: { interviewerId: string },
     viewer: AuthUser,
   ): void {
-    if (interview.interviewerId !== viewer.id && !this.canViewAll(viewer)) {
+    if (interview.interviewerId !== viewer.id) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅面谈人可填写该面谈记录' });
     }
   }

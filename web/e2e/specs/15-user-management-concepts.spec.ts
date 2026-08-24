@@ -48,9 +48,12 @@ test('uses concise and consistent organization relationship concepts', async () 
   expect(source).not.toContain('openRoleDialog');
   expect(source).not.toContain('该员工的系统角色');
   expect(source).toContain('绩效直属上级关系：已生效');
-  expect(source).toContain('系统角色已更新；绩效直属上级变更已提交 HR 审核');
+  expect(source).toContain('系统权限已更新；绩效直属上级变更已提交 HR 审核');
   expect(source).toContain("ElMessage.success('绩效直属上级变更已提交 HR 审核')");
-  expect(source).toContain("ElMessage.success('系统角色已更新')");
+  expect(source).toContain("ElMessage.success('系统权限已更新')");
+  expect(source).toContain('业务身份');
+  expect(source).not.toContain("{ label: '董事长', value: 'chairman' }");
+  expect(source).not.toContain("{ label: '主管', value: 'manager' }");
   expect(source).not.toContain('主管权限：已开通');
   expect(source).not.toContain('绩效关系审核通过时自动开通');
   expect(source).not.toContain('设置负责人');
@@ -98,6 +101,8 @@ test('keeps the employee roster pager visible while the table scrolls independen
     directManagerId: 'manager-1',
     directManagerName: '直属主管',
     sysRole: 'employee',
+    systemPermission: 'standard_user',
+    businessIdentities: [],
     isAssessorOnly: false,
     canViewAll: false,
     dingtalkBindingState: 'unbound',
@@ -398,18 +403,19 @@ test('uses one person settings dialog and keeps performance identity separate fr
 
   await page.goto(`${webBaseUrl}/users`);
   await expect(page.getByRole('columnheader', { name: '岗位', exact: true })).toBeVisible();
-  await expect(page.getByRole('columnheader', { name: '系统角色', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: '系统权限', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: '业务身份', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '人员设置' }).click();
   const dialog = page.getByRole('dialog', { name: '人员设置' });
   await expect(dialog.getByText('余焱玲的岗位', { exact: true })).toBeVisible();
   await expect(dialog.locator('.el-form-item').filter({ hasText: '余焱玲的岗位' })).toContainText('人事专员');
-  await expect(dialog.getByText('余焱玲的系统角色', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('余焱玲的系统权限', { exact: true })).toBeVisible();
   await dialog.locator('.el-form-item').filter({ hasText: '绩效直属上级' }).locator('.el-select').click();
   await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '方园' }).click();
   await expect(dialog).toContainText('方园的绩效直属上级关系：提交后待 HR 审核');
   await expect(dialog).toContainText('关系待审核');
   await expect(dialog).toContainText('审核通过后，方园将作为余焱玲的绩效直属上级');
-  await expect(dialog).toContainText('系统角色“员工”和岗位“HRBP”保持不变');
+  await expect(dialog).toContainText('系统权限“标准用户”和岗位“HRBP”保持不变');
   await expect(dialog).not.toContainText('升级为主管');
   await expect(dialog).not.toContainText('主管权限：未开通');
   await dialog.getByRole('button', { name: '提交审核' }).click();
@@ -420,11 +426,12 @@ test('uses one person settings dialog and keeps performance identity separate fr
 
   await page.getByRole('button', { name: '员工名册' }).click();
   await expect(page.getByRole('columnheader', { name: '岗位', exact: true })).toBeVisible();
-  await expect(page.getByRole('columnheader', { name: '系统角色', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: '系统权限', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: '业务身份', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '人员设置' }).click();
   const rosterDialog = page.getByRole('dialog', { name: '人员设置' });
   await expect(rosterDialog.getByText('余焱玲的岗位', { exact: true })).toBeVisible();
-  await expect(rosterDialog.getByText('余焱玲的系统角色', { exact: true })).toBeVisible();
+  await expect(rosterDialog.getByText('余焱玲的系统权限', { exact: true })).toBeVisible();
 });
 
 test('opens one employee archive with employment history, contracts and an identity-only DingTalk switch', async ({ page }) => {

@@ -39,12 +39,14 @@ test.describe("02-role-menu-visibility navigation manager", () => {
     const dashboard = new DashboardPage(page);
     await dashboard.goto();
 
-    await expectModules(dashboard, ["工作台", "绩效", "试用期与转正"]);
+    await expectModules(dashboard, ["工作台", "绩效", "试用期与转正", "分析与设置"]);
     await dashboard.openModule("performance");
     await expect(dashboard.menuItem("绩效工作台")).toBeVisible();
-    await expect(dashboard.menuItem("绩效面谈")).toBeVisible();
+    await expect(dashboard.menuItem("绩效面谈")).toHaveCount(0);
     await expect(dashboard.menuItem("团队绩效")).toHaveCount(0);
-    await expect(dashboard.module("analysis")).toHaveCount(0);
+    await dashboard.openModule("analysis");
+    await expect(dashboard.menuItem("报表分析")).toBeVisible();
+    await expect(dashboard.menuItem("员工档案")).toHaveCount(0);
   });
 });
 
@@ -70,7 +72,7 @@ test.describe("02-role-menu-visibility navigation HR", () => {
     await expect(dashboard.groupTitle("指标与模板")).toBeVisible();
     await expect(dashboard.menuItem("指标库")).toBeVisible();
     await expect(dashboard.menuItem("考核模板")).toBeVisible();
-    await expect(dashboard.menuItem("用户管理")).toBeVisible();
+    await expect(dashboard.menuItem("员工档案")).toBeVisible();
   });
 });
 
@@ -144,7 +146,7 @@ test.describe("02-role-menu-visibility navigation system administrator", () => {
     await expect(dashboard.menuItem("结果审批")).toBeVisible();
     await dashboard.openModule("analysis");
     await expect(dashboard.groupTitle("指标与模板")).toBeVisible();
-    await expect(dashboard.menuItem("用户管理")).toBeVisible();
+    await expect(dashboard.menuItem("员工档案")).toBeVisible();
   });
 });
 

@@ -20,16 +20,14 @@ import type { PerfGrade, TeamTaskStage } from '@/types/enums';
 const auth = useAuthStore();
 const router = useRouter();
 
-const isEmployee = computed(() => auth.user?.sysRole === 'employee');
 const userRole = computed(() => auth.user?.sysRole ?? '');
 const userId = computed(() => auth.user?.id ?? '');
 const isDirectManager = computed(() => auth.isManager);
+const canViewReports = computed(() => Boolean(auth.user?.businessCapabilities?.canViewReports));
 const canOpenManagementTask = computed(() => Boolean(
-  auth.isManager
-  || auth.user?.businessCapabilities?.canReviewDepartment
-  || auth.user?.businessCapabilities?.canOperatePerformanceApproval
-  || ['manager', 'dept_head', 'vp', 'chairman', 'hr', 'system_admin'].includes(userRole.value)
+  canViewReports.value
 ));
+const isEmployee = computed(() => !canOpenManagementTask.value && !auth.canAccessAdmin);
 const GRADES: PerfGrade[] = ['A', 'B', 'C', 'D'];
 
 const dashboardLoading = ref(false);
@@ -125,7 +123,7 @@ async function loadTeamTaskCount(requestId: number, stage: TeamTaskStage) {
 
 function loadTaskEntries() {
   const requestId = ++taskEntryRequestSerial;
-  const loadPersonal = isEmployee.value || isDirectManager.value;
+  const loadPersonal = Boolean(auth.user);
   const loadTeam = isDirectManager.value;
   resetTaskEntries();
   personalTaskLoading.value = loadPersonal;
@@ -180,9 +178,7 @@ const qualifiedRate = computed(() =>
   summary.value?.stats.qualifiedRate
   ?? (resultedCount.value === 0 ? 0 : qualifiedCount.value / resultedCount.value),
 );
-const canOpenReports = computed(() =>
-  ['hr', 'system_admin', 'vp', 'chairman'].includes(userRole.value),
-);
+const canOpenReports = canViewReports;
 
 function formatPercent(value: number): number {
   return Number((value * 100).toFixed(1));
@@ -209,7 +205,7 @@ const roleQuickActions = computed<DashboardQuickAction[]>(() => {
       { label: '结果审批', description: '处理待审批的绩效结果', path: '/approval' },
     );
   }
-  if (userRole.value === 'vp' || userRole.value === 'chairman') {
+  if (canViewReports.value) {
     actions.push(
       { label: '报表分析', description: '查看分管范围结果与重点关注', path: '/reports' },
     );
@@ -267,9 +263,9 @@ async function loadDashboardData() {
 let dashboardLoaded = false;
 
 watch(
-  userRole,
-  (role) => {
-    if (role && role !== 'employee' && !dashboardLoaded) {
+  canViewReports,
+  (canView) => {
+    if (canView && !dashboardLoaded) {
       dashboardLoaded = true;
       void loadDashboardData();
     }
@@ -412,7 +408,7 @@ function avatarColor(name: string): string {
       <section v-if="roleQuickActions.length" class="quick-actions" data-testid="dashboard-quick-actions">
         <header class="quick-actions__header">
           <h2>常用工作入口</h2>
-          <p>按当前角色展示高频业务动作。</p>
+          <p>按当前系统权限和实际业务身份展示高频工作。</p>
         </header>
         <div class="quick-actions__grid">
           <button
@@ -429,7 +425,7 @@ function avatarColor(name: string): string {
         </div>
       </section>
 
-      <template v-if="!isEmployee">
+      <template v-if="canViewReports">
       <section class="result-summary" data-testid="dashboard-result-summary">
         <div class="result-summary__heading">
           <div>

@@ -164,7 +164,15 @@ async function onPasswordLogin() {
     </a>
 
     <el-divider>
-      <span class="other" @click="showPasswordForm = !showPasswordForm">管理员账号登录</span>
+      <button
+        type="button"
+        class="other other-login-toggle"
+        data-testid="password-login-toggle"
+        :aria-expanded="showPasswordForm"
+        @click="showPasswordForm = !showPasswordForm"
+      >
+        管理员账号登录
+      </button>
     </el-divider>
 
     <el-form v-show="showPasswordForm" @submit.prevent="onPasswordLogin">
@@ -186,7 +194,7 @@ async function onPasswordLogin() {
           :aria-expanded="showTestAccounts"
           @click="showTestAccounts = !showTestAccounts"
         >
-          验收账号登录（{{ testAccounts.length }}个角色）
+          验收账号登录（{{ testAccounts.length }}个场景）
           <span aria-hidden="true">{{ showTestAccounts ? '收起' : '展开' }}</span>
         </button>
       </el-divider>
@@ -257,6 +265,13 @@ async function onPasswordLogin() {
 }
 .manual-link:hover {
   text-decoration: underline;
+}
+.other-login-toggle {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
 }
 .manual-link:focus-visible {
   outline: 2px solid var(--el-color-primary-light-5);

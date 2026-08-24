@@ -96,8 +96,8 @@ async function markAllRead() {
 }
 
 function notificationTarget(item: (typeof store.recent)[number]) {
-  const role = auth.user?.sysRole;
-  return role ? resolveNotificationTarget(item, role) : null;
+  if (!auth.user) return null;
+  return resolveNotificationTarget(item, Boolean(auth.user.businessCapabilities?.canManageTeam));
 }
 
 function isProcessing(id: string) {

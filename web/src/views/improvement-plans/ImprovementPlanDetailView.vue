@@ -29,7 +29,9 @@ const saving = ref(false);
 const completing = ref(false);
 
 const isManagerOrHR = computed(() =>
-  ['hr', 'system_admin', 'manager', 'dept_head'].includes(auth.user?.sysRole ?? ''),
+  ['hr', 'system_admin'].includes(auth.user?.sysRole ?? '')
+  || Boolean(auth.user?.businessCapabilities?.canManageTeam)
+  || Boolean(auth.user?.businessCapabilities?.canReviewDepartment),
 );
 
 const canEdit = computed(() => {

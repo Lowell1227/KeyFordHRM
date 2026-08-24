@@ -69,6 +69,7 @@ async function main() {
   const userIdByName = new Map<string, string>();
   const userIdByNo = new Map<string, string>();
   for (const u of users) {
+    const sysRole = u.sysRole === 'system_admin' ? 'system_admin' : u.sysRole === 'hr' ? 'hr' : 'employee';
     const base = {
       name: u.name,
       position: u.position ?? undefined,
@@ -78,8 +79,8 @@ async function main() {
       actualRegularDate: d(u.actualRegularDate),
       employmentType: u.employmentType as any,
       status: u.status as any,
-      sysRole: u.sysRole as any,
-      canViewAll: u.canViewAll,
+      sysRole: sysRole as any,
+      canViewAll: sysRole === 'system_admin' || sysRole === 'hr',
       passwordHash,
       deletedAt: null,
     } satisfies Prisma.UserUncheckedUpdateInput;
@@ -108,20 +109,20 @@ async function main() {
   }
   console.log(`✓ 直属上级已连 ${linked}`);
 
-  // —— 4) 部门负责人：把部门内最高角色者设为 leader（粗略，便于演示）——
-  const rolePri: Record<string, number> = {
-    chairman: 6, vp: 5, dept_head: 4, hr: 3, manager: 2, employee: 1, system_admin: 0,
-  };
+  // —— 4) 部门负责人：只依据花名册直属主管关系推导，不再依据旧系统角色 ——
   for (const [key, id] of deptId) {
-    const members = await prisma.user.findMany({
-      where: { deptId: id, deletedAt: null },
-      select: { id: true, sysRole: true },
-    });
-    if (!members.length) continue;
-    const top = members.sort((a, b) => (rolePri[b.sysRole] ?? 0) - (rolePri[a.sysRole] ?? 0))[0];
-    await prisma.department.update({ where: { id }, data: { leaderId: top.id } });
+    const members = users.filter((user) => user.deptKey === key);
+    const managerCounts = new Map<string, number>();
+    for (const member of members) {
+      if (!member.managerName || !members.some((candidate) => candidate.name === member.managerName)) continue;
+      managerCounts.set(member.managerName, (managerCounts.get(member.managerName) ?? 0) + 1);
+    }
+    const ranked = [...managerCounts.entries()].sort((left, right) => right[1] - left[1]);
+    if (!ranked.length || (ranked[1] && ranked[0][1] === ranked[1][1])) continue;
+    const leaderId = userIdByName.get(ranked[0][0]);
+    if (leaderId) await prisma.department.update({ where: { id }, data: { leaderId } });
   }
-  console.log(`✓ 部门负责人已粗设`);
+  console.log(`✓ 部门负责人已按花名册直属主管关系推导`);
 
   console.log(`\n▶ 完成。导入用户密码统一为 ${DEFAULT_PWD}，用工号登录。`);
 }

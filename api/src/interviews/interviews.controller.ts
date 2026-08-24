@@ -8,8 +8,6 @@ import {
   Put,
   Query,
 } from '@nestjs/common';
-import { SysRole } from '@prisma/client';
-import { Roles } from '@/common/decorators/roles.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import { InterviewsService } from './interviews.service';
@@ -23,7 +21,6 @@ export class InterviewsController {
 
   /** GET /interviews — 主管面谈列表。 */
   @Get()
-  @Roles(SysRole.manager, SysRole.dept_head, SysRole.vp, SysRole.hr, SysRole.system_admin)
   findAll(@Query() dto: InterviewQueryDto, @CurrentUser() viewer: AuthUser) {
     return this.interviewsService.findAll(dto, viewer);
   }
@@ -45,7 +42,6 @@ export class InterviewsController {
 
   /** PUT /interviews/:id — 主管填写面谈记录。 */
   @Put(':id')
-  @Roles(SysRole.manager, SysRole.dept_head, SysRole.vp, SysRole.hr, SysRole.system_admin)
   update(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: UpdateInterviewDto,
@@ -56,7 +52,6 @@ export class InterviewsController {
 
   /** POST /interviews/:id/manager-sign — 主管签字。 */
   @Post(':id/manager-sign')
-  @Roles(SysRole.manager, SysRole.dept_head, SysRole.vp, SysRole.hr, SysRole.system_admin)
   managerSign(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @CurrentUser() viewer: AuthUser,

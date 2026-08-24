@@ -78,14 +78,11 @@ const display = ref(parseObjectiveMapDisplay(
     : window.localStorage.getItem(OBJECTIVE_MAP_DISPLAY_STORAGE_KEY),
 ));
 
-const canManage = computed(() =>
-  ['system_admin', 'hr', 'dept_head', 'manager'].includes(auth.user?.sysRole ?? ''),
-);
+const canManage = computed(() => Boolean(auth.user?.businessCapabilities?.canManageObjectives));
 
 function defaultLevelForCreate(): ObjectiveLevel {
-  const role = auth.user?.sysRole;
-  if (role === 'manager') return 'individual';
-  if (role === 'dept_head') return 'department';
+  if (auth.user?.businessCapabilities?.canReviewDepartment) return 'department';
+  if (auth.user?.businessCapabilities?.canManageTeam) return 'individual';
   return 'company';
 }
 
@@ -205,8 +202,8 @@ async function loadUsers() {
   try {
     const u = auth.user;
     if (!u) return;
-    // 主管看下属、HR/管理员看全员、其余角色至少能选到自己——按角色取可分配人选，避免越权 403。
-    if (u.sysRole === 'manager' && u.id) {
+    // 绩效直属上级看自己的下属；HR/管理员看全员；其余业务负责人至少能选到自己。
+    if (u.businessCapabilities?.canManageTeam && u.id) {
       const subs = await usersApi.getSubordinates(u.id);
       directReports.value = subs;
       users.value = [...subs, u as User];
@@ -271,8 +268,7 @@ let scopeInitialized = false;
 watch(scopeCounts, (counts) => {
   const hasAnyScope = Object.values(counts).some((count) => count > 0);
   if (!hasAnyScope) return;
-  const role = auth.user?.sysRole;
-  const order: ObjectiveMapScope[] = role === 'manager'
+  const order: ObjectiveMapScope[] = auth.user?.businessCapabilities?.canManageTeam
     ? ['team', 'mine', 'organization', 'other']
     : ['mine', 'organization', 'other', 'team'];
   if (!scopeInitialized) {

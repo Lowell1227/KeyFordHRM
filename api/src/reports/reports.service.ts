@@ -308,6 +308,7 @@ export class ReportsService {
     cycleId: string,
     options: {
       approverId?: string;
+      responsibleUserId?: string;
       deptId?: string;
       grade?: PerfGrade;
       employeeWhere?: Prisma.UserWhereInput;
@@ -322,7 +323,16 @@ export class ReportsService {
       where.approverId = options.approverId;
     }
 
-    if (options.employeeWhere) {
+    if (options.employeeWhere && options.responsibleUserId) {
+      where.AND = [{
+        OR: [
+          { employee: options.employeeWhere },
+          { managerId: options.responsibleUserId },
+          { deptHeadId: options.responsibleUserId },
+          { approverId: options.responsibleUserId },
+        ],
+      }];
+    } else if (options.employeeWhere) {
       where.employee = options.employeeWhere;
     }
 
@@ -361,21 +371,22 @@ export class ReportsService {
 
     const options: {
       approverId?: string;
+      responsibleUserId?: string;
       deptId?: string;
       grade?: PerfGrade;
       employeeWhere?: Prisma.UserWhereInput;
     } = {};
 
-    // 数据范围：hr / system_admin / canViewAll 全量；vp / chairman 非全量时按 approver_id
+    // 数据范围：系统管理员、HR 管理员和全量只读账号可看全量；
+    // 其他账号合并当前组织范围与历史任务责任，不依赖旧主管/高管角色。
     const canViewAll =
       viewer.sysRole === SysRole.hr ||
       viewer.sysRole === SysRole.system_admin ||
       viewer.canViewAll === true;
 
-    if (!canViewAll && (viewer.sysRole === SysRole.vp || viewer.sysRole === SysRole.chairman)) {
-      options.approverId = viewer.id;
-    } else if (!canViewAll) {
+    if (!canViewAll) {
       options.employeeWhere = await this.dataScope.getVisibleEmployeeFilter(viewer);
+      options.responsibleUserId = viewer.id;
     }
 
     if (dto.deptId) {

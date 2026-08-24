@@ -2,10 +2,13 @@ import { BusinessCapabilitiesService } from './business-capabilities.service';
 
 function createService() {
   const prisma = {
-    user: { count: jest.fn() },
+    user: { count: jest.fn(), groupBy: jest.fn() },
     department: { findMany: jest.fn() },
-    assessmentTask: { count: jest.fn() },
-    assessmentCycle: { count: jest.fn() },
+    assessmentTask: { count: jest.fn(), groupBy: jest.fn() },
+    assessmentCycle: { count: jest.fn(), groupBy: jest.fn() },
+    performanceInterview: { count: jest.fn() },
+    probationReview: { count: jest.fn() },
+    confirmationApplication: { count: jest.fn() },
   };
   return {
     service: new BusinessCapabilitiesService(prisma as never),
@@ -42,6 +45,9 @@ describe('BusinessCapabilitiesService', () => {
       .mockResolvedValueOnce(1)
       .mockResolvedValueOnce(4);
     prisma.assessmentCycle.count.mockResolvedValue(1);
+    prisma.performanceInterview.count.mockResolvedValue(1);
+    prisma.probationReview.count.mockResolvedValue(1);
+    prisma.confirmationApplication.count.mockResolvedValue(1);
 
     await expect(service.getForUser({
       id: 'user-1',
@@ -53,6 +59,11 @@ describe('BusinessCapabilitiesService', () => {
       canViewPerformanceApproval: true,
       canOperatePerformanceApproval: true,
       canHandleHrCycle: true,
+      canHandleInterviews: true,
+      canHandleProbationReviews: true,
+      canHandleConfirmationApprovals: true,
+      canViewReports: true,
+      canManageObjectives: true,
       identities: [
         { type: 'performance_manager', label: '绩效直属上级', count: 5 },
         { type: 'department_leader', label: '部门负责人', count: 2 },
@@ -78,6 +89,9 @@ describe('BusinessCapabilitiesService', () => {
     prisma.department.findMany.mockResolvedValue([]);
     prisma.assessmentTask.count.mockResolvedValue(0);
     prisma.assessmentCycle.count.mockResolvedValue(0);
+    prisma.performanceInterview.count.mockResolvedValue(0);
+    prisma.probationReview.count.mockResolvedValue(0);
+    prisma.confirmationApplication.count.mockResolvedValue(0);
 
     await expect(service.getForUser({
       id: 'viewer-1',
@@ -89,6 +103,11 @@ describe('BusinessCapabilitiesService', () => {
       canViewPerformanceApproval: true,
       canOperatePerformanceApproval: false,
       canHandleHrCycle: false,
+      canHandleInterviews: true,
+      canHandleProbationReviews: false,
+      canHandleConfirmationApprovals: false,
+      canViewReports: true,
+      canManageObjectives: false,
       identities: [],
     });
   });
@@ -99,6 +118,9 @@ describe('BusinessCapabilitiesService', () => {
     prisma.department.findMany.mockResolvedValue([]);
     prisma.assessmentTask.count.mockResolvedValue(0);
     prisma.assessmentCycle.count.mockResolvedValue(0);
+    prisma.performanceInterview.count.mockResolvedValue(0);
+    prisma.probationReview.count.mockResolvedValue(0);
+    prisma.confirmationApplication.count.mockResolvedValue(0);
 
     const capabilities = await service.getForUser({
       id: 'admin-1',
@@ -108,6 +130,35 @@ describe('BusinessCapabilitiesService', () => {
 
     expect(capabilities.canViewPerformanceApproval).toBe(true);
     expect(capabilities.canOperatePerformanceApproval).toBe(false);
+    expect(capabilities.canViewReports).toBe(true);
+    expect(capabilities.canManageObjectives).toBe(true);
     expect(capabilities.identities).toEqual([]);
+  });
+
+  it('批量投影员工业务身份且不会逐人计算', async () => {
+    const { service, prisma } = createService();
+    prisma.user.groupBy.mockResolvedValue([
+      { directManagerId: 'user-1', _count: { _all: 2 } },
+    ]);
+    prisma.department.findMany.mockResolvedValue([
+      { id: 'dept-1', name: '销售部', parentId: null, leaderId: 'user-1', approverId: null },
+      { id: 'dept-2', name: '运营部', parentId: null, leaderId: 'other', approverId: 'user-2' },
+    ]);
+    prisma.assessmentTask.groupBy
+      .mockResolvedValueOnce([{ managerId: 'user-1', _count: { _all: 1 } }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ approverId: 'user-2', _count: { _all: 3 } }]);
+    prisma.assessmentCycle.groupBy.mockResolvedValue([]);
+
+    const result = await (service as any).getIdentitySummariesForUsers(['user-1', 'user-2']);
+
+    expect(result.get('user-1')).toEqual([
+      { type: 'performance_manager', label: '绩效直属上级', count: 3 },
+      { type: 'department_leader', label: '部门负责人', count: 1 },
+    ]);
+    expect(result.get('user-2')).toEqual([
+      { type: 'performance_approver', label: '最终业务审批人', count: 4 },
+    ]);
+    expect(prisma.user.count).not.toHaveBeenCalled();
   });
 });
