@@ -1,4 +1,5 @@
 import { Injectable, Logger } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
 import { PrismaService } from '@/prisma/prisma.service';
 import { MessagePushProvider, MessagePushInput, MessagePushResult } from '@/notifications/message-push.provider';
 import { DingtalkService } from './dingtalk.service';
@@ -17,9 +18,16 @@ export class DingtalkPushProvider implements MessagePushProvider {
   constructor(
     private readonly dingtalk: DingtalkService,
     private readonly prisma: PrismaService,
+    private readonly config: ConfigService,
   ) {}
 
   async push(input: MessagePushInput): Promise<MessagePushResult> {
+    const notificationEnabled = this.config.get<string>('DINGTALK_NOTIFICATION_ENABLED', 'false') === 'true';
+    if (!notificationEnabled) {
+      this.logger.debug('[DingtalkPushProvider] external notification is disabled');
+      return { channel: 'system' };
+    }
+
     this.logger.debug(`[DingtalkPushProvider] push invoked for userId=${input.userId}`);
     const { notificationId, userId, dingtalkId, title, content, url } = input;
 
