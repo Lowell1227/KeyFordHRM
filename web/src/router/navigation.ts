@@ -1,5 +1,6 @@
 import type { RouteRecordRaw } from 'vue-router';
 import type { SysRole } from '@/types/enums';
+import type { BusinessCapabilities } from '@/types/api.types';
 import type {
   NavigationGroup,
   NavigationItem,
@@ -8,7 +9,11 @@ import type {
   NavigationModuleKey,
 } from './navigation.types';
 
-export type NavigationUser = Pick<{ sysRole: SysRole; canViewAll: boolean }, 'sysRole' | 'canViewAll'>;
+export type NavigationUser = {
+  sysRole: SysRole;
+  canViewAll: boolean;
+  businessCapabilities?: BusinessCapabilities;
+};
 
 const moduleDefinitions: Record<NavigationModuleKey, Pick<NavigationModule, 'label' | 'order'>> = {
   workbench: { label: '工作台', order: 10 },
@@ -17,7 +22,14 @@ const moduleDefinitions: Record<NavigationModuleKey, Pick<NavigationModule, 'lab
   analysis: { label: '分析与设置', order: 40 },
 };
 
-function canSeeRoute(route: RouteRecordRaw, user: NavigationUser): boolean {
+export function canAccessRoute(
+  route: Pick<RouteRecordRaw, 'meta'>,
+  user: NavigationUser,
+): boolean {
+  const capability = route.meta?.capability;
+  if (capability && user.businessCapabilities) {
+    return user.businessCapabilities[capability];
+  }
   const roles = route.meta?.roles;
   return !roles || roles.includes(user.sysRole);
 }
@@ -37,7 +49,7 @@ export function buildNavigation(routes: readonly RouteRecordRaw[], user: Navigat
 
   for (const route of routes) {
     const meta = navigationMeta(route);
-    if (!meta || !canSeeRoute(route, user)) continue;
+    if (!meta || !canAccessRoute(route, user)) continue;
 
     const moduleDefinition = moduleDefinitions[meta.module];
     const module = modules.get(meta.module) ?? {

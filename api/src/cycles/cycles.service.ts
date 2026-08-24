@@ -273,25 +273,16 @@ export class CyclesService {
     return owner.id;
   }
 
-  /** 普通员工只关联本人任务；具备团队工作台的角色同时关联其直属团队任务。 */
+  /** 周期可见性按任务中保存的实际业务身份判断，不依赖单一系统角色。 */
   private visibleTaskWhere(viewer: AuthUser): Prisma.AssessmentTaskWhereInput {
-    const directTeamRoles: SysRole[] = [
-      SysRole.manager,
-      SysRole.dept_head,
-      SysRole.vp,
-      SysRole.hr,
-      SysRole.system_admin,
-    ];
-    const canReviewDirectTeam = directTeamRoles.includes(viewer.sysRole);
-
-    return canReviewDirectTeam
-      ? {
-          OR: [
-            { employeeId: viewer.id },
-            { managerId: viewer.id },
-          ],
-        }
-      : { employeeId: viewer.id };
+    return {
+      OR: [
+        { employeeId: viewer.id },
+        { managerId: viewer.id },
+        { deptHeadId: viewer.id },
+        { approverId: viewer.id },
+      ],
+    };
   }
 
   /** 校验创建时的日期与截止日关系。 */

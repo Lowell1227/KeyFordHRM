@@ -27,9 +27,15 @@ export const useAuthStore = defineStore('auth', {
       return Date.now() >= s.expiresAt;
     },
     isHR: (s) => ['hr', 'system_admin'].includes(s.user?.sysRole ?? ''),
-    isVP: (s) => s.user?.sysRole === 'vp',
-    isManager: (s) =>
-      ['manager', 'dept_head', 'vp', 'hr', 'system_admin'].includes(s.user?.sysRole ?? ''),
+    isVP: (s) => s.user?.businessCapabilities
+      ? s.user.businessCapabilities.canViewPerformanceApproval
+      : s.user?.sysRole === 'vp',
+    canAccessPerformanceApproval: (s) => s.user?.businessCapabilities
+      ? s.user.businessCapabilities.canViewPerformanceApproval
+      : ['vp', 'chairman', 'system_admin'].includes(s.user?.sysRole ?? ''),
+    isManager: (s) => s.user?.businessCapabilities
+      ? s.user.businessCapabilities.canManageTeam
+      : ['manager', 'dept_head', 'vp', 'hr', 'system_admin'].includes(s.user?.sysRole ?? ''),
     canAccessAdmin: (s) => ['hr', 'system_admin'].includes(s.user?.sysRole ?? ''),
   },
   actions: {

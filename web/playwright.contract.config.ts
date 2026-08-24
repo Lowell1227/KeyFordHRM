@@ -15,6 +15,7 @@ export default defineConfig({
     '21-unified-list-workspace.spec.ts',
     '22-template-global-weight-contract.spec.ts',
     '23-employee-data-review.spec.ts',
+    '24-dynamic-business-permissions.spec.ts',
   ],
   workers: 1,
 });

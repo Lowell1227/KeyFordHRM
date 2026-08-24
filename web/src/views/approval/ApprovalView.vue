@@ -9,9 +9,15 @@ import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import type { ApprovalTaskView, AssessmentCycle } from '@/types/api.types';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
+import { useAuthStore } from '@/stores/auth.store';
+import {
+  canOperatePerformanceApproval,
+  canOperatePerformanceApprovalTask,
+} from '@/utils/business-permissions';
 
 const route = useRoute();
 const router = useRouter();
+const auth = useAuthStore();
 
 const cycles = ref<AssessmentCycle[]>([]);
 const selectedCycleId = ref('');
@@ -26,6 +32,9 @@ const selectedCycle = computed(() =>
 );
 
 const hasSelection = computed(() => selectedTaskIds.value.length > 0);
+const canOperateApproval = computed(() => (
+  auth.user ? canOperatePerformanceApproval(auth.user) : false
+));
 
 const rejectDialog = ref({
   visible: false,
@@ -129,6 +138,18 @@ onMounted(async () => {
 
 function onSelectionChange(rows: ApprovalTaskView[]) {
   selectedTaskIds.value = rows.map((r) => r.id);
+}
+
+function canOperateTask(task: unknown): boolean {
+  const approvalTask = task as ApprovalTaskView;
+  return Boolean(
+    auth.user
+    && canOperatePerformanceApprovalTask(auth.user, approvalTask.approverId),
+  );
+}
+
+function isTaskSelectable(task: unknown): boolean {
+  return canOperateTask(task);
 }
 
 async function handleApproveSingle(taskId: string) {
@@ -273,6 +294,7 @@ function handleBatchReject() {
             />
           </el-select>
           <el-button
+            v-if="canOperateApproval"
             type="primary"
             :disabled="!hasSelection"
             :loading="submitting"
@@ -281,6 +303,7 @@ function handleBatchReject() {
             批量通过
           </el-button>
           <el-button
+            v-if="canOperateApproval"
             type="danger"
             plain
             :disabled="!hasSelection"
@@ -297,6 +320,16 @@ function handleBatchReject() {
       </div>
 
       <template v-else>
+        <el-alert
+          v-if="!canOperateApproval"
+          class="approval-view__readonly"
+          data-testid="approval-readonly-notice"
+          type="info"
+          :closable="false"
+          title="当前为全局只读视图"
+          description="你可以查看审批结果，但只有任务指定的最终业务审批人可以通过或退回。"
+          show-icon
+        />
         <el-table
           class="app-table"
           v-loading="loading"
@@ -304,7 +337,13 @@ function handleBatchReject() {
           row-key="id"
           @selection-change="onSelectionChange"
         >
-          <el-table-column type="selection" width="50" reserve-selection />
+          <el-table-column
+            v-if="canOperateApproval"
+            type="selection"
+            width="50"
+            reserve-selection
+            :selectable="isTaskSelectable"
+          />
           <el-table-column prop="employeeName" label="员工" min-width="120" />
           <el-table-column prop="position" label="岗位" min-width="120" />
           <el-table-column prop="deptName" label="部门" min-width="160" show-overflow-tooltip />
@@ -334,26 +373,29 @@ function handleBatchReject() {
               {{ row.status }}
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="160" fixed="right">
+          <el-table-column v-if="canOperateApproval" label="操作" width="160" fixed="right">
             <template #default="{ row }">
-              <el-button
-                link
-                type="primary"
-                size="small"
-                :loading="submitting"
-                @click="handleApproveSingleWithConfirm(row.id)"
-              >
-                通过
-              </el-button>
-              <el-button
-                link
-                type="danger"
-                size="small"
-                :loading="submitting"
-                @click="handleRejectSingle(row.id)"
-              >
-                退回
-              </el-button>
+              <template v-if="canOperateTask(row)">
+                <el-button
+                  link
+                  type="primary"
+                  size="small"
+                  :loading="submitting"
+                  @click="handleApproveSingleWithConfirm(row.id)"
+                >
+                  通过
+                </el-button>
+                <el-button
+                  link
+                  type="danger"
+                  size="small"
+                  :loading="submitting"
+                  @click="handleRejectSingle(row.id)"
+                >
+                  退回
+                </el-button>
+              </template>
+              <span v-else class="text-secondary">仅查看</span>
             </template>
           </el-table-column>
         </el-table>
@@ -402,6 +444,10 @@ function handleBatchReject() {
 
 .approval-view__empty {
   padding: 24px 0;
+}
+
+.approval-view__readonly {
+  margin: 0 0 12px;
 }
 
 .approval-view__reject-tip {

@@ -44,6 +44,17 @@ describe('CyclesService', () => {
     };
   }
 
+  function taskScope(userId: string) {
+    return {
+      OR: [
+        { employeeId: userId },
+        { managerId: userId },
+        { deptHeadId: userId },
+        { approverId: userId },
+      ],
+    };
+  }
+
   it('allows goal-setting deadlines before the performance period starts', async () => {
     const dto = quarterlyCycle({
       deadlineIndicatorSetting: new Date('2026-12-27T00:00:00.000Z'),
@@ -96,11 +107,11 @@ describe('CyclesService', () => {
     expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith({
       where: {
         status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
-        tasks: { some: { employeeId: employee.id } },
+        tasks: { some: taskScope(employee.id) },
       },
       include: {
         tasks: {
-          where: { employeeId: employee.id },
+          where: taskScope(employee.id),
           select: { id: true, status: true, isExempt: true },
           take: 1,
         },
@@ -126,28 +137,42 @@ describe('CyclesService', () => {
       where: {
         status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
         tasks: {
-          some: {
-            OR: [
-              { employeeId: manager.id },
-              { managerId: manager.id },
-            ],
-          },
+          some: taskScope(manager.id),
         },
       },
       include: {
         tasks: {
-          where: {
-            OR: [
-              { employeeId: manager.id },
-              { managerId: manager.id },
-            ],
-          },
+          where: taskScope(manager.id),
           select: { id: true, status: true, isExempt: true },
           take: 1,
         },
       },
       orderBy: { startDate: 'desc' },
     });
+  });
+
+  it('returns approval cycles to an employee who is the saved task approver', async () => {
+    prisma.assessmentCycle.findMany.mockResolvedValue([{
+      id: 'cycle-1',
+      name: '2027年第一季度',
+      status: 'approval',
+      tasks: [{ id: 'task-1', status: 'approval', isExempt: false }],
+    }]);
+    const approver = { ...creator, id: 'approver-1', sysRole: SysRole.employee } as AuthUser;
+
+    await expect(service.findMine(approver)).resolves.toHaveLength(1);
+    expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        tasks: {
+          some: {
+            OR: expect.arrayContaining([
+              { employeeId: approver.id },
+              { approverId: approver.id },
+            ]),
+          },
+        },
+      }),
+    }));
   });
 
   it('allows a direct manager to open a cycle that only contains team tasks', async () => {
@@ -168,19 +193,13 @@ describe('CyclesService', () => {
     expect(prisma.assessmentTask.count).toHaveBeenNthCalledWith(1, {
       where: {
         cycleId: 'cycle-1',
-        OR: [
-          { employeeId: manager.id },
-          { managerId: manager.id },
-        ],
+        ...taskScope(manager.id),
       },
     });
     expect(prisma.assessmentTask.count).toHaveBeenNthCalledWith(2, {
       where: {
         cycleId: 'cycle-1',
-        OR: [
-          { employeeId: manager.id },
-          { managerId: manager.id },
-        ],
+        ...taskScope(manager.id),
       },
     });
   });
@@ -195,7 +214,7 @@ describe('CyclesService', () => {
     expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
-        tasks: { some: { employeeId: employee.id } },
+        tasks: { some: taskScope(employee.id) },
       }),
     }));
   });
@@ -207,17 +226,12 @@ describe('CyclesService', () => {
 
     await service.findAll({ page: 1, pageSize: 20, skip: 0, take: 20 } as any, manager);
 
-    const taskScope = {
-      OR: [
-        { employeeId: manager.id },
-        { managerId: manager.id },
-      ],
-    };
+    const managerTaskScope = taskScope(manager.id);
     expect(prisma.assessmentCycle.count).toHaveBeenCalledWith({
-      where: expect.objectContaining({ tasks: { some: taskScope } }),
+      where: expect.objectContaining({ tasks: { some: managerTaskScope } }),
     });
     expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ tasks: { some: taskScope } }),
+      where: expect.objectContaining({ tasks: { some: managerTaskScope } }),
     }));
   });
 
@@ -273,7 +287,7 @@ describe('CyclesService', () => {
     await service.findOne('cycle-1', employee);
 
     expect(prisma.assessmentTask.groupBy).toHaveBeenCalledWith(expect.objectContaining({
-      where: { cycleId: 'cycle-1', employeeId: employee.id },
+      where: { cycleId: 'cycle-1', ...taskScope(employee.id) },
     }));
   });
 

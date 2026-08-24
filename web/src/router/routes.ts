@@ -98,6 +98,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '结果审批',
       roles: ['vp', 'chairman', 'system_admin'],
+      capability: 'canViewPerformanceApproval',
       navigation: { module: 'performance', label: '结果审批', order: 60, group: 'performance', groupLabel: '绩效管理' },
     },
   },
@@ -127,7 +128,12 @@ export const routes: RouteRecordRaw[] = [
     path: '/manager/scoring',
     name: 'ManagerScoring',
     redirect: (to) => ({ path: '/tasks', query: { ...to.query, scope: 'team', stage: 'manager-eval' } }),
-    meta: { requiresAuth: true, title: '团队绩效', roles: ['manager', 'dept_head', 'vp', 'hr', 'system_admin'] },
+    meta: {
+      requiresAuth: true,
+      title: '团队绩效',
+      roles: ['manager', 'dept_head', 'vp', 'hr', 'system_admin'],
+      capability: 'canManageTeam',
+    },
   },
   {
     path: '/interviews',

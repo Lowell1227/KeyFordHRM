@@ -1,6 +1,4 @@
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
-import { SysRole } from '@prisma/client';
-import { Roles } from '@/common/decorators/roles.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import { ApprovalService } from './approval.service';
@@ -9,7 +7,6 @@ import { ApprovalRejectDto } from './dto/approval-reject.dto';
 
 /** 周期级审批接口。 */
 @Controller('cycles/:id')
-@Roles(SysRole.vp, SysRole.chairman, SysRole.system_admin)
 export class ApprovalController {
   constructor(private readonly approvalService: ApprovalService) {}
 
@@ -36,7 +33,6 @@ export class ApprovalController {
 
 /** 任务级审批接口。 */
 @Controller('tasks/:id')
-@Roles(SysRole.vp, SysRole.chairman, SysRole.system_admin)
 export class ApprovalTaskController {
   constructor(private readonly approvalService: ApprovalService) {}
 

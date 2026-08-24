@@ -2,6 +2,7 @@ import { createRouter, createWebHistory } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores/auth.store';
 import { routes } from './routes';
+import { canAccessRoute } from './navigation';
 
 const router = createRouter({
   history: createWebHistory(),
@@ -26,7 +27,7 @@ router.beforeEach(async (to) => {
 
   if (
     to.name === 'MyTasks'
-    && auth.user?.sysRole === 'manager'
+    && auth.isManager
     && Object.keys(to.query).length === 0
   ) {
     return {
@@ -41,8 +42,7 @@ router.beforeEach(async (to) => {
     };
   }
 
-  const requiredRoles = to.meta.roles;
-  if (requiredRoles && auth.user && !requiredRoles.includes(auth.user.sysRole)) {
+  if (auth.user && !canAccessRoute(to, auth.user)) {
     ElMessage.warning('无权访问该页面');
     return { name: 'Dashboard' };
   }

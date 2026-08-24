@@ -196,9 +196,7 @@ export class ApprovalService {
       isExempt: false,
     };
 
-    if (!this.canViewAll(viewer)) {
-      where.approverId = viewer.id;
-    }
+    where.approverId = viewer.id;
 
     return this.prisma.assessmentTask.findMany({ where });
   }
@@ -208,7 +206,7 @@ export class ApprovalService {
   }
 
   private assertApprover(task: AssessmentTask, viewer: AuthUser): void {
-    if (task.approverId !== viewer.id && !this.canViewAll(viewer)) {
+    if (task.approverId !== viewer.id) {
       throw new ForbiddenException({
         code: ERROR_CODE.FORBIDDEN,
         message: '仅审批人可操作',
@@ -243,7 +241,7 @@ export class ApprovalService {
       rawGrade: task.gradeResult?.rawGrade ?? null,
       calibratedGrade: task.gradeResult?.calibratedGrade ?? null,
       isVeto: task.gradeResult?.isVeto ?? false,
-      approverId: task.gradeResult?.approverId ?? task.approverId ?? null,
+      approverId: task.approverId ?? null,
       approvedAt: task.gradeResult?.approvedAt ?? null,
     };
   }

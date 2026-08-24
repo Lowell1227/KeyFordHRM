@@ -48,6 +48,27 @@ export interface Paginated<T> {
 }
 
 /** GET /auth/me 当前用户。 */
+export type BusinessIdentityType =
+  | 'performance_manager'
+  | 'department_leader'
+  | 'performance_approver'
+  | 'cycle_hr_owner';
+
+export interface BusinessIdentity {
+  type: BusinessIdentityType;
+  label: string;
+  count: number;
+}
+
+export interface BusinessCapabilities {
+  canManageTeam: boolean;
+  canReviewDepartment: boolean;
+  canViewPerformanceApproval: boolean;
+  canOperatePerformanceApproval: boolean;
+  canHandleHrCycle: boolean;
+  identities: BusinessIdentity[];
+}
+
 export interface CurrentUser {
   id: string;
   name: string;
@@ -63,6 +84,7 @@ export interface CurrentUser {
   directManagerId?: string | null;
   directManagerName?: string;
   avatarUrl?: string;
+  businessCapabilities?: BusinessCapabilities;
 }
 
 /** 登录响应。 */

@@ -4,6 +4,7 @@ import { ForbiddenException, NotFoundException, UnauthorizedException } from '@n
 import { AuthService } from './auth.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { DingtalkService } from '../dingtalk/dingtalk.service';
+import { BusinessCapabilitiesService } from './business-capabilities.service';
 import * as bcrypt from 'bcrypt';
 
 jest.mock('bcrypt', () => ({ compare: jest.fn() }));
@@ -29,6 +30,7 @@ function createService(enabled: boolean) {
     user: {
       findMany: jest.fn(),
       findFirst: jest.fn(),
+      findUnique: jest.fn(),
     },
     externalIdentityBinding: {
       findFirst: jest.fn(),
@@ -47,14 +49,25 @@ function createService(enabled: boolean) {
     }),
   };
   const dingtalk = { getAuthCodeUnionId: jest.fn() };
+  const businessCapabilities = {
+    getForUser: jest.fn().mockResolvedValue({
+      canManageTeam: true,
+      canReviewDepartment: false,
+      canViewPerformanceApproval: false,
+      canOperatePerformanceApproval: false,
+      canHandleHrCycle: false,
+      identities: [{ type: 'performance_manager', label: '绩效直属上级', count: 1 }],
+    }),
+  };
   const service = new AuthService(
     prisma as unknown as PrismaService,
     jwt as unknown as JwtService,
     config as unknown as ConfigService,
     dingtalk as unknown as DingtalkService,
+    businessCapabilities as unknown as BusinessCapabilitiesService,
   );
 
-  return { service, prisma, jwt, dingtalk };
+  return { service, prisma, jwt, dingtalk, businessCapabilities };
 }
 
 describe('AuthService test quick login', () => {
@@ -101,14 +114,40 @@ describe('AuthService test quick login', () => {
   });
 
   it('为完全匹配的测试账号签发登录令牌', async () => {
-    const { service, prisma, jwt } = createService(true);
+    const { service, prisma, jwt, businessCapabilities } = createService(true);
     prisma.user.findFirst.mockResolvedValue(eligibleUser);
 
     await expect(service.testLogin({ employeeNo: 'MGR001' })).resolves.toMatchObject({
       token: 'test-token',
-      user: { id: 'test-manager-id', name: '测试·周强明', sysRole: 'manager' },
+      user: {
+        id: 'test-manager-id',
+        name: '测试·周强明',
+        sysRole: 'manager',
+        businessCapabilities: expect.objectContaining({ canManageTeam: true }),
+      },
     });
     expect(jwt.signAsync).toHaveBeenCalledTimes(1);
+    expect(businessCapabilities.getForUser).toHaveBeenCalledWith(expect.objectContaining({ id: eligibleUser.id }));
+  });
+});
+
+describe('AuthService current user capabilities', () => {
+  it('/auth/me 返回动态业务能力', async () => {
+    const { service, prisma, businessCapabilities } = createService(false);
+    prisma.user.findUnique.mockResolvedValue({
+      ...eligibleUser,
+      phone: null,
+      position: '研发经理',
+      directManagerId: null,
+      directManager: null,
+      dept: { name: '测试研发部', fullPath: '测试研发部' },
+    });
+
+    await expect(service.getMe(eligibleUser.id)).resolves.toMatchObject({
+      id: eligibleUser.id,
+      businessCapabilities: expect.objectContaining({ canManageTeam: true }),
+    });
+    expect(businessCapabilities.getForUser).toHaveBeenCalledWith(expect.objectContaining({ id: eligibleUser.id }));
   });
 });
 

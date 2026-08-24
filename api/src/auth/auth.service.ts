@@ -11,6 +11,7 @@ import { LocalLoginDto } from './dto/local-login.dto';
 import { DingTalkLoginDto } from './dto/dingtalk-login.dto';
 import { TestLoginDto } from './dto/test-login.dto';
 import { findTestAccount, TEST_ACCOUNT_MANIFEST } from './test-accounts';
+import { BusinessCapabilities, BusinessCapabilitiesService } from './business-capabilities.service';
 
 /** 登录成功响应。 */
 export interface LoginResponse {
@@ -22,6 +23,7 @@ export interface LoginResponse {
     sysRole: string;
     deptName: string | null;
     avatarUrl: string | null;
+    businessCapabilities: BusinessCapabilities;
   };
 }
 
@@ -32,6 +34,7 @@ export class AuthService {
     private readonly jwt: JwtService,
     private readonly config: ConfigService,
     private readonly dingtalk: DingtalkService,
+    private readonly businessCapabilities: BusinessCapabilitiesService,
   ) {}
 
   /** 工号+密码登录。 */
@@ -165,6 +168,8 @@ export class AuthService {
       });
     }
 
+    const businessCapabilities = await this.businessCapabilities.getForUser(user);
+
     return {
       id: user.id,
       name: user.name,
@@ -180,6 +185,7 @@ export class AuthService {
       directManagerId: user.directManagerId,
       directManagerName: user.directManager?.name ?? null,
       avatarUrl: user.avatarUrl,
+      businessCapabilities,
     };
   }
 
@@ -254,6 +260,7 @@ export class AuthService {
 
     const token = await this.jwt.signAsync(payload);
     const expiresIn = this.resolveExpiresInSeconds();
+    const businessCapabilities = await this.businessCapabilities.getForUser(user);
 
     return {
       token,
@@ -264,6 +271,7 @@ export class AuthService {
         sysRole: user.sysRole,
         deptName: user.dept?.name ?? null,
         avatarUrl: user.avatarUrl,
+        businessCapabilities,
       },
     };
   }

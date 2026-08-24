@@ -154,6 +154,27 @@ describe('ApprovalService', () => {
       );
       expect(result).toHaveLength(1);
     });
+
+    it('列表使用任务快照中的 approverId 作为当前操作责任人', async () => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      prisma.assessmentTask.findMany.mockResolvedValue([{
+        ...makeTask('approval', { approverId: 'vp-1' }),
+        employee: { name: '张三', position: '工程师' },
+        dept: { name: '研发部' },
+        gradeResult: {
+          calculatedScore: new Prisma.Decimal(90),
+          rawGrade: 'A',
+          calibratedGrade: 'A',
+          isVeto: false,
+          approverId: 'historic-approver',
+          approvedAt: null,
+        },
+      }]);
+
+      const [item] = await service.getApprovalList('cycle-1', makeViewer());
+
+      expect(item.approverId).toBe('vp-1');
+    });
   });
 
   describe('POST /cycles/:id/approval 批量审批', () => {
@@ -213,6 +234,36 @@ describe('ApprovalService', () => {
         expect((err as ConflictException).getResponse()).toMatchObject({ code: ERROR_CODE.CONFLICT });
       }
     });
+
+    it('canViewAll 仍只能审批明确分配给自己的任务', async () => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      prisma.assessmentTask.findMany.mockResolvedValue([]);
+
+      await expect(service.approveTasks(
+        'cycle-1',
+        { taskIds: ['task-1'] },
+        makeViewer({ canViewAll: true }),
+      )).rejects.toThrow(ConflictException);
+
+      expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith({
+        where: expect.objectContaining({ approverId: 'vp-1' }),
+      });
+    });
+
+    it('system_admin 也不能代替任务审批人批量审批', async () => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      prisma.assessmentTask.findMany.mockResolvedValue([]);
+
+      await expect(service.approveTasks(
+        'cycle-1',
+        { taskIds: ['task-1'] },
+        makeViewer({ sysRole: 'system_admin' as any }),
+      )).rejects.toThrow(ConflictException);
+
+      expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith({
+        where: expect.objectContaining({ approverId: 'vp-1' }),
+      });
+    });
   });
 
   describe('POST /tasks/:id/approval/reject 退回', () => {
@@ -251,6 +302,14 @@ describe('ApprovalService', () => {
       prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('approval', { approverId: 'vp-2' }));
 
       await expect(service.rejectTask('task-1', {}, makeViewer())).rejects.toThrow(ForbiddenException);
+    });
+
+    it('canViewAll 不能退回其他审批人的任务', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('approval', { approverId: 'vp-2' }));
+
+      await expect(
+        service.rejectTask('task-1', {}, makeViewer({ canViewAll: true })),
+      ).rejects.toThrow(ForbiddenException);
     });
 
     it('非 approval 状态抛 4001', async () => {
