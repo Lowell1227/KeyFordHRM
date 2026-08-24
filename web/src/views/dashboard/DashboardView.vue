@@ -408,7 +408,7 @@ function avatarColor(name: string): string {
       <section v-if="roleQuickActions.length" class="quick-actions" data-testid="dashboard-quick-actions">
         <header class="quick-actions__header">
           <h2>常用工作入口</h2>
-          <p>按当前系统权限和实际业务身份展示高频工作。</p>
+          <p>按当前系统权限和实际业务职责展示高频工作。</p>
         </header>
         <div class="quick-actions__grid">
           <button

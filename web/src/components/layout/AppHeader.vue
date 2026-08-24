@@ -7,6 +7,7 @@ import UserAvatar from '@/components/common/UserAvatar.vue';
 import { isPerformanceWorkspacePath } from '@/router/performance-workspace';
 import NotificationBell from './NotificationBell.vue';
 import { formatBusinessIdentityLabel } from './business-identity';
+import { formatPersonnelIdentityLabel } from '@/utils/personnel-identity';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -16,6 +17,7 @@ const userName = computed(() => auth.user?.name ?? '未登录');
 const pageTitle = computed(() => (route.meta.title as string) ?? '孚德绩效管理');
 const isPerformanceWorkspace = computed(() => isPerformanceWorkspacePath(route.path));
 const businessIdentities = computed(() => auth.user?.businessCapabilities?.identities ?? []);
+const personnelIdentityLabel = computed(() => formatPersonnelIdentityLabel(auth.user?.status));
 const systemPermissionLabel = computed(() => {
   const labels: Record<string, string> = {
     employee: '标准用户',
@@ -56,10 +58,11 @@ function onLogout() {
           <el-dropdown-menu>
             <div class="account-summary" data-testid="header-account-summary">
               <strong>{{ userName }}</strong>
+              <span class="account-summary__role">人员身份：{{ personnelIdentityLabel }}</span>
               <span class="account-summary__role">系统权限：{{ systemPermissionLabel }}</span>
               <span v-if="auth.user?.canViewAll" class="account-summary__identity">查看范围：全量只读</span>
               <template v-if="businessIdentities.length">
-                <span class="account-summary__label">当前业务身份</span>
+                <span class="account-summary__label">当前业务职责</span>
                 <span
                   v-for="identity in businessIdentities"
                   :key="identity.type"

@@ -79,6 +79,7 @@ export type SystemPermission = 'standard_user' | 'hr_admin' | 'system_admin';
 export interface CurrentUser {
   id: string;
   name: string;
+  status?: UserStatus;
   employeeNo?: string;
   phone?: string;
   deptId: string | null;

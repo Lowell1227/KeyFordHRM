@@ -50,7 +50,6 @@ test('uses concise and consistent organization relationship concepts', async () 
   expect(source).toContain('系统权限已更新；绩效直属上级变更已提交 HR 审核');
   expect(source).toContain("ElMessage.success('绩效直属上级变更已提交 HR 审核')");
   expect(source).toContain("ElMessage.success('系统权限已更新')");
-  expect(source).toContain('业务身份');
   expect(source).not.toContain("{ label: '董事长', value: 'chairman' }");
   expect(source).not.toContain("{ label: '主管', value: 'manager' }");
   expect(source).not.toContain('主管权限：已开通');
@@ -324,6 +323,7 @@ test('uses one person settings dialog and keeps performance identity separate fr
     directManagerId: null,
     directManagerName: null,
     sysRole: 'employee',
+    businessIdentities: [{ type: 'performance_manager', label: '绩效直属上级', count: 2 }],
     isAssessorOnly: false,
     canViewAll: false,
   };
@@ -403,19 +403,31 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await page.goto(`${webBaseUrl}/users`);
   await expect(page.getByRole('columnheader', { name: '岗位', exact: true })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: '系统权限', exact: true })).toBeVisible();
-  await expect(page.getByRole('columnheader', { name: '业务身份', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: '业务职责', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '人员设置' }).click();
   const dialog = page.getByRole('dialog', { name: '人员设置' });
   const summary = dialog.locator('.person-settings__summary');
   await expect(summary).toContainText('余焱玲');
   await expect(summary).toContainText('人事专员');
   await expect(summary).toContainText('标准用户');
+  await expect(summary.getByText('员工', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('当前业务职责', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('绩效直属上级 · 负责 2 项', { exact: true })).toBeVisible();
+  await expect(dialog.getByText('当前业务身份', { exact: true })).toHaveCount(0);
   await expect(dialog.getByText('余焱玲的岗位', { exact: true })).toHaveCount(0);
   await expect(dialog.getByText('余焱玲的系统权限', { exact: true })).toHaveCount(0);
   await dialog.getByRole('button', { name: '岗位和系统权限说明' }).hover();
-  await expect(page.getByRole('tooltip').filter({ hasText: '岗位来自 HRM 当前有效任职记录' })).toBeVisible();
+  const positionTooltip = page.locator('.el-popper[role="tooltip"]:visible').filter({ hasText: '岗位：来自当前有效任职记录' });
+  await expect(positionTooltip.locator('.person-settings__tooltip-line')).toHaveCount(3);
   await dialog.getByRole('button', { name: '绩效直属上级说明' }).hover();
-  await expect(page.getByRole('tooltip').filter({ hasText: '员工名册 > 待审核变更' })).toBeVisible();
+  const managerTooltip = page.locator('.el-popper[role="tooltip"]:visible').filter({ hasText: '目标审核、主管评分和待办归属' });
+  await expect(managerTooltip.locator('.person-settings__tooltip-line')).toHaveCount(4);
+  await expect(managerTooltip).toContainText('员工名册 → 待审核变更');
+  await dialog.getByRole('button', { name: '业务职责说明' }).hover();
+  const responsibilityTooltip = page.locator('.el-popper[role="tooltip"]:visible').filter({ hasText: '员工是基础人员身份' });
+  await expect(responsibilityTooltip.locator('.person-settings__tooltip-line')).toHaveCount(3);
+  await summary.hover();
+  await expect(responsibilityTooltip).toBeHidden();
   await dialog.locator('.el-form-item').filter({ hasText: '绩效直属上级' }).locator('.el-select').click();
   await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '方园' }).click();
   await expect(dialog).toContainText('提交后待 HR 审核');
@@ -434,7 +446,7 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await page.getByRole('button', { name: '正式员工档案' }).click();
   await expect(page.getByRole('columnheader', { name: '岗位', exact: true })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: '系统权限', exact: true })).toBeVisible();
-  await expect(page.getByRole('columnheader', { name: '业务身份', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: '业务职责', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '人员设置' }).click();
   const rosterDialog = page.getByRole('dialog', { name: '人员设置' });
   await expect(rosterDialog.locator('.person-settings__summary')).toContainText('人事专员');

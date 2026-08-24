@@ -57,6 +57,7 @@ async function mockIdentity(
       name: role === 'hr' ? 'HR用户' : role === 'manager' ? '周主管' : '动态业务负责人',
       deptId: 'dept-1',
       deptName: '研发部',
+      status: 'active',
       sysRole: role === 'manager' ? 'employee' : role,
       isAssessorOnly: false,
       canViewAll: role === 'hr',
@@ -208,7 +209,10 @@ test.describe('dashboard and reports business clarity', () => {
     await page.goto('/dashboard');
 
     await page.getByRole('button', { name: /动态业务负责人/ }).click();
-    await expect(page.getByRole('menu')).toContainText('绩效直属上级 · 1 项');
+    await expect(page.getByRole('menu')).toContainText('人员身份：员工');
+    await expect(page.getByRole('menu')).toContainText('当前业务职责');
+    await expect(page.getByRole('menu')).toContainText('绩效直属上级 · 负责 1 项');
+    await expect(page.getByRole('menu')).not.toContainText('当前业务身份');
     await page.getByRole('button', { name: /动态业务负责人/ }).click();
     await expect(page.getByTestId('manager-goal-review-open')).toBeVisible();
     await expect(page.getByTestId('manager-evaluation-open')).toBeVisible();
