@@ -70,10 +70,10 @@ describe('EmployeeDataReviewsService', () => {
       where: { id: 'employee-1' },
       data: { directManagerId: 'manager-1' },
     });
-    expect(userUpdate).toHaveBeenCalledWith({
-      where: { id: 'manager-1' },
-      data: { sysRole: 'manager' },
-    });
+    expect(userUpdate).toHaveBeenCalledTimes(1);
+    expect(tx.auditLog.create).not.toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ action: 'grant_performance_manager_role' }),
+    }));
     expect(changeUpdate).toHaveBeenCalledWith({
       where: { id: 'review-valid' },
       data: expect.objectContaining({

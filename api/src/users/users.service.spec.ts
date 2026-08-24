@@ -53,7 +53,7 @@ describe('UsersService', () => {
   });
 
   describe('updateManager', () => {
-    it('updates the reporting line and grants manager access atomically for a system administrator', async () => {
+    it('rejects the legacy direct manager update so the HR review cannot be bypassed', async () => {
       const target = {
         id: 'employee-1',
         employeeNo: null,
@@ -63,38 +63,22 @@ describe('UsersService', () => {
         deptId: 'hr-dept',
         directManagerId: null,
       };
-      const manager = {
-        id: 'manager-1',
-        employeeNo: null,
-        name: '方园',
-        sysRole: SysRole.employee,
-        status: UserStatus.active,
-        deptId: 'hr-dept',
-        directManagerId: null,
-      };
-      const transactionUpdate = jest.fn()
-        .mockResolvedValueOnce({ ...target, directManagerId: manager.id })
-        .mockResolvedValueOnce({ ...manager, sysRole: SysRole.manager });
       const transaction = jest.fn(async (callback: (tx: unknown) => unknown) => callback({
-        user: { update: transactionUpdate },
+        user: { update: jest.fn().mockResolvedValue({ ...target, directManagerId: 'manager-1' }) },
       }));
       const service = new UsersService(
         {
           user: {
-            findUnique: jest.fn()
-              .mockResolvedValueOnce(target)
-              .mockResolvedValueOnce(manager)
-              .mockResolvedValueOnce({ directManagerId: null }),
-            update: jest.fn().mockResolvedValue({ ...target, directManagerId: manager.id }),
+            findUnique: jest.fn().mockResolvedValue(target),
           },
           $transaction: transaction,
         } as any,
         {} as any,
       );
 
-      const result = await (service.updateManager as any)(
+      await expect((service.updateManager as any)(
         target.id,
-        { directManagerId: manager.id, grantManagerRole: true },
+        { directManagerId: 'manager-1', grantManagerRole: true },
         {
           id: 'admin-1',
           name: '系统管理员',
@@ -103,21 +87,43 @@ describe('UsersService', () => {
           isAssessorOnly: false,
           canViewAll: true,
         },
-      );
+      )).rejects.toMatchObject({
+        response: { code: 4001, message: '绩效直属上级变更必须提交 HR 审核' },
+      });
 
-      expect(transaction).toHaveBeenCalledTimes(1);
-      expect(transactionUpdate).toHaveBeenNthCalledWith(1, {
-        where: { id: target.id },
-        data: { directManagerId: manager.id },
-      });
-      expect(transactionUpdate).toHaveBeenNthCalledWith(2, {
-        where: { id: manager.id },
-        data: { sysRole: SysRole.manager },
-      });
-      expect(result.directManagerId).toBe(manager.id);
+      expect(transaction).not.toHaveBeenCalled();
     });
 
-    it('saves one person settings form and grants the selected manager access in one transaction', async () => {
+    it('rejects directManagerId in the combined settings endpoint', async () => {
+      const target = {
+        id: 'employee-1', employeeNo: null, name: '员工一', sysRole: SysRole.employee,
+        status: UserStatus.active, deptId: 'dept-1', directManagerId: null,
+      };
+      const service = new UsersService({
+        user: {
+          findUnique: jest.fn()
+            .mockResolvedValueOnce(target)
+            .mockResolvedValueOnce({ id: 'manager-1' })
+            .mockResolvedValueOnce({ directManagerId: null }),
+        },
+        $transaction: jest.fn(async (callback: (tx: unknown) => unknown) => callback({
+          user: { update: jest.fn().mockResolvedValue({ ...target, directManagerId: 'manager-1' }) },
+        })),
+      } as any, {} as any);
+
+      await expect((service as any).updateSettings(
+        'employee-1',
+        { directManagerId: 'manager-1' },
+        {
+          id: 'admin-1', name: '系统管理员', sysRole: SysRole.system_admin,
+          deptId: null, isAssessorOnly: false, canViewAll: true,
+        },
+      )).rejects.toMatchObject({
+        response: { code: 4001, message: '绩效直属上级变更必须提交 HR 审核' },
+      });
+    });
+
+    it('keeps an explicit system role change independent from the performance relationship', async () => {
       const target = {
         id: 'employee-1',
         employeeNo: null,
@@ -127,22 +133,12 @@ describe('UsersService', () => {
         deptId: 'hr-dept',
         directManagerId: null,
       };
-      const manager = {
-        id: 'manager-1',
-        name: '方园',
-        sysRole: SysRole.employee,
-        directManagerId: null,
-      };
       const transactionUpdate = jest.fn()
-        .mockResolvedValueOnce({ ...target, directManagerId: manager.id, sysRole: SysRole.manager })
-        .mockResolvedValueOnce({ ...manager, sysRole: SysRole.manager });
+        .mockResolvedValueOnce({ ...target, sysRole: SysRole.manager });
       const service = new UsersService(
         {
           user: {
-            findUnique: jest.fn()
-              .mockResolvedValueOnce(target)
-              .mockResolvedValueOnce(manager)
-              .mockResolvedValueOnce({ directManagerId: null }),
+            findUnique: jest.fn().mockResolvedValueOnce(target),
           },
           $transaction: jest.fn(async (callback: (tx: unknown) => unknown) => callback({
             user: { update: transactionUpdate },
@@ -154,9 +150,7 @@ describe('UsersService', () => {
       const result = await (service as any).updateSettings(
         target.id,
         {
-          directManagerId: manager.id,
           sysRole: SysRole.manager,
-          grantManagerRole: true,
         },
         {
           id: 'admin-1',
@@ -171,16 +165,11 @@ describe('UsersService', () => {
       expect(transactionUpdate).toHaveBeenNthCalledWith(1, {
         where: { id: target.id },
         data: {
-          directManagerId: manager.id,
           sysRole: SysRole.manager,
         },
       });
-      expect(transactionUpdate).toHaveBeenNthCalledWith(2, {
-        where: { id: manager.id },
-        data: { sysRole: SysRole.manager },
-      });
+      expect(transactionUpdate).toHaveBeenCalledTimes(1);
       expect(result).toEqual(expect.objectContaining({
-        directManagerId: manager.id,
         sysRole: SysRole.manager,
       }));
     });

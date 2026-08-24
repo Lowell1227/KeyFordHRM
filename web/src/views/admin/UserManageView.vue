@@ -719,15 +719,16 @@ watch(
   },
 );
 
-const selectedManagerNeedsRole = computed(() =>
-  personSettingsDialog.value.selectedManager?.sysRole === 'employee',
+const selectedManagerRelationChanged = computed(() =>
+  personSettingsDialog.value.selectedManager?.id !== personSettingsDialog.value.originalDirectManagerId,
 );
 
 const selectedManagerAccessText = computed(() => {
   const manager = personSettingsDialog.value.selectedManager;
   if (!manager) return '';
-  if (manager.sysRole !== 'employee') return '主管权限：已开通';
-  return '主管权限：未开通，绩效关系审核通过时自动开通';
+  return selectedManagerRelationChanged.value
+    ? '绩效直属上级关系：提交后待 HR 审核'
+    : '绩效直属上级关系：已生效';
 });
 
 async function confirmPersonSettings() {
@@ -738,14 +739,18 @@ async function confirmPersonSettings() {
   }
   personSettingsDialog.value.saving = true;
   try {
+    const performanceRelationChanged =
+      personSettingsDialog.value.directManagerId !== personSettingsDialog.value.originalDirectManagerId;
+    const systemRoleChanged =
+      isSystemAdmin.value && personSettingsDialog.value.sysRole !== personSettingsDialog.value.originalSysRole;
     const actions: Promise<unknown>[] = [];
-    if (personSettingsDialog.value.directManagerId !== personSettingsDialog.value.originalDirectManagerId) {
+    if (performanceRelationChanged) {
       actions.push(employeeArchivesApi.proposePerformanceManager(
         personSettingsDialog.value.userId,
         personSettingsDialog.value.directManagerId ?? null,
       ));
     }
-    if (isSystemAdmin.value && personSettingsDialog.value.sysRole !== personSettingsDialog.value.originalSysRole) {
+    if (systemRoleChanged) {
       actions.push(usersApi.updateSettings(personSettingsDialog.value.userId, {
         sysRole: personSettingsDialog.value.sysRole,
       }));
@@ -755,7 +760,13 @@ async function confirmPersonSettings() {
       return;
     }
     await Promise.all(actions);
-    ElMessage.success('人员设置已提交；绩效直属上级经审核后生效');
+    if (performanceRelationChanged && systemRoleChanged) {
+      ElMessage.success('系统角色已更新；绩效直属上级变更已提交 HR 审核');
+    } else if (performanceRelationChanged) {
+      ElMessage.success('绩效直属上级变更已提交 HR 审核');
+    } else {
+      ElMessage.success('系统角色已更新');
+    }
     personSettingsDialog.value.visible = false;
     await Promise.all([loadReviews(), loadUsers(), loadOrgMembers(), loadCheckUsers()]);
   } catch {
@@ -1754,19 +1765,19 @@ onMounted(async () => {
         <div v-if="personSettingsDialog.selectedManager" class="person-settings__manager-access">
           <span>{{ personSettingsDialog.selectedManager.name }}的{{ selectedManagerAccessText }}</span>
           <el-tag
-            :type="personSettingsDialog.selectedManager.sysRole === 'employee' ? 'warning' : 'success'"
+            :type="selectedManagerRelationChanged ? 'warning' : 'success'"
             effect="light"
           >
-            {{ personSettingsDialog.selectedManager.sysRole === 'employee' ? '待开通' : '已开通' }}
+            {{ selectedManagerRelationChanged ? '关系待审核' : '已生效' }}
           </el-tag>
         </div>
         <el-alert
-          v-if="selectedManagerNeedsRole"
-          type="warning"
+          v-if="personSettingsDialog.selectedManager && selectedManagerRelationChanged"
+          type="info"
           :closable="false"
           show-icon
-          :title="`${personSettingsDialog.selectedManager?.name}当前系统角色为员工，没有主管权限`"
-          :description="`绩效关系审核通过时将把系统角色升级为主管，岗位 ${personSettingsDialog.selectedManager?.position || '保持原值'} 保持不变。`"
+          :title="`${personSettingsDialog.selectedManager.name}将成为${personSettingsDialog.userName}的绩效直属上级`"
+          :description="`审核通过后，${personSettingsDialog.selectedManager.name}将作为${personSettingsDialog.userName}的绩效直属上级，获得${personSettingsDialog.userName}相关绩效目标审核、主管评分和待办处理权限；系统角色“${roleLabels[personSettingsDialog.selectedManager.sysRole]}”和岗位“${personSettingsDialog.selectedManager.position || '未设置'}”保持不变。`"
           class="person-settings__alert"
         />
         <el-form-item :label="`${personSettingsDialog.userName}的系统角色`">

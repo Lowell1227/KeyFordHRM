@@ -283,20 +283,25 @@ export class UsersService {
     }));
   }
 
-  /** PATCH /users/:id/manager — 更新直属主管 */
+  /** @deprecated 绩效直属上级变更必须走 HR 审核。 */
   async updateManager(id: string, dto: UpdateManagerDto, operator?: AuthUser): Promise<UserSummary> {
-    return this.updateSettings(
-      id,
-      {
-        directManagerId: dto.directManagerId ?? null,
-        grantManagerRole: dto.grantManagerRole,
-      },
-      operator,
-    );
+    void id;
+    void dto;
+    void operator;
+    throw new BadRequestException({
+      code: ERROR_CODE.PARAM_INVALID,
+      message: '绩效直属上级变更必须提交 HR 审核',
+    });
   }
 
-  /** PATCH /users/:id/settings — 统一更新人员关系与系统权限 */
+  /** PATCH /users/:id/settings — 更新系统权限；关系字段仅为旧客户端拒绝兼容。 */
   async updateSettings(id: string, dto: UpdateUserSettingsDto, operator?: AuthUser): Promise<UserSummary> {
+    if (dto.directManagerId !== undefined || dto.grantManagerRole === true) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '绩效直属上级变更必须提交 HR 审核',
+      });
+    }
     const targetUser = await this.prisma.user.findUnique({
       where: { id, deletedAt: null },
     });
@@ -314,85 +319,16 @@ export class UsersService {
       });
     }
 
-    const directManagerId = dto.directManagerId !== undefined
-      ? dto.directManagerId ?? null
-      : targetUser.directManagerId;
-    let newManager: { id: string; sysRole: SysRole } | null = null;
-
-    if (dto.grantManagerRole && operator?.sysRole !== SysRole.system_admin) {
-      throw new ForbiddenException({
-        code: ERROR_CODE.FORBIDDEN,
-        message: '仅系统管理员可以同时开通主管权限',
-      });
-    }
-
-    if (dto.grantManagerRole && !directManagerId) {
-      throw new BadRequestException({
-        code: ERROR_CODE.PARAM_INVALID,
-        message: '开通主管权限时必须指定直属主管',
-      });
-    }
-
-    if ((dto.directManagerId !== undefined || dto.grantManagerRole) && directManagerId) {
-      if (directManagerId === id) {
-        throw new BadRequestException({
-          code: ERROR_CODE.PARAM_INVALID,
-          message: '不能将自己设为自己的直属主管',
-        });
-      }
-
-      newManager = await this.prisma.user.findUnique({
-        where: { id: directManagerId, deletedAt: null },
-        select: { id: true, sysRole: true },
-      });
-      if (!newManager) {
-        throw new BadRequestException({
-          code: ERROR_CODE.PARAM_INVALID,
-          message: '指定的直属主管不存在',
-        });
-      }
-
-      // 环检测：沿 directManagerId 向上遍历，若遇到 targetUser.id 则形成环
-      let currentId: string | null = directManagerId;
-      const visited = new Set<string>();
-      while (currentId) {
-        if (visited.has(currentId)) {
-          break; // 已有环，但继续抛出
-        }
-        visited.add(currentId);
-        if (currentId === id) {
-          throw new BadRequestException({
-            code: ERROR_CODE.PARAM_INVALID,
-            message: '设置的直属主管会形成汇报环',
-          });
-        }
-        const next = await this.prisma.user.findUnique({
-          where: { id: currentId, deletedAt: null },
-          select: { directManagerId: true },
-        });
-        currentId = next?.directManagerId ?? null;
-      }
-    }
-
     const updateData: Prisma.UserUncheckedUpdateInput = {};
-    if (dto.directManagerId !== undefined) {
-      updateData.directManagerId = directManagerId;
-    }
     if (dto.sysRole !== undefined) {
       updateData.sysRole = dto.sysRole;
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
       const assignedUser = await tx.user.update({
-          where: { id },
-          data: updateData,
+        where: { id },
+        data: updateData,
       });
-      if (dto.grantManagerRole && newManager?.sysRole === SysRole.employee) {
-        await tx.user.update({
-          where: { id: newManager.id },
-          data: { sysRole: SysRole.manager },
-        });
-      }
       return assignedUser;
     });
 

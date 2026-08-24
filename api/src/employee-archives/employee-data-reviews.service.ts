@@ -5,7 +5,6 @@ import {
   EmploymentType,
   ExternalIdentityStatus,
   Prisma,
-  SysRole,
   UserStatus,
 } from '@prisma/client';
 import { ERROR_CODE } from '@/common/constants/error-codes';
@@ -271,7 +270,7 @@ export class EmployeeDataReviewsService {
         if (scope === 'profile') {
           subjectUserId = await this.applyProfile(tx, request, operator);
         } else {
-          await this.applyPerformanceRelation(tx, request, operator);
+          await this.applyPerformanceRelation(tx, request);
         }
 
         const now = new Date();
@@ -593,7 +592,6 @@ export class EmployeeDataReviewsService {
       baseValue: Prisma.JsonValue;
       proposedValue: Prisma.JsonValue;
     },
-    operator: AuthUser,
   ): Promise<void> {
     if (!request.userId) {
       throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '请先通过基础档案审核' });
@@ -650,7 +648,7 @@ export class EmployeeDataReviewsService {
         accountType: AccountType.employee,
         status: { not: UserStatus.resigned },
       },
-      select: { id: true, deletedAt: true, directManagerId: true, sysRole: true },
+      select: { id: true, deletedAt: true, directManagerId: true },
     });
     if (!manager || manager.deletedAt) {
       throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '绩效直属上级不存在或已停用' });
@@ -675,22 +673,6 @@ export class EmployeeDataReviewsService {
       where: { id: request.userId },
       data: { directManagerId: managerId },
     });
-    if (manager.sysRole === SysRole.employee) {
-      await tx.user.update({
-        where: { id: managerId },
-        data: { sysRole: SysRole.manager },
-      });
-      await tx.auditLog.create({
-        data: {
-          userId: operator.id,
-          action: 'grant_performance_manager_role',
-          entityType: 'user',
-          entityId: managerId,
-          oldValue: { sysRole: SysRole.employee },
-          newValue: { sysRole: SysRole.manager, reason: '绩效直属上级审核通过' },
-        },
-      });
-    }
   }
 
   private record(value: unknown): Record<string, unknown> {

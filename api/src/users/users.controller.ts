@@ -39,7 +39,7 @@ export class UsersController {
     return this.usersService.findOne(id, viewer);
   }
 
-  /** PATCH /users/:id/manager — 更新直属主管（system_admin / HR） */
+  /** @deprecated 绩效直属上级变更统一走员工档案审核接口。 */
   @Patch(':id/manager')
   @Roles(SysRole.system_admin, SysRole.hr)
   updateManager(
@@ -50,7 +50,7 @@ export class UsersController {
     return this.usersService.updateManager(id, dto, operator);
   }
 
-  /** PATCH /users/:id/settings — 统一更新直属主管与系统权限（system_admin / HR） */
+  /** PATCH /users/:id/settings — 更新系统权限；关系字段只作旧客户端拦截。 */
   @Patch(':id/settings')
   @Roles(SysRole.system_admin, SysRole.hr)
   updateSettings(

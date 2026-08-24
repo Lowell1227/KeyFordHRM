@@ -23,15 +23,13 @@ const router = useRouter();
 const isEmployee = computed(() => auth.user?.sysRole === 'employee');
 const userRole = computed(() => auth.user?.sysRole ?? '');
 const userId = computed(() => auth.user?.id ?? '');
-const isDirectManager = computed(() => userRole.value === 'manager');
-const canOpenManagementTask = computed(() => [
-  'manager',
-  'dept_head',
-  'vp',
-  'chairman',
-  'hr',
-  'system_admin',
-].includes(userRole.value));
+const isDirectManager = computed(() => auth.isManager);
+const canOpenManagementTask = computed(() => Boolean(
+  auth.isManager
+  || auth.user?.businessCapabilities?.canReviewDepartment
+  || auth.user?.businessCapabilities?.canOperatePerformanceApproval
+  || ['manager', 'dept_head', 'vp', 'chairman', 'hr', 'system_admin'].includes(userRole.value)
+));
 const GRADES: PerfGrade[] = ['A', 'B', 'C', 'D'];
 
 const dashboardLoading = ref(false);
@@ -197,21 +195,26 @@ interface DashboardQuickAction {
 }
 
 const roleQuickActions = computed<DashboardQuickAction[]>(() => {
+  const actions: DashboardQuickAction[] = [];
   if (userRole.value === 'hr' || userRole.value === 'system_admin') {
-    return [
+    actions.push(
       { label: '周期与计划', description: '发起周期、检查节点与参与范围', path: '/cycles' },
       { label: '绩效校准', description: '核对等级分布并完成校准', path: '/calibration' },
       { label: '结果公示', description: '确认审批状态并发布结果', path: '/publish' },
       { label: '申诉管理', description: '集中处理员工绩效申诉', path: '/appeals' },
-    ];
+    );
+  }
+  if (auth.canAccessPerformanceApproval) {
+    actions.push(
+      { label: '结果审批', description: '处理待审批的绩效结果', path: '/approval' },
+    );
   }
   if (userRole.value === 'vp' || userRole.value === 'chairman') {
-    return [
-      { label: '结果审批', description: '处理待审批的绩效结果', path: '/approval' },
+    actions.push(
       { label: '报表分析', description: '查看分管范围结果与重点关注', path: '/reports' },
-    ];
+    );
   }
-  return [];
+  return actions;
 });
 
 const tableRows = computed(() =>
@@ -275,7 +278,7 @@ watch(
 );
 
 watch(
-  [userRole, userId],
+  [userRole, userId, isDirectManager],
   () => {
     loadTaskEntries();
   },
@@ -325,7 +328,7 @@ function avatarColor(name: string): string {
       </section>
     </template>
 
-    <template v-else>
+    <template v-if="!isEmployee || isDirectManager || roleQuickActions.length">
       <div v-loading="dashboardLoading" class="dashboard-admin">
       <section v-if="isDirectManager" class="manager-task-entry" aria-label="团队绩效待办">
         <header class="manager-task-entry__header">
@@ -426,6 +429,7 @@ function avatarColor(name: string): string {
         </div>
       </section>
 
+      <template v-if="!isEmployee">
       <section class="result-summary" data-testid="dashboard-result-summary">
         <div class="result-summary__heading">
           <div>
@@ -496,6 +500,7 @@ function avatarColor(name: string): string {
           </el-table-column>
         </el-table>
       </ChartCard>
+      </template>
       </div>
     </template>
   </div>

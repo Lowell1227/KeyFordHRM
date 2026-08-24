@@ -12,7 +12,20 @@ const resultCycle = {
   endDate: '2026-06-30',
 };
 
-async function mockIdentity(page: Page, role: 'hr' | 'manager') {
+const emptyCapabilities = {
+  canManageTeam: false,
+  canReviewDepartment: false,
+  canViewPerformanceApproval: false,
+  canOperatePerformanceApproval: false,
+  canHandleHrCycle: false,
+  identities: [],
+};
+
+async function mockIdentity(
+  page: Page,
+  role: 'employee' | 'hr' | 'manager',
+  businessCapabilities?: typeof emptyCapabilities,
+) {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'business-clarity-token');
     localStorage.setItem('expiresAt', String(Date.now() + 60_000));
@@ -25,12 +38,13 @@ async function mockIdentity(page: Page, role: 'hr' | 'manager') {
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({
       id: `${role}-1`,
-      name: role === 'hr' ? 'HR用户' : '周主管',
+      name: role === 'hr' ? 'HR用户' : role === 'manager' ? '周主管' : '动态业务负责人',
       deptId: 'dept-1',
       deptName: '研发部',
       sysRole: role,
       isAssessorOnly: false,
       canViewAll: role === 'hr',
+      ...(businessCapabilities ? { businessCapabilities } : {}),
     })),
   }));
 }
@@ -81,7 +95,7 @@ async function mockReportShell(page: Page) {
 }
 
 test.describe('dashboard and reports business clarity', () => {
-  test.use({ baseURL: 'http://localhost:5173' });
+  test.use({ baseURL: process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173' });
 
   test('report separates pending results and computes department average from scored people only', async ({ page }) => {
     await mockIdentity(page, 'hr');
@@ -142,6 +156,48 @@ test.describe('dashboard and reports business clarity', () => {
 
     await expect(page.getByTestId('manager-goal-review-open')).toHaveText('查看全部');
     await expect(page.getByTestId('manager-evaluation-open')).toHaveText('查看全部');
+  });
+
+  test('dynamic business identities drive dashboard team and approval entries without changing the employee role', async ({ page }) => {
+    await mockIdentity(page, 'employee', {
+      ...emptyCapabilities,
+      canManageTeam: true,
+      canViewPerformanceApproval: true,
+      canOperatePerformanceApproval: true,
+      identities: [
+        { type: 'performance_manager', label: '绩效直属上级', count: 1 },
+        { type: 'performance_approver', label: '最终业务审批人', count: 1 },
+      ],
+    });
+    await page.route('**/api/v1/tasks/mine**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
+    }));
+    await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({
+        total: 0,
+        page: 1,
+        pageSize: 1,
+        items: [],
+        counts: { all: 0, notStarted: 0, pending: 0, completed: 0, exempted: 0 },
+        facets: { departments: [], employees: [] },
+      })),
+    }));
+    await page.route('**/api/v1/cycles**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 50, items: [] })),
+    }));
+
+    await page.goto('/dashboard');
+
+    await page.getByRole('button', { name: /动态业务负责人/ }).click();
+    await expect(page.getByRole('menu')).toContainText('绩效直属上级 · 1 项');
+    await page.getByRole('button', { name: /动态业务负责人/ }).click();
+    await expect(page.getByTestId('manager-goal-review-open')).toBeVisible();
+    await expect(page.getByTestId('manager-evaluation-open')).toBeVisible();
+    await expect(page.getByTestId('dashboard-quick-actions')).toContainText('结果审批');
+    await expect(page.getByTestId('dashboard-result-summary')).toHaveCount(0);
   });
 
   test('report keeps the business tabs usable on a phone-sized viewport', async ({ page }) => {

@@ -4,7 +4,6 @@ import type {
   DirectReport,
   User,
   UserQuery,
-  UpdateManagerBody,
   UpdateUserSettingsBody,
   UpdateRoleBody,
   SetPasswordBody,
@@ -12,10 +11,6 @@ import type {
 
 function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
   return http.get(url, { params }) as unknown as Promise<T>;
-}
-
-function apiPost<T>(url: string, data?: unknown): Promise<T> {
-  return http.post(url, data) as unknown as Promise<T>;
 }
 
 function apiPatch<T>(url: string, data?: unknown): Promise<T> {
@@ -33,12 +28,7 @@ export const usersApi = {
     return apiGet(`/users/${id}`);
   },
 
-  /** PATCH /users/:id/manager — 更新直属主管 */
-  updateManager(id: string, body: UpdateManagerBody): Promise<User> {
-    return apiPatch(`/users/${id}/manager`, body);
-  },
-
-  /** PATCH /users/:id/settings — 统一更新人员关系与系统权限 */
+  /** PATCH /users/:id/settings — 更新系统权限 */
   updateSettings(id: string, body: UpdateUserSettingsBody): Promise<User> {
     return apiPatch(`/users/${id}/settings`, body);
   },

@@ -145,15 +145,8 @@ export interface UserQuery {
   keyword?: string;
 }
 
-export interface UpdateManagerBody {
-  directManagerId: string | null;
-  grantManagerRole?: boolean;
-}
-
 export interface UpdateUserSettingsBody {
-  directManagerId?: string | null;
   sysRole?: SysRole;
-  grantManagerRole?: boolean;
 }
 
 export interface UpdateRoleBody {
