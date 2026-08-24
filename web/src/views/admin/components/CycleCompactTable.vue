@@ -10,6 +10,7 @@ defineProps<{
   cycles: AssessmentCycle[];
   loading?: boolean;
   launchingId?: string | null;
+  deletingId?: string | null;
 }>();
 
 const emit = defineEmits<{
@@ -17,6 +18,7 @@ const emit = defineEmits<{
   primary: [cycle: AssessmentCycle];
   'edit-deadlines': [cycle: AssessmentCycle];
   'cancel-schedule': [cycle: AssessmentCycle];
+  delete: [cycle: AssessmentCycle];
 }>();
 
 const TYPE_LABEL = {
@@ -64,6 +66,7 @@ function formatNextTime(value?: string): string {
 function handleMore(command: string, cycle: AssessmentCycle) {
   if (command === 'deadlines') emit('edit-deadlines', cycle);
   if (command === 'cancel-schedule') emit('cancel-schedule', cycle);
+  if (command === 'delete') emit('delete', cycle);
 }
 </script>
 
@@ -143,6 +146,15 @@ function handleMore(command: string, cycle: AssessmentCycle) {
                 >
                   取消预约
                 </el-dropdown-item>
+                <el-dropdown-item
+                  v-if="(row as AssessmentCycle).status === 'draft'"
+                  command="delete"
+                  divided
+                  :disabled="deletingId === (row as AssessmentCycle).id"
+                  style="color: var(--el-color-danger)"
+                >
+                  删除周期
+                </el-dropdown-item>
               </el-dropdown-menu>
             </template>
           </el-dropdown>
@@ -200,6 +212,15 @@ function handleMore(command: string, cycle: AssessmentCycle) {
                 divided
               >
                 取消预约
+              </el-dropdown-item>
+              <el-dropdown-item
+                v-if="cycle.status === 'draft'"
+                command="delete"
+                divided
+                :disabled="deletingId === cycle.id"
+                style="color: var(--el-color-danger)"
+              >
+                删除周期
               </el-dropdown-item>
             </el-dropdown-menu>
           </template>

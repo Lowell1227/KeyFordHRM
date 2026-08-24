@@ -88,6 +88,47 @@ export class CyclesService {
     });
   }
 
+  /** DELETE /cycles/:id — 仅允许删除尚未预约或开放的草稿周期。 */
+  async remove(id: string, user: AuthUser): Promise<{ id: string }> {
+    return this.prisma.$transaction(async (tx) => {
+      const cycle = await tx.assessmentCycle.findUnique({ where: { id } });
+      if (!cycle) {
+        throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
+      }
+      if (cycle.status !== CycleStatus.draft) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '仅草稿状态的周期可以删除',
+        });
+      }
+
+      const deleted = await tx.assessmentCycle.deleteMany({
+        where: { id, status: CycleStatus.draft },
+      });
+      if (deleted.count !== 1) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '周期状态已变化，请刷新后重试',
+        });
+      }
+
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'cycle_draft_deleted',
+          entityType: 'assessment_cycle',
+          entityId: cycle.id,
+          oldValue: {
+            name: cycle.name,
+            type: cycle.type,
+            status: cycle.status,
+          },
+        },
+      });
+      return { id: cycle.id };
+    });
+  }
+
   /** GET /cycles — 查询周期列表。 */
   async findAll(query: CycleQueryDto, viewer: AuthUser) {
     const canManageCycles = viewer.sysRole === SysRole.hr || viewer.sysRole === SysRole.system_admin;

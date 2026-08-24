@@ -1,4 +1,4 @@
-import { Prisma, SysRole } from '@prisma/client';
+import { CycleStatus, Prisma, SysRole } from '@prisma/client';
 import { CyclesService } from './cycles.service';
 import { CreateCycleDto } from './dto/create-cycle.dto';
 import { AuthUser } from '@/common/types/auth.types';
@@ -25,6 +25,7 @@ describe('CyclesService', () => {
         findUniqueOrThrow: jest.fn(),
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       assessmentTask: { findMany: jest.fn(), count: jest.fn(), groupBy: jest.fn() },
       assessmentTemplateSnapshot: { count: jest.fn() },
@@ -270,6 +271,57 @@ describe('CyclesService', () => {
     expect(prisma.assessmentCycle.count).toHaveBeenCalledWith({
       where: { status: 'scheduled' },
     });
+  });
+
+  it('deletes a draft cycle and records who deleted it', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue({
+      id: 'cycle-1',
+      name: '2027年第一季度',
+      type: 'quarterly',
+      status: CycleStatus.draft,
+    });
+
+    await expect(service.remove('cycle-1', creator)).resolves.toEqual({ id: 'cycle-1' });
+    expect(prisma.assessmentCycle.deleteMany).toHaveBeenCalledWith({
+      where: { id: 'cycle-1', status: CycleStatus.draft },
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: creator.id,
+        action: 'cycle_draft_deleted',
+        entityType: 'assessment_cycle',
+        entityId: 'cycle-1',
+      }),
+    });
+  });
+
+  it('rejects deletion after a cycle leaves draft status', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue({
+      id: 'cycle-1',
+      name: '2027年第一季度',
+      type: 'quarterly',
+      status: CycleStatus.scheduled,
+    });
+
+    await expect(service.remove('cycle-1', creator)).rejects.toMatchObject({
+      response: { message: expect.stringContaining('仅草稿') },
+    });
+    expect(prisma.assessmentCycle.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects deletion when the draft status changes during the request', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue({
+      id: 'cycle-1',
+      name: '2027年第一季度',
+      type: 'quarterly',
+      status: CycleStatus.draft,
+    });
+    prisma.assessmentCycle.deleteMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.remove('cycle-1', creator)).rejects.toMatchObject({
+      response: { message: expect.stringContaining('状态已变化') },
+    });
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('does not expose organization-wide task counts to an employee', async () => {

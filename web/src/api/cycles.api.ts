@@ -22,6 +22,10 @@ function apiPatch<T>(url: string, data?: unknown): Promise<T> {
   return http.patch(url, data) as unknown as Promise<T>;
 }
 
+function apiDelete<T>(url: string): Promise<T> {
+  return http.delete(url) as unknown as Promise<T>;
+}
+
 export const cyclesApi = {
   /** GET /cycles — 查询周期列表（hr/system_admin/vp/chairman 可访问） */
   findAll(query?: CycleQuery): Promise<Paginated<AssessmentCycle>> {
@@ -41,6 +45,11 @@ export const cyclesApi = {
   /** POST /cycles — 创建周期（限 hr/system_admin） */
   create(body: CreateCycleBody): Promise<AssessmentCycle> {
     return apiPost('/cycles', body);
+  },
+
+  /** DELETE /cycles/:id — 删除草稿周期（限 hr/system_admin） */
+  remove(id: string): Promise<{ id: string }> {
+    return apiDelete(`/cycles/${id}`);
   },
 
   /**

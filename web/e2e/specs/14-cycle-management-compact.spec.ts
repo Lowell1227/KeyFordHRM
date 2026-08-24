@@ -100,6 +100,7 @@ interface CycleMockOptions {
   createBodies?: unknown[];
   preflightRequests?: string[];
   preflight?: LaunchPreflightResult;
+  deletedIds?: string[];
 }
 
 async function mockCyclePage(
@@ -157,6 +158,14 @@ async function mockCyclePage(
   await page.route('**/api/v1/cycles**', (route) => {
     const url = new URL(route.request().url());
     cycleRequests.push(url);
+    const requestedId = url.pathname.match(/\/cycles\/([^/]+)$/)?.[1];
+    if (route.request().method() === 'DELETE' && requestedId) {
+      options.deletedIds?.push(requestedId);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ id: requestedId })),
+      });
+    }
     if (route.request().method() === 'POST' && url.pathname.endsWith('/cycles')) {
       options.createBodies?.push(route.request().postDataJSON());
       return route.fulfill({
@@ -172,10 +181,10 @@ async function mockCyclePage(
         body: JSON.stringify(apiResponse(options.preflight ?? readyPreflight)),
       });
     }
-    const requestedId = url.pathname.match(/\/cycles\/([^/]+)$/)?.[1];
+    const visibleCycles = options.deletedIds?.includes(draftCycle.id) ? [] : [draftCycle];
     const data = requestedId
       ? draftCycle
-      : { total: 1, page: 1, pageSize: 10, items: [draftCycle] };
+      : { total: visibleCycles.length, page: 1, pageSize: 10, items: visibleCycles };
     return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify(apiResponse(data)),
@@ -209,6 +218,22 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByRole('columnheader', { name: '操作' })).toBeVisible();
     await expect(page.getByTestId('cycle-primary-cycle-draft')).toHaveText('发起前检查');
     expect(cycleRequests.some((url) => url.searchParams.get('group') === 'attention')).toBe(true);
+  });
+
+  test('deletes a draft only after naming it in an explicit confirmation', async ({ page }) => {
+    const deletedIds: string[] = [];
+    await mockCyclePage(page, [], { deletedIds });
+    await page.goto('/cycles?group=attention');
+
+    await page.getByRole('button', { name: '更多操作' }).click();
+    await page.getByRole('menuitem', { name: '删除周期' }).click();
+
+    const dialog = page.getByRole('dialog', { name: '删除草稿周期' });
+    await expect(dialog).toContainText('2026 Q4 季度考核');
+    await dialog.getByRole('button', { name: '删除', exact: true }).click();
+
+    await expect.poll(() => deletedIds).toEqual(['cycle-draft']);
+    await expect(page.getByText('2026 Q4 季度考核', { exact: true })).toHaveCount(0);
   });
 
   test('keeps generated schedule and result rules collapsed until HR opens advanced settings', async ({ page }) => {

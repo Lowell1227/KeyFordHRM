@@ -126,6 +126,7 @@ const router = useRouter();
 const departments = ref<Department[]>([]);
 const submitting = ref(false);
 const launchingId = ref<string | null>(null);
+const deletingId = ref<string | null>(null);
 const cycles = ref<AssessmentCycle[]>([]);
 
 const initialStatus = CYCLE_STATUS_OPTIONS.some((item) => item.value === route.query.status)
@@ -661,6 +662,40 @@ async function handleCancelSchedule(cycle: AssessmentCycle) {
   }
 }
 
+async function handleDeleteCycle(cycle: AssessmentCycle) {
+  if (cycle.status !== 'draft') return;
+  try {
+    await ElMessageBox.confirm(
+      `删除后无法恢复，确认删除「${cycle.name}」？`,
+      '删除草稿周期',
+      {
+        confirmButtonText: '删除',
+        cancelButtonText: '取消',
+        type: 'warning',
+        confirmButtonClass: 'el-button--danger',
+      },
+    );
+  } catch {
+    return;
+  }
+
+  deletingId.value = cycle.id;
+  try {
+    await cyclesApi.remove(cycle.id);
+    ElMessage.success('草稿周期已删除');
+    await loadCycles();
+    if (cycles.value.length === 0 && page.value > 1) {
+      page.value -= 1;
+      await syncListRoute();
+      await loadCycles();
+    }
+  } catch (error) {
+    ElMessage.error(error instanceof Error ? error.message : '删除周期失败');
+  } finally {
+    deletingId.value = null;
+  }
+}
+
 async function loadCycleDetail(cycleId: string) {
   detailLoading.value = true;
   detailError.value = '';
@@ -897,10 +932,12 @@ onMounted(() => {
         :cycles="cycles"
         :loading="listLoading"
         :launching-id="launchingId"
+        :deleting-id="deletingId"
         @open="handleView"
         @primary="handlePrimaryCycleAction"
         @edit-deadlines="openEditDeadlines"
         @cancel-schedule="handleCancelSchedule"
+        @delete="handleDeleteCycle"
       />
 
       <div v-else data-testid="cycle-empty-state" class="cycle-empty-state">

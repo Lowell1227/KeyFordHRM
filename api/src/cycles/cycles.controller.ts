@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Patch, Param, Body, Query, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Delete, Get, Post, Patch, Param, Body, Query, ParseUUIDPipe } from '@nestjs/common';
 import { SysRole } from '@prisma/client';
 import { Roles } from '@/common/decorators/roles.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
@@ -37,6 +37,12 @@ export class CyclesController {
   @Get(':id')
   findOne(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
     return this.cyclesService.findOne(id, user);
+  }
+
+  @Delete(':id')
+  @Roles(SysRole.hr, SysRole.system_admin)
+  remove(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
+    return this.cyclesService.remove(id, user);
   }
 
   @Patch(':id/deadlines')
