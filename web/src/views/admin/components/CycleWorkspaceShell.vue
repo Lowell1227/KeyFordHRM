@@ -74,6 +74,12 @@ function blockerActionLabel(code: string): string {
   if (code === 'ORGANIZATION_RELATION_INVALID') return '去完善人员关系';
   return '';
 }
+
+function notificationModeLabel(mode?: AssessmentCycle['notificationMode']): string {
+  if (mode === 'launch_only') return '仅正式发起时提醒一次';
+  if (mode === 'launch_and_reminders') return '正式发起并对临期或逾期任务每日催办';
+  return '不发送钉钉通知';
+}
 </script>
 
 <template>
@@ -258,6 +264,7 @@ function blockerActionLabel(code: string): string {
           <el-descriptions-item label="考核期间">
             {{ formatDate(cycle.startDate) }}–{{ formatDate(cycle.endDate) }}
           </el-descriptions-item>
+          <el-descriptions-item label="钉钉通知">{{ notificationModeLabel(cycle.notificationMode) }}</el-descriptions-item>
           <el-descriptions-item label="目标制定开放">{{ formatDateTime(cycle.goalSettingOpenAt) }}</el-descriptions-item>
           <el-descriptions-item label="指标制定截止">{{ formatDateTime(cycle.deadlineIndicatorSetting) }}</el-descriptions-item>
           <el-descriptions-item label="指标确认截止">{{ formatDateTime(cycle.deadlineIndicatorConfirm) }}</el-descriptions-item>

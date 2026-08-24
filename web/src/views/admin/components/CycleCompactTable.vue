@@ -18,6 +18,7 @@ const emit = defineEmits<{
   primary: [cycle: AssessmentCycle];
   'edit-deadlines': [cycle: AssessmentCycle];
   'cancel-schedule': [cycle: AssessmentCycle];
+  'notification-mode': [cycle: AssessmentCycle];
   delete: [cycle: AssessmentCycle];
 }>();
 
@@ -66,7 +67,14 @@ function formatNextTime(value?: string): string {
 function handleMore(command: string, cycle: AssessmentCycle) {
   if (command === 'deadlines') emit('edit-deadlines', cycle);
   if (command === 'cancel-schedule') emit('cancel-schedule', cycle);
+  if (command === 'notification-mode') emit('notification-mode', cycle);
   if (command === 'delete') emit('delete', cycle);
+}
+
+function notificationLabel(cycle: AssessmentCycle): string {
+  if (cycle.notificationMode === 'launch_only') return '钉钉：仅发起提醒';
+  if (cycle.notificationMode === 'launch_and_reminders') return '钉钉：发起＋每日催办';
+  return '钉钉：关闭';
 }
 </script>
 
@@ -86,6 +94,7 @@ function handleMore(command: string, cycle: AssessmentCycle) {
             {{ TYPE_LABEL[(row as AssessmentCycle).type] }} ·
             {{ formatDate((row as AssessmentCycle).startDate) }}–{{ formatDate((row as AssessmentCycle).endDate) }}
           </span>
+          <small>{{ notificationLabel(row as AssessmentCycle) }}</small>
         </button>
       </template>
     </el-table-column>
@@ -140,6 +149,12 @@ function handleMore(command: string, cycle: AssessmentCycle) {
                   修改截止日
                 </el-dropdown-item>
                 <el-dropdown-item
+                  v-if="['draft', 'scheduled', 'launch_blocked'].includes((row as AssessmentCycle).status)"
+                  command="notification-mode"
+                >
+                  通知设置
+                </el-dropdown-item>
+                <el-dropdown-item
                   v-if="['scheduled', 'launch_blocked'].includes((row as AssessmentCycle).status)"
                   command="cancel-schedule"
                   divided
@@ -178,6 +193,7 @@ function handleMore(command: string, cycle: AssessmentCycle) {
         <div>
           <strong>{{ cycle.name }}</strong>
           <span>{{ TYPE_LABEL[cycle.type] }} · {{ formatDate(cycle.startDate) }}–{{ formatDate(cycle.endDate) }}</span>
+          <small>{{ notificationLabel(cycle) }}</small>
         </div>
         <el-tag :type="STATUS_TAG_TYPE[cycle.status]" size="small">{{ STATUS_LABEL[cycle.status] }}</el-tag>
       </header>
@@ -205,6 +221,12 @@ function handleMore(command: string, cycle: AssessmentCycle) {
                 :disabled="['scheduled', 'launch_blocked'].includes(cycle.status)"
               >
                 修改截止日
+              </el-dropdown-item>
+              <el-dropdown-item
+                v-if="['draft', 'scheduled', 'launch_blocked'].includes(cycle.status)"
+                command="notification-mode"
+              >
+                通知设置
               </el-dropdown-item>
               <el-dropdown-item
                 v-if="['scheduled', 'launch_blocked'].includes(cycle.status)"
@@ -255,11 +277,16 @@ function handleMore(command: string, cycle: AssessmentCycle) {
 }
 
 .cycle-cell span,
+.cycle-cell small,
 .cycle-next-cell span,
 .cycle-state-cell small {
   color: var(--el-text-color-secondary);
   font-size: 12px;
   line-height: 1.45;
+}
+
+.cycle-cell small {
+  color: var(--el-color-info);
 }
 
 .cycle-state-cell,

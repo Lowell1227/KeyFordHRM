@@ -2,6 +2,7 @@
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { QuestionFilled } from '@element-plus/icons-vue';
 import dayjs from 'dayjs';
 import { cyclesApi } from '@/api/cycles.api';
 import { departmentsApi } from '@/api/departments.api';
@@ -24,6 +25,8 @@ import type {
   Department,
   CycleQuery,
   CycleStatusGroup,
+  CycleNotificationMode,
+  DingtalkNotificationSettings,
 } from '@/types/api.types';
 import type { CycleStatus, CycleType } from '@/types/enums';
 
@@ -156,7 +159,15 @@ const createDialogVisible = ref(false);
 const advancedCreateVisible = ref(false);
 const advancedCreateSections = ref<string[]>([]);
 const createScheduleCustomized = ref(false);
+const createNameCustomized = ref(false);
+const createPeriodRange = ref<[Date, Date] | null>(null);
 const createInitialSnapshot = ref('');
+const notificationSettings = ref<DingtalkNotificationSettings | null>(null);
+const notificationSettingsLoading = ref(false);
+const notificationSettingsSaving = ref(false);
+const notificationDialogVisible = ref(false);
+const notificationCycle = ref<AssessmentCycle | null>(null);
+const notificationModeDraft = ref<CycleNotificationMode>('off');
 const editDialogVisible = ref(false);
 const editingCycle = ref<AssessmentCycle | null>(null);
 const preflightLoading = ref(false);
@@ -185,10 +196,12 @@ const gradeRatioSummary = computed(() => (
   `A ${createForm.gradeAMaxRatio}% · B ${createForm.gradeBMaxRatio}% · C ${createForm.gradeCMaxRatio}% · D ${createForm.gradeDMaxRatio}%`
 ));
 const visibleFieldCount = computed(() => Object.values(createForm.publishVisibleFields).filter(Boolean).length);
-const hrOwnerSummary = computed(() => {
-  if (!createForm.hrOwnerId) return '待选择';
-  if (createForm.hrOwnerId === auth.user?.id) return auth.user.name;
-  return '已指定';
+const createNotificationHint = computed(() => {
+  if (createForm.notificationMode === 'off') return '本周期不发送钉钉通知';
+  if (!notificationSettings.value?.effectiveEnabled) return '钉钉通知总开关已关闭，本周期暂不外发';
+  return createForm.notificationMode === 'launch_only'
+    ? '正式发起时提醒一次，不会每日催办'
+    : '正式发起时提醒，并在临期或逾期任务每日 09:00 催办';
 });
 
 const createFormRef = ref<InstanceType<typeof import('element-plus')['ElForm']> | null>(null);
@@ -206,6 +219,7 @@ const createForm = reactive({
   participantDeptIds: [] as string[],
   participantUserIds: [] as string[],
   explicitExemptUserIds: [] as string[],
+  notificationMode: 'off' as CycleNotificationMode,
   deadlineIndicatorSetting: undefined as Date | undefined,
   deadlineIndicatorConfirm: undefined as Date | undefined,
   deadlineSelfEval: undefined as Date | undefined,
@@ -264,6 +278,7 @@ function resetCreateForm() {
   advancedCreateVisible.value = false;
   advancedCreateSections.value = [];
   createScheduleCustomized.value = false;
+  createNameCustomized.value = false;
   createForm.name = '';
   createForm.type = 'quarterly';
   createForm.participantScope = 'all';
@@ -275,6 +290,7 @@ function resetCreateForm() {
   createForm.participantDeptIds = [];
   createForm.participantUserIds = [];
   createForm.explicitExemptUserIds = [];
+  createForm.notificationMode = 'off';
   createForm.deadlineIndicatorSetting = undefined;
   createForm.deadlineIndicatorConfirm = undefined;
   createForm.deadlineSelfEval = undefined;
@@ -288,20 +304,71 @@ function resetCreateForm() {
   createForm.gradeDMaxRatio = 10;
   createForm.publishVisibleFields = { ...DEFAULT_VISIBLE_FIELDS };
   createFormRef.value?.resetFields?.();
-  presetNextQuarter();
+  applyCycleTypePreset('quarterly');
   createInitialSnapshot.value = createFormSnapshot();
 }
 
-function presetNextQuarter() {
+function nextPeriodForType(type: CycleType): [dayjs.Dayjs, dayjs.Dayjs] | null {
   const now = dayjs();
+  if (type === 'monthly') {
+    const start = now.add(1, 'month').startOf('month').startOf('day');
+    return [start, start.endOf('month').startOf('day')];
+  }
+  if (type === 'annual') {
+    const start = now.add(1, 'year').startOf('year').startOf('day');
+    return [start, start.endOf('year').startOf('day')];
+  }
+  if (type !== 'quarterly') return null;
   const quarterStartMonth = Math.floor(now.month() / 3) * 3;
   const start = now.month(quarterStartMonth).startOf('month').add(3, 'month').startOf('day');
   const end = start.add(3, 'month').subtract(1, 'day').startOf('day');
-  const quarter = Math.floor(start.month() / 3) + 1;
-  createForm.name = `${start.year()} Q${quarter} 季度考核`;
+  return [start, end];
+}
+
+function generatedCycleName(type: CycleType, start: dayjs.Dayjs): string {
+  if (type === 'monthly') return `${start.year()}年${String(start.month() + 1).padStart(2, '0')}月绩效考核`;
+  if (type === 'quarterly') return `${start.year()} Q${Math.floor(start.month() / 3) + 1} 季度考核`;
+  if (type === 'annual') return `${start.year()} 年度绩效考核`;
+  if (type === 'probation') return `${start.year()} 试用期考核`;
+  return `${start.year()} 自定义绩效考核`;
+}
+
+function syncGeneratedName() {
+  if (createNameCustomized.value || !createForm.startDate) return;
+  createForm.name = generatedCycleName(createForm.type, dayjs(createForm.startDate));
+}
+
+function applyCycleTypePreset(type: CycleType) {
+  const period = nextPeriodForType(type);
+  if (!period) {
+    createPeriodRange.value = null;
+    createForm.startDate = undefined;
+    createForm.endDate = undefined;
+    if (!createNameCustomized.value) createForm.name = type === 'probation' ? '试用期绩效考核' : '自定义绩效考核';
+    return;
+  }
+  const [start, end] = period;
   createForm.startDate = start.toDate();
   createForm.endDate = end.toDate();
+  createPeriodRange.value = [start.toDate(), end.toDate()];
+  syncGeneratedName();
   applyDefaultCreateSchedule();
+}
+
+function handleCreateTypeChange(type: CycleType) {
+  createScheduleCustomized.value = false;
+  applyCycleTypePreset(type);
+}
+
+function handleCreateNameInput() {
+  createNameCustomized.value = true;
+}
+
+function handleCreatePeriodRangeChange(value: [Date, Date] | null) {
+  createForm.startDate = value?.[0];
+  createForm.endDate = value?.[1];
+  syncGeneratedName();
+  handleCreatePeriodChange();
 }
 
 function applyDefaultCreateSchedule() {
@@ -322,6 +389,7 @@ function applyDefaultCreateSchedule() {
 
 function openCreateDialog() {
   resetCreateForm();
+  if (!notificationSettings.value) void loadNotificationSettings();
   createDialogVisible.value = true;
 }
 
@@ -393,6 +461,50 @@ function handleCreatePeriodChange() {
   if (!createScheduleCustomized.value) applyDefaultCreateSchedule();
 }
 
+async function loadNotificationSettings() {
+  notificationSettingsLoading.value = true;
+  try {
+    notificationSettings.value = await cyclesApi.getDingtalkNotificationSettings();
+  } catch {
+    notificationSettings.value = null;
+  } finally {
+    notificationSettingsLoading.value = false;
+  }
+}
+
+async function handleDingtalkNotificationToggle(value: string | number | boolean) {
+  notificationSettingsSaving.value = true;
+  try {
+    notificationSettings.value = await cyclesApi.updateDingtalkNotificationSettings(Boolean(value));
+    ElMessage.success(Boolean(value) ? '钉钉绩效通知总开关已开启' : '钉钉绩效通知总开关已关闭');
+  } catch {
+    await loadNotificationSettings();
+  } finally {
+    notificationSettingsSaving.value = false;
+  }
+}
+
+function openNotificationModeDialog(cycle: AssessmentCycle) {
+  notificationCycle.value = cycle;
+  notificationModeDraft.value = cycle.notificationMode ?? 'off';
+  notificationDialogVisible.value = true;
+}
+
+async function saveNotificationMode() {
+  if (!notificationCycle.value) return;
+  submitting.value = true;
+  try {
+    const updated = await cyclesApi.updateNotificationMode(notificationCycle.value.id, notificationModeDraft.value);
+    const index = cycles.value.findIndex((item) => item.id === updated.id);
+    if (index >= 0) cycles.value[index] = updated;
+    if (cycleDetail.value?.id === updated.id) cycleDetail.value = updated;
+    notificationDialogVisible.value = false;
+    ElMessage.success('周期通知策略已更新');
+  } finally {
+    submitting.value = false;
+  }
+}
+
 function getCreateDeadlineValidationMessage(): string | null {
   if (createForm.startDate && createForm.endDate && !dayjs(createForm.endDate).isAfter(createForm.startDate)) {
     return `结束日期必须晚于开始日期（${formatDate(createForm.startDate)}）。`;
@@ -440,6 +552,7 @@ function buildCreateBody(): CreateCycleBody {
     participantDeptIds: [...createForm.participantDeptIds],
     participantUserIds: [...createForm.participantUserIds],
     explicitExemptUserIds: [...createForm.explicitExemptUserIds],
+    notificationMode: createForm.notificationMode,
     publishVisibleFields: { ...createForm.publishVisibleFields },
   };
 
@@ -845,6 +958,7 @@ onChange(() => {
 
 onMounted(() => {
   loadCycles();
+  loadNotificationSettings();
   if (typeof route.query.cycleId === 'string') void loadCycleDetail(route.query.cycleId);
   departmentsApi.findAll({ flat: true }).then((items) => {
     departments.value = items;
@@ -880,7 +994,23 @@ onMounted(() => {
     <ChartCard class="list-page-header-card">
       <template #title>考核周期管理</template>
       <template #extra>
-        <el-button data-testid="cycle-create" type="primary" @click="openCreateDialog">新建周期</el-button>
+        <div class="cycle-header-actions">
+          <div
+            data-testid="dingtalk-notification-status"
+            class="dingtalk-notification-status"
+            :class="{ 'is-enabled': notificationSettings?.effectiveEnabled }"
+          >
+            <span>{{ notificationSettings?.effectiveEnabled ? '钉钉通知已开启' : '钉钉通知已关闭' }}</span>
+            <el-switch
+              data-testid="dingtalk-global-toggle"
+              :model-value="notificationSettings?.enabled ?? false"
+              :loading="notificationSettingsLoading || notificationSettingsSaving"
+              :disabled="!notificationSettings?.available"
+              @change="handleDingtalkNotificationToggle"
+            />
+          </div>
+          <el-button data-testid="cycle-create" type="primary" @click="openCreateDialog">新建周期</el-button>
+        </div>
       </template>
 
       <CollapsibleFilterPanel title="周期筛选" class="page-filter-panel">
@@ -937,6 +1067,7 @@ onMounted(() => {
         @primary="handlePrimaryCycleAction"
         @edit-deadlines="openEditDeadlines"
         @cancel-schedule="handleCancelSchedule"
+        @notification-mode="openNotificationModeDialog"
         @delete="handleDeleteCycle"
       />
 
@@ -972,35 +1103,70 @@ onMounted(() => {
       class="cycle-create-dialog"
       data-testid="cycle-create-dialog"
       title="创建绩效周期"
-      width="900px"
+      width="760px"
       destroy-on-close
       :before-close="handleCreateBeforeClose"
     >
-      <ol class="cycle-create-flow" data-testid="cycle-create-flow" aria-label="绩效周期发起流程">
-        <li class="is-current"><span>1</span><div><strong>创建周期</strong><small>填写关键设置</small></div></li>
-        <li><span>2</span><div><strong>发起前检查</strong><small>核对人员与模板</small></div></li>
-        <li><span>3</span><div><strong>通知员工</strong><small>确认后正式发起</small></div></li>
-      </ol>
-
-      <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="104px">
-        <div class="cycle-create-layout">
-          <section class="cycle-create-main" aria-label="周期关键设置">
+      <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="96px">
+        <section class="cycle-create-main" aria-label="周期关键设置">
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="周期名称" prop="name">
-              <el-input v-model="createForm.name" placeholder="如 2026 Q2 季度考核" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
             <el-form-item label="周期类型" prop="type">
-              <el-select v-model="createForm.type" placeholder="请选择" style="width: 100%">
+              <template #label>
+                <span class="form-label-with-help">周期类型
+                  <el-tooltip content="选择后自动生成建议的周期名称、考核期间和时间节点" placement="top">
+                    <el-icon><QuestionFilled /></el-icon>
+                  </el-tooltip>
+                </span>
+              </template>
+              <el-select v-model="createForm.type" placeholder="请选择" style="width: 100%" @change="handleCreateTypeChange">
                 <el-option v-for="opt in CYCLE_TYPE_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
               </el-select>
             </el-form-item>
           </el-col>
+          <el-col :span="12">
+            <el-form-item label="周期名称" prop="name">
+              <el-input v-model="createForm.name" placeholder="系统自动生成，可直接修改" @input="handleCreateNameInput" />
+            </el-form-item>
+          </el-col>
         </el-row>
 
+        <el-form-item prop="startDate">
+          <template #label>
+            <span class="form-label-with-help">考核期间
+              <el-tooltip content="月度、季度和年度会自动联动；手动调整后，默认时间节点也会同步重算" placement="top">
+                <el-icon><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+          </template>
+          <el-date-picker
+            v-model="createPeriodRange"
+            data-testid="cycle-period-range"
+            type="daterange"
+            range-separator="至"
+            start-placeholder="开始日期"
+            end-placeholder="结束日期"
+            style="width: 100%"
+            @change="handleCreatePeriodRangeChange"
+          />
+        </el-form-item>
+
         <el-row :gutter="16">
+          <el-col :span="12">
+            <el-form-item label="考核范围">
+              <template #label>
+                <span class="form-label-with-help">考核范围
+                  <el-tooltip content="选择指定部门后才需要补充部门；切回全公司会自动清空部门选择" placement="top">
+                    <el-icon><QuestionFilled /></el-icon>
+                  </el-tooltip>
+                </span>
+              </template>
+              <el-radio-group v-model="createForm.participantScope" @change="handleParticipantScopeChange">
+                <el-radio-button data-testid="cycle-scope-all" value="all">全公司</el-radio-button>
+                <el-radio-button data-testid="cycle-scope-departments" value="departments">指定部门</el-radio-button>
+              </el-radio-group>
+            </el-form-item>
+          </el-col>
           <el-col :span="12">
             <el-form-item label="HR 负责人" prop="hrOwnerId">
               <UserSelect
@@ -1010,14 +1176,6 @@ onMounted(() => {
                 :clearable="false"
                 placeholder="选择本周期 HR 负责人"
               />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="考核范围">
-              <el-radio-group v-model="createForm.participantScope" @change="handleParticipantScopeChange">
-                <el-radio-button data-testid="cycle-scope-all" value="all">全公司</el-radio-button>
-                <el-radio-button data-testid="cycle-scope-departments" value="departments">指定部门</el-radio-button>
-              </el-radio-group>
             </el-form-item>
           </el-col>
         </el-row>
@@ -1040,55 +1198,29 @@ onMounted(() => {
           </el-select>
         </el-form-item>
 
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="开始日期" prop="startDate">
-              <el-date-picker
-                v-model="createForm.startDate"
-                type="date"
-                placeholder="选择开始日期"
-                style="width: 100%"
-                @change="handleCreatePeriodChange"
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="结束日期" prop="endDate">
-              <el-date-picker
-                v-model="createForm.endDate"
-                type="date"
-                placeholder="选择结束日期"
-                style="width: 100%"
-                @change="handleCreatePeriodChange"
-              />
-            </el-form-item>
-          </el-col>
-        </el-row>
-        <div class="cycle-plan-summary" data-testid="cycle-plan-summary">
-          <div>
-            <span>目标制定开放</span>
-            <strong>{{ formatDateTimeForMessage(createForm.goalSettingOpenAt) }}</strong>
-          </div>
-          <div>
-            <span>周期开始</span>
-            <strong>{{ formatDate(createForm.startDate) }}</strong>
-          </div>
-          <div>
-            <span>周期结束</span>
-            <strong>{{ formatDate(createForm.endDate) }}</strong>
-          </div>
-          <div>
-            <span>员工自评开放</span>
-            <strong>{{ formatDateTimeForMessage(createForm.selfEvalOpenAt) }}</strong>
-          </div>
+        <el-form-item>
+          <template #label>
+            <span class="form-label-with-help">员工通知
+              <el-tooltip content="不发送为默认；仅发起只通知一次；每日催办会在临期或逾期任务每天 09:00 提醒，并按 24 小时限频" placement="top">
+                <el-icon><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+          </template>
+          <el-radio-group v-model="createForm.notificationMode" class="notification-mode-options">
+            <el-radio-button data-testid="cycle-notification-off" value="off">不发送</el-radio-button>
+            <el-radio-button data-testid="cycle-notification-launch-only" value="launch_only">仅发起提醒一次</el-radio-button>
+            <el-radio-button data-testid="cycle-notification-reminders" value="launch_and_reminders">发起＋每日催办</el-radio-button>
+          </el-radio-group>
+        </el-form-item>
+
+        <div class="cycle-auto-plan" data-testid="cycle-plan-summary">
           <el-tag size="small" :type="createScheduleCustomized ? 'warning' : 'info'" effect="light">
-            {{ createScheduleCustomized ? '自定义计划' : '默认计划' }}
+            {{ createScheduleCustomized ? '自定义计划' : '时间节点已联动' }}
           </el-tag>
-          <p>
-            {{ createScheduleCustomized
-              ? '已保留自定义时间节点；可在高级设置中恢复默认计划。'
-              : '系统已根据考核期间自动生成目标制定、自评和审批节点。' }}
-          </p>
+          <span>目标开放 {{ formatDateTimeForMessage(createForm.goalSettingOpenAt) }} · 自评开放 {{ formatDateTimeForMessage(createForm.selfEvalOpenAt) }}</span>
+          <el-tooltip content="指标制定、确认、自评、评分、校准、审批和公示时间可在高级设置中调整" placement="top">
+            <el-icon><QuestionFilled /></el-icon>
+          </el-tooltip>
         </div>
 
         <button
@@ -1107,7 +1239,11 @@ onMounted(() => {
             <el-collapse-item name="participants">
               <template #title>
                 <div data-testid="cycle-advanced-participants" class="advanced-group-title">
-                  <strong>参与范围与例外</strong>
+                  <strong>参与范围与例外
+                    <el-tooltip content="可补充范围外人员或设置明确豁免；全公司范围通常无需调整" placement="top">
+                      <el-icon><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </strong>
                   <span>{{ participantScopeSummary }}</span>
                 </div>
               </template>
@@ -1123,18 +1259,20 @@ onMounted(() => {
                   </el-form-item>
                 </el-col>
               </el-row>
-              <p class="form-tip">全公司范围无需额外补充人员；明确豁免人员仍会生成可查看原因的豁免任务。</p>
             </el-collapse-item>
 
             <el-collapse-item name="schedule">
               <template #title>
                 <div data-testid="cycle-advanced-schedule" class="advanced-group-title">
-                  <strong>时间节点</strong>
+                  <strong>时间节点
+                    <el-tooltip content="默认随考核期间自动生成；调整任一节点后改为自定义计划" placement="top">
+                      <el-icon><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </strong>
                   <span>{{ createScheduleCustomized ? '已自定义' : '默认计划' }}</span>
                 </div>
               </template>
               <div class="advanced-group-actions">
-                <span>调整任一时间后将标记为自定义计划</span>
                 <el-button text type="primary" @click.stop="applyDefaultCreateSchedule">恢复默认计划</el-button>
               </div>
               <el-row :gutter="16">
@@ -1175,11 +1313,14 @@ onMounted(() => {
             <el-collapse-item name="grades">
               <template #title>
                 <div data-testid="cycle-advanced-grades" class="advanced-group-title">
-                  <strong>等级比例</strong>
+                  <strong>等级比例
+                    <el-tooltip content="用于校准阶段判断各绩效等级是否超过建议上限" placement="top">
+                      <el-icon><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </strong>
                   <span>{{ gradeRatioSummary }}</span>
                 </div>
               </template>
-              <p class="form-tip advanced-group-tip">用于校准阶段判断各绩效等级是否超过建议上限。</p>
               <el-row :gutter="16">
                 <el-col v-for="field in GRADE_RATIO_FIELDS" :key="field.key" :span="12">
                   <el-form-item :label="field.label">
@@ -1200,7 +1341,11 @@ onMounted(() => {
             <el-collapse-item name="publication">
               <template #title>
                 <div data-testid="cycle-advanced-publication" class="advanced-group-title">
-                  <strong>公示范围</strong>
+                  <strong>公示范围
+                    <el-tooltip content="设置结果公示后员工可以看到的字段；绩效系数默认隐藏" placement="top">
+                      <el-icon><QuestionFilled /></el-icon>
+                    </el-tooltip>
+                  </strong>
                   <span>{{ visibleFieldCount }} 项可见</span>
                 </div>
               </template>
@@ -1214,41 +1359,42 @@ onMounted(() => {
                     {{ opt.label }}
                   </el-checkbox>
                 </div>
-                <p class="form-tip">「绩效系数」默认不勾选，员工默认不可见；HR 可按需开启。</p>
               </el-form-item>
             </el-collapse-item>
           </el-collapse>
         </div>
-          </section>
-
-          <aside class="cycle-create-summary" data-testid="cycle-create-summary" aria-label="创建摘要">
-            <h3>本次将创建</h3>
-            <dl>
-              <div><dt>考核期间</dt><dd>{{ formatDate(createForm.startDate) }} – {{ formatDate(createForm.endDate) }}</dd></div>
-              <div><dt>考核范围</dt><dd>{{ participantScopeSummary }}</dd></div>
-              <div><dt>HR 负责人</dt><dd>{{ hrOwnerSummary }}</dd></div>
-              <div><dt>时间计划</dt><dd>{{ createScheduleCustomized ? '已自定义' : '系统自动生成' }}</dd></div>
-              <div><dt>绩效模板</dt><dd>模板将在下一步自动匹配检查</dd></div>
-            </dl>
-            <p v-if="createScheduleCustomized" class="cycle-create-summary__warning">
-              时间节点已自定义，修改考核期间不会覆盖这些节点。
-            </p>
-            <p class="cycle-create-summary__notice">当前仅保存草稿，不会通知员工。</p>
-          </aside>
-        </div>
+        </section>
       </el-form>
 
       <template #footer>
         <div class="cycle-create-footer">
-          <p data-testid="cycle-create-impact-hint">检查通过并确认发起后，员工才会收到通知</p>
+          <p data-testid="cycle-create-impact-hint">{{ createNotificationHint }}</p>
           <div>
             <el-button @click="requestCloseCreateDialog">取消</el-button>
             <el-button data-testid="cycle-create-save-draft" :loading="submitting" @click="handleCreate(false)">仅保存草稿</el-button>
             <el-button data-testid="cycle-create-and-check" type="primary" :loading="submitting" @click="handleCreate(true)">
-              保存并进行发起检查
+              保存并检查
             </el-button>
           </div>
         </div>
+      </template>
+    </el-dialog>
+
+    <el-dialog v-model="notificationDialogVisible" title="周期通知设置" width="560px" destroy-on-close>
+      <div class="notification-setting-dialog">
+        <div class="notification-setting-dialog__status">
+          <strong>{{ notificationSettings?.effectiveEnabled ? '钉钉通知总开关已开启' : '钉钉通知总开关已关闭' }}</strong>
+          <span>{{ notificationSettings?.effectiveEnabled ? '本周期将按下方策略执行' : '可先保存策略，打开总开关后才会外发' }}</span>
+        </div>
+        <el-radio-group v-model="notificationModeDraft" class="notification-setting-list">
+          <el-radio value="off"><strong>不发送</strong><span>仅保留系统站内通知</span></el-radio>
+          <el-radio value="launch_only"><strong>仅发起提醒一次</strong><span>正式发起时通知员工和主管，不做每日催办</span></el-radio>
+          <el-radio value="launch_and_reminders"><strong>发起＋每日催办</strong><span>临期或逾期任务每天 09:00 催办，24 小时内不重复</span></el-radio>
+        </el-radio-group>
+      </div>
+      <template #footer>
+        <el-button @click="notificationDialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="submitting" @click="saveNotificationMode">保存</el-button>
       </template>
     </el-dialog>
     </template>
@@ -1330,6 +1476,71 @@ onMounted(() => {
 
 .cycle-empty-state {
   min-height: 220px;
+}
+
+.cycle-header-actions,
+.dingtalk-notification-status,
+.form-label-with-help,
+.cycle-auto-plan,
+.advanced-group-title strong {
+  display: flex;
+  align-items: center;
+}
+
+.cycle-header-actions {
+  gap: 12px;
+}
+
+.dingtalk-notification-status {
+  gap: 9px;
+  padding: 6px 10px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+}
+
+.dingtalk-notification-status.is-enabled {
+  color: var(--el-color-success-dark-2);
+  background: var(--el-color-success-light-9);
+  border-color: var(--el-color-success-light-7);
+}
+
+.form-label-with-help,
+.advanced-group-title strong {
+  gap: 5px;
+}
+
+.form-label-with-help .el-icon,
+.advanced-group-title strong .el-icon,
+.cycle-auto-plan .el-icon {
+  color: var(--el-text-color-placeholder);
+  cursor: help;
+}
+
+.notification-mode-options {
+  display: flex;
+  width: 100%;
+}
+
+.notification-mode-options :deep(.el-radio-button) {
+  flex: 1;
+}
+
+.notification-mode-options :deep(.el-radio-button__inner) {
+  width: 100%;
+  padding-inline: 10px;
+}
+
+.cycle-auto-plan {
+  gap: 9px;
+  margin: 2px 0 16px 96px;
+  padding: 10px 12px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
 }
 
 .cycle-create-flow {
@@ -1457,8 +1668,8 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  width: calc(100% - 104px);
-  margin: 0 0 8px 104px;
+  width: calc(100% - 96px);
+  margin: 0 0 8px 96px;
   padding: 11px 14px;
   color: var(--el-color-primary);
   font: inherit;
@@ -1483,7 +1694,7 @@ onMounted(() => {
 }
 
 .advanced-create-groups {
-  margin-left: 104px;
+  margin-left: 96px;
   border-top: 0;
 }
 
@@ -1603,6 +1814,49 @@ onMounted(() => {
   gap: 10px;
 }
 
+.notification-setting-dialog,
+.notification-setting-list,
+.notification-setting-list :deep(.el-radio),
+.notification-setting-list :deep(.el-radio__label) {
+  display: grid;
+}
+
+.notification-setting-dialog {
+  gap: 16px;
+}
+
+.notification-setting-dialog__status {
+  display: grid;
+  gap: 4px;
+  padding: 12px 14px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+}
+
+.notification-setting-dialog__status span,
+.notification-setting-list span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.notification-setting-list {
+  gap: 8px;
+}
+
+.notification-setting-list :deep(.el-radio) {
+  grid-template-columns: auto 1fr;
+  align-items: start;
+  height: auto;
+  margin: 0;
+  padding: 12px 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+}
+
+.notification-setting-list :deep(.el-radio__label) {
+  gap: 4px;
+}
+
 :global(.cycle-create-dialog) {
   display: flex;
   flex-direction: column;
@@ -1670,6 +1924,14 @@ onMounted(() => {
 }
 
 @media (max-width: 767px) {
+  .cycle-header-actions {
+    align-items: stretch;
+    flex-direction: column-reverse;
+  }
+
+  .dingtalk-notification-status {
+    justify-content: space-between;
+  }
   .cycle-list-toolbar,
   .filter-row {
     align-items: stretch;
@@ -1747,6 +2009,29 @@ onMounted(() => {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     margin-left: 0;
     padding-right: 14px;
+  }
+
+  .cycle-auto-plan {
+    align-items: flex-start;
+    margin-left: 0;
+  }
+
+  .notification-mode-options {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .notification-mode-options :deep(.el-radio-button__inner) {
+    border-left: var(--el-border);
+    border-radius: 0;
+  }
+
+  .notification-mode-options :deep(.el-radio-button:first-child .el-radio-button__inner) {
+    border-radius: var(--el-border-radius-base) var(--el-border-radius-base) 0 0;
+  }
+
+  .notification-mode-options :deep(.el-radio-button:last-child .el-radio-button__inner) {
+    border-radius: 0 0 var(--el-border-radius-base) var(--el-border-radius-base);
   }
 
   .cycle-plan-summary > .el-tag {

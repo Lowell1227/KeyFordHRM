@@ -197,14 +197,16 @@ export class NotificationsService {
 
   private async deliver(
     logId: string,
-    params: Pick<CreateNotificationParams, 'userId' | 'title' | 'content' | 'extraData'>,
+    params: Pick<CreateNotificationParams, 'userId' | 'cycleId' | 'type' | 'title' | 'content' | 'extraData'>,
     dingtalkId: string | null,
   ): Promise<void> {
-    const { userId, title, content, extraData } = params;
+    const { userId, cycleId = null, type, title, content, extraData } = params;
     try {
       const result = await this.pushProvider.push({
         userId,
         dingtalkId,
+        cycleId,
+        type,
         title,
         content,
       });

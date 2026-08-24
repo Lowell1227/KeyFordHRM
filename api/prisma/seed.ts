@@ -17,6 +17,7 @@ const SYSTEM_CONFIGS: { key: string; value: unknown; description: string }[] = [
   { key: 'exempt_threshold_ratio', value: 0.3333, description: '在岗时间不足此比例则自动豁免（D10）' },
   { key: 'dingtalk_sync_cron', value: '0 2 * * *', description: '钉钉组织架构同步定时任务，每日凌晨 2 点' },
   { key: 'deadline_reminder_days', value: 3, description: '节点截止前提前 N 天推送提醒，默认 3 天' },
+  { key: 'dingtalk_notification_enabled', value: false, description: '绩效钉钉通知业务总开关，默认关闭' },
   { key: 'probation_duration_days', value: 90, description: '试用期默认天数，超出后系统触发转正提醒' },
   { key: 'notification_channels', value: ['dingtalk'], description: '默认通知渠道' },
   { key: 'system_name', value: '孚德绩效管理系统', description: '系统名称' },

@@ -273,6 +273,41 @@ describe('CyclesService', () => {
     });
   });
 
+  it('stores an explicit per-cycle notification mode and defaults to off', async () => {
+    await service.create(quarterlyCycle({ notificationMode: 'launch_only' } as Partial<CreateCycleDto>), creator);
+    expect(prisma.assessmentCycle.create).toHaveBeenLastCalledWith({
+      data: expect.objectContaining({ notificationMode: 'launch_only' }),
+    });
+
+    await service.create(quarterlyCycle(), creator);
+    expect(prisma.assessmentCycle.create).toHaveBeenLastCalledWith({
+      data: expect.objectContaining({ notificationMode: 'off' }),
+    });
+  });
+
+  it('changes notification mode only before a cycle has opened', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue({
+      id: 'cycle-1',
+      status: CycleStatus.draft,
+      notificationMode: 'off',
+    });
+    prisma.assessmentCycle.findUniqueOrThrow.mockResolvedValue({
+      id: 'cycle-1',
+      status: CycleStatus.draft,
+      notificationMode: 'launch_only',
+    });
+
+    await expect((service as any).updateNotificationMode(
+      'cycle-1',
+      'launch_only',
+      creator,
+    )).resolves.toEqual(expect.objectContaining({ notificationMode: 'launch_only' }));
+    expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith({
+      where: { id: 'cycle-1', status: CycleStatus.draft },
+      data: { notificationMode: 'launch_only' },
+    });
+  });
+
   it('deletes a draft cycle and records who deleted it', async () => {
     prisma.assessmentCycle.findUnique.mockResolvedValue({
       id: 'cycle-1',

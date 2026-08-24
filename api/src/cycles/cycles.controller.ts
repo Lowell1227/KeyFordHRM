@@ -9,6 +9,7 @@ import { CreateCycleDto } from './dto/create-cycle.dto';
 import { UpdateDeadlinesDto } from './dto/update-deadlines.dto';
 import { CycleQueryDto } from './dto/cycle-query.dto';
 import { LaunchCycleDto, ScheduleCycleDto } from './dto/launch-cycle.dto';
+import { UpdateCycleNotificationModeDto } from './dto/update-cycle-notification-mode.dto';
 
 // 管理员可以查看全量周期；其他角色只能读取已开放周期，避免草稿和预约信息泄露。
 @Controller('cycles')
@@ -53,6 +54,16 @@ export class CyclesController {
     @CurrentUser() user: AuthUser,
   ) {
     return this.cyclesService.updateDeadlines(id, dto, user);
+  }
+
+  @Patch(':id/notification-mode')
+  @Roles(SysRole.hr, SysRole.system_admin)
+  updateNotificationMode(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCycleNotificationModeDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.cyclesService.updateNotificationMode(id, dto.notificationMode, user);
   }
 
   @Get(':id/preflight')

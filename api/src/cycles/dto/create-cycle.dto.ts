@@ -8,6 +8,7 @@ import {
   IsNumber,
   IsArray,
   IsUUID,
+  IsIn,
   Min,
   Max,
 } from 'class-validator';
@@ -23,6 +24,10 @@ export class CreateCycleDto {
 
   @IsEnum(CycleType)
   type: CycleType;
+
+  @IsOptional()
+  @IsIn(['off', 'launch_only', 'launch_and_reminders'])
+  notificationMode?: 'off' | 'launch_only' | 'launch_and_reminders';
 
   @Type(() => Date)
   @IsDate()

@@ -363,6 +363,14 @@ export interface PublishVisibleFields {
   coefficient: boolean;
 }
 
+export type CycleNotificationMode = 'off' | 'launch_only' | 'launch_and_reminders';
+
+export interface DingtalkNotificationSettings {
+  available: boolean;
+  enabled: boolean;
+  effectiveEnabled: boolean;
+}
+
 export interface AssessmentCycle {
   id: string;
   name: string;
@@ -391,6 +399,7 @@ export interface AssessmentCycle {
   participantDeptIds?: string[];
   participantUserIds?: string[];
   explicitExemptUserIds?: string[];
+  notificationMode?: CycleNotificationMode;
   scheduledAt?: string;
   scheduledById?: string;
   openedAt?: string;
@@ -432,6 +441,7 @@ export type CycleStatusGroup = 'attention' | 'active' | 'finished';
 export interface CreateCycleBody {
   name: string;
   type: CycleType;
+  notificationMode?: CycleNotificationMode;
   startDate: string;
   endDate: string;
   goalSettingOpenAt?: string;

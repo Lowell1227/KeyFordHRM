@@ -11,6 +11,8 @@ const apiResponse = (data: unknown) => ({
 interface CycleLaunchMockOptions {
   cycles?: AssessmentCycle[];
   createBodies?: unknown[];
+  settingUpdates?: boolean[];
+  notificationModeUpdates?: string[];
 }
 
 const createdCycle = {
@@ -24,6 +26,7 @@ const createdCycle = {
   participantDeptIds: [],
   participantUserIds: [],
   explicitExemptUserIds: [],
+  notificationMode: 'off',
   publishVisibleFields: {},
   gradeAMaxRatio: 0.2,
   gradeBMaxRatio: 0.4,
@@ -85,7 +88,25 @@ async function mockCycleLaunchPage(
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
   }));
+  await page.route('**/api/v1/notification-settings/dingtalk', (route) => {
+    const enabled = route.request().method() === 'PATCH'
+      ? Boolean(route.request().postDataJSON()?.enabled)
+      : false;
+    if (route.request().method() === 'PATCH') options.settingUpdates?.push(enabled);
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ available: true, enabled, effectiveEnabled: enabled })),
+    });
+  });
   await page.route('**/api/v1/cycles**', (route) => {
+    if (route.request().method() === 'PATCH' && route.request().url().endsWith('/notification-mode')) {
+      const notificationMode = String(route.request().postDataJSON()?.notificationMode ?? 'off');
+      options.notificationModeUpdates?.push(notificationMode);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ ...createdCycle, notificationMode })),
+      });
+    }
     if (route.request().method() === 'POST') {
       options.createBodies?.push(route.request().postDataJSON());
       return route.fulfill({
@@ -125,15 +146,12 @@ test.describe('cycle launch entry UX', () => {
     await page.getByTestId('cycle-create').click();
 
     await expect(page.getByRole('dialog', { name: '创建绩效周期' })).toBeVisible();
-    await expect(page.getByTestId('cycle-create-flow')).toContainText('创建周期');
-    await expect(page.getByTestId('cycle-create-flow')).toContainText('发起前检查');
-    await expect(page.getByTestId('cycle-create-flow')).toContainText('通知员工');
+    await expect(page.getByTestId('cycle-create-flow')).toHaveCount(0);
     await expect(page.getByRole('radio', { name: '全公司' })).toBeChecked();
-    await expect(page.getByTestId('cycle-plan-summary')).toContainText('周期开始');
-    await expect(page.getByTestId('cycle-plan-summary')).toContainText('周期结束');
-    await expect(page.getByTestId('cycle-create-summary')).toContainText('模板将在下一步自动匹配检查');
-    await expect(page.getByTestId('cycle-create-and-check')).toHaveText('保存并进行发起检查');
-    await expect(page.getByTestId('cycle-create-impact-hint')).toContainText('确认发起后');
+    await expect(page.getByTestId('cycle-plan-summary')).toContainText('时间节点已联动');
+    await expect(page.getByTestId('cycle-create-summary')).toHaveCount(0);
+    await expect(page.getByTestId('cycle-create-and-check')).toHaveText('保存并检查');
+    await expect(page.getByTestId('cycle-create-impact-hint')).toContainText('不发送钉钉通知');
 
     await page.getByTestId('cycle-scope-departments').click();
     await page.getByTestId('cycle-scope-department-select').click();
@@ -144,17 +162,75 @@ test.describe('cycle launch entry UX', () => {
     expect(createBodies[0]).toMatchObject({ participantDeptIds: ['sales'] });
   });
 
-  test('recalculates the default plan when HR changes the assessment period', async ({ page }) => {
+  test('shows visible notification controls and keeps a new cycle off by default', async ({ page }) => {
+    const createBodies: unknown[] = [];
+    await mockCycleLaunchPage(page, { cycles: [], createBodies });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    await expect(page.getByTestId('cycle-create-flow')).toHaveCount(0);
+    await expect(page.getByTestId('cycle-create-summary')).toHaveCount(0);
+    await expect(page.getByTestId('dingtalk-notification-status')).toContainText('钉钉通知已关闭');
+    await expect(page.getByTestId('cycle-notification-off')).toBeChecked();
+    await expect(page.getByTestId('cycle-notification-launch-only')).toBeVisible();
+    await expect(page.getByTestId('cycle-notification-reminders')).toBeVisible();
+
+    await page.getByTestId('cycle-create-save-draft').click();
+    await expect.poll(() => createBodies).toHaveLength(1);
+    expect(createBodies[0]).toMatchObject({ notificationMode: 'off' });
+  });
+
+  test('lets HR turn on the visible DingTalk notification master switch', async ({ page }) => {
+    const settingUpdates: boolean[] = [];
+    await mockCycleLaunchPage(page, { cycles: [], settingUpdates });
+    await page.goto('/cycles?group=attention');
+
+    await page.getByTestId('dingtalk-global-toggle').click();
+    await expect.poll(() => settingUpdates).toEqual([true]);
+    await expect(page.getByTestId('dingtalk-notification-status')).toContainText('钉钉通知已开启');
+  });
+
+  test('lets HR change the notification mode of an existing draft cycle', async ({ page }) => {
+    const notificationModeUpdates: string[] = [];
+    await mockCycleLaunchPage(page, { cycles: [createdCycle], notificationModeUpdates });
+    await page.goto('/cycles?group=attention');
+
+    await page.getByRole('button', { name: '更多操作' }).click();
+    await page.getByRole('menuitem', { name: '通知设置' }).click();
+    const dialog = page.getByRole('dialog', { name: '周期通知设置' });
+    await expect(dialog).toBeVisible();
+    await dialog.getByText('仅发起提醒一次', { exact: true }).click();
+    await dialog.getByRole('button', { name: '保存', exact: true }).click();
+
+    await expect.poll(() => notificationModeUpdates).toEqual(['launch_only']);
+  });
+
+  test('links annual type to the next calendar year name and date range', async ({ page }) => {
     await mockCycleLaunchPage(page, { cycles: [] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
 
     const dialog = page.getByRole('dialog', { name: '创建绩效周期' });
-    const startDateInput = dialog.getByPlaceholder('选择开始日期');
-    await startDateInput.fill('2026-11-01');
-    await startDateInput.press('Enter');
+    await dialog.locator('.el-select').first().click();
+    await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '年度' }).click();
 
-    await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-10-22 09:00');
+    await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2027 年度绩效考核');
+    await expect(dialog.getByPlaceholder('开始日期')).toHaveValue('2027-01-01');
+    await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2027-12-31');
+    await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-12-22 09:00');
+  });
+
+  test('recalculates the default plan when HR changes the cycle type', async ({ page }) => {
+    await mockCycleLaunchPage(page, { cycles: [] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    const dialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    await dialog.locator('.el-select').first().click();
+    await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '月度' }).click();
+
+    await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2026年09月绩效考核');
+    await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-08-22 09:00');
   });
 
   test('labels the plan clearly after HR customizes a generated time node', async ({ page }) => {

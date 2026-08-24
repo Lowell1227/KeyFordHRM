@@ -7,6 +7,7 @@ import { PaginationDto, paginated } from '@/common/dto/pagination.dto';
 import { CreateCycleDto } from './dto/create-cycle.dto';
 import { UpdateDeadlinesDto } from './dto/update-deadlines.dto';
 import { CycleQueryDto, CycleStatusGroup } from './dto/cycle-query.dto';
+import type { CycleNotificationMode } from './dto/update-cycle-notification-mode.dto';
 
 const DEADLINE_FIELDS = [
   'deadlineIndicatorSetting',
@@ -57,6 +58,7 @@ export class CyclesService {
       participantDeptIds: dto.participantDeptIds ?? [],
       participantUserIds: dto.participantUserIds ?? [],
       explicitExemptUserIds: dto.explicitExemptUserIds ?? [],
+      notificationMode: dto.notificationMode ?? 'off',
       status: 'draft',
       creator: { connect: { id: user.id } },
       ...(dto.deadlineIndicatorSetting && { deadlineIndicatorSetting: dto.deadlineIndicatorSetting }),
@@ -85,6 +87,43 @@ export class CyclesService {
         },
       });
       return cycle;
+    });
+  }
+
+  /** PATCH /cycles/:id/notification-mode — 开放前可调整钉钉通知策略。 */
+  async updateNotificationMode(id: string, notificationMode: CycleNotificationMode, user: AuthUser) {
+    return this.prisma.$transaction(async (tx) => {
+      const cycle = await tx.assessmentCycle.findUnique({ where: { id } });
+      if (!cycle) {
+        throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
+      }
+      const editableStatuses: CycleStatus[] = [CycleStatus.draft, CycleStatus.scheduled, CycleStatus.launch_blocked];
+      if (!editableStatuses.includes(cycle.status)) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '周期正式开放后不能修改通知策略',
+        });
+      }
+
+      const write = await tx.assessmentCycle.updateMany({
+        where: { id, status: cycle.status },
+        data: { notificationMode },
+      });
+      if (write.count !== 1) {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '周期状态已变化，请刷新后重试' });
+      }
+      const updated = await tx.assessmentCycle.findUniqueOrThrow({ where: { id } });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'cycle_notification_mode_updated',
+          entityType: 'assessment_cycle',
+          entityId: id,
+          oldValue: { notificationMode: cycle.notificationMode },
+          newValue: { notificationMode },
+        },
+      });
+      return updated;
     });
   }
 

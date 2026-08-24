@@ -13,6 +13,10 @@ export interface MessagePushInput {
   title: string;
   /** 消息正文。 */
   content: string;
+  /** 业务通知类型，用于执行周期通知策略。 */
+  type: string;
+  /** 所属绩效周期；为空时不允许通过周期通知通道外发。 */
+  cycleId: string | null;
   /**
    * 本地通知记录 id。
    * Provider 可据此回写发送结果；未传时由调用方自行处理状态。

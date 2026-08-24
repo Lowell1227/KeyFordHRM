@@ -803,6 +803,7 @@ model AssessmentCycle {
   participantDeptIds       String[]    @default([]) @map("participant_dept_ids") @db.Uuid
   participantUserIds       String[]    @default([]) @map("participant_user_ids") @db.Uuid
   explicitExemptUserIds    String[]    @default([]) @map("explicit_exempt_user_ids") @db.Uuid
+  notificationMode         String      @default("off") @map("notification_mode") @db.VarChar(30)
   scheduledAt              DateTime?   @map("scheduled_at") @db.Timestamptz(6)
   scheduledById            String?     @map("scheduled_by_id") @db.Uuid
   launchPlan               Json?       @map("launch_plan") @db.JsonB

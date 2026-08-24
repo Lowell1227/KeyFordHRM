@@ -336,7 +336,7 @@ test.describe('compact cycle management list', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
 
-    await page.getByPlaceholder('如 2026 Q2 季度考核').fill('临时修改的周期名称');
+    await page.getByPlaceholder('系统自动生成，可直接修改').fill('临时修改的周期名称');
     await page.getByTestId('cycle-create-dialog').getByRole('button', { name: '取消', exact: true }).click();
 
     await expect(page.getByRole('dialog', { name: '放弃未保存内容？' })).toBeVisible();

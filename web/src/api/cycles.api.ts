@@ -8,6 +8,8 @@ import type {
   PublishResultsBody,
   PublishResultsResult,
   LaunchPreflightResult,
+  CycleNotificationMode,
+  DingtalkNotificationSettings,
 } from '@/types/api.types';
 
 function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
@@ -84,6 +86,18 @@ export const cyclesApi = {
 
   cancelSchedule(id: string): Promise<AssessmentCycle> {
     return apiPost(`/cycles/${id}/schedule/cancel`);
+  },
+
+  updateNotificationMode(id: string, notificationMode: CycleNotificationMode): Promise<AssessmentCycle> {
+    return apiPatch(`/cycles/${id}/notification-mode`, { notificationMode });
+  },
+
+  getDingtalkNotificationSettings(): Promise<DingtalkNotificationSettings> {
+    return apiGet('/notification-settings/dingtalk');
+  },
+
+  updateDingtalkNotificationSettings(enabled: boolean): Promise<DingtalkNotificationSettings> {
+    return apiPatch('/notification-settings/dingtalk', { enabled });
   },
 
   /** POST /cycles/:id/publish — HR 批量公示结果 */

@@ -28,6 +28,12 @@ export class DingtalkPushProvider implements MessagePushProvider {
       return { channel: 'system' };
     }
 
+    const externallyAllowed = await this.isExternallyAllowed(input);
+    if (!externallyAllowed) {
+      this.logger.debug(`[DingtalkPushProvider] notification policy kept ${input.type} in system inbox`);
+      return { channel: 'system' };
+    }
+
     this.logger.debug(`[DingtalkPushProvider] push invoked for userId=${input.userId}`);
     const { notificationId, userId, dingtalkId, title, content, url } = input;
 
@@ -58,6 +64,30 @@ export class DingtalkPushProvider implements MessagePushProvider {
       await this.markFailed(notificationId, errorMsg);
       throw err;
     }
+  }
+
+  private async isExternallyAllowed(input: MessagePushInput): Promise<boolean> {
+    if (!input.cycleId) return false;
+
+    const [setting, cycle] = await Promise.all([
+      this.prisma.systemConfig.findUnique({
+        where: { key: 'dingtalk_notification_enabled' },
+        select: { value: true },
+      }),
+      this.prisma.assessmentCycle.findUnique({
+        where: { id: input.cycleId },
+        select: { notificationMode: true },
+      }),
+    ]);
+    if (setting?.value !== true || !cycle) return false;
+
+    if (cycle.notificationMode === 'launch_only') {
+      return input.type === 'indicator_setting_notice';
+    }
+    if (cycle.notificationMode === 'launch_and_reminders') {
+      return ['indicator_setting_notice', 'task_reminder'].includes(input.type);
+    }
+    return false;
   }
 
   private async markSent(notificationId?: string): Promise<void> {
