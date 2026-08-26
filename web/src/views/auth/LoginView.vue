@@ -152,6 +152,8 @@ async function onPasswordLogin() {
       {{ dingtalkButtonText }}
     </el-button>
 
+    <p class="login-guidance">公司员工请使用钉钉账号登录；新浏览器首次使用需完成钉钉授权</p>
+    <p class="org-guidance">多组织账号请在钉钉授权页选择应用所属企业</p>
     <a
       class="manual-link"
       href="/manual/index.html"
@@ -245,6 +247,17 @@ async function onPasswordLogin() {
 .dingtalk-btn,
 .full {
   width: 100%;
+}
+.login-guidance,
+.org-guidance {
+  margin: 10px 0 0;
+  text-align: center;
+  color: var(--app-text-secondary, #646a73);
+  font-size: 12px;
+  line-height: 1.6;
+}
+.org-guidance {
+  color: var(--el-color-warning-dark-2, #b88230);
 }
 .manual-link {
   display: block;
