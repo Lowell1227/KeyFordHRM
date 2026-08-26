@@ -401,6 +401,24 @@ describe('ObjectivesService visibility helpers', () => {
     }));
   });
 
+  it('rejects creating a child objective under a parent from another cycle', async () => {
+    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'manager-1' });
+    prisma.objective.findUnique
+      .mockResolvedValueOnce({ level: ObjectiveLevel.department })
+      .mockResolvedValueOnce({ cycleId: 'cycle-parent' });
+
+    await expect(service.create({
+      title: 'Cross-cycle child',
+      level: ObjectiveLevel.individual,
+      ownerId: 'employee-1',
+      deptId: 'dept-1',
+      cycleId: 'cycle-child',
+      parentId: 'parent-other-cycle',
+    } as any, viewer)).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(prisma.objective.create).not.toHaveBeenCalled();
+  });
+
   it('lets only the current direct manager approve a pending objective', async () => {
     const approvedObjective = {
       ...visibleObjective,
@@ -545,6 +563,24 @@ describe('ObjectivesService visibility helpers', () => {
         reviewComment: null,
       }),
     }));
+  });
+
+  it('rejects changing cycleId while keeping a parent from another cycle', async () => {
+    prisma.objective.findUnique
+      .mockResolvedValueOnce({
+        ...visibleObjective,
+        parentId: 'parent-other-cycle',
+      })
+      .mockResolvedValueOnce({ level: ObjectiveLevel.department })
+      .mockResolvedValueOnce({ cycleId: 'cycle-parent' });
+
+    await expect(service.update(
+      'objective-visible',
+      { cycleId: 'cycle-child' },
+      viewer,
+    )).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(prisma.objective.update).not.toHaveBeenCalled();
   });
 
   it('shows only explicitly shareable direct-manager indicators and keeps them read-only', async () => {

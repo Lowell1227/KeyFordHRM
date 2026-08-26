@@ -713,6 +713,9 @@ export class ObjectivesService {
   async create(dto: CreateObjectiveDto, viewer: AuthUser): Promise<ObjectiveNode> {
     await this.assertCanCreate(dto, viewer);
     await this.validateParentLevel(dto.level, dto.parentId);
+    if (dto.parentId) {
+      await this.validateParentCycleConsistency(dto.cycleId, dto.parentId);
+    }
     const reviewStatus = await this.resolveReviewStatus(dto.ownerId, ObjectiveStatus.active);
 
     const created = await this.prisma.objective.create({
@@ -754,11 +757,14 @@ export class ObjectivesService {
 
     const nextLevel = dto.level ?? existing.level;
     const nextParentId = dto.parentId === undefined ? existing.parentId : dto.parentId;
+    const nextCycleId = dto.cycleId === undefined ? existing.cycleId : dto.cycleId;
     await this.validateParentLevel(nextLevel, nextParentId);
 
-    // 防止 company 级目标被挂到非 company 父目标下等非法移动。
-    if (dto.parentId !== undefined && dto.parentId !== null && dto.parentId !== existing.parentId) {
-      await this.validateCycleConsistency(id, dto.parentId);
+    if (
+      nextParentId
+      && (dto.parentId !== undefined || dto.cycleId !== undefined)
+    ) {
+      await this.validateParentCycleConsistency(nextCycleId, nextParentId);
     }
 
     const materialFields: Array<keyof UpdateObjectiveDto> = [
@@ -1166,13 +1172,16 @@ export class ObjectivesService {
     }
   }
 
-  private async validateCycleConsistency(id: string, parentId: string): Promise<void> {
-    const [self, parent] = await Promise.all([
-      this.prisma.objective.findUnique({ where: { id }, select: { cycleId: true } }),
-      this.prisma.objective.findUnique({ where: { id: parentId }, select: { cycleId: true } }),
-    ]);
+  private async validateParentCycleConsistency(
+    cycleId: string | null | undefined,
+    parentId: string,
+  ): Promise<void> {
+    const parent = await this.prisma.objective.findUnique({
+      where: { id: parentId },
+      select: { cycleId: true },
+    });
 
-    if (self?.cycleId && parent?.cycleId && self.cycleId !== parent.cycleId) {
+    if (cycleId && parent?.cycleId && cycleId !== parent.cycleId) {
       throw new BadRequestException({
         code: ERROR_CODE.PARAM_INVALID,
         message: '子目标与父目标所属周期不一致',

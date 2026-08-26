@@ -225,3 +225,75 @@ Remaining failures were unchanged broader-baseline items outside this Task 1 obj
 
 - The full `web/e2e/specs/09-performance-workspace.spec.ts` file is not fully green in this branch because three older, non-Task-1 failures remain in team-selector / shared-navigation coverage.
 - The report path was provided under a future-dated folder name, `2026-08-27`; I wrote the report there exactly as requested even though the current date is Wednesday, August 26, 2026.
+
+## Fix Round 1
+
+### Scope
+
+Address the open review finding in `api/src/objectives/objectives.service.ts`: prevent cross-cycle parent/child mismatches when creating a child objective under an existing parent and when changing `cycleId` while retaining the same `parentId`.
+
+### Test-first changes
+
+Updated test file:
+
+- `api/src/objectives/objectives.service.spec.ts`
+
+Added focused regressions:
+
+- `rejects creating a child objective under a parent from another cycle`
+- `rejects changing cycleId while keeping a parent from another cycle`
+
+### RED evidence
+
+Command:
+
+```powershell
+npm test -- objectives.service.spec.ts --runInBand
+```
+
+Result:
+
+- `FAIL src/objectives/objectives.service.spec.ts`
+- `Tests: 2 failed, 24 passed, 26 total`
+
+Relevant RED output:
+
+- `rejects creating a child objective under a parent from another cycle`
+- `rejects changing cycleId while keeping a parent from another cycle`
+- both failed as `Expected constructor: BadRequestException / Received constructor: TypeError`, showing the service still fell through those paths without cycle validation.
+
+### Implementation
+
+- In `ObjectivesService.create`, validate parent-cycle consistency whenever `parentId` is present.
+- In `ObjectivesService.update`, compute `nextCycleId` and validate parent-cycle consistency whenever either `parentId` or `cycleId` changes and a parent remains attached.
+- Replaced the old self-vs-parent helper with a direct `validateParentCycleConsistency(cycleId, parentId)` helper so update checks use the incoming cycle, not the persisted old cycle.
+- Tightened the second regression fixture to truly cover “keep same parent, change cycle” by preserving an existing `parentId`.
+
+### GREEN evidence
+
+Command:
+
+```powershell
+npm test -- objectives.service.spec.ts objectives.controller.spec.ts --runInBand
+```
+
+Result:
+
+- `PASS src/objectives/objectives.service.spec.ts`
+- `PASS src/objectives/objectives.controller.spec.ts`
+- `Tests: 31 passed, 31 total`
+
+Command:
+
+```powershell
+npm run build
+```
+
+Result:
+
+- `nest build` completed successfully.
+
+### Self-review
+
+- Kept this round API-only and did not touch Web files.
+- The change is narrow to cycle-consistency validation and the two regression paths named in the finding.
