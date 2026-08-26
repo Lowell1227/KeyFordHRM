@@ -38,6 +38,7 @@ const cycle = ref<AssessmentCycle | null>(null);
 const cycleLoading = ref(false);
 const actionLoading = ref(false);
 const reminding = ref(false);
+const indicatorSnapshotRef = ref<{ clearSelfEvalDraft: () => void } | null>(null);
 
 const task = computed(() => taskStore.detail);
 const loading = computed(() => taskStore.loading || cycleLoading.value);
@@ -304,6 +305,7 @@ async function handleSubmitSelfEval(body: SubmitSelfEvalBody, actualValues: Actu
       actualValuesSaved = true;
     }
     await tasksApi.submitSelfEval(id, body, { skipErrorMessage: true });
+    indicatorSnapshotRef.value?.clearSelfEvalDraft();
     ElMessage.success('自评提交成功');
     await loadDetail();
   } catch {
@@ -414,6 +416,7 @@ async function handleRemind() {
 
           <IndicatorSnapshot
             v-else-if="requestedPerformanceStage !== 'result'"
+            ref="indicatorSnapshotRef"
             :task-id="task.id"
             :title="performanceStageCardTitle"
             :instances="task.indicatorInstances"
@@ -433,6 +436,7 @@ async function handleRemind() {
             :self-eval-mode="requestedPerformanceStage === 'self-eval'"
             :self-eval-readonly="!isCurrentPerformanceStage || !permission.canEditSelfEval.value"
             :self-eval-summary="task.selfEvalSummary"
+            :self-eval-user-id="authStore.user?.id"
             @save="handleSaveIndicators"
             @confirm="handleConfirmIndicators"
             @reject="handleRejectIndicators"

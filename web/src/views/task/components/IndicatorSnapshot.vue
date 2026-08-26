@@ -81,6 +81,7 @@ const props = defineProps<{
   selfEvalReadonly?: boolean;
   selfEvalSummary?: SelfEvalSummary | null;
   taskId?: string;
+  selfEvalUserId?: string;
 }>();
 
 const emit = defineEmits<{
@@ -123,6 +124,7 @@ const selfEvalDraftSavedAt = ref<number | null>(null);
 const selfEvalDraftReady = ref(false);
 const selfEvalDraftRestoring = ref(false);
 const selfEvalDraftTimer = ref<number | null>(null);
+const selfEvalDraftErrorShown = ref(false);
 const snapshotValidationIds = ref<string[]>([]);
 const advancedSettingIds = ref(new Set<string>());
 
@@ -181,7 +183,11 @@ const operationRecords = computed(() =>
 );
 
 const scoredSelfEvalCount = computed(() => selfEvalRows.filter((row) => row.selfScore != null).length);
-const selfEvalDraftKey = computed(() => props.taskId ? `kayford.self-eval-draft.${props.taskId}` : '');
+const selfEvalDraftKey = computed(() => (
+  props.selfEvalUserId && props.taskId
+    ? `kayford.self-eval-draft.${props.selfEvalUserId}.${props.taskId}`
+    : ''
+));
 const selfEvalDraftStatusText = computed(() => {
   const savedAt = selfEvalDraftSavedAt.value;
   const time = savedAt
@@ -390,9 +396,9 @@ async function restoreSelfEvalDraft() {
   }
 }
 
-function persistSelfEvalDraft() {
+function persistSelfEvalDraft(): boolean {
   const storageKey = selfEvalDraftKey.value;
-  if (!props.selfEvalMode || props.selfEvalReadonly || !storageKey) return;
+  if (!props.selfEvalMode || props.selfEvalReadonly || !storageKey) return false;
   const updatedAt = Date.now();
   const draft: SelfEvalDraft = {
     version: 1,
@@ -420,8 +426,14 @@ function persistSelfEvalDraft() {
     window.localStorage.setItem(storageKey, JSON.stringify(draft));
     selfEvalDraftSavedAt.value = updatedAt;
     selfEvalDraftState.value = 'saved';
+    selfEvalDraftErrorShown.value = false;
+    return true;
   } catch {
-    ElMessage.warning('当前设备无法暂存草稿，请勿关闭页面');
+    if (!selfEvalDraftErrorShown.value) {
+      selfEvalDraftErrorShown.value = true;
+      ElMessage.warning('当前设备无法暂存草稿，请勿关闭页面');
+    }
+    return false;
   }
 }
 
@@ -435,10 +447,16 @@ function scheduleSelfEvalDraftSave() {
 }
 
 function clearSelfEvalDraft() {
+  if (selfEvalDraftTimer.value != null) {
+    window.clearTimeout(selfEvalDraftTimer.value);
+    selfEvalDraftTimer.value = null;
+  }
+  selfEvalDraftReady.value = false;
   const storageKey = selfEvalDraftKey.value;
   if (storageKey) window.localStorage.removeItem(storageKey);
   selfEvalDraftState.value = 'idle';
   selfEvalDraftSavedAt.value = null;
+  selfEvalDraftErrorShown.value = false;
 }
 
 watch(
@@ -451,14 +469,6 @@ watch(
     scheduleSelfEvalDraftSave();
   },
   { deep: true, flush: 'post' },
-);
-
-watch(
-  () => props.selfEvalReadonly,
-  (readonly) => {
-    if (props.selfEvalMode && readonly) clearSelfEvalDraft();
-  },
-  { immediate: true },
 );
 
 function templateMatchesContext(template: TemplateListItem, deptId?: string | null, employeeId?: string | null): boolean {
@@ -959,9 +969,10 @@ async function handleCheckAndSubmitSelfEval() {
 }
 
 function handleSaveSelfEvalForLater() {
-  persistSelfEvalDraft();
-  emit('save-self-eval-draft');
+  if (persistSelfEvalDraft()) emit('save-self-eval-draft');
 }
+
+defineExpose({ clearSelfEvalDraft });
 
 async function handleUpload(files: File[]) {
   for (const file of files) {

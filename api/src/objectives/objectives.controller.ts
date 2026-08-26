@@ -129,6 +129,7 @@ export class ObjectivesController {
       ObjectiveReviewStatus.approved,
       dto.comment,
       viewer,
+      dto.expectedUpdatedAt,
     );
   }
 
@@ -144,6 +145,7 @@ export class ObjectivesController {
       ObjectiveReviewStatus.changes_requested,
       dto.comment,
       viewer,
+      dto.expectedUpdatedAt,
     );
   }
 

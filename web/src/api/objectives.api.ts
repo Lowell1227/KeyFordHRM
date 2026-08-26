@@ -67,7 +67,7 @@ export const objectivesApi = {
     return http.patch(`/objectives/${id}/progress`, body) as unknown as Promise<Objective>;
   },
 
-  approveReview(id: string, body: ObjectiveReviewBody = {}): Promise<Objective> {
+  approveReview(id: string, body: ObjectiveReviewBody): Promise<Objective> {
     return http.post(
       `/objectives/${id}/review/approve`,
       body,

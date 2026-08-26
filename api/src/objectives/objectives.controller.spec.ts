@@ -47,6 +47,27 @@ describe('ObjectivesController tracking access', () => {
     }
   });
 
+  it('passes the loaded objective version into review decisions', () => {
+    const reviewObjective = jest.fn();
+    const controller = new ObjectivesController({ reviewObjective } as any);
+    const viewer = { id: 'manager-1' } as any;
+    const expectedUpdatedAt = '2026-08-25T08:00:00.000Z';
+
+    controller.approveObjective(
+      '00000000-0000-4000-8000-000000000001',
+      { expectedUpdatedAt },
+      viewer,
+    );
+
+    expect(reviewObjective).toHaveBeenCalledWith(
+      '00000000-0000-4000-8000-000000000001',
+      'approved',
+      undefined,
+      viewer,
+      expectedUpdatedAt,
+    );
+  });
+
   it('accepts deterministic UUIDv5 indicator IDs used by realistic demo data', async () => {
     await expect(
       TRACKING_INDICATOR_UUID_PIPE.transform(

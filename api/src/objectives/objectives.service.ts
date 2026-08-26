@@ -766,6 +766,9 @@ export class ObjectivesService {
     ) {
       await this.validateParentCycleConsistency(nextCycleId, nextParentId);
     }
+    if (dto.cycleId !== undefined && nextCycleId !== existing.cycleId) {
+      await this.validateChildrenCycleConsistency(id, nextCycleId);
+    }
 
     const materialFields: Array<keyof UpdateObjectiveDto> = [
       'title',
@@ -851,6 +854,7 @@ export class ObjectivesService {
     decision: ObjectiveReviewDecision,
     comment: string | undefined,
     viewer: AuthUser,
+    expectedUpdatedAt: string,
   ): Promise<ObjectiveNode> {
     const existing = await this.prisma.objective.findUnique({
       where: { id },
@@ -891,6 +895,7 @@ export class ObjectivesService {
         where: {
           id,
           reviewStatus: ObjectiveReviewStatus.pending,
+          updatedAt: new Date(expectedUpdatedAt),
           owner: { directManagerId: viewer.id },
         },
         data: {
@@ -1181,10 +1186,26 @@ export class ObjectivesService {
       select: { cycleId: true },
     });
 
-    if (cycleId && parent?.cycleId && cycleId !== parent.cycleId) {
+    if (!parent || (cycleId ?? null) !== parent.cycleId) {
       throw new BadRequestException({
         code: ERROR_CODE.PARAM_INVALID,
         message: '子目标与父目标所属周期不一致',
+      });
+    }
+  }
+
+  private async validateChildrenCycleConsistency(
+    parentId: string,
+    cycleId: string | null,
+  ): Promise<void> {
+    const children = await this.prisma.objective.findMany({
+      where: { parentId },
+      select: { cycleId: true },
+    });
+    if (children.some((child) => child.cycleId !== cycleId)) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '父目标所属周期与现有子目标不一致',
       });
     }
   }

@@ -377,6 +377,19 @@ const reviewChangesDialogVisible = ref(false);
 const reviewChangesReason = ref('');
 const reviewChangesError = ref('');
 
+async function reconcileReviewFailure(objectiveId: string) {
+  reviewChangesDialogVisible.value = false;
+  await loadTree();
+  const refreshed = flattenObjectives(treeData.value).find((objective) => objective.id === objectiveId);
+  if (refreshed) {
+    selectedObjective.value = refreshed;
+    detailVisible.value = true;
+    return;
+  }
+  selectedObjective.value = null;
+  detailVisible.value = false;
+}
+
 async function approveSelectedObjective() {
   const objective = selectedObjective.value;
   if (!objective?.canReview || reviewSubmitting.value) return;
@@ -390,13 +403,20 @@ async function approveSelectedObjective() {
         cancelButtonText: '取消',
       },
     );
-    reviewSubmitting.value = true;
-    await objectivesApi.approveReview(objective.id);
+  } catch {
+    return;
+  }
+
+  reviewSubmitting.value = true;
+  try {
+    await objectivesApi.approveReview(objective.id, {
+      expectedUpdatedAt: objective.updatedAt,
+    });
     ElMessage.success('目标已通过');
     detailVisible.value = false;
     await loadTree();
   } catch {
-    // 用户取消或请求失败；请求失败由统一拦截器提示。
+    await reconcileReviewFailure(objective.id);
   } finally {
     reviewSubmitting.value = false;
   }
@@ -421,11 +441,16 @@ async function submitReviewChanges() {
   reviewChangesError.value = '';
   reviewSubmitting.value = true;
   try {
-    await objectivesApi.requestReviewChanges(objective.id, { comment });
+    await objectivesApi.requestReviewChanges(objective.id, {
+      comment,
+      expectedUpdatedAt: objective.updatedAt,
+    });
     ElMessage.success('目标已退回修改');
     reviewChangesDialogVisible.value = false;
     detailVisible.value = false;
     await loadTree();
+  } catch {
+    await reconcileReviewFailure(objective.id);
   } finally {
     reviewSubmitting.value = false;
   }

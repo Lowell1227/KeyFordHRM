@@ -1577,6 +1577,7 @@ export interface UpdateObjectiveProgressBody {
 }
 
 export interface ObjectiveReviewBody {
+  expectedUpdatedAt: string;
   comment?: string;
 }
 

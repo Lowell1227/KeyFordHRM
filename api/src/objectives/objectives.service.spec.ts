@@ -419,6 +419,31 @@ describe('ObjectivesService visibility helpers', () => {
     expect(prisma.objective.create).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { childCycleId: undefined, parentCycleId: 'cycle-parent' },
+    { childCycleId: 'cycle-child', parentCycleId: null },
+  ])(
+    'rejects creating a child when null and non-null cycles differ ($childCycleId vs $parentCycleId)',
+    async ({ childCycleId, parentCycleId }) => {
+      prisma.user.findUnique.mockResolvedValue({ directManagerId: 'manager-1' });
+      prisma.objective.create.mockResolvedValue(visibleObjective);
+      prisma.objective.findUnique
+        .mockResolvedValueOnce({ level: ObjectiveLevel.department })
+        .mockResolvedValueOnce({ cycleId: parentCycleId });
+
+      await expect(service.create({
+        title: 'Cycle-mismatched child',
+        level: ObjectiveLevel.individual,
+        ownerId: 'employee-1',
+        deptId: 'dept-1',
+        cycleId: childCycleId,
+        parentId: 'parent-cycle-mismatch',
+      } as any, viewer)).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(prisma.objective.create).not.toHaveBeenCalled();
+    },
+  );
+
   it('lets only the current direct manager approve a pending objective', async () => {
     const approvedObjective = {
       ...visibleObjective,
@@ -437,6 +462,7 @@ describe('ObjectivesService visibility helpers', () => {
       'approved',
       '对齐清晰',
       viewer,
+      visibleObjective.updatedAt.toISOString(),
     );
 
     expect(result).toEqual(expect.objectContaining({
@@ -502,6 +528,27 @@ describe('ObjectivesService visibility helpers', () => {
       undefined,
       viewer,
     )).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('includes the loaded objective version in the atomic review claim', async () => {
+    prisma.objective.findUnique.mockResolvedValue(visibleObjective);
+
+    await (service as any).reviewObjective(
+      'objective-visible',
+      'approved',
+      undefined,
+      viewer,
+      '2026-08-07T08:00:00.000Z',
+    );
+
+    expect(prisma.objective.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        id: 'objective-visible',
+        reviewStatus: 'pending',
+        updatedAt: new Date('2026-08-07T08:00:00.000Z'),
+        owner: { directManagerId: viewer.id },
+      }),
+    }));
   });
 
   it('requires a reason before requesting objective changes', async () => {
@@ -577,6 +624,53 @@ describe('ObjectivesService visibility helpers', () => {
     await expect(service.update(
       'objective-visible',
       { cycleId: 'cycle-child' },
+      viewer,
+    )).rejects.toBeInstanceOf(BadRequestException);
+
+    expect(prisma.objective.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { childCycleId: null, parentCycleId: 'cycle-parent' },
+    { childCycleId: 'cycle-child', parentCycleId: null },
+  ])(
+    'rejects updating a child when null and non-null cycles differ ($childCycleId vs $parentCycleId)',
+    async ({ childCycleId, parentCycleId }) => {
+      prisma.objective.update.mockResolvedValue(visibleObjective);
+      prisma.objective.findUnique
+        .mockResolvedValueOnce({
+          ...visibleObjective,
+          parentId: 'parent-cycle-mismatch',
+        })
+        .mockResolvedValueOnce({ level: ObjectiveLevel.department })
+        .mockResolvedValueOnce({ cycleId: parentCycleId });
+
+      await expect(service.update(
+        'objective-visible',
+        { cycleId: childCycleId },
+        viewer,
+      )).rejects.toBeInstanceOf(BadRequestException);
+
+      expect(prisma.objective.update).not.toHaveBeenCalled();
+    },
+  );
+
+  it('rejects changing a parent cycle when an existing child would become incompatible', async () => {
+    prisma.objective.update.mockResolvedValue({
+      ...visibleObjective,
+      cycleId: 'cycle-new',
+    });
+    prisma.objective.findUnique.mockResolvedValue({
+      ...visibleObjective,
+      level: ObjectiveLevel.department,
+      parentId: null,
+      cycleId: 'cycle-old',
+    });
+    prisma.objective.findMany.mockResolvedValue([{ cycleId: 'cycle-old' }]);
+
+    await expect(service.update(
+      'objective-visible',
+      { cycleId: 'cycle-new' },
       viewer,
     )).rejects.toBeInstanceOf(BadRequestException);
 

@@ -414,7 +414,9 @@ test.describe('09-performance-workspace manager shell', () => {
     await detail.getByTestId('objective-review-approve').click();
     await expect(page.getByRole('dialog', { name: '通过目标' })).toBeVisible();
     await page.getByRole('button', { name: '确认通过' }).click();
-    await expect.poll(() => reviewBodies).toEqual([{}]);
+    await expect.poll(() => reviewBodies).toEqual([{
+      expectedUpdatedAt: '2026-08-01T00:00:00.000Z',
+    }]);
   });
 
   test('requesting objective changes requires and submits a reason', async ({ page }) => {
@@ -442,7 +444,60 @@ test.describe('09-performance-workspace manager shell', () => {
     await expect(dialog).toContainText('请填写退回原因');
     await dialog.getByRole('textbox', { name: '退回原因' }).fill('请补充量化验收口径');
     await dialog.getByRole('button', { name: '确认退回' }).click();
-    await expect.poll(() => reviewBodies).toEqual([{ comment: '请补充量化验收口径' }]);
+    await expect.poll(() => reviewBodies).toEqual([{
+      comment: '请补充量化验收口径',
+      expectedUpdatedAt: '2026-08-01T00:00:00.000Z',
+    }]);
+  });
+
+  test('reloads and reselects the objective after a 409 review conflict', async ({ page }) => {
+    await routeObjectiveMap(page);
+    await page.unroute('**/api/v1/objectives**');
+    let treeRequests = 0;
+    let reviewBody: unknown;
+    await page.route('**/api/v1/objectives/tree**', (route) => {
+      treeRequests += 1;
+      const tree = objectiveMapTreeFixture();
+      if (treeRequests > 1) {
+        Object.assign(tree[0].children![0].children![0], {
+          reviewStatus: 'changes_requested',
+          canReview: false,
+          reviewComment: '目标内容已由其他请求退回',
+          updatedAt: '2026-08-25T09:00:00.000Z',
+        });
+      }
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(tree)),
+      });
+    });
+    await page.route('**/api/v1/objectives/individual-1/review/request-changes', async (route) => {
+      reviewBody = route.request().postDataJSON();
+      await route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 'CONFLICT', message: '目标已更新，请刷新后重试', data: null }),
+      });
+    });
+
+    await page.goto('/objectives');
+    await page.getByTestId('objective-map-card-individual-1').click();
+    await page.getByTestId('objective-map-detail').getByTestId('objective-review-request-changes').click();
+    const dialog = page.getByTestId('objective-review-request-changes-dialog');
+    await dialog.getByRole('textbox', { name: '退回原因' }).fill('请补充量化验收口径');
+    await dialog.getByRole('button', { name: '确认退回' }).click();
+
+    await expect.poll(() => treeRequests).toBe(2);
+    expect(reviewBody).toEqual({
+      comment: '请补充量化验收口径',
+      expectedUpdatedAt: '2026-08-01T00:00:00.000Z',
+    });
+    await expect(dialog).not.toBeVisible();
+    const detail = page.getByTestId('objective-map-detail');
+    await expect(detail).toBeVisible();
+    await expect(detail).toContainText('待修改');
+    await expect(detail).toContainText('目标内容已由其他请求退回');
+    await expect(detail.getByTestId('objective-review-request-changes')).toHaveCount(0);
   });
 
   test('objective map ignores a stale cycle response', async ({ page }) => {

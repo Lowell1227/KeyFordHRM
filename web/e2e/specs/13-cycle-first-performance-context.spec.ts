@@ -894,6 +894,96 @@ test.describe('employee self-evaluation soft guide', () => {
     await expect(page.getByTestId('self-eval-draft-status')).toContainText('已恢复当前设备草稿');
   });
 
+  test('scopes a self-evaluation draft to the authenticated editing user and task', async ({ page }) => {
+    const detail = selfEvalTaskDetail();
+    await mockTaskCycleShell(page, [cycle('current', '2026-07-01', '2026-09-30')], [], [], detail);
+
+    await page.goto('/tasks/self-eval-task-1?stage=self-eval');
+    await page.getByTestId('self-eval-card').nth(0).getByPlaceholder('0-100').fill('92');
+
+    await expect.poll(() => page.evaluate(() => Object.keys(localStorage)
+      .filter((key) => key.startsWith('kayford.self-eval-draft.')))).toEqual([
+      'kayford.self-eval-draft.manager-1.self-eval-task-1',
+    ]);
+  });
+
+  test('does not delete a device draft when a manager opens self-evaluation read-only', async ({ page }) => {
+    const detail = selfEvalTaskDetail();
+    await mockTaskCycleShell(page, [cycle('current', '2026-07-01', '2026-09-30')], [], [], detail);
+    await page.goto('/tasks/self-eval-task-1?stage=self-eval');
+    await page.getByTestId('self-eval-card').nth(0).getByPlaceholder('0-100').fill('92');
+    await expect(page.getByTestId('self-eval-draft-status')).toContainText('已暂存于当前设备');
+    const draftKey = await page.evaluate(() => Object.keys(localStorage)
+      .find((key) => key.startsWith('kayford.self-eval-draft.')) ?? '');
+    expect(draftKey).not.toBe('');
+
+    await page.evaluate(() => {
+      const app = (document.querySelector('#app') as any).__vue_app__;
+      const auth = app.config.globalProperties.$pinia._s.get('auth');
+      auth.user = {
+        id: 'manager-2',
+        name: '直属主管',
+        deptId: 'dept-1',
+        deptName: 'Engineering',
+        sysRole: 'manager',
+        isAssessorOnly: false,
+        canViewAll: false,
+      };
+    });
+
+    await expect(page.getByRole('button', { name: '保存并稍后继续' })).toHaveCount(0);
+    expect(await page.evaluate((key) => localStorage.getItem(key), draftKey)).not.toBeNull();
+  });
+
+  test('keeps in-memory work and stays on the page when device draft storage fails', async ({ page }) => {
+    const detail = selfEvalTaskDetail();
+    await mockTaskCycleShell(page, [cycle('current', '2026-07-01', '2026-09-30')], [], [], detail);
+    await page.goto('/tasks/self-eval-task-1?stage=self-eval');
+    await page.evaluate(() => {
+      const originalSetItem = Storage.prototype.setItem;
+      Storage.prototype.setItem = function setItem(key: string, value: string) {
+        if (key.startsWith('kayford.self-eval-draft.')) {
+          throw new DOMException('storage unavailable', 'QuotaExceededError');
+        }
+        return originalSetItem.call(this, key, value);
+      };
+    });
+
+    const score = page.getByTestId('self-eval-card').nth(0).getByPlaceholder('0-100');
+    await score.fill('92');
+    await page.getByRole('button', { name: '保存并稍后继续' }).click();
+
+    await expect(page).toHaveURL(/\/tasks\/self-eval-task-1\?stage=self-eval/);
+    expect(Number(await score.inputValue())).toBe(92);
+    await expect(page.getByText('当前设备无法暂存草稿，请勿关闭页面')).toBeVisible();
+    await expect(page.locator('.el-message')).toHaveCount(1);
+  });
+
+  test('clears the current user draft only after self-evaluation submission succeeds', async ({ page }) => {
+    const detail = selfEvalTaskDetail();
+    const draftKey = 'kayford.self-eval-draft.manager-1.self-eval-task-1';
+    await mockTaskCycleShell(page, [cycle('current', '2026-07-01', '2026-09-30')], [], [], detail);
+    await page.route('**/api/v1/tasks/self-eval-task-1/self-eval', (route) => {
+      detail.status = 'manager_scoring';
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ success: true })),
+      });
+    });
+    await page.goto('/tasks/self-eval-task-1?stage=self-eval');
+    await page.evaluate(({ key }) => localStorage.setItem(key, 'confirmed-local-draft'), { key: draftKey });
+    const cards = page.getByTestId('self-eval-card');
+    await cards.nth(0).getByPlaceholder('0-100').fill('92');
+    await cards.nth(1).getByTestId('self-eval-card-toggle').click();
+    await cards.nth(1).getByPlaceholder('0-100').fill('88');
+    await page.getByRole('button', { name: '检查并提交' }).click();
+    await page.getByRole('dialog', { name: '提交前检查' }).getByRole('button', { name: '确认提交' }).click();
+
+    await expect(page.getByText('自评提交成功')).toBeVisible();
+    await expect.poll(() => page.evaluate(({ key }) => localStorage.getItem(key), { key: draftKey }))
+      .toBeNull();
+  });
+
   test('locates missing scores before submitting the checked self-evaluation', async ({ page }) => {
     const detail = selfEvalTaskDetail();
     let actualValueRequests = 0;
