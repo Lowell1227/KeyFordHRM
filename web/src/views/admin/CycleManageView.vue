@@ -12,6 +12,7 @@ import EmptyState from '@/components/common/EmptyState.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
 import CycleCompactTable from './components/CycleCompactTable.vue';
 import CycleWorkspaceShell from './components/CycleWorkspaceShell.vue';
+import CycleParticipantScopePicker, { type ParticipantScopeMode } from './components/CycleParticipantScopePicker.vue';
 import { cycleStatusGroup } from './cycle-management';
 import { useAuthStore } from '@/stores/auth.store';
 import { usePagination } from '@/composables/usePagination';
@@ -97,7 +98,6 @@ const DEADLINE_FIELDS = [
 ] as const;
 
 type DeadlineKey = (typeof DEADLINE_FIELDS)[number]['key'];
-type ParticipantScope = 'all' | 'departments';
 
 const DEFAULT_VISIBLE_FIELDS: PublishVisibleFields = {
   totalScore: true,
@@ -187,13 +187,6 @@ const emptyStateDescription = computed(() => {
   if (statusGroup.value === 'finished') return '暂无已结束周期';
   return '暂无待发起周期';
 });
-const participantScopeSummary = computed(() => (
-  createForm.participantScope === 'all'
-    ? '全公司'
-    : createForm.participantDeptIds.length > 0
-      ? `${createForm.participantDeptIds.length} 个部门`
-      : '待选择部门'
-));
 const gradeRatioSummary = computed(() => (
   `A ${createForm.gradeAMaxRatio}% · B ${createForm.gradeBMaxRatio}% · C ${createForm.gradeCMaxRatio}% · D ${createForm.gradeDMaxRatio}%`
 ));
@@ -212,7 +205,7 @@ const editFormRef = ref<InstanceType<typeof import('element-plus')['ElForm']> | 
 const createForm = reactive({
   name: '',
   type: 'quarterly' as CycleType,
-  participantScope: 'all' as ParticipantScope,
+  participantScope: 'all' as ParticipantScopeMode,
   startDate: undefined as Date | undefined,
   endDate: undefined as Date | undefined,
   goalSettingOpenAt: undefined as Date | undefined,
@@ -258,8 +251,12 @@ const createRules = {
   hrOwnerId: [{ required: true, message: '请选择本周期 HR 负责人', trigger: 'change' }],
   participantDeptIds: [{
     validator: (_rule: unknown, value: string[], callback: (error?: Error) => void) => {
-      if (createForm.participantScope === 'departments' && value.length === 0) {
-        callback(new Error('请选择至少一个参与部门'));
+      if (
+        createForm.participantScope === 'custom'
+        && value.length === 0
+        && createForm.participantUserIds.length === 0
+      ) {
+        callback(new Error('请至少选择一个部门或一名员工'));
         return;
       }
       callback();
@@ -408,7 +405,10 @@ function openEditCycle(cycle: AssessmentCycle) {
   createForm.goalSettingOpenAt = toDate(cycle.goalSettingOpenAt);
   createForm.selfEvalOpenAt = toDate(cycle.selfEvalOpenAt);
   createForm.hrOwnerId = cycle.hrOwnerId;
-  createForm.participantScope = (cycle.participantDeptIds?.length ?? 0) > 0 ? 'departments' : 'all';
+  createForm.participantScope = (
+    (cycle.participantDeptIds?.length ?? 0) > 0
+    || (cycle.participantUserIds?.length ?? 0) > 0
+  ) ? 'custom' : 'all';
   createForm.participantDeptIds = [...(cycle.participantDeptIds ?? [])];
   createForm.participantUserIds = [...(cycle.participantUserIds ?? [])];
   createForm.explicitExemptUserIds = [...(cycle.explicitExemptUserIds ?? [])];
@@ -424,15 +424,13 @@ function openEditCycle(cycle: AssessmentCycle) {
   createNameCustomized.value = true;
   createScheduleCustomized.value = true;
   advancedCreateVisible.value = true;
-  advancedCreateSections.value = ['participants', 'schedule', 'grades', 'publication'];
+  advancedCreateSections.value = ['schedule', 'grades', 'publication'];
   createInitialSnapshot.value = createFormSnapshot();
   if (!notificationSettings.value) void loadNotificationSettings();
   createDialogVisible.value = true;
 }
 
-function handleParticipantScopeChange(scope: string | number | boolean | undefined) {
-  if (scope !== 'all' && scope !== 'departments') return;
-  if (scope === 'all') createForm.participantDeptIds = [];
+function handleParticipantSelectionChange() {
   createFormRef.value?.clearValidate?.('participantDeptIds');
 }
 
@@ -1008,7 +1006,7 @@ onMounted(() => {
   loadCycles();
   loadNotificationSettings();
   if (typeof route.query.cycleId === 'string') void loadCycleDetail(route.query.cycleId);
-  departmentsApi.findAll({ flat: true }).then((items) => {
+  departmentsApi.findAll({ isActive: true }).then((items) => {
     departments.value = items;
   }).catch(() => {
     departments.value = [];
@@ -1156,7 +1154,7 @@ onMounted(() => {
       destroy-on-close
       :before-close="handleCreateBeforeClose"
     >
-      <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="96px">
+      <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="108px">
         <section class="cycle-create-main" aria-label="周期关键设置">
         <el-row :gutter="16">
           <el-col :span="12">
@@ -1202,18 +1200,22 @@ onMounted(() => {
 
         <el-row :gutter="16">
           <el-col :span="12">
-            <el-form-item label="考核范围">
+            <el-form-item label="考核范围" prop="participantDeptIds">
               <template #label>
                 <span class="form-label-with-help">考核范围
-                  <el-tooltip content="选择指定部门后才需要补充部门；切回全公司会自动清空部门选择" placement="top">
+                  <el-tooltip content="自定义范围支持部门与人员混选，并可明确排除个别人" placement="top">
                     <el-icon><QuestionFilled /></el-icon>
                   </el-tooltip>
                 </span>
               </template>
-              <el-radio-group v-model="createForm.participantScope" @change="handleParticipantScopeChange">
-                <el-radio-button data-testid="cycle-scope-all" value="all">全公司</el-radio-button>
-                <el-radio-button data-testid="cycle-scope-departments" value="departments">指定部门</el-radio-button>
-              </el-radio-group>
+              <CycleParticipantScopePicker
+                v-model:scope="createForm.participantScope"
+                v-model:department-ids="createForm.participantDeptIds"
+                v-model:user-ids="createForm.participantUserIds"
+                v-model:excluded-user-ids="createForm.explicitExemptUserIds"
+                :departments="departments"
+                @change="handleParticipantSelectionChange"
+              />
             </el-form-item>
           </el-col>
           <el-col :span="12">
@@ -1228,24 +1230,6 @@ onMounted(() => {
             </el-form-item>
           </el-col>
         </el-row>
-
-        <el-form-item
-          v-if="createForm.participantScope === 'departments'"
-          label="参与部门"
-          prop="participantDeptIds"
-        >
-          <el-select
-            v-model="createForm.participantDeptIds"
-            data-testid="cycle-scope-department-select"
-            multiple
-            filterable
-            collapse-tags
-            placeholder="请选择至少一个参与部门"
-            style="width: 100%"
-          >
-            <el-option v-for="dept in departments" :key="dept.id" :label="dept.fullPath || dept.name" :value="dept.id" />
-          </el-select>
-        </el-form-item>
 
         <el-form-item>
           <template #label>
@@ -1285,31 +1269,6 @@ onMounted(() => {
 
         <div v-show="advancedCreateVisible" data-testid="cycle-advanced-fields" class="advanced-create-fields">
           <el-collapse v-model="advancedCreateSections" class="advanced-create-groups">
-            <el-collapse-item name="participants">
-              <template #title>
-                <div data-testid="cycle-advanced-participants" class="advanced-group-title">
-                  <strong>参与范围与例外
-                    <el-tooltip content="可补充范围外人员或设置明确豁免；全公司范围通常无需调整" placement="top">
-                      <el-icon><QuestionFilled /></el-icon>
-                    </el-tooltip>
-                  </strong>
-                  <span>{{ participantScopeSummary }}</span>
-                </div>
-              </template>
-              <el-row :gutter="16">
-                <el-col v-if="createForm.participantScope === 'departments'" :span="12">
-                  <el-form-item label="额外参与人员">
-                    <UserSelect v-model="createForm.participantUserIds" multiple include-test-accounts placeholder="按需补充参与人员" />
-                  </el-form-item>
-                </el-col>
-                <el-col :span="createForm.participantScope === 'departments' ? 12 : 24">
-                  <el-form-item label="明确豁免人员">
-                    <UserSelect v-model="createForm.explicitExemptUserIds" multiple include-test-accounts placeholder="按需设置本周期豁免" />
-                  </el-form-item>
-                </el-col>
-              </el-row>
-            </el-collapse-item>
-
             <el-collapse-item name="schedule">
               <template #title>
                 <div data-testid="cycle-advanced-schedule" class="advanced-group-title">
@@ -1577,6 +1536,13 @@ onMounted(() => {
   gap: 5px;
 }
 
+.form-label-with-help {
+  flex: none;
+  flex-wrap: nowrap;
+  white-space: nowrap;
+  word-break: keep-all;
+}
+
 .form-label-with-help .el-icon,
 .advanced-group-title strong .el-icon,
 .cycle-auto-plan .el-icon {
@@ -1600,7 +1566,7 @@ onMounted(() => {
 
 .cycle-auto-plan {
   gap: 9px;
-  margin: 2px 0 16px 96px;
+  margin: 2px 0 16px 108px;
   padding: 10px 12px;
   color: var(--el-text-color-secondary);
   font-size: 12px;
@@ -1733,8 +1699,8 @@ onMounted(() => {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  width: calc(100% - 96px);
-  margin: 0 0 8px 96px;
+  width: calc(100% - 108px);
+  margin: 0 0 8px 108px;
   padding: 11px 14px;
   color: var(--el-color-primary);
   font: inherit;
@@ -1759,7 +1725,7 @@ onMounted(() => {
 }
 
 .advanced-create-groups {
-  margin-left: 96px;
+  margin-left: 108px;
   border-top: 0;
 }
 
@@ -1937,6 +1903,11 @@ onMounted(() => {
 :global(.cycle-create-dialog .el-dialog__body) {
   min-height: 0;
   overflow-y: auto;
+}
+
+:global(.cycle-create-dialog .el-form-item__label) {
+  white-space: nowrap;
+  word-break: keep-all;
 }
 
 :global(.cycle-create-dialog .el-form) {
