@@ -2,7 +2,11 @@ import { defineConfig, devices } from '@playwright/test';
 
 export default defineConfig({
   testDir: './e2e/specs',
-  testMatch: ['19-test-account-quick-login.spec.ts', '20-login-manual-link.spec.ts'],
+  testMatch: [
+    '19-test-account-quick-login.spec.ts',
+    '20-login-manual-link.spec.ts',
+    '25-online-login-baseline.spec.ts',
+  ],
   workers: 1,
   use: {
     baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173',
