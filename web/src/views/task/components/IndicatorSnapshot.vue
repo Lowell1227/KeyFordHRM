@@ -52,6 +52,15 @@ interface SelfEvalRow {
   selfComment: string;
 }
 
+interface SelfEvalDraft {
+  version: 1;
+  indicatorIds: string[];
+  updatedAt: number;
+  activeIndicatorId: string;
+  rows: Array<Pick<SelfEvalRow, 'id' | 'actualValue' | 'actualNote' | 'selfScore' | 'selfComment'>>;
+  summary: typeof selfEvalForm;
+}
+
 const props = defineProps<{
   instances: IndicatorInstance[];
   canEdit?: boolean;
@@ -71,6 +80,7 @@ const props = defineProps<{
   selfEvalMode?: boolean;
   selfEvalReadonly?: boolean;
   selfEvalSummary?: SelfEvalSummary | null;
+  taskId?: string;
 }>();
 
 const emit = defineEmits<{
@@ -78,6 +88,7 @@ const emit = defineEmits<{
   (e: 'confirm'): void;
   (e: 'reject', reason: string): void;
   (e: 'submit-self-eval', body: SubmitSelfEvalBody, actualValues: ActualValueItem[]): void;
+  (e: 'save-self-eval-draft'): void;
 }>();
 
 const rejectVisible = ref(false);
@@ -105,6 +116,13 @@ const selfEvalForm = reactive({
   supportNeeded: '',
   attachments: [] as Attachment[],
 });
+const activeSelfEvalId = ref('');
+const selfEvalValidationIds = ref<string[]>([]);
+const selfEvalDraftState = ref<'idle' | 'saved' | 'restored'>('idle');
+const selfEvalDraftSavedAt = ref<number | null>(null);
+const selfEvalDraftReady = ref(false);
+const selfEvalDraftRestoring = ref(false);
+const selfEvalDraftTimer = ref<number | null>(null);
 const snapshotValidationIds = ref<string[]>([]);
 const advancedSettingIds = ref(new Set<string>());
 
@@ -162,9 +180,17 @@ const operationRecords = computed(() =>
     })),
 );
 
-const readonlyTableRows = computed<Array<IndicatorInstance | SelfEvalRow>>(() =>
-  props.selfEvalMode ? selfEvalRows : props.instances,
-);
+const scoredSelfEvalCount = computed(() => selfEvalRows.filter((row) => row.selfScore != null).length);
+const selfEvalDraftKey = computed(() => props.taskId ? `kayford.self-eval-draft.${props.taskId}` : '');
+const selfEvalDraftStatusText = computed(() => {
+  const savedAt = selfEvalDraftSavedAt.value;
+  const time = savedAt
+    ? new Date(savedAt).toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit', hour12: false })
+    : '';
+  if (selfEvalDraftState.value === 'restored') return `已恢复当前设备草稿${time ? ` · ${time}` : ''}`;
+  if (selfEvalDraftState.value === 'saved') return `已暂存于当前设备${time ? ` · ${time}` : ''}`;
+  return '内容将自动暂存于当前设备';
+});
 
 const editableRowIds = computed(() => editableItems.map((_, index) => (
   props.instances[index]?.id ?? `draft-indicator-${index + 1}`
@@ -264,6 +290,7 @@ watch(
 );
 
 function initSelfEvalForm() {
+  selfEvalDraftReady.value = false;
   selfEvalRows.splice(
     0,
     selfEvalRows.length,
@@ -291,7 +318,148 @@ function initSelfEvalForm() {
   selfEvalForm.nextGoals = props.selfEvalSummary?.nextGoals ?? '';
   selfEvalForm.supportNeeded = props.selfEvalSummary?.supportNeeded ?? '';
   selfEvalForm.attachments = props.selfEvalSummary?.attachments ? [...props.selfEvalSummary.attachments] : [];
+  if (!selfEvalRows.some((row) => row.id === activeSelfEvalId.value)) {
+    activeSelfEvalId.value = selfEvalRows.find((row) => row.selfScore == null)?.id ?? selfEvalRows[0]?.id ?? '';
+  }
+  void restoreSelfEvalDraft();
 }
+
+function toggleSelfEvalCard(id: string) {
+  activeSelfEvalId.value = activeSelfEvalId.value === id ? '' : id;
+}
+
+function openSelfEvalCard(index: number) {
+  const target = selfEvalRows[index];
+  if (target) activeSelfEvalId.value = target.id;
+}
+
+function currentSelfEvalIndicatorIds() {
+  return selfEvalRows.map((row) => row.id);
+}
+
+async function restoreSelfEvalDraft() {
+  const storageKey = selfEvalDraftKey.value;
+  if (!props.selfEvalMode || props.selfEvalReadonly || !storageKey) {
+    selfEvalDraftReady.value = true;
+    return;
+  }
+
+  const raw = window.localStorage.getItem(storageKey);
+  if (!raw) {
+    selfEvalDraftState.value = 'idle';
+    selfEvalDraftSavedAt.value = null;
+    selfEvalDraftReady.value = true;
+    return;
+  }
+
+  try {
+    const draft = JSON.parse(raw) as SelfEvalDraft;
+    const indicatorIds = currentSelfEvalIndicatorIds();
+    if (
+      draft.version !== 1
+      || draft.indicatorIds.length !== indicatorIds.length
+      || draft.indicatorIds.some((id, index) => id !== indicatorIds[index])
+    ) {
+      window.localStorage.removeItem(storageKey);
+      selfEvalDraftReady.value = true;
+      return;
+    }
+
+    selfEvalDraftRestoring.value = true;
+    const savedRows = new Map(draft.rows.map((row) => [row.id, row]));
+    for (const row of selfEvalRows) {
+      const saved = savedRows.get(row.id);
+      if (!saved) continue;
+      row.actualValue = saved.actualValue;
+      row.actualNote = saved.actualNote ?? '';
+      row.selfScore = saved.selfScore;
+      row.selfComment = saved.selfComment ?? '';
+    }
+    Object.assign(selfEvalForm, draft.summary);
+    if (selfEvalRows.some((row) => row.id === draft.activeIndicatorId)) {
+      activeSelfEvalId.value = draft.activeIndicatorId;
+    }
+    selfEvalDraftSavedAt.value = draft.updatedAt;
+    selfEvalDraftState.value = 'restored';
+    await nextTick();
+  } catch {
+    window.localStorage.removeItem(storageKey);
+  } finally {
+    selfEvalDraftRestoring.value = false;
+    selfEvalDraftReady.value = true;
+  }
+}
+
+function persistSelfEvalDraft() {
+  const storageKey = selfEvalDraftKey.value;
+  if (!props.selfEvalMode || props.selfEvalReadonly || !storageKey) return;
+  const updatedAt = Date.now();
+  const draft: SelfEvalDraft = {
+    version: 1,
+    indicatorIds: currentSelfEvalIndicatorIds(),
+    updatedAt,
+    activeIndicatorId: activeSelfEvalId.value,
+    rows: selfEvalRows.map((row) => ({
+      id: row.id,
+      actualValue: row.actualValue,
+      actualNote: row.actualNote,
+      selfScore: row.selfScore,
+      selfComment: row.selfComment,
+    })),
+    summary: {
+      achievements: selfEvalForm.achievements,
+      improvements: selfEvalForm.improvements,
+      suggestions: selfEvalForm.suggestions,
+      nextGoals: selfEvalForm.nextGoals,
+      supportNeeded: selfEvalForm.supportNeeded,
+      attachments: [...selfEvalForm.attachments],
+    },
+  };
+
+  try {
+    window.localStorage.setItem(storageKey, JSON.stringify(draft));
+    selfEvalDraftSavedAt.value = updatedAt;
+    selfEvalDraftState.value = 'saved';
+  } catch {
+    ElMessage.warning('当前设备无法暂存草稿，请勿关闭页面');
+  }
+}
+
+function scheduleSelfEvalDraftSave() {
+  if (!selfEvalDraftReady.value || selfEvalDraftRestoring.value || props.selfEvalReadonly) return;
+  if (selfEvalDraftTimer.value != null) window.clearTimeout(selfEvalDraftTimer.value);
+  selfEvalDraftTimer.value = window.setTimeout(() => {
+    selfEvalDraftTimer.value = null;
+    persistSelfEvalDraft();
+  }, 300);
+}
+
+function clearSelfEvalDraft() {
+  const storageKey = selfEvalDraftKey.value;
+  if (storageKey) window.localStorage.removeItem(storageKey);
+  selfEvalDraftState.value = 'idle';
+  selfEvalDraftSavedAt.value = null;
+}
+
+watch(
+  [selfEvalRows, selfEvalForm, activeSelfEvalId],
+  () => {
+    selfEvalValidationIds.value = selfEvalValidationIds.value.filter((id) => {
+      const row = selfEvalRows.find((item) => item.id === id);
+      return !row || row.selfScore == null || !isValidScore(row.selfScore);
+    });
+    scheduleSelfEvalDraftSave();
+  },
+  { deep: true, flush: 'post' },
+);
+
+watch(
+  () => props.selfEvalReadonly,
+  (readonly) => {
+    if (props.selfEvalMode && readonly) clearSelfEvalDraft();
+  },
+  { immediate: true },
+);
 
 function templateMatchesContext(template: TemplateListItem, deptId?: string | null, employeeId?: string | null): boolean {
   const matchesDept = !!deptId && (template.applicableDepts ?? []).includes(deptId);
@@ -644,6 +812,11 @@ function trimItem(item: SetIndicatorBody['instances'][number], index: number): S
 
 onBeforeUnmount(() => {
   clearWeightHold();
+  if (selfEvalDraftTimer.value != null) {
+    window.clearTimeout(selfEvalDraftTimer.value);
+    selfEvalDraftTimer.value = null;
+    persistSelfEvalDraft();
+  }
 });
 
 function revealSnapshotIndicator(index: number) {
@@ -714,11 +887,14 @@ function handleReject(reason: string) {
 }
 
 function validateSelfEval(): boolean {
-  for (const row of selfEvalRows) {
-    if (row.selfScore == null || !isValidScore(row.selfScore)) {
-      ElMessage.warning(`请为指标「${row.name}」录入有效的自评分数（0-100）`);
-      return false;
-    }
+  selfEvalValidationIds.value = selfEvalRows
+    .filter((row) => row.selfScore == null || !isValidScore(row.selfScore))
+    .map((row) => row.id);
+  if (selfEvalValidationIds.value.length > 0) {
+    const firstInvalid = selfEvalRows.find((row) => row.id === selfEvalValidationIds.value[0]);
+    activeSelfEvalId.value = firstInvalid?.id ?? '';
+    ElMessage.warning(`请先完成${selfEvalValidationIds.value.length}项必填自评分`);
+    return false;
   }
   return true;
 }
@@ -756,6 +932,29 @@ function handleSubmitSelfEval() {
   emit('submit-self-eval', buildSelfEvalBody(), buildActualValues());
 }
 
+async function handleCheckAndSubmitSelfEval() {
+  if (!validateSelfEval()) return;
+  try {
+    await ElMessageBox.confirm(
+      `${selfEvalRows.length} 项指标均已评分。其他总结内容为选填，确认后将进入主管评分。`,
+      '提交前检查',
+      {
+        type: 'info',
+        confirmButtonText: '确认提交',
+        cancelButtonText: '返回修改',
+      },
+    );
+  } catch {
+    return;
+  }
+  handleSubmitSelfEval();
+}
+
+function handleSaveSelfEvalForLater() {
+  persistSelfEvalDraft();
+  emit('save-self-eval-draft');
+}
+
 async function handleUpload(files: File[]) {
   for (const file of files) {
     try {
@@ -779,7 +978,7 @@ function handleAttachmentsChange(attachments: Attachment[]) {
     <template #title>{{ title || '考核指标明细' }}</template>
     <template #extra>
       <div
-        v-if="canEdit || canConfirm || canReject || (selfEvalMode && !selfEvalReadonly)"
+        v-if="canEdit || canConfirm || canReject"
         class="actions"
         data-testid="performance-stage-actions"
       >
@@ -794,14 +993,6 @@ function handleAttachmentsChange(attachments: Attachment[]) {
         </el-button>
         <el-button v-if="canConfirm" type="primary" :icon="Check" :loading="loading" @click="handleConfirm">
           {{ confirmLabel || '确认指标' }}
-        </el-button>
-        <el-button
-          v-if="selfEvalMode && !selfEvalReadonly"
-          type="primary"
-          :loading="loading"
-          @click="handleSubmitSelfEval"
-        >
-          提交自评
         </el-button>
       </div>
     </template>
@@ -1002,160 +1193,146 @@ function handleAttachmentsChange(attachments: Attachment[]) {
         :invalid-indicator-ids="snapshotRevealIds"
       />
 
-      <el-table v-else :data="readonlyTableRows" border stripe size="small" class="indicator-table indicator-table--desktop">
-        <el-table-column label="序号" type="index" width="56" />
-        <el-table-column prop="dimensionName" label="考核维度" min-width="120" />
-        <el-table-column label="指标" min-width="360">
-          <template #default="{ row }">
-            <div class="indicator-name">{{ row.name }}</div>
-            <div v-if="row.description" class="indicator-desc">{{ row.description }}</div>
-          </template>
-        </el-table-column>
-        <el-table-column label="权重" width="78">
-          <template #default="{ row }">{{ formatWeightPercent(row.weight) }}</template>
-        </el-table-column>
-        <el-table-column label="评分标准" min-width="160">
-          <template #default="{ row }">{{ row.scoringStandard || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="数据来源" min-width="140">
-          <template #default="{ row }">{{ (row as IndicatorInstance).dataSource || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="数据口径" min-width="140">
-          <template #default="{ row }">{{ (row as IndicatorInstance).dataCaliber || '-' }}</template>
-        </el-table-column>
-        <el-table-column label="目标值" width="120">
-          <template #default="{ row }">
-            {{ formatTargetValue(row as IndicatorInstance) }}
-          </template>
-        </el-table-column>
-        <template v-if="selfEvalMode">
-          <el-table-column label="实际完成值" min-width="190">
-            <template #default="{ row }">
-              <el-input
-                v-model="row.actualValue"
-                :disabled="selfEvalReadonly"
-                placeholder="请输入实际完成值"
-                maxlength="200"
-                show-word-limit
-              />
-            </template>
-          </el-table-column>
-          <el-table-column label="实际完成说明" min-width="300">
-            <template #default="{ row }">
-              <el-input
-                v-model="row.actualNote"
-                :disabled="selfEvalReadonly"
-                placeholder="说明实际完成情况"
-                maxlength="500"
-                show-word-limit
-              />
-            </template>
-          </el-table-column>
-          <el-table-column label="自评分" width="132">
-            <template #default="{ row }">
-              <ScoreInput v-model="row.selfScore" :disabled="selfEvalReadonly" placeholder="0-100" />
-            </template>
-          </el-table-column>
-          <el-table-column label="自评评语" min-width="260">
-            <template #default="{ row }">
-              <el-input
-                v-model="row.selfComment"
-                :disabled="selfEvalReadonly"
-                placeholder="请说明打分依据"
-                maxlength="500"
-                show-word-limit
-              />
-            </template>
-          </el-table-column>
-        </template>
-      </el-table>
+      <section v-else class="self-eval-guide" data-testid="self-eval-guide">
+        <div class="self-eval-guide__intro">
+          <div>
+            <strong>逐项完成指标自评</strong>
+            <p>本次共 {{ selfEvalRows.length }} 项指标，每项自评分为必填，其他内容可按需补充。支持分次填写，提交前统一检查。</p>
+            <small
+              v-if="!selfEvalReadonly"
+              class="self-eval-guide__draft-status"
+              data-testid="self-eval-draft-status"
+            >
+              {{ selfEvalDraftStatusText }}
+            </small>
+          </div>
+          <span class="self-eval-guide__progress" data-testid="self-eval-progress">
+            已评分 {{ scoredSelfEvalCount }}/{{ selfEvalRows.length }}
+          </span>
+        </div>
 
-      <div v-if="selfEvalMode" class="indicator-mobile-list">
-        <article v-for="(row, index) in readonlyTableRows" :key="row.id || index" class="indicator-mobile-card">
-          <div class="indicator-mobile-card__header">
-            <span class="indicator-mobile-card__index">#{{ index + 1 }}</span>
-            <strong>{{ row.name || '未命名指标' }}</strong>
-          </div>
-          <div class="indicator-mobile-meta">
-            <span>{{ row.dimensionName || '未设置维度' }}</span>
-            <span>权重 {{ formatWeightPercent(row.weight) }}</span>
-            <span>目标 {{ formatTargetValue(row as IndicatorInstance) }}</span>
-          </div>
-          <p v-if="row.description" class="indicator-mobile-desc">{{ row.description }}</p>
-          <dl class="indicator-mobile-detail">
-            <div>
-              <dt>评分标准</dt>
-              <dd>{{ row.scoringStandard || '-' }}</dd>
+        <div class="self-eval-card-list">
+          <article
+            v-for="(row, index) in selfEvalRows"
+            :key="row.id"
+            class="self-eval-card"
+            :class="{
+              'is-active': activeSelfEvalId === row.id,
+              'is-complete': row.selfScore != null,
+              'is-invalid': selfEvalValidationIds.includes(row.id),
+            }"
+            data-testid="self-eval-card"
+          >
+            <button
+              type="button"
+              class="self-eval-card__toggle"
+              data-testid="self-eval-card-toggle"
+              :aria-expanded="activeSelfEvalId === row.id"
+              @click="toggleSelfEvalCard(row.id)"
+            >
+              <span class="self-eval-card__index">{{ index + 1 }}</span>
+              <span class="self-eval-card__heading">
+                <strong>{{ row.name || '未命名指标' }}</strong>
+                <small>
+                  {{ row.dimensionName || '未设置维度' }} · 权重 {{ formatWeightPercent(row.weight) }} · 目标 {{ formatTargetValue(row as IndicatorInstance) }}
+                </small>
+              </span>
+              <span class="self-eval-card__state" :class="{ 'is-complete': row.selfScore != null }">
+                {{ row.selfScore == null ? '待评分' : `已评分 ${row.selfScore}` }}
+              </span>
+              <el-icon><ArrowUp v-if="activeSelfEvalId === row.id" /><ArrowDown v-else /></el-icon>
+            </button>
+
+            <div
+              v-show="activeSelfEvalId === row.id"
+              class="self-eval-card__body"
+              data-testid="self-eval-card-body"
+            >
+              <section class="self-eval-reference" aria-label="评分依据">
+                <div class="self-eval-section-heading">评分依据</div>
+                <p v-if="row.description" class="self-eval-reference__description">{{ row.description }}</p>
+                <dl>
+                  <div><dt>评分标准</dt><dd>{{ row.scoringStandard || '-' }}</dd></div>
+                  <div><dt>目标值</dt><dd>{{ formatTargetValue(row as IndicatorInstance) }}</dd></div>
+                  <div><dt>数据来源</dt><dd>{{ row.dataSource || '-' }}</dd></div>
+                  <div><dt>数据口径</dt><dd>{{ row.dataCaliber || '-' }}</dd></div>
+                </dl>
+              </section>
+
+              <el-form label-position="top" class="self-eval-fields" aria-label="我的填写">
+                <div class="self-eval-section-heading">我的填写</div>
+                <div class="self-eval-fields__primary">
+                  <el-form-item label="实际完成值（选填）">
+                    <el-input
+                      v-model="row.actualValue"
+                      :disabled="selfEvalReadonly"
+                      placeholder="填写关键结果或完成比例"
+                      maxlength="200"
+                    />
+                  </el-form-item>
+                  <el-form-item label="自评分（必填）" required>
+                    <ScoreInput v-model="row.selfScore" :disabled="selfEvalReadonly" placeholder="0-100" />
+                    <span v-if="selfEvalValidationIds.includes(row.id)" class="self-eval-field-error">
+                      请填写 0-100 分的自评分
+                    </span>
+                  </el-form-item>
+                </div>
+                <el-form-item label="完成情况与证据（选填）">
+                  <el-input
+                    v-model="row.actualNote"
+                    :disabled="selfEvalReadonly"
+                    type="textarea"
+                    :rows="2"
+                    placeholder="写关键结果、时间或数据即可"
+                    maxlength="500"
+                    show-word-limit
+                  />
+                </el-form-item>
+                <el-form-item label="评分说明（选填）">
+                  <el-input
+                    v-model="row.selfComment"
+                    :disabled="selfEvalReadonly"
+                    type="textarea"
+                    :rows="2"
+                    placeholder="说明与评分标准的对应点或未达原因，无需重复完成情况"
+                    maxlength="500"
+                    show-word-limit
+                  />
+                </el-form-item>
+                <div v-if="!selfEvalReadonly" class="self-eval-card__navigation">
+                  <el-button v-if="index > 0" @click="openSelfEvalCard(index - 1)">上一项</el-button>
+                  <el-button v-if="index < selfEvalRows.length - 1" type="primary" plain @click="openSelfEvalCard(index + 1)">
+                    下一项
+                  </el-button>
+                </div>
+              </el-form>
             </div>
-            <div>
-              <dt>数据来源</dt>
-              <dd>{{ (row as IndicatorInstance).dataSource || '-' }}</dd>
-            </div>
-            <div>
-              <dt>数据口径</dt>
-              <dd>{{ (row as IndicatorInstance).dataCaliber || '-' }}</dd>
-            </div>
-          </dl>
-          <template v-if="selfEvalMode">
-            <div class="indicator-mobile-field">
-              <span>实际完成值</span>
-              <el-input
-                v-model="(row as SelfEvalRow).actualValue"
-                :disabled="selfEvalReadonly"
-                placeholder="请输入实际完成值"
-                maxlength="200"
-                show-word-limit
-              />
-            </div>
-            <div class="indicator-mobile-field">
-              <span>实际完成说明</span>
-              <el-input
-                v-model="(row as SelfEvalRow).actualNote"
-                :disabled="selfEvalReadonly"
-                placeholder="说明实际完成情况"
-                maxlength="500"
-                show-word-limit
-              />
-            </div>
-            <div class="indicator-mobile-field">
-              <span>自评分</span>
-              <ScoreInput v-model="(row as SelfEvalRow).selfScore" :disabled="selfEvalReadonly" placeholder="0-100" />
-            </div>
-            <div class="indicator-mobile-field">
-              <span>自评评语</span>
-              <el-input
-                v-model="(row as SelfEvalRow).selfComment"
-                :disabled="selfEvalReadonly"
-                placeholder="请说明打分依据"
-                maxlength="500"
-                show-word-limit
-              />
-            </div>
-          </template>
-        </article>
-      </div>
+          </article>
+        </div>
+      </section>
     </template>
 
-    <div v-if="selfEvalMode" class="self-eval-inline">
+    <section v-if="selfEvalMode" class="self-eval-inline" data-testid="self-eval-summary">
       <div class="self-eval-inline__header">
-        <div class="proposal-history__title">员工自评</div>
+        <div>
+          <div class="proposal-history__title">自评总结</div>
+          <p>以下内容均为选填，简要记录即可，不影响提交。</p>
+        </div>
       </div>
-      <el-form label-position="top" class="summary-form">
-        <el-row :gutter="12">
-          <el-col :span="12">
+      <el-form label-position="top" class="summary-form summary-groups">
+        <section class="summary-group is-open">
+          <div class="summary-group__title">本周期回顾（选填）</div>
+          <div class="summary-group__grid">
             <el-form-item label="主要成果">
               <el-input
                 v-model="selfEvalForm.achievements"
                 :disabled="selfEvalReadonly"
                 type="textarea"
                 :rows="2"
-                placeholder="本周期主要工作成果"
+                placeholder="概括 1-3 项关键成果"
                 maxlength="2000"
-                show-word-limit
               />
             </el-form-item>
-          </el-col>
-          <el-col :span="12">
             <el-form-item label="待改进项">
               <el-input
                 v-model="selfEvalForm.improvements"
@@ -1164,24 +1341,17 @@ function handleAttachmentsChange(attachments: Attachment[]) {
                 :rows="2"
                 placeholder="存在的不足与改进方向"
                 maxlength="2000"
-                show-word-limit
               />
             </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="建议 / 反馈">
-              <el-input
-                v-model="selfEvalForm.suggestions"
-                :disabled="selfEvalReadonly"
-                type="textarea"
-                :rows="2"
-                placeholder="对团队或管理者的建议"
-                maxlength="2000"
-                show-word-limit
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
+          </div>
+        </section>
+
+        <details class="summary-group" :open="selfEvalReadonly">
+          <summary>
+            <span>下一阶段（选填）</span>
+            <small>目标与需要的支持</small>
+          </summary>
+          <div class="summary-group__grid">
             <el-form-item label="下阶段目标">
               <el-input
                 v-model="selfEvalForm.nextGoals"
@@ -1190,24 +1360,37 @@ function handleAttachmentsChange(attachments: Attachment[]) {
                 :rows="2"
                 placeholder="下一阶段重点工作目标"
                 maxlength="2000"
-                show-word-limit
               />
             </el-form-item>
-          </el-col>
-          <el-col :span="24">
-            <el-form-item label="需要的困难 / 资源支持">
+            <el-form-item label="困难与资源支持">
               <el-input
                 v-model="selfEvalForm.supportNeeded"
                 :disabled="selfEvalReadonly"
                 type="textarea"
                 :rows="2"
-                placeholder="工作中遇到的困难或需要的资源支持"
+                placeholder="如需协作、人员、预算或权限，请在此说明；暂无可留空"
                 maxlength="2000"
-                show-word-limit
               />
             </el-form-item>
-          </el-col>
-          <el-col :span="24">
+          </div>
+        </details>
+
+        <details class="summary-group" :open="selfEvalReadonly">
+          <summary>
+            <span>建议与材料（选填）</span>
+            <small>建议反馈与附件</small>
+          </summary>
+          <div class="summary-group__content">
+            <el-form-item label="建议 / 反馈">
+              <el-input
+                v-model="selfEvalForm.suggestions"
+                :disabled="selfEvalReadonly"
+                type="textarea"
+                :rows="2"
+                placeholder="对团队或管理者的建议"
+                maxlength="2000"
+              />
+            </el-form-item>
             <el-form-item label="附件">
               <FileUpload
                 :model-value="selfEvalForm.attachments"
@@ -1216,9 +1399,22 @@ function handleAttachmentsChange(attachments: Attachment[]) {
                 @update:model-value="handleAttachmentsChange"
               />
             </el-form-item>
-          </el-col>
-        </el-row>
+          </div>
+        </details>
       </el-form>
+    </section>
+
+    <div v-if="selfEvalMode && !selfEvalReadonly" class="self-eval-action-bar">
+      <div>
+        <strong>{{ scoredSelfEvalCount }}/{{ selfEvalRows.length }} 项已评分</strong>
+        <span>{{ selfEvalDraftStatusText }}</span>
+      </div>
+      <div class="self-eval-action-bar__buttons">
+        <el-button @click="handleSaveSelfEvalForLater">保存并稍后继续</el-button>
+        <el-button type="primary" :loading="loading" @click="handleCheckAndSubmitSelfEval">
+          检查并提交
+        </el-button>
+      </div>
     </div>
 
     <div v-if="operationRecords.length" class="proposal-history">
@@ -1245,110 +1441,6 @@ function handleAttachmentsChange(attachments: Attachment[]) {
 .actions {
   display: flex;
   gap: 8px;
-}
-
-.indicator-name {
-  font-weight: 500;
-}
-
-.indicator-desc {
-  margin-top: 4px;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.indicator-table {
-  width: 100%;
-  overflow: hidden;
-  border: 1px solid #dfe3eb;
-  border-radius: 6px;
-  color: #2f343d;
-  font-size: 12px;
-  --el-table-border-color: #dfe3eb;
-  --el-table-header-bg-color: #f5f7fa;
-  --el-table-row-hover-bg-color: #f7f9fc;
-  --el-table-tr-bg-color: #ffffff;
-}
-
-.indicator-mobile-list {
-  display: none;
-}
-
-.indicator-table :deep(.el-table__inner-wrapper::before),
-.indicator-table :deep(.el-table__border-left-patch) {
-  display: none;
-}
-
-.indicator-table :deep(th.el-table__cell) {
-  height: 34px;
-  background: #f5f7fa !important;
-  color: #20242b;
-  font-size: 12px;
-  font-weight: 600;
-}
-
-.indicator-table :deep(th.el-table__cell .cell) {
-  line-height: 18px;
-}
-
-.indicator-table :deep(td.el-table__cell) {
-  background: #ffffff;
-  color: #3f4650;
-  font-size: 12px;
-}
-
-.indicator-table :deep(.el-table__row:nth-child(even) td.el-table__cell) {
-  background: #f7f9fc;
-}
-
-.indicator-table :deep(.el-table__cell) {
-  padding: 4px 0;
-}
-
-.indicator-table :deep(.cell) {
-  padding: 0 7px;
-  line-height: 18px;
-}
-
-.indicator-table :deep(.el-input__wrapper),
-.indicator-table :deep(.el-select__wrapper) {
-  min-height: 26px;
-  border-radius: 4px;
-  background: #ffffff;
-  box-shadow: 0 0 0 1px #dfe3eb inset;
-  color: #2f343d;
-  font-size: 12px;
-}
-
-.indicator-table :deep(.el-input__inner),
-.indicator-table :deep(.el-select__placeholder),
-.indicator-table :deep(.el-select__selected-item),
-.indicator-table :deep(.el-button) {
-  height: 24px;
-  line-height: 24px;
-  color: #3f4650;
-  font-size: 12px;
-}
-
-.indicator-table :deep(.el-input__count-inner) {
-  color: #8f98a8;
-  font-size: 11px;
-}
-
-.indicator-table :deep(.el-input__count) {
-  display: none;
-}
-
-.indicator-table :deep(.el-input-number) {
-  line-height: 26px;
-}
-
-.indicator-table :deep(.el-input-number__decrease),
-.indicator-table :deep(.el-input-number__increase) {
-  width: 20px;
-  background: #f8fafc;
-  border-color: #dfe3eb;
 }
 
 .template-select {
@@ -1596,6 +1688,222 @@ function handleAttachmentsChange(attachments: Attachment[]) {
   margin-top: 10px;
 }
 
+.self-eval-guide {
+  display: grid;
+  gap: 14px;
+}
+
+.self-eval-guide__intro {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 16px;
+  border: 1px solid #dbe7ff;
+  border-radius: 8px;
+  background: #f6f9ff;
+}
+
+.self-eval-guide__intro strong {
+  color: #1f2937;
+  font-size: 15px;
+}
+
+.self-eval-guide__intro p {
+  margin: 5px 0 0;
+  color: #687386;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.self-eval-guide__draft-status {
+  display: inline-block;
+  margin-top: 6px;
+  color: #4f6f9d;
+  font-size: 12px;
+}
+
+.self-eval-guide__progress {
+  flex: none;
+  padding: 7px 12px;
+  border-radius: 999px;
+  background: #e8f0ff;
+  color: #315fb4;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.self-eval-card-list {
+  display: grid;
+  gap: 10px;
+}
+
+.self-eval-card {
+  overflow: hidden;
+  border: 1px solid #dfe3eb;
+  border-radius: 8px;
+  background: #fff;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.self-eval-card.is-active {
+  border-color: #9bb8f3;
+  box-shadow: 0 8px 24px rgba(40, 88, 170, 0.08);
+}
+
+.self-eval-card.is-invalid {
+  border-color: #e89a9a;
+}
+
+.self-eval-card__toggle {
+  display: grid;
+  width: 100%;
+  grid-template-columns: 32px minmax(0, 1fr) auto 18px;
+  align-items: center;
+  gap: 12px;
+  padding: 13px 16px;
+  border: 0;
+  background: #fff;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.self-eval-card.is-complete .self-eval-card__toggle {
+  background: #fbfefc;
+}
+
+.self-eval-card__index {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  background: #edf3ff;
+  color: #3264c5;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.self-eval-card__heading {
+  min-width: 0;
+  display: grid;
+  gap: 4px;
+}
+
+.self-eval-card__heading strong {
+  overflow: hidden;
+  color: #263244;
+  font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.self-eval-card__heading small {
+  color: #7a8596;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.self-eval-card__state {
+  padding: 4px 9px;
+  border-radius: 999px;
+  background: #f4f5f7;
+  color: #737d8d;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.self-eval-card__state.is-complete {
+  background: #eaf7ef;
+  color: #2f7c4a;
+}
+
+.self-eval-card__body {
+  display: grid;
+  grid-template-columns: minmax(260px, 0.8fr) minmax(420px, 1.2fr);
+  gap: 18px;
+  padding: 16px;
+  border-top: 1px solid #edf0f5;
+}
+
+.self-eval-reference {
+  padding: 14px;
+  border-radius: 7px;
+  background: #f7f9fc;
+}
+
+.self-eval-section-heading {
+  margin-bottom: 10px;
+  color: #354256;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+.self-eval-reference__description {
+  margin: 0 0 12px;
+  color: #566176;
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.self-eval-reference dl {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+}
+
+.self-eval-reference dl div {
+  display: grid;
+  gap: 3px;
+}
+
+.self-eval-reference dt {
+  color: #8a94a6;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.self-eval-reference dd {
+  margin: 0;
+  color: #344054;
+  font-size: 13px;
+  line-height: 20px;
+  word-break: break-word;
+}
+
+.self-eval-fields__primary {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 160px;
+  gap: 12px;
+}
+
+.self-eval-fields :deep(.el-form-item) {
+  margin-bottom: 12px;
+}
+
+.self-eval-fields :deep(.el-form-item:last-child) {
+  margin-bottom: 0;
+}
+
+.self-eval-card__navigation {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding-top: 4px;
+}
+
+.self-eval-field-error {
+  display: block;
+  width: 100%;
+  margin-top: 5px;
+  color: var(--el-color-danger);
+  font-size: 12px;
+  line-height: 18px;
+}
+
 .self-eval-inline {
   margin-top: 14px;
   padding-top: 14px;
@@ -1609,6 +1917,17 @@ function handleAttachmentsChange(attachments: Attachment[]) {
   margin-bottom: 10px;
 }
 
+.self-eval-inline__header .proposal-history__title {
+  margin-bottom: 4px;
+}
+
+.self-eval-inline__header p {
+  margin: 0;
+  color: #7b8798;
+  font-size: 12px;
+  line-height: 18px;
+}
+
 .summary-form :deep(.el-form-item) {
   margin-bottom: 12px;
 }
@@ -1617,10 +1936,117 @@ function handleAttachmentsChange(attachments: Attachment[]) {
   min-height: 64px;
 }
 
+.summary-groups {
+  display: grid;
+  gap: 10px;
+}
+
+.summary-group {
+  overflow: hidden;
+  border: 1px solid #e1e5ec;
+  border-radius: 8px;
+  background: #fff;
+}
+
+.summary-group__title,
+.summary-group summary {
+  padding: 12px 14px;
+  color: #354256;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.summary-group summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  cursor: pointer;
+  list-style: none;
+}
+
+.summary-group summary::-webkit-details-marker {
+  display: none;
+}
+
+.summary-group summary::after {
+  content: '展开';
+  color: #4f6f9d;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.summary-group[open] summary::after {
+  content: '收起';
+}
+
+.summary-group summary small {
+  margin-left: auto;
+  color: #8b95a5;
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.summary-group__grid,
+.summary-group__content {
+  padding: 0 14px 2px;
+  border-top: 1px solid #eef1f5;
+}
+
+.summary-group__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+}
+
+.summary-group.is-open .summary-group__grid {
+  padding-top: 12px;
+}
+
+.summary-group__content {
+  padding-top: 12px;
+}
+
 .self-eval-inline__actions {
   display: flex;
   justify-content: flex-end;
   padding-top: 4px;
+}
+
+.self-eval-action-bar {
+  position: sticky;
+  z-index: 5;
+  bottom: 0;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin: 16px -16px -16px;
+  padding: 12px 16px;
+  border-top: 1px solid #dfe4ec;
+  background: rgba(255, 255, 255, 0.96);
+  box-shadow: 0 -8px 20px rgba(31, 45, 61, 0.06);
+  backdrop-filter: blur(8px);
+}
+
+.self-eval-action-bar > div:first-child {
+  display: grid;
+  gap: 3px;
+}
+
+.self-eval-action-bar strong {
+  color: #354256;
+  font-size: 13px;
+}
+
+.self-eval-action-bar span {
+  color: #7b8798;
+  font-size: 12px;
+}
+
+.self-eval-action-bar__buttons {
+  display: flex;
+  gap: 8px;
 }
 
 .proposal-history {
@@ -1656,6 +2082,70 @@ function handleAttachmentsChange(attachments: Attachment[]) {
 }
 
 @media (max-width: 768px) {
+  .self-eval-guide__intro {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+
+  .self-eval-card__toggle {
+    grid-template-columns: 32px minmax(0, 1fr) 18px;
+    padding: 12px;
+  }
+
+  .self-eval-card__state {
+    grid-column: 2;
+    justify-self: start;
+  }
+
+  .self-eval-card__toggle > .el-icon {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+
+  .self-eval-card__body {
+    grid-template-columns: minmax(0, 1fr);
+    padding: 12px;
+  }
+
+  .self-eval-fields__primary {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .self-eval-action-bar {
+    align-items: stretch;
+    flex-direction: column;
+    margin: 16px -12px -12px;
+  }
+
+  .self-eval-action-bar > div:first-child {
+    display: none;
+  }
+
+  .self-eval-action-bar__buttons {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  }
+
+  .self-eval-action-bar__buttons .el-button {
+    min-height: 44px;
+    margin-left: 0;
+  }
+
+  .summary-group__grid {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0;
+  }
+
+  .summary-group summary {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .summary-group summary small {
+    width: 100%;
+    margin-left: 0;
+  }
+
   .snapshot-compact-editor__primary,
   .snapshot-compact-editor__advanced {
     grid-template-columns: minmax(0, 1fr);
@@ -1676,132 +2166,6 @@ function handleAttachmentsChange(attachments: Attachment[]) {
     width: 100%;
     min-height: 44px;
     margin-left: 0;
-  }
-
-  .indicator-table--desktop {
-    display: none;
-  }
-
-  .indicator-mobile-list {
-    display: grid;
-    gap: 12px;
-  }
-
-  .indicator-mobile-card {
-    padding: 14px;
-    border: 1px solid #dfe3eb;
-    border-radius: 8px;
-    background: #fff;
-    box-shadow: 0 8px 20px rgba(31, 45, 61, 0.05);
-  }
-
-  .indicator-mobile-card__header {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    margin-bottom: 12px;
-  }
-
-  .indicator-mobile-card__header strong {
-    min-width: 0;
-    flex: 1;
-    color: #1f2937;
-    font-size: 15px;
-    line-height: 22px;
-    word-break: break-word;
-  }
-
-  .indicator-mobile-card__index {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    min-width: 30px;
-    height: 24px;
-    padding: 0 8px;
-    border-radius: 999px;
-    color: #2f63ff;
-    background: #edf3ff;
-    font-size: 12px;
-    font-weight: 700;
-  }
-
-  .indicator-mobile-meta {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-    margin-bottom: 10px;
-  }
-
-  .indicator-mobile-meta span {
-    display: inline-flex;
-    align-items: center;
-    min-height: 24px;
-    padding: 0 8px;
-    border-radius: 999px;
-    color: #596275;
-    background: #f4f6fa;
-    font-size: 12px;
-  }
-
-  .indicator-mobile-desc {
-    margin: 0 0 12px;
-    color: #4b5563;
-    font-size: 13px;
-    line-height: 20px;
-    word-break: break-word;
-  }
-
-  .indicator-mobile-detail {
-    display: grid;
-    gap: 8px;
-    margin: 0 0 12px;
-  }
-
-  .indicator-mobile-detail div {
-    display: grid;
-    gap: 4px;
-    padding: 10px;
-    border-radius: 6px;
-    background: #f8fafc;
-  }
-
-  .indicator-mobile-detail dt,
-  .indicator-mobile-field > span {
-    color: #8a94a6;
-    font-size: 12px;
-    font-weight: 600;
-  }
-
-  .indicator-mobile-detail dd {
-    margin: 0;
-    color: #273244;
-    font-size: 13px;
-    line-height: 20px;
-    word-break: break-word;
-  }
-
-  .indicator-mobile-field {
-    display: grid;
-    gap: 6px;
-    margin-top: 10px;
-  }
-
-  .indicator-mobile-field--inline {
-    grid-template-columns: 72px minmax(0, 1fr);
-    align-items: center;
-  }
-
-  .indicator-mobile-card :deep(.el-input__wrapper),
-  .indicator-mobile-card :deep(.el-select__wrapper),
-  .indicator-mobile-card :deep(.el-input-number) {
-    min-height: 44px;
-  }
-
-  .indicator-mobile-card :deep(.el-input__inner),
-  .indicator-mobile-card :deep(.el-button) {
-    min-height: 40px;
-    font-size: 14px;
   }
 
   .target-inputs {

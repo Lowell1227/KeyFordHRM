@@ -33,8 +33,16 @@ export interface TasksApiClient {
     url: string,
     config?: { params?: Record<string, unknown> },
   ): Promise<unknown>;
-  post(url: string, data?: unknown): Promise<unknown>;
-  put(url: string, data?: unknown): Promise<unknown>;
+  post(
+    url: string,
+    data?: unknown,
+    config?: { skipErrorMessage?: boolean },
+  ): Promise<unknown>;
+  put(
+    url: string,
+    data?: unknown,
+    config?: { skipErrorMessage?: boolean },
+  ): Promise<unknown>;
   patch(url: string, data?: unknown): Promise<unknown>;
   delete(url: string): Promise<unknown>;
 }
@@ -46,10 +54,16 @@ export function createTasksApi(client: TasksApiClient) {
     url: string,
     params?: Record<string, unknown>,
   ): Promise<T> => client.get(url, { params }) as Promise<T>;
-  const apiPost = <T>(url: string, data?: unknown): Promise<T> =>
-    client.post(url, data) as Promise<T>;
-  const apiPut = <T>(url: string, data?: unknown): Promise<T> =>
-    client.put(url, data) as Promise<T>;
+  const apiPost = <T>(
+    url: string,
+    data?: unknown,
+    config?: { skipErrorMessage?: boolean },
+  ): Promise<T> => client.post(url, data, config) as Promise<T>;
+  const apiPut = <T>(
+    url: string,
+    data?: unknown,
+    config?: { skipErrorMessage?: boolean },
+  ): Promise<T> => client.put(url, data, config) as Promise<T>;
   const apiPatch = <T>(url: string, data?: unknown): Promise<T> =>
     client.patch(url, data) as Promise<T>;
   const apiDelete = <T>(url: string): Promise<T> =>
@@ -158,8 +172,9 @@ export function createTasksApi(client: TasksApiClient) {
     updateActualValues(
       id: string,
       body: UpdateActualValueBody,
+      options?: { skipErrorMessage?: boolean },
     ): Promise<{ id: string; updatedCount: number }> {
-      return apiPut(`/tasks/${id}/actual-value`, body);
+      return apiPut(`/tasks/${id}/actual-value`, body, options);
     },
 
     // 自评
@@ -167,8 +182,9 @@ export function createTasksApi(client: TasksApiClient) {
     submitSelfEval(
       id: string,
       body: SubmitSelfEvalBody,
+      options?: { skipErrorMessage?: boolean },
     ): Promise<TaskActionResult> {
-      return apiPost(`/tasks/${id}/self-eval`, body);
+      return apiPost(`/tasks/${id}/self-eval`, body, options);
     },
 
     // 主管评分

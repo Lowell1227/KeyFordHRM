@@ -297,13 +297,21 @@ async function handleSubmitSelfEval(body: SubmitSelfEvalBody, actualValues: Actu
   const id = task.value?.id;
   if (!id) return;
   actionLoading.value = true;
+  let actualValuesSaved = false;
   try {
     if (actualValues.length > 0) {
-      await tasksApi.updateActualValues(id, { indicators: actualValues });
+      await tasksApi.updateActualValues(id, { indicators: actualValues }, { skipErrorMessage: true });
+      actualValuesSaved = true;
     }
-    await tasksApi.submitSelfEval(id, body);
+    await tasksApi.submitSelfEval(id, body, { skipErrorMessage: true });
     ElMessage.success('自评提交成功');
     await loadDetail();
+  } catch {
+    ElMessage.error(
+      actualValuesSaved
+        ? '自评尚未提交，实际完成信息已保存，请稍后重试'
+        : '自评尚未提交，当前设备草稿仍保留，请稍后重试',
+    );
   } finally {
     actionLoading.value = false;
   }
@@ -406,6 +414,7 @@ async function handleRemind() {
 
           <IndicatorSnapshot
             v-else-if="requestedPerformanceStage !== 'result'"
+            :task-id="task.id"
             :title="performanceStageCardTitle"
             :instances="task.indicatorInstances"
             :can-edit="canEditIndicators"
@@ -428,6 +437,7 @@ async function handleRemind() {
             @confirm="handleConfirmIndicators"
             @reject="handleRejectIndicators"
             @submit-self-eval="handleSubmitSelfEval"
+            @save-self-eval-draft="goBack"
           />
 
           <ChartCard v-if="showResultView" class="result-view">

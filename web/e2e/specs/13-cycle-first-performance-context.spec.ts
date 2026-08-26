@@ -798,3 +798,206 @@ test.describe('cycle-first lifecycle workbench contracts', () => {
     expect(businessCycles).toHaveLength(0);
   });
 });
+
+function selfEvalTaskDetail(): TaskDetail {
+  const indicator = (id: string, name: string, weight: number, sortOrder: number) => ({
+    id,
+    taskId: 'self-eval-task-1',
+    name,
+    description: `${name}的目标说明`,
+    dimensionName: sortOrder === 0 ? '业绩目标' : '能力态度',
+    weight,
+    dimensionWeight: 1,
+    indicatorType: 'kpi' as const,
+    sortOrder,
+    scoringStandard: '请结合目标完成情况、质量与时效进行评分。',
+    dataSource: '项目验收记录',
+    dataCaliber: '以本周期确认的验收结果为准',
+    targetValue: 100,
+    unit: '分',
+    visibilityScope: 'supervisors' as const,
+    visibleDepartmentIds: [],
+    visibleUserIds: [],
+    alignedObjectives: [],
+  });
+
+  return {
+    id: 'self-eval-task-1',
+    cycleId: 'current',
+    cycleName: '2026-Q3',
+    snapshotId: 'snapshot-1',
+    employeeId: 'manager-1',
+    employeeName: '测试员工',
+    employeeNo: 'EMP002',
+    deptId: 'dept-1',
+    deptName: '研发部',
+    managerId: 'manager-2',
+    managerName: '直属主管',
+    status: 'self_eval',
+    isExempt: false,
+    updatedAt: '2026-08-25T00:00:00.000Z',
+    indicatorInstances: [
+      indicator('indicator-1', '核心项目交付', 0.6, 0),
+      indicator('indicator-2', '协作与责任心', 0.4, 1),
+    ],
+    flowRecords: [],
+  };
+}
+
+test.describe('employee self-evaluation soft guide', () => {
+  test.use({ baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173' });
+
+  test('focuses the employee on one indicator instead of a wide report table', async ({ page }) => {
+    const detail = selfEvalTaskDetail();
+    await mockTaskCycleShell(page, [cycle('current', '2026-07-01', '2026-09-30')], [], [], detail);
+
+    await page.goto('/tasks/self-eval-task-1?stage=self-eval');
+
+    const workspace = page.getByTestId('personal-performance-detail');
+    const guide = workspace.getByTestId('self-eval-guide');
+    const cards = guide.getByTestId('self-eval-card');
+    await expect(guide).toContainText('每项自评分为必填，其他内容可按需补充');
+    await expect(guide.getByTestId('self-eval-progress')).toHaveText('已评分 0/2');
+    await expect(cards).toHaveCount(2);
+    await expect(workspace.getByRole('columnheader')).toHaveCount(0);
+    await expect(cards.nth(0).getByTestId('self-eval-card-toggle')).toHaveAttribute('aria-expanded', 'true');
+    await expect(cards.nth(1).getByTestId('self-eval-card-toggle')).toHaveAttribute('aria-expanded', 'false');
+    await expect(cards.nth(0).getByTestId('self-eval-card-body')).toBeVisible();
+    await expect(cards.nth(1).getByTestId('self-eval-card-body')).toBeHidden();
+    await expect(cards.nth(0).getByText('完成情况与证据（选填）')).toBeVisible();
+    await expect(cards.nth(0).getByText('评分说明（选填）')).toBeVisible();
+    await cards.nth(0).getByRole('button', { name: '下一项' }).click();
+    await expect(cards.nth(0).getByTestId('self-eval-card-toggle')).toHaveAttribute('aria-expanded', 'false');
+    await expect(cards.nth(1).getByTestId('self-eval-card-toggle')).toHaveAttribute('aria-expanded', 'true');
+  });
+
+  test('automatically restores an unfinished self-evaluation on the current device', async ({ page }) => {
+    const detail = selfEvalTaskDetail();
+    await mockTaskCycleShell(page, [cycle('current', '2026-07-01', '2026-09-30')], [], [], detail);
+
+    await page.goto('/tasks/self-eval-task-1?stage=self-eval');
+    const guide = page.getByTestId('self-eval-guide');
+    const firstCard = guide.getByTestId('self-eval-card').nth(0);
+    await firstCard.getByPlaceholder('填写关键结果或完成比例').fill('完成 95%');
+    await firstCard.getByPlaceholder('0-100').fill('92');
+    await firstCard.getByPlaceholder('写关键结果、时间或数据即可').fill('关键里程碑均按期验收');
+
+    await expect(guide.getByTestId('self-eval-progress')).toHaveText('已评分 1/2');
+    await expect(guide.getByTestId('self-eval-draft-status')).toContainText('已暂存于当前设备');
+
+    await page.reload();
+
+    const restoredCard = page.getByTestId('self-eval-card').nth(0);
+    await expect(restoredCard.getByPlaceholder('填写关键结果或完成比例')).toHaveValue('完成 95%');
+    expect(Number(await restoredCard.getByPlaceholder('0-100').inputValue())).toBe(92);
+    await expect(restoredCard.getByPlaceholder('写关键结果、时间或数据即可')).toHaveValue('关键里程碑均按期验收');
+    await expect(page.getByTestId('self-eval-draft-status')).toContainText('已恢复当前设备草稿');
+  });
+
+  test('locates missing scores before submitting the checked self-evaluation', async ({ page }) => {
+    const detail = selfEvalTaskDetail();
+    let actualValueRequests = 0;
+    let submitRequests = 0;
+    await mockTaskCycleShell(page, [cycle('current', '2026-07-01', '2026-09-30')], [], [], detail);
+    await page.route('**/api/v1/tasks/self-eval-task-1/actual-value', (route) => {
+      actualValueRequests += 1;
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ success: true })) });
+    });
+    await page.route('**/api/v1/tasks/self-eval-task-1/self-eval', (route) => {
+      submitRequests += 1;
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ success: true })) });
+    });
+
+    await page.goto('/tasks/self-eval-task-1?stage=self-eval');
+    const cards = page.getByTestId('self-eval-card');
+    await cards.nth(0).getByPlaceholder('填写关键结果或完成比例').fill('完成 95%');
+    await cards.nth(0).getByPlaceholder('0-100').fill('92');
+    await page.getByRole('button', { name: '检查并提交' }).click();
+
+    await expect(cards.nth(1).getByTestId('self-eval-card-toggle')).toHaveAttribute('aria-expanded', 'true');
+    await expect(cards.nth(1).getByText('请填写 0-100 分的自评分')).toBeVisible();
+    expect(submitRequests).toBe(0);
+
+    await cards.nth(1).getByPlaceholder('0-100').fill('88');
+    await page.getByRole('button', { name: '检查并提交' }).click();
+    const confirm = page.getByRole('dialog', { name: '提交前检查' });
+    await expect(confirm).toContainText('2 项指标均已评分');
+    await confirm.getByRole('button', { name: '确认提交' }).click();
+
+    await expect.poll(() => submitRequests).toBe(1);
+    expect(actualValueRequests).toBe(1);
+  });
+
+  test('keeps optional summary prompts progressively disclosed', async ({ page }) => {
+    const detail = selfEvalTaskDetail();
+    await mockTaskCycleShell(page, [cycle('current', '2026-07-01', '2026-09-30')], [], [], detail);
+
+    await page.goto('/tasks/self-eval-task-1?stage=self-eval');
+
+    const summary = page.getByTestId('self-eval-summary');
+    await expect(summary).toContainText('以下内容均为选填');
+    await expect(summary.getByText('本周期回顾（选填）')).toBeVisible();
+    await expect(summary.getByPlaceholder('概括 1-3 项关键成果')).toBeVisible();
+    await expect(summary.getByPlaceholder('下一阶段重点工作目标')).toBeHidden();
+    await summary.getByText('下一阶段（选填）').click();
+    await expect(summary.getByPlaceholder('下一阶段重点工作目标')).toBeVisible();
+    await expect(summary.getByPlaceholder('对团队或管理者的建议')).toBeHidden();
+    await summary.getByText('建议与材料（选填）').click();
+    await expect(summary.getByPlaceholder('对团队或管理者的建议')).toBeVisible();
+  });
+
+  test('explains partial persistence when final self-evaluation submission fails', async ({ page }) => {
+    const detail = selfEvalTaskDetail();
+    await mockTaskCycleShell(page, [cycle('current', '2026-07-01', '2026-09-30')], [], [], detail);
+    await page.route('**/api/v1/tasks/self-eval-task-1/actual-value', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ success: true })),
+    }));
+    await page.route('**/api/v1/tasks/self-eval-task-1/self-eval', (route) => route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 'SELF_EVAL_FAILED', message: 'temporary failure', data: null }),
+    }));
+
+    await page.goto('/tasks/self-eval-task-1?stage=self-eval');
+    const cards = page.getByTestId('self-eval-card');
+    await cards.nth(0).getByPlaceholder('填写关键结果或完成比例').fill('完成 95%');
+    await cards.nth(0).getByPlaceholder('0-100').fill('92');
+    await cards.nth(1).getByTestId('self-eval-card-toggle').click();
+    await cards.nth(1).getByPlaceholder('0-100').fill('88');
+    await page.getByRole('button', { name: '检查并提交' }).click();
+    await page.getByRole('dialog', { name: '提交前检查' }).getByRole('button', { name: '确认提交' }).click();
+
+    await expect(page.getByText('自评尚未提交，实际完成信息已保存，请稍后重试')).toBeVisible();
+    await expect(page.locator('.el-message')).toHaveCount(1, { timeout: 1_000 });
+    await expect(page.getByTestId('self-eval-draft-status')).toContainText('当前设备');
+  });
+
+  test('keeps one clear error and the local draft when actual values cannot be saved', async ({ page }) => {
+    const detail = selfEvalTaskDetail();
+    let submitRequests = 0;
+    await mockTaskCycleShell(page, [cycle('current', '2026-07-01', '2026-09-30')], [], [], detail);
+    await page.route('**/api/v1/tasks/self-eval-task-1/actual-value', (route) => route.fulfill({
+      status: 500,
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 'ACTUAL_VALUE_FAILED', message: 'temporary failure', data: null }),
+    }));
+    await page.route('**/api/v1/tasks/self-eval-task-1/self-eval', (route) => {
+      submitRequests += 1;
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ success: true })) });
+    });
+
+    await page.goto('/tasks/self-eval-task-1?stage=self-eval');
+    const cards = page.getByTestId('self-eval-card');
+    await cards.nth(0).getByPlaceholder('填写关键结果或完成比例').fill('完成 95%');
+    await cards.nth(0).getByPlaceholder('0-100').fill('92');
+    await cards.nth(1).getByTestId('self-eval-card-toggle').click();
+    await cards.nth(1).getByPlaceholder('0-100').fill('88');
+    await page.getByRole('button', { name: '检查并提交' }).click();
+    await page.getByRole('dialog', { name: '提交前检查' }).getByRole('button', { name: '确认提交' }).click();
+
+    await expect(page.getByText('自评尚未提交，当前设备草稿仍保留，请稍后重试')).toBeVisible();
+    await expect(page.locator('.el-message')).toHaveCount(1, { timeout: 1_000 });
+    expect(submitRequests).toBe(0);
+  });
+});
