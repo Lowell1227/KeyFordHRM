@@ -15,11 +15,16 @@ export type NavigationUser = {
   businessCapabilities?: BusinessCapabilities;
 };
 
-const moduleDefinitions: Record<NavigationModuleKey, Pick<NavigationModule, 'label' | 'order'>> = {
+const moduleDefinitions: Record<
+  NavigationModuleKey,
+  Pick<NavigationModule, 'label' | 'order' | 'status'>
+> = {
   workbench: { label: '工作台', order: 10 },
   performance: { label: '绩效', order: 20 },
-  people: { label: '试用期与转正', order: 30 },
-  analysis: { label: '分析与设置', order: 40 },
+  people: { label: '人员', order: 30 },
+  recruitment: { label: '招聘', order: 40, status: 'paused' },
+  compensation: { label: '薪酬', order: 50, status: 'paused' },
+  system: { label: '系统管理', order: 60 },
 };
 
 export function canAccessRoute(

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, watch, type Component } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ArrowDown, Briefcase, HomeFilled, Setting, UserFilled } from '@element-plus/icons-vue';
+import { ArrowDown, Briefcase, Coin, HomeFilled, Search, Tools, UserFilled } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth.store';
 import { buildNavigation } from '@/router/navigation';
 import { routes } from '@/router/routes';
@@ -17,7 +17,9 @@ const moduleIcons: Record<NavigationModuleKey, Component> = {
   workbench: HomeFilled,
   performance: Briefcase,
   people: UserFilled,
-  analysis: Setting,
+  recruitment: Search,
+  compensation: Coin,
+  system: Tools,
 };
 
 function readCollapsedGroups(): Record<string, boolean> {
@@ -106,7 +108,14 @@ function isMenuActive(path: string): boolean {
         @click="navigate(module.defaultPath)"
       >
         <span class="rail-icon"><el-icon><component :is="moduleIcons[module.key]" /></el-icon></span>
-        <span>{{ module.label }}</span>
+        <span class="rail-copy">
+          <span>{{ module.label }}</span>
+          <small
+            v-if="module.status === 'paused'"
+            class="rail-status"
+            :data-testid="`module-status-${module.key}`"
+          >规划中</small>
+        </span>
       </button>
     </nav>
 
@@ -216,6 +225,23 @@ function isMenuActive(path: string): boolean {
 .rail-icon {
   display: inline-flex;
   font-size: 18px;
+}
+
+.rail-copy {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 1px;
+}
+
+.rail-status {
+  padding: 0 4px;
+  border: 1px solid currentcolor;
+  border-radius: 999px;
+  font-size: 8px;
+  line-height: 12px;
+  white-space: nowrap;
+  opacity: 0.88;
 }
 
 .menu-panel {
@@ -345,8 +371,9 @@ function isMenuActive(path: string): boolean {
   }
   .app-rail::-webkit-scrollbar { display: none; }
   .rail-logo { display: none; }
-  .rail-item { min-width: 54px; min-height: 44px; margin: 0; flex-direction: row; font-size: 12px; }
+  .rail-item { min-width: 62px; min-height: 44px; margin: 0; flex-direction: row; font-size: 12px; }
   .rail-icon { font-size: 16px; }
+  .rail-copy { flex-direction: row; gap: 3px; }
   .menu-panel { width: 100%; min-width: 0; height: 48px; flex-direction: row; }
   .menu-brand { display: none; }
   .menu-scroll { display: flex; align-items: center; overflow-x: auto; overflow-y: hidden; padding: 6px 10px; scrollbar-width: none; }

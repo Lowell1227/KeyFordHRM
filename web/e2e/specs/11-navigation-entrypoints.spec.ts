@@ -9,6 +9,7 @@ import { routes } from "../../src/router/routes";
 import { DashboardPage } from "../page-objects/dashboard.page";
 import type {
   AssessmentCycle,
+  BusinessCapabilities,
   Paginated,
   TaskListItem,
   TeamTaskListItem,
@@ -24,6 +25,20 @@ const apiResponse = (data: unknown) => ({
 });
 
 const E2E_ACTIONABLE_NOTIFICATION_ID = "00000000-0000-4000-8000-000000000411";
+
+const fullBusinessCapabilities: BusinessCapabilities = {
+  canManageTeam: true,
+  canReviewDepartment: true,
+  canViewPerformanceApproval: true,
+  canOperatePerformanceApproval: true,
+  canHandleHrCycle: true,
+  canHandleInterviews: true,
+  canHandleProbationReviews: true,
+  canHandleConfirmationApprovals: true,
+  canViewReports: true,
+  canManageObjectives: true,
+  identities: [],
+};
 
 const taskItem = (overrides: Partial<TaskListItem> = {}): TaskListItem => ({
   id: "task-default",
@@ -163,7 +178,7 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
     expect(modules.map((module) => module.label)).toEqual([
       "工作台",
       "绩效",
-      "试用期与转正",
+      "人员",
     ]);
     const people = modules.find((module) => module.key === "people");
     expect(people?.groups.map((group) => group.label)).toEqual([
@@ -174,30 +189,78 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
     expect(JSON.stringify(modules)).not.toContain("目标跟进");
   });
 
-  test("HR navigation exposes analysis and settings pages in configured order", () => {
+  test("HR navigation keeps analysis and settings inside performance", () => {
     const modules = buildNavigation(routes, {
       sysRole: "hr",
       canViewAll: false,
+      businessCapabilities: fullBusinessCapabilities,
     });
 
     expect(modules.map((module) => module.label)).toEqual([
       "工作台",
       "绩效",
-      "试用期与转正",
-      "分析与设置",
+      "人员",
+      "系统管理",
     ]);
-    const analysis = modules.find((module) => module.key === "analysis");
-    expect(analysis?.defaultPath).toBe("/reports");
+    const performance = modules.find((module) => module.key === "performance");
+    expect(performance?.defaultPath).toBe("/tasks");
     expect(
-      analysis?.groups.flatMap((group) =>
-        group.items.map((item) => item.label),
-      ),
-    ).toEqual(["报表分析", "指标库", "考核模板", "用户管理"]);
+      performance?.groups.map((group) => ({
+        label: group.label,
+        items: group.items.map((item) => item.label),
+      })),
+    ).toEqual([
+      { label: "绩效工作台", items: ["绩效工作台"] },
+      {
+        label: "绩效运营",
+        items: [
+          "周期与计划",
+          "绩效校准",
+          "绩效面谈",
+          "改进计划",
+          "结果审批",
+          "结果公示",
+          "申诉管理",
+        ],
+      },
+      { label: "绩效分析", items: ["绩效报表"] },
+      { label: "绩效设置", items: ["指标库", "考核模板"] },
+    ]);
+    const people = modules.find((module) => module.key === "people");
     expect(
-      analysis?.groups
-        .find((group) => group.key === "indicator-config")
-        ?.items.map((item) => item.label),
-    ).toEqual(["指标库", "考核模板"]);
+      people?.groups.map((group) => group.label),
+    ).toEqual(["人员档案", "试用期与转正"]);
+    expect(people?.groups[0].items.map((item) => item.label)).toEqual([
+      "员工档案",
+    ]);
+  });
+
+  test("system administrator sees paused recruiting and compensation before system management", () => {
+    const modules = buildNavigation(routes, {
+      sysRole: "system_admin",
+      canViewAll: true,
+      businessCapabilities: fullBusinessCapabilities,
+    });
+
+    expect(modules.map((module) => module.label)).toEqual([
+      "工作台",
+      "绩效",
+      "人员",
+      "招聘",
+      "薪酬",
+      "系统管理",
+    ]);
+    expect(modules.find((module) => module.key === "recruitment")).toMatchObject({
+      defaultPath: "/recruitment",
+      status: "paused",
+    });
+    expect(modules.find((module) => module.key === "compensation")).toMatchObject({
+      defaultPath: "/compensation",
+      status: "paused",
+    });
+    expect(modules.find((module) => module.key === "system")?.defaultPath).toBe(
+      "/system",
+    );
   });
 
   test("does not expose route records without navigation metadata", () => {
@@ -277,7 +340,7 @@ test.describe("11-navigation-entrypoints navigation active state", () => {
     await page.reload();
 
     const performanceGroup = page.locator(".menu-group__title", {
-      hasText: "绩效管理",
+      hasText: "绩效运营",
     });
     await expect(performanceGroup).toHaveAttribute("aria-expanded", "false");
     const persisted = await page.evaluate(() =>
@@ -881,7 +944,7 @@ test.describe("11-navigation-entrypoints non-workspace header", () => {
   test("non-workspace pages retain one plain route title", async ({ page }) => {
     await page.goto("/reports");
 
-    await expect(page.getByTestId("app-route-title")).toHaveText("报表分析");
+    await expect(page.getByTestId("app-route-title")).toHaveText("绩效报表");
     await expect(page.getByTestId("app-route-title")).toHaveCount(1);
   });
 });

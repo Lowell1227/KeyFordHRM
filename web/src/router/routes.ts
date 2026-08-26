@@ -32,7 +32,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '周期与计划',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'performance', label: '周期与计划', order: 20, group: 'performance', groupLabel: '绩效管理' },
+      navigation: { module: 'performance', label: '周期与计划', order: 20, group: 'performance', groupLabel: '绩效运营' },
     },
   },
   {
@@ -43,7 +43,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '考核模板',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'analysis', label: '考核模板', order: 30, group: 'indicator-config', groupLabel: '指标与模板' },
+      navigation: { module: 'performance', label: '考核模板', order: 120, group: 'performance-settings', groupLabel: '绩效设置' },
     },
   },
   {
@@ -54,7 +54,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '指标库',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'analysis', label: '指标库', order: 20, group: 'indicator-config', groupLabel: '指标与模板' },
+      navigation: { module: 'performance', label: '指标库', order: 110, group: 'performance-settings', groupLabel: '绩效设置' },
     },
   },
   {
@@ -65,7 +65,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '绩效校准',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'performance', label: '绩效校准', order: 30, group: 'performance', groupLabel: '绩效管理' },
+      navigation: { module: 'performance', label: '绩效校准', order: 30, group: 'performance', groupLabel: '绩效运营' },
     },
   },
   {
@@ -76,7 +76,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '申诉管理',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'performance', label: '申诉管理', order: 80, group: 'performance', groupLabel: '绩效管理' },
+      navigation: { module: 'performance', label: '申诉管理', order: 80, group: 'performance', groupLabel: '绩效运营' },
     },
   },
   {
@@ -87,7 +87,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '结果公示',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'performance', label: '结果公示', order: 70, group: 'performance', groupLabel: '绩效管理' },
+      navigation: { module: 'performance', label: '结果公示', order: 70, group: 'performance', groupLabel: '绩效运营' },
     },
   },
   {
@@ -98,7 +98,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '结果审批',
       capability: 'canViewPerformanceApproval',
-      navigation: { module: 'performance', label: '结果审批', order: 60, group: 'performance', groupLabel: '绩效管理' },
+      navigation: { module: 'performance', label: '结果审批', order: 60, group: 'performance', groupLabel: '绩效运营' },
     },
   },
   {
@@ -107,9 +107,9 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/reports/ReportsView.vue'),
     meta: {
       requiresAuth: true,
-      title: '报表分析',
+      title: '绩效报表',
       capability: 'canViewReports',
-      navigation: { module: 'analysis', label: '报表分析', order: 10 },
+      navigation: { module: 'performance', label: '绩效报表', order: 100, group: 'performance-analysis', groupLabel: '绩效分析' },
     },
   },
   {
@@ -120,7 +120,40 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '员工档案',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'analysis', label: '员工档案', order: 40 },
+      navigation: { module: 'people', label: '员工档案', order: 10, group: 'people-archive', groupLabel: '人员档案' },
+    },
+  },
+  {
+    path: '/recruitment',
+    name: 'RecruitmentOverview',
+    component: () => import('@/views/recruitment/RecruitmentOverviewView.vue'),
+    meta: {
+      requiresAuth: true,
+      title: '招聘（规划中）',
+      roles: ['system_admin'],
+      navigation: { module: 'recruitment', label: '招聘概览', order: 10 },
+    },
+  },
+  {
+    path: '/compensation',
+    name: 'CompensationOverview',
+    component: () => import('@/views/compensation/CompensationOverviewView.vue'),
+    meta: {
+      requiresAuth: true,
+      title: '薪酬（规划中）',
+      roles: ['system_admin'],
+      navigation: { module: 'compensation', label: '薪酬概览', order: 10 },
+    },
+  },
+  {
+    path: '/system',
+    name: 'SystemOverview',
+    component: () => import('@/views/system/SystemOverviewView.vue'),
+    meta: {
+      requiresAuth: true,
+      title: '系统管理',
+      roles: ['hr', 'system_admin'],
+      navigation: { module: 'system', label: '系统概览', order: 10 },
     },
   },
   {
@@ -141,7 +174,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '绩效面谈',
       capability: 'canHandleInterviews',
-      navigation: { module: 'performance', label: '绩效面谈', order: 40, group: 'performance', groupLabel: '绩效管理' },
+      navigation: { module: 'performance', label: '绩效面谈', order: 40, group: 'performance', groupLabel: '绩效运营' },
     },
   },
   {
@@ -151,7 +184,7 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '绩效工作台',
-      navigation: { module: 'performance', label: '绩效工作台', order: 10, group: 'performance', groupLabel: '绩效管理' },
+      navigation: { module: 'performance', label: '绩效工作台', order: 10, group: 'performance-workbench', groupLabel: '绩效工作台' },
     },
   },
   {
@@ -167,7 +200,7 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '改进计划',
-      navigation: { module: 'performance', label: '改进计划', order: 50, group: 'performance', groupLabel: '绩效管理' },
+      navigation: { module: 'performance', label: '改进计划', order: 50, group: 'performance', groupLabel: '绩效运营' },
     },
   },
   {
@@ -184,7 +217,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '试用期考核管理',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'people', label: '试用期考核管理', order: 10, group: 'people', groupLabel: '试用期与转正' },
+      navigation: { module: 'people', label: '试用期考核管理', order: 20, group: 'people-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -195,7 +228,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '试用期评分',
       capability: 'canHandleProbationReviews',
-      navigation: { module: 'people', label: '试用期评分', order: 20, group: 'people', groupLabel: '试用期与转正' },
+      navigation: { module: 'people', label: '试用期评分', order: 30, group: 'people-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -205,7 +238,7 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '我的试用期考核',
-      navigation: { module: 'people', label: '我的试用期考核', order: 30, group: 'people', groupLabel: '试用期与转正' },
+      navigation: { module: 'people', label: '我的试用期考核', order: 40, group: 'people-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -222,7 +255,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '转正申请管理',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'people', label: '转正申请管理', order: 40, group: 'people', groupLabel: '试用期与转正' },
+      navigation: { module: 'people', label: '转正申请管理', order: 50, group: 'people-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -233,7 +266,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '转正审批台',
       capability: 'canHandleConfirmationApprovals',
-      navigation: { module: 'people', label: '转正审批台', order: 50, group: 'people', groupLabel: '试用期与转正' },
+      navigation: { module: 'people', label: '转正审批台', order: 60, group: 'people-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -243,7 +276,7 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '我的转正申请',
-      navigation: { module: 'people', label: '我的转正申请', order: 60, group: 'people', groupLabel: '试用期与转正' },
+      navigation: { module: 'people', label: '我的转正申请', order: 70, group: 'people-probation', groupLabel: '试用期与转正' },
     },
   },
   {

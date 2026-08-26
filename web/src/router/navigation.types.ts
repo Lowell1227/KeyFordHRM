@@ -1,7 +1,14 @@
 import type { RouteRecordName } from 'vue-router';
 import type { BusinessCapabilities } from '@/types/api.types';
 
-export type NavigationModuleKey = 'workbench' | 'performance' | 'people' | 'analysis';
+export type NavigationModuleKey =
+  | 'workbench'
+  | 'performance'
+  | 'people'
+  | 'recruitment'
+  | 'compensation'
+  | 'system';
+export type NavigationModuleStatus = 'paused';
 export type BusinessCapabilityKey = Exclude<keyof BusinessCapabilities, 'identities'>;
 
 export interface NavigationMeta {
@@ -29,6 +36,7 @@ export interface NavigationModule {
   key: NavigationModuleKey;
   label: string;
   order: number;
+  status?: NavigationModuleStatus;
   defaultPath: string;
   groups: NavigationGroup[];
 }

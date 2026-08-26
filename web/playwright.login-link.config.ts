@@ -6,6 +6,7 @@ export default defineConfig({
     '19-test-account-quick-login.spec.ts',
     '20-login-manual-link.spec.ts',
     '25-online-login-baseline.spec.ts',
+    '27-primary-menu-role-baseline.spec.ts',
   ],
   workers: 1,
   use: {

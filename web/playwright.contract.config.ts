@@ -16,6 +16,7 @@ export default defineConfig({
     '22-template-global-weight-contract.spec.ts',
     '23-employee-data-review.spec.ts',
     '24-dynamic-business-permissions.spec.ts',
+    '26-menu-online-baseline.spec.ts',
   ],
   workers: 1,
 });

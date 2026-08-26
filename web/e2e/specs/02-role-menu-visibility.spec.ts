@@ -2,7 +2,7 @@ import { test, expect } from "@playwright/test";
 import { DashboardPage } from "../page-objects/dashboard.page";
 import { ReportsPage } from "../page-objects/reports.page";
 
-const unopenedModules = ["任务", "项目", "考勤", "薪酬"];
+const unopenedModules = ["任务", "项目", "考勤"];
 
 async function expectModules(page: DashboardPage, labels: string[]) {
   await expect(page.navigationModules()).toHaveText(labels);
@@ -20,13 +20,15 @@ test.describe("02-role-menu-visibility navigation employee", () => {
     const dashboard = new DashboardPage(page);
     await dashboard.goto();
 
-    await expectModules(dashboard, ["工作台", "绩效", "试用期与转正"]);
+    await expectModules(dashboard, ["工作台", "绩效", "人员"]);
     await dashboard.openModule("performance");
     await expect(dashboard.menuItem("绩效工作台")).toBeVisible();
     await expect(dashboard.menuItem("目标跟进")).toHaveCount(0);
     await expect(dashboard.menuItem("目标地图")).toHaveCount(0);
     await expect(dashboard.menuItem("团队绩效")).toHaveCount(0);
-    await expect(dashboard.module("analysis")).toHaveCount(0);
+    await expect(dashboard.module("compensation")).toHaveCount(0);
+    await expect(dashboard.module("recruitment")).toHaveCount(0);
+    await expect(dashboard.module("system")).toHaveCount(0);
   });
 });
 
@@ -39,13 +41,12 @@ test.describe("02-role-menu-visibility navigation manager", () => {
     const dashboard = new DashboardPage(page);
     await dashboard.goto();
 
-    await expectModules(dashboard, ["工作台", "绩效", "试用期与转正", "分析与设置"]);
+    await expectModules(dashboard, ["工作台", "绩效", "人员"]);
     await dashboard.openModule("performance");
     await expect(dashboard.menuItem("绩效工作台")).toBeVisible();
     await expect(dashboard.menuItem("绩效面谈")).toHaveCount(0);
     await expect(dashboard.menuItem("团队绩效")).toHaveCount(0);
-    await dashboard.openModule("analysis");
-    await expect(dashboard.menuItem("报表分析")).toBeVisible();
+    await expect(dashboard.menuItem("绩效报表")).toBeVisible();
     await expect(dashboard.menuItem("员工档案")).toHaveCount(0);
   });
 });
@@ -53,7 +54,7 @@ test.describe("02-role-menu-visibility navigation manager", () => {
 test.describe("02-role-menu-visibility navigation HR", () => {
   test.use({ storageState: "e2e/auth-state/hr.json" });
 
-  test("HR navigation shows configuration through analysis and settings", async ({
+  test("HR navigation keeps configuration inside performance and people", async ({
     page,
   }) => {
     const dashboard = new DashboardPage(page);
@@ -62,17 +63,20 @@ test.describe("02-role-menu-visibility navigation HR", () => {
     await expectModules(dashboard, [
       "工作台",
       "绩效",
-      "试用期与转正",
-      "分析与设置",
+      "人员",
+      "系统管理",
     ]);
     await dashboard.openModule("performance");
     await expect(dashboard.menuItem("周期与计划")).toBeVisible();
     await expect(dashboard.menuItem("绩效校准")).toBeVisible();
-    await dashboard.openModule("analysis");
-    await expect(dashboard.groupTitle("指标与模板")).toBeVisible();
+    await expect(dashboard.groupTitle("绩效设置")).toBeVisible();
     await expect(dashboard.menuItem("指标库")).toBeVisible();
     await expect(dashboard.menuItem("考核模板")).toBeVisible();
+    await dashboard.openModule("people");
+    await expect(dashboard.groupTitle("人员档案")).toBeVisible();
     await expect(dashboard.menuItem("员工档案")).toBeVisible();
+    await expect(dashboard.module("recruitment")).toHaveCount(0);
+    await expect(dashboard.module("compensation")).toHaveCount(0);
   });
 });
 
@@ -83,17 +87,11 @@ test.describe("02-role-menu-visibility navigation approver", () => {
     const dashboard = new DashboardPage(page);
     await dashboard.goto();
 
-    await expectModules(dashboard, [
-      "工作台",
-      "绩效",
-      "试用期与转正",
-      "分析与设置",
-    ]);
+    await expectModules(dashboard, ["工作台", "绩效", "人员"]);
     await dashboard.openModule("performance");
     await expect(dashboard.menuItem("结果审批")).toBeVisible();
-    await dashboard.openModule("analysis");
     await expect(dashboard.menuItem("周期与计划")).toHaveCount(0);
-    await expect(dashboard.menuItem("指标与模板")).toHaveCount(0);
+    await expect(dashboard.groupTitle("绩效设置")).toHaveCount(0);
     await expect(dashboard.menuItem("用户管理")).toHaveCount(0);
   });
 });
@@ -107,18 +105,12 @@ test.describe("02-role-menu-visibility navigation chairman", () => {
     const dashboard = new DashboardPage(page);
     await dashboard.goto();
 
-    await expectModules(dashboard, [
-      "工作台",
-      "绩效",
-      "试用期与转正",
-      "分析与设置",
-    ]);
+    await expectModules(dashboard, ["工作台", "绩效", "人员"]);
     await dashboard.openModule("performance");
     await expect(dashboard.menuItem("结果审批")).toBeVisible();
     await expect(dashboard.menuItem("周期与计划")).toHaveCount(0);
     await expect(dashboard.menuItem("绩效校准")).toHaveCount(0);
-    await dashboard.openModule("analysis");
-    await expect(dashboard.menuItem("报表分析")).toBeVisible();
+    await expect(dashboard.menuItem("绩效报表")).toBeVisible();
     await expect(dashboard.menuItem("指标库")).toHaveCount(0);
     await expect(dashboard.menuItem("考核模板")).toHaveCount(0);
     await expect(dashboard.menuItem("用户管理")).toHaveCount(0);
@@ -137,15 +129,17 @@ test.describe("02-role-menu-visibility navigation system administrator", () => {
     await expectModules(dashboard, [
       "工作台",
       "绩效",
-      "试用期与转正",
-      "分析与设置",
+      "人员",
+      "招聘规划中",
+      "薪酬规划中",
+      "系统管理",
     ]);
     await dashboard.openModule("performance");
     await expect(dashboard.menuItem("周期与计划")).toBeVisible();
     await expect(dashboard.menuItem("绩效校准")).toBeVisible();
     await expect(dashboard.menuItem("结果审批")).toBeVisible();
-    await dashboard.openModule("analysis");
-    await expect(dashboard.groupTitle("指标与模板")).toBeVisible();
+    await expect(dashboard.groupTitle("绩效设置")).toBeVisible();
+    await dashboard.openModule("people");
     await expect(dashboard.menuItem("员工档案")).toBeVisible();
   });
 });

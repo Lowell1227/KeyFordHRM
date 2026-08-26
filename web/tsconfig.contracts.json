@@ -12,7 +12,8 @@
     "e2e/specs/10-team-performance-contract.spec.ts",
     "e2e/specs/11-navigation-entrypoints.spec.ts",
     "e2e/specs/12-goal-tracking-model.spec.ts",
-    "e2e/specs/22-template-global-weight-contract.spec.ts"
+    "e2e/specs/22-template-global-weight-contract.spec.ts",
+    "e2e/specs/26-menu-online-baseline.spec.ts"
   ],
   "exclude": ["node_modules", "dist"]
 }

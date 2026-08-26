@@ -24,7 +24,7 @@ export class DashboardPage {
   }
 
   navigationModules(): Locator {
-    return this.sidebar.locator('[data-testid^="nav-module-"]');
+    return this.sidebar.locator('.rail-item[data-testid^="nav-module-"]');
   }
 
   module(key: string): Locator {
@@ -68,7 +68,11 @@ export class DashboardPage {
   }
 
   async openModule(key: string) {
-    await this.module(key).click();
+    const module = this.module(key);
+    await module.click();
+    await this.sidebar
+      .locator(`.rail-item[data-testid="nav-module-${key}"].is-active`)
+      .waitFor();
   }
 
   async hasMenu(title: string): Promise<boolean> {
