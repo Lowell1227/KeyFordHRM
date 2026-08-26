@@ -119,43 +119,60 @@ async function mockCycleLaunchPage(
       body: JSON.stringify(apiResponse(departments)),
     });
   });
-  await page.route('**/api/v1/users**', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify(apiResponse({
-      total: 3,
-      page: 1,
-      pageSize: 50,
-      items: [
-        {
-          id: 'hr-1',
-          name: '姚瑶',
-          employeeNo: 'HR001',
-          deptId: 'hr-dept',
-          deptName: '人力资源部',
-          sysRole: 'hr',
-          status: 'active',
-        },
-        {
-          id: 'employee-1',
-          name: '陈晨',
-          employeeNo: 'E001',
-          deptId: 'sales',
-          deptName: '销售部',
-          sysRole: 'employee',
-          status: 'active',
-        },
-        {
-          id: 'employee-2',
-          name: '周舟',
-          employeeNo: 'E002',
-          deptId: 'product',
-          deptName: '产品部',
-          sysRole: 'employee',
-          status: 'active',
-        },
-      ],
-    })),
-  }));
+  await page.route('**/api/v1/users**', (route) => {
+    const requestUrl = new URL(route.request().url());
+    const users = [
+      {
+        id: 'hr-1',
+        name: '姚瑶',
+        employeeNo: 'HR001',
+        deptId: 'hr-dept',
+        deptName: '人力资源部',
+        sysRole: 'hr',
+        status: 'active',
+      },
+      {
+        id: 'employee-1',
+        name: '陈晨',
+        employeeNo: 'E001',
+        deptId: 'sales',
+        deptName: '销售部',
+        sysRole: 'employee',
+        status: 'active',
+      },
+      {
+        id: 'employee-2',
+        name: '周舟',
+        employeeNo: 'E002',
+        deptId: 'product',
+        deptName: '产品部',
+        sysRole: 'employee',
+        status: 'active',
+      },
+      {
+        id: 'employee-probation',
+        name: '孙珊',
+        employeeNo: 'P001',
+        deptId: 'product',
+        deptName: '产品部',
+        sysRole: 'employee',
+        status: 'probation',
+      },
+    ];
+    const requestedStatus = requestUrl.searchParams.get('status');
+    const items = requestedStatus
+      ? users.filter((user) => user.status === requestedStatus)
+      : users.filter((user) => user.status !== 'resigned');
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({
+        total: items.length,
+        page: 1,
+        pageSize: 50,
+        items,
+      })),
+    });
+  });
   await page.route('**/api/v1/templates**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
@@ -233,8 +250,9 @@ test.describe('cycle launch entry UX', () => {
     await expect(scopeDrawer.getByRole('tab', { name: '按部门' })).toHaveCount(0);
     await expect(scopeDrawer.getByRole('tab', { name: '按人员' })).toHaveCount(0);
     await expect(scopeDrawer.getByRole('tab', { name: '排除人员' })).toBeVisible();
+    await expect(scopeDrawer).toContainText('系统会保留豁免记录，并通知本人及主管');
     await scopeDrawer.getByTestId('cycle-scope-excluded-select').locator('.el-select').click();
-    await page.locator('li.el-select-dropdown__item:visible').filter({ hasText: '周舟 (E002)' }).last().click();
+    await page.locator('li.el-select-dropdown__item:visible').filter({ hasText: '孙珊 (P001)' }).last().click();
     await scopeDrawer.getByRole('button', { name: '确定' }).click();
 
     await expect(page.getByTestId('cycle-scope-summary')).toContainText('全公司');
@@ -245,7 +263,7 @@ test.describe('cycle launch entry UX', () => {
     expect(createBodies[0]).toMatchObject({
       participantDeptIds: [],
       participantUserIds: [],
-      explicitExemptUserIds: ['employee-2'],
+      explicitExemptUserIds: ['employee-probation'],
     });
   });
 
@@ -297,7 +315,7 @@ test.describe('cycle launch entry UX', () => {
     expect(createBodies[0]).toMatchObject({
       participantDeptIds: ['product'],
       participantUserIds: ['employee-1'],
-      explicitExemptUserIds: ['employee-2'],
+      explicitExemptUserIds: ['employee-probation'],
     });
   });
 

@@ -245,7 +245,6 @@ watch(activeTab, async (value) => {
             <UserSelect
               :model-value="userDraft"
               multiple
-              status="active"
               :disabled-ids="excludedUserDraft"
               placeholder="按姓名或工号搜索并选择人员"
               @update:model-value="updateUserDraft"
@@ -255,11 +254,14 @@ watch(activeTab, async (value) => {
 
         <el-tab-pane label="排除人员" name="excluded">
           <div class="people-picker-panel" data-testid="cycle-scope-excluded-select">
-            <p>{{ scope === 'all' ? '被排除人员不会进入本周期。' : '排除优先于部门和单独选择的人员。' }}</p>
+            <p>
+              {{ scope === 'all'
+                ? '被排除人员将标记为本周期豁免，不进入考核流程；系统会保留豁免记录，并通知本人及主管。'
+                : '排除优先于部门和单独选择的人员；系统会保留豁免记录，并通知本人及主管。' }}
+            </p>
             <UserSelect
               :model-value="excludedUserDraft"
               multiple
-              status="active"
               :disabled-ids="userDraft"
               placeholder="按姓名或工号搜索需要排除的人员"
               @update:model-value="updateExcludedUserDraft"
