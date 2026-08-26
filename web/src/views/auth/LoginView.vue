@@ -152,8 +152,6 @@ async function onPasswordLogin() {
       {{ dingtalkButtonText }}
     </el-button>
 
-    <p class="login-guidance">公司员工请使用钉钉账号登录；新浏览器首次使用需完成钉钉授权</p>
-    <p class="org-guidance">多组织账号请在钉钉授权页选择应用所属企业</p>
     <a
       class="manual-link"
       href="/manual/index.html"
@@ -211,9 +209,13 @@ async function onPasswordLogin() {
             data-testid="test-account-login-button"
             @click="quickLogin(acc.employeeNo)"
           >
-            <span class="quick-login__role">{{ acc.roleLabel }}</span>
-            <span class="quick-login__name">{{ acc.name }}</span>
-            <span class="quick-login__no">{{ acc.employeeNo }}</span>
+            <span class="quick-login__content">
+              <span class="quick-login__role">{{ acc.roleLabel }}</span>
+              <span class="quick-login__details">
+                <span class="quick-login__name">{{ acc.name }}</span>
+                <span class="quick-login__no">{{ acc.employeeNo }}</span>
+              </span>
+            </span>
           </el-button>
         </div>
       </div>
@@ -243,17 +245,6 @@ async function onPasswordLogin() {
 .dingtalk-btn,
 .full {
   width: 100%;
-}
-.login-guidance,
-.org-guidance {
-  margin: 10px 0 0;
-  text-align: center;
-  color: var(--app-text-secondary, #646a73);
-  font-size: 12px;
-  line-height: 1.6;
-}
-.org-guidance {
-  color: var(--el-color-warning-dark-2, #b88230);
 }
 .manual-link {
   display: block;
@@ -319,29 +310,60 @@ async function onPasswordLogin() {
 }
 .quick-login__account.el-button {
   margin: 0;
-  height: 48px;
-  padding: 6px 10px;
-  display: grid;
-  grid-template-columns: auto 1fr;
-  grid-template-rows: auto auto;
-  column-gap: 8px;
+  height: 62px;
+  min-width: 0;
+  padding: 8px 10px;
+  overflow: hidden;
+  border-color: var(--el-border-color-lighter, #e4e7ed);
+  border-radius: 8px;
+  background: var(--el-fill-color-blank, #fff);
   text-align: left;
 }
-.quick-login__role {
-  grid-row: 1 / 3;
-  align-self: center;
-  min-width: 48px;
-  color: var(--el-color-primary);
-  font-weight: 600;
+.quick-login__account.el-button:hover,
+.quick-login__account.el-button:focus-visible {
+  border-color: var(--el-color-primary-light-5);
+  background: var(--el-color-primary-light-9);
 }
-.quick-login__name {
+.quick-login__content {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+  line-height: 1.15;
+}
+.quick-login__role {
+  display: block;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--el-color-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+.quick-login__details {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+.quick-login__name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--app-text-secondary, #646a73);
+  font-size: 12px;
 }
 .quick-login__no {
+  flex: none;
+  white-space: nowrap;
   color: var(--app-text-tertiary, #8f959e);
   font-size: 11px;
+  font-variant-numeric: tabular-nums;
 }
 @media (max-width: 520px) {
   .login-card {
