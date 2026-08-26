@@ -52,6 +52,8 @@ web/verify-*
 web/f9-screenshots/
 web/test-results/
 test-results/
+/outputs/
+/tmp/
 
 # 误建的杂项文件/目录
 nul
