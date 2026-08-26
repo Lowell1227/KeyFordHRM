@@ -25,7 +25,7 @@ const capabilities: CapabilityItem[] = [
     name: '钉钉登录与身份绑定',
     status: 'available',
     statusLabel: '可用',
-    note: '已支持钉钉登录、组织读取和直属主管读取。',
+    note: '组织、人员、任职和花名册直属主管均以 HRM 花名册为准，不读取或同步钉钉组织。',
   },
   {
     name: 'OA 审批读取与事件订阅',

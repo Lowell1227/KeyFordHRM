@@ -46,12 +46,19 @@ test.describe('一级菜单角色基线', () => {
     await expect(page).toHaveURL(/\/dashboard$/);
     await page.goto('/compensation');
     await expect(page).toHaveURL(/\/dashboard$/);
+
+    await page.goto('/system');
+    await expect(page.getByText('组织、人员、任职和花名册直属主管均以 HRM 花名册为准，不读取或同步钉钉组织。')).toBeVisible();
   });
 
   test('员工只看到工作台、绩效和人员且不能进入系统管理', async ({ page }) => {
     await loginWithAcceptanceAccount(page, 'EMP001');
 
     await expectPrimaryModules(page, ['工作台', '绩效', '人员']);
+    await page.goto('/recruitment');
+    await expect(page).toHaveURL(/\/dashboard$/);
+    await page.goto('/compensation');
+    await expect(page).toHaveURL(/\/dashboard$/);
     await page.goto('/system');
     await expect(page).toHaveURL(/\/dashboard$/);
   });
