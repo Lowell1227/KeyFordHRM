@@ -127,6 +127,7 @@ describe('AuthService test quick login', () => {
       user: {
         id: 'test-manager-id',
         name: '测试·周强明',
+        status: 'active',
         sysRole: 'employee',
         systemPermission: 'standard_user',
         canViewAll: false,
@@ -152,6 +153,7 @@ describe('AuthService current user capabilities', () => {
 
     await expect(service.getMe(eligibleUser.id)).resolves.toMatchObject({
       id: eligibleUser.id,
+      status: 'active',
       systemPermission: 'standard_user',
       businessCapabilities: expect.objectContaining({ canManageTeam: true }),
     });

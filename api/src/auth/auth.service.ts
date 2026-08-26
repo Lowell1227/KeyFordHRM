@@ -28,6 +28,7 @@ export interface LoginResponse {
   user: {
     id: string;
     name: string;
+    status: UserStatus;
     sysRole: string;
     systemPermission: SystemPermission;
     deptId: string | null;
@@ -191,6 +192,7 @@ export class AuthService {
       deptName: user.dept?.name ?? null,
       deptPath: user.dept?.fullPath ?? null,
       position: user.position,
+      status: user.status,
       sysRole: user.sysRole,
       systemPermission: toSystemPermission(user.sysRole),
       isAssessorOnly: user.isAssessorOnly,
@@ -281,6 +283,7 @@ export class AuthService {
       user: {
         id: user.id,
         name: user.name,
+        status: user.status,
         sysRole: user.sysRole,
         systemPermission: toSystemPermission(user.sysRole),
         deptId: user.deptId,
