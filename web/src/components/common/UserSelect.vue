@@ -17,6 +17,7 @@ const props = withDefaults(
     sysRole?: SysRole;
     disabledIds?: string[];
     clearable?: boolean;
+    includeTestAccounts?: boolean;
   }>(),
   { multiple: false, placeholder: '搜索姓名 / 工号', clearable: true },
 );
@@ -65,6 +66,7 @@ async function search(keyword: string) {
       keyword: keyword.trim() || undefined,
       status: props.status,
       sysRole: props.sysRole,
+      includeTestAccounts: props.includeTestAccounts,
     });
     if (requestId !== searchRequestId) return;
     replaceSearchOptions(res.items);

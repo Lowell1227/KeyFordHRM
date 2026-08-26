@@ -79,6 +79,7 @@ export type SystemPermission = 'standard_user' | 'hr_admin' | 'system_admin';
 export interface CurrentUser {
   id: string;
   name: string;
+  status?: UserStatus;
   employeeNo?: string;
   phone?: string;
   deptId: string | null;
@@ -154,6 +155,7 @@ export interface UserQuery {
   employmentType?: EmploymentType;
   sysRole?: SysRole;
   keyword?: string;
+  includeTestAccounts?: boolean;
 }
 
 export interface UpdateUserSettingsBody {
@@ -475,7 +477,7 @@ export interface UpdateDeadlinesBody {
   deadlinePublish?: string;
 }
 
-/** @deprecated 旧版 update 接口（PUT /cycles/:id）已不存在，保留类型避免引用报错。 */
+/** PATCH /cycles/:id 更新草稿周期请求体。 */
 export type UpdateCycleBody = Partial<CreateCycleBody>;
 
 export interface AssessmentTemplateSnapshot {

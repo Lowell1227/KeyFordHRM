@@ -4,6 +4,7 @@ import type {
   AssessmentCycle,
   CycleQuery,
   CreateCycleBody,
+  UpdateCycleBody,
   UpdateDeadlinesBody,
   PublishResultsBody,
   PublishResultsResult,
@@ -47,6 +48,11 @@ export const cyclesApi = {
   /** POST /cycles — 创建周期（限 hr/system_admin） */
   create(body: CreateCycleBody): Promise<AssessmentCycle> {
     return apiPost('/cycles', body);
+  },
+
+  /** PATCH /cycles/:id — 更新草稿周期完整计划（限 hr/system_admin） */
+  update(id: string, body: UpdateCycleBody): Promise<AssessmentCycle> {
+    return apiPatch(`/cycles/${id}`, body);
   },
 
   /** DELETE /cycles/:id — 删除草稿周期（限 hr/system_admin） */

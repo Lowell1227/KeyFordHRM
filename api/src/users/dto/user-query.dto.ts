@@ -1,6 +1,7 @@
-import { IsOptional, IsUUID, IsEnum, IsString } from 'class-validator';
+import { IsOptional, IsUUID, IsEnum, IsString, IsBoolean } from 'class-validator';
 import { UserStatus, EmploymentType, SysRole } from '@prisma/client';
 import { PaginationDto } from '../../common/dto/pagination.dto';
+import { Transform } from 'class-transformer';
 
 export class UserQueryDto extends PaginationDto {
   @IsOptional()
@@ -22,4 +23,9 @@ export class UserQueryDto extends PaginationDto {
   @IsOptional()
   @IsString()
   keyword?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  includeTestAccounts?: boolean;
 }

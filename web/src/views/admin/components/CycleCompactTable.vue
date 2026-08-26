@@ -16,6 +16,7 @@ defineProps<{
 const emit = defineEmits<{
   open: [cycle: AssessmentCycle];
   primary: [cycle: AssessmentCycle];
+  'edit-cycle': [cycle: AssessmentCycle];
   'edit-deadlines': [cycle: AssessmentCycle];
   'cancel-schedule': [cycle: AssessmentCycle];
   'notification-mode': [cycle: AssessmentCycle];
@@ -65,6 +66,7 @@ function formatNextTime(value?: string): string {
 }
 
 function handleMore(command: string, cycle: AssessmentCycle) {
+  if (command === 'edit-cycle') emit('edit-cycle', cycle);
   if (command === 'deadlines') emit('edit-deadlines', cycle);
   if (command === 'cancel-schedule') emit('cancel-schedule', cycle);
   if (command === 'notification-mode') emit('notification-mode', cycle);
@@ -143,8 +145,15 @@ function notificationLabel(cycle: AssessmentCycle): string {
             <template #dropdown>
               <el-dropdown-menu>
                 <el-dropdown-item
+                  v-if="(row as AssessmentCycle).status === 'draft'"
+                  command="edit-cycle"
+                >
+                  编辑周期
+                </el-dropdown-item>
+                <el-dropdown-item
                   command="deadlines"
                   :disabled="['scheduled', 'launch_blocked'].includes((row as AssessmentCycle).status)"
+                  divided
                 >
                   修改截止日
                 </el-dropdown-item>
@@ -217,8 +226,15 @@ function notificationLabel(cycle: AssessmentCycle): string {
           <template #dropdown>
             <el-dropdown-menu>
               <el-dropdown-item
+                v-if="cycle.status === 'draft'"
+                command="edit-cycle"
+              >
+                编辑周期
+              </el-dropdown-item>
+              <el-dropdown-item
                 command="deadlines"
                 :disabled="['scheduled', 'launch_blocked'].includes(cycle.status)"
+                divided
               >
                 修改截止日
               </el-dropdown-item>

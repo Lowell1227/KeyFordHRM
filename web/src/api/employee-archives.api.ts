@@ -145,6 +145,10 @@ export const employeeArchivesApi = {
     return http.patch(`/employee-archives/${userId}/dingtalk-binding`, { enabled, reason }) as unknown as Promise<unknown>;
   },
 
+  updateProfile(userId: string, body: { phone?: string | null; gender?: string | null }): Promise<EmployeeDataReview> {
+    return http.patch(`/employee-archives/${userId}/profile`, body) as unknown as Promise<EmployeeDataReview>;
+  },
+
   previewRoster(file: File, mode: EmployeeRosterImportMode): Promise<EmployeeRosterPreviewResult> {
     const form = new FormData();
     form.append('file', file);

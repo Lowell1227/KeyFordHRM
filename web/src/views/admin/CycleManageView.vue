@@ -156,6 +156,8 @@ const initialPage = Number(route.query.page);
 if (Number.isInteger(initialPage) && initialPage > 0) page.value = initialPage;
 
 const createDialogVisible = ref(false);
+const editingCycleId = ref<string | null>(null);
+const isEditMode = computed(() => Boolean(editingCycleId.value));
 const advancedCreateVisible = ref(false);
 const advancedCreateSections = ref<string[]>([]);
 const createScheduleCustomized = ref(false);
@@ -275,6 +277,7 @@ const canOpenImmediately = computed(() => {
 });
 
 function resetCreateForm() {
+  editingCycleId.value = null;
   advancedCreateVisible.value = false;
   advancedCreateSections.value = [];
   createScheduleCustomized.value = false;
@@ -304,6 +307,7 @@ function resetCreateForm() {
   createForm.gradeDMaxRatio = 10;
   createForm.publishVisibleFields = { ...DEFAULT_VISIBLE_FIELDS };
   createFormRef.value?.resetFields?.();
+  createPeriodRange.value = null;
   applyCycleTypePreset('quarterly');
   createInitialSnapshot.value = createFormSnapshot();
 }
@@ -389,6 +393,39 @@ function applyDefaultCreateSchedule() {
 
 function openCreateDialog() {
   resetCreateForm();
+  if (!notificationSettings.value) void loadNotificationSettings();
+  createDialogVisible.value = true;
+}
+
+function openEditCycle(cycle: AssessmentCycle) {
+  resetCreateForm();
+  editingCycleId.value = cycle.id;
+  createForm.name = cycle.name;
+  createForm.type = cycle.type;
+  createForm.startDate = toDate(cycle.startDate);
+  createForm.endDate = toDate(cycle.endDate);
+  createPeriodRange.value = createForm.startDate && createForm.endDate ? [createForm.startDate, createForm.endDate] : null;
+  createForm.goalSettingOpenAt = toDate(cycle.goalSettingOpenAt);
+  createForm.selfEvalOpenAt = toDate(cycle.selfEvalOpenAt);
+  createForm.hrOwnerId = cycle.hrOwnerId;
+  createForm.participantScope = (cycle.participantDeptIds?.length ?? 0) > 0 ? 'departments' : 'all';
+  createForm.participantDeptIds = [...(cycle.participantDeptIds ?? [])];
+  createForm.participantUserIds = [...(cycle.participantUserIds ?? [])];
+  createForm.explicitExemptUserIds = [...(cycle.explicitExemptUserIds ?? [])];
+  createForm.notificationMode = cycle.notificationMode ?? 'off';
+  createForm.gradeAMaxRatio = Math.round((cycle.gradeAMaxRatio ?? 0.2) * 100);
+  createForm.gradeBMaxRatio = Math.round((cycle.gradeBMaxRatio ?? 0.4) * 100);
+  createForm.gradeCMaxRatio = Math.round((cycle.gradeCMaxRatio ?? 0.3) * 100);
+  createForm.gradeDMaxRatio = Math.round((cycle.gradeDMaxRatio ?? 0.1) * 100);
+  createForm.publishVisibleFields = { ...DEFAULT_VISIBLE_FIELDS, ...(cycle.publishVisibleFields ?? {}) };
+  DEADLINE_FIELDS.forEach(({ key }) => {
+    createForm[key] = toDate(cycle[key]);
+  });
+  createNameCustomized.value = true;
+  createScheduleCustomized.value = true;
+  advancedCreateVisible.value = true;
+  advancedCreateSections.value = ['participants', 'schedule', 'grades', 'publication'];
+  createInitialSnapshot.value = createFormSnapshot();
   if (!notificationSettings.value) void loadNotificationSettings();
   createDialogVisible.value = true;
 }
@@ -585,13 +622,24 @@ async function handleCreate(runPreflight = false) {
 
   submitting.value = true;
   try {
-    const created = await cyclesApi.create(buildCreateBody());
-    ElMessage.success(runPreflight ? '周期草稿已保存，正在进入发起前检查' : '周期草稿已保存');
-    createDialogVisible.value = false;
-    resetCreateForm();
-    await loadCycles();
-    if (runPreflight) {
-      await openCycleWorkspace(created, true);
+    if (isEditMode.value && editingCycleId.value) {
+      const updated = await cyclesApi.update(editingCycleId.value, buildCreateBody());
+      ElMessage.success(runPreflight ? '周期已更新，正在进入发起前检查' : '周期已更新');
+      createDialogVisible.value = false;
+      resetCreateForm();
+      await loadCycles();
+      if (runPreflight) {
+        await openCycleWorkspace(updated, true);
+      }
+    } else {
+      const created = await cyclesApi.create(buildCreateBody());
+      ElMessage.success(runPreflight ? '周期草稿已保存，正在进入发起前检查' : '周期草稿已保存');
+      createDialogVisible.value = false;
+      resetCreateForm();
+      await loadCycles();
+      if (runPreflight) {
+        await openCycleWorkspace(created, true);
+      }
     }
   } catch {
     // 写请求失败已由 HTTP 拦截器显示后端业务文案，这里只负责收起 loading。
@@ -1065,6 +1113,7 @@ onMounted(() => {
         :deleting-id="deletingId"
         @open="handleView"
         @primary="handlePrimaryCycleAction"
+        @edit-cycle="openEditCycle"
         @edit-deadlines="openEditDeadlines"
         @cancel-schedule="handleCancelSchedule"
         @notification-mode="openNotificationModeDialog"
@@ -1097,12 +1146,12 @@ onMounted(() => {
       </div>
     </ChartCard>
 
-    <!-- 新建周期 -->
+    <!-- 新建/编辑周期 -->
     <el-dialog
       v-model="createDialogVisible"
       class="cycle-create-dialog"
       data-testid="cycle-create-dialog"
-      title="创建绩效周期"
+      :title="isEditMode ? '编辑绩效周期' : '创建绩效周期'"
       width="760px"
       destroy-on-close
       :before-close="handleCreateBeforeClose"
@@ -1250,12 +1299,12 @@ onMounted(() => {
               <el-row :gutter="16">
                 <el-col v-if="createForm.participantScope === 'departments'" :span="12">
                   <el-form-item label="额外参与人员">
-                    <UserSelect v-model="createForm.participantUserIds" multiple status="active" placeholder="按需补充参与人员" />
+                    <UserSelect v-model="createForm.participantUserIds" multiple include-test-accounts placeholder="按需补充参与人员" />
                   </el-form-item>
                 </el-col>
                 <el-col :span="createForm.participantScope === 'departments' ? 12 : 24">
                   <el-form-item label="明确豁免人员">
-                    <UserSelect v-model="createForm.explicitExemptUserIds" multiple status="active" placeholder="按需设置本周期豁免" />
+                    <UserSelect v-model="createForm.explicitExemptUserIds" multiple include-test-accounts placeholder="按需设置本周期豁免" />
                   </el-form-item>
                 </el-col>
               </el-row>
@@ -1371,9 +1420,25 @@ onMounted(() => {
           <p data-testid="cycle-create-impact-hint">{{ createNotificationHint }}</p>
           <div>
             <el-button @click="requestCloseCreateDialog">取消</el-button>
-            <el-button data-testid="cycle-create-save-draft" :loading="submitting" @click="handleCreate(false)">仅保存草稿</el-button>
-            <el-button data-testid="cycle-create-and-check" type="primary" :loading="submitting" @click="handleCreate(true)">
-              保存并检查
+            <el-button
+              v-if="!isEditMode"
+              data-testid="cycle-create-save-draft"
+              :loading="submitting"
+              @click="handleCreate(false)"
+            >仅保存草稿</el-button>
+            <el-button
+              v-else
+              data-testid="cycle-update-save"
+              :loading="submitting"
+              @click="handleCreate(false)"
+            >保存</el-button>
+            <el-button
+              data-testid="cycle-create-and-check"
+              type="primary"
+              :loading="submitting"
+              @click="handleCreate(true)"
+            >
+              {{ isEditMode ? '保存并检查' : '保存并检查' }}
             </el-button>
           </div>
         </div>

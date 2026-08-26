@@ -5,6 +5,7 @@ import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { PaginationDto, paginated } from '@/common/dto/pagination.dto';
 import { CreateCycleDto } from './dto/create-cycle.dto';
+import { UpdateCycleDto } from './dto/update-cycle.dto';
 import { UpdateDeadlinesDto } from './dto/update-deadlines.dto';
 import { CycleQueryDto, CycleStatusGroup } from './dto/cycle-query.dto';
 import type { CycleNotificationMode } from './dto/update-cycle-notification-mode.dto';
@@ -165,6 +166,85 @@ export class CyclesService {
         },
       });
       return { id: cycle.id };
+    });
+  }
+
+  /** PATCH /cycles/:id — 仅允许修改草稿周期的完整计划。 */
+  async updateDraft(id: string, dto: UpdateCycleDto, user: AuthUser) {
+    return this.prisma.$transaction(async (tx) => {
+      const cycle = await tx.assessmentCycle.findUnique({ where: { id } });
+      if (!cycle) {
+        throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
+      }
+      if (cycle.status !== CycleStatus.draft) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '仅草稿状态的周期可以编辑完整计划',
+        });
+      }
+
+      const goalSettingOpenAt = dto.goalSettingOpenAt ?? cycle.goalSettingOpenAt;
+      const selfEvalOpenAt = dto.selfEvalOpenAt ?? cycle.selfEvalOpenAt;
+      const startDate = dto.startDate ?? cycle.startDate;
+      const endDate = dto.endDate ?? cycle.endDate;
+      if (goalSettingOpenAt && selfEvalOpenAt) {
+        this.validateCycleDates(
+          {
+            startDate,
+            endDate,
+            deadlineIndicatorSetting: dto.deadlineIndicatorSetting ?? cycle.deadlineIndicatorSetting ?? undefined,
+            deadlineIndicatorConfirm: dto.deadlineIndicatorConfirm ?? cycle.deadlineIndicatorConfirm ?? undefined,
+            deadlineSelfEval: dto.deadlineSelfEval ?? cycle.deadlineSelfEval ?? undefined,
+            deadlineManagerScore: dto.deadlineManagerScore ?? cycle.deadlineManagerScore ?? undefined,
+            deadlineHrCalibration: dto.deadlineHrCalibration ?? cycle.deadlineHrCalibration ?? undefined,
+            deadlineApproval: dto.deadlineApproval ?? cycle.deadlineApproval ?? undefined,
+            deadlinePublish: dto.deadlinePublish ?? cycle.deadlinePublish ?? undefined,
+          } as CreateCycleDto,
+          goalSettingOpenAt,
+          selfEvalOpenAt,
+        );
+      }
+
+      const hrOwnerId = dto.hrOwnerId !== undefined
+        ? await this.resolveHrOwnerId(dto.hrOwnerId, user)
+        : cycle.hrOwnerId;
+
+      const data: Prisma.AssessmentCycleUpdateInput = {
+        ...(dto.name !== undefined && { name: dto.name }),
+        ...(dto.type !== undefined && { type: dto.type }),
+        ...(dto.startDate !== undefined && { startDate: dto.startDate }),
+        ...(dto.endDate !== undefined && { endDate: dto.endDate }),
+        ...(dto.goalSettingOpenAt !== undefined && { goalSettingOpenAt: dto.goalSettingOpenAt }),
+        ...(dto.selfEvalOpenAt !== undefined && { selfEvalOpenAt: dto.selfEvalOpenAt }),
+        ...(dto.notificationMode !== undefined && { notificationMode: dto.notificationMode }),
+        ...(dto.participantDeptIds !== undefined && { participantDeptIds: dto.participantDeptIds }),
+        ...(dto.participantUserIds !== undefined && { participantUserIds: dto.participantUserIds }),
+        ...(dto.explicitExemptUserIds !== undefined && { explicitExemptUserIds: dto.explicitExemptUserIds }),
+        ...(dto.publishVisibleFields !== undefined && { publishVisibleFields: dto.publishVisibleFields }),
+        ...(dto.gradeAMaxRatio !== undefined && { gradeAMaxRatio: new Prisma.Decimal(dto.gradeAMaxRatio) }),
+        ...(dto.gradeBMaxRatio !== undefined && { gradeBMaxRatio: new Prisma.Decimal(dto.gradeBMaxRatio) }),
+        ...(dto.gradeCMaxRatio !== undefined && { gradeCMaxRatio: new Prisma.Decimal(dto.gradeCMaxRatio) }),
+        ...(dto.gradeDMaxRatio !== undefined && { gradeDMaxRatio: new Prisma.Decimal(dto.gradeDMaxRatio) }),
+        ...(dto.deadlineIndicatorSetting !== undefined && { deadlineIndicatorSetting: dto.deadlineIndicatorSetting }),
+        ...(dto.deadlineIndicatorConfirm !== undefined && { deadlineIndicatorConfirm: dto.deadlineIndicatorConfirm }),
+        ...(dto.deadlineSelfEval !== undefined && { deadlineSelfEval: dto.deadlineSelfEval }),
+        ...(dto.deadlineManagerScore !== undefined && { deadlineManagerScore: dto.deadlineManagerScore }),
+        ...(dto.deadlineHrCalibration !== undefined && { deadlineHrCalibration: dto.deadlineHrCalibration }),
+        ...(dto.deadlineApproval !== undefined && { deadlineApproval: dto.deadlineApproval }),
+        ...(dto.deadlinePublish !== undefined && { deadlinePublish: dto.deadlinePublish }),
+      };
+
+      const updated = await tx.assessmentCycle.update({ where: { id }, data });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: 'cycle_draft_updated',
+          entityType: 'assessment_cycle',
+          entityId: id,
+          newValue: { name: updated.name, type: updated.type, status: updated.status },
+        },
+      });
+      return updated;
     });
   }
 

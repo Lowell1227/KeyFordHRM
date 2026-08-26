@@ -6,6 +6,7 @@ import { AuthUser } from '@/common/types/auth.types';
 import { CyclesService } from './cycles.service';
 import { LaunchService } from './launch.service';
 import { CreateCycleDto } from './dto/create-cycle.dto';
+import { UpdateCycleDto } from './dto/update-cycle.dto';
 import { UpdateDeadlinesDto } from './dto/update-deadlines.dto';
 import { CycleQueryDto } from './dto/cycle-query.dto';
 import { LaunchCycleDto, ScheduleCycleDto } from './dto/launch-cycle.dto';
@@ -44,6 +45,16 @@ export class CyclesController {
   @Roles(SysRole.hr, SysRole.system_admin)
   remove(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
     return this.cyclesService.remove(id, user);
+  }
+
+  @Patch(':id')
+  @Roles(SysRole.hr, SysRole.system_admin)
+  update(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: UpdateCycleDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.cyclesService.updateDraft(id, dto, user);
   }
 
   @Patch(':id/deadlines')

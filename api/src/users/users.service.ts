@@ -111,7 +111,9 @@ export class UsersService {
   async findAll(dto: UserQueryDto, viewer: AuthUser): Promise<Paginated<UserListItem>> {
     const where: Prisma.UserWhereInput = {
       deletedAt: null,
-      accountType: AccountType.employee,
+      ...(dto.includeTestAccounts
+        ? { accountType: { in: [AccountType.employee, AccountType.test] } }
+        : { accountType: AccountType.employee }),
     };
 
     // 部门过滤（含子部门）

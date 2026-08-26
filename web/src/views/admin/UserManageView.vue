@@ -26,11 +26,13 @@ import { usersApi } from '@/api/users.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
+import { formatBusinessIdentityLabel } from '@/components/layout/business-identity';
 import { useAuthStore } from '@/stores/auth.store';
 import type { BusinessIdentity, Department, SystemPermission, User as ManagedUser, UserQuery } from '@/types/api.types';
 import type { SysRole, UserStatus } from '@/types/enums';
 import { formatDate, formatDateTime } from '@/utils/date';
 import { isTopLevelDepartmentLeader } from '@/utils/organization-relations';
+import { formatPersonnelIdentityLabel } from '@/utils/personnel-identity';
 
 const auth = useAuthStore();
 
@@ -121,7 +123,7 @@ function systemPermissionLabel(user: Pick<ManagedUser, 'sysRole' | 'systemPermis
 }
 
 function businessIdentityText(identity: BusinessIdentity): string {
-  return `${identity.label}（${identity.count}）`;
+  return formatBusinessIdentityLabel(identity);
 }
 
 const statusOptions: { label: string; value: UserStatus }[] = [
@@ -592,19 +594,58 @@ const employeeArchiveDrawer = ref({
   visible: false,
   loading: false,
   dingtalkSaving: false,
+  profileSaving: false,
+  editing: false,
   data: null as EmployeeArchive | null,
+});
+
+const archiveEditDraft = ref({
+  phone: '',
+  gender: '',
 });
 
 async function openEmployeeArchive(row: ManagedUser) {
   employeeArchiveDrawer.value.visible = true;
   employeeArchiveDrawer.value.loading = true;
   employeeArchiveDrawer.value.data = null;
+  employeeArchiveDrawer.value.editing = false;
   try {
     employeeArchiveDrawer.value.data = await employeeArchivesApi.getArchive(row.id);
   } catch {
     employeeArchiveDrawer.value.visible = false;
   } finally {
     employeeArchiveDrawer.value.loading = false;
+  }
+}
+
+function startArchiveEdit() {
+  const data = employeeArchiveDrawer.value.data;
+  if (!data) return;
+  archiveEditDraft.value.phone = data.employeeProfile?.phone ?? '';
+  archiveEditDraft.value.gender = data.employeeProfile?.gender ?? '';
+  employeeArchiveDrawer.value.editing = true;
+}
+
+function cancelArchiveEdit() {
+  employeeArchiveDrawer.value.editing = false;
+}
+
+async function saveArchiveProfile() {
+  const data = employeeArchiveDrawer.value.data;
+  if (!data) return;
+  employeeArchiveDrawer.value.profileSaving = true;
+  try {
+    await employeeArchivesApi.updateProfile(data.id, {
+      phone: archiveEditDraft.value.phone.trim() || null,
+      gender: archiveEditDraft.value.gender.trim() || null,
+    });
+    ElMessage.success('档案信息已提交 HR 审核');
+    employeeArchiveDrawer.value.editing = false;
+    employeeArchiveDrawer.value.data = await employeeArchivesApi.getArchive(data.id);
+  } catch {
+    // 由 HTTP 拦截器展示错误
+  } finally {
+    employeeArchiveDrawer.value.profileSaving = false;
   }
 }
 
@@ -690,6 +731,7 @@ const personSettingsDialog = ref({
   userName: '',
   deptName: '',
   position: '',
+  status: 'active' as UserStatus,
   originalDirectManagerId: undefined as string | undefined,
   directManagerId: undefined as string | undefined,
   originalSysRole: 'employee' as SysRole,
@@ -709,6 +751,7 @@ function openPersonSettingsDialog(row: ManagedUser) {
     userName: row.name,
     deptName: row.deptName || '未分配部门',
     position: row.position || '未设置岗位',
+    status: row.status,
     originalDirectManagerId: row.directManagerId ?? undefined,
     directManagerId: row.directManagerId ?? undefined,
     originalSysRole: normalizeSystemRole(row),
@@ -1143,7 +1186,7 @@ onMounted(async () => {
                 <el-tag v-if="(row as ManagedUser).canViewAll" size="small" type="info" effect="plain">全量只读</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="业务身份" min-width="220">
+            <el-table-column label="业务职责" min-width="220">
               <template #default="{ row }">
                 <div v-if="(row as ManagedUser).businessIdentities?.length" class="business-identity-tags">
                   <el-tag
@@ -1155,7 +1198,7 @@ onMounted(async () => {
                     {{ businessIdentityText(identity) }}
                   </el-tag>
                 </div>
-                <span v-else class="muted-text">无业务责任</span>
+                <span v-else class="muted-text">无额外业务职责</span>
               </template>
             </el-table-column>
             <el-table-column label="绩效直属上级" min-width="140">
@@ -1261,7 +1304,7 @@ onMounted(async () => {
               <el-tag v-if="(row as ManagedUser).canViewAll" size="small" type="info" effect="plain">全量只读</el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="业务身份" min-width="220">
+          <el-table-column label="业务职责" min-width="220">
             <template #default="{ row }">
               <div v-if="(row as ManagedUser).businessIdentities?.length" class="business-identity-tags">
                 <el-tag
@@ -1273,7 +1316,7 @@ onMounted(async () => {
                   {{ businessIdentityText(identity) }}
                 </el-tag>
               </div>
-              <span v-else class="muted-text">无业务责任</span>
+              <span v-else class="muted-text">无额外业务职责</span>
             </template>
           </el-table-column>
           <el-table-column label="钉钉登录" width="130">
@@ -1572,10 +1615,51 @@ onMounted(async () => {
                 <h3>个人与教育信息</h3>
                 <span>默认仅展示普通档案字段，身份证和银行账户不在普通查询中返回</span>
               </div>
+              <el-button
+                v-if="!employeeArchiveDrawer.editing"
+                type="primary"
+                size="small"
+                @click="startArchiveEdit"
+              >
+                编辑档案
+              </el-button>
+              <div v-else class="archive-edit-actions">
+                <el-button size="small" @click="cancelArchiveEdit">取消</el-button>
+                <el-button
+                  type="primary"
+                  size="small"
+                  :loading="employeeArchiveDrawer.profileSaving"
+                  @click="saveArchiveProfile"
+                >
+                  保存
+                </el-button>
+              </div>
             </div>
             <div class="employee-archive__facts">
-              <div><span>手机号</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.phone || '未填写' }}</strong></div>
-              <div><span>性别</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.gender || '未填写' }}</strong></div>
+              <div>
+                <span>手机号</span>
+                <el-input
+                  v-if="employeeArchiveDrawer.editing"
+                  v-model="archiveEditDraft.phone"
+                  placeholder="请输入手机号"
+                  size="small"
+                />
+                <strong v-else>{{ employeeArchiveDrawer.data.employeeProfile?.phone || '未填写' }}</strong>
+              </div>
+              <div>
+                <span>性别</span>
+                <el-select
+                  v-if="employeeArchiveDrawer.editing"
+                  v-model="archiveEditDraft.gender"
+                  placeholder="请选择性别"
+                  size="small"
+                  style="width: 100%"
+                >
+                  <el-option label="男" value="男" />
+                  <el-option label="女" value="女" />
+                </el-select>
+                <strong v-else>{{ employeeArchiveDrawer.data.employeeProfile?.gender || '未填写' }}</strong>
+              </div>
               <div><span>出生日期</span><strong>{{ formatDate(employeeArchiveDrawer.data.employeeProfile?.birthDate) }}</strong></div>
               <div><span>民族</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.ethnicity || '未填写' }}</strong></div>
               <div><span>学历</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.education || '未填写' }}</strong></div>
@@ -1801,6 +1885,13 @@ onMounted(async () => {
         <div class="person-settings__summary-content">
           <div class="person-settings__summary-title">
             <strong>{{ personSettingsDialog.userName }}</strong>
+            <el-tag
+              size="small"
+              :type="statusTagType[personSettingsDialog.status]"
+              effect="plain"
+            >
+              {{ formatPersonnelIdentityLabel(personSettingsDialog.status) }}
+            </el-tag>
             <el-tag size="small" type="info" effect="plain">{{ personSettingsDialog.position }}</el-tag>
             <el-select
               v-if="isSystemAdmin"
@@ -1813,10 +1904,14 @@ onMounted(async () => {
             </el-select>
             <el-tag v-else size="small" effect="plain">{{ roleLabels[personSettingsDialog.sysRole] }}</el-tag>
             <el-tag v-if="personSettingsDialog.canViewAll" size="small" type="info" effect="plain">全量只读</el-tag>
-            <el-tooltip
-              content="岗位来自 HRM 当前有效任职记录；系统权限由系统管理员维护。“全量只读”只扩大查看范围，不授予业务审批或处理权限。"
-              placement="top"
-            >
+            <el-tooltip placement="top">
+              <template #content>
+                <div class="person-settings__tooltip-content">
+                  <div class="person-settings__tooltip-line"><strong>岗位：</strong>来自当前有效任职记录。</div>
+                  <div class="person-settings__tooltip-line"><strong>系统权限：</strong>由系统管理员维护。</div>
+                  <div class="person-settings__tooltip-line"><strong>全量只读：</strong>只扩大查看范围，不授予业务审批或处理权限。</div>
+                </div>
+              </template>
               <button type="button" class="person-settings__help" aria-label="岗位和系统权限说明">
                 <el-icon><QuestionFilled /></el-icon>
               </button>
@@ -1830,10 +1925,15 @@ onMounted(async () => {
           <template #label>
             <span class="person-settings__label">
               绩效直属上级
-              <el-tooltip
-                content="用于绩效目标审核、主管评分和待办归属；与花名册直属主管相互独立。变更提交后由 HR 在“员工名册 > 待审核变更”中审核；审核通过前原关系继续生效，且不会改变岗位或系统权限。"
-                placement="top"
-              >
+              <el-tooltip placement="top">
+                <template #content>
+                  <div class="person-settings__tooltip-content">
+                    <div class="person-settings__tooltip-line"><strong>作用：</strong>用于目标审核、主管评分和待办归属。</div>
+                    <div class="person-settings__tooltip-line"><strong>区别：</strong>与花名册“直属主管”相互独立。</div>
+                    <div class="person-settings__tooltip-line"><strong>审核：</strong>由 HR 在“员工名册 → 待审核变更”中处理。</div>
+                    <div class="person-settings__tooltip-line"><strong>生效：</strong>审核通过前继续使用原关系，不改变岗位或系统权限。</div>
+                  </div>
+                </template>
                 <button type="button" class="person-settings__help" aria-label="绩效直属上级说明">
                   <el-icon><QuestionFilled /></el-icon>
                 </button>
@@ -1859,9 +1959,16 @@ onMounted(async () => {
         <el-form-item>
           <template #label>
             <span class="person-settings__label">
-              当前业务身份
-              <el-tooltip content="由组织关系和当前业务记录自动计算，不能在这里手工指定。" placement="top">
-                <button type="button" class="person-settings__help" aria-label="业务身份说明">
+              当前业务职责
+              <el-tooltip placement="top">
+                <template #content>
+                  <div class="person-settings__tooltip-content">
+                    <div class="person-settings__tooltip-line"><strong>人员身份：</strong>员工是基础人员身份，不会额外赋权。</div>
+                    <div class="person-settings__tooltip-line"><strong>业务职责：</strong>根据组织关系和当前业务记录自动计算。</div>
+                    <div class="person-settings__tooltip-line"><strong>职责数量：</strong>表示当前负责的关系或业务事项，不等同于下属人数。</div>
+                  </div>
+                </template>
+                <button type="button" class="person-settings__help" aria-label="业务职责说明">
                   <el-icon><QuestionFilled /></el-icon>
                 </button>
               </el-tooltip>
@@ -1878,7 +1985,7 @@ onMounted(async () => {
                 {{ businessIdentityText(identity) }}
               </el-tag>
             </div>
-            <span v-else>无业务责任</span>
+            <span v-else>无额外业务职责</span>
           </div>
         </el-form-item>
       </el-form>
@@ -1941,6 +2048,17 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.archive-edit-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.employee-archive__facts .el-input,
+.employee-archive__facts .el-select {
+  margin-top: 5px;
 }
 
 .roster-import__alert {
@@ -2841,6 +2959,20 @@ onMounted(async () => {
   color: #2f63ff;
   background: #eef3ff;
   outline: none;
+}
+
+.person-settings__tooltip-content {
+  display: grid;
+  gap: 6px;
+  max-width: 340px;
+}
+
+.person-settings__tooltip-line {
+  line-height: 1.55;
+}
+
+.person-settings__tooltip-line strong {
+  color: #fff;
 }
 
 .person-settings__label {
