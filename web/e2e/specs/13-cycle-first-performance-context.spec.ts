@@ -916,6 +916,7 @@ test.describe('employee self-evaluation soft guide', () => {
 
     await expect(cards.nth(1).getByTestId('self-eval-card-toggle')).toHaveAttribute('aria-expanded', 'true');
     await expect(cards.nth(1).getByText('请填写 0-100 分的自评分')).toBeVisible();
+    await expect(cards.nth(1).getByPlaceholder('0-100')).toBeFocused();
     expect(submitRequests).toBe(0);
 
     await cards.nth(1).getByPlaceholder('0-100').fill('88');
@@ -971,6 +972,31 @@ test.describe('employee self-evaluation soft guide', () => {
     await expect(page.getByText('自评尚未提交，实际完成信息已保存，请稍后重试')).toBeVisible();
     await expect(page.locator('.el-message')).toHaveCount(1, { timeout: 1_000 });
     await expect(page.getByTestId('self-eval-draft-status')).toContainText('当前设备');
+  });
+
+  test('keeps one clear error when final self-evaluation returns a business-code failure', async ({ page }) => {
+    const detail = selfEvalTaskDetail();
+    await mockTaskCycleShell(page, [cycle('current', '2026-07-01', '2026-09-30')], [], [], detail);
+    await page.route('**/api/v1/tasks/self-eval-task-1/actual-value', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ success: true })),
+    }));
+    await page.route('**/api/v1/tasks/self-eval-task-1/self-eval', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({ code: 5001, message: 'temporary failure', data: null, timestamp: Date.now() }),
+    }));
+
+    await page.goto('/tasks/self-eval-task-1?stage=self-eval');
+    const cards = page.getByTestId('self-eval-card');
+    await cards.nth(0).getByPlaceholder('填写关键结果或完成比例').fill('完成 95%');
+    await cards.nth(0).getByPlaceholder('0-100').fill('92');
+    await cards.nth(1).getByTestId('self-eval-card-toggle').click();
+    await cards.nth(1).getByPlaceholder('0-100').fill('88');
+    await page.getByRole('button', { name: '检查并提交' }).click();
+    await page.getByRole('dialog', { name: '提交前检查' }).getByRole('button', { name: '确认提交' }).click();
+
+    await expect(page.getByText('自评尚未提交，实际完成信息已保存，请稍后重试')).toBeVisible();
+    await expect(page.locator('.el-message')).toHaveCount(1, { timeout: 1_000 });
   });
 
   test('keeps one clear error and the local draft when actual values cannot be saved', async ({ page }) => {

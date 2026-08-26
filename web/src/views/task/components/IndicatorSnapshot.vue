@@ -886,13 +886,21 @@ function handleReject(reason: string) {
   emit('reject', reason);
 }
 
-function validateSelfEval(): boolean {
+async function focusSelfEvalScoreInput(indicatorId: string) {
+  await nextTick();
+  const container = document.querySelector(`[data-self-eval-score-id="${indicatorId}"]`);
+  const input = container?.querySelector('input');
+  if (input instanceof HTMLInputElement) input.focus();
+}
+
+async function validateSelfEval(): Promise<boolean> {
   selfEvalValidationIds.value = selfEvalRows
     .filter((row) => row.selfScore == null || !isValidScore(row.selfScore))
     .map((row) => row.id);
   if (selfEvalValidationIds.value.length > 0) {
     const firstInvalid = selfEvalRows.find((row) => row.id === selfEvalValidationIds.value[0]);
     activeSelfEvalId.value = firstInvalid?.id ?? '';
+    if (firstInvalid) await focusSelfEvalScoreInput(firstInvalid.id);
     ElMessage.warning(`请先完成${selfEvalValidationIds.value.length}项必填自评分`);
     return false;
   }
@@ -927,13 +935,13 @@ function buildActualValues(): ActualValueItem[] {
     }));
 }
 
-function handleSubmitSelfEval() {
-  if (!validateSelfEval()) return;
+async function handleSubmitSelfEval() {
+  if (!await validateSelfEval()) return;
   emit('submit-self-eval', buildSelfEvalBody(), buildActualValues());
 }
 
 async function handleCheckAndSubmitSelfEval() {
-  if (!validateSelfEval()) return;
+  if (!await validateSelfEval()) return;
   try {
     await ElMessageBox.confirm(
       `${selfEvalRows.length} 项指标均已评分。其他总结内容为选填，确认后将进入主管评分。`,
@@ -1271,7 +1279,12 @@ function handleAttachmentsChange(attachments: Attachment[]) {
                     />
                   </el-form-item>
                   <el-form-item label="自评分（必填）" required>
-                    <ScoreInput v-model="row.selfScore" :disabled="selfEvalReadonly" placeholder="0-100" />
+                    <ScoreInput
+                      :data-self-eval-score-id="row.id"
+                      v-model="row.selfScore"
+                      :disabled="selfEvalReadonly"
+                      placeholder="0-100"
+                    />
                     <span v-if="selfEvalValidationIds.includes(row.id)" class="self-eval-field-error">
                       请填写 0-100 分的自评分
                     </span>

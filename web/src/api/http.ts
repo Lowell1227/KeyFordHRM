@@ -46,8 +46,9 @@ http.interceptors.response.use(
     if (response.config.responseType === 'blob') return response;
 
     const body = response.data as ApiResponse<unknown>;
+    const skipErrorMessage = Boolean(response.config.skipErrorMessage);
     if (body.code !== 0) {
-      ElMessage.error(body.message || '操作失败');
+      if (!skipErrorMessage) ElMessage.error(body.message || '操作失败');
       return Promise.reject(new Error(body.message));
     }
     return body.data;
