@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { MoreFilled } from '@element-plus/icons-vue';
 import type { Objective } from '@/types/api.types';
+import { OBJECTIVE_REVIEW_STATUS_META } from '@/types/enums';
 import type { ObjectiveMapDisplayOptions } from '../objective-map-settings';
 
 const props = defineProps<{
@@ -29,6 +30,14 @@ const ownerLabel = computed(() => (
   props.objective.ownerName || props.objective.deptName || '未指定负责人'
 ));
 
+const reviewMeta = computed(() => OBJECTIVE_REVIEW_STATUS_META[props.objective.reviewStatus]);
+const showReviewBadge = computed(() => props.objective.reviewStatus !== 'not_required');
+const reviewTitle = computed(() => (
+  props.objective.reviewStatus === 'pending' && props.objective.reviewerName
+    ? `待${props.objective.reviewerName}审核`
+    : reviewMeta.value.label
+));
+
 function handleCommand(command: 'edit' | 'progress' | 'track' | 'remove') {
   if (command === 'edit') emit('edit', props.objective);
   if (command === 'progress') emit('progress', props.objective);
@@ -52,6 +61,12 @@ function handleCommand(command: 'edit' | 'progress' | 'track' | 'remove') {
     <div class="objective-map-card__header">
       <span class="objective-map-card__level">{{ levelLabel }}</span>
       <span v-if="display.showOwner" class="objective-map-card__owner">{{ ownerLabel }}</span>
+      <span
+        v-if="showReviewBadge"
+        class="objective-map-card__review"
+        :class="`is-${objective.reviewStatus}`"
+        :title="reviewTitle"
+      >{{ reviewMeta.label }}</span>
       <el-dropdown
         v-if="canManage"
         trigger="click"
@@ -166,6 +181,32 @@ function handleCommand(command: 'edit' | 'progress' | 'track' | 'remove') {
   font-size: 13px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.objective-map-card__review {
+  flex: 0 0 auto;
+  padding: 2px 6px;
+  border-radius: 5px;
+  color: #7a4f00;
+  background: #fff2cf;
+  font-size: 11px;
+  font-weight: 600;
+  line-height: 18px;
+}
+
+.objective-map-card__review.is-approved {
+  color: #237a48;
+  background: #e7f7ee;
+}
+
+.objective-map-card__review.is-changes_requested {
+  color: #b23a42;
+  background: #fdecef;
+}
+
+.objective-map-card__review.is-draft {
+  color: #69758a;
+  background: #eef1f5;
 }
 
 .objective-map-card__more {

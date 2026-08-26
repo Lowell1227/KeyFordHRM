@@ -8,16 +8,19 @@ const props = defineProps<{
   cycleId: string;
   scope: ObjectiveMapScope;
   scopeCounts: Record<ObjectiveMapScope, number>;
+  reviewOnly: boolean;
+  reviewCount: number;
 }>();
 
 const emit = defineEmits<{
   'update:cycleId': [value: string];
   'update:scope': [value: ObjectiveMapScope];
+  'update:reviewOnly': [value: boolean];
 }>();
 
 const scopes: Array<{ key: ObjectiveMapScope; label: string }> = [
   { key: 'mine', label: '我的目标' },
-  { key: 'team', label: '我团队成员的目标' },
+  { key: 'team', label: '下属目标' },
   { key: 'organization', label: '我负责组织的目标' },
   { key: 'other', label: '其他目标' },
 ];
@@ -56,6 +59,19 @@ const scopes: Array<{ key: ObjectiveMapScope; label: string }> = [
       @click="emit('update:scope', item.key)"
     >
       {{ item.label }}
+    </button>
+
+    <span class="objective-map-filters__divider" aria-hidden="true" />
+
+    <button
+      type="button"
+      data-testid="objective-map-review-only"
+      class="objective-map-filters__review"
+      :class="{ 'is-active': reviewOnly }"
+      :aria-pressed="reviewOnly"
+      @click="emit('update:reviewOnly', !reviewOnly)"
+    >
+      待我审核 {{ reviewCount }}
     </button>
   </div>
 </template>
@@ -141,6 +157,31 @@ const scopes: Array<{ key: ObjectiveMapScope; label: string }> = [
 
 .objective-map-filters__scope:focus-visible {
   outline: 2px solid #195dcc;
+  outline-offset: 2px;
+}
+
+.objective-map-filters__review {
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid #f0c36c;
+  border-radius: 6px;
+  color: #9a6400;
+  background: #fff9ec;
+  font: inherit;
+  font-size: 14px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.objective-map-filters__review:hover,
+.objective-map-filters__review.is-active {
+  color: #fff;
+  background: #d99016;
+  border-color: #d99016;
+}
+
+.objective-map-filters__review:focus-visible {
+  outline: 2px solid #a96700;
   outline-offset: 2px;
 }
 

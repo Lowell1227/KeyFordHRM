@@ -103,6 +103,13 @@ export type ObjectiveLevel = 'company' | 'department' | 'individual';
 
 export type ObjectiveStatus = 'draft' | 'active' | 'archived';
 
+export type ObjectiveReviewStatus =
+  | 'draft'
+  | 'pending'
+  | 'approved'
+  | 'changes_requested'
+  | 'not_required';
+
 export type ActionItemStatus = 'todo' | 'in_progress' | 'done' | 'blocked';
 
 export type ConfirmationStatus =
@@ -233,6 +240,14 @@ export const OBJECTIVE_STATUS_META: Record<ObjectiveStatus, { label: string; typ
   draft: { label: '草稿', type: 'info' },
   active: { label: '进行中', type: 'primary' },
   archived: { label: '已归档', type: 'info' },
+};
+
+export const OBJECTIVE_REVIEW_STATUS_META: Record<ObjectiveReviewStatus, { label: string; type: string }> = {
+  draft: { label: '草稿', type: 'info' },
+  pending: { label: '待审核', type: 'warning' },
+  approved: { label: '已通过', type: 'success' },
+  changes_requested: { label: '待修改', type: 'danger' },
+  not_required: { label: '无需审核', type: 'info' },
 };
 
 // 行动项状态标签

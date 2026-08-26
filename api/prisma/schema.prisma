@@ -252,6 +252,16 @@ enum ObjectiveStatus {
   @@map("objective_status")
 }
 
+enum ObjectiveReviewStatus {
+  draft
+  pending
+  approved
+  changes_requested
+  not_required
+
+  @@map("objective_review_status")
+}
+
 enum ActionItemStatus {
   todo
   in_progress
@@ -433,6 +443,7 @@ model User {
   createdConfirmationApplications           ConfirmationApplication[]   @relation("ConfirmationApplicationCreator")
   ownedObjectives                           Objective[]                 @relation("ObjectiveOwner")
   createdObjectives                         Objective[]                 @relation("ObjectiveCreator")
+  reviewedObjectives                        Objective[]                 @relation("ObjectiveReviewer")
   assignedActionItems                       ActionItem[]                @relation("ActionItemAssignee")
   createdActionItems                        ActionItem[]                @relation("ActionItemCreator")
   createdIndicatorProgressUpdates           IndicatorProgressUpdate[]   @relation("IndicatorProgressCreator")
@@ -1396,8 +1407,12 @@ model Objective {
   priority           Int             @default(0)
   progress           Int             @default(0) @db.SmallInt
   status             ObjectiveStatus @default(active)
+  reviewStatus       ObjectiveReviewStatus @default(not_required) @map("review_status")
   relatedIndicatorId String?         @map("related_indicator_id") @db.Uuid
   createdBy          String?         @map("created_by") @db.Uuid
+  reviewedById       String?         @map("reviewed_by_id") @db.Uuid
+  reviewedAt         DateTime?       @map("reviewed_at") @db.Timestamptz(6)
+  reviewComment      String?         @map("review_comment") @db.Text
   createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
 
@@ -1408,6 +1423,7 @@ model Objective {
   cycle                        AssessmentCycle?              @relation(fields: [cycleId], references: [id], onDelete: SetNull)
   relatedIndicator             Indicator?                    @relation(fields: [relatedIndicatorId], references: [id], onDelete: SetNull)
   creator                      User?                         @relation("ObjectiveCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  reviewedBy                   User?                         @relation("ObjectiveReviewer", fields: [reviewedById], references: [id], onDelete: SetNull)
   actionItems                  ActionItem[]
   indicatorObjectiveAlignments IndicatorObjectiveAlignment[]
 
@@ -1417,6 +1433,8 @@ model Objective {
   @@index([parentId])
   @@index([cycleId])
   @@index([status])
+  @@index([reviewStatus])
+  @@index([reviewedById])
   @@index([relatedIndicatorId])
   @@index([createdBy])
   @@map("objectives")

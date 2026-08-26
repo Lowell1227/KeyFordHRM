@@ -26,6 +26,7 @@ import type {
   VoteResult,
   ObjectiveLevel,
   ObjectiveStatus,
+  ObjectiveReviewStatus,
   ActionItemStatus,
   TeamTaskStage,
   TeamStageState,
@@ -1523,6 +1524,15 @@ export interface Objective {
   priority: number;
   progress: number;
   status: ObjectiveStatus;
+  reviewStatus: ObjectiveReviewStatus;
+  reviewerId: string | null;
+  reviewerName: string | null;
+  reviewedById: string | null;
+  reviewedByName: string | null;
+  reviewedAt: string | null;
+  reviewComment: string | null;
+  canReview: boolean;
+  ownerReportingDepth: number | null;
   relatedIndicatorId: string | null;
   relatedIndicatorName: string | null;
   createdBy: string | null;
@@ -1564,6 +1574,10 @@ export type UpdateObjectiveBody = Partial<CreateObjectiveBody> & {
 
 export interface UpdateObjectiveProgressBody {
   progress: number;
+}
+
+export interface ObjectiveReviewBody {
+  comment?: string;
 }
 
 export interface GoalTrackingLatestProgress {

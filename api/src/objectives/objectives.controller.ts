@@ -19,6 +19,11 @@ import { UpdateProgressDto } from './dto/update-progress.dto';
 import { ObjectiveQueryDto } from './dto/objective-query.dto';
 import { GoalTrackingQueryDto } from './dto/goal-tracking-query.dto';
 import { UpdateIndicatorProgressDto } from './dto/update-indicator-progress.dto';
+import {
+  ApproveObjectiveDto,
+  RequestObjectiveChangesDto,
+} from './dto/objective-review.dto';
+import { ObjectiveReviewStatus } from '@prisma/client';
 
 export const TRACKING_INDICATOR_UUID_PIPE = new ParseUUIDPipe();
 
@@ -110,6 +115,36 @@ export class ObjectivesController {
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.objectivesService.updateProgress(id, dto, viewer);
+  }
+
+  @Post(':id/review/approve')
+  @HttpCode(200)
+  approveObjective(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: ApproveObjectiveDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.objectivesService.reviewObjective(
+      id,
+      ObjectiveReviewStatus.approved,
+      dto.comment,
+      viewer,
+    );
+  }
+
+  @Post(':id/review/request-changes')
+  @HttpCode(200)
+  requestObjectiveChanges(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: RequestObjectiveChangesDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.objectivesService.reviewObjective(
+      id,
+      ObjectiveReviewStatus.changes_requested,
+      dto.comment,
+      viewer,
+    );
   }
 
   /** DELETE /objectives/:id — 删除。 */

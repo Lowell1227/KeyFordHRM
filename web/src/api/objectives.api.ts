@@ -5,6 +5,7 @@ import type {
   CreateObjectiveBody,
   UpdateObjectiveBody,
   UpdateObjectiveProgressBody,
+  ObjectiveReviewBody,
   GoalTrackingQuery,
   GoalTrackingResult,
   GoalTrackingIndicatorDetail,
@@ -64,6 +65,20 @@ export const objectivesApi = {
   /** PATCH /objectives/:id/progress — 更新进度。 */
   updateProgress(id: string, body: UpdateObjectiveProgressBody): Promise<Objective> {
     return http.patch(`/objectives/${id}/progress`, body) as unknown as Promise<Objective>;
+  },
+
+  approveReview(id: string, body: ObjectiveReviewBody = {}): Promise<Objective> {
+    return http.post(
+      `/objectives/${id}/review/approve`,
+      body,
+    ) as unknown as Promise<Objective>;
+  },
+
+  requestReviewChanges(id: string, body: Required<ObjectiveReviewBody>): Promise<Objective> {
+    return http.post(
+      `/objectives/${id}/review/request-changes`,
+      body,
+    ) as unknown as Promise<Objective>;
   },
 
   /** DELETE /objectives/:id — 删除。 */

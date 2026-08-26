@@ -16,6 +16,18 @@ import {
 import type { Objective } from '../../src/types/api.types';
 import type { TaskStatus } from '../../src/types/enums';
 
+type ObjectiveReviewFixture = Objective & {
+  reviewStatus?: 'draft' | 'pending' | 'approved' | 'changes_requested' | 'not_required';
+  reviewerId?: string | null;
+  reviewerName?: string | null;
+  reviewedById?: string | null;
+  reviewedByName?: string | null;
+  reviewedAt?: string | null;
+  reviewComment?: string | null;
+  canReview?: boolean;
+  ownerReportingDepth?: number | null;
+};
+
 const apiResponse = (data: unknown) => ({
   code: 0,
   message: 'success',
@@ -23,7 +35,7 @@ const apiResponse = (data: unknown) => ({
   timestamp: Date.now(),
 });
 
-function objectiveMapTreeFixture(): Objective[] {
+function objectiveMapTreeFixture(): ObjectiveReviewFixture[] {
   const company = objectiveFixture({
     id: 'company-1',
     title: '提升年度经营质量',
@@ -42,6 +54,13 @@ function objectiveMapTreeFixture(): Objective[] {
     ownerId: 'manager-1',
     ownerName: '周强',
     progress: 56,
+    reviewStatus: 'approved',
+    reviewerId: 'vp-1',
+    reviewerName: '褚浩然',
+    reviewedById: 'vp-1',
+    reviewedByName: '褚浩然',
+    reviewedAt: '2026-08-20T08:00:00.000Z',
+    ownerReportingDepth: 0,
   });
   const individual = objectiveFixture({
     id: 'individual-1',
@@ -58,6 +77,11 @@ function objectiveMapTreeFixture(): Objective[] {
     progress: 30,
     relatedIndicatorId: 'indicator-1',
     relatedIndicatorName: '支持工单按期关闭率',
+    reviewStatus: 'pending',
+    reviewerId: 'manager-1',
+    reviewerName: '周强',
+    canReview: true,
+    ownerReportingDepth: 1,
   });
   const mine = objectiveFixture({
     id: 'manager-goal-1',
@@ -69,6 +93,13 @@ function objectiveMapTreeFixture(): Objective[] {
     ownerId: 'manager-1',
     ownerName: '周强',
     progress: 70,
+    reviewStatus: 'approved',
+    reviewerId: 'vp-1',
+    reviewerName: '褚浩然',
+    reviewedById: 'vp-1',
+    reviewedByName: '褚浩然',
+    reviewedAt: '2026-08-20T08:00:00.000Z',
+    ownerReportingDepth: 0,
   });
   return [{ ...company, children: [{ ...department, children: [individual, mine] }] }];
 }
@@ -78,10 +109,36 @@ async function routeObjectiveMap(page: Page, role: 'manager' | 'vp' = 'manager')
     ? {
         id: 'manager-1', name: '周强', employeeNo: 'E2E_MGR', deptId: 'dept-1',
         deptName: '孚德北京办公室', sysRole: 'manager', isAssessorOnly: false, canViewAll: false,
+        businessCapabilities: {
+          canManageTeam: true,
+          canReviewDepartment: false,
+          canViewPerformanceApproval: false,
+          canOperatePerformanceApproval: false,
+          canHandleHrCycle: false,
+          canHandleInterviews: false,
+          canHandleProbationReviews: false,
+          canHandleConfirmationApprovals: false,
+          canViewReports: false,
+          canManageObjectives: true,
+          identities: [],
+        },
       }
     : {
         id: 'vp-1', name: '褚浩然', employeeNo: 'E2E_VP', deptId: null,
         deptName: '孚德集团', sysRole: 'vp', isAssessorOnly: false, canViewAll: true,
+        businessCapabilities: {
+          canManageTeam: false,
+          canReviewDepartment: false,
+          canViewPerformanceApproval: true,
+          canOperatePerformanceApproval: false,
+          canHandleHrCycle: false,
+          canHandleInterviews: false,
+          canHandleProbationReviews: false,
+          canHandleConfirmationApprovals: false,
+          canViewReports: true,
+          canManageObjectives: false,
+          identities: [],
+        },
       };
 
   await page.route('**/api/v1/auth/me', (route) => route.fulfill({
@@ -123,9 +180,26 @@ async function routeObjectiveMap(page: Page, role: 'manager' | 'vp' = 'manager')
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
   }));
+  const objectiveTree = objectiveMapTreeFixture();
+  if (role === 'vp') {
+    const removeReviewAuthority = (objectives: ObjectiveReviewFixture[]) => {
+      for (const objective of objectives) {
+        objective.canReview = false;
+        objective.ownerReportingDepth = objective.ownerId === 'vp-1'
+          ? 0
+          : objective.ownerId === 'manager-1'
+            ? 1
+            : objective.ownerId === 'employee-1'
+              ? 2
+              : null;
+        if (objective.children) removeReviewAuthority(objective.children as ObjectiveReviewFixture[]);
+      }
+    };
+    removeReviewAuthority(objectiveTree);
+  }
   await page.route('**/api/v1/objectives**', (route) => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify(apiResponse(objectiveMapTreeFixture())),
+    body: JSON.stringify(apiResponse(objectiveTree)),
   }));
 }
 
@@ -205,7 +279,7 @@ test.describe('09-performance-workspace manager shell', () => {
 
     await expect(page.getByTestId('objective-map-filters')).toBeVisible();
     await expect(page.getByRole('button', { name: '我的目标', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: '我团队成员的目标', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '下属目标', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '我负责组织的目标', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '其他目标', exact: true })).toBeVisible();
     await expect(page.getByText('排序：按对齐数量')).toBeVisible();
@@ -242,6 +316,24 @@ test.describe('09-performance-workspace manager shell', () => {
     await expect(page.getByRole('menuitem', { name: '更新进度' })).toBeVisible();
     await expect(page.getByRole('menuitem', { name: '目标跟进' })).toHaveCount(0);
     await expect(page.getByRole('menuitem', { name: '删除目标' })).toBeVisible();
+  });
+
+  test('objective review state stays secondary to the alignment chain and supports a review-only filter', async ({ page }) => {
+    await routeObjectiveMap(page);
+    await page.goto('/objectives');
+
+    const pendingCard = page.getByTestId('objective-map-card-individual-1');
+    await expect(pendingCard).toContainText('待审核');
+    await expect(pendingCard.getByText('待审核')).toHaveAttribute('title', '待周强审核');
+    await expect(page.getByTestId('objective-map-review-only')).toContainText('待我审核 1');
+
+    await page.getByTestId('objective-map-scope-mine').click();
+    await expect(pendingCard).toHaveCount(0);
+    await page.getByTestId('objective-map-review-only').click();
+    await expect(page.getByTestId('objective-map-card-company-1')).toBeVisible();
+    await expect(page.getByTestId('objective-map-card-department-1')).toBeVisible();
+    await expect(pendingCard).toBeVisible();
+    await expect(page.getByTestId('objective-map-card-manager-goal-1')).toHaveCount(0);
   });
 
   test('objective scope switching keeps visible ancestors and removes teammate-only goals', async ({ page }) => {
@@ -292,6 +384,65 @@ test.describe('09-performance-workspace manager shell', () => {
 
     await card.getByRole('button', { name: '更多操作' }).click();
     await expect(page.getByRole('menuitem', { name: '目标跟进' })).toHaveCount(0);
+  });
+
+  test('the exact direct manager can approve a pending goal from its detail', async ({ page }) => {
+    await routeObjectiveMap(page);
+    const reviewBodies: unknown[] = [];
+    await page.route('**/api/v1/objectives/individual-1/review/approve', async (route) => {
+      reviewBodies.push(route.request().postDataJSON());
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(objectiveFixture({
+          ...objectiveMapTreeFixture()[0].children![0].children![0],
+          reviewStatus: 'approved',
+          canReview: false,
+          reviewedById: 'manager-1',
+          reviewedByName: '周强',
+          reviewedAt: '2026-08-25T08:00:00.000Z',
+        }))),
+      });
+    });
+    await page.goto('/objectives');
+
+    await page.getByTestId('objective-map-card-individual-1').click();
+    const detail = page.getByTestId('objective-map-detail');
+    await expect(detail).toContainText('上级目标');
+    await expect(detail).toContainText('提升产品与服务交付质量');
+    await expect(detail).toContainText('当前审核人');
+    await expect(detail).toContainText('周强');
+    await detail.getByTestId('objective-review-approve').click();
+    await expect(page.getByRole('dialog', { name: '通过目标' })).toBeVisible();
+    await page.getByRole('button', { name: '确认通过' }).click();
+    await expect.poll(() => reviewBodies).toEqual([{}]);
+  });
+
+  test('requesting objective changes requires and submits a reason', async ({ page }) => {
+    await routeObjectiveMap(page);
+    const reviewBodies: unknown[] = [];
+    await page.route('**/api/v1/objectives/individual-1/review/request-changes', async (route) => {
+      reviewBodies.push(route.request().postDataJSON());
+      await route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(objectiveFixture({
+          ...objectiveMapTreeFixture()[0].children![0].children![0],
+          reviewStatus: 'changes_requested',
+          canReview: false,
+          reviewComment: '请补充量化验收口径',
+        }))),
+      });
+    });
+    await page.goto('/objectives');
+
+    await page.getByTestId('objective-map-card-individual-1').click();
+    await page.getByTestId('objective-map-detail').getByTestId('objective-review-request-changes').click();
+    const dialog = page.getByTestId('objective-review-request-changes-dialog');
+    await expect(dialog).toBeVisible();
+    await dialog.getByRole('button', { name: '确认退回' }).click();
+    await expect(dialog).toContainText('请填写退回原因');
+    await dialog.getByRole('textbox', { name: '退回原因' }).fill('请补充量化验收口径');
+    await dialog.getByRole('button', { name: '确认退回' }).click();
+    await expect.poll(() => reviewBodies).toEqual([{ comment: '请补充量化验收口径' }]);
   });
 
   test('objective map ignores a stale cycle response', async ({ page }) => {
@@ -606,6 +757,7 @@ test.describe('09-performance-workspace read-only leadership', () => {
   test('VP can inspect objective cards without management actions', async ({ page }) => {
     await routeObjectiveMap(page, 'vp');
     await page.goto('/objectives');
+    await page.getByTestId('objective-map-scope-team').click();
 
     const card = page.getByTestId('objective-map-card-individual-1');
     await expect(card).toBeVisible();
@@ -617,6 +769,8 @@ test.describe('09-performance-workspace read-only leadership', () => {
     await expect(detail.getByRole('button', { name: '更新进度' })).toHaveCount(0);
     await expect(detail.getByRole('button', { name: '删除目标' })).toHaveCount(0);
     await expect(detail.getByRole('button', { name: '目标跟进' })).toHaveCount(0);
+    await expect(detail.getByRole('button', { name: '通过目标' })).toHaveCount(0);
+    await expect(detail.getByRole('button', { name: '退回修改' })).toHaveCount(0);
   });
 });
 
@@ -723,8 +877,8 @@ test.describe('09-performance-workspace stage semantics', () => {
 });
 
 function objectiveFixture(
-  value: Partial<Objective> & Pick<Objective, 'id' | 'title' | 'level'>,
-): Objective {
+  value: Partial<ObjectiveReviewFixture> & Pick<Objective, 'id' | 'title' | 'level'>,
+): ObjectiveReviewFixture {
   return {
     description: null,
     deptId: null,
@@ -738,6 +892,15 @@ function objectiveFixture(
     priority: 1,
     progress: 50,
     status: 'active',
+    reviewStatus: 'not_required',
+    reviewerId: null,
+    reviewerName: null,
+    reviewedById: null,
+    reviewedByName: null,
+    reviewedAt: null,
+    reviewComment: null,
+    canReview: false,
+    ownerReportingDepth: null,
     relatedIndicatorId: null,
     relatedIndicatorName: null,
     createdBy: null,

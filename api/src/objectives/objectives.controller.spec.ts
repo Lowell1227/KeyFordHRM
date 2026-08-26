@@ -35,6 +35,18 @@ describe('ObjectivesController tracking access', () => {
     }
   });
 
+  it('exposes objective review routes without granting a broad role override', () => {
+    const methods = [
+      (ObjectivesController.prototype as any).approveObjective,
+      (ObjectivesController.prototype as any).requestObjectiveChanges,
+    ];
+
+    for (const method of methods) {
+      expect(typeof method).toBe('function');
+      expect(Reflect.getMetadata(ROLES_KEY, method)).toBeUndefined();
+    }
+  });
+
   it('accepts deterministic UUIDv5 indicator IDs used by realistic demo data', async () => {
     await expect(
       TRACKING_INDICATOR_UUID_PIPE.transform(

@@ -8,10 +8,12 @@ import {
 import {
   IndicatorProgressHealth,
   ObjectiveLevel,
+  ObjectiveReviewStatus,
   ObjectiveStatus,
   Prisma,
   SysRole,
   TaskStatus,
+  UserStatus,
 } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DataScopeService } from '@/common/services/data-scope.service';
@@ -28,10 +30,18 @@ import { buildActionItemVisibilityWhere } from '@/action-items/action-item-visib
 /** include 定义（字面量，便于 Prisma 推导类型）。 */
 const objectiveIncludeDef = {
   dept: { select: { id: true, name: true } },
-  owner: { select: { id: true, name: true } },
+  owner: {
+    select: {
+      id: true,
+      name: true,
+      directManagerId: true,
+      directManager: { select: { id: true, name: true } },
+    },
+  },
   cycle: { select: { id: true, name: true } },
   relatedIndicator: { select: { id: true, name: true } },
   creator: { select: { id: true, name: true } },
+  reviewedBy: { select: { id: true, name: true } },
 } as const;
 
 type ObjectiveWithRelations = Prisma.ObjectiveGetPayload<{ include: typeof objectiveIncludeDef }>;
@@ -116,6 +126,15 @@ export interface ObjectiveNode {
   priority: number;
   progress: number;
   status: ObjectiveStatus;
+  reviewStatus: ObjectiveReviewStatus;
+  reviewerId: string | null;
+  reviewerName: string | null;
+  reviewedById: string | null;
+  reviewedByName: string | null;
+  reviewedAt: Date | null;
+  reviewComment: string | null;
+  canReview: boolean;
+  ownerReportingDepth: number | null;
   relatedIndicatorId: string | null;
   relatedIndicatorName: string | null;
   createdBy: string | null;
@@ -136,6 +155,14 @@ export interface ObjectiveQuery {
   keyword?: string;
 }
 
+interface ObjectiveViewerContext {
+  reportingDepthByOwner: Map<string, number>;
+}
+
+export type ObjectiveReviewDecision =
+  | 'approved'
+  | 'changes_requested';
+
 @Injectable()
 export class ObjectivesService {
   constructor(
@@ -148,7 +175,8 @@ export class ObjectivesService {
     query: ObjectiveQueryDto,
     viewer: AuthUser,
   ): Promise<ObjectiveNode[] | Paginated<ObjectiveNode>> {
-    const where = await this.buildWhere(query, viewer);
+    const context = await this.getViewerContext(viewer);
+    const where = await this.buildWhere(query, viewer, context);
 
     if (query.flat) {
       const [total, objectives] = await Promise.all([
@@ -161,7 +189,11 @@ export class ObjectivesService {
           take: query.take,
         }),
       ]);
-      return paginated(objectives.map((o) => this.mapToNode(o)), total, query);
+      return paginated(
+        objectives.map((objective) => this.mapToNode(objective, viewer, context)),
+        total,
+        query,
+      );
     }
 
     // 树模式：先取所有可见目标，再内存组装成森林。
@@ -171,18 +203,23 @@ export class ObjectivesService {
       orderBy: [{ level: 'asc' }, { priority: 'desc' }, { createdAt: 'desc' }],
     });
 
-    return this.buildForest(objectives.map((o) => this.mapToNode(o)));
+    return this.buildForest(
+      objectives.map((objective) => this.mapToNode(objective, viewer, context)),
+    );
   }
 
   /** GET /objectives/tree — 独立树接口（兼容前端直接调用）。 */
   async findTree(viewer: AuthUser, cycleId?: string): Promise<ObjectiveNode[]> {
-    const where = await this.buildWhere({ cycleId }, viewer);
+    const context = await this.getViewerContext(viewer);
+    const where = await this.buildWhere({ cycleId }, viewer, context);
     const objectives = await this.prisma.objective.findMany({
       where,
       include: objectiveIncludeDef,
       orderBy: [{ level: 'asc' }, { priority: 'desc' }, { createdAt: 'desc' }],
     });
-    return this.buildForest(objectives.map((o) => this.mapToNode(o)));
+    return this.buildForest(
+      objectives.map((objective) => this.mapToNode(objective, viewer, context)),
+    );
   }
 
   async findTracking(
@@ -626,7 +663,8 @@ export class ObjectivesService {
     const uniqueIds = [...new Set(ids)];
     if (uniqueIds.length === 0) return;
 
-    const visibilityWhere = await this.buildWhere({}, viewer);
+    const context = await this.getViewerContext(viewer);
+    const visibilityWhere = await this.buildWhere({}, viewer, context);
     const count = await this.prisma.objective.count({
       where: { AND: [visibilityWhere, { id: { in: uniqueIds } }] },
     });
@@ -642,13 +680,14 @@ export class ObjectivesService {
     const uniqueIds = [...new Set(ids)];
     if (uniqueIds.length === 0) return [];
 
-    const visibilityWhere = await this.buildWhere({}, viewer);
+    const context = await this.getViewerContext(viewer);
+    const visibilityWhere = await this.buildWhere({}, viewer, context);
     const objectives = await this.prisma.objective.findMany({
       where: { AND: [visibilityWhere, { id: { in: uniqueIds } }] },
       include: objectiveIncludeDef,
       orderBy: [{ level: 'asc' }, { priority: 'desc' }, { createdAt: 'desc' }],
     });
-    return objectives.map((objective) => this.mapToNode(objective));
+    return objectives.map((objective) => this.mapToNode(objective, viewer, context));
   }
 
   /** GET /objectives/:id — 详情。 */
@@ -665,14 +704,16 @@ export class ObjectivesService {
       });
     }
 
-    await this.assertCanView(objective, viewer);
-    return this.mapToNode(objective);
+    const context = await this.getViewerContext(viewer);
+    await this.assertCanView(objective, viewer, context);
+    return this.mapToNode(objective, viewer, context);
   }
 
   /** POST /objectives — 创建。 */
   async create(dto: CreateObjectiveDto, viewer: AuthUser): Promise<ObjectiveNode> {
     await this.assertCanCreate(dto, viewer);
     await this.validateParentLevel(dto.level, dto.parentId);
+    const reviewStatus = await this.resolveReviewStatus(dto.ownerId, ObjectiveStatus.active);
 
     const created = await this.prisma.objective.create({
       data: {
@@ -685,13 +726,15 @@ export class ObjectivesService {
         cycleId: dto.cycleId,
         weight: dto.weight == null ? null : new Prisma.Decimal(dto.weight),
         priority: dto.priority ?? 0,
+        reviewStatus,
         relatedIndicatorId: dto.relatedIndicatorId,
         createdBy: viewer.id,
       },
       include: objectiveIncludeDef,
     });
 
-    return this.mapToNode(created);
+    const context = await this.getViewerContext(viewer);
+    return this.mapToNode(created, viewer, context);
   }
 
   /** PATCH /objectives/:id — 更新。 */
@@ -718,6 +761,33 @@ export class ObjectivesService {
       await this.validateCycleConsistency(id, dto.parentId);
     }
 
+    const materialFields: Array<keyof UpdateObjectiveDto> = [
+      'title',
+      'description',
+      'level',
+      'deptId',
+      'ownerId',
+      'parentId',
+      'cycleId',
+      'weight',
+      'relatedIndicatorId',
+    ];
+    const draftLifecycleChanged = dto.status === ObjectiveStatus.draft
+      || (existing.status === ObjectiveStatus.draft && dto.status === ObjectiveStatus.active);
+    const shouldResetReview = draftLifecycleChanged
+      || materialFields.some((field) => dto[field] !== undefined);
+    const reviewReset = shouldResetReview
+      ? {
+          reviewStatus: await this.resolveReviewStatus(
+            dto.ownerId === undefined ? existing.ownerId : dto.ownerId,
+            dto.status ?? existing.status,
+          ),
+          reviewedById: null,
+          reviewedAt: null,
+          reviewComment: null,
+        }
+      : {};
+
     const updated = await this.prisma.objective.update({
       where: { id },
       data: {
@@ -732,11 +802,13 @@ export class ObjectivesService {
         priority: dto.priority,
         status: dto.status,
         relatedIndicatorId: dto.relatedIndicatorId === undefined ? undefined : dto.relatedIndicatorId,
+        ...reviewReset,
       },
       include: objectiveIncludeDef,
     });
 
-    return this.mapToNode(updated);
+    const context = await this.getViewerContext(viewer);
+    return this.mapToNode(updated, viewer, context);
   }
 
   /** PATCH /objectives/:id/progress — 更新进度。 */
@@ -764,7 +836,107 @@ export class ObjectivesService {
       include: objectiveIncludeDef,
     });
 
-    return this.mapToNode(updated);
+    const context = await this.getViewerContext(viewer);
+    return this.mapToNode(updated, viewer, context);
+  }
+
+  async reviewObjective(
+    id: string,
+    decision: ObjectiveReviewDecision,
+    comment: string | undefined,
+    viewer: AuthUser,
+  ): Promise<ObjectiveNode> {
+    const existing = await this.prisma.objective.findUnique({
+      where: { id },
+      include: objectiveIncludeDef,
+    });
+    if (!existing) {
+      throw new NotFoundException({
+        code: ERROR_CODE.NOT_FOUND,
+        message: '目标不存在',
+      });
+    }
+    if (existing.owner?.directManagerId !== viewer.id) {
+      throw new ForbiddenException({
+        code: ERROR_CODE.FORBIDDEN,
+        message: '仅目标负责人的直属上级可以审核',
+      });
+    }
+    if (existing.reviewStatus !== ObjectiveReviewStatus.pending) {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: '审核状态已变化，请刷新后重试',
+      });
+    }
+
+    const normalizedComment = comment?.trim() || null;
+    if (
+      decision === ObjectiveReviewStatus.changes_requested
+      && !normalizedComment
+    ) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '请填写退回原因',
+      });
+    }
+    const reviewedAt = new Date();
+    const updated = await this.prisma.$transaction(async (tx) => {
+      const claimed = await tx.objective.updateMany({
+        where: {
+          id,
+          reviewStatus: ObjectiveReviewStatus.pending,
+          owner: { directManagerId: viewer.id },
+        },
+        data: {
+          reviewStatus: decision,
+          reviewedById: viewer.id,
+          reviewedAt,
+          reviewComment: normalizedComment,
+        },
+      });
+      if (claimed.count !== 1) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '审核状态已变化，请刷新后重试',
+        });
+      }
+      const objective = await tx.objective.findUnique({
+        where: { id },
+        include: objectiveIncludeDef,
+      });
+      if (!objective) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '审核状态已变化，请刷新后重试',
+        });
+      }
+      await tx.auditLog.create({
+        data: {
+          userId: viewer.id,
+          action: decision === ObjectiveReviewStatus.approved
+            ? 'objective_review_approved'
+            : 'objective_review_changes_requested',
+          entityType: 'objective',
+          entityId: id,
+          oldValue: {
+            reviewStatus: existing.reviewStatus,
+            reviewedById: existing.reviewedById,
+            reviewedAt: existing.reviewedAt?.toISOString() ?? null,
+            reviewComment: existing.reviewComment,
+          },
+          newValue: {
+            reviewStatus: decision,
+            reviewedById: viewer.id,
+            reviewedAt: reviewedAt.toISOString(),
+            reviewComment: normalizedComment,
+          },
+        },
+      });
+      return objective;
+    });
+
+    const context = await this.getViewerContext(viewer);
+    return this.mapToNode(updated, viewer, context);
   }
 
   /** DELETE /objectives/:id — 删除。 */
@@ -797,7 +969,12 @@ export class ObjectivesService {
   // 私有辅助
   // ---------------------------------------------------------------------------
 
-  private mapToNode(objective: ObjectiveWithRelations): ObjectiveNode {
+  private mapToNode(
+    objective: ObjectiveWithRelations,
+    viewer: AuthUser,
+    context: ObjectiveViewerContext,
+  ): ObjectiveNode {
+    const reviewerId = objective.owner?.directManagerId ?? null;
     return {
       id: objective.id,
       title: objective.title,
@@ -814,6 +991,18 @@ export class ObjectivesService {
       priority: objective.priority,
       progress: objective.progress,
       status: objective.status,
+      reviewStatus: objective.reviewStatus,
+      reviewerId,
+      reviewerName: objective.owner?.directManager?.name ?? null,
+      reviewedById: objective.reviewedById,
+      reviewedByName: objective.reviewedBy?.name ?? null,
+      reviewedAt: objective.reviewedAt,
+      reviewComment: objective.reviewComment,
+      canReview: reviewerId === viewer.id
+        && objective.reviewStatus === ObjectiveReviewStatus.pending,
+      ownerReportingDepth: objective.ownerId
+        ? (context.reportingDepthByOwner.get(objective.ownerId) ?? null)
+        : null,
       relatedIndicatorId: objective.relatedIndicatorId,
       relatedIndicatorName: objective.relatedIndicator?.name ?? null,
       createdBy: objective.createdBy,
@@ -826,6 +1015,7 @@ export class ObjectivesService {
   private async buildWhere(
     query: ObjectiveQuery,
     viewer: AuthUser,
+    context?: ObjectiveViewerContext,
   ): Promise<Prisma.ObjectiveWhereInput> {
     const where: Prisma.ObjectiveWhereInput = {};
 
@@ -844,6 +1034,7 @@ export class ObjectivesService {
     // 数据权限：普通员工只能看到公司级 + 自己作为负责人的目标；
     // 主管/部门负责人额外看到其数据范围内的目标；HR/system_admin 看全部。
     if (!this.isAdminLike(viewer)) {
+      const viewerContext = context ?? await this.getViewerContext(viewer);
       const scope = await this.dataScope.getVisibleEmployeeFilter(viewer);
       const visibleOwners = await this.prisma.user.findMany({
         where: scope,
@@ -851,7 +1042,10 @@ export class ObjectivesService {
       });
       const visibleOwnerIds = visibleOwners.map((user) => user.id);
 
-      const uniqueIds = [...new Set(visibleOwnerIds)].filter(Boolean);
+      const uniqueIds = [...new Set([
+        ...visibleOwnerIds,
+        ...viewerContext.reportingDepthByOwner.keys(),
+      ])].filter(Boolean);
       where.OR = [
         { level: ObjectiveLevel.company },
         ...(uniqueIds.length > 0 ? [{ ownerId: { in: uniqueIds } }] : []),
@@ -860,6 +1054,54 @@ export class ObjectivesService {
     }
 
     return where;
+  }
+
+  private async getViewerContext(viewer: AuthUser): Promise<ObjectiveViewerContext> {
+    return {
+      reportingDepthByOwner: await this.getReportingDepthByOwner(viewer.id),
+    };
+  }
+
+  private async getReportingDepthByOwner(viewerId: string): Promise<Map<string, number>> {
+    const users = await this.prisma.user.findMany({
+      where: { status: UserStatus.active },
+      select: { id: true, directManagerId: true },
+    });
+    const childrenByManager = new Map<string, string[]>();
+    for (const user of users) {
+      if (!user.directManagerId) continue;
+      const children = childrenByManager.get(user.directManagerId) ?? [];
+      children.push(user.id);
+      childrenByManager.set(user.directManagerId, children);
+    }
+
+    const depthByOwner = new Map<string, number>([[viewerId, 0]]);
+    const queue: Array<{ id: string; depth: number }> = [{ id: viewerId, depth: 0 }];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      for (const childId of childrenByManager.get(current.id) ?? []) {
+        if (depthByOwner.has(childId)) continue;
+        const depth = current.depth + 1;
+        depthByOwner.set(childId, depth);
+        queue.push({ id: childId, depth });
+      }
+    }
+    return depthByOwner;
+  }
+
+  private async resolveReviewStatus(
+    ownerId: string | null | undefined,
+    status: ObjectiveStatus,
+  ): Promise<ObjectiveReviewStatus> {
+    if (status === ObjectiveStatus.draft) return ObjectiveReviewStatus.draft;
+    if (!ownerId) return ObjectiveReviewStatus.not_required;
+    const owner = await this.prisma.user.findUnique({
+      where: { id: ownerId },
+      select: { directManagerId: true },
+    });
+    return owner?.directManagerId
+      ? ObjectiveReviewStatus.pending
+      : ObjectiveReviewStatus.not_required;
   }
 
   private buildForest(nodes: ObjectiveNode[]): ObjectiveNode[] {
@@ -941,10 +1183,15 @@ export class ObjectivesService {
   private async assertCanView(
     objective: { level: ObjectiveLevel; ownerId: string | null; deptId: string | null },
     viewer: AuthUser,
+    context: ObjectiveViewerContext,
   ): Promise<void> {
     if (this.isAdminLike(viewer)) return;
     if (objective.level === ObjectiveLevel.company) return;
     if (objective.ownerId === viewer.id) return;
+    if (
+      objective.ownerId
+      && context.reportingDepthByOwner.has(objective.ownerId)
+    ) return;
 
     if (viewer.deptId && objective.deptId === viewer.deptId) return;
 

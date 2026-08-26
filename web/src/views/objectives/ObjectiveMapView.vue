@@ -15,6 +15,7 @@ import { indicatorsApi } from '@/api/indicators.api';
 import { usersApi } from '@/api/users.api';
 import {
   OBJECTIVE_LEVEL_LABELS,
+  OBJECTIVE_REVIEW_STATUS_META,
   OBJECTIVE_STATUS_META,
   type ObjectiveLevel,
   type ObjectiveStatus,
@@ -34,6 +35,8 @@ import ObjectiveMapDisplaySettings from './components/ObjectiveMapDisplaySetting
 import ObjectiveMapCanvas from './components/ObjectiveMapCanvas.vue';
 import {
   countObjectivesByScope,
+  filterObjectivesAwaitingReview,
+  flattenObjectives,
   layoutObjectives,
   selectObjectiveScope,
   type ObjectiveMapActorContext,
@@ -68,6 +71,7 @@ const filters = reactive<{ cycleId: string }>({
   cycleId: '',
 });
 const selectedScope = ref<ObjectiveMapScope>('team');
+const reviewOnly = ref(false);
 const selectedObjective = ref<Objective | null>(null);
 const detailVisible = ref(false);
 const loadError = ref('');
@@ -256,12 +260,26 @@ const actorContext = computed<ObjectiveMapActorContext>(() => ({
 }));
 
 const scopeCounts = computed(() => countObjectivesByScope(treeData.value, actorContext.value));
-const scopedObjectives = computed(() => selectObjectiveScope(
+const baseScopedObjectives = computed(() => selectObjectiveScope(
   treeData.value,
   selectedScope.value,
   actorContext.value,
 ));
+const reviewCount = computed(() => flattenObjectives(treeData.value).filter((objective) => (
+  objective.reviewStatus === 'pending' && objective.canReview
+)).length);
+const scopedObjectives = computed(() => (
+  reviewOnly.value
+    ? filterObjectivesAwaitingReview(treeData.value)
+    : baseScopedObjectives.value
+));
 const canvasLayout = computed(() => layoutObjectives(scopedObjectives.value, display.value));
+
+const selectedParentObjective = computed(() => {
+  const parentId = selectedObjective.value?.parentId;
+  if (!parentId) return null;
+  return flattenObjectives(treeData.value).find((objective) => objective.id === parentId) ?? null;
+});
 
 let scopeInitialized = false;
 
@@ -293,6 +311,15 @@ function statusType(status: ObjectiveStatus): 'info' | 'primary' | 'success' | '
 
 function statusLabel(status: ObjectiveStatus): string {
   return OBJECTIVE_STATUS_META[status]?.label ?? status;
+}
+
+function reviewStatusType(reviewStatus: Objective['reviewStatus']): 'info' | 'success' | 'warning' | 'danger' {
+  const type = OBJECTIVE_REVIEW_STATUS_META[reviewStatus].type;
+  return type === 'success' || type === 'warning' || type === 'danger' ? type : 'info';
+}
+
+function reviewStatusLabel(reviewStatus: Objective['reviewStatus']): string {
+  return OBJECTIVE_REVIEW_STATUS_META[reviewStatus].label;
 }
 
 function formatProgress(progress: number): string {
@@ -343,6 +370,65 @@ function removeFromDetail() {
   const objective = selectedObjective.value;
   detailVisible.value = false;
   removeRow(objective);
+}
+
+const reviewSubmitting = ref(false);
+const reviewChangesDialogVisible = ref(false);
+const reviewChangesReason = ref('');
+const reviewChangesError = ref('');
+
+async function approveSelectedObjective() {
+  const objective = selectedObjective.value;
+  if (!objective?.canReview || reviewSubmitting.value) return;
+  try {
+    await ElMessageBox.confirm(
+      `确认通过“${objective.title}”吗？`,
+      '通过目标',
+      {
+        type: 'warning',
+        confirmButtonText: '确认通过',
+        cancelButtonText: '取消',
+      },
+    );
+    reviewSubmitting.value = true;
+    await objectivesApi.approveReview(objective.id);
+    ElMessage.success('目标已通过');
+    detailVisible.value = false;
+    await loadTree();
+  } catch {
+    // 用户取消或请求失败；请求失败由统一拦截器提示。
+  } finally {
+    reviewSubmitting.value = false;
+  }
+}
+
+function openReviewChangesDialog() {
+  if (!selectedObjective.value?.canReview) return;
+  reviewChangesReason.value = '';
+  reviewChangesError.value = '';
+  reviewChangesDialogVisible.value = true;
+}
+
+async function submitReviewChanges() {
+  const objective = selectedObjective.value;
+  const comment = reviewChangesReason.value.trim();
+  if (!objective?.canReview || reviewSubmitting.value) return;
+  if (!comment) {
+    reviewChangesError.value = '请填写退回原因';
+    return;
+  }
+
+  reviewChangesError.value = '';
+  reviewSubmitting.value = true;
+  try {
+    await objectivesApi.requestReviewChanges(objective.id, { comment });
+    ElMessage.success('目标已退回修改');
+    reviewChangesDialogVisible.value = false;
+    detailVisible.value = false;
+    await loadTree();
+  } finally {
+    reviewSubmitting.value = false;
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -531,8 +617,11 @@ async function removeRow(row: Objective) {
             :cycle-id="filters.cycleId"
             :scope="selectedScope"
             :scope-counts="scopeCounts"
+            :review-only="reviewOnly"
+            :review-count="reviewCount"
             @update:cycle-id="selectObjectiveCycle"
             @update:scope="selectedScope = $event"
+            @update:review-only="reviewOnly = $event"
           />
           <div class="objective-map__toolbar-spacer" />
           <ObjectiveMapDisplaySettings v-model="display" />
@@ -603,10 +692,47 @@ async function removeRow(row: Objective) {
               <dt>关联指标</dt>
               <dd>{{ selectedObjective.relatedIndicatorName || '-' }}</dd>
             </div>
+            <div>
+              <dt>上级目标</dt>
+              <dd>{{ selectedParentObjective?.title || '顶层目标' }}</dd>
+            </div>
+            <div>
+              <dt>审核状态</dt>
+              <dd>
+                <el-tag :type="reviewStatusType(selectedObjective.reviewStatus)" effect="light">
+                  {{ reviewStatusLabel(selectedObjective.reviewStatus) }}
+                </el-tag>
+              </dd>
+            </div>
+            <div>
+              <dt>当前审核人</dt>
+              <dd>{{ selectedObjective.reviewerName || '无需审核' }}</dd>
+            </div>
+            <div v-if="selectedObjective.reviewedByName">
+              <dt>最近审核</dt>
+              <dd>{{ selectedObjective.reviewedByName }}</dd>
+            </div>
+            <div v-if="selectedObjective.reviewComment" class="objective-detail__review-comment">
+              <dt>审核意见</dt>
+              <dd>{{ selectedObjective.reviewComment }}</dd>
+            </div>
           </dl>
         </div>
         <template #footer>
           <div v-if="selectedObjective" class="objective-detail__actions">
+            <template v-if="selectedObjective.canReview">
+              <el-button
+                data-testid="objective-review-request-changes"
+                :loading="reviewSubmitting"
+                @click="openReviewChangesDialog"
+              >退回修改</el-button>
+              <el-button
+                data-testid="objective-review-approve"
+                type="primary"
+                :loading="reviewSubmitting"
+                @click="approveSelectedObjective"
+              >通过目标</el-button>
+            </template>
             <el-button v-if="canOpenTracking(selectedObjective)" @click="trackFromDetail">目标跟进</el-button>
             <template v-if="canManage">
               <el-button @click="progressFromDetail">更新进度</el-button>
@@ -616,6 +742,35 @@ async function removeRow(row: Objective) {
           </div>
         </template>
       </el-drawer>
+
+      <el-dialog
+        v-model="reviewChangesDialogVisible"
+        data-testid="objective-review-request-changes-dialog"
+        title="退回修改"
+        width="480px"
+        destroy-on-close
+      >
+        <el-form label-position="top">
+          <el-form-item label="退回原因" :error="reviewChangesError" required>
+            <el-input
+              v-model="reviewChangesReason"
+              type="textarea"
+              :rows="4"
+              maxlength="500"
+              show-word-limit
+              aria-label="退回原因"
+              placeholder="说明需要补充或调整的内容"
+              @input="reviewChangesError = ''"
+            />
+          </el-form-item>
+        </el-form>
+        <template #footer>
+          <el-button @click="reviewChangesDialogVisible = false">取消</el-button>
+          <el-button type="primary" :loading="reviewSubmitting" @click="submitReviewChanges">
+            确认退回
+          </el-button>
+        </template>
+      </el-dialog>
 
     <!-- 新建 / 编辑弹窗 -->
     <el-dialog v-model="dialogVisible" data-testid="objective-dialog" :title="dialogTitle" width="640px" destroy-on-close>
@@ -822,6 +977,14 @@ async function removeRow(row: Objective) {
   overflow-wrap: anywhere;
   color: #2e394e;
   font-size: 14px;
+}
+
+.objective-detail__review-comment {
+  grid-column: 1 / -1;
+  padding: 12px;
+  background: #fff7f7;
+  border: 1px solid #f4d6da;
+  border-radius: 8px;
 }
 
 .objective-detail__actions {

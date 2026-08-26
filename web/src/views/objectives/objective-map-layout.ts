@@ -106,7 +106,14 @@ function businessIdsByScope(
   );
   const team = new Set(
     nodes
-      .filter((node) => node.level === 'individual' && !!node.ownerId && teamOwnerIds.has(node.ownerId))
+      .filter((node) => (
+        node.level === 'individual'
+        && !!node.ownerId
+        && (
+          teamOwnerIds.has(node.ownerId)
+          || (node.ownerReportingDepth != null && node.ownerReportingDepth > 0)
+        )
+      ))
       .map((node) => node.id),
   );
   const organization = new Set<string>();
@@ -166,6 +173,30 @@ export function selectObjectiveScope(
   const nodes = flattenObjectives(roots);
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const selectedIds = businessIdsByScope(nodes, scope, actor);
+
+  for (const selectedId of [...selectedIds]) {
+    let parentId = byId.get(selectedId)?.parentId ?? null;
+    const visited = new Set<string>();
+    while (parentId && byId.has(parentId) && !visited.has(parentId)) {
+      visited.add(parentId);
+      selectedIds.add(parentId);
+      parentId = byId.get(parentId)?.parentId ?? null;
+    }
+  }
+
+  return stableObjectiveSort(nodes.filter((node) => selectedIds.has(node.id)));
+}
+
+export function filterObjectivesAwaitingReview(
+  roots: readonly Objective[],
+): Objective[] {
+  const nodes = flattenObjectives(roots);
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const selectedIds = new Set(
+    nodes
+      .filter((node) => node.reviewStatus === 'pending' && node.canReview)
+      .map((node) => node.id),
+  );
 
   for (const selectedId of [...selectedIds]) {
     let parentId = byId.get(selectedId)?.parentId ?? null;

@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { ObjectiveLevel, ObjectiveStatus, Prisma, SysRole } from '@prisma/client';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { DataScopeService } from '@/common/services/data-scope.service';
@@ -9,7 +9,14 @@ import { ObjectivesService } from './objectives.service';
 describe('ObjectivesService visibility helpers', () => {
   let service: ObjectivesService;
   let prisma: {
-    objective: { count: jest.Mock; findMany: jest.Mock; create: jest.Mock };
+    objective: {
+      count: jest.Mock;
+      findMany: jest.Mock;
+      findUnique: jest.Mock;
+      create: jest.Mock;
+      update: jest.Mock;
+      updateMany: jest.Mock;
+    };
     actionItem: { findMany: jest.Mock };
     user: { findMany: jest.Mock; findUnique: jest.Mock };
     assessmentTask: { findUnique: jest.Mock };
@@ -42,20 +49,37 @@ describe('ObjectivesService visibility helpers', () => {
     priority: 0,
     progress: 25,
     status: ObjectiveStatus.active,
+    reviewStatus: 'pending',
+    reviewedById: null,
+    reviewedAt: null,
+    reviewComment: null,
     relatedIndicatorId: null,
     createdBy: 'manager-1',
     createdAt: new Date('2026-08-08T08:00:00.000Z'),
     updatedAt: new Date('2026-08-08T08:00:00.000Z'),
     dept: { id: 'dept-1', name: 'Engineering' },
-    owner: { id: 'employee-1', name: 'Employee' },
+    owner: {
+      id: 'employee-1',
+      name: 'Employee',
+      directManagerId: 'manager-1',
+      directManager: { id: 'manager-1', name: 'Manager' },
+    },
     cycle: { id: 'cycle-1', name: '2026 H2' },
     relatedIndicator: null,
     creator: { id: 'manager-1', name: 'Manager' },
+    reviewedBy: null,
   };
 
   beforeEach(() => {
     prisma = {
-      objective: { count: jest.fn(), findMany: jest.fn(), create: jest.fn() },
+      objective: {
+        count: jest.fn(),
+        findMany: jest.fn(),
+        findUnique: jest.fn(),
+        create: jest.fn(),
+        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
       actionItem: { findMany: jest.fn() },
       user: {
         findMany: jest.fn().mockResolvedValue([{ id: 'manager-1' }, { id: 'employee-1' }]),
@@ -277,6 +301,250 @@ describe('ObjectivesService visibility helpers', () => {
     } as any, { ...viewer, sysRole: SysRole.employee })).resolves.toEqual(
       expect.objectContaining({ id: 'objective-visible' }),
     );
+  });
+
+  it('includes every descendant level but marks only direct-report objectives reviewable', async () => {
+    const managerObjective = {
+      ...visibleObjective,
+      id: 'objective-manager',
+      ownerId: 'manager-1',
+      parentId: null,
+      owner: {
+        id: 'manager-1',
+        name: 'Manager',
+        directManagerId: null,
+        directManager: null,
+      },
+      reviewStatus: 'not_required',
+    };
+    const leadObjective = {
+      ...visibleObjective,
+      id: 'objective-lead',
+      ownerId: 'lead-1',
+      parentId: 'objective-manager',
+      owner: {
+        id: 'lead-1',
+        name: 'Lead',
+        directManagerId: 'manager-1',
+        directManager: { id: 'manager-1', name: 'Manager' },
+      },
+    };
+    const employeeObjective = {
+      ...visibleObjective,
+      id: 'objective-employee',
+      ownerId: 'employee-1',
+      parentId: 'objective-lead',
+      owner: {
+        id: 'employee-1',
+        name: 'Employee',
+        directManagerId: 'lead-1',
+        directManager: { id: 'lead-1', name: 'Lead' },
+      },
+    };
+    prisma.user.findMany.mockImplementation(async (args: any) => (
+      args?.select?.directManagerId
+        ? [
+            { id: 'manager-1', directManagerId: null },
+            { id: 'lead-1', directManagerId: 'manager-1' },
+            { id: 'employee-1', directManagerId: 'lead-1' },
+          ]
+        : [{ id: 'manager-1' }, { id: 'lead-1' }]
+    ));
+    prisma.objective.findMany.mockResolvedValue([
+      managerObjective,
+      leadObjective,
+      employeeObjective,
+    ]);
+
+    const result = await service.findTree(viewer, 'cycle-1');
+    const flattened = [
+      ...result,
+      ...(result[0]?.children ?? []),
+      ...(result[0]?.children?.[0]?.children ?? []),
+    ];
+
+    expect(prisma.objective.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        OR: expect.arrayContaining([
+          { ownerId: { in: ['manager-1', 'lead-1', 'employee-1'] } },
+        ]),
+      }),
+    }));
+    expect(flattened.find((objective) => objective.id === 'objective-lead')).toEqual(
+      expect.objectContaining({ ownerReportingDepth: 1, canReview: true }),
+    );
+    expect(flattened.find((objective) => objective.id === 'objective-employee')).toEqual(
+      expect.objectContaining({ ownerReportingDepth: 2, canReview: false }),
+    );
+  });
+
+  it('submits an active objective to the owner current direct manager', async () => {
+    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'manager-1' });
+    prisma.objective.create.mockResolvedValue(visibleObjective);
+
+    const result = await service.create({
+      title: 'Visible objective',
+      level: ObjectiveLevel.individual,
+      ownerId: 'employee-1',
+      deptId: 'dept-1',
+      cycleId: 'cycle-1',
+    } as any, viewer);
+
+    expect(result).toEqual(expect.objectContaining({
+      id: 'objective-visible',
+      reviewStatus: 'pending',
+      reviewerId: 'manager-1',
+      canReview: true,
+    }));
+    expect(prisma.objective.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ reviewStatus: 'pending' }),
+    }));
+  });
+
+  it('lets only the current direct manager approve a pending objective', async () => {
+    const approvedObjective = {
+      ...visibleObjective,
+      reviewStatus: 'approved',
+      reviewedById: viewer.id,
+      reviewedAt: new Date('2026-08-25T08:00:00.000Z'),
+      reviewComment: '对齐清晰',
+      reviewedBy: { id: viewer.id, name: viewer.name },
+    };
+    prisma.objective.findUnique
+      .mockResolvedValueOnce(visibleObjective)
+      .mockResolvedValueOnce(approvedObjective);
+
+    const result = await (service as any).reviewObjective(
+      'objective-visible',
+      'approved',
+      '对齐清晰',
+      viewer,
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      reviewStatus: 'approved',
+      reviewedById: viewer.id,
+      reviewComment: '对齐清晰',
+    }));
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: viewer.id,
+        action: 'objective_review_approved',
+        entityType: 'objective',
+        entityId: 'objective-visible',
+      }),
+    });
+  });
+
+  it('does not grant objective review authority from HR or all-data read access', async () => {
+    prisma.objective.findUnique.mockResolvedValue(visibleObjective);
+    const broadReader = {
+      ...viewer,
+      id: 'hr-1',
+      name: 'HR',
+      sysRole: SysRole.hr,
+      canViewAll: true,
+    };
+
+    await expect((service as any).reviewObjective(
+      'objective-visible',
+      'approved',
+      undefined,
+      broadReader,
+    )).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.objective.update).not.toHaveBeenCalled();
+  });
+
+  it('returns a conflict when a pending objective has already been reviewed', async () => {
+    prisma.objective.findUnique.mockResolvedValue({
+      ...visibleObjective,
+      reviewStatus: 'approved',
+    });
+
+    await expect((service as any).reviewObjective(
+      'objective-visible',
+      'changes_requested',
+      '请补充量化口径',
+      viewer,
+    )).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.objective.update).not.toHaveBeenCalled();
+  });
+
+  it('returns a conflict when another request claims the pending review first', async () => {
+    prisma.objective.findUnique.mockResolvedValue(visibleObjective);
+    prisma.objective.update.mockResolvedValue({
+      ...visibleObjective,
+      reviewStatus: 'approved',
+    });
+    prisma.objective.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect((service as any).reviewObjective(
+      'objective-visible',
+      'approved',
+      undefined,
+      viewer,
+    )).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('requires a reason before requesting objective changes', async () => {
+    prisma.objective.findUnique.mockResolvedValue(visibleObjective);
+    prisma.objective.update.mockResolvedValue({
+      ...visibleObjective,
+      reviewStatus: 'changes_requested',
+      reviewedById: viewer.id,
+      reviewedAt: new Date('2026-08-25T08:00:00.000Z'),
+      reviewComment: null,
+      reviewedBy: { id: viewer.id, name: viewer.name },
+    });
+
+    await expect((service as any).reviewObjective(
+      'objective-visible',
+      'changes_requested',
+      '   ',
+      viewer,
+    )).rejects.toBeInstanceOf(BadRequestException);
+    expect(prisma.objective.update).not.toHaveBeenCalled();
+  });
+
+  it('resubmits an approved objective after a material definition change', async () => {
+    const approvedObjective = {
+      ...visibleObjective,
+      reviewStatus: 'approved',
+      reviewedById: viewer.id,
+      reviewedAt: new Date('2026-08-25T08:00:00.000Z'),
+      reviewComment: '同意',
+      reviewedBy: { id: viewer.id, name: viewer.name },
+    };
+    prisma.objective.findUnique.mockResolvedValue(approvedObjective);
+    prisma.user.findUnique.mockResolvedValue({ directManagerId: viewer.id });
+    prisma.objective.update.mockResolvedValue({
+      ...approvedObjective,
+      title: 'Updated objective',
+      reviewStatus: 'pending',
+      reviewedById: null,
+      reviewedAt: null,
+      reviewComment: null,
+      reviewedBy: null,
+    });
+
+    const result = await service.update(
+      'objective-visible',
+      { title: 'Updated objective' },
+      viewer,
+    );
+
+    expect(result).toEqual(expect.objectContaining({
+      reviewStatus: 'pending',
+      reviewedById: null,
+    }));
+    expect(prisma.objective.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        reviewStatus: 'pending',
+        reviewedById: null,
+        reviewedAt: null,
+        reviewComment: null,
+      }),
+    }));
   });
 
   it('shows only explicitly shareable direct-manager indicators and keeps them read-only', async () => {
