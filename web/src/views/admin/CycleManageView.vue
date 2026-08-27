@@ -149,6 +149,11 @@ const submitting = ref(false);
 const launchingId = ref<string | null>(null);
 const deletingId = ref<string | null>(null);
 const cycles = ref<AssessmentCycle[]>([]);
+const canEditCyclePlan = computed(() => (
+  auth.user?.sysRole === 'system_admin'
+  || auth.user?.sysRole === 'hr'
+  || auth.user?.hrCapabilities?.includes('cycle_plan_edit')
+));
 
 const initialStatus = CYCLE_STATUS_OPTIONS.some((item) => item.value === route.query.status)
   ? route.query.status as CycleStatus
@@ -242,6 +247,8 @@ const createForm = reactive({
   goalSettingOpenAt: undefined as Date | undefined,
   selfEvalOpenAt: undefined as Date | undefined,
   hrOwnerId: '' as string | undefined,
+  reviewerId: '' as string | undefined,
+  monthlyFollowUpRequired: false,
   participantDeptIds: [] as string[],
   participantUserIds: [] as string[],
   explicitExemptDeptIds: [] as string[],
@@ -280,7 +287,7 @@ const createRules = {
   type: [{ required: true, message: '请选择周期类型', trigger: 'change' }],
   startDate: [{ required: true, message: '请选择开始日期', trigger: 'change' }],
   endDate: [{ required: true, message: '请选择结束日期', trigger: 'change' }],
-  hrOwnerId: [{ required: true, message: '请选择本周期 HR 负责人', trigger: 'change' }],
+  reviewerId: [{ required: true, message: '请选择本周期审核人', trigger: 'change' }],
   participantDeptIds: [{
     validator: (_rule: unknown, value: string[], callback: (error?: Error) => void) => {
       if (
@@ -317,6 +324,8 @@ function resetCreateForm() {
   createForm.goalSettingOpenAt = undefined;
   createForm.selfEvalOpenAt = undefined;
   createForm.hrOwnerId = auth.user?.sysRole === 'hr' ? auth.user.id : undefined;
+  createForm.reviewerId = auth.user?.sysRole === 'hr' ? auth.user.id : undefined;
+  createForm.monthlyFollowUpRequired = false;
   createForm.participantDeptIds = [];
   createForm.participantUserIds = [];
   createForm.explicitExemptDeptIds = [];
@@ -490,6 +499,8 @@ function openEditCycle(cycle: AssessmentCycle) {
   createForm.goalSettingOpenAt = toDate(cycle.goalSettingOpenAt);
   createForm.selfEvalOpenAt = toDate(cycle.selfEvalOpenAt);
   createForm.hrOwnerId = cycle.hrOwnerId;
+  createForm.reviewerId = cycle.reviewerId;
+  createForm.monthlyFollowUpRequired = Boolean(cycle.monthlyFollowUpRequired);
   createForm.participantScope = (
     (cycle.participantDeptIds?.length ?? 0) > 0
     || (cycle.participantUserIds?.length ?? 0) > 0
@@ -727,7 +738,10 @@ function buildCreateBody(): CreateCycleBody {
     endDate: formatDateLocal(createForm.endDate)!,
     goalSettingOpenAt: formatDateTimeLocal(createForm.goalSettingOpenAt),
     selfEvalOpenAt: formatDateTimeLocal(createForm.selfEvalOpenAt),
-    hrOwnerId: createForm.hrOwnerId,
+    reviewerId: createForm.reviewerId,
+    monthlyFollowUpRequired: ['quarterly', 'semiannual', 'annual'].includes(createForm.type)
+      ? createForm.monthlyFollowUpRequired
+      : false,
     participantDeptIds: [...createForm.participantDeptIds],
     participantUserIds: [...createForm.participantUserIds],
     explicitExemptDeptIds: [...createForm.explicitExemptDeptIds],
@@ -888,7 +902,7 @@ async function handleLaunch(cycle: AssessmentCycle) {
       overrideReason = prompt.value.trim();
     }
     await ElMessageBox.confirm(
-      `发起后将为全员创建考核任务并绑定模板快照，该操作不可撤销。\n\n确认发起「${cycle.name}」？`,
+      `发起后将为参与员工创建空白目标任务，该操作不可撤销。\n\n确认发起「${cycle.name}」？`,
       '确认发起周期',
       {
         confirmButtonText: '确认发起',
@@ -1139,6 +1153,22 @@ async function handleStatusFilterChange(status: CycleStatus | '') {
   await handleSearch();
 }
 
+async function handleReviewCycle(cycle: AssessmentCycle) {
+  try {
+    await ElMessageBox.confirm(
+      `确认审核通过「${cycle.name}」？通过后创建人可执行发起检查。`,
+      '审核周期计划',
+      { confirmButtonText: '审核通过', cancelButtonText: '取消', type: 'warning' },
+    );
+    await cyclesApi.review(cycle.id, 'approve');
+    ElMessage.success('周期计划已审核通过');
+    await loadCycles();
+    if (isCycleWorkspace.value) await loadCycleDetail(cycle.id);
+  } catch {
+    // 用户取消或接口错误由拦截器展示。
+  }
+}
+
 onChange(() => {
   void syncListRoute();
   void loadCycles();
@@ -1170,6 +1200,7 @@ onMounted(() => {
       :preflight-error="preflightError"
       :launching="launchingId === cycleDetail?.id"
       :can-open-immediately="canOpenImmediately"
+      :can-edit="canEditCyclePlan"
       @back="closeCycleWorkspace"
       @retry="retryCycleDetail"
       @preflight="handleWorkspacePreflight"
@@ -1198,7 +1229,7 @@ onMounted(() => {
               @change="handleDingtalkNotificationToggle"
             />
           </div>
-          <el-button data-testid="cycle-create" type="primary" @click="openCreateDialog">新建周期</el-button>
+          <el-button v-if="canEditCyclePlan" data-testid="cycle-create" type="primary" @click="openCreateDialog">新建周期</el-button>
         </div>
       </template>
 
@@ -1254,6 +1285,9 @@ onMounted(() => {
         :loading="listLoading"
         :launching-id="launchingId"
         :deleting-id="deletingId"
+        :current-user-id="auth.user?.id"
+        :is-system-admin="auth.user?.sysRole === 'system_admin'"
+        :can-edit="canEditCyclePlan"
         @open="handleView"
         @primary="handlePrimaryCycleAction"
         @edit-cycle="openEditCycle"
@@ -1261,12 +1295,13 @@ onMounted(() => {
         @cancel-schedule="handleCancelSchedule"
         @notification-mode="openNotificationModeDialog"
         @delete="handleDeleteCycle"
+        @review="handleReviewCycle"
       />
 
       <div v-else data-testid="cycle-empty-state" class="cycle-empty-state">
         <EmptyState :description="emptyStateDescription">
           <el-button
-            v-if="statusGroup === 'attention' && !hasListFilters"
+            v-if="canEditCyclePlan && statusGroup === 'attention' && !hasListFilters"
             data-testid="cycle-empty-create"
             type="primary"
             @click="openCreateDialog"
@@ -1398,17 +1433,25 @@ onMounted(() => {
             </el-form-item>
           </el-col>
           <el-col :span="12">
-            <el-form-item label="HR 负责人" prop="hrOwnerId">
+            <el-form-item label="审核人" prop="reviewerId">
               <UserSelect
-                v-model="createForm.hrOwnerId"
+                v-model="createForm.reviewerId"
                 sys-role="hr"
                 status="active"
                 :clearable="false"
-                placeholder="选择本周期 HR 负责人"
+                placeholder="选择 HR 管理员审核"
               />
             </el-form-item>
           </el-col>
         </el-row>
+
+        <el-form-item v-if="['quarterly', 'semiannual', 'annual'].includes(createForm.type)" label="月度跟进">
+          <el-switch
+            v-model="createForm.monthlyFollowUpRequired"
+            active-text="需要按月跟进"
+            inactive-text="不要求月度跟进"
+          />
+        </el-form-item>
 
         <el-form-item>
           <template #label>
@@ -1596,6 +1639,9 @@ onMounted(() => {
             </el-collapse-item>
           </el-collapse>
         </div>
+          <div class="cycle-creator-note">
+            创建人：{{ isEditMode ? (cycles.find((item) => item.id === editingCycleId)?.creator?.name || auth.user?.name) : auth.user?.name }}
+          </div>
         </section>
       </el-form>
 

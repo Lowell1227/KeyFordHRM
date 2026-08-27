@@ -6,6 +6,7 @@ import { AuthUser } from '../common/types/auth.types';
 import { LocalLoginDto } from './dto/local-login.dto';
 import { DingTalkLoginDto } from './dto/dingtalk-login.dto';
 import { TestLoginDto } from './dto/test-login.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -23,6 +24,12 @@ export class AuthController {
   @Get('me')
   async me(@CurrentUser() authUser: AuthUser) {
     return this.authService.getMe(authUser.id);
+  }
+
+  @Post('change-password')
+  @HttpCode(200)
+  async changePassword(@Body() dto: ChangePasswordDto, @CurrentUser() authUser: AuthUser) {
+    return this.authService.changePassword(authUser.id, dto);
   }
 
   /** 钉钉免密登录（占位）。 */

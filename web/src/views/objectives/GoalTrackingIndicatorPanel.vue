@@ -80,6 +80,9 @@ function handleCycleChange(event: Event) {
     <p v-if="notice" class="tracking-indicators__notice" role="status">
       {{ notice }}
     </p>
+    <p v-if="result.monthlyFollowUpRequired" class="tracking-indicators__notice" role="status">
+      本周期要求按月跟进：每个自然月至少更新一次目标进展。
+    </p>
 
     <div
       class="goal-indicator-surface tracking-indicators__table"

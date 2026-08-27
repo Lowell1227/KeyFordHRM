@@ -11,6 +11,8 @@ import { UpdateDeadlinesDto } from './dto/update-deadlines.dto';
 import { CycleQueryDto } from './dto/cycle-query.dto';
 import { LaunchCycleDto, ScheduleCycleDto } from './dto/launch-cycle.dto';
 import { UpdateCycleNotificationModeDto } from './dto/update-cycle-notification-mode.dto';
+import { ReviewCycleDto } from './dto/review-cycle.dto';
+import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
 
 // 管理员可以查看全量周期；其他角色只能读取已开放周期，避免草稿和预约信息泄露。
 @Controller('cycles')
@@ -22,6 +24,7 @@ export class CyclesController {
 
   @Post()
   @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('cycle_plan_edit')
   create(@Body() dto: CreateCycleDto, @CurrentUser() user: AuthUser) {
     return this.cyclesService.create(dto, user);
   }
@@ -43,12 +46,14 @@ export class CyclesController {
 
   @Delete(':id')
   @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('cycle_plan_edit')
   remove(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
     return this.cyclesService.remove(id, user);
   }
 
   @Patch(':id')
   @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('cycle_plan_edit')
   update(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCycleDto,
@@ -59,6 +64,7 @@ export class CyclesController {
 
   @Patch(':id/deadlines')
   @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('cycle_plan_edit')
   updateDeadlines(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateDeadlinesDto,
@@ -69,6 +75,7 @@ export class CyclesController {
 
   @Patch(':id/notification-mode')
   @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('cycle_plan_edit')
   updateNotificationMode(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: UpdateCycleNotificationModeDto,
@@ -79,12 +86,14 @@ export class CyclesController {
 
   @Get(':id/preflight')
   @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('cycle_plan_edit', 'cycle_plan_review')
   preflight(@Param('id', ParseUUIDPipe) id: string) {
     return this.launchService.preflight(id);
   }
 
   @Post(':id/schedule')
   @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('cycle_plan_edit')
   schedule(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ScheduleCycleDto,
@@ -95,12 +104,14 @@ export class CyclesController {
 
   @Post(':id/schedule/cancel')
   @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('cycle_plan_edit')
   cancelSchedule(@Param('id', ParseUUIDPipe) id: string, @CurrentUser() user: AuthUser) {
     return this.launchService.cancelSchedule(id, user);
   }
 
   @Post(':id/launch')
   @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('cycle_plan_edit')
   launch(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: LaunchCycleDto,
@@ -110,5 +121,16 @@ export class CyclesController {
       expectedPlanHash: dto.expectedPlanHash,
       overrideReason: dto.overrideReason,
     });
+  }
+
+  @Post(':id/review')
+  @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('cycle_plan_review')
+  review(
+    @Param('id', ParseUUIDPipe) id: string,
+    @Body() dto: ReviewCycleDto,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.cyclesService.review(id, dto, user);
   }
 }

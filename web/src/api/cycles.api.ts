@@ -70,7 +70,7 @@ export const cyclesApi = {
 
   /**
    * POST /cycles/:id/launch — 发起周期。
-   * 会为全员生成考核任务并绑定模板快照，可能耗时较长，调用方需加 loading。
+   * 会为参与员工生成空白目标任务，可能耗时较长，调用方需加 loading。
    */
   launch(id: string, body: { expectedPlanHash: string; overrideReason?: string }): Promise<AssessmentCycle> {
     return apiPost(`/cycles/${id}/launch`, body);
@@ -92,6 +92,10 @@ export const cyclesApi = {
 
   cancelSchedule(id: string): Promise<AssessmentCycle> {
     return apiPost(`/cycles/${id}/schedule/cancel`);
+  },
+
+  review(id: string, action: 'approve' | 'reject', comment?: string): Promise<AssessmentCycle> {
+    return apiPost(`/cycles/${id}/review`, { action, comment });
   },
 
   updateNotificationMode(id: string, notificationMode: CycleNotificationMode): Promise<AssessmentCycle> {

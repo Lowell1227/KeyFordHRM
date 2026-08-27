@@ -16,6 +16,7 @@ const props = withDefaults(defineProps<{
   preflightError?: string;
   launching?: boolean;
   canOpenImmediately?: boolean;
+  canEdit?: boolean;
 }>(), {
   cycle: null,
   loading: false,
@@ -25,6 +26,7 @@ const props = withDefaults(defineProps<{
   preflightError: '',
   launching: false,
   canOpenImmediately: false,
+  canEdit: false,
 });
 
 const emit = defineEmits<{
@@ -86,10 +88,16 @@ function blockerActionLabel(code: string): string {
             <el-tag v-if="cycle" size="small" effect="light">{{ STATUS_LABEL[cycle.status] }}</el-tag>
           </div>
           <p v-if="cycle">{{ formatDate(cycle.startDate) }}–{{ formatDate(cycle.endDate) }}</p>
+          <div v-if="cycle" class="cycle-workspace__meta">
+            <span>创建人：{{ cycle.creator?.name || '—' }}</span>
+            <span>审核人：{{ cycle.reviewer?.name || '—' }}</span>
+            <span>审核状态：{{ cycle.reviewStatus === 'approved' ? '已通过' : (cycle.reviewStatus === 'rejected' ? '已退回' : '待审核') }}</span>
+            <span v-if="cycle.monthlyFollowUpRequired">需按月跟进</span>
+          </div>
         </div>
       </div>
       <div
-        v-if="cycle?.status === 'draft'"
+        v-if="cycle?.status === 'draft' && canEdit"
         class="cycle-workspace__header-actions"
       >
         <el-button
@@ -143,10 +151,10 @@ function blockerActionLabel(code: string): string {
           </div>
 
           <div v-if="cycle.taskStats" class="cycle-stat-grid">
-            <div><span>参与任务</span><strong>{{ cycle.taskStats.total }}</strong></div>
-            <div><span>目标已完成</span><strong>{{ cycle.taskStats.goalCompleted }}</strong></div>
-            <div><span>待主管审核</span><strong>{{ cycle.taskStats.pendingManagerReview }}</strong></div>
-            <div><span>已逾期</span><strong :class="{ 'is-danger': cycle.taskStats.overdue > 0 }">{{ cycle.taskStats.overdue }}</strong></div>
+            <div><span>参与任务</span><strong>{{ cycle.taskStats.total }}人</strong></div>
+            <div><span>目标已完成</span><strong>{{ cycle.taskStats.goalCompleted }}人</strong></div>
+            <div><span>待主管审核</span><strong>{{ cycle.taskStats.pendingManagerReview }}人</strong></div>
+            <div><span>已逾期</span><strong :class="{ 'is-danger': cycle.taskStats.overdue > 0 }">{{ cycle.taskStats.overdue }}人</strong></div>
           </div>
 
           <section v-if="['draft', 'launch_blocked'].includes(cycle.status)" class="cycle-preflight-panel">
@@ -154,7 +162,7 @@ function blockerActionLabel(code: string): string {
               class="cycle-preflight-control-bar"
               data-testid="cycle-preflight-control-bar"
             >
-              <p>检查参与人员、直属上级、考核模板和时间计划是否准备完成。</p>
+              <p>检查周期审核、参与人员、直属上级和时间计划是否准备完成。</p>
               <div
                 class="cycle-preflight-primary-action"
                 data-testid="cycle-preflight-primary-action"
@@ -206,7 +214,7 @@ function blockerActionLabel(code: string): string {
               />
               <div class="cycle-preflight-summary">
                 <span><strong>{{ preflight.participantCount }}</strong> 名参与员工</span>
-                <span><strong>{{ preflight.templateCount }}</strong> 套考核模板</span>
+                <span>员工目标将在发起后空白创建</span>
                 <span>目标制定开放时间 {{ formatDateTime(preflight.cycle.goalSettingOpenAt) }}</span>
               </div>
               <div
@@ -217,7 +225,7 @@ function blockerActionLabel(code: string): string {
                 <article v-for="blocker in preflight.blockers" :key="blocker.code">
                   <div>
                     <strong>{{ blocker.message }}</strong>
-                    <span>请完成相关人员、组织或考核模板配置后重新检查。</span>
+                    <span>请完成周期审核、人员或组织配置后重新检查。</span>
                   </div>
                   <el-button
                     v-if="blockerActionLabel(blocker.code)"
@@ -240,7 +248,6 @@ function blockerActionLabel(code: string): string {
                   <el-table-column prop="employeeName" label="员工" min-width="100" />
                   <el-table-column prop="deptName" label="部门" min-width="140" />
                   <el-table-column prop="managerName" label="直属上级" min-width="110" />
-                  <el-table-column prop="templateName" label="匹配考核模板" min-width="180" />
                 </el-table>
               </details>
             </template>
@@ -287,6 +294,15 @@ function blockerActionLabel(code: string): string {
   margin: 5px 0 0;
   color: var(--el-text-color-secondary);
   font-size: 13px;
+}
+
+.cycle-workspace__meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 7px;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 
 .cycle-stage-strip {

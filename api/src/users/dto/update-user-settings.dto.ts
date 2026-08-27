@@ -1,5 +1,5 @@
 import { SysRole } from '@prisma/client';
-import { IsBoolean, IsIn, IsOptional, IsUUID } from 'class-validator';
+import { IsArray, IsBoolean, IsIn, IsOptional, IsUUID } from 'class-validator';
 
 export class UpdateUserSettingsDto {
   @IsOptional()
@@ -7,8 +7,19 @@ export class UpdateUserSettingsDto {
   directManagerId?: string | null;
 
   @IsOptional()
-  @IsIn([SysRole.employee, SysRole.hr, SysRole.system_admin])
+  @IsIn([SysRole.employee, SysRole.hr_user, SysRole.hr, SysRole.system_admin])
   sysRole?: SysRole;
+
+  @IsOptional()
+  @IsArray()
+  @IsIn([
+    'employee_archive_edit',
+    'employee_archive_review',
+    'organization_edit',
+    'cycle_plan_edit',
+    'cycle_plan_review',
+  ], { each: true })
+  hrCapabilities?: string[];
 
   @IsOptional()
   @IsBoolean()

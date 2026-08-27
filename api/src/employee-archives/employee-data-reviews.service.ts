@@ -10,6 +10,7 @@ import {
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
+import * as bcrypt from 'bcrypt';
 
 export type EmployeeReviewScope = 'profile' | 'performance';
 
@@ -427,10 +428,16 @@ export class EmployeeDataReviewsService {
       accountType: AccountType.employee,
       leaveDate,
     };
+    const initialPasswordHash = request.userId ? null : await bcrypt.hash('0000', 10);
     const userId = request.userId
       ? request.userId
       : (await tx.user.create({
-        data: { ...projection, directManagerId: null },
+        data: {
+          ...projection,
+          directManagerId: null,
+          passwordHash: initialPasswordHash,
+          mustChangePassword: true,
+        },
         select: { id: true },
       })).id;
     if (request.userId && shouldUpdateUserProjection) {
@@ -555,7 +562,7 @@ export class EmployeeDataReviewsService {
       });
     }
 
-    if (request.sourceType === 'employee_roster_import') {
+    if (request.sourceType === 'employee_roster_import' || request.sourceType === 'manual_archive_change') {
       const contracts = Array.isArray(proposed.contracts)
         ? proposed.contracts.map((item) => this.record(item))
         : [];
@@ -682,6 +689,14 @@ export class EmployeeDataReviewsService {
   }
 
   private profileUpdate(value: Record<string, unknown>): Record<string, unknown> {
+    const allowedFields = new Set([
+      'phone', 'gender', 'birthDate', 'ethnicity', 'education', 'professionalTitle', 'school',
+      'graduationDate', 'major', 'maritalStatus', 'childrenStatus', 'childrenCount', 'politicalStatus',
+      'nativePlace', 'householdType', 'idAddress', 'idNumberEncrypted', 'idNumberFingerprint',
+      'currentAddress', 'emergencyContactName', 'emergencyContactRelation', 'emergencyContactPhone',
+      'socialSecurityStatus', 'socialSecurityStartDate', 'housingFundStatus', 'housingFundStartDate',
+      'bankName', 'bankBranch', 'bankAccountEncrypted', 'bankAccountFingerprint',
+    ]);
     const dateFields = new Set([
       'birthDate',
       'graduationDate',
@@ -691,7 +706,7 @@ export class EmployeeDataReviewsService {
     const byteFields = new Set(['idNumberEncrypted', 'bankAccountEncrypted']);
     const result: Record<string, unknown> = {};
     for (const [key, item] of Object.entries(value)) {
-      if (item === undefined) continue;
+      if (item === undefined || !allowedFields.has(key)) continue;
       if (dateFields.has(key)) result[key] = this.nullableDate(item);
       else if (byteFields.has(key)) result[key] = this.bufferValue(item);
       else result[key] = item;
@@ -912,7 +927,7 @@ export class EmployeeDataReviewsService {
       proposedKeys.add(this.contractKey(contractType, sequence));
       const contractData = {
         name: this.nullableString(contract.name),
-        signingCompany: this.nullableString(employee.companyText),
+        signingCompany: this.nullableString(contract.signingCompany ?? employee.companyText),
         signedAt: this.nullableDate(contract.signedAt),
         effectiveFrom: this.nullableDate(contract.signedAt),
         expiresAt: this.nullableDate(contract.expiresAt),

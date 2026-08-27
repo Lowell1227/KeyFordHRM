@@ -1,4 +1,5 @@
 import http from './http';
+import type { AxiosResponse } from 'axios';
 
 export type EmployeeRosterImportMode = 'full' | 'incremental';
 
@@ -88,7 +89,24 @@ export interface EmployeeArchive {
   dept: { id: string; name: string; fullPath: string | null; company: string } | null;
   performanceManager: { id: string; name: string; employeeNo: string | null } | null;
   rosterManager: { id: string; name: string; employeeNo: string | null } | null;
-  currentEmployment: { id: string; company: string; directManager?: { id: string; name: string; employeeNo: string | null } | null } | null;
+  currentEmployment: {
+    id: string;
+    company: string;
+    deptId: string | null;
+    position: string | null;
+    jobGrade: string | null;
+    jobFamily: string | null;
+    directManagerId: string | null;
+    directManager?: { id: string; name: string; employeeNo: string | null } | null;
+    workLocation: string | null;
+    employmentType: string;
+    employeeStatus: 'active' | 'probation' | 'resigned';
+    entryDate: string | null;
+    plannedRegularDate: string | null;
+    actualRegularDate: string | null;
+    leaveDate: string | null;
+    probationMonths: number | null;
+  } | null;
   employeeProfile: {
     phone: string | null;
     gender: string | null;
@@ -99,15 +117,42 @@ export interface EmployeeArchive {
     school: string | null;
     graduationDate: string | null;
     major: string | null;
+    maritalStatus: string | null;
+    childrenStatus: string | null;
+    childrenCount: number | null;
+    politicalStatus: string | null;
+    nativePlace: string | null;
+    householdType: string | null;
+    idAddress: string | null;
+    idNumberConfigured: boolean;
+    currentAddress: string | null;
+    emergencyContactName: string | null;
+    emergencyContactRelation: string | null;
+    emergencyContactPhone: string | null;
+    socialSecurityStatus: string | null;
+    socialSecurityStartDate: string | null;
+    housingFundStatus: string | null;
+    housingFundStartDate: string | null;
+    bankName: string | null;
+    bankBranch: string | null;
+    bankAccountConfigured: boolean;
   } | null;
   employmentHistory: Array<{
     id: string;
     company: string;
+    deptId: string | null;
     position: string | null;
     jobGrade: string | null;
     jobFamily: string | null;
     workLocation: string | null;
+    employmentType: string;
+    directManagerId: string | null;
     employeeStatus: 'active' | 'probation' | 'resigned';
+    entryDate: string | null;
+    plannedRegularDate: string | null;
+    actualRegularDate: string | null;
+    leaveDate: string | null;
+    probationMonths: number | null;
     effectiveFrom: string;
     effectiveTo: string | null;
     changeType: string;
@@ -122,6 +167,13 @@ export interface EmployeeArchive {
     signedAt: string | null;
     expiresAt: string | null;
     termType: string | null;
+    sequence: number;
+    effectiveFrom: string | null;
+    originalCompany: string | null;
+    newCompany: string | null;
+    confidentialityAgreement: string | null;
+    nonCompeteAgreement: string | null;
+    portraitAgreement: string | null;
     isActive: boolean;
     endedAt: string | null;
   }>;
@@ -147,6 +199,20 @@ export const employeeArchivesApi = {
 
   updateProfile(userId: string, body: { phone?: string | null; gender?: string | null }): Promise<EmployeeDataReview> {
     return http.patch(`/employee-archives/${userId}/profile`, body) as unknown as Promise<EmployeeDataReview>;
+  },
+
+  submitDraft(userId: string, body: {
+    employee: Record<string, unknown>;
+    profile: Record<string, unknown>;
+    contracts: Record<string, unknown>[];
+    performance: Record<string, unknown>;
+  }): Promise<EmployeeDataReview> {
+    return http.patch(`/employee-archives/${userId}/draft`, body) as unknown as Promise<EmployeeDataReview>;
+  },
+
+  async downloadRosterTemplate(): Promise<Blob> {
+    const response = await http.get('/employee-archives/imports/template', { responseType: 'blob' }) as unknown as AxiosResponse<Blob>;
+    return response.data;
   },
 
   previewRoster(file: File, mode: EmployeeRosterImportMode): Promise<EmployeeRosterPreviewResult> {

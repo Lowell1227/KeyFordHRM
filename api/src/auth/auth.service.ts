@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
 import { ExternalIdentityProvider, ExternalIdentityStatus, User, UserStatus } from '@prisma/client';
@@ -12,12 +12,15 @@ import { DingTalkLoginDto } from './dto/dingtalk-login.dto';
 import { TestLoginDto } from './dto/test-login.dto';
 import { findTestAccount, TEST_ACCOUNT_MANIFEST } from './test-accounts';
 import { BusinessCapabilities, BusinessCapabilitiesService } from './business-capabilities.service';
+import { ChangePasswordDto } from './dto/change-password.dto';
+import type { HrCapability } from './hr-capabilities';
 
-type SystemPermission = 'standard_user' | 'hr_admin' | 'system_admin';
+type SystemPermission = 'standard_user' | 'hr_user' | 'hr_admin' | 'system_admin';
 
 function toSystemPermission(sysRole: string): SystemPermission {
   if (sysRole === 'system_admin') return 'system_admin';
   if (sysRole === 'hr') return 'hr_admin';
+  if (sysRole === 'hr_user') return 'hr_user';
   return 'standard_user';
 }
 
@@ -25,6 +28,7 @@ function toSystemPermission(sysRole: string): SystemPermission {
 export interface LoginResponse {
   token: string;
   expiresIn: number;
+  passwordChangeRequired: boolean;
   user: {
     id: string;
     name: string;
@@ -37,6 +41,7 @@ export interface LoginResponse {
     isAssessorOnly: boolean;
     canViewAll: boolean;
     businessCapabilities: BusinessCapabilities;
+    hrCapabilities: HrCapability[];
   };
 }
 
@@ -77,13 +82,13 @@ export class AuthService {
     }
 
     await this.assertCurrentEmployment(user.id);
-    return this.issueToken(user);
+    return this.issueToken(user, user.mustChangePassword);
   }
 
   /** 钉钉免密登录（结构占位）。 */
   async dingtalkLogin(dto: DingTalkLoginDto): Promise<LoginResponse> {
     const user = await this.resolveUserByAuthCode(dto.authCode, dto.loginMode);
-    return this.issueToken(user);
+    return this.issueToken(user, false);
   }
 
   /** 返回由后端开关控制的固定测试身份，不向浏览器下发任何密码。 */
@@ -161,7 +166,7 @@ export class AuthService {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '账号不是受控测试身份' });
     }
 
-    return this.issueToken(user);
+    return this.issueToken(user, false);
   }
 
   /** 获取当前登录用户详情（含部门、直属上级）。 */
@@ -201,7 +206,43 @@ export class AuthService {
       directManagerName: user.directManager?.name ?? null,
       avatarUrl: user.avatarUrl,
       businessCapabilities,
+      hrCapabilities: user.hrCapabilities as HrCapability[],
     };
+  }
+
+  async changePassword(userId: string, dto: ChangePasswordDto): Promise<{ success: boolean }> {
+    if (dto.password !== dto.confirmPassword) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '两次输入的密码不一致' });
+    }
+    if (!/^\d{4,6}$/.test(dto.password)) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '密码必须为4至6位数字' });
+    }
+    if (dto.password === '0000') {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '新密码不能继续使用0000' });
+    }
+
+    const user = await this.prisma.user.findUnique({ where: { id: userId, deletedAt: null } });
+    if (!user) {
+      throw new UnauthorizedException({ code: ERROR_CODE.UNAUTHORIZED, message: '用户不存在或已被禁用' });
+    }
+    const passwordHash = await bcrypt.hash(dto.password, 10);
+    await this.prisma.$transaction(async (tx) => {
+      await tx.user.update({
+        where: { id: userId },
+        data: { passwordHash, mustChangePassword: false },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId,
+          action: 'change_password',
+          entityType: 'user',
+          entityId: userId,
+          oldValue: { mustChangePassword: user.mustChangePassword },
+          newValue: { changedAt: Date.now() },
+        },
+      });
+    });
+    return { success: true };
   }
 
   /**
@@ -263,7 +304,10 @@ export class AuthService {
   }
 
   /** 签发 JWT 并组装登录响应（供本地登录与钉钉登录复用）。 */
-  async issueToken(user: User & { dept?: { name: string } | null }): Promise<LoginResponse> {
+  async issueToken(
+    user: User & { dept?: { name: string } | null },
+    passwordChangeRequired = false,
+  ): Promise<LoginResponse> {
     const payload: JwtPayload = {
       sub: user.id,
       name: user.name,
@@ -280,6 +324,7 @@ export class AuthService {
     return {
       token,
       expiresIn,
+      passwordChangeRequired,
       user: {
         id: user.id,
         name: user.name,
@@ -292,6 +337,7 @@ export class AuthService {
         isAssessorOnly: user.isAssessorOnly,
         canViewAll: user.canViewAll,
         businessCapabilities,
+        hrCapabilities: user.hrCapabilities as HrCapability[],
       },
     };
   }

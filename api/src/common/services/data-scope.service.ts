@@ -4,6 +4,7 @@ import { SysRole } from '@prisma/client';
 import { PrismaService } from '../../prisma/prisma.service';
 import { AuthUser } from '../types/auth.types';
 import { findDepartmentsByEffectiveApprover } from '@/departments/department-relations';
+import { hasHrCapability } from '@/auth/hr-capabilities';
 
 /**
  * 数据权限助手服务。
@@ -104,6 +105,13 @@ export class DataScopeService {
 
     /** HR 角色 → 可见全部在职员工。 */
     if (viewer.sysRole === SysRole.hr) {
+      return {};
+    }
+    if (
+      hasHrCapability(viewer, 'employee_archive_edit')
+      || hasHrCapability(viewer, 'employee_archive_review')
+      || hasHrCapability(viewer, 'organization_edit')
+    ) {
       return {};
     }
 

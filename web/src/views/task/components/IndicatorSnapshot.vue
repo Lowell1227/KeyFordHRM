@@ -86,6 +86,7 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'save', body: Omit<SetIndicatorBody, 'expectedUpdatedAt'>): void;
+  (e: 'save-and-add', body: Omit<SetIndicatorBody, 'expectedUpdatedAt'>): void;
   (e: 'confirm'): void;
   (e: 'reject', reason: string): void;
   (e: 'submit-self-eval', body: SubmitSelfEvalBody, actualValues: ActualValueItem[]): void;
@@ -282,17 +283,6 @@ watch(
     advancedSettingIds.value = new Set();
   },
   { immediate: true, deep: true },
-);
-
-watch(
-  () => props.canEdit,
-  (canEdit) => {
-    if (canEdit) {
-      loadIndicatorReferences();
-      if (props.canUseTemplate) loadTemplateReferences();
-    }
-  },
-  { immediate: true },
 );
 
 function initSelfEvalForm() {
@@ -605,7 +595,7 @@ function libraryIndicatorToItem(indicator: Indicator, sortOrder: number): SetInd
     targetValue: indicator.targetValue,
     targetValueText: indicator.targetValueText,
     unit: indicator.unit,
-    weight: editableItems.length ? Number((1 / (editableItems.length + 1)).toFixed(4)) : 1,
+    weight: editableItems.length ? 0 : 1,
     indicatorType: indicator.type,
     dimensionName: indicator.category || indicator.groupName || 'KPI维度',
     dimensionWeight: 1,
@@ -860,9 +850,9 @@ function buildIndicatorBody(action: 'save' | 'submit'): Omit<SetIndicatorBody, '
     ElMessage.warning(`指标权重合计不能超过 100%，当前为 ${displayedWeightTotal.value.percentText}%。`);
     return null;
   }
-  if (action === 'submit' && !displayedWeightTotal.value.isExactlyOneHundredPercent) {
-    revealSnapshotIndicator(0);
-    ElMessage.warning(`提交指标前权重合计必须为 100%，当前为 ${displayedWeightTotal.value.percentText}%。`);
+  const normalizedNames = instances.map((item) => item.name.trim().toLocaleLowerCase());
+  if (new Set(normalizedNames).size !== normalizedNames.length) {
+    ElMessage.warning('目标名称不能重复');
     return null;
   }
   return {
@@ -876,6 +866,12 @@ function handleSave(action: 'save' | 'submit' = 'submit') {
   const body = buildIndicatorBody(action);
   if (!body) return;
   emit('save', body);
+}
+
+async function handleSaveAndAdd() {
+  const body = buildIndicatorBody('save');
+  if (!body) return;
+  emit('save-and-add', body);
 }
 
 async function handleConfirm() {
@@ -972,7 +968,7 @@ function handleSaveSelfEvalForLater() {
   if (persistSelfEvalDraft()) emit('save-self-eval-draft');
 }
 
-defineExpose({ clearSelfEvalDraft });
+defineExpose({ clearSelfEvalDraft, addGoal: addItem });
 
 async function handleUpload(files: File[]) {
   for (const file of files) {
@@ -1002,10 +998,8 @@ function handleAttachmentsChange(attachments: Attachment[]) {
         data-testid="performance-stage-actions"
       >
         <template v-if="canEdit">
-          <el-button v-if="splitSaveActions" :loading="loading" @click="handleSave('save')">保存</el-button>
-          <el-button type="primary" :loading="loading" @click="handleSave('submit')">
-            {{ submitLabel || saveLabel || '提交' }}
-          </el-button>
+          <el-button :loading="loading" @click="handleSave('save')">保存</el-button>
+          <el-button type="primary" :loading="loading" @click="handleSaveAndAdd">保存并添加下一个</el-button>
         </template>
         <el-button v-if="canReject" plain type="danger" :icon="Close" :loading="loading" @click="rejectVisible = true">
           {{ rejectLabel || '退回指标' }}
@@ -1017,6 +1011,24 @@ function handleAttachmentsChange(attachments: Attachment[]) {
     </template>
 
     <template v-if="canEdit">
+      <div class="simple-goal-list">
+        <article v-for="(item, index) in editableItems" :key="editableRowIds[index]" class="simple-goal-card">
+          <header><strong>目标 {{ index + 1 }}</strong><el-button link type="danger" :icon="Delete" @click="removeItem(index)">删除</el-button></header>
+          <div class="simple-goal-grid">
+            <label class="goal-name"><span>名称</span><el-input v-model="item.name" maxlength="200" placeholder="请输入目标名称" /></label>
+            <label><span>权重</span><el-input-number :model-value="toPercent(item.weight)" :min="0" :max="100" :precision="2" @update:model-value="(value?: number) => setWeightPercent(item, value)" /></label>
+            <label class="is-wide"><span>描述</span><el-input v-model="item.description" type="textarea" :rows="2" placeholder="说明目标内容" /></label>
+            <label class="is-wide"><span>标准</span><el-input v-model="item.scoringStandard" type="textarea" :rows="2" placeholder="说明完成或评价标准" /></label>
+          </div>
+        </article>
+      </div>
+      <div class="simple-goal-footer">
+        <el-button plain :icon="Plus" @click="addItem">添加目标</el-button>
+        <span :class="{ 'is-danger': isWeightOverLimit }">权重合计 {{ displayedWeightTotal.percentText }}%（不超过 100%）</span>
+      </div>
+    </template>
+
+    <template v-else-if="false">
       <PerformanceIndicatorList
         :rows="editableDisclosureRows"
         :invalid-indicator-ids="snapshotRevealIds"
@@ -1462,6 +1474,17 @@ function handleAttachmentsChange(attachments: Attachment[]) {
 </template>
 
 <style scoped>
+.simple-goal-list { display: grid; gap: 14px; }
+.simple-goal-card { padding: 18px; border: 1px solid var(--el-border-color-lighter); border-radius: 12px; background: #fff; }
+.simple-goal-card header, .simple-goal-footer { display: flex; align-items: center; justify-content: space-between; }
+.simple-goal-card header { margin-bottom: 14px; }
+.simple-goal-grid { display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: 14px; }
+.simple-goal-grid label { display: grid; gap: 7px; color: var(--el-text-color-secondary); font-size: 13px; }
+.simple-goal-grid .is-wide { grid-column: 1 / -1; }
+.simple-goal-grid :deep(.el-input-number) { width: 100%; }
+.simple-goal-footer { margin-top: 16px; color: var(--el-text-color-secondary); }
+.simple-goal-footer .is-danger { color: var(--el-color-danger); }
+@media (max-width: 720px) { .simple-goal-grid { grid-template-columns: 1fr; } .simple-goal-grid .is-wide { grid-column: auto; } }
 .actions {
   display: flex;
   gap: 8px;

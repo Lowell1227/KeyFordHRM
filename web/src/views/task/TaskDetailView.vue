@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, watch } from 'vue';
+import { ref, computed, nextTick, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
@@ -38,7 +38,7 @@ const cycle = ref<AssessmentCycle | null>(null);
 const cycleLoading = ref(false);
 const actionLoading = ref(false);
 const reminding = ref(false);
-const indicatorSnapshotRef = ref<{ clearSelfEvalDraft: () => void } | null>(null);
+const indicatorSnapshotRef = ref<{ clearSelfEvalDraft: () => void; addGoal: () => void } | null>(null);
 
 const task = computed(() => taskStore.detail);
 const loading = computed(() => taskStore.loading || cycleLoading.value);
@@ -68,8 +68,8 @@ const performanceStageLabels: Record<TaskStageKey, string> = {
 };
 
 const performanceStageCardTitles: Record<TaskStageKey, string> = {
-  'goal-setting': '考核指标',
-  'goal-confirmation': '指标确认',
+  'goal-setting': '目标制定',
+  'goal-confirmation': '目标确认',
   'self-eval': '员工自评',
   result: '结果信息',
 };
@@ -261,7 +261,7 @@ async function handleRejectIndicators(reason: string) {
   }
 }
 
-async function handleSaveIndicators(body: Omit<SetIndicatorBody, 'expectedUpdatedAt'>) {
+async function handleSaveIndicators(body: Omit<SetIndicatorBody, 'expectedUpdatedAt'>, addNext = false) {
   const currentTask = task.value;
   const id = currentTask?.id;
   if (!id || !currentTask.updatedAt) return;
@@ -278,8 +278,12 @@ async function handleSaveIndicators(body: Omit<SetIndicatorBody, 'expectedUpdate
       expectedUpdatedAt: currentTask.updatedAt,
     });
     if (body.action === 'save') {
-      ElMessage.success('指标已保存');
+      ElMessage.success('目标已保存');
       await loadDetail();
+      if (addNext) {
+        await nextTick();
+        indicatorSnapshotRef.value?.addGoal();
+      }
       return;
     }
     ElMessage.success(
@@ -438,6 +442,7 @@ async function handleRemind() {
             :self-eval-summary="task.selfEvalSummary"
             :self-eval-user-id="authStore.user?.id"
             @save="handleSaveIndicators"
+            @save-and-add="handleSaveIndicators($event, true)"
             @confirm="handleConfirmIndicators"
             @reject="handleRejectIndicators"
             @submit-self-eval="handleSubmitSelfEval"

@@ -26,9 +26,10 @@ import { usersApi } from '@/api/users.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
+import EmployeeArchiveEditDialog from './components/EmployeeArchiveEditDialog.vue';
 import { formatBusinessIdentityLabel } from '@/components/layout/business-identity';
 import { useAuthStore } from '@/stores/auth.store';
-import type { BusinessIdentity, Department, SystemPermission, User as ManagedUser, UserQuery } from '@/types/api.types';
+import type { BusinessIdentity, Department, HrCapability, SystemPermission, User as ManagedUser, UserQuery } from '@/types/api.types';
 import type { SysRole, UserStatus } from '@/types/enums';
 import { formatDate, formatDateTime } from '@/utils/date';
 import { isTopLevelDepartmentLeader } from '@/utils/organization-relations';
@@ -75,10 +76,19 @@ const contractTypeLabels: Record<string, string> = {
 
 const activeView = ref<'org' | 'users' | 'checks'>('org');
 const isSystemAdmin = computed(() => auth.user?.sysRole === 'system_admin');
+const canResetPassword = computed(() => ['hr', 'system_admin'].includes(auth.user?.sysRole ?? ''));
+const hasHrCapability = (capability: HrCapability) => (
+  ['hr', 'system_admin'].includes(auth.user?.sysRole ?? '')
+  || Boolean(auth.user?.hrCapabilities?.includes(capability))
+);
+const canEditArchive = computed(() => hasHrCapability('employee_archive_edit'));
+const canReviewArchive = computed(() => hasHrCapability('employee_archive_review'));
+const canEditOrganization = computed(() => hasHrCapability('organization_edit'));
 
 const roleLabels: Record<SysRole, string> = {
   system_admin: '系统管理员',
   hr: 'HR 管理员',
+  hr_user: '普通 HR',
   chairman: '标准用户',
   vp: '标准用户',
   dept_head: '标准用户',
@@ -89,6 +99,7 @@ const roleLabels: Record<SysRole, string> = {
 const systemPermissionLabels: Record<SystemPermission, string> = {
   system_admin: '系统管理员',
   hr_admin: 'HR 管理员',
+  hr_user: '普通 HR',
   standard_user: '标准用户',
 };
 
@@ -107,12 +118,14 @@ const statusTagType: Record<UserStatus, 'success' | 'warning' | 'info'> = {
 const sysRoleOptions: { label: string; value: SysRole }[] = [
   { label: '系统管理员', value: 'system_admin' },
   { label: 'HR 管理员', value: 'hr' },
+  { label: '普通 HR', value: 'hr_user' },
   { label: '标准用户', value: 'employee' },
 ];
 
 function normalizeSystemRole(user: Pick<ManagedUser, 'sysRole' | 'systemPermission'>): SysRole {
   if (user.systemPermission === 'system_admin' || user.sysRole === 'system_admin') return 'system_admin';
   if (user.systemPermission === 'hr_admin' || user.sysRole === 'hr') return 'hr';
+  if (user.systemPermission === 'hr_user' || user.sysRole === 'hr_user') return 'hr_user';
   return 'employee';
 }
 
@@ -125,6 +138,14 @@ function systemPermissionLabel(user: Pick<ManagedUser, 'sysRole' | 'systemPermis
 function businessIdentityText(identity: BusinessIdentity): string {
   return formatBusinessIdentityLabel(identity);
 }
+
+const hrCapabilityOptions: { label: string; value: HrCapability }[] = [
+  { label: '员工档案编辑', value: 'employee_archive_edit' },
+  { label: '员工档案审核', value: 'employee_archive_review' },
+  { label: '组织架构编辑', value: 'organization_edit' },
+  { label: '绩效周期计划创建编辑', value: 'cycle_plan_edit' },
+  { label: '绩效周期计划审核', value: 'cycle_plan_review' },
+];
 
 const statusOptions: { label: string; value: UserStatus }[] = [
   { label: '在职', value: 'active' },
@@ -594,21 +615,15 @@ const employeeArchiveDrawer = ref({
   visible: false,
   loading: false,
   dingtalkSaving: false,
-  profileSaving: false,
-  editing: false,
   data: null as EmployeeArchive | null,
 });
-
-const archiveEditDraft = ref({
-  phone: '',
-  gender: '',
-});
+const archiveEditDialogVisible = ref(false);
+const archiveEditSaving = ref(false);
 
 async function openEmployeeArchive(row: ManagedUser) {
   employeeArchiveDrawer.value.visible = true;
   employeeArchiveDrawer.value.loading = true;
   employeeArchiveDrawer.value.data = null;
-  employeeArchiveDrawer.value.editing = false;
   try {
     employeeArchiveDrawer.value.data = await employeeArchivesApi.getArchive(row.id);
   } catch {
@@ -618,34 +633,101 @@ async function openEmployeeArchive(row: ManagedUser) {
   }
 }
 
-function startArchiveEdit() {
+async function submitArchiveDraft(value: {
+  employee: Record<string, unknown>;
+  profile: Record<string, unknown>;
+  contracts: Record<string, unknown>[];
+  performance: Record<string, unknown>;
+}) {
   const data = employeeArchiveDrawer.value.data;
   if (!data) return;
-  archiveEditDraft.value.phone = data.employeeProfile?.phone ?? '';
-  archiveEditDraft.value.gender = data.employeeProfile?.gender ?? '';
-  employeeArchiveDrawer.value.editing = true;
-}
-
-function cancelArchiveEdit() {
-  employeeArchiveDrawer.value.editing = false;
-}
-
-async function saveArchiveProfile() {
-  const data = employeeArchiveDrawer.value.data;
-  if (!data) return;
-  employeeArchiveDrawer.value.profileSaving = true;
+  archiveEditSaving.value = true;
   try {
-    await employeeArchivesApi.updateProfile(data.id, {
-      phone: archiveEditDraft.value.phone.trim() || null,
-      gender: archiveEditDraft.value.gender.trim() || null,
-    });
-    ElMessage.success('档案信息已提交 HR 审核');
-    employeeArchiveDrawer.value.editing = false;
+    await employeeArchivesApi.submitDraft(data.id, value);
+    ElMessage.success('档案变更已提交审核，审核通过后生效');
+    archiveEditDialogVisible.value = false;
     employeeArchiveDrawer.value.data = await employeeArchivesApi.getArchive(data.id);
   } catch {
     // 由 HTTP 拦截器展示错误
   } finally {
-    employeeArchiveDrawer.value.profileSaving = false;
+    archiveEditSaving.value = false;
+  }
+}
+
+const departmentEditDialog = ref({ visible: false, id: '', name: '', saving: false });
+const orgDragEnabled = ref(false);
+let orgLongPressTimer: ReturnType<typeof setTimeout> | null = null;
+
+function openDepartmentEdit(row: Department) {
+  departmentEditDialog.value = { visible: true, id: row.id, name: row.name, saving: false };
+}
+
+async function saveDepartmentName() {
+  const dialog = departmentEditDialog.value;
+  if (!dialog.name.trim()) {
+    ElMessage.warning('请输入部门名称');
+    return;
+  }
+  dialog.saving = true;
+  try {
+    await departmentsApi.updateStructure(dialog.id, { name: dialog.name.trim() });
+    ElMessage.success('部门名称已更新');
+    dialog.visible = false;
+    await loadDepartments();
+  } finally {
+    dialog.saving = false;
+  }
+}
+
+function startOrgLongPress() {
+  if (!canEditOrganization.value) return;
+  if (orgLongPressTimer) clearTimeout(orgLongPressTimer);
+  orgLongPressTimer = setTimeout(() => { orgDragEnabled.value = true; }, 450);
+}
+
+function endOrgLongPress() {
+  if (orgLongPressTimer) clearTimeout(orgLongPressTimer);
+  orgLongPressTimer = null;
+  setTimeout(() => { orgDragEnabled.value = false; }, 250);
+}
+
+function allowDepartmentDrop(draggingNode: any, dropNode: any, type: string) {
+  if (!canEditOrganization.value) return false;
+  if (draggingNode.data.company !== dropNode.data.company) return false;
+  return type !== 'inner' || draggingNode.data.id !== dropNode.data.id;
+}
+
+async function onDepartmentDrop(draggingNode: any, dropNode: any, type: 'before' | 'after' | 'inner') {
+  const department = draggingNode.data as Department;
+  const target = dropNode.data as Department;
+  const parentId = type === 'inner' ? target.id : (target.parentId ?? null);
+  try {
+    await ElMessageBox.confirm(
+      `确认将“${department.name}”挂靠到${parentId ? `“${flattenedDepartments.value.find((item) => item.id === parentId)?.name ?? target.name}”` : '组织根节点'}？`,
+      '调整组织层级',
+      { confirmButtonText: '确认调整', cancelButtonText: '取消', type: 'warning' },
+    );
+    await departmentsApi.updateStructure(department.id, { parentId });
+    ElMessage.success('组织层级已更新');
+  } catch {
+    // 取消时重新加载正式结构；接口错误由拦截器展示。
+  } finally {
+    orgDragEnabled.value = false;
+    await loadDepartments();
+  }
+}
+
+async function downloadRosterTemplate() {
+  try {
+    const blob = await employeeArchivesApi.downloadRosterTemplate();
+    const url = URL.createObjectURL(blob);
+    const anchor = document.createElement('a');
+    anchor.href = url;
+    anchor.download = '员工花名册导入模板.xlsx';
+    anchor.click();
+    URL.revokeObjectURL(url);
+  } catch {
+    ElMessage.error('模板下载失败，请稍后重试');
   }
 }
 
@@ -736,6 +818,8 @@ const personSettingsDialog = ref({
   directManagerId: undefined as string | undefined,
   originalSysRole: 'employee' as SysRole,
   sysRole: 'employee' as SysRole,
+  originalHrCapabilities: [] as HrCapability[],
+  hrCapabilities: [] as HrCapability[],
   businessIdentities: [] as BusinessIdentity[],
   canViewAll: false,
   isTopLevelLeader: false,
@@ -756,6 +840,8 @@ function openPersonSettingsDialog(row: ManagedUser) {
     directManagerId: row.directManagerId ?? undefined,
     originalSysRole: normalizeSystemRole(row),
     sysRole: normalizeSystemRole(row),
+    originalHrCapabilities: [...(row.hrCapabilities ?? [])],
+    hrCapabilities: [...(row.hrCapabilities ?? [])],
     businessIdentities: row.businessIdentities ?? [],
     canViewAll: row.canViewAll,
     isTopLevelLeader: isTopLevelDepartmentLeader(row, flattenedDepartments.value),
@@ -801,6 +887,11 @@ async function confirmPersonSettings() {
       personSettingsDialog.value.directManagerId !== personSettingsDialog.value.originalDirectManagerId;
     const systemRoleChanged =
       isSystemAdmin.value && personSettingsDialog.value.sysRole !== personSettingsDialog.value.originalSysRole;
+    const nextHrCapabilities = personSettingsDialog.value.sysRole === 'hr_user'
+      ? [...personSettingsDialog.value.hrCapabilities].sort()
+      : [];
+    const hrCapabilitiesChanged = isSystemAdmin.value
+      && JSON.stringify(nextHrCapabilities) !== JSON.stringify([...personSettingsDialog.value.originalHrCapabilities].sort());
     const actions: Promise<unknown>[] = [];
     if (performanceRelationChanged) {
       actions.push(employeeArchivesApi.proposePerformanceManager(
@@ -808,9 +899,10 @@ async function confirmPersonSettings() {
         personSettingsDialog.value.directManagerId ?? null,
       ));
     }
-    if (systemRoleChanged) {
+    if (systemRoleChanged || hrCapabilitiesChanged) {
       actions.push(usersApi.updateSettings(personSettingsDialog.value.userId, {
         sysRole: personSettingsDialog.value.sysRole,
+        hrCapabilities: nextHrCapabilities,
       }));
     }
     if (actions.length === 0) {
@@ -818,7 +910,7 @@ async function confirmPersonSettings() {
       return;
     }
     await Promise.all(actions);
-    if (performanceRelationChanged && systemRoleChanged) {
+    if (performanceRelationChanged && (systemRoleChanged || hrCapabilitiesChanged)) {
       ElMessage.success('系统权限已更新；绩效直属上级变更已提交 HR 审核');
     } else if (performanceRelationChanged) {
       ElMessage.success('绩效直属上级变更已提交 HR 审核');
@@ -839,36 +931,17 @@ async function confirmPersonSettings() {
   }
 }
 
-const passwordDialog = ref({
-  visible: false,
-  userId: '',
-  userName: '',
-  password: '',
-});
-
-function openPasswordDialog(row: ManagedUser) {
-  passwordDialog.value = {
-    visible: true,
-    userId: row.id,
-    userName: row.name,
-    password: '',
-  };
-}
-
-async function confirmPassword() {
-  if (!passwordDialog.value.userId) return;
-  const pwd = passwordDialog.value.password.trim();
-  if (pwd.length < 6) {
-    ElMessage.warning('密码长度不能少于 6 位');
-    return;
-  }
+async function resetPassword(row: ManagedUser) {
   try {
-    await usersApi.setPassword(passwordDialog.value.userId, { password: pwd });
-    ElMessage.success('登录密码已设置');
-    passwordDialog.value.visible = false;
-    passwordDialog.value.password = '';
+    await ElMessageBox.confirm(
+      `确认将 ${row.name} 的密码重置为 0000？重置后，下次使用密码登录时必须修改密码。`,
+      '重置登录密码',
+      { confirmButtonText: '确认重置', cancelButtonText: '取消', type: 'warning' },
+    );
+    await usersApi.setPassword(row.id, {});
+    ElMessage.success('密码已重置为 0000');
   } catch {
-    // 由 HTTP 拦截器展示错误
+    // 用户取消或由 HTTP 拦截器展示错误
   }
 }
 
@@ -1081,6 +1154,7 @@ onMounted(async () => {
             <strong>部门架构</strong>
             <span>{{ flattenedDepartments.length }} 个部门</span>
           </div>
+          <p v-if="canEditOrganization" class="org-drag-tip">长按部门约 0.5 秒后拖拽，可调整父子层级。</p>
           <el-tree
             v-loading="deptLoading"
             :data="departments"
@@ -1089,10 +1163,14 @@ onMounted(async () => {
             default-expand-all
             highlight-current
             :current-node-key="selectedDeptId"
+            :draggable="orgDragEnabled"
+            :allow-drop="allowDepartmentDrop"
             @node-click="(data: Department) => onDeptSelect(data.id)"
+            @node-drop="onDepartmentDrop"
+            @node-drag-end="endOrgLongPress"
           >
             <template #default="{ data }">
-              <div class="dept-node">
+              <div class="dept-node" @pointerdown="startOrgLongPress" @pointerup="endOrgLongPress">
                 <div class="dept-node__content">
                   <span class="dept-node__name">{{ data.name }}</span>
                   <div v-if="getTreeDeptBadge(data)" class="dept-node__badges">
@@ -1129,11 +1207,12 @@ onMounted(async () => {
             </div>
             <div class="dept-summary__side">
               <span class="dept-path">{{ selectedDept.fullPath || '未维护完整路径' }}</span>
-              <div v-if="isSystemAdmin" class="dept-summary__actions">
-                <el-button type="primary" size="small" @click="openLeaderDialog(selectedDept)">
+              <div v-if="isSystemAdmin || canEditOrganization" class="dept-summary__actions">
+                <el-button v-if="canEditOrganization" plain size="small" @click="openDepartmentEdit(selectedDept)">编辑部门名称</el-button>
+                <el-button v-if="isSystemAdmin" type="primary" size="small" @click="openLeaderDialog(selectedDept)">
                   设置部门负责人
                 </el-button>
-                <el-button plain size="small" @click="openApproverDialog(selectedDept)">
+                <el-button v-if="isSystemAdmin" plain size="small" @click="openApproverDialog(selectedDept)">
                   设置最终业务审批人
                 </el-button>
               </div>
@@ -1239,6 +1318,7 @@ onMounted(async () => {
             正式员工档案
           </button>
           <button
+            v-if="canReviewArchive"
             type="button"
             :class="{ active: rosterWorkspace === 'reviews' }"
             @click="rosterWorkspace = 'reviews'; loadReviews()"
@@ -1345,8 +1425,8 @@ onMounted(async () => {
               <el-button link type="primary" size="small" :icon="Setting" @click="openPersonSettingsDialog(row as ManagedUser)">
                 人员设置
               </el-button>
-              <el-button link type="primary" size="small" :icon="Key" @click="openPasswordDialog(row as ManagedUser)">
-                密码
+              <el-button v-if="canResetPassword" link type="primary" size="small" :icon="Key" @click="resetPassword(row as ManagedUser)">
+                重置密码
               </el-button>
             </template>
             </el-table-column>
@@ -1616,49 +1696,22 @@ onMounted(async () => {
                 <span>默认仅展示普通档案字段，身份证和银行账户不在普通查询中返回</span>
               </div>
               <el-button
-                v-if="!employeeArchiveDrawer.editing"
+                v-if="canEditArchive"
                 type="primary"
                 size="small"
-                @click="startArchiveEdit"
+                @click="archiveEditDialogVisible = true"
               >
                 编辑档案
               </el-button>
-              <div v-else class="archive-edit-actions">
-                <el-button size="small" @click="cancelArchiveEdit">取消</el-button>
-                <el-button
-                  type="primary"
-                  size="small"
-                  :loading="employeeArchiveDrawer.profileSaving"
-                  @click="saveArchiveProfile"
-                >
-                  保存
-                </el-button>
-              </div>
             </div>
             <div class="employee-archive__facts">
               <div>
                 <span>手机号</span>
-                <el-input
-                  v-if="employeeArchiveDrawer.editing"
-                  v-model="archiveEditDraft.phone"
-                  placeholder="请输入手机号"
-                  size="small"
-                />
-                <strong v-else>{{ employeeArchiveDrawer.data.employeeProfile?.phone || '未填写' }}</strong>
+                <strong>{{ employeeArchiveDrawer.data.employeeProfile?.phone || '未填写' }}</strong>
               </div>
               <div>
                 <span>性别</span>
-                <el-select
-                  v-if="employeeArchiveDrawer.editing"
-                  v-model="archiveEditDraft.gender"
-                  placeholder="请选择性别"
-                  size="small"
-                  style="width: 100%"
-                >
-                  <el-option label="男" value="男" />
-                  <el-option label="女" value="女" />
-                </el-select>
-                <strong v-else>{{ employeeArchiveDrawer.data.employeeProfile?.gender || '未填写' }}</strong>
+                <strong>{{ employeeArchiveDrawer.data.employeeProfile?.gender || '未填写' }}</strong>
               </div>
               <div><span>出生日期</span><strong>{{ formatDate(employeeArchiveDrawer.data.employeeProfile?.birthDate) }}</strong></div>
               <div><span>民族</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.ethnicity || '未填写' }}</strong></div>
@@ -1752,6 +1805,14 @@ onMounted(async () => {
       </div>
     </el-drawer>
 
+    <EmployeeArchiveEditDialog
+      v-model="archiveEditDialogVisible"
+      :archive="employeeArchiveDrawer.data"
+      :departments="departments"
+      :saving="archiveEditSaving"
+      @submit="submitArchiveDraft"
+    />
+
     <el-dialog
       v-model="rosterImportDialog.visible"
       title="花名册导入预检"
@@ -1792,6 +1853,7 @@ onMounted(async () => {
           <div class="el-upload__tip">仅支持 .xlsx，最大 10MB；当前模板按 81 列花名册解析。</div>
         </template>
       </el-upload>
+      <el-button plain type="primary" @click="downloadRosterTemplate">下载标准 Excel 模板</el-button>
 
       <div v-if="rosterImportDialog.result" class="roster-preview">
         <div class="roster-preview__head">
@@ -1859,6 +1921,11 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
+    <el-dialog v-model="departmentEditDialog.visible" title="编辑部门名称" width="440px" :close-on-click-modal="false">
+      <el-form label-position="top"><el-form-item label="部门名称"><el-input v-model="departmentEditDialog.name" maxlength="100" /></el-form-item></el-form>
+      <template #footer><el-button @click="departmentEditDialog.visible = false">取消</el-button><el-button type="primary" :loading="departmentEditDialog.saving" @click="saveDepartmentName">保存</el-button></template>
+    </el-dialog>
+
     <el-dialog
       v-model="reviewManagerDialog.visible"
       title="补充绩效直属上级"
@@ -1921,6 +1988,14 @@ onMounted(async () => {
         </div>
       </div>
       <el-form label-position="top" class="person-settings__form">
+        <el-form-item v-if="isSystemAdmin && personSettingsDialog.sysRole === 'hr_user'" label="普通 HR 可操作能力">
+          <el-checkbox-group v-model="personSettingsDialog.hrCapabilities" class="hr-capability-options">
+            <el-checkbox v-for="item in hrCapabilityOptions" :key="item.value" :value="item.value">
+              {{ item.label }}
+            </el-checkbox>
+          </el-checkbox-group>
+          <small class="dialog-tip">编辑与审核可分别赋给不同人员，也允许同一人同时拥有两项能力。</small>
+        </el-form-item>
         <el-form-item>
           <template #label>
             <span class="person-settings__label">
@@ -1992,15 +2067,6 @@ onMounted(async () => {
       <template #footer>
         <el-button @click="personSettingsDialog.visible = false">取消</el-button>
         <el-button type="primary" :loading="personSettingsDialog.saving" @click="confirmPersonSettings">提交审核</el-button>
-      </template>
-    </el-dialog>
-
-    <el-dialog v-model="passwordDialog.visible" title="设置登录密码" width="480px" :close-on-click-modal="false" destroy-on-close>
-      <p class="dialog-tip">为员工 <strong>{{ passwordDialog.userName }}</strong> 设置登录密码，不少于 6 位。</p>
-      <el-input v-model="passwordDialog.password" type="password" placeholder="请输入新密码" show-password />
-      <template #footer>
-        <el-button @click="passwordDialog.visible = false">取消</el-button>
-        <el-button type="primary" @click="confirmPassword">确认</el-button>
       </template>
     </el-dialog>
 

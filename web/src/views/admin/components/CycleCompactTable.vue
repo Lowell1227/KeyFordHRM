@@ -13,6 +13,9 @@ const props = defineProps<{
   loading?: boolean;
   launchingId?: string | null;
   deletingId?: string | null;
+  currentUserId?: string;
+  isSystemAdmin?: boolean;
+  canEdit?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -23,6 +26,7 @@ const emit = defineEmits<{
   'cancel-schedule': [cycle: AssessmentCycle];
   'notification-mode': [cycle: AssessmentCycle];
   delete: [cycle: AssessmentCycle];
+  review: [cycle: AssessmentCycle];
 }>();
 
 const TYPE_LABEL = {
@@ -214,6 +218,9 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
           <small v-if="(row as AssessmentCycle).status === 'launch_blocked' && (row as AssessmentCycle).launchBlockedReason">
             {{ (row as AssessmentCycle).launchBlockedReason }}
           </small>
+          <small v-if="(row as AssessmentCycle).status === 'draft'">
+            计划审核：{{ (row as AssessmentCycle).reviewStatus === 'approved' ? '已通过' : ((row as AssessmentCycle).reviewStatus === 'rejected' ? '已退回' : '待审核') }}
+          </small>
         </div>
       </template>
     </el-table-column>
@@ -240,12 +247,20 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
         <div class="cycle-actions" @click.stop>
           <template v-if="(row as AssessmentCycle).status === 'draft'">
             <el-button
+              v-if="(row as AssessmentCycle).reviewStatus !== 'approved' && (isSystemAdmin || (row as AssessmentCycle).reviewerId === currentUserId)"
+              link
+              type="success"
+              @click="emit('review', row as AssessmentCycle)"
+            >审核</el-button>
+            <el-button
+              v-if="canEdit"
               :data-testid="`cycle-edit-${(row as AssessmentCycle).id}`"
               link
               type="primary"
               @click="emit('edit-cycle', row as AssessmentCycle)"
             >编辑</el-button>
             <el-button
+              v-if="canEdit"
               :data-testid="`cycle-delete-${(row as AssessmentCycle).id}`"
               link
               type="danger"
@@ -331,12 +346,20 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
       <footer @click.stop>
         <template v-if="cycle.status === 'draft'">
           <el-button
+            v-if="cycle.reviewStatus !== 'approved' && (isSystemAdmin || cycle.reviewerId === currentUserId)"
+            type="success"
+            size="small"
+            @click="emit('review', cycle)"
+          >审核</el-button>
+          <el-button
+            v-if="canEdit"
             :data-testid="`cycle-edit-mobile-${cycle.id}`"
             type="primary"
             size="small"
             @click="emit('edit-cycle', cycle)"
           >编辑</el-button>
           <el-button
+            v-if="canEdit"
             :data-testid="`cycle-delete-mobile-${cycle.id}`"
             type="danger"
             plain

@@ -22,6 +22,9 @@ export const authApi = {
   localLogin(employeeNo: string, password: string): Promise<LoginResult> {
     return http.post('/auth/login', { employeeNo, password }) as unknown as Promise<LoginResult>;
   },
+  changePassword(password: string, confirmPassword: string): Promise<{ success: boolean }> {
+    return http.post('/auth/change-password', { password, confirmPassword }) as unknown as Promise<{ success: boolean }>;
+  },
   getTestAccounts(): Promise<TestAccountsResult> {
     return http.get('/auth/test-accounts') as unknown as Promise<TestAccountsResult>;
   },

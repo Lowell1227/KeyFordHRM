@@ -69,6 +69,7 @@ describe('LaunchService preflight', () => {
           endDate: new Date('2027-03-31T00:00:00.000Z'),
           goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
           hrOwnerId: operator.id,
+          reviewStatus: 'approved',
           participantDeptIds: [],
           participantUserIds: [],
           explicitExemptDeptIds: [],
@@ -123,20 +124,18 @@ describe('LaunchService preflight', () => {
     );
   });
 
-  it('blocks launch when one employee matches multiple person-specific templates', async () => {
+  it('does not inspect person-specific templates during launch preflight', async () => {
     tx.assessmentTemplate.findMany.mockResolvedValue([
       template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
       template('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'),
     ]);
 
-    await expect(service.launch('55555555-5555-4555-8555-555555555555', operator))
-      .rejects.toMatchObject({
-        response: { message: expect.stringContaining('匹配到多个人员模板') },
-      });
-    expect(tx.assessmentTask.create).not.toHaveBeenCalled();
+    await expect(service.preflight('55555555-5555-4555-8555-555555555555'))
+      .resolves.toEqual(expect.objectContaining({ ready: true, templateCount: 0 }));
+    expect(tx.assessmentTemplate.findMany).not.toHaveBeenCalled();
   });
 
-  it('reports all company-default templates and the affected employee count', async () => {
+  it('does not block preflight when company-default templates overlap', async () => {
     const first = template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
     const second = template('bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb');
     first.name = '公司模板 A';
@@ -147,11 +146,20 @@ describe('LaunchService preflight', () => {
 
     await expect(service.preflight('55555555-5555-4555-8555-555555555555'))
       .resolves.toEqual(expect.objectContaining({
+        ready: true,
+        templateCount: 0,
+        blockers: [],
+      }));
+  });
+
+  it('blocks launch preflight until the designated reviewer approves the plan', async () => {
+    const cycle = await tx.assessmentCycle.findUnique({ where: { id: '55555555-5555-4555-8555-555555555555' } });
+    tx.assessmentCycle.findUnique.mockResolvedValue({ ...cycle, reviewStatus: 'pending' });
+
+    await expect(service.preflight('55555555-5555-4555-8555-555555555555'))
+      .resolves.toEqual(expect.objectContaining({
         ready: false,
-        blockers: expect.arrayContaining([{
-          code: 'TEMPLATE_AMBIGUOUS',
-          message: '存在 2 套启用的公司默认模板，影响 1 名员工：公司模板 A、公司模板 B',
-        }]),
+        blockers: expect.arrayContaining([expect.objectContaining({ code: 'CYCLE_NOT_APPROVED' })]),
       }));
   });
 
@@ -265,6 +273,7 @@ describe('LaunchService preflight', () => {
       endDate: new Date('2027-03-31T00:00:00.000Z'),
       goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
       hrOwnerId: operator.id,
+      reviewStatus: 'approved',
       participantDeptIds: [],
       participantUserIds: [candidate.id],
       explicitExemptDeptIds: [],
@@ -288,16 +297,20 @@ describe('LaunchService preflight', () => {
     }));
   });
 
-  it('blocks launch when a matched template no longer has valid weights', async () => {
+  it('launches blank goal tasks without validating template weights', async () => {
     tx.assessmentTemplate.findMany.mockResolvedValue([
       template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 0.8),
     ]);
 
-    await expect(service.launch('55555555-5555-4555-8555-555555555555', operator))
-      .rejects.toMatchObject({
-        response: { message: expect.stringContaining('权重') },
-      });
-    expect(tx.assessmentTask.create).not.toHaveBeenCalled();
+    const checked = await service.preflight('55555555-5555-4555-8555-555555555555');
+    await expect(service.launch('55555555-5555-4555-8555-555555555555', operator, {
+      now: new Date('2026-12-23T00:00:00.000Z'),
+      expectedPlanHash: checked.planHash!,
+    })).resolves.toEqual(expect.objectContaining({ activeTasks: 1 }));
+    expect(tx.assessmentTask.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ snapshotId: null }),
+    });
+    expect(tx.indicatorInstance.createMany).not.toHaveBeenCalled();
   });
 
   it('opens a scheduled cycle and records the actual opening audit fields', async () => {
@@ -313,6 +326,7 @@ describe('LaunchService preflight', () => {
       endDate: new Date('2027-03-31T00:00:00.000Z'),
       goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
       hrOwnerId: operator.id,
+      reviewStatus: 'approved',
       launchPlanHash: checked.planHash,
     });
     jest.useFakeTimers().setSystemTime(new Date('2026-12-23T08:00:00.000Z'));
@@ -365,14 +379,12 @@ describe('LaunchService preflight', () => {
     jest.useRealTimers();
   });
 
-  it('blocks a scheduled opening when the approved launch plan has drifted', async () => {
+  it('blocks a scheduled opening when the approved participant plan has drifted', async () => {
     tx.assessmentTemplate.findMany.mockResolvedValue([
       template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
     ]);
     const checked = await service.preflight('55555555-5555-4555-8555-555555555555');
-    const changedTemplate = template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa');
-    changedTemplate.version = 2;
-    tx.assessmentTemplate.findMany.mockResolvedValue([changedTemplate]);
+    tx.user.findMany.mockResolvedValue([{ ...candidate, directManagerId: '88888888-8888-4888-8888-888888888888' }]);
     tx.assessmentCycle.findUnique.mockResolvedValue({
       id: '55555555-5555-4555-8555-555555555555',
       name: '2027年第一季度',
@@ -381,6 +393,7 @@ describe('LaunchService preflight', () => {
       endDate: new Date('2027-03-31T00:00:00.000Z'),
       goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
       hrOwnerId: operator.id,
+      reviewStatus: 'approved',
       launchPlanHash: checked.planHash,
     });
 
@@ -405,6 +418,7 @@ describe('LaunchService preflight', () => {
       endDate: new Date('2027-03-31T00:00:00.000Z'),
       goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
       hrOwnerId: operator.id,
+      reviewStatus: 'approved',
       launchPlanHash: 'stale-plan-hash',
     });
     const checked = await service.preflight('55555555-5555-4555-8555-555555555555');
@@ -476,6 +490,7 @@ describe('LaunchService preflight', () => {
       endDate: new Date('2027-03-31T00:00:00.000Z'),
       goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
       hrOwnerId: operator.id,
+      reviewStatus: 'approved',
       participantDeptIds: [],
       participantUserIds: [],
       explicitExemptDeptIds: [],
@@ -512,6 +527,7 @@ describe('LaunchService preflight', () => {
       endDate: new Date('2027-03-31T00:00:00.000Z'),
       goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
       hrOwnerId: operator.id,
+      reviewStatus: 'approved',
       participantDeptIds: [],
       participantUserIds: [],
       explicitExemptDeptIds: [candidate.deptId],
@@ -541,6 +557,7 @@ describe('LaunchService preflight', () => {
       endDate: new Date('2027-03-31T00:00:00.000Z'),
       goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
       hrOwnerId: operator.id,
+      reviewStatus: 'approved',
       participantDeptIds: ['88888888-8888-4888-8888-888888888888'],
       participantUserIds: [],
       explicitExemptDeptIds: [candidate.deptId],
@@ -570,6 +587,7 @@ describe('LaunchService preflight', () => {
       endDate: new Date('2027-03-31T00:00:00.000Z'),
       goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
       hrOwnerId: operator.id,
+      reviewStatus: 'approved',
       participantDeptIds: [],
       participantUserIds: [],
       explicitExemptDeptIds: [],

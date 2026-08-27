@@ -131,8 +131,12 @@ async function onPasswordLogin() {
   }
   loading.value = true;
   try {
-    await auth.loginWithPassword(form.employeeNo, form.password);
-    redirectAfterLogin();
+    const passwordChangeRequired = await auth.loginWithPassword(form.employeeNo, form.password);
+    if (passwordChangeRequired) {
+      await router.replace({ name: 'ChangePassword' });
+    } else {
+      redirectAfterLogin();
+    }
   } catch (err) {
     // 401 拦截器静默处理，这里补充用户可见的失败提示；其它错误已由拦截层弹窗。
     if (isAuthFailure(err)) {
@@ -221,14 +225,14 @@ async function onPasswordLogin() {
               </svg>
             </span>
             <span class="auth-option__copy">
-              <strong>管理员账号登录</strong>
-              <small>仅限授权管理员使用</small>
+              <strong>密码登录</strong>
+              <small>账号为工号，初始密码为 0000</small>
             </span>
             <span class="auth-option__arrow" :class="{ 'is-open': showPasswordForm }" aria-hidden="true">⌄</span>
           </button>
 
           <transition name="field-reveal">
-            <el-form v-show="showPasswordForm" class="password-form" aria-label="管理员账号登录表单" @submit.prevent="onPasswordLogin">
+            <el-form v-show="showPasswordForm" class="password-form" aria-label="密码登录表单" @submit.prevent="onPasswordLogin">
               <el-form-item>
                 <label class="sr-only" for="login-employee-no">工号</label>
                 <el-input

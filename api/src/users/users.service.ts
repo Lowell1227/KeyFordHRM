@@ -15,12 +15,14 @@ import {
   BusinessCapabilitiesService,
   BusinessIdentity,
 } from '@/auth/business-capabilities.service';
+import { hasHrCapability } from '@/auth/hr-capabilities';
 import * as bcrypt from 'bcrypt';
 
-export type SystemPermission = 'standard_user' | 'hr_admin' | 'system_admin';
+export type SystemPermission = 'standard_user' | 'hr_user' | 'hr_admin' | 'system_admin';
 
 const EDITABLE_SYSTEM_ROLES = new Set<SysRole>([
   SysRole.employee,
+  SysRole.hr_user,
   SysRole.hr,
   SysRole.system_admin,
 ]);
@@ -28,6 +30,7 @@ const EDITABLE_SYSTEM_ROLES = new Set<SysRole>([
 export function toSystemPermission(sysRole: SysRole): SystemPermission {
   if (sysRole === SysRole.system_admin) return 'system_admin';
   if (sysRole === SysRole.hr) return 'hr_admin';
+  if (sysRole === SysRole.hr_user) return 'hr_user';
   return 'standard_user';
 }
 
@@ -44,6 +47,7 @@ export interface UserListItem {
   position: string | null;
   sysRole: SysRole;
   systemPermission: SystemPermission;
+  hrCapabilities: string[];
   businessIdentities: BusinessIdentity[];
   status: UserStatus;
   employmentType: EmploymentType;
@@ -69,6 +73,7 @@ export interface UserDetail {
   position: string | null;
   sysRole: SysRole;
   systemPermission: SystemPermission;
+  hrCapabilities: string[];
   businessIdentities: BusinessIdentity[];
   status: UserStatus;
   employmentType: EmploymentType;
@@ -137,7 +142,7 @@ export class UsersService {
     // 系统权限过滤（employee 同时兼容尚未归一化的历史业务角色值）
     if (dto.sysRole) {
       where.sysRole = dto.sysRole === SysRole.employee
-        ? { notIn: [SysRole.hr, SysRole.system_admin] }
+        ? { notIn: [SysRole.hr_user, SysRole.hr, SysRole.system_admin] }
         : dto.sysRole;
     }
 
@@ -189,6 +194,7 @@ export class UsersService {
       position: u.position,
       sysRole: u.sysRole,
       systemPermission: toSystemPermission(u.sysRole),
+      hrCapabilities: u.hrCapabilities,
       businessIdentities: identitiesByUser.get(u.id) ?? [],
       status: u.status,
       employmentType: u.employmentType,
@@ -210,6 +216,9 @@ export class UsersService {
       viewer.id === id ||
       viewer.sysRole === SysRole.hr ||
       viewer.sysRole === SysRole.system_admin ||
+      hasHrCapability(viewer, 'employee_archive_edit') ||
+      hasHrCapability(viewer, 'employee_archive_review') ||
+      hasHrCapability(viewer, 'organization_edit') ||
       viewer.canViewAll === true;
 
     if (!canViewDirectly) {
@@ -260,6 +269,7 @@ export class UsersService {
       position: user.position,
       sysRole: user.sysRole,
       systemPermission: toSystemPermission(user.sysRole),
+      hrCapabilities: user.hrCapabilities,
       businessIdentities: identities.get(user.id) ?? [],
       status: user.status,
       employmentType: user.employmentType,
@@ -282,6 +292,9 @@ export class UsersService {
       viewer.id === managerId ||
       viewer.sysRole === SysRole.hr ||
       viewer.sysRole === SysRole.system_admin ||
+      hasHrCapability(viewer, 'employee_archive_edit') ||
+      hasHrCapability(viewer, 'employee_archive_review') ||
+      hasHrCapability(viewer, 'organization_edit') ||
       viewer.canViewAll === true;
     if (!privileged) {
       throw new ForbiddenException({
@@ -357,13 +370,19 @@ export class UsersService {
     if (dto.sysRole !== undefined && !EDITABLE_SYSTEM_ROLES.has(dto.sysRole)) {
       throw new BadRequestException({
         code: ERROR_CODE.PARAM_INVALID,
-        message: '系统权限仅支持标准用户、HR 管理员或系统管理员',
+        message: '系统权限仅支持标准用户、普通 HR、HR 管理员或系统管理员',
       });
     }
 
     const updateData: Prisma.UserUncheckedUpdateInput = {};
     if (dto.sysRole !== undefined) {
       updateData.sysRole = dto.sysRole;
+    }
+    if (dto.hrCapabilities !== undefined) {
+      if (operator?.sysRole !== SysRole.system_admin) {
+        throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅系统管理员可以设置 HR 能力' });
+      }
+      updateData.hrCapabilities = dto.hrCapabilities;
     }
 
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -392,7 +411,7 @@ export class UsersService {
     if (!EDITABLE_SYSTEM_ROLES.has(dto.sysRole)) {
       throw new BadRequestException({
         code: ERROR_CODE.PARAM_INVALID,
-        message: '系统权限仅支持标准用户、HR 管理员或系统管理员',
+        message: '系统权限仅支持标准用户、普通 HR、HR 管理员或系统管理员',
       });
     }
 
@@ -405,7 +424,7 @@ export class UsersService {
   }
 
   /** PATCH /users/:id/password — 设置密码 */
-  async setPassword(id: string, dto: SetPasswordDto, operator: AuthUser): Promise<{ success: boolean }> {
+  async setPassword(id: string, _dto: SetPasswordDto, operator: AuthUser): Promise<{ success: boolean }> {
     const targetUser = await this.prisma.user.findUnique({
       where: { id, deletedAt: null },
     });
@@ -416,12 +435,12 @@ export class UsersService {
       });
     }
 
-    const passwordHash = await bcrypt.hash(dto.password, 10);
+    const passwordHash = await bcrypt.hash('0000', 10);
 
     await this.prisma.$transaction(async (tx) => {
       await tx.user.update({
         where: { id },
-        data: { passwordHash },
+        data: { passwordHash, mustChangePassword: true },
       });
 
       await tx.auditLog.create({

@@ -25,6 +25,13 @@ router.beforeEach(async (to) => {
 
   if (!auth.isLoggedIn) return { name: 'Login', query: { redirect: to.fullPath } };
 
+  if (auth.passwordChangeRequired && to.name !== 'ChangePassword') {
+    return { name: 'ChangePassword' };
+  }
+  if (!auth.passwordChangeRequired && to.name === 'ChangePassword') {
+    return { name: 'Dashboard' };
+  }
+
   if (
     to.name === 'MyTasks'
     && auth.isManager

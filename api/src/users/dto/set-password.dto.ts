@@ -1,7 +1,3 @@
-import { IsString, MinLength } from 'class-validator';
-
 export class SetPasswordDto {
-  @IsString()
-  @MinLength(6)
-  password: string;
+  /** 管理员重置固定恢复为 0000，不接收自定义明文。 */
 }

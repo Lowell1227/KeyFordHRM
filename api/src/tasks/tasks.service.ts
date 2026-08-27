@@ -682,6 +682,14 @@ export class TasksService {
     if (!validItems.length) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '请至少保留一条指标' });
     }
+    const normalizedNames = validItems.map((item) => item.name.trim().toLocaleLowerCase());
+    if (new Set(normalizedNames).size !== normalizedNames.length) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '目标名称不能重复' });
+    }
+    const totalWeight = validItems.reduce((sum, item) => sum + Number(item.weight ?? 0), 0);
+    if (totalWeight > 1.000001) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '目标权重合计不能超过 100%' });
+    }
 
     for (const item of validItems) {
       await this.indicatorVisibility.validateSelection(item, task, viewer);

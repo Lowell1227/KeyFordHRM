@@ -1,6 +1,6 @@
 // 与后端 Prisma 枚举对齐（snake_case 字符串值）
 
-export type SysRole = 'system_admin' | 'hr' | 'chairman' | 'vp' | 'dept_head' | 'manager' | 'employee';
+export type SysRole = 'system_admin' | 'hr' | 'hr_user' | 'chairman' | 'vp' | 'dept_head' | 'manager' | 'employee';
 
 export type EmploymentType = 'full_time' | 'part_time' | 'rehire' | 'external';
 

@@ -1,11 +1,17 @@
 import { EmploymentType, SysRole, UserStatus } from '@prisma/client';
-import { UsersService } from './users.service';
+import { toSystemPermission, UsersService } from './users.service';
 
 const noBusinessIdentities = {
   getIdentitySummariesForUsers: jest.fn().mockResolvedValue(new Map()),
 };
 
 describe('UsersService', () => {
+  describe('system permissions', () => {
+    it('普通HR使用独立系统权限标签而不是标准用户', () => {
+      expect(toSystemPermission('hr_user' as SysRole)).toBe('hr_user');
+    });
+  });
+
   describe('findAll', () => {
     it('员工列表一人一行，并返回钉钉关联三态', async () => {
       const user = {
@@ -174,7 +180,7 @@ describe('UsersService', () => {
           deptId: null, isAssessorOnly: false, canViewAll: true,
         },
       )).rejects.toMatchObject({
-        response: { message: '系统权限仅支持标准用户、HR 管理员或系统管理员' },
+        response: { message: '系统权限仅支持标准用户、普通 HR、HR 管理员或系统管理员' },
       });
 
       expect(transactionUpdate).not.toHaveBeenCalled();

@@ -7,7 +7,7 @@ import { DingtalkService } from '../dingtalk/dingtalk.service';
 import { BusinessCapabilitiesService } from './business-capabilities.service';
 import * as bcrypt from 'bcrypt';
 
-jest.mock('bcrypt', () => ({ compare: jest.fn() }));
+jest.mock('bcrypt', () => ({ compare: jest.fn(), hash: jest.fn() }));
 
 const eligibleUser = {
   id: 'test-manager-id',
@@ -18,6 +18,8 @@ const eligibleUser = {
   dingtalkId: null,
   dingtalkUnionId: null,
   passwordHash: 'hashed',
+  mustChangePassword: true,
+  hrCapabilities: [],
   deptId: 'test-dept-id',
   isAssessorOnly: false,
   canViewAll: false,
@@ -31,7 +33,9 @@ function createService(enabled: boolean) {
       findMany: jest.fn(),
       findFirst: jest.fn(),
       findUnique: jest.fn(),
+      update: jest.fn(),
     },
+    auditLog: { create: jest.fn() },
     externalIdentityBinding: {
       findFirst: jest.fn(),
       update: jest.fn().mockResolvedValue({}),
@@ -39,6 +43,7 @@ function createService(enabled: boolean) {
     employmentRecord: {
       findFirst: jest.fn(),
     },
+    $transaction: jest.fn(async (callback: (tx: unknown) => unknown) => callback(prisma)),
   };
   const jwt = { signAsync: jest.fn().mockResolvedValue('test-token') };
   const config = {
@@ -179,6 +184,7 @@ describe('AuthService DingTalk identity boundary', () => {
       loginMode: 'internal',
     })).resolves.toMatchObject({
       token: 'test-token',
+      passwordChangeRequired: false,
       user: { id: eligibleUser.id },
     });
 
@@ -234,6 +240,43 @@ describe('AuthService local identity boundary', () => {
     await expect(service.localLogin({
       employeeNo: 'MGR001',
       password: 'correct-password',
-    })).resolves.toMatchObject({ token: 'test-token', user: { id: eligibleUser.id } });
+    })).resolves.toMatchObject({
+      token: 'test-token',
+      passwordChangeRequired: true,
+      user: { id: eligibleUser.id },
+    });
+  });
+
+  it('修改密码只接受4至6位数字且不能继续使用0000', async () => {
+    const { service, prisma } = createService(false);
+    prisma.user.findUnique.mockResolvedValue(eligibleUser);
+
+    await expect((service as any).changePassword(
+      eligibleUser.id,
+      { password: '0000', confirmPassword: '0000' },
+    )).rejects.toMatchObject({ response: expect.objectContaining({ message: expect.stringContaining('0000') }) });
+    await expect((service as any).changePassword(
+      eligibleUser.id,
+      { password: '12ab', confirmPassword: '12ab' },
+    )).rejects.toMatchObject({ response: expect.objectContaining({ message: expect.stringContaining('4至6位数字') }) });
+  });
+
+  it('修改密码成功后清除首次改密标记并写审计', async () => {
+    const { service, prisma } = createService(false);
+    prisma.user.findUnique.mockResolvedValue(eligibleUser);
+    prisma.user.update.mockResolvedValue({ ...eligibleUser, mustChangePassword: false });
+    (bcrypt.hash as jest.Mock).mockResolvedValue('new-hash');
+
+    await expect((service as any).changePassword(
+      eligibleUser.id,
+      { password: '12345', confirmPassword: '12345' },
+    )).resolves.toEqual({ success: true });
+    expect(prisma.user.update).toHaveBeenCalledWith({
+      where: { id: eligibleUser.id },
+      data: { passwordHash: 'new-hash', mustChangePassword: false },
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ action: 'change_password', userId: eligibleUser.id }),
+    }));
   });
 });

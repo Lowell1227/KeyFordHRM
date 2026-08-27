@@ -72,6 +72,50 @@ export interface ParsedEmployeeRosterRow {
 
 const PLACEHOLDERS = new Set(['', '/', '／', '#VALUE!']);
 
+const TEMPLATE_HEADERS = [
+  '姓名*', '工号*', '所属公司*', '一级部门*', '二级部门', '三级部门', '岗位', '职级', '职系', '直属主管',
+  '入职日期*', '工作地点', '用工类型', '员工状态', '试用期（月）', '预计转正日期', '实际转正日期', '预留',
+  '手机号', '性别', '出生日期', '年龄（无需填写）', '预留', '民族', '学历', '职称', '毕业院校', '毕业日期', '专业',
+  '婚姻状况', '子女状况', '子女数量', '政治面貌', '籍贯', '户籍类型', '身份证地址', '身份证号', '现住址',
+  '紧急联系人', '紧急联系人关系', '紧急联系人电话', '社保状态', '社保起始日期', '公积金状态', '公积金起始日期',
+  '开户行', '开户支行', '银行卡号', '合同名称', '保密协议', '竞业协议', '肖像协议', '预留', '预留', '预留',
+  '首签日期', '首签到期日', '首签期限', '续签1日期', '续签1到期日', '续签1期限', '续签2日期', '续签2到期日', '续签2期限',
+  '续签3日期', '续签3到期日', '续签3期限', '续签4日期', '续签4期限', '转签1原公司', '转签1日期', '转签1到期日', '转签1新公司',
+  '转签2原公司', '转签2日期', '转签2到期日', '转签2新公司', '转签3原公司', '转签3日期', '转签3到期日', '转签3新公司',
+];
+
+export async function buildEmployeeRosterTemplate(): Promise<Buffer> {
+  const workbook = new ExcelJS.Workbook();
+  const sheet = workbook.addWorksheet('员工花名册');
+  sheet.addRow(TEMPLATE_HEADERS);
+  sheet.addRow([
+    '张三', 'KF0001', '孚德', '人事部', '', '', 'HR专员', '', '', '姚遥', '2026-08-01', '上海', '全职', '在职', 3,
+    '2026-11-01', '', '', '13800000000', '女', '1995-01-01', '', '', '汉族', '本科', '', '示例大学', '2017-06-30', '人力资源',
+  ]);
+  sheet.views = [{ state: 'frozen', ySplit: 1 }];
+  sheet.getRow(1).font = { bold: true, color: { argb: 'FFFFFFFF' } };
+  sheet.getRow(1).fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FF1F4E78' } };
+  sheet.getRow(1).alignment = { vertical: 'middle', horizontal: 'center', wrapText: true };
+  sheet.getRow(1).height = 34;
+  sheet.columns.forEach((column, index) => {
+    column.width = index < 17 ? 16 : 18;
+  });
+  sheet.autoFilter = { from: 'A1', to: 'CC1' };
+  const notes = workbook.addWorksheet('填写说明');
+  notes.addRows([
+    ['花名册导入说明'],
+    ['1', '请保留模板列顺序，不要删除或新增列。'],
+    ['2', '带 * 的字段为必填；日期统一填写为 YYYY-MM-DD。'],
+    ['3', '组织以本花名册为准，钉钉组织不会覆盖 HRM 数据。'],
+    ['4', '上传后先生成差异预检，确认后仍需审核才会生效。'],
+    ['5', '示例行仅用于说明，正式导入前请删除。'],
+  ]);
+  notes.getColumn(1).width = 12;
+  notes.getColumn(2).width = 78;
+  notes.getRow(1).font = { bold: true, size: 16 };
+  return Buffer.from(await workbook.xlsx.writeBuffer());
+}
+
 export async function parseEmployeeRosterExcel(buffer: Buffer): Promise<ParsedEmployeeRosterRow[]> {
   const workbook = new ExcelJS.Workbook();
   await workbook.xlsx.load(buffer as any);

@@ -9,6 +9,7 @@ import {
   IsArray,
   IsUUID,
   IsIn,
+  IsBoolean,
   Min,
   Max,
 } from 'class-validator';
@@ -50,6 +51,14 @@ export class CreateCycleDto {
   @IsOptional()
   @IsUUID()
   hrOwnerId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  reviewerId?: string;
+
+  @IsOptional()
+  @IsBoolean()
+  monthlyFollowUpRequired?: boolean;
 
   @IsOptional()
   @IsArray()

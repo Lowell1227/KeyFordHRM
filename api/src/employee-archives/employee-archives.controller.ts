@@ -7,6 +7,7 @@ import {
   Patch,
   Post,
   Query,
+  StreamableFile,
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
@@ -21,6 +22,7 @@ import {
   PreviewEmployeeRosterDto,
   SetDingtalkIdentityStateDto,
   UpdateEmployeeProfileDto,
+  SubmitEmployeeArchiveDraftDto,
 } from './dto/employee-archive.dto';
 import { EmployeeArchivesService } from './employee-archives.service';
 import { EmployeeDataReviewsService } from './employee-data-reviews.service';
@@ -31,6 +33,8 @@ import {
   ProposePerformanceManagerDto,
   SetPendingPerformanceManagerDto,
 } from './dto/employee-data-review.dto';
+import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
+import { buildEmployeeRosterTemplate } from './employee-roster.excel';
 
 @Controller('employee-archives')
 @Roles(SysRole.hr, SysRole.system_admin)
@@ -42,11 +46,13 @@ export class EmployeeArchivesController {
   ) {}
 
   @Get('reviews/list')
+  @HrCapabilities('employee_archive_review')
   findReviews(@Query() dto: EmployeeDataReviewQueryDto) {
     return this.reviews.findAll(dto);
   }
 
   @Post('reviews/approve')
+  @HrCapabilities('employee_archive_review')
   approveReviews(
     @Body() dto: ApproveEmployeeDataReviewsDto,
     @CurrentUser() operator: AuthUser,
@@ -55,6 +61,7 @@ export class EmployeeArchivesController {
   }
 
   @Patch('reviews/:requestId/performance-manager')
+  @HrCapabilities('employee_archive_review')
   setPendingPerformanceManager(
     @Param('requestId', new ParseUUIDPipe({ version: '4' })) requestId: string,
     @Body() dto: SetPendingPerformanceManagerDto,
@@ -64,6 +71,7 @@ export class EmployeeArchivesController {
   }
 
   @Post(':id/performance-manager-review')
+  @HrCapabilities('employee_archive_edit')
   proposePerformanceManager(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: ProposePerformanceManagerDto,
@@ -72,12 +80,24 @@ export class EmployeeArchivesController {
     return this.reviews.proposePerformanceManager(id, dto, operator);
   }
 
+  @Get('imports/template')
+  @HrCapabilities('employee_archive_edit')
+  async downloadImportTemplate() {
+    const buffer = await buildEmployeeRosterTemplate();
+    return new StreamableFile(buffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: 'attachment; filename="employee-roster-template.xlsx"',
+    });
+  }
+
   @Get(':id')
+  @HrCapabilities('employee_archive_edit', 'employee_archive_review')
   findOne(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
     return this.archives.findOne(id);
   }
 
   @Patch(':id/profile')
+  @HrCapabilities('employee_archive_edit')
   updateProfile(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: UpdateEmployeeProfileDto,
@@ -86,7 +106,18 @@ export class EmployeeArchivesController {
     return this.archives.upsertProfile(id, dto, operator);
   }
 
+  @Patch(':id/draft')
+  @HrCapabilities('employee_archive_edit')
+  submitDraft(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: SubmitEmployeeArchiveDraftDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.archives.submitDraft(id, dto, operator);
+  }
+
   @Post(':id/employments')
+  @HrCapabilities('employee_archive_edit')
   createEmployment(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Body() dto: CreateEmploymentRecordDto,
@@ -114,6 +145,7 @@ export class EmployeeArchivesController {
   }
 
   @Post('imports/preview')
+  @HrCapabilities('employee_archive_edit')
   @UseInterceptors(FileInterceptor('file'))
   previewImport(
     @UploadedFile() file: Express.Multer.File,
@@ -124,6 +156,7 @@ export class EmployeeArchivesController {
   }
 
   @Post('imports/:batchId/confirm')
+  @HrCapabilities('employee_archive_edit')
   @UseInterceptors(FileInterceptor('file'))
   confirmImport(
     @Param('batchId', new ParseUUIDPipe({ version: '4' })) batchId: string,
@@ -134,6 +167,7 @@ export class EmployeeArchivesController {
   }
 
   @Get('imports/:batchId')
+  @HrCapabilities('employee_archive_edit')
   getImportBatch(@Param('batchId', new ParseUUIDPipe({ version: '4' })) batchId: string) {
     return this.imports.findBatch(batchId);
   }

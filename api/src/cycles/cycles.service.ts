@@ -9,6 +9,8 @@ import { UpdateCycleDto } from './dto/update-cycle.dto';
 import { UpdateDeadlinesDto } from './dto/update-deadlines.dto';
 import { CycleQueryDto, CycleStatusGroup } from './dto/cycle-query.dto';
 import type { CycleNotificationMode } from './dto/update-cycle-notification-mode.dto';
+import type { ReviewCycleDto } from './dto/review-cycle.dto';
+import { hasHrCapability } from '@/auth/hr-capabilities';
 
 const DEADLINE_FIELDS = [
   'deadlineIndicatorSetting',
@@ -46,7 +48,7 @@ export class CyclesService {
     const goalSettingOpenAt = dto.goalSettingOpenAt ?? this.addDays(dto.startDate, -10);
     const selfEvalOpenAt = dto.selfEvalOpenAt ?? this.addDays(dto.endDate, 1);
     this.validateCycleDates(dto, goalSettingOpenAt, selfEvalOpenAt);
-    const hrOwnerId = await this.resolveHrOwnerId(dto.hrOwnerId, user);
+    const reviewerId = await this.resolveReviewerId(dto.reviewerId);
 
     const data: Prisma.AssessmentCycleCreateInput = {
       name: dto.name,
@@ -55,7 +57,11 @@ export class CyclesService {
       endDate: dto.endDate,
       goalSettingOpenAt,
       selfEvalOpenAt,
-      hrOwner: { connect: { id: hrOwnerId } },
+      reviewer: { connect: { id: reviewerId } },
+      reviewStatus: 'pending',
+      monthlyFollowUpRequired: ['quarterly', 'semiannual', 'annual'].includes(dto.type)
+        ? Boolean(dto.monthlyFollowUpRequired)
+        : false,
       participantDeptIds: dto.participantDeptIds ?? [],
       participantUserIds: dto.participantUserIds ?? [],
       explicitExemptDeptIds: dto.explicitExemptDeptIds ?? [],
@@ -63,6 +69,7 @@ export class CyclesService {
       notificationMode: dto.notificationMode ?? 'off',
       status: 'draft',
       creator: { connect: { id: user.id } },
+      hrOwner: { connect: { id: user.id } },
       ...(dto.deadlineIndicatorSetting && { deadlineIndicatorSetting: dto.deadlineIndicatorSetting }),
       ...(dto.deadlineIndicatorConfirm && { deadlineIndicatorConfirm: dto.deadlineIndicatorConfirm }),
       ...(dto.deadlineSelfEval && { deadlineSelfEval: dto.deadlineSelfEval }),
@@ -206,9 +213,9 @@ export class CyclesService {
         );
       }
 
-      const hrOwnerId = dto.hrOwnerId !== undefined
-        ? await this.resolveHrOwnerId(dto.hrOwnerId, user)
-        : cycle.hrOwnerId;
+      const reviewerId = dto.reviewerId !== undefined
+        ? await this.resolveReviewerId(dto.reviewerId)
+        : cycle.reviewerId;
 
       const data: Prisma.AssessmentCycleUpdateInput = {
         ...(dto.name !== undefined && { name: dto.name }),
@@ -218,6 +225,15 @@ export class CyclesService {
         ...(dto.goalSettingOpenAt !== undefined && { goalSettingOpenAt: dto.goalSettingOpenAt }),
         ...(dto.selfEvalOpenAt !== undefined && { selfEvalOpenAt: dto.selfEvalOpenAt }),
         ...(dto.notificationMode !== undefined && { notificationMode: dto.notificationMode }),
+        ...(reviewerId && { reviewer: { connect: { id: reviewerId } } }),
+        ...(dto.monthlyFollowUpRequired !== undefined && {
+          monthlyFollowUpRequired: ['quarterly', 'semiannual', 'annual'].includes(dto.type ?? cycle.type)
+            ? dto.monthlyFollowUpRequired
+            : false,
+        }),
+        reviewStatus: 'pending',
+        reviewedAt: null,
+        reviewComment: null,
         ...(dto.participantDeptIds !== undefined && { participantDeptIds: dto.participantDeptIds }),
         ...(dto.participantUserIds !== undefined && { participantUserIds: dto.participantUserIds }),
         ...(dto.explicitExemptDeptIds !== undefined && { explicitExemptDeptIds: dto.explicitExemptDeptIds }),
@@ -252,7 +268,10 @@ export class CyclesService {
 
   /** GET /cycles — 查询周期列表。 */
   async findAll(query: CycleQueryDto, viewer: AuthUser) {
-    const canManageCycles = viewer.sysRole === SysRole.hr || viewer.sysRole === SysRole.system_admin;
+    const canManageCycles = viewer.sysRole === SysRole.hr
+      || viewer.sysRole === SysRole.system_admin
+      || hasHrCapability(viewer, 'cycle_plan_edit')
+      || hasHrCapability(viewer, 'cycle_plan_review');
     const visibleTaskWhere = this.visibleTaskWhere(viewer);
     const where: Prisma.AssessmentCycleWhereInput = {
       ...(query.status && { status: query.status }),
@@ -301,14 +320,19 @@ export class CyclesService {
   async findOne(id: string, viewer?: AuthUser) {
     const cycle = await this.prisma.assessmentCycle.findUnique({
       where: { id },
-      include: { hrOwner: { select: { id: true, name: true } } },
+      include: {
+        creator: { select: { id: true, name: true } },
+        reviewer: { select: { id: true, name: true } },
+      },
     });
     if (!cycle) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
     }
     const canManageCycles = !viewer
       || viewer.sysRole === SysRole.hr
-      || viewer.sysRole === SysRole.system_admin;
+      || viewer.sysRole === SysRole.system_admin
+      || hasHrCapability(viewer, 'cycle_plan_edit')
+      || hasHrCapability(viewer, 'cycle_plan_review');
     if (!canManageCycles && ['draft', 'scheduled', 'launch_blocked'].includes(cycle.status)) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权查看尚未发起的周期' });
     }
@@ -408,6 +432,51 @@ export class CyclesService {
           entityId: id,
           oldValue: Object.fromEntries(DEADLINE_FIELDS.map((field) => [field, cycle[field]])) as Prisma.InputJsonValue,
           newValue: Object.fromEntries(DEADLINE_FIELDS.map((field) => [field, updated[field]])) as Prisma.InputJsonValue,
+        },
+      });
+      return updated;
+    });
+  }
+
+  private async resolveReviewerId(requestedId?: string): Promise<string> {
+    const reviewer = requestedId
+      ? await this.prisma.user.findFirst({
+        where: { id: requestedId, sysRole: SysRole.hr, deletedAt: null, status: { not: 'resigned' } },
+        select: { id: true },
+      })
+      : await this.prisma.user.findFirst({
+        where: { sysRole: SysRole.hr, deletedAt: null, status: { not: 'resigned' } },
+        select: { id: true },
+        orderBy: { createdAt: 'asc' },
+      });
+    if (!reviewer) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '请选择一名在职 HR 管理员作为审核人' });
+    }
+    return reviewer.id;
+  }
+
+  async review(id: string, dto: ReviewCycleDto, user: AuthUser) {
+    return this.prisma.$transaction(async (tx) => {
+      const cycle = await tx.assessmentCycle.findUnique({ where: { id } });
+      if (!cycle) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
+      if (cycle.status !== CycleStatus.draft) {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '只有草稿周期可以审核' });
+      }
+      if (cycle.reviewerId !== user.id && user.sysRole !== SysRole.system_admin) {
+        throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅本周期审核人可以审核' });
+      }
+      const reviewStatus = dto.action === 'approve' ? 'approved' : 'rejected';
+      const updated = await tx.assessmentCycle.update({
+        where: { id },
+        data: { reviewStatus, reviewedAt: new Date(), reviewComment: dto.comment?.trim() || null },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: user.id,
+          action: `cycle_review_${dto.action}`,
+          entityType: 'assessment_cycle',
+          entityId: id,
+          newValue: { reviewStatus, comment: dto.comment?.trim() || null },
         },
       });
       return updated;

@@ -1,6 +1,6 @@
 import type { RouteRecordRaw } from 'vue-router';
 import type { SysRole } from '@/types/enums';
-import type { BusinessCapabilities } from '@/types/api.types';
+import type { BusinessCapabilities, HrCapability } from '@/types/api.types';
 import type {
   NavigationGroup,
   NavigationItem,
@@ -13,6 +13,7 @@ export type NavigationUser = {
   sysRole: SysRole;
   canViewAll: boolean;
   businessCapabilities?: BusinessCapabilities;
+  hrCapabilities?: HrCapability[];
 };
 
 const moduleDefinitions: Record<
@@ -36,6 +37,13 @@ export function canAccessRoute(
     return Boolean(user.businessCapabilities?.[capability]);
   }
   const roles = route.meta?.roles;
+  const hrCapabilities = route.meta?.hrCapabilities;
+  if (hrCapabilities?.length) {
+    return Boolean(
+      roles?.includes(user.sysRole)
+      || hrCapabilities.some((item) => user.hrCapabilities?.includes(item)),
+    );
+  }
   return !roles || roles.includes(user.sysRole);
 }
 

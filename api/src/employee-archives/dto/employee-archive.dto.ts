@@ -5,6 +5,8 @@ import {
   IsEnum,
   IsInt,
   IsNotEmpty,
+  IsArray,
+  IsObject,
   IsOptional,
   IsString,
   IsUUID,
@@ -21,6 +23,22 @@ export class UpdateEmployeeProfileDto {
   @IsOptional()
   @IsString()
   gender?: string | null;
+}
+
+export class SubmitEmployeeArchiveDraftDto {
+  @IsObject()
+  employee!: Record<string, unknown>;
+
+  @IsObject()
+  profile!: Record<string, unknown>;
+
+  @IsOptional()
+  @IsArray()
+  contracts?: Record<string, unknown>[];
+
+  @IsOptional()
+  @IsObject()
+  performance?: Record<string, unknown>;
 }
 
 export class CreateEmploymentRecordDto {

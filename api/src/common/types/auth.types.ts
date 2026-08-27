@@ -8,6 +8,7 @@ export interface AuthUser {
   deptId: string | null;
   isAssessorOnly: boolean;
   canViewAll: boolean;
+  hrCapabilities?: string[];
 }
 
 /** JWT 签发载荷（sub=用户id）。 */
@@ -18,6 +19,7 @@ export interface JwtPayload {
   deptId: string | null;
   isAssessorOnly: boolean;
   canViewAll: boolean;
+  hrCapabilities?: string[];
   iat?: number;
   exp?: number;
 }

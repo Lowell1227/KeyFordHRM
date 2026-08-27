@@ -1,5 +1,5 @@
 import type { RouteRecordName } from 'vue-router';
-import type { BusinessCapabilities } from '@/types/api.types';
+import type { BusinessCapabilities, HrCapability } from '@/types/api.types';
 
 export type NavigationModuleKey =
   | 'workbench'
@@ -49,6 +49,7 @@ declare module 'vue-router' {
     title?: string;
     roles?: string[];
     capability?: BusinessCapabilityKey;
+    hrCapabilities?: HrCapability[];
     navigation?: NavigationMeta;
   }
 }

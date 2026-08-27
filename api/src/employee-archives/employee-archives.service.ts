@@ -1,4 +1,7 @@
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException } from '@nestjs/common';
+import { ConfigService } from '@nestjs/config';
+import { createCipheriv, createHash, createHmac, randomBytes } from 'crypto';
 import {
   CompanyCode,
   EmploymentType,
@@ -10,6 +13,7 @@ import {
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
+import type { SubmitEmployeeArchiveDraftDto } from './dto/employee-archive.dto';
 
 export interface UpsertEmployeeProfileInput {
   phone?: string | null;
@@ -46,7 +50,10 @@ export interface BindDingtalkIdentityInput {
 
 @Injectable()
 export class EmployeeArchivesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly config?: ConfigService,
+  ) {}
 
   async findOne(userId: string) {
     const archive = await this.prisma.user.findUnique({
@@ -73,6 +80,19 @@ export class EmployeeArchivesService {
             politicalStatus: true,
             nativePlace: true,
             householdType: true,
+            idAddress: true,
+            idNumberFingerprint: true,
+            currentAddress: true,
+            emergencyContactName: true,
+            emergencyContactRelation: true,
+            emergencyContactPhone: true,
+            socialSecurityStatus: true,
+            socialSecurityStartDate: true,
+            housingFundStatus: true,
+            housingFundStartDate: true,
+            bankName: true,
+            bankBranch: true,
+            bankAccountFingerprint: true,
             createdAt: true,
             updatedAt: true,
           },
@@ -114,6 +134,13 @@ export class EmployeeArchivesService {
     )) ?? null;
     return {
       ...archive,
+      employeeProfile: archive.employeeProfile ? {
+        ...archive.employeeProfile,
+        idNumberConfigured: Boolean(archive.employeeProfile.idNumberFingerprint),
+        bankAccountConfigured: Boolean(archive.employeeProfile.bankAccountFingerprint),
+        idNumberFingerprint: undefined,
+        bankAccountFingerprint: undefined,
+      } : null,
       currentEmployment,
       performanceManager: archive.directManager,
       rosterManager: currentEmployment?.directManager ?? null,
@@ -187,6 +214,87 @@ export class EmployeeArchivesService {
         ...data,
         profileReviewStatus: 'pending',
         performanceReviewStatus: 'not_required',
+      },
+    });
+  }
+
+  async submitDraft(userId: string, input: SubmitEmployeeArchiveDraftDto, operator: AuthUser) {
+    const user = await this.prisma.user.findUnique({
+      where: { id: userId, deletedAt: null },
+      include: {
+        employeeProfile: true,
+        employmentHistory: {
+          orderBy: { effectiveFrom: 'desc' },
+          take: 1,
+          include: { directManager: { select: { name: true } } },
+        },
+        employeeContracts: { where: { isActive: true }, orderBy: { sequence: 'asc' } },
+      },
+    });
+    if (!user) {
+      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '员工不存在' });
+    }
+
+    const employment = user.employmentHistory[0] ?? null;
+    const baseEmployee = this.employeeReviewData(user, employment);
+    const baseProfile = this.profileReviewData(user.employeeProfile);
+    const baseContracts = user.employeeContracts.map((contract) => this.contractReviewData(contract));
+    const proposedEmployee = { ...baseEmployee, ...input.employee };
+    const proposedProfile: Record<string, unknown> = { ...baseProfile, ...input.profile };
+    this.applySensitiveReplacement(proposedProfile, input.profile, 'idNumber', 'idNumberEncrypted', 'idNumberFingerprint');
+    this.applySensitiveReplacement(proposedProfile, input.profile, 'bankAccount', 'bankAccountEncrypted', 'bankAccountFingerprint');
+    delete proposedProfile.idNumber;
+    delete proposedProfile.bankAccount;
+    const proposedContracts = input.contracts?.map((contract, index) => ({
+      ...contract,
+      sequence: typeof contract.sequence === 'number' ? contract.sequence : index,
+    })) ?? baseContracts;
+    const proposedPerformance = {
+      managerId: user.directManagerId,
+      ...(input.performance ?? {}),
+    };
+    const performanceChanged = (proposedPerformance.managerId ?? null) !== (user.directManagerId ?? null);
+
+    const data = {
+      baseValue: this.toJson({
+        employee: baseEmployee,
+        profile: baseProfile,
+        profileExists: user.employeeProfile !== null,
+        contracts: baseContracts,
+        performance: { managerId: user.directManagerId },
+      }),
+      proposedValue: this.toJson({
+        employee: proposedEmployee,
+        profile: proposedProfile,
+        contracts: proposedContracts,
+        performance: proposedPerformance,
+      }),
+      validationErrors: this.toJson([]),
+      createdById: operator.id,
+      rejectedReason: null,
+    };
+    const pending = await this.prisma.employeeDataChangeRequest.findFirst({
+      where: { userId, sourceType: 'manual_archive_change', profileReviewStatus: 'pending' },
+      orderBy: { createdAt: 'desc' },
+    });
+    if (pending) {
+      return this.prisma.employeeDataChangeRequest.update({
+        where: { id: pending.id },
+        data: {
+          ...data,
+          performanceReviewStatus: performanceChanged ? 'pending' : 'not_required',
+        },
+      });
+    }
+    return this.prisma.employeeDataChangeRequest.create({
+      data: {
+        userId,
+        employeeNo: user.employeeNo,
+        employeeName: user.name,
+        sourceType: 'manual_archive_change',
+        ...data,
+        profileReviewStatus: 'pending',
+        performanceReviewStatus: performanceChanged ? 'pending' : 'not_required',
       },
     });
   }
@@ -411,6 +519,42 @@ export class EmployeeArchivesService {
     return Object.fromEntries(
       Object.entries(profile).filter(([key]) => !['id', 'userId', 'createdAt', 'updatedAt'].includes(key)),
     );
+  }
+
+  private contractReviewData(contract: object): Record<string, unknown> {
+    return Object.fromEntries(
+      Object.entries(contract).filter(([key]) => !['id', 'userId', 'createdAt', 'updatedAt', 'sourceBatchId', 'createdById'].includes(key)),
+    );
+  }
+
+  private applySensitiveReplacement(
+    target: Record<string, unknown>,
+    input: Record<string, unknown>,
+    inputKey: string,
+    encryptedKey: string,
+    fingerprintKey: string,
+  ) {
+    if (typeof input[inputKey] !== 'string' || !input[inputKey].trim()) return;
+    const secured = this.encryptAndFingerprint(input[inputKey].trim());
+    target[encryptedKey] = secured.encrypted;
+    target[fingerprintKey] = secured.fingerprint;
+  }
+
+  private encryptAndFingerprint(value: string): { encrypted: Buffer; fingerprint: string } {
+    const secret = this.config?.get<string>('EMPLOYEE_ARCHIVE_ENCRYPTION_KEY')
+      ?? this.config?.get<string>('JWT_SECRET');
+    if (!secret) {
+      throw new BadRequestException({ code: ERROR_CODE.INTERNAL, message: '员工档案加密配置缺失' });
+    }
+    const key = createHash('sha256').update(`employee-archive:${secret}`).digest();
+    const iv = randomBytes(12);
+    const cipher = createCipheriv('aes-256-gcm', key, iv);
+    const ciphertext = Buffer.concat([cipher.update(value, 'utf8'), cipher.final()]);
+    const tag = cipher.getAuthTag();
+    return {
+      encrypted: Buffer.concat([Buffer.from([1]), iv, tag, ciphertext]),
+      fingerprint: createHmac('sha256', key).update(value.toUpperCase()).digest('hex'),
+    };
   }
 
   private toJson(value: unknown): Prisma.InputJsonValue {

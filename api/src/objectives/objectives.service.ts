@@ -97,6 +97,7 @@ export interface GoalTrackingResult {
   taskId?: string | null;
   taskStatus?: TaskStatus | null;
   canEdit?: boolean;
+  monthlyFollowUpRequired?: boolean;
   totalWeight: number;
   items: GoalTrackingItem[];
 }
@@ -337,7 +338,7 @@ export class ObjectivesService {
       where: { cycleId_employeeId: { cycleId, employeeId: ownerId } },
       include: {
         employee: { select: { id: true, name: true } },
-        cycle: { select: { id: true, name: true } },
+        cycle: { select: { id: true, name: true, monthlyFollowUpRequired: true } },
         indicatorInstances: {
           ...(indicatorWhere ? { where: indicatorWhere } : {}),
           orderBy: { sortOrder: 'asc' },
@@ -416,6 +417,7 @@ export class ObjectivesService {
       taskId: task.id,
       taskStatus: task.status,
       canEdit,
+      monthlyFollowUpRequired: task.cycle.monthlyFollowUpRequired,
       totalWeight: Math.round(items.reduce((sum, item) => sum + (item.weight ?? 0), 0) * 100) / 100,
       items,
     };

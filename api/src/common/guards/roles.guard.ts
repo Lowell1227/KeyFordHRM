@@ -5,6 +5,8 @@ import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { ROLES_KEY } from '../decorators/roles.decorator';
 import { ERROR_CODE } from '../constants/error-codes';
 import { AuthUser } from '../types/auth.types';
+import { HR_CAPABILITIES_KEY } from '../decorators/hr-capabilities.decorator';
+import { hasHrCapability, type HrCapability } from '@/auth/hr-capabilities';
 
 /**
  * 角色守卫（菜单/操作级）。读取 @Roles() 元数据，校验当前用户 sysRole。
@@ -25,10 +27,17 @@ export class RolesGuard implements CanActivate {
       context.getHandler(),
       context.getClass(),
     ]);
-    if (!required || required.length === 0) return true;
+    const requiredCapabilities = this.reflector.getAllAndOverride<HrCapability[]>(HR_CAPABILITIES_KEY, [
+      context.getHandler(),
+      context.getClass(),
+    ]);
+    if ((!required || required.length === 0) && (!requiredCapabilities || requiredCapabilities.length === 0)) return true;
 
     const user = context.switchToHttp().getRequest().user as AuthUser;
-    if (user && required.includes(user.sysRole)) return true;
+    if (user && (
+      required?.includes(user.sysRole)
+      || requiredCapabilities?.some((capability) => hasHrCapability(user, capability))
+    )) return true;
 
     throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权限执行此操作' });
   }

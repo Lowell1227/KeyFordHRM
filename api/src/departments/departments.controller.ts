@@ -5,6 +5,10 @@ import { DepartmentsService } from './departments.service';
 import { DepartmentQueryDto } from './dto/department-query.dto';
 import { UpdateApproverDto } from './dto/update-approver.dto';
 import { UpdateLeaderDto } from './dto/update-leader.dto';
+import { UpdateDepartmentStructureDto } from './dto/update-department-structure.dto';
+import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
+import { CurrentUser } from '@/common/decorators/current-user.decorator';
+import type { AuthUser } from '@/common/types/auth.types';
 
 @Controller('departments')
 export class DepartmentsController {
@@ -36,5 +40,16 @@ export class DepartmentsController {
     @Body() dto: UpdateApproverDto,
   ) {
     return this.departmentsService.updateApprover(id, dto);
+  }
+
+  @Patch(':id/structure')
+  @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('organization_edit')
+  async updateStructure(
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Body() dto: UpdateDepartmentStructureDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.departmentsService.updateStructure(id, dto, operator);
   }
 }

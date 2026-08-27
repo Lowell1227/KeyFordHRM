@@ -30,7 +30,7 @@ describe('CyclesService', () => {
       },
       assessmentTask: { findMany: jest.fn(), count: jest.fn(), groupBy: jest.fn() },
       assessmentTemplateSnapshot: { count: jest.fn() },
-      user: { findFirst: jest.fn() },
+      user: { findFirst: jest.fn().mockResolvedValue({ id: '99999999-9999-4999-8999-999999999999' }) },
       auditLog: { create: jest.fn() },
     };
     service = new CyclesService(prisma as never);

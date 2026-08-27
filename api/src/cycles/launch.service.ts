@@ -96,9 +96,9 @@ export interface LaunchPreflightResult {
     managerName: string | null;
     deptHeadId: string | null;
     approverId: string | null;
-    templateId: string;
-    templateName: string;
-    templateVersion: number;
+    templateId: null;
+    templateName: null;
+    templateVersion: null;
     isExempt: boolean;
     exemptReason: string | null;
   }>;
@@ -126,53 +126,26 @@ export class LaunchService {
 
     const blockers: LaunchPreflightResult['blockers'] = [];
     const warnings: LaunchPreflightResult['warnings'] = [];
-    const hrOwner = await this.findValidHrOwner(client, cycle.hrOwnerId);
-    if (!hrOwner) {
-      blockers.push({ code: 'HR_OWNER_MISSING', message: '请先为本周期指定一名在职 HR 负责人' });
+    if (cycle.reviewStatus !== 'approved') {
+      blockers.push({ code: 'CYCLE_NOT_APPROVED', message: '周期计划需由审核人通过后才能发起' });
     }
     const candidates = await this.findCandidates(client, cycle);
-    const templates = await this.findActiveTemplates(client);
     const deptMap = await this.buildDeptMap(client);
     const exemptRatio = await this.getExemptRatio(client);
-    let matches: Array<{ candidate: Candidate; template: TemplateView }> = [];
 
     if (candidates.length === 0) {
       blockers.push({ code: 'NO_PARTICIPANTS', message: '当前没有符合被考核条件的员工' });
     }
-    if (templates.length === 0) {
-      blockers.push({ code: 'NO_ACTIVE_TEMPLATES', message: '当前没有可用的考核模板' });
-    }
-
-    if (candidates.length > 0 && templates.length > 0) {
+    if (candidates.length > 0) {
       try {
-        const matchResult = this.matchTemplates(candidates, templates);
-        matches = matchResult.matches;
-        if (matchResult.uncovered.length > 0) {
-          blockers.push({
-            code: 'TEMPLATE_UNCOVERED',
-            message: `以下员工未匹配到考核模板：${matchResult.uncovered.map((candidate) => candidate.name).join('、')}`,
-          });
-        }
+        this.assertLaunchRelations(candidates, deptMap);
       } catch (error) {
-        blockers.push(this.toPreflightBlocker('TEMPLATE_AMBIGUOUS', error));
-      }
-
-      if (matches.length > 0) {
-        try {
-          this.assertMatchedTemplateWeights(matches.map((match) => match.template));
-        } catch (error) {
-          blockers.push(this.toPreflightBlocker('TEMPLATE_WEIGHT_INVALID', error));
-        }
-        try {
-          this.assertLaunchRelations(matches, deptMap);
-        } catch (error) {
-          blockers.push(this.toPreflightBlocker('ORGANIZATION_RELATION_INVALID', error));
-        }
+        blockers.push(this.toPreflightBlocker('ORGANIZATION_RELATION_INVALID', error));
       }
     }
 
     const plan = blockers.length === 0
-      ? this.buildLaunchPlan(matches, cycle, deptMap, exemptRatio)
+      ? this.buildLaunchPlan(candidates, cycle, deptMap, exemptRatio)
       : null;
 
     return {
@@ -185,7 +158,7 @@ export class LaunchService {
         goalSettingOpenAt: cycle.goalSettingOpenAt,
       },
       participantCount: candidates.length,
-      templateCount: new Set(matches.map((match) => match.template.id)).size,
+      templateCount: 0,
       participants: plan?.participants ?? [],
       blockers,
       warnings,
@@ -327,10 +300,10 @@ export class LaunchService {
         });
       }
 
-      if (!await this.findValidHrOwner(tx, cycle.hrOwnerId)) {
+      if (cycle.reviewStatus !== 'approved') {
         throw new BadRequestException({
           code: ERROR_CODE.PARAM_INVALID,
-          message: '本周期 HR 负责人缺失或已离职，请重新设置后执行发起检查',
+          message: '周期计划需由审核人通过后才能发起',
         });
       }
 
@@ -338,22 +311,6 @@ export class LaunchService {
       if (candidates.length === 0) {
         throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '当前没有符合被考核条件的员工' });
       }
-
-      const templates = await this.findActiveTemplates(tx);
-      if (templates.length === 0) {
-        throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '当前没有可用的考核模板' });
-      }
-
-      const { matches, uncovered } = this.matchTemplates(candidates, templates);
-      if (uncovered.length > 0) {
-        const names = uncovered.map((u) => u.name).join('、');
-        throw new BadRequestException({
-          code: ERROR_CODE.PARAM_INVALID,
-          message: `以下员工未匹配到考核模板：${names}`,
-        });
-      }
-
-      this.assertMatchedTemplateWeights(matches.map((match) => match.template));
 
       const openedAt = options.now ?? new Date();
       const opensEarly = Boolean(cycle.goalSettingOpenAt && openedAt < cycle.goalSettingOpenAt);
@@ -373,10 +330,10 @@ export class LaunchService {
       }
 
       const deptMap = await this.buildDeptMap(tx);
-      this.assertLaunchRelations(matches, deptMap);
+      this.assertLaunchRelations(candidates, deptMap);
 
       const ratio = await this.getExemptRatio(tx);
-      const currentPlan = this.buildLaunchPlan(matches, cycle, deptMap, ratio);
+      const currentPlan = this.buildLaunchPlan(candidates, cycle, deptMap, ratio);
       const currentPlanHash = this.hashLaunchPlan(currentPlan);
       const expectedPlanHash = options.source === 'scheduled'
         ? cycle.launchPlanHash
@@ -384,7 +341,7 @@ export class LaunchService {
       if (!expectedPlanHash || expectedPlanHash !== currentPlanHash) {
         throw new ConflictException({
           code: ERROR_CODE.CONFLICT,
-          message: '人员、组织关系、模板或周期配置已变化，请重新执行发起检查',
+          message: '人员、组织关系或周期配置已变化，请重新执行发起检查',
         });
       }
 
@@ -407,18 +364,13 @@ export class LaunchService {
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '周期状态已变化，请刷新后重试' });
       }
 
-      const usedTemplateIds = Array.from(new Set(matches.map((m) => m.template.id)));
-      const snapshots = await this.createSnapshots(tx, cycleId, templates, usedTemplateIds);
-      const snapshotMap = new Map(snapshots.map((s) => [s.templateId, s.id]));
-
       let exemptedTasks = 0;
       const activeEmployeeIds = new Set<string>();
       const activeManagerIds = new Set<string>();
       const exemptEmployeeIds = new Set<string>();
       const exemptManagerIds = new Set<string>();
 
-      for (const { candidate, template } of matches) {
-        const snapshotId = snapshotMap.get(template.id)!;
+      for (const candidate of candidates) {
         const dept = candidate.deptId ? deptMap.get(candidate.deptId) : null;
         const manager = this.resolveLaunchManager(candidate, dept);
 
@@ -428,7 +380,7 @@ export class LaunchService {
           await tx.assessmentTask.create({
             data: {
               cycleId,
-              snapshotId,
+              snapshotId: null,
               employeeId: candidate.id,
               deptId: candidate.deptId,
               managerId: manager.id,
@@ -445,10 +397,10 @@ export class LaunchService {
           continue;
         }
 
-        const task = await tx.assessmentTask.create({
+        await tx.assessmentTask.create({
           data: {
             cycleId,
-            snapshotId,
+            snapshotId: null,
             employeeId: candidate.id,
             deptId: candidate.deptId,
             managerId: manager.id,
@@ -459,7 +411,6 @@ export class LaunchService {
           },
         });
 
-        await this.createIndicatorInstances(tx, task.id, template);
         activeEmployeeIds.add(candidate.id);
 
         if (manager.id) {
@@ -467,7 +418,7 @@ export class LaunchService {
         }
       }
 
-      const totalTasks = matches.length;
+      const totalTasks = candidates.length;
       const activeTasks = totalTasks - exemptedTasks;
 
       await tx.auditLog.create({
@@ -692,7 +643,7 @@ export class LaunchService {
   }
 
   private buildLaunchPlan(
-    matches: Array<{ candidate: Candidate; template: TemplateView }>,
+    candidates: Candidate[],
     cycle: {
       startDate: Date;
       endDate: Date;
@@ -714,22 +665,7 @@ export class LaunchService {
     deptMap: Map<string, LaunchDepartment>,
     exemptRatio: number,
   ) {
-    const templateHashes = new Map<string, string>();
-    for (const { template } of matches) {
-      if (templateHashes.has(template.id)) continue;
-      const normalized = serializeDecimals({
-        id: template.id,
-        name: template.name,
-        version: template.version,
-        applicableUsers: [...template.applicableUsers].sort(),
-        applicableDepts: [...template.applicableDepts].sort(),
-        maxScore: template.maxScore,
-        dimensions: template.dimensions,
-      });
-      templateHashes.set(template.id, createHash('sha256').update(JSON.stringify(normalized)).digest('hex'));
-    }
-
-    const participants = matches.map(({ candidate, template }) => {
+    const participants = candidates.map((candidate) => {
       const dept = candidate.deptId ? deptMap.get(candidate.deptId) : null;
       const manager = this.resolveLaunchManager(candidate, dept);
       const exempt = this.resolveExemption(candidate, cycle, exemptRatio);
@@ -744,10 +680,9 @@ export class LaunchService {
         approverId: dept?.effectiveApproverId ?? null,
         entryDate: candidate.entryDate?.toISOString() ?? null,
         leaveDate: candidate.leaveDate?.toISOString() ?? null,
-        templateId: template.id,
-        templateName: template.name,
-        templateVersion: template.version,
-        templateHash: templateHashes.get(template.id)!,
+        templateId: null,
+        templateName: null,
+        templateVersion: null,
         isExempt: exempt.isExempt,
         exemptReason: exempt.reason,
       };
@@ -924,7 +859,7 @@ export class LaunchService {
   }
 
   private assertLaunchRelations(
-    matches: Array<{ candidate: Candidate; template: TemplateView }>,
+    candidates: Candidate[],
     deptMap: Map<string, LaunchDepartment>,
   ): void {
     const missingDeptUsers = new Set<string>();
@@ -932,7 +867,7 @@ export class LaunchService {
     const missingDeptLeaders = new Set<string>();
     const missingApprovers = new Set<string>();
 
-    for (const { candidate } of matches) {
+    for (const candidate of candidates) {
       if (!candidate.deptId) {
         missingDeptUsers.add(candidate.name);
         continue;

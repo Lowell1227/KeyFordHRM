@@ -9,6 +9,7 @@ import { SetPasswordDto } from './dto/set-password.dto';
 import { Roles } from '@/common/decorators/roles.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
+import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
 
 @Controller('users')
 export class UsersController {
@@ -17,6 +18,7 @@ export class UsersController {
   /** GET /users — 查询用户列表（HR / system_admin） */
   @Get()
   @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('employee_archive_edit', 'employee_archive_review', 'organization_edit', 'cycle_plan_edit', 'cycle_plan_review')
   findAll(@Query() dto: UserQueryDto, @CurrentUser() viewer: AuthUser) {
     return this.usersService.findAll(dto, viewer);
   }

@@ -1,5 +1,5 @@
 import http from './http';
-import type { Department, DepartmentQuery, UpdateApproverBody, UpdateLeaderBody } from '@/types/api.types';
+import type { Department, DepartmentQuery, UpdateApproverBody, UpdateDepartmentStructureBody, UpdateLeaderBody } from '@/types/api.types';
 
 function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
   return http.get(url, { params }) as unknown as Promise<T>;
@@ -28,5 +28,10 @@ export const departmentsApi = {
   /** PATCH /departments/:id/approver — 更新部门审批人 */
   updateApprover(id: string, body: UpdateApproverBody): Promise<Department> {
     return apiPatch(`/departments/${id}/approver`, body);
+  },
+
+  /** PATCH /departments/:id/structure — 更新名称或父级。 */
+  updateStructure(id: string, body: UpdateDepartmentStructureBody): Promise<Department> {
+    return apiPatch(`/departments/${id}/structure`, body);
   },
 };

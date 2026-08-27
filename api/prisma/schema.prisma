@@ -60,6 +60,7 @@ enum AccountType {
 enum SysRole {
   system_admin
   hr
+  hr_user
   chairman
   vp
   dept_head
@@ -385,6 +386,8 @@ model User {
   email              String?        @db.VarChar(100)
   avatarUrl          String?        @map("avatar_url") @db.VarChar(500)
   passwordHash       String?        @map("password_hash") @db.VarChar(100) // 降级方案：账号密码登录
+  mustChangePassword Boolean        @default(false) @map("must_change_password")
+  hrCapabilities     String[]       @default([]) @map("hr_capabilities") @db.VarChar(60)
   deptId             String?        @map("dept_id") @db.Uuid
   position           String?        @db.VarChar(100)
   entryDate          DateTime?      @map("entry_date") @db.Date
@@ -413,6 +416,7 @@ model User {
   createdTemplates                          AssessmentTemplate[]
   createdCycles                             AssessmentCycle[]           @relation("CycleCreator")
   hrOwnedCycles                             AssessmentCycle[]           @relation("CycleHrOwner")
+  reviewedCycles                            AssessmentCycle[]           @relation("CycleReviewer")
   employeeTasks                             AssessmentTask[]            @relation("TaskEmployee")
   managedTasks                              AssessmentTask[]            @relation("TaskManager")
   deptHeadTasks                             AssessmentTask[]            @relation("TaskDeptHead")
@@ -812,6 +816,11 @@ model AssessmentCycle {
   gradeDMaxRatio           Decimal     @default(0.10) @map("grade_d_max_ratio") @db.Decimal(4, 3)
   createdBy                String?     @map("created_by") @db.Uuid
   hrOwnerId                String?     @map("hr_owner_id") @db.Uuid
+  reviewerId               String?     @map("reviewer_id") @db.Uuid
+  reviewStatus             String      @default("pending") @map("review_status") @db.VarChar(20)
+  reviewedAt               DateTime?   @map("reviewed_at") @db.Timestamptz(6)
+  reviewComment            String?     @map("review_comment") @db.Text
+  monthlyFollowUpRequired  Boolean     @default(false) @map("monthly_follow_up_required")
   participantDeptIds       String[]    @default([]) @map("participant_dept_ids") @db.Uuid
   participantUserIds       String[]    @default([]) @map("participant_user_ids") @db.Uuid
   explicitExemptDeptIds    String[]    @default([]) @map("explicit_exempt_dept_ids") @db.Uuid
@@ -833,6 +842,7 @@ model AssessmentCycle {
 
   creator               User?                        @relation("CycleCreator", fields: [createdBy], references: [id], onDelete: SetNull)
   hrOwner               User?                        @relation("CycleHrOwner", fields: [hrOwnerId], references: [id], onDelete: SetNull)
+  reviewer              User?                        @relation("CycleReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
   snapshots             AssessmentTemplateSnapshot[]
   tasks                 AssessmentTask[]
   flowRecords           FlowRecord[]
@@ -847,6 +857,7 @@ model AssessmentCycle {
   @@index([status, goalSettingOpenAt])
   @@index([status, selfEvalOpenAt])
   @@index([hrOwnerId])
+  @@index([reviewerId, reviewStatus])
   @@map("assessment_cycles")
 }
 
@@ -868,7 +879,7 @@ model AssessmentTemplateSnapshot {
 model AssessmentTask {
   id                   String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   cycleId              String     @map("cycle_id") @db.Uuid
-  snapshotId           String     @map("snapshot_id") @db.Uuid
+  snapshotId           String?    @map("snapshot_id") @db.Uuid
   employeeId           String     @map("employee_id") @db.Uuid
   deptId               String?    @map("dept_id") @db.Uuid
   managerId            String?    @map("manager_id") @db.Uuid
@@ -891,7 +902,7 @@ model AssessmentTask {
   updatedAt            DateTime   @default(now()) @map("updated_at") @db.Timestamptz(3)
 
   cycle                AssessmentCycle            @relation(fields: [cycleId], references: [id], onDelete: Restrict)
-  snapshot             AssessmentTemplateSnapshot @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
+  snapshot             AssessmentTemplateSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
   employee             User                       @relation("TaskEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
   dept                 Department?                @relation(fields: [deptId], references: [id], onDelete: SetNull)
   manager              User?                      @relation("TaskManager", fields: [managerId], references: [id], onDelete: SetNull)

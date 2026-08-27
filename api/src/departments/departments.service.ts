@@ -6,11 +6,14 @@ import { UpdateLeaderDto } from './dto/update-leader.dto';
 import { ERROR_CODE } from '../common/constants/error-codes';
 import { AccountType, CompanyCode } from '@prisma/client';
 import { buildEffectiveApproverMap } from './department-relations';
+import { UpdateDepartmentStructureDto } from './dto/update-department-structure.dto';
+import type { AuthUser } from '@/common/types/auth.types';
 
 export interface DepartmentNode {
   id: string;
   name: string;
   fullPath: string | null;
+  parentId?: string | null;
   leaderId: string | null;
   leaderName: string | null;
   approverId: string | null;
@@ -129,6 +132,7 @@ export class DepartmentsService {
         id: d.id,
         name: d.name,
         fullPath: d.fullPath,
+        parentId: d.parentId,
         leaderId: d.leaderId,
         leaderName: d.leader?.name ?? null,
         approverId: d.approverId,
@@ -250,6 +254,82 @@ export class DepartmentsService {
       directMemberCount: memberCount,
       memberCount,
     };
+  }
+
+  async updateStructure(id: string, dto: UpdateDepartmentStructureDto, operator: AuthUser): Promise<DepartmentNode> {
+    const departments = await this.prisma.department.findMany({
+      select: { id: true, name: true, fullPath: true, parentId: true, company: true },
+    });
+    const target = departments.find((item) => item.id === id);
+    if (!target) {
+      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '部门不存在' });
+    }
+    const parentId = dto.parentId === undefined ? target.parentId : dto.parentId;
+    const name = dto.name?.trim() || target.name;
+    if (parentId === id) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '部门不能挂靠到自身' });
+    }
+    if (parentId) {
+      const parent = departments.find((item) => item.id === parentId);
+      if (!parent) {
+        throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '目标上级部门不存在' });
+      }
+      if (parent.company !== target.company) {
+        throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '部门不能跨公司挂靠' });
+      }
+      let cursor: typeof parent | undefined = parent;
+      const visited = new Set<string>();
+      while (cursor) {
+        if (cursor.id === id) {
+          throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '部门不能挂靠到自己的下级' });
+        }
+        if (visited.has(cursor.id)) break;
+        visited.add(cursor.id);
+        cursor = departments.find((item) => item.id === cursor?.parentId);
+      }
+    }
+
+    const nodes = new Map(departments.map((item) => [item.id, { ...item }]));
+    nodes.set(id, { ...target, name, parentId });
+    const buildPath = (nodeId: string, visiting = new Set<string>()): string => {
+      if (visiting.has(nodeId)) {
+        throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '组织架构存在循环' });
+      }
+      visiting.add(nodeId);
+      const node = nodes.get(nodeId)!;
+      const parentPath = node.parentId ? buildPath(node.parentId, visiting) : '';
+      visiting.delete(nodeId);
+      return parentPath ? `${parentPath} / ${node.name}` : node.name;
+    };
+    const affected = [...nodes.values()].filter((node) => {
+      let cursor: typeof node | undefined = node;
+      const visited = new Set<string>();
+      while (cursor) {
+        if (cursor.id === id) return true;
+        if (visited.has(cursor.id)) return false;
+        visited.add(cursor.id);
+        cursor = cursor.parentId ? nodes.get(cursor.parentId) : undefined;
+      }
+      return false;
+    });
+    await this.prisma.$transaction(async (tx) => {
+      await tx.department.update({ where: { id }, data: { name, parentId } });
+      for (const node of affected) {
+        await tx.department.update({ where: { id: node.id }, data: { fullPath: buildPath(node.id) } });
+      }
+      await tx.auditLog.create({
+        data: {
+          userId: operator.id,
+          action: 'update_department_structure',
+          entityType: 'department',
+          entityId: id,
+          oldValue: { name: target.name, parentId: target.parentId },
+          newValue: { name, parentId },
+        },
+      });
+    });
+    const updated = await this.findAll({ flat: true });
+    return updated.find((item) => item.id === id)!;
   }
 
   async updateLeader(id: string, dto: UpdateLeaderDto): Promise<DepartmentNode> {

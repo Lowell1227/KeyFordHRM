@@ -13,6 +13,12 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/auth/DingTalkCallbackView.vue'),
     meta: { layout: 'auth', public: true, title: '登录中' },
   },
+  {
+    path: '/change-password',
+    name: 'ChangePassword',
+    component: () => import('@/views/auth/ChangePasswordView.vue'),
+    meta: { layout: 'auth', requiresAuth: true, title: '修改初始密码' },
+  },
   { path: '/', redirect: '/dashboard' },
   {
     path: '/dashboard',
@@ -32,6 +38,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '周期与计划',
       roles: ['hr', 'system_admin'],
+      hrCapabilities: ['cycle_plan_edit', 'cycle_plan_review'],
       navigation: { module: 'performance', label: '周期与计划', order: 20, group: 'performance', groupLabel: '绩效运营' },
     },
   },
@@ -44,17 +51,6 @@ export const routes: RouteRecordRaw[] = [
       title: '考核模板',
       roles: ['hr', 'system_admin'],
       navigation: { module: 'performance', label: '考核模板', order: 120, group: 'performance-settings', groupLabel: '绩效设置' },
-    },
-  },
-  {
-    path: '/indicators',
-    name: 'IndicatorLibrary',
-    component: () => import('@/views/admin/IndicatorLibraryView.vue'),
-    meta: {
-      requiresAuth: true,
-      title: '指标库',
-      roles: ['hr', 'system_admin'],
-      navigation: { module: 'performance', label: '指标库', order: 110, group: 'performance-settings', groupLabel: '绩效设置' },
     },
   },
   {
@@ -120,6 +116,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '员工档案',
       roles: ['hr', 'system_admin'],
+      hrCapabilities: ['employee_archive_edit', 'employee_archive_review', 'organization_edit'],
       navigation: { module: 'people', label: '员工档案', order: 10, group: 'people-archive', groupLabel: '人员档案' },
     },
   },
@@ -217,7 +214,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '试用期考核管理',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'people', label: '试用期考核管理', order: 20, group: 'people-probation', groupLabel: '试用期与转正' },
+      navigation: { module: 'performance', label: '试用期考核管理', order: 130, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -228,7 +225,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '试用期评分',
       capability: 'canHandleProbationReviews',
-      navigation: { module: 'people', label: '试用期评分', order: 30, group: 'people-probation', groupLabel: '试用期与转正' },
+      navigation: { module: 'performance', label: '试用期评分', order: 140, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -238,7 +235,7 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '我的试用期考核',
-      navigation: { module: 'people', label: '我的试用期考核', order: 40, group: 'people-probation', groupLabel: '试用期与转正' },
+      navigation: { module: 'performance', label: '我的试用期考核', order: 150, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -255,7 +252,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '转正申请管理',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'people', label: '转正申请管理', order: 50, group: 'people-probation', groupLabel: '试用期与转正' },
+      navigation: { module: 'performance', label: '转正申请管理', order: 160, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -266,7 +263,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '转正审批台',
       capability: 'canHandleConfirmationApprovals',
-      navigation: { module: 'people', label: '转正审批台', order: 60, group: 'people-probation', groupLabel: '试用期与转正' },
+      navigation: { module: 'performance', label: '转正审批台', order: 170, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -276,7 +273,7 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '我的转正申请',
-      navigation: { module: 'people', label: '我的转正申请', order: 70, group: 'people-probation', groupLabel: '试用期与转正' },
+      navigation: { module: 'performance', label: '我的转正申请', order: 180, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
   },
   {

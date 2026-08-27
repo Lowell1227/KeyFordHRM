@@ -75,7 +75,14 @@ export interface BusinessCapabilities {
   identities: BusinessIdentity[];
 }
 
-export type SystemPermission = 'standard_user' | 'hr_admin' | 'system_admin';
+export type SystemPermission = 'standard_user' | 'hr_user' | 'hr_admin' | 'system_admin';
+
+export type HrCapability =
+  | 'employee_archive_edit'
+  | 'employee_archive_review'
+  | 'organization_edit'
+  | 'cycle_plan_edit'
+  | 'cycle_plan_review';
 
 export interface CurrentUser {
   id: string;
@@ -89,6 +96,7 @@ export interface CurrentUser {
   position?: string;
   sysRole: SysRole;
   systemPermission?: SystemPermission;
+  hrCapabilities?: HrCapability[];
   businessIdentities?: BusinessIdentity[];
   isAssessorOnly: boolean;
   canViewAll: boolean;
@@ -102,6 +110,7 @@ export interface CurrentUser {
 export interface LoginResult {
   token: string;
   expiresIn: number;
+  passwordChangeRequired: boolean;
   user: CurrentUser;
 }
 
@@ -127,6 +136,7 @@ export interface User {
   directManagerName?: string;
   sysRole: SysRole;
   systemPermission?: SystemPermission;
+  hrCapabilities?: HrCapability[];
   businessIdentities?: BusinessIdentity[];
   isAssessorOnly: boolean;
   canViewAll: boolean;
@@ -161,15 +171,14 @@ export interface UserQuery {
 
 export interface UpdateUserSettingsBody {
   sysRole?: SysRole;
+  hrCapabilities?: HrCapability[];
 }
 
 export interface UpdateRoleBody {
   sysRole: SysRole;
 }
 
-export interface SetPasswordBody {
-  password: string;
-}
+export type SetPasswordBody = Record<string, never>;
 
 export interface Department {
   id: string;
@@ -216,6 +225,11 @@ export interface UpdateApproverBody {
 
 export interface UpdateLeaderBody {
   leaderId: string | null;
+}
+
+export interface UpdateDepartmentStructureBody {
+  name?: string;
+  parentId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -397,8 +411,15 @@ export interface AssessmentCycle {
   gradeCMaxRatio: number;
   gradeDMaxRatio: number;
   createdBy?: string;
+  creator?: { id: string; name: string } | null;
   hrOwnerId?: string;
   hrOwner?: { id: string; name: string } | null;
+  reviewerId?: string;
+  reviewer?: { id: string; name: string } | null;
+  reviewStatus?: 'pending' | 'approved' | 'rejected';
+  reviewedAt?: string;
+  reviewComment?: string | null;
+  monthlyFollowUpRequired?: boolean;
   participantDeptIds?: string[];
   participantUserIds?: string[];
   explicitExemptDeptIds?: string[];
@@ -451,6 +472,8 @@ export interface CreateCycleBody {
   goalSettingOpenAt?: string;
   selfEvalOpenAt?: string;
   hrOwnerId?: string;
+  reviewerId?: string;
+  monthlyFollowUpRequired?: boolean;
   participantDeptIds?: string[];
   participantUserIds?: string[];
   explicitExemptDeptIds?: string[];
@@ -1627,6 +1650,7 @@ export interface GoalTrackingResult {
   taskId?: string | null;
   taskStatus?: TaskStatus | null;
   canEdit?: boolean;
+  monthlyFollowUpRequired?: boolean;
   totalWeight: number;
   items: GoalTrackingItem[];
 }

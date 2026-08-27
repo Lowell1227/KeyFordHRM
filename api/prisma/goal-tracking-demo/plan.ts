@@ -91,7 +91,7 @@ export interface GoalTrackingDemoInput {
 export interface GoalTrackingDemoTaskCreate {
   id: string;
   cycleId: string;
-  snapshotId: string;
+  snapshotId: string | null;
   employeeId: string;
   deptId: string | null;
   managerId: string | null;
