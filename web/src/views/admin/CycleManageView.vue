@@ -55,6 +55,7 @@ const CYCLE_STATUS_GROUPS: { label: string; value: CycleStatusGroup }[] = [
 const CYCLE_TYPE_OPTIONS: { label: string; value: CycleType }[] = [
   { label: '月度', value: 'monthly' },
   { label: '季度', value: 'quarterly' },
+  { label: '半年', value: 'semiannual' },
   { label: '年度', value: 'annual' },
   { label: '试用期', value: 'probation' },
   { label: '自定义', value: 'custom' },
@@ -208,6 +209,12 @@ const gradeRatioSummary = computed(() => (
   `A ${createForm.gradeAMaxRatio}% · B ${createForm.gradeBMaxRatio}% · C ${createForm.gradeCMaxRatio}% · D ${createForm.gradeDMaxRatio}%`
 ));
 const visibleFieldCount = computed(() => Object.values(createForm.publishVisibleFields).filter(Boolean).length);
+const semiannualPeriodWarning = computed(() => {
+  if (createForm.type !== 'semiannual' || !createForm.startDate || !createForm.endDate) return '';
+  const recommendedEnd = dayjs(createForm.startDate).add(6, 'month').subtract(1, 'day').startOf('day');
+  if (dayjs(createForm.endDate).isSame(recommendedEnd, 'day')) return '';
+  return `当前期间不是完整的连续六个月，仍可保存，请确认符合本次考核安排。按开始日期建议结束于 ${recommendedEnd.format('YYYY-MM-DD')}。`;
+});
 const createSchedulePlanLabel = computed(() => (createScheduleCustomized.value ? '已调整计划' : '系统默认计划'));
 const createSchedulePeriodLabel = computed(() => {
   if (!createForm.startDate || !createForm.endDate) return '考核执行期未设置';
@@ -342,6 +349,12 @@ function nextPeriodForType(type: CycleType): [dayjs.Dayjs, dayjs.Dayjs] | null {
     const start = now.add(1, 'year').startOf('year').startOf('day');
     return [start, start.endOf('year').startOf('day')];
   }
+  if (type === 'semiannual') {
+    const start = now.month() < 6
+      ? now.startOf('year').add(6, 'month').startOf('day')
+      : now.add(1, 'year').startOf('year').startOf('day');
+    return [start, start.add(6, 'month').subtract(1, 'day').startOf('day')];
+  }
   if (type !== 'quarterly') return null;
   const quarterStartMonth = Math.floor(now.month() / 3) * 3;
   const start = now.month(quarterStartMonth).startOf('month').add(3, 'month').startOf('day');
@@ -349,9 +362,26 @@ function nextPeriodForType(type: CycleType): [dayjs.Dayjs, dayjs.Dayjs] | null {
   return [start, end];
 }
 
-function generatedCycleName(type: CycleType, start: dayjs.Dayjs): string {
+function generatedCycleName(type: CycleType, start: dayjs.Dayjs, end?: dayjs.Dayjs): string {
   if (type === 'monthly') return `${start.year()}年${String(start.month() + 1).padStart(2, '0')}月绩效考核`;
   if (type === 'quarterly') return `${start.year()} Q${Math.floor(start.month() / 3) + 1} 季度考核`;
+  if (type === 'semiannual') {
+    const isFirstHalf = start.month() === 0 && start.date() === 1
+      && end?.month() === 5 && end.date() === 30 && end.year() === start.year();
+    const isSecondHalf = start.month() === 6 && start.date() === 1
+      && end?.month() === 11 && end.date() === 31 && end.year() === start.year();
+    if (isFirstHalf || isSecondHalf) {
+      return `${start.year()} ${isFirstHalf ? '上半年' : '下半年'}绩效考核`;
+    }
+    if (end) {
+      const startLabel = `${start.year()}年${String(start.month() + 1).padStart(2, '0')}月`;
+      const endLabel = end.year() === start.year()
+        ? `${String(end.month() + 1).padStart(2, '0')}月`
+        : `${end.year()}年${String(end.month() + 1).padStart(2, '0')}月`;
+      return `${startLabel}—${endLabel}半年绩效考核`;
+    }
+    return `${start.year()} 半年绩效考核`;
+  }
   if (type === 'annual') return `${start.year()} 年度绩效考核`;
   if (type === 'probation') return `${start.year()} 试用期考核`;
   return `${start.year()} 自定义绩效考核`;
@@ -359,7 +389,11 @@ function generatedCycleName(type: CycleType, start: dayjs.Dayjs): string {
 
 function syncGeneratedName() {
   if (createNameCustomized.value || !createForm.startDate) return;
-  createForm.name = generatedCycleName(createForm.type, dayjs(createForm.startDate));
+  createForm.name = generatedCycleName(
+    createForm.type,
+    dayjs(createForm.startDate),
+    createForm.endDate ? dayjs(createForm.endDate) : undefined,
+  );
 }
 
 function applyCycleTypePreset(type: CycleType) {
@@ -393,6 +427,37 @@ async function handleCreatePeriodRangeChange(value: [Date, Date] | null) {
   const previousEndDate = createForm.endDate;
   createForm.startDate = value?.[0];
   createForm.endDate = value?.[1];
+  syncGeneratedName();
+  await handleCreatePeriodChange(previousStartDate, previousEndDate);
+}
+
+async function handleSemiannualStartDateChange(value: Date | null) {
+  const previousStartDate = createPeriodRange.value?.[0];
+  const previousEndDate = createPeriodRange.value?.[1];
+  if (!value) {
+    createForm.startDate = undefined;
+    createForm.endDate = undefined;
+    createPeriodRange.value = null;
+    return;
+  }
+
+  const start = dayjs(value).startOf('day');
+  const end = start.add(6, 'month').subtract(1, 'day').startOf('day');
+  createForm.startDate = start.toDate();
+  createForm.endDate = end.toDate();
+  createPeriodRange.value = [start.toDate(), end.toDate()];
+  syncGeneratedName();
+  await handleCreatePeriodChange(previousStartDate, previousEndDate);
+  ElMessage.info('已按开始日期自动补齐连续六个自然月');
+}
+
+async function handleSemiannualEndDateChange(value: Date | null) {
+  const previousStartDate = createPeriodRange.value?.[0];
+  const previousEndDate = createPeriodRange.value?.[1];
+  createForm.endDate = value ? dayjs(value).startOf('day').toDate() : undefined;
+  createPeriodRange.value = createForm.startDate && createForm.endDate
+    ? [createForm.startDate, createForm.endDate]
+    : null;
   syncGeneratedName();
   await handleCreatePeriodChange(previousStartDate, previousEndDate);
 }
@@ -1256,7 +1321,29 @@ onMounted(() => {
               </el-tooltip>
             </span>
           </template>
+          <div v-if="createForm.type === 'semiannual'" class="cycle-semiannual-period">
+            <el-date-picker
+              v-model="createForm.startDate"
+              data-testid="cycle-semiannual-start"
+              type="date"
+              placeholder="开始日期"
+              :clearable="false"
+              style="width: 100%"
+              @change="handleSemiannualStartDateChange"
+            />
+            <span class="cycle-semiannual-period__separator">至</span>
+            <el-date-picker
+              v-model="createForm.endDate"
+              data-testid="cycle-semiannual-end"
+              type="date"
+              placeholder="结束日期"
+              :clearable="false"
+              style="width: 100%"
+              @change="handleSemiannualEndDateChange"
+            />
+          </div>
           <el-date-picker
+            v-else
             v-model="createPeriodRange"
             data-testid="cycle-period-range"
             type="daterange"
@@ -1265,6 +1352,15 @@ onMounted(() => {
             end-placeholder="结束日期"
             style="width: 100%"
             @change="handleCreatePeriodRangeChange"
+          />
+          <el-alert
+            v-if="semiannualPeriodWarning"
+            class="cycle-semiannual-warning"
+            data-testid="cycle-semiannual-warning"
+            type="warning"
+            :closable="false"
+            show-icon
+            :title="semiannualPeriodWarning"
           />
         </el-form-item>
 
@@ -1764,6 +1860,23 @@ onMounted(() => {
 
 .cycle-create-main {
   min-width: 0;
+}
+
+.cycle-semiannual-period {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+}
+
+.cycle-semiannual-period__separator {
+  color: var(--el-text-color-secondary);
+}
+
+.cycle-semiannual-warning {
+  width: 100%;
+  margin-top: 8px;
 }
 
 .cycle-plan-summary {

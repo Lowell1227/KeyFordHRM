@@ -26,6 +26,7 @@ const emit = defineEmits<{
 const TYPE_LABEL = {
   monthly: '月度',
   quarterly: '季度',
+  semiannual: '半年',
   annual: '年度',
   probation: '试用期',
   custom: '自定义',

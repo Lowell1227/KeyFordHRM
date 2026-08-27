@@ -8,7 +8,7 @@ export type UserStatus = 'active' | 'probation' | 'resigned';
 
 export type CompanyCode = 'fuede' | 'fuede_sports' | 'beijing_fuede' | 'fansibao';
 
-export type CycleType = 'quarterly' | 'monthly' | 'annual' | 'probation' | 'custom';
+export type CycleType = 'quarterly' | 'semiannual' | 'monthly' | 'annual' | 'probation' | 'custom';
 
 export type CycleStatus =
   | 'draft'

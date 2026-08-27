@@ -589,6 +589,80 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-12-18 09:00');
   });
 
+  test('links half-year type to the next complete natural half-year', async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-08-27T09:00:00+08:00'));
+    await mockCycleLaunchPage(page, { cycles: [] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    const dialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    await dialog.locator('.el-select').first().click();
+    await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '半年' }).click();
+
+    await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2027 上半年绩效考核');
+    await expect(dialog.getByPlaceholder('开始日期')).toHaveValue('2027-01-01');
+    await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2027-06-30');
+    await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-12-18 09:00');
+  });
+
+  test('auto-completes a rolling half-year after HR changes its start date', async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-08-27T09:00:00+08:00'));
+    await mockCycleLaunchPage(page, { cycles: [] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    const dialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    await dialog.locator('.el-select').first().click();
+    await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '半年' }).click();
+    await dialog.getByPlaceholder('开始日期').click();
+
+    const picker = page.locator('.el-picker-panel:visible');
+    await picker.locator('button.arrow-right').click();
+    await picker.locator('button.arrow-right').click();
+    await picker.locator('td.available:not(.prev-month):not(.next-month)').filter({ hasText: /^1$/ }).click();
+
+    await expect(dialog.getByPlaceholder('开始日期')).toHaveValue('2027-03-01');
+    await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2027-08-31');
+    await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2027年03月—08月半年绩效考核');
+    await expect(page.getByText('已按开始日期自动补齐连续六个自然月')).toBeVisible();
+  });
+
+  test('warns without blocking when HR fine-tunes a rolling half-year end date', async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-08-27T09:00:00+08:00'));
+    const createBodies: unknown[] = [];
+    await mockCycleLaunchPage(page, { cycles: [], createBodies });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    const dialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    await dialog.locator('.el-select').first().click();
+    await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '半年' }).click();
+    await dialog.getByPlaceholder('开始日期').click();
+    let picker = page.locator('.el-picker-panel:visible');
+    await picker.locator('button.arrow-right').click();
+    await picker.locator('button.arrow-right').click();
+    await picker.locator('td.available:not(.prev-month):not(.next-month)').filter({ hasText: /^1$/ }).click();
+
+    await expect(page.locator('.el-picker-panel:visible')).toHaveCount(0);
+    await dialog.getByPlaceholder('结束日期').click();
+    picker = page.locator('.el-picker-panel:visible');
+    await picker.locator('button.arrow-right').click();
+    await picker.locator('td.available:not(.prev-month):not(.next-month)').filter({ hasText: /^1$/ }).click();
+
+    await expect(dialog.getByTestId('cycle-semiannual-warning')).toContainText(
+      '当前期间不是完整的连续六个月，仍可保存，请确认符合本次考核安排',
+    );
+    await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2027年03月—09月半年绩效考核');
+    await dialog.getByTestId('cycle-create-save-draft').click();
+
+    await expect.poll(() => createBodies).toHaveLength(1);
+    expect(createBodies[0]).toMatchObject({
+      type: 'semiannual',
+      startDate: '2027-03-01',
+      endDate: '2027-09-01',
+    });
+  });
+
   test('recalculates the default plan when HR changes the cycle type', async ({ page }) => {
     await mockCycleLaunchPage(page, { cycles: [] });
     await page.goto('/cycles?group=attention');
