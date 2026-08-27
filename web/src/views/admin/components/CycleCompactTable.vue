@@ -66,11 +66,9 @@ function formatNextTime(value?: string): string {
 }
 
 function handleMore(command: string, cycle: AssessmentCycle) {
-  if (command === 'edit-cycle') emit('edit-cycle', cycle);
   if (command === 'deadlines') emit('edit-deadlines', cycle);
   if (command === 'cancel-schedule') emit('cancel-schedule', cycle);
   if (command === 'notification-mode') emit('notification-mode', cycle);
-  if (command === 'delete') emit('delete', cycle);
 }
 
 function notificationLabel(cycle: AssessmentCycle): string {
@@ -128,32 +126,41 @@ function notificationLabel(cycle: AssessmentCycle): string {
     <el-table-column label="操作" width="190" fixed="right">
       <template #default="{ row }">
         <div class="cycle-actions" @click.stop>
-          <el-button
-            :data-testid="`cycle-primary-${(row as AssessmentCycle).id}`"
-            type="primary"
-            size="small"
-            :loading="launchingId === (row as AssessmentCycle).id"
-            @click="emit('primary', row as AssessmentCycle)"
-          >
-            {{ cyclePrimaryActionLabel((row as AssessmentCycle).status) }}
-          </el-button>
-          <el-dropdown
-            trigger="click"
-            @command="handleMore($event as string, row as AssessmentCycle)"
-          >
-            <el-button :icon="MoreFilled" text aria-label="更多操作" />
-            <template #dropdown>
-              <el-dropdown-menu>
-                <el-dropdown-item
-                  v-if="(row as AssessmentCycle).status === 'draft'"
-                  command="edit-cycle"
-                >
-                  编辑周期
-                </el-dropdown-item>
+          <template v-if="(row as AssessmentCycle).status === 'draft'">
+            <el-button
+              :data-testid="`cycle-edit-${(row as AssessmentCycle).id}`"
+              link
+              type="primary"
+              @click="emit('edit-cycle', row as AssessmentCycle)"
+            >编辑</el-button>
+            <el-button
+              :data-testid="`cycle-delete-${(row as AssessmentCycle).id}`"
+              link
+              type="danger"
+              :loading="deletingId === (row as AssessmentCycle).id"
+              @click="emit('delete', row as AssessmentCycle)"
+            >删除</el-button>
+          </template>
+          <template v-else>
+            <el-button
+              :data-testid="`cycle-primary-${(row as AssessmentCycle).id}`"
+              type="primary"
+              size="small"
+              :loading="launchingId === (row as AssessmentCycle).id"
+              @click="emit('primary', row as AssessmentCycle)"
+            >
+              {{ cyclePrimaryActionLabel((row as AssessmentCycle).status) }}
+            </el-button>
+            <el-dropdown
+              trigger="click"
+              @command="handleMore($event as string, row as AssessmentCycle)"
+            >
+              <el-button :icon="MoreFilled" text aria-label="更多操作" />
+              <template #dropdown>
+                <el-dropdown-menu>
                 <el-dropdown-item
                   command="deadlines"
                   :disabled="['scheduled', 'launch_blocked'].includes((row as AssessmentCycle).status)"
-                  divided
                 >
                   修改截止日
                 </el-dropdown-item>
@@ -170,18 +177,10 @@ function notificationLabel(cycle: AssessmentCycle): string {
                 >
                   取消预约
                 </el-dropdown-item>
-                <el-dropdown-item
-                  v-if="(row as AssessmentCycle).status === 'draft'"
-                  command="delete"
-                  divided
-                  :disabled="deletingId === (row as AssessmentCycle).id"
-                  style="color: var(--el-color-danger)"
-                >
-                  删除周期
-                </el-dropdown-item>
-              </el-dropdown-menu>
-            </template>
-          </el-dropdown>
+                </el-dropdown-menu>
+              </template>
+            </el-dropdown>
+          </template>
         </div>
       </template>
     </el-table-column>
@@ -212,29 +211,39 @@ function notificationLabel(cycle: AssessmentCycle): string {
         <small v-if="formatNextTime(cycleNextStep(cycle).time)">{{ formatNextTime(cycleNextStep(cycle).time) }}</small>
       </div>
       <footer @click.stop>
-        <el-button
-          :data-testid="`cycle-primary-mobile-${cycle.id}`"
-          type="primary"
-          size="small"
-          :loading="launchingId === cycle.id"
-          @click="emit('primary', cycle)"
-        >
-          {{ cyclePrimaryActionLabel(cycle.status) }}
-        </el-button>
-        <el-dropdown trigger="click" @command="handleMore($event as string, cycle)">
-          <el-button :icon="MoreFilled" text aria-label="更多操作" />
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item
-                v-if="cycle.status === 'draft'"
-                command="edit-cycle"
-              >
-                编辑周期
-              </el-dropdown-item>
+        <template v-if="cycle.status === 'draft'">
+          <el-button
+            :data-testid="`cycle-edit-mobile-${cycle.id}`"
+            type="primary"
+            size="small"
+            @click="emit('edit-cycle', cycle)"
+          >编辑</el-button>
+          <el-button
+            :data-testid="`cycle-delete-mobile-${cycle.id}`"
+            type="danger"
+            plain
+            size="small"
+            :loading="deletingId === cycle.id"
+            @click="emit('delete', cycle)"
+          >删除</el-button>
+        </template>
+        <template v-else>
+          <el-button
+            :data-testid="`cycle-primary-mobile-${cycle.id}`"
+            type="primary"
+            size="small"
+            :loading="launchingId === cycle.id"
+            @click="emit('primary', cycle)"
+          >
+            {{ cyclePrimaryActionLabel(cycle.status) }}
+          </el-button>
+          <el-dropdown trigger="click" @command="handleMore($event as string, cycle)">
+            <el-button :icon="MoreFilled" text aria-label="更多操作" />
+            <template #dropdown>
+              <el-dropdown-menu>
               <el-dropdown-item
                 command="deadlines"
                 :disabled="['scheduled', 'launch_blocked'].includes(cycle.status)"
-                divided
               >
                 修改截止日
               </el-dropdown-item>
@@ -251,18 +260,10 @@ function notificationLabel(cycle: AssessmentCycle): string {
               >
                 取消预约
               </el-dropdown-item>
-              <el-dropdown-item
-                v-if="cycle.status === 'draft'"
-                command="delete"
-                divided
-                :disabled="deletingId === cycle.id"
-                style="color: var(--el-color-danger)"
-              >
-                删除周期
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+              </el-dropdown-menu>
+            </template>
+          </el-dropdown>
+        </template>
       </footer>
     </article>
   </section>

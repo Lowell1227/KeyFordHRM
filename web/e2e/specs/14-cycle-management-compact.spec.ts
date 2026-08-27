@@ -33,6 +33,7 @@ const draftCycle: AssessmentCycle = {
   hrOwnerId: 'hr-1',
   participantDeptIds: [],
   participantUserIds: [],
+  explicitExemptDeptIds: [],
   explicitExemptUserIds: [],
   publishVisibleFields: {
     totalScore: true,
@@ -45,6 +46,13 @@ const draftCycle: AssessmentCycle = {
   gradeBMaxRatio: 0.4,
   gradeCMaxRatio: 0.3,
   gradeDMaxRatio: 0.1,
+};
+
+const scheduledCycle: AssessmentCycle = {
+  ...draftCycle,
+  id: 'cycle-scheduled',
+  name: '2027 Q1 预约周期',
+  status: 'scheduled',
 };
 
 const readyPreflight: LaunchPreflightResult = {
@@ -97,6 +105,7 @@ const immediatelyOpenablePreflight: LaunchPreflightResult = {
 };
 
 interface CycleMockOptions {
+  cycles?: AssessmentCycle[];
   createBodies?: unknown[];
   preflightRequests?: string[];
   preflight?: LaunchPreflightResult;
@@ -181,9 +190,10 @@ async function mockCyclePage(
         body: JSON.stringify(apiResponse(options.preflight ?? readyPreflight)),
       });
     }
-    const visibleCycles = options.deletedIds?.includes(draftCycle.id) ? [] : [draftCycle];
+    const visibleCycles = (options.cycles ?? [draftCycle])
+      .filter((cycle) => !options.deletedIds?.includes(cycle.id));
     const data = requestedId
-      ? draftCycle
+      ? visibleCycles.find((cycle) => cycle.id === requestedId) ?? draftCycle
       : { total: visibleCycles.length, page: 1, pageSize: 10, items: visibleCycles };
     return route.fulfill({
       contentType: 'application/json',
@@ -203,7 +213,7 @@ test('maps cycle states to the compact group, action, and five-stage workflow', 
 });
 
 test.describe('compact cycle management list', () => {
-  test.use({ baseURL: 'http://localhost:5173' });
+  test.use({ baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173' });
 
   test('shows grouped compact columns and sends the selected group to the API', async ({ page }) => {
     const cycleRequests: URL[] = [];
@@ -216,8 +226,21 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByRole('columnheader', { name: '当前状态' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: '下一步' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: '操作' })).toBeVisible();
-    await expect(page.getByTestId('cycle-primary-cycle-draft')).toHaveText('发起前检查');
+    await expect(page.getByTestId('cycle-edit-cycle-draft')).toHaveText('编辑');
+    await expect(page.getByTestId('cycle-delete-cycle-draft')).toHaveText('删除');
+    await expect(page.getByTestId('cycle-primary-cycle-draft')).toHaveCount(0);
     expect(cycleRequests.some((url) => url.searchParams.get('group') === 'attention')).toBe(true);
+  });
+
+  test('opens the existing edit dialog from the direct draft action', async ({ page }) => {
+    await mockCyclePage(page);
+    await page.goto('/cycles?group=attention');
+
+    await page.getByTestId('cycle-edit-cycle-draft').click();
+
+    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue(draftCycle.name);
   });
 
   test('deletes a draft only after naming it in an explicit confirmation', async ({ page }) => {
@@ -225,8 +248,7 @@ test.describe('compact cycle management list', () => {
     await mockCyclePage(page, [], { deletedIds });
     await page.goto('/cycles?group=attention');
 
-    await page.getByRole('button', { name: '更多操作' }).click();
-    await page.getByRole('menuitem', { name: '删除周期' }).click();
+    await page.getByTestId('cycle-delete-cycle-draft').click();
 
     const dialog = page.getByRole('dialog', { name: '删除草稿周期' });
     await expect(dialog).toContainText('2026 Q4 季度考核');
@@ -273,6 +295,7 @@ test.describe('compact cycle management list', () => {
     await expect(page).toHaveURL(/cycleId=cycle-draft/);
     await expect(page.getByTestId('cycle-workspace')).toBeVisible();
     await expect(page.getByTestId('cycle-current-action')).toBeVisible();
+    await expect(page.getByTestId('cycle-workspace-edit')).toHaveText('编辑');
     for (let index = 0; index < 5; index += 1) {
       await expect(page.getByTestId(`cycle-stage-${index}`)).toBeVisible();
     }
@@ -285,11 +308,32 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByRole('columnheader', { name: '周期' })).toBeVisible();
   });
 
+  test('opens the same edit dialog from a draft workspace', async ({ page }) => {
+    await mockCyclePage(page);
+    await page.goto('/cycles?group=attention&cycleId=cycle-draft');
+
+    await page.getByTestId('cycle-workspace-edit').click();
+
+    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    await expect(dialog).toBeVisible();
+    await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue(draftCycle.name);
+  });
+
+  test('keeps stage-specific actions for non-draft cycles', async ({ page }) => {
+    await mockCyclePage(page, [], { cycles: [scheduledCycle] });
+    await page.goto('/cycles?group=active');
+
+    await expect(page.getByTestId('cycle-primary-cycle-scheduled')).toHaveText('查看预约');
+    await expect(page.getByTestId('cycle-edit-cycle-scheduled')).toHaveCount(0);
+    await expect(page.getByTestId('cycle-delete-cycle-scheduled')).toHaveCount(0);
+  });
+
   test('shows only business blockers first and provides a returnable fix path', async ({ page }) => {
     await mockCyclePage(page, [], { preflight: blockedPreflight });
     await page.goto('/cycles?group=attention&keyword=2026');
 
-    await page.getByTestId('cycle-primary-cycle-draft').click();
+    await page.getByRole('button', { name: draftCycle.name }).click();
+    await page.getByRole('button', { name: '开始发起前检查' }).click();
 
     await expect(page.getByTestId('cycle-preflight-blockers')).toContainText('1 名员工未匹配到绩效模板');
     await expect(page.getByText('TEMPLATE_UNCOVERED')).toHaveCount(0);
@@ -305,7 +349,8 @@ test.describe('compact cycle management list', () => {
     await mockCyclePage(page, [], { preflight: immediatelyOpenablePreflight });
     await page.goto('/cycles?group=attention');
 
-    await page.getByTestId('cycle-primary-cycle-draft').click();
+    await page.getByRole('button', { name: draftCycle.name }).click();
+    await page.getByRole('button', { name: '开始发起前检查' }).click();
 
     await expect(page.getByRole('button', { name: '立即开放' })).toBeVisible();
     await expect(page.getByRole('button', { name: '按开放时间预约' })).toBeVisible();
@@ -317,7 +362,8 @@ test.describe('compact cycle management list', () => {
     await page.goto('/cycles?group=attention');
 
     await expect(page.getByTestId('cycle-compact-card-cycle-draft')).toBeVisible();
-    await expect(page.getByTestId('cycle-primary-mobile-cycle-draft')).toBeVisible();
+    await expect(page.getByTestId('cycle-edit-mobile-cycle-draft')).toHaveText('编辑');
+    await expect(page.getByTestId('cycle-delete-mobile-cycle-draft')).toHaveText('删除');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     await page.getByTestId('cycle-create').click();

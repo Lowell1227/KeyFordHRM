@@ -629,6 +629,7 @@ async function handleCreate(runPreflight = false) {
       ElMessage.success(runPreflight ? '周期已更新，正在进入发起前检查' : '周期已更新');
       createDialogVisible.value = false;
       resetCreateForm();
+      if (cycleDetail.value?.id === updated.id) cycleDetail.value = updated;
       await loadCycles();
       if (runPreflight) {
         await openCycleWorkspace(updated, true);
@@ -907,6 +908,10 @@ function handleWorkspaceLaunch() {
   if (cycleDetail.value) void handleLaunch(cycleDetail.value);
 }
 
+function handleWorkspaceEditCycle() {
+  if (cycleDetail.value) openEditCycle(cycleDetail.value);
+}
+
 function handleWorkspaceEditDeadlines() {
   if (cycleDetail.value) openEditDeadlines(cycleDetail.value);
 }
@@ -1035,6 +1040,7 @@ onMounted(() => {
       @preflight="handleWorkspacePreflight"
       @launch="handleWorkspaceLaunch"
       @schedule="handleSchedule"
+      @edit="handleWorkspaceEditCycle"
       @edit-deadlines="handleWorkspaceEditDeadlines"
       @cancel-schedule="handleWorkspaceCancelSchedule"
       @resolve-blocker="handleResolvePreflightBlocker"
@@ -1147,6 +1153,8 @@ onMounted(() => {
         />
       </div>
     </ChartCard>
+
+    </template>
 
     <!-- 新建/编辑周期 -->
     <el-dialog
@@ -1426,7 +1434,6 @@ onMounted(() => {
         <el-button type="primary" :loading="submitting" @click="saveNotificationMode">保存</el-button>
       </template>
     </el-dialog>
-    </template>
 
     <!-- 修改截止日 -->
     <el-dialog v-model="editDialogVisible" title="修改节点截止日" width="560px" destroy-on-close>

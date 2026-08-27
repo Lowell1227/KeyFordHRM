@@ -33,6 +33,7 @@ const emit = defineEmits<{
   preflight: [];
   launch: [];
   schedule: [];
+  edit: [];
   'edit-deadlines': [];
   'cancel-schedule': [];
   'resolve-blocker': [code: string];
@@ -102,6 +103,12 @@ function notificationModeLabel(mode?: AssessmentCycle['notificationMode']): stri
         </div>
       </div>
       <div v-if="cycle" class="cycle-workspace__header-actions">
+        <el-button
+          v-if="cycle.status === 'draft'"
+          data-testid="cycle-workspace-edit"
+          type="primary"
+          @click="emit('edit')"
+        >编辑</el-button>
         <el-button @click="settingsVisible = true">查看全部设置</el-button>
         <el-dropdown trigger="click" @command="handleMore($event as string)">
           <el-button :icon="MoreFilled" aria-label="周期更多操作" />
@@ -506,6 +513,7 @@ function notificationModeLabel(mode?: AssessmentCycle['notificationMode']): stri
 @media (max-width: 767px) {
   .cycle-workspace__header {
     align-items: flex-start;
+    flex-wrap: wrap;
     padding: 14px 12px;
   }
 
@@ -518,7 +526,9 @@ function notificationModeLabel(mode?: AssessmentCycle['notificationMode']): stri
   }
 
   .cycle-workspace__header-actions {
-    display: none;
+    display: flex;
+    justify-content: flex-end;
+    width: 100%;
   }
 
   .cycle-stage-strip {
