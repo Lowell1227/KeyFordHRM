@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import type { AssessmentCycle } from '../../src/types/api.types';
+import type { AssessmentCycle, Department } from '../../src/types/api.types';
 
 const apiResponse = (data: unknown) => ({
   code: 0,
@@ -10,6 +10,7 @@ const apiResponse = (data: unknown) => ({
 
 interface CycleLaunchMockOptions {
   cycles?: AssessmentCycle[];
+  departments?: Department[];
   cycleUrls?: string[];
   createBodies?: unknown[];
   updateBodies?: unknown[];
@@ -47,6 +48,28 @@ const createdCycle = {
   gradeDMaxRatio: 0.1,
 } satisfies AssessmentCycle;
 
+const scrollableDepartmentTree: Department[] = [{
+  id: 'company-root',
+  name: '孚德',
+  fullPath: '孚德',
+  parentId: null,
+  company: 'fuede',
+  sortOrder: 1,
+  isActive: true,
+  directMemberCount: 1,
+  children: Array.from({ length: 36 }, (_, index) => ({
+    id: `department-${index + 1}`,
+    name: `测试部门 ${String(index + 1).padStart(2, '0')}`,
+    fullPath: `孚德 / 测试部门 ${String(index + 1).padStart(2, '0')}`,
+    parentId: 'company-root',
+    company: 'fuede' as const,
+    sortOrder: index + 1,
+    isActive: true,
+    directMemberCount: index + 1,
+    children: [],
+  })),
+}];
+
 async function mockCycleLaunchPage(
   page: import('@playwright/test').Page,
   options: CycleLaunchMockOptions = {},
@@ -78,7 +101,7 @@ async function mockCycleLaunchPage(
     const activeTreeRequested = requestUrl.searchParams.get('isActive') === 'true'
       && requestUrl.searchParams.get('flat') !== 'true';
     const departments = activeTreeRequested
-      ? [{
+      ? options.departments ?? [{
           id: 'company-root',
           name: '孚德',
           fullPath: '孚德',
@@ -336,6 +359,73 @@ test.describe('cycle launch entry UX', () => {
 
     await expect(page.getByTestId('cycle-scope-summary')).toContainText('已选 1 个部门（预计 8 人）');
     await expect(page.getByTestId('cycle-scope-summary')).toContainText('另选 0 人');
+  });
+
+  test('uses the available desktop drawer height for a long department tree and keeps one scroll area', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await mockCycleLaunchPage(page, { cycles: [], departments: scrollableDepartmentTree });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+    await page.getByTestId('cycle-scope-custom').click();
+    await page.getByTestId('cycle-scope-picker-open').click();
+
+    const drawer = page.getByRole('dialog', { name: '选择考核对象' });
+    const body = drawer.locator('.el-drawer__body');
+    const panel = drawer.getByTestId('cycle-scope-department-tree');
+    const footer = drawer.locator('.el-drawer__footer');
+    const bodyBox = await body.boundingBox();
+    const panelBox = await panel.boundingBox();
+    const footerBox = await footer.boundingBox();
+
+    expect(bodyBox).not.toBeNull();
+    expect(panelBox).not.toBeNull();
+    expect(footerBox).not.toBeNull();
+    expect(panelBox!.height).toBeGreaterThan(bodyBox!.height * 0.55);
+    expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(footerBox!.y + 1);
+    await expect.poll(() => body.evaluate((element) => getComputedStyle(element).overflowY)).toBe('hidden');
+    await expect.poll(() => panel.evaluate((element) => ({
+      overflowY: getComputedStyle(element).overflowY,
+      scrollable: element.scrollHeight > element.clientHeight,
+    }))).toEqual({ overflowY: 'auto', scrollable: true });
+
+    await panel.evaluate((element) => element.scrollTo({ top: element.scrollHeight }));
+    const lastDepartmentBox = await panel.getByText('测试部门 36', { exact: true }).boundingBox();
+    const scrolledPanelBox = await panel.boundingBox();
+    expect(lastDepartmentBox).not.toBeNull();
+    expect(lastDepartmentBox!.y).toBeGreaterThanOrEqual(scrolledPanelBox!.y);
+    expect(lastDepartmentBox!.y + lastDepartmentBox!.height).toBeLessThanOrEqual(
+      scrolledPanelBox!.y + scrolledPanelBox!.height,
+    );
+  });
+
+  test('keeps the scope drawer footer visible and the department tree contained at 390px', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await mockCycleLaunchPage(page, { cycles: [], departments: scrollableDepartmentTree });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+    await page.getByTestId('cycle-scope-custom').click();
+    await page.getByTestId('cycle-scope-picker-open').click();
+
+    const drawer = page.getByRole('dialog', { name: '选择考核对象' });
+    const body = drawer.locator('.el-drawer__body');
+    const panel = drawer.getByTestId('cycle-scope-department-tree');
+    const footer = drawer.locator('.el-drawer__footer');
+    await panel
+      .locator('.el-tree-node__content')
+      .filter({ hasText: '孚德' })
+      .first()
+      .locator('.el-checkbox')
+      .click();
+    await expect(footer).toContainText('已选 1 个部门，包含 36 个下级组织');
+    const drawerBox = await drawer.boundingBox();
+    const panelBox = await panel.boundingBox();
+    const footerBox = await footer.boundingBox();
+
+    expect(drawerBox?.width).toBeLessThanOrEqual(390);
+    expect(footerBox!.y + footerBox!.height).toBeLessThanOrEqual(844);
+    expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(footerBox!.y + 1);
+    await expect.poll(() => body.evaluate((element) => getComputedStyle(element).overflowY)).toBe('hidden');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
   test('counts a checked parent separately from its automatically included descendants', async ({ page }) => {

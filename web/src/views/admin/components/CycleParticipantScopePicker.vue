@@ -357,6 +357,7 @@ watch(activeTab, async (value) => {
 
   <el-drawer
     v-model="drawerVisible"
+    class="cycle-scope-drawer"
     title="选择考核对象"
     size="620px"
     append-to-body
@@ -500,16 +501,36 @@ watch(activeTab, async (value) => {
 }
 
 .scope-drawer-content {
-  display: grid;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
   gap: 16px;
+  min-height: 0;
 }
 
 .scope-tabs {
-  min-height: 360px;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.scope-tabs :deep(.el-tabs__content) {
+  flex: 1;
+  min-height: 0;
+}
+
+.scope-tabs :deep(.el-tab-pane) {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
 }
 
 .department-tree-panel {
-  height: 320px;
+  flex: 1;
+  min-height: 0;
   margin-top: 12px;
   padding: 8px;
   overflow: auto;
@@ -520,6 +541,8 @@ watch(activeTab, async (value) => {
 .people-picker-panel {
   display: grid;
   gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .people-picker-panel p {
@@ -547,6 +570,12 @@ watch(activeTab, async (value) => {
 
 .scope-drawer-footer > div {
   gap: 8px;
+}
+
+:global(.cycle-scope-drawer .el-drawer__body) {
+  display: flex;
+  min-height: 0;
+  overflow: hidden;
 }
 
 @media (max-width: 640px) {
