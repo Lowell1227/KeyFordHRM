@@ -33,7 +33,7 @@ import type { CycleStatus, CycleType } from '@/types/enums';
 
 const CYCLE_STATUS_OPTIONS: { label: string; value: CycleStatus }[] = [
   { label: '草稿', value: 'draft' },
-  { label: '待开放', value: 'scheduled' },
+  { label: '待发起', value: 'scheduled' },
   { label: '发起受阻', value: 'launch_blocked' },
   { label: '指标制定中', value: 'indicator_setting' },
   { label: '员工自评中', value: 'self_eval' },
@@ -75,7 +75,7 @@ const STATUS_TAG_TYPE: Record<CycleStatus, 'primary' | 'success' | 'warning' | '
 
 const STATUS_LABEL: Record<CycleStatus, string> = {
   draft: '草稿',
-  scheduled: '待开放',
+  scheduled: '待发起',
   launch_blocked: '发起受阻',
   indicator_setting: '指标制定中',
   self_eval: '员工自评中',
@@ -268,10 +268,7 @@ const createRules = {
 
 const canOpenImmediately = computed(() => {
   const value = preflight.value?.cycle.goalSettingOpenAt;
-  return Boolean(value && (
-    dayjs(value).valueOf() <= Date.now()
-    || auth.user?.sysRole === 'system_admin'
-  ));
+  return Boolean(value && dayjs(value).valueOf() <= Date.now());
 });
 
 function resetCreateForm() {
@@ -626,7 +623,7 @@ async function handleCreate(runPreflight = false) {
   try {
     if (isEditMode.value && editingCycleId.value) {
       const updated = await cyclesApi.update(editingCycleId.value, buildCreateBody());
-      ElMessage.success(runPreflight ? '周期已更新，正在进入发起前检查' : '周期已更新');
+      ElMessage.success(runPreflight ? '周期已提交，正在执行发起检查' : '周期已保存');
       createDialogVisible.value = false;
       resetCreateForm();
       if (cycleDetail.value?.id === updated.id) cycleDetail.value = updated;
@@ -636,7 +633,7 @@ async function handleCreate(runPreflight = false) {
       }
     } else {
       const created = await cyclesApi.create(buildCreateBody());
-      ElMessage.success(runPreflight ? '周期草稿已保存，正在进入发起前检查' : '周期草稿已保存');
+      ElMessage.success(runPreflight ? '周期已提交，正在执行发起检查' : '周期草稿已保存');
       createDialogVisible.value = false;
       resetCreateForm();
       await loadCycles();
@@ -736,8 +733,8 @@ async function handleLaunch(cycle: AssessmentCycle) {
       && dayjs(preflight.value.cycle.goalSettingOpenAt).isAfter(dayjs())
     ) {
       const prompt = await ElMessageBox.prompt(
-        '当前尚未到目标开放时间。提前开放会立即通知员工，请填写业务原因（至少 5 个字）。',
-        '提前开放说明',
+        '当前尚未到目标制定开放时间。提前发起会立即通知员工，请填写业务原因（至少 5 个字）。',
+        '提前发起说明',
         {
           confirmButtonText: '继续',
           cancelButtonText: '取消',
@@ -765,7 +762,7 @@ async function handleLaunch(cycle: AssessmentCycle) {
       expectedPlanHash: preflight.value.planHash,
       overrideReason,
     });
-    ElMessage.success('目标制定已开放，员工可查看本期任务');
+    ElMessage.success('周期已发起，员工可开始目标制定');
     preflight.value = null;
     await loadCycles();
     await loadCycleDetail(cycle.id);
@@ -784,7 +781,7 @@ async function handlePreflight(cycle: AssessmentCycle) {
   try {
     preflight.value = await cyclesApi.preflight(cycle.id);
   } catch (error) {
-    preflightError.value = error instanceof Error ? error.message : '发起前检查失败，请重试';
+    preflightError.value = error instanceof Error ? error.message : '发起检查失败，请重试';
   } finally {
     preflightLoading.value = false;
   }
@@ -796,7 +793,7 @@ async function handleSchedule() {
   launchingId.value = cycle.id;
   try {
     await cyclesApi.schedule(cycle.id, preflight.value.planHash!);
-    ElMessage.success(`已预约，将于 ${formatDateTimeForMessage(preflight.value.cycle.goalSettingOpenAt)} 自动开放`);
+    ElMessage.success(`已预约发起，将于 ${formatDateTimeForMessage(preflight.value.cycle.goalSettingOpenAt)} 自动发起周期`);
     preflight.value = null;
     await loadCycles();
     await loadCycleDetail(cycle.id);
@@ -808,7 +805,7 @@ async function handleSchedule() {
 async function handleCancelSchedule(cycle: AssessmentCycle) {
   try {
     await ElMessageBox.confirm(
-      `确认取消「${cycle.name}」的自动开放预约？`,
+      `确认取消「${cycle.name}」的自动发起预约？`,
       '取消预约',
       { type: 'warning', confirmButtonText: '确认取消', cancelButtonText: '保留预约' },
     );
@@ -1397,7 +1394,7 @@ onMounted(() => {
               data-testid="cycle-create-save-draft"
               :loading="submitting"
               @click="handleCreate(false)"
-            >仅保存草稿</el-button>
+            >保存</el-button>
             <el-button
               v-else
               data-testid="cycle-update-save"
@@ -1405,12 +1402,12 @@ onMounted(() => {
               @click="handleCreate(false)"
             >保存</el-button>
             <el-button
-              data-testid="cycle-create-and-check"
+              data-testid="cycle-create-submit"
               type="primary"
               :loading="submitting"
               @click="handleCreate(true)"
             >
-              {{ isEditMode ? '保存并检查' : '保存并检查' }}
+              提交
             </el-button>
           </div>
         </div>

@@ -16,6 +16,7 @@ const props = withDefaults(
     status?: UserStatus;
     sysRole?: SysRole;
     disabledIds?: string[];
+    departmentIds?: string[];
     clearable?: boolean;
     includeTestAccounts?: boolean;
   }>(),
@@ -34,6 +35,11 @@ watch(
   (v) => { inner.value = v; ensureLabels(v); },
 );
 watch(inner, (v) => emit('update:modelValue', (v ?? undefined) as string | string[] | undefined));
+watch(
+  () => props.departmentIds,
+  () => { void search(''); },
+  { deep: true },
+);
 
 function mergeOptions(list: User[]) {
   const map = new Map(options.value.map((u) => [u.id, u]));
@@ -60,16 +66,21 @@ async function search(keyword: string) {
   const requestId = ++searchRequestId;
   loading.value = true;
   try {
-    const res = await usersApi.findAll({
+    const departmentIds = props.departmentIds === undefined
+      ? [undefined]
+      : [...new Set(props.departmentIds)];
+    const responses = await Promise.all(departmentIds.map((deptId) => usersApi.findAll({
       page: 1,
       pageSize: 50,
       keyword: keyword.trim() || undefined,
       status: props.status,
       sysRole: props.sysRole,
       includeTestAccounts: props.includeTestAccounts,
-    });
+      deptId,
+    })));
     if (requestId !== searchRequestId) return;
-    replaceSearchOptions(res.items);
+    const users = responses.flatMap((response) => response.items);
+    replaceSearchOptions(Array.from(new Map(users.map((user) => [user.id, user])).values()));
   } catch {
     /* 错误由 http 拦截器处理 */
   } finally {

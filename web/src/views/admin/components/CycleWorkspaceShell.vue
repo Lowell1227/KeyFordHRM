@@ -46,7 +46,7 @@ const nextStep = computed(() => props.cycle ? cycleNextStep(props.cycle) : null)
 
 const STATUS_LABEL: Record<CycleStatus, string> = {
   draft: '草稿',
-  scheduled: '待开放',
+  scheduled: '待发起',
   launch_blocked: '发起受阻',
   indicator_setting: '指标制定中',
   self_eval: '员工自评中',
@@ -191,7 +191,7 @@ function notificationModeLabel(mode?: AssessmentCycle['notificationMode']): stri
               type="error"
               :closable="false"
               show-icon
-              title="发起前检查失败"
+              title="发起检查失败"
               :description="preflightError"
             >
               <template #default><el-button size="small" @click="emit('preflight')">重新检查</el-button></template>
@@ -202,12 +202,12 @@ function notificationModeLabel(mode?: AssessmentCycle['notificationMode']): stri
                 :type="preflight.ready ? 'success' : 'error'"
                 :closable="false"
                 show-icon
-                :title="preflight.ready ? '发起前检查通过' : '请先处理阻断项'"
+                :title="preflight.ready ? '发起检查通过' : '请先处理阻断项'"
               />
               <div class="cycle-preflight-summary">
                 <span><strong>{{ preflight.participantCount }}</strong> 名参与员工</span>
                 <span><strong>{{ preflight.templateCount }}</strong> 套匹配模板</span>
-                <span>目标开放 {{ formatDateTime(preflight.cycle.goalSettingOpenAt) }}</span>
+                <span>目标制定开放时间 {{ formatDateTime(preflight.cycle.goalSettingOpenAt) }}</span>
               </div>
               <div
                 v-if="preflight.blockers.length"
@@ -246,21 +246,22 @@ function notificationModeLabel(mode?: AssessmentCycle['notificationMode']): stri
               <div v-if="preflight.ready" class="cycle-preflight-actions">
                 <el-button
                   v-if="canOpenImmediately"
+                  type="primary"
                   :loading="launching"
                   @click="emit('launch')"
                 >
-                  立即开放
+                  立即发起
                 </el-button>
-                <el-button type="primary" :loading="launching" @click="emit('schedule')">
-                  按开放时间预约
+                <el-button v-else type="primary" :loading="launching" @click="emit('schedule')">
+                  预约发起（{{ formatDateTime(preflight.cycle.goalSettingOpenAt) }}）
                 </el-button>
               </div>
               <el-button v-else type="primary" plain @click="emit('preflight')">重新检查</el-button>
             </template>
 
             <div v-else class="cycle-preflight-empty">
-              <p>检查参与人员、直属主管和绩效模板是否已准备完成。</p>
-              <el-button type="primary" @click="emit('preflight')">开始发起前检查</el-button>
+              <p>检查参与人员、直属主管、绩效模板和时间设置是否准备完成。</p>
+              <el-button type="primary" @click="emit('preflight')">开始检查</el-button>
             </div>
           </section>
         </section>
@@ -272,10 +273,10 @@ function notificationModeLabel(mode?: AssessmentCycle['notificationMode']): stri
             {{ formatDate(cycle.startDate) }}–{{ formatDate(cycle.endDate) }}
           </el-descriptions-item>
           <el-descriptions-item label="钉钉通知">{{ notificationModeLabel(cycle.notificationMode) }}</el-descriptions-item>
-          <el-descriptions-item label="目标制定开放">{{ formatDateTime(cycle.goalSettingOpenAt) }}</el-descriptions-item>
+          <el-descriptions-item label="目标制定开放时间">{{ formatDateTime(cycle.goalSettingOpenAt) }}</el-descriptions-item>
           <el-descriptions-item label="指标制定截止">{{ formatDateTime(cycle.deadlineIndicatorSetting) }}</el-descriptions-item>
           <el-descriptions-item label="指标确认截止">{{ formatDateTime(cycle.deadlineIndicatorConfirm) }}</el-descriptions-item>
-          <el-descriptions-item label="员工自评开放">{{ formatDateTime(cycle.selfEvalOpenAt) }}</el-descriptions-item>
+          <el-descriptions-item label="员工自评开放时间">{{ formatDateTime(cycle.selfEvalOpenAt) }}</el-descriptions-item>
           <el-descriptions-item label="员工自评截止">{{ formatDateTime(cycle.deadlineSelfEval) }}</el-descriptions-item>
           <el-descriptions-item label="主管评分截止">{{ formatDateTime(cycle.deadlineManagerScore) }}</el-descriptions-item>
           <el-descriptions-item label="HR校准截止">{{ formatDateTime(cycle.deadlineHrCalibration) }}</el-descriptions-item>

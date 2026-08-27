@@ -62,13 +62,13 @@ export class SchedulerService {
     private readonly launchService: LaunchService,
   ) {}
 
-  /** 每 5 分钟检查预约开放的绩效周期。 */
+  /** 每 5 分钟检查预约发起的绩效周期。 */
   @Cron('*/5 * * * *')
   async openScheduledCycles(): Promise<void> {
     try {
       await this.runScheduledCycleOpenings();
     } catch (err) {
-      this.logger.error('预约开放绩效周期定时任务异常', err);
+      this.logger.error('预约发起绩效周期定时任务异常', err);
     }
   }
 
@@ -201,7 +201,7 @@ export class SchedulerService {
       } as AuthUser;
       try {
         await this.launchService.launch(cycle.id, operator, { source: 'scheduled', now });
-        this.logger.log(`周期 ${cycle.id} 已按预约开放目标制定`);
+        this.logger.log(`周期 ${cycle.id} 已按预约发起`);
       } catch (error) {
         const blocked = await this.prisma.$transaction(async (tx) => {
           const result = await tx.assessmentCycle.updateMany({
@@ -230,11 +230,11 @@ export class SchedulerService {
             userId: cycle.hrOwnerId,
             cycleId: cycle.id,
             type: 'cycle_launch_blocked',
-            title: '季度目标开放受阻',
-            content: `预约开放未完成：${this.errorMessage(error)}。请重新执行开放检查。`,
+            title: '季度目标发起受阻',
+            content: `预约发起未完成：${this.errorMessage(error)}。请重新执行发起检查。`,
           });
         }
-        this.logger.error(`周期 ${cycle.id} 预约开放受阻`, error);
+        this.logger.error(`周期 ${cycle.id} 预约发起受阻`, error);
       }
     }
   }
@@ -437,6 +437,6 @@ export class SchedulerService {
       }
       return String(response);
     }
-    return error instanceof Error ? error.message : '开放检查失败';
+    return error instanceof Error ? error.message : '发起检查失败';
   }
 }

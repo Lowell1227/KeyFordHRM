@@ -174,9 +174,18 @@ async function mockCycleLaunchPage(
       },
     ];
     const requestedStatus = requestUrl.searchParams.get('status');
-    const items = requestedStatus
+    const requestedDepartmentId = requestUrl.searchParams.get('deptId');
+    const departmentScope = requestedDepartmentId === 'sales'
+      ? new Set(['sales', 'sales-b2b'])
+      : requestedDepartmentId === 'product'
+        ? new Set(['product'])
+        : null;
+    const statusItems = requestedStatus
       ? users.filter((user) => user.status === requestedStatus)
       : users.filter((user) => user.status !== 'resigned');
+    const items = departmentScope
+      ? statusItems.filter((user) => departmentScope.has(user.deptId))
+      : statusItems;
     return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify(apiResponse({
@@ -263,7 +272,10 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.getByRole('radio', { name: '全公司' })).toBeChecked();
     await expect(page.getByTestId('cycle-plan-summary')).toContainText('时间节点已联动');
     await expect(page.getByTestId('cycle-create-summary')).toHaveCount(0);
-    await expect(page.getByTestId('cycle-create-and-check')).toHaveText('保存并检查');
+    await expect(page.getByTestId('cycle-create-save-draft')).toHaveText('保存');
+    await expect(page.getByTestId('cycle-create-submit')).toHaveText('提交');
+    await expect(dialog.getByRole('button', { name: '仅保存草稿' })).toHaveCount(0);
+    await expect(dialog.getByRole('button', { name: '保存并检查' })).toHaveCount(0);
     await expect(page.getByTestId('cycle-create-impact-hint')).toContainText('不发送钉钉通知');
 
     await expect(page.getByTestId('cycle-scope-picker-open')).toContainText('设置排除范围');
@@ -287,7 +299,7 @@ test.describe('cycle launch entry UX', () => {
     await scopeDrawer.getByRole('button', { name: '确定' }).click();
 
     await expect(page.getByTestId('cycle-scope-summary')).toContainText('全公司');
-    await expect(page.getByTestId('cycle-scope-summary')).toContainText('排除 2 个部门（预计 18 人）');
+    await expect(page.getByTestId('cycle-scope-summary')).toContainText('排除 1 个部门，包含 1 个下级组织（预计 18 人）');
     await expect(page.getByTestId('cycle-scope-summary')).toContainText('另排除 1 人');
     await page.getByTestId('cycle-create-save-draft').click();
 
@@ -316,11 +328,39 @@ test.describe('cycle launch entry UX', () => {
       .click();
     await scopeDrawer.getByRole('button', { name: '确定' }).click();
 
-    await expect(page.getByTestId('cycle-scope-summary')).toContainText('1 个部门（预计 8 人）');
+    await expect(page.getByTestId('cycle-scope-summary')).toContainText('已选 1 个部门（预计 8 人）');
     await expect(page.getByTestId('cycle-scope-summary')).toContainText('另选 0 人');
   });
 
-  test('supports active organization, people, and exclusions together in one scope drawer', async ({ page }) => {
+  test('counts a checked parent separately from its automatically included descendants', async ({ page }) => {
+    const createBodies: unknown[] = [];
+    await mockCycleLaunchPage(page, { cycles: [], createBodies });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    await page.getByTestId('cycle-scope-custom').click();
+    await page.getByTestId('cycle-scope-picker-open').click();
+    const scopeDrawer = page.getByRole('dialog', { name: '选择考核对象' });
+    const tree = scopeDrawer.getByTestId('cycle-scope-department-tree');
+    await tree
+      .locator('.el-tree-node__content')
+      .filter({ hasText: '销售部' })
+      .locator('.el-checkbox')
+      .click();
+    await scopeDrawer.getByRole('button', { name: '确定' }).click();
+
+    const summary = page.getByTestId('cycle-scope-summary');
+    await expect(summary).toContainText('已选 1 个部门，包含 1 个下级组织（预计 18 人）');
+    await expect(summary).not.toContainText('2 个部门');
+
+    await page.getByTestId('cycle-create-save-draft').click();
+    await expect.poll(() => createBodies).toHaveLength(1);
+    expect(createBodies[0]).toMatchObject({
+      participantDeptIds: expect.arrayContaining(['sales', 'sales-b2b']),
+    });
+  });
+
+  test('limits custom-scope exceptions to people and descendants inside the included departments', async ({ page }) => {
     const createBodies: unknown[] = [];
     const departmentUrls: string[] = [];
     await mockCycleLaunchPage(page, { cycles: [], createBodies, departmentUrls });
@@ -340,36 +380,115 @@ test.describe('cycle launch entry UX', () => {
     await expect(tree.getByText('销售部', { exact: true })).toBeVisible();
     await expect(tree.getByText('B2B销售组', { exact: true })).toHaveCount(1);
 
-    const productDepartment = tree
+    const salesDepartment = tree
       .locator('.el-tree-node__content')
-      .filter({ hasText: '产品部' })
+      .filter({ hasText: '销售部' })
       .locator('.el-checkbox');
-    await productDepartment.click();
-    await scopeDrawer.getByRole('tab', { name: '按人员' }).click();
-    await scopeDrawer.getByTestId('cycle-scope-user-select').locator('.el-select').click();
-    await page.locator('li.el-select-dropdown__item:visible').filter({ hasText: '陈晨 (E001)' }).last().click();
-    await page.keyboard.press('Escape');
-    await scopeDrawer.getByRole('tab', { name: '排除人员' }).click();
+    await salesDepartment.click();
+
+    await scopeDrawer.getByRole('tab', { name: '例外部门' }).click();
+    const exceptionTree = scopeDrawer.getByTestId('cycle-scope-excluded-department-tree');
+    await expect(exceptionTree.getByText('B2B销售组', { exact: true })).toBeVisible();
+    await expect(exceptionTree.getByText('销售部', { exact: true })).toHaveCount(0);
+    await expect(exceptionTree.getByText('产品部', { exact: true })).toHaveCount(0);
+    await exceptionTree
+      .locator('.el-tree-node__content')
+      .filter({ hasText: 'B2B销售组' })
+      .locator('.el-checkbox')
+      .click();
+
+    await scopeDrawer.getByRole('tab', { name: '例外人员' }).click();
     const excludedSelect = scopeDrawer.getByTestId('cycle-scope-excluded-select');
-    const excludedCombobox = excludedSelect.getByRole('combobox');
     await excludedSelect.locator('.el-select').click();
-    await excludedCombobox.press('End');
-    await excludedCombobox.press('Enter');
-    await expect(scopeDrawer.locator('.scope-drawer-footer')).toContainText('排除 1 人');
+    await expect(page.locator('li.el-select-dropdown__item:visible').filter({ hasText: '陈晨 (E001)' })).toBeVisible();
+    await expect(page.locator('li.el-select-dropdown__item:visible').filter({ hasText: '周舟 (E002)' })).toHaveCount(0);
+    await expect(page.locator('li.el-select-dropdown__item:visible').filter({ hasText: '孙珊 (P001)' })).toHaveCount(0);
     await page.keyboard.press('Escape');
     await scopeDrawer.getByRole('button', { name: '确定' }).click();
 
-    await expect(page.getByTestId('cycle-scope-summary')).toContainText('1 个部门（预计 8 人）');
-    await expect(page.getByTestId('cycle-scope-summary')).toContainText('另选 1 人');
-    await expect(page.getByTestId('cycle-scope-summary')).toContainText('排除 1 人');
+    const summary = page.getByTestId('cycle-scope-summary');
+    await expect(summary).toContainText('已选 1 个部门，包含 1 个下级组织');
+    await expect(summary).toContainText('排除例外：1 个下级组织');
+    await expect(summary).toContainText('预计参评 10 人');
     await page.getByTestId('cycle-create-save-draft').click();
 
     await expect.poll(() => createBodies).toHaveLength(1);
     expect(createBodies[0]).toMatchObject({
-      participantDeptIds: ['product'],
-      participantUserIds: ['employee-1'],
+      participantDeptIds: expect.arrayContaining(['sales', 'sales-b2b']),
+      participantUserIds: [],
+      explicitExemptDeptIds: ['sales-b2b'],
+      explicitExemptUserIds: [],
+    });
+  });
+
+  test('clears stale people exceptions when the included departments change', async ({ page }) => {
+    await mockCycleLaunchPage(page, { cycles: [] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+    await page.getByTestId('cycle-scope-custom').click();
+    await page.getByTestId('cycle-scope-picker-open').click();
+
+    const scopeDrawer = page.getByRole('dialog', { name: '选择考核对象' });
+    const tree = scopeDrawer.getByTestId('cycle-scope-department-tree');
+    const salesDepartment = tree
+      .locator('.el-tree-node__content')
+      .filter({ hasText: '销售部' })
+      .locator('.el-checkbox');
+    const productDepartment = tree
+      .locator('.el-tree-node__content')
+      .filter({ hasText: '产品部' })
+      .locator('.el-checkbox');
+    await salesDepartment.click();
+    await scopeDrawer.getByRole('tab', { name: '例外人员' }).click();
+    await scopeDrawer.getByTestId('cycle-scope-excluded-select').locator('.el-select').click();
+    await page.locator('li.el-select-dropdown__item:visible').filter({ hasText: '陈晨 (E001)' }).click();
+    await page.keyboard.press('Escape');
+    await expect(scopeDrawer.locator('.scope-drawer-footer')).toContainText('排除例外：1 人');
+
+    await scopeDrawer.getByRole('tab', { name: '按部门' }).click();
+    await salesDepartment.click();
+    await productDepartment.click();
+
+    await expect(scopeDrawer.locator('.scope-drawer-footer')).not.toContainText('排除例外');
+    await scopeDrawer.getByRole('tab', { name: '例外人员' }).click();
+    await scopeDrawer.getByTestId('cycle-scope-excluded-select').locator('.el-select').click();
+    await expect(page.locator('li.el-select-dropdown__item:visible').filter({ hasText: '陈晨 (E001)' })).toHaveCount(0);
+    await expect(page.locator('li.el-select-dropdown__item:visible').filter({ hasText: '周舟 (E002)' })).toBeVisible();
+  });
+
+  test('does not carry custom exceptions into an all-company scope', async ({ page }) => {
+    const createBodies: unknown[] = [];
+    await mockCycleLaunchPage(page, { cycles: [], createBodies });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+    await page.getByTestId('cycle-scope-custom').click();
+    await page.getByTestId('cycle-scope-picker-open').click();
+
+    const scopeDrawer = page.getByRole('dialog', { name: '选择考核对象' });
+    await scopeDrawer.getByTestId('cycle-scope-department-tree')
+      .locator('.el-tree-node__content')
+      .filter({ hasText: '销售部' })
+      .locator('.el-checkbox')
+      .click();
+    await scopeDrawer.getByRole('tab', { name: '例外部门' }).click();
+    await scopeDrawer.getByTestId('cycle-scope-excluded-department-tree')
+      .locator('.el-tree-node__content')
+      .filter({ hasText: 'B2B销售组' })
+      .locator('.el-checkbox')
+      .click();
+    await scopeDrawer.getByRole('button', { name: '确定' }).click();
+    await expect(page.getByTestId('cycle-scope-summary')).toContainText('排除例外：1 个下级组织');
+
+    await page.getByTestId('cycle-scope-all').click();
+    await expect(page.getByTestId('cycle-scope-summary')).toHaveText('全公司');
+    await page.getByTestId('cycle-create-save-draft').click();
+
+    await expect.poll(() => createBodies).toHaveLength(1);
+    expect(createBodies[0]).toMatchObject({
+      participantDeptIds: [],
+      participantUserIds: [],
       explicitExemptDeptIds: [],
-      explicitExemptUserIds: ['employee-probation'],
+      explicitExemptUserIds: [],
     });
   });
 
@@ -386,16 +505,16 @@ test.describe('cycle launch entry UX', () => {
     const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole('radio', { name: '自定义范围' })).toBeChecked();
-    await expect(dialog.getByTestId('cycle-scope-summary')).toContainText('0 个部门（预计 0 人）');
+    await expect(dialog.getByTestId('cycle-scope-summary')).toContainText('已选 0 个部门（预计 0 人）');
     await expect(dialog.getByTestId('cycle-scope-summary')).toContainText('另选 1 人');
-    await expect(dialog.getByTestId('cycle-scope-summary')).toContainText('排除 1 人');
+    await expect(dialog.getByTestId('cycle-scope-summary')).toContainText('排除例外：1 人');
   });
 
-  test('restores excluded departments when reopening a saved draft', async ({ page }) => {
+  test('restores valid department exceptions when reopening a saved custom draft', async ({ page }) => {
     const excludedDepartmentCycle: AssessmentCycle = {
       ...createdCycle,
-      participantDeptIds: ['product'],
-      explicitExemptDeptIds: ['sales', 'sales-b2b'],
+      participantDeptIds: ['sales', 'sales-b2b'],
+      explicitExemptDeptIds: ['sales-b2b'],
     };
     await mockCycleLaunchPage(page, { cycles: [excludedDepartmentCycle] });
     await page.goto('/cycles?group=attention');
@@ -404,12 +523,9 @@ test.describe('cycle launch entry UX', () => {
     const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
     await dialog.getByTestId('cycle-scope-picker-open').click();
     const scopeDrawer = page.getByRole('dialog', { name: '选择考核对象' });
-    await scopeDrawer.getByRole('tab', { name: '排除部门' }).click();
+    await scopeDrawer.getByRole('tab', { name: '例外部门' }).click();
     const excludedDepartmentTree = scopeDrawer.getByTestId('cycle-scope-excluded-department-tree');
-    await expect(excludedDepartmentTree
-      .locator('.el-tree-node__content')
-      .filter({ hasText: '销售部' })
-      .locator('.el-checkbox')).toHaveClass(/is-checked/);
+    await expect(excludedDepartmentTree.getByText('销售部', { exact: true })).toHaveCount(0);
     await expect(excludedDepartmentTree
       .locator('.el-tree-node__content')
       .filter({ hasText: 'B2B销售组' })
@@ -528,7 +644,7 @@ test.describe('cycle launch entry UX', () => {
     await page.getByTestId('cycle-advanced-schedule').click();
 
     await expect(page.getByText('目标开放时间', { exact: true })).toBeVisible();
-    await expect(page.getByTestId('cycle-create-and-check')).toBeVisible();
+    await expect(page.getByTestId('cycle-create-submit')).toHaveText('提交');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     const footer = await page.getByTestId('cycle-create-impact-hint').boundingBox();
     expect(footer?.y).toBeGreaterThanOrEqual(0);

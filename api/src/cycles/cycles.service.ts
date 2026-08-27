@@ -310,7 +310,7 @@ export class CyclesService {
       || viewer.sysRole === SysRole.hr
       || viewer.sysRole === SysRole.system_admin;
     if (!canManageCycles && ['draft', 'scheduled', 'launch_blocked'].includes(cycle.status)) {
-      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权查看未开放周期' });
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权查看尚未发起的周期' });
     }
 
     if (!canManageCycles) {
@@ -380,7 +380,7 @@ export class CyclesService {
       if (['scheduled', 'launch_blocked'].includes(cycle.status)) {
         throw new ConflictException({
           code: ERROR_CODE.PARAM_INVALID,
-          message: '周期已预约开放，修改截止时间前请先取消预约',
+          message: '周期已预约发起，修改截止时间前请先取消预约',
         });
       }
 

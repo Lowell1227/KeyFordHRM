@@ -57,10 +57,11 @@ const departmentTree = computed<DepartmentTreeNode[]>(() => {
     items.sort((left, right) => left.sortOrder - right.sortOrder || left.name.localeCompare(right.name));
     items.forEach((item) => sortNodes(item.children));
   };
-  const cloneNestedNodes = (items: Department[]): DepartmentTreeNode[] => items.map((department) => ({
+  const cloneNestedNodes = (items: Department[], parentId?: string): DepartmentTreeNode[] => items.map((department) => ({
     ...department,
+    parentId: department.parentId ?? parentId,
     disabled: department.isActive === false,
-    children: cloneNestedNodes(department.children ?? []),
+    children: cloneNestedNodes(department.children ?? [], department.id),
   }));
 
   if (props.departments.some((department) => (department.children?.length ?? 0) > 0)) {
@@ -108,6 +109,62 @@ const countDirectMembers = (ids: string[]) => ids.reduce(
   0,
 );
 
+function departmentSelection(ids: string[]) {
+  const selectedIds = uniqueIds(ids).filter((id) => departmentById.value.has(id));
+  const selected = new Set(selectedIds);
+  const rootIds = selectedIds.filter((id) => {
+    let parentId = departmentById.value.get(id)?.parentId;
+    while (parentId) {
+      if (selected.has(parentId)) return false;
+      parentId = departmentById.value.get(parentId)?.parentId;
+    }
+    return true;
+  });
+  return {
+    ids: selectedIds,
+    rootIds,
+    descendantCount: Math.max(0, selectedIds.length - rootIds.length),
+  };
+}
+
+function expandDepartmentSelection(ids: string[]) {
+  const result = new Set<string>();
+  const visit = (id: string) => {
+    const department = departmentById.value.get(id);
+    if (!department || result.has(id)) return;
+    result.add(id);
+    department.children.forEach((child) => visit(child.id));
+  };
+  departmentSelection(ids).rootIds.forEach(visit);
+  return [...result];
+}
+
+const includedDepartmentSelection = computed(() => departmentSelection(departmentDraft.value));
+const allowedCustomExceptionDepartmentIds = computed(() => {
+  const roots = new Set(includedDepartmentSelection.value.rootIds);
+  return expandDepartmentSelection(includedDepartmentSelection.value.rootIds)
+    .filter((id) => !roots.has(id));
+});
+const customExceptionDepartmentTree = computed<DepartmentTreeNode[]>(() => {
+  const allowed = new Set(allowedCustomExceptionDepartmentIds.value);
+  const collect = (nodes: DepartmentTreeNode[]): DepartmentTreeNode[] => nodes.flatMap((node) => {
+    const children = collect(node.children);
+    return allowed.has(node.id) ? [{ ...node, children }] : children;
+  });
+  return collect(departmentTree.value);
+});
+const excludedDepartmentTree = computed(() => (
+  props.scope === 'custom' ? customExceptionDepartmentTree.value : departmentTree.value
+));
+
+function departmentSummary(ids: string[], prefix: string) {
+  const selection = departmentSelection(ids);
+  const descendants = selection.descendantCount > 0
+    ? `，包含 ${selection.descendantCount} 个下级组织`
+    : '';
+  return `${prefix}${selection.rootIds.length} 个部门${descendants}（预计 ${countDirectMembers(selection.ids)} 人）`;
+}
+
 function buildSummary(
   scope: ParticipantScopeMode,
   departmentIds: string[],
@@ -117,15 +174,32 @@ function buildSummary(
 ) {
   const parts = scope === 'all'
     ? ['全公司']
-    : [
-        `${departmentIds.length} 个部门（预计 ${countDirectMembers(departmentIds)} 人）`,
-        `另选 ${userIds.length} 人`,
-      ];
-  if (excludedDepartmentIds.length > 0) {
-    parts.push(`排除 ${excludedDepartmentIds.length} 个部门（预计 ${countDirectMembers(excludedDepartmentIds)} 人）`);
+    : [departmentSummary(departmentIds, '已选 '), `另选 ${userIds.length} 人`];
+  if (scope === 'all' && excludedDepartmentIds.length > 0) {
+    parts.push(departmentSummary(excludedDepartmentIds, '排除 '));
   }
-  if (excludedUserIds.length > 0) {
+  if (scope === 'all' && excludedUserIds.length > 0) {
     parts.push(`${excludedDepartmentIds.length > 0 ? '另排除' : '排除'} ${excludedUserIds.length} 人`);
+  }
+  if (scope === 'custom' && (excludedDepartmentIds.length > 0 || excludedUserIds.length > 0)) {
+    const exceptionParts: string[] = [];
+    if (excludedDepartmentIds.length > 0) {
+      const exceptionSelection = departmentSelection(excludedDepartmentIds);
+      const descendants = exceptionSelection.descendantCount > 0
+        ? `（包含 ${exceptionSelection.descendantCount} 个更下级组织）`
+        : '';
+      exceptionParts.push(`${exceptionSelection.rootIds.length} 个下级组织${descendants}`);
+    }
+    if (excludedUserIds.length > 0) exceptionParts.push(`${excludedUserIds.length} 人`);
+    parts.push(`排除例外：${exceptionParts.join('、')}`);
+  }
+  if (scope === 'custom') {
+    const estimatedParticipants = Math.max(
+      0,
+      countDirectMembers(departmentIds) + userIds.length
+        - countDirectMembers(excludedDepartmentIds) - excludedUserIds.length,
+    );
+    parts.push(`预计参评 ${estimatedParticipants} 人`);
   }
   return parts.join(' · ');
 }
@@ -153,14 +227,19 @@ function setScope(value: string | number | boolean | undefined) {
     emit('update:departmentIds', []);
     emit('update:userIds', []);
   }
+  emit('update:excludedDepartmentIds', []);
+  emit('update:excludedUserIds', []);
   emit('change');
 }
 
 async function openPicker() {
-  const excludedIds = new Set(props.excludedDepartmentIds);
-  departmentDraft.value = uniqueIds(props.departmentIds.filter((id) => !excludedIds.has(id)));
+  departmentDraft.value = props.scope === 'custom'
+    ? expandDepartmentSelection(props.departmentIds)
+    : [];
   userDraft.value = [...props.userIds];
-  excludedDepartmentDraft.value = uniqueIds(props.excludedDepartmentIds);
+  const allowedExceptionIds = new Set(allowedCustomExceptionDepartmentIds.value);
+  excludedDepartmentDraft.value = uniqueIds(props.excludedDepartmentIds)
+    .filter((id) => props.scope === 'all' || allowedExceptionIds.has(id));
   excludedUserDraft.value = [...props.excludedUserIds];
   departmentKeyword.value = '';
   activeTab.value = props.scope === 'all' ? 'excludedDepartments' : 'includedDepartments';
@@ -177,8 +256,10 @@ function syncDepartmentDraft() {
   departmentDraft.value = uniqueIds(
     (includedDepartmentTreeRef.value?.getCheckedKeys(false) ?? []).map(String),
   );
-  const includedIds = new Set(departmentDraft.value);
-  excludedDepartmentDraft.value = excludedDepartmentDraft.value.filter((id) => !includedIds.has(id));
+  const allowedExceptionIds = new Set(allowedCustomExceptionDepartmentIds.value);
+  excludedDepartmentDraft.value = excludedDepartmentDraft.value
+    .filter((id) => allowedExceptionIds.has(id));
+  excludedUserDraft.value = [];
   excludedDepartmentTreeRef.value?.setCheckedKeys(excludedDepartmentDraft.value);
 }
 
@@ -186,9 +267,6 @@ function syncExcludedDepartmentDraft() {
   excludedDepartmentDraft.value = uniqueIds(
     (excludedDepartmentTreeRef.value?.getCheckedKeys(false) ?? []).map(String),
   );
-  const excludedIds = new Set(excludedDepartmentDraft.value);
-  departmentDraft.value = departmentDraft.value.filter((id) => !excludedIds.has(id));
-  includedDepartmentTreeRef.value?.setCheckedKeys(departmentDraft.value);
 }
 
 function updateUserDraft(value: string | string[] | undefined) {
@@ -286,7 +364,7 @@ watch(activeTab, async (value) => {
   >
     <div class="scope-drawer-content">
       <el-alert
-        :title="scope === 'all' ? '当前覆盖全公司，可按部门或人员设置不参与范围' : '部门和指定人员取并集，排除部门及人员优先'"
+        :title="scope === 'all' ? '当前覆盖全公司，可按部门或人员设置不参与范围' : '先选择参评部门或人员，再从已选部门内排除例外'"
         type="info"
         :closable="false"
         show-icon
@@ -327,18 +405,22 @@ watch(activeTab, async (value) => {
           </div>
         </el-tab-pane>
 
-        <el-tab-pane label="排除部门" name="excludedDepartments">
+        <el-tab-pane :label="scope === 'custom' ? '例外部门' : '排除部门'" name="excludedDepartments">
           <el-input
             v-model="departmentKeyword"
             clearable
             placeholder="搜索需要排除的部门"
             @input="filterDepartment"
           />
-          <p class="department-exclusion-hint">勾选父部门会同时排除其全部子部门，正式人数以保存后的发起前检查为准。</p>
+          <p class="department-exclusion-hint">
+            {{ scope === 'custom'
+              ? '仅显示已选部门内的下级组织；正式人数以提交后的发起检查为准。'
+              : '勾选父部门会同时排除其全部子部门，正式人数以提交后的发起检查为准。' }}
+          </p>
           <div class="department-tree-panel" data-testid="cycle-scope-excluded-department-tree">
             <el-tree
               ref="excludedDepartmentTreeRef"
-              :data="departmentTree"
+              :data="excludedDepartmentTree"
               :props="treeProps"
               node-key="id"
               show-checkbox
@@ -349,16 +431,17 @@ watch(activeTab, async (value) => {
           </div>
         </el-tab-pane>
 
-        <el-tab-pane label="排除人员" name="excludedUsers">
+        <el-tab-pane :label="scope === 'custom' ? '例外人员' : '排除人员'" name="excludedUsers">
           <div class="people-picker-panel" data-testid="cycle-scope-excluded-select">
             <p>
               {{ scope === 'all'
                 ? '被排除人员将标记为本周期豁免，不进入考核流程；系统会保留豁免记录，并通知本人及主管。'
-                : '排除优先于部门和单独选择的人员；系统会保留豁免记录，并通知本人及主管。' }}
+                : '仅可选择已选部门内的人员作为例外；系统会保留豁免记录。' }}
             </p>
             <UserSelect
               :model-value="excludedUserDraft"
               multiple
+              :department-ids="scope === 'custom' ? includedDepartmentSelection.rootIds : undefined"
               :disabled-ids="userDraft"
               placeholder="按姓名或工号搜索需要排除的人员"
               @update:model-value="updateExcludedUserDraft"

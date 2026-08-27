@@ -33,8 +33,8 @@ import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 
 const CYCLE_STATUS_LABELS: Record<CycleStatus, string> = {
   draft: '草稿',
-  scheduled: '待开放',
-  launch_blocked: '开放受阻',
+  scheduled: '待发起',
+  launch_blocked: '发起受阻',
   indicator_setting: '指标制定',
   self_eval: '员工自评',
   manager_score: '主管评分',

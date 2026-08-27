@@ -121,7 +121,7 @@ export class LaunchService {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
     }
     if (!(['draft', 'scheduled', 'launch_blocked'] as string[]).includes(cycle.status)) {
-      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前周期已开放，不能重新执行开放检查' });
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前周期已发起，不能重新执行发起检查' });
     }
 
     const blockers: LaunchPreflightResult['blockers'] = [];
@@ -202,12 +202,12 @@ export class LaunchService {
       });
     }
     if (!['draft', 'launch_blocked'].includes(result.cycle.status)) {
-      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '周期已预约开放，无需重复预约' });
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '周期已预约发起，无需重复预约' });
     }
     if (!result.planHash || result.planHash !== expectedPlanHash) {
       throw new ConflictException({
         code: ERROR_CODE.CONFLICT,
-        message: '开放检查结果已变化，请重新检查后再预约',
+        message: '发起检查结果已变化，请重新检查后再预约',
       });
     }
 
@@ -234,7 +234,7 @@ export class LaunchService {
         },
       });
       if (update.count !== 1) {
-        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '周期状态已变化，请刷新后重新执行开放检查' });
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '周期状态已变化，请刷新后重新执行发起检查' });
       }
       await tx.auditLog.create({
         data: {
@@ -262,7 +262,7 @@ export class LaunchService {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
     }
     if (!['scheduled', 'launch_blocked'].includes(cycle.status)) {
-      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '只有待开放或开放受阻的周期可以取消预约' });
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '只有待发起或发起受阻的周期可以取消预约' });
     }
     await this.prisma.$transaction(async (tx) => {
       const result = await tx.assessmentCycle.updateMany({
@@ -323,14 +323,14 @@ export class LaunchService {
       if (options.source === 'scheduled' && cycle.status !== 'scheduled') {
         throw new ConflictException({
           code: ERROR_CODE.CONFLICT,
-          message: '周期已不处于待开放状态，定时任务不会自动重试',
+          message: '周期已不处于待发起状态，定时任务不会自动重试',
         });
       }
 
       if (!await this.findValidHrOwner(tx, cycle.hrOwnerId)) {
         throw new BadRequestException({
           code: ERROR_CODE.PARAM_INVALID,
-          message: '本周期 HR 负责人缺失或已离职，请重新设置后执行开放检查',
+          message: '本周期 HR 负责人缺失或已离职，请重新设置后执行发起检查',
         });
       }
 
@@ -384,7 +384,7 @@ export class LaunchService {
       if (!expectedPlanHash || expectedPlanHash !== currentPlanHash) {
         throw new ConflictException({
           code: ERROR_CODE.CONFLICT,
-          message: '人员、组织关系、模板或周期配置已变化，请重新执行开放检查',
+          message: '人员、组织关系、模板或周期配置已变化，请重新执行发起检查',
         });
       }
 
@@ -688,7 +688,7 @@ export class LaunchService {
       }
       return { code, message: String(response) };
     }
-    return { code, message: error instanceof Error ? error.message : '开放检查失败' };
+    return { code, message: error instanceof Error ? error.message : '发起检查失败' };
   }
 
   private buildLaunchPlan(

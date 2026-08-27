@@ -33,7 +33,7 @@ const TYPE_LABEL = {
 
 const STATUS_LABEL: Record<CycleStatus, string> = {
   draft: '草稿',
-  scheduled: '待开放',
+  scheduled: '待发起',
   launch_blocked: '发起受阻',
   indicator_setting: '指标制定中',
   self_eval: '员工自评中',
