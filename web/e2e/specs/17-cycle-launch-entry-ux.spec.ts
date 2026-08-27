@@ -276,8 +276,8 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.getByRole('radio', { name: '全公司' })).toBeChecked();
     await expect(page.getByTestId('cycle-plan-summary')).toContainText('系统默认计划');
     await expect(page.getByTestId('cycle-create-summary')).toHaveCount(0);
-    await expect(page.getByTestId('cycle-create-save-draft')).toHaveText('保存');
-    await expect(page.getByTestId('cycle-create-submit')).toHaveText('提交');
+    await expect(page.getByTestId('cycle-create-save-draft')).toHaveText('保存草稿');
+    await expect(page.getByTestId('cycle-create-save-and-view')).toHaveText('保存');
     await expect(dialog.getByRole('button', { name: '仅保存草稿' })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '保存并检查' })).toHaveCount(0);
     await expect(page.getByTestId('cycle-create-impact-hint')).toContainText('不发送钉钉通知');
@@ -290,6 +290,8 @@ test.describe('cycle launch entry UX', () => {
     await expect(scopeDrawer.getByRole('tab', { name: '按人员' })).toHaveCount(0);
     await expect(scopeDrawer.getByRole('tab', { name: '排除部门' })).toBeVisible();
     await expect(scopeDrawer.getByRole('tab', { name: '排除人员' })).toBeVisible();
+    await expect(scopeDrawer).toContainText('正式人数以发起检查结果为准');
+    await expect(scopeDrawer).not.toContainText('提交后的发起检查');
 
     const excludedDepartmentTree = scopeDrawer.getByTestId('cycle-scope-excluded-department-tree');
     const salesDepartment = excludedDepartmentTree
@@ -573,7 +575,7 @@ test.describe('cycle launch entry UX', () => {
     const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
     await expect(dialog).toBeVisible();
     await dialog.getByTestId('cycle-notification-launch-only').click();
-    await dialog.getByTestId('cycle-update-save').click();
+    await dialog.getByTestId('cycle-create-save-and-view').click();
 
     await expect.poll(() => notificationModeUpdates).toEqual(['launch_only']);
   });
@@ -667,7 +669,7 @@ test.describe('cycle launch entry UX', () => {
 
     await expect(dialog.getByPlaceholder('开始日期')).toHaveValue('2027-12-01');
     await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2028-05-31');
-    await dialog.getByTestId('cycle-update-save').click();
+    await dialog.getByTestId('cycle-create-save-and-view').click();
 
     await expect.poll(() => updateBodies).toHaveLength(1);
     expect(updateBodies[0]).toMatchObject({
@@ -900,7 +902,7 @@ test.describe('cycle launch entry UX', () => {
     await page.getByTestId('cycle-advanced-schedule').click();
 
     await expect(page.getByText('目标制定开放', { exact: true })).toBeVisible();
-    await expect(page.getByTestId('cycle-create-submit')).toHaveText('提交');
+    await expect(page.getByTestId('cycle-create-save-and-view')).toHaveText('保存');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     const footer = await page.getByTestId('cycle-create-impact-hint').boundingBox();
     expect(footer?.y).toBeGreaterThanOrEqual(0);

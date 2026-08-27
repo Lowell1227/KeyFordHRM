@@ -62,7 +62,7 @@ function formatDateTime(value?: string): string {
 }
 
 function blockerActionLabel(code: string): string {
-  if (code.startsWith('TEMPLATE_') || code === 'NO_ACTIVE_TEMPLATES') return '去配置模板';
+  if (code.startsWith('TEMPLATE_') || code === 'NO_ACTIVE_TEMPLATES') return '去配置考核模板';
   if (code === 'ORGANIZATION_RELATION_INVALID') return '去完善人员关系';
   return '';
 }
@@ -89,20 +89,13 @@ function blockerActionLabel(code: string): string {
         </div>
       </div>
       <div
-        v-if="cycle && ['draft', 'launch_blocked'].includes(cycle.status)"
+        v-if="cycle?.status === 'draft'"
         class="cycle-workspace__header-actions"
       >
         <el-button
-          v-if="cycle.status === 'draft'"
           data-testid="cycle-workspace-edit"
           @click="emit('edit')"
         >编辑</el-button>
-        <el-button
-          data-testid="cycle-workspace-submit"
-          type="primary"
-          :loading="preflightLoading"
-          @click="emit('preflight')"
-        >提交</el-button>
       </div>
     </header>
 
@@ -157,6 +150,43 @@ function blockerActionLabel(code: string): string {
           </div>
 
           <section v-if="['draft', 'launch_blocked'].includes(cycle.status)" class="cycle-preflight-panel">
+            <div
+              class="cycle-preflight-control-bar"
+              data-testid="cycle-preflight-control-bar"
+            >
+              <p>检查参与人员、直属上级、考核模板和时间计划是否准备完成。</p>
+              <div
+                class="cycle-preflight-primary-action"
+                data-testid="cycle-preflight-primary-action"
+              >
+                <el-button
+                  v-if="preflight?.ready && canOpenImmediately"
+                  type="primary"
+                  :loading="launching"
+                  @click="emit('launch')"
+                >
+                  立即发起
+                </el-button>
+                <el-button
+                  v-else-if="preflight?.ready"
+                  type="primary"
+                  :loading="launching"
+                  @click="emit('schedule')"
+                >
+                  预约发起（{{ formatDateTime(preflight.cycle.goalSettingOpenAt) }}）
+                </el-button>
+                <el-button
+                  v-else
+                  type="primary"
+                  :plain="Boolean(preflight || preflightError)"
+                  :loading="preflightLoading"
+                  @click="emit('preflight')"
+                >
+                  {{ preflightLoading ? '正在检查' : (preflight || preflightError ? '重新检查' : '开始发起检查') }}
+                </el-button>
+              </div>
+            </div>
+
             <el-skeleton v-if="preflightLoading" animated :rows="4" />
             <el-alert
               v-else-if="preflightError"
@@ -165,9 +195,7 @@ function blockerActionLabel(code: string): string {
               show-icon
               title="发起检查失败"
               :description="preflightError"
-            >
-              <template #default><el-button size="small" @click="emit('preflight')">重新检查</el-button></template>
-            </el-alert>
+            />
 
             <template v-else-if="preflight">
               <el-alert
@@ -178,7 +206,7 @@ function blockerActionLabel(code: string): string {
               />
               <div class="cycle-preflight-summary">
                 <span><strong>{{ preflight.participantCount }}</strong> 名参与员工</span>
-                <span><strong>{{ preflight.templateCount }}</strong> 套匹配模板</span>
+                <span><strong>{{ preflight.templateCount }}</strong> 套考核模板</span>
                 <span>目标制定开放时间 {{ formatDateTime(preflight.cycle.goalSettingOpenAt) }}</span>
               </div>
               <div
@@ -189,7 +217,7 @@ function blockerActionLabel(code: string): string {
                 <article v-for="blocker in preflight.blockers" :key="blocker.code">
                   <div>
                     <strong>{{ blocker.message }}</strong>
-                    <span>请完成相关人员、组织或模板配置后重新检查。</span>
+                    <span>请完成相关人员、组织或考核模板配置后重新检查。</span>
                   </div>
                   <el-button
                     v-if="blockerActionLabel(blocker.code)"
@@ -211,30 +239,12 @@ function blockerActionLabel(code: string): string {
                 <el-table :data="preflight.participants" size="small" max-height="360">
                   <el-table-column prop="employeeName" label="员工" min-width="100" />
                   <el-table-column prop="deptName" label="部门" min-width="140" />
-                  <el-table-column prop="managerName" label="直属主管" min-width="110" />
-                  <el-table-column prop="templateName" label="匹配模板" min-width="180" />
+                  <el-table-column prop="managerName" label="直属上级" min-width="110" />
+                  <el-table-column prop="templateName" label="匹配考核模板" min-width="180" />
                 </el-table>
               </details>
-              <div v-if="preflight.ready" class="cycle-preflight-actions">
-                <el-button
-                  v-if="canOpenImmediately"
-                  type="primary"
-                  :loading="launching"
-                  @click="emit('launch')"
-                >
-                  立即发起
-                </el-button>
-                <el-button v-else type="primary" :loading="launching" @click="emit('schedule')">
-                  预约发起（{{ formatDateTime(preflight.cycle.goalSettingOpenAt) }}）
-                </el-button>
-              </div>
-              <el-button v-else type="primary" plain @click="emit('preflight')">重新检查</el-button>
             </template>
 
-            <div v-else class="cycle-preflight-empty">
-              <p>检查参与人员、直属主管、绩效模板和时间设置是否准备完成。</p>
-              <el-button type="primary" @click="emit('preflight')">开始检查</el-button>
-            </div>
           </section>
         </section>
       </main>
@@ -403,12 +413,23 @@ function blockerActionLabel(code: string): string {
   border-top: 1px solid var(--el-border-color-lighter);
 }
 
-.cycle-preflight-summary,
-.cycle-preflight-actions {
+.cycle-preflight-summary {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 18px;
+}
+
+.cycle-preflight-primary-action {
+  display: flex;
+  flex: 0 0 320px;
+  min-height: 40px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.cycle-preflight-primary-action .el-button {
+  min-width: 168px;
 }
 
 .cycle-preflight-summary span {
@@ -450,7 +471,7 @@ function blockerActionLabel(code: string): string {
   cursor: pointer;
 }
 
-.cycle-preflight-empty {
+.cycle-preflight-control-bar {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -460,7 +481,7 @@ function blockerActionLabel(code: string): string {
   border-radius: 8px;
 }
 
-.cycle-preflight-empty p {
+.cycle-preflight-control-bar p {
   margin: 0;
   color: var(--el-text-color-secondary);
 }
@@ -502,14 +523,19 @@ function blockerActionLabel(code: string): string {
 
   .cycle-current-action__heading,
   .cycle-preflight-blockers article,
-  .cycle-preflight-empty {
+  .cycle-preflight-control-bar {
     align-items: stretch;
     flex-direction: column;
   }
 
   .cycle-current-action__heading > .el-button,
   .cycle-preflight-blockers article .el-button,
-  .cycle-preflight-empty .el-button {
+  .cycle-preflight-primary-action .el-button {
+    width: 100%;
+  }
+
+  .cycle-preflight-primary-action {
+    flex-basis: auto;
     width: 100%;
   }
 

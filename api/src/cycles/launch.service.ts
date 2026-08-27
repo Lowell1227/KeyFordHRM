@@ -962,14 +962,14 @@ export class LaunchService {
       messages.push(`以下员工未分配部门：${Array.from(missingDeptUsers).join('、')}`);
     }
     if (missingManagers.size > 0) {
-      messages.push(`以下员工未设置直属主管：${Array.from(missingManagers).join('、')}`);
+      messages.push(`以下员工未设置直属上级：${Array.from(missingManagers).join('、')}`);
     }
     if (missingDeptLeaders.size > 0) {
       messages.push(`以下部门未设置部门负责人：${Array.from(missingDeptLeaders).join('、')}`);
     }
     if (missingApprovers.size > 0) {
       messages.push(
-        `以下部门未设置最终业务审批人，请补齐部门负责人及其直属主管；最高层级可手动设置：${Array.from(missingApprovers).join('、')}`,
+        `以下部门未设置最终业务审批人，请补齐部门负责人及其直属上级；最高层级可手动设置：${Array.from(missingApprovers).join('、')}`,
       );
     }
 

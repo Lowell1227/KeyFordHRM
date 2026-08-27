@@ -414,8 +414,8 @@ watch(activeTab, async (value) => {
           />
           <p class="department-exclusion-hint">
             {{ scope === 'custom'
-              ? '仅显示已选部门内的下级组织；正式人数以提交后的发起检查为准。'
-              : '勾选父部门会同时排除其全部子部门，正式人数以提交后的发起检查为准。' }}
+              ? '仅显示已选部门内的下级组织；正式人数以发起检查结果为准。'
+              : '勾选父部门会同时排除其全部子部门，正式人数以发起检查结果为准。' }}
           </p>
           <div class="department-tree-panel" data-testid="cycle-scope-excluded-department-tree">
             <el-tree

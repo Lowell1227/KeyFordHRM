@@ -216,7 +216,7 @@ describe('LaunchService preflight', () => {
         ready: false,
         blockers: [expect.objectContaining({
           code: 'ORGANIZATION_RELATION_INVALID',
-          message: expect.stringContaining('以下员工未设置直属主管：测试员工'),
+          message: expect.stringContaining('以下员工未设置直属上级：测试员工'),
         })],
       }));
   });

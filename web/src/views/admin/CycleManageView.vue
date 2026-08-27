@@ -732,7 +732,7 @@ function buildCreateBody(): CreateCycleBody {
   return body;
 }
 
-async function handleCreate(runPreflight = false) {
+async function handleCreate(openWorkspace = false) {
   if (!createFormRef.value) return;
   try {
     await createFormRef.value.validate();
@@ -750,22 +750,22 @@ async function handleCreate(runPreflight = false) {
   try {
     if (isEditMode.value && editingCycleId.value) {
       const updated = await cyclesApi.update(editingCycleId.value, buildCreateBody());
-      ElMessage.success(runPreflight ? '周期已提交，正在执行发起检查' : '周期已保存');
+      ElMessage.success('周期已保存');
       createDialogVisible.value = false;
       resetCreateForm();
       if (cycleDetail.value?.id === updated.id) cycleDetail.value = updated;
       await loadCycles();
-      if (runPreflight) {
-        await openCycleWorkspace(updated, true);
+      if (openWorkspace) {
+        await openCycleWorkspace(updated);
       }
     } else {
       const created = await cyclesApi.create(buildCreateBody());
-      ElMessage.success(runPreflight ? '周期已提交，正在执行发起检查' : '周期草稿已保存');
+      ElMessage.success(openWorkspace ? '周期已保存' : '周期草稿已保存');
       createDialogVisible.value = false;
       resetCreateForm();
       await loadCycles();
-      if (runPreflight) {
-        await openCycleWorkspace(created, true);
+      if (openWorkspace) {
+        await openCycleWorkspace(created);
       }
     }
   } catch {
@@ -1578,20 +1578,14 @@ onMounted(() => {
               data-testid="cycle-create-save-draft"
               :loading="submitting"
               @click="handleCreate(false)"
-            >保存</el-button>
+            >保存草稿</el-button>
             <el-button
-              v-else
-              data-testid="cycle-update-save"
-              :loading="submitting"
-              @click="handleCreate(false)"
-            >保存</el-button>
-            <el-button
-              data-testid="cycle-create-submit"
+              data-testid="cycle-create-save-and-view"
               type="primary"
               :loading="submitting"
               @click="handleCreate(true)"
             >
-              提交
+              保存
             </el-button>
           </div>
         </div>
