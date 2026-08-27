@@ -12,6 +12,7 @@ interface CycleLaunchMockOptions {
   cycles?: AssessmentCycle[];
   cycleUrls?: string[];
   createBodies?: unknown[];
+  updateBodies?: unknown[];
   departmentUrls?: string[];
   settingUpdates?: boolean[];
   notificationModeUpdates?: string[];
@@ -222,6 +223,7 @@ async function mockCycleLaunchPage(
     }
     if (route.request().method() === 'PATCH') {
       const body = route.request().postDataJSON();
+      options.updateBodies?.push(body);
       const notificationMode = String(body?.notificationMode ?? 'off');
       options.notificationModeUpdates?.push(notificationMode);
       return route.fulfill({
@@ -629,7 +631,8 @@ test.describe('cycle launch entry UX', () => {
     await expect.poll(() => cycleUrls.some((url) => new URL(url).searchParams.get('type') === 'semiannual')).toBe(true);
   });
 
-  test('opens a saved cross-year half-year with its persisted rolling dates', async ({ page }) => {
+  test('edits and saves a cross-year half-year after regenerating its schedule', async ({ page }) => {
+    const updateBodies: unknown[] = [];
     const semiannualCycle = {
       ...createdCycle,
       id: 'cycle-semiannual-cross-year',
@@ -638,7 +641,7 @@ test.describe('cycle launch entry UX', () => {
       startDate: '2027-11-01',
       endDate: '2028-04-30',
     } satisfies AssessmentCycle;
-    await mockCycleLaunchPage(page, { cycles: [semiannualCycle] });
+    await mockCycleLaunchPage(page, { cycles: [semiannualCycle], updateBodies });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-edit-cycle-semiannual-cross-year').click();
 
@@ -647,6 +650,29 @@ test.describe('cycle launch entry UX', () => {
     await expect(dialog.getByPlaceholder('开始日期')).toHaveValue('2027-11-01');
     await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2028-04-30');
     await expect(dialog.getByTestId('cycle-semiannual-warning')).toHaveCount(0);
+
+    await dialog.getByPlaceholder('开始日期').click();
+    const picker = page.locator('.el-picker-panel:visible');
+    await picker.locator('button.arrow-right').click();
+    await picker.locator('td.available:not(.prev-month):not(.next-month)').filter({ hasText: /^1$/ }).click();
+
+    const confirmation = page.getByRole('dialog', { name: '是否同步调整时间节点？' });
+    await expect(confirmation).toContainText('2027-11-01—2028-04-30');
+    await expect(confirmation).toContainText('2027-12-01—2028-05-31');
+    await confirmation.getByRole('button', { name: '同步重新生成（推荐）' }).click();
+
+    await expect(dialog.getByPlaceholder('开始日期')).toHaveValue('2027-12-01');
+    await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2028-05-31');
+    await dialog.getByTestId('cycle-update-save').click();
+
+    await expect.poll(() => updateBodies).toHaveLength(1);
+    expect(updateBodies[0]).toMatchObject({
+      type: 'semiannual',
+      startDate: '2027-12-01',
+      endDate: '2028-05-31',
+    });
+    expect((updateBodies[0] as Record<string, unknown>).goalSettingOpenAt).not.toBe(createdCycle.goalSettingOpenAt);
+    expect((updateBodies[0] as Record<string, unknown>).deadlinePublish).not.toBe(createdCycle.deadlinePublish);
   });
 
   test('auto-completes a rolling half-year after HR changes its start date', async ({ page }) => {
