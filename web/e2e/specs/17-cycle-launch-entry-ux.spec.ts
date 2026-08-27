@@ -670,6 +670,57 @@ test.describe('cycle launch entry UX', () => {
     await expect(nodes.nth(3).locator('.el-date-editor input')).toHaveValue('2027-01-01 17:00:00');
   });
 
+  test('asks before regenerating saved nodes when an edited cycle period changes', async ({ page }) => {
+    await mockCycleLaunchPage(page, { cycles: [createdCycle] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-edit-cycle-created').click();
+
+    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    const periodInputs = dialog.locator('.el-date-editor--daterange input');
+    await periodInputs.nth(0).click();
+    const picker = page.locator('.el-picker-panel:visible');
+    await picker.locator('.el-date-range-picker__content.is-left td.available:not(.prev-month):not(.next-month)')
+      .filter({ hasText: /^19$/ })
+      .click();
+    await picker.locator('.el-date-range-picker__content.is-right td.available:not(.prev-month):not(.next-month)')
+      .filter({ hasText: /^30$/ })
+      .click();
+
+    const confirmation = page.getByRole('dialog', { name: '是否同步调整时间节点？' });
+    await expect(confirmation).toContainText('2026-10-01—2026-12-31');
+    await expect(confirmation).toContainText('2026-10-19—2026-11-30');
+    await expect(confirmation).toContainText('中国法定工作日');
+    await confirmation.getByRole('button', { name: '同步重新生成（推荐）' }).click();
+
+    const nodes = dialog.getByTestId('cycle-schedule-node');
+    await expect(nodes.nth(0).locator('.el-date-editor input')).toHaveValue('2026-09-29 09:00:00');
+    await expect(dialog.getByTestId('cycle-plan-summary')).toContainText('系统默认计划');
+  });
+
+  test('keeps saved nodes when HR chooses not to regenerate after a period change', async ({ page }) => {
+    await mockCycleLaunchPage(page, { cycles: [createdCycle] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-edit-cycle-created').click();
+
+    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    const periodInputs = dialog.locator('.el-date-editor--daterange input');
+    await periodInputs.nth(0).click();
+    const picker = page.locator('.el-picker-panel:visible');
+    await picker.locator('.el-date-range-picker__content.is-left td.available:not(.prev-month):not(.next-month)')
+      .filter({ hasText: /^19$/ })
+      .click();
+    await picker.locator('.el-date-range-picker__content.is-right td.available:not(.prev-month):not(.next-month)')
+      .filter({ hasText: /^30$/ })
+      .click();
+
+    const confirmation = page.getByRole('dialog', { name: '是否同步调整时间节点？' });
+    await confirmation.getByRole('button', { name: '保留当前时间节点' }).click();
+
+    const nodes = dialog.getByTestId('cycle-schedule-node');
+    await expect(nodes.nth(0).locator('.el-date-editor input')).toHaveValue('2026-09-21 17:00:00');
+    await expect(dialog.getByTestId('cycle-plan-summary')).toContainText('已调整计划');
+  });
+
   test('keeps advanced groups collapsed with useful summaries', async ({ page }) => {
     await mockCycleLaunchPage(page, { cycles: [] });
     await page.goto('/cycles?group=attention');

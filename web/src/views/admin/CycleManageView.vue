@@ -388,11 +388,13 @@ function handleCreateNameInput() {
   createNameCustomized.value = true;
 }
 
-function handleCreatePeriodRangeChange(value: [Date, Date] | null) {
+async function handleCreatePeriodRangeChange(value: [Date, Date] | null) {
+  const previousStartDate = createForm.startDate;
+  const previousEndDate = createForm.endDate;
   createForm.startDate = value?.[0];
   createForm.endDate = value?.[1];
   syncGeneratedName();
-  handleCreatePeriodChange();
+  await handleCreatePeriodChange(previousStartDate, previousEndDate);
 }
 
 function applyDefaultCreateSchedule() {
@@ -516,8 +518,43 @@ function handleCreateScheduleChange() {
   createScheduleCustomized.value = true;
 }
 
-function handleCreatePeriodChange() {
-  if (!createScheduleCustomized.value) applyDefaultCreateSchedule();
+async function handleCreatePeriodChange(previousStartDate?: Date, previousEndDate?: Date) {
+  if (!createScheduleCustomized.value) {
+    applyDefaultCreateSchedule();
+    return;
+  }
+  if (
+    !isEditMode.value
+    || !previousStartDate
+    || !previousEndDate
+    || !createForm.startDate
+    || !createForm.endDate
+  ) return;
+
+  const previousPeriod = `${dayjs(previousStartDate).format('YYYY-MM-DD')}—${dayjs(previousEndDate).format('YYYY-MM-DD')}`;
+  const nextPeriod = `${dayjs(createForm.startDate).format('YYYY-MM-DD')}—${dayjs(createForm.endDate).format('YYYY-MM-DD')}`;
+  if (previousPeriod === nextPeriod) return;
+
+  try {
+    await ElMessageBox.confirm(
+      `考核期间已由「${previousPeriod}」调整为「${nextPeriod}」。系统可以按照新的考核期间和中国法定工作日，重新生成全部 01–09 时间节点；若节点已经人工调整，也可以保留当前设置。`,
+      '是否同步调整时间节点？',
+      {
+        type: 'warning',
+        confirmButtonText: '同步重新生成（推荐）',
+        cancelButtonText: '保留当前时间节点',
+        showClose: false,
+        closeOnClickModal: false,
+        closeOnPressEscape: false,
+      },
+    );
+    applyDefaultCreateSchedule();
+    ElMessage.success('已按新的考核期间重新生成时间节点');
+  } catch (action) {
+    if (action === 'cancel') {
+      ElMessage.info('已保留当前时间节点，请确认各节点仍与新的考核期间匹配');
+    }
+  }
 }
 
 async function loadNotificationSettings() {
@@ -1214,7 +1251,7 @@ onMounted(() => {
         <el-form-item prop="startDate">
           <template #label>
             <span class="form-label-with-help">考核期间
-              <el-tooltip content="月度、季度和年度会自动联动；手动调整后，默认时间节点也会同步重算" placement="top">
+              <el-tooltip content="新建周期时会自动联动；编辑已保存周期并修改期间时，可选择重新生成或保留现有时间节点" placement="top">
                 <el-icon><QuestionFilled /></el-icon>
               </el-tooltip>
             </span>
