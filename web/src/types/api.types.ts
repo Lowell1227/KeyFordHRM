@@ -401,6 +401,7 @@ export interface AssessmentCycle {
   hrOwner?: { id: string; name: string } | null;
   participantDeptIds?: string[];
   participantUserIds?: string[];
+  explicitExemptDeptIds?: string[];
   explicitExemptUserIds?: string[];
   notificationMode?: CycleNotificationMode;
   scheduledAt?: string;
@@ -452,6 +453,7 @@ export interface CreateCycleBody {
   hrOwnerId?: string;
   participantDeptIds?: string[];
   participantUserIds?: string[];
+  explicitExemptDeptIds?: string[];
   explicitExemptUserIds?: string[];
   deadlineIndicatorSetting?: string;
   deadlineIndicatorConfirm?: string;

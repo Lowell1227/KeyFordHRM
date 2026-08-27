@@ -15,6 +15,7 @@ const props = defineProps<{
   departments: Department[];
   departmentIds: string[];
   userIds: string[];
+  excludedDepartmentIds: string[];
   excludedUserIds: string[];
 }>();
 
@@ -22,21 +23,28 @@ const emit = defineEmits<{
   'update:scope': [value: ParticipantScopeMode];
   'update:departmentIds': [value: string[]];
   'update:userIds': [value: string[]];
+  'update:excludedDepartmentIds': [value: string[]];
   'update:excludedUserIds': [value: string[]];
   change: [];
 }>();
 
 const drawerVisible = ref(false);
-const activeTab = ref<'departments' | 'users' | 'excluded'>('departments');
+type ScopeTab = 'includedDepartments' | 'includedUsers' | 'excludedDepartments' | 'excludedUsers';
+
+const activeTab = ref<ScopeTab>('includedDepartments');
 const departmentKeyword = ref('');
 const departmentDraft = ref<string[]>([]);
 const userDraft = ref<string[]>([]);
+const excludedDepartmentDraft = ref<string[]>([]);
 const excludedUserDraft = ref<string[]>([]);
-const departmentTreeRef = ref<{
+type DepartmentTreeRef = {
   filter: (value: string) => void;
   getCheckedKeys: (leafOnly?: boolean) => Array<string | number>;
   setCheckedKeys: (keys: string[]) => void;
-} | null>(null);
+};
+
+const includedDepartmentTreeRef = ref<DepartmentTreeRef | null>(null);
+const excludedDepartmentTreeRef = ref<DepartmentTreeRef | null>(null);
 
 const treeProps = {
   label: 'name',
@@ -82,27 +90,61 @@ const departmentTree = computed<DepartmentTreeNode[]>(() => {
   return roots;
 });
 
-const summary = computed(() => {
-  const parts = props.scope === 'all'
-    ? ['全公司']
-    : [
-        `${props.departmentIds.length} 个部门`,
-        `${props.userIds.length} 名员工`,
-      ];
-  if (props.excludedUserIds.length > 0) parts.push(`排除 ${props.excludedUserIds.length} 人`);
-  return parts.join(' · ');
+const departmentById = computed(() => {
+  const result = new Map<string, DepartmentTreeNode>();
+  const visit = (items: DepartmentTreeNode[]) => {
+    for (const item of items) {
+      result.set(item.id, item);
+      visit(item.children);
+    }
+  };
+  visit(departmentTree.value);
+  return result;
 });
 
-const draftSummary = computed(() => {
-  const parts = props.scope === 'all'
+const uniqueIds = (ids: string[]) => [...new Set(ids)];
+const countDirectMembers = (ids: string[]) => ids.reduce(
+  (total, id) => total + (departmentById.value.get(id)?.directMemberCount ?? 0),
+  0,
+);
+
+function buildSummary(
+  scope: ParticipantScopeMode,
+  departmentIds: string[],
+  userIds: string[],
+  excludedDepartmentIds: string[],
+  excludedUserIds: string[],
+) {
+  const parts = scope === 'all'
     ? ['全公司']
     : [
-        `${departmentDraft.value.length} 个部门`,
-        `${userDraft.value.length} 名员工`,
+        `${departmentIds.length} 个部门（预计 ${countDirectMembers(departmentIds)} 人）`,
+        `另选 ${userIds.length} 人`,
       ];
-  if (excludedUserDraft.value.length > 0) parts.push(`排除 ${excludedUserDraft.value.length} 人`);
+  if (excludedDepartmentIds.length > 0) {
+    parts.push(`排除 ${excludedDepartmentIds.length} 个部门（预计 ${countDirectMembers(excludedDepartmentIds)} 人）`);
+  }
+  if (excludedUserIds.length > 0) {
+    parts.push(`${excludedDepartmentIds.length > 0 ? '另排除' : '排除'} ${excludedUserIds.length} 人`);
+  }
   return parts.join(' · ');
-});
+}
+
+const summary = computed(() => buildSummary(
+  props.scope,
+  props.departmentIds,
+  props.userIds,
+  props.excludedDepartmentIds,
+  props.excludedUserIds,
+));
+
+const draftSummary = computed(() => buildSummary(
+  props.scope,
+  departmentDraft.value,
+  userDraft.value,
+  excludedDepartmentDraft.value,
+  excludedUserDraft.value,
+));
 
 function setScope(value: string | number | boolean | undefined) {
   if (value !== 'all' && value !== 'custom') return;
@@ -115,18 +157,38 @@ function setScope(value: string | number | boolean | undefined) {
 }
 
 async function openPicker() {
-  departmentDraft.value = [...props.departmentIds];
+  const excludedIds = new Set(props.excludedDepartmentIds);
+  departmentDraft.value = uniqueIds(props.departmentIds.filter((id) => !excludedIds.has(id)));
   userDraft.value = [...props.userIds];
+  excludedDepartmentDraft.value = uniqueIds(props.excludedDepartmentIds);
   excludedUserDraft.value = [...props.excludedUserIds];
   departmentKeyword.value = '';
-  activeTab.value = props.scope === 'all' ? 'excluded' : 'departments';
+  activeTab.value = props.scope === 'all' ? 'excludedDepartments' : 'includedDepartments';
   drawerVisible.value = true;
   await nextTick();
-  departmentTreeRef.value?.setCheckedKeys(departmentDraft.value);
+  if (activeTab.value === 'includedDepartments') {
+    includedDepartmentTreeRef.value?.setCheckedKeys(departmentDraft.value);
+  } else {
+    excludedDepartmentTreeRef.value?.setCheckedKeys(excludedDepartmentDraft.value);
+  }
 }
 
 function syncDepartmentDraft() {
-  departmentDraft.value = (departmentTreeRef.value?.getCheckedKeys(false) ?? []).map(String);
+  departmentDraft.value = uniqueIds(
+    (includedDepartmentTreeRef.value?.getCheckedKeys(false) ?? []).map(String),
+  );
+  const includedIds = new Set(departmentDraft.value);
+  excludedDepartmentDraft.value = excludedDepartmentDraft.value.filter((id) => !includedIds.has(id));
+  excludedDepartmentTreeRef.value?.setCheckedKeys(excludedDepartmentDraft.value);
+}
+
+function syncExcludedDepartmentDraft() {
+  excludedDepartmentDraft.value = uniqueIds(
+    (excludedDepartmentTreeRef.value?.getCheckedKeys(false) ?? []).map(String),
+  );
+  const excludedIds = new Set(excludedDepartmentDraft.value);
+  departmentDraft.value = departmentDraft.value.filter((id) => !excludedIds.has(id));
+  includedDepartmentTreeRef.value?.setCheckedKeys(departmentDraft.value);
 }
 
 function updateUserDraft(value: string | string[] | undefined) {
@@ -148,11 +210,14 @@ function updateExcludedUserDraft(value: string | string[] | undefined) {
 }
 
 function clearCurrentTab() {
-  if (activeTab.value === 'departments') {
+  if (activeTab.value === 'includedDepartments') {
     departmentDraft.value = [];
-    departmentTreeRef.value?.setCheckedKeys([]);
-  } else if (activeTab.value === 'users') {
+    includedDepartmentTreeRef.value?.setCheckedKeys([]);
+  } else if (activeTab.value === 'includedUsers') {
     userDraft.value = [];
+  } else if (activeTab.value === 'excludedDepartments') {
+    excludedDepartmentDraft.value = [];
+    excludedDepartmentTreeRef.value?.setCheckedKeys([]);
   } else {
     excludedUserDraft.value = [];
   }
@@ -161,13 +226,18 @@ function clearCurrentTab() {
 function applySelection() {
   emit('update:departmentIds', props.scope === 'custom' ? [...departmentDraft.value] : []);
   emit('update:userIds', props.scope === 'custom' ? [...userDraft.value] : []);
+  emit('update:excludedDepartmentIds', [...excludedDepartmentDraft.value]);
   emit('update:excludedUserIds', [...excludedUserDraft.value]);
   emit('change');
   drawerVisible.value = false;
 }
 
 function filterDepartment(value: string) {
-  departmentTreeRef.value?.filter(value);
+  if (activeTab.value === 'includedDepartments') {
+    includedDepartmentTreeRef.value?.filter(value);
+  } else if (activeTab.value === 'excludedDepartments') {
+    excludedDepartmentTreeRef.value?.filter(value);
+  }
 }
 
 function departmentMatches(value: string, data: unknown) {
@@ -178,9 +248,14 @@ function departmentMatches(value: string, data: unknown) {
 }
 
 watch(activeTab, async (value) => {
-  if (value !== 'departments') return;
+  if (value !== 'includedDepartments' && value !== 'excludedDepartments') return;
+  departmentKeyword.value = '';
   await nextTick();
-  departmentTreeRef.value?.setCheckedKeys(departmentDraft.value);
+  if (value === 'includedDepartments') {
+    includedDepartmentTreeRef.value?.setCheckedKeys(departmentDraft.value);
+  } else {
+    excludedDepartmentTreeRef.value?.setCheckedKeys(excludedDepartmentDraft.value);
+  }
 });
 </script>
 
@@ -198,7 +273,7 @@ watch(activeTab, async (value) => {
       @click="openPicker"
     >
       <span data-testid="cycle-scope-summary">{{ summary }}</span>
-      <strong>{{ scope === 'all' ? '设置排除人员' : '选择考核对象' }}</strong>
+      <strong>{{ scope === 'all' ? '设置排除范围' : '选择考核对象' }}</strong>
     </button>
   </div>
 
@@ -211,14 +286,14 @@ watch(activeTab, async (value) => {
   >
     <div class="scope-drawer-content">
       <el-alert
-        :title="scope === 'all' ? '当前覆盖全公司，可设置不参与人员' : '部门和指定人员取并集，排除人员优先'"
+        :title="scope === 'all' ? '当前覆盖全公司，可按部门或人员设置不参与范围' : '部门和指定人员取并集，排除部门及人员优先'"
         type="info"
         :closable="false"
         show-icon
       />
 
       <el-tabs v-model="activeTab" class="scope-tabs">
-        <el-tab-pane v-if="scope === 'custom'" label="按部门" name="departments">
+        <el-tab-pane v-if="scope === 'custom'" label="按部门" name="includedDepartments">
           <el-input
             v-model="departmentKeyword"
             clearable
@@ -227,7 +302,7 @@ watch(activeTab, async (value) => {
           />
           <div class="department-tree-panel" data-testid="cycle-scope-department-tree">
             <el-tree
-              ref="departmentTreeRef"
+              ref="includedDepartmentTreeRef"
               :data="departmentTree"
               :props="treeProps"
               node-key="id"
@@ -239,7 +314,7 @@ watch(activeTab, async (value) => {
           </div>
         </el-tab-pane>
 
-        <el-tab-pane v-if="scope === 'custom'" label="按人员" name="users">
+        <el-tab-pane v-if="scope === 'custom'" label="按人员" name="includedUsers">
           <div class="people-picker-panel" data-testid="cycle-scope-user-select">
             <p>可补充不在所选部门内的员工。</p>
             <UserSelect
@@ -252,7 +327,29 @@ watch(activeTab, async (value) => {
           </div>
         </el-tab-pane>
 
-        <el-tab-pane label="排除人员" name="excluded">
+        <el-tab-pane label="排除部门" name="excludedDepartments">
+          <el-input
+            v-model="departmentKeyword"
+            clearable
+            placeholder="搜索需要排除的部门"
+            @input="filterDepartment"
+          />
+          <p class="department-exclusion-hint">勾选父部门会同时排除其全部子部门，正式人数以保存后的发起前检查为准。</p>
+          <div class="department-tree-panel" data-testid="cycle-scope-excluded-department-tree">
+            <el-tree
+              ref="excludedDepartmentTreeRef"
+              :data="departmentTree"
+              :props="treeProps"
+              node-key="id"
+              show-checkbox
+              default-expand-all
+              :filter-node-method="departmentMatches"
+              @check="syncExcludedDepartmentDraft"
+            />
+          </div>
+        </el-tab-pane>
+
+        <el-tab-pane label="排除人员" name="excludedUsers">
           <div class="people-picker-panel" data-testid="cycle-scope-excluded-select">
             <p>
               {{ scope === 'all'
@@ -344,6 +441,12 @@ watch(activeTab, async (value) => {
 
 .people-picker-panel p {
   margin: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.department-exclusion-hint {
+  margin: 10px 0 0;
   color: var(--el-text-color-secondary);
   font-size: 13px;
 }

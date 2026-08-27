@@ -213,6 +213,7 @@ const createForm = reactive({
   hrOwnerId: '' as string | undefined,
   participantDeptIds: [] as string[],
   participantUserIds: [] as string[],
+  explicitExemptDeptIds: [] as string[],
   explicitExemptUserIds: [] as string[],
   notificationMode: 'off' as CycleNotificationMode,
   deadlineIndicatorSetting: undefined as Date | undefined,
@@ -289,6 +290,7 @@ function resetCreateForm() {
   createForm.hrOwnerId = auth.user?.sysRole === 'hr' ? auth.user.id : undefined;
   createForm.participantDeptIds = [];
   createForm.participantUserIds = [];
+  createForm.explicitExemptDeptIds = [];
   createForm.explicitExemptUserIds = [];
   createForm.notificationMode = 'off';
   createForm.deadlineIndicatorSetting = undefined;
@@ -411,6 +413,7 @@ function openEditCycle(cycle: AssessmentCycle) {
   ) ? 'custom' : 'all';
   createForm.participantDeptIds = [...(cycle.participantDeptIds ?? [])];
   createForm.participantUserIds = [...(cycle.participantUserIds ?? [])];
+  createForm.explicitExemptDeptIds = [...(cycle.explicitExemptDeptIds ?? [])];
   createForm.explicitExemptUserIds = [...(cycle.explicitExemptUserIds ?? [])];
   createForm.notificationMode = cycle.notificationMode ?? 'off';
   createForm.gradeAMaxRatio = Math.round((cycle.gradeAMaxRatio ?? 0.2) * 100);
@@ -586,6 +589,7 @@ function buildCreateBody(): CreateCycleBody {
     hrOwnerId: createForm.hrOwnerId,
     participantDeptIds: [...createForm.participantDeptIds],
     participantUserIds: [...createForm.participantUserIds],
+    explicitExemptDeptIds: [...createForm.explicitExemptDeptIds],
     explicitExemptUserIds: [...createForm.explicitExemptUserIds],
     notificationMode: createForm.notificationMode,
     publishVisibleFields: { ...createForm.publishVisibleFields },
@@ -1212,6 +1216,7 @@ onMounted(() => {
                 v-model:scope="createForm.participantScope"
                 v-model:department-ids="createForm.participantDeptIds"
                 v-model:user-ids="createForm.participantUserIds"
+                v-model:excluded-department-ids="createForm.explicitExemptDeptIds"
                 v-model:excluded-user-ids="createForm.explicitExemptUserIds"
                 :departments="departments"
                 @change="handleParticipantSelectionChange"
