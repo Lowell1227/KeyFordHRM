@@ -514,10 +514,16 @@ export class LaunchService {
   /** 选出被考核候选人：deletedAt=null、status!=resigned、is_assessor_only=false。 */
   private async findCandidates(
     tx: Prisma.TransactionClient,
-    cycle: { participantDeptIds: string[]; participantUserIds: string[]; explicitExemptUserIds: string[] },
+    cycle: {
+      participantDeptIds: string[];
+      participantUserIds: string[];
+      explicitExemptDeptIds: string[];
+      explicitExemptUserIds: string[];
+    },
   ): Promise<Candidate[]> {
     const participantDeptIds = cycle.participantDeptIds ?? [];
     const participantUserIds = cycle.participantUserIds ?? [];
+    const explicitExemptDeptIds = cycle.explicitExemptDeptIds ?? [];
     const explicitExemptUserIds = cycle.explicitExemptUserIds ?? [];
     const hasScopedParticipants = participantDeptIds.length > 0 || participantUserIds.length > 0;
     const explicitlyIncludedUserIds = [...new Set([
@@ -543,6 +549,7 @@ export class LaunchService {
           OR: [
             ...(participantDeptIds.length > 0 ? [{ deptId: { in: participantDeptIds } }] : []),
             ...(participantUserIds.length > 0 ? [{ id: { in: participantUserIds } }] : []),
+            ...(explicitExemptDeptIds.length > 0 ? [{ deptId: { in: explicitExemptDeptIds } }] : []),
             ...(explicitExemptUserIds.length > 0 ? [{ id: { in: explicitExemptUserIds } }] : []),
           ],
         }),
@@ -701,6 +708,7 @@ export class LaunchService {
       hrOwnerId: string | null;
       participantDeptIds: string[];
       participantUserIds: string[];
+      explicitExemptDeptIds: string[];
       explicitExemptUserIds: string[];
     },
     deptMap: Map<string, LaunchDepartment>,
@@ -762,6 +770,7 @@ export class LaunchService {
       hrOwnerId: cycle.hrOwnerId ?? null,
       participantDeptIds: [...(cycle.participantDeptIds ?? [])].sort(),
       participantUserIds: [...(cycle.participantUserIds ?? [])].sort(),
+      explicitExemptDeptIds: [...(cycle.explicitExemptDeptIds ?? [])].sort(),
       explicitExemptUserIds: [...(cycle.explicitExemptUserIds ?? [])].sort(),
       exemptRatio,
       participants,
@@ -770,9 +779,17 @@ export class LaunchService {
 
   private resolveExemption(
     candidate: Candidate,
-    cycle: { startDate: Date; endDate: Date; explicitExemptUserIds: string[] },
+    cycle: {
+      startDate: Date;
+      endDate: Date;
+      explicitExemptDeptIds: string[];
+      explicitExemptUserIds: string[];
+    },
     exemptRatio: number,
   ): { isExempt: boolean; reason: string | null } {
+    if (candidate.deptId && (cycle.explicitExemptDeptIds ?? []).includes(candidate.deptId)) {
+      return { isExempt: true, reason: 'HR 按部门设置为本周期豁免' };
+    }
     if ((cycle.explicitExemptUserIds ?? []).includes(candidate.id)) {
       return { isExempt: true, reason: 'HR 在本周期中明确设置为豁免' };
     }

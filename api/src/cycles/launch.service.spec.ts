@@ -71,6 +71,7 @@ describe('LaunchService preflight', () => {
           hrOwnerId: operator.id,
           participantDeptIds: [],
           participantUserIds: [],
+          explicitExemptDeptIds: [],
           explicitExemptUserIds: [],
         }),
         update: jest.fn(),
@@ -266,6 +267,7 @@ describe('LaunchService preflight', () => {
       hrOwnerId: operator.id,
       participantDeptIds: [],
       participantUserIds: [candidate.id],
+      explicitExemptDeptIds: [],
       explicitExemptUserIds: [],
     });
     tx.assessmentTemplate.findMany.mockResolvedValue([
@@ -476,6 +478,7 @@ describe('LaunchService preflight', () => {
       hrOwnerId: operator.id,
       participantDeptIds: [],
       participantUserIds: [],
+      explicitExemptDeptIds: [],
       explicitExemptUserIds: [candidate.id],
     });
     const checked = await service.preflight('55555555-5555-4555-8555-555555555555');
@@ -495,6 +498,95 @@ describe('LaunchService preflight', () => {
       userId: candidate.directManagerId,
       title: '团队成员存在绩效豁免',
     }));
+  });
+
+  it('marks employees in explicitly exempt departments as exempt', async () => {
+    tx.assessmentTemplate.findMany.mockResolvedValue([
+      template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+    ]);
+    tx.assessmentCycle.findUnique.mockResolvedValue({
+      id: '55555555-5555-4555-8555-555555555555',
+      name: '2027年第一季度',
+      status: 'draft',
+      startDate: new Date('2027-01-01T00:00:00.000Z'),
+      endDate: new Date('2027-03-31T00:00:00.000Z'),
+      goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
+      hrOwnerId: operator.id,
+      participantDeptIds: [],
+      participantUserIds: [],
+      explicitExemptDeptIds: [candidate.deptId],
+      explicitExemptUserIds: [],
+    });
+
+    await expect(service.preflight('55555555-5555-4555-8555-555555555555'))
+      .resolves.toEqual(expect.objectContaining({
+        ready: true,
+        participants: [expect.objectContaining({
+          employeeId: candidate.id,
+          isExempt: true,
+          exemptReason: 'HR 按部门设置为本周期豁免',
+        })],
+      }));
+  });
+
+  it('includes exempt departments in a custom-scope candidate query', async () => {
+    tx.assessmentTemplate.findMany.mockResolvedValue([
+      template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+    ]);
+    tx.assessmentCycle.findUnique.mockResolvedValue({
+      id: '55555555-5555-4555-8555-555555555555',
+      name: '2027年第一季度',
+      status: 'draft',
+      startDate: new Date('2027-01-01T00:00:00.000Z'),
+      endDate: new Date('2027-03-31T00:00:00.000Z'),
+      goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
+      hrOwnerId: operator.id,
+      participantDeptIds: ['88888888-8888-4888-8888-888888888888'],
+      participantUserIds: [],
+      explicitExemptDeptIds: [candidate.deptId],
+      explicitExemptUserIds: [],
+    });
+
+    await service.preflight('55555555-5555-4555-8555-555555555555');
+
+    expect(tx.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        OR: expect.arrayContaining([
+          { deptId: { in: [candidate.deptId] } },
+        ]),
+      }),
+    }));
+  });
+
+  it('changes the launch plan hash when exempt departments change', async () => {
+    tx.assessmentTemplate.findMany.mockResolvedValue([
+      template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
+    ]);
+    const cycle = {
+      id: '55555555-5555-4555-8555-555555555555',
+      name: '2027年第一季度',
+      status: 'draft',
+      startDate: new Date('2027-01-01T00:00:00.000Z'),
+      endDate: new Date('2027-03-31T00:00:00.000Z'),
+      goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
+      hrOwnerId: operator.id,
+      participantDeptIds: [],
+      participantUserIds: [],
+      explicitExemptDeptIds: [],
+      explicitExemptUserIds: [],
+    };
+    tx.assessmentCycle.findUnique.mockResolvedValue(cycle);
+    const before = await service.preflight('55555555-5555-4555-8555-555555555555');
+    tx.assessmentCycle.findUnique.mockResolvedValue({
+      ...cycle,
+      explicitExemptDeptIds: [candidate.deptId],
+    });
+
+    const after = await service.preflight('55555555-5555-4555-8555-555555555555');
+
+    expect(before.planHash).not.toBeNull();
+    expect(after.planHash).not.toBeNull();
+    expect(after.planHash).not.toBe(before.planHash);
   });
 
   it('returns the existing result when a concurrent request already opened the cycle', async () => {
