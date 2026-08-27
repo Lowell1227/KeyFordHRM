@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { ArrowLeft, MoreFilled } from '@element-plus/icons-vue';
+import { computed } from 'vue';
+import { ArrowLeft } from '@element-plus/icons-vue';
 import dayjs from 'dayjs';
 import type { AssessmentCycle, LaunchPreflightResult } from '@/types/api.types';
 import type { CycleStatus } from '@/types/enums';
@@ -34,12 +34,9 @@ const emit = defineEmits<{
   launch: [];
   schedule: [];
   edit: [];
-  'edit-deadlines': [];
-  'cancel-schedule': [];
   'resolve-blocker': [code: string];
 }>();
 
-const settingsVisible = ref(false);
 const stages = ['规划配置', '目标制定', '绩效评价', '校准审批', '公示归档'];
 const currentStage = computed(() => props.cycle ? cycleStageIndex(props.cycle.status) : 0);
 const nextStep = computed(() => props.cycle ? cycleNextStep(props.cycle) : null);
@@ -64,23 +61,12 @@ function formatDateTime(value?: string): string {
   return parsed.isValid() ? parsed.format('YYYY-MM-DD HH:mm') : '未设置';
 }
 
-function handleMore(command: string) {
-  if (command === 'deadlines') emit('edit-deadlines');
-  if (command === 'cancel-schedule') emit('cancel-schedule');
-  if (command === 'settings') settingsVisible.value = true;
-}
-
 function blockerActionLabel(code: string): string {
   if (code.startsWith('TEMPLATE_') || code === 'NO_ACTIVE_TEMPLATES') return '去配置模板';
   if (code === 'ORGANIZATION_RELATION_INVALID') return '去完善人员关系';
   return '';
 }
 
-function notificationModeLabel(mode?: AssessmentCycle['notificationMode']): string {
-  if (mode === 'launch_only') return '仅正式发起时提醒一次';
-  if (mode === 'launch_and_reminders') return '正式发起并对临期或逾期任务每日催办';
-  return '不发送钉钉通知';
-}
 </script>
 
 <template>
@@ -102,35 +88,21 @@ function notificationModeLabel(mode?: AssessmentCycle['notificationMode']): stri
           <p v-if="cycle">{{ formatDate(cycle.startDate) }}–{{ formatDate(cycle.endDate) }}</p>
         </div>
       </div>
-      <div v-if="cycle" class="cycle-workspace__header-actions">
+      <div
+        v-if="cycle && ['draft', 'launch_blocked'].includes(cycle.status)"
+        class="cycle-workspace__header-actions"
+      >
         <el-button
           v-if="cycle.status === 'draft'"
           data-testid="cycle-workspace-edit"
-          type="primary"
           @click="emit('edit')"
         >编辑</el-button>
-        <el-button @click="settingsVisible = true">查看全部设置</el-button>
-        <el-dropdown trigger="click" @command="handleMore($event as string)">
-          <el-button :icon="MoreFilled" aria-label="周期更多操作" />
-          <template #dropdown>
-            <el-dropdown-menu>
-              <el-dropdown-item command="settings">查看全部设置</el-dropdown-item>
-              <el-dropdown-item
-                command="deadlines"
-                :disabled="['scheduled', 'launch_blocked'].includes(cycle.status)"
-              >
-                修改截止日
-              </el-dropdown-item>
-              <el-dropdown-item
-                v-if="['scheduled', 'launch_blocked'].includes(cycle.status)"
-                command="cancel-schedule"
-                divided
-              >
-                取消预约
-              </el-dropdown-item>
-            </el-dropdown-menu>
-          </template>
-        </el-dropdown>
+        <el-button
+          data-testid="cycle-workspace-submit"
+          type="primary"
+          :loading="preflightLoading"
+          @click="emit('preflight')"
+        >提交</el-button>
       </div>
     </header>
 
@@ -266,24 +238,6 @@ function notificationModeLabel(mode?: AssessmentCycle['notificationMode']): stri
           </section>
         </section>
       </main>
-
-      <el-drawer v-model="settingsVisible" title="周期全部设置" size="520px">
-        <el-descriptions :column="1" border>
-          <el-descriptions-item label="考核期间">
-            {{ formatDate(cycle.startDate) }}–{{ formatDate(cycle.endDate) }}
-          </el-descriptions-item>
-          <el-descriptions-item label="钉钉通知">{{ notificationModeLabel(cycle.notificationMode) }}</el-descriptions-item>
-          <el-descriptions-item label="目标制定开放时间">{{ formatDateTime(cycle.goalSettingOpenAt) }}</el-descriptions-item>
-          <el-descriptions-item label="指标制定截止">{{ formatDateTime(cycle.deadlineIndicatorSetting) }}</el-descriptions-item>
-          <el-descriptions-item label="指标确认截止">{{ formatDateTime(cycle.deadlineIndicatorConfirm) }}</el-descriptions-item>
-          <el-descriptions-item label="员工自评开放时间">{{ formatDateTime(cycle.selfEvalOpenAt) }}</el-descriptions-item>
-          <el-descriptions-item label="员工自评截止">{{ formatDateTime(cycle.deadlineSelfEval) }}</el-descriptions-item>
-          <el-descriptions-item label="主管评分截止">{{ formatDateTime(cycle.deadlineManagerScore) }}</el-descriptions-item>
-          <el-descriptions-item label="HR校准截止">{{ formatDateTime(cycle.deadlineHrCalibration) }}</el-descriptions-item>
-          <el-descriptions-item label="审批截止">{{ formatDateTime(cycle.deadlineApproval) }}</el-descriptions-item>
-          <el-descriptions-item label="公示截止">{{ formatDateTime(cycle.deadlinePublish) }}</el-descriptions-item>
-        </el-descriptions>
-      </el-drawer>
     </template>
   </section>
 </template>

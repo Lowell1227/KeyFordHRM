@@ -108,6 +108,8 @@ interface CycleMockOptions {
   cycles?: AssessmentCycle[];
   createBodies?: unknown[];
   preflightRequests?: string[];
+  launchRequests?: string[];
+  scheduleRequests?: string[];
   preflight?: LaunchPreflightResult;
   deletedIds?: string[];
 }
@@ -188,6 +190,22 @@ async function mockCyclePage(
       return route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify(apiResponse(options.preflight ?? readyPreflight)),
+      });
+    }
+    const launchId = url.pathname.match(/\/cycles\/([^/]+)\/launch$/)?.[1];
+    if (launchId) {
+      options.launchRequests?.push(launchId);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ id: launchId })),
+      });
+    }
+    const scheduleId = url.pathname.match(/\/cycles\/([^/]+)\/schedule$/)?.[1];
+    if (scheduleId) {
+      options.scheduleRequests?.push(scheduleId);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ id: scheduleId })),
       });
     }
     const visibleCycles = (options.cycles ?? [draftCycle])
@@ -319,6 +337,32 @@ test.describe('compact cycle management list', () => {
     const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue(draftCycle.name);
+  });
+
+  test('keeps only edit and submit in the draft workspace header', async ({ page }) => {
+    await mockCyclePage(page);
+    await page.goto('/cycles?group=attention&cycleId=cycle-draft');
+
+    const actions = page.locator('.cycle-workspace__header-actions');
+    await expect(actions.getByRole('button', { name: '编辑', exact: true })).toBeVisible();
+    await expect(actions.getByRole('button', { name: '提交', exact: true })).toBeVisible();
+    await expect(actions.getByRole('button', { name: '查看全部设置', exact: true })).toHaveCount(0);
+    await expect(actions.getByRole('button', { name: '周期更多操作', exact: true })).toHaveCount(0);
+  });
+
+  test('runs the same launch preflight from workspace submit', async ({ page }) => {
+    const preflightRequests: string[] = [];
+    const launchRequests: string[] = [];
+    const scheduleRequests: string[] = [];
+    await mockCyclePage(page, [], { preflightRequests, launchRequests, scheduleRequests });
+    await page.goto('/cycles?group=attention&cycleId=cycle-draft');
+
+    await page.getByTestId('cycle-workspace-submit').click();
+
+    await expect.poll(() => preflightRequests).toEqual(['cycle-draft']);
+    await expect(page.getByText('发起检查通过')).toBeVisible();
+    expect(launchRequests).toEqual([]);
+    expect(scheduleRequests).toEqual([]);
   });
 
   test('keeps stage-specific actions for non-draft cycles', async ({ page }) => {

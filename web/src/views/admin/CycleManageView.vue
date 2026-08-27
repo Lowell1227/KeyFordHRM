@@ -1035,14 +1035,6 @@ function handleWorkspaceEditCycle() {
   if (cycleDetail.value) openEditCycle(cycleDetail.value);
 }
 
-function handleWorkspaceEditDeadlines() {
-  if (cycleDetail.value) openEditDeadlines(cycleDetail.value);
-}
-
-function handleWorkspaceCancelSchedule() {
-  if (cycleDetail.value) void handleCancelSchedule(cycleDetail.value);
-}
-
 function handleResolvePreflightBlocker(code: string) {
   const path = code.startsWith('TEMPLATE_') || code === 'NO_ACTIVE_TEMPLATES'
     ? '/templates'
@@ -1164,8 +1156,6 @@ onMounted(() => {
       @launch="handleWorkspaceLaunch"
       @schedule="handleSchedule"
       @edit="handleWorkspaceEditCycle"
-      @edit-deadlines="handleWorkspaceEditDeadlines"
-      @cancel-schedule="handleWorkspaceCancelSchedule"
       @resolve-blocker="handleResolvePreflightBlocker"
     />
 
