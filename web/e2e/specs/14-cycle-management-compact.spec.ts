@@ -443,7 +443,7 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByTestId('cycle-advanced-fields')).toBeVisible();
     await expect(page.getByTestId('cycle-create-save-draft')).toBeVisible();
     await expect(page.getByTestId('cycle-create-save-draft')).toHaveText('保存草稿');
-    await expect(page.getByTestId('cycle-create-save-and-view')).toHaveText('保存');
+    await expect(page.getByTestId('cycle-create-save-and-view')).toHaveText('下一步');
     await expect(page.getByRole('dialog', { name: '创建绩效周期' }).getByRole('button', { name: '提交', exact: true })).toHaveCount(0);
   });
 
@@ -604,7 +604,7 @@ test.describe('compact cycle management list', () => {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
     await page.getByTestId('cycle-create').click();
-    await expect(page.getByTestId('cycle-create-save-and-view')).toHaveText('保存');
+    await expect(page.getByTestId('cycle-create-save-and-view')).toHaveText('下一步');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     await page.getByRole('button', { name: '取消' }).click();
 

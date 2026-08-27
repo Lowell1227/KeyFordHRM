@@ -300,7 +300,7 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.getByTestId('cycle-plan-summary')).toContainText('系统默认计划');
     await expect(page.getByTestId('cycle-create-summary')).toHaveCount(0);
     await expect(page.getByTestId('cycle-create-save-draft')).toHaveText('保存草稿');
-    await expect(page.getByTestId('cycle-create-save-and-view')).toHaveText('保存');
+    await expect(page.getByTestId('cycle-create-save-and-view')).toHaveText('下一步');
     await expect(dialog.getByRole('button', { name: '仅保存草稿' })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '保存并检查' })).toHaveCount(0);
     await expect(page.getByTestId('cycle-create-impact-hint')).toContainText('不发送钉钉通知');
@@ -992,7 +992,7 @@ test.describe('cycle launch entry UX', () => {
     await page.getByTestId('cycle-advanced-schedule').click();
 
     await expect(page.getByText('目标制定开放', { exact: true })).toBeVisible();
-    await expect(page.getByTestId('cycle-create-save-and-view')).toHaveText('保存');
+    await expect(page.getByTestId('cycle-create-save-and-view')).toHaveText('下一步');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     const footer = await page.getByTestId('cycle-create-impact-hint').boundingBox();
     expect(footer?.y).toBeGreaterThanOrEqual(0);
