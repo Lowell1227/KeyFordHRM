@@ -651,15 +651,19 @@ test.describe('cycle launch entry UX', () => {
     await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2028-04-30');
     await expect(dialog.getByTestId('cycle-semiannual-warning')).toHaveCount(0);
 
-    await dialog.getByPlaceholder('开始日期').click();
-    const picker = page.locator('.el-picker-panel:visible');
-    await picker.locator('button.arrow-right').click();
-    await picker.locator('td.available:not(.prev-month):not(.next-month)').filter({ hasText: /^1$/ }).click();
+    const startDateInput = dialog.getByPlaceholder('开始日期');
+    await startDateInput.fill('2027-12-01');
+    await startDateInput.press('Enter');
 
-    const confirmation = page.getByRole('dialog', { name: '是否同步调整时间节点？' });
+    let confirmation = page.getByRole('dialog', { name: '是否同步调整时间节点？' });
     await expect(confirmation).toContainText('2027-11-01—2028-04-30');
-    await expect(confirmation).toContainText('2027-12-01—2028-05-31');
+    await expect(confirmation).toContainText('2027-12-01—2028-04-30');
     await confirmation.getByRole('button', { name: '同步重新生成（推荐）' }).click();
+    await expect(confirmation).toBeHidden();
+
+    const endDateInput = dialog.getByPlaceholder('结束日期');
+    await endDateInput.fill('2028-05-31');
+    await endDateInput.press('Enter');
 
     await expect(dialog.getByPlaceholder('开始日期')).toHaveValue('2027-12-01');
     await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2028-05-31');
@@ -671,8 +675,11 @@ test.describe('cycle launch entry UX', () => {
       startDate: '2027-12-01',
       endDate: '2028-05-31',
     });
-    expect((updateBodies[0] as Record<string, unknown>).goalSettingOpenAt).not.toBe(createdCycle.goalSettingOpenAt);
-    expect((updateBodies[0] as Record<string, unknown>).deadlinePublish).not.toBe(createdCycle.deadlinePublish);
+    const updatedBody = updateBodies[0] as Record<string, unknown>;
+    expect(updatedBody.goalSettingOpenAt).toEqual(expect.any(String));
+    expect(updatedBody.deadlinePublish).toEqual(expect.any(String));
+    expect(updatedBody.goalSettingOpenAt).not.toBe(createdCycle.goalSettingOpenAt);
+    expect(updatedBody.deadlinePublish).not.toBe(createdCycle.deadlinePublish);
   });
 
   test('auto-completes a rolling half-year after HR changes its start date', async ({ page }) => {
