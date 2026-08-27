@@ -22,6 +22,15 @@ const createdCycle = {
   type: 'quarterly',
   startDate: '2026-10-01',
   endDate: '2026-12-31',
+  goalSettingOpenAt: '2026-09-21T09:00:00.000Z',
+  selfEvalOpenAt: '2027-01-01T09:00:00.000Z',
+  deadlineIndicatorSetting: '2026-09-28T18:00:00.000Z',
+  deadlineIndicatorConfirm: '2026-09-30T09:00:00.000Z',
+  deadlineSelfEval: '2027-01-05T18:00:00.000Z',
+  deadlineManagerScore: '2027-01-08T18:00:00.000Z',
+  deadlineHrCalibration: '2027-01-11T18:00:00.000Z',
+  deadlineApproval: '2027-01-13T18:00:00.000Z',
+  deadlinePublish: '2027-01-14T18:00:00.000Z',
   status: 'draft',
   hrOwnerId: 'hr-1',
   participantDeptIds: [],
@@ -201,6 +210,15 @@ async function mockCycleLaunchPage(
         body: JSON.stringify(apiResponse({ ...createdCycle, notificationMode })),
       });
     }
+    if (route.request().method() === 'PATCH') {
+      const body = route.request().postDataJSON();
+      const notificationMode = String(body?.notificationMode ?? 'off');
+      options.notificationModeUpdates?.push(notificationMode);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ ...createdCycle, ...body, notificationMode })),
+      });
+    }
     if (route.request().method() === 'POST') {
       options.createBodies?.push(route.request().postDataJSON());
       return route.fulfill({
@@ -364,8 +382,7 @@ test.describe('cycle launch entry UX', () => {
     await mockCycleLaunchPage(page, { cycles: [userOnlyCycle] });
     await page.goto('/cycles?group=attention');
 
-    await page.getByRole('button', { name: '更多操作' }).first().click();
-    await page.getByRole('menuitem', { name: '编辑周期' }).click();
+    await page.getByTestId('cycle-edit-cycle-created').click();
     const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole('radio', { name: '自定义范围' })).toBeChecked();
@@ -383,8 +400,7 @@ test.describe('cycle launch entry UX', () => {
     await mockCycleLaunchPage(page, { cycles: [excludedDepartmentCycle] });
     await page.goto('/cycles?group=attention');
 
-    await page.getByRole('button', { name: '更多操作' }).first().click();
-    await page.getByRole('menuitem', { name: '编辑周期' }).click();
+    await page.getByTestId('cycle-edit-cycle-created').click();
     const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
     await dialog.getByTestId('cycle-scope-picker-open').click();
     const scopeDrawer = page.getByRole('dialog', { name: '选择考核对象' });
@@ -428,17 +444,16 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.getByTestId('dingtalk-notification-status')).toContainText('钉钉通知已开启');
   });
 
-  test('lets HR change the notification mode of an existing draft cycle', async ({ page }) => {
+  test('lets HR change the notification mode while editing an existing draft cycle', async ({ page }) => {
     const notificationModeUpdates: string[] = [];
     await mockCycleLaunchPage(page, { cycles: [createdCycle], notificationModeUpdates });
     await page.goto('/cycles?group=attention');
 
-    await page.getByRole('button', { name: '更多操作' }).click();
-    await page.getByRole('menuitem', { name: '通知设置' }).click();
-    const dialog = page.getByRole('dialog', { name: '周期通知设置' });
+    await page.getByTestId('cycle-edit-cycle-created').click();
+    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
     await expect(dialog).toBeVisible();
-    await dialog.getByText('仅发起提醒一次', { exact: true }).click();
-    await dialog.getByRole('button', { name: '保存', exact: true }).click();
+    await dialog.getByTestId('cycle-notification-launch-only').click();
+    await dialog.getByTestId('cycle-update-save').click();
 
     await expect.poll(() => notificationModeUpdates).toEqual(['launch_only']);
   });
