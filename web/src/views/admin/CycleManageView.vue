@@ -14,6 +14,7 @@ import CycleCompactTable from './components/CycleCompactTable.vue';
 import CycleWorkspaceShell from './components/CycleWorkspaceShell.vue';
 import CycleParticipantScopePicker, { type ParticipantScopeMode } from './components/CycleParticipantScopePicker.vue';
 import { cycleStatusGroup } from './cycle-management';
+import { buildDefaultCycleSchedule } from './cycle-default-schedule';
 import { useAuthStore } from '@/stores/auth.store';
 import { usePagination } from '@/composables/usePagination';
 import { formatDate } from '@/utils/date';
@@ -99,6 +100,21 @@ const DEADLINE_FIELDS = [
 
 type DeadlineKey = (typeof DEADLINE_FIELDS)[number]['key'];
 
+const CREATE_SCHEDULE_NODES = [
+  { number: '01', key: 'goalSettingOpenAt', label: '目标制定开放', helper: '周期开始前第 10 个工作日 · 09:00', stage: 'preparation' },
+  { number: '02', key: 'deadlineIndicatorSetting', label: '指标制定截止', helper: '周期开始前第 3 个工作日 · 18:00', stage: 'preparation' },
+  { number: '03', key: 'deadlineIndicatorConfirm', label: '指标确认截止', helper: '周期开始前第 1 个工作日 · 18:00', stage: 'preparation' },
+  { number: '04', key: 'selfEvalOpenAt', label: '员工自评开放', helper: '周期结束后的第 1 个工作日 · 09:00', stage: 'result' },
+  { number: '05', key: 'deadlineSelfEval', label: '员工自评截止', helper: '开放日起第 3 个工作日 · 18:00', stage: 'result' },
+  { number: '06', key: 'deadlineManagerScore', label: '主管评分截止', helper: '自评截止后第 3 个工作日 · 18:00', stage: 'result' },
+  { number: '07', key: 'deadlineHrCalibration', label: 'HR校准截止', helper: '主管评分后第 2 个工作日 · 18:00', stage: 'result' },
+  { number: '08', key: 'deadlineApproval', label: '结果审批截止', helper: 'HR校准后第 2 个工作日 · 18:00', stage: 'result' },
+  { number: '09', key: 'deadlinePublish', label: '结果公示截止', helper: '结果审批后第 1 个工作日 · 18:00', stage: 'result' },
+] as const;
+
+const PREPARATION_SCHEDULE_NODES = CREATE_SCHEDULE_NODES.filter((node) => node.stage === 'preparation');
+const RESULT_SCHEDULE_NODES = CREATE_SCHEDULE_NODES.filter((node) => node.stage === 'result');
+
 const DEFAULT_VISIBLE_FIELDS: PublishVisibleFields = {
   totalScore: true,
   grade: true,
@@ -161,6 +177,7 @@ const isEditMode = computed(() => Boolean(editingCycleId.value));
 const advancedCreateVisible = ref(false);
 const advancedCreateSections = ref<string[]>([]);
 const createScheduleCustomized = ref(false);
+const createScheduleProvisionalYears = ref<number[]>([]);
 const createNameCustomized = ref(false);
 const createPeriodRange = ref<[Date, Date] | null>(null);
 const createInitialSnapshot = ref('');
@@ -191,6 +208,12 @@ const gradeRatioSummary = computed(() => (
   `A ${createForm.gradeAMaxRatio}% · B ${createForm.gradeBMaxRatio}% · C ${createForm.gradeCMaxRatio}% · D ${createForm.gradeDMaxRatio}%`
 ));
 const visibleFieldCount = computed(() => Object.values(createForm.publishVisibleFields).filter(Boolean).length);
+const createSchedulePlanLabel = computed(() => (createScheduleCustomized.value ? '已调整计划' : '系统默认计划'));
+const createSchedulePeriodLabel = computed(() => {
+  if (!createForm.startDate || !createForm.endDate) return '考核执行期未设置';
+  return `考核执行期 ${dayjs(createForm.startDate).format('YYYY-MM-DD')}—${dayjs(createForm.endDate).format('YYYY-MM-DD')}`;
+});
+const createScheduleProvisionalYearLabel = computed(() => createScheduleProvisionalYears.value.join('、'));
 const createNotificationHint = computed(() => {
   if (createForm.notificationMode === 'off') return '本周期不发送钉钉通知';
   if (!notificationSettings.value?.effectiveEnabled) return '钉钉通知总开关已关闭，本周期暂不外发';
@@ -276,6 +299,7 @@ function resetCreateForm() {
   advancedCreateVisible.value = false;
   advancedCreateSections.value = [];
   createScheduleCustomized.value = false;
+  createScheduleProvisionalYears.value = [];
   createNameCustomized.value = false;
   createForm.name = '';
   createForm.type = 'quarterly';
@@ -373,17 +397,11 @@ function handleCreatePeriodRangeChange(value: [Date, Date] | null) {
 
 function applyDefaultCreateSchedule() {
   if (!createForm.startDate || !createForm.endDate) return;
-  const start = dayjs(createForm.startDate).startOf('day');
-  const end = dayjs(createForm.endDate).startOf('day');
-  createForm.goalSettingOpenAt = start.subtract(10, 'day').hour(9).toDate();
-  createForm.deadlineIndicatorSetting = start.subtract(3, 'day').hour(18).toDate();
-  createForm.deadlineIndicatorConfirm = start.subtract(1, 'day').hour(18).toDate();
-  createForm.selfEvalOpenAt = end.add(1, 'day').hour(9).toDate();
-  createForm.deadlineSelfEval = end.add(5, 'day').hour(18).toDate();
-  createForm.deadlineManagerScore = end.add(8, 'day').hour(18).toDate();
-  createForm.deadlineHrCalibration = end.add(11, 'day').hour(18).toDate();
-  createForm.deadlineApproval = end.add(13, 'day').hour(18).toDate();
-  createForm.deadlinePublish = end.add(14, 'day').hour(18).toDate();
+  const schedule = buildDefaultCycleSchedule(createForm.startDate, createForm.endDate);
+  CREATE_SCHEDULE_NODES.forEach(({ key }) => {
+    createForm[key] = schedule[key];
+  });
+  createScheduleProvisionalYears.value = schedule.provisionalYears;
   createScheduleCustomized.value = false;
 }
 
@@ -421,6 +439,12 @@ function openEditCycle(cycle: AssessmentCycle) {
   DEADLINE_FIELDS.forEach(({ key }) => {
     createForm[key] = toDate(cycle[key]);
   });
+  if (createForm.startDate && createForm.endDate) {
+    createScheduleProvisionalYears.value = buildDefaultCycleSchedule(
+      createForm.startDate,
+      createForm.endDate,
+    ).provisionalYears;
+  }
   createNameCustomized.value = true;
   createScheduleCustomized.value = true;
   advancedCreateVisible.value = true;
@@ -1257,13 +1281,16 @@ onMounted(() => {
         </el-form-item>
 
         <div class="cycle-auto-plan" data-testid="cycle-plan-summary">
-          <el-tag size="small" :type="createScheduleCustomized ? 'warning' : 'info'" effect="light">
-            {{ createScheduleCustomized ? '自定义计划' : '时间节点已联动' }}
-          </el-tag>
-          <span>目标开放 {{ formatDateTimeForMessage(createForm.goalSettingOpenAt) }} · 自评开放 {{ formatDateTimeForMessage(createForm.selfEvalOpenAt) }}</span>
-          <el-tooltip content="指标制定、确认、自评、评分、校准、审批和公示时间可在高级设置中调整" placement="top">
-            <el-icon><QuestionFilled /></el-icon>
-          </el-tooltip>
+          <div class="cycle-auto-plan__heading">
+            <el-tag size="small" :type="createScheduleCustomized ? 'warning' : 'info'" effect="light">
+              {{ createSchedulePlanLabel }}
+            </el-tag>
+            <span>按中国法定工作日（含调休）</span>
+            <el-tooltip content="时间节点按法定工作日顺序生成，保存后不会因日历更新而自动改变" placement="top">
+              <el-icon><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </div>
+          <span>目标制定开放 {{ formatDateTimeForMessage(createForm.goalSettingOpenAt) }} · 员工自评开放 {{ formatDateTimeForMessage(createForm.selfEvalOpenAt) }}</span>
         </div>
 
         <button
@@ -1274,7 +1301,7 @@ onMounted(() => {
           @click="advancedCreateVisible = !advancedCreateVisible"
         >
           <span>{{ advancedCreateVisible ? '收起高级设置' : '高级设置' }}</span>
-          <small>{{ createScheduleCustomized ? '时间计划已自定义' : '通常无需修改' }}</small>
+          <small>{{ createScheduleCustomized ? '时间计划已调整' : '通常无需修改' }}</small>
         </button>
 
         <div v-show="advancedCreateVisible" data-testid="cycle-advanced-fields" class="advanced-create-fields">
@@ -1283,49 +1310,78 @@ onMounted(() => {
               <template #title>
                 <div data-testid="cycle-advanced-schedule" class="advanced-group-title">
                   <strong>时间节点
-                    <el-tooltip content="默认随考核期间自动生成；调整任一节点后改为自定义计划" placement="top">
+                    <el-tooltip content="默认随考核期间按法定工作日自动生成；调整任一节点后标记为已调整计划" placement="top">
                       <el-icon><QuestionFilled /></el-icon>
                     </el-tooltip>
                   </strong>
-                  <span>{{ createScheduleCustomized ? '已自定义' : '默认计划' }}</span>
+                  <span>{{ createSchedulePlanLabel }}</span>
                 </div>
               </template>
               <div class="advanced-group-actions">
+                <span>节点按实际业务顺序执行，开放时间为 09:00，截止时间为 18:00</span>
                 <el-button text type="primary" @click.stop="applyDefaultCreateSchedule">恢复默认计划</el-button>
               </div>
-              <el-row :gutter="16">
-                <el-col :span="12">
-                  <el-form-item label="目标开放时间">
-                    <el-date-picker
-                      v-model="createForm.goalSettingOpenAt"
-                      type="datetime"
-                      style="width: 100%"
-                      @change="handleCreateScheduleChange"
-                    />
-                  </el-form-item>
-                </el-col>
-                <el-col :span="12">
-                  <el-form-item label="自评开放时间">
-                    <el-date-picker
-                      v-model="createForm.selfEvalOpenAt"
-                      type="datetime"
-                      style="width: 100%"
-                      @change="handleCreateScheduleChange"
-                    />
-                  </el-form-item>
-                </el-col>
-                <el-col v-for="field in DEADLINE_FIELDS" :key="field.key" :span="12">
-                  <el-form-item :label="field.label">
-                    <el-date-picker
-                      v-model="createForm[field.key]"
-                      type="datetime"
-                      :placeholder="`选择${field.label}`"
-                      style="width: 100%"
-                      @change="handleCreateScheduleChange"
-                    />
-                  </el-form-item>
-                </el-col>
-              </el-row>
+              <div
+                v-if="createScheduleProvisionalYears.length"
+                class="schedule-calendar-warning"
+                data-testid="cycle-schedule-calendar-warning"
+              >
+                {{ createScheduleProvisionalYearLabel }} 年法定节假日日历尚未维护，相关节点暂按周一至周五排期，并避开元旦等固定法定节日；保存后不会自动变化。
+              </div>
+
+              <section class="schedule-stage" aria-labelledby="schedule-stage-preparation">
+                <div class="schedule-stage__title">
+                  <strong id="schedule-stage-preparation">目标准备</strong>
+                  <span>考核开始前完成</span>
+                </div>
+                <div
+                  v-for="node in PREPARATION_SCHEDULE_NODES"
+                  :key="node.key"
+                  class="schedule-node"
+                  data-testid="cycle-schedule-node"
+                >
+                  <span class="schedule-node__number">{{ node.number }}</span>
+                  <div class="schedule-node__copy">
+                    <strong>{{ node.label }}</strong>
+                    <small>{{ node.helper }}</small>
+                  </div>
+                  <el-date-picker
+                    v-model="createForm[node.key]"
+                    type="datetime"
+                    :placeholder="`选择${node.label}`"
+                    @change="handleCreateScheduleChange"
+                  />
+                </div>
+              </section>
+
+              <div class="schedule-period" data-testid="cycle-schedule-period">
+                {{ createSchedulePeriodLabel }}
+              </div>
+
+              <section class="schedule-stage" aria-labelledby="schedule-stage-result">
+                <div class="schedule-stage__title">
+                  <strong id="schedule-stage-result">评价与结果</strong>
+                  <span>考核结束后依次完成</span>
+                </div>
+                <div
+                  v-for="node in RESULT_SCHEDULE_NODES"
+                  :key="node.key"
+                  class="schedule-node"
+                  data-testid="cycle-schedule-node"
+                >
+                  <span class="schedule-node__number">{{ node.number }}</span>
+                  <div class="schedule-node__copy">
+                    <strong>{{ node.label }}</strong>
+                    <small>{{ node.helper }}</small>
+                  </div>
+                  <el-date-picker
+                    v-model="createForm[node.key]"
+                    type="datetime"
+                    :placeholder="`选择${node.label}`"
+                    @change="handleCreateScheduleChange"
+                  />
+                </div>
+              </section>
             </el-collapse-item>
 
             <el-collapse-item name="grades">
@@ -1574,6 +1630,8 @@ onMounted(() => {
 }
 
 .cycle-auto-plan {
+  align-items: stretch;
+  flex-direction: column;
   gap: 9px;
   margin: 2px 0 16px 108px;
   padding: 10px 12px;
@@ -1581,6 +1639,17 @@ onMounted(() => {
   font-size: 12px;
   background: var(--el-fill-color-lighter);
   border-radius: 8px;
+}
+
+.cycle-auto-plan__heading {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.cycle-auto-plan__heading > span {
+  color: var(--el-text-color-regular);
+  font-weight: 500;
 }
 
 .cycle-create-flow {
@@ -1832,6 +1901,105 @@ onMounted(() => {
   margin-bottom: 10px;
 }
 
+.advanced-group-actions .el-button {
+  flex: none;
+}
+
+.schedule-calendar-warning {
+  margin-bottom: 14px;
+  padding: 10px 12px;
+  color: var(--el-color-warning-dark-2);
+  font-size: 12px;
+  line-height: 1.55;
+  background: var(--el-color-warning-light-9);
+  border: 1px solid var(--el-color-warning-light-7);
+  border-radius: 8px;
+}
+
+.schedule-stage {
+  display: grid;
+  gap: 8px;
+  padding: 14px;
+  background: var(--el-fill-color-lighter);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 10px;
+}
+
+.schedule-stage__title {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 0 2px 4px;
+}
+
+.schedule-stage__title strong {
+  color: var(--el-text-color-primary);
+  font-size: 14px;
+}
+
+.schedule-stage__title span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.schedule-node {
+  display: grid;
+  grid-template-columns: 36px minmax(150px, 1fr) minmax(210px, 250px);
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+  padding: 10px 12px;
+  background: var(--el-bg-color);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+}
+
+.schedule-node__number {
+  display: grid;
+  width: 32px;
+  height: 32px;
+  color: var(--el-color-primary);
+  font-size: 12px;
+  font-weight: 700;
+  place-items: center;
+  background: var(--el-color-primary-light-9);
+  border-radius: 50%;
+}
+
+.schedule-node__copy {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.schedule-node__copy strong {
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+}
+
+.schedule-node__copy small {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.schedule-node :deep(.el-date-editor) {
+  width: 100%;
+}
+
+.schedule-period {
+  margin: 12px 0;
+  padding: 11px 14px;
+  color: var(--el-color-primary-dark-2);
+  font-size: 13px;
+  font-weight: 600;
+  text-align: center;
+  background: var(--el-color-primary-light-9);
+  border: 1px dashed var(--el-color-primary-light-5);
+  border-radius: 8px;
+}
+
 .advanced-group-tip {
   margin-bottom: 12px;
 }
@@ -2057,8 +2225,35 @@ onMounted(() => {
   }
 
   .cycle-auto-plan {
-    align-items: flex-start;
+    align-items: stretch;
     margin-left: 0;
+  }
+
+  .cycle-auto-plan__heading {
+    flex-wrap: wrap;
+  }
+
+  .advanced-group-actions {
+    align-items: flex-start;
+  }
+
+  .schedule-stage {
+    padding: 10px;
+  }
+
+  .schedule-node {
+    grid-template-columns: 32px minmax(0, 1fr);
+    gap: 8px 10px;
+    padding: 10px;
+  }
+
+  .schedule-node__number {
+    width: 28px;
+    height: 28px;
+  }
+
+  .schedule-node :deep(.el-date-editor) {
+    grid-column: 2;
   }
 
   .notification-mode-options {

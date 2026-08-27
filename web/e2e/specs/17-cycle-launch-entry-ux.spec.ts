@@ -270,7 +270,7 @@ test.describe('cycle launch entry UX', () => {
     await expect(dialog).toBeVisible();
     await expect(page.getByTestId('cycle-create-flow')).toHaveCount(0);
     await expect(page.getByRole('radio', { name: '全公司' })).toBeChecked();
-    await expect(page.getByTestId('cycle-plan-summary')).toContainText('时间节点已联动');
+    await expect(page.getByTestId('cycle-plan-summary')).toContainText('系统默认计划');
     await expect(page.getByTestId('cycle-create-summary')).toHaveCount(0);
     await expect(page.getByTestId('cycle-create-save-draft')).toHaveText('保存');
     await expect(page.getByTestId('cycle-create-submit')).toHaveText('提交');
@@ -586,7 +586,7 @@ test.describe('cycle launch entry UX', () => {
     await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2027 年度绩效考核');
     await expect(dialog.getByPlaceholder('开始日期')).toHaveValue('2027-01-01');
     await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2027-12-31');
-    await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-12-22 09:00');
+    await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-12-18 09:00');
   });
 
   test('recalculates the default plan when HR changes the cycle type', async ({ page }) => {
@@ -599,7 +599,49 @@ test.describe('cycle launch entry UX', () => {
     await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '月度' }).click();
 
     await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2026年09月绩效考核');
-    await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-08-22 09:00');
+    await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-08-18 09:00');
+  });
+
+  test('uses official workdays and presents the default plan in business order', async ({ page }) => {
+    await mockCycleLaunchPage(page, { cycles: [] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    await expect(page.getByTestId('cycle-plan-summary')).toContainText('系统默认计划');
+    await expect(page.getByTestId('cycle-plan-summary')).toContainText('按中国法定工作日（含调休）');
+
+    await page.getByTestId('cycle-create-advanced').click();
+    await page.getByTestId('cycle-advanced-schedule').click();
+
+    await expect(page.getByTestId('cycle-schedule-calendar-warning')).toContainText(
+      '2027 年法定节假日日历尚未维护，相关节点暂按周一至周五排期',
+    );
+    await expect(page.getByTestId('cycle-schedule-period')).toHaveText('考核执行期 2026-10-01—2026-12-31');
+
+    const nodes = page.getByTestId('cycle-schedule-node');
+    await expect(nodes).toHaveCount(9);
+    await expect(nodes.nth(0)).toContainText('01');
+    await expect(nodes.nth(0)).toContainText('目标制定开放');
+    await expect(nodes.nth(3)).toContainText('04');
+    await expect(nodes.nth(3)).toContainText('员工自评开放');
+    await expect(nodes.nth(8)).toContainText('09');
+    await expect(nodes.nth(8)).toContainText('结果公示截止');
+
+    const expectedTimes = [
+      '2026-09-17 09:00:00',
+      '2026-09-28 18:00:00',
+      '2026-09-30 18:00:00',
+      '2027-01-04 09:00:00',
+      '2027-01-06 18:00:00',
+      '2027-01-11 18:00:00',
+      '2027-01-13 18:00:00',
+      '2027-01-15 18:00:00',
+      '2027-01-18 18:00:00',
+    ];
+    await expect(nodes.locator('.el-date-editor input')).toHaveCount(expectedTimes.length);
+    for (let index = 0; index < expectedTimes.length; index += 1) {
+      await expect(nodes.nth(index).locator('.el-date-editor input')).toHaveValue(expectedTimes[index]);
+    }
   });
 
   test('labels the plan clearly after HR customizes a generated time node', async ({ page }) => {
@@ -613,7 +655,19 @@ test.describe('cycle launch entry UX', () => {
     await goalOpenInput.fill('2026-09-20 09:00:00');
     await goalOpenInput.press('Enter');
 
-    await expect(page.getByTestId('cycle-plan-summary')).toContainText('自定义计划');
+    await expect(page.getByTestId('cycle-plan-summary')).toContainText('已调整计划');
+  });
+
+  test('preserves saved cycle dates instead of silently recalculating them on edit', async ({ page }) => {
+    await mockCycleLaunchPage(page, { cycles: [createdCycle] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-edit-cycle-created').click();
+
+    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    await expect(dialog.getByTestId('cycle-plan-summary')).toContainText('已调整计划');
+    const nodes = dialog.getByTestId('cycle-schedule-node');
+    await expect(nodes.nth(0).locator('.el-date-editor input')).toHaveValue('2026-09-21 17:00:00');
+    await expect(nodes.nth(3).locator('.el-date-editor input')).toHaveValue('2027-01-01 17:00:00');
   });
 
   test('keeps advanced groups collapsed with useful summaries', async ({ page }) => {
@@ -622,10 +676,10 @@ test.describe('cycle launch entry UX', () => {
     await page.getByTestId('cycle-create').click();
     await page.getByTestId('cycle-create-advanced').click();
 
-    await expect(page.getByTestId('cycle-advanced-schedule')).toContainText('默认计划');
+    await expect(page.getByTestId('cycle-advanced-schedule')).toContainText('系统默认计划');
     await expect(page.getByTestId('cycle-advanced-grades')).toContainText('A 20%');
     await expect(page.getByTestId('cycle-advanced-publication')).toContainText('4 项可见');
-    await expect(page.getByText('目标开放时间', { exact: true })).not.toBeVisible();
+    await expect(page.getByText('目标制定开放', { exact: true })).not.toBeVisible();
     expect(await page.locator('.cycle-create-dialog .el-dialog__body').evaluate((element) => (
       element.scrollWidth <= element.clientWidth
     ))).toBe(true);
@@ -643,7 +697,7 @@ test.describe('cycle launch entry UX', () => {
     await page.getByTestId('cycle-create-advanced').click();
     await page.getByTestId('cycle-advanced-schedule').click();
 
-    await expect(page.getByText('目标开放时间', { exact: true })).toBeVisible();
+    await expect(page.getByText('目标制定开放', { exact: true })).toBeVisible();
     await expect(page.getByTestId('cycle-create-submit')).toHaveText('提交');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
     const footer = await page.getByTestId('cycle-create-impact-hint').boundingBox();
