@@ -1,4 +1,5 @@
 import { expect, test } from '@playwright/test';
+import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dingtalkLoginErrorMessage } from '../../src/utils/dingtalk-login-error';
@@ -12,6 +13,9 @@ const callbackViewPath = fileURLToPath(
 );
 const nginxConfigPath = fileURLToPath(
   new URL('../../nginx/default.conf', import.meta.url),
+);
+const dingtalkBuildValidatorPath = fileURLToPath(
+  new URL('../../scripts/validate-dingtalk-build-env.mjs', import.meta.url),
 );
 
 test.describe('DingTalk login error message', () => {
@@ -106,5 +110,47 @@ test.describe('DingTalk login error message', () => {
     );
     expect(source).toContain('多组织账号请在钉钉授权页选择应用所属企业');
     expect(source).not.toContain('Safari 若未显示钉钉扫码页');
+  });
+
+  const validDingTalkBuildEnv = {
+    VITE_DINGTALK_APP_KEY: 'dingvalidappkey12345',
+    VITE_DINGTALK_CORP_ID: 'dingvalidcorpid12345',
+    VITE_DINGTALK_REDIRECT_URI: 'https://hr.example.com/auth/callback',
+  };
+
+  function validateDingTalkBuildEnv(overrides: Record<string, string>) {
+    return spawnSync(process.execPath, [dingtalkBuildValidatorPath], {
+      encoding: 'utf8',
+      env: { ...process.env, ...validDingTalkBuildEnv, ...overrides },
+    });
+  }
+
+  test('rejects each unsafe DingTalk production build setting independently', () => {
+    const invalidCases = [
+      ['missing AppKey', { VITE_DINGTALK_APP_KEY: '' }, 'VITE_DINGTALK_APP_KEY 未配置'],
+      ['placeholder AppKey', { VITE_DINGTALK_APP_KEY: 'devdingtalk' }, 'VITE_DINGTALK_APP_KEY 仍是开发占位值'],
+      ['missing CorpId', { VITE_DINGTALK_CORP_ID: '' }, 'VITE_DINGTALK_CORP_ID 未配置'],
+      ['placeholder CorpId', { VITE_DINGTALK_CORP_ID: 'dingdev' }, 'VITE_DINGTALK_CORP_ID 仍是开发占位值'],
+      ['missing redirect URI', { VITE_DINGTALK_REDIRECT_URI: '' }, 'VITE_DINGTALK_REDIRECT_URI 未配置'],
+      ['malformed redirect URI', { VITE_DINGTALK_REDIRECT_URI: 'not-a-url' }, 'VITE_DINGTALK_REDIRECT_URI 不是有效地址'],
+      ['HTTP redirect URI', { VITE_DINGTALK_REDIRECT_URI: 'http://hr.example.com/auth/callback' }, 'VITE_DINGTALK_REDIRECT_URI 必须使用 HTTPS'],
+      ['wrong callback path', { VITE_DINGTALK_REDIRECT_URI: 'https://hr.example.com/login' }, 'VITE_DINGTALK_REDIRECT_URI 必须指向 /auth/callback'],
+      ['IPv4 loopback redirect', { VITE_DINGTALK_REDIRECT_URI: 'https://127.0.0.2/auth/callback' }, 'VITE_DINGTALK_REDIRECT_URI 不能指向本机'],
+      ['IPv6 loopback redirect', { VITE_DINGTALK_REDIRECT_URI: 'https://[::1]/auth/callback' }, 'VITE_DINGTALK_REDIRECT_URI 不能指向本机'],
+      ['unspecified redirect', { VITE_DINGTALK_REDIRECT_URI: 'https://0.0.0.0/auth/callback' }, 'VITE_DINGTALK_REDIRECT_URI 不能指向本机'],
+    ] as const;
+
+    for (const [caseName, overrides, expectedMessage] of invalidCases) {
+      const result = validateDingTalkBuildEnv(overrides);
+      expect(result.status, caseName).toBe(1);
+      expect(result.stderr, caseName).toContain(expectedMessage);
+    }
+  });
+
+  test('accepts a valid HTTPS DingTalk callback for a production build', () => {
+    const validResult = validateDingTalkBuildEnv({});
+
+    expect(validResult.status).toBe(0);
+    expect(validResult.stdout).toContain('钉钉生产构建配置已通过校验');
   });
 });
