@@ -4,7 +4,7 @@
 
 **Goal:** Add department-based exclusions to performance-cycle scope, correct department headcount summaries, and make draft-cycle editing and deletion directly accessible from both the list and detail view.
 
-**Architecture:** Extend the existing cycle participant snapshot with an additive `explicitExemptDeptIds` JSON array. The API persists and hashes that array and the launch service resolves department exemptions before automatic exemption rules. The Vue scope picker keeps included and excluded department selections distinct, derives estimated headcount from active organization nodes, and sends the complete snapshot through the existing create/update-draft flow. Draft actions remain routed through the existing edit dialog and guarded delete flow.
+**Architecture:** Extend the existing cycle participant snapshot with an additive PostgreSQL UUID-array field named `explicitExemptDeptIds`. The API persists and hashes that array and the launch service resolves department exemptions before automatic exemption rules. The Vue scope picker keeps included and excluded department selections distinct, derives estimated headcount from active organization nodes, and sends the complete snapshot through the existing create/update-draft flow. Draft actions remain routed through the existing edit dialog and guarded delete flow.
 
 **Tech Stack:** Vue 3, TypeScript, Element Plus, Pinia/API client, Playwright, NestJS, Prisma, PostgreSQL, Jest, Docker Compose.
 
@@ -73,14 +73,14 @@ Expected: the new assertions fail because `explicitExemptDeptIds` is absent from
 Add this field beside the existing participant/exemption arrays in `AssessmentCycle`:
 
 ```prisma
-explicitExemptDeptIds Json @default("[]") @map("explicit_exempt_dept_ids")
+explicitExemptDeptIds String[] @default([]) @map("explicit_exempt_dept_ids") @db.Uuid
 ```
 
 Create the additive migration:
 
 ```sql
 ALTER TABLE "assessment_cycles"
-ADD COLUMN "explicit_exempt_dept_ids" JSONB NOT NULL DEFAULT '[]';
+ADD COLUMN "explicit_exempt_dept_ids" UUID[] NOT NULL DEFAULT ARRAY[]::UUID[];
 ```
 
 The existing Prisma model and prior cycle migrations map this model to the exact table name `assessment_cycles` used above.

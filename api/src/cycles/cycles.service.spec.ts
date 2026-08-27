@@ -4,6 +4,7 @@ import { CreateCycleDto } from './dto/create-cycle.dto';
 import { AuthUser } from '@/common/types/auth.types';
 
 describe('CyclesService', () => {
+  const explicitExemptDeptId = 'c134b614-5d97-4f1c-a72e-0afc6d12eb99';
   const creator = {
     id: '11111111-1111-4111-8111-111111111111',
     sysRole: SysRole.hr,
@@ -80,6 +81,49 @@ describe('CyclesService', () => {
         gradeBMaxRatio: new Prisma.Decimal(0.4),
         gradeCMaxRatio: new Prisma.Decimal(0.3),
         gradeDMaxRatio: new Prisma.Decimal(0.1),
+      }),
+    });
+  });
+
+  it('stores explicit exempt departments when creating a cycle', async () => {
+    await service.create(quarterlyCycle({
+      explicitExemptDeptIds: [explicitExemptDeptId],
+    } as Partial<CreateCycleDto>), creator);
+
+    expect(prisma.assessmentCycle.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        explicitExemptDeptIds: [explicitExemptDeptId],
+      }),
+    });
+  });
+
+  it('stores explicit exempt departments when updating a draft cycle', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue({
+      id: 'cycle-1',
+      name: '2027年第一季度',
+      type: 'quarterly',
+      status: CycleStatus.draft,
+      startDate: new Date('2027-01-01T00:00:00.000Z'),
+      endDate: new Date('2027-03-31T00:00:00.000Z'),
+      goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
+      selfEvalOpenAt: new Date('2027-04-01T00:00:00.000Z'),
+      hrOwnerId: creator.id,
+    });
+    prisma.assessmentCycle.update.mockResolvedValue({
+      id: 'cycle-1',
+      name: '2027年第一季度',
+      type: 'quarterly',
+      status: CycleStatus.draft,
+    });
+
+    await service.updateDraft('cycle-1', {
+      explicitExemptDeptIds: [explicitExemptDeptId],
+    } as any, creator);
+
+    expect(prisma.assessmentCycle.update).toHaveBeenCalledWith({
+      where: { id: 'cycle-1' },
+      data: expect.objectContaining({
+        explicitExemptDeptIds: [explicitExemptDeptId],
       }),
     });
   });

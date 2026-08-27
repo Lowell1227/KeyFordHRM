@@ -64,6 +64,11 @@ export class CreateCycleDto {
   @IsOptional()
   @IsArray()
   @IsUUID('4', { each: true })
+  explicitExemptDeptIds?: string[];
+
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
   explicitExemptUserIds?: string[];
 
   @IsOptional()

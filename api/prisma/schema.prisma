@@ -813,6 +813,7 @@ model AssessmentCycle {
   hrOwnerId                String?     @map("hr_owner_id") @db.Uuid
   participantDeptIds       String[]    @default([]) @map("participant_dept_ids") @db.Uuid
   participantUserIds       String[]    @default([]) @map("participant_user_ids") @db.Uuid
+  explicitExemptDeptIds    String[]    @default([]) @map("explicit_exempt_dept_ids") @db.Uuid
   explicitExemptUserIds    String[]    @default([]) @map("explicit_exempt_user_ids") @db.Uuid
   notificationMode         String      @default("off") @map("notification_mode") @db.VarChar(30)
   scheduledAt              DateTime?   @map("scheduled_at") @db.Timestamptz(6)
