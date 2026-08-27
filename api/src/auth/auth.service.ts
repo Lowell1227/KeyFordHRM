@@ -315,6 +315,7 @@ export class AuthService {
       deptId: user.deptId,
       isAssessorOnly: user.isAssessorOnly,
       canViewAll: user.canViewAll,
+      hrCapabilities: user.hrCapabilities as HrCapability[],
     };
 
     const token = await this.jwt.signAsync(payload);

@@ -232,8 +232,11 @@ describe('AuthService local identity boundary', () => {
   });
 
   it('工号密码与当前有效任职都通过时签发令牌', async () => {
-    const { service, prisma } = createService(false);
-    prisma.user.findFirst.mockResolvedValue(eligibleUser);
+    const { service, prisma, jwt } = createService(false);
+    prisma.user.findFirst.mockResolvedValue({
+      ...eligibleUser,
+      hrCapabilities: ['employee_archive_edit'],
+    });
     prisma.employmentRecord.findFirst.mockResolvedValue({ id: 'employment-1' });
     (bcrypt.compare as jest.Mock).mockResolvedValue(true);
 
@@ -245,6 +248,9 @@ describe('AuthService local identity boundary', () => {
       passwordChangeRequired: true,
       user: { id: eligibleUser.id },
     });
+    expect(jwt.signAsync).toHaveBeenCalledWith(expect.objectContaining({
+      hrCapabilities: ['employee_archive_edit'],
+    }));
   });
 
   it('修改密码只接受4至6位数字且不能继续使用0000', async () => {

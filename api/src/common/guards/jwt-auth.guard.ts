@@ -39,6 +39,7 @@ export class JwtAuthGuard implements CanActivate {
         deptId: payload.deptId,
         isAssessorOnly: payload.isAssessorOnly,
         canViewAll: payload.canViewAll,
+        hrCapabilities: payload.hrCapabilities ?? [],
       };
       (req as Request & { user: AuthUser }).user = user;
       return true;
