@@ -530,7 +530,7 @@ describe('ObjectivesService visibility helpers', () => {
     )).rejects.toBeInstanceOf(ConflictException);
   });
 
-  it('includes the loaded objective version in the atomic review claim', async () => {
+  it('claims database timestamps within the client millisecond version', async () => {
     prisma.objective.findUnique.mockResolvedValue(visibleObjective);
 
     await (service as any).reviewObjective(
@@ -545,7 +545,10 @@ describe('ObjectivesService visibility helpers', () => {
       where: expect.objectContaining({
         id: 'objective-visible',
         reviewStatus: 'pending',
-        updatedAt: new Date('2026-08-07T08:00:00.000Z'),
+        updatedAt: {
+          gte: new Date('2026-08-07T08:00:00.000Z'),
+          lt: new Date('2026-08-07T08:00:00.001Z'),
+        },
         owner: { directManagerId: viewer.id },
       }),
     }));

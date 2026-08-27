@@ -890,12 +890,17 @@ export class ObjectivesService {
       });
     }
     const reviewedAt = new Date();
+    const expectedVersionStart = new Date(expectedUpdatedAt);
+    const expectedVersionEnd = new Date(expectedVersionStart.getTime() + 1);
     const updated = await this.prisma.$transaction(async (tx) => {
       const claimed = await tx.objective.updateMany({
         where: {
           id,
           reviewStatus: ObjectiveReviewStatus.pending,
-          updatedAt: new Date(expectedUpdatedAt),
+          updatedAt: {
+            gte: expectedVersionStart,
+            lt: expectedVersionEnd,
+          },
           owner: { directManagerId: viewer.id },
         },
         data: {
