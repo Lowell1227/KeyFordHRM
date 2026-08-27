@@ -10,6 +10,7 @@ const apiResponse = (data: unknown) => ({
 
 interface CycleLaunchMockOptions {
   cycles?: AssessmentCycle[];
+  cycleUrls?: string[];
   createBodies?: unknown[];
   departmentUrls?: string[];
   settingUpdates?: boolean[];
@@ -235,6 +236,7 @@ async function mockCycleLaunchPage(
         body: JSON.stringify(apiResponse(createdCycle)),
       });
     }
+    options.cycleUrls?.push(route.request().url());
     return route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify(apiResponse({
@@ -603,6 +605,48 @@ test.describe('cycle launch entry UX', () => {
     await expect(dialog.getByPlaceholder('开始日期')).toHaveValue('2027-01-01');
     await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2027-06-30');
     await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-12-18 09:00');
+  });
+
+  test('shows saved half-year cycles and sends the half-year list filter', async ({ page }) => {
+    const cycleUrls: string[] = [];
+    const semiannualCycle = {
+      ...createdCycle,
+      id: 'cycle-semiannual',
+      name: '2027年03月—08月半年绩效考核',
+      type: 'semiannual',
+      startDate: '2027-03-01',
+      endDate: '2027-08-31',
+    } satisfies AssessmentCycle;
+    await mockCycleLaunchPage(page, { cycles: [semiannualCycle], cycleUrls });
+    await page.goto('/cycles?group=attention');
+
+    const cycleRow = page.locator('.cycle-cell').filter({ hasText: '2027年03月—08月半年绩效考核' });
+    await expect(cycleRow).toBeVisible();
+    await expect(cycleRow).toContainText('半年');
+
+    await page.locator('.filter-row .el-select').nth(1).click();
+    await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '半年' }).click();
+    await expect.poll(() => cycleUrls.some((url) => new URL(url).searchParams.get('type') === 'semiannual')).toBe(true);
+  });
+
+  test('opens a saved cross-year half-year with its persisted rolling dates', async ({ page }) => {
+    const semiannualCycle = {
+      ...createdCycle,
+      id: 'cycle-semiannual-cross-year',
+      name: '2027年11月—2028年04月半年绩效考核',
+      type: 'semiannual',
+      startDate: '2027-11-01',
+      endDate: '2028-04-30',
+    } satisfies AssessmentCycle;
+    await mockCycleLaunchPage(page, { cycles: [semiannualCycle] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-edit-cycle-semiannual-cross-year').click();
+
+    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2027年11月—2028年04月半年绩效考核');
+    await expect(dialog.getByPlaceholder('开始日期')).toHaveValue('2027-11-01');
+    await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2028-04-30');
+    await expect(dialog.getByTestId('cycle-semiannual-warning')).toHaveCount(0);
   });
 
   test('auto-completes a rolling half-year after HR changes its start date', async ({ page }) => {

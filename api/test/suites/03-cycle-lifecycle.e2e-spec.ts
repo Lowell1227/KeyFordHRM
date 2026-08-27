@@ -1,9 +1,10 @@
 import { buildTestApp, closeTestApp, TestApp } from "../test-app";
 import { FixtureFactory } from "../fixtures/fixture-factory";
 import { login } from "../helpers/auth-helper";
-import { SysRole, TaskStatus, CycleStatus } from "@prisma/client";
+import { SysRole, TaskStatus, CycleStatus, CycleType } from "@prisma/client";
 import { LaunchService } from "@/cycles/launch.service";
 import { SchedulerService } from "@/scheduler/scheduler.service";
+import { AuthService } from "@/auth/auth.service";
 
 describe("03-cycle-lifecycle", () => {
   let app: TestApp;
@@ -129,6 +130,82 @@ describe("03-cycle-lifecycle", () => {
       data: { status: TaskStatus.indicator_confirming },
     });
   }
+
+  it("半年周期可通过 API 创建、读取、筛选并修改滚动期间", async () => {
+    const enumValues = await app.prisma.$queryRaw<Array<{ enumlabel: string }>>`
+      SELECT enumlabel
+      FROM pg_enum
+      JOIN pg_type ON pg_type.oid = pg_enum.enumtypid
+      WHERE pg_type.typname = 'cycle_type'
+      ORDER BY enumsortorder
+    `;
+    expect(enumValues.slice(0, 2).map((item) => item.enumlabel)).toEqual([
+      "quarterly",
+      "semiannual",
+    ]);
+
+    const { hr } = await createRoleSet();
+    await factory.createCycle({
+      name: "对照季度周期",
+      createdBy: hr.id,
+      type: CycleType.quarterly,
+    });
+    const hrToken = (await app.app.get(AuthService).issueToken(hr)).token;
+
+    const created = await app.http
+      .post("/api/v1/cycles")
+      .set("Authorization", `Bearer ${hrToken}`)
+      .send({
+        name: "2027年03月—08月半年绩效考核",
+        type: "semiannual",
+        startDate: "2027-03-01T00:00:00.000Z",
+        endDate: "2027-08-31T00:00:00.000Z",
+        hrOwnerId: hr.id,
+      })
+      .expect(201);
+
+    const cycleId = created.body.data.id as string;
+    expect(created.body.data).toMatchObject({
+      type: "semiannual",
+      name: "2027年03月—08月半年绩效考核",
+      startDate: "2027-03-01T00:00:00.000Z",
+      endDate: "2027-08-31T00:00:00.000Z",
+    });
+
+    const detail = await app.http
+      .get(`/api/v1/cycles/${cycleId}`)
+      .set("Authorization", `Bearer ${hrToken}`)
+      .expect(200);
+    expect(detail.body.data.type).toBe("semiannual");
+
+    const filtered = await app.http
+      .get("/api/v1/cycles?type=semiannual&page=1&pageSize=20")
+      .set("Authorization", `Bearer ${hrToken}`)
+      .expect(200);
+    expect(filtered.body.data.total).toBe(1);
+    expect(filtered.body.data.items).toEqual([
+      expect.objectContaining({ id: cycleId, type: "semiannual" }),
+    ]);
+
+    const updated = await app.http
+      .patch(`/api/v1/cycles/${cycleId}`)
+      .set("Authorization", `Bearer ${hrToken}`)
+      .send({
+        name: "2027年11月—2028年04月半年绩效考核",
+        startDate: "2027-11-01T00:00:00.000Z",
+        endDate: "2028-04-30T00:00:00.000Z",
+        goalSettingOpenAt: "2027-10-20T01:00:00.000Z",
+        selfEvalOpenAt: "2028-05-01T01:00:00.000Z",
+      })
+      .expect(200);
+    expect(updated.body.data).toMatchObject({
+      id: cycleId,
+      type: "semiannual",
+      name: "2027年11月—2028年04月半年绩效考核",
+      startDate: "2027-11-01T00:00:00.000Z",
+      endDate: "2028-04-30T00:00:00.000Z",
+    });
+  });
 
   it("建周期→launch→全员生成任务 + 快照绑定 + exempt 标记", async () => {
     const { dept, hr, employee } = await createRoleSet();
