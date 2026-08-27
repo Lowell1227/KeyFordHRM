@@ -901,6 +901,35 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.getByTestId('cycle-plan-summary')).toContainText('已调整计划');
   });
 
+  test('shows inline reminders without blocking a schedule that crosses the performance period', async ({ page }) => {
+    const createBodies: unknown[] = [];
+    await mockCycleLaunchPage(page, { cycles: [], createBodies });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+    await page.getByTestId('cycle-create-advanced').click();
+    await page.getByTestId('cycle-advanced-schedule').click();
+
+    const nodes = page.getByTestId('cycle-schedule-node');
+    const preparationTimes = [
+      '2026-10-02 09:00:00',
+      '2026-10-03 18:00:00',
+      '2026-10-04 18:00:00',
+    ];
+    for (let index = 0; index < preparationTimes.length; index += 1) {
+      const input = nodes.nth(index).locator('.el-date-editor input');
+      await input.fill(preparationTimes[index]);
+      await input.press('Enter');
+    }
+
+    await expect(nodes.nth(0).getByTestId('cycle-schedule-boundary-warning')).toHaveText(
+      '该时间已进入考核期间，仍可保存，请确认符合实际安排。',
+    );
+    await page.getByTestId('cycle-create-save-draft').click();
+
+    await expect.poll(() => createBodies).toHaveLength(1);
+    await expect(page.locator('.el-message')).not.toContainText('应在考核周期开始前完成');
+  });
+
   test('preserves saved cycle dates instead of silently recalculating them on edit', async ({ page }) => {
     await mockCycleLaunchPage(page, { cycles: [createdCycle] });
     await page.goto('/cycles?group=attention');

@@ -128,11 +128,27 @@ describe('CyclesService', () => {
     });
   });
 
-  it('rejects self evaluation opening before the day after the period ends', async () => {
-    await expect(service.create(quarterlyCycle({
-      selfEvalOpenAt: new Date('2027-03-31T12:00:00.000Z'),
-    }), creator)).rejects.toMatchObject({
-      response: { message: expect.stringContaining('次日') },
+  it('allows a manually customized schedule to cross the performance period boundaries', async () => {
+    const dto = quarterlyCycle({
+      goalSettingOpenAt: new Date('2027-01-02T01:00:00.000Z'),
+      deadlineIndicatorSetting: new Date('2027-01-03T10:00:00.000Z'),
+      deadlineIndicatorConfirm: new Date('2027-01-04T10:00:00.000Z'),
+      selfEvalOpenAt: new Date('2027-03-01T01:00:00.000Z'),
+      deadlineSelfEval: new Date('2027-03-02T10:00:00.000Z'),
+      deadlineManagerScore: new Date('2027-03-03T10:00:00.000Z'),
+      deadlineHrCalibration: new Date('2027-03-04T10:00:00.000Z'),
+      deadlineApproval: new Date('2027-03-05T10:00:00.000Z'),
+      deadlinePublish: new Date('2027-03-06T10:00:00.000Z'),
+    });
+
+    await expect(service.create(dto, creator)).resolves.toEqual(
+      expect.objectContaining({ id: 'cycle-1' }),
+    );
+    expect(prisma.assessmentCycle.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        goalSettingOpenAt: dto.goalSettingOpenAt,
+        selfEvalOpenAt: dto.selfEvalOpenAt,
+      }),
     });
   });
 

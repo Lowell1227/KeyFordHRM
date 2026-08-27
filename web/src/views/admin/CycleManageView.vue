@@ -680,12 +680,6 @@ function getCreateDeadlineValidationMessage(): string | null {
     { label: '指标制定截止', value: createForm.deadlineIndicatorSetting },
     { label: '指标确认截止', value: createForm.deadlineIndicatorConfirm },
   ].filter((item): item is { label: string; value: Date } => Boolean(item.value));
-  if (goalDates.some((item) => createForm.startDate && !dayjs(item.value).isBefore(createForm.startDate))) {
-    return '目标制定、审核与确认应在考核周期开始前完成。';
-  }
-  if (createForm.endDate && dayjs(createForm.selfEvalOpenAt).isBefore(dayjs(createForm.endDate).add(1, 'day').startOf('day'))) {
-    return '自评开放时间不能早于考核周期结束后的次日。';
-  }
   const resultDates = [
     { label: '自评开放', value: createForm.selfEvalOpenAt },
     ...DEADLINE_FIELDS.slice(2).map(({ key, label }) => ({ label, value: createForm[key] })),
@@ -700,6 +694,29 @@ function getCreateDeadlineValidationMessage(): string | null {
   }
 
   return null;
+}
+
+function getCreateScheduleBoundaryWarning(node: (typeof CREATE_SCHEDULE_NODES)[number]): string {
+  const value = createForm[node.key];
+  if (!value) return '';
+
+  if (
+    node.stage === 'preparation'
+    && createForm.startDate
+    && !dayjs(value).isBefore(createForm.startDate)
+  ) {
+    return '该时间已进入考核期间，仍可保存，请确认符合实际安排。';
+  }
+
+  if (
+    node.stage === 'result'
+    && createForm.endDate
+    && dayjs(value).isBefore(dayjs(createForm.endDate).add(1, 'day').startOf('day'))
+  ) {
+    return '该时间早于考核期间结束，仍可保存，请确认符合实际安排。';
+  }
+
+  return '';
 }
 
 function buildCreateBody(): CreateCycleBody {
@@ -1473,12 +1490,19 @@ onMounted(() => {
                     <strong>{{ node.label }}</strong>
                     <small>{{ node.helper }}</small>
                   </div>
-                  <el-date-picker
-                    v-model="createForm[node.key]"
-                    type="datetime"
-                    :placeholder="`选择${node.label}`"
-                    @change="handleCreateScheduleChange"
-                  />
+                  <div class="schedule-node__input">
+                    <el-date-picker
+                      v-model="createForm[node.key]"
+                      type="datetime"
+                      :placeholder="`选择${node.label}`"
+                      @change="handleCreateScheduleChange"
+                    />
+                    <small
+                      v-if="getCreateScheduleBoundaryWarning(node)"
+                      class="schedule-node__warning"
+                      data-testid="cycle-schedule-boundary-warning"
+                    >{{ getCreateScheduleBoundaryWarning(node) }}</small>
+                  </div>
                 </div>
               </section>
 
@@ -1502,12 +1526,19 @@ onMounted(() => {
                     <strong>{{ node.label }}</strong>
                     <small>{{ node.helper }}</small>
                   </div>
-                  <el-date-picker
-                    v-model="createForm[node.key]"
-                    type="datetime"
-                    :placeholder="`选择${node.label}`"
-                    @change="handleCreateScheduleChange"
-                  />
+                  <div class="schedule-node__input">
+                    <el-date-picker
+                      v-model="createForm[node.key]"
+                      type="datetime"
+                      :placeholder="`选择${node.label}`"
+                      @change="handleCreateScheduleChange"
+                    />
+                    <small
+                      v-if="getCreateScheduleBoundaryWarning(node)"
+                      class="schedule-node__warning"
+                      data-testid="cycle-schedule-boundary-warning"
+                    >{{ getCreateScheduleBoundaryWarning(node) }}</small>
+                  </div>
                 </div>
               </section>
             </el-collapse-item>
@@ -2123,6 +2154,18 @@ onMounted(() => {
   line-height: 1.4;
 }
 
+.schedule-node__input {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.schedule-node__warning {
+  color: var(--el-color-danger);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
 .schedule-node :deep(.el-date-editor) {
   width: 100%;
 }
@@ -2391,7 +2434,7 @@ onMounted(() => {
     height: 28px;
   }
 
-  .schedule-node :deep(.el-date-editor) {
+  .schedule-node__input {
     grid-column: 2;
   }
 

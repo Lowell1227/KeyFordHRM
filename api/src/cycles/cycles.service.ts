@@ -447,7 +447,7 @@ export class CyclesService {
     };
   }
 
-  /** 校验创建时的日期与截止日关系。 */
+  /** 校验考核期间本身与时间节点的业务顺序；节点可跨越考核期间边界。 */
   private validateCycleDates(
     dto: CreateCycleDto,
     goalSettingOpenAt: Date,
@@ -466,25 +466,6 @@ export class CyclesService {
       dto.deadlineIndicatorConfirm,
     ].filter((date): date is Date => date != null);
     this.assertNonDecreasing(goalDeadlines, '目标制定开放、提交和确认时间需按流程顺序递增');
-
-    if (goalSettingOpenAt >= dto.startDate) {
-      throw new BadRequestException({
-        code: ERROR_CODE.PARAM_INVALID,
-        message: '目标制定开放时间必须早于绩效周期开始时间',
-      });
-    }
-    if (dto.deadlineIndicatorConfirm && dto.deadlineIndicatorConfirm >= dto.startDate) {
-      throw new BadRequestException({
-        code: ERROR_CODE.PARAM_INVALID,
-        message: '目标确认截止时间必须早于绩效周期开始时间',
-      });
-    }
-    if (selfEvalOpenAt < this.addDays(dto.endDate, 1)) {
-      throw new BadRequestException({
-        code: ERROR_CODE.PARAM_INVALID,
-        message: '自评开放时间不得早于绩效周期结束后的次日',
-      });
-    }
 
     const evaluationDeadlines = [
       selfEvalOpenAt,
