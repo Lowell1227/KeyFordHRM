@@ -144,6 +144,7 @@ const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
 const departments = ref<Department[]>([]);
+const departmentsState = ref<'loading' | 'ready' | 'failed'>('loading');
 const submitting = ref(false);
 const launchingId = ref<string | null>(null);
 const deletingId = ref<string | null>(null);
@@ -1132,8 +1133,10 @@ onMounted(() => {
   if (typeof route.query.cycleId === 'string') void loadCycleDetail(route.query.cycleId);
   departmentsApi.findAll({ isActive: true }).then((items) => {
     departments.value = items;
+    departmentsState.value = 'ready';
   }).catch(() => {
     departments.value = [];
+    departmentsState.value = 'failed';
   });
 });
 </script>
@@ -1229,6 +1232,8 @@ onMounted(() => {
       <CycleCompactTable
         v-if="listLoading || cycles.length > 0"
         :cycles="cycles"
+        :departments="departments"
+        :department-state="departmentsState"
         :loading="listLoading"
         :launching-id="launchingId"
         :deleting-id="deletingId"

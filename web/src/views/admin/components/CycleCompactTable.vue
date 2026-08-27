@@ -1,13 +1,15 @@
 <script setup lang="ts">
 import { MoreFilled } from '@element-plus/icons-vue';
-import dayjs from 'dayjs';
-import type { AssessmentCycle } from '@/types/api.types';
+import { computed } from 'vue';
+import type { AssessmentCycle, Department } from '@/types/api.types';
 import type { CycleStatus } from '@/types/enums';
 import { formatDate } from '@/utils/date';
-import { cycleNextStep, cyclePrimaryActionLabel } from '../cycle-management';
+import { cyclePrimaryActionLabel } from '../cycle-management';
 
-defineProps<{
+const props = defineProps<{
   cycles: AssessmentCycle[];
+  departments: Department[];
+  departmentState: 'loading' | 'ready' | 'failed';
   loading?: boolean;
   launchingId?: string | null;
   deletingId?: string | null;
@@ -60,12 +62,6 @@ const STATUS_TAG_TYPE: Record<CycleStatus, 'primary' | 'success' | 'warning' | '
   closed: 'info',
 };
 
-function formatNextTime(value?: string): string {
-  if (!value) return '';
-  const parsed = dayjs(value);
-  return parsed.isValid() ? parsed.format('MM月DD日 HH:mm') : '';
-}
-
 function handleMore(command: string, cycle: AssessmentCycle) {
   if (command === 'deadlines') emit('edit-deadlines', cycle);
   if (command === 'cancel-schedule') emit('cancel-schedule', cycle);
@@ -76,6 +72,115 @@ function notificationLabel(cycle: AssessmentCycle): string {
   if (cycle.notificationMode === 'launch_only') return '钉钉：仅发起提醒';
   if (cycle.notificationMode === 'launch_and_reminders') return '钉钉：发起＋每日催办';
   return '钉钉：关闭';
+}
+
+const departmentParentById = computed(() => {
+  const result = new Map<string, string | null>();
+  const visit = (items: Department[], inheritedParentId: string | null = null) => {
+    for (const department of items) {
+      result.set(department.id, department.parentId ?? inheritedParentId);
+      visit(department.children ?? [], department.id);
+    }
+  };
+  visit(props.departments);
+  return result;
+});
+
+function uniqueCount(ids: string[] | undefined): number {
+  return new Set(ids ?? []).size;
+}
+
+function referencedDepartmentIds(cycle: AssessmentCycle): string[] {
+  return [...new Set([
+    ...(cycle.participantDeptIds ?? []),
+    ...(cycle.explicitExemptDeptIds ?? []),
+  ])];
+}
+
+function hasCompleteDepartmentLineage(id: string): boolean {
+  const visited = new Set<string>();
+  let currentId: string | null = id;
+  while (currentId) {
+    if (visited.has(currentId) || !departmentParentById.value.has(currentId)) return false;
+    visited.add(currentId);
+    currentId = departmentParentById.value.get(currentId) ?? null;
+  }
+  return true;
+}
+
+function unavailableDepartmentSummary(cycle: AssessmentCycle): string | null {
+  const referencedIds = referencedDepartmentIds(cycle);
+  if (referencedIds.length === 0) return null;
+  if (props.departmentState === 'loading') return '考核范围加载中…';
+  if (props.departmentState === 'failed') return '考核范围暂不可用，请稍后重试';
+  if (referencedIds.some((id) => !hasCompleteDepartmentLineage(id))) {
+    return '部分历史部门信息不可用，请进入编辑核对';
+  }
+  return null;
+}
+
+function effectiveDepartmentCount(ids: string[] | undefined): number {
+  const selected = new Set(ids ?? []);
+  return [...selected].filter((id) => {
+    const visited = new Set<string>();
+    let parentId = departmentParentById.value.get(id);
+    while (parentId && !visited.has(parentId)) {
+      if (selected.has(parentId)) return false;
+      visited.add(parentId);
+      parentId = departmentParentById.value.get(parentId);
+    }
+    return true;
+  }).length;
+}
+
+function scopeCountText(
+  departmentIds: string[] | undefined,
+  userIds: string[] | undefined,
+  options: { effective?: boolean; alternateUser?: boolean } = {},
+): string {
+  const departmentCount = effectiveDepartmentCount(departmentIds);
+  const userCount = uniqueCount(userIds);
+  const parts: string[] = [];
+  if (departmentCount > 0) {
+    parts.push(`${departmentCount} 个${options.effective ? '有效' : ''}部门`);
+  }
+  if (userCount > 0) {
+    parts.push(`${options.alternateUser && departmentCount > 0 ? '另选 ' : ''}${userCount} 名员工`);
+  }
+  return parts.join('、');
+}
+
+function assessmentScopeSummary(cycle: AssessmentCycle) {
+  const custom = (cycle.participantDeptIds?.length ?? 0) > 0
+    || (cycle.participantUserIds?.length ?? 0) > 0;
+  const unavailableSummary = unavailableDepartmentSummary(cycle);
+  if (unavailableSummary) {
+    return {
+      label: custom ? '自定义范围' : '全公司',
+      details: [unavailableSummary],
+    };
+  }
+  const exclusionText = scopeCountText(cycle.explicitExemptDeptIds, cycle.explicitExemptUserIds);
+
+  if (!custom) {
+    return {
+      label: '全公司',
+      details: [exclusionText ? `排除 ${exclusionText}` : '无排除'],
+    };
+  }
+
+  const selectionText = scopeCountText(
+    cycle.participantDeptIds,
+    cycle.participantUserIds,
+    { effective: true, alternateUser: true },
+  );
+  return {
+    label: '自定义范围',
+    details: [
+      selectionText || '未选择考核对象',
+      ...(exclusionText ? [`排除 ${exclusionText}`] : []),
+    ],
+  };
 }
 </script>
 
@@ -113,12 +218,18 @@ function notificationLabel(cycle: AssessmentCycle): string {
       </template>
     </el-table-column>
 
-    <el-table-column label="下一步" min-width="220">
+    <el-table-column label="考核范围" min-width="240">
       <template #default="{ row }">
-        <div class="cycle-next-cell">
-          <strong>{{ cycleNextStep(row as AssessmentCycle).label }}</strong>
-          <span v-if="formatNextTime(cycleNextStep(row as AssessmentCycle).time)">
-            {{ formatNextTime(cycleNextStep(row as AssessmentCycle).time) }}
+        <div
+          :data-testid="`cycle-scope-${(row as AssessmentCycle).id}`"
+          class="cycle-scope-cell"
+        >
+          <strong>{{ assessmentScopeSummary(row as AssessmentCycle).label }}</strong>
+          <span
+            v-for="detail in assessmentScopeSummary(row as AssessmentCycle).details"
+            :key="detail"
+          >
+            {{ detail }}
           </span>
         </div>
       </template>
@@ -206,10 +317,16 @@ function notificationLabel(cycle: AssessmentCycle): string {
         </div>
         <el-tag :type="STATUS_TAG_TYPE[cycle.status]" size="small">{{ STATUS_LABEL[cycle.status] }}</el-tag>
       </header>
-      <div class="cycle-mobile-card__next">
-        <span>下一步</span>
-        <strong>{{ cycleNextStep(cycle).label }}</strong>
-        <small v-if="formatNextTime(cycleNextStep(cycle).time)">{{ formatNextTime(cycleNextStep(cycle).time) }}</small>
+      <div
+        :data-testid="`cycle-scope-mobile-${cycle.id}`"
+        class="cycle-mobile-card__scope"
+      >
+        <span>考核范围</span>
+        <strong>{{ assessmentScopeSummary(cycle).label }}</strong>
+        <small
+          v-for="detail in assessmentScopeSummary(cycle).details"
+          :key="detail"
+        >{{ detail }}</small>
       </div>
       <footer @click.stop>
         <template v-if="cycle.status === 'draft'">
@@ -288,7 +405,7 @@ function notificationLabel(cycle: AssessmentCycle): string {
 }
 
 .cycle-cell strong,
-.cycle-next-cell strong {
+.cycle-scope-cell strong {
   color: var(--el-text-color-primary);
   font-size: 14px;
   font-weight: 600;
@@ -296,7 +413,7 @@ function notificationLabel(cycle: AssessmentCycle): string {
 
 .cycle-cell span,
 .cycle-cell small,
-.cycle-next-cell span,
+.cycle-scope-cell span,
 .cycle-state-cell small {
   color: var(--el-text-color-secondary);
   font-size: 12px;
@@ -308,7 +425,7 @@ function notificationLabel(cycle: AssessmentCycle): string {
 }
 
 .cycle-state-cell,
-.cycle-next-cell {
+.cycle-scope-cell {
   display: grid;
   justify-items: start;
   gap: 6px;
@@ -359,19 +476,19 @@ function notificationLabel(cycle: AssessmentCycle): string {
   }
 
   .cycle-mobile-card > header > div,
-  .cycle-mobile-card__next {
+  .cycle-mobile-card__scope {
     display: grid;
     gap: 4px;
   }
 
   .cycle-mobile-card > header span,
-  .cycle-mobile-card__next span,
-  .cycle-mobile-card__next small {
+  .cycle-mobile-card__scope span,
+  .cycle-mobile-card__scope small {
     color: var(--el-text-color-secondary);
     font-size: 12px;
   }
 
-  .cycle-mobile-card__next strong {
+  .cycle-mobile-card__scope strong {
     font-size: 14px;
   }
 }

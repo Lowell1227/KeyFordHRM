@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import type { AssessmentCycle, LaunchPreflightResult } from '../../src/types/api.types';
+import type { AssessmentCycle, Department, LaunchPreflightResult } from '../../src/types/api.types';
 import {
   cyclePrimaryActionLabel,
   cycleNextStep,
@@ -55,6 +55,48 @@ const scheduledCycle: AssessmentCycle = {
   status: 'scheduled',
 };
 
+const scopeDepartments: Department[] = [{
+  id: 'dept-parent',
+  name: '研发中心',
+  parentId: null,
+  company: 'fuede',
+  sortOrder: 1,
+  isActive: true,
+  children: [{
+    id: 'dept-child-a',
+    name: '平台组',
+    parentId: 'dept-parent',
+    company: 'fuede',
+    sortOrder: 1,
+    isActive: true,
+  }, {
+    id: 'dept-child-b',
+    name: '应用组',
+    parentId: 'dept-parent',
+    company: 'fuede',
+    sortOrder: 2,
+    isActive: true,
+  }],
+}];
+
+const allCompanyWithExclusions: AssessmentCycle = {
+  ...draftCycle,
+  id: 'cycle-all-exclusions',
+  name: '2027 全公司考核',
+  explicitExemptDeptIds: ['dept-parent', 'dept-child-a'],
+  explicitExemptUserIds: ['user-1', 'user-2'],
+};
+
+const customScopeCycle: AssessmentCycle = {
+  ...draftCycle,
+  id: 'cycle-custom-scope',
+  name: '2027 自定义范围考核',
+  participantDeptIds: ['dept-parent', 'dept-child-a', 'dept-child-b'],
+  participantUserIds: ['user-1', 'user-2'],
+  explicitExemptDeptIds: ['dept-child-a'],
+  explicitExemptUserIds: ['user-3'],
+};
+
 const readyPreflight: LaunchPreflightResult = {
   ready: true,
   planHash: 'ready-plan-hash',
@@ -106,6 +148,9 @@ const immediatelyOpenablePreflight: LaunchPreflightResult = {
 
 interface CycleMockOptions {
   cycles?: AssessmentCycle[];
+  departments?: Department[];
+  departmentsGate?: Promise<void>;
+  departmentsFail?: boolean;
   createBodies?: unknown[];
   preflightRequests?: string[];
   launchRequests?: string[];
@@ -127,6 +172,14 @@ async function mockCyclePage(
     contentType: 'application/json',
     body: JSON.stringify(apiResponse(0)),
   }));
+  await page.route('**/api/v1/notification-settings/dingtalk', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      available: true,
+      enabled: false,
+      effectiveEnabled: false,
+    })),
+  }));
   await page.route('**/api/v1/auth/me', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({
@@ -140,10 +193,20 @@ async function mockCyclePage(
       canViewAll: true,
     })),
   }));
-  await page.route('**/api/v1/departments**', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify(apiResponse([])),
-  }));
+  await page.route('**/api/v1/departments**', async (route) => {
+    await options.departmentsGate;
+    if (options.departmentsFail) {
+      return route.fulfill({
+        status: 500,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 500, message: 'department tree unavailable' }),
+      });
+    }
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(options.departments ?? [])),
+    });
+  });
   await page.route('**/api/v1/users**', (route) => {
     const user = {
       id: 'hr-1',
@@ -233,7 +296,7 @@ test('maps cycle states to the compact group, action, and five-stage workflow', 
 test.describe('compact cycle management list', () => {
   test.use({ baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173' });
 
-  test('shows grouped compact columns and sends the selected group to the API', async ({ page }) => {
+  test('shows stable assessment scope instead of a transient next step and sends the selected group to the API', async ({ page }) => {
     const cycleRequests: URL[] = [];
     await mockCyclePage(page, cycleRequests);
 
@@ -242,12 +305,104 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByTestId('cycle-group-attention')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByRole('columnheader', { name: '周期' })).toBeVisible();
     await expect(page.getByRole('columnheader', { name: '当前状态' })).toBeVisible();
-    await expect(page.getByRole('columnheader', { name: '下一步' })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: '考核范围' })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: '下一步' })).toHaveCount(0);
+    await expect(page.getByTestId('cycle-scope-cycle-draft')).toContainText('全公司');
+    await expect(page.getByTestId('cycle-scope-cycle-draft')).toContainText('无排除');
+    await expect(page.getByText('待完成发起检查', { exact: true })).toHaveCount(0);
     await expect(page.getByRole('columnheader', { name: '操作' })).toBeVisible();
     await expect(page.getByTestId('cycle-edit-cycle-draft')).toHaveText('编辑');
     await expect(page.getByTestId('cycle-delete-cycle-draft')).toHaveText('删除');
     await expect(page.getByTestId('cycle-primary-cycle-draft')).toHaveCount(0);
     expect(cycleRequests.some((url) => url.searchParams.get('group') === 'attention')).toBe(true);
+  });
+
+  test('summarizes persisted custom scope and exclusions with parent-child departments deduplicated', async ({ page }) => {
+    await mockCyclePage(page, [], {
+      cycles: [allCompanyWithExclusions, customScopeCycle],
+      departments: scopeDepartments,
+    });
+
+    await page.goto('/cycles?group=attention');
+
+    await expect(page.getByTestId('cycle-scope-cycle-all-exclusions')).toContainText('全公司');
+    await expect(page.getByTestId('cycle-scope-cycle-all-exclusions')).toContainText('排除 1 个部门、2 名员工');
+    await expect(page.getByTestId('cycle-scope-cycle-custom-scope')).toContainText('自定义范围');
+    await expect(page.getByTestId('cycle-scope-cycle-custom-scope')).toContainText('1 个有效部门、另选 2 名员工');
+    await expect(page.getByTestId('cycle-scope-cycle-custom-scope')).toContainText('排除 1 个部门、1 名员工');
+  });
+
+  test('does not show an unverified department count while the organization tree is loading', async ({ page }) => {
+    let releaseDepartments!: () => void;
+    const departmentsGate = new Promise<void>((resolve) => {
+      releaseDepartments = resolve;
+    });
+    await mockCyclePage(page, [], {
+      cycles: [customScopeCycle],
+      departments: scopeDepartments,
+      departmentsGate,
+    });
+
+    await page.goto('/cycles?group=attention');
+
+    try {
+      await expect(page.getByTestId('cycle-scope-cycle-custom-scope')).toContainText('考核范围加载中…');
+      await expect(page.getByTestId('cycle-scope-cycle-custom-scope')).not.toContainText('3 个有效部门');
+    } finally {
+      releaseDepartments();
+    }
+    await expect(page.getByTestId('cycle-scope-cycle-custom-scope')).toContainText('1 个有效部门、另选 2 名员工');
+  });
+
+  test('asks HR to verify the scope instead of guessing when historical department lineage is unavailable', async ({ page }) => {
+    const cycleWithUnavailableDepartment: AssessmentCycle = {
+      ...customScopeCycle,
+      id: 'cycle-historical-scope',
+      participantDeptIds: ['dept-archived', 'dept-child-a'],
+    };
+    await mockCyclePage(page, [], {
+      cycles: [cycleWithUnavailableDepartment],
+      departments: scopeDepartments,
+    });
+
+    await page.goto('/cycles?group=attention');
+
+    const scope = page.getByTestId('cycle-scope-cycle-historical-scope');
+    await expect(scope).toContainText('自定义范围');
+    await expect(scope).toContainText('部分历史部门信息不可用，请进入编辑核对');
+    await expect(scope).not.toContainText('2 个有效部门');
+  });
+
+  test('does not double-count an active root and grandchild when an inactive middle department breaks the lineage', async ({ page }) => {
+    const departmentsWithMissingMiddle: Department[] = [
+      scopeDepartments[0],
+      {
+        id: 'dept-grandchild',
+        name: '基础设施组',
+        parentId: 'dept-inactive-middle',
+        company: 'fuede',
+        sortOrder: 3,
+        isActive: true,
+      },
+    ];
+    const cycleWithBrokenLineage: AssessmentCycle = {
+      ...customScopeCycle,
+      id: 'cycle-broken-lineage',
+      participantDeptIds: ['dept-parent', 'dept-grandchild'],
+      participantUserIds: [],
+      explicitExemptDeptIds: [],
+      explicitExemptUserIds: [],
+    };
+    await mockCyclePage(page, [], {
+      cycles: [cycleWithBrokenLineage],
+      departments: departmentsWithMissingMiddle,
+    });
+
+    await page.goto('/cycles?group=attention');
+
+    const scope = page.getByTestId('cycle-scope-cycle-broken-lineage');
+    await expect(scope).toContainText('部分历史部门信息不可用，请进入编辑核对');
+    await expect(scope).not.toContainText('2 个有效部门');
   });
 
   test('opens the existing edit dialog from the direct draft action', async ({ page }) => {
@@ -415,10 +570,18 @@ test.describe('compact cycle management list', () => {
 
   test('keeps list, creation, and workspace primary actions usable at 390px', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
-    await mockCyclePage(page);
+    await mockCyclePage(page, [], {
+      cycles: [{ ...customScopeCycle, id: draftCycle.id, name: draftCycle.name }],
+      departments: scopeDepartments,
+    });
     await page.goto('/cycles?group=attention');
 
     await expect(page.getByTestId('cycle-compact-card-cycle-draft')).toBeVisible();
+    await expect(page.getByTestId('cycle-scope-mobile-cycle-draft')).toContainText('自定义范围');
+    await expect(page.getByTestId('cycle-scope-mobile-cycle-draft')).toContainText('1 个有效部门、另选 2 名员工');
+    await expect(page.getByTestId('cycle-scope-mobile-cycle-draft')).toContainText('排除 1 个部门、1 名员工');
+    await expect(page.getByText('下一步', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('待完成发起检查', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('cycle-edit-mobile-cycle-draft')).toHaveText('编辑');
     await expect(page.getByTestId('cycle-delete-mobile-cycle-draft')).toHaveText('删除');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
