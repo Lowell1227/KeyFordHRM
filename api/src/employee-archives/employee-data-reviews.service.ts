@@ -75,6 +75,11 @@ export class EmployeeDataReviewsService {
     const [items, total] = await Promise.all([
       this.prisma.employeeDataChangeRequest.findMany({
         where,
+        include: {
+          createdBy: { select: { id: true, name: true, sysRole: true } },
+          profileReviewedBy: { select: { id: true, name: true } },
+          performanceReviewedBy: { select: { id: true, name: true } },
+        },
         orderBy: { createdAt: 'desc' },
         skip: (query.page - 1) * query.pageSize,
         take: query.pageSize,
@@ -289,9 +294,6 @@ export class EmployeeDataReviewsService {
           if (request.profileReviewStatus !== 'pending') updateData.appliedAt = now;
         }
         await tx.employeeDataChangeRequest.update({ where: { id: requestId }, data: updateData });
-        if (scope === 'profile' && request.sourceType === 'employee_roster_import' && request.sourceBatchId) {
-          await this.finalizeFullRosterOrganizationIfReady(tx, request.sourceBatchId);
-        }
         if (request.sourceType === 'employee_roster_import' && request.sourceBatchId) {
           await this.completeImportBatchIfReady(tx, request.sourceBatchId);
         }
@@ -566,7 +568,15 @@ export class EmployeeDataReviewsService {
       const contracts = Array.isArray(proposed.contracts)
         ? proposed.contracts.map((item) => this.record(item))
         : [];
-      await this.reconcileRosterContracts(tx, userId, employee, contracts, request.sourceBatchId, operator);
+      await this.reconcileRosterContracts(
+        tx,
+        userId,
+        employee,
+        contracts,
+        request.sourceBatchId,
+        operator,
+        request.sourceType,
+      );
     }
     const organizationLeaderPaths = Array.isArray(employee.organizationLeaderPaths)
       ? employee.organizationLeaderPaths
@@ -584,10 +594,9 @@ export class EmployeeDataReviewsService {
           message: `部门“${fullPath}”负责人已发生变化，请重新提交审核`,
         });
       }
-      await tx.department.update({
-        where: { id: department.id },
-        data: { leaderId: userId },
-      });
+      if (department.leaderId !== userId) {
+        await this.queueDepartmentLeaderChange(tx, department, userId, operator);
+      }
     }
     return userId;
   }
@@ -741,65 +750,88 @@ export class EmployeeDataReviewsService {
   private async ensureReviewedDepartmentPath(
     tx: Prisma.TransactionClient,
     path: string[],
-    fallbackCompany: CompanyCode,
-    organizationNodes: Record<string, unknown>[],
-  ): Promise<{ id: string; leaderId: string | null }> {
-    let parentId: string | null = null;
-    let leaf: { id: string; leaderId: string | null } | null = null;
+    _fallbackCompany: CompanyCode,
+    _organizationNodes: Record<string, unknown>[],
+  ): Promise<{ id: string; name: string; fullPath: string | null; leaderId: string | null }> {
+    let leaf: { id: string; name: string; fullPath: string | null; leaderId: string | null } | null = null;
     for (let index = 0; index < path.length; index++) {
       const segments = path.slice(0, index + 1);
       const fullPath = segments.join(' / ');
-      const node = organizationNodes.find((item) => item.fullPath === fullPath);
-      const company = this.enumValue(node?.company, Object.values(CompanyCode), fallbackCompany);
       const existing = await tx.department.findMany({
         where: {
+          isActive: true,
           OR: [
             { fullPath },
             { name: segments.at(-1)! },
           ],
         },
-        select: { id: true, leaderId: true, fullPath: true },
+        select: { id: true, name: true, leaderId: true, fullPath: true },
       });
       const exact = existing.filter((item) => (
-        item.fullPath?.replaceAll('／', '/').replace(/\s*\/\s*/g, '/').trim()
+        (item.fullPath ?? (segments.length === 1 ? item.name : ''))
+          .replaceAll('／', '/').replace(/\s*\/\s*/g, '/').trim()
           === fullPath.replaceAll('／', '/').replace(/\s*\/\s*/g, '/').trim()
       ));
       if (exact.length > 1) {
         throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: `组织路径“${fullPath}”存在重复，请先清理` });
       }
-      if (exact.length === 1) {
-        await tx.department.update({
-          where: { id: exact[0].id },
-          data: {
-            name: segments.at(-1)!,
-            fullPath,
-            parentId,
-            company,
-            sortOrder: typeof node?.sortOrder === 'number' ? node.sortOrder : index,
-            isActive: true,
-            dingtalkDeptId: null,
-          },
-        });
-        leaf = exact[0];
-      } else {
-        leaf = await tx.department.create({
-          data: {
-            name: segments.at(-1)!,
-            fullPath,
-            parentId,
-            company,
-            sortOrder: typeof node?.sortOrder === 'number' ? node.sortOrder : index,
-            isActive: true,
-          },
-          select: { id: true, leaderId: true },
+      if (exact.length === 0) {
+        throw new BadRequestException({
+          code: ERROR_CODE.CONFLICT,
+          message: `部门“${fullPath}”尚未通过部门架构审核`,
         });
       }
-      parentId = leaf.id;
+      leaf = exact[0];
     }
     if (!leaf) {
       throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '所属部门路径不能为空' });
     }
     return leaf;
+  }
+
+  private async queueDepartmentLeaderChange(
+    tx: Prisma.TransactionClient,
+    department: { id: string; name: string; fullPath: string | null; leaderId: string | null },
+    leaderId: string | null,
+    operator: AuthUser,
+  ): Promise<void> {
+    const pending = await tx.departmentChangeRequest.findFirst({
+      where: { departmentId: department.id, action: 'update_leader', status: 'pending' },
+    });
+    if (pending) {
+      const pendingProposed = this.record(pending.proposedValue);
+      if (this.nullableString(pendingProposed.leaderId) === leaderId) return;
+      throw new BadRequestException({
+        code: ERROR_CODE.CONFLICT,
+        message: `部门“${department.fullPath ?? department.name}”已有待审核的负责人变更`,
+      });
+    }
+    const request = await tx.departmentChangeRequest.create({
+      data: {
+        departmentId: department.id,
+        departmentName: department.name,
+        action: 'update_leader',
+        status: 'pending',
+        baseValue: {
+          id: department.id,
+          name: department.name,
+          fullPath: department.fullPath,
+          leaderId: department.leaderId,
+        },
+        proposedValue: { leaderId },
+        createdById: operator.id,
+      },
+    });
+    await tx.auditLog.create({
+      data: {
+        userId: operator.id,
+        action: 'submit_department_change',
+        entityType: 'department_change_request',
+        entityId: request.id,
+        oldValue: { leaderId: department.leaderId },
+        newValue: { action: 'update_leader', departmentId: department.id, leaderId },
+      },
+    });
   }
 
   private async assertProfileBaseStillCurrent(
@@ -839,10 +871,13 @@ export class EmployeeDataReviewsService {
         employeeContracts: {
           where: { isActive: true },
           select: {
+            id: true,
             contractType: true,
             sequence: true,
             name: true,
+            signingCompany: true,
             signedAt: true,
+            effectiveFrom: true,
             expiresAt: true,
             termType: true,
             originalCompany: true,
@@ -915,21 +950,23 @@ export class EmployeeDataReviewsService {
     contracts: Record<string, unknown>[],
     sourceBatchId: string | null,
     operator: AuthUser,
+    sourceType = 'employee_roster_import',
   ): Promise<void> {
     const currentActive = await tx.employeeContract.findMany({
       where: { userId, isActive: true },
       select: { id: true, contractType: true, sequence: true },
     });
-    const proposedKeys = new Set<string>();
+    const retainedIds = new Set<string>();
     for (const [index, contract] of contracts.entries()) {
+      const contractId = this.nullableString(contract.id);
       const contractType = this.nullableString(contract.kind ?? contract.contractType) ?? 'contract';
       const sequence = typeof contract.sequence === 'number' ? contract.sequence : index;
-      proposedKeys.add(this.contractKey(contractType, sequence));
       const contractData = {
+        sequence,
         name: this.nullableString(contract.name),
         signingCompany: this.nullableString(contract.signingCompany ?? employee.companyText),
         signedAt: this.nullableDate(contract.signedAt),
-        effectiveFrom: this.nullableDate(contract.signedAt),
+        effectiveFrom: this.nullableDate(contract.effectiveFrom ?? contract.signedAt),
         expiresAt: this.nullableDate(contract.expiresAt),
         termType: this.nullableString(contract.termText ?? contract.termType),
         originalCompany: this.nullableString(contract.originalCompany),
@@ -942,23 +979,34 @@ export class EmployeeDataReviewsService {
         isActive: true,
         endedAt: null,
       };
-      const activeContract = currentActive.find((item) => (
-        item.contractType === contractType && item.sequence === sequence
-      ));
+      const activeContract = contractId
+        ? currentActive.find((item) => item.id === contractId)
+        : sourceType === 'employee_roster_import' ? currentActive.find((item) => (
+          !retainedIds.has(item.id)
+          && item.contractType === contractType
+          && item.sequence === sequence
+        )) : undefined;
+      if (contractId && !activeContract) {
+        throw new BadRequestException({
+          code: ERROR_CODE.CONFLICT,
+          message: '合同记录已发生变化，请重新提交审核',
+        });
+      }
       if (activeContract) {
+        retainedIds.add(activeContract.id);
         await tx.employeeContract.update({
           where: { id: activeContract.id },
           data: contractData,
         });
       } else {
         await tx.employeeContract.create({
-          data: { userId, contractType, sequence, ...contractData },
+          data: { userId, contractType, ...contractData },
         });
       }
     }
     const endedAt = new Date();
     for (const contract of currentActive) {
-      if (proposedKeys.has(this.contractKey(contract.contractType, contract.sequence))) continue;
+      if (retainedIds.has(contract.id)) continue;
       await tx.employeeContract.update({
         where: { id: contract.id },
         data: { isActive: false, endedAt },
@@ -970,11 +1018,15 @@ export class EmployeeDataReviewsService {
     left: Record<string, unknown>[],
     right: Record<string, unknown>[],
   ): boolean {
+    const compareById = right.length > 0 && right.every((contract) => Boolean(this.nullableString(contract.id)));
     const normalize = (contract: Record<string, unknown>) => ({
+      id: compareById ? this.nullableString(contract.id) : null,
       contractType: this.nullableString(contract.contractType ?? contract.kind) ?? 'contract',
       sequence: typeof contract.sequence === 'number' ? contract.sequence : 0,
       name: this.nullableString(contract.name),
+      signingCompany: this.nullableString(contract.signingCompany),
       signedAt: this.comparableValue(contract.signedAt),
+      effectiveFrom: this.comparableValue(contract.effectiveFrom),
       expiresAt: this.comparableValue(contract.expiresAt),
       termType: this.nullableString(contract.termType ?? contract.termText),
       originalCompany: this.nullableString(contract.originalCompany),
@@ -985,58 +1037,15 @@ export class EmployeeDataReviewsService {
     });
     const sort = (items: Record<string, unknown>[]) => items
       .map(normalize)
-      .sort((a, b) => this.contractKey(a.contractType, a.sequence).localeCompare(this.contractKey(b.contractType, b.sequence)));
+      .sort((a, b) => (
+        (a.id ?? this.contractKey(a.contractType, a.sequence))
+          .localeCompare(b.id ?? this.contractKey(b.contractType, b.sequence))
+      ));
     return JSON.stringify(sort(left)) === JSON.stringify(sort(right));
   }
 
   private contractKey(contractType: string, sequence: number): string {
     return `${contractType}:${sequence}`;
-  }
-
-  private async finalizeFullRosterOrganizationIfReady(
-    tx: Prisma.TransactionClient,
-    batchId: string,
-  ): Promise<void> {
-    const remainingProfiles = await tx.employeeDataChangeRequest.count({
-      where: {
-        sourceBatchId: batchId,
-        profileReviewStatus: { in: ['pending', 'applying'] },
-      },
-    });
-    if (remainingProfiles > 0) return;
-    const batch = await tx.employeeImportBatch.findUnique({
-      where: { id: batchId },
-      select: { mode: true, summary: true },
-    });
-    if (!batch || batch.mode !== 'full') return;
-    const summary = this.record(batch.summary);
-    if (typeof summary.blockingErrorCount === 'number' && summary.blockingErrorCount > 0) return;
-    const organizationPlan = Array.isArray(summary.organizationPlan)
-      ? summary.organizationPlan.map((item) => this.record(item))
-      : [];
-    const desiredFullPaths = organizationPlan
-      .map((node) => this.nullableString(node.fullPath))
-      .filter((item): item is string => Boolean(item));
-    if (desiredFullPaths.length === 0) return;
-    await tx.department.updateMany({
-      where: {
-        OR: [
-          { fullPath: null },
-          { fullPath: { notIn: desiredFullPaths } },
-        ],
-      },
-      data: { isActive: false },
-    });
-    const pathsWithoutLeader = organizationPlan
-      .filter((node) => !this.nullableString(node.leaderName))
-      .map((node) => this.nullableString(node.fullPath))
-      .filter((item): item is string => Boolean(item));
-    if (pathsWithoutLeader.length > 0) {
-      await tx.department.updateMany({
-        where: { fullPath: { in: pathsWithoutLeader } },
-        data: { leaderId: null },
-      });
-    }
   }
 
   private async completeImportBatchIfReady(

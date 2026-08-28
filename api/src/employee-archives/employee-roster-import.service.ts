@@ -16,6 +16,7 @@ import { parseEmployeeRosterExcel, ParsedEmployeeRosterRow } from './employee-ro
 import {
   buildRosterOrganizationPlan,
   mapRosterCompany,
+  RosterOrganizationNode,
   rosterOrganizationKeyForRow,
 } from './employee-roster-organization';
 
@@ -128,11 +129,20 @@ export class EmployeeRosterImportService {
       const currentOrganizationDepartments = batch.mode === 'full'
         ? await tx.department.findMany({
           select: {
+            id: true,
             fullPath: true,
             name: true,
+            parentId: true,
+            leaderId: true,
             company: true,
             sortOrder: true,
             isActive: true,
+            _count: {
+              select: {
+                members: { where: { deletedAt: null } },
+                children: { where: { isActive: true } },
+              },
+            },
           },
         })
         : [];
@@ -155,6 +165,15 @@ export class EmployeeRosterImportService {
           && !desiredOrganizationPaths.has(this.normalizeOrgPath(department.fullPath))
         ))
       );
+      if (organizationNeedsReview) {
+        await this.queueRosterOrganizationChanges(
+          tx,
+          batchId,
+          organizationPlan,
+          currentOrganizationDepartments,
+          operator,
+        );
+      }
       const organizationReviewCarrierRow = organizationNeedsReview ? actionableRows[0]?.rowNumber : null;
       const topLevelLeaderNames = new Set(
         organizationPlan
@@ -192,10 +211,13 @@ export class EmployeeRosterImportService {
               employeeContracts: {
                 where: { isActive: true },
                 select: {
+                  id: true,
                   contractType: true,
                   sequence: true,
                   name: true,
+                  signingCompany: true,
                   signedAt: true,
+                  effectiveFrom: true,
                   expiresAt: true,
                   termType: true,
                   originalCompany: true,
@@ -331,10 +353,15 @@ export class EmployeeRosterImportService {
           currentOrganizationLeaders[fullPath]
             !== importRow.matchedUserId
         ));
+        const proposedContracts = raw.contracts.map((contract) => ({
+          ...contract,
+          signingCompany: raw.employee.companyText,
+          effectiveFrom: contract.signedAt,
+        }));
         const needsProfileReview = !current
           || !this.sameReviewRecord(currentEmployee, proposedEmployee, employeeReviewKeys)
           || !this.sameReviewRecord(currentProfile, proposedProfile)
-          || !this.sameContractSet(current?.employeeContracts ?? [], raw.contracts)
+          || !this.sameContractSet(current?.employeeContracts ?? [], proposedContracts)
           || needsLeaderReview
           || importRow.rowNumber === organizationReviewCarrierRow;
         if (!needsProfileReview && !needsPerformanceReview) continue;
@@ -344,7 +371,7 @@ export class EmployeeRosterImportService {
         const proposedValue = this.toJson({
           employee: proposedEmployee,
           profile: proposedProfile,
-          contracts: raw.contracts,
+          contracts: proposedContracts,
           performance: approvedPerformanceManagerId
             ? {
               managerId: approvedPerformanceManagerId,
@@ -419,10 +446,13 @@ export class EmployeeRosterImportService {
               employeeContracts: {
                 where: { isActive: true },
                 select: {
+                  id: true,
                   contractType: true,
                   sequence: true,
                   name: true,
+                  signingCompany: true,
                   signedAt: true,
+                  effectiveFrom: true,
                   expiresAt: true,
                   termType: true,
                   originalCompany: true,
@@ -540,6 +570,125 @@ export class EmployeeRosterImportService {
       };
 
     }, { timeout: 60_000 });
+  }
+
+  private async queueRosterOrganizationChanges(
+    tx: Prisma.TransactionClient,
+    batchId: string,
+    plan: RosterOrganizationNode[],
+    currentDepartments: Array<{
+      id: string;
+      name: string;
+      fullPath: string | null;
+      parentId: string | null;
+      leaderId: string | null;
+      company: CompanyCode;
+      sortOrder: number;
+      isActive: boolean;
+      _count?: { members: number; children: number };
+    }>,
+    operator: AuthUser,
+  ): Promise<void> {
+    const currentByPath = new Map(
+      currentDepartments
+        .filter((item) => item.fullPath)
+        .map((item) => [this.normalizeOrgPath(item.fullPath!), item]),
+    );
+    const desiredPaths = new Set(plan.map((node) => this.normalizeOrgPath(node.fullPath)));
+    const submit = async (
+      action: 'create' | 'update_structure' | 'update_leader' | 'delete',
+      departmentId: string | null,
+      departmentName: string,
+      baseValue: Record<string, unknown>,
+      proposedValue: Record<string, unknown>,
+    ) => {
+      const request = await tx.departmentChangeRequest.create({
+        data: {
+          departmentId,
+          departmentName,
+          action,
+          status: 'pending',
+          baseValue: this.toJson(baseValue),
+          proposedValue: this.toJson({ ...proposedValue, sourceBatchId: batchId }),
+          createdById: operator.id,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: operator.id,
+          action: 'submit_department_change',
+          entityType: 'department_change_request',
+          entityId: request.id,
+          oldValue: this.toJson(baseValue),
+          newValue: this.toJson({ action, departmentId, proposedValue, sourceBatchId: batchId }),
+        },
+      });
+    };
+
+    for (const node of [...plan].sort((left, right) => left.depth - right.depth || left.sortOrder - right.sortOrder)) {
+      const current = currentByPath.get(this.normalizeOrgPath(node.fullPath));
+      const parentFullPath = node.depth > 0
+        ? node.fullPath.split(' / ').slice(0, -1).join(' / ')
+        : null;
+      const parent = parentFullPath ? currentByPath.get(this.normalizeOrgPath(parentFullPath)) : null;
+      if (!current) {
+        await submit('create', null, node.name, {}, {
+          name: node.name,
+          parentId: parent?.id ?? null,
+          parentFullPath,
+          company: node.company,
+          sortOrder: node.sortOrder,
+          fullPath: node.fullPath,
+        });
+        continue;
+      }
+      if (
+        current.name !== node.name
+        || current.company !== node.company
+        || current.sortOrder !== node.sortOrder
+        || !current.isActive
+      ) {
+        await submit('update_structure', current.id, current.name, {
+          id: current.id,
+          name: current.name,
+          parentId: current.parentId,
+          fullPath: current.fullPath,
+          company: current.company,
+          sortOrder: current.sortOrder,
+          isActive: current.isActive,
+        }, {
+          id: current.id,
+          name: node.name,
+          parentId: parent?.id ?? current.parentId,
+          parentFullPath,
+          company: node.company,
+          sortOrder: node.sortOrder,
+          isActive: true,
+        });
+      }
+      if (!node.leaderName && current.leaderId) {
+        await submit('update_leader', current.id, current.name, {
+          id: current.id,
+          name: current.name,
+          fullPath: current.fullPath,
+          leaderId: current.leaderId,
+        }, { leaderId: null });
+      }
+    }
+
+    for (const current of currentDepartments.filter((item) => (
+      item.isActive && (!item.fullPath || !desiredPaths.has(this.normalizeOrgPath(item.fullPath)))
+    ))) {
+      await submit('delete', current.id, current.name, {
+        id: current.id,
+        name: current.name,
+        fullPath: current.fullPath,
+        parentId: current.parentId,
+        isActive: true,
+        directMemberCount: current._count?.members ?? 0,
+        childDepartmentCount: current._count?.children ?? 0,
+      }, { isActive: false });
+    }
   }
 
   async createPreviewFromRows(rows: ParsedEmployeeRosterRow[], source: PreviewSource, operator: AuthUser) {
@@ -973,13 +1122,17 @@ export class EmployeeRosterImportService {
 
   private sameContractSet(
     current: Array<Record<string, unknown>>,
-    proposed: ParsedEmployeeRosterRow['contracts'],
+    proposed: Array<Record<string, unknown>>,
   ): boolean {
+    const compareById = proposed.length > 0 && proposed.every((contract) => typeof contract.id === 'string');
     const normalize = (contract: Record<string, unknown>) => ({
+      id: compareById ? contract.id ?? null : null,
       contractType: contract.contractType ?? contract.kind ?? 'contract',
       sequence: contract.sequence ?? 0,
       name: contract.name ?? null,
+      signingCompany: contract.signingCompany ?? null,
       signedAt: this.comparableValue(contract.signedAt),
+      effectiveFrom: this.comparableValue(contract.effectiveFrom),
       expiresAt: this.comparableValue(contract.expiresAt),
       termType: contract.termType ?? contract.termText ?? null,
       originalCompany: contract.originalCompany ?? null,
@@ -988,10 +1141,12 @@ export class EmployeeRosterImportService {
       nonCompeteAgreement: contract.nonCompeteAgreement ?? null,
       portraitAgreement: contract.portraitAgreement ?? null,
     });
-    const sortKey = (contract: ReturnType<typeof normalize>) => `${contract.contractType}:${contract.sequence}`;
+    const sortKey = (contract: ReturnType<typeof normalize>) => (
+      String(contract.id ?? `${contract.contractType}:${contract.sequence}`)
+    );
     const left = current.map((item) => normalize(item)).sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
     const right = proposed
-      .map((item) => normalize(item as unknown as Record<string, unknown>))
+      .map((item) => normalize(item))
       .sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
     return JSON.stringify(left) === JSON.stringify(right);
   }

@@ -11,6 +11,37 @@ const operator = {
 };
 
 describe('EmployeeDataReviewsService', () => {
+  it('HR 管理员查看待审核档案时能识别普通 HR 提交人', async () => {
+    const item = {
+      id: 'review-from-ordinary-hr',
+      employeeName: '员工甲',
+      profileReviewStatus: 'pending',
+      performanceReviewStatus: 'not_required',
+      createdBy: { id: 'ordinary-hr-1', name: '余焱玲', sysRole: SysRole.hr_user },
+    };
+    const prisma = {
+      employeeDataChangeRequest: {
+        findMany: jest.fn().mockResolvedValue([item]),
+        count: jest.fn().mockResolvedValue(1),
+      },
+    };
+    const service = new EmployeeDataReviewsService(prisma as any);
+
+    const result = await service.findAll({ page: 1, pageSize: 20, status: 'pending' });
+
+    expect(result.items[0]).toMatchObject({
+      id: 'review-from-ordinary-hr',
+      createdBy: { name: '余焱玲', sysRole: SysRole.hr_user },
+    });
+    expect(prisma.employeeDataChangeRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      include: {
+        createdBy: { select: { id: true, name: true, sysRole: true } },
+        profileReviewedBy: { select: { id: true, name: true } },
+        performanceReviewedBy: { select: { id: true, name: true } },
+      },
+    }));
+  });
+
   it('批量审核隔离异常员工，合法绩效关系仍然生效', async () => {
     const requests = new Map<string, any>([
       ['review-valid', {
@@ -324,11 +355,15 @@ describe('EmployeeDataReviewsService', () => {
         create: jest.fn().mockResolvedValue({ id: 'employment-new' }),
       },
       department: {
-        findMany: jest.fn()
-          .mockResolvedValueOnce([])
-          .mockResolvedValueOnce([{ id: 'dept-1', leaderId: null, fullPath: '项目中心' }]),
-        create: jest.fn().mockResolvedValue({ id: 'dept-1', leaderId: null, fullPath: '项目中心' }),
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'dept-1', name: '项目中心', leaderId: null, fullPath: '项目中心' },
+        ]),
+        create: jest.fn(),
         update: jest.fn().mockResolvedValue({ id: 'dept-1' }),
+      },
+      departmentChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'department-review-1' }),
       },
       employeeContract: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-new' }) },
@@ -368,9 +403,14 @@ describe('EmployeeDataReviewsService', () => {
         sourceBatchId: 'batch-1',
       }),
     });
-    expect(tx.department.update).toHaveBeenCalledWith({
-      where: { id: 'dept-1' },
-      data: { leaderId: 'employee-new' },
+    expect(tx.department.update).not.toHaveBeenCalled();
+    expect(tx.departmentChangeRequest.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        departmentId: 'dept-1',
+        action: 'update_leader',
+        status: 'pending',
+        proposedValue: { leaderId: 'employee-new' },
+      }),
     });
   });
 
@@ -761,13 +801,23 @@ describe('EmployeeDataReviewsService', () => {
       actualRegularDate: null, leaveDate: null, probationMonths: 3,
       employmentType: 'full_time', employeeStatus: 'active',
     };
+    const existingContract = {
+      id: 'contract-1', contractType: 'contract', sequence: 0, name: '劳动合同',
+      signingCompany: '孚德', signedAt: '2024-01-01T00:00:00.000Z',
+      effectiveFrom: '2024-01-02T00:00:00.000Z', expiresAt: '2026-12-31T00:00:00.000Z',
+      termType: '3年', originalCompany: null, newCompany: null,
+      confidentialityAgreement: null, nonCompeteAgreement: null, portraitAgreement: null,
+    };
     const request = {
       id: 'review-profile-only', userId: 'employee-1', employeeNo: '001', employeeName: '员工一',
       sourceType: 'manual_profile_change', sourceBatchId: null,
       profileReviewStatus: 'pending', performanceReviewStatus: 'not_required', validationErrors: [],
-      baseValue: { employee: baseEmployee, profile: { gender: '男' }, performance: { managerId: 'manager-1' } },
+      baseValue: {
+        employee: baseEmployee, profile: { gender: '男' }, contracts: [existingContract],
+        performance: { managerId: 'manager-1' },
+      },
       proposedValue: {
-        employee: baseEmployee, profile: { gender: '女' }, contracts: [],
+        employee: baseEmployee, profile: { gender: '女' }, contracts: [existingContract],
         performance: { managerId: 'manager-1' },
       },
     };
@@ -784,6 +834,12 @@ describe('EmployeeDataReviewsService', () => {
           entryDate: new Date('2024-01-01T00:00:00.000Z'), plannedRegularDate: null,
           actualRegularDate: null, leaveDate: null, employmentType: 'full_time', status: 'active',
           employeeProfile: { gender: '男' },
+          employeeContracts: [{
+            ...existingContract,
+            signedAt: new Date(existingContract.signedAt),
+            effectiveFrom: new Date(existingContract.effectiveFrom),
+            expiresAt: new Date(existingContract.expiresAt),
+          }],
           employmentHistory: [{
             company: 'fuede', jobGrade: 'P3', jobFamily: '运营', directManagerId: 'roster-manager',
             directManager: null, workLocation: '杭州', probationMonths: 3,
@@ -1047,5 +1103,106 @@ describe('EmployeeDataReviewsService', () => {
         name: '重新签订合同', isActive: true, endedAt: null,
       }),
     });
+  });
+
+  it('手工档案删减合同后仍按不可变合同 ID 更新保留记录', async () => {
+    const update = jest.fn();
+    const tx = {
+      employeeContract: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'contract-a', contractType: 'contract', sequence: 0 },
+          { id: 'contract-b', contractType: 'contract', sequence: 1 },
+        ]),
+        update,
+        create: jest.fn(),
+      },
+    };
+    const service = new EmployeeDataReviewsService({} as any);
+
+    await (service as any).reconcileRosterContracts(
+      tx,
+      'employee-1',
+      { companyText: '孚德' },
+      [{
+        id: 'contract-b',
+        contractType: 'contract',
+        sequence: 0,
+        name: '保留的第二份合同',
+        signingCompany: '孚德体育文化',
+        signedAt: '2025-01-01',
+        effectiveFrom: '2025-02-01',
+      }],
+      null,
+      operator,
+      'manual_archive_change',
+    );
+
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'contract-b' },
+      data: expect.objectContaining({
+        sequence: 0,
+        name: '保留的第二份合同',
+        signedAt: new Date('2025-01-01'),
+        effectiveFrom: new Date('2025-02-01'),
+      }),
+    });
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'contract-a' },
+      data: { isActive: false, endedAt: expect.any(Date) },
+    });
+    expect(tx.employeeContract.create).not.toHaveBeenCalled();
+  });
+
+  it('合同并发校验覆盖签约公司、生效日期和不可变 ID', () => {
+    const service = new EmployeeDataReviewsService({} as any);
+    const base = [{
+      id: 'contract-1', contractType: 'contract', sequence: 0, name: '劳动合同',
+      signingCompany: '孚德', signedAt: '2025-01-01', effectiveFrom: '2025-01-02',
+    }];
+
+    expect((service as any).sameContractSet(base, [{ ...base[0], signingCompany: '北京孚德' }])).toBe(false);
+    expect((service as any).sameContractSet(base, [{ ...base[0], effectiveFrom: '2025-02-01' }])).toBe(false);
+    expect((service as any).sameContractSet(base, [{ ...base[0], id: 'contract-2' }])).toBe(false);
+  });
+
+  it('员工档案审核只解析已生效部门，不直接改写或新建组织架构', async () => {
+    const update = jest.fn();
+    const create = jest.fn();
+    const service = new EmployeeDataReviewsService({} as any);
+    const existingTx = {
+      department: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'dept-1', name: '项目中心', leaderId: null, fullPath: '项目中心' },
+        ]),
+        update,
+        create,
+      },
+    };
+
+    await expect((service as any).ensureReviewedDepartmentPath(
+      existingTx,
+      ['项目中心'],
+      'fuede',
+      [{ fullPath: '项目中心', company: 'beijing_fuede', sortOrder: 99 }],
+    )).resolves.toEqual({ id: 'dept-1', name: '项目中心', fullPath: '项目中心', leaderId: null });
+    expect(update).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+
+    const missingTx = {
+      department: {
+        findMany: jest.fn().mockResolvedValue([]),
+        update,
+        create,
+      },
+    };
+    await expect((service as any).ensureReviewedDepartmentPath(
+      missingTx,
+      ['项目中心', '新部门'],
+      'fuede',
+      [],
+    )).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '部门“项目中心”尚未通过部门架构审核' }),
+    });
+    expect(create).not.toHaveBeenCalled();
   });
 });

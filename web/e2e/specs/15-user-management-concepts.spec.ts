@@ -422,7 +422,7 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await dialog.getByRole('button', { name: '绩效直属上级说明' }).hover();
   const managerTooltip = page.locator('.el-popper[role="tooltip"]:visible').filter({ hasText: '目标审核、主管评分和待办归属' });
   await expect(managerTooltip.locator('.person-settings__tooltip-line')).toHaveCount(4);
-  await expect(managerTooltip).toContainText('员工名册 → 待审核变更');
+  await expect(managerTooltip).toContainText('待处理事项 → 员工档案');
   await dialog.getByRole('button', { name: '业务职责说明' }).hover();
   const responsibilityTooltip = page.locator('.el-popper[role="tooltip"]:visible').filter({ hasText: '员工是基础人员身份' });
   await expect(responsibilityTooltip.locator('.person-settings__tooltip-line')).toHaveCount(3);
@@ -431,7 +431,7 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await dialog.locator('.el-form-item').filter({ hasText: '绩效直属上级' }).locator('.el-select').click();
   await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '方园' }).click();
   await expect(dialog).toContainText('提交后待 HR 审核');
-  await expect(dialog).toContainText('审核入口：员工名册 > 待审核变更');
+  await expect(dialog).toContainText('审核入口：待处理事项 > 员工档案');
   await expect(dialog.locator('.person-settings__alert')).toHaveCount(0);
   await expect(dialog).not.toContainText('升级为主管');
   await expect(dialog).not.toContainText('主管权限：未开通');
@@ -440,10 +440,10 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await expect.poll(() => performanceReviewBody).toEqual({
     managerId: manager.id,
   });
-  await expect(page.getByText('员工变更审核', { exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: /待审核变更/ })).toBeVisible();
+  await expect(page.getByText('审核事项', { exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /员工档案 1/ })).toBeVisible();
 
-  await page.getByRole('button', { name: '正式员工档案' }).click();
+  await page.getByRole('button', { name: '员工名册' }).click();
   await expect(page.getByRole('columnheader', { name: '岗位', exact: true })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: '系统权限', exact: true })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: '业务职责', exact: true })).toBeVisible();
@@ -453,7 +453,8 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await expect(rosterDialog.locator('.person-settings__summary')).toContainText('标准用户');
 });
 
-test('opens one employee archive with employment history, contracts and an identity-only DingTalk switch', async ({ page }) => {
+test('edits the whole employee archive in place and supports contract row changes', async ({ page }) => {
+  let submittedDraft: Record<string, any> | null = null;
   const employee = {
     id: 'employee-yu',
     name: '余焱玲',
@@ -551,6 +552,13 @@ test('opens one employee archive with employment history, contracts and an ident
   await page.route('**/api/v1/employee-archives/employee-yu', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse(archive)),
   }));
+  await page.route('**/api/v1/employee-archives/employee-yu/draft', async (route) => {
+    submittedDraft = route.request().postDataJSON();
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ id: 'review-1', profileReviewStatus: 'pending' })),
+    });
+  });
 
   await page.goto(`${webBaseUrl}/users`);
   await page.getByRole('button', { name: '员工名册' }).click();
@@ -564,6 +572,20 @@ test('opens one employee archive with employment history, contracts and an ident
   await expect(drawer).toContainText('劳动合同');
   await expect(drawer).toContainText('仅影响钉钉登录和消息通知，不读取或同步钉钉组织');
   await expect(drawer.getByRole('switch')).toBeChecked();
+
+  await drawer.getByRole('button', { name: '编辑档案' }).click();
+  await expect(page.getByRole('dialog', { name: '编辑员工档案' })).toHaveCount(0);
+  await expect(drawer.getByRole('textbox', { name: '姓名' })).toHaveValue('余焱玲');
+  const firstContract = drawer.locator('.contract-card').first();
+  await firstContract.getByRole('textbox', { name: '合同名称' }).fill('劳动合同（修订）');
+  await drawer.getByRole('button', { name: '新增合同' }).click();
+  await expect(drawer.locator('.contract-card')).toHaveCount(2);
+  await drawer.locator('.contract-card').nth(1).getByRole('button', { name: '移除' }).click();
+  await drawer.getByRole('button', { name: '保存并提交审核' }).click();
+  await expect.poll(() => submittedDraft).toMatchObject({
+    employee: { name: '余焱玲' },
+    contracts: [{ id: 'contract-1', name: '劳动合同（修订）', sequence: 0 }],
+  });
 
   await page.setViewportSize({ width: 390, height: 844 });
   await expect.poll(() => drawer.evaluate((element) => ({

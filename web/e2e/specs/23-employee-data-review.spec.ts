@@ -9,7 +9,7 @@ const apiResponse = (data: unknown) => ({
 
 const webBaseUrl = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173';
 
-test('HR can review profile and performance changes together without one invalid row blocking the rest', async ({ page }) => {
+test('HR administrator reviews employee and department changes from categorized pending items', async ({ page }) => {
   const employee = {
     id: 'employee-1', name: '员工一', employeeNo: '001', deptId: 'dept-1', deptName: '项目中心',
     position: '项目专员', employmentType: 'full_time', status: 'active', directManagerId: 'manager-old',
@@ -20,8 +20,24 @@ test('HR can review profile and performance changes together without one invalid
     {
       id: '11111111-1111-4111-8111-111111111111', userId: 'employee-1', employeeNo: '001', employeeName: '员工一',
       sourceType: 'employee_roster_import', profileReviewStatus: 'pending', performanceReviewStatus: 'pending',
-      validationErrors: [], baseValue: { employee: { position: '项目助理' }, performance: { managerId: 'manager-old' } },
-      proposedValue: { employee: { position: '项目专员' }, performance: { managerId: 'manager-new', managerName: '新绩效上级' } },
+      validationErrors: [],
+      baseValue: {
+        employee: { position: '项目助理' },
+        performance: { managerId: 'manager-old' },
+        contracts: [{
+          id: 'contract-1', name: '劳动合同', signingCompany: '孚德',
+          signedAt: '2024-01-01', effectiveFrom: '2024-01-02', expiresAt: '2026-12-31',
+        }],
+      },
+      proposedValue: {
+        employee: { position: '项目专员' },
+        performance: { managerId: 'manager-new', managerName: '新绩效上级' },
+        contracts: [{
+          id: 'contract-1', name: '劳动合同', signingCompany: '孚德体育文化',
+          signedAt: '2024-01-01', effectiveFrom: '2024-02-01', expiresAt: '2026-12-31',
+        }],
+      },
+      createdBy: { id: 'ordinary-hr-1', name: '余焱玲', sysRole: 'hr_user' },
       createdAt: '2026-08-23T08:00:00.000Z', updatedAt: '2026-08-23T08:00:00.000Z',
     },
     {
@@ -29,10 +45,20 @@ test('HR can review profile and performance changes together without one invalid
       sourceType: 'employee_roster_import', profileReviewStatus: 'not_required', performanceReviewStatus: 'pending',
       validationErrors: ['绩效直属上级待设置'], baseValue: {},
       proposedValue: { employee: { position: '设计师' }, performance: { managerId: null } },
+      createdBy: { id: 'ordinary-hr-1', name: '余焱玲', sysRole: 'hr_user' },
       createdAt: '2026-08-23T08:01:00.000Z', updatedAt: '2026-08-23T08:01:00.000Z',
     },
   ];
+  const departmentChange = {
+    id: '33333333-3333-4333-8333-333333333333',
+    action: 'update_structure', status: 'pending', departmentId: 'dept-1', departmentName: '项目中心',
+    baseValue: { name: '项目中心', parentId: null },
+    proposedValue: { name: '项目管理中心', parentId: null },
+    createdBy: { id: 'ordinary-hr-1', name: '余焱玲', sysRole: 'hr_user' },
+    createdAt: '2026-08-23T08:02:00.000Z', updatedAt: '2026-08-23T08:02:00.000Z',
+  };
   let approveBody: unknown;
+  let approvedDepartmentId: string | null = null;
 
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-admin-token');
@@ -72,17 +98,40 @@ test('HR can review profile and performance changes together without one invalid
       })),
     });
   });
+  await page.route('**/api/v1/departments/change-requests**', async (route) => {
+    if (route.request().method() === 'GET') {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 20, items: [departmentChange] })),
+      });
+    }
+    if (route.request().url().endsWith('/approve')) {
+      approvedDepartmentId = departmentChange.id;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ ...departmentChange, status: 'approved' })),
+      });
+    }
+    return route.fallback();
+  });
 
   await page.goto(`${webBaseUrl}/users`);
-  await page.getByRole('button', { name: '员工名册' }).click();
-  await page.getByRole('button', { name: '待审核变更 2' }).click();
+  await page.getByRole('button', { name: /待处理事项/ }).click();
 
-  const workspace = page.locator('.review-workspace');
+  const workspace = page.locator('.pending-review-workspace');
+  await expect(workspace.getByRole('button', { name: '员工档案 2' })).toBeVisible();
+  await expect(workspace.getByRole('button', { name: '部门架构 1' })).toBeVisible();
   await expect(workspace.getByText('员工一', { exact: true })).toBeVisible();
   await expect(workspace.getByText('员工二', { exact: true })).toBeVisible();
+  await expect(workspace.getByText('余焱玲', { exact: true }).first()).toBeVisible();
   await expect(workspace.getByText('基础档案审核', { exact: true })).toBeVisible();
   await expect(workspace.getByText('绩效关系审核', { exact: true })).toBeVisible();
   await expect(workspace.getByText('需补充', { exact: true })).toBeVisible();
+  await expect(workspace.getByText(/合同修改/)).toBeVisible();
+  await workspace.locator('.el-table__expand-icon').first().click();
+  await expect(workspace.getByText('合同变更明细', { exact: true })).toBeVisible();
+  await expect(workspace.getByText('变更前：签约公司：孚德；签订日期：2024-01-01；生效日期：2024-01-02；到期日期：2026-12-31')).toBeVisible();
+  await expect(workspace.getByText('变更后：签约公司：孚德体育文化；签订日期：2024-01-01；生效日期：2024-02-01；到期日期：2026-12-31')).toBeVisible();
 
   const rowChecks = workspace.locator('.el-table__body-wrapper .el-checkbox');
   await rowChecks.nth(0).click();
@@ -94,4 +143,10 @@ test('HR can review profile and performance changes together without one invalid
     scopes: ['profile', 'performance'],
   });
   await expect(page.getByText('已通过 1 人；1 人需补充信息')).toBeVisible();
+
+  await workspace.getByRole('button', { name: '部门架构 1' }).click();
+  await expect(workspace.getByText('项目中心 → 项目管理中心')).toBeVisible();
+  await expect(workspace.getByText('余焱玲', { exact: true })).toBeVisible();
+  await workspace.getByRole('button', { name: '通过' }).click();
+  await expect.poll(() => approvedDepartmentId).toBe(departmentChange.id);
 });

@@ -677,8 +677,10 @@ describe('EmployeeRosterImportService', () => {
           employmentType: 'full_time', status: 'active', directManagerId: 'performance-manager-approved',
           employeeProfile: null,
           employeeContracts: [{
-            contractType: 'contract', sequence: 0, name: '劳动合同',
+            id: 'contract-1', contractType: 'contract', sequence: 0, name: '劳动合同',
+            signingCompany: parsed.employee.companyText,
             signedAt: new Date('2024-01-01T00:00:00.000Z'),
+            effectiveFrom: new Date('2024-01-01T00:00:00.000Z'),
             expiresAt: new Date('2026-12-31T00:00:00.000Z'), termType: '3年',
             originalCompany: null, newCompany: null, confidentialityAgreement: '已签',
             nonCompeteAgreement: '无', portraitAgreement: '已签',
@@ -733,6 +735,9 @@ describe('EmployeeRosterImportService', () => {
     const transactionUserUpdate = jest.fn();
     const transactionUserUpdateMany = jest.fn().mockResolvedValue({ count: 1 });
     const reviewCreate = jest.fn().mockResolvedValue({ id: 'review-full' });
+    const departmentReviewCreate = jest.fn()
+      .mockResolvedValueOnce({ id: 'department-create-review' })
+      .mockResolvedValueOnce({ id: 'department-delete-review' });
     const tx = {
       employeeImportBatch: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -740,8 +745,12 @@ describe('EmployeeRosterImportService', () => {
       },
       employeeImportRow: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: reviewCreate },
+      departmentChangeRequest: { create: departmentReviewCreate },
       department: {
-        findMany: jest.fn().mockResolvedValue([{ id: 'dept-old', fullPath: '外援', name: '外援' }]),
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'dept-old', fullPath: '外援', name: '外援', parentId: null, leaderId: null,
+          company: 'fuede', sortOrder: 0, isActive: true, _count: { members: 0, children: 0 },
+        }]),
         create: departmentCreate,
         update: jest.fn(),
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
@@ -827,6 +836,23 @@ describe('EmployeeRosterImportService', () => {
     expect(result).toEqual({ batchId: 'batch-full', status: 'pending_review', submitted: 2 });
     expect(departmentCreate).not.toHaveBeenCalled();
     expect(tx.department.updateMany).not.toHaveBeenCalled();
+    expect(departmentReviewCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'create',
+        departmentId: null,
+        departmentName: '总经办',
+        proposedValue: expect.objectContaining({ fullPath: '总经办', parentFullPath: null }),
+        createdById: 'hr-1',
+      }),
+    });
+    expect(departmentReviewCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'delete',
+        departmentId: 'dept-old',
+        departmentName: '外援',
+        createdById: 'hr-1',
+      }),
+    });
     expect(reviewCreate).toHaveBeenCalledTimes(2);
     expect(reviewCreate).toHaveBeenNthCalledWith(1, {
       data: expect.objectContaining({
@@ -967,5 +993,23 @@ describe('EmployeeRosterImportService', () => {
     expect(tx.user.update).not.toHaveBeenCalled();
     expect(tx.employeeProfile.upsert).not.toHaveBeenCalled();
     expect(tx.employmentRecord.update).not.toHaveBeenCalled();
+  });
+
+  it('花名册合同比较覆盖签约公司和生效日期，但不因导入格式缺少 ID 误判', () => {
+    const service = new EmployeeRosterImportService({} as any);
+    const current = [{
+      id: 'contract-1', contractType: 'contract', sequence: 0, name: '劳动合同',
+      signingCompany: '孚德', signedAt: new Date('2024-01-01'),
+      effectiveFrom: new Date('2024-01-02'), expiresAt: new Date('2026-12-31'), termType: '3年',
+    }];
+    const proposed = [{
+      kind: 'contract', sequence: 0, name: '劳动合同', signingCompany: '孚德',
+      signedAt: new Date('2024-01-01'), effectiveFrom: new Date('2024-01-02'),
+      expiresAt: new Date('2026-12-31'), termText: '3年',
+    }];
+
+    expect((service as any).sameContractSet(current, proposed)).toBe(true);
+    expect((service as any).sameContractSet(current, [{ ...proposed[0], signingCompany: '北京孚德' }])).toBe(false);
+    expect((service as any).sameContractSet(current, [{ ...proposed[0], effectiveFrom: new Date('2024-02-01') }])).toBe(false);
   });
 });

@@ -523,7 +523,7 @@ export class EmployeeArchivesService {
 
   private contractReviewData(contract: object): Record<string, unknown> {
     return Object.fromEntries(
-      Object.entries(contract).filter(([key]) => !['id', 'userId', 'createdAt', 'updatedAt', 'sourceBatchId', 'createdById'].includes(key)),
+      Object.entries(contract).filter(([key]) => !['userId', 'createdAt', 'updatedAt', 'sourceBatchId', 'createdById'].includes(key)),
     );
   }
 

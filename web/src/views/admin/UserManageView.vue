@@ -16,8 +16,6 @@ import { departmentsApi } from '@/api/departments.api';
 import {
   employeeArchivesApi,
   type EmployeeArchive,
-  type EmployeeDataReview,
-  type EmployeeReviewStatus,
   type EmployeeRosterImportRow,
   type EmployeeRosterImportMode,
   type EmployeeRosterPreviewResult,
@@ -26,7 +24,8 @@ import { usersApi } from '@/api/users.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
-import EmployeeArchiveEditDialog from './components/EmployeeArchiveEditDialog.vue';
+import EmployeeArchiveInlineEditor from './components/EmployeeArchiveInlineEditor.vue';
+import PersonnelPendingReviews from './components/PersonnelPendingReviews.vue';
 import { formatBusinessIdentityLabel } from '@/components/layout/business-identity';
 import { useAuthStore } from '@/stores/auth.store';
 import type { BusinessIdentity, Department, HrCapability, SystemPermission, User as ManagedUser, UserQuery } from '@/types/api.types';
@@ -84,6 +83,7 @@ const hasHrCapability = (capability: HrCapability) => (
 const canEditArchive = computed(() => hasHrCapability('employee_archive_edit'));
 const canReviewArchive = computed(() => hasHrCapability('employee_archive_review'));
 const canEditOrganization = computed(() => hasHrCapability('organization_edit'));
+const canReviewDepartmentChanges = computed(() => ['hr', 'system_admin'].includes(auth.user?.sysRole ?? ''));
 
 const roleLabels: Record<SysRole, string> = {
   system_admin: '系统管理员',
@@ -190,18 +190,6 @@ const userQuery = ref<UserQuery>({
   sysRole: undefined,
   status: undefined,
 });
-const rosterWorkspace = ref<'directory' | 'reviews'>('directory');
-const reviewList = ref<EmployeeDataReview[]>([]);
-const reviewTotal = ref(0);
-const reviewLoading = ref(false);
-const reviewSelected = ref<EmployeeDataReview[]>([]);
-const reviewQuery = ref({
-  page: 1,
-  pageSize: 20,
-  status: 'pending' as 'pending' | 'approved' | 'rejected' | 'all',
-  keyword: '',
-});
-
 const checkUsers = ref<ManagedUser[]>([]);
 const checkLoading = ref(false);
 const issueLevelFilter = ref<'all' | 'danger' | 'warning' | 'info'>('all');
@@ -374,120 +362,6 @@ async function loadUsers() {
   }
 }
 
-async function loadReviews() {
-  reviewLoading.value = true;
-  try {
-    const res = await employeeArchivesApi.listReviews({
-      ...reviewQuery.value,
-      keyword: reviewQuery.value.keyword || undefined,
-    });
-    reviewList.value = res.items;
-    reviewTotal.value = res.total;
-    reviewSelected.value = [];
-  } catch {
-    reviewList.value = [];
-    reviewTotal.value = 0;
-  } finally {
-    reviewLoading.value = false;
-  }
-}
-
-function onReviewSelectionChange(rows: EmployeeDataReview[]) {
-  reviewSelected.value = rows;
-}
-
-function onReviewQueryChange() {
-  reviewQuery.value.page = 1;
-  loadReviews();
-}
-
-function reviewHasPerformanceBlocker(row: EmployeeDataReview): boolean {
-  return row.performanceReviewStatus === 'pending'
-    && row.validationErrors.some((error) => error.includes('绩效直属上级'));
-}
-
-function reviewIsPending(row: EmployeeDataReview): boolean {
-  return row.profileReviewStatus === 'pending' || row.performanceReviewStatus === 'pending';
-}
-
-function reviewStatusLabel(
-  row: EmployeeDataReview,
-  scope: 'profile' | 'performance',
-): string {
-  const status = scope === 'profile' ? row.profileReviewStatus : row.performanceReviewStatus;
-  if (scope === 'performance' && reviewHasPerformanceBlocker(row)) return '需补充';
-  return ({
-    not_required: '无变更',
-    pending: '待审核',
-    approved: '已通过',
-    rejected: '已退回',
-  } as Record<EmployeeReviewStatus, string>)[status];
-}
-
-function reviewStatusType(
-  row: EmployeeDataReview,
-  scope: 'profile' | 'performance',
-): 'success' | 'warning' | 'danger' | 'info' {
-  const status = scope === 'profile' ? row.profileReviewStatus : row.performanceReviewStatus;
-  if (scope === 'performance' && reviewHasPerformanceBlocker(row)) return 'danger';
-  if (status === 'approved') return 'success';
-  if (status === 'pending') return 'warning';
-  if (status === 'rejected') return 'danger';
-  return 'info';
-}
-
-function reviewChangeSummary(row: EmployeeDataReview): string {
-  const beforeEmployee = (row.baseValue.employee ?? {}) as Record<string, unknown>;
-  const afterEmployee = (row.proposedValue.employee ?? {}) as Record<string, unknown>;
-  const beforePerformance = (row.baseValue.performance ?? {}) as Record<string, unknown>;
-  const afterPerformance = (row.proposedValue.performance ?? {}) as Record<string, unknown>;
-  const changes: string[] = [];
-  const fields: Array<[string, string]> = [
-    ['deptId', '部门'],
-    ['position', '岗位'],
-    ['employeeStatus', '在职状态'],
-    ['phone', '手机号'],
-  ];
-  for (const [field, label] of fields) {
-    if ((beforeEmployee[field] ?? null) !== (afterEmployee[field] ?? null)) changes.push(label);
-  }
-  if ((beforePerformance.managerId ?? null) !== (afterPerformance.managerId ?? null)) {
-    changes.push('绩效直属上级');
-  }
-  if (reviewHasPerformanceBlocker(row)) changes.push('绩效直属上级待补充');
-  return changes.length ? changes.join('、') : '花名册档案信息复核';
-}
-
-async function approveSelectedReviews() {
-  if (reviewSelected.value.length === 0) {
-    ElMessage.warning('请先选择待审核员工');
-    return;
-  }
-  reviewLoading.value = true;
-  try {
-    const result = await employeeArchivesApi.approveReviews(
-      reviewSelected.value.map((row) => row.id),
-      ['profile', 'performance'],
-    );
-    if (result.failed.length > 0) {
-      const failedIds = new Set(result.failed.map((item) => item.requestId));
-      const partialCount = result.succeeded.filter((item) => failedIds.has(item.requestId)).length;
-      const passedCount = result.succeeded.length - partialCount;
-      const failedCount = result.failed.length - partialCount;
-      ElMessage.warning(partialCount > 0
-        ? `已通过 ${passedCount} 人；${partialCount} 人部分通过；${failedCount} 人未通过`
-        : `已通过 ${passedCount} 人；${result.failed.length} 人需补充信息`);
-    } else {
-      ElMessage.success(`已通过 ${result.succeeded.length} 人`);
-    }
-    await Promise.all([loadReviews(), loadUsers(), loadDepartments(), loadCheckUsers()]);
-  } catch {
-    // 由 HTTP 拦截器展示错误
-  } finally {
-    reviewLoading.value = false;
-  }
-}
-
 async function loadCheckUsers() {
   checkLoading.value = true;
   try {
@@ -604,8 +478,7 @@ function refreshCurrentView() {
     return;
   }
   if (activeView.value === 'users') {
-    if (rosterWorkspace.value === 'reviews') loadReviews();
-    else loadUsers();
+    loadUsers();
     return;
   }
   Promise.all([loadDepartments(), loadCheckUsers()]);
@@ -617,11 +490,13 @@ const employeeArchiveDrawer = ref({
   dingtalkSaving: false,
   data: null as EmployeeArchive | null,
 });
-const archiveEditDialogVisible = ref(false);
+const archiveEditing = ref(false);
 const archiveEditSaving = ref(false);
+const archiveEditorRef = ref<InstanceType<typeof EmployeeArchiveInlineEditor> | null>(null);
 
 async function openEmployeeArchive(row: ManagedUser) {
   employeeArchiveDrawer.value.visible = true;
+  archiveEditing.value = false;
   employeeArchiveDrawer.value.loading = true;
   employeeArchiveDrawer.value.data = null;
   try {
@@ -645,8 +520,10 @@ async function submitArchiveDraft(value: {
   try {
     await employeeArchivesApi.submitDraft(data.id, value);
     ElMessage.success('档案变更已提交审核，审核通过后生效');
-    archiveEditDialogVisible.value = false;
+    archiveEditing.value = false;
     employeeArchiveDrawer.value.data = await employeeArchivesApi.getArchive(data.id);
+    employeeArchiveDrawer.value.visible = false;
+    activeView.value = 'checks';
   } catch {
     // 由 HTTP 拦截器展示错误
   } finally {
@@ -671,9 +548,10 @@ async function saveDepartmentName() {
   dialog.saving = true;
   try {
     await departmentsApi.updateStructure(dialog.id, { name: dialog.name.trim() });
-    ElMessage.success('部门名称已更新');
+    ElMessage.success('部门名称变更已提交 HR 管理员审核');
     dialog.visible = false;
     await loadDepartments();
+    activeView.value = 'checks';
   } finally {
     dialog.saving = false;
   }
@@ -708,7 +586,8 @@ async function onDepartmentDrop(draggingNode: any, dropNode: any, type: 'before'
       { confirmButtonText: '确认调整', cancelButtonText: '取消', type: 'warning' },
     );
     await departmentsApi.updateStructure(department.id, { parentId });
-    ElMessage.success('组织层级已更新');
+    ElMessage.success('组织层级变更已提交 HR 管理员审核');
+    activeView.value = 'checks';
   } catch {
     // 取消时重新加载正式结构；接口错误由拦截器展示。
   } finally {
@@ -765,45 +644,6 @@ async function setArchiveDingtalkState(enabled: boolean) {
     // 由 HTTP 拦截器展示错误
   } finally {
     employeeArchiveDrawer.value.dingtalkSaving = false;
-  }
-}
-
-const reviewManagerDialog = ref({
-  visible: false,
-  requestId: '',
-  employeeName: '',
-  managerId: undefined as string | undefined,
-  saving: false,
-});
-
-function openReviewManagerDialog(row: EmployeeDataReview) {
-  reviewManagerDialog.value = {
-    visible: true,
-    requestId: row.id,
-    employeeName: row.employeeName,
-    managerId: undefined,
-    saving: false,
-  };
-}
-
-async function confirmReviewManager() {
-  if (!reviewManagerDialog.value.requestId || !reviewManagerDialog.value.managerId) {
-    ElMessage.warning('请选择绩效直属上级');
-    return;
-  }
-  reviewManagerDialog.value.saving = true;
-  try {
-    await employeeArchivesApi.setPendingPerformanceManager(
-      reviewManagerDialog.value.requestId,
-      reviewManagerDialog.value.managerId,
-    );
-    ElMessage.success('绩效直属上级已补充，可继续审核');
-    reviewManagerDialog.value.visible = false;
-    await loadReviews();
-  } catch {
-    // 由 HTTP 拦截器展示错误
-  } finally {
-    reviewManagerDialog.value.saving = false;
   }
 }
 
@@ -919,11 +759,9 @@ async function confirmPersonSettings() {
     }
     personSettingsDialog.value.visible = false;
     if (performanceRelationChanged) {
-      activeView.value = 'users';
-      rosterWorkspace.value = 'reviews';
-      reviewQuery.value.status = 'pending';
+      activeView.value = 'checks';
     }
-    await Promise.all([loadReviews(), loadUsers(), loadOrgMembers(), loadCheckUsers()]);
+    await Promise.all([loadUsers(), loadOrgMembers(), loadCheckUsers()]);
   } catch {
     // 由 HTTP 拦截器展示错误
   } finally {
@@ -1093,9 +931,8 @@ async function confirmRosterImport() {
       ? `已提交 ${confirmed.submitted} 条员工变更，审核通过后生效`
       : '花名册与正式档案一致，无需重复审核');
     rosterImportDialog.value.visible = false;
-    rosterWorkspace.value = confirmed.submitted > 0 ? 'reviews' : 'directory';
-    activeView.value = 'users';
-    await Promise.all([loadDepartments(), loadReviews(), loadUsers(), loadCheckUsers()]);
+    activeView.value = confirmed.submitted > 0 ? 'checks' : 'users';
+    await Promise.all([loadDepartments(), loadUsers(), loadCheckUsers()]);
   } catch {
     // 由 HTTP 拦截器展示错误
   } finally {
@@ -1106,13 +943,12 @@ async function confirmRosterImport() {
 watch(activeView, (view) => {
   if (view === 'users') {
     if (userList.value.length === 0) loadUsers();
-    loadReviews();
   }
   if (view === 'checks') loadCheckUsers();
 });
 
 onMounted(async () => {
-  await Promise.all([loadDepartments(), loadUsers(), loadReviews(), loadCheckUsers()]);
+  await Promise.all([loadDepartments(), loadUsers(), loadCheckUsers()]);
   await loadOrgMembers();
 });
 </script>
@@ -1309,26 +1145,7 @@ onMounted(async () => {
       </section>
 
       <section v-else-if="activeView === 'users'" class="directory-view">
-        <div class="roster-workspace-switch" aria-label="员工名册视图">
-          <button
-            type="button"
-            :class="{ active: rosterWorkspace === 'directory' }"
-            @click="rosterWorkspace = 'directory'"
-          >
-            正式员工档案
-          </button>
-          <button
-            v-if="canReviewArchive"
-            type="button"
-            :class="{ active: rosterWorkspace === 'reviews' }"
-            @click="rosterWorkspace = 'reviews'; loadReviews()"
-          >
-            待审核变更 <span>{{ reviewTotal }}</span>
-          </button>
-        </div>
-
-        <template v-if="rosterWorkspace === 'directory'">
-          <CollapsibleFilterPanel class="roster-filter-panel">
+        <CollapsibleFilterPanel class="roster-filter-panel">
           <div class="light-filter">
             <el-input
               v-model="userQuery.keyword"
@@ -1356,7 +1173,7 @@ onMounted(async () => {
             <el-button type="primary" @click="onUserQueryChange">查询</el-button>
             <el-button @click="resetUserFilters">重置</el-button>
           </div>
-          </CollapsibleFilterPanel>
+        </CollapsibleFilterPanel>
 
           <div class="directory-table-region">
           <el-table v-loading="userLoading" :data="userList" row-key="id" height="100%" class="app-table compact-table">
@@ -1442,107 +1259,6 @@ onMounted(async () => {
             @current-change="loadUsers"
             @size-change="onUserQueryChange"
           />
-        </template>
-
-        <div v-else class="review-workspace">
-          <div class="review-toolbar">
-            <div>
-              <strong>员工变更审核</strong>
-              <small>基础档案和绩效关系分开记录，可一次批量通过</small>
-            </div>
-            <div class="review-toolbar__filters">
-              <el-input
-                v-model="reviewQuery.keyword"
-                :prefix-icon="Search"
-                placeholder="搜索姓名或工号"
-                clearable
-                @keyup.enter="onReviewQueryChange"
-              />
-              <el-select v-model="reviewQuery.status" @change="onReviewQueryChange">
-                <el-option label="待审核" value="pending" />
-                <el-option label="已通过" value="approved" />
-                <el-option label="已退回" value="rejected" />
-                <el-option label="全部" value="all" />
-              </el-select>
-              <el-button :icon="Search" @click="onReviewQueryChange">查询</el-button>
-            </div>
-          </div>
-
-          <div v-if="reviewSelected.length" class="review-batchbar">
-            <span>已选择 <strong>{{ reviewSelected.length }}</strong> 人</span>
-            <small>有缺项的员工会单独保留，不影响其他员工通过</small>
-            <el-button type="primary" :loading="reviewLoading" @click="approveSelectedReviews">
-              通过可审核项（{{ reviewSelected.length }}）
-            </el-button>
-          </div>
-
-          <div class="review-table-region">
-            <el-table
-              v-loading="reviewLoading"
-              :data="reviewList"
-              row-key="id"
-              height="100%"
-              class="app-table compact-table"
-              @selection-change="onReviewSelectionChange"
-            >
-              <el-table-column type="selection" width="48" :selectable="reviewIsPending" />
-              <el-table-column label="员工" min-width="170">
-                <template #default="{ row }">
-                  <div class="person-cell">
-                    <span class="avatar">{{ (row as EmployeeDataReview).employeeName.slice(0, 1) }}</span>
-                    <div>
-                      <strong>{{ (row as EmployeeDataReview).employeeName }}</strong>
-                      <small>{{ (row as EmployeeDataReview).employeeNo || '工号待补充' }}</small>
-                    </div>
-                  </div>
-                </template>
-              </el-table-column>
-              <el-table-column label="基础档案审核" min-width="140">
-                <template #default="{ row }">
-                  <el-tag :type="reviewStatusType(row as EmployeeDataReview, 'profile')" effect="plain">
-                    {{ reviewStatusLabel(row as EmployeeDataReview, 'profile') }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="绩效关系审核" min-width="140">
-                <template #default="{ row }">
-                  <el-tag :type="reviewStatusType(row as EmployeeDataReview, 'performance')" effect="plain">
-                    {{ reviewStatusLabel(row as EmployeeDataReview, 'performance') }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="变更摘要" min-width="240" show-overflow-tooltip>
-                <template #default="{ row }">{{ reviewChangeSummary(row as EmployeeDataReview) }}</template>
-              </el-table-column>
-              <el-table-column label="提交时间" width="160">
-                <template #default="{ row }">{{ formatDateTime((row as EmployeeDataReview).createdAt) }}</template>
-              </el-table-column>
-              <el-table-column label="操作" width="120" fixed="right">
-                <template #default="{ row }">
-                  <el-button
-                    v-if="reviewHasPerformanceBlocker(row as EmployeeDataReview)"
-                    link
-                    type="primary"
-                    @click="openReviewManagerDialog(row as EmployeeDataReview)"
-                  >
-                    补充上级
-                  </el-button>
-                  <span v-else class="review-ready">{{ reviewIsPending(row as EmployeeDataReview) ? '可审核' : '已处理' }}</span>
-                </template>
-              </el-table-column>
-            </el-table>
-          </div>
-          <el-pagination
-            v-model:current-page="reviewQuery.page"
-            v-model:page-size="reviewQuery.pageSize"
-            :total="reviewTotal"
-            :page-sizes="[10, 20, 50, 100]"
-            layout="total, sizes, prev, pager, next"
-            class="table-pagination"
-            @current-change="loadReviews"
-            @size-change="onReviewQueryChange"
-          />
-        </div>
       </section>
 
       <section v-else class="checks-view" v-loading="checkLoading || deptLoading">
@@ -1642,13 +1358,18 @@ onMounted(async () => {
             <el-empty v-else :description="userIssueItems.length ? '当前筛选下没有人员问题' : '人员关系已完整'" :image-size="70" />
           </section>
         </div>
+
+        <PersonnelPendingReviews
+          :can-review-employee="canReviewArchive"
+          :can-review-department="canReviewDepartmentChanges"
+        />
       </section>
     </ChartCard>
 
     <el-drawer
       v-model="employeeArchiveDrawer.visible"
       title="员工档案"
-      size="760px"
+      size="min(1080px, 100vw)"
       class="employee-archive-drawer"
       destroy-on-close
     >
@@ -1669,9 +1390,24 @@ onMounted(async () => {
                 · {{ employeeArchiveDrawer.data.position || '未设置岗位' }}
               </p>
             </div>
+            <div v-if="canEditArchive" class="employee-archive__global-actions">
+              <el-button v-if="!archiveEditing" type="primary" @click="archiveEditing = true">编辑档案</el-button>
+              <template v-else>
+                <el-button :disabled="archiveEditSaving" @click="archiveEditing = false">取消</el-button>
+                <el-button type="primary" :loading="archiveEditSaving" @click="archiveEditorRef?.submit()">保存并提交审核</el-button>
+              </template>
+            </div>
           </div>
 
-          <section class="employee-archive__section">
+          <EmployeeArchiveInlineEditor
+            ref="archiveEditorRef"
+            :editing="archiveEditing"
+            :archive="employeeArchiveDrawer.data"
+            :departments="departments"
+            @submit="submitArchiveDraft"
+          />
+
+          <section v-if="!archiveEditing" class="employee-archive__section">
             <div class="section-head">
               <div>
                 <h3>当前任职</h3>
@@ -1689,20 +1425,12 @@ onMounted(async () => {
             </div>
           </section>
 
-          <section class="employee-archive__section">
+          <section v-if="!archiveEditing" class="employee-archive__section">
             <div class="section-head">
               <div>
                 <h3>个人与教育信息</h3>
                 <span>默认仅展示普通档案字段，身份证和银行账户不在普通查询中返回</span>
               </div>
-              <el-button
-                v-if="canEditArchive"
-                type="primary"
-                size="small"
-                @click="archiveEditDialogVisible = true"
-              >
-                编辑档案
-              </el-button>
             </div>
             <div class="employee-archive__facts">
               <div>
@@ -1722,7 +1450,7 @@ onMounted(async () => {
             </div>
           </section>
 
-          <section class="employee-archive__section">
+          <section v-if="!archiveEditing" class="employee-archive__section">
             <div class="section-head">
               <div>
                 <h3>钉钉账号关联</h3>
@@ -1750,7 +1478,7 @@ onMounted(async () => {
             </div>
           </section>
 
-          <section class="employee-archive__section">
+          <section v-if="!archiveEditing" class="employee-archive__section">
             <div class="section-head">
               <div>
                 <h3>任职历史</h3>
@@ -1773,7 +1501,7 @@ onMounted(async () => {
             </el-table>
           </section>
 
-          <section class="employee-archive__section">
+          <section v-if="!archiveEditing" class="employee-archive__section">
             <div class="section-head">
               <div>
                 <h3>合同记录</h3>
@@ -1804,14 +1532,6 @@ onMounted(async () => {
         </template>
       </div>
     </el-drawer>
-
-    <EmployeeArchiveEditDialog
-      v-model="archiveEditDialogVisible"
-      :archive="employeeArchiveDrawer.data"
-      :departments="departments"
-      :saving="archiveEditSaving"
-      @submit="submitArchiveDraft"
-    />
 
     <el-dialog
       v-model="rosterImportDialog.visible"
@@ -1926,26 +1646,6 @@ onMounted(async () => {
       <template #footer><el-button @click="departmentEditDialog.visible = false">取消</el-button><el-button type="primary" :loading="departmentEditDialog.saving" @click="saveDepartmentName">保存</el-button></template>
     </el-dialog>
 
-    <el-dialog
-      v-model="reviewManagerDialog.visible"
-      title="补充绩效直属上级"
-      width="480px"
-      :close-on-click-modal="false"
-      destroy-on-close
-    >
-      <p class="dialog-tip">
-        为 <strong>{{ reviewManagerDialog.employeeName }}</strong> 选择系统内绩效直属上级。该关系仅用于绩效流程，不会修改花名册直属主管。
-      </p>
-      <UserSelect
-        v-model="reviewManagerDialog.managerId"
-        placeholder="搜索姓名或工号选择绩效直属上级"
-      />
-      <template #footer>
-        <el-button @click="reviewManagerDialog.visible = false">取消</el-button>
-        <el-button type="primary" :loading="reviewManagerDialog.saving" @click="confirmReviewManager">保存并返回审核</el-button>
-      </template>
-    </el-dialog>
-
     <el-dialog v-model="personSettingsDialog.visible" title="人员设置" width="520px" :close-on-click-modal="false" destroy-on-close>
       <div class="person-settings__summary">
         <span class="avatar">{{ personSettingsDialog.userName.slice(0, 1) }}</span>
@@ -2005,7 +1705,7 @@ onMounted(async () => {
                   <div class="person-settings__tooltip-content">
                     <div class="person-settings__tooltip-line"><strong>作用：</strong>用于目标审核、主管评分和待办归属。</div>
                     <div class="person-settings__tooltip-line"><strong>区别：</strong>与花名册“直属主管”相互独立。</div>
-                    <div class="person-settings__tooltip-line"><strong>审核：</strong>由 HR 在“员工名册 → 待审核变更”中处理。</div>
+                    <div class="person-settings__tooltip-line"><strong>审核：</strong>由 HR 管理员在“待处理事项 → 员工档案”中处理。</div>
                     <div class="person-settings__tooltip-line"><strong>生效：</strong>审核通过前继续使用原关系，不改变岗位或系统权限。</div>
                   </div>
                 </template>
@@ -2029,7 +1729,7 @@ onMounted(async () => {
           >
             {{ selectedManagerRelationChanged ? '提交后待 HR 审核' : '已生效' }}
           </el-tag>
-          <span v-if="selectedManagerRelationChanged">审核入口：员工名册 &gt; 待审核变更</span>
+          <span v-if="selectedManagerRelationChanged">审核入口：待处理事项 &gt; 员工档案</span>
         </div>
         <el-form-item>
           <template #label>
@@ -2188,6 +1888,12 @@ onMounted(async () => {
 .employee-archive__hero p {
   margin-top: 6px;
   color: #6f7b91;
+}
+
+.employee-archive__global-actions {
+  display: flex;
+  gap: 8px;
+  margin-left: auto;
 }
 
 .employee-archive__section {
@@ -3287,6 +2993,20 @@ onMounted(async () => {
 
   .employee-archive__facts {
     grid-template-columns: 1fr;
+  }
+
+  .employee-archive__hero {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .employee-archive__global-actions {
+    width: 100%;
+    margin-left: 0;
+  }
+
+  .employee-archive__global-actions .el-button {
+    flex: 1;
   }
 
   .dept-summary__side {

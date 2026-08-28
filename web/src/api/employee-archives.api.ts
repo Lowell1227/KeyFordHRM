@@ -39,6 +39,9 @@ export interface EmployeeDataReview {
   validationErrors: string[];
   baseValue: Record<string, any>;
   proposedValue: Record<string, any>;
+  createdBy?: { id: string; name: string; sysRole: string };
+  profileReviewedBy?: { id: string; name: string } | null;
+  performanceReviewedBy?: { id: string; name: string } | null;
   rejectedReason?: string | null;
   createdAt: string;
   updatedAt: string;
