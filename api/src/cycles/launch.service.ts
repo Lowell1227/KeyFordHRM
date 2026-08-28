@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { AccountType, IndicatorType, Prisma } from '@prisma/client';
+import { AccountType, AssessmentPeriodType, IndicatorType, Prisma } from '@prisma/client';
 import { createHash } from 'crypto';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
@@ -54,6 +54,36 @@ interface Candidate {
   leaveDate: Date | null;
 }
 
+interface CandidateSelection {
+  included: Candidate[];
+  exclusions: Array<{
+    employeeId: string;
+    employeeName: string;
+    reasonCode: 'PROBATION_NOT_IN_PLAN';
+    reason: '试用期员工不进入本绩效计划';
+  }>;
+}
+
+interface LaunchPeriodSchedule {
+  periodKey: string;
+  periodType: AssessmentPeriodType;
+  sequence: number;
+  periodStart: Date;
+  periodEnd: Date;
+  selfEvalOpenAt: Date;
+  selfEvalDueAt: Date;
+  managerDueAt: Date;
+  isException: boolean;
+}
+
+interface CompanyFinalApprover {
+  id: string;
+  name: string;
+  directManagerId: string | null;
+}
+
+type ParticipantDispositionValue = 'active' | 'cycle_exempt' | 'top_leader_exempt';
+
 interface LaunchDepartment {
   name: string;
   parentId: string | null;
@@ -67,6 +97,8 @@ export interface LaunchResult {
   totalTasks: number;
   exemptedTasks: number;
   activeTasks: number;
+  periodCount?: number;
+  indicatorVersionCount?: number;
 }
 
 export interface LaunchOptions {
@@ -101,7 +133,9 @@ export interface LaunchPreflightResult {
     templateVersion: null;
     isExempt: boolean;
     exemptReason: string | null;
+    participantDisposition?: ParticipantDispositionValue;
   }>;
+  exclusions: CandidateSelection['exclusions'];
   blockers: Array<{ code: string; message: string }>;
   warnings: Array<{ code: string; message: string }>;
 }
@@ -129,7 +163,22 @@ export class LaunchService {
     if (cycle.reviewStatus !== 'approved') {
       blockers.push({ code: 'CYCLE_NOT_APPROVED', message: '周期计划需由审核人通过后才能发起' });
     }
-    const candidates = await this.findCandidates(client, cycle);
+    const selection = await this.findCandidates(client, cycle);
+    const candidates = selection.included;
+    const isWorkflowV2 = this.isWorkflowV2(cycle);
+    const schedules = isWorkflowV2
+      ? await this.findPeriodSchedules(client, cycle.id)
+      : [];
+    const companyFinalApprover = isWorkflowV2
+      ? await this.findCompanyFinalApprover(client, cycle.companyFinalApproverId)
+      : null;
+    if (isWorkflowV2) {
+      blockers.push(...this.workflowV2ConfigurationBlockers(
+        cycle,
+        schedules,
+        companyFinalApprover,
+      ));
+    }
     const deptMap = await this.buildDeptMap(client);
     const exemptRatio = await this.getExemptRatio(client);
 
@@ -138,14 +187,14 @@ export class LaunchService {
     }
     if (candidates.length > 0) {
       try {
-        this.assertLaunchRelations(candidates, deptMap);
+        this.assertLaunchRelations(candidates, deptMap, cycle);
       } catch (error) {
         blockers.push(this.toPreflightBlocker('ORGANIZATION_RELATION_INVALID', error));
       }
     }
 
     const plan = blockers.length === 0
-      ? this.buildLaunchPlan(candidates, cycle, deptMap, exemptRatio)
+      ? this.buildLaunchPlan(candidates, cycle, deptMap, exemptRatio, schedules)
       : null;
 
     return {
@@ -160,6 +209,7 @@ export class LaunchService {
       participantCount: candidates.length,
       templateCount: 0,
       participants: plan?.participants ?? [],
+      exclusions: selection.exclusions,
       blockers,
       warnings,
     };
@@ -290,7 +340,7 @@ export class LaunchService {
       if (!(['draft', 'scheduled', 'launch_blocked'] as const).includes(
         cycle.status as 'draft' | 'scheduled' | 'launch_blocked',
       )) {
-        if (cycle.openedAt) return this.existingLaunchResult(tx, cycleId);
+        if (cycle.openedAt) return this.existingLaunchResult(tx, cycleId, cycle.workflowVersion);
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前周期状态不能开放目标制定' });
       }
       if (options.source === 'scheduled' && cycle.status !== 'scheduled') {
@@ -307,9 +357,32 @@ export class LaunchService {
         });
       }
 
-      const candidates = await this.findCandidates(tx, cycle);
+      const selection = await this.findCandidates(tx, cycle);
+      const candidates = selection.included;
       if (candidates.length === 0) {
         throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '当前没有符合被考核条件的员工' });
+      }
+
+      const isWorkflowV2 = this.isWorkflowV2(cycle);
+      const schedules = isWorkflowV2
+        ? await this.findPeriodSchedules(tx, cycle.id)
+        : [];
+      const companyFinalApprover = isWorkflowV2
+        ? await this.findCompanyFinalApprover(tx, cycle.companyFinalApproverId)
+        : null;
+      if (isWorkflowV2) {
+        const configurationBlockers = this.workflowV2ConfigurationBlockers(
+          cycle,
+          schedules,
+          companyFinalApprover,
+        );
+        if (configurationBlockers.length > 0) {
+          throw new BadRequestException({
+            code: ERROR_CODE.PARAM_INVALID,
+            message: configurationBlockers.map((blocker) => blocker.message).join('；'),
+            blockers: configurationBlockers,
+          });
+        }
       }
 
       const openedAt = options.now ?? new Date();
@@ -330,10 +403,10 @@ export class LaunchService {
       }
 
       const deptMap = await this.buildDeptMap(tx);
-      this.assertLaunchRelations(candidates, deptMap);
+      this.assertLaunchRelations(candidates, deptMap, cycle);
 
       const ratio = await this.getExemptRatio(tx);
-      const currentPlan = this.buildLaunchPlan(candidates, cycle, deptMap, ratio);
+      const currentPlan = this.buildLaunchPlan(candidates, cycle, deptMap, ratio, schedules);
       const currentPlanHash = this.hashLaunchPlan(currentPlan);
       const expectedPlanHash = options.source === 'scheduled'
         ? cycle.launchPlanHash
@@ -360,7 +433,7 @@ export class LaunchService {
       });
       if (claim.count !== 1) {
         const latest = await tx.assessmentCycle.findUnique({ where: { id: cycleId } });
-        if (latest?.openedAt) return this.existingLaunchResult(tx, cycleId);
+        if (latest?.openedAt) return this.existingLaunchResult(tx, cycleId, latest.workflowVersion);
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '周期状态已变化，请刷新后重试' });
       }
 
@@ -369,14 +442,16 @@ export class LaunchService {
       const activeManagerIds = new Set<string>();
       const exemptEmployeeIds = new Set<string>();
       const exemptManagerIds = new Set<string>();
+      let periodCount = 0;
+      let indicatorVersionCount = 0;
 
       for (const candidate of candidates) {
         const dept = candidate.deptId ? deptMap.get(candidate.deptId) : null;
-        const manager = this.resolveLaunchManager(candidate, dept);
+        const manager = this.resolveLaunchManager(candidate, dept, cycle);
 
-        const exempt = this.resolveExemption(candidate, cycle, ratio);
+        const disposition = this.resolveParticipantDisposition(candidate, cycle, ratio);
 
-        if (exempt.isExempt) {
+        if (disposition.isExempt) {
           await tx.assessmentTask.create({
             data: {
               cycleId,
@@ -388,7 +463,10 @@ export class LaunchService {
               approverId: dept?.effectiveApproverId ?? null,
               status: 'exempted',
               isExempt: true,
-              exemptReason: exempt.reason,
+              exemptReason: disposition.reason,
+              ...(isWorkflowV2 && {
+                participantDisposition: disposition.participantDisposition,
+              }),
             },
           });
           exemptedTasks++;
@@ -397,7 +475,7 @@ export class LaunchService {
           continue;
         }
 
-        await tx.assessmentTask.create({
+        const task = await tx.assessmentTask.create({
           data: {
             cycleId,
             snapshotId: null,
@@ -408,8 +486,37 @@ export class LaunchService {
             approverId: dept?.effectiveApproverId ?? null,
             status: 'indicator_drafting',
             isExempt: false,
+            ...(isWorkflowV2 && { participantDisposition: 'active' }),
           },
         });
+
+        if (isWorkflowV2) {
+          await tx.indicatorVersion.create({
+            data: {
+              taskId: task.id,
+              version: 1,
+              status: 'draft',
+              effectiveFromPeriodKey: schedules[0].periodKey,
+              createdById: operator.id,
+            },
+          });
+          indicatorVersionCount++;
+
+          await tx.assessmentPeriod.createMany({
+            data: schedules.map((schedule) => ({
+              taskId: task.id,
+              periodKey: schedule.periodKey,
+              periodType: schedule.periodType,
+              sequence: schedule.sequence,
+              periodStart: schedule.periodStart,
+              periodEnd: schedule.periodEnd,
+              managerId: task.managerId,
+              indicatorVersionId: null,
+              status: 'unopened',
+            })),
+          });
+          periodCount += schedules.length;
+        }
 
         activeEmployeeIds.add(candidate.id);
 
@@ -443,6 +550,7 @@ export class LaunchService {
         totalTasks,
         exemptedTasks,
         activeTasks,
+        ...(isWorkflowV2 && { periodCount, indicatorVersionCount }),
         activeEmployeeIds,
         activeManagerIds,
         exemptEmployeeIds,
@@ -462,16 +570,17 @@ export class LaunchService {
     return result;
   }
 
-  /** 选出被考核候选人：deletedAt=null、status!=resigned、is_assessor_only=false。 */
+  /** 选出被考核候选人；v2 将试用期员工单列为可解释的排除项。 */
   private async findCandidates(
     tx: Prisma.TransactionClient,
     cycle: {
+      workflowVersion?: number | null;
       participantDeptIds: string[];
       participantUserIds: string[];
       explicitExemptDeptIds: string[];
       explicitExemptUserIds: string[];
     },
-  ): Promise<Candidate[]> {
+  ): Promise<CandidateSelection> {
     const participantDeptIds = cycle.participantDeptIds ?? [];
     const participantUserIds = cycle.participantUserIds ?? [];
     const explicitExemptDeptIds = cycle.explicitExemptDeptIds ?? [];
@@ -481,40 +590,59 @@ export class LaunchService {
       ...participantUserIds,
       ...explicitExemptUserIds,
     ])];
-    return tx.user.findMany({
-      where: {
-        deletedAt: null,
-        status: { not: 'resigned' },
-        isAssessorOnly: false,
-        ...(explicitlyIncludedUserIds.length === 0
-          ? { accountType: AccountType.employee }
-          : {
-              AND: [{
-                OR: [
-                  { accountType: AccountType.employee },
-                  { id: { in: explicitlyIncludedUserIds } },
-                ],
-              }],
-            }),
-        ...(hasScopedParticipants && {
-          OR: [
-            ...(participantDeptIds.length > 0 ? [{ deptId: { in: participantDeptIds } }] : []),
-            ...(participantUserIds.length > 0 ? [{ id: { in: participantUserIds } }] : []),
-            ...(explicitExemptDeptIds.length > 0 ? [{ deptId: { in: explicitExemptDeptIds } }] : []),
-            ...(explicitExemptUserIds.length > 0 ? [{ id: { in: explicitExemptUserIds } }] : []),
-          ],
-        }),
-      },
-      select: {
-        id: true,
-        name: true,
-        deptId: true,
-        directManagerId: true,
-        directManager: { select: { name: true } },
-        entryDate: true,
-        leaveDate: true,
-      },
-    });
+    const scopeWhere = {
+      deletedAt: null,
+      isAssessorOnly: false,
+      ...(explicitlyIncludedUserIds.length === 0
+        ? { accountType: AccountType.employee }
+        : {
+            AND: [{
+              OR: [
+                { accountType: AccountType.employee },
+                { id: { in: explicitlyIncludedUserIds } },
+              ],
+            }],
+          }),
+      ...(hasScopedParticipants && {
+        OR: [
+          ...(participantDeptIds.length > 0 ? [{ deptId: { in: participantDeptIds } }] : []),
+          ...(participantUserIds.length > 0 ? [{ id: { in: participantUserIds } }] : []),
+          ...(explicitExemptDeptIds.length > 0 ? [{ deptId: { in: explicitExemptDeptIds } }] : []),
+          ...(explicitExemptUserIds.length > 0 ? [{ id: { in: explicitExemptUserIds } }] : []),
+        ],
+      }),
+    };
+    const select = {
+      id: true,
+      name: true,
+      deptId: true,
+      directManagerId: true,
+      directManager: { select: { name: true } },
+      entryDate: true,
+      leaveDate: true,
+    } as const;
+
+    if (!this.isWorkflowV2(cycle)) {
+      const included = await tx.user.findMany({
+        where: { ...scopeWhere, status: { not: 'resigned' } },
+        select,
+      });
+      return { included, exclusions: [] };
+    }
+
+    const [included, probation] = await Promise.all([
+      tx.user.findMany({ where: { ...scopeWhere, status: 'active' }, select }),
+      tx.user.findMany({ where: { ...scopeWhere, status: 'probation' }, select }),
+    ]);
+    return {
+      included,
+      exclusions: probation.map((employee) => ({
+        employeeId: employee.id,
+        employeeName: employee.name,
+        reasonCode: 'PROBATION_NOT_IN_PLAN' as const,
+        reason: '试用期员工不进入本绩效计划' as const,
+      })),
+    };
   }
 
   /** 查询所有未删除的生效模板（含维度、指标、指标类型）。 */
@@ -661,14 +789,19 @@ export class LaunchService {
       participantUserIds: string[];
       explicitExemptDeptIds: string[];
       explicitExemptUserIds: string[];
+      workflowVersion?: number | null;
+      scoringFrequency?: string | null;
+      companyFinalApproverId?: string | null;
     },
     deptMap: Map<string, LaunchDepartment>,
     exemptRatio: number,
+    schedules: LaunchPeriodSchedule[] = [],
   ) {
+    const isWorkflowV2 = this.isWorkflowV2(cycle);
     const participants = candidates.map((candidate) => {
       const dept = candidate.deptId ? deptMap.get(candidate.deptId) : null;
-      const manager = this.resolveLaunchManager(candidate, dept);
-      const exempt = this.resolveExemption(candidate, cycle, exemptRatio);
+      const manager = this.resolveLaunchManager(candidate, dept, cycle);
+      const disposition = this.resolveParticipantDisposition(candidate, cycle, exemptRatio);
       return {
         employeeId: candidate.id,
         employeeName: candidate.name,
@@ -683,12 +816,15 @@ export class LaunchService {
         templateId: null,
         templateName: null,
         templateVersion: null,
-        isExempt: exempt.isExempt,
-        exemptReason: exempt.reason,
+        isExempt: disposition.isExempt,
+        exemptReason: disposition.reason,
+        ...(isWorkflowV2 && {
+          participantDisposition: disposition.participantDisposition,
+        }),
       };
     }).sort((a, b) => a.employeeId.localeCompare(b.employeeId));
 
-    return {
+    const plan = {
       cycleStartDate: cycle.startDate.toISOString(),
       cycleEndDate: cycle.endDate.toISOString(),
       goalSettingOpenAt: cycle.goalSettingOpenAt?.toISOString() ?? null,
@@ -709,6 +845,56 @@ export class LaunchService {
       explicitExemptUserIds: [...(cycle.explicitExemptUserIds ?? [])].sort(),
       exemptRatio,
       participants,
+    };
+
+    if (!isWorkflowV2) return plan;
+    return {
+      ...plan,
+      workflowVersion: 2,
+      scoringFrequency: cycle.scoringFrequency ?? null,
+      companyFinalApproverId: cycle.companyFinalApproverId ?? null,
+      periodSchedules: schedules.map((schedule) => ({
+        periodKey: schedule.periodKey,
+        periodType: schedule.periodType,
+        sequence: schedule.sequence,
+        periodStart: schedule.periodStart.toISOString(),
+        periodEnd: schedule.periodEnd.toISOString(),
+        selfEvalOpenAt: schedule.selfEvalOpenAt.toISOString(),
+        selfEvalDueAt: schedule.selfEvalDueAt.toISOString(),
+        managerDueAt: schedule.managerDueAt.toISOString(),
+        isException: schedule.isException,
+      })),
+    };
+  }
+
+  private resolveParticipantDisposition(
+    candidate: Candidate,
+    cycle: {
+      startDate: Date;
+      endDate: Date;
+      workflowVersion?: number | null;
+      companyFinalApproverId?: string | null;
+      explicitExemptDeptIds: string[];
+      explicitExemptUserIds: string[];
+    },
+    exemptRatio: number,
+  ): {
+    participantDisposition: ParticipantDispositionValue;
+    isExempt: boolean;
+    reason: string | null;
+  } {
+    if (this.isWorkflowV2(cycle) && candidate.id === cycle.companyFinalApproverId) {
+      return {
+        participantDisposition: 'top_leader_exempt',
+        isExempt: true,
+        reason: '最高负责人豁免',
+      };
+    }
+    const exemption = this.resolveExemption(candidate, cycle, exemptRatio);
+    return {
+      participantDisposition: exemption.isExempt ? 'cycle_exempt' : 'active',
+      isExempt: exemption.isExempt,
+      reason: exemption.reason,
     };
   }
 
@@ -739,21 +925,97 @@ export class LaunchService {
     return createHash('sha256').update(JSON.stringify(plan)).digest('hex');
   }
 
-  private async existingLaunchResult(tx: Prisma.TransactionClient, cycleId: string) {
-    const [totalTasks, exemptedTasks] = await Promise.all([
+  private async existingLaunchResult(
+    tx: Prisma.TransactionClient,
+    cycleId: string,
+    workflowVersion?: number | null,
+  ) {
+    if (workflowVersion !== 2) {
+      const [totalTasks, exemptedTasks] = await Promise.all([
+        tx.assessmentTask.count({ where: { cycleId } }),
+        tx.assessmentTask.count({ where: { cycleId, isExempt: true } }),
+      ]);
+      return {
+        cycleId,
+        totalTasks,
+        exemptedTasks,
+        activeTasks: totalTasks - exemptedTasks,
+        activeEmployeeIds: new Set<string>(),
+        activeManagerIds: new Set<string>(),
+        exemptEmployeeIds: new Set<string>(),
+        exemptManagerIds: new Set<string>(),
+      };
+    }
+
+    const [totalTasks, exemptedTasks, periodCount, indicatorVersionCount] = await Promise.all([
       tx.assessmentTask.count({ where: { cycleId } }),
       tx.assessmentTask.count({ where: { cycleId, isExempt: true } }),
+      tx.assessmentPeriod.count({ where: { task: { cycleId } } }),
+      tx.indicatorVersion.count({ where: { task: { cycleId } } }),
     ]);
     return {
       cycleId,
       totalTasks,
       exemptedTasks,
       activeTasks: totalTasks - exemptedTasks,
+      periodCount,
+      indicatorVersionCount,
       activeEmployeeIds: new Set<string>(),
       activeManagerIds: new Set<string>(),
       exemptEmployeeIds: new Set<string>(),
       exemptManagerIds: new Set<string>(),
     };
+  }
+
+  private isWorkflowV2(cycle: { workflowVersion?: number | null }): boolean {
+    return cycle.workflowVersion === 2;
+  }
+
+  private async findPeriodSchedules(
+    tx: Prisma.TransactionClient,
+    cycleId: string,
+  ): Promise<LaunchPeriodSchedule[]> {
+    return tx.cyclePeriodSchedule.findMany({
+      where: { cycleId },
+      orderBy: { sequence: 'asc' },
+    });
+  }
+
+  private async findCompanyFinalApprover(
+    tx: Prisma.TransactionClient,
+    companyFinalApproverId: string | null | undefined,
+  ): Promise<CompanyFinalApprover | null> {
+    if (!companyFinalApproverId) return null;
+    return tx.user.findUnique({
+      where: { id: companyFinalApproverId },
+      select: { id: true, name: true, directManagerId: true },
+    });
+  }
+
+  private workflowV2ConfigurationBlockers(
+    cycle: { companyFinalApproverId?: string | null },
+    schedules: LaunchPeriodSchedule[],
+    companyFinalApprover: CompanyFinalApprover | null,
+  ): LaunchPreflightResult['blockers'] {
+    const blockers: LaunchPreflightResult['blockers'] = [];
+    if (!cycle.companyFinalApproverId || !companyFinalApprover) {
+      blockers.push({
+        code: 'COMPANY_FINAL_APPROVER_MISSING',
+        message: '未设置有效的公司最终审定人，请先完成配置',
+      });
+    } else if (companyFinalApprover.directManagerId) {
+      blockers.push({
+        code: 'ORGANIZATION_RELATION_INVALID',
+        message: `公司最终审定人必须是没有直属上级的最高负责人：${companyFinalApprover.name}`,
+      });
+    }
+    if (schedules.length === 0) {
+      blockers.push({
+        code: 'PERIOD_SCHEDULE_MISSING',
+        message: '评分周期排期为空，请返回周期计划补齐后重新审核',
+      });
+    }
+    return blockers;
   }
 
   /** 为每个被使用模板生成快照。 */
@@ -861,6 +1123,10 @@ export class LaunchService {
   private assertLaunchRelations(
     candidates: Candidate[],
     deptMap: Map<string, LaunchDepartment>,
+    cycle: {
+      workflowVersion?: number | null;
+      companyFinalApproverId?: string | null;
+    },
   ): void {
     const missingDeptUsers = new Set<string>();
     const missingManagers = new Set<string>();
@@ -879,7 +1145,8 @@ export class LaunchService {
         continue;
       }
 
-      if (!this.resolveLaunchManager(candidate, dept).id) {
+      if (!this.resolveLaunchManager(candidate, dept, cycle).id
+        && !(this.isWorkflowV2(cycle) && candidate.id === cycle.companyFinalApproverId)) {
         missingManagers.add(candidate.name);
       }
 
@@ -903,8 +1170,11 @@ export class LaunchService {
       messages.push(`以下部门未设置部门负责人：${Array.from(missingDeptLeaders).join('、')}`);
     }
     if (missingApprovers.size > 0) {
+      const approverCopy = this.isWorkflowV2(cycle)
+        ? '分管总审核人/公司最终审定人'
+        : '最终业务审批人';
       messages.push(
-        `以下部门未设置最终业务审批人，请补齐部门负责人及其直属上级；最高层级可手动设置：${Array.from(missingApprovers).join('、')}`,
+        `以下部门未设置${approverCopy}，请补齐部门负责人及其直属上级；最高层级可手动设置：${Array.from(missingApprovers).join('、')}`,
       );
     }
 
@@ -916,16 +1186,23 @@ export class LaunchService {
     }
   }
 
-  /** 最高层级部门负责人没有上级，发起新周期时由本人承接主管任务。 */
+  /** v1 保留最高层负责人自管；v2 只使用结构化直属上级，最高负责人单独豁免。 */
   private resolveLaunchManager(
     candidate: Candidate,
     dept: LaunchDepartment | null | undefined,
+    cycle: {
+      workflowVersion?: number | null;
+      companyFinalApproverId?: string | null;
+    },
   ): { id: string | null; name: string | null } {
     if (candidate.directManagerId) {
       return {
         id: candidate.directManagerId,
         name: candidate.directManager?.name ?? null,
       };
+    }
+    if (this.isWorkflowV2(cycle)) {
+      return { id: null, name: null };
     }
     if (dept?.parentId === null && dept.leaderId === candidate.id) {
       return { id: candidate.id, name: candidate.name };
