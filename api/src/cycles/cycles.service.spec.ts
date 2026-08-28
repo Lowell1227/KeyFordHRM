@@ -2,7 +2,9 @@ import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { CycleStatus, Prisma, ScoringFrequency, SysRole } from '@prisma/client';
 import { CyclesService } from './cycles.service';
 import { CreateCycleDto } from './dto/create-cycle.dto';
+import { UpdateCycleDto } from './dto/update-cycle.dto';
 import { AuthUser } from '@/common/types/auth.types';
+import { plainToInstance } from 'class-transformer';
 
 describe('CyclesService', () => {
   const explicitExemptDeptId = 'c134b614-5d97-4f1c-a72e-0afc6d12eb99';
@@ -169,6 +171,40 @@ describe('CyclesService', () => {
     });
   });
 
+  it('selects an eligible HR owner when a system administrator creates without one', async () => {
+    const eligibleHrOwnerId = '77777777-7777-4777-8777-777777777777';
+    const systemAdministrator = {
+      ...creator,
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      sysRole: SysRole.system_admin,
+      hrCapabilities: ['cycle_plan_edit'],
+    } as AuthUser;
+    prisma.user.findFirst
+      .mockResolvedValueOnce({ id: eligibleHrOwnerId })
+      .mockResolvedValueOnce({ id: reviewer.id });
+
+    await service.create(quarterlyCycle(), systemAdministrator);
+
+    expect(prisma.user.findFirst).toHaveBeenNthCalledWith(1, {
+      where: {
+        OR: [
+          { sysRole: SysRole.hr },
+          { sysRole: SysRole.hr_user, hrCapabilities: { has: 'cycle_plan_edit' } },
+        ],
+        deletedAt: null,
+        status: { not: 'resigned' },
+      },
+      select: { id: true },
+      orderBy: { createdAt: 'asc' },
+    });
+    expect(prisma.assessmentCycle.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        creator: { connect: { id: systemAdministrator.id } },
+        hrOwner: { connect: { id: eligibleHrOwnerId } },
+      }),
+    }));
+  });
+
   it.each([
     {
       label: 'scoring frequency',
@@ -229,8 +265,8 @@ describe('CyclesService', () => {
       periodKey: '2027-01',
       periodType: 'month',
       sequence: 1,
-      periodStart: new Date('2026-12-31T00:00:00.000Z'),
-      periodEnd: new Date('2027-01-30T00:00:00.000Z'),
+      periodStart: new Date('2027-01-01T00:00:00.000Z'),
+      periodEnd: new Date('2027-01-31T00:00:00.000Z'),
       selfEvalOpenAt: new Date('2027-02-01T01:00:00.000Z'),
       selfEvalDueAt: new Date('2027-02-03T10:00:00.000Z'),
       managerDueAt: new Date('2027-02-08T10:00:00.000Z'),
@@ -239,8 +275,8 @@ describe('CyclesService', () => {
       periodKey: '2027-02',
       periodType: 'month',
       sequence: 2,
-      periodStart: new Date('2027-01-31T00:00:00.000Z'),
-      periodEnd: new Date('2027-02-27T00:00:00.000Z'),
+      periodStart: new Date('2027-02-01T00:00:00.000Z'),
+      periodEnd: new Date('2027-02-28T00:00:00.000Z'),
       selfEvalOpenAt: new Date('2027-03-01T01:00:00.000Z'),
       selfEvalDueAt: new Date('2027-03-03T10:00:00.000Z'),
       managerDueAt: new Date('2027-03-08T10:00:00.000Z'),
@@ -249,26 +285,25 @@ describe('CyclesService', () => {
       periodKey: '2027-03',
       periodType: 'month',
       sequence: 3,
-      periodStart: new Date('2027-02-28T00:00:00.000Z'),
-      periodEnd: new Date('2027-03-30T00:00:00.000Z'),
+      periodStart: new Date('2027-03-01T00:00:00.000Z'),
+      periodEnd: new Date('2027-03-31T00:00:00.000Z'),
       selfEvalOpenAt: new Date('2027-04-01T01:00:00.000Z'),
       selfEvalDueAt: new Date('2027-04-06T10:00:00.000Z'),
       managerDueAt: new Date('2027-04-09T10:00:00.000Z'),
       isException: true,
     }];
     const cycle = storedDraft({
-      startDate: new Date('2026-12-31T00:00:00.000Z'),
-      endDate: new Date('2027-03-30T00:00:00.000Z'),
       participantDeptIds: ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
       publishVisibleFields: { grade: true, total_score: true },
       periodSchedules: schedules,
     });
     prisma.assessmentCycle.findUnique.mockResolvedValue(cycle);
 
-    const result = await service.updateDraft('cycle-1', {
+    const result = await service.updateDraft('cycle-1', plainToInstance(UpdateCycleDto, {
       expectedPlanVersion: 3,
       name: cycle.name,
-      startDate: new Date('2027-01-01T00:00:00+08:00'),
+      startDate: '2027-01-01',
+      endDate: '2027-03-31',
       participantDeptIds: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'],
       publishVisibleFields: { total_score: true, grade: true },
       gradeAMaxRatio: 0.20,
@@ -279,7 +314,7 @@ describe('CyclesService', () => {
         managerDueAt: schedule.managerDueAt.toISOString(),
         isException: schedule.isException,
       })),
-    } as any, creator);
+    }), creator);
 
     expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith({
       where: { id: 'cycle-1', status: CycleStatus.draft, planVersion: 3 },

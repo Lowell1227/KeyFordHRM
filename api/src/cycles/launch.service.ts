@@ -1139,30 +1139,13 @@ export class LaunchService {
     },
     schedules: LaunchPeriodSchedule[],
   ): boolean {
-    return [1, 0].some((utcDateOffsetDays) => this.persistedSchedulesMatchPlanDateMode(
-      cycle,
-      schedules,
-      utcDateOffsetDays,
-    ));
-  }
-
-  private persistedSchedulesMatchPlanDateMode(
-    cycle: {
-      type: CycleType;
-      scoringFrequency: ScoringFrequency;
-      startDate: Date;
-      endDate: Date;
-    },
-    schedules: LaunchPeriodSchedule[],
-    utcDateOffsetDays: number,
-  ): boolean {
     let expected: ReturnType<typeof buildPeriodDefinitions>;
     try {
       expected = buildPeriodDefinitions({
         type: cycle.type,
         scoringFrequency: cycle.scoringFrequency,
-        startDate: this.asShanghaiMidnight(cycle.startDate, utcDateOffsetDays),
-        endDate: this.asShanghaiMidnight(cycle.endDate, utcDateOffsetDays),
+        startDate: cycle.startDate,
+        endDate: cycle.endDate,
       });
     } catch {
       return false;
@@ -1181,25 +1164,10 @@ export class LaunchService {
         schedule
         && schedule.periodType === period.periodType
         && schedule.sequence === period.sequence
-        && this.persistedDateKey(schedule.periodStart, utcDateOffsetDays) === businessDateKey(period.periodStart)
-        && this.persistedDateKey(schedule.periodEnd, utcDateOffsetDays) === businessDateKey(period.periodEnd),
+        && businessDateKey(schedule.periodStart) === businessDateKey(period.periodStart)
+        && businessDateKey(schedule.periodEnd) === businessDateKey(period.periodEnd),
       );
     });
-  }
-
-  private asShanghaiMidnight(date: Date, utcDateOffsetDays: number): Date {
-    return new Date(`${this.persistedDateKey(date, utcDateOffsetDays)}T00:00:00+08:00`);
-  }
-
-  private persistedDateKey(date: Date, utcDateOffsetDays: number): string {
-    const isUtcMidnight = date.getUTCHours() === 0
-      && date.getUTCMinutes() === 0
-      && date.getUTCSeconds() === 0
-      && date.getUTCMilliseconds() === 0;
-    if (!isUtcMidnight) return businessDateKey(date);
-    const businessDate = new Date(date.getTime());
-    businessDate.setUTCDate(businessDate.getUTCDate() + utcDateOffsetDays);
-    return businessDate.toISOString().slice(0, 10);
   }
 
   /** 为每个被使用模板生成快照。 */

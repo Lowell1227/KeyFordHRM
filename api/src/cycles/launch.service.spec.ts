@@ -697,6 +697,26 @@ describe('LaunchService preflight', () => {
     }));
   });
 
+  it('blocks pre-deployment V2 rows whose date-only values were shifted from Shanghai-midnight instants', async () => {
+    tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle({
+      startDate: new Date('2026-12-31T00:00:00.000Z'),
+      endDate: new Date('2027-03-30T00:00:00.000Z'),
+    }));
+    tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules.map((schedule) => ({
+      ...schedule,
+      periodStart: new Date(schedule.periodStart.getTime() - 24 * 60 * 60 * 1000),
+      periodEnd: new Date(schedule.periodEnd.getTime() - 24 * 60 * 60 * 1000),
+    })));
+    mockV2Users();
+
+    await expect(service.preflight(cycleId)).resolves.toEqual(expect.objectContaining({
+      ready: false,
+      blockers: expect.arrayContaining([expect.objectContaining({
+        code: 'PERIOD_SCHEDULE_INVALID',
+      })]),
+    }));
+  });
+
   it('blocks workflow v2 when the configured company final approver has a direct manager', async () => {
     tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle());
     tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);

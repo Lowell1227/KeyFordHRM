@@ -12,7 +12,7 @@ import type { CycleNotificationMode } from './dto/update-cycle-notification-mode
 import type { ReviewCycleDto } from './dto/review-cycle.dto';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { CycleScheduleService, NormalizedCycleSchedulePlan } from './cycle-schedule.service';
-import { businessDateKey, normalizeScoringFrequency, prismaDateBusinessKey } from './cycle-scoring-plan';
+import { businessDateKey, canonicalDateOnly, normalizeScoringFrequency } from './cycle-scoring-plan';
 
 const DEADLINE_FIELDS = [
   'deadlineIndicatorSetting',
@@ -55,17 +55,19 @@ export class CyclesService {
 
   /** POST /cycles — 创建考核周期。 */
   async create(dto: CreateCycleDto, user: AuthUser) {
-    const goalSettingOpenAt = dto.goalSettingOpenAt ?? this.addDays(dto.startDate, -10);
-    const selfEvalOpenAt = dto.selfEvalOpenAt ?? this.addDays(dto.endDate, 1);
-    this.validateCycleDates(dto, goalSettingOpenAt, selfEvalOpenAt);
+    const startDate = canonicalDateOnly(dto.startDate);
+    const endDate = canonicalDateOnly(dto.endDate);
+    const goalSettingOpenAt = dto.goalSettingOpenAt ?? this.addDays(startDate, -10);
+    const selfEvalOpenAt = dto.selfEvalOpenAt ?? this.addDays(endDate, 1);
+    this.validateCycleDates({ ...dto, startDate, endDate }, goalSettingOpenAt, selfEvalOpenAt);
     const hrOwnerId = await this.resolveHrOwnerId(dto.hrOwnerId, user);
     const reviewerId = await this.resolveReviewerId(dto.reviewerId);
     const workflowVersion = dto.workflowVersion ?? 1;
     const schedulePlan = workflowVersion === 2
       ? this.normalizeSchedulePlan({
           type: dto.type,
-          startDate: dto.startDate,
-          endDate: dto.endDate,
+          startDate,
+          endDate,
           scoringFrequency: dto.scoringFrequency,
           schedules: dto.periodSchedules,
         })
@@ -78,8 +80,8 @@ export class CyclesService {
       const data: Prisma.AssessmentCycleCreateInput = {
         name: dto.name,
         type: dto.type,
-        startDate: dto.startDate,
-        endDate: dto.endDate,
+        startDate,
+        endDate,
         goalSettingOpenAt,
         selfEvalOpenAt,
         workflowVersion,
@@ -230,8 +232,8 @@ export class CyclesService {
 
       const goalSettingOpenAt = dto.goalSettingOpenAt ?? cycle.goalSettingOpenAt;
       const selfEvalOpenAt = dto.selfEvalOpenAt ?? cycle.selfEvalOpenAt;
-      const startDate = dto.startDate ?? this.asShanghaiBusinessDate(cycle.startDate);
-      const endDate = dto.endDate ?? this.asShanghaiBusinessDate(cycle.endDate);
+      const startDate = canonicalDateOnly(dto.startDate ?? cycle.startDate);
+      const endDate = canonicalDateOnly(dto.endDate ?? cycle.endDate);
       if (goalSettingOpenAt && selfEvalOpenAt) {
         this.validateCycleDates(
           {
@@ -264,8 +266,8 @@ export class CyclesService {
       );
       const scheduleStructureChanged = workflowVersion !== (cycle.workflowVersion ?? 1)
         || nextType !== cycle.type
-        || businessDateKey(startDate) !== prismaDateBusinessKey(cycle.startDate)
-        || businessDateKey(endDate) !== prismaDateBusinessKey(cycle.endDate)
+        || businessDateKey(startDate) !== businessDateKey(cycle.startDate)
+        || businessDateKey(endDate) !== businessDateKey(cycle.endDate)
         || requestedScoringFrequency !== (cycle.scoringFrequency ?? ScoringFrequency.cycle);
       const storedSchedules = cycle.periodSchedules ?? [];
       const schedulePlan = workflowVersion === 2
@@ -311,11 +313,11 @@ export class CyclesService {
       const data: Prisma.AssessmentCycleUncheckedUpdateManyInput = {};
       if (dto.name !== undefined && dto.name !== cycle.name) data.name = dto.name;
       if (dto.type !== undefined && dto.type !== cycle.type) data.type = dto.type;
-      if (dto.startDate !== undefined && businessDateKey(dto.startDate) !== prismaDateBusinessKey(cycle.startDate)) {
-        data.startDate = dto.startDate;
+      if (dto.startDate !== undefined && businessDateKey(startDate) !== businessDateKey(cycle.startDate)) {
+        data.startDate = startDate;
       }
-      if (dto.endDate !== undefined && businessDateKey(dto.endDate) !== prismaDateBusinessKey(cycle.endDate)) {
-        data.endDate = dto.endDate;
+      if (dto.endDate !== undefined && businessDateKey(endDate) !== businessDateKey(cycle.endDate)) {
+        data.endDate = endDate;
       }
       if (dto.goalSettingOpenAt !== undefined && !this.sameInstant(dto.goalSettingOpenAt, cycle.goalSettingOpenAt)) {
         data.goalSettingOpenAt = dto.goalSettingOpenAt;
@@ -680,8 +682,8 @@ export class CyclesService {
     }>,
     next: NormalizedCycleSchedulePlan['schedules'],
   ): string[] {
-    const storedByKey = new Map(stored.map((schedule) => [schedule.periodKey, this.scheduleSignature(schedule, true)]));
-    const nextByKey = new Map(next.map((schedule) => [schedule.periodKey, this.scheduleSignature(schedule, false)]));
+    const storedByKey = new Map(stored.map((schedule) => [schedule.periodKey, this.scheduleSignature(schedule)]));
+    const nextByKey = new Map(next.map((schedule) => [schedule.periodKey, this.scheduleSignature(schedule)]));
     return [...new Set([...storedByKey.keys(), ...nextByKey.keys()])]
       .filter((periodKey) => storedByKey.get(periodKey) !== nextByKey.get(periodKey))
       .sort();
@@ -696,13 +698,12 @@ export class CyclesService {
     selfEvalDueAt: Date;
     managerDueAt: Date;
     isException: boolean;
-  }, persistedDateFields: boolean): string {
-    const dateKey = persistedDateFields ? prismaDateBusinessKey : businessDateKey;
+  }): string {
     return JSON.stringify([
       schedule.periodType,
       schedule.sequence,
-      dateKey(schedule.periodStart),
-      dateKey(schedule.periodEnd),
+      businessDateKey(schedule.periodStart),
+      businessDateKey(schedule.periodEnd),
       schedule.selfEvalOpenAt.toISOString(),
       schedule.selfEvalDueAt.toISOString(),
       schedule.managerDueAt.toISOString(),
@@ -721,10 +722,6 @@ export class CyclesService {
   private sameInstant(left: Date | null | undefined, right: Date | null | undefined): boolean {
     if (left == null || right == null) return left == null && right == null;
     return left.getTime() === right.getTime();
-  }
-
-  private asShanghaiBusinessDate(date: Date): Date {
-    return new Date(`${prismaDateBusinessKey(date)}T00:00:00+08:00`);
   }
 
   private sameDecimal(left: number | Prisma.Decimal, right: number | Prisma.Decimal): boolean {
@@ -844,7 +841,9 @@ export class CyclesService {
   }
 
   private async resolveHrOwnerId(requestedId: string | undefined, operator: AuthUser): Promise<string> {
-    if (!requestedId && (operator.sysRole === SysRole.hr || hasHrCapability(operator, 'cycle_plan_edit'))) {
+    const operatorIsEligibleOwner = operator.sysRole === SysRole.hr
+      || (operator.sysRole === SysRole.hr_user && hasHrCapability(operator, 'cycle_plan_edit'));
+    if (!requestedId && operatorIsEligibleOwner) {
       return operator.id;
     }
     const eligibleOwnerWhere: Prisma.UserWhereInput = {

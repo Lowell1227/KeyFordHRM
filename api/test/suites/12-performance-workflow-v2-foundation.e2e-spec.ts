@@ -120,8 +120,8 @@ describe("Performance workflow v2 foundation", () => {
         type: "quarterly",
         workflowVersion: 2,
         scoringFrequency: "monthly",
-        startDate: "2027-01-01T00:00:00+08:00",
-        endDate: "2027-03-31T00:00:00+08:00",
+        startDate: "2027-01-01",
+        endDate: "2027-03-31",
         goalSettingOpenAt: "2026-01-01T09:00:00+08:00",
         hrOwnerId: hr.id,
         reviewerId: hrAdministrator.id,
@@ -159,11 +159,28 @@ describe("Performance workflow v2 foundation", () => {
       companyFinalApprover: null,
     });
     expect(createdV2.body.data.periodSchedules).toHaveLength(3);
-    expect(
-      await app.prisma.cyclePeriodSchedule.count({
-        where: { cycleId: v2CycleId },
-      }),
-    ).toBe(3);
+    const persistedV2DateShape = await app.prisma.assessmentCycle.findUniqueOrThrow({
+      where: { id: v2CycleId },
+      select: {
+        startDate: true,
+        endDate: true,
+        periodSchedules: {
+          orderBy: { sequence: "asc" },
+          select: { periodKey: true, periodStart: true, periodEnd: true },
+        },
+      },
+    });
+    expect(persistedV2DateShape.startDate.toISOString()).toBe("2027-01-01T00:00:00.000Z");
+    expect(persistedV2DateShape.endDate.toISOString()).toBe("2027-03-31T00:00:00.000Z");
+    expect(persistedV2DateShape.periodSchedules.map((schedule) => ({
+      periodKey: schedule.periodKey,
+      periodStart: schedule.periodStart.toISOString(),
+      periodEnd: schedule.periodEnd.toISOString(),
+    }))).toEqual([
+      { periodKey: "2027-01", periodStart: "2027-01-01T00:00:00.000Z", periodEnd: "2027-01-31T00:00:00.000Z" },
+      { periodKey: "2027-02", periodStart: "2027-02-01T00:00:00.000Z", periodEnd: "2027-02-28T00:00:00.000Z" },
+      { periodKey: "2027-03", periodStart: "2027-03-01T00:00:00.000Z", periodEnd: "2027-03-31T00:00:00.000Z" },
+    ]);
 
     await app.prisma.systemConfig.update({
       where: { key: "performance_company_final_approver" },
@@ -386,8 +403,8 @@ describe("Performance workflow v2 foundation", () => {
       .send({
         name: "2027年第二季度绩效（历史工作流V1）",
         type: "quarterly",
-        startDate: "2027-04-01T00:00:00+08:00",
-        endDate: "2027-06-30T00:00:00+08:00",
+        startDate: "2027-04-01",
+        endDate: "2027-06-30",
         goalSettingOpenAt: "2026-01-01T09:00:00+08:00",
         hrOwnerId: hr.id,
         reviewerId: hrAdministrator.id,

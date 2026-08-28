@@ -10,8 +10,8 @@ describe('CreateCycleDto', () => {
       type: 'quarterly',
       workflowVersion: 2,
       scoringFrequency: 'monthly',
-      startDate: '2027-01-01T00:00:00+08:00',
-      endDate: '2027-03-31T00:00:00+08:00',
+      startDate: '2027-01-01',
+      endDate: '2027-03-31',
       periodSchedules: [{
         periodKey: '2027-01',
         selfEvalOpenAt: '2027-02-01T09:00:00+08:00',
@@ -21,6 +21,8 @@ describe('CreateCycleDto', () => {
     });
 
     await expect(validate(dto)).resolves.toHaveLength(0);
+    expect(dto.startDate.toISOString()).toBe('2027-01-01T00:00:00.000Z');
+    expect(dto.endDate.toISOString()).toBe('2027-03-31T00:00:00.000Z');
   });
 
   it('rejects unsupported workflow, frequency, and malformed nested schedules', async () => {
@@ -29,8 +31,8 @@ describe('CreateCycleDto', () => {
       type: 'quarterly',
       workflowVersion: 3,
       scoringFrequency: 'weekly',
-      startDate: '2027-01-01T00:00:00+08:00',
-      endDate: '2027-03-31T00:00:00+08:00',
+      startDate: '2027-01-01',
+      endDate: '2027-03-31',
       periodSchedules: [{ periodKey: 'January' }],
     });
 
@@ -47,12 +49,28 @@ describe('CreateCycleDto', () => {
     const dto = plainToInstance(CreateCycleDto, {
       name: '2027 上半年绩效考核',
       type: 'semiannual',
-      startDate: new Date('2027-01-01T00:00:00+08:00'),
-      endDate: new Date('2027-06-30T00:00:00+08:00'),
+      startDate: '2027-01-01',
+      endDate: '2027-06-30',
     });
 
     const errors = await validate(dto);
 
     expect(errors.find((error) => error.property === 'type')).toBeUndefined();
+  });
+
+  it('rejects timestamp-shaped values for the public date-only fields', async () => {
+    const dto = plainToInstance(CreateCycleDto, {
+      name: '含歧义日期的周期',
+      type: 'quarterly',
+      startDate: '2027-01-01T00:00:00+08:00',
+      endDate: '2027-03-31T00:00:00+08:00',
+    });
+
+    const errors = await validate(dto);
+
+    expect(errors.map((error) => error.property)).toEqual(expect.arrayContaining([
+      'startDate',
+      'endDate',
+    ]));
   });
 });

@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsString,
   IsOptional,
@@ -16,6 +16,7 @@ import {
 } from 'class-validator';
 import { CycleType, ScoringFrequency } from '@prisma/client';
 import { CyclePeriodScheduleDto } from './cycle-period-schedule.dto';
+import { transformDateOnly } from './date-only.transform';
 
 /**
  * 创建考核周期请求体（对应后端文档 3.7）。
@@ -46,11 +47,11 @@ export class CreateCycleDto {
   @IsIn(['off', 'launch_only', 'launch_and_reminders'])
   notificationMode?: 'off' | 'launch_only' | 'launch_and_reminders';
 
-  @Type(() => Date)
+  @Transform(transformDateOnly, { toClassOnly: true })
   @IsDate()
   startDate: Date;
 
-  @Type(() => Date)
+  @Transform(transformDateOnly, { toClassOnly: true })
   @IsDate()
   endDate: Date;
 

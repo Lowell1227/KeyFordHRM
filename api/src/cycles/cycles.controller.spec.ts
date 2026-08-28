@@ -16,4 +16,14 @@ describe('CyclesController schedule preview route', () => {
     expect(Reflect.getMetadata(ROLES_KEY, CyclesController.prototype.review)).toEqual([SysRole.hr]);
     expect(Reflect.getMetadata(HR_CAPABILITIES_KEY, CyclesController.prototype.review)).toBeUndefined();
   });
+
+  it('keeps system administrators on cycle creation without granting implicit HR ownership', () => {
+    expect(Reflect.getMetadata(ROLES_KEY, CyclesController.prototype.create)).toEqual([
+      SysRole.hr,
+      SysRole.system_admin,
+    ]);
+    expect(Reflect.getMetadata(HR_CAPABILITIES_KEY, CyclesController.prototype.create)).toEqual([
+      'cycle_plan_edit',
+    ]);
+  });
 });

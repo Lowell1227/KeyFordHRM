@@ -1,16 +1,6 @@
 import { BadRequestException } from '@nestjs/common';
 import { AssessmentPeriodType, CycleType, ScoringFrequency } from '@prisma/client';
 
-const SHANGHAI_TIME_ZONE = 'Asia/Shanghai';
-const SHANGHAI_OFFSET_MS = 8 * 60 * 60 * 1000;
-const shanghaiDateFormatter = new Intl.DateTimeFormat('en-CA', {
-  timeZone: SHANGHAI_TIME_ZONE,
-  calendar: 'iso8601',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-});
-
 export interface BuildPeriodDefinitionsInput {
   type: CycleType;
   scoringFrequency: ScoringFrequency;
@@ -26,26 +16,14 @@ export interface PeriodDefinition {
   periodEnd: Date;
 }
 
-/** Canonicalize date-only values from either Shanghai-midnight DTOs or Prisma @db.Date UTC-midnight rows. */
-export function businessDateKey(date: Date): string {
+/** Canonicalize all date-only values as UTC midnight; timestamps use separate fields. */
+export function canonicalDateOnly(date: Date): Date {
   if (Number.isNaN(date.getTime())) throw new BadRequestException('日期必须是有效值');
-  const value = getCalendarDate(date);
-  return `${value.year}-${String(value.month).padStart(2, '0')}-${String(value.day).padStart(2, '0')}`;
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
-/** Restore the Shanghai business date lost when a Shanghai-midnight instant round-trips through Prisma @db.Date. */
-export function prismaDateBusinessKey(date: Date): string {
-  if (Number.isNaN(date.getTime())) throw new BadRequestException('日期必须是有效值');
-  const isUtcMidnight = date.getUTCHours() === 0
-    && date.getUTCMinutes() === 0
-    && date.getUTCSeconds() === 0
-    && date.getUTCMilliseconds() === 0;
-  if (isUtcMidnight) {
-    const businessDate = new Date(date.getTime());
-    businessDate.setUTCDate(businessDate.getUTCDate() + 1);
-    return businessDate.toISOString().slice(0, 10);
-  }
-  return businessDateKey(date);
+export function businessDateKey(date: Date): string {
+  return canonicalDateOnly(date).toISOString().slice(0, 10);
 }
 
 interface CalendarDate {
@@ -64,10 +42,12 @@ export function normalizeScoringFrequency(type: CycleType, requested?: ScoringFr
     : ScoringFrequency.cycle;
 }
 
-/** Build immutable period boundaries from cycle calendar dates in Asia/Shanghai. */
+/** Build immutable period boundaries from canonical UTC date-only values. */
 export function buildPeriodDefinitions(input: BuildPeriodDefinitionsInput): PeriodDefinition[] {
-  const start = getCalendarDate(input.startDate);
-  const end = getCalendarDate(input.endDate);
+  const canonicalStart = canonicalDateOnly(input.startDate);
+  const canonicalEnd = canonicalDateOnly(input.endDate);
+  const start = getCalendarDate(canonicalStart);
+  const end = getCalendarDate(canonicalEnd);
 
   if (compareCalendarDates(end, start) < 0) {
     throw new BadRequestException('结束日期不能早于开始日期');
@@ -80,8 +60,8 @@ export function buildPeriodDefinitions(input: BuildPeriodDefinitionsInput): Peri
         periodKey: 'cycle',
         periodType: AssessmentPeriodType.cycle,
         sequence: 1,
-        periodStart: cloneDate(input.startDate),
-        periodEnd: cloneDate(input.endDate),
+        periodStart: canonicalStart,
+        periodEnd: canonicalEnd,
       },
     ];
   }
@@ -95,8 +75,8 @@ export function buildPeriodDefinitions(input: BuildPeriodDefinitionsInput): Peri
     const isFirstMonth = sequence === 1;
     const isLastMonth = sequence === expectedPeriodCount;
     const lastDay = daysInMonth(year, month);
-    const periodStart = isFirstMonth ? cloneDate(input.startDate) : dateAtShanghaiMidnight(year, month, 1);
-    const periodEnd = isLastMonth ? cloneDate(input.endDate) : dateAtShanghaiMidnight(year, month, lastDay);
+    const periodStart = isFirstMonth ? canonicalStart : dateAtUtcMidnight(year, month, 1);
+    const periodEnd = isLastMonth ? canonicalEnd : dateAtUtcMidnight(year, month, lastDay);
 
     if (periodEnd < periodStart) {
       throw new BadRequestException(`${input.type}按月评分的考核期间不足以形成${expectedPeriodCount}个评分月份`);
@@ -133,12 +113,10 @@ function getCalendarDate(date: Date): CalendarDate {
     throw new BadRequestException('开始日期和结束日期必须是有效日期');
   }
 
-  const parts = shanghaiDateFormatter.formatToParts(date);
-  const values = new Map(parts.map((part) => [part.type, part.value]));
   return {
-    year: Number(values.get('year')),
-    month: Number(values.get('month')),
-    day: Number(values.get('day')),
+    year: date.getUTCFullYear(),
+    month: date.getUTCMonth() + 1,
+    day: date.getUTCDate(),
   };
 }
 
@@ -150,10 +128,6 @@ function daysInMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
-function dateAtShanghaiMidnight(year: number, month: number, day: number): Date {
-  return new Date(Date.UTC(year, month - 1, day) - SHANGHAI_OFFSET_MS);
-}
-
-function cloneDate(date: Date): Date {
-  return new Date(date.getTime());
+function dateAtUtcMidnight(year: number, month: number, day: number): Date {
+  return new Date(Date.UTC(year, month - 1, day));
 }
