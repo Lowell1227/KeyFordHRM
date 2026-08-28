@@ -51,12 +51,16 @@ describe("Performance workflow v2 foundation", () => {
       deptId: dept.id,
       directManagerId: topLeader.id,
     });
-    const hr = await factory.createUser({
+    const cycleHr = await factory.createUser({
       employeeNo: "V2-HR-001",
       name: "周期HR",
-      sysRole: SysRole.hr,
+      sysRole: SysRole.hr_user,
       deptId: dept.id,
       directManagerId: topLeader.id,
+    });
+    const hr = await app.prisma.user.update({
+      where: { id: cycleHr.id },
+      data: { hrCapabilities: ["cycle_plan_edit"] },
     });
     const departmentHead = await factory.createUser({
       employeeNo: "V2-HEAD-001",
@@ -170,10 +174,22 @@ describe("Performance workflow v2 foundation", () => {
       blockers: [],
     });
     expect(preflightV2.body.data.planHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(preflightV2.body.data.participants).toHaveLength(2);
+    expect(
+      preflightV2.body.data.participants
+        .map((participant: { employeeId: string }) => participant.employeeId)
+        .sort(),
+    ).toEqual([employee.id, topLeader.id].sort());
     expect(
       preflightV2.body.data.participants.filter(
         (participant: { participantDisposition: string }) =>
           participant.participantDisposition === "active",
+      ),
+    ).toHaveLength(1);
+    expect(
+      preflightV2.body.data.participants.filter(
+        (participant: { participantDisposition: string }) =>
+          participant.participantDisposition === "top_leader_exempt",
       ),
     ).toHaveLength(1);
     expect(preflightV2.body.data.participants).toContainEqual(
@@ -193,6 +209,7 @@ describe("Performance workflow v2 foundation", () => {
         exemptReason: "最高负责人豁免",
       }),
     );
+    expect(preflightV2.body.data.exclusions).toHaveLength(1);
     expect(preflightV2.body.data.exclusions).toEqual([
       {
         employeeId: probationUser.id,
