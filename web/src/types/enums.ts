@@ -10,6 +10,10 @@ export type CompanyCode = 'fuede' | 'fuede_sports' | 'beijing_fuede' | 'fansibao
 
 export type CycleType = 'quarterly' | 'semiannual' | 'monthly' | 'annual' | 'probation' | 'custom';
 
+export type ScoringFrequency = 'monthly' | 'cycle';
+
+export type AssessmentPeriodType = 'month' | 'cycle';
+
 export type CycleStatus =
   | 'draft'
   | 'scheduled'

@@ -9,9 +9,11 @@ import type {
   PublishResultsBody,
   PublishResultsResult,
   LaunchPreflightResult,
+  CycleSchedulePreview,
   CycleNotificationMode,
   DingtalkNotificationSettings,
 } from '@/types/api.types';
+import type { CycleType, ScoringFrequency } from '@/types/enums';
 
 function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
   return http.get(url, { params }) as unknown as Promise<T>;
@@ -43,6 +45,15 @@ export const cyclesApi = {
   /** GET /cycles/:id — 周期详情 */
   findOne(id: string): Promise<AssessmentCycle> {
     return apiGet(`/cycles/${id}`);
+  },
+
+  previewSchedule(body: {
+    type: CycleType;
+    scoringFrequency?: ScoringFrequency;
+    startDate: string;
+    endDate: string;
+  }): Promise<CycleSchedulePreview> {
+    return apiPost('/cycles/schedule-preview', body);
   },
 
   /** POST /cycles — 创建周期（限 hr/system_admin） */

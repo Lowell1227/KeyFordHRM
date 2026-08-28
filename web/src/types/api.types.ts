@@ -4,6 +4,8 @@ import type {
   UserStatus,
   CompanyCode,
   CycleType,
+  ScoringFrequency,
+  AssessmentPeriodType,
   CycleStatus,
   IndicatorType,
   IndicatorVisibilityScope,
@@ -392,10 +394,43 @@ export interface DingtalkNotificationSettings {
   effectiveEnabled: boolean;
 }
 
+export interface CyclePeriodSchedule {
+  id?: string;
+  periodKey: string;
+  periodType: AssessmentPeriodType;
+  sequence: number;
+  periodStart: string;
+  periodEnd: string;
+  selfEvalOpenAt: string;
+  selfEvalDueAt: string;
+  managerDueAt: string;
+  isException: boolean;
+}
+
+export interface CycleScheduleIssue {
+  code: string;
+  periodKey: string;
+  message: string;
+}
+
+export interface CycleSchedulePreview {
+  scoringFrequency: ScoringFrequency;
+  reviewFrequency: 'cycle';
+  schedules: CyclePeriodSchedule[];
+  blockers: CycleScheduleIssue[];
+  warnings: CycleScheduleIssue[];
+}
+
 export interface AssessmentCycle {
   id: string;
   name: string;
   type: CycleType;
+  workflowVersion?: number;
+  scoringFrequency?: ScoringFrequency;
+  reviewFrequency?: 'cycle';
+  periodSchedules?: CyclePeriodSchedule[];
+  companyFinalApproverId?: string | null;
+  companyFinalApprover?: { id: string; name: string } | null;
   startDate: string;
   endDate: string;
   goalSettingOpenAt?: string;
@@ -470,6 +505,12 @@ export type CycleStatusGroup = 'attention' | 'active' | 'finished';
 export interface CreateCycleBody {
   name: string;
   type: CycleType;
+  workflowVersion?: number;
+  scoringFrequency?: ScoringFrequency;
+  reviewFrequency?: 'cycle';
+  periodSchedules?: CyclePeriodSchedule[];
+  companyFinalApproverId?: string | null;
+  companyFinalApprover?: { id: string; name: string } | null;
   notificationMode?: CycleNotificationMode;
   startDate: string;
   endDate: string;

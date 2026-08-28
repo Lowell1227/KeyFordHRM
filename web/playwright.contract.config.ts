@@ -1,6 +1,14 @@
 import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
+  use: {
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:4173',
+  },
+  webServer: {
+    command: 'npm run dev -- --host 127.0.0.1 --port 4173',
+    url: 'http://127.0.0.1:4173',
+    reuseExistingServer: !process.env.CI,
+  },
   testDir: './e2e/specs',
   testMatch: [
     '10-team-performance-contract.spec.ts',
@@ -16,6 +24,7 @@ export default defineConfig({
     '22-template-global-weight-contract.spec.ts',
     '23-employee-data-review.spec.ts',
     '24-dynamic-business-permissions.spec.ts',
+    '25-cycle-scoring-plan.spec.ts',
     '26-menu-online-baseline.spec.ts',
   ],
   workers: 1,
