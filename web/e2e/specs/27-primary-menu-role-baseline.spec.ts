@@ -1,12 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 
-async function loginWithAcceptanceAccount(page: Page, employeeNo: string) {
+async function loginWithPassword(page: Page, employeeNo: string) {
   await page.goto('/login');
-  await page.getByTestId('test-account-login-toggle').click();
-  await page
-    .getByTestId('test-account-login-button')
-    .filter({ hasText: employeeNo })
-    .click();
+  await page.getByTestId('password-login-toggle').click();
+  await page.getByTestId('login-employee-no').fill(employeeNo);
+  await page.getByTestId('login-password').fill('000000');
+  await page.getByTestId('login-submit').click();
   await expect(page).toHaveURL(/\/dashboard$/);
 }
 
@@ -18,7 +17,7 @@ async function expectPrimaryModules(page: Page, labels: string[]) {
 
 test.describe('一级菜单角色基线', () => {
   test('系统管理员看到完整业务域和两个只读规划模块', async ({ page }) => {
-    await loginWithAcceptanceAccount(page, 'ADMIN');
+    await loginWithPassword(page, 'ADMIN');
 
     await expectPrimaryModules(page, [
       '工作台',
@@ -39,7 +38,7 @@ test.describe('一级菜单角色基线', () => {
   });
 
   test('HR 看到人员和系统管理且不能进入规划模块', async ({ page }) => {
-    await loginWithAcceptanceAccount(page, 'HR001');
+    await loginWithPassword(page, 'HR001');
 
     await expectPrimaryModules(page, ['工作台', '绩效', '人员', '系统管理']);
     await page.goto('/recruitment');
@@ -52,7 +51,7 @@ test.describe('一级菜单角色基线', () => {
   });
 
   test('员工只看到工作台、绩效和人员且不能进入系统管理', async ({ page }) => {
-    await loginWithAcceptanceAccount(page, 'EMP001');
+    await loginWithPassword(page, 'EMP001');
 
     await expectPrimaryModules(page, ['工作台', '绩效', '人员']);
     await page.goto('/recruitment');

@@ -1,5 +1,30 @@
 import { expect, test } from '@playwright/test';
 
+async function mockPasswordLogin(page: import('@playwright/test').Page) {
+  await page.route('**/api/v1/auth/login', async (route) => {
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify({
+        code: 0,
+        message: 'success',
+        data: {
+          token: 'login-page-brand-test-token',
+          expiresIn: 3600,
+          passwordChangeRequired: false,
+          user: {
+            id: 'login-page-brand-test-user',
+            name: '品牌验证用户',
+            deptId: null,
+            sysRole: 'system_admin',
+            isAssessorOnly: false,
+            canViewAll: true,
+          },
+        },
+      }),
+    });
+  });
+}
+
 test.describe('login manual link', () => {
   test('operation manual opens in a new tab without leaving the login page', async ({ page }) => {
     await page.goto('/login');
@@ -34,15 +59,19 @@ test.describe('login manual link', () => {
   });
 
   test('authenticated navigation uses the inverse 2025 logo on its blue rail', async ({ page }) => {
+    await mockPasswordLogin(page);
     await page.goto('/login');
-    const quickLogin = page.getByTestId('test-account-login-button').first();
-    await expect(quickLogin).toBeVisible();
-    await quickLogin.click();
+    await page.getByTestId('password-login-toggle').click();
+    await page.getByTestId('login-employee-no').fill('335');
+    await page.getByTestId('login-password').fill('0000');
+    await page.getByTestId('login-submit').click();
     await page.waitForURL(/\/dashboard$/);
 
     const sidebarLogo = page.getByRole('img', { name: 'KAYFORD 孚德' });
     await expect(sidebarLogo).toBeVisible();
     await expect(sidebarLogo).toHaveAttribute('src', '/brand/logo-2025-inverse.png');
-    expect(await sidebarLogo.evaluate((image: HTMLImageElement) => image.naturalWidth)).toBeGreaterThan(0);
+    await expect.poll(
+      () => sidebarLogo.evaluate((image: HTMLImageElement) => image.naturalWidth),
+    ).toBeGreaterThan(0);
   });
 });

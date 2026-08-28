@@ -1,32 +1,7 @@
 import { expect, test } from '@playwright/test';
 
-const TEST_ACCOUNTS = [
-  { employeeNo: 'ADMIN', name: '测试·系统管理员', sysRole: 'system_admin', roleLabel: '系统管理员' },
-  { employeeNo: 'HR001', name: '测试·姚遥', sysRole: 'hr', roleLabel: 'HR 管理员' },
-  { employeeNo: 'VP001', name: '测试·李弘', sysRole: 'employee', roleLabel: '最终业务审批场景' },
-  { employeeNo: 'MGR001', name: '测试·周强明', sysRole: 'employee', roleLabel: '绩效直属上级场景' },
-  { employeeNo: 'EMP001', name: '测试·张辰', sysRole: 'employee', roleLabel: '员工目标审核场景' },
-  { employeeNo: 'EMP002', name: '测试·陈铭', sysRole: 'employee', roleLabel: '员工自评场景' },
-  { employeeNo: 'EMP003', name: '测试·王敏宁', sysRole: 'employee', roleLabel: '主管评分场景' },
-  { employeeNo: 'EMP004', name: '测试·刘扬', sysRole: 'employee', roleLabel: '结果查看场景' },
-];
-
-async function mockTestAccounts(page: import('@playwright/test').Page) {
-  await page.route('**/api/v1/auth/test-accounts', async (route) => {
-    await route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify({
-        code: 0,
-        message: 'success',
-        data: { enabled: true, accounts: TEST_ACCOUNTS },
-      }),
-    });
-  });
-}
-
 test.describe('登录页品牌体验', () => {
   test('桌面端使用品牌舞台与登录区双栏布局', async ({ page }) => {
-    await mockTestAccounts(page);
     await page.setViewportSize({ width: 1280, height: 720 });
     await page.goto('/login');
 
@@ -54,7 +29,6 @@ test.describe('登录页品牌体验', () => {
   });
 
   test('登录说明保持克制层级并将主操作留给钉钉登录', async ({ page }) => {
-    await mockTestAccounts(page);
     await page.setViewportSize({ width: 1280, height: 720 });
     await page.goto('/login');
     await expect(page.locator('.auth-heading h2')).toBeVisible();
@@ -81,46 +55,11 @@ test.describe('登录页品牌体验', () => {
     expect(hierarchy.primaryButtonHeight).toBeGreaterThanOrEqual(48);
   });
 
-  test('验收账号在独立对话层中按双列展示并支持 Esc 关闭', async ({ page }) => {
-    await mockTestAccounts(page);
-    await page.setViewportSize({ width: 1280, height: 720 });
-    await page.goto('/login');
-
-    await expect(page.getByRole('dialog', { name: '验收账号登录' })).toHaveCount(0);
-    const toggle = page.getByTestId('test-account-login-toggle');
-    await toggle.click();
-
-    const dialog = page.getByRole('dialog', { name: '验收账号登录' });
-    await expect(dialog).toBeVisible();
-    await expect(dialog).toContainText('仅用于测试组织与测试数据，不关联钉钉和真实员工');
-
-    const buttons = dialog.getByTestId('test-account-login-button');
-    await expect(buttons).toHaveCount(8);
-    const cards = await buttons.evaluateAll((elements) => elements.map((element) => {
-      const box = element.getBoundingClientRect();
-      const role = element.querySelector('.quick-login__role');
-      return {
-        x: Math.round(box.x),
-        y: Math.round(box.y),
-        roleFits: !!role && role.scrollWidth <= role.clientWidth,
-        cardFits: element.scrollWidth <= element.clientWidth,
-      };
-    }));
-
-    expect(cards[0].y).toBe(cards[1].y);
-    expect(cards[1].x).toBeGreaterThan(cards[0].x);
-    expect(cards[2].y).toBeGreaterThan(cards[0].y);
-    expect(cards.every((card) => card.roleFits && card.cardFits)).toBe(true);
-
-    await page.keyboard.press('Escape');
-    await expect(dialog).toBeHidden();
-    await expect(toggle).toBeFocused();
-  });
-
   test('辅助文字与所在表面保持至少 4.5 比 1 的对比度', async ({ page }) => {
-    await mockTestAccounts(page);
     await page.goto('/login');
-    await page.getByTestId('test-account-login-toggle').click();
+    await expect(page.locator('.auth-option__copy small')).toBeVisible();
+    await expect(page.locator('.security-note')).toBeVisible();
+    await expect(page.locator('.auth-panel')).toBeVisible();
 
     const ratios = await page.evaluate(() => {
       const rgb = (value: string) => {
@@ -145,28 +84,13 @@ test.describe('登录页品牌体验', () => {
       return [
         contrast(required('.auth-option__copy small'), required('.auth-panel')),
         contrast(required('.security-note'), required('.auth-panel')),
-        contrast(required('.quick-login__no'), required('.quick-login__account')),
       ];
     });
 
     expect(Math.min(...ratios)).toBeGreaterThanOrEqual(4.5);
   });
 
-  test('系统偏好减少动态效果时验收弹层不播放进入动画', async ({ page }) => {
-    await page.emulateMedia({ reducedMotion: 'reduce' });
-    await mockTestAccounts(page);
-    await page.goto('/login');
-    await page.getByTestId('test-account-login-toggle').click();
-
-    const dialogAnimations = await page.evaluate(() => document.getAnimations()
-      .map((animation) => 'animationName' in animation ? String(animation.animationName) : '')
-      .filter((name) => name.includes('fade')));
-
-    expect(dialogAnimations).toEqual([]);
-  });
-
   test('管理员账号输入框提供持久标签与正确的自动填充语义', async ({ page }) => {
-    await mockTestAccounts(page);
     await page.goto('/login');
     await page.getByTestId('password-login-toggle').click();
 
@@ -178,8 +102,7 @@ test.describe('登录页品牌体验', () => {
     await expect(password).toHaveAttribute('autocomplete', 'current-password');
   });
 
-  test('手机端隐藏品牌舞台并将验收账号对话层贴底单列显示', async ({ page }) => {
-    await mockTestAccounts(page);
+  test('手机端隐藏品牌舞台并保持工号登录无横向滚动', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await page.goto('/login');
 
@@ -187,26 +110,9 @@ test.describe('登录页品牌体验', () => {
     await expect(page.getByTestId('login-auth-panel')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
 
-    await page.getByTestId('test-account-login-toggle').click();
-    const dialog = page.getByRole('dialog', { name: '验收账号登录' });
-    await expect(dialog).toBeVisible();
-
-    const dialogSurface = dialog.locator('.el-dialog');
-    await expect.poll(async () => {
-      const box = await dialogSurface.boundingBox();
-      return Math.abs((box?.y ?? 0) + (box?.height ?? 0) - 844);
-    }).toBeLessThanOrEqual(2);
-
-    const dialogBox = await dialogSurface.boundingBox();
-    expect(dialogBox?.width).toBeGreaterThanOrEqual(358);
-    expect(Math.abs((dialogBox?.y ?? 0) + (dialogBox?.height ?? 0) - 844)).toBeLessThanOrEqual(2);
-
-    const cards = await dialog.getByTestId('test-account-login-button').evaluateAll((elements) => elements.map((element) => {
-      const box = element.getBoundingClientRect();
-      return { x: Math.round(box.x), y: Math.round(box.y) };
-    }));
-    expect(new Set(cards.map((card) => card.x)).size).toBe(1);
-    expect(new Set(cards.map((card) => card.y)).size).toBe(8);
+    await page.getByTestId('password-login-toggle').click();
+    await expect(page.getByTestId('login-employee-no')).toBeVisible();
+    await expect(page.getByTestId('login-password')).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 });

@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores/auth.store';
 import { loadDingTalkJsApi } from '@/utils/dingtalk-jsapi';
 import { dingtalkLoginErrorMessage } from '@/utils/dingtalk-login-error';
 import { buildDingTalkOAuthUrl } from '@/utils/dingtalk-oauth';
-import { authApi, type TestAccount } from '@/api/auth.api';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -19,38 +18,13 @@ const dingtalkButtonText = computed(() => (
 const showPasswordForm = ref(false);
 const loading = ref(false);
 const form = reactive({ employeeNo: '', password: '' });
+const formErrors = reactive({ employeeNo: '', password: '' });
 
 const DINGTALK_APP_KEY = import.meta.env.VITE_DINGTALK_APP_KEY || 'dinghwbnyktt3oku2jd3';
 const DINGTALK_CORP_ID = import.meta.env.VITE_DINGTALK_CORP_ID || '';
 
-const testAccounts = ref<TestAccount[]>([]);
-const quickLoadingNo = ref<string | null>(null);
-const showTestAccounts = ref(false);
-
-onMounted(async () => {
-  try {
-    const result = await authApi.getTestAccounts();
-    testAccounts.value = result.enabled ? result.accounts : [];
-  } catch {
-    testAccounts.value = [];
-  }
-});
-
 function isAuthFailure(err: unknown): boolean {
   return (err as { response?: { status?: number } })?.response?.status === 401;
-}
-
-async function quickLogin(employeeNo: string) {
-  if (loading.value || quickLoadingNo.value) return;
-  quickLoadingNo.value = employeeNo;
-  try {
-    await auth.loginWithTestAccount(employeeNo);
-    redirectAfterLogin();
-  } catch {
-    ElMessage.error('测试账号暂不可用，请联系系统管理员检查测试数据');
-  } finally {
-    quickLoadingNo.value = null;
-  }
 }
 
 function redirectAfterLogin() {
@@ -122,10 +96,10 @@ async function onDingTalkLogin() {
 }
 
 async function onPasswordLogin() {
-  if (!form.employeeNo || !form.password) {
-    ElMessage.warning('请输入工号和密码');
-    return;
-  }
+  formErrors.employeeNo = form.employeeNo ? '' : '请输入工号';
+  formErrors.password = form.password ? '' : '请输入密码';
+  if (formErrors.employeeNo || formErrors.password) return;
+
   loading.value = true;
   try {
     const passwordChangeRequired = await auth.loginWithPassword(form.employeeNo, form.password);
@@ -135,9 +109,9 @@ async function onPasswordLogin() {
       redirectAfterLogin();
     }
   } catch (err) {
-    // 401 拦截器静默处理，这里补充用户可见的失败提示；其它错误已由拦截层弹窗。
+    // 401 拦截器静默处理，这里把凭据错误就近显示在密码框下方。
     if (isAuthFailure(err)) {
-      ElMessage.error('工号或密码错误');
+      formErrors.password = '工号或密码错误';
     }
   } finally {
     loading.value = false;
@@ -230,7 +204,7 @@ async function onPasswordLogin() {
 
           <transition name="field-reveal">
             <el-form v-show="showPasswordForm" class="password-form" aria-label="密码登录表单" @submit.prevent="onPasswordLogin">
-              <el-form-item>
+              <el-form-item :error="formErrors.employeeNo">
                 <label class="sr-only" for="login-employee-no">工号</label>
                 <el-input
                   id="login-employee-no"
@@ -238,9 +212,10 @@ async function onPasswordLogin() {
                   autocomplete="username"
                   placeholder="工号"
                   data-testid="login-employee-no"
+                  @input="formErrors.employeeNo = ''"
                 />
               </el-form-item>
-              <el-form-item>
+              <el-form-item :error="formErrors.password">
                 <label class="sr-only" for="login-password">密码</label>
                 <el-input
                   id="login-password"
@@ -250,33 +225,12 @@ async function onPasswordLogin() {
                   placeholder="密码"
                   show-password
                   data-testid="login-password"
+                  @input="formErrors.password = ''"
                 />
               </el-form-item>
               <el-button type="primary" :loading="loading" class="full" native-type="submit" data-testid="login-submit">登录</el-button>
             </el-form>
           </transition>
-
-          <button
-            v-if="testAccounts.length"
-            type="button"
-            class="auth-option auth-option--test"
-            data-testid="test-account-login-toggle"
-            :aria-expanded="showTestAccounts"
-            @click="showTestAccounts = true"
-          >
-            <span class="auth-option__icon auth-option__icon--test" aria-hidden="true">
-              <svg viewBox="0 0 24 24">
-                <path d="M7 4.75h10A2.25 2.25 0 0 1 19.25 7v10A2.25 2.25 0 0 1 17 19.25H7A2.25 2.25 0 0 1 4.75 17V7A2.25 2.25 0 0 1 7 4.75Z" />
-                <path d="m8.5 12 2.25 2.25 4.75-4.75" />
-              </svg>
-            </span>
-            <span class="auth-option__copy">
-              <strong>验收账号登录</strong>
-              <small>仅用于测试组织与测试数据</small>
-            </span>
-            <span class="auth-option__meta">{{ testAccounts.length }} 个场景</span>
-            <span class="auth-option__arrow auth-option__arrow--right" aria-hidden="true">›</span>
-          </button>
         </div>
 
         <p class="security-note">
@@ -287,44 +241,6 @@ async function onPasswordLogin() {
     </main>
   </section>
 
-  <el-dialog
-    v-model="showTestAccounts"
-    title="验收账号登录"
-    width="680px"
-    align-center
-    destroy-on-close
-    class="test-account-dialog"
-    modal-class="test-account-overlay"
-  >
-    <div class="quick-login" data-testid="test-account-login">
-      <p class="quick-login__lead">选择一个业务场景，直接进入对应的验收工作台。</p>
-      <p class="quick-login__boundary">
-        <span aria-hidden="true">i</span>
-        仅用于测试组织与测试数据，不关联钉钉和真实员工
-      </p>
-      <p class="quick-login__password">统一密码 0000，也可直接选择场景快捷登录</p>
-      <div class="quick-login__grid">
-        <el-button
-          v-for="acc in testAccounts"
-          :key="acc.employeeNo"
-          plain
-          class="quick-login__account"
-          :loading="quickLoadingNo === acc.employeeNo"
-          :disabled="!!quickLoadingNo && quickLoadingNo !== acc.employeeNo"
-          data-testid="test-account-login-button"
-          @click="quickLogin(acc.employeeNo)"
-        >
-          <span class="quick-login__content">
-            <span class="quick-login__role">{{ acc.roleLabel }}</span>
-            <span class="quick-login__details">
-              <span class="quick-login__name">{{ acc.name }}</span>
-              <span class="quick-login__no">{{ acc.employeeNo }}</span>
-            </span>
-          </span>
-        </el-button>
-      </div>
-    </div>
-  </el-dialog>
 </template>
 
 <style scoped>
@@ -614,11 +530,6 @@ async function onPasswordLogin() {
   background: #f1f4f6;
 }
 
-.auth-option__icon--test {
-  color: #178477;
-  background: #ebf7f4;
-}
-
 .auth-option__icon svg {
   width: 18px;
   height: 18px;
@@ -653,12 +564,6 @@ async function onPasswordLogin() {
   white-space: nowrap;
 }
 
-.auth-option__meta {
-  flex: none;
-  color: #667887;
-  font-size: 12px;
-}
-
 .auth-option__arrow {
   flex: none;
   color: #9aa5ae;
@@ -670,10 +575,6 @@ async function onPasswordLogin() {
 
 .auth-option__arrow.is-open {
   transform: rotate(180deg);
-}
-
-.auth-option__arrow--right {
-  font-size: 23px;
 }
 
 .password-form {
@@ -719,152 +620,6 @@ async function onPasswordLogin() {
 .field-reveal-leave-to {
   opacity: 0;
   transform: translateY(-6px);
-}
-
-.quick-login__lead {
-  margin: -2px 0 14px;
-  color: #74808c;
-  font-size: 13px;
-  line-height: 1.6;
-}
-
-.quick-login__boundary {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  margin: 0 0 18px;
-  padding: 10px 12px;
-  border: 1px solid #dceeea;
-  border-radius: 10px;
-  color: #51716e;
-  background: #f2faf8;
-  font-size: 12px;
-  line-height: 1.5;
-}
-
-.quick-login__boundary span {
-  display: grid;
-  flex: 0 0 18px;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  border-radius: 50%;
-  color: #fff;
-  background: #48a99b;
-  font-family: Georgia, serif;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.quick-login__password {
-  margin: -6px 0 14px;
-  color: #425466;
-  font-size: 13px;
-  font-weight: 600;
-  letter-spacing: 0.01em;
-}
-
-.quick-login__grid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.quick-login__account.el-button {
-  margin: 0;
-  height: 78px;
-  min-width: 0;
-  padding: 12px 14px;
-  overflow: hidden;
-  border-color: #e1e7eb;
-  border-radius: 12px;
-  background: #fbfcfd;
-  text-align: left;
-  transition: border-color 0.18s ease, background 0.18s ease, transform 0.18s ease;
-}
-
-.quick-login__account.el-button:hover,
-.quick-login__account.el-button:focus-visible {
-  border-color: #78c9bc;
-  background: #f1faf8;
-  transform: translateY(-1px);
-}
-
-.quick-login__content {
-  display: flex;
-  flex-direction: column;
-  align-items: stretch;
-  gap: 9px;
-  width: 100%;
-  min-width: 0;
-  line-height: 1.15;
-}
-
-.quick-login__role {
-  display: block;
-  min-width: 0;
-  color: #1d4f4a;
-  font-size: 14px;
-  font-weight: 650;
-  line-height: 1.25;
-  white-space: normal;
-}
-
-.quick-login__details {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-}
-
-.quick-login__name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  color: #66727e;
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.quick-login__no {
-  flex: none;
-  white-space: nowrap;
-  color: #66727e;
-  font-size: 11px;
-  font-variant-numeric: tabular-nums;
-}
-
-:global(.test-account-overlay) {
-  background: rgba(5, 21, 37, 0.48);
-  backdrop-filter: blur(8px);
-}
-
-:global(.test-account-dialog) {
-  overflow: hidden;
-  margin: 0;
-  border-radius: 20px;
-  box-shadow: 0 28px 80px rgba(5, 24, 43, 0.24);
-}
-
-:global(.test-account-dialog .el-dialog__header) {
-  margin: 0;
-  padding: 24px 26px 12px;
-}
-
-:global(.test-account-dialog .el-dialog__title) {
-  color: #153046;
-  font-size: 20px;
-  font-weight: 650;
-}
-
-:global(.test-account-dialog .el-dialog__headerbtn) {
-  top: 17px;
-  right: 18px;
-}
-
-:global(.test-account-dialog .el-dialog__body) {
-  padding: 8px 26px 26px;
 }
 
 @media (max-width: 900px) {
@@ -931,56 +686,14 @@ async function onPasswordLogin() {
     min-height: 66px;
   }
 
-  :global(.test-account-overlay .el-overlay-dialog) {
-    align-items: flex-end;
-    padding: 0;
-  }
-
-  :global(.test-account-dialog) {
-    display: flex;
-    flex-direction: column;
-    width: 100% !important;
-    max-width: none;
-    max-height: 78vh;
-    margin: 0 !important;
-    border-radius: 22px 22px 0 0;
-  }
-
-  :global(.test-account-dialog .el-dialog__header) {
-    flex: none;
-    padding: 22px 22px 10px;
-  }
-
-  :global(.test-account-dialog .el-dialog__body) {
-    flex: 1;
-    min-height: 0;
-    overflow-y: auto;
-    padding: 8px 18px 24px;
-  }
-
-  .quick-login__grid {
-    grid-template-columns: 1fr;
-  }
-
-  .quick-login__account.el-button {
-    height: 72px;
-  }
 }
 
 @media (prefers-reduced-motion: reduce) {
   .manual-link,
   .auth-option__arrow,
-  .quick-login__account.el-button,
   .field-reveal-enter-active,
   .field-reveal-leave-active {
     transition: none;
-  }
-
-  :global(.dialog-fade-enter-active),
-  :global(.dialog-fade-leave-active),
-  :global(.dialog-fade-enter-active .el-overlay-dialog),
-  :global(.dialog-fade-leave-active .el-overlay-dialog) {
-    animation: none !important;
   }
 }
 </style>
