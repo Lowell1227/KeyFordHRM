@@ -35,7 +35,7 @@ function updateSchedule(index: number, changes: Partial<CyclePeriodSchedule>) {
 }
 
 function updateDate(index: number, field: DateField, value: string | number | Date | null | undefined) {
-  updateSchedule(index, { [field]: value ? String(value) : '' });
+  updateSchedule(index, { [field]: value ? String(value) : '', isException: true });
 }
 
 function issuesFor(schedule: CyclePeriodSchedule, issues: CycleScheduleIssue[]) {
@@ -59,11 +59,11 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
     <header class="cycle-monthly-schedule-editor__header">
       <div>
         <strong>评分计划</strong>
-        <p>逐期设置员工自评与主管评分的计划时间。</p>
+        <p>逐期设置员工自评与主管评分的计划时间；重新应用默认规则时可保留已调整月份。</p>
       </div>
       <div class="cycle-monthly-schedule-editor__actions">
         <el-checkbox data-testid="cycle-preserve-exceptions" v-model="preserveExceptions">保留特殊月份</el-checkbox>
-        <el-button data-testid="cycle-apply-unified" text type="primary" @click="emit('apply-unified', { preserveExceptions })">统一调整规则</el-button>
+        <el-button data-testid="cycle-apply-unified" text type="primary" @click="emit('apply-unified', { preserveExceptions })">重新应用默认规则</el-button>
         <el-button data-testid="cycle-restore-all" text @click="emit('restore-all')">恢复全部默认</el-button>
       </div>
     </header>

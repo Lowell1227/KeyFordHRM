@@ -884,6 +884,7 @@ model AssessmentCycle {
   deadlineAppeal           DateTime?   @map("deadline_appeal") @db.Date
   status                   CycleStatus @default(draft)
   workflowVersion          Int              @default(1) @map("workflow_version")
+  planVersion              Int              @default(1) @map("plan_version")
   scoringFrequency         ScoringFrequency @default(cycle) @map("scoring_frequency")
   companyFinalApproverId   String?          @map("company_final_approver_id") @db.Uuid
   publishVisibleFields     Json        @default("{\"total_score\":true,\"grade\":true,\"indicator_scores\":true,\"manager_comment\":true,\"coefficient\":false}") @map("publish_visible_fields") @db.JsonB

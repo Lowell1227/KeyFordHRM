@@ -133,8 +133,7 @@ export class CyclesController {
   }
 
   @Post(':id/review')
-  @Roles(SysRole.hr, SysRole.system_admin)
-  @HrCapabilities('cycle_plan_review')
+  @Roles(SysRole.hr)
   review(
     @Param('id', ParseUUIDPipe) id: string,
     @Body() dto: ReviewCycleDto,

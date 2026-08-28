@@ -1,3 +1,4 @@
+import { ConflictException, ForbiddenException } from '@nestjs/common';
 import { CycleStatus, Prisma, ScoringFrequency, SysRole } from '@prisma/client';
 import { CyclesService } from './cycles.service';
 import { CreateCycleDto } from './dto/create-cycle.dto';
@@ -11,6 +12,10 @@ describe('CyclesService', () => {
     sysRole: SysRole.hr,
     deptId: null,
     canViewAll: true,
+  } as AuthUser;
+  const reviewer = {
+    ...creator,
+    id: '99999999-9999-4999-8999-999999999999',
   } as AuthUser;
 
   let prisma: any;
@@ -31,6 +36,10 @@ describe('CyclesService', () => {
       },
       assessmentTask: { findMany: jest.fn(), count: jest.fn(), groupBy: jest.fn() },
       assessmentTemplateSnapshot: { count: jest.fn() },
+      cyclePeriodSchedule: {
+        deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
+        createMany: jest.fn().mockResolvedValue({ count: 0 }),
+      },
       user: { findFirst: jest.fn().mockResolvedValue({ id: '99999999-9999-4999-8999-999999999999' }) },
       systemConfig: {
         findUnique: jest.fn().mockResolvedValue({ value: { userId: companyFinalApproverId } }),
@@ -46,6 +55,48 @@ describe('CyclesService', () => {
       type: 'quarterly',
       startDate: new Date('2027-01-01T00:00:00.000Z'),
       endDate: new Date('2027-03-31T00:00:00.000Z'),
+      ...overrides,
+    };
+  }
+
+  function storedDraft(overrides: Record<string, unknown> = {}) {
+    return {
+      id: 'cycle-1',
+      name: '2027年第一季度',
+      type: 'quarterly',
+      workflowVersion: 2,
+      planVersion: 3,
+      scoringFrequency: ScoringFrequency.monthly,
+      status: CycleStatus.draft,
+      startDate: new Date('2027-01-01T00:00:00.000Z'),
+      endDate: new Date('2027-03-31T00:00:00.000Z'),
+      goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
+      selfEvalOpenAt: new Date('2027-04-01T00:00:00.000Z'),
+      deadlineIndicatorSetting: null,
+      deadlineIndicatorConfirm: null,
+      deadlineSelfEval: null,
+      deadlineManagerScore: null,
+      deadlineHrCalibration: null,
+      deadlineApproval: null,
+      deadlinePublish: null,
+      hrOwnerId: creator.id,
+      reviewerId: '99999999-9999-4999-8999-999999999999',
+      reviewStatus: 'approved',
+      reviewedAt: new Date('2026-12-20T00:00:00.000Z'),
+      reviewComment: '通过',
+      monthlyFollowUpRequired: false,
+      participantDeptIds: [],
+      participantUserIds: [],
+      explicitExemptDeptIds: [],
+      explicitExemptUserIds: [],
+      notificationMode: 'off',
+      publishVisibleFields: {},
+      gradeAMaxRatio: new Prisma.Decimal(0.2),
+      gradeBMaxRatio: new Prisma.Decimal(0.4),
+      gradeCMaxRatio: new Prisma.Decimal(0.3),
+      gradeDMaxRatio: new Prisma.Decimal(0.1),
+      periodSchedules: [],
+      companyFinalApprover: { id: companyFinalApproverId, name: '李宏' },
       ...overrides,
     };
   }
@@ -102,31 +153,17 @@ describe('CyclesService', () => {
   });
 
   it('stores explicit exempt departments when updating a draft cycle', async () => {
-    prisma.assessmentCycle.findUnique.mockResolvedValue({
-      id: 'cycle-1',
-      name: '2027年第一季度',
-      type: 'quarterly',
-      status: CycleStatus.draft,
-      startDate: new Date('2027-01-01T00:00:00.000Z'),
-      endDate: new Date('2027-03-31T00:00:00.000Z'),
-      goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
-      selfEvalOpenAt: new Date('2027-04-01T00:00:00.000Z'),
-      hrOwnerId: creator.id,
-    });
-    prisma.assessmentCycle.update.mockResolvedValue({
-      id: 'cycle-1',
-      name: '2027年第一季度',
-      type: 'quarterly',
-      status: CycleStatus.draft,
-    });
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft());
 
     await service.updateDraft('cycle-1', {
+      expectedPlanVersion: 3,
       explicitExemptDeptIds: [explicitExemptDeptId],
     } as any, creator);
 
-    expect(prisma.assessmentCycle.update).toHaveBeenCalledWith({
-      where: { id: 'cycle-1' },
+    expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith({
+      where: { id: 'cycle-1', status: CycleStatus.draft, planVersion: 3 },
       data: expect.objectContaining({
+        planVersion: { increment: 1 },
         explicitExemptDeptIds: [explicitExemptDeptId],
       }),
     });
@@ -149,21 +186,7 @@ describe('CyclesService', () => {
       },
     },
   ])('forces reapproval and audits an approved draft after changing $label', async ({ update }) => {
-    prisma.assessmentCycle.findUnique.mockResolvedValue({
-      id: 'cycle-1',
-      name: '2027年第一季度',
-      type: 'quarterly',
-      workflowVersion: 2,
-      scoringFrequency: ScoringFrequency.monthly,
-      status: CycleStatus.draft,
-      startDate: new Date('2027-01-01T00:00:00.000Z'),
-      endDate: new Date('2027-03-31T00:00:00.000Z'),
-      goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
-      selfEvalOpenAt: new Date('2027-04-01T00:00:00.000Z'),
-      reviewerId: '99999999-9999-4999-8999-999999999999',
-      reviewStatus: 'approved',
-      reviewedAt: new Date('2026-12-20T00:00:00.000Z'),
-      reviewComment: '通过',
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft({
       periodSchedules: [{
         periodKey: '2027-01',
         periodType: 'month',
@@ -175,28 +198,22 @@ describe('CyclesService', () => {
         managerDueAt: new Date('2027-02-08T10:00:00.000Z'),
         isException: false,
       }],
-    });
-    prisma.assessmentCycle.update.mockImplementation(({ data }) => ({
-      id: 'cycle-1',
-      name: '2027年第一季度',
-      type: 'quarterly',
-      status: CycleStatus.draft,
-      ...data,
     }));
 
-    await service.updateDraft('cycle-1', update as any, creator);
+    await service.updateDraft('cycle-1', { expectedPlanVersion: 3, ...update } as any, creator);
 
-    expect(prisma.assessmentCycle.update).toHaveBeenCalledWith({
-      where: { id: 'cycle-1' },
+    expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith({
+      where: { id: 'cycle-1', status: CycleStatus.draft, planVersion: 3 },
       data: expect.objectContaining({
+        planVersion: { increment: 1 },
         reviewStatus: 'pending',
         reviewedAt: null,
         reviewComment: null,
-        periodSchedules: {
-          deleteMany: {},
-          create: expect.any(Array),
-        },
       }),
+    });
+    expect(prisma.cyclePeriodSchedule.deleteMany).toHaveBeenCalledWith({ where: { cycleId: 'cycle-1' } });
+    expect(prisma.cyclePeriodSchedule.createMany).toHaveBeenCalledWith({
+      data: expect.arrayContaining([expect.objectContaining({ cycleId: 'cycle-1' })]),
     });
     expect(prisma.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -205,6 +222,162 @@ describe('CyclesService', () => {
         newValue: expect.objectContaining({ changedPeriodKeys: expect.any(Array) }),
       }),
     });
+  });
+
+  it('keeps approval metadata and schedules untouched for a semantic API no-op', async () => {
+    const schedules = [{
+      periodKey: '2027-01',
+      periodType: 'month',
+      sequence: 1,
+      periodStart: new Date('2027-01-01T00:00:00.000Z'),
+      periodEnd: new Date('2027-01-30T16:00:00.000Z'),
+      selfEvalOpenAt: new Date('2027-02-01T01:00:00.000Z'),
+      selfEvalDueAt: new Date('2027-02-03T10:00:00.000Z'),
+      managerDueAt: new Date('2027-02-08T10:00:00.000Z'),
+      isException: true,
+    }, {
+      periodKey: '2027-02',
+      periodType: 'month',
+      sequence: 2,
+      periodStart: new Date('2027-01-31T16:00:00.000Z'),
+      periodEnd: new Date('2027-02-27T16:00:00.000Z'),
+      selfEvalOpenAt: new Date('2027-03-01T01:00:00.000Z'),
+      selfEvalDueAt: new Date('2027-03-03T10:00:00.000Z'),
+      managerDueAt: new Date('2027-03-08T10:00:00.000Z'),
+      isException: true,
+    }, {
+      periodKey: '2027-03',
+      periodType: 'month',
+      sequence: 3,
+      periodStart: new Date('2027-02-28T16:00:00.000Z'),
+      periodEnd: new Date('2027-03-31T00:00:00.000Z'),
+      selfEvalOpenAt: new Date('2027-04-01T01:00:00.000Z'),
+      selfEvalDueAt: new Date('2027-04-06T10:00:00.000Z'),
+      managerDueAt: new Date('2027-04-09T10:00:00.000Z'),
+      isException: true,
+    }];
+    const cycle = storedDraft({
+      participantDeptIds: ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
+      publishVisibleFields: { grade: true, total_score: true },
+      periodSchedules: schedules,
+    });
+    prisma.assessmentCycle.findUnique.mockResolvedValue(cycle);
+
+    const result = await service.updateDraft('cycle-1', {
+      expectedPlanVersion: 3,
+      name: cycle.name,
+      startDate: new Date('2027-01-01T08:00:00+08:00'),
+      participantDeptIds: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'],
+      publishVisibleFields: { total_score: true, grade: true },
+      gradeAMaxRatio: 0.20,
+      periodSchedules: schedules.map((schedule) => ({
+        periodKey: schedule.periodKey,
+        selfEvalOpenAt: schedule.selfEvalOpenAt.toISOString(),
+        selfEvalDueAt: schedule.selfEvalDueAt.toISOString(),
+        managerDueAt: schedule.managerDueAt.toISOString(),
+        isException: schedule.isException,
+      })),
+    } as any, creator);
+
+    expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith({
+      where: { id: 'cycle-1', status: CycleStatus.draft, planVersion: 3 },
+      data: { planVersion: { increment: 0 } },
+    });
+    expect(prisma.cyclePeriodSchedule.deleteMany).not.toHaveBeenCalled();
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({
+      planVersion: 3,
+      reviewStatus: 'approved',
+      reviewedAt: cycle.reviewedAt,
+      periodSchedules: schedules,
+      companyFinalApprover: { id: companyFinalApproverId, name: '李宏' },
+      reviewFrequency: 'cycle',
+    }));
+  });
+
+  it('rejects a stale draft update before replacing schedules', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft());
+
+    await expect(service.updateDraft('cycle-1', {
+      expectedPlanVersion: 2,
+      name: '过期编辑',
+    } as any, creator)).rejects.toBeInstanceOf(ConflictException);
+
+    expect(prisma.assessmentCycle.updateMany).not.toHaveBeenCalled();
+    expect(prisma.cyclePeriodSchedule.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('allows only the assigned business reviewer and returns the full cycle contract', async () => {
+    const cycle = storedDraft({ reviewStatus: 'pending', reviewedAt: null, reviewComment: null });
+    prisma.assessmentCycle.findUnique.mockResolvedValue(cycle);
+
+    const result = await service.review('cycle-1', {
+      action: 'approve',
+      expectedPlanVersion: 3,
+    }, reviewer);
+
+    expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'cycle-1',
+        status: CycleStatus.draft,
+        planVersion: 3,
+        reviewStatus: 'pending',
+        reviewedAt: null,
+      },
+      data: expect.objectContaining({ reviewStatus: 'approved' }),
+    });
+    expect(result).toEqual(expect.objectContaining({
+      periodSchedules: cycle.periodSchedules,
+      companyFinalApprover: cycle.companyFinalApprover,
+      reviewFrequency: 'cycle',
+    }));
+  });
+
+  it('does not let a system administrator bypass the assigned cycle reviewer', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft({ reviewStatus: 'pending' }));
+    const systemAdministrator = {
+      ...creator,
+      id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      sysRole: SysRole.system_admin,
+    } as AuthUser;
+
+    await expect(service.review('cycle-1', {
+      action: 'approve',
+      expectedPlanVersion: 3,
+    }, systemAdministrator)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.assessmentCycle.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('returns a clear conflict when the reviewed plan version is stale', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft({ reviewStatus: 'pending' }));
+
+    await expect(service.review('cycle-1', {
+      action: 'approve',
+      expectedPlanVersion: 2,
+    }, reviewer)).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.assessmentCycle.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('returns a conflict when launch wins the draft-update CAS', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft());
+    prisma.assessmentCycle.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.updateDraft('cycle-1', {
+      expectedPlanVersion: 3,
+      name: '并发修改',
+    } as any, creator)).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.cyclePeriodSchedule.deleteMany).not.toHaveBeenCalled();
+  });
+
+  it('returns a conflict when another operation wins the review CAS', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft({ reviewStatus: 'pending', reviewedAt: null }));
+    prisma.assessmentCycle.updateMany.mockResolvedValue({ count: 0 });
+
+    await expect(service.review('cycle-1', {
+      action: 'approve',
+      expectedPlanVersion: 3,
+    }, reviewer)).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
   });
 
   it('allows a manually customized schedule to cross the performance period boundaries', async () => {

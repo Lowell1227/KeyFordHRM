@@ -272,6 +272,7 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
                 <span>目标制定开放时间 {{ formatDateTime(preflight.cycle.goalSettingOpenAt) }}</span>
                 <span v-if="cycle.workflowVersion === 2">试用期排除：{{ probationExclusionCount(preflight) }}人</span>
                 <span v-if="cycle.workflowVersion === 2 && topLeaderNames(preflight)">最高负责人豁免：{{ topLeaderNames(preflight) }}</span>
+                <span v-if="cycle.workflowVersion === 2">本次发起公司最终审定人：{{ preflight.companyFinalApprover?.name || '未配置' }}</span>
               </div>
               <div
                 v-if="preflight.blockers.length"

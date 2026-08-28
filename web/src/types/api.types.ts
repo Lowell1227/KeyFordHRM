@@ -423,6 +423,7 @@ export interface CycleSchedulePreview {
 
 export interface AssessmentCycle {
   id: string;
+  planVersion: number;
   name: string;
   type: CycleType;
   workflowVersion?: 1 | 2;
@@ -549,7 +550,7 @@ export interface UpdateDeadlinesBody {
 }
 
 /** PATCH /cycles/:id 更新草稿周期请求体。 */
-export type UpdateCycleBody = Partial<CreateCycleBody>;
+export type UpdateCycleBody = Partial<CreateCycleBody> & { expectedPlanVersion: number };
 
 export interface AssessmentTemplateSnapshot {
   id: string;
@@ -769,7 +770,8 @@ export interface TaskWorkflowContext {
 export interface LaunchPreflightResult {
   ready: boolean;
   planHash: string | null;
-  cycle: Pick<AssessmentCycle, 'id' | 'name' | 'status' | 'goalSettingOpenAt'>;
+  cycle: Pick<AssessmentCycle, 'id' | 'name' | 'status' | 'goalSettingOpenAt' | 'planVersion'>;
+  companyFinalApprover?: { id: string; name: string } | null;
   participantCount: number;
   templateCount: number;
   participants: Array<{

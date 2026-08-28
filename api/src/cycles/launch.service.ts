@@ -115,6 +115,7 @@ export interface LaunchPreflightResult {
     name: string;
     status: string;
     goalSettingOpenAt: Date | null;
+    planVersion: number;
   };
   participantCount: number;
   templateCount: number;
@@ -135,6 +136,7 @@ export interface LaunchPreflightResult {
     participantDisposition?: ParticipantDispositionValue;
   }>;
   exclusions?: CandidateSelection['exclusions'];
+  companyFinalApprover?: { id: string; name: string } | null;
   blockers: Array<{ code: string; message: string }>;
   warnings: Array<{ code: string; message: string }>;
 }
@@ -162,17 +164,23 @@ export class LaunchService {
     if (cycle.reviewStatus !== 'approved') {
       blockers.push({ code: 'CYCLE_NOT_APPROVED', message: '周期计划需由审核人通过后才能发起' });
     }
-    const selection = await this.findCandidates(client, cycle);
     const isWorkflowV2 = this.isWorkflowV2(cycle);
+    const configuredCompanyFinalApproverId = isWorkflowV2
+      ? await this.resolveConfiguredCompanyFinalApproverId(client)
+      : null;
+    const effectiveCycle = isWorkflowV2
+      ? { ...cycle, companyFinalApproverId: configuredCompanyFinalApproverId }
+      : cycle;
+    const selection = await this.findCandidates(client, effectiveCycle);
     const schedules = isWorkflowV2
       ? await this.findPeriodSchedules(client, cycle.id)
       : [];
     const companyFinalApprover = isWorkflowV2
-      ? await this.findCompanyFinalApprover(client, cycle.companyFinalApproverId)
+      ? await this.findCompanyFinalApprover(client, configuredCompanyFinalApproverId)
       : null;
     if (isWorkflowV2) {
       blockers.push(...this.workflowV2ConfigurationBlockers(
-        cycle,
+        effectiveCycle,
         schedules,
         companyFinalApprover,
       ));
@@ -191,14 +199,14 @@ export class LaunchService {
     }
     if (candidates.length > 0) {
       try {
-        this.assertLaunchRelations(candidates, deptMap, cycle);
+        this.assertLaunchRelations(candidates, deptMap, effectiveCycle);
       } catch (error) {
         blockers.push(this.toPreflightBlocker('ORGANIZATION_RELATION_INVALID', error));
       }
     }
 
     const plan = blockers.length === 0
-      ? this.buildLaunchPlan(candidates, cycle, deptMap, exemptRatio, schedules)
+      ? this.buildLaunchPlan(candidates, effectiveCycle, deptMap, exemptRatio, schedules)
       : null;
 
     return {
@@ -209,11 +217,17 @@ export class LaunchService {
         name: cycle.name,
         status: cycle.status,
         goalSettingOpenAt: cycle.goalSettingOpenAt,
+        planVersion: cycle.planVersion ?? 1,
       },
       participantCount: candidates.length,
       templateCount: 0,
       participants: plan?.participants ?? [],
       ...(isWorkflowV2 && { exclusions }),
+      ...(isWorkflowV2 && {
+        companyFinalApprover: this.isEligibleCompanyFinalApprover(companyFinalApprover)
+          ? { id: companyFinalApprover.id, name: companyFinalApprover.name }
+          : null,
+      }),
       blockers,
       warnings,
     };
@@ -245,6 +259,8 @@ export class LaunchService {
           id: cycleId,
           status: { in: ['draft', 'launch_blocked'] },
           openedAt: null,
+          planVersion: result.cycle.planVersion,
+          reviewStatus: 'approved',
         },
         data: {
           status: 'scheduled',
@@ -361,17 +377,24 @@ export class LaunchService {
         });
       }
 
-      const selection = await this.findCandidates(tx, cycle);
       const isWorkflowV2 = this.isWorkflowV2(cycle);
+      if (isWorkflowV2) await this.lockCompanyFinalApproverConfig(tx);
+      const configuredCompanyFinalApproverId = isWorkflowV2
+        ? await this.resolveConfiguredCompanyFinalApproverId(tx)
+        : null;
+      const effectiveCycle = isWorkflowV2
+        ? { ...cycle, companyFinalApproverId: configuredCompanyFinalApproverId }
+        : cycle;
+      const selection = await this.findCandidates(tx, effectiveCycle);
       const schedules = isWorkflowV2
         ? await this.findPeriodSchedules(tx, cycle.id)
         : [];
       const companyFinalApprover = isWorkflowV2
-        ? await this.findCompanyFinalApprover(tx, cycle.companyFinalApproverId)
+        ? await this.findCompanyFinalApprover(tx, configuredCompanyFinalApproverId)
         : null;
       if (isWorkflowV2) {
         const configurationBlockers = this.workflowV2ConfigurationBlockers(
-          cycle,
+          effectiveCycle,
           schedules,
           companyFinalApprover,
         );
@@ -408,10 +431,10 @@ export class LaunchService {
       }
 
       const deptMap = await this.buildDeptMap(tx);
-      this.assertLaunchRelations(candidates, deptMap, cycle);
+      this.assertLaunchRelations(candidates, deptMap, effectiveCycle);
 
       const ratio = await this.getExemptRatio(tx);
-      const currentPlan = this.buildLaunchPlan(candidates, cycle, deptMap, ratio, schedules);
+      const currentPlan = this.buildLaunchPlan(candidates, effectiveCycle, deptMap, ratio, schedules);
       const currentPlanHash = this.hashLaunchPlan(currentPlan);
       const expectedPlanHash = options.source === 'scheduled'
         ? cycle.launchPlanHash
@@ -424,7 +447,13 @@ export class LaunchService {
       }
 
       const claim = await tx.assessmentCycle.updateMany({
-        where: { id: cycleId, status: cycle.status, openedAt: null },
+        where: {
+          id: cycleId,
+          status: cycle.status,
+          openedAt: null,
+          planVersion: cycle.planVersion ?? 1,
+          reviewStatus: 'approved',
+        },
         data: {
           status: 'indicator_setting',
           openedAt,
@@ -434,6 +463,7 @@ export class LaunchService {
           launchPlanHash: currentPlanHash,
           launchBlockedAt: null,
           launchBlockedReason: null,
+          ...(isWorkflowV2 && { companyFinalApproverId: configuredCompanyFinalApproverId }),
         },
       });
       if (claim.count !== 1) {
@@ -452,9 +482,9 @@ export class LaunchService {
 
       for (const candidate of candidates) {
         const dept = candidate.deptId ? deptMap.get(candidate.deptId) : null;
-        const manager = this.resolveLaunchManager(candidate, dept, cycle);
+        const manager = this.resolveLaunchManager(candidate, dept, effectiveCycle);
 
-        const disposition = this.resolveParticipantDisposition(candidate, cycle, ratio);
+        const disposition = this.resolveParticipantDisposition(candidate, effectiveCycle, ratio);
 
         if (disposition.isExempt) {
           await tx.assessmentTask.create({
@@ -1010,6 +1040,27 @@ export class LaunchService {
         deletedAt: true,
       },
     });
+  }
+
+  private async resolveConfiguredCompanyFinalApproverId(
+    tx: Prisma.TransactionClient,
+  ): Promise<string | null> {
+    const config = await tx.systemConfig.findUnique({
+      where: { key: 'performance_company_final_approver' },
+    });
+    const value = config?.value;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const userId = (value as Prisma.JsonObject).userId;
+    return typeof userId === 'string' && userId.trim() ? userId : null;
+  }
+
+  private async lockCompanyFinalApproverConfig(tx: Prisma.TransactionClient): Promise<void> {
+    await tx.$queryRaw(Prisma.sql`
+      SELECT "key"
+      FROM "system_configs"
+      WHERE "key" = 'performance_company_final_approver'
+      FOR SHARE
+    `);
   }
 
   private includeCompanyFinalApprover(

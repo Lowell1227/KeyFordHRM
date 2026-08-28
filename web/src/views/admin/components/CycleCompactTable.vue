@@ -14,7 +14,6 @@ const props = defineProps<{
   launchingId?: string | null;
   deletingId?: string | null;
   currentUserId?: string;
-  isSystemAdmin?: boolean;
   canEdit?: boolean;
 }>();
 
@@ -257,7 +256,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
         <div class="cycle-actions" @click.stop>
           <template v-if="(row as AssessmentCycle).status === 'draft'">
             <el-button
-              v-if="(row as AssessmentCycle).reviewStatus !== 'approved' && (isSystemAdmin || (row as AssessmentCycle).reviewerId === currentUserId)"
+              v-if="(row as AssessmentCycle).reviewStatus !== 'approved' && (row as AssessmentCycle).reviewerId === currentUserId"
               link
               type="success"
               @click="emit('review', row as AssessmentCycle)"
@@ -357,7 +356,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
       <footer @click.stop>
         <template v-if="cycle.status === 'draft'">
           <el-button
-            v-if="cycle.reviewStatus !== 'approved' && (isSystemAdmin || cycle.reviewerId === currentUserId)"
+            v-if="cycle.reviewStatus !== 'approved' && cycle.reviewerId === currentUserId"
             type="success"
             size="small"
             @click="emit('review', cycle)"

@@ -57,6 +57,7 @@ export class CyclesService {
     const goalSettingOpenAt = dto.goalSettingOpenAt ?? this.addDays(dto.startDate, -10);
     const selfEvalOpenAt = dto.selfEvalOpenAt ?? this.addDays(dto.endDate, 1);
     this.validateCycleDates(dto, goalSettingOpenAt, selfEvalOpenAt);
+    const hrOwnerId = await this.resolveHrOwnerId(dto.hrOwnerId, user);
     const reviewerId = await this.resolveReviewerId(dto.reviewerId);
     const workflowVersion = dto.workflowVersion ?? 1;
     const schedulePlan = workflowVersion === 2
@@ -100,7 +101,7 @@ export class CyclesService {
         notificationMode: dto.notificationMode ?? 'off',
         status: 'draft',
         creator: { connect: { id: user.id } },
-        hrOwner: { connect: { id: user.id } },
+        hrOwner: { connect: { id: hrOwnerId } },
         ...(dto.deadlineIndicatorSetting && { deadlineIndicatorSetting: dto.deadlineIndicatorSetting }),
         ...(dto.deadlineIndicatorConfirm && { deadlineIndicatorConfirm: dto.deadlineIndicatorConfirm }),
         ...(dto.deadlineSelfEval && { deadlineSelfEval: dto.deadlineSelfEval }),
@@ -211,7 +212,7 @@ export class CyclesService {
     return this.prisma.$transaction(async (tx) => {
       const cycle = await tx.assessmentCycle.findUnique({
         where: { id },
-        include: { periodSchedules: { orderBy: { sequence: 'asc' } } },
+        include: CYCLE_PLAN_INCLUDE,
       });
       if (!cycle) {
         throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
@@ -221,6 +222,9 @@ export class CyclesService {
           code: ERROR_CODE.CONFLICT,
           message: '仅草稿状态的周期可以编辑完整计划',
         });
+      }
+      if (dto.expectedPlanVersion !== cycle.planVersion) {
+        throw this.stalePlanConflict();
       }
 
       const goalSettingOpenAt = dto.goalSettingOpenAt ?? cycle.goalSettingOpenAt;
@@ -245,6 +249,9 @@ export class CyclesService {
         );
       }
 
+      const hrOwnerId = dto.hrOwnerId !== undefined
+        ? await this.resolveHrOwnerId(dto.hrOwnerId, user)
+        : cycle.hrOwnerId;
       const reviewerId = dto.reviewerId !== undefined
         ? await this.resolveReviewerId(dto.reviewerId)
         : cycle.reviewerId;
@@ -267,56 +274,133 @@ export class CyclesService {
         : null;
       const nextScoringFrequency = schedulePlan?.scoringFrequency ?? ScoringFrequency.cycle;
       const changedPeriodKeys = this.changedPeriodKeys(storedSchedules, schedulePlan?.schedules ?? []);
+      const scheduleChanged = changedPeriodKeys.length > 0;
       const coreTimingChanged = workflowVersion !== (cycle.workflowVersion ?? 1)
         || nextScoringFrequency !== (cycle.scoringFrequency ?? ScoringFrequency.cycle)
-        || changedPeriodKeys.length > 0;
+        || scheduleChanged;
 
-      const data: Prisma.AssessmentCycleUpdateInput = {
-        ...(dto.name !== undefined && { name: dto.name }),
-        ...(dto.type !== undefined && { type: dto.type }),
-        ...(dto.startDate !== undefined && { startDate: dto.startDate }),
-        ...(dto.endDate !== undefined && { endDate: dto.endDate }),
-        ...(dto.goalSettingOpenAt !== undefined && { goalSettingOpenAt: dto.goalSettingOpenAt }),
-        ...(dto.selfEvalOpenAt !== undefined && { selfEvalOpenAt: dto.selfEvalOpenAt }),
-        ...(dto.workflowVersion !== undefined && { workflowVersion }),
-        ...(coreTimingChanged && { scoringFrequency: nextScoringFrequency }),
-        ...(coreTimingChanged && {
-          periodSchedules: {
-            deleteMany: {},
-            ...(schedulePlan && {
-              create: schedulePlan.schedules.map((schedule) => this.scheduleCreateData(schedule)),
-            }),
-          },
-        }),
-        ...(dto.notificationMode !== undefined && { notificationMode: dto.notificationMode }),
-        ...(reviewerId && { reviewer: { connect: { id: reviewerId } } }),
-        ...(dto.monthlyFollowUpRequired !== undefined && {
-          monthlyFollowUpRequired: ['quarterly', 'semiannual', 'annual'].includes(dto.type ?? cycle.type)
-            ? dto.monthlyFollowUpRequired
-            : false,
-        }),
-        reviewStatus: 'pending',
-        reviewedAt: null,
-        reviewComment: null,
-        ...(dto.participantDeptIds !== undefined && { participantDeptIds: dto.participantDeptIds }),
-        ...(dto.participantUserIds !== undefined && { participantUserIds: dto.participantUserIds }),
-        ...(dto.explicitExemptDeptIds !== undefined && { explicitExemptDeptIds: dto.explicitExemptDeptIds }),
-        ...(dto.explicitExemptUserIds !== undefined && { explicitExemptUserIds: dto.explicitExemptUserIds }),
-        ...(dto.publishVisibleFields !== undefined && { publishVisibleFields: dto.publishVisibleFields }),
-        ...(dto.gradeAMaxRatio !== undefined && { gradeAMaxRatio: new Prisma.Decimal(dto.gradeAMaxRatio) }),
-        ...(dto.gradeBMaxRatio !== undefined && { gradeBMaxRatio: new Prisma.Decimal(dto.gradeBMaxRatio) }),
-        ...(dto.gradeCMaxRatio !== undefined && { gradeCMaxRatio: new Prisma.Decimal(dto.gradeCMaxRatio) }),
-        ...(dto.gradeDMaxRatio !== undefined && { gradeDMaxRatio: new Prisma.Decimal(dto.gradeDMaxRatio) }),
-        ...(dto.deadlineIndicatorSetting !== undefined && { deadlineIndicatorSetting: dto.deadlineIndicatorSetting }),
-        ...(dto.deadlineIndicatorConfirm !== undefined && { deadlineIndicatorConfirm: dto.deadlineIndicatorConfirm }),
-        ...(dto.deadlineSelfEval !== undefined && { deadlineSelfEval: dto.deadlineSelfEval }),
-        ...(dto.deadlineManagerScore !== undefined && { deadlineManagerScore: dto.deadlineManagerScore }),
-        ...(dto.deadlineHrCalibration !== undefined && { deadlineHrCalibration: dto.deadlineHrCalibration }),
-        ...(dto.deadlineApproval !== undefined && { deadlineApproval: dto.deadlineApproval }),
-        ...(dto.deadlinePublish !== undefined && { deadlinePublish: dto.deadlinePublish }),
-      };
+      const nextType = dto.type ?? cycle.type;
+      const nextMonthlyFollowUpRequired = ['quarterly', 'semiannual', 'annual'].includes(nextType)
+        ? dto.monthlyFollowUpRequired ?? cycle.monthlyFollowUpRequired
+        : false;
+      const nextParticipantDeptIds = dto.participantDeptIds !== undefined
+        ? this.normalizeIdSet(dto.participantDeptIds)
+        : this.normalizeIdSet(cycle.participantDeptIds);
+      const nextParticipantUserIds = dto.participantUserIds !== undefined
+        ? this.normalizeIdSet(dto.participantUserIds)
+        : this.normalizeIdSet(cycle.participantUserIds);
+      const nextExplicitExemptDeptIds = dto.explicitExemptDeptIds !== undefined
+        ? this.normalizeIdSet(dto.explicitExemptDeptIds)
+        : this.normalizeIdSet(cycle.explicitExemptDeptIds);
+      const nextExplicitExemptUserIds = dto.explicitExemptUserIds !== undefined
+        ? this.normalizeIdSet(dto.explicitExemptUserIds)
+        : this.normalizeIdSet(cycle.explicitExemptUserIds);
 
-      const updated = await tx.assessmentCycle.update({ where: { id }, data });
+      const data: Prisma.AssessmentCycleUncheckedUpdateManyInput = {};
+      if (dto.name !== undefined && dto.name !== cycle.name) data.name = dto.name;
+      if (dto.type !== undefined && dto.type !== cycle.type) data.type = dto.type;
+      if (dto.startDate !== undefined && !this.sameInstant(dto.startDate, cycle.startDate)) data.startDate = dto.startDate;
+      if (dto.endDate !== undefined && !this.sameInstant(dto.endDate, cycle.endDate)) data.endDate = dto.endDate;
+      if (dto.goalSettingOpenAt !== undefined && !this.sameInstant(dto.goalSettingOpenAt, cycle.goalSettingOpenAt)) {
+        data.goalSettingOpenAt = dto.goalSettingOpenAt;
+      }
+      if (dto.selfEvalOpenAt !== undefined && !this.sameInstant(dto.selfEvalOpenAt, cycle.selfEvalOpenAt)) {
+        data.selfEvalOpenAt = dto.selfEvalOpenAt;
+      }
+      if (workflowVersion !== (cycle.workflowVersion ?? 1)) data.workflowVersion = workflowVersion;
+      if (nextScoringFrequency !== (cycle.scoringFrequency ?? ScoringFrequency.cycle)) {
+        data.scoringFrequency = nextScoringFrequency;
+      }
+      if (dto.notificationMode !== undefined && dto.notificationMode !== cycle.notificationMode) {
+        data.notificationMode = dto.notificationMode;
+      }
+      if (hrOwnerId !== cycle.hrOwnerId) data.hrOwnerId = hrOwnerId;
+      if (reviewerId !== cycle.reviewerId) data.reviewerId = reviewerId;
+      if (nextMonthlyFollowUpRequired !== cycle.monthlyFollowUpRequired) {
+        data.monthlyFollowUpRequired = nextMonthlyFollowUpRequired;
+      }
+      if (!this.sameIdSet(nextParticipantDeptIds, cycle.participantDeptIds)) data.participantDeptIds = nextParticipantDeptIds;
+      if (!this.sameIdSet(nextParticipantUserIds, cycle.participantUserIds)) data.participantUserIds = nextParticipantUserIds;
+      if (!this.sameIdSet(nextExplicitExemptDeptIds, cycle.explicitExemptDeptIds)) {
+        data.explicitExemptDeptIds = nextExplicitExemptDeptIds;
+      }
+      if (!this.sameIdSet(nextExplicitExemptUserIds, cycle.explicitExemptUserIds)) {
+        data.explicitExemptUserIds = nextExplicitExemptUserIds;
+      }
+      if (dto.publishVisibleFields !== undefined && !this.sameJson(dto.publishVisibleFields, cycle.publishVisibleFields)) {
+        data.publishVisibleFields = dto.publishVisibleFields;
+      }
+      if (dto.gradeAMaxRatio !== undefined && !this.sameDecimal(dto.gradeAMaxRatio, cycle.gradeAMaxRatio)) {
+        data.gradeAMaxRatio = new Prisma.Decimal(dto.gradeAMaxRatio);
+      }
+      if (dto.gradeBMaxRatio !== undefined && !this.sameDecimal(dto.gradeBMaxRatio, cycle.gradeBMaxRatio)) {
+        data.gradeBMaxRatio = new Prisma.Decimal(dto.gradeBMaxRatio);
+      }
+      if (dto.gradeCMaxRatio !== undefined && !this.sameDecimal(dto.gradeCMaxRatio, cycle.gradeCMaxRatio)) {
+        data.gradeCMaxRatio = new Prisma.Decimal(dto.gradeCMaxRatio);
+      }
+      if (dto.gradeDMaxRatio !== undefined && !this.sameDecimal(dto.gradeDMaxRatio, cycle.gradeDMaxRatio)) {
+        data.gradeDMaxRatio = new Prisma.Decimal(dto.gradeDMaxRatio);
+      }
+      if (dto.deadlineIndicatorSetting !== undefined
+        && !this.sameInstant(dto.deadlineIndicatorSetting, cycle.deadlineIndicatorSetting)) {
+        data.deadlineIndicatorSetting = dto.deadlineIndicatorSetting;
+      }
+      if (dto.deadlineIndicatorConfirm !== undefined
+        && !this.sameInstant(dto.deadlineIndicatorConfirm, cycle.deadlineIndicatorConfirm)) {
+        data.deadlineIndicatorConfirm = dto.deadlineIndicatorConfirm;
+      }
+      if (dto.deadlineSelfEval !== undefined && !this.sameInstant(dto.deadlineSelfEval, cycle.deadlineSelfEval)) {
+        data.deadlineSelfEval = dto.deadlineSelfEval;
+      }
+      if (dto.deadlineManagerScore !== undefined
+        && !this.sameInstant(dto.deadlineManagerScore, cycle.deadlineManagerScore)) {
+        data.deadlineManagerScore = dto.deadlineManagerScore;
+      }
+      if (dto.deadlineHrCalibration !== undefined
+        && !this.sameInstant(dto.deadlineHrCalibration, cycle.deadlineHrCalibration)) {
+        data.deadlineHrCalibration = dto.deadlineHrCalibration;
+      }
+      if (dto.deadlineApproval !== undefined && !this.sameInstant(dto.deadlineApproval, cycle.deadlineApproval)) {
+        data.deadlineApproval = dto.deadlineApproval;
+      }
+      if (dto.deadlinePublish !== undefined && !this.sameInstant(dto.deadlinePublish, cycle.deadlinePublish)) {
+        data.deadlinePublish = dto.deadlinePublish;
+      }
+
+      const businessChanged = Object.keys(data).length > 0 || scheduleChanged;
+      if (!businessChanged) {
+        const claim = await tx.assessmentCycle.updateMany({
+          where: { id, status: CycleStatus.draft, planVersion: dto.expectedPlanVersion },
+          data: { planVersion: { increment: 0 } },
+        });
+        if (claim.count !== 1) throw this.stalePlanConflict();
+        const unchanged = await tx.assessmentCycle.findUnique({ where: { id }, include: CYCLE_PLAN_INCLUDE });
+        if (!unchanged) throw this.stalePlanConflict();
+        return this.withPlanFields(unchanged, schedulePlan?.warnings ?? []);
+      }
+
+      data.planVersion = { increment: 1 };
+      data.reviewStatus = 'pending';
+      data.reviewedAt = null;
+      data.reviewComment = null;
+      const claim = await tx.assessmentCycle.updateMany({
+        where: { id, status: CycleStatus.draft, planVersion: dto.expectedPlanVersion },
+        data,
+      });
+      if (claim.count !== 1) throw this.stalePlanConflict();
+
+      if (scheduleChanged) {
+        await tx.cyclePeriodSchedule.deleteMany({ where: { cycleId: id } });
+        if (schedulePlan?.schedules.length) {
+          await tx.cyclePeriodSchedule.createMany({
+            data: schedulePlan.schedules.map((schedule) => ({
+              cycleId: id,
+              ...this.scheduleCreateData(schedule),
+            })),
+          });
+        }
+      }
       if (coreTimingChanged) {
         await tx.auditLog.create({
           data: {
@@ -341,9 +425,11 @@ export class CyclesService {
           action: 'cycle_draft_updated',
           entityType: 'assessment_cycle',
           entityId: id,
-          newValue: { name: updated.name, type: updated.type, status: updated.status },
+          newValue: { name: dto.name ?? cycle.name, type: nextType, status: cycle.status },
         },
       });
+      const updated = await tx.assessmentCycle.findUnique({ where: { id }, include: CYCLE_PLAN_INCLUDE });
+      if (!updated) throw this.stalePlanConflict();
       return this.withPlanFields(updated, schedulePlan?.warnings ?? []);
     });
   }
@@ -594,6 +680,46 @@ export class CyclesService {
     ]);
   }
 
+  private normalizeIdSet(values: readonly string[] | null | undefined): string[] {
+    return [...new Set(values ?? [])].sort();
+  }
+
+  private sameIdSet(left: readonly string[] | null | undefined, right: readonly string[] | null | undefined): boolean {
+    return JSON.stringify(this.normalizeIdSet(left)) === JSON.stringify(this.normalizeIdSet(right));
+  }
+
+  private sameInstant(left: Date | null | undefined, right: Date | null | undefined): boolean {
+    if (left == null || right == null) return left == null && right == null;
+    return left.getTime() === right.getTime();
+  }
+
+  private sameDecimal(left: number | Prisma.Decimal, right: number | Prisma.Decimal): boolean {
+    return new Prisma.Decimal(left).equals(new Prisma.Decimal(right));
+  }
+
+  private sameJson(left: unknown, right: unknown): boolean {
+    return JSON.stringify(this.canonicalJson(left)) === JSON.stringify(this.canonicalJson(right));
+  }
+
+  private canonicalJson(value: unknown): unknown {
+    if (Array.isArray(value)) return value.map((item) => this.canonicalJson(item));
+    if (value && typeof value === 'object' && !(value instanceof Date) && !(value instanceof Prisma.Decimal)) {
+      return Object.fromEntries(
+        Object.entries(value as Record<string, unknown>)
+          .sort(([left], [right]) => left.localeCompare(right))
+          .map(([key, item]) => [key, this.canonicalJson(item)]),
+      );
+    }
+    return value;
+  }
+
+  private stalePlanConflict(): ConflictException {
+    return new ConflictException({
+      code: ERROR_CODE.CONFLICT,
+      message: '周期计划已被其他人修改、审核或发起，请刷新后重试',
+    });
+  }
+
   private withPlanFields<T extends object>(
     cycle: T,
     scheduleWarnings?: NormalizedCycleSchedulePlan['warnings'],
@@ -642,19 +768,27 @@ export class CyclesService {
 
   async review(id: string, dto: ReviewCycleDto, user: AuthUser) {
     return this.prisma.$transaction(async (tx) => {
-      const cycle = await tx.assessmentCycle.findUnique({ where: { id } });
+      const cycle = await tx.assessmentCycle.findUnique({ where: { id }, include: CYCLE_PLAN_INCLUDE });
       if (!cycle) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
       if (cycle.status !== CycleStatus.draft) {
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '只有草稿周期可以审核' });
       }
-      if (cycle.reviewerId !== user.id && user.sysRole !== SysRole.system_admin) {
+      if (cycle.reviewerId !== user.id) {
         throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅本周期审核人可以审核' });
       }
+      if (cycle.planVersion !== dto.expectedPlanVersion) throw this.stalePlanConflict();
       const reviewStatus = dto.action === 'approve' ? 'approved' : 'rejected';
-      const updated = await tx.assessmentCycle.update({
-        where: { id },
+      const claim = await tx.assessmentCycle.updateMany({
+        where: {
+          id,
+          status: CycleStatus.draft,
+          planVersion: dto.expectedPlanVersion,
+          reviewStatus: cycle.reviewStatus,
+          reviewedAt: cycle.reviewedAt,
+        },
         data: { reviewStatus, reviewedAt: new Date(), reviewComment: dto.comment?.trim() || null },
       });
+      if (claim.count !== 1) throw this.stalePlanConflict();
       await tx.auditLog.create({
         data: {
           userId: user.id,
@@ -664,7 +798,9 @@ export class CyclesService {
           newValue: { reviewStatus, comment: dto.comment?.trim() || null },
         },
       });
-      return updated;
+      const updated = await tx.assessmentCycle.findUnique({ where: { id }, include: CYCLE_PLAN_INCLUDE });
+      if (!updated) throw this.stalePlanConflict();
+      return this.withPlanFields(updated);
     });
   }
 

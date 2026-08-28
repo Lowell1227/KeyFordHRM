@@ -173,4 +173,24 @@ describe('CycleScheduleService', () => {
 
     expect(plan.schedules[1]).toEqual(expect.objectContaining({ periodKey: '2026-08', isException: true }));
   });
+
+  it('marks a schedule exceptional when a client edits a timestamp but sends isException false', () => {
+    const plan = service.normalizeAndValidate({
+      type: 'quarterly',
+      scoringFrequency: 'monthly',
+      startDate: new Date('2026-07-01T00:00:00+08:00'),
+      endDate: new Date('2026-09-30T00:00:00+08:00'),
+      schedules: [{
+        periodKey: '2026-08',
+        managerDueAt: new Date('2026-09-15T18:00:00+08:00'),
+        isException: false,
+      }],
+    });
+
+    expect(plan.schedules[1]).toEqual(expect.objectContaining({
+      periodKey: '2026-08',
+      managerDueAt: new Date('2026-09-15T18:00:00+08:00'),
+      isException: true,
+    }));
+  });
 });

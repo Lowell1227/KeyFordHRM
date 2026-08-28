@@ -32,6 +32,7 @@ const integratedCycle: AssessmentCycle = {
   workflowVersion: 2,
   scoringFrequency: 'monthly',
   reviewFrequency: 'cycle',
+  planVersion: 3,
   periodSchedules: buildSchedules(3, 'monthly'),
   companyFinalApproverId: 'leader-1',
   companyFinalApprover: { id: 'leader-1', name: '李宏' },
@@ -70,6 +71,7 @@ interface IntegratedPageOptions {
   warnings?: Array<{ code: string; periodKey: string; message: string }>;
   createBodies?: Record<string, unknown>[];
   updateBodies?: Record<string, unknown>[];
+  reviewBodies?: Record<string, unknown>[];
   previewBodies?: Record<string, unknown>[];
   previewCompletions?: number[];
   previewResolver?: (
@@ -178,6 +180,7 @@ async function mockIntegratedCyclePage(
         body: JSON.stringify(apiResponse({
           ready: true,
           planHash: 'plan-hash',
+          companyFinalApprover: { id: 'leader-1', name: '李宏' },
           cycle: {
             id: integratedCycle.id,
             name: integratedCycle.name,
@@ -239,6 +242,18 @@ async function mockIntegratedCyclePage(
       return route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify(apiResponse({ ...matchedCycle, ...body })),
+      });
+    }
+    if (request.method() === 'POST' && path.endsWith('/review')) {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      options.reviewBodies?.push(body);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          ...matchedCycle,
+          reviewStatus: 'approved',
+          reviewedAt: new Date().toISOString(),
+        })),
       });
     }
     if (request.method() === 'POST') {
@@ -361,6 +376,8 @@ test.describe('cycle scoring plan controls', () => {
     await expect(secondRow.getByTestId('cycle-special-month-badge')).toHaveText('特殊月份');
     await expect(secondRow).toContainText('该月与相邻计划有重叠风险');
     await expect(secondRow).toContainText('主管完成时间不得早于员工完成时间');
+    await expect(page.getByTestId('cycle-apply-unified')).toHaveText('重新应用默认规则');
+    await expect(page.getByTestId('cycle-apply-unified')).not.toHaveText('统一调整规则');
 
     await firstRow.getByTestId('cycle-special-month-button').click();
     await expect(firstRow.getByTestId('cycle-special-month-badge')).toHaveText('特殊月份');
@@ -398,8 +415,10 @@ test.describe('cycle scoring plan integration', () => {
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
     await page.getByTestId('cycle-scoring-monthly').click();
     const secondRow = page.getByTestId('cycle-month-schedule-row').nth(1);
-    await secondRow.getByTestId('cycle-special-month-button').click();
-    await secondRow.getByTestId('manager-due-at').locator('input').fill('2027-03-10 18:00');
+    const managerDueInput = secondRow.getByTestId('manager-due-at').locator('input');
+    await managerDueInput.fill('2027-03-10 18:00');
+    await managerDueInput.press('Tab');
+    await expect(secondRow.getByTestId('cycle-special-month-badge')).toHaveText('特殊月份');
     await page.getByRole('button', { name: '下一步' }).click();
 
     await expect(page.getByRole('dialog', { name: '确认评分计划提示' })).toContainText('主管完成时间跨月，请确认安排');
@@ -600,6 +619,25 @@ test.describe('cycle scoring plan integration', () => {
     expect(updateBodies[0]).not.toHaveProperty('workflowVersion');
     expect(updateBodies[0]).not.toHaveProperty('scoringFrequency');
     expect(updateBodies[0]).not.toHaveProperty('periodSchedules');
+    expect(updateBodies[0]).toHaveProperty('expectedPlanVersion', historicalCycle.planVersion);
+  });
+
+  test('submits the inspected plan version when the assigned reviewer approves', async ({ page }) => {
+    const reviewBodies: Record<string, unknown>[] = [];
+    const pendingCycle: AssessmentCycle = { ...integratedCycle, reviewStatus: 'pending' };
+    await mockIntegratedCyclePage(page, { cycles: [pendingCycle], reviewBodies });
+    await page.goto('/cycles?group=attention');
+
+    await page.getByRole('button', { name: '审核', exact: true }).click();
+    await page.getByRole('dialog', { name: '审核周期计划' })
+      .getByRole('button', { name: '审核通过' })
+      .click();
+
+    await expect.poll(() => reviewBodies).toHaveLength(1);
+    expect(reviewBodies[0]).toMatchObject({
+      action: 'approve',
+      expectedPlanVersion: pendingCycle.planVersion,
+    });
   });
 
   test('shows scoring, fixed review, exceptions, final approver, and v2 preflight dispositions', async ({ page }) => {
@@ -616,5 +654,6 @@ test.describe('cycle scoring plan integration', () => {
     await page.getByRole('button', { name: '开始发起检查' }).click();
     await expect(page.getByTestId('cycle-preflight-summary')).toContainText('试用期排除：1人');
     await expect(page.getByTestId('cycle-preflight-summary')).toContainText('最高负责人豁免：李宏');
+    await expect(page.getByTestId('cycle-preflight-summary')).toContainText('本次发起公司最终审定人：李宏');
   });
 });

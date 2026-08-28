@@ -193,6 +193,7 @@ const createNameCustomized = ref(false);
 const createPeriodRange = ref<[Date, Date] | null>(null);
 const createInitialSnapshot = ref('');
 const editingWorkflowVersion = ref<1 | 2>(2);
+const editingPlanVersion = ref<number | null>(null);
 const editingReviewStatus = ref<AssessmentCycle['reviewStatus']>();
 const editingCycleOriginal = ref<AssessmentCycle | null>(null);
 type SchedulePreviewMode = 'defaults' | 'validate';
@@ -470,6 +471,7 @@ function resetCreateForm() {
   pendingScheduleRollbackScope = undefined;
   editingCycleId.value = null;
   editingWorkflowVersion.value = 2;
+  editingPlanVersion.value = null;
   editingReviewStatus.value = undefined;
   editingCycleOriginal.value = null;
   confirmedScoringContext.value = null;
@@ -673,6 +675,7 @@ function openEditCycle(cycle: AssessmentCycle) {
   resetCreateForm();
   editingCycleId.value = cycle.id;
   editingWorkflowVersion.value = cycle.workflowVersion === 2 ? 2 : 1;
+  editingPlanVersion.value = cycle.planVersion;
   editingReviewStatus.value = cycle.reviewStatus;
   editingCycleOriginal.value = cycle;
   createForm.name = cycle.name;
@@ -1089,7 +1092,7 @@ async function handleRestoreAllScoringSchedules() {
 
 async function handleApplyUnifiedScoringRule(options: { preserveExceptions: boolean }) {
   if (!await refreshScoringPlan({
-    reason: options.preserveExceptions ? undefined : '统一调整将覆盖特殊月份',
+    reason: options.preserveExceptions ? undefined : '重新应用默认规则将覆盖特殊月份',
     preserveExceptions: options.preserveExceptions,
   })) return;
   await validateCurrentScoringPlan();
@@ -1162,6 +1165,7 @@ function buildCreateBody(): CreateCycleBody {
     endDate: formatDateLocal(createForm.endDate)!,
     goalSettingOpenAt: formatDateTimeLocal(createForm.goalSettingOpenAt),
     selfEvalOpenAt: formatDateTimeLocal(createForm.selfEvalOpenAt),
+    hrOwnerId: createForm.hrOwnerId,
     reviewerId: createForm.reviewerId,
     monthlyFollowUpRequired: ['quarterly', 'semiannual', 'annual'].includes(createForm.type)
       ? createForm.monthlyFollowUpRequired
@@ -1251,7 +1255,14 @@ async function handleCreate(openWorkspace = false) {
   submitting.value = true;
   try {
     if (isEditMode.value && editingCycleId.value) {
-      const updated = await cyclesApi.update(editingCycleId.value, buildCreateBody());
+      if (!editingPlanVersion.value) {
+        ElMessage.error('周期版本信息缺失，请刷新后重试');
+        return;
+      }
+      const updated = await cyclesApi.update(editingCycleId.value, {
+        ...buildCreateBody(),
+        expectedPlanVersion: editingPlanVersion.value,
+      });
       ElMessage.success('周期已保存');
       createDialogVisible.value = false;
       resetCreateForm();
@@ -1639,7 +1650,7 @@ async function handleReviewCycle(cycle: AssessmentCycle) {
       '审核周期计划',
       { confirmButtonText: '审核通过', cancelButtonText: '取消', type: 'warning' },
     );
-    await cyclesApi.review(cycle.id, 'approve');
+    await cyclesApi.review(cycle.id, 'approve', cycle.planVersion);
     ElMessage.success('周期计划已审核通过');
     await loadCycles();
     if (isCycleWorkspace.value) await loadCycleDetail(cycle.id);
@@ -1765,7 +1776,6 @@ onMounted(() => {
         :launching-id="launchingId"
         :deleting-id="deletingId"
         :current-user-id="auth.user?.id"
-        :is-system-admin="auth.user?.sysRole === 'system_admin'"
         :can-edit="canEditCyclePlan"
         @open="handleView"
         @primary="handlePrimaryCycleAction"

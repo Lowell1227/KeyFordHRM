@@ -107,8 +107,13 @@ export const cyclesApi = {
     return apiPost(`/cycles/${id}/schedule/cancel`);
   },
 
-  review(id: string, action: 'approve' | 'reject', comment?: string): Promise<AssessmentCycle> {
-    return apiPost(`/cycles/${id}/review`, { action, comment });
+  review(
+    id: string,
+    action: 'approve' | 'reject',
+    expectedPlanVersion: number,
+    comment?: string,
+  ): Promise<AssessmentCycle> {
+    return apiPost(`/cycles/${id}/review`, { action, expectedPlanVersion, comment });
   },
 
   updateNotificationMode(id: string, notificationMode: CycleNotificationMode): Promise<AssessmentCycle> {

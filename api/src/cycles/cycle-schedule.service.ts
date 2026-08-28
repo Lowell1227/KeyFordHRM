@@ -84,12 +84,22 @@ export class CycleScheduleService {
   }
 
   private buildSchedule(period: PeriodDefinition, override?: CyclePeriodScheduleDto): ScheduleValues {
-    const selfEvalOpenAt = override?.selfEvalOpenAt
-      ? toDate(override.selfEvalOpenAt)
-      : atShanghaiTime(firstStatutoryWorkdayOfFollowingMonth(period.periodEnd), 9);
-    const selfEvalDueAt = override?.selfEvalDueAt ? toDate(override.selfEvalDueAt) : atShanghaiTime(shiftStatutoryWorkdays(selfEvalOpenAt, 2), 18);
-    const managerDueAt = override?.managerDueAt ? toDate(override.managerDueAt) : atShanghaiTime(shiftStatutoryWorkdays(selfEvalDueAt, 3), 18);
-    return { ...period, selfEvalOpenAt, selfEvalDueAt, managerDueAt, isException: override?.isException ?? false };
+    const defaultSelfEvalOpenAt = atShanghaiTime(firstStatutoryWorkdayOfFollowingMonth(period.periodEnd), 9);
+    const defaultSelfEvalDueAt = atShanghaiTime(shiftStatutoryWorkdays(defaultSelfEvalOpenAt, 2), 18);
+    const defaultManagerDueAt = atShanghaiTime(shiftStatutoryWorkdays(defaultSelfEvalDueAt, 3), 18);
+    const selfEvalOpenAt = override?.selfEvalOpenAt ? toDate(override.selfEvalOpenAt) : defaultSelfEvalOpenAt;
+    const selfEvalDueAt = override?.selfEvalDueAt ? toDate(override.selfEvalDueAt) : defaultSelfEvalDueAt;
+    const managerDueAt = override?.managerDueAt ? toDate(override.managerDueAt) : defaultManagerDueAt;
+    const timingChanged = selfEvalOpenAt.getTime() !== defaultSelfEvalOpenAt.getTime()
+      || selfEvalDueAt.getTime() !== defaultSelfEvalDueAt.getTime()
+      || managerDueAt.getTime() !== defaultManagerDueAt.getTime();
+    return {
+      ...period,
+      selfEvalOpenAt,
+      selfEvalDueAt,
+      managerDueAt,
+      isException: Boolean(override?.isException) || timingChanged,
+    };
   }
 
   private validateSchedule(schedule: ScheduleValues, blockers: ScheduleIssue[], warnings: ScheduleIssue[]): void {

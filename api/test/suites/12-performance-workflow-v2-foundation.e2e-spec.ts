@@ -44,6 +44,13 @@ describe("Performance workflow v2 foundation", () => {
       deptId: dept.id,
       canViewAll: true,
     });
+    const replacementTopLeader = await factory.createUser({
+      employeeNo: "V2-TOP-002",
+      name: "李宏（新配置）",
+      sysRole: SysRole.chairman,
+      deptId: dept.id,
+      canViewAll: true,
+    });
     const hrAdministrator = await factory.createUser({
       employeeNo: "V2-HRA-001",
       name: "HR管理员",
@@ -98,7 +105,7 @@ describe("Performance workflow v2 foundation", () => {
     await factory.updateDeptApprover(dept.id, topLeader.id);
     await app.prisma.systemConfig.update({
       where: { key: "performance_company_final_approver" },
-      data: { value: { userId: topLeader.id } },
+      data: { value: { userId: null } },
     });
 
     const authService = app.app.get(AuthService);
@@ -148,7 +155,8 @@ describe("Performance workflow v2 foundation", () => {
       workflowVersion: 2,
       scoringFrequency: "monthly",
       reviewFrequency: "cycle",
-      companyFinalApprover: { id: topLeader.id, name: "李宏" },
+      planVersion: 1,
+      companyFinalApprover: null,
     });
     expect(createdV2.body.data.periodSchedules).toHaveLength(3);
     expect(
@@ -157,10 +165,19 @@ describe("Performance workflow v2 foundation", () => {
       }),
     ).toBe(3);
 
+    await app.prisma.systemConfig.update({
+      where: { key: "performance_company_final_approver" },
+      data: { value: { userId: topLeader.id } },
+    });
+
     await app.http
       .post(`/api/v1/cycles/${v2CycleId}/review`)
       .set("Authorization", `Bearer ${reviewerToken}`)
-      .send({ action: "approve", comment: "计划审核通过" })
+      .send({
+        action: "approve",
+        expectedPlanVersion: createdV2.body.data.planVersion,
+        comment: "计划审核通过",
+      })
       .expect(201);
 
     const preflightV2 = await app.http
@@ -171,6 +188,7 @@ describe("Performance workflow v2 foundation", () => {
     expect(preflightV2.body.data).toMatchObject({
       ready: true,
       participantCount: 2,
+      companyFinalApprover: { id: topLeader.id, name: "李宏" },
       blockers: [],
     });
     expect(preflightV2.body.data.planHash).toMatch(/^[a-f0-9]{64}$/);
@@ -219,10 +237,30 @@ describe("Performance workflow v2 foundation", () => {
       },
     ]);
 
-    const launchedV2 = await app.http
+    await app.prisma.systemConfig.update({
+      where: { key: "performance_company_final_approver" },
+      data: { value: { userId: replacementTopLeader.id } },
+    });
+    await app.http
       .post(`/api/v1/cycles/${v2CycleId}/launch`)
       .set("Authorization", `Bearer ${hrToken}`)
       .send({ expectedPlanHash: preflightV2.body.data.planHash })
+      .expect(409);
+
+    const refreshedPreflightV2 = await app.http
+      .get(`/api/v1/cycles/${v2CycleId}/preflight`)
+      .set("Authorization", `Bearer ${hrToken}`)
+      .expect(200);
+    expect(refreshedPreflightV2.body.data).toMatchObject({
+      ready: true,
+      companyFinalApprover: { id: replacementTopLeader.id, name: replacementTopLeader.name },
+    });
+    expect(refreshedPreflightV2.body.data.planHash).not.toBe(preflightV2.body.data.planHash);
+
+    const launchedV2 = await app.http
+      .post(`/api/v1/cycles/${v2CycleId}/launch`)
+      .set("Authorization", `Bearer ${hrToken}`)
+      .send({ expectedPlanHash: refreshedPreflightV2.body.data.planHash })
       .expect(201);
     expect(launchedV2.body.data).toEqual({
       cycleId: v2CycleId,
@@ -238,13 +276,13 @@ describe("Performance workflow v2 foundation", () => {
       orderBy: { employeeId: "asc" },
     });
     expect(v2Tasks.map(({ employeeId }) => employeeId).sort()).toEqual(
-      [employee.id, topLeader.id].sort(),
+      [employee.id, replacementTopLeader.id].sort(),
     );
     const employeeTask = v2Tasks.find(
       (task) => task.employeeId === employee.id,
     )!;
     const topLeaderTask = v2Tasks.find(
-      (task) => task.employeeId === topLeader.id,
+      (task) => task.employeeId === replacementTopLeader.id,
     )!;
     expect(employeeTask).toMatchObject({
       managerId: directManager.id,
@@ -258,6 +296,10 @@ describe("Performance workflow v2 foundation", () => {
       isExempt: true,
       exemptReason: "最高负责人豁免",
     });
+    expect(await app.prisma.assessmentCycle.findUniqueOrThrow({
+      where: { id: v2CycleId },
+      select: { companyFinalApproverId: true },
+    })).toEqual({ companyFinalApproverId: replacementTopLeader.id });
     expect(
       await app.prisma.assessmentPeriod.count({
         where: { taskId: employeeTask.id },
@@ -333,7 +375,7 @@ describe("Performance workflow v2 foundation", () => {
     await app.http
       .post(`/api/v1/cycles/${v1CycleId}/review`)
       .set("Authorization", `Bearer ${reviewerToken}`)
-      .send({ action: "approve" })
+      .send({ action: "approve", expectedPlanVersion: createdV1.body.data.planVersion })
       .expect(201);
     const preflightV1 = await app.http
       .get(`/api/v1/cycles/${v1CycleId}/preflight`)
