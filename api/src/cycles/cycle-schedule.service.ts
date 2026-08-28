@@ -1,5 +1,5 @@
 import { Injectable } from '@nestjs/common';
-import { AssessmentPeriodType, ScoringFrequency } from '@prisma/client';
+import { ScoringFrequency } from '@prisma/client';
 import { buildPeriodDefinitions, normalizeScoringFrequency, PeriodDefinition } from './cycle-scoring-plan';
 import { atShanghaiTime, shiftStatutoryWorkdays, workdayStatus } from './cycle-workday-calendar';
 import { CyclePeriodScheduleDto } from './dto/cycle-period-schedule.dto';
@@ -84,8 +84,10 @@ export class CycleScheduleService {
   }
 
   private buildSchedule(period: PeriodDefinition, override?: CyclePeriodScheduleDto): ScheduleValues {
-    const selfEvalOpenAt = override?.selfEvalOpenAt ? toDate(override.selfEvalOpenAt) : atShanghaiTime(shiftStatutoryWorkdays(period.periodEnd, 1), 9);
-    const selfEvalDueAt = override?.selfEvalDueAt ? toDate(override.selfEvalDueAt) : atShanghaiTime(shiftStatutoryWorkdays(selfEvalOpenAt, 2), 18);
+    const selfEvalOpenAt = override?.selfEvalOpenAt
+      ? toDate(override.selfEvalOpenAt)
+      : atShanghaiTime(firstStatutoryWorkdayOfFollowingMonth(period.periodEnd), 9);
+    const selfEvalDueAt = override?.selfEvalDueAt ? toDate(override.selfEvalDueAt) : atShanghaiTime(shiftStatutoryWorkdays(selfEvalOpenAt, 3), 18);
     const managerDueAt = override?.managerDueAt ? toDate(override.managerDueAt) : atShanghaiTime(shiftStatutoryWorkdays(selfEvalDueAt, 3), 18);
     return { ...period, selfEvalOpenAt, selfEvalDueAt, managerDueAt, isException: override?.isException ?? false };
   }
@@ -105,13 +107,21 @@ export class CycleScheduleService {
     if (timestamps.some((date) => !workdayStatus(date).official)) {
       warnings.push({ code: 'WORKDAY_CALENDAR_FALLBACK', periodKey: schedule.periodKey, message: '部分日期使用了工作日回退规则' });
     }
-    if (schedule.periodType !== AssessmentPeriodType.cycle && timestamps.some((date) => monthKey(date) !== schedule.periodKey)) {
+    if (new Set(timestamps.map(monthKey)).size > 1) {
       warnings.push({ code: 'SCHEDULE_CROSS_MONTH', periodKey: schedule.periodKey, message: '排期跨越考核月份' });
     }
     if (statutoryWorkdaysBetween(schedule.selfEvalOpenAt, schedule.managerDueAt) > 10) {
       warnings.push({ code: 'SCHEDULE_INTERVAL_OVER_10_WORKDAYS', periodKey: schedule.periodKey, message: '自评开放至主管评分截止超过十个法定工作日' });
     }
   }
+}
+
+function firstStatutoryWorkdayOfFollowingMonth(date: Date): Date {
+  const timestamp = formatShanghaiTimestamp(date);
+  const year = Number(timestamp.slice(0, 4));
+  const month = Number(timestamp.slice(5, 7));
+  const firstDay = new Date(Date.UTC(year, month, 1) - 8 * 60 * 60 * 1000);
+  return workdayStatus(firstDay).isWorkday ? firstDay : shiftStatutoryWorkdays(firstDay, 1);
 }
 
 function toDate(value: string | Date): Date {

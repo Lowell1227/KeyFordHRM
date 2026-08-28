@@ -35,6 +35,22 @@ describe('CycleScheduleService', () => {
     expect(preview.schedules[0].selfEvalOpenAt).toBe('2026-08-03T09:00:00+08:00');
   });
 
+  it('starts a partial period schedule on the following calendar month and uses third-workday deadlines', () => {
+    const preview = service.preview({
+      type: 'quarterly',
+      scoringFrequency: 'monthly',
+      startDate: new Date('2026-07-01T00:00:00+08:00'),
+      endDate: new Date('2026-09-15T00:00:00+08:00'),
+    });
+
+    expect(preview.schedules[2]).toMatchObject({
+      periodKey: '2026-09',
+      selfEvalOpenAt: '2026-10-08T09:00:00+08:00',
+      selfEvalDueAt: '2026-10-12T18:00:00+08:00',
+      managerDueAt: '2026-10-15T18:00:00+08:00',
+    });
+  });
+
   it('blocks schedules whose self-evaluation does not open before it is due', () => {
     const plan = service.normalizeAndValidate({
       type: 'monthly',
@@ -113,6 +129,37 @@ describe('CycleScheduleService', () => {
     });
 
     expect(preview.schedules).toEqual([expect.objectContaining({ periodKey: 'cycle' })]);
+  });
+
+  it('warns when a cycle-scoring schedule node spans calendar months', () => {
+    const plan = service.normalizeAndValidate({
+      type: 'quarterly',
+      scoringFrequency: 'cycle',
+      startDate: new Date('2026-07-01T00:00:00+08:00'),
+      endDate: new Date('2026-09-30T00:00:00+08:00'),
+      schedules: [{
+        periodKey: 'cycle',
+        selfEvalOpenAt: new Date('2026-10-30T09:00:00+08:00'),
+        selfEvalDueAt: new Date('2026-11-03T18:00:00+08:00'),
+        managerDueAt: new Date('2026-11-06T18:00:00+08:00'),
+      }],
+    });
+
+    expect(plan.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'SCHEDULE_CROSS_MONTH', periodKey: 'cycle' }),
+    ]));
+  });
+
+  it('warns explicitly when generated dates use the weekday fallback calendar', () => {
+    const preview = service.preview({
+      type: 'monthly',
+      startDate: new Date('2026-12-01T00:00:00+08:00'),
+      endDate: new Date('2026-12-31T00:00:00+08:00'),
+    });
+
+    expect(preview.warnings).toEqual(expect.arrayContaining([
+      expect.objectContaining({ code: 'WORKDAY_CALENDAR_FALLBACK', periodKey: '2026-12' }),
+    ]));
   });
 
   it('keeps an explicitly exceptional month through normalization', () => {
