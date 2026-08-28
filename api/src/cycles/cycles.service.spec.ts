@@ -1,10 +1,11 @@
-import { CycleStatus, Prisma, SysRole } from '@prisma/client';
+import { CycleStatus, Prisma, ScoringFrequency, SysRole } from '@prisma/client';
 import { CyclesService } from './cycles.service';
 import { CreateCycleDto } from './dto/create-cycle.dto';
 import { AuthUser } from '@/common/types/auth.types';
 
 describe('CyclesService', () => {
   const explicitExemptDeptId = 'c134b614-5d97-4f1c-a72e-0afc6d12eb99';
+  const companyFinalApproverId = '88888888-8888-4888-8888-888888888888';
   const creator = {
     id: '11111111-1111-4111-8111-111111111111',
     sysRole: SysRole.hr,
@@ -31,6 +32,9 @@ describe('CyclesService', () => {
       assessmentTask: { findMany: jest.fn(), count: jest.fn(), groupBy: jest.fn() },
       assessmentTemplateSnapshot: { count: jest.fn() },
       user: { findFirst: jest.fn().mockResolvedValue({ id: '99999999-9999-4999-8999-999999999999' }) },
+      systemConfig: {
+        findUnique: jest.fn().mockResolvedValue({ value: { userId: companyFinalApproverId } }),
+      },
       auditLog: { create: jest.fn() },
     };
     service = new CyclesService(prisma as never);
@@ -73,7 +77,7 @@ describe('CyclesService', () => {
   it('derives the default goal-setting and self-evaluation opening dates', async () => {
     await service.create(quarterlyCycle(), creator);
 
-    expect(prisma.assessmentCycle.create).toHaveBeenCalledWith({
+    expect(prisma.assessmentCycle.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
         selfEvalOpenAt: new Date('2027-04-01T00:00:00.000Z'),
@@ -82,7 +86,7 @@ describe('CyclesService', () => {
         gradeCMaxRatio: new Prisma.Decimal(0.3),
         gradeDMaxRatio: new Prisma.Decimal(0.1),
       }),
-    });
+    }));
   });
 
   it('stores explicit exempt departments when creating a cycle', async () => {
@@ -90,11 +94,11 @@ describe('CyclesService', () => {
       explicitExemptDeptIds: [explicitExemptDeptId],
     } as Partial<CreateCycleDto>), creator);
 
-    expect(prisma.assessmentCycle.create).toHaveBeenCalledWith({
+    expect(prisma.assessmentCycle.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         explicitExemptDeptIds: [explicitExemptDeptId],
       }),
-    });
+    }));
   });
 
   it('stores explicit exempt departments when updating a draft cycle', async () => {
@@ -128,6 +132,81 @@ describe('CyclesService', () => {
     });
   });
 
+  it.each([
+    {
+      label: 'scoring frequency',
+      update: { scoringFrequency: ScoringFrequency.cycle },
+    },
+    {
+      label: 'schedule timestamp',
+      update: {
+        periodSchedules: [{
+          periodKey: '2027-01',
+          selfEvalOpenAt: '2027-02-02T09:00:00+08:00',
+          selfEvalDueAt: '2027-02-03T18:00:00+08:00',
+          managerDueAt: '2027-02-08T18:00:00+08:00',
+        }],
+      },
+    },
+  ])('forces reapproval and audits an approved draft after changing $label', async ({ update }) => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue({
+      id: 'cycle-1',
+      name: '2027年第一季度',
+      type: 'quarterly',
+      workflowVersion: 2,
+      scoringFrequency: ScoringFrequency.monthly,
+      status: CycleStatus.draft,
+      startDate: new Date('2027-01-01T00:00:00.000Z'),
+      endDate: new Date('2027-03-31T00:00:00.000Z'),
+      goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
+      selfEvalOpenAt: new Date('2027-04-01T00:00:00.000Z'),
+      reviewerId: '99999999-9999-4999-8999-999999999999',
+      reviewStatus: 'approved',
+      reviewedAt: new Date('2026-12-20T00:00:00.000Z'),
+      reviewComment: '通过',
+      periodSchedules: [{
+        periodKey: '2027-01',
+        periodType: 'month',
+        sequence: 1,
+        periodStart: new Date('2027-01-01T00:00:00.000Z'),
+        periodEnd: new Date('2027-01-31T00:00:00.000Z'),
+        selfEvalOpenAt: new Date('2027-02-01T01:00:00.000Z'),
+        selfEvalDueAt: new Date('2027-02-03T10:00:00.000Z'),
+        managerDueAt: new Date('2027-02-08T10:00:00.000Z'),
+        isException: false,
+      }],
+    });
+    prisma.assessmentCycle.update.mockImplementation(({ data }) => ({
+      id: 'cycle-1',
+      name: '2027年第一季度',
+      type: 'quarterly',
+      status: CycleStatus.draft,
+      ...data,
+    }));
+
+    await service.updateDraft('cycle-1', update as any, creator);
+
+    expect(prisma.assessmentCycle.update).toHaveBeenCalledWith({
+      where: { id: 'cycle-1' },
+      data: expect.objectContaining({
+        reviewStatus: 'pending',
+        reviewedAt: null,
+        reviewComment: null,
+        periodSchedules: {
+          deleteMany: {},
+          create: expect.any(Array),
+        },
+      }),
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'cycle_scoring_plan_updated',
+        oldValue: expect.objectContaining({ scoringFrequency: ScoringFrequency.monthly }),
+        newValue: expect.objectContaining({ changedPeriodKeys: expect.any(Array) }),
+      }),
+    });
+  });
+
   it('allows a manually customized schedule to cross the performance period boundaries', async () => {
     const dto = quarterlyCycle({
       goalSettingOpenAt: new Date('2027-01-02T01:00:00.000Z'),
@@ -144,12 +223,50 @@ describe('CyclesService', () => {
     await expect(service.create(dto, creator)).resolves.toEqual(
       expect.objectContaining({ id: 'cycle-1' }),
     );
-    expect(prisma.assessmentCycle.create).toHaveBeenCalledWith({
+    expect(prisma.assessmentCycle.create).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         goalSettingOpenAt: dto.goalSettingOpenAt,
         selfEvalOpenAt: dto.selfEvalOpenAt,
       }),
+    }));
+  });
+
+  it('persists a normalized v2 scoring plan and snapshots the configured final approver', async () => {
+    prisma.user.findFirst
+      .mockResolvedValueOnce({ id: '99999999-9999-4999-8999-999999999999' })
+      .mockResolvedValueOnce({ id: companyFinalApproverId });
+
+    const result = await service.create(quarterlyCycle({
+      workflowVersion: 2,
+      scoringFrequency: ScoringFrequency.monthly,
+      periodSchedules: [{
+        periodKey: '2027-01',
+        selfEvalOpenAt: '2027-02-01T09:00:00+08:00',
+        selfEvalDueAt: '2027-02-03T18:00:00+08:00',
+        managerDueAt: '2027-02-08T18:00:00+08:00',
+      }],
+    } as any), creator);
+
+    expect(prisma.assessmentCycle.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        workflowVersion: 2,
+        scoringFrequency: ScoringFrequency.monthly,
+        companyFinalApprover: { connect: { id: companyFinalApproverId } },
+        periodSchedules: {
+          create: expect.arrayContaining([
+            expect.objectContaining({ periodKey: '2027-01', sequence: 1 }),
+          ]),
+        },
+      }),
+      include: expect.objectContaining({
+        periodSchedules: { orderBy: { sequence: 'asc' } },
+        companyFinalApprover: { select: { id: true, name: true } },
+      }),
     });
+    expect(result).toEqual(expect.objectContaining({
+      reviewFrequency: 'cycle',
+      scheduleWarnings: expect.any(Array),
+    }));
   });
 
   it('returns only opened cycles that contain a task for the current employee', async () => {
@@ -249,8 +366,15 @@ describe('CyclesService', () => {
     const manager = { ...creator, id: 'manager-1', sysRole: SysRole.manager } as AuthUser;
 
     await expect(service.findOne('cycle-1', manager)).resolves.toEqual(
-      expect.objectContaining({ id: 'cycle-1' }),
+      expect.objectContaining({ id: 'cycle-1', reviewFrequency: 'cycle' }),
     );
+    expect(prisma.assessmentCycle.findUnique).toHaveBeenCalledWith({
+      where: { id: 'cycle-1' },
+      include: expect.objectContaining({
+        periodSchedules: { orderBy: { sequence: 'asc' } },
+        companyFinalApprover: { select: { id: true, name: true } },
+      }),
+    });
     expect(prisma.assessmentTask.count).toHaveBeenNthCalledWith(1, {
       where: {
         cycleId: 'cycle-1',
@@ -267,15 +391,24 @@ describe('CyclesService', () => {
 
   it('scopes the general cycle list to the current employee task', async () => {
     prisma.assessmentCycle.count.mockResolvedValue(1);
-    prisma.assessmentCycle.findMany.mockResolvedValue([]);
+    prisma.assessmentCycle.findMany.mockResolvedValue([{ id: 'cycle-1' }]);
     const employee = { ...creator, id: 'employee-1', sysRole: SysRole.employee } as AuthUser;
 
-    await service.findAll({ page: 1, pageSize: 20, skip: 0, take: 20 } as any, employee);
+    await expect(service.findAll(
+      { page: 1, pageSize: 20, skip: 0, take: 20 } as any,
+      employee,
+    )).resolves.toEqual(expect.objectContaining({
+      items: [expect.objectContaining({ id: 'cycle-1', reviewFrequency: 'cycle' })],
+    }));
 
     expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({
         status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
         tasks: { some: taskScope(employee.id) },
+      }),
+      include: expect.objectContaining({
+        periodSchedules: { orderBy: { sequence: 'asc' } },
+        companyFinalApprover: { select: { id: true, name: true } },
       }),
     }));
   });
@@ -335,14 +468,14 @@ describe('CyclesService', () => {
 
   it('stores an explicit per-cycle notification mode and defaults to off', async () => {
     await service.create(quarterlyCycle({ notificationMode: 'launch_only' } as Partial<CreateCycleDto>), creator);
-    expect(prisma.assessmentCycle.create).toHaveBeenLastCalledWith({
+    expect(prisma.assessmentCycle.create).toHaveBeenLastCalledWith(expect.objectContaining({
       data: expect.objectContaining({ notificationMode: 'launch_only' }),
-    });
+    }));
 
     await service.create(quarterlyCycle(), creator);
-    expect(prisma.assessmentCycle.create).toHaveBeenLastCalledWith({
+    expect(prisma.assessmentCycle.create).toHaveBeenLastCalledWith(expect.objectContaining({
       data: expect.objectContaining({ notificationMode: 'off' }),
-    });
+    }));
   });
 
   it('changes notification mode only before a cycle has opened', async () => {

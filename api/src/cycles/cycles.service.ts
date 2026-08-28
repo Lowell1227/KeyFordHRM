@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { CycleStatus, Prisma, SysRole } from '@prisma/client';
+import { CycleStatus, Prisma, ScoringFrequency, SysRole } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
@@ -11,6 +11,7 @@ import { CycleQueryDto, CycleStatusGroup } from './dto/cycle-query.dto';
 import type { CycleNotificationMode } from './dto/update-cycle-notification-mode.dto';
 import type { ReviewCycleDto } from './dto/review-cycle.dto';
 import { hasHrCapability } from '@/auth/hr-capabilities';
+import { CycleScheduleService, NormalizedCycleSchedulePlan } from './cycle-schedule.service';
 
 const DEADLINE_FIELDS = [
   'deadlineIndicatorSetting',
@@ -39,9 +40,17 @@ const CYCLE_STATUS_GROUPS: Record<CycleStatusGroup, CycleStatus[]> = {
   [CycleStatusGroup.finished]: [CycleStatus.closed],
 };
 
+const CYCLE_PLAN_INCLUDE = {
+  periodSchedules: { orderBy: { sequence: 'asc' as const } },
+  companyFinalApprover: { select: { id: true, name: true } },
+};
+
 @Injectable()
 export class CyclesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly cycleScheduleService: CycleScheduleService = new CycleScheduleService(),
+  ) {}
 
   /** POST /cycles — 创建考核周期。 */
   async create(dto: CreateCycleDto, user: AuthUser) {
@@ -49,43 +58,63 @@ export class CyclesService {
     const selfEvalOpenAt = dto.selfEvalOpenAt ?? this.addDays(dto.endDate, 1);
     this.validateCycleDates(dto, goalSettingOpenAt, selfEvalOpenAt);
     const reviewerId = await this.resolveReviewerId(dto.reviewerId);
-
-    const data: Prisma.AssessmentCycleCreateInput = {
-      name: dto.name,
-      type: dto.type,
-      startDate: dto.startDate,
-      endDate: dto.endDate,
-      goalSettingOpenAt,
-      selfEvalOpenAt,
-      reviewer: { connect: { id: reviewerId } },
-      reviewStatus: 'pending',
-      monthlyFollowUpRequired: ['quarterly', 'semiannual', 'annual'].includes(dto.type)
-        ? Boolean(dto.monthlyFollowUpRequired)
-        : false,
-      participantDeptIds: dto.participantDeptIds ?? [],
-      participantUserIds: dto.participantUserIds ?? [],
-      explicitExemptDeptIds: dto.explicitExemptDeptIds ?? [],
-      explicitExemptUserIds: dto.explicitExemptUserIds ?? [],
-      notificationMode: dto.notificationMode ?? 'off',
-      status: 'draft',
-      creator: { connect: { id: user.id } },
-      hrOwner: { connect: { id: user.id } },
-      ...(dto.deadlineIndicatorSetting && { deadlineIndicatorSetting: dto.deadlineIndicatorSetting }),
-      ...(dto.deadlineIndicatorConfirm && { deadlineIndicatorConfirm: dto.deadlineIndicatorConfirm }),
-      ...(dto.deadlineSelfEval && { deadlineSelfEval: dto.deadlineSelfEval }),
-      ...(dto.deadlineManagerScore && { deadlineManagerScore: dto.deadlineManagerScore }),
-      ...(dto.deadlineHrCalibration && { deadlineHrCalibration: dto.deadlineHrCalibration }),
-      ...(dto.deadlineApproval && { deadlineApproval: dto.deadlineApproval }),
-      ...(dto.deadlinePublish && { deadlinePublish: dto.deadlinePublish }),
-      ...(dto.publishVisibleFields && { publishVisibleFields: dto.publishVisibleFields }),
-      gradeAMaxRatio: new Prisma.Decimal(dto.gradeAMaxRatio ?? 0.2),
-      gradeBMaxRatio: new Prisma.Decimal(dto.gradeBMaxRatio ?? 0.4),
-      gradeCMaxRatio: new Prisma.Decimal(dto.gradeCMaxRatio ?? 0.3),
-      gradeDMaxRatio: new Prisma.Decimal(dto.gradeDMaxRatio ?? 0.1),
-    };
+    const workflowVersion = dto.workflowVersion ?? 1;
+    const schedulePlan = workflowVersion === 2
+      ? this.normalizeSchedulePlan({
+          type: dto.type,
+          startDate: dto.startDate,
+          endDate: dto.endDate,
+          scoringFrequency: dto.scoringFrequency,
+          schedules: dto.periodSchedules,
+        })
+      : null;
 
     return this.prisma.$transaction(async (tx) => {
-      const cycle = await tx.assessmentCycle.create({ data });
+      const companyFinalApproverId = workflowVersion === 2
+        ? await this.resolveCompanyFinalApproverId(tx)
+        : null;
+      const data: Prisma.AssessmentCycleCreateInput = {
+        name: dto.name,
+        type: dto.type,
+        startDate: dto.startDate,
+        endDate: dto.endDate,
+        goalSettingOpenAt,
+        selfEvalOpenAt,
+        workflowVersion,
+        scoringFrequency: schedulePlan?.scoringFrequency ?? ScoringFrequency.cycle,
+        ...(companyFinalApproverId && {
+          companyFinalApprover: { connect: { id: companyFinalApproverId } },
+        }),
+        ...(schedulePlan && {
+          periodSchedules: { create: schedulePlan.schedules.map((schedule) => this.scheduleCreateData(schedule)) },
+        }),
+        reviewer: { connect: { id: reviewerId } },
+        reviewStatus: 'pending',
+        monthlyFollowUpRequired: ['quarterly', 'semiannual', 'annual'].includes(dto.type)
+          ? Boolean(dto.monthlyFollowUpRequired)
+          : false,
+        participantDeptIds: dto.participantDeptIds ?? [],
+        participantUserIds: dto.participantUserIds ?? [],
+        explicitExemptDeptIds: dto.explicitExemptDeptIds ?? [],
+        explicitExemptUserIds: dto.explicitExemptUserIds ?? [],
+        notificationMode: dto.notificationMode ?? 'off',
+        status: 'draft',
+        creator: { connect: { id: user.id } },
+        hrOwner: { connect: { id: user.id } },
+        ...(dto.deadlineIndicatorSetting && { deadlineIndicatorSetting: dto.deadlineIndicatorSetting }),
+        ...(dto.deadlineIndicatorConfirm && { deadlineIndicatorConfirm: dto.deadlineIndicatorConfirm }),
+        ...(dto.deadlineSelfEval && { deadlineSelfEval: dto.deadlineSelfEval }),
+        ...(dto.deadlineManagerScore && { deadlineManagerScore: dto.deadlineManagerScore }),
+        ...(dto.deadlineHrCalibration && { deadlineHrCalibration: dto.deadlineHrCalibration }),
+        ...(dto.deadlineApproval && { deadlineApproval: dto.deadlineApproval }),
+        ...(dto.deadlinePublish && { deadlinePublish: dto.deadlinePublish }),
+        ...(dto.publishVisibleFields && { publishVisibleFields: dto.publishVisibleFields }),
+        gradeAMaxRatio: new Prisma.Decimal(dto.gradeAMaxRatio ?? 0.2),
+        gradeBMaxRatio: new Prisma.Decimal(dto.gradeBMaxRatio ?? 0.4),
+        gradeCMaxRatio: new Prisma.Decimal(dto.gradeCMaxRatio ?? 0.3),
+        gradeDMaxRatio: new Prisma.Decimal(dto.gradeDMaxRatio ?? 0.1),
+      };
+      const cycle = await tx.assessmentCycle.create({ data, include: CYCLE_PLAN_INCLUDE });
       await tx.auditLog.create({
         data: {
           userId: user.id,
@@ -95,7 +124,7 @@ export class CyclesService {
           newValue: { name: dto.name, type: dto.type, status: 'draft' },
         },
       });
-      return cycle;
+      return this.withPlanFields(cycle, schedulePlan?.warnings ?? []);
     });
   }
 
@@ -180,7 +209,10 @@ export class CyclesService {
   /** PATCH /cycles/:id — 仅允许修改草稿周期的完整计划。 */
   async updateDraft(id: string, dto: UpdateCycleDto, user: AuthUser) {
     return this.prisma.$transaction(async (tx) => {
-      const cycle = await tx.assessmentCycle.findUnique({ where: { id } });
+      const cycle = await tx.assessmentCycle.findUnique({
+        where: { id },
+        include: { periodSchedules: { orderBy: { sequence: 'asc' } } },
+      });
       if (!cycle) {
         throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
       }
@@ -216,6 +248,28 @@ export class CyclesService {
       const reviewerId = dto.reviewerId !== undefined
         ? await this.resolveReviewerId(dto.reviewerId)
         : cycle.reviewerId;
+      const workflowVersion = dto.workflowVersion ?? cycle.workflowVersion ?? 1;
+      const storedSchedules = cycle.periodSchedules ?? [];
+      const schedulePlan = workflowVersion === 2
+        ? this.normalizeSchedulePlan({
+            type: dto.type ?? cycle.type,
+            startDate,
+            endDate,
+            scoringFrequency: dto.scoringFrequency ?? cycle.scoringFrequency,
+            schedules: dto.periodSchedules ?? storedSchedules.map((schedule) => ({
+              periodKey: schedule.periodKey,
+              selfEvalOpenAt: schedule.selfEvalOpenAt,
+              selfEvalDueAt: schedule.selfEvalDueAt,
+              managerDueAt: schedule.managerDueAt,
+              isException: schedule.isException,
+            })),
+          })
+        : null;
+      const nextScoringFrequency = schedulePlan?.scoringFrequency ?? ScoringFrequency.cycle;
+      const changedPeriodKeys = this.changedPeriodKeys(storedSchedules, schedulePlan?.schedules ?? []);
+      const coreTimingChanged = workflowVersion !== (cycle.workflowVersion ?? 1)
+        || nextScoringFrequency !== (cycle.scoringFrequency ?? ScoringFrequency.cycle)
+        || changedPeriodKeys.length > 0;
 
       const data: Prisma.AssessmentCycleUpdateInput = {
         ...(dto.name !== undefined && { name: dto.name }),
@@ -224,6 +278,16 @@ export class CyclesService {
         ...(dto.endDate !== undefined && { endDate: dto.endDate }),
         ...(dto.goalSettingOpenAt !== undefined && { goalSettingOpenAt: dto.goalSettingOpenAt }),
         ...(dto.selfEvalOpenAt !== undefined && { selfEvalOpenAt: dto.selfEvalOpenAt }),
+        ...(dto.workflowVersion !== undefined && { workflowVersion }),
+        ...(coreTimingChanged && { scoringFrequency: nextScoringFrequency }),
+        ...(coreTimingChanged && {
+          periodSchedules: {
+            deleteMany: {},
+            ...(schedulePlan && {
+              create: schedulePlan.schedules.map((schedule) => this.scheduleCreateData(schedule)),
+            }),
+          },
+        }),
         ...(dto.notificationMode !== undefined && { notificationMode: dto.notificationMode }),
         ...(reviewerId && { reviewer: { connect: { id: reviewerId } } }),
         ...(dto.monthlyFollowUpRequired !== undefined && {
@@ -253,6 +317,24 @@ export class CyclesService {
       };
 
       const updated = await tx.assessmentCycle.update({ where: { id }, data });
+      if (coreTimingChanged) {
+        await tx.auditLog.create({
+          data: {
+            userId: user.id,
+            action: 'cycle_scoring_plan_updated',
+            entityType: 'assessment_cycle',
+            entityId: id,
+            oldValue: {
+              scoringFrequency: cycle.scoringFrequency ?? ScoringFrequency.cycle,
+              changedPeriodKeys,
+            },
+            newValue: {
+              scoringFrequency: nextScoringFrequency,
+              changedPeriodKeys,
+            },
+          },
+        });
+      }
       await tx.auditLog.create({
         data: {
           userId: user.id,
@@ -262,7 +344,7 @@ export class CyclesService {
           newValue: { name: updated.name, type: updated.type, status: updated.status },
         },
       });
-      return updated;
+      return this.withPlanFields(updated, schedulePlan?.warnings ?? []);
     });
   }
 
@@ -290,11 +372,12 @@ export class CyclesService {
         where,
         skip: query.skip,
         take: query.take,
+        include: CYCLE_PLAN_INCLUDE,
         orderBy: { createdAt: 'desc' },
       }),
     ]);
 
-    return paginated(items, total, query);
+    return paginated(items.map((cycle) => this.withPlanFields(cycle)), total, query);
   }
 
   /** GET /cycles/mine — 查看已开放且与本人或直属团队任务相关的周期。 */
@@ -323,6 +406,7 @@ export class CyclesService {
       include: {
         creator: { select: { id: true, name: true } },
         reviewer: { select: { id: true, name: true } },
+        ...CYCLE_PLAN_INCLUDE,
       },
     });
     if (!cycle) {
@@ -380,6 +464,7 @@ export class CyclesService {
 
     return {
       ...cycle,
+      reviewFrequency: 'cycle' as const,
       snapshotCount,
       taskStats: {
         total: totalTasks,
@@ -436,6 +521,106 @@ export class CyclesService {
       });
       return updated;
     });
+  }
+
+  private normalizeSchedulePlan(
+    input: Parameters<CycleScheduleService['normalizeAndValidate']>[0],
+  ): NormalizedCycleSchedulePlan {
+    const plan = this.cycleScheduleService.normalizeAndValidate(input);
+    if (plan.blockers.length > 0) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '评分排期存在阻断项，请调整后重试',
+        blockers: plan.blockers,
+      });
+    }
+    return plan;
+  }
+
+  private scheduleCreateData(schedule: NormalizedCycleSchedulePlan['schedules'][number]) {
+    return {
+      periodKey: schedule.periodKey,
+      periodType: schedule.periodType,
+      sequence: schedule.sequence,
+      periodStart: schedule.periodStart,
+      periodEnd: schedule.periodEnd,
+      selfEvalOpenAt: schedule.selfEvalOpenAt,
+      selfEvalDueAt: schedule.selfEvalDueAt,
+      managerDueAt: schedule.managerDueAt,
+      isException: schedule.isException,
+    };
+  }
+
+  private changedPeriodKeys(
+    stored: Array<{
+      periodKey: string;
+      periodType: string;
+      sequence: number;
+      periodStart: Date;
+      periodEnd: Date;
+      selfEvalOpenAt: Date;
+      selfEvalDueAt: Date;
+      managerDueAt: Date;
+      isException: boolean;
+    }>,
+    next: NormalizedCycleSchedulePlan['schedules'],
+  ): string[] {
+    const storedByKey = new Map(stored.map((schedule) => [schedule.periodKey, this.scheduleSignature(schedule)]));
+    const nextByKey = new Map(next.map((schedule) => [schedule.periodKey, this.scheduleSignature(schedule)]));
+    return [...new Set([...storedByKey.keys(), ...nextByKey.keys()])]
+      .filter((periodKey) => storedByKey.get(periodKey) !== nextByKey.get(periodKey))
+      .sort();
+  }
+
+  private scheduleSignature(schedule: {
+    periodType: string;
+    sequence: number;
+    periodStart: Date;
+    periodEnd: Date;
+    selfEvalOpenAt: Date;
+    selfEvalDueAt: Date;
+    managerDueAt: Date;
+    isException: boolean;
+  }): string {
+    return JSON.stringify([
+      schedule.periodType,
+      schedule.sequence,
+      schedule.periodStart.toISOString(),
+      schedule.periodEnd.toISOString(),
+      schedule.selfEvalOpenAt.toISOString(),
+      schedule.selfEvalDueAt.toISOString(),
+      schedule.managerDueAt.toISOString(),
+      schedule.isException,
+    ]);
+  }
+
+  private withPlanFields<T extends object>(
+    cycle: T,
+    scheduleWarnings?: NormalizedCycleSchedulePlan['warnings'],
+  ): T & { reviewFrequency: 'cycle'; scheduleWarnings?: NormalizedCycleSchedulePlan['warnings'] } {
+    return {
+      ...cycle,
+      reviewFrequency: 'cycle',
+      ...(scheduleWarnings !== undefined && { scheduleWarnings }),
+    };
+  }
+
+  private async resolveCompanyFinalApproverId(
+    tx: Prisma.TransactionClient,
+  ): Promise<string | null> {
+    const config = await tx.systemConfig.findUnique({
+      where: { key: 'performance_company_final_approver' },
+    });
+    const value = config?.value;
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const userId = (value as Prisma.JsonObject).userId;
+    if (typeof userId !== 'string' || !userId.trim()) return null;
+
+    const user = await tx.user.findFirst({
+      where: { id: userId, deletedAt: null, status: 'active' },
+      select: { id: true },
+    });
+    return user?.id ?? null;
   }
 
   private async resolveReviewerId(requestedId?: string): Promise<string> {

@@ -10,10 +10,12 @@ import {
   IsUUID,
   IsIn,
   IsBoolean,
+  ValidateNested,
   Min,
   Max,
 } from 'class-validator';
-import { CycleType } from '@prisma/client';
+import { CycleType, ScoringFrequency } from '@prisma/client';
+import { CyclePeriodScheduleDto } from './cycle-period-schedule.dto';
 
 /**
  * 创建考核周期请求体（对应后端文档 3.7）。
@@ -25,6 +27,20 @@ export class CreateCycleDto {
 
   @IsEnum(CycleType)
   type: CycleType;
+
+  @IsOptional()
+  @IsIn([1, 2])
+  workflowVersion?: 1 | 2;
+
+  @IsOptional()
+  @IsEnum(ScoringFrequency)
+  scoringFrequency?: ScoringFrequency;
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CyclePeriodScheduleDto)
+  periodSchedules?: CyclePeriodScheduleDto[];
 
   @IsOptional()
   @IsIn(['off', 'launch_only', 'launch_and_reminders'])
