@@ -89,8 +89,9 @@ test.describe('DingTalk login error message', () => {
 
     expect(source).toContain("const showPasswordForm = ref(false)");
     expect(source).toContain("isDingTalkEnv.value ? '钉钉内免登' : '选择钉钉账号/组织登录'");
-    expect(source).toContain('公司员工请使用钉钉账号登录；新浏览器首次使用需完成钉钉授权');
-    expect(source).toContain('管理员账号登录');
+    expect(source).toContain('使用企业身份进入你的绩效工作台');
+    expect(source).toContain('<strong>密码登录</strong>');
+    expect(source).toContain('账号为工号，初始密码为 0000');
     expect(source).not.toContain('>其他方式登录<');
   });
 
@@ -121,11 +122,8 @@ test.describe('DingTalk login error message', () => {
     const source = await readFile(loginViewPath, 'utf8');
 
     expect(source).not.toContain('const isSafariEnv = computed');
-    expect(source).toContain("scope: 'openid corpid'");
-    expect(source).toMatch(
-      /const params = new URLSearchParams\(\{[\s\S]*?corpId: DINGTALK_CORP_ID,[\s\S]*?\}\);/,
-    );
-    expect(source).toContain('多组织账号请在钉钉授权页选择应用所属企业');
+    expect(source).toContain('buildDingTalkOAuthUrl({');
+    expect(source).toContain('corpId: DINGTALK_CORP_ID');
     expect(source).not.toContain('Safari 若未显示钉钉扫码页');
   });
 
