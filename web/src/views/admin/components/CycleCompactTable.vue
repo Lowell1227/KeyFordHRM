@@ -78,6 +78,13 @@ function notificationLabel(cycle: AssessmentCycle): string {
   return '钉钉：关闭';
 }
 
+function scoringSummary(cycle: AssessmentCycle): string {
+  if (cycle.workflowVersion !== 2) return '历史流程';
+  return cycle.scoringFrequency === 'monthly'
+    ? `按月评分 · ${cycle.periodSchedules?.length ?? 0}个月`
+    : '按整个周期评分';
+}
+
 const departmentParentById = computed(() => {
   const result = new Map<string, string | null>();
   const visit = (items: Department[], inheritedParentId: string | null = null) => {
@@ -204,6 +211,9 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
             {{ TYPE_LABEL[(row as AssessmentCycle).type] }} ·
             {{ formatDate((row as AssessmentCycle).startDate) }}–{{ formatDate((row as AssessmentCycle).endDate) }}
           </span>
+          <small :data-testid="`cycle-scoring-summary-${(row as AssessmentCycle).id}`">
+            {{ scoringSummary(row as AssessmentCycle) }}
+          </small>
           <small>{{ notificationLabel(row as AssessmentCycle) }}</small>
         </button>
       </template>
@@ -328,6 +338,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
         <div>
           <strong>{{ cycle.name }}</strong>
           <span>{{ TYPE_LABEL[cycle.type] }} · {{ formatDate(cycle.startDate) }}–{{ formatDate(cycle.endDate) }}</span>
+          <small :data-testid="`cycle-scoring-summary-mobile-${cycle.id}`">{{ scoringSummary(cycle) }}</small>
           <small>{{ notificationLabel(cycle) }}</small>
         </div>
         <el-tag :type="STATUS_TAG_TYPE[cycle.status]" size="small">{{ STATUS_LABEL[cycle.status] }}</el-tag>

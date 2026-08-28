@@ -69,6 +69,53 @@ function blockerActionLabel(code: string): string {
   return '';
 }
 
+function scoringSummary(cycle: AssessmentCycle): string {
+  if (cycle.workflowVersion !== 2) return '历史流程';
+  return cycle.scoringFrequency === 'monthly'
+    ? `按月评分 · ${cycle.periodSchedules?.length ?? 0}个月`
+    : '按整个周期评分';
+}
+
+function scheduleExceptionCount(cycle: AssessmentCycle): number {
+  return cycle.periodSchedules?.filter((schedule) => schedule.isException).length ?? 0;
+}
+
+type V2PreflightParticipant = LaunchPreflightResult['participants'][number] & {
+  participantDisposition?: 'active' | 'cycle_exempt' | 'top_leader_exempt';
+};
+
+type V2PreflightExclusion = {
+  employeeId: string;
+  employeeName: string;
+  reasonCode: 'PROBATION_NOT_IN_PLAN';
+  reason: string;
+};
+
+function preflightParticipants(result: LaunchPreflightResult): V2PreflightParticipant[] {
+  return result.participants as V2PreflightParticipant[];
+}
+
+function preflightExclusions(result: LaunchPreflightResult): V2PreflightExclusion[] {
+  return (result as LaunchPreflightResult & { exclusions?: V2PreflightExclusion[] }).exclusions ?? [];
+}
+
+function probationExclusionCount(result: LaunchPreflightResult): number {
+  return preflightExclusions(result).filter((item) => item.reasonCode === 'PROBATION_NOT_IN_PLAN').length;
+}
+
+function topLeaderNames(result: LaunchPreflightResult): string {
+  return preflightParticipants(result)
+    .filter((participant) => participant.participantDisposition === 'top_leader_exempt')
+    .map((participant) => participant.employeeName)
+    .join('、');
+}
+
+function participantDispositionLabel(participant: V2PreflightParticipant): string {
+  if (participant.participantDisposition === 'top_leader_exempt') return '最高负责人豁免';
+  if (participant.participantDisposition === 'cycle_exempt') return participant.exemptReason || '周期豁免';
+  return '纳入绩效计划';
+}
+
 </script>
 
 <template>
@@ -93,6 +140,13 @@ function blockerActionLabel(code: string): string {
             <span>审核人：{{ cycle.reviewer?.name || '—' }}</span>
             <span>审核状态：{{ cycle.reviewStatus === 'approved' ? '已通过' : (cycle.reviewStatus === 'rejected' ? '已退回' : '待审核') }}</span>
             <span v-if="cycle.monthlyFollowUpRequired">需按月跟进</span>
+          </div>
+          <div v-if="cycle" class="cycle-workspace__scoring" data-testid="cycle-workspace-scoring-summary">
+            <span>{{ scoringSummary(cycle) }}</span>
+            <span v-if="cycle.workflowVersion === 2">结果审核：按周期审核</span>
+            <span v-if="cycle.workflowVersion === 2">评分期数：{{ cycle.periodSchedules?.length ?? 0 }}期</span>
+            <span v-if="cycle.workflowVersion === 2">特殊月份：{{ scheduleExceptionCount(cycle) }}个</span>
+            <span v-if="cycle.workflowVersion === 2">公司最终审定人：{{ cycle.companyFinalApprover?.name || '未配置' }}</span>
           </div>
         </div>
       </div>
@@ -212,10 +266,12 @@ function blockerActionLabel(code: string): string {
                 show-icon
                 :title="preflight.ready ? '发起检查通过' : '请先处理阻断项'"
               />
-              <div class="cycle-preflight-summary">
+              <div class="cycle-preflight-summary" data-testid="cycle-preflight-summary">
                 <span><strong>{{ preflight.participantCount }}</strong> 名参与员工</span>
                 <span>员工目标将在发起后空白创建</span>
                 <span>目标制定开放时间 {{ formatDateTime(preflight.cycle.goalSettingOpenAt) }}</span>
+                <span v-if="cycle.workflowVersion === 2">试用期排除：{{ probationExclusionCount(preflight) }}人</span>
+                <span v-if="cycle.workflowVersion === 2 && topLeaderNames(preflight)">最高负责人豁免：{{ topLeaderNames(preflight) }}</span>
               </div>
               <div
                 v-if="preflight.blockers.length"
@@ -248,6 +304,9 @@ function blockerActionLabel(code: string): string {
                   <el-table-column prop="employeeName" label="员工" min-width="100" />
                   <el-table-column prop="deptName" label="部门" min-width="140" />
                   <el-table-column prop="managerName" label="直属上级" min-width="110" />
+                  <el-table-column v-if="cycle.workflowVersion === 2" label="处理结果" min-width="130">
+                    <template #default="{ row }">{{ participantDispositionLabel(row as V2PreflightParticipant) }}</template>
+                  </el-table-column>
                 </el-table>
               </details>
             </template>
@@ -302,6 +361,15 @@ function blockerActionLabel(code: string): string {
   gap: 6px 14px;
   margin-top: 7px;
   color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.cycle-workspace__scoring {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  margin-top: 6px;
+  color: var(--el-color-primary-dark-2);
   font-size: 12px;
 }
 

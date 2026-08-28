@@ -1,6 +1,14 @@
 import { expect, test } from '@playwright/test';
+import type { AssessmentCycle, CyclePeriodSchedule } from '../../src/types/api.types';
 
-function buildSchedules(count: number, scoringFrequency: 'monthly' | 'cycle') {
+const apiResponse = (data: unknown) => ({
+  code: 0,
+  message: 'success',
+  data,
+  timestamp: Date.now(),
+});
+
+function buildSchedules(count: number, scoringFrequency: 'monthly' | 'cycle'): CyclePeriodSchedule[] {
   return Array.from({ length: count }, (_, index) => {
     const month = String(index + 1).padStart(2, '0');
     return {
@@ -14,6 +22,223 @@ function buildSchedules(count: number, scoringFrequency: 'monthly' | 'cycle') {
       managerDueAt: `2027-${month}-06T18:00:00+08:00`,
       isException: index === 1,
     };
+  });
+}
+
+const integratedCycle: AssessmentCycle = {
+  id: 'cycle-v2',
+  name: '2027 Q1 季度考核',
+  type: 'quarterly',
+  workflowVersion: 2,
+  scoringFrequency: 'monthly',
+  reviewFrequency: 'cycle',
+  periodSchedules: buildSchedules(3, 'monthly'),
+  companyFinalApproverId: 'leader-1',
+  companyFinalApprover: { id: 'leader-1', name: '李宏' },
+  startDate: '2027-01-01',
+  endDate: '2027-03-31',
+  goalSettingOpenAt: '2026-12-15T09:00:00+08:00',
+  selfEvalOpenAt: '2027-04-01T09:00:00+08:00',
+  deadlineIndicatorSetting: '2026-12-22T18:00:00+08:00',
+  deadlineIndicatorConfirm: '2026-12-30T18:00:00+08:00',
+  deadlineSelfEval: '2027-04-03T18:00:00+08:00',
+  deadlineManagerScore: '2027-04-06T18:00:00+08:00',
+  deadlineHrCalibration: '2027-04-08T18:00:00+08:00',
+  deadlineApproval: '2027-04-10T18:00:00+08:00',
+  deadlinePublish: '2027-04-11T18:00:00+08:00',
+  status: 'draft',
+  reviewStatus: 'approved',
+  reviewerId: 'hr-1',
+  reviewer: { id: 'hr-1', name: '姚瑶' },
+  creator: { id: 'hr-1', name: '姚瑶' },
+  hrOwnerId: 'hr-1',
+  participantDeptIds: [],
+  participantUserIds: [],
+  explicitExemptDeptIds: [],
+  explicitExemptUserIds: [],
+  notificationMode: 'off',
+  publishVisibleFields: {},
+  gradeAMaxRatio: 0.2,
+  gradeBMaxRatio: 0.4,
+  gradeCMaxRatio: 0.3,
+  gradeDMaxRatio: 0.1,
+};
+
+interface IntegratedPageOptions {
+  cycles?: AssessmentCycle[];
+  blockers?: Array<{ code: string; periodKey: string; message: string }>;
+  warnings?: Array<{ code: string; periodKey: string; message: string }>;
+  createBodies?: Record<string, unknown>[];
+  updateBodies?: Record<string, unknown>[];
+  previewBodies?: Record<string, unknown>[];
+}
+
+async function mockIntegratedCyclePage(
+  page: import('@playwright/test').Page,
+  options: IntegratedPageOptions = {},
+) {
+  const cycles = options.cycles ?? [];
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'mock-cycle-scoring-token');
+    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+  });
+  await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse(0)),
+  }));
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      id: 'hr-1',
+      name: '姚瑶',
+      employeeNo: 'HR001',
+      deptId: 'hr-dept',
+      deptName: '人力资源部',
+      sysRole: 'hr',
+      isAssessorOnly: false,
+      canViewAll: true,
+    })),
+  }));
+  await page.route('**/api/v1/departments**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([])),
+  }));
+  await page.route('**/api/v1/users**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      total: 1,
+      page: 1,
+      pageSize: 50,
+      items: [{
+        id: 'hr-1',
+        name: '姚瑶',
+        employeeNo: 'HR001',
+        deptId: 'hr-dept',
+        deptName: '人力资源部',
+        sysRole: 'hr',
+        status: 'active',
+      }],
+    })),
+  }));
+  await page.route('**/api/v1/templates**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
+  }));
+  await page.route('**/api/v1/notification-settings/dingtalk', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ available: true, enabled: false, effectiveEnabled: false })),
+  }));
+  await page.route('**/api/v1/cycles**', (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const path = url.pathname;
+    if (path.endsWith('/cycles/schedule-preview')) {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      options.previewBodies?.push(body);
+      const scoringFrequency = body.scoringFrequency === 'cycle' || body.type === 'custom'
+        ? 'cycle'
+        : 'monthly';
+      const count = scoringFrequency === 'cycle'
+        ? 1
+        : ({ monthly: 1, quarterly: 3, semiannual: 6, annual: 12 } as Record<string, number>)[String(body.type)] ?? 1;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          scoringFrequency,
+          reviewFrequency: 'cycle',
+          schedules: buildSchedules(count, scoringFrequency).map((schedule) => ({ ...schedule, isException: false })),
+          blockers: options.blockers ?? [],
+          warnings: options.warnings ?? [],
+        })),
+      });
+    }
+    if (path.endsWith('/preflight')) {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          ready: true,
+          planHash: 'plan-hash',
+          cycle: {
+            id: integratedCycle.id,
+            name: integratedCycle.name,
+            status: integratedCycle.status,
+            goalSettingOpenAt: integratedCycle.goalSettingOpenAt,
+          },
+          participantCount: 2,
+          templateCount: 0,
+          participants: [
+            {
+              employeeId: 'employee-1',
+              employeeName: '陈晨',
+              deptId: 'sales',
+              deptName: '销售部',
+              managerId: 'manager-1',
+              managerName: '王强',
+              deptHeadId: 'manager-1',
+              approverId: 'leader-1',
+              templateId: null,
+              templateName: null,
+              templateVersion: null,
+              isExempt: false,
+              exemptReason: null,
+              participantDisposition: 'active',
+            },
+            {
+              employeeId: 'leader-1',
+              employeeName: '李宏',
+              deptId: null,
+              deptName: null,
+              managerId: null,
+              managerName: null,
+              deptHeadId: null,
+              approverId: null,
+              templateId: null,
+              templateName: null,
+              templateVersion: null,
+              isExempt: true,
+              exemptReason: '最高负责人豁免',
+              participantDisposition: 'top_leader_exempt',
+            },
+          ],
+          exclusions: [{
+            employeeId: 'probation-1',
+            employeeName: '孙珊',
+            reasonCode: 'PROBATION_NOT_IN_PLAN',
+            reason: '试用期员工不进入本绩效计划',
+          }],
+          blockers: [],
+          warnings: [],
+        })),
+      });
+    }
+    const id = path.split('/').at(-1);
+    const matchedCycle = cycles.find((cycle) => cycle.id === id) ?? integratedCycle;
+    if (request.method() === 'PATCH') {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      options.updateBodies?.push(body);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ ...matchedCycle, ...body })),
+      });
+    }
+    if (request.method() === 'POST') {
+      const body = request.postDataJSON() as Record<string, unknown>;
+      options.createBodies?.push(body);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ ...integratedCycle, ...body, id: 'cycle-created', reviewStatus: 'pending' })),
+      });
+    }
+    if (path !== '/api/v1/cycles') {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(matchedCycle)),
+      });
+    }
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: cycles.length, page: 1, pageSize: 10, items: cycles })),
+    });
   });
 }
 
@@ -135,5 +360,115 @@ test.describe('cycle scoring plan controls', () => {
     await page.getByTestId('cycle-preserve-exceptions').click();
     await page.getByTestId('cycle-apply-unified').click();
     await expect(page.getByTestId('cycle-apply-unified-value')).toHaveText('false');
+  });
+});
+
+test.describe('cycle scoring plan integration', () => {
+  test('creates workflow v2 with a normalized special-month schedule after explicit warning confirmation', async ({ page }) => {
+    const createBodies: Record<string, unknown>[] = [];
+    await mockIntegratedCyclePage(page, {
+      createBodies,
+      warnings: [{ code: 'CROSS_MONTH_WARNING', periodKey: '2027-02', message: '主管完成时间跨月，请确认安排' }],
+    });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
+    await page.getByTestId('cycle-scoring-monthly').click();
+    const secondRow = page.getByTestId('cycle-month-schedule-row').nth(1);
+    await secondRow.getByTestId('cycle-special-month-button').click();
+    await secondRow.getByTestId('manager-due-at').locator('input').fill('2027-03-10 18:00');
+    await page.getByRole('button', { name: '下一步' }).click();
+
+    await expect(page.getByRole('dialog', { name: '确认评分计划提示' })).toContainText('主管完成时间跨月，请确认安排');
+    expect(createBodies).toHaveLength(0);
+    await page.getByRole('button', { name: '确认并继续' }).click();
+    await expect.poll(() => createBodies).toHaveLength(1);
+    expect(createBodies.at(-1)).toMatchObject({
+      workflowVersion: 2,
+      scoringFrequency: 'monthly',
+      periodSchedules: expect.arrayContaining([
+        expect.objectContaining({ periodKey: '2027-02', isException: true }),
+      ]),
+    });
+    expect(createBodies.at(-1)).not.toHaveProperty('reviewFrequency');
+  });
+
+  test('blocks submission and focuses the invalid schedule row', async ({ page }) => {
+    const createBodies: Record<string, unknown>[] = [];
+    await mockIntegratedCyclePage(page, {
+      createBodies,
+      blockers: [{
+        code: 'MANAGER_DUE_BEFORE_SELF_EVAL',
+        periodKey: '2027-02',
+        message: '主管完成时间不得早于员工完成时间',
+      }],
+    });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+    await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
+
+    await page.getByRole('button', { name: '下一步' }).click();
+
+    expect(createBodies).toHaveLength(0);
+    const invalidRow = page.getByTestId('cycle-month-schedule-row').nth(1);
+    await expect(invalidRow).toContainText('主管完成时间不得早于员工完成时间');
+    await expect(invalidRow.getByTestId('manager-due-at').locator('input')).toBeFocused();
+  });
+
+  test('warns that an approved workflow v2 draft needs review again after scoring frequency changes', async ({ page }) => {
+    await mockIntegratedCyclePage(page, { cycles: [integratedCycle] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId(`cycle-edit-${integratedCycle.id}`).click();
+    await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
+
+    await page.getByTestId('cycle-scoring-cycle').click();
+    await expect(page.getByRole('dialog', { name: '重新生成还是保留当前评分计划？' })).toBeVisible();
+    await page.getByRole('button', { name: '重新生成评分计划' }).click();
+
+    await expect(page.getByTestId('cycle-review-reset-warning')).toContainText('修改后需重新审核');
+    await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(1);
+  });
+
+  test('keeps a historical workflow v1 edit on v1 without adding scoring fields', async ({ page }) => {
+    const updateBodies: Record<string, unknown>[] = [];
+    const historicalCycle: AssessmentCycle = {
+      ...integratedCycle,
+      id: 'cycle-v1',
+      name: '历史季度考核',
+      workflowVersion: 1,
+      scoringFrequency: undefined,
+      reviewFrequency: undefined,
+      periodSchedules: undefined,
+      companyFinalApproverId: undefined,
+      companyFinalApprover: undefined,
+      reviewStatus: 'pending',
+    };
+    await mockIntegratedCyclePage(page, { cycles: [historicalCycle], updateBodies });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId(`cycle-edit-${historicalCycle.id}`).click();
+
+    await expect(page.getByTestId('cycle-scoring-settings')).toHaveCount(0);
+    await page.getByRole('button', { name: '下一步' }).click();
+    await expect.poll(() => updateBodies).toHaveLength(1);
+    expect(updateBodies[0]).not.toHaveProperty('workflowVersion');
+    expect(updateBodies[0]).not.toHaveProperty('scoringFrequency');
+    expect(updateBodies[0]).not.toHaveProperty('periodSchedules');
+  });
+
+  test('shows scoring, fixed review, exceptions, final approver, and v2 preflight dispositions', async ({ page }) => {
+    await mockIntegratedCyclePage(page, { cycles: [integratedCycle] });
+    await page.goto('/cycles?group=attention');
+
+    await expect(page.getByTestId(`cycle-scoring-summary-${integratedCycle.id}`)).toHaveText('按月评分 · 3个月');
+    await page.getByText(integratedCycle.name, { exact: true }).first().click();
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('按月评分 · 3个月');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('结果审核：按周期审核');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('特殊月份：1个');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('公司最终审定人：李宏');
+
+    await page.getByRole('button', { name: '开始发起检查' }).click();
+    await expect(page.getByTestId('cycle-preflight-summary')).toContainText('试用期排除：1人');
+    await expect(page.getByTestId('cycle-preflight-summary')).toContainText('最高负责人豁免：李宏');
   });
 });

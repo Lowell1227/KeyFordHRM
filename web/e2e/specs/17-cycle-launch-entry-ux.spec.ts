@@ -236,6 +236,51 @@ async function mockCycleLaunchPage(
     });
   });
   await page.route('**/api/v1/cycles**', (route) => {
+    if (route.request().url().endsWith('/cycles/schedule-preview')) {
+      const body = route.request().postDataJSON() as {
+        type: string;
+        scoringFrequency?: 'monthly' | 'cycle';
+        startDate: string;
+        endDate: string;
+      };
+      const scoringFrequency = body.type === 'monthly'
+        ? 'monthly'
+        : body.type === 'custom' || body.type === 'probation'
+          ? 'cycle'
+          : body.scoringFrequency ?? 'monthly';
+      const count = scoringFrequency === 'cycle'
+        ? 1
+        : ({ monthly: 1, quarterly: 3, semiannual: 6, annual: 12 } as Record<string, number>)[body.type] ?? 1;
+      const start = new Date(`${body.startDate}T00:00:00+08:00`);
+      const schedules = Array.from({ length: count }, (_, index) => {
+        const periodStart = new Date(start);
+        periodStart.setMonth(periodStart.getMonth() + index);
+        const periodKey = scoringFrequency === 'cycle'
+          ? 'cycle'
+          : `${periodStart.getFullYear()}-${String(periodStart.getMonth() + 1).padStart(2, '0')}`;
+        return {
+          periodKey,
+          periodType: scoringFrequency === 'cycle' ? 'cycle' : 'month',
+          sequence: index + 1,
+          periodStart: scoringFrequency === 'cycle' ? body.startDate : `${periodKey}-01`,
+          periodEnd: scoringFrequency === 'cycle' ? body.endDate : `${periodKey}-28`,
+          selfEvalOpenAt: `${periodKey === 'cycle' ? body.endDate : `${periodKey}-01`}T09:00:00+08:00`,
+          selfEvalDueAt: `${periodKey === 'cycle' ? body.endDate : `${periodKey}-03`}T18:00:00+08:00`,
+          managerDueAt: `${periodKey === 'cycle' ? body.endDate : `${periodKey}-06`}T18:00:00+08:00`,
+          isException: false,
+        };
+      });
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          scoringFrequency,
+          reviewFrequency: 'cycle',
+          schedules,
+          blockers: [],
+          warnings: [],
+        })),
+      });
+    }
     if (route.request().method() === 'PATCH' && route.request().url().endsWith('/notification-mode')) {
       const notificationMode = String(route.request().postDataJSON()?.notificationMode ?? 'off');
       options.notificationModeUpdates?.push(notificationMode);
@@ -749,7 +794,7 @@ test.describe('cycle launch entry UX', () => {
 
     let confirmation = page.getByRole('dialog', { name: '是否同步调整时间节点？' });
     await expect(confirmation).toContainText('2027-11-01—2028-04-30');
-    await expect(confirmation).toContainText('2027-12-01—2028-04-30');
+    await expect(confirmation).toContainText('2027-12-01—2028-05-31');
     await confirmation.getByRole('button', { name: '同步重新生成（推荐）' }).click();
     await expect(confirmation).toBeHidden();
 
