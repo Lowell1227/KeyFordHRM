@@ -110,6 +110,46 @@ enum CycleType {
   @@map("cycle_type")
 }
 
+enum ScoringFrequency {
+  monthly
+  cycle
+
+  @@map("scoring_frequency")
+}
+
+enum AssessmentPeriodType {
+  month
+  cycle
+
+  @@map("assessment_period_type")
+}
+
+enum AssessmentPeriodStatus {
+  unopened
+  self_eval
+  manager_scoring
+  completed
+  no_result
+
+  @@map("assessment_period_status")
+}
+
+enum IndicatorVersionStatus {
+  draft
+  active
+  retired
+
+  @@map("indicator_version_status")
+}
+
+enum ParticipantDisposition {
+  active
+  cycle_exempt
+  top_leader_exempt
+
+  @@map("participant_disposition")
+}
+
 enum IndicatorType {
   kpi
   attitude
@@ -444,6 +484,7 @@ model User {
   createdCycles                             AssessmentCycle[]           @relation("CycleCreator")
   hrOwnedCycles                             AssessmentCycle[]           @relation("CycleHrOwner")
   reviewedCycles                            AssessmentCycle[]           @relation("CycleReviewer")
+  companyFinalApproverCycles                AssessmentCycle[]           @relation("CycleCompanyFinalApprover")
   employeeTasks                             AssessmentTask[]            @relation("TaskEmployee")
   managedTasks                              AssessmentTask[]            @relation("TaskManager")
   deptHeadTasks                             AssessmentTask[]            @relation("TaskDeptHead")
@@ -479,6 +520,8 @@ model User {
   assignedActionItems                       ActionItem[]                @relation("ActionItemAssignee")
   createdActionItems                        ActionItem[]                @relation("ActionItemCreator")
   createdIndicatorProgressUpdates           IndicatorProgressUpdate[]   @relation("IndicatorProgressCreator")
+  managedAssessmentPeriods                  AssessmentPeriod[]          @relation("PeriodManager")
+  createdIndicatorVersions                  IndicatorVersion[]          @relation("IndicatorVersionCreator")
   updatedConfigs                            SystemConfig[]
   notifications                             NotificationLog[]           @relation("NotifReceiver")
   sentNotifications                         NotificationLog[]           @relation("NotifSender")
@@ -840,6 +883,9 @@ model AssessmentCycle {
   deadlinePublish          DateTime?   @map("deadline_publish") @db.Date
   deadlineAppeal           DateTime?   @map("deadline_appeal") @db.Date
   status                   CycleStatus @default(draft)
+  workflowVersion          Int              @default(1) @map("workflow_version")
+  scoringFrequency         ScoringFrequency @default(cycle) @map("scoring_frequency")
+  companyFinalApproverId   String?          @map("company_final_approver_id") @db.Uuid
   publishVisibleFields     Json        @default("{\"total_score\":true,\"grade\":true,\"indicator_scores\":true,\"manager_comment\":true,\"coefficient\":false}") @map("publish_visible_fields") @db.JsonB
   gradeAMaxRatio           Decimal     @default(0.20) @map("grade_a_max_ratio") @db.Decimal(4, 3)
   gradeBMaxRatio           Decimal     @default(0.40) @map("grade_b_max_ratio") @db.Decimal(4, 3)
@@ -874,7 +920,9 @@ model AssessmentCycle {
   creator               User?                        @relation("CycleCreator", fields: [createdBy], references: [id], onDelete: SetNull)
   hrOwner               User?                        @relation("CycleHrOwner", fields: [hrOwnerId], references: [id], onDelete: SetNull)
   reviewer              User?                        @relation("CycleReviewer", fields: [reviewerId], references: [id], onDelete: SetNull)
+  companyFinalApprover  User?                        @relation("CycleCompanyFinalApprover", fields: [companyFinalApproverId], references: [id], onDelete: SetNull)
   snapshots             AssessmentTemplateSnapshot[]
+  periodSchedules       CyclePeriodSchedule[]
   tasks                 AssessmentTask[]
   flowRecords           FlowRecord[]
   appeals               Appeal[]
@@ -918,6 +966,7 @@ model AssessmentTask {
   approverId           String?    @map("approver_id") @db.Uuid
   status               TaskStatus @default(pending)
   isExempt             Boolean    @default(false) @map("is_exempt")
+  participantDisposition ParticipantDisposition @default(active) @map("participant_disposition")
   exemptReason         String?    @map("exempt_reason") @db.Text
   indicatorSetAt       DateTime?  @map("indicator_set_at") @db.Timestamptz(6)
   indicatorConfirmedAt DateTime?  @map("indicator_confirmed_at") @db.Timestamptz(6)
@@ -948,6 +997,8 @@ model AssessmentTask {
   flowRecords          FlowRecord[]
   appeals              Appeal[]
   notifications        NotificationLog[]
+  periods              AssessmentPeriod[]
+  indicatorVersions    IndicatorVersion[]
 
   @@unique([cycleId, employeeId])
   @@index([cycleId])
@@ -958,6 +1009,99 @@ model AssessmentTask {
   @@index([status])
   @@index([cycleId, status])
   @@map("assessment_tasks")
+}
+
+model CyclePeriodSchedule {
+  id             String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cycleId        String               @map("cycle_id") @db.Uuid
+  periodKey      String               @map("period_key") @db.VarChar(20)
+  periodType     AssessmentPeriodType @map("period_type")
+  sequence       Int
+  periodStart    DateTime             @map("period_start") @db.Date
+  periodEnd      DateTime             @map("period_end") @db.Date
+  selfEvalOpenAt DateTime             @map("self_eval_open_at") @db.Timestamptz(6)
+  selfEvalDueAt  DateTime             @map("self_eval_due_at") @db.Timestamptz(6)
+  managerDueAt   DateTime             @map("manager_due_at") @db.Timestamptz(6)
+  isException    Boolean              @default(false) @map("is_exception")
+  createdAt      DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime             @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  cycle AssessmentCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+
+  @@unique([cycleId, periodKey])
+  @@index([cycleId, sequence])
+  @@map("cycle_period_schedules")
+}
+
+model AssessmentPeriod {
+  id                 String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  taskId             String                 @map("task_id") @db.Uuid
+  periodKey          String                 @map("period_key") @db.VarChar(20)
+  periodType         AssessmentPeriodType   @map("period_type")
+  sequence           Int
+  periodStart        DateTime               @map("period_start") @db.Date
+  periodEnd          DateTime               @map("period_end") @db.Date
+  managerId          String?                @map("manager_id") @db.Uuid
+  indicatorVersionId String?                @map("indicator_version_id") @db.Uuid
+  status             AssessmentPeriodStatus @default(unopened)
+  openedAt           DateTime?              @map("opened_at") @db.Timestamptz(6)
+  lockedAt           DateTime?              @map("locked_at") @db.Timestamptz(6)
+  noResultReason     String?                @map("no_result_reason") @db.Text
+  createdAt          DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime               @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  task             AssessmentTask  @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  manager          User?           @relation("PeriodManager", fields: [managerId], references: [id], onDelete: SetNull)
+  indicatorVersion IndicatorVersion? @relation("PeriodIndicatorVersion", fields: [indicatorVersionId], references: [id], onDelete: SetNull)
+
+  @@unique([taskId, periodKey])
+  @@index([managerId, status])
+  @@index([status, periodStart])
+  @@map("assessment_periods")
+}
+
+model IndicatorVersion {
+  id                     String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  taskId                 String                 @map("task_id") @db.Uuid
+  version                Int
+  status                 IndicatorVersionStatus @default(draft)
+  effectiveFromPeriodKey String                 @map("effective_from_period_key") @db.VarChar(20)
+  reason                 String?                @db.Text
+  createdById            String?                @map("created_by_id") @db.Uuid
+  activatedAt            DateTime?              @map("activated_at") @db.Timestamptz(6)
+  createdAt              DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime               @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  task      AssessmentTask         @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  createdBy User?                  @relation("IndicatorVersionCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  items     IndicatorVersionItem[]
+  periods   AssessmentPeriod[]     @relation("PeriodIndicatorVersion")
+
+  @@unique([taskId, version])
+  @@index([taskId, status])
+  @@map("indicator_versions")
+}
+
+model IndicatorVersionItem {
+  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  indicatorVersionId String   @map("indicator_version_id") @db.Uuid
+  sourceInstanceId   String?  @map("source_instance_id") @db.Uuid
+  name               String   @db.VarChar(200)
+  description        String?  @db.Text
+  scoringStandard    String?  @map("scoring_standard") @db.Text
+  targetValue        Decimal? @map("target_value") @db.Decimal(10, 2)
+  targetValueText    String?  @map("target_value_text") @db.VarChar(100)
+  unit               String?  @db.VarChar(30)
+  weight             Decimal  @db.Decimal(5, 4)
+  indicatorType      IndicatorType @default(kpi) @map("indicator_type")
+  dimensionName      String?  @map("dimension_name") @db.VarChar(100)
+  dimensionWeight    Decimal  @map("dimension_weight") @db.Decimal(5, 4)
+  sortOrder          Int      @default(0) @map("sort_order")
+
+  indicatorVersion IndicatorVersion @relation(fields: [indicatorVersionId], references: [id], onDelete: Cascade)
+
+  @@index([indicatorVersionId, sortOrder])
+  @@map("indicator_version_items")
 }
 
 model IndicatorInstance {

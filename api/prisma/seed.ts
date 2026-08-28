@@ -22,6 +22,11 @@ const SYSTEM_CONFIGS: { key: string; value: unknown; description: string }[] = [
   { key: 'notification_channels', value: ['dingtalk'], description: '默认通知渠道' },
   { key: 'system_name', value: '孚德绩效管理系统', description: '系统名称' },
   { key: 'company_full_name', value: '杭州孚德品牌管理有限公司', description: '主体公司全名' },
+  {
+    key: 'performance_company_final_approver',
+    value: { userId: null },
+    description: '公司绩效最终审定人。启用新流程前由 HR 管理员配置为李宏的用户 ID',
+  },
 ];
 
 // 顶层部门结构（DDL 5.2），均属孚德主体
