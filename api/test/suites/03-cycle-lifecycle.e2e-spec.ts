@@ -1,7 +1,15 @@
 import { buildTestApp, closeTestApp, TestApp } from "../test-app";
 import { FixtureFactory } from "../fixtures/fixture-factory";
 import { login } from "../helpers/auth-helper";
-import { SysRole, TaskStatus, CycleStatus, CycleType } from "@prisma/client";
+import {
+  CompanyCode,
+  CycleStatus,
+  CycleType,
+  EmploymentType,
+  SysRole,
+  TaskStatus,
+  UserStatus,
+} from "@prisma/client";
 import { LaunchService } from "@/cycles/launch.service";
 import { SchedulerService } from "@/scheduler/scheduler.service";
 import { AuthService } from "@/auth/auth.service";
@@ -77,6 +85,23 @@ describe("03-cycle-lifecycle", () => {
 
     await factory.updateDeptLeader(dept.id, deptHead.id);
     await factory.updateDeptApprover(dept.id, approver.id);
+
+    await app.prisma.employmentRecord.createMany({
+      data: [hr, deptHead, manager, approver, employee].map((user) => ({
+        userId: user.id,
+        effectiveFrom: new Date("2020-01-01"),
+        effectiveTo: null,
+        company: CompanyCode.fuede,
+        deptId: dept.id,
+        directManagerId: user.directManagerId,
+        employmentType: EmploymentType.full_time,
+        employeeStatus: UserStatus.active,
+        entryDate: new Date("2020-01-01"),
+        changeType: "e2e_fixture",
+        reason: "03-cycle-lifecycle current employment",
+        sourceType: "e2e_fixture",
+      })),
+    });
 
     return { dept, hr, manager, deptHead, approver, employee };
   }

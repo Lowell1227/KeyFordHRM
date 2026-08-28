@@ -454,6 +454,7 @@ export class FixtureFactory {
       'template_indicators',
       'template_dimensions',
       'indicators',
+      'employment_records',
     ];
 
     for (const table of tables) {

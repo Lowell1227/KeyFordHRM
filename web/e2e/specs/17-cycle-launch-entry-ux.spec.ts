@@ -467,7 +467,9 @@ test.describe('cycle launch entry UX', () => {
     const panelBox = await panel.boundingBox();
     const footerBox = await footer.boundingBox();
 
-    expect(drawerBox?.width).toBeLessThanOrEqual(390);
+    expect(drawerBox).not.toBeNull();
+    // Chromium can report a tiny fractional layout residue beyond the integer viewport width.
+    expect(drawerBox!.width).toBeLessThanOrEqual(390 + 0.01);
     expect(footerBox!.y + footerBox!.height).toBeLessThanOrEqual(844);
     expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(footerBox!.y + 1);
     await expect.poll(() => body.evaluate((element) => getComputedStyle(element).overflowY)).toBe('hidden');
