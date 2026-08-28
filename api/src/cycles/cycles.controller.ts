@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, Post, Patch, Param, Body, Query, ParseUUIDPipe } from '@nestjs/common';
+import { Controller, Delete, Get, Post, Patch, Param, Body, Query, ParseUUIDPipe, HttpCode } from '@nestjs/common';
 import { SysRole } from '@prisma/client';
 import { Roles } from '@/common/decorators/roles.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
@@ -13,6 +13,8 @@ import { LaunchCycleDto, ScheduleCycleDto } from './dto/launch-cycle.dto';
 import { UpdateCycleNotificationModeDto } from './dto/update-cycle-notification-mode.dto';
 import { ReviewCycleDto } from './dto/review-cycle.dto';
 import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
+import { CycleScheduleService } from './cycle-schedule.service';
+import { PreviewCycleScheduleDto } from './dto/preview-cycle-schedule.dto';
 
 // 管理员可以查看全量周期；其他角色只能读取已开放周期，避免草稿和预约信息泄露。
 @Controller('cycles')
@@ -20,6 +22,7 @@ export class CyclesController {
   constructor(
     private readonly cyclesService: CyclesService,
     private readonly launchService: LaunchService,
+    private readonly cycleScheduleService: CycleScheduleService,
   ) {}
 
   @Post()
@@ -37,6 +40,12 @@ export class CyclesController {
   @Get('mine')
   findMine(@CurrentUser() user: AuthUser) {
     return this.cyclesService.findMine(user);
+  }
+
+  @Post('schedule-preview')
+  @HttpCode(200)
+  previewSchedule(@Body() dto: PreviewCycleScheduleDto) {
+    return this.cycleScheduleService.preview(dto);
   }
 
   @Get(':id')
