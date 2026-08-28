@@ -46,8 +46,8 @@ describe('CycleScheduleService', () => {
     expect(preview.schedules[2]).toMatchObject({
       periodKey: '2026-09',
       selfEvalOpenAt: '2026-10-08T09:00:00+08:00',
-      selfEvalDueAt: '2026-10-12T18:00:00+08:00',
-      managerDueAt: '2026-10-15T18:00:00+08:00',
+      selfEvalDueAt: '2026-10-10T18:00:00+08:00',
+      managerDueAt: '2026-10-14T18:00:00+08:00',
     });
   });
 

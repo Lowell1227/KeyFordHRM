@@ -87,7 +87,7 @@ export class CycleScheduleService {
     const selfEvalOpenAt = override?.selfEvalOpenAt
       ? toDate(override.selfEvalOpenAt)
       : atShanghaiTime(firstStatutoryWorkdayOfFollowingMonth(period.periodEnd), 9);
-    const selfEvalDueAt = override?.selfEvalDueAt ? toDate(override.selfEvalDueAt) : atShanghaiTime(shiftStatutoryWorkdays(selfEvalOpenAt, 3), 18);
+    const selfEvalDueAt = override?.selfEvalDueAt ? toDate(override.selfEvalDueAt) : atShanghaiTime(shiftStatutoryWorkdays(selfEvalOpenAt, 2), 18);
     const managerDueAt = override?.managerDueAt ? toDate(override.managerDueAt) : atShanghaiTime(shiftStatutoryWorkdays(selfEvalDueAt, 3), 18);
     return { ...period, selfEvalOpenAt, selfEvalDueAt, managerDueAt, isException: override?.isException ?? false };
   }
