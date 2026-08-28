@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { AccountType, AssessmentPeriodType, IndicatorType, Prisma } from '@prisma/client';
+import { AccountType, AssessmentPeriodType, IndicatorType, Prisma, UserStatus } from '@prisma/client';
 import { createHash } from 'crypto';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
@@ -76,10 +76,9 @@ interface LaunchPeriodSchedule {
   isException: boolean;
 }
 
-interface CompanyFinalApprover {
-  id: string;
-  name: string;
-  directManagerId: string | null;
+interface CompanyFinalApprover extends Candidate {
+  status: UserStatus;
+  deletedAt: Date | null;
 }
 
 type ParticipantDispositionValue = 'active' | 'cycle_exempt' | 'top_leader_exempt';
@@ -135,7 +134,7 @@ export interface LaunchPreflightResult {
     exemptReason: string | null;
     participantDisposition?: ParticipantDispositionValue;
   }>;
-  exclusions: CandidateSelection['exclusions'];
+  exclusions?: CandidateSelection['exclusions'];
   blockers: Array<{ code: string; message: string }>;
   warnings: Array<{ code: string; message: string }>;
 }
@@ -164,7 +163,6 @@ export class LaunchService {
       blockers.push({ code: 'CYCLE_NOT_APPROVED', message: '周期计划需由审核人通过后才能发起' });
     }
     const selection = await this.findCandidates(client, cycle);
-    const candidates = selection.included;
     const isWorkflowV2 = this.isWorkflowV2(cycle);
     const schedules = isWorkflowV2
       ? await this.findPeriodSchedules(client, cycle.id)
@@ -179,6 +177,9 @@ export class LaunchService {
         companyFinalApprover,
       ));
     }
+    const candidates = isWorkflowV2
+      ? this.includeCompanyFinalApprover(selection.included, companyFinalApprover)
+      : selection.included;
     const deptMap = await this.buildDeptMap(client);
     const exemptRatio = await this.getExemptRatio(client);
 
@@ -209,7 +210,7 @@ export class LaunchService {
       participantCount: candidates.length,
       templateCount: 0,
       participants: plan?.participants ?? [],
-      exclusions: selection.exclusions,
+      ...(isWorkflowV2 && { exclusions: selection.exclusions }),
       blockers,
       warnings,
     };
@@ -358,11 +359,6 @@ export class LaunchService {
       }
 
       const selection = await this.findCandidates(tx, cycle);
-      const candidates = selection.included;
-      if (candidates.length === 0) {
-        throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '当前没有符合被考核条件的员工' });
-      }
-
       const isWorkflowV2 = this.isWorkflowV2(cycle);
       const schedules = isWorkflowV2
         ? await this.findPeriodSchedules(tx, cycle.id)
@@ -383,6 +379,12 @@ export class LaunchService {
             blockers: configurationBlockers,
           });
         }
+      }
+      const candidates = isWorkflowV2
+        ? this.includeCompanyFinalApprover(selection.included, companyFinalApprover)
+        : selection.included;
+      if (candidates.length === 0) {
+        throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '当前没有符合被考核条件的员工' });
       }
 
       const openedAt = options.now ?? new Date();
@@ -630,10 +632,15 @@ export class LaunchService {
       return { included, exclusions: [] };
     }
 
-    const [included, probation] = await Promise.all([
-      tx.user.findMany({ where: { ...scopeWhere, status: 'active' }, select }),
-      tx.user.findMany({ where: { ...scopeWhere, status: 'probation' }, select }),
-    ]);
+    const eligible = await tx.user.findMany({
+      where: {
+        ...scopeWhere,
+        status: { in: [UserStatus.active, UserStatus.probation] },
+      },
+      select: { ...select, status: true },
+    });
+    const included = eligible.filter((employee) => employee.status === UserStatus.active);
+    const probation = eligible.filter((employee) => employee.status === UserStatus.probation);
     return {
       included,
       exclusions: probation.map((employee) => ({
@@ -988,8 +995,39 @@ export class LaunchService {
     if (!companyFinalApproverId) return null;
     return tx.user.findUnique({
       where: { id: companyFinalApproverId },
-      select: { id: true, name: true, directManagerId: true },
+      select: {
+        id: true,
+        name: true,
+        deptId: true,
+        directManagerId: true,
+        directManager: { select: { name: true } },
+        entryDate: true,
+        leaveDate: true,
+        status: true,
+        deletedAt: true,
+      },
     });
+  }
+
+  private includeCompanyFinalApprover(
+    candidates: Candidate[],
+    companyFinalApprover: CompanyFinalApprover | null,
+  ): Candidate[] {
+    if (!this.isEligibleCompanyFinalApprover(companyFinalApprover)
+      || candidates.some((candidate) => candidate.id === companyFinalApprover.id)) {
+      return candidates;
+    }
+    return [...candidates, companyFinalApprover];
+  }
+
+  private isEligibleCompanyFinalApprover(
+    companyFinalApprover: CompanyFinalApprover | null,
+  ): companyFinalApprover is CompanyFinalApprover {
+    return Boolean(
+      companyFinalApprover
+      && companyFinalApprover.status === UserStatus.active
+      && companyFinalApprover.deletedAt === null,
+    );
   }
 
   private workflowV2ConfigurationBlockers(
@@ -998,7 +1036,7 @@ export class LaunchService {
     companyFinalApprover: CompanyFinalApprover | null,
   ): LaunchPreflightResult['blockers'] {
     const blockers: LaunchPreflightResult['blockers'] = [];
-    if (!cycle.companyFinalApproverId || !companyFinalApprover) {
+    if (!cycle.companyFinalApproverId || !this.isEligibleCompanyFinalApprover(companyFinalApprover)) {
       blockers.push({
         code: 'COMPANY_FINAL_APPROVER_MISSING',
         message: '未设置有效的公司最终审定人，请先完成配置',

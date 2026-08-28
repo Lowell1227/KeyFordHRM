@@ -25,6 +25,16 @@ describe('LaunchService preflight', () => {
     entryDate: new Date('2020-01-01T00:00:00.000Z'),
     leaveDate: null,
   };
+  const activeCandidate = { ...candidate, status: 'active' };
+  const companyFinalApprover = {
+    ...candidate,
+    id: companyFinalApproverId,
+    name: '李宏',
+    directManagerId: null,
+    directManager: null,
+    status: 'active',
+    deletedAt: null,
+  };
 
   const periodSchedules = [
     {
@@ -80,6 +90,14 @@ describe('LaunchService preflight', () => {
     explicitExemptUserIds: [],
     ...overrides,
   });
+
+  function mockV2Users(
+    scopedUsers: Array<Record<string, unknown>> = [activeCandidate],
+    finalApprover: Record<string, unknown> | null = companyFinalApprover,
+  ) {
+    tx.user.findMany.mockResolvedValue(scopedUsers);
+    tx.user.findUnique.mockResolvedValue(finalApprover);
+  }
 
   function template(id: string, indicatorWeight = 1) {
     return {
@@ -204,6 +222,12 @@ describe('LaunchService preflight', () => {
     await expect(service.preflight('55555555-5555-4555-8555-555555555555'))
       .resolves.toEqual(expect.objectContaining({ ready: true, templateCount: 0 }));
     expect(tx.assessmentTemplate.findMany).not.toHaveBeenCalled();
+  });
+
+  it('preserves the exact workflow v1 preflight response shape', async () => {
+    const preflight = await service.preflight(cycleId);
+
+    expect(preflight).not.toHaveProperty('exclusions');
   });
 
   it('does not block preflight when company-default templates overlap', async () => {
@@ -348,14 +372,10 @@ describe('LaunchService preflight', () => {
       companyFinalApproverId: topLeader.id,
     }));
     tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
-    tx.user.findMany.mockImplementation(({ where }: any) => Promise.resolve(
-      where.status === 'active' ? [topLeader] : [],
-    ));
-    tx.user.findUnique.mockResolvedValue({
-      id: topLeader.id,
-      name: topLeader.name,
-      directManagerId: null,
-    });
+    mockV2Users(
+      [{ ...topLeader, status: 'active' }],
+      { ...topLeader, status: 'active', deletedAt: null },
+    );
     tx.department.findMany.mockResolvedValue([{
       id: candidate.deptId,
       name: '总经办',
@@ -375,7 +395,17 @@ describe('LaunchService preflight', () => {
     }));
     expect(tx.user.findUnique).toHaveBeenCalledWith({
       where: { id: topLeader.id },
-      select: { id: true, name: true, directManagerId: true },
+      select: {
+        id: true,
+        name: true,
+        deptId: true,
+        directManagerId: true,
+        directManager: { select: { name: true } },
+        entryDate: true,
+        leaveDate: true,
+        status: true,
+        deletedAt: true,
+      },
     });
 
     await service.launch(cycleId, operator, {
@@ -394,6 +424,44 @@ describe('LaunchService preflight', () => {
     });
     expect(tx.indicatorVersion.create).not.toHaveBeenCalled();
     expect(tx.assessmentPeriod.createMany).not.toHaveBeenCalled();
+  });
+
+  it('force-includes an active company final approver outside the participant scope for audit', async () => {
+    tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle({
+      participantUserIds: [candidate.id],
+    }));
+    tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
+    mockV2Users([activeCandidate]);
+
+    const checked = await service.preflight(cycleId);
+
+    expect(checked.participants).toEqual(expect.arrayContaining([
+      expect.objectContaining({
+        employeeId: candidate.id,
+        participantDisposition: 'active',
+      }),
+      expect.objectContaining({
+        employeeId: companyFinalApproverId,
+        participantDisposition: 'top_leader_exempt',
+      }),
+    ]));
+    expect(checked.participantCount).toBe(2);
+
+    await service.launch(cycleId, operator, {
+      now: new Date('2026-12-23T00:00:00.000Z'),
+      expectedPlanHash: checked.planHash!,
+    });
+
+    expect(tx.assessmentTask.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        employeeId: companyFinalApproverId,
+        managerId: null,
+        status: 'exempted',
+        participantDisposition: 'top_leader_exempt',
+      }),
+    });
+    expect(tx.indicatorVersion.create).toHaveBeenCalledTimes(1);
+    expect(tx.assessmentPeriod.createMany).toHaveBeenCalledTimes(1);
   });
 
   it('keeps explicitly selected test accounts eligible without admitting every test account', async () => {
@@ -429,32 +497,28 @@ describe('LaunchService preflight', () => {
     }));
   });
 
-  it('excludes probation employees from workflow v2 and explains the headcount change', async () => {
+  it('partitions active and probation employees from one workflow v2 candidate snapshot', async () => {
     const probationEmployee = {
       ...candidate,
       id: '99999999-9999-4999-8999-999999999999',
       name: '试用期员工',
+      status: 'probation',
     };
     tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle());
     tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
-    tx.user.findMany.mockImplementation(({ where }: any) => Promise.resolve(
-      where.status === 'active' ? [candidate] : [probationEmployee],
-    ));
-    tx.user.findUnique.mockResolvedValue({
-      id: companyFinalApproverId,
-      name: '李宏',
-      directManagerId: null,
-    });
+    mockV2Users([activeCandidate, probationEmployee]);
 
     const preflight = await service.preflight(cycleId);
 
     expect(tx.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ status: 'active' }),
+      where: expect.objectContaining({ status: { in: ['active', 'probation'] } }),
+      select: expect.objectContaining({ status: true }),
     }));
-    expect(tx.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: expect.objectContaining({ status: 'probation' }),
+    expect(tx.user.findMany).toHaveBeenCalledTimes(1);
+    expect(preflight.participantCount).toBe(2);
+    expect(preflight.participants).not.toContainEqual(expect.objectContaining({
+      employeeId: probationEmployee.id,
     }));
-    expect(preflight.participantCount).toBe(1);
     expect(preflight.exclusions).toContainEqual({
       employeeId: probationEmployee.id,
       employeeName: probationEmployee.name,
@@ -466,9 +530,23 @@ describe('LaunchService preflight', () => {
   it('blocks workflow v2 preflight when the company final approver is missing', async () => {
     tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle({ companyFinalApproverId: null }));
     tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
-    tx.user.findMany.mockImplementation(({ where }: any) => Promise.resolve(
-      where.status === 'active' ? [candidate] : [],
-    ));
+    tx.user.findMany.mockResolvedValue([activeCandidate]);
+
+    await expect(service.preflight(cycleId)).resolves.toEqual(expect.objectContaining({
+      ready: false,
+      blockers: expect.arrayContaining([expect.objectContaining({
+        code: 'COMPANY_FINAL_APPROVER_MISSING',
+      })]),
+    }));
+  });
+
+  it.each([
+    { label: 'not active', finalApprover: { ...companyFinalApprover, status: 'probation' } },
+    { label: 'deleted', finalApprover: { ...companyFinalApprover, deletedAt: new Date('2026-12-01T00:00:00.000Z') } },
+  ])('blocks workflow v2 when the fixed final approver is $label', async ({ finalApprover }) => {
+    tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle());
+    tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
+    mockV2Users(undefined, finalApprover);
 
     await expect(service.preflight(cycleId)).resolves.toEqual(expect.objectContaining({
       ready: false,
@@ -480,14 +558,7 @@ describe('LaunchService preflight', () => {
 
   it('blocks workflow v2 preflight when no normalized period schedule is stored', async () => {
     tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle());
-    tx.user.findMany.mockImplementation(({ where }: any) => Promise.resolve(
-      where.status === 'active' ? [candidate] : [],
-    ));
-    tx.user.findUnique.mockResolvedValue({
-      id: companyFinalApproverId,
-      name: '李宏',
-      directManagerId: null,
-    });
+    mockV2Users();
 
     await expect(service.preflight(cycleId)).resolves.toEqual(expect.objectContaining({
       ready: false,
@@ -500,11 +571,8 @@ describe('LaunchService preflight', () => {
   it('blocks workflow v2 when the configured company final approver has a direct manager', async () => {
     tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle());
     tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
-    tx.user.findMany.mockImplementation(({ where }: any) => Promise.resolve(
-      where.status === 'active' ? [candidate] : [],
-    ));
-    tx.user.findUnique.mockResolvedValue({
-      id: companyFinalApproverId,
+    mockV2Users(undefined, {
+      ...companyFinalApprover,
       name: '错误审定人',
       directManagerId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
     });
@@ -527,14 +595,11 @@ describe('LaunchService preflight', () => {
   }) => {
     tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle({ workflowVersion }));
     tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
-    tx.user.findMany.mockImplementation(({ where }: any) => Promise.resolve(
-      workflowVersion === 1 || where.status === 'active' ? [candidate] : [],
-    ));
-    tx.user.findUnique.mockResolvedValue({
-      id: companyFinalApproverId,
-      name: '李宏',
-      directManagerId: null,
-    });
+    if (workflowVersion === 2) {
+      mockV2Users();
+    } else {
+      tx.user.findMany.mockResolvedValue([candidate]);
+    }
     tx.department.findMany.mockResolvedValue([{
       id: candidate.deptId,
       name: '产品部',
@@ -573,14 +638,7 @@ describe('LaunchService preflight', () => {
   it('creates v2 draft indicator V1 and one unopened record per stored period', async () => {
     tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle());
     tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
-    tx.user.findMany.mockImplementation(({ where }: any) => Promise.resolve(
-      where.status === 'active' ? [candidate] : [],
-    ));
-    tx.user.findUnique.mockResolvedValue({
-      id: companyFinalApproverId,
-      name: '李宏',
-      directManagerId: null,
-    });
+    mockV2Users();
 
     const checked = await service.preflight(cycleId);
     const result = await service.launch(cycleId, operator, {
@@ -605,7 +663,10 @@ describe('LaunchService preflight', () => {
               managerDueAt: '2027-02-08T10:00:00.000Z',
             }),
           ]),
-          participants: [expect.objectContaining({ participantDisposition: 'active' })],
+          participants: expect.arrayContaining([
+            expect.objectContaining({ participantDisposition: 'active' }),
+            expect.objectContaining({ participantDisposition: 'top_leader_exempt' }),
+          ]),
         }),
       }),
     }));
@@ -641,7 +702,7 @@ describe('LaunchService preflight', () => {
       ],
     });
     expect(result).toEqual(expect.objectContaining({
-      totalTasks: 1,
+      totalTasks: 2,
       activeTasks: 1,
       periodCount: 3,
       indicatorVersionCount: 1,
@@ -653,14 +714,7 @@ describe('LaunchService preflight', () => {
       explicitExemptUserIds: [candidate.id],
     }));
     tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
-    tx.user.findMany.mockImplementation(({ where }: any) => Promise.resolve(
-      where.status === 'active' ? [candidate] : [],
-    ));
-    tx.user.findUnique.mockResolvedValue({
-      id: companyFinalApproverId,
-      name: '李宏',
-      directManagerId: null,
-    });
+    mockV2Users();
 
     const checked = await service.preflight(cycleId);
     expect(checked.participants).toContainEqual(expect.objectContaining({
