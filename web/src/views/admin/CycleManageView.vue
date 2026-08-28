@@ -284,9 +284,29 @@ const scoringPlan = reactive<CycleScoringPlanForm>({
   scheduleWarnings: [],
 });
 const isWorkflowV2Form = computed(() => !isEditMode.value || editingWorkflowVersion.value === 2);
+
+function normalizeScheduleInstant(value: string): string {
+  const instant = dayjs(value);
+  return instant.isValid() ? instant.toISOString() : value;
+}
+
+function semanticPeriodSchedules(schedules: CyclePeriodSchedule[]): Omit<CyclePeriodSchedule, 'id'>[] {
+  return schedules.map((schedule) => ({
+    periodKey: schedule.periodKey,
+    periodType: schedule.periodType,
+    sequence: schedule.sequence,
+    periodStart: schedule.periodStart,
+    periodEnd: schedule.periodEnd,
+    selfEvalOpenAt: normalizeScheduleInstant(schedule.selfEvalOpenAt),
+    selfEvalDueAt: normalizeScheduleInstant(schedule.selfEvalDueAt),
+    managerDueAt: normalizeScheduleInstant(schedule.managerDueAt),
+    isException: Boolean(schedule.isException),
+  }));
+}
+
 const scoringPlanSnapshot = () => JSON.stringify({
   scoringFrequency: scoringPlan.scoringFrequency,
-  periodSchedules: scoringPlan.periodSchedules,
+  periodSchedules: semanticPeriodSchedules(scoringPlan.periodSchedules),
 });
 const reviewResetRequired = computed(() => (
   isEditMode.value
@@ -1167,11 +1187,7 @@ function buildCreateBody(): CreateCycleBody {
   if (isWorkflowV2Form.value) {
     body.workflowVersion = 2;
     body.scoringFrequency = scoringPlan.scoringFrequency;
-    body.periodSchedules = scoringPlan.periodSchedules.map((schedule) => {
-      const normalized = { ...schedule };
-      delete normalized.id;
-      return normalized;
-    });
+    body.periodSchedules = semanticPeriodSchedules(scoringPlan.periodSchedules);
   }
 
   return body;

@@ -549,6 +549,32 @@ test.describe('cycle scoring plan integration', () => {
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('按月评分 · 3个月');
   });
 
+  test('treats persisted schedule ids as non-semantic after an approved plan is changed then restored', async ({ page }) => {
+    const updateBodies: Record<string, unknown>[] = [];
+    const cycleWithPersistedScheduleIds: AssessmentCycle = {
+      ...integratedCycle,
+      periodSchedules: buildSchedules(3, 'monthly').map((schedule, index) => ({
+        ...schedule,
+        id: `persisted-schedule-${index + 1}`,
+        isException: false,
+      })),
+    };
+    await mockIntegratedCyclePage(page, { cycles: [cycleWithPersistedScheduleIds], updateBodies });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId(`cycle-edit-${cycleWithPersistedScheduleIds.id}`).click();
+
+    await page.getByTestId('cycle-scoring-cycle').click();
+    await expect(page.getByTestId('cycle-review-reset-warning')).toContainText('修改后需重新审核');
+    await page.getByTestId('cycle-scoring-monthly').click();
+
+    await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
+    await expect(page.getByTestId('cycle-review-reset-warning')).toHaveCount(0);
+    await page.getByRole('button', { name: '下一步' }).click();
+
+    await expect(page.getByTestId('cycle-workspace')).toBeVisible();
+    expect(updateBodies).toHaveLength(0);
+  });
+
   test('keeps a historical workflow v1 edit on v1 without adding scoring fields', async ({ page }) => {
     const updateBodies: Record<string, unknown>[] = [];
     const historicalCycle: AssessmentCycle = {
