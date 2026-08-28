@@ -62,9 +62,9 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
         <p>逐期设置员工自评与主管评分的计划时间。</p>
       </div>
       <div class="cycle-monthly-schedule-editor__actions">
-        <el-checkbox v-model="preserveExceptions">保留特殊月份</el-checkbox>
-        <el-button text type="primary" @click="emit('apply-unified', { preserveExceptions })">统一调整规则</el-button>
-        <el-button text @click="emit('restore-all')">恢复全部默认</el-button>
+        <el-checkbox data-testid="cycle-preserve-exceptions" v-model="preserveExceptions">保留特殊月份</el-checkbox>
+        <el-button data-testid="cycle-apply-unified" text type="primary" @click="emit('apply-unified', { preserveExceptions })">统一调整规则</el-button>
+        <el-button data-testid="cycle-restore-all" text @click="emit('restore-all')">恢复全部默认</el-button>
       </div>
     </header>
 
@@ -76,8 +76,8 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
     >
       <header class="cycle-month-schedule-row__header">
         <div>
-          <strong>{{ periodLabel(schedule) }}</strong>
-          <el-tag v-if="schedule.isException" type="warning" size="small">特殊月份</el-tag>
+          <strong data-testid="cycle-period-label">{{ periodLabel(schedule) }}</strong>
+          <el-tag v-if="schedule.isException" data-testid="cycle-special-month-badge" type="warning" size="small">特殊月份</el-tag>
         </div>
         <div>
           <el-button
@@ -86,38 +86,40 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
             type="primary"
             @click="updateSchedule(index, { isException: true })"
           >调整特殊月份</el-button>
-          <el-button text @click="emit('restore-one', { ...schedule })">恢复默认</el-button>
+          <el-button data-testid="cycle-restore-one" text @click="emit('restore-one', { ...schedule })">恢复默认</el-button>
         </div>
       </header>
 
       <div class="cycle-month-schedule-row__fields">
-        <label>
+        <label data-testid="self-eval-open-at">
           <span>自评开放时间</span>
           <el-date-picker
             :model-value="schedule.selfEvalOpenAt"
             type="datetime"
-            value-format="YYYY-MM-DD HH:mm"
+            format="YYYY-MM-DD HH:mm"
+            value-format="YYYY-MM-DDTHH:mm:ssZ"
             @update:model-value="updateDate(index, 'selfEvalOpenAt', $event)"
           />
           <small v-for="issue in issuesForField(schedule, 'selfEvalOpenAt')" :key="issue.code" class="is-blocker">{{ issue.message }}</small>
         </label>
-        <label>
+        <label data-testid="self-eval-due-at">
           <span>员工计划完成时间</span>
           <el-date-picker
             :model-value="schedule.selfEvalDueAt"
             type="datetime"
-            value-format="YYYY-MM-DD HH:mm"
+            format="YYYY-MM-DD HH:mm"
+            value-format="YYYY-MM-DDTHH:mm:ssZ"
             @update:model-value="updateDate(index, 'selfEvalDueAt', $event)"
           />
           <small v-for="issue in issuesForField(schedule, 'selfEvalDueAt')" :key="issue.code" class="is-blocker">{{ issue.message }}</small>
         </label>
-        <label>
+        <label data-testid="manager-due-at">
           <span>主管计划完成时间</span>
           <el-date-picker
-            data-testid="manager-due-at"
             :model-value="schedule.managerDueAt"
             type="datetime"
-            value-format="YYYY-MM-DD HH:mm"
+            format="YYYY-MM-DD HH:mm"
+            value-format="YYYY-MM-DDTHH:mm:ssZ"
             @update:model-value="updateDate(index, 'managerDueAt', $event)"
           />
           <small v-for="issue in issuesForField(schedule, 'managerDueAt')" :key="issue.code" class="is-blocker">{{ issue.message }}</small>

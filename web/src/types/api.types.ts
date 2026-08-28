@@ -425,7 +425,7 @@ export interface AssessmentCycle {
   id: string;
   name: string;
   type: CycleType;
-  workflowVersion?: number;
+  workflowVersion?: 1 | 2;
   scoringFrequency?: ScoringFrequency;
   reviewFrequency?: 'cycle';
   periodSchedules?: CyclePeriodSchedule[];
@@ -505,7 +505,7 @@ export type CycleStatusGroup = 'attention' | 'active' | 'finished';
 export interface CreateCycleBody {
   name: string;
   type: CycleType;
-  workflowVersion?: number;
+  workflowVersion?: 1 | 2;
   scoringFrequency?: ScoringFrequency;
   reviewFrequency?: 'cycle';
   periodSchedules?: CyclePeriodSchedule[];

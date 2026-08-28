@@ -3,13 +3,24 @@ import { ref } from 'vue';
 import { cyclesApi } from '../../src/api/cycles.api';
 import CycleMonthlyScheduleEditor from '../../src/views/admin/components/CycleMonthlyScheduleEditor.vue';
 import CycleScoringSettings from '../../src/views/admin/components/CycleScoringSettings.vue';
-import type { CyclePeriodSchedule } from '../../src/types/api.types';
+import type { CyclePeriodSchedule, CycleScheduleIssue } from '../../src/types/api.types';
 import type { CycleType, ScoringFrequency } from '../../src/types/enums';
 
 const visible = ref(false);
 const cycleType = ref<CycleType>('quarterly');
 const scoringFrequency = ref<ScoringFrequency>('monthly');
 const schedules = ref<CyclePeriodSchedule[]>([]);
+const defaultSchedules = ref<CyclePeriodSchedule[]>([]);
+const restoreOneCount = ref(0);
+const restoreAllCount = ref(0);
+const immutableUpdate = ref('array:false,row:false');
+const applyUnifiedValue = ref('');
+const warnings: CycleScheduleIssue[] = [{ code: 'overlap_warning', periodKey: '2027-02', message: '该月与相邻计划有重叠风险' }];
+const blockers: CycleScheduleIssue[] = [{ code: 'manager_due_before_self', periodKey: '2027-02', message: '主管完成时间不得早于员工完成时间' }];
+
+function cloneSchedules(value: CyclePeriodSchedule[]) {
+  return value.map((schedule) => ({ ...schedule }));
+}
 
 async function preview(type: CycleType, frequency: ScoringFrequency) {
   const result = await cyclesApi.previewSchedule({
@@ -18,7 +29,8 @@ async function preview(type: CycleType, frequency: ScoringFrequency) {
     startDate: '2027-01-01',
     endDate: '2027-12-31',
   });
-  schedules.value = result.schedules;
+  defaultSchedules.value = cloneSchedules(result.schedules);
+  schedules.value = cloneSchedules(result.schedules);
 }
 
 function selectType(type: CycleType) {
@@ -31,6 +43,29 @@ function selectType(type: CycleType) {
 function updateFrequency(frequency: ScoringFrequency) {
   scoringFrequency.value = frequency;
   void preview(cycleType.value, frequency);
+}
+
+function updateSchedules(value: CyclePeriodSchedule[]) {
+  immutableUpdate.value = `array:${value !== schedules.value}:row:${value[0] !== schedules.value[0]}`;
+  schedules.value = value;
+}
+
+function restoreOne(schedule: CyclePeriodSchedule) {
+  const defaultSchedule = defaultSchedules.value.find((item) => item.periodKey === schedule.periodKey);
+  if (!defaultSchedule) return;
+  schedules.value = schedules.value.map((item) => (
+    item.periodKey === schedule.periodKey ? { ...defaultSchedule } : { ...item }
+  ));
+  restoreOneCount.value += 1;
+}
+
+function restoreAll() {
+  schedules.value = cloneSchedules(defaultSchedules.value);
+  restoreAllCount.value += 1;
+}
+
+function applyUnified(options: { preserveExceptions: boolean }) {
+  applyUnifiedValue.value = String(options.preserveExceptions);
 }
 </script>
 
@@ -50,7 +85,19 @@ function updateFrequency(frequency: ScoringFrequency) {
         :scoring-frequency="scoringFrequency"
         @update:scoring-frequency="updateFrequency"
       />
-      <CycleMonthlyScheduleEditor v-model:schedules="schedules" />
+      <CycleMonthlyScheduleEditor
+        :schedules="schedules"
+        :warnings="warnings"
+        :blockers="blockers"
+        @update:schedules="updateSchedules"
+        @restore-one="restoreOne"
+        @restore-all="restoreAll"
+        @apply-unified="applyUnified"
+      />
+      <output data-testid="cycle-immutable-update">{{ immutableUpdate }}</output>
+      <output data-testid="cycle-restore-one-count">{{ restoreOneCount }}</output>
+      <output data-testid="cycle-restore-all-count">{{ restoreAllCount }}</output>
+      <output data-testid="cycle-apply-unified-value">{{ applyUnifiedValue }}</output>
     </section>
   </main>
 </template>
