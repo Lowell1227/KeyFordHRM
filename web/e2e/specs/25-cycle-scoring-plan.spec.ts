@@ -71,6 +71,16 @@ interface IntegratedPageOptions {
   createBodies?: Record<string, unknown>[];
   updateBodies?: Record<string, unknown>[];
   previewBodies?: Record<string, unknown>[];
+  previewCompletions?: number[];
+  previewResolver?: (
+    body: Record<string, unknown>,
+    callIndex: number,
+  ) => {
+    delayMs?: number;
+    schedules?: CyclePeriodSchedule[];
+    blockers?: Array<{ code: string; periodKey: string; message: string }>;
+    warnings?: Array<{ code: string; periodKey: string; message: string }>;
+  };
 }
 
 async function mockIntegratedCyclePage(
@@ -78,6 +88,7 @@ async function mockIntegratedCyclePage(
   options: IntegratedPageOptions = {},
 ) {
   const cycles = options.cycles ?? [];
+  let previewCallIndex = 0;
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-cycle-scoring-token');
     localStorage.setItem('expiresAt', String(Date.now() + 60_000));
@@ -128,27 +139,36 @@ async function mockIntegratedCyclePage(
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ available: true, enabled: false, effectiveEnabled: false })),
   }));
-  await page.route('**/api/v1/cycles**', (route) => {
+  await page.route('**/api/v1/cycles**', async (route) => {
     const request = route.request();
     const url = new URL(request.url());
     const path = url.pathname;
     if (path.endsWith('/cycles/schedule-preview')) {
       const body = request.postDataJSON() as Record<string, unknown>;
       options.previewBodies?.push(body);
+      const callIndex = previewCallIndex++;
       const scoringFrequency = body.scoringFrequency === 'cycle' || body.type === 'custom'
         ? 'cycle'
         : 'monthly';
       const count = scoringFrequency === 'cycle'
         ? 1
         : ({ monthly: 1, quarterly: 3, semiannual: 6, annual: 12 } as Record<string, number>)[String(body.type)] ?? 1;
+      const resolved = options.previewResolver?.(body, callIndex);
+      if (resolved?.delayMs) await new Promise((resolve) => setTimeout(resolve, resolved.delayMs));
+      const submittedSchedules = Array.isArray(body.schedules)
+        ? body.schedules as CyclePeriodSchedule[]
+        : undefined;
+      options.previewCompletions?.push(callIndex);
       return route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify(apiResponse({
           scoringFrequency,
           reviewFrequency: 'cycle',
-          schedules: buildSchedules(count, scoringFrequency).map((schedule) => ({ ...schedule, isException: false })),
-          blockers: options.blockers ?? [],
-          warnings: options.warnings ?? [],
+          schedules: resolved?.schedules
+            ?? submittedSchedules
+            ?? buildSchedules(count, scoringFrequency).map((schedule) => ({ ...schedule, isException: false })),
+          blockers: resolved?.blockers ?? options.blockers ?? [],
+          warnings: resolved?.warnings ?? options.warnings ?? [],
         })),
       });
     }
@@ -366,8 +386,10 @@ test.describe('cycle scoring plan controls', () => {
 test.describe('cycle scoring plan integration', () => {
   test('creates workflow v2 with a normalized special-month schedule after explicit warning confirmation', async ({ page }) => {
     const createBodies: Record<string, unknown>[] = [];
+    const previewBodies: Record<string, unknown>[] = [];
     await mockIntegratedCyclePage(page, {
       createBodies,
+      previewBodies,
       warnings: [{ code: 'CROSS_MONTH_WARNING', periodKey: '2027-02', message: '主管完成时间跨月，请确认安排' }],
     });
     await page.goto('/cycles?group=attention');
@@ -381,6 +403,11 @@ test.describe('cycle scoring plan integration', () => {
     await page.getByRole('button', { name: '下一步' }).click();
 
     await expect(page.getByRole('dialog', { name: '确认评分计划提示' })).toContainText('主管完成时间跨月，请确认安排');
+    expect(previewBodies).toContainEqual(expect.objectContaining({
+      schedules: expect.arrayContaining([
+        expect.objectContaining({ periodKey: '2027-02', isException: true }),
+      ]),
+    }));
     expect(createBodies).toHaveLength(0);
     await page.getByRole('button', { name: '确认并继续' }).click();
     await expect.poll(() => createBodies).toHaveLength(1);
@@ -392,6 +419,46 @@ test.describe('cycle scoring plan integration', () => {
       ]),
     });
     expect(createBodies.at(-1)).not.toHaveProperty('reviewFrequency');
+  });
+
+  test('uses authoritative edited-schedule blockers, treats equality as invalid, and waits before submit', async ({ page }) => {
+    const createBodies: Record<string, unknown>[] = [];
+    const previewBodies: Record<string, unknown>[] = [];
+    await mockIntegratedCyclePage(page, {
+      createBodies,
+      previewBodies,
+      previewResolver: (body) => {
+        if (!Array.isArray(body.schedules)) return {};
+        return {
+          delayMs: 120,
+          blockers: [{
+            code: 'SELF_EVAL_DUE_NOT_BEFORE_MANAGER_DUE',
+            periodKey: '2027-02',
+            message: '服务端：自评截止时间必须早于主管评分截止时间',
+          }],
+        };
+      },
+    });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+    const secondRow = page.getByTestId('cycle-month-schedule-row').nth(1);
+    await expect(secondRow).toBeVisible();
+
+    await secondRow.getByTestId('manager-due-at').locator('input').fill('2027-02-03 18:00');
+    await page.getByRole('button', { name: '下一步' }).click();
+
+    expect(createBodies).toHaveLength(0);
+    expect(previewBodies).toContainEqual(expect.objectContaining({
+      schedules: expect.arrayContaining([
+        expect.objectContaining({
+          periodKey: '2027-02',
+          selfEvalDueAt: '2027-02-03T18:00:00+08:00',
+          managerDueAt: '2027-02-03T18:00:00+08:00',
+        }),
+      ]),
+    }));
+    await expect(secondRow).toContainText('服务端：自评截止时间必须早于主管评分截止时间');
+    await expect(secondRow.getByTestId('manager-due-at').locator('input')).toBeFocused();
   });
 
   test('blocks submission and focuses the invalid schedule row', async ({ page }) => {
@@ -430,6 +497,58 @@ test.describe('cycle scoring plan integration', () => {
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(1);
   });
 
+  test('restores the confirmed frequency and schedule when special-month regeneration is declined', async ({ page }) => {
+    await mockIntegratedCyclePage(page, { cycles: [integratedCycle] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId(`cycle-edit-${integratedCycle.id}`).click();
+    await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
+
+    await page.getByTestId('cycle-scoring-cycle').click();
+    const confirmation = page.getByRole('dialog', { name: '重新生成还是保留当前评分计划？' });
+    await expect(confirmation).toBeVisible();
+    await confirmation.getByRole('button', { name: '保留当前评分计划' }).click();
+
+    await expect(page.getByTestId('cycle-scoring-monthly').locator('input')).toBeChecked();
+    await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
+    await expect(page.getByTestId('cycle-review-reset-warning')).toHaveCount(0);
+  });
+
+  test('ignores a stale delayed preview after a newer frequency preview completes', async ({ page }) => {
+    const previewCompletions: number[] = [];
+    const noExceptionCycle: AssessmentCycle = {
+      ...integratedCycle,
+      periodSchedules: integratedCycle.periodSchedules?.map((schedule) => ({ ...schedule, isException: false })),
+      reviewStatus: 'pending',
+    };
+    await mockIntegratedCyclePage(page, {
+      cycles: [noExceptionCycle],
+      previewCompletions,
+      previewResolver: (body) => ({ delayMs: body.scoringFrequency === 'cycle' ? 250 : 0 }),
+    });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId(`cycle-edit-${noExceptionCycle.id}`).click();
+
+    await page.getByTestId('cycle-scoring-cycle').click();
+    await page.getByTestId('cycle-scoring-monthly').click();
+    await expect.poll(() => previewCompletions).toContain(0);
+
+    await expect(page.getByTestId('cycle-scoring-monthly').locator('input')).toBeChecked();
+    await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
+  });
+
+  test('opens an approved workflow v2 draft without updating when nothing changed', async ({ page }) => {
+    const updateBodies: Record<string, unknown>[] = [];
+    await mockIntegratedCyclePage(page, { cycles: [integratedCycle], updateBodies });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId(`cycle-edit-${integratedCycle.id}`).click();
+
+    await page.getByRole('button', { name: '下一步' }).click();
+
+    await expect(page.getByTestId('cycle-workspace')).toBeVisible();
+    expect(updateBodies).toHaveLength(0);
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('按月评分 · 3个月');
+  });
+
   test('keeps a historical workflow v1 edit on v1 without adding scoring fields', async ({ page }) => {
     const updateBodies: Record<string, unknown>[] = [];
     const historicalCycle: AssessmentCycle = {
@@ -449,6 +568,7 @@ test.describe('cycle scoring plan integration', () => {
     await page.getByTestId(`cycle-edit-${historicalCycle.id}`).click();
 
     await expect(page.getByTestId('cycle-scoring-settings')).toHaveCount(0);
+    await page.getByLabel('周期名称').fill('历史季度考核（修订）');
     await page.getByRole('button', { name: '下一步' }).click();
     await expect.poll(() => updateBodies).toHaveLength(1);
     expect(updateBodies[0]).not.toHaveProperty('workflowVersion');

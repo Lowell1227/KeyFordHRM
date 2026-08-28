@@ -12,6 +12,7 @@ import type {
   CycleSchedulePreview,
   CycleNotificationMode,
   DingtalkNotificationSettings,
+  CyclePeriodSchedule,
 } from '@/types/api.types';
 import type { CycleType, ScoringFrequency } from '@/types/enums';
 
@@ -52,6 +53,7 @@ export const cyclesApi = {
     scoringFrequency?: ScoringFrequency;
     startDate: string;
     endDate: string;
+    schedules?: CyclePeriodSchedule[];
   }): Promise<CycleSchedulePreview> {
     return apiPost('/cycles/schedule-preview', body);
   },

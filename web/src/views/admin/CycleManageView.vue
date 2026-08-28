@@ -194,10 +194,31 @@ const createPeriodRange = ref<[Date, Date] | null>(null);
 const createInitialSnapshot = ref('');
 const editingWorkflowVersion = ref<1 | 2>(2);
 const editingReviewStatus = ref<AssessmentCycle['reviewStatus']>();
-const confirmedScoringFrequency = ref<ScoringFrequency>('monthly');
+const editingCycleOriginal = ref<AssessmentCycle | null>(null);
+type SchedulePreviewMode = 'defaults' | 'validate';
+type ScheduleRollbackScope = 'frequency' | 'structure';
+interface ConfirmedScoringContext {
+  type: CycleType;
+  name: string;
+  startDate?: Date;
+  endDate?: Date;
+  periodRange: [Date, Date] | null;
+  scoringFrequency: ScoringFrequency;
+  periodSchedules: CyclePeriodSchedule[];
+  scheduleBlockers: CycleScheduleIssue[];
+  scheduleWarnings: CycleScheduleIssue[];
+  scheduleCustomized: boolean;
+  scheduleProvisionalYears: number[];
+  nameCustomized: boolean;
+  scheduleNodes: Record<string, Date | undefined>;
+}
+const confirmedScoringContext = ref<ConfirmedScoringContext | null>(null);
 let schedulePreviewTimer: ReturnType<typeof setTimeout> | undefined;
 let schedulePreviewRequest = 0;
+let activeSchedulePreview: Promise<boolean> | null = null;
 let pendingSchedulePreviewReason = '';
+let pendingSchedulePreviewMode: SchedulePreviewMode = 'defaults';
+let pendingScheduleRollbackScope: ScheduleRollbackScope | undefined;
 const notificationSettings = ref<DingtalkNotificationSettings | null>(null);
 const notificationSettingsLoading = ref(false);
 const notificationSettingsSaving = ref(false);
@@ -315,6 +336,74 @@ function createFormSnapshot(): string {
   });
 }
 
+function cloneDate(value: Date | undefined): Date | undefined {
+  return value ? new Date(value.getTime()) : undefined;
+}
+
+function captureConfirmedScoringContext() {
+  confirmedScoringContext.value = {
+    type: createForm.type,
+    name: createForm.name,
+    startDate: cloneDate(createForm.startDate),
+    endDate: cloneDate(createForm.endDate),
+    periodRange: createPeriodRange.value
+      ? [cloneDate(createPeriodRange.value[0])!, cloneDate(createPeriodRange.value[1])!]
+      : null,
+    scoringFrequency: scoringPlan.scoringFrequency,
+    periodSchedules: clonePeriodSchedules(scoringPlan.periodSchedules),
+    scheduleBlockers: scoringPlan.scheduleBlockers.map((issue) => ({ ...issue })),
+    scheduleWarnings: scoringPlan.scheduleWarnings.map((issue) => ({ ...issue })),
+    scheduleCustomized: createScheduleCustomized.value,
+    scheduleProvisionalYears: [...createScheduleProvisionalYears.value],
+    nameCustomized: createNameCustomized.value,
+    scheduleNodes: Object.fromEntries(
+      CREATE_SCHEDULE_NODES.map(({ key }) => [key, cloneDate(createForm[key])]),
+    ),
+  };
+}
+
+function syncConfirmedScheduleSnapshot() {
+  if (!confirmedScoringContext.value) return;
+  confirmedScoringContext.value.periodSchedules = clonePeriodSchedules(scoringPlan.periodSchedules);
+  confirmedScoringContext.value.scheduleBlockers = scoringPlan.scheduleBlockers.map((issue) => ({ ...issue }));
+  confirmedScoringContext.value.scheduleWarnings = scoringPlan.scheduleWarnings.map((issue) => ({ ...issue }));
+}
+
+function invalidateSchedulePreview() {
+  schedulePreviewRequest += 1;
+}
+
+function restoreConfirmedScoringContext(scope: ScheduleRollbackScope) {
+  const confirmed = confirmedScoringContext.value;
+  if (!confirmed) return;
+  invalidateSchedulePreview();
+  if (schedulePreviewTimer) clearTimeout(schedulePreviewTimer);
+  schedulePreviewTimer = undefined;
+  pendingSchedulePreviewReason = '';
+  pendingScheduleRollbackScope = undefined;
+  if (scope === 'structure') {
+    createForm.type = confirmed.type;
+    if (!createNameCustomized.value) {
+      createForm.name = confirmed.name;
+      createNameCustomized.value = confirmed.nameCustomized;
+    }
+    createForm.startDate = cloneDate(confirmed.startDate);
+    createForm.endDate = cloneDate(confirmed.endDate);
+    createPeriodRange.value = confirmed.periodRange
+      ? [cloneDate(confirmed.periodRange[0])!, cloneDate(confirmed.periodRange[1])!]
+      : null;
+    createScheduleCustomized.value = confirmed.scheduleCustomized;
+    createScheduleProvisionalYears.value = [...confirmed.scheduleProvisionalYears];
+    CREATE_SCHEDULE_NODES.forEach(({ key }) => {
+      createForm[key] = cloneDate(confirmed.scheduleNodes[key]);
+    });
+  }
+  scoringPlan.scoringFrequency = confirmed.scoringFrequency;
+  scoringPlan.periodSchedules = clonePeriodSchedules(confirmed.periodSchedules);
+  scoringPlan.scheduleBlockers = confirmed.scheduleBlockers.map((issue) => ({ ...issue }));
+  scoringPlan.scheduleWarnings = confirmed.scheduleWarnings.map((issue) => ({ ...issue }));
+}
+
 const editForm = reactive<Record<DeadlineKey, Date | undefined>>({
   deadlineIndicatorSetting: undefined,
   deadlineIndicatorConfirm: undefined,
@@ -354,10 +443,16 @@ const canOpenImmediately = computed(() => {
 
 function resetCreateForm() {
   if (schedulePreviewTimer) clearTimeout(schedulePreviewTimer);
+  invalidateSchedulePreview();
+  activeSchedulePreview = null;
   pendingSchedulePreviewReason = '';
+  pendingSchedulePreviewMode = 'defaults';
+  pendingScheduleRollbackScope = undefined;
   editingCycleId.value = null;
   editingWorkflowVersion.value = 2;
   editingReviewStatus.value = undefined;
+  editingCycleOriginal.value = null;
+  confirmedScoringContext.value = null;
   advancedCreateVisible.value = false;
   advancedCreateSections.value = [];
   createScheduleCustomized.value = false;
@@ -391,7 +486,6 @@ function resetCreateForm() {
   createForm.gradeDMaxRatio = 10;
   createForm.publishVisibleFields = { ...DEFAULT_VISIBLE_FIELDS };
   scoringPlan.scoringFrequency = 'monthly';
-  confirmedScoringFrequency.value = 'monthly';
   scoringPlan.periodSchedules = [];
   scoringPlan.scheduleBlockers = [];
   scoringPlan.scheduleWarnings = [];
@@ -480,7 +574,10 @@ function handleCreateTypeChange(type: CycleType) {
   const fixedFrequency = requiredScoringFrequency(type);
   if (fixedFrequency) scoringPlan.scoringFrequency = fixedFrequency;
   applyCycleTypePreset(type);
-  void refreshScoringPlan({ reason: '周期类型已调整，需要重新生成评分计划' });
+  void refreshScoringPlan({
+    reason: '周期类型已调整，需要重新生成评分计划',
+    rollbackOnCancel: 'structure',
+  });
 }
 
 function handleCreateNameInput() {
@@ -494,7 +591,7 @@ async function handleCreatePeriodRangeChange(value: [Date, Date] | null) {
   createForm.endDate = value?.[1];
   syncGeneratedName();
   await handleCreatePeriodChange(previousStartDate, previousEndDate);
-  scheduleScoringPreview('考核期间已调整，需要重新生成评分计划');
+  scheduleScoringPreview('考核期间已调整，需要重新生成评分计划', 'defaults', 'structure');
 }
 
 async function handleSemiannualStartDateChange(value: Date | null) {
@@ -514,7 +611,7 @@ async function handleSemiannualStartDateChange(value: Date | null) {
   createPeriodRange.value = [start.toDate(), end.toDate()];
   syncGeneratedName();
   await handleCreatePeriodChange(previousStartDate, previousEndDate);
-  scheduleScoringPreview('考核期间已调整，需要重新生成评分计划');
+  scheduleScoringPreview('考核期间已调整，需要重新生成评分计划', 'defaults', 'structure');
   ElMessage.info('已按开始日期自动补齐连续六个自然月');
 }
 
@@ -527,7 +624,7 @@ async function handleSemiannualEndDateChange(value: Date | null) {
     : null;
   syncGeneratedName();
   await handleCreatePeriodChange(previousStartDate, previousEndDate);
-  scheduleScoringPreview('考核期间已调整，需要重新生成评分计划');
+  scheduleScoringPreview('考核期间已调整，需要重新生成评分计划', 'defaults', 'structure');
 }
 
 function applyDefaultCreateSchedule() {
@@ -557,6 +654,7 @@ function openEditCycle(cycle: AssessmentCycle) {
   editingCycleId.value = cycle.id;
   editingWorkflowVersion.value = cycle.workflowVersion === 2 ? 2 : 1;
   editingReviewStatus.value = cycle.reviewStatus;
+  editingCycleOriginal.value = cycle;
   createForm.name = cycle.name;
   createForm.type = cycle.type;
   createForm.startDate = toDate(cycle.startDate);
@@ -565,8 +663,7 @@ function openEditCycle(cycle: AssessmentCycle) {
   createForm.goalSettingOpenAt = toDate(cycle.goalSettingOpenAt);
   createForm.selfEvalOpenAt = toDate(cycle.selfEvalOpenAt);
   createForm.hrOwnerId = cycle.hrOwnerId;
-  createForm.reviewerId = cycle.reviewerId
-    ?? (auth.user?.sysRole === 'hr' ? auth.user.id : undefined);
+  createForm.reviewerId = cycle.reviewerId;
   createForm.monthlyFollowUpRequired = Boolean(cycle.monthlyFollowUpRequired);
   createForm.participantScope = (
     (cycle.participantDeptIds?.length ?? 0) > 0
@@ -587,7 +684,6 @@ function openEditCycle(cycle: AssessmentCycle) {
   });
   if (editingWorkflowVersion.value === 2) {
     scoringPlan.scoringFrequency = cycle.scoringFrequency ?? 'monthly';
-    confirmedScoringFrequency.value = scoringPlan.scoringFrequency;
     scoringPlan.periodSchedules = clonePeriodSchedules(cycle.periodSchedules ?? []);
     scoringPlan.scheduleBlockers = [];
     scoringPlan.scheduleWarnings = [];
@@ -603,6 +699,7 @@ function openEditCycle(cycle: AssessmentCycle) {
   advancedCreateVisible.value = true;
   advancedCreateSections.value = ['schedule', 'grades', 'publication'];
   createInitialSnapshot.value = createFormSnapshot();
+  if (editingWorkflowVersion.value === 2) captureConfirmedScoringContext();
   if (!notificationSettings.value) void loadNotificationSettings();
   createDialogVisible.value = true;
 }
@@ -815,57 +912,123 @@ async function confirmScheduleRegeneration(reason: string): Promise<boolean> {
 async function refreshScoringPlan(options: {
   reason?: string;
   preserveExceptions?: boolean;
-  previousFrequency?: ScoringFrequency;
+  restorePeriodKey?: string;
+  rollbackOnCancel?: ScheduleRollbackScope;
 } = {}): Promise<boolean> {
   if (!isWorkflowV2Form.value || !createForm.startDate || !createForm.endDate) return false;
   const requestId = ++schedulePreviewRequest;
-  const preview = await cyclesApi.previewSchedule({
-    type: createForm.type,
-    scoringFrequency: scoringPlan.scoringFrequency,
-    startDate: formatDateLocal(createForm.startDate)!,
-    endDate: formatDateLocal(createForm.endDate)!,
-  });
-  if (requestId !== schedulePreviewRequest) return false;
+  const contextFingerprint = scoringPreviewFingerprint(false);
+  const promise = (async () => {
+    try {
+      const preview = await cyclesApi.previewSchedule({
+        type: createForm.type,
+        scoringFrequency: scoringPlan.scoringFrequency,
+        startDate: formatDateLocal(createForm.startDate)!,
+        endDate: formatDateLocal(createForm.endDate)!,
+      });
+      if (requestId !== schedulePreviewRequest || contextFingerprint !== scoringPreviewFingerprint(false)) return false;
 
-  if (options.reason && !await confirmScheduleRegeneration(options.reason)) {
-    if (options.previousFrequency) scoringPlan.scoringFrequency = options.previousFrequency;
-    return false;
-  }
+      if (options.reason && !await confirmScheduleRegeneration(options.reason)) {
+        if (options.rollbackOnCancel) restoreConfirmedScoringContext(options.rollbackOnCancel);
+        return false;
+      }
+      if (requestId !== schedulePreviewRequest || contextFingerprint !== scoringPreviewFingerprint(false)) return false;
 
-  const exceptions = new Map(
-    scoringPlan.periodSchedules
-      .filter((schedule) => schedule.isException)
-      .map((schedule) => [schedule.periodKey, { ...schedule }]),
-  );
-  scoringPlan.periodSchedules = preview.schedules.map((schedule) => (
-    options.preserveExceptions && exceptions.has(schedule.periodKey)
-      ? { ...exceptions.get(schedule.periodKey)! }
-      : { ...schedule }
-  ));
-  scoringPlan.scoringFrequency = preview.scoringFrequency;
-  confirmedScoringFrequency.value = preview.scoringFrequency;
-  scoringPlan.scheduleBlockers = [...preview.blockers];
-  scoringPlan.scheduleWarnings = [...preview.warnings];
-  return true;
+      const currentSchedules = new Map(
+        scoringPlan.periodSchedules.map((schedule) => [schedule.periodKey, { ...schedule }]),
+      );
+      scoringPlan.periodSchedules = preview.schedules.map((schedule) => {
+        const current = currentSchedules.get(schedule.periodKey);
+        if (options.restorePeriodKey && schedule.periodKey !== options.restorePeriodKey && current) return current;
+        if (options.preserveExceptions && current?.isException) return current;
+        return { ...schedule };
+      });
+      scoringPlan.scoringFrequency = preview.scoringFrequency;
+      scoringPlan.scheduleBlockers = [...preview.blockers];
+      scoringPlan.scheduleWarnings = [...preview.warnings];
+      captureConfirmedScoringContext();
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  return trackSchedulePreview(promise);
 }
 
-function scheduleScoringPreview(reason: string) {
+function scoringPreviewFingerprint(includeSchedules: boolean): string {
+  return JSON.stringify({
+    type: createForm.type,
+    scoringFrequency: scoringPlan.scoringFrequency,
+    startDate: formatDateLocal(createForm.startDate),
+    endDate: formatDateLocal(createForm.endDate),
+    ...(includeSchedules && { schedules: scoringPlan.periodSchedules }),
+  });
+}
+
+function trackSchedulePreview(promise: Promise<boolean>): Promise<boolean> {
+  activeSchedulePreview = promise;
+  void promise.then(() => {
+    if (activeSchedulePreview === promise) activeSchedulePreview = null;
+  });
+  return promise;
+}
+
+async function validateCurrentScoringPlan(): Promise<boolean> {
+  if (!isWorkflowV2Form.value || !createForm.startDate || !createForm.endDate) return false;
+  if (scoringPlan.periodSchedules.length === 0) return false;
+  const requestId = ++schedulePreviewRequest;
+  const contextFingerprint = scoringPreviewFingerprint(true);
+  const schedules = clonePeriodSchedules(scoringPlan.periodSchedules);
+  const promise = (async () => {
+    try {
+      const preview = await cyclesApi.previewSchedule({
+        type: createForm.type,
+        scoringFrequency: scoringPlan.scoringFrequency,
+        startDate: formatDateLocal(createForm.startDate)!,
+        endDate: formatDateLocal(createForm.endDate)!,
+        schedules,
+      });
+      if (requestId !== schedulePreviewRequest || contextFingerprint !== scoringPreviewFingerprint(true)) return false;
+      scoringPlan.scoringFrequency = preview.scoringFrequency;
+      scoringPlan.periodSchedules = clonePeriodSchedules(preview.schedules);
+      scoringPlan.scheduleBlockers = preview.blockers.map((issue) => ({ ...issue }));
+      scoringPlan.scheduleWarnings = preview.warnings.map((issue) => ({ ...issue }));
+      syncConfirmedScheduleSnapshot();
+      return true;
+    } catch {
+      return false;
+    }
+  })();
+  return trackSchedulePreview(promise);
+}
+
+function scheduleScoringPreview(
+  reason: string,
+  mode: SchedulePreviewMode = 'defaults',
+  rollbackOnCancel?: ScheduleRollbackScope,
+) {
   if (!isWorkflowV2Form.value) return;
   if (schedulePreviewTimer) clearTimeout(schedulePreviewTimer);
+  invalidateSchedulePreview();
   pendingSchedulePreviewReason = reason;
+  pendingSchedulePreviewMode = mode;
+  pendingScheduleRollbackScope = rollbackOnCancel;
   schedulePreviewTimer = setTimeout(() => {
     schedulePreviewTimer = undefined;
     pendingSchedulePreviewReason = '';
-    void refreshScoringPlan({ reason });
+    pendingSchedulePreviewMode = 'defaults';
+    pendingScheduleRollbackScope = undefined;
+    void (mode === 'validate'
+      ? validateCurrentScoringPlan()
+      : refreshScoringPlan({ reason, rollbackOnCancel }));
   }, 300);
 }
 
 async function handleScoringFrequencyChange(frequency: ScoringFrequency) {
-  const previousFrequency = confirmedScoringFrequency.value;
   scoringPlan.scoringFrequency = frequency;
   await refreshScoringPlan({
     reason: '评分频率已调整，需要按新频率重新生成评分计划',
-    previousFrequency,
+    rollbackOnCancel: 'frequency',
   });
 }
 
@@ -873,40 +1036,31 @@ function handleScoringSchedulesUpdate(schedules: CyclePeriodSchedule[]) {
   scoringPlan.periodSchedules = clonePeriodSchedules(schedules);
   const blockers: CycleScheduleIssue[] = [];
   schedules.forEach((schedule) => {
-    if (dayjs(schedule.selfEvalDueAt).isBefore(dayjs(schedule.selfEvalOpenAt))) {
+    if (!dayjs(schedule.selfEvalOpenAt).isBefore(dayjs(schedule.selfEvalDueAt))) {
       blockers.push({
-        code: 'SELF_EVAL_DUE_BEFORE_OPEN',
+        code: 'SELF_EVAL_OPEN_NOT_BEFORE_DUE',
         periodKey: schedule.periodKey,
-        message: '员工完成时间不得早于自评开放时间',
+        message: '自评开放时间必须早于自评截止时间',
       });
       return;
     }
-    if (dayjs(schedule.managerDueAt).isBefore(dayjs(schedule.selfEvalDueAt))) {
+    if (!dayjs(schedule.selfEvalDueAt).isBefore(dayjs(schedule.managerDueAt))) {
       blockers.push({
-        code: 'MANAGER_DUE_BEFORE_SELF_EVAL',
+        code: 'SELF_EVAL_DUE_NOT_BEFORE_MANAGER_DUE',
         periodKey: schedule.periodKey,
-        message: '主管完成时间不得早于员工完成时间',
+        message: '自评截止时间必须早于主管评分截止时间',
       });
     }
   });
   scoringPlan.scheduleBlockers = blockers;
+  scoringPlan.scheduleWarnings = [];
+  syncConfirmedScheduleSnapshot();
+  scheduleScoringPreview('', 'validate');
 }
 
 async function handleRestoreScoringSchedule(schedule: CyclePeriodSchedule) {
-  if (!createForm.startDate || !createForm.endDate) return;
-  const preview = await cyclesApi.previewSchedule({
-    type: createForm.type,
-    scoringFrequency: scoringPlan.scoringFrequency,
-    startDate: formatDateLocal(createForm.startDate)!,
-    endDate: formatDateLocal(createForm.endDate)!,
-  });
-  const restored = preview.schedules.find((item) => item.periodKey === schedule.periodKey);
-  if (!restored) return;
-  scoringPlan.periodSchedules = scoringPlan.periodSchedules.map((item) => (
-    item.periodKey === schedule.periodKey ? { ...restored } : { ...item }
-  ));
-  scoringPlan.scheduleBlockers = [...preview.blockers];
-  scoringPlan.scheduleWarnings = [...preview.warnings];
+  if (!await refreshScoringPlan({ restorePeriodKey: schedule.periodKey })) return;
+  await validateCurrentScoringPlan();
 }
 
 async function handleRestoreAllScoringSchedules() {
@@ -914,10 +1068,11 @@ async function handleRestoreAllScoringSchedules() {
 }
 
 async function handleApplyUnifiedScoringRule(options: { preserveExceptions: boolean }) {
-  await refreshScoringPlan({
+  if (!await refreshScoringPlan({
     reason: options.preserveExceptions ? undefined : '统一调整将覆盖特殊月份',
     preserveExceptions: options.preserveExceptions,
-  });
+  })) return;
+  await validateCurrentScoringPlan();
 }
 
 function getCreateScheduleBoundaryWarning(node: (typeof CREATE_SCHEDULE_NODES)[number]): string {
@@ -1024,6 +1179,14 @@ function buildCreateBody(): CreateCycleBody {
 
 async function handleCreate(openWorkspace = false) {
   if (!createFormRef.value) return;
+  if (isEditMode.value && createFormSnapshot() === createInitialSnapshot.value) {
+    const unchangedCycle = editingCycleOriginal.value;
+    createDialogVisible.value = false;
+    resetCreateForm();
+    ElMessage.info('周期配置未修改，已保留当前审核状态');
+    if (openWorkspace && unchangedCycle) await openCycleWorkspace(unchangedCycle);
+    return;
+  }
   try {
     await createFormRef.value.validate();
   } catch {
@@ -1036,16 +1199,30 @@ async function handleCreate(openWorkspace = false) {
     return;
   }
 
-  if (isWorkflowV2Form.value && schedulePreviewTimer) {
-    clearTimeout(schedulePreviewTimer);
-    schedulePreviewTimer = undefined;
-    const reason = pendingSchedulePreviewReason;
-    pendingSchedulePreviewReason = '';
-    if (!await refreshScoringPlan({ reason })) return;
-  }
-  if (isWorkflowV2Form.value && scoringPlan.periodSchedules.length === 0) {
-    ElMessage.warning('评分计划尚未生成，请确认周期类型和考核期间');
-    return;
+  if (isWorkflowV2Form.value) {
+    if (activeSchedulePreview) {
+      const completed = await activeSchedulePreview;
+      if (!completed && !schedulePreviewTimer) return;
+    }
+    if (schedulePreviewTimer) {
+      clearTimeout(schedulePreviewTimer);
+      schedulePreviewTimer = undefined;
+      const reason = pendingSchedulePreviewReason;
+      const mode = pendingSchedulePreviewMode;
+      const rollbackOnCancel = pendingScheduleRollbackScope;
+      pendingSchedulePreviewReason = '';
+      pendingSchedulePreviewMode = 'defaults';
+      pendingScheduleRollbackScope = undefined;
+      const refreshed = mode === 'validate'
+        ? await validateCurrentScoringPlan()
+        : await refreshScoringPlan({ reason, rollbackOnCancel });
+      if (!refreshed) return;
+    }
+    if (scoringPlan.periodSchedules.length === 0) {
+      ElMessage.warning('评分计划尚未生成，请确认周期类型和考核期间');
+      return;
+    }
+    if (!await validateCurrentScoringPlan()) return;
   }
 
   if (isWorkflowV2Form.value && scoringPlan.scheduleBlockers.length > 0) {

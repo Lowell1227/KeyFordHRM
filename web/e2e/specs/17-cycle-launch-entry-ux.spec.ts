@@ -36,6 +36,7 @@ const createdCycle = {
   deadlinePublish: '2027-01-14T18:00:00.000Z',
   status: 'draft',
   hrOwnerId: 'hr-1',
+  reviewerId: 'hr-1',
   participantDeptIds: [],
   participantUserIds: [],
   explicitExemptDeptIds: [],
