@@ -180,6 +180,9 @@ export class LaunchService {
     const candidates = isWorkflowV2
       ? this.includeCompanyFinalApprover(selection.included, companyFinalApprover)
       : selection.included;
+    const exclusions = isWorkflowV2 && this.isEligibleCompanyFinalApprover(companyFinalApprover)
+      ? selection.exclusions.filter(({ employeeId }) => employeeId !== companyFinalApprover.id)
+      : selection.exclusions;
     const deptMap = await this.buildDeptMap(client);
     const exemptRatio = await this.getExemptRatio(client);
 
@@ -210,7 +213,7 @@ export class LaunchService {
       participantCount: candidates.length,
       templateCount: 0,
       participants: plan?.participants ?? [],
-      ...(isWorkflowV2 && { exclusions: selection.exclusions }),
+      ...(isWorkflowV2 && { exclusions }),
       blockers,
       warnings,
     };

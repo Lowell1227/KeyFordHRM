@@ -527,6 +527,27 @@ describe('LaunchService preflight', () => {
     });
   });
 
+  it('removes a stale probation exclusion when the final approver reload is active', async () => {
+    const probationSnapshot = {
+      ...companyFinalApprover,
+      status: 'probation',
+    };
+    tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle());
+    tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
+    mockV2Users([activeCandidate, probationSnapshot], companyFinalApprover);
+
+    const preflight = await service.preflight(cycleId);
+
+    expect(preflight.participants).toContainEqual(expect.objectContaining({
+      employeeId: companyFinalApproverId,
+      participantDisposition: 'top_leader_exempt',
+    }));
+    expect(preflight.exclusions).not.toContainEqual(expect.objectContaining({
+      employeeId: companyFinalApproverId,
+      reasonCode: 'PROBATION_NOT_IN_PLAN',
+    }));
+  });
+
   it('blocks workflow v2 preflight when the company final approver is missing', async () => {
     tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle({ companyFinalApproverId: null }));
     tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
