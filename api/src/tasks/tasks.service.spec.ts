@@ -509,6 +509,30 @@ describe('TasksService', () => {
   describe('visibility persistence and aligned objectives', () => {
     const updatedAt = new Date('2026-08-08T08:00:00.000Z');
 
+    it('allows an HR administrator to save their own goal draft as the employee', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...makeTask('indicator_drafting'),
+        updatedAt,
+      });
+      jest.spyOn(service, 'findOne').mockResolvedValue({ id: 'task-1' } as TaskDetail);
+
+      await expect(service.setIndicators(
+        'task-1',
+        {
+          expectedUpdatedAt: updatedAt.toISOString(),
+          action: 'save',
+          instances: [{ name: 'Quarterly delivery', weight: 1, visibilityScope: 'company' }],
+        } as any,
+        makeViewer({ id: 'emp-1', sysRole: SysRole.hr }),
+      )).resolves.toEqual({ id: 'task-1' });
+
+      expect(transactionClient.indicatorInstance.create).toHaveBeenCalledWith(
+        expect.objectContaining({
+          data: expect.objectContaining({ name: 'Quarterly delivery' }),
+        }),
+      );
+    });
+
     it('returns only aligned objectives that remain visible to the viewer', async () => {
       const task = buildFullTask('indicator_reviewing');
       task.indicatorInstances = [

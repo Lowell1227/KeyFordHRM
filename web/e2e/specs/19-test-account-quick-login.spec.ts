@@ -35,10 +35,11 @@ test.describe('受控测试账号快捷登录', () => {
     await toggle.click();
     await expect(panel).toBeVisible();
     await expect(panel).toContainText('仅用于测试组织与测试数据');
+    await expect(panel).toContainText('统一密码 0000');
     await expect(panel.getByTestId('test-account-login-button')).toHaveCount(2);
   });
 
-  test('登录页从后端读取测试身份且不再内置统一密码', async () => {
+  test('登录页从后端读取测试身份且快捷登录不复用密码接口', async () => {
     const source = await readFile(loginViewPath, 'utf8');
 
     expect(source).toContain('authApi.getTestAccounts()');

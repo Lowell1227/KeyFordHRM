@@ -667,11 +667,13 @@ export class TasksService {
     const action = dto.action ?? 'submit';
     const isDraftStatus = task.status === 'indicator_drafting' || task.status === 'indicator_setting';
     const isReviewStatus = task.status === 'indicator_reviewing' || task.status === 'indicator_setting';
+    const actsAsEmployee = isEmployee && isDraftStatus;
+    const actsAsReviewer = (isManager || isAdmin) && isReviewStatus;
 
     if (!isEmployee && !isManager && !isAdmin) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权限维护该任务指标' });
     }
-    if ((isEmployee && !isDraftStatus) || ((isManager || isAdmin) && !isReviewStatus)) {
+    if (!actsAsEmployee && !actsAsReviewer) {
       throw new ConflictException({
         code: ERROR_CODE.CONFLICT,
         message: '只有指标制定中才允许维护本周期指标',
@@ -716,8 +718,8 @@ export class TasksService {
             actorId: viewer.id,
             comment: note,
             extraData: {
-              type: isEmployee ? 'indicator_draft_saved' : 'indicator_review_saved',
-              source: isEmployee ? 'employee' : isAdmin ? 'admin' : 'manager',
+              type: actsAsEmployee ? 'indicator_draft_saved' : 'indicator_review_saved',
+              source: actsAsEmployee ? 'employee' : isAdmin ? 'admin' : 'manager',
               count: validItems.length,
             },
           },
@@ -725,7 +727,7 @@ export class TasksService {
         return;
       }
 
-      if (isEmployee) {
+      if (actsAsEmployee) {
         await this.flowService.transitionTx(tx, {
           task,
           action: 'submit',
@@ -745,7 +747,7 @@ export class TasksService {
         return;
       }
 
-      if (isManager || isAdmin) {
+      if (actsAsReviewer) {
         await this.flowService.transitionTx(tx, {
           task,
           action: 'submit',

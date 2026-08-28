@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores/auth.store';
 import { loadDingTalkJsApi } from '@/utils/dingtalk-jsapi';
 import { dingtalkLoginErrorMessage } from '@/utils/dingtalk-login-error';
+import { buildDingTalkOAuthUrl } from '@/utils/dingtalk-oauth';
 import { authApi, type TestAccount } from '@/api/auth.api';
 
 const auth = useAuthStore();
@@ -113,15 +114,11 @@ async function onDingTalkLogin() {
   }
 
   loading.value = true;
-  const params = new URLSearchParams({
-    redirect_uri: getDingTalkRedirectUri(),
-    response_type: 'code',
-    client_id: DINGTALK_APP_KEY,
-    scope: 'openid corpid',
-    prompt: 'consent',
+  window.location.href = buildDingTalkOAuthUrl({
+    redirectUri: getDingTalkRedirectUri(),
+    appKey: DINGTALK_APP_KEY,
     corpId: DINGTALK_CORP_ID,
   });
-  window.location.href = `https://login.dingtalk.com/oauth2/auth?${params.toString()}`;
 }
 
 async function onPasswordLogin() {
@@ -305,6 +302,7 @@ async function onPasswordLogin() {
         <span aria-hidden="true">i</span>
         仅用于测试组织与测试数据，不关联钉钉和真实员工
       </p>
+      <p class="quick-login__password">统一密码 0000，也可直接选择场景快捷登录</p>
       <div class="quick-login__grid">
         <el-button
           v-for="acc in testAccounts"
@@ -756,6 +754,14 @@ async function onPasswordLogin() {
   font-family: Georgia, serif;
   font-size: 12px;
   font-weight: 700;
+}
+
+.quick-login__password {
+  margin: -6px 0 14px;
+  color: #425466;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
 }
 
 .quick-login__grid {

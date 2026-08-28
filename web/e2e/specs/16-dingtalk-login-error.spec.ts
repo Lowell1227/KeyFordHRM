@@ -3,6 +3,7 @@ import { spawnSync } from 'node:child_process';
 import { readFile } from 'node:fs/promises';
 import { fileURLToPath } from 'node:url';
 import { dingtalkLoginErrorMessage } from '../../src/utils/dingtalk-login-error';
+import { buildDingTalkOAuthUrl } from '../../src/utils/dingtalk-oauth';
 
 const loginViewPath = fileURLToPath(
   new URL('../../src/views/auth/LoginView.vue', import.meta.url),
@@ -19,6 +20,22 @@ const dingtalkBuildValidatorPath = fileURLToPath(
 );
 
 test.describe('DingTalk login error message', () => {
+  test('lets an already authorized DingTalk account return without forced consent', () => {
+    const url = new URL(buildDingTalkOAuthUrl({
+      appKey: 'ding-app-key',
+      corpId: 'ding-corp-id',
+      redirectUri: 'https://hr.example.com/auth/callback',
+    }));
+
+    expect(`${url.origin}${url.pathname}`).toBe('https://login.dingtalk.com/oauth2/auth');
+    expect(url.searchParams.get('redirect_uri')).toBe('https://hr.example.com/auth/callback');
+    expect(url.searchParams.get('response_type')).toBe('code');
+    expect(url.searchParams.get('client_id')).toBe('ding-app-key');
+    expect(url.searchParams.get('scope')).toBe('openid corpid');
+    expect(url.searchParams.get('corpId')).toBe('ding-corp-id');
+    expect(url.searchParams.has('prompt')).toBe(false);
+  });
+
   test('turns a missing contact permission into an actionable message', () => {
     const error = {
       response: {
