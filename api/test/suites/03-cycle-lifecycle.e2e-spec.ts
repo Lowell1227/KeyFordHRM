@@ -102,6 +102,14 @@ describe("03-cycle-lifecycle", () => {
       deadlineApproval: new Date("2026-02-10"),
       deadlinePublish: new Date("2026-02-15"),
     });
+    await app.prisma.assessmentCycle.update({
+      where: { id: cycle.id },
+      data: {
+        reviewerId: hrId,
+        reviewStatus: "approved",
+        reviewedAt: new Date("2025-12-31T00:00:00.000Z"),
+      },
+    });
 
     const launchResult = await launchChecked(cycle.id, {
       id: hrId,

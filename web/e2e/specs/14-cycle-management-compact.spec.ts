@@ -1,5 +1,10 @@
 import { expect, test } from '@playwright/test';
-import type { AssessmentCycle, Department, LaunchPreflightResult } from '../../src/types/api.types';
+import type {
+  AssessmentCycle,
+  CyclePeriodSchedule,
+  Department,
+  LaunchPreflightResult,
+} from '../../src/types/api.types';
 import {
   cyclePrimaryActionLabel,
   cycleNextStep,
@@ -232,6 +237,46 @@ async function mockCyclePage(
   await page.route('**/api/v1/cycles**', (route) => {
     const url = new URL(route.request().url());
     cycleRequests.push(url);
+    if (route.request().method() === 'POST' && url.pathname.endsWith('/cycles/schedule-preview')) {
+      const body = route.request().postDataJSON() as {
+        scoringFrequency?: 'monthly' | 'cycle';
+        schedules?: CyclePeriodSchedule[];
+      };
+      const scoringFrequency = body.scoringFrequency === 'cycle' ? 'cycle' : 'monthly';
+      const defaultSchedules: CyclePeriodSchedule[] = scoringFrequency === 'cycle'
+        ? [{
+            periodKey: 'cycle',
+            periodType: 'cycle',
+            sequence: 1,
+            periodStart: '2026-10-01',
+            periodEnd: '2026-12-31',
+            selfEvalOpenAt: '2027-01-04T09:00:00+08:00',
+            selfEvalDueAt: '2027-01-06T18:00:00+08:00',
+            managerDueAt: '2027-01-11T18:00:00+08:00',
+            isException: false,
+          }]
+        : ['10', '11', '12'].map((month, index) => ({
+            periodKey: `2026-${month}`,
+            periodType: 'month' as const,
+            sequence: index + 1,
+            periodStart: `2026-${month}-01`,
+            periodEnd: `2026-${month}-${month === '11' ? '30' : '31'}`,
+            selfEvalOpenAt: `202${month === '12' ? '7-01' : `6-${String(Number(month) + 1).padStart(2, '0')}`}-04T09:00:00+08:00`,
+            selfEvalDueAt: `202${month === '12' ? '7-01' : `6-${String(Number(month) + 1).padStart(2, '0')}`}-06T18:00:00+08:00`,
+            managerDueAt: `202${month === '12' ? '7-01' : `6-${String(Number(month) + 1).padStart(2, '0')}`}-11T18:00:00+08:00`,
+            isException: false,
+          }));
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          scoringFrequency,
+          reviewFrequency: 'cycle',
+          schedules: body.schedules ?? defaultSchedules,
+          blockers: [],
+          warnings: [],
+        })),
+      });
+    }
     const requestedId = url.pathname.match(/\/cycles\/([^/]+)$/)?.[1];
     if (route.request().method() === 'DELETE' && requestedId) {
       options.deletedIds?.push(requestedId);
@@ -503,7 +548,7 @@ test.describe('compact cycle management list', () => {
     await expect(actions.getByRole('button', { name: '编辑', exact: true })).toBeVisible();
     await expect(page.getByTestId('cycle-workspace-submit')).toHaveCount(0);
     const controlBar = page.getByTestId('cycle-preflight-control-bar');
-    await expect(controlBar).toContainText('检查参与人员、直属上级、考核模板和时间计划是否准备完成');
+    await expect(controlBar).toContainText('检查周期审核、参与人员、直属上级和时间计划是否准备完成');
     await expect(controlBar.getByTestId('cycle-preflight-primary-action').getByRole('button', { name: '开始发起检查' })).toBeVisible();
     await expect(page.getByRole('button', { name: '开始发起检查' })).toHaveCount(1);
     await expect(actions.getByRole('button', { name: '查看全部设置', exact: true })).toHaveCount(0);
@@ -547,7 +592,7 @@ test.describe('compact cycle management list', () => {
 
     await page.getByRole('button', { name: draftCycle.name }).click();
     const currentTask = page.getByTestId('cycle-current-action');
-    await expect(currentTask).toContainText('检查参与人员、直属上级、考核模板和时间计划是否准备完成');
+    await expect(currentTask).toContainText('检查周期审核、参与人员、直属上级和时间计划是否准备完成');
     await expect(currentTask).not.toContainText('直属主管');
     await expect(currentTask).not.toContainText('绩效模板');
     await expect(currentTask).not.toContainText('时间设置');
