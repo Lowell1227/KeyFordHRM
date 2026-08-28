@@ -167,6 +167,7 @@ export interface UserQuery {
   sysRole?: SysRole;
   keyword?: string;
   includeTestAccounts?: boolean;
+  unassigned?: boolean;
 }
 
 export interface UpdateUserSettingsBody {
@@ -230,6 +231,9 @@ export interface UpdateLeaderBody {
 export interface UpdateDepartmentStructureBody {
   name?: string;
   parentId?: string | null;
+  company?: CompanyCode;
+  leaderId?: string | null;
+  approverId?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1065,6 +1069,7 @@ export interface Attachment {
   name: string;
   url: string;
   size?: number;
+  mimeType?: string;
 }
 
 /** 申诉列表项（对齐后端 AppealListItem，不含 coefficient）。 */

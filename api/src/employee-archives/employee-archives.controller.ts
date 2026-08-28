@@ -23,6 +23,7 @@ import {
   SetDingtalkIdentityStateDto,
   UpdateEmployeeProfileDto,
   SubmitEmployeeArchiveDraftDto,
+  SubmitDepartmentAssignmentsDto,
 } from './dto/employee-archive.dto';
 import { EmployeeArchivesService } from './employee-archives.service';
 import { EmployeeDataReviewsService } from './employee-data-reviews.service';
@@ -114,6 +115,15 @@ export class EmployeeArchivesController {
     @CurrentUser() operator: AuthUser,
   ) {
     return this.archives.submitDraft(id, dto, operator);
+  }
+
+  @Post('department-assignments')
+  @HrCapabilities('employee_archive_edit')
+  submitDepartmentAssignments(
+    @Body() dto: SubmitDepartmentAssignmentsDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.archives.submitDepartmentAssignments(dto.userIds, dto.departmentId, operator);
   }
 
   @Post(':id/employments')

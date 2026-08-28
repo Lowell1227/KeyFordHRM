@@ -48,6 +48,21 @@ export interface BindDingtalkIdentityInput {
   externalUnionId: string;
 }
 
+const CONTRACT_IMAGE_MAX_COUNT = 5;
+const CONTRACT_ATTACHMENT_MAX_COUNT = 10;
+const CONTRACT_IMAGE_MAX_SIZE = 2 * 1024 * 1024;
+const CONTRACT_ATTACHMENT_MAX_SIZE = 10 * 1024 * 1024;
+const CONTRACT_IMAGE_MIME_TYPES = new Set(['image/jpeg', 'image/png', 'image/webp']);
+const CONTRACT_IMAGE_EXTENSIONS = new Set(['.jpg', '.jpeg', '.png', '.webp']);
+const CONTRACT_ATTACHMENT_MIME_TYPES = new Set([
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+]);
+const CONTRACT_ATTACHMENT_EXTENSIONS = new Set(['.pdf', '.doc', '.docx', '.xls', '.xlsx']);
+
 @Injectable()
 export class EmployeeArchivesService {
   constructor(
@@ -219,7 +234,16 @@ export class EmployeeArchivesService {
   }
 
   async submitDraft(userId: string, input: SubmitEmployeeArchiveDraftDto, operator: AuthUser) {
-    const user = await this.prisma.user.findUnique({
+    return this.submitDraftWithClient(this.prisma, userId, input, operator);
+  }
+
+  private async submitDraftWithClient(
+    client: Pick<Prisma.TransactionClient, 'user' | 'employeeDataChangeRequest'>,
+    userId: string,
+    input: SubmitEmployeeArchiveDraftDto,
+    operator: AuthUser,
+  ) {
+    const user = await client.user.findUnique({
       where: { id: userId, deletedAt: null },
       include: {
         employeeProfile: true,
@@ -245,10 +269,13 @@ export class EmployeeArchivesService {
     this.applySensitiveReplacement(proposedProfile, input.profile, 'bankAccount', 'bankAccountEncrypted', 'bankAccountFingerprint');
     delete proposedProfile.idNumber;
     delete proposedProfile.bankAccount;
-    const proposedContracts = input.contracts?.map((contract, index) => ({
-      ...contract,
-      sequence: typeof contract.sequence === 'number' ? contract.sequence : index,
-    })) ?? baseContracts;
+    const proposedContracts = input.contracts?.map((contract, index) => {
+      this.assertContractMaterials(contract);
+      return {
+        ...contract,
+        sequence: typeof contract.sequence === 'number' ? contract.sequence : index,
+      };
+    }) ?? baseContracts;
     const proposedPerformance = {
       managerId: user.directManagerId,
       ...(input.performance ?? {}),
@@ -273,12 +300,12 @@ export class EmployeeArchivesService {
       createdById: operator.id,
       rejectedReason: null,
     };
-    const pending = await this.prisma.employeeDataChangeRequest.findFirst({
+    const pending = await client.employeeDataChangeRequest.findFirst({
       where: { userId, sourceType: 'manual_archive_change', profileReviewStatus: 'pending' },
       orderBy: { createdAt: 'desc' },
     });
     if (pending) {
-      return this.prisma.employeeDataChangeRequest.update({
+      return client.employeeDataChangeRequest.update({
         where: { id: pending.id },
         data: {
           ...data,
@@ -286,7 +313,7 @@ export class EmployeeArchivesService {
         },
       });
     }
-    return this.prisma.employeeDataChangeRequest.create({
+    return client.employeeDataChangeRequest.create({
       data: {
         userId,
         employeeNo: user.employeeNo,
@@ -297,6 +324,55 @@ export class EmployeeArchivesService {
         performanceReviewStatus: performanceChanged ? 'pending' : 'not_required',
       },
     });
+  }
+
+  async submitDepartmentAssignments(
+    userIds: string[],
+    departmentId: string,
+    operator: AuthUser,
+  ): Promise<{ submitted: number }> {
+    const uniqueUserIds = [...new Set(userIds)];
+    if (uniqueUserIds.length === 0 || uniqueUserIds.length > 100) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '每次请选择 1 至 100 名员工' });
+    }
+    return this.prisma.$transaction(async (tx) => {
+      const department = await tx.department.findUnique({
+        where: { id: departmentId },
+        select: { id: true, isActive: true },
+      });
+      if (!department?.isActive) {
+        throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '目标部门不存在或已停用' });
+      }
+      const users = await tx.user.findMany({
+        where: { id: { in: uniqueUserIds }, deletedAt: null },
+        select: { id: true, deptId: true },
+      });
+      if (users.length !== uniqueUserIds.length) {
+        throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '部分员工不存在或已停用，请刷新后重试' });
+      }
+      const changedUserIds = users.filter((user) => user.deptId !== departmentId).map((user) => user.id);
+      if (changedUserIds.length === 0) return { submitted: 0 };
+
+      const pendingReviews = await tx.employeeDataChangeRequest.findMany({
+        where: { userId: { in: changedUserIds }, profileReviewStatus: 'pending' },
+        select: { userId: true, employeeName: true },
+      });
+      if (pendingReviews.length > 0) {
+        const names = pendingReviews.map((item) => item.employeeName).filter(Boolean).join('、');
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: `${names || '所选员工'}已有档案变更待审，请先处理后再批量调整`,
+        });
+      }
+
+      for (const userId of changedUserIds) {
+        await this.submitDraftWithClient(tx, userId, {
+          employee: { deptId: departmentId },
+          profile: {},
+        }, operator);
+      }
+      return { submitted: changedUserIds.length };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   async createEmploymentRecord(userId: string, input: CreateEmploymentRecordInput, operator: AuthUser) {
@@ -525,6 +601,82 @@ export class EmployeeArchivesService {
     return Object.fromEntries(
       Object.entries(contract).filter(([key]) => !['userId', 'createdAt', 'updatedAt', 'sourceBatchId', 'createdById'].includes(key)),
     );
+  }
+
+  private assertContractMaterials(contract: Record<string, unknown>): void {
+    const images = this.materialList(contract.images, '合同图片');
+    const attachments = this.materialList(contract.attachments, '合同附件');
+    if (images.length > CONTRACT_IMAGE_MAX_COUNT) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '每份合同最多上传 5 张图片' });
+    }
+    if (attachments.length > CONTRACT_ATTACHMENT_MAX_COUNT) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '每份合同最多上传 10 个附件' });
+    }
+    images.forEach((material) => this.assertContractMaterial(
+      material,
+      CONTRACT_IMAGE_MAX_SIZE,
+      CONTRACT_IMAGE_MIME_TYPES,
+      CONTRACT_IMAGE_EXTENSIONS,
+      'employee-contracts/images/',
+      '合同图片单张不能超过 2MB',
+      '合同图片仅支持 JPG、PNG、WEBP',
+    ));
+    attachments.forEach((material) => this.assertContractMaterial(
+      material,
+      CONTRACT_ATTACHMENT_MAX_SIZE,
+      CONTRACT_ATTACHMENT_MIME_TYPES,
+      CONTRACT_ATTACHMENT_EXTENSIONS,
+      'employee-contracts/attachments/',
+      '合同附件单个不能超过 10MB',
+      '合同附件仅支持 PDF、DOC、DOCX、XLS、XLSX',
+    ));
+  }
+
+  private materialList(value: unknown, label: string): Record<string, unknown>[] {
+    if (value === undefined || value === null) return [];
+    if (!Array.isArray(value)) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: `${label}格式不正确` });
+    }
+    return value as Record<string, unknown>[];
+  }
+
+  private assertContractMaterial(
+    material: Record<string, unknown>,
+    maxSize: number,
+    allowedMimeTypes: Set<string>,
+    allowedExtensions: Set<string>,
+    requiredObjectPrefix: string,
+    sizeMessage: string,
+    typeMessage: string,
+  ): void {
+    if (!material || typeof material !== 'object'
+      || typeof material.name !== 'string'
+      || typeof material.url !== 'string'
+      || typeof material.size !== 'number'
+      || typeof material.mimeType !== 'string') {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '合同材料信息不完整' });
+    }
+    if (material.size > maxSize) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: sizeMessage });
+    }
+    const name = material.name.toLowerCase();
+    const extension = name.includes('.') ? name.slice(name.lastIndexOf('.')) : '';
+    if (!allowedMimeTypes.has(material.mimeType) || !allowedExtensions.has(extension)) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: typeMessage });
+    }
+    try {
+      const parsed = new URL(material.url, 'https://hrm.internal');
+      const key = parsed.searchParams.get('key') ?? '';
+      if (!material.url.startsWith('/storage/download?key=')
+        || parsed.pathname !== '/storage/download'
+        || !key.startsWith(requiredObjectPrefix)
+        || key.includes('..')
+        || key.includes('\\')) {
+        throw new Error('invalid contract object key');
+      }
+    } catch {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '合同材料必须通过系统合同专用入口安全上传' });
+    }
   }
 
   private applySensitiveReplacement(

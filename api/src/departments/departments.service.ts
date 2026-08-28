@@ -19,6 +19,8 @@ interface DepartmentStructureRecord {
   company: CompanyCode;
   sortOrder?: number;
   isActive?: boolean;
+  leaderId?: string | null;
+  approverId?: string | null;
 }
 
 type DepartmentChangeAction = 'create' | 'update_structure' | 'update_leader' | 'merge' | 'delete';
@@ -340,6 +342,8 @@ export class DepartmentsService {
         company: true,
         sortOrder: true,
         isActive: true,
+        leaderId: true,
+        approverId: true,
       },
     });
     const parentId = dto.parentId ?? null;
@@ -374,7 +378,16 @@ export class DepartmentsService {
   async updateStructure(id: string, dto: UpdateDepartmentStructureDto, operator: AuthUser) {
     const departments = await this.prisma.department.findMany({
       where: { isActive: true },
-      select: { id: true, name: true, fullPath: true, parentId: true, company: true, isActive: true },
+      select: {
+        id: true,
+        name: true,
+        fullPath: true,
+        parentId: true,
+        company: true,
+        leaderId: true,
+        approverId: true,
+        isActive: true,
+      },
     });
     const target = departments.find((item) => item.id === id);
     if (!target) {
@@ -386,6 +399,9 @@ export class DepartmentsService {
       throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '请输入部门名称' });
     }
     const name = requestedName || target.name;
+    const company = dto.company ?? target.company;
+    const leaderId = dto.leaderId === undefined ? target.leaderId : dto.leaderId;
+    const approverId = dto.approverId === undefined ? target.approverId : dto.approverId;
     if (parentId === id) {
       throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '部门不能挂靠到自身' });
     }
@@ -416,12 +432,36 @@ export class DepartmentsService {
     }
 
     const parent = parentId ? departments.find((item) => item.id === parentId) : null;
+    if (parent && parent.company !== company) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '上级部门与所属公司必须一致' });
+    }
+    if (departments.some((item) => item.parentId === id && item.company !== company)) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '该部门含下级部门，请先调整下级部门后再变更所属公司' });
+    }
+    const responsibilityIds = [...new Set([leaderId, approverId].filter((id): id is string => Boolean(id)))];
+    if (responsibilityIds.length > 0) {
+      const users = await this.prisma.user.findMany({
+        where: { id: { in: responsibilityIds }, deletedAt: null },
+        select: { id: true },
+      });
+      if (users.length !== responsibilityIds.length) {
+        throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '部门负责人或审批人不存在或已停用' });
+      }
+    }
     return this.submitChangeRequest(
       'update_structure',
       id,
       target.name,
-      { id, name: target.name, parentId: target.parentId, fullPath: target.fullPath },
-      { id, name, parentId, parentName: parent?.name ?? null },
+      {
+        id,
+        name: target.name,
+        parentId: target.parentId,
+        fullPath: target.fullPath,
+        company: target.company,
+        leaderId: target.leaderId,
+        approverId: target.approverId,
+      },
+      { id, name, parentId, parentName: parent?.name ?? null, company, leaderId, approverId },
       operator,
     );
   }
@@ -494,24 +534,13 @@ export class DepartmentsService {
         fullPath: true,
         parentId: true,
         isActive: true,
-        _count: {
-          select: {
-            members: { where: { deletedAt: null } },
-            children: { where: { isActive: true } },
-          },
-        },
+        members: { where: { deletedAt: null }, select: { id: true } },
+        children: { where: { isActive: true }, select: { id: true } },
       },
     });
     if (!department || !department.isActive) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '部门不存在或已删除' });
     }
-    if (department._count.members > 0) {
-      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '该部门仍有直属人员，请先合并部门' });
-    }
-    if (department._count.children > 0) {
-      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '该部门仍有下级部门，请先合并部门' });
-    }
-
     return this.submitChangeRequest(
       'delete',
       id,
@@ -522,10 +551,16 @@ export class DepartmentsService {
         fullPath: department.fullPath,
         parentId: department.parentId,
         isActive: true,
-        directMemberCount: department._count.members,
-        childDepartmentCount: department._count.children,
+        directMemberCount: department.members.length,
+        childDepartmentCount: department.children.length,
+        directMemberIds: department.members.map((member) => member.id),
+        childDepartmentIds: department.children.map((child) => child.id),
       },
-      { isActive: false },
+      {
+        isActive: false,
+        releaseMembersToRoot: true,
+        promoteChildrenToParentId: department.parentId,
+      },
       operator,
     );
   }
@@ -561,6 +596,9 @@ export class DepartmentsService {
       }
       if (request.status !== 'pending') {
         throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '该部门变更申请已处理' });
+      }
+      if (request.createdById === operator.id) {
+        throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '不能审核自己提交的部门变更' });
       }
       const claimed = await tx.departmentChangeRequest.updateMany({
         where: { id: requestId, status: 'pending' },
@@ -615,6 +653,12 @@ export class DepartmentsService {
       if (!request) {
         throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '部门变更申请不存在' });
       }
+      if (request.status !== 'pending') {
+        throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '该部门变更申请已处理' });
+      }
+      if (request.createdById === operator.id) {
+        throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '不能审核自己提交的部门变更' });
+      }
       const now = new Date();
       const rejected = await tx.departmentChangeRequest.updateMany({
         where: { id: requestId, status: 'pending' },
@@ -651,30 +695,69 @@ export class DepartmentsService {
     proposedValue: Record<string, unknown>,
     operator: AuthUser,
   ) {
-    return this.prisma.$transaction(async (tx) => {
-      const request = await tx.departmentChangeRequest.create({
-        data: {
-          departmentId,
-          departmentName,
-          action,
-          status: 'pending',
-          baseValue: baseValue as Prisma.InputJsonValue,
-          proposedValue: proposedValue as Prisma.InputJsonValue,
-          createdById: operator.id,
-        },
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        if (departmentId) {
+          const pending = await tx.departmentChangeRequest.findFirst({
+            where: { departmentId, status: { in: ['pending', 'applying'] } },
+            select: { id: true },
+          });
+          if (pending) {
+            throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '该部门已有变更审核中，请先处理现有申请' });
+          }
+        } else if (action === 'create') {
+          const pendingCreates = await tx.departmentChangeRequest.findMany({
+            where: { action: 'create', departmentId: null, status: { in: ['pending', 'applying'] } },
+            select: { id: true, proposedValue: true },
+          });
+          const proposedName = typeof proposedValue.name === 'string' ? proposedValue.name.trim().toLocaleLowerCase() : '';
+          const proposedParentId = typeof proposedValue.parentId === 'string' ? proposedValue.parentId : null;
+          const proposedCompany = typeof proposedValue.company === 'string' ? proposedValue.company : '';
+          const duplicate = pendingCreates.some((item) => {
+            const pendingValue = this.jsonRecord(item.proposedValue);
+            const pendingName = typeof pendingValue.name === 'string' ? pendingValue.name.trim().toLocaleLowerCase() : '';
+            return pendingName === proposedName
+              && (pendingValue.parentId ?? null) === proposedParentId
+              && pendingValue.company === proposedCompany;
+          });
+          if (duplicate) {
+            throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '同一上级下已有同名部门待审核，请先处理现有申请' });
+          }
+        }
+        const request = await tx.departmentChangeRequest.create({
+          data: {
+            departmentId,
+            departmentName,
+            action,
+            status: 'pending',
+            baseValue: baseValue as Prisma.InputJsonValue,
+            proposedValue: proposedValue as Prisma.InputJsonValue,
+            createdById: operator.id,
+          },
+        });
+        await tx.auditLog.create({
+          data: {
+            userId: operator.id,
+            action: 'submit_department_change',
+            entityType: 'department_change_request',
+            entityId: request.id,
+            oldValue: baseValue as Prisma.InputJsonValue,
+            newValue: { action, departmentId, proposedValue } as Prisma.InputJsonValue,
+          },
+        });
+        return request;
       });
-      await tx.auditLog.create({
-        data: {
-          userId: operator.id,
-          action: 'submit_department_change',
-          entityType: 'department_change_request',
-          entityId: request.id,
-          oldValue: baseValue as Prisma.InputJsonValue,
-          newValue: { action, departmentId, proposedValue } as Prisma.InputJsonValue,
-        },
-      });
-      return request;
-    });
+    } catch (error) {
+      if ((error as { code?: string })?.code === 'P2002') {
+        throw new BadRequestException({
+          code: ERROR_CODE.CONFLICT,
+          message: action === 'create'
+            ? '同一上级下已有同名部门待审核，请先处理现有申请'
+            : '该部门已有变更审核中，请先处理现有申请',
+        });
+      }
+      throw error;
+    }
   }
 
   private async applyApprovedChange(tx: Prisma.TransactionClient, request: DepartmentChangeRecord) {
@@ -730,6 +813,8 @@ export class DepartmentsService {
       ('company' in base && target?.company !== base.company)
       || ('sortOrder' in base && target?.sortOrder !== base.sortOrder)
       || ('isActive' in base && target?.isActive !== base.isActive)
+      || ('leaderId' in base && target?.leaderId !== (base.leaderId ?? null))
+      || ('approverId' in base && target?.approverId !== (base.approverId ?? null))
     );
     if (!target || target.name !== base.name || target.parentId !== (base.parentId ?? null) || staleMetadata) {
       throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '正式部门信息已发生变化，请重新提交审核' });
@@ -754,6 +839,8 @@ export class DepartmentsService {
     if (typeof proposed.company === 'string' && Object.values(CompanyCode).includes(proposed.company as CompanyCode)) {
       updateData.company = proposed.company as CompanyCode;
     }
+    if ('leaderId' in proposed) updateData.leaderId = this.nullableJsonString(proposed.leaderId);
+    if ('approverId' in proposed) updateData.approverId = this.nullableJsonString(proposed.approverId);
     if (typeof proposed.sortOrder === 'number') updateData.sortOrder = proposed.sortOrder;
     if (typeof proposed.isActive === 'boolean') updateData.isActive = proposed.isActive;
     await tx.department.update({ where: { id }, data: updateData });
@@ -848,21 +935,129 @@ export class DepartmentsService {
         name: true,
         parentId: true,
         isActive: true,
-        _count: {
-          select: {
-            members: { where: { deletedAt: null } },
-            children: { where: { isActive: true } },
-          },
-        },
+        members: { where: { deletedAt: null }, select: { id: true } },
+        children: { where: { isActive: true }, select: { id: true } },
       },
     });
     if (!department || !department.isActive || department.name !== base.name || department.parentId !== (base.parentId ?? null)) {
       throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '正式部门信息已发生变化，请重新提交审核' });
     }
-    if (department._count.members > 0 || department._count.children > 0) {
-      throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '部门已不为空，请重新处理后提交审核' });
+    const submittedMemberIds = Array.isArray(base.directMemberIds) ? base.directMemberIds.filter((item): item is string => typeof item === 'string') : [];
+    const submittedChildIds = Array.isArray(base.childDepartmentIds) ? base.childDepartmentIds.filter((item): item is string => typeof item === 'string') : [];
+    const currentMemberIds = department.members.map((member) => member.id);
+    const currentChildIds = department.children.map((child) => child.id);
+    if (!this.sameIdSet(currentMemberIds, submittedMemberIds) || !this.sameIdSet(currentChildIds, submittedChildIds)) {
+      throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '部门人员或下级结构已发生变化，请重新提交审核' });
     }
-    await tx.department.update({ where: { id }, data: { isActive: false, parentId: null } });
+
+    if (submittedMemberIds.length > 0) {
+      await this.releaseCurrentEmploymentRecords(tx, submittedMemberIds, id, department.name, request.createdById);
+      await tx.user.updateMany({
+        where: { id: { in: submittedMemberIds }, deptId: id, deletedAt: null },
+        data: { deptId: null },
+      });
+    }
+    if (submittedChildIds.length > 0) {
+      await tx.department.updateMany({
+        where: { id: { in: submittedChildIds }, parentId: id, isActive: true },
+        data: { parentId: department.parentId },
+      });
+    }
+
+    const departments = await this.activeDepartments(tx);
+    const nextDepartments = departments
+      .filter((item) => item.id !== id)
+      .map((item) => item.parentId === id ? { ...item, parentId: department.parentId } : item);
+    const pathMap = this.buildPathMap(nextDepartments);
+    for (const item of nextDepartments) {
+      const nextPath = pathMap.get(item.id);
+      if (nextPath && nextPath !== item.fullPath) {
+        await tx.department.update({ where: { id: item.id }, data: { fullPath: nextPath } });
+      }
+    }
+    await tx.department.update({
+      where: { id },
+      data: { isActive: false, parentId: null, leaderId: null, approverId: null },
+    });
+  }
+
+  private async releaseCurrentEmploymentRecords(
+    tx: Prisma.TransactionClient,
+    userIds: string[],
+    departmentId: string,
+    departmentName: string,
+    createdById: string,
+  ): Promise<void> {
+    const todayParts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(new Date());
+    const part = (type: Intl.DateTimeFormatPartTypes) => todayParts.find((item) => item.type === type)?.value ?? '';
+    const todayText = `${part('year')}-${part('month')}-${part('day')}`;
+    const today = new Date(`${todayText}T00:00:00.000Z`);
+    const yesterday = new Date(today);
+    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
+    const currentRecords = await tx.employmentRecord.findMany({
+      where: {
+        userId: { in: userIds },
+        deptId: departmentId,
+        effectiveFrom: { lte: today },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }],
+      },
+      select: {
+        id: true, userId: true, effectiveFrom: true, effectiveTo: true, company: true, deptId: true,
+        position: true, jobGrade: true, jobFamily: true, directManagerId: true, workLocation: true,
+        employmentType: true, employeeStatus: true, entryDate: true, plannedRegularDate: true,
+        actualRegularDate: true, leaveDate: true, probationMonths: true, changeType: true, reason: true,
+        sourceType: true, sourceBatchId: true, createdById: true,
+      },
+    });
+    for (const record of currentRecords) {
+      const reason = `原部门“${departmentName}”审核删除，人员释放到未分配人员`;
+      if (record.effectiveFrom.getTime() >= today.getTime()) {
+        await tx.employmentRecord.update({
+          where: { id: record.id },
+          data: {
+            deptId: null, changeType: 'department_deleted', reason,
+            sourceType: 'department_change_review', sourceBatchId: null, createdById,
+          },
+        });
+        continue;
+      }
+      await tx.employmentRecord.update({
+        where: { id: record.id },
+        data: { effectiveTo: yesterday },
+      });
+      await tx.employmentRecord.create({
+        data: {
+          userId: record.userId,
+          effectiveFrom: today,
+          effectiveTo: record.effectiveTo,
+          company: record.company,
+          deptId: null,
+          position: record.position,
+          jobGrade: record.jobGrade,
+          jobFamily: record.jobFamily,
+          directManagerId: record.directManagerId,
+          workLocation: record.workLocation,
+          employmentType: record.employmentType,
+          employeeStatus: record.employeeStatus,
+          entryDate: record.entryDate,
+          plannedRegularDate: record.plannedRegularDate,
+          actualRegularDate: record.actualRegularDate,
+          leaveDate: record.leaveDate,
+          probationMonths: record.probationMonths,
+          changeType: 'department_deleted',
+          reason,
+          sourceType: 'department_change_review',
+          sourceBatchId: null,
+          createdById,
+        },
+      });
+    }
+  }
+
+  private sameIdSet(left: string[], right: string[]): boolean {
+    return left.length === right.length && left.every((id) => right.includes(id));
   }
 
   private async activeDepartments(client: Pick<Prisma.TransactionClient, 'department'>, includeId?: string) {
@@ -876,6 +1071,8 @@ export class DepartmentsService {
         company: true,
         sortOrder: true,
         isActive: true,
+        leaderId: true,
+        approverId: true,
       },
     });
   }

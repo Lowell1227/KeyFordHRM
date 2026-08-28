@@ -570,6 +570,8 @@ model EmployeeContract {
   isActive                 Boolean   @default(true) @map("is_active")
   endedAt                  DateTime? @map("ended_at") @db.Timestamptz(6)
   attachmentRef            String?   @map("attachment_ref") @db.VarChar(500)
+  images                   Json      @default("[]") @db.JsonB
+  attachments              Json      @default("[]") @db.JsonB
   sourceBatchId            String?   @map("source_batch_id") @db.Uuid
   createdById              String?   @map("created_by_id") @db.Uuid
   createdAt                DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)

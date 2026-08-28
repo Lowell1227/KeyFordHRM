@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
 import {
   ArrowRight,
@@ -21,14 +21,15 @@ import {
   type EmployeeRosterPreviewResult,
 } from '@/api/employee-archives.api';
 import { usersApi } from '@/api/users.api';
+import { uploadApi } from '@/api/upload.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
 import EmployeeArchiveInlineEditor from './components/EmployeeArchiveInlineEditor.vue';
-import PersonnelPendingReviews from './components/PersonnelPendingReviews.vue';
+import DepartmentEditDrawer from './components/DepartmentEditDrawer.vue';
 import { formatBusinessIdentityLabel } from '@/components/layout/business-identity';
 import { useAuthStore } from '@/stores/auth.store';
-import type { BusinessIdentity, Department, HrCapability, SystemPermission, User as ManagedUser, UserQuery } from '@/types/api.types';
+import type { Attachment, BusinessIdentity, Department, HrCapability, SystemPermission, UpdateDepartmentStructureBody, User as ManagedUser, UserQuery } from '@/types/api.types';
 import type { SysRole, UserStatus } from '@/types/enums';
 import { formatDate, formatDateTime } from '@/utils/date';
 import { isTopLevelDepartmentLeader } from '@/utils/organization-relations';
@@ -73,7 +74,7 @@ const contractTypeLabels: Record<string, string> = {
   transfer: '转签',
 };
 
-const activeView = ref<'org' | 'users' | 'checks'>('org');
+const activeView = ref<'org' | 'users'>('org');
 const isSystemAdmin = computed(() => auth.user?.sysRole === 'system_admin');
 const canResetPassword = computed(() => ['hr', 'system_admin'].includes(auth.user?.sysRole ?? ''));
 const hasHrCapability = (capability: HrCapability) => (
@@ -156,6 +157,7 @@ const statusOptions: { label: string; value: UserStatus }[] = [
 const departments = ref<Department[]>([]);
 const deptLoading = ref(false);
 const selectedDeptId = ref('');
+const UNASSIGNED_DEPARTMENT_ID = '__unassigned__';
 
 const flattenedDepartments = computed<Department[]>(() => {
   const result: Department[] = [];
@@ -169,7 +171,23 @@ const flattenedDepartments = computed<Department[]>(() => {
   return result;
 });
 
-const selectedDept = computed(() => flattenedDepartments.value.find((dept) => dept.id === selectedDeptId.value) ?? null);
+const selectedDept = computed<Department | null>(() => {
+  if (selectedDeptId.value === UNASSIGNED_DEPARTMENT_ID) {
+    return {
+      id: UNASSIGNED_DEPARTMENT_ID,
+      name: '未分配人员',
+      fullPath: '组织根节点 / 未分配人员',
+      parentId: null,
+      company: 'fuede',
+      sortOrder: -1,
+      isActive: true,
+      directMemberCount: orgMemberTotal.value,
+      memberCount: orgMemberTotal.value,
+      children: [],
+    };
+  }
+  return flattenedDepartments.value.find((dept) => dept.id === selectedDeptId.value) ?? null;
+});
 
 const childDeptCount = computed(() => selectedDept.value?.children?.length ?? 0);
 const selectedDeptIssueBadges = computed(() => getDeptIssueBadges(selectedDept.value));
@@ -178,6 +196,10 @@ const orgMembers = ref<ManagedUser[]>([]);
 const orgMemberTotal = ref(0);
 const orgMemberLoading = ref(false);
 const orgMemberPage = ref(1);
+const selectedOrgMembers = ref<ManagedUser[]>([]);
+const assignmentDialog = ref({ visible: false, targetDepartmentId: '' as string, saving: false });
+const draggedUserIds = ref<string[]>([]);
+const selectedOrgIsUnassigned = computed(() => selectedDeptId.value === UNASSIGNED_DEPARTMENT_ID);
 
 const userList = ref<ManagedUser[]>([]);
 const userTotal = ref(0);
@@ -333,7 +355,8 @@ async function loadOrgMembers() {
     const res = await usersApi.findAll({
       page: orgMemberPage.value,
       pageSize: 8,
-      deptId: selectedDeptId.value,
+      deptId: selectedOrgIsUnassigned.value ? undefined : selectedDeptId.value,
+      unassigned: selectedOrgIsUnassigned.value || undefined,
     });
     orgMembers.value = res.items;
     orgMemberTotal.value = res.total;
@@ -359,18 +382,6 @@ async function loadUsers() {
     userTotal.value = 0;
   } finally {
     userLoading.value = false;
-  }
-}
-
-async function loadCheckUsers() {
-  checkLoading.value = true;
-  try {
-    const res = await usersApi.findAll({ page: 1, pageSize: 100 });
-    checkUsers.value = res.items;
-  } catch {
-    checkUsers.value = [];
-  } finally {
-    checkLoading.value = false;
   }
 }
 
@@ -481,7 +492,7 @@ function refreshCurrentView() {
     loadUsers();
     return;
   }
-  Promise.all([loadDepartments(), loadCheckUsers()]);
+  loadUsers();
 }
 
 const employeeArchiveDrawer = ref({
@@ -523,7 +534,7 @@ async function submitArchiveDraft(value: {
     archiveEditing.value = false;
     employeeArchiveDrawer.value.data = await employeeArchivesApi.getArchive(data.id);
     employeeArchiveDrawer.value.visible = false;
-    activeView.value = 'checks';
+    activeView.value = 'users';
   } catch {
     // 由 HTTP 拦截器展示错误
   } finally {
@@ -531,30 +542,153 @@ async function submitArchiveDraft(value: {
   }
 }
 
-const departmentEditDialog = ref({ visible: false, id: '', name: '', saving: false });
+async function cancelArchiveEditing() {
+  if (!archiveEditorRef.value?.isDirty()) {
+    archiveEditing.value = false;
+    return;
+  }
+  try {
+    await ElMessageBox.confirm('当前档案修改尚未保存，确认放弃？', '放弃修改', {
+      confirmButtonText: '放弃修改', cancelButtonText: '继续编辑', type: 'warning',
+    });
+    archiveEditing.value = false;
+  } catch {
+    // 继续编辑
+  }
+}
+
+async function beforeCloseEmployeeArchive(done: () => void) {
+  if (!archiveEditing.value || !archiveEditorRef.value?.isDirty()) {
+    done();
+    return;
+  }
+  try {
+    await ElMessageBox.confirm('当前档案修改尚未保存，确认关闭？', '关闭员工档案', {
+      confirmButtonText: '放弃并关闭', cancelButtonText: '继续编辑', type: 'warning',
+    });
+    archiveEditing.value = false;
+    done();
+  } catch {
+    // 继续编辑
+  }
+}
+
+function selectUnassignedPeople() {
+  selectedDeptId.value = UNASSIGNED_DEPARTMENT_ID;
+  orgMemberPage.value = 1;
+  selectedOrgMembers.value = [];
+  void loadOrgMembers();
+}
+
+function openBatchAssignment() {
+  if (!selectedOrgMembers.value.length) return;
+  assignmentDialog.value = { visible: true, targetDepartmentId: '', saving: false };
+}
+
+function startPersonDrag(row: ManagedUser, event: DragEvent) {
+  const selectedIds = selectedOrgMembers.value.some((item) => item.id === row.id)
+    ? selectedOrgMembers.value.map((item) => item.id)
+    : [row.id];
+  draggedUserIds.value = selectedIds;
+  event.dataTransfer?.setData('application/x-kayford-personnel', selectedIds.join(','));
+  if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+}
+
+async function assignUsersToDepartment(userIds: string[], department: Department) {
+  if (!userIds.length || department.id === UNASSIGNED_DEPARTMENT_ID) return;
+  try {
+    await ElMessageBox.confirm(
+      `确认将 ${userIds.length} 名员工归属到“${department.name}”？提交后由 HR 管理员审核，审核通过前人员仍保留在原位置。`,
+      '调整人员归属',
+      { confirmButtonText: '提交审核', cancelButtonText: '取消', type: 'warning' },
+    );
+    const result = await employeeArchivesApi.submitDepartmentAssignments(userIds, department.id);
+    if (result.submitted > 0) {
+      ElMessage.success(`已提交 ${result.submitted} 条人员归属变更审核`);
+    } else {
+      ElMessage.info('所选人员已归属该部门，无需重复提交');
+    }
+    selectedOrgMembers.value = [];
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') throw error;
+  } finally {
+    draggedUserIds.value = [];
+  }
+}
+
+function dropPeopleOnDepartment(event: DragEvent, department: Department) {
+  const raw = event.dataTransfer?.getData('application/x-kayford-personnel') ?? '';
+  const userIds = raw.split(',').filter(Boolean);
+  if (userIds.length) void assignUsersToDepartment(userIds, department);
+}
+
+async function confirmBatchAssignment() {
+  const department = flattenedDepartments.value.find((item) => item.id === assignmentDialog.value.targetDepartmentId);
+  if (!department) {
+    ElMessage.warning('请选择目标部门');
+    return;
+  }
+  assignmentDialog.value.visible = false;
+  await assignUsersToDepartment(selectedOrgMembers.value.map((item) => item.id), department);
+}
+
+const departmentEditDrawer = ref({ visible: false, department: null as Department | null, saving: false });
+const departmentContextMenu = ref({ visible: false, x: 0, y: 0, department: null as Department | null });
 const orgDragEnabled = ref(false);
 let orgLongPressTimer: ReturnType<typeof setTimeout> | null = null;
 
 function openDepartmentEdit(row: Department) {
-  departmentEditDialog.value = { visible: true, id: row.id, name: row.name, saving: false };
+  departmentContextMenu.value.visible = false;
+  departmentEditDrawer.value = { visible: true, department: row, saving: false };
 }
 
-async function saveDepartmentName() {
-  const dialog = departmentEditDialog.value;
-  if (!dialog.name.trim()) {
-    ElMessage.warning('请输入部门名称');
-    return;
-  }
-  dialog.saving = true;
+async function saveDepartment(value: UpdateDepartmentStructureBody) {
+  const department = departmentEditDrawer.value.department;
+  if (!department) return;
+  departmentEditDrawer.value.saving = true;
   try {
-    await departmentsApi.updateStructure(dialog.id, { name: dialog.name.trim() });
-    ElMessage.success('部门名称变更已提交 HR 管理员审核');
-    dialog.visible = false;
+    await departmentsApi.updateStructure(department.id, value);
+    ElMessage.success('部门变更已提交 HR 管理员审核');
+    departmentEditDrawer.value.visible = false;
     await loadDepartments();
-    activeView.value = 'checks';
+    activeView.value = 'org';
   } finally {
-    dialog.saving = false;
+    departmentEditDrawer.value.saving = false;
   }
+}
+
+function onDepartmentContextMenu(rawEvent: Event, row: Department) {
+  if (!canEditOrganization.value) return;
+  const event = rawEvent as MouseEvent;
+  event.preventDefault();
+  selectedDeptId.value = row.id;
+  departmentContextMenu.value = {
+    visible: true,
+    x: Math.min(event.clientX, window.innerWidth - 170),
+    y: Math.min(event.clientY, window.innerHeight - 110),
+    department: row,
+  };
+}
+
+async function removeDepartment(row: Department) {
+  departmentContextMenu.value.visible = false;
+  const memberCount = row.directMemberCount ?? 0;
+  const childCount = row.children?.length ?? 0;
+  try {
+    await ElMessageBox.confirm(
+      `删除“${row.name}”将提交审核。审核通过后，${memberCount} 名直属人员释放到“未分配人员”，${childCount} 个直属子部门提升到当前上级。历史记录不受影响。`,
+      '删除部门',
+      { confirmButtonText: '提交删除审核', cancelButtonText: '取消', type: 'warning' },
+    );
+    await departmentsApi.remove(row.id);
+    ElMessage.success('删除部门申请已提交 HR 管理员审核');
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') throw error;
+  }
+}
+
+function closeDepartmentContextMenu() {
+  departmentContextMenu.value.visible = false;
 }
 
 function startOrgLongPress() {
@@ -587,7 +721,7 @@ async function onDepartmentDrop(draggingNode: any, dropNode: any, type: 'before'
     );
     await departmentsApi.updateStructure(department.id, { parentId });
     ElMessage.success('组织层级变更已提交 HR 管理员审核');
-    activeView.value = 'checks';
+    activeView.value = 'org';
   } catch {
     // 取消时重新加载正式结构；接口错误由拦截器展示。
   } finally {
@@ -608,6 +742,21 @@ async function downloadRosterTemplate() {
   } catch {
     ElMessage.error('模板下载失败，请稍后重试');
   }
+}
+
+async function openContractMaterial(item: Attachment) {
+  const blob = await uploadApi.download(item.url);
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  if (item.mimeType?.startsWith('image/') || item.mimeType === 'application/pdf') {
+    anchor.target = '_blank';
+    anchor.rel = 'noopener';
+  } else {
+    anchor.download = item.name;
+  }
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 async function setArchiveDingtalkState(enabled: boolean) {
@@ -759,9 +908,9 @@ async function confirmPersonSettings() {
     }
     personSettingsDialog.value.visible = false;
     if (performanceRelationChanged) {
-      activeView.value = 'checks';
+      activeView.value = 'users';
     }
-    await Promise.all([loadUsers(), loadOrgMembers(), loadCheckUsers()]);
+    await Promise.all([loadUsers(), loadOrgMembers()]);
   } catch {
     // 由 HTTP 拦截器展示错误
   } finally {
@@ -807,7 +956,7 @@ async function confirmLeader() {
     });
     ElMessage.success('部门负责人已更新');
     leaderDialog.value.visible = false;
-    await Promise.all([loadDepartments(), loadOrgMembers(), loadCheckUsers()]);
+    await Promise.all([loadDepartments(), loadOrgMembers()]);
   } catch {
     // 由 HTTP 拦截器展示错误
   }
@@ -837,7 +986,7 @@ async function confirmApprover() {
     });
     ElMessage.success('最终业务审批人已更新');
     approverDialog.value.visible = false;
-    await Promise.all([loadDepartments(), loadCheckUsers()]);
+    await loadDepartments();
   } catch {
     // 由 HTTP 拦截器展示错误
   }
@@ -931,8 +1080,8 @@ async function confirmRosterImport() {
       ? `已提交 ${confirmed.submitted} 条员工变更，审核通过后生效`
       : '花名册与正式档案一致，无需重复审核');
     rosterImportDialog.value.visible = false;
-    activeView.value = confirmed.submitted > 0 ? 'checks' : 'users';
-    await Promise.all([loadDepartments(), loadUsers(), loadCheckUsers()]);
+    activeView.value = 'users';
+    await Promise.all([loadDepartments(), loadUsers()]);
   } catch {
     // 由 HTTP 拦截器展示错误
   } finally {
@@ -944,12 +1093,22 @@ watch(activeView, (view) => {
   if (view === 'users') {
     if (userList.value.length === 0) loadUsers();
   }
-  if (view === 'checks') loadCheckUsers();
 });
 
+function refreshAfterPersonnelReview() {
+  void Promise.all([loadDepartments(), loadUsers(), loadOrgMembers()]);
+}
+
 onMounted(async () => {
-  await Promise.all([loadDepartments(), loadUsers(), loadCheckUsers()]);
+  document.addEventListener('click', closeDepartmentContextMenu);
+  window.addEventListener('personnel-data-changed', refreshAfterPersonnelReview);
+  await Promise.all([loadDepartments(), loadUsers()]);
   await loadOrgMembers();
+});
+
+onBeforeUnmount(() => {
+  document.removeEventListener('click', closeDepartmentContextMenu);
+  window.removeEventListener('personnel-data-changed', refreshAfterPersonnelReview);
 });
 </script>
 
@@ -977,11 +1136,6 @@ onMounted(async () => {
           <el-icon><UserFilled /></el-icon>
           员工名册
         </button>
-        <button :class="{ active: activeView === 'checks' }" type="button" @click="activeView = 'checks'">
-          <el-icon><Warning /></el-icon>
-          待处理事项
-          <span v-if="issueItems.length" class="issue-dot">{{ issueItems.length }}</span>
-        </button>
       </div>
 
       <section v-if="activeView === 'org'" class="org-layout">
@@ -991,6 +1145,14 @@ onMounted(async () => {
             <span>{{ flattenedDepartments.length }} 个部门</span>
           </div>
           <p v-if="canEditOrganization" class="org-drag-tip">长按部门约 0.5 秒后拖拽，可调整父子层级。</p>
+          <button
+            type="button"
+            :class="['unassigned-node', { active: selectedOrgIsUnassigned }]"
+            @click="selectUnassignedPeople"
+          >
+            <span>未分配人员</span>
+            <small>根节点</small>
+          </button>
           <el-tree
             v-loading="deptLoading"
             :data="departments"
@@ -1002,11 +1164,18 @@ onMounted(async () => {
             :draggable="orgDragEnabled"
             :allow-drop="allowDepartmentDrop"
             @node-click="(data: Department) => onDeptSelect(data.id)"
+            @node-contextmenu="onDepartmentContextMenu"
             @node-drop="onDepartmentDrop"
             @node-drag-end="endOrgLongPress"
           >
             <template #default="{ data }">
-              <div class="dept-node" @pointerdown="startOrgLongPress" @pointerup="endOrgLongPress">
+              <div
+                class="dept-node"
+                @pointerdown="startOrgLongPress"
+                @pointerup="endOrgLongPress"
+                @dragover.stop.prevent
+                @drop.stop.prevent="dropPeopleOnDepartment($event, data as Department)"
+              >
                 <div class="dept-node__content">
                   <span class="dept-node__name">{{ data.name }}</span>
                   <div v-if="getTreeDeptBadge(data)" class="dept-node__badges">
@@ -1043,14 +1212,9 @@ onMounted(async () => {
             </div>
             <div class="dept-summary__side">
               <span class="dept-path">{{ selectedDept.fullPath || '未维护完整路径' }}</span>
-              <div v-if="isSystemAdmin || canEditOrganization" class="dept-summary__actions">
-                <el-button v-if="canEditOrganization" plain size="small" @click="openDepartmentEdit(selectedDept)">编辑部门名称</el-button>
-                <el-button v-if="isSystemAdmin" type="primary" size="small" @click="openLeaderDialog(selectedDept)">
-                  设置部门负责人
-                </el-button>
-                <el-button v-if="isSystemAdmin" plain size="small" @click="openApproverDialog(selectedDept)">
-                  设置最终业务审批人
-                </el-button>
+              <div v-if="(isSystemAdmin || canEditOrganization) && !selectedOrgIsUnassigned" class="dept-summary__actions">
+                <el-button v-if="canEditOrganization" type="primary" size="small" @click="openDepartmentEdit(selectedDept)">编辑</el-button>
+                <el-button v-if="canEditOrganization" plain type="danger" size="small" @click="removeDepartment(selectedDept)">删除</el-button>
               </div>
             </div>
           </div>
@@ -1077,13 +1241,14 @@ onMounted(async () => {
           </div>
 
           <div class="section-head">
-            <h3>部门人员</h3>
-            <span>含当前部门及下级部门</span>
+            <div><h3>{{ selectedOrgIsUnassigned ? '未分配人员' : '部门人员' }}</h3><span>{{ selectedOrgIsUnassigned ? '审核通过删除部门后，人员会先释放到这里' : '含当前部门及下级部门' }}</span></div>
+            <el-button v-if="selectedOrgIsUnassigned && selectedOrgMembers.length" type="primary" @click="openBatchAssignment">批量归属部门（{{ selectedOrgMembers.length }}）</el-button>
           </div>
-          <el-table v-loading="orgMemberLoading" :data="orgMembers" row-key="id" class="app-table compact-table">
+          <el-table v-loading="orgMemberLoading" :data="orgMembers" row-key="id" class="app-table compact-table" @selection-change="selectedOrgMembers = $event">
+            <el-table-column v-if="selectedOrgIsUnassigned" type="selection" width="48" />
             <el-table-column label="人员" min-width="180">
               <template #default="{ row }">
-                <div class="person-cell">
+                <div class="person-cell" :draggable="selectedOrgIsUnassigned" @dragstart="startPersonDrag(row as ManagedUser, $event)">
                   <span class="avatar">{{ (row as ManagedUser).name.slice(0, 1) }}</span>
                   <div>
                     <strong>{{ (row as ManagedUser).name }}</strong>
@@ -1261,109 +1426,6 @@ onMounted(async () => {
           />
       </section>
 
-      <section v-else class="checks-view" v-loading="checkLoading || deptLoading">
-        <div class="checks-summary">
-          <div>
-            <h3>员工档案待处理事项</h3>
-            <p>优先处理会影响绩效流程流转的问题。</p>
-          </div>
-          <strong>{{ issueItems.length }}</strong>
-        </div>
-
-        <div v-if="issueItems.length" class="checks-overview">
-          <button type="button" class="checks-stat is-danger" @click="issueLevelFilter = 'danger'">
-            <span>阻塞项</span>
-            <strong>{{ dangerIssueCount }}</strong>
-            <small>会影响流程正常启动或流转</small>
-          </button>
-          <button type="button" class="checks-stat is-warning" @click="issueLevelFilter = 'warning'">
-            <span>待补项</span>
-            <strong>{{ warningIssueCount }}</strong>
-            <small>建议尽快补齐，避免后续人工兜底</small>
-          </button>
-          <button type="button" class="checks-stat is-info" @click="issueLevelFilter = 'info'">
-            <span>提示项</span>
-            <strong>{{ infoIssueCount }}</strong>
-            <small>不阻塞流程，但建议核对组织完整性</small>
-          </button>
-        </div>
-
-        <div v-if="issueItems.length" class="checks-filter">
-          <span class="checks-filter__label">快速筛选</span>
-          <el-radio-group v-model="issueLevelFilter" size="small">
-            <el-radio-button value="all">全部</el-radio-button>
-            <el-radio-button value="danger">阻塞项</el-radio-button>
-            <el-radio-button value="warning">待补项</el-radio-button>
-            <el-radio-button value="info">提示项</el-radio-button>
-          </el-radio-group>
-        </div>
-
-        <el-empty v-if="issueItems.length === 0" description="暂无需要处理的组织配置问题" />
-        <div v-else class="checks-groups">
-          <section class="checks-group">
-            <div class="checks-group__head">
-              <div>
-                <strong>组织问题</strong>
-                <p>优先补齐部门负责人、绩效直属上级和最终业务审批人。</p>
-              </div>
-              <el-tag effect="plain" type="primary">{{ filteredDepartmentIssueItems.length }}/{{ departmentIssueItems.length }}</el-tag>
-            </div>
-            <div v-if="filteredDepartmentIssueItems.length" class="issue-list">
-              <button
-                v-for="item in filteredDepartmentIssueItems"
-                :key="item.key"
-                type="button"
-                :class="['issue-item', `is-${item.level}`]"
-                @click="jumpToIssue(item)"
-              >
-                <el-tag :type="item.level === 'danger' ? 'danger' : item.level === 'warning' ? 'warning' : 'info'" effect="plain">
-                  {{ item.type }}
-                </el-tag>
-                <div>
-                  <strong>{{ item.title }}</strong>
-                  <p>{{ item.detail }}</p>
-                </div>
-                <el-icon><ArrowRight /></el-icon>
-              </button>
-            </div>
-            <el-empty v-else :description="departmentIssueItems.length ? '当前筛选下没有组织问题' : '组织关系已完整'" :image-size="70" />
-          </section>
-
-          <section class="checks-group">
-            <div class="checks-group__head">
-              <div>
-                <strong>人员问题</strong>
-                <p>检查绩效直属上级、部门归属和离职权限残留。</p>
-              </div>
-              <el-tag effect="plain">{{ filteredUserIssueItems.length }}/{{ userIssueItems.length }}</el-tag>
-            </div>
-            <div v-if="filteredUserIssueItems.length" class="issue-list">
-              <button
-                v-for="item in filteredUserIssueItems"
-                :key="item.key"
-                type="button"
-                :class="['issue-item', `is-${item.level}`]"
-                @click="jumpToIssue(item)"
-              >
-                <el-tag :type="item.level === 'danger' ? 'danger' : item.level === 'warning' ? 'warning' : 'info'" effect="plain">
-                  {{ item.type }}
-                </el-tag>
-                <div>
-                  <strong>{{ item.title }}</strong>
-                  <p>{{ item.detail }}</p>
-                </div>
-                <el-icon><ArrowRight /></el-icon>
-              </button>
-            </div>
-            <el-empty v-else :description="userIssueItems.length ? '当前筛选下没有人员问题' : '人员关系已完整'" :image-size="70" />
-          </section>
-        </div>
-
-        <PersonnelPendingReviews
-          :can-review-employee="canReviewArchive"
-          :can-review-department="canReviewDepartmentChanges"
-        />
-      </section>
     </ChartCard>
 
     <el-drawer
@@ -1372,6 +1434,7 @@ onMounted(async () => {
       size="min(1080px, 100vw)"
       class="employee-archive-drawer"
       destroy-on-close
+      :before-close="beforeCloseEmployeeArchive"
     >
       <div v-loading="employeeArchiveDrawer.loading" class="employee-archive">
         <template v-if="employeeArchiveDrawer.data">
@@ -1393,7 +1456,7 @@ onMounted(async () => {
             <div v-if="canEditArchive" class="employee-archive__global-actions">
               <el-button v-if="!archiveEditing" type="primary" @click="archiveEditing = true">编辑档案</el-button>
               <template v-else>
-                <el-button :disabled="archiveEditSaving" @click="archiveEditing = false">取消</el-button>
+                <el-button :disabled="archiveEditSaving" @click="cancelArchiveEditing">取消</el-button>
                 <el-button type="primary" :loading="archiveEditSaving" @click="archiveEditorRef?.submit()">保存并提交审核</el-button>
               </template>
             </div>
@@ -1519,6 +1582,15 @@ onMounted(async () => {
               <el-table-column label="到期日期" width="120">
                 <template #default="{ row }">{{ formatDate(row.expiresAt) }}</template>
               </el-table-column>
+              <el-table-column label="合同材料" min-width="180">
+                <template #default="{ row }">
+                  <div class="contract-material-links">
+                    <span v-if="!(row.images?.length || row.attachments?.length)">无材料</span>
+                    <el-button v-for="item in row.images ?? []" :key="item.url" link type="primary" @click="openContractMaterial(item)">图片：{{ item.name }}</el-button>
+                    <el-button v-for="item in row.attachments ?? []" :key="item.url" link type="primary" @click="openContractMaterial(item)">附件：{{ item.name }}</el-button>
+                  </div>
+                </template>
+              </el-table-column>
               <el-table-column label="状态" width="90">
                 <template #default="{ row }">
                   <el-tag :type="row.isActive === false ? 'info' : 'success'" size="small">
@@ -1641,10 +1713,38 @@ onMounted(async () => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="departmentEditDialog.visible" title="编辑部门名称" width="440px" :close-on-click-modal="false">
-      <el-form label-position="top"><el-form-item label="部门名称"><el-input v-model="departmentEditDialog.name" maxlength="100" /></el-form-item></el-form>
-      <template #footer><el-button @click="departmentEditDialog.visible = false">取消</el-button><el-button type="primary" :loading="departmentEditDialog.saving" @click="saveDepartmentName">保存</el-button></template>
+    <DepartmentEditDrawer
+      v-model="departmentEditDrawer.visible"
+      :department="departmentEditDrawer.department"
+      :departments="departments"
+      :saving="departmentEditDrawer.saving"
+      @save="saveDepartment"
+    />
+
+    <el-dialog v-model="assignmentDialog.visible" title="批量归属部门" width="480px" :close-on-click-modal="false">
+      <p>已选择 <strong>{{ selectedOrgMembers.length }}</strong> 名未分配人员。保存后提交员工档案审核。</p>
+      <el-tree-select
+        v-model="assignmentDialog.targetDepartmentId"
+        :data="departments"
+        node-key="id"
+        :props="{ label: 'name', children: 'children' }"
+        check-strictly
+        filterable
+        placeholder="请选择目标部门"
+        style="width: 100%"
+      />
+      <template #footer><el-button @click="assignmentDialog.visible = false">取消</el-button><el-button type="primary" @click="confirmBatchAssignment">提交审核</el-button></template>
     </el-dialog>
+
+    <div
+      v-if="departmentContextMenu.visible && departmentContextMenu.department"
+      class="department-context-menu"
+      :style="{ left: `${departmentContextMenu.x}px`, top: `${departmentContextMenu.y}px` }"
+      @click.stop
+    >
+      <button type="button" @click="openDepartmentEdit(departmentContextMenu.department!)">编辑</button>
+      <button type="button" class="is-danger" @click="removeDepartment(departmentContextMenu.department!)">删除</button>
+    </div>
 
     <el-dialog v-model="personSettingsDialog.visible" title="人员设置" width="520px" :close-on-click-modal="false" destroy-on-close>
       <div class="person-settings__summary">
@@ -1705,7 +1805,7 @@ onMounted(async () => {
                   <div class="person-settings__tooltip-content">
                     <div class="person-settings__tooltip-line"><strong>作用：</strong>用于目标审核、主管评分和待办归属。</div>
                     <div class="person-settings__tooltip-line"><strong>区别：</strong>与花名册“直属主管”相互独立。</div>
-                    <div class="person-settings__tooltip-line"><strong>审核：</strong>由 HR 管理员在“待处理事项 → 员工档案”中处理。</div>
+                    <div class="person-settings__tooltip-line"><strong>审核：</strong>由 HR 管理员在“人事变更审核 → 员工档案”中处理。</div>
                     <div class="person-settings__tooltip-line"><strong>生效：</strong>审核通过前继续使用原关系，不改变岗位或系统权限。</div>
                   </div>
                 </template>
@@ -1729,7 +1829,7 @@ onMounted(async () => {
           >
             {{ selectedManagerRelationChanged ? '提交后待 HR 审核' : '已生效' }}
           </el-tag>
-          <span v-if="selectedManagerRelationChanged">审核入口：待处理事项 &gt; 员工档案</span>
+          <span v-if="selectedManagerRelationChanged">审核入口：人事变更审核 &gt; 员工档案</span>
         </div>
         <el-form-item>
           <template #label>
@@ -1889,6 +1989,51 @@ onMounted(async () => {
   margin-top: 6px;
   color: #6f7b91;
 }
+
+.department-context-menu {
+  position: fixed;
+  z-index: 5000;
+  display: grid;
+  min-width: 150px;
+  padding: 6px;
+  border: 1px solid #e5eaf2;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgb(16 24 40 / 18%);
+}
+
+.department-context-menu button {
+  border: 0;
+  border-radius: 7px;
+  padding: 9px 12px;
+  background: transparent;
+  color: #344054;
+  text-align: left;
+  cursor: pointer;
+}
+
+.department-context-menu button:hover { background: #f2f4f7; }
+.department-context-menu button.is-danger { color: #d92d20; }
+
+.unassigned-node {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  width: calc(100% - 16px);
+  margin: 4px 8px 8px;
+  border: 0;
+  border-radius: 8px;
+  padding: 9px 10px;
+  background: #fff7ed;
+  color: #9a3412;
+  cursor: pointer;
+}
+
+.unassigned-node.active { background: #ffedd5; box-shadow: inset 0 0 0 1px #fdba74; }
+.unassigned-node small { color: #c2410c; }
+
+.contract-material-links { display: grid; justify-items: start; gap: 2px; }
+.contract-material-links .el-button { max-width: 100%; margin-left: 0; }
 
 .employee-archive__global-actions {
   display: flex;

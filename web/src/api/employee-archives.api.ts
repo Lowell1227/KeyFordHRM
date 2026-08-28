@@ -179,6 +179,8 @@ export interface EmployeeArchive {
     portraitAgreement: string | null;
     isActive: boolean;
     endedAt: string | null;
+    images: Array<{ name: string; url: string; size: number; mimeType: string }>;
+    attachments: Array<{ name: string; url: string; size: number; mimeType: string }>;
   }>;
   dingtalkBindingState: 'unbound' | 'enabled' | 'disabled';
   dingtalkBinding: {
@@ -211,6 +213,13 @@ export const employeeArchivesApi = {
     performance: Record<string, unknown>;
   }): Promise<EmployeeDataReview> {
     return http.patch(`/employee-archives/${userId}/draft`, body) as unknown as Promise<EmployeeDataReview>;
+  },
+
+  submitDepartmentAssignments(userIds: string[], departmentId: string): Promise<{ submitted: number }> {
+    return http.post('/employee-archives/department-assignments', {
+      userIds,
+      departmentId,
+    }) as unknown as Promise<{ submitted: number }>;
   },
 
   async downloadRosterTemplate(): Promise<Blob> {

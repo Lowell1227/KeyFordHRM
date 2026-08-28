@@ -28,4 +28,9 @@ export class UserQueryDto extends PaginationDto {
   @IsBoolean()
   @Transform(({ value }) => value === 'true' || value === true)
   includeTestAccounts?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
+  unassigned?: boolean;
 }

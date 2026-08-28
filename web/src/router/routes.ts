@@ -121,6 +121,18 @@ export const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/personnel-change-reviews',
+    name: 'PersonnelChangeReviews',
+    component: () => import('@/views/admin/PersonnelReviewView.vue'),
+    meta: {
+      requiresAuth: true,
+      title: '人事变更审核',
+      roles: ['hr', 'system_admin'],
+      hrCapabilities: ['employee_archive_review'],
+      navigation: { module: 'people', label: '人事变更审核', order: 20, group: 'people-archive', groupLabel: '人员档案' },
+    },
+  },
+  {
     path: '/recruitment',
     name: 'RecruitmentOverview',
     component: () => import('@/views/recruitment/RecruitmentOverviewView.vue'),

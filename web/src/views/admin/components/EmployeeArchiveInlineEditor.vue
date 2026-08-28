@@ -1,9 +1,11 @@
 <script setup lang="ts">
 import { reactive, watch } from 'vue';
 import { Delete, Plus } from '@element-plus/icons-vue';
+import { ElMessage, type UploadRequestOptions } from 'element-plus';
 import type { Department } from '@/types/api.types';
 import type { EmployeeArchive } from '@/api/employee-archives.api';
 import UserSelect from '@/components/common/UserSelect.vue';
+import { uploadApi } from '@/api/upload.api';
 
 const props = defineProps<{
   editing: boolean;
@@ -26,6 +28,11 @@ const form = reactive({
   contracts: [] as Array<Record<string, any> & { __key: string }>,
   performance: {} as Record<string, any>,
 });
+let initialSnapshot = '';
+
+function formSnapshot() {
+  return JSON.stringify(form);
+}
 
 function dateValue(value?: string | null) {
   return value ? value.slice(0, 10) : null;
@@ -109,7 +116,10 @@ function reset() {
       confidentialityAgreement: item.confidentialityAgreement,
       nonCompeteAgreement: item.nonCompeteAgreement,
       portraitAgreement: item.portraitAgreement,
+      images: [...(item.images ?? [])],
+      attachments: [...(item.attachments ?? [])],
     }));
+  initialSnapshot = formSnapshot();
 }
 
 watch(() => [props.editing, props.archive?.id] as const, ([editing]) => {
@@ -132,7 +142,66 @@ function addContract() {
     confidentialityAgreement: '',
     nonCompeteAgreement: '',
     portraitAgreement: '',
+    images: [],
+    attachments: [],
   });
+}
+
+async function uploadContractImage(contract: Record<string, any>, options: UploadRequestOptions) {
+  const file = options.file as File;
+  if ((contract.images?.length ?? 0) >= 5) {
+    ElMessage.warning('每份合同最多上传 5 张图片');
+    return;
+  }
+  if (file.size > 2 * 1024 * 1024) {
+    ElMessage.warning('合同图片单张不能超过 2MB');
+    return;
+  }
+  const imageExtension = file.name.toLowerCase().slice(file.name.lastIndexOf('.'));
+  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)
+    && !['.jpg', '.jpeg', '.png', '.webp'].includes(imageExtension)) {
+    ElMessage.warning('合同图片仅支持 JPG、PNG、WEBP');
+    return;
+  }
+  const uploaded = await uploadApi.upload(file, 'employee-contract-image');
+  contract.images = [...(contract.images ?? []), uploaded];
+  options.onSuccess(uploaded);
+}
+
+async function uploadContractAttachment(contract: Record<string, any>, options: UploadRequestOptions) {
+  const file = options.file as File;
+  if ((contract.attachments?.length ?? 0) >= 10) {
+    ElMessage.warning('每份合同最多上传 10 个附件');
+    return;
+  }
+  if (file.size > 10 * 1024 * 1024) {
+    ElMessage.warning('合同附件单个不能超过 10MB');
+    return;
+  }
+  const allowed = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+  const attachmentExtension = file.name.toLowerCase().slice(file.name.lastIndexOf('.'));
+  if (!allowed.includes(file.type) && !['.pdf', '.doc', '.docx', '.xls', '.xlsx'].includes(attachmentExtension)) {
+    ElMessage.warning('合同附件仅支持 PDF、DOC、DOCX、XLS、XLSX');
+    return;
+  }
+  const uploaded = await uploadApi.upload(file, 'employee-contract-attachment');
+  contract.attachments = [...(contract.attachments ?? []), uploaded];
+  options.onSuccess(uploaded);
+}
+
+async function openUploadedMaterial(item: { name: string; url: string; mimeType?: string }) {
+  const blob = await uploadApi.download(item.url);
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement('a');
+  anchor.href = url;
+  if (item.mimeType?.startsWith('image/') || item.mimeType === 'application/pdf') {
+    anchor.target = '_blank';
+    anchor.rel = 'noopener';
+  } else {
+    anchor.download = item.name;
+  }
+  anchor.click();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
 function submit() {
@@ -145,13 +214,17 @@ function submit() {
   });
 }
 
-defineExpose({ submit, reset });
+function isDirty() {
+  return Boolean(initialSnapshot) && formSnapshot() !== initialSnapshot;
+}
+
+defineExpose({ submit, reset, isDirty });
 </script>
 
 <template>
   <div v-if="editing" class="archive-inline-editor">
     <el-alert
-      title="保存后进入员工档案待处理事项，HR 管理员审核通过前不会修改正式档案。"
+      title="保存后进入人事变更审核，HR 管理员审核通过前不会修改正式档案。"
       type="info"
       show-icon
       :closable="false"
@@ -245,6 +318,32 @@ defineExpose({ submit, reset });
           <el-form-item label="竞业协议"><el-input v-model="contract.nonCompeteAgreement" /></el-form-item>
           <el-form-item label="肖像协议"><el-input v-model="contract.portraitAgreement" /></el-form-item>
         </el-form>
+        <div class="contract-materials">
+          <div class="contract-materials__group">
+            <div><strong>合同图片</strong><span>最多 5 张，JPG/PNG/WEBP，单张不超过 2MB</span></div>
+            <el-upload :show-file-list="false" accept="image/jpeg,image/png,image/webp" :http-request="(options: UploadRequestOptions) => uploadContractImage(contract, options)">
+              <el-button :disabled="(contract.images?.length ?? 0) >= 5">上传图片</el-button>
+            </el-upload>
+            <div v-if="contract.images?.length" class="material-list">
+              <div v-for="(item, itemIndex) in contract.images" :key="`${item.url}-${itemIndex}`" class="material-item">
+                <el-button link type="primary" @click="openUploadedMaterial(item)">{{ item.name }}</el-button><small>{{ Math.ceil(item.size / 1024) }}KB</small>
+                <el-button link type="danger" @click="contract.images.splice(itemIndex, 1)">移除</el-button>
+              </div>
+            </div>
+          </div>
+          <div class="contract-materials__group">
+            <div><strong>合同附件</strong><span>最多 10 个，PDF/Word/Excel，单个不超过 10MB</span></div>
+            <el-upload :show-file-list="false" accept=".pdf,.doc,.docx,.xls,.xlsx" :http-request="(options: UploadRequestOptions) => uploadContractAttachment(contract, options)">
+              <el-button :disabled="(contract.attachments?.length ?? 0) >= 10">上传附件</el-button>
+            </el-upload>
+            <div v-if="contract.attachments?.length" class="material-list">
+              <div v-for="(item, itemIndex) in contract.attachments" :key="`${item.url}-${itemIndex}`" class="material-item">
+                <el-button link type="primary" @click="openUploadedMaterial(item)">{{ item.name }}</el-button><small>{{ Math.ceil(item.size / 1024) }}KB</small>
+                <el-button link type="danger" @click="contract.attachments.splice(itemIndex, 1)">移除</el-button>
+              </div>
+            </div>
+          </div>
+        </div>
       </div>
       <el-empty v-if="!form.contracts.length" description="暂无合同，可点击新增合同" :image-size="72" />
     </section>
@@ -263,9 +362,19 @@ defineExpose({ submit, reset });
 .span-2 { grid-column: span 2; }
 .contract-card { margin-top: 14px; padding: 16px; border: 1px solid #dfe5ee; border-radius: 12px; background: #f8fafc; }
 .contract-card__head { margin-bottom: 8px; }
+.contract-materials { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; margin-top: 8px; }
+.contract-materials__group { display: grid; gap: 10px; padding: 14px; border: 1px dashed #cfd7e6; border-radius: 10px; background: #fff; }
+.contract-materials__group > div:first-child { display: grid; gap: 3px; }
+.contract-materials__group span { color: #667085; font-size: 12px; }
+.material-list { display: grid; gap: 6px; }
+.material-item { display: flex; align-items: center; gap: 8px; padding: 7px 9px; border-radius: 7px; background: #f2f4f7; }
+.material-item .el-button { min-width: 0; max-width: 100%; flex: 1; justify-content: flex-start; overflow: hidden; margin-left: 0; }
+.material-item .el-button :deep(span) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.material-item small { color: #98a2b3; }
 @media (max-width: 760px) {
   .editor-section { padding: 14px; }
   .archive-editor-grid { grid-template-columns: 1fr; }
+  .contract-materials { grid-template-columns: 1fr; }
   .span-2 { grid-column: auto; }
   .editor-section__head { align-items: flex-start; flex-direction: column; }
 }

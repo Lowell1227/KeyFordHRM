@@ -73,6 +73,32 @@ describe('UsersService', () => {
         }),
       });
     });
+
+    it('未分配人员筛选只查询根节点人员且不展开部门范围', async () => {
+      const count = jest.fn().mockResolvedValue(0);
+      const findMany = jest.fn().mockResolvedValue([]);
+      const getSubDeptIds = jest.fn();
+      const service = new UsersService(
+        { user: { count, findMany } } as any,
+        {
+          getSubDeptIds,
+          getVisibleEmployeeFilter: jest.fn().mockResolvedValue({}),
+        } as any,
+        noBusinessIdentities as any,
+      );
+
+      await service.findAll({
+        page: 1, pageSize: 20, skip: 0, take: 20, unassigned: true,
+      } as any, {
+        id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null,
+        isAssessorOnly: false, canViewAll: true,
+      });
+
+      expect(count).toHaveBeenCalledWith({
+        where: expect.objectContaining({ deptId: null }),
+      });
+      expect(getSubDeptIds).not.toHaveBeenCalled();
+    });
   });
 
   describe('updateManager', () => {

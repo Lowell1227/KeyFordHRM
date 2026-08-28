@@ -9,7 +9,7 @@ const apiResponse = (data: unknown) => ({
 
 const webBaseUrl = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173';
 
-test('HR administrator reviews employee and department changes from categorized pending items', async ({ page }) => {
+test('HR administrator reviews employee and department changes from the independent personnel review menu', async ({ page }) => {
   const employee = {
     id: 'employee-1', name: '员工一', employeeNo: '001', deptId: 'dept-1', deptName: '项目中心',
     position: '项目专员', employmentType: 'full_time', status: 'active', directManagerId: 'manager-old',
@@ -115,8 +115,9 @@ test('HR administrator reviews employee and department changes from categorized 
     return route.fallback();
   });
 
-  await page.goto(`${webBaseUrl}/users`);
-  await page.getByRole('button', { name: /待处理事项/ }).click();
+  await page.goto(`${webBaseUrl}/personnel-change-reviews`);
+  await expect(page.getByRole('button', { name: '人事变更审核', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: /待处理事项/ })).toHaveCount(0);
 
   const workspace = page.locator('.pending-review-workspace');
   await expect(workspace.getByRole('button', { name: '员工档案 2' })).toBeVisible();
@@ -149,4 +150,97 @@ test('HR administrator reviews employee and department changes from categorized 
   await expect(workspace.getByText('余焱玲', { exact: true })).toBeVisible();
   await workspace.getByRole('button', { name: '通过' }).click();
   await expect.poll(() => approvedDepartmentId).toBe(departmentChange.id);
+});
+
+test('department context menu uses the full edit drawer and unassigned people can be submitted in batch', async ({ page }) => {
+  const departments = [{
+    id: 'dept-1', name: '项目中心', fullPath: '项目中心', parentId: null, company: 'fuede',
+    leaderId: 'manager-1', leaderName: '负责人甲', approverId: null, sortOrder: 1, isActive: true,
+    directMemberCount: 1, memberCount: 1, children: [],
+  }];
+  const unassigned = [
+    { id: 'employee-1', name: '待分配甲', employeeNo: '001' },
+    { id: 'employee-2', name: '待分配乙', employeeNo: '002' },
+  ].map((item) => ({
+    ...item, deptId: null, deptName: null, position: '专员', employmentType: 'full_time', status: 'active',
+    directManagerId: null, directManagerName: null, sysRole: 'employee', systemPermission: 'standard_user',
+    businessIdentities: [], isAssessorOnly: false, canViewAll: false, dingtalkBindingState: 'unbound',
+  }));
+  let structureBody: unknown;
+  let deleteRequested = false;
+  let assignmentBody: unknown;
+  let queriedUnassigned = false;
+
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'mock-admin-token');
+    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+  });
+  await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse(0)),
+  }));
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      id: 'admin-1', name: '系统管理员', deptId: null, sysRole: 'system_admin', isAssessorOnly: false, canViewAll: true,
+    })),
+  }));
+  await page.route('**/api/v1/departments**', async (route) => {
+    if (route.request().method() === 'PATCH') {
+      structureBody = route.request().postDataJSON();
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ id: 'change-edit', status: 'pending' })) });
+    }
+    if (route.request().method() === 'DELETE') {
+      deleteRequested = true;
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ id: 'change-delete', status: 'pending' })) });
+    }
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(departments)) });
+  });
+  await page.route('**/api/v1/users**', (route) => {
+    const url = new URL(route.request().url());
+    const isUnassigned = url.searchParams.get('unassigned') === 'true';
+    queriedUnassigned ||= isUnassigned;
+    const items = isUnassigned ? unassigned : [unassigned[0]];
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: items.length, page: 1, pageSize: 20, items })),
+    });
+  });
+  await page.route('**/api/v1/employee-archives/department-assignments', (route) => {
+    assignmentBody = route.request().postDataJSON();
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ submitted: 2 })) });
+  });
+
+  await page.goto(`${webBaseUrl}/users`);
+  const treeNode = page.locator('.dept-node').filter({ hasText: '项目中心' });
+  await treeNode.click({ button: 'right' });
+  await page.locator('.department-context-menu').getByRole('button', { name: '编辑' }).click();
+  const drawer = page.getByRole('dialog', { name: '编辑部门' });
+  await expect(drawer).toContainText('基础信息');
+  await expect(drawer).toContainText('组织职责');
+  await expect(drawer).toContainText('影响范围');
+  await drawer.getByRole('textbox', { name: '部门名称' }).fill('项目管理中心');
+  await drawer.getByRole('button', { name: '保存并提交审核' }).click();
+  await expect.poll(() => structureBody).toMatchObject({
+    name: '项目管理中心', company: 'fuede', parentId: null, leaderId: 'manager-1', approverId: null,
+  });
+
+  await treeNode.click({ button: 'right' });
+  await page.locator('.department-context-menu').getByRole('button', { name: '删除' }).click();
+  await expect(page.getByText(/人员释放到“未分配人员”/)).toBeVisible();
+  await page.getByRole('button', { name: '提交删除审核' }).click();
+  await expect.poll(() => deleteRequested).toBe(true);
+
+  await page.getByRole('button', { name: /未分配人员/ }).click();
+  await expect.poll(() => queriedUnassigned).toBe(true);
+  await expect(page.getByText('待分配甲', { exact: true })).toBeVisible();
+  await page.locator('.org-detail .el-table__header-wrapper .el-checkbox').click();
+  await page.getByRole('button', { name: '批量归属部门（2）' }).click();
+  const assignmentDialog = page.getByRole('dialog', { name: '批量归属部门' });
+  await assignmentDialog.getByRole('combobox').click();
+  await page.locator('.el-select-dropdown:visible').getByText('项目中心', { exact: true }).click();
+  await assignmentDialog.getByRole('button', { name: '提交审核' }).click();
+  await page.getByRole('dialog', { name: '调整人员归属' }).getByRole('button', { name: '提交审核' }).click();
+  await expect.poll(() => assignmentBody).toEqual({
+    userIds: ['employee-1', 'employee-2'], departmentId: 'dept-1',
+  });
 });

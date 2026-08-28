@@ -82,6 +82,20 @@ test('team capability opens the team route without changing base role', () => {
   })).toBe(false);
 });
 
+test('personnel change review is visible only to HR reviewers and administrators', () => {
+  const reviewRoute = routes.find((route) => route.path === '/personnel-change-reviews');
+  expect(reviewRoute).toBeTruthy();
+  expect(canAccessRoute(reviewRoute!, {
+    sysRole: 'hr_user', canViewAll: false, hrCapabilities: ['employee_archive_review'],
+  })).toBe(true);
+  expect(canAccessRoute(reviewRoute!, {
+    sysRole: 'hr_user', canViewAll: false, hrCapabilities: ['employee_archive_edit'],
+  })).toBe(false);
+  expect(canAccessRoute(reviewRoute!, {
+    sysRole: 'hr', canViewAll: true, hrCapabilities: [],
+  })).toBe(true);
+});
+
 test('multiple business identities retain clear labels and counts', () => {
   expect([
     { type: 'performance_manager' as const, label: '绩效直属上级', count: 3 },

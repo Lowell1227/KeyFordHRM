@@ -122,7 +122,9 @@ export class UsersService {
     };
 
     // 部门过滤（含子部门）
-    if (dto.deptId) {
+    if (dto.unassigned) {
+      where.deptId = null;
+    } else if (dto.deptId) {
       const subDeptIds = await this.dataScope.getSubDeptIds(dto.deptId);
       where.deptId = { in: subDeptIds };
     }

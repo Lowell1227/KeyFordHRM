@@ -39,6 +39,10 @@ function apiPost<T>(url: string, data?: unknown): Promise<T> {
   return http.post(url, data) as unknown as Promise<T>;
 }
 
+function apiDelete<T>(url: string): Promise<T> {
+  return http.delete(url) as unknown as Promise<T>;
+}
+
 export const departmentsApi = {
   /** GET /departments — 查询部门列表/树 */
   findAll(query?: DepartmentQuery): Promise<Department[]> {
@@ -63,6 +67,10 @@ export const departmentsApi = {
   /** PATCH /departments/:id/structure — 更新名称或父级。 */
   updateStructure(id: string, body: UpdateDepartmentStructureBody): Promise<DepartmentChangeRequest> {
     return apiPatch(`/departments/${id}/structure`, body);
+  },
+
+  remove(id: string): Promise<DepartmentChangeRequest> {
+    return apiDelete(`/departments/${id}`);
   },
 
   listChangeRequests(params: {

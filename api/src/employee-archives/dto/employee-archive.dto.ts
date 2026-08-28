@@ -6,6 +6,8 @@ import {
   IsInt,
   IsNotEmpty,
   IsArray,
+  ArrayMaxSize,
+  ArrayMinSize,
   IsObject,
   IsOptional,
   IsString,
@@ -39,6 +41,17 @@ export class SubmitEmployeeArchiveDraftDto {
   @IsOptional()
   @IsObject()
   performance?: Record<string, unknown>;
+}
+
+export class SubmitDepartmentAssignmentsDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(100)
+  @IsUUID('4', { each: true })
+  userIds!: string[];
+
+  @IsUUID('4')
+  departmentId!: string;
 }
 
 export class CreateEmploymentRecordDto {

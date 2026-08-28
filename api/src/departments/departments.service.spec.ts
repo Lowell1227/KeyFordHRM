@@ -82,14 +82,14 @@ describe("DepartmentsService", () => {
     };
     const tx = {
       department: { update: jest.fn().mockResolvedValue({}) },
-      departmentChangeRequest: { create: jest.fn().mockResolvedValue(request) },
+      departmentChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn().mockResolvedValue(request) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma = {
       department: {
         findMany: jest.fn().mockResolvedValue([
           { id: 'dept-visual', name: '视觉设计部', fullPath: '视觉设计部', parentId: null, company: 'fuede', isActive: true },
-          { id: 'dept-project', name: '项目中心', fullPath: '项目中心', parentId: null, company: 'beijing_fuede', isActive: true },
+          { id: 'dept-project', name: '项目中心', fullPath: '项目中心', parentId: null, company: 'fuede', isActive: true },
         ]),
       },
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
@@ -129,6 +129,7 @@ describe("DepartmentsService", () => {
     const tx = {
       department: { create: jest.fn().mockResolvedValue(created) },
       departmentChangeRequest: {
+        findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn().mockResolvedValue({ id: 'change-create-1', action: 'create', status: 'pending' }),
       },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
@@ -166,6 +167,32 @@ describe("DepartmentsService", () => {
     expect(tx.department.create).not.toHaveBeenCalled();
   });
 
+  it('同一上级下已有同名新建部门待审时拒绝重复提交', async () => {
+    const tx = {
+      departmentChangeRequest: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'create-pending',
+          proposedValue: { name: '品牌组', parentId: 'dept-market', company: 'fuede_sports' },
+        }]),
+        create: jest.fn(),
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new DepartmentsService({
+      department: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'dept-market', name: '市场部', fullPath: '市场部', parentId: null,
+          company: 'fuede_sports', sortOrder: 1, isActive: true, leaderId: null, approverId: null,
+        }]),
+      },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any);
+
+    await expect(service.create({ name: '品牌组', parentId: 'dept-market' } as any, operator))
+      .rejects.toThrow('同一上级下已有同名部门待审核');
+    expect(tx.departmentChangeRequest.create).not.toHaveBeenCalled();
+  });
+
   it('普通 HR 合并部门时只提交包含影响范围的待审核申请', async () => {
     const tx = {
       user: { updateMany: jest.fn().mockResolvedValue({ count: 3 }) },
@@ -174,6 +201,7 @@ describe("DepartmentsService", () => {
         update: jest.fn().mockResolvedValue({}),
       },
       departmentChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'change-merge-1', action: 'merge', status: 'pending' }),
       },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
@@ -468,7 +496,14 @@ describe("DepartmentsService", () => {
     }));
   });
 
-  it('只允许删除没有直属人员和下级部门的空部门', async () => {
+  it('删除非空部门时提交人员释放和下级部门提升的影响快照', async () => {
+    const tx = {
+      departmentChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'change-delete-busy', action: 'delete', status: 'pending' }),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
     const prisma = {
       department: {
         findUnique: jest.fn().mockResolvedValue({
@@ -477,20 +512,38 @@ describe("DepartmentsService", () => {
           fullPath: '项目中心 / 项目部',
           parentId: 'dept-project',
           isActive: true,
-          _count: { members: 2, children: 0 },
+          members: [{ id: 'user-1' }, { id: 'user-2' }],
+          children: [{ id: 'dept-child' }],
         }),
       },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const service = new DepartmentsService(prisma as any);
 
-    await expect(service.remove('dept-busy', operator)).rejects.toEqual(expect.any(BadRequestException));
-    await expect(service.remove('dept-busy', operator)).rejects.toThrow('该部门仍有直属人员，请先合并部门');
+    await expect(service.remove('dept-busy', operator)).resolves.toMatchObject({
+      id: 'change-delete-busy',
+      status: 'pending',
+    });
+    expect(tx.departmentChangeRequest.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'delete',
+        baseValue: expect.objectContaining({
+          directMemberIds: ['user-1', 'user-2'],
+          childDepartmentIds: ['dept-child'],
+        }),
+        proposedValue: expect.objectContaining({
+          releaseMembersToRoot: true,
+          promoteChildrenToParentId: 'dept-project',
+        }),
+      }),
+    });
   });
 
   it('删除空部门只提交待审核申请，审核前保持启用', async () => {
     const tx = {
       department: { update: jest.fn() },
       departmentChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'change-delete-1', action: 'delete', status: 'pending' }),
       },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
@@ -499,7 +552,7 @@ describe("DepartmentsService", () => {
       department: {
         findUnique: jest.fn().mockResolvedValue({
           id: 'dept-empty', name: '空部门', fullPath: '空部门', parentId: null, isActive: true,
-          _count: { members: 0, children: 0 },
+          members: [], children: [],
         }),
       },
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
@@ -514,5 +567,217 @@ describe("DepartmentsService", () => {
       data: expect.objectContaining({ action: 'delete', departmentId: 'dept-empty', createdById: 'operator-335' }),
     });
     expect(tx.department.update).not.toHaveBeenCalled();
+  });
+
+  it('审核删除部门后释放直属人员并把下级部门提升到原上级', async () => {
+    const request = {
+      id: 'change-delete-approve', action: 'delete', status: 'pending', departmentId: 'dept-source',
+      departmentName: '项目部', createdById: 'operator-335',
+      baseValue: {
+        id: 'dept-source', name: '项目部', parentId: 'dept-parent', fullPath: '事业部 / 项目部',
+        directMemberIds: ['user-1', 'user-2'], childDepartmentIds: ['dept-child'],
+      },
+      proposedValue: { releaseMembersToRoot: true, promoteChildrenToParentId: 'dept-parent', isActive: false },
+    };
+    const tx = {
+      departmentChangeRequest: {
+        findUnique: jest.fn().mockResolvedValue(request),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockImplementation(async ({ data }: any) => ({ ...request, ...data })),
+      },
+      department: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'dept-source', name: '项目部', parentId: 'dept-parent', isActive: true,
+          members: [{ id: 'user-1' }, { id: 'user-2' }], children: [{ id: 'dept-child' }],
+        }),
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'dept-parent', name: '事业部', fullPath: '事业部', parentId: null, company: 'fuede', sortOrder: 1, isActive: true },
+          { id: 'dept-source', name: '项目部', fullPath: '事业部 / 项目部', parentId: 'dept-parent', company: 'fuede', sortOrder: 1, isActive: true },
+          { id: 'dept-child', name: '实施组', fullPath: '事业部 / 项目部 / 实施组', parentId: 'dept-source', company: 'fuede', sortOrder: 1, isActive: true },
+        ]),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockResolvedValue({}),
+      },
+      user: { updateMany: jest.fn().mockResolvedValue({ count: 2 }) },
+      employmentRecord: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'employment-user-1', userId: 'user-1', effectiveFrom: new Date('2025-01-01T00:00:00.000Z'),
+          effectiveTo: null, company: 'fuede', deptId: 'dept-source', position: '项目专员',
+          jobGrade: 'P3', jobFamily: '项目', directManagerId: null, workLocation: '上海',
+          employmentType: 'full_time', employeeStatus: 'active', entryDate: new Date('2025-01-01T00:00:00.000Z'),
+          plannedRegularDate: null, actualRegularDate: null, leaveDate: null, probationMonths: 3,
+          changeType: 'onboarding', reason: null, sourceType: 'roster', sourceBatchId: null, createdById: 'operator-335',
+        }]),
+        update: jest.fn().mockResolvedValue({}),
+        create: jest.fn().mockResolvedValue({}),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const service = new DepartmentsService({
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any);
+
+    await service.approveChange(request.id, hrAdmin);
+
+    expect(tx.user.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['user-1', 'user-2'] }, deptId: 'dept-source', deletedAt: null },
+      data: { deptId: null },
+    });
+    expect(tx.department.updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['dept-child'] }, parentId: 'dept-source', isActive: true },
+      data: { parentId: 'dept-parent' },
+    });
+    expect(tx.department.update).toHaveBeenCalledWith({
+      where: { id: 'dept-source' },
+      data: { isActive: false, parentId: null, leaderId: null, approverId: null },
+    });
+    expect(tx.employmentRecord.update).toHaveBeenCalledWith({
+      where: { id: 'employment-user-1' },
+      data: { effectiveTo: expect.any(Date) },
+    });
+    expect(tx.employmentRecord.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 'user-1', deptId: null, position: '项目专员',
+        changeType: 'department_deleted', sourceType: 'department_change_review',
+      }),
+    });
+  });
+
+  it('部门编辑一次提交名称公司上级负责人和审批人', async () => {
+    const tx = {
+      departmentChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({ id: 'change-details', action: 'update_structure', status: 'pending' }),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = {
+      department: {
+        findMany: jest.fn().mockResolvedValue([
+          {
+            id: 'dept-1', name: '旧名称', fullPath: '旧名称', parentId: null, company: 'fuede',
+            leaderId: null, approverId: null, isActive: true,
+          },
+          {
+            id: 'dept-parent', name: '事业部', fullPath: '事业部', parentId: null, company: 'beijing_fuede',
+            leaderId: null, approverId: null, isActive: true,
+          },
+        ]),
+      },
+      user: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'leader-1' }, { id: 'approver-1' }]),
+      },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new DepartmentsService(prisma as any);
+
+    await service.updateStructure('dept-1', {
+      name: '新名称', parentId: 'dept-parent', company: 'beijing_fuede',
+      leaderId: 'leader-1', approverId: 'approver-1',
+    } as any, operator);
+
+    expect(tx.departmentChangeRequest.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        baseValue: expect.objectContaining({ company: 'fuede', leaderId: null, approverId: null }),
+        proposedValue: expect.objectContaining({
+          name: '新名称', parentId: 'dept-parent', company: 'beijing_fuede',
+          leaderId: 'leader-1', approverId: 'approver-1',
+        }),
+      }),
+    });
+  });
+
+  it('部门不能挂靠到其他公司的上级部门', async () => {
+    const service = new DepartmentsService({
+      department: {
+        findMany: jest.fn().mockResolvedValue([
+          { id: 'dept-1', name: '项目部', fullPath: '项目部', parentId: null, company: 'fuede', leaderId: null, approverId: null, isActive: true },
+          { id: 'dept-parent', name: '北京事业部', fullPath: '北京事业部', parentId: null, company: 'beijing_fuede', leaderId: null, approverId: null, isActive: true },
+        ]),
+      },
+    } as any);
+
+    await expect(service.updateStructure('dept-1', { parentId: 'dept-parent' }, operator))
+      .rejects.toThrow('上级部门与所属公司必须一致');
+  });
+
+  it('审核人不能通过自己提交的部门变更', async () => {
+    const ownRequest = {
+      id: 'change-own', action: 'update_structure', status: 'pending', departmentId: 'dept-1',
+      departmentName: '项目部', createdById: 'hr-admin-1', baseValue: {}, proposedValue: {},
+    };
+    const tx = { departmentChangeRequest: { findUnique: jest.fn().mockResolvedValue(ownRequest) } };
+    const service = new DepartmentsService({
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any);
+
+    await expect(service.approveChange(ownRequest.id, hrAdmin)).rejects.toThrow('不能审核自己提交的部门变更');
+  });
+
+  it('审核人不能退回自己提交的部门变更', async () => {
+    const ownRequest = {
+      id: 'change-own-reject', action: 'update_structure', status: 'pending', departmentId: 'dept-1',
+      departmentName: '项目部', createdById: 'hr-admin-1', baseValue: {}, proposedValue: {},
+    };
+    const tx = {
+      departmentChangeRequest: {
+        findUnique: jest.fn().mockResolvedValue(ownRequest),
+        updateMany: jest.fn(),
+      },
+    };
+    const service = new DepartmentsService({
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any);
+
+    await expect(service.rejectChange(ownRequest.id, '信息不完整', hrAdmin))
+      .rejects.toThrow('不能审核自己提交的部门变更');
+    expect(tx.departmentChangeRequest.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('同一部门已有待审核结构变更时拒绝重复提交', async () => {
+    const tx = {
+      departmentChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'change-pending', status: 'pending' }),
+        create: jest.fn(),
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new DepartmentsService({
+      department: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'dept-1', name: '项目部', fullPath: '项目部', parentId: null, company: 'fuede',
+          leaderId: null, approverId: null, isActive: true,
+        }]),
+      },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any);
+
+    await expect(service.updateStructure('dept-1', { name: '新项目部' }, operator))
+      .rejects.toThrow('该部门已有变更审核中');
+    expect(tx.departmentChangeRequest.create).not.toHaveBeenCalled();
+  });
+
+  it('并发提交由数据库唯一索引拦截时返回明确的待审冲突', async () => {
+    const duplicateError = Object.assign(new Error('unique constraint'), { code: 'P2002' });
+    const tx = {
+      departmentChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockRejectedValue(duplicateError),
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new DepartmentsService({
+      department: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'dept-1', name: '项目部', fullPath: '项目部', parentId: null, company: 'fuede',
+          leaderId: null, approverId: null, isActive: true,
+        }]),
+      },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any);
+
+    await expect(service.updateStructure('dept-1', { name: '新项目部' }, operator))
+      .rejects.toThrow('该部门已有变更审核中');
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
   });
 });

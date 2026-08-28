@@ -63,21 +63,25 @@ export class DepartmentsController {
   }
 
   @Patch(':id/leader')
-  @Roles(SysRole.system_admin)
+  @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('organization_edit')
   async updateLeader(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateLeaderDto,
+    @CurrentUser() operator: AuthUser,
   ) {
-    return this.departmentsService.updateLeader(id, dto);
+    return this.departmentsService.updateStructure(id, { leaderId: dto.leaderId }, operator);
   }
 
   @Patch(':id/approver')
-  @Roles(SysRole.system_admin)
+  @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('organization_edit')
   async updateApprover(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateApproverDto,
+    @CurrentUser() operator: AuthUser,
   ) {
-    return this.departmentsService.updateApprover(id, dto);
+    return this.departmentsService.updateStructure(id, { approverId: dto.approverId }, operator);
   }
 
   @Patch(':id/structure')

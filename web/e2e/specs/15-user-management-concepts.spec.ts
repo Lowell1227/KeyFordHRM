@@ -30,10 +30,10 @@ test('uses concise and consistent organization relationship concepts', async () 
     '人员设置',
     '直属主管',
     '系统权限',
-    '设置部门负责人',
     '最终业务审批人',
-    '设置最终业务审批人',
-    '待处理事项',
+    '人事变更审核',
+    '未分配人员',
+    '删除',
   ]) {
     expect(source).toContain(label);
   }
@@ -295,7 +295,8 @@ test('filters direct-manager candidates by employee name', async ({ page }) => {
   await expect(approverCard).toContainText('郭志浩');
   await expect(approverCard).toContainText('自动取部门负责人的绩效直属上级');
   await expect(approverCard).toContainText('HR 只负责校准');
-  await expect(page.getByRole('button', { name: '设置最终业务审批人' })).toBeVisible();
+  await expect(page.getByRole('button', { name: '编辑', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: '设置最终业务审批人' })).toHaveCount(0);
   await expect(page.locator('.approver-trail-card')).toHaveCount(0);
   await page.getByRole('button', { name: '人员设置' }).click();
   const dialog = page.getByRole('dialog', { name: '人员设置' });
@@ -422,7 +423,7 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await dialog.getByRole('button', { name: '绩效直属上级说明' }).hover();
   const managerTooltip = page.locator('.el-popper[role="tooltip"]:visible').filter({ hasText: '目标审核、主管评分和待办归属' });
   await expect(managerTooltip.locator('.person-settings__tooltip-line')).toHaveCount(4);
-  await expect(managerTooltip).toContainText('待处理事项 → 员工档案');
+  await expect(managerTooltip).toContainText('人事变更审核 → 员工档案');
   await dialog.getByRole('button', { name: '业务职责说明' }).hover();
   const responsibilityTooltip = page.locator('.el-popper[role="tooltip"]:visible').filter({ hasText: '员工是基础人员身份' });
   await expect(responsibilityTooltip.locator('.person-settings__tooltip-line')).toHaveCount(3);
@@ -431,7 +432,7 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await dialog.locator('.el-form-item').filter({ hasText: '绩效直属上级' }).locator('.el-select').click();
   await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '方园' }).click();
   await expect(dialog).toContainText('提交后待 HR 审核');
-  await expect(dialog).toContainText('审核入口：待处理事项 > 员工档案');
+  await expect(dialog).toContainText('审核入口：人事变更审核 > 员工档案');
   await expect(dialog.locator('.person-settings__alert')).toHaveCount(0);
   await expect(dialog).not.toContainText('升级为主管');
   await expect(dialog).not.toContainText('主管权限：未开通');
@@ -440,9 +441,12 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await expect.poll(() => performanceReviewBody).toEqual({
     managerId: manager.id,
   });
+  await expect(page.getByText('审核事项', { exact: true })).toHaveCount(0);
+  await page.getByRole('button', { name: '人事变更审核', exact: true }).click();
   await expect(page.getByText('审核事项', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /员工档案 1/ })).toBeVisible();
 
+  await page.getByRole('button', { name: '员工档案', exact: true }).click();
   await page.getByRole('button', { name: '员工名册' }).click();
   await expect(page.getByRole('columnheader', { name: '岗位', exact: true })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: '系统权限', exact: true })).toBeVisible();
@@ -559,6 +563,13 @@ test('edits the whole employee archive in place and supports contract row change
       body: JSON.stringify(apiResponse({ id: 'review-1', profileReviewStatus: 'pending' })),
     });
   });
+  await page.route('**/api/v1/storage/upload**', async (route) => {
+    const purpose = new URL(route.request().url()).searchParams.get('purpose');
+    const material = purpose === 'employee-contract-image'
+      ? { name: '合同.jpg', url: '/storage/download?key=image', size: 1024, mimeType: 'image/jpeg' }
+      : { name: '合同.pdf', url: '/storage/download?key=file', size: 2048, mimeType: 'application/pdf' };
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(material)) });
+  });
 
   await page.goto(`${webBaseUrl}/users`);
   await page.getByRole('button', { name: '员工名册' }).click();
@@ -578,13 +589,25 @@ test('edits the whole employee archive in place and supports contract row change
   await expect(drawer.getByRole('textbox', { name: '姓名' })).toHaveValue('余焱玲');
   const firstContract = drawer.locator('.contract-card').first();
   await firstContract.getByRole('textbox', { name: '合同名称' }).fill('劳动合同（修订）');
+  await firstContract.locator('input[type="file"]').nth(0).setInputFiles({
+    name: '合同.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('image'),
+  });
+  await firstContract.locator('input[type="file"]').nth(1).setInputFiles({
+    name: '合同.pdf', mimeType: 'application/pdf', buffer: Buffer.from('pdf'),
+  });
+  await expect(firstContract.getByText('合同.jpg', { exact: true })).toBeVisible();
+  await expect(firstContract.getByText('合同.pdf', { exact: true })).toBeVisible();
   await drawer.getByRole('button', { name: '新增合同' }).click();
   await expect(drawer.locator('.contract-card')).toHaveCount(2);
   await drawer.locator('.contract-card').nth(1).getByRole('button', { name: '移除' }).click();
   await drawer.getByRole('button', { name: '保存并提交审核' }).click();
   await expect.poll(() => submittedDraft).toMatchObject({
     employee: { name: '余焱玲' },
-    contracts: [{ id: 'contract-1', name: '劳动合同（修订）', sequence: 0 }],
+    contracts: [{
+      id: 'contract-1', name: '劳动合同（修订）', sequence: 0,
+      images: [{ name: '合同.jpg', size: 1024, mimeType: 'image/jpeg' }],
+      attachments: [{ name: '合同.pdf', size: 2048, mimeType: 'application/pdf' }],
+    }],
   });
 
   await page.setViewportSize({ width: 390, height: 844 });

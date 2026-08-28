@@ -885,6 +885,8 @@ export class EmployeeDataReviewsService {
             confidentialityAgreement: true,
             nonCompeteAgreement: true,
             portraitAgreement: true,
+            images: true,
+            attachments: true,
           },
         },
         employmentHistory: {
@@ -974,6 +976,10 @@ export class EmployeeDataReviewsService {
         confidentialityAgreement: this.nullableString(contract.confidentialityAgreement),
         nonCompeteAgreement: this.nullableString(contract.nonCompeteAgreement),
         portraitAgreement: this.nullableString(contract.portraitAgreement),
+        ...(sourceType === 'manual_archive_change' ? {
+          images: this.materials(contract.images),
+          attachments: this.materials(contract.attachments),
+        } : {}),
         sourceBatchId,
         createdById: operator.id,
         isActive: true,
@@ -1034,6 +1040,8 @@ export class EmployeeDataReviewsService {
       confidentialityAgreement: this.nullableString(contract.confidentialityAgreement),
       nonCompeteAgreement: this.nullableString(contract.nonCompeteAgreement),
       portraitAgreement: this.nullableString(contract.portraitAgreement),
+      images: this.materials(contract.images),
+      attachments: this.materials(contract.attachments),
     });
     const sort = (items: Record<string, unknown>[]) => items
       .map(normalize)
@@ -1046,6 +1054,10 @@ export class EmployeeDataReviewsService {
 
   private contractKey(contractType: string, sequence: number): string {
     return `${contractType}:${sequence}`;
+  }
+
+  private materials(value: unknown): Prisma.InputJsonValue {
+    return JSON.parse(JSON.stringify(Array.isArray(value) ? value : [])) as Prisma.InputJsonValue;
   }
 
   private async completeImportBatchIfReady(

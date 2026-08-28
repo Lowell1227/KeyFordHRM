@@ -12,11 +12,22 @@ import {
   type DepartmentChangeRequest,
 } from '@/api/departments.api';
 import UserSelect from '@/components/common/UserSelect.vue';
+import { useAuthStore } from '@/stores/auth.store';
 
 const props = defineProps<{
   canReviewEmployee: boolean;
   canReviewDepartment: boolean;
 }>();
+const auth = useAuthStore();
+
+const emit = defineEmits<{
+  changed: [];
+}>();
+
+function notifyPersonnelChanged() {
+  emit('changed');
+  window.dispatchEvent(new CustomEvent('personnel-data-changed'));
+}
 
 const activeCategory = ref<'employee' | 'department'>('employee');
 const employeeItems = ref<EmployeeDataReview[]>([]);
@@ -62,12 +73,16 @@ function contractTitle(contract: Record<string, unknown>, index: number): string
 }
 
 function contractDetail(contract: Record<string, unknown>): string {
+  const images = reviewContracts(contract.images);
+  const attachments = reviewContracts(contract.attachments);
   const items = [
     ['签约公司', contract.signingCompany],
     ['签订日期', contract.signedAt],
     ['生效日期', contract.effectiveFrom],
     ['到期日期', contract.expiresAt],
     ['期限', contract.termType ?? contract.termText],
+    ['图片', images.length ? images.map((item) => item.name).filter(Boolean).join('、') : null],
+    ['附件', attachments.length ? attachments.map((item) => item.name).filter(Boolean).join('、') : null],
   ].filter((item) => item[1] !== undefined && item[1] !== null && item[1] !== '');
   return items.length
     ? items.map(([label, value]) => `${label}：${String(value).slice(0, 10)}`).join('；')
@@ -179,6 +194,10 @@ function departmentActionLabel(action: DepartmentChangeAction): string {
   })[action];
 }
 
+function canApproveDepartment(row: DepartmentChangeRequest): boolean {
+  return row.createdBy?.id !== auth.user?.id;
+}
+
 function departmentChangeSummary(row: DepartmentChangeRequest): string {
   if (row.action === 'create') {
     return `新建 ${String(row.proposedValue.name ?? row.departmentName)}`;
@@ -188,9 +207,13 @@ function departmentChangeSummary(row: DepartmentChangeRequest): string {
     const afterName = String(row.proposedValue.name ?? row.departmentName);
     const beforeParent = row.baseValue.parentId ?? null;
     const afterParent = row.proposedValue.parentId ?? null;
-    if (beforeName !== afterName) return `${beforeName} → ${afterName}`;
-    if (beforeParent !== afterParent) return `${beforeName} → ${String(row.proposedValue.parentName ?? '公司根节点')}`;
-    return `${beforeName} 组织信息调整`;
+    const changes: string[] = [];
+    if (beforeName !== afterName) changes.push(`名称：${beforeName} → ${afterName}`);
+    if (beforeParent !== afterParent) changes.push(`上级：${String(row.proposedValue.parentName ?? '公司根节点')}`);
+    if ((row.baseValue.company ?? null) !== (row.proposedValue.company ?? null)) changes.push('所属公司');
+    if ((row.baseValue.leaderId ?? null) !== (row.proposedValue.leaderId ?? null)) changes.push('部门负责人');
+    if ((row.baseValue.approverId ?? null) !== (row.proposedValue.approverId ?? null)) changes.push('最终业务审批人');
+    return changes.length ? changes.join('；') : `${beforeName} 组织信息调整`;
   }
   if (row.action === 'merge') {
     return `${row.departmentName} → ${String(row.proposedValue.targetDepartmentName ?? '目标部门')}`;
@@ -198,7 +221,9 @@ function departmentChangeSummary(row: DepartmentChangeRequest): string {
   if (row.action === 'update_leader') {
     return `${row.departmentName}负责人变更`;
   }
-  return `停用 ${row.departmentName}`;
+  const directMembers = Array.isArray(row.baseValue.directMemberIds) ? row.baseValue.directMemberIds.length : 0;
+  const childDepartments = Array.isArray(row.baseValue.childDepartmentIds) ? row.baseValue.childDepartmentIds.length : 0;
+  return `删除 ${row.departmentName}；释放 ${directMembers} 人到未分配人员；提升 ${childDepartments} 个子部门`;
 }
 
 async function loadEmployeeReviews() {
@@ -273,6 +298,7 @@ async function confirmManager() {
     ElMessage.success('绩效直属上级已补充，可继续审核');
     dialog.visible = false;
     await loadEmployeeReviews();
+    notifyPersonnelChanged();
   } finally {
     dialog.saving = false;
   }
@@ -284,6 +310,7 @@ async function approveDepartment(row: DepartmentChangeRequest) {
     await departmentsApi.approveChange(row.id);
     ElMessage.success('部门变更已通过并生效');
     await loadDepartmentReviews();
+    notifyPersonnelChanged();
   } finally {
     departmentLoading.value = false;
   }
@@ -298,6 +325,7 @@ async function rejectDepartment(row: DepartmentChangeRequest) {
     await departmentsApi.rejectChange(row.id, result.value);
     ElMessage.success('部门变更已退回');
     await loadDepartmentReviews();
+    notifyPersonnelChanged();
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') throw error;
   } finally {
@@ -370,7 +398,11 @@ onMounted(async () => {
           <el-tag type="warning" effect="plain">{{ departmentActionLabel(row.action) }}</el-tag>
           <div><strong>{{ departmentChangeSummary(row) }}</strong><p>提交人：<span>{{ row.createdBy?.name || '未知' }}</span> · {{ formatDateTime(row.createdAt) }}</p></div>
         </div>
-        <div class="department-review-card__actions"><el-button @click="rejectDepartment(row)">退回</el-button><el-button type="primary" @click="approveDepartment(row)">通过</el-button></div>
+        <div class="department-review-card__actions">
+          <span v-if="!canApproveDepartment(row)" class="self-review-tip">本人提交，需其他管理员审核</span>
+          <el-button :disabled="!canApproveDepartment(row)" @click="rejectDepartment(row)">退回</el-button>
+          <el-button type="primary" :disabled="!canApproveDepartment(row)" @click="approveDepartment(row)">通过</el-button>
+        </div>
       </article>
       <el-empty v-if="!departmentLoading && !departmentItems.length" description="暂无部门架构待审核变更" />
     </div>
@@ -403,6 +435,7 @@ onMounted(async () => {
 .department-review-card__main { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .department-review-card__main strong { display: block; margin-bottom: 4px; }
 .department-review-card__actions { display: flex; flex: none; }
+.self-review-tip { align-self: center; margin-right: 6px; color: #b54708; font-size: 12px; }
 @media (max-width: 760px) {
   .pending-review-workspace { padding: 14px; }
   .pending-review-workspace__head, .department-review-card { align-items: stretch; flex-direction: column; }

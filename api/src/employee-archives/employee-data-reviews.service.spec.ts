@@ -1131,6 +1131,8 @@ describe('EmployeeDataReviewsService', () => {
         signingCompany: '孚德体育文化',
         signedAt: '2025-01-01',
         effectiveFrom: '2025-02-01',
+        images: [{ name: '合同.jpg', url: '/storage/download?key=image', size: 1024, mimeType: 'image/jpeg' }],
+        attachments: [{ name: '合同.pdf', url: '/storage/download?key=file', size: 2048, mimeType: 'application/pdf' }],
       }],
       null,
       operator,
@@ -1144,6 +1146,8 @@ describe('EmployeeDataReviewsService', () => {
         name: '保留的第二份合同',
         signedAt: new Date('2025-01-01'),
         effectiveFrom: new Date('2025-02-01'),
+        images: [{ name: '合同.jpg', url: '/storage/download?key=image', size: 1024, mimeType: 'image/jpeg' }],
+        attachments: [{ name: '合同.pdf', url: '/storage/download?key=file', size: 2048, mimeType: 'application/pdf' }],
       }),
     });
     expect(update).toHaveBeenCalledWith({
