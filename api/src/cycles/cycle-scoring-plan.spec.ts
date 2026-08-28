@@ -7,6 +7,7 @@ describe('cycle scoring plan rules', () => {
     expect(normalizeScoringFrequency('custom', 'monthly')).toBe('cycle');
     expect(normalizeScoringFrequency('quarterly')).toBe('monthly');
     expect(normalizeScoringFrequency('semiannual')).toBe('monthly');
+    expect(normalizeScoringFrequency('annual')).toBe('monthly');
     expect(normalizeScoringFrequency('annual', 'cycle')).toBe('cycle');
   });
 

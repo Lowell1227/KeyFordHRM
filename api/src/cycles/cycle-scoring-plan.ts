@@ -37,7 +37,7 @@ export function normalizeScoringFrequency(type: CycleType, requested?: ScoringFr
   if (type === CycleType.custom) return ScoringFrequency.cycle;
   if (type === CycleType.monthly) return ScoringFrequency.monthly;
   if (requested) return requested;
-  return type === CycleType.quarterly || type === CycleType.semiannual
+  return type === CycleType.quarterly || type === CycleType.semiannual || type === CycleType.annual
     ? ScoringFrequency.monthly
     : ScoringFrequency.cycle;
 }
