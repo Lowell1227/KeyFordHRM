@@ -1,5 +1,13 @@
 import { Injectable, BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
-import { AccountType, AssessmentPeriodType, IndicatorType, Prisma, UserStatus } from '@prisma/client';
+import {
+  AccountType,
+  AssessmentPeriodType,
+  CycleType,
+  IndicatorType,
+  Prisma,
+  ScoringFrequency,
+  UserStatus,
+} from '@prisma/client';
 import { createHash } from 'crypto';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
@@ -9,6 +17,7 @@ import { ExemptService } from './exempt.service';
 import { serializeDecimals } from '@/common/interceptors/response.interceptor';
 import { buildEffectiveApproverMap } from '@/departments/department-relations';
 import { validateTemplateWeights } from '@/templates/templates.validation';
+import { buildPeriodDefinitions, businessDateKey } from './cycle-scoring-plan';
 
 /** 模板匹配所需的模板视图。 */
 interface TemplateView {
@@ -1085,7 +1094,13 @@ export class LaunchService {
   }
 
   private workflowV2ConfigurationBlockers(
-    cycle: { companyFinalApproverId?: string | null },
+    cycle: {
+      companyFinalApproverId?: string | null;
+      type: CycleType;
+      scoringFrequency: ScoringFrequency;
+      startDate: Date;
+      endDate: Date;
+    },
     schedules: LaunchPeriodSchedule[],
     companyFinalApprover: CompanyFinalApprover | null,
   ): LaunchPreflightResult['blockers'] {
@@ -1106,8 +1121,85 @@ export class LaunchService {
         code: 'PERIOD_SCHEDULE_MISSING',
         message: '评分周期排期为空，请返回周期计划补齐后重新审核',
       });
+    } else if (!this.persistedSchedulesMatchPlan(cycle, schedules)) {
+      blockers.push({
+        code: 'PERIOD_SCHEDULE_INVALID',
+        message: '已保存的评分排期与周期类型或考核期间不一致，请返回周期计划重新生成并审核',
+      });
     }
     return blockers;
+  }
+
+  private persistedSchedulesMatchPlan(
+    cycle: {
+      type: CycleType;
+      scoringFrequency: ScoringFrequency;
+      startDate: Date;
+      endDate: Date;
+    },
+    schedules: LaunchPeriodSchedule[],
+  ): boolean {
+    return [1, 0].some((utcDateOffsetDays) => this.persistedSchedulesMatchPlanDateMode(
+      cycle,
+      schedules,
+      utcDateOffsetDays,
+    ));
+  }
+
+  private persistedSchedulesMatchPlanDateMode(
+    cycle: {
+      type: CycleType;
+      scoringFrequency: ScoringFrequency;
+      startDate: Date;
+      endDate: Date;
+    },
+    schedules: LaunchPeriodSchedule[],
+    utcDateOffsetDays: number,
+  ): boolean {
+    let expected: ReturnType<typeof buildPeriodDefinitions>;
+    try {
+      expected = buildPeriodDefinitions({
+        type: cycle.type,
+        scoringFrequency: cycle.scoringFrequency,
+        startDate: this.asShanghaiMidnight(cycle.startDate, utcDateOffsetDays),
+        endDate: this.asShanghaiMidnight(cycle.endDate, utcDateOffsetDays),
+      });
+    } catch {
+      return false;
+    }
+    if (schedules.length !== expected.length) return false;
+
+    const schedulesByKey = new Map<string, LaunchPeriodSchedule>();
+    for (const schedule of schedules) {
+      if (schedulesByKey.has(schedule.periodKey)) return false;
+      schedulesByKey.set(schedule.periodKey, schedule);
+    }
+
+    return expected.every((period) => {
+      const schedule = schedulesByKey.get(period.periodKey);
+      return Boolean(
+        schedule
+        && schedule.periodType === period.periodType
+        && schedule.sequence === period.sequence
+        && this.persistedDateKey(schedule.periodStart, utcDateOffsetDays) === businessDateKey(period.periodStart)
+        && this.persistedDateKey(schedule.periodEnd, utcDateOffsetDays) === businessDateKey(period.periodEnd),
+      );
+    });
+  }
+
+  private asShanghaiMidnight(date: Date, utcDateOffsetDays: number): Date {
+    return new Date(`${this.persistedDateKey(date, utcDateOffsetDays)}T00:00:00+08:00`);
+  }
+
+  private persistedDateKey(date: Date, utcDateOffsetDays: number): string {
+    const isUtcMidnight = date.getUTCHours() === 0
+      && date.getUTCMinutes() === 0
+      && date.getUTCSeconds() === 0
+      && date.getUTCMilliseconds() === 0;
+    if (!isUtcMidnight) return businessDateKey(date);
+    const businessDate = new Date(date.getTime());
+    businessDate.setUTCDate(businessDate.getUTCDate() + utcDateOffsetDays);
+    return businessDate.toISOString().slice(0, 10);
   }
 
   /** 为每个被使用模板生成快照。 */

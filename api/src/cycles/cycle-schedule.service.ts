@@ -64,11 +64,26 @@ export class CycleScheduleService {
 
   normalizeAndValidate(input: PreviewCycleScheduleDto): NormalizedCycleSchedulePlan {
     const scoringFrequency = normalizeScoringFrequency(input.type, input.scoringFrequency);
-    const overrides = new Map((input.schedules ?? []).map((schedule) => [schedule.periodKey, schedule]));
-    const schedules = buildPeriodDefinitions({ ...input, scoringFrequency }).map((period) =>
+    const periods = buildPeriodDefinitions({ ...input, scoringFrequency });
+    const expectedKeys = new Set(periods.map((period) => period.periodKey));
+    const submittedSchedules = input.schedules ?? [];
+    const keyCounts = new Map<string, number>();
+    for (const schedule of submittedSchedules) {
+      keyCounts.set(schedule.periodKey, (keyCounts.get(schedule.periodKey) ?? 0) + 1);
+    }
+    const blockers: ScheduleIssue[] = [];
+    for (const [periodKey, count] of keyCounts) {
+      if (count > 1) {
+        blockers.push({ code: 'DUPLICATE_PERIOD_KEY', periodKey, message: `评分排期中存在重复期次 ${periodKey}` });
+      }
+      if (!expectedKeys.has(periodKey)) {
+        blockers.push({ code: 'UNEXPECTED_PERIOD_KEY', periodKey, message: `评分排期包含非本周期期次 ${periodKey}` });
+      }
+    }
+    const overrides = new Map(submittedSchedules.map((schedule) => [schedule.periodKey, schedule]));
+    const schedules = periods.map((period) =>
       this.buildSchedule(period, overrides.get(period.periodKey)),
     );
-    const blockers: ScheduleIssue[] = [];
     const warnings: ScheduleIssue[] = [];
 
     for (const schedule of schedules) this.validateSchedule(schedule, blockers, warnings);

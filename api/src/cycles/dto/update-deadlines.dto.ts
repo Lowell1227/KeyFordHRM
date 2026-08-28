@@ -1,11 +1,16 @@
 import { Type } from 'class-transformer';
-import { IsOptional, IsDate } from 'class-validator';
+import { IsOptional, IsDate, IsInt, Min } from 'class-validator';
 
 /**
  * 修改考核周期各节点截止日期。
  * 仅允许延期，不允许提前；新值仍需保持递增顺序。
  */
 export class UpdateDeadlinesDto {
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  expectedPlanVersion!: number;
+
   @IsOptional()
   @Type(() => Date)
   @IsDate()

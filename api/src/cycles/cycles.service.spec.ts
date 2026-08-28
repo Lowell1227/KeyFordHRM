@@ -229,8 +229,8 @@ describe('CyclesService', () => {
       periodKey: '2027-01',
       periodType: 'month',
       sequence: 1,
-      periodStart: new Date('2027-01-01T00:00:00.000Z'),
-      periodEnd: new Date('2027-01-30T16:00:00.000Z'),
+      periodStart: new Date('2026-12-31T00:00:00.000Z'),
+      periodEnd: new Date('2027-01-30T00:00:00.000Z'),
       selfEvalOpenAt: new Date('2027-02-01T01:00:00.000Z'),
       selfEvalDueAt: new Date('2027-02-03T10:00:00.000Z'),
       managerDueAt: new Date('2027-02-08T10:00:00.000Z'),
@@ -239,8 +239,8 @@ describe('CyclesService', () => {
       periodKey: '2027-02',
       periodType: 'month',
       sequence: 2,
-      periodStart: new Date('2027-01-31T16:00:00.000Z'),
-      periodEnd: new Date('2027-02-27T16:00:00.000Z'),
+      periodStart: new Date('2027-01-31T00:00:00.000Z'),
+      periodEnd: new Date('2027-02-27T00:00:00.000Z'),
       selfEvalOpenAt: new Date('2027-03-01T01:00:00.000Z'),
       selfEvalDueAt: new Date('2027-03-03T10:00:00.000Z'),
       managerDueAt: new Date('2027-03-08T10:00:00.000Z'),
@@ -249,14 +249,16 @@ describe('CyclesService', () => {
       periodKey: '2027-03',
       periodType: 'month',
       sequence: 3,
-      periodStart: new Date('2027-02-28T16:00:00.000Z'),
-      periodEnd: new Date('2027-03-31T00:00:00.000Z'),
+      periodStart: new Date('2027-02-28T00:00:00.000Z'),
+      periodEnd: new Date('2027-03-30T00:00:00.000Z'),
       selfEvalOpenAt: new Date('2027-04-01T01:00:00.000Z'),
       selfEvalDueAt: new Date('2027-04-06T10:00:00.000Z'),
       managerDueAt: new Date('2027-04-09T10:00:00.000Z'),
       isException: true,
     }];
     const cycle = storedDraft({
+      startDate: new Date('2026-12-31T00:00:00.000Z'),
+      endDate: new Date('2027-03-30T00:00:00.000Z'),
       participantDeptIds: ['bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb', 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'],
       publishVisibleFields: { grade: true, total_score: true },
       periodSchedules: schedules,
@@ -266,7 +268,7 @@ describe('CyclesService', () => {
     const result = await service.updateDraft('cycle-1', {
       expectedPlanVersion: 3,
       name: cycle.name,
-      startDate: new Date('2027-01-01T08:00:00+08:00'),
+      startDate: new Date('2027-01-01T00:00:00+08:00'),
       participantDeptIds: ['aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb'],
       publishVisibleFields: { total_score: true, grade: true },
       gradeAMaxRatio: 0.20,
@@ -309,7 +311,9 @@ describe('CyclesService', () => {
 
   it('allows only the assigned business reviewer and returns the full cycle contract', async () => {
     const cycle = storedDraft({ reviewStatus: 'pending', reviewedAt: null, reviewComment: null });
-    prisma.assessmentCycle.findUnique.mockResolvedValue(cycle);
+    prisma.assessmentCycle.findUnique
+      .mockResolvedValueOnce(cycle)
+      .mockResolvedValueOnce({ ...cycle, planVersion: 4, reviewStatus: 'approved' });
 
     const result = await service.review('cycle-1', {
       action: 'approve',
@@ -324,9 +328,13 @@ describe('CyclesService', () => {
         reviewStatus: 'pending',
         reviewedAt: null,
       },
-      data: expect.objectContaining({ reviewStatus: 'approved' }),
+      data: expect.objectContaining({
+        planVersion: { increment: 1 },
+        reviewStatus: 'approved',
+      }),
     });
     expect(result).toEqual(expect.objectContaining({
+      planVersion: 4,
       periodSchedules: cycle.periodSchedules,
       companyFinalApprover: cycle.companyFinalApprover,
       reviewFrequency: 'cycle',
@@ -745,9 +753,10 @@ describe('CyclesService', () => {
   });
 
   it('requires schedule cancellation before deadlines can be changed', async () => {
-    prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', status: 'scheduled' });
+    prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', status: 'scheduled', planVersion: 3 });
 
     await expect(service.updateDeadlines('cycle-1', {
+      expectedPlanVersion: 3,
       deadlineIndicatorSetting: new Date('2026-12-28T00:00:00.000Z'),
     }, creator)).rejects.toMatchObject({
       response: { message: expect.stringContaining('取消预约') },
@@ -755,20 +764,83 @@ describe('CyclesService', () => {
   });
 
   it('uses a status CAS so concurrent scheduling cannot race a deadline update', async () => {
-    prisma.assessmentCycle.findUnique.mockResolvedValue({
-      id: 'cycle-1',
-      status: 'draft',
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft({
       deadlineIndicatorSetting: new Date('2026-12-20T00:00:00.000Z'),
-    });
+    }));
     prisma.assessmentCycle.updateMany.mockResolvedValue({ count: 0 });
 
     await expect(service.updateDeadlines('cycle-1', {
+      expectedPlanVersion: 3,
       deadlineIndicatorSetting: new Date('2026-12-21T00:00:00.000Z'),
     }, creator)).rejects.toMatchObject({
-      response: { message: expect.stringContaining('状态已变化') },
+      response: { message: expect.stringContaining('刷新后重试') },
     });
     expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'cycle-1', status: 'draft' },
+      where: { id: 'cycle-1', status: 'draft', planVersion: 3 },
+    }));
+  });
+
+  it('preserves approval and plan version for a semantic deadline no-op', async () => {
+    const cycle = storedDraft({
+      deadlineIndicatorSetting: new Date('2026-12-20T00:00:00.000Z'),
+    });
+    prisma.assessmentCycle.findUnique.mockResolvedValue(cycle);
+
+    const result = await service.updateDeadlines('cycle-1', {
+      expectedPlanVersion: 3,
+      deadlineIndicatorSetting: new Date('2026-12-20T00:00:00.000Z'),
+    }, creator);
+
+    expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith({
+      where: { id: 'cycle-1', status: 'draft', planVersion: 3 },
+      data: { planVersion: { increment: 0 } },
+    });
+    expect(prisma.auditLog.create).not.toHaveBeenCalled();
+    expect(result).toEqual(expect.objectContaining({
+      planVersion: 3,
+      reviewStatus: 'approved',
+      periodSchedules: cycle.periodSchedules,
+      companyFinalApprover: cycle.companyFinalApprover,
+    }));
+  });
+
+  it('increments plan version and resets review metadata for a real draft deadline change', async () => {
+    const cycle = storedDraft({
+      deadlineIndicatorSetting: new Date('2026-12-20T00:00:00.000Z'),
+    });
+    const updated = {
+      ...cycle,
+      planVersion: 4,
+      deadlineIndicatorSetting: new Date('2026-12-21T00:00:00.000Z'),
+      reviewStatus: 'pending',
+      reviewedAt: null,
+      reviewComment: null,
+    };
+    prisma.assessmentCycle.findUnique
+      .mockResolvedValueOnce(cycle)
+      .mockResolvedValueOnce(updated);
+
+    const result = await service.updateDeadlines('cycle-1', {
+      expectedPlanVersion: 3,
+      deadlineIndicatorSetting: updated.deadlineIndicatorSetting,
+    }, creator);
+
+    expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith({
+      where: { id: 'cycle-1', status: 'draft', planVersion: 3 },
+      data: expect.objectContaining({
+        deadlineIndicatorSetting: updated.deadlineIndicatorSetting,
+        planVersion: { increment: 1 },
+        reviewStatus: 'pending',
+        reviewedAt: null,
+        reviewComment: null,
+      }),
+    });
+    expect(result).toEqual(expect.objectContaining({
+      planVersion: 4,
+      reviewStatus: 'pending',
+      periodSchedules: cycle.periodSchedules,
+      companyFinalApprover: cycle.companyFinalApprover,
+      reviewFrequency: 'cycle',
     }));
   });
 });

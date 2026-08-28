@@ -1297,7 +1297,9 @@ function openEditDeadlines(cycle: AssessmentCycle) {
 }
 
 function buildDeadlinesBody(): UpdateDeadlinesBody {
-  const body: UpdateDeadlinesBody = {};
+  const body: UpdateDeadlinesBody = {
+    expectedPlanVersion: editingCycle.value?.planVersion ?? 0,
+  };
   DEADLINE_FIELDS.forEach(({ key }) => {
     const v = editForm[key];
     if (v) body[key] = formatDateTimeLocal(v);
@@ -1350,7 +1352,10 @@ async function handleUpdateDeadlines() {
 
   submitting.value = true;
   try {
-    await cyclesApi.updateDeadlines(editingCycle.value.id, buildDeadlinesBody());
+    const updated = await cyclesApi.updateDeadlines(editingCycle.value.id, buildDeadlinesBody());
+    const index = cycles.value.findIndex((cycle) => cycle.id === updated.id);
+    if (index >= 0) cycles.value[index] = updated;
+    if (cycleDetail.value?.id === updated.id) cycleDetail.value = updated;
     ElMessage.success('修改截止日成功');
     editDialogVisible.value = false;
     editingCycle.value = null;
@@ -1650,7 +1655,10 @@ async function handleReviewCycle(cycle: AssessmentCycle) {
       '审核周期计划',
       { confirmButtonText: '审核通过', cancelButtonText: '取消', type: 'warning' },
     );
-    await cyclesApi.review(cycle.id, 'approve', cycle.planVersion);
+    const updated = await cyclesApi.review(cycle.id, 'approve', cycle.planVersion);
+    const index = cycles.value.findIndex((item) => item.id === updated.id);
+    if (index >= 0) cycles.value[index] = updated;
+    if (cycleDetail.value?.id === updated.id) cycleDetail.value = updated;
     ElMessage.success('周期计划已审核通过');
     await loadCycles();
     if (isCycleWorkspace.value) await loadCycleDetail(cycle.id);

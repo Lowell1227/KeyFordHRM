@@ -26,6 +26,28 @@ export interface PeriodDefinition {
   periodEnd: Date;
 }
 
+/** Canonicalize date-only values from either Shanghai-midnight DTOs or Prisma @db.Date UTC-midnight rows. */
+export function businessDateKey(date: Date): string {
+  if (Number.isNaN(date.getTime())) throw new BadRequestException('日期必须是有效值');
+  const value = getCalendarDate(date);
+  return `${value.year}-${String(value.month).padStart(2, '0')}-${String(value.day).padStart(2, '0')}`;
+}
+
+/** Restore the Shanghai business date lost when a Shanghai-midnight instant round-trips through Prisma @db.Date. */
+export function prismaDateBusinessKey(date: Date): string {
+  if (Number.isNaN(date.getTime())) throw new BadRequestException('日期必须是有效值');
+  const isUtcMidnight = date.getUTCHours() === 0
+    && date.getUTCMinutes() === 0
+    && date.getUTCSeconds() === 0
+    && date.getUTCMilliseconds() === 0;
+  if (isUtcMidnight) {
+    const businessDate = new Date(date.getTime());
+    businessDate.setUTCDate(businessDate.getUTCDate() + 1);
+    return businessDate.toISOString().slice(0, 10);
+  }
+  return businessDateKey(date);
+}
+
 interface CalendarDate {
   year: number;
   month: number;

@@ -75,6 +75,7 @@ describe('LaunchService preflight', () => {
   const v2Cycle = (overrides: Record<string, unknown> = {}) => ({
     id: cycleId,
     name: '2027年第一季度',
+    type: 'quarterly',
     status: 'draft',
     startDate: new Date('2027-01-01T00:00:00.000Z'),
     endDate: new Date('2027-03-31T00:00:00.000Z'),
@@ -641,6 +642,57 @@ describe('LaunchService preflight', () => {
       ready: false,
       blockers: expect.arrayContaining([expect.objectContaining({
         code: 'PERIOD_SCHEDULE_MISSING',
+      })]),
+    }));
+  });
+
+  it.each([
+    {
+      label: 'a legacy fourth quarterly row',
+      schedules: [
+        ...periodSchedules,
+        {
+          ...periodSchedules[2],
+          periodKey: '2027-04',
+          sequence: 4,
+          periodStart: new Date('2027-04-01T00:00:00.000Z'),
+          periodEnd: new Date('2027-04-30T00:00:00.000Z'),
+        },
+      ],
+    },
+    {
+      label: 'a duplicate key',
+      schedules: [periodSchedules[0], periodSchedules[0], periodSchedules[2]],
+    },
+    {
+      label: 'a missing period',
+      schedules: periodSchedules.slice(0, 2),
+    },
+    {
+      label: 'an unknown key',
+      schedules: [
+        periodSchedules[0],
+        periodSchedules[1],
+        { ...periodSchedules[2], periodKey: '2027-04' },
+      ],
+    },
+    {
+      label: 'a boundary that does not cover the configured cycle',
+      schedules: [
+        { ...periodSchedules[0], periodStart: new Date('2027-01-02T00:00:00.000Z') },
+        periodSchedules[1],
+        periodSchedules[2],
+      ],
+    },
+  ])('blocks workflow v2 preflight for persisted schedules with $label', async ({ schedules }) => {
+    tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle());
+    tx.cyclePeriodSchedule.findMany.mockResolvedValue(schedules);
+    mockV2Users();
+
+    await expect(service.preflight(cycleId)).resolves.toEqual(expect.objectContaining({
+      ready: false,
+      blockers: expect.arrayContaining([expect.objectContaining({
+        code: 'PERIOD_SCHEDULE_INVALID',
       })]),
     }));
   });

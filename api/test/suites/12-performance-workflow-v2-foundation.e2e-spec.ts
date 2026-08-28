@@ -170,7 +170,7 @@ describe("Performance workflow v2 foundation", () => {
       data: { value: { userId: topLeader.id } },
     });
 
-    await app.http
+    const reviewedV2 = await app.http
       .post(`/api/v1/cycles/${v2CycleId}/review`)
       .set("Authorization", `Bearer ${reviewerToken}`)
       .send({
@@ -180,6 +180,48 @@ describe("Performance workflow v2 foundation", () => {
       })
       .expect(201);
 
+    expect(reviewedV2.body.data).toMatchObject({
+      planVersion: 2,
+      reviewStatus: "approved",
+      companyFinalApprover: null,
+    });
+    expect(reviewedV2.body.data.periodSchedules).toHaveLength(3);
+
+    await app.http
+      .post(`/api/v1/cycles/${v2CycleId}/review`)
+      .set("Authorization", `Bearer ${reviewerToken}`)
+      .send({
+        action: "approve",
+        expectedPlanVersion: createdV2.body.data.planVersion,
+      })
+      .expect(409);
+
+    const malformedSchedule = await app.prisma.cyclePeriodSchedule.create({
+      data: {
+        cycleId: v2CycleId,
+        periodKey: "2027-04",
+        periodType: "month",
+        sequence: 4,
+        periodStart: new Date("2027-04-01T00:00:00.000Z"),
+        periodEnd: new Date("2027-04-30T00:00:00.000Z"),
+        selfEvalOpenAt: new Date("2027-05-06T01:00:00.000Z"),
+        selfEvalDueAt: new Date("2027-05-10T10:00:00.000Z"),
+        managerDueAt: new Date("2027-05-13T10:00:00.000Z"),
+      },
+    });
+    const malformedPreflight = await app.http
+      .get(`/api/v1/cycles/${v2CycleId}/preflight`)
+      .set("Authorization", `Bearer ${hrToken}`)
+      .expect(200);
+    expect(malformedPreflight.body.data).toMatchObject({
+      ready: false,
+      planHash: null,
+      blockers: expect.arrayContaining([expect.objectContaining({
+        code: "PERIOD_SCHEDULE_INVALID",
+      })]),
+    });
+    await app.prisma.cyclePeriodSchedule.delete({ where: { id: malformedSchedule.id } });
+
     const preflightV2 = await app.http
       .get(`/api/v1/cycles/${v2CycleId}/preflight`)
       .set("Authorization", `Bearer ${hrToken}`)
@@ -188,6 +230,7 @@ describe("Performance workflow v2 foundation", () => {
     expect(preflightV2.body.data).toMatchObject({
       ready: true,
       participantCount: 2,
+      cycle: expect.objectContaining({ planVersion: reviewedV2.body.data.planVersion }),
       companyFinalApprover: { id: topLeader.id, name: "李宏" },
       blockers: [],
     });

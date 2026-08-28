@@ -540,6 +540,7 @@ export interface CreateCycleBody {
 
 /** PATCH /cycles/:id/deadlines 请求体。 */
 export interface UpdateDeadlinesBody {
+  expectedPlanVersion: number;
   deadlineIndicatorSetting?: string;
   deadlineIndicatorConfirm?: string;
   deadlineSelfEval?: string;

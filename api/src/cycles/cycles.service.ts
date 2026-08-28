@@ -12,6 +12,7 @@ import type { CycleNotificationMode } from './dto/update-cycle-notification-mode
 import type { ReviewCycleDto } from './dto/review-cycle.dto';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { CycleScheduleService, NormalizedCycleSchedulePlan } from './cycle-schedule.service';
+import { businessDateKey, normalizeScoringFrequency, prismaDateBusinessKey } from './cycle-scoring-plan';
 
 const DEADLINE_FIELDS = [
   'deadlineIndicatorSetting',
@@ -229,8 +230,8 @@ export class CyclesService {
 
       const goalSettingOpenAt = dto.goalSettingOpenAt ?? cycle.goalSettingOpenAt;
       const selfEvalOpenAt = dto.selfEvalOpenAt ?? cycle.selfEvalOpenAt;
-      const startDate = dto.startDate ?? cycle.startDate;
-      const endDate = dto.endDate ?? cycle.endDate;
+      const startDate = dto.startDate ?? this.asShanghaiBusinessDate(cycle.startDate);
+      const endDate = dto.endDate ?? this.asShanghaiBusinessDate(cycle.endDate);
       if (goalSettingOpenAt && selfEvalOpenAt) {
         this.validateCycleDates(
           {
@@ -256,20 +257,32 @@ export class CyclesService {
         ? await this.resolveReviewerId(dto.reviewerId)
         : cycle.reviewerId;
       const workflowVersion = dto.workflowVersion ?? cycle.workflowVersion ?? 1;
+      const nextType = dto.type ?? cycle.type;
+      const requestedScoringFrequency = normalizeScoringFrequency(
+        nextType,
+        dto.scoringFrequency ?? cycle.scoringFrequency,
+      );
+      const scheduleStructureChanged = workflowVersion !== (cycle.workflowVersion ?? 1)
+        || nextType !== cycle.type
+        || businessDateKey(startDate) !== prismaDateBusinessKey(cycle.startDate)
+        || businessDateKey(endDate) !== prismaDateBusinessKey(cycle.endDate)
+        || requestedScoringFrequency !== (cycle.scoringFrequency ?? ScoringFrequency.cycle);
       const storedSchedules = cycle.periodSchedules ?? [];
       const schedulePlan = workflowVersion === 2
         ? this.normalizeSchedulePlan({
-            type: dto.type ?? cycle.type,
+            type: nextType,
             startDate,
             endDate,
             scoringFrequency: dto.scoringFrequency ?? cycle.scoringFrequency,
-            schedules: dto.periodSchedules ?? storedSchedules.map((schedule) => ({
-              periodKey: schedule.periodKey,
-              selfEvalOpenAt: schedule.selfEvalOpenAt,
-              selfEvalDueAt: schedule.selfEvalDueAt,
-              managerDueAt: schedule.managerDueAt,
-              isException: schedule.isException,
-            })),
+            schedules: dto.periodSchedules ?? (scheduleStructureChanged
+              ? undefined
+              : storedSchedules.map((schedule) => ({
+                  periodKey: schedule.periodKey,
+                  selfEvalOpenAt: schedule.selfEvalOpenAt,
+                  selfEvalDueAt: schedule.selfEvalDueAt,
+                  managerDueAt: schedule.managerDueAt,
+                  isException: schedule.isException,
+                }))),
           })
         : null;
       const nextScoringFrequency = schedulePlan?.scoringFrequency ?? ScoringFrequency.cycle;
@@ -279,7 +292,6 @@ export class CyclesService {
         || nextScoringFrequency !== (cycle.scoringFrequency ?? ScoringFrequency.cycle)
         || scheduleChanged;
 
-      const nextType = dto.type ?? cycle.type;
       const nextMonthlyFollowUpRequired = ['quarterly', 'semiannual', 'annual'].includes(nextType)
         ? dto.monthlyFollowUpRequired ?? cycle.monthlyFollowUpRequired
         : false;
@@ -299,8 +311,12 @@ export class CyclesService {
       const data: Prisma.AssessmentCycleUncheckedUpdateManyInput = {};
       if (dto.name !== undefined && dto.name !== cycle.name) data.name = dto.name;
       if (dto.type !== undefined && dto.type !== cycle.type) data.type = dto.type;
-      if (dto.startDate !== undefined && !this.sameInstant(dto.startDate, cycle.startDate)) data.startDate = dto.startDate;
-      if (dto.endDate !== undefined && !this.sameInstant(dto.endDate, cycle.endDate)) data.endDate = dto.endDate;
+      if (dto.startDate !== undefined && businessDateKey(dto.startDate) !== prismaDateBusinessKey(cycle.startDate)) {
+        data.startDate = dto.startDate;
+      }
+      if (dto.endDate !== undefined && businessDateKey(dto.endDate) !== prismaDateBusinessKey(cycle.endDate)) {
+        data.endDate = dto.endDate;
+      }
       if (dto.goalSettingOpenAt !== undefined && !this.sameInstant(dto.goalSettingOpenAt, cycle.goalSettingOpenAt)) {
         data.goalSettingOpenAt = dto.goalSettingOpenAt;
       }
@@ -568,7 +584,7 @@ export class CyclesService {
   /** PATCH /cycles/:id/deadlines — 只能延期不能提前。 */
   async updateDeadlines(id: string, dto: UpdateDeadlinesDto, user: AuthUser) {
     return this.prisma.$transaction(async (tx) => {
-      const cycle = await tx.assessmentCycle.findUnique({ where: { id } });
+      const cycle = await tx.assessmentCycle.findUnique({ where: { id }, include: CYCLE_PLAN_INCLUDE });
       if (!cycle) {
         throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
       }
@@ -578,23 +594,36 @@ export class CyclesService {
           message: '周期已预约发起，修改截止时间前请先取消预约',
         });
       }
+      if (cycle.planVersion !== dto.expectedPlanVersion) throw this.stalePlanConflict();
 
       this.validateDeadlinePostponement(cycle, dto);
       const data: Prisma.AssessmentCycleUpdateManyMutationInput = {};
       for (const field of DEADLINE_FIELDS) {
-        if (dto[field] !== undefined) data[field] = dto[field];
+        if (dto[field] !== undefined && !this.sameInstant(dto[field], cycle[field])) data[field] = dto[field];
+      }
+      if (Object.keys(data).length === 0) {
+        const unchanged = await tx.assessmentCycle.updateMany({
+          where: { id, status: cycle.status, planVersion: dto.expectedPlanVersion },
+          data: { planVersion: { increment: 0 } },
+        });
+        if (unchanged.count !== 1) throw this.stalePlanConflict();
+        const current = await tx.assessmentCycle.findUnique({ where: { id }, include: CYCLE_PLAN_INCLUDE });
+        if (!current) throw this.stalePlanConflict();
+        return this.withPlanFields(current);
+      }
+      data.planVersion = { increment: 1 };
+      if (cycle.status === CycleStatus.draft) {
+        data.reviewStatus = 'pending';
+        data.reviewedAt = null;
+        data.reviewComment = null;
       }
       const write = await tx.assessmentCycle.updateMany({
-        where: { id, status: cycle.status },
+        where: { id, status: cycle.status, planVersion: dto.expectedPlanVersion },
         data,
       });
-      if (write.count !== 1) {
-        throw new ConflictException({
-          code: ERROR_CODE.CONFLICT,
-          message: '周期状态已变化，请刷新后重试',
-        });
-      }
-      const updated = await tx.assessmentCycle.findUniqueOrThrow({ where: { id } });
+      if (write.count !== 1) throw this.stalePlanConflict();
+      const updated = await tx.assessmentCycle.findUnique({ where: { id }, include: CYCLE_PLAN_INCLUDE });
+      if (!updated) throw this.stalePlanConflict();
       await tx.auditLog.create({
         data: {
           userId: user.id,
@@ -605,7 +634,7 @@ export class CyclesService {
           newValue: Object.fromEntries(DEADLINE_FIELDS.map((field) => [field, updated[field]])) as Prisma.InputJsonValue,
         },
       });
-      return updated;
+      return this.withPlanFields(updated);
     });
   }
 
@@ -651,8 +680,8 @@ export class CyclesService {
     }>,
     next: NormalizedCycleSchedulePlan['schedules'],
   ): string[] {
-    const storedByKey = new Map(stored.map((schedule) => [schedule.periodKey, this.scheduleSignature(schedule)]));
-    const nextByKey = new Map(next.map((schedule) => [schedule.periodKey, this.scheduleSignature(schedule)]));
+    const storedByKey = new Map(stored.map((schedule) => [schedule.periodKey, this.scheduleSignature(schedule, true)]));
+    const nextByKey = new Map(next.map((schedule) => [schedule.periodKey, this.scheduleSignature(schedule, false)]));
     return [...new Set([...storedByKey.keys(), ...nextByKey.keys()])]
       .filter((periodKey) => storedByKey.get(periodKey) !== nextByKey.get(periodKey))
       .sort();
@@ -667,12 +696,13 @@ export class CyclesService {
     selfEvalDueAt: Date;
     managerDueAt: Date;
     isException: boolean;
-  }): string {
+  }, persistedDateFields: boolean): string {
+    const dateKey = persistedDateFields ? prismaDateBusinessKey : businessDateKey;
     return JSON.stringify([
       schedule.periodType,
       schedule.sequence,
-      schedule.periodStart.toISOString(),
-      schedule.periodEnd.toISOString(),
+      dateKey(schedule.periodStart),
+      dateKey(schedule.periodEnd),
       schedule.selfEvalOpenAt.toISOString(),
       schedule.selfEvalDueAt.toISOString(),
       schedule.managerDueAt.toISOString(),
@@ -691,6 +721,10 @@ export class CyclesService {
   private sameInstant(left: Date | null | undefined, right: Date | null | undefined): boolean {
     if (left == null || right == null) return left == null && right == null;
     return left.getTime() === right.getTime();
+  }
+
+  private asShanghaiBusinessDate(date: Date): Date {
+    return new Date(`${prismaDateBusinessKey(date)}T00:00:00+08:00`);
   }
 
   private sameDecimal(left: number | Prisma.Decimal, right: number | Prisma.Decimal): boolean {
@@ -786,7 +820,12 @@ export class CyclesService {
           reviewStatus: cycle.reviewStatus,
           reviewedAt: cycle.reviewedAt,
         },
-        data: { reviewStatus, reviewedAt: new Date(), reviewComment: dto.comment?.trim() || null },
+        data: {
+          planVersion: { increment: 1 },
+          reviewStatus,
+          reviewedAt: new Date(),
+          reviewComment: dto.comment?.trim() || null,
+        },
       });
       if (claim.count !== 1) throw this.stalePlanConflict();
       await tx.auditLog.create({
@@ -805,14 +844,24 @@ export class CyclesService {
   }
 
   private async resolveHrOwnerId(requestedId: string | undefined, operator: AuthUser): Promise<string> {
-    if (!requestedId && operator.sysRole === SysRole.hr) return operator.id;
+    if (!requestedId && (operator.sysRole === SysRole.hr || hasHrCapability(operator, 'cycle_plan_edit'))) {
+      return operator.id;
+    }
+    const eligibleOwnerWhere: Prisma.UserWhereInput = {
+      OR: [
+        { sysRole: SysRole.hr },
+        { sysRole: SysRole.hr_user, hrCapabilities: { has: 'cycle_plan_edit' } },
+      ],
+      deletedAt: null,
+      status: { not: 'resigned' },
+    };
     const owner = requestedId
       ? await this.prisma.user.findFirst({
-          where: { id: requestedId, sysRole: SysRole.hr, deletedAt: null, status: { not: 'resigned' } },
+          where: { id: requestedId, ...eligibleOwnerWhere },
           select: { id: true },
         })
       : await this.prisma.user.findFirst({
-          where: { sysRole: SysRole.hr, deletedAt: null, status: { not: 'resigned' } },
+          where: eligibleOwnerWhere,
           select: { id: true },
           orderBy: { createdAt: 'asc' },
         });

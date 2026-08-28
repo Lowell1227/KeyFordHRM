@@ -193,4 +193,37 @@ describe('CycleScheduleService', () => {
       isException: true,
     }));
   });
+
+  it('blocks duplicate schedule overrides instead of silently keeping the last row', () => {
+    const plan = service.normalizeAndValidate({
+      type: 'quarterly',
+      scoringFrequency: 'monthly',
+      startDate: new Date('2027-01-01T00:00:00+08:00'),
+      endDate: new Date('2027-03-31T00:00:00+08:00'),
+      schedules: [
+        { periodKey: '2027-01', isException: false },
+        { periodKey: '2027-01', isException: true },
+      ],
+    });
+
+    expect(plan.blockers).toContainEqual(expect.objectContaining({
+      code: 'DUPLICATE_PERIOD_KEY',
+      periodKey: '2027-01',
+    }));
+  });
+
+  it('blocks schedule overrides outside the expected period key set', () => {
+    const plan = service.normalizeAndValidate({
+      type: 'quarterly',
+      scoringFrequency: 'monthly',
+      startDate: new Date('2027-01-01T00:00:00+08:00'),
+      endDate: new Date('2027-03-31T00:00:00+08:00'),
+      schedules: [{ periodKey: '2027-04', isException: true }],
+    });
+
+    expect(plan.blockers).toContainEqual(expect.objectContaining({
+      code: 'UNEXPECTED_PERIOD_KEY',
+      periodKey: '2027-04',
+    }));
+  });
 });

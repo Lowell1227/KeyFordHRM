@@ -251,6 +251,7 @@ async function mockIntegratedCyclePage(
         contentType: 'application/json',
         body: JSON.stringify(apiResponse({
           ...matchedCycle,
+          planVersion: matchedCycle.planVersion + 1,
           reviewStatus: 'approved',
           reviewedAt: new Date().toISOString(),
         })),
@@ -637,6 +638,27 @@ test.describe('cycle scoring plan integration', () => {
     expect(reviewBodies[0]).toMatchObject({
       action: 'approve',
       expectedPlanVersion: pendingCycle.planVersion,
+    });
+  });
+
+  test('submits the current plan version when postponing an active cycle deadline', async ({ page }) => {
+    const updateBodies: Record<string, unknown>[] = [];
+    const activeCycle: AssessmentCycle = { ...integratedCycle, status: 'indicator_setting' };
+    await mockIntegratedCyclePage(page, { cycles: [activeCycle], updateBodies });
+    await page.goto('/cycles?group=active');
+
+    await page.getByRole('button', { name: '更多操作' }).first().click();
+    await page.locator('.el-dropdown-menu:visible').getByText('修改截止日', { exact: true }).click();
+    const publishDeadline = page.getByPlaceholder('选择结果公示截止');
+    await publishDeadline.fill('2027-04-12 18:00');
+    await publishDeadline.press('Tab');
+    await page.getByRole('dialog', { name: '修改节点截止日' })
+      .getByRole('button', { name: '保存' })
+      .click();
+
+    await expect.poll(() => updateBodies).toHaveLength(1);
+    expect(updateBodies[0]).toMatchObject({
+      expectedPlanVersion: activeCycle.planVersion,
     });
   });
 
