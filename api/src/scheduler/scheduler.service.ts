@@ -271,6 +271,7 @@ export class SchedulerService {
     const periods = await this.prisma.assessmentPeriod.findMany({
       where: {
         status: 'unopened',
+        indicatorVersionId: { not: null },
         selfEvalOpenAt: { lte: now },
         task: { cycle: { workflowVersion: 2 } },
       },
@@ -291,7 +292,11 @@ export class SchedulerService {
 
     for (const period of periods) {
       const claimed = await this.prisma.assessmentPeriod.updateMany({
-        where: { id: period.id, status: 'unopened' },
+        where: {
+          id: period.id,
+          status: 'unopened',
+          indicatorVersionId: { not: null },
+        },
         data: { status: 'self_eval', openedAt: now },
       });
       if (claimed.count !== 1) continue;

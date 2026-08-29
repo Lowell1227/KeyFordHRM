@@ -103,11 +103,10 @@ const requestedPerformanceStage = computed<TaskStageKey>(() =>
 
 const activeMonthlyPeriod = computed(() => {
   const current = task.value;
-  if (current?.workflowVersion !== 2) return null;
+  if (current?.workflowVersion !== 2 || requestedPerformanceStage.value !== 'self-eval') return null;
   const periods = current.periods ?? [];
   const employeeAction = periods.find((period) => period.status === 'self_eval' && !period.employeeSubmittedAt);
   if (employeeAction) return employeeAction;
-  if (requestedPerformanceStage.value !== 'self-eval') return null;
   return [...periods]
       .filter((period) => period.status === 'manager_scoring' || period.status === 'completed')
       .sort((left, right) => right.sequence - left.sequence)[0]

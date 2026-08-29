@@ -33,7 +33,7 @@ describe('IndicatorVersionService', () => {
     }]);
   });
 
-  it('claims V1 before copying confirmed indicators and binds unopened periods', async () => {
+  it('claims V1 before copying confirmed indicators and recovers every period missing a version', async () => {
     await service.activateConfirmedV1(tx, 'task-1', 'employee-1');
 
     expect(tx.indicatorVersion.updateMany).toHaveBeenCalledWith({
@@ -48,7 +48,7 @@ describe('IndicatorVersionService', () => {
       })],
     });
     expect(tx.assessmentPeriod.updateMany).toHaveBeenCalledWith({
-      where: { taskId: 'task-1', status: 'unopened' },
+      where: { taskId: 'task-1', indicatorVersionId: null },
       data: { indicatorVersionId: 'version-1' },
     });
     expect(tx.indicatorVersion.updateMany.mock.invocationCallOrder[0])

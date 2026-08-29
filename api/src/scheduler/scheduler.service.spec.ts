@@ -314,7 +314,7 @@ describe('SchedulerService', () => {
       jest.useRealTimers();
     });
 
-    it('opens each due monthly review independently for workflow v2', async () => {
+    it('opens only due monthly reviews that already have a confirmed indicator version', async () => {
       const now = new Date('2027-02-01T01:00:00.000Z');
       jest.useFakeTimers().setSystemTime(now);
       prisma.assessmentPeriod.findMany.mockResolvedValue([{
@@ -334,12 +334,17 @@ describe('SchedulerService', () => {
       expect(prisma.assessmentPeriod.findMany).toHaveBeenCalledWith(expect.objectContaining({
         where: expect.objectContaining({
           status: 'unopened',
+          indicatorVersionId: { not: null },
           selfEvalOpenAt: { lte: now },
           task: { cycle: { workflowVersion: 2 } },
         }),
       }));
       expect(prisma.assessmentPeriod.updateMany).toHaveBeenCalledWith({
-        where: { id: 'period-2027-01', status: 'unopened' },
+        where: {
+          id: 'period-2027-01',
+          status: 'unopened',
+          indicatorVersionId: { not: null },
+        },
         data: { status: 'self_eval', openedAt: now },
       });
       expect(prisma.assessmentTask.updateMany).toHaveBeenCalledWith({

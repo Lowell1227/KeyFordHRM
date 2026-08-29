@@ -46,7 +46,7 @@ export class IndicatorVersionService {
       })),
     });
     await tx.assessmentPeriod.updateMany({
-      where: { taskId, status: 'unopened' },
+      where: { taskId, indicatorVersionId: null },
       data: { indicatorVersionId: version.id },
     });
     return version.id;

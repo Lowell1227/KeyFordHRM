@@ -52,7 +52,11 @@ function goalTaskDetail(weight = 0.8) {
   };
 }
 
-async function mockGoalSetting(page: Page, requests: Request[]) {
+async function mockGoalSetting(
+  page: Page,
+  requests: Request[],
+  taskDetail = goalTaskDetail(),
+) {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-goal-setting-token');
     localStorage.setItem('expiresAt', String(Date.now() + 60_000));
@@ -97,16 +101,55 @@ async function mockGoalSetting(page: Page, requests: Request[]) {
     requests.push(route.request());
     return route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse(goalTaskDetail())),
+      body: JSON.stringify(apiResponse(taskDetail)),
     });
   });
   await page.route('**/api/v1/tasks/task-goal-1', (route) => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify(apiResponse(goalTaskDetail())),
+    body: JSON.stringify(apiResponse(taskDetail)),
   }));
 }
 
 test.describe('goal setting responsive workspace', () => {
+  test('keeps goal setting visible when an unconfirmed monthly period was opened early', async ({ page }) => {
+    const earlyPeriodTask = {
+      ...goalTaskDetail(),
+      workflowVersion: 2,
+      status: 'indicator_drafting',
+      periods: [{
+        id: 'period-opened-too-early',
+        periodKey: '2026-07',
+        periodType: 'monthly',
+        sequence: 1,
+        periodStart: '2026-07-01',
+        periodEnd: '2026-07-31',
+        selfEvalOpenAt: '2026-07-25T00:00:00.000Z',
+        selfEvalDueAt: '2026-07-31T00:00:00.000Z',
+        managerDueAt: '2026-08-03T00:00:00.000Z',
+        status: 'self_eval',
+        employeeSubmittedAt: null,
+        managerSubmittedAt: null,
+      }],
+    };
+    let monthlyReviewRequests = 0;
+    await page.route('**/api/v1/assessment-periods/*/review', (route) => {
+      monthlyReviewRequests += 1;
+      return route.fulfill({
+        status: 409,
+        contentType: 'application/json',
+        body: JSON.stringify({ code: 'CONFLICT', message: '本期目标版本尚未确认' }),
+      });
+    });
+    await mockGoalSetting(page, [], earlyPeriodTask);
+
+    await page.goto('/tasks/task-goal-1?stage=goal-setting');
+
+    await expect(page.getByTestId('performance-stage-title')).toHaveText('目标制定');
+    await expect(page.getByTestId('goal-setting-workspace')).toBeVisible();
+    await expect(page.getByText('月度复盘加载失败')).toHaveCount(0);
+    expect(monthlyReviewRequests).toBe(0);
+  });
+
   test('uses a reference-style PC workspace and separates draft, add-next, and submit actions', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1000 });
     const requests: Request[] = [];
