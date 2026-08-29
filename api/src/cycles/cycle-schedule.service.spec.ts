@@ -23,8 +23,8 @@ describe('CycleScheduleService', () => {
     const preview = service.preview({
       type: 'quarterly',
       scoringFrequency: 'monthly',
-      startDate: new Date('2026-07-01T00:00:00+08:00'),
-      endDate: new Date('2026-09-30T00:00:00+08:00'),
+      startDate: new Date('2026-07-01T00:00:00.000Z'),
+      endDate: new Date('2026-09-30T00:00:00.000Z'),
     });
 
     expect(preview.reviewFrequency).toBe('cycle');
@@ -45,8 +45,8 @@ describe('CycleScheduleService', () => {
     const preview = service.preview({
       type: 'quarterly',
       scoringFrequency: 'monthly',
-      startDate: new Date('2026-07-01T00:00:00+08:00'),
-      endDate: new Date('2026-09-15T00:00:00+08:00'),
+      startDate: new Date('2026-07-01T00:00:00.000Z'),
+      endDate: new Date('2026-09-15T00:00:00.000Z'),
     });
 
     expect(preview.schedules[2]).toMatchObject({
@@ -60,8 +60,8 @@ describe('CycleScheduleService', () => {
   it('blocks schedules whose self-evaluation does not open before it is due', () => {
     const plan = service.normalizeAndValidate({
       type: 'monthly',
-      startDate: new Date('2026-07-01T00:00:00+08:00'),
-      endDate: new Date('2026-07-31T00:00:00+08:00'),
+      startDate: new Date('2026-07-01T00:00:00.000Z'),
+      endDate: new Date('2026-07-31T00:00:00.000Z'),
       schedules: [{
         periodKey: '2026-07',
         selfEvalOpenAt: new Date('2026-08-03T18:00:00+08:00'),
@@ -78,8 +78,8 @@ describe('CycleScheduleService', () => {
   it('blocks schedules whose manager deadline is not after self-evaluation', () => {
     const plan = service.normalizeAndValidate({
       type: 'monthly',
-      startDate: new Date('2026-07-01T00:00:00+08:00'),
-      endDate: new Date('2026-07-31T00:00:00+08:00'),
+      startDate: new Date('2026-07-01T00:00:00.000Z'),
+      endDate: new Date('2026-07-31T00:00:00.000Z'),
       schedules: [{
         periodKey: '2026-07',
         selfEvalOpenAt: new Date('2026-08-03T09:00:00+08:00'),
@@ -97,8 +97,8 @@ describe('CycleScheduleService', () => {
     const plan = service.normalizeAndValidate({
       type: 'quarterly',
       scoringFrequency: 'monthly',
-      startDate: new Date('2026-07-01T00:00:00+08:00'),
-      endDate: new Date('2026-09-30T00:00:00+08:00'),
+      startDate: new Date('2026-07-01T00:00:00.000Z'),
+      endDate: new Date('2026-09-30T00:00:00.000Z'),
       schedules: [
         {
           periodKey: '2026-07',
@@ -123,8 +123,8 @@ describe('CycleScheduleService', () => {
     const preview = service.preview({
       type: 'quarterly',
       scoringFrequency: 'cycle',
-      startDate: new Date('2026-07-01T00:00:00+08:00'),
-      endDate: new Date('2026-09-30T00:00:00+08:00'),
+      startDate: new Date('2026-07-01T00:00:00.000Z'),
+      endDate: new Date('2026-09-30T00:00:00.000Z'),
     });
 
     expect(preview.schedules).toEqual([expect.objectContaining({ periodKey: 'cycle' })]);
@@ -134,8 +134,8 @@ describe('CycleScheduleService', () => {
     const plan = service.normalizeAndValidate({
       type: 'quarterly',
       scoringFrequency: 'cycle',
-      startDate: new Date('2026-07-01T00:00:00+08:00'),
-      endDate: new Date('2026-09-30T00:00:00+08:00'),
+      startDate: new Date('2026-07-01T00:00:00.000Z'),
+      endDate: new Date('2026-09-30T00:00:00.000Z'),
       schedules: [{
         periodKey: 'cycle',
         selfEvalOpenAt: new Date('2026-10-30T09:00:00+08:00'),
@@ -150,8 +150,8 @@ describe('CycleScheduleService', () => {
   it('generates the December scoring schedule from the included 2027 base calendar', () => {
     const preview = service.preview({
       type: 'monthly',
-      startDate: new Date('2026-12-01T00:00:00+08:00'),
-      endDate: new Date('2026-12-31T00:00:00+08:00'),
+      startDate: new Date('2026-12-01T00:00:00.000Z'),
+      endDate: new Date('2026-12-31T00:00:00.000Z'),
     });
 
     expect(preview.warnings).toEqual([]);
@@ -166,8 +166,8 @@ describe('CycleScheduleService', () => {
     const plan = service.normalizeAndValidate({
       type: 'quarterly',
       scoringFrequency: 'monthly',
-      startDate: new Date('2026-07-01T00:00:00+08:00'),
-      endDate: new Date('2026-09-30T00:00:00+08:00'),
+      startDate: new Date('2026-07-01T00:00:00.000Z'),
+      endDate: new Date('2026-09-30T00:00:00.000Z'),
       schedules: [{ periodKey: '2026-08', isException: true }],
     });
 
@@ -178,8 +178,8 @@ describe('CycleScheduleService', () => {
     const plan = service.normalizeAndValidate({
       type: 'quarterly',
       scoringFrequency: 'monthly',
-      startDate: new Date('2026-07-01T00:00:00+08:00'),
-      endDate: new Date('2026-09-30T00:00:00+08:00'),
+      startDate: new Date('2026-07-01T00:00:00.000Z'),
+      endDate: new Date('2026-09-30T00:00:00.000Z'),
       schedules: [{
         periodKey: '2026-08',
         managerDueAt: new Date('2026-09-15T18:00:00+08:00'),
@@ -198,8 +198,8 @@ describe('CycleScheduleService', () => {
     const plan = service.normalizeAndValidate({
       type: 'quarterly',
       scoringFrequency: 'monthly',
-      startDate: new Date('2027-01-01T00:00:00+08:00'),
-      endDate: new Date('2027-03-31T00:00:00+08:00'),
+      startDate: new Date('2027-01-01T00:00:00.000Z'),
+      endDate: new Date('2027-03-31T00:00:00.000Z'),
       schedules: [
         { periodKey: '2027-01', isException: false },
         { periodKey: '2027-01', isException: true },
@@ -216,8 +216,8 @@ describe('CycleScheduleService', () => {
     const plan = service.normalizeAndValidate({
       type: 'quarterly',
       scoringFrequency: 'monthly',
-      startDate: new Date('2027-01-01T00:00:00+08:00'),
-      endDate: new Date('2027-03-31T00:00:00+08:00'),
+      startDate: new Date('2027-01-01T00:00:00.000Z'),
+      endDate: new Date('2027-03-31T00:00:00.000Z'),
       schedules: [{ periodKey: '2027-04', isException: true }],
     });
 

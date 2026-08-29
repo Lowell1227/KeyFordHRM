@@ -529,6 +529,119 @@ describe('CyclesService', () => {
     }));
   });
 
+  it('derives monthly follow-up compatibility from monthly scoring for a new workflow-v2 cycle', async () => {
+    await service.create(quarterlyCycle({
+      workflowVersion: 2,
+      scoringFrequency: ScoringFrequency.monthly,
+      monthlyFollowUpRequired: false,
+      periodSchedules: [{
+        periodKey: '2027-01',
+        selfEvalOpenAt: '2027-02-01T09:00:00+08:00',
+        selfEvalDueAt: '2027-02-03T18:00:00+08:00',
+        managerDueAt: '2027-02-08T18:00:00+08:00',
+      }],
+    } as any), creator);
+
+    expect(prisma.assessmentCycle.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        scoringFrequency: ScoringFrequency.monthly,
+        monthlyFollowUpRequired: true,
+      }),
+    }));
+  });
+
+  it('derives disabled monthly follow-up compatibility from cycle scoring for a new workflow-v2 cycle', async () => {
+    await service.create(quarterlyCycle({
+      workflowVersion: 2,
+      scoringFrequency: ScoringFrequency.cycle,
+      monthlyFollowUpRequired: true,
+      periodSchedules: [{
+        periodKey: 'cycle',
+        selfEvalOpenAt: '2027-04-01T09:00:00+08:00',
+        selfEvalDueAt: '2027-04-03T18:00:00+08:00',
+        managerDueAt: '2027-04-08T18:00:00+08:00',
+      }],
+    } as any), creator);
+
+    expect(prisma.assessmentCycle.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        scoringFrequency: ScoringFrequency.cycle,
+        monthlyFollowUpRequired: false,
+      }),
+    }));
+  });
+
+  it('keeps independent monthly follow-up compatibility for a legacy workflow-v1 cycle', async () => {
+    await service.create(quarterlyCycle({
+      workflowVersion: 1,
+      monthlyFollowUpRequired: true,
+    }), creator);
+
+    expect(prisma.assessmentCycle.create).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        workflowVersion: 1,
+        monthlyFollowUpRequired: true,
+      }),
+    }));
+  });
+
+  it('repairs monthly follow-up compatibility when an unreviewed workflow-v2 draft is edited', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft({
+      reviewStatus: 'pending',
+      reviewedAt: null,
+      reviewComment: null,
+      monthlyFollowUpRequired: false,
+    }));
+
+    await service.updateDraft('cycle-1', {
+      expectedPlanVersion: 3,
+      name: '2027年第一季度（修订）',
+    } as any, creator);
+
+    expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        name: '2027年第一季度（修订）',
+        monthlyFollowUpRequired: true,
+      }),
+    }));
+  });
+
+  it('preserves an approved historical workflow-v2 compatibility value during an unrelated edit', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft({
+      scoringFrequency: ScoringFrequency.monthly,
+      monthlyFollowUpRequired: false,
+    }));
+
+    await service.updateDraft('cycle-1', {
+      expectedPlanVersion: 3,
+      name: '2027年第一季度（更名）',
+    } as any, creator);
+
+    const data = prisma.assessmentCycle.updateMany.mock.calls[0][0].data;
+    expect(data).toEqual(expect.objectContaining({ name: '2027年第一季度（更名）' }));
+    expect(data).not.toHaveProperty('monthlyFollowUpRequired');
+  });
+
+  it('synchronizes monthly follow-up compatibility when an approved workflow-v2 scoring mode changes', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft({
+      scoringFrequency: ScoringFrequency.monthly,
+      monthlyFollowUpRequired: true,
+    }));
+
+    await service.updateDraft('cycle-1', {
+      expectedPlanVersion: 3,
+      scoringFrequency: ScoringFrequency.cycle,
+    } as any, creator);
+
+    expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        scoringFrequency: ScoringFrequency.cycle,
+        monthlyFollowUpRequired: false,
+        reviewStatus: 'pending',
+      }),
+    }));
+  });
+
   it('returns only opened cycles that contain a task for the current employee', async () => {
     prisma.assessmentCycle.findMany.mockResolvedValue([{
       id: 'cycle-1',

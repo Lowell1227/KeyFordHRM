@@ -26,6 +26,7 @@ function makeCycle(
 ): AssessmentCycle {
   return {
     id,
+    planVersion: 1,
     name,
     type,
     startDate,
@@ -76,7 +77,7 @@ test('chooses the date-current cycle regardless of lifecycle status', () => {
     startDate: string,
     endDate: string,
   ): AssessmentCycle => ({
-    id, name, status, startDate, endDate, type: 'quarterly',
+    id, planVersion: 1, name, status, startDate, endDate, type: 'quarterly',
     publishVisibleFields: {
       totalScore: true,
       grade: true,

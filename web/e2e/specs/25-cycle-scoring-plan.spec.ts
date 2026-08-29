@@ -49,6 +49,7 @@ const integratedCycle: AssessmentCycle = {
   deadlinePublish: '2027-04-11T18:00:00+08:00',
   status: 'draft',
   reviewStatus: 'approved',
+  monthlyFollowUpRequired: true,
   reviewerId: 'hr-1',
   reviewer: { id: 'hr-1', name: '姚瑶' },
   creator: { id: 'hr-1', name: '姚瑶' },
@@ -326,7 +327,10 @@ test.describe('cycle scoring plan controls', () => {
 
     await page.getByTestId('cycle-create').click();
     await page.getByTestId('cycle-type-quarterly').click();
-    await expect(page.getByTestId('cycle-scoring-monthly').locator('input')).toBeChecked();
+    await expect(page.getByTestId('cycle-monthly-review-switch').locator('input')).toBeChecked();
+    await expect(page.getByTestId('cycle-scoring-settings')).toContainText('每月复盘并评分');
+    await expect(page.getByText('按月度评分', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('月度跟进', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('cycle-review-frequency')).toHaveText('结果统一按周期审核');
     await expect(page.getByText('结果审核按整个周期统一进行', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
@@ -337,10 +341,14 @@ test.describe('cycle scoring plan controls', () => {
 
     await page.getByTestId('cycle-create').click();
     await page.getByTestId('cycle-type-monthly').click();
-    await expect(page.getByTestId('cycle-scoring-settings')).toContainText('固定按月评分');
+    await expect(page.getByTestId('cycle-monthly-review-switch').locator('input')).toBeChecked();
+    await expect(page.getByTestId('cycle-monthly-review-switch')).toHaveClass(/is-disabled/);
+    await expect(page.getByTestId('cycle-scoring-settings')).toContainText('月度周期固定开启');
 
     await page.getByTestId('cycle-type-custom').click();
-    await expect(page.getByTestId('cycle-scoring-settings')).toContainText('按整个周期评分');
+    await expect(page.getByTestId('cycle-monthly-review-switch').locator('input')).not.toBeChecked();
+    await expect(page.getByTestId('cycle-monthly-review-switch')).toHaveClass(/is-disabled/);
+    await expect(page.getByTestId('cycle-scoring-settings')).toContainText('该周期只在周期结束统一评分');
   });
 
   test('shows six and twelve monthly schedule rows for semiannual and annual cycles', async ({ page }) => {
@@ -359,7 +367,7 @@ test.describe('cycle scoring plan controls', () => {
 
     await page.getByTestId('cycle-create').click();
     await page.getByTestId('cycle-type-quarterly').click();
-    await page.getByTestId('cycle-scoring-cycle').click();
+    await page.getByTestId('cycle-monthly-review-switch').click();
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(1);
     await expect(page.getByTestId('cycle-month-schedule-row')).toContainText('整个周期');
   });
@@ -431,8 +439,8 @@ test.describe('cycle scoring plan integration', () => {
 
     const createDialog = page.getByRole('dialog', { name: '创建绩效周期' });
     await expect(createDialog.getByText('审核人', { exact: true })).toHaveCount(0);
+    await expect(createDialog.getByText('月度跟进', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
-    await page.getByTestId('cycle-scoring-monthly').click();
     const secondRow = page.getByTestId('cycle-month-schedule-row').nth(1);
     const managerDueInput = secondRow.getByTestId('manager-due-at').locator('input');
     await managerDueInput.fill('2027-03-10 18:00');
@@ -451,11 +459,30 @@ test.describe('cycle scoring plan integration', () => {
     expect(createBodies.at(-1)).toMatchObject({
       workflowVersion: 2,
       scoringFrequency: 'monthly',
+      monthlyFollowUpRequired: true,
       periodSchedules: expect.arrayContaining([
         expect.objectContaining({ periodKey: '2027-02', isException: true }),
       ]),
     });
     expect(createBodies.at(-1)).not.toHaveProperty('reviewFrequency');
+  });
+
+  test('submits one disabled monthly-review setting as cycle scoring and compatibility false', async ({ page }) => {
+    const createBodies: Record<string, unknown>[] = [];
+    await mockIntegratedCyclePage(page, { createBodies });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    await page.getByTestId('cycle-monthly-review-switch').click();
+    await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(1);
+    await page.getByRole('button', { name: '下一步' }).click();
+
+    await expect.poll(() => createBodies).toHaveLength(1);
+    expect(createBodies[0]).toMatchObject({
+      workflowVersion: 2,
+      scoringFrequency: 'cycle',
+      monthlyFollowUpRequired: false,
+    });
   });
 
   test('uses authoritative edited-schedule blockers, treats equality as invalid, and waits before submit', async ({ page }) => {
@@ -526,7 +553,7 @@ test.describe('cycle scoring plan integration', () => {
     await page.getByTestId(`cycle-edit-${integratedCycle.id}`).click();
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
 
-    await page.getByTestId('cycle-scoring-cycle').click();
+    await page.getByTestId('cycle-monthly-review-switch').click();
     await expect(page.getByRole('dialog', { name: '确认重新生成评分计划？' })).toBeVisible();
     await page.getByRole('button', { name: '重新生成评分计划' }).click();
 
@@ -540,12 +567,12 @@ test.describe('cycle scoring plan integration', () => {
     await page.getByTestId(`cycle-edit-${integratedCycle.id}`).click();
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
 
-    await page.getByTestId('cycle-scoring-cycle').click();
+    await page.getByTestId('cycle-monthly-review-switch').click();
     const confirmation = page.getByRole('dialog', { name: '确认重新生成评分计划？' });
     await expect(confirmation).toBeVisible();
     await confirmation.getByRole('button', { name: '保留当前评分计划' }).click();
 
-    await expect(page.getByTestId('cycle-scoring-monthly').locator('input')).toBeChecked();
+    await expect(page.getByTestId('cycle-monthly-review-switch').locator('input')).toBeChecked();
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
     await expect(page.getByTestId('cycle-review-reset-warning')).toHaveCount(0);
   });
@@ -565,11 +592,11 @@ test.describe('cycle scoring plan integration', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId(`cycle-edit-${noExceptionCycle.id}`).click();
 
-    await page.getByTestId('cycle-scoring-cycle').click();
-    await page.getByTestId('cycle-scoring-monthly').click();
+    await page.getByTestId('cycle-monthly-review-switch').click();
+    await page.getByTestId('cycle-monthly-review-switch').click();
     await expect.poll(() => previewCompletions).toContain(0);
 
-    await expect(page.getByTestId('cycle-scoring-monthly').locator('input')).toBeChecked();
+    await expect(page.getByTestId('cycle-monthly-review-switch').locator('input')).toBeChecked();
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
   });
 
@@ -583,7 +610,7 @@ test.describe('cycle scoring plan integration', () => {
 
     await expect(page.getByTestId('cycle-workspace')).toBeVisible();
     expect(updateBodies).toHaveLength(0);
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('按月评分 · 3个月');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('每月复盘并评分 · 3期');
   });
 
   test('treats persisted schedule ids as non-semantic after an approved plan is changed then restored', async ({ page }) => {
@@ -600,9 +627,9 @@ test.describe('cycle scoring plan integration', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId(`cycle-edit-${cycleWithPersistedScheduleIds.id}`).click();
 
-    await page.getByTestId('cycle-scoring-cycle').click();
+    await page.getByTestId('cycle-monthly-review-switch').click();
     await expect(page.getByTestId('cycle-review-reset-warning')).toContainText('修改后需重新审核');
-    await page.getByTestId('cycle-scoring-monthly').click();
+    await page.getByTestId('cycle-monthly-review-switch').click();
 
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
     await expect(page.getByTestId('cycle-review-reset-warning')).toHaveCount(0);
@@ -688,9 +715,9 @@ test.describe('cycle scoring plan integration', () => {
     await mockIntegratedCyclePage(page, { cycles: [integratedCycle] });
     await page.goto('/cycles?group=attention');
 
-    await expect(page.getByTestId(`cycle-scoring-summary-${integratedCycle.id}`)).toHaveText('按月评分 · 3个月');
+    await expect(page.getByTestId(`cycle-scoring-summary-${integratedCycle.id}`)).toHaveText('每月复盘并评分 · 3期');
     await page.getByText(integratedCycle.name, { exact: true }).first().click();
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('按月评分 · 3个月');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('每月复盘并评分 · 3期');
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('结果审核：按周期审核');
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('已调整月份：1个');
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('公司最终审定人：李宏');

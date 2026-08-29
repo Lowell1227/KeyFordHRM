@@ -72,8 +72,8 @@ function blockerActionLabel(code: string): string {
 function scoringSummary(cycle: AssessmentCycle): string {
   if (cycle.workflowVersion !== 2) return '历史流程';
   return cycle.scoringFrequency === 'monthly'
-    ? `按月评分 · ${cycle.periodSchedules?.length ?? 0}个月`
-    : '按整个周期评分';
+    ? `每月复盘并评分 · ${cycle.periodSchedules?.length ?? 0}期`
+    : '周期结束统一评分';
 }
 
 function scheduleExceptionCount(cycle: AssessmentCycle): number {
@@ -139,7 +139,7 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
             <span>创建人：{{ cycle.creator?.name || '—' }}</span>
             <span>{{ cycle.reviewer?.name ? `审核人：${cycle.reviewer.name}` : '审核处理：HR 管理员审核池' }}</span>
             <span>审核状态：{{ cycle.reviewStatus === 'approved' ? '已通过' : (cycle.reviewStatus === 'rejected' ? '已退回' : '待审核') }}</span>
-            <span v-if="cycle.monthlyFollowUpRequired">需按月跟进</span>
+            <span v-if="cycle.workflowVersion !== 2 && cycle.monthlyFollowUpRequired">需按月跟进</span>
           </div>
           <div v-if="cycle" class="cycle-workspace__scoring" data-testid="cycle-workspace-scoring-summary">
             <span>{{ scoringSummary(cycle) }}</span>

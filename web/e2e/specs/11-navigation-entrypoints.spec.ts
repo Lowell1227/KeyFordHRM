@@ -108,6 +108,7 @@ const teamPage = (
 
 const workspaceCycle: AssessmentCycle = {
   id: "cycle-default",
+  planVersion: 1,
   name: "2026-Q3",
   type: "quarterly",
   startDate: "2026-07-01",

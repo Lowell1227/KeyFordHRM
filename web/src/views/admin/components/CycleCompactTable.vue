@@ -81,8 +81,8 @@ function notificationLabel(cycle: AssessmentCycle): string {
 function scoringSummary(cycle: AssessmentCycle): string {
   if (cycle.workflowVersion !== 2) return '历史流程';
   return cycle.scoringFrequency === 'monthly'
-    ? `按月评分 · ${cycle.periodSchedules?.length ?? 0}个月`
-    : '按整个周期评分';
+    ? `每月复盘并评分 · ${cycle.periodSchedules?.length ?? 0}期`
+    : '周期结束统一评分';
 }
 
 const departmentParentById = computed(() => {

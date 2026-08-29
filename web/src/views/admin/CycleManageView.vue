@@ -1114,9 +1114,11 @@ function buildCreateBody(): CreateCycleBody {
     goalSettingOpenAt: formatDateTimeLocal(createForm.goalSettingOpenAt),
     selfEvalOpenAt: formatDateTimeLocal(createForm.selfEvalOpenAt),
     hrOwnerId: createForm.hrOwnerId,
-    monthlyFollowUpRequired: ['quarterly', 'semiannual', 'annual'].includes(createForm.type)
-      ? createForm.monthlyFollowUpRequired
-      : false,
+    monthlyFollowUpRequired: isWorkflowV2Form.value
+      ? scoringPlan.scoringFrequency === 'monthly'
+      : ['quarterly', 'semiannual', 'annual'].includes(createForm.type)
+        ? createForm.monthlyFollowUpRequired
+        : false,
     participantDeptIds: [...createForm.participantDeptIds],
     participantUserIds: [...createForm.participantUserIds],
     explicitExemptDeptIds: [...createForm.explicitExemptDeptIds],
@@ -1588,8 +1590,8 @@ async function handleStatusFilterChange(status: CycleStatus | '') {
 async function handleReviewCycle(cycle: AssessmentCycle) {
   const scoringSummary = cycle.workflowVersion === 2
     ? cycle.scoringFrequency === 'monthly'
-      ? `按月评分，共 ${cycle.periodSchedules?.length ?? 0} 期`
-      : '按整个周期评分，共 1 期'
+      ? `每月复盘并评分，共 ${cycle.periodSchedules?.length ?? 0} 期`
+      : '周期结束统一评分，共 1 期'
     : '历史流程';
   const reviewSummary = cycle.workflowVersion === 2
     ? `结果按周期审核；已调整月份 ${cycle.periodSchedules?.filter((schedule) => schedule.isException).length ?? 0} 个；公司最终审定人 ${cycle.companyFinalApprover?.name || '未配置'}；`
@@ -1896,14 +1898,6 @@ onMounted(() => {
             v-model:excluded-user-ids="createForm.explicitExemptUserIds"
             :departments="departments"
             @change="handleParticipantSelectionChange"
-          />
-        </el-form-item>
-
-        <el-form-item v-if="['quarterly', 'semiannual', 'annual'].includes(createForm.type)" label="月度跟进">
-          <el-switch
-            v-model="createForm.monthlyFollowUpRequired"
-            active-text="需要按月跟进"
-            inactive-text="不要求月度跟进"
           />
         </el-form-item>
 

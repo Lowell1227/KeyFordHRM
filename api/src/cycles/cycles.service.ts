@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { CycleStatus, Prisma, ScoringFrequency, SysRole } from '@prisma/client';
+import { CycleStatus, CycleType, Prisma, ScoringFrequency, SysRole } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
@@ -74,6 +74,7 @@ export class CyclesService {
           schedules: dto.periodSchedules,
         })
       : null;
+    const scoringFrequency = schedulePlan?.scoringFrequency ?? ScoringFrequency.cycle;
 
     return this.prisma.$transaction(async (tx) => {
       const companyFinalApproverId = workflowVersion === 2
@@ -87,7 +88,7 @@ export class CyclesService {
         goalSettingOpenAt,
         selfEvalOpenAt,
         workflowVersion,
-        scoringFrequency: schedulePlan?.scoringFrequency ?? ScoringFrequency.cycle,
+        scoringFrequency,
         ...(companyFinalApproverId && {
           companyFinalApprover: { connect: { id: companyFinalApproverId } },
         }),
@@ -96,9 +97,11 @@ export class CyclesService {
         }),
         ...(reviewerId && { reviewer: { connect: { id: reviewerId } } }),
         reviewStatus: 'pending',
-        monthlyFollowUpRequired: ['quarterly', 'semiannual', 'annual'].includes(dto.type)
-          ? Boolean(dto.monthlyFollowUpRequired)
-          : false,
+        monthlyFollowUpRequired: workflowVersion === 2
+          ? this.monthlyReviewEnabled(dto.type, scoringFrequency)
+          : ['quarterly', 'semiannual', 'annual'].includes(dto.type)
+            ? Boolean(dto.monthlyFollowUpRequired)
+            : false,
         participantDeptIds: dto.participantDeptIds ?? [],
         participantUserIds: dto.participantUserIds ?? [],
         explicitExemptDeptIds: dto.explicitExemptDeptIds ?? [],
@@ -296,9 +299,20 @@ export class CyclesService {
         || nextScoringFrequency !== (cycle.scoringFrequency ?? ScoringFrequency.cycle)
         || scheduleChanged;
 
-      const nextMonthlyFollowUpRequired = ['quarterly', 'semiannual', 'annual'].includes(nextType)
-        ? dto.monthlyFollowUpRequired ?? cycle.monthlyFollowUpRequired
-        : false;
+      const scoringModeChanged = workflowVersion !== (cycle.workflowVersion ?? 1)
+        || nextType !== cycle.type
+        || nextScoringFrequency !== (cycle.scoringFrequency ?? ScoringFrequency.cycle);
+      const preserveApprovedHistoricalCompatibility = workflowVersion === 2
+        && cycle.workflowVersion === 2
+        && cycle.reviewStatus === 'approved'
+        && !scoringModeChanged;
+      const nextMonthlyFollowUpRequired = workflowVersion === 2
+        ? preserveApprovedHistoricalCompatibility
+          ? cycle.monthlyFollowUpRequired
+          : this.monthlyReviewEnabled(nextType, nextScoringFrequency)
+        : ['quarterly', 'semiannual', 'annual'].includes(nextType)
+          ? dto.monthlyFollowUpRequired ?? cycle.monthlyFollowUpRequired
+          : false;
       const nextParticipantDeptIds = dto.participantDeptIds !== undefined
         ? this.normalizeIdSet(dto.participantDeptIds)
         : this.normalizeIdSet(cycle.participantDeptIds);
@@ -654,6 +668,12 @@ export class CyclesService {
       });
     }
     return plan;
+  }
+
+  private monthlyReviewEnabled(type: CycleType, scoringFrequency: ScoringFrequency): boolean {
+    if (type === CycleType.monthly) return true;
+    if (type === CycleType.custom || type === CycleType.probation) return false;
+    return scoringFrequency === ScoringFrequency.monthly;
   }
 
   private scheduleCreateData(schedule: NormalizedCycleSchedulePlan['schedules'][number]) {

@@ -23,7 +23,9 @@ const fixedFrequency = computed<ScoringFrequency>(() => (
 ));
 
 const fixedFrequencyCopy = computed(() => (
-  fixedFrequency.value === 'monthly' ? '固定按月评分' : '按整个周期评分'
+  fixedFrequency.value === 'monthly'
+    ? '月度周期固定开启'
+    : '该周期只在周期结束统一评分'
 ));
 
 function updateFrequency(value: ScoringFrequency) {
@@ -31,8 +33,8 @@ function updateFrequency(value: ScoringFrequency) {
   emit('change', value);
 }
 
-function handleFrequencyChange(value: string | number | boolean | undefined) {
-  if (value === 'monthly' || value === 'cycle') updateFrequency(value);
+function handleMonthlyReviewChange(value: string | number | boolean) {
+  if (typeof value === 'boolean') updateFrequency(value ? 'monthly' : 'cycle');
 }
 
 watch(
@@ -47,22 +49,23 @@ watch(
 </script>
 
 <template>
-  <section data-testid="cycle-scoring-settings" class="cycle-scoring-settings" aria-label="评分频率设置">
+  <section data-testid="cycle-scoring-settings" class="cycle-scoring-settings" aria-label="复盘与评分设置">
     <div class="cycle-scoring-settings__heading">
-      <strong>评分频率</strong>
+      <strong>复盘与评分</strong>
       <span data-testid="cycle-review-frequency">结果统一按周期审核</span>
     </div>
 
-    <el-radio-group
-      v-if="canChooseFrequency"
-      :model-value="scoringFrequency"
-      @update:model-value="handleFrequencyChange"
-    >
-      <el-radio-button data-testid="cycle-scoring-monthly" value="monthly">按月度评分</el-radio-button>
-      <el-radio-button data-testid="cycle-scoring-cycle" value="cycle">按整个周期评分</el-radio-button>
-    </el-radio-group>
-    <p v-else class="cycle-scoring-settings__fixed">{{ fixedFrequencyCopy }}</p>
-
+    <div class="cycle-scoring-settings__control">
+      <el-switch
+        data-testid="cycle-monthly-review-switch"
+        :model-value="scoringFrequency === 'monthly'"
+        :disabled="!canChooseFrequency"
+        active-text="每月复盘并评分"
+        inactive-text="周期结束统一评分"
+        @change="handleMonthlyReviewChange"
+      />
+      <p v-if="!canChooseFrequency" class="cycle-scoring-settings__fixed">{{ fixedFrequencyCopy }}</p>
+    </div>
   </section>
 </template>
 
@@ -87,10 +90,24 @@ watch(
   font-size: 12px;
 }
 
+.cycle-scoring-settings__control {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 12px;
+}
+
 .cycle-scoring-settings__fixed {
   margin: 0;
-  color: var(--el-color-primary-dark-2);
-  font-size: 14px;
-  font-weight: 600;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+@media (max-width: 767px) {
+  .cycle-scoring-settings__heading,
+  .cycle-scoring-settings__control {
+    align-items: flex-start;
+    flex-direction: column;
+  }
 }
 </style>
