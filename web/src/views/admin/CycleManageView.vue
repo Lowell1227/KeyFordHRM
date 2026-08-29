@@ -9,7 +9,6 @@ import { departmentsApi } from '@/api/departments.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
-import UserSelect from '@/components/common/UserSelect.vue';
 import CycleCompactTable from './components/CycleCompactTable.vue';
 import CycleWorkspaceShell from './components/CycleWorkspaceShell.vue';
 import CycleParticipantScopePicker, { type ParticipantScopeMode } from './components/CycleParticipantScopePicker.vue';
@@ -158,6 +157,7 @@ const canEditCyclePlan = computed(() => (
   || auth.user?.sysRole === 'hr'
   || auth.user?.hrCapabilities?.includes('cycle_plan_edit')
 ));
+const canReviewCyclePlan = computed(() => auth.user?.sysRole === 'hr');
 const canManageGlobalNotificationSettings = computed(() => (
   auth.user?.sysRole === 'system_admin'
   || auth.user?.sysRole === 'hr'
@@ -333,7 +333,6 @@ const createForm = reactive({
   goalSettingOpenAt: undefined as Date | undefined,
   selfEvalOpenAt: undefined as Date | undefined,
   hrOwnerId: '' as string | undefined,
-  reviewerId: '' as string | undefined,
   monthlyFollowUpRequired: false,
   participantDeptIds: [] as string[],
   participantUserIds: [] as string[],
@@ -444,7 +443,6 @@ const createRules = {
   type: [{ required: true, message: '请选择周期类型', trigger: 'change' }],
   startDate: [{ required: true, message: '请选择开始日期', trigger: 'change' }],
   endDate: [{ required: true, message: '请选择结束日期', trigger: 'change' }],
-  reviewerId: [{ required: true, message: '请选择本周期审核人', trigger: 'change' }],
   participantDeptIds: [{
     validator: (_rule: unknown, value: string[], callback: (error?: Error) => void) => {
       if (
@@ -492,7 +490,6 @@ function resetCreateForm() {
   createForm.goalSettingOpenAt = undefined;
   createForm.selfEvalOpenAt = undefined;
   createForm.hrOwnerId = auth.user?.sysRole === 'hr' ? auth.user.id : undefined;
-  createForm.reviewerId = auth.user?.sysRole === 'hr' ? auth.user.id : undefined;
   createForm.monthlyFollowUpRequired = false;
   createForm.participantDeptIds = [];
   createForm.participantUserIds = [];
@@ -690,7 +687,6 @@ function openEditCycle(cycle: AssessmentCycle) {
   createForm.goalSettingOpenAt = toDate(cycle.goalSettingOpenAt);
   createForm.selfEvalOpenAt = toDate(cycle.selfEvalOpenAt);
   createForm.hrOwnerId = cycle.hrOwnerId;
-  createForm.reviewerId = cycle.reviewerId;
   createForm.monthlyFollowUpRequired = Boolean(cycle.monthlyFollowUpRequired);
   createForm.participantScope = (
     (cycle.participantDeptIds?.length ?? 0) > 0
@@ -919,8 +915,8 @@ async function confirmScheduleRegeneration(reason: string): Promise<boolean> {
   if (!scoringPlan.periodSchedules.some((schedule) => schedule.isException)) return true;
   try {
     await ElMessageBox.confirm(
-      `${reason}。当前评分计划包含特殊月份，重新生成会替换这些调整；也可以保留当前设置。`,
-      '重新生成还是保留当前评分计划？',
+      `${reason}。当前有手动调整的月份，重新生成会覆盖这些调整。`,
+      '确认重新生成评分计划？',
       {
         type: 'warning',
         confirmButtonText: '重新生成评分计划',
@@ -938,7 +934,6 @@ async function confirmScheduleRegeneration(reason: string): Promise<boolean> {
 
 async function refreshScoringPlan(options: {
   reason?: string;
-  preserveExceptions?: boolean;
   restorePeriodKey?: string;
   rollbackOnCancel?: ScheduleRollbackScope;
 } = {}): Promise<boolean> {
@@ -967,7 +962,6 @@ async function refreshScoringPlan(options: {
       scoringPlan.periodSchedules = preview.schedules.map((schedule) => {
         const current = currentSchedules.get(schedule.periodKey);
         if (options.restorePeriodKey && schedule.periodKey !== options.restorePeriodKey && current) return current;
-        if (options.preserveExceptions && current?.isException) return current;
         return { ...schedule };
       });
       scoringPlan.scoringFrequency = preview.scoringFrequency;
@@ -1094,14 +1088,6 @@ async function handleRestoreAllScoringSchedules() {
   await refreshScoringPlan({ reason: '将恢复 API 生成的全部默认评分计划' });
 }
 
-async function handleApplyUnifiedScoringRule(options: { preserveExceptions: boolean }) {
-  if (!await refreshScoringPlan({
-    reason: options.preserveExceptions ? undefined : '重新应用默认规则将覆盖特殊月份',
-    preserveExceptions: options.preserveExceptions,
-  })) return;
-  await validateCurrentScoringPlan();
-}
-
 function getCreateScheduleBoundaryWarning(node: (typeof CREATE_SCHEDULE_NODES)[number]): string {
   const value = createForm[node.key];
   if (!value) return '';
@@ -1170,7 +1156,6 @@ function buildCreateBody(): CreateCycleBody {
     goalSettingOpenAt: formatDateTimeLocal(createForm.goalSettingOpenAt),
     selfEvalOpenAt: formatDateTimeLocal(createForm.selfEvalOpenAt),
     hrOwnerId: createForm.hrOwnerId,
-    reviewerId: createForm.reviewerId,
     monthlyFollowUpRequired: ['quarterly', 'semiannual', 'annual'].includes(createForm.type)
       ? createForm.monthlyFollowUpRequired
       : false,
@@ -1651,7 +1636,7 @@ async function handleReviewCycle(cycle: AssessmentCycle) {
       : '按整个周期评分，共 1 期'
     : '历史流程';
   const reviewSummary = cycle.workflowVersion === 2
-    ? `结果按周期审核；特殊月份 ${cycle.periodSchedules?.filter((schedule) => schedule.isException).length ?? 0} 个；公司最终审定人 ${cycle.companyFinalApprover?.name || '未配置'}；`
+    ? `结果按周期审核；已调整月份 ${cycle.periodSchedules?.filter((schedule) => schedule.isException).length ?? 0} 个；公司最终审定人 ${cycle.companyFinalApprover?.name || '未配置'}；`
     : '';
   try {
     await ElMessageBox.confirm(
@@ -1790,6 +1775,7 @@ onMounted(() => {
         :deleting-id="deletingId"
         :current-user-id="auth.user?.id"
         :can-edit="canEditCyclePlan"
+        :can-review="canReviewCyclePlan"
         @open="handleView"
         @primary="handlePrimaryCycleAction"
         @edit-cycle="openEditCycle"
@@ -1935,43 +1921,27 @@ onMounted(() => {
             @update:schedules="handleScoringSchedulesUpdate"
             @restore-one="handleRestoreScoringSchedule"
             @restore-all="handleRestoreAllScoringSchedules"
-            @apply-unified="handleApplyUnifiedScoringRule"
           />
         </section>
 
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="考核范围" prop="participantDeptIds">
-              <template #label>
-                <span class="form-label-with-help">考核范围
-                  <el-tooltip content="自定义范围支持部门与人员混选，并可明确排除个别人" placement="top">
-                    <el-icon><QuestionFilled /></el-icon>
-                  </el-tooltip>
-                </span>
-              </template>
-              <CycleParticipantScopePicker
-                v-model:scope="createForm.participantScope"
-                v-model:department-ids="createForm.participantDeptIds"
-                v-model:user-ids="createForm.participantUserIds"
-                v-model:excluded-department-ids="createForm.explicitExemptDeptIds"
-                v-model:excluded-user-ids="createForm.explicitExemptUserIds"
-                :departments="departments"
-                @change="handleParticipantSelectionChange"
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="审核人" prop="reviewerId">
-              <UserSelect
-                v-model="createForm.reviewerId"
-                sys-role="hr"
-                status="active"
-                :clearable="false"
-                placeholder="选择 HR 管理员审核"
-              />
-            </el-form-item>
-          </el-col>
-        </el-row>
+        <el-form-item label="考核范围" prop="participantDeptIds">
+          <template #label>
+            <span class="form-label-with-help">考核范围
+              <el-tooltip content="自定义范围支持部门与人员混选，并可明确排除个别人" placement="top">
+                <el-icon><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </span>
+          </template>
+          <CycleParticipantScopePicker
+            v-model:scope="createForm.participantScope"
+            v-model:department-ids="createForm.participantDeptIds"
+            v-model:user-ids="createForm.participantUserIds"
+            v-model:excluded-department-ids="createForm.explicitExemptDeptIds"
+            v-model:excluded-user-ids="createForm.explicitExemptUserIds"
+            :departments="departments"
+            @change="handleParticipantSelectionChange"
+          />
+        </el-form-item>
 
         <el-form-item v-if="['quarterly', 'semiannual', 'annual'].includes(createForm.type)" label="月度跟进">
           <el-switch

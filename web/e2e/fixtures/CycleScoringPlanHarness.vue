@@ -14,7 +14,6 @@ const defaultSchedules = ref<CyclePeriodSchedule[]>([]);
 const restoreOneCount = ref(0);
 const restoreAllCount = ref(0);
 const immutableUpdate = ref('array:false,row:false');
-const applyUnifiedValue = ref('');
 const warnings: CycleScheduleIssue[] = [{ code: 'overlap_warning', periodKey: '2027-02', message: '该月与相邻计划有重叠风险' }];
 const blockers: CycleScheduleIssue[] = [{ code: 'manager_due_before_self', periodKey: '2027-02', message: '主管完成时间不得早于员工完成时间' }];
 
@@ -29,7 +28,7 @@ async function preview(type: CycleType, frequency: ScoringFrequency) {
     startDate: '2027-01-01',
     endDate: '2027-12-31',
   });
-  defaultSchedules.value = cloneSchedules(result.schedules);
+  defaultSchedules.value = result.schedules.map((schedule) => ({ ...schedule, isException: false }));
   schedules.value = cloneSchedules(result.schedules);
 }
 
@@ -64,9 +63,6 @@ function restoreAll() {
   restoreAllCount.value += 1;
 }
 
-function applyUnified(options: { preserveExceptions: boolean }) {
-  applyUnifiedValue.value = String(options.preserveExceptions);
-}
 </script>
 
 <template>
@@ -92,12 +88,10 @@ function applyUnified(options: { preserveExceptions: boolean }) {
         @update:schedules="updateSchedules"
         @restore-one="restoreOne"
         @restore-all="restoreAll"
-        @apply-unified="applyUnified"
       />
       <output data-testid="cycle-immutable-update">{{ immutableUpdate }}</output>
       <output data-testid="cycle-restore-one-count">{{ restoreOneCount }}</output>
       <output data-testid="cycle-restore-all-count">{{ restoreAllCount }}</output>
-      <output data-testid="cycle-apply-unified-value">{{ applyUnifiedValue }}</output>
     </section>
   </main>
 </template>

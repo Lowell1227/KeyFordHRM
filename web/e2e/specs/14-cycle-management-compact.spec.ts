@@ -364,6 +364,11 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByTestId('cycle-create')).toBeVisible();
     await expect(page.getByTestId('dingtalk-notification-status')).toContainText('钉钉通知已关闭');
     await expect(page.getByTestId('dingtalk-global-toggle').locator('input')).toBeDisabled();
+
+    await page.getByTestId('cycle-create').click();
+    const createDialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    await expect(createDialog).toBeVisible();
+    await expect(createDialog.getByText('审核人', { exact: true })).toHaveCount(0);
   });
 
   test('shows stable assessment scope instead of a transient next step and sends the selected group to the API', async ({ page }) => {

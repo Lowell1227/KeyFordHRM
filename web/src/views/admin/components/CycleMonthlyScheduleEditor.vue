@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref } from 'vue';
+import { computed } from 'vue';
 import type { CyclePeriodSchedule, CycleScheduleIssue } from '@/types/api.types';
 
 const props = withDefaults(defineProps<{
@@ -15,10 +15,9 @@ const emit = defineEmits<{
   'update:schedules': [value: CyclePeriodSchedule[]];
   'restore-all': [];
   'restore-one': [schedule: CyclePeriodSchedule];
-  'apply-unified': [options: { preserveExceptions: boolean }];
 }>();
 
-const preserveExceptions = ref(true);
+const hasExceptions = computed(() => props.schedules.some((schedule) => schedule.isException));
 
 type DateField = 'selfEvalOpenAt' | 'selfEvalDueAt' | 'managerDueAt';
 
@@ -59,40 +58,38 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
     <header class="cycle-monthly-schedule-editor__header">
       <div>
         <strong>评分计划</strong>
-        <p>逐期设置员工自评与主管评分的计划时间；重新应用默认规则时可保留已调整月份。</p>
+        <p>可直接修改单月时间；人工调整后可恢复本月或全部默认时间。</p>
       </div>
-      <div class="cycle-monthly-schedule-editor__actions">
-        <el-checkbox data-testid="cycle-preserve-exceptions" v-model="preserveExceptions">保留特殊月份</el-checkbox>
-        <el-button data-testid="cycle-apply-unified" text type="primary" @click="emit('apply-unified', { preserveExceptions })">重新应用默认规则</el-button>
-        <el-button data-testid="cycle-restore-all" text @click="emit('restore-all')">恢复全部默认</el-button>
-      </div>
+      <el-button
+        v-if="hasExceptions"
+        data-testid="cycle-restore-all"
+        text
+        @click="emit('restore-all')"
+      >全部恢复默认</el-button>
     </header>
 
-    <article
-      v-for="(schedule, index) in schedules"
-      :key="schedule.id ?? schedule.periodKey"
-      data-testid="cycle-month-schedule-row"
-      class="cycle-month-schedule-row"
-    >
-      <header class="cycle-month-schedule-row__header">
-        <div>
-          <strong data-testid="cycle-period-label">{{ periodLabel(schedule) }}</strong>
-          <el-tag v-if="schedule.isException" data-testid="cycle-special-month-badge" type="warning" size="small">特殊月份</el-tag>
-        </div>
-        <div>
-          <el-button
-            data-testid="cycle-special-month-button"
-            text
-            type="primary"
-            @click="updateSchedule(index, { isException: true })"
-          >调整特殊月份</el-button>
-          <el-button data-testid="cycle-restore-one" text @click="emit('restore-one', { ...schedule })">恢复默认</el-button>
-        </div>
-      </header>
+    <div data-testid="cycle-schedule-column-header" class="cycle-monthly-schedule-grid__header">
+      <span>月份</span>
+      <span>自评开放时间</span>
+      <span>员工计划完成时间</span>
+      <span>主管计划完成时间</span>
+      <span>操作</span>
+    </div>
 
-      <div class="cycle-month-schedule-row__fields">
+    <div class="cycle-monthly-schedule-list">
+      <article
+        v-for="(schedule, index) in schedules"
+        :key="schedule.id ?? schedule.periodKey"
+        data-testid="cycle-month-schedule-row"
+        class="cycle-month-schedule-row"
+      >
+        <div class="cycle-month-schedule-row__main">
+          <div class="cycle-month-schedule-row__period">
+            <strong data-testid="cycle-period-label">{{ periodLabel(schedule) }}</strong>
+            <el-tag v-if="schedule.isException" data-testid="cycle-special-month-badge" type="warning" size="small">已调整</el-tag>
+          </div>
         <label data-testid="self-eval-open-at">
-          <span>自评开放时间</span>
+          <span class="cycle-month-schedule-row__mobile-label">自评开放时间</span>
           <el-date-picker
             :model-value="schedule.selfEvalOpenAt"
             type="datetime"
@@ -103,7 +100,7 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
           <small v-for="issue in issuesForField(schedule, 'selfEvalOpenAt')" :key="issue.code" class="is-blocker">{{ issue.message }}</small>
         </label>
         <label data-testid="self-eval-due-at">
-          <span>员工计划完成时间</span>
+          <span class="cycle-month-schedule-row__mobile-label">员工计划完成时间</span>
           <el-date-picker
             :model-value="schedule.selfEvalDueAt"
             type="datetime"
@@ -114,7 +111,7 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
           <small v-for="issue in issuesForField(schedule, 'selfEvalDueAt')" :key="issue.code" class="is-blocker">{{ issue.message }}</small>
         </label>
         <label data-testid="manager-due-at">
-          <span>主管计划完成时间</span>
+          <span class="cycle-month-schedule-row__mobile-label">主管计划完成时间</span>
           <el-date-picker
             :model-value="schedule.managerDueAt"
             type="datetime"
@@ -124,32 +121,46 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
           />
           <small v-for="issue in issuesForField(schedule, 'managerDueAt')" :key="issue.code" class="is-blocker">{{ issue.message }}</small>
         </label>
-      </div>
+          <div class="cycle-month-schedule-row__actions">
+            <el-button
+              v-if="schedule.isException"
+              data-testid="cycle-restore-one"
+              text
+              @click="emit('restore-one', { ...schedule })"
+            >恢复本月默认</el-button>
+          </div>
+        </div>
 
-      <p v-for="issue in issuesFor(schedule, warnings)" :key="issue.code" class="cycle-month-schedule-row__warning">{{ issue.message }}</p>
-      <p
-        v-for="issue in issuesFor(schedule, blockers).filter((blocker) => !['open', 'self', 'employee', 'manager'].some((word) => blocker.code.toLowerCase().includes(word)))"
-        :key="issue.code"
-        class="cycle-month-schedule-row__blocker"
-      >{{ issue.message }}</p>
-    </article>
+        <p v-for="issue in issuesFor(schedule, warnings)" :key="issue.code" class="cycle-month-schedule-row__warning">{{ issue.message }}</p>
+        <p
+          v-for="issue in issuesFor(schedule, blockers).filter((blocker) => !['open', 'self', 'employee', 'manager'].some((word) => blocker.code.toLowerCase().includes(word)))"
+          :key="issue.code"
+          class="cycle-month-schedule-row__blocker"
+        >{{ issue.message }}</p>
+      </article>
+    </div>
   </section>
 </template>
 
 <style scoped>
 .cycle-monthly-schedule-editor {
   display: grid;
-  gap: 12px;
+  overflow: hidden;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
 }
 
 .cycle-monthly-schedule-editor__header,
-.cycle-month-schedule-row__header,
-.cycle-monthly-schedule-editor__actions,
-.cycle-month-schedule-row__header > div {
+.cycle-month-schedule-row__period {
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 10px;
+}
+
+.cycle-monthly-schedule-editor__header {
+  padding: 12px 14px;
+  background: var(--el-fill-color-extra-light);
 }
 
 .cycle-monthly-schedule-editor__header p {
@@ -158,29 +169,52 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
   font-size: 12px;
 }
 
-.cycle-monthly-schedule-editor__actions {
-  justify-content: flex-end;
-  flex-wrap: wrap;
+.cycle-monthly-schedule-grid__header,
+.cycle-month-schedule-row__main {
+  display: grid;
+  grid-template-columns: 96px repeat(3, minmax(180px, 1fr)) 108px;
+  align-items: start;
+  gap: 10px;
+}
+
+.cycle-monthly-schedule-grid__header {
+  padding: 8px 12px;
+  color: var(--el-text-color-secondary);
+  background: var(--el-fill-color-light);
+  font-size: 12px;
+}
+
+.cycle-monthly-schedule-list {
+  display: grid;
 }
 
 .cycle-month-schedule-row {
-  padding: 14px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
+  padding: 10px 12px;
+  border-top: 1px solid var(--el-border-color-lighter);
 }
 
-.cycle-month-schedule-row__fields {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 12px;
-  margin-top: 12px;
+.cycle-month-schedule-row__period {
+  min-height: 32px;
+  justify-content: flex-start;
+  flex-wrap: wrap;
 }
 
 .cycle-month-schedule-row label {
   display: grid;
-  gap: 6px;
+  gap: 4px;
   color: var(--el-text-color-regular);
   font-size: 12px;
+}
+
+.cycle-month-schedule-row__mobile-label {
+  display: none;
+}
+
+.cycle-month-schedule-row__actions {
+  display: flex;
+  min-height: 32px;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 .cycle-month-schedule-row :deep(.el-date-editor) {
@@ -204,14 +238,42 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
 }
 
 @media (max-width: 768px) {
-  .cycle-monthly-schedule-editor__header,
-  .cycle-month-schedule-row__header {
-    align-items: flex-start;
-    flex-direction: column;
+  .cycle-monthly-schedule-editor {
+    overflow: visible;
+    gap: 12px;
+    border: 0;
   }
 
-  .cycle-month-schedule-row__fields {
+  .cycle-monthly-schedule-editor__header {
+    align-items: flex-start;
+    padding: 0;
+    background: transparent;
+  }
+
+  .cycle-monthly-schedule-grid__header {
+    display: none;
+  }
+
+  .cycle-monthly-schedule-list {
+    gap: 12px;
+  }
+
+  .cycle-month-schedule-row {
+    padding: 12px;
+    border: 1px solid var(--el-border-color-lighter);
+    border-radius: 8px;
+  }
+
+  .cycle-month-schedule-row__main {
     grid-template-columns: 1fr;
+  }
+
+  .cycle-month-schedule-row__mobile-label {
+    display: block;
+  }
+
+  .cycle-month-schedule-row__actions {
+    justify-content: flex-start;
   }
 }
 </style>

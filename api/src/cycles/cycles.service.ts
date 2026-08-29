@@ -61,8 +61,10 @@ export class CyclesService {
     const selfEvalOpenAt = dto.selfEvalOpenAt ?? this.addDays(endDate, 1);
     this.validateCycleDates({ ...dto, startDate, endDate }, goalSettingOpenAt, selfEvalOpenAt);
     const hrOwnerId = await this.resolveHrOwnerId(dto.hrOwnerId, user);
-    const reviewerId = await this.resolveReviewerId(dto.reviewerId);
     const workflowVersion = dto.workflowVersion ?? 1;
+    const reviewerId = workflowVersion === 1
+      ? await this.resolveReviewerId(dto.reviewerId)
+      : null;
     const schedulePlan = workflowVersion === 2
       ? this.normalizeSchedulePlan({
           type: dto.type,
@@ -92,7 +94,7 @@ export class CyclesService {
         ...(schedulePlan && {
           periodSchedules: { create: schedulePlan.schedules.map((schedule) => this.scheduleCreateData(schedule)) },
         }),
-        reviewer: { connect: { id: reviewerId } },
+        ...(reviewerId && { reviewer: { connect: { id: reviewerId } } }),
         reviewStatus: 'pending',
         monthlyFollowUpRequired: ['quarterly', 'semiannual', 'annual'].includes(dto.type)
           ? Boolean(dto.monthlyFollowUpRequired)
@@ -255,10 +257,10 @@ export class CyclesService {
       const hrOwnerId = dto.hrOwnerId !== undefined
         ? await this.resolveHrOwnerId(dto.hrOwnerId, user)
         : cycle.hrOwnerId;
-      const reviewerId = dto.reviewerId !== undefined
+      const workflowVersion = dto.workflowVersion ?? cycle.workflowVersion ?? 1;
+      const reviewerId = dto.reviewerId !== undefined && workflowVersion === 1
         ? await this.resolveReviewerId(dto.reviewerId)
         : cycle.reviewerId;
-      const workflowVersion = dto.workflowVersion ?? cycle.workflowVersion ?? 1;
       const nextType = dto.type ?? cycle.type;
       const requestedScoringFrequency = normalizeScoringFrequency(
         nextType,
@@ -804,8 +806,11 @@ export class CyclesService {
       if (cycle.status !== CycleStatus.draft) {
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '只有草稿周期可以审核' });
       }
-      if (cycle.reviewerId !== user.id) {
+      if (cycle.reviewerId && cycle.reviewerId !== user.id) {
         throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅本周期审核人可以审核' });
+      }
+      if (!cycle.reviewerId && user.sysRole !== SysRole.hr) {
+        throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅 HR 管理员可以审核待分配的周期计划' });
       }
       if (cycle.planVersion !== dto.expectedPlanVersion) throw this.stalePlanConflict();
       const reviewStatus = dto.action === 'approve' ? 'approved' : 'rejected';
@@ -814,11 +819,13 @@ export class CyclesService {
           id,
           status: CycleStatus.draft,
           planVersion: dto.expectedPlanVersion,
+          reviewerId: cycle.reviewerId,
           reviewStatus: cycle.reviewStatus,
           reviewedAt: cycle.reviewedAt,
         },
         data: {
           planVersion: { increment: 1 },
+          reviewerId: user.id,
           reviewStatus,
           reviewedAt: new Date(),
           reviewComment: dto.comment?.trim() || null,

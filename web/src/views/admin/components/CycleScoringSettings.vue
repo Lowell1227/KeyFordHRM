@@ -50,7 +50,7 @@ watch(
   <section data-testid="cycle-scoring-settings" class="cycle-scoring-settings" aria-label="评分频率设置">
     <div class="cycle-scoring-settings__heading">
       <strong>评分频率</strong>
-      <span>结果审核按整个周期统一进行</span>
+      <span data-testid="cycle-review-frequency">结果统一按周期审核</span>
     </div>
 
     <el-radio-group
@@ -63,9 +63,6 @@ watch(
     </el-radio-group>
     <p v-else class="cycle-scoring-settings__fixed">{{ fixedFrequencyCopy }}</p>
 
-    <div data-testid="cycle-review-frequency" class="cycle-scoring-settings__review">
-      结果审核频率：按周期审核（固定）
-    </div>
   </section>
 </template>
 
@@ -85,8 +82,7 @@ watch(
   gap: 12px;
 }
 
-.cycle-scoring-settings__heading span,
-.cycle-scoring-settings__review {
+.cycle-scoring-settings__heading span {
   color: var(--el-text-color-secondary);
   font-size: 12px;
 }

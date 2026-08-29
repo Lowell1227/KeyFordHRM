@@ -142,6 +142,13 @@ describe('CyclesService', () => {
     }));
   });
 
+  it('leaves a new workflow-v2 plan unassigned for the HR administrator review pool', async () => {
+    await service.create(quarterlyCycle({ workflowVersion: 2 }), creator);
+
+    const data = prisma.assessmentCycle.create.mock.calls[0][0].data;
+    expect(data).not.toHaveProperty('reviewer');
+  });
+
   it('stores explicit exempt departments when creating a cycle', async () => {
     await service.create(quarterlyCycle({
       explicitExemptDeptIds: [explicitExemptDeptId],
@@ -344,6 +351,44 @@ describe('CyclesService', () => {
     expect(prisma.cyclePeriodSchedule.deleteMany).not.toHaveBeenCalled();
   });
 
+  it('lets an HR administrator claim and review an unassigned plan', async () => {
+    const cycle = storedDraft({
+      reviewerId: null,
+      reviewStatus: 'pending',
+      reviewedAt: null,
+      reviewComment: null,
+    });
+    prisma.assessmentCycle.findUnique
+      .mockResolvedValueOnce(cycle)
+      .mockResolvedValueOnce({ ...cycle, reviewerId: reviewer.id, planVersion: 4, reviewStatus: 'approved' });
+
+    const result = await service.review('cycle-1', {
+      action: 'approve',
+      expectedPlanVersion: 3,
+    }, reviewer);
+
+    expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith({
+      where: {
+        id: 'cycle-1',
+        status: CycleStatus.draft,
+        planVersion: 3,
+        reviewerId: null,
+        reviewStatus: 'pending',
+        reviewedAt: null,
+      },
+      data: expect.objectContaining({
+        planVersion: { increment: 1 },
+        reviewerId: reviewer.id,
+        reviewStatus: 'approved',
+      }),
+    });
+    expect(result).toEqual(expect.objectContaining({
+      planVersion: 4,
+      reviewerId: reviewer.id,
+      reviewFrequency: 'cycle',
+    }));
+  });
+
   it('allows only the assigned business reviewer and returns the full cycle contract', async () => {
     const cycle = storedDraft({ reviewStatus: 'pending', reviewedAt: null, reviewComment: null });
     prisma.assessmentCycle.findUnique
@@ -360,6 +405,7 @@ describe('CyclesService', () => {
         id: 'cycle-1',
         status: CycleStatus.draft,
         planVersion: 3,
+        reviewerId: cycle.reviewerId,
         reviewStatus: 'pending',
         reviewedAt: null,
       },
@@ -377,7 +423,7 @@ describe('CyclesService', () => {
   });
 
   it('does not let a system administrator bypass the assigned cycle reviewer', async () => {
-    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft({ reviewStatus: 'pending' }));
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft({ reviewerId: null, reviewStatus: 'pending' }));
     const systemAdministrator = {
       ...creator,
       id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -448,9 +494,7 @@ describe('CyclesService', () => {
   });
 
   it('persists a normalized v2 scoring plan and snapshots the configured final approver', async () => {
-    prisma.user.findFirst
-      .mockResolvedValueOnce({ id: '99999999-9999-4999-8999-999999999999' })
-      .mockResolvedValueOnce({ id: companyFinalApproverId });
+    prisma.user.findFirst.mockResolvedValueOnce({ id: companyFinalApproverId });
 
     const result = await service.create(quarterlyCycle({
       workflowVersion: 2,

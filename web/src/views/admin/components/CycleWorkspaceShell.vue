@@ -137,7 +137,7 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
           <p v-if="cycle">{{ formatDate(cycle.startDate) }}–{{ formatDate(cycle.endDate) }}</p>
           <div v-if="cycle" class="cycle-workspace__meta">
             <span>创建人：{{ cycle.creator?.name || '—' }}</span>
-            <span>审核人：{{ cycle.reviewer?.name || '—' }}</span>
+            <span>{{ cycle.reviewer?.name ? `审核人：${cycle.reviewer.name}` : '审核处理：HR 管理员审核池' }}</span>
             <span>审核状态：{{ cycle.reviewStatus === 'approved' ? '已通过' : (cycle.reviewStatus === 'rejected' ? '已退回' : '待审核') }}</span>
             <span v-if="cycle.monthlyFollowUpRequired">需按月跟进</span>
           </div>
@@ -145,7 +145,7 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
             <span>{{ scoringSummary(cycle) }}</span>
             <span v-if="cycle.workflowVersion === 2">结果审核：按周期审核</span>
             <span v-if="cycle.workflowVersion === 2">评分期数：{{ cycle.periodSchedules?.length ?? 0 }}期</span>
-            <span v-if="cycle.workflowVersion === 2">特殊月份：{{ scheduleExceptionCount(cycle) }}个</span>
+            <span v-if="cycle.workflowVersion === 2">已调整月份：{{ scheduleExceptionCount(cycle) }}个</span>
             <span v-if="cycle.workflowVersion === 2">公司最终审定人：{{ cycle.companyFinalApprover?.name || '未配置' }}</span>
           </div>
         </div>

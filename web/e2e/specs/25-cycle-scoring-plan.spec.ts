@@ -327,7 +327,8 @@ test.describe('cycle scoring plan controls', () => {
     await page.getByTestId('cycle-create').click();
     await page.getByTestId('cycle-type-quarterly').click();
     await expect(page.getByTestId('cycle-scoring-monthly').locator('input')).toBeChecked();
-    await expect(page.getByTestId('cycle-review-frequency')).toContainText('按周期审核');
+    await expect(page.getByTestId('cycle-review-frequency')).toHaveText('结果统一按周期审核');
+    await expect(page.getByText('结果审核按整个周期统一进行', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
   });
 
@@ -363,46 +364,61 @@ test.describe('cycle scoring plan controls', () => {
     await expect(page.getByTestId('cycle-month-schedule-row')).toContainText('整个周期');
   });
 
-  test('renders schedule details and keeps editor updates, restores, issues, and unified choices explicit', async ({ page }) => {
+  test('renders a compact scoring schedule with only contextual restore actions', async ({ page }) => {
     await mountScoringPlanHarness(page);
     await page.getByTestId('cycle-create').click();
     await page.getByTestId('cycle-type-quarterly').click();
 
     const firstRow = page.getByTestId('cycle-month-schedule-row').first();
     const secondRow = page.getByTestId('cycle-month-schedule-row').nth(1);
+    await expect(page.getByTestId('cycle-schedule-column-header')).toBeVisible();
     await expect(firstRow.getByTestId('cycle-period-label')).toHaveText('2027年1月');
     await expect(firstRow.getByTestId('self-eval-open-at').locator('input')).toHaveValue('2027-01-01 09:00');
     await expect(firstRow.getByTestId('self-eval-due-at').locator('input')).toHaveValue('2027-01-03 18:00');
     await expect(firstRow.getByTestId('manager-due-at').locator('input')).toHaveValue('2027-01-06 18:00');
-    await expect(secondRow.getByTestId('cycle-special-month-badge')).toHaveText('特殊月份');
+    await expect(secondRow.getByTestId('cycle-special-month-badge')).toHaveText('已调整');
     await expect(secondRow).toContainText('该月与相邻计划有重叠风险');
     await expect(secondRow).toContainText('主管完成时间不得早于员工完成时间');
-    await expect(page.getByTestId('cycle-apply-unified')).toHaveText('重新应用默认规则');
-    await expect(page.getByTestId('cycle-apply-unified')).not.toHaveText('统一调整规则');
+    await expect(page.getByTestId('cycle-apply-unified')).toHaveCount(0);
+    await expect(page.getByTestId('cycle-preserve-exceptions')).toHaveCount(0);
+    await expect(firstRow.getByTestId('cycle-special-month-button')).toHaveCount(0);
+    await expect(firstRow.getByTestId('cycle-restore-one')).toHaveCount(0);
 
-    await firstRow.getByTestId('cycle-special-month-button').click();
-    await expect(firstRow.getByTestId('cycle-special-month-badge')).toHaveText('特殊月份');
+    const managerDueInput = firstRow.getByTestId('manager-due-at').locator('input');
+    await managerDueInput.fill('2027-01-08 18:00');
+    await managerDueInput.press('Tab');
+    await expect(firstRow.getByTestId('cycle-special-month-badge')).toHaveText('已调整');
     await expect(page.getByTestId('cycle-immutable-update')).toHaveText('array:true:row:true');
 
+    await expect(firstRow.getByTestId('cycle-restore-one')).toHaveText('恢复本月默认');
     await firstRow.getByTestId('cycle-restore-one').click();
     await expect(firstRow.getByTestId('cycle-special-month-badge')).toHaveCount(0);
     await expect(page.getByTestId('cycle-restore-one-count')).toHaveText('1');
 
-    await firstRow.getByTestId('cycle-special-month-button').click();
+    await expect(page.getByTestId('cycle-restore-all')).toHaveText('全部恢复默认');
     await page.getByTestId('cycle-restore-all').click();
-    await expect(firstRow.getByTestId('cycle-special-month-badge')).toHaveCount(0);
+    await expect(secondRow.getByTestId('cycle-special-month-badge')).toHaveCount(0);
     await expect(page.getByTestId('cycle-restore-all-count')).toHaveText('1');
+    await expect(page.getByTestId('cycle-restore-all')).toHaveCount(0);
+  });
 
-    await page.getByTestId('cycle-apply-unified').click();
-    await expect(page.getByTestId('cycle-apply-unified-value')).toHaveText('true');
-    await page.getByTestId('cycle-preserve-exceptions').click();
-    await page.getByTestId('cycle-apply-unified').click();
-    await expect(page.getByTestId('cycle-apply-unified-value')).toHaveText('false');
+  test('keeps the scoring schedule usable at 390px', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await mountScoringPlanHarness(page);
+    await page.getByTestId('cycle-create').click();
+    await page.getByTestId('cycle-type-quarterly').click();
+
+    const firstRow = page.getByTestId('cycle-month-schedule-row').first();
+    await expect(page.getByTestId('cycle-schedule-column-header')).not.toBeVisible();
+    await expect(firstRow.getByText('自评开放时间', { exact: true })).toBeVisible();
+    await expect(firstRow.getByText('员工计划完成时间', { exact: true })).toBeVisible();
+    await expect(firstRow.getByText('主管计划完成时间', { exact: true })).toBeVisible();
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 });
 
 test.describe('cycle scoring plan integration', () => {
-  test('creates workflow v2 with a normalized special-month schedule after explicit warning confirmation', async ({ page }) => {
+  test('creates workflow v2 without reviewer selection and keeps the normalized adjusted schedule', async ({ page }) => {
     const createBodies: Record<string, unknown>[] = [];
     const previewBodies: Record<string, unknown>[] = [];
     await mockIntegratedCyclePage(page, {
@@ -413,13 +429,15 @@ test.describe('cycle scoring plan integration', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
 
+    const createDialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    await expect(createDialog.getByText('审核人', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
     await page.getByTestId('cycle-scoring-monthly').click();
     const secondRow = page.getByTestId('cycle-month-schedule-row').nth(1);
     const managerDueInput = secondRow.getByTestId('manager-due-at').locator('input');
     await managerDueInput.fill('2027-03-10 18:00');
     await managerDueInput.press('Tab');
-    await expect(secondRow.getByTestId('cycle-special-month-badge')).toHaveText('特殊月份');
+    await expect(secondRow.getByTestId('cycle-special-month-badge')).toHaveText('已调整');
     await page.getByRole('button', { name: '下一步' }).click();
 
     await expect(page.getByRole('dialog', { name: '确认评分计划提示' })).toContainText('主管完成时间跨月，请确认安排');
@@ -431,6 +449,7 @@ test.describe('cycle scoring plan integration', () => {
     expect(createBodies).toHaveLength(0);
     await page.getByRole('button', { name: '确认并继续' }).click();
     await expect.poll(() => createBodies).toHaveLength(1);
+    expect(createBodies.at(-1)).not.toHaveProperty('reviewerId');
     expect(createBodies.at(-1)).toMatchObject({
       workflowVersion: 2,
       scoringFrequency: 'monthly',
@@ -510,21 +529,21 @@ test.describe('cycle scoring plan integration', () => {
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
 
     await page.getByTestId('cycle-scoring-cycle').click();
-    await expect(page.getByRole('dialog', { name: '重新生成还是保留当前评分计划？' })).toBeVisible();
+    await expect(page.getByRole('dialog', { name: '确认重新生成评分计划？' })).toBeVisible();
     await page.getByRole('button', { name: '重新生成评分计划' }).click();
 
     await expect(page.getByTestId('cycle-review-reset-warning')).toContainText('修改后需重新审核');
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(1);
   });
 
-  test('restores the confirmed frequency and schedule when special-month regeneration is declined', async ({ page }) => {
+  test('restores the confirmed frequency and schedule when adjusted-schedule regeneration is declined', async ({ page }) => {
     await mockIntegratedCyclePage(page, { cycles: [integratedCycle] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId(`cycle-edit-${integratedCycle.id}`).click();
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
 
     await page.getByTestId('cycle-scoring-cycle').click();
-    const confirmation = page.getByRole('dialog', { name: '重新生成还是保留当前评分计划？' });
+    const confirmation = page.getByRole('dialog', { name: '确认重新生成评分计划？' });
     await expect(confirmation).toBeVisible();
     await confirmation.getByRole('button', { name: '保留当前评分计划' }).click();
 
@@ -623,9 +642,14 @@ test.describe('cycle scoring plan integration', () => {
     expect(updateBodies[0]).toHaveProperty('expectedPlanVersion', historicalCycle.planVersion);
   });
 
-  test('submits the inspected plan version when the assigned reviewer approves', async ({ page }) => {
+  test('lets an HR administrator review a plan from the review pool', async ({ page }) => {
     const reviewBodies: Record<string, unknown>[] = [];
-    const pendingCycle: AssessmentCycle = { ...integratedCycle, reviewStatus: 'pending' };
+    const pendingCycle: AssessmentCycle = {
+      ...integratedCycle,
+      reviewerId: undefined,
+      reviewer: null,
+      reviewStatus: 'pending',
+    };
     await mockIntegratedCyclePage(page, { cycles: [pendingCycle], reviewBodies });
     await page.goto('/cycles?group=attention');
 
@@ -670,7 +694,7 @@ test.describe('cycle scoring plan integration', () => {
     await page.getByText(integratedCycle.name, { exact: true }).first().click();
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('按月评分 · 3个月');
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('结果审核：按周期审核');
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('特殊月份：1个');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('已调整月份：1个');
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('公司最终审定人：李宏');
 
     await page.getByRole('button', { name: '开始发起检查' }).click();
