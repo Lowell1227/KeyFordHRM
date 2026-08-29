@@ -9,6 +9,8 @@
 > 前置设计：[周期计划发起前工作流设计](./2026-08-28-cycle-plan-prelaunch-workflow-design.md)
 >
 > 关联设计：[组织调岗与绩效交接设计](./2026-08-28-organization-transfer-performance-handoff-design.md)
+>
+> 2026-08-29 变更：评分频率与原“月度跟进”的配置、月度员工填写及主管评分交互，以[月度复盘与评分一体化设计](./2026-08-29-unified-monthly-review-and-scoring-design.md)为准；本文件其余周期汇总、审核、人员变化和结果更正规则继续有效。
 
 ## 1. 设计目标
 
