@@ -161,6 +161,8 @@ interface CycleMockOptions {
   preflightRequests?: string[];
   launchRequests?: string[];
   scheduleRequests?: string[];
+  launchBodies?: Record<string, unknown>[];
+  scheduleBodies?: Record<string, unknown>[];
   preflight?: LaunchPreflightResult;
   deletedIds?: string[];
   authUser?: CurrentUser;
@@ -305,6 +307,7 @@ async function mockCyclePage(
     const launchId = url.pathname.match(/\/cycles\/([^/]+)\/launch$/)?.[1];
     if (launchId) {
       options.launchRequests?.push(launchId);
+      options.launchBodies?.push(route.request().postDataJSON() as Record<string, unknown>);
       return route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify(apiResponse({ id: launchId })),
@@ -313,6 +316,7 @@ async function mockCyclePage(
     const scheduleId = url.pathname.match(/\/cycles\/([^/]+)\/schedule$/)?.[1];
     if (scheduleId) {
       options.scheduleRequests?.push(scheduleId);
+      options.scheduleBodies?.push(route.request().postDataJSON() as Record<string, unknown>);
       return route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify(apiResponse({ id: scheduleId })),
@@ -522,7 +526,7 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByRole('dialog', { name: '创建绩效周期' }).getByRole('button', { name: '提交', exact: true })).toHaveCount(0);
   });
 
-  test('saves a draft into its detail without starting the launch check', async ({ page }) => {
+  test('submits a new cycle into its detail without starting a launch check', async ({ page }) => {
     const createBodies: unknown[] = [];
     const preflightRequests: string[] = [];
     await mockCyclePage(page, [], { createBodies, preflightRequests });
@@ -534,7 +538,9 @@ test.describe('compact cycle management list', () => {
     await expect(page).toHaveURL(/cycleId=cycle-draft/);
     expect(createBodies).toHaveLength(1);
     expect(preflightRequests).toEqual([]);
-    await expect(page.getByTestId('cycle-preflight-primary-action').getByRole('button', { name: '开始发起检查' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '开始发起', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '预约发起', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '开始发起检查', exact: true })).toHaveCount(0);
   });
 
   test('opens a full-page five-stage workspace and restores list context on return', async ({ page }) => {
@@ -570,7 +576,7 @@ test.describe('compact cycle management list', () => {
     await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue(draftCycle.name);
   });
 
-  test('keeps edit in the header and the only launch check action in the current task panel', async ({ page }) => {
+  test('keeps edit in the header and both launch actions in the current task panel', async ({ page }) => {
     await mockCyclePage(page);
     await page.goto('/cycles?group=attention&cycleId=cycle-draft');
 
@@ -578,27 +584,35 @@ test.describe('compact cycle management list', () => {
     await expect(actions.getByRole('button', { name: '编辑', exact: true })).toBeVisible();
     await expect(page.getByTestId('cycle-workspace-submit')).toHaveCount(0);
     const controlBar = page.getByTestId('cycle-preflight-control-bar');
-    await expect(controlBar).toContainText('检查周期审核、参与人员、直属上级和时间计划是否准备完成');
-    await expect(controlBar.getByTestId('cycle-preflight-primary-action').getByRole('button', { name: '开始发起检查' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '开始发起检查' })).toHaveCount(1);
+    await expect(controlBar).toContainText('点击发起操作后，系统会先检查周期审核、参与人员、直属上级和时间计划');
+    const launchActions = controlBar.getByTestId('cycle-preflight-primary-action');
+    await expect(launchActions.getByRole('button', { name: '开始发起', exact: true })).toBeVisible();
+    await expect(launchActions.getByRole('button', { name: '预约发起', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '开始发起检查', exact: true })).toHaveCount(0);
     await expect(actions.getByRole('button', { name: '查看全部设置', exact: true })).toHaveCount(0);
     await expect(actions.getByRole('button', { name: '周期更多操作', exact: true })).toHaveCount(0);
   });
 
-  test('keeps the launch action anchored while the launch check result changes', async ({ page }) => {
+  test('keeps both launch actions anchored after a blocked launch check', async ({ page }) => {
     const preflightRequests: string[] = [];
     const launchRequests: string[] = [];
     const scheduleRequests: string[] = [];
-    await mockCyclePage(page, [], { preflightRequests, launchRequests, scheduleRequests });
+    await mockCyclePage(page, [], {
+      preflightRequests,
+      launchRequests,
+      scheduleRequests,
+      preflight: blockedPreflight,
+    });
     await page.goto('/cycles?group=attention&cycleId=cycle-draft');
 
     const actionSlot = page.getByTestId('cycle-preflight-primary-action');
     const before = await actionSlot.boundingBox();
-    await actionSlot.getByRole('button', { name: '开始发起检查' }).click();
+    await actionSlot.getByRole('button', { name: '开始发起', exact: true }).click();
 
     await expect.poll(() => preflightRequests).toEqual(['cycle-draft']);
-    await expect(page.getByText('发起检查通过')).toBeVisible();
-    await expect(actionSlot.getByRole('button', { name: /预约发起/ })).toBeVisible();
+    await expect(page.getByText('请先处理阻断项')).toBeVisible();
+    await expect(actionSlot.getByRole('button', { name: '开始发起', exact: true })).toBeVisible();
+    await expect(actionSlot.getByRole('button', { name: '预约发起', exact: true })).toBeVisible();
     const after = await actionSlot.boundingBox();
     expect(after?.x).toBeCloseTo(before?.x ?? 0, 0);
     expect(after?.y).toBeCloseTo(before?.y ?? 0, 0);
@@ -622,11 +636,11 @@ test.describe('compact cycle management list', () => {
 
     await page.getByRole('button', { name: draftCycle.name }).click();
     const currentTask = page.getByTestId('cycle-current-action');
-    await expect(currentTask).toContainText('检查周期审核、参与人员、直属上级和时间计划是否准备完成');
+    await expect(currentTask).toContainText('点击发起操作后，系统会先检查周期审核、参与人员、直属上级和时间计划');
     await expect(currentTask).not.toContainText('直属主管');
     await expect(currentTask).not.toContainText('绩效模板');
     await expect(currentTask).not.toContainText('时间设置');
-    await page.getByRole('button', { name: '开始发起检查' }).click();
+    await page.getByRole('button', { name: '开始发起', exact: true }).click();
 
     await expect(page.getByTestId('cycle-preflight-blockers')).toContainText('1 名员工未匹配到考核模板');
     await expect(page.getByText('TEMPLATE_UNCOVERED')).toHaveCount(0);
@@ -638,26 +652,104 @@ test.describe('compact cycle management list', () => {
     ));
   });
 
-  test('shows only immediate launch when the configured goal opening time has arrived', async ({ page }) => {
-    await mockCyclePage(page, [], { preflight: immediatelyOpenablePreflight });
+  test('checks and confirms participant impact before starting immediately', async ({ page }) => {
+    const preflightRequests: string[] = [];
+    const launchRequests: string[] = [];
+    const launchBodies: Record<string, unknown>[] = [];
+    await mockCyclePage(page, [], {
+      preflight: immediatelyOpenablePreflight,
+      preflightRequests,
+      launchRequests,
+      launchBodies,
+    });
     await page.goto('/cycles?group=attention');
 
     await page.getByRole('button', { name: draftCycle.name }).click();
-    await page.getByRole('button', { name: '开始发起检查' }).click();
+    await page.getByRole('button', { name: '开始发起', exact: true }).click();
 
-    await expect(page.getByRole('button', { name: '立即发起' })).toBeVisible();
-    await expect(page.getByRole('button', { name: /预约发起/ })).toHaveCount(0);
+    await expect.poll(() => preflightRequests).toEqual(['cycle-draft']);
+    const confirmation = page.getByRole('dialog', { name: '确认发起周期' });
+    await expect(confirmation).toContainText('128 名参与员工');
+    await expect(confirmation).toContainText('不可撤销');
+    expect(launchRequests).toEqual([]);
+    await confirmation.getByRole('button', { name: '确认发起' }).click();
+
+    await expect.poll(() => launchRequests).toEqual(['cycle-draft']);
+    expect(launchBodies).toEqual([{ expectedPlanHash: 'ready-plan-hash' }]);
   });
 
-  test('shows only a dated scheduled launch when the configured goal opening time is in the future', async ({ page }) => {
-    await mockCyclePage(page, [], { preflight: readyPreflight });
+  test('guides ordinary HR to schedule when immediate launch is too early', async ({ page }) => {
+    const preflightRequests: string[] = [];
+    const launchRequests: string[] = [];
+    await mockCyclePage(page, [], { preflight: readyPreflight, preflightRequests, launchRequests });
     await page.goto('/cycles?group=attention');
 
     await page.getByRole('button', { name: draftCycle.name }).click();
-    await page.getByRole('button', { name: '开始发起检查' }).click();
+    await page.getByRole('button', { name: '开始发起', exact: true }).click();
 
-    await expect(page.getByRole('button', { name: /预约发起（.+）/ })).toBeVisible();
-    await expect(page.getByRole('button', { name: '立即发起' })).toHaveCount(0);
+    await expect.poll(() => preflightRequests).toEqual(['cycle-draft']);
+    await expect(page.getByText('尚未到目标制定开放时间，请使用预约发起')).toBeVisible();
+    expect(launchRequests).toEqual([]);
+  });
+
+  test('checks and confirms the time and participants before scheduling', async ({ page }) => {
+    const preflightRequests: string[] = [];
+    const scheduleRequests: string[] = [];
+    const scheduleBodies: Record<string, unknown>[] = [];
+    await mockCyclePage(page, [], {
+      preflight: readyPreflight,
+      preflightRequests,
+      scheduleRequests,
+      scheduleBodies,
+    });
+    await page.goto('/cycles?group=attention&cycleId=cycle-draft');
+
+    await page.getByRole('button', { name: '预约发起', exact: true }).click();
+
+    await expect.poll(() => preflightRequests).toEqual(['cycle-draft']);
+    const confirmation = page.getByRole('dialog', { name: '确认预约发起' });
+    await expect(confirmation).toContainText('128 名参与员工');
+    await expect(confirmation).toContainText('目标制定开放时间');
+    expect(scheduleRequests).toEqual([]);
+    await confirmation.getByRole('button', { name: '确认预约' }).click();
+
+    await expect.poll(() => scheduleRequests).toEqual(['cycle-draft']);
+    expect(scheduleBodies).toEqual([{ expectedPlanHash: 'ready-plan-hash' }]);
+  });
+
+  test('allows a system administrator to explain and confirm an early launch', async ({ page }) => {
+    const launchRequests: string[] = [];
+    const launchBodies: Record<string, unknown>[] = [];
+    await mockCyclePage(page, [], {
+      preflight: readyPreflight,
+      launchRequests,
+      launchBodies,
+      authUser: {
+        id: 'system-admin',
+        name: '系统管理员',
+        employeeNo: 'ADMIN001',
+        deptId: 'hr-dept',
+        deptName: '人力资源部',
+        sysRole: 'system_admin',
+        isAssessorOnly: false,
+        canViewAll: true,
+      },
+    });
+    await page.goto('/cycles?group=attention&cycleId=cycle-draft');
+
+    await page.getByRole('button', { name: '开始发起', exact: true }).click();
+    const reasonPrompt = page.getByRole('dialog', { name: '提前发起说明' });
+    await reasonPrompt.getByRole('textbox').fill('业务安排提前启动');
+    await reasonPrompt.getByRole('button', { name: '继续' }).click();
+    await page.getByRole('dialog', { name: '确认发起周期' })
+      .getByRole('button', { name: '确认发起' })
+      .click();
+
+    await expect.poll(() => launchRequests).toEqual(['cycle-draft']);
+    expect(launchBodies).toEqual([{
+      expectedPlanHash: 'ready-plan-hash',
+      overrideReason: '业务安排提前启动',
+    }]);
   });
 
   test('keeps list, creation, and workspace primary actions usable at 390px', async ({ page }) => {
@@ -686,7 +778,8 @@ test.describe('compact cycle management list', () => {
     await page.getByTestId('cycle-compact-card-cycle-draft').click();
     await expect(page.getByTestId('cycle-workspace-back')).toBeVisible();
     await expect(page.getByTestId('cycle-current-action')).toBeVisible();
-    await expect(page.getByRole('button', { name: '开始发起检查' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '开始发起', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '预约发起', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 

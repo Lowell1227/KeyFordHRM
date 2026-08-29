@@ -14,8 +14,7 @@ const props = withDefaults(defineProps<{
   preflight?: LaunchPreflightResult | null;
   preflightLoading?: boolean;
   preflightError?: string;
-  launching?: boolean;
-  canOpenImmediately?: boolean;
+  launchAction?: 'launch' | 'schedule' | null;
   canEdit?: boolean;
 }>(), {
   cycle: null,
@@ -24,15 +23,13 @@ const props = withDefaults(defineProps<{
   preflight: null,
   preflightLoading: false,
   preflightError: '',
-  launching: false,
-  canOpenImmediately: false,
+  launchAction: null,
   canEdit: false,
 });
 
 const emit = defineEmits<{
   back: [];
   retry: [];
-  preflight: [];
   launch: [];
   schedule: [];
   edit: [];
@@ -216,35 +213,25 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
               class="cycle-preflight-control-bar"
               data-testid="cycle-preflight-control-bar"
             >
-              <p>检查周期审核、参与人员、直属上级和时间计划是否准备完成。</p>
+              <p>点击发起操作后，系统会先检查周期审核、参与人员、直属上级和时间计划。</p>
               <div
                 class="cycle-preflight-primary-action"
                 data-testid="cycle-preflight-primary-action"
               >
                 <el-button
-                  v-if="preflight?.ready && canOpenImmediately"
                   type="primary"
-                  :loading="launching"
+                  :loading="launchAction === 'launch'"
+                  :disabled="launchAction === 'schedule'"
                   @click="emit('launch')"
                 >
-                  立即发起
+                  开始发起
                 </el-button>
                 <el-button
-                  v-else-if="preflight?.ready"
-                  type="primary"
-                  :loading="launching"
+                  :loading="launchAction === 'schedule'"
+                  :disabled="launchAction === 'launch'"
                   @click="emit('schedule')"
                 >
-                  预约发起（{{ formatDateTime(preflight.cycle.goalSettingOpenAt) }}）
-                </el-button>
-                <el-button
-                  v-else
-                  type="primary"
-                  :plain="Boolean(preflight || preflightError)"
-                  :loading="preflightLoading"
-                  @click="emit('preflight')"
-                >
-                  {{ preflightLoading ? '正在检查' : (preflight || preflightError ? '重新检查' : '开始发起检查') }}
+                  预约发起
                 </el-button>
               </div>
             </div>
@@ -507,14 +494,17 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
 
 .cycle-preflight-primary-action {
   display: flex;
-  flex: 0 0 320px;
+  flex: 0 0 auto;
+  flex-wrap: wrap;
+  gap: 8px;
   min-height: 40px;
   align-items: center;
   justify-content: flex-end;
 }
 
 .cycle-preflight-primary-action .el-button {
-  min-width: 168px;
+  min-width: 112px;
+  margin-left: 0;
 }
 
 .cycle-preflight-summary span {
@@ -620,8 +610,14 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
   }
 
   .cycle-preflight-primary-action {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
     flex-basis: auto;
     width: 100%;
+  }
+
+  .cycle-preflight-primary-action .el-button {
+    min-width: 0;
   }
 
   .cycle-stat-grid {

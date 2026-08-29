@@ -234,8 +234,8 @@ const editDialogVisible = ref(false);
 const editingCycle = ref<AssessmentCycle | null>(null);
 const preflightLoading = ref(false);
 const preflightError = ref('');
-const preflightCycle = ref<AssessmentCycle | null>(null);
 const preflight = ref<LaunchPreflightResult | null>(null);
+const launchActionMode = ref<'launch' | 'schedule' | null>(null);
 const detailLoading = ref(false);
 const detailError = ref('');
 const cycleDetail = ref<AssessmentCycle | null>(null);
@@ -312,7 +312,6 @@ const scoringPlanSnapshot = () => JSON.stringify({
 });
 const reviewResetRequired = computed(() => (
   isEditMode.value
-  && editingWorkflowVersion.value === 2
   && editingReviewStatus.value === 'approved'
   && createInitialSnapshot.value !== ''
   && createFormSnapshot() !== createInitialSnapshot.value
@@ -455,11 +454,6 @@ const createRules = {
     trigger: 'change',
   }],
 };
-
-const canOpenImmediately = computed(() => {
-  const value = preflight.value?.cycle.goalSettingOpenAt;
-  return Boolean(value && dayjs(value).valueOf() <= Date.now());
-});
 
 function resetCreateForm() {
   if (schedulePreviewTimer) clearTimeout(schedulePreviewTimer);
@@ -1197,6 +1191,22 @@ async function handleCreate(openWorkspace = false) {
     await focusFirstInvalidScheduleRow();
     return;
   }
+  if (reviewResetRequired.value) {
+    try {
+      await ElMessageBox.confirm(
+        '本次修改会使已审核的周期计划重新进入待审核状态，由 HR 管理员审核。确认提交吗？',
+        '重新提交周期审核？',
+        {
+          confirmButtonText: '确认提交',
+          cancelButtonText: '返回修改',
+          type: 'warning',
+          closeOnClickModal: false,
+        },
+      );
+    } catch {
+      return;
+    }
+  }
   submitting.value = true;
   try {
     if (isEditMode.value && editingCycleId.value) {
@@ -1208,7 +1218,7 @@ async function handleCreate(openWorkspace = false) {
         ...buildCreateBody(),
         expectedPlanVersion: editingPlanVersion.value,
       });
-      ElMessage.success('周期已保存');
+      ElMessage.success(reviewResetRequired.value ? '周期计划已提交审核' : '周期已保存');
       createDialogVisible.value = false;
       resetCreateForm();
       if (cycleDetail.value?.id === updated.id) cycleDetail.value = updated;
@@ -1218,7 +1228,7 @@ async function handleCreate(openWorkspace = false) {
       }
     } else {
       const created = await cyclesApi.create(buildCreateBody());
-      ElMessage.success(openWorkspace ? '周期已保存' : '周期草稿已保存');
+      ElMessage.success(openWorkspace ? '周期计划已提交审核' : '周期草稿已保存');
       createDialogVisible.value = false;
       resetCreateForm();
       await loadCycles();
@@ -1314,81 +1324,125 @@ async function handleUpdateDeadlines() {
 }
 
 async function handleLaunch(cycle: AssessmentCycle) {
-  if (!preflight.value?.planHash) return;
-  let overrideReason: string | undefined;
+  if (launchActionMode.value) return;
+  launchActionMode.value = 'launch';
   try {
+    const result = await handlePreflight(cycle);
+    if (!result?.ready || !result.planHash) return;
+
+    const opensInFuture = Boolean(
+      result.cycle.goalSettingOpenAt
+      && dayjs(result.cycle.goalSettingOpenAt).isAfter(dayjs()),
+    );
+    if (opensInFuture && auth.user?.sysRole !== 'system_admin') {
+      ElMessage.warning('尚未到目标制定开放时间，请使用预约发起');
+      return;
+    }
+
+    let overrideReason: string | undefined;
     if (
       auth.user?.sysRole === 'system_admin'
-      && preflight.value.cycle.goalSettingOpenAt
-      && dayjs(preflight.value.cycle.goalSettingOpenAt).isAfter(dayjs())
+      && opensInFuture
     ) {
-      const prompt = await ElMessageBox.prompt(
-        '当前尚未到目标制定开放时间。提前发起会立即通知员工，请填写业务原因（至少 5 个字）。',
-        '提前发起说明',
+      try {
+        const prompt = await ElMessageBox.prompt(
+          '当前尚未到目标制定开放时间。提前发起会立即通知员工，请填写业务原因（至少 5 个字）。',
+          '提前发起说明',
+          {
+            confirmButtonText: '继续',
+            cancelButtonText: '取消',
+            inputValidator: (value) => value.trim().length >= 5 || '请填写至少 5 个字的原因',
+          },
+        );
+        overrideReason = prompt.value.trim();
+      } catch {
+        return;
+      }
+    }
+
+    try {
+      await ElMessageBox.confirm(
+        `发起后将为 ${result.participantCount} 名参与员工创建空白目标任务，该操作不可撤销。\n\n确认发起「${cycle.name}」？`,
+        '确认发起周期',
         {
-          confirmButtonText: '继续',
+          confirmButtonText: '确认发起',
           cancelButtonText: '取消',
-          inputValidator: (value) => value.trim().length >= 5 || '请填写至少 5 个字的原因',
+          type: 'warning',
         },
       );
-      overrideReason = prompt.value.trim();
+    } catch {
+      return;
     }
-    await ElMessageBox.confirm(
-      `发起后将为参与员工创建空白目标任务，该操作不可撤销。\n\n确认发起「${cycle.name}」？`,
-      '确认发起周期',
-      {
-        confirmButtonText: '确认发起',
-        cancelButtonText: '取消',
-        type: 'warning',
-      },
-    );
-  } catch {
-    return;
-  }
 
-  launchingId.value = cycle.id;
-  try {
-    await cyclesApi.launch(cycle.id, {
-      expectedPlanHash: preflight.value.planHash,
-      overrideReason,
-    });
-    ElMessage.success('周期已发起，员工可开始目标制定');
-    preflight.value = null;
-    await loadCycles();
-    await loadCycleDetail(cycle.id);
-  } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '发起周期失败');
+    launchingId.value = cycle.id;
+    try {
+      await cyclesApi.launch(cycle.id, {
+        expectedPlanHash: result.planHash,
+        overrideReason,
+      });
+      ElMessage.success('周期已发起，员工可开始目标制定');
+      preflight.value = null;
+      await loadCycles();
+      await loadCycleDetail(cycle.id);
+    } catch (e) {
+      ElMessage.error(e instanceof Error ? e.message : '发起周期失败');
+    } finally {
+      launchingId.value = null;
+    }
   } finally {
-    launchingId.value = null;
+    launchActionMode.value = null;
   }
 }
 
-async function handlePreflight(cycle: AssessmentCycle) {
-  preflightCycle.value = cycle;
+async function handlePreflight(cycle: AssessmentCycle): Promise<LaunchPreflightResult | null> {
   preflight.value = null;
   preflightError.value = '';
   preflightLoading.value = true;
   try {
-    preflight.value = await cyclesApi.preflight(cycle.id);
+    const result = await cyclesApi.preflight(cycle.id);
+    preflight.value = result;
+    return result;
   } catch (error) {
     preflightError.value = error instanceof Error ? error.message : '发起检查失败，请重试';
+    return null;
   } finally {
     preflightLoading.value = false;
   }
 }
 
-async function handleSchedule() {
-  const cycle = preflightCycle.value;
-  if (!cycle || !preflight.value?.ready) return;
-  launchingId.value = cycle.id;
+async function handleSchedule(cycle: AssessmentCycle) {
+  if (launchActionMode.value) return;
+  launchActionMode.value = 'schedule';
   try {
-    await cyclesApi.schedule(cycle.id, preflight.value.planHash!);
-    ElMessage.success(`已预约发起，将于 ${formatDateTimeForMessage(preflight.value.cycle.goalSettingOpenAt)} 自动发起周期`);
-    preflight.value = null;
-    await loadCycles();
-    await loadCycleDetail(cycle.id);
+    const result = await handlePreflight(cycle);
+    if (!result?.ready || !result.planHash) return;
+    const openAt = formatDateTimeForMessage(result.cycle.goalSettingOpenAt);
+    try {
+      await ElMessageBox.confirm(
+        `系统将在目标制定开放时间 ${openAt} 自动为 ${result.participantCount} 名参与员工发起周期。确认预约吗？`,
+        '确认预约发起',
+        {
+          confirmButtonText: '确认预约',
+          cancelButtonText: '取消',
+          type: 'warning',
+        },
+      );
+    } catch {
+      return;
+    }
+
+    launchingId.value = cycle.id;
+    try {
+      await cyclesApi.schedule(cycle.id, result.planHash);
+      ElMessage.success(`已预约发起，将于 ${openAt} 自动发起周期`);
+      preflight.value = null;
+      await loadCycles();
+      await loadCycleDetail(cycle.id);
+    } finally {
+      launchingId.value = null;
+    }
   } finally {
-    launchingId.value = null;
+    launchActionMode.value = null;
   }
 }
 
@@ -1487,12 +1541,12 @@ function retryCycleDetail() {
   if (typeof route.query.cycleId === 'string') void loadCycleDetail(route.query.cycleId);
 }
 
-function handleWorkspacePreflight() {
-  if (cycleDetail.value) void handlePreflight(cycleDetail.value);
-}
-
 function handleWorkspaceLaunch() {
   if (cycleDetail.value) void handleLaunch(cycleDetail.value);
+}
+
+function handleWorkspaceSchedule() {
+  if (cycleDetail.value) void handleSchedule(cycleDetail.value);
 }
 
 function handleWorkspaceEditCycle() {
@@ -1641,14 +1695,12 @@ onMounted(() => {
       :preflight="preflight"
       :preflight-loading="preflightLoading"
       :preflight-error="preflightError"
-      :launching="launchingId === cycleDetail?.id"
-      :can-open-immediately="canOpenImmediately"
+      :launch-action="launchActionMode"
       :can-edit="canEditCyclePlan"
       @back="closeCycleWorkspace"
       @retry="retryCycleDetail"
-      @preflight="handleWorkspacePreflight"
       @launch="handleWorkspaceLaunch"
-      @schedule="handleSchedule"
+      @schedule="handleWorkspaceSchedule"
       @edit="handleWorkspaceEditCycle"
       @resolve-blocker="handleResolvePreflightBlocker"
     />
@@ -1865,14 +1917,6 @@ onMounted(() => {
             :scoring-frequency="scoringPlan.scoringFrequency"
             @update:scoring-frequency="scoringPlan.scoringFrequency = $event"
             @change="handleScoringFrequencyChange"
-          />
-          <el-alert
-            v-if="reviewResetRequired"
-            data-testid="cycle-review-reset-warning"
-            type="warning"
-            :closable="false"
-            show-icon
-            title="评分配置已变化，修改后需重新审核"
           />
           <CycleMonthlyScheduleEditor
             :schedules="scoringPlan.periodSchedules"
