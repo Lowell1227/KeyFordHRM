@@ -19,7 +19,7 @@
 - 员工必填完成度、进展状态和自评分；实际完成值、说明和附件选填。
 - 主管每项评分必填，主管说明始终选填；分差达到 10 分或主管分低于 60 分只提醒、不拦截。
 - 员工提交和主管提交必须事务化、幂等且保留正式修订，草稿不能写正式进展历史。
-- PC 使用所有指标同屏表格，手机使用逐项卡片；两端共用服务端草稿。
+- PC 使用“主工作区 + 参考信息”双栏和单目标紧凑卡片，手机使用单栏卡片与底部固定操作栏；两端共用服务端草稿。
 - 直属上级只取 `User.directManagerId` 已固化到期次的 `managerId`，不读取花名册或钉钉组织关系。
 - 完整闭环通过 API、Prisma、类型检查和 PC/手机 Playwright 验收前，不发布生产。
 - 生产发布必须再次获得用户明确指令，并包含数据库备份、镜像回滚标记和真实角色验收。
@@ -290,6 +290,9 @@ model AssessmentPeriodIndicatorReview {
   healthStatus           IndicatorProgressHealth? @map("health_status")
   actualValueText        String?  @map("actual_value_text") @db.VarChar(200)
   employeeComment        String?  @map("employee_comment") @db.Text
+  problemReason          String?  @map("problem_reason") @db.Text
+  nextMonthPlan          String?  @map("next_month_plan") @db.Text
+  supportNeeded          String?  @map("support_needed") @db.Text
   employeeAttachments    Json     @default("[]") @map("employee_attachments") @db.JsonB
   selfScore              Decimal? @map("self_score") @db.Decimal(6, 2)
   managerScore           Decimal? @map("manager_score") @db.Decimal(6, 2)
@@ -641,6 +644,9 @@ export class EmployeePeriodReviewDraftItemDto {
   @IsOptional() @IsEnum(IndicatorProgressHealth) healthStatus?: IndicatorProgressHealth | null;
   @IsOptional() @IsString() @MaxLength(200) actualValueText?: string | null;
   @IsOptional() @IsString() @MaxLength(10_000) employeeComment?: string | null;
+  @IsOptional() @IsString() @MaxLength(10_000) problemReason?: string | null;
+  @IsOptional() @IsString() @MaxLength(10_000) nextMonthPlan?: string | null;
+  @IsOptional() @IsString() @MaxLength(10_000) supportNeeded?: string | null;
   @IsOptional() @IsArray() @ArrayMaxSize(10) attachments?: PeriodReviewAttachmentDto[];
   @IsOptional() @IsNumber() @Min(0) @Max(100) selfScore?: number | null;
 }
@@ -795,6 +801,9 @@ export class SubmitEmployeePeriodReviewItemDto {
   @IsEnum(IndicatorProgressHealth) healthStatus!: IndicatorProgressHealth;
   @IsOptional() @IsString() @MaxLength(200) actualValueText?: string;
   @IsOptional() @IsString() @MaxLength(10_000) employeeComment?: string;
+  @IsOptional() @IsString() @MaxLength(10_000) problemReason?: string;
+  @IsOptional() @IsString() @MaxLength(10_000) nextMonthPlan?: string;
+  @IsOptional() @IsString() @MaxLength(10_000) supportNeeded?: string;
   @IsOptional() @IsArray() @ArrayMaxSize(10) attachments?: PeriodReviewAttachmentDto[];
   @IsNumber() @Min(0) @Max(100) selfScore!: number;
 }
@@ -1340,24 +1349,27 @@ git commit -m "feat(performance): add monthly review draft client"
 
 ---
 
-### Task 10: Build the Employee PC Table and Mobile Card Workspace
+### Task 10: Build the Employee PC Two-Column and Mobile Card Workspace
 
 **Files:**
 - Create: `web/src/views/task/components/EmployeePeriodReviewWorkspace.vue`
+- Create: `web/src/views/task/components/PerformanceFormWorkspace.vue`
+- Create: `web/src/views/task/components/MonthlyReviewReferencePanel.vue`
 - Modify: `web/src/views/task/TaskDetailView.vue`
 - Modify: `web/src/views/task/TaskListView.vue`
 - Modify: `web/e2e/specs/28-monthly-review-responsive.spec.ts`
 
 **Interfaces:**
 - Consumes: `PeriodReviewDetail`, employee draft composable and period summaries.
-- Produces: one employee submission containing progress review and self-score; desktop table at `min-width: 768px`, mobile cards below it.
+- Produces: one employee submission containing progress review and self-score; desktop main/reference columns and continuous goal cards, mobile single-column cards with collapsible reference information.
 
 - [ ] **Step 1: Add failing desktop and mobile acceptance cases**
 
 ```ts
-test('employee completes progress and self-score once in the desktop table', async ({ page }) => {
+test('employee completes progress and self-score in compact goal cards beside reference information', async ({ page }) => {
   await openEmployeePeriod(page, '2027-01');
-  await expect(page.getByTestId('employee-period-table')).toBeVisible();
+  await expect(page.getByTestId('monthly-review-main')).toBeVisible();
+  await expect(page.getByTestId('monthly-review-reference')).toBeVisible();
   await fillEmployeeIndicator(page, 'item-1', { progress: 80, health: 'on_track', selfScore: 88 });
   await page.getByRole('button', { name: '提交本月复盘' }).click();
   await expect(page.getByText('已提交，等待主管评分')).toBeVisible();
@@ -1387,7 +1399,7 @@ type EmployeeIndicatorInput = {
 };
 ```
 
-Desktop columns are indicator/target, completion, status, actual value, self-score and optional note. Mobile shows the same fields in one card per indicator. Do not restore the legacy five-box self-evaluation summary.
+Each goal card shows goal name, current result, completion, status and self-score first; problem reason, next-month plan, support needed, other note and attachments remain optional and compact. The right reference panel shows original goal content, scoring/completion standard, prior monthly records and aligned objectives. Do not apply the target-setting weight-total validation.
 
 - [ ] **Step 3: Add explicit in-period and previous-period reuse actions**
 
@@ -1526,7 +1538,7 @@ Expected: it fails before all implementation tasks are complete, then passes aga
 
 - [ ] **Step 3: Finish browser acceptance on PC and mobile**
 
-The Playwright suite must cover: one cycle switch; employee month selector; shared draft after reload; desktop table; 390px cards without horizontal overflow; optional explanations; warning-only score differences; manager next-person action; locked history read-only; and a historical v1 task still opening the existing workspace.
+The Playwright suite must cover: one cycle switch; employee month selector; shared draft after reload; 1440px main/reference columns with goal cards; 390px single column, collapsible reference and non-overlapping fixed action bar; optional explanations; warning-only score differences; manager next-person action; locked history read-only; and a historical v1 task still opening the existing workspace.
 
 ```powershell
 cd web

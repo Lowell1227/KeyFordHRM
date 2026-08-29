@@ -30,4 +30,17 @@ describe('performance workflow v2 schema', () => {
     expect(schema).toContain('@@unique([taskId, periodKey])');
     expect(schema).toContain('@@unique([taskId, version])');
   });
+
+  it('stores period review drafts, formal revisions, and the approved optional reflection fields', () => {
+    const schema = readFileSync(resolve(process.cwd(), 'prisma/schema.prisma'), 'utf8');
+
+    expect(schema).toContain('model AssessmentPeriodIndicatorReview');
+    expect(schema).toContain('model AssessmentPeriodReviewRevision');
+    expect(schema).toContain('@@unique([periodId, indicatorVersionItemId])');
+    expect(schema).toMatch(/draftVersion\s+Int\s+@default\(0\)/);
+    expect(schema).toMatch(/selfEvalOpenAt\s+DateTime/);
+    expect(schema).toMatch(/problemReason\s+String\?/);
+    expect(schema).toMatch(/nextMonthPlan\s+String\?/);
+    expect(schema).toMatch(/supportNeeded\s+String\?/);
+  });
 });

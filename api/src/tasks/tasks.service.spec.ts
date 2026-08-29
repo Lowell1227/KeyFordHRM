@@ -15,6 +15,7 @@ import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
 import { SubmitManagerScoreDto } from './dto/submit-manager-score.dto';
 import { SaveManagerEvaluationDraftDto } from './dto/save-manager-evaluation-draft.dto';
+import { IndicatorVersionService } from './indicator-version.service';
 
 describe('TasksService', () => {
   let service: TasksService;
@@ -46,6 +47,7 @@ describe('TasksService', () => {
   };
   let indicatorVisibility: { validateSelection: jest.Mock };
   let objectivesService: { findVisibleByIds: jest.Mock };
+  let indicatorVersionService: { activateConfirmedV1: jest.Mock };
   let scoringService: {
     validateScore: jest.Mock;
     toScorableIndicator: jest.Mock;
@@ -119,6 +121,7 @@ describe('TasksService', () => {
       validateSelection: jest.fn().mockResolvedValue(undefined),
     };
     objectivesService = { findVisibleByIds: jest.fn().mockResolvedValue([]) };
+    indicatorVersionService = { activateConfirmedV1: jest.fn().mockResolvedValue('version-1') };
     scoringService = {
       validateScore: jest.fn(),
       toScorableIndicator: jest.fn((indicator) => indicator),
@@ -137,6 +140,7 @@ describe('TasksService', () => {
         { provide: FlowService, useValue: flowService },
         { provide: IndicatorVisibilityService, useValue: indicatorVisibility },
         { provide: ObjectivesService, useValue: objectivesService },
+        { provide: IndicatorVersionService, useValue: indicatorVersionService },
       ],
     }).compile();
 
@@ -274,8 +278,9 @@ describe('TasksService', () => {
   function buildFullTask(status: TaskStatus, publishVisibleFields: Prisma.JsonValue = null) {
     return {
       ...makeTask(status),
-      employee: { name: '员工A' },
+      employee: { name: '员工A', employeeNo: 'E001' },
       dept: { name: '部门A' },
+      manager: { id: 'mgr-1', name: '主管A' },
       indicatorInstances: [makeIndicator()],
       selfEvalSummary: {
         achievements: '成就',
@@ -306,11 +311,45 @@ describe('TasksService', () => {
         employeeConfirmedAt: null,
       },
       flowRecords: [],
-      cycle: { publishVisibleFields },
+      periods: [],
+      cycle: { publishVisibleFields, workflowVersion: 1 },
     };
   }
 
   describe('findOne', () => {
+    it('returns workflow v2 monthly periods so the employee can enter the active review', async () => {
+      const task: any = buildFullTask('self_eval');
+      const openAt = new Date('2027-02-01T01:00:00.000Z');
+      task.cycle.workflowVersion = 2;
+      task.periods = [{
+        id: 'period-2027-01',
+        periodKey: '2027-01',
+        periodType: 'month',
+        sequence: 1,
+        status: 'self_eval',
+        selfEvalOpenAt: openAt,
+        selfEvalDueAt: new Date('2027-02-03T10:00:00.000Z'),
+        managerDueAt: new Date('2027-02-08T10:00:00.000Z'),
+        employeeSubmittedAt: null,
+        managerSubmittedAt: null,
+      }];
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+
+      const result = await service.findOne('task-1', makeViewer({ id: 'emp-1' }));
+
+      expect(result).toMatchObject({
+        workflowVersion: 2,
+        employeeNo: 'E001',
+        managerName: '主管A',
+        periods: [{
+          id: 'period-2027-01',
+          periodKey: '2027-01',
+          status: 'self_eval',
+          selfEvalOpenAt: openAt,
+        }],
+      });
+    });
+
     it('returns the exemption flag and reason for an exempt employee task', async () => {
       const task: any = buildFullTask('exempted');
       task.isExempt = true;
@@ -1475,6 +1514,29 @@ describe('TasksService', () => {
 
       expect(transactionClient.auditLog.createMany).not.toHaveBeenCalled();
       expect(flowService.transitionTx).not.toHaveBeenCalled();
+    });
+
+    it('activates the frozen period indicator version for workflow v2', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('indicator_confirming'));
+      prisma.assessmentCycle.findUnique.mockResolvedValue({
+        selfEvalOpenAt: new Date('2027-04-01T00:00:00.000Z'),
+        workflowVersion: 2,
+      });
+      transactionClient.indicatorInstance.findMany.mockResolvedValue([{
+        ...makeIndicator({ id: 'ind-1' }),
+        visibleDepartments: [],
+        visibleUsers: [],
+        objectiveAlignments: [],
+      }]);
+      flowService.transitionTx.mockResolvedValue({ newStatus: 'goal_confirmed' });
+
+      await service.confirmIndicators('task-1', makeViewer({ id: 'emp-1' }));
+
+      expect(indicatorVersionService.activateConfirmedV1).toHaveBeenCalledWith(
+        transactionClient,
+        'task-1',
+        'emp-1',
+      );
     });
 
     it('does not let a stale rejection overwrite a concurrently confirmed baseline', async () => {

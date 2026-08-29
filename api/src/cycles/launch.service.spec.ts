@@ -841,6 +841,9 @@ describe('LaunchService preflight', () => {
           periodKey: '2027-01',
           sequence: 1,
           managerId: candidate.directManagerId,
+          selfEvalOpenAt: new Date('2027-02-01T01:00:00.000Z'),
+          selfEvalDueAt: new Date('2027-02-03T10:00:00.000Z'),
+          managerDueAt: new Date('2027-02-08T10:00:00.000Z'),
         }),
         expect.objectContaining({
           taskId: 'task-1',

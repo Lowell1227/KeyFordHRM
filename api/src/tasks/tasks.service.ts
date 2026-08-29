@@ -1,5 +1,5 @@
 import { ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
-import { AssessmentTask, IndicatorInstance, IndicatorVisibilityScope, ObjectiveLevel, Prisma, SysRole, TaskStatus } from '@prisma/client';
+import { AssessmentPeriodStatus, AssessmentPeriodType, AssessmentTask, IndicatorInstance, IndicatorVisibilityScope, ObjectiveLevel, Prisma, SysRole, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DataScopeService } from '@/common/services/data-scope.service';
 import { NotificationsService, TaskReminderNodeType } from '@/notifications/notifications.service';
@@ -21,6 +21,7 @@ import { ObjectivesService } from '@/objectives/objectives.service';
 import { IndicatorReferenceItem, IndicatorVisibilityService } from './indicator-visibility.service';
 import { ReferenceIndicatorQueryDto } from './dto/reference-indicator-query.dto';
 import { assertTaskVersion, claimTaskVersion } from './task-version';
+import { IndicatorVersionService } from './indicator-version.service';
 
 type IndicatorBaselineSource = IndicatorInstance & {
   visibleDepartments: Array<{ departmentId: string }>;
@@ -48,6 +49,21 @@ export interface TaskListItem {
 
 /** 任务详情。 */
 export interface TaskDetail extends TaskListItem {
+  workflowVersion: number;
+  employeeNo: string | null;
+  managerName: string | null;
+  periods: Array<{
+    id: string;
+    periodKey: string;
+    periodType: AssessmentPeriodType;
+    sequence: number;
+    status: AssessmentPeriodStatus;
+    selfEvalOpenAt: Date;
+    selfEvalDueAt: Date;
+    managerDueAt: Date;
+    employeeSubmittedAt: Date | null;
+    managerSubmittedAt: Date | null;
+  }>;
   workflowContext: TaskWorkflowContext;
   managerScoredAt: Date | null;
   indicatorInstances: Array<{
@@ -185,6 +201,7 @@ export class TasksService {
     private readonly notificationsService: NotificationsService,
     private readonly indicatorVisibility: IndicatorVisibilityService,
     private readonly objectivesService: ObjectivesService,
+    private readonly indicatorVersionService: IndicatorVersionService,
   ) {}
 
   /** GET /tasks — 角色过滤 + 分页。 */
@@ -316,7 +333,7 @@ export class TasksService {
     const task = await this.prisma.assessmentTask.findUnique({
       where: { id },
       include: {
-        employee: { select: { name: true } },
+        employee: { select: { name: true, employeeNo: true } },
         dept: { select: { name: true } },
         manager: { select: { id: true, name: true } },
         deptHead: { select: { id: true, name: true } },
@@ -341,6 +358,21 @@ export class TasksService {
           include: { vetoOperator: { select: { id: true, name: true } } },
         },
         performanceInterview: true,
+        periods: {
+          orderBy: { sequence: 'asc' },
+          select: {
+            id: true,
+            periodKey: true,
+            periodType: true,
+            sequence: true,
+            status: true,
+            selfEvalOpenAt: true,
+            selfEvalDueAt: true,
+            managerDueAt: true,
+            employeeSubmittedAt: true,
+            managerSubmittedAt: true,
+          },
+        },
         flowRecords: {
           orderBy: { createdAt: 'desc' },
           include: { actor: { select: { name: true } } },
@@ -348,6 +380,7 @@ export class TasksService {
         cycle: {
           select: {
             name: true,
+            workflowVersion: true,
             hrOwnerId: true,
             hrOwner: { select: { id: true, name: true } },
             publishVisibleFields: true,
@@ -439,7 +472,7 @@ export class TasksService {
 
     const cycle = await this.prisma.assessmentCycle.findUnique({
       where: { id: task.cycleId },
-      select: { selfEvalOpenAt: true },
+      select: { selfEvalOpenAt: true, workflowVersion: true },
     });
     const now = new Date();
     const targetStatus: TaskStatus = !cycle?.selfEvalOpenAt || cycle.selfEvalOpenAt <= now
@@ -486,6 +519,9 @@ export class TasksService {
             newValue: this.buildIndicatorBaseline(indicator),
           })),
         });
+      }
+      if (cycle?.workflowVersion === 2) {
+        await this.indicatorVersionService.activateConfirmedV1(tx, task.id, viewer.id);
       }
       return this.flowService.transitionTx(tx, {
         task,
@@ -1567,9 +1603,24 @@ export class TasksService {
       cycleName: task.cycle?.name ?? '',
       employeeId: task.employeeId,
       employeeName: task.employee?.name ?? '',
+      employeeNo: task.employee?.employeeNo ?? null,
       deptId: task.deptId,
       deptName: task.dept?.name ?? null,
       managerId: task.managerId,
+      managerName: task.manager?.name ?? null,
+      workflowVersion: task.cycle?.workflowVersion ?? 1,
+      periods: (task.periods ?? []).map((period: any) => ({
+        id: period.id,
+        periodKey: period.periodKey,
+        periodType: period.periodType,
+        sequence: period.sequence,
+        status: period.status,
+        selfEvalOpenAt: period.selfEvalOpenAt,
+        selfEvalDueAt: period.selfEvalDueAt,
+        managerDueAt: period.managerDueAt,
+        employeeSubmittedAt: period.employeeSubmittedAt,
+        managerSubmittedAt: period.managerSubmittedAt,
+      })),
       status: task.status,
       isExempt: task.isExempt,
       exemptReason: task.exemptReason,

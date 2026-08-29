@@ -557,6 +557,9 @@ export class LaunchService {
               managerId: task.managerId,
               indicatorVersionId: null,
               status: 'unopened',
+              selfEvalOpenAt: schedule.selfEvalOpenAt,
+              selfEvalDueAt: schedule.selfEvalDueAt,
+              managerDueAt: schedule.managerDueAt,
             })),
           });
           periodCount += schedules.length;

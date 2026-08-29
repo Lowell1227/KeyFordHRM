@@ -77,6 +77,7 @@ export class SchedulerService {
   async openSelfEvaluations(): Promise<void> {
     try {
       await this.runSelfEvalOpenings();
+      await this.runPeriodSelfEvalOpenings();
     } catch (err) {
       this.logger.error('开放绩效自评定时任务异常', err);
     }
@@ -245,6 +246,7 @@ export class SchedulerService {
       where: {
         status: 'indicator_setting',
         selfEvalOpenAt: { lte: now },
+        workflowVersion: 1,
       },
       select: { id: true },
     });
@@ -260,6 +262,55 @@ export class SchedulerService {
           data: { status: 'self_eval' },
         });
       });
+    }
+  }
+
+  /** 按月评分周期逐期开放员工复盘，不沿用旧周期的一次性开放。 */
+  async runPeriodSelfEvalOpenings(): Promise<void> {
+    const now = new Date();
+    const periods = await this.prisma.assessmentPeriod.findMany({
+      where: {
+        status: 'unopened',
+        selfEvalOpenAt: { lte: now },
+        task: { cycle: { workflowVersion: 2 } },
+      },
+      select: {
+        id: true,
+        taskId: true,
+        periodKey: true,
+        task: {
+          select: {
+            cycleId: true,
+            employeeId: true,
+            cycle: { select: { notificationMode: true } },
+          },
+        },
+      },
+      orderBy: [{ selfEvalOpenAt: 'asc' }, { id: 'asc' }],
+    });
+
+    for (const period of periods) {
+      const claimed = await this.prisma.assessmentPeriod.updateMany({
+        where: { id: period.id, status: 'unopened' },
+        data: { status: 'self_eval', openedAt: now },
+      });
+      if (claimed.count !== 1) continue;
+
+      await this.prisma.assessmentTask.updateMany({
+        where: { id: period.taskId, status: 'goal_confirmed' },
+        data: { status: 'self_eval' },
+      });
+      if (period.task.cycle.notificationMode !== 'off') {
+        await this.notificationsService.create({
+          userId: period.task.employeeId,
+          cycleId: period.task.cycleId,
+          taskId: period.taskId,
+          type: 'monthly_employee_review_opened',
+          title: '本月目标复盘已开放',
+          content: `${period.periodKey}目标复盘已开放，请按计划完成填写。`,
+          extraData: { periodId: period.id, periodKey: period.periodKey },
+        });
+      }
     }
   }
 

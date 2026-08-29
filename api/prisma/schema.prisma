@@ -134,6 +134,13 @@ enum AssessmentPeriodStatus {
   @@map("assessment_period_status")
 }
 
+enum AssessmentPeriodRevisionStage {
+  employee
+  manager
+
+  @@map("assessment_period_revision_stage")
+}
+
 enum IndicatorVersionStatus {
   draft
   active
@@ -418,20 +425,20 @@ model Department {
 }
 
 model DepartmentChangeRequest {
-  id               String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  departmentId     String?   @map("department_id") @db.Uuid
-  departmentName   String    @map("department_name") @db.VarChar(100)
-  action           String    @db.VarChar(30)
-  status           String    @default("pending") @db.VarChar(20)
-  baseValue        Json      @default("{}") @map("base_value") @db.JsonB
-  proposedValue    Json      @map("proposed_value") @db.JsonB
-  createdById      String    @map("created_by_id") @db.Uuid
-  reviewedById     String?   @map("reviewed_by_id") @db.Uuid
-  reviewedAt       DateTime? @map("reviewed_at") @db.Timestamptz(6)
-  rejectedReason   String?   @map("rejected_reason") @db.Text
-  appliedAt        DateTime? @map("applied_at") @db.Timestamptz(6)
-  createdAt        DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt        DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  departmentId   String?   @map("department_id") @db.Uuid
+  departmentName String    @map("department_name") @db.VarChar(100)
+  action         String    @db.VarChar(30)
+  status         String    @default("pending") @db.VarChar(20)
+  baseValue      Json      @default("{}") @map("base_value") @db.JsonB
+  proposedValue  Json      @map("proposed_value") @db.JsonB
+  createdById    String    @map("created_by_id") @db.Uuid
+  reviewedById   String?   @map("reviewed_by_id") @db.Uuid
+  reviewedAt     DateTime? @map("reviewed_at") @db.Timestamptz(6)
+  rejectedReason String?   @map("rejected_reason") @db.Text
+  appliedAt      DateTime? @map("applied_at") @db.Timestamptz(6)
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   department Department? @relation(fields: [departmentId], references: [id], onDelete: SetNull)
   createdBy  User        @relation("DepartmentChangeCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
@@ -477,73 +484,74 @@ model User {
   directManager User?       @relation("UserManager", fields: [directManagerId], references: [id], onDelete: SetNull)
   subordinates  User[]      @relation("UserManager")
 
-  ledDepartments                            Department[]                @relation("DeptLeader")
-  approvedDepartments                       Department[]                @relation("DeptApprover")
+  ledDepartments                            Department[]                     @relation("DeptLeader")
+  approvedDepartments                       Department[]                     @relation("DeptApprover")
   createdIndicators                         Indicator[]
   createdTemplates                          AssessmentTemplate[]
-  createdCycles                             AssessmentCycle[]           @relation("CycleCreator")
-  hrOwnedCycles                             AssessmentCycle[]           @relation("CycleHrOwner")
-  reviewedCycles                            AssessmentCycle[]           @relation("CycleReviewer")
-  companyFinalApproverCycles                AssessmentCycle[]           @relation("CycleCompanyFinalApprover")
-  employeeTasks                             AssessmentTask[]            @relation("TaskEmployee")
-  managedTasks                              AssessmentTask[]            @relation("TaskManager")
-  deptHeadTasks                             AssessmentTask[]            @relation("TaskDeptHead")
-  approverTasks                             AssessmentTask[]            @relation("TaskApprover")
-  vetoedResults                             GradeResult[]               @relation("GradeVetoOperator")
-  calibratedResults                         GradeResult[]               @relation("GradeHrCalibrator")
-  approvedResults                           GradeResult[]               @relation("GradeApprover")
+  createdCycles                             AssessmentCycle[]                @relation("CycleCreator")
+  hrOwnedCycles                             AssessmentCycle[]                @relation("CycleHrOwner")
+  reviewedCycles                            AssessmentCycle[]                @relation("CycleReviewer")
+  companyFinalApproverCycles                AssessmentCycle[]                @relation("CycleCompanyFinalApprover")
+  employeeTasks                             AssessmentTask[]                 @relation("TaskEmployee")
+  managedTasks                              AssessmentTask[]                 @relation("TaskManager")
+  deptHeadTasks                             AssessmentTask[]                 @relation("TaskDeptHead")
+  approverTasks                             AssessmentTask[]                 @relation("TaskApprover")
+  vetoedResults                             GradeResult[]                    @relation("GradeVetoOperator")
+  calibratedResults                         GradeResult[]                    @relation("GradeHrCalibrator")
+  approvedResults                           GradeResult[]                    @relation("GradeApprover")
   flowRecords                               FlowRecord[]
   indicatorVisibilityUsers                  IndicatorVisibilityUser[]
-  appeals                                   Appeal[]                    @relation("AppealAppellant")
-  deptResolvedAppeals                       Appeal[]                    @relation("AppealDeptResolver")
-  hrResolvedAppeals                         Appeal[]                    @relation("AppealHrResolver")
+  appeals                                   Appeal[]                         @relation("AppealAppellant")
+  deptResolvedAppeals                       Appeal[]                         @relation("AppealDeptResolver")
+  hrResolvedAppeals                         Appeal[]                         @relation("AppealHrResolver")
   archives                                  PerformanceArchive[]
-  improvementPlans                          ImprovementPlan[]           @relation("ImprovementPlanEmployee")
-  createdImprovementPlans                   ImprovementPlan[]           @relation("ImprovementPlanCreator")
+  improvementPlans                          ImprovementPlan[]                @relation("ImprovementPlanEmployee")
+  createdImprovementPlans                   ImprovementPlan[]                @relation("ImprovementPlanCreator")
   auditLogs                                 AuditLog[]
   signatures                                Signature[]
-  interviewedAsEmployee                     PerformanceInterview[]      @relation("InterviewEmployee")
-  interviewedAsInterviewer                  PerformanceInterview[]      @relation("InterviewInterviewer")
-  probationReviewsAsEmployee                ProbationReview[]           @relation("ProbationReviewEmployee")
-  probationReviewsAsManager                 ProbationReview[]           @relation("ProbationReviewManager")
-  probationReviewsAsHr                      ProbationReview[]           @relation("ProbationReviewHr")
-  createdProbationReviews                   ProbationReview[]           @relation("ProbationReviewCreator")
-  confirmationApplicationsAsEmployee        ConfirmationApplication[]   @relation("ConfirmationApplicationEmployee")
-  confirmationApplicationsAsManager         ConfirmationApplication[]   @relation("ConfirmationApplicationManager")
-  confirmationApplicationsAsHr              ConfirmationApplication[]   @relation("ConfirmationApplicationHr")
-  confirmationApplicationsAsCompanyApprover ConfirmationApplication[]   @relation("ConfirmationApplicationCompanyApprover")
-  confirmationApplicationsRejected          ConfirmationApplication[]   @relation("ConfirmationApplicationRejectedBy")
-  createdConfirmationApplications           ConfirmationApplication[]   @relation("ConfirmationApplicationCreator")
-  ownedObjectives                           Objective[]                 @relation("ObjectiveOwner")
-  createdObjectives                         Objective[]                 @relation("ObjectiveCreator")
-  reviewedObjectives                        Objective[]                 @relation("ObjectiveReviewer")
-  assignedActionItems                       ActionItem[]                @relation("ActionItemAssignee")
-  createdActionItems                        ActionItem[]                @relation("ActionItemCreator")
-  createdIndicatorProgressUpdates           IndicatorProgressUpdate[]   @relation("IndicatorProgressCreator")
-  managedAssessmentPeriods                  AssessmentPeriod[]          @relation("PeriodManager")
-  createdIndicatorVersions                  IndicatorVersion[]          @relation("IndicatorVersionCreator")
+  interviewedAsEmployee                     PerformanceInterview[]           @relation("InterviewEmployee")
+  interviewedAsInterviewer                  PerformanceInterview[]           @relation("InterviewInterviewer")
+  probationReviewsAsEmployee                ProbationReview[]                @relation("ProbationReviewEmployee")
+  probationReviewsAsManager                 ProbationReview[]                @relation("ProbationReviewManager")
+  probationReviewsAsHr                      ProbationReview[]                @relation("ProbationReviewHr")
+  createdProbationReviews                   ProbationReview[]                @relation("ProbationReviewCreator")
+  confirmationApplicationsAsEmployee        ConfirmationApplication[]        @relation("ConfirmationApplicationEmployee")
+  confirmationApplicationsAsManager         ConfirmationApplication[]        @relation("ConfirmationApplicationManager")
+  confirmationApplicationsAsHr              ConfirmationApplication[]        @relation("ConfirmationApplicationHr")
+  confirmationApplicationsAsCompanyApprover ConfirmationApplication[]        @relation("ConfirmationApplicationCompanyApprover")
+  confirmationApplicationsRejected          ConfirmationApplication[]        @relation("ConfirmationApplicationRejectedBy")
+  createdConfirmationApplications           ConfirmationApplication[]        @relation("ConfirmationApplicationCreator")
+  ownedObjectives                           Objective[]                      @relation("ObjectiveOwner")
+  createdObjectives                         Objective[]                      @relation("ObjectiveCreator")
+  reviewedObjectives                        Objective[]                      @relation("ObjectiveReviewer")
+  assignedActionItems                       ActionItem[]                     @relation("ActionItemAssignee")
+  createdActionItems                        ActionItem[]                     @relation("ActionItemCreator")
+  createdIndicatorProgressUpdates           IndicatorProgressUpdate[]        @relation("IndicatorProgressCreator")
+  managedAssessmentPeriods                  AssessmentPeriod[]               @relation("PeriodManager")
+  createdIndicatorVersions                  IndicatorVersion[]               @relation("IndicatorVersionCreator")
+  createdPeriodReviewRevisions              AssessmentPeriodReviewRevision[] @relation("PeriodReviewRevisionCreator")
   updatedConfigs                            SystemConfig[]
-  notifications                             NotificationLog[]           @relation("NotifReceiver")
-  sentNotifications                         NotificationLog[]           @relation("NotifSender")
+  notifications                             NotificationLog[]                @relation("NotifReceiver")
+  sentNotifications                         NotificationLog[]                @relation("NotifSender")
   employeeProfile                           EmployeeProfile?
-  employmentHistory                         EmploymentRecord[]          @relation("EmployeeEmployment")
-  managedEmploymentHistory                  EmploymentRecord[]          @relation("EmploymentManager")
-  createdEmploymentHistory                  EmploymentRecord[]          @relation("EmploymentCreator")
-  externalIdentityBindings                  ExternalIdentityBinding[]   @relation("ExternalIdentityEmployee")
-  boundExternalIdentities                   ExternalIdentityBinding[]   @relation("ExternalIdentityBoundBy")
-  disabledExternalIdentities                ExternalIdentityBinding[]   @relation("ExternalIdentityDisabledBy")
-  endedExternalIdentities                   ExternalIdentityBinding[]   @relation("ExternalIdentityEndedBy")
-  operatedEmployeeImports                   EmployeeImportBatch[]       @relation("EmployeeImportOperator")
-  confirmedEmployeeImports                  EmployeeImportBatch[]       @relation("EmployeeImportConfirmer")
+  employmentHistory                         EmploymentRecord[]               @relation("EmployeeEmployment")
+  managedEmploymentHistory                  EmploymentRecord[]               @relation("EmploymentManager")
+  createdEmploymentHistory                  EmploymentRecord[]               @relation("EmploymentCreator")
+  externalIdentityBindings                  ExternalIdentityBinding[]        @relation("ExternalIdentityEmployee")
+  boundExternalIdentities                   ExternalIdentityBinding[]        @relation("ExternalIdentityBoundBy")
+  disabledExternalIdentities                ExternalIdentityBinding[]        @relation("ExternalIdentityDisabledBy")
+  endedExternalIdentities                   ExternalIdentityBinding[]        @relation("ExternalIdentityEndedBy")
+  operatedEmployeeImports                   EmployeeImportBatch[]            @relation("EmployeeImportOperator")
+  confirmedEmployeeImports                  EmployeeImportBatch[]            @relation("EmployeeImportConfirmer")
   matchedEmployeeImportRows                 EmployeeImportRow[]
-  employeeChangeRequests                    EmployeeDataChangeRequest[] @relation("EmployeeChangeSubject")
-  createdEmployeeChangeRequests             EmployeeDataChangeRequest[] @relation("EmployeeChangeCreatedBy")
-  profileReviewedEmployeeChanges            EmployeeDataChangeRequest[] @relation("EmployeeProfileReviewedBy")
-  performanceReviewedEmployeeChanges        EmployeeDataChangeRequest[] @relation("EmployeePerformanceReviewedBy")
-  employeeContracts                         EmployeeContract[]          @relation("EmployeeContractOwner")
-  createdEmployeeContracts                  EmployeeContract[]          @relation("EmployeeContractCreator")
-  createdDepartmentChangeRequests           DepartmentChangeRequest[]   @relation("DepartmentChangeCreatedBy")
-  reviewedDepartmentChangeRequests          DepartmentChangeRequest[]   @relation("DepartmentChangeReviewedBy")
+  employeeChangeRequests                    EmployeeDataChangeRequest[]      @relation("EmployeeChangeSubject")
+  createdEmployeeChangeRequests             EmployeeDataChangeRequest[]      @relation("EmployeeChangeCreatedBy")
+  profileReviewedEmployeeChanges            EmployeeDataChangeRequest[]      @relation("EmployeeProfileReviewedBy")
+  performanceReviewedEmployeeChanges        EmployeeDataChangeRequest[]      @relation("EmployeePerformanceReviewedBy")
+  employeeContracts                         EmployeeContract[]               @relation("EmployeeContractOwner")
+  createdEmployeeContracts                  EmployeeContract[]               @relation("EmployeeContractCreator")
+  createdDepartmentChangeRequests           DepartmentChangeRequest[]        @relation("DepartmentChangeCreatedBy")
+  reviewedDepartmentChangeRequests          DepartmentChangeRequest[]        @relation("DepartmentChangeReviewedBy")
 
   @@index([deptId])
   @@index([directManagerId])
@@ -867,56 +875,56 @@ model TemplateIndicator {
 }
 
 model AssessmentCycle {
-  id                       String      @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  name                     String      @db.VarChar(100)
-  type                     CycleType   @default(quarterly)
-  startDate                DateTime    @map("start_date") @db.Date
-  endDate                  DateTime    @map("end_date") @db.Date
-  goalSettingOpenAt        DateTime?   @map("goal_setting_open_at") @db.Timestamptz(6)
-  selfEvalOpenAt           DateTime?   @map("self_eval_open_at") @db.Timestamptz(6)
-  deadlineIndicatorSetting DateTime?   @map("deadline_indicator_setting") @db.Date
-  deadlineIndicatorConfirm DateTime?   @map("deadline_indicator_confirm") @db.Date
-  deadlineSelfEval         DateTime?   @map("deadline_self_eval") @db.Date
-  deadlineManagerScore     DateTime?   @map("deadline_manager_score") @db.Date
-  deadlineHrCalibration    DateTime?   @map("deadline_hr_calibration") @db.Date
-  deadlineApproval         DateTime?   @map("deadline_approval") @db.Date
-  deadlinePublish          DateTime?   @map("deadline_publish") @db.Date
-  deadlineAppeal           DateTime?   @map("deadline_appeal") @db.Date
-  status                   CycleStatus @default(draft)
+  id                       String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name                     String           @db.VarChar(100)
+  type                     CycleType        @default(quarterly)
+  startDate                DateTime         @map("start_date") @db.Date
+  endDate                  DateTime         @map("end_date") @db.Date
+  goalSettingOpenAt        DateTime?        @map("goal_setting_open_at") @db.Timestamptz(6)
+  selfEvalOpenAt           DateTime?        @map("self_eval_open_at") @db.Timestamptz(6)
+  deadlineIndicatorSetting DateTime?        @map("deadline_indicator_setting") @db.Date
+  deadlineIndicatorConfirm DateTime?        @map("deadline_indicator_confirm") @db.Date
+  deadlineSelfEval         DateTime?        @map("deadline_self_eval") @db.Date
+  deadlineManagerScore     DateTime?        @map("deadline_manager_score") @db.Date
+  deadlineHrCalibration    DateTime?        @map("deadline_hr_calibration") @db.Date
+  deadlineApproval         DateTime?        @map("deadline_approval") @db.Date
+  deadlinePublish          DateTime?        @map("deadline_publish") @db.Date
+  deadlineAppeal           DateTime?        @map("deadline_appeal") @db.Date
+  status                   CycleStatus      @default(draft)
   workflowVersion          Int              @default(1) @map("workflow_version")
   planVersion              Int              @default(1) @map("plan_version")
   scoringFrequency         ScoringFrequency @default(cycle) @map("scoring_frequency")
   companyFinalApproverId   String?          @map("company_final_approver_id") @db.Uuid
-  publishVisibleFields     Json        @default("{\"total_score\":true,\"grade\":true,\"indicator_scores\":true,\"manager_comment\":true,\"coefficient\":false}") @map("publish_visible_fields") @db.JsonB
-  gradeAMaxRatio           Decimal     @default(0.20) @map("grade_a_max_ratio") @db.Decimal(4, 3)
-  gradeBMaxRatio           Decimal     @default(0.40) @map("grade_b_max_ratio") @db.Decimal(4, 3)
-  gradeCMaxRatio           Decimal     @default(0.30) @map("grade_c_max_ratio") @db.Decimal(4, 3)
-  gradeDMaxRatio           Decimal     @default(0.10) @map("grade_d_max_ratio") @db.Decimal(4, 3)
-  createdBy                String?     @map("created_by") @db.Uuid
-  hrOwnerId                String?     @map("hr_owner_id") @db.Uuid
-  reviewerId               String?     @map("reviewer_id") @db.Uuid
-  reviewStatus             String      @default("pending") @map("review_status") @db.VarChar(20)
-  reviewedAt               DateTime?   @map("reviewed_at") @db.Timestamptz(6)
-  reviewComment            String?     @map("review_comment") @db.Text
-  monthlyFollowUpRequired  Boolean     @default(false) @map("monthly_follow_up_required")
-  participantDeptIds       String[]    @default([]) @map("participant_dept_ids") @db.Uuid
-  participantUserIds       String[]    @default([]) @map("participant_user_ids") @db.Uuid
-  explicitExemptDeptIds    String[]    @default([]) @map("explicit_exempt_dept_ids") @db.Uuid
-  explicitExemptUserIds    String[]    @default([]) @map("explicit_exempt_user_ids") @db.Uuid
-  notificationMode         String      @default("off") @map("notification_mode") @db.VarChar(30)
-  scheduledAt              DateTime?   @map("scheduled_at") @db.Timestamptz(6)
-  scheduledById            String?     @map("scheduled_by_id") @db.Uuid
-  launchPlan               Json?       @map("launch_plan") @db.JsonB
-  launchPlanHash           String?     @map("launch_plan_hash") @db.VarChar(64)
-  openedAt                 DateTime?   @map("opened_at") @db.Timestamptz(6)
-  openedById               String?     @map("opened_by_id") @db.Uuid
-  openSource               String?     @map("open_source") @db.VarChar(20)
-  launchBlockedAt          DateTime?   @map("launch_blocked_at") @db.Timestamptz(6)
-  launchBlockedReason      String?     @map("launch_blocked_reason") @db.Text
-  publishedAt              DateTime?   @map("published_at") @db.Timestamptz(6)
-  closedAt                 DateTime?   @map("closed_at") @db.Timestamptz(6)
-  createdAt                DateTime    @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt                DateTime    @default(now()) @map("updated_at") @db.Timestamptz(6)
+  publishVisibleFields     Json             @default("{\"total_score\":true,\"grade\":true,\"indicator_scores\":true,\"manager_comment\":true,\"coefficient\":false}") @map("publish_visible_fields") @db.JsonB
+  gradeAMaxRatio           Decimal          @default(0.20) @map("grade_a_max_ratio") @db.Decimal(4, 3)
+  gradeBMaxRatio           Decimal          @default(0.40) @map("grade_b_max_ratio") @db.Decimal(4, 3)
+  gradeCMaxRatio           Decimal          @default(0.30) @map("grade_c_max_ratio") @db.Decimal(4, 3)
+  gradeDMaxRatio           Decimal          @default(0.10) @map("grade_d_max_ratio") @db.Decimal(4, 3)
+  createdBy                String?          @map("created_by") @db.Uuid
+  hrOwnerId                String?          @map("hr_owner_id") @db.Uuid
+  reviewerId               String?          @map("reviewer_id") @db.Uuid
+  reviewStatus             String           @default("pending") @map("review_status") @db.VarChar(20)
+  reviewedAt               DateTime?        @map("reviewed_at") @db.Timestamptz(6)
+  reviewComment            String?          @map("review_comment") @db.Text
+  monthlyFollowUpRequired  Boolean          @default(false) @map("monthly_follow_up_required")
+  participantDeptIds       String[]         @default([]) @map("participant_dept_ids") @db.Uuid
+  participantUserIds       String[]         @default([]) @map("participant_user_ids") @db.Uuid
+  explicitExemptDeptIds    String[]         @default([]) @map("explicit_exempt_dept_ids") @db.Uuid
+  explicitExemptUserIds    String[]         @default([]) @map("explicit_exempt_user_ids") @db.Uuid
+  notificationMode         String           @default("off") @map("notification_mode") @db.VarChar(30)
+  scheduledAt              DateTime?        @map("scheduled_at") @db.Timestamptz(6)
+  scheduledById            String?          @map("scheduled_by_id") @db.Uuid
+  launchPlan               Json?            @map("launch_plan") @db.JsonB
+  launchPlanHash           String?          @map("launch_plan_hash") @db.VarChar(64)
+  openedAt                 DateTime?        @map("opened_at") @db.Timestamptz(6)
+  openedById               String?          @map("opened_by_id") @db.Uuid
+  openSource               String?          @map("open_source") @db.VarChar(20)
+  launchBlockedAt          DateTime?        @map("launch_blocked_at") @db.Timestamptz(6)
+  launchBlockedReason      String?          @map("launch_blocked_reason") @db.Text
+  publishedAt              DateTime?        @map("published_at") @db.Timestamptz(6)
+  closedAt                 DateTime?        @map("closed_at") @db.Timestamptz(6)
+  createdAt                DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt                DateTime         @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   creator               User?                        @relation("CycleCreator", fields: [createdBy], references: [id], onDelete: SetNull)
   hrOwner               User?                        @relation("CycleHrOwner", fields: [hrOwnerId], references: [id], onDelete: SetNull)
@@ -957,38 +965,38 @@ model AssessmentTemplateSnapshot {
 }
 
 model AssessmentTask {
-  id                   String     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  cycleId              String     @map("cycle_id") @db.Uuid
-  snapshotId           String?    @map("snapshot_id") @db.Uuid
-  employeeId           String     @map("employee_id") @db.Uuid
-  deptId               String?    @map("dept_id") @db.Uuid
-  managerId            String?    @map("manager_id") @db.Uuid
-  deptHeadId           String?    @map("dept_head_id") @db.Uuid
-  approverId           String?    @map("approver_id") @db.Uuid
-  status               TaskStatus @default(pending)
-  isExempt             Boolean    @default(false) @map("is_exempt")
+  id                     String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  cycleId                String                 @map("cycle_id") @db.Uuid
+  snapshotId             String?                @map("snapshot_id") @db.Uuid
+  employeeId             String                 @map("employee_id") @db.Uuid
+  deptId                 String?                @map("dept_id") @db.Uuid
+  managerId              String?                @map("manager_id") @db.Uuid
+  deptHeadId             String?                @map("dept_head_id") @db.Uuid
+  approverId             String?                @map("approver_id") @db.Uuid
+  status                 TaskStatus             @default(pending)
+  isExempt               Boolean                @default(false) @map("is_exempt")
   participantDisposition ParticipantDisposition @default(active) @map("participant_disposition")
-  exemptReason         String?    @map("exempt_reason") @db.Text
-  indicatorSetAt       DateTime?  @map("indicator_set_at") @db.Timestamptz(6)
-  indicatorConfirmedAt DateTime?  @map("indicator_confirmed_at") @db.Timestamptz(6)
-  selfEvalSubmittedAt  DateTime?  @map("self_eval_submitted_at") @db.Timestamptz(6)
-  managerScoredAt      DateTime?  @map("manager_scored_at") @db.Timestamptz(6)
-  deptReviewedAt       DateTime?  @map("dept_reviewed_at") @db.Timestamptz(6)
-  hrCalibratedAt       DateTime?  @map("hr_calibrated_at") @db.Timestamptz(6)
-  approvedAt           DateTime?  @map("approved_at") @db.Timestamptz(6)
-  publishedAt          DateTime?  @map("published_at") @db.Timestamptz(6)
-  employeeConfirmedAt  DateTime?  @map("employee_confirmed_at") @db.Timestamptz(6)
-  closedAt             DateTime?  @map("closed_at") @db.Timestamptz(6)
-  createdAt            DateTime   @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt            DateTime   @default(now()) @map("updated_at") @db.Timestamptz(3)
+  exemptReason           String?                @map("exempt_reason") @db.Text
+  indicatorSetAt         DateTime?              @map("indicator_set_at") @db.Timestamptz(6)
+  indicatorConfirmedAt   DateTime?              @map("indicator_confirmed_at") @db.Timestamptz(6)
+  selfEvalSubmittedAt    DateTime?              @map("self_eval_submitted_at") @db.Timestamptz(6)
+  managerScoredAt        DateTime?              @map("manager_scored_at") @db.Timestamptz(6)
+  deptReviewedAt         DateTime?              @map("dept_reviewed_at") @db.Timestamptz(6)
+  hrCalibratedAt         DateTime?              @map("hr_calibrated_at") @db.Timestamptz(6)
+  approvedAt             DateTime?              @map("approved_at") @db.Timestamptz(6)
+  publishedAt            DateTime?              @map("published_at") @db.Timestamptz(6)
+  employeeConfirmedAt    DateTime?              @map("employee_confirmed_at") @db.Timestamptz(6)
+  closedAt               DateTime?              @map("closed_at") @db.Timestamptz(6)
+  createdAt              DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime               @default(now()) @map("updated_at") @db.Timestamptz(3)
 
-  cycle                AssessmentCycle            @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  cycle                AssessmentCycle             @relation(fields: [cycleId], references: [id], onDelete: Restrict)
   snapshot             AssessmentTemplateSnapshot? @relation(fields: [snapshotId], references: [id], onDelete: Restrict)
-  employee             User                       @relation("TaskEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
-  dept                 Department?                @relation(fields: [deptId], references: [id], onDelete: SetNull)
-  manager              User?                      @relation("TaskManager", fields: [managerId], references: [id], onDelete: SetNull)
-  deptHead             User?                      @relation("TaskDeptHead", fields: [deptHeadId], references: [id], onDelete: SetNull)
-  approver             User?                      @relation("TaskApprover", fields: [approverId], references: [id], onDelete: SetNull)
+  employee             User                        @relation("TaskEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
+  dept                 Department?                 @relation(fields: [deptId], references: [id], onDelete: SetNull)
+  manager              User?                       @relation("TaskManager", fields: [managerId], references: [id], onDelete: SetNull)
+  deptHead             User?                       @relation("TaskDeptHead", fields: [deptHeadId], references: [id], onDelete: SetNull)
+  approver             User?                       @relation("TaskApprover", fields: [approverId], references: [id], onDelete: SetNull)
   indicatorInstances   IndicatorInstance[]
   selfEvalSummary      SelfEvalSummary?
   managerEvalSummary   ManagerEvalSummary?
@@ -1035,25 +1043,35 @@ model CyclePeriodSchedule {
 }
 
 model AssessmentPeriod {
-  id                 String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  taskId             String                 @map("task_id") @db.Uuid
-  periodKey          String                 @map("period_key") @db.VarChar(20)
-  periodType         AssessmentPeriodType   @map("period_type")
-  sequence           Int
-  periodStart        DateTime               @map("period_start") @db.Date
-  periodEnd          DateTime               @map("period_end") @db.Date
-  managerId          String?                @map("manager_id") @db.Uuid
-  indicatorVersionId String?                @map("indicator_version_id") @db.Uuid
-  status             AssessmentPeriodStatus @default(unopened)
-  openedAt           DateTime?              @map("opened_at") @db.Timestamptz(6)
-  lockedAt           DateTime?              @map("locked_at") @db.Timestamptz(6)
-  noResultReason     String?                @map("no_result_reason") @db.Text
-  createdAt          DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime               @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id                  String                 @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  taskId              String                 @map("task_id") @db.Uuid
+  periodKey           String                 @map("period_key") @db.VarChar(20)
+  periodType          AssessmentPeriodType   @map("period_type")
+  sequence            Int
+  periodStart         DateTime               @map("period_start") @db.Date
+  periodEnd           DateTime               @map("period_end") @db.Date
+  managerId           String?                @map("manager_id") @db.Uuid
+  indicatorVersionId  String?                @map("indicator_version_id") @db.Uuid
+  status              AssessmentPeriodStatus @default(unopened)
+  selfEvalOpenAt      DateTime               @map("self_eval_open_at") @db.Timestamptz(6)
+  selfEvalDueAt       DateTime               @map("self_eval_due_at") @db.Timestamptz(6)
+  managerDueAt        DateTime               @map("manager_due_at") @db.Timestamptz(6)
+  openedAt            DateTime?              @map("opened_at") @db.Timestamptz(6)
+  lockedAt            DateTime?              @map("locked_at") @db.Timestamptz(6)
+  employeeSubmittedAt DateTime?              @map("employee_submitted_at") @db.Timestamptz(6)
+  managerSubmittedAt  DateTime?              @map("manager_submitted_at") @db.Timestamptz(6)
+  selfScoreTotal      Decimal?               @map("self_score_total") @db.Decimal(8, 2)
+  managerScoreTotal   Decimal?               @map("manager_score_total") @db.Decimal(8, 2)
+  draftVersion        Int                    @default(0) @map("draft_version")
+  noResultReason      String?                @map("no_result_reason") @db.Text
+  createdAt           DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime               @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  task             AssessmentTask  @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  manager          User?           @relation("PeriodManager", fields: [managerId], references: [id], onDelete: SetNull)
-  indicatorVersion IndicatorVersion? @relation("PeriodIndicatorVersion", fields: [indicatorVersionId], references: [id], onDelete: SetNull)
+  task             AssessmentTask                    @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  manager          User?                             @relation("PeriodManager", fields: [managerId], references: [id], onDelete: SetNull)
+  indicatorVersion IndicatorVersion?                 @relation("PeriodIndicatorVersion", fields: [indicatorVersionId], references: [id], onDelete: SetNull)
+  indicatorReviews AssessmentPeriodIndicatorReview[]
+  revisions        AssessmentPeriodReviewRevision[]
 
   @@unique([taskId, periodKey])
   @@index([managerId, status])
@@ -1084,25 +1102,70 @@ model IndicatorVersion {
 }
 
 model IndicatorVersionItem {
-  id                 String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  indicatorVersionId String   @map("indicator_version_id") @db.Uuid
-  sourceInstanceId   String?  @map("source_instance_id") @db.Uuid
-  name               String   @db.VarChar(200)
-  description        String?  @db.Text
-  scoringStandard    String?  @map("scoring_standard") @db.Text
-  targetValue        Decimal? @map("target_value") @db.Decimal(10, 2)
-  targetValueText    String?  @map("target_value_text") @db.VarChar(100)
-  unit               String?  @db.VarChar(30)
-  weight             Decimal  @db.Decimal(5, 4)
+  id                 String        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  indicatorVersionId String        @map("indicator_version_id") @db.Uuid
+  sourceInstanceId   String?       @map("source_instance_id") @db.Uuid
+  name               String        @db.VarChar(200)
+  description        String?       @db.Text
+  scoringStandard    String?       @map("scoring_standard") @db.Text
+  targetValue        Decimal?      @map("target_value") @db.Decimal(10, 2)
+  targetValueText    String?       @map("target_value_text") @db.VarChar(100)
+  unit               String?       @db.VarChar(30)
+  weight             Decimal       @db.Decimal(5, 4)
   indicatorType      IndicatorType @default(kpi) @map("indicator_type")
-  dimensionName      String?  @map("dimension_name") @db.VarChar(100)
-  dimensionWeight    Decimal  @map("dimension_weight") @db.Decimal(5, 4)
-  sortOrder          Int      @default(0) @map("sort_order")
+  dimensionName      String?       @map("dimension_name") @db.VarChar(100)
+  dimensionWeight    Decimal       @map("dimension_weight") @db.Decimal(5, 4)
+  sortOrder          Int           @default(0) @map("sort_order")
 
-  indicatorVersion IndicatorVersion @relation(fields: [indicatorVersionId], references: [id], onDelete: Cascade)
+  indicatorVersion IndicatorVersion                  @relation(fields: [indicatorVersionId], references: [id], onDelete: Cascade)
+  periodReviews    AssessmentPeriodIndicatorReview[]
 
   @@index([indicatorVersionId, sortOrder])
   @@map("indicator_version_items")
+}
+
+model AssessmentPeriodIndicatorReview {
+  id                     String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  periodId               String                   @map("period_id") @db.Uuid
+  indicatorVersionItemId String                   @map("indicator_version_item_id") @db.Uuid
+  progress               Int?                     @db.SmallInt
+  healthStatus           IndicatorProgressHealth? @map("health_status")
+  actualValueText        String?                  @map("actual_value_text") @db.VarChar(200)
+  employeeComment        String?                  @map("employee_comment") @db.Text
+  problemReason          String?                  @map("problem_reason") @db.Text
+  nextMonthPlan          String?                  @map("next_month_plan") @db.Text
+  supportNeeded          String?                  @map("support_needed") @db.Text
+  employeeAttachments    Json                     @default("[]") @map("employee_attachments") @db.JsonB
+  selfScore              Decimal?                 @map("self_score") @db.Decimal(6, 2)
+  managerScore           Decimal?                 @map("manager_score") @db.Decimal(6, 2)
+  managerComment         String?                  @map("manager_comment") @db.Text
+  createdAt              DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt              DateTime                 @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  period               AssessmentPeriod     @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  indicatorVersionItem IndicatorVersionItem @relation(fields: [indicatorVersionItemId], references: [id], onDelete: Restrict)
+
+  @@unique([periodId, indicatorVersionItemId])
+  @@index([periodId])
+  @@map("assessment_period_indicator_reviews")
+}
+
+model AssessmentPeriodReviewRevision {
+  id             String                        @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  periodId       String                        @map("period_id") @db.Uuid
+  stage          AssessmentPeriodRevisionStage
+  revision       Int
+  snapshot       Json                          @db.JsonB
+  idempotencyKey String                        @unique @map("idempotency_key") @db.VarChar(64)
+  createdById    String                        @map("created_by_id") @db.Uuid
+  createdAt      DateTime                      @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  period    AssessmentPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  createdBy User             @relation("PeriodReviewRevisionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+
+  @@unique([periodId, stage, revision])
+  @@index([periodId, stage])
+  @@map("assessment_period_review_revisions")
 }
 
 model IndicatorInstance {
@@ -1584,26 +1647,26 @@ model NotificationLog {
 // -----------------------------------------------------------------------------
 
 model Objective {
-  id                 String          @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  title              String          @db.VarChar(200)
-  description        String?         @db.Text
+  id                 String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  title              String                @db.VarChar(200)
+  description        String?               @db.Text
   level              ObjectiveLevel
-  deptId             String?         @map("dept_id") @db.Uuid
-  ownerId            String?         @map("owner_id") @db.Uuid
-  parentId           String?         @map("parent_id") @db.Uuid
-  cycleId            String?         @map("cycle_id") @db.Uuid
-  weight             Decimal?        @db.Decimal(5, 2)
-  priority           Int             @default(0)
-  progress           Int             @default(0) @db.SmallInt
-  status             ObjectiveStatus @default(active)
+  deptId             String?               @map("dept_id") @db.Uuid
+  ownerId            String?               @map("owner_id") @db.Uuid
+  parentId           String?               @map("parent_id") @db.Uuid
+  cycleId            String?               @map("cycle_id") @db.Uuid
+  weight             Decimal?              @db.Decimal(5, 2)
+  priority           Int                   @default(0)
+  progress           Int                   @default(0) @db.SmallInt
+  status             ObjectiveStatus       @default(active)
   reviewStatus       ObjectiveReviewStatus @default(not_required) @map("review_status")
-  relatedIndicatorId String?         @map("related_indicator_id") @db.Uuid
-  createdBy          String?         @map("created_by") @db.Uuid
-  reviewedById       String?         @map("reviewed_by_id") @db.Uuid
-  reviewedAt         DateTime?       @map("reviewed_at") @db.Timestamptz(6)
-  reviewComment      String?         @map("review_comment") @db.Text
-  createdAt          DateTime        @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt          DateTime        @default(now()) @map("updated_at") @db.Timestamptz(6)
+  relatedIndicatorId String?               @map("related_indicator_id") @db.Uuid
+  createdBy          String?               @map("created_by") @db.Uuid
+  reviewedById       String?               @map("reviewed_by_id") @db.Uuid
+  reviewedAt         DateTime?             @map("reviewed_at") @db.Timestamptz(6)
+  reviewComment      String?               @map("review_comment") @db.Text
+  createdAt          DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt          DateTime              @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   dept                         Department?                   @relation("ObjectiveDepartment", fields: [deptId], references: [id], onDelete: SetNull)
   owner                        User?                         @relation("ObjectiveOwner", fields: [ownerId], references: [id], onDelete: SetNull)

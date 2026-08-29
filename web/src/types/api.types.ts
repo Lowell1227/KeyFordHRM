@@ -745,6 +745,8 @@ export interface TaskListItem extends AssessmentTask {
 }
 
 export interface TaskDetail extends AssessmentTask {
+  workflowVersion?: number;
+  periods?: AssessmentPeriodSummary[];
   workflowContext?: TaskWorkflowContext;
   indicatorInstances: IndicatorInstance[];
   selfEvalSummary?: SelfEvalSummary;
@@ -1114,6 +1116,119 @@ export interface Attachment {
   url: string;
   size?: number;
   mimeType?: string;
+}
+
+export type AssessmentPeriodStatus = 'unopened' | 'self_eval' | 'manager_scoring' | 'completed' | 'no_result';
+
+export interface AssessmentPeriodSummary {
+  id: string;
+  periodKey: string;
+  periodType: 'month' | 'cycle';
+  sequence: number;
+  status: AssessmentPeriodStatus;
+  selfEvalOpenAt: string;
+  selfEvalDueAt: string;
+  managerDueAt: string;
+  employeeSubmittedAt: string | null;
+  managerSubmittedAt: string | null;
+}
+
+export interface PeriodReviewHistoryItem {
+  periodKey: string;
+  progress: number | null;
+  healthStatus: GoalTrackingHealthStatus | null;
+  actualValueText: string | null;
+  selfScore: number | null;
+  managerScore: number | null;
+}
+
+export interface PeriodReviewIndicator {
+  indicatorVersionItemId: string;
+  sourceInstanceId: string | null;
+  name: string;
+  description: string | null;
+  scoringStandard: string | null;
+  targetValue: number | null;
+  targetValueText: string | null;
+  unit: string | null;
+  weight: number;
+  progress: number | null;
+  healthStatus: GoalTrackingHealthStatus | null;
+  actualValueText: string | null;
+  employeeComment: string | null;
+  problemReason: string | null;
+  nextMonthPlan: string | null;
+  supportNeeded: string | null;
+  attachments: Attachment[];
+  selfScore: number | null;
+  managerScore: number | null;
+  managerComment: string | null;
+  latestProgress: GoalTrackingLatestProgress | null;
+  alignedObjectives: Array<{ id: string; title: string; level: ObjectiveLevel }>;
+  history: PeriodReviewHistoryItem[];
+}
+
+export interface PeriodReviewDetail {
+  period: {
+    id: string;
+    taskId: string;
+    periodKey: string;
+    periodType: 'month' | 'cycle';
+    status: AssessmentPeriodStatus;
+    selfEvalOpenAt: string;
+    selfEvalDueAt: string;
+    managerDueAt: string;
+    employeeSubmittedAt: string | null;
+    managerSubmittedAt: string | null;
+    selfScoreTotal: number | null;
+    managerScoreTotal: number | null;
+    draftVersion: number;
+  };
+  context: {
+    cycleName: string;
+    employeeName: string;
+    employeeNo: string | null;
+    deptName: string | null;
+    managerName: string | null;
+    statusLabel: string;
+  };
+  permissions: { canEditEmployee: boolean; canEditManager: boolean };
+  indicators: PeriodReviewIndicator[];
+}
+
+export interface EmployeePeriodReviewItemBody {
+  indicatorVersionItemId: string;
+  progress?: number | null;
+  healthStatus?: GoalTrackingHealthStatus | null;
+  actualValueText?: string | null;
+  employeeComment?: string | null;
+  problemReason?: string | null;
+  nextMonthPlan?: string | null;
+  supportNeeded?: string | null;
+  attachments?: Attachment[];
+  selfScore?: number | null;
+}
+
+export interface SaveEmployeePeriodReviewDraftBody {
+  expectedVersion: number;
+  indicators: EmployeePeriodReviewItemBody[];
+}
+
+export interface SubmitEmployeePeriodReviewBody {
+  expectedVersion: number;
+  idempotencyKey: string;
+  indicators: Array<EmployeePeriodReviewItemBody & {
+    progress: number;
+    healthStatus: GoalTrackingHealthStatus;
+    selfScore: number;
+  }>;
+}
+
+export interface PeriodReviewActionResult {
+  periodId: string;
+  status: AssessmentPeriodStatus;
+  draftVersion: number;
+  savedAt: string;
 }
 
 /** 申诉列表项（对齐后端 AppealListItem，不含 coefficient）。 */

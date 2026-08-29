@@ -10,6 +10,8 @@ import { useTaskFlow } from '@/composables/useTaskFlow';
 import { usePermission } from '@/composables/usePermission';
 import IndicatorSnapshot, { type ActualValueItem } from './components/IndicatorSnapshot.vue';
 import PerformanceReferencePanel from './components/PerformanceReferencePanel.vue';
+import PerformanceFormWorkspace from './components/PerformanceFormWorkspace.vue';
+import EmployeePeriodReviewWorkspace from './components/EmployeePeriodReviewWorkspace.vue';
 import ExemptView from './components/ExemptView.vue';
 import ScoreMask from './components/ScoreMask.vue';
 import InterviewCard from './components/InterviewCard.vue';
@@ -101,8 +103,25 @@ const requestedPerformanceStage = computed<TaskStageKey>(() =>
   asTaskStage(route.query.stage) ?? currentPerformanceStage.value ?? 'goal-setting',
 );
 
-const performanceStageTitle = computed(() => performanceStageLabels[requestedPerformanceStage.value]);
-const performanceStageCardTitle = computed(() => performanceStageCardTitles[requestedPerformanceStage.value]);
+const activeMonthlyPeriod = computed(() => {
+  const current = task.value;
+  if (current?.workflowVersion !== 2) return null;
+  const periods = current.periods ?? [];
+  const employeeAction = periods.find((period) => period.status === 'self_eval' && !period.employeeSubmittedAt);
+  if (employeeAction) return employeeAction;
+  if (requestedPerformanceStage.value !== 'self-eval') return null;
+  return [...periods]
+      .filter((period) => period.status === 'manager_scoring' || period.status === 'completed')
+      .sort((left, right) => right.sequence - left.sequence)[0]
+    ?? null;
+});
+const isMonthlyReviewPage = computed(() => Boolean(activeMonthlyPeriod.value));
+const performanceStageTitle = computed(() => isMonthlyReviewPage.value
+  ? '每月目标复盘'
+  : performanceStageLabels[requestedPerformanceStage.value]);
+const performanceStageCardTitle = computed(() => isMonthlyReviewPage.value
+  ? '每月目标复盘'
+  : performanceStageCardTitles[requestedPerformanceStage.value]);
 const performanceStageState = computed<TaskStageState>(() => {
   const status = task.value?.status;
   return status
@@ -402,11 +421,9 @@ async function handleRemind() {
         </div>
       </section>
 
-      <div
-        class="performance-detail__workspace"
-        :class="{ 'has-reference': PERFORMANCE_REFERENCE_ENABLED }"
-      >
-        <section class="performance-detail__main">
+      <PerformanceFormWorkspace :show-reference="PERFORMANCE_REFERENCE_ENABLED">
+        <template #main>
+          <section class="performance-detail__main">
           <ChartCard
             v-if="!showPerformanceStageContent"
             class="stage-unavailable-card"
@@ -417,6 +434,12 @@ async function handleRemind() {
           </ChartCard>
 
           <ExemptView v-else-if="task.isExempt" :task="task" />
+
+          <EmployeePeriodReviewWorkspace
+            v-else-if="isMonthlyReviewPage && activeMonthlyPeriod"
+            :period-id="activeMonthlyPeriod.id"
+            @submitted="loadDetail"
+          />
 
           <IndicatorSnapshot
             v-else-if="requestedPerformanceStage !== 'result'"
@@ -517,18 +540,18 @@ async function handleRemind() {
             :interview="task.performanceInterview"
             @refresh="loadDetail"
           />
-        </section>
+          </section>
+        </template>
 
-        <aside v-if="PERFORMANCE_REFERENCE_ENABLED" class="reference-card">
-          <div class="reference-card__title">参考信息</div>
+        <template #reference>
           <PerformanceReferencePanel
             :cycle-id="task.cycleId"
             :employee-id="task.employeeId"
             :indicators="task.indicatorInstances"
             :flow-records="task.flowRecords"
           />
-        </aside>
-      </div>
+        </template>
+      </PerformanceFormWorkspace>
     </template>
 
     <div v-else-if="taskStore.error" class="error-state">
@@ -665,49 +688,19 @@ async function handleRemind() {
   font-size: 12px;
 }
 
-.performance-detail__workspace {
-  min-width: 0;
-  display: grid;
-  grid-template-columns: minmax(0, 1fr);
-  align-items: start;
-  gap: 14px;
-}
-
-.performance-detail__workspace.has-reference {
-  grid-template-columns: minmax(0, 1fr) minmax(280px, 340px);
-}
-
 .performance-detail__main {
   min-width: 0;
   display: grid;
   gap: 14px;
 }
 
-.performance-detail__main :deep(.chart-card),
-.reference-card {
+.performance-detail__main :deep(.chart-card) {
   border: 1px solid #edf0f5;
   border-radius: 14px;
   box-shadow: 0 1px 2px rgb(31 45 61 / 4%);
 }
 
-.reference-card {
-  min-width: 0;
-  overflow: hidden;
-  background: #fff;
-}
-
-.reference-card__title {
-  min-height: 50px;
-  display: flex;
-  align-items: center;
-  padding: 0 16px;
-  border-bottom: 1px solid #edf0f5;
-  color: #20283a;
-  font-size: 16px;
-  font-weight: 700;
-}
-
-.reference-card :deep(.performance-reference) {
+:deep(.performance-form-workspace__reference .performance-reference) {
   border-left: 0;
 }
 
@@ -754,12 +747,6 @@ async function handleRemind() {
 
 .error-state {
   padding: 48px 0;
-}
-
-@media (max-width: 1180px) {
-  .performance-detail__workspace.has-reference {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 768px) {

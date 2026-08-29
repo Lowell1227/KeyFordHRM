@@ -28,6 +28,10 @@ describe('SchedulerService', () => {
         update: jest.fn(),
         updateMany: jest.fn(),
       },
+      assessmentPeriod: {
+        findMany: jest.fn(),
+        updateMany: jest.fn(),
+      },
       performanceArchive: { upsert: jest.fn() },
       $transaction: jest.fn(async (fn: (tx: any) => Promise<unknown>, _options?: unknown) => fn(prisma)),
     };
@@ -307,6 +311,42 @@ describe('SchedulerService', () => {
         where: { id: 'cycle-q1' },
         data: { status: 'self_eval' },
       });
+      jest.useRealTimers();
+    });
+
+    it('opens each due monthly review independently for workflow v2', async () => {
+      const now = new Date('2027-02-01T01:00:00.000Z');
+      jest.useFakeTimers().setSystemTime(now);
+      prisma.assessmentPeriod.findMany.mockResolvedValue([{
+        id: 'period-2027-01',
+        taskId: 'task-1',
+        periodKey: '2027-01',
+        task: {
+          cycleId: 'cycle-q1',
+          employeeId: 'emp-1',
+          cycle: { notificationMode: 'off' },
+        },
+      }]);
+      prisma.assessmentPeriod.updateMany.mockResolvedValue({ count: 1 });
+
+      await service.runPeriodSelfEvalOpenings();
+
+      expect(prisma.assessmentPeriod.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          status: 'unopened',
+          selfEvalOpenAt: { lte: now },
+          task: { cycle: { workflowVersion: 2 } },
+        }),
+      }));
+      expect(prisma.assessmentPeriod.updateMany).toHaveBeenCalledWith({
+        where: { id: 'period-2027-01', status: 'unopened' },
+        data: { status: 'self_eval', openedAt: now },
+      });
+      expect(prisma.assessmentTask.updateMany).toHaveBeenCalledWith({
+        where: { id: 'task-1', status: 'goal_confirmed' },
+        data: { status: 'self_eval' },
+      });
+      expect(notificationsService.create).not.toHaveBeenCalled();
       jest.useRealTimers();
     });
 

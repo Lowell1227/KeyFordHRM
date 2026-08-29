@@ -26,6 +26,7 @@ export default defineConfig({
     '24-dynamic-business-permissions.spec.ts',
     '25-cycle-scoring-plan.spec.ts',
     '26-menu-online-baseline.spec.ts',
+    '28-monthly-review-responsive.spec.ts',
   ],
   workers: 1,
 });
