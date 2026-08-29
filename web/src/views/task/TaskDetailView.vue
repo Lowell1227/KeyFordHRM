@@ -34,8 +34,6 @@ const route = useRoute();
 const router = useRouter();
 const taskStore = useTaskStore();
 const authStore = useAuthStore();
-const PERFORMANCE_REFERENCE_ENABLED = false;
-
 const cycle = ref<AssessmentCycle | null>(null);
 const cycleLoading = ref(false);
 const actionLoading = ref(false);
@@ -116,6 +114,9 @@ const activeMonthlyPeriod = computed(() => {
     ?? null;
 });
 const isMonthlyReviewPage = computed(() => Boolean(activeMonthlyPeriod.value));
+const showGoalSettingReference = computed(() => (
+  requestedPerformanceStage.value === 'goal-setting' && !isMonthlyReviewPage.value
+));
 const performanceStageTitle = computed(() => isMonthlyReviewPage.value
   ? '每月目标复盘'
   : performanceStageLabels[requestedPerformanceStage.value]);
@@ -373,6 +374,7 @@ async function handleRemind() {
   <div
     v-loading="loading"
     class="performance-detail"
+    :class="{ 'has-goal-setting-actions': canEditIndicators }"
     data-testid="personal-performance-detail"
   >
     <template v-if="task">
@@ -421,7 +423,10 @@ async function handleRemind() {
         </div>
       </section>
 
-      <PerformanceFormWorkspace :show-reference="PERFORMANCE_REFERENCE_ENABLED">
+      <PerformanceFormWorkspace
+        :show-reference="showGoalSettingReference"
+        :workspace-test-id="showGoalSettingReference ? 'goal-setting-workspace' : undefined"
+      >
         <template #main>
           <section class="performance-detail__main">
           <ChartCard
@@ -752,6 +757,10 @@ async function handleRemind() {
 @media (max-width: 768px) {
   .performance-detail {
     padding: 12px;
+  }
+
+  .performance-detail.has-goal-setting-actions {
+    padding-bottom: 108px;
   }
 
   .performance-detail__topbar {

@@ -127,6 +127,8 @@ const selfEvalDraftRestoring = ref(false);
 const selfEvalDraftTimer = ref<number | null>(null);
 const selfEvalDraftErrorShown = ref(false);
 const snapshotValidationIds = ref<string[]>([]);
+const snapshotNameErrors = ref<Record<string, string>>({});
+const snapshotWeightError = ref('');
 const advancedSettingIds = ref(new Set<string>());
 
 const indicatorOptions = computed(() => {
@@ -168,6 +170,13 @@ const displayedWeightTotal = computed(() => (
   normalizeDisplayedWeightTotal(weightTotalPercent.value / 100)
 ));
 const isWeightOverLimit = computed(() => displayedWeightTotal.value.hundredths > 10_000);
+const isWeightReadyToSubmit = computed(() => displayedWeightTotal.value.isExactlyOneHundredPercent);
+const goalWeightFeedback = computed(() => {
+  if (snapshotWeightError.value) return snapshotWeightError.value;
+  if (isWeightOverLimit.value) return `权重合计 ${displayedWeightTotal.value.percentText}% · 已超过 100%`;
+  if (isWeightReadyToSubmit.value) return '权重合计 100% · 可以提交';
+  return `权重合计 ${displayedWeightTotal.value.percentText}% · 提交前需调整为 100%`;
+});
 
 const indicatorOperationNodeTypes = ['indicator_setting', 'indicator_confirm'];
 
@@ -747,6 +756,7 @@ function setWeightPercent(row: unknown, value: number | undefined) {
   if (value == null || Number.isNaN(value)) return;
   const item = row as SetIndicatorBody['instances'][number];
   item.weight = Number((value / 100).toFixed(6));
+  snapshotWeightError.value = '';
 }
 
 function adjustWeightPercent(row: unknown, deltaPercent: number) {
@@ -828,11 +838,50 @@ function revealSnapshotIndicator(index: number) {
   });
 }
 
+function clearSnapshotNameError(id: string) {
+  if (!snapshotNameErrors.value[id]) return;
+  const next = { ...snapshotNameErrors.value };
+  delete next[id];
+  snapshotNameErrors.value = next;
+}
+
+function resetSnapshotValidation() {
+  snapshotValidationIds.value = [];
+  snapshotNameErrors.value = {};
+  snapshotWeightError.value = '';
+}
+
 function buildIndicatorBody(action: 'save' | 'submit'): Omit<SetIndicatorBody, 'expectedUpdatedAt'> | null {
-  const instances = editableItems.map(trimItem).filter((item) => item.name);
+  resetSnapshotValidation();
+  const trimmedItems = editableItems.map(trimItem);
+  const instances = trimmedItems.filter((item) => item.name);
   if (!instances.length) {
+    const firstId = editableRowIds.value[0];
+    if (firstId) snapshotNameErrors.value = { [firstId]: '请填写目标名称' };
     revealSnapshotIndicator(0);
-    ElMessage.warning('请至少填写一条指标');
+    ElMessage.warning('请至少填写一条目标');
+    return null;
+  }
+  if (action === 'submit') {
+    const emptyNameIndex = trimmedItems.findIndex((item) => !item.name);
+    if (emptyNameIndex >= 0) {
+      const id = editableRowIds.value[emptyNameIndex];
+      if (id) snapshotNameErrors.value = { [id]: '请填写目标名称' };
+      revealSnapshotIndicator(emptyNameIndex);
+      ElMessage.warning('请补全目标名称后再提交');
+      return null;
+    }
+  }
+  const normalizedNames = instances.map((item) => item.name.trim().toLocaleLowerCase());
+  const duplicateNames = new Set(normalizedNames.filter((name, index) => normalizedNames.indexOf(name) !== index));
+  if (duplicateNames.size > 0) {
+    snapshotNameErrors.value = Object.fromEntries(
+      trimmedItems
+        .map((item, index) => ({ item, id: editableRowIds.value[index] }))
+        .filter(({ item }) => duplicateNames.has(item.name.trim().toLocaleLowerCase()))
+        .map(({ id }) => [id, '目标名称不能重复']),
+    );
+    ElMessage.warning('目标名称不能重复');
     return null;
   }
   const emptyCustomIndex = editableItems.findIndex((item) => (
@@ -846,13 +895,14 @@ function buildIndicatorBody(action: 'save' | 'submit'): Omit<SetIndicatorBody, '
     return null;
   }
   if (isWeightOverLimit.value) {
+    snapshotWeightError.value = `权重合计不能超过 100%，当前为 ${displayedWeightTotal.value.percentText}%`;
     revealSnapshotIndicator(0);
-    ElMessage.warning(`指标权重合计不能超过 100%，当前为 ${displayedWeightTotal.value.percentText}%。`);
+    ElMessage.warning(snapshotWeightError.value);
     return null;
   }
-  const normalizedNames = instances.map((item) => item.name.trim().toLocaleLowerCase());
-  if (new Set(normalizedNames).size !== normalizedNames.length) {
-    ElMessage.warning('目标名称不能重复');
+  if (action === 'submit' && !isWeightReadyToSubmit.value) {
+    snapshotWeightError.value = `权重合计 ${displayedWeightTotal.value.percentText}%，提交前需调整为 100%`;
+    ElMessage.warning(snapshotWeightError.value);
     return null;
   }
   return {
@@ -1012,11 +1062,37 @@ function handleAttachmentsChange(attachments: Attachment[]) {
 
     <template v-if="canEdit">
       <div class="simple-goal-list">
-        <article v-for="(item, index) in editableItems" :key="editableRowIds[index]" class="simple-goal-card">
+        <article
+          v-for="(item, index) in editableItems"
+          :key="editableRowIds[index]"
+          class="simple-goal-card"
+          data-testid="goal-setting-card"
+        >
           <header><strong>目标 {{ index + 1 }}</strong><el-button link type="danger" :icon="Delete" @click="removeItem(index)">删除</el-button></header>
           <div class="simple-goal-grid">
-            <label class="goal-name"><span>名称</span><el-input v-model="item.name" maxlength="200" placeholder="请输入目标名称" /></label>
-            <label><span>权重</span><el-input-number :model-value="toPercent(item.weight)" :min="0" :max="100" :precision="2" @update:model-value="(value?: number) => setWeightPercent(item, value)" /></label>
+            <label class="goal-name" :class="{ 'is-invalid': snapshotNameErrors[editableRowIds[index]] }">
+              <span>名称</span>
+              <el-input
+                v-model="item.name"
+                maxlength="200"
+                placeholder="请输入目标名称"
+                @update:model-value="clearSnapshotNameError(editableRowIds[index])"
+              />
+              <em v-if="snapshotNameErrors[editableRowIds[index]]" class="goal-field-error">
+                {{ snapshotNameErrors[editableRowIds[index]] }}
+              </em>
+            </label>
+            <label>
+              <span>权重</span>
+              <el-input-number
+                :data-testid="`goal-weight-input-${index}`"
+                :model-value="toPercent(item.weight)"
+                :min="0"
+                :max="100"
+                :precision="2"
+                @update:model-value="(value?: number) => setWeightPercent(item, value)"
+              />
+            </label>
             <label class="is-wide"><span>描述</span><el-input v-model="item.description" type="textarea" :rows="2" placeholder="说明目标内容" /></label>
             <label class="is-wide"><span>标准</span><el-input v-model="item.scoringStandard" type="textarea" :rows="2" placeholder="说明完成或评价标准" /></label>
           </div>
@@ -1024,8 +1100,21 @@ function handleAttachmentsChange(attachments: Attachment[]) {
       </div>
       <div class="simple-goal-footer">
         <el-button plain :icon="Plus" @click="addItem">添加目标</el-button>
-        <span :class="{ 'is-danger': isWeightOverLimit }">权重合计 {{ displayedWeightTotal.percentText }}%（不超过 100%）</span>
       </div>
+      <footer class="goal-setting-action-bar" data-testid="goal-setting-actions">
+        <span
+          data-testid="goal-weight-feedback"
+          :class="{
+            'is-ready': isWeightReadyToSubmit && !snapshotWeightError,
+            'is-danger': Boolean(snapshotWeightError) || isWeightOverLimit,
+          }"
+        >
+          {{ goalWeightFeedback }}
+        </span>
+        <el-button type="primary" :loading="loading" @click="handleSave('submit')">
+          {{ submitLabel || saveLabel || '提交' }}
+        </el-button>
+      </footer>
     </template>
 
     <template v-else-if="false">
@@ -1474,17 +1563,22 @@ function handleAttachmentsChange(attachments: Attachment[]) {
 </template>
 
 <style scoped>
-.simple-goal-list { display: grid; gap: 14px; }
-.simple-goal-card { padding: 18px; border: 1px solid var(--el-border-color-lighter); border-radius: 12px; background: #fff; }
+.simple-goal-list { display: grid; gap: 12px; }
+.simple-goal-card { padding: 16px; border: 1px solid var(--el-border-color-lighter); border-radius: 10px; background: #fff; }
 .simple-goal-card header, .simple-goal-footer { display: flex; align-items: center; justify-content: space-between; }
-.simple-goal-card header { margin-bottom: 14px; }
-.simple-goal-grid { display: grid; grid-template-columns: minmax(0, 1fr) 160px; gap: 14px; }
+.simple-goal-card header { margin-bottom: 12px; }
+.simple-goal-grid { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 12px; }
 .simple-goal-grid label { display: grid; gap: 7px; color: var(--el-text-color-secondary); font-size: 13px; }
 .simple-goal-grid .is-wide { grid-column: 1 / -1; }
 .simple-goal-grid :deep(.el-input-number) { width: 100%; }
-.simple-goal-footer { margin-top: 16px; color: var(--el-text-color-secondary); }
-.simple-goal-footer .is-danger { color: var(--el-color-danger); }
-@media (max-width: 720px) { .simple-goal-grid { grid-template-columns: 1fr; } .simple-goal-grid .is-wide { grid-column: auto; } }
+.simple-goal-grid label.is-invalid :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--el-color-danger) inset; }
+.goal-field-error { color: var(--el-color-danger); font-size: 12px; font-style: normal; line-height: 18px; }
+.simple-goal-footer { margin-top: 14px; color: var(--el-text-color-secondary); }
+.goal-setting-action-bar { position: sticky; z-index: 5; bottom: 10px; display: flex; align-items: center; justify-content: flex-end; gap: 16px; margin-top: 16px; padding: 12px 14px; border: 1px solid #dfe5f0; border-radius: 10px; background: rgb(255 255 255 / 96%); box-shadow: 0 8px 24px rgb(31 45 61 / 10%); backdrop-filter: blur(10px); }
+.goal-setting-action-bar > span { color: #9a6814; font-size: 13px; }
+.goal-setting-action-bar > span.is-ready { color: var(--el-color-success); }
+.goal-setting-action-bar > span.is-danger { color: var(--el-color-danger); }
+.goal-setting-action-bar .el-button { min-width: 128px; }
 .actions {
   display: flex;
   gap: 8px;
@@ -2129,6 +2223,14 @@ function handleAttachmentsChange(attachments: Attachment[]) {
 }
 
 @media (max-width: 768px) {
+  .simple-goal-list { padding-bottom: 96px; }
+  .simple-goal-card { padding: 14px 12px; scroll-margin-bottom: 112px; }
+  .simple-goal-grid { grid-template-columns: minmax(0, 1fr); }
+  .simple-goal-grid .is-wide { grid-column: auto; }
+  .goal-setting-action-bar { position: fixed; z-index: 40; right: 0; bottom: 0; left: 0; min-width: 0; margin: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 0; }
+  .goal-setting-action-bar > span { min-width: 0; flex: 1; font-size: 12px; line-height: 17px; }
+  .goal-setting-action-bar .el-button { min-width: 120px; min-height: 44px; margin-left: 0; }
+
   .self-eval-guide__intro {
     align-items: flex-start;
     flex-direction: column;

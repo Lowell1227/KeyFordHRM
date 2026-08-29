@@ -728,6 +728,9 @@ export class TasksService {
     if (totalWeight > 1.000001) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '目标权重合计不能超过 100%' });
     }
+    if (action === 'submit' && Math.abs(totalWeight - 1) > 0.000001) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '提交目标前权重合计必须为 100%' });
+    }
 
     for (const item of validItems) {
       await this.indicatorVisibility.validateSelection(item, task, viewer);
@@ -1521,6 +1524,7 @@ export class TasksService {
         targetValue: item.targetValue,
         targetValueText: item.targetValueText?.trim() || undefined,
         unit: item.unit?.trim() || undefined,
+        weight: item.weight,
         indicatorType: item.indicatorType ?? 'kpi',
         dimensionName: item.dimensionName?.trim() || 'KPI维度',
         dimensionWeight: item.dimensionWeight ?? 1,

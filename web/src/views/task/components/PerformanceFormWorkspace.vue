@@ -5,10 +5,12 @@ const props = withDefaults(defineProps<{
   showReference?: boolean;
   referenceTitle?: string;
   referenceTestId?: string;
+  workspaceTestId?: string;
 }>(), {
   showReference: true,
   referenceTitle: '参考信息',
   referenceTestId: 'performance-form-reference',
+  workspaceTestId: undefined,
 });
 
 const referenceOpen = ref(false);
@@ -16,7 +18,11 @@ const referenceActionLabel = computed(() => referenceOpen.value ? '收起参考�
 </script>
 
 <template>
-  <div class="performance-form-workspace" :class="{ 'has-reference': showReference }">
+  <div
+    class="performance-form-workspace"
+    :class="{ 'has-reference': showReference }"
+    :data-testid="workspaceTestId"
+  >
     <main class="performance-form-workspace__main">
       <slot name="main" />
     </main>

@@ -572,6 +572,62 @@ describe('TasksService', () => {
       );
     });
 
+    it('rejects a submitted goal set whose weights do not total 100 percent', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...makeTask('indicator_setting'),
+        updatedAt,
+      });
+      jest.spyOn(service, 'findOne').mockResolvedValue({ id: 'task-1' } as TaskDetail);
+
+      await expect(service.setIndicators(
+        'task-1',
+        {
+          expectedUpdatedAt: updatedAt.toISOString(),
+          action: 'submit',
+          instances: [{
+            name: 'Quarterly delivery',
+            weight: 0.8,
+            visibilityScope: 'company',
+            visibleDepartmentIds: [],
+            visibleUserIds: [],
+            alignedObjectiveIds: [],
+          }],
+        } as any,
+        makeViewer({ id: 'emp-1' }),
+      )).rejects.toMatchObject({
+        response: expect.objectContaining({ message: '提交目标前权重合计必须为 100%' }),
+      });
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('preserves a partial weight when saving a goal draft', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...makeTask('indicator_setting'),
+        updatedAt,
+      });
+      jest.spyOn(service, 'findOne').mockResolvedValue({ id: 'task-1' } as TaskDetail);
+
+      await service.setIndicators(
+        'task-1',
+        {
+          expectedUpdatedAt: updatedAt.toISOString(),
+          action: 'save',
+          instances: [{
+            name: 'Quarterly delivery',
+            weight: 0.8,
+            visibilityScope: 'company',
+            visibleDepartmentIds: [],
+            visibleUserIds: [],
+            alignedObjectiveIds: [],
+          }],
+        } as any,
+        makeViewer({ id: 'emp-1' }),
+      );
+
+      expect(transactionClient.indicatorInstance.create.mock.calls[0][0].data.weight.toString()).toBe('0.8');
+    });
+
     it('returns only aligned objectives that remain visible to the viewer', async () => {
       const task = buildFullTask('indicator_reviewing');
       task.indicatorInstances = [
