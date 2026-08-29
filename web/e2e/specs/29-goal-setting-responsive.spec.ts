@@ -97,6 +97,45 @@ async function mockGoalSetting(
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ page: 1, pageSize: 20, total: 0, items: [] })),
   }));
+  await page.route('**/api/v1/objectives**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([{
+      id: '11111111-1111-4111-8111-111111111111',
+      title: '提升公司重点客户续约率',
+      description: null,
+      level: 'company',
+      deptId: null,
+      deptName: null,
+      ownerId: null,
+      ownerName: null,
+      parentId: null,
+      cycleId: 'cycle-2027-q1',
+      cycleName: '2027 第一季度绩效考核',
+      weight: null,
+      priority: 0,
+      progress: 0,
+      status: 'active',
+      reviewStatus: 'approved',
+      reviewerId: null,
+      reviewerName: null,
+      reviewedById: null,
+      reviewedByName: null,
+      reviewedAt: null,
+      reviewComment: null,
+      canReview: false,
+      ownerReportingDepth: null,
+      relatedIndicatorId: null,
+      relatedIndicatorName: null,
+      createdBy: null,
+      creatorName: null,
+      createdAt: '2026-08-01T00:00:00.000Z',
+      updatedAt: '2026-08-01T00:00:00.000Z',
+    }])),
+  }));
+  await page.route('**/api/v1/departments**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([{ id: 'dept-1', name: '销售部', isActive: true, children: [] }])),
+  }));
   await page.route('**/api/v1/tasks/task-goal-1/indicators', (route) => {
     requests.push(route.request());
     return route.fulfill({
@@ -150,7 +189,7 @@ test.describe('goal setting responsive workspace', () => {
     expect(monthlyReviewRequests).toBe(0);
   });
 
-  test('uses a reference-style PC workspace and separates draft, add-next, and submit actions', async ({ page }) => {
+  test('uses the compact mode by default and switches to a complete PC editor without losing data', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1000 });
     const requests: Request[] = [];
     await mockGoalSetting(page, requests);
@@ -158,23 +197,55 @@ test.describe('goal setting responsive workspace', () => {
     await page.goto('/tasks/task-goal-1?stage=goal-setting');
 
     const workspace = page.getByTestId('goal-setting-workspace');
-    const reference = page.getByTestId('performance-form-reference');
     await expect(workspace).toBeVisible();
-    await expect(reference).toBeVisible();
-    await expect(reference.getByTestId('performance-reference-panel')).toBeVisible();
-    await expect(page.getByRole('button', { name: '保存', exact: true })).toBeVisible();
-    await expect(page.getByRole('button', { name: '保存并添加下一个' })).toBeVisible();
+    await expect(page.getByTestId('performance-form-reference')).toHaveCount(0);
+    await expect(page.getByTestId('goal-setting-reference-open')).toBeVisible();
+    await expect(page.getByTestId('goal-setting-simple-editor')).toBeVisible();
+    await expect(page.getByTestId('goal-setting-complete-fields')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '添加目标' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '从指标库引入' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '保存草稿' })).toBeVisible();
     await expect(page.getByRole('button', { name: '提交主管审核' })).toBeVisible();
+    await expect(page.getByTestId('indicator-visibility-indicator-1')).toBeVisible();
+    await expect(page.getByTestId('goal-align-open-0')).toBeVisible();
 
-    const workspaceBox = await workspace.boundingBox();
-    const referenceBox = await reference.boundingBox();
-    expect(workspaceBox).not.toBeNull();
-    expect(referenceBox).not.toBeNull();
-    expect(referenceBox!.x).toBeGreaterThan(workspaceBox!.x + workspaceBox!.width * 0.55);
+    await page.getByTestId('goal-name-input-0').fill('重点客户续约与增购');
+    await page.getByRole('button', { name: '切换到完整模式' }).click();
+    await expect(page.getByTestId('goal-setting-complete-editor')).toBeVisible();
+    await expect(page.getByTestId('goal-setting-complete-fields')).toBeVisible();
+    await expect(page.getByTestId('goal-setting-complete-fields').getByText('描述')).toBeVisible();
+    await expect(page.getByTestId('goal-setting-complete-fields').getByText('衡量标准')).toBeVisible();
+    await expect(page.getByText('目标量', { exact: true })).toBeVisible();
+    await expect(page.getByText('完成量', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('goal-name-input-0')).toHaveValue('重点客户续约与增购');
 
-    await page.getByRole('button', { name: '保存', exact: true }).click();
+    await page.getByTestId('goal-description-input-0').fill('完成重点客户续约并推动增购');
+    await page.getByTestId('goal-standard-input-0').fill('续约率达到 90%');
+    await page.getByTestId('goal-target-input-0').fill('90');
+    await page.getByTestId('goal-unit-input-0').fill('%');
+
+    await page.getByTestId('goal-align-open-0').click();
+    await page.getByTestId('goal-align-select-0').click();
+    await page.getByRole('option', { name: '提升公司重点客户续约率' }).click();
+    await page.keyboard.press('Escape');
+
+    await page.getByTestId('indicator-visibility-indicator-1').click();
+    await page.getByRole('option', { name: '全公司可见' }).click();
+
+    await page.getByRole('button', { name: '保存草稿' }).click();
     await expect.poll(() => requests.length).toBe(1);
-    expect(requests[0].postDataJSON()).toMatchObject({ action: 'save' });
+    expect(requests[0].postDataJSON()).toMatchObject({
+      action: 'save',
+      instances: [{
+        name: '重点客户续约与增购',
+        description: '完成重点客户续约并推动增购',
+        scoringStandard: '续约率达到 90%',
+        targetValueText: '90',
+        unit: '%',
+        visibilityScope: 'company',
+        alignedObjectiveIds: ['11111111-1111-4111-8111-111111111111'],
+      }],
+    });
 
     await page.getByRole('button', { name: '提交主管审核' }).click();
     await expect(page.getByTestId('goal-weight-feedback')).toContainText('提交前需调整为 100%');
@@ -184,26 +255,28 @@ test.describe('goal setting responsive workspace', () => {
     await page.getByRole('button', { name: '提交主管审核' }).click();
     await expect.poll(() => requests.length).toBe(2);
     expect(requests[1].postDataJSON()).toMatchObject({ action: 'submit' });
+
+    await page.getByTestId('goal-setting-reference-open').click();
+    await expect(page.getByTestId('goal-setting-reference-drawer')).toBeVisible();
+    await expect(page.getByTestId('performance-reference-panel')).toBeVisible();
   });
 
-  test('uses one column at 390 with collapsible references and an unobstructed fixed submit bar', async ({ page }) => {
+  test('turns both modes into mobile cards with no horizontal overflow or covered final row', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await mockGoalSetting(page, []);
 
     await page.goto('/tasks/task-goal-1?stage=goal-setting');
 
-    const reference = page.getByTestId('performance-form-reference');
-    await expect(reference.getByRole('button', { name: '展开参考信息' })).toBeVisible();
-    await expect(reference.getByTestId('performance-reference-panel')).toBeHidden();
-    await reference.getByRole('button', { name: '展开参考信息' }).click();
-    await expect(reference.getByTestId('performance-reference-panel')).toBeVisible();
+    await expect(page.getByTestId('goal-setting-simple-editor')).toBeVisible();
+    await page.getByRole('button', { name: '切换到完整模式' }).click();
+    await expect(page.getByTestId('goal-setting-complete-editor')).toBeVisible();
 
     const actionBar = page.getByTestId('goal-setting-actions');
     await expect(actionBar).toHaveCSS('position', 'fixed');
     await expect(actionBar.getByRole('button', { name: '提交主管审核' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
-    const lastGoal = page.getByTestId('goal-setting-card').last();
+    const lastGoal = page.getByTestId('goal-setting-row').last();
     await lastGoal.scrollIntoViewIfNeeded();
     const actionBox = await actionBar.boundingBox();
     const lastGoalBox = await lastGoal.boundingBox();

@@ -38,6 +38,7 @@ const cycle = ref<AssessmentCycle | null>(null);
 const cycleLoading = ref(false);
 const actionLoading = ref(false);
 const reminding = ref(false);
+const goalSettingReferenceOpen = ref(false);
 const indicatorSnapshotRef = ref<{ clearSelfEvalDraft: () => void; addGoal: () => void } | null>(null);
 
 const task = computed(() => taskStore.detail);
@@ -68,7 +69,7 @@ const performanceStageLabels: Record<TaskStageKey, string> = {
 };
 
 const performanceStageCardTitles: Record<TaskStageKey, string> = {
-  'goal-setting': '目标制定',
+  'goal-setting': '考核指标',
   'goal-confirmation': '目标确认',
   'self-eval': '员工自评',
   result: '结果信息',
@@ -391,6 +392,14 @@ async function handleRemind() {
         </div>
         <div class="performance-detail__topbar-actions">
           <el-button
+            v-if="showGoalSettingReference"
+            data-testid="goal-setting-reference-open"
+            plain
+            @click="goalSettingReferenceOpen = true"
+          >
+            参考信息
+          </el-button>
+          <el-button
             v-if="workflowContext.canRemind && isCurrentPerformanceStage"
             plain
             :loading="reminding"
@@ -423,7 +432,7 @@ async function handleRemind() {
       </section>
 
       <PerformanceFormWorkspace
-        :show-reference="showGoalSettingReference"
+        :show-reference="false"
         :workspace-test-id="showGoalSettingReference ? 'goal-setting-workspace' : undefined"
       >
         <template #main>
@@ -449,6 +458,7 @@ async function handleRemind() {
             v-else-if="requestedPerformanceStage !== 'result'"
             ref="indicatorSnapshotRef"
             :task-id="task.id"
+            :cycle-id="task.cycleId"
             :title="performanceStageCardTitle"
             :instances="task.indicatorInstances"
             :can-edit="canEditIndicators"
@@ -556,6 +566,21 @@ async function handleRemind() {
           />
         </template>
       </PerformanceFormWorkspace>
+
+      <el-drawer
+        v-model="goalSettingReferenceOpen"
+        title="参考信息"
+        size="min(430px, 92vw)"
+        class="goal-setting-reference-drawer"
+        data-testid="goal-setting-reference-drawer"
+      >
+        <PerformanceReferencePanel
+          :cycle-id="task.cycleId"
+          :employee-id="task.employeeId"
+          :indicators="task.indicatorInstances"
+          :flow-records="task.flowRecords"
+        />
+      </el-drawer>
     </template>
 
     <div v-else-if="taskStore.error" class="error-state">

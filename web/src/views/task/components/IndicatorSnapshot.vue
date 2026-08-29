@@ -9,15 +9,24 @@ import ChartCard from '@/components/common/ChartCard.vue';
 import PerformanceIndicatorList, {
   type PerformanceIndicatorRow,
 } from './PerformanceIndicatorList.vue';
+import IndicatorVisibilityEditor, {
+  type IndicatorVisibilitySelection,
+  type VisibilityDepartmentOption,
+} from './IndicatorVisibilityEditor.vue';
 import { indicatorsApi } from '@/api/indicators.api';
 import { templatesApi } from '@/api/templates.api';
 import { uploadApi } from '@/api/upload.api';
+import { departmentsApi } from '@/api/departments.api';
+import { objectivesApi } from '@/api/objectives.api';
 import type {
   AssessmentTemplate,
   Attachment,
+  Department,
   FlowRecord,
   Indicator,
   IndicatorInstance,
+  Objective,
+  Paginated,
   SetIndicatorBody,
   SelfEvalSummary,
   SubmitSelfEvalBody,
@@ -67,6 +76,7 @@ const props = defineProps<{
   canConfirm: boolean;
   canReject?: boolean;
   title?: string;
+  cycleId?: string | null;
   deptId?: string | null;
   employeeId?: string | null;
   canUseTemplate?: boolean;
@@ -130,6 +140,30 @@ const snapshotValidationIds = ref<string[]>([]);
 const snapshotNameErrors = ref<Record<string, string>>({});
 const snapshotWeightError = ref('');
 const advancedSettingIds = ref(new Set<string>());
+type GoalSettingMode = 'simple' | 'complete';
+const GOAL_SETTING_MODE_KEY = 'kayford.goal-setting.mode';
+const goalSettingMode = ref<GoalSettingMode>(readGoalSettingMode());
+const goalSettingOptionsLoading = ref(false);
+const goalSettingOptionsLoaded = ref(false);
+const goalAlignmentOptions = ref<Objective[]>([]);
+const goalVisibilityDepartments = ref<VisibilityDepartmentOption[]>([]);
+
+function readGoalSettingMode(): GoalSettingMode {
+  try {
+    return window.localStorage.getItem(GOAL_SETTING_MODE_KEY) === 'complete' ? 'complete' : 'simple';
+  } catch {
+    return 'simple';
+  }
+}
+
+function setGoalSettingMode(mode: GoalSettingMode) {
+  goalSettingMode.value = mode;
+  try {
+    window.localStorage.setItem(GOAL_SETTING_MODE_KEY, mode);
+  } catch {
+    // The editor still works when browser storage is unavailable.
+  }
+}
 
 const indicatorOptions = computed(() => {
   const keyword = indicatorSearchKeyword.value.trim().toLowerCase();
@@ -292,6 +326,14 @@ watch(
     advancedSettingIds.value = new Set();
   },
   { immediate: true, deep: true },
+);
+
+watch(
+  () => [props.canEdit, props.cycleId] as const,
+  ([canEdit]) => {
+    if (canEdit) void loadGoalSettingOptions();
+  },
+  { immediate: true },
 );
 
 function initSelfEvalForm() {
@@ -566,6 +608,71 @@ async function loadReferences() {
   } finally {
     referenceLoading.value = false;
   }
+}
+
+function flattenDepartmentOptions(items: Department[]): VisibilityDepartmentOption[] {
+  const result: VisibilityDepartmentOption[] = [];
+  const visit = (nodes: Department[]) => {
+    for (const department of nodes) {
+      if (department.isActive !== false) result.push({ id: department.id, name: department.name });
+      if (department.children?.length) visit(department.children);
+    }
+  };
+  visit(items);
+  return result;
+}
+
+function objectiveItems(result: Objective[] | Paginated<Objective>): Objective[] {
+  return Array.isArray(result) ? result : result.items;
+}
+
+async function loadGoalSettingOptions() {
+  if (goalSettingOptionsLoading.value || goalSettingOptionsLoaded.value) return;
+  goalSettingOptionsLoading.value = true;
+  try {
+    const [objectiveResult, departmentResult] = await Promise.allSettled([
+      objectivesApi.findAll({
+        cycleId: props.cycleId || undefined,
+        page: 1,
+        pageSize: 200,
+        flat: true,
+      }),
+      departmentsApi.findAll({ isActive: true, flat: true }),
+    ]);
+    if (objectiveResult.status === 'fulfilled') {
+      goalAlignmentOptions.value = objectiveItems(objectiveResult.value);
+    }
+    if (departmentResult.status === 'fulfilled') {
+      goalVisibilityDepartments.value = flattenDepartmentOptions(departmentResult.value);
+    }
+    goalSettingOptionsLoaded.value = true;
+  } finally {
+    goalSettingOptionsLoading.value = false;
+  }
+}
+
+function updateEditableVisibility(index: number, selection: IndicatorVisibilitySelection) {
+  const item = editableItems[index];
+  if (!item) return;
+  item.visibilityScope = selection.visibilityScope;
+  item.visibleDepartmentIds = [...selection.visibleDepartmentIds];
+  item.visibleUserIds = [...selection.visibleUserIds];
+}
+
+function objectiveLabel(id: string, index: number): string {
+  return goalAlignmentOptions.value.find((objective) => objective.id === id)?.title
+    ?? props.instances[index]?.alignedObjectives.find((objective) => objective.id === id)?.title
+    ?? '已对齐目标';
+}
+
+function targetInputValue(item: SetIndicatorBody['instances'][number]): string {
+  if (item.targetValueText) return item.targetValueText;
+  return item.targetValue == null ? '' : String(item.targetValue);
+}
+
+function setTargetInputValue(item: SetIndicatorBody['instances'][number], value: string) {
+  item.targetValueText = value;
+  item.targetValue = undefined;
 }
 
 function createEmptyItem(): SetIndicatorBody['instances'][number] {
@@ -1044,13 +1151,10 @@ function handleAttachmentsChange(attachments: Attachment[]) {
     <template #extra>
       <div
         v-if="canEdit || canConfirm || canReject"
-        class="actions"
+        class="goal-card-head-actions"
         data-testid="performance-stage-actions"
       >
-        <template v-if="canEdit">
-          <el-button :loading="loading" @click="handleSave('save')">保存</el-button>
-          <el-button type="primary" :loading="loading" @click="handleSaveAndAdd">保存并添加下一个</el-button>
-        </template>
+        <span v-if="canEdit" class="goal-weight-pill">维度权重：{{ displayedWeightTotal.percentText }}%</span>
         <el-button v-if="canReject" plain type="danger" :icon="Close" :loading="loading" @click="rejectVisible = true">
           {{ rejectLabel || '退回指标' }}
         </el-button>
@@ -1061,28 +1165,98 @@ function handleAttachmentsChange(attachments: Attachment[]) {
     </template>
 
     <template v-if="canEdit">
-      <div class="simple-goal-list">
+      <div
+        class="goal-setting-editor"
+        :class="`is-${goalSettingMode}`"
+        :data-testid="goalSettingMode === 'simple' ? 'goal-setting-simple-editor' : 'goal-setting-complete-editor'"
+      >
         <article
           v-for="(item, index) in editableItems"
           :key="editableRowIds[index]"
-          class="simple-goal-card"
-          data-testid="goal-setting-card"
+          class="goal-setting-row"
+          data-testid="goal-setting-row"
         >
-          <header><strong>目标 {{ index + 1 }}</strong><el-button link type="danger" :icon="Delete" @click="removeItem(index)">删除</el-button></header>
-          <div class="simple-goal-grid">
+          <div class="goal-setting-row__meta">
+            <span class="goal-setting-row__index">{{ index + 1 }}</span>
+            <div class="goal-setting-row__alignment">
+              <el-popover
+                trigger="click"
+                placement="bottom-start"
+                :width="360"
+                @show="loadGoalSettingOptions"
+              >
+                <template #reference>
+                  <el-button
+                    link
+                    type="primary"
+                    :data-testid="`goal-align-open-${index}`"
+                  >
+                    + 添加对齐
+                  </el-button>
+                </template>
+                <div class="goal-alignment-picker">
+                  <strong>选择要对齐的上级或协同目标</strong>
+                  <el-select
+                    v-model="item.alignedObjectiveIds"
+                    multiple
+                    filterable
+                    collapse-tags
+                    collapse-tags-tooltip
+                    :loading="goalSettingOptionsLoading"
+                    :data-testid="`goal-align-select-${index}`"
+                    placeholder="搜索目标"
+                  >
+                    <el-option
+                      v-for="objective in goalAlignmentOptions"
+                      :key="objective.id"
+                      :label="objective.title"
+                      :value="objective.id"
+                    />
+                  </el-select>
+                  <el-empty
+                    v-if="!goalSettingOptionsLoading && goalAlignmentOptions.length === 0"
+                    description="当前周期暂无可对齐目标"
+                    :image-size="44"
+                  />
+                </div>
+              </el-popover>
+              <el-tag
+                v-for="objectiveId in item.alignedObjectiveIds"
+                :key="objectiveId"
+                size="small"
+                effect="plain"
+              >
+                {{ objectiveLabel(objectiveId, index) }}
+              </el-tag>
+            </div>
+            <IndicatorVisibilityEditor
+              class="goal-setting-row__visibility"
+              :model-value="{
+                visibilityScope: item.visibilityScope,
+                visibleDepartmentIds: item.visibleDepartmentIds,
+                visibleUserIds: item.visibleUserIds,
+              }"
+              :indicator-id="editableRowIds[index]"
+              :departments="goalVisibilityDepartments"
+              :disabled="loading"
+              @update:model-value="updateEditableVisibility(index, $event)"
+            />
+          </div>
+
+          <div class="goal-setting-row__primary">
             <label class="goal-name" :class="{ 'is-invalid': snapshotNameErrors[editableRowIds[index]] }">
-              <span>名称</span>
               <el-input
                 v-model="item.name"
+                :data-testid="`goal-name-input-${index}`"
                 maxlength="200"
-                placeholder="请输入目标名称"
+                placeholder="请输入目标"
                 @update:model-value="clearSnapshotNameError(editableRowIds[index])"
               />
               <em v-if="snapshotNameErrors[editableRowIds[index]]" class="goal-field-error">
                 {{ snapshotNameErrors[editableRowIds[index]] }}
               </em>
             </label>
-            <label>
+            <label class="goal-weight-input">
               <span>权重</span>
               <el-input-number
                 :data-testid="`goal-weight-input-${index}`"
@@ -1092,28 +1266,138 @@ function handleAttachmentsChange(attachments: Attachment[]) {
                 :precision="2"
                 @update:model-value="(value?: number) => setWeightPercent(item, value)"
               />
+              <span>%</span>
             </label>
-            <label class="is-wide"><span>描述</span><el-input v-model="item.description" type="textarea" :rows="2" placeholder="说明目标内容" /></label>
-            <label class="is-wide"><span>标准</span><el-input v-model="item.scoringStandard" type="textarea" :rows="2" placeholder="说明完成或评价标准" /></label>
+            <el-button
+              class="goal-setting-row__delete"
+              link
+              type="danger"
+              :icon="Delete"
+              :aria-label="`删除目标 ${index + 1}`"
+              @click="removeItem(index)"
+            />
+          </div>
+
+          <div
+            v-if="goalSettingMode === 'complete'"
+            class="goal-setting-row__complete"
+            data-testid="goal-setting-complete-fields"
+          >
+            <label>
+              <span><i>*</i> 描述</span>
+              <el-input
+                v-model="item.description"
+                :data-testid="`goal-description-input-${index}`"
+                type="textarea"
+                :rows="3"
+                maxlength="500"
+                placeholder="说明目标内容、范围与关键交付"
+              />
+            </label>
+            <label>
+              <span><i>*</i> 衡量标准</span>
+              <el-input
+                v-model="item.scoringStandard"
+                :data-testid="`goal-standard-input-${index}`"
+                type="textarea"
+                :rows="3"
+                maxlength="500"
+                placeholder="说明达成条件、评价口径或分档标准"
+              />
+            </label>
+            <div class="goal-setting-row__quantities">
+              <label>
+                <span>目标量</span>
+                <div class="goal-quantity-inputs">
+                  <el-input
+                    :model-value="targetInputValue(item)"
+                    :data-testid="`goal-target-input-${index}`"
+                    maxlength="100"
+                    placeholder="填写目标值"
+                    @update:model-value="(value: string) => setTargetInputValue(item, value)"
+                  />
+                  <el-input
+                    v-model="item.unit"
+                    :data-testid="`goal-unit-input-${index}`"
+                    maxlength="30"
+                    placeholder="单位"
+                  />
+                </div>
+              </label>
+              <label>
+                <span>完成量</span>
+                <div class="goal-quantity-inputs">
+                  <el-input disabled placeholder="目标制定阶段无需填写" />
+                  <el-input :model-value="item.unit" disabled placeholder="单位" />
+                </div>
+              </label>
+            </div>
           </div>
         </article>
       </div>
-      <div class="simple-goal-footer">
-        <el-button plain :icon="Plus" @click="addItem">添加目标</el-button>
+
+      <div class="goal-setting-tools">
+        <div class="goal-setting-tools__add">
+          <el-button plain :icon="Plus" @click="addItem">添加目标</el-button>
+          <el-popover
+            v-model:visible="indicatorPickerVisible"
+            trigger="click"
+            placement="bottom-start"
+            :width="460"
+            popper-class="indicator-picker-popover"
+            @show="openIndicatorPicker"
+          >
+            <template #reference>
+              <el-button plain>从指标库引入</el-button>
+            </template>
+            <div class="indicator-picker">
+              <el-input
+                v-model="indicatorSearchKeyword"
+                clearable
+                placeholder="搜索指标库：考核维度 / 指标 / 描述"
+              />
+              <div v-loading="referenceLoading" class="indicator-picker__list">
+                <button
+                  v-for="opt in indicatorOptions"
+                  :key="opt.value"
+                  class="indicator-picker__item"
+                  type="button"
+                  @click="addLibraryIndicator(opt.value)"
+                >
+                  <span class="indicator-picker__main">
+                    <span>{{ opt.item.name }}</span>
+                    <span class="indicator-picker__meta">{{ opt.item.category || opt.item.groupName || opt.item.type }}</span>
+                  </span>
+                  <span v-if="opt.item.description" class="indicator-picker__desc">{{ opt.item.description }}</span>
+                </button>
+                <el-empty v-if="!referenceLoading && indicatorOptions.length === 0" description="没有匹配的指标" :image-size="48" />
+              </div>
+              <div class="indicator-picker__footer">
+                <el-button :icon="Plus" link type="primary" @click="addBlankIndicator">添加空白目标</el-button>
+              </div>
+            </div>
+          </el-popover>
+        </div>
+        <el-button
+          plain
+          class="goal-setting-mode-switch"
+          :aria-label="goalSettingMode === 'simple' ? '切换到完整模式' : '切换到简洁模式'"
+          @click="setGoalSettingMode(goalSettingMode === 'simple' ? 'complete' : 'simple')"
+        >
+          {{ goalSettingMode === 'simple' ? '完整模式' : '简洁模式' }}
+        </el-button>
       </div>
       <footer class="goal-setting-action-bar" data-testid="goal-setting-actions">
-        <span
-          data-testid="goal-weight-feedback"
-          :class="{
-            'is-ready': isWeightReadyToSubmit && !snapshotWeightError,
-            'is-danger': Boolean(snapshotWeightError) || isWeightOverLimit,
-          }"
-        >
-          {{ goalWeightFeedback }}
-        </span>
-        <el-button type="primary" :loading="loading" @click="handleSave('submit')">
-          {{ submitLabel || saveLabel || '提交' }}
-        </el-button>
+        <span data-testid="goal-weight-feedback" :class="{
+          'is-ready': isWeightReadyToSubmit && !snapshotWeightError,
+          'is-danger': Boolean(snapshotWeightError) || isWeightOverLimit,
+        }">{{ goalWeightFeedback }}</span>
+        <div class="goal-setting-action-bar__buttons">
+          <el-button :loading="loading" @click="handleSave('save')">保存草稿</el-button>
+          <el-button type="primary" :loading="loading" @click="handleSave('submit')">
+            {{ submitLabel || saveLabel || '提交' }}
+          </el-button>
+        </div>
       </footer>
     </template>
 
@@ -1563,22 +1847,50 @@ function handleAttachmentsChange(attachments: Attachment[]) {
 </template>
 
 <style scoped>
-.simple-goal-list { display: grid; gap: 12px; }
-.simple-goal-card { padding: 16px; border: 1px solid var(--el-border-color-lighter); border-radius: 10px; background: #fff; }
-.simple-goal-card header, .simple-goal-footer { display: flex; align-items: center; justify-content: space-between; }
-.simple-goal-card header { margin-bottom: 12px; }
-.simple-goal-grid { display: grid; grid-template-columns: minmax(0, 1fr) 150px; gap: 12px; }
-.simple-goal-grid label { display: grid; gap: 7px; color: var(--el-text-color-secondary); font-size: 13px; }
-.simple-goal-grid .is-wide { grid-column: 1 / -1; }
-.simple-goal-grid :deep(.el-input-number) { width: 100%; }
-.simple-goal-grid label.is-invalid :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--el-color-danger) inset; }
+.goal-card-head-actions { display: flex; align-items: center; gap: 8px; }
+.goal-weight-pill { display: inline-flex; min-height: 30px; align-items: center; padding: 0 10px; border-radius: 6px; background: #fff7df; color: #d99016; font-size: 12px; font-weight: 600; }
+.goal-setting-editor { display: grid; gap: 0; }
+.goal-setting-row { position: relative; min-width: 0; padding: 10px 0 14px 28px; border-bottom: 1px solid #edf0f5; }
+.goal-setting-row:first-child { padding-top: 2px; }
+.goal-setting-row__meta { min-height: 28px; display: grid; grid-template-columns: minmax(180px, 1fr) minmax(190px, 280px); align-items: center; gap: 12px; }
+.goal-setting-row__index { position: absolute; top: 43px; left: 0; width: 22px; height: 22px; display: inline-flex; align-items: center; justify-content: center; border-radius: 8px; background: #eaf3ff; color: #2685eb; font-size: 12px; font-weight: 700; }
+.goal-setting-row:first-child .goal-setting-row__index { top: 35px; }
+.goal-setting-row__alignment { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
+.goal-setting-row__alignment :deep(.el-button) { padding: 0; font-size: 12px; }
+.goal-setting-row__alignment :deep(.el-tag) { max-width: min(260px, 100%); }
+.goal-setting-row__visibility { justify-self: end; width: min(100%, 280px); }
+.goal-setting-row__primary { min-width: 0; display: grid; grid-template-columns: minmax(220px, 1fr) 116px 28px; align-items: start; gap: 10px; }
+.goal-setting-row__primary :deep(.el-input__wrapper),
+.goal-setting-row__primary :deep(.el-select__wrapper),
+.goal-setting-row__complete :deep(.el-input__wrapper),
+.goal-setting-row__complete :deep(.el-select__wrapper) { min-height: 34px; }
+.goal-setting-row__primary .goal-name { min-width: 0; display: grid; gap: 3px; }
+.goal-setting-row__primary .goal-name.is-invalid :deep(.el-input__wrapper) { box-shadow: 0 0 0 1px var(--el-color-danger) inset; }
+.goal-weight-input { height: 34px; display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; overflow: hidden; border: 1px solid #dcdfe6; border-radius: 4px; color: #667085; font-size: 12px; }
+.goal-weight-input > span { padding: 0 7px; white-space: nowrap; }
+.goal-weight-input :deep(.el-input-number) { width: 100%; }
+.goal-weight-input :deep(.el-input__wrapper) { padding: 0; box-shadow: none; }
+.goal-weight-input :deep(.el-input-number__decrease), .goal-weight-input :deep(.el-input-number__increase) { display: none; }
+.goal-setting-row__delete { width: 28px; min-height: 34px; margin: 0; }
+.goal-setting-row__complete { display: grid; gap: 12px; padding-top: 12px; }
+.goal-setting-row__complete > label { min-width: 0; display: grid; gap: 6px; color: #687386; font-size: 12px; }
+.goal-setting-row__complete > label > span i { color: var(--el-color-danger); font-style: normal; }
+.goal-setting-row__quantities { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.goal-setting-row__quantities > label { min-width: 0; display: grid; gap: 6px; color: #687386; font-size: 12px; }
+.goal-quantity-inputs { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(70px, .42fr); gap: 6px; }
+.goal-setting-tools { display: grid; justify-items: start; gap: 14px; padding-top: 14px; }
+.goal-setting-tools__add { display: flex; flex-wrap: wrap; gap: 8px; }
+.goal-setting-mode-switch { color: #2685eb; border-color: #2685eb; }
+.goal-alignment-picker { display: grid; gap: 10px; }
+.goal-alignment-picker > strong { color: #303744; font-size: 13px; }
+.goal-alignment-picker :deep(.el-select) { width: 100%; }
 .goal-field-error { color: var(--el-color-danger); font-size: 12px; font-style: normal; line-height: 18px; }
-.simple-goal-footer { margin-top: 14px; color: var(--el-text-color-secondary); }
 .goal-setting-action-bar { position: sticky; z-index: 5; bottom: 10px; display: flex; align-items: center; justify-content: flex-end; gap: 16px; margin-top: 16px; padding: 12px 14px; border: 1px solid #dfe5f0; border-radius: 10px; background: rgb(255 255 255 / 96%); box-shadow: 0 8px 24px rgb(31 45 61 / 10%); backdrop-filter: blur(10px); }
 .goal-setting-action-bar > span { color: #9a6814; font-size: 13px; }
 .goal-setting-action-bar > span.is-ready { color: var(--el-color-success); }
 .goal-setting-action-bar > span.is-danger { color: var(--el-color-danger); }
-.goal-setting-action-bar .el-button { min-width: 128px; }
+.goal-setting-action-bar__buttons { display: flex; gap: 8px; }
+.goal-setting-action-bar__buttons .el-button { min-width: 112px; margin-left: 0; }
 .actions {
   display: flex;
   gap: 8px;
@@ -2223,13 +2535,26 @@ function handleAttachmentsChange(attachments: Attachment[]) {
 }
 
 @media (max-width: 768px) {
-  .simple-goal-list { padding-bottom: 96px; }
-  .simple-goal-card { padding: 14px 12px; scroll-margin-bottom: 112px; }
-  .simple-goal-grid { grid-template-columns: minmax(0, 1fr); }
-  .simple-goal-grid .is-wide { grid-column: auto; }
-  .goal-setting-action-bar { position: fixed; z-index: 40; right: 0; bottom: 0; left: 0; min-width: 0; margin: 0; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 0; }
+  .goal-card-head-actions { flex-wrap: wrap; justify-content: flex-end; }
+  .goal-setting-editor { padding-bottom: 104px; }
+  .goal-setting-row { padding: 12px 0 16px; scroll-margin-bottom: 126px; }
+  .goal-setting-row:first-child { padding-top: 4px; }
+  .goal-setting-row__index, .goal-setting-row:first-child .goal-setting-row__index { position: static; grid-row: 1 / span 2; align-self: center; }
+  .goal-setting-row__meta { grid-template-columns: 24px minmax(0, 1fr); gap: 7px; }
+  .goal-setting-row__alignment { grid-column: 2; }
+  .goal-setting-row__visibility { grid-column: 2; justify-self: stretch; width: 100%; }
+  .goal-setting-row__primary { grid-template-columns: minmax(0, 1fr) 102px 26px; gap: 7px; padding-top: 8px; }
+  .goal-weight-input > span:first-child { display: none; }
+  .goal-weight-input { grid-template-columns: minmax(0, 1fr) auto; }
+  .goal-setting-row__complete { padding-top: 12px; }
+  .goal-setting-row__quantities { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .goal-quantity-inputs { grid-template-columns: minmax(0, 1fr) 72px; }
+  .goal-setting-tools { align-items: stretch; flex-direction: column; padding-bottom: 8px; }
+  .goal-setting-mode-switch { align-self: flex-start; }
+  .goal-setting-action-bar { position: fixed; z-index: 40; right: 0; bottom: 0; left: 0; min-width: 0; margin: 0; padding: 9px 12px calc(9px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 0; }
   .goal-setting-action-bar > span { min-width: 0; flex: 1; font-size: 12px; line-height: 17px; }
-  .goal-setting-action-bar .el-button { min-width: 120px; min-height: 44px; margin-left: 0; }
+  .goal-setting-action-bar__buttons { flex: none; }
+  .goal-setting-action-bar__buttons .el-button { min-width: 0; min-height: 42px; padding: 8px 12px; }
 
   .self-eval-guide__intro {
     align-items: flex-start;
@@ -2336,5 +2661,11 @@ function handleAttachmentsChange(attachments: Attachment[]) {
     flex-direction: column;
     gap: 8px;
   }
+}
+
+@media (max-width: 430px) {
+  .goal-setting-row__primary { grid-template-columns: minmax(0, 1fr) 88px 24px; }
+  .goal-setting-action-bar > span { max-width: 110px; }
+  .goal-setting-action-bar__buttons .el-button { padding: 8px 10px; }
 }
 </style>
