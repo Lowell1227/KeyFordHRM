@@ -1154,6 +1154,15 @@ function handleAttachmentsChange(attachments: Attachment[]) {
         class="goal-card-head-actions"
         data-testid="performance-stage-actions"
       >
+        <el-button
+          v-if="canEdit"
+          plain
+          class="goal-setting-mode-switch"
+          :aria-label="goalSettingMode === 'simple' ? '切换到完整模式' : '切换到简洁模式'"
+          @click="setGoalSettingMode(goalSettingMode === 'simple' ? 'complete' : 'simple')"
+        >
+          {{ goalSettingMode === 'simple' ? '完整模式' : '简洁模式' }}
+        </el-button>
         <span v-if="canEdit" class="goal-weight-pill">维度权重：{{ displayedWeightTotal.percentText }}%</span>
         <el-button v-if="canReject" plain type="danger" :icon="Close" :loading="loading" @click="rejectVisible = true">
           {{ rejectLabel || '退回指标' }}
@@ -1231,6 +1240,7 @@ function handleAttachmentsChange(attachments: Attachment[]) {
             </div>
             <IndicatorVisibilityEditor
               class="goal-setting-row__visibility"
+              :class="{ 'is-custom': item.visibilityScope === 'custom' }"
               :model-value="{
                 visibilityScope: item.visibilityScope,
                 visibleDepartmentIds: item.visibleDepartmentIds,
@@ -1378,14 +1388,6 @@ function handleAttachmentsChange(attachments: Attachment[]) {
             </div>
           </el-popover>
         </div>
-        <el-button
-          plain
-          class="goal-setting-mode-switch"
-          :aria-label="goalSettingMode === 'simple' ? '切换到完整模式' : '切换到简洁模式'"
-          @click="setGoalSettingMode(goalSettingMode === 'simple' ? 'complete' : 'simple')"
-        >
-          {{ goalSettingMode === 'simple' ? '完整模式' : '简洁模式' }}
-        </el-button>
       </div>
       <footer class="goal-setting-action-bar" data-testid="goal-setting-actions">
         <span data-testid="goal-weight-feedback" :class="{
@@ -1858,7 +1860,24 @@ function handleAttachmentsChange(attachments: Attachment[]) {
 .goal-setting-row__alignment { min-width: 0; display: flex; align-items: center; flex-wrap: wrap; gap: 5px; }
 .goal-setting-row__alignment :deep(.el-button) { padding: 0; font-size: 12px; }
 .goal-setting-row__alignment :deep(.el-tag) { max-width: min(260px, 100%); }
-.goal-setting-row__visibility { justify-self: end; width: min(100%, 280px); }
+.goal-setting-row__visibility { justify-self: end; width: min(100%, 240px); }
+.goal-setting-row__visibility.is-custom { width: min(100%, 560px); }
+.goal-setting-row__visibility :deep(.el-select__wrapper) {
+  min-height: 30px;
+  border-radius: 999px;
+  background: #eff6ff;
+  box-shadow: 0 0 0 1px #bfdbfe inset;
+}
+.goal-setting-row__visibility :deep(.el-select__wrapper:hover),
+.goal-setting-row__visibility :deep(.el-select__wrapper.is-focused) {
+  box-shadow: 0 0 0 1px #60a5fa inset;
+}
+.goal-setting-row__visibility :deep(.el-select__selected-item) {
+  color: #2563eb;
+  font-size: 12px;
+  font-weight: 600;
+}
+.goal-setting-row__visibility :deep(.el-select__caret) { color: #3b82f6; }
 .goal-setting-row__primary { min-width: 0; display: grid; grid-template-columns: minmax(220px, 1fr) 116px 28px; align-items: start; gap: 10px; }
 .goal-setting-row__primary :deep(.el-input__wrapper),
 .goal-setting-row__primary :deep(.el-select__wrapper),
@@ -2542,7 +2561,8 @@ function handleAttachmentsChange(attachments: Attachment[]) {
   .goal-setting-row__index, .goal-setting-row:first-child .goal-setting-row__index { position: static; grid-row: 1 / span 2; align-self: center; }
   .goal-setting-row__meta { grid-template-columns: 24px minmax(0, 1fr); gap: 7px; }
   .goal-setting-row__alignment { grid-column: 2; }
-  .goal-setting-row__visibility { grid-column: 2; justify-self: stretch; width: 100%; }
+  .goal-setting-row__visibility { grid-column: 2; justify-self: end; width: min(100%, 240px); }
+  .goal-setting-row__visibility.is-custom { width: 100%; }
   .goal-setting-row__primary { grid-template-columns: minmax(0, 1fr) 102px 26px; gap: 7px; padding-top: 8px; }
   .goal-weight-input > span:first-child { display: none; }
   .goal-weight-input { grid-template-columns: minmax(0, 1fr) auto; }
@@ -2550,7 +2570,6 @@ function handleAttachmentsChange(attachments: Attachment[]) {
   .goal-setting-row__quantities { grid-template-columns: minmax(0, 1fr); gap: 12px; }
   .goal-quantity-inputs { grid-template-columns: minmax(0, 1fr) 72px; }
   .goal-setting-tools { align-items: stretch; flex-direction: column; padding-bottom: 8px; }
-  .goal-setting-mode-switch { align-self: flex-start; }
   .goal-setting-action-bar { position: fixed; z-index: 40; right: 0; bottom: 0; left: 0; min-width: 0; margin: 0; padding: 9px 12px calc(9px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 0; }
   .goal-setting-action-bar > span { min-width: 0; flex: 1; font-size: 12px; line-height: 17px; }
   .goal-setting-action-bar__buttons { flex: none; }

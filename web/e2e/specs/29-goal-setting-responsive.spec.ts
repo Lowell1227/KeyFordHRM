@@ -205,9 +205,21 @@ test.describe('goal setting responsive workspace', () => {
     await expect(page.getByRole('button', { name: '添加目标' })).toBeVisible();
     await expect(page.getByRole('button', { name: '从指标库引入' })).toBeVisible();
     await expect(page.getByRole('button', { name: '保存草稿' })).toBeVisible();
-    await expect(page.getByRole('button', { name: '提交主管审核' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '提交上级审核' })).toBeVisible();
     await expect(page.getByTestId('indicator-visibility-indicator-1')).toBeVisible();
     await expect(page.getByTestId('goal-align-open-0')).toBeVisible();
+
+    const headerActions = page.getByTestId('performance-stage-actions');
+    await expect(headerActions.getByRole('button', { name: '切换到完整模式' })).toBeVisible();
+
+    const visibilityWrapper = page
+      .getByTestId('indicator-visibility-indicator-1')
+      .locator('.el-select__wrapper');
+    const nameWrapper = page.locator('.goal-name .el-input__wrapper').first();
+    await expect(visibilityWrapper).toHaveCSS('background-color', 'rgb(239, 246, 255)');
+    await expect(visibilityWrapper).toHaveCSS('border-radius', '999px');
+    expect(await visibilityWrapper.evaluate((element) => getComputedStyle(element).backgroundColor))
+      .not.toBe(await nameWrapper.evaluate((element) => getComputedStyle(element).backgroundColor));
 
     await page.getByTestId('goal-name-input-0').fill('重点客户续约与增购');
     await page.getByRole('button', { name: '切换到完整模式' }).click();
@@ -247,12 +259,12 @@ test.describe('goal setting responsive workspace', () => {
       }],
     });
 
-    await page.getByRole('button', { name: '提交主管审核' }).click();
+    await page.getByRole('button', { name: '提交上级审核' }).click();
     await expect(page.getByTestId('goal-weight-feedback')).toContainText('提交前需调整为 100%');
     expect(requests).toHaveLength(1);
 
     await page.getByTestId('goal-weight-input-0').locator('input').fill('100');
-    await page.getByRole('button', { name: '提交主管审核' }).click();
+    await page.getByRole('button', { name: '提交上级审核' }).click();
     await expect.poll(() => requests.length).toBe(2);
     expect(requests[1].postDataJSON()).toMatchObject({ action: 'submit' });
 
@@ -273,7 +285,7 @@ test.describe('goal setting responsive workspace', () => {
 
     const actionBar = page.getByTestId('goal-setting-actions');
     await expect(actionBar).toHaveCSS('position', 'fixed');
-    await expect(actionBar.getByRole('button', { name: '提交主管审核' })).toBeVisible();
+    await expect(actionBar.getByRole('button', { name: '提交上级审核' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 
     const lastGoal = page.getByTestId('goal-setting-row').last();

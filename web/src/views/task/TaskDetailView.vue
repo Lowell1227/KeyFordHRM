@@ -176,7 +176,7 @@ const canEditIndicators = computed(() => {
 });
 
 const indicatorSaveLabel = computed(() => {
-  if (permission.isTaskSelf.value) return '提交主管审核';
+  if (permission.isTaskSelf.value) return '提交上级审核';
   return '审核通过';
 });
 
