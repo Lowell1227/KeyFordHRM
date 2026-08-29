@@ -13,6 +13,12 @@ describe('CycleScheduleService', () => {
     expect(workdayStatus(new Date('2026-01-04T12:00:00+08:00'))).toEqual({ isWorkday: true, official: true });
   });
 
+  it('uses the included 2027 base calendar without falling back', () => {
+    expect(workdayStatus(new Date('2027-01-01T12:00:00+08:00'))).toEqual({ isWorkday: false, official: true });
+    expect(workdayStatus(new Date('2027-01-02T12:00:00+08:00'))).toEqual({ isWorkday: false, official: true });
+    expect(workdayStatus(new Date('2027-01-04T12:00:00+08:00'))).toEqual({ isWorkday: true, official: true });
+  });
+
   it('generates one monthly scoring schedule for each calendar month', () => {
     const preview = service.preview({
       type: 'quarterly',
@@ -87,7 +93,7 @@ describe('CycleScheduleService', () => {
     ]);
   });
 
-  it('warns without blocking for non-workday, cross-month, long, and overlapping schedules', () => {
+  it('accepts non-workday, cross-month, long, and overlapping custom schedules without warnings', () => {
     const plan = service.normalizeAndValidate({
       type: 'quarterly',
       scoringFrequency: 'monthly',
@@ -110,14 +116,7 @@ describe('CycleScheduleService', () => {
     });
 
     expect(plan.blockers).toEqual([]);
-    expect(plan.warnings.map((warning) => warning.code)).toEqual(
-      expect.arrayContaining([
-        'SCHEDULE_NON_WORKDAY',
-        'SCHEDULE_CROSS_MONTH',
-        'SCHEDULE_INTERVAL_OVER_10_WORKDAYS',
-        'SCHEDULE_OVERLAP',
-      ]),
-    );
+    expect(plan.warnings).toEqual([]);
   });
 
   it('generates a single cycle schedule for cycle scoring', () => {
@@ -131,7 +130,7 @@ describe('CycleScheduleService', () => {
     expect(preview.schedules).toEqual([expect.objectContaining({ periodKey: 'cycle' })]);
   });
 
-  it('warns when a cycle-scoring schedule node spans calendar months', () => {
+  it('accepts a cycle-scoring schedule that spans calendar months without warnings', () => {
     const plan = service.normalizeAndValidate({
       type: 'quarterly',
       scoringFrequency: 'cycle',
@@ -145,21 +144,22 @@ describe('CycleScheduleService', () => {
       }],
     });
 
-    expect(plan.warnings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'SCHEDULE_CROSS_MONTH', periodKey: 'cycle' }),
-    ]));
+    expect(plan.warnings).toEqual([]);
   });
 
-  it('warns explicitly when generated dates use the weekday fallback calendar', () => {
+  it('generates the December scoring schedule from the included 2027 base calendar', () => {
     const preview = service.preview({
       type: 'monthly',
       startDate: new Date('2026-12-01T00:00:00+08:00'),
       endDate: new Date('2026-12-31T00:00:00+08:00'),
     });
 
-    expect(preview.warnings).toEqual(expect.arrayContaining([
-      expect.objectContaining({ code: 'WORKDAY_CALENDAR_FALLBACK', periodKey: '2026-12' }),
-    ]));
+    expect(preview.warnings).toEqual([]);
+    expect(preview.schedules[0]).toMatchObject({
+      selfEvalOpenAt: '2027-01-04T09:00:00+08:00',
+      selfEvalDueAt: '2027-01-06T18:00:00+08:00',
+      managerDueAt: '2027-01-11T18:00:00+08:00',
+    });
   });
 
   it('keeps an explicitly exceptional month through normalization', () => {

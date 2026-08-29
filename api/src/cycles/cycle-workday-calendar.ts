@@ -36,6 +36,16 @@ const OFFICIAL_CALENDARS: Readonly<Record<number, ChinaWorkdayCalendar>> = {
       '2026-09-20', '2026-10-10',
     ]),
   },
+  // 国务院尚未发布 2027 年度调休安排；先按自然工作日和现行办法中
+  // 日期确定的法定节日生成默认排期，不预设尚未公布的调休工作日。
+  2027: {
+    holidays: new Set([
+      '2027-01-01',
+      '2027-05-01', '2027-05-02',
+      '2027-10-01', '2027-10-02', '2027-10-03',
+    ]),
+    makeupWorkdays: new Set(),
+  },
 };
 
 const FIXED_STATUTORY_HOLIDAYS = new Set(['01-01', '05-01', '05-02', '10-01', '10-02', '10-03']);

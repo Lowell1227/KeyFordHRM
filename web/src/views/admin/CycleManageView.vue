@@ -262,7 +262,6 @@ const createSchedulePeriodLabel = computed(() => {
   if (!createForm.startDate || !createForm.endDate) return '考核执行期未设置';
   return `考核执行期 ${dayjs(createForm.startDate).format('YYYY-MM-DD')}—${dayjs(createForm.endDate).format('YYYY-MM-DD')}`;
 });
-const createScheduleProvisionalYearLabel = computed(() => createScheduleProvisionalYears.value.join('、'));
 const createNotificationHint = computed(() => {
   if (createForm.notificationMode === 'off') return '本周期不发送钉钉通知';
   if (!notificationSettings.value?.effectiveEnabled) return '钉钉通知总开关已关闭，本周期暂不外发';
@@ -808,7 +807,7 @@ async function handleCreatePeriodChange(previousStartDate?: Date, previousEndDat
 
   try {
     await ElMessageBox.confirm(
-      `考核期间已由「${previousPeriod}」调整为「${nextPeriod}」。系统可以按照新的考核期间和中国法定工作日，重新生成全部 01–09 时间节点；若节点已经人工调整，也可以保留当前设置。`,
+      `考核期间已由「${previousPeriod}」调整为「${nextPeriod}」。系统可以按照新的考核期间和系统工作日日历，重新生成全部 01–09 时间节点；若节点已经人工调整，也可以保留当前设置。`,
       '是否同步调整时间节点？',
       {
         type: 'warning',
@@ -1088,29 +1087,6 @@ async function handleRestoreAllScoringSchedules() {
   await refreshScoringPlan({ reason: '将恢复 API 生成的全部默认评分计划' });
 }
 
-function getCreateScheduleBoundaryWarning(node: (typeof CREATE_SCHEDULE_NODES)[number]): string {
-  const value = createForm[node.key];
-  if (!value) return '';
-
-  if (
-    node.stage === 'preparation'
-    && createForm.startDate
-    && !dayjs(value).isBefore(createForm.startDate)
-  ) {
-    return '该时间已进入考核期间，仍可保存，请确认符合实际安排。';
-  }
-
-  if (
-    node.stage === 'result'
-    && createForm.endDate
-    && dayjs(value).isBefore(dayjs(createForm.endDate).add(1, 'day').startOf('day'))
-  ) {
-    return '该时间早于考核期间结束，仍可保存，请确认符合实际安排。';
-  }
-
-  return '';
-}
-
 async function focusFirstInvalidScheduleRow() {
   const issue = scoringPlan.scheduleBlockers[0];
   if (!issue) return;
@@ -1127,24 +1103,6 @@ async function focusFirstInvalidScheduleRow() {
       : 'self-eval-open-at';
   row.scrollIntoView({ block: 'center', behavior: 'smooth' });
   row.querySelector<HTMLElement>(`[data-testid="${fieldTestId}"] input`)?.focus();
-}
-
-async function confirmScheduleWarnings(): Promise<boolean> {
-  if (!isWorkflowV2Form.value || scoringPlan.scheduleWarnings.length === 0) return true;
-  try {
-    await ElMessageBox.confirm(
-      scoringPlan.scheduleWarnings.map((warning) => warning.message).join('；'),
-      '确认评分计划提示',
-      {
-        type: 'warning',
-        confirmButtonText: '确认并继续',
-        cancelButtonText: '返回调整',
-      },
-    );
-    return true;
-  } catch {
-    return false;
-  }
 }
 
 function buildCreateBody(): CreateCycleBody {
@@ -1239,8 +1197,6 @@ async function handleCreate(openWorkspace = false) {
     await focusFirstInvalidScheduleRow();
     return;
   }
-  if (!await confirmScheduleWarnings()) return;
-
   submitting.value = true;
   try {
     if (isEditMode.value && editingCycleId.value) {
@@ -1971,8 +1927,8 @@ onMounted(() => {
             <el-tag size="small" :type="createScheduleCustomized ? 'warning' : 'info'" effect="light">
               {{ createSchedulePlanLabel }}
             </el-tag>
-            <span>按中国法定工作日（含调休）</span>
-            <el-tooltip content="时间节点按法定工作日顺序生成，保存后不会因日历更新而自动改变" placement="top">
+            <span>按系统工作日日历生成</span>
+            <el-tooltip content="默认时间按系统已维护的工作日日历顺序生成，人工调整时可选择任意时间" placement="top">
               <el-icon><QuestionFilled /></el-icon>
             </el-tooltip>
           </div>
@@ -1996,7 +1952,7 @@ onMounted(() => {
               <template #title>
                 <div data-testid="cycle-advanced-schedule" class="advanced-group-title">
                   <strong>时间节点
-                    <el-tooltip content="默认随考核期间按法定工作日自动生成；调整任一节点后标记为已调整计划" placement="top">
+                    <el-tooltip content="默认随考核期间按系统工作日日历生成；调整任一节点后标记为已调整计划" placement="top">
                       <el-icon><QuestionFilled /></el-icon>
                     </el-tooltip>
                   </strong>
@@ -2007,14 +1963,6 @@ onMounted(() => {
                 <span>节点按实际业务顺序执行，开放时间为 09:00，截止时间为 18:00</span>
                 <el-button text type="primary" @click.stop="applyDefaultCreateSchedule">恢复默认计划</el-button>
               </div>
-              <div
-                v-if="createScheduleProvisionalYears.length"
-                class="schedule-calendar-warning"
-                data-testid="cycle-schedule-calendar-warning"
-              >
-                {{ createScheduleProvisionalYearLabel }} 年法定节假日日历尚未维护，相关节点暂按周一至周五排期，并避开元旦等固定法定节日；保存后不会自动变化。
-              </div>
-
               <section class="schedule-stage" aria-labelledby="schedule-stage-preparation">
                 <div class="schedule-stage__title">
                   <strong id="schedule-stage-preparation">目标准备</strong>
@@ -2038,11 +1986,6 @@ onMounted(() => {
                       :placeholder="`选择${node.label}`"
                       @change="handleCreateScheduleChange"
                     />
-                    <small
-                      v-if="getCreateScheduleBoundaryWarning(node)"
-                      class="schedule-node__warning"
-                      data-testid="cycle-schedule-boundary-warning"
-                    >{{ getCreateScheduleBoundaryWarning(node) }}</small>
                   </div>
                 </div>
               </section>
@@ -2074,11 +2017,6 @@ onMounted(() => {
                       :placeholder="`选择${node.label}`"
                       @change="handleCreateScheduleChange"
                     />
-                    <small
-                      v-if="getCreateScheduleBoundaryWarning(node)"
-                      class="schedule-node__warning"
-                      data-testid="cycle-schedule-boundary-warning"
-                    >{{ getCreateScheduleBoundaryWarning(node) }}</small>
                   </div>
                 </div>
               </section>
@@ -2625,17 +2563,6 @@ onMounted(() => {
   flex: none;
 }
 
-.schedule-calendar-warning {
-  margin-bottom: 14px;
-  padding: 10px 12px;
-  color: var(--el-color-warning-dark-2);
-  font-size: 12px;
-  line-height: 1.55;
-  background: var(--el-color-warning-light-9);
-  border: 1px solid var(--el-color-warning-light-7);
-  border-radius: 8px;
-}
-
 .schedule-stage {
   display: grid;
   gap: 8px;
@@ -2708,12 +2635,6 @@ onMounted(() => {
   display: grid;
   gap: 5px;
   min-width: 0;
-}
-
-.schedule-node__warning {
-  color: var(--el-color-danger);
-  font-size: 12px;
-  line-height: 1.4;
 }
 
 .schedule-node :deep(.el-date-editor) {

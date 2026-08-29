@@ -893,20 +893,18 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-08-18 09:00');
   });
 
-  test('uses official workdays and presents the default plan in business order', async ({ page }) => {
+  test('uses the included 2027 calendar without showing fallback guidance', async ({ page }) => {
     await mockCycleLaunchPage(page, { cycles: [] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
 
     await expect(page.getByTestId('cycle-plan-summary')).toContainText('系统默认计划');
-    await expect(page.getByTestId('cycle-plan-summary')).toContainText('按中国法定工作日（含调休）');
+    await expect(page.getByTestId('cycle-plan-summary')).toContainText('按系统工作日日历生成');
 
     await page.getByTestId('cycle-create-advanced').click();
     await page.getByTestId('cycle-advanced-schedule').click();
 
-    await expect(page.getByTestId('cycle-schedule-calendar-warning')).toContainText(
-      '2027 年法定节假日日历尚未维护，相关节点暂按周一至周五排期',
-    );
+    await expect(page.getByTestId('cycle-schedule-calendar-warning')).toHaveCount(0);
     await expect(page.getByTestId('cycle-schedule-period')).toHaveText('考核执行期 2026-10-01—2026-12-31');
 
     const nodes = page.getByTestId('cycle-schedule-node');
@@ -949,7 +947,7 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.getByTestId('cycle-plan-summary')).toContainText('已调整计划');
   });
 
-  test('shows inline reminders without blocking a schedule that crosses the performance period', async ({ page }) => {
+  test('allows any custom schedule time without boundary reminders', async ({ page }) => {
     const createBodies: unknown[] = [];
     await mockCycleLaunchPage(page, { cycles: [], createBodies });
     await page.goto('/cycles?group=attention');
@@ -969,9 +967,7 @@ test.describe('cycle launch entry UX', () => {
       await input.press('Enter');
     }
 
-    await expect(nodes.nth(0).getByTestId('cycle-schedule-boundary-warning')).toHaveText(
-      '该时间已进入考核期间，仍可保存，请确认符合实际安排。',
-    );
+    await expect(page.getByTestId('cycle-schedule-boundary-warning')).toHaveCount(0);
     await page.getByTestId('cycle-create-save-draft').click();
 
     await expect.poll(() => createBodies).toHaveLength(1);
@@ -1009,7 +1005,7 @@ test.describe('cycle launch entry UX', () => {
     const confirmation = page.getByRole('dialog', { name: '是否同步调整时间节点？' });
     await expect(confirmation).toContainText('2026-10-01—2026-12-31');
     await expect(confirmation).toContainText('2026-10-19—2026-11-30');
-    await expect(confirmation).toContainText('中国法定工作日');
+    await expect(confirmation).toContainText('系统工作日日历');
     await confirmation.getByRole('button', { name: '同步重新生成（推荐）' }).click();
 
     const nodes = dialog.getByTestId('cycle-schedule-node');

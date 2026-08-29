@@ -86,14 +86,7 @@ export class CycleScheduleService {
     );
     const warnings: ScheduleIssue[] = [];
 
-    for (const schedule of schedules) this.validateSchedule(schedule, blockers, warnings);
-    for (let index = 1; index < schedules.length; index += 1) {
-      const previous = schedules[index - 1];
-      const current = schedules[index];
-      if (current.selfEvalOpenAt < previous.managerDueAt) {
-        warnings.push({ code: 'SCHEDULE_OVERLAP', periodKey: current.periodKey, message: '本期自评与上一期主管评分时间重叠' });
-      }
-    }
+    for (const schedule of schedules) this.validateSchedule(schedule, blockers);
 
     return { scoringFrequency, reviewFrequency: 'cycle', schedules, blockers, warnings };
   }
@@ -117,7 +110,7 @@ export class CycleScheduleService {
     };
   }
 
-  private validateSchedule(schedule: ScheduleValues, blockers: ScheduleIssue[], warnings: ScheduleIssue[]): void {
+  private validateSchedule(schedule: ScheduleValues, blockers: ScheduleIssue[]): void {
     if (schedule.selfEvalOpenAt >= schedule.selfEvalDueAt) {
       blockers.push({ code: 'SELF_EVAL_OPEN_NOT_BEFORE_DUE', periodKey: schedule.periodKey, message: '自评开放时间必须早于自评截止时间' });
     }
@@ -125,19 +118,6 @@ export class CycleScheduleService {
       blockers.push({ code: 'SELF_EVAL_DUE_NOT_BEFORE_MANAGER_DUE', periodKey: schedule.periodKey, message: '自评截止时间必须早于主管评分截止时间' });
     }
 
-    const timestamps = [schedule.selfEvalOpenAt, schedule.selfEvalDueAt, schedule.managerDueAt];
-    if (timestamps.some((date) => !workdayStatus(date).isWorkday)) {
-      warnings.push({ code: 'SCHEDULE_NON_WORKDAY', periodKey: schedule.periodKey, message: '排期包含非工作日' });
-    }
-    if (timestamps.some((date) => !workdayStatus(date).official)) {
-      warnings.push({ code: 'WORKDAY_CALENDAR_FALLBACK', periodKey: schedule.periodKey, message: '部分日期使用了工作日回退规则' });
-    }
-    if (new Set(timestamps.map(monthKey)).size > 1) {
-      warnings.push({ code: 'SCHEDULE_CROSS_MONTH', periodKey: schedule.periodKey, message: '排期跨越考核月份' });
-    }
-    if (statutoryWorkdaysBetween(schedule.selfEvalOpenAt, schedule.managerDueAt) > 10) {
-      warnings.push({ code: 'SCHEDULE_INTERVAL_OVER_10_WORKDAYS', periodKey: schedule.periodKey, message: '自评开放至主管评分截止超过十个法定工作日' });
-    }
   }
 }
 
@@ -151,22 +131,6 @@ function firstStatutoryWorkdayOfFollowingMonth(date: Date): Date {
 
 function toDate(value: string | Date): Date {
   return value instanceof Date ? new Date(value.getTime()) : new Date(value);
-}
-
-function statutoryWorkdaysBetween(start: Date, end: Date): number {
-  let current = atShanghaiTime(start, 0);
-  const finish = atShanghaiTime(end, 0);
-  let total = 0;
-  while (current < finish) {
-    current = new Date(current.getTime() + 24 * 60 * 60 * 1000);
-    if (workdayStatus(current).isWorkday) total += 1;
-  }
-  return total;
-}
-
-function monthKey(date: Date): string {
-  const timestamp = formatShanghaiTimestamp(date);
-  return timestamp.slice(0, 7);
 }
 
 function formatShanghaiTimestamp(date: Date): string {

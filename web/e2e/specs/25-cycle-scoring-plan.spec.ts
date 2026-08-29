@@ -418,7 +418,7 @@ test.describe('cycle scoring plan controls', () => {
 });
 
 test.describe('cycle scoring plan integration', () => {
-  test('creates workflow v2 without reviewer selection and keeps the normalized adjusted schedule', async ({ page }) => {
+  test('creates workflow v2 without reviewer or schedule-warning confirmation', async ({ page }) => {
     const createBodies: Record<string, unknown>[] = [];
     const previewBodies: Record<string, unknown>[] = [];
     await mockIntegratedCyclePage(page, {
@@ -440,14 +440,12 @@ test.describe('cycle scoring plan integration', () => {
     await expect(secondRow.getByTestId('cycle-special-month-badge')).toHaveText('已调整');
     await page.getByRole('button', { name: '下一步' }).click();
 
-    await expect(page.getByRole('dialog', { name: '确认评分计划提示' })).toContainText('主管完成时间跨月，请确认安排');
+    await expect(page.getByRole('dialog', { name: '确认评分计划提示' })).toHaveCount(0);
     expect(previewBodies).toContainEqual(expect.objectContaining({
       schedules: expect.arrayContaining([
         expect.objectContaining({ periodKey: '2027-02', isException: true }),
       ]),
     }));
-    expect(createBodies).toHaveLength(0);
-    await page.getByRole('button', { name: '确认并继续' }).click();
     await expect.poll(() => createBodies).toHaveLength(1);
     expect(createBodies.at(-1)).not.toHaveProperty('reviewerId');
     expect(createBodies.at(-1)).toMatchObject({
