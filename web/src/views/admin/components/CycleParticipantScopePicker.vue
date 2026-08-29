@@ -212,6 +212,12 @@ const summary = computed(() => buildSummary(
   props.excludedUserIds,
 ));
 
+const visibleSummary = computed(() => (
+  props.scope === 'all'
+    ? summary.value.replace(/^全公司(?: · )?/, '')
+    : summary.value
+));
+
 const draftSummary = computed(() => buildSummary(
   props.scope,
   departmentDraft.value,
@@ -339,19 +345,28 @@ watch(activeTab, async (value) => {
 
 <template>
   <div class="participant-scope-picker">
-    <el-radio-group :model-value="scope" :validate-event="false" @change="setScope">
-      <el-radio-button data-testid="cycle-scope-all" value="all">全公司</el-radio-button>
-      <el-radio-button data-testid="cycle-scope-custom" value="custom">自定义范围</el-radio-button>
-    </el-radio-group>
+    <div class="participant-scope-toolbar" data-testid="cycle-scope-toolbar">
+      <el-radio-group :model-value="scope" :validate-event="false" @change="setScope">
+        <el-radio-button data-testid="cycle-scope-all" value="all">全公司</el-radio-button>
+        <el-radio-button data-testid="cycle-scope-custom" value="custom">自定义范围</el-radio-button>
+      </el-radio-group>
+
+      <button
+        type="button"
+        class="participant-scope-action"
+        data-testid="cycle-scope-picker-open"
+        @click="openPicker"
+      >{{ scope === 'all' ? '设置排除范围' : '选择考核对象' }}</button>
+    </div>
 
     <button
+      v-if="visibleSummary"
       type="button"
       class="participant-scope-summary"
-      data-testid="cycle-scope-picker-open"
       @click="openPicker"
     >
-      <span data-testid="cycle-scope-summary">{{ summary }}</span>
-      <strong>{{ scope === 'all' ? '设置排除范围' : '选择考核对象' }}</strong>
+      <span data-testid="cycle-scope-summary">{{ visibleSummary }}</span>
+      <strong>调整</strong>
     </button>
   </div>
 
@@ -474,6 +489,39 @@ watch(activeTab, async (value) => {
   width: 100%;
 }
 
+.participant-scope-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 3px;
+  background: var(--el-color-primary-light-9);
+  border-radius: 8px;
+}
+
+.participant-scope-action {
+  flex: none;
+  padding: 7px 10px;
+  color: var(--el-color-primary);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+}
+
+.participant-scope-action:hover {
+  background: rgb(255 255 255 / 70%);
+}
+
+.participant-scope-action:focus-visible,
+.participant-scope-summary:focus-visible {
+  outline: 2px solid var(--el-color-primary);
+  outline-offset: 2px;
+}
+
 .participant-scope-summary {
   display: flex;
   align-items: center;
@@ -579,10 +627,15 @@ watch(activeTab, async (value) => {
 }
 
 @media (max-width: 640px) {
+  .participant-scope-toolbar,
   .participant-scope-summary,
   .scope-drawer-footer {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .participant-scope-action {
+    text-align: left;
   }
 
   .scope-drawer-footer > div:last-child {

@@ -331,7 +331,9 @@ test.describe('cycle scoring plan controls', () => {
     await expect(page.getByTestId('cycle-scoring-settings')).toContainText('每月复盘并评分');
     await expect(page.getByText('按月度评分', { exact: true })).toHaveCount(0);
     await expect(page.getByText('月度跟进', { exact: true })).toHaveCount(0);
-    await expect(page.getByTestId('cycle-review-frequency')).toHaveText('结果统一按周期审核');
+    await expect(page.getByTestId('cycle-review-frequency')).toHaveCount(0);
+    await expect(page.getByText('复盘与评分', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('评分计划', { exact: true })).toHaveCount(0);
     await expect(page.getByText('结果审核按整个周期统一进行', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
   });
@@ -348,7 +350,7 @@ test.describe('cycle scoring plan controls', () => {
     await page.getByTestId('cycle-type-custom').click();
     await expect(page.getByTestId('cycle-monthly-review-switch').locator('input')).not.toBeChecked();
     await expect(page.getByTestId('cycle-monthly-review-switch')).toHaveClass(/is-disabled/);
-    await expect(page.getByTestId('cycle-scoring-settings')).toContainText('该周期只在周期结束统一评分');
+    await expect(page.getByTestId('cycle-scoring-settings')).toContainText('当前周期不支持月度复盘');
   });
 
   test('shows six and twelve monthly schedule rows for semiannual and annual cycles', async ({ page }) => {
@@ -370,6 +372,7 @@ test.describe('cycle scoring plan controls', () => {
     await page.getByTestId('cycle-monthly-review-switch').click();
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(1);
     await expect(page.getByTestId('cycle-month-schedule-row')).toContainText('整个周期');
+    await expect(page.getByTestId('cycle-schedule-column-header')).not.toBeVisible();
   });
 
   test('renders a compact scoring schedule with only contextual restore actions', async ({ page }) => {
@@ -427,6 +430,7 @@ test.describe('cycle scoring plan controls', () => {
 
 test.describe('cycle scoring plan integration', () => {
   test('creates workflow v2 without reviewer or schedule-warning confirmation', async ({ page }) => {
+    await page.setViewportSize({ width: 1440, height: 1000 });
     const createBodies: Record<string, unknown>[] = [];
     const previewBodies: Record<string, unknown>[] = [];
     await mockIntegratedCyclePage(page, {
@@ -438,6 +442,16 @@ test.describe('cycle scoring plan integration', () => {
     await page.getByTestId('cycle-create').click();
 
     const createDialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    const reviewPlan = createDialog.getByTestId('cycle-review-plan');
+    await expect(reviewPlan).toBeVisible();
+    await expect(reviewPlan.getByTestId('cycle-scoring-settings')).toBeVisible();
+    await expect(reviewPlan.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
+    await expect(reviewPlan.getByTestId('cycle-plan-summary')).toBeVisible();
+    await expect(reviewPlan.getByTestId('cycle-review-settings-help')).toBeVisible();
+    await expect(reviewPlan.getByTestId('cycle-schedule-help')).toBeVisible();
+    expect(await reviewPlan.locator('.cycle-monthly-schedule-editor').evaluate((element) => (
+      element.scrollWidth <= element.clientWidth
+    ))).toBe(true);
     await expect(createDialog.getByText('审核人', { exact: true })).toHaveCount(0);
     await expect(createDialog.getByText('月度跟进', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);

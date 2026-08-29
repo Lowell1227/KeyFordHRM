@@ -263,11 +263,9 @@ const createSchedulePeriodLabel = computed(() => {
   return `考核执行期 ${dayjs(createForm.startDate).format('YYYY-MM-DD')}—${dayjs(createForm.endDate).format('YYYY-MM-DD')}`;
 });
 const createNotificationHint = computed(() => {
-  if (createForm.notificationMode === 'off') return '本周期不发送钉钉通知';
+  if (createForm.notificationMode === 'off') return '';
   if (!notificationSettings.value?.effectiveEnabled) return '钉钉通知总开关已关闭，本周期暂不外发';
-  return createForm.notificationMode === 'launch_only'
-    ? '正式发起时提醒一次，不会每日催办'
-    : '正式发起时提醒，并在临期或逾期任务每日 09:00 催办';
+  return '';
 });
 
 interface CycleScoringPlanForm {
@@ -1857,7 +1855,11 @@ onMounted(() => {
           />
         </el-form-item>
 
-        <section v-if="isWorkflowV2Form" class="cycle-create-scoring-plan">
+        <section
+          v-if="isWorkflowV2Form"
+          class="cycle-create-scoring-plan"
+          data-testid="cycle-review-plan"
+        >
           <CycleScoringSettings
             :cycle-type="createForm.type"
             :scoring-frequency="scoringPlan.scoringFrequency"
@@ -1880,6 +1882,18 @@ onMounted(() => {
             @restore-one="handleRestoreScoringSchedule"
             @restore-all="handleRestoreAllScoringSchedules"
           />
+          <div class="cycle-auto-plan" data-testid="cycle-plan-summary">
+            <div class="cycle-auto-plan__heading">
+              <el-tag size="small" :type="createScheduleCustomized ? 'warning' : 'info'" effect="light">
+                {{ createSchedulePlanLabel }}
+              </el-tag>
+              <span>按系统工作日日历生成</span>
+              <el-tooltip content="默认时间按系统已维护的工作日日历顺序生成，人工调整时可选择任意时间" placement="top">
+                <el-icon><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </div>
+            <span>目标制定开放 {{ formatDateTimeForMessage(createForm.goalSettingOpenAt) }} · 员工自评开放 {{ formatDateTimeForMessage(createForm.selfEvalOpenAt) }}</span>
+          </div>
         </section>
 
         <el-form-item label="考核范围" prop="participantDeptIds">
@@ -1904,19 +1918,19 @@ onMounted(() => {
         <el-form-item>
           <template #label>
             <span class="form-label-with-help">员工通知
-              <el-tooltip content="不发送为默认；仅发起只通知一次；每日催办会在临期或逾期任务每天 09:00 提醒，并按 24 小时限频" placement="top">
+              <el-tooltip content="不发送为默认；发起时提醒只通知一次；每日催办会在临期或逾期任务每天 09:00 提醒，并按 24 小时限频" placement="top">
                 <el-icon><QuestionFilled /></el-icon>
               </el-tooltip>
             </span>
           </template>
           <el-radio-group v-model="createForm.notificationMode" class="notification-mode-options">
             <el-radio-button data-testid="cycle-notification-off" value="off">不发送</el-radio-button>
-            <el-radio-button data-testid="cycle-notification-launch-only" value="launch_only">仅发起提醒一次</el-radio-button>
-            <el-radio-button data-testid="cycle-notification-reminders" value="launch_and_reminders">发起＋每日催办</el-radio-button>
+            <el-radio-button data-testid="cycle-notification-launch-only" value="launch_only">发起时提醒</el-radio-button>
+            <el-radio-button data-testid="cycle-notification-reminders" value="launch_and_reminders">每日催办</el-radio-button>
           </el-radio-group>
         </el-form-item>
 
-        <div class="cycle-auto-plan" data-testid="cycle-plan-summary">
+        <div v-if="!isWorkflowV2Form" class="cycle-auto-plan cycle-auto-plan--standalone" data-testid="cycle-plan-summary">
           <div class="cycle-auto-plan__heading">
             <el-tag size="small" :type="createScheduleCustomized ? 'warning' : 'info'" effect="light">
               {{ createSchedulePlanLabel }}
@@ -2069,16 +2083,18 @@ onMounted(() => {
             </el-collapse-item>
           </el-collapse>
         </div>
-          <div class="cycle-creator-note">
-            创建人：{{ isEditMode ? (cycles.find((item) => item.id === editingCycleId)?.creator?.name || auth.user?.name) : auth.user?.name }}
-          </div>
         </section>
       </el-form>
 
       <template #footer>
         <div class="cycle-create-footer">
-          <p data-testid="cycle-create-impact-hint">{{ createNotificationHint }}</p>
-          <div>
+          <div class="cycle-create-footer__meta">
+            <span class="cycle-creator-note">
+              创建人：{{ isEditMode ? (cycles.find((item) => item.id === editingCycleId)?.creator?.name || auth.user?.name) : auth.user?.name }}
+            </span>
+            <p v-if="createNotificationHint" data-testid="cycle-create-impact-hint">{{ createNotificationHint }}</p>
+          </div>
+          <div class="cycle-create-footer__actions">
             <el-button @click="requestCloseCreateDialog">取消</el-button>
             <el-button
               v-if="!isEditMode"
@@ -2259,14 +2275,18 @@ onMounted(() => {
 }
 
 .cycle-auto-plan {
-  align-items: stretch;
-  flex-direction: column;
-  gap: 9px;
-  margin: 2px 0 16px 108px;
-  padding: 10px 12px;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  padding: 9px 14px;
   color: var(--el-text-color-secondary);
   font-size: 12px;
   background: var(--el-fill-color-lighter);
+  border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.cycle-auto-plan--standalone {
+  margin: 2px 0 16px 108px;
+  border-top: 0;
   border-radius: 8px;
 }
 
@@ -2360,8 +2380,15 @@ onMounted(() => {
 
 .cycle-create-scoring-plan {
   display: grid;
-  gap: 14px;
+  overflow: hidden;
   margin: 0 0 18px 108px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+}
+
+.cycle-create-scoring-plan > :deep(.el-alert) {
+  width: auto;
+  margin: 0 14px 12px;
 }
 
 .cycle-semiannual-period {
@@ -2669,6 +2696,14 @@ onMounted(() => {
   gap: 10px;
 }
 
+.cycle-create-footer__meta {
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 2px !important;
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
 .notification-setting-dialog,
 .notification-setting-list,
 .notification-setting-list :deep(.el-radio),
@@ -2871,8 +2906,7 @@ onMounted(() => {
     padding-right: 14px;
   }
 
-  .cycle-auto-plan {
-    align-items: stretch;
+  .cycle-auto-plan--standalone {
     margin-left: 0;
   }
 
@@ -2953,17 +2987,17 @@ onMounted(() => {
     flex-direction: column;
   }
 
-  .cycle-create-footer > div {
+  .cycle-create-footer__actions {
     display: grid;
     grid-template-columns: 1fr 1fr;
   }
 
-  .cycle-create-footer > div .el-button {
+  .cycle-create-footer__actions .el-button {
     width: 100%;
     margin-left: 0;
   }
 
-  .cycle-create-footer > div .el-button:last-child {
+  .cycle-create-footer__actions .el-button:last-child {
     grid-column: 1 / -1;
   }
 }

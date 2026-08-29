@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { QuestionFilled } from '@element-plus/icons-vue';
 import type { CyclePeriodSchedule, CycleScheduleIssue } from '@/types/api.types';
 
 const props = withDefaults(defineProps<{
@@ -18,6 +19,9 @@ const emit = defineEmits<{
 }>();
 
 const hasExceptions = computed(() => props.schedules.some((schedule) => schedule.isException));
+const isCycleSchedule = computed(() => (
+  props.schedules.length === 1 && props.schedules[0]?.periodType === 'cycle'
+));
 
 type DateField = 'selfEvalOpenAt' | 'selfEvalDueAt' | 'managerDueAt';
 
@@ -54,26 +58,32 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
 </script>
 
 <template>
-  <section class="cycle-monthly-schedule-editor" aria-label="月度评分计划">
-    <header class="cycle-monthly-schedule-editor__header">
-      <div>
-        <strong>评分计划</strong>
-        <p>可直接修改单月时间；人工调整后可恢复本月或全部默认时间。</p>
-      </div>
-      <el-button
-        v-if="hasExceptions"
-        data-testid="cycle-restore-all"
-        text
-        @click="emit('restore-all')"
-      >全部恢复默认</el-button>
-    </header>
-
-    <div data-testid="cycle-schedule-column-header" class="cycle-monthly-schedule-grid__header">
-      <span>月份</span>
+  <section class="cycle-monthly-schedule-editor" aria-label="复盘与评分时间安排">
+    <div
+      v-if="!isCycleSchedule"
+      data-testid="cycle-schedule-column-header"
+      class="cycle-monthly-schedule-grid__header"
+    >
+      <span class="cycle-schedule-help-label">月份
+        <el-tooltip content="下方时间为每月复盘与评分安排，可直接修改；调整后可恢复默认。" placement="top">
+          <el-icon
+            data-testid="cycle-schedule-help"
+            aria-label="查看时间安排说明"
+            tabindex="0"
+          ><QuestionFilled /></el-icon>
+        </el-tooltip>
+      </span>
       <span>自评开放时间</span>
       <span>员工计划完成时间</span>
       <span>主管计划完成时间</span>
-      <span>操作</span>
+      <span class="cycle-monthly-schedule-grid__actions">
+        <el-button
+          v-if="hasExceptions"
+          data-testid="cycle-restore-all"
+          text
+          @click="emit('restore-all')"
+        >全部恢复默认</el-button>
+      </span>
     </div>
 
     <div class="cycle-monthly-schedule-list">
@@ -86,6 +96,17 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
         <div class="cycle-month-schedule-row__main">
           <div class="cycle-month-schedule-row__period">
             <strong data-testid="cycle-period-label">{{ periodLabel(schedule) }}</strong>
+            <el-tooltip
+              v-if="isCycleSchedule"
+              content="下方时间为整个绩效周期的复盘与评分安排，可直接修改。"
+              placement="top"
+            >
+              <el-icon
+                data-testid="cycle-schedule-help"
+                aria-label="查看时间安排说明"
+                tabindex="0"
+              ><QuestionFilled /></el-icon>
+            </el-tooltip>
             <el-tag v-if="schedule.isException" data-testid="cycle-special-month-badge" type="warning" size="small">已调整</el-tag>
           </div>
         <label data-testid="self-eval-open-at">
@@ -146,35 +167,47 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
 .cycle-monthly-schedule-editor {
   display: grid;
   overflow: hidden;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
+  border-top: 1px solid var(--el-border-color-lighter);
 }
 
-.cycle-monthly-schedule-editor__header,
 .cycle-month-schedule-row__period {
   display: flex;
   align-items: center;
-  justify-content: space-between;
   gap: 10px;
 }
 
-.cycle-monthly-schedule-editor__header {
-  padding: 12px 14px;
-  background: var(--el-fill-color-extra-light);
+.cycle-schedule-help-label,
+.cycle-monthly-schedule-grid__actions {
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
-.cycle-monthly-schedule-editor__header p {
-  margin: 4px 0 0;
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
+.cycle-schedule-help-label .el-icon,
+.cycle-month-schedule-row__period .el-icon {
+  color: var(--el-text-color-placeholder);
+  cursor: help;
+}
+
+.cycle-schedule-help-label .el-icon:focus-visible,
+.cycle-month-schedule-row__period .el-icon:focus-visible {
+  color: var(--el-color-primary);
+  outline: 2px solid var(--el-color-primary-light-5);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+
+.cycle-monthly-schedule-grid__actions {
+  min-height: 24px;
+  justify-content: flex-end;
 }
 
 .cycle-monthly-schedule-grid__header,
 .cycle-month-schedule-row__main {
   display: grid;
-  grid-template-columns: 96px repeat(3, minmax(180px, 1fr)) 108px;
+  grid-template-columns: 82px repeat(3, minmax(0, 1fr)) 76px;
   align-items: start;
-  gap: 10px;
+  gap: 8px;
 }
 
 .cycle-monthly-schedule-grid__header {
@@ -182,6 +215,12 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
   color: var(--el-text-color-secondary);
   background: var(--el-fill-color-light);
   font-size: 12px;
+}
+
+.cycle-monthly-schedule-grid__header > span,
+.cycle-month-schedule-row label,
+.cycle-month-schedule-row__actions {
+  min-width: 0;
 }
 
 .cycle-monthly-schedule-list {
@@ -218,6 +257,7 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
 }
 
 .cycle-month-schedule-row :deep(.el-date-editor) {
+  min-width: 0;
   width: 100%;
 }
 
@@ -242,12 +282,6 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
     overflow: visible;
     gap: 12px;
     border: 0;
-  }
-
-  .cycle-monthly-schedule-editor__header {
-    align-items: flex-start;
-    padding: 0;
-    background: transparent;
   }
 
   .cycle-monthly-schedule-grid__header {

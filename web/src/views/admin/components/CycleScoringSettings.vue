@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, watch } from 'vue';
+import { QuestionFilled } from '@element-plus/icons-vue';
 import type { CycleType, ScoringFrequency } from '@/types/enums';
 
 const props = defineProps<{
@@ -25,7 +26,7 @@ const fixedFrequency = computed<ScoringFrequency>(() => (
 const fixedFrequencyCopy = computed(() => (
   fixedFrequency.value === 'monthly'
     ? '月度周期固定开启'
-    : '该周期只在周期结束统一评分'
+    : '当前周期不支持月度复盘'
 ));
 
 function updateFrequency(value: ScoringFrequency) {
@@ -50,20 +51,25 @@ watch(
 
 <template>
   <section data-testid="cycle-scoring-settings" class="cycle-scoring-settings" aria-label="复盘与评分设置">
-    <div class="cycle-scoring-settings__heading">
-      <strong>复盘与评分</strong>
-      <span data-testid="cycle-review-frequency">结果统一按周期审核</span>
-    </div>
-
     <div class="cycle-scoring-settings__control">
       <el-switch
         data-testid="cycle-monthly-review-switch"
         :model-value="scoringFrequency === 'monthly'"
         :disabled="!canChooseFrequency"
         active-text="每月复盘并评分"
-        inactive-text="周期结束统一评分"
         @change="handleMonthlyReviewChange"
       />
+      <el-tooltip
+        content="开启后，每月由员工填写复盘并由主管评分；关闭后，仅在周期结束时统一评分。最终结果仍按整个绩效周期审核。"
+        placement="top"
+      >
+        <el-icon
+          data-testid="cycle-review-settings-help"
+          class="cycle-scoring-settings__help"
+          aria-label="查看每月复盘并评分说明"
+          tabindex="0"
+        ><QuestionFilled /></el-icon>
+      </el-tooltip>
       <p v-if="!canChooseFrequency" class="cycle-scoring-settings__fixed">{{ fixedFrequencyCopy }}</p>
     </div>
   </section>
@@ -71,23 +77,7 @@ watch(
 
 <style scoped>
 .cycle-scoring-settings {
-  display: grid;
-  gap: 10px;
   padding: 14px;
-  border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
-}
-
-.cycle-scoring-settings__heading {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.cycle-scoring-settings__heading span {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
 }
 
 .cycle-scoring-settings__control {
@@ -97,6 +87,19 @@ watch(
   gap: 12px;
 }
 
+.cycle-scoring-settings__help {
+  flex: none;
+  color: var(--el-text-color-placeholder);
+  cursor: help;
+}
+
+.cycle-scoring-settings__help:focus-visible {
+  color: var(--el-color-primary);
+  outline: 2px solid var(--el-color-primary-light-5);
+  outline-offset: 2px;
+  border-radius: 50%;
+}
+
 .cycle-scoring-settings__fixed {
   margin: 0;
   color: var(--el-text-color-secondary);
@@ -104,10 +107,8 @@ watch(
 }
 
 @media (max-width: 767px) {
-  .cycle-scoring-settings__heading,
   .cycle-scoring-settings__control {
-    align-items: flex-start;
-    flex-direction: column;
+    flex-wrap: wrap;
   }
 }
 </style>

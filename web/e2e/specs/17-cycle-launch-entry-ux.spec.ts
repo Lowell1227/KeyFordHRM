@@ -349,9 +349,9 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.getByTestId('cycle-create-save-and-view')).toHaveText('下一步');
     await expect(dialog.getByRole('button', { name: '仅保存草稿' })).toHaveCount(0);
     await expect(dialog.getByRole('button', { name: '保存并检查' })).toHaveCount(0);
-    await expect(page.getByTestId('cycle-create-impact-hint')).toContainText('不发送钉钉通知');
+    await expect(page.getByTestId('cycle-create-impact-hint')).toHaveCount(0);
 
-    await expect(page.getByTestId('cycle-scope-picker-open')).toContainText('设置排除范围');
+    await expect(page.getByTestId('cycle-scope-picker-open')).toHaveText('设置排除范围');
     await page.getByTestId('cycle-scope-picker-open').click();
     const scopeDrawer = page.getByRole('dialog', { name: '选择考核对象' });
     await expect(scopeDrawer).toBeVisible();
@@ -373,7 +373,6 @@ test.describe('cycle launch entry UX', () => {
     await page.locator('li.el-select-dropdown__item:visible').filter({ hasText: '孙珊 (P001)' }).last().click();
     await scopeDrawer.getByRole('button', { name: '确定' }).click();
 
-    await expect(page.getByTestId('cycle-scope-summary')).toContainText('全公司');
     await expect(page.getByTestId('cycle-scope-summary')).toContainText('排除 1 个部门，包含 1 个下级组织（预计 18 人）');
     await expect(page.getByTestId('cycle-scope-summary')).toContainText('另排除 1 人');
     await page.getByTestId('cycle-create-save-draft').click();
@@ -624,7 +623,7 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.getByTestId('cycle-scope-summary')).toContainText('排除例外：1 个下级组织');
 
     await page.getByTestId('cycle-scope-all').click();
-    await expect(page.getByTestId('cycle-scope-summary')).toHaveText('全公司');
+    await expect(page.getByTestId('cycle-scope-summary')).toHaveCount(0);
     await page.getByTestId('cycle-create-save-draft').click();
 
     await expect.poll(() => createBodies).toHaveLength(1);
@@ -1067,7 +1066,7 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.getByText('目标制定开放', { exact: true })).toBeVisible();
     await expect(page.getByTestId('cycle-create-save-and-view')).toHaveText('下一步');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
-    const footer = await page.getByTestId('cycle-create-impact-hint').boundingBox();
+    const footer = await page.getByTestId('cycle-create-save-and-view').boundingBox();
     expect(footer?.y).toBeGreaterThanOrEqual(0);
     expect((footer?.y ?? 0) + (footer?.height ?? 0)).toBeLessThanOrEqual(844);
   });
