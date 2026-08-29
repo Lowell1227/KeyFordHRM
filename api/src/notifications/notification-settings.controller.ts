@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Patch } from '@nestjs/common';
 import { SysRole } from '@prisma/client';
 import { Roles } from '@/common/decorators/roles.decorator';
+import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import { UpdateDingtalkNotificationSettingsDto } from './dto/update-dingtalk-notification-settings.dto';
@@ -12,6 +13,7 @@ export class NotificationSettingsController {
 
   @Get('dingtalk')
   @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('cycle_plan_edit')
   getDingtalkSettings() {
     return this.settings.getDingtalkSettings();
   }

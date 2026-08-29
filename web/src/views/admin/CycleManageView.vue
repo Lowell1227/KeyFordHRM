@@ -158,6 +158,10 @@ const canEditCyclePlan = computed(() => (
   || auth.user?.sysRole === 'hr'
   || auth.user?.hrCapabilities?.includes('cycle_plan_edit')
 ));
+const canManageGlobalNotificationSettings = computed(() => (
+  auth.user?.sysRole === 'system_admin'
+  || auth.user?.sysRole === 'hr'
+));
 
 const initialStatus = CYCLE_STATUS_OPTIONS.some((item) => item.value === route.query.status)
   ? route.query.status as CycleStatus
@@ -1723,7 +1727,8 @@ onMounted(() => {
               data-testid="dingtalk-global-toggle"
               :model-value="notificationSettings?.enabled ?? false"
               :loading="notificationSettingsLoading || notificationSettingsSaving"
-              :disabled="!notificationSettings?.available"
+              :disabled="!canManageGlobalNotificationSettings || !notificationSettings?.available"
+              :title="canManageGlobalNotificationSettings ? '' : '仅 HR 管理员可修改总开关'"
               @change="handleDingtalkNotificationToggle"
             />
           </div>

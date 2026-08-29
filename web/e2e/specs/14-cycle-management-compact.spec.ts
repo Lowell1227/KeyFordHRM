@@ -2,6 +2,7 @@ import { expect, test } from '@playwright/test';
 import type {
   AssessmentCycle,
   CyclePeriodSchedule,
+  CurrentUser,
   Department,
   LaunchPreflightResult,
 } from '../../src/types/api.types';
@@ -162,6 +163,7 @@ interface CycleMockOptions {
   scheduleRequests?: string[];
   preflight?: LaunchPreflightResult;
   deletedIds?: string[];
+  authUser?: CurrentUser;
 }
 
 async function mockCyclePage(
@@ -187,7 +189,7 @@ async function mockCyclePage(
   }));
   await page.route('**/api/v1/auth/me', (route) => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify(apiResponse({
+    body: JSON.stringify(apiResponse(options.authUser ?? {
       id: 'hr-1',
       name: '姚瑶',
       employeeNo: 'HR001',
@@ -196,7 +198,7 @@ async function mockCyclePage(
       sysRole: 'hr',
       isAssessorOnly: false,
       canViewAll: true,
-    })),
+    } satisfies CurrentUser)),
   }));
   await page.route('**/api/v1/departments**', async (route) => {
     await options.departmentsGate;
@@ -340,6 +342,29 @@ test('maps cycle states to the compact group, action, and five-stage workflow', 
 
 test.describe('compact cycle management list', () => {
   test.use({ baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173' });
+
+  test('keeps the global DingTalk notification switch read-only for a cycle plan editor', async ({ page }) => {
+    await mockCyclePage(page, [], {
+      authUser: {
+        id: 'hr-editor',
+        name: '方园',
+        employeeNo: '319',
+        deptId: 'hr-dept',
+        deptName: '人事组',
+        sysRole: 'hr_user',
+        systemPermission: 'hr_user',
+        hrCapabilities: ['cycle_plan_edit'],
+        isAssessorOnly: false,
+        canViewAll: false,
+      },
+    });
+
+    await page.goto('/cycles?group=attention');
+
+    await expect(page.getByTestId('cycle-create')).toBeVisible();
+    await expect(page.getByTestId('dingtalk-notification-status')).toContainText('钉钉通知已关闭');
+    await expect(page.getByTestId('dingtalk-global-toggle').locator('input')).toBeDisabled();
+  });
 
   test('shows stable assessment scope instead of a transient next step and sends the selected group to the API', async ({ page }) => {
     const cycleRequests: URL[] = [];
