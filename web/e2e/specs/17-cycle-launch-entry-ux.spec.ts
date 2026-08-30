@@ -283,24 +283,34 @@ async function mockCycleLaunchPage(
           isException: false,
         };
       });
-      const warnings = schedules.flatMap((schedule) => {
-        const issues = [];
+        const warnings = schedules.flatMap((schedule) => {
+          const issues = [];
         if (new Date(schedule.selfEvalOpenAt) > new Date(schedule.selfEvalDueAt)) {
           issues.push({
             code: 'SELF_EVAL_OPEN_AFTER_DUE',
             periodKey: schedule.periodKey,
-            message: '自评开放时间不能晚于员工计划完成时间',
+            message: '本期员工自评截止不能早于本期自评开放',
           });
         }
         if (new Date(schedule.selfEvalDueAt) > new Date(schedule.managerDueAt)) {
           issues.push({
             code: 'SELF_EVAL_DUE_AFTER_MANAGER_DUE',
             periodKey: schedule.periodKey,
-            message: '员工计划完成时间不能晚于主管计划完成时间',
+            message: '本期主管评分截止不能早于本期员工自评截止',
           });
         }
-        return issues;
-      });
+          return issues;
+        });
+        if (
+          body.goalSettingOpenAt
+          && body.deadlineIndicatorSetting
+          && new Date(String(body.goalSettingOpenAt)) > new Date(String(body.deadlineIndicatorSetting))
+        ) {
+          warnings.push({
+            code: 'INDICATOR_SETTING_BEFORE_GOAL_OPEN',
+            message: '指标制定截止不能早于目标制定开放',
+          });
+        }
       return route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify(apiResponse({
@@ -973,7 +983,7 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.getByTestId('cycle-plan-summary')).toContainText('已调整计划');
   });
 
-  test('summarizes reversed scoring times once and still saves the draft', async ({ page }) => {
+  test('allows equal scoring times and shows reversed order below the affected cells without blocking draft save', async ({ page }) => {
     const createBodies: unknown[] = [];
     await mockCycleLaunchPage(page, { cycles: [], createBodies });
     await page.goto('/cycles?group=attention');
@@ -982,17 +992,51 @@ test.describe('cycle launch entry UX', () => {
     const firstSchedule = page.getByTestId('cycle-month-schedule-row').first();
     const openInput = firstSchedule.getByTestId('self-eval-open-at').locator('input');
     const dueInput = firstSchedule.getByTestId('self-eval-due-at').locator('input');
+    const managerInput = firstSchedule.getByTestId('manager-due-at').locator('input');
+    const headers = page.getByTestId('cycle-schedule-column-header');
+    await expect(headers).toContainText('本期自评开放');
+    await expect(headers).toContainText('本期员工自评截止');
+    await expect(headers).toContainText('本期主管评分截止');
+
+    for (const input of [openInput, dueInput, managerInput]) {
+      await input.fill('2026-11-05 18:00');
+      await input.press('Enter');
+    }
+    await expect(firstSchedule.locator('.cycle-time-field__issue')).toHaveCount(0);
+
     await openInput.fill('2026-11-05 18:00');
     await openInput.press('Enter');
     await dueInput.fill('2026-11-04 18:00');
     await dueInput.press('Enter');
+    await managerInput.fill('2026-11-03 18:00');
+    await managerInput.press('Enter');
 
-    await expect(page.getByTestId('cycle-schedule-warning-summary')).toHaveCount(1);
-    await expect(page.getByTestId('cycle-schedule-warning-summary')).toContainText('时间顺序需要调整，可继续保存');
-    await expect(firstSchedule.locator('.cycle-month-schedule-row__warning')).toHaveCount(0);
+    await expect(page.getByTestId('cycle-schedule-warning-summary')).toHaveCount(0);
+    await expect(firstSchedule.getByTestId('self-eval-due-at').locator('.cycle-time-field__issue'))
+      .toContainText('正式发起前需调整：本期员工自评截止不能早于本期自评开放');
+    await expect(firstSchedule.getByTestId('manager-due-at').locator('.cycle-time-field__issue'))
+      .toContainText('正式发起前需调整：本期主管评分截止不能早于本期员工自评截止');
     await page.getByTestId('cycle-create-save-draft').click();
 
     await expect.poll(() => createBodies).toHaveLength(1);
+  });
+
+  test('shows a reversed preparation node issue below its own input instead of a top message', async ({ page }) => {
+    await mockCycleLaunchPage(page, { cycles: [] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+    await page.getByTestId('cycle-create-advanced').click();
+    await page.getByTestId('cycle-advanced-schedule').click();
+
+    const nodes = page.getByTestId('cycle-schedule-node');
+    const goalOpenInput = nodes.nth(0).locator('.el-date-editor input');
+    await goalOpenInput.fill('2026-09-29 18:00:00');
+    await goalOpenInput.press('Enter');
+
+    await expect(nodes.nth(1).locator('.schedule-node__issue'))
+      .toContainText('正式发起前需调整：指标制定截止不能早于目标制定开放');
+    await expect(page.locator('.el-message').filter({ hasText: '指标制定截止不能早于目标制定开放' }))
+      .toHaveCount(0);
   });
 
   test('allows any custom schedule time without boundary reminders', async ({ page }) => {

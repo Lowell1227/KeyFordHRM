@@ -316,6 +316,23 @@ describe('LaunchService preflight', () => {
       }));
   });
 
+  it('still returns the expected participant scope when another launch check blocks the plan', async () => {
+    const cycle = await tx.assessmentCycle.findUnique({ where: { id: cycleId } });
+    tx.assessmentCycle.findUnique.mockResolvedValue({ ...cycle, reviewStatus: 'pending' });
+
+    const checked = await service.preflight(cycleId);
+
+    expect(checked.ready).toBe(false);
+    expect(checked.participantCount).toBe(1);
+    expect(checked.participants).toContainEqual(expect.objectContaining({
+      employeeId: candidate.id,
+      employeeName: candidate.name,
+      deptName: '产品部',
+      managerId: candidate.directManagerId,
+      isExempt: false,
+    }));
+  });
+
   it('limits an unscoped cycle to employee accounts', async () => {
     tx.assessmentTemplate.findMany.mockResolvedValue([
       template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),

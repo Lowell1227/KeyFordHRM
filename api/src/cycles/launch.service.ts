@@ -215,9 +215,14 @@ export class LaunchService {
       }
     }
 
-    const plan = blockers.length === 0
-      ? this.buildLaunchPlan(candidates, effectiveCycle, deptMap, exemptRatio, schedules)
-      : null;
+    const participantPreview = this.buildLaunchPlan(
+      candidates,
+      effectiveCycle,
+      deptMap,
+      exemptRatio,
+      schedules,
+    );
+    const plan = blockers.length === 0 ? participantPreview : null;
 
     return {
       ready: blockers.length === 0,
@@ -231,7 +236,7 @@ export class LaunchService {
       },
       participantCount: candidates.length,
       templateCount: 0,
-      participants: plan?.participants ?? [],
+      participants: participantPreview.participants,
       ...(isWorkflowV2 && { exclusions }),
       ...(isWorkflowV2 && {
         companyFinalApprover: this.isEligibleCompanyFinalApprover(companyFinalApprover)

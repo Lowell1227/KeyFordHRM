@@ -126,6 +126,15 @@ const WORKFLOW_V2_FINAL_SCHEDULE_NODES = CREATE_SCHEDULE_NODES.slice(6).map((nod
   ...node,
   number: `0${index + 4}`,
 }));
+type CreateScheduleNodeKey = (typeof CREATE_SCHEDULE_NODES)[number]['key'];
+
+const SCHEDULE_NODE_ISSUE_CODES: Partial<Record<CreateScheduleNodeKey, string[]>> = {
+  deadlineIndicatorSetting: ['INDICATOR_SETTING_BEFORE_GOAL_OPEN'],
+  deadlineIndicatorConfirm: ['INDICATOR_CONFIRM_BEFORE_SETTING_DUE'],
+  deadlineHrCalibration: ['HR_CALIBRATION_BEFORE_FINAL_MANAGER_DUE'],
+  deadlineApproval: ['APPROVAL_BEFORE_HR_CALIBRATION'],
+  deadlinePublish: ['PUBLISH_BEFORE_APPROVAL'],
+};
 
 const DEFAULT_VISIBLE_FIELDS: PublishVisibleFields = {
   totalScore: true,
@@ -790,6 +799,7 @@ function formatDateTimeForMessage(value: Date | string | undefined | null): stri
 
 function handleCreateScheduleChange() {
   createScheduleCustomized.value = true;
+  if (isWorkflowV2Form.value) scheduleScoringPreview('', 'validate');
 }
 
 async function handleCreatePeriodChange(previousStartDate?: Date, previousEndDate?: Date) {
@@ -979,8 +989,15 @@ function scoringPreviewFingerprint(includeSchedules: boolean): string {
     scoringFrequency: scoringPlan.scoringFrequency,
     startDate: formatDateLocal(createForm.startDate),
     endDate: formatDateLocal(createForm.endDate),
+    ...schedulePreviewTimeline(),
     ...(includeSchedules && { schedules: scoringPlan.periodSchedules }),
   });
+}
+
+function scheduleNodeIssues(key: CreateScheduleNodeKey): CycleScheduleIssue[] {
+  const codes = SCHEDULE_NODE_ISSUE_CODES[key] ?? [];
+  return [...scoringPlan.scheduleBlockers, ...scoringPlan.scheduleWarnings]
+    .filter((issue) => !issue.periodKey && codes.includes(issue.code));
 }
 
 function trackSchedulePreview(promise: Promise<boolean>): Promise<boolean> {
@@ -1145,7 +1162,6 @@ async function handleCreate(openWorkspace = false) {
 
   const validationMessage = getCreateDeadlineValidationMessage();
   if (validationMessage) {
-    ElMessage.warning(validationMessage);
     return;
   }
 
@@ -1176,7 +1192,6 @@ async function handleCreate(openWorkspace = false) {
   }
 
   if (isWorkflowV2Form.value && scoringPlan.scheduleBlockers.length > 0) {
-    ElMessage.warning('评分计划存在阻断项，请先完成调整');
     await focusFirstInvalidScheduleRow();
     return;
   }
@@ -1507,6 +1522,8 @@ async function loadCycleDetail(cycleId: string) {
       } finally {
         participantRecordLoading.value = false;
       }
+    } else if (['draft', 'scheduled', 'launch_blocked'].includes(detail.status)) {
+      await handlePreflight(detail);
     }
   } catch (error) {
     detailError.value = error instanceof Error ? error.message : '获取周期详情失败';
@@ -1515,7 +1532,7 @@ async function loadCycleDetail(cycleId: string) {
   }
 }
 
-async function openCycleWorkspace(cycle: AssessmentCycle, runPreflight = false) {
+async function openCycleWorkspace(cycle: AssessmentCycle) {
   cycleDetail.value = cycle;
   preflight.value = null;
   preflightError.value = '';
@@ -1525,7 +1542,6 @@ async function openCycleWorkspace(cycle: AssessmentCycle, runPreflight = false) 
     await router.push({ query: { ...route.query, cycleId: cycle.id } });
   }
   await loadCycleDetail(cycle.id);
-  if (runPreflight) await handlePreflight(cycleDetail.value ?? cycle);
 }
 
 async function closeCycleWorkspace() {
@@ -1571,7 +1587,7 @@ function handleResolvePreflightBlocker(code: string) {
 
 function handlePrimaryCycleAction(cycle: AssessmentCycle) {
   if (['draft', 'launch_blocked'].includes(cycle.status)) {
-    void openCycleWorkspace(cycle, true);
+    void openCycleWorkspace(cycle);
     return;
   }
   void openCycleWorkspace(cycle);
@@ -2048,6 +2064,11 @@ onMounted(() => {
                       :placeholder="`选择${node.label}`"
                       @change="handleCreateScheduleChange"
                     />
+                    <small
+                      v-for="issue in scheduleNodeIssues(node.key)"
+                      :key="issue.code"
+                      class="schedule-node__issue"
+                    >正式发起前需调整：{{ issue.message }}</small>
                   </div>
                 </div>
               </section>
@@ -2079,6 +2100,11 @@ onMounted(() => {
                       :placeholder="`选择${node.label}`"
                       @change="handleCreateScheduleChange"
                     />
+                    <small
+                      v-for="issue in scheduleNodeIssues(node.key)"
+                      :key="issue.code"
+                      class="schedule-node__issue"
+                    >正式发起前需调整：{{ issue.message }}</small>
                   </div>
                 </div>
               </section>
@@ -2710,6 +2736,12 @@ onMounted(() => {
   display: grid;
   gap: 5px;
   min-width: 0;
+}
+
+.schedule-node__issue {
+  color: var(--el-color-danger);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
 .schedule-node :deep(.el-date-editor) {

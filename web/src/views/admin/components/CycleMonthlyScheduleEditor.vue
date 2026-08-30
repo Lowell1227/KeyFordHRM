@@ -22,12 +22,13 @@ const hasExceptions = computed(() => props.schedules.some((schedule) => schedule
 const isCycleSchedule = computed(() => (
   props.schedules.length === 1 && props.schedules[0]?.periodType === 'cycle'
 ));
-const warningMessages = computed(() => [...new Set(props.warnings.map((issue) => {
-  const schedule = props.schedules.find(({ periodKey }) => periodKey === issue.periodKey);
-  return schedule ? `${periodLabel(schedule)}：${issue.message}` : issue.message;
-}))]);
-
 type DateField = 'selfEvalOpenAt' | 'selfEvalDueAt' | 'managerDueAt';
+
+const FIELD_ISSUE_CODES: Record<DateField, string[]> = {
+  selfEvalOpenAt: ['FIRST_SELF_EVAL_BEFORE_INDICATOR_CONFIRM'],
+  selfEvalDueAt: ['SELF_EVAL_OPEN_AFTER_DUE'],
+  managerDueAt: ['SELF_EVAL_DUE_AFTER_MANAGER_DUE'],
+};
 
 function periodLabel(schedule: CyclePeriodSchedule) {
   if (schedule.periodType === 'cycle') return '整个周期';
@@ -48,25 +49,22 @@ function updateDate(index: number, field: DateField, value: string | number | Da
 function issuesFor(schedule: CyclePeriodSchedule, issues: CycleScheduleIssue[]) {
   return issues.filter((issue) => issue.periodKey === schedule.periodKey);
 }
+
+function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
+  const codes = FIELD_ISSUE_CODES[field];
+  return [...props.blockers, ...props.warnings].filter((issue) => (
+    issue.periodKey === schedule.periodKey && codes.includes(issue.code)
+  ));
+}
+
+function rowBlockers(schedule: CyclePeriodSchedule) {
+  const fieldCodes = Object.values(FIELD_ISSUE_CODES).flat();
+  return issuesFor(schedule, props.blockers).filter((issue) => !fieldCodes.includes(issue.code));
+}
 </script>
 
 <template>
   <section class="cycle-monthly-schedule-editor" aria-label="复盘与评分时间安排">
-    <div
-      v-if="warningMessages.length"
-      class="cycle-schedule-warning-summary"
-      data-testid="cycle-schedule-warning-summary"
-    >
-      <span>时间顺序需要调整，可继续保存</span>
-      <el-popover placement="bottom-end" trigger="click" :width="360">
-        <ul class="cycle-schedule-warning-summary__details">
-          <li v-for="message in warningMessages" :key="message">{{ message }}</li>
-        </ul>
-        <template #reference>
-          <el-button text type="warning">查看{{ warningMessages.length }}项</el-button>
-        </template>
-      </el-popover>
-    </div>
     <div
       v-if="!isCycleSchedule"
       data-testid="cycle-schedule-column-header"
@@ -81,9 +79,9 @@ function issuesFor(schedule: CyclePeriodSchedule, issues: CycleScheduleIssue[]) 
           ><QuestionFilled /></el-icon>
         </el-tooltip>
       </span>
-      <span>自评开放时间</span>
-      <span>员工计划完成时间</span>
-      <span>主管计划完成时间</span>
+      <span>本期自评开放</span>
+      <span>本期员工自评截止</span>
+      <span>本期主管评分截止</span>
       <span class="cycle-monthly-schedule-grid__actions">
         <el-button
           v-if="hasExceptions"
@@ -116,9 +114,14 @@ function issuesFor(schedule: CyclePeriodSchedule, issues: CycleScheduleIssue[]) 
               ><QuestionFilled /></el-icon>
             </el-tooltip>
             <el-tag v-if="schedule.isException" data-testid="cycle-special-month-badge" type="warning" size="small">已调整</el-tag>
+            <small
+              v-for="issue in rowBlockers(schedule)"
+              :key="issue.code"
+              class="cycle-time-field__issue"
+            >{{ issue.message }}</small>
           </div>
         <label data-testid="self-eval-open-at">
-          <span class="cycle-month-schedule-row__mobile-label">自评开放时间</span>
+          <span class="cycle-month-schedule-row__mobile-label">本期自评开放</span>
           <el-date-picker
             :model-value="schedule.selfEvalOpenAt"
             type="datetime"
@@ -126,9 +129,14 @@ function issuesFor(schedule: CyclePeriodSchedule, issues: CycleScheduleIssue[]) 
             value-format="YYYY-MM-DDTHH:mm:ssZ"
             @update:model-value="updateDate(index, 'selfEvalOpenAt', $event)"
           />
+          <small
+            v-for="issue in issuesForField(schedule, 'selfEvalOpenAt')"
+            :key="issue.code"
+            class="cycle-time-field__issue"
+          >正式发起前需调整：{{ issue.message }}</small>
         </label>
         <label data-testid="self-eval-due-at">
-          <span class="cycle-month-schedule-row__mobile-label">员工计划完成时间</span>
+          <span class="cycle-month-schedule-row__mobile-label">本期员工自评截止</span>
           <el-date-picker
             :model-value="schedule.selfEvalDueAt"
             type="datetime"
@@ -136,9 +144,14 @@ function issuesFor(schedule: CyclePeriodSchedule, issues: CycleScheduleIssue[]) 
             value-format="YYYY-MM-DDTHH:mm:ssZ"
             @update:model-value="updateDate(index, 'selfEvalDueAt', $event)"
           />
+          <small
+            v-for="issue in issuesForField(schedule, 'selfEvalDueAt')"
+            :key="issue.code"
+            class="cycle-time-field__issue"
+          >正式发起前需调整：{{ issue.message }}</small>
         </label>
         <label data-testid="manager-due-at">
-          <span class="cycle-month-schedule-row__mobile-label">主管计划完成时间</span>
+          <span class="cycle-month-schedule-row__mobile-label">本期主管评分截止</span>
           <el-date-picker
             :model-value="schedule.managerDueAt"
             type="datetime"
@@ -146,6 +159,11 @@ function issuesFor(schedule: CyclePeriodSchedule, issues: CycleScheduleIssue[]) 
             value-format="YYYY-MM-DDTHH:mm:ssZ"
             @update:model-value="updateDate(index, 'managerDueAt', $event)"
           />
+          <small
+            v-for="issue in issuesForField(schedule, 'managerDueAt')"
+            :key="issue.code"
+            class="cycle-time-field__issue"
+          >正式发起前需调整：{{ issue.message }}</small>
         </label>
           <div class="cycle-month-schedule-row__actions">
             <el-button
@@ -157,11 +175,6 @@ function issuesFor(schedule: CyclePeriodSchedule, issues: CycleScheduleIssue[]) 
           </div>
         </div>
 
-        <p
-          v-for="issue in issuesFor(schedule, blockers).filter((blocker) => !['open', 'self', 'employee', 'manager'].some((word) => blocker.code.toLowerCase().includes(word)))"
-          :key="issue.code"
-          class="cycle-month-schedule-row__blocker"
-        >{{ issue.message }}</p>
       </article>
     </div>
   </section>
@@ -172,26 +185,6 @@ function issuesFor(schedule: CyclePeriodSchedule, issues: CycleScheduleIssue[]) 
   display: grid;
   overflow: hidden;
   border-top: 1px solid var(--el-border-color-lighter);
-}
-
-.cycle-schedule-warning-summary {
-  display: flex;
-  min-height: 36px;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 4px 12px;
-  color: var(--el-color-warning-dark-2);
-  background: var(--el-color-warning-light-9);
-  font-size: 12px;
-}
-
-.cycle-schedule-warning-summary__details {
-  display: grid;
-  gap: 6px;
-  margin: 0;
-  padding-left: 18px;
-  color: var(--el-text-color-regular);
 }
 
 .cycle-month-schedule-row__period {
@@ -285,13 +278,10 @@ function issuesFor(schedule: CyclePeriodSchedule, issues: CycleScheduleIssue[]) 
   width: 100%;
 }
 
-.cycle-month-schedule-row__blocker {
+.cycle-time-field__issue {
   color: var(--el-color-danger);
-}
-
-.cycle-month-schedule-row__blocker {
-  margin: 8px 0 0;
   font-size: 12px;
+  line-height: 1.35;
 }
 
 @media (max-width: 768px) {

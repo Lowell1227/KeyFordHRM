@@ -32,14 +32,14 @@ export function scoringScheduleSequenceIssues(
       issues.push({
         code: 'SELF_EVAL_OPEN_AFTER_DUE',
         periodKey: schedule.periodKey,
-        message: '自评开放时间不能晚于员工计划完成时间',
+        message: '本期员工自评截止不能早于本期自评开放',
       });
     }
     if (schedule.selfEvalDueAt > schedule.managerDueAt) {
       issues.push({
         code: 'SELF_EVAL_DUE_AFTER_MANAGER_DUE',
         periodKey: schedule.periodKey,
-        message: '员工计划完成时间不能晚于主管计划完成时间',
+        message: '本期主管评分截止不能早于本期员工自评截止',
       });
     }
   }

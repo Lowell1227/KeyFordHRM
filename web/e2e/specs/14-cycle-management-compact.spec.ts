@@ -240,6 +240,10 @@ async function mockCyclePage(
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
   }));
+  await page.route('**/api/v1/indicators**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+  }));
   await page.route('**/api/v1/cycles**', (route) => {
     const url = new URL(route.request().url());
     cycleRequests.push(url);
@@ -621,10 +625,14 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByRole('dialog', { name: '创建绩效周期' }).getByRole('button', { name: '提交', exact: true })).toHaveCount(0);
   });
 
-  test('submits a new cycle into its detail without starting a launch check', async ({ page }) => {
+  test('submits a new cycle into its detail and automatically expands the read-only participant preview', async ({ page }) => {
     const createBodies: unknown[] = [];
     const preflightRequests: string[] = [];
-    await mockCyclePage(page, [], { createBodies, preflightRequests });
+    await mockCyclePage(page, [], {
+      createBodies,
+      preflightRequests,
+      preflight: blockedPreflight,
+    });
     await page.goto('/cycles?group=attention');
 
     await page.getByTestId('cycle-create').click();
@@ -632,7 +640,14 @@ test.describe('compact cycle management list', () => {
 
     await expect(page).toHaveURL(/cycleId=cycle-draft/);
     expect(createBodies).toHaveLength(1);
-    expect(preflightRequests).toEqual([]);
+    await expect.poll(() => preflightRequests).toEqual(['cycle-draft']);
+    const participantDetails = page.getByTestId('cycle-preflight-details');
+    await expect(participantDetails).toHaveAttribute('open', '');
+    await expect(participantDetails).toContainText('林晓');
+    await expect(participantDetails).toContainText('销售部');
+    await expect(participantDetails).toContainText('周强');
+    await expect(page.getByTestId('participant-filter-all')).toBeVisible();
+    await expect(page.getByTestId('participant-search')).toBeVisible();
     await expect(page.getByRole('button', { name: '开始发起', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '预约发起', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '开始发起检查', exact: true })).toHaveCount(0);
@@ -704,7 +719,7 @@ test.describe('compact cycle management list', () => {
     const before = await actionSlot.boundingBox();
     await actionSlot.getByRole('button', { name: '开始发起', exact: true }).click();
 
-    await expect.poll(() => preflightRequests).toEqual(['cycle-draft']);
+    await expect.poll(() => preflightRequests).toEqual(['cycle-draft', 'cycle-draft']);
     await expect(page.getByText('请先处理阻断项')).toBeVisible();
     await expect(actionSlot.getByRole('button', { name: '开始发起', exact: true })).toBeVisible();
     await expect(actionSlot.getByRole('button', { name: '预约发起', exact: true })).toBeVisible();
@@ -740,7 +755,7 @@ test.describe('compact cycle management list', () => {
 
     await expect(page.getByTestId('cycle-preflight-blockers')).toContainText('1 名员工未匹配到考核模板');
     await expect(page.getByText('TEMPLATE_UNCOVERED')).toHaveCount(0);
-    await expect(page.getByText('林晓')).not.toBeVisible();
+    await expect(page.getByText('林晓')).toBeVisible();
     await page.getByRole('button', { name: '去配置考核模板' }).click();
     await expect(page).toHaveURL((url) => (
       url.pathname === '/templates'
@@ -763,7 +778,7 @@ test.describe('compact cycle management list', () => {
     await page.getByRole('button', { name: draftCycle.name }).click();
     await page.getByRole('button', { name: '开始发起', exact: true }).click();
 
-    await expect.poll(() => preflightRequests).toEqual(['cycle-draft']);
+    await expect.poll(() => preflightRequests).toEqual(['cycle-draft', 'cycle-draft']);
     const confirmation = page.getByRole('dialog', { name: '确认发起周期' });
     await expect(confirmation).toContainText('128 名参与员工');
     await expect(confirmation).toContainText('不可撤销');
@@ -783,7 +798,7 @@ test.describe('compact cycle management list', () => {
     await page.getByRole('button', { name: draftCycle.name }).click();
     await page.getByRole('button', { name: '开始发起', exact: true }).click();
 
-    await expect.poll(() => preflightRequests).toEqual(['cycle-draft']);
+    await expect.poll(() => preflightRequests).toEqual(['cycle-draft', 'cycle-draft']);
     await expect(page.getByText('尚未到目标制定开放时间，请使用预约发起')).toBeVisible();
     expect(launchRequests).toEqual([]);
   });
@@ -802,7 +817,7 @@ test.describe('compact cycle management list', () => {
 
     await page.getByRole('button', { name: '预约发起', exact: true }).click();
 
-    await expect.poll(() => preflightRequests).toEqual(['cycle-draft']);
+    await expect.poll(() => preflightRequests).toEqual(['cycle-draft', 'cycle-draft']);
     const confirmation = page.getByRole('dialog', { name: '确认预约发起' });
     await expect(confirmation).toContainText('128 名参与员工');
     await expect(confirmation).toContainText('目标制定开放时间');

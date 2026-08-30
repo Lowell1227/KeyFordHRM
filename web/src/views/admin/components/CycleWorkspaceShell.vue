@@ -52,7 +52,14 @@ const currentStage = computed(() => props.cycle ? cycleStageIndex(props.cycle.st
 const nextStep = computed(() => props.cycle ? cycleNextStep(props.cycle) : null);
 const participantFilter = ref<'all' | 'active' | 'exempted'>('all');
 const participantKeyword = ref('');
-const isPrelaunch = computed(() => Boolean(props.cycle && ['draft', 'launch_blocked'].includes(props.cycle.status)));
+const isPrelaunch = computed(() => Boolean(
+  props.cycle
+  && !props.cycle.openedAt
+  && ['draft', 'scheduled', 'launch_blocked'].includes(props.cycle.status),
+));
+const canRunLaunchAction = computed(() => Boolean(
+  props.cycle && ['draft', 'launch_blocked'].includes(props.cycle.status),
+));
 const activeTaskCount = computed(() => {
   const stats = props.cycle?.taskStats;
   return stats ? Math.max(0, stats.total - stats.exempted) : 0;
@@ -286,6 +293,7 @@ watch(() => props.cycle?.id, () => {
 
           <template v-if="isPrelaunch">
             <div
+              v-if="canRunLaunchAction"
               class="cycle-preflight-control-bar"
               data-testid="cycle-preflight-control-bar"
             >
@@ -378,11 +386,11 @@ watch(() => props.cycle?.id, () => {
           <details
             v-if="participantRows.length"
             class="cycle-participant-details"
-            :open="!isPrelaunch"
+            open
             data-testid="cycle-preflight-details"
           >
             <summary>{{ isPrelaunch ? '查看人员明细' : '人员明细' }}（{{ participantRows.length }}）</summary>
-            <div v-if="!isPrelaunch" class="cycle-participant-toolbar">
+            <div class="cycle-participant-toolbar">
               <div class="cycle-participant-filters" aria-label="参与结果筛选">
                 <button
                   v-for="item in participantFilterOptions"
