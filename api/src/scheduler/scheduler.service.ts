@@ -78,6 +78,7 @@ export class SchedulerService {
     try {
       await this.runSelfEvalOpenings();
       await this.runPeriodSelfEvalOpenings();
+      await this.runPeriodManagerOpenings();
     } catch (err) {
       this.logger.error('开放绩效自评定时任务异常', err);
     }
@@ -317,6 +318,36 @@ export class SchedulerService {
         });
       }
     }
+  }
+
+  /** 员工截止后开放主管评分；不伪造员工提交，员工仍可在主管提交前补交。 */
+  async runPeriodManagerOpenings(): Promise<void> {
+    const now = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      await tx.assessmentPeriod.updateMany({
+        where: {
+          status: 'self_eval',
+          selfEvalDueAt: { lte: now },
+          managerSubmittedAt: null,
+          task: { cycle: { workflowVersion: 2 } },
+        },
+        data: { status: 'manager_scoring' },
+      });
+      await tx.assessmentTask.updateMany({
+        where: {
+          status: 'self_eval',
+          cycle: { workflowVersion: 2 },
+          periods: {
+            some: {
+              status: 'manager_scoring',
+              selfEvalDueAt: { lte: now },
+              managerSubmittedAt: null,
+            },
+          },
+        },
+        data: { status: 'manager_scoring' },
+      });
+    });
   }
 
   // ---------------------------------------------------------------------------

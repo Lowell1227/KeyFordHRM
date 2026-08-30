@@ -16,6 +16,11 @@ import type { AuthUser } from '@/common/types/auth.types';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import type { SaveEmployeePeriodReviewDraftDto } from './dto/save-employee-period-review-draft.dto';
 import type { SubmitEmployeePeriodReviewDto } from './dto/submit-employee-period-review.dto';
+import type { SaveManagerPeriodReviewDraftDto } from './dto/save-manager-period-review-draft.dto';
+import type { ReturnManagerPeriodReviewDto } from './dto/return-manager-period-review.dto';
+import type { SubmitManagerPeriodReviewDto } from './dto/submit-manager-period-review.dto';
+import { PeriodAggregationService } from './period-aggregation.service';
+import { periodReviewNoun, periodReviewTitle } from './period-review-labels';
 import type { PeriodReviewActionResult, PeriodReviewDetail } from './period-review.types';
 
 const periodInclude = {
@@ -67,6 +72,7 @@ export class PeriodReviewsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
+    private readonly aggregation: PeriodAggregationService,
   ) {}
 
   async getReview(periodId: string, viewer: AuthUser): Promise<PeriodReviewDetail> {
@@ -273,7 +279,7 @@ export class PeriodReviewsService {
               progress: item.progress,
               healthStatus: item.healthStatus,
               content: this.optionalText(item.employeeComment)
-                ?? this.progressSummary(item.progress, item.healthStatus),
+                ?? this.progressSummary(period.periodType, item.progress, item.healthStatus),
               attachments: this.attachmentsJson(item.attachments),
               createdBy: viewer.id,
             },
@@ -322,8 +328,230 @@ export class PeriodReviewsService {
         cycleId: period.task.cycleId,
         taskId: period.taskId,
         type: 'monthly_manager_score_opened',
-        title: '员工已提交月度复盘与自评',
-        content: `${period.task.employee.name}已提交${period.periodKey}月度复盘，请完成评分。`,
+        title: `员工已提交${periodReviewNoun(period.periodType)}与自评`,
+        content: `${period.task.employee.name}已提交${periodReviewTitle(period.periodType, period.periodKey)}，请完成评分。`,
+        extraData: { periodId, periodKey: period.periodKey },
+      });
+    }
+    return result;
+  }
+
+  async saveManagerDraft(
+    periodId: string,
+    dto: SaveManagerPeriodReviewDraftDto,
+    viewer: AuthUser,
+  ): Promise<PeriodReviewActionResult> {
+    const period = await this.getPeriod(periodId);
+    this.assertManagerEditable(period, viewer, false);
+    this.assertKnownItems(period, dto.indicators.map((item) => item.indicatorVersionItemId), false);
+    const savedAt = new Date();
+
+    const draftVersion = await this.prisma.$transaction(async (tx) => {
+      const nextVersion = await this.claimManagerDraftVersion(tx, period, dto.expectedVersion);
+      for (const item of dto.indicators) {
+        const data = this.managerReviewData(item);
+        await tx.assessmentPeriodIndicatorReview.upsert({
+          where: {
+            periodId_indicatorVersionItemId: {
+              periodId,
+              indicatorVersionItemId: item.indicatorVersionItemId,
+            },
+          },
+          create: { periodId, indicatorVersionItemId: item.indicatorVersionItemId, ...data },
+          update: data,
+        });
+      }
+      return nextVersion;
+    });
+
+    return { periodId, status: period.status, draftVersion, savedAt };
+  }
+
+  async returnManagerReview(
+    periodId: string,
+    dto: ReturnManagerPeriodReviewDto,
+    viewer: AuthUser,
+  ): Promise<PeriodReviewActionResult> {
+    const previous = await this.prisma.assessmentPeriodReviewRevision.findUnique({
+      where: { idempotencyKey: dto.idempotencyKey },
+    });
+    if (previous) return this.actionResultFromRevision(previous.snapshot, periodId);
+
+    const period = await this.getPeriod(periodId);
+    this.assertManagerEditable(period, viewer, true);
+    const returnedAt = new Date();
+    const reason = this.optionalText(dto.reason) ?? null;
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const draftVersion = await this.claimManagerDraftVersion(tx, period, dto.expectedVersion);
+      const revision = await tx.assessmentPeriodReviewRevision.count({
+        where: { periodId, stage: 'manager' },
+      });
+      const snapshot: Prisma.InputJsonObject = {
+        action: 'return',
+        periodId,
+        status: AssessmentPeriodStatus.self_eval,
+        draftVersion,
+        submittedAt: returnedAt.toISOString(),
+        reason,
+      };
+      await tx.assessmentPeriodReviewRevision.create({
+        data: {
+          periodId,
+          stage: 'manager',
+          revision: revision + 1,
+          snapshot,
+          idempotencyKey: dto.idempotencyKey,
+          createdById: viewer.id,
+        },
+      });
+      await tx.assessmentPeriodIndicatorReview.updateMany({
+        where: { periodId },
+        data: { managerScore: null, managerComment: null },
+      });
+      await tx.assessmentPeriod.update({
+        where: { id: periodId },
+        data: {
+          status: 'self_eval',
+          employeeSubmittedAt: null,
+          managerSubmittedAt: null,
+          managerScoreTotal: null,
+          lockedAt: null,
+        },
+      });
+      await tx.flowRecord.create({
+        data: {
+          taskId: period.taskId,
+          cycleId: period.task.cycleId,
+          nodeType: 'manager_score',
+          actorId: viewer.id,
+          action: 'reject',
+          comment: reason,
+          extraData: { type: 'manager_period_review_returned', periodId, periodKey: period.periodKey },
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: viewer.id,
+          action: 'manager_period_review_returned',
+          entityType: 'assessment_period',
+          entityId: periodId,
+          oldValue: { employeeSubmittedAt: period.employeeSubmittedAt?.toISOString() ?? null },
+          newValue: snapshot,
+        },
+      });
+      return { periodId, status: AssessmentPeriodStatus.self_eval, draftVersion, savedAt: returnedAt };
+    });
+
+    if (period.task.cycle.notificationMode !== 'off') {
+      await this.notifications.create({
+        userId: period.task.employeeId,
+        senderId: viewer.id,
+        cycleId: period.task.cycleId,
+        taskId: period.taskId,
+        type: 'period_employee_review_returned',
+        title: `${periodReviewTitle(period.periodType, period.periodKey)}已退回`,
+        content: reason
+          ? `主管退回了本期复盘：${reason}`
+          : '主管退回了本期复盘，请补充后重新提交。',
+        extraData: { periodId, periodKey: period.periodKey },
+      });
+    }
+    return result;
+  }
+
+  async submitManagerReview(
+    periodId: string,
+    dto: SubmitManagerPeriodReviewDto,
+    viewer: AuthUser,
+  ): Promise<PeriodReviewActionResult> {
+    const previous = await this.prisma.assessmentPeriodReviewRevision.findUnique({
+      where: { idempotencyKey: dto.idempotencyKey },
+    });
+    if (previous) return this.actionResultFromRevision(previous.snapshot, periodId);
+
+    const period = await this.getPeriod(periodId);
+    this.assertManagerEditable(period, viewer, false);
+    this.assertKnownItems(period, dto.indicators.map((item) => item.indicatorVersionItemId), true);
+    const submittedAt = new Date();
+    const itemsById = new Map((period.indicatorVersion?.items ?? []).map((item) => [item.id, item]));
+    const managerScoreTotal = Number(dto.indicators.reduce((sum, item) => {
+      const weight = itemsById.get(item.indicatorVersionItemId)?.weight.toNumber() ?? 0;
+      return sum + item.managerScore * weight;
+    }, 0).toFixed(2));
+
+    const result = await this.prisma.$transaction(async (tx) => {
+      const draftVersion = await this.claimManagerDraftVersion(tx, period, dto.expectedVersion);
+      const revision = await tx.assessmentPeriodReviewRevision.count({
+        where: { periodId, stage: 'manager' },
+      });
+      const snapshot: Prisma.InputJsonObject = {
+        action: 'submit',
+        periodId,
+        status: AssessmentPeriodStatus.completed,
+        draftVersion,
+        submittedAt: submittedAt.toISOString(),
+        managerScoreTotal,
+        indicators: dto.indicators.map((item) => ({
+          indicatorVersionItemId: item.indicatorVersionItemId,
+          managerScore: item.managerScore,
+          managerComment: this.optionalText(item.managerComment) ?? null,
+        })) as Prisma.InputJsonArray,
+      };
+      await tx.assessmentPeriodReviewRevision.create({
+        data: {
+          periodId,
+          stage: 'manager',
+          revision: revision + 1,
+          snapshot,
+          idempotencyKey: dto.idempotencyKey,
+          createdById: viewer.id,
+        },
+      });
+      for (const item of dto.indicators) {
+        const data = this.managerReviewData(item);
+        await tx.assessmentPeriodIndicatorReview.upsert({
+          where: {
+            periodId_indicatorVersionItemId: {
+              periodId,
+              indicatorVersionItemId: item.indicatorVersionItemId,
+            },
+          },
+          create: { periodId, indicatorVersionItemId: item.indicatorVersionItemId, ...data },
+          update: data,
+        });
+      }
+      await tx.assessmentPeriod.update({
+        where: { id: periodId },
+        data: {
+          status: 'completed',
+          managerSubmittedAt: submittedAt,
+          managerScoreTotal,
+          lockedAt: submittedAt,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: viewer.id,
+          action: 'manager_period_review_submitted',
+          entityType: 'assessment_period',
+          entityId: periodId,
+          newValue: snapshot,
+        },
+      });
+      await this.aggregation.refreshTask(period.taskId, tx, viewer.id);
+      return { periodId, status: AssessmentPeriodStatus.completed, draftVersion, savedAt: submittedAt };
+    });
+
+    if (period.task.cycle.notificationMode !== 'off') {
+      await this.notifications.create({
+        userId: period.task.employeeId,
+        senderId: viewer.id,
+        cycleId: period.task.cycleId,
+        taskId: period.taskId,
+        type: 'period_manager_review_completed',
+        title: `${periodReviewTitle(period.periodType, period.periodKey)}已完成`,
+        content: '主管已完成本期评分，最终周期结果将在全部期间评分完成后汇总。',
         extraData: { periodId, periodKey: period.periodKey },
       });
     }
@@ -335,7 +563,7 @@ export class PeriodReviewsService {
       where: { id: periodId },
       include: periodInclude,
     });
-    if (!period) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '月度复盘不存在' });
+    if (!period) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '复盘与评分任务不存在' });
     if (!period.indicatorVersion) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '本期目标版本尚未确认' });
     }
@@ -349,7 +577,7 @@ export class PeriodReviewsService {
       || viewer.sysRole === SysRole.system_admin
       || viewer.canViewAll;
     if (!allowed) {
-      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权查看该月度复盘' });
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权查看该期复盘' });
     }
   }
 
@@ -362,10 +590,10 @@ export class PeriodReviewsService {
 
   private assertEmployeeEditable(period: PeriodWithContext, viewer: AuthUser): void {
     if (period.task.employeeId !== viewer.id) {
-      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅员工本人可填写月度复盘' });
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅员工本人可填写本期复盘' });
     }
     if (!this.canEditEmployee(period, viewer)) {
-      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前月度复盘不可编辑' });
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前复盘不可编辑' });
     }
   }
 
@@ -377,8 +605,24 @@ export class PeriodReviewsService {
     if (!valid || !complete) {
       throw new ConflictException({
         code: ERROR_CODE.PARAM_INVALID,
-        message: requireComplete ? '请完成每一项目标的月度复盘' : '包含不属于本期目标的内容',
+        message: requireComplete ? '请完成每一项目标的本期复盘' : '包含不属于本期目标的内容',
       });
+    }
+  }
+
+  private assertManagerEditable(
+    period: PeriodWithContext,
+    viewer: AuthUser,
+    requireEmployeeSubmission: boolean,
+  ): void {
+    if (period.managerId !== viewer.id) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅本期冻结的直属主管可评分' });
+    }
+    if (period.status !== 'manager_scoring' || period.managerSubmittedAt || period.lockedAt) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前期间不可进行主管评分' });
+    }
+    if (requireEmployeeSubmission && !period.employeeSubmittedAt) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '员工尚未提交本期复盘' });
     }
   }
 
@@ -394,6 +638,31 @@ export class PeriodReviewsService {
         managerSubmittedAt: null,
         employeeSubmittedAt: null,
         status: { in: ['self_eval', 'manager_scoring'] },
+      },
+      data: { draftVersion: { increment: 1 } },
+    });
+    if (claimed.count !== 1) {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: '内容已在其他设备更新，请刷新后继续',
+      });
+    }
+    return expectedVersion + 1;
+  }
+
+  private async claimManagerDraftVersion(
+    tx: Prisma.TransactionClient,
+    period: PeriodWithContext,
+    expectedVersion: number,
+  ): Promise<number> {
+    const claimed = await tx.assessmentPeriod.updateMany({
+      where: {
+        id: period.id,
+        managerId: period.managerId,
+        draftVersion: expectedVersion,
+        managerSubmittedAt: null,
+        lockedAt: null,
+        status: 'manager_scoring',
       },
       data: { draftVersion: { increment: 1 } },
     });
@@ -427,6 +696,16 @@ export class PeriodReviewsService {
       supportNeeded: this.optionalText(item.supportNeeded),
       employeeAttachments: this.attachmentsJson(item.attachments),
       selfScore: item.selfScore,
+    };
+  }
+
+  private managerReviewData(item: { managerScore: number; managerComment?: string | null }) {
+    if (!Number.isFinite(item.managerScore) || item.managerScore < 0 || item.managerScore > 100) {
+      throw new ConflictException({ code: ERROR_CODE.PARAM_INVALID, message: '主管评分须为0至100分' });
+    }
+    return {
+      managerScore: item.managerScore,
+      managerComment: this.optionalText(item.managerComment) ?? null,
     };
   }
 
@@ -485,14 +764,18 @@ export class PeriodReviewsService {
     }[status];
   }
 
-  private progressSummary(progress: number, health: IndicatorProgressHealth): string {
+  private progressSummary(
+    periodType: PeriodWithContext['periodType'],
+    progress: number,
+    health: IndicatorProgressHealth,
+  ): string {
     const labels: Record<IndicatorProgressHealth, string> = {
       on_track: '正常',
       at_risk: '有风险',
       blocked: '受阻',
       completed: '已完成',
     };
-    return `月度复盘：完成度 ${progress}%，状态${labels[health]}`;
+    return `${periodReviewNoun(periodType)}：完成度 ${progress}%，状态${labels[health]}`;
   }
 
   private optionalText(value: string | null | undefined): string | null | undefined {

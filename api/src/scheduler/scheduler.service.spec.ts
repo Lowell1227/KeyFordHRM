@@ -275,6 +275,38 @@ describe('SchedulerService', () => {
     });
   });
 
+  describe('runPeriodManagerOpenings', () => {
+    it('moves overdue employee periods to manager scoring without fabricating employee submission', async () => {
+      prisma.assessmentPeriod.updateMany.mockResolvedValue({ count: 2 });
+
+      await (service as any).runPeriodManagerOpenings();
+
+      expect(prisma.assessmentPeriod.updateMany).toHaveBeenCalledWith({
+        where: {
+          status: 'self_eval',
+          selfEvalDueAt: { lte: expect.any(Date) },
+          managerSubmittedAt: null,
+          task: { cycle: { workflowVersion: 2 } },
+        },
+        data: { status: 'manager_scoring' },
+      });
+      expect(prisma.assessmentTask.updateMany).toHaveBeenCalledWith({
+        where: {
+          status: 'self_eval',
+          cycle: { workflowVersion: 2 },
+          periods: {
+            some: {
+              status: 'manager_scoring',
+              selfEvalDueAt: { lte: expect.any(Date) },
+              managerSubmittedAt: null,
+            },
+          },
+        },
+        data: { status: 'manager_scoring' },
+      });
+    });
+  });
+
   describe('quarter opening orchestration', () => {
     it('opens every scheduled cycle whose goal-setting opening time has arrived', async () => {
       const now = new Date('2026-12-22T09:00:00.000Z');

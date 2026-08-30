@@ -13,10 +13,16 @@ describe('PeriodReviewsService', () => {
     canViewAll: false,
   };
   const outsider = { ...employee, id: '99999999-9999-4999-8999-999999999999' };
+  const manager: AuthUser = {
+    ...employee,
+    id: 'dddddddd-dddd-4ddd-8ddd-dddddddddddd',
+    name: '王主管',
+    sysRole: SysRole.manager,
+  };
 
   const tx = {
     assessmentPeriod: { updateMany: jest.fn(), update: jest.fn() },
-    assessmentPeriodIndicatorReview: { upsert: jest.fn() },
+    assessmentPeriodIndicatorReview: { upsert: jest.fn(), updateMany: jest.fn() },
     assessmentPeriodReviewRevision: { count: jest.fn(), create: jest.fn() },
     indicatorProgressUpdate: { create: jest.fn() },
     assessmentTask: { updateMany: jest.fn() },
@@ -30,7 +36,12 @@ describe('PeriodReviewsService', () => {
     $transaction: jest.fn(async (handler: (client: typeof tx) => unknown) => handler(tx)),
   };
   const notifications = { create: jest.fn() };
-  const service = new PeriodReviewsService(prisma as any, notifications as any);
+  const aggregation = { refreshTask: jest.fn() };
+  const service: PeriodReviewsService = new (PeriodReviewsService as any)(
+    prisma,
+    notifications,
+    aggregation,
+  );
 
   const period = {
     id: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
@@ -43,6 +54,7 @@ describe('PeriodReviewsService', () => {
     selfEvalOpenAt: new Date('2027-02-01T01:00:00.000Z'),
     selfEvalDueAt: new Date('2027-02-03T10:00:00.000Z'),
     managerDueAt: new Date('2027-02-08T10:00:00.000Z'),
+    managerId: manager.id,
     status: 'self_eval',
     draftVersion: 2,
     employeeSubmittedAt: null,
@@ -127,6 +139,7 @@ describe('PeriodReviewsService', () => {
     tx.assessmentPeriodReviewRevision.create.mockResolvedValue({
       id: '14141414-1414-4414-8414-141414141414',
     });
+    aggregation.refreshTask.mockResolvedValue({ complete: false, score: null, targetStatus: null });
     tx.assessmentPeriod.update.mockResolvedValue({ ...period, draftVersion: 3 });
   });
 
@@ -228,5 +241,77 @@ describe('PeriodReviewsService', () => {
       expectedVersion: 1,
       indicators: [],
     }, employee)).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('lets only the frozen direct manager save a manager score draft', async () => {
+    prisma.assessmentPeriod.findUnique.mockResolvedValue({
+      ...period,
+      status: 'manager_scoring',
+      employeeSubmittedAt: new Date('2027-02-02T08:00:00.000Z'),
+    });
+
+    const result = await (service as any).saveManagerDraft(period.id, {
+      expectedVersion: 2,
+      indicators: [{
+        indicatorVersionItemId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        managerScore: 90,
+        managerComment: '交付质量良好',
+      }],
+    }, manager);
+
+    expect(tx.assessmentPeriodIndicatorReview.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      update: { managerScore: 90, managerComment: '交付质量良好' },
+    }));
+    expect(result).toMatchObject({ periodId: period.id, status: 'manager_scoring', draftVersion: 3 });
+    await expect((service as any).saveManagerDraft(period.id, {
+      expectedVersion: 2,
+      indicators: [],
+    }, outsider)).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('returns an employee submission without deleting its formal revision', async () => {
+    prisma.assessmentPeriod.findUnique.mockResolvedValue({
+      ...period,
+      status: 'manager_scoring',
+      employeeSubmittedAt: new Date('2027-02-02T08:00:00.000Z'),
+    });
+
+    const result = await (service as any).returnManagerReview(period.id, {
+      expectedVersion: 2,
+      idempotencyKey: '15151515-1515-4515-8515-151515151515',
+      reason: '请补充关键结果证明',
+    }, manager);
+
+    expect(tx.assessmentPeriod.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'self_eval', employeeSubmittedAt: null }),
+    }));
+    expect(result).toMatchObject({ status: 'self_eval', draftVersion: 3 });
+  });
+
+  it('submits complete manager scores, locks the period, and refreshes the parent task', async () => {
+    prisma.assessmentPeriod.findUnique.mockResolvedValue({
+      ...period,
+      status: 'manager_scoring',
+      employeeSubmittedAt: new Date('2027-02-02T08:00:00.000Z'),
+    });
+
+    const result = await (service as any).submitManagerReview(period.id, {
+      expectedVersion: 2,
+      idempotencyKey: '16161616-1616-4616-8616-161616161616',
+      indicators: [{
+        indicatorVersionItemId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        managerScore: 90,
+        managerComment: '',
+      }],
+    }, manager);
+
+    expect(tx.assessmentPeriodReviewRevision.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ stage: 'manager', idempotencyKey: '16161616-1616-4616-8616-161616161616' }),
+    });
+    expect(tx.assessmentPeriod.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ status: 'completed', managerScoreTotal: 90, lockedAt: expect.any(Date) }),
+    }));
+    expect(aggregation.refreshTask).toHaveBeenCalledWith(period.taskId, tx, manager.id);
+    expect(result).toMatchObject({ status: 'completed', draftVersion: 3 });
   });
 });
