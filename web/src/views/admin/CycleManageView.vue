@@ -797,6 +797,11 @@ function formatDateTimeForMessage(value: Date | string | undefined | null): stri
   return d.isValid() ? d.format('YYYY-MM-DD HH:mm') : '未设置';
 }
 
+function timeWarningConfirmation(result: LaunchPreflightResult, action: '发起' | '预约'): string {
+  if (!result.warnings.length) return '';
+  return `\n\n有 ${result.warnings.length} 项时间安排提醒，已在页面列出；确认后仍可继续${action}。`;
+}
+
 function handleCreateScheduleChange() {
   createScheduleCustomized.value = true;
   if (isWorkflowV2Form.value) scheduleScoringPreview('', 'validate');
@@ -1278,20 +1283,6 @@ function getDeadlineValidationMessage(): string | null {
     }
   }
 
-  const merged: Array<{ label: string; value: Date }> = [];
-  DEADLINE_FIELDS.forEach(({ key, label }) => {
-    const value = editForm[key] ?? toDate(cycle[key]);
-    if (value) merged.push({ label, value });
-  });
-
-  for (let i = 1; i < merged.length; i++) {
-    const previous = merged[i - 1];
-    const current = merged[i];
-    if (dayjs(current.value).isBefore(previous.value)) {
-      return `${current.label}不能早于${previous.label}。请按流程顺序设置截止时间：前一节点结束后，再进入下一节点。`;
-    }
-  }
-
   return null;
 }
 
@@ -1366,7 +1357,7 @@ async function handleLaunch(cycle: AssessmentCycle) {
 
     try {
       await ElMessageBox.confirm(
-        `发起后将为 ${result.participantCount} 名参与员工创建空白目标任务，该操作不可撤销。\n\n确认发起「${cycle.name}」？`,
+        `发起后将为 ${result.participantCount} 名参与员工创建空白目标任务，该操作不可撤销。${timeWarningConfirmation(result, '发起')}\n\n确认发起「${cycle.name}」？`,
         '确认发起周期',
         {
           confirmButtonText: '确认发起',
@@ -1423,7 +1414,7 @@ async function handleSchedule(cycle: AssessmentCycle) {
     const openAt = formatDateTimeForMessage(result.cycle.goalSettingOpenAt);
     try {
       await ElMessageBox.confirm(
-        `系统将在目标制定开放时间 ${openAt} 自动为 ${result.participantCount} 名参与员工发起周期。确认预约吗？`,
+        `系统将在目标制定开放时间 ${openAt} 自动为 ${result.participantCount} 名参与员工发起周期。${timeWarningConfirmation(result, '预约')}\n\n确认预约吗？`,
         '确认预约发起',
         {
           confirmButtonText: '确认预约',
@@ -2068,7 +2059,7 @@ onMounted(() => {
                       v-for="issue in scheduleNodeIssues(node.key)"
                       :key="issue.code"
                       class="schedule-node__issue"
-                    >正式发起前需调整：{{ issue.message }}</small>
+                    >请确认：{{ issue.message }}</small>
                   </div>
                 </div>
               </section>
@@ -2104,7 +2095,7 @@ onMounted(() => {
                       v-for="issue in scheduleNodeIssues(node.key)"
                       :key="issue.code"
                       class="schedule-node__issue"
-                    >正式发起前需调整：{{ issue.message }}</small>
+                    >请确认：{{ issue.message }}</small>
                   </div>
                 </div>
               </section>
@@ -2218,8 +2209,8 @@ onMounted(() => {
       <el-form ref="editFormRef" :model="editForm" label-width="130px">
         <el-alert
           class="deadline-alert"
-          title="截止日只能向后延期，并且要保持流程顺序"
-          description="例如：指标确认截止不能早于指标制定截止；员工自评截止不能早于指标确认截止。"
+          title="已执行节点只能向后延期"
+          description="节点先后异常会在发起检查中提醒，不影响保存；相同时间允许保存。"
           type="info"
           :closable="false"
           show-icon

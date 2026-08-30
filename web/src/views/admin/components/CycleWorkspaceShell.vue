@@ -332,10 +332,13 @@ watch(() => props.cycle?.id, () => {
 
             <template v-else-if="preflight">
               <el-alert
-                :type="preflight.ready ? 'success' : 'error'"
+                :type="preflight.ready ? (preflight.warnings.length ? 'warning' : 'success') : 'error'"
                 :closable="false"
                 show-icon
-                :title="preflight.ready ? '发起检查通过' : '请先处理阻断项'"
+                :title="preflight.ready
+                  ? (preflight.warnings.length ? `${preflight.warnings.length} 项时间安排需确认` : '发起检查通过')
+                  : '请先处理阻断项'"
+                :description="preflight.ready && preflight.warnings.length ? '以下内容仅作提醒，不影响发起或预约。' : undefined"
               />
               <div class="cycle-preflight-summary" data-testid="cycle-preflight-summary">
                 <span>预计范围<strong>{{ preflight.participantCount }}</strong>人</span>
@@ -363,6 +366,16 @@ watch(() => props.cycle?.id, () => {
                   >
                     {{ blockerActionLabel(blocker.code) }}
                   </el-button>
+                </article>
+              </div>
+              <div
+                v-if="preflight.warnings.length"
+                class="cycle-preflight-warnings"
+                data-testid="cycle-preflight-warnings"
+              >
+                <article v-for="warning in preflight.warnings" :key="warning.code">
+                  <strong>{{ warning.message }}</strong>
+                  <span>请确认时间安排；该提醒不会阻止发起。</span>
                 </article>
               </div>
             </template>
@@ -697,6 +710,25 @@ watch(() => props.cycle?.id, () => {
 }
 
 .cycle-preflight-blockers span {
+  font-size: 12px;
+}
+
+.cycle-preflight-warnings {
+  display: grid;
+  gap: 8px;
+}
+
+.cycle-preflight-warnings article {
+  display: grid;
+  gap: 4px;
+  padding: 10px 14px;
+  color: var(--el-color-warning-dark-2);
+  background: var(--el-color-warning-light-9);
+  border-radius: 8px;
+}
+
+.cycle-preflight-warnings span {
+  color: var(--el-text-color-secondary);
   font-size: 12px;
 }
 

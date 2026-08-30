@@ -3,7 +3,7 @@ import { IsOptional, IsDate, IsInt, Min } from 'class-validator';
 
 /**
  * 修改考核周期各节点截止日期。
- * 仅允许延期，不允许提前；新值仍需保持递增顺序。
+ * 已执行节点仅允许延期；节点之间的先后异常由页面和发起检查提示。
  */
 export class UpdateDeadlinesDto {
   @Type(() => Number)

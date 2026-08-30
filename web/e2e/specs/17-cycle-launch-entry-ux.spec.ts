@@ -1013,9 +1013,9 @@ test.describe('cycle launch entry UX', () => {
 
     await expect(page.getByTestId('cycle-schedule-warning-summary')).toHaveCount(0);
     await expect(firstSchedule.getByTestId('self-eval-due-at').locator('.cycle-time-field__issue'))
-      .toContainText('正式发起前需调整：本期员工自评截止不能早于本期自评开放');
+      .toContainText('请确认：本期员工自评截止不能早于本期自评开放');
     await expect(firstSchedule.getByTestId('manager-due-at').locator('.cycle-time-field__issue'))
-      .toContainText('正式发起前需调整：本期主管评分截止不能早于本期员工自评截止');
+      .toContainText('请确认：本期主管评分截止不能早于本期员工自评截止');
     await page.getByTestId('cycle-create-save-draft').click();
 
     await expect.poll(() => createBodies).toHaveLength(1);
@@ -1034,7 +1034,7 @@ test.describe('cycle launch entry UX', () => {
     await goalOpenInput.press('Enter');
 
     await expect(nodes.nth(1).locator('.schedule-node__issue'))
-      .toContainText('正式发起前需调整：指标制定截止不能早于目标制定开放');
+      .toContainText('请确认：指标制定截止不能早于目标制定开放');
     await expect(page.locator('.el-message').filter({ hasText: '指标制定截止不能早于目标制定开放' }))
       .toHaveCount(0);
   });

@@ -801,7 +801,7 @@ export class CyclesService {
     });
   }
 
-  /** PATCH /cycles/:id/deadlines — 只能延期不能提前。 */
+  /** PATCH /cycles/:id/deadlines — 已执行节点只能延期；节点间顺序由发起检查提醒。 */
   async updateDeadlines(id: string, dto: UpdateDeadlinesDto, user: AuthUser) {
     return this.prisma.$transaction(async (tx) => {
       const cycle = await tx.assessmentCycle.findUnique({ where: { id }, include: CYCLE_PLAN_INCLUDE });
@@ -1156,7 +1156,7 @@ export class CyclesService {
     }
   }
 
-  /** 校验延期：每个新截止日 ≥ 原值，且结果序列仍递增。 */
+  /** 校验延期：每个新截止日 ≥ 原值；节点间先后异常只提醒，不在这里阻断。 */
   private validateDeadlinePostponement(cycle: any, dto: UpdateDeadlinesDto): void {
     for (const field of DEADLINE_FIELDS) {
       const newValue = dto[field];
@@ -1171,18 +1171,6 @@ export class CyclesService {
       }
     }
 
-    const merged = DEADLINE_FIELDS.map((field) => dto[field] ?? cycle[field])
-      .filter((d): d is Date => d != null);
-
-    this.assertNonDecreasing(merged, '调整后各节点截止日需保持递增');
-  }
-
-  private assertNonDecreasing(dates: Date[], message: string): void {
-    for (let i = 1; i < dates.length; i++) {
-      if (dates[i] < dates[i - 1]) {
-        throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message });
-      }
-    }
   }
 
   private addDays(date: Date, days: number): Date {

@@ -238,7 +238,7 @@ describe('LaunchService preflight', () => {
     expect(tx.assessmentTemplate.findMany).not.toHaveBeenCalled();
   });
 
-  it('blocks launch preflight when an approved workflow time sequence runs backwards', async () => {
+  it('warns without blocking preflight or launch when an approved workflow time sequence runs backwards', async () => {
     tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle({
       deadlineIndicatorSetting: new Date('2026-12-21T10:00:00.000Z'),
     }));
@@ -247,13 +247,16 @@ describe('LaunchService preflight', () => {
 
     const checked = await service.preflight(cycleId);
 
-    expect(checked.ready).toBe(false);
-    expect(checked.blockers).toContainEqual(expect.objectContaining({
+    expect(checked.ready).toBe(true);
+    expect(checked.planHash).toEqual(expect.any(String));
+    expect(checked.blockers).toEqual([]);
+    expect(checked.warnings).toContainEqual(expect.objectContaining({
       code: 'INDICATOR_SETTING_BEFORE_GOAL_OPEN',
     }));
-    await expect(service.launch(cycleId, operator, { expectedPlanHash: 'not-used' }))
-      .rejects.toThrow('指标制定截止不能早于目标制定开放');
-    expect(tx.assessmentTask.create).not.toHaveBeenCalled();
+    await expect(service.launch(cycleId, operator, {
+      now: new Date('2026-12-23T00:00:00.000Z'),
+      expectedPlanHash: checked.planHash!,
+    })).resolves.toEqual(expect.objectContaining({ activeTasks: 1 }));
   });
 
   it('allows every adjacent workflow time to be equal at launch preflight', async () => {

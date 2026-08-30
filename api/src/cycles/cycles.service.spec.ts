@@ -1217,4 +1217,32 @@ describe('CyclesService', () => {
       reviewFrequency: 'cycle',
     }));
   });
+
+  it('saves a postponed deadline even when it reverses the order of two nodes', async () => {
+    const cycle = storedDraft({
+      deadlineIndicatorSetting: new Date('2026-12-20T10:00:00.000Z'),
+      deadlineIndicatorConfirm: new Date('2026-12-21T10:00:00.000Z'),
+    });
+    const updated = {
+      ...cycle,
+      planVersion: 4,
+      deadlineIndicatorSetting: new Date('2026-12-23T10:00:00.000Z'),
+      deadlineIndicatorConfirm: new Date('2026-12-22T10:00:00.000Z'),
+      reviewStatus: 'pending',
+      reviewedAt: null,
+      reviewComment: null,
+    };
+    prisma.assessmentCycle.findUnique
+      .mockResolvedValueOnce(cycle)
+      .mockResolvedValueOnce(updated);
+
+    await expect(service.updateDeadlines('cycle-1', {
+      expectedPlanVersion: 3,
+      deadlineIndicatorSetting: updated.deadlineIndicatorSetting,
+      deadlineIndicatorConfirm: updated.deadlineIndicatorConfirm,
+    }, creator)).resolves.toEqual(expect.objectContaining({
+      deadlineIndicatorSetting: updated.deadlineIndicatorSetting,
+      deadlineIndicatorConfirm: updated.deadlineIndicatorConfirm,
+    }));
+  });
 });

@@ -12,7 +12,10 @@ import { createHash } from 'crypto';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
-import { launchTimeSequenceBlockers } from './cycle-time-policy';
+import {
+  launchTimeSequenceWarnings,
+  launchTimeStructuralBlockers,
+} from './cycle-time-policy';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { ExemptService } from './exempt.service';
 import { serializeDecimals } from '@/common/interceptors/response.interceptor';
@@ -194,6 +197,7 @@ export class LaunchService {
         schedules,
         companyFinalApprover,
       ));
+      warnings.push(...launchTimeSequenceWarnings(effectiveCycle, schedules));
     }
     const candidates = isWorkflowV2
       ? this.includeCompanyFinalApprover(selection.included, companyFinalApprover)
@@ -1142,7 +1146,7 @@ export class LaunchService {
         message: '已保存的评分排期与周期类型或考核期间不一致，请返回周期计划重新生成并审核',
       });
     }
-    blockers.push(...launchTimeSequenceBlockers(cycle, schedules));
+    blockers.push(...launchTimeStructuralBlockers(cycle));
     return blockers;
   }
 

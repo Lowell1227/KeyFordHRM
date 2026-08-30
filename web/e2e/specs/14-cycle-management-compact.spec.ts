@@ -152,6 +152,14 @@ const immediatelyOpenablePreflight: LaunchPreflightResult = {
   },
 };
 
+const warningPreflight: LaunchPreflightResult = {
+  ...immediatelyOpenablePreflight,
+  warnings: [{
+    code: 'HR_CALIBRATION_BEFORE_FINAL_MANAGER_DUE',
+    message: 'HR校准截止不能早于最后一期主管计划完成时间',
+  }],
+};
+
 interface CycleMockOptions {
   cycles?: AssessmentCycle[];
   departments?: Department[];
@@ -787,6 +795,27 @@ test.describe('compact cycle management list', () => {
 
     await expect.poll(() => launchRequests).toEqual(['cycle-draft']);
     expect(launchBodies).toEqual([{ expectedPlanHash: 'ready-plan-hash' }]);
+  });
+
+  test('shows time order warnings and still lets HR confirm and launch', async ({ page }) => {
+    const launchRequests: string[] = [];
+    await mockCyclePage(page, [], {
+      preflight: warningPreflight,
+      launchRequests,
+    });
+    await page.goto('/cycles?group=attention&cycleId=cycle-draft');
+
+    await expect(page.getByTestId('cycle-preflight-warnings'))
+      .toContainText('HR校准截止不能早于最后一期主管计划完成时间');
+    await expect(page.getByText('1 项时间安排需确认')).toBeVisible();
+    await page.getByRole('button', { name: '开始发起', exact: true }).click();
+
+    const confirmation = page.getByRole('dialog', { name: '确认发起周期' });
+    await expect(confirmation).toContainText('1 项时间安排提醒');
+    await expect(confirmation).toContainText('仍可继续发起');
+    await confirmation.getByRole('button', { name: '确认发起' }).click();
+
+    await expect.poll(() => launchRequests).toEqual(['cycle-draft']);
   });
 
   test('guides ordinary HR to schedule when immediate launch is too early', async ({ page }) => {

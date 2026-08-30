@@ -133,7 +133,7 @@ function rowBlockers(schedule: CyclePeriodSchedule) {
             v-for="issue in issuesForField(schedule, 'selfEvalOpenAt')"
             :key="issue.code"
             class="cycle-time-field__issue"
-          >正式发起前需调整：{{ issue.message }}</small>
+          >请确认：{{ issue.message }}</small>
         </label>
         <label data-testid="self-eval-due-at">
           <span class="cycle-month-schedule-row__mobile-label">本期员工自评截止</span>
@@ -148,7 +148,7 @@ function rowBlockers(schedule: CyclePeriodSchedule) {
             v-for="issue in issuesForField(schedule, 'selfEvalDueAt')"
             :key="issue.code"
             class="cycle-time-field__issue"
-          >正式发起前需调整：{{ issue.message }}</small>
+          >请确认：{{ issue.message }}</small>
         </label>
         <label data-testid="manager-due-at">
           <span class="cycle-month-schedule-row__mobile-label">本期主管评分截止</span>
@@ -163,7 +163,7 @@ function rowBlockers(schedule: CyclePeriodSchedule) {
             v-for="issue in issuesForField(schedule, 'managerDueAt')"
             :key="issue.code"
             class="cycle-time-field__issue"
-          >正式发起前需调整：{{ issue.message }}</small>
+          >请确认：{{ issue.message }}</small>
         </label>
           <div class="cycle-month-schedule-row__actions">
             <el-button
