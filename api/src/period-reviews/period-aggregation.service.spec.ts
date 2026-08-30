@@ -6,6 +6,7 @@ describe('PeriodAggregationService', () => {
     assessmentTask: { findUnique: jest.fn() },
     systemConfig: { findUnique: jest.fn() },
     gradeResult: { upsert: jest.fn() },
+    auditLog: { create: jest.fn() },
   };
   const scoring = { calcRawGrade: jest.fn().mockReturnValue('B') };
   const flow = { transitionTx: jest.fn() };
@@ -38,6 +39,14 @@ describe('PeriodAggregationService', () => {
     expect(flow.transitionTx).toHaveBeenCalledWith(tx, expect.objectContaining({
       targetStatus: 'dept_review', actorId: 'manager-1',
     }));
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        action: 'period_scores_aggregated',
+        entityType: 'assessment_task',
+        entityId: 'task-1',
+        newValue: expect.objectContaining({ score: 85, validPeriodCount: 2, targetStatus: 'dept_review' }),
+      }),
+    });
   });
 
   it('does not create an early score while any required period is unfinished', async () => {

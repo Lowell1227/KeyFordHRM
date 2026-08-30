@@ -87,6 +87,20 @@ export class PeriodAggregationService {
       actorId,
       taskUpdate: { managerScoredAt: new Date() },
     });
+    await tx.auditLog.create({
+      data: {
+        userId: actorId,
+        action: 'period_scores_aggregated',
+        entityType: 'assessment_task',
+        entityId: taskId,
+        newValue: {
+          score,
+          validPeriodCount: valid.length,
+          excludedNoResultCount: task.periods.filter((period) => period.status === 'no_result').length,
+          targetStatus,
+        },
+      },
+    });
     return { complete: true, score, targetStatus };
   }
 }
