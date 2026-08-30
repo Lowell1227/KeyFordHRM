@@ -71,6 +71,7 @@ const teamStagePendingCounts = ref<Record<TeamTaskStage, number | undefined>>({
 let teamRequestSerial = 0;
 let teamDetailRequestSerial = 0;
 let teamStageSummaryRequestSerial = 0;
+let personalRequestSerial = 0;
 let singleOperationSerial = 0;
 let saveRequestSerial = 0;
 let taskWorkspaceReady = false;
@@ -306,23 +307,28 @@ interface LoadListOptions {
 }
 
 async function loadList(options: LoadListOptions = {}) {
+  const requestId = ++personalRequestSerial;
   if (!selectedCycleId.value) {
     list.value = [];
     loading.value = false;
     return;
   }
+  const cycleId = selectedCycleId.value;
   loading.value = true;
   try {
     const baseParams = {
-      cycleId: selectedCycleId.value,
+      cycleId,
     } satisfies Omit<TaskQuery, 'employeeId' | 'page' | 'pageSize'>;
     const scopedTasks = await fetchAllMine(baseParams);
+    if (requestId !== personalRequestSerial || selectedCycleId.value !== cycleId) return;
     list.value = sortTasksByCycleDesc(scopedTasks);
   } catch {
-    list.value = [];
-    if (!options.silent) ElMessage.error('获取绩效任务失败');
+    if (requestId === personalRequestSerial) {
+      list.value = [];
+      if (!options.silent) ElMessage.error('获取绩效任务失败');
+    }
   } finally {
-    loading.value = false;
+    if (requestId === personalRequestSerial) loading.value = false;
   }
 }
 
@@ -957,18 +963,23 @@ watch(
     }
     await teamListRef.value?.clearSelection();
     teamBatchResult.value = undefined;
-    const summaryFiltersChanged = current.cycleId !== previous.cycleId
+    const cycleChanged = current.cycleId !== previous.cycleId;
+    if (cycleChanged) list.value = [];
+    const summaryFiltersChanged = cycleChanged
       || current.deptId !== previous.deptId
       || current.employeeId !== previous.employeeId;
     if (current.scope === 'team') {
       await Promise.all([
         loadTeam(),
+        isManagerCapable.value && cycleChanged
+          ? loadList({ silent: true })
+          : Promise.resolve(),
         isManagerCapable.value && summaryFiltersChanged
           ? loadTeamStageSummaries()
           : Promise.resolve(),
       ]);
     } else {
-      if (previous.scope !== 'mine') await loadList();
+      if (previous.scope !== 'mine' || cycleChanged) await loadList();
       if (isManagerCapable.value && summaryFiltersChanged) await loadTeamStageSummaries();
     }
   },

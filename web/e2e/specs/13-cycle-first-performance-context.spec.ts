@@ -333,6 +333,71 @@ test.describe('cycle-first task contracts', () => {
     await expect(page).toHaveURL(/\/tasks\/personal-task-1\?.*stage=result/);
   });
 
+  test('reloads the personal performance task after switching assessment cycle', async ({ page }) => {
+    const taskRequests: URL[] = [];
+    const activeCycle = cycle('cycle-active', '2026-08-01', '2026-08-30');
+    activeCycle.name = '2026年08月绩效考核';
+    activeCycle.scoringFrequency = 'monthly';
+    activeCycle.personalTask = {
+      id: 'task-active',
+      employeeId: 'manager-1',
+      status: 'self_eval',
+      isExempt: false,
+    };
+    const exemptCycle = cycle('cycle-exempt', '2026-08-01', '2026-08-31');
+    exemptCycle.name = '2026年08月绩效考核';
+    exemptCycle.scoringFrequency = 'monthly';
+    exemptCycle.personalTask = {
+      id: 'task-exempt',
+      employeeId: 'manager-1',
+      status: 'exempted',
+      isExempt: true,
+    };
+
+    await mockTaskCycleShell(page, [activeCycle, exemptCycle], taskRequests);
+    await page.route('**/api/v1/tasks/mine**', (route) => {
+      const url = new URL(route.request().url());
+      taskRequests.push(url);
+      const isExempt = url.searchParams.get('cycleId') === exemptCycle.id;
+      const task: TaskListItem = isExempt
+        ? {
+            id: 'task-exempt',
+            cycleId: exemptCycle.id,
+            cycleName: exemptCycle.name,
+            employeeId: 'manager-1',
+            employeeName: 'Cycle Manager',
+            status: 'exempted',
+            isExempt: true,
+            exemptReason: 'HR 按部门设置为本周期豁免',
+            updatedAt: '2026-08-30T03:00:00.000Z',
+          }
+        : {
+            id: 'task-active',
+            cycleId: activeCycle.id,
+            cycleName: activeCycle.name,
+            employeeId: 'manager-1',
+            employeeName: 'Cycle Manager',
+            status: 'self_eval',
+            isExempt: false,
+            updatedAt: '2026-08-30T02:00:00.000Z',
+          };
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 100, items: [task] })),
+      });
+    });
+
+    await page.goto('/tasks?scope=mine&cycleId=cycle-active');
+    await expect(page.getByTestId('personal-task-card')).toContainText('已完成');
+
+    await page.getByTestId('task-cycle-filter').click();
+    await page.locator('.el-select-dropdown__item').filter({ hasText: '已豁免' }).click();
+
+    await expect(page).toHaveURL(/cycleId=cycle-exempt/);
+    await expect.poll(() => taskRequests.at(-1)?.searchParams.get('cycleId')).toBe('cycle-exempt');
+    await expect(page.locator('.personal-task-card__state')).toHaveText('已豁免');
+  });
+
   test('shows an exempt task as exempted in goal setting list and detail', async ({ page }) => {
     const taskRequests: URL[] = [];
     const currentCycle = cycle('cycle-exempt', '2026-08-01', '2026-08-31');
