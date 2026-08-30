@@ -1072,6 +1072,7 @@ model AssessmentPeriod {
   indicatorVersion IndicatorVersion?                 @relation("PeriodIndicatorVersion", fields: [indicatorVersionId], references: [id], onDelete: SetNull)
   indicatorReviews AssessmentPeriodIndicatorReview[]
   revisions        AssessmentPeriodReviewRevision[]
+  progressUpdates  IndicatorProgressUpdate[]
 
   @@unique([taskId, periodKey])
   @@index([managerId, status])
@@ -1162,6 +1163,7 @@ model AssessmentPeriodReviewRevision {
 
   period    AssessmentPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
   createdBy User             @relation("PeriodReviewRevisionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  progressUpdates IndicatorProgressUpdate[]
 
   @@unique([periodId, stage, revision])
   @@index([periodId, stage])
@@ -1209,19 +1211,25 @@ model IndicatorInstance {
 }
 
 model IndicatorProgressUpdate {
-  id                  String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  indicatorInstanceId String                  @map("indicator_instance_id") @db.Uuid
-  progress            Int                     @db.SmallInt
-  healthStatus        IndicatorProgressHealth @map("health_status")
-  content             String                  @db.Text
-  attachments         Json                    @default("[]") @db.JsonB
-  createdBy           String                  @map("created_by") @db.Uuid
-  createdAt           DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                     String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  indicatorInstanceId    String                  @map("indicator_instance_id") @db.Uuid
+  periodId               String?                 @map("period_id") @db.Uuid
+  periodReviewRevisionId String?                 @map("period_review_revision_id") @db.Uuid
+  progress               Int                     @db.SmallInt
+  healthStatus           IndicatorProgressHealth @map("health_status")
+  content                String                  @db.Text
+  attachments            Json                    @default("[]") @db.JsonB
+  createdBy              String                  @map("created_by") @db.Uuid
+  createdAt              DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  indicatorInstance IndicatorInstance @relation(fields: [indicatorInstanceId], references: [id], onDelete: Cascade)
-  creator           User              @relation("IndicatorProgressCreator", fields: [createdBy], references: [id], onDelete: Restrict)
+  indicatorInstance    IndicatorInstance               @relation(fields: [indicatorInstanceId], references: [id], onDelete: Cascade)
+  period               AssessmentPeriod?               @relation(fields: [periodId], references: [id], onDelete: SetNull)
+  periodReviewRevision AssessmentPeriodReviewRevision? @relation(fields: [periodReviewRevisionId], references: [id], onDelete: SetNull)
+  creator              User                            @relation("IndicatorProgressCreator", fields: [createdBy], references: [id], onDelete: Restrict)
 
+  @@unique([indicatorInstanceId, periodReviewRevisionId])
   @@index([indicatorInstanceId, createdAt(sort: Desc)])
+  @@index([periodId, createdAt(sort: Desc)])
   @@index([createdBy])
   @@map("indicator_progress_updates")
 }

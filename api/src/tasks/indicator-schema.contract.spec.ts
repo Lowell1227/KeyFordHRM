@@ -42,5 +42,8 @@ describe('performance workflow v2 schema', () => {
     expect(schema).toMatch(/problemReason\s+String\?/);
     expect(schema).toMatch(/nextMonthPlan\s+String\?/);
     expect(schema).toMatch(/supportNeeded\s+String\?/);
+    expect(schema).toMatch(/periodId\s+String\?/);
+    expect(schema).toMatch(/periodReviewRevisionId\s+String\?/);
+    expect(schema).toContain('@@unique([indicatorInstanceId, periodReviewRevisionId])');
   });
 });

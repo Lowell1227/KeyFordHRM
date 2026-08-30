@@ -124,6 +124,9 @@ describe('PeriodReviewsService', () => {
     prisma.assessmentPeriodReviewRevision.findUnique.mockResolvedValue(null);
     tx.assessmentPeriod.updateMany.mockResolvedValue({ count: 1 });
     tx.assessmentPeriodReviewRevision.count.mockResolvedValue(0);
+    tx.assessmentPeriodReviewRevision.create.mockResolvedValue({
+      id: '14141414-1414-4414-8414-141414141414',
+    });
     tx.assessmentPeriod.update.mockResolvedValue({ ...period, draftVersion: 3 });
   });
 
@@ -198,6 +201,8 @@ describe('PeriodReviewsService', () => {
     expect(tx.indicatorProgressUpdate.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         indicatorInstanceId: '12121212-1212-4212-8212-121212121212',
+        periodId: period.id,
+        periodReviewRevisionId: '14141414-1414-4414-8414-141414141414',
         progress: 80,
         content: expect.stringContaining('完成度 80%'),
       }),

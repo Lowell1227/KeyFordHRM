@@ -219,33 +219,6 @@ export class PeriodReviewsService {
 
     const result = await this.prisma.$transaction(async (tx) => {
       const draftVersion = await this.claimDraftVersion(tx, period, dto.expectedVersion);
-      for (const item of dto.indicators) {
-        const versionItem = itemsById.get(item.indicatorVersionItemId)!;
-        const data = this.employeeReviewData(item);
-        await tx.assessmentPeriodIndicatorReview.upsert({
-          where: {
-            periodId_indicatorVersionItemId: {
-              periodId,
-              indicatorVersionItemId: item.indicatorVersionItemId,
-            },
-          },
-          create: { periodId, indicatorVersionItemId: item.indicatorVersionItemId, ...data },
-          update: data,
-        });
-        if (versionItem.sourceInstanceId) {
-          await tx.indicatorProgressUpdate.create({
-            data: {
-              indicatorInstanceId: versionItem.sourceInstanceId,
-              progress: item.progress,
-              healthStatus: item.healthStatus,
-              content: this.optionalText(item.employeeComment)
-                ?? this.progressSummary(item.progress, item.healthStatus),
-              attachments: this.attachmentsJson(item.attachments),
-              createdBy: viewer.id,
-            },
-          });
-        }
-      }
       const revision = await tx.assessmentPeriodReviewRevision.count({
         where: { periodId, stage: 'employee' },
       });
@@ -268,7 +241,7 @@ export class PeriodReviewsService {
           selfScore: item.selfScore,
         })) as Prisma.InputJsonArray,
       };
-      await tx.assessmentPeriodReviewRevision.create({
+      const formalRevision = await tx.assessmentPeriodReviewRevision.create({
         data: {
           periodId,
           stage: 'employee',
@@ -278,6 +251,35 @@ export class PeriodReviewsService {
           createdById: viewer.id,
         },
       });
+      for (const item of dto.indicators) {
+        const versionItem = itemsById.get(item.indicatorVersionItemId)!;
+        const data = this.employeeReviewData(item);
+        await tx.assessmentPeriodIndicatorReview.upsert({
+          where: {
+            periodId_indicatorVersionItemId: {
+              periodId,
+              indicatorVersionItemId: item.indicatorVersionItemId,
+            },
+          },
+          create: { periodId, indicatorVersionItemId: item.indicatorVersionItemId, ...data },
+          update: data,
+        });
+        if (versionItem.sourceInstanceId) {
+          await tx.indicatorProgressUpdate.create({
+            data: {
+              indicatorInstanceId: versionItem.sourceInstanceId,
+              periodId,
+              periodReviewRevisionId: formalRevision.id,
+              progress: item.progress,
+              healthStatus: item.healthStatus,
+              content: this.optionalText(item.employeeComment)
+                ?? this.progressSummary(item.progress, item.healthStatus),
+              attachments: this.attachmentsJson(item.attachments),
+              createdBy: viewer.id,
+            },
+          });
+        }
+      }
       await tx.assessmentPeriod.update({
         where: { id: periodId },
         data: {
