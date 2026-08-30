@@ -12,6 +12,15 @@ describe('CyclesController schedule preview route', () => {
     expect(methods.indexOf('previewSchedule')).toBeLessThan(methods.indexOf('findOne'));
   });
 
+  it('registers the literal tracking-contexts route before the :id route', () => {
+    const methods = Object.getOwnPropertyNames(CyclesController.prototype);
+    const handler = (CyclesController.prototype as unknown as Record<string, object>).findTrackingContexts;
+
+    expect(handler).toBeDefined();
+    expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe('tracking-contexts');
+    expect(methods.indexOf('findTrackingContexts')).toBeLessThan(methods.indexOf('findOne'));
+  });
+
   it('authorizes cycle review as HR business work without a system-administrator fallback', () => {
     expect(Reflect.getMetadata(ROLES_KEY, CyclesController.prototype.review)).toEqual([SysRole.hr]);
     expect(Reflect.getMetadata(HR_CAPABILITIES_KEY, CyclesController.prototype.review)).toBeUndefined();

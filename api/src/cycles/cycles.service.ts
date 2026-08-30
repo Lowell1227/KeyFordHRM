@@ -13,6 +13,7 @@ import type { ReviewCycleDto } from './dto/review-cycle.dto';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { CycleScheduleService, NormalizedCycleSchedulePlan } from './cycle-schedule.service';
 import { businessDateKey, canonicalDateOnly, normalizeScoringFrequency } from './cycle-scoring-plan';
+import type { PerformanceCycleContext } from './tracking-context.types';
 
 const DEADLINE_FIELDS = [
   'deadlineIndicatorSetting',
@@ -513,7 +514,7 @@ export class CyclesService {
   /** GET /cycles/mine — 查看已开放且与本人或直属团队任务相关的周期。 */
   async findMine(viewer: AuthUser) {
     const visibleTaskWhere = this.visibleTaskWhere(viewer);
-    return this.prisma.assessmentCycle.findMany({
+    const cycles = await this.prisma.assessmentCycle.findMany({
       where: {
         status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
         tasks: { some: visibleTaskWhere },
@@ -521,11 +522,101 @@ export class CyclesService {
       include: {
         tasks: {
           where: visibleTaskWhere,
-          select: { id: true, status: true, isExempt: true },
-          take: 1,
+          select: { id: true, employeeId: true, status: true, isExempt: true },
         },
       },
       orderBy: { startDate: 'desc' },
+    });
+    return cycles.map(({ tasks, ...cycle }) => ({
+      ...cycle,
+      personalTask: tasks.find((task) => task.employeeId === viewer.id) ?? null,
+      visibleTasks: tasks,
+    }));
+  }
+
+  /** GET /cycles/tracking-contexts — 按冻结任务返回某人的正式目标跟进周期。 */
+  async findTrackingContexts(ownerId: string, viewer: AuthUser): Promise<PerformanceCycleContext[]> {
+    await this.assertTrackingOwnerVisible(ownerId, viewer);
+    const cycles = await this.prisma.assessmentCycle.findMany({
+      where: {
+        openedAt: { not: null },
+        status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
+        tasks: { some: { employeeId: ownerId } },
+      },
+      select: {
+        id: true,
+        name: true,
+        type: true,
+        startDate: true,
+        endDate: true,
+        openedAt: true,
+        scoringFrequency: true,
+        tasks: {
+          where: { employeeId: ownerId },
+          take: 1,
+          select: {
+            id: true,
+            status: true,
+            isExempt: true,
+            exemptReason: true,
+            participantDisposition: true,
+            periods: {
+              orderBy: { sequence: 'asc' },
+              select: {
+                id: true,
+                periodKey: true,
+                periodType: true,
+                sequence: true,
+                status: true,
+                selfEvalOpenAt: true,
+                selfEvalDueAt: true,
+                managerDueAt: true,
+                employeeSubmittedAt: true,
+                managerSubmittedAt: true,
+                selfScoreTotal: true,
+                managerScoreTotal: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
+    const contexts = cycles.flatMap((cycle): PerformanceCycleContext[] => {
+      const task = cycle.tasks[0];
+      if (!task || !cycle.openedAt) return [];
+      return [{
+        id: cycle.id,
+        name: cycle.name,
+        type: cycle.type,
+        startDate: cycle.startDate,
+        endDate: cycle.endDate,
+        openedAt: cycle.openedAt,
+        scoringFrequency: cycle.scoringFrequency,
+        task: {
+          id: task.id,
+          status: task.status,
+          isExempt: task.isExempt,
+          exemptReason: task.exemptReason,
+          participantDisposition: task.participantDisposition,
+        },
+        periods: task.periods.map((period) => ({
+          ...period,
+          selfScoreTotal: period.selfScoreTotal?.toNumber() ?? null,
+          managerScoreTotal: period.managerScoreTotal?.toNumber() ?? null,
+        })),
+      }];
+    });
+
+    const today = businessDateKey(new Date());
+    return contexts.sort((left, right) => {
+      const priorityDifference = this.trackingContextPriority(left, today)
+        - this.trackingContextPriority(right, today);
+      if (priorityDifference !== 0) return priorityDifference;
+      return right.startDate.getTime() - left.startDate.getTime()
+        || right.endDate.getTime() - left.endDate.getTime()
+        || right.openedAt.getTime() - left.openedAt.getTime()
+        || left.id.localeCompare(right.id);
     });
   }
 
@@ -1021,6 +1112,38 @@ export class CyclesService {
         { approverId: viewer.id },
       ],
     };
+  }
+
+  private async assertTrackingOwnerVisible(ownerId: string, viewer: AuthUser): Promise<void> {
+    if (ownerId === viewer.id) return;
+    const viewerRecord = await this.prisma.user.findUnique({
+      where: { id: viewer.id },
+      select: { directManagerId: true },
+    });
+    if (viewerRecord?.directManagerId !== ownerId) {
+      throw new ForbiddenException({
+        code: ERROR_CODE.FORBIDDEN,
+        message: '无权查看该员工的目标跟进周期',
+      });
+    }
+  }
+
+  private trackingContextPriority(context: PerformanceCycleContext, today: string): number {
+    const startDate = businessDateKey(context.startDate);
+    const endDate = businessDateKey(context.endDate);
+    const current = startDate <= today && endDate >= today;
+    const actionableStatuses: string[] = [
+      'indicator_drafting',
+      'indicator_reviewing',
+      'indicator_confirming',
+      'self_eval',
+      'manager_scoring',
+    ];
+    if (current && !context.task.isExempt && actionableStatuses.includes(context.task.status)) return 0;
+    if (current && !context.task.isExempt) return 1;
+    if (current && context.task.isExempt) return 2;
+    if (endDate < today) return 3;
+    return 4;
   }
 
   /** 草稿需能生成评分期；时间节点业务顺序统一留到发起检查。 */

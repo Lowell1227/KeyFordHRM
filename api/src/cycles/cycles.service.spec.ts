@@ -666,19 +666,85 @@ describe('CyclesService', () => {
     }));
   });
 
-  it('returns only opened cycles that contain a task for the current employee', async () => {
+  it('returns every opened task context for the owner without filtering by cycle name or type', async () => {
+    const owner = { ...creator, id: 'employee-1', sysRole: SysRole.employee } as AuthUser;
+    prisma.assessmentCycle.findMany.mockResolvedValue([
+      {
+        id: 'monthly-active',
+        name: '2026年08月绩效考核',
+        type: 'monthly',
+        startDate: new Date('2026-08-01T00:00:00.000Z'),
+        endDate: new Date('2026-08-30T00:00:00.000Z'),
+        openedAt: new Date('2026-08-30T06:35:00.000Z'),
+        scoringFrequency: 'monthly',
+        tasks: [{
+          id: 'task-active', status: 'goal_confirmed', isExempt: false,
+          exemptReason: null, participantDisposition: 'active',
+          periods: [{
+            id: 'period-1', periodKey: '2026-08', periodType: 'month', sequence: 1,
+            status: 'self_eval', selfEvalOpenAt: new Date('2026-08-25T00:00:00.000Z'),
+            selfEvalDueAt: new Date('2026-08-31T10:00:00.000Z'), managerDueAt: new Date('2026-09-03T10:00:00.000Z'),
+            employeeSubmittedAt: null, managerSubmittedAt: null, selfScoreTotal: null, managerScoreTotal: null,
+          }],
+        }],
+      },
+      {
+        id: 'custom-exempt',
+        name: '2026年08月绩效考核',
+        type: 'custom',
+        startDate: new Date('2026-08-01T00:00:00.000Z'),
+        endDate: new Date('2026-08-31T00:00:00.000Z'),
+        openedAt: new Date('2026-08-30T02:51:00.000Z'),
+        scoringFrequency: 'cycle',
+        tasks: [{
+          id: 'task-exempt', status: 'exempted', isExempt: true,
+          exemptReason: 'HR 按部门设置为本周期豁免', participantDisposition: 'cycle_exempt', periods: [],
+        }],
+      },
+    ]);
+
+    const result = await (service as any).findTrackingContexts(owner.id, owner);
+
+    expect(result).toHaveLength(2);
+    expect(result.map((item: any) => item.task.participantDisposition)).toEqual(['active', 'cycle_exempt']);
+    expect(result[0].periods[0]).toMatchObject({ periodType: 'month', status: 'self_eval' });
+    expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        openedAt: { not: null },
+        status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
+        tasks: { some: { employeeId: owner.id } },
+      },
+    }));
+  });
+
+  it('allows an employee to view only their direct manager tracking contexts', async () => {
+    const employee = { ...creator, id: 'employee-1', sysRole: SysRole.employee } as AuthUser;
+    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'manager-1' });
+    prisma.assessmentCycle.findMany.mockResolvedValue([]);
+
+    await expect((service as any).findTrackingContexts('manager-1', employee)).resolves.toEqual([]);
+    await expect((service as any).findTrackingContexts('unrelated-1', employee))
+      .rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('returns opened cycles with the current employee personal task separated from visible team tasks', async () => {
     prisma.assessmentCycle.findMany.mockResolvedValue([{
       id: 'cycle-1',
       name: '2027年第一季度',
       status: 'indicator_setting',
-      tasks: [{ id: 'task-1', status: 'indicator_drafting', isExempt: false }],
+      tasks: [{ id: 'task-1', employeeId: 'employee-1', status: 'indicator_drafting', isExempt: false }],
     }]);
     const employee = { ...creator, id: 'employee-1', sysRole: SysRole.employee } as AuthUser;
     const visibleCycles = service as unknown as {
       findMine: (viewer: AuthUser) => Promise<unknown[]>;
     };
 
-    await expect(visibleCycles.findMine(employee)).resolves.toHaveLength(1);
+    await expect(visibleCycles.findMine(employee)).resolves.toEqual([
+      expect.objectContaining({
+        personalTask: expect.objectContaining({ id: 'task-1', status: 'indicator_drafting' }),
+        visibleTasks: [expect.objectContaining({ id: 'task-1' })],
+      }),
+    ]);
     expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith({
       where: {
         status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
@@ -687,8 +753,7 @@ describe('CyclesService', () => {
       include: {
         tasks: {
           where: taskScope(employee.id),
-          select: { id: true, status: true, isExempt: true },
-          take: 1,
+          select: { id: true, employeeId: true, status: true, isExempt: true },
         },
       },
       orderBy: { startDate: 'desc' },
@@ -700,14 +765,19 @@ describe('CyclesService', () => {
       id: 'cycle-1',
       name: '2027年第一季度',
       status: 'indicator_setting',
-      tasks: [{ id: 'task-1', status: 'indicator_reviewing', isExempt: false }],
+      tasks: [{ id: 'task-1', employeeId: 'employee-2', status: 'indicator_reviewing', isExempt: false }],
     }]);
     const manager = { ...creator, id: 'manager-1', sysRole: SysRole.manager } as AuthUser;
     const visibleCycles = service as unknown as {
       findMine: (viewer: AuthUser) => Promise<unknown[]>;
     };
 
-    await expect(visibleCycles.findMine(manager)).resolves.toHaveLength(1);
+    await expect(visibleCycles.findMine(manager)).resolves.toEqual([
+      expect.objectContaining({
+        personalTask: null,
+        visibleTasks: [expect.objectContaining({ id: 'task-1' })],
+      }),
+    ]);
     expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith({
       where: {
         status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
@@ -718,8 +788,7 @@ describe('CyclesService', () => {
       include: {
         tasks: {
           where: taskScope(manager.id),
-          select: { id: true, status: true, isExempt: true },
-          take: 1,
+          select: { id: true, employeeId: true, status: true, isExempt: true },
         },
       },
       orderBy: { startDate: 'desc' },
