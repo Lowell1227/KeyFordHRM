@@ -73,7 +73,7 @@ export class CyclesService {
     const endDate = canonicalDateOnly(dto.endDate);
     const goalSettingOpenAt = dto.goalSettingOpenAt ?? this.addDays(startDate, -10);
     const selfEvalOpenAt = dto.selfEvalOpenAt ?? this.addDays(endDate, 1);
-    this.validateCycleDates({ ...dto, startDate, endDate }, goalSettingOpenAt, selfEvalOpenAt);
+    this.validateCyclePeriod(startDate, endDate);
     const hrOwnerId = await this.resolveHrOwnerId(dto.hrOwnerId, user);
     const workflowVersion = dto.workflowVersion ?? 1;
     const reviewerId = workflowVersion === 1
@@ -85,6 +85,12 @@ export class CyclesService {
           startDate,
           endDate,
           scoringFrequency: dto.scoringFrequency,
+          goalSettingOpenAt,
+          deadlineIndicatorSetting: dto.deadlineIndicatorSetting,
+          deadlineIndicatorConfirm: dto.deadlineIndicatorConfirm,
+          deadlineHrCalibration: dto.deadlineHrCalibration,
+          deadlineApproval: dto.deadlineApproval,
+          deadlinePublish: dto.deadlinePublish,
           schedules: dto.periodSchedules,
         })
       : null;
@@ -253,23 +259,7 @@ export class CyclesService {
       const selfEvalOpenAt = dto.selfEvalOpenAt ?? cycle.selfEvalOpenAt;
       const startDate = canonicalDateOnly(dto.startDate ?? cycle.startDate);
       const endDate = canonicalDateOnly(dto.endDate ?? cycle.endDate);
-      if (goalSettingOpenAt && selfEvalOpenAt) {
-        this.validateCycleDates(
-          {
-            startDate,
-            endDate,
-            deadlineIndicatorSetting: dto.deadlineIndicatorSetting ?? cycle.deadlineIndicatorSetting ?? undefined,
-            deadlineIndicatorConfirm: dto.deadlineIndicatorConfirm ?? cycle.deadlineIndicatorConfirm ?? undefined,
-            deadlineSelfEval: dto.deadlineSelfEval ?? cycle.deadlineSelfEval ?? undefined,
-            deadlineManagerScore: dto.deadlineManagerScore ?? cycle.deadlineManagerScore ?? undefined,
-            deadlineHrCalibration: dto.deadlineHrCalibration ?? cycle.deadlineHrCalibration ?? undefined,
-            deadlineApproval: dto.deadlineApproval ?? cycle.deadlineApproval ?? undefined,
-            deadlinePublish: dto.deadlinePublish ?? cycle.deadlinePublish ?? undefined,
-          } as CreateCycleDto,
-          goalSettingOpenAt,
-          selfEvalOpenAt,
-        );
-      }
+      this.validateCyclePeriod(startDate, endDate);
 
       const hrOwnerId = dto.hrOwnerId !== undefined
         ? await this.resolveHrOwnerId(dto.hrOwnerId, user)
@@ -295,6 +285,12 @@ export class CyclesService {
             startDate,
             endDate,
             scoringFrequency: dto.scoringFrequency ?? cycle.scoringFrequency,
+            goalSettingOpenAt: goalSettingOpenAt ?? undefined,
+            deadlineIndicatorSetting: dto.deadlineIndicatorSetting ?? cycle.deadlineIndicatorSetting ?? undefined,
+            deadlineIndicatorConfirm: dto.deadlineIndicatorConfirm ?? cycle.deadlineIndicatorConfirm ?? undefined,
+            deadlineHrCalibration: dto.deadlineHrCalibration ?? cycle.deadlineHrCalibration ?? undefined,
+            deadlineApproval: dto.deadlineApproval ?? cycle.deadlineApproval ?? undefined,
+            deadlinePublish: dto.deadlinePublish ?? cycle.deadlinePublish ?? undefined,
             schedules: dto.periodSchedules ?? (scheduleStructureChanged
               ? undefined
               : storedSchedules.map((schedule) => ({
@@ -1027,35 +1023,14 @@ export class CyclesService {
     };
   }
 
-  /** 校验考核期间本身与时间节点的业务顺序；节点可跨越考核期间边界。 */
-  private validateCycleDates(
-    dto: CreateCycleDto,
-    goalSettingOpenAt: Date,
-    selfEvalOpenAt: Date,
-  ): void {
-    if (dto.endDate <= dto.startDate) {
+  /** 草稿需能生成评分期；时间节点业务顺序统一留到发起检查。 */
+  private validateCyclePeriod(startDate: Date, endDate: Date): void {
+    if (endDate < startDate) {
       throw new BadRequestException({
         code: ERROR_CODE.PARAM_INVALID,
-        message: '结束日期必须晚于开始日期',
+        message: '结束日期不能早于开始日期',
       });
     }
-
-    const goalDeadlines = [
-      goalSettingOpenAt,
-      dto.deadlineIndicatorSetting,
-      dto.deadlineIndicatorConfirm,
-    ].filter((date): date is Date => date != null);
-    this.assertNonDecreasing(goalDeadlines, '目标制定开放、提交和确认时间需按流程顺序递增');
-
-    const evaluationDeadlines = [
-      selfEvalOpenAt,
-      dto.deadlineSelfEval,
-      dto.deadlineManagerScore,
-      dto.deadlineHrCalibration,
-      dto.deadlineApproval,
-      dto.deadlinePublish,
-    ].filter((date): date is Date => date != null);
-    this.assertNonDecreasing(evaluationDeadlines, '自评开放后各节点截止日需按流程顺序递增');
   }
 
   /** 校验延期：每个新截止日 ≥ 原值，且结果序列仍递增。 */

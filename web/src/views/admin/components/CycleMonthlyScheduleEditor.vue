@@ -22,6 +22,10 @@ const hasExceptions = computed(() => props.schedules.some((schedule) => schedule
 const isCycleSchedule = computed(() => (
   props.schedules.length === 1 && props.schedules[0]?.periodType === 'cycle'
 ));
+const warningMessages = computed(() => [...new Set(props.warnings.map((issue) => {
+  const schedule = props.schedules.find(({ periodKey }) => periodKey === issue.periodKey);
+  return schedule ? `${periodLabel(schedule)}：${issue.message}` : issue.message;
+}))]);
 
 type DateField = 'selfEvalOpenAt' | 'selfEvalDueAt' | 'managerDueAt';
 
@@ -44,21 +48,25 @@ function updateDate(index: number, field: DateField, value: string | number | Da
 function issuesFor(schedule: CyclePeriodSchedule, issues: CycleScheduleIssue[]) {
   return issues.filter((issue) => issue.periodKey === schedule.periodKey);
 }
-
-function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
-  const aliases: Record<DateField, string[]> = {
-    selfEvalOpenAt: ['open', 'self_eval_open'],
-    selfEvalDueAt: ['self', 'employee'],
-    managerDueAt: ['manager'],
-  };
-  return issuesFor(schedule, props.blockers).filter((issue) => (
-    aliases[field].some((alias) => issue.code.toLowerCase().includes(alias))
-  ));
-}
 </script>
 
 <template>
   <section class="cycle-monthly-schedule-editor" aria-label="复盘与评分时间安排">
+    <div
+      v-if="warningMessages.length"
+      class="cycle-schedule-warning-summary"
+      data-testid="cycle-schedule-warning-summary"
+    >
+      <span>时间顺序需要调整，可继续保存</span>
+      <el-popover placement="bottom-end" trigger="click" :width="360">
+        <ul class="cycle-schedule-warning-summary__details">
+          <li v-for="message in warningMessages" :key="message">{{ message }}</li>
+        </ul>
+        <template #reference>
+          <el-button text type="warning">查看{{ warningMessages.length }}项</el-button>
+        </template>
+      </el-popover>
+    </div>
     <div
       v-if="!isCycleSchedule"
       data-testid="cycle-schedule-column-header"
@@ -118,7 +126,6 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
             value-format="YYYY-MM-DDTHH:mm:ssZ"
             @update:model-value="updateDate(index, 'selfEvalOpenAt', $event)"
           />
-          <small v-for="issue in issuesForField(schedule, 'selfEvalOpenAt')" :key="issue.code" class="is-blocker">{{ issue.message }}</small>
         </label>
         <label data-testid="self-eval-due-at">
           <span class="cycle-month-schedule-row__mobile-label">员工计划完成时间</span>
@@ -129,7 +136,6 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
             value-format="YYYY-MM-DDTHH:mm:ssZ"
             @update:model-value="updateDate(index, 'selfEvalDueAt', $event)"
           />
-          <small v-for="issue in issuesForField(schedule, 'selfEvalDueAt')" :key="issue.code" class="is-blocker">{{ issue.message }}</small>
         </label>
         <label data-testid="manager-due-at">
           <span class="cycle-month-schedule-row__mobile-label">主管计划完成时间</span>
@@ -140,7 +146,6 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
             value-format="YYYY-MM-DDTHH:mm:ssZ"
             @update:model-value="updateDate(index, 'managerDueAt', $event)"
           />
-          <small v-for="issue in issuesForField(schedule, 'managerDueAt')" :key="issue.code" class="is-blocker">{{ issue.message }}</small>
         </label>
           <div class="cycle-month-schedule-row__actions">
             <el-button
@@ -152,7 +157,6 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
           </div>
         </div>
 
-        <p v-for="issue in issuesFor(schedule, warnings)" :key="issue.code" class="cycle-month-schedule-row__warning">{{ issue.message }}</p>
         <p
           v-for="issue in issuesFor(schedule, blockers).filter((blocker) => !['open', 'self', 'employee', 'manager'].some((word) => blocker.code.toLowerCase().includes(word)))"
           :key="issue.code"
@@ -168,6 +172,26 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
   display: grid;
   overflow: hidden;
   border-top: 1px solid var(--el-border-color-lighter);
+}
+
+.cycle-schedule-warning-summary {
+  display: flex;
+  min-height: 36px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 4px 12px;
+  color: var(--el-color-warning-dark-2);
+  background: var(--el-color-warning-light-9);
+  font-size: 12px;
+}
+
+.cycle-schedule-warning-summary__details {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding-left: 18px;
+  color: var(--el-text-color-regular);
 }
 
 .cycle-month-schedule-row__period {
@@ -261,15 +285,8 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
   width: 100%;
 }
 
-.is-blocker,
 .cycle-month-schedule-row__blocker {
   color: var(--el-color-danger);
-}
-
-.cycle-month-schedule-row__warning {
-  margin: 10px 0 0;
-  color: var(--el-color-warning-dark-2);
-  font-size: 12px;
 }
 
 .cycle-month-schedule-row__blocker {

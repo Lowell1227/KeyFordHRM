@@ -57,7 +57,7 @@ describe('CycleScheduleService', () => {
     });
   });
 
-  it('blocks schedules whose self-evaluation does not open before it is due', () => {
+  it('allows self-evaluation to open exactly when it is due', () => {
     const plan = service.normalizeAndValidate({
       type: 'monthly',
       startDate: new Date('2026-07-01T00:00:00.000Z'),
@@ -70,12 +70,11 @@ describe('CycleScheduleService', () => {
       }],
     });
 
-    expect(plan.blockers).toEqual([
-      expect.objectContaining({ code: 'SELF_EVAL_OPEN_NOT_BEFORE_DUE', periodKey: '2026-07' }),
-    ]);
+    expect(plan.blockers).toEqual([]);
+    expect(plan.warnings).toEqual([]);
   });
 
-  it('blocks schedules whose manager deadline is not after self-evaluation', () => {
+  it('allows the manager deadline to equal the self-evaluation deadline', () => {
     const plan = service.normalizeAndValidate({
       type: 'monthly',
       startDate: new Date('2026-07-01T00:00:00.000Z'),
@@ -88,8 +87,57 @@ describe('CycleScheduleService', () => {
       }],
     });
 
-    expect(plan.blockers).toEqual([
-      expect.objectContaining({ code: 'SELF_EVAL_DUE_NOT_BEFORE_MANAGER_DUE', periodKey: '2026-07' }),
+    expect(plan.blockers).toEqual([]);
+    expect(plan.warnings).toEqual([]);
+  });
+
+  it('keeps a reversed scoring schedule saveable and returns one concise warning per conflict', () => {
+    const plan = service.normalizeAndValidate({
+      type: 'monthly',
+      startDate: new Date('2026-07-01T00:00:00.000Z'),
+      endDate: new Date('2026-07-31T00:00:00.000Z'),
+      schedules: [{
+        periodKey: '2026-07',
+        selfEvalOpenAt: new Date('2026-08-06T18:00:00+08:00'),
+        selfEvalDueAt: new Date('2026-08-05T18:00:00+08:00'),
+        managerDueAt: new Date('2026-08-04T18:00:00+08:00'),
+      }],
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.warnings).toEqual([
+      expect.objectContaining({ code: 'SELF_EVAL_OPEN_AFTER_DUE', periodKey: '2026-07' }),
+      expect.objectContaining({ code: 'SELF_EVAL_DUE_AFTER_MANAGER_DUE', periodKey: '2026-07' }),
+    ]);
+  });
+
+  it('uses the same non-decreasing policy for the global launch timeline without blocking draft save', () => {
+    const plan = service.normalizeAndValidate({
+      type: 'monthly',
+      startDate: new Date('2026-07-01T00:00:00.000Z'),
+      endDate: new Date('2026-07-31T00:00:00.000Z'),
+      goalSettingOpenAt: new Date('2026-07-03T09:00:00+08:00'),
+      deadlineIndicatorSetting: new Date('2026-07-02T18:00:00+08:00'),
+      deadlineIndicatorConfirm: new Date('2026-07-01T18:00:00+08:00'),
+      deadlineHrCalibration: new Date('2026-08-05T18:00:00+08:00'),
+      deadlineApproval: new Date('2026-08-04T18:00:00+08:00'),
+      deadlinePublish: new Date('2026-08-03T18:00:00+08:00'),
+      schedules: [{
+        periodKey: '2026-07',
+        selfEvalOpenAt: new Date('2026-07-01T17:00:00+08:00'),
+        selfEvalDueAt: new Date('2026-08-05T18:00:00+08:00'),
+        managerDueAt: new Date('2026-08-06T18:00:00+08:00'),
+      }],
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.warnings.map(({ code }) => code)).toEqual([
+      'INDICATOR_SETTING_BEFORE_GOAL_OPEN',
+      'INDICATOR_CONFIRM_BEFORE_SETTING_DUE',
+      'FIRST_SELF_EVAL_BEFORE_INDICATOR_CONFIRM',
+      'HR_CALIBRATION_BEFORE_FINAL_MANAGER_DUE',
+      'APPROVAL_BEFORE_HR_CALIBRATION',
+      'PUBLISH_BEFORE_APPROVAL',
     ]);
   });
 

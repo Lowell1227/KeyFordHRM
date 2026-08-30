@@ -55,6 +55,12 @@ export const cyclesApi = {
     startDate: string;
     endDate: string;
     schedules?: CyclePeriodSchedule[];
+    goalSettingOpenAt?: string;
+    deadlineIndicatorSetting?: string;
+    deadlineIndicatorConfirm?: string;
+    deadlineHrCalibration?: string;
+    deadlineApproval?: string;
+    deadlinePublish?: string;
   }): Promise<CycleSchedulePreview> {
     return apiPost('/cycles/schedule-preview', body);
   },

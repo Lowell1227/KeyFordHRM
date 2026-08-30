@@ -122,6 +122,10 @@ const CREATE_SCHEDULE_NODES = [
 
 const PREPARATION_SCHEDULE_NODES = CREATE_SCHEDULE_NODES.filter((node) => node.stage === 'preparation');
 const RESULT_SCHEDULE_NODES = CREATE_SCHEDULE_NODES.filter((node) => node.stage === 'result');
+const WORKFLOW_V2_FINAL_SCHEDULE_NODES = CREATE_SCHEDULE_NODES.slice(6).map((node, index) => ({
+  ...node,
+  number: `0${index + 4}`,
+}));
 
 const DEFAULT_VISIBLE_FIELDS: PublishVisibleFields = {
   totalScore: true,
@@ -872,32 +876,25 @@ async function saveNotificationMode() {
 }
 
 function getCreateDeadlineValidationMessage(): string | null {
-  if (createForm.startDate && createForm.endDate && !dayjs(createForm.endDate).isAfter(createForm.startDate)) {
-    return `结束日期必须晚于开始日期（${formatDate(createForm.startDate)}）。`;
+  if (createForm.startDate && createForm.endDate && dayjs(createForm.endDate).isBefore(createForm.startDate)) {
+    return `结束日期不能早于开始日期（${formatDate(createForm.startDate)}）。`;
   }
 
   if (!createForm.goalSettingOpenAt || !createForm.selfEvalOpenAt) {
     return '请设置目标制定和自评的开放时间。';
   }
-  const goalDates = [
-    { label: '目标制定开放', value: createForm.goalSettingOpenAt },
-    { label: '指标制定截止', value: createForm.deadlineIndicatorSetting },
-    { label: '指标确认截止', value: createForm.deadlineIndicatorConfirm },
-  ].filter((item): item is { label: string; value: Date } => Boolean(item.value));
-  const resultDates = [
-    { label: '自评开放', value: createForm.selfEvalOpenAt },
-    ...DEADLINE_FIELDS.slice(2).map(({ key, label }) => ({ label, value: createForm[key] })),
-  ].filter((item): item is { label: string; value: Date } => Boolean(item.value));
-
-  for (const sequence of [goalDates, resultDates]) {
-    for (let i = 1; i < sequence.length; i++) {
-      if (dayjs(sequence[i].value).isBefore(sequence[i - 1].value)) {
-        return `${sequence[i].label}不能早于${sequence[i - 1].label}。`;
-      }
-    }
-  }
-
   return null;
+}
+
+function schedulePreviewTimeline() {
+  return {
+    goalSettingOpenAt: formatDateTimeLocal(createForm.goalSettingOpenAt),
+    deadlineIndicatorSetting: formatDateTimeLocal(createForm.deadlineIndicatorSetting),
+    deadlineIndicatorConfirm: formatDateTimeLocal(createForm.deadlineIndicatorConfirm),
+    deadlineHrCalibration: formatDateTimeLocal(createForm.deadlineHrCalibration),
+    deadlineApproval: formatDateTimeLocal(createForm.deadlineApproval),
+    deadlinePublish: formatDateTimeLocal(createForm.deadlinePublish),
+  };
 }
 
 function clonePeriodSchedules(schedules: CyclePeriodSchedule[]): CyclePeriodSchedule[] {
@@ -946,6 +943,7 @@ async function refreshScoringPlan(options: {
         scoringFrequency: scoringPlan.scoringFrequency,
         startDate: formatDateLocal(createForm.startDate)!,
         endDate: formatDateLocal(createForm.endDate)!,
+        ...schedulePreviewTimeline(),
       });
       if (requestId !== schedulePreviewRequest || contextFingerprint !== scoringPreviewFingerprint(false)) return false;
 
@@ -1006,6 +1004,7 @@ async function validateCurrentScoringPlan(): Promise<boolean> {
         scoringFrequency: scoringPlan.scoringFrequency,
         startDate: formatDateLocal(createForm.startDate)!,
         endDate: formatDateLocal(createForm.endDate)!,
+        ...schedulePreviewTimeline(),
         schedules,
       });
       if (requestId !== schedulePreviewRequest || contextFingerprint !== scoringPreviewFingerprint(true)) return false;
@@ -1054,25 +1053,7 @@ async function handleScoringFrequencyChange(frequency: ScoringFrequency) {
 
 function handleScoringSchedulesUpdate(schedules: CyclePeriodSchedule[]) {
   scoringPlan.periodSchedules = clonePeriodSchedules(schedules);
-  const blockers: CycleScheduleIssue[] = [];
-  schedules.forEach((schedule) => {
-    if (!dayjs(schedule.selfEvalOpenAt).isBefore(dayjs(schedule.selfEvalDueAt))) {
-      blockers.push({
-        code: 'SELF_EVAL_OPEN_NOT_BEFORE_DUE',
-        periodKey: schedule.periodKey,
-        message: '自评开放时间必须早于自评截止时间',
-      });
-      return;
-    }
-    if (!dayjs(schedule.selfEvalDueAt).isBefore(dayjs(schedule.managerDueAt))) {
-      blockers.push({
-        code: 'SELF_EVAL_DUE_NOT_BEFORE_MANAGER_DUE',
-        periodKey: schedule.periodKey,
-        message: '自评截止时间必须早于主管评分截止时间',
-      });
-    }
-  });
-  scoringPlan.scheduleBlockers = blockers;
+  scoringPlan.scheduleBlockers = [];
   scoringPlan.scheduleWarnings = [];
   syncConfirmedScheduleSnapshot();
   scheduleScoringPreview('', 'validate');
@@ -1965,7 +1946,7 @@ onMounted(() => {
                 <el-icon><QuestionFilled /></el-icon>
               </el-tooltip>
             </div>
-            <span>目标制定开放 {{ formatDateTimeForMessage(createForm.goalSettingOpenAt) }} · 员工自评开放 {{ formatDateTimeForMessage(createForm.selfEvalOpenAt) }}</span>
+            <span>目标制定开放 {{ formatDateTimeForMessage(createForm.goalSettingOpenAt) }} · 已生成 {{ scoringPlan.periodSchedules.length }} 期复盘评分时间</span>
           </div>
         </section>
 
@@ -2077,11 +2058,11 @@ onMounted(() => {
 
               <section class="schedule-stage" aria-labelledby="schedule-stage-result">
                 <div class="schedule-stage__title">
-                  <strong id="schedule-stage-result">评价与结果</strong>
-                  <span>考核结束后依次完成</span>
+                  <strong id="schedule-stage-result">{{ isWorkflowV2Form ? '最终结果' : '评价与结果' }}</strong>
+                  <span>{{ isWorkflowV2Form ? '最后一期评分后完成' : '考核结束后依次完成' }}</span>
                 </div>
                 <div
-                  v-for="node in RESULT_SCHEDULE_NODES"
+                  v-for="node in isWorkflowV2Form ? WORKFLOW_V2_FINAL_SCHEDULE_NODES : RESULT_SCHEDULE_NODES"
                   :key="node.key"
                   class="schedule-node"
                   data-testid="cycle-schedule-node"

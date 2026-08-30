@@ -409,7 +409,7 @@ export interface CyclePeriodSchedule {
 
 export interface CycleScheduleIssue {
   code: string;
-  periodKey: string;
+  periodKey?: string;
   message: string;
 }
 

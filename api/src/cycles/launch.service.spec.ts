@@ -80,6 +80,11 @@ describe('LaunchService preflight', () => {
     startDate: new Date('2027-01-01T00:00:00.000Z'),
     endDate: new Date('2027-03-31T00:00:00.000Z'),
     goalSettingOpenAt: new Date('2026-12-22T00:00:00.000Z'),
+    deadlineIndicatorSetting: new Date('2026-12-29T10:00:00.000Z'),
+    deadlineIndicatorConfirm: new Date('2026-12-31T10:00:00.000Z'),
+    deadlineHrCalibration: new Date('2027-04-08T10:00:00.000Z'),
+    deadlineApproval: new Date('2027-04-10T10:00:00.000Z'),
+    deadlinePublish: new Date('2027-04-12T10:00:00.000Z'),
     hrOwnerId: operator.id,
     reviewStatus: 'approved',
     planVersion: 1,
@@ -231,6 +236,50 @@ describe('LaunchService preflight', () => {
     await expect(service.preflight('55555555-5555-4555-8555-555555555555'))
       .resolves.toEqual(expect.objectContaining({ ready: true, templateCount: 0 }));
     expect(tx.assessmentTemplate.findMany).not.toHaveBeenCalled();
+  });
+
+  it('blocks launch preflight when an approved workflow time sequence runs backwards', async () => {
+    tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle({
+      deadlineIndicatorSetting: new Date('2026-12-21T10:00:00.000Z'),
+    }));
+    tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
+    mockV2Users();
+
+    const checked = await service.preflight(cycleId);
+
+    expect(checked.ready).toBe(false);
+    expect(checked.blockers).toContainEqual(expect.objectContaining({
+      code: 'INDICATOR_SETTING_BEFORE_GOAL_OPEN',
+    }));
+    await expect(service.launch(cycleId, operator, { expectedPlanHash: 'not-used' }))
+      .rejects.toThrow('指标制定截止不能早于目标制定开放');
+    expect(tx.assessmentTask.create).not.toHaveBeenCalled();
+  });
+
+  it('allows every adjacent workflow time to be equal at launch preflight', async () => {
+    const samePreparationTime = new Date('2027-02-01T01:00:00.000Z');
+    const sameFinalTime = new Date('2027-04-08T10:00:00.000Z');
+    tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle({
+      goalSettingOpenAt: samePreparationTime,
+      deadlineIndicatorSetting: samePreparationTime,
+      deadlineIndicatorConfirm: samePreparationTime,
+      deadlineHrCalibration: sameFinalTime,
+      deadlineApproval: sameFinalTime,
+      deadlinePublish: sameFinalTime,
+    }));
+    tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules.map((schedule, index) => (
+      index === 0
+        ? { ...schedule, selfEvalOpenAt: samePreparationTime }
+        : index === periodSchedules.length - 1
+          ? { ...schedule, managerDueAt: sameFinalTime }
+          : schedule
+    )));
+    mockV2Users();
+
+    await expect(service.preflight(cycleId)).resolves.toEqual(expect.objectContaining({
+      ready: true,
+      blockers: [],
+    }));
   });
 
   it('preserves the exact workflow v1 preflight response shape', async () => {

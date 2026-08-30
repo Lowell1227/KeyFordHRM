@@ -4,8 +4,9 @@ import { buildPeriodDefinitions, normalizeScoringFrequency, PeriodDefinition } f
 import { atShanghaiTime, shiftStatutoryWorkdays, workdayStatus } from './cycle-workday-calendar';
 import { CyclePeriodScheduleDto } from './dto/cycle-period-schedule.dto';
 import { PreviewCycleScheduleDto } from './dto/preview-cycle-schedule.dto';
+import { draftTimeSequenceWarnings } from './cycle-time-policy';
 
-type ScheduleIssue = { code: string; periodKey: string; message: string };
+type ScheduleIssue = { code: string; periodKey?: string; message: string };
 
 type ScheduleValues = PeriodDefinition & {
   selfEvalOpenAt: Date;
@@ -84,9 +85,7 @@ export class CycleScheduleService {
     const schedules = periods.map((period) =>
       this.buildSchedule(period, overrides.get(period.periodKey)),
     );
-    const warnings: ScheduleIssue[] = [];
-
-    for (const schedule of schedules) this.validateSchedule(schedule, blockers);
+    const warnings: ScheduleIssue[] = draftTimeSequenceWarnings(input, schedules);
 
     return { scoringFrequency, reviewFrequency: 'cycle', schedules, blockers, warnings };
   }
@@ -110,15 +109,6 @@ export class CycleScheduleService {
     };
   }
 
-  private validateSchedule(schedule: ScheduleValues, blockers: ScheduleIssue[]): void {
-    if (schedule.selfEvalOpenAt >= schedule.selfEvalDueAt) {
-      blockers.push({ code: 'SELF_EVAL_OPEN_NOT_BEFORE_DUE', periodKey: schedule.periodKey, message: '自评开放时间必须早于自评截止时间' });
-    }
-    if (schedule.selfEvalDueAt >= schedule.managerDueAt) {
-      blockers.push({ code: 'SELF_EVAL_DUE_NOT_BEFORE_MANAGER_DUE', periodKey: schedule.periodKey, message: '自评截止时间必须早于主管评分截止时间' });
-    }
-
-  }
 }
 
 function firstStatutoryWorkdayOfFollowingMonth(date: Date): Date {

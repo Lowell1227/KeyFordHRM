@@ -25,4 +25,34 @@ export class PreviewCycleScheduleDto {
   @ValidateNested({ each: true })
   @Type(() => CyclePeriodScheduleDto)
   schedules?: CyclePeriodScheduleDto[];
+
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  goalSettingOpenAt?: Date;
+
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  deadlineIndicatorSetting?: Date;
+
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  deadlineIndicatorConfirm?: Date;
+
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  deadlineHrCalibration?: Date;
+
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  deadlineApproval?: Date;
+
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  deadlinePublish?: Date;
 }

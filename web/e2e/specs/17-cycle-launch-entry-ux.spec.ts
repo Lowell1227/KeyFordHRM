@@ -21,6 +21,7 @@ interface CycleLaunchMockOptions {
 
 const createdCycle = {
   id: 'cycle-created',
+  planVersion: 1,
   name: '2026 Q4 季度考核',
   type: 'quarterly',
   startDate: '2026-10-01',
@@ -243,6 +244,17 @@ async function mockCycleLaunchPage(
         scoringFrequency?: 'monthly' | 'cycle';
         startDate: string;
         endDate: string;
+        schedules?: Array<{
+          periodKey: string;
+          periodType: 'month' | 'cycle';
+          sequence: number;
+          periodStart: string;
+          periodEnd: string;
+          selfEvalOpenAt: string;
+          selfEvalDueAt: string;
+          managerDueAt: string;
+          isException: boolean;
+        }>;
       };
       const scoringFrequency = body.type === 'monthly'
         ? 'monthly'
@@ -253,7 +265,7 @@ async function mockCycleLaunchPage(
         ? 1
         : ({ monthly: 1, quarterly: 3, semiannual: 6, annual: 12 } as Record<string, number>)[body.type] ?? 1;
       const start = new Date(`${body.startDate}T00:00:00+08:00`);
-      const schedules = Array.from({ length: count }, (_, index) => {
+      const schedules = body.schedules ?? Array.from({ length: count }, (_, index) => {
         const periodStart = new Date(start);
         periodStart.setMonth(periodStart.getMonth() + index);
         const periodKey = scoringFrequency === 'cycle'
@@ -271,6 +283,24 @@ async function mockCycleLaunchPage(
           isException: false,
         };
       });
+      const warnings = schedules.flatMap((schedule) => {
+        const issues = [];
+        if (new Date(schedule.selfEvalOpenAt) > new Date(schedule.selfEvalDueAt)) {
+          issues.push({
+            code: 'SELF_EVAL_OPEN_AFTER_DUE',
+            periodKey: schedule.periodKey,
+            message: '自评开放时间不能晚于员工计划完成时间',
+          });
+        }
+        if (new Date(schedule.selfEvalDueAt) > new Date(schedule.managerDueAt)) {
+          issues.push({
+            code: 'SELF_EVAL_DUE_AFTER_MANAGER_DUE',
+            periodKey: schedule.periodKey,
+            message: '员工计划完成时间不能晚于主管计划完成时间',
+          });
+        }
+        return issues;
+      });
       return route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify(apiResponse({
@@ -278,7 +308,7 @@ async function mockCycleLaunchPage(
           reviewFrequency: 'cycle',
           schedules,
           blockers: [],
-          warnings: [],
+          warnings,
         })),
       });
     }
@@ -907,21 +937,18 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.getByTestId('cycle-schedule-period')).toHaveText('考核执行期 2026-10-01—2026-12-31');
 
     const nodes = page.getByTestId('cycle-schedule-node');
-    await expect(nodes).toHaveCount(9);
+    await expect(nodes).toHaveCount(6);
     await expect(nodes.nth(0)).toContainText('01');
     await expect(nodes.nth(0)).toContainText('目标制定开放');
     await expect(nodes.nth(3)).toContainText('04');
-    await expect(nodes.nth(3)).toContainText('员工自评开放');
-    await expect(nodes.nth(8)).toContainText('09');
-    await expect(nodes.nth(8)).toContainText('结果公示截止');
+    await expect(nodes.nth(3)).toContainText('HR校准截止');
+    await expect(nodes.nth(5)).toContainText('06');
+    await expect(nodes.nth(5)).toContainText('结果公示截止');
 
     const expectedTimes = [
       '2026-09-17 09:00:00',
       '2026-09-28 18:00:00',
       '2026-09-30 18:00:00',
-      '2027-01-04 09:00:00',
-      '2027-01-06 18:00:00',
-      '2027-01-11 18:00:00',
       '2027-01-13 18:00:00',
       '2027-01-15 18:00:00',
       '2027-01-18 18:00:00',
@@ -944,6 +971,28 @@ test.describe('cycle launch entry UX', () => {
     await goalOpenInput.press('Enter');
 
     await expect(page.getByTestId('cycle-plan-summary')).toContainText('已调整计划');
+  });
+
+  test('summarizes reversed scoring times once and still saves the draft', async ({ page }) => {
+    const createBodies: unknown[] = [];
+    await mockCycleLaunchPage(page, { cycles: [], createBodies });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    const firstSchedule = page.getByTestId('cycle-month-schedule-row').first();
+    const openInput = firstSchedule.getByTestId('self-eval-open-at').locator('input');
+    const dueInput = firstSchedule.getByTestId('self-eval-due-at').locator('input');
+    await openInput.fill('2026-11-05 18:00');
+    await openInput.press('Enter');
+    await dueInput.fill('2026-11-04 18:00');
+    await dueInput.press('Enter');
+
+    await expect(page.getByTestId('cycle-schedule-warning-summary')).toHaveCount(1);
+    await expect(page.getByTestId('cycle-schedule-warning-summary')).toContainText('时间顺序需要调整，可继续保存');
+    await expect(firstSchedule.locator('.cycle-month-schedule-row__warning')).toHaveCount(0);
+    await page.getByTestId('cycle-create-save-draft').click();
+
+    await expect.poll(() => createBodies).toHaveLength(1);
   });
 
   test('allows any custom schedule time without boundary reminders', async ({ page }) => {

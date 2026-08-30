@@ -130,6 +130,27 @@ describe('CyclesService', () => {
     expect(prisma.assessmentCycle.create).toHaveBeenCalledTimes(1);
   });
 
+  it('allows a one-day performance period', async () => {
+    const day = new Date('2027-01-01T00:00:00.000Z');
+
+    await expect(service.create(quarterlyCycle({ startDate: day, endDate: day }), creator))
+      .resolves.toEqual(expect.objectContaining({ id: 'cycle-1' }));
+  });
+
+  it('keeps reversed workflow dates saveable as a draft', async () => {
+    const dto = quarterlyCycle({
+      goalSettingOpenAt: new Date('2027-01-03T09:00:00.000Z'),
+      deadlineIndicatorSetting: new Date('2027-01-02T18:00:00.000Z'),
+      deadlineIndicatorConfirm: new Date('2027-01-01T18:00:00.000Z'),
+      selfEvalOpenAt: new Date('2027-04-03T09:00:00.000Z'),
+      deadlineSelfEval: new Date('2027-04-02T18:00:00.000Z'),
+      deadlineManagerScore: new Date('2027-04-01T18:00:00.000Z'),
+    });
+
+    await expect(service.create(dto, creator))
+      .resolves.toEqual(expect.objectContaining({ id: 'cycle-1' }));
+  });
+
   it('derives the default goal-setting and self-evaluation opening dates', async () => {
     await service.create(quarterlyCycle(), creator);
 
