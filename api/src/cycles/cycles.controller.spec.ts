@@ -26,4 +26,15 @@ describe('CyclesController schedule preview route', () => {
       'cycle_plan_edit',
     ]);
   });
+
+  it('limits the participant record to HR cycle-plan permissions', () => {
+    const handler = (CyclesController.prototype as unknown as Record<string, unknown>).participantRecord;
+
+    expect(handler).toBeDefined();
+    expect(Reflect.getMetadata(ROLES_KEY, handler as object)).toEqual([SysRole.hr, SysRole.system_admin]);
+    expect(Reflect.getMetadata(HR_CAPABILITIES_KEY, handler as object)).toEqual([
+      'cycle_plan_edit',
+      'cycle_plan_review',
+    ]);
+  });
 });

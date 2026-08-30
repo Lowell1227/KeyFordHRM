@@ -318,6 +318,41 @@ test.describe('cycle-first task contracts', () => {
     await expect(page).toHaveURL(/\/tasks\/personal-task-1\?.*stage=result/);
   });
 
+  test('shows an exempt task as exempted in goal setting list and detail', async ({ page }) => {
+    const taskRequests: URL[] = [];
+    const currentCycle = cycle('cycle-exempt', '2026-08-01', '2026-08-31');
+    const personalTask: TaskListItem = {
+      id: 'task-exempt',
+      cycleId: currentCycle.id,
+      cycleName: '2026年08月绩效考核',
+      employeeId: 'employee-exempt',
+      employeeName: '方园',
+      employeeNo: '319',
+      deptId: 'hr-team',
+      deptName: '人事组',
+      managerId: 'manager-1',
+      managerName: '俞丹',
+      status: 'exempted',
+      isExempt: true,
+      exemptReason: 'HR 按部门设置为本周期豁免',
+      updatedAt: '2026-08-30T03:00:00.000Z',
+    };
+    const personalDetail: TaskDetail = {
+      ...personalTask,
+      snapshotId: '',
+      indicatorInstances: [],
+      flowRecords: [],
+    };
+    await mockTaskCycleShell(page, [currentCycle], taskRequests, [personalTask], personalDetail);
+
+    await page.goto('/tasks?scope=mine&stage=goal-setting&cycleId=cycle-exempt');
+
+    await expect(page.locator('.personal-task-card__state')).toHaveText('已豁免');
+    await page.getByTestId('personal-task-detail').click();
+    await expect(page.getByTestId('performance-stage-state')).toHaveText('已豁免');
+    await expect(page.getByText('该任务已豁免')).toBeVisible();
+  });
+
   test('opens the requested personal stage with matching state content and actions', async ({ page }) => {
     const taskRequests: URL[] = [];
     const currentCycle = cycle('current', '2026-07-01', '2026-09-30');

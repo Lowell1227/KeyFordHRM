@@ -42,7 +42,10 @@ describe('CyclesService', () => {
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
         createMany: jest.fn().mockResolvedValue({ count: 0 }),
       },
-      user: { findFirst: jest.fn().mockResolvedValue({ id: '99999999-9999-4999-8999-999999999999' }) },
+      user: {
+        findFirst: jest.fn().mockResolvedValue({ id: '99999999-9999-4999-8999-999999999999' }),
+        findUnique: jest.fn(),
+      },
       systemConfig: {
         findUnique: jest.fn().mockResolvedValue({ value: { userId: companyFinalApproverId } }),
       },
@@ -942,6 +945,95 @@ describe('CyclesService', () => {
     expect(prisma.assessmentTask.groupBy).toHaveBeenCalledWith(expect.objectContaining({
       where: { cycleId: 'cycle-1', ...taskScope(employee.id) },
     }));
+  });
+
+  it('does not expose the frozen organization roster through general cycle details', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue({
+      id: 'cycle-1',
+      status: 'indicator_setting',
+      deadlineIndicatorSetting: null,
+      deadlineIndicatorConfirm: null,
+      launchPlan: { participants: [{ employeeId: 'other-employee', employeeName: '其他员工' }] },
+      launchPlanHash: 'private-plan-hash',
+    });
+    prisma.assessmentTask.count.mockResolvedValueOnce(1).mockResolvedValueOnce(1);
+    prisma.assessmentTask.groupBy.mockResolvedValue([]);
+    prisma.assessmentTemplateSnapshot.count.mockResolvedValue(1);
+    const employee = { ...creator, id: 'employee-1', sysRole: SysRole.employee } as AuthUser;
+
+    const result = await service.findOne('cycle-1', employee);
+
+    expect(result).not.toHaveProperty('launchPlan');
+    expect(result).not.toHaveProperty('launchPlanHash');
+  });
+
+  it('returns the launched participant record from the frozen plan with actual task dispositions', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue({
+      id: 'cycle-1',
+      openedAt: new Date('2026-08-30T02:51:22.695Z'),
+      openedById: creator.id,
+      openSource: 'manual',
+      launchPlan: {
+        participants: [
+          {
+            employeeId: 'employee-active', employeeName: '俞丹',
+            deptId: 'hr-team', deptName: '人事组',
+            managerId: 'manager-1', managerName: '姚瑶',
+            participantDisposition: 'active', isExempt: false, exemptReason: null,
+          },
+          {
+            employeeId: 'employee-exempt', employeeName: '方园',
+            deptId: 'hr-team', deptName: '人事组',
+            managerId: 'manager-1', managerName: '俞丹',
+            participantDisposition: 'cycle_exempt', isExempt: true,
+            exemptReason: '发起检查时的豁免原因',
+          },
+        ],
+      },
+    });
+    prisma.assessmentTask.findMany.mockResolvedValue([
+      {
+        employeeId: 'employee-active', status: 'indicator_drafting', isExempt: false,
+        participantDisposition: 'active', exemptReason: null,
+      },
+      {
+        employeeId: 'employee-exempt', status: 'exempted', isExempt: true,
+        participantDisposition: 'cycle_exempt', exemptReason: 'HR 按部门设置为本周期豁免',
+      },
+    ]);
+    prisma.user.findUnique.mockResolvedValue({ id: creator.id, name: '姚瑶' });
+
+    const participantRecords = service as unknown as {
+      findParticipantRecord: (cycleId: string) => Promise<unknown>;
+    };
+    await expect(Promise.resolve().then(() => participantRecords.findParticipantRecord('cycle-1'))).resolves.toEqual({
+      cycleId: 'cycle-1',
+      recordedAt: new Date('2026-08-30T02:51:22.695Z'),
+      source: 'manual',
+      operator: { id: creator.id, name: '姚瑶' },
+      summary: { total: 2, active: 1, exempted: 1 },
+      participants: [
+        expect.objectContaining({
+          employeeId: 'employee-active', employeeName: '俞丹',
+          participantDisposition: 'active', status: 'indicator_drafting',
+        }),
+        expect.objectContaining({
+          employeeId: 'employee-exempt', employeeName: '方园', deptName: '人事组',
+          participantDisposition: 'cycle_exempt', status: 'exempted',
+          exemptReason: 'HR 按部门设置为本周期豁免',
+        }),
+      ],
+    });
+    expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith({
+      where: { cycleId: 'cycle-1' },
+      select: {
+        employeeId: true,
+        status: true,
+        isExempt: true,
+        participantDisposition: true,
+        exemptReason: true,
+      },
+    });
   });
 
   it('requires schedule cancellation before deadlines can be changed', async () => {

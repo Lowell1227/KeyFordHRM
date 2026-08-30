@@ -164,6 +164,8 @@ interface CycleMockOptions {
   launchBodies?: Record<string, unknown>[];
   scheduleBodies?: Record<string, unknown>[];
   preflight?: LaunchPreflightResult;
+  participantRecord?: Record<string, unknown>;
+  participantRecordRequests?: string[];
   deletedIds?: string[];
   authUser?: CurrentUser;
 }
@@ -304,6 +306,14 @@ async function mockCyclePage(
         body: JSON.stringify(apiResponse(options.preflight ?? readyPreflight)),
       });
     }
+    const participantRecordId = url.pathname.match(/\/cycles\/([^/]+)\/participant-record$/)?.[1];
+    if (participantRecordId) {
+      options.participantRecordRequests?.push(participantRecordId);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(options.participantRecord ?? {})),
+      });
+    }
     const launchId = url.pathname.match(/\/cycles\/([^/]+)\/launch$/)?.[1];
     if (launchId) {
       options.launchRequests?.push(launchId);
@@ -346,6 +356,24 @@ test('maps cycle states to the compact group, action, and five-stage workflow', 
 
 test.describe('compact cycle management list', () => {
   test.use({ baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173' });
+
+  test('defaults to all cycles and reset returns to the ungrouped list', async ({ page }) => {
+    const cycleRequests: URL[] = [];
+    await mockCyclePage(page, cycleRequests);
+
+    await page.goto('/cycles');
+
+    await expect(page.getByTestId('cycle-group-all')).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => cycleRequests.at(-1)?.searchParams.has('group')).toBe(false);
+
+    await page.getByTestId('cycle-group-attention').click();
+    await expect.poll(() => cycleRequests.at(-1)?.searchParams.get('group')).toBe('attention');
+
+    await page.getByRole('button', { name: '重置', exact: true }).click();
+    await expect(page.getByTestId('cycle-group-all')).toHaveAttribute('aria-pressed', 'true');
+    await expect.poll(() => cycleRequests.at(-1)?.searchParams.has('group')).toBe(false);
+    await expect(page).not.toHaveURL(/(?:\?|&)group=/);
+  });
 
   test('keeps the global DingTalk notification switch read-only for a cycle plan editor', async ({ page }) => {
     await mockCyclePage(page, [], {
@@ -394,6 +422,73 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByTestId('cycle-delete-cycle-draft')).toHaveText('删除');
     await expect(page.getByTestId('cycle-primary-cycle-draft')).toHaveCount(0);
     expect(cycleRequests.some((url) => url.searchParams.get('group') === 'attention')).toBe(true);
+  });
+
+  test('shows the launched participant record without duplicating cycle concepts', async ({ page }) => {
+    const participantRecordRequests: string[] = [];
+    const launchedCycle: AssessmentCycle = {
+      ...draftCycle,
+      id: 'cycle-launched',
+      name: '2026年08月绩效考核',
+      status: 'indicator_setting',
+      openedAt: '2026-08-30T02:51:22.695Z',
+      openSource: 'manual',
+      taskStats: {
+        total: 109,
+        unsubmitted: 101,
+        pendingManagerReview: 0,
+        pendingEmployeeConfirmation: 0,
+        goalCompleted: 0,
+        exempted: 8,
+        overdue: 101,
+        byStatus: { indicator_drafting: 101, exempted: 8 },
+      },
+    };
+    await mockCyclePage(page, [], {
+      cycles: [launchedCycle],
+      participantRecordRequests,
+      participantRecord: {
+        cycleId: launchedCycle.id,
+        recordedAt: launchedCycle.openedAt,
+        source: 'manual',
+        operator: { id: 'hr-1', name: '姚瑶' },
+        summary: { total: 109, active: 101, exempted: 8 },
+        participants: [
+          {
+            employeeId: 'employee-active', employeeName: '陈晨', deptId: 'hr-team', deptName: '人事组',
+            managerId: 'manager-1', managerName: '姚瑶', participantDisposition: 'active',
+            isExempt: false, exemptReason: null, status: 'indicator_drafting',
+          },
+          {
+            employeeId: 'employee-exempt', employeeName: '方园', deptId: 'hr-team', deptName: '人事组',
+            managerId: 'manager-1', managerName: '俞丹', participantDisposition: 'cycle_exempt',
+            isExempt: true, exemptReason: 'HR 按部门设置为本周期豁免', status: 'exempted',
+          },
+        ],
+      },
+    });
+
+    await page.goto('/cycles?cycleId=cycle-launched');
+
+    await expect.poll(() => participantRecordRequests).toEqual(['cycle-launched']);
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).not.toContainText('评分期数');
+    const progress = page.getByTestId('cycle-current-action');
+    await expect(progress).toContainText('目标完成');
+    await expect(progress).toContainText('0/101');
+    await expect(progress).not.toContainText('参与任务');
+
+    const record = page.getByTestId('cycle-participant-record');
+    await expect(record).toContainText('人员与发起记录');
+    await expect(record).toContainText('发起时已锁定');
+    await expect(record).toContainText('范围人数109');
+    await expect(record).toContainText('正常参与101');
+    await expect(record).toContainText('已豁免8');
+
+    await page.getByTestId('participant-filter-exempted').click();
+    await expect(record).toContainText('方园');
+    await expect(record).toContainText('人事组');
+    await expect(record).toContainText('HR 按部门设置为本周期豁免');
+    await expect(record).not.toContainText('陈晨');
   });
 
   test('summarizes persisted custom scope and exclusions with parent-child departments deduplicated', async ({ page }) => {
@@ -636,7 +731,8 @@ test.describe('compact cycle management list', () => {
 
     await page.getByRole('button', { name: draftCycle.name }).click();
     const currentTask = page.getByTestId('cycle-current-action');
-    await expect(currentTask).toContainText('点击发起操作后，系统会先检查周期审核、参与人员、直属上级和时间计划');
+    const preflightPanel = page.getByTestId('cycle-preflight-panel');
+    await expect(preflightPanel).toContainText('点击发起操作后，系统会先检查周期审核、参与人员、直属上级和时间计划');
     await expect(currentTask).not.toContainText('直属主管');
     await expect(currentTask).not.toContainText('绩效模板');
     await expect(currentTask).not.toContainText('时间设置');

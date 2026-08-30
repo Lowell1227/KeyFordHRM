@@ -786,14 +786,45 @@ export interface LaunchPreflightResult {
     managerName: string | null;
     deptHeadId: string | null;
     approverId: string | null;
-    templateId: string;
-    templateName: string;
-    templateVersion: number;
+    templateId: string | null;
+    templateName: string | null;
+    templateVersion: number | null;
     isExempt: boolean;
     exemptReason: string | null;
+    participantDisposition?: 'active' | 'cycle_exempt' | 'top_leader_exempt';
+  }>;
+  exclusions?: Array<{
+    employeeId: string;
+    employeeName: string;
+    reasonCode: 'PROBATION_NOT_IN_PLAN';
+    reason: string;
   }>;
   blockers: Array<{ code: string; message: string }>;
   warnings: Array<{ code: string; message: string }>;
+}
+
+export interface CycleParticipantRecord {
+  cycleId: string;
+  recordedAt: string;
+  source: 'manual' | 'scheduled';
+  operator: { id: string; name: string } | null;
+  summary: {
+    total: number;
+    active: number;
+    exempted: number;
+  };
+  participants: Array<{
+    employeeId: string;
+    employeeName: string;
+    deptId: string | null;
+    deptName: string | null;
+    managerId: string | null;
+    managerName: string | null;
+    participantDisposition: 'active' | 'cycle_exempt' | 'top_leader_exempt';
+    isExempt: boolean;
+    exemptReason: string | null;
+    status: TaskStatus | null;
+  }>;
 }
 
 export interface TaskQuery {

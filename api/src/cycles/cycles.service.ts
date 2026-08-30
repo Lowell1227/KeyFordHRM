@@ -46,6 +46,20 @@ const CYCLE_PLAN_INCLUDE = {
   companyFinalApprover: { select: { id: true, name: true } },
 };
 
+type ParticipantRecordDisposition = 'active' | 'cycle_exempt' | 'top_leader_exempt';
+
+interface FrozenLaunchParticipant {
+  employeeId: string;
+  employeeName: string;
+  deptId: string | null;
+  deptName: string | null;
+  managerId: string | null;
+  managerName: string | null;
+  participantDisposition: ParticipantRecordDisposition;
+  isExempt: boolean;
+  exemptReason: string | null;
+}
+
 @Injectable()
 export class CyclesService {
   constructor(
@@ -581,9 +595,12 @@ export class CyclesService {
         ? pendingEmployeeConfirmation
         : 0
     );
+    const publicCycle = Object.fromEntries(
+      Object.entries(cycle).filter(([key]) => key !== 'launchPlan' && key !== 'launchPlanHash'),
+    );
 
     return {
-      ...cycle,
+      ...publicCycle,
       reviewFrequency: 'cycle' as const,
       snapshotCount,
       taskStats: {
@@ -597,6 +614,104 @@ export class CyclesService {
         byStatus,
       },
     };
+  }
+
+  /** GET /cycles/:id/participant-record — 读取发起时锁定的人员范围，并叠加实际任务结果。 */
+  async findParticipantRecord(id: string) {
+    const cycle = await this.prisma.assessmentCycle.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        openedAt: true,
+        openedById: true,
+        openSource: true,
+        launchPlan: true,
+      },
+    });
+    if (!cycle) {
+      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
+    }
+    if (!cycle.openedAt) {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: '周期尚未发起，请查看发起前检查结果',
+      });
+    }
+
+    const frozenParticipants = this.frozenLaunchParticipants(cycle.launchPlan);
+    const [tasks, operator] = await Promise.all([
+      this.prisma.assessmentTask.findMany({
+        where: { cycleId: id },
+        select: {
+          employeeId: true,
+          status: true,
+          isExempt: true,
+          participantDisposition: true,
+          exemptReason: true,
+        },
+      }),
+      cycle.openedById
+        ? this.prisma.user.findUnique({
+            where: { id: cycle.openedById },
+            select: { id: true, name: true },
+          })
+        : Promise.resolve(null),
+    ]);
+    const taskByEmployee = new Map(tasks.map((task) => [task.employeeId, task]));
+    const participants = frozenParticipants.map((participant) => {
+      const task = taskByEmployee.get(participant.employeeId);
+      return {
+        ...participant,
+        participantDisposition: (task?.participantDisposition ?? participant.participantDisposition) as ParticipantRecordDisposition,
+        isExempt: task?.isExempt ?? participant.isExempt,
+        exemptReason: task ? task.exemptReason : participant.exemptReason,
+        status: task?.status ?? null,
+      };
+    });
+    const exempted = participants.filter((participant) => participant.isExempt).length;
+
+    return {
+      cycleId: cycle.id,
+      recordedAt: cycle.openedAt,
+      source: cycle.openSource === 'scheduled' ? 'scheduled' as const : 'manual' as const,
+      operator,
+      summary: {
+        total: participants.length,
+        active: participants.length - exempted,
+        exempted,
+      },
+      participants,
+    };
+  }
+
+  private frozenLaunchParticipants(value: Prisma.JsonValue | null): FrozenLaunchParticipant[] {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return [];
+    const rawParticipants = (value as Prisma.JsonObject).participants;
+    if (!Array.isArray(rawParticipants)) return [];
+
+    return rawParticipants.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object' || Array.isArray(entry)) return [];
+      const participant = entry as Prisma.JsonObject;
+      if (typeof participant.employeeId !== 'string' || typeof participant.employeeName !== 'string') return [];
+      const isExempt = participant.isExempt === true;
+      const disposition = participant.participantDisposition;
+      const participantDisposition: ParticipantRecordDisposition = disposition === 'top_leader_exempt'
+        ? 'top_leader_exempt'
+        : disposition === 'cycle_exempt' || isExempt
+          ? 'cycle_exempt'
+          : 'active';
+      return [{
+        employeeId: participant.employeeId,
+        employeeName: participant.employeeName,
+        deptId: typeof participant.deptId === 'string' ? participant.deptId : null,
+        deptName: typeof participant.deptName === 'string' ? participant.deptName : null,
+        managerId: typeof participant.managerId === 'string' ? participant.managerId : null,
+        managerName: typeof participant.managerName === 'string' ? participant.managerName : null,
+        participantDisposition,
+        isExempt,
+        exemptReason: typeof participant.exemptReason === 'string' ? participant.exemptReason : null,
+      }];
+    });
   }
 
   /** PATCH /cycles/:id/deadlines — 只能延期不能提前。 */

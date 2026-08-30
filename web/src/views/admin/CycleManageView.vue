@@ -25,6 +25,7 @@ import type {
   UpdateDeadlinesBody,
   PublishVisibleFields,
   LaunchPreflightResult,
+  CycleParticipantRecord,
   Department,
   CycleQuery,
   CycleStatusGroup,
@@ -49,7 +50,10 @@ const CYCLE_STATUS_OPTIONS: { label: string; value: CycleStatus }[] = [
   { label: '已关闭', value: 'closed' },
 ];
 
-const CYCLE_STATUS_GROUPS: { label: string; value: CycleStatusGroup }[] = [
+type CycleListGroup = CycleStatusGroup | 'all';
+
+const CYCLE_STATUS_GROUPS: { label: string; value: CycleListGroup }[] = [
+  { label: '全部', value: 'all' },
   { label: '待发起', value: 'attention' },
   { label: '进行中', value: 'active' },
   { label: '已结束', value: 'finished' },
@@ -170,12 +174,12 @@ const initialType = CYCLE_TYPE_OPTIONS.some((item) => item.value === route.query
   ? route.query.type as CycleType
   : '';
 const initialGroup = CYCLE_STATUS_GROUPS.some((item) => item.value === route.query.group)
-  ? route.query.group as CycleStatusGroup
+  ? route.query.group as CycleListGroup
   : initialStatus
     ? cycleStatusGroup(initialStatus)
-    : 'attention';
+    : 'all';
 
-const statusGroup = ref<CycleStatusGroup>(initialGroup);
+const statusGroup = ref<CycleListGroup>(initialGroup);
 const statusFilter = ref<CycleStatus | ''>(initialStatus);
 const typeFilter = ref<CycleType | ''>(initialType);
 const keyword = ref(typeof route.query.keyword === 'string' ? route.query.keyword : '');
@@ -235,6 +239,9 @@ const editingCycle = ref<AssessmentCycle | null>(null);
 const preflightLoading = ref(false);
 const preflightError = ref('');
 const preflight = ref<LaunchPreflightResult | null>(null);
+const participantRecordLoading = ref(false);
+const participantRecordError = ref('');
+const participantRecord = ref<CycleParticipantRecord | null>(null);
 const launchActionMode = ref<'launch' | 'schedule' | null>(null);
 const detailLoading = ref(false);
 const detailError = ref('');
@@ -245,6 +252,7 @@ const emptyStateDescription = computed(() => {
   if (hasListFilters.value) return '没有符合筛选条件的周期';
   if (statusGroup.value === 'active') return '暂无进行中的周期';
   if (statusGroup.value === 'finished') return '暂无已结束周期';
+  if (statusGroup.value === 'all') return '暂无绩效周期';
   return '暂无待发起周期';
 });
 const gradeRatioSummary = computed(() => (
@@ -1505,7 +1513,20 @@ async function loadCycleDetail(cycleId: string) {
   detailLoading.value = true;
   detailError.value = '';
   try {
-    cycleDetail.value = await cyclesApi.findOne(cycleId);
+    const detail = await cyclesApi.findOne(cycleId);
+    cycleDetail.value = detail;
+    participantRecord.value = null;
+    participantRecordError.value = '';
+    if (detail.openedAt) {
+      participantRecordLoading.value = true;
+      try {
+        participantRecord.value = await cyclesApi.participantRecord(cycleId);
+      } catch (error) {
+        participantRecordError.value = error instanceof Error ? error.message : '获取发起记录失败';
+      } finally {
+        participantRecordLoading.value = false;
+      }
+    }
   } catch (error) {
     detailError.value = error instanceof Error ? error.message : '获取周期详情失败';
   } finally {
@@ -1517,6 +1538,8 @@ async function openCycleWorkspace(cycle: AssessmentCycle, runPreflight = false) 
   cycleDetail.value = cycle;
   preflight.value = null;
   preflightError.value = '';
+  participantRecord.value = null;
+  participantRecordError.value = '';
   if (route.query.cycleId !== cycle.id) {
     await router.push({ query: { ...route.query, cycleId: cycle.id } });
   }
@@ -1530,6 +1553,8 @@ async function closeCycleWorkspace() {
   preflight.value = null;
   preflightError.value = '';
   cycleDetail.value = null;
+  participantRecord.value = null;
+  participantRecordError.value = '';
   await router.replace({ query });
 }
 
@@ -1574,7 +1599,7 @@ function handlePrimaryCycleAction(cycle: AssessmentCycle) {
 function buildQuery(): CycleQuery {
   const query: CycleQuery & Record<string, unknown> = {};
   if (statusFilter.value) query.status = statusFilter.value;
-  else query.group = statusGroup.value;
+  else if (statusGroup.value !== 'all') query.group = statusGroup.value;
   if (typeFilter.value) query.type = typeFilter.value;
   if (keyword.value.trim()) query.keyword = keyword.value.trim();
   return withParams(query);
@@ -1582,7 +1607,8 @@ function buildQuery(): CycleQuery {
 
 async function syncListRoute() {
   const query = { ...route.query };
-  query.group = statusGroup.value;
+  if (statusGroup.value === 'all') delete query.group;
+  else query.group = statusGroup.value;
   if (statusFilter.value) query.status = statusFilter.value;
   else delete query.status;
   if (typeFilter.value) query.type = typeFilter.value;
@@ -1616,7 +1642,7 @@ async function handleSearch() {
 }
 
 async function handleReset() {
-  statusGroup.value = 'attention';
+  statusGroup.value = 'all';
   statusFilter.value = '';
   typeFilter.value = '';
   keyword.value = '';
@@ -1625,7 +1651,7 @@ async function handleReset() {
   await loadCycles();
 }
 
-async function selectStatusGroup(group: CycleStatusGroup) {
+async function selectStatusGroup(group: CycleListGroup) {
   if (statusGroup.value === group && !statusFilter.value) return;
   statusGroup.value = group;
   statusFilter.value = '';
@@ -1695,6 +1721,9 @@ onMounted(() => {
       :preflight="preflight"
       :preflight-loading="preflightLoading"
       :preflight-error="preflightError"
+      :participant-record="participantRecord"
+      :participant-record-loading="participantRecordLoading"
+      :participant-record-error="participantRecordError"
       :launch-action="launchActionMode"
       :can-edit="canEditCyclePlan"
       @back="closeCycleWorkspace"

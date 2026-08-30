@@ -9,6 +9,7 @@ import type {
   PublishResultsBody,
   PublishResultsResult,
   LaunchPreflightResult,
+  CycleParticipantRecord,
   CycleSchedulePreview,
   CycleNotificationMode,
   DingtalkNotificationSettings,
@@ -91,6 +92,10 @@ export const cyclesApi = {
 
   preflight(id: string): Promise<LaunchPreflightResult> {
     return apiGet(`/cycles/${id}/preflight`);
+  },
+
+  participantRecord(id: string): Promise<CycleParticipantRecord> {
+    return apiGet(`/cycles/${id}/participant-record`);
   },
 
   schedule(id: string, expectedPlanHash: string): Promise<{

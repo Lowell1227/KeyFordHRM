@@ -53,6 +53,13 @@ export class CyclesController {
     return this.cyclesService.findOne(id, user);
   }
 
+  @Get(':id/participant-record')
+  @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('cycle_plan_edit', 'cycle_plan_review')
+  participantRecord(@Param('id', ParseUUIDPipe) id: string) {
+    return this.cyclesService.findParticipantRecord(id);
+  }
+
   @Delete(':id')
   @Roles(SysRole.hr, SysRole.system_admin)
   @HrCapabilities('cycle_plan_edit')

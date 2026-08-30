@@ -130,7 +130,7 @@ const performanceStageState = computed<TaskStageState>(() => {
     : 'not-started';
 });
 const performanceStageStateLabel = computed(() => {
-  if (task.value?.isExempt && requestedPerformanceStage.value === 'result') return '已豁免';
+  if (task.value?.isExempt) return '已豁免';
   return {
     pending: '待处理',
     progress: '处理中',

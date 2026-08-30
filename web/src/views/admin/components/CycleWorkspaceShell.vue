@@ -1,8 +1,8 @@
 <script setup lang="ts">
-import { computed } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import dayjs from 'dayjs';
-import type { AssessmentCycle, LaunchPreflightResult } from '@/types/api.types';
+import type { AssessmentCycle, CycleParticipantRecord, LaunchPreflightResult } from '@/types/api.types';
 import type { CycleStatus } from '@/types/enums';
 import { formatDate } from '@/utils/date';
 import { cycleNextStep, cycleStageIndex } from '../cycle-management';
@@ -14,6 +14,9 @@ const props = withDefaults(defineProps<{
   preflight?: LaunchPreflightResult | null;
   preflightLoading?: boolean;
   preflightError?: string;
+  participantRecord?: CycleParticipantRecord | null;
+  participantRecordLoading?: boolean;
+  participantRecordError?: string;
   launchAction?: 'launch' | 'schedule' | null;
   canEdit?: boolean;
 }>(), {
@@ -23,6 +26,9 @@ const props = withDefaults(defineProps<{
   preflight: null,
   preflightLoading: false,
   preflightError: '',
+  participantRecord: null,
+  participantRecordLoading: false,
+  participantRecordError: '',
   launchAction: null,
   canEdit: false,
 });
@@ -37,8 +43,20 @@ const emit = defineEmits<{
 }>();
 
 const stages = ['规划配置', '目标制定', '绩效评价', '校准审批', '公示归档'];
+const participantFilterOptions = [
+  { key: 'all', label: '全部' },
+  { key: 'active', label: '正常参与' },
+  { key: 'exempted', label: '已豁免' },
+] as const;
 const currentStage = computed(() => props.cycle ? cycleStageIndex(props.cycle.status) : 0);
 const nextStep = computed(() => props.cycle ? cycleNextStep(props.cycle) : null);
+const participantFilter = ref<'all' | 'active' | 'exempted'>('all');
+const participantKeyword = ref('');
+const isPrelaunch = computed(() => Boolean(props.cycle && ['draft', 'launch_blocked'].includes(props.cycle.status)));
+const activeTaskCount = computed(() => {
+  const stats = props.cycle?.taskStats;
+  return stats ? Math.max(0, stats.total - stats.exempted) : 0;
+});
 
 const STATUS_LABEL: Record<CycleStatus, string> = {
   draft: '草稿',
@@ -100,18 +118,60 @@ function probationExclusionCount(result: LaunchPreflightResult): number {
   return preflightExclusions(result).filter((item) => item.reasonCode === 'PROBATION_NOT_IN_PLAN').length;
 }
 
-function topLeaderNames(result: LaunchPreflightResult): string {
-  return preflightParticipants(result)
-    .filter((participant) => participant.participantDisposition === 'top_leader_exempt')
-    .map((participant) => participant.employeeName)
-    .join('、');
+function participantDispositionLabel(participant: {
+  participantDisposition?: 'active' | 'cycle_exempt' | 'top_leader_exempt';
+  isExempt: boolean;
+}): string {
+  if (participant.participantDisposition === 'top_leader_exempt') return '最高负责人豁免';
+  if (participant.participantDisposition === 'cycle_exempt' || participant.isExempt) return '已豁免';
+  return '正常参与';
 }
 
-function participantDispositionLabel(participant: V2PreflightParticipant): string {
-  if (participant.participantDisposition === 'top_leader_exempt') return '最高负责人豁免';
-  if (participant.participantDisposition === 'cycle_exempt') return participant.exemptReason || '周期豁免';
-  return '纳入绩效计划';
+type ParticipantRow = V2PreflightParticipant | CycleParticipantRecord['participants'][number];
+
+const participantRows = computed<ParticipantRow[]>(() => (
+  isPrelaunch.value
+    ? (props.preflight ? preflightParticipants(props.preflight) : [])
+    : (props.participantRecord?.participants ?? [])
+));
+
+const filteredParticipantRows = computed(() => {
+  const keyword = participantKeyword.value.trim().toLocaleLowerCase();
+  return participantRows.value.filter((participant) => {
+    if (participantFilter.value === 'active' && participant.isExempt) return false;
+    if (participantFilter.value === 'exempted' && !participant.isExempt) return false;
+    if (!keyword) return true;
+    return [participant.employeeName, participant.deptName, participant.managerName]
+      .filter(Boolean)
+      .some((value) => String(value).toLocaleLowerCase().includes(keyword));
+  });
+});
+
+const preflightExemptedCount = computed(() => (
+  props.preflight ? preflightParticipants(props.preflight).filter((participant) => participant.isExempt).length : 0
+));
+
+const preflightActiveCount = computed(() => (
+  props.preflight ? preflightParticipants(props.preflight).filter((participant) => !participant.isExempt).length : 0
+));
+
+function participantReason(participant: ParticipantRow): string {
+  return participant.exemptReason || (participant.isExempt ? '本周期豁免' : '—');
 }
+
+function recordSourceLabel(record: CycleParticipantRecord): string {
+  return record.source === 'scheduled' ? '预约发起' : '手动发起';
+}
+
+function reviewSummary(cycle: AssessmentCycle): string {
+  const status = cycle.reviewStatus === 'approved' ? '已通过' : cycle.reviewStatus === 'rejected' ? '已退回' : '待审核';
+  return `审核：${status} · ${cycle.reviewer?.name || 'HR 管理员审核池'}`;
+}
+
+watch(() => props.cycle?.id, () => {
+  participantFilter.value = 'all';
+  participantKeyword.value = '';
+});
 
 </script>
 
@@ -134,14 +194,12 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
           <p v-if="cycle">{{ formatDate(cycle.startDate) }}–{{ formatDate(cycle.endDate) }}</p>
           <div v-if="cycle" class="cycle-workspace__meta">
             <span>创建人：{{ cycle.creator?.name || '—' }}</span>
-            <span>{{ cycle.reviewer?.name ? `审核人：${cycle.reviewer.name}` : '审核处理：HR 管理员审核池' }}</span>
-            <span>审核状态：{{ cycle.reviewStatus === 'approved' ? '已通过' : (cycle.reviewStatus === 'rejected' ? '已退回' : '待审核') }}</span>
+            <span>{{ reviewSummary(cycle) }}</span>
             <span v-if="cycle.workflowVersion !== 2 && cycle.monthlyFollowUpRequired">需按月跟进</span>
           </div>
           <div v-if="cycle" class="cycle-workspace__scoring" data-testid="cycle-workspace-scoring-summary">
             <span>{{ scoringSummary(cycle) }}</span>
             <span v-if="cycle.workflowVersion === 2">结果审核：按周期审核</span>
-            <span v-if="cycle.workflowVersion === 2">评分期数：{{ cycle.periodSchedules?.length ?? 0 }}期</span>
             <span v-if="cycle.workflowVersion === 2">已调整月份：{{ scheduleExceptionCount(cycle) }}个</span>
             <span v-if="cycle.workflowVersion === 2">公司最终审定人：{{ cycle.companyFinalApprover?.name || '未配置' }}</span>
           </div>
@@ -201,14 +259,32 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
             </el-tag>
           </div>
 
-          <div v-if="cycle.taskStats" class="cycle-stat-grid">
-            <div><span>参与任务</span><strong>{{ cycle.taskStats.total }}人</strong></div>
-            <div><span>目标已完成</span><strong>{{ cycle.taskStats.goalCompleted }}人</strong></div>
+          <div v-if="cycle.taskStats && cycle.status === 'indicator_setting'" class="cycle-stat-grid cycle-stat-grid--progress">
+            <div><span>目标完成</span><strong>{{ cycle.taskStats.goalCompleted }}/{{ activeTaskCount }}</strong></div>
             <div><span>待主管审核</span><strong>{{ cycle.taskStats.pendingManagerReview }}人</strong></div>
-            <div><span>已逾期</span><strong :class="{ 'is-danger': cycle.taskStats.overdue > 0 }">{{ cycle.taskStats.overdue }}人</strong></div>
+            <div><span>逾期未完成</span><strong :class="{ 'is-danger': cycle.taskStats.overdue > 0 }">{{ cycle.taskStats.overdue }}人</strong></div>
           </div>
+        </section>
 
-          <section v-if="['draft', 'launch_blocked'].includes(cycle.status)" class="cycle-preflight-panel">
+        <section
+          v-if="isPrelaunch || cycle.openedAt"
+          class="cycle-participant-panel"
+          :data-testid="isPrelaunch ? 'cycle-preflight-panel' : 'cycle-participant-record'"
+        >
+          <header class="cycle-participant-panel__heading">
+            <div>
+              <span>考核人员范围</span>
+              <h2>{{ isPrelaunch ? '预计发起结果' : '人员与发起记录' }}</h2>
+              <p v-if="participantRecord">
+                发起时已锁定 · {{ recordSourceLabel(participantRecord) }} ·
+                {{ formatDateTime(participantRecord.recordedAt) }}
+                <template v-if="participantRecord.operator?.name"> · {{ participantRecord.operator.name }}</template>
+              </p>
+              <p v-else-if="isPrelaunch">检查结果用于确认本次将为哪些员工创建任务，不会修改人员资料。</p>
+            </div>
+          </header>
+
+          <template v-if="isPrelaunch">
             <div
               class="cycle-preflight-control-bar"
               data-testid="cycle-preflight-control-bar"
@@ -254,12 +330,11 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
                 :title="preflight.ready ? '发起检查通过' : '请先处理阻断项'"
               />
               <div class="cycle-preflight-summary" data-testid="cycle-preflight-summary">
-                <span><strong>{{ preflight.participantCount }}</strong> 名参与员工</span>
-                <span>员工目标将在发起后空白创建</span>
+                <span>预计范围<strong>{{ preflight.participantCount }}</strong>人</span>
+                <span v-if="preflight.participants.length">正常参与<strong>{{ preflightActiveCount }}</strong>人</span>
+                <span v-if="preflight.participants.length">预计豁免<strong>{{ preflightExemptedCount }}</strong>人</span>
+                <span v-if="cycle.workflowVersion === 2">未进入范围<strong>{{ probationExclusionCount(preflight) }}</strong>人</span>
                 <span>目标制定开放时间 {{ formatDateTime(preflight.cycle.goalSettingOpenAt) }}</span>
-                <span v-if="cycle.workflowVersion === 2">试用期排除：{{ probationExclusionCount(preflight) }}人</span>
-                <span v-if="cycle.workflowVersion === 2 && topLeaderNames(preflight)">最高负责人豁免：{{ topLeaderNames(preflight) }}</span>
-                <span v-if="cycle.workflowVersion === 2">本次发起公司最终审定人：{{ preflight.companyFinalApprover?.name || '未配置' }}</span>
               </div>
               <div
                 v-if="preflight.blockers.length"
@@ -282,24 +357,69 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
                   </el-button>
                 </article>
               </div>
-              <details
-                v-if="preflight.participants.length"
-                class="cycle-preflight-details"
-                data-testid="cycle-preflight-details"
-              >
-                <summary>查看检查明细（{{ preflight.participants.length }}）</summary>
-                <el-table :data="preflight.participants" size="small" max-height="360">
-                  <el-table-column prop="employeeName" label="员工" min-width="100" />
-                  <el-table-column prop="deptName" label="部门" min-width="140" />
-                  <el-table-column prop="managerName" label="直属上级" min-width="110" />
-                  <el-table-column v-if="cycle.workflowVersion === 2" label="处理结果" min-width="130">
-                    <template #default="{ row }">{{ participantDispositionLabel(row as V2PreflightParticipant) }}</template>
-                  </el-table-column>
-                </el-table>
-              </details>
             </template>
+          </template>
 
-          </section>
+          <el-skeleton v-else-if="participantRecordLoading" animated :rows="5" />
+          <el-alert
+            v-else-if="participantRecordError"
+            type="error"
+            :closable="false"
+            show-icon
+            title="发起记录加载失败"
+            :description="participantRecordError"
+          />
+          <div v-else-if="participantRecord" class="cycle-participant-summary" data-testid="cycle-participant-summary">
+            <span>范围人数<strong>{{ participantRecord.summary.total }}</strong></span>
+            <span>正常参与<strong>{{ participantRecord.summary.active }}</strong></span>
+            <span>已豁免<strong>{{ participantRecord.summary.exempted }}</strong></span>
+          </div>
+
+          <details
+            v-if="participantRows.length"
+            class="cycle-participant-details"
+            :open="!isPrelaunch"
+            data-testid="cycle-preflight-details"
+          >
+            <summary>{{ isPrelaunch ? '查看人员明细' : '人员明细' }}（{{ participantRows.length }}）</summary>
+            <div v-if="!isPrelaunch" class="cycle-participant-toolbar">
+              <div class="cycle-participant-filters" aria-label="参与结果筛选">
+                <button
+                  v-for="item in participantFilterOptions"
+                  :key="item.key"
+                  type="button"
+                  :data-testid="`participant-filter-${item.key}`"
+                  :class="{ 'is-active': participantFilter === item.key }"
+                  :aria-pressed="participantFilter === item.key"
+                  @click="participantFilter = item.key"
+                >
+                  {{ item.label }}
+                </button>
+              </div>
+              <el-input
+                v-model="participantKeyword"
+                data-testid="participant-search"
+                clearable
+                placeholder="搜索姓名、部门或直属主管"
+                style="width: 260px"
+              />
+            </div>
+            <el-table :data="filteredParticipantRows" size="small" max-height="360" empty-text="没有符合条件的人员">
+              <el-table-column prop="employeeName" label="员工" min-width="100" />
+              <el-table-column prop="deptName" label="部门" min-width="130" />
+              <el-table-column prop="managerName" label="直属主管" min-width="110" />
+              <el-table-column label="参与结果" min-width="120">
+                <template #default="{ row }">
+                  <el-tag :type="row.isExempt ? 'info' : 'success'" effect="light" size="small">
+                    {{ participantDispositionLabel(row as ParticipantRow) }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="说明" min-width="230">
+                <template #default="{ row }">{{ participantReason(row as ParticipantRow) }}</template>
+              </el-table-column>
+            </el-table>
+          </details>
         </section>
       </main>
     </template>
@@ -461,6 +581,10 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
   margin-top: 20px;
 }
 
+.cycle-stat-grid--progress {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
 .cycle-stat-grid > div {
   display: grid;
   gap: 7px;
@@ -477,15 +601,40 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
   color: var(--el-color-danger);
 }
 
-.cycle-preflight-panel {
+.cycle-participant-panel {
   display: grid;
   gap: 16px;
-  margin-top: 20px;
-  padding-top: 20px;
-  border-top: 1px solid var(--el-border-color-lighter);
+  margin-top: 12px;
+  padding: 22px;
+  background: #fff;
+  border-radius: 10px;
 }
 
-.cycle-preflight-summary {
+.cycle-participant-panel__heading {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.cycle-participant-panel__heading > div > span {
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.cycle-participant-panel__heading h2 {
+  margin: 5px 0;
+  font-size: 20px;
+}
+
+.cycle-participant-panel__heading p {
+  margin: 0;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.cycle-preflight-summary,
+.cycle-participant-summary {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
@@ -507,11 +656,14 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
   margin-left: 0;
 }
 
-.cycle-preflight-summary span {
+.cycle-preflight-summary span,
+.cycle-participant-summary span {
   color: var(--el-text-color-secondary);
 }
 
-.cycle-preflight-summary strong {
+.cycle-preflight-summary strong,
+.cycle-participant-summary strong {
+  margin-left: 4px;
   color: var(--el-text-color-primary);
 }
 
@@ -540,10 +692,42 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
   font-size: 12px;
 }
 
-.cycle-preflight-details summary {
+.cycle-preflight-details summary,
+.cycle-participant-details summary {
   padding: 8px 0;
   color: var(--el-color-primary);
   cursor: pointer;
+}
+
+.cycle-participant-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 6px 0 12px;
+}
+
+.cycle-participant-filters {
+  display: flex;
+  gap: 6px;
+  padding: 3px;
+  background: var(--el-fill-color-lighter);
+  border-radius: 8px;
+}
+
+.cycle-participant-filters button {
+  padding: 7px 14px;
+  color: var(--el-text-color-secondary);
+  cursor: pointer;
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+}
+
+.cycle-participant-filters button.is-active {
+  color: var(--el-color-primary);
+  background: #fff;
+  box-shadow: var(--el-box-shadow-lighter);
 }
 
 .cycle-preflight-control-bar {
@@ -597,6 +781,8 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
   }
 
   .cycle-current-action__heading,
+  .cycle-participant-panel__heading,
+  .cycle-participant-toolbar,
   .cycle-preflight-blockers article,
   .cycle-preflight-control-bar {
     align-items: stretch;
@@ -622,6 +808,14 @@ function participantDispositionLabel(participant: V2PreflightParticipant): strin
 
   .cycle-stat-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .cycle-stat-grid--progress {
+    grid-template-columns: 1fr;
+  }
+
+  .cycle-participant-toolbar .el-input {
+    width: 100% !important;
   }
 }
 </style>

@@ -1219,7 +1219,7 @@ watch(
             class="personal-task-card__state"
             :class="`is-${stageState(selectedStage)}`"
           >
-            {{ personalTask.isExempt && selectedStage === 'result'
+            {{ personalTask.isExempt
               ? '已豁免'
               : stageStateLabel(stageState(selectedStage)) }}
           </span>

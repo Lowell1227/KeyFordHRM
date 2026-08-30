@@ -806,8 +806,16 @@ test.describe('cycle scoring plan integration', () => {
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('公司最终审定人：李宏');
 
     await page.getByRole('button', { name: '开始发起' }).click();
-    await expect(page.getByTestId('cycle-preflight-summary')).toContainText('试用期排除：1人');
-    await expect(page.getByTestId('cycle-preflight-summary')).toContainText('最高负责人豁免：李宏');
-    await expect(page.getByTestId('cycle-preflight-summary')).toContainText('本次发起公司最终审定人：李宏');
+    const preflightSummary = page.getByTestId('cycle-preflight-summary');
+    await expect(preflightSummary).toContainText('预计范围2人');
+    await expect(preflightSummary).toContainText('正常参与1人');
+    await expect(preflightSummary).toContainText('预计豁免1人');
+    await expect(preflightSummary).toContainText('未进入范围1人');
+    await expect(preflightSummary).not.toContainText('公司最终审定人');
+
+    const participantDetails = page.getByTestId('cycle-preflight-details');
+    await participantDetails.locator('summary').click();
+    await expect(participantDetails).toContainText('李宏');
+    await expect(participantDetails).toContainText('最高负责人豁免');
   });
 });
