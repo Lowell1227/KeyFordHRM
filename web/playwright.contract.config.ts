@@ -28,6 +28,7 @@ export default defineConfig({
     '26-menu-online-baseline.spec.ts',
     '28-monthly-review-responsive.spec.ts',
     '29-goal-setting-responsive.spec.ts',
+    '30-goal-tracking-cycle-closure.spec.ts',
   ],
   workers: 1,
 });

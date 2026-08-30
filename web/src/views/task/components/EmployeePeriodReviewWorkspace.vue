@@ -53,11 +53,14 @@ const completedCount = computed(() => formItems.filter((item) => (
   item.progress != null && item.healthStatus != null && item.selfScore != null
 )).length);
 const periodLabel = computed(() => {
-  const key = detail.value?.period.periodKey;
-  if (!key) return '';
+  const period = detail.value?.period;
+  if (!period) return '';
+  if (period.periodType === 'cycle') return '整周期';
+  const key = period.periodKey;
   const [year, month] = key.split('-');
   return `${year}年${Number(month)}月`;
 });
+const periodNoun = computed(() => detail.value?.period.periodType === 'cycle' ? '本期' : '本月');
 
 function optionalText(value: string): string | null {
   return value.trim() || null;
@@ -89,7 +92,7 @@ async function loadReview() {
     replaceForm(await periodReviewsApi.findOne(props.periodId));
   } catch (loadError) {
     const candidate = loadError as { message?: string; response?: { data?: { message?: string } } };
-    error.value = candidate.response?.data?.message || candidate.message || '月度复盘加载失败';
+    error.value = candidate.response?.data?.message || candidate.message || '复盘与自评加载失败';
   } finally {
     loading.value = false;
   }
@@ -119,9 +122,9 @@ function validateForSubmit(): boolean {
   let firstInvalid = -1;
   formItems.forEach((item, index) => {
     const errors: Partial<Record<RequiredField, string>> = {};
-    if (item.progress == null) errors.progress = '请填写本月完成进度';
-    if (!item.healthStatus) errors.healthStatus = '请选择本月完成状态';
-    if (item.selfScore == null) errors.selfScore = '请填写 0-100 分的本月自评分';
+    if (item.progress == null) errors.progress = `请填写${periodNoun.value}完成进度`;
+    if (!item.healthStatus) errors.healthStatus = `请选择${periodNoun.value}完成状态`;
+    if (item.selfScore == null) errors.selfScore = `请填写 0-100 分的${periodNoun.value}自评分`;
     if (Object.keys(errors).length) {
       validationErrors[item.indicatorVersionItemId] = errors;
       if (firstInvalid < 0) firstInvalid = index;
@@ -185,7 +188,7 @@ async function submitReview() {
       detail.value.period.status = result.status;
       detail.value.permissions.canEditEmployee = false;
     }
-    ElMessage.success('月度复盘已提交');
+    ElMessage.success('复盘与自评已提交');
     emit('submitted');
   } finally {
     submitting.value = false;
@@ -198,13 +201,13 @@ watch(() => props.periodId, loadReview, { immediate: true });
 <template>
   <section class="monthly-review" data-testid="monthly-review-workspace">
     <el-skeleton v-if="loading" animated :rows="10" />
-    <el-result v-else-if="error" icon="error" title="月度复盘加载失败" :sub-title="error">
+    <el-result v-else-if="error" icon="error" title="复盘与自评加载失败" :sub-title="error">
       <template #extra><el-button @click="loadReview">重新加载</el-button></template>
     </el-result>
     <template v-else-if="detail">
       <div class="monthly-review__period-bar">
         <div>
-          <strong>{{ periodLabel }}目标复盘</strong>
+          <strong>{{ periodLabel }}复盘与评分</strong>
           <span>{{ detail.context.statusLabel }}</span>
         </div>
         <small>员工截止 {{ new Date(detail.period.selfEvalDueAt).toLocaleString('zh-CN', { hour12: false }) }}</small>
@@ -236,14 +239,14 @@ watch(() => props.periodId, loadReview, { immediate: true });
 
               <div class="monthly-goal-card__core">
                 <label class="monthly-field">
-                  <span>本月完成进度 <b>*</b></span>
+                  <span>{{ periodNoun }}完成进度 <b>*</b></span>
                   <el-input-number
                     v-model="formItems[index].progress"
                     :min="0"
                     :max="100"
                     :controls="false"
                     :disabled="!canEdit"
-                    aria-label="本月完成进度"
+                    :aria-label="`${periodNoun}完成进度`"
                     placeholder="0-100"
                     @change="clearItemError(indicator.indicatorVersionItemId, 'progress')"
                   />
@@ -254,7 +257,7 @@ watch(() => props.periodId, loadReview, { immediate: true });
                 </label>
 
                 <div class="monthly-field monthly-field--status">
-                  <span>本月完成状态 <b>*</b></span>
+                  <span>{{ periodNoun }}完成状态 <b>*</b></span>
                   <div class="monthly-health-options">
                     <button
                       v-for="option in healthOptions"
@@ -271,14 +274,14 @@ watch(() => props.periodId, loadReview, { immediate: true });
                 </div>
 
                 <label class="monthly-field">
-                  <span>本月自评分 <b>*</b></span>
+                  <span>{{ periodNoun }}自评分 <b>*</b></span>
                   <el-input-number
                     v-model="formItems[index].selfScore"
                     :min="0"
                     :max="100"
                     :controls="false"
                     :disabled="!canEdit"
-                    aria-label="本月自评分"
+                    :aria-label="`${periodNoun}自评分`"
                     placeholder="0-100"
                     @change="clearItemError(indicator.indicatorVersionItemId, 'selfScore')"
                   />
@@ -291,7 +294,7 @@ watch(() => props.periodId, loadReview, { immediate: true });
 
               <div class="monthly-goal-card__details">
                 <label class="monthly-field is-wide">
-                  <span>本月完成情况 <i>选填</i></span>
+                  <span>{{ periodNoun }}完成情况 <i>选填</i></span>
                   <el-input v-model="formItems[index].actualValueText" :disabled="!canEdit" maxlength="200" placeholder="填写关键结果、完成数量或交付结果" />
                 </label>
                 <label class="monthly-field">
@@ -299,7 +302,7 @@ watch(() => props.periodId, loadReview, { immediate: true });
                   <el-input v-model="formItems[index].problemReason" :disabled="!canEdit" type="textarea" :rows="2" placeholder="如有偏差，简要说明原因" />
                 </label>
                 <label class="monthly-field">
-                  <span>下月计划 <i>选填</i></span>
+                  <span>下一步计划 <i>选填</i></span>
                   <el-input v-model="formItems[index].nextMonthPlan" :disabled="!canEdit" type="textarea" :rows="2" placeholder="填写下一步重点动作" />
                 </label>
                 <label class="monthly-field">
@@ -321,7 +324,7 @@ watch(() => props.periodId, loadReview, { immediate: true });
 
       <footer v-if="canEdit" class="monthly-review-actions" data-testid="monthly-review-actions">
         <div class="monthly-review-actions__progress">
-          <strong>本月填写完成 {{ completedCount }}/{{ formItems.length }}</strong>
+          <strong>本期填写完成 {{ completedCount }}/{{ formItems.length }}</strong>
           <span>进度、状态和自评分为必填，其余说明选填</span>
         </div>
         <div class="monthly-review-actions__buttons">

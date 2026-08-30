@@ -39,7 +39,7 @@ import {
   type TaskStageState,
 } from './task-stage';
 import { useTaskWorkspaceQuery } from './use-task-workspace-query';
-import { resolvePerformanceCycle } from '@/utils/performance-cycle';
+import { formatPerformanceCycleOption, resolvePerformanceCycle } from '@/utils/performance-cycle';
 
 const router = useRouter();
 const route = useRoute();
@@ -1037,7 +1037,7 @@ watch(
               <el-option
                 v-for="cycle in cycles"
                 :key="cycle.id"
-                :label="cycle.name"
+                :label="formatPerformanceCycleOption(cycle)"
                 :value="cycle.id"
               />
             </el-select>
@@ -1129,7 +1129,7 @@ watch(
               <el-option
                 v-for="cycle in cycles"
                 :key="cycle.id"
-                :label="cycle.name"
+                :label="formatPerformanceCycleOption(cycle)"
                 :value="cycle.id"
               />
             </el-select>

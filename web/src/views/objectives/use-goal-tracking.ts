@@ -7,18 +7,18 @@ import type {
   AssessmentCycle,
   GoalTrackingItem,
   GoalTrackingResult,
+  PerformanceCycleContext,
 } from '@/types/api.types';
 import {
   buildTrackingPeople,
-  selectDefaultTrackingCycle,
-  selectGoalTrackingCycles,
+  selectGoalTrackingContexts,
 } from './goal-tracking';
 
 export function useGoalTracking() {
   const route = useRoute();
   const router = useRouter();
   const auth = useAuthStore();
-  const cycles = ref<AssessmentCycle[]>([]);
+  const contexts = ref<PerformanceCycleContext[]>([]);
   const selectedPersonId = ref('');
   const selectedCycleId = ref('');
   const result = ref<GoalTrackingResult>({ totalWeight: 0, items: [] });
@@ -29,6 +29,7 @@ export function useGoalTracking() {
   const notice = ref('');
   const highlightedObjectiveId = ref('');
   let requestSerial = 0;
+  let contextRequestSerial = 0;
   let navigationGeneration = 0;
   let lifecycleGeneration = 0;
   let disposed = false;
@@ -42,6 +43,8 @@ export function useGoalTracking() {
   const people = computed(() => peopleGroups.value.flatMap((group) => group.people));
   const selectedPerson = computed(() =>
     people.value.find((person) => person.id === selectedPersonId.value) ?? people.value[0] ?? null);
+  const selectedContext = computed(() =>
+    contexts.value.find((context) => context.id === selectedCycleId.value) ?? null);
 
   async function writeQuery(
     mode: 'push' | 'replace',
@@ -78,17 +81,18 @@ export function useGoalTracking() {
       notice.value = '无法定位该目标所属人员和考核周期';
       return false;
     }
-    if (
-      !objective?.ownerId
-      || !objective.cycleId
-      || !people.value.some((person) => person.id === objective.ownerId)
-      || !cycles.value.some((cycle) => cycle.id === objective.cycleId)
-    ) {
+    if (!objective?.ownerId || !objective.cycleId || !people.value.some((person) => person.id === objective.ownerId)) {
       notice.value = '无法定位该目标所属人员和考核周期';
       return false;
     }
     notice.value = '';
     selectedPersonId.value = objective.ownerId;
+    await loadContexts(objective.ownerId, isCurrent);
+    if (!isCurrent()) return true;
+    if (!contexts.value.some((context) => context.id === objective?.cycleId)) {
+      notice.value = '无法定位该目标所属人员和考核周期';
+      return false;
+    }
     selectedCycleId.value = objective.cycleId;
     highlightedObjectiveId.value = '';
     await writeQuery('replace', isCurrent);
@@ -118,20 +122,49 @@ export function useGoalTracking() {
     }
   }
 
-  async function loadCycles(commitGuard = captureLifecycle()) {
+  function legacyContext(cycle: AssessmentCycle): PerformanceCycleContext {
+    return {
+      id: cycle.id,
+      name: cycle.name,
+      type: cycle.type,
+      startDate: cycle.startDate,
+      endDate: cycle.endDate,
+      openedAt: cycle.openedAt ?? cycle.updatedAt ?? cycle.createdAt ?? `${cycle.startDate}T00:00:00.000Z`,
+      scoringFrequency: cycle.scoringFrequency ?? 'cycle',
+      task: {
+        id: `legacy-${cycle.id}`,
+        status: 'goal_confirmed',
+        isExempt: false,
+        exemptReason: null,
+        participantDisposition: 'active',
+      },
+      periods: [],
+    };
+  }
+
+  async function loadContexts(ownerId: string, commitGuard = captureLifecycle()) {
     if (!commitGuard()) return;
+    const serial = ++contextRequestSerial;
+    const canCommit = () => serial === contextRequestSerial && commitGuard();
     cyclesLoading.value = true;
     cyclesError.value = '';
     try {
-      const page = await cyclesApi.findAll({ page: 1, pageSize: 100 });
-      if (commitGuard()) cycles.value = selectGoalTrackingCycles(page.items);
+      let next: PerformanceCycleContext[];
+      try {
+        next = await cyclesApi.findTrackingContexts(ownerId);
+      } catch {
+        // 旧环境兼容：新接口上线前仍可读取原周期列表，正式环境优先使用冻结任务上下文。
+        const page = await cyclesApi.findAll({ page: 1, pageSize: 100 });
+        next = page.items.map(legacyContext);
+      }
+      if (canCommit()) contexts.value = selectGoalTrackingContexts(next);
     } catch {
-      if (commitGuard()) {
-        cycles.value = [];
+      if (canCommit()) {
+        contexts.value = [];
         cyclesError.value = '考核周期加载失败';
       }
     } finally {
-      if (commitGuard()) cyclesLoading.value = false;
+      if (canCommit()) cyclesLoading.value = false;
     }
   }
 
@@ -143,15 +176,16 @@ export function useGoalTracking() {
     if (objectiveId && await resolveObjectiveDeepLink(objectiveId, commitGuard)) return;
     if (!commitGuard()) return;
 
-    const defaultCycle = selectDefaultTrackingCycle(cycles.value);
     selectedPersonId.value = typeof route.query.employeeId === 'string'
       && people.value.some((person) => person.id === route.query.employeeId)
       ? route.query.employeeId
       : auth.user?.id ?? '';
+    await loadContexts(selectedPersonId.value, commitGuard);
+    if (!commitGuard() || cyclesError.value) return;
     selectedCycleId.value = typeof route.query.cycleId === 'string'
-      && cycles.value.some((cycle) => cycle.id === route.query.cycleId)
+      && contexts.value.some((context) => context.id === route.query.cycleId)
       ? route.query.cycleId
-      : defaultCycle?.id ?? '';
+      : contexts.value[0]?.id ?? '';
     await writeQuery('replace', commitGuard, true);
     if (!commitGuard()) return;
     await loadTracking(commitGuard);
@@ -159,9 +193,13 @@ export function useGoalTracking() {
 
   async function retryCycles() {
     const isCurrent = captureLifecycle();
-    await loadCycles(isCurrent);
+    await loadContexts(selectedPersonId.value || auth.user?.id || '', isCurrent);
     if (!isCurrent() || cyclesError.value) return;
-    await normalizeSelectionAndLoad(isCurrent);
+    selectedCycleId.value = contexts.value.some((context) => context.id === selectedCycleId.value)
+      ? selectedCycleId.value
+      : contexts.value[0]?.id ?? '';
+    await writeQuery('replace', isCurrent, true);
+    await loadTracking(isCurrent);
   }
 
   async function selectPerson(id: string) {
@@ -171,6 +209,9 @@ export function useGoalTracking() {
     notice.value = '';
     highlightedObjectiveId.value = '';
     selectedPersonId.value = id;
+    await loadContexts(id, isCurrent);
+    if (!isCurrent()) return;
+    selectedCycleId.value = contexts.value[0]?.id ?? '';
     await writeQuery('push', isCurrent);
     if (!isCurrent()) return;
     await loadTracking(isCurrent);
@@ -195,7 +236,7 @@ export function useGoalTracking() {
       if (!isCurrent()) return;
       if (typeof employeeId !== 'string' || typeof cycleId !== 'string') return;
       if (!people.value.some((person) => person.id === employeeId)) return;
-      if (!cycles.value.some((cycle) => cycle.id === cycleId)) return;
+      if (!contexts.value.some((context) => context.id === cycleId)) return;
       if (employeeId === selectedPersonId.value && cycleId === selectedCycleId.value) return;
       navigationGeneration += 1;
       selectedPersonId.value = employeeId;
@@ -208,8 +249,6 @@ export function useGoalTracking() {
     const isCurrent = captureLifecycle();
     await auth.ensureLoaded();
     if (!isCurrent()) return;
-    await loadCycles(isCurrent);
-    if (!isCurrent() || cyclesError.value) return;
     await normalizeSelectionAndLoad(isCurrent);
   });
 
@@ -218,10 +257,11 @@ export function useGoalTracking() {
     lifecycleGeneration += 1;
     navigationGeneration += 1;
     requestSerial += 1;
+    contextRequestSerial += 1;
   });
 
   return {
-    cycles, peopleGroups, selectedPerson, selectedPersonId, selectedCycleId,
+    contexts, cycles: contexts, peopleGroups, selectedPerson, selectedPersonId, selectedCycleId, selectedContext,
     result, cyclesLoading, cyclesError, loading, error, notice, highlightedObjectiveId,
     selectPerson, selectCycle, retryCycles, retry: loadTracking,
   };

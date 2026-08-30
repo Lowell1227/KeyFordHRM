@@ -483,6 +483,18 @@ export interface AssessmentCycle {
     overdue: number;
     byStatus: Partial<Record<TaskStatus, number>>;
   };
+  personalTask?: {
+    id: string;
+    employeeId: string;
+    status: TaskStatus;
+    isExempt: boolean;
+  } | null;
+  visibleTasks?: Array<{
+    id: string;
+    employeeId: string;
+    status: TaskStatus;
+    isExempt: boolean;
+  }>;
   publishedAt?: string;
   closedAt?: string;
   createdAt?: string;
@@ -1164,6 +1176,27 @@ export interface AssessmentPeriodSummary {
   managerSubmittedAt: string | null;
 }
 
+export interface PerformanceCycleContext {
+  id: string;
+  name: string;
+  type: CycleType;
+  startDate: string;
+  endDate: string;
+  openedAt: string;
+  scoringFrequency: ScoringFrequency;
+  task: {
+    id: string;
+    status: TaskStatus;
+    isExempt: boolean;
+    exemptReason: string | null;
+    participantDisposition: 'active' | 'cycle_exempt' | 'top_leader_exempt';
+  };
+  periods: Array<AssessmentPeriodSummary & {
+    selfScoreTotal: number | null;
+    managerScoreTotal: number | null;
+  }>;
+}
+
 export interface PeriodReviewHistoryItem {
   periodKey: string;
   progress: number | null;
@@ -1260,6 +1293,27 @@ export interface PeriodReviewActionResult {
   status: AssessmentPeriodStatus;
   draftVersion: number;
   savedAt: string;
+}
+
+export interface ManagerPeriodReviewItemBody {
+  indicatorVersionItemId: string;
+  managerScore: number;
+  managerComment?: string | null;
+}
+
+export interface SaveManagerPeriodReviewDraftBody {
+  expectedVersion: number;
+  indicators: ManagerPeriodReviewItemBody[];
+}
+
+export interface ReturnManagerPeriodReviewBody {
+  expectedVersion: number;
+  idempotencyKey: string;
+  reason?: string | null;
+}
+
+export interface SubmitManagerPeriodReviewBody extends SaveManagerPeriodReviewDraftBody {
+  idempotencyKey: string;
 }
 
 /** 申诉列表项（对齐后端 AppealListItem，不含 coefficient）。 */

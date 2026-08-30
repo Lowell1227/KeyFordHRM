@@ -1,6 +1,7 @@
 import { expect, test } from '@playwright/test';
 import type { AssessmentCycle, TaskDetail, TaskListItem } from '../../src/types/api.types';
 import {
+  formatPerformanceCycleOption,
   localDateKey,
   orderPerformanceCycles,
   resolvePerformanceCycle,
@@ -76,6 +77,20 @@ test('handles inclusive boundaries, invalid dates, empty candidates, and local d
   expect(orderPerformanceCycles([
     cycle('invalid-first', 'invalid', 'invalid'),
   ], '2026-08-16')[0]?.id).toBe('invalid-first');
+});
+
+test('distinguishes same-name task cycles by date, scoring mode, and personal participation', () => {
+  const active = cycle('active', '2026-08-01', '2026-08-31');
+  active.name = '2026年08月绩效考核';
+  active.scoringFrequency = 'monthly';
+  active.personalTask = { id: 'task-active', employeeId: 'employee-1', status: 'self_eval', isExempt: false };
+  const exempt = cycle('exempt', '2026-08-01', '2026-08-31');
+  exempt.name = '2026年08月绩效考核';
+  exempt.scoringFrequency = 'cycle';
+  exempt.personalTask = { id: 'task-exempt', employeeId: 'employee-1', status: 'exempted', isExempt: true };
+
+  expect(formatPerformanceCycleOption(active)).toContain('每月复盘｜正常参与');
+  expect(formatPerformanceCycleOption(exempt)).toContain('整周期评分｜已豁免');
 });
 
 const apiResponse = (data: unknown) => ({

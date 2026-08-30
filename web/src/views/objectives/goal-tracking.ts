@@ -1,4 +1,4 @@
-import type { AssessmentCycle, CurrentUser } from '@/types/api.types';
+import type { AssessmentCycle, CurrentUser, PerformanceCycleContext } from '@/types/api.types';
 import type { ObjectiveStatus } from '@/types/enums';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 
@@ -80,6 +80,86 @@ export function formatGoalTrackingCycleName(cycle: AssessmentCycle): string {
   if (!quarter) return cycle.name;
   const quarterNames = ['', '第一季度', '第二季度', '第三季度', '第四季度'];
   return `${quarter.year} ${quarterNames[quarter.quarter]}`;
+}
+
+export type TrackingAction =
+  | { kind: 'exempt'; label: string }
+  | { kind: 'goal-setting' | 'goal-confirmation'; label: string; taskId: string }
+  | { kind: 'review'; label: string; taskId: string; periodId: string }
+  | { kind: 'waiting' | 'complete' | 'none'; label: string; taskId: string };
+
+export function selectTrackingAction(context: PerformanceCycleContext): TrackingAction {
+  if (context.task.isExempt) return { kind: 'exempt', label: '本周期已豁免' };
+  if (['pending', 'indicator_drafting', 'indicator_setting'].includes(context.task.status)) {
+    return { kind: 'goal-setting', label: '进入目标制定', taskId: context.task.id };
+  }
+  if (context.task.status === 'indicator_confirming') {
+    return { kind: 'goal-confirmation', label: '确认目标', taskId: context.task.id };
+  }
+  if (context.task.status === 'indicator_reviewing') {
+    return { kind: 'waiting', label: '等待直属上级审核', taskId: context.task.id };
+  }
+  const employeePeriod = context.periods.find((period) => (
+    ['self_eval', 'manager_scoring'].includes(period.status)
+    && !period.employeeSubmittedAt
+    && !period.managerSubmittedAt
+  ));
+  if (employeePeriod) {
+    return {
+      kind: 'review',
+      label: employeePeriod.periodType === 'cycle' ? '进入整周期复盘' : '进入本期复盘',
+      taskId: context.task.id,
+      periodId: employeePeriod.id,
+    };
+  }
+  if (context.periods.some((period) => period.status === 'manager_scoring')) {
+    return { kind: 'waiting', label: '等待主管评分', taskId: context.task.id };
+  }
+  if (context.periods.length > 0 && context.periods.every((period) => ['completed', 'no_result'].includes(period.status))) {
+    return { kind: 'complete', label: '评分期次已完成', taskId: context.task.id };
+  }
+  return { kind: 'none', label: '持续跟进目标', taskId: context.task.id };
+}
+
+function dateKey(value: string): string {
+  return value.slice(0, 10);
+}
+
+function contextPriority(context: PerformanceCycleContext, today: string): number {
+  const current = dateKey(context.startDate) <= today && dateKey(context.endDate) >= today;
+  if (current && !context.task.isExempt && ['review', 'goal-setting', 'goal-confirmation'].includes(selectTrackingAction(context).kind)) return 0;
+  if (current && !context.task.isExempt) return 1;
+  if (current && context.task.isExempt) return 2;
+  if (dateKey(context.endDate) < today) return 3;
+  return 4;
+}
+
+export function selectGoalTrackingContexts(
+  contexts: PerformanceCycleContext[],
+  today = new Date().toISOString().slice(0, 10),
+): PerformanceCycleContext[] {
+  return [...contexts].sort((left, right) => (
+    contextPriority(left, today) - contextPriority(right, today)
+    || right.startDate.localeCompare(left.startDate)
+    || right.endDate.localeCompare(left.endDate)
+    || right.openedAt.localeCompare(left.openedAt)
+    || left.id.localeCompare(right.id)
+  ));
+}
+
+function shortDate(value: string): string {
+  const [, month = '', day = ''] = dateKey(value).split('-');
+  return `${month}/${day}`;
+}
+
+export function formatGoalTrackingContextLabel(context: PerformanceCycleContext): string {
+  const mode = context.scoringFrequency === 'monthly' ? '每月复盘' : '整周期评分';
+  const participation = context.task.isExempt ? '已豁免' : '正常参与';
+  return `${context.name}｜${shortDate(context.startDate)}-${shortDate(context.endDate)}｜${mode}｜${participation}`;
+}
+
+export function formatGoalTrackingContextMeta(context: PerformanceCycleContext): string {
+  return `${context.scoringFrequency === 'monthly' ? '每月复盘' : '整周期评分'} · ${context.task.isExempt ? '已豁免' : '正常参与'} · 开放 ${new Date(context.openedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}`;
 }
 
 export type GoalTrackingHealthStatus = 'on_track' | 'at_risk' | 'blocked' | 'completed';

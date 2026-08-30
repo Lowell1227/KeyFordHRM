@@ -12,6 +12,7 @@ import IndicatorSnapshot, { type ActualValueItem } from './components/IndicatorS
 import PerformanceReferencePanel from './components/PerformanceReferencePanel.vue';
 import PerformanceFormWorkspace from './components/PerformanceFormWorkspace.vue';
 import EmployeePeriodReviewWorkspace from './components/EmployeePeriodReviewWorkspace.vue';
+import ManagerPeriodReviewWorkspace from './components/ManagerPeriodReviewWorkspace.vue';
 import ExemptView from './components/ExemptView.vue';
 import ScoreMask from './components/ScoreMask.vue';
 import InterviewCard from './components/InterviewCard.vue';
@@ -84,10 +85,10 @@ function asTaskStage(value: unknown): TaskStageKey | null {
 
 function safeTaskListReturnTo(value: unknown): string | null {
   const raw = Array.isArray(value) ? value[0] : value;
-  if (typeof raw !== 'string' || !raw.startsWith('/tasks')) return null;
+  if (typeof raw !== 'string' || (!raw.startsWith('/tasks') && !raw.startsWith('/action-items'))) return null;
   try {
     const parsed = new URL(raw, window.location.origin);
-    return parsed.pathname === '/tasks' ? `${parsed.pathname}${parsed.search}` : null;
+    return ['/tasks', '/action-items'].includes(parsed.pathname) ? `${parsed.pathname}${parsed.search}` : null;
   } catch {
     return null;
   }
@@ -102,10 +103,13 @@ const requestedPerformanceStage = computed<TaskStageKey>(() =>
   asTaskStage(route.query.stage) ?? currentPerformanceStage.value ?? 'goal-setting',
 );
 
-const activeMonthlyPeriod = computed(() => {
+const activePerformancePeriod = computed(() => {
   const current = task.value;
   if (current?.workflowVersion !== 2 || requestedPerformanceStage.value !== 'self-eval') return null;
   const periods = current.periods ?? [];
+  const requestedPeriodId = typeof route.query.periodId === 'string' ? route.query.periodId : '';
+  const requestedPeriod = periods.find((period) => period.id === requestedPeriodId);
+  if (requestedPeriod) return requestedPeriod;
   const employeeAction = periods.find((period) => period.status === 'self_eval' && !period.employeeSubmittedAt);
   if (employeeAction) return employeeAction;
   return [...periods]
@@ -113,15 +117,23 @@ const activeMonthlyPeriod = computed(() => {
       .sort((left, right) => right.sequence - left.sequence)[0]
     ?? null;
 });
-const isMonthlyReviewPage = computed(() => Boolean(activeMonthlyPeriod.value));
-const showGoalSettingReference = computed(() => (
-  requestedPerformanceStage.value === 'goal-setting' && !isMonthlyReviewPage.value
+const isPeriodReviewPage = computed(() => Boolean(activePerformancePeriod.value));
+const isManagerPeriodReview = computed(() => Boolean(
+  activePerformancePeriod.value
+  && activePerformancePeriod.value.status === 'manager_scoring'
+  && task.value?.managerId === authStore.user?.id,
 ));
-const performanceStageTitle = computed(() => isMonthlyReviewPage.value
-  ? '每月目标复盘'
+const showGoalSettingReference = computed(() => (
+  requestedPerformanceStage.value === 'goal-setting' && !isPeriodReviewPage.value
+));
+const periodReviewTitle = computed(() => activePerformancePeriod.value?.periodType === 'cycle'
+  ? '整周期复盘与评分'
+  : '本期复盘与评分');
+const performanceStageTitle = computed(() => isPeriodReviewPage.value
+  ? periodReviewTitle.value
   : performanceStageLabels[requestedPerformanceStage.value]);
-const performanceStageCardTitle = computed(() => isMonthlyReviewPage.value
-  ? '每月目标复盘'
+const performanceStageCardTitle = computed(() => isPeriodReviewPage.value
+  ? periodReviewTitle.value
   : performanceStageCardTitles[requestedPerformanceStage.value]);
 const performanceStageState = computed<TaskStageState>(() => {
   const status = task.value?.status;
@@ -448,9 +460,16 @@ async function handleRemind() {
 
           <ExemptView v-else-if="task.isExempt" :task="task" />
 
+          <ManagerPeriodReviewWorkspace
+            v-else-if="isPeriodReviewPage && activePerformancePeriod && isManagerPeriodReview"
+            :period-id="activePerformancePeriod.id"
+            @submitted="loadDetail"
+            @returned="loadDetail"
+          />
+
           <EmployeePeriodReviewWorkspace
-            v-else-if="isMonthlyReviewPage && activeMonthlyPeriod"
-            :period-id="activeMonthlyPeriod.id"
+            v-else-if="isPeriodReviewPage && activePerformancePeriod"
+            :period-id="activePerformancePeriod.id"
             @submitted="loadDetail"
           />
 

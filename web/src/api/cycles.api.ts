@@ -14,6 +14,7 @@ import type {
   CycleNotificationMode,
   DingtalkNotificationSettings,
   CyclePeriodSchedule,
+  PerformanceCycleContext,
 } from '@/types/api.types';
 import type { CycleType, ScoringFrequency } from '@/types/enums';
 
@@ -42,6 +43,11 @@ export const cyclesApi = {
   /** GET /cycles/mine — 已开放且与本人或直属团队任务相关的周期 */
   findMine(): Promise<AssessmentCycle[]> {
     return apiGet('/cycles/mine');
+  },
+
+  /** 已开放且存在 owner 冻结任务的正式目标跟进上下文。 */
+  findTrackingContexts(ownerId: string): Promise<PerformanceCycleContext[]> {
+    return apiGet('/cycles/tracking-contexts', { ownerId });
   },
 
   /** GET /cycles/:id — 周期详情 */

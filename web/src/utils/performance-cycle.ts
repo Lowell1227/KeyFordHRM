@@ -77,3 +77,16 @@ export function resolvePerformanceCycle(
     requestedCycleIsValid: Boolean(requestedCycle),
   };
 }
+
+function compactDate(value: string): string {
+  const [, month = '', day = ''] = value.slice(0, 10).split('-');
+  return `${month}/${day}`;
+}
+
+export function formatPerformanceCycleOption(cycle: AssessmentCycle): string {
+  const mode = cycle.scoringFrequency === 'monthly' ? '每月复盘' : '整周期评分';
+  const participation = cycle.personalTask
+    ? cycle.personalTask.isExempt ? '已豁免' : '正常参与'
+    : '团队周期';
+  return `${cycle.name}｜${compactDate(cycle.startDate)}-${compactDate(cycle.endDate)}｜${mode}｜${participation}`;
+}

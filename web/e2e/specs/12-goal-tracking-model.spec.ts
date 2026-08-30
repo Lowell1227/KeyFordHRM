@@ -2,8 +2,11 @@ import { expect, test } from '@playwright/test';
 import type { AssessmentCycle } from '../../src/types/api.types';
 import {
   buildTrackingPeople,
+  formatGoalTrackingContextLabel,
   formatGoalTrackingCycleName,
   goalTrackingStatus,
+  selectGoalTrackingContexts,
+  selectTrackingAction,
   parseCollapsedPeopleGroups,
   parseVisibleColumns,
   selectDefaultTrackingCycle,
@@ -124,6 +127,33 @@ test('curates formal goal-tracking quarters and formats reference labels', () =>
     '2025 第四季度',
     '2025 第三季度',
   ]);
+});
+
+test('keeps same-name opened cycles distinct and selects the actionable employee period', () => {
+  const contexts = selectGoalTrackingContexts([{
+    id: 'cycle-exempt', name: '2026年08月绩效考核', type: 'monthly',
+    startDate: '2026-08-01', endDate: '2026-08-31', openedAt: '2026-08-20T02:51:00.000Z',
+    scoringFrequency: 'cycle',
+    task: { id: 'task-exempt', status: 'exempted', isExempt: true, exemptReason: '本周期豁免', participantDisposition: 'cycle_exempt' },
+    periods: [],
+  }, {
+    id: 'cycle-active', name: '2026年08月绩效考核', type: 'monthly',
+    startDate: '2026-08-01', endDate: '2026-08-31', openedAt: '2026-08-30T06:35:00.000Z',
+    scoringFrequency: 'monthly',
+    task: { id: 'task-active', status: 'self_eval', isExempt: false, exemptReason: null, participantDisposition: 'active' },
+    periods: [{
+      id: 'period-aug', periodKey: '2026-08', periodType: 'month', sequence: 1,
+      status: 'self_eval', selfEvalOpenAt: '2026-08-29T10:00:00.000Z', selfEvalDueAt: '2026-08-31T10:00:00.000Z',
+      managerDueAt: '2026-09-03T10:00:00.000Z', employeeSubmittedAt: null, managerSubmittedAt: null,
+      selfScoreTotal: null, managerScoreTotal: null,
+    }],
+  }], '2026-08-30');
+
+  expect(contexts.map((context) => context.id)).toEqual(['cycle-active', 'cycle-exempt']);
+  expect(formatGoalTrackingContextLabel(contexts[0])).toContain('每月复盘');
+  expect(formatGoalTrackingContextLabel(contexts[1])).toContain('已豁免');
+  expect(selectTrackingAction(contexts[0])).toMatchObject({ kind: 'review', periodId: 'period-aug' });
+  expect(selectTrackingAction(contexts[1])).toMatchObject({ kind: 'exempt' });
 });
 
 test('maps objective status from archive and progress semantics', () => {

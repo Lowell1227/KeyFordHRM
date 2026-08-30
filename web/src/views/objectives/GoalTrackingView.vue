@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { useAuthStore } from '@/stores/auth.store';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
 import GoalTrackingPeoplePanel from './GoalTrackingPeoplePanel.vue';
-import GoalTrackingIndicatorPanel from './GoalTrackingIndicatorPanel.vue';
+import GoalTrackingCyclePanel from './GoalTrackingCyclePanel.vue';
 import GoalTrackingDetailDrawer from './GoalTrackingDetailDrawer.vue';
 import { useGoalTracking } from './use-goal-tracking';
 
@@ -35,6 +35,7 @@ async function closeIndicator() {
   delete query.indicatorId;
   await router.replace({ query });
 }
+
 </script>
 
 <template>
@@ -47,17 +48,18 @@ async function closeIndicator() {
       />
     </template>
     <div class="goal-tracking-view">
-      <GoalTrackingIndicatorPanel
+      <GoalTrackingCyclePanel
         :person="workspace.selectedPerson.value"
-        :cycles="workspace.cycles.value"
+        :contexts="workspace.contexts.value"
+        :selected-context="workspace.selectedContext.value"
         :selected-cycle-id="workspace.selectedCycleId.value"
         :result="workspace.result.value"
+        :is-self="workspace.selectedPersonId.value === auth.user?.id"
         :cycles-loading="workspace.cyclesLoading.value"
         :cycles-error="workspace.cyclesError.value"
         :loading="workspace.loading.value"
         :error="workspace.error.value"
         :notice="workspace.notice.value"
-        :highlighted-objective-id="workspace.highlightedObjectiveId.value"
         @cycle-change="workspace.selectCycle"
         @retry-cycles="workspace.retryCycles"
         @retry-indicators="workspace.retry"
