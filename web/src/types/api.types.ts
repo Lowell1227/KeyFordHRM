@@ -879,6 +879,14 @@ export interface TeamTaskListItem {
   avatarUrl: string | null;
   position: string | null;
   stageState: TeamStageState;
+  periodReview: {
+    id: string;
+    periodKey: string;
+    periodType: 'month' | 'cycle';
+    status: AssessmentPeriodStatus;
+    selfScoreTotal: number | null;
+    managerScoreTotal: number | null;
+  } | null;
 }
 
 export interface TeamTaskPage extends Paginated<TeamTaskListItem> {

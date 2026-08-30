@@ -8,7 +8,12 @@ import {
   NotFoundException,
 } from "@nestjs/common";
 import { randomUUID } from "crypto";
-import { Prisma, TaskStatus } from "@prisma/client";
+import {
+  AssessmentPeriodStatus,
+  AssessmentPeriodType,
+  Prisma,
+  TaskStatus,
+} from "@prisma/client";
 import { Paginated } from "@/common/dto/pagination.dto";
 import { ERROR_CODE } from "@/common/constants/error-codes";
 import { AuthUser } from "@/common/types/auth.types";
@@ -43,6 +48,14 @@ export interface TeamTaskListItem extends TaskListItem {
   avatarUrl: string | null;
   position: string | null;
   stageState: TeamStageState;
+  periodReview: {
+    id: string;
+    periodKey: string;
+    periodType: AssessmentPeriodType;
+    status: AssessmentPeriodStatus;
+    selfScoreTotal: number | null;
+    managerScoreTotal: number | null;
+  } | null;
 }
 
 export interface TeamTaskPage extends Paginated<TeamTaskListItem> {
@@ -77,6 +90,32 @@ type ReviewTask = Prisma.AssessmentTaskGetPayload<{
   };
 }>;
 
+type TeamListTask = Prisma.AssessmentTaskGetPayload<{
+  include: {
+    employee: {
+      select: {
+        name: true;
+        employeeNo: true;
+        avatarUrl: true;
+        position: true;
+      };
+    };
+    cycle: { select: { name: true } };
+    dept: { select: { name: true } };
+    gradeResult: { select: { calculatedScore: true; rawGrade: true } };
+  };
+}> & {
+  periods?: Array<{
+    id: string;
+    periodKey: string;
+    periodType: AssessmentPeriodType;
+    sequence: number;
+    status: AssessmentPeriodStatus;
+    selfScoreTotal: Prisma.Decimal | null;
+    managerScoreTotal: Prisma.Decimal | null;
+  }>;
+};
+
 @Injectable()
 export class TeamTasksService {
   private readonly logger = new Logger(TeamTasksService.name);
@@ -99,6 +138,10 @@ export class TeamTasksService {
 
     if (dto.cycleId) {
       facetWhere.cycleId = dto.cycleId;
+    }
+
+    if (dto.stage === "manager-eval") {
+      return this.findManagerEvaluations(dto, filteredWhere, facetWhere);
     }
 
     const itemWhere: Prisma.AssessmentTaskWhereInput = dto.stageState
@@ -163,6 +206,88 @@ export class TeamTasksService {
         departments: departmentTasks.flatMap((task) =>
           task.dept ? [task.dept] : [],
         ),
+        employees: employeeTasks.map((task) => task.employee),
+      },
+    };
+  }
+
+  private async findManagerEvaluations(
+    dto: TeamTaskQueryDto,
+    filteredWhere: Prisma.AssessmentTaskWhereInput,
+    facetWhere: Prisma.AssessmentTaskWhereInput,
+  ): Promise<TeamTaskPage> {
+    const [tasks, departmentTasks, employeeTasks] = await Promise.all([
+      this.prisma.assessmentTask.findMany({
+        where: filteredWhere,
+        include: {
+          employee: {
+            select: {
+              name: true,
+              employeeNo: true,
+              avatarUrl: true,
+              position: true,
+            },
+          },
+          cycle: { select: { name: true } },
+          dept: { select: { name: true } },
+          gradeResult: { select: { calculatedScore: true, rawGrade: true } },
+          periods: {
+            select: {
+              id: true,
+              periodKey: true,
+              periodType: true,
+              sequence: true,
+              status: true,
+              selfScoreTotal: true,
+              managerScoreTotal: true,
+            },
+            orderBy: { sequence: "asc" },
+          },
+        },
+        orderBy: [{ cycle: { startDate: "desc" } }, { updatedAt: "desc" }],
+      }),
+      this.prisma.assessmentTask.findMany({
+        where: facetWhere,
+        distinct: ["deptId"],
+        select: { dept: { select: { id: true, name: true } } },
+        orderBy: { dept: { name: "asc" } },
+      }),
+      this.prisma.assessmentTask.findMany({
+        where: facetWhere,
+        distinct: ["employeeId"],
+        select: {
+          employee: {
+            select: { id: true, name: true, employeeNo: true, deptId: true },
+          },
+        },
+        orderBy: { employee: { name: "asc" } },
+      }),
+    ]);
+
+    const allItems = tasks.map((task) => this.toListItem(task, dto.stage));
+    const matchingItems = dto.stageState
+      ? allItems.filter((item) => item.stageState === dto.stageState)
+      : allItems;
+    const counts = allItems.reduce<TeamTaskCounts>(
+      (result, item) => {
+        result.all += 1;
+        if (item.stageState === "not_started") result.notStarted += 1;
+        if (item.stageState === "pending") result.pending += 1;
+        if (item.stageState === "completed") result.completed += 1;
+        if (item.stageState === "exempted") result.exempted += 1;
+        return result;
+      },
+      { all: 0, notStarted: 0, pending: 0, completed: 0, exempted: 0 },
+    );
+
+    return {
+      total: matchingItems.length,
+      page: dto.page,
+      pageSize: dto.pageSize,
+      items: matchingItems.slice(dto.skip, dto.skip + dto.take),
+      counts,
+      facets: {
+        departments: departmentTasks.flatMap((task) => task.dept ? [task.dept] : []),
         employees: employeeTasks.map((task) => task.employee),
       },
     };
@@ -234,23 +359,12 @@ export class TeamTasksService {
   }
 
   private toListItem(
-    task: Prisma.AssessmentTaskGetPayload<{
-      include: {
-        employee: {
-          select: {
-            name: true;
-            employeeNo: true;
-            avatarUrl: true;
-            position: true;
-          };
-        };
-        cycle: { select: { name: true } };
-        dept: { select: { name: true } };
-        gradeResult: { select: { calculatedScore: true; rawGrade: true } };
-      };
-    }>,
+    task: TeamListTask,
     stage: TeamTaskQueryDto["stage"],
   ): TeamTaskListItem {
+    const periodReview = stage === "manager-eval"
+      ? this.pickManagerPeriod(task.periods ?? [])
+      : null;
     return {
       id: task.id,
       cycleId: task.cycleId,
@@ -269,8 +383,42 @@ export class TeamTasksService {
       employeeNo: task.employee.employeeNo,
       avatarUrl: task.employee.avatarUrl,
       position: task.employee.position,
-      stageState: getTeamStageState(task.status, stage),
+      stageState: stage === "manager-eval"
+        ? this.managerStageState(task, periodReview)
+        : getTeamStageState(task.status, stage),
+      periodReview: periodReview
+        ? {
+            id: periodReview.id,
+            periodKey: periodReview.periodKey,
+            periodType: periodReview.periodType,
+            status: periodReview.status,
+            selfScoreTotal: periodReview.selfScoreTotal?.toNumber() ?? null,
+            managerScoreTotal: periodReview.managerScoreTotal?.toNumber() ?? null,
+          }
+        : null,
     };
+  }
+
+  private pickManagerPeriod(periods: NonNullable<TeamListTask["periods"]>) {
+    return periods.find((period) => period.status === AssessmentPeriodStatus.manager_scoring)
+      ?? periods.find((period) => period.status === AssessmentPeriodStatus.self_eval)
+      ?? periods.find((period) => period.status === AssessmentPeriodStatus.unopened)
+      ?? periods.at(-1)
+      ?? null;
+  }
+
+  private managerStageState(
+    task: TeamListTask,
+    period: ReturnType<TeamTasksService["pickManagerPeriod"]>,
+  ): TeamStageState {
+    if (task.isExempt || task.status === TaskStatus.exempted) return "exempted";
+    if (!period) return getTeamStageState(task.status, "manager-eval");
+    if (period.status === AssessmentPeriodStatus.manager_scoring) return "pending";
+    if (
+      period.status === AssessmentPeriodStatus.unopened
+      || period.status === AssessmentPeriodStatus.self_eval
+    ) return "not_started";
+    return "completed";
   }
 
   private async reviewBatch(

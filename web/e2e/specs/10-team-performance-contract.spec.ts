@@ -561,6 +561,9 @@ async function mockTaskWorkspaceIdentity(page: import('@playwright/test').Page, 
       sysRole,
       isAssessorOnly: false,
       canViewAll: false,
+      businessCapabilities: {
+        canManageTeam: ['manager', 'dept_head', 'hr'].includes(sysRole),
+      },
     })),
   }));
   await page.route('**/api/v1/cycles**', (route) => {
@@ -583,6 +586,10 @@ async function mockTaskWorkspaceIdentity(page: import('@playwright/test').Page, 
   await page.route('**/api/v1/tasks/mine**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+  }));
+  await page.route('**/api/v1/users/*/subordinates', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([])),
   }));
   await page.route('**/api/v1/tasks/*', (route) => {
     const path = new URL(route.request().url()).pathname;
@@ -630,7 +637,7 @@ async function mockGoalReviewWorkspace(
 
 test.describe('team list manager workspace', () => {
   test.use({
-    baseURL: 'http://localhost:5173',
+    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173',
     storageState: 'e2e/auth-state/manager.json',
   });
 
@@ -708,9 +715,10 @@ test.describe('team list manager workspace', () => {
 
     await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1');
 
-    for (const heading of ['员工', '部门', '职位', '考核周期', '任务状态', '结果', '更新日期', '操作']) {
+    for (const heading of ['员工', '部门', '职位', '考核周期', '任务状态', '更新日期', '操作']) {
       await expect(page.getByRole('columnheader', { name: heading, exact: true })).toBeVisible();
     }
+    await expect(page.getByRole('columnheader', { name: '结果', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '处理 Ada Chen', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '查看 Lin Wei', exact: true })).toBeVisible();
 
@@ -719,6 +727,107 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('team-task-list')).toHaveCount(0);
     await page.getByTestId('team-task-workspace-back').click();
     await expect(page.getByTestId('team-task-list')).toBeVisible();
+  });
+
+  test('monthly manager work shows the employee weighted total and opens the matching period review', async ({ page }) => {
+    await page.setViewportSize({ width: 1920, height: 1080 });
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    const monthlyPage = {
+      total: 1,
+      page: 1,
+      pageSize: 20,
+      items: [{
+        id: 'task-monthly',
+        cycleId: 'cycle-1',
+        cycleName: '2026年09月绩效考核',
+        employeeId: 'employee-1',
+        employeeName: '方园',
+        deptId: 'dept-1',
+        deptName: '人事组',
+        managerId: 'manager-1',
+        status: 'hr_calibration',
+        totalScore: 85,
+        rawGrade: 'B',
+        updatedAt: '2026-08-30T12:12:14.000Z',
+        employeeNo: '319',
+        avatarUrl: null,
+        position: 'HRBP',
+        stageState: 'pending',
+        periodReview: {
+          id: 'period-august',
+          periodKey: '2026-08',
+          periodType: 'month',
+          status: 'manager_scoring',
+          selfScoreTotal: 80,
+          managerScoreTotal: null,
+        },
+      }],
+      counts: { all: 1, notStarted: 0, pending: 1, completed: 0, exempted: 0 },
+      facets: {
+        departments: [{ id: 'dept-1', name: '人事组' }],
+        employees: [{ id: 'employee-1', name: '方园', employeeNo: '319', deptId: 'dept-1' }],
+      },
+    } as unknown as TeamTaskPage;
+    const periodDetail = {
+      period: {
+        id: 'period-august', taskId: 'task-monthly', periodKey: '2026-08', periodType: 'month',
+        status: 'manager_scoring', selfEvalOpenAt: '2026-08-29T00:00:00.000Z',
+        selfEvalDueAt: '2026-08-30T00:00:00.000Z', managerDueAt: '2026-08-31T00:00:00.000Z',
+        employeeSubmittedAt: '2026-08-30T12:02:40.000Z', managerSubmittedAt: null,
+        selfScoreTotal: 80, managerScoreTotal: null, draftVersion: 0,
+      },
+      context: {
+        cycleName: '2026年09月绩效考核', employeeName: '方园', employeeNo: '319',
+        deptName: '人事组', managerName: '姚瑶', statusLabel: '主管评分',
+      },
+      permissions: { canEditEmployee: false, canEditManager: true },
+      indicators: [
+        {
+          indicatorVersionItemId: 'period-item-1', sourceInstanceId: 'indicator-1', name: '111',
+          description: '1111', scoringStandard: '1111', targetValue: null, targetValueText: null,
+          unit: null, weight: 0.5, progress: 50, healthStatus: 'on_track', actualValueText: null,
+          employeeComment: '1111', problemReason: null, nextMonthPlan: null, supportNeeded: null,
+          attachments: [], selfScore: 70, managerScore: null, managerComment: null,
+          latestProgress: null, alignedObjectives: [], history: [],
+        },
+        {
+          indicatorVersionItemId: 'period-item-2', sourceInstanceId: 'indicator-2', name: '2222',
+          description: '2222', scoringStandard: '2222', targetValue: null, targetValueText: null,
+          unit: null, weight: 0.5, progress: 90, healthStatus: 'on_track', actualValueText: null,
+          employeeComment: '1111', problemReason: null, nextMonthPlan: null, supportNeeded: null,
+          attachments: [], selfScore: 90, managerScore: null, managerComment: null,
+          latestProgress: null, alignedObjectives: [], history: [],
+        },
+      ],
+    };
+    await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(monthlyPage)),
+    }));
+    await page.route('**/api/v1/assessment-periods/period-august/review', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(periodDetail)),
+    }));
+
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1');
+
+    await expect(page.getByRole('columnheader', { name: '自评总分', exact: true })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: '主管总分', exact: true })).toBeVisible();
+    const row = page.getByRole('row').filter({ hasText: '方园' });
+    await expect(row.getByTestId('team-self-score-total')).toHaveText('80');
+    await expect(row.getByTestId('team-manager-score-total')).toHaveText('-');
+    await expect(row).toContainText('主管评分中');
+    await row.getByRole('button', { name: '处理 方园' }).click();
+
+    await expect(page.getByTestId('manager-period-review-workspace')).toBeVisible();
+    await expect(page.getByTestId('manager-evaluation-workspace')).toHaveCount(0);
+    await expect(page.getByTestId('manager-review-self-total')).toContainText('80');
+    const cards = page.getByTestId('manager-review-goal-card');
+    await expect(cards.nth(0)).toContainText('员工自评分70分');
+    await expect(cards.nth(1)).toContainText('员工自评分90分');
+    await cards.nth(0).getByLabel('主管评分').fill('80');
+    await cards.nth(1).getByLabel('主管评分').fill('90');
+    await expect(page.getByTestId('manager-review-manager-total')).toContainText('85');
   });
 
   test('team list applies URL filters and limits batch commands to pending goal reviews', async ({ page }) => {

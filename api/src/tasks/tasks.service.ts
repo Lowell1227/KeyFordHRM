@@ -952,8 +952,17 @@ export class TasksService {
     dto: SaveManagerEvaluationDraftDto,
     viewer: AuthUser,
   ): Promise<{ id: string; status: TaskStatus; updatedAt: string }> {
-    const task = await this.getTaskOrThrow(id, { snapshot: { select: { snapshotData: true } } });
+    const task = (await this.getTaskOrThrow(id, {
+      snapshot: { select: { snapshotData: true } },
+      cycle: { select: { workflowVersion: true } },
+      periods: { select: { id: true, status: true }, take: 1 },
+    })) as AssessmentTask & {
+      snapshot?: { snapshotData: Prisma.JsonValue };
+      cycle: { workflowVersion: number };
+      periods: Array<{ id: string; status: AssessmentPeriodStatus }>;
+    };
     this.assertManager(task, viewer);
+    this.assertLegacyManagerEvaluationAllowed(task);
     this.assertManagerScoring(task);
     assertTaskVersion(task.updatedAt, dto.expectedUpdatedAt);
 
@@ -1039,11 +1048,16 @@ export class TasksService {
     const task = (await this.getTaskOrThrow(id, {
       snapshot: { select: { snapshotData: true } },
       indicatorInstances: { select: { id: true, indicatorType: true } },
+      cycle: { select: { workflowVersion: true } },
+      periods: { select: { id: true, status: true }, take: 1 },
     })) as AssessmentTask & {
       snapshot?: { snapshotData: Prisma.JsonValue };
       indicatorInstances: Array<{ id: string; indicatorType: string }>;
+      cycle: { workflowVersion: number };
+      periods: Array<{ id: string; status: AssessmentPeriodStatus }>;
     };
     this.assertManager(task, viewer);
+    this.assertLegacyManagerEvaluationAllowed(task);
     this.assertManagerScoring(task);
     assertTaskVersion(task.updatedAt, dto.expectedUpdatedAt);
     this.assertCompleteManagerScores(task.indicatorInstances, dto);
@@ -1393,6 +1407,18 @@ export class TasksService {
   private assertManager(task: AssessmentTask, viewer: AuthUser): void {
     if (task.managerId !== viewer.id) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅主管本人可操作' });
+    }
+  }
+
+  private assertLegacyManagerEvaluationAllowed(task: AssessmentTask & {
+    cycle?: { workflowVersion: number };
+    periods?: Array<{ id: string }>;
+  }): void {
+    if (task.cycle?.workflowVersion === 2 && task.periods?.length) {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: '本周期使用分期复盘，请在本期复盘中完成主管评分',
+      });
     }
   }
 

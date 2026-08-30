@@ -85,6 +85,24 @@ function stageStateLabel(state: TeamStageState): string {
   return labels[state];
 }
 
+function periodLabel(item: TeamTaskListItem): string {
+  const period = item.periodReview;
+  if (!period) return '-';
+  if (period.periodType === 'cycle') return '整周期';
+  const [year, month] = period.periodKey.split('-');
+  return `${year}年${Number(month)}月`;
+}
+
+function managerStatusLabel(item: TeamTaskListItem): string {
+  const status = item.periodReview?.status;
+  if (status === 'manager_scoring') return '主管评分中';
+  if (status === 'self_eval') return '员工自评中';
+  if (status === 'completed') return '本期已完成';
+  if (status === 'no_result') return '本期无结果';
+  if (status === 'unopened') return '未开始';
+  return stageStateLabel(item.stageState);
+}
+
 function taskActionLabel(item: TeamTaskListItem): string {
   return item.stageState === 'pending' ? '处理' : '查看';
 }
@@ -259,9 +277,17 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
           min-width="130"
           show-overflow-tooltip
         />
+        <el-table-column v-if="stage === 'manager-eval' && !mediumColumns" label="复盘期间" width="112">
+          <template #default="{ row }">{{ periodLabel(asTeamTask(row)) }}</template>
+        </el-table-column>
         <el-table-column label="任务状态" :min-width="narrowColumns ? 96 : mediumColumns ? 120 : 170">
           <template #default="{ row }">
-            <div class="team-task-list__status">
+            <div v-if="stage === 'manager-eval'" class="team-task-list__status">
+              <el-tag size="small" :type="row.stageState === 'pending' ? 'warning' : row.stageState === 'completed' ? 'success' : 'info'">
+                {{ managerStatusLabel(asTeamTask(row)) }}
+              </el-tag>
+            </div>
+            <div v-else class="team-task-list__status">
               <StatusBadge :status="row.status" size="small" />
               <small :class="`is-${row.stageState}`">
                 {{ stageStateLabel(row.stageState) }}
@@ -269,11 +295,14 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
             </div>
           </template>
         </el-table-column>
-        <el-table-column v-if="!mediumColumns" label="结果" width="88" align="right">
+        <el-table-column v-if="stage === 'manager-eval' && !narrowColumns" label="自评总分" width="96" align="right">
           <template #default="{ row }">
-            <span v-if="row.totalScore !== null">{{ row.totalScore }}</span>
-            <span v-else-if="row.rawGrade">{{ row.rawGrade }}</span>
-            <span v-else>-</span>
+            <span data-testid="team-self-score-total">{{ row.periodReview?.selfScoreTotal ?? '-' }}</span>
+          </template>
+        </el-table-column>
+        <el-table-column v-if="stage === 'manager-eval' && !narrowColumns" label="主管总分" width="96" align="right">
+          <template #default="{ row }">
+            <span data-testid="team-manager-score-total">{{ row.periodReview ? (row.periodReview.managerScoreTotal ?? '-') : (row.totalScore ?? '-') }}</span>
           </template>
         </el-table-column>
         <el-table-column v-if="!mediumColumns" label="更新日期" width="112">

@@ -35,6 +35,23 @@ const periodTitle = computed(() => {
   return `${year}年${Number(month)}月复盘与评分`;
 });
 const completedCount = computed(() => formItems.filter((item) => item.managerScore != null).length);
+const selfScoreTotal = computed(() => {
+  if (detail.value?.period.selfScoreTotal != null) return detail.value.period.selfScoreTotal;
+  if (!detail.value || detail.value.indicators.some((item) => item.selfScore == null)) return null;
+  return weightedTotal(detail.value.indicators.map((item) => item.selfScore));
+});
+const managerScoreTotal = computed(() => {
+  if (!detail.value || formItems.length !== detail.value.indicators.length) return null;
+  if (formItems.some((item) => item.managerScore == null)) return null;
+  return weightedTotal(formItems.map((item) => item.managerScore));
+});
+
+function weightedTotal(scores: Array<number | null>): number {
+  const total = scores.reduce<number>((sum, score, index) => (
+    sum + (score ?? 0) * (detail.value?.indicators[index]?.weight ?? 0)
+  ), 0);
+  return Math.round(total * 100) / 100;
+}
 
 function replaceForm(next: PeriodReviewDetail) {
   detail.value = next;
@@ -181,6 +198,19 @@ watch(() => props.periodId, loadReview, { immediate: true });
         <small>主管截止 {{ new Date(detail.period.managerDueAt).toLocaleString('zh-CN', { hour12: false }) }}</small>
       </div>
 
+      <div class="manager-review__totals" data-testid="manager-review-totals">
+        <div>
+          <span>自评总分</span>
+          <strong data-testid="manager-review-self-total">{{ selfScoreTotal ?? '--' }}</strong>
+          <small>Σ 自评分 × 权重</small>
+        </div>
+        <div>
+          <span>主管总分</span>
+          <strong data-testid="manager-review-manager-total">{{ managerScoreTotal ?? '--' }}</strong>
+          <small>Σ 主管评分 × 权重</small>
+        </div>
+      </div>
+
       <PerformanceFormWorkspace reference-title="员工复盘参考" reference-test-id="manager-review-reference">
         <template #main>
           <div class="manager-review__goals">
@@ -242,6 +272,11 @@ watch(() => props.periodId, loadReview, { immediate: true });
 .manager-review__period-bar strong { color: #202a3d; font-size: 16px; }
 .manager-review__period-bar span { padding: 3px 8px; border-radius: 4px; background: #eef2ff; color: #5068d8; font-size: 11px; }
 .manager-review__period-bar small { color: #7c8799; font-size: 12px; }
+.manager-review__totals { display: grid; grid-template-columns: repeat(2, minmax(0, 220px)); gap: 12px; }
+.manager-review__totals > div { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 3px 12px; padding: 12px 15px; border: 1px solid #e5eaf2; border-radius: 10px; background: #fff; }
+.manager-review__totals span { color: #697487; font-size: 12px; }
+.manager-review__totals strong { justify-self: end; color: #202a3d; font-size: 22px; }
+.manager-review__totals small { grid-column: 1 / -1; color: #9aa3b2; font-size: 11px; }
 .manager-review__goals { display: grid; gap: 12px; }
 .manager-score-card { overflow: hidden; border: 1px solid #e5eaf2; border-radius: 13px; background: #fff; }
 .manager-score-card.is-selected { border-color: #bdc8f8; box-shadow: 0 3px 12px rgb(79 103 216 / 9%); }
@@ -273,6 +308,7 @@ watch(() => props.periodId, loadReview, { immediate: true });
   .manager-review { padding-bottom: 112px; }
   .manager-review__period-bar { align-items: flex-start; padding: 12px; }
   .manager-review__period-bar > div { align-items: flex-start; flex-direction: column; gap: 5px; }
+  .manager-review__totals { grid-template-columns: 1fr 1fr; }
   .manager-score-card > header { grid-template-columns: 27px minmax(0, 1fr); padding: 12px; }
   .manager-score-card > header b { grid-column: 2; justify-self: start; }
   .manager-score-card__employee, .manager-score-card__form { grid-template-columns: minmax(0, 1fr); padding-right: 12px; padding-left: 12px; }

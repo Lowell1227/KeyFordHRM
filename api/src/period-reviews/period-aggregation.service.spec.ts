@@ -78,4 +78,20 @@ describe('PeriodAggregationService', () => {
       targetStatus: 'hr_calibration',
     }));
   });
+
+  it('repairs a workflow v2 score already advanced by the legacy route without transitioning twice', async () => {
+    tx.assessmentTask.findUnique.mockResolvedValue({
+      id: 'task-1', cycleId: 'cycle-1', status: 'hr_calibration',
+      managerId: 'manager-1', deptHeadId: 'manager-1',
+      cycle: { workflowVersion: 2 },
+      periods: [{ status: 'completed', managerScoreTotal: new Prisma.Decimal(90) }],
+    });
+
+    await expect(service.refreshTask('task-1', tx as any, 'manager-1'))
+      .resolves.toEqual({ complete: true, score: 90, targetStatus: 'hr_calibration' });
+    expect(tx.gradeResult.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      update: expect.objectContaining({ calculatedScore: 90 }),
+    }));
+    expect(flow.transitionTx).not.toHaveBeenCalled();
+  });
 });

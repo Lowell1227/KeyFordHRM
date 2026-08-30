@@ -22,6 +22,7 @@ import GoalReviewWorkspace, {
   type GoalReviewWorkspaceHandle,
 } from './components/GoalReviewWorkspace.vue';
 import ManagerEvaluationWorkspace from './components/ManagerEvaluationWorkspace.vue';
+import ManagerPeriodReviewWorkspace from './components/ManagerPeriodReviewWorkspace.vue';
 import type {
   AssessmentCycle,
   BatchReviewResult,
@@ -386,6 +387,7 @@ function toTeamTaskItem(detail: TaskDetail, stage: TeamTaskStage): TeamTaskListI
     avatarUrl: null,
     position: null,
     stageState: detailStageState(detail, stage),
+    periodReview: null,
   };
 }
 
@@ -1198,6 +1200,12 @@ watch(
         @save="saveSingleGoalReview"
         @approve="approveSingleGoalReview"
         @reject="rejectSingleGoalReview"
+      />
+      <ManagerPeriodReviewWorkspace
+        v-else-if="workspaceQuery.state.value.stage === 'manager-eval' && selectedTeamTask?.periodReview"
+        :period-id="selectedTeamTask.periodReview.id"
+        @submitted="loadTeam"
+        @returned="loadTeam"
       />
       <ManagerEvaluationWorkspace
         v-else-if="workspaceQuery.state.value.stage === 'manager-eval' && selectedTeamTask"

@@ -25,6 +25,7 @@ export class PeriodAggregationService {
     const task = await tx.assessmentTask.findUnique({
       where: { id: taskId },
       include: {
+        cycle: { select: { workflowVersion: true } },
         periods: {
           select: { status: true, managerScoreTotal: true },
           orderBy: { sequence: 'asc' },
@@ -39,7 +40,13 @@ export class PeriodAggregationService {
     const valid = task.periods.filter((period) => (
       period.status === 'completed' && period.managerScoreTotal != null
     ));
-    if (unfinished || valid.length === 0 || task.status !== 'manager_scoring') {
+    const legacyAdvancedWorkflowV2 = task.cycle?.workflowVersion === 2
+      && (task.status === TaskStatus.dept_review || task.status === TaskStatus.hr_calibration);
+    if (
+      unfinished
+      || valid.length === 0
+      || (task.status !== TaskStatus.manager_scoring && !legacyAdvancedWorkflowV2)
+    ) {
       return { complete: false, score: null, targetStatus: null };
     }
 
@@ -77,16 +84,20 @@ export class PeriodAggregationService {
       },
     });
 
-    const targetStatus: TaskStatus = task.managerId === task.deptHeadId
-      ? TaskStatus.hr_calibration
-      : TaskStatus.dept_review;
-    await this.flow.transitionTx(tx, {
-      task,
-      action: 'submit',
-      targetStatus,
-      actorId,
-      taskUpdate: { managerScoredAt: new Date() },
-    });
+    const targetStatus: TaskStatus = legacyAdvancedWorkflowV2
+      ? task.status
+      : task.managerId === task.deptHeadId
+        ? TaskStatus.hr_calibration
+        : TaskStatus.dept_review;
+    if (!legacyAdvancedWorkflowV2) {
+      await this.flow.transitionTx(tx, {
+        task,
+        action: 'submit',
+        targetStatus,
+        actorId,
+        taskUpdate: { managerScoredAt: new Date() },
+      });
+    }
     await tx.auditLog.create({
       data: {
         userId: actorId,

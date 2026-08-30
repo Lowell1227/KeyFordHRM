@@ -28,6 +28,16 @@ defineEmits<{
 
 const title = computed(() => props.stage === 'goal-review' ? '指标审核' : '主管评分');
 
+const managerPeriodStatus = computed(() => {
+  const status = props.task?.periodReview?.status;
+  if (status === 'manager_scoring') return '主管评分中';
+  if (status === 'self_eval') return '员工自评中';
+  if (status === 'completed') return '本期已完成';
+  if (status === 'no_result') return '本期无结果';
+  if (status === 'unopened') return '未开始';
+  return '';
+});
+
 function stageStateLabel(state: TeamStageState): string {
   const labels: Record<TeamStageState, string> = {
     not_started: '未开始',
@@ -102,7 +112,10 @@ function stageStateLabel(state: TeamStageState): string {
             <div class="team-task-workspace__identity">
               <div>
                 <h2>{{ task.employeeName }}</h2>
-                <StatusBadge :status="task.status" size="small" />
+                <el-tag v-if="stage === 'manager-eval' && managerPeriodStatus" size="small" type="warning">
+                  {{ managerPeriodStatus }}
+                </el-tag>
+                <StatusBadge v-else :status="task.status" size="small" />
               </div>
               <p>
                 <span>{{ task.employeeNo || '-' }}</span>

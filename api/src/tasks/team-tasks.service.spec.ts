@@ -132,9 +132,9 @@ describe("TeamTasksService", () => {
     );
   });
 
-  it("keeps every requested filter within the current manager scope", async () => {
+  it("keeps every requested filter within the current manager scope before deriving period state", async () => {
     const query = Object.assign(new TeamTaskQueryDto(), {
-      page: 2,
+      page: 1,
       pageSize: 5,
       stage: "manager-eval" as const,
       stageState: "pending" as const,
@@ -202,46 +202,16 @@ describe("TeamTasksService", () => {
               { employeeNo: { contains: "Ada", mode: "insensitive" } },
             ],
           },
-          status: { in: ["manager_scoring"] },
         }),
-        skip: 5,
-        take: 5,
-      }),
-    );
-    expect(prisma.assessmentTask.count).toHaveBeenCalledTimes(1);
-    expect(prisma.assessmentTask.count).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: expect.objectContaining({
-          managerId: managerViewer.id,
-          cycleId: "cycle-1",
-          deptId: "dept-1",
-          employeeId: "employee-1",
-          employee: {
-            OR: [
-              { name: { contains: "Ada", mode: "insensitive" } },
-              { employeeNo: { contains: "Ada", mode: "insensitive" } },
-            ],
-          },
-          status: { in: ["manager_scoring"] },
+        include: expect.objectContaining({
+          periods: expect.objectContaining({
+            select: expect.objectContaining({ selfScoreTotal: true, managerScoreTotal: true }),
+          }),
         }),
       }),
     );
-    expect(prisma.assessmentTask.groupBy).toHaveBeenCalledWith({
-      by: ["status"],
-      where: expect.objectContaining({
-        managerId: managerViewer.id,
-        cycleId: "cycle-1",
-        deptId: "dept-1",
-        employeeId: "employee-1",
-        employee: {
-          OR: [
-            { name: { contains: "Ada", mode: "insensitive" } },
-            { employeeNo: { contains: "Ada", mode: "insensitive" } },
-          ],
-        },
-      }),
-      _count: { status: true },
-    });
+    expect(prisma.assessmentTask.count).not.toHaveBeenCalled();
+    expect(prisma.assessmentTask.groupBy).not.toHaveBeenCalled();
     expect(prisma.assessmentTask.findMany).toHaveBeenNthCalledWith(
       2,
       expect.objectContaining({
@@ -256,7 +226,7 @@ describe("TeamTasksService", () => {
     );
     expect(result).toEqual({
       total: 1,
-      page: 2,
+      page: 1,
       pageSize: 5,
       items: [
         expect.objectContaining({
@@ -266,9 +236,10 @@ describe("TeamTasksService", () => {
           position: "Engineer",
           stageState: "pending",
           totalScore: 88,
+          periodReview: null,
         }),
       ],
-      counts: { all: 10, notStarted: 4, pending: 2, completed: 3, exempted: 1 },
+      counts: { all: 1, notStarted: 0, pending: 1, completed: 0, exempted: 0 },
       facets: {
         departments: [{ id: "dept-1", name: "Engineering" }],
         employees: [
@@ -283,11 +254,94 @@ describe("TeamTasksService", () => {
     });
   });
 
-  it.each(["goal-review", "manager-eval"] as const)(
-    "filters %s exempted items without indexing an undefined stage array",
-    async (stage) => {
+  it("uses the submitted monthly review as the manager pending item and score source", async () => {
+    const query = Object.assign(new TeamTaskQueryDto(), {
+      page: 1,
+      pageSize: 20,
+      stage: "manager-eval" as const,
+      cycleId: "cycle-1",
+    });
+    prisma.assessmentTask.count.mockResolvedValueOnce(1);
+    prisma.assessmentTask.groupBy.mockResolvedValue([
+      { status: "hr_calibration" as TaskStatus, _count: { status: 1 } },
+    ]);
+    prisma.assessmentTask.findMany
+      .mockResolvedValueOnce([
+        {
+          id: "task-monthly",
+          cycleId: "cycle-1",
+          employeeId: "employee-1",
+          deptId: "dept-1",
+          managerId: "manager-1",
+          status: "hr_calibration" as TaskStatus,
+          isExempt: false,
+          exemptReason: null,
+          updatedAt: new Date("2026-08-30T12:12:14.000Z"),
+          cycle: { name: "2026年09月绩效考核" },
+          employee: {
+            name: "方园",
+            employeeNo: "319",
+            avatarUrl: null,
+            position: "HRBP",
+          },
+          dept: { name: "人事组" },
+          gradeResult: {
+            calculatedScore: new Prisma.Decimal(85),
+            rawGrade: "B",
+          },
+          periods: [
+            {
+              id: "period-august",
+              periodKey: "2026-08",
+              periodType: "month",
+              sequence: 1,
+              status: "manager_scoring",
+              selfScoreTotal: new Prisma.Decimal(80),
+              managerScoreTotal: null,
+            },
+          ],
+        },
+      ])
+      .mockResolvedValueOnce([{ dept: { id: "dept-1", name: "人事组" } }])
+      .mockResolvedValueOnce([
+        {
+          employee: {
+            id: "employee-1",
+            name: "方园",
+            employeeNo: "319",
+            deptId: "dept-1",
+          },
+        },
+      ]);
+
+    const result = await service.findAll(query, managerViewer);
+
+    expect(result.counts).toEqual({
+      all: 1,
+      notStarted: 0,
+      pending: 1,
+      completed: 0,
+      exempted: 0,
+    });
+    expect(result.items).toEqual([
+      expect.objectContaining({
+        id: "task-monthly",
+        stageState: "pending",
+        periodReview: {
+          id: "period-august",
+          periodKey: "2026-08",
+          periodType: "month",
+          status: "manager_scoring",
+          selfScoreTotal: 80,
+          managerScoreTotal: null,
+        },
+      }),
+    ]);
+  });
+
+  it("filters goal-review exempted items without indexing an undefined stage array", async () => {
       const query = Object.assign(new TeamTaskQueryDto(), {
-        stage,
+        stage: "goal-review" as const,
         stageState: "exempted" as const,
       });
       prisma.assessmentTask.count.mockResolvedValue(1);
@@ -319,8 +373,46 @@ describe("TeamTasksService", () => {
           exempted: 1,
         },
       });
-    },
-  );
+  });
+
+  it("filters manager-eval exempted items from the derived task state", async () => {
+    const query = Object.assign(new TeamTaskQueryDto(), {
+      stage: "manager-eval" as const,
+      stageState: "exempted" as const,
+    });
+    prisma.assessmentTask.findMany
+      .mockResolvedValueOnce([{
+        id: "task-exempt",
+        cycleId: "cycle-1",
+        employeeId: "employee-1",
+        deptId: "dept-1",
+        managerId: managerViewer.id,
+        status: "exempted" as TaskStatus,
+        isExempt: true,
+        exemptReason: "本期豁免",
+        updatedAt: new Date("2026-08-08T00:00:00.000Z"),
+        cycle: { name: "2026 H2" },
+        employee: { name: "Ada", employeeNo: "E-001", avatarUrl: null, position: "Engineer" },
+        dept: { name: "Engineering" },
+        gradeResult: null,
+        periods: [],
+      }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const result = await service.findAll(query, managerViewer);
+
+    expect(prisma.assessmentTask.count).not.toHaveBeenCalled();
+    expect(prisma.assessmentTask.findMany).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ where: { managerId: managerViewer.id } }),
+    );
+    expect(result).toMatchObject({
+      total: 1,
+      items: [expect.objectContaining({ id: "task-exempt", stageState: "exempted" })],
+      counts: { all: 1, notStarted: 0, pending: 0, completed: 0, exempted: 1 },
+    });
+  });
 
   it("approves owned review tasks while recording a foreign task failure", async () => {
     const transaction = mockSuccessfulReviewTransaction();

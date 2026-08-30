@@ -959,6 +959,25 @@ describe('TasksService', () => {
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
+    it('rejects the legacy task-level draft when a workflow v2 period must be scored', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...makeTask('manager_scoring'),
+        updatedAt,
+        cycle: { workflowVersion: 2 },
+        periods: [{ id: 'period-august', status: 'manager_scoring' }],
+      });
+
+      await expect(
+        service.saveManagerEvaluationDraft(
+          'task-1',
+          { expectedUpdatedAt: updatedAt.toISOString(), indicators: [], evalSummary: {} },
+          makeViewer({ id: 'mgr-1', sysRole: SysRole.manager }),
+        ),
+      ).rejects.toThrow('请在本期复盘中完成主管评分');
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
     it('rejects a stale draft before transactional writes', async () => {
       prisma.assessmentTask.findUnique.mockResolvedValue({ ...makeTask('manager_scoring'), updatedAt });
 
@@ -1147,6 +1166,28 @@ describe('TasksService', () => {
           manager(),
         ),
       ).rejects.toThrow(ConflictException);
+
+      expect(prisma.$transaction).not.toHaveBeenCalled();
+    });
+
+    it('rejects the legacy task-level submission when a workflow v2 period must be scored', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...scoringTask(),
+        cycle: { workflowVersion: 2 },
+        periods: [{ id: 'period-august', status: 'manager_scoring' }],
+      });
+
+      await expect(
+        service.submitManagerScore(
+          'task-1',
+          {
+            expectedUpdatedAt: updatedAt.toISOString(),
+            indicators: submittedIndicators,
+            evalSummary: {},
+          },
+          manager(),
+        ),
+      ).rejects.toThrow('请在本期复盘中完成主管评分');
 
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
