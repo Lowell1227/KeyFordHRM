@@ -194,6 +194,7 @@ const selectedDeptIssueBadges = computed(() => getDeptIssueBadges(selectedDept.v
 
 const orgMembers = ref<ManagedUser[]>([]);
 const orgMemberTotal = ref(0);
+const unassignedMemberTotal = ref(0);
 const orgMemberLoading = ref(false);
 const orgMemberPage = ref(1);
 const selectedOrgMembers = ref<ManagedUser[]>([]);
@@ -344,6 +345,15 @@ async function loadDepartments() {
   }
 }
 
+async function loadUnassignedMemberTotal() {
+  try {
+    const res = await usersApi.findAll({ page: 1, pageSize: 1, unassigned: true });
+    unassignedMemberTotal.value = res.total;
+  } catch {
+    unassignedMemberTotal.value = 0;
+  }
+}
+
 async function loadOrgMembers() {
   if (!selectedDeptId.value) {
     orgMembers.value = [];
@@ -360,6 +370,7 @@ async function loadOrgMembers() {
     });
     orgMembers.value = res.items;
     orgMemberTotal.value = res.total;
+    if (selectedOrgIsUnassigned.value) unassignedMemberTotal.value = res.total;
   } catch {
     orgMembers.value = [];
     orgMemberTotal.value = 0;
@@ -485,7 +496,7 @@ async function jumpToIssue(item: IssueItem) {
 
 function refreshCurrentView() {
   if (activeView.value === 'org') {
-    loadDepartments().then(loadOrgMembers);
+    Promise.all([loadDepartments(), loadUnassignedMemberTotal()]).then(() => loadOrgMembers());
     return;
   }
   if (activeView.value === 'users') {
@@ -1096,13 +1107,13 @@ watch(activeView, (view) => {
 });
 
 function refreshAfterPersonnelReview() {
-  void Promise.all([loadDepartments(), loadUsers(), loadOrgMembers()]);
+  void Promise.all([loadDepartments(), loadUsers(), loadOrgMembers(), loadUnassignedMemberTotal()]);
 }
 
 onMounted(async () => {
   document.addEventListener('click', closeDepartmentContextMenu);
   window.addEventListener('personnel-data-changed', refreshAfterPersonnelReview);
-  await Promise.all([loadDepartments(), loadUsers()]);
+  await Promise.all([loadDepartments(), loadUsers(), loadUnassignedMemberTotal()]);
   await loadOrgMembers();
 });
 
@@ -1144,15 +1155,6 @@ onBeforeUnmount(() => {
             <strong>部门架构</strong>
             <span>{{ flattenedDepartments.length }} 个部门</span>
           </div>
-          <p v-if="canEditOrganization" class="org-drag-tip">长按部门约 0.5 秒后拖拽，可调整父子层级。</p>
-          <button
-            type="button"
-            :class="['unassigned-node', { active: selectedOrgIsUnassigned }]"
-            @click="selectUnassignedPeople"
-          >
-            <span>未分配人员</span>
-            <small>根节点</small>
-          </button>
           <el-tree
             v-loading="deptLoading"
             :data="departments"
@@ -1193,6 +1195,15 @@ onBeforeUnmount(() => {
               </div>
             </template>
           </el-tree>
+          <button
+            v-if="unassignedMemberTotal > 0"
+            type="button"
+            :class="['unassigned-node', { active: selectedOrgIsUnassigned }]"
+            @click="selectUnassignedPeople"
+          >
+            <span>未分配人员</span>
+            <small>{{ unassignedMemberTotal }} 人</small>
+          </button>
         </aside>
 
         <main class="org-detail" v-if="selectedDept">

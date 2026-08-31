@@ -707,3 +707,57 @@ test('department tree, organization detail and archive drawer scroll independent
     scrollable: element.scrollHeight > element.clientHeight,
   }))).toEqual({ overflowY: 'auto', scrollable: true });
 });
+
+test('shows unassigned people below the department tree only when people need assignment', async ({ page }) => {
+  const departments = [{
+    id: 'dept-1', name: '项目中心', fullPath: '项目中心', parentId: null, company: 'fuede',
+    sortOrder: 1, isActive: true, directMemberCount: 1, memberCount: 1, children: [],
+  }];
+  const employee = {
+    id: 'employee-1', employeeNo: '001', name: '待分配员工', deptId: null, deptName: null,
+    position: '专员', employmentType: 'full_time', status: 'active', directManagerId: null,
+    directManagerName: null, sysRole: 'employee', isAssessorOnly: false, canViewAll: false,
+    dingtalkBindingState: 'unbound',
+  };
+  let unassignedTotal = 1;
+
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'mock-admin-token');
+    localStorage.setItem('expiresAt', String(Date.now() + 10 * 60_000));
+  });
+  await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse(0)),
+  }));
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      id: 'admin-1', name: '系统管理员', deptId: null, sysRole: 'system_admin', isAssessorOnly: false, canViewAll: true,
+    })),
+  }));
+  await page.route('**/api/v1/departments**', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse(departments)),
+  }));
+  await page.route('**/api/v1/users**', (route) => {
+    const url = new URL(route.request().url());
+    const isUnassigned = url.searchParams.get('unassigned') === 'true';
+    const items = isUnassigned ? (unassignedTotal > 0 ? [employee] : []) : [employee];
+    const total = isUnassigned ? unassignedTotal : 1;
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total, page: 1, pageSize: 20, items })),
+    });
+  });
+
+  await page.goto(`${webBaseUrl}/users`);
+
+  await expect(page.locator('.org-tree-panel')).toBeVisible();
+  const panelChildren = page.locator('.org-tree-panel > *');
+  const treeIndex = await panelChildren.evaluateAll((elements) => elements.findIndex((element) => element.classList.contains('el-tree')));
+  const unassignedIndex = await panelChildren.evaluateAll((elements) => elements.findIndex((element) => element.classList.contains('unassigned-node')));
+  expect(unassignedIndex).toBeGreaterThan(treeIndex);
+  await expect(page.getByRole('button', { name: /未分配人员/ })).toBeVisible();
+
+  unassignedTotal = 0;
+  await page.reload();
+  await expect(page.getByRole('button', { name: /未分配人员/ })).toHaveCount(0);
+});
