@@ -169,6 +169,38 @@ async function mockTaskWorkspaceContext(page: Page) {
   );
 }
 
+async function mockNavigationIdentity(page: Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem("token", "mock-navigation-token");
+    localStorage.setItem("expiresAt", String(Date.now() + 60_000));
+    localStorage.setItem("passwordChangeRequired", "false");
+  });
+  await page.route("**/api/v1/auth/me", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(
+        apiResponse({
+          id: "manager-1",
+          name: "导航验收主管",
+          employeeNo: "MGR-NAV",
+          deptId: "dept-1",
+          deptName: "研发部",
+          sysRole: "manager",
+          isAssessorOnly: false,
+          canViewAll: false,
+          businessCapabilities: fullBusinessCapabilities,
+        }),
+      ),
+    }),
+  );
+  await page.route("**/api/v1/notifications/unread-count", (route) =>
+    route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify(apiResponse(0)),
+    }),
+  );
+}
+
 test.describe("11-navigation-entrypoints navigation tree", () => {
   test("employee navigation excludes administration and unopened modules", () => {
     const modules = buildNavigation(routes, {
@@ -326,6 +358,29 @@ test.describe("11-navigation-entrypoints navigation active state", () => {
     await expect(page.getByTestId("performance-workspace-title")).toHaveText(
       "绩效待办",
     );
+  });
+
+  test("keeps the performance workbench parent active across its three local sections", async ({
+    page,
+  }) => {
+    await mockNavigationIdentity(page);
+    await mockTaskWorkspaceContext(page);
+    await page.goto("/tasks?scope=team&stage=goal-review");
+    const dashboard = new DashboardPage(page);
+
+    for (const section of [
+      { label: "目标跟进", path: "/action-items" },
+      { label: "目标地图", path: "/objectives" },
+      { label: "绩效待办", path: "/tasks" },
+    ]) {
+      await page
+        .getByTestId("performance-secondary-nav")
+        .getByRole("link", { name: section.label, exact: true })
+        .click();
+      await expect(page).toHaveURL(new RegExp(`${section.path}(?:\\?|$)`));
+      await expect(dashboard.module("performance")).toHaveClass(/is-active/);
+      await expect(dashboard.menuItem("绩效工作台")).toHaveClass(/is-active/);
+    }
   });
 
   test("preserves a performance collapse across refresh and removes stale persisted keys", async ({

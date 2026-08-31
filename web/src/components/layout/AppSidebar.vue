@@ -42,8 +42,13 @@ function saveCollapsedGroups(value: Record<string, boolean>) {
 
 const collapsedGroups = ref<Record<string, boolean>>(readCollapsedGroups());
 const navigation = computed(() => (auth.user ? buildNavigation(routes, auth.user) : []));
+const activeNavigationRoute = computed(() =>
+  router.resolve(route.meta.activeNavigationPath ?? route.path),
+);
 const activeNavigationModule = computed(() => {
-  const matched = [...route.matched].reverse().find((record) => record.meta.navigation);
+  const matched = [...activeNavigationRoute.value.matched]
+    .reverse()
+    .find((record) => record.meta.navigation);
   return matched?.meta.navigation?.module;
 });
 const activeModule = computed<NavigationModule | undefined>(() =>
@@ -88,7 +93,7 @@ function navigate(path: string) {
 }
 
 function isMenuActive(path: string): boolean {
-  return router.resolve(path).path === route.path;
+  return router.resolve(path).path === activeNavigationRoute.value.path;
 }
 </script>
 

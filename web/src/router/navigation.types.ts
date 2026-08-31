@@ -51,5 +51,6 @@ declare module 'vue-router' {
     capability?: BusinessCapabilityKey;
     hrCapabilities?: HrCapability[];
     navigation?: NavigationMeta;
+    activeNavigationPath?: string;
   }
 }

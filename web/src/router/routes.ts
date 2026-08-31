@@ -298,13 +298,13 @@ export const routes: RouteRecordRaw[] = [
     path: '/objectives',
     name: 'ObjectiveMap',
     component: () => import('@/views/objectives/ObjectiveMapView.vue'),
-    meta: { requiresAuth: true, title: '目标地图' },
+    meta: { requiresAuth: true, title: '目标地图', activeNavigationPath: '/tasks' },
   },
   {
     path: '/action-items',
     name: 'ActionItems',
     component: () => import('@/views/objectives/GoalTrackingView.vue'),
-    meta: { requiresAuth: true, title: '目标跟进' },
+    meta: { requiresAuth: true, title: '目标跟进', activeNavigationPath: '/tasks' },
   },
   {
     path: '/:pathMatch(.*)*',
