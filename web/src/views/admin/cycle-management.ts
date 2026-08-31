@@ -63,13 +63,13 @@ export function cyclePrimaryActionLabel(status: CycleStatus): string {
 export function cycleNextStep(cycle: AssessmentCycle): CycleNextStep {
   switch (cycle.status) {
     case 'draft':
-      return { label: '待完成发起检查', time: cycle.goalSettingOpenAt };
+      return { label: '完成发起检查', time: cycle.goalSettingOpenAt };
     case 'launch_blocked':
       return { label: '处理发起阻断项', time: cycle.goalSettingOpenAt };
     case 'scheduled':
       return { label: '预约发起时间', time: cycle.goalSettingOpenAt };
     case 'indicator_setting':
-      return { label: '指标制定截止', time: cycle.deadlineIndicatorSetting };
+      return { label: '目标制定截止', time: cycle.deadlineIndicatorSetting };
     case 'self_eval':
       return { label: '员工自评截止', time: cycle.deadlineSelfEval };
     case 'manager_score':

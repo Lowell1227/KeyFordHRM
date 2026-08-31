@@ -57,9 +57,10 @@ function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
   ));
 }
 
-function rowBlockers(schedule: CyclePeriodSchedule) {
+function rowIssues(schedule: CyclePeriodSchedule) {
   const fieldCodes = Object.values(FIELD_ISSUE_CODES).flat();
-  return issuesFor(schedule, props.blockers).filter((issue) => !fieldCodes.includes(issue.code));
+  return issuesFor(schedule, [...props.blockers, ...props.warnings])
+    .filter((issue) => !fieldCodes.includes(issue.code));
 }
 </script>
 
@@ -104,7 +105,7 @@ function rowBlockers(schedule: CyclePeriodSchedule) {
             <strong data-testid="cycle-period-label">{{ periodLabel(schedule) }}</strong>
             <el-tooltip
               v-if="isCycleSchedule"
-              content="下方时间为整个绩效周期的复盘与评分安排，可直接修改。"
+              content="下方时间为整个考核周期的复盘与评分安排，可直接修改。"
               placement="top"
             >
               <el-icon
@@ -115,7 +116,7 @@ function rowBlockers(schedule: CyclePeriodSchedule) {
             </el-tooltip>
             <el-tag v-if="schedule.isException" data-testid="cycle-special-month-badge" type="warning" size="small">已调整</el-tag>
             <small
-              v-for="issue in rowBlockers(schedule)"
+              v-for="issue in rowIssues(schedule)"
               :key="issue.code"
               class="cycle-time-field__issue"
             >{{ issue.message }}</small>

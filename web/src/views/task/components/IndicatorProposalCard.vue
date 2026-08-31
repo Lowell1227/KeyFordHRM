@@ -67,7 +67,7 @@ function formatOperationRecord(record: FlowRecord): string {
   const countText = count > 0 ? `了 ${count} 条指标` : '';
 
   if (type === 'indicator_formal_submitted') {
-    return record.extraData?.employeeConfirmedBeforeReview ? `保存并审核${countText}，指标确认完成` : `保存并审核${countText}`;
+    return record.extraData?.employeeConfirmedBeforeReview ? `保存并审核${countText}，目标确认完成` : `保存并审核${countText}`;
   }
   if (type === 'indicator_employee_submitted') {
     return `提交主管审核${countText}`;
@@ -159,7 +159,7 @@ function handleSubmit() {
     <template #header>
       <div class="card-header">
         <span>本周期指标草稿</span>
-        <el-tag type="warning" effect="plain">指标制定中</el-tag>
+        <el-tag type="warning" effect="plain">目标制定中</el-tag>
       </div>
     </template>
 

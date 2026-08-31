@@ -120,7 +120,7 @@ export class TasksController {
     return this.tasksService.rejectIndicators(id, dto.comment, viewer);
   }
 
-  /** POST /tasks/:id/indicator-proposal — 员工在指标制定阶段提交指标建议。 */
+  /** POST /tasks/:id/indicator-proposal — 员工在目标制定阶段提交考核指标建议。 */
   @Post(':id/indicator-proposal')
   @HttpCode(200)
   submitIndicatorProposal(

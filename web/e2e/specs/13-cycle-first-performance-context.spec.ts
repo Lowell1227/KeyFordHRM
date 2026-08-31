@@ -485,7 +485,7 @@ test.describe('cycle-first task contracts', () => {
     await page.goto('/tasks/personal-task-1?stage=goal-confirmation&returnTo=%2Ftasks%3Fscope%3Dmine');
     await expect(detail.getByTestId('performance-stage-title')).toHaveText('目标确认');
     await expect(detail.getByTestId('performance-stage-state')).toHaveText('已完成');
-    await expect(detail.getByText('指标确认', { exact: true })).toBeVisible();
+    await expect(detail.locator('.chart-card__title').getByText('目标确认', { exact: true })).toBeVisible();
     await expect(detail.getByRole('button', { name: '确认指标' })).toHaveCount(0);
 
     await page.goto('/tasks/personal-task-1?stage=self-eval&returnTo=%2Ftasks%3Fscope%3Dmine');

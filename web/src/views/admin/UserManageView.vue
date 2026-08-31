@@ -151,8 +151,8 @@ const hrCapabilityOptions: { label: string; value: HrCapability }[] = [
   { label: '员工档案编辑', value: 'employee_archive_edit' },
   { label: '员工档案审核', value: 'employee_archive_review' },
   { label: '组织架构编辑', value: 'organization_edit' },
-  { label: '绩效周期计划创建编辑', value: 'cycle_plan_edit' },
-  { label: '绩效周期计划审核', value: 'cycle_plan_review' },
+  { label: '考核周期创建与编辑', value: 'cycle_plan_edit' },
+  { label: '考核周期审核', value: 'cycle_plan_review' },
 ];
 
 const statusOptions: { label: string; value: UserStatus }[] = [

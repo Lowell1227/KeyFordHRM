@@ -97,14 +97,14 @@ export function createTasksApi(client: TasksApiClient) {
       );
     },
 
-    /** POST /tasks/team/indicator-review/batch-approve — 批量通过指标审核。 */
+    /** POST /tasks/team/indicator-review/batch-approve — 批量通过目标审核。 */
     batchApproveIndicators(
       body: BatchIndicatorReviewBody,
     ): Promise<BatchReviewResult> {
       return apiPost("/tasks/team/indicator-review/batch-approve", body);
     },
 
-    /** POST /tasks/team/indicator-review/batch-reject — 批量驳回指标审核。 */
+    /** POST /tasks/team/indicator-review/batch-reject — 批量驳回目标审核。 */
     batchRejectIndicators(
       body: BatchRejectIndicatorReviewBody,
     ): Promise<BatchReviewResult> {

@@ -26,7 +26,7 @@ defineEmits<{
   'member-selected': [taskId: string];
 }>();
 
-const title = computed(() => props.stage === 'goal-review' ? '指标审核' : '主管评分');
+const title = computed(() => props.stage === 'goal-review' ? '目标审核' : '主管评分');
 
 const managerPeriodStatus = computed(() => {
   const status = props.task?.periodReview?.status;

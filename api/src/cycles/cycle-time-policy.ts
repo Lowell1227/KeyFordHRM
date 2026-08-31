@@ -94,13 +94,13 @@ export function launchTimeSequenceWarnings(
   if (goalSettingOpenAt > deadlineIndicatorSetting) {
     warnings.push({
       code: 'INDICATOR_SETTING_BEFORE_GOAL_OPEN',
-      message: '指标制定截止不能早于目标制定开放',
+      message: '目标制定截止不能早于目标制定开放',
     });
   }
   if (deadlineIndicatorSetting > deadlineIndicatorConfirm) {
     warnings.push({
       code: 'INDICATOR_CONFIRM_BEFORE_SETTING_DUE',
-      message: '指标确认截止不能早于指标制定截止',
+      message: '目标确认截止不能早于目标制定截止',
     });
   }
 
@@ -111,7 +111,7 @@ export function launchTimeSequenceWarnings(
     warnings.push({
       code: 'FIRST_SELF_EVAL_BEFORE_INDICATOR_CONFIRM',
       periodKey: firstSchedule.periodKey,
-      message: '第一期自评开放不能早于指标确认截止',
+      message: '第一期自评开放不能早于目标确认截止',
     });
   }
   warnings.push(...scoringScheduleSequenceIssues(orderedSchedules));

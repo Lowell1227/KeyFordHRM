@@ -525,7 +525,7 @@ function formatOperationRecord(record: FlowRecord): string {
   const countText = count > 0 ? `了 ${count} 条指标` : '';
 
   if (type === 'indicator_formal_submitted') {
-    return record.extraData?.employeeConfirmedBeforeReview ? `保存并审核${countText}，指标确认完成` : `保存并审核${countText}`;
+    return record.extraData?.employeeConfirmedBeforeReview ? `保存并审核${countText}，目标确认完成` : `保存并审核${countText}`;
   }
   if (type === 'indicator_employee_submitted') {
     return `提交主管审核${countText}`;

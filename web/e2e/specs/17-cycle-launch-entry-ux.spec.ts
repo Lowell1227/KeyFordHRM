@@ -308,7 +308,7 @@ async function mockCycleLaunchPage(
         ) {
           warnings.push({
             code: 'INDICATOR_SETTING_BEFORE_GOAL_OPEN',
-            message: '指标制定截止不能早于目标制定开放',
+            message: '目标制定截止不能早于目标制定开放',
           });
         }
       return route.fulfill({
@@ -379,7 +379,7 @@ test.describe('cycle launch entry UX', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
 
-    const dialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '新建考核周期' });
     await expect(dialog).toBeVisible();
     await expect(page.getByTestId('cycle-create-flow')).toHaveCount(0);
     await expect(page.getByRole('radio', { name: '全公司' })).toBeChecked();
@@ -685,7 +685,7 @@ test.describe('cycle launch entry UX', () => {
     await page.goto('/cycles?group=attention');
 
     await page.getByTestId('cycle-edit-cycle-created').click();
-    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '编辑考核周期' });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByRole('radio', { name: '自定义范围' })).toBeChecked();
     await expect(dialog.getByTestId('cycle-scope-summary')).toContainText('已选 0 个部门（预计 0 人）');
@@ -703,7 +703,7 @@ test.describe('cycle launch entry UX', () => {
     await page.goto('/cycles?group=attention');
 
     await page.getByTestId('cycle-edit-cycle-created').click();
-    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '编辑考核周期' });
     await dialog.getByTestId('cycle-scope-picker-open').click();
     const scopeDrawer = page.getByRole('dialog', { name: '选择考核对象' });
     await scopeDrawer.getByRole('tab', { name: '例外部门' }).click();
@@ -749,7 +749,7 @@ test.describe('cycle launch entry UX', () => {
     await page.goto('/cycles?group=attention');
 
     await page.getByTestId('cycle-edit-cycle-created').click();
-    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '编辑考核周期' });
     await expect(dialog).toBeVisible();
     await dialog.getByTestId('cycle-notification-launch-only').click();
     await dialog.getByTestId('cycle-create-save-and-view').click();
@@ -762,7 +762,7 @@ test.describe('cycle launch entry UX', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
 
-    const dialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '新建考核周期' });
     await dialog.locator('.el-select').first().click();
     await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '年度' }).click();
 
@@ -778,7 +778,7 @@ test.describe('cycle launch entry UX', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
 
-    const dialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '新建考核周期' });
     await dialog.locator('.el-select').first().click();
     await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '半年' }).click();
 
@@ -824,7 +824,7 @@ test.describe('cycle launch entry UX', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-edit-cycle-semiannual-cross-year').click();
 
-    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '编辑考核周期' });
     await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2027年11月—2028年04月半年绩效考核');
     await expect(dialog.getByPlaceholder('开始日期')).toHaveValue('2027-11-01');
     await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2028-04-30');
@@ -867,7 +867,7 @@ test.describe('cycle launch entry UX', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
 
-    const dialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '新建考核周期' });
     await dialog.locator('.el-select').first().click();
     await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '半年' }).click();
     await dialog.getByPlaceholder('开始日期').click();
@@ -890,7 +890,7 @@ test.describe('cycle launch entry UX', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
 
-    const dialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '新建考核周期' });
     await dialog.locator('.el-select').first().click();
     await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '半年' }).click();
     await dialog.getByPlaceholder('开始日期').click();
@@ -924,7 +924,7 @@ test.describe('cycle launch entry UX', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
 
-    const dialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '新建考核周期' });
     await dialog.locator('.el-select').first().click();
     await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '月度' }).click();
 
@@ -1034,8 +1034,8 @@ test.describe('cycle launch entry UX', () => {
     await goalOpenInput.press('Enter');
 
     await expect(nodes.nth(1).locator('.schedule-node__issue'))
-      .toContainText('请确认：指标制定截止不能早于目标制定开放');
-    await expect(page.locator('.el-message').filter({ hasText: '指标制定截止不能早于目标制定开放' }))
+      .toContainText('请确认：目标制定截止不能早于目标制定开放');
+    await expect(page.locator('.el-message').filter({ hasText: '目标制定截止不能早于目标制定开放' }))
       .toHaveCount(0);
   });
 
@@ -1071,7 +1071,7 @@ test.describe('cycle launch entry UX', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-edit-cycle-created').click();
 
-    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '编辑考核周期' });
     await expect(dialog.getByTestId('cycle-plan-summary')).toContainText('已调整计划');
     const nodes = dialog.getByTestId('cycle-schedule-node');
     await expect(nodes.nth(0).locator('.el-date-editor input')).toHaveValue('2026-09-21 17:00:00');
@@ -1083,7 +1083,7 @@ test.describe('cycle launch entry UX', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-edit-cycle-created').click();
 
-    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '编辑考核周期' });
     const periodInputs = dialog.locator('.el-date-editor--daterange input');
     await periodInputs.nth(0).click();
     const picker = page.locator('.el-picker-panel:visible');
@@ -1110,7 +1110,7 @@ test.describe('cycle launch entry UX', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-edit-cycle-created').click();
 
-    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '编辑考核周期' });
     const periodInputs = dialog.locator('.el-date-editor--daterange input');
     await periodInputs.nth(0).click();
     const picker = page.locator('.el-picker-panel:visible');
@@ -1149,7 +1149,7 @@ test.describe('cycle launch entry UX', () => {
     await mockCycleLaunchPage(page, { cycles: [] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
-    const firstRowColumns = page.getByRole('dialog', { name: '创建绩效周期' }).locator('.el-row').first().locator('.el-col-12');
+    const firstRowColumns = page.getByRole('dialog', { name: '新建考核周期' }).locator('.el-row').first().locator('.el-col-12');
     const nameColumn = await firstRowColumns.nth(0).boundingBox();
     const typeColumn = await firstRowColumns.nth(1).boundingBox();
     expect(typeColumn?.y).toBeGreaterThanOrEqual((nameColumn?.y ?? 0) + (nameColumn?.height ?? 0) - 1);

@@ -176,7 +176,7 @@ export class LaunchService {
     const blockers: LaunchPreflightResult['blockers'] = [];
     const warnings: LaunchPreflightResult['warnings'] = [];
     if (cycle.reviewStatus !== 'approved') {
-      blockers.push({ code: 'CYCLE_NOT_APPROVED', message: '周期计划需由审核人通过后才能发起' });
+      blockers.push({ code: 'CYCLE_NOT_APPROVED', message: '考核周期需由审核人通过后才能发起' });
     }
     const isWorkflowV2 = this.isWorkflowV2(cycle);
     const configuredCompanyFinalApproverId = isWorkflowV2
@@ -393,7 +393,7 @@ export class LaunchService {
       if (cycle.reviewStatus !== 'approved') {
         throw new BadRequestException({
           code: ERROR_CODE.PARAM_INVALID,
-          message: '周期计划需由审核人通过后才能发起',
+          message: '考核周期需由审核人通过后才能发起',
         });
       }
 
@@ -1140,12 +1140,12 @@ export class LaunchService {
     if (schedules.length === 0) {
       blockers.push({
         code: 'PERIOD_SCHEDULE_MISSING',
-        message: '评分周期排期为空，请返回周期计划补齐后重新审核',
+        message: '月度复盘评分排期为空，请返回考核周期补齐后重新审核',
       });
     } else if (!this.persistedSchedulesMatchPlan(cycle, schedules)) {
       blockers.push({
         code: 'PERIOD_SCHEDULE_INVALID',
-        message: '已保存的评分排期与周期类型或考核期间不一致，请返回周期计划重新生成并审核',
+        message: '已保存的月度复盘评分排期与周期类型或考核期间不一致，请返回考核周期重新生成并审核',
       });
     }
     blockers.push(...launchTimeStructuralBlockers(cycle));
@@ -1456,7 +1456,7 @@ export class LaunchService {
         cycleId,
         type: 'indicator_setting_notice',
         title: '季度目标制定已开放',
-        content: '新的绩效周期已开放，请在截止时间前填写并提交目标。',
+        content: '新的考核周期已开放，请在截止时间前填写并提交目标。',
       })),
       ...Array.from(managerIds, (managerId) => ({
         userId: managerId,
@@ -1464,7 +1464,7 @@ export class LaunchService {
         cycleId,
         type: 'indicator_setting_notice',
         title: '团队目标制定已开放',
-        content: '新的绩效周期已开放，请关注团队成员的目标制定进度。',
+        content: '新的考核周期已开放，请关注团队成员的目标制定进度。',
       })),
       ...Array.from(exemptEmployeeIds, (employeeId) => ({
         userId: employeeId,
@@ -1472,7 +1472,7 @@ export class LaunchService {
         cycleId,
         type: 'indicator_setting_notice',
         title: '本季度绩效任务已豁免',
-        content: '新的绩效周期已开放，您在本周期中已被标记为豁免，可进入周期查看原因。',
+        content: '新的考核周期已开放，您在本周期中已被标记为豁免，可进入周期查看原因。',
       })),
       ...Array.from(exemptManagerIds, (managerId) => ({
         userId: managerId,
@@ -1480,7 +1480,7 @@ export class LaunchService {
         cycleId,
         type: 'indicator_setting_notice',
         title: '团队成员存在绩效豁免',
-        content: '新的绩效周期已开放，您的团队中有成员被标记为本周期豁免，请进入团队任务查看。',
+        content: '新的考核周期已开放，您的团队中有成员被标记为本周期豁免，请进入团队任务查看。',
       })),
     ];
 

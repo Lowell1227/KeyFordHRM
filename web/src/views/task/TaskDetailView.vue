@@ -274,7 +274,7 @@ async function handleConfirmIndicators() {
   actionLoading.value = true;
   try {
     await tasksApi.confirmIndicators(id);
-    ElMessage.success('指标确认成功');
+    ElMessage.success('目标确认成功');
     await loadDetail();
   } finally {
     actionLoading.value = false;

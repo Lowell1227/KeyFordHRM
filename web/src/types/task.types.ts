@@ -97,7 +97,7 @@ export interface TaskExportQuery {
 }
 
 /**
- * 任务草稿状态：指标制定阶段暂存。
+ * 任务草稿状态：目标制定阶段暂存。
  */
 export interface IndicatorDraft {
   taskId: string;

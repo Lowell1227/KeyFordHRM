@@ -45,6 +45,20 @@ describe('cycle launch time policy', () => {
     expect(launchTimeSequenceWarnings(cycle, schedules).map(({ code }) => code)).toEqual([expectedCode]);
   });
 
+  it('uses the same goal terminology in user-visible time reminders', () => {
+    const settingWarning = launchTimeSequenceWarnings({
+      ...baseCycle(),
+      deadlineIndicatorSetting: at(1),
+    }, baseSchedules());
+    const confirmationWarning = launchTimeSequenceWarnings({
+      ...baseCycle(),
+      deadlineIndicatorConfirm: at(2),
+    }, baseSchedules());
+
+    expect(settingWarning[0]?.message).toBe('目标制定截止不能早于目标制定开放');
+    expect(confirmationWarning[0]?.message).toBe('目标确认截止不能早于目标制定截止');
+  });
+
   it('keeps a reversed performance period as a structural blocker', () => {
     expect(launchTimeStructuralBlockers({
       ...baseCycle(),

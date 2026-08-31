@@ -971,7 +971,7 @@ export class CyclesService {
   private stalePlanConflict(): ConflictException {
     return new ConflictException({
       code: ERROR_CODE.CONFLICT,
-      message: '周期计划已被其他人修改、审核或发起，请刷新后重试',
+      message: '考核周期已被其他人修改、审核或发起，请刷新后重试',
     });
   }
 
@@ -1032,7 +1032,7 @@ export class CyclesService {
         throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅本周期审核人可以审核' });
       }
       if (!cycle.reviewerId && user.sysRole !== SysRole.hr) {
-        throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅 HR 管理员可以审核待分配的周期计划' });
+        throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅 HR 管理员可以审核待分配的考核周期' });
       }
       if (cycle.planVersion !== dto.expectedPlanVersion) throw this.stalePlanConflict();
       const reviewStatus = dto.action === 'approve' ? 'approved' : 'rejected';

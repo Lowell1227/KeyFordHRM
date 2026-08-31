@@ -54,6 +54,10 @@ describe('CyclesService', () => {
     service = new CyclesService(prisma as never);
   });
 
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   function quarterlyCycle(overrides: Partial<CreateCycleDto> = {}): CreateCycleDto {
     return {
       name: '2027年第一季度',
@@ -667,6 +671,7 @@ describe('CyclesService', () => {
   });
 
   it('returns every opened task context for the owner without filtering by cycle name or type', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-08-30T08:00:00.000Z'));
     const owner = { ...creator, id: 'employee-1', sysRole: SysRole.employee } as AuthUser;
     prisma.assessmentCycle.findMany.mockResolvedValue([
       {
@@ -715,6 +720,7 @@ describe('CyclesService', () => {
         tasks: { some: { employeeId: owner.id } },
       },
     }));
+    jest.useRealTimers();
   });
 
   it('allows an employee to view only their direct manager tracking contexts', async () => {

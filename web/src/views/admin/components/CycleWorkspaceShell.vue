@@ -42,7 +42,7 @@ const emit = defineEmits<{
   'resolve-blocker': [code: string];
 }>();
 
-const stages = ['规划配置', '目标制定', '绩效评价', '校准审批', '公示归档'];
+const stages = ['规划配置', '目标制定', '绩效评价', '校准与审批', '公示归档'];
 const participantFilterOptions = [
   { key: 'all', label: '全部' },
   { key: 'active', label: '正常参与' },
@@ -69,7 +69,7 @@ const STATUS_LABEL: Record<CycleStatus, string> = {
   draft: '草稿',
   scheduled: '待发起',
   launch_blocked: '发起受阻',
-  indicator_setting: '指标制定中',
+  indicator_setting: '目标制定中',
   self_eval: '员工自评中',
   manager_score: '主管评分中',
   hr_calibration: 'HR校准中',
@@ -94,7 +94,7 @@ function blockerActionLabel(code: string): string {
 function scoringSummary(cycle: AssessmentCycle): string {
   if (cycle.workflowVersion !== 2) return '历史流程';
   return cycle.scoringFrequency === 'monthly'
-    ? `每月复盘并评分 · ${cycle.periodSchedules?.length ?? 0}期`
+    ? `月度复盘评分 · ${cycle.periodSchedules?.length ?? 0}期`
     : '周期结束统一评分';
 }
 
@@ -124,6 +124,50 @@ function preflightExclusions(result: LaunchPreflightResult): V2PreflightExclusio
 function probationExclusionCount(result: LaunchPreflightResult): number {
   return preflightExclusions(result).filter((item) => item.reasonCode === 'PROBATION_NOT_IN_PLAN').length;
 }
+
+type PreflightIssue = LaunchPreflightResult['warnings'][number];
+type GroupedPreflightIssue = PreflightIssue & { count: number };
+
+function groupPreflightIssues(issues: PreflightIssue[]): GroupedPreflightIssue[] {
+  const grouped = new Map<string, GroupedPreflightIssue>();
+  issues.forEach((issue) => {
+    const key = issue.message.trim();
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.count += 1;
+      return;
+    }
+    grouped.set(key, { ...issue, count: 1 });
+  });
+  return Array.from(grouped.values());
+}
+
+const groupedPreflightBlockers = computed(() => groupPreflightIssues(props.preflight?.blockers ?? []));
+const groupedPreflightWarnings = computed(() => groupPreflightIssues(props.preflight?.warnings ?? []));
+
+const planCheckSummary = computed(() => {
+  const blockerCount = groupedPreflightBlockers.value.length;
+  const warningCount = groupedPreflightWarnings.value.length;
+  if (!blockerCount && !warningCount) return '检查通过，可以发起考核。';
+  const parts = [];
+  if (blockerCount) parts.push(`${blockerCount}项需处理`);
+  if (warningCount) parts.push(`${warningCount}项时间提醒`);
+  return `${parts.join('，')}。${warningCount ? '时间提醒不影响发起。' : ''}`;
+});
+
+const cycleTimeNodes = computed(() => {
+  if (!props.cycle) return [];
+  return [
+    { label: '目标制定截止', value: props.cycle.deadlineIndicatorSetting },
+    { label: '目标确认截止', value: props.cycle.deadlineIndicatorConfirm },
+    { label: '员工自评开放', value: props.cycle.selfEvalOpenAt },
+    { label: '员工自评截止', value: props.cycle.deadlineSelfEval },
+    { label: '主管评分截止', value: props.cycle.deadlineManagerScore },
+    { label: 'HR校准截止', value: props.cycle.deadlineHrCalibration },
+    { label: '结果审批截止', value: props.cycle.deadlineApproval },
+    { label: '结果公示截止', value: props.cycle.deadlinePublish },
+  ];
+});
 
 function participantDispositionLabel(participant: {
   participantDisposition?: 'active' | 'cycle_exempt' | 'top_leader_exempt';
@@ -257,13 +301,31 @@ watch(() => props.cycle?.id, () => {
         <section class="cycle-current-action" data-testid="cycle-current-action">
           <div class="cycle-current-action__heading">
             <div>
-              <span>当前任务</span>
+              <span>当前要做</span>
               <h2>{{ nextStep?.label }}</h2>
               <p v-if="nextStep?.time">计划时间：{{ formatDateTime(nextStep.time) }}</p>
             </div>
-            <el-tag :type="cycle.status === 'launch_blocked' ? 'danger' : 'primary'" effect="light">
-              {{ STATUS_LABEL[cycle.status] }}
-            </el-tag>
+            <div
+              v-if="canRunLaunchAction"
+              class="cycle-preflight-primary-action"
+              data-testid="cycle-preflight-primary-action"
+            >
+              <el-button
+                type="primary"
+                :loading="launchAction === 'launch'"
+                :disabled="launchAction === 'schedule'"
+                @click="emit('launch')"
+              >
+                发起考核
+              </el-button>
+              <el-button
+                :loading="launchAction === 'schedule'"
+                :disabled="launchAction === 'launch'"
+                @click="emit('schedule')"
+              >
+                预约发起
+              </el-button>
+            </div>
           </div>
 
           <div v-if="cycle.taskStats && cycle.status === 'indicator_setting'" class="cycle-stat-grid cycle-stat-grid--progress">
@@ -274,89 +336,46 @@ watch(() => props.cycle?.id, () => {
         </section>
 
         <section
-          v-if="isPrelaunch || cycle.openedAt"
-          class="cycle-participant-panel"
-          :data-testid="isPrelaunch ? 'cycle-preflight-panel' : 'cycle-participant-record'"
+          v-if="isPrelaunch"
+          class="cycle-preflight-reminder"
+          :class="{
+            'has-blockers': groupedPreflightBlockers.length,
+            'has-warnings': !groupedPreflightBlockers.length && groupedPreflightWarnings.length,
+          }"
+          data-testid="cycle-preflight-reminder"
         >
-          <header class="cycle-participant-panel__heading">
+          <header class="cycle-preflight-reminder__heading">
+            <div class="cycle-preflight-reminder__icon" aria-hidden="true">✓</div>
             <div>
-              <span>考核人员范围</span>
-              <h2>{{ isPrelaunch ? '预计发起结果' : '人员与发起记录' }}</h2>
-              <p v-if="participantRecord">
-                发起时已锁定 · {{ recordSourceLabel(participantRecord) }} ·
-                {{ formatDateTime(participantRecord.recordedAt) }}
-                <template v-if="participantRecord.operator?.name"> · {{ participantRecord.operator.name }}</template>
-              </p>
-              <p v-else-if="isPrelaunch">检查结果用于确认本次将为哪些员工创建任务，不会修改人员资料。</p>
+              <h2>计划检查提醒</h2>
+              <p v-if="preflight">{{ planCheckSummary }}</p>
+              <p v-else-if="preflightLoading">正在检查考核周期、参与人员、直属上级和时间节点。</p>
+              <p v-else>发起前将检查考核周期、参与人员、直属上级和时间节点。</p>
             </div>
           </header>
 
-          <template v-if="isPrelaunch">
+          <el-skeleton v-if="preflightLoading" animated :rows="3" />
+          <el-alert
+            v-else-if="preflightError"
+            type="error"
+            :closable="false"
+            show-icon
+            title="发起检查失败"
+            :description="preflightError"
+          />
+          <template v-else-if="preflight">
             <div
-              v-if="canRunLaunchAction"
-              class="cycle-preflight-control-bar"
-              data-testid="cycle-preflight-control-bar"
+              v-if="groupedPreflightBlockers.length || groupedPreflightWarnings.length"
+              class="cycle-preflight-issues"
             >
-              <p>点击发起操作后，系统会先检查周期审核、参与人员、直属上级和时间计划。</p>
-              <div
-                class="cycle-preflight-primary-action"
-                data-testid="cycle-preflight-primary-action"
-              >
-                <el-button
-                  type="primary"
-                  :loading="launchAction === 'launch'"
-                  :disabled="launchAction === 'schedule'"
-                  @click="emit('launch')"
+              <div v-if="groupedPreflightBlockers.length" class="cycle-preflight-issue-group" data-testid="cycle-preflight-blockers">
+                <article
+                  v-for="blocker in groupedPreflightBlockers"
+                  :key="blocker.message"
+                  class="cycle-preflight-issue is-blocker"
+                  data-testid="cycle-preflight-blocker"
                 >
-                  开始发起
-                </el-button>
-                <el-button
-                  :loading="launchAction === 'schedule'"
-                  :disabled="launchAction === 'launch'"
-                  @click="emit('schedule')"
-                >
-                  预约发起
-                </el-button>
-              </div>
-            </div>
-
-            <el-skeleton v-if="preflightLoading" animated :rows="4" />
-            <el-alert
-              v-else-if="preflightError"
-              type="error"
-              :closable="false"
-              show-icon
-              title="发起检查失败"
-              :description="preflightError"
-            />
-
-            <template v-else-if="preflight">
-              <el-alert
-                :type="preflight.ready ? (preflight.warnings.length ? 'warning' : 'success') : 'error'"
-                :closable="false"
-                show-icon
-                :title="preflight.ready
-                  ? (preflight.warnings.length ? `${preflight.warnings.length} 项时间安排需确认` : '发起检查通过')
-                  : '请先处理阻断项'"
-                :description="preflight.ready && preflight.warnings.length ? '以下内容仅作提醒，不影响发起或预约。' : undefined"
-              />
-              <div class="cycle-preflight-summary" data-testid="cycle-preflight-summary">
-                <span>预计范围<strong>{{ preflight.participantCount }}</strong>人</span>
-                <span v-if="preflight.participants.length">正常参与<strong>{{ preflightActiveCount }}</strong>人</span>
-                <span v-if="preflight.participants.length">预计豁免<strong>{{ preflightExemptedCount }}</strong>人</span>
-                <span v-if="cycle.workflowVersion === 2">未进入范围<strong>{{ probationExclusionCount(preflight) }}</strong>人</span>
-                <span>目标制定开放时间 {{ formatDateTime(preflight.cycle.goalSettingOpenAt) }}</span>
-              </div>
-              <div
-                v-if="preflight.blockers.length"
-                class="cycle-preflight-blockers"
-                data-testid="cycle-preflight-blockers"
-              >
-                <article v-for="blocker in preflight.blockers" :key="blocker.code">
-                  <div>
-                    <strong>{{ blocker.message }}</strong>
-                    <span>请完成周期审核、人员或组织配置后重新检查。</span>
-                  </div>
+                  <div><i aria-hidden="true" /><strong>{{ blocker.message }}</strong><span v-if="blocker.count > 1">涉及{{ blocker.count }}项</span></div>
                   <el-button
                     v-if="blockerActionLabel(blocker.code)"
                     type="primary"
@@ -368,41 +387,80 @@ watch(() => props.cycle?.id, () => {
                   </el-button>
                 </article>
               </div>
-              <div
-                v-if="preflight.warnings.length"
-                class="cycle-preflight-warnings"
-                data-testid="cycle-preflight-warnings"
-              >
-                <article v-for="warning in preflight.warnings" :key="warning.code">
-                  <strong>{{ warning.message }}</strong>
-                  <span>请确认时间安排；该提醒不会阻止发起。</span>
+              <div v-if="groupedPreflightWarnings.length" class="cycle-preflight-issue-group" data-testid="cycle-preflight-warnings">
+                <article
+                  v-for="warning in groupedPreflightWarnings"
+                  :key="warning.message"
+                  class="cycle-preflight-issue is-warning"
+                  data-testid="cycle-preflight-warning"
+                >
+                  <div><i aria-hidden="true" /><strong>{{ warning.message }}</strong><span v-if="warning.count > 1">涉及{{ warning.count }}项</span></div>
                 </article>
               </div>
-            </template>
-          </template>
+            </div>
 
-          <el-skeleton v-else-if="participantRecordLoading" animated :rows="5" />
+            <details class="cycle-time-nodes" data-testid="cycle-time-nodes">
+              <summary>
+                <strong>计划时间节点</strong>
+                <span>目标制定开放：{{ formatDateTime(preflight.cycle.goalSettingOpenAt) }}</span>
+                <em>展开全部时间节点</em>
+              </summary>
+              <div class="cycle-time-nodes__grid">
+                <div v-for="node in cycleTimeNodes" :key="node.label">
+                  <span>{{ node.label }}</span>
+                  <strong>{{ formatDateTime(node.value) }}</strong>
+                </div>
+              </div>
+            </details>
+          </template>
+        </section>
+
+        <section
+          v-if="isPrelaunch || cycle.openedAt"
+          class="cycle-participant-panel"
+          :data-testid="isPrelaunch ? 'cycle-preflight-panel' : 'cycle-participant-record'"
+        >
+          <header class="cycle-participant-panel__heading">
+            <div>
+              <h2>考核范围</h2>
+              <p v-if="participantRecord">
+                发起时已锁定 · {{ recordSourceLabel(participantRecord) }} ·
+                {{ formatDateTime(participantRecord.recordedAt) }}
+                <template v-if="participantRecord.operator?.name"> · {{ participantRecord.operator.name }}</template>
+              </p>
+              <p v-else-if="isPrelaunch">检查结果用于确认本次将为哪些员工创建任务，不会修改人员资料。</p>
+            </div>
+          </header>
+
+          <el-skeleton v-if="!isPrelaunch && participantRecordLoading" animated :rows="5" />
           <el-alert
-            v-else-if="participantRecordError"
+            v-else-if="!isPrelaunch && participantRecordError"
             type="error"
             :closable="false"
             show-icon
             title="发起记录加载失败"
             :description="participantRecordError"
           />
-          <div v-else-if="participantRecord" class="cycle-participant-summary" data-testid="cycle-participant-summary">
-            <span>范围人数<strong>{{ participantRecord.summary.total }}</strong></span>
-            <span>正常参与<strong>{{ participantRecord.summary.active }}</strong></span>
-            <span>已豁免<strong>{{ participantRecord.summary.exempted }}</strong></span>
-          </div>
-
           <details
             v-if="participantRows.length"
             class="cycle-participant-details"
             open
             data-testid="cycle-preflight-details"
           >
-            <summary>{{ isPrelaunch ? '查看人员明细' : '人员明细' }}（{{ participantRows.length }}）</summary>
+            <summary>
+              <span>{{ isPrelaunch ? '查看人员明细' : '人员明细' }}（{{ participantRows.length }}）</span>
+              <span v-if="isPrelaunch && preflight" class="cycle-preflight-summary" data-testid="cycle-preflight-summary">
+                <span>范围人数<strong>{{ preflight.participantCount }}</strong>人</span>
+                <span>参与人员<strong>{{ preflightActiveCount }}</strong>人</span>
+                <span>豁免人员<strong>{{ preflightExemptedCount }}</strong>人</span>
+                <span v-if="cycle.workflowVersion === 2 && probationExclusionCount(preflight) > 0">未进入范围<strong>{{ probationExclusionCount(preflight) }}</strong>人</span>
+              </span>
+              <span v-else-if="participantRecord" class="cycle-participant-summary" data-testid="cycle-participant-summary">
+                <span>范围人数<strong>{{ participantRecord.summary.total }}</strong>人</span>
+                <span>参与人员<strong>{{ participantRecord.summary.active }}</strong>人</span>
+                <span>豁免人员<strong>{{ participantRecord.summary.exempted }}</strong>人</span>
+              </span>
+            </summary>
             <div class="cycle-participant-toolbar">
               <div class="cycle-participant-filters" aria-label="参与结果筛选">
                 <button
@@ -635,6 +693,175 @@ watch(() => props.cycle?.id, () => {
   color: var(--el-color-danger);
 }
 
+.cycle-preflight-reminder {
+  display: grid;
+  gap: 16px;
+  margin-top: 12px;
+  padding: 20px 22px;
+  background: #f7f8ff;
+  border: 1px solid #dfe5ff;
+  border-left: 4px solid var(--el-color-primary);
+  border-radius: 10px;
+  box-shadow: 0 6px 20px rgb(67 86 170 / 6%);
+}
+
+.cycle-preflight-reminder.has-blockers {
+  border-left-color: var(--el-color-danger);
+}
+
+.cycle-preflight-reminder.has-warnings {
+  border-left-color: var(--el-color-warning);
+}
+
+.cycle-preflight-reminder__heading {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+}
+
+.cycle-preflight-reminder__icon {
+  display: grid;
+  flex: 0 0 34px;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  color: var(--el-color-primary);
+  font-weight: 700;
+  background: #e9edff;
+  border-radius: 9px;
+}
+
+.cycle-preflight-reminder__heading h2 {
+  margin: 0;
+  font-size: 18px;
+}
+
+.cycle-preflight-reminder__heading p {
+  margin: 4px 0 0;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+}
+
+.cycle-preflight-issues {
+  overflow: hidden;
+  background: #fff;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+}
+
+.cycle-preflight-issue-group {
+  display: contents;
+}
+
+.cycle-preflight-issue {
+  display: flex;
+  min-height: 46px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+
+.cycle-preflight-issue:last-child {
+  border-bottom: 0;
+}
+
+.cycle-preflight-issue > div {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 9px;
+}
+
+.cycle-preflight-issue i {
+  display: block;
+  flex: 0 0 7px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.cycle-preflight-issue strong {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.cycle-preflight-issue span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.cycle-preflight-issue.is-blocker {
+  color: var(--el-color-danger);
+  background: var(--el-color-danger-light-9);
+}
+
+.cycle-preflight-issue.is-blocker i {
+  background: var(--el-color-danger);
+}
+
+.cycle-preflight-issue.is-warning {
+  color: var(--el-color-warning-dark-2);
+}
+
+.cycle-preflight-issue.is-warning i {
+  background: var(--el-color-warning);
+}
+
+.cycle-time-nodes {
+  padding: 13px 15px;
+  background: #fff;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+}
+
+.cycle-time-nodes summary {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  color: var(--el-text-color-primary);
+  cursor: pointer;
+}
+
+.cycle-time-nodes summary span {
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+}
+
+.cycle-time-nodes summary em {
+  margin-left: auto;
+  color: var(--el-color-primary);
+  font-size: 13px;
+  font-style: normal;
+}
+
+.cycle-time-nodes__grid {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px 20px;
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px dashed var(--el-border-color-light);
+}
+
+.cycle-time-nodes__grid > div {
+  display: grid;
+  gap: 4px;
+}
+
+.cycle-time-nodes__grid span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+}
+
+.cycle-time-nodes__grid strong {
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  font-weight: 600;
+}
+
 .cycle-participant-panel {
   display: grid;
   gap: 16px;
@@ -651,13 +878,8 @@ watch(() => props.cycle?.id, () => {
   gap: 16px;
 }
 
-.cycle-participant-panel__heading > div > span {
-  color: var(--el-text-color-secondary);
-  font-size: 13px;
-}
-
 .cycle-participant-panel__heading h2 {
-  margin: 5px 0;
+  margin: 0 0 5px;
   font-size: 20px;
 }
 
@@ -672,7 +894,7 @@ watch(() => props.cycle?.id, () => {
   display: flex;
   flex-wrap: wrap;
   align-items: center;
-  gap: 18px;
+  gap: 14px;
 }
 
 .cycle-preflight-primary-action {
@@ -701,52 +923,12 @@ watch(() => props.cycle?.id, () => {
   color: var(--el-text-color-primary);
 }
 
-.cycle-preflight-blockers {
-  display: grid;
-  gap: 10px;
-}
-
-.cycle-preflight-blockers article {
+.cycle-participant-details summary {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   justify-content: space-between;
-  gap: 16px;
-  padding: 12px 14px;
-  color: var(--el-color-danger);
-  background: var(--el-color-danger-light-9);
-  border-radius: 8px;
-}
-
-.cycle-preflight-blockers article > div {
-  display: grid;
-  gap: 4px;
-}
-
-.cycle-preflight-blockers span {
-  font-size: 12px;
-}
-
-.cycle-preflight-warnings {
-  display: grid;
-  gap: 8px;
-}
-
-.cycle-preflight-warnings article {
-  display: grid;
-  gap: 4px;
-  padding: 10px 14px;
-  color: var(--el-color-warning-dark-2);
-  background: var(--el-color-warning-light-9);
-  border-radius: 8px;
-}
-
-.cycle-preflight-warnings span {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-
-.cycle-preflight-details summary,
-.cycle-participant-details summary {
+  gap: 10px 18px;
   padding: 8px 0;
   color: var(--el-color-primary);
   cursor: pointer;
@@ -795,21 +977,6 @@ watch(() => props.cycle?.id, () => {
   border-radius: 6px;
 }
 
-.cycle-preflight-control-bar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px;
-  background: var(--el-fill-color-lighter);
-  border-radius: 8px;
-}
-
-.cycle-preflight-control-bar p {
-  margin: 0;
-  color: var(--el-text-color-secondary);
-}
-
 @media (max-width: 767px) {
   .cycle-workspace__header {
     align-items: flex-start;
@@ -848,14 +1015,13 @@ watch(() => props.cycle?.id, () => {
   .cycle-current-action__heading,
   .cycle-participant-panel__heading,
   .cycle-participant-toolbar,
-  .cycle-preflight-blockers article,
-  .cycle-preflight-control-bar {
+  .cycle-preflight-issue {
     align-items: stretch;
     flex-direction: column;
   }
 
   .cycle-current-action__heading > .el-button,
-  .cycle-preflight-blockers article .el-button,
+  .cycle-preflight-issue .el-button,
   .cycle-preflight-primary-action .el-button {
     width: 100%;
   }
@@ -877,6 +1043,30 @@ watch(() => props.cycle?.id, () => {
 
   .cycle-stat-grid--progress {
     grid-template-columns: 1fr;
+  }
+
+  .cycle-preflight-reminder,
+  .cycle-participant-panel {
+    padding: 16px;
+  }
+
+  .cycle-time-nodes summary {
+    align-items: flex-start;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .cycle-time-nodes summary em {
+    margin-left: 0;
+  }
+
+  .cycle-time-nodes__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .cycle-participant-details summary {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .cycle-participant-toolbar .el-input {

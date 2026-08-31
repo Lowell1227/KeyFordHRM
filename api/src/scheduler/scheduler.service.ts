@@ -62,13 +62,13 @@ export class SchedulerService {
     private readonly launchService: LaunchService,
   ) {}
 
-  /** 每 5 分钟检查预约发起的绩效周期。 */
+  /** 每 5 分钟检查预约发起的考核周期。 */
   @Cron('*/5 * * * *')
   async openScheduledCycles(): Promise<void> {
     try {
       await this.runScheduledCycleOpenings();
     } catch (err) {
-      this.logger.error('预约发起绩效周期定时任务异常', err);
+      this.logger.error('预约发起考核周期定时任务异常', err);
     }
   }
 

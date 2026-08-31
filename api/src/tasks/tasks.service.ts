@@ -639,7 +639,7 @@ export class TasksService {
     if (task.status !== 'indicator_drafting' && task.status !== 'indicator_setting') {
       throw new ConflictException({
         code: ERROR_CODE.CONFLICT,
-        message: '只有指标制定中才允许维护本周期指标',
+        message: '只有目标制定中才允许维护本周期考核指标',
       });
     }
 
@@ -712,7 +712,7 @@ export class TasksService {
     if (!actsAsEmployee && !actsAsReviewer) {
       throw new ConflictException({
         code: ERROR_CODE.CONFLICT,
-        message: '只有指标制定中才允许维护本周期指标',
+        message: '只有目标制定中才允许维护本周期考核指标',
       });
     }
 

@@ -332,7 +332,7 @@ test.describe('cycle scoring plan controls', () => {
     await page.getByTestId('cycle-create').click();
     await page.getByTestId('cycle-type-quarterly').click();
     await expect(page.getByTestId('cycle-monthly-review-switch').locator('input')).toBeChecked();
-    await expect(page.getByTestId('cycle-scoring-settings')).toContainText('每月复盘并评分');
+    await expect(page.getByTestId('cycle-scoring-settings')).toContainText('月度复盘评分');
     await expect(page.getByText('按月度评分', { exact: true })).toHaveCount(0);
     await expect(page.getByText('月度跟进', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('cycle-review-frequency')).toHaveCount(0);
@@ -425,9 +425,9 @@ test.describe('cycle scoring plan controls', () => {
 
     const firstRow = page.getByTestId('cycle-month-schedule-row').first();
     await expect(page.getByTestId('cycle-schedule-column-header')).not.toBeVisible();
-    await expect(firstRow.getByText('自评开放时间', { exact: true })).toBeVisible();
-    await expect(firstRow.getByText('员工计划完成时间', { exact: true })).toBeVisible();
-    await expect(firstRow.getByText('主管计划完成时间', { exact: true })).toBeVisible();
+    await expect(firstRow.getByText('本期自评开放', { exact: true })).toBeVisible();
+    await expect(firstRow.getByText('本期员工自评截止', { exact: true })).toBeVisible();
+    await expect(firstRow.getByText('本期主管评分截止', { exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
   });
 });
@@ -445,7 +445,7 @@ test.describe('cycle scoring plan integration', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
 
-    const createDialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    const createDialog = page.getByRole('dialog', { name: '新建考核周期' });
     const reviewPlan = createDialog.getByTestId('cycle-review-plan');
     await expect(reviewPlan).toBeVisible();
     await expect(reviewPlan.getByTestId('cycle-scoring-settings')).toBeVisible();
@@ -606,7 +606,7 @@ test.describe('cycle scoring plan integration', () => {
     await page.getByRole('button', { name: '下一步' }).click();
 
     const reviewConfirm = page.getByRole('dialog', { name: '重新提交周期审核？' });
-    await expect(reviewConfirm).toContainText('本次修改会使已审核的周期计划重新进入待审核状态');
+    await expect(reviewConfirm).toContainText('本次修改会使已审核的考核周期重新进入待审核状态');
     await reviewConfirm.getByRole('button', { name: '确认提交' }).click();
 
     await expect.poll(() => updateBodies).toHaveLength(1);
@@ -662,7 +662,7 @@ test.describe('cycle scoring plan integration', () => {
 
     await expect(page.getByTestId('cycle-workspace')).toBeVisible();
     expect(updateBodies).toHaveLength(0);
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('每月复盘并评分 · 3期');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('月度复盘评分 · 3期');
   });
 
   test('treats persisted schedule ids as non-semantic after an approved plan is changed then restored', async ({ page }) => {
@@ -762,7 +762,7 @@ test.describe('cycle scoring plan integration', () => {
     await page.goto('/cycles?group=attention');
 
     await page.getByRole('button', { name: '审核', exact: true }).click();
-    await page.getByRole('dialog', { name: '审核周期计划' })
+    await page.getByRole('dialog', { name: '审核考核周期' })
       .getByRole('button', { name: '审核通过' })
       .click();
 
@@ -798,18 +798,18 @@ test.describe('cycle scoring plan integration', () => {
     await mockIntegratedCyclePage(page, { cycles: [integratedCycle] });
     await page.goto('/cycles?group=attention');
 
-    await expect(page.getByTestId(`cycle-scoring-summary-${integratedCycle.id}`)).toHaveText('每月复盘并评分 · 3期');
+    await expect(page.getByTestId(`cycle-scoring-summary-${integratedCycle.id}`)).toHaveText('月度复盘评分 · 3期');
     await page.getByText(integratedCycle.name, { exact: true }).first().click();
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('每月复盘并评分 · 3期');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('月度复盘评分 · 3期');
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('结果审核：按周期审核');
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('已调整月份：1个');
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('公司最终审定人：李宏');
 
-    await page.getByRole('button', { name: '开始发起' }).click();
+    await page.getByRole('button', { name: '发起考核' }).click();
     const preflightSummary = page.getByTestId('cycle-preflight-summary');
-    await expect(preflightSummary).toContainText('预计范围2人');
-    await expect(preflightSummary).toContainText('正常参与1人');
-    await expect(preflightSummary).toContainText('预计豁免1人');
+    await expect(preflightSummary).toContainText('范围人数2人');
+    await expect(preflightSummary).toContainText('参与人员1人');
+    await expect(preflightSummary).toContainText('豁免人员1人');
     await expect(preflightSummary).toContainText('未进入范围1人');
     await expect(preflightSummary).not.toContainText('公司最终审定人');
 

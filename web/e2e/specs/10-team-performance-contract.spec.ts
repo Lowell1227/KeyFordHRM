@@ -661,7 +661,7 @@ test.describe('team list manager workspace', () => {
     await page.getByTestId('team-task-row-task-1').click();
     await expect(page).toHaveURL(/taskId=task-1/);
     await expect(page.getByTestId('team-task-workspace')).toBeVisible();
-    await expect(page.getByRole('heading', { level: 1, name: '指标审核', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: '目标审核', exact: true })).toBeVisible();
     await expect(page.getByTestId('team-task-workspace')).toContainText('Ada Chen');
     await expect(page.getByTestId('goal-review-workspace')).toBeVisible();
     await expect(page.getByTestId('manager-evaluation-workspace')).toHaveCount(0);

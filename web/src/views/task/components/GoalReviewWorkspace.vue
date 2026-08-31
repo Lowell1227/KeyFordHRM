@@ -211,7 +211,7 @@ async function loadTask() {
   } catch (loadError) {
     if (requestId !== requestSerial) return;
     const candidate = loadError as { message?: string; response?: { data?: { message?: string } } };
-    error.value = candidate.response?.data?.message || candidate.message || '指标审核详情加载失败';
+    error.value = candidate.response?.data?.message || candidate.message || '目标审核详情加载失败';
     task.value = undefined;
     draftIndicators.splice(0, draftIndicators.length);
   } finally {
@@ -344,7 +344,7 @@ async function handleApprove() {
     return;
   }
   try {
-    await ElMessageBox.confirm('确认通过该员工的指标审核？', '通过指标审核', {
+    await ElMessageBox.confirm('确认通过该员工的目标审核？', '通过目标审核', {
       confirmButtonText: '通过',
       cancelButtonText: '取消',
       type: 'warning',
@@ -362,7 +362,7 @@ async function handleApprove() {
 async function handleReject() {
   if (!isReviewable.value || !task.value?.updatedAt) return;
   try {
-    const { value } = await ElMessageBox.prompt('请输入驳回原因', '驳回指标审核', {
+    const { value } = await ElMessageBox.prompt('请输入驳回原因', '驳回目标审核', {
       confirmButtonText: '驳回',
       cancelButtonText: '取消',
       inputPlaceholder: '请输入驳回原因',
@@ -400,12 +400,12 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
     <el-result
       v-else-if="error"
       icon="error"
-      title="指标审核详情加载失败"
+      title="目标审核详情加载失败"
       :sub-title="error"
     >
       <template #extra>
         <el-tooltip content="重新加载" placement="top">
-          <el-button circle :icon="Refresh" aria-label="重新加载指标审核" @click="loadTask" />
+          <el-button circle :icon="Refresh" aria-label="重新加载目标审核" @click="loadTask" />
         </el-tooltip>
       </template>
     </el-result>
@@ -438,7 +438,7 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
                 type="success"
                 :icon="Check"
                 data-testid="goal-review-approve"
-                aria-label="通过指标审核"
+                aria-label="通过目标审核"
                 :loading="busy"
                 @click="handleApprove"
               />
@@ -448,7 +448,7 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
                 type="danger"
                 :icon="Close"
                 data-testid="goal-review-reject"
-                aria-label="驳回指标审核"
+                aria-label="驳回目标审核"
                 :loading="busy"
                 @click="handleReject"
               />
@@ -608,7 +608,7 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
       </el-drawer>
     </template>
 
-    <el-empty v-else :image-size="52" description="暂无指标审核详情" />
+    <el-empty v-else :image-size="52" description="暂无目标审核详情" />
   </section>
 </template>
 

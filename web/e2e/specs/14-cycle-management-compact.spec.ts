@@ -410,7 +410,7 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByTestId('dingtalk-global-toggle').locator('input')).toBeDisabled();
 
     await page.getByTestId('cycle-create').click();
-    const createDialog = page.getByRole('dialog', { name: '创建绩效周期' });
+    const createDialog = page.getByRole('dialog', { name: '新建考核周期' });
     await expect(createDialog).toBeVisible();
     await expect(createDialog.getByText('审核人', { exact: true })).toHaveCount(0);
   });
@@ -490,11 +490,11 @@ test.describe('compact cycle management list', () => {
     await expect(progress).not.toContainText('参与任务');
 
     const record = page.getByTestId('cycle-participant-record');
-    await expect(record).toContainText('人员与发起记录');
+    await expect(record).toContainText('考核范围');
     await expect(record).toContainText('发起时已锁定');
     await expect(record).toContainText('范围人数109');
-    await expect(record).toContainText('正常参与101');
-    await expect(record).toContainText('已豁免8');
+    await expect(record).toContainText('参与人员101');
+    await expect(record).toContainText('豁免人员8人');
 
     await page.getByTestId('participant-filter-exempted').click();
     await expect(record).toContainText('方园');
@@ -643,7 +643,7 @@ test.describe('compact cycle management list', () => {
 
     await page.getByTestId('cycle-edit-cycle-draft').click();
 
-    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '编辑考核周期' });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue(draftCycle.name);
   });
@@ -676,7 +676,7 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByTestId('cycle-create-save-draft')).toBeVisible();
     await expect(page.getByTestId('cycle-create-save-draft')).toHaveText('保存草稿');
     await expect(page.getByTestId('cycle-create-save-and-view')).toHaveText('下一步');
-    await expect(page.getByRole('dialog', { name: '创建绩效周期' }).getByRole('button', { name: '提交', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: '新建考核周期' }).getByRole('button', { name: '提交', exact: true })).toHaveCount(0);
   });
 
   test('submits a new cycle into its detail and automatically expands the read-only participant preview', async ({ page }) => {
@@ -702,7 +702,7 @@ test.describe('compact cycle management list', () => {
     await expect(participantDetails).toContainText('周强');
     await expect(page.getByTestId('participant-filter-all')).toBeVisible();
     await expect(page.getByTestId('participant-search')).toBeVisible();
-    await expect(page.getByRole('button', { name: '开始发起', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '发起考核', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '预约发起', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '开始发起检查', exact: true })).toHaveCount(0);
   });
@@ -716,6 +716,9 @@ test.describe('compact cycle management list', () => {
     await expect(page).toHaveURL(/cycleId=cycle-draft/);
     await expect(page.getByTestId('cycle-workspace')).toBeVisible();
     await expect(page.getByTestId('cycle-current-action')).toBeVisible();
+    await expect(page.getByTestId('cycle-current-action')).toContainText('当前要做');
+    await expect(page.getByTestId('cycle-current-action').getByRole('heading', { name: '完成发起检查', exact: true })).toBeVisible();
+    await expect(page.getByTestId('cycle-stage-3')).toContainText('校准与审批');
     await expect(page.getByTestId('cycle-workspace-edit')).toHaveText('编辑');
     for (let index = 0; index < 5; index += 1) {
       await expect(page.getByTestId(`cycle-stage-${index}`)).toBeVisible();
@@ -729,13 +732,42 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByRole('columnheader', { name: '周期' })).toBeVisible();
   });
 
+  test('groups repeated plan reminders into one concise line and keeps scope beside people details', async ({ page }) => {
+    const duplicateWarningPreflight: LaunchPreflightResult = {
+      ...warningPreflight,
+      participantCount: 1,
+      participants: blockedPreflight.participants,
+      warnings: [
+        warningPreflight.warnings[0],
+        { ...warningPreflight.warnings[0], code: 'HR_CALIBRATION_BEFORE_FINAL_MANAGER_DUE_DUPLICATE' },
+      ],
+    };
+    await mockCyclePage(page, [], { preflight: duplicateWarningPreflight });
+    await page.goto('/cycles?group=attention&cycleId=cycle-draft');
+
+    const reminder = page.getByTestId('cycle-preflight-reminder');
+    await expect(reminder.getByRole('heading', { name: '计划检查提醒' })).toBeVisible();
+    await expect(reminder.getByText('HR校准截止不能早于最后一期主管计划完成时间', { exact: true })).toHaveCount(1);
+    await expect(reminder).toContainText('涉及2项');
+    await expect(reminder).toContainText('目标制定开放');
+    await expect(reminder).not.toContainText('请确认时间安排；该提醒不会阻止发起。');
+    const timeNodes = page.getByTestId('cycle-time-nodes');
+    await timeNodes.locator('summary').click();
+    await expect(timeNodes.getByText(/目标制定开放/)).toHaveCount(1);
+
+    const participantDetails = page.getByTestId('cycle-preflight-details');
+    await expect(participantDetails.locator('summary')).toContainText('范围人数1人');
+    await expect(participantDetails.locator('summary')).toContainText('参与人员1人');
+    await expect(participantDetails.locator('summary')).not.toContainText('未进入范围0');
+  });
+
   test('opens the same edit dialog from a draft workspace', async ({ page }) => {
     await mockCyclePage(page);
     await page.goto('/cycles?group=attention&cycleId=cycle-draft');
 
     await page.getByTestId('cycle-workspace-edit').click();
 
-    const dialog = page.getByRole('dialog', { name: '编辑绩效周期' });
+    const dialog = page.getByRole('dialog', { name: '编辑考核周期' });
     await expect(dialog).toBeVisible();
     await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue(draftCycle.name);
   });
@@ -747,10 +779,9 @@ test.describe('compact cycle management list', () => {
     const actions = page.locator('.cycle-workspace__header-actions');
     await expect(actions.getByRole('button', { name: '编辑', exact: true })).toBeVisible();
     await expect(page.getByTestId('cycle-workspace-submit')).toHaveCount(0);
-    const controlBar = page.getByTestId('cycle-preflight-control-bar');
-    await expect(controlBar).toContainText('点击发起操作后，系统会先检查周期审核、参与人员、直属上级和时间计划');
-    const launchActions = controlBar.getByTestId('cycle-preflight-primary-action');
-    await expect(launchActions.getByRole('button', { name: '开始发起', exact: true })).toBeVisible();
+    const currentAction = page.getByTestId('cycle-current-action');
+    const launchActions = currentAction.getByTestId('cycle-preflight-primary-action');
+    await expect(launchActions.getByRole('button', { name: '发起考核', exact: true })).toBeVisible();
     await expect(launchActions.getByRole('button', { name: '预约发起', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '开始发起检查', exact: true })).toHaveCount(0);
     await expect(actions.getByRole('button', { name: '查看全部设置', exact: true })).toHaveCount(0);
@@ -771,11 +802,11 @@ test.describe('compact cycle management list', () => {
 
     const actionSlot = page.getByTestId('cycle-preflight-primary-action');
     const before = await actionSlot.boundingBox();
-    await actionSlot.getByRole('button', { name: '开始发起', exact: true }).click();
+    await actionSlot.getByRole('button', { name: '发起考核', exact: true }).click();
 
     await expect.poll(() => preflightRequests).toEqual(['cycle-draft', 'cycle-draft']);
-    await expect(page.getByText('请先处理阻断项')).toBeVisible();
-    await expect(actionSlot.getByRole('button', { name: '开始发起', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { name: '计划检查提醒' })).toBeVisible();
+    await expect(actionSlot.getByRole('button', { name: '发起考核', exact: true })).toBeVisible();
     await expect(actionSlot.getByRole('button', { name: '预约发起', exact: true })).toBeVisible();
     const after = await actionSlot.boundingBox();
     expect(after?.x).toBeCloseTo(before?.x ?? 0, 0);
@@ -801,11 +832,12 @@ test.describe('compact cycle management list', () => {
     await page.getByRole('button', { name: draftCycle.name }).click();
     const currentTask = page.getByTestId('cycle-current-action');
     const preflightPanel = page.getByTestId('cycle-preflight-panel');
-    await expect(preflightPanel).toContainText('点击发起操作后，系统会先检查周期审核、参与人员、直属上级和时间计划');
+    await expect(page.getByTestId('cycle-preflight-reminder')).toContainText('计划检查提醒');
+    await expect(preflightPanel).toContainText('考核范围');
     await expect(currentTask).not.toContainText('直属主管');
     await expect(currentTask).not.toContainText('绩效模板');
     await expect(currentTask).not.toContainText('时间设置');
-    await page.getByRole('button', { name: '开始发起', exact: true }).click();
+    await page.getByRole('button', { name: '发起考核', exact: true }).click();
 
     await expect(page.getByTestId('cycle-preflight-blockers')).toContainText('1 名员工未匹配到考核模板');
     await expect(page.getByText('TEMPLATE_UNCOVERED')).toHaveCount(0);
@@ -830,7 +862,7 @@ test.describe('compact cycle management list', () => {
     await page.goto('/cycles?group=attention');
 
     await page.getByRole('button', { name: draftCycle.name }).click();
-    await page.getByRole('button', { name: '开始发起', exact: true }).click();
+    await page.getByRole('button', { name: '发起考核', exact: true }).click();
 
     await expect.poll(() => preflightRequests).toEqual(['cycle-draft', 'cycle-draft']);
     const confirmation = page.getByRole('dialog', { name: '确认发起周期' });
@@ -851,10 +883,10 @@ test.describe('compact cycle management list', () => {
     });
     await page.goto('/cycles?group=attention&cycleId=cycle-draft');
 
-    await expect(page.getByTestId('cycle-preflight-warnings'))
+    await expect(page.getByTestId('cycle-preflight-reminder'))
       .toContainText('HR校准截止不能早于最后一期主管计划完成时间');
-    await expect(page.getByText('1 项时间安排需确认')).toBeVisible();
-    await page.getByRole('button', { name: '开始发起', exact: true }).click();
+    await expect(page.getByText('1项时间提醒。时间提醒不影响发起。')).toBeVisible();
+    await page.getByRole('button', { name: '发起考核', exact: true }).click();
 
     const confirmation = page.getByRole('dialog', { name: '确认发起周期' });
     await expect(confirmation).toContainText('1 项时间安排提醒');
@@ -871,7 +903,7 @@ test.describe('compact cycle management list', () => {
     await page.goto('/cycles?group=attention');
 
     await page.getByRole('button', { name: draftCycle.name }).click();
-    await page.getByRole('button', { name: '开始发起', exact: true }).click();
+    await page.getByRole('button', { name: '发起考核', exact: true }).click();
 
     await expect.poll(() => preflightRequests).toEqual(['cycle-draft', 'cycle-draft']);
     await expect(page.getByText('尚未到目标制定开放时间，请使用预约发起')).toBeVisible();
@@ -923,7 +955,7 @@ test.describe('compact cycle management list', () => {
     });
     await page.goto('/cycles?group=attention&cycleId=cycle-draft');
 
-    await page.getByRole('button', { name: '开始发起', exact: true }).click();
+    await page.getByRole('button', { name: '发起考核', exact: true }).click();
     const reasonPrompt = page.getByRole('dialog', { name: '提前发起说明' });
     await reasonPrompt.getByRole('textbox').fill('业务安排提前启动');
     await reasonPrompt.getByRole('button', { name: '继续' }).click();
@@ -964,7 +996,7 @@ test.describe('compact cycle management list', () => {
     await page.getByTestId('cycle-compact-card-cycle-draft').click();
     await expect(page.getByTestId('cycle-workspace-back')).toBeVisible();
     await expect(page.getByTestId('cycle-current-action')).toBeVisible();
-    await expect(page.getByRole('button', { name: '开始发起', exact: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '发起考核', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '预约发起', exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });

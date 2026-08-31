@@ -56,17 +56,17 @@ watch(
         data-testid="cycle-monthly-review-switch"
         :model-value="scoringFrequency === 'monthly'"
         :disabled="!canChooseFrequency"
-        active-text="每月复盘并评分"
+        active-text="月度复盘评分"
         @change="handleMonthlyReviewChange"
       />
       <el-tooltip
-        content="开启后，每月由员工填写复盘并由主管评分；关闭后，仅在周期结束时统一评分。最终结果仍按整个绩效周期审核。"
+        content="开启后，每月由员工填写复盘并由主管评分；关闭后，仅在周期结束时统一评分。最终结果仍按整个考核周期审核。"
         placement="top"
       >
         <el-icon
           data-testid="cycle-review-settings-help"
           class="cycle-scoring-settings__help"
-          aria-label="查看每月复盘并评分说明"
+          aria-label="查看月度复盘评分说明"
           tabindex="0"
         ><QuestionFilled /></el-icon>
       </el-tooltip>

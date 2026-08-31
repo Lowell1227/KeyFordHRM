@@ -148,10 +148,10 @@ export const IMPROVEMENT_PLAN_STATUS_META: Record<ImprovementPlanStatus, { label
 // 任务状态 → 中文标签 + Element Tag 类型（StatusBadge 用）
 export const TASK_STATUS_META: Record<TaskStatus, { label: string; type: string }> = {
   pending: { label: '待开始', type: 'info' },
-  indicator_drafting: { label: '指标填写中', type: 'warning' },
-  indicator_reviewing: { label: '待主管审核指标', type: 'warning' },
-  indicator_setting: { label: '指标制定中', type: 'warning' },
-  indicator_confirming: { label: '待员工确认指标', type: 'warning' },
+  indicator_drafting: { label: '目标制定中', type: 'warning' },
+  indicator_reviewing: { label: '待主管目标审核', type: 'warning' },
+  indicator_setting: { label: '目标制定中', type: 'warning' },
+  indicator_confirming: { label: '待员工确认目标', type: 'warning' },
   goal_confirmed: { label: '目标已确认', type: 'success' },
   self_eval: { label: '员工自评中', type: 'primary' },
   manager_scoring: { label: '主管评分中', type: 'primary' },
@@ -167,8 +167,8 @@ export const TASK_STATUS_META: Record<TaskStatus, { label: string; type: string 
 
 // 流程节点标签（useTaskFlow 用）
 export const FLOW_NODE_LABELS: Record<FlowNodeType, string> = {
-  indicator_setting: '指标制定',
-  indicator_confirm: '指标确认',
+  indicator_setting: '目标制定',
+  indicator_confirm: '目标确认',
   self_eval: '员工自评',
   manager_score: '主管评分',
   dept_review: '部门审核',
@@ -203,7 +203,7 @@ export const SIGNATURE_METHOD_LABELS: Record<SignatureMethod, string> = {
 // 试用期考核状态标签
 export const PROBATION_STATUS_META: Record<ProbationReviewStatus, { label: string; type: string }> = {
   pending: { label: '待开始', type: 'info' },
-  indicator_setting: { label: '指标制定中', type: 'warning' },
+  indicator_setting: { label: '目标制定中', type: 'warning' },
   self_eval: { label: '员工自评中', type: 'primary' },
   manager_scoring: { label: '主管评分中', type: 'primary' },
   closed: { label: '已结束', type: 'success' },

@@ -191,7 +191,7 @@ const filteredTeamRoster = computed(() => {
   });
 });
 const teamStageTabs: Array<{ key: TeamTaskStage; label: string }> = [
-  { key: 'goal-review', label: '指标审核' },
+  { key: 'goal-review', label: '目标审核' },
   { key: 'manager-eval', label: '主管评分' },
 ];
 const teamCountTabs = computed<Array<{
@@ -799,7 +799,7 @@ async function executeTeamRejection(
 
 async function approveTeamTasks(tasks: TeamTaskVersion[]) {
   try {
-    await ElMessageBox.confirm(`确认通过选中的 ${tasks.length} 项指标审核？`, '批量通过', {
+    await ElMessageBox.confirm(`确认通过选中的 ${tasks.length} 项目标审核？`, '批量通过', {
       confirmButtonText: '通过',
       cancelButtonText: '取消',
       type: 'warning',
@@ -1274,7 +1274,7 @@ watch(
       <header class="team-workspace__header">
         <div>
           <span>绩效环节</span>
-          <h2>{{ workspaceQuery.state.value.stage === 'goal-review' ? '指标审核' : '主管评分' }}</h2>
+          <h2>{{ workspaceQuery.state.value.stage === 'goal-review' ? '目标审核' : '主管评分' }}</h2>
         </div>
         <span>待办人：直属员工</span>
       </header>

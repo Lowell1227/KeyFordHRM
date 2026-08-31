@@ -40,7 +40,7 @@ const CYCLE_STATUS_OPTIONS: { label: string; value: CycleStatus }[] = [
   { label: '草稿', value: 'draft' },
   { label: '待发起', value: 'scheduled' },
   { label: '发起受阻', value: 'launch_blocked' },
-  { label: '指标制定中', value: 'indicator_setting' },
+  { label: '目标制定中', value: 'indicator_setting' },
   { label: '员工自评中', value: 'self_eval' },
   { label: '主管评分中', value: 'manager_score' },
   { label: 'HR校准中', value: 'hr_calibration' },
@@ -86,7 +86,7 @@ const STATUS_LABEL: Record<CycleStatus, string> = {
   draft: '草稿',
   scheduled: '待发起',
   launch_blocked: '发起受阻',
-  indicator_setting: '指标制定中',
+  indicator_setting: '目标制定中',
   self_eval: '员工自评中',
   manager_score: '主管评分中',
   hr_calibration: 'HR校准中',
@@ -97,8 +97,8 @@ const STATUS_LABEL: Record<CycleStatus, string> = {
 };
 
 const DEADLINE_FIELDS = [
-  { key: 'deadlineIndicatorSetting', label: '指标制定截止' },
-  { key: 'deadlineIndicatorConfirm', label: '指标确认截止' },
+  { key: 'deadlineIndicatorSetting', label: '目标制定截止' },
+  { key: 'deadlineIndicatorConfirm', label: '目标确认截止' },
   { key: 'deadlineSelfEval', label: '员工自评截止' },
   { key: 'deadlineManagerScore', label: '主管评分截止' },
   { key: 'deadlineHrCalibration', label: 'HR校准截止' },
@@ -110,8 +110,8 @@ type DeadlineKey = (typeof DEADLINE_FIELDS)[number]['key'];
 
 const CREATE_SCHEDULE_NODES = [
   { number: '01', key: 'goalSettingOpenAt', label: '目标制定开放', helper: '周期开始前第 10 个工作日 · 09:00', stage: 'preparation' },
-  { number: '02', key: 'deadlineIndicatorSetting', label: '指标制定截止', helper: '周期开始前第 3 个工作日 · 18:00', stage: 'preparation' },
-  { number: '03', key: 'deadlineIndicatorConfirm', label: '指标确认截止', helper: '周期开始前第 1 个工作日 · 18:00', stage: 'preparation' },
+  { number: '02', key: 'deadlineIndicatorSetting', label: '目标制定截止', helper: '周期开始前第 3 个工作日 · 18:00', stage: 'preparation' },
+  { number: '03', key: 'deadlineIndicatorConfirm', label: '目标确认截止', helper: '周期开始前第 1 个工作日 · 18:00', stage: 'preparation' },
   { number: '04', key: 'selfEvalOpenAt', label: '员工自评开放', helper: '周期结束后的第 1 个工作日 · 09:00', stage: 'result' },
   { number: '05', key: 'deadlineSelfEval', label: '员工自评截止', helper: '开放日起第 3 个工作日 · 18:00', stage: 'result' },
   { number: '06', key: 'deadlineManagerScore', label: '主管评分截止', helper: '自评截止后第 3 个工作日 · 18:00', stage: 'result' },
@@ -265,7 +265,7 @@ const emptyStateDescription = computed(() => {
   if (hasListFilters.value) return '没有符合筛选条件的周期';
   if (statusGroup.value === 'active') return '暂无进行中的周期';
   if (statusGroup.value === 'finished') return '暂无已结束周期';
-  if (statusGroup.value === 'all') return '暂无绩效周期';
+  if (statusGroup.value === 'all') return '暂无考核周期';
   return '暂无待发起周期';
 });
 const gradeRatioSummary = computed(() => (
@@ -1203,7 +1203,7 @@ async function handleCreate(openWorkspace = false) {
   if (reviewResetRequired.value) {
     try {
       await ElMessageBox.confirm(
-        '本次修改会使已审核的周期计划重新进入待审核状态，由 HR 管理员审核。确认提交吗？',
+        '本次修改会使已审核的考核周期重新进入待审核状态，由 HR 管理员审核。确认提交吗？',
         '重新提交周期审核？',
         {
           confirmButtonText: '确认提交',
@@ -1227,7 +1227,7 @@ async function handleCreate(openWorkspace = false) {
         ...buildCreateBody(),
         expectedPlanVersion: editingPlanVersion.value,
       });
-      ElMessage.success(reviewResetRequired.value ? '周期计划已提交审核' : '周期已保存');
+      ElMessage.success(reviewResetRequired.value ? '考核周期已提交审核' : '考核周期已保存');
       createDialogVisible.value = false;
       resetCreateForm();
       if (cycleDetail.value?.id === updated.id) cycleDetail.value = updated;
@@ -1237,7 +1237,7 @@ async function handleCreate(openWorkspace = false) {
       }
     } else {
       const created = await cyclesApi.create(buildCreateBody());
-      ElMessage.success(openWorkspace ? '周期计划已提交审核' : '周期草稿已保存');
+      ElMessage.success(openWorkspace ? '考核周期已提交审核' : '考核周期草稿已保存');
       createDialogVisible.value = false;
       resetCreateForm();
       await loadCycles();
@@ -1656,7 +1656,7 @@ async function handleStatusFilterChange(status: CycleStatus | '') {
 async function handleReviewCycle(cycle: AssessmentCycle) {
   const scoringSummary = cycle.workflowVersion === 2
     ? cycle.scoringFrequency === 'monthly'
-      ? `每月复盘并评分，共 ${cycle.periodSchedules?.length ?? 0} 期`
+      ? `月度复盘评分，共 ${cycle.periodSchedules?.length ?? 0} 期`
       : '周期结束统一评分，共 1 期'
     : '历史流程';
   const reviewSummary = cycle.workflowVersion === 2
@@ -1665,14 +1665,14 @@ async function handleReviewCycle(cycle: AssessmentCycle) {
   try {
     await ElMessageBox.confirm(
       `确认审核通过「${cycle.name}」？${scoringSummary}。${reviewSummary}通过后创建人可执行发起检查。`,
-      '审核周期计划',
+      '审核考核周期',
       { confirmButtonText: '审核通过', cancelButtonText: '取消', type: 'warning' },
     );
     const updated = await cyclesApi.review(cycle.id, 'approve', cycle.planVersion);
     const index = cycles.value.findIndex((item) => item.id === updated.id);
     if (index >= 0) cycles.value[index] = updated;
     if (cycleDetail.value?.id === updated.id) cycleDetail.value = updated;
-    ElMessage.success('周期计划已审核通过');
+    ElMessage.success('考核周期已审核通过');
     await loadCycles();
     if (isCycleWorkspace.value) await loadCycleDetail(cycle.id);
   } catch {
@@ -1819,7 +1819,7 @@ onMounted(() => {
             type="primary"
             @click="openCreateDialog"
           >
-            创建绩效周期
+            新建考核周期
           </el-button>
           <el-button v-else-if="hasListFilters" @click="handleReset">清空筛选</el-button>
         </EmptyState>
@@ -1844,7 +1844,7 @@ onMounted(() => {
       v-model="createDialogVisible"
       class="cycle-create-dialog"
       data-testid="cycle-create-dialog"
-      :title="isEditMode ? '编辑绩效周期' : '创建绩效周期'"
+      :title="isEditMode ? '编辑考核周期' : '新建考核周期'"
       width="760px"
       destroy-on-close
       :before-close="handleCreateBeforeClose"

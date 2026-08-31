@@ -42,7 +42,7 @@ const STATUS_LABEL: Record<CycleStatus, string> = {
   draft: '草稿',
   scheduled: '待发起',
   launch_blocked: '发起受阻',
-  indicator_setting: '指标制定中',
+  indicator_setting: '目标制定中',
   self_eval: '员工自评中',
   manager_score: '主管评分中',
   hr_calibration: 'HR校准中',
@@ -81,7 +81,7 @@ function notificationLabel(cycle: AssessmentCycle): string {
 function scoringSummary(cycle: AssessmentCycle): string {
   if (cycle.workflowVersion !== 2) return '历史流程';
   return cycle.scoringFrequency === 'monthly'
-    ? `每月复盘并评分 · ${cycle.periodSchedules?.length ?? 0}期`
+    ? `月度复盘评分 · ${cycle.periodSchedules?.length ?? 0}期`
     : '周期结束统一评分';
 }
 
