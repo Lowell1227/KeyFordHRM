@@ -577,17 +577,63 @@ test('edits the whole employee archive in place and supports contract row change
 
   const drawer = page.getByRole('dialog', { name: '员工档案' });
   await expect(drawer).toBeVisible();
-  await expect(drawer).toContainText('当前任职');
+  const basicLabels = [
+    '姓名', '工号', '所属公司', '所属部门', '岗位', '职级', '职系', '花名册直属主管', '绩效直属上级',
+    '工作地点', '用工类型', '当前状态', '入职日期', '试用期（月）', '预计转正日期', '实际转正日期', '离职日期',
+  ];
+  const personalLabels = [
+    '手机号', '性别', '出生日期', '民族', '学历', '职称', '毕业院校', '毕业日期', '专业',
+    '婚姻状况', '子女状况', '子女数量', '政治面貌', '籍贯', '户籍类型',
+  ];
+  const contactLabels = [
+    '身份证地址', '身份证号', '现住址', '紧急联系人', '与联系人关系', '紧急联系电话', '社保状态',
+    '社保起始日期', '公积金状态', '公积金起始日期', '开户行', '开户支行', '银行卡号',
+  ];
+  const contractLabels = [
+    '类型', '合同名称', '签约公司', '签订日期', '生效日期', '到期日期', '期限',
+    '原公司', '新公司', '保密协议', '竞业协议', '肖像协议',
+  ];
+  const readonlySection = (heading: string) => drawer.locator('.employee-archive__section').filter({
+    has: page.getByRole('heading', { name: heading, exact: true }),
+  });
+  const basicSection = readonlySection('基本与任职');
+  const personalSection = readonlySection('个人与教育');
+  const contactSection = readonlySection('联系与保障');
+  await expect(basicSection).toHaveCount(1);
+  await expect(personalSection).toHaveCount(1);
+  await expect(contactSection).toHaveCount(1);
+  expect(await basicSection.locator('.employee-archive__facts > div > span').allTextContents()).toEqual(basicLabels);
+  expect(await personalSection.locator('.employee-archive__facts > div > span').allTextContents()).toEqual(personalLabels);
+  expect(await contactSection.locator('.employee-archive__facts > div > span').allTextContents()).toEqual(contactLabels);
+  expect(await basicSection.locator('.employee-archive__facts').evaluate((element) => (
+    window.getComputedStyle(element).gridTemplateColumns.split(' ').length
+  ))).toBe(3);
+  const readonlyContract = readonlySection('合同记录').locator('.employee-archive__contract-card').first();
+  await expect(readonlyContract).toBeVisible();
+  expect(await readonlyContract.locator('.employee-archive__facts > div > span').allTextContents()).toEqual(contractLabels);
   await expect(drawer.locator('.employee-archive__facts > div').filter({ hasText: '所属公司' }).first()).toContainText('凡思堡');
   await expect(drawer).toContainText('任职历史');
   await expect(drawer).toContainText('劳动合同');
   await expect(drawer).toContainText('仅影响钉钉登录和消息通知，不读取或同步钉钉组织');
   await expect(drawer.getByRole('switch')).toBeChecked();
 
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await basicSection.locator('.employee-archive__facts').evaluate((element) => (
+    window.getComputedStyle(element).gridTemplateColumns.split(' ').length
+  ))).toBe(1);
+  await page.setViewportSize({ width: 1280, height: 720 });
+
   await drawer.getByRole('button', { name: '编辑档案' }).click();
   await expect(page.getByRole('dialog', { name: '编辑员工档案' })).toHaveCount(0);
+  const editorSection = (heading: string) => drawer.locator('.editor-section').filter({
+    has: page.getByRole('heading', { name: heading, exact: true }),
+  });
+  expect(await editorSection('基本与任职').locator('.el-form-item__label').allTextContents()).toEqual(basicLabels);
+  expect(await editorSection('个人与教育').locator('.el-form-item__label').allTextContents()).toEqual(personalLabels);
+  expect(await editorSection('联系与保障').locator('.el-form-item__label').allTextContents()).toEqual(contactLabels);
   await expect(drawer.getByRole('textbox', { name: '姓名' })).toHaveValue('余焱玲');
   const firstContract = drawer.locator('.contract-card').first();
+  expect(await firstContract.locator('.el-form-item__label').allTextContents()).toEqual(contractLabels);
   await firstContract.getByRole('textbox', { name: '合同名称' }).fill('劳动合同（修订）');
   await firstContract.locator('input[type="file"]').nth(0).setInputFiles({
     name: '合同.jpg', mimeType: 'image/jpeg', buffer: Buffer.from('image'),

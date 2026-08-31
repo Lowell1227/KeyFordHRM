@@ -74,6 +74,13 @@ const contractTypeLabels: Record<string, string> = {
   transfer: '转签',
 };
 
+const employmentTypeLabels: Record<string, string> = {
+  full_time: '全职',
+  part_time: '兼职',
+  rehire: '返聘',
+  external: '外部',
+};
+
 const activeView = ref<'org' | 'users'>('org');
 const isSystemAdmin = computed(() => auth.user?.sysRole === 'system_admin');
 const canResetPassword = computed(() => ['hr', 'system_admin'].includes(auth.user?.sysRole ?? ''));
@@ -512,9 +519,18 @@ const employeeArchiveDrawer = ref({
   dingtalkSaving: false,
   data: null as EmployeeArchive | null,
 });
+const archiveCurrentEmployment = computed(() => (
+  employeeArchiveDrawer.value.data?.currentEmployment
+  ?? employeeArchiveDrawer.value.data?.employmentHistory[0]
+  ?? null
+));
 const archiveEditing = ref(false);
 const archiveEditSaving = ref(false);
 const archiveEditorRef = ref<InstanceType<typeof EmployeeArchiveInlineEditor> | null>(null);
+
+function archiveDisplayValue(value: unknown, emptyText = '未填写') {
+  return value === null || value === undefined || value === '' ? emptyText : String(value);
+}
 
 async function openEmployeeArchive(row: ManagedUser) {
   employeeArchiveDrawer.value.visible = true;
@@ -1481,46 +1497,87 @@ onBeforeUnmount(() => {
             @submit="submitArchiveDraft"
           />
 
-          <section v-if="!archiveEditing" class="employee-archive__section">
+          <section v-if="!archiveEditing" class="employee-archive__section employee-archive__section--card">
             <div class="section-head">
               <div>
-                <h3>当前任职</h3>
-                <span>来自 HRM 当前有效任职记录</span>
+                <h3>基本与任职</h3>
+                <span>员工身份、当前组织和绩效关系</span>
               </div>
             </div>
             <div class="employee-archive__facts">
-              <div><span>所属公司</span><strong>{{ companyLabels[employeeArchiveDrawer.data.currentEmployment?.company || employeeArchiveDrawer.data.employmentHistory[0]?.company || ''] || '待确认' }}</strong></div>
-              <div><span>部门</span><strong>{{ employeeArchiveDrawer.data.dept?.fullPath || employeeArchiveDrawer.data.dept?.name || '未设置' }}</strong></div>
+              <div><span>姓名</span><strong>{{ employeeArchiveDrawer.data.name }}</strong></div>
+              <div><span>工号</span><strong>{{ employeeArchiveDrawer.data.employeeNo || '未填写' }}</strong></div>
+              <div><span>所属公司</span><strong>{{ companyLabels[archiveCurrentEmployment?.company || employeeArchiveDrawer.data.dept?.company || ''] || '待确认' }}</strong></div>
+              <div><span>所属部门</span><strong>{{ employeeArchiveDrawer.data.dept?.fullPath || employeeArchiveDrawer.data.dept?.name || '未设置' }}</strong></div>
               <div><span>岗位</span><strong>{{ employeeArchiveDrawer.data.position || '未设置' }}</strong></div>
+              <div><span>职级</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.jobGrade) }}</strong></div>
+              <div><span>职系</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.jobFamily) }}</strong></div>
               <div><span>花名册直属主管</span><strong>{{ employeeArchiveDrawer.data.rosterManager?.name || '未设置' }}</strong></div>
               <div><span>绩效直属上级</span><strong>{{ employeeArchiveDrawer.data.performanceManager?.name || '未设置' }}</strong></div>
-              <div><span>入职日期</span><strong>{{ formatDate(employeeArchiveDrawer.data.entryDate) }}</strong></div>
+              <div><span>工作地点</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.workLocation) }}</strong></div>
+              <div><span>用工类型</span><strong>{{ employmentTypeLabels[archiveCurrentEmployment?.employmentType || ''] || '未填写' }}</strong></div>
               <div><span>当前状态</span><strong>{{ statusLabels[employeeArchiveDrawer.data.status] }}</strong></div>
+              <div><span>入职日期</span><strong>{{ formatDate(employeeArchiveDrawer.data.entryDate) }}</strong></div>
+              <div><span>试用期（月）</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.probationMonths) }}</strong></div>
+              <div><span>预计转正日期</span><strong>{{ formatDate(archiveCurrentEmployment?.plannedRegularDate) }}</strong></div>
+              <div><span>实际转正日期</span><strong>{{ formatDate(archiveCurrentEmployment?.actualRegularDate) }}</strong></div>
+              <div><span>离职日期</span><strong>{{ formatDate(archiveCurrentEmployment?.leaveDate) }}</strong></div>
             </div>
           </section>
 
-          <section v-if="!archiveEditing" class="employee-archive__section">
+          <section v-if="!archiveEditing" class="employee-archive__section employee-archive__section--card">
             <div class="section-head">
               <div>
-                <h3>个人与教育信息</h3>
-                <span>默认仅展示普通档案字段，身份证和银行账户不在普通查询中返回</span>
+                <h3>个人与教育</h3>
+                <span>基础身份和教育经历</span>
               </div>
             </div>
             <div class="employee-archive__facts">
-              <div>
-                <span>手机号</span>
-                <strong>{{ employeeArchiveDrawer.data.employeeProfile?.phone || '未填写' }}</strong>
-              </div>
-              <div>
-                <span>性别</span>
-                <strong>{{ employeeArchiveDrawer.data.employeeProfile?.gender || '未填写' }}</strong>
-              </div>
+              <div><span>手机号</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.phone || '未填写' }}</strong></div>
+              <div><span>性别</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.gender || '未填写' }}</strong></div>
               <div><span>出生日期</span><strong>{{ formatDate(employeeArchiveDrawer.data.employeeProfile?.birthDate) }}</strong></div>
               <div><span>民族</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.ethnicity || '未填写' }}</strong></div>
               <div><span>学历</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.education || '未填写' }}</strong></div>
-              <div><span>毕业院校</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.school || '未填写' }}</strong></div>
-              <div><span>专业</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.major || '未填写' }}</strong></div>
               <div><span>职称</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.professionalTitle || '未填写' }}</strong></div>
+              <div><span>毕业院校</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.school || '未填写' }}</strong></div>
+              <div><span>毕业日期</span><strong>{{ formatDate(employeeArchiveDrawer.data.employeeProfile?.graduationDate) }}</strong></div>
+              <div><span>专业</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.major || '未填写' }}</strong></div>
+              <div><span>婚姻状况</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.maritalStatus || '未填写' }}</strong></div>
+              <div><span>子女状况</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.childrenStatus || '未填写' }}</strong></div>
+              <div><span>子女数量</span><strong>{{ archiveDisplayValue(employeeArchiveDrawer.data.employeeProfile?.childrenCount) }}</strong></div>
+              <div><span>政治面貌</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.politicalStatus || '未填写' }}</strong></div>
+              <div><span>籍贯</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.nativePlace || '未填写' }}</strong></div>
+              <div><span>户籍类型</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.householdType || '未填写' }}</strong></div>
+            </div>
+          </section>
+
+          <section v-if="!archiveEditing" class="employee-archive__section employee-archive__section--card">
+            <div class="section-head">
+              <div>
+                <h3>联系与保障</h3>
+                <span>敏感号码仅显示保存状态，不返回具体内容</span>
+              </div>
+            </div>
+            <div class="employee-archive__facts">
+              <div class="span-2"><span>身份证地址</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.idAddress || '未填写' }}</strong></div>
+              <div>
+                <span>{{ employeeArchiveDrawer.data.employeeProfile?.idNumberConfigured ? '身份证号（已保存，留空不变）' : '身份证号' }}</span>
+                <strong>{{ employeeArchiveDrawer.data.employeeProfile?.idNumberConfigured ? '已保存' : '未填写' }}</strong>
+              </div>
+              <div class="span-2"><span>现住址</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.currentAddress || '未填写' }}</strong></div>
+              <div><span>紧急联系人</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.emergencyContactName || '未填写' }}</strong></div>
+              <div><span>与联系人关系</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.emergencyContactRelation || '未填写' }}</strong></div>
+              <div><span>紧急联系电话</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.emergencyContactPhone || '未填写' }}</strong></div>
+              <div><span>社保状态</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.socialSecurityStatus || '未填写' }}</strong></div>
+              <div><span>社保起始日期</span><strong>{{ formatDate(employeeArchiveDrawer.data.employeeProfile?.socialSecurityStartDate) }}</strong></div>
+              <div><span>公积金状态</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.housingFundStatus || '未填写' }}</strong></div>
+              <div><span>公积金起始日期</span><strong>{{ formatDate(employeeArchiveDrawer.data.employeeProfile?.housingFundStartDate) }}</strong></div>
+              <div><span>开户行</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.bankName || '未填写' }}</strong></div>
+              <div><span>开户支行</span><strong>{{ employeeArchiveDrawer.data.employeeProfile?.bankBranch || '未填写' }}</strong></div>
+              <div>
+                <span>{{ employeeArchiveDrawer.data.employeeProfile?.bankAccountConfigured ? '银行卡号（已保存，留空不变）' : '银行卡号' }}</span>
+                <strong>{{ employeeArchiveDrawer.data.employeeProfile?.bankAccountConfigured ? '已保存' : '未填写' }}</strong>
+              </div>
             </div>
           </section>
 
@@ -1575,41 +1632,57 @@ onBeforeUnmount(() => {
             </el-table>
           </section>
 
-          <section v-if="!archiveEditing" class="employee-archive__section">
+          <section v-if="!archiveEditing" class="employee-archive__section employee-archive__section--card">
             <div class="section-head">
               <div>
                 <h3>合同记录</h3>
                 <span>有效合同与历史合同均保留，花名册移除只停用、不删除</span>
               </div>
             </div>
-            <el-table v-if="employeeArchiveDrawer.data.employeeContracts.length" :data="employeeArchiveDrawer.data.employeeContracts" size="small" class="app-table">
-              <el-table-column label="类型" width="100">
-                <template #default="{ row }">{{ contractTypeLabels[row.contractType] || row.contractType }}</template>
-              </el-table-column>
-              <el-table-column prop="name" label="合同名称" min-width="150" />
-              <el-table-column label="签订日期" width="120">
-                <template #default="{ row }">{{ formatDate(row.signedAt) }}</template>
-              </el-table-column>
-              <el-table-column label="到期日期" width="120">
-                <template #default="{ row }">{{ formatDate(row.expiresAt) }}</template>
-              </el-table-column>
-              <el-table-column label="合同材料" min-width="180">
-                <template #default="{ row }">
+            <template v-if="employeeArchiveDrawer.data.employeeContracts.length">
+            <div
+              v-for="(contract, index) in employeeArchiveDrawer.data.employeeContracts"
+              :key="contract.id"
+              class="employee-archive__contract-card"
+            >
+              <div class="employee-archive__contract-head">
+                <strong>合同 {{ index + 1 }}</strong>
+                <el-tag :type="contract.isActive === false ? 'info' : 'success'" size="small">
+                  {{ contract.isActive === false ? '历史' : '有效' }}
+                </el-tag>
+              </div>
+              <div class="employee-archive__facts">
+                <div><span>类型</span><strong>{{ contractTypeLabels[contract.contractType] || contract.contractType || '未填写' }}</strong></div>
+                <div><span>合同名称</span><strong>{{ contract.name || '未填写' }}</strong></div>
+                <div><span>签约公司</span><strong>{{ contract.signingCompany || '未填写' }}</strong></div>
+                <div><span>签订日期</span><strong>{{ formatDate(contract.signedAt) }}</strong></div>
+                <div><span>生效日期</span><strong>{{ formatDate(contract.effectiveFrom) }}</strong></div>
+                <div><span>到期日期</span><strong>{{ formatDate(contract.expiresAt) }}</strong></div>
+                <div><span>期限</span><strong>{{ contract.termType || '未填写' }}</strong></div>
+                <div><span>原公司</span><strong>{{ contract.originalCompany || '未填写' }}</strong></div>
+                <div><span>新公司</span><strong>{{ contract.newCompany || '未填写' }}</strong></div>
+                <div><span>保密协议</span><strong>{{ contract.confidentialityAgreement || '未填写' }}</strong></div>
+                <div><span>竞业协议</span><strong>{{ contract.nonCompeteAgreement || '未填写' }}</strong></div>
+                <div><span>肖像协议</span><strong>{{ contract.portraitAgreement || '未填写' }}</strong></div>
+              </div>
+              <div class="employee-archive__contract-materials">
+                <div>
+                  <strong>合同图片</strong>
                   <div class="contract-material-links">
-                    <span v-if="!(row.images?.length || row.attachments?.length)">无材料</span>
-                    <el-button v-for="item in row.images ?? []" :key="item.url" link type="primary" @click="openContractMaterial(item)">图片：{{ item.name }}</el-button>
-                    <el-button v-for="item in row.attachments ?? []" :key="item.url" link type="primary" @click="openContractMaterial(item)">附件：{{ item.name }}</el-button>
+                    <span v-if="!contract.images?.length">无图片</span>
+                    <el-button v-for="item in contract.images ?? []" :key="item.url" link type="primary" @click="openContractMaterial(item)">{{ item.name }}</el-button>
                   </div>
-                </template>
-              </el-table-column>
-              <el-table-column label="状态" width="90">
-                <template #default="{ row }">
-                  <el-tag :type="row.isActive === false ? 'info' : 'success'" size="small">
-                    {{ row.isActive === false ? '历史' : '有效' }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-            </el-table>
+                </div>
+                <div>
+                  <strong>合同附件</strong>
+                  <div class="contract-material-links">
+                    <span v-if="!contract.attachments?.length">无附件</span>
+                    <el-button v-for="item in contract.attachments ?? []" :key="item.url" link type="primary" @click="openContractMaterial(item)">{{ item.name }}</el-button>
+                  </div>
+                </div>
+              </div>
+            </div>
+            </template>
             <el-empty v-else description="暂无合同记录" :image-size="64" />
           </section>
         </template>
@@ -2061,14 +2134,22 @@ onBeforeUnmount(() => {
   border-bottom: 0;
 }
 
+.employee-archive__section.employee-archive__section--card {
+  padding: 18px;
+  margin-top: 18px;
+  border: 1px solid #e5eaf2;
+  border-radius: 14px;
+  background: #fff;
+}
+
 .employee-archive__section .section-head {
   margin-bottom: 14px;
 }
 
 .employee-archive__facts {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px 18px;
 }
 
 .employee-archive__facts > div {
@@ -2093,6 +2174,42 @@ onBeforeUnmount(() => {
   margin-top: 5px;
   overflow-wrap: anywhere;
   color: #2d3850;
+}
+
+.employee-archive__facts .span-2 {
+  grid-column: span 2;
+}
+
+.employee-archive__contract-card {
+  padding: 16px;
+  margin-top: 14px;
+  border: 1px solid #dfe5ee;
+  border-radius: 12px;
+  background: #f8fafc;
+}
+
+.employee-archive__contract-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-bottom: 14px;
+}
+
+.employee-archive__contract-materials {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.employee-archive__contract-materials > div {
+  display: grid;
+  gap: 10px;
+  padding: 14px;
+  border: 1px dashed #cfd7e6;
+  border-radius: 10px;
+  background: #fff;
 }
 
 .employee-archive__identity {
@@ -3148,6 +3265,18 @@ onBeforeUnmount(() => {
   }
 
   .employee-archive__facts {
+    grid-template-columns: 1fr;
+  }
+
+  .employee-archive__facts .span-2 {
+    grid-column: auto;
+  }
+
+  .employee-archive__section.employee-archive__section--card {
+    padding: 14px;
+  }
+
+  .employee-archive__contract-materials {
     grid-template-columns: 1fr;
   }
 
