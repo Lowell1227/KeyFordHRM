@@ -65,7 +65,7 @@ const teamDetailError = ref('');
 const teamBatchRequestBusy = ref(false);
 const teamSingleRequestBusy = ref(false);
 const teamBatchBusy = computed(() => teamBatchRequestBusy.value || teamSingleRequestBusy.value);
-const teamStagePendingCounts = ref<Record<TeamTaskStage, number | undefined>>({
+const teamStageCounts = ref<Record<TeamTaskStage, TeamTaskPage['counts'] | undefined>>({
   'goal-review': undefined,
   'manager-eval': undefined,
 });
@@ -222,6 +222,7 @@ const selectedStageLabel = computed(() => {
 function stageState(stage: MappedTaskStageKey): TaskStageState {
   if (list.value.length === 0) return 'not-started';
   const states = list.value.map((task) => getTaskStageStateForStatus(task.status, stage));
+  if (states.every((state) => state === 'exempted')) return 'exempted';
   if (states.includes('pending')) return 'pending';
   if (states.includes('progress')) return 'progress';
   if (states.every((state) => state === 'completed')) return 'completed';
@@ -234,6 +235,7 @@ function stageStateLabel(state: TaskStageState): string {
     progress: '处理中',
     completed: '已完成',
     'not-started': '未开始',
+    exempted: '已豁免',
   };
   return labels[state];
 }
@@ -484,9 +486,9 @@ async function loadTeam(options: LoadTeamOptions = {}) {
     });
     if (requestId !== teamRequestSerial) return;
     teamPage.value = withRosterFacets(response);
-    teamStagePendingCounts.value = {
-      ...teamStagePendingCounts.value,
-      [state.stage]: response.counts.pending,
+    teamStageCounts.value = {
+      ...teamStageCounts.value,
+      [state.stage]: response.counts,
     };
     if (response.page !== requestedPage) {
       await teamListRef.value?.clearSelection();
@@ -515,7 +517,7 @@ async function loadTeam(options: LoadTeamOptions = {}) {
 async function loadTeamStageSummaries() {
   if (!isManagerCapable.value) return;
   if (!selectedCycleId.value) {
-    teamStagePendingCounts.value = { 'goal-review': undefined, 'manager-eval': undefined };
+    teamStageCounts.value = { 'goal-review': undefined, 'manager-eval': undefined };
     return;
   }
   const requestId = ++teamStageSummaryRequestSerial;
@@ -534,23 +536,33 @@ async function loadTeamStageSummaries() {
     })),
   );
   if (requestId !== teamStageSummaryRequestSerial) return;
-  const next: Record<TeamTaskStage, number | undefined> = {
+  const next: Record<TeamTaskStage, TeamTaskPage['counts'] | undefined> = {
     'goal-review': undefined,
     'manager-eval': undefined,
   };
   results.forEach((result, index) => {
     const stage = teamStageTabs[index];
     if (stage && result.status === 'fulfilled') {
-      next[stage.key] = result.value.counts.pending;
+      next[stage.key] = result.value.counts;
     }
   });
-  teamStagePendingCounts.value = next;
+  teamStageCounts.value = next;
 }
 
-function teamStageSummaryLabel(stage: TeamTaskStage): string {
-  const pending = teamStagePendingCounts.value[stage];
-  if (pending === undefined) return '-';
-  return pending > 0 ? `待处理 ${pending}` : '已完成';
+type TeamStageSummaryTone = 'unknown' | 'not-started' | 'pending' | 'completed' | 'exempted' | 'mixed';
+
+function teamStageSummary(stage: TeamTaskStage): { label: string; tone: TeamStageSummaryTone } {
+  const counts = teamStageCounts.value[stage];
+  if (!counts) return { label: '-', tone: 'unknown' };
+  if (counts.all === 0) return { label: '暂无任务', tone: 'not-started' };
+  if (counts.pending > 0) return { label: `待处理 ${counts.pending}`, tone: 'pending' };
+  if (counts.exempted === counts.all) return { label: '已豁免', tone: 'exempted' };
+  if (counts.notStarted > 0) return { label: `未开始 ${counts.notStarted}`, tone: 'not-started' };
+  if (counts.completed === counts.all) return { label: '已完成', tone: 'completed' };
+  if (counts.completed + counts.exempted === counts.all) {
+    return { label: `完成 ${counts.completed} · 豁免 ${counts.exempted}`, tone: 'mixed' };
+  }
+  return { label: '处理中', tone: 'mixed' };
 }
 
 async function fetchAllMine(
@@ -1113,9 +1125,9 @@ watch(
                 <span>{{ stage.label }}</span>
                 <span
                   class="task-stage-item__state"
-                  :class="{ 'is-pending': (teamStagePendingCounts[stage.key] ?? 0) > 0 }"
+                  :class="`is-${teamStageSummary(stage.key).tone}`"
                 >
-                  {{ teamStageSummaryLabel(stage.key) }}
+                  {{ teamStageSummary(stage.key).label }}
                 </span>
               </button>
             </div>
@@ -1513,6 +1525,11 @@ watch(
 }
 
 .task-stage-item__state.is-progress {
+  color: #155cc3;
+  background: #e6f2ff;
+}
+
+.task-stage-item__state.is-mixed {
   color: #155cc3;
   background: #e6f2ff;
 }

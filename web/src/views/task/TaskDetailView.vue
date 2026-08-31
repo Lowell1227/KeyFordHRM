@@ -148,6 +148,7 @@ const performanceStageStateLabel = computed(() => {
     progress: '处理中',
     completed: '已完成',
     'not-started': '未开始',
+    exempted: '已豁免',
   }[performanceStageState.value];
 });
 const isCurrentPerformanceStage = computed(() =>

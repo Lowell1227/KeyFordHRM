@@ -396,6 +396,10 @@ test.describe('cycle-first task contracts', () => {
     await expect(page).toHaveURL(/cycleId=cycle-exempt/);
     await expect.poll(() => taskRequests.at(-1)?.searchParams.get('cycleId')).toBe('cycle-exempt');
     await expect(page.locator('.personal-task-card__state')).toHaveText('已豁免');
+    await expect(page.getByTestId('task-stage-goal-setting').locator('.task-stage-item__state')).toHaveText('已豁免');
+    await expect(page.getByTestId('task-stage-goal-confirmation').locator('.task-stage-item__state')).toHaveText('已豁免');
+    await expect(page.getByTestId('task-stage-self-eval').locator('.task-stage-item__state')).toHaveText('已豁免');
+    await expect(page.getByTestId('task-stage-result').locator('.task-stage-item__state')).toHaveText('已豁免');
   });
 
   test('shows an exempt task as exempted in goal setting list and detail', async ({ page }) => {

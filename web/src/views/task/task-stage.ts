@@ -1,7 +1,7 @@
 import type { TaskStatus } from '@/types/enums';
 
 export type TaskStageKey = 'goal-setting' | 'goal-confirmation' | 'self-eval' | 'result';
-export type TaskStageState = 'pending' | 'progress' | 'completed' | 'not-started';
+export type TaskStageState = 'pending' | 'progress' | 'completed' | 'not-started' | 'exempted';
 
 export const TASK_STAGE_ORDER: TaskStageKey[] = [
   'goal-setting',
@@ -46,12 +46,14 @@ export function getTaskStageState(statuses: TaskStatus[]): TaskStageState {
   if (statuses.length === 0 || statuses.every((status) => status === 'pending')) {
     return 'not-started';
   }
+  if (statuses.every((status) => status === 'exempted')) return 'exempted';
   if (statuses.every((status) => isTerminalTaskStatus(status) || status === 'goal_confirmed')) return 'completed';
   if (statuses.some((status) => actionableStatuses.has(status))) return 'pending';
   return 'progress';
 }
 
 export function getTaskStageStateForStatus(status: TaskStatus, stage: TaskStageKey): TaskStageState {
+  if (status === 'exempted') return 'exempted';
   const currentStage = TASK_STATUS_STAGE[status];
   const currentIndex = TASK_STAGE_ORDER.indexOf(currentStage);
   const stageIndex = TASK_STAGE_ORDER.indexOf(stage);

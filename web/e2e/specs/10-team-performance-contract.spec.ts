@@ -674,6 +674,40 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('team-task-list')).toBeVisible();
   });
 
+  test('team stage summaries distinguish exempted work and style completed work as completed', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    await page.route('**/api/v1/tasks/team**', (route) => {
+      const stage = new URL(route.request().url()).searchParams.get('stage');
+      const allExempted = stage === 'goal-review';
+      const item = {
+        ...teamPageFixture.items[0],
+        status: allExempted ? 'exempted' as const : 'dept_review' as const,
+        stageState: allExempted ? 'exempted' as const : 'completed' as const,
+      };
+      const response: TeamTaskPage = {
+        ...teamPageFixture,
+        total: 5,
+        items: [item],
+        counts: allExempted
+          ? { all: 5, notStarted: 0, pending: 0, completed: 0, exempted: 5 }
+          : { all: 5, notStarted: 0, pending: 0, completed: 5, exempted: 0 },
+      };
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(response)),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1');
+
+    const exempted = page.getByTestId('manager-team-stage-goal-review').locator('.task-stage-item__state');
+    const completed = page.getByTestId('manager-team-stage-manager-eval').locator('.task-stage-item__state');
+    await expect(exempted).toHaveText('已豁免');
+    await expect(exempted).toHaveClass(/is-exempted/);
+    await expect(completed).toHaveText('已完成');
+    await expect(completed).toHaveClass(/is-completed/);
+  });
+
   test('full-page manager workspace keeps the reference shell compact and low-chrome', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await mockGoalReviewWorkspace(page);
