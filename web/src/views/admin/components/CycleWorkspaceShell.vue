@@ -425,7 +425,12 @@ watch(() => props.cycle?.id, () => {
                 style="width: 260px"
               />
             </div>
-            <el-table :data="filteredParticipantRows" size="small" max-height="360" empty-text="没有符合条件的人员">
+            <el-table
+              v-if="filteredParticipantRows.length"
+              :data="filteredParticipantRows"
+              size="small"
+              max-height="360"
+            >
               <el-table-column prop="employeeName" label="员工" min-width="100" />
               <el-table-column prop="deptName" label="部门" min-width="130" />
               <el-table-column prop="managerName" label="直属主管" min-width="110" />
@@ -440,6 +445,14 @@ watch(() => props.cycle?.id, () => {
                 <template #default="{ row }">{{ participantReason(row as ParticipantRow) }}</template>
               </el-table-column>
             </el-table>
+            <div
+              v-else
+              class="cycle-participant-empty"
+              data-testid="participant-search-empty"
+              role="status"
+            >
+              没有符合条件的人员
+            </div>
           </details>
         </section>
       </main>
@@ -768,6 +781,18 @@ watch(() => props.cycle?.id, () => {
   color: var(--el-color-primary);
   background: #fff;
   box-shadow: var(--el-box-shadow-lighter);
+}
+
+.cycle-participant-empty {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 72px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  background: var(--el-fill-color-blank);
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
 }
 
 .cycle-preflight-control-bar {

@@ -503,6 +503,52 @@ test.describe('compact cycle management list', () => {
     await expect(record).not.toContainText('陈晨');
   });
 
+  test('keeps an empty participant search result compact and stable', async ({ page }) => {
+    const launchedCycle: AssessmentCycle = {
+      ...draftCycle,
+      id: 'cycle-launched-search',
+      name: '2026 Q4 季度考核',
+      status: 'indicator_setting',
+      openedAt: '2026-08-30T02:51:22.695Z',
+      openSource: 'manual',
+    };
+    await mockCyclePage(page, [], {
+      cycles: [launchedCycle],
+      participantRecord: {
+        cycleId: launchedCycle.id,
+        recordedAt: launchedCycle.openedAt,
+        source: 'manual',
+        operator: { id: 'hr-1', name: '姚瑶' },
+        summary: { total: 2, active: 2, exempted: 0 },
+        participants: [
+          {
+            employeeId: 'employee-1', employeeName: '陈晨', deptId: 'hr-team', deptName: '人事组',
+            managerId: 'manager-1', managerName: '姚瑶', participantDisposition: 'active',
+            isExempt: false, exemptReason: null, status: 'indicator_drafting',
+          },
+          {
+            employeeId: 'employee-2', employeeName: '方园', deptId: 'hr-team', deptName: '人事组',
+            managerId: 'manager-1', managerName: '俞丹', participantDisposition: 'active',
+            isExempt: false, exemptReason: null, status: 'indicator_drafting',
+          },
+        ],
+      },
+    });
+
+    await page.goto('/cycles?cycleId=cycle-launched-search');
+    const record = page.getByTestId('cycle-participant-record');
+    await page.getByTestId('participant-search').fill('余焱');
+
+    const emptyResult = page.getByTestId('participant-search-empty');
+    await expect(emptyResult).toContainText('没有符合条件的人员');
+    await expect(record.locator('.el-table')).toHaveCount(0);
+    const firstHeight = await emptyResult.evaluate((element) => element.getBoundingClientRect().height);
+    await page.waitForTimeout(250);
+    const laterHeight = await emptyResult.evaluate((element) => element.getBoundingClientRect().height);
+    expect(laterHeight).toBeLessThanOrEqual(96);
+    expect(Math.abs(laterHeight - firstHeight)).toBeLessThanOrEqual(1);
+  });
+
   test('summarizes persisted custom scope and exclusions with parent-child departments deduplicated', async ({ page }) => {
     await mockCyclePage(page, [], {
       cycles: [allCompanyWithExclusions, customScopeCycle],
