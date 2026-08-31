@@ -60,6 +60,7 @@ interface TemplateView {
 interface Candidate {
   id: string;
   name: string;
+  status?: UserStatus;
   deptId: string | null;
   directManagerId: string | null;
   directManager: { name: string } | null;
@@ -627,7 +628,7 @@ export class LaunchService {
     return result;
   }
 
-  /** 选出被考核候选人；v2 将试用期员工单列为可解释的排除项。 */
+  /** 选出范围内员工；v2 保留试用期员工，并在计划中标记为豁免。 */
   private async findCandidates(
     tx: Prisma.TransactionClient,
     cycle: {
@@ -675,6 +676,7 @@ export class LaunchService {
       deptId: true,
       directManagerId: true,
       directManager: { select: { name: true } },
+      status: true,
       entryDate: true,
       leaveDate: true,
     } as const;
@@ -692,18 +694,11 @@ export class LaunchService {
         ...scopeWhere,
         status: { in: [UserStatus.active, UserStatus.probation] },
       },
-      select: { ...select, status: true },
+      select,
     });
-    const included = eligible.filter((employee) => employee.status === UserStatus.active);
-    const probation = eligible.filter((employee) => employee.status === UserStatus.probation);
     return {
-      included,
-      exclusions: probation.map((employee) => ({
-        employeeId: employee.id,
-        employeeName: employee.name,
-        reasonCode: 'PROBATION_NOT_IN_PLAN' as const,
-        reason: '试用期员工不进入本绩效计划' as const,
-      })),
+      included: eligible,
+      exclusions: [],
     };
   }
 
@@ -950,6 +945,13 @@ export class LaunchService {
         participantDisposition: 'top_leader_exempt',
         isExempt: true,
         reason: '最高负责人豁免',
+      };
+    }
+    if (this.isWorkflowV2(cycle) && candidate.status === UserStatus.probation) {
+      return {
+        participantDisposition: 'cycle_exempt',
+        isExempt: true,
+        reason: '试用期员工不参与本绩效计划',
       };
     }
     const exemption = this.resolveExemption(candidate, cycle, exemptRatio);

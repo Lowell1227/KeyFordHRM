@@ -622,7 +622,7 @@ describe('LaunchService preflight', () => {
     }));
   });
 
-  it('partitions active and probation employees from one workflow v2 candidate snapshot', async () => {
+  it('keeps probation employees visible in the workflow v2 roster as exempt participants', async () => {
     const probationEmployee = {
       ...candidate,
       id: '99999999-9999-4999-8999-999999999999',
@@ -640,15 +640,28 @@ describe('LaunchService preflight', () => {
       select: expect.objectContaining({ status: true }),
     }));
     expect(tx.user.findMany).toHaveBeenCalledTimes(1);
-    expect(preflight.participantCount).toBe(2);
-    expect(preflight.participants).not.toContainEqual(expect.objectContaining({
+    expect(preflight.participantCount).toBe(3);
+    expect(preflight.participants).toContainEqual(expect.objectContaining({
       employeeId: probationEmployee.id,
+      participantDisposition: 'cycle_exempt',
+      isExempt: true,
+      exemptReason: '试用期员工不参与本绩效计划',
     }));
-    expect(preflight.exclusions).toContainEqual({
-      employeeId: probationEmployee.id,
-      employeeName: probationEmployee.name,
-      reasonCode: 'PROBATION_NOT_IN_PLAN',
-      reason: '试用期员工不进入本绩效计划',
+    expect(preflight.exclusions).toEqual([]);
+
+    await service.launch(cycleId, operator, {
+      now: new Date('2026-12-23T00:00:00.000Z'),
+      expectedPlanHash: preflight.planHash!,
+    });
+
+    expect(tx.assessmentTask.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        employeeId: probationEmployee.id,
+        status: 'exempted',
+        isExempt: true,
+        participantDisposition: 'cycle_exempt',
+        exemptReason: '试用期员工不参与本绩效计划',
+      }),
     });
   });
 
