@@ -75,6 +75,20 @@ describe('cycle launch time policy', () => {
     expect(managerWarning[0]?.message.length).toBeLessThanOrEqual(15);
   });
 
+  it('names both fields in final-result sequence warnings', () => {
+    const calibrationWarning = launchTimeSequenceWarnings({
+      ...baseCycle(),
+      deadlineHrCalibration: at(5, 10),
+    }, baseSchedules());
+    const approvalWarning = launchTimeSequenceWarnings({
+      ...baseCycle(),
+      deadlineApproval: at(5, 10),
+    }, baseSchedules());
+
+    expect(calibrationWarning[0]?.message).toBe('HR校准截止早于主管评分截止');
+    expect(approvalWarning[0]?.message).toBe('结果审批截止早于HR校准截止');
+  });
+
   it('keeps a reversed performance period as a structural blocker', () => {
     expect(launchTimeStructuralBlockers({
       ...baseCycle(),

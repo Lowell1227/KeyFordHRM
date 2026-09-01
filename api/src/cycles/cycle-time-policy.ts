@@ -120,13 +120,13 @@ export function launchTimeSequenceWarnings(
     warnings.push({
       code: 'HR_CALIBRATION_BEFORE_FINAL_MANAGER_DUE',
       periodKey: lastSchedule.periodKey,
-      message: '建议不早于主管评分',
+      message: 'HR校准截止早于主管评分截止',
     });
   }
   if (deadlineHrCalibration > deadlineApproval) {
     warnings.push({
       code: 'APPROVAL_BEFORE_HR_CALIBRATION',
-      message: '建议不早于HR校准',
+      message: '结果审批截止早于HR校准截止',
     });
   }
   if (deadlineApproval > deadlinePublish) {

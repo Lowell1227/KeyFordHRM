@@ -156,7 +156,7 @@ const warningPreflight: LaunchPreflightResult = {
   ...immediatelyOpenablePreflight,
   warnings: [{
     code: 'HR_CALIBRATION_BEFORE_FINAL_MANAGER_DUE',
-    message: 'HR校准截止不能早于最后一期主管计划完成时间',
+    message: 'HR校准截止早于主管评分截止',
   }],
 };
 
@@ -747,7 +747,7 @@ test.describe('compact cycle management list', () => {
 
     const reminder = page.getByTestId('cycle-preflight-reminder');
     await expect(reminder.getByRole('heading', { name: '计划检查提醒' })).toBeVisible();
-    await expect(reminder.getByText('HR校准截止不能早于最后一期主管计划完成时间', { exact: true })).toHaveCount(1);
+    await expect(reminder.getByText('HR校准截止早于主管评分截止', { exact: true })).toHaveCount(1);
     await expect(reminder).toContainText('涉及2项');
     await expect(reminder).toContainText('目标制定开放');
     await expect(reminder).not.toContainText('请确认时间安排；该提醒不会阻止发起。');
@@ -886,7 +886,7 @@ test.describe('compact cycle management list', () => {
     await page.goto('/cycles?group=attention&cycleId=cycle-draft');
 
     await expect(page.getByTestId('cycle-preflight-reminder'))
-      .toContainText('HR校准截止不能早于最后一期主管计划完成时间');
+      .toContainText('HR校准截止早于主管评分截止');
     await expect(page.getByText('1项时间提醒。时间提醒不影响发起。')).toBeVisible();
     await page.getByRole('button', { name: '发起考核', exact: true }).click();
 
