@@ -133,7 +133,7 @@ function dueDate(value: string) {
     <section v-if="selectedContext" class="tracking-cycle__summary" data-testid="goal-tracking-summary">
       <div>
         <span>评分方式</span>
-        <strong>{{ selectedContext.scoringFrequency === 'monthly' ? '月度复盘评分' : '整周期评分' }}</strong>
+        <strong>{{ selectedContext.scoringFrequency === 'monthly' ? '月度跟进' : '整周期评分' }}</strong>
       </div>
       <div>
         <span>期次进度</span>

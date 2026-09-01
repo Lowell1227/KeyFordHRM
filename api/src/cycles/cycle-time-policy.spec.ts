@@ -55,8 +55,24 @@ describe('cycle launch time policy', () => {
       deadlineIndicatorConfirm: at(2),
     }, baseSchedules());
 
-    expect(settingWarning[0]?.message).toBe('目标制定截止不能早于目标制定开放');
-    expect(confirmationWarning[0]?.message).toBe('目标确认截止不能早于目标制定截止');
+    expect(settingWarning[0]?.message).toBe('建议不早于目标开放');
+    expect(confirmationWarning[0]?.message).toBe('建议不早于目标截止');
+  });
+
+  it('uses concise non-blocking copy for monthly follow-up sequence warnings', () => {
+    const selfEvalWarning = launchTimeSequenceWarnings(
+      baseCycle(),
+      [{ ...baseSchedules()[0], selfEvalOpenAt: at(5, 10) }],
+    );
+    const managerWarning = launchTimeSequenceWarnings(
+      baseCycle(),
+      [{ ...baseSchedules()[0], selfEvalDueAt: at(6, 10) }],
+    );
+
+    expect(selfEvalWarning[0]?.message).toBe('建议不早于自评开始');
+    expect(managerWarning[0]?.message).toBe('建议不早于自评截止');
+    expect(selfEvalWarning[0]?.message.length).toBeLessThanOrEqual(15);
+    expect(managerWarning[0]?.message.length).toBeLessThanOrEqual(15);
   });
 
   it('keeps a reversed performance period as a structural blocker', () => {

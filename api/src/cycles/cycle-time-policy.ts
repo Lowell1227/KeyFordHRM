@@ -32,14 +32,14 @@ export function scoringScheduleSequenceIssues(
       issues.push({
         code: 'SELF_EVAL_OPEN_AFTER_DUE',
         periodKey: schedule.periodKey,
-        message: '本期员工自评截止不能早于本期自评开放',
+        message: '建议不早于自评开始',
       });
     }
     if (schedule.selfEvalDueAt > schedule.managerDueAt) {
       issues.push({
         code: 'SELF_EVAL_DUE_AFTER_MANAGER_DUE',
         periodKey: schedule.periodKey,
-        message: '本期主管评分截止不能早于本期员工自评截止',
+        message: '建议不早于自评截止',
       });
     }
   }
@@ -94,13 +94,13 @@ export function launchTimeSequenceWarnings(
   if (goalSettingOpenAt > deadlineIndicatorSetting) {
     warnings.push({
       code: 'INDICATOR_SETTING_BEFORE_GOAL_OPEN',
-      message: '目标制定截止不能早于目标制定开放',
+      message: '建议不早于目标开放',
     });
   }
   if (deadlineIndicatorSetting > deadlineIndicatorConfirm) {
     warnings.push({
       code: 'INDICATOR_CONFIRM_BEFORE_SETTING_DUE',
-      message: '目标确认截止不能早于目标制定截止',
+      message: '建议不早于目标截止',
     });
   }
 
@@ -111,7 +111,7 @@ export function launchTimeSequenceWarnings(
     warnings.push({
       code: 'FIRST_SELF_EVAL_BEFORE_INDICATOR_CONFIRM',
       periodKey: firstSchedule.periodKey,
-      message: '第一期自评开放不能早于目标确认截止',
+      message: '建议不早于目标确认',
     });
   }
   warnings.push(...scoringScheduleSequenceIssues(orderedSchedules));
@@ -120,19 +120,19 @@ export function launchTimeSequenceWarnings(
     warnings.push({
       code: 'HR_CALIBRATION_BEFORE_FINAL_MANAGER_DUE',
       periodKey: lastSchedule.periodKey,
-      message: 'HR校准截止不能早于最后一期主管计划完成时间',
+      message: '建议不早于主管评分',
     });
   }
   if (deadlineHrCalibration > deadlineApproval) {
     warnings.push({
       code: 'APPROVAL_BEFORE_HR_CALIBRATION',
-      message: '结果审批截止不能早于HR校准截止',
+      message: '建议不早于HR校准',
     });
   }
   if (deadlineApproval > deadlinePublish) {
     warnings.push({
       code: 'PUBLISH_BEFORE_APPROVAL',
-      message: '结果公示截止不能早于结果审批截止',
+      message: '建议不早于结果审批',
     });
   }
   return warnings;

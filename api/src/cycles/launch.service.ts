@@ -1140,12 +1140,12 @@ export class LaunchService {
     if (schedules.length === 0) {
       blockers.push({
         code: 'PERIOD_SCHEDULE_MISSING',
-        message: '月度复盘评分排期为空，请返回考核周期补齐后重新审核',
+        message: '月度跟进排期为空，请返回考核周期补齐后重新审核',
       });
     } else if (!this.persistedSchedulesMatchPlan(cycle, schedules)) {
       blockers.push({
         code: 'PERIOD_SCHEDULE_INVALID',
-        message: '已保存的月度复盘评分排期与周期类型或考核期间不一致，请返回考核周期重新生成并审核',
+        message: '已保存的月度跟进排期与周期类型或考核期间不一致，请返回考核周期重新生成并审核',
       });
     }
     blockers.push(...launchTimeStructuralBlockers(cycle));

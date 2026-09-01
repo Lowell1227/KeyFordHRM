@@ -289,14 +289,14 @@ async function mockCycleLaunchPage(
           issues.push({
             code: 'SELF_EVAL_OPEN_AFTER_DUE',
             periodKey: schedule.periodKey,
-            message: '本期员工自评截止不能早于本期自评开放',
+            message: '建议不早于自评开始',
           });
         }
         if (new Date(schedule.selfEvalDueAt) > new Date(schedule.managerDueAt)) {
           issues.push({
             code: 'SELF_EVAL_DUE_AFTER_MANAGER_DUE',
             periodKey: schedule.periodKey,
-            message: '本期主管评分截止不能早于本期员工自评截止',
+            message: '建议不早于自评截止',
           });
         }
           return issues;
@@ -308,7 +308,7 @@ async function mockCycleLaunchPage(
         ) {
           warnings.push({
             code: 'INDICATOR_SETTING_BEFORE_GOAL_OPEN',
-            message: '目标制定截止不能早于目标制定开放',
+            message: '建议不早于目标开放',
           });
         }
       return route.fulfill({
@@ -373,7 +373,70 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.locator('.app-pager')).toHaveCount(0);
   });
 
-  test('lets all-company cycles exclude departments and people from the scope drawer', async ({ page }) => {
+  test('uses one multi-select scope picker without all-company or custom modes', async ({ page }) => {
+    await mockCycleLaunchPage(page, { cycles: [] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    const dialog = page.getByRole('dialog', { name: '新建考核周期' });
+    await expect(dialog.getByTestId('cycle-scope-all')).toHaveCount(0);
+    await expect(dialog.getByTestId('cycle-scope-custom')).toHaveCount(0);
+    await expect(dialog.getByTestId('cycle-scope-picker-open')).toHaveText('选择考核对象');
+    await dialog.getByTestId('cycle-scope-picker-open').click();
+
+    const drawer = page.getByRole('dialog', { name: '选择考核对象' });
+    await expect(drawer.getByRole('tab', { name: '按部门' })).toBeVisible();
+    await expect(drawer.getByRole('tab', { name: '按人员' })).toBeVisible();
+    await expect(drawer.getByRole('tab', { name: /排除|例外/ })).toHaveCount(0);
+    await expect(drawer.getByTestId('cycle-scope-select-all')).toHaveText('全选');
+    await expect(drawer.getByTestId('cycle-scope-invert')).toHaveText('反选');
+    await expect(drawer.getByTestId('cycle-scope-clear')).toHaveText('清空');
+  });
+
+  test('saves one unified department selection with no exclusion payload', async ({ page }) => {
+    const createBodies: unknown[] = [];
+    await mockCycleLaunchPage(page, { cycles: [], createBodies });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+    await page.getByTestId('cycle-scope-picker-open').click();
+
+    const drawer = page.getByRole('dialog', { name: '选择考核对象' });
+    await drawer.getByTestId('cycle-scope-clear').click();
+    await drawer.getByTestId('cycle-scope-department-tree')
+      .locator('.el-tree-node__content')
+      .filter({ hasText: '产品部' })
+      .locator('.el-checkbox')
+      .click();
+    await drawer.getByRole('button', { name: '确定' }).click();
+
+    await expect(page.getByTestId('cycle-scope-summary')).toContainText('已选择 1 个部门，共 8 人');
+    await page.getByTestId('cycle-create-save-draft').click();
+    await expect.poll(() => createBodies).toHaveLength(1);
+    expect(createBodies[0]).toMatchObject({
+      participantDeptIds: ['product'],
+      participantUserIds: [],
+      explicitExemptDeptIds: [],
+      explicitExemptUserIds: [],
+    });
+  });
+
+  test('keeps all time settings before scope and notification settings', async ({ page }) => {
+    await mockCycleLaunchPage(page, { cycles: [] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    const dialog = page.getByRole('dialog', { name: '新建考核周期' });
+    const timeBox = await dialog.getByTestId('cycle-advanced-schedule').boundingBox();
+    const scopeBox = await dialog.getByTestId('cycle-scope-picker-open').boundingBox();
+    const notificationBox = await dialog.getByTestId('cycle-notification-off').boundingBox();
+    expect(timeBox).not.toBeNull();
+    expect(scopeBox).not.toBeNull();
+    expect(notificationBox).not.toBeNull();
+    expect(timeBox!.y).toBeLessThan(scopeBox!.y);
+    expect(scopeBox!.y).toBeLessThan(notificationBox!.y);
+  });
+
+  test.skip('lets all-company cycles exclude departments and people from the scope drawer', async ({ page }) => {
     const createBodies: unknown[] = [];
     await mockCycleLaunchPage(page, { cycles: [], createBodies });
     await page.goto('/cycles?group=attention');
@@ -426,7 +489,7 @@ test.describe('cycle launch entry UX', () => {
     });
   });
 
-  test('shows the estimated employee count when a custom scope contains only a department', async ({ page }) => {
+  test.skip('shows the estimated employee count when a custom scope contains only a department', async ({ page }) => {
     await mockCycleLaunchPage(page, { cycles: [] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
@@ -451,7 +514,6 @@ test.describe('cycle launch entry UX', () => {
     await mockCycleLaunchPage(page, { cycles: [], departments: scrollableDepartmentTree });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
-    await page.getByTestId('cycle-scope-custom').click();
     await page.getByTestId('cycle-scope-picker-open').click();
 
     const drawer = page.getByRole('dialog', { name: '选择考核对象' });
@@ -488,20 +550,20 @@ test.describe('cycle launch entry UX', () => {
     await mockCycleLaunchPage(page, { cycles: [], departments: scrollableDepartmentTree });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
-    await page.getByTestId('cycle-scope-custom').click();
     await page.getByTestId('cycle-scope-picker-open').click();
 
     const drawer = page.getByRole('dialog', { name: '选择考核对象' });
     const body = drawer.locator('.el-drawer__body');
     const panel = drawer.getByTestId('cycle-scope-department-tree');
     const footer = drawer.locator('.el-drawer__footer');
+    await drawer.getByTestId('cycle-scope-clear').click();
     await panel
       .locator('.el-tree-node__content')
       .filter({ hasText: '孚德' })
       .first()
       .locator('.el-checkbox')
       .click();
-    await expect(footer).toContainText('已选 1 个部门，包含 36 个下级组织');
+    await expect(footer).toContainText('已选择全部部门');
     const drawerBox = await drawer.boundingBox();
     const panelBox = await panel.boundingBox();
     const footerBox = await footer.boundingBox();
@@ -521,9 +583,9 @@ test.describe('cycle launch entry UX', () => {
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
 
-    await page.getByTestId('cycle-scope-custom').click();
     await page.getByTestId('cycle-scope-picker-open').click();
     const scopeDrawer = page.getByRole('dialog', { name: '选择考核对象' });
+    await scopeDrawer.getByTestId('cycle-scope-clear').click();
     const tree = scopeDrawer.getByTestId('cycle-scope-department-tree');
     await tree
       .locator('.el-tree-node__content')
@@ -533,7 +595,7 @@ test.describe('cycle launch entry UX', () => {
     await scopeDrawer.getByRole('button', { name: '确定' }).click();
 
     const summary = page.getByTestId('cycle-scope-summary');
-    await expect(summary).toContainText('已选 1 个部门，包含 1 个下级组织（预计 18 人）');
+    await expect(summary).toContainText('已选择 1 个部门，共 18 人');
     await expect(summary).not.toContainText('2 个部门');
 
     await page.getByTestId('cycle-create-save-draft').click();
@@ -543,7 +605,7 @@ test.describe('cycle launch entry UX', () => {
     });
   });
 
-  test('limits custom-scope exceptions to people and descendants inside the included departments', async ({ page }) => {
+  test.skip('limits custom-scope exceptions to people and descendants inside the included departments', async ({ page }) => {
     const createBodies: unknown[] = [];
     const departmentUrls: string[] = [];
     await mockCycleLaunchPage(page, { cycles: [], createBodies, departmentUrls });
@@ -604,7 +666,7 @@ test.describe('cycle launch entry UX', () => {
     });
   });
 
-  test('clears stale people exceptions when the included departments change', async ({ page }) => {
+  test.skip('clears stale people exceptions when the included departments change', async ({ page }) => {
     await mockCycleLaunchPage(page, { cycles: [] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
@@ -639,7 +701,7 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.locator('li.el-select-dropdown__item:visible').filter({ hasText: '周舟 (E002)' })).toBeVisible();
   });
 
-  test('does not carry custom exceptions into an all-company scope', async ({ page }) => {
+  test.skip('does not carry custom exceptions into an all-company scope', async ({ page }) => {
     const createBodies: unknown[] = [];
     await mockCycleLaunchPage(page, { cycles: [], createBodies });
     await page.goto('/cycles?group=attention');
@@ -675,7 +737,7 @@ test.describe('cycle launch entry UX', () => {
     });
   });
 
-  test('opens a user-only draft as a custom scope instead of all-company', async ({ page }) => {
+  test.skip('opens a user-only draft as a custom scope instead of all-company', async ({ page }) => {
     const userOnlyCycle: AssessmentCycle = {
       ...createdCycle,
       participantUserIds: ['employee-1'],
@@ -693,7 +755,7 @@ test.describe('cycle launch entry UX', () => {
     await expect(dialog.getByTestId('cycle-scope-summary')).toContainText('排除例外：1 人');
   });
 
-  test('restores valid department exceptions when reopening a saved custom draft', async ({ page }) => {
+  test.skip('restores valid department exceptions when reopening a saved custom draft', async ({ page }) => {
     const excludedDepartmentCycle: AssessmentCycle = {
       ...createdCycle,
       participantDeptIds: ['sales', 'sales-b2b'],
@@ -928,8 +990,8 @@ test.describe('cycle launch entry UX', () => {
     await dialog.locator('.el-select').first().click();
     await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '月度' }).click();
 
-    await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2026年09月绩效考核');
-    await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-08-18 09:00');
+    await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2026年10月绩效考核');
+    await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-09-17 09:00');
   });
 
   test('uses the included 2027 calendar without showing fallback guidance', async ({ page }) => {
@@ -994,9 +1056,9 @@ test.describe('cycle launch entry UX', () => {
     const dueInput = firstSchedule.getByTestId('self-eval-due-at').locator('input');
     const managerInput = firstSchedule.getByTestId('manager-due-at').locator('input');
     const headers = page.getByTestId('cycle-schedule-column-header');
-    await expect(headers).toContainText('本期自评开放');
-    await expect(headers).toContainText('本期员工自评截止');
-    await expect(headers).toContainText('本期主管评分截止');
+    await expect(headers).toContainText('自评开始');
+    await expect(headers).toContainText('自评截止');
+    await expect(headers).toContainText('主管评分截止');
 
     for (const input of [openInput, dueInput, managerInput]) {
       await input.fill('2026-11-05 18:00');
@@ -1013,9 +1075,9 @@ test.describe('cycle launch entry UX', () => {
 
     await expect(page.getByTestId('cycle-schedule-warning-summary')).toHaveCount(0);
     await expect(firstSchedule.getByTestId('self-eval-due-at').locator('.cycle-time-field__issue'))
-      .toContainText('请确认：本期员工自评截止不能早于本期自评开放');
+      .toContainText('建议不早于自评开始');
     await expect(firstSchedule.getByTestId('manager-due-at').locator('.cycle-time-field__issue'))
-      .toContainText('请确认：本期主管评分截止不能早于本期员工自评截止');
+      .toContainText('建议不早于自评截止');
     await page.getByTestId('cycle-create-save-draft').click();
 
     await expect.poll(() => createBodies).toHaveLength(1);
@@ -1034,8 +1096,8 @@ test.describe('cycle launch entry UX', () => {
     await goalOpenInput.press('Enter');
 
     await expect(nodes.nth(1).locator('.schedule-node__issue'))
-      .toContainText('请确认：目标制定截止不能早于目标制定开放');
-    await expect(page.locator('.el-message').filter({ hasText: '目标制定截止不能早于目标制定开放' }))
+      .toContainText('建议不早于目标开放');
+    await expect(page.locator('.el-message').filter({ hasText: '建议不早于目标开放' }))
       .toHaveCount(0);
   });
 
@@ -1138,7 +1200,7 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.getByTestId('cycle-advanced-schedule')).toContainText('系统默认计划');
     await expect(page.getByTestId('cycle-advanced-grades')).toContainText('A 20%');
     await expect(page.getByTestId('cycle-advanced-publication')).toContainText('4 项可见');
-    await expect(page.getByText('目标制定开放', { exact: true })).not.toBeVisible();
+    await expect(page.getByText('目标制定开放', { exact: true })).toBeVisible();
     expect(await page.locator('.cycle-create-dialog .el-dialog__body').evaluate((element) => (
       element.scrollWidth <= element.clientWidth
     ))).toBe(true);

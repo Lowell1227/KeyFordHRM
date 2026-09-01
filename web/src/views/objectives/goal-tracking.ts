@@ -164,7 +164,7 @@ export function formatGoalTrackingContextLabel(context: PerformanceCycleContext)
 }
 
 export function formatGoalTrackingContextMeta(context: PerformanceCycleContext): string {
-  return `${context.scoringFrequency === 'monthly' ? '月度复盘评分' : '整周期评分'} · ${context.task.isExempt ? '已豁免' : '正常参与'} · 开放 ${new Date(context.openedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}`;
+  return `${context.scoringFrequency === 'monthly' ? '月度跟进' : '整周期评分'} · ${context.task.isExempt ? '已豁免' : '正常参与'} · 开放 ${new Date(context.openedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}`;
 }
 
 export type GoalTrackingHealthStatus = 'on_track' | 'at_risk' | 'blocked' | 'completed';

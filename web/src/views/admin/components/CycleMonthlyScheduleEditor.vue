@@ -15,7 +15,6 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   'update:schedules': [value: CyclePeriodSchedule[]];
   'restore-all': [];
-  'restore-one': [schedule: CyclePeriodSchedule];
 }>();
 
 const hasExceptions = computed(() => props.schedules.some((schedule) => schedule.isException));
@@ -52,9 +51,14 @@ function issuesFor(schedule: CyclePeriodSchedule, issues: CycleScheduleIssue[]) 
 
 function issuesForField(schedule: CyclePeriodSchedule, field: DateField) {
   const codes = FIELD_ISSUE_CODES[field];
-  return [...props.blockers, ...props.warnings].filter((issue) => (
-    issue.periodKey === schedule.periodKey && codes.includes(issue.code)
-  ));
+  return [
+    ...props.blockers
+      .filter((issue) => issue.periodKey === schedule.periodKey && codes.includes(issue.code))
+      .map((issue) => ({ ...issue, level: 'blocker' as const })),
+    ...props.warnings
+      .filter((issue) => issue.periodKey === schedule.periodKey && codes.includes(issue.code))
+      .map((issue) => ({ ...issue, level: 'warning' as const })),
+  ];
 }
 
 function rowIssues(schedule: CyclePeriodSchedule) {
@@ -65,14 +69,14 @@ function rowIssues(schedule: CyclePeriodSchedule) {
 </script>
 
 <template>
-  <section class="cycle-monthly-schedule-editor" aria-label="复盘与评分时间安排">
+  <section class="cycle-monthly-schedule-editor" aria-label="月度跟进时间安排">
     <div
       v-if="!isCycleSchedule"
       data-testid="cycle-schedule-column-header"
       class="cycle-monthly-schedule-grid__header"
     >
       <span class="cycle-schedule-help-label">月份
-        <el-tooltip content="下方时间为每月复盘与评分安排，可直接修改；调整后可恢复默认。" placement="top">
+        <el-tooltip content="下方时间为每月跟进安排，可直接修改。" placement="top">
           <el-icon
             data-testid="cycle-schedule-help"
             aria-label="查看时间安排说明"
@@ -80,9 +84,9 @@ function rowIssues(schedule: CyclePeriodSchedule) {
           ><QuestionFilled /></el-icon>
         </el-tooltip>
       </span>
-      <span>本期自评开放</span>
-      <span>本期员工自评截止</span>
-      <span>本期主管评分截止</span>
+      <span>自评开始</span>
+      <span>自评截止</span>
+      <span>主管评分截止</span>
       <span class="cycle-monthly-schedule-grid__actions">
         <el-button
           v-if="hasExceptions"
@@ -102,10 +106,16 @@ function rowIssues(schedule: CyclePeriodSchedule) {
       >
         <div class="cycle-month-schedule-row__main">
           <div class="cycle-month-schedule-row__period">
+            <span
+              v-if="schedule.isException"
+              data-testid="cycle-special-month-dot"
+              class="cycle-special-month-dot"
+              aria-label="本月时间已调整"
+            />
             <strong data-testid="cycle-period-label">{{ periodLabel(schedule) }}</strong>
             <el-tooltip
               v-if="isCycleSchedule"
-              content="下方时间为整个考核周期的复盘与评分安排，可直接修改。"
+              content="下方时间为整个考核周期的跟进安排，可直接修改。"
               placement="top"
             >
               <el-icon
@@ -114,15 +124,14 @@ function rowIssues(schedule: CyclePeriodSchedule) {
                 tabindex="0"
               ><QuestionFilled /></el-icon>
             </el-tooltip>
-            <el-tag v-if="schedule.isException" data-testid="cycle-special-month-badge" type="warning" size="small">已调整</el-tag>
             <small
               v-for="issue in rowIssues(schedule)"
               :key="issue.code"
               class="cycle-time-field__issue"
             >{{ issue.message }}</small>
           </div>
-        <label data-testid="self-eval-open-at">
-          <span class="cycle-month-schedule-row__mobile-label">本期自评开放</span>
+        <label data-testid="self-eval-open-at" :class="{ 'is-missing': !schedule.selfEvalOpenAt }">
+          <span class="cycle-month-schedule-row__mobile-label">自评开始</span>
           <el-date-picker
             :model-value="schedule.selfEvalOpenAt"
             type="datetime"
@@ -130,14 +139,16 @@ function rowIssues(schedule: CyclePeriodSchedule) {
             value-format="YYYY-MM-DDTHH:mm:ssZ"
             @update:model-value="updateDate(index, 'selfEvalOpenAt', $event)"
           />
+          <small v-if="!schedule.selfEvalOpenAt" class="cycle-time-field__required">必填</small>
           <small
             v-for="issue in issuesForField(schedule, 'selfEvalOpenAt')"
             :key="issue.code"
             class="cycle-time-field__issue"
-          >请确认：{{ issue.message }}</small>
+            :class="`is-${issue.level}`"
+          >{{ issue.message }}</small>
         </label>
-        <label data-testid="self-eval-due-at">
-          <span class="cycle-month-schedule-row__mobile-label">本期员工自评截止</span>
+        <label data-testid="self-eval-due-at" :class="{ 'is-missing': !schedule.selfEvalDueAt }">
+          <span class="cycle-month-schedule-row__mobile-label">自评截止</span>
           <el-date-picker
             :model-value="schedule.selfEvalDueAt"
             type="datetime"
@@ -145,14 +156,16 @@ function rowIssues(schedule: CyclePeriodSchedule) {
             value-format="YYYY-MM-DDTHH:mm:ssZ"
             @update:model-value="updateDate(index, 'selfEvalDueAt', $event)"
           />
+          <small v-if="!schedule.selfEvalDueAt" class="cycle-time-field__required">必填</small>
           <small
             v-for="issue in issuesForField(schedule, 'selfEvalDueAt')"
             :key="issue.code"
             class="cycle-time-field__issue"
-          >请确认：{{ issue.message }}</small>
+            :class="`is-${issue.level}`"
+          >{{ issue.message }}</small>
         </label>
-        <label data-testid="manager-due-at">
-          <span class="cycle-month-schedule-row__mobile-label">本期主管评分截止</span>
+        <label data-testid="manager-due-at" :class="{ 'is-missing': !schedule.managerDueAt }">
+          <span class="cycle-month-schedule-row__mobile-label">主管评分截止</span>
           <el-date-picker
             :model-value="schedule.managerDueAt"
             type="datetime"
@@ -160,20 +173,14 @@ function rowIssues(schedule: CyclePeriodSchedule) {
             value-format="YYYY-MM-DDTHH:mm:ssZ"
             @update:model-value="updateDate(index, 'managerDueAt', $event)"
           />
+          <small v-if="!schedule.managerDueAt" class="cycle-time-field__required">必填</small>
           <small
             v-for="issue in issuesForField(schedule, 'managerDueAt')"
             :key="issue.code"
             class="cycle-time-field__issue"
-          >请确认：{{ issue.message }}</small>
+            :class="`is-${issue.level}`"
+          >{{ issue.message }}</small>
         </label>
-          <div class="cycle-month-schedule-row__actions">
-            <el-button
-              v-if="schedule.isException"
-              data-testid="cycle-restore-one"
-              text
-              @click="emit('restore-one', { ...schedule })"
-            >恢复本月默认</el-button>
-          </div>
         </div>
 
       </article>
@@ -192,6 +199,14 @@ function rowIssues(schedule: CyclePeriodSchedule) {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.cycle-special-month-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  border-radius: 50%;
+  background: var(--el-color-danger);
 }
 
 .cycle-schedule-help-label,
@@ -223,7 +238,7 @@ function rowIssues(schedule: CyclePeriodSchedule) {
 .cycle-monthly-schedule-grid__header,
 .cycle-month-schedule-row__main {
   display: grid;
-  grid-template-columns: 82px repeat(3, minmax(0, 1fr)) 76px;
+  grid-template-columns: 96px repeat(3, minmax(160px, 1fr));
   align-items: start;
   gap: 8px;
 }
@@ -236,8 +251,7 @@ function rowIssues(schedule: CyclePeriodSchedule) {
 }
 
 .cycle-monthly-schedule-grid__header > span,
-.cycle-month-schedule-row label,
-.cycle-month-schedule-row__actions {
+.cycle-month-schedule-row label {
   min-width: 0;
 }
 
@@ -267,22 +281,29 @@ function rowIssues(schedule: CyclePeriodSchedule) {
   display: none;
 }
 
-.cycle-month-schedule-row__actions {
-  display: flex;
-  min-height: 32px;
-  align-items: center;
-  justify-content: flex-end;
-}
-
 .cycle-month-schedule-row :deep(.el-date-editor) {
   min-width: 0;
   width: 100%;
 }
 
 .cycle-time-field__issue {
+  font-size: 12px;
+  line-height: 1.35;
+}
+
+.cycle-time-field__issue.is-warning {
+  color: var(--el-color-warning-dark-2);
+}
+
+.cycle-time-field__issue.is-blocker,
+.cycle-time-field__required {
   color: var(--el-color-danger);
   font-size: 12px;
   line-height: 1.35;
+}
+
+.cycle-month-schedule-row label.is-missing :deep(.el-input__wrapper) {
+  box-shadow: 0 0 0 1px var(--el-color-danger) inset;
 }
 
 @media (max-width: 768px) {
@@ -314,8 +335,5 @@ function rowIssues(schedule: CyclePeriodSchedule) {
     display: block;
   }
 
-  .cycle-month-schedule-row__actions {
-    justify-content: flex-start;
-  }
 }
 </style>

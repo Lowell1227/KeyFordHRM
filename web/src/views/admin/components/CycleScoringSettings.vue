@@ -26,7 +26,7 @@ const fixedFrequency = computed<ScoringFrequency>(() => (
 const fixedFrequencyCopy = computed(() => (
   fixedFrequency.value === 'monthly'
     ? '月度周期固定开启'
-    : '当前周期不支持月度复盘'
+    : '当前周期不支持月度跟进'
 ));
 
 function updateFrequency(value: ScoringFrequency) {
@@ -50,13 +50,13 @@ watch(
 </script>
 
 <template>
-  <section data-testid="cycle-scoring-settings" class="cycle-scoring-settings" aria-label="复盘与评分设置">
+  <section data-testid="cycle-scoring-settings" class="cycle-scoring-settings" aria-label="月度跟进设置">
     <div class="cycle-scoring-settings__control">
       <el-switch
         data-testid="cycle-monthly-review-switch"
         :model-value="scoringFrequency === 'monthly'"
         :disabled="!canChooseFrequency"
-        active-text="月度复盘评分"
+        active-text="月度跟进"
         @change="handleMonthlyReviewChange"
       />
       <el-tooltip
@@ -66,7 +66,7 @@ watch(
         <el-icon
           data-testid="cycle-review-settings-help"
           class="cycle-scoring-settings__help"
-          aria-label="查看月度复盘评分说明"
+          aria-label="查看月度跟进说明"
           tabindex="0"
         ><QuestionFilled /></el-icon>
       </el-tooltip>

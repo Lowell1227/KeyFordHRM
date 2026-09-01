@@ -490,7 +490,7 @@ function resetCreateForm() {
   editingCycleOriginal.value = null;
   confirmedScoringContext.value = null;
   advancedCreateVisible.value = false;
-  advancedCreateSections.value = [];
+  advancedCreateSections.value = ['schedule'];
   createScheduleCustomized.value = false;
   createScheduleProvisionalYears.value = [];
   createNameCustomized.value = false;
@@ -916,6 +916,12 @@ function clonePeriodSchedules(schedules: CyclePeriodSchedule[]): CyclePeriodSche
   return schedules.map((schedule) => ({ ...schedule }));
 }
 
+function hasIncompleteScoringSchedule(): boolean {
+  return scoringPlan.periodSchedules.some((schedule) => (
+    !schedule.selfEvalOpenAt || !schedule.selfEvalDueAt || !schedule.managerDueAt
+  ));
+}
+
 function requiredScoringFrequency(type: CycleType): ScoringFrequency | null {
   if (type === 'monthly') return 'monthly';
   if (type === 'custom' || type === 'probation') return 'cycle';
@@ -1016,6 +1022,7 @@ function trackSchedulePreview(promise: Promise<boolean>): Promise<boolean> {
 async function validateCurrentScoringPlan(): Promise<boolean> {
   if (!isWorkflowV2Form.value || !createForm.startDate || !createForm.endDate) return false;
   if (scoringPlan.periodSchedules.length === 0) return false;
+  if (hasIncompleteScoringSchedule()) return false;
   const requestId = ++schedulePreviewRequest;
   const contextFingerprint = scoringPreviewFingerprint(true);
   const schedules = clonePeriodSchedules(scoringPlan.periodSchedules);
@@ -1078,12 +1085,11 @@ function handleScoringSchedulesUpdate(schedules: CyclePeriodSchedule[]) {
   scoringPlan.scheduleBlockers = [];
   scoringPlan.scheduleWarnings = [];
   syncConfirmedScheduleSnapshot();
+  if (schedulePreviewTimer) clearTimeout(schedulePreviewTimer);
+  schedulePreviewTimer = undefined;
+  invalidateSchedulePreview();
+  if (hasIncompleteScoringSchedule()) return;
   scheduleScoringPreview('', 'validate');
-}
-
-async function handleRestoreScoringSchedule(schedule: CyclePeriodSchedule) {
-  if (!await refreshScoringPlan({ restorePeriodKey: schedule.periodKey })) return;
-  await validateCurrentScoringPlan();
 }
 
 async function handleRestoreAllScoringSchedules() {
@@ -1106,6 +1112,23 @@ async function focusFirstInvalidScheduleRow() {
       : 'self-eval-open-at';
   row.scrollIntoView({ block: 'center', behavior: 'smooth' });
   row.querySelector<HTMLElement>(`[data-testid="${fieldTestId}"] input`)?.focus();
+}
+
+async function focusFirstMissingScheduleField() {
+  const index = scoringPlan.periodSchedules.findIndex((schedule) => (
+    !schedule.selfEvalOpenAt || !schedule.selfEvalDueAt || !schedule.managerDueAt
+  ));
+  if (index < 0) return;
+  const schedule = scoringPlan.periodSchedules[index];
+  const fieldTestId = !schedule.selfEvalOpenAt
+    ? 'self-eval-open-at'
+    : !schedule.selfEvalDueAt
+      ? 'self-eval-due-at'
+      : 'manager-due-at';
+  await nextTick();
+  const rows = document.querySelectorAll<HTMLElement>('[data-testid="cycle-month-schedule-row"]');
+  rows[index]?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  rows[index]?.querySelector<HTMLElement>(`[data-testid="${fieldTestId}"] input`)?.focus();
 }
 
 function buildCreateBody(): CreateCycleBody {
@@ -1171,6 +1194,10 @@ async function handleCreate(openWorkspace = false) {
   }
 
   if (isWorkflowV2Form.value) {
+    if (hasIncompleteScoringSchedule()) {
+      await focusFirstMissingScheduleField();
+      return;
+    }
     if (activeSchedulePreview) {
       const completed = await activeSchedulePreview;
       if (!completed && !schedulePreviewTimer) return;
@@ -1656,7 +1683,7 @@ async function handleStatusFilterChange(status: CycleStatus | '') {
 async function handleReviewCycle(cycle: AssessmentCycle) {
   const scoringSummary = cycle.workflowVersion === 2
     ? cycle.scoringFrequency === 'monthly'
-      ? `月度复盘评分，共 ${cycle.periodSchedules?.length ?? 0} 期`
+      ? `月度跟进，共 ${cycle.periodSchedules?.length ?? 0} 期`
       : '周期结束统一评分，共 1 期'
     : '历史流程';
   const reviewSummary = cycle.workflowVersion === 2
@@ -1845,13 +1872,13 @@ onMounted(() => {
       class="cycle-create-dialog"
       data-testid="cycle-create-dialog"
       :title="isEditMode ? '编辑考核周期' : '新建考核周期'"
-      width="760px"
+      width="900px"
       destroy-on-close
       :before-close="handleCreateBeforeClose"
     >
       <el-form ref="createFormRef" :model="createForm" :rules="createRules" label-width="108px">
         <section class="cycle-create-main" aria-label="周期关键设置">
-        <el-row :gutter="16">
+        <el-row :gutter="16" class="cycle-basic-fields">
           <el-col :span="12">
             <el-form-item label="周期类型" prop="type">
               <template #label>
@@ -1873,7 +1900,7 @@ onMounted(() => {
           </el-col>
         </el-row>
 
-        <el-form-item prop="startDate">
+        <el-form-item prop="startDate" class="cycle-period-field">
           <template #label>
             <span class="form-label-with-help">考核期间
               <el-tooltip content="新建周期时会自动联动；编辑已保存周期并修改期间时，可选择重新生成或保留现有时间节点" placement="top">
@@ -1940,7 +1967,6 @@ onMounted(() => {
             :warnings="scoringPlan.scheduleWarnings"
             :blockers="scoringPlan.scheduleBlockers"
             @update:schedules="handleScoringSchedulesUpdate"
-            @restore-one="handleRestoreScoringSchedule"
             @restore-all="handleRestoreAllScoringSchedules"
           />
           <div class="cycle-auto-plan" data-testid="cycle-plan-summary">
@@ -1953,14 +1979,14 @@ onMounted(() => {
                 <el-icon><QuestionFilled /></el-icon>
               </el-tooltip>
             </div>
-            <span>目标制定开放 {{ formatDateTimeForMessage(createForm.goalSettingOpenAt) }} · 已生成 {{ scoringPlan.periodSchedules.length }} 期复盘评分时间</span>
+            <span>目标制定开放 {{ formatDateTimeForMessage(createForm.goalSettingOpenAt) }} · 已生成 {{ scoringPlan.periodSchedules.length }} 期月度跟进时间</span>
           </div>
         </section>
 
-        <el-form-item label="考核范围" prop="participantDeptIds">
+        <el-form-item label="考核范围" prop="participantDeptIds" class="cycle-participant-field">
           <template #label>
             <span class="form-label-with-help">考核范围
-              <el-tooltip content="自定义范围支持部门与人员混选，并可明确排除个别人" placement="top">
+              <el-tooltip content="可按部门或人员多选考核对象，并支持全选、反选和清空" placement="top">
                 <el-icon><QuestionFilled /></el-icon>
               </el-tooltip>
             </span>
@@ -1976,7 +2002,7 @@ onMounted(() => {
           />
         </el-form-item>
 
-        <el-form-item>
+        <el-form-item class="cycle-notification-field">
           <template #label>
             <span class="form-label-with-help">员工通知
               <el-tooltip content="不发送为默认；发起时提醒只通知一次；每日催办会在临期或逾期任务每天 09:00 提醒，并按 24 小时限频" placement="top">
@@ -2012,10 +2038,14 @@ onMounted(() => {
           @click="advancedCreateVisible = !advancedCreateVisible"
         >
           <span>{{ advancedCreateVisible ? '收起高级设置' : '高级设置' }}</span>
-          <small>{{ createScheduleCustomized ? '时间计划已调整' : '通常无需修改' }}</small>
+          <small>等级比例与公示范围</small>
         </button>
 
-        <div v-show="advancedCreateVisible" data-testid="cycle-advanced-fields" class="advanced-create-fields">
+        <div
+          data-testid="cycle-advanced-fields"
+          class="advanced-create-fields"
+          :class="{ 'is-visible': advancedCreateVisible }"
+        >
           <el-collapse v-model="advancedCreateSections" class="advanced-create-groups">
             <el-collapse-item name="schedule">
               <template #title>
@@ -2059,7 +2089,7 @@ onMounted(() => {
                       v-for="issue in scheduleNodeIssues(node.key)"
                       :key="issue.code"
                       class="schedule-node__issue"
-                    >请确认：{{ issue.message }}</small>
+                    >{{ issue.message }}</small>
                   </div>
                 </div>
               </section>
@@ -2095,7 +2125,7 @@ onMounted(() => {
                       v-for="issue in scheduleNodeIssues(node.key)"
                       :key="issue.code"
                       class="schedule-node__issue"
-                    >请确认：{{ issue.message }}</small>
+                    >{{ issue.message }}</small>
                   </div>
                 </div>
               </section>
@@ -2446,8 +2476,17 @@ onMounted(() => {
 }
 
 .cycle-create-main {
+  display: flex;
+  flex-direction: column;
   min-width: 0;
 }
+
+.cycle-basic-fields { order: 1; }
+.cycle-period-field { order: 2; }
+.cycle-create-scoring-plan,
+.cycle-auto-plan--standalone { order: 3; }
+.cycle-participant-field { order: 5; }
+.cycle-notification-field { order: 6; }
 
 .cycle-create-scoring-plan {
   display: grid;
@@ -2537,6 +2576,7 @@ onMounted(() => {
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
   cursor: pointer;
+  order: 7;
 }
 
 .advanced-create-toggle span {
@@ -2549,12 +2589,25 @@ onMounted(() => {
 }
 
 .advanced-create-fields {
-  padding-top: 4px;
+  display: contents;
 }
 
 .advanced-create-groups {
+  display: contents;
+}
+
+.advanced-create-fields :deep(.el-collapse-item) {
+  width: calc(100% - 108px);
   margin-left: 108px;
-  border-top: 0;
+  order: 8;
+}
+
+.advanced-create-fields :deep(.el-collapse-item:first-child) {
+  order: 4;
+}
+
+.advanced-create-fields:not(.is-visible) :deep(.el-collapse-item:not(:first-child)) {
+  display: none;
 }
 
 .cycle-create-summary {
@@ -2730,7 +2783,7 @@ onMounted(() => {
 }
 
 .schedule-node__issue {
-  color: var(--el-color-danger);
+  color: var(--el-color-warning-dark-2);
   font-size: 12px;
   line-height: 1.35;
 }
