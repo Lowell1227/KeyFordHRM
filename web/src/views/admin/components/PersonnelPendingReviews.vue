@@ -30,7 +30,7 @@ function notifyPersonnelChanged() {
   window.dispatchEvent(new CustomEvent('personnel-data-changed'));
 }
 
-const activeCategory = ref<'employee' | 'department' | 'position'>('employee');
+const activeCategory = ref<'all' | 'employee' | 'department' | 'position'>('all');
 const employeeItems = ref<EmployeeDataReview[]>([]);
 const employeeTotal = ref(0);
 const employeeLoading = ref(false);
@@ -50,6 +50,24 @@ const managerDialog = ref({
 });
 
 const visible = computed(() => props.canReviewEmployee || props.canReviewDepartment || props.canReviewPosition);
+const reviewTotal = computed(() => (
+  (props.canReviewEmployee ? employeeTotal.value : 0)
+  + (props.canReviewDepartment ? departmentTotal.value : 0)
+  + (props.canReviewPosition ? positionTotal.value : 0)
+));
+const allLoading = computed(() => employeeLoading.value || departmentLoading.value || positionLoading.value);
+const showEmployeeReviews = computed(() => props.canReviewEmployee && (
+  activeCategory.value === 'employee'
+  || (activeCategory.value === 'all' && employeeTotal.value > 0)
+));
+const showDepartmentReviews = computed(() => props.canReviewDepartment && (
+  activeCategory.value === 'department'
+  || (activeCategory.value === 'all' && departmentTotal.value > 0)
+));
+const showPositionReviews = computed(() => props.canReviewPosition && (
+  activeCategory.value === 'position'
+  || (activeCategory.value === 'all' && positionTotal.value > 0)
+));
 
 type ContractDiff = {
   key: string;
@@ -390,7 +408,6 @@ function positionActionLabel(action: PositionChangeRequest['action']) {
 }
 
 onMounted(async () => {
-  if (!props.canReviewEmployee && props.canReviewDepartment) activeCategory.value = 'department';
   await Promise.all([loadEmployeeReviews(), loadDepartmentReviews(), loadPositionReviews()]);
 });
 </script>
@@ -400,6 +417,9 @@ onMounted(async () => {
     <div class="pending-review-workspace__head">
       <div class="review-title"><h3>待审核变更</h3><el-tooltip placement="bottom"><template #content>普通 HR 提交后由 HR 管理员审核。<br>HR 管理员可审核本人提交的变更。<br>审核通过前不改变正式数据。</template><el-icon><QuestionFilled /></el-icon></el-tooltip></div>
       <div class="pending-review-workspace__tabs" aria-label="审核事项分类">
+        <button type="button" :class="{ active: activeCategory === 'all' }" @click="activeCategory = 'all'">
+          全部 {{ reviewTotal }}
+        </button>
         <button v-if="canReviewEmployee" type="button" :class="{ active: activeCategory === 'employee' }" @click="activeCategory = 'employee'">
           员工档案 {{ employeeTotal }}
         </button>
@@ -410,7 +430,8 @@ onMounted(async () => {
       </div>
     </div>
 
-    <div v-if="activeCategory === 'employee'" class="review-workspace">
+    <div v-if="showEmployeeReviews" class="review-workspace review-category-section">
+      <h4 v-if="activeCategory === 'all'" class="review-category-heading">员工档案 <span>{{ employeeTotal }}</span></h4>
       <div v-if="selectedEmployees.length" class="review-batchbar">
         <span>已选择 <strong>{{ selectedEmployees.length }}</strong> 人</span>
         <el-button :loading="employeeLoading" @click="rejectSelectedEmployees">退回</el-button>
@@ -447,33 +468,41 @@ onMounted(async () => {
         <el-table-column label="提交时间" width="160"><template #default="{ row }">{{ formatDateTime((row as EmployeeDataReview).createdAt) }}</template></el-table-column>
         <el-table-column label="操作" width="110"><template #default="{ row }"><el-button v-if="reviewHasPerformanceBlocker(row as EmployeeDataReview)" link type="primary" @click="openManagerDialog(row as EmployeeDataReview)">补充上级</el-button><span v-else>{{ reviewIsPending(row as EmployeeDataReview) ? '可审核' : '已处理' }}</span></template></el-table-column>
       </el-table>
-      <el-empty v-if="!employeeLoading && !employeeItems.length" description="暂无员工档案待审核变更" />
+      <el-empty v-if="activeCategory === 'employee' && !employeeLoading && !employeeItems.length" description="暂无员工档案待审核变更" />
     </div>
 
-    <div v-else-if="activeCategory === 'department'" class="department-review-list" v-loading="departmentLoading">
-      <article v-for="row in departmentItems" :key="row.id" class="department-review-card">
-        <div class="department-review-card__main">
-          <el-tag type="warning" effect="plain">{{ departmentActionLabel(row.action) }}</el-tag>
-          <div><strong>{{ departmentChangeSummary(row) }}</strong><p>提交人：<span>{{ row.createdBy?.name || '未知' }}</span> · {{ formatDateTime(row.createdAt) }}</p></div>
-        </div>
-        <div class="department-review-card__actions">
-          <el-button @click="rejectDepartment(row)">退回</el-button>
-          <el-button type="primary" @click="approveDepartment(row)">通过</el-button>
-        </div>
-      </article>
-      <el-empty v-if="!departmentLoading && !departmentItems.length" description="暂无部门架构待审核变更" />
+    <div v-if="showDepartmentReviews" class="review-category-section">
+      <h4 v-if="activeCategory === 'all'" class="review-category-heading">组织架构 <span>{{ departmentTotal }}</span></h4>
+      <div class="department-review-list" v-loading="departmentLoading">
+        <article v-for="row in departmentItems" :key="row.id" class="department-review-card">
+          <div class="department-review-card__main">
+            <el-tag type="warning" effect="plain">{{ departmentActionLabel(row.action) }}</el-tag>
+            <div><strong>{{ departmentChangeSummary(row) }}</strong><p>提交人：<span>{{ row.createdBy?.name || '未知' }}</span> · {{ formatDateTime(row.createdAt) }}</p></div>
+          </div>
+          <div class="department-review-card__actions">
+            <el-button @click="rejectDepartment(row)">退回</el-button>
+            <el-button type="primary" @click="approveDepartment(row)">通过</el-button>
+          </div>
+        </article>
+        <el-empty v-if="activeCategory === 'department' && !departmentLoading && !departmentItems.length" description="暂无部门架构待审核变更" />
+      </div>
     </div>
 
-    <div v-else class="department-review-list" v-loading="positionLoading">
-      <article v-for="row in positionItems" :key="row.id" class="department-review-card">
-        <div class="department-review-card__main">
-          <el-tag type="warning" effect="plain">{{ positionActionLabel(row.action) }}</el-tag>
-          <div><strong>{{ row.positionName }}</strong><p>{{ row.proposedValue.code || '-' }} · {{ row.proposedValue.jobFamily || '未分类' }} · {{ row.createdBy?.name || '未知' }} · {{ formatDateTime(row.createdAt) }}</p><p v-if="row.warnings?.length" class="review-warning">{{ row.warnings.join('；') }}</p></div>
-        </div>
-        <div class="department-review-card__actions"><el-button @click="rejectPosition(row)">退回</el-button><el-button type="primary" @click="approvePosition(row)">通过</el-button></div>
-      </article>
-      <el-empty v-if="!positionLoading && !positionItems.length" description="暂无岗位待审核变更" />
+    <div v-if="showPositionReviews" class="review-category-section">
+      <h4 v-if="activeCategory === 'all'" class="review-category-heading">岗位目录 <span>{{ positionTotal }}</span></h4>
+      <div class="department-review-list" v-loading="positionLoading">
+        <article v-for="row in positionItems" :key="row.id" class="department-review-card">
+          <div class="department-review-card__main">
+            <el-tag type="warning" effect="plain">{{ positionActionLabel(row.action) }}</el-tag>
+            <div><strong>{{ row.positionName }}</strong><p>{{ row.proposedValue.code || '-' }} · {{ row.proposedValue.jobFamily || '未分类' }} · {{ row.createdBy?.name || '未知' }} · {{ formatDateTime(row.createdAt) }}</p><p v-if="row.warnings?.length" class="review-warning">{{ row.warnings.join('；') }}</p></div>
+          </div>
+          <div class="department-review-card__actions"><el-button @click="rejectPosition(row)">退回</el-button><el-button type="primary" @click="approvePosition(row)">通过</el-button></div>
+        </article>
+        <el-empty v-if="activeCategory === 'position' && !positionLoading && !positionItems.length" description="暂无岗位待审核变更" />
+      </div>
     </div>
+
+    <el-empty v-if="activeCategory === 'all' && !allLoading && reviewTotal === 0" description="暂无待审核变更" />
 
     <el-dialog v-model="managerDialog.visible" title="补充绩效直属上级" width="480px" :close-on-click-modal="false" destroy-on-close>
       <p>为 <strong>{{ managerDialog.employeeName }}</strong> 选择系统内绩效直属上级。</p>
@@ -493,6 +522,9 @@ onMounted(async () => {
 .pending-review-workspace__tabs button { border: 0; padding: 8px 14px; border-radius: 8px; background: transparent; color: #475467; cursor: pointer; }
 .pending-review-workspace__tabs button.active { background: #fff; color: #175cd3; box-shadow: 0 1px 3px rgb(16 24 40 / 12%); }
 .review-batchbar { display: flex; align-items: center; justify-content: flex-end; gap: 14px; margin-bottom: 12px; }
+.review-category-section + .review-category-section { margin-top: 22px; padding-top: 22px; border-top: 1px solid #eef2f6; }
+.review-category-heading { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; color: #344054; }
+.review-category-heading span { min-width: 24px; padding: 1px 8px; border-radius: 999px; background: #eef4ff; color: #3563e9; font-size: 12px; text-align: center; }
 .contract-review-detail { padding: 4px 52px 14px; }
 .contract-review-detail h4 { margin: 0 0 10px; }
 .contract-review-detail > p { margin: 0; color: #667085; }

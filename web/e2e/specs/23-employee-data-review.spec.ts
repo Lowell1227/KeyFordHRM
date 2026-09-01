@@ -57,6 +57,13 @@ test('HR administrator reviews employee and department changes from the independ
     createdBy: { id: 'ordinary-hr-1', name: '余焱玲', sysRole: 'hr_user' },
     createdAt: '2026-08-23T08:02:00.000Z', updatedAt: '2026-08-23T08:02:00.000Z',
   };
+  const positionChange = {
+    id: '44444444-4444-4444-8444-444444444444',
+    positionId: null, positionName: '项目经理', action: 'create', status: 'pending',
+    baseValue: {}, proposedValue: { code: 'PM', jobFamily: '项目管理' }, warnings: [],
+    createdBy: { id: 'ordinary-hr-1', name: '余焱玲' },
+    createdAt: '2026-08-23T08:03:00.000Z',
+  };
   let approveBody: unknown;
   let approvedDepartmentId: string | null = null;
 
@@ -114,16 +121,25 @@ test('HR administrator reviews employee and department changes from the independ
     }
     return route.fallback();
   });
+  await page.route('**/api/v1/positions/change-requests**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 20, items: [positionChange] })),
+  }));
 
   await page.goto(`${webBaseUrl}/personnel-change-reviews`);
   await expect(page.getByRole('button', { name: '人事变更审核', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /待处理事项/ })).toHaveCount(0);
+  await expect(page.locator('.personnel-review-hero')).toHaveCount(0);
 
   const workspace = page.locator('.pending-review-workspace');
+  await expect(workspace.getByRole('button', { name: '全部 4' })).toHaveClass(/active/);
   await expect(workspace.getByRole('button', { name: '员工档案 2' })).toBeVisible();
   await expect(workspace.getByRole('button', { name: '组织架构 1' })).toBeVisible();
+  await expect(workspace.getByRole('button', { name: '岗位目录 1' })).toBeVisible();
   await expect(workspace.getByText('员工一', { exact: true })).toBeVisible();
   await expect(workspace.getByText('员工二', { exact: true })).toBeVisible();
+  await expect(workspace.getByText('项目中心 → 项目管理中心')).toBeVisible();
+  await expect(workspace.getByText('项目经理', { exact: true })).toBeVisible();
   await expect(workspace.getByText('余焱玲', { exact: true }).first()).toBeVisible();
   await expect(workspace.getByText('基础档案审核', { exact: true })).toBeVisible();
   await expect(workspace.getByText('绩效关系审核', { exact: true })).toBeVisible();
