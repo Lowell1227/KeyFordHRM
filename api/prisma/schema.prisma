@@ -1203,7 +1203,10 @@ model IndicatorInstance {
   templateIndicator   TemplateIndicator?              @relation(fields: [templateIndicatorId], references: [id], onDelete: SetNull)
   visibleDepartments  IndicatorVisibilityDepartment[]
   visibleUsers        IndicatorVisibilityUser[]
+  visibilityRules     IndicatorVisibilityRule[]
   objectiveAlignments IndicatorObjectiveAlignment[]
+  parentAlignments    IndicatorInstanceAlignment[]     @relation("IndicatorAlignmentParent")
+  childAlignments     IndicatorInstanceAlignment[]     @relation("IndicatorAlignmentChild")
   progressUpdates     IndicatorProgressUpdate[]
 
   @@index([taskId])
@@ -1254,6 +1257,31 @@ model IndicatorVisibilityUser {
   @@id([indicatorInstanceId, userId])
   @@index([userId])
   @@map("indicator_visibility_users")
+}
+
+model IndicatorVisibilityRule {
+  id                  String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  indicatorInstanceId String                   @map("indicator_instance_id") @db.Uuid
+  scope               IndicatorVisibilityScope
+  createdAt           DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
+  indicatorInstance   IndicatorInstance        @relation(fields: [indicatorInstanceId], references: [id], onDelete: Cascade)
+
+  @@unique([indicatorInstanceId, scope])
+  @@index([scope, indicatorInstanceId])
+  @@map("indicator_visibility_rules")
+}
+
+model IndicatorInstanceAlignment {
+  id                String            @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  childIndicatorId  String            @map("child_indicator_id") @db.Uuid
+  parentIndicatorId String            @map("parent_indicator_id") @db.Uuid
+  createdAt         DateTime          @default(now()) @map("created_at") @db.Timestamptz(6)
+  childIndicator    IndicatorInstance @relation("IndicatorAlignmentChild", fields: [childIndicatorId], references: [id], onDelete: Cascade)
+  parentIndicator   IndicatorInstance @relation("IndicatorAlignmentParent", fields: [parentIndicatorId], references: [id], onDelete: Cascade)
+
+  @@unique([childIndicatorId, parentIndicatorId])
+  @@index([parentIndicatorId])
+  @@map("indicator_instance_alignments")
 }
 
 model IndicatorObjectiveAlignment {

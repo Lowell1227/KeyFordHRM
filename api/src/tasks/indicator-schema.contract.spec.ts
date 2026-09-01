@@ -46,4 +46,16 @@ describe('performance workflow v2 schema', () => {
     expect(schema).toMatch(/periodReviewRevisionId\s+String\?/);
     expect(schema).toContain('@@unique([indicatorInstanceId, periodReviewRevisionId])');
   });
+
+  it('stores multi-scope visibility rules and explicit indicator-to-indicator alignments', () => {
+    const schema = readFileSync(resolve(process.cwd(), 'prisma/schema.prisma'), 'utf8');
+
+    expect(schema).toContain('model IndicatorVisibilityRule');
+    expect(schema).toContain('@@unique([indicatorInstanceId, scope])');
+    expect(schema).toContain('model IndicatorInstanceAlignment');
+    expect(schema).toContain('@@unique([childIndicatorId, parentIndicatorId])');
+    expect(schema).toMatch(/visibilityRules\s+IndicatorVisibilityRule\[\]/);
+    expect(schema).toMatch(/parentAlignments\s+IndicatorInstanceAlignment\[\]/);
+    expect(schema).toMatch(/childAlignments\s+IndicatorInstanceAlignment\[\]/);
+  });
 });
