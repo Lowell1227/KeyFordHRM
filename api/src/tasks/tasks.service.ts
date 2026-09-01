@@ -18,7 +18,14 @@ import { DeptReviewDto } from './dto/dept-review.dto';
 import { SubmitIndicatorProposalDto } from './dto/submit-indicator-proposal.dto';
 import { SetIndicatorItemDto, SetIndicatorsDto } from './dto/set-indicators.dto';
 import { ObjectivesService } from '@/objectives/objectives.service';
-import { IndicatorReferenceItem, IndicatorVisibilityService } from './indicator-visibility.service';
+import {
+  IndicatorReferenceItem,
+  IndicatorVisibilityService,
+} from './indicator-visibility.service';
+import {
+  legacyVisibilityScope,
+  normalizeIndicatorVisibilityScopes,
+} from './indicator-visibility.rules';
 import { ReferenceIndicatorQueryDto } from './dto/reference-indicator-query.dto';
 import { assertTaskVersion, claimTaskVersion } from './task-version';
 import { IndicatorVersionService } from './indicator-version.service';
@@ -26,6 +33,7 @@ import { IndicatorVersionService } from './indicator-version.service';
 type IndicatorBaselineSource = IndicatorInstance & {
   visibleDepartments: Array<{ departmentId: string }>;
   visibleUsers: Array<{ userId: string }>;
+  visibilityRules?: Array<{ scope: IndicatorVisibilityScope }>;
   objectiveAlignments: Array<{ objectiveId: string }>;
 };
 
@@ -90,6 +98,7 @@ export interface TaskDetail extends TaskListItem {
     finalScore: number | null;
     sortOrder: number;
     visibilityScope: IndicatorVisibilityScope;
+    visibilityScopes: IndicatorVisibilityScope[];
     visibleDepartmentIds: string[];
     visibleUserIds: string[];
     alignedObjectives: Array<{
@@ -343,6 +352,10 @@ export class TasksService {
           include: {
             visibleDepartments: { select: { departmentId: true } },
             visibleUsers: { select: { userId: true } },
+            visibilityRules: {
+              orderBy: { scope: 'asc' },
+              select: { scope: true },
+            },
             objectiveAlignments: {
               include: {
                 objective: {
@@ -502,6 +515,10 @@ export class TasksService {
             orderBy: { userId: 'asc' },
             select: { userId: true },
           },
+          visibilityRules: {
+            orderBy: { scope: 'asc' },
+            select: { scope: true },
+          },
           objectiveAlignments: {
             orderBy: { objectiveId: 'asc' },
             select: { objectiveId: true },
@@ -650,6 +667,10 @@ export class TasksService {
         code: ERROR_CODE.CONFLICT,
         message: '请至少填写一条指标草稿',
       });
+    }
+
+    for (const item of validItems) {
+      await this.indicatorVisibility.validateSelection(item, task, viewer);
     }
 
     const record = await this.prisma.$transaction(async (tx) => {
@@ -1540,6 +1561,7 @@ export class TasksService {
       if (!name) continue;
       const legacyTarget = (item as SetIndicatorItemDto & { target?: string }).target?.trim();
       const legacyStandard = (item as SetIndicatorItemDto & { standard?: string }).standard?.trim();
+      const visibilityScopes = normalizeIndicatorVisibilityScopes(item);
       valid.push({
         templateIndicatorId: item.templateIndicatorId,
         name,
@@ -1555,7 +1577,8 @@ export class TasksService {
         dimensionName: item.dimensionName?.trim() || 'KPI维度',
         dimensionWeight: item.dimensionWeight ?? 1,
         sortOrder: item.sortOrder ?? index,
-        visibilityScope: item.visibilityScope ?? IndicatorVisibilityScope.supervisors,
+        visibilityScope: legacyVisibilityScope(visibilityScopes),
+        visibilityScopes,
         visibleDepartmentIds: [...new Set(item.visibleDepartmentIds ?? [])],
         visibleUserIds: [...new Set(item.visibleUserIds ?? [])],
         alignedObjectiveIds: [...new Set(item.alignedObjectiveIds ?? [])],
@@ -1596,6 +1619,11 @@ export class TasksService {
           dimensionWeight: new Prisma.Decimal((item.dimensionWeight ?? 1).toString()),
           sortOrder: item.sortOrder ?? index,
           visibilityScope: item.visibilityScope,
+          visibilityRules: {
+            createMany: {
+              data: (item.visibilityScopes ?? [IndicatorVisibilityScope.supervisors]).map((scope) => ({ scope })),
+            },
+          },
           visibleDepartments: item.visibleDepartmentIds.length
             ? {
                 createMany: {
@@ -1691,6 +1719,9 @@ export class TasksService {
         finalScore: ind.finalScore?.toNumber() ?? null,
         sortOrder: ind.sortOrder,
         visibilityScope: ind.visibilityScope ?? IndicatorVisibilityScope.supervisors,
+        visibilityScopes: ind.visibilityRules?.length
+          ? ind.visibilityRules.map((rule: { scope: IndicatorVisibilityScope }) => rule.scope)
+          : [ind.visibilityScope ?? IndicatorVisibilityScope.supervisors],
         visibleDepartmentIds: (ind.visibleDepartments ?? []).map((row: { departmentId: string }) => row.departmentId),
         visibleUserIds: (ind.visibleUsers ?? []).map((row: { userId: string }) => row.userId),
         alignedObjectives: (ind.objectiveAlignments ?? [])
@@ -1792,6 +1823,9 @@ export class TasksService {
       dimensionName: indicator.dimensionName ?? null,
       dimensionWeight: indicator.dimensionWeight?.toNumber?.() ?? Number(indicator.dimensionWeight ?? 0),
       visibilityScope: indicator.visibilityScope ?? IndicatorVisibilityScope.supervisors,
+      visibilityScopes: indicator.visibilityRules?.length
+        ? indicator.visibilityRules.map((item) => item.scope).sort()
+        : [indicator.visibilityScope ?? IndicatorVisibilityScope.supervisors],
       visibleDepartmentIds: indicator.visibleDepartments
         .map((item) => item.departmentId)
         .sort(),

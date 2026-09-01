@@ -702,20 +702,12 @@ describe('ObjectivesService visibility helpers', () => {
       where: { id: viewer.id },
       select: { directManagerId: true },
     });
-    expect(prisma.assessmentTask.findUnique).toHaveBeenCalledWith(expect.objectContaining({
-      include: expect.objectContaining({
-        indicatorInstances: expect.objectContaining({
-          where: {
-            OR: expect.arrayContaining([
-              { visibilityScope: 'company' },
-              { visibilityScope: 'direct_reports' },
-              { visibilityScope: 'all_reports' },
-              { visibleUsers: { some: { userId: viewer.id } } },
-            ]),
-          },
-        }),
-      }),
-    }));
+    const trackingQuery = JSON.stringify(prisma.assessmentTask.findUnique.mock.calls[0][0]);
+    expect(trackingQuery).toContain('visibilityRules');
+    expect(trackingQuery).toContain('"scope":"company"');
+    expect(trackingQuery).toContain('"scope":"direct_reports"');
+    expect(trackingQuery).toContain('"scope":"all_reports"');
+    expect(trackingQuery).toContain(`"userId":"${viewer.id}"`);
     expect(result.canEdit).toBe(false);
   });
 
@@ -983,6 +975,10 @@ describe('ObjectivesService visibility helpers', () => {
       dimensionName: '工作目标',
       dimensionWeight: new Prisma.Decimal('1'),
       visibilityScope: 'direct_reports',
+      visibilityRules: [
+        { scope: 'direct_reports' },
+        { scope: 'department' },
+      ],
       actualValue: null,
       actualNote: null,
       sortOrder: 0,
@@ -1003,25 +999,13 @@ describe('ObjectivesService visibility helpers', () => {
 
     const result = await (service as any).findTrackingIndicator('indicator-manager', viewer);
 
-    expect(prisma.indicatorInstance.findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      where: {
-        AND: [
-          { id: 'indicator-manager' },
-          {
-            OR: expect.arrayContaining([
-              { task: { employeeId: viewer.id } },
-              {
-                AND: [
-                  { task: { employeeId: 'director-1' } },
-                  { visibilityScope: 'direct_reports' },
-                ],
-              },
-            ]),
-          },
-        ],
-      },
-    }));
+    const detailQuery = JSON.stringify(prisma.indicatorInstance.findFirst.mock.calls[0][0]);
+    expect(detailQuery).toContain('"employeeId":"manager-1"');
+    expect(detailQuery).toContain('"employeeId":"director-1"');
+    expect(detailQuery).toContain('"scope":"direct_reports"');
+    expect(detailQuery).toContain('visibilityRules');
     expect(result.canEdit).toBe(false);
+    expect(result.visibilityScopes).toEqual(['direct_reports', 'department']);
   });
 
   it('resolves a deep link through the same visibility predicate', async () => {

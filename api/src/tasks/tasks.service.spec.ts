@@ -548,6 +548,35 @@ describe('TasksService', () => {
   describe('visibility persistence and aligned objectives', () => {
     const updatedAt = new Date('2026-08-08T08:00:00.000Z');
 
+    it('validates every visibility selection before saving an employee proposal', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...makeTask('indicator_drafting'),
+        updatedAt,
+      });
+      transactionClient.flowRecord.create.mockResolvedValue({ createdAt: updatedAt });
+
+      await service.submitIndicatorProposal(
+        'task-1',
+        {
+          items: [{
+            name: 'Revenue',
+            weight: 1,
+            visibilityScopes: ['supervisors', 'department'],
+            visibleDepartmentIds: [],
+            visibleUserIds: [],
+            alignedObjectiveIds: [],
+          }],
+        } as any,
+        makeViewer({ id: 'emp-1' }),
+      );
+
+      expect(indicatorVisibility.validateSelection).toHaveBeenCalledWith(
+        expect.objectContaining({ visibilityScopes: ['department', 'supervisors'] }),
+        expect.objectContaining({ id: 'task-1' }),
+        expect.objectContaining({ id: 'emp-1' }),
+      );
+    });
+
     it('allows an HR administrator to save their own goal draft as the employee', async () => {
       prisma.assessmentTask.findUnique.mockResolvedValue({
         ...makeTask('indicator_drafting'),
@@ -698,7 +727,7 @@ describe('TasksService', () => {
             {
               name: 'Revenue',
               weight: 1,
-              visibilityScope: 'custom',
+              visibilityScopes: ['supervisors', 'custom'],
               visibleDepartmentIds: ['dept-2', 'dept-2'],
               visibleUserIds: ['user-2', 'user-2'],
               alignedObjectiveIds: ['objective-1', 'objective-1'],
@@ -710,7 +739,7 @@ describe('TasksService', () => {
 
       expect(indicatorVisibility.validateSelection).toHaveBeenCalledWith(
         expect.objectContaining({
-          visibilityScope: 'custom',
+          visibilityScopes: ['supervisors', 'custom'],
           visibleDepartmentIds: ['dept-2'],
           visibleUserIds: ['user-2'],
           alignedObjectiveIds: ['objective-1'],
@@ -721,7 +750,12 @@ describe('TasksService', () => {
       expect(transactionClient.indicatorInstance.create).toHaveBeenCalledWith(
         expect.objectContaining({
           data: expect.objectContaining({
-            visibilityScope: 'custom',
+            visibilityScope: 'supervisors',
+            visibilityRules: {
+              createMany: {
+                data: [{ scope: 'supervisors' }, { scope: 'custom' }],
+              },
+            },
             visibleDepartments: {
               createMany: { data: [{ departmentId: 'dept-2' }] },
             },
@@ -1563,6 +1597,10 @@ describe('TasksService', () => {
           visibleUsers: {
             orderBy: { userId: 'asc' },
             select: { userId: true },
+          },
+          visibilityRules: {
+            orderBy: { scope: 'asc' },
+            select: { scope: true },
           },
           objectiveAlignments: {
             orderBy: { objectiveId: 'asc' },

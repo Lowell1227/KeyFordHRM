@@ -7,9 +7,14 @@ import { AuthUser } from '@/common/types/auth.types';
 import { ObjectivesService } from '@/objectives/objectives.service';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ReferenceIndicatorQueryDto } from './dto/reference-indicator-query.dto';
+import {
+  buildVisibilityScopeWhere,
+  normalizeIndicatorVisibilityScopes,
+} from './indicator-visibility.rules';
 
 export interface IndicatorVisibilitySelection {
-  visibilityScope: IndicatorVisibilityScope;
+  visibilityScope?: IndicatorVisibilityScope;
+  visibilityScopes?: IndicatorVisibilityScope[];
   visibleDepartmentIds: string[];
   visibleUserIds: string[];
   alignedObjectiveIds: string[];
@@ -31,6 +36,7 @@ export interface IndicatorReferenceItem {
   name: string;
   weight: number;
   visibilityScope: IndicatorVisibilityScope;
+  visibilityScopes: IndicatorVisibilityScope[];
 }
 
 @Injectable()
@@ -46,19 +52,13 @@ export class IndicatorVisibilityService {
     _task: IndicatorTaskContext,
     viewer: AuthUser,
   ): Promise<void> {
+    const visibilityScopes = normalizeIndicatorVisibilityScopes(selection);
     const departmentIds = [...new Set(selection.visibleDepartmentIds ?? [])];
     const userIds = [...new Set(selection.visibleUserIds ?? [])];
     const objectiveIds = [...new Set(selection.alignedObjectiveIds ?? [])];
 
-    if (!Object.values(IndicatorVisibilityScope).includes(selection.visibilityScope)) {
-      throw new BadRequestException({
-        code: ERROR_CODE.PARAM_INVALID,
-        message: '可见范围无效',
-      });
-    }
-
     if (
-      selection.visibilityScope === IndicatorVisibilityScope.custom &&
+      visibilityScopes.includes(IndicatorVisibilityScope.custom) &&
       departmentIds.length === 0 &&
       userIds.length === 0
     ) {
@@ -69,7 +69,7 @@ export class IndicatorVisibilityService {
     }
 
     if (
-      selection.visibilityScope !== IndicatorVisibilityScope.custom &&
+      !visibilityScopes.includes(IndicatorVisibilityScope.custom) &&
       (departmentIds.length > 0 || userIds.length > 0)
     ) {
       throw new BadRequestException({
@@ -130,41 +130,61 @@ export class IndicatorVisibilityService {
 
     const clauses: Prisma.IndicatorInstanceWhereInput[] = [
       { task: { employeeId: viewer.id } },
-      { visibilityScope: IndicatorVisibilityScope.company },
       {
-        visibilityScope: IndicatorVisibilityScope.supervisors,
-        task: { managerId: viewer.id },
+        AND: [
+          buildVisibilityScopeWhere(IndicatorVisibilityScope.company),
+        ],
       },
       {
-        visibleUsers: { some: { userId: viewer.id } },
+        AND: [
+          buildVisibilityScopeWhere(IndicatorVisibilityScope.supervisors),
+          { task: { managerId: viewer.id } },
+        ],
+      },
+      {
+        AND: [
+          buildVisibilityScopeWhere(IndicatorVisibilityScope.custom),
+          { visibleUsers: { some: { userId: viewer.id } } },
+        ],
       },
     ];
 
     if (viewer.deptId) {
       clauses.push(
         {
-          visibilityScope: IndicatorVisibilityScope.department,
-          task: { deptId: viewer.deptId },
+          AND: [
+            buildVisibilityScopeWhere(IndicatorVisibilityScope.department),
+            { task: { deptId: viewer.deptId } },
+          ],
         },
         {
-          visibilityScope: IndicatorVisibilityScope.department_tree,
-          task: { deptId: { in: ancestorDeptIds } },
+          AND: [
+            buildVisibilityScopeWhere(IndicatorVisibilityScope.department_tree),
+            { task: { deptId: { in: ancestorDeptIds } } },
+          ],
         },
         {
-          visibleDepartments: { some: { departmentId: viewer.deptId } },
+          AND: [
+            buildVisibilityScopeWhere(IndicatorVisibilityScope.custom),
+            { visibleDepartments: { some: { departmentId: viewer.deptId } } },
+          ],
         },
       );
     }
     if (viewerRecord?.directManagerId) {
       clauses.push({
-        visibilityScope: IndicatorVisibilityScope.direct_reports,
-        task: { employeeId: viewerRecord.directManagerId },
+        AND: [
+          buildVisibilityScopeWhere(IndicatorVisibilityScope.direct_reports),
+          { task: { employeeId: viewerRecord.directManagerId } },
+        ],
       });
     }
     if (managerChainIds.length > 0) {
       clauses.push({
-        visibilityScope: IndicatorVisibilityScope.all_reports,
-        task: { employeeId: { in: managerChainIds } },
+        AND: [
+          buildVisibilityScopeWhere(IndicatorVisibilityScope.all_reports),
+          { task: { employeeId: { in: managerChainIds } } },
+        ],
       });
     }
 
@@ -203,6 +223,10 @@ export class IndicatorVisibilityService {
           name: true,
           weight: true,
           visibilityScope: true,
+          visibilityRules: {
+            orderBy: { scope: 'asc' },
+            select: { scope: true },
+          },
           task: {
             select: {
               cycleId: true,
@@ -226,6 +250,9 @@ export class IndicatorVisibilityService {
         name: indicator.name,
         weight: indicator.weight.toNumber(),
         visibilityScope: indicator.visibilityScope,
+        visibilityScopes: indicator.visibilityRules.length
+          ? indicator.visibilityRules.map((rule) => rule.scope)
+          : [indicator.visibilityScope],
       })),
       total,
       query,

@@ -7,6 +7,7 @@ import {
 } from '@nestjs/common';
 import {
   IndicatorProgressHealth,
+  IndicatorVisibilityScope,
   ObjectiveLevel,
   ObjectiveReviewStatus,
   ObjectiveStatus,
@@ -26,6 +27,7 @@ import { UpdateProgressDto } from './dto/update-progress.dto';
 import { ObjectiveQueryDto } from './dto/objective-query.dto';
 import { GoalTrackingQueryDto } from './dto/goal-tracking-query.dto';
 import { buildActionItemVisibilityWhere } from '@/action-items/action-item-visibility';
+import { buildVisibilityScopeWhere } from '@/tasks/indicator-visibility.rules';
 
 /** include 定义（字面量，便于 Prisma 推导类型）。 */
 const objectiveIncludeDef = {
@@ -82,6 +84,7 @@ export interface GoalTrackingItem {
   dimensionName?: string | null;
   dimensionWeight?: number;
   visibilityScope?: string;
+  visibilityScopes?: string[];
   ownerId: string | null;
   ownerName: string | null;
   cycleId: string | null;
@@ -320,16 +323,31 @@ export class ObjectivesService {
       }
       indicatorWhere = {
         OR: [
-          { visibilityScope: 'company' },
-          { visibilityScope: 'direct_reports' },
-          { visibilityScope: 'all_reports' },
+          buildVisibilityScopeWhere(IndicatorVisibilityScope.company),
+          buildVisibilityScopeWhere(IndicatorVisibilityScope.direct_reports),
+          buildVisibilityScopeWhere(IndicatorVisibilityScope.all_reports),
           ...(viewer.deptId
             ? [
-                { visibilityScope: 'department', task: { deptId: viewer.deptId } },
-                { visibleDepartments: { some: { departmentId: viewer.deptId } } },
+                {
+                  AND: [
+                    buildVisibilityScopeWhere(IndicatorVisibilityScope.department),
+                    { task: { deptId: viewer.deptId } },
+                  ],
+                },
+                {
+                  AND: [
+                    buildVisibilityScopeWhere(IndicatorVisibilityScope.custom),
+                    { visibleDepartments: { some: { departmentId: viewer.deptId } } },
+                  ],
+                },
               ] satisfies Prisma.IndicatorInstanceWhereInput[]
             : []),
-          { visibleUsers: { some: { userId: viewer.id } } },
+          {
+            AND: [
+              buildVisibilityScopeWhere(IndicatorVisibilityScope.custom),
+              { visibleUsers: { some: { userId: viewer.id } } },
+            ],
+          },
         ],
       };
     }
@@ -343,6 +361,10 @@ export class ObjectivesService {
           ...(indicatorWhere ? { where: indicatorWhere } : {}),
           orderBy: { sortOrder: 'asc' },
           include: {
+            visibilityRules: {
+              orderBy: { scope: 'asc' },
+              select: { scope: true },
+            },
             objectiveAlignments: {
               include: {
                 objective: {
@@ -390,6 +412,9 @@ export class ObjectivesService {
         dimensionName: indicator.dimensionName,
         dimensionWeight: indicator.dimensionWeight.toNumber() * 100,
         visibilityScope: indicator.visibilityScope,
+        visibilityScopes: indicator.visibilityRules?.length
+          ? indicator.visibilityRules.map((rule) => rule.scope)
+          : [indicator.visibilityScope],
         ownerId: task.employee.id,
         ownerName: task.employee.name,
         cycleId: task.cycle.id,
@@ -536,12 +561,13 @@ export class ObjectivesService {
     if (viewerRecord?.directManagerId) {
       const managerId = viewerRecord.directManagerId;
       ownerVisibility.push(
-        { AND: [{ task: { employeeId: managerId } }, { visibilityScope: 'company' }] },
-        { AND: [{ task: { employeeId: managerId } }, { visibilityScope: 'direct_reports' }] },
-        { AND: [{ task: { employeeId: managerId } }, { visibilityScope: 'all_reports' }] },
+        { AND: [{ task: { employeeId: managerId } }, buildVisibilityScopeWhere(IndicatorVisibilityScope.company)] },
+        { AND: [{ task: { employeeId: managerId } }, buildVisibilityScopeWhere(IndicatorVisibilityScope.direct_reports)] },
+        { AND: [{ task: { employeeId: managerId } }, buildVisibilityScopeWhere(IndicatorVisibilityScope.all_reports)] },
         {
           AND: [
             { task: { employeeId: managerId } },
+            buildVisibilityScopeWhere(IndicatorVisibilityScope.custom),
             { visibleUsers: { some: { userId: viewer.id } } },
           ],
         },
@@ -551,12 +577,14 @@ export class ObjectivesService {
           {
             AND: [
               { task: { employeeId: managerId } },
-              { visibilityScope: 'department', task: { deptId: viewer.deptId } },
+              buildVisibilityScopeWhere(IndicatorVisibilityScope.department),
+              { task: { deptId: viewer.deptId } },
             ],
           },
           {
             AND: [
               { task: { employeeId: managerId } },
+              buildVisibilityScopeWhere(IndicatorVisibilityScope.custom),
               { visibleDepartments: { some: { departmentId: viewer.deptId } } },
             ],
           },
@@ -566,6 +594,10 @@ export class ObjectivesService {
     const indicator = await this.prisma.indicatorInstance.findFirst({
       where: { AND: [{ id: indicatorId }, { OR: ownerVisibility }] },
       include: {
+        visibilityRules: {
+          orderBy: { scope: 'asc' },
+          select: { scope: true },
+        },
         task: {
           include: {
             employee: { select: { id: true, name: true } },
@@ -626,6 +658,9 @@ export class ObjectivesService {
       dimensionWeight: indicator.dimensionWeight.toNumber() * 100,
       weight: effectiveWeight,
       visibilityScope: indicator.visibilityScope,
+      visibilityScopes: indicator.visibilityRules?.length
+        ? indicator.visibilityRules.map((rule) => rule.scope)
+        : [indicator.visibilityScope],
       actualValue: indicator.actualValue?.toNumber() ?? null,
       actualNote: indicator.actualNote,
       ownerId: indicator.task.employee.id,

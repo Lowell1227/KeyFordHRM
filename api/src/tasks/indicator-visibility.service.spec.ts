@@ -61,10 +61,67 @@ describe('IndicatorVisibilityService', () => {
 
   const selection = (overrides: Record<string, unknown> = {}) => ({
     visibilityScope: IndicatorVisibilityScope.custom,
+    visibilityScopes: [IndicatorVisibilityScope.custom],
     visibleDepartmentIds: ['dept-2'],
     visibleUserIds: ['user-2'],
     alignedObjectiveIds: ['objective-1'],
     ...overrides,
+  });
+
+  it('accepts the new multi-scope DTO contract without requiring the legacy scalar', async () => {
+    const item = Object.assign(new SetIndicatorItemDto(), {
+      name: 'Revenue',
+      visibilityScopes: [IndicatorVisibilityScope.supervisors, IndicatorVisibilityScope.department],
+      visibleDepartmentIds: [],
+      visibleUserIds: [],
+      alignedObjectiveIds: [],
+    });
+    const dto = Object.assign(new SetIndicatorsDto(), {
+      expectedUpdatedAt: '2026-08-08T08:00:00.000Z',
+      instances: [item],
+    });
+
+    await expect(validate(dto)).resolves.toEqual([]);
+  });
+
+  it('rejects an empty visibility scope selection', async () => {
+    await expect(
+      service.validateSelection(
+        selection({ visibilityScope: undefined, visibilityScopes: [] }) as any,
+        task,
+        viewer,
+      ),
+    ).rejects.toThrow('请至少选择一个可见范围');
+  });
+
+  it('keeps company visibility exclusive from every other scope', async () => {
+    await expect(
+      service.validateSelection(
+        selection({
+          visibilityScope: undefined,
+          visibilityScopes: [IndicatorVisibilityScope.company, IndicatorVisibilityScope.department],
+          visibleDepartmentIds: [],
+          visibleUserIds: [],
+        }) as any,
+        task,
+        viewer,
+      ),
+    ).rejects.toThrow('全公司可见不能与其他范围同时选择');
+  });
+
+  it('allows custom selectors to coexist with another visibility scope', async () => {
+    prisma.user.findMany.mockResolvedValueOnce([{ id: 'user-2' }]).mockResolvedValueOnce([{ deptId: 'dept-2' }]);
+
+    await expect(
+      service.validateSelection(
+        selection({
+          visibilityScope: undefined,
+          visibilityScopes: [IndicatorVisibilityScope.supervisors, IndicatorVisibilityScope.custom],
+        }) as any,
+        task,
+        viewer,
+      ),
+    ).resolves.toBeUndefined();
   });
 
   it('requires a department or user for a custom visibility scope', async () => {
@@ -78,6 +135,7 @@ describe('IndicatorVisibilityService', () => {
       service.validateSelection(
         selection({
           visibilityScope: 'private',
+          visibilityScopes: ['private'],
           visibleDepartmentIds: [],
           visibleUserIds: [],
           alignedObjectiveIds: [],
@@ -114,7 +172,7 @@ describe('IndicatorVisibilityService', () => {
     'rejects custom ids submitted for the %s scope',
     async (visibilityScope) => {
       await expect(
-        service.validateSelection(selection({ visibilityScope }) as any, task, viewer),
+        service.validateSelection(selection({ visibilityScope, visibilityScopes: [visibilityScope] }) as any, task, viewer),
       ).rejects.toBeInstanceOf(BadRequestException);
     },
   );
@@ -169,32 +227,18 @@ describe('IndicatorVisibilityService', () => {
 
     const where = await service.buildReferenceWhere(viewer);
 
-    expect(where.OR).toEqual(
-      expect.arrayContaining([
-        { task: { employeeId: viewer.id } },
-        { visibilityScope: 'company' },
-        { visibilityScope: 'department', task: { deptId: viewer.deptId } },
-        {
-          visibilityScope: 'department_tree',
-          task: { deptId: { in: ['dept-child', 'dept-parent'] } },
-        },
-        {
-          visibilityScope: 'direct_reports',
-          task: { employeeId: 'manager-direct' },
-        },
-        {
-          visibilityScope: 'all_reports',
-          task: { employeeId: { in: ['manager-direct', 'manager-upper'] } },
-        },
-        { visibilityScope: 'supervisors', task: { managerId: viewer.id } },
-        {
-          visibleUsers: { some: { userId: viewer.id } },
-        },
-        {
-          visibleDepartments: { some: { departmentId: viewer.deptId } },
-        },
-      ]),
-    );
+    expect(JSON.stringify(where)).toContain('visibilityRules');
+    expect(JSON.stringify(where)).toContain('"scope":"company"');
+    expect(JSON.stringify(where)).toContain('"none":{}');
+
+    expect(where.OR).toEqual(expect.arrayContaining([{ task: { employeeId: viewer.id } }]));
+    const serialized = JSON.stringify(where);
+    for (const scope of Object.values(IndicatorVisibilityScope)) {
+      expect(serialized).toContain(`\"scope\":\"${scope}\"`);
+    }
+    expect(serialized).toContain('"managerId":"viewer-1"');
+    expect(serialized).toContain('"employeeId":"manager-direct"');
+    expect(serialized).toContain('"departmentId":"dept-child"');
   });
 
   it('combines reference visibility with filters and returns only the picker projection', async () => {
@@ -207,6 +251,10 @@ describe('IndicatorVisibilityService', () => {
         name: 'Revenue',
         weight: { toNumber: () => 0.4 },
         visibilityScope: IndicatorVisibilityScope.company,
+        visibilityRules: [
+          { scope: IndicatorVisibilityScope.company },
+          { scope: IndicatorVisibilityScope.supervisors },
+        ],
         task: {
           cycleId: 'cycle-1',
           employee: { id: 'owner-1', name: 'Owner' },
@@ -262,6 +310,7 @@ describe('IndicatorVisibilityService', () => {
           name: 'Revenue',
           weight: 0.4,
           visibilityScope: 'company',
+          visibilityScopes: ['company', 'supervisors'],
         },
       ],
     });

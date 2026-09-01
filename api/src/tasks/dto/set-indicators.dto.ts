@@ -83,8 +83,15 @@ export class SetIndicatorItemDto {
   @IsNumber()
   sortOrder?: number;
 
+  /** 兼容旧客户端；新客户端使用 visibilityScopes。 */
+  @IsOptional()
   @IsEnum(IndicatorVisibilityScope)
-  visibilityScope!: IndicatorVisibilityScope;
+  visibilityScope?: IndicatorVisibilityScope;
+
+  @IsOptional()
+  @IsArray()
+  @IsEnum(IndicatorVisibilityScope, { each: true })
+  visibilityScopes?: IndicatorVisibilityScope[];
 
   @IsArray()
   @IsUUID('4', { each: true })
