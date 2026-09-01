@@ -834,6 +834,8 @@ test.describe('compact cycle management list', () => {
     const preflightPanel = page.getByTestId('cycle-preflight-panel');
     await expect(page.getByTestId('cycle-preflight-reminder')).toContainText('计划检查提醒');
     await expect(preflightPanel).toContainText('考核范围');
+    await expect(preflightPanel.getByRole('columnheader', { name: '绩效直属上级' })).toBeVisible();
+    await expect(preflightPanel.getByPlaceholder('搜索姓名、部门或绩效直属上级')).toBeVisible();
     await expect(currentTask).not.toContainText('直属主管');
     await expect(currentTask).not.toContainText('绩效模板');
     await expect(currentTask).not.toContainText('时间设置');

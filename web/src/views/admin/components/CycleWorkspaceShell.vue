@@ -479,7 +479,7 @@ watch(() => props.cycle?.id, () => {
                 v-model="participantKeyword"
                 data-testid="participant-search"
                 clearable
-                placeholder="搜索姓名、部门或直属主管"
+                placeholder="搜索姓名、部门或绩效直属上级"
                 style="width: 260px"
               />
             </div>
@@ -491,7 +491,7 @@ watch(() => props.cycle?.id, () => {
             >
               <el-table-column prop="employeeName" label="员工" min-width="100" />
               <el-table-column prop="deptName" label="部门" min-width="130" />
-              <el-table-column prop="managerName" label="直属主管" min-width="110" />
+              <el-table-column prop="managerName" label="绩效直属上级" min-width="130" />
               <el-table-column label="参与结果" min-width="120">
                 <template #default="{ row }">
                   <el-tag :type="row.isExempt ? 'info' : 'success'" effect="light" size="small">
