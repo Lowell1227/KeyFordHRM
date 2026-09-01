@@ -11,34 +11,85 @@ const operator = {
 };
 
 describe('EmployeeDataReviewsService', () => {
-  it('HR管理员不能审核自己提交的员工变更', async () => {
+  it('HR管理员可以通过自己提交的员工绩效关系变更并保留审核记录', async () => {
     const request = {
       id: 'review-self',
       userId: 'employee-1',
       createdById: operator.id,
-      profileReviewStatus: 'pending',
-      performanceReviewStatus: 'not_required',
+      profileReviewStatus: 'not_required',
+      performanceReviewStatus: 'pending',
       validationErrors: [],
-      baseValue: {},
-      proposedValue: {},
+      baseValue: { performance: { managerId: null } },
+      proposedValue: { performance: { managerId: 'manager-1', managerName: '主管一' } },
     };
     const tx = {
       employeeDataChangeRequest: {
         findUnique: jest.fn().mockResolvedValue(request),
-        updateMany: jest.fn(),
-        update: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockImplementation(async ({ data }: any) => ({ ...request, ...data })),
       },
-      user: { update: jest.fn() },
-      auditLog: { create: jest.fn() },
+      user: {
+        findUnique: jest.fn(async ({ where }: any) => (
+          where.id === 'employee-1'
+            ? { id: 'employee-1', directManagerId: null, dept: { parentId: 'dept-parent', leaderId: null } }
+            : { id: 'manager-1', deletedAt: null, directManagerId: null }
+        )),
+        update: jest.fn().mockResolvedValue({ id: 'employee-1', directManagerId: 'manager-1' }),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-self-approve' }) },
     };
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
     const service = new EmployeeDataReviewsService(prisma as any);
 
-    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, operator);
+    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['performance'] }, operator);
 
-    expect(result.failed).toEqual([{ requestId: request.id, reason: '不能审核自己提交的变更' }]);
-    expect(tx.employeeDataChangeRequest.updateMany).not.toHaveBeenCalled();
-    expect(tx.user.update).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      succeeded: [{ requestId: request.id, scopes: ['performance'] }],
+      failed: [],
+    });
+    expect(tx.user.update).toHaveBeenCalledWith({
+      where: { id: 'employee-1' },
+      data: { directManagerId: 'manager-1' },
+    });
+    expect(tx.employeeDataChangeRequest.update).toHaveBeenCalledWith({
+      where: { id: request.id },
+      data: expect.objectContaining({
+        performanceReviewStatus: 'approved',
+        performanceReviewedById: operator.id,
+      }),
+    });
+  });
+
+  it('HR管理员可以退回自己提交的员工变更并保留审核记录', async () => {
+    const request = {
+      id: 'review-self-reject',
+      userId: 'employee-1',
+      createdById: operator.id,
+      profileReviewStatus: 'pending',
+      performanceReviewStatus: 'not_required',
+    };
+    const tx = {
+      employeeDataChangeRequest: {
+        findUnique: jest.fn().mockResolvedValue(request),
+        update: jest.fn().mockResolvedValue(request),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-self-reject' }) },
+    };
+    const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
+    const service = new EmployeeDataReviewsService(prisma as any);
+
+    const result = await service.rejectBatch([request.id], '信息需调整', operator);
+
+    expect(result.failed).toEqual([]);
+    expect(result.succeeded).toEqual([{ requestId: request.id, scopes: ['profile', 'performance'] }]);
+    expect(tx.employeeDataChangeRequest.update).toHaveBeenCalledWith({
+      where: { id: request.id },
+      data: expect.objectContaining({
+        profileReviewStatus: 'rejected',
+        profileReviewedById: operator.id,
+        rejectedReason: '信息需调整',
+      }),
+    });
   });
 
   it('HR 管理员查看待审核档案时能识别普通 HR 提交人', async () => {

@@ -152,9 +152,6 @@ export class PositionsService {
     return this.prisma.$transaction(async (tx) => {
       const request = await tx.positionChangeRequest.findUnique({ where: { id: requestId } });
       if (!request) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '岗位变更不存在' });
-      if (request.createdById === operator.id) {
-        throw new BadRequestException({ code: ERROR_CODE.FORBIDDEN, message: '不能审核自己提交的变更' });
-      }
       this.assertReviewer(operator);
       if (request.status !== 'pending') {
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '该岗位变更已处理' });
@@ -242,9 +239,6 @@ export class PositionsService {
     return this.prisma.$transaction(async (tx) => {
       const request = await tx.positionChangeRequest.findUnique({ where: { id: requestId } });
       if (!request) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '岗位变更不存在' });
-      if (request.createdById === operator.id) {
-        throw new BadRequestException({ code: ERROR_CODE.FORBIDDEN, message: '不能审核自己提交的变更' });
-      }
       const updated = await tx.positionChangeRequest.updateMany({
         where: { id: requestId, status: 'pending' },
         data: {

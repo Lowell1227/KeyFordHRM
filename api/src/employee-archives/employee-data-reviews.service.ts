@@ -249,9 +249,6 @@ export class EmployeeDataReviewsService {
         if (!request) {
           throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '审核记录不存在' });
         }
-        if (request.createdById === operator.id) {
-          throw new BadRequestException({ code: ERROR_CODE.FORBIDDEN, message: '不能审核自己提交的变更' });
-        }
         const status = scope === 'profile'
           ? request.profileReviewStatus
           : request.performanceReviewStatus;
@@ -376,9 +373,6 @@ export class EmployeeDataReviewsService {
         await this.prisma.$transaction(async (tx) => {
           const request = await tx.employeeDataChangeRequest.findUnique({ where: { id: requestId } });
           if (!request) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '审核记录不存在' });
-          if (request.createdById === operator.id) {
-            throw new BadRequestException({ code: ERROR_CODE.FORBIDDEN, message: '不能审核自己提交的变更' });
-          }
           const profilePending = request.profileReviewStatus === 'pending';
           const performancePending = request.performanceReviewStatus === 'pending';
           if (!profilePending && !performancePending) {

@@ -61,26 +61,89 @@ describe('PositionsService', () => {
     expect(tx.position.create).not.toHaveBeenCalled();
   });
 
-  it('提交人不能审核自己提交的岗位变更', async () => {
+  it('HR管理员可以通过自己提交的岗位变更并保留审核记录', async () => {
+    const ownReviewer = { ...reviewer, id: submitter.id };
+    const request = {
+      id: 'fc0dcfff-9891-4e75-85ce-f4f74a04c724',
+      positionId: null,
+      positionName: 'HRBP',
+      action: 'create',
+      status: 'pending',
+      baseValue: {},
+      proposedValue: { code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', isActive: true },
+      createdById: ownReviewer.id,
+    };
     const tx = {
       positionChangeRequest: {
-        findUnique: jest.fn().mockResolvedValue({
-          id: 'fc0dcfff-9891-4e75-85ce-f4f74a04c724',
-          createdById: submitter.id,
-          status: 'pending',
+        findUnique: jest.fn().mockResolvedValue(request),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockImplementation(async ({ data }: any) => ({ ...request, ...data })),
+      },
+      position: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue({
+          id: '1560b58d-f432-4e2e-a98f-e04ca77981d5',
+          code: 'HRBP',
+          name: 'HRBP',
+          jobFamily: '人力资源',
+          isActive: true,
         }),
       },
+      auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-own-approve' }) },
     };
     const prisma = {
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
     const service = new PositionsService(prisma as any);
 
-    await expect(service.approve('fc0dcfff-9891-4e75-85ce-f4f74a04c724', {
-      ...submitter,
-      sysRole: 'hr',
-    }))
-      .rejects.toThrow('不能审核自己提交的变更');
+    await expect(service.approve(request.id, ownReviewer)).resolves.toMatchObject({
+      status: 'approved',
+      reviewedById: ownReviewer.id,
+    });
+    expect(tx.positionChangeRequest.update).toHaveBeenCalledWith({
+      where: { id: request.id },
+      data: expect.objectContaining({ status: 'approved', reviewedById: ownReviewer.id }),
+    });
+  });
+
+  it('HR管理员可以退回自己提交的岗位变更并保留审核记录', async () => {
+    const ownReviewer = { ...reviewer, id: submitter.id };
+    const request = {
+      id: 'fc0dcfff-9891-4e75-85ce-f4f74a04c724',
+      positionId: null,
+      positionName: 'HRBP',
+      action: 'create',
+      status: 'pending',
+      baseValue: {},
+      proposedValue: { code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', isActive: true },
+      createdById: ownReviewer.id,
+    };
+    const tx = {
+      positionChangeRequest: {
+        findUnique: jest.fn()
+          .mockResolvedValueOnce(request)
+          .mockResolvedValueOnce({ ...request, status: 'rejected', reviewedById: ownReviewer.id }),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-own-reject' }) },
+    };
+    const prisma = {
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new PositionsService(prisma as any);
+
+    await expect(service.reject(request.id, '岗位信息需调整', ownReviewer)).resolves.toMatchObject({
+      status: 'rejected',
+      reviewedById: ownReviewer.id,
+    });
+    expect(tx.positionChangeRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: request.id, status: 'pending' },
+      data: expect.objectContaining({
+        status: 'rejected',
+        reviewedById: ownReviewer.id,
+        rejectedReason: '岗位信息需调整',
+      }),
+    });
   });
 
   it('HR管理员通过后才创建正式岗位并记录审核人', async () => {

@@ -685,20 +685,43 @@ describe("DepartmentsService", () => {
       .rejects.toThrow('上级部门与所属公司必须一致');
   });
 
-  it('审核人不能通过自己提交的部门变更', async () => {
+  it('HR管理员可以通过自己提交的部门变更并保留审核记录', async () => {
     const ownRequest = {
-      id: 'change-own', action: 'update_structure', status: 'pending', departmentId: 'dept-1',
-      departmentName: '项目部', createdById: 'hr-admin-1', baseValue: {}, proposedValue: {},
+      id: 'change-own', action: 'update_leader', status: 'pending', departmentId: 'dept-1',
+      departmentName: '项目部', createdById: 'hr-admin-1',
+      baseValue: { name: '项目部', leaderId: null },
+      proposedValue: { leaderId: null },
     };
-    const tx = { departmentChangeRequest: { findUnique: jest.fn().mockResolvedValue(ownRequest) } };
+    const tx = {
+      departmentChangeRequest: {
+        findUnique: jest.fn().mockResolvedValue(ownRequest),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockImplementation(async ({ data }: any) => ({ ...ownRequest, ...data })),
+      },
+      department: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'dept-1', name: '项目部', fullPath: '项目部', leaderId: null, isActive: true,
+        }),
+        update: jest.fn().mockResolvedValue({ id: 'dept-1', leaderId: null }),
+      },
+      user: { findUnique: jest.fn() },
+      auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-own-approve' }) },
+    };
     const service = new DepartmentsService({
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     } as any);
 
-    await expect(service.approveChange(ownRequest.id, hrAdmin)).rejects.toThrow('不能审核自己提交的部门变更');
+    await expect(service.approveChange(ownRequest.id, hrAdmin)).resolves.toMatchObject({
+      status: 'approved',
+      reviewedById: hrAdmin.id,
+    });
+    expect(tx.departmentChangeRequest.update).toHaveBeenCalledWith({
+      where: { id: ownRequest.id },
+      data: expect.objectContaining({ status: 'approved', reviewedById: hrAdmin.id }),
+    });
   });
 
-  it('审核人不能退回自己提交的部门变更', async () => {
+  it('HR管理员可以退回自己提交的部门变更并保留审核记录', async () => {
     const ownRequest = {
       id: 'change-own-reject', action: 'update_structure', status: 'pending', departmentId: 'dept-1',
       departmentName: '项目部', createdById: 'hr-admin-1', baseValue: {}, proposedValue: {},
@@ -706,16 +729,23 @@ describe("DepartmentsService", () => {
     const tx = {
       departmentChangeRequest: {
         findUnique: jest.fn().mockResolvedValue(ownRequest),
-        updateMany: jest.fn(),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
+      auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-own-reject' }) },
     };
     const service = new DepartmentsService({
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     } as any);
 
-    await expect(service.rejectChange(ownRequest.id, '信息不完整', hrAdmin))
-      .rejects.toThrow('不能审核自己提交的部门变更');
-    expect(tx.departmentChangeRequest.updateMany).not.toHaveBeenCalled();
+    await expect(service.rejectChange(ownRequest.id, '信息不完整', hrAdmin)).resolves.toEqual(ownRequest);
+    expect(tx.departmentChangeRequest.updateMany).toHaveBeenCalledWith({
+      where: { id: ownRequest.id, status: 'pending' },
+      data: expect.objectContaining({
+        status: 'rejected',
+        reviewedById: hrAdmin.id,
+        rejectedReason: '信息不完整',
+      }),
+    });
   });
 
   it('同一部门已有待审核结构变更时拒绝重复提交', async () => {

@@ -596,9 +596,6 @@ export class DepartmentsService {
       if (request.status !== 'pending') {
         throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '该部门变更申请已处理' });
       }
-      if (request.createdById === operator.id) {
-        throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '不能审核自己提交的部门变更' });
-      }
       const claimed = await tx.departmentChangeRequest.updateMany({
         where: { id: requestId, status: 'pending' },
         data: { status: 'applying' },
@@ -654,9 +651,6 @@ export class DepartmentsService {
       }
       if (request.status !== 'pending') {
         throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '该部门变更申请已处理' });
-      }
-      if (request.createdById === operator.id) {
-        throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '不能审核自己提交的部门变更' });
       }
       const now = new Date();
       const rejected = await tx.departmentChangeRequest.updateMany({

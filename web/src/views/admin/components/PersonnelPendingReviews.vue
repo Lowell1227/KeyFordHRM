@@ -13,7 +13,6 @@ import {
   type DepartmentChangeRequest,
 } from '@/api/departments.api';
 import UserSelect from '@/components/common/UserSelect.vue';
-import { useAuthStore } from '@/stores/auth.store';
 import { positionsApi, type PositionChangeRequest } from '@/api/positions.api';
 
 const props = defineProps<{
@@ -21,7 +20,6 @@ const props = defineProps<{
   canReviewDepartment: boolean;
   canReviewPosition?: boolean;
 }>();
-const auth = useAuthStore();
 
 const emit = defineEmits<{
   changed: [];
@@ -198,10 +196,6 @@ function departmentActionLabel(action: DepartmentChangeAction): string {
     merge: '合并部门',
     delete: '停用部门',
   })[action];
-}
-
-function canApproveDepartment(row: DepartmentChangeRequest): boolean {
-  return row.createdBy?.id !== auth.user?.id;
 }
 
 function departmentChangeSummary(row: DepartmentChangeRequest): string {
@@ -404,7 +398,7 @@ onMounted(async () => {
 <template>
   <section v-if="visible" class="pending-review-workspace">
     <div class="pending-review-workspace__head">
-      <div class="review-title"><h3>待审核变更</h3><el-tooltip placement="bottom"><template #content>普通 HR 提交后由 HR 管理员审核。<br>审核通过前不改变正式数据。<br>本人不能审核自己提交的变更。</template><el-icon><QuestionFilled /></el-icon></el-tooltip></div>
+      <div class="review-title"><h3>待审核变更</h3><el-tooltip placement="bottom"><template #content>普通 HR 提交后由 HR 管理员审核。<br>HR 管理员可审核本人提交的变更。<br>审核通过前不改变正式数据。</template><el-icon><QuestionFilled /></el-icon></el-tooltip></div>
       <div class="pending-review-workspace__tabs" aria-label="审核事项分类">
         <button v-if="canReviewEmployee" type="button" :class="{ active: activeCategory === 'employee' }" @click="activeCategory = 'employee'">
           员工档案 {{ employeeTotal }}
@@ -463,9 +457,8 @@ onMounted(async () => {
           <div><strong>{{ departmentChangeSummary(row) }}</strong><p>提交人：<span>{{ row.createdBy?.name || '未知' }}</span> · {{ formatDateTime(row.createdAt) }}</p></div>
         </div>
         <div class="department-review-card__actions">
-          <span v-if="!canApproveDepartment(row)" class="self-review-tip">本人提交，需其他管理员审核</span>
-          <el-button :disabled="!canApproveDepartment(row)" @click="rejectDepartment(row)">退回</el-button>
-          <el-button type="primary" :disabled="!canApproveDepartment(row)" @click="approveDepartment(row)">通过</el-button>
+          <el-button @click="rejectDepartment(row)">退回</el-button>
+          <el-button type="primary" @click="approveDepartment(row)">通过</el-button>
         </div>
       </article>
       <el-empty v-if="!departmentLoading && !departmentItems.length" description="暂无部门架构待审核变更" />
@@ -477,7 +470,7 @@ onMounted(async () => {
           <el-tag type="warning" effect="plain">{{ positionActionLabel(row.action) }}</el-tag>
           <div><strong>{{ row.positionName }}</strong><p>{{ row.proposedValue.code || '-' }} · {{ row.proposedValue.jobFamily || '未分类' }} · {{ row.createdBy?.name || '未知' }} · {{ formatDateTime(row.createdAt) }}</p><p v-if="row.warnings?.length" class="review-warning">{{ row.warnings.join('；') }}</p></div>
         </div>
-        <div class="department-review-card__actions"><el-button :disabled="row.createdBy?.id === auth.user?.id" @click="rejectPosition(row)">退回</el-button><el-button type="primary" :disabled="row.createdBy?.id === auth.user?.id" @click="approvePosition(row)">通过</el-button></div>
+        <div class="department-review-card__actions"><el-button @click="rejectPosition(row)">退回</el-button><el-button type="primary" @click="approvePosition(row)">通过</el-button></div>
       </article>
       <el-empty v-if="!positionLoading && !positionItems.length" description="暂无岗位待审核变更" />
     </div>
@@ -511,7 +504,6 @@ onMounted(async () => {
 .department-review-card__main { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .department-review-card__main strong { display: block; margin-bottom: 4px; }
 .department-review-card__actions { display: flex; flex: none; }
-.self-review-tip { align-self: center; margin-right: 6px; color: #b54708; font-size: 12px; }
 .review-warning { color: #b54708 !important; }
 @media (max-width: 760px) {
   .pending-review-workspace { padding: 14px; }
