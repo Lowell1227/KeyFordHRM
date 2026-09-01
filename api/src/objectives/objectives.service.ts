@@ -311,14 +311,14 @@ export class ObjectivesService {
   ): Promise<GoalTrackingResult> {
     let indicatorWhere: Prisma.IndicatorInstanceWhereInput | undefined;
     if (ownerId !== viewer.id) {
-      const viewerRecord = await this.prisma.user.findUnique({
-        where: { id: viewer.id },
-        select: { directManagerId: true },
+      const viewerTask = await this.prisma.assessmentTask.findUnique({
+        where: { cycleId_employeeId: { cycleId, employeeId: viewer.id } },
+        select: { managerId: true },
       });
-      if (viewerRecord?.directManagerId !== ownerId) {
+      if (viewerTask?.managerId !== ownerId) {
         throw new ForbiddenException({
           code: ERROR_CODE.FORBIDDEN,
-          message: '无权查看该员工的考核指标',
+          message: '你没有权限查看该员工在本考核周期的目标',
         });
       }
       indicatorWhere = {
@@ -551,15 +551,32 @@ export class ObjectivesService {
   }
 
   async findTrackingIndicator(indicatorId: string, viewer: AuthUser) {
-    const viewerRecord = await this.prisma.user.findUnique({
-      where: { id: viewer.id },
-      select: { directManagerId: true },
+    const identity = await this.prisma.indicatorInstance.findUnique({
+      where: { id: indicatorId },
+      select: {
+        task: { select: { employeeId: true, cycleId: true } },
+      },
     });
     const ownerVisibility: Prisma.IndicatorInstanceWhereInput[] = [
       { task: { employeeId: viewer.id } },
     ];
-    if (viewerRecord?.directManagerId) {
-      const managerId = viewerRecord.directManagerId;
+    if (identity && identity.task.employeeId !== viewer.id) {
+      const viewerTask = await this.prisma.assessmentTask.findUnique({
+        where: {
+          cycleId_employeeId: {
+            cycleId: identity.task.cycleId,
+            employeeId: viewer.id,
+          },
+        },
+        select: { managerId: true },
+      });
+      const managerId = viewerTask?.managerId;
+      if (!managerId || managerId !== identity.task.employeeId) {
+        throw new NotFoundException({
+          code: ERROR_CODE.NOT_FOUND,
+          message: '考核指标不存在或不可见',
+        });
+      }
       ownerVisibility.push(
         { AND: [{ task: { employeeId: managerId } }, buildVisibilityScopeWhere(IndicatorVisibilityScope.company)] },
         { AND: [{ task: { employeeId: managerId } }, buildVisibilityScopeWhere(IndicatorVisibilityScope.direct_reports)] },

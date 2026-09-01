@@ -286,7 +286,7 @@ test.describe('cycle-first task contracts', () => {
     await page.goto('/tasks?scope=team&stage=goal-review');
 
     const list = page.getByTestId('team-task-list');
-    await expect(list).toContainText('团队成员');
+    await expect(list).toContainText('直属下属');
     await expect(list).toContainText('2 人');
     await expect(list).toContainText('俞丹');
     await expect(list).toContainText('方园');

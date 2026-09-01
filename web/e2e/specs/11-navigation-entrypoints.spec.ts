@@ -323,7 +323,7 @@ test.describe("11-navigation-entrypoints navigation active state", () => {
     const groups = navigation.locator(".manager-task-group");
     await expect(groups).toHaveCount(2);
     await expect(groups.nth(0)).toContainText("我的绩效待办");
-    await expect(groups.nth(1)).toContainText("我团队的绩效待办");
+    await expect(groups.nth(1)).toContainText("直属下属的绩效待办");
     await expect(page.getByTestId("task-scope-mine")).toHaveCount(0);
     await expect(page.getByTestId("task-scope-team")).toHaveCount(0);
 

@@ -49,7 +49,25 @@ function makeCycle(
   };
 }
 
-test('builds only self and direct-manager people groups', () => {
+test('builds self and the cycle-frozen performance manager instead of the current roster manager', () => {
+  const context = {
+    id: 'cycle-1',
+    name: '2026 Q3',
+    type: 'quarterly',
+    startDate: '2026-07-01',
+    endDate: '2026-09-30',
+    openedAt: '2026-06-20T00:00:00.000Z',
+    scoringFrequency: 'monthly',
+    task: {
+      id: 'task-1',
+      status: 'self_eval',
+      isExempt: false,
+      exemptReason: null,
+      participantDisposition: 'active',
+      manager: { id: 'manager-frozen', name: '冻结上级' },
+    },
+    periods: [],
+  } as const;
   const groups = buildTrackingPeople({
     id: 'employee-1',
     name: '刘伟',
@@ -57,11 +75,12 @@ test('builds only self and direct-manager people groups', () => {
     deptId: 'dept-1',
     isAssessorOnly: false,
     canViewAll: false,
-    directManagerId: 'manager-1',
-    directManagerName: '林治',
-  });
+    directManagerId: 'manager-current',
+    directManagerName: '当前花名册上级',
+  }, [context], 'cycle-1');
   expect(groups.map((group) => [group.key, group.people.map((person) => person.name)]))
-    .toEqual([['self', ['刘伟']], ['manager', ['林治']]]);
+    .toEqual([['self', ['刘伟']], ['manager', ['冻结上级']]]);
+  expect(groups[1].label).toBe('绩效直属上级');
   expect(buildTrackingPeople({
     id: 'employee-2',
     name: '无上级员工',
@@ -69,7 +88,8 @@ test('builds only self and direct-manager people groups', () => {
     deptId: 'dept-1',
     isAssessorOnly: false,
     canViewAll: false,
-  }).map((group) => group.key)).toEqual(['self']);
+  }, [{ ...context, task: { ...context.task, manager: null } }], 'cycle-1')
+    .map((group) => group.key)).toEqual(['self']);
 });
 
 test('chooses the date-current cycle regardless of lifecycle status', () => {

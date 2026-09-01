@@ -10,7 +10,7 @@ export type GoalTrackingColumn = (typeof GOAL_TRACKING_COLUMNS)[number];
 export type GoalTrackingPerson = { id: string; name: string; avatarUrl?: string };
 export type GoalTrackingPeopleGroup = {
   key: 'self' | 'manager';
-  label: '我' | '直接上级';
+  label: '我' | '绩效直属上级';
   people: GoalTrackingPerson[];
 };
 
@@ -35,17 +35,22 @@ function parseGoalTrackingQuarter(cycle: AssessmentCycle): GoalTrackingQuarter |
   };
 }
 
-export function buildTrackingPeople(user: CurrentUser): GoalTrackingPeopleGroup[] {
+export function buildTrackingPeople(
+  user: CurrentUser,
+  selfContexts: PerformanceCycleContext[] = [],
+  cycleId = '',
+): GoalTrackingPeopleGroup[] {
   const groups: GoalTrackingPeopleGroup[] = [{
     key: 'self',
     label: '我',
     people: [{ id: user.id, name: user.name, avatarUrl: user.avatarUrl }],
   }];
-  if (user.directManagerId && user.directManagerName) {
+  const context = selfContexts.find((item) => item.id === cycleId) ?? selfContexts[0];
+  if (context?.task.manager) {
     groups.push({
       key: 'manager',
-      label: '直接上级',
-      people: [{ id: user.directManagerId, name: user.directManagerName }],
+      label: '绩效直属上级',
+      people: [{ id: context.task.manager.id, name: context.task.manager.name }],
     });
   }
   return groups;
@@ -97,7 +102,7 @@ export function selectTrackingAction(context: PerformanceCycleContext): Tracking
     return { kind: 'goal-confirmation', label: '确认目标', taskId: context.task.id };
   }
   if (context.task.status === 'indicator_reviewing') {
-    return { kind: 'waiting', label: '等待直属上级审核', taskId: context.task.id };
+    return { kind: 'waiting', label: '等待绩效直属上级审核', taskId: context.task.id };
   }
   const employeePeriod = context.periods.find((period) => (
     ['self_eval', 'manager_scoring'].includes(period.status)

@@ -1198,6 +1198,7 @@ export interface PerformanceCycleContext {
     isExempt: boolean;
     exemptReason: string | null;
     participantDisposition: 'active' | 'cycle_exempt' | 'top_leader_exempt';
+    manager: { id: string; name: string } | null;
   };
   periods: Array<AssessmentPeriodSummary & {
     selfScoreTotal: number | null;

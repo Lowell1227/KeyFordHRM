@@ -685,6 +685,7 @@ describe('CyclesService', () => {
         tasks: [{
           id: 'task-active', status: 'goal_confirmed', isExempt: false,
           exemptReason: null, participantDisposition: 'active',
+          manager: { id: 'manager-frozen', name: '冻结上级' },
           periods: [{
             id: 'period-1', periodKey: '2026-08', periodType: 'month', sequence: 1,
             status: 'self_eval', selfEvalOpenAt: new Date('2026-08-25T00:00:00.000Z'),
@@ -713,6 +714,7 @@ describe('CyclesService', () => {
     expect(result).toHaveLength(2);
     expect(result.map((item: any) => item.task.participantDisposition)).toEqual(['active', 'cycle_exempt']);
     expect(result[0].periods[0]).toMatchObject({ periodType: 'month', status: 'self_eval' });
+    expect(result[0].task.manager).toEqual({ id: 'manager-frozen', name: '冻结上级' });
     expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: {
         openedAt: { not: null },
@@ -723,14 +725,31 @@ describe('CyclesService', () => {
     jest.useRealTimers();
   });
 
-  it('allows an employee to view only their direct manager tracking contexts', async () => {
+  it('allows an employee to view only the manager frozen in the same opened cycle', async () => {
     const employee = { ...creator, id: 'employee-1', sysRole: SysRole.employee } as AuthUser;
-    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'manager-1' });
+    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'new-roster-manager' });
+    prisma.assessmentTask.findMany
+      .mockResolvedValueOnce([{ cycleId: 'cycle-frozen' }])
+      .mockResolvedValueOnce([]);
     prisma.assessmentCycle.findMany.mockResolvedValue([]);
 
     await expect((service as any).findTrackingContexts('manager-1', employee)).resolves.toEqual([]);
     await expect((service as any).findTrackingContexts('unrelated-1', employee))
       .rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.assessmentTask.findMany).toHaveBeenNthCalledWith(1, {
+      where: {
+        employeeId: employee.id,
+        managerId: 'manager-1',
+        cycle: {
+          openedAt: { not: null },
+          status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
+        },
+      },
+      select: { cycleId: true },
+    });
+    expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ id: { in: ['cycle-frozen'] } }),
+    }));
   });
 
   it('returns opened cycles with the current employee personal task separated from visible team tasks', async () => {

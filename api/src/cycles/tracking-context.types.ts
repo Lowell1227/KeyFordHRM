@@ -36,6 +36,7 @@ export interface PerformanceCycleContext {
     isExempt: boolean;
     exemptReason: string | null;
     participantDisposition: ParticipantDisposition;
+    manager: { id: string; name: string } | null;
   };
   periods: PerformancePeriodContext[];
 }

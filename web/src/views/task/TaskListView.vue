@@ -275,7 +275,7 @@ async function loadTeamRoster() {
     teamPage.value = withRosterFacets(teamPage.value);
   } catch {
     teamRoster.value = [];
-    teamRosterError.value = '直属员工加载失败';
+    teamRosterError.value = '直属下属加载失败';
   }
 }
 
@@ -399,7 +399,7 @@ function isAssignedTeamManager(detail: Pick<TaskDetail, 'managerId'>): boolean {
 
 async function denyTeamTaskAccess(taskId: string) {
   if (workspaceQuery.state.value.taskId !== taskId) return;
-  const message = '无权访问非直属员工的团队任务';
+  const message = '无权访问非直属下属的绩效任务';
   hydratedTeamTask.value = undefined;
   teamDetailError.value = message;
   await workspaceQuery.update({ taskId: undefined });
@@ -877,7 +877,7 @@ async function executeSingleGoalReview(
   const item = teamPage.value.items.find((candidate) => candidate.id === task.taskId)
     ?? (hydratedTeamTask.value?.id === task.taskId ? hydratedTeamTask.value : undefined);
   if (!item || !auth.user?.id || item.managerId !== auth.user.id) {
-    ElMessage.warning('无权处理非直属员工的团队任务');
+    ElMessage.warning('无权处理非直属下属的绩效任务');
     return;
   }
   const requestId = ++singleOperationSerial;
@@ -1105,7 +1105,7 @@ watch(
           >
             <div class="task-context__label">
               <el-icon><DocumentChecked /></el-icon>
-              <span>我团队的绩效待办</span>
+              <span>直属下属的绩效待办</span>
             </div>
             <div class="task-stage-list">
               <button
@@ -1276,7 +1276,7 @@ watch(
           <span>绩效环节</span>
           <h2>{{ workspaceQuery.state.value.stage === 'goal-review' ? '目标审核' : '主管评分' }}</h2>
         </div>
-        <span>待办人：直属员工</span>
+        <span>待办人：直属下属</span>
       </header>
 
       <section

@@ -164,7 +164,7 @@ const employeeMeta = computed(() => {
   return [
     current.employeeNo ? `工号 ${current.employeeNo}` : '',
     current.deptName || '',
-    current.managerName ? `直属主管 ${current.managerName}` : '',
+    current.managerName ? `绩效直属上级 ${current.managerName}` : '',
   ].filter(Boolean);
 });
 

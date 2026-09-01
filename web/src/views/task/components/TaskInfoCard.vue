@@ -62,7 +62,7 @@ const infoGroups = computed(() => [
     title: '人员信息',
     items: [
       { label: '所属部门', value: props.task.deptName || '待补充' },
-      { label: '直属主管', value: props.task.managerName || '待补充' },
+      { label: '绩效直属上级', value: props.task.managerName || '待补充' },
       { label: '部门负责人', value: props.task.deptHeadName || '待补充' },
       { label: '结果审批人', value: props.task.approverName || '待补充' },
     ],

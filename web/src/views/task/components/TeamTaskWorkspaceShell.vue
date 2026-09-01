@@ -67,7 +67,7 @@ function stageStateLabel(state: TeamStageState): string {
     </header>
 
     <div class="team-task-workspace__layout">
-      <nav class="team-task-workspace__members" aria-label="团队成员">
+      <nav class="team-task-workspace__members" aria-label="直属下属">
         <button
           v-for="member in members"
           :key="member.id"

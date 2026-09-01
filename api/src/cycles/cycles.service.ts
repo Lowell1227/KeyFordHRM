@@ -536,9 +536,10 @@ export class CyclesService {
 
   /** GET /cycles/tracking-contexts — 按冻结任务返回某人的正式目标跟进周期。 */
   async findTrackingContexts(ownerId: string, viewer: AuthUser): Promise<PerformanceCycleContext[]> {
-    await this.assertTrackingOwnerVisible(ownerId, viewer);
+    const restrictedCycleIds = await this.resolveTrackingCycleScope(ownerId, viewer);
     const cycles = await this.prisma.assessmentCycle.findMany({
       where: {
+        ...(restrictedCycleIds ? { id: { in: restrictedCycleIds } } : {}),
         openedAt: { not: null },
         status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
         tasks: { some: { employeeId: ownerId } },
@@ -560,6 +561,7 @@ export class CyclesService {
             isExempt: true,
             exemptReason: true,
             participantDisposition: true,
+            manager: { select: { id: true, name: true } },
             periods: {
               orderBy: { sequence: 'asc' },
               select: {
@@ -599,6 +601,7 @@ export class CyclesService {
           isExempt: task.isExempt,
           exemptReason: task.exemptReason,
           participantDisposition: task.participantDisposition,
+          manager: task.manager ?? null,
         },
         periods: task.periods.map((period) => ({
           ...period,
@@ -1114,18 +1117,27 @@ export class CyclesService {
     };
   }
 
-  private async assertTrackingOwnerVisible(ownerId: string, viewer: AuthUser): Promise<void> {
-    if (ownerId === viewer.id) return;
-    const viewerRecord = await this.prisma.user.findUnique({
-      where: { id: viewer.id },
-      select: { directManagerId: true },
+  private async resolveTrackingCycleScope(ownerId: string, viewer: AuthUser): Promise<string[] | null> {
+    if (ownerId === viewer.id) return null;
+    const viewerTasks = await this.prisma.assessmentTask.findMany({
+      where: {
+        employeeId: viewer.id,
+        managerId: ownerId,
+        cycle: {
+          openedAt: { not: null },
+          status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
+        },
+      },
+      select: { cycleId: true },
     });
-    if (viewerRecord?.directManagerId !== ownerId) {
+    const cycleIds = [...new Set(viewerTasks.map((task) => task.cycleId))];
+    if (cycleIds.length === 0) {
       throw new ForbiddenException({
         code: ERROR_CODE.FORBIDDEN,
-        message: '无权查看该员工的目标跟进周期',
+        message: '你没有权限查看该员工在本考核周期的目标',
       });
     }
+    return cycleIds;
   }
 
   private trackingContextPriority(context: PerformanceCycleContext, today: string): number {

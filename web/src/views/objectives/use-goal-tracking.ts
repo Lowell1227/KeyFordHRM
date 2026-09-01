@@ -19,6 +19,7 @@ export function useGoalTracking() {
   const router = useRouter();
   const auth = useAuthStore();
   const contexts = ref<PerformanceCycleContext[]>([]);
+  const selfContexts = ref<PerformanceCycleContext[]>([]);
   const selectedPersonId = ref('');
   const selectedCycleId = ref('');
   const result = ref<GoalTrackingResult>({ totalWeight: 0, items: [] });
@@ -39,7 +40,9 @@ export function useGoalTracking() {
     return () => !disposed && generation === lifecycleGeneration;
   }
 
-  const peopleGroups = computed(() => auth.user ? buildTrackingPeople(auth.user) : []);
+  const peopleGroups = computed(() => auth.user
+    ? buildTrackingPeople(auth.user, selfContexts.value, selectedCycleId.value)
+    : []);
   const people = computed(() => peopleGroups.value.flatMap((group) => group.people));
   const selectedPerson = computed(() =>
     people.value.find((person) => person.id === selectedPersonId.value) ?? people.value[0] ?? null);
@@ -137,6 +140,7 @@ export function useGoalTracking() {
         isExempt: false,
         exemptReason: null,
         participantDisposition: 'active',
+        manager: null,
       },
       periods: [],
     };
@@ -157,7 +161,10 @@ export function useGoalTracking() {
         const page = await cyclesApi.findAll({ page: 1, pageSize: 100 });
         next = page.items.map(legacyContext);
       }
-      if (canCommit()) contexts.value = selectGoalTrackingContexts(next);
+      if (canCommit()) {
+        contexts.value = selectGoalTrackingContexts(next);
+        if (ownerId === auth.user?.id) selfContexts.value = contexts.value;
+      }
     } catch {
       if (canCommit()) {
         contexts.value = [];
@@ -170,22 +177,34 @@ export function useGoalTracking() {
 
   async function normalizeSelectionAndLoad(commitGuard = captureLifecycle()) {
     if (!commitGuard()) return;
+    const selfId = auth.user?.id ?? '';
+    selectedPersonId.value = selfId;
+    await loadContexts(selfId, commitGuard);
+    if (!commitGuard() || cyclesError.value) return;
+    selectedCycleId.value = typeof route.query.cycleId === 'string'
+      && selfContexts.value.some((context) => context.id === route.query.cycleId)
+      ? route.query.cycleId
+      : selfContexts.value[0]?.id ?? '';
+
     const objectiveId = typeof route.query.objectiveId === 'string'
       ? route.query.objectiveId
       : '';
     if (objectiveId && await resolveObjectiveDeepLink(objectiveId, commitGuard)) return;
     if (!commitGuard()) return;
 
-    selectedPersonId.value = typeof route.query.employeeId === 'string'
+    const requestedPersonId = typeof route.query.employeeId === 'string'
       && people.value.some((person) => person.id === route.query.employeeId)
       ? route.query.employeeId
-      : auth.user?.id ?? '';
-    await loadContexts(selectedPersonId.value, commitGuard);
-    if (!commitGuard() || cyclesError.value) return;
-    selectedCycleId.value = typeof route.query.cycleId === 'string'
-      && contexts.value.some((context) => context.id === route.query.cycleId)
-      ? route.query.cycleId
-      : contexts.value[0]?.id ?? '';
+      : selfId;
+    if (requestedPersonId !== selfId) {
+      const preferredCycleId = selectedCycleId.value;
+      selectedPersonId.value = requestedPersonId;
+      await loadContexts(requestedPersonId, commitGuard);
+      if (!commitGuard() || cyclesError.value) return;
+      selectedCycleId.value = contexts.value.some((context) => context.id === preferredCycleId)
+        ? preferredCycleId
+        : contexts.value[0]?.id ?? '';
+    }
     await writeQuery('replace', commitGuard, true);
     if (!commitGuard()) return;
     await loadTracking(commitGuard);
@@ -224,6 +243,10 @@ export function useGoalTracking() {
     notice.value = '';
     highlightedObjectiveId.value = '';
     selectedCycleId.value = id;
+    if (!people.value.some((person) => person.id === selectedPersonId.value)) {
+      selectedPersonId.value = auth.user?.id ?? '';
+      contexts.value = selfContexts.value;
+    }
     await writeQuery('push', isCurrent);
     if (!isCurrent()) return;
     await loadTracking(isCurrent);

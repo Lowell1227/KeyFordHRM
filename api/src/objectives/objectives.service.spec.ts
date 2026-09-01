@@ -681,8 +681,10 @@ describe('ObjectivesService visibility helpers', () => {
   });
 
   it('shows only explicitly shareable direct-manager indicators and keeps them read-only', async () => {
-    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'director-1' });
-    prisma.assessmentTask.findUnique.mockResolvedValue({
+    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'new-roster-manager' });
+    prisma.assessmentTask.findUnique
+      .mockResolvedValueOnce({ managerId: 'director-1' })
+      .mockResolvedValueOnce({
       id: 'task-manager',
       employeeId: 'director-1',
       cycleId: 'cycle-1',
@@ -691,18 +693,18 @@ describe('ObjectivesService visibility helpers', () => {
       employee: { id: 'director-1', name: 'Director' },
       cycle: { id: 'cycle-1', name: '2026-Q3' },
       indicatorInstances: [],
-    });
+      });
 
     const result = await service.findTracking(
       { ownerId: 'director-1', cycleId: 'cycle-1' },
       viewer,
     );
 
-    expect(prisma.user.findUnique).toHaveBeenCalledWith({
-      where: { id: viewer.id },
-      select: { directManagerId: true },
+    expect(prisma.assessmentTask.findUnique).toHaveBeenNthCalledWith(1, {
+      where: { cycleId_employeeId: { cycleId: 'cycle-1', employeeId: viewer.id } },
+      select: { managerId: true },
     });
-    const trackingQuery = JSON.stringify(prisma.assessmentTask.findUnique.mock.calls[0][0]);
+    const trackingQuery = JSON.stringify(prisma.assessmentTask.findUnique.mock.calls[1][0]);
     expect(trackingQuery).toContain('visibilityRules');
     expect(trackingQuery).toContain('"scope":"company"');
     expect(trackingQuery).toContain('"scope":"direct_reports"');
@@ -712,14 +714,15 @@ describe('ObjectivesService visibility helpers', () => {
   });
 
   it('rejects an arbitrary tracking owner before loading their task', async () => {
-    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'director-1' });
+    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'unrelated-user' });
+    prisma.assessmentTask.findUnique.mockResolvedValue({ managerId: 'director-1' });
 
     await expect(service.findTracking(
       { ownerId: 'unrelated-user', cycleId: 'cycle-1' },
       viewer,
     )).rejects.toBeInstanceOf(ForbiddenException);
 
-    expect(prisma.assessmentTask.findUnique).not.toHaveBeenCalled();
+    expect(prisma.assessmentTask.findUnique).toHaveBeenCalledTimes(1);
   });
 
   it('appends an employee progress update and its audit record without overwriting history', async () => {
@@ -958,7 +961,11 @@ describe('ObjectivesService visibility helpers', () => {
   });
 
   it('opens a shareable direct-manager indicator as read-only without exposing edit authority', async () => {
-    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'director-1' });
+    prisma.user.findUnique.mockResolvedValue({ directManagerId: 'new-roster-manager' });
+    prisma.indicatorInstance.findUnique.mockResolvedValue({
+      task: { employeeId: 'director-1', cycleId: 'cycle-1' },
+    });
+    prisma.assessmentTask.findUnique.mockResolvedValue({ managerId: 'director-1' });
     prisma.indicatorInstance.findFirst.mockResolvedValue({
       id: 'indicator-manager',
       taskId: 'task-manager',
@@ -998,6 +1005,11 @@ describe('ObjectivesService visibility helpers', () => {
     prisma.auditLog.findMany.mockResolvedValue([]);
 
     const result = await (service as any).findTrackingIndicator('indicator-manager', viewer);
+
+    expect(prisma.assessmentTask.findUnique).toHaveBeenCalledWith({
+      where: { cycleId_employeeId: { cycleId: 'cycle-1', employeeId: viewer.id } },
+      select: { managerId: true },
+    });
 
     const detailQuery = JSON.stringify(prisma.indicatorInstance.findFirst.mock.calls[0][0]);
     expect(detailQuery).toContain('"employeeId":"manager-1"');

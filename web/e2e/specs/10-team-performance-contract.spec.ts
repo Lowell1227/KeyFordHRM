@@ -1130,7 +1130,7 @@ test.describe('team list manager workspace', () => {
       await expect(page).not.toHaveURL(/taskId=task-off-page/);
       await expect(page.getByTestId('team-task-workspace')).toHaveCount(0);
       await expect(page.getByTestId('goal-review-workspace')).toHaveCount(0);
-      await expect(page.locator('.el-message--warning')).toContainText('无权访问非直属员工的团队任务');
+      await expect(page.locator('.el-message--warning')).toContainText('无权访问非直属下属的绩效任务');
     });
   }
 

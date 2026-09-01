@@ -181,7 +181,7 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
   >
     <header class="team-task-list__header">
       <div class="team-task-list__summary">
-        <strong>团队成员</strong>
+        <strong>直属下属</strong>
         <span>{{ memberCount }} 人 · {{ total }} 项任务</span>
       </div>
 
@@ -360,7 +360,7 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
         v-if="!loading && !error && items.length === 0 && roster.length === 0"
         data-testid="team-task-empty"
       >
-        <EmptyState :description="hasCycle ? '暂无匹配任务' : '暂无直属员工'" />
+        <EmptyState :description="hasCycle ? '暂无匹配任务' : '暂无直属下属'" />
       </div>
     </div>
 
