@@ -66,6 +66,7 @@ test('HR administrator reviews employee and department changes from the independ
   };
   let approveBody: unknown;
   let approvedDepartmentId: string | null = null;
+  let approvedPositionId: string | null = null;
 
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-admin-token');
@@ -121,10 +122,22 @@ test('HR administrator reviews employee and department changes from the independ
     }
     return route.fallback();
   });
-  await page.route('**/api/v1/positions/change-requests**', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 20, items: [positionChange] })),
-  }));
+  await page.route('**/api/v1/positions/change-requests**', async (route) => {
+    if (route.request().method() === 'GET') {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 20, items: [positionChange] })),
+      });
+    }
+    if (route.request().url().endsWith('/approve')) {
+      approvedPositionId = positionChange.id;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ ...positionChange, status: 'approved' })),
+      });
+    }
+    return route.fallback();
+  });
 
   await page.goto(`${webBaseUrl}/personnel-change-reviews`);
   await expect(page.getByRole('button', { name: '人事变更审核', exact: true })).toBeVisible();
@@ -143,7 +156,10 @@ test('HR administrator reviews employee and department changes from the independ
     await expect.poll(async () => (
       reviewTables.nth(index).locator('.el-table__header-wrapper th .cell').allTextContents()
     ).then((items) => items.map((item) => item.trim()).filter(Boolean))).toEqual(expectedReviewColumns);
+    await expect(reviewTables.nth(index).getByRole('button', { name: '退回', exact: true }).first()).toBeVisible();
+    await expect(reviewTables.nth(index).getByRole('button', { name: '通过', exact: true }).first()).toBeVisible();
   }
+  await expect(workspace.getByText('可审核', { exact: true })).toHaveCount(0);
   await expect(workspace.locator('.department-review-card')).toHaveCount(0);
   await expect(workspace.getByText('员工一', { exact: true })).toBeVisible();
   await expect(workspace.getByText('员工二', { exact: true })).toBeVisible();
@@ -160,10 +176,10 @@ test('HR administrator reviews employee and department changes from the independ
   await expect(workspace.getByText('变更前：签约公司：孚德；签订日期：2024-01-01；生效日期：2024-01-02；到期日期：2026-12-31')).toBeVisible();
   await expect(workspace.getByText('变更后：签约公司：孚德体育文化；签订日期：2024-01-01；生效日期：2024-02-01；到期日期：2026-12-31')).toBeVisible();
 
-  const rowChecks = workspace.locator('.el-table__body-wrapper .el-checkbox');
+  const rowChecks = reviewTables.nth(0).locator('.el-table__body-wrapper .el-checkbox');
   await rowChecks.nth(0).click();
   await rowChecks.nth(1).click();
-  await workspace.getByRole('button', { name: '通过可审核项（2）' }).click();
+  await workspace.getByRole('button', { name: '批量通过（2）' }).click();
 
   await expect.poll(() => approveBody).toEqual({
     requestIds: [reviews[0].id, reviews[1].id],
@@ -174,8 +190,14 @@ test('HR administrator reviews employee and department changes from the independ
   await workspace.getByRole('button', { name: '组织架构 1' }).click();
   await expect(workspace.getByText('项目中心 → 项目管理中心')).toBeVisible();
   await expect(workspace.getByText('余焱玲', { exact: true })).toBeVisible();
-  await workspace.getByRole('button', { name: '通过' }).click();
+  await workspace.locator('.review-table .el-table__body-wrapper .el-checkbox').click();
+  await workspace.getByRole('button', { name: '批量通过（1）' }).click();
   await expect.poll(() => approvedDepartmentId).toBe(departmentChange.id);
+
+  await workspace.getByRole('button', { name: '岗位目录 1' }).click();
+  await workspace.locator('.review-table .el-table__body-wrapper .el-checkbox').click();
+  await workspace.getByRole('button', { name: '批量通过（1）' }).click();
+  await expect.poll(() => approvedPositionId).toBe(positionChange.id);
 });
 
 test('department context menu uses the full edit drawer and unassigned people can be submitted in batch', async ({ page }) => {

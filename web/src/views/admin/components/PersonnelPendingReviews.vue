@@ -38,9 +38,11 @@ const selectedEmployees = ref<EmployeeDataReview[]>([]);
 const departmentItems = ref<DepartmentChangeRequest[]>([]);
 const departmentTotal = ref(0);
 const departmentLoading = ref(false);
+const selectedDepartments = ref<DepartmentChangeRequest[]>([]);
 const positionItems = ref<PositionChangeRequest[]>([]);
 const positionTotal = ref(0);
 const positionLoading = ref(false);
+const selectedPositions = ref<PositionChangeRequest[]>([]);
 const managerDialog = ref({
   visible: false,
   requestId: '',
@@ -273,6 +275,7 @@ async function loadDepartmentReviews() {
     const result = await departmentsApi.listChangeRequests({ status: 'pending', page: 1, pageSize: 50 });
     departmentItems.value = result.items;
     departmentTotal.value = result.total;
+    selectedDepartments.value = [];
   } finally {
     departmentLoading.value = false;
   }
@@ -285,17 +288,18 @@ async function loadPositionReviews() {
     const result = await positionsApi.listChangeRequests({ status: 'pending', page: 1, pageSize: 50 });
     positionItems.value = result.items;
     positionTotal.value = result.total;
+    selectedPositions.value = [];
   } finally {
     positionLoading.value = false;
   }
 }
 
-async function approveSelectedEmployees() {
-  if (!selectedEmployees.value.length) return;
+async function approveEmployeeReviews(rows: EmployeeDataReview[]) {
+  if (!rows.length) return;
   employeeLoading.value = true;
   try {
     const result = await employeeArchivesApi.approveReviews(
-      selectedEmployees.value.map((row) => row.id),
+      rows.map((row) => row.id),
       ['profile', 'performance'],
     );
     if (result.failed.length > 0) {
@@ -310,24 +314,42 @@ async function approveSelectedEmployees() {
       ElMessage.success(`已通过 ${result.succeeded.length} 人`);
     }
     await loadEmployeeReviews();
+    notifyPersonnelChanged();
   } finally {
     employeeLoading.value = false;
   }
 }
 
-async function rejectSelectedEmployees() {
-  if (!selectedEmployees.value.length) return;
+async function rejectEmployeeReviews(rows: EmployeeDataReview[]) {
+  if (!rows.length) return;
   try {
     const result = await ElMessageBox.prompt('请填写退回原因。', '退回员工变更', {
       confirmButtonText: '确认退回', cancelButtonText: '取消', inputPattern: /\S{2,}/, inputErrorMessage: '请至少填写 2 个字',
     });
     employeeLoading.value = true;
-    await employeeArchivesApi.rejectReviews(selectedEmployees.value.map((row) => row.id), result.value);
-    ElMessage.success(`已退回 ${selectedEmployees.value.length} 项`);
+    await employeeArchivesApi.rejectReviews(rows.map((row) => row.id), result.value);
+    ElMessage.success(`已退回 ${rows.length} 项`);
     await loadEmployeeReviews();
+    notifyPersonnelChanged();
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') throw error;
   } finally { employeeLoading.value = false; }
+}
+
+async function approveSelectedEmployees() {
+  await approveEmployeeReviews(selectedEmployees.value);
+}
+
+async function rejectSelectedEmployees() {
+  await rejectEmployeeReviews(selectedEmployees.value);
+}
+
+async function approveEmployee(row: EmployeeDataReview) {
+  await approveEmployeeReviews([row]);
+}
+
+async function rejectEmployee(row: EmployeeDataReview) {
+  await rejectEmployeeReviews([row]);
 }
 
 function openManagerDialog(row: EmployeeDataReview) {
@@ -358,11 +380,12 @@ async function confirmManager() {
   }
 }
 
-async function approveDepartment(row: DepartmentChangeRequest) {
+async function approveDepartments(rows: DepartmentChangeRequest[]) {
+  if (!rows.length) return;
   departmentLoading.value = true;
   try {
-    await departmentsApi.approveChange(row.id);
-    ElMessage.success('部门变更已通过并生效');
+    await Promise.all(rows.map((row) => departmentsApi.approveChange(row.id)));
+    ElMessage.success(`已通过 ${rows.length} 项部门变更`);
     await loadDepartmentReviews();
     notifyPersonnelChanged();
   } finally {
@@ -370,14 +393,15 @@ async function approveDepartment(row: DepartmentChangeRequest) {
   }
 }
 
-async function rejectDepartment(row: DepartmentChangeRequest) {
+async function rejectDepartments(rows: DepartmentChangeRequest[]) {
+  if (!rows.length) return;
   try {
     const result = await ElMessageBox.prompt('请填写退回原因，提交人可据此重新调整。', '退回部门变更', {
       confirmButtonText: '确认退回', cancelButtonText: '取消', inputPattern: /\S{2,}/, inputErrorMessage: '请至少填写 2 个字',
     });
     departmentLoading.value = true;
-    await departmentsApi.rejectChange(row.id, result.value);
-    ElMessage.success('部门变更已退回');
+    await Promise.all(rows.map((row) => departmentsApi.rejectChange(row.id, result.value)));
+    ElMessage.success(`已退回 ${rows.length} 项部门变更`);
     await loadDepartmentReviews();
     notifyPersonnelChanged();
   } catch (error) {
@@ -387,28 +411,47 @@ async function rejectDepartment(row: DepartmentChangeRequest) {
   }
 }
 
-async function approvePosition(row: PositionChangeRequest) {
+async function approveDepartment(row: DepartmentChangeRequest) {
+  await approveDepartments([row]);
+}
+
+async function rejectDepartment(row: DepartmentChangeRequest) {
+  await rejectDepartments([row]);
+}
+
+async function approvePositions(rows: PositionChangeRequest[]) {
+  if (!rows.length) return;
   positionLoading.value = true;
   try {
-    await positionsApi.approve(row.id);
-    ElMessage.success('岗位变更已通过并生效');
+    await Promise.all(rows.map((row) => positionsApi.approve(row.id)));
+    ElMessage.success(`已通过 ${rows.length} 项岗位变更`);
     await loadPositionReviews();
     notifyPersonnelChanged();
   } finally { positionLoading.value = false; }
 }
 
-async function rejectPosition(row: PositionChangeRequest) {
+async function rejectPositions(rows: PositionChangeRequest[]) {
+  if (!rows.length) return;
   try {
     const result = await ElMessageBox.prompt('请填写退回原因。', '退回岗位变更', {
       confirmButtonText: '确认退回', cancelButtonText: '取消', inputPattern: /\S{2,}/, inputErrorMessage: '请至少填写 2 个字',
     });
-    await positionsApi.reject(row.id, result.value);
-    ElMessage.success('岗位变更已退回');
+    positionLoading.value = true;
+    await Promise.all(rows.map((row) => positionsApi.reject(row.id, result.value)));
+    ElMessage.success(`已退回 ${rows.length} 项岗位变更`);
     await loadPositionReviews();
     notifyPersonnelChanged();
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') throw error;
-  }
+  } finally { positionLoading.value = false; }
+}
+
+async function approvePosition(row: PositionChangeRequest) {
+  await approvePositions([row]);
+}
+
+async function rejectPosition(row: PositionChangeRequest) {
+  await rejectPositions([row]);
 }
 
 function positionActionLabel(action: PositionChangeRequest['action']) {
@@ -441,9 +484,9 @@ onMounted(async () => {
     <div v-if="showEmployeeReviews" class="review-workspace review-category-section">
       <h4 v-if="activeCategory === 'all'" class="review-category-heading">员工档案 <span>{{ employeeTotal }}</span></h4>
       <div v-if="selectedEmployees.length" class="review-batchbar">
-        <span>已选择 <strong>{{ selectedEmployees.length }}</strong> 人</span>
-        <el-button :loading="employeeLoading" @click="rejectSelectedEmployees">退回</el-button>
-        <el-button type="primary" :loading="employeeLoading" @click="approveSelectedEmployees">通过可审核项（{{ selectedEmployees.length }}）</el-button>
+        <span>已选择 <strong>{{ selectedEmployees.length }}</strong> 项</span>
+        <el-button :loading="employeeLoading" @click="rejectSelectedEmployees">批量退回</el-button>
+        <el-button type="primary" :loading="employeeLoading" @click="approveSelectedEmployees">批量通过（{{ selectedEmployees.length }}）</el-button>
       </div>
       <el-table
         v-loading="employeeLoading"
@@ -490,14 +533,29 @@ onMounted(async () => {
         </el-table-column>
         <el-table-column label="提交人" min-width="120"><template #default="{ row }">{{ (row as EmployeeDataReview).createdBy?.name || '系统导入' }}</template></el-table-column>
         <el-table-column label="提交时间" width="160"><template #default="{ row }">{{ formatDateTime((row as EmployeeDataReview).createdAt) }}</template></el-table-column>
-        <el-table-column label="操作" width="110"><template #default="{ row }"><el-button v-if="reviewHasPerformanceBlocker(row as EmployeeDataReview)" link type="primary" @click="openManagerDialog(row as EmployeeDataReview)">补充上级</el-button><span v-else>{{ reviewIsPending(row as EmployeeDataReview) ? '可审核' : '已处理' }}</span></template></el-table-column>
+        <el-table-column label="操作" width="250" fixed="right">
+          <template #default="{ row }">
+            <template v-if="reviewIsPending(row as EmployeeDataReview)">
+              <el-button v-if="reviewHasPerformanceBlocker(row as EmployeeDataReview)" link type="primary" @click="openManagerDialog(row as EmployeeDataReview)">补充上级</el-button>
+              <el-button :loading="employeeLoading" @click="rejectEmployee(row as EmployeeDataReview)">退回</el-button>
+              <el-button type="primary" :loading="employeeLoading" @click="approveEmployee(row as EmployeeDataReview)">通过</el-button>
+            </template>
+            <span v-else>已处理</span>
+          </template>
+        </el-table-column>
       </el-table>
       <el-empty v-if="activeCategory === 'employee' && !employeeLoading && !employeeItems.length" description="暂无员工档案待审核变更" />
     </div>
 
     <div v-if="showDepartmentReviews" class="review-category-section">
       <h4 v-if="activeCategory === 'all'" class="review-category-heading">组织架构 <span>{{ departmentTotal }}</span></h4>
-      <el-table v-loading="departmentLoading" :data="departmentItems" row-key="id" class="app-table compact-table review-table">
+      <div v-if="selectedDepartments.length" class="review-batchbar">
+        <span>已选择 <strong>{{ selectedDepartments.length }}</strong> 项</span>
+        <el-button :loading="departmentLoading" @click="rejectDepartments(selectedDepartments)">批量退回</el-button>
+        <el-button type="primary" :loading="departmentLoading" @click="approveDepartments(selectedDepartments)">批量通过（{{ selectedDepartments.length }}）</el-button>
+      </div>
+      <el-table v-loading="departmentLoading" :data="departmentItems" row-key="id" class="app-table compact-table review-table" @selection-change="selectedDepartments = $event">
+        <el-table-column type="selection" width="48" />
         <el-table-column label="变更类型" width="120"><template #default="{ row }"><el-tag type="warning" effect="plain">{{ departmentActionLabel((row as DepartmentChangeRequest).action) }}</el-tag></template></el-table-column>
         <el-table-column prop="departmentName" label="审核对象" min-width="170" />
         <el-table-column label="变更内容" min-width="300"><template #default="{ row }">{{ departmentChangeSummary(row as DepartmentChangeRequest) }}</template></el-table-column>
@@ -510,7 +568,13 @@ onMounted(async () => {
 
     <div v-if="showPositionReviews" class="review-category-section">
       <h4 v-if="activeCategory === 'all'" class="review-category-heading">岗位目录 <span>{{ positionTotal }}</span></h4>
-      <el-table v-loading="positionLoading" :data="positionItems" row-key="id" class="app-table compact-table review-table">
+      <div v-if="selectedPositions.length" class="review-batchbar">
+        <span>已选择 <strong>{{ selectedPositions.length }}</strong> 项</span>
+        <el-button :loading="positionLoading" @click="rejectPositions(selectedPositions)">批量退回</el-button>
+        <el-button type="primary" :loading="positionLoading" @click="approvePositions(selectedPositions)">批量通过（{{ selectedPositions.length }}）</el-button>
+      </div>
+      <el-table v-loading="positionLoading" :data="positionItems" row-key="id" class="app-table compact-table review-table" @selection-change="selectedPositions = $event">
+        <el-table-column type="selection" width="48" />
         <el-table-column label="变更类型" width="120"><template #default="{ row }"><el-tag type="warning" effect="plain">{{ positionActionLabel((row as PositionChangeRequest).action) }}</el-tag></template></el-table-column>
         <el-table-column prop="positionName" label="审核对象" min-width="170" />
         <el-table-column label="变更内容" min-width="300"><template #default="{ row }"><div>岗位编码：{{ (row as PositionChangeRequest).proposedValue.code || '-' }}；岗位族：{{ (row as PositionChangeRequest).proposedValue.jobFamily || '未分类' }}</div><div v-if="(row as PositionChangeRequest).warnings?.length" class="review-warning">{{ (row as PositionChangeRequest).warnings.join('；') }}</div></template></el-table-column>
