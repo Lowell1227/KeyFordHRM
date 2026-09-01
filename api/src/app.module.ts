@@ -33,6 +33,7 @@ import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
 import { RolesGuard } from './common/guards/roles.guard';
 import { EmployeeArchivesModule } from './employee-archives/employee-archives.module';
 import { PeriodReviewsModule } from './period-reviews/period-reviews.module';
+import { PositionsModule } from './positions/positions.module';
 
 /**
  * 根模块。
@@ -83,6 +84,7 @@ import { PeriodReviewsModule } from './period-reviews/period-reviews.module';
     ObjectivesModule,
     ActionItemsModule,
     PeriodReviewsModule,
+    PositionsModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
