@@ -12,12 +12,15 @@ import PerformanceIndicatorList, {
 import IndicatorVisibilityEditor, {
   type IndicatorVisibilitySelection,
   type VisibilityDepartmentOption,
+  type VisibilityUserOption,
 } from './IndicatorVisibilityEditor.vue';
 import { indicatorsApi } from '@/api/indicators.api';
 import { templatesApi } from '@/api/templates.api';
 import { uploadApi } from '@/api/upload.api';
 import { departmentsApi } from '@/api/departments.api';
 import { objectivesApi } from '@/api/objectives.api';
+import { usersApi } from '@/api/users.api';
+import { useAuthStore } from '@/stores/auth.store';
 import type {
   AssessmentTemplate,
   Attachment,
@@ -154,6 +157,8 @@ const goalAlignmentOptions = ref<Objective[]>([]);
 const parentIndicatorAlignmentOptions = ref<IndicatorAlignmentCandidate[]>([]);
 const parentIndicatorAlignmentReason = ref('');
 const goalVisibilityDepartments = ref<VisibilityDepartmentOption[]>([]);
+const goalVisibilityUsers = ref<VisibilityUserOption[]>([]);
+const auth = useAuthStore();
 
 function readGoalSettingMode(): GoalSettingMode {
   try {
@@ -639,7 +644,9 @@ async function loadGoalSettingOptions() {
   if (goalSettingOptionsLoading.value || goalSettingOptionsLoaded.value) return;
   goalSettingOptionsLoading.value = true;
   try {
-    const [objectiveResult, departmentResult, parentIndicatorResult] = await Promise.allSettled([
+    const shouldLoadAllUsers = ['hr', 'system_admin'].includes(auth.user?.sysRole ?? '');
+    const shouldLoadReports = Boolean(auth.user?.businessCapabilities?.canManageTeam && auth.user?.id);
+    const [objectiveResult, departmentResult, parentIndicatorResult, userResult] = await Promise.allSettled([
       objectivesApi.findAll({
         cycleId: props.cycleId || undefined,
         page: 1,
@@ -650,17 +657,46 @@ async function loadGoalSettingOptions() {
       props.taskId
         ? objectivesApi.getIndicatorAlignmentCandidates(props.taskId)
         : Promise.resolve({ items: [], reason: '当前任务暂不可设置指标对齐' }),
+      shouldLoadAllUsers
+        ? usersApi.findAll({ page: 1, pageSize: 200, status: 'active' })
+        : shouldLoadReports && auth.user?.id
+          ? usersApi.getSubordinates(auth.user.id)
+          : Promise.resolve([]),
     ]);
     if (objectiveResult.status === 'fulfilled') {
       goalAlignmentOptions.value = objectiveItems(objectiveResult.value);
     }
     if (departmentResult.status === 'fulfilled') {
-      goalVisibilityDepartments.value = flattenDepartmentOptions(departmentResult.value);
+      const allDepartments = flattenDepartmentOptions(departmentResult.value);
+      if (shouldLoadAllUsers) {
+        goalVisibilityDepartments.value = allDepartments;
+      } else {
+        const allowedIds = new Set([
+          ...(auth.user?.deptId ? [auth.user.deptId] : []),
+          ...(userResult.status === 'fulfilled' && Array.isArray(userResult.value)
+            ? userResult.value.flatMap((user) => user.deptId ? [user.deptId] : [])
+            : []),
+        ]);
+        goalVisibilityDepartments.value = allDepartments.filter((department) => allowedIds.has(department.id));
+      }
     }
     if (parentIndicatorResult.status === 'fulfilled') {
       parentIndicatorAlignmentOptions.value = parentIndicatorResult.value.items;
       parentIndicatorAlignmentReason.value = parentIndicatorResult.value.reason ?? '';
     }
+    const loadedUsers = userResult.status === 'fulfilled'
+      ? Array.isArray(userResult.value) ? userResult.value : userResult.value.items
+      : [];
+    const currentUser = auth.user
+      ? [{ id: auth.user.id, name: auth.user.name, employeeNo: auth.user.employeeNo }]
+      : [];
+    goalVisibilityUsers.value = [...new Map(
+      [...currentUser, ...loadedUsers].map((user) => [user.id, {
+        id: user.id,
+        name: user.name,
+        employeeNo: user.employeeNo,
+      }]),
+    ).values()];
     goalSettingOptionsLoaded.value = true;
   } finally {
     goalSettingOptionsLoading.value = false;
@@ -1331,6 +1367,7 @@ function handleAttachmentsChange(attachments: Attachment[]) {
               }"
               :indicator-id="editableRowIds[index]"
               :departments="goalVisibilityDepartments"
+              :users="goalVisibilityUsers"
               :disabled="loading"
               @update:model-value="updateEditableVisibility(index, $event)"
             />

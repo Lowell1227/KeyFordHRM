@@ -128,6 +128,26 @@ test('company visibility is exclusive and at least one permission always remains
   await expect(visibility).not.toContainText('绩效直属上级可见');
 });
 
+test('custom visibility expands department and employee multi-selects', async ({ page }) => {
+  const requests: Request[] = [];
+  await mockGoalSetting(page, requests);
+  await page.goto(`/tasks/${taskId}?stage=goal-setting`);
+  const visibility = page.getByTestId('indicator-visibility-indicator-1');
+  await visibility.locator('.el-select__caret').click();
+  await page.getByRole('option', { name: '自定义部门或员工' }).click();
+  await page.keyboard.press('Escape');
+  await expect(page.getByTestId('visibility-departments')).toBeVisible();
+  await expect(page.getByTestId('visibility-users')).toBeVisible();
+  await page.getByTestId('visibility-users').locator('.el-select__caret').click();
+  await page.getByRole('option', { name: '方园' }).click();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '保存草稿' }).click();
+  await expect.poll(() => requests.length).toBe(1);
+  expect(requests[0].postDataJSON()).toMatchObject({
+    instances: [{ visibilityScopes: ['supervisors', 'custom'], visibleUserIds: ['employee-1'] }],
+  });
+});
+
 async function mockIndicatorMap(page: Page) {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'indicator-map-contract');
