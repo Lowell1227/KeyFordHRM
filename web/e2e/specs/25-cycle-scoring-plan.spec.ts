@@ -25,6 +25,55 @@ function buildSchedules(count: number, scoringFrequency: 'monthly' | 'cycle'): C
   });
 }
 
+function buildSchedulesForRange(
+  startDate: string,
+  endDate: string,
+  scoringFrequency: 'monthly' | 'cycle',
+): CyclePeriodSchedule[] {
+  if (scoringFrequency === 'cycle') {
+    return [{
+      periodKey: 'cycle',
+      periodType: 'cycle',
+      sequence: 1,
+      periodStart: startDate,
+      periodEnd: endDate,
+      selfEvalOpenAt: `${endDate}T09:00:00+08:00`,
+      selfEvalDueAt: `${endDate}T18:00:00+08:00`,
+      managerDueAt: `${endDate}T18:00:00+08:00`,
+      isException: false,
+    }];
+  }
+
+  const start = new Date(`${startDate}T00:00:00.000Z`);
+  const end = new Date(`${endDate}T00:00:00.000Z`);
+  const schedules: CyclePeriodSchedule[] = [];
+  let year = start.getUTCFullYear();
+  let month = start.getUTCMonth();
+  while (year < end.getUTCFullYear() || (year === end.getUTCFullYear() && month <= end.getUTCMonth())) {
+    const key = `${year}-${String(month + 1).padStart(2, '0')}`;
+    const isFirst = schedules.length === 0;
+    const isLast = year === end.getUTCFullYear() && month === end.getUTCMonth();
+    const lastDay = new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+    schedules.push({
+      periodKey: key,
+      periodType: 'month',
+      sequence: schedules.length + 1,
+      periodStart: isFirst ? startDate : `${key}-01`,
+      periodEnd: isLast ? endDate : `${key}-${lastDay}`,
+      selfEvalOpenAt: `${key}-01T09:00:00+08:00`,
+      selfEvalDueAt: `${key}-03T18:00:00+08:00`,
+      managerDueAt: `${key}-06T18:00:00+08:00`,
+      isException: false,
+    });
+    month += 1;
+    if (month === 12) {
+      year += 1;
+      month = 0;
+    }
+  }
+  return schedules;
+}
+
 const integratedCycle: AssessmentCycle = {
   id: 'cycle-v2',
   name: '2027 Q1 季度考核',
@@ -153,9 +202,6 @@ async function mockIntegratedCyclePage(
       const scoringFrequency = body.scoringFrequency === 'cycle' || body.type === 'custom'
         ? 'cycle'
         : 'monthly';
-      const count = scoringFrequency === 'cycle'
-        ? 1
-        : ({ monthly: 1, quarterly: 3, semiannual: 6, annual: 12 } as Record<string, number>)[String(body.type)] ?? 1;
       const resolved = options.previewResolver?.(body, callIndex);
       if (resolved?.delayMs) await new Promise((resolve) => setTimeout(resolve, resolved.delayMs));
       const submittedSchedules = Array.isArray(body.schedules)
@@ -169,7 +215,7 @@ async function mockIntegratedCyclePage(
           reviewFrequency: 'cycle',
           schedules: resolved?.schedules
             ?? submittedSchedules
-            ?? buildSchedules(count, scoringFrequency).map((schedule) => ({ ...schedule, isException: false })),
+            ?? buildSchedulesForRange(String(body.startDate), String(body.endDate), scoringFrequency),
           blockers: resolved?.blockers ?? options.blockers ?? [],
           warnings: resolved?.warnings ?? options.warnings ?? [],
         })),
@@ -288,6 +334,8 @@ async function mountScoringPlanHarness(page: import('@playwright/test').Page) {
     const body = route.request().postDataJSON() as {
       type: string;
       scoringFrequency?: 'monthly' | 'cycle';
+      startDate: string;
+      endDate: string;
       schedules?: CyclePeriodSchedule[];
     };
     const scoringFrequency = body.type === 'monthly'
@@ -464,7 +512,7 @@ test.describe('cycle scoring plan integration', () => {
     await mockIntegratedCyclePage(page, {
       createBodies,
       previewBodies,
-      warnings: [{ code: 'CROSS_MONTH_WARNING', periodKey: '2027-02', message: '主管完成时间跨月，请确认安排' }],
+      warnings: [{ code: 'CROSS_MONTH_WARNING', periodKey: '2026-11', message: '主管完成时间跨月，请确认安排' }],
     });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
@@ -486,7 +534,7 @@ test.describe('cycle scoring plan integration', () => {
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
     const secondRow = page.getByTestId('cycle-month-schedule-row').nth(1);
     const managerDueInput = secondRow.getByTestId('manager-due-at').locator('input');
-    await managerDueInput.fill('2027-03-10 18:00');
+    await managerDueInput.fill('2026-12-10 18:00');
     await managerDueInput.press('Tab');
     await expect(secondRow.getByTestId('cycle-special-month-dot')).toHaveAttribute('aria-label', '时间已调整');
     await page.getByRole('button', { name: '下一步' }).click();
@@ -494,7 +542,7 @@ test.describe('cycle scoring plan integration', () => {
     await expect(page.getByRole('dialog', { name: '确认评分计划提示' })).toHaveCount(0);
     expect(previewBodies).toContainEqual(expect.objectContaining({
       schedules: expect.arrayContaining([
-        expect.objectContaining({ periodKey: '2027-02', isException: true }),
+        expect.objectContaining({ periodKey: '2026-11', isException: true }),
       ]),
     }));
     await expect.poll(() => createBodies).toHaveLength(1);
@@ -504,7 +552,7 @@ test.describe('cycle scoring plan integration', () => {
       scoringFrequency: 'monthly',
       monthlyFollowUpRequired: true,
       periodSchedules: expect.arrayContaining([
-        expect.objectContaining({ periodKey: '2027-02', isException: true }),
+        expect.objectContaining({ periodKey: '2026-11', isException: true }),
       ]),
     });
     expect(createBodies.at(-1)).not.toHaveProperty('reviewFrequency');
@@ -539,7 +587,7 @@ test.describe('cycle scoring plan integration', () => {
           delayMs: 120,
           warnings: [{
             code: 'SELF_EVAL_DUE_NOT_BEFORE_MANAGER_DUE',
-            periodKey: '2027-02',
+            periodKey: '2026-11',
             message: '自评与主管评分时间相同',
           }],
         };
@@ -551,7 +599,7 @@ test.describe('cycle scoring plan integration', () => {
     const secondRow = page.getByTestId('cycle-month-schedule-row').nth(1);
     await expect(secondRow).toBeVisible();
 
-    await secondRow.getByTestId('manager-due-at').locator('input').fill('2027-02-03 18:00');
+    await secondRow.getByTestId('manager-due-at').locator('input').fill('2026-11-03 18:00');
     await secondRow.getByTestId('manager-due-at').locator('input').press('Tab');
     await expect(secondRow).toContainText('自评与主管评分时间相同');
     await page.getByRole('button', { name: '下一步' }).click();
@@ -560,9 +608,9 @@ test.describe('cycle scoring plan integration', () => {
     expect(previewBodies).toContainEqual(expect.objectContaining({
       schedules: expect.arrayContaining([
         expect.objectContaining({
-          periodKey: '2027-02',
-          selfEvalDueAt: '2027-02-03T18:00:00+08:00',
-          managerDueAt: '2027-02-03T18:00:00+08:00',
+          periodKey: '2026-11',
+          selfEvalDueAt: '2026-11-03T18:00:00+08:00',
+          managerDueAt: '2026-11-03T18:00:00+08:00',
         }),
       ]),
     }));
@@ -574,7 +622,7 @@ test.describe('cycle scoring plan integration', () => {
       createBodies,
       warnings: [{
         code: 'MANAGER_DUE_BEFORE_SELF_EVAL',
-        periodKey: '2027-02',
+        periodKey: '2026-11',
         message: '主管完成时间不得早于员工完成时间',
       }],
     });
@@ -598,8 +646,7 @@ test.describe('cycle scoring plan integration', () => {
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
 
     await page.getByTestId('cycle-monthly-review-switch').click();
-    await expect(page.getByRole('dialog', { name: '确认重新生成评分计划？' })).toBeVisible();
-    await page.getByRole('button', { name: '重新生成评分计划' }).click();
+    await expect(page.getByRole('dialog', { name: '确认重新生成评分计划？' })).toHaveCount(0);
 
     await expect(page.getByTestId('cycle-review-reset-warning')).toHaveCount(0);
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(1);
@@ -638,20 +685,43 @@ test.describe('cycle scoring plan integration', () => {
     expect(updateBodies[0]).toMatchObject({ name: '2027 Q1 季度考核（调整）' });
   });
 
-  test('restores the confirmed frequency and schedule when adjusted-schedule regeneration is declined', async ({ page }) => {
+  test('switches frequency directly without an adjusted-schedule regeneration dialog', async ({ page }) => {
     await mockIntegratedCyclePage(page, { cycles: [integratedCycle] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId(`cycle-edit-${integratedCycle.id}`).click();
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
 
     await page.getByTestId('cycle-monthly-review-switch').click();
-    const confirmation = page.getByRole('dialog', { name: '确认重新生成评分计划？' });
-    await expect(confirmation).toBeVisible();
-    await confirmation.getByRole('button', { name: '保留当前评分计划' }).click();
-
-    await expect(page.getByTestId('cycle-monthly-review-switch').locator('input')).toBeChecked();
-    await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
+    await expect(page.getByRole('dialog', { name: '确认重新生成评分计划？' })).toHaveCount(0);
+    await expect(page.getByTestId('cycle-monthly-review-switch').locator('input')).not.toBeChecked();
+    await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(1);
     await expect(page.getByTestId('cycle-review-reset-warning')).toHaveCount(0);
+  });
+
+  test('uses covered months after a period change and preserves matching adjusted rows', async ({ page }) => {
+    await mockIntegratedCyclePage(page, { cycles: [integratedCycle] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId(`cycle-edit-${integratedCycle.id}`).click();
+    await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
+
+    const dialog = page.getByRole('dialog', { name: '编辑考核周期' });
+    const periodInputs = dialog.locator('.el-date-editor--daterange input');
+    await periodInputs.nth(0).click();
+    const picker = page.locator('.el-date-range-picker:visible');
+    await picker.locator('.el-date-range-picker__content.is-left td.available:not(.prev-month):not(.next-month)')
+      .filter({ hasText: /^15$/ })
+      .click();
+    await picker.locator('.el-date-range-picker__content.is-right td.available:not(.prev-month):not(.next-month)')
+      .filter({ hasText: /^20$/ })
+      .click();
+
+    await expect(page.getByRole('dialog', { name: '是否同步调整时间节点？' })).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: '确认重新生成评分计划？' })).toHaveCount(0);
+    await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(2);
+    const adjustedRow = page.getByTestId('cycle-month-schedule-row').nth(1);
+    await expect(adjustedRow.getByTestId('cycle-special-month-dot')).toHaveAttribute('aria-label', '时间已调整');
+    await expect(adjustedRow.getByTestId('manager-due-at').locator('input')).toHaveValue('2027-02-06 18:00');
+    await expect(dialog.getByTestId('cycle-period-warning')).toContainText('当前期间覆盖2个月，与季度常规3个月不同，仍可保存');
   });
 
   test('ignores a stale delayed preview after a newer frequency preview completes', async ({ page }) => {
@@ -694,7 +764,11 @@ test.describe('cycle scoring plan integration', () => {
     const updateBodies: Record<string, unknown>[] = [];
     const cycleWithPersistedScheduleIds: AssessmentCycle = {
       ...integratedCycle,
-      periodSchedules: buildSchedules(3, 'monthly').map((schedule, index) => ({
+      periodSchedules: buildSchedulesForRange(
+        integratedCycle.startDate,
+        integratedCycle.endDate,
+        'monthly',
+      ).map((schedule, index) => ({
         ...schedule,
         id: `persisted-schedule-${index + 1}`,
         isException: false,

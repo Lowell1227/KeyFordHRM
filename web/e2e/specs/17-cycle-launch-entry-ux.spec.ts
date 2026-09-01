@@ -8,6 +8,23 @@ const apiResponse = (data: unknown) => ({
   timestamp: Date.now(),
 });
 
+function coveredMonthKeys(startDate: string, endDate: string): string[] {
+  const start = new Date(`${startDate}T00:00:00.000Z`);
+  const end = new Date(`${endDate}T00:00:00.000Z`);
+  const keys: string[] = [];
+  let year = start.getUTCFullYear();
+  let month = start.getUTCMonth();
+  while (year < end.getUTCFullYear() || (year === end.getUTCFullYear() && month <= end.getUTCMonth())) {
+    keys.push(`${year}-${String(month + 1).padStart(2, '0')}`);
+    month += 1;
+    if (month === 12) {
+      year += 1;
+      month = 0;
+    }
+  }
+  return keys;
+}
+
 interface CycleLaunchMockOptions {
   cycles?: AssessmentCycle[];
   departments?: Department[];
@@ -261,16 +278,11 @@ async function mockCycleLaunchPage(
         : body.type === 'custom' || body.type === 'probation'
           ? 'cycle'
           : body.scoringFrequency ?? 'monthly';
-      const count = scoringFrequency === 'cycle'
-        ? 1
-        : ({ monthly: 1, quarterly: 3, semiannual: 6, annual: 12 } as Record<string, number>)[body.type] ?? 1;
-      const start = new Date(`${body.startDate}T00:00:00+08:00`);
-      const schedules = body.schedules ?? Array.from({ length: count }, (_, index) => {
-        const periodStart = new Date(start);
-        periodStart.setMonth(periodStart.getMonth() + index);
+      const periodKeys = scoringFrequency === 'cycle' ? ['cycle'] : coveredMonthKeys(body.startDate, body.endDate);
+      const schedules = body.schedules ?? periodKeys.map((generatedPeriodKey, index) => {
         const periodKey = scoringFrequency === 'cycle'
           ? 'cycle'
-          : `${periodStart.getFullYear()}-${String(periodStart.getMonth() + 1).padStart(2, '0')}`;
+          : generatedPeriodKey;
         return {
           periodKey,
           periodType: scoringFrequency === 'cycle' ? 'cycle' : 'month',
@@ -874,7 +886,7 @@ test.describe('cycle launch entry UX', () => {
     await expect.poll(() => cycleUrls.some((url) => new URL(url).searchParams.get('type') === 'semiannual')).toBe(true);
   });
 
-  test('edits and saves a cross-year half-year after regenerating its schedule', async ({ page }) => {
+  test('edits and saves a cross-year half-year without overwriting adjusted times', async ({ page }) => {
     const updateBodies: unknown[] = [];
     const semiannualCycle = {
       ...createdCycle,
@@ -892,17 +904,13 @@ test.describe('cycle launch entry UX', () => {
     await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2027年11月—2028年04月半年绩效考核');
     await expect(dialog.getByPlaceholder('开始日期')).toHaveValue('2027-11-01');
     await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2028-04-30');
-    await expect(dialog.getByTestId('cycle-semiannual-warning')).toHaveCount(0);
+    await expect(dialog.getByTestId('cycle-period-warning')).toHaveCount(0);
 
     const startDateInput = dialog.getByPlaceholder('开始日期');
     await startDateInput.fill('2027-12-01');
     await startDateInput.press('Enter');
 
-    let confirmation = page.getByRole('dialog', { name: '是否同步调整时间节点？' });
-    await expect(confirmation).toContainText('2027-11-01—2028-04-30');
-    await expect(confirmation).toContainText('2027-12-01—2028-05-31');
-    await confirmation.getByRole('button', { name: '同步重新生成（推荐）' }).click();
-    await expect(confirmation).toBeHidden();
+    await expect(page.getByRole('dialog', { name: '是否同步调整时间节点？' })).toHaveCount(0);
 
     const endDateInput = dialog.getByPlaceholder('结束日期');
     await endDateInput.fill('2028-05-31');
@@ -921,8 +929,8 @@ test.describe('cycle launch entry UX', () => {
     const updatedBody = updateBodies[0] as Record<string, unknown>;
     expect(updatedBody.goalSettingOpenAt).toEqual(expect.any(String));
     expect(updatedBody.deadlinePublish).toEqual(expect.any(String));
-    expect(updatedBody.goalSettingOpenAt).not.toBe(createdCycle.goalSettingOpenAt);
-    expect(updatedBody.deadlinePublish).not.toBe(createdCycle.deadlinePublish);
+    expect(updatedBody.goalSettingOpenAt).toBe(createdCycle.goalSettingOpenAt);
+    expect(updatedBody.deadlinePublish).toBe(createdCycle.deadlinePublish);
   });
 
   test('auto-completes a rolling half-year after HR changes its start date', async ({ page }) => {
@@ -969,8 +977,8 @@ test.describe('cycle launch entry UX', () => {
     await picker.locator('button.arrow-right').click();
     await picker.locator('td.available:not(.prev-month):not(.next-month)').filter({ hasText: /^1$/ }).click();
 
-    await expect(dialog.getByTestId('cycle-semiannual-warning')).toContainText(
-      '当前期间不是完整的连续六个月，仍可保存，请确认符合本次考核安排',
+    await expect(dialog.getByTestId('cycle-period-warning')).toContainText(
+      '当前期间覆盖7个月，与半年常规6个月不同，仍可保存',
     );
     await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2027年03月—09月半年绩效考核');
     await dialog.getByTestId('cycle-create-save-draft').click();
@@ -1176,7 +1184,7 @@ test.describe('cycle launch entry UX', () => {
     await expect(nodes.nth(3).locator('.el-date-editor input')).toHaveValue('2027-01-01 17:00:00');
   });
 
-  test('asks before regenerating saved nodes when an edited cycle period changes', async ({ page }) => {
+  test('keeps adjusted nodes and shows one inline period reminder without regeneration dialogs', async ({ page }) => {
     await mockCycleLaunchPage(page, { cycles: [createdCycle] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-edit-cycle-created').click();
@@ -1191,19 +1199,17 @@ test.describe('cycle launch entry UX', () => {
     await picker.locator('.el-date-range-picker__content.is-right td.available:not(.prev-month):not(.next-month)')
       .filter({ hasText: /^30$/ })
       .click();
-
-    const confirmation = page.getByRole('dialog', { name: '是否同步调整时间节点？' });
-    await expect(confirmation).toContainText('2026-10-01—2026-12-31');
-    await expect(confirmation).toContainText('2026-10-19—2026-11-30');
-    await expect(confirmation).toContainText('系统工作日日历');
-    await confirmation.getByRole('button', { name: '同步重新生成（推荐）' }).click();
 
     const nodes = dialog.getByTestId('cycle-schedule-node');
-    await expect(nodes.nth(0).locator('.el-date-editor input')).toHaveValue('2026-09-29 09:00:00');
-    await expect(dialog.getByTestId('cycle-plan-summary')).toContainText('系统默认计划');
+    await expect(page.getByRole('dialog', { name: '是否同步调整时间节点？' })).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: '确认重新生成评分计划？' })).toHaveCount(0);
+    await expect(nodes.nth(0).locator('.el-date-editor input')).toHaveValue('2026-09-21 17:00:00');
+    await expect(dialog.getByTestId('cycle-plan-summary')).toContainText('已调整计划');
+    await expect(dialog.getByTestId('cycle-period-warning')).toContainText('当前期间覆盖2个月，与季度常规3个月不同，仍可保存');
+    await expect(page.locator('.el-message--error')).toHaveCount(0);
   });
 
-  test('keeps saved nodes when HR chooses not to regenerate after a period change', async ({ page }) => {
+  test('uses restore default plan as the only action that overwrites adjusted nodes', async ({ page }) => {
     await mockCycleLaunchPage(page, { cycles: [createdCycle] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-edit-cycle-created').click();
@@ -1218,13 +1224,14 @@ test.describe('cycle launch entry UX', () => {
     await picker.locator('.el-date-range-picker__content.is-right td.available:not(.prev-month):not(.next-month)')
       .filter({ hasText: /^30$/ })
       .click();
-
-    const confirmation = page.getByRole('dialog', { name: '是否同步调整时间节点？' });
-    await confirmation.getByRole('button', { name: '保留当前时间节点' }).click();
 
     const nodes = dialog.getByTestId('cycle-schedule-node');
     await expect(nodes.nth(0).locator('.el-date-editor input')).toHaveValue('2026-09-21 17:00:00');
     await expect(dialog.getByTestId('cycle-plan-summary')).toContainText('已调整计划');
+
+    await dialog.getByTestId('cycle-restore-default-plan').click();
+    await expect(nodes.nth(0).locator('.el-date-editor input')).toHaveValue('2026-09-29 09:00:00');
+    await expect(dialog.getByTestId('cycle-plan-summary')).toContainText('系统默认计划');
   });
 
   test('keeps time settings visible and advanced groups limited to secondary settings', async ({ page }) => {

@@ -66,21 +66,17 @@ export function buildPeriodDefinitions(input: BuildPeriodDefinitionsInput): Peri
     ];
   }
 
-  const expectedPeriodCount = monthlyPeriodCount(input.type);
   const periods: PeriodDefinition[] = [];
   let year = start.year;
   let month = start.month;
+  let sequence = 1;
 
-  for (let sequence = 1; sequence <= expectedPeriodCount; sequence += 1) {
+  while (year < end.year || (year === end.year && month <= end.month)) {
     const isFirstMonth = sequence === 1;
-    const isLastMonth = sequence === expectedPeriodCount;
+    const isLastMonth = year === end.year && month === end.month;
     const lastDay = daysInMonth(year, month);
     const periodStart = isFirstMonth ? canonicalStart : dateAtUtcMidnight(year, month, 1);
     const periodEnd = isLastMonth ? canonicalEnd : dateAtUtcMidnight(year, month, lastDay);
-
-    if (periodEnd < periodStart) {
-      throw new BadRequestException(`${input.type}按月评分的考核期间不足以形成${expectedPeriodCount}个评分月份`);
-    }
 
     periods.push({
       periodKey: `${year}-${String(month).padStart(2, '0')}`,
@@ -96,16 +92,10 @@ export function buildPeriodDefinitions(input: BuildPeriodDefinitionsInput): Peri
     } else {
       month += 1;
     }
+    sequence += 1;
   }
 
   return periods;
-}
-
-function monthlyPeriodCount(type: CycleType): number {
-  if (type === CycleType.quarterly) return 3;
-  if (type === CycleType.semiannual) return 6;
-  if (type === CycleType.annual) return 12;
-  return 1;
 }
 
 function getCalendarDate(date: Date): CalendarDate {

@@ -11,7 +11,7 @@ describe('cycle scoring plan rules', () => {
     expect(normalizeScoringFrequency('annual', 'cycle')).toBe('cycle');
   });
 
-  it('builds the fixed number of start-month-anchored periods for monthly scoring', () => {
+  it('builds one row for each calendar month in a standard quarterly range', () => {
     const periods = buildPeriodDefinitions({
       type: 'quarterly',
       scoringFrequency: 'monthly',
@@ -26,16 +26,28 @@ describe('cycle scoring plan rules', () => {
 
   it.each([
     {
+      type: 'monthly' as const,
+      startDate: '2026-01-20T00:00:00.000Z',
+      endDate: '2026-02-19T00:00:00.000Z',
+      expectedKeys: ['2026-01', '2026-02'],
+    },
+    {
+      type: 'quarterly' as const,
+      startDate: '2026-10-02T00:00:00.000Z',
+      endDate: '2026-11-24T00:00:00.000Z',
+      expectedKeys: ['2026-10', '2026-11'],
+    },
+    {
       type: 'quarterly' as const,
       startDate: '2026-11-15T00:00:00.000Z',
       endDate: '2027-02-14T00:00:00.000Z',
-      expectedKeys: ['2026-11', '2026-12', '2027-01'],
+      expectedKeys: ['2026-11', '2026-12', '2027-01', '2027-02'],
     },
     {
       type: 'semiannual' as const,
       startDate: '2026-09-15T00:00:00.000Z',
       endDate: '2027-03-14T00:00:00.000Z',
-      expectedKeys: ['2026-09', '2026-10', '2026-11', '2026-12', '2027-01', '2027-02'],
+      expectedKeys: ['2026-09', '2026-10', '2026-11', '2026-12', '2027-01', '2027-02', '2027-03'],
     },
     {
       type: 'annual' as const,
@@ -43,10 +55,10 @@ describe('cycle scoring plan rules', () => {
       endDate: '2027-03-14T00:00:00.000Z',
       expectedKeys: [
         '2026-03', '2026-04', '2026-05', '2026-06', '2026-07', '2026-08',
-        '2026-09', '2026-10', '2026-11', '2026-12', '2027-01', '2027-02',
+        '2026-09', '2026-10', '2026-11', '2026-12', '2027-01', '2027-02', '2027-03',
       ],
     },
-  ])('returns the business period count for a partial cross-year $type range', ({
+  ])('builds one follow-up row per covered calendar month for a $type cycle', ({
     type,
     startDate,
     endDate,
@@ -64,21 +76,6 @@ describe('cycle scoring plan rules', () => {
     expect(periods.map((period) => period.periodKey)).toEqual(expectedKeys);
     expect(periods[0].periodStart).toEqual(start);
     expect(periods.at(-1)?.periodEnd).toEqual(end);
-  });
-
-  it('keeps a monthly cycle as one period when adjusted dates cross a calendar-month boundary', () => {
-    const periods = buildPeriodDefinitions({
-      type: 'monthly',
-      scoringFrequency: 'monthly',
-      startDate: new Date('2026-01-20T00:00:00.000Z'),
-      endDate: new Date('2026-02-19T00:00:00.000Z'),
-    });
-
-    expect(periods).toHaveLength(1);
-    expect(periods[0]).toEqual(expect.objectContaining({
-      periodKey: '2026-01',
-      periodEnd: new Date('2026-02-19T00:00:00.000Z'),
-    }));
   });
 
   it('uses the cycle boundary dates for partial first and last months', () => {
