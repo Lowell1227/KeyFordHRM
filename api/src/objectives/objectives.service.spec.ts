@@ -18,8 +18,9 @@ describe('ObjectivesService visibility helpers', () => {
       updateMany: jest.Mock;
     };
     actionItem: { findMany: jest.Mock };
+    assessmentCycle: { findUnique: jest.Mock };
     user: { findMany: jest.Mock; findUnique: jest.Mock };
-    assessmentTask: { findUnique: jest.Mock };
+    assessmentTask: { findUnique: jest.Mock; findMany: jest.Mock };
     indicatorInstance: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock; count: jest.Mock };
     indicatorProgressUpdate: { findFirst: jest.Mock; create: jest.Mock };
     auditLog: { create: jest.Mock; findMany: jest.Mock };
@@ -81,11 +82,12 @@ describe('ObjectivesService visibility helpers', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
       actionItem: { findMany: jest.fn() },
+      assessmentCycle: { findUnique: jest.fn() },
       user: {
         findMany: jest.fn().mockResolvedValue([{ id: 'manager-1' }, { id: 'employee-1' }]),
         findUnique: jest.fn().mockResolvedValue({ directManagerId: null }),
       },
-      assessmentTask: { findUnique: jest.fn() },
+      assessmentTask: { findUnique: jest.fn(), findMany: jest.fn() },
       indicatorInstance: {
         findUnique: jest.fn(),
         findFirst: jest.fn(),
@@ -729,6 +731,70 @@ describe('ObjectivesService visibility helpers', () => {
     )).rejects.toBeInstanceOf(ForbiddenException);
 
     expect(prisma.assessmentTask.findUnique).toHaveBeenCalledTimes(1);
+  });
+
+  it('builds the indicator map from explicit visible alignments and keeps unaligned peers separate', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue({
+      id: 'cycle-1', name: '2026 Q3', startDate: new Date('2026-07-01'), endDate: new Date('2026-09-30'),
+    });
+    prisma.assessmentTask.findUnique.mockResolvedValue({
+      id: 'task-self', cycleId: 'cycle-1', employeeId: 'manager-1', managerId: 'leader-1', deptId: 'dept-1',
+    });
+    prisma.assessmentTask.findMany.mockResolvedValue([
+      { employeeId: 'manager-1', managerId: 'leader-1' },
+      { employeeId: 'leader-1', managerId: 'director-1' },
+    ]);
+    prisma.indicatorInstance.findMany.mockResolvedValue([
+      {
+        id: 'parent-1', name: '提升组织效能', description: null, weight: new Prisma.Decimal('1'), sortOrder: 0,
+        visibilityScope: 'direct_reports', visibilityRules: [{ scope: 'direct_reports' }],
+        task: { employeeId: 'leader-1', deptId: 'dept-1', employee: { id: 'leader-1', name: 'Leader' }, dept: { id: 'dept-1', name: 'HR' } },
+        childAlignments: [], progressUpdates: [],
+      },
+      {
+        id: 'child-1', name: '完成招聘交付', description: null, weight: new Prisma.Decimal('0.7'), sortOrder: 0,
+        visibilityScope: 'supervisors', visibilityRules: [{ scope: 'supervisors' }],
+        task: { employeeId: 'manager-1', deptId: 'dept-1', employee: { id: 'manager-1', name: 'Manager' }, dept: { id: 'dept-1', name: 'HR' } },
+        childAlignments: [{ parentIndicatorId: 'parent-1' }], progressUpdates: [{ progress: 60 }],
+      },
+      {
+        id: 'peer-1', name: '推动培训落地', description: null, weight: new Prisma.Decimal('0.5'), sortOrder: 0,
+        visibilityScope: 'department', visibilityRules: [{ scope: 'department' }],
+        task: { employeeId: 'peer-1', deptId: 'dept-1', employee: { id: 'peer-1', name: 'Peer' }, dept: { id: 'dept-1', name: 'HR' } },
+        childAlignments: [], progressUpdates: [],
+      },
+    ]);
+
+    const result = await service.findIndicatorMap('cycle-1', viewer);
+
+    expect(result.roots).toEqual(['parent-1']);
+    expect(result.edges).toEqual([{ id: 'parent-1:child-1', source: 'parent-1', target: 'child-1' }]);
+    expect(result.nodes.map((node) => node.id)).toEqual(['parent-1', 'child-1']);
+    expect(result.sameDepartmentUnaligned.map((node) => node.id)).toEqual(['peer-1']);
+    expect(result.nodes[1]).toMatchObject({ progress: 60, owner: { id: 'manager-1', name: 'Manager' } });
+  });
+
+  it('promotes a visible child to a root without leaking its hidden parent', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue({
+      id: 'cycle-1', name: '2026 Q3', startDate: new Date('2026-07-01'), endDate: new Date('2026-09-30'),
+    });
+    prisma.assessmentTask.findUnique.mockResolvedValue({
+      id: 'task-self', cycleId: 'cycle-1', employeeId: 'manager-1', managerId: 'leader-1', deptId: 'dept-1',
+    });
+    prisma.assessmentTask.findMany.mockResolvedValue([{ employeeId: 'manager-1', managerId: 'leader-1' }]);
+    prisma.indicatorInstance.findMany.mockResolvedValue([{
+      id: 'child-1', name: '完成招聘交付', description: null, weight: new Prisma.Decimal('1'), sortOrder: 0,
+      visibilityScope: 'supervisors', visibilityRules: [{ scope: 'supervisors' }],
+      task: { employeeId: 'manager-1', deptId: 'dept-1', employee: { id: 'manager-1', name: 'Manager' }, dept: { id: 'dept-1', name: 'HR' } },
+      childAlignments: [{ parentIndicatorId: 'hidden-parent' }], progressUpdates: [],
+    }]);
+
+    const result = await service.findIndicatorMap('cycle-1', viewer);
+
+    expect(result.roots).toEqual(['child-1']);
+    expect(result.edges).toEqual([]);
+    expect(JSON.stringify(result)).not.toContain('hidden-parent');
+    expect(result).not.toHaveProperty('hiddenCount');
   });
 
   it('appends an employee progress update and its audit record without overwriting history', async () => {

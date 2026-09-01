@@ -28,6 +28,7 @@ import { ObjectiveQueryDto } from './dto/objective-query.dto';
 import { GoalTrackingQueryDto } from './dto/goal-tracking-query.dto';
 import { buildActionItemVisibilityWhere } from '@/action-items/action-item-visibility';
 import { buildVisibilityScopeWhere } from '@/tasks/indicator-visibility.rules';
+import { IndicatorMapNode, IndicatorMapResult } from './indicator-map.types';
 
 /** include 定义（字面量，便于 Prisma 推导类型）。 */
 const objectiveIncludeDef = {
@@ -181,6 +182,182 @@ export class ObjectivesService {
     private readonly prisma: PrismaService,
     private readonly dataScope: DataScopeService,
   ) {}
+
+  async findIndicatorMap(cycleId: string, viewer: AuthUser): Promise<IndicatorMapResult> {
+    const [cycle, viewerTask, cycleTasks] = await Promise.all([
+      this.prisma.assessmentCycle.findUnique({
+        where: { id: cycleId },
+        select: { id: true, name: true, startDate: true, endDate: true },
+      }),
+      this.prisma.assessmentTask.findUnique({
+        where: { cycleId_employeeId: { cycleId, employeeId: viewer.id } },
+        select: { id: true, cycleId: true, employeeId: true, managerId: true, deptId: true },
+      }),
+      this.prisma.assessmentTask.findMany({
+        where: { cycleId },
+        select: { employeeId: true, managerId: true },
+      }),
+    ]);
+    if (!cycle) {
+      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
+    }
+    if (!viewerTask) {
+      throw new ForbiddenException({
+        code: ERROR_CODE.FORBIDDEN,
+        message: '你没有权限查看该考核周期的目标地图',
+      });
+    }
+
+    const managerByEmployee = new Map(cycleTasks.map((task) => [task.employeeId, task.managerId]));
+    const frozenAncestorOwnerIds: string[] = [];
+    const visited = new Set<string>([viewerTask.employeeId]);
+    let ancestorId = viewerTask.managerId;
+    while (ancestorId && !visited.has(ancestorId)) {
+      frozenAncestorOwnerIds.push(ancestorId);
+      visited.add(ancestorId);
+      ancestorId = managerByEmployee.get(ancestorId) ?? null;
+    }
+    const ancestorDeptIds = viewerTask.deptId
+      ? await this.dataScope.getAncestorDeptIds(viewerTask.deptId)
+      : [];
+    const visibilityWhere: Prisma.IndicatorInstanceWhereInput = {
+      OR: [
+        { task: { employeeId: viewer.id } },
+        buildVisibilityScopeWhere(IndicatorVisibilityScope.company),
+        {
+          AND: [
+            buildVisibilityScopeWhere(IndicatorVisibilityScope.supervisors),
+            { task: { managerId: viewer.id } },
+          ],
+        },
+        ...(viewerTask.managerId
+          ? [{
+              AND: [
+                buildVisibilityScopeWhere(IndicatorVisibilityScope.direct_reports),
+                { task: { employeeId: viewerTask.managerId } },
+              ],
+            } satisfies Prisma.IndicatorInstanceWhereInput]
+          : []),
+        ...(frozenAncestorOwnerIds.length
+          ? [{
+              AND: [
+                buildVisibilityScopeWhere(IndicatorVisibilityScope.all_reports),
+                { task: { employeeId: { in: frozenAncestorOwnerIds } } },
+              ],
+            } satisfies Prisma.IndicatorInstanceWhereInput]
+          : []),
+        ...(viewerTask.deptId
+          ? [
+              {
+                AND: [
+                  buildVisibilityScopeWhere(IndicatorVisibilityScope.department),
+                  { task: { deptId: viewerTask.deptId } },
+                ],
+              } satisfies Prisma.IndicatorInstanceWhereInput,
+              {
+                AND: [
+                  buildVisibilityScopeWhere(IndicatorVisibilityScope.custom),
+                  { visibleDepartments: { some: { departmentId: viewerTask.deptId } } },
+                ],
+              } satisfies Prisma.IndicatorInstanceWhereInput,
+            ]
+          : []),
+        ...(ancestorDeptIds.length
+          ? [{
+              AND: [
+                buildVisibilityScopeWhere(IndicatorVisibilityScope.department_tree),
+                { task: { deptId: { in: ancestorDeptIds } } },
+              ],
+            } satisfies Prisma.IndicatorInstanceWhereInput]
+          : []),
+        {
+          AND: [
+            buildVisibilityScopeWhere(IndicatorVisibilityScope.custom),
+            { visibleUsers: { some: { userId: viewer.id } } },
+          ],
+        },
+      ],
+    };
+
+    const indicators = await this.prisma.indicatorInstance.findMany({
+      where: { AND: [{ task: { cycleId } }, visibilityWhere] },
+      orderBy: [{ task: { employeeId: 'asc' } }, { sortOrder: 'asc' }, { id: 'asc' }],
+      include: {
+        task: {
+          select: {
+            employeeId: true,
+            deptId: true,
+            employee: { select: { id: true, name: true } },
+            dept: { select: { id: true, name: true } },
+          },
+        },
+        visibilityRules: { orderBy: { scope: 'asc' }, select: { scope: true } },
+        childAlignments: { select: { parentIndicatorId: true } },
+        progressUpdates: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1, select: { progress: true } },
+      },
+    });
+
+    const visibleIds = new Set(indicators.map((indicator) => indicator.id));
+    const allEdges = indicators.flatMap((indicator) => indicator.childAlignments
+      .filter((alignment) => visibleIds.has(alignment.parentIndicatorId))
+      .map((alignment) => ({
+        id: `${alignment.parentIndicatorId}:${indicator.id}`,
+        source: alignment.parentIndicatorId,
+        target: indicator.id,
+      })));
+    const coreOwnerIds = new Set([viewer.id, ...(viewerTask.managerId ? [viewerTask.managerId] : [])]);
+    const graphIds = new Set(
+      indicators.filter((indicator) => coreOwnerIds.has(indicator.task.employeeId)).map((indicator) => indicator.id),
+    );
+    let changed = true;
+    while (changed) {
+      changed = false;
+      for (const edge of allEdges) {
+        if (!graphIds.has(edge.source) && !graphIds.has(edge.target)) continue;
+        if (!graphIds.has(edge.source)) { graphIds.add(edge.source); changed = true; }
+        if (!graphIds.has(edge.target)) { graphIds.add(edge.target); changed = true; }
+      }
+    }
+    const edges = allEdges.filter((edge) => graphIds.has(edge.source) && graphIds.has(edge.target));
+    const incomingIds = new Set(edges.map((edge) => edge.target));
+    const mapNode = (indicator: (typeof indicators)[number]): IndicatorMapNode => ({
+      id: indicator.id,
+      name: indicator.name,
+      description: indicator.description,
+      weight: Math.round(indicator.weight.toNumber() * 10_000) / 100,
+      progress: indicator.progressUpdates[0]?.progress ?? 0,
+      sortOrder: indicator.sortOrder,
+      visibilityScopes: indicator.visibilityRules.length
+        ? indicator.visibilityRules.map((rule) => rule.scope)
+        : [indicator.visibilityScope],
+      owner: {
+        id: indicator.task.employee.id,
+        name: indicator.task.employee.name,
+        deptId: indicator.task.deptId,
+        deptName: indicator.task.dept?.name ?? null,
+      },
+    });
+    const nodes = indicators.filter((indicator) => graphIds.has(indicator.id)).map(mapNode);
+    const sameDepartmentUnaligned = viewerTask.deptId
+      ? indicators
+          .filter((indicator) => indicator.task.deptId === viewerTask.deptId && !graphIds.has(indicator.id))
+          .map(mapNode)
+      : [];
+
+    return {
+      cycle,
+      roots: nodes.filter((node) => !incomingIds.has(node.id)).map((node) => node.id),
+      nodes,
+      edges,
+      sameDepartmentUnaligned,
+      permissions: {
+        viewerTaskId: viewerTask.id,
+        viewerId: viewer.id,
+        managerId: viewerTask.managerId,
+        canViewSameDepartment: Boolean(viewerTask.deptId),
+      },
+    };
+  }
 
   /** GET /objectives — 列表或树。 */
   async findAll(

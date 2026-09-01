@@ -25,6 +25,7 @@ import {
 } from './dto/objective-review.dto';
 import { ObjectiveReviewStatus } from '@prisma/client';
 import { AlignmentCandidatesQueryDto } from './dto/alignment-candidates-query.dto';
+import { IndicatorMapQueryDto } from './dto/indicator-map-query.dto';
 
 export const TRACKING_INDICATOR_UUID_PIPE = new ParseUUIDPipe();
 
@@ -74,6 +75,14 @@ export class ObjectivesController {
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.objectivesService.findIndicatorAlignmentCandidates(query.taskId, viewer);
+  }
+
+  @Get('indicator-map')
+  findIndicatorMap(
+    @Query() query: IndicatorMapQueryDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.objectivesService.findIndicatorMap(query.cycleId, viewer);
   }
 
   @Patch('tracking/indicators/:id/progress')
