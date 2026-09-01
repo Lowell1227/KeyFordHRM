@@ -1,4 +1,4 @@
-import type { Objective } from '@/types/api.types';
+import type { IndicatorMapResult, Objective } from '@/types/api.types';
 
 export const OBJECTIVE_MAP_CARD_WIDTH = 292;
 export const OBJECTIVE_MAP_CARD_HEIGHT = 88;
@@ -326,5 +326,107 @@ export function layoutObjectives(
     edges,
     width: maxRight + CANVAS_PADDING,
     height: maxBottom + CANVAS_PADDING,
+  };
+}
+
+export function layoutIndicatorMap(map: IndicatorMapResult): ObjectiveMapLayout {
+  if (map.nodes.length === 0) return { nodes: [], edges: [], width: 0, height: 0 };
+  const byId = new Map(map.nodes.map((node) => [node.id, node]));
+  const depth = new Map(map.nodes.map((node) => [node.id, 0]));
+  for (let pass = 0; pass < map.nodes.length; pass += 1) {
+    let changed = false;
+    for (const edge of map.edges) {
+      if (!byId.has(edge.source) || !byId.has(edge.target)) continue;
+      const nextDepth = (depth.get(edge.source) ?? 0) + 1;
+      if (nextDepth > (depth.get(edge.target) ?? 0)) {
+        depth.set(edge.target, nextDepth);
+        changed = true;
+      }
+    }
+    if (!changed) break;
+  }
+  const levels = new Map<number, typeof map.nodes>();
+  for (const node of map.nodes) {
+    const level = Math.min(map.nodes.length - 1, depth.get(node.id) ?? 0);
+    const nodes = levels.get(level) ?? [];
+    nodes.push(node);
+    levels.set(level, nodes);
+  }
+  for (const nodes of levels.values()) {
+    nodes.sort((left, right) => (
+      left.owner.name.localeCompare(right.owner.name, 'zh-CN')
+      || left.sortOrder - right.sortOrder
+      || left.id.localeCompare(right.id)
+    ));
+  }
+  const positions = new Map<string, ObjectiveMapPositionedNode>();
+  const levelEntries = [...levels.entries()].sort(([left], [right]) => left - right);
+  const maxColumns = Math.max(...levelEntries.map(([, nodes]) => nodes.length));
+  for (const [level, nodes] of levelEntries) {
+    const rowWidth = nodes.length * OBJECTIVE_MAP_CARD_WIDTH + Math.max(0, nodes.length - 1) * HORIZONTAL_GAP;
+    const fullWidth = maxColumns * OBJECTIVE_MAP_CARD_WIDTH + Math.max(0, maxColumns - 1) * HORIZONTAL_GAP;
+    const startX = CANVAS_PADDING + Math.max(0, (fullWidth - rowWidth) / 2);
+    nodes.forEach((node, index) => {
+      const objective: Objective = {
+        id: node.id,
+        title: node.name,
+        description: node.description,
+        level: 'individual',
+        deptId: node.owner.deptId,
+        deptName: node.owner.deptName,
+        ownerId: node.owner.id,
+        ownerName: node.owner.name,
+        parentId: map.edges.find((edge) => edge.target === node.id)?.source ?? null,
+        cycleId: map.cycle.id,
+        cycleName: map.cycle.name,
+        weight: node.weight,
+        priority: -node.sortOrder,
+        progress: node.progress,
+        status: 'active',
+        reviewStatus: 'not_required',
+        reviewerId: null,
+        reviewerName: null,
+        reviewedById: null,
+        reviewedByName: null,
+        reviewedAt: null,
+        reviewComment: null,
+        canReview: false,
+        ownerReportingDepth: null,
+        relatedIndicatorId: node.id,
+        relatedIndicatorName: node.name,
+        createdBy: null,
+        creatorName: null,
+        createdAt: map.cycle.startDate,
+        updatedAt: map.cycle.startDate,
+      };
+      positions.set(node.id, {
+        objective,
+        x: startX + index * (OBJECTIVE_MAP_CARD_WIDTH + HORIZONTAL_GAP),
+        y: CANVAS_PADDING + level * (OBJECTIVE_MAP_CARD_HEIGHT + VERTICAL_GAP),
+        width: OBJECTIVE_MAP_CARD_WIDTH,
+        height: OBJECTIVE_MAP_CARD_HEIGHT,
+      });
+    });
+  }
+  const edges = map.edges.flatMap((edge) => {
+    const parent = positions.get(edge.source);
+    const child = positions.get(edge.target);
+    if (!parent || !child) return [];
+    return [{
+      id: edge.id,
+      parentId: edge.source,
+      childId: edge.target,
+      fromX: parent.x + parent.width / 2,
+      fromY: parent.y + parent.height,
+      toX: child.x + child.width / 2,
+      toY: child.y,
+    }];
+  });
+  const nodes = map.nodes.map((node) => positions.get(node.id)!).filter(Boolean);
+  return {
+    nodes,
+    edges,
+    width: Math.max(...nodes.map((node) => node.x + node.width)) + CANVAS_PADDING,
+    height: Math.max(...nodes.map((node) => node.y + node.height)) + CANVAS_PADDING,
   };
 }

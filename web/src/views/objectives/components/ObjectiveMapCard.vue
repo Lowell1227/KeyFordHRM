@@ -25,6 +25,9 @@ const levelLabel = computed(() => ({
   department: '部门',
   individual: '个人',
 })[props.objective.level]);
+const typeLabel = computed(() => (
+  props.objective.relatedIndicatorId === props.objective.id ? '指标' : levelLabel.value
+));
 
 const ownerLabel = computed(() => (
   props.objective.ownerName || props.objective.deptName || '未指定负责人'
@@ -53,13 +56,13 @@ function handleCommand(command: 'edit' | 'progress' | 'track' | 'remove') {
     :class="`is-${objective.level}`"
     tabindex="0"
     role="button"
-    :aria-label="`${levelLabel}目标：${objective.title}，进度${objective.progress}%`"
+    :aria-label="`${typeLabel}：${objective.title}，进度${objective.progress}%`"
     @click="emit('open', objective)"
     @keydown.enter.prevent="emit('open', objective)"
     @keydown.space.prevent="emit('open', objective)"
   >
     <div class="objective-map-card__header">
-      <span class="objective-map-card__level">{{ levelLabel }}</span>
+      <span class="objective-map-card__level">{{ typeLabel }}</span>
       <span v-if="display.showOwner" class="objective-map-card__owner">{{ ownerLabel }}</span>
       <span
         v-if="showReviewBadge"

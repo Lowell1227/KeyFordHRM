@@ -10,6 +10,7 @@ const props = defineProps<{
   scopeCounts: Record<ObjectiveMapScope, number>;
   reviewOnly: boolean;
   reviewCount: number;
+  indicatorMode?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -45,10 +46,11 @@ const scopes: Array<{ key: ObjectiveMapScope; label: string }> = [
       </el-select>
     </div>
 
-    <span class="objective-map-filters__divider" aria-hidden="true" />
+    <span v-if="!indicatorMode" class="objective-map-filters__divider" aria-hidden="true" />
 
     <button
       v-for="item in scopes"
+      v-show="!indicatorMode"
       :key="item.key"
       type="button"
       class="objective-map-filters__scope"
@@ -61,10 +63,11 @@ const scopes: Array<{ key: ObjectiveMapScope; label: string }> = [
       {{ item.label }}
     </button>
 
-    <span class="objective-map-filters__divider" aria-hidden="true" />
+    <span v-if="!indicatorMode" class="objective-map-filters__divider" aria-hidden="true" />
 
     <button
       type="button"
+      v-show="!indicatorMode"
       data-testid="objective-map-review-only"
       class="objective-map-filters__review"
       :class="{ 'is-active': reviewOnly }"

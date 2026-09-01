@@ -127,3 +127,98 @@ test('company visibility is exclusive and at least one permission always remains
   await expect(visibility).toContainText('全公司可见');
   await expect(visibility).not.toContainText('绩效直属上级可见');
 });
+
+async function mockIndicatorMap(page: Page) {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'indicator-map-contract');
+    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
+  });
+  await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse(0)),
+  }));
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      id: 'employee-1', name: '方园', deptId: 'dept-1', deptName: '人事组', sysRole: 'employee',
+      isAssessorOnly: false, canViewAll: false,
+    })),
+  }));
+  await page.route('**/api/v1/cycles?**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      page: 1, pageSize: 100, total: 1,
+      items: [{
+        id: cycleId, name: '2026 Q3 季度考核', type: 'quarterly', startDate: '2026-07-01',
+        endDate: '2026-09-30', status: 'indicator_setting', publishVisibleFields: {},
+        gradeAMaxRatio: .2, gradeBMaxRatio: .4, gradeCMaxRatio: .3, gradeDMaxRatio: .1,
+      }],
+    })),
+  }));
+  await page.route('**/api/v1/cycles/mine', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([{
+      id: cycleId, name: '2026 Q3 季度考核', type: 'quarterly', startDate: '2026-07-01',
+      endDate: '2026-09-30', status: 'indicator_setting', publishVisibleFields: {},
+      gradeAMaxRatio: .2, gradeBMaxRatio: .4, gradeCMaxRatio: .3, gradeDMaxRatio: .1,
+    }])),
+  }));
+  await page.route('**/api/v1/objectives**', (route) => {
+    if (!route.request().url().includes('/indicator-map')) {
+      return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse([])) });
+    }
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({
+        cycle: { id: cycleId, name: '2026 Q3 季度考核', startDate: '2026-07-01', endDate: '2026-09-30' },
+        roots: ['manager-indicator'],
+        nodes: [{
+          id: 'manager-indicator', name: '提升组织效能', description: '绩效直属上级指标', weight: 100,
+          progress: 40, sortOrder: 0, visibilityScopes: ['direct_reports'],
+          owner: { id: 'manager-1', name: '姚瑶', deptId: 'dept-1', deptName: '人事组' },
+        }, {
+          id: 'employee-indicator', name: '完成重点岗位招聘', description: '我的指标', weight: 100,
+          progress: 60, sortOrder: 0, visibilityScopes: ['supervisors'],
+          owner: { id: 'employee-1', name: '方园', deptId: 'dept-1', deptName: '人事组' },
+        }],
+        edges: [{ id: 'manager-indicator:employee-indicator', source: 'manager-indicator', target: 'employee-indicator' }],
+        sameDepartmentUnaligned: [{
+          id: 'peer-indicator', name: '推动培训落地', description: '同部门可见指标', weight: 50,
+          progress: 20, sortOrder: 0, visibilityScopes: ['department'],
+          owner: { id: 'peer-1', name: '同事甲', deptId: 'dept-1', deptName: '人事组' },
+        }],
+        permissions: { viewerTaskId: taskId, viewerId: 'employee-1', managerId: 'manager-1', canViewSameDepartment: true },
+      })),
+    });
+  });
+}
+
+test('indicator map renders explicit alignment and keeps visible peer indicators outside the graph', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 960 });
+  await mockIndicatorMap(page);
+  await page.goto(`/objectives?cycleId=${cycleId}`);
+
+  await expect(page.getByTestId('objective-map-card-manager-indicator')).toContainText('提升组织效能');
+  await expect(page.getByTestId('objective-map-card-employee-indicator')).toContainText('完成重点岗位招聘');
+  await expect(page.getByTestId('objective-map-edges').locator('path')).toHaveCount(1);
+  const unaligned = page.getByTestId('indicator-map-unaligned');
+  await expect(unaligned).toContainText('同部门可见 · 未对齐');
+  await expect(unaligned).toContainText('推动培训落地');
+  await expect(page.locator('body')).not.toContainText('hidden-parent');
+});
+
+test('mobile indicator map stacks the unaligned panel below the graph without overflow', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockIndicatorMap(page);
+  await page.goto(`/objectives?cycleId=${cycleId}`);
+
+  const canvas = page.getByTestId('objective-map-canvas');
+  const unaligned = page.getByTestId('indicator-map-unaligned');
+  await expect(canvas).toBeVisible();
+  await expect(unaligned).toBeVisible();
+  const canvasBox = await canvas.boundingBox();
+  const unalignedBox = await unaligned.boundingBox();
+  expect(canvasBox).not.toBeNull();
+  expect(unalignedBox).not.toBeNull();
+  expect(unalignedBox!.y).toBeGreaterThanOrEqual(canvasBox!.y + canvasBox!.height);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+});

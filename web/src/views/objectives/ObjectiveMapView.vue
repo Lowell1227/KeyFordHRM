@@ -28,6 +28,8 @@ import type {
   Indicator,
   User,
   CreateObjectiveBody,
+  IndicatorMapNode,
+  IndicatorMapResult,
 } from '@/types/api.types';
 import PerformanceWorkspace from '@/components/performance/PerformanceWorkspace.vue';
 import ObjectiveMapFilters from './components/ObjectiveMapFilters.vue';
@@ -38,10 +40,12 @@ import {
   filterObjectivesAwaitingReview,
   flattenObjectives,
   layoutObjectives,
+  layoutIndicatorMap,
   selectObjectiveScope,
   type ObjectiveMapActorContext,
   type ObjectiveMapScope,
 } from './objective-map-layout';
+import GoalTrackingDetailDrawer from './GoalTrackingDetailDrawer.vue';
 import {
   OBJECTIVE_MAP_DISPLAY_STORAGE_KEY,
   parseObjectiveMapDisplay,
@@ -60,6 +64,8 @@ interface ObjectiveUserOption {
 }
 
 const treeData = ref<Objective[]>([]);
+const indicatorMap = ref<IndicatorMapResult | null>(null);
+const selectedIndicatorId = ref('');
 const loading = ref(false);
 const cycles = ref<AssessmentCycle[]>([]);
 const departments = ref<Department[]>([]);
@@ -83,6 +89,7 @@ const display = ref(parseObjectiveMapDisplay(
 ));
 
 const canManage = computed(() => Boolean(auth.user?.businessCapabilities?.canManageObjectives));
+const indicatorMapMode = computed(() => Boolean(indicatorMap.value));
 
 function defaultLevelForCreate(): ObjectiveLevel {
   if (auth.user?.businessCapabilities?.canReviewDepartment) return 'department';
@@ -134,6 +141,7 @@ let treeRequestSequence = 0;
 async function loadTree() {
   if (!filters.cycleId) {
     treeData.value = [];
+    indicatorMap.value = null;
     loading.value = false;
     loadError.value = '';
     return;
@@ -141,20 +149,46 @@ async function loadTree() {
   const requestSequence = ++treeRequestSequence;
   loading.value = true;
   loadError.value = '';
+  treeData.value = [];
+  indicatorMap.value = null;
+  selectedIndicatorId.value = '';
   try {
-    const res = await objectivesApi.getTree(filters.cycleId);
+    const mapResult = await objectivesApi.getIndicatorMap(filters.cycleId);
     if (requestSequence !== treeRequestSequence) return;
-    treeData.value = res;
-  } catch {
+    if (mapResult && Array.isArray(mapResult.nodes) && Array.isArray(mapResult.edges)) {
+      indicatorMap.value = mapResult;
+      return;
+    }
+    treeData.value = await objectivesApi.getTree(filters.cycleId);
+  } catch (mapError) {
     if (requestSequence !== treeRequestSequence) return;
-    treeData.value = [];
-    loadError.value = '目标数据加载失败，请稍后重试';
+    const status = (mapError as { response?: { status?: number } }).response?.status;
+    if (status === 404) {
+      try {
+        treeData.value = await objectivesApi.getTree(filters.cycleId);
+        return;
+      } catch {
+        // Fall through to the unified load error.
+      }
+    }
+    loadError.value = status === 403
+      ? '你没有权限查看该考核周期的目标地图'
+      : '目标地图加载失败，请稍后重试';
   } finally {
     if (requestSequence === treeRequestSequence) loading.value = false;
   }
 }
 
 async function loadCycles() {
+  try {
+    const mine = await cyclesApi.findMine();
+    if (Array.isArray(mine)) {
+      cycles.value = mine;
+      return;
+    }
+  } catch {
+    // Compatibility fallback for an older API that does not expose /cycles/mine.
+  }
   try {
     const res = await cyclesApi.findAll({ page: 1, pageSize: 100 });
     cycles.value = res.items;
@@ -273,7 +307,11 @@ const scopedObjectives = computed(() => (
     ? filterObjectivesAwaitingReview(treeData.value)
     : baseScopedObjectives.value
 ));
-const canvasLayout = computed(() => layoutObjectives(scopedObjectives.value, display.value));
+const canvasLayout = computed(() => (
+  indicatorMap.value
+    ? layoutIndicatorMap(indicatorMap.value)
+    : layoutObjectives(scopedObjectives.value, display.value)
+));
 
 const selectedParentObjective = computed(() => {
   const parentId = selectedObjective.value?.parentId;
@@ -327,8 +365,16 @@ function formatProgress(progress: number): string {
 }
 
 function openDetail(objective: Objective) {
+  if (indicatorMapMode.value) {
+    selectedIndicatorId.value = objective.id;
+    return;
+  }
   selectedObjective.value = objective;
   detailVisible.value = true;
+}
+
+function openUnalignedIndicator(indicator: IndicatorMapNode) {
+  selectedIndicatorId.value = indicator.id;
 }
 
 function canOpenTracking(objective: Objective) {
@@ -624,7 +670,7 @@ async function removeRow(row: Objective) {
   <PerformanceWorkspace title="目标地图" active-section="map" :show-context="false">
     <template #toolbar>
       <el-button
-        v-if="canManage"
+        v-if="canManage && !indicatorMapMode"
         data-testid="objective-create"
         type="primary"
         :icon="Plus"
@@ -635,7 +681,11 @@ async function removeRow(row: Objective) {
     </template>
 
     <div class="objective-map page-stack">
-      <section data-testid="objective-map-surface" class="performance-surface">
+      <section
+        data-testid="objective-map-surface"
+        class="performance-surface"
+        :class="{ 'is-indicator-map': indicatorMapMode }"
+      >
         <div data-testid="objective-map-toolbar" class="objective-map__toolbar">
           <ObjectiveMapFilters
             :cycles="cycles"
@@ -644,12 +694,13 @@ async function removeRow(row: Objective) {
             :scope-counts="scopeCounts"
             :review-only="reviewOnly"
             :review-count="reviewCount"
+            :indicator-mode="indicatorMapMode"
             @update:cycle-id="selectObjectiveCycle"
             @update:scope="selectedScope = $event"
             @update:review-only="reviewOnly = $event"
           />
           <div class="objective-map__toolbar-spacer" />
-          <ObjectiveMapDisplaySettings v-model="display" />
+          <ObjectiveMapDisplaySettings v-if="!indicatorMapMode" v-model="display" />
         </div>
 
         <ObjectiveMapCanvas
@@ -657,7 +708,7 @@ async function removeRow(row: Objective) {
           :display="display"
           :loading="loading"
           :error="loadError"
-          :can-manage="canManage"
+          :can-manage="canManage && !indicatorMapMode"
           :can-track="canOpenTracking"
           @retry="loadTree"
           @open="openDetail"
@@ -666,9 +717,45 @@ async function removeRow(row: Objective) {
           @track="openTracking"
           @remove="removeRow"
         />
+        <aside
+          v-if="indicatorMapMode"
+          data-testid="indicator-map-unaligned"
+          class="indicator-map-unaligned"
+          aria-label="同部门可见且未对齐的指标"
+        >
+          <header>
+            <div>
+              <strong>同部门可见 · 未对齐</strong>
+              <span>仅展示已授权给你的指标，不进入主关系图</span>
+            </div>
+            <em>{{ indicatorMap?.sameDepartmentUnaligned.length ?? 0 }}</em>
+          </header>
+          <div v-if="indicatorMap?.sameDepartmentUnaligned.length" class="indicator-map-unaligned__list">
+            <button
+              v-for="indicator in indicatorMap.sameDepartmentUnaligned"
+              :key="indicator.id"
+              type="button"
+              :data-testid="`indicator-map-unaligned-${indicator.id}`"
+              @click="openUnalignedIndicator(indicator)"
+            >
+              <strong>{{ indicator.name }}</strong>
+              <span>{{ indicator.owner.name }} · {{ indicator.owner.deptName || '未分配部门' }}</span>
+              <small>进度 {{ indicator.progress }}% · 权重 {{ indicator.weight }}%</small>
+            </button>
+          </div>
+          <el-empty v-else description="暂无同部门可见的未对齐指标" :image-size="52" />
+        </aside>
       </section>
 
+      <GoalTrackingDetailDrawer
+        v-if="selectedIndicatorId"
+        :indicator-id="selectedIndicatorId"
+        @close="selectedIndicatorId = ''"
+        @updated="loadTree"
+      />
+
       <el-drawer
+        v-if="!indicatorMapMode"
         v-model="detailVisible"
         data-testid="objective-map-detail"
         title="目标详情"
@@ -962,6 +1049,99 @@ async function removeRow(row: Objective) {
   background: #f3f6fc;
 }
 
+.performance-surface.is-indicator-map {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  gap: 14px;
+  padding: 0 14px 14px 0;
+  overflow: hidden;
+}
+
+.performance-surface.is-indicator-map :deep(.objective-map-canvas) {
+  min-height: 520px;
+}
+
+.indicator-map-unaligned {
+  min-width: 0;
+  align-self: stretch;
+  margin-top: 80px;
+  padding: 18px;
+  overflow: auto;
+  background: #fff;
+  border: 1px solid #e4e9f2;
+  border-radius: 12px;
+  box-shadow: 0 5px 20px rgb(35 55 88 / 8%);
+}
+
+.indicator-map-unaligned > header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid #eef1f5;
+}
+
+.indicator-map-unaligned > header div {
+  min-width: 0;
+  display: grid;
+  gap: 5px;
+}
+
+.indicator-map-unaligned > header strong {
+  color: #26324a;
+  font-size: 16px;
+}
+
+.indicator-map-unaligned > header span {
+  color: #8994a7;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.indicator-map-unaligned > header em {
+  min-width: 28px;
+  height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #266fe8;
+  background: #eaf2ff;
+  border-radius: 14px;
+  font-size: 12px;
+  font-style: normal;
+  font-weight: 700;
+}
+
+.indicator-map-unaligned__list {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+}
+
+.indicator-map-unaligned__list button {
+  min-height: 92px;
+  display: grid;
+  gap: 6px;
+  padding: 13px;
+  text-align: left;
+  color: #2c3850;
+  background: #f8faff;
+  border: 1px solid #e2e8f3;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.indicator-map-unaligned__list button:hover {
+  border-color: #91b8f8;
+  box-shadow: 0 5px 14px rgb(44 96 180 / 10%);
+}
+
+.indicator-map-unaligned__list button span,
+.indicator-map-unaligned__list button small {
+  color: #7f8a9d;
+}
+
 .progress-row-title {
   margin-bottom: 16px;
   font-weight: 500;
@@ -1055,6 +1235,24 @@ async function removeRow(row: Objective) {
   .performance-surface {
     min-height: 520px;
     overflow: hidden;
+  }
+
+  .performance-surface.is-indicator-map {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+    padding: 0 10px 88px;
+    overflow: visible;
+  }
+
+  .performance-surface.is-indicator-map :deep(.objective-map-canvas) {
+    min-height: 480px;
+  }
+
+  .indicator-map-unaligned {
+    margin-top: 0;
+    padding: 15px;
+    overflow: visible;
   }
 }
 </style>
