@@ -3,6 +3,7 @@ import { SchedulerService } from './scheduler.service';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { PrismaService } from '@/prisma/prisma.service';
 import { LaunchService } from '@/cycles/launch.service';
+import { EmployeeEffectiveDateService } from '@/employee-archives/employee-effective-date.service';
 
 describe('SchedulerService', () => {
   let service: SchedulerService;
@@ -43,6 +44,7 @@ describe('SchedulerService', () => {
         { provide: NotificationsService, useValue: notificationsMock },
         { provide: PrismaService, useValue: prisma },
         { provide: LaunchService, useValue: launchService },
+        { provide: EmployeeEffectiveDateService, useValue: { refreshEffectiveProjections: jest.fn() } },
       ],
     }).compile();
 

@@ -5,6 +5,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { NotificationsService, TaskReminderNodeType } from '@/notifications/notifications.service';
 import { LaunchService } from '@/cycles/launch.service';
 import { AuthUser } from '@/common/types/auth.types';
+import { EmployeeEffectiveDateService } from '@/employee-archives/employee-effective-date.service';
 
 /** 进行中的周期状态（draft/closed 除外）。 */
 const ACTIVE_CYCLE_STATUSES: CycleStatus[] = [
@@ -60,7 +61,19 @@ export class SchedulerService {
     private readonly notificationsService: NotificationsService,
     private readonly prisma: PrismaService,
     private readonly launchService: LaunchService,
+    private readonly employeeEffectiveDates: EmployeeEffectiveDateService,
   ) {}
+
+  /** 每天 00:10 把已审核、当天生效的任职记录投影到员工当前状态。 */
+  @Cron('10 0 * * *', { timeZone: 'Asia/Shanghai' })
+  async refreshEmployeeEffectiveDates(): Promise<void> {
+    try {
+      const result = await this.employeeEffectiveDates.refreshEffectiveProjections(new Date());
+      this.logger.log(`员工任职生效刷新完成：${result.updated}/${result.checked}`);
+    } catch (err) {
+      this.logger.error('员工任职生效刷新异常', err);
+    }
+  }
 
   /** 每 5 分钟检查预约发起的考核周期。 */
   @Cron('*/5 * * * *')

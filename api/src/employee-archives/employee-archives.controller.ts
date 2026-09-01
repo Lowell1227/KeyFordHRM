@@ -38,6 +38,7 @@ import {
 } from './dto/employee-data-review.dto';
 import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
 import { buildEmployeeRosterTemplate } from './employee-roster.excel';
+import { PersonnelDiagnosticsService } from './personnel-diagnostics.service';
 
 @Controller('employee-archives')
 @Roles(SysRole.hr, SysRole.system_admin)
@@ -46,7 +47,14 @@ export class EmployeeArchivesController {
     private readonly archives: EmployeeArchivesService,
     private readonly imports: EmployeeRosterImportService,
     private readonly reviews: EmployeeDataReviewsService,
+    private readonly diagnostics: PersonnelDiagnosticsService,
   ) {}
+
+  @Get('diagnostics')
+  @HrCapabilities('employee_archive_edit', 'employee_archive_review')
+  inspectDiagnostics() {
+    return this.diagnostics.inspect();
+  }
 
   @Get('reviews/list')
   @HrCapabilities('employee_archive_review')

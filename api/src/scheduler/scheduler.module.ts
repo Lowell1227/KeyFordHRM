@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common';
 import { SchedulerService } from './scheduler.service';
 import { CyclesModule } from '@/cycles/cycles.module';
+import { EmployeeArchivesModule } from '@/employee-archives/employee-archives.module';
 
 /**
  * 定时任务模块。
@@ -8,7 +9,7 @@ import { CyclesModule } from '@/cycles/cycles.module';
  * 与全局 provider：NotificationsService、PrismaService。
  */
 @Module({
-  imports: [CyclesModule],
+  imports: [CyclesModule, EmployeeArchivesModule],
   providers: [SchedulerService],
   exports: [SchedulerService],
 })
