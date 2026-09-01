@@ -20,12 +20,12 @@ describe('ObjectivesService visibility helpers', () => {
     actionItem: { findMany: jest.Mock };
     user: { findMany: jest.Mock; findUnique: jest.Mock };
     assessmentTask: { findUnique: jest.Mock };
-    indicatorInstance: { findUnique: jest.Mock; findFirst: jest.Mock };
+    indicatorInstance: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock; count: jest.Mock };
     indicatorProgressUpdate: { findFirst: jest.Mock; create: jest.Mock };
     auditLog: { create: jest.Mock; findMany: jest.Mock };
     $transaction: jest.Mock;
   };
-  let dataScope: { getVisibleEmployeeFilter: jest.Mock };
+  let dataScope: { getVisibleEmployeeFilter: jest.Mock; getAncestorDeptIds: jest.Mock };
 
   const viewer: AuthUser = {
     id: 'manager-1',
@@ -86,7 +86,12 @@ describe('ObjectivesService visibility helpers', () => {
         findUnique: jest.fn().mockResolvedValue({ directManagerId: null }),
       },
       assessmentTask: { findUnique: jest.fn() },
-      indicatorInstance: { findUnique: jest.fn(), findFirst: jest.fn() },
+      indicatorInstance: {
+        findUnique: jest.fn(),
+        findFirst: jest.fn(),
+        findMany: jest.fn(),
+        count: jest.fn(),
+      },
       indicatorProgressUpdate: { findFirst: jest.fn(), create: jest.fn() },
       auditLog: { create: jest.fn(), findMany: jest.fn() },
       $transaction: jest.fn(async (callback: (tx: unknown) => unknown) => callback(prisma)),
@@ -95,6 +100,7 @@ describe('ObjectivesService visibility helpers', () => {
       getVisibleEmployeeFilter: jest.fn().mockResolvedValue({
         OR: [{ directManagerId: 'manager-1' }, { id: 'manager-1' }],
       }),
+      getAncestorDeptIds: jest.fn().mockResolvedValue(['dept-1', 'dept-parent']),
     };
     service = new ObjectivesService(
       prisma as unknown as PrismaService,
@@ -1038,5 +1044,49 @@ describe('ObjectivesService visibility helpers', () => {
   it('rejects tracking requests without a deep link or owner-cycle pair', async () => {
     await expect(service.findTracking({ ownerId: 'employee-1' }, viewer))
       .rejects.toMatchObject({ response: expect.objectContaining({ message: '请选择人员和考核周期' }) });
+  });
+
+  it('returns only same-cycle visible indicators owned by the frozen performance manager', async () => {
+    prisma.assessmentTask.findUnique.mockResolvedValue({
+      id: 'task-child',
+      cycleId: 'cycle-1',
+      employeeId: viewer.id,
+      managerId: 'director-1',
+      deptId: 'dept-1',
+    });
+    prisma.indicatorInstance.findMany.mockResolvedValue([{
+      id: 'parent-1',
+      name: '部门交付目标',
+      task: { employee: { id: 'director-1', name: 'Director' } },
+    }]);
+
+    const result = await service.findIndicatorAlignmentCandidates('task-child', viewer);
+
+    expect(result).toEqual({
+      items: [{ id: 'parent-1', name: '部门交付目标', owner: { id: 'director-1', name: 'Director' } }],
+      reason: null,
+    });
+    const query = JSON.stringify(prisma.indicatorInstance.findMany.mock.calls[0][0]);
+    expect(query).toContain('"cycleId":"cycle-1"');
+    expect(query).toContain('"employeeId":"director-1"');
+    expect(query).toContain('"scope":"direct_reports"');
+    expect(query).toContain('"scope":"department_tree"');
+    expect(query).toContain('"userId":"manager-1"');
+  });
+
+  it('rejects an alignment id that is not a visible indicator of the frozen manager', async () => {
+    prisma.indicatorInstance.count.mockResolvedValue(0);
+
+    await expect(service.assertIndicatorAlignmentCandidateIds(
+      {
+        id: 'task-child',
+        cycleId: 'cycle-1',
+        employeeId: viewer.id,
+        managerId: 'director-1',
+        deptId: 'dept-1',
+      },
+      ['protected-parent'],
+      viewer,
+    )).rejects.toBeInstanceOf(ForbiddenException);
   });
 });

@@ -104,6 +104,11 @@ export class SetIndicatorItemDto {
   @IsArray()
   @IsUUID('4', { each: true })
   alignedObjectiveIds: string[] = [];
+
+  @IsOptional()
+  @IsArray()
+  @IsUUID('4', { each: true })
+  alignedParentIndicatorIds?: string[];
 }
 
 export class SetIndicatorsDto {

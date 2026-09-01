@@ -113,6 +113,14 @@ export interface UpdateIndicatorProgressInput {
   expectedLatestUpdateAt?: string | null;
 }
 
+export interface IndicatorAlignmentTaskContext {
+  id: string;
+  cycleId: string;
+  employeeId: string;
+  managerId: string | null;
+  deptId: string | null;
+}
+
 /** 目标树节点。 */
 export interface ObjectiveNode {
   id: string;
@@ -446,6 +454,137 @@ export class ObjectivesService {
       totalWeight: Math.round(items.reduce((sum, item) => sum + (item.weight ?? 0), 0) * 100) / 100,
       items,
     };
+  }
+
+  async findIndicatorAlignmentCandidates(taskId: string, viewer: AuthUser) {
+    const task = await this.prisma.assessmentTask.findUnique({
+      where: { id: taskId },
+      select: {
+        id: true,
+        cycleId: true,
+        employeeId: true,
+        managerId: true,
+        deptId: true,
+      },
+    });
+    if (!task) {
+      throw new NotFoundException({
+        code: ERROR_CODE.NOT_FOUND,
+        message: '考核任务不存在',
+      });
+    }
+    this.assertCanMaintainIndicatorAlignment(task, viewer);
+    if (!task.managerId) {
+      return { items: [], reason: '本周期未设置绩效直属上级' };
+    }
+
+    const where = await this.buildIndicatorAlignmentCandidateWhere(task);
+    const indicators = await this.prisma.indicatorInstance.findMany({
+      where,
+      select: {
+        id: true,
+        name: true,
+        task: {
+          select: {
+            employee: { select: { id: true, name: true } },
+          },
+        },
+      },
+      orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+    });
+    return {
+      items: indicators.map((indicator) => ({
+        id: indicator.id,
+        name: indicator.name,
+        owner: indicator.task.employee,
+      })),
+      reason: indicators.length ? null : '绩效直属上级暂无对你可见的指标',
+    };
+  }
+
+  async assertIndicatorAlignmentCandidateIds(
+    task: IndicatorAlignmentTaskContext,
+    submittedIds: string[],
+    viewer: AuthUser,
+  ): Promise<void> {
+    this.assertCanMaintainIndicatorAlignment(task, viewer);
+    const ids = [...new Set(submittedIds ?? [])];
+    if (ids.length === 0) return;
+    if (!task.managerId) this.throwAlignmentForbidden();
+
+    const where = await this.buildIndicatorAlignmentCandidateWhere(task);
+    const visibleCount = await this.prisma.indicatorInstance.count({
+      where: { AND: [where, { id: { in: ids } }] },
+    });
+    if (visibleCount !== ids.length) this.throwAlignmentForbidden();
+  }
+
+  private async buildIndicatorAlignmentCandidateWhere(
+    task: IndicatorAlignmentTaskContext,
+  ): Promise<Prisma.IndicatorInstanceWhereInput> {
+    const ancestorDeptIds = task.deptId
+      ? await this.dataScope.getAncestorDeptIds(task.deptId)
+      : [];
+    const visibility: Prisma.IndicatorInstanceWhereInput[] = [
+      buildVisibilityScopeWhere(IndicatorVisibilityScope.company),
+      buildVisibilityScopeWhere(IndicatorVisibilityScope.direct_reports),
+      buildVisibilityScopeWhere(IndicatorVisibilityScope.all_reports),
+      {
+        AND: [
+          buildVisibilityScopeWhere(IndicatorVisibilityScope.custom),
+          { visibleUsers: { some: { userId: task.employeeId } } },
+        ],
+      },
+    ];
+    if (task.deptId) {
+      visibility.push(
+        {
+          AND: [
+            buildVisibilityScopeWhere(IndicatorVisibilityScope.department),
+            { task: { deptId: task.deptId } },
+          ],
+        },
+        {
+          AND: [
+            buildVisibilityScopeWhere(IndicatorVisibilityScope.department_tree),
+            { task: { deptId: { in: ancestorDeptIds } } },
+          ],
+        },
+        {
+          AND: [
+            buildVisibilityScopeWhere(IndicatorVisibilityScope.custom),
+            { visibleDepartments: { some: { departmentId: task.deptId } } },
+          ],
+        },
+      );
+    }
+    return {
+      AND: [
+        { task: { cycleId: task.cycleId, employeeId: task.managerId! } },
+        { OR: visibility },
+      ],
+    };
+  }
+
+  private assertCanMaintainIndicatorAlignment(
+    task: IndicatorAlignmentTaskContext,
+    viewer: AuthUser,
+  ): void {
+    if (
+      task.employeeId !== viewer.id
+      && task.managerId !== viewer.id
+      && viewer.sysRole !== SysRole.hr
+      && viewer.sysRole !== SysRole.system_admin
+    ) {
+      this.throwAlignmentForbidden();
+    }
+  }
+
+  private throwAlignmentForbidden(): never {
+    throw new ForbiddenException({
+      code: ERROR_CODE.FORBIDDEN,
+      message: '无权选择所提交的绩效直属上级指标',
+    });
   }
 
   async updateIndicatorProgress(

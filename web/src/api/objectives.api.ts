@@ -12,6 +12,7 @@ import type {
   GoalTrackingLatestProgress,
   UpdateGoalTrackingProgressBody,
   Paginated,
+  IndicatorAlignmentCandidatesResult,
 } from '@/types/api.types';
 
 function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
@@ -30,6 +31,10 @@ export const objectivesApi = {
 
   getTrackingIndicator(id: string): Promise<GoalTrackingIndicatorDetail> {
     return apiGet(`/objectives/tracking/indicators/${id}`);
+  },
+
+  getIndicatorAlignmentCandidates(taskId: string): Promise<IndicatorAlignmentCandidatesResult> {
+    return apiGet('/objectives/alignment-candidates', { taskId });
   },
 
   updateTrackingIndicatorProgress(

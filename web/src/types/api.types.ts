@@ -614,6 +614,7 @@ export interface IndicatorInstance {
   finalScore?: number;
   sortOrder: number;
   visibilityScope: IndicatorVisibilityScope;
+  visibilityScopes: IndicatorVisibilityScope[];
   visibleDepartmentIds: string[];
   visibleUserIds: string[];
   alignedObjectives: Array<{
@@ -622,6 +623,18 @@ export interface IndicatorInstance {
     level: ObjectiveLevel;
     ownerId: string | null;
   }>;
+  alignedParentIndicators: IndicatorAlignmentCandidate[];
+}
+
+export interface IndicatorAlignmentCandidate {
+  id: string;
+  name: string;
+  owner: { id: string; name: string };
+}
+
+export interface IndicatorAlignmentCandidatesResult {
+  items: IndicatorAlignmentCandidate[];
+  reason: string | null;
 }
 
 export interface ExtraScoreItem {
@@ -922,6 +935,7 @@ export interface IndicatorReferenceItem {
   name: string;
   weight: number;
   visibilityScope: IndicatorVisibilityScope;
+  visibilityScopes: IndicatorVisibilityScope[];
 }
 
 export interface TaskWorkspaceQuery {
@@ -968,7 +982,11 @@ export interface SetIndicatorBody {
       | 'visibilityScope'
       | 'visibleDepartmentIds'
       | 'visibleUserIds'
-    > & { alignedObjectiveIds: string[] }
+    > & {
+      visibilityScopes?: IndicatorVisibilityScope[];
+      alignedObjectiveIds: string[];
+      alignedParentIndicatorIds?: string[];
+    }
   >;
   action?: 'save' | 'submit';
   note?: string;

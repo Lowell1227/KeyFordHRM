@@ -46,7 +46,11 @@ describe('TasksService', () => {
     getReminderCooldownUntil: jest.Mock;
   };
   let indicatorVisibility: { validateSelection: jest.Mock };
-  let objectivesService: { findVisibleByIds: jest.Mock };
+  let objectivesService: {
+    findVisibleByIds: jest.Mock;
+    assertIndicatorAlignmentCandidateIds: jest.Mock;
+    findIndicatorAlignmentCandidates: jest.Mock;
+  };
   let indicatorVersionService: { activateConfirmedV1: jest.Mock };
   let scoringService: {
     validateScore: jest.Mock;
@@ -120,7 +124,11 @@ describe('TasksService', () => {
     indicatorVisibility = {
       validateSelection: jest.fn().mockResolvedValue(undefined),
     };
-    objectivesService = { findVisibleByIds: jest.fn().mockResolvedValue([]) };
+    objectivesService = {
+      findVisibleByIds: jest.fn().mockResolvedValue([]),
+      assertIndicatorAlignmentCandidateIds: jest.fn().mockResolvedValue(undefined),
+      findIndicatorAlignmentCandidates: jest.fn().mockResolvedValue({ items: [], reason: null }),
+    };
     indicatorVersionService = { activateConfirmedV1: jest.fn().mockResolvedValue('version-1') };
     scoringService = {
       validateScore: jest.fn(),
@@ -685,10 +693,36 @@ describe('TasksService', () => {
               },
             },
           ],
+          childAlignments: [
+            {
+              parentIndicatorId: 'parent-visible',
+              parentIndicator: {
+                id: 'parent-visible',
+                name: 'Visible parent indicator',
+                task: { employee: { id: 'owner-1', name: 'Owner' } },
+              },
+            },
+            {
+              parentIndicatorId: 'parent-hidden',
+              parentIndicator: {
+                id: 'parent-hidden',
+                name: 'Protected parent indicator',
+                task: { employee: { id: 'owner-2', name: 'Protected' } },
+              },
+            },
+          ],
         } as any,
       ];
       prisma.assessmentTask.findUnique.mockResolvedValue(task);
       objectivesService.findVisibleByIds.mockResolvedValue([{ id: 'objective-1' }]);
+      objectivesService.findIndicatorAlignmentCandidates.mockResolvedValue({
+        items: [{
+          id: 'parent-visible',
+          name: 'Visible parent indicator',
+          owner: { id: 'owner-1', name: 'Owner' },
+        }],
+        reason: null,
+      });
 
       const result = await service.findOne('task-1', makeViewer({ id: 'mgr-1' }));
 
@@ -706,6 +740,13 @@ describe('TasksService', () => {
             title: 'Visible objective',
             level: 'department',
             ownerId: 'owner-1',
+          },
+        ],
+        alignedParentIndicators: [
+          {
+            id: 'parent-visible',
+            name: 'Visible parent indicator',
+            owner: { id: 'owner-1', name: 'Owner' },
           },
         ],
       });
@@ -731,6 +772,7 @@ describe('TasksService', () => {
               visibleDepartmentIds: ['dept-2', 'dept-2'],
               visibleUserIds: ['user-2', 'user-2'],
               alignedObjectiveIds: ['objective-1', 'objective-1'],
+              alignedParentIndicatorIds: ['parent-indicator-1', 'parent-indicator-1'],
             },
           ],
         } as any,
@@ -743,6 +785,7 @@ describe('TasksService', () => {
           visibleDepartmentIds: ['dept-2'],
           visibleUserIds: ['user-2'],
           alignedObjectiveIds: ['objective-1'],
+          alignedParentIndicatorIds: ['parent-indicator-1'],
         }),
         expect.objectContaining({ id: 'task-1' }),
         expect.objectContaining({ id: 'mgr-1' }),
@@ -763,8 +806,16 @@ describe('TasksService', () => {
             objectiveAlignments: {
               createMany: { data: [{ objectiveId: 'objective-1' }] },
             },
+            childAlignments: {
+              createMany: { data: [{ parentIndicatorId: 'parent-indicator-1' }] },
+            },
           }),
         }),
+      );
+      expect(objectivesService.assertIndicatorAlignmentCandidateIds).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'task-1' }),
+        ['parent-indicator-1'],
+        expect.objectContaining({ id: 'mgr-1' }),
       );
       expect(transactionClient.assessmentTask.updateMany).toHaveBeenCalledWith({
         where: { id: 'task-1', updatedAt },
@@ -1601,6 +1652,10 @@ describe('TasksService', () => {
           visibilityRules: {
             orderBy: { scope: 'asc' },
             select: { scope: true },
+          },
+          childAlignments: {
+            orderBy: { parentIndicatorId: 'asc' },
+            select: { parentIndicatorId: true },
           },
           objectiveAlignments: {
             orderBy: { objectiveId: 'asc' },

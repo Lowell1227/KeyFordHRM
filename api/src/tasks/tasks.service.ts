@@ -35,6 +35,7 @@ type IndicatorBaselineSource = IndicatorInstance & {
   visibleUsers: Array<{ userId: string }>;
   visibilityRules?: Array<{ scope: IndicatorVisibilityScope }>;
   objectiveAlignments: Array<{ objectiveId: string }>;
+  childAlignments?: Array<{ parentIndicatorId: string }>;
 };
 
 /** 任务列表项。 */
@@ -106,6 +107,11 @@ export interface TaskDetail extends TaskListItem {
       title: string;
       level: ObjectiveLevel;
       ownerId: string | null;
+    }>;
+    alignedParentIndicators: Array<{
+      id: string;
+      name: string;
+      owner: { id: string; name: string };
     }>;
   }>;
   selfEvalSummary: {
@@ -363,6 +369,9 @@ export class TasksService {
                 },
               },
             },
+            childAlignments: {
+              select: { parentIndicatorId: true },
+            },
           },
         },
         selfEvalSummary: true,
@@ -424,8 +433,24 @@ export class TasksService {
         ),
       ),
     ];
-    const visibleObjectives = await this.objectivesService.findVisibleByIds(alignedObjectiveIds, viewer);
-    const detail = this.buildTaskDetail(task, new Set(visibleObjectives.map((objective) => objective.id)));
+    const canMaintainAlignment = viewer.id === task.employeeId
+      || viewer.id === task.managerId
+      || viewer.sysRole === SysRole.hr
+      || viewer.sysRole === SysRole.system_admin;
+    const [visibleObjectives, alignmentCandidates] = await Promise.all([
+      this.objectivesService.findVisibleByIds(alignedObjectiveIds, viewer),
+      canMaintainAlignment
+        ? this.objectivesService.findIndicatorAlignmentCandidates(task.id, viewer)
+        : Promise.resolve({ items: [], reason: null }),
+    ]);
+    const visibleParentIndicators = new Map(
+      alignmentCandidates.items.map((item) => [item.id, item]),
+    );
+    const detail = this.buildTaskDetail(
+      task,
+      new Set(visibleObjectives.map((objective) => objective.id)),
+      visibleParentIndicators,
+    );
     detail.workflowContext = await this.buildWorkflowContext(task, viewer);
 
     // D18：员工本人需区分公示前/公示后
@@ -522,6 +547,10 @@ export class TasksService {
           objectiveAlignments: {
             orderBy: { objectiveId: 'asc' },
             select: { objectiveId: true },
+          },
+          childAlignments: {
+            orderBy: { parentIndicatorId: 'asc' },
+            select: { parentIndicatorId: true },
           },
         },
       });
@@ -671,6 +700,11 @@ export class TasksService {
 
     for (const item of validItems) {
       await this.indicatorVisibility.validateSelection(item, task, viewer);
+      await this.objectivesService.assertIndicatorAlignmentCandidateIds(
+        task,
+        item.alignedParentIndicatorIds ?? [],
+        viewer,
+      );
     }
 
     const record = await this.prisma.$transaction(async (tx) => {
@@ -755,6 +789,11 @@ export class TasksService {
 
     for (const item of validItems) {
       await this.indicatorVisibility.validateSelection(item, task, viewer);
+      await this.objectivesService.assertIndicatorAlignmentCandidateIds(
+        task,
+        item.alignedParentIndicatorIds ?? [],
+        viewer,
+      );
     }
 
     const note = dto.note?.trim() || undefined;
@@ -1582,6 +1621,7 @@ export class TasksService {
         visibleDepartmentIds: [...new Set(item.visibleDepartmentIds ?? [])],
         visibleUserIds: [...new Set(item.visibleUserIds ?? [])],
         alignedObjectiveIds: [...new Set(item.alignedObjectiveIds ?? [])],
+        alignedParentIndicatorIds: [...new Set(item.alignedParentIndicatorIds ?? [])],
       });
     }
 
@@ -1601,6 +1641,7 @@ export class TasksService {
     await tx.indicatorInstance.deleteMany({ where: { taskId } });
     if (!items.length) return;
     for (const [index, item] of items.entries()) {
+      const alignedParentIndicatorIds = item.alignedParentIndicatorIds ?? [];
       await tx.indicatorInstance.create({
         data: {
           task: { connect: { id: taskId } },
@@ -1649,12 +1690,29 @@ export class TasksService {
                 },
               }
             : undefined,
+          childAlignments: alignedParentIndicatorIds.length
+            ? {
+                createMany: {
+                  data: alignedParentIndicatorIds.map((parentIndicatorId) => ({
+                    parentIndicatorId,
+                  })),
+                },
+              }
+            : undefined,
         },
       });
     }
   }
 
-  private buildTaskDetail(task: any, visibleObjectiveIds = new Set<string>()): TaskDetail {
+  private buildTaskDetail(
+    task: any,
+    visibleObjectiveIds = new Set<string>(),
+    visibleParentIndicators = new Map<string, {
+      id: string;
+      name: string;
+      owner: { id: string; name: string };
+    }>(),
+  ): TaskDetail {
     return {
       id: task.id,
       cycleId: task.cycleId,
@@ -1732,6 +1790,11 @@ export class TasksService {
             level: objective.level,
             ownerId: objective.ownerId,
           })),
+        alignedParentIndicators: (ind.childAlignments ?? [])
+          .flatMap((alignment: { parentIndicatorId: string }) => {
+            const parent = visibleParentIndicators.get(alignment.parentIndicatorId);
+            return parent ? [parent] : [];
+          }),
       })),
       selfEvalSummary: task.selfEvalSummary
         ? {
@@ -1834,6 +1897,9 @@ export class TasksService {
         .sort(),
       alignedObjectiveIds: indicator.objectiveAlignments
         .map((item) => item.objectiveId)
+        .sort(),
+      alignedParentIndicatorIds: (indicator.childAlignments ?? [])
+        .map((item) => item.parentIndicatorId)
         .sort(),
       sortOrder: indicator.sortOrder,
     };

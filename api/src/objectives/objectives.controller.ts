@@ -24,6 +24,7 @@ import {
   RequestObjectiveChangesDto,
 } from './dto/objective-review.dto';
 import { ObjectiveReviewStatus } from '@prisma/client';
+import { AlignmentCandidatesQueryDto } from './dto/alignment-candidates-query.dto';
 
 export const TRACKING_INDICATOR_UUID_PIPE = new ParseUUIDPipe();
 
@@ -65,6 +66,14 @@ export class ObjectivesController {
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.objectivesService.findTrackingIndicator(id, viewer);
+  }
+
+  @Get('alignment-candidates')
+  findIndicatorAlignmentCandidates(
+    @Query() query: AlignmentCandidatesQueryDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.objectivesService.findIndicatorAlignmentCandidates(query.taskId, viewer);
   }
 
   @Patch('tracking/indicators/:id/progress')
