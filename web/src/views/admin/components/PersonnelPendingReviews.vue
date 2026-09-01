@@ -43,6 +43,20 @@ const positionItems = ref<PositionChangeRequest[]>([]);
 const positionTotal = ref(0);
 const positionLoading = ref(false);
 const selectedPositions = ref<PositionChangeRequest[]>([]);
+const reviewTableColumns = Object.freeze({
+  selection: 48,
+  index: 70,
+  changeType: 120,
+  subject: 180,
+  content: 360,
+  submitter: 140,
+  submittedAt: 170,
+  actions: 230,
+});
+const contractReviewDialog = ref({
+  visible: false,
+  row: null as EmployeeDataReview | null,
+});
 const managerDialog = ref({
   visible: false,
   requestId: '',
@@ -142,6 +156,10 @@ function contractDiffs(row: EmployeeDataReview): ContractDiff[] {
     }
   }
   return result;
+}
+
+function openContractReviewDialog(row: EmployeeDataReview) {
+  contractReviewDialog.value = { visible: true, row };
 }
 
 function reviewHasPerformanceBlocker(row: EmployeeDataReview): boolean {
@@ -495,28 +513,17 @@ onMounted(async () => {
         class="app-table compact-table review-table"
         @selection-change="selectedEmployees = $event"
       >
-        <el-table-column type="expand" width="48">
-          <template #default="{ row }">
-            <div class="contract-review-detail">
-              <h4>合同变更明细</h4>
-              <template v-if="contractDiffs(row as EmployeeDataReview).length">
-                <article v-for="change in contractDiffs(row as EmployeeDataReview)" :key="change.key" class="contract-review-change">
-                  <div><el-tag :type="change.kind === '移除' ? 'danger' : change.kind === '新增' ? 'success' : 'warning'" effect="plain">{{ change.kind }}</el-tag><strong>{{ change.title }}</strong></div>
-                  <p v-if="change.before">变更前：{{ change.before }}</p>
-                  <p v-if="change.after">变更后：{{ change.after }}</p>
-                </article>
-              </template>
-              <p v-else>本次未涉及合同变更。</p>
-            </div>
-          </template>
-        </el-table-column>
-        <el-table-column type="selection" width="48" :selectable="reviewIsPending" />
-        <el-table-column label="变更类型" width="120"><template #default="{ row }"><el-tag type="warning" effect="plain">{{ employeeChangeType(row as EmployeeDataReview) }}</el-tag></template></el-table-column>
-        <el-table-column prop="employeeName" label="审核对象" min-width="150" />
-        <el-table-column label="变更内容" min-width="300">
+        <el-table-column type="selection" :width="reviewTableColumns.selection" :selectable="reviewIsPending" />
+        <el-table-column type="index" label="序号" :width="reviewTableColumns.index" align="center" />
+        <el-table-column label="变更类型" :width="reviewTableColumns.changeType"><template #default="{ row }"><el-tag type="warning" effect="plain">{{ employeeChangeType(row as EmployeeDataReview) }}</el-tag></template></el-table-column>
+        <el-table-column prop="employeeName" label="审核对象" :width="reviewTableColumns.subject" />
+        <el-table-column label="变更内容" :min-width="reviewTableColumns.content">
           <template #default="{ row }">
             <div class="employee-change-content">
-              <div>{{ employeeChangeSummary(row as EmployeeDataReview) }}</div>
+              <div class="employee-change-content__summary">
+                <span>{{ employeeChangeSummary(row as EmployeeDataReview) }}</span>
+                <el-button v-if="contractDiffs(row as EmployeeDataReview).length" link type="primary" @click="openContractReviewDialog(row as EmployeeDataReview)">查看合同明细</el-button>
+              </div>
               <div class="employee-change-content__statuses">
                 <span v-if="(row as EmployeeDataReview).profileReviewStatus !== 'not_required'">
                   基础档案
@@ -531,9 +538,9 @@ onMounted(async () => {
             </div>
           </template>
         </el-table-column>
-        <el-table-column label="提交人" min-width="120"><template #default="{ row }">{{ (row as EmployeeDataReview).createdBy?.name || '系统导入' }}</template></el-table-column>
-        <el-table-column label="提交时间" width="160"><template #default="{ row }">{{ formatDateTime((row as EmployeeDataReview).createdAt) }}</template></el-table-column>
-        <el-table-column label="操作" width="250" fixed="right">
+        <el-table-column label="提交人" :width="reviewTableColumns.submitter"><template #default="{ row }">{{ (row as EmployeeDataReview).createdBy?.name || '系统导入' }}</template></el-table-column>
+        <el-table-column label="提交时间" :width="reviewTableColumns.submittedAt"><template #default="{ row }">{{ formatDateTime((row as EmployeeDataReview).createdAt) }}</template></el-table-column>
+        <el-table-column label="操作" :width="reviewTableColumns.actions" fixed="right">
           <template #default="{ row }">
             <template v-if="reviewIsPending(row as EmployeeDataReview)">
               <el-button v-if="reviewHasPerformanceBlocker(row as EmployeeDataReview)" link type="primary" @click="openManagerDialog(row as EmployeeDataReview)">补充上级</el-button>
@@ -555,13 +562,14 @@ onMounted(async () => {
         <el-button type="primary" :loading="departmentLoading" @click="approveDepartments(selectedDepartments)">批量通过（{{ selectedDepartments.length }}）</el-button>
       </div>
       <el-table v-loading="departmentLoading" :data="departmentItems" row-key="id" class="app-table compact-table review-table" @selection-change="selectedDepartments = $event">
-        <el-table-column type="selection" width="48" />
-        <el-table-column label="变更类型" width="120"><template #default="{ row }"><el-tag type="warning" effect="plain">{{ departmentActionLabel((row as DepartmentChangeRequest).action) }}</el-tag></template></el-table-column>
-        <el-table-column prop="departmentName" label="审核对象" min-width="170" />
-        <el-table-column label="变更内容" min-width="300"><template #default="{ row }">{{ departmentChangeSummary(row as DepartmentChangeRequest) }}</template></el-table-column>
-        <el-table-column label="提交人" min-width="120"><template #default="{ row }">{{ (row as DepartmentChangeRequest).createdBy?.name || '未知' }}</template></el-table-column>
-        <el-table-column label="提交时间" width="160"><template #default="{ row }">{{ formatDateTime((row as DepartmentChangeRequest).createdAt) }}</template></el-table-column>
-        <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }"><el-button @click="rejectDepartment(row as DepartmentChangeRequest)">退回</el-button><el-button type="primary" @click="approveDepartment(row as DepartmentChangeRequest)">通过</el-button></template></el-table-column>
+        <el-table-column type="selection" :width="reviewTableColumns.selection" />
+        <el-table-column type="index" label="序号" :width="reviewTableColumns.index" align="center" />
+        <el-table-column label="变更类型" :width="reviewTableColumns.changeType"><template #default="{ row }"><el-tag type="warning" effect="plain">{{ departmentActionLabel((row as DepartmentChangeRequest).action) }}</el-tag></template></el-table-column>
+        <el-table-column prop="departmentName" label="审核对象" :width="reviewTableColumns.subject" />
+        <el-table-column label="变更内容" :min-width="reviewTableColumns.content"><template #default="{ row }">{{ departmentChangeSummary(row as DepartmentChangeRequest) }}</template></el-table-column>
+        <el-table-column label="提交人" :width="reviewTableColumns.submitter"><template #default="{ row }">{{ (row as DepartmentChangeRequest).createdBy?.name || '未知' }}</template></el-table-column>
+        <el-table-column label="提交时间" :width="reviewTableColumns.submittedAt"><template #default="{ row }">{{ formatDateTime((row as DepartmentChangeRequest).createdAt) }}</template></el-table-column>
+        <el-table-column label="操作" :width="reviewTableColumns.actions" fixed="right"><template #default="{ row }"><el-button @click="rejectDepartment(row as DepartmentChangeRequest)">退回</el-button><el-button type="primary" @click="approveDepartment(row as DepartmentChangeRequest)">通过</el-button></template></el-table-column>
       </el-table>
       <el-empty v-if="activeCategory === 'department' && !departmentLoading && !departmentItems.length" description="暂无部门架构待审核变更" />
     </div>
@@ -574,18 +582,31 @@ onMounted(async () => {
         <el-button type="primary" :loading="positionLoading" @click="approvePositions(selectedPositions)">批量通过（{{ selectedPositions.length }}）</el-button>
       </div>
       <el-table v-loading="positionLoading" :data="positionItems" row-key="id" class="app-table compact-table review-table" @selection-change="selectedPositions = $event">
-        <el-table-column type="selection" width="48" />
-        <el-table-column label="变更类型" width="120"><template #default="{ row }"><el-tag type="warning" effect="plain">{{ positionActionLabel((row as PositionChangeRequest).action) }}</el-tag></template></el-table-column>
-        <el-table-column prop="positionName" label="审核对象" min-width="170" />
-        <el-table-column label="变更内容" min-width="300"><template #default="{ row }"><div>岗位编码：{{ (row as PositionChangeRequest).proposedValue.code || '-' }}；岗位族：{{ (row as PositionChangeRequest).proposedValue.jobFamily || '未分类' }}</div><div v-if="(row as PositionChangeRequest).warnings?.length" class="review-warning">{{ (row as PositionChangeRequest).warnings.join('；') }}</div></template></el-table-column>
-        <el-table-column label="提交人" min-width="120"><template #default="{ row }">{{ (row as PositionChangeRequest).createdBy?.name || '未知' }}</template></el-table-column>
-        <el-table-column label="提交时间" width="160"><template #default="{ row }">{{ formatDateTime((row as PositionChangeRequest).createdAt) }}</template></el-table-column>
-        <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }"><el-button @click="rejectPosition(row as PositionChangeRequest)">退回</el-button><el-button type="primary" @click="approvePosition(row as PositionChangeRequest)">通过</el-button></template></el-table-column>
+        <el-table-column type="selection" :width="reviewTableColumns.selection" />
+        <el-table-column type="index" label="序号" :width="reviewTableColumns.index" align="center" />
+        <el-table-column label="变更类型" :width="reviewTableColumns.changeType"><template #default="{ row }"><el-tag type="warning" effect="plain">{{ positionActionLabel((row as PositionChangeRequest).action) }}</el-tag></template></el-table-column>
+        <el-table-column prop="positionName" label="审核对象" :width="reviewTableColumns.subject" />
+        <el-table-column label="变更内容" :min-width="reviewTableColumns.content"><template #default="{ row }"><div>岗位编码：{{ (row as PositionChangeRequest).proposedValue.code || '-' }}；岗位族：{{ (row as PositionChangeRequest).proposedValue.jobFamily || '未分类' }}</div><div v-if="(row as PositionChangeRequest).warnings?.length" class="review-warning">{{ (row as PositionChangeRequest).warnings.join('；') }}</div></template></el-table-column>
+        <el-table-column label="提交人" :width="reviewTableColumns.submitter"><template #default="{ row }">{{ (row as PositionChangeRequest).createdBy?.name || '未知' }}</template></el-table-column>
+        <el-table-column label="提交时间" :width="reviewTableColumns.submittedAt"><template #default="{ row }">{{ formatDateTime((row as PositionChangeRequest).createdAt) }}</template></el-table-column>
+        <el-table-column label="操作" :width="reviewTableColumns.actions" fixed="right"><template #default="{ row }"><el-button @click="rejectPosition(row as PositionChangeRequest)">退回</el-button><el-button type="primary" @click="approvePosition(row as PositionChangeRequest)">通过</el-button></template></el-table-column>
       </el-table>
       <el-empty v-if="activeCategory === 'position' && !positionLoading && !positionItems.length" description="暂无岗位待审核变更" />
     </div>
 
     <el-empty v-if="activeCategory === 'all' && !allLoading && reviewTotal === 0" description="暂无待审核变更" />
+
+    <el-dialog v-model="contractReviewDialog.visible" title="合同变更明细" width="680px" destroy-on-close>
+      <div v-if="contractReviewDialog.row" class="contract-review-detail">
+        <p class="contract-review-detail__employee">{{ contractReviewDialog.row.employeeName }}</p>
+        <article v-for="change in contractDiffs(contractReviewDialog.row)" :key="change.key" class="contract-review-change">
+          <div><el-tag :type="change.kind === '移除' ? 'danger' : change.kind === '新增' ? 'success' : 'warning'" effect="plain">{{ change.kind }}</el-tag><strong>{{ change.title }}</strong></div>
+          <p v-if="change.before">变更前：{{ change.before }}</p>
+          <p v-if="change.after">变更后：{{ change.after }}</p>
+        </article>
+      </div>
+      <template #footer><el-button @click="contractReviewDialog.visible = false">关闭</el-button></template>
+    </el-dialog>
 
     <el-dialog v-model="managerDialog.visible" title="补充绩效直属上级" width="480px" :close-on-click-modal="false" destroy-on-close>
       <p>为 <strong>{{ managerDialog.employeeName }}</strong> 选择系统内绩效直属上级。</p>
@@ -607,13 +628,16 @@ onMounted(async () => {
 .review-category-section + .review-category-section { margin-top: 22px; padding-top: 22px; border-top: 1px solid #eef2f6; }
 .review-category-heading { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; color: #344054; }
 .review-category-heading span { min-width: 24px; padding: 1px 8px; border-radius: 999px; background: #eef4ff; color: #3563e9; font-size: 12px; text-align: center; }
-.contract-review-detail { padding: 4px 52px 14px; }
-.contract-review-detail h4 { margin: 0 0 10px; }
+.review-table :deep(.el-table__cell) { padding: 10px 0; vertical-align: middle; }
+.review-table :deep(.cell) { line-height: 22px; }
+.contract-review-detail { padding: 0; }
+.contract-review-detail__employee { padding-bottom: 10px; font-weight: 600; }
 .contract-review-detail > p { margin: 0; color: #667085; }
 .contract-review-change { padding: 10px 0; border-top: 1px solid #eef2f6; }
 .contract-review-change > div { display: flex; align-items: center; gap: 8px; }
 .contract-review-change p { margin: 6px 0 0; color: #475467; font-size: 13px; }
 .employee-change-content { display: grid; gap: 6px; }
+.employee-change-content__summary { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; }
 .employee-change-content__statuses { display: flex; flex-wrap: wrap; gap: 6px 12px; color: #667085; font-size: 12px; }
 .employee-change-content__statuses span { display: inline-flex; align-items: center; gap: 5px; }
 .review-warning { color: #b54708 !important; }

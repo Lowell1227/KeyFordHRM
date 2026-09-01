@@ -151,11 +151,19 @@ test('HR administrator reviews employee and department changes from the independ
   await expect(workspace.getByRole('button', { name: '岗位目录 1' })).toBeVisible();
   const reviewTables = workspace.locator('.review-category-section > .review-table');
   await expect(reviewTables).toHaveCount(3);
-  const expectedReviewColumns = ['变更类型', '审核对象', '变更内容', '提交人', '提交时间', '操作'];
+  const expectedReviewColumns = ['序号', '变更类型', '审核对象', '变更内容', '提交人', '提交时间', '操作'];
+  let referenceColumnWidths: number[] = [];
   for (let index = 0; index < 3; index += 1) {
+    await expect(reviewTables.nth(index).locator('.el-table__header-wrapper th')).toHaveCount(8);
     await expect.poll(async () => (
       reviewTables.nth(index).locator('.el-table__header-wrapper th .cell').allTextContents()
     ).then((items) => items.map((item) => item.trim()).filter(Boolean))).toEqual(expectedReviewColumns);
+    const columnWidths = await reviewTables.nth(index).locator('.el-table__header-wrapper th').evaluateAll((cells) => (
+      cells.map((cell) => Math.round(cell.getBoundingClientRect().width))
+    ));
+    if (index === 0) referenceColumnWidths = columnWidths;
+    else expect(columnWidths).toEqual(referenceColumnWidths);
+    await expect(reviewTables.nth(index).locator('.el-table__body-wrapper tbody tr').first().locator('td').nth(1)).toHaveText('1');
     await expect(reviewTables.nth(index).getByRole('button', { name: '退回', exact: true }).first()).toBeVisible();
     await expect(reviewTables.nth(index).getByRole('button', { name: '通过', exact: true }).first()).toBeVisible();
   }
@@ -171,10 +179,11 @@ test('HR administrator reviews employee and department changes from the independ
   await expect(workspace.getByText('无变更', { exact: true })).toHaveCount(0);
   await expect(workspace.getByText('需补充', { exact: true })).toBeVisible();
   await expect(workspace.getByText(/合同修改/)).toBeVisible();
-  await workspace.locator('.el-table__expand-icon').first().click();
+  await workspace.getByRole('button', { name: '查看合同明细' }).click();
   await expect(workspace.getByText('合同变更明细', { exact: true })).toBeVisible();
   await expect(workspace.getByText('变更前：签约公司：孚德；签订日期：2024-01-01；生效日期：2024-01-02；到期日期：2026-12-31')).toBeVisible();
   await expect(workspace.getByText('变更后：签约公司：孚德体育文化；签订日期：2024-01-01；生效日期：2024-02-01；到期日期：2026-12-31')).toBeVisible();
+  await page.getByRole('dialog', { name: '合同变更明细' }).getByRole('button', { name: '关闭', exact: true }).click();
 
   const rowChecks = reviewTables.nth(0).locator('.el-table__body-wrapper .el-checkbox');
   await rowChecks.nth(0).click();
