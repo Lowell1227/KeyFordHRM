@@ -117,6 +117,12 @@ export class EmployeeDataReviewsService {
     if (input.managerId === userId) {
       throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '绩效直属上级不能是员工本人' });
     }
+    if ((input.managerId ?? null) === (user.directManagerId ?? null)) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '未检测到实际变更，无需提交审核',
+      });
+    }
     if (input.managerId) {
       const manager = await this.prisma.user.findUnique({
         where: {

@@ -671,6 +671,36 @@ describe("DepartmentsService", () => {
     });
   });
 
+  it('部门名称层级和负责人均未变化时不生成审核', async () => {
+    const tx = {
+      departmentChangeRequest: { findFirst: jest.fn(), create: jest.fn() },
+      auditLog: { create: jest.fn() },
+    };
+    const prisma = {
+      department: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'dept-1', name: '项目部', fullPath: '项目部', parentId: null, company: 'fuede',
+          leaderId: 'leader-1', approverId: 'approver-1', isActive: true,
+        }]),
+      },
+      user: { findMany: jest.fn().mockResolvedValue([{ id: 'leader-1' }, { id: 'approver-1' }]) },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new DepartmentsService(prisma as any);
+
+    await expect(service.updateStructure('dept-1', {
+      name: '项目部',
+      parentId: null,
+      company: 'fuede',
+      leaderId: 'leader-1',
+      approverId: 'approver-1',
+    } as any, operator)).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '未检测到实际变更，无需提交审核' }),
+    });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+    expect(tx.departmentChangeRequest.create).not.toHaveBeenCalled();
+  });
+
   it('部门不能挂靠到其他公司的上级部门', async () => {
     const service = new DepartmentsService({
       department: {

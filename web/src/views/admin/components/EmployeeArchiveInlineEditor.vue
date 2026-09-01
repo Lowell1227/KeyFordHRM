@@ -209,6 +209,10 @@ async function openUploadedMaterial(item: { name: string; url: string; mimeType?
 }
 
 function submit() {
+  if (!isDirty()) {
+    ElMessage.info('未检测到变更，无需提交审核');
+    return;
+  }
   form.employee.phone = form.profile.phone || null;
   emit('submit', {
     employee: { ...form.employee },

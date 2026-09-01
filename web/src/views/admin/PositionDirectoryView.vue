@@ -8,19 +8,31 @@ const loading = ref(false);
 const keyword = ref('');
 const includeInactive = ref(false);
 const dialog = reactive({ visible: false, editingId: '', code: '', name: '', jobFamily: '', saving: false });
+let initialPositionSnapshot = '';
+
+function positionSnapshot(value: { code: string; name: string; jobFamily: string | null }) {
+  return JSON.stringify({ code: value.code.trim(), name: value.name.trim(), jobFamily: value.jobFamily?.trim() || null });
+}
 
 async function load() {
   loading.value = true;
   try { items.value = await positionsApi.findAll({ keyword: keyword.value || undefined, includeInactive: includeInactive.value }); }
   finally { loading.value = false; }
 }
-function openCreate() { Object.assign(dialog, { visible: true, editingId: '', code: '', name: '', jobFamily: '' }); }
-function openEdit(row: PositionRecord) { Object.assign(dialog, { visible: true, editingId: row.id, code: row.code, name: row.name, jobFamily: row.jobFamily ?? '' }); }
+function openCreate() { initialPositionSnapshot = ''; Object.assign(dialog, { visible: true, editingId: '', code: '', name: '', jobFamily: '' }); }
+function openEdit(row: PositionRecord) {
+  Object.assign(dialog, { visible: true, editingId: row.id, code: row.code, name: row.name, jobFamily: row.jobFamily ?? '' });
+  initialPositionSnapshot = positionSnapshot({ code: row.code, name: row.name, jobFamily: row.jobFamily });
+}
 async function submit() {
   if (!dialog.code.trim() || !dialog.name.trim()) { ElMessage.warning('请填写岗位编码和岗位名称'); return; }
+  const body = { code: dialog.code.trim(), name: dialog.name.trim(), jobFamily: dialog.jobFamily.trim() || null };
+  if (dialog.editingId && positionSnapshot(body) === initialPositionSnapshot) {
+    ElMessage.info('未检测到变更，无需提交审核');
+    return;
+  }
   dialog.saving = true;
   try {
-    const body = { code: dialog.code.trim(), name: dialog.name.trim(), jobFamily: dialog.jobFamily.trim() || null };
     if (dialog.editingId) await positionsApi.update(dialog.editingId, body); else await positionsApi.create(body);
     ElMessage.success('已提交岗位变更，HR 管理员审核后生效'); dialog.visible = false;
   } finally { dialog.saving = false; }

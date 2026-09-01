@@ -93,6 +93,20 @@ export class EmployeeArchivesService {
           message: `疑似已存在员工：${existing.employeeNo ?? '无工号'} · ${existing.name}`,
         });
       }
+      const pendingCreate = await tx.employeeDataChangeRequest.findFirst({
+        where: {
+          employeeNo,
+          sourceType: 'manual_employee_create',
+          profileReviewStatus: { in: ['pending', 'applying'] },
+        },
+        select: { id: true },
+      });
+      if (pendingCreate) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '该工号已有新增员工审核中，请先处理现有申请',
+        });
+      }
       const department = await tx.department.findUnique({
         where: { id: input.deptId },
         select: { id: true, isActive: true },
@@ -292,6 +306,13 @@ export class EmployeeArchivesService {
       ...(input.gender !== undefined ? { gender: input.gender } : {}),
     };
     const employee = this.employeeReviewData(user, currentEmployment, input.phone);
+    if (this.sameReviewRecord(this.employeeReviewData(user, currentEmployment), employee)
+      && this.sameReviewRecord(currentProfile, proposedProfile)) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '未检测到实际变更，无需提交审核',
+      });
+    }
     const pending = await this.prisma.employeeDataChangeRequest.findFirst({
       where: { userId, sourceType: 'manual_profile_change', profileReviewStatus: 'pending' },
       orderBy: { createdAt: 'desc' },
@@ -379,7 +400,20 @@ export class EmployeeArchivesService {
       managerId: user.directManagerId,
       ...(input.performance ?? {}),
     };
+    const profileChanged = !this.sameReviewRecord(baseEmployee, proposedEmployee, [
+      'employeeNo', 'name', 'phone', 'company', 'deptId', 'positionId', 'position', 'jobGrade',
+      'jobFamily', 'managerId', 'workLocation', 'employmentType', 'employeeStatus', 'entryDate',
+      'plannedRegularDate', 'actualRegularDate', 'leaveDate', 'probationMonths',
+    ])
+      || !this.sameReviewRecord(baseProfile, proposedProfile)
+      || !this.sameContractSet(baseContracts, proposedContracts);
     const performanceChanged = (proposedPerformance.managerId ?? null) !== (user.directManagerId ?? null);
+    if (!profileChanged && !performanceChanged) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '未检测到实际变更，无需提交审核',
+      });
+    }
 
     const data = {
       baseValue: this.toJson({
@@ -400,7 +434,14 @@ export class EmployeeArchivesService {
       rejectedReason: null,
     };
     const pending = await client.employeeDataChangeRequest.findFirst({
-      where: { userId, sourceType: 'manual_archive_change', profileReviewStatus: 'pending' },
+      where: {
+        userId,
+        sourceType: 'manual_archive_change',
+        OR: [
+          { profileReviewStatus: 'pending' },
+          { performanceReviewStatus: 'pending' },
+        ],
+      },
       orderBy: { createdAt: 'desc' },
     });
     if (pending) {
@@ -408,6 +449,7 @@ export class EmployeeArchivesService {
         where: { id: pending.id },
         data: {
           ...data,
+          profileReviewStatus: profileChanged ? 'pending' : 'not_required',
           performanceReviewStatus: performanceChanged ? 'pending' : 'not_required',
         },
       });
@@ -419,7 +461,7 @@ export class EmployeeArchivesService {
         employeeName: user.name,
         sourceType: 'manual_archive_change',
         ...data,
-        profileReviewStatus: 'pending',
+        profileReviewStatus: profileChanged ? 'pending' : 'not_required',
         performanceReviewStatus: performanceChanged ? 'pending' : 'not_required',
       },
     });
@@ -490,6 +532,21 @@ export class EmployeeArchivesService {
       throw new NotFoundException({
         code: ERROR_CODE.NOT_FOUND,
         message: '员工不存在',
+      });
+    }
+
+    const pendingEmploymentChange = await this.prisma.employeeDataChangeRequest.findFirst({
+      where: {
+        userId,
+        sourceType: 'manual_employment_change',
+        profileReviewStatus: { in: ['pending', 'applying'] },
+      },
+      select: { id: true },
+    });
+    if (pendingEmploymentChange) {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: '该员工已有任职变更审核中，请先处理现有申请',
       });
     }
 
@@ -711,8 +768,66 @@ export class EmployeeArchivesService {
 
   private contractReviewData(contract: object): Record<string, unknown> {
     return Object.fromEntries(
-      Object.entries(contract).filter(([key]) => !['userId', 'createdAt', 'updatedAt', 'sourceBatchId', 'createdById'].includes(key)),
+      Object.entries(contract).filter(([key]) => ![
+        'userId', 'createdAt', 'updatedAt', 'sourceBatchId', 'createdById', 'isActive', 'endedAt', 'attachmentRef',
+      ].includes(key)),
     );
+  }
+
+  private sameReviewRecord(
+    left: Record<string, unknown>,
+    right: Record<string, unknown>,
+    selectedKeys?: string[],
+  ): boolean {
+    const ignoredKeys = new Set(['idNumber', 'bankAccount']);
+    const keys = selectedKeys ?? [...new Set([...Object.keys(left), ...Object.keys(right)])];
+    return keys
+      .filter((key) => !ignoredKeys.has(key))
+      .every((key) => this.comparableReviewValue(left[key], key) === this.comparableReviewValue(right[key], key));
+  }
+
+  private sameContractSet(
+    left: Record<string, unknown>[],
+    right: Record<string, unknown>[],
+  ): boolean {
+    const normalize = (contract: Record<string, unknown>) => ({
+      id: contract.id ?? null,
+      contractType: contract.contractType ?? contract.kind ?? 'contract',
+      sequence: contract.sequence ?? 0,
+      name: contract.name ?? null,
+      signingCompany: contract.signingCompany ?? null,
+      signedAt: this.comparableReviewValue(contract.signedAt, 'signedAt'),
+      effectiveFrom: this.comparableReviewValue(contract.effectiveFrom, 'effectiveFrom'),
+      expiresAt: this.comparableReviewValue(contract.expiresAt, 'expiresAt'),
+      termType: contract.termType ?? contract.termText ?? null,
+      originalCompany: contract.originalCompany ?? null,
+      newCompany: contract.newCompany ?? null,
+      confidentialityAgreement: contract.confidentialityAgreement ?? null,
+      nonCompeteAgreement: contract.nonCompeteAgreement ?? null,
+      portraitAgreement: contract.portraitAgreement ?? null,
+      images: Array.isArray(contract.images) ? contract.images : [],
+      attachments: Array.isArray(contract.attachments) ? contract.attachments : [],
+    });
+    const sortKey = (contract: ReturnType<typeof normalize>) => String(
+      contract.id ?? `${contract.contractType}:${contract.sequence}`,
+    );
+    const normalizedLeft = left.map(normalize).sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+    const normalizedRight = right.map(normalize).sort((a, b) => sortKey(a).localeCompare(sortKey(b)));
+    return JSON.stringify(normalizedLeft) === JSON.stringify(normalizedRight);
+  }
+
+  private comparableReviewValue(value: unknown, key: string): string {
+    if (value === undefined || value === null || value === '') return 'null';
+    if ([
+      'entryDate', 'plannedRegularDate', 'actualRegularDate', 'leaveDate', 'birthDate', 'graduationDate',
+      'socialSecurityStartDate', 'housingFundStartDate', 'signedAt', 'effectiveFrom', 'expiresAt',
+    ].includes(key)) {
+      const date = value instanceof Date ? value : new Date(String(value));
+      return Number.isNaN(date.getTime()) ? String(value) : date.toISOString().slice(0, 10);
+    }
+    if (Buffer.isBuffer(value)) return value.toString('base64');
+    if (typeof value === 'object') return JSON.stringify(value);
+    return String(value);
   }
 
   private assertContractMaterials(contract: Record<string, unknown>): void {

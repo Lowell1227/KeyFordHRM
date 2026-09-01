@@ -441,7 +441,7 @@ onMounted(async () => {
         v-loading="employeeLoading"
         :data="employeeItems"
         row-key="id"
-        class="app-table compact-table"
+        class="app-table compact-table review-table"
         @selection-change="selectedEmployees = $event"
       >
         <el-table-column type="expand" width="48">
@@ -473,33 +473,28 @@ onMounted(async () => {
 
     <div v-if="showDepartmentReviews" class="review-category-section">
       <h4 v-if="activeCategory === 'all'" class="review-category-heading">组织架构 <span>{{ departmentTotal }}</span></h4>
-      <div class="department-review-list" v-loading="departmentLoading">
-        <article v-for="row in departmentItems" :key="row.id" class="department-review-card">
-          <div class="department-review-card__main">
-            <el-tag type="warning" effect="plain">{{ departmentActionLabel(row.action) }}</el-tag>
-            <div><strong>{{ departmentChangeSummary(row) }}</strong><p>提交人：<span>{{ row.createdBy?.name || '未知' }}</span> · {{ formatDateTime(row.createdAt) }}</p></div>
-          </div>
-          <div class="department-review-card__actions">
-            <el-button @click="rejectDepartment(row)">退回</el-button>
-            <el-button type="primary" @click="approveDepartment(row)">通过</el-button>
-          </div>
-        </article>
-        <el-empty v-if="activeCategory === 'department' && !departmentLoading && !departmentItems.length" description="暂无部门架构待审核变更" />
-      </div>
+      <el-table v-loading="departmentLoading" :data="departmentItems" row-key="id" class="app-table compact-table review-table">
+        <el-table-column label="变更类型" width="120"><template #default="{ row }"><el-tag type="warning" effect="plain">{{ departmentActionLabel((row as DepartmentChangeRequest).action) }}</el-tag></template></el-table-column>
+        <el-table-column prop="departmentName" label="审核对象" min-width="170" />
+        <el-table-column label="变更内容" min-width="300"><template #default="{ row }">{{ departmentChangeSummary(row as DepartmentChangeRequest) }}</template></el-table-column>
+        <el-table-column label="提交人" min-width="120"><template #default="{ row }">{{ (row as DepartmentChangeRequest).createdBy?.name || '未知' }}</template></el-table-column>
+        <el-table-column label="提交时间" width="160"><template #default="{ row }">{{ formatDateTime((row as DepartmentChangeRequest).createdAt) }}</template></el-table-column>
+        <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }"><el-button @click="rejectDepartment(row as DepartmentChangeRequest)">退回</el-button><el-button type="primary" @click="approveDepartment(row as DepartmentChangeRequest)">通过</el-button></template></el-table-column>
+      </el-table>
+      <el-empty v-if="activeCategory === 'department' && !departmentLoading && !departmentItems.length" description="暂无部门架构待审核变更" />
     </div>
 
     <div v-if="showPositionReviews" class="review-category-section">
       <h4 v-if="activeCategory === 'all'" class="review-category-heading">岗位目录 <span>{{ positionTotal }}</span></h4>
-      <div class="department-review-list" v-loading="positionLoading">
-        <article v-for="row in positionItems" :key="row.id" class="department-review-card">
-          <div class="department-review-card__main">
-            <el-tag type="warning" effect="plain">{{ positionActionLabel(row.action) }}</el-tag>
-            <div><strong>{{ row.positionName }}</strong><p>{{ row.proposedValue.code || '-' }} · {{ row.proposedValue.jobFamily || '未分类' }} · {{ row.createdBy?.name || '未知' }} · {{ formatDateTime(row.createdAt) }}</p><p v-if="row.warnings?.length" class="review-warning">{{ row.warnings.join('；') }}</p></div>
-          </div>
-          <div class="department-review-card__actions"><el-button @click="rejectPosition(row)">退回</el-button><el-button type="primary" @click="approvePosition(row)">通过</el-button></div>
-        </article>
-        <el-empty v-if="activeCategory === 'position' && !positionLoading && !positionItems.length" description="暂无岗位待审核变更" />
-      </div>
+      <el-table v-loading="positionLoading" :data="positionItems" row-key="id" class="app-table compact-table review-table">
+        <el-table-column label="变更类型" width="120"><template #default="{ row }"><el-tag type="warning" effect="plain">{{ positionActionLabel((row as PositionChangeRequest).action) }}</el-tag></template></el-table-column>
+        <el-table-column prop="positionName" label="审核对象" min-width="170" />
+        <el-table-column label="变更内容" min-width="300"><template #default="{ row }"><div>岗位编码：{{ (row as PositionChangeRequest).proposedValue.code || '-' }}；岗位族：{{ (row as PositionChangeRequest).proposedValue.jobFamily || '未分类' }}</div><div v-if="(row as PositionChangeRequest).warnings?.length" class="review-warning">{{ (row as PositionChangeRequest).warnings.join('；') }}</div></template></el-table-column>
+        <el-table-column label="提交人" min-width="120"><template #default="{ row }">{{ (row as PositionChangeRequest).createdBy?.name || '未知' }}</template></el-table-column>
+        <el-table-column label="提交时间" width="160"><template #default="{ row }">{{ formatDateTime((row as PositionChangeRequest).createdAt) }}</template></el-table-column>
+        <el-table-column label="操作" width="150" fixed="right"><template #default="{ row }"><el-button @click="rejectPosition(row as PositionChangeRequest)">退回</el-button><el-button type="primary" @click="approvePosition(row as PositionChangeRequest)">通过</el-button></template></el-table-column>
+      </el-table>
+      <el-empty v-if="activeCategory === 'position' && !positionLoading && !positionItems.length" description="暂无岗位待审核变更" />
     </div>
 
     <el-empty v-if="activeCategory === 'all' && !allLoading && reviewTotal === 0" description="暂无待审核变更" />
@@ -517,7 +512,6 @@ onMounted(async () => {
 .pending-review-workspace__head { display: flex; align-items: flex-end; justify-content: space-between; gap: 18px; margin-bottom: 18px; }
 .pending-review-workspace__head h3 { margin: 0 0 4px; }
 .review-title { display: flex; align-items: center; gap: 8px; }.review-title .el-icon { color: #98a2b3; cursor: help; }
-.pending-review-workspace__head p, .department-review-card p { margin: 0; color: #667085; font-size: 13px; }
 .pending-review-workspace__tabs { display: flex; gap: 8px; padding: 4px; border-radius: 10px; background: #f2f4f7; }
 .pending-review-workspace__tabs button { border: 0; padding: 8px 14px; border-radius: 8px; background: transparent; color: #475467; cursor: pointer; }
 .pending-review-workspace__tabs button.active { background: #fff; color: #175cd3; box-shadow: 0 1px 3px rgb(16 24 40 / 12%); }
@@ -531,17 +525,12 @@ onMounted(async () => {
 .contract-review-change { padding: 10px 0; border-top: 1px solid #eef2f6; }
 .contract-review-change > div { display: flex; align-items: center; gap: 8px; }
 .contract-review-change p { margin: 6px 0 0; color: #475467; font-size: 13px; }
-.department-review-list { display: grid; gap: 10px; min-height: 100px; }
-.department-review-card { display: flex; align-items: center; justify-content: space-between; gap: 18px; padding: 14px 16px; border: 1px solid #e5eaf2; border-radius: 12px; }
-.department-review-card__main { display: flex; align-items: center; gap: 12px; min-width: 0; }
-.department-review-card__main strong { display: block; margin-bottom: 4px; }
-.department-review-card__actions { display: flex; flex: none; }
 .review-warning { color: #b54708 !important; }
 @media (max-width: 760px) {
   .pending-review-workspace { padding: 14px; }
-  .pending-review-workspace__head, .department-review-card { align-items: stretch; flex-direction: column; }
+  .pending-review-workspace__head { align-items: stretch; flex-direction: column; }
   .pending-review-workspace__tabs { width: 100%; }
   .pending-review-workspace__tabs button { flex: 1; }
-  .department-review-card__actions { justify-content: flex-end; }
+  .review-table { min-width: 860px; }
 }
 </style>

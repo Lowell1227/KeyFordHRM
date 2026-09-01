@@ -162,6 +162,29 @@ describe('EmployeeArchivesService', () => {
     });
   });
 
+  it('旧版档案入口提交相同手机号和性别时不生成审核', async () => {
+    const user = {
+      ...archiveEditorUser(),
+      employeeProfile: { phone: '13800000000', gender: '女' },
+    };
+    const create = jest.fn();
+    const update = jest.fn();
+    const prisma = {
+      user: { findUnique: jest.fn().mockResolvedValue(user) },
+      employeeDataChangeRequest: { findFirst: jest.fn(), create, update },
+    };
+    const service = new EmployeeArchivesService(prisma as any);
+
+    await expect(service.upsertProfile(user.id, {
+      phone: '13800000000',
+      gender: '女',
+    }, hrOperator)).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '未检测到实际变更，无需提交审核' }),
+    });
+    expect(create).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('新增任职记录只生成基础档案待审核版本', async () => {
     const user = {
       id: '10000000-0000-4000-8000-000000000001', employeeNo: '001', name: '李宏',
@@ -175,7 +198,7 @@ describe('EmployeeArchivesService', () => {
     const prisma = {
       user: { findUnique: jest.fn().mockResolvedValue(user) },
       employmentRecord: { findMany: jest.fn().mockResolvedValue([]), create: employmentCreate },
-      employeeDataChangeRequest: { create: reviewCreate },
+      employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: reviewCreate },
     };
     const service = new EmployeeArchivesService(prisma as any);
     const operator = {
@@ -211,6 +234,36 @@ describe('EmployeeArchivesService', () => {
     expect(userUpdate).not.toHaveBeenCalled();
   });
 
+  it('同一员工已有任职变更待审核时不重复生成申请', async () => {
+    const user = {
+      ...archiveEditorUser(),
+      employmentHistory: [],
+    };
+    const reviewCreate = jest.fn();
+    const prisma = {
+      user: { findUnique: jest.fn().mockResolvedValue(user) },
+      employmentRecord: { findMany: jest.fn().mockResolvedValue([]) },
+      employeeDataChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'existing-employment-review' }),
+        create: reviewCreate,
+      },
+    };
+    const service = new EmployeeArchivesService(prisma as any);
+
+    await expect(service.createEmploymentRecord(user.id, {
+      effectiveFrom: new Date('2026-01-01T00:00:00.000Z'), effectiveTo: null, company: CompanyCode.fuede,
+      deptId: '30000000-0000-4000-8000-000000000001', position: '项目专员', jobGrade: null,
+      jobFamily: '项目', directManagerId: null, workLocation: '杭州',
+      employmentType: EmploymentType.full_time, employeeStatus: UserStatus.active,
+      entryDate: new Date('2024-01-01T00:00:00.000Z'), plannedRegularDate: null, actualRegularDate: null,
+      leaveDate: null, probationMonths: null, changeType: 'transfer', reason: '调岗',
+      sourceType: 'manual', sourceBatchId: null,
+    }, hrOperator)).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '该员工已有任职变更审核中，请先处理现有申请' }),
+    });
+    expect(reviewCreate).not.toHaveBeenCalled();
+  });
+
   it('任职区间重叠时生成提醒但仍允许提交审核', async () => {
     const user = {
       id: '10000000-0000-4000-8000-000000000001',
@@ -241,7 +294,7 @@ describe('EmployeeArchivesService', () => {
           effectiveTo: null,
         }]),
       },
-      employeeDataChangeRequest: { create: reviewCreate },
+      employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: reviewCreate },
     };
     const service = new EmployeeArchivesService(prisma as any);
     const operator = {
@@ -387,6 +440,136 @@ describe('EmployeeArchivesService', () => {
       }],
     }, hrOperator)).rejects.toMatchObject({
       response: expect.objectContaining({ message: '合同附件单个不能超过 10MB' }),
+    });
+  });
+
+  it('档案内容未变化时不因日期格式和合同系统字段生成审核', async () => {
+    const user = {
+      ...archiveEditorUser(),
+      positionId: null,
+      employeeProfile: {
+        id: 'profile-1',
+        userId: archiveEditorUser().id,
+        phone: '13800000000',
+        gender: '女',
+        birthDate: new Date('1990-05-20T00:00:00.000Z'),
+        createdAt: new Date('2026-01-01T00:00:00.000Z'),
+        updatedAt: new Date('2026-08-01T00:00:00.000Z'),
+      },
+      employeeContracts: [{
+        id: 'contract-1',
+        userId: archiveEditorUser().id,
+        contractType: 'contract',
+        sequence: 0,
+        name: '劳动合同',
+        signingCompany: '孚德',
+        signedAt: new Date('2024-01-01T00:00:00.000Z'),
+        effectiveFrom: new Date('2024-01-01T00:00:00.000Z'),
+        expiresAt: new Date('2026-12-31T00:00:00.000Z'),
+        termType: '固定期限',
+        originalCompany: null,
+        newCompany: null,
+        confidentialityAgreement: null,
+        nonCompeteAgreement: null,
+        portraitAgreement: null,
+        images: [],
+        attachments: [],
+        isActive: true,
+        endedAt: null,
+        sourceBatchId: null,
+        createdById: hrOperator.id,
+        createdAt: new Date('2024-01-01T00:00:00.000Z'),
+        updatedAt: new Date('2024-01-01T00:00:00.000Z'),
+      }],
+    };
+    const create = jest.fn();
+    const update = jest.fn();
+    const prisma = {
+      user: { findUnique: jest.fn().mockResolvedValue(user) },
+      employeeDataChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create,
+        update,
+      },
+    };
+    const service = new EmployeeArchivesService(prisma as any);
+
+    await expect(service.submitDraft(user.id, {
+      employee: {
+        employeeNo: '001',
+        name: '员工甲',
+        phone: '13800000000',
+        company: CompanyCode.fuede,
+        deptId: user.deptId,
+        positionId: null,
+        position: '专员',
+        jobGrade: null,
+        jobFamily: null,
+        managerId: null,
+        workLocation: null,
+        employmentType: EmploymentType.full_time,
+        employeeStatus: UserStatus.active,
+        entryDate: '2024-01-01',
+        plannedRegularDate: null,
+        actualRegularDate: null,
+        leaveDate: null,
+        probationMonths: null,
+      },
+      profile: {
+        phone: '13800000000',
+        gender: '女',
+        birthDate: '1990-05-20',
+        idNumber: '',
+        bankAccount: '',
+      },
+      contracts: [{
+        id: 'contract-1',
+        contractType: 'contract',
+        sequence: 0,
+        name: '劳动合同',
+        signingCompany: '孚德',
+        signedAt: '2024-01-01',
+        effectiveFrom: '2024-01-01',
+        expiresAt: '2026-12-31',
+        termType: '固定期限',
+        originalCompany: null,
+        newCompany: null,
+        confidentialityAgreement: null,
+        nonCompeteAgreement: null,
+        portraitAgreement: null,
+        images: [],
+        attachments: [],
+      }],
+      performance: { managerId: null },
+    }, hrOperator)).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '未检测到实际变更，无需提交审核' }),
+    });
+    expect(create).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('只修改绩效直属上级时不要求重复审核基础档案', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 'performance-only-review' });
+    const prisma = {
+      user: { findUnique: jest.fn().mockResolvedValue(archiveEditorUser()) },
+      employeeDataChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create,
+      },
+    };
+    const service = new EmployeeArchivesService(prisma as any);
+
+    await service.submitDraft(archiveEditorUser().id, {
+      employee: {},
+      profile: {},
+      performance: { managerId: 'manager-new' },
+    }, hrOperator);
+
+    expect(create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        profileReviewStatus: 'not_required',
+        performanceReviewStatus: 'pending',
+      }),
     });
   });
 
@@ -626,6 +809,7 @@ describe('EmployeeArchivesService', () => {
       },
       employmentRecord: { findMany: jest.fn().mockResolvedValue([]) },
       employeeDataChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({
           id: '50000000-0000-4000-8000-000000000001',
           userId: null,
@@ -673,5 +857,38 @@ describe('EmployeeArchivesService', () => {
       }),
     });
     expect(userCreate).not.toHaveBeenCalled();
+  });
+
+  it('相同工号已有新增员工待审核申请时不重复生成', async () => {
+    const create = jest.fn();
+    const tx = {
+      user: { findFirst: jest.fn().mockResolvedValue(null) },
+      department: {
+        findUnique: jest.fn().mockResolvedValue({ id: '30000000-0000-4000-8000-000000000001', isActive: true }),
+      },
+      position: { findUnique: jest.fn().mockResolvedValue(null) },
+      employeeDataChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'employee-create-pending' }),
+        create,
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new EmployeeArchivesService({
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any);
+
+    await expect(service.createEmployee({
+      employeeNo: '901',
+      name: '新员工',
+      company: CompanyCode.fuede,
+      deptId: '30000000-0000-4000-8000-000000000001',
+      entryDate: new Date('2026-09-10T00:00:00.000Z'),
+      effectiveFrom: new Date('2026-09-10T00:00:00.000Z'),
+      employmentType: EmploymentType.full_time,
+      employeeStatus: UserStatus.probation,
+    }, hrOperator)).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '该工号已有新增员工审核中，请先处理现有申请' }),
+    });
+    expect(create).not.toHaveBeenCalled();
   });
 });

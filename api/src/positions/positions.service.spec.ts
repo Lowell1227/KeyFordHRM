@@ -25,6 +25,7 @@ describe('PositionsService', () => {
       },
       positionChangeRequest: {
         findFirst: jest.fn().mockResolvedValue(null),
+        findMany: jest.fn().mockResolvedValue([]),
         create: jest.fn().mockResolvedValue({
           id: 'fc0dcfff-9891-4e75-85ce-f4f74a04c724',
           action: 'create',
@@ -59,6 +60,80 @@ describe('PositionsService', () => {
       }),
     });
     expect(tx.position.create).not.toHaveBeenCalled();
+  });
+
+  it('相同的新建岗位已有待审核申请时不重复生成', async () => {
+    const tx = {
+      position: { findFirst: jest.fn().mockResolvedValue(null) },
+      positionChangeRequest: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: 'position-create-pending',
+          proposedValue: { code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', isActive: true },
+        }]),
+        create: jest.fn(),
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new PositionsService({
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any);
+
+    await expect(service.create({
+      code: ' hrbp ',
+      name: 'HRBP',
+      jobFamily: ' 人力资源 ',
+    }, submitter)).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '相同岗位已有变更审核中，请先处理现有申请' }),
+    });
+    expect(tx.positionChangeRequest.create).not.toHaveBeenCalled();
+  });
+
+  it('岗位编码名称和岗位族未变化时不生成审核', async () => {
+    const create = jest.fn();
+    const prisma = {
+      position: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'position-1', code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', isActive: true,
+        }),
+      },
+      positionChangeRequest: { create },
+    };
+    const service = new PositionsService(prisma as any);
+
+    await expect(service.update('position-1', {
+      code: ' hrbp ',
+      name: 'HRBP',
+      jobFamily: ' 人力资源 ',
+    }, submitter)).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '未检测到实际变更，无需提交审核' }),
+    });
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('同一岗位已有待审核变更时不重复生成申请', async () => {
+    const tx = {
+      positionChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue({ id: 'position-change-pending' }),
+        create: jest.fn(),
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const prisma = {
+      position: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'position-1', code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', isActive: true,
+        }),
+      },
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new PositionsService(prisma as any);
+
+    await expect(service.update('position-1', {
+      name: '高级 HRBP',
+    }, submitter)).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '该岗位已有变更审核中，请先处理现有申请' }),
+    });
+    expect(tx.positionChangeRequest.create).not.toHaveBeenCalled();
   });
 
   it('HR管理员可以通过自己提交的岗位变更并保留审核记录', async () => {
@@ -195,5 +270,42 @@ describe('PositionsService', () => {
         reviewedById: reviewer.id,
       }),
     });
+  });
+
+  it('正式岗位在提交后发生变化时拒绝覆盖新数据', async () => {
+    const request = {
+      id: 'position-change-stale',
+      positionId: 'position-1',
+      positionName: 'HRBP',
+      action: 'update',
+      status: 'pending',
+      baseValue: { id: 'position-1', code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', isActive: true },
+      proposedValue: { code: 'HRBP', name: '高级 HRBP', jobFamily: '人力资源', isActive: true },
+      createdById: submitter.id,
+    };
+    const tx = {
+      positionChangeRequest: {
+        findUnique: jest.fn().mockResolvedValue(request),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn(),
+      },
+      position: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'position-1', code: 'HRBP', name: '业务 HRBP', jobFamily: '人力资源', isActive: true,
+        }),
+        update: jest.fn(),
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const prisma = {
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    };
+    const service = new PositionsService(prisma as any);
+
+    await expect(service.approve(request.id, reviewer)).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '正式岗位信息已发生变化，请重新提交审核' }),
+    });
+    expect(tx.position.update).not.toHaveBeenCalled();
+    expect(tx.positionChangeRequest.update).not.toHaveBeenCalled();
   });
 });

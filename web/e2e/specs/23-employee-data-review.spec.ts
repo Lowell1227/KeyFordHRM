@@ -136,6 +136,8 @@ test('HR administrator reviews employee and department changes from the independ
   await expect(workspace.getByRole('button', { name: '员工档案 2' })).toBeVisible();
   await expect(workspace.getByRole('button', { name: '组织架构 1' })).toBeVisible();
   await expect(workspace.getByRole('button', { name: '岗位目录 1' })).toBeVisible();
+  await expect(workspace.locator('.review-category-section > .review-table')).toHaveCount(3);
+  await expect(workspace.locator('.department-review-card')).toHaveCount(0);
   await expect(workspace.getByText('员工一', { exact: true })).toBeVisible();
   await expect(workspace.getByText('员工二', { exact: true })).toBeVisible();
   await expect(workspace.getByText('项目中心 → 项目管理中心')).toBeVisible();

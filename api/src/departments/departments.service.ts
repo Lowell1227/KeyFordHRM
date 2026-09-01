@@ -438,6 +438,16 @@ export class DepartmentsService {
     if (departments.some((item) => item.parentId === id && item.company !== company)) {
       throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '该部门含下级部门，请先调整下级部门后再变更所属公司' });
     }
+    if (name === target.name
+      && parentId === target.parentId
+      && company === target.company
+      && (leaderId ?? null) === (target.leaderId ?? null)
+      && (approverId ?? null) === (target.approverId ?? null)) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '未检测到实际变更，无需提交审核',
+      });
+    }
     const responsibilityIds = [...new Set([leaderId, approverId].filter((id): id is string => Boolean(id)))];
     if (responsibilityIds.length > 0) {
       const users = await this.prisma.user.findMany({

@@ -994,6 +994,7 @@ const leaderDialog = ref({
   deptId: '',
   deptName: '',
   leaderId: undefined as string | undefined,
+  originalLeaderId: undefined as string | undefined,
 });
 
 function openLeaderDialog(row: Department) {
@@ -1002,11 +1003,16 @@ function openLeaderDialog(row: Department) {
     deptId: row.id,
     deptName: row.name,
     leaderId: row.leaderId ?? undefined,
+    originalLeaderId: row.leaderId ?? undefined,
   };
 }
 
 async function confirmLeader() {
   if (!leaderDialog.value.deptId) return;
+  if ((leaderDialog.value.leaderId ?? null) === (leaderDialog.value.originalLeaderId ?? null)) {
+    ElMessage.info('未检测到变更，无需提交审核');
+    return;
+  }
   try {
     await departmentsApi.updateLeader(leaderDialog.value.deptId, {
       leaderId: leaderDialog.value.leaderId ?? null,
@@ -1024,6 +1030,7 @@ const approverDialog = ref({
   deptId: '',
   deptName: '',
   approverId: undefined as string | undefined,
+  originalApproverId: undefined as string | undefined,
 });
 
 function openApproverDialog(row: Department) {
@@ -1032,11 +1039,16 @@ function openApproverDialog(row: Department) {
     deptId: row.id,
     deptName: row.name,
     approverId: row.approverId ?? undefined,
+    originalApproverId: row.approverId ?? undefined,
   };
 }
 
 async function confirmApprover() {
   if (!approverDialog.value.deptId) return;
+  if ((approverDialog.value.approverId ?? null) === (approverDialog.value.originalApproverId ?? null)) {
+    ElMessage.info('未检测到变更，无需提交审核');
+    return;
+  }
   try {
     await departmentsApi.updateApprover(approverDialog.value.deptId, {
       approverId: approverDialog.value.approverId ?? null,

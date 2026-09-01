@@ -373,6 +373,31 @@ describe('EmployeeDataReviewsService', () => {
     )).rejects.toMatchObject({ response: expect.objectContaining({ message: '绩效直属上级不存在或已停用' }) });
   });
 
+  it('绩效直属上级未变化时不生成审核', async () => {
+    const create = jest.fn();
+    const update = jest.fn();
+    const prisma = {
+      user: {
+        findUnique: jest.fn().mockResolvedValue({
+          id: 'employee-1', employeeNo: '001', name: '员工一', directManagerId: 'manager-1',
+          deletedAt: null, dept: { parentId: 'dept-root', leaderId: null },
+        }),
+      },
+      employeeDataChangeRequest: { findFirst: jest.fn(), create, update },
+    };
+    const service = new EmployeeDataReviewsService(prisma as any);
+
+    await expect(service.proposePerformanceManager(
+      'employee-1',
+      { managerId: 'manager-1' },
+      operator,
+    )).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '未检测到实际变更，无需提交审核' }),
+    });
+    expect(create).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
   it('同一次审核先建立新员工档案，再启用该员工的绩效直属上级', async () => {
     const request = {
       id: 'review-new',

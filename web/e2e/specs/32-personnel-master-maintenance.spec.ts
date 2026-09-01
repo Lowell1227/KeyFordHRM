@@ -100,13 +100,15 @@ test('HR administrator can review self-submitted department and position changes
   }));
 
   await page.goto(`${webBaseUrl}/personnel-change-reviews`);
+  await expect(page.locator('.review-category-section > .review-table')).toHaveCount(2);
+  await expect(page.locator('.department-review-card')).toHaveCount(0);
   await page.getByRole('button', { name: '组织架构 1' }).click();
-  const departmentCard = page.locator('.department-review-card').filter({ hasText: '自建部门' });
-  await expect(departmentCard.getByRole('button', { name: '退回' })).toBeEnabled();
-  await expect(departmentCard.getByRole('button', { name: '通过' })).toBeEnabled();
+  const departmentRow = page.locator('.review-table .el-table__row').filter({ hasText: '自建部门' });
+  await expect(departmentRow.getByRole('button', { name: '退回' })).toBeEnabled();
+  await expect(departmentRow.getByRole('button', { name: '通过' })).toBeEnabled();
 
   await page.getByRole('button', { name: '岗位目录 1' }).click();
-  const positionCard = page.locator('.department-review-card').filter({ hasText: '自建岗位' });
-  await expect(positionCard.getByRole('button', { name: '退回' })).toBeEnabled();
-  await expect(positionCard.getByRole('button', { name: '通过' })).toBeEnabled();
+  const positionRow = page.locator('.review-table .el-table__row').filter({ hasText: '自建岗位' });
+  await expect(positionRow.getByRole('button', { name: '退回' })).toBeEnabled();
+  await expect(positionRow.getByRole('button', { name: '通过' })).toBeEnabled();
 });

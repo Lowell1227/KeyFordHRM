@@ -70,6 +70,19 @@ export class PositionsService {
       const warnings = duplicates
         ? [`已存在相似岗位：${duplicates.code} · ${duplicates.name}`]
         : [];
+      const pendingCreates = await tx.positionChangeRequest.findMany({
+        where: { action: 'create', status: { in: ['pending', 'applying'] } },
+        select: { id: true, proposedValue: true },
+      });
+      if (pendingCreates.some((item) => this.samePositionValue(
+        proposedValue,
+        this.record(item.proposedValue),
+      ))) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '相同岗位已有变更审核中，请先处理现有申请',
+        });
+      }
       const request = await tx.positionChangeRequest.create({
         data: {
           positionName: proposedValue.name,
@@ -102,6 +115,15 @@ export class PositionsService {
       name: dto.name ?? position.name,
       jobFamily: dto.jobFamily !== undefined ? dto.jobFamily : position.jobFamily,
     });
+    if (proposedValue.code === position.code
+      && proposedValue.name === position.name
+      && proposedValue.jobFamily === (position.jobFamily ?? null)
+      && proposedValue.isActive === position.isActive) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '未检测到实际变更，无需提交审核',
+      });
+    }
     return this.createRequest('update', id, position.name, position, proposedValue, [], operator);
   }
 
@@ -182,6 +204,12 @@ export class PositionsService {
         if (!positionId) throw this.notFound();
         const current = await tx.position.findUnique({ where: { id: positionId } });
         if (!current) throw this.notFound();
+        if (!this.samePositionValue(current, this.record(request.baseValue))) {
+          throw new ConflictException({
+            code: ERROR_CODE.CONFLICT,
+            message: '正式岗位信息已发生变化，请重新提交审核',
+          });
+        }
         if (request.action === 'update') {
           await tx.position.update({
             where: { id: positionId },
@@ -274,6 +302,19 @@ export class PositionsService {
     operator: AuthUser,
   ) {
     return this.prisma.$transaction(async (tx) => {
+      const pending = await tx.positionChangeRequest.findFirst({
+        where: {
+          positionId,
+          status: { in: ['pending', 'applying'] },
+        },
+        select: { id: true },
+      });
+      if (pending) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '该岗位已有变更审核中，请先处理现有申请',
+        });
+      }
       const request = await tx.positionChangeRequest.create({
         data: {
           positionId,
@@ -307,6 +348,16 @@ export class PositionsService {
       jobFamily: dto.jobFamily?.trim() || null,
       isActive: true,
     };
+  }
+
+  private samePositionValue(
+    current: { code: string; name: string; jobFamily?: string | null; isActive: boolean },
+    base: Record<string, unknown>,
+  ): boolean {
+    return current.code === base.code
+      && current.name === base.name
+      && (current.jobFamily ?? null) === (base.jobFamily ?? null)
+      && current.isActive === base.isActive;
   }
 
   private assertReviewer(operator: AuthUser): void {

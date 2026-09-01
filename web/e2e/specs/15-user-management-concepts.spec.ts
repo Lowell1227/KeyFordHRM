@@ -550,6 +550,10 @@ test('edits the whole employee archive in place and supports contract row change
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 20, items: [employee] })),
   }));
+  await page.route('**/api/v1/positions**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([])),
+  }));
   await page.route('**/api/v1/employee-archives/employee-yu', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse(archive)),
   }));
@@ -628,6 +632,9 @@ test('edits the whole employee archive in place and supports contract row change
   expect(await editorSection('个人与教育').locator('.el-form-item__label').allTextContents()).toEqual(personalLabels);
   expect(await editorSection('联系与保障').locator('.el-form-item__label').allTextContents()).toEqual(contactLabels);
   await expect(drawer.getByRole('textbox', { name: '姓名' })).toHaveValue('余焱玲');
+  await drawer.getByRole('button', { name: '保存并提交审核' }).click();
+  await expect(page.getByText('未检测到变更，无需提交审核')).toBeVisible();
+  expect(submittedDraft).toBeNull();
   const firstContract = drawer.locator('.contract-card').first();
   expect(await firstContract.locator('.el-form-item__label').allTextContents()).toEqual(contractLabels);
   await firstContract.getByRole('textbox', { name: '合同名称' }).fill('劳动合同（修订）');
