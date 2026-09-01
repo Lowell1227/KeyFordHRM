@@ -124,15 +124,9 @@ function submit() {
     <div v-if="department" class="department-editor">
       <el-alert title="保存后提交 HR 管理员审核，审核通过前正式组织架构保持不变。" type="info" show-icon :closable="false" />
       <section>
-        <div class="section-title"><h3>基础信息</h3><span>部门名称、公司与组织层级</span></div>
+        <div class="section-title"><h3>基础信息</h3><span>部门名称与组织层级</span></div>
         <el-form label-position="top">
           <el-form-item label="部门名称"><el-input v-model="form.name" maxlength="100" show-word-limit /></el-form-item>
-          <el-form-item label="所属公司">
-            <el-select v-model="form.company">
-              <el-option label="孚德" value="fuede" /><el-option label="北京孚德" value="beijing_fuede" />
-              <el-option label="孚德体育文化" value="fuede_sports" /><el-option label="凡思堡" value="fansibao" />
-            </el-select>
-          </el-form-item>
           <el-form-item label="上级部门">
             <el-select v-model="form.parentId" filterable placeholder="公司根节点">
               <el-option label="公司根节点" :value="ROOT_PARENT" />
@@ -152,7 +146,7 @@ function submit() {
         <div class="section-title"><h3>影响范围</h3><span>提交前核对</span></div>
         <p>当前直属人员：<strong>{{ department.directMemberCount ?? 0 }}</strong> 人</p>
         <p>当前直属子部门：<strong>{{ department.children?.length ?? 0 }}</strong> 个</p>
-        <p>名称、公司、上级或职责变化会作为同一条部门变更审核。</p>
+        <p>名称、上级或职责变化会作为同一条部门变更审核。</p>
       </section>
     </div>
     <template #footer>

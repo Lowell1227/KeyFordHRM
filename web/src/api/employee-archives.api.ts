@@ -37,6 +37,7 @@ export interface EmployeeDataReview {
   profileReviewStatus: EmployeeReviewStatus;
   performanceReviewStatus: EmployeeReviewStatus;
   validationErrors: string[];
+  validationWarnings?: string[];
   baseValue: Record<string, any>;
   proposedValue: Record<string, any>;
   createdBy?: { id: string; name: string; sysRole: string };
@@ -96,6 +97,7 @@ export interface EmployeeArchive {
     id: string;
     company: string;
     deptId: string | null;
+    positionId: string | null;
     position: string | null;
     jobGrade: string | null;
     jobFamily: string | null;
@@ -110,6 +112,7 @@ export interface EmployeeArchive {
     leaveDate: string | null;
     probationMonths: number | null;
   } | null;
+  employmentWarnings?: string[];
   employeeProfile: {
     phone: string | null;
     gender: string | null;
@@ -144,6 +147,7 @@ export interface EmployeeArchive {
     id: string;
     company: string;
     deptId: string | null;
+    positionId?: string | null;
     position: string | null;
     jobGrade: string | null;
     jobFamily: string | null;
@@ -194,6 +198,27 @@ export interface EmployeeArchive {
 }
 
 export const employeeArchivesApi = {
+  createEmployee(body: {
+    employeeNo: string;
+    name: string;
+    phone?: string | null;
+    company: string;
+    deptId: string;
+    positionId?: string | null;
+    entryDate: string;
+    effectiveFrom: string;
+    effectiveTo?: string | null;
+    employmentType: string;
+    employeeStatus: string;
+    rosterManagerId?: string | null;
+    performanceManagerId?: string | null;
+  }): Promise<EmployeeDataReview> {
+    return http.post('/employee-archives', body) as unknown as Promise<EmployeeDataReview>;
+  },
+
+  getDiagnostics(): Promise<{ blocking: false; total: number; items: Array<{ code: string; label: string; userIds: string[]; detail: string }> }> {
+    return http.get('/employee-archives/diagnostics') as unknown as Promise<any>;
+  },
   getArchive(userId: string): Promise<EmployeeArchive> {
     return http.get(`/employee-archives/${userId}`) as unknown as Promise<EmployeeArchive>;
   },
@@ -220,6 +245,10 @@ export const employeeArchivesApi = {
       userIds,
       departmentId,
     }) as unknown as Promise<{ submitted: number }>;
+  },
+
+  createEmployment(userId: string, body: Record<string, unknown>): Promise<EmployeeDataReview> {
+    return http.post(`/employee-archives/${userId}/employments`, body) as unknown as Promise<EmployeeDataReview>;
   },
 
   async downloadRosterTemplate(): Promise<Blob> {
@@ -261,6 +290,10 @@ export const employeeArchivesApi = {
 
   approveReviews(requestIds: string[], scopes: EmployeeReviewScope[]): Promise<EmployeeReviewBatchResult> {
     return http.post('/employee-archives/reviews/approve', { requestIds, scopes }) as unknown as Promise<EmployeeReviewBatchResult>;
+  },
+
+  rejectReviews(requestIds: string[], reason: string): Promise<EmployeeReviewBatchResult> {
+    return http.post('/employee-archives/reviews/reject', { requestIds, reason }) as unknown as Promise<EmployeeReviewBatchResult>;
   },
 
   proposePerformanceManager(userId: string, managerId: string | null): Promise<EmployeeDataReview> {

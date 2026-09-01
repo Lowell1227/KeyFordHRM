@@ -112,12 +112,36 @@ export const routes: RouteRecordRaw[] = [
     path: '/users',
     name: 'Users',
     component: () => import('@/views/admin/UserManageView.vue'),
+    props: { mode: 'users' },
     meta: {
       requiresAuth: true,
       title: '员工档案',
       roles: ['hr', 'system_admin'],
       hrCapabilities: ['employee_archive_edit', 'employee_archive_review', 'organization_edit'],
       navigation: { module: 'people', label: '员工档案', order: 10, group: 'people-archive', groupLabel: '人员档案' },
+    },
+  },
+  {
+    path: '/organization',
+    name: 'Organization',
+    component: () => import('@/views/admin/UserManageView.vue'),
+    props: { mode: 'org' },
+    meta: {
+      requiresAuth: true,
+      title: '组织架构', roles: ['hr', 'system_admin'],
+      hrCapabilities: ['organization_edit', 'employee_archive_review'],
+      navigation: { module: 'people', label: '组织架构', order: 20, group: 'people-archive', groupLabel: '人员档案' },
+    },
+  },
+  {
+    path: '/positions',
+    name: 'Positions',
+    component: () => import('@/views/admin/PositionDirectoryView.vue'),
+    meta: {
+      requiresAuth: true,
+      title: '岗位目录', roles: ['hr', 'system_admin'],
+      hrCapabilities: ['organization_edit', 'employee_archive_edit', 'employee_archive_review'],
+      navigation: { module: 'people', label: '岗位目录', order: 30, group: 'people-archive', groupLabel: '人员档案' },
     },
   },
   {
@@ -129,7 +153,7 @@ export const routes: RouteRecordRaw[] = [
       title: '人事变更审核',
       roles: ['hr', 'system_admin'],
       hrCapabilities: ['employee_archive_review'],
-      navigation: { module: 'people', label: '人事变更审核', order: 20, group: 'people-archive', groupLabel: '人员档案' },
+      navigation: { module: 'people', label: '人事变更审核', order: 40, group: 'people-archive', groupLabel: '人员档案' },
     },
   },
   {

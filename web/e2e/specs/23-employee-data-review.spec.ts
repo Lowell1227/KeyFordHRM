@@ -121,7 +121,7 @@ test('HR administrator reviews employee and department changes from the independ
 
   const workspace = page.locator('.pending-review-workspace');
   await expect(workspace.getByRole('button', { name: '员工档案 2' })).toBeVisible();
-  await expect(workspace.getByRole('button', { name: '部门架构 1' })).toBeVisible();
+  await expect(workspace.getByRole('button', { name: '组织架构 1' })).toBeVisible();
   await expect(workspace.getByText('员工一', { exact: true })).toBeVisible();
   await expect(workspace.getByText('员工二', { exact: true })).toBeVisible();
   await expect(workspace.getByText('余焱玲', { exact: true }).first()).toBeVisible();
@@ -145,7 +145,7 @@ test('HR administrator reviews employee and department changes from the independ
   });
   await expect(page.getByText('已通过 1 人；1 人需补充信息')).toBeVisible();
 
-  await workspace.getByRole('button', { name: '部门架构 1' }).click();
+  await workspace.getByRole('button', { name: '组织架构 1' }).click();
   await expect(workspace.getByText('项目中心 → 项目管理中心')).toBeVisible();
   await expect(workspace.getByText('余焱玲', { exact: true })).toBeVisible();
   await workspace.getByRole('button', { name: '通过' }).click();
@@ -210,7 +210,7 @@ test('department context menu uses the full edit drawer and unassigned people ca
     return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ submitted: 2 })) });
   });
 
-  await page.goto(`${webBaseUrl}/users`);
+  await page.goto(`${webBaseUrl}/organization`);
   const treeNode = page.locator('.dept-node').filter({ hasText: '项目中心' });
   await treeNode.click({ button: 'right' });
   await page.locator('.department-context-menu').getByRole('button', { name: '编辑' }).click();
@@ -225,9 +225,9 @@ test('department context menu uses the full edit drawer and unassigned people ca
   });
 
   await treeNode.click({ button: 'right' });
-  await page.locator('.department-context-menu').getByRole('button', { name: '删除' }).click();
-  await expect(page.getByText(/人员释放到“未分配人员”/)).toBeVisible();
-  await page.getByRole('button', { name: '提交删除审核' }).click();
+  await page.locator('.department-context-menu').getByRole('button', { name: '停用' }).click();
+  await expect(page.getByText(/仍有 .*直属人员/)).toBeVisible();
+  await page.getByRole('button', { name: '提交停用审核' }).click();
   await expect.poll(() => deleteRequested).toBe(true);
 
   await page.getByRole('button', { name: /未分配人员/ }).click();

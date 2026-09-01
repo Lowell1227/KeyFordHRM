@@ -30,6 +30,7 @@ export default defineConfig({
     '29-goal-setting-responsive.spec.ts',
     '30-goal-tracking-cycle-closure.spec.ts',
     '31-indicator-visibility-and-map.spec.ts',
+    '32-personnel-master-maintenance.spec.ts',
   ],
   workers: 1,
 });

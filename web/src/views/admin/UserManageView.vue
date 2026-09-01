@@ -4,11 +4,9 @@ import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
 import {
   ArrowRight,
   Key,
-  OfficeBuilding,
   QuestionFilled,
   Search,
   Setting,
-  UserFilled,
   UploadFilled,
   Warning,
 } from '@element-plus/icons-vue';
@@ -27,6 +25,9 @@ import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.v
 import UserSelect from '@/components/common/UserSelect.vue';
 import EmployeeArchiveInlineEditor from './components/EmployeeArchiveInlineEditor.vue';
 import DepartmentEditDrawer from './components/DepartmentEditDrawer.vue';
+import DepartmentCreateDrawer from './components/DepartmentCreateDrawer.vue';
+import EmployeeCreateDrawer from './components/EmployeeCreateDrawer.vue';
+import EmploymentRecordDrawer from './components/EmploymentRecordDrawer.vue';
 import { formatBusinessIdentityLabel } from '@/components/layout/business-identity';
 import { useAuthStore } from '@/stores/auth.store';
 import type { Attachment, BusinessIdentity, Department, HrCapability, SystemPermission, UpdateDepartmentStructureBody, User as ManagedUser, UserQuery } from '@/types/api.types';
@@ -35,6 +36,7 @@ import { formatDate, formatDateTime } from '@/utils/date';
 import { isTopLevelDepartmentLeader } from '@/utils/organization-relations';
 import { formatPersonnelIdentityLabel } from '@/utils/personnel-identity';
 
+const props = withDefaults(defineProps<{ mode?: 'org' | 'users' }>(), { mode: 'users' });
 const auth = useAuthStore();
 
 const dingtalkStateLabels = {
@@ -81,7 +83,8 @@ const employmentTypeLabels: Record<string, string> = {
   external: '外部',
 };
 
-const activeView = ref<'org' | 'users'>('org');
+const activeView = ref<'org' | 'users'>(props.mode);
+watch(() => props.mode, (mode) => { activeView.value = mode; });
 const isSystemAdmin = computed(() => auth.user?.sysRole === 'system_admin');
 const canResetPassword = computed(() => ['hr', 'system_admin'].includes(auth.user?.sysRole ?? ''));
 const hasHrCapability = (capability: HrCapability) => (
@@ -660,6 +663,10 @@ async function confirmBatchAssignment() {
 }
 
 const departmentEditDrawer = ref({ visible: false, department: null as Department | null, saving: false });
+const departmentCreateDrawer = ref({ visible: false, parent: null as Department | null });
+const employeeCreateDrawerVisible = ref(false);
+const employmentRecordDrawerVisible = ref(false);
+const departmentMergeDialog = ref({ visible: false, source: null as Department | null, targetId: '', saving: false });
 const departmentContextMenu = ref({ visible: false, x: 0, y: 0, department: null as Department | null });
 const orgDragEnabled = ref(false);
 let orgLongPressTimer: ReturnType<typeof setTimeout> | null = null;
@@ -667,6 +674,27 @@ let orgLongPressTimer: ReturnType<typeof setTimeout> | null = null;
 function openDepartmentEdit(row: Department) {
   departmentContextMenu.value.visible = false;
   departmentEditDrawer.value = { visible: true, department: row, saving: false };
+}
+
+function openDepartmentCreate(parent: Department | null) {
+  departmentCreateDrawer.value = { visible: true, parent };
+}
+
+function openDepartmentMerge(source: Department) {
+  departmentContextMenu.value.visible = false;
+  departmentMergeDialog.value = { visible: true, source, targetId: '', saving: false };
+}
+
+async function confirmDepartmentMerge() {
+  const dialog = departmentMergeDialog.value;
+  if (!dialog.source || !dialog.targetId) { ElMessage.warning('请选择合并后的目标部门'); return; }
+  dialog.saving = true;
+  try {
+    await departmentsApi.merge(dialog.source.id, dialog.targetId);
+    ElMessage.success('部门合并已提交 HR 管理员审核');
+    dialog.visible = false;
+    await loadDepartments();
+  } finally { dialog.saving = false; }
 }
 
 async function saveDepartment(value: UpdateDepartmentStructureBody) {
@@ -703,12 +731,14 @@ async function removeDepartment(row: Department) {
   const childCount = row.children?.length ?? 0;
   try {
     await ElMessageBox.confirm(
-      `删除“${row.name}”将提交审核。审核通过后，${memberCount} 名直属人员释放到“未分配人员”，${childCount} 个直属子部门提升到当前上级。历史记录不受影响。`,
-      '删除部门',
-      { confirmButtonText: '提交删除审核', cancelButtonText: '取消', type: 'warning' },
+      memberCount || childCount
+        ? `“${row.name}”仍有 ${memberCount} 名直属人员、${childCount} 个下级部门。可以提交停用，但审核通过前需先处理这些归属。`
+        : `停用“${row.name}”？停用后不再用于新的人员归属，历史记录继续保留。`,
+      '停用部门',
+      { confirmButtonText: '提交停用审核', cancelButtonText: '取消', type: 'warning' },
     );
     await departmentsApi.remove(row.id);
-    ElMessage.success('删除部门申请已提交 HR 管理员审核');
+    ElMessage.success('停用部门申请已提交 HR 管理员审核');
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') throw error;
   }
@@ -1145,25 +1175,24 @@ onBeforeUnmount(() => {
       <template #title>
         <div class="page-title">
           <div>
-            <h2>员工档案</h2>
+            <h2>{{ activeView === 'org' ? '组织架构' : '员工档案' }}</h2>
           </div>
           <div class="page-title__actions">
-            <el-button type="primary" :icon="UploadFilled" @click="openRosterImportDialog">导入花名册</el-button>
+            <template v-if="activeView === 'org'">
+              <el-button v-if="canEditOrganization" @click="openDepartmentCreate(null)">新增一级部门</el-button>
+              <el-button v-if="canEditOrganization && selectedDept && !selectedOrgIsUnassigned" type="primary" @click="openDepartmentCreate(selectedDept)">新增下级部门</el-button>
+            </template>
+            <template v-else>
+              <el-button v-if="canEditArchive" type="primary" @click="employeeCreateDrawerVisible = true">新增员工</el-button>
+              <el-dropdown v-if="canEditArchive" trigger="click" @command="(command: string) => command === 'roster' && openRosterImportDialog()">
+                <el-button>批量操作</el-button>
+                <template #dropdown><el-dropdown-menu><el-dropdown-item command="roster" :icon="UploadFilled">导入花名册</el-dropdown-item></el-dropdown-menu></template>
+              </el-dropdown>
+            </template>
             <el-button :icon="Search" @click="refreshCurrentView">刷新</el-button>
           </div>
         </div>
       </template>
-
-      <div class="view-switch">
-        <button :class="{ active: activeView === 'org' }" type="button" @click="activeView = 'org'">
-          <el-icon><OfficeBuilding /></el-icon>
-          组织架构
-        </button>
-        <button :class="{ active: activeView === 'users' }" type="button" @click="activeView = 'users'">
-          <el-icon><UserFilled /></el-icon>
-          员工名册
-        </button>
-      </div>
 
       <section v-if="activeView === 'org'" class="org-layout">
         <aside class="org-tree-panel">
@@ -1241,7 +1270,7 @@ onBeforeUnmount(() => {
               <span class="dept-path">{{ selectedDept.fullPath || '未维护完整路径' }}</span>
               <div v-if="(isSystemAdmin || canEditOrganization) && !selectedOrgIsUnassigned" class="dept-summary__actions">
                 <el-button v-if="canEditOrganization" type="primary" size="small" @click="openDepartmentEdit(selectedDept)">编辑</el-button>
-                <el-button v-if="canEditOrganization" plain type="danger" size="small" @click="removeDepartment(selectedDept)">删除</el-button>
+                <el-button v-if="canEditOrganization" plain type="danger" size="small" @click="removeDepartment(selectedDept)">停用</el-button>
               </div>
             </div>
           </div>
@@ -1268,7 +1297,7 @@ onBeforeUnmount(() => {
           </div>
 
           <div class="section-head">
-            <div><h3>{{ selectedOrgIsUnassigned ? '未分配人员' : '部门人员' }}</h3><span>{{ selectedOrgIsUnassigned ? '审核通过删除部门后，人员会先释放到这里' : '含当前部门及下级部门' }}</span></div>
+            <div><h3>{{ selectedOrgIsUnassigned ? '未分配人员' : '部门人员' }}</h3><span>{{ selectedOrgIsUnassigned ? '尚未归属有效部门的人员' : '含当前部门及下级部门' }}</span></div>
             <el-button v-if="selectedOrgIsUnassigned && selectedOrgMembers.length" type="primary" @click="openBatchAssignment">批量归属部门（{{ selectedOrgMembers.length }}）</el-button>
           </div>
           <el-table v-loading="orgMemberLoading" :data="orgMembers" row-key="id" class="app-table compact-table" @selection-change="selectedOrgMembers = $event">
@@ -1295,7 +1324,8 @@ onBeforeUnmount(() => {
             </el-table-column>
             <el-table-column label="业务职责" min-width="220">
               <template #default="{ row }">
-                <div v-if="(row as ManagedUser).businessIdentities?.length" class="business-identity-tags">
+                <div class="business-identity-tags">
+                  <el-tag size="small" effect="plain">员工</el-tag>
                   <el-tag
                     v-for="identity in (row as ManagedUser).businessIdentities"
                     :key="identity.type"
@@ -1305,7 +1335,6 @@ onBeforeUnmount(() => {
                     {{ businessIdentityText(identity) }}
                   </el-tag>
                 </div>
-                <span v-else class="muted-text">无额外业务职责</span>
               </template>
             </el-table-column>
             <el-table-column label="绩效直属上级" min-width="140">
@@ -1395,7 +1424,8 @@ onBeforeUnmount(() => {
           </el-table-column>
           <el-table-column label="业务职责" min-width="220">
             <template #default="{ row }">
-              <div v-if="(row as ManagedUser).businessIdentities?.length" class="business-identity-tags">
+              <div class="business-identity-tags">
+                <el-tag size="small" effect="plain">员工</el-tag>
                 <el-tag
                   v-for="identity in (row as ManagedUser).businessIdentities"
                   :key="identity.type"
@@ -1405,7 +1435,6 @@ onBeforeUnmount(() => {
                   {{ businessIdentityText(identity) }}
                 </el-tag>
               </div>
-              <span v-else class="muted-text">无额外业务职责</span>
             </template>
           </el-table-column>
           <el-table-column label="钉钉登录" width="130">
@@ -1613,9 +1642,11 @@ onBeforeUnmount(() => {
             <div class="section-head">
               <div>
                 <h3>任职历史</h3>
-                <span>生效区间不重叠，历史记录不会覆盖</span>
+                <span>支持历史补录和未来生效；重叠只提醒，不覆盖记录</span>
               </div>
+              <el-button v-if="canEditArchive" @click="employmentRecordDrawerVisible = true">新增任职记录</el-button>
             </div>
+            <el-tag v-if="employeeArchiveDrawer.data.employmentWarnings?.length" type="warning" effect="plain" size="small">{{ employeeArchiveDrawer.data.employmentWarnings.join('；') }}</el-tag>
             <el-table :data="employeeArchiveDrawer.data.employmentHistory" size="small" class="app-table">
               <el-table-column label="生效区间" min-width="180">
                 <template #default="{ row }">{{ formatDate(row.effectiveFrom) }} — {{ row.effectiveTo ? formatDate(row.effectiveTo) : '至今' }}</template>
@@ -1805,6 +1836,33 @@ onBeforeUnmount(() => {
       @save="saveDepartment"
     />
 
+    <DepartmentCreateDrawer
+      v-model="departmentCreateDrawer.visible"
+      :parent="departmentCreateDrawer.parent"
+      @submitted="loadDepartments"
+    />
+
+    <EmployeeCreateDrawer
+      v-model="employeeCreateDrawerVisible"
+      :departments="departments"
+      @submitted="loadUsers"
+    />
+
+    <EmploymentRecordDrawer
+      v-model="employmentRecordDrawerVisible"
+      :archive="employeeArchiveDrawer.data"
+      :departments="departments"
+      @submitted="employeeArchiveDrawer.visible = false"
+    />
+
+    <el-dialog v-model="departmentMergeDialog.visible" title="合并部门" width="520px" :close-on-click-modal="false">
+      <p>将 <strong>{{ departmentMergeDialog.source?.name }}</strong> 合并到目标部门。审核通过后，人员和下级部门转入目标部门，来源部门停用，历史记录保留。</p>
+      <el-select v-model="departmentMergeDialog.targetId" filterable placeholder="请选择目标部门" style="width: 100%">
+        <el-option v-for="dept in flattenedDepartments.filter((item) => item.id !== departmentMergeDialog.source?.id)" :key="dept.id" :label="dept.fullPath || dept.name" :value="dept.id" />
+      </el-select>
+      <template #footer><el-button @click="departmentMergeDialog.visible = false">取消</el-button><el-button type="primary" :loading="departmentMergeDialog.saving" @click="confirmDepartmentMerge">提交审核</el-button></template>
+    </el-dialog>
+
     <el-dialog v-model="assignmentDialog.visible" title="批量归属部门" width="480px" :close-on-click-modal="false">
       <p>已选择 <strong>{{ selectedOrgMembers.length }}</strong> 名未分配人员。保存后提交员工档案审核。</p>
       <el-tree-select
@@ -1827,7 +1885,9 @@ onBeforeUnmount(() => {
       @click.stop
     >
       <button type="button" @click="openDepartmentEdit(departmentContextMenu.department!)">编辑</button>
-      <button type="button" class="is-danger" @click="removeDepartment(departmentContextMenu.department!)">删除</button>
+      <button type="button" @click="openDepartmentCreate(departmentContextMenu.department!)">新增下级部门</button>
+      <button type="button" @click="openDepartmentMerge(departmentContextMenu.department!)">合并到…</button>
+      <button type="button" class="is-danger" @click="removeDepartment(departmentContextMenu.department!)">停用</button>
     </div>
 
     <el-dialog v-model="personSettingsDialog.visible" title="人员设置" width="520px" :close-on-click-modal="false" destroy-on-close>

@@ -64,6 +64,10 @@ export const departmentsApi = {
     return apiPatch(`/departments/${id}/approver`, body);
   },
 
+  create(body: { name: string; parentId?: string | null; company?: string }): Promise<DepartmentChangeRequest> {
+    return apiPost('/departments', body);
+  },
+
   /** PATCH /departments/:id/structure — 更新名称或父级。 */
   updateStructure(id: string, body: UpdateDepartmentStructureBody): Promise<DepartmentChangeRequest> {
     return apiPatch(`/departments/${id}/structure`, body);
@@ -71,6 +75,10 @@ export const departmentsApi = {
 
   remove(id: string): Promise<DepartmentChangeRequest> {
     return apiDelete(`/departments/${id}`);
+  },
+
+  merge(id: string, targetDepartmentId: string): Promise<DepartmentChangeRequest> {
+    return apiPost(`/departments/${id}/merge`, { targetDepartmentId });
   },
 
   listChangeRequests(params: {

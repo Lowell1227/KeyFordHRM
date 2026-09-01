@@ -142,7 +142,6 @@ test('keeps the employee roster pager visible while the table scrolls independen
 
   await page.setViewportSize({ width: 1440, height: 800 });
   await page.goto(`${webBaseUrl}/users`);
-  await page.getByRole('button', { name: '员工名册' }).click();
 
   const roster = page.locator('.directory-view');
   const tableBody = roster.locator('.el-table__body-wrapper .el-scrollbar__wrap');
@@ -197,7 +196,6 @@ test('collapses and restores roster filters without hiding the result workspace'
 
   await page.setViewportSize({ width: 1440, height: 800 });
   await page.goto(`${webBaseUrl}/users`);
-  await page.getByRole('button', { name: '员工名册' }).click();
 
   const roster = page.locator('.directory-view');
   const filterInput = roster.getByPlaceholder('搜索姓名或工号');
@@ -290,7 +288,7 @@ test('filters direct-manager candidates by employee name', async ({ page }) => {
     });
   });
 
-  await page.goto(`${webBaseUrl}/users`);
+  await page.goto(`${webBaseUrl}/organization`);
   const approverCard = page.locator('.relation-card').filter({ hasText: '最终业务审批人' });
   await expect(approverCard).toContainText('郭志浩');
   await expect(approverCard).toContainText('自动取部门负责人的绩效直属上级');
@@ -441,13 +439,12 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await expect.poll(() => performanceReviewBody).toEqual({
     managerId: manager.id,
   });
-  await expect(page.getByText('审核事项', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('待审核变更', { exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '人事变更审核', exact: true }).click();
-  await expect(page.getByText('审核事项', { exact: true })).toBeVisible();
+  await expect(page.getByText('待审核变更', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /员工档案 1/ })).toBeVisible();
 
   await page.getByRole('button', { name: '员工档案', exact: true }).click();
-  await page.getByRole('button', { name: '员工名册' }).click();
   await expect(page.getByRole('columnheader', { name: '岗位', exact: true })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: '系统权限', exact: true })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: '业务职责', exact: true })).toBeVisible();
@@ -572,7 +569,6 @@ test('edits the whole employee archive in place and supports contract row change
   });
 
   await page.goto(`${webBaseUrl}/users`);
-  await page.getByRole('button', { name: '员工名册' }).click();
   await page.getByRole('button', { name: '查看档案' }).click();
 
   const drawer = page.getByRole('dialog', { name: '员工档案' });
@@ -733,7 +729,7 @@ test('department tree, organization detail and archive drawer scroll independent
   }));
 
   await page.setViewportSize({ width: 1440, height: 800 });
-  await page.goto(`${webBaseUrl}/users`);
+  await page.goto(`${webBaseUrl}/organization`);
 
   for (const selector of ['.app-rail', '.menu-scroll']) {
     await expect.poll(() => page.locator(selector).evaluate((element) => getComputedStyle(element).overflowY)).toBe('auto');
@@ -794,7 +790,7 @@ test('shows unassigned people below the department tree only when people need as
     });
   });
 
-  await page.goto(`${webBaseUrl}/users`);
+  await page.goto(`${webBaseUrl}/organization`);
 
   await expect(page.locator('.org-tree-panel')).toBeVisible();
   const panelChildren = page.locator('.org-tree-panel > *');

@@ -266,6 +266,9 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
     ).toEqual(["人员档案", "试用期与转正"]);
     expect(people?.groups[0].items.map((item) => item.label)).toEqual([
       "员工档案",
+      "组织架构",
+      "岗位目录",
+      "人事变更审核",
     ]);
   });
 

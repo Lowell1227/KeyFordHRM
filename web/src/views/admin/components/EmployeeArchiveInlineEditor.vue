@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { reactive, watch } from 'vue';
+import { onMounted, reactive, ref, watch } from 'vue';
 import { Delete, Plus } from '@element-plus/icons-vue';
 import { ElMessage, type UploadRequestOptions } from 'element-plus';
 import type { Department } from '@/types/api.types';
 import type { EmployeeArchive } from '@/api/employee-archives.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import { uploadApi } from '@/api/upload.api';
+import { positionsApi, type PositionRecord } from '@/api/positions.api';
 
 const props = defineProps<{
   editing: boolean;
@@ -21,6 +22,7 @@ const emit = defineEmits<{
     performance: Record<string, unknown>;
   }];
 }>();
+const positions = ref<PositionRecord[]>([]);
 
 const form = reactive({
   employee: {} as Record<string, any>,
@@ -53,6 +55,7 @@ function reset() {
     phone: archive.employeeProfile?.phone ?? null,
     company: employment?.company ?? archive.dept?.company ?? 'fuede',
     deptId: archive.dept?.id ?? null,
+    positionId: employment?.positionId ?? null,
     position: archive.position,
     jobGrade: employment?.jobGrade ?? null,
     jobFamily: employment?.jobFamily ?? null,
@@ -125,6 +128,7 @@ function reset() {
 watch(() => [props.editing, props.archive?.id] as const, ([editing]) => {
   if (editing) reset();
 }, { immediate: true });
+onMounted(async () => { positions.value = await positionsApi.findAll(); });
 
 function addContract() {
   form.contracts.push({
@@ -241,7 +245,7 @@ defineExpose({ submit, reset, isDirty });
           <el-select v-model="form.employee.company"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select>
         </el-form-item>
         <el-form-item label="所属部门"><el-tree-select v-model="form.employee.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
-        <el-form-item label="岗位"><el-input v-model="form.employee.position" /></el-form-item>
+        <el-form-item label="岗位"><el-select v-model="form.employee.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="`${position.code} · ${position.name}`" :value="position.id" /></el-select></el-form-item>
         <el-form-item label="职级"><el-input v-model="form.employee.jobGrade" /></el-form-item>
         <el-form-item label="职系"><el-input v-model="form.employee.jobFamily" /></el-form-item>
         <el-form-item label="花名册直属主管"><UserSelect v-model="form.employee.managerId" :disabled-ids="archive ? [archive.id] : []" /></el-form-item>
