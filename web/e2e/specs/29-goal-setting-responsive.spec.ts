@@ -241,7 +241,7 @@ test.describe('goal setting responsive workspace', () => {
     await page.getByRole('option', { name: '提升公司重点客户续约率' }).click();
     await page.keyboard.press('Escape');
 
-    await page.getByTestId('indicator-visibility-indicator-1').click();
+    await page.getByTestId('indicator-visibility-indicator-1').locator('.el-select__caret').click();
     await page.getByRole('option', { name: '全公司可见' }).click();
 
     await page.getByRole('button', { name: '保存草稿' }).click();

@@ -1,9 +1,16 @@
 <script setup lang="ts">
 import { computed } from 'vue';
+import { ElMessage } from 'element-plus';
 import type { IndicatorVisibilityScope } from '@/types/enums';
+import {
+  indicatorVisibilityGroups,
+  normalizeIndicatorVisibilityScopes,
+  primaryIndicatorVisibilityScope,
+} from '../indicator-visibility';
 
 export interface IndicatorVisibilitySelection {
   visibilityScope: IndicatorVisibilityScope;
+  visibilityScopes: IndicatorVisibilityScope[];
   visibleDepartmentIds: string[];
   visibleUserIds: string[];
 }
@@ -38,17 +45,11 @@ const emit = defineEmits<{
   'update:modelValue': [value: IndicatorVisibilitySelection];
 }>();
 
-const scopeOptions: Array<{ value: IndicatorVisibilityScope; label: string }> = [
-  { value: 'company', label: '全公司可见' },
-  { value: 'department', label: '部门内可见' },
-  { value: 'department_tree', label: '部门及下级可见' },
-  { value: 'direct_reports', label: '直接下级可见' },
-  { value: 'all_reports', label: '所有下级可见' },
-  { value: 'supervisors', label: '仅上级可见' },
-  { value: 'custom', label: '自定义范围' },
-];
-
-const isCustom = computed(() => props.modelValue.visibilityScope === 'custom');
+const normalizedScopes = computed(() => normalizeIndicatorVisibilityScopes(
+  props.modelValue.visibilityScopes,
+  props.modelValue.visibilityScope,
+));
+const isCustom = computed(() => normalizedScopes.value.includes('custom'));
 
 function normalizeIds(ids: string[]): string[] {
   const normalized = new Map<string, string>();
@@ -61,13 +62,26 @@ function normalizeIds(ids: string[]): string[] {
   return [...normalized.values()];
 }
 
-function updateScope(scope: IndicatorVisibilityScope) {
+function updateScopes(rawScopes: IndicatorVisibilityScope[]) {
+  if (!rawScopes.length) {
+    ElMessage.warning('至少保留一个可见范围');
+    return;
+  }
+  let scopes = [...new Set(rawScopes)];
+  if (scopes.includes('company')) {
+    const companyWasSelected = normalizedScopes.value.includes('company');
+    scopes = companyWasSelected && scopes.length > 1
+      ? scopes.filter((scope) => scope !== 'company')
+      : ['company'];
+  }
+  scopes = normalizeIndicatorVisibilityScopes(scopes, props.modelValue.visibilityScope);
   emit('update:modelValue', {
-    visibilityScope: scope,
-    visibleDepartmentIds: scope === 'custom'
+    visibilityScope: primaryIndicatorVisibilityScope(scopes),
+    visibilityScopes: scopes,
+    visibleDepartmentIds: scopes.includes('custom')
       ? normalizeIds(props.modelValue.visibleDepartmentIds)
       : [],
-    visibleUserIds: scope === 'custom'
+    visibleUserIds: scopes.includes('custom')
       ? normalizeIds(props.modelValue.visibleUserIds)
       : [],
   });
@@ -76,6 +90,7 @@ function updateScope(scope: IndicatorVisibilityScope) {
 function updateDepartments(ids: string[]) {
   emit('update:modelValue', {
     visibilityScope: props.modelValue.visibilityScope,
+    visibilityScopes: normalizedScopes.value,
     visibleDepartmentIds: normalizeIds(ids),
     visibleUserIds: normalizeIds(props.modelValue.visibleUserIds),
   });
@@ -84,6 +99,7 @@ function updateDepartments(ids: string[]) {
 function updateUsers(ids: string[]) {
   emit('update:modelValue', {
     visibilityScope: props.modelValue.visibilityScope,
+    visibilityScopes: normalizedScopes.value,
     visibleDepartmentIds: normalizeIds(props.modelValue.visibleDepartmentIds),
     visibleUserIds: normalizeIds(ids),
   });
@@ -93,18 +109,26 @@ function updateUsers(ids: string[]) {
 <template>
   <div class="visibility-editor" @click.stop>
     <el-select
-      :model-value="modelValue.visibilityScope"
+      multiple
+      :model-value="normalizedScopes"
       :data-testid="`indicator-visibility-${indicatorId}`"
       :aria-label="`指标 ${indicatorId} 可见范围`"
       :disabled="disabled"
-      @update:model-value="updateScope"
+      placeholder="请选择可见范围"
+      @update:model-value="updateScopes"
     >
-      <el-option
-        v-for="option in scopeOptions"
-        :key="option.value"
-        :label="option.label"
-        :value="option.value"
-      />
+      <el-option-group
+        v-for="group in indicatorVisibilityGroups"
+        :key="group.label"
+        :label="group.label"
+      >
+        <el-option
+          v-for="option in group.options"
+          :key="option.value"
+          :label="option.label"
+          :value="option.value"
+        />
+      </el-option-group>
     </el-select>
 
     <div v-if="isCustom" class="visibility-editor__custom">

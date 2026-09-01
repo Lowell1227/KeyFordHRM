@@ -5,7 +5,6 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { tasksApi } from '@/api/tasks.api';
 import { useAuthStore } from '@/stores/auth.store';
 import type { IndicatorInstance, SetIndicatorBody, TaskDetail } from '@/types/api.types';
-import type { IndicatorVisibilityScope } from '@/types/enums';
 import type { PerformanceIndicatorRow } from './PerformanceIndicatorList.vue';
 import PerformanceReviewTable, {
   type PerformanceReviewColumn,
@@ -17,6 +16,10 @@ import IndicatorVisibilityEditor, {
 } from './IndicatorVisibilityEditor.vue';
 import PerformanceReferencePanel from './PerformanceReferencePanel.vue';
 import { normalizeDisplayedWeightTotal } from '../indicator-weight';
+import {
+  indicatorVisibilitySummary,
+  normalizeIndicatorVisibilityScopes,
+} from '../indicator-visibility';
 
 export interface GoalReviewSaveIdentity {
   operationToken: string;
@@ -113,15 +116,6 @@ const goalReviewColumns: PerformanceReviewColumn[] = [
   { key: 'primary', label: '对齐', width: 'minmax(150px, .75fr)' },
   { key: 'secondary', label: '可见范围', width: 'minmax(180px, .85fr)' },
 ];
-const visibilityScopeLabels: Record<IndicatorVisibilityScope, string> = {
-  company: '全公司可见',
-  department: '部门内可见',
-  department_tree: '部门及下级可见',
-  direct_reports: '直接下级可见',
-  all_reports: '所有下级可见',
-  supervisors: '仅上级可见',
-  custom: '自定义范围',
-};
 const isReviewable = computed(() => (
   task.value?.status === 'indicator_reviewing'
   && !task.value.isExempt
@@ -132,6 +126,7 @@ const reviewRows = computed<PerformanceIndicatorRow[]>(() => draftIndicators.map
   name: indicator.name,
   weight: indicator.weight,
   visibilityScope: indicator.visibilityScope,
+  visibilityScopes: indicator.visibilityScopes,
   statusLabel: task.value?.status === 'indicator_reviewing' ? '待审核' : '已处理',
   description: indicator.description,
   scoringStandard: indicator.scoringStandard,
@@ -149,6 +144,7 @@ const reviewRows = computed<PerformanceIndicatorRow[]>(() => draftIndicators.map
 function cloneIndicators(indicators: IndicatorInstance[]) {
   return indicators.map((indicator) => ({
     ...indicator,
+    visibilityScopes: normalizeIndicatorVisibilityScopes(indicator.visibilityScopes, indicator.visibilityScope),
     visibleDepartmentIds: [...indicator.visibleDepartmentIds],
     visibleUserIds: [...indicator.visibleUserIds],
     alignedObjectives: indicator.alignedObjectives.map((objective) => ({ ...objective })),
@@ -230,6 +226,7 @@ function updateVisibility(index: number, selection: IndicatorVisibilitySelection
   const indicator = draftIndicators[index];
   if (!indicator) return;
   indicator.visibilityScope = selection.visibilityScope;
+  indicator.visibilityScopes = [...selection.visibilityScopes];
   indicator.visibleDepartmentIds = [...selection.visibleDepartmentIds];
   indicator.visibleUserIds = [...selection.visibleUserIds];
   markDirty(indicator.id);
@@ -260,7 +257,7 @@ function validateIndicators(requireExactWeight: boolean): boolean {
     return false;
   }
   const emptyCustom = draftIndicators.find((indicator) => (
-    indicator.visibilityScope === 'custom'
+    normalizeIndicatorVisibilityScopes(indicator.visibilityScopes, indicator.visibilityScope).includes('custom')
     && indicator.visibleDepartmentIds.length === 0
     && indicator.visibleUserIds.length === 0
   ));
@@ -287,7 +284,8 @@ function normalizeIds(ids: string[]): string[] {
 }
 
 function toSaveItem(indicator: IndicatorInstance, index: number): SetIndicatorBody['instances'][number] {
-  const visibilityScope: IndicatorVisibilityScope = indicator.visibilityScope;
+  const visibilityScopes = normalizeIndicatorVisibilityScopes(indicator.visibilityScopes, indicator.visibilityScope);
+  const visibilityScope = visibilityScopes[0];
   return {
     templateIndicatorId: indicator.templateIndicatorId,
     name: indicator.name.trim(),
@@ -304,13 +302,15 @@ function toSaveItem(indicator: IndicatorInstance, index: number): SetIndicatorBo
     dimensionWeight: indicator.dimensionWeight,
     sortOrder: index,
     visibilityScope,
-    visibleDepartmentIds: visibilityScope === 'custom'
+    visibilityScopes,
+    visibleDepartmentIds: visibilityScopes.includes('custom')
       ? normalizeIds(indicator.visibleDepartmentIds)
       : [],
-    visibleUserIds: visibilityScope === 'custom'
+    visibleUserIds: visibilityScopes.includes('custom')
       ? normalizeIds(indicator.visibleUserIds)
       : [],
     alignedObjectiveIds: indicator.alignedObjectives.map((objective) => objective.id),
+    alignedParentIndicatorIds: indicator.alignedParentIndicators?.map((parent) => parent.id) ?? [],
   };
 }
 
@@ -580,6 +580,10 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
             v-if="isReviewable"
             :model-value="{
               visibilityScope: draftIndicators[index].visibilityScope,
+              visibilityScopes: normalizeIndicatorVisibilityScopes(
+                draftIndicators[index].visibilityScopes,
+                draftIndicators[index].visibilityScope,
+              ),
               visibleDepartmentIds: draftIndicators[index].visibleDepartmentIds,
               visibleUserIds: draftIndicators[index].visibleUserIds,
             }"
@@ -589,7 +593,12 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
             :disabled="busy"
             @update:model-value="updateVisibility(index, $event)"
           />
-          <span v-else>{{ visibilityScopeLabels[draftIndicators[index].visibilityScope] }}</span>
+          <span v-else>
+            {{ indicatorVisibilitySummary(
+              draftIndicators[index].visibilityScopes,
+              draftIndicators[index].visibilityScope,
+            ) }}
+          </span>
         </template>
       </PerformanceReviewTable>
 

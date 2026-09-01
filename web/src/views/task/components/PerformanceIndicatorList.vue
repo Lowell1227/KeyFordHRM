@@ -3,12 +3,14 @@ import { computed, nextTick, ref, watch } from 'vue';
 import { ArrowDown, ArrowUp } from '@element-plus/icons-vue';
 import type { IndicatorVisibilityScope, ObjectiveLevel } from '@/types/enums';
 import { normalizeDisplayedWeightTotal } from '../indicator-weight';
+import { indicatorVisibilitySummary } from '../indicator-visibility';
 
 export interface PerformanceIndicatorRow {
   id: string;
   name: string;
   weight: number;
   visibilityScope: IndicatorVisibilityScope;
+  visibilityScopes?: IndicatorVisibilityScope[];
   statusLabel?: string;
   description?: string;
   scoringStandard?: string;
@@ -53,20 +55,6 @@ const hasValidWeight = computed(() => displayedWeightTotal.value.isExactlyOneHun
 const allExpanded = computed(() => (
   props.rows.length > 0 && props.rows.every((row) => expandedIds.value.has(row.id))
 ));
-
-const visibilityLabels: Record<IndicatorVisibilityScope, string> = {
-  company: '全公司可见',
-  department: '部门内可见',
-  department_tree: '部门及下级可见',
-  direct_reports: '直接下级可见',
-  all_reports: '所有下级可见',
-  supervisors: '仅上级可见',
-  custom: '自定义范围',
-};
-
-function visibilityScopeLabel(scope: IndicatorVisibilityScope): string {
-  return visibilityLabels[scope];
-}
 
 function safeDisclosureId(id: string): string {
   return encodeURIComponent(id);
@@ -212,7 +200,7 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
           <span class="indicator-row__weight">{{ Number((row.weight * 100).toFixed(2)) }}%</span>
           <div class="indicator-row__visibility" @click.stop>
             <slot name="visibility" :row="row" :index="index">
-              <span>{{ visibilityScopeLabel(row.visibilityScope) }}</span>
+              <span>{{ indicatorVisibilitySummary(row.visibilityScopes, row.visibilityScope) }}</span>
             </slot>
           </div>
           <span class="indicator-row__status">{{ row.statusLabel || '-' }}</span>

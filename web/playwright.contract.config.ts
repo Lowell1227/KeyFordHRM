@@ -29,6 +29,7 @@ export default defineConfig({
     '28-monthly-review-responsive.spec.ts',
     '29-goal-setting-responsive.spec.ts',
     '30-goal-tracking-cycle-closure.spec.ts',
+    '31-indicator-visibility-and-map.spec.ts',
   ],
   workers: 1,
 });

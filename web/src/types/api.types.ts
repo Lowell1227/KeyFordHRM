@@ -1911,6 +1911,7 @@ export interface GoalTrackingItem {
   dimensionName?: string | null;
   dimensionWeight?: number;
   visibilityScope?: IndicatorVisibilityScope;
+  visibilityScopes?: IndicatorVisibilityScope[];
   ownerId: string | null;
   ownerName: string | null;
   cycleId: string | null;
@@ -1952,6 +1953,7 @@ export interface GoalTrackingIndicatorDetail extends GoalTrackingItem {
     level: ObjectiveLevel;
     ownerId: string | null;
   }>;
+  alignedParentIndicators?: IndicatorAlignmentCandidate[];
   progressUpdates: GoalTrackingLatestProgress[];
   changeRecords: GoalTrackingChangeRecord[];
   createdAt: string;

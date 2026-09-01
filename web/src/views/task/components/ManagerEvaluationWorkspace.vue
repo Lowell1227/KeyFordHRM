@@ -22,6 +22,7 @@ import type { PerformanceIndicatorRow } from './PerformanceIndicatorList.vue';
 import PerformanceReviewTable, {
   type PerformanceReviewColumn,
 } from './PerformanceReviewTable.vue';
+import { normalizeIndicatorVisibilityScopes } from '../indicator-visibility';
 
 interface EditableIndicator extends IndicatorInstance {
   managerScoreInput: number | null;
@@ -101,6 +102,7 @@ const evaluationRows = computed<PerformanceIndicatorRow[]>(() => draftIndicators
   name: indicator.name,
   weight: indicator.weight,
   visibilityScope: indicator.visibilityScope,
+  visibilityScopes: indicator.visibilityScopes,
   statusLabel: indicator.managerScoreInput == null
     ? '待评分'
     : task.value?.status === 'manager_scoring' ? '已评分' : '已提交',
@@ -124,6 +126,7 @@ const managerEvaluationColumns: PerformanceReviewColumn[] = [
 function cloneIndicators(indicators: IndicatorInstance[]): EditableIndicator[] {
   return indicators.map((indicator) => ({
     ...indicator,
+    visibilityScopes: normalizeIndicatorVisibilityScopes(indicator.visibilityScopes, indicator.visibilityScope),
     visibleDepartmentIds: [...indicator.visibleDepartmentIds],
     visibleUserIds: [...indicator.visibleUserIds],
     alignedObjectives: indicator.alignedObjectives.map((objective) => ({ ...objective })),

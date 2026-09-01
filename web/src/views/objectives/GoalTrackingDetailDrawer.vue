@@ -9,6 +9,7 @@ import type {
   GoalTrackingIndicatorDetail,
 } from '@/types/api.types';
 import { buildIndicatorVersionHistory } from './indicator-version-history';
+import { indicatorVisibilitySummary } from '@/views/task/indicator-visibility';
 
 const props = defineProps<{ indicatorId: string }>();
 const emit = defineEmits<{ close: []; updated: [] }>();
@@ -194,18 +195,6 @@ function healthLabel(status?: GoalTrackingHealthStatus) {
   }[status ?? 'on_track'];
 }
 
-function visibilityLabel(scope?: string) {
-  return {
-    company: '全公司可见',
-    department: '本部门可见',
-    department_tree: '部门体系可见',
-    direct_reports: '直接下属可见',
-    all_reports: '全部下属可见',
-    supervisors: '本人及主管可见',
-    custom: '指定范围可见',
-  }[scope ?? 'supervisors'] ?? '按权限可见';
-}
-
 </script>
 
 <template>
@@ -240,7 +229,9 @@ function visibilityLabel(scope?: string) {
       <header class="goal-detail__hero">
         <div class="goal-detail__meta-line">
           <span class="goal-detail__alignment">↗ {{ detail.alignedObjectives.length ? '已对齐目标' : '暂未关联目标' }}</span>
-          <span class="goal-detail__visibility">{{ visibilityLabel(detail.visibilityScope) }}</span>
+          <span class="goal-detail__visibility">
+            {{ indicatorVisibilitySummary(detail.visibilityScopes, detail.visibilityScope) }}
+          </span>
         </div>
         <h2>{{ detail.title }}</h2>
         <div class="goal-detail__subline">

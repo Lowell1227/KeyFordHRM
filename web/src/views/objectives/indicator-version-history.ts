@@ -1,4 +1,6 @@
 import type { GoalTrackingChangeRecord } from '@/types/api.types';
+import type { IndicatorVisibilityScope } from '@/types/enums';
+import { indicatorVisibilitySummary } from '@/views/task/indicator-visibility';
 
 const VERSION_ACTIONS = new Set([
   'indicator_baseline_confirmed',
@@ -19,6 +21,7 @@ const FIELD_LABELS: Record<string, string> = {
   dimensionName: '考核维度',
   dimensionWeight: '维度权重',
   visibilityScope: '可见范围',
+  visibilityScopes: '可见范围',
   sortOrder: '排序',
 };
 
@@ -55,6 +58,12 @@ function displayValue(field: string, value: unknown): string {
   if (value === undefined || value === null || value === '') return '未设置';
   if ((field === 'weight' || field === 'dimensionWeight') && typeof value === 'number') {
     return `${Math.round(value * 10_000) / 100}%`;
+  }
+  if (field === 'visibilityScopes' && Array.isArray(value)) {
+    return indicatorVisibilitySummary(value as IndicatorVisibilityScope[], undefined);
+  }
+  if (field === 'visibilityScope' && typeof value === 'string') {
+    return indicatorVisibilitySummary(undefined, value as IndicatorVisibilityScope);
   }
   return comparableValue(value);
 }

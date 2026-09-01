@@ -24,6 +24,7 @@ import type {
   Department,
   FlowRecord,
   Indicator,
+  IndicatorAlignmentCandidate,
   IndicatorInstance,
   Objective,
   Paginated,
@@ -34,6 +35,10 @@ import type {
   TemplateListItem,
 } from '@/types/api.types';
 import type { DimensionType, IndicatorType } from '@/types/enums';
+import {
+  normalizeIndicatorVisibilityScopes,
+  primaryIndicatorVisibilityScope,
+} from '../indicator-visibility';
 import { isValidScore } from '@/utils/score';
 import { normalizeDisplayedWeightTotal } from '../indicator-weight';
 
@@ -146,6 +151,8 @@ const goalSettingMode = ref<GoalSettingMode>(readGoalSettingMode());
 const goalSettingOptionsLoading = ref(false);
 const goalSettingOptionsLoaded = ref(false);
 const goalAlignmentOptions = ref<Objective[]>([]);
+const parentIndicatorAlignmentOptions = ref<IndicatorAlignmentCandidate[]>([]);
+const parentIndicatorAlignmentReason = ref('');
 const goalVisibilityDepartments = ref<VisibilityDepartmentOption[]>([]);
 
 function readGoalSettingMode(): GoalSettingMode {
@@ -265,6 +272,7 @@ const editableDisclosureRows = computed<PerformanceIndicatorRow[]>(() => editabl
   name: item.name,
   weight: item.weight,
   visibilityScope: item.visibilityScope,
+  visibilityScopes: item.visibilityScopes,
   statusLabel: latestIndicatorRejection.value ? '待修改' : '草稿',
   description: item.description,
   scoringStandard: item.scoringStandard,
@@ -294,6 +302,7 @@ const readonlyDisclosureRows = computed<PerformanceIndicatorRow[]>(() => props.i
   name: item.name,
   weight: item.weight,
   visibilityScope: item.visibilityScope,
+  visibilityScopes: item.visibilityScopes,
   statusLabel: latestIndicatorRejection.value ? '已驳回' : '已提交',
   description: item.description,
   scoringStandard: item.scoringStandard,
@@ -630,7 +639,7 @@ async function loadGoalSettingOptions() {
   if (goalSettingOptionsLoading.value || goalSettingOptionsLoaded.value) return;
   goalSettingOptionsLoading.value = true;
   try {
-    const [objectiveResult, departmentResult] = await Promise.allSettled([
+    const [objectiveResult, departmentResult, parentIndicatorResult] = await Promise.allSettled([
       objectivesApi.findAll({
         cycleId: props.cycleId || undefined,
         page: 1,
@@ -638,12 +647,19 @@ async function loadGoalSettingOptions() {
         flat: true,
       }),
       departmentsApi.findAll({ isActive: true, flat: true }),
+      props.taskId
+        ? objectivesApi.getIndicatorAlignmentCandidates(props.taskId)
+        : Promise.resolve({ items: [], reason: '当前任务暂不可设置指标对齐' }),
     ]);
     if (objectiveResult.status === 'fulfilled') {
       goalAlignmentOptions.value = objectiveItems(objectiveResult.value);
     }
     if (departmentResult.status === 'fulfilled') {
       goalVisibilityDepartments.value = flattenDepartmentOptions(departmentResult.value);
+    }
+    if (parentIndicatorResult.status === 'fulfilled') {
+      parentIndicatorAlignmentOptions.value = parentIndicatorResult.value.items;
+      parentIndicatorAlignmentReason.value = parentIndicatorResult.value.reason ?? '';
     }
     goalSettingOptionsLoaded.value = true;
   } finally {
@@ -655,8 +671,15 @@ function updateEditableVisibility(index: number, selection: IndicatorVisibilityS
   const item = editableItems[index];
   if (!item) return;
   item.visibilityScope = selection.visibilityScope;
+  item.visibilityScopes = [...selection.visibilityScopes];
   item.visibleDepartmentIds = [...selection.visibleDepartmentIds];
   item.visibleUserIds = [...selection.visibleUserIds];
+}
+
+function parentIndicatorLabel(id: string, index: number): string {
+  const candidate = parentIndicatorAlignmentOptions.value.find((item) => item.id === id)
+    ?? props.instances[index]?.alignedParentIndicators?.find((item) => item.id === id);
+  return candidate ? `${candidate.name}（${candidate.owner.name}）` : '已对齐上级指标';
 }
 
 function objectiveLabel(id: string, index: number): string {
@@ -691,9 +714,11 @@ function createEmptyItem(): SetIndicatorBody['instances'][number] {
     dimensionWeight: 1,
     sortOrder: 0,
     visibilityScope: 'supervisors',
+    visibilityScopes: ['supervisors'],
     visibleDepartmentIds: [],
     visibleUserIds: [],
     alignedObjectiveIds: [],
+    alignedParentIndicatorIds: [],
   };
 }
 
@@ -717,9 +742,11 @@ function libraryIndicatorToItem(indicator: Indicator, sortOrder: number): SetInd
     dimensionWeight: 1,
     sortOrder,
     visibilityScope: 'supervisors',
+    visibilityScopes: ['supervisors'],
     visibleDepartmentIds: [],
     visibleUserIds: [],
     alignedObjectiveIds: [],
+    alignedParentIndicatorIds: [],
   };
 }
 
@@ -764,9 +791,11 @@ function templateIndicatorToItem(
     dimensionWeight,
     sortOrder,
     visibilityScope: 'supervisors',
+    visibilityScopes: ['supervisors'],
     visibleDepartmentIds: [],
     visibleUserIds: [],
     alignedObjectiveIds: [],
+    alignedParentIndicatorIds: [],
   };
 }
 
@@ -822,9 +851,11 @@ function toEditableItem(instance: IndicatorInstance): SetIndicatorBody['instance
     dimensionWeight: instance.dimensionWeight,
     sortOrder: instance.sortOrder,
     visibilityScope: instance.visibilityScope,
+    visibilityScopes: normalizeIndicatorVisibilityScopes(instance.visibilityScopes, instance.visibilityScope),
     visibleDepartmentIds: [...instance.visibleDepartmentIds],
     visibleUserIds: [...instance.visibleUserIds],
     alignedObjectiveIds: instance.alignedObjectives.map((objective) => objective.id),
+    alignedParentIndicatorIds: instance.alignedParentIndicators?.map((indicator) => indicator.id) ?? [],
   };
 }
 
@@ -921,9 +952,11 @@ function trimItem(item: SetIndicatorBody['instances'][number], index: number): S
     dimensionWeight: Number(item.dimensionWeight ?? 1),
     sortOrder: index,
     visibilityScope: item.visibilityScope,
+    visibilityScopes: normalizeIndicatorVisibilityScopes(item.visibilityScopes, item.visibilityScope),
     visibleDepartmentIds: [...item.visibleDepartmentIds],
     visibleUserIds: [...item.visibleUserIds],
     alignedObjectiveIds: [...item.alignedObjectiveIds],
+    alignedParentIndicatorIds: [...(item.alignedParentIndicatorIds ?? [])],
   };
 }
 
@@ -992,7 +1025,7 @@ function buildIndicatorBody(action: 'save' | 'submit'): Omit<SetIndicatorBody, '
     return null;
   }
   const emptyCustomIndex = editableItems.findIndex((item) => (
-    item.visibilityScope === 'custom'
+    normalizeIndicatorVisibilityScopes(item.visibilityScopes, item.visibilityScope).includes('custom')
     && item.visibleDepartmentIds.length === 0
     && item.visibleUserIds.length === 0
   ));
@@ -1191,6 +1224,55 @@ function handleAttachmentsChange(attachments: Attachment[]) {
               <el-popover
                 trigger="click"
                 placement="bottom-start"
+                :width="380"
+                @show="loadGoalSettingOptions"
+              >
+                <template #reference>
+                  <el-button
+                    link
+                    type="primary"
+                    :data-testid="`goal-parent-align-open-${index}`"
+                  >
+                    + 对齐绩效直属上级指标
+                  </el-button>
+                </template>
+                <div class="goal-alignment-picker">
+                  <strong>对齐绩效直属上级指标（可多选）</strong>
+                  <el-select
+                    v-model="item.alignedParentIndicatorIds"
+                    multiple
+                    filterable
+                    collapse-tags
+                    collapse-tags-tooltip
+                    :loading="goalSettingOptionsLoading"
+                    :data-testid="`goal-parent-align-select-${index}`"
+                    placeholder="搜索上级指标"
+                  >
+                    <el-option
+                      v-for="candidate in parentIndicatorAlignmentOptions"
+                      :key="candidate.id"
+                      :label="`${candidate.name}（${candidate.owner.name}）`"
+                      :value="candidate.id"
+                    />
+                  </el-select>
+                  <el-empty
+                    v-if="!goalSettingOptionsLoading && parentIndicatorAlignmentOptions.length === 0"
+                    :description="parentIndicatorAlignmentReason || '当前周期暂无可对齐的绩效直属上级指标'"
+                    :image-size="44"
+                  />
+                </div>
+              </el-popover>
+              <el-tag
+                v-for="parentIndicatorId in item.alignedParentIndicatorIds"
+                :key="`parent-${parentIndicatorId}`"
+                size="small"
+                effect="plain"
+              >
+                {{ parentIndicatorLabel(parentIndicatorId, index) }}
+              </el-tag>
+              <el-popover
+                trigger="click"
+                placement="bottom-start"
                 :width="360"
                 @show="loadGoalSettingOptions"
               >
@@ -1240,9 +1322,10 @@ function handleAttachmentsChange(attachments: Attachment[]) {
             </div>
             <IndicatorVisibilityEditor
               class="goal-setting-row__visibility"
-              :class="{ 'is-custom': item.visibilityScope === 'custom' }"
+              :class="{ 'is-custom': item.visibilityScopes?.includes('custom') }"
               :model-value="{
                 visibilityScope: item.visibilityScope,
+                visibilityScopes: item.visibilityScopes || [item.visibilityScope],
                 visibleDepartmentIds: item.visibleDepartmentIds,
                 visibleUserIds: item.visibleUserIds,
               }"
