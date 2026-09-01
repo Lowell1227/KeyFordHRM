@@ -14,10 +14,8 @@ const props = withDefaults(defineProps<{
 
 const emit = defineEmits<{
   'update:schedules': [value: CyclePeriodSchedule[]];
-  'restore-all': [];
 }>();
 
-const hasExceptions = computed(() => props.schedules.some((schedule) => schedule.isException));
 const isCycleSchedule = computed(() => (
   props.schedules.length === 1 && props.schedules[0]?.periodType === 'cycle'
 ));
@@ -70,13 +68,9 @@ function rowIssues(schedule: CyclePeriodSchedule) {
 
 <template>
   <section class="cycle-monthly-schedule-editor" aria-label="月度跟进时间安排">
-    <div
-      v-if="!isCycleSchedule"
-      data-testid="cycle-schedule-column-header"
-      class="cycle-monthly-schedule-grid__header"
-    >
-      <span class="cycle-schedule-help-label">月份
-        <el-tooltip content="下方时间为每月跟进安排，可直接修改。" placement="top">
+    <div data-testid="cycle-schedule-column-header" class="cycle-monthly-schedule-grid__header">
+      <span class="cycle-schedule-help-label">{{ isCycleSchedule ? '周期' : '月份' }}
+        <el-tooltip :content="isCycleSchedule ? '下方时间为整个周期的目标跟进安排。' : '下方时间为每月目标跟进安排。'" placement="top">
           <el-icon
             data-testid="cycle-schedule-help"
             aria-label="查看时间安排说明"
@@ -87,14 +81,6 @@ function rowIssues(schedule: CyclePeriodSchedule) {
       <span>自评开始</span>
       <span>自评截止</span>
       <span>主管评分截止</span>
-      <span class="cycle-monthly-schedule-grid__actions">
-        <el-button
-          v-if="hasExceptions"
-          data-testid="cycle-restore-all"
-          text
-          @click="emit('restore-all')"
-        >全部恢复默认</el-button>
-      </span>
     </div>
 
     <div class="cycle-monthly-schedule-list">
@@ -110,20 +96,9 @@ function rowIssues(schedule: CyclePeriodSchedule) {
               v-if="schedule.isException"
               data-testid="cycle-special-month-dot"
               class="cycle-special-month-dot"
-              aria-label="本月时间已调整"
+              aria-label="时间已调整"
             />
             <strong data-testid="cycle-period-label">{{ periodLabel(schedule) }}</strong>
-            <el-tooltip
-              v-if="isCycleSchedule"
-              content="下方时间为整个考核周期的跟进安排，可直接修改。"
-              placement="top"
-            >
-              <el-icon
-                data-testid="cycle-schedule-help"
-                aria-label="查看时间安排说明"
-                tabindex="0"
-              ><QuestionFilled /></el-icon>
-            </el-tooltip>
             <small
               v-for="issue in rowIssues(schedule)"
               :key="issue.code"
@@ -209,8 +184,7 @@ function rowIssues(schedule: CyclePeriodSchedule) {
   background: var(--el-color-danger);
 }
 
-.cycle-schedule-help-label,
-.cycle-monthly-schedule-grid__actions {
+.cycle-schedule-help-label {
   display: flex;
   align-items: center;
   gap: 5px;
@@ -228,11 +202,6 @@ function rowIssues(schedule: CyclePeriodSchedule) {
   outline: 2px solid var(--el-color-primary-light-5);
   outline-offset: 2px;
   border-radius: 50%;
-}
-
-.cycle-monthly-schedule-grid__actions {
-  min-height: 24px;
-  justify-content: flex-end;
 }
 
 .cycle-monthly-schedule-grid__header,

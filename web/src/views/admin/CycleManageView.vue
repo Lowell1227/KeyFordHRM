@@ -278,11 +278,14 @@ const semiannualPeriodWarning = computed(() => {
   if (dayjs(createForm.endDate).isSame(recommendedEnd, 'day')) return '';
   return `当前期间不是完整的连续六个月，仍可保存，请确认符合本次考核安排。按开始日期建议结束于 ${recommendedEnd.format('YYYY-MM-DD')}。`;
 });
-const createSchedulePlanLabel = computed(() => (createScheduleCustomized.value ? '已调整计划' : '系统默认计划'));
-const createSchedulePeriodLabel = computed(() => {
-  if (!createForm.startDate || !createForm.endDate) return '考核执行期未设置';
-  return `考核执行期 ${dayjs(createForm.startDate).format('YYYY-MM-DD')}—${dayjs(createForm.endDate).format('YYYY-MM-DD')}`;
-});
+const createTimePlanCustomized = computed(() => (
+  createScheduleCustomized.value
+  || (isWorkflowV2Form.value && (
+    scoringPlan.scoringFrequency !== defaultScoringFrequency(createForm.type)
+    || scoringPlan.periodSchedules.some((schedule) => schedule.isException)
+  ))
+));
+const createSchedulePlanLabel = computed(() => (createTimePlanCustomized.value ? '已调整计划' : '系统默认计划'));
 const createNotificationHint = computed(() => {
   if (createForm.notificationMode === 'off') return '';
   if (!notificationSettings.value?.effectiveEnabled) return '钉钉通知总开关已关闭，本周期暂不外发';
@@ -490,7 +493,7 @@ function resetCreateForm() {
   editingCycleOriginal.value = null;
   confirmedScoringContext.value = null;
   advancedCreateVisible.value = false;
-  advancedCreateSections.value = ['schedule'];
+  advancedCreateSections.value = [];
   createScheduleCustomized.value = false;
   createScheduleProvisionalYears.value = [];
   createNameCustomized.value = false;
@@ -520,7 +523,7 @@ function resetCreateForm() {
   createForm.gradeCMaxRatio = 30;
   createForm.gradeDMaxRatio = 10;
   createForm.publishVisibleFields = { ...DEFAULT_VISIBLE_FIELDS };
-  scoringPlan.scoringFrequency = 'monthly';
+  scoringPlan.scoringFrequency = 'cycle';
   scoringPlan.periodSchedules = [];
   scoringPlan.scheduleBlockers = [];
   scoringPlan.scheduleWarnings = [];
@@ -606,8 +609,7 @@ function applyCycleTypePreset(type: CycleType) {
 
 function handleCreateTypeChange(type: CycleType) {
   createScheduleCustomized.value = false;
-  const fixedFrequency = requiredScoringFrequency(type);
-  if (fixedFrequency) scoringPlan.scoringFrequency = fixedFrequency;
+  scoringPlan.scoringFrequency = defaultScoringFrequency(type);
   applyCycleTypePreset(type);
   void refreshScoringPlan({
     reason: '周期类型已调整，需要重新生成评分计划',
@@ -672,6 +674,19 @@ function applyDefaultCreateSchedule() {
   createScheduleCustomized.value = false;
 }
 
+function isCreateScheduleNodeAdjusted(key: CreateScheduleNodeKey): boolean {
+  if (!createForm.startDate || !createForm.endDate || !createForm[key]) return false;
+  const defaultSchedule = buildDefaultCycleSchedule(createForm.startDate, createForm.endDate);
+  return !dayjs(createForm[key]).isSame(dayjs(defaultSchedule[key]));
+}
+
+async function handleRestoreDefaultTimePlan() {
+  applyDefaultCreateSchedule();
+  if (!isWorkflowV2Form.value) return;
+  scoringPlan.scoringFrequency = defaultScoringFrequency(createForm.type);
+  await refreshScoringPlan();
+}
+
 function openCreateDialog() {
   resetCreateForm();
   const pristineForm = JSON.stringify(createForm);
@@ -732,7 +747,7 @@ function openEditCycle(cycle: AssessmentCycle) {
   createNameCustomized.value = true;
   createScheduleCustomized.value = true;
   advancedCreateVisible.value = true;
-  advancedCreateSections.value = ['schedule', 'grades', 'publication'];
+  advancedCreateSections.value = ['grades', 'publication'];
   createInitialSnapshot.value = createFormSnapshot();
   if (editingWorkflowVersion.value === 2) captureConfirmedScoringContext();
   if (!notificationSettings.value) void loadNotificationSettings();
@@ -894,10 +909,6 @@ function getCreateDeadlineValidationMessage(): string | null {
   if (createForm.startDate && createForm.endDate && dayjs(createForm.endDate).isBefore(createForm.startDate)) {
     return `结束日期不能早于开始日期（${formatDate(createForm.startDate)}）。`;
   }
-
-  if (!createForm.goalSettingOpenAt || !createForm.selfEvalOpenAt) {
-    return '请设置目标制定和自评的开放时间。';
-  }
   return null;
 }
 
@@ -926,6 +937,10 @@ function requiredScoringFrequency(type: CycleType): ScoringFrequency | null {
   if (type === 'monthly') return 'monthly';
   if (type === 'custom' || type === 'probation') return 'cycle';
   return null;
+}
+
+function defaultScoringFrequency(type: CycleType): ScoringFrequency {
+  return requiredScoringFrequency(type) ?? 'cycle';
 }
 
 async function confirmScheduleRegeneration(reason: string): Promise<boolean> {
@@ -1011,6 +1026,24 @@ function scheduleNodeIssues(key: CreateScheduleNodeKey): CycleScheduleIssue[] {
     .filter((issue) => !issue.periodKey && codes.includes(issue.code));
 }
 
+function firstMissingCreateScheduleNode(): CreateScheduleNodeKey | undefined {
+  const nodes = isWorkflowV2Form.value
+    ? [...PREPARATION_SCHEDULE_NODES, ...WORKFLOW_V2_FINAL_SCHEDULE_NODES]
+    : CREATE_SCHEDULE_NODES;
+  return nodes.find((node) => !createForm[node.key])?.key;
+}
+
+async function focusFirstMissingCreateScheduleNode() {
+  const key = firstMissingCreateScheduleNode();
+  if (!key) return;
+  await nextTick();
+  const input = document.querySelector<HTMLInputElement>(
+    `.cycle-create-dialog [data-schedule-node-key="${key}"] input`,
+  );
+  input?.scrollIntoView({ block: 'center' });
+  input?.focus();
+}
+
 function trackSchedulePreview(promise: Promise<boolean>): Promise<boolean> {
   activeSchedulePreview = promise;
   void promise.then(() => {
@@ -1090,10 +1123,6 @@ function handleScoringSchedulesUpdate(schedules: CyclePeriodSchedule[]) {
   invalidateSchedulePreview();
   if (hasIncompleteScoringSchedule()) return;
   scheduleScoringPreview('', 'validate');
-}
-
-async function handleRestoreAllScoringSchedules() {
-  await refreshScoringPlan({ reason: '将恢复 API 生成的全部默认评分计划' });
 }
 
 async function focusFirstInvalidScheduleRow() {
@@ -1190,6 +1219,11 @@ async function handleCreate(openWorkspace = false) {
 
   const validationMessage = getCreateDeadlineValidationMessage();
   if (validationMessage) {
+    return;
+  }
+
+  if (firstMissingCreateScheduleNode()) {
+    await focusFirstMissingCreateScheduleNode();
     return;
   }
 
@@ -1951,36 +1985,121 @@ onMounted(() => {
           />
         </el-form-item>
 
-        <section
-          v-if="isWorkflowV2Form"
-          class="cycle-create-scoring-plan"
-          data-testid="cycle-review-plan"
-        >
-          <CycleScoringSettings
-            :cycle-type="createForm.type"
-            :scoring-frequency="scoringPlan.scoringFrequency"
-            @update:scoring-frequency="scoringPlan.scoringFrequency = $event"
-            @change="handleScoringFrequencyChange"
-          />
-          <CycleMonthlyScheduleEditor
-            :schedules="scoringPlan.periodSchedules"
-            :warnings="scoringPlan.scheduleWarnings"
-            :blockers="scoringPlan.scheduleBlockers"
-            @update:schedules="handleScoringSchedulesUpdate"
-            @restore-all="handleRestoreAllScoringSchedules"
-          />
-          <div class="cycle-auto-plan" data-testid="cycle-plan-summary">
-            <div class="cycle-auto-plan__heading">
-              <el-tag size="small" :type="createScheduleCustomized ? 'warning' : 'info'" effect="light">
-                {{ createSchedulePlanLabel }}
-              </el-tag>
-              <span>按系统工作日日历生成</span>
-              <el-tooltip content="默认时间按系统已维护的工作日日历顺序生成，人工调整时可选择任意时间" placement="top">
-                <el-icon><QuestionFilled /></el-icon>
+        <section class="cycle-time-plan" data-testid="cycle-time-plan" aria-labelledby="cycle-time-plan-title">
+          <div class="cycle-time-plan__heading">
+            <div>
+              <strong id="cycle-time-plan-title">时间节点
+                <el-tooltip content="系统会生成建议时间；缺失时间会阻断，顺序异常仅提醒，相同时间允许保存" placement="top">
+                  <el-icon><QuestionFilled /></el-icon>
+                </el-tooltip>
+              </strong>
+              <span data-testid="cycle-plan-summary" :class="{ 'is-adjusted': createTimePlanCustomized }">{{ createSchedulePlanLabel }}</span>
+            </div>
+            <el-button data-testid="cycle-restore-default-plan" text type="primary" @click="handleRestoreDefaultTimePlan">
+              恢复默认计划
+            </el-button>
+          </div>
+
+          <section class="schedule-stage" data-testid="cycle-schedule-stage" aria-labelledby="schedule-stage-preparation">
+            <div class="schedule-stage__title">
+              <span class="schedule-stage__phase-number">1</span>
+              <strong id="schedule-stage-preparation">目标准备</strong>
+              <el-tooltip content="考核开始前完成目标设定" placement="top">
+                <el-icon class="schedule-stage__help"><QuestionFilled /></el-icon>
               </el-tooltip>
             </div>
-            <span>目标制定开放 {{ formatDateTimeForMessage(createForm.goalSettingOpenAt) }} · 已生成 {{ scoringPlan.periodSchedules.length }} 期月度跟进时间</span>
-          </div>
+            <div
+              v-for="node in PREPARATION_SCHEDULE_NODES"
+              :key="node.key"
+              class="schedule-node"
+              :class="{ 'is-missing': !createForm[node.key] }"
+              :data-schedule-node-key="node.key"
+              data-testid="cycle-schedule-node"
+            >
+              <div class="schedule-node__copy">
+                <strong><span v-if="isCreateScheduleNodeAdjusted(node.key)" class="cycle-adjusted-dot" aria-label="时间已调整" />{{ node.label }}</strong>
+                <small>{{ node.helper }}</small>
+              </div>
+              <div class="schedule-node__input">
+                <el-date-picker
+                  v-model="createForm[node.key]"
+                  type="datetime"
+                  :placeholder="`选择${node.label}`"
+                  @change="handleCreateScheduleChange"
+                />
+                <small v-if="!createForm[node.key]" class="schedule-node__required">必填</small>
+                <small
+                  v-for="issue in scheduleNodeIssues(node.key)"
+                  :key="issue.code"
+                  class="schedule-node__issue"
+                >{{ issue.message }}</small>
+              </div>
+            </div>
+          </section>
+
+          <section
+            v-if="isWorkflowV2Form"
+            class="schedule-stage schedule-stage--tracking"
+            data-testid="cycle-schedule-stage"
+            aria-labelledby="schedule-stage-tracking"
+          >
+            <div class="schedule-stage__title schedule-stage__title--tracking">
+              <span class="schedule-stage__phase-number">2</span>
+              <strong id="schedule-stage-tracking">目标跟进</strong>
+              <el-tooltip content="每月或者每个周期进行一次目标复盘和评分" placement="top">
+                <el-icon class="schedule-stage__help"><QuestionFilled /></el-icon>
+              </el-tooltip>
+              <CycleScoringSettings
+                :cycle-type="createForm.type"
+                :scoring-frequency="scoringPlan.scoringFrequency"
+                @update:scoring-frequency="scoringPlan.scoringFrequency = $event"
+                @change="handleScoringFrequencyChange"
+              />
+            </div>
+            <CycleMonthlyScheduleEditor
+              :schedules="scoringPlan.periodSchedules"
+              :warnings="scoringPlan.scheduleWarnings"
+              :blockers="scoringPlan.scheduleBlockers"
+              @update:schedules="handleScoringSchedulesUpdate"
+            />
+          </section>
+
+          <section class="schedule-stage" data-testid="cycle-schedule-stage" aria-labelledby="schedule-stage-result">
+            <div class="schedule-stage__title">
+              <span class="schedule-stage__phase-number">{{ isWorkflowV2Form ? 3 : 2 }}</span>
+              <strong id="schedule-stage-result">结果考评</strong>
+              <el-tooltip :content="isWorkflowV2Form ? '最后一期评分后完成结果审核和公示' : '考核结束后完成结果审核和公示'" placement="top">
+                <el-icon class="schedule-stage__help"><QuestionFilled /></el-icon>
+              </el-tooltip>
+            </div>
+            <div
+              v-for="node in isWorkflowV2Form ? WORKFLOW_V2_FINAL_SCHEDULE_NODES : RESULT_SCHEDULE_NODES"
+              :key="node.key"
+              class="schedule-node"
+              :class="{ 'is-missing': !createForm[node.key] }"
+              :data-schedule-node-key="node.key"
+              data-testid="cycle-schedule-node"
+            >
+              <div class="schedule-node__copy">
+                <strong><span v-if="isCreateScheduleNodeAdjusted(node.key)" class="cycle-adjusted-dot" aria-label="时间已调整" />{{ node.label }}</strong>
+                <small>{{ node.helper }}</small>
+              </div>
+              <div class="schedule-node__input">
+                <el-date-picker
+                  v-model="createForm[node.key]"
+                  type="datetime"
+                  :placeholder="`选择${node.label}`"
+                  @change="handleCreateScheduleChange"
+                />
+                <small v-if="!createForm[node.key]" class="schedule-node__required">必填</small>
+                <small
+                  v-for="issue in scheduleNodeIssues(node.key)"
+                  :key="issue.code"
+                  class="schedule-node__issue"
+                >{{ issue.message }}</small>
+              </div>
+            </div>
+          </section>
         </section>
 
         <el-form-item label="考核范围" prop="participantDeptIds" class="cycle-participant-field">
@@ -2017,19 +2136,6 @@ onMounted(() => {
           </el-radio-group>
         </el-form-item>
 
-        <div v-if="!isWorkflowV2Form" class="cycle-auto-plan cycle-auto-plan--standalone" data-testid="cycle-plan-summary">
-          <div class="cycle-auto-plan__heading">
-            <el-tag size="small" :type="createScheduleCustomized ? 'warning' : 'info'" effect="light">
-              {{ createSchedulePlanLabel }}
-            </el-tag>
-            <span>按系统工作日日历生成</span>
-            <el-tooltip content="默认时间按系统已维护的工作日日历顺序生成，人工调整时可选择任意时间" placement="top">
-              <el-icon><QuestionFilled /></el-icon>
-            </el-tooltip>
-          </div>
-          <span>目标制定开放 {{ formatDateTimeForMessage(createForm.goalSettingOpenAt) }} · 员工自评开放 {{ formatDateTimeForMessage(createForm.selfEvalOpenAt) }}</span>
-        </div>
-
         <button
           type="button"
           class="advanced-create-toggle"
@@ -2047,90 +2153,6 @@ onMounted(() => {
           :class="{ 'is-visible': advancedCreateVisible }"
         >
           <el-collapse v-model="advancedCreateSections" class="advanced-create-groups">
-            <el-collapse-item name="schedule">
-              <template #title>
-                <div data-testid="cycle-advanced-schedule" class="advanced-group-title">
-                  <strong>时间节点
-                    <el-tooltip content="默认随考核期间按系统工作日日历生成；调整任一节点后标记为已调整计划" placement="top">
-                      <el-icon><QuestionFilled /></el-icon>
-                    </el-tooltip>
-                  </strong>
-                  <span>{{ createSchedulePlanLabel }}</span>
-                </div>
-              </template>
-              <div class="advanced-group-actions">
-                <span>节点按实际业务顺序执行，开放时间为 09:00，截止时间为 18:00</span>
-                <el-button text type="primary" @click.stop="applyDefaultCreateSchedule">恢复默认计划</el-button>
-              </div>
-              <section class="schedule-stage" aria-labelledby="schedule-stage-preparation">
-                <div class="schedule-stage__title">
-                  <strong id="schedule-stage-preparation">目标准备</strong>
-                  <span>考核开始前完成</span>
-                </div>
-                <div
-                  v-for="node in PREPARATION_SCHEDULE_NODES"
-                  :key="node.key"
-                  class="schedule-node"
-                  data-testid="cycle-schedule-node"
-                >
-                  <span class="schedule-node__number">{{ node.number }}</span>
-                  <div class="schedule-node__copy">
-                    <strong>{{ node.label }}</strong>
-                    <small>{{ node.helper }}</small>
-                  </div>
-                  <div class="schedule-node__input">
-                    <el-date-picker
-                      v-model="createForm[node.key]"
-                      type="datetime"
-                      :placeholder="`选择${node.label}`"
-                      @change="handleCreateScheduleChange"
-                    />
-                    <small
-                      v-for="issue in scheduleNodeIssues(node.key)"
-                      :key="issue.code"
-                      class="schedule-node__issue"
-                    >{{ issue.message }}</small>
-                  </div>
-                </div>
-              </section>
-
-              <div class="schedule-period" data-testid="cycle-schedule-period">
-                {{ createSchedulePeriodLabel }}
-              </div>
-
-              <section class="schedule-stage" aria-labelledby="schedule-stage-result">
-                <div class="schedule-stage__title">
-                  <strong id="schedule-stage-result">{{ isWorkflowV2Form ? '最终结果' : '评价与结果' }}</strong>
-                  <span>{{ isWorkflowV2Form ? '最后一期评分后完成' : '考核结束后依次完成' }}</span>
-                </div>
-                <div
-                  v-for="node in isWorkflowV2Form ? WORKFLOW_V2_FINAL_SCHEDULE_NODES : RESULT_SCHEDULE_NODES"
-                  :key="node.key"
-                  class="schedule-node"
-                  data-testid="cycle-schedule-node"
-                >
-                  <span class="schedule-node__number">{{ node.number }}</span>
-                  <div class="schedule-node__copy">
-                    <strong>{{ node.label }}</strong>
-                    <small>{{ node.helper }}</small>
-                  </div>
-                  <div class="schedule-node__input">
-                    <el-date-picker
-                      v-model="createForm[node.key]"
-                      type="datetime"
-                      :placeholder="`选择${node.label}`"
-                      @change="handleCreateScheduleChange"
-                    />
-                    <small
-                      v-for="issue in scheduleNodeIssues(node.key)"
-                      :key="issue.code"
-                      class="schedule-node__issue"
-                    >{{ issue.message }}</small>
-                  </div>
-                </div>
-              </section>
-            </el-collapse-item>
-
             <el-collapse-item name="grades">
               <template #title>
                 <div data-testid="cycle-advanced-grades" class="advanced-group-title">
@@ -2483,22 +2505,52 @@ onMounted(() => {
 
 .cycle-basic-fields { order: 1; }
 .cycle-period-field { order: 2; }
-.cycle-create-scoring-plan,
-.cycle-auto-plan--standalone { order: 3; }
-.cycle-participant-field { order: 5; }
-.cycle-notification-field { order: 6; }
+.cycle-time-plan { order: 3; }
+.cycle-participant-field { order: 4; }
+.cycle-notification-field { order: 5; }
 
-.cycle-create-scoring-plan {
+.cycle-time-plan {
   display: grid;
-  overflow: hidden;
+  gap: 12px;
   margin: 0 0 18px 108px;
+  padding: 14px;
   border: 1px solid var(--el-border-color-lighter);
-  border-radius: 8px;
+  border-radius: 10px;
 }
 
-.cycle-create-scoring-plan > :deep(.el-alert) {
-  width: auto;
-  margin: 0 14px 12px;
+.cycle-time-plan__heading,
+.cycle-time-plan__heading > div,
+.cycle-time-plan__heading strong {
+  display: flex;
+  align-items: center;
+}
+
+.cycle-time-plan__heading {
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.cycle-time-plan__heading > div,
+.cycle-time-plan__heading strong {
+  gap: 7px;
+}
+
+.cycle-time-plan__heading strong {
+  color: var(--el-text-color-primary);
+  font-size: 15px;
+}
+
+.cycle-time-plan__heading > div > span {
+  padding: 2px 7px;
+  color: var(--el-color-primary);
+  font-size: 12px;
+  background: var(--el-color-primary-light-9);
+  border-radius: 4px;
+}
+
+.cycle-time-plan__heading > div > span.is-adjusted {
+  color: var(--el-color-warning-dark-2);
+  background: var(--el-color-warning-light-9);
 }
 
 .cycle-semiannual-period {
@@ -2576,7 +2628,7 @@ onMounted(() => {
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 8px;
   cursor: pointer;
-  order: 7;
+  order: 6;
 }
 
 .advanced-create-toggle span {
@@ -2599,14 +2651,10 @@ onMounted(() => {
 .advanced-create-fields :deep(.el-collapse-item) {
   width: calc(100% - 108px);
   margin-left: 108px;
-  order: 8;
+  order: 7;
 }
 
-.advanced-create-fields :deep(.el-collapse-item:first-child) {
-  order: 4;
-}
-
-.advanced-create-fields:not(.is-visible) :deep(.el-collapse-item:not(:first-child)) {
+.advanced-create-fields:not(.is-visible) {
   display: none;
 }
 
@@ -2719,10 +2767,21 @@ onMounted(() => {
 
 .schedule-stage__title {
   display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
+  align-items: center;
+  gap: 8px;
   padding: 0 2px 4px;
+}
+
+.schedule-stage__phase-number {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  place-items: center;
+  color: #fff;
+  font-size: 12px;
+  background: var(--el-color-primary);
+  border-radius: 50%;
 }
 
 .schedule-stage__title strong {
@@ -2730,14 +2789,18 @@ onMounted(() => {
   font-size: 14px;
 }
 
-.schedule-stage__title span {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
+.schedule-stage__help {
+  color: var(--el-text-color-placeholder);
+  cursor: help;
+}
+
+.schedule-stage__title--tracking :deep(.cycle-scoring-settings) {
+  margin-left: auto;
 }
 
 .schedule-node {
   display: grid;
-  grid-template-columns: 36px minmax(150px, 1fr) minmax(210px, 250px);
+  grid-template-columns: minmax(150px, 1fr) minmax(210px, 280px);
   align-items: center;
   gap: 12px;
   min-width: 0;
@@ -2747,18 +2810,6 @@ onMounted(() => {
   border-radius: 8px;
 }
 
-.schedule-node__number {
-  display: grid;
-  width: 32px;
-  height: 32px;
-  color: var(--el-color-primary);
-  font-size: 12px;
-  font-weight: 700;
-  place-items: center;
-  background: var(--el-color-primary-light-9);
-  border-radius: 50%;
-}
-
 .schedule-node__copy {
   display: grid;
   gap: 3px;
@@ -2766,8 +2817,19 @@ onMounted(() => {
 }
 
 .schedule-node__copy strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   color: var(--el-text-color-primary);
   font-size: 13px;
+}
+
+.cycle-adjusted-dot {
+  width: 7px;
+  height: 7px;
+  flex: 0 0 7px;
+  background: var(--el-color-danger);
+  border-radius: 50%;
 }
 
 .schedule-node__copy small {
@@ -2788,20 +2850,18 @@ onMounted(() => {
   line-height: 1.35;
 }
 
-.schedule-node :deep(.el-date-editor) {
-  width: 100%;
+.schedule-node__required {
+  color: var(--el-color-danger);
+  font-size: 12px;
+  line-height: 1.35;
 }
 
-.schedule-period {
-  margin: 12px 0;
-  padding: 11px 14px;
-  color: var(--el-color-primary-dark-2);
-  font-size: 13px;
-  font-weight: 600;
-  text-align: center;
-  background: var(--el-color-primary-light-9);
-  border: 1px dashed var(--el-color-primary-light-5);
-  border-radius: 8px;
+.schedule-node.is-missing :deep(.el-input__wrapper) {
+  box-shadow: 0 0 0 1px var(--el-color-danger) inset;
+}
+
+.schedule-node :deep(.el-date-editor) {
+  width: 100%;
 }
 
 .advanced-group-tip {
@@ -3053,22 +3113,28 @@ onMounted(() => {
   }
 
   .schedule-node {
-    grid-template-columns: 32px minmax(0, 1fr);
-    gap: 8px 10px;
+    grid-template-columns: 1fr;
+    gap: 8px;
     padding: 10px;
   }
 
-  .schedule-node__number {
-    width: 28px;
-    height: 28px;
-  }
-
   .schedule-node__input {
-    grid-column: 2;
+    grid-column: 1;
   }
 
-  .cycle-create-scoring-plan {
+  .cycle-time-plan {
     margin-left: 0;
+  }
+
+  .cycle-time-plan__heading,
+  .schedule-stage__title--tracking {
+    align-items: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .schedule-stage__title--tracking :deep(.cycle-scoring-settings) {
+    width: 100%;
+    margin-left: 34px;
   }
 
   .notification-mode-options {

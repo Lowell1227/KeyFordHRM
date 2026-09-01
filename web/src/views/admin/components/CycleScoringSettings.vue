@@ -77,7 +77,7 @@ watch(
 
 <style scoped>
 .cycle-scoring-settings {
-  padding: 14px;
+  min-width: 0;
 }
 
 .cycle-scoring-settings__control {
@@ -107,6 +107,10 @@ watch(
 }
 
 @media (max-width: 767px) {
+  .cycle-scoring-settings {
+    width: 100%;
+  }
+
   .cycle-scoring-settings__control {
     flex-wrap: wrap;
   }

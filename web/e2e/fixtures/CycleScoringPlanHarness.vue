@@ -8,14 +8,14 @@ import type { CycleType, ScoringFrequency } from '../../src/types/enums';
 
 const visible = ref(false);
 const cycleType = ref<CycleType>('quarterly');
-const scoringFrequency = ref<ScoringFrequency>('monthly');
+const scoringFrequency = ref<ScoringFrequency>('cycle');
 const schedules = ref<CyclePeriodSchedule[]>([]);
-const defaultSchedules = ref<CyclePeriodSchedule[]>([]);
-const restoreOneCount = ref(0);
-const restoreAllCount = ref(0);
 const immutableUpdate = ref('array:false,row:false');
-const warnings: CycleScheduleIssue[] = [{ code: 'overlap_warning', periodKey: '2027-02', message: '该月与相邻计划有重叠风险' }];
-const blockers: CycleScheduleIssue[] = [{ code: 'manager_due_before_self', periodKey: '2027-02', message: '主管完成时间不得早于员工完成时间' }];
+const warnings: CycleScheduleIssue[] = [
+  { code: 'overlap_warning', periodKey: '2027-02', message: '该月与相邻计划有重叠风险' },
+  { code: 'manager_due_before_self', periodKey: '2027-02', message: '主管评分早于自评截止' },
+];
+const blockers: CycleScheduleIssue[] = [];
 
 function cloneSchedules(value: CyclePeriodSchedule[]) {
   return value.map((schedule) => ({ ...schedule }));
@@ -28,14 +28,12 @@ async function preview(type: CycleType, frequency: ScoringFrequency) {
     startDate: '2027-01-01',
     endDate: '2027-12-31',
   });
-  defaultSchedules.value = result.schedules.map((schedule) => ({ ...schedule, isException: false }));
   schedules.value = cloneSchedules(result.schedules);
 }
 
 function selectType(type: CycleType) {
   cycleType.value = type;
-  if (type === 'monthly') scoringFrequency.value = 'monthly';
-  if (type === 'custom' || type === 'probation') scoringFrequency.value = 'cycle';
+  scoringFrequency.value = type === 'monthly' ? 'monthly' : 'cycle';
   void preview(type, scoringFrequency.value);
 }
 
@@ -47,20 +45,6 @@ function updateFrequency(frequency: ScoringFrequency) {
 function updateSchedules(value: CyclePeriodSchedule[]) {
   immutableUpdate.value = `array:${value !== schedules.value}:row:${value[0] !== schedules.value[0]}`;
   schedules.value = value;
-}
-
-function restoreOne(schedule: CyclePeriodSchedule) {
-  const defaultSchedule = defaultSchedules.value.find((item) => item.periodKey === schedule.periodKey);
-  if (!defaultSchedule) return;
-  schedules.value = schedules.value.map((item) => (
-    item.periodKey === schedule.periodKey ? { ...defaultSchedule } : { ...item }
-  ));
-  restoreOneCount.value += 1;
-}
-
-function restoreAll() {
-  schedules.value = cloneSchedules(defaultSchedules.value);
-  restoreAllCount.value += 1;
 }
 
 </script>
@@ -86,12 +70,8 @@ function restoreAll() {
         :warnings="warnings"
         :blockers="blockers"
         @update:schedules="updateSchedules"
-        @restore-one="restoreOne"
-        @restore-all="restoreAll"
       />
       <output data-testid="cycle-immutable-update">{{ immutableUpdate }}</output>
-      <output data-testid="cycle-restore-one-count">{{ restoreOneCount }}</output>
-      <output data-testid="cycle-restore-all-count">{{ restoreAllCount }}</output>
     </section>
   </main>
 </template>

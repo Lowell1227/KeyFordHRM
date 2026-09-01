@@ -426,7 +426,7 @@ test.describe('cycle launch entry UX', () => {
     await page.getByTestId('cycle-create').click();
 
     const dialog = page.getByRole('dialog', { name: '新建考核周期' });
-    const timeBox = await dialog.getByTestId('cycle-advanced-schedule').boundingBox();
+    const timeBox = await dialog.getByTestId('cycle-time-plan').boundingBox();
     const scopeBox = await dialog.getByTestId('cycle-scope-picker-open').boundingBox();
     const notificationBox = await dialog.getByTestId('cycle-notification-off').boundingBox();
     expect(timeBox).not.toBeNull();
@@ -831,7 +831,8 @@ test.describe('cycle launch entry UX', () => {
     await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2027 年度绩效考核');
     await expect(dialog.getByPlaceholder('开始日期')).toHaveValue('2027-01-01');
     await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2027-12-31');
-    await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-12-18 09:00');
+    await expect(dialog.getByTestId('cycle-schedule-node').first().locator('.el-date-editor input'))
+      .toHaveValue('2026-12-18 09:00:00');
   });
 
   test('links half-year type to the next complete natural half-year', async ({ page }) => {
@@ -847,7 +848,8 @@ test.describe('cycle launch entry UX', () => {
     await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2027 上半年绩效考核');
     await expect(dialog.getByPlaceholder('开始日期')).toHaveValue('2027-01-01');
     await expect(dialog.getByPlaceholder('结束日期')).toHaveValue('2027-06-30');
-    await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-12-18 09:00');
+    await expect(dialog.getByTestId('cycle-schedule-node').first().locator('.el-date-editor input'))
+      .toHaveValue('2026-12-18 09:00:00');
   });
 
   test('shows saved half-year cycles and sends the half-year list filter', async ({ page }) => {
@@ -991,31 +993,46 @@ test.describe('cycle launch entry UX', () => {
     await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '月度' }).click();
 
     await expect(dialog.getByPlaceholder('系统自动生成，可直接修改')).toHaveValue('2026年10月绩效考核');
-    await expect(page.getByTestId('cycle-plan-summary')).toContainText('2026-09-17 09:00');
+    await expect(dialog.getByTestId('cycle-schedule-node').first().locator('.el-date-editor input'))
+      .toHaveValue('2026-09-17 09:00:00');
   });
 
-  test('uses the included 2027 calendar without showing fallback guidance', async ({ page }) => {
+  test('keeps all time settings in one visible three-stage plan with cycle tracking by default', async ({ page }) => {
     await mockCycleLaunchPage(page, { cycles: [] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
 
-    await expect(page.getByTestId('cycle-plan-summary')).toContainText('系统默认计划');
-    await expect(page.getByTestId('cycle-plan-summary')).toContainText('按系统工作日日历生成');
-
-    await page.getByTestId('cycle-create-advanced').click();
-    await page.getByTestId('cycle-advanced-schedule').click();
-
+    const timePlan = page.getByTestId('cycle-time-plan');
+    await expect(timePlan).toBeVisible();
+    await expect(timePlan.getByTestId('cycle-plan-summary')).toContainText('系统默认计划');
     await expect(page.getByTestId('cycle-schedule-calendar-warning')).toHaveCount(0);
-    await expect(page.getByTestId('cycle-schedule-period')).toHaveText('考核执行期 2026-10-01—2026-12-31');
+    await expect(page.getByTestId('cycle-schedule-period')).toHaveCount(0);
+
+    const stages = timePlan.getByTestId('cycle-schedule-stage');
+    await expect(stages).toHaveCount(3);
+    await expect(stages.nth(0)).toContainText('目标准备');
+    await expect(stages.nth(1)).toContainText('目标跟进');
+    await expect(stages.nth(2)).toContainText('结果考评');
+    await expect(timePlan.getByTestId('cycle-monthly-review-switch').locator('input')).not.toBeChecked();
+    await expect(timePlan.getByTestId('cycle-schedule-column-header')).toContainText('周期');
+    await expect(timePlan.getByTestId('cycle-month-schedule-row')).toHaveCount(1);
+    await expect(timePlan.getByTestId('cycle-period-label')).toHaveText('整个周期');
 
     const nodes = page.getByTestId('cycle-schedule-node');
     await expect(nodes).toHaveCount(6);
-    await expect(nodes.nth(0)).toContainText('01');
     await expect(nodes.nth(0)).toContainText('目标制定开放');
-    await expect(nodes.nth(3)).toContainText('04');
     await expect(nodes.nth(3)).toContainText('HR校准截止');
-    await expect(nodes.nth(5)).toContainText('06');
     await expect(nodes.nth(5)).toContainText('结果公示截止');
+    await expect(timePlan.locator('.schedule-node__number')).toHaveCount(0);
+
+    const scopeField = page.locator('.cycle-participant-field');
+    const notificationField = page.locator('.cycle-notification-field');
+    expect(await timePlan.evaluate((element, scope) => (
+      Boolean(element.compareDocumentPosition(scope as Node) & Node.DOCUMENT_POSITION_FOLLOWING)
+    ), await scopeField.elementHandle())).toBe(true);
+    expect(await scopeField.evaluate((element, notification) => (
+      Boolean(element.compareDocumentPosition(notification as Node) & Node.DOCUMENT_POSITION_FOLLOWING)
+    ), await notificationField.elementHandle())).toBe(true);
 
     const expectedTimes = [
       '2026-09-17 09:00:00',
@@ -1031,14 +1048,37 @@ test.describe('cycle launch entry UX', () => {
     }
   });
 
+  test('restores the complete default time plan to one cycle schedule', async ({ page }) => {
+    await mockCycleLaunchPage(page, { cycles: [] });
+    await page.goto('/cycles?group=attention');
+    await page.getByTestId('cycle-create').click();
+
+    const timePlan = page.getByTestId('cycle-time-plan');
+    const monthlySwitch = timePlan.getByTestId('cycle-monthly-review-switch');
+    await monthlySwitch.click();
+    await expect(monthlySwitch.locator('input')).toBeChecked();
+    await expect(timePlan.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
+
+    const firstNode = timePlan.getByTestId('cycle-schedule-node').first();
+    const firstNodeInput = firstNode.locator('.el-date-editor input');
+    await firstNodeInput.fill('2026-09-20 09:00:00');
+    await firstNodeInput.press('Enter');
+    await expect(firstNode.locator('.cycle-adjusted-dot')).toHaveCount(1);
+
+    await timePlan.getByTestId('cycle-restore-default-plan').click();
+    await expect(monthlySwitch.locator('input')).not.toBeChecked();
+    await expect(timePlan.getByTestId('cycle-month-schedule-row')).toHaveCount(1);
+    await expect(timePlan.getByTestId('cycle-period-label')).toHaveText('整个周期');
+    await expect(timePlan.locator('.cycle-adjusted-dot, .cycle-special-month-dot')).toHaveCount(0);
+    await expect(timePlan.getByTestId('cycle-plan-summary')).toContainText('系统默认计划');
+  });
+
   test('labels the plan clearly after HR customizes a generated time node', async ({ page }) => {
     await mockCycleLaunchPage(page, { cycles: [] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
-    await page.getByTestId('cycle-create-advanced').click();
-    await page.getByTestId('cycle-advanced-schedule').click();
 
-    const goalOpenInput = page.getByTestId('cycle-advanced-fields').locator('.el-date-editor input').first();
+    const goalOpenInput = page.getByTestId('cycle-time-plan').locator('.el-date-editor input').first();
     await goalOpenInput.fill('2026-09-20 09:00:00');
     await goalOpenInput.press('Enter');
 
@@ -1087,8 +1127,6 @@ test.describe('cycle launch entry UX', () => {
     await mockCycleLaunchPage(page, { cycles: [] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
-    await page.getByTestId('cycle-create-advanced').click();
-    await page.getByTestId('cycle-advanced-schedule').click();
 
     const nodes = page.getByTestId('cycle-schedule-node');
     const goalOpenInput = nodes.nth(0).locator('.el-date-editor input');
@@ -1106,8 +1144,6 @@ test.describe('cycle launch entry UX', () => {
     await mockCycleLaunchPage(page, { cycles: [], createBodies });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
-    await page.getByTestId('cycle-create-advanced').click();
-    await page.getByTestId('cycle-advanced-schedule').click();
 
     const nodes = page.getByTestId('cycle-schedule-node');
     const preparationTimes = [
@@ -1191,13 +1227,14 @@ test.describe('cycle launch entry UX', () => {
     await expect(dialog.getByTestId('cycle-plan-summary')).toContainText('已调整计划');
   });
 
-  test('keeps advanced groups collapsed with useful summaries', async ({ page }) => {
+  test('keeps time settings visible and advanced groups limited to secondary settings', async ({ page }) => {
     await mockCycleLaunchPage(page, { cycles: [] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
     await page.getByTestId('cycle-create-advanced').click();
 
-    await expect(page.getByTestId('cycle-advanced-schedule')).toContainText('系统默认计划');
+    await expect(page.getByTestId('cycle-time-plan')).toContainText('系统默认计划');
+    await expect(page.getByTestId('cycle-advanced-schedule')).toHaveCount(0);
     await expect(page.getByTestId('cycle-advanced-grades')).toContainText('A 20%');
     await expect(page.getByTestId('cycle-advanced-publication')).toContainText('4 项可见');
     await expect(page.getByText('目标制定开放', { exact: true })).toBeVisible();
@@ -1216,7 +1253,6 @@ test.describe('cycle launch entry UX', () => {
     const typeColumn = await firstRowColumns.nth(1).boundingBox();
     expect(typeColumn?.y).toBeGreaterThanOrEqual((nameColumn?.y ?? 0) + (nameColumn?.height ?? 0) - 1);
     await page.getByTestId('cycle-create-advanced').click();
-    await page.getByTestId('cycle-advanced-schedule').click();
 
     await expect(page.getByText('目标制定开放', { exact: true })).toBeVisible();
     await expect(page.getByTestId('cycle-create-save-and-view')).toHaveText('下一步');
