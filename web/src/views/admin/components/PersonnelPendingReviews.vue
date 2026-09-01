@@ -199,6 +199,14 @@ function employeeChangeSummary(row: EmployeeDataReview): string {
   return changes.length ? changes.join('、') : '员工档案信息复核';
 }
 
+function employeeChangeType(row: EmployeeDataReview): string {
+  const profilePending = row.profileReviewStatus === 'pending';
+  const performancePending = row.performanceReviewStatus === 'pending';
+  if (profilePending && performancePending) return '档案及关系';
+  if (performancePending) return '绩效关系';
+  return '档案变更';
+}
+
 function formatDateTime(value?: string | null): string {
   if (!value) return '-';
   return new Intl.DateTimeFormat('zh-CN', {
@@ -460,11 +468,27 @@ onMounted(async () => {
           </template>
         </el-table-column>
         <el-table-column type="selection" width="48" :selectable="reviewIsPending" />
-        <el-table-column prop="employeeName" label="员工" min-width="130" />
+        <el-table-column label="变更类型" width="120"><template #default="{ row }"><el-tag type="warning" effect="plain">{{ employeeChangeType(row as EmployeeDataReview) }}</el-tag></template></el-table-column>
+        <el-table-column prop="employeeName" label="审核对象" min-width="150" />
+        <el-table-column label="变更内容" min-width="300">
+          <template #default="{ row }">
+            <div class="employee-change-content">
+              <div>{{ employeeChangeSummary(row as EmployeeDataReview) }}</div>
+              <div class="employee-change-content__statuses">
+                <span v-if="(row as EmployeeDataReview).profileReviewStatus !== 'not_required'">
+                  基础档案
+                  <el-tag size="small" :type="reviewStatusType(row as EmployeeDataReview, 'profile')" effect="plain">{{ reviewStatusLabel(row as EmployeeDataReview, 'profile') }}</el-tag>
+                </span>
+                <span v-if="(row as EmployeeDataReview).performanceReviewStatus !== 'not_required'">
+                  绩效关系
+                  <el-tag size="small" :type="reviewStatusType(row as EmployeeDataReview, 'performance')" effect="plain">{{ reviewStatusLabel(row as EmployeeDataReview, 'performance') }}</el-tag>
+                </span>
+              </div>
+              <div v-if="(row as EmployeeDataReview).validationWarnings?.length" class="review-warning">{{ (row as EmployeeDataReview).validationWarnings?.join('；') }}</div>
+            </div>
+          </template>
+        </el-table-column>
         <el-table-column label="提交人" min-width="120"><template #default="{ row }">{{ (row as EmployeeDataReview).createdBy?.name || '系统导入' }}</template></el-table-column>
-        <el-table-column label="基础档案审核" min-width="130"><template #default="{ row }"><el-tag :type="reviewStatusType(row as EmployeeDataReview, 'profile')" effect="plain">{{ reviewStatusLabel(row as EmployeeDataReview, 'profile') }}</el-tag></template></el-table-column>
-        <el-table-column label="绩效关系审核" min-width="130"><template #default="{ row }"><el-tag :type="reviewStatusType(row as EmployeeDataReview, 'performance')" effect="plain">{{ reviewStatusLabel(row as EmployeeDataReview, 'performance') }}</el-tag></template></el-table-column>
-        <el-table-column label="变更摘要" min-width="240"><template #default="{ row }"><div>{{ employeeChangeSummary(row as EmployeeDataReview) }}</div><el-tag v-if="(row as EmployeeDataReview).validationWarnings?.length" size="small" type="warning" effect="plain">{{ (row as EmployeeDataReview).validationWarnings?.join('；') }}</el-tag></template></el-table-column>
         <el-table-column label="提交时间" width="160"><template #default="{ row }">{{ formatDateTime((row as EmployeeDataReview).createdAt) }}</template></el-table-column>
         <el-table-column label="操作" width="110"><template #default="{ row }"><el-button v-if="reviewHasPerformanceBlocker(row as EmployeeDataReview)" link type="primary" @click="openManagerDialog(row as EmployeeDataReview)">补充上级</el-button><span v-else>{{ reviewIsPending(row as EmployeeDataReview) ? '可审核' : '已处理' }}</span></template></el-table-column>
       </el-table>
@@ -525,6 +549,9 @@ onMounted(async () => {
 .contract-review-change { padding: 10px 0; border-top: 1px solid #eef2f6; }
 .contract-review-change > div { display: flex; align-items: center; gap: 8px; }
 .contract-review-change p { margin: 6px 0 0; color: #475467; font-size: 13px; }
+.employee-change-content { display: grid; gap: 6px; }
+.employee-change-content__statuses { display: flex; flex-wrap: wrap; gap: 6px 12px; color: #667085; font-size: 12px; }
+.employee-change-content__statuses span { display: inline-flex; align-items: center; gap: 5px; }
 .review-warning { color: #b54708 !important; }
 @media (max-width: 760px) {
   .pending-review-workspace { padding: 14px; }

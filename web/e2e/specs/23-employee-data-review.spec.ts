@@ -136,15 +136,23 @@ test('HR administrator reviews employee and department changes from the independ
   await expect(workspace.getByRole('button', { name: '员工档案 2' })).toBeVisible();
   await expect(workspace.getByRole('button', { name: '组织架构 1' })).toBeVisible();
   await expect(workspace.getByRole('button', { name: '岗位目录 1' })).toBeVisible();
-  await expect(workspace.locator('.review-category-section > .review-table')).toHaveCount(3);
+  const reviewTables = workspace.locator('.review-category-section > .review-table');
+  await expect(reviewTables).toHaveCount(3);
+  const expectedReviewColumns = ['变更类型', '审核对象', '变更内容', '提交人', '提交时间', '操作'];
+  for (let index = 0; index < 3; index += 1) {
+    await expect.poll(async () => (
+      reviewTables.nth(index).locator('.el-table__header-wrapper th .cell').allTextContents()
+    ).then((items) => items.map((item) => item.trim()).filter(Boolean))).toEqual(expectedReviewColumns);
+  }
   await expect(workspace.locator('.department-review-card')).toHaveCount(0);
   await expect(workspace.getByText('员工一', { exact: true })).toBeVisible();
   await expect(workspace.getByText('员工二', { exact: true })).toBeVisible();
   await expect(workspace.getByText('项目中心 → 项目管理中心')).toBeVisible();
   await expect(workspace.getByText('项目经理', { exact: true })).toBeVisible();
   await expect(workspace.getByText('余焱玲', { exact: true }).first()).toBeVisible();
-  await expect(workspace.getByText('基础档案审核', { exact: true })).toBeVisible();
-  await expect(workspace.getByText('绩效关系审核', { exact: true })).toBeVisible();
+  await expect(workspace.getByText('基础档案审核', { exact: true })).toHaveCount(0);
+  await expect(workspace.getByText('绩效关系审核', { exact: true })).toHaveCount(0);
+  await expect(workspace.getByText('无变更', { exact: true })).toHaveCount(0);
   await expect(workspace.getByText('需补充', { exact: true })).toBeVisible();
   await expect(workspace.getByText(/合同修改/)).toBeVisible();
   await workspace.locator('.el-table__expand-icon').first().click();
@@ -201,6 +209,12 @@ test('department context menu uses the full edit drawer and unassigned people ca
     body: JSON.stringify(apiResponse({
       id: 'admin-1', name: '系统管理员', deptId: null, sysRole: 'system_admin', isAssessorOnly: false, canViewAll: true,
     })),
+  }));
+  await page.route('**/api/v1/positions**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([{
+      id: 'position-1', code: 'SPECIALIST', name: '专员', jobFamily: null, isActive: true, activeEmployeeCount: 2,
+    }])),
   }));
   await page.route('**/api/v1/departments**', async (route) => {
     if (route.request().method() === 'PATCH') {
