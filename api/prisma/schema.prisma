@@ -797,6 +797,7 @@ model EmployeeDataChangeRequest {
   profileReviewStatus     String    @default("pending") @map("profile_review_status") @db.VarChar(20)
   performanceReviewStatus String    @default("not_required") @map("performance_review_status") @db.VarChar(20)
   validationErrors        Json      @default("[]") @map("validation_errors") @db.JsonB
+  validationWarnings      Json      @default("[]") @map("validation_warnings") @db.JsonB
   createdById             String    @map("created_by_id") @db.Uuid
   profileReviewedById     String?   @map("profile_reviewed_by_id") @db.Uuid
   profileReviewedAt       DateTime? @map("profile_reviewed_at") @db.Timestamptz(6)

@@ -13,9 +13,64 @@ import {
   IsString,
   IsUUID,
   Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 import { CompanyCode, EmploymentType, UserStatus } from '@prisma/client';
+
+export class CreateEmployeeDto {
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(30)
+  employeeNo!: string;
+
+  @IsString()
+  @IsNotEmpty()
+  @MaxLength(50)
+  name!: string;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  phone?: string | null;
+
+  @IsEnum(CompanyCode)
+  company!: CompanyCode;
+
+  @IsUUID('4')
+  deptId!: string;
+
+  @IsOptional()
+  @IsUUID('4')
+  positionId?: string | null;
+
+  @Type(() => Date)
+  @IsDate()
+  entryDate!: Date;
+
+  @Type(() => Date)
+  @IsDate()
+  effectiveFrom!: Date;
+
+  @IsOptional()
+  @Type(() => Date)
+  @IsDate()
+  effectiveTo?: Date | null;
+
+  @IsEnum(EmploymentType)
+  employmentType!: EmploymentType;
+
+  @IsEnum(UserStatus)
+  employeeStatus!: UserStatus;
+
+  @IsOptional()
+  @IsUUID('4')
+  rosterManagerId?: string | null;
+
+  @IsOptional()
+  @IsUUID('4')
+  performanceManagerId?: string | null;
+}
 
 export class UpdateEmployeeProfileDto {
   @IsOptional()
@@ -74,6 +129,10 @@ export class CreateEmploymentRecordDto {
   @IsOptional()
   @IsString()
   position?: string | null;
+
+  @IsOptional()
+  @IsUUID('4')
+  positionId?: string | null;
 
   @IsOptional()
   @IsString()

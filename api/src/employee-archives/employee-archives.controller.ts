@@ -18,6 +18,7 @@ import { Roles } from '@/common/decorators/roles.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import {
   BindDingtalkIdentityDto,
+  CreateEmployeeDto,
   CreateEmploymentRecordDto,
   PreviewEmployeeRosterDto,
   SetDingtalkIdentityStateDto,
@@ -33,6 +34,7 @@ import {
   EmployeeDataReviewQueryDto,
   ProposePerformanceManagerDto,
   SetPendingPerformanceManagerDto,
+  RejectEmployeeDataReviewsDto,
 } from './dto/employee-data-review.dto';
 import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
 import { buildEmployeeRosterTemplate } from './employee-roster.excel';
@@ -59,6 +61,15 @@ export class EmployeeArchivesController {
     @CurrentUser() operator: AuthUser,
   ) {
     return this.reviews.approveBatch(dto, operator);
+  }
+
+  @Post('reviews/reject')
+  @HrCapabilities('employee_archive_review')
+  rejectReviews(
+    @Body() dto: RejectEmployeeDataReviewsDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.reviews.rejectBatch(dto.requestIds, dto.reason, operator);
   }
 
   @Patch('reviews/:requestId/performance-manager')
@@ -89,6 +100,15 @@ export class EmployeeArchivesController {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
       disposition: 'attachment; filename="employee-roster-template.xlsx"',
     });
+  }
+
+  @Post()
+  @HrCapabilities('employee_archive_edit')
+  createEmployee(
+    @Body() dto: CreateEmployeeDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.archives.createEmployee(dto, operator);
   }
 
   @Get(':id')

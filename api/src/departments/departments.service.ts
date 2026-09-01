@@ -558,8 +558,7 @@ export class DepartmentsService {
       },
       {
         isActive: false,
-        releaseMembersToRoot: true,
-        promoteChildrenToParentId: department.parentId,
+        requiresResolution: department.members.length > 0 || department.children.length > 0,
       },
       operator,
     );
@@ -942,122 +941,16 @@ export class DepartmentsService {
     if (!department || !department.isActive || department.name !== base.name || department.parentId !== (base.parentId ?? null)) {
       throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '正式部门信息已发生变化，请重新提交审核' });
     }
-    const submittedMemberIds = Array.isArray(base.directMemberIds) ? base.directMemberIds.filter((item): item is string => typeof item === 'string') : [];
-    const submittedChildIds = Array.isArray(base.childDepartmentIds) ? base.childDepartmentIds.filter((item): item is string => typeof item === 'string') : [];
-    const currentMemberIds = department.members.map((member) => member.id);
-    const currentChildIds = department.children.map((child) => child.id);
-    if (!this.sameIdSet(currentMemberIds, submittedMemberIds) || !this.sameIdSet(currentChildIds, submittedChildIds)) {
-      throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '部门人员或下级结构已发生变化，请重新提交审核' });
-    }
-
-    if (submittedMemberIds.length > 0) {
-      await this.releaseCurrentEmploymentRecords(tx, submittedMemberIds, id, department.name, request.createdById);
-      await tx.user.updateMany({
-        where: { id: { in: submittedMemberIds }, deptId: id, deletedAt: null },
-        data: { deptId: null },
+    if (department.members.length > 0 || department.children.length > 0) {
+      throw new BadRequestException({
+        code: ERROR_CODE.CONFLICT,
+        message: '请先处理在职人员和下级部门，再停用该部门',
       });
-    }
-    if (submittedChildIds.length > 0) {
-      await tx.department.updateMany({
-        where: { id: { in: submittedChildIds }, parentId: id, isActive: true },
-        data: { parentId: department.parentId },
-      });
-    }
-
-    const departments = await this.activeDepartments(tx);
-    const nextDepartments = departments
-      .filter((item) => item.id !== id)
-      .map((item) => item.parentId === id ? { ...item, parentId: department.parentId } : item);
-    const pathMap = this.buildPathMap(nextDepartments);
-    for (const item of nextDepartments) {
-      const nextPath = pathMap.get(item.id);
-      if (nextPath && nextPath !== item.fullPath) {
-        await tx.department.update({ where: { id: item.id }, data: { fullPath: nextPath } });
-      }
     }
     await tx.department.update({
       where: { id },
-      data: { isActive: false, parentId: null, leaderId: null, approverId: null },
+      data: { isActive: false },
     });
-  }
-
-  private async releaseCurrentEmploymentRecords(
-    tx: Prisma.TransactionClient,
-    userIds: string[],
-    departmentId: string,
-    departmentName: string,
-    createdById: string,
-  ): Promise<void> {
-    const todayParts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
-    }).formatToParts(new Date());
-    const part = (type: Intl.DateTimeFormatPartTypes) => todayParts.find((item) => item.type === type)?.value ?? '';
-    const todayText = `${part('year')}-${part('month')}-${part('day')}`;
-    const today = new Date(`${todayText}T00:00:00.000Z`);
-    const yesterday = new Date(today);
-    yesterday.setUTCDate(yesterday.getUTCDate() - 1);
-    const currentRecords = await tx.employmentRecord.findMany({
-      where: {
-        userId: { in: userIds },
-        deptId: departmentId,
-        effectiveFrom: { lte: today },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }],
-      },
-      select: {
-        id: true, userId: true, effectiveFrom: true, effectiveTo: true, company: true, deptId: true,
-        position: true, jobGrade: true, jobFamily: true, directManagerId: true, workLocation: true,
-        employmentType: true, employeeStatus: true, entryDate: true, plannedRegularDate: true,
-        actualRegularDate: true, leaveDate: true, probationMonths: true, changeType: true, reason: true,
-        sourceType: true, sourceBatchId: true, createdById: true,
-      },
-    });
-    for (const record of currentRecords) {
-      const reason = `原部门“${departmentName}”审核删除，人员释放到未分配人员`;
-      if (record.effectiveFrom.getTime() >= today.getTime()) {
-        await tx.employmentRecord.update({
-          where: { id: record.id },
-          data: {
-            deptId: null, changeType: 'department_deleted', reason,
-            sourceType: 'department_change_review', sourceBatchId: null, createdById,
-          },
-        });
-        continue;
-      }
-      await tx.employmentRecord.update({
-        where: { id: record.id },
-        data: { effectiveTo: yesterday },
-      });
-      await tx.employmentRecord.create({
-        data: {
-          userId: record.userId,
-          effectiveFrom: today,
-          effectiveTo: record.effectiveTo,
-          company: record.company,
-          deptId: null,
-          position: record.position,
-          jobGrade: record.jobGrade,
-          jobFamily: record.jobFamily,
-          directManagerId: record.directManagerId,
-          workLocation: record.workLocation,
-          employmentType: record.employmentType,
-          employeeStatus: record.employeeStatus,
-          entryDate: record.entryDate,
-          plannedRegularDate: record.plannedRegularDate,
-          actualRegularDate: record.actualRegularDate,
-          leaveDate: record.leaveDate,
-          probationMonths: record.probationMonths,
-          changeType: 'department_deleted',
-          reason,
-          sourceType: 'department_change_review',
-          sourceBatchId: null,
-          createdById,
-        },
-      });
-    }
-  }
-
-  private sameIdSet(left: string[], right: string[]): boolean {
-    return left.length === right.length && left.every((id) => right.includes(id));
   }
 
   private async activeDepartments(client: Pick<Prisma.TransactionClient, 'department'>, includeId?: string) {

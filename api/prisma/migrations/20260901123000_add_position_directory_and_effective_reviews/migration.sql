@@ -15,6 +15,8 @@ CREATE INDEX "positions_job_family_is_active_idx" ON "positions"("job_family", "
 
 ALTER TABLE "users" ADD COLUMN "position_id" UUID;
 ALTER TABLE "employment_records" ADD COLUMN "position_id" UUID;
+ALTER TABLE "employee_data_change_requests"
+ADD COLUMN "validation_warnings" JSONB NOT NULL DEFAULT '[]';
 
 WITH legacy_names AS (
     SELECT DISTINCT BTRIM("position") AS "name"

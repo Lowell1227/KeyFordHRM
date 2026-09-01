@@ -496,7 +496,7 @@ describe("DepartmentsService", () => {
     }));
   });
 
-  it('删除非空部门时提交人员释放和下级部门提升的影响快照', async () => {
+  it('停用非空部门时只提交待处理影响，不自动安排人员释放或下级提升', async () => {
     const tx = {
       departmentChangeRequest: {
         findFirst: jest.fn().mockResolvedValue(null),
@@ -532,8 +532,8 @@ describe("DepartmentsService", () => {
           childDepartmentIds: ['dept-child'],
         }),
         proposedValue: expect.objectContaining({
-          releaseMembersToRoot: true,
-          promoteChildrenToParentId: 'dept-project',
+          isActive: false,
+          requiresResolution: true,
         }),
       }),
     });
@@ -569,7 +569,7 @@ describe("DepartmentsService", () => {
     expect(tx.department.update).not.toHaveBeenCalled();
   });
 
-  it('审核删除部门后释放直属人员并把下级部门提升到原上级', async () => {
+  it('审核停用部门时如仍有人员或下级部门则拒绝生效且不自动改动', async () => {
     const request = {
       id: 'change-delete-approve', action: 'delete', status: 'pending', departmentId: 'dept-source',
       departmentName: '项目部', createdById: 'operator-335',
@@ -617,30 +617,14 @@ describe("DepartmentsService", () => {
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     } as any);
 
-    await service.approveChange(request.id, hrAdmin);
+    await expect(service.approveChange(request.id, hrAdmin))
+      .rejects.toThrow('请先处理在职人员和下级部门');
 
-    expect(tx.user.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: ['user-1', 'user-2'] }, deptId: 'dept-source', deletedAt: null },
-      data: { deptId: null },
-    });
-    expect(tx.department.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: ['dept-child'] }, parentId: 'dept-source', isActive: true },
-      data: { parentId: 'dept-parent' },
-    });
-    expect(tx.department.update).toHaveBeenCalledWith({
-      where: { id: 'dept-source' },
-      data: { isActive: false, parentId: null, leaderId: null, approverId: null },
-    });
-    expect(tx.employmentRecord.update).toHaveBeenCalledWith({
-      where: { id: 'employment-user-1' },
-      data: { effectiveTo: expect.any(Date) },
-    });
-    expect(tx.employmentRecord.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        userId: 'user-1', deptId: null, position: '项目专员',
-        changeType: 'department_deleted', sourceType: 'department_change_review',
-      }),
-    });
+    expect(tx.user.updateMany).not.toHaveBeenCalled();
+    expect(tx.department.updateMany).not.toHaveBeenCalled();
+    expect(tx.department.update).not.toHaveBeenCalled();
+    expect(tx.employmentRecord.update).not.toHaveBeenCalled();
+    expect(tx.employmentRecord.create).not.toHaveBeenCalled();
   });
 
   it('部门编辑一次提交名称公司上级负责人和审批人', async () => {

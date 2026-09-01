@@ -5,6 +5,7 @@ import {
   EmploymentType,
   ExternalIdentityStatus,
   Prisma,
+  SysRole,
   UserStatus,
 } from '@prisma/client';
 import { ERROR_CODE } from '@/common/constants/error-codes';
@@ -248,6 +249,9 @@ export class EmployeeDataReviewsService {
         if (!request) {
           throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '审核记录不存在' });
         }
+        if (request.createdById === operator.id) {
+          throw new BadRequestException({ code: ERROR_CODE.FORBIDDEN, message: '不能审核自己提交的变更' });
+        }
         const status = scope === 'profile'
           ? request.profileReviewStatus
           : request.performanceReviewStatus;
@@ -358,6 +362,63 @@ export class EmployeeDataReviewsService {
     return result;
   }
 
+  async rejectBatch(
+    requestIds: string[],
+    reason: string,
+    operator: AuthUser,
+  ): Promise<EmployeeReviewBatchResult> {
+    if (operator.sysRole !== SysRole.hr && operator.sysRole !== SysRole.system_admin) {
+      throw new BadRequestException({ code: ERROR_CODE.FORBIDDEN, message: '仅 HR 管理员可退回人事变更' });
+    }
+    const result: EmployeeReviewBatchResult = { succeeded: [], failed: [] };
+    for (const requestId of [...new Set(requestIds)]) {
+      try {
+        await this.prisma.$transaction(async (tx) => {
+          const request = await tx.employeeDataChangeRequest.findUnique({ where: { id: requestId } });
+          if (!request) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '审核记录不存在' });
+          if (request.createdById === operator.id) {
+            throw new BadRequestException({ code: ERROR_CODE.FORBIDDEN, message: '不能审核自己提交的变更' });
+          }
+          const profilePending = request.profileReviewStatus === 'pending';
+          const performancePending = request.performanceReviewStatus === 'pending';
+          if (!profilePending && !performancePending) {
+            throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '该记录已处理' });
+          }
+          const now = new Date();
+          await tx.employeeDataChangeRequest.update({
+            where: { id: requestId },
+            data: {
+              ...(profilePending ? {
+                profileReviewStatus: 'rejected',
+                profileReviewedById: operator.id,
+                profileReviewedAt: now,
+              } : {}),
+              ...(performancePending ? {
+                performanceReviewStatus: 'rejected',
+                performanceReviewedById: operator.id,
+                performanceReviewedAt: now,
+              } : {}),
+              rejectedReason: reason.trim(),
+            },
+          });
+          await tx.auditLog.create({
+            data: {
+              userId: operator.id,
+              action: 'reject_employee_data_change',
+              entityType: 'employee_data_change_request',
+              entityId: requestId,
+              newValue: { reason: reason.trim() },
+            },
+          });
+        });
+        result.succeeded.push({ requestId, scopes: ['profile', 'performance'] });
+      } catch (error) {
+        result.failed.push({ requestId, reason: this.errorMessage(error) });
+      }
+    }
+    return result;
+  }
+
   private async applyProfile(
     tx: Prisma.TransactionClient,
     request: {
@@ -398,11 +459,26 @@ export class EmployeeDataReviewsService {
     const employmentType = this.enumValue(employee.employmentType, Object.values(EmploymentType), EmploymentType.full_time);
     const employeeStatus = this.enumValue(employee.employeeStatus, Object.values(UserStatus), UserStatus.active);
     const phone = this.nullableString(employee.phone);
-    const position = this.nullableString(employee.position);
+    let positionId = this.nullableString(employee.positionId);
+    let position = this.nullableString(employee.position);
+    let jobFamily = this.nullableString(employee.jobFamily);
+    if (positionId) {
+      const positionRecord = await tx.position.findUnique({
+        where: { id: positionId },
+        select: { id: true, name: true, jobFamily: true },
+      });
+      if (!positionRecord) {
+        throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '岗位不存在' });
+      }
+      positionId = positionRecord.id;
+      position = positionRecord.name;
+      jobFamily = positionRecord.jobFamily;
+    }
     const plannedRegularDate = this.nullableDate(employee.plannedRegularDate);
     const actualRegularDate = this.nullableDate(employee.actualRegularDate);
     const leaveDate = this.nullableDate(employee.leaveDate);
-    const isManualEmployment = request.sourceType === 'manual_employment_change';
+    const isManualEmployment = request.sourceType === 'manual_employment_change'
+      || request.sourceType === 'manual_employee_create';
     const today = this.startOfUtcDay(new Date());
     const effectiveFrom = isManualEmployment
       ? this.requiredDate(employee.effectiveFrom, '任职生效日期不能为空')
@@ -421,6 +497,7 @@ export class EmployeeDataReviewsService {
       name,
       phone,
       deptId,
+      positionId,
       position,
       entryDate,
       plannedRegularDate,
@@ -485,9 +562,10 @@ export class EmployeeDataReviewsService {
       userId,
       company,
       deptId,
+      positionId,
       position,
       jobGrade: this.nullableString(employee.jobGrade),
-      jobFamily: this.nullableString(employee.jobFamily),
+      jobFamily,
       directManagerId: rosterManagerId,
       workLocation: this.nullableString(employee.workLocation),
       employmentType,
@@ -728,7 +806,7 @@ export class EmployeeDataReviewsService {
     proposed: Record<string, unknown>,
   ): boolean {
     const keys = [
-      'company', 'deptId', 'position', 'jobGrade', 'jobFamily', 'managerId', 'managerName',
+      'company', 'deptId', 'positionId', 'position', 'jobGrade', 'jobFamily', 'managerId', 'managerName',
       'workLocation', 'employmentType', 'employeeStatus', 'entryDate', 'plannedRegularDate',
       'actualRegularDate', 'leaveDate', 'probationMonths',
     ];
@@ -860,6 +938,7 @@ export class EmployeeDataReviewsService {
         name: true,
         phone: true,
         deptId: true,
+        positionId: true,
         position: true,
         entryDate: true,
         plannedRegularDate: true,
@@ -906,6 +985,7 @@ export class EmployeeDataReviewsService {
       phone: current.phone,
       company: employment?.company ?? null,
       deptId: current.deptId,
+      positionId: current.positionId ?? employment?.positionId ?? null,
       position: current.position,
       jobGrade: employment?.jobGrade ?? null,
       jobFamily: employment?.jobFamily ?? null,

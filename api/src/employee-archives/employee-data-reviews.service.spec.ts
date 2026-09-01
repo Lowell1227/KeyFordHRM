@@ -11,6 +11,36 @@ const operator = {
 };
 
 describe('EmployeeDataReviewsService', () => {
+  it('HR管理员不能审核自己提交的员工变更', async () => {
+    const request = {
+      id: 'review-self',
+      userId: 'employee-1',
+      createdById: operator.id,
+      profileReviewStatus: 'pending',
+      performanceReviewStatus: 'not_required',
+      validationErrors: [],
+      baseValue: {},
+      proposedValue: {},
+    };
+    const tx = {
+      employeeDataChangeRequest: {
+        findUnique: jest.fn().mockResolvedValue(request),
+        updateMany: jest.fn(),
+        update: jest.fn(),
+      },
+      user: { update: jest.fn() },
+      auditLog: { create: jest.fn() },
+    };
+    const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
+    const service = new EmployeeDataReviewsService(prisma as any);
+
+    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, operator);
+
+    expect(result.failed).toEqual([{ requestId: request.id, reason: '不能审核自己提交的变更' }]);
+    expect(tx.employeeDataChangeRequest.updateMany).not.toHaveBeenCalled();
+    expect(tx.user.update).not.toHaveBeenCalled();
+  });
+
   it('HR 管理员查看待审核档案时能识别普通 HR 提交人', async () => {
     const item = {
       id: 'review-from-ordinary-hr',

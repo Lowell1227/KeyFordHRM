@@ -14,6 +14,8 @@ import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { SubmitEmployeeArchiveDraftDto } from './dto/employee-archive.dto';
+import type { CreateEmployeeDto } from './dto/employee-archive.dto';
+import { employmentWarnings, selectEmploymentAt } from './employment-timeline';
 
 export interface UpsertEmployeeProfileInput {
   phone?: string | null;
@@ -26,6 +28,7 @@ export interface CreateEmploymentRecordInput {
   company: CompanyCode;
   deptId?: string | null;
   position?: string | null;
+  positionId?: string | null;
   jobGrade?: string | null;
   jobFamily?: string | null;
   directManagerId?: string | null;
@@ -69,6 +72,103 @@ export class EmployeeArchivesService {
     private readonly prisma: PrismaService,
     private readonly config?: ConfigService,
   ) {}
+
+  async createEmployee(input: CreateEmployeeDto, operator: AuthUser) {
+    return this.prisma.$transaction(async (tx) => {
+      const employeeNo = input.employeeNo.trim();
+      const name = input.name.trim();
+      const existing = await tx.user.findFirst({
+        where: {
+          OR: [
+            { employeeNo },
+            ...(input.phone?.trim() ? [{ phone: input.phone.trim() }] : []),
+          ],
+          deletedAt: null,
+        },
+        select: { id: true, employeeNo: true, name: true },
+      });
+      if (existing) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: `疑似已存在员工：${existing.employeeNo ?? '无工号'} · ${existing.name}`,
+        });
+      }
+      const department = await tx.department.findUnique({
+        where: { id: input.deptId },
+        select: { id: true, isActive: true },
+      });
+      if (!department?.isActive) {
+        throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '所属部门不存在或已停用' });
+      }
+      const position = input.positionId
+        ? await tx.position.findUnique({
+          where: { id: input.positionId },
+          select: { id: true, name: true, jobFamily: true, isActive: true },
+        })
+        : null;
+      if (input.positionId && !position) {
+        throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '岗位不存在' });
+      }
+      const warnings: string[] = [];
+      if (position && !position.isActive) warnings.push('所选岗位已停用');
+      if (input.effectiveTo && input.effectiveTo < input.effectiveFrom) {
+        warnings.push('任职结束日期早于生效日期');
+      }
+      const performanceManagerId = input.performanceManagerId ?? null;
+      const request = await tx.employeeDataChangeRequest.create({
+        data: {
+          userId: null,
+          employeeNo,
+          employeeName: name,
+          sourceType: 'manual_employee_create',
+          baseValue: this.toJson({
+            employee: {},
+            profile: {},
+            profileExists: false,
+            contracts: [],
+            performance: { managerId: null },
+          }),
+          proposedValue: this.toJson({
+            employee: {
+              employeeNo,
+              name,
+              phone: input.phone?.trim() || null,
+              company: input.company,
+              deptId: input.deptId,
+              positionId: position?.id ?? null,
+              position: position?.name ?? null,
+              jobFamily: position?.jobFamily ?? null,
+              managerId: input.rosterManagerId ?? null,
+              entryDate: input.entryDate,
+              effectiveFrom: input.effectiveFrom,
+              effectiveTo: input.effectiveTo ?? null,
+              employmentType: input.employmentType,
+              employeeStatus: input.employeeStatus,
+              changeType: 'hire',
+            },
+            profile: { phone: input.phone?.trim() || null },
+            contracts: [],
+            performance: { managerId: performanceManagerId },
+          }),
+          profileReviewStatus: 'pending',
+          performanceReviewStatus: performanceManagerId ? 'pending' : 'not_required',
+          validationErrors: this.toJson([]),
+          validationWarnings: this.toJson(warnings),
+          createdById: operator.id,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: operator.id,
+          action: 'submit_employee_create',
+          entityType: 'employee_data_change_request',
+          entityId: request.id,
+          newValue: this.toJson({ employeeNo, name, effectiveFrom: input.effectiveFrom, warnings }),
+        },
+      });
+      return request;
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
 
   async findOne(userId: string) {
     const archive = await this.prisma.user.findUnique({
@@ -143,10 +243,8 @@ export class EmployeeArchivesService {
     }
     const [dingtalkBinding] = archive.externalIdentityBindings;
     const now = new Date();
-    const currentEmployment = archive.employmentHistory.find((record) => (
-      record.effectiveFrom <= now
-      && (!record.effectiveTo || record.effectiveTo >= now)
-    )) ?? null;
+    const employmentSelection = selectEmploymentAt(archive.employmentHistory, now);
+    const currentEmployment = employmentSelection.current;
     return {
       ...archive,
       employeeProfile: archive.employeeProfile ? {
@@ -157,6 +255,7 @@ export class EmployeeArchivesService {
         bankAccountFingerprint: undefined,
       } : null,
       currentEmployment,
+      employmentWarnings: employmentSelection.warnings,
       performanceManager: archive.directManager,
       rosterManager: currentEmployment?.directManager ?? null,
       directManager: undefined,
@@ -394,7 +493,7 @@ export class EmployeeArchivesService {
       });
     }
 
-    const overlap = await this.prisma.employmentRecord.findFirst({
+    const overlappingRecords = await this.prisma.employmentRecord.findMany({
       where: {
         userId,
         effectiveFrom: { lte: input.effectiveTo ?? new Date('9999-12-31T00:00:00.000Z') },
@@ -403,14 +502,24 @@ export class EmployeeArchivesService {
           { effectiveTo: { gte: input.effectiveFrom } },
         ],
       },
-      select: { id: true },
+      select: { id: true, effectiveFrom: true, effectiveTo: true },
     });
-    if (overlap) {
-      throw new ConflictException({
-        code: ERROR_CODE.CONFLICT,
-        message: '任职生效区间与现有记录重叠',
-      });
+    const warnings = employmentWarnings(overlappingRecords, {
+      id: 'pending',
+      effectiveFrom: input.effectiveFrom,
+      effectiveTo: input.effectiveTo ?? null,
+    });
+
+    const position = input.positionId
+      ? await this.prisma.position.findUnique({
+        where: { id: input.positionId },
+        select: { id: true, name: true, jobFamily: true, isActive: true },
+      })
+      : null;
+    if (input.positionId && !position) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '岗位不存在' });
     }
+    if (position && !position.isActive) warnings.push('所选岗位已停用');
 
     const currentEmployment = user.employmentHistory[0] ?? null;
     const baseEmployee = this.employeeReviewData(user, currentEmployment);
@@ -418,9 +527,10 @@ export class EmployeeArchivesService {
       ...baseEmployee,
       company: input.company,
       deptId: input.deptId ?? null,
-      position: input.position ?? null,
+      positionId: position?.id ?? null,
+      position: position?.name ?? input.position ?? null,
       jobGrade: input.jobGrade ?? null,
-      jobFamily: input.jobFamily ?? null,
+      jobFamily: position?.jobFamily ?? input.jobFamily ?? null,
       managerId: input.directManagerId ?? null,
       workLocation: input.workLocation ?? null,
       employmentType: input.employmentType,
@@ -457,6 +567,7 @@ export class EmployeeArchivesService {
         profileReviewStatus: 'pending',
         performanceReviewStatus: 'not_required',
         validationErrors: this.toJson([]),
+        validationWarnings: this.toJson(warnings),
         createdById: operator.id,
       },
     });
@@ -575,6 +686,7 @@ export class EmployeeArchivesService {
       phone: phoneOverride !== undefined ? phoneOverride : user.phone,
       company: employment?.company ?? CompanyCode.fuede,
       deptId: user.deptId ?? employment?.deptId ?? null,
+      positionId: user.positionId ?? employment?.positionId ?? null,
       position: user.position ?? employment?.position ?? null,
       jobGrade: employment?.jobGrade ?? null,
       jobFamily: employment?.jobFamily ?? null,

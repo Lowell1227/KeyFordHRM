@@ -9,7 +9,9 @@ import {
   IsString,
   IsUUID,
   Max,
+  MaxLength,
   Min,
+  MinLength,
   ValidateIf,
 } from 'class-validator';
 import type { EmployeeReviewScope } from '../employee-data-reviews.service';
@@ -49,6 +51,19 @@ export class ApproveEmployeeDataReviewsDto {
   @ArrayUnique()
   @IsIn(['profile', 'performance'], { each: true })
   scopes!: EmployeeReviewScope[];
+}
+
+export class RejectEmployeeDataReviewsDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayUnique()
+  @IsUUID('4', { each: true })
+  requestIds!: string[];
+
+  @IsString()
+  @MinLength(2)
+  @MaxLength(500)
+  reason!: string;
 }
 
 export class ProposePerformanceManagerDto {
