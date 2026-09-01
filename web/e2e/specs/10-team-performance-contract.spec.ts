@@ -96,6 +96,7 @@ const teamPageFixture: TeamTaskPage = {
       avatarUrl: null,
       position: 'Senior Engineer',
       stageState: 'pending',
+      periodReview: null,
     },
     {
       id: 'task-2',
@@ -114,6 +115,7 @@ const teamPageFixture: TeamTaskPage = {
       avatarUrl: null,
       position: 'Product Manager',
       stageState: 'pending',
+      periodReview: null,
     },
     {
       id: 'task-3',
@@ -132,6 +134,7 @@ const teamPageFixture: TeamTaskPage = {
       avatarUrl: null,
       position: 'Operations Lead',
       stageState: 'completed',
+      periodReview: null,
     },
   ],
   counts: { all: 3, notStarted: 0, pending: 2, completed: 1, exempted: 0 },
@@ -195,11 +198,13 @@ const goalReviewDetailFixture: TaskDetail = {
       dimensionWeight: 1,
       sortOrder: 0,
       visibilityScope: 'supervisors',
+      visibilityScopes: ['supervisors'],
       visibleDepartmentIds: [],
       visibleUserIds: [],
       alignedObjectives: [
         { id: 'objective-1', title: 'Launch the customer portal', level: 'company', ownerId: null },
       ],
+      alignedParentIndicators: [],
     },
     {
       id: 'ind-2',
@@ -217,9 +222,11 @@ const goalReviewDetailFixture: TaskDetail = {
       dimensionWeight: 1,
       sortOrder: 1,
       visibilityScope: 'department',
+      visibilityScopes: ['department'],
       visibleDepartmentIds: [],
       visibleUserIds: [],
       alignedObjectives: [],
+      alignedParentIndicators: [],
     },
   ],
   flowRecords: [
@@ -252,6 +259,7 @@ const referenceIndicatorFixture: Paginated<IndicatorReferenceItem> = {
       name: 'Prior delivery target',
       weight: 0.5,
       visibilityScope: 'supervisors',
+      visibilityScopes: ['supervisors'],
     },
   ],
 };
@@ -345,6 +353,7 @@ function managerEvaluationTeamPage(details: TaskDetail[]): TeamTaskPage {
     avatarUrl: null,
     position: detail.id === 'task-1' ? 'Senior Engineer' : 'Product Manager',
     stageState: detail.status === 'manager_scoring' ? 'pending' as const : 'completed' as const,
+    periodReview: null,
   }));
   return {
     ...teamPageWith(items),
@@ -637,7 +646,8 @@ async function mockGoalReviewWorkspace(
 
 test.describe('team list manager workspace', () => {
   test.use({
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5173',
+    baseURL: (globalThis as { process?: { env?: Record<string, string | undefined> } })
+      .process?.env?.PLAYWRIGHT_BASE_URL || 'http://localhost:5173',
     storageState: 'e2e/auth-state/manager.json',
   });
 
@@ -2724,6 +2734,7 @@ test('uses the six team workspace API contracts without a server or login', asyn
         avatarUrl: null,
         position: null,
         stageState: 'pending',
+        periodReview: null,
       },
     ],
     counts: { all: 1, notStarted: 0, pending: 1, completed: 0, exempted: 0 },
@@ -2746,6 +2757,7 @@ test('uses the six team workspace API contracts without a server or login', asyn
         name: 'Delivery',
         weight: 100,
         visibilityScope: 'supervisors',
+        visibilityScopes: ['supervisors'],
       },
     ],
   };

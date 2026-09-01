@@ -521,4 +521,3 @@ Check formal health/API route, production Web, login, one employee and one froze
 - [ ] **Step 9: Report and archive release evidence**
 
 Report the release commit, pushed remote state, migration name, backup/rollback point, actual verification commands/results and any remaining non-blocking risk. Do not call the release accepted until the user has performed business acceptance.
-

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test';
-import type { AssessmentCycle } from '../../src/types/api.types';
+import type { AssessmentCycle, PerformanceCycleContext } from '../../src/types/api.types';
 import {
   buildTrackingPeople,
   formatGoalTrackingContextLabel,
@@ -50,7 +50,7 @@ function makeCycle(
 }
 
 test('builds self and the cycle-frozen performance manager instead of the current roster manager', () => {
-  const context = {
+  const context: PerformanceCycleContext = {
     id: 'cycle-1',
     name: '2026 Q3',
     type: 'quarterly',
@@ -67,7 +67,7 @@ test('builds self and the cycle-frozen performance manager instead of the curren
       manager: { id: 'manager-frozen', name: '冻结上级' },
     },
     periods: [],
-  } as const;
+  };
   const groups = buildTrackingPeople({
     id: 'employee-1',
     name: '刘伟',
@@ -154,13 +154,13 @@ test('keeps same-name opened cycles distinct and selects the actionable employee
     id: 'cycle-exempt', name: '2026年08月绩效考核', type: 'monthly',
     startDate: '2026-08-01', endDate: '2026-08-31', openedAt: '2026-08-20T02:51:00.000Z',
     scoringFrequency: 'cycle',
-    task: { id: 'task-exempt', status: 'exempted', isExempt: true, exemptReason: '本周期豁免', participantDisposition: 'cycle_exempt' },
+    task: { id: 'task-exempt', status: 'exempted', isExempt: true, exemptReason: '本周期豁免', participantDisposition: 'cycle_exempt', manager: null },
     periods: [],
   }, {
     id: 'cycle-active', name: '2026年08月绩效考核', type: 'monthly',
     startDate: '2026-08-01', endDate: '2026-08-31', openedAt: '2026-08-30T06:35:00.000Z',
     scoringFrequency: 'monthly',
-    task: { id: 'task-active', status: 'self_eval', isExempt: false, exemptReason: null, participantDisposition: 'active' },
+    task: { id: 'task-active', status: 'self_eval', isExempt: false, exemptReason: null, participantDisposition: 'active', manager: null },
     periods: [{
       id: 'period-aug', periodKey: '2026-08', periodType: 'month', sequence: 1,
       status: 'self_eval', selfEvalOpenAt: '2026-08-29T10:00:00.000Z', selfEvalDueAt: '2026-08-31T10:00:00.000Z',

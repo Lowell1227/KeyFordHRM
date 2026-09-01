@@ -81,6 +81,7 @@ const teamTaskItem = (
   position: "Engineer",
   stageState: "pending",
   ...overrides,
+  periodReview: overrides.periodReview ?? null,
 });
 
 const teamPage = (
