@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, reactive, watch } from 'vue';
+import { reactive, watch } from 'vue';
 import { Plus, Delete } from '@element-plus/icons-vue';
+import IndicatorOperationTimeline from './IndicatorOperationTimeline.vue';
 import type {
   FlowRecord,
   IndicatorInstance,
@@ -22,20 +23,6 @@ const form = reactive<SubmitIndicatorProposalBody>({
   items: [],
   note: '',
 });
-
-const indicatorOperationNodeTypes = ['indicator_setting', 'indicator_confirm'];
-
-const operationRecords = computed(() =>
-  (props.flowRecords ?? [])
-    .filter((record) => indicatorOperationNodeTypes.includes(String(record.nodeType)))
-    .map((record) => ({
-      id: record.id,
-      actorName: record.actorName || '系统',
-      createdAt: record.createdAt,
-      note: record.comment ?? '',
-      summary: formatOperationRecord(record),
-    })),
-);
 
 watch(
   () => props.instances,
@@ -59,38 +46,6 @@ function createEmptyItem(): IndicatorProposalItem {
     dimensionName: 'KPI维度',
     dimensionWeight: 1,
   };
-}
-
-function formatOperationRecord(record: FlowRecord): string {
-  const type = String(record.extraData?.type ?? '');
-  const count = Number(record.extraData?.count ?? 0);
-  const countText = count > 0 ? `了 ${count} 条指标` : '';
-
-  if (type === 'indicator_formal_submitted') {
-    return record.extraData?.employeeConfirmedBeforeReview ? `保存并审核${countText}，目标确认完成` : `保存并审核${countText}`;
-  }
-  if (type === 'indicator_employee_submitted') {
-    return `提交主管审核${countText}`;
-  }
-  if (type === 'indicator_review_saved') {
-    return `保存审核调整${countText}`;
-  }
-  if (type === 'indicator_review_approved') {
-    return `审核通过${countText}`;
-  }
-  if (type === 'indicator_employee_confirmed' || type === 'indicator_draft_saved') {
-    return `保存并确认${countText}`;
-  }
-  if (record.action === 'reject') {
-    return '退回指标';
-  }
-  if (record.action === 'submit' && record.nodeType === 'indicator_confirm') {
-    return '确认指标';
-  }
-  if (record.action === 'submit') {
-    return `提交指标${countText}`;
-  }
-  return `操作${countText}`;
 }
 
 function toFormItem(instance: IndicatorInstance): IndicatorProposalItem {
@@ -205,15 +160,7 @@ function handleSubmit() {
       <el-button type="primary" :loading="loading" @click="handleSubmit">保存指标草稿</el-button>
     </div>
 
-    <div v-if="operationRecords.length" class="proposal-history">
-      <div class="proposal-history__title">操作记录</div>
-      <div v-for="record in operationRecords" :key="record.id" class="proposal-history__item">
-        <div class="proposal-history__meta">
-          {{ record.actorName }} {{ record.summary }} · {{ new Date(record.createdAt).toLocaleString() }}
-        </div>
-        <div v-if="record.note" class="proposal-history__note">{{ record.note }}</div>
-      </div>
-    </div>
+    <IndicatorOperationTimeline :records="flowRecords" />
   </el-card>
 </template>
 
@@ -258,38 +205,6 @@ function handleSubmit() {
   display: flex;
   justify-content: flex-end;
   margin-top: 12px;
-}
-
-.proposal-history {
-  margin-top: 16px;
-  padding-top: 14px;
-  border-top: 1px solid var(--el-border-color-lighter);
-}
-
-.proposal-history__title {
-  font-weight: 600;
-  margin-bottom: 10px;
-}
-
-.proposal-history__item {
-  padding: 10px 12px;
-  border-radius: 8px;
-  background: var(--el-fill-color-lighter);
-}
-
-.proposal-history__item + .proposal-history__item {
-  margin-top: 10px;
-}
-
-.proposal-history__meta {
-  color: var(--el-text-color-secondary);
-  font-size: 12px;
-}
-
-.proposal-history__note {
-  margin-top: 6px;
-  white-space: pre-wrap;
-  color: var(--el-text-color-regular);
 }
 
 @media (max-width: 900px) {

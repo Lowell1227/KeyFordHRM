@@ -292,6 +292,72 @@ test.describe('goal setting responsive workspace', () => {
     await expect(page.getByTestId('goal-weight-feedback')).toContainText('80.00%');
   });
 
+  test('shows operation records as a latest-first timeline with progressive disclosure', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const historyTask = {
+      ...goalTaskDetail(1),
+      flowRecords: [
+        {
+          id: 'draft-1', taskId: 'task-goal-1', cycleId: 'cycle-2027-q1',
+          nodeType: 'indicator_setting', action: 'comment', actorName: '方园',
+          createdAt: '2026-09-02T08:00:00.000Z', extraData: { type: 'indicator_draft_saved', count: 2 },
+        },
+        {
+          id: 'submit-1', taskId: 'task-goal-1', cycleId: 'cycle-2027-q1',
+          nodeType: 'indicator_setting', action: 'submit', actorName: '方园',
+          createdAt: '2026-09-02T08:20:00.000Z', extraData: { type: 'indicator_employee_submitted', count: 2 },
+        },
+        {
+          id: 'reject-1', taskId: 'task-goal-1', cycleId: 'cycle-2027-q1',
+          nodeType: 'indicator_setting', action: 'reject', actorName: '王主管', comment: '衡量标准不完整',
+          createdAt: '2026-09-02T08:40:00.000Z',
+        },
+        {
+          id: 'draft-2', taskId: 'task-goal-1', cycleId: 'cycle-2027-q1',
+          nodeType: 'indicator_setting', action: 'comment', actorName: '方园',
+          createdAt: '2026-09-02T09:00:00.000Z', extraData: { type: 'indicator_draft_saved', count: 2 },
+        },
+        {
+          id: 'submit-2', taskId: 'task-goal-1', cycleId: 'cycle-2027-q1',
+          nodeType: 'indicator_setting', action: 'submit', actorName: '方园',
+          createdAt: '2026-09-02T09:20:00.000Z', extraData: { type: 'indicator_employee_submitted', count: 2 },
+        },
+        {
+          id: 'review-save-1', taskId: 'task-goal-1', cycleId: 'cycle-2027-q1',
+          nodeType: 'indicator_setting', action: 'comment', actorName: '王主管',
+          createdAt: '2026-09-02T09:40:00.000Z', extraData: { type: 'indicator_review_saved', count: 2 },
+        },
+        {
+          id: 'approve-1', taskId: 'task-goal-1', cycleId: 'cycle-2027-q1',
+          nodeType: 'indicator_confirm', action: 'approve', actorName: '王主管',
+          createdAt: '2026-09-02T10:00:00.000Z', extraData: { type: 'indicator_review_approved', count: 2 },
+        },
+      ],
+    };
+    await mockGoalSetting(page, [], historyTask);
+
+    await page.goto('/tasks/task-goal-1?stage=goal-setting');
+
+    const timeline = page.getByTestId('indicator-operation-timeline');
+    await expect(timeline).toBeVisible();
+    await expect(timeline).toContainText('共 7 条');
+    const visibleRecords = timeline.getByTestId('indicator-operation-record');
+    await expect(visibleRecords).toHaveCount(5);
+    await expect(visibleRecords.first()).toContainText('王主管');
+    await expect(visibleRecords.first()).toContainText('审核通过了 2 条指标');
+    await expect(visibleRecords.first().locator('time')).toHaveText(/^2026-09-02 \d{2}:\d{2}$/);
+    await expect(timeline).not.toContainText(/AM|PM/);
+
+    const returnedRecord = visibleRecords.filter({ hasText: '退回指标' });
+    await expect(returnedRecord).toContainText('退回原因');
+    await expect(returnedRecord).toContainText('衡量标准不完整');
+
+    await timeline.getByRole('button', { name: '查看全部 7 条' }).click();
+    await expect(visibleRecords).toHaveCount(7);
+    await expect(visibleRecords.last()).toContainText('保存草稿了 2 条指标');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
+  });
+
   test('shows an active return once and clears it after resubmission', async ({ page }) => {
     const returnedAt = '2026-09-02T08:00:00.000Z';
     const submittedAt = '2026-09-02T09:00:00.000Z';
