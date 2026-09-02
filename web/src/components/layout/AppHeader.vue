@@ -31,9 +31,9 @@ const systemPermissionLabel = computed(() => {
   return labels[auth.user?.sysRole ?? ''] ?? auth.user?.sysRole ?? '未设置';
 });
 
-function onLogout() {
+async function onLogout() {
+  await router.push('/login');
   auth.logout();
-  router.push('/login');
 }
 </script>
 
