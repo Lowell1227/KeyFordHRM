@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
-import { Check, Close, Refresh, Select } from '@element-plus/icons-vue';
+import { Clock, Connection, EditPen, Refresh } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { tasksApi } from '@/api/tasks.api';
 import { useAuthStore } from '@/stores/auth.store';
@@ -14,7 +14,8 @@ import IndicatorVisibilityEditor, {
   type VisibilityDepartmentOption,
   type VisibilityUserOption,
 } from './IndicatorVisibilityEditor.vue';
-import PerformanceReferencePanel from './PerformanceReferencePanel.vue';
+import GoalReviewReferencePanel from './GoalReviewReferencePanel.vue';
+import IndicatorOperationTimeline from './IndicatorOperationTimeline.vue';
 import { normalizeDisplayedWeightTotal } from '../indicator-weight';
 import {
   indicatorVisibilitySummary,
@@ -76,6 +77,8 @@ const auth = useAuthStore();
 const loading = ref(false);
 const error = ref('');
 const referenceOpen = ref(false);
+const historyOpen = ref(false);
+const editing = ref(false);
 const draftIndicators = reactive<IndicatorInstance[]>([]);
 const validationIndicatorIds = ref<string[]>([]);
 const dirtyIndicatorIds = ref(new Set<string>());
@@ -161,6 +164,7 @@ function replaceDraft(nextTask: TaskDetail) {
   validationIndicatorIds.value = [];
   dirtyIndicatorIds.value = new Set();
   draftRevision.value = 0;
+  editing.value = false;
 }
 
 function acknowledgeSavedTask(
@@ -220,6 +224,31 @@ function markDirty(indicatorId: string) {
   next.add(indicatorId);
   dirtyIndicatorIds.value = next;
   draftRevision.value += 1;
+}
+
+function beginEditing() {
+  if (!isReviewable.value) return;
+  editing.value = true;
+}
+
+function cancelEditing() {
+  if (!task.value) return;
+  draftIndicators.splice(
+    0,
+    draftIndicators.length,
+    ...cloneIndicators(task.value.indicatorInstances ?? []),
+  );
+  validationIndicatorIds.value = [];
+  dirtyIndicatorIds.value = new Set();
+  draftRevision.value += 1;
+  editing.value = false;
+}
+
+function targetDisplay(indicator: IndicatorInstance): string {
+  const text = indicator.targetValueText?.trim();
+  if (text) return text;
+  if (indicator.targetValue != null) return String(indicator.targetValue);
+  return '未设置';
 }
 
 function updateVisibility(index: number, selection: IndicatorVisibilitySelection) {
@@ -362,10 +391,10 @@ async function handleApprove() {
 async function handleReject() {
   if (!isReviewable.value || !task.value?.updatedAt) return;
   try {
-    const { value } = await ElMessageBox.prompt('请输入退回原因', '退回目标审核', {
-      confirmButtonText: '退回',
+    const { value } = await ElMessageBox.prompt('请说明需要员工修改的内容', '退回修改', {
+      confirmButtonText: '退回修改',
       cancelButtonText: '取消',
-      inputPlaceholder: '请输入退回原因',
+      inputPlaceholder: '请输入退回原因和修改要求',
       inputPattern: /\S+/,
       inputErrorMessage: '请输入退回原因',
       type: 'warning',
@@ -413,46 +442,53 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
     <template v-else-if="task">
       <header class="goal-review__header">
         <div>
-          <h3>考核指标</h3>
-          <span>{{ task.indicatorInstances.length }} 项 · {{ task.cycleName || '-' }}</span>
+          <h3>本次提交的目标</h3>
+          <span>重点检查目标是否清晰、可衡量，并与业务方向一致</span>
         </div>
         <div class="goal-review__actions">
+          <strong
+            class="goal-review__weight"
+            :class="{ 'is-invalid': !hasValidWeight }"
+            data-testid="indicator-weight-total"
+          >
+            权重合计 {{ displayedWeightTotal.percentText }}%
+          </strong>
           <el-button
+            :icon="Clock"
+            data-testid="goal-review-history-open"
+            @click="historyOpen = true"
+          >
+            操作记录
+          </el-button>
+          <el-button
+            :icon="Connection"
             data-testid="goal-review-reference-open"
             @click="referenceOpen = true"
           >
-            参考信息
+            参考目标
           </el-button>
-          <template v-if="isReviewable">
-            <el-tooltip content="保存修改" placement="top">
-              <el-button
-                :icon="Select"
-                data-testid="goal-review-save"
-                aria-label="保存指标修改"
-                :loading="busy"
-                @click="handleSave"
-              />
-            </el-tooltip>
-            <el-tooltip content="通过审核" placement="top">
-              <el-button
-                type="success"
-                :icon="Check"
-                data-testid="goal-review-approve"
-                aria-label="通过目标审核"
-                :loading="busy"
-                @click="handleApprove"
-              />
-            </el-tooltip>
-            <el-tooltip content="退回审核" placement="top">
-              <el-button
-                type="danger"
-                :icon="Close"
-                data-testid="goal-review-reject"
-                aria-label="退回目标审核"
-                :loading="busy"
-                @click="handleReject"
-              />
-            </el-tooltip>
+          <el-button
+            v-if="isReviewable && !editing"
+            type="primary"
+            plain
+            :icon="EditPen"
+            data-testid="goal-review-edit"
+            @click="beginEditing"
+          >
+            编辑目标
+          </el-button>
+          <template v-else-if="isReviewable">
+            <el-button data-testid="goal-review-cancel-edit" :disabled="busy" @click="cancelEditing">
+              取消编辑
+            </el-button>
+            <el-button
+              type="primary"
+              data-testid="goal-review-save"
+              :loading="busy"
+              @click="handleSave"
+            >
+              保存修改
+            </el-button>
           </template>
         </div>
       </header>
@@ -462,20 +498,21 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
         :columns="goalReviewColumns"
         :invalid-indicator-ids="indicatorIdsToReveal"
         :weight-total="totalWeight"
+        :show-weight-total="false"
       >
         <template #cell-indicator="{ index }">
           <div class="goal-review-cell goal-review-cell--name">
             <span class="goal-review-cell__index">{{ index + 1 }}</span>
             <div>
               <el-input
-                v-if="isReviewable"
+                v-if="editing"
                 v-model="draftIndicators[index].name"
                 maxlength="100"
                 aria-label="指标名称"
                 @input="markDirty(draftIndicators[index].id)"
               />
               <strong v-else>{{ draftIndicators[index].name || '未命名指标' }}</strong>
-              <label v-if="isReviewable" class="goal-review-cell__compact-field">
+              <label v-if="editing" class="goal-review-cell__compact-field">
                 <span>考核维度</span>
                 <el-input
                   v-model="draftIndicators[index].dimensionName"
@@ -490,7 +527,7 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
 
         <template #cell-weight="{ index }">
           <el-input-number
-            v-if="isReviewable"
+            v-if="editing"
             :model-value="Number((draftIndicators[index].weight * 100).toFixed(2))"
             :min="0"
             :max="100"
@@ -506,7 +543,7 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
         <template #cell-description="{ index }">
           <div class="goal-review-cell__stack">
             <el-input
-              v-if="isReviewable"
+              v-if="editing"
               v-model="draftIndicators[index].description"
               type="textarea"
               :rows="2"
@@ -514,70 +551,73 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
               aria-label="指标描述"
               @input="markDirty(draftIndicators[index].id)"
             />
-            <p v-else>{{ draftIndicators[index].description || '-' }}</p>
+            <p v-else>{{ draftIndicators[index].description || '未填写指标描述' }}</p>
 
             <div class="goal-review-cell__facts">
               <label>
                 <span>目标值</span>
                 <el-input
-                  v-if="isReviewable"
+                  v-if="editing"
                   v-model="draftIndicators[index].targetValueText"
                   maxlength="100"
                   @input="markDirty(draftIndicators[index].id)"
                 />
-                <strong v-else>{{ draftIndicators[index].targetValueText || '-' }}</strong>
+                <strong v-else>{{ targetDisplay(draftIndicators[index]) }}</strong>
               </label>
-              <label>
+              <label v-if="editing || draftIndicators[index].unit">
                 <span>单位</span>
                 <el-input
-                  v-if="isReviewable"
+                  v-if="editing"
                   v-model="draftIndicators[index].unit"
                   maxlength="30"
                   @input="markDirty(draftIndicators[index].id)"
                 />
-                <strong v-else>{{ draftIndicators[index].unit || '-' }}</strong>
+                <strong v-else>{{ draftIndicators[index].unit }}</strong>
               </label>
-              <label class="is-wide">
+              <label v-if="editing || draftIndicators[index].scoringStandard" class="is-wide">
                 <span>评分标准</span>
                 <el-input
-                  v-if="isReviewable"
+                  v-if="editing"
                   v-model="draftIndicators[index].scoringStandard"
                   maxlength="300"
                   @input="markDirty(draftIndicators[index].id)"
                 />
-                <strong v-else>{{ draftIndicators[index].scoringStandard || '-' }}</strong>
+                <strong v-else>{{ draftIndicators[index].scoringStandard }}</strong>
               </label>
-              <label>
+              <label v-if="editing || draftIndicators[index].dataSource">
                 <span>数据来源</span>
                 <el-input
-                  v-if="isReviewable"
+                  v-if="editing"
                   v-model="draftIndicators[index].dataSource"
                   maxlength="100"
                   @input="markDirty(draftIndicators[index].id)"
                 />
-                <strong v-else>{{ draftIndicators[index].dataSource || '-' }}</strong>
+                <strong v-else>{{ draftIndicators[index].dataSource }}</strong>
               </label>
-              <label>
+              <label v-if="editing || draftIndicators[index].dataCaliber">
                 <span>完成口径</span>
                 <el-input
-                  v-if="isReviewable"
+                  v-if="editing"
                   v-model="draftIndicators[index].dataCaliber"
                   maxlength="100"
                   @input="markDirty(draftIndicators[index].id)"
                 />
-                <strong v-else>{{ draftIndicators[index].dataCaliber || '-' }}</strong>
+                <strong v-else>{{ draftIndicators[index].dataCaliber }}</strong>
               </label>
             </div>
           </div>
         </template>
 
         <template #cell-primary="{ row }">
-          <span>{{ row.alignedObjectives?.map((objective) => objective.title).join('、') || '-' }}</span>
+          <div class="goal-review-cell__summary">
+            <span>对齐目标</span>
+            <strong>{{ row.alignedObjectives?.map((objective) => objective.title).join('、') || '未设置' }}</strong>
+          </div>
         </template>
 
         <template #cell-secondary="{ index }">
           <IndicatorVisibilityEditor
-            v-if="isReviewable"
+            v-if="editing"
             :model-value="{
               visibilityScope: draftIndicators[index].visibilityScope,
               visibilityScopes: normalizeIndicatorVisibilityScopes(
@@ -593,27 +633,66 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
             :disabled="busy"
             @update:model-value="updateVisibility(index, $event)"
           />
-          <span v-else>
-            {{ indicatorVisibilitySummary(
-              draftIndicators[index].visibilityScopes,
-              draftIndicators[index].visibilityScope,
-            ) }}
-          </span>
+          <div v-else class="goal-review-cell__summary">
+            <span>可见范围</span>
+            <strong>
+              {{ indicatorVisibilitySummary(
+                draftIndicators[index].visibilityScopes,
+                draftIndicators[index].visibilityScope,
+              ) }}
+            </strong>
+          </div>
         </template>
       </PerformanceReviewTable>
 
+      <footer v-if="isReviewable" class="goal-review__decision">
+        <div>
+          <strong>{{ editing ? '正在编辑目标' : '审核处理' }}</strong>
+          <span>{{ editing ? '请先保存修改，再进行通过或退回操作。' : '退回时需要填写原因，员工修改后可重新提交。' }}</span>
+        </div>
+        <div>
+          <el-button
+            type="danger"
+            plain
+            data-testid="goal-review-reject"
+            :disabled="editing"
+            :loading="busy"
+            @click="handleReject"
+          >
+            退回修改
+          </el-button>
+          <el-button
+            type="primary"
+            data-testid="goal-review-approve"
+            :disabled="editing"
+            :loading="busy"
+            @click="handleApprove"
+          >
+            通过
+          </el-button>
+        </div>
+      </footer>
+
       <el-drawer
         v-model="referenceOpen"
-        title="参考信息"
+        title="参考目标"
         size="430px"
         class="goal-review-reference-drawer"
       >
-        <PerformanceReferencePanel
+        <GoalReviewReferencePanel
           :cycle-id="task.cycleId"
           :employee-id="task.employeeId"
-          :indicators="task.indicatorInstances"
-          :flow-records="task.flowRecords"
+          :indicators="draftIndicators"
         />
+      </el-drawer>
+
+      <el-drawer
+        v-model="historyOpen"
+        title="操作记录"
+        size="460px"
+        class="goal-review-history-drawer"
+      >
+        <IndicatorOperationTimeline :records="task.flowRecords" />
       </el-drawer>
     </template>
 
@@ -637,19 +716,18 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
 }
 
 .goal-review__header {
-  min-height: 62px;
+  min-height: 72px;
   display: flex;
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-  padding: 0 18px;
+  padding: 10px 18px;
 }
 
 .goal-review__header > div:first-child {
   min-width: 0;
-  display: flex;
-  align-items: baseline;
-  gap: 8px;
+  display: grid;
+  gap: 4px;
 }
 
 .goal-review__header h3 {
@@ -667,7 +745,20 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
   flex: 0 0 auto;
   display: flex;
   align-items: center;
+  flex-wrap: wrap;
+  justify-content: flex-end;
   gap: 6px;
+}
+
+.goal-review__weight {
+  margin-right: 4px;
+  color: #16834a;
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.goal-review__weight.is-invalid {
+  color: #c0363e;
 }
 
 .goal-review-cell,
@@ -709,7 +800,7 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
 
 .goal-review-cell--name strong {
   color: #273247;
-  font-size: 14px;
+  font-size: 15px;
 }
 
 .goal-review-cell--name small,
@@ -725,6 +816,8 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
 
 .goal-review-cell__stack p {
   margin: 0;
+  color: #475467;
+  line-height: 1.75;
   white-space: pre-wrap;
 }
 
@@ -740,13 +833,148 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
 }
 
 .goal-review-cell__facts strong {
-  color: #5f6a7d;
+  color: #344054;
   font-size: 12px;
-  font-weight: 400;
+  font-weight: 500;
 }
 
 .goal-review :deep(.performance-review-table) {
+  padding: 0 18px 18px;
   border-top: 1px solid #edf0f5;
+  background: #f7f9fc;
+}
+
+.goal-review :deep(.performance-review-table__head) {
+  display: none !important;
+}
+
+.goal-review :deep(.performance-review-table__body) {
+  display: grid;
+  gap: 12px;
+  padding-top: 14px;
+  border-top: 0;
+}
+
+.goal-review :deep(.performance-review-table__row) {
+  padding: 0;
+  overflow: hidden;
+  border: 1px solid #e7ebf1;
+  border-radius: 12px;
+  background: #fff;
+  box-shadow: 0 1px 2px rgb(31 45 61 / 3%);
+}
+
+.goal-review :deep(.performance-review-table__row + .performance-review-table__row) {
+  border-top: 1px solid #e7ebf1;
+}
+
+.goal-review :deep(.performance-review-table__row.is-invalid) {
+  border-color: #f2b8b5;
+  box-shadow: inset 3px 0 #e34d59;
+}
+
+.goal-review :deep(.performance-review-table__cells) {
+  min-height: 0;
+  display: grid !important;
+  grid-template-columns: minmax(0, 1fr) 130px !important;
+  gap: 14px 18px;
+  padding: 16px;
+}
+
+.goal-review :deep(.performance-review-table__cell) {
+  display: block;
+  margin: 0;
+}
+
+.goal-review :deep(.performance-review-table__cell::before) {
+  display: none !important;
+}
+
+.goal-review :deep(.performance-review-table__cell[data-column='indicator']) {
+  grid-column: 1;
+}
+
+.goal-review :deep(.performance-review-table__cell[data-column='weight']) {
+  grid-column: 2;
+  align-self: start;
+  padding: 4px 10px;
+  border-radius: 8px;
+  color: #8a5a00;
+  text-align: center;
+  background: #fff6dc;
+  font-weight: 700;
+}
+
+.goal-review :deep(.performance-review-table__cell[data-column='description']) {
+  grid-column: 1 / -1;
+  padding-top: 14px;
+  border-top: 1px solid #edf0f5;
+}
+
+.goal-review :deep(.performance-review-table__cell[data-column='primary']) {
+  grid-column: 1;
+}
+
+.goal-review :deep(.performance-review-table__cell[data-column='secondary']) {
+  grid-column: 2;
+}
+
+.goal-review-cell__summary {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: #f6f8fb;
+}
+
+.goal-review-cell__summary span {
+  color: #8a94a6;
+  font-size: 11px;
+}
+
+.goal-review-cell__summary strong {
+  min-width: 0;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 500;
+  overflow-wrap: anywhere;
+}
+
+.goal-review :deep(.performance-review-table__extra) {
+  padding: 0 16px 16px;
+}
+
+.goal-review__decision {
+  min-height: 70px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 12px 18px;
+  border-top: 1px solid #e6ebf2;
+  background: #fff;
+}
+
+.goal-review__decision > div:first-child {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.goal-review__decision strong {
+  color: #273247;
+  font-size: 14px;
+}
+
+.goal-review__decision span {
+  color: #7a8495;
+  font-size: 12px;
+}
+
+.goal-review__decision > div:last-child {
+  flex: 0 0 auto;
+  display: flex;
 }
 
 .goal-review :deep(.performance-review-table .el-input-number),
@@ -765,14 +993,20 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
   padding: 0;
 }
 
-:global(.goal-review-reference-drawer .performance-reference) {
-  min-height: 100%;
-  border-left: 0;
+:global(.goal-review-history-drawer .el-drawer__body) {
+  padding: 0 18px 18px;
+}
+
+@media (max-width: 720px) {
+  :global(.goal-review-reference-drawer),
+  :global(.goal-review-history-drawer) {
+    width: 92vw !important;
+  }
 }
 
 @container goal-review (max-width: 720px) {
   .goal-review__header {
-    align-items: flex-start;
+    display: grid;
     padding: 12px;
   }
 
@@ -782,9 +1016,46 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
   }
 
   .goal-review__actions {
-    flex-wrap: wrap;
-    justify-content: flex-end;
-    gap: 2px;
+    justify-content: flex-start;
+    gap: 6px;
+  }
+
+  .goal-review__weight {
+    flex: 1 0 100%;
+  }
+
+  .goal-review :deep(.performance-review-table) {
+    padding: 0 10px 10px;
+  }
+
+  .goal-review :deep(.performance-review-table__cells) {
+    grid-template-columns: minmax(0, 1fr) !important;
+    gap: 12px;
+    padding: 14px;
+  }
+
+  .goal-review :deep(.performance-review-table__cell[data-column]) {
+    grid-column: 1;
+  }
+
+  .goal-review :deep(.performance-review-table__cell[data-column='weight']) {
+    justify-self: start;
+  }
+
+  .goal-review__decision {
+    align-items: stretch;
+    flex-direction: column;
+    padding: 12px;
+  }
+
+  .goal-review__decision > div:last-child {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .goal-review__decision :deep(.el-button) {
+    width: 100%;
+    margin: 0;
   }
 
   .goal-review-cell__facts {

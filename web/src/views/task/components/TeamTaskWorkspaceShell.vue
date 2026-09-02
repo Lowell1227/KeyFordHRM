@@ -27,6 +27,9 @@ defineEmits<{
 }>();
 
 const title = computed(() => props.stage === 'goal-review' ? '目标审核' : '主管评分');
+const pendingMemberCount = computed(() => (
+  props.members.filter((member) => member.stageState === 'pending').length
+));
 
 const managerPeriodStatus = computed(() => {
   const status = props.task?.periodReview?.status;
@@ -39,9 +42,18 @@ const managerPeriodStatus = computed(() => {
 });
 
 function stageStateLabel(state: TeamStageState): string {
+  if (props.stage === 'goal-review') {
+    const goalReviewLabels: Record<TeamStageState, string> = {
+      not_started: '未提交',
+      pending: '待我审核',
+      completed: '已处理',
+      exempted: '已豁免',
+    };
+    return goalReviewLabels[state];
+  }
   const labels: Record<TeamStageState, string> = {
     not_started: '未开始',
-    pending: '待处理',
+    pending: '待评分',
     completed: '已完成',
     exempted: '已豁免',
   };
@@ -68,6 +80,13 @@ function stageStateLabel(state: TeamStageState): string {
 
     <div class="team-task-workspace__layout">
       <nav class="team-task-workspace__members" aria-label="直属下属">
+        <div class="team-task-workspace__queue-heading">
+          <h2>{{ stage === 'goal-review' ? '下属目标' : '下属评分' }}</h2>
+          <span v-if="stage === 'goal-review'" data-testid="goal-review-pending-count">
+            {{ pendingMemberCount }} 人待我审核
+          </span>
+          <span v-else>{{ pendingMemberCount }} 人待评分</span>
+        </div>
         <button
           v-for="member in members"
           :key="member.id"
@@ -211,6 +230,23 @@ function stageStateLabel(state: TeamStageState): string {
   border-right: 1px solid #e8ecf2;
 }
 
+.team-task-workspace__queue-heading {
+  display: grid;
+  gap: 2px;
+  padding: 4px 8px 10px;
+}
+
+.team-task-workspace__queue-heading h2 {
+  margin: 0;
+  color: #30384b;
+  font-size: 13px;
+}
+
+.team-task-workspace__queue-heading span {
+  color: #8490a3;
+  font-size: 11px;
+}
+
 .team-task-workspace__member {
   width: 100%;
   min-width: 0;
@@ -343,6 +379,13 @@ function stageStateLabel(state: TeamStageState): string {
     overflow-y: hidden;
     border-right: 0;
     border-bottom: 1px solid #e3e7ee;
+  }
+
+  .team-task-workspace__queue-heading {
+    min-width: 96px;
+    flex: 0 0 auto;
+    justify-content: center;
+    padding: 4px 2px;
   }
 
   .team-task-workspace__member {

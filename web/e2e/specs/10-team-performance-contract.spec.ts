@@ -600,6 +600,18 @@ async function mockTaskWorkspaceIdentity(page: import('@playwright/test').Page, 
     contentType: 'application/json',
     body: JSON.stringify(apiResponse([])),
   }));
+  await page.route('**/api/v1/departments**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([])),
+  }));
+  await page.route('**/api/v1/objectives/alignment-candidates**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ items: [], owners: [], reason: '暂无可对齐目标' })),
+  }));
+  await page.route('**/api/v1/objectives**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([])),
+  }));
   await page.route('**/api/v1/tasks/*', (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/tasks/mine') || path.endsWith('/tasks/team')) return route.fallback();
@@ -961,7 +973,7 @@ test.describe('team list manager workspace', () => {
     await expect(page).toHaveURL(/employeeId=employee-1/);
 
     await page.getByTestId('team-cycle-filter').click();
-    await page.getByRole('option', { name: '2026 H1', exact: true }).click();
+    await page.getByRole('option', { name: /^2026 H1/ }).click();
     await expect(page).toHaveURL(/cycleId=cycle-1/);
     await selectAda();
     await page.getByTestId('team-count-completed').click();
@@ -1302,32 +1314,43 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('team-task-empty')).toHaveCount(0);
   });
 
-  test('goal review presents every business row in a flat reference-style table', async ({ page }) => {
+  test('goal review separates review decisions from reference targets and operation history', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await mockGoalReviewWorkspace(page);
     await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
 
     const table = page.getByTestId('performance-review-table');
-    for (const label of ['名称', '权重', '指标描述', '对齐', '可见范围']) {
-      await expect(table.getByRole('columnheader', { name: label, exact: true })).toBeVisible();
-    }
+    const memberQueue = page.getByRole('navigation', { name: '直属下属' });
+    await expect(memberQueue.getByRole('heading', { name: '下属目标', exact: true })).toBeVisible();
+    await expect(memberQueue.getByTestId('goal-review-pending-count')).toHaveText('1 人待我审核');
+    await expect(page.getByTestId('team-task-row-task-1')).toContainText('待我审核');
+    await expect(page.getByRole('heading', { name: '本次提交的目标', exact: true })).toBeVisible();
+    await expect(table.getByRole('columnheader').first()).toBeHidden();
     await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
     await expect(page.getByTestId('indicator-details-ind-2')).toBeVisible();
     await expect(page.getByTestId('indicator-toggle-ind-1')).toHaveCount(0);
     await expect(page.getByTestId('indicator-expand-all')).toHaveCount(0);
-    await expect(page.getByTestId('indicator-visibility-ind-1')).toBeVisible();
     await expect(page.getByTestId('indicator-details-ind-1').getByText('评分标准', { exact: true })).toBeVisible();
-    await expect(
-      page.getByTestId('indicator-details-ind-1')
-        .locator('label')
-        .filter({ hasText: '评分标准' })
-        .locator('input'),
-    ).toHaveValue('Accepted on schedule');
+    await expect(page.getByLabel('指标名称')).toHaveCount(0);
+    await expect(page.getByTestId('goal-review-edit')).toHaveText('编辑目标');
+    await expect(page.getByTestId('goal-review-approve')).toHaveText('通过');
+    await expect(page.getByTestId('goal-review-reject')).toHaveText('退回修改');
+    await expect(page.getByTestId('indicator-weight-total')).toHaveCount(1);
 
-    await expect(page.getByTestId('goal-review-reference-open')).toBeVisible();
-    await expect(page.getByTestId('performance-reference-panel')).toHaveCount(0);
+    await expect(page.getByTestId('goal-review-reference-open')).toHaveText('参考目标');
+    await expect(page.getByTestId('goal-review-history-open')).toHaveText('操作记录');
+    await expect(page.getByTestId('goal-review-reference-panel')).toHaveCount(0);
     await page.getByTestId('goal-review-reference-open').click();
-    await expect(page.getByTestId('performance-reference-panel')).toBeVisible();
+    const referenceDialog = page.getByRole('dialog', { name: '参考目标' });
+    await expect(referenceDialog).toContainText('仅用于判断员工目标是否与上级、部门方向一致');
+    await expect(referenceDialog.getByRole('heading', { name: '本次已对齐', exact: true })).toBeVisible();
+    await expect(referenceDialog.getByRole('heading', { name: '其他可参考目标', exact: true })).toBeVisible();
+    await expect(referenceDialog.getByText('流程历史', { exact: true })).toHaveCount(0);
+    await page.keyboard.press('Escape');
+
+    await page.getByTestId('goal-review-history-open').click();
+    await expect(page.getByRole('dialog', { name: '操作记录' })).toBeVisible();
+    await expect(page.getByTestId('indicator-operation-timeline')).toBeVisible();
   });
 
   test('goal review keeps rows compact, edits all visibility scopes, and uses scoped references', async ({ page }) => {
@@ -1357,59 +1380,41 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('indicator-details-ind-2')).toBeVisible();
     await expect(page.getByTestId('indicator-toggle-ind-1')).toHaveCount(0);
 
+    await page.getByTestId('goal-review-edit').click();
+    await expect(page.getByLabel('指标名称').first()).toHaveValue('Delivery quality');
+
     await page.getByTestId('indicator-visibility-ind-1').click();
+    const visibilityMenu = page.getByRole('tooltip', { name: '指标 ind-1 可见范围选项' });
     for (const label of [
       '全公司可见',
-      '部门内可见',
-      '部门及下级可见',
-      '直接下级可见',
-      '所有下级可见',
-      '仅上级可见',
-      '自定义范围',
+      '本部门可见',
+      '本部门及下级部门可见',
+      '直属下属可见',
+      '全部下属可见',
+      '绩效直属上级可见',
+      '自定义部门或员工',
     ]) {
-      await expect(page.getByRole('option', { name: label, exact: true })).toBeVisible();
+      await expect(visibilityMenu.getByText(label, { exact: true })).toBeVisible();
     }
-    await page.getByRole('option', { name: '自定义范围', exact: true }).click();
+    await visibilityMenu.getByText('自定义部门或员工', { exact: true }).click();
     await page.getByTestId('visibility-departments').click();
-    await page.getByRole('option', { name: 'Engineering', exact: true }).click();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
     await page.getByTestId('visibility-users').click();
-    await page.getByRole('option', { name: /Ada Chen/ }).click();
+    await page.keyboard.press('ArrowDown');
+    await page.keyboard.press('Enter');
     await expect(page.getByTestId('visibility-department-count')).toContainText('1');
     await expect(page.getByTestId('visibility-user-count')).toContainText('1');
 
     await page.getByTestId('goal-review-reference-open').click();
-    const objectiveTab = page.getByRole('tab', { name: '对齐目标' });
-    const historyTab = page.getByRole('tab', { name: '流程历史' });
-    const objectivePanel = page.getByTestId('reference-aligned-objectives');
-    const historyPanel = page.getByTestId('reference-flow-history');
-    await expect(page.getByRole('tablist', { name: '参考信息' })).toBeVisible();
-    await expect(objectiveTab).toHaveAttribute('aria-selected', 'true');
-    await expect(objectiveTab).toHaveAttribute('tabindex', '0');
-    await expect(historyTab).toHaveAttribute('aria-selected', 'false');
-    await expect(historyTab).toHaveAttribute('tabindex', '-1');
-    await expect(objectivePanel).toHaveAttribute('role', 'tabpanel');
-    await expect(objectivePanel).toHaveAttribute('aria-labelledby', await objectiveTab.getAttribute('id') ?? '');
-    await expect(objectiveTab).toHaveAttribute('aria-controls', await objectivePanel.getAttribute('id') ?? '');
-    await expect(objectivePanel).toContainText('Launch the customer portal');
-    await expect(page.getByTestId('reference-indicator-picker')).toContainText('Prior delivery target');
+    const referencePanel = page.getByTestId('goal-review-reference-panel');
+    await expect(referencePanel).toContainText('Launch the customer portal');
+    await expect(referencePanel).toContainText('Prior delivery target');
     await expect.poll(() => referenceRequests[referenceRequests.length - 1]?.searchParams.get('cycleId')).toBe('cycle-1');
     await expect.poll(() => referenceRequests[referenceRequests.length - 1]?.searchParams.get('ownerId')).toBe('employee-1');
-    await objectiveTab.press('ArrowRight');
-    await expect(historyTab).toBeFocused();
-    await expect(historyTab).toHaveAttribute('aria-selected', 'true');
-    await expect(historyPanel).toHaveAttribute('role', 'tabpanel');
-    await expect(historyPanel).toHaveAttribute('aria-labelledby', await historyTab.getAttribute('id') ?? '');
-    await expect(historyTab).toHaveAttribute('aria-controls', await historyPanel.getAttribute('id') ?? '');
-    await expect(historyPanel).toContainText('Ready for review');
-    await historyTab.press('ArrowLeft');
-    await expect(objectiveTab).toBeFocused();
-    await objectiveTab.press('End');
-    await expect(historyTab).toBeFocused();
-    await historyTab.press('Home');
-    await expect(objectiveTab).toBeFocused();
     expect(referenceRequests.every((url) => url.pathname.endsWith('/tasks/reference-indicators'))).toBe(true);
     await page.keyboard.press('Escape');
-    await expect(page.getByRole('dialog', { name: '参考信息' })).toBeHidden();
+    await expect(page.getByRole('dialog', { name: '参考目标' })).toBeHidden();
 
     await page.getByTestId('goal-review-save').click();
     await expect.poll(() => savedBody).toEqual(expect.objectContaining({
@@ -1418,7 +1423,8 @@ test.describe('team list manager workspace', () => {
     }));
     const instances = savedBody?.instances as Array<Record<string, unknown>>;
     expect(instances[0]).toEqual(expect.objectContaining({
-      visibilityScope: 'custom',
+      visibilityScope: 'supervisors',
+      visibilityScopes: ['supervisors', 'custom'],
       visibleDepartmentIds: ['dept-1'],
       visibleUserIds: ['employee-1'],
     }));
@@ -1480,22 +1486,25 @@ test.describe('team list manager workspace', () => {
 
     await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
     await page.getByTestId('goal-review-approve').click();
-    await page.getByRole('button', { name: '通过', exact: true }).click();
+    await page.getByRole('dialog', { name: '通过目标审核' })
+      .getByRole('button', { name: '通过', exact: true }).click();
     await expect(page.locator('.el-message--error')).toContainText('任务已被其他操作更新');
     await expect(page.getByTestId('team-task-list')).toHaveCount(0);
     await expect(page.locator('.el-message--success')).toHaveCount(0);
 
     await page.getByTestId('goal-review-approve').click();
-    await page.getByRole('button', { name: '通过', exact: true }).click();
+    await page.getByRole('dialog', { name: '通过目标审核' })
+      .getByRole('button', { name: '通过', exact: true }).click();
     await expect(page.locator('.el-message--success')).toContainText('单项通过成功 1 项');
     await expect(page.getByTestId('team-task-list')).toHaveCount(0);
 
     await page.getByTestId('goal-review-reject').click();
-    await page.getByRole('button', { name: '驳回', exact: true }).click();
-    await expect(page.locator('.el-message-box__errormsg')).toHaveText('请输入驳回原因');
+    const rejectDialog = page.getByRole('dialog', { name: '退回修改' });
+    await rejectDialog.getByRole('button', { name: '退回修改', exact: true }).click();
+    await expect(page.locator('.el-message-box__errormsg')).toHaveText('请输入退回原因');
     expect(rejectionBody).toBeUndefined();
-    await page.getByRole('textbox', { name: '请输入驳回原因' }).fill('目标口径需要补充');
-    await page.getByRole('button', { name: '驳回', exact: true }).click();
+    await page.getByRole('textbox', { name: '请说明需要员工修改的内容' }).fill('目标口径需要补充');
+    await rejectDialog.getByRole('button', { name: '退回修改', exact: true }).click();
     await expect.poll(() => rejectionBody).toEqual({
       tasks: [{ taskId: 'task-1', updatedAt: '2026-08-09T00:00:00.000Z' }],
       reason: '目标口径需要补充',
@@ -1535,21 +1544,23 @@ test.describe('team list manager workspace', () => {
       await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
       if (action === 'approve') {
         await page.getByTestId('goal-review-approve').click();
-        await page.getByRole('button', { name: '通过', exact: true }).click();
+        await page.getByRole('dialog', { name: '通过目标审核' })
+          .getByRole('button', { name: '通过', exact: true }).click();
       } else {
         await page.getByTestId('goal-review-reject').click();
-        await page.getByRole('textbox', { name: '请输入驳回原因' }).fill('目标需要重写');
-        await page.getByRole('button', { name: '驳回', exact: true }).click();
+        await page.getByRole('textbox', { name: '请说明需要员工修改的内容' }).fill('目标需要重写');
+        await page.getByRole('dialog', { name: '退回修改' })
+          .getByRole('button', { name: '退回修改', exact: true }).click();
       }
 
       await page.getByTestId('team-task-row-task-2').click();
       await expect(page.getByTestId('team-task-workspace')).toContainText('Grace Lin');
-      await expect(page.getByLabel('指标名称').first()).toHaveValue('Grace delivery target');
+      await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
       releaseResponse();
       await page.waitForTimeout(100);
 
       await expect(page.getByTestId('team-task-workspace')).toContainText('Grace Lin');
-      await expect(page.getByLabel('指标名称').first()).toHaveValue('Grace delivery target');
+      await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
       await expect(page.getByTestId('team-batch-result')).toHaveCount(0);
       await expect(page.locator('.el-message--success')).toHaveCount(0);
     });
@@ -1585,15 +1596,16 @@ test.describe('team list manager workspace', () => {
     });
 
     await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
+    await page.getByTestId('goal-review-edit').click();
     await expect(page.getByLabel('指标名称').first()).toHaveValue('Delivery quality');
     await page.getByTestId('goal-review-save').click();
     await page.getByTestId('team-task-row-task-2').click();
     await expect(page.getByTestId('team-task-workspace')).toContainText('Grace Lin');
-    await expect(page.getByLabel('指标名称').first()).toHaveValue('Grace delivery target');
+    await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
 
     releaseSave();
     await page.waitForTimeout(100);
-    await expect(page.getByLabel('指标名称').first()).toHaveValue('Grace delivery target');
+    await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
   });
 
   test('old A save cannot overwrite newer A draft after A to B to A', async ({ page }) => {
@@ -1637,14 +1649,16 @@ test.describe('team list manager workspace', () => {
     });
 
     await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
+    await page.getByTestId('goal-review-edit').click();
     const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
     await nameInput.fill('Ada first save');
     await page.getByTestId('goal-review-save').click();
 
     await page.getByTestId('team-task-row-task-2').click();
-    await expect(page.getByLabel('指标名称').first()).toHaveValue('Grace delivery target');
+    await expect(page.getByTestId('goal-review-workspace')).toContainText('Grace delivery target');
     await page.getByTestId('team-task-row-task-1').click();
-    await expect(page.getByLabel('指标名称').first()).toHaveValue('Delivery quality');
+    await expect(page.getByTestId('indicator-details-ind-1')).toContainText('Delivery quality');
+    await page.getByTestId('goal-review-edit').click();
     const newerNameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
     const newerDescriptionInput = page.getByTestId('indicator-details-ind-1').locator('textarea').first();
     await newerNameInput.fill('Ada newer unsaved draft');
@@ -1687,6 +1701,7 @@ test.describe('team list manager workspace', () => {
     });
 
     await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
+    await page.getByTestId('goal-review-edit').click();
     const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
     await nameInput.fill('Draft at save start');
     await page.getByTestId('goal-review-save').click();
@@ -1742,6 +1757,7 @@ test.describe('team list manager workspace', () => {
     });
 
     await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
+    await page.getByTestId('goal-review-edit').click();
     const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
     await nameInput.fill('Draft at save start');
     await page.getByTestId('goal-review-save').click();
@@ -1802,16 +1818,19 @@ test.describe('team list manager workspace', () => {
     });
 
     await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
+    await page.getByTestId('goal-review-edit').click();
     await page.getByTestId('goal-review-save').click();
     await page.getByTestId('team-task-row-task-2').click();
     await page.getByTestId('team-task-row-task-1').click();
-    await expect(page.getByLabel('指标名称').first()).toHaveValue('Delivery quality');
+    await expect(page.getByTestId('indicator-details-ind-1')).toContainText('Delivery quality');
+    await page.getByTestId('goal-review-edit').click();
     await page.getByTestId('goal-review-save').click();
     await expect.poll(() => saveBodies.length).toBe(2);
     releaseOldSave();
     await page.waitForTimeout(100);
 
     const nameInput = page.getByTestId('indicator-details-ind-1').locator('input').first();
+    await page.getByTestId('goal-review-edit').click();
     await nameInput.fill('Draft after newer acknowledgement');
     await page.getByTestId('goal-review-save').click();
     await expect.poll(() => saveBodies.length).toBe(3);
@@ -1890,9 +1909,13 @@ test.describe('team list manager workspace', () => {
         (element) => element.getBoundingClientRect().width,
       );
       expect(Math.abs(workspaceWidth - containerWidth)).toBeLessThanOrEqual(1);
-      await expect(page.getByTestId('performance-reference-panel')).toHaveCount(0);
+      await expect(page.getByTestId('goal-review-reference-panel')).toHaveCount(0);
       await expect(page.getByTestId('performance-review-table').locator('[role="columnheader"]'))
         .toHaveCount(5);
+      await expect(page.getByTestId('performance-review-table').locator('[role="columnheader"]').first())
+        .toBeHidden();
+
+      await page.getByTestId('goal-review-edit').click();
 
       for (const testId of [
         'indicator-visibility-ind-1',
@@ -1912,7 +1935,7 @@ test.describe('team list manager workspace', () => {
 
       await expect(page.getByTestId('indicator-details-ind-2')).toBeVisible();
       await page.getByTestId('indicator-visibility-ind-1').click();
-      await expect(page.getByRole('option', { name: '仅上级可见', exact: true })).toBeVisible();
+      await expect(page.getByText('绩效直属上级可见', { exact: true }).first()).toBeVisible();
       await page.keyboard.press('Escape');
       await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
 
@@ -1947,12 +1970,8 @@ test.describe('team list manager workspace', () => {
       const indicatorRows = page.locator('[data-testid^="indicator-row-"]');
       await expect(indicatorRows).toHaveCount(2);
       const tableHeaders = page.getByTestId('performance-review-table').locator('[role="columnheader"]');
-      if (viewport.name === 'desktop') {
-        await expect(tableHeaders).toHaveCount(5);
-        await expect(tableHeaders.first()).toBeVisible();
-      } else {
-        await expect(tableHeaders.first()).toBeHidden();
-      }
+      await expect(tableHeaders).toHaveCount(5);
+      await expect(tableHeaders.first()).toBeHidden();
       const rowFit = await indicatorRows.evaluateAll((rows) => rows.map((row) => ({
         clientWidth: row.clientWidth,
         scrollWidth: row.scrollWidth,
@@ -1979,8 +1998,8 @@ test.describe('team list manager workspace', () => {
       name: 'desktop',
       width: 1920,
       height: 1080,
-      visibleHeaders: ['员工', '部门', '职位', '考核周期', '任务状态', '结果', '更新日期', '操作'],
-      hiddenHeaders: [],
+      visibleHeaders: ['员工', '部门', '职位', '考核周期', '任务状态', '更新日期', '操作'],
+      hiddenHeaders: ['结果'],
       secondaryText: 'E001',
     },
     {
@@ -2539,11 +2558,9 @@ test.describe('team list employee visibility', () => {
 
     await page.goto('/tasks/task-employee');
 
-    await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
-    await expect(page.getByTestId('indicator-row-ind-1')).toBeFocused();
-    await expect(page.getByTestId('indicator-details-ind-1')).toContainText('请补充验收口径');
-    await page.getByTestId('indicator-collapse-all').click();
-    await expect(page.getByTestId('indicator-details-ind-1')).toBeHidden();
+    await expect(page.getByTestId('indicator-return-notice')).toBeVisible();
+    await expect(page.getByTestId('indicator-return-notice')).toContainText('请补充验收口径');
+    await expect(page.getByTestId('goal-setting-row')).toHaveCount(2);
   });
 
   for (const totalPercent of [99.99, 100.01]) {
@@ -2586,12 +2603,11 @@ test.describe('team list employee visibility', () => {
       }));
 
       await page.goto('/tasks/task-employee');
-      await expect(page.getByTestId('indicator-weight-total')).toContainText(`${totalPercent.toFixed(2)}%`);
-      await page.getByRole('button', { name: '提交主管审核', exact: true }).click();
+      await expect(page.getByTestId('goal-weight-feedback')).toContainText(`${totalPercent.toFixed(2)}%`);
+      await page.getByRole('button', { name: '提交上级审核', exact: true }).click();
 
       expect(submitCalls).toBe(0);
-      await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
-      await expect(page.getByTestId('indicator-row-ind-1')).toBeFocused();
+      await expect(page.getByTestId('goal-setting-row').first()).toBeVisible();
       await expect(page.locator('.el-message--warning')).toContainText('100%');
     });
   }

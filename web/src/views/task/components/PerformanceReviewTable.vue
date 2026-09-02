@@ -14,9 +14,11 @@ const props = withDefaults(defineProps<{
   columns: PerformanceReviewColumn[];
   invalidIndicatorIds?: string[];
   weightTotal?: number;
+  showWeightTotal?: boolean;
 }>(), {
   invalidIndicatorIds: () => [],
   weightTotal: undefined,
+  showWeightTotal: true,
 });
 
 const slots = useSlots();
@@ -105,6 +107,7 @@ watch(
     </div>
 
     <footer
+      v-if="showWeightTotal"
       class="performance-review-table__total"
       :class="{ 'is-invalid': !hasValidWeight }"
       data-testid="indicator-weight-total"
