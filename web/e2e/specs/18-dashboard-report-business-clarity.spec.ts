@@ -57,6 +57,7 @@ async function mockIdentity(
       name: role === 'hr' ? 'HR用户' : role === 'manager' ? '周主管' : '动态业务负责人',
       deptId: 'dept-1',
       deptName: '研发部',
+      position: '产品经理',
       status: 'active',
       sysRole: role === 'manager' ? 'employee' : role,
       isAssessorOnly: false,
@@ -175,7 +176,7 @@ test.describe('dashboard and reports business clarity', () => {
     await expect(page.getByTestId('manager-evaluation-open')).toHaveText('查看全部');
   });
 
-  test('dynamic business identities drive dashboard team and approval entries without changing the employee role', async ({ page }) => {
+  test('personal center keeps dynamic business duties out of stable account information', async ({ page }) => {
     await mockIdentity(page, 'employee', {
       ...emptyCapabilities,
       canManageTeam: true,
@@ -208,12 +209,18 @@ test.describe('dashboard and reports business clarity', () => {
 
     await page.goto('/dashboard');
 
-    await page.getByRole('button', { name: /动态业务负责人/ }).click();
-    await expect(page.getByRole('menu')).toContainText('人员身份：员工');
-    await expect(page.getByRole('menu')).toContainText('当前业务职责');
-    await expect(page.getByRole('menu')).toContainText('绩效直属上级 · 负责 1 项');
-    await expect(page.getByRole('menu')).not.toContainText('当前业务身份');
-    await page.getByRole('button', { name: /动态业务负责人/ }).click();
+    await page.getByTestId('header-user-menu').click();
+    const personalCenter = page.getByRole('menu');
+    await expect(personalCenter).toContainText('动态业务负责人');
+    await expect(personalCenter).toContainText('研发部 · 产品经理');
+    await expect(personalCenter).toContainText('任职状态');
+    await expect(personalCenter).toContainText('在职');
+    await expect(personalCenter).toContainText('系统权限');
+    await expect(personalCenter).toContainText('标准用户');
+    await expect(personalCenter).not.toContainText('当前业务职责');
+    await expect(personalCenter).not.toContainText('绩效直属上级');
+    await expect(personalCenter).not.toContainText('最终业务审批人');
+    await page.getByTestId('header-user-menu').click();
     await expect(page.getByTestId('manager-goal-review-open')).toBeVisible();
     await expect(page.getByTestId('manager-evaluation-open')).toBeVisible();
     await expect(page.getByTestId('dashboard-quick-actions')).toContainText('结果审批');
