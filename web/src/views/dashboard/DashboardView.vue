@@ -196,7 +196,7 @@ const roleQuickActions = computed<DashboardQuickAction[]>(() => {
     actions.push(
       { label: '周期与计划', description: '发起周期、检查节点与参与范围', path: '/cycles' },
       { label: '绩效校准', description: '核对等级分布并完成校准', path: '/calibration' },
-      { label: '结果公示', description: '确认审批状态并发布结果', path: '/publish' },
+      { label: '结果公示', description: '确认审批状态并公示结果', path: '/publish' },
       { label: '申诉管理', description: '集中处理员工绩效申诉', path: '/appeals' },
     );
   }
@@ -330,7 +330,7 @@ function avatarColor(name: string): string {
         <header class="manager-task-entry__header">
           <div>
             <h2>当前周期待办</h2>
-            <p>优先处理团队当前阶段任务；下方结果区仅展示最近已发布周期。</p>
+            <p>优先处理团队当前阶段任务；下方结果区仅展示最近已公示周期。</p>
           </div>
         </header>
         <article
@@ -429,8 +429,8 @@ function avatarColor(name: string): string {
       <section class="result-summary" data-testid="dashboard-result-summary">
         <div class="result-summary__heading">
           <div>
-            <span class="result-summary__eyebrow">最近已发布结果</span>
-            <h2 data-testid="dashboard-result-cycle">{{ selectedCycle?.name || '暂无已发布周期' }}</h2>
+            <span class="result-summary__eyebrow">最近公示结果</span>
+            <h2 data-testid="dashboard-result-cycle">{{ selectedCycle?.name || '暂无已公示周期' }}</h2>
           </div>
           <el-button v-if="canOpenReports" type="primary" plain @click="openReports">查看完整报表</el-button>
         </div>
@@ -466,7 +466,7 @@ function avatarColor(name: string): string {
           </el-table-column>
           <el-table-column prop="position" label="岗位" min-width="120" />
           <el-table-column prop="cycle" label="考核周期" min-width="150" />
-          <el-table-column prop="managerName" label="直属主管" min-width="110">
+          <el-table-column prop="managerName" label="绩效直属上级" min-width="110">
             <template #default="{ row }">{{ row.managerName || '-' }}</template>
           </el-table-column>
           <el-table-column prop="totalScore" label="总分" min-width="100" align="center">

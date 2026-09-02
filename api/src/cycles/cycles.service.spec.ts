@@ -22,6 +22,7 @@ describe('CyclesService', () => {
 
   let prisma: any;
   let service: CyclesService;
+  let notificationsService: any;
 
   beforeEach(() => {
     prisma = {
@@ -36,7 +37,7 @@ describe('CyclesService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         deleteMany: jest.fn().mockResolvedValue({ count: 1 }),
       },
-      assessmentTask: { findMany: jest.fn(), count: jest.fn(), groupBy: jest.fn() },
+      assessmentTask: { findMany: jest.fn(), count: jest.fn(), groupBy: jest.fn().mockResolvedValue([]) },
       assessmentTemplateSnapshot: { count: jest.fn() },
       cyclePeriodSchedule: {
         deleteMany: jest.fn().mockResolvedValue({ count: 0 }),
@@ -44,6 +45,7 @@ describe('CyclesService', () => {
       },
       user: {
         findFirst: jest.fn().mockResolvedValue({ id: '99999999-9999-4999-8999-999999999999' }),
+        findMany: jest.fn(),
         findUnique: jest.fn(),
       },
       systemConfig: {
@@ -51,7 +53,13 @@ describe('CyclesService', () => {
       },
       auditLog: { create: jest.fn() },
     };
-    service = new CyclesService(prisma as never);
+    notificationsService = {
+      sendCycleReviewReminder: jest.fn().mockResolvedValue({
+        recipientCount: 2,
+        reminderAvailableAt: new Date('2026-09-03T01:00:00.000Z'),
+      }),
+    };
+    service = new CyclesService(prisma as never, notificationsService as never);
   });
 
   afterEach(() => {
@@ -725,6 +733,56 @@ describe('CyclesService', () => {
     jest.useRealTimers();
   });
 
+  it('lets an ordinary HR plan editor remind every active HR administrator when no reviewer is assigned', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft({
+      reviewerId: null,
+      reviewStatus: 'pending',
+    }));
+    prisma.user.findMany.mockResolvedValue([{ id: 'hr-admin-1' }, { id: 'hr-admin-2' }]);
+    const ordinaryHr = {
+      ...creator,
+      id: 'hr-user-1',
+      sysRole: SysRole.hr_user,
+      hrCapabilities: ['cycle_plan_edit'],
+    } as AuthUser;
+
+    await expect((service as any).remindCycleReview('cycle-1', ordinaryHr)).resolves.toEqual({
+      recipientCount: 2,
+      reminderAvailableAt: new Date('2026-09-03T01:00:00.000Z'),
+    });
+
+    expect(prisma.user.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ sysRole: SysRole.hr, status: 'active' }),
+    }));
+    expect(notificationsService.sendCycleReviewReminder).toHaveBeenCalledWith({
+      cycleId: 'cycle-1',
+      cycleName: '2027年第一季度',
+      senderId: 'hr-user-1',
+      recipientIds: ['hr-admin-1', 'hr-admin-2'],
+    });
+  });
+
+  it('reminds only the assigned active reviewer when the plan has one', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue(storedDraft({
+      reviewerId: 'hr-admin-assigned',
+      reviewStatus: 'pending',
+    }));
+    prisma.user.findFirst.mockResolvedValue({ id: 'hr-admin-assigned' });
+    const ordinaryHr = {
+      ...creator,
+      id: 'hr-user-1',
+      sysRole: SysRole.hr_user,
+      hrCapabilities: ['cycle_plan_edit'],
+    } as AuthUser;
+
+    await (service as any).remindCycleReview('cycle-1', ordinaryHr);
+
+    expect(prisma.user.findMany).not.toHaveBeenCalled();
+    expect(notificationsService.sendCycleReviewReminder).toHaveBeenCalledWith(expect.objectContaining({
+      recipientIds: ['hr-admin-assigned'],
+    }));
+  });
+
   it('allows an employee to view only the manager frozen in the same opened cycle', async () => {
     const employee = { ...creator, id: 'employee-1', sysRole: SysRole.employee } as AuthUser;
     prisma.user.findUnique.mockResolvedValue({ directManagerId: 'new-roster-manager' });
@@ -932,7 +990,7 @@ describe('CyclesService', () => {
       group: 'attention',
     } as any, creator);
 
-    const expectedWhere = { status: { in: ['draft', 'launch_blocked'] } };
+    const expectedWhere = { status: { in: ['draft', 'scheduled', 'launch_blocked'] } };
     expect(prisma.assessmentCycle.count).toHaveBeenCalledWith({ where: expectedWhere });
     expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expectedWhere,
@@ -1241,6 +1299,36 @@ describe('CyclesService', () => {
       companyFinalApprover: cycle.companyFinalApprover,
       reviewFrequency: 'cycle',
     }));
+  });
+
+  it('returns task progress with managed cycle list items so list and detail use the same business state', async () => {
+    prisma.assessmentCycle.count.mockResolvedValue(1);
+    prisma.assessmentCycle.findMany.mockResolvedValue([storedDraft({
+      id: 'cycle-opened',
+      status: CycleStatus.self_eval,
+      openedAt: new Date('2027-01-01T01:00:00.000Z'),
+    })]);
+    prisma.assessmentTask.groupBy.mockResolvedValue([
+      { cycleId: 'cycle-opened', status: 'manager_scoring', _count: { _all: 3, approvedAt: 0 } },
+      { cycleId: 'cycle-opened', status: 'exempted', _count: { _all: 1, approvedAt: 0 } },
+    ]);
+
+    const result = await service.findAll({ page: 1, pageSize: 20, skip: 0, take: 20 } as any, creator);
+
+    expect(result.items[0]).toEqual(expect.objectContaining({
+      id: 'cycle-opened',
+      taskStats: expect.objectContaining({
+        total: 4,
+        approved: 0,
+        exempted: 1,
+        byStatus: { manager_scoring: 3, exempted: 1 },
+      }),
+    }));
+    expect(prisma.assessmentTask.groupBy).toHaveBeenCalledWith({
+      by: ['cycleId', 'status'],
+      where: { cycleId: { in: ['cycle-opened'] } },
+      _count: { _all: true, approvedAt: true },
+    });
   });
 
   it('saves a postponed deadline even when it reverses the order of two nodes', async () => {

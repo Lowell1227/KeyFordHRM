@@ -74,7 +74,7 @@ export function usePermission(ctx?: PermissionContext) {
   const maskMessage = computed(() => {
     if (!isTaskSelf.value) return null;
     if (!isPublished.value) {
-      return '公示结果尚未发布，评分、总分及等级将在公示后开放查看。';
+      return '绩效结果尚未公示，评分、总分及等级将在公示后开放查看。';
     }
     return '该字段未在公示范围内展示。';
   });
@@ -150,7 +150,7 @@ export function usePermission(ctx?: PermissionContext) {
     return status.value === 'published' && isTaskSelf.value;
   });
 
-  /** 是否可以查看 HR 校准结果/等级（公示后按 grade 配置）。 */
+  /** 是否可以查看绩效校准结果/等级（公示后按 grade 配置）。 */
   const canViewCalibration = computed(() => {
     if (!task.value || !user.value) return false;
     if (isTaskSelf.value) {

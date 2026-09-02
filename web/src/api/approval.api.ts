@@ -23,7 +23,7 @@ export const approvalApi = {
     return apiPost(`/cycles/${cycleId}/approval`, body);
   },
 
-  /** POST /tasks/:id/approval/reject — 退回 HR 校准 */
+  /** POST /tasks/:id/approval/reject — 退回绩效校准 */
   rejectTask(taskId: string, body: { comment?: string }): Promise<void> {
     return apiPost(`/tasks/${taskId}/approval/reject`, body);
   },

@@ -212,8 +212,8 @@ export function createTasksApi(client: TasksApiClient) {
       return apiPost(`/tasks/${id}/manager-score/withdraw`, body);
     },
 
-    // 部门审核
-    /** POST /tasks/:id/dept-review — 部门审核 */
+    // 部门复核
+    /** POST /tasks/:id/dept-review — 部门复核 */
     deptReview(id: string, body: DeptReviewBody): Promise<TaskDetail> {
       return apiPost(`/tasks/${id}/dept-review`, body);
     },

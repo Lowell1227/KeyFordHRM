@@ -55,8 +55,8 @@ describe('cycle launch time policy', () => {
       deadlineIndicatorConfirm: at(2),
     }, baseSchedules());
 
-    expect(settingWarning[0]?.message).toBe('建议不早于目标开放');
-    expect(confirmationWarning[0]?.message).toBe('建议不早于目标截止');
+    expect(settingWarning[0]?.message).toBe('目标制定截止早于目标制定开放');
+    expect(confirmationWarning[0]?.message).toBe('目标确认截止早于目标制定截止');
   });
 
   it('uses concise non-blocking copy for monthly follow-up sequence warnings', () => {
@@ -69,8 +69,8 @@ describe('cycle launch time policy', () => {
       [{ ...baseSchedules()[0], selfEvalDueAt: at(6, 10) }],
     );
 
-    expect(selfEvalWarning[0]?.message).toBe('建议不早于自评开始');
-    expect(managerWarning[0]?.message).toBe('建议不早于自评截止');
+    expect(selfEvalWarning[0]?.message).toBe('自评截止早于自评开始');
+    expect(managerWarning[0]?.message).toBe('主管评分截止早于自评截止');
     expect(selfEvalWarning[0]?.message.length).toBeLessThanOrEqual(15);
     expect(managerWarning[0]?.message.length).toBeLessThanOrEqual(15);
   });
@@ -85,8 +85,18 @@ describe('cycle launch time policy', () => {
       deadlineApproval: at(5, 10),
     }, baseSchedules());
 
-    expect(calibrationWarning[0]?.message).toBe('HR校准截止早于主管评分截止');
-    expect(approvalWarning[0]?.message).toBe('结果审批截止早于HR校准截止');
+    expect(calibrationWarning[0]?.message).toBe('绩效校准截止早于主管评分截止');
+    expect(approvalWarning[0]?.message).toBe('结果审批截止早于绩效校准截止');
+  });
+
+  it('names both fields in the publish sequence warning', () => {
+    const publishWarning = launchTimeSequenceWarnings({
+      ...baseCycle(),
+      deadlinePublish: at(5, 10),
+    }, baseSchedules());
+
+    expect(publishWarning[0]?.message).toBe('结果公示截止早于结果审批截止');
+    expect(publishWarning[0]?.message.length).toBeLessThanOrEqual(15);
   });
 
   it('keeps a reversed performance period as a structural blocker', () => {

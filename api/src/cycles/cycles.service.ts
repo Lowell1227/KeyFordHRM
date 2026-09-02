@@ -14,6 +14,7 @@ import { hasHrCapability } from '@/auth/hr-capabilities';
 import { CycleScheduleService, NormalizedCycleSchedulePlan } from './cycle-schedule.service';
 import { businessDateKey, canonicalDateOnly, normalizeScoringFrequency } from './cycle-scoring-plan';
 import type { PerformanceCycleContext } from './tracking-context.types';
+import { NotificationsService } from '@/notifications/notifications.service';
 
 const DEADLINE_FIELDS = [
   'deadlineIndicatorSetting',
@@ -28,9 +29,8 @@ const DEADLINE_FIELDS = [
 type DeadlineField = (typeof DEADLINE_FIELDS)[number];
 
 const CYCLE_STATUS_GROUPS: Record<CycleStatusGroup, CycleStatus[]> = {
-  [CycleStatusGroup.attention]: [CycleStatus.draft, CycleStatus.launch_blocked],
+  [CycleStatusGroup.attention]: [CycleStatus.draft, CycleStatus.scheduled, CycleStatus.launch_blocked],
   [CycleStatusGroup.active]: [
-    CycleStatus.scheduled,
     CycleStatus.indicator_setting,
     CycleStatus.self_eval,
     CycleStatus.manager_score,
@@ -65,6 +65,7 @@ interface FrozenLaunchParticipant {
 export class CyclesService {
   constructor(
     private readonly prisma: PrismaService,
+    private readonly notificationsService: NotificationsService,
     private readonly cycleScheduleService: CycleScheduleService = new CycleScheduleService(),
   ) {}
 
@@ -508,7 +509,32 @@ export class CyclesService {
       }),
     ]);
 
-    return paginated(items.map((cycle) => this.withPlanFields(cycle)), total, query);
+    const taskStatusRows = canManageCycles && items.length > 0
+      ? await this.prisma.assessmentTask.groupBy({
+          by: ['cycleId', 'status'],
+          where: { cycleId: { in: items.map((cycle) => cycle.id) } },
+          _count: { _all: true, approvedAt: true },
+        })
+      : [];
+    const statusCountsByCycle = new Map<string, Record<string, number>>();
+    const approvedCountsByCycle = new Map<string, number>();
+    for (const row of taskStatusRows) {
+      const byStatus = statusCountsByCycle.get(row.cycleId) ?? {};
+      byStatus[row.status] = row._count._all;
+      statusCountsByCycle.set(row.cycleId, byStatus);
+      approvedCountsByCycle.set(
+        row.cycleId,
+        (approvedCountsByCycle.get(row.cycleId) ?? 0) + row._count.approvedAt,
+      );
+    }
+
+    return paginated(items.map((cycle) => {
+      const publicCycle = this.withPlanFields(cycle);
+      const byStatus = statusCountsByCycle.get(cycle.id);
+      return byStatus
+        ? { ...publicCycle, taskStats: this.buildTaskStats(cycle, byStatus, undefined, approvedCountsByCycle.get(cycle.id)) }
+        : publicCycle;
+    }), total, query);
   }
 
   /** GET /cycles/mine — 查看已开放且与本人或直属团队任务相关的周期。 */
@@ -665,26 +691,12 @@ export class CyclesService {
       this.prisma.assessmentTask.groupBy({
         by: ['status'],
         where: taskWhere,
-        _count: { _all: true },
+        _count: { _all: true, approvedAt: true },
       }),
     ]);
 
     const byStatus = Object.fromEntries(taskStatusCounts.map((item) => [item.status, item._count._all]));
-    const count = (...statuses: string[]) => statuses.reduce((sum, status) => sum + (byStatus[status] ?? 0), 0);
-    const unsubmitted = count('pending', 'indicator_drafting');
-    const pendingManagerReview = count('indicator_reviewing', 'indicator_setting');
-    const pendingEmployeeConfirmation = count('indicator_confirming');
-    const exempted = count('exempted');
-    const goalCompleted = Math.max(0, totalTasks - exempted - unsubmitted - pendingManagerReview - pendingEmployeeConfirmation);
-    const overdue = (
-      cycle.deadlineIndicatorSetting && cycle.deadlineIndicatorSetting < new Date()
-        ? unsubmitted + pendingManagerReview
-        : 0
-    ) + (
-      cycle.deadlineIndicatorConfirm && cycle.deadlineIndicatorConfirm < new Date()
-        ? pendingEmployeeConfirmation
-        : 0
-    );
+    const approved = taskStatusCounts.reduce((sum, item) => sum + item._count.approvedAt, 0);
     const publicCycle = Object.fromEntries(
       Object.entries(cycle).filter(([key]) => key !== 'launchPlan' && key !== 'launchPlanHash'),
     );
@@ -693,16 +705,7 @@ export class CyclesService {
       ...publicCycle,
       reviewFrequency: 'cycle' as const,
       snapshotCount,
-      taskStats: {
-        total: totalTasks,
-        unsubmitted,
-        pendingManagerReview,
-        pendingEmployeeConfirmation,
-        goalCompleted,
-        exempted,
-        overdue,
-        byStatus,
-      },
+      taskStats: this.buildTaskStats(cycle, byStatus, totalTasks, approved),
     };
   }
 
@@ -1138,6 +1141,102 @@ export class CyclesService {
       });
     }
     return cycleIds;
+  }
+
+  private buildTaskStats(
+    cycle: {
+      deadlineIndicatorSetting?: Date | null;
+      deadlineIndicatorConfirm?: Date | null;
+    },
+    byStatus: Record<string, number>,
+    total = Object.values(byStatus).reduce((sum, value) => sum + value, 0),
+    approved = 0,
+  ) {
+    const count = (...statuses: string[]) => statuses.reduce((sum, status) => sum + (byStatus[status] ?? 0), 0);
+    const unsubmitted = count('pending', 'indicator_drafting');
+    const pendingManagerReview = count('indicator_reviewing', 'indicator_setting');
+    const pendingEmployeeConfirmation = count('indicator_confirming');
+    const exempted = count('exempted');
+    const goalCompleted = Math.max(0, total - exempted - unsubmitted - pendingManagerReview - pendingEmployeeConfirmation);
+    const overdue = (
+      cycle.deadlineIndicatorSetting && cycle.deadlineIndicatorSetting < new Date()
+        ? unsubmitted + pendingManagerReview
+        : 0
+    ) + (
+      cycle.deadlineIndicatorConfirm && cycle.deadlineIndicatorConfirm < new Date()
+        ? pendingEmployeeConfirmation
+        : 0
+    );
+    return {
+      total,
+      approved,
+      unsubmitted,
+      pendingManagerReview,
+      pendingEmployeeConfirmation,
+      goalCompleted,
+      exempted,
+      overdue,
+      byStatus,
+    };
+  }
+
+  async remindCycleReview(id: string, user: AuthUser) {
+    if (user.sysRole !== SysRole.hr_user || !hasHrCapability(user, 'cycle_plan_edit')) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅普通 HR 可催办周期审核' });
+    }
+
+    const cycle = await this.prisma.assessmentCycle.findUnique({
+      where: { id },
+      select: {
+        id: true,
+        name: true,
+        status: true,
+        reviewStatus: true,
+        reviewerId: true,
+      },
+    });
+    if (!cycle) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
+    if (cycle.status !== CycleStatus.draft || cycle.reviewStatus === 'approved') {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前周期无需催办审核' });
+    }
+
+    let recipientIds: string[];
+    if (cycle.reviewerId) {
+      const reviewer = await this.prisma.user.findFirst({
+        where: {
+          id: cycle.reviewerId,
+          sysRole: SysRole.hr,
+          deletedAt: null,
+          status: 'active',
+        },
+        select: { id: true },
+      });
+      recipientIds = reviewer ? [reviewer.id] : [];
+    } else {
+      const reviewers = await this.prisma.user.findMany({
+        where: {
+          sysRole: SysRole.hr,
+          deletedAt: null,
+          status: 'active',
+        },
+        select: { id: true },
+      });
+      recipientIds = reviewers.map(({ id: reviewerId }) => reviewerId);
+    }
+
+    if (recipientIds.length === 0) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '当前没有可接收审核提醒的 HR 管理员',
+      });
+    }
+
+    return this.notificationsService.sendCycleReviewReminder({
+      cycleId: cycle.id,
+      cycleName: cycle.name,
+      senderId: user.id,
+      recipientIds,
+    });
   }
 
   private trackingContextPriority(context: PerformanceCycleContext, today: string): number {

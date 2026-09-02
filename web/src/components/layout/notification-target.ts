@@ -6,8 +6,12 @@ export function resolveNotificationTarget(
   canManageTeam: boolean,
 ): RouteLocationRaw | null {
   const taskId = notification.taskId;
-  if (!taskId) return null;
   const cycleId = notification.cycleId || undefined;
+
+  if (notification.type === 'cycle_review_reminder' && cycleId) {
+    return { path: '/cycles', query: { group: 'attention', cycleId } };
+  }
+  if (!taskId) return null;
 
   if (canManageTeam && cycleId) {
     if (notification.type === 'indicator_setting_notice') {

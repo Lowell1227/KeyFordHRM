@@ -7,6 +7,7 @@ import type {
   LaunchPreflightResult,
 } from '../../src/types/api.types';
 import {
+  cycleBusinessState,
   cyclePrimaryActionLabel,
   cycleNextStep,
   cycleStageIndex,
@@ -36,6 +37,7 @@ const draftCycle: AssessmentCycle = {
   deadlineApproval: '2027-01-13T18:00:00.000Z',
   deadlinePublish: '2027-01-14T18:00:00.000Z',
   status: 'draft',
+  reviewStatus: 'pending',
   hrOwnerId: 'hr-1',
   participantDeptIds: [],
   participantUserIds: [],
@@ -117,7 +119,19 @@ const readyPreflight: LaunchPreflightResult = {
   participants: [],
   blockers: [],
   warnings: [],
+  reviewReminderAvailableAt: null,
 };
+
+const reviewBlockedPreflight = {
+  ...readyPreflight,
+  ready: false,
+  planHash: null,
+  blockers: [{
+    code: 'CYCLE_NOT_APPROVED',
+    message: '计划需要HR管理员审核通过后才能发起',
+  }],
+  reviewReminderAvailableAt: null,
+} as LaunchPreflightResult & { reviewReminderAvailableAt: string | null };
 
 const blockedPreflight: LaunchPreflightResult = {
   ...readyPreflight,
@@ -156,7 +170,7 @@ const warningPreflight: LaunchPreflightResult = {
   ...immediatelyOpenablePreflight,
   warnings: [{
     code: 'HR_CALIBRATION_BEFORE_FINAL_MANAGER_DUE',
-    message: 'HR校准截止早于主管评分截止',
+    message: '绩效校准截止早于主管评分截止',
   }],
 };
 
@@ -174,6 +188,7 @@ interface CycleMockOptions {
   preflight?: LaunchPreflightResult;
   participantRecord?: Record<string, unknown>;
   participantRecordRequests?: string[];
+  reviewReminderRequests?: string[];
   deletedIds?: string[];
   authUser?: CurrentUser;
 }
@@ -318,6 +333,16 @@ async function mockCyclePage(
         body: JSON.stringify(apiResponse(options.preflight ?? readyPreflight)),
       });
     }
+    const reviewReminderId = url.pathname.match(/\/cycles\/([^/]+)\/review-reminder$/)?.[1];
+    if (route.request().method() === 'POST' && reviewReminderId) {
+      options.reviewReminderRequests?.push(reviewReminderId);
+      const reminderAvailableAt = '2026-09-03T02:00:00.000Z';
+      if (options.preflight) options.preflight.reviewReminderAvailableAt = reminderAvailableAt;
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ recipientCount: 2, reminderAvailableAt })),
+      });
+    }
     const participantRecordId = url.pathname.match(/\/cycles\/([^/]+)\/participant-record$/)?.[1];
     if (participantRecordId) {
       options.participantRecordRequests?.push(participantRecordId);
@@ -358,11 +383,57 @@ async function mockCyclePage(
 
 test('maps cycle states to the compact group, action, and five-stage workflow', () => {
   expect(cycleStatusGroup('draft')).toBe('attention');
+  expect(cycleStatusGroup('scheduled')).toBe('attention');
   expect(cycleStatusGroup('manager_score')).toBe('active');
   expect(cycleStatusGroup('closed')).toBe('finished');
-  expect(cyclePrimaryActionLabel('draft')).toBe('发起检查');
-  expect(cyclePrimaryActionLabel('launch_blocked')).toBe('重新检查');
-  expect(cycleNextStep({ ...draftCycle, status: 'launch_blocked' }).label).toBe('处理发起阻断项');
+  expect(cycleBusinessState(draftCycle).label).toBe('待审核');
+  expect(cycleBusinessState({ ...draftCycle, reviewStatus: 'rejected' }).label).toBe('已退回');
+  expect(cycleBusinessState({ ...draftCycle, reviewStatus: 'approved' }).label).toBe('待发起');
+  expect(cycleBusinessState(scheduledCycle).label).toBe('已预约');
+  expect(cycleBusinessState({
+    ...draftCycle,
+    status: 'approval',
+    taskStats: {
+      total: 3,
+      approved: 3,
+      exempted: 0,
+      unsubmitted: 0,
+      pendingManagerReview: 0,
+      pendingEmployeeConfirmation: 0,
+      goalCompleted: 3,
+      overdue: 0,
+      byStatus: { approval: 3 },
+    },
+  }).label).toBe('待公示');
+  expect(cycleBusinessState({
+    ...draftCycle,
+    status: 'indicator_setting',
+    taskStats: { total: 1, exempted: 0, unsubmitted: 1, pendingManagerReview: 1, pendingEmployeeConfirmation: 0, goalCompleted: 0, overdue: 0, byStatus: { indicator_reviewing: 1 } },
+  }).label).toBe('目标准备中');
+  expect(cycleBusinessState({
+    ...draftCycle,
+    status: 'self_eval',
+    taskStats: { total: 1, exempted: 0, unsubmitted: 1, pendingManagerReview: 0, pendingEmployeeConfirmation: 0, goalCompleted: 1, overdue: 0, byStatus: { self_eval: 1 } },
+  }).label).toBe('目标跟进中');
+  expect(cycleBusinessState({
+    ...draftCycle,
+    status: 'hr_calibration',
+    taskStats: { total: 1, exempted: 0, unsubmitted: 0, pendingManagerReview: 0, pendingEmployeeConfirmation: 0, goalCompleted: 1, overdue: 0, byStatus: { dept_review: 1 } },
+  }).label).toBe('结果考评中');
+  expect(cycleBusinessState({
+    ...draftCycle,
+    status: 'appeal',
+    taskStats: { total: 1, exempted: 0, unsubmitted: 0, pendingManagerReview: 0, pendingEmployeeConfirmation: 0, goalCompleted: 1, overdue: 0, byStatus: { appealing: 1 } },
+  }).label).toBe('申诉处理中');
+  expect(cycleBusinessState({
+    ...draftCycle,
+    status: 'published',
+    taskStats: { total: 1, exempted: 0, unsubmitted: 0, pendingManagerReview: 0, pendingEmployeeConfirmation: 1, goalCompleted: 1, overdue: 0, byStatus: { published: 1 } },
+  }).label).toBe('已公示');
+  expect(cycleBusinessState({ ...draftCycle, status: 'closed' }).label).toBe('已结束');
+  expect(cyclePrimaryActionLabel({ ...draftCycle, reviewStatus: 'approved' })).toBe('发起考核');
+  expect(cyclePrimaryActionLabel({ ...draftCycle, status: 'launch_blocked' })).toBe('处理发起问题');
+  expect(cycleNextStep({ ...draftCycle, status: 'launch_blocked' }).label).toBe('处理发起问题');
   expect(cycleStageIndex('approval')).toBe(3);
 });
 
@@ -434,6 +505,43 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByTestId('cycle-delete-cycle-draft')).toHaveText('删除');
     await expect(page.getByTestId('cycle-primary-cycle-draft')).toHaveCount(0);
     expect(cycleRequests.some((url) => url.searchParams.get('group') === 'attention')).toBe(true);
+  });
+
+  test('uses one unambiguous business status in the list and detail', async ({ page }) => {
+    const approvedDraft: AssessmentCycle = {
+      ...draftCycle,
+      id: 'cycle-approved',
+      name: '2027 Q1 待发起周期',
+      reviewStatus: 'approved',
+      creator: { id: 'hr-user-1', name: '方园' },
+      reviewer: { id: 'hr-admin-1', name: '姚瑶' },
+    };
+    await mockCyclePage(page, [], {
+      cycles: [draftCycle, approvedDraft, scheduledCycle],
+      preflight: readyPreflight,
+    });
+
+    await page.goto('/cycles');
+
+    const pendingRow = page.getByRole('row').filter({ hasText: draftCycle.name });
+    const approvedRow = page.getByRole('row').filter({ hasText: approvedDraft.name });
+    const scheduledRow = page.getByRole('row').filter({ hasText: scheduledCycle.name });
+    await expect(pendingRow).toContainText('待审核');
+    await expect(pendingRow).not.toContainText('草稿');
+    await expect(pendingRow).not.toContainText('计划审核');
+    await expect(approvedRow).toContainText('待发起');
+    await expect(scheduledRow).toContainText('已预约');
+
+    await approvedRow.getByRole('button', { name: approvedDraft.name }).click();
+    await expect(page.getByTestId('cycle-current-action')).toContainText('发起考核');
+    await expect(page.getByTestId('cycle-stage-0')).toContainText('规划配置');
+    await expect(page.getByTestId('cycle-stage-1')).toContainText('目标准备');
+    await expect(page.getByTestId('cycle-stage-2')).toContainText('目标跟进');
+    await expect(page.getByTestId('cycle-stage-3')).toContainText('结果考评');
+    await expect(page.getByTestId('cycle-stage-4')).toContainText('公示归档');
+    await expect(page.getByTestId('cycle-workspace')).toContainText('审核人：姚瑶');
+    await expect(page.getByTestId('cycle-workspace')).not.toContainText('HR管理员审核池');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).not.toContainText('结果审核：按周期审核');
   });
 
   test('shows the launched participant record without duplicating cycle concepts', async ({ page }) => {
@@ -717,8 +825,8 @@ test.describe('compact cycle management list', () => {
     await expect(page.getByTestId('cycle-workspace')).toBeVisible();
     await expect(page.getByTestId('cycle-current-action')).toBeVisible();
     await expect(page.getByTestId('cycle-current-action')).toContainText('当前要做');
-    await expect(page.getByTestId('cycle-current-action').getByRole('heading', { name: '完成发起检查', exact: true })).toBeVisible();
-    await expect(page.getByTestId('cycle-stage-3')).toContainText('校准与审批');
+    await expect(page.getByTestId('cycle-current-action').getByRole('heading', { name: '审核计划', exact: true })).toBeVisible();
+    await expect(page.getByTestId('cycle-stage-3')).toContainText('结果考评');
     await expect(page.getByTestId('cycle-workspace-edit')).toHaveText('编辑');
     for (let index = 0; index < 5; index += 1) {
       await expect(page.getByTestId(`cycle-stage-${index}`)).toBeVisible();
@@ -747,7 +855,7 @@ test.describe('compact cycle management list', () => {
 
     const reminder = page.getByTestId('cycle-preflight-reminder');
     await expect(reminder.getByRole('heading', { name: '计划检查提醒' })).toBeVisible();
-    await expect(reminder.getByText('HR校准截止早于主管评分截止', { exact: true })).toHaveCount(1);
+    await expect(reminder.getByText('绩效校准截止早于主管评分截止', { exact: true })).toHaveCount(1);
     await expect(reminder).toContainText('涉及2项');
     await expect(reminder).toContainText('目标制定开放');
     await expect(reminder).not.toContainText('请确认时间安排；该提醒不会阻止发起。');
@@ -877,6 +985,43 @@ test.describe('compact cycle management list', () => {
     expect(launchBodies).toEqual([{ expectedPlanHash: 'ready-plan-hash' }]);
   });
 
+  test('shows the review action to an HR administrator on the review blocker', async ({ page }) => {
+    await mockCyclePage(page, [], { preflight: { ...reviewBlockedPreflight } });
+    await page.goto('/cycles?group=attention&cycleId=cycle-draft');
+
+    const blocker = page.getByTestId('cycle-preflight-blocker');
+    await expect(blocker).toContainText('计划需要HR管理员审核通过后才能发起');
+    await expect(blocker.getByRole('button', { name: '审核', exact: true })).toBeVisible();
+    await expect(blocker.getByRole('button', { name: '催办', exact: true })).toHaveCount(0);
+  });
+
+  test('lets an ordinary HR send one in-app review reminder and shows the cooldown state', async ({ page }) => {
+    const reviewReminderRequests: string[] = [];
+    await mockCyclePage(page, [], {
+      preflight: { ...reviewBlockedPreflight },
+      reviewReminderRequests,
+      authUser: {
+        id: 'hr-user-1',
+        name: '普通 HR',
+        employeeNo: 'HRU001',
+        deptId: 'hr-dept',
+        deptName: '人力资源部',
+        sysRole: 'hr_user',
+        hrCapabilities: ['cycle_plan_edit'],
+        isAssessorOnly: false,
+        canViewAll: true,
+      },
+    });
+    await page.goto('/cycles?group=attention&cycleId=cycle-draft');
+
+    const blocker = page.getByTestId('cycle-preflight-blocker');
+    await expect(blocker.getByRole('button', { name: '审核', exact: true })).toHaveCount(0);
+    await blocker.getByRole('button', { name: '催办', exact: true }).click();
+
+    await expect.poll(() => reviewReminderRequests).toEqual(['cycle-draft']);
+    await expect(blocker.getByRole('button', { name: '已催办', exact: true })).toBeDisabled();
+  });
+
   test('shows time order warnings and still lets HR confirm and launch', async ({ page }) => {
     const launchRequests: string[] = [];
     await mockCyclePage(page, [], {
@@ -886,7 +1031,7 @@ test.describe('compact cycle management list', () => {
     await page.goto('/cycles?group=attention&cycleId=cycle-draft');
 
     await expect(page.getByTestId('cycle-preflight-reminder'))
-      .toContainText('HR校准截止早于主管评分截止');
+      .toContainText('绩效校准截止早于主管评分截止');
     await expect(page.getByText('1项时间提醒。时间提醒不影响发起。')).toBeVisible();
     await page.getByRole('button', { name: '发起考核', exact: true }).click();
 

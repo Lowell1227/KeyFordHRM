@@ -133,6 +133,13 @@ export const cyclesApi = {
     return apiPost(`/cycles/${id}/review`, { action, expectedPlanVersion, comment });
   },
 
+  remindReview(id: string): Promise<{
+    recipientCount: number;
+    reminderAvailableAt: string;
+  }> {
+    return apiPost(`/cycles/${id}/review-reminder`, {});
+  },
+
   updateNotificationMode(id: string, notificationMode: CycleNotificationMode): Promise<AssessmentCycle> {
     return apiPatch(`/cycles/${id}/notification-mode`, { notificationMode });
   },

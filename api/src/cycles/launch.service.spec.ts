@@ -15,7 +15,7 @@ describe('LaunchService preflight', () => {
   let tx: any;
   let prisma: any;
   let service: LaunchService;
-  let notificationsService: { create: jest.Mock };
+  let notificationsService: { create: jest.Mock; getCycleReviewReminderCooldownUntil: jest.Mock };
 
   const candidate = {
     id: '22222222-2222-4222-8222-222222222222',
@@ -219,7 +219,10 @@ describe('LaunchService preflight', () => {
       department: tx.department,
       systemConfig: tx.systemConfig,
     };
-    notificationsService = { create: jest.fn().mockResolvedValue(undefined) };
+    notificationsService = {
+      create: jest.fn().mockResolvedValue(undefined),
+      getCycleReviewReminderCooldownUntil: jest.fn().mockResolvedValue(null),
+    };
     service = new LaunchService(
       prisma,
       { calcExempt: jest.fn().mockReturnValue({ isExempt: false, onJobDays: 90 }) } as never,
@@ -315,7 +318,11 @@ describe('LaunchService preflight', () => {
     await expect(service.preflight('55555555-5555-4555-8555-555555555555'))
       .resolves.toEqual(expect.objectContaining({
         ready: false,
-        blockers: expect.arrayContaining([expect.objectContaining({ code: 'CYCLE_NOT_APPROVED' })]),
+        reviewReminderAvailableAt: null,
+        blockers: expect.arrayContaining([expect.objectContaining({
+          code: 'CYCLE_NOT_APPROVED',
+          message: '计划需要HR管理员审核通过后才能发起',
+        })]),
       }));
   });
 
@@ -529,7 +536,7 @@ describe('LaunchService preflight', () => {
     const replacementApprover = {
       ...companyFinalApprover,
       id: replacementApproverId,
-      name: '新公司最终审定人',
+      name: '新结果审批人',
     };
     tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle());
     tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
@@ -547,7 +554,7 @@ describe('LaunchService preflight', () => {
     const after = await service.preflight(cycleId);
 
     expect(before.companyFinalApprover).toEqual({ id: companyFinalApproverId, name: '李宏' });
-    expect(after.companyFinalApprover).toEqual({ id: replacementApproverId, name: '新公司最终审定人' });
+    expect(after.companyFinalApprover).toEqual({ id: replacementApproverId, name: '新结果审批人' });
     expect(after.planHash).not.toBe(before.planHash);
   });
 
@@ -812,14 +819,14 @@ describe('LaunchService preflight', () => {
       ready: false,
       blockers: expect.arrayContaining([expect.objectContaining({
         code: 'ORGANIZATION_RELATION_INVALID',
-        message: expect.stringContaining('公司最终审定人必须是没有直属上级的最高负责人'),
+        message: expect.stringContaining('结果审批人必须是没有绩效直属上级的最高负责人'),
       })]),
     }));
   });
 
   it.each([
     { workflowVersion: 1, expectedCopy: '最终业务审批人' },
-    { workflowVersion: 2, expectedCopy: '分管总审核人/公司最终审定人' },
+    { workflowVersion: 2, expectedCopy: '结果审批人' },
   ])('uses workflow v$workflowVersion organization blocker terminology', async ({
     workflowVersion,
     expectedCopy,

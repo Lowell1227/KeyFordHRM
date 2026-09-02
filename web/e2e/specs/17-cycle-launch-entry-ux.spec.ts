@@ -301,14 +301,14 @@ async function mockCycleLaunchPage(
           issues.push({
             code: 'SELF_EVAL_OPEN_AFTER_DUE',
             periodKey: schedule.periodKey,
-            message: '建议不早于自评开始',
+            message: '自评截止早于自评开始',
           });
         }
         if (new Date(schedule.selfEvalDueAt) > new Date(schedule.managerDueAt)) {
           issues.push({
             code: 'SELF_EVAL_DUE_AFTER_MANAGER_DUE',
             periodKey: schedule.periodKey,
-            message: '建议不早于自评截止',
+            message: '主管评分截止早于自评截止',
           });
         }
           return issues;
@@ -320,7 +320,7 @@ async function mockCycleLaunchPage(
         ) {
           warnings.push({
             code: 'INDICATOR_SETTING_BEFORE_GOAL_OPEN',
-            message: '建议不早于目标开放',
+            message: '目标制定截止早于目标制定开放',
           });
         }
       return route.fulfill({
@@ -1029,7 +1029,7 @@ test.describe('cycle launch entry UX', () => {
     const nodes = page.getByTestId('cycle-schedule-node');
     await expect(nodes).toHaveCount(6);
     await expect(nodes.nth(0)).toContainText('目标制定开放');
-    await expect(nodes.nth(3)).toContainText('HR校准截止');
+    await expect(nodes.nth(3)).toContainText('绩效校准截止');
     await expect(nodes.nth(5)).toContainText('结果公示截止');
     await expect(timePlan.locator('.schedule-node__number')).toHaveCount(0);
 
@@ -1123,9 +1123,9 @@ test.describe('cycle launch entry UX', () => {
 
     await expect(page.getByTestId('cycle-schedule-warning-summary')).toHaveCount(0);
     await expect(firstSchedule.getByTestId('self-eval-due-at').locator('.cycle-time-field__issue'))
-      .toContainText('建议不早于自评开始');
+      .toContainText('自评截止早于自评开始');
     await expect(firstSchedule.getByTestId('manager-due-at').locator('.cycle-time-field__issue'))
-      .toContainText('建议不早于自评截止');
+      .toContainText('主管评分截止早于自评截止');
     await page.getByTestId('cycle-create-save-draft').click();
 
     await expect.poll(() => createBodies).toHaveLength(1);
@@ -1142,8 +1142,8 @@ test.describe('cycle launch entry UX', () => {
     await goalOpenInput.press('Enter');
 
     await expect(nodes.nth(1).locator('.schedule-node__issue'))
-      .toContainText('建议不早于目标开放');
-    await expect(page.locator('.el-message').filter({ hasText: '建议不早于目标开放' }))
+      .toContainText('目标制定截止早于目标制定开放');
+    await expect(page.locator('.el-message').filter({ hasText: '目标制定截止早于目标制定开放' }))
       .toHaveCount(0);
   });
 

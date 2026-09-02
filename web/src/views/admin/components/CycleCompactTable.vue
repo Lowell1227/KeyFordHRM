@@ -2,9 +2,8 @@
 import { MoreFilled } from '@element-plus/icons-vue';
 import { computed } from 'vue';
 import type { AssessmentCycle, Department } from '@/types/api.types';
-import type { CycleStatus } from '@/types/enums';
 import { formatDate } from '@/utils/date';
-import { cyclePrimaryActionLabel } from '../cycle-management';
+import { cycleBusinessState, cyclePrimaryActionLabel } from '../cycle-management';
 
 const props = defineProps<{
   cycles: AssessmentCycle[];
@@ -37,34 +36,6 @@ const TYPE_LABEL = {
   probation: '试用期',
   custom: '自定义',
 } as const;
-
-const STATUS_LABEL: Record<CycleStatus, string> = {
-  draft: '草稿',
-  scheduled: '待发起',
-  launch_blocked: '发起受阻',
-  indicator_setting: '目标制定中',
-  self_eval: '员工自评中',
-  manager_score: '主管评分中',
-  hr_calibration: 'HR校准中',
-  approval: '审批中',
-  published: '已公示',
-  appeal: '申诉中',
-  closed: '已关闭',
-};
-
-const STATUS_TAG_TYPE: Record<CycleStatus, 'primary' | 'success' | 'warning' | 'info' | 'danger'> = {
-  draft: 'info',
-  scheduled: 'primary',
-  launch_blocked: 'danger',
-  indicator_setting: 'warning',
-  self_eval: 'primary',
-  manager_score: 'primary',
-  hr_calibration: 'primary',
-  approval: 'primary',
-  published: 'success',
-  appeal: 'danger',
-  closed: 'info',
-};
 
 function handleMore(command: string, cycle: AssessmentCycle) {
   if (command === 'deadlines') emit('edit-deadlines', cycle);
@@ -222,14 +193,11 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
     <el-table-column label="当前状态" min-width="170">
       <template #default="{ row }">
         <div class="cycle-state-cell">
-          <el-tag :type="STATUS_TAG_TYPE[(row as AssessmentCycle).status]" size="small">
-            {{ STATUS_LABEL[(row as AssessmentCycle).status] }}
+          <el-tag :type="cycleBusinessState(row as AssessmentCycle).tagType" size="small">
+            {{ cycleBusinessState(row as AssessmentCycle).label }}
           </el-tag>
           <small v-if="(row as AssessmentCycle).status === 'launch_blocked' && (row as AssessmentCycle).launchBlockedReason">
             {{ (row as AssessmentCycle).launchBlockedReason }}
-          </small>
-          <small v-if="(row as AssessmentCycle).status === 'draft'">
-            计划审核：{{ (row as AssessmentCycle).reviewStatus === 'approved' ? '已通过' : ((row as AssessmentCycle).reviewStatus === 'rejected' ? '已退回' : '待审核') }}
           </small>
         </div>
       </template>
@@ -256,6 +224,13 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
       <template #default="{ row }">
         <div class="cycle-actions" @click.stop>
           <template v-if="(row as AssessmentCycle).status === 'draft'">
+            <el-button
+              v-if="canEdit && (row as AssessmentCycle).reviewStatus === 'approved'"
+              :data-testid="`cycle-primary-${(row as AssessmentCycle).id}`"
+              link
+              type="primary"
+              @click="emit('primary', row as AssessmentCycle)"
+            >发起考核</el-button>
             <el-button
               v-if="canReview && (row as AssessmentCycle).reviewStatus !== 'approved' && (!(row as AssessmentCycle).reviewerId || (row as AssessmentCycle).reviewerId === currentUserId)"
               link
@@ -286,7 +261,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
               :loading="launchingId === (row as AssessmentCycle).id"
               @click="emit('primary', row as AssessmentCycle)"
             >
-              {{ cyclePrimaryActionLabel((row as AssessmentCycle).status) }}
+              {{ cyclePrimaryActionLabel(row as AssessmentCycle) }}
             </el-button>
             <el-dropdown
               trigger="click"
@@ -341,7 +316,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
           <small :data-testid="`cycle-scoring-summary-mobile-${cycle.id}`">{{ scoringSummary(cycle) }}</small>
           <small>{{ notificationLabel(cycle) }}</small>
         </div>
-        <el-tag :type="STATUS_TAG_TYPE[cycle.status]" size="small">{{ STATUS_LABEL[cycle.status] }}</el-tag>
+        <el-tag :type="cycleBusinessState(cycle).tagType" size="small">{{ cycleBusinessState(cycle).label }}</el-tag>
       </header>
       <div
         :data-testid="`cycle-scope-mobile-${cycle.id}`"
@@ -356,6 +331,13 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
       </div>
       <footer @click.stop>
         <template v-if="cycle.status === 'draft'">
+          <el-button
+            v-if="canEdit && cycle.reviewStatus === 'approved'"
+            :data-testid="`cycle-primary-mobile-${cycle.id}`"
+            type="primary"
+            size="small"
+            @click="emit('primary', cycle)"
+          >发起考核</el-button>
           <el-button
             v-if="canReview && cycle.reviewStatus !== 'approved' && (!cycle.reviewerId || cycle.reviewerId === currentUserId)"
             type="success"
@@ -387,7 +369,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
             :loading="launchingId === cycle.id"
             @click="emit('primary', cycle)"
           >
-            {{ cyclePrimaryActionLabel(cycle.status) }}
+            {{ cyclePrimaryActionLabel(cycle) }}
           </el-button>
           <el-dropdown trigger="click" @command="handleMore($event as string, cycle)">
             <el-button :icon="MoreFilled" text aria-label="更多操作" />

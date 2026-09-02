@@ -121,7 +121,7 @@ export class ApprovalService {
     return { approved: tasks.length };
   }
 
-  /** POST /tasks/:id/approval/reject — 审批人退回 HR 校准。 */
+  /** POST /tasks/:id/approval/reject — 审批人退回绩效校准。 */
   async rejectTask(
     taskId: string,
     dto: ApprovalRejectDto,

@@ -25,25 +25,12 @@ import type {
   User,
   ConsecutiveDWarningItem,
 } from '@/types/api.types';
-import type { PerfGrade, TaskStatus, CycleStatus } from '@/types/enums';
+import type { PerfGrade, TaskStatus } from '@/types/enums';
 import { TASK_STATUS_META } from '@/types/enums';
 import { GRADE_LABELS } from '@/utils/grade';
 import dayjs from 'dayjs';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
-
-const CYCLE_STATUS_LABELS: Record<CycleStatus, string> = {
-  draft: '草稿',
-  scheduled: '待发起',
-  launch_blocked: '发起受阻',
-  indicator_setting: '目标制定',
-  self_eval: '员工自评',
-  manager_score: '主管评分',
-  hr_calibration: 'HR 校准',
-  approval: '分管总审批',
-  published: '已公示',
-  appeal: '申诉中',
-  closed: '已关闭',
-};
+import { cycleBusinessState } from '@/views/admin/cycle-management';
 
 const auth = useAuthStore();
 const route = useRoute();
@@ -58,8 +45,8 @@ const NODE_LABELS: Record<string, string> = {
   indicator_setting: '目标制定',
   self_eval: '员工自评',
   manager_scoring: '主管评分',
-  hr_calibration: 'HR 校准',
-  approval: '分管总审批',
+  hr_calibration: '绩效校准',
+  approval: '结果审批',
   published: '结果公示',
 };
 
@@ -478,7 +465,7 @@ onMounted(async () => {
       <div v-if="selectedCycle" class="report-context" data-testid="report-context">
         <span><b>分析范围</b>{{ isAdminLike ? '全公司' : '授权范围' }}</span>
         <span><b>周期</b>{{ selectedCycle.name }}</span>
-        <span><b>状态</b>{{ CYCLE_STATUS_LABELS[selectedCycle.status] }}</span>
+        <span><b>状态</b>{{ cycleBusinessState(selectedCycle).label }}</span>
         <span><b>日期</b>{{ formatDate(selectedCycle.startDate) }} 至 {{ formatDate(selectedCycle.endDate) }}</span>
       </div>
     </ChartCard>

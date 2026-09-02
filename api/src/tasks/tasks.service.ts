@@ -1242,7 +1242,7 @@ export class TasksService {
           content: '主管已完成评分，请进行部门负责人复核。',
         });
       } else {
-        await this.notifyHr(task, viewer, '主管评分待 HR 校准', '主管已完成评分，请进行 HR 校准。');
+        await this.notifyHr(task, viewer, '主管评分待绩效校准', '主管已完成评分，请进行绩效校准。');
       }
     } catch (error) {
       this.logger.error(
@@ -1380,7 +1380,7 @@ export class TasksService {
         });
       });
 
-      await this.notifyHr(task, viewer, '部门复核通过，待 HR 校准', '部门负责人已复核通过，请进行 HR 校准。');
+      await this.notifyHr(task, viewer, '部门复核通过，待绩效校准', '部门负责人已复核通过，请进行绩效校准。');
       return { id: task.id, status: 'hr_calibration' };
     }
 
@@ -1928,9 +1928,9 @@ export class TasksService {
       self_eval: '待员工自评',
       manager_scoring: '待主管评估',
       dept_review: '待部门复核',
-      hr_calibration: '待 HR 校准',
-      approval: '待审批',
-      published: '结果已发布，待员工确认',
+      hr_calibration: '待绩效校准',
+      approval: '待结果审批',
+      published: '结果已公示，待员工确认',
       confirmed: '结果已确认',
       appealing: '申诉处理中',
       closed: '已完成',
@@ -2001,7 +2001,7 @@ export class TasksService {
 
   private resolveHandlerName(task: any, nodeType: TaskReminderNodeType): string {
     if (nodeType === 'employee') return task.employee?.name ?? '员工';
-    if (nodeType === 'manager') return task.manager?.name ?? '直属主管';
+    if (nodeType === 'manager') return task.manager?.name ?? '绩效直属上级';
     if (nodeType === 'deptHead') return task.deptHead?.name ?? '部门负责人';
     if (nodeType === 'hr') return task.cycle?.hrOwner?.name ?? 'HR 负责人';
     return task.approver?.name ?? '审批人';

@@ -186,7 +186,7 @@ export class CalibrationService {
               action: 'submit',
               targetStatus: 'approval',
               actorId: viewer.id,
-              comment: 'HR 校准完成，提交审批',
+              comment: '绩效校准完成，提交结果审批',
               taskUpdate: { hrCalibratedAt: new Date(), updatedAt: claimedUpdatedAt },
             });
           }
@@ -213,7 +213,7 @@ export class CalibrationService {
           senderId: viewer.id,
           cycleId,
           type: 'calibration_submitted',
-          title: 'HR 校准结果待审批',
+          title: '绩效校准结果待审批',
           content: `HR 已完成 ${cycle.name} 的等级校准，涉及员工：${names}，请审批。`,
         }).catch(() => {
           // 推送失败不阻断业务

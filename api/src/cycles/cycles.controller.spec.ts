@@ -26,6 +26,14 @@ describe('CyclesController schedule preview route', () => {
     expect(Reflect.getMetadata(HR_CAPABILITIES_KEY, CyclesController.prototype.review)).toBeUndefined();
   });
 
+  it('limits cycle review reminders to ordinary HR accounts', () => {
+    const handler = (CyclesController.prototype as unknown as Record<string, object>).remindCycleReview;
+
+    expect(handler).toBeDefined();
+    expect(Reflect.getMetadata(PATH_METADATA, handler)).toBe(':id/review-reminder');
+    expect(Reflect.getMetadata(ROLES_KEY, handler)).toEqual([SysRole.hr_user]);
+  });
+
   it('keeps system administrators on cycle creation without granting implicit HR ownership', () => {
     expect(Reflect.getMetadata(ROLES_KEY, CyclesController.prototype.create)).toEqual([
       SysRole.hr,

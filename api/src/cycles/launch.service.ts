@@ -153,6 +153,7 @@ export interface LaunchPreflightResult {
   companyFinalApprover?: { id: string; name: string } | null;
   blockers: Array<{ code: string; message: string }>;
   warnings: Array<{ code: string; message: string }>;
+  reviewReminderAvailableAt: Date | null;
 }
 
 @Injectable()
@@ -176,8 +177,11 @@ export class LaunchService {
     const blockers: LaunchPreflightResult['blockers'] = [];
     const warnings: LaunchPreflightResult['warnings'] = [];
     if (cycle.reviewStatus !== 'approved') {
-      blockers.push({ code: 'CYCLE_NOT_APPROVED', message: '考核周期需由审核人通过后才能发起' });
+      blockers.push({ code: 'CYCLE_NOT_APPROVED', message: '计划需要HR管理员审核通过后才能发起' });
     }
+    const reviewReminderAvailableAt = cycle.reviewStatus === 'approved'
+      ? null
+      : await this.notificationsService.getCycleReviewReminderCooldownUntil(cycle.id);
     const isWorkflowV2 = this.isWorkflowV2(cycle);
     const configuredCompanyFinalApproverId = isWorkflowV2
       ? await this.resolveConfiguredCompanyFinalApproverId(client)
@@ -250,6 +254,7 @@ export class LaunchService {
       }),
       blockers,
       warnings,
+      reviewReminderAvailableAt,
     };
   }
 
@@ -1129,12 +1134,12 @@ export class LaunchService {
     if (!cycle.companyFinalApproverId || !this.isEligibleCompanyFinalApprover(companyFinalApprover)) {
       blockers.push({
         code: 'COMPANY_FINAL_APPROVER_MISSING',
-        message: '未设置有效的公司最终审定人，请先完成配置',
+        message: '未设置有效的结果审批人，请先完成配置',
       });
     } else if (companyFinalApprover.directManagerId) {
       blockers.push({
         code: 'ORGANIZATION_RELATION_INVALID',
-        message: `公司最终审定人必须是没有直属上级的最高负责人：${companyFinalApprover.name}`,
+        message: `结果审批人必须是没有绩效直属上级的最高负责人：${companyFinalApprover.name}`,
       });
     }
     if (schedules.length === 0) {
@@ -1345,7 +1350,7 @@ export class LaunchService {
     }
     if (missingApprovers.size > 0) {
       const approverCopy = this.isWorkflowV2(cycle)
-        ? '分管总审核人/公司最终审定人'
+        ? '结果审批人'
         : '最终业务审批人';
       messages.push(
         `以下部门未设置${approverCopy}，请补齐部门负责人及其直属上级；最高层级可手动设置：${Array.from(missingApprovers).join('、')}`,

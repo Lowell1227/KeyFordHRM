@@ -3,9 +3,8 @@ import { computed, ref, watch } from 'vue';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import dayjs from 'dayjs';
 import type { AssessmentCycle, CycleParticipantRecord, LaunchPreflightResult } from '@/types/api.types';
-import type { CycleStatus } from '@/types/enums';
 import { formatDate } from '@/utils/date';
-import { cycleNextStep, cycleStageIndex } from '../cycle-management';
+import { CYCLE_PHASES, cycleBusinessState, cycleNextStep } from '../cycle-management';
 
 const props = withDefaults(defineProps<{
   cycle?: AssessmentCycle | null;
@@ -18,7 +17,10 @@ const props = withDefaults(defineProps<{
   participantRecordLoading?: boolean;
   participantRecordError?: string;
   launchAction?: 'launch' | 'schedule' | null;
+  reviewAction?: 'review' | 'remind' | null;
   canEdit?: boolean;
+  canReview?: boolean;
+  canRemindReview?: boolean;
 }>(), {
   cycle: null,
   loading: false,
@@ -30,7 +32,10 @@ const props = withDefaults(defineProps<{
   participantRecordLoading: false,
   participantRecordError: '',
   launchAction: null,
+  reviewAction: null,
   canEdit: false,
+  canReview: false,
+  canRemindReview: false,
 });
 
 const emit = defineEmits<{
@@ -39,16 +44,18 @@ const emit = defineEmits<{
   launch: [];
   schedule: [];
   edit: [];
+  review: [];
+  'remind-review': [];
   'resolve-blocker': [code: string];
 }>();
 
-const stages = ['规划配置', '目标制定', '绩效评价', '校准与审批', '公示归档'];
+const stages = CYCLE_PHASES;
 const participantFilterOptions = [
   { key: 'all', label: '全部' },
   { key: 'active', label: '正常参与' },
   { key: 'exempted', label: '已豁免' },
 ] as const;
-const currentStage = computed(() => props.cycle ? cycleStageIndex(props.cycle.status) : 0);
+const currentStage = computed(() => props.cycle ? cycleBusinessState(props.cycle).phaseIndex : 0);
 const nextStep = computed(() => props.cycle ? cycleNextStep(props.cycle) : null);
 const participantFilter = ref<'all' | 'active' | 'exempted'>('all');
 const participantKeyword = ref('');
@@ -64,20 +71,6 @@ const activeTaskCount = computed(() => {
   const stats = props.cycle?.taskStats;
   return stats ? Math.max(0, stats.total - stats.exempted) : 0;
 });
-
-const STATUS_LABEL: Record<CycleStatus, string> = {
-  draft: '草稿',
-  scheduled: '待发起',
-  launch_blocked: '发起受阻',
-  indicator_setting: '目标制定中',
-  self_eval: '员工自评中',
-  manager_score: '主管评分中',
-  hr_calibration: 'HR校准中',
-  approval: '审批中',
-  published: '已公示',
-  appeal: '申诉中',
-  closed: '已关闭',
-};
 
 function formatDateTime(value?: string): string {
   if (!value) return '未设置';
@@ -97,6 +90,11 @@ function scoringSummary(cycle: AssessmentCycle): string {
     ? `月度跟进 · ${cycle.periodSchedules?.length ?? 0}期`
     : '周期结束统一评分';
 }
+
+const reviewReminderCoolingDown = computed(() => Boolean(
+  props.preflight?.reviewReminderAvailableAt
+  && dayjs(props.preflight.reviewReminderAvailableAt).isAfter(dayjs()),
+));
 
 function scheduleExceptionCount(cycle: AssessmentCycle): number {
   return cycle.periodSchedules?.filter((schedule) => schedule.isException).length ?? 0;
@@ -163,7 +161,7 @@ const cycleTimeNodes = computed(() => {
     { label: '员工自评开放', value: props.cycle.selfEvalOpenAt },
     { label: '员工自评截止', value: props.cycle.deadlineSelfEval },
     { label: '主管评分截止', value: props.cycle.deadlineManagerScore },
-    { label: 'HR校准截止', value: props.cycle.deadlineHrCalibration },
+    { label: '绩效校准截止', value: props.cycle.deadlineHrCalibration },
     { label: '结果审批截止', value: props.cycle.deadlineApproval },
     { label: '结果公示截止', value: props.cycle.deadlinePublish },
   ];
@@ -215,8 +213,7 @@ function recordSourceLabel(record: CycleParticipantRecord): string {
 }
 
 function reviewSummary(cycle: AssessmentCycle): string {
-  const status = cycle.reviewStatus === 'approved' ? '已通过' : cycle.reviewStatus === 'rejected' ? '已退回' : '待审核';
-  return `审核：${status} · ${cycle.reviewer?.name || 'HR 管理员审核池'}`;
+  return `审核人：${cycle.reviewer?.name || 'HR管理员'}`;
 }
 
 watch(() => props.cycle?.id, () => {
@@ -240,7 +237,12 @@ watch(() => props.cycle?.id, () => {
         <div>
           <div class="cycle-workspace__title-row">
             <h1>{{ cycle?.name || '周期详情' }}</h1>
-            <el-tag v-if="cycle" size="small" effect="light">{{ STATUS_LABEL[cycle.status] }}</el-tag>
+            <el-tag
+              v-if="cycle"
+              :type="cycleBusinessState(cycle).tagType"
+              size="small"
+              effect="light"
+            >{{ cycleBusinessState(cycle).label }}</el-tag>
           </div>
           <p v-if="cycle">{{ formatDate(cycle.startDate) }}–{{ formatDate(cycle.endDate) }}</p>
           <div v-if="cycle" class="cycle-workspace__meta">
@@ -250,9 +252,8 @@ watch(() => props.cycle?.id, () => {
           </div>
           <div v-if="cycle" class="cycle-workspace__scoring" data-testid="cycle-workspace-scoring-summary">
             <span>{{ scoringSummary(cycle) }}</span>
-            <span v-if="cycle.workflowVersion === 2">结果审核：按周期审核</span>
             <span v-if="cycle.workflowVersion === 2">已调整月份：{{ scheduleExceptionCount(cycle) }}个</span>
-            <span v-if="cycle.workflowVersion === 2">公司最终审定人：{{ cycle.companyFinalApprover?.name || '未配置' }}</span>
+            <span v-if="cycle.workflowVersion === 2">结果审批人：{{ cycle.companyFinalApprover?.name || '未配置' }}</span>
           </div>
         </div>
       </div>
@@ -288,7 +289,7 @@ watch(() => props.cycle?.id, () => {
           :class="{
             'is-completed': index < currentStage,
             'is-current': index === currentStage,
-            'is-blocked': index === currentStage && cycle.status === 'launch_blocked',
+            'is-blocked': index === currentStage && cycleBusinessState(cycle).code === 'launch_blocked',
           }"
           :aria-current="index === currentStage ? 'step' : undefined"
         >
@@ -328,7 +329,7 @@ watch(() => props.cycle?.id, () => {
             </div>
           </div>
 
-          <div v-if="cycle.taskStats && cycle.status === 'indicator_setting'" class="cycle-stat-grid cycle-stat-grid--progress">
+          <div v-if="cycle.taskStats && cycleBusinessState(cycle).code === 'goal_preparation'" class="cycle-stat-grid cycle-stat-grid--progress">
             <div><span>目标完成</span><strong>{{ cycle.taskStats.goalCompleted }}/{{ activeTaskCount }}</strong></div>
             <div><span>待主管审核</span><strong>{{ cycle.taskStats.pendingManagerReview }}人</strong></div>
             <div><span>逾期未完成</span><strong :class="{ 'is-danger': cycle.taskStats.overdue > 0 }">{{ cycle.taskStats.overdue }}人</strong></div>
@@ -377,7 +378,30 @@ watch(() => props.cycle?.id, () => {
                 >
                   <div><i aria-hidden="true" /><strong>{{ blocker.message }}</strong><span v-if="blocker.count > 1">涉及{{ blocker.count }}项</span></div>
                   <el-button
-                    v-if="blockerActionLabel(blocker.code)"
+                    v-if="blocker.code === 'CYCLE_NOT_APPROVED' && canReview"
+                    data-testid="cycle-review-action"
+                    type="primary"
+                    plain
+                    size="small"
+                    :loading="reviewAction === 'review'"
+                    @click="emit('review')"
+                  >
+                    审核
+                  </el-button>
+                  <el-button
+                    v-else-if="blocker.code === 'CYCLE_NOT_APPROVED' && canRemindReview"
+                    data-testid="cycle-review-reminder-action"
+                    type="primary"
+                    plain
+                    size="small"
+                    :loading="reviewAction === 'remind'"
+                    :disabled="reviewReminderCoolingDown"
+                    @click="emit('remind-review')"
+                  >
+                    {{ reviewReminderCoolingDown ? '已催办' : '催办' }}
+                  </el-button>
+                  <el-button
+                    v-else-if="blockerActionLabel(blocker.code)"
                     type="primary"
                     plain
                     size="small"

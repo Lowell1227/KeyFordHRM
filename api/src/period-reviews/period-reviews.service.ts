@@ -616,7 +616,7 @@ export class PeriodReviewsService {
     requireEmployeeSubmission: boolean,
   ): void {
     if (period.managerId !== viewer.id) {
-      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅本期冻结的直属主管可评分' });
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅本期冻结的绩效直属上级可评分' });
     }
     if (period.status !== 'manager_scoring' || period.managerSubmittedAt || period.lockedAt) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前期间不可进行主管评分' });
@@ -757,7 +757,7 @@ export class PeriodReviewsService {
   private statusLabel(status: AssessmentPeriodStatus): string {
     return {
       unopened: '未开放',
-      self_eval: '员工复盘与自评',
+      self_eval: '员工自评',
       manager_scoring: '主管评分',
       completed: '已完成',
       no_result: '无绩效结果',

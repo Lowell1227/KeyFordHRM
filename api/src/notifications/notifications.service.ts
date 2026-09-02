@@ -68,6 +68,15 @@ interface TaskHandlerSnapshot {
   hrId: string | null;
 }
 
+interface CycleReviewReminderParams {
+  cycleId: string;
+  cycleName: string;
+  senderId: string;
+  recipientIds: string[];
+}
+
+const REVIEW_REMINDER_COOLDOWN_MS = 24 * 60 * 60 * 1000;
+
 /** 通知服务：写日志、限频、调推送 provider；推送失败不阻断业务。 */
 @Injectable()
 export class NotificationsService {
@@ -308,7 +317,83 @@ export class NotificationsService {
     return latest ? new Date(latest.createdAt.getTime() + 24 * 60 * 60 * 1000) : null;
   }
 
-  /** 结果发布通知：发给被考核员工，不限频。 */
+  async getCycleReviewReminderCooldownUntil(cycleId: string): Promise<Date | null> {
+    const cutoff = new Date(Date.now() - REVIEW_REMINDER_COOLDOWN_MS);
+    const latest = await this.prisma.notificationLog.findFirst({
+      where: {
+        cycleId,
+        type: 'cycle_review_reminder',
+        createdAt: { gte: cutoff },
+      },
+      select: { createdAt: true },
+      orderBy: { createdAt: 'desc' },
+    });
+    return latest
+      ? new Date(latest.createdAt.getTime() + REVIEW_REMINDER_COOLDOWN_MS)
+      : null;
+  }
+
+  /** 审核催办只进入站内通知，不调用钉钉或其他外部推送。 */
+  async sendCycleReviewReminder(params: CycleReviewReminderParams): Promise<{
+    recipientCount: number;
+    reminderAvailableAt: Date;
+  }> {
+    const recipientIds = [...new Set(params.recipientIds)];
+    const now = new Date();
+    const cutoff = new Date(now.getTime() - REVIEW_REMINDER_COOLDOWN_MS);
+    const reminderAvailableAt = new Date(now.getTime() + REVIEW_REMINDER_COOLDOWN_MS);
+    const lockKey = `cycle-review-reminder:${params.cycleId}`;
+
+    await this.prisma.$transaction(async (tx) => {
+      await tx.$executeRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${lockKey}, 0))`);
+      const existing = await tx.notificationLog.findFirst({
+        where: {
+          cycleId: params.cycleId,
+          type: 'cycle_review_reminder',
+          createdAt: { gte: cutoff },
+        },
+        select: { createdAt: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (existing) {
+        throw new ConflictException({
+          code: ERROR_CODE.RATE_LIMITED,
+          message: '本周期 24 小时内已催办过',
+        });
+      }
+
+      await tx.notificationLog.createMany({
+        data: recipientIds.map((userId) => ({
+          userId,
+          senderId: params.senderId,
+          cycleId: params.cycleId,
+          taskId: null,
+          type: 'cycle_review_reminder',
+          title: '考核周期待审核',
+          content: `“${params.cycleName}”等待您审核，请及时处理。`,
+          channel: 'system',
+          status: 'sent',
+          isRead: false,
+          readAt: null,
+          sentAt: now,
+          extraData: { action: 'cycle_review' },
+        })),
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: params.senderId,
+          action: 'cycle_review_reminded',
+          entityType: 'assessment_cycle',
+          entityId: params.cycleId,
+          newValue: { recipientIds },
+        },
+      });
+    });
+
+    return { recipientCount: recipientIds.length, reminderAvailableAt };
+  }
+
+  /** 结果公示通知：发给被考核员工，不限频。 */
   async sendResultPublished(taskId: string) {
     const task = await this.findTaskOrThrow(taskId);
     return this.create({
@@ -316,8 +401,8 @@ export class NotificationsService {
       taskId,
       cycleId: task.cycleId,
       type: 'result_published',
-      title: '绩效结果已发布',
-      content: '您的绩效结果已发布，请查看。',
+      title: '绩效结果已公示',
+      content: '您的绩效结果已公示，请查看。',
     });
   }
 

@@ -40,7 +40,7 @@ export const FLOW_TRANSITIONS: FlowTransition[] = [
   { from: 'self_eval', action: 'submit', to: 'manager_scoring', nodeType: 'self_eval' },
   { from: 'self_eval', action: 'submit', to: 'hr_calibration', nodeType: 'self_eval' },
 
-  // 主管评分后提交：分管部门负责人时直接到 HR 校准，否则到部门负责人复核
+  // 主管评分后提交：分管部门负责人时直接到绩效校准，否则到部门负责人复核
   { from: 'manager_scoring', action: 'submit', to: 'dept_review', nodeType: 'manager_score' },
   { from: 'manager_scoring', action: 'submit', to: 'hr_calibration', nodeType: 'manager_score' },
 
@@ -48,12 +48,12 @@ export const FLOW_TRANSITIONS: FlowTransition[] = [
   { from: 'dept_review', action: 'approve', to: 'hr_calibration', nodeType: 'dept_review' },
   { from: 'dept_review', action: 'reject', to: 'manager_scoring', nodeType: 'dept_review' },
 
-  // HR 校准后提交审批（#10 范围）
+  // 绩效校准后提交结果审批（#10 范围）
   { from: 'hr_calibration', action: 'submit', to: 'approval', nodeType: 'hr_calibration' },
 
   // 审批通过 → 公示发布（#11 范围）
   { from: 'approval', action: 'approve', to: 'published', nodeType: 'publish' },
-  // 审批人退回 HR 校准（#11 范围）
+  // 审批人退回绩效校准（#11 范围）
   { from: 'approval', action: 'reject', to: 'hr_calibration', nodeType: 'approval' },
 
   // 员工确认结果

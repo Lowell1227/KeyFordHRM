@@ -157,4 +157,14 @@ export class CyclesController {
   ) {
     return this.cyclesService.review(id, dto, user);
   }
+
+  @Post(':id/review-reminder')
+  @HttpCode(200)
+  @Roles(SysRole.hr_user)
+  remindCycleReview(
+    @Param('id', ParseUUIDPipe) id: string,
+    @CurrentUser() user: AuthUser,
+  ) {
+    return this.cyclesService.remindCycleReview(id, user);
+  }
 }

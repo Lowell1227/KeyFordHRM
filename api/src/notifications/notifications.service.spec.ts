@@ -13,6 +13,7 @@ function makePrismaMock() {
     user: { findUnique: jest.fn() },
     notificationLog: {
       create: jest.fn(),
+      createMany: jest.fn(),
       update: jest.fn(),
       updateMany: jest.fn(),
       count: jest.fn(),
@@ -128,6 +129,62 @@ describe('NotificationsService', () => {
 
       expect(id).toBeNull();
       expect(prisma.notificationLog.create).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('cycle review reminder', () => {
+    it('creates only in-app notifications for the review pool', async () => {
+      jest.spyOn(prisma.notificationLog, 'findFirst').mockResolvedValue(null);
+      jest.spyOn(prisma.notificationLog, 'createMany').mockResolvedValue({ count: 2 } as any);
+      jest.spyOn(prisma.auditLog, 'create').mockResolvedValue({ id: 'audit-1' } as any);
+
+      const result = await (service as any).sendCycleReviewReminder({
+        cycleId: 'cycle-1',
+        cycleName: '2026 Q4 季度考核',
+        senderId: 'hr-user-1',
+        recipientIds: ['hr-admin-1', 'hr-admin-2'],
+      });
+
+      expect(result).toEqual({
+        recipientCount: 2,
+        reminderAvailableAt: expect.any(Date),
+      });
+      expect(prisma.notificationLog.createMany).toHaveBeenCalledWith({
+        data: expect.arrayContaining([
+          expect.objectContaining({
+            userId: 'hr-admin-1',
+            senderId: 'hr-user-1',
+            cycleId: 'cycle-1',
+            type: 'cycle_review_reminder',
+            title: '考核周期待审核',
+            channel: 'system',
+            status: 'sent',
+          }),
+          expect.objectContaining({ userId: 'hr-admin-2' }),
+        ]),
+      });
+      expect(pushProvider.push).not.toHaveBeenCalled();
+    });
+
+    it('rejects another reminder for the same cycle within 24 hours', async () => {
+      jest.spyOn(prisma.notificationLog, 'findFirst').mockResolvedValue({
+        createdAt: new Date('2026-09-02T01:00:00.000Z'),
+      } as any);
+
+      await expect((service as any).sendCycleReviewReminder({
+        cycleId: 'cycle-1',
+        cycleName: '2026 Q4 季度考核',
+        senderId: 'hr-user-1',
+        recipientIds: ['hr-admin-1'],
+      })).rejects.toMatchObject({
+        response: expect.objectContaining({
+          code: ERROR_CODE.RATE_LIMITED,
+          message: '本周期 24 小时内已催办过',
+        }),
+      });
+
+      expect(prisma.notificationLog.createMany).not.toHaveBeenCalled();
+      expect(pushProvider.push).not.toHaveBeenCalled();
     });
   });
 

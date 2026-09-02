@@ -153,7 +153,7 @@ describe('PeriodReviewsService', () => {
         employeeName: '方园',
         deptName: '销售部',
         managerName: '王主管',
-        statusLabel: '员工复盘与自评',
+        statusLabel: '员工自评',
       },
       permissions: { canEditEmployee: true, canEditManager: false },
       indicators: [{

@@ -216,7 +216,7 @@ function openRejectDialog(options: { taskId?: string }) {
 async function confirmReject() {
   const comment = rejectDialog.value.comment.trim();
   if (!comment) {
-    ElMessage.warning('退回 HR 校准时必须填写审批意见');
+    ElMessage.warning('退回绩效校准时必须填写审批意见');
     return;
   }
   rejectDialog.value.visible = false;
@@ -225,7 +225,7 @@ async function confirmReject() {
     submitting.value = true;
     try {
       await approvalApi.rejectTask(rejectDialog.value.taskId, { comment });
-      ElMessage.success('已退回 HR 校准');
+      ElMessage.success('已退回绩效校准');
       refreshList();
     } finally {
       submitting.value = false;
@@ -404,13 +404,13 @@ function handleBatchReject() {
 
     <el-dialog
       v-model="rejectDialog.visible"
-      title="退回 HR 校准"
+      title="退回绩效校准"
       width="520px"
       :close-on-click-modal="false"
       destroy-on-close
     >
       <p class="approval-view__reject-tip">
-        退回后该任务将回到 HR 校准环节，请填写审批意见。
+        退回后该任务将回到绩效校准环节，请填写审批意见。
       </p>
       <el-input
         v-model="rejectDialog.comment"

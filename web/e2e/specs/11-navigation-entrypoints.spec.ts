@@ -1086,6 +1086,16 @@ test.describe("11-navigation-entrypoints notification task links", () => {
     ).toBeNull();
   });
 
+  test("opens the cycle workspace from an in-app cycle review reminder", () => {
+    expect(resolveNotificationTarget(notificationItem({
+      taskId: null,
+      type: "cycle_review_reminder",
+    }), true)).toEqual({
+      path: "/cycles",
+      query: { group: "attention", cycleId: workspaceCycle.id },
+    });
+  });
+
   test.use({ storageState: "e2e/auth-state/manager.json" });
 
   test("marks an unread notification then opens the matching goal review workspace", async ({

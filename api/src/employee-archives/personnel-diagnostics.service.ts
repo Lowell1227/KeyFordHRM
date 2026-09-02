@@ -50,7 +50,7 @@ export class PersonnelDiagnosticsService {
         this.add(items, 'missing_position', '岗位未映射', user, '当前岗位尚未关联岗位目录');
       }
       if (user.status === 'active' && !user.directManagerId) {
-        this.add(items, 'missing_roster_manager', '缺少直属主管', user, '花名册直属主管尚未维护');
+        this.add(items, 'missing_roster_manager', '缺少花名册直属主管', user, '花名册直属主管尚未维护');
       }
       if (this.hasOverlap(user.employmentHistory)) {
         this.add(items, 'employment_overlap', '任职时间重叠', user, '存在多条时间区间重叠的任职记录');

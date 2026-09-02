@@ -14,7 +14,6 @@ import CycleWorkspaceShell from './components/CycleWorkspaceShell.vue';
 import CycleParticipantScopePicker, { type ParticipantScopeMode } from './components/CycleParticipantScopePicker.vue';
 import CycleScoringSettings from './components/CycleScoringSettings.vue';
 import CycleMonthlyScheduleEditor from './components/CycleMonthlyScheduleEditor.vue';
-import { cycleStatusGroup } from './cycle-management';
 import { buildDefaultCycleSchedule } from './cycle-default-schedule';
 import { useAuthStore } from '@/stores/auth.store';
 import { usePagination } from '@/composables/usePagination';
@@ -34,21 +33,7 @@ import type {
   CyclePeriodSchedule,
   CycleScheduleIssue,
 } from '@/types/api.types';
-import type { CycleStatus, CycleType, ScoringFrequency } from '@/types/enums';
-
-const CYCLE_STATUS_OPTIONS: { label: string; value: CycleStatus }[] = [
-  { label: '草稿', value: 'draft' },
-  { label: '待发起', value: 'scheduled' },
-  { label: '发起受阻', value: 'launch_blocked' },
-  { label: '目标制定中', value: 'indicator_setting' },
-  { label: '员工自评中', value: 'self_eval' },
-  { label: '主管评分中', value: 'manager_score' },
-  { label: 'HR校准中', value: 'hr_calibration' },
-  { label: '审批中', value: 'approval' },
-  { label: '已公示', value: 'published' },
-  { label: '申诉中', value: 'appeal' },
-  { label: '已关闭', value: 'closed' },
-];
+import type { CycleType, ScoringFrequency } from '@/types/enums';
 
 type CycleListGroup = CycleStatusGroup | 'all';
 
@@ -68,40 +53,12 @@ const CYCLE_TYPE_OPTIONS: { label: string; value: CycleType }[] = [
   { label: '自定义', value: 'custom' },
 ];
 
-const STATUS_TAG_TYPE: Record<CycleStatus, 'primary' | 'success' | 'warning' | 'info' | 'danger'> = {
-  draft: 'info',
-  scheduled: 'primary',
-  launch_blocked: 'danger',
-  indicator_setting: 'warning',
-  self_eval: 'primary',
-  manager_score: 'primary',
-  hr_calibration: 'primary',
-  approval: 'primary',
-  published: 'success',
-  appeal: 'danger',
-  closed: 'info',
-};
-
-const STATUS_LABEL: Record<CycleStatus, string> = {
-  draft: '草稿',
-  scheduled: '待发起',
-  launch_blocked: '发起受阻',
-  indicator_setting: '目标制定中',
-  self_eval: '员工自评中',
-  manager_score: '主管评分中',
-  hr_calibration: 'HR校准中',
-  approval: '审批中',
-  published: '已公示',
-  appeal: '申诉中',
-  closed: '已关闭',
-};
-
 const DEADLINE_FIELDS = [
   { key: 'deadlineIndicatorSetting', label: '目标制定截止' },
   { key: 'deadlineIndicatorConfirm', label: '目标确认截止' },
   { key: 'deadlineSelfEval', label: '员工自评截止' },
   { key: 'deadlineManagerScore', label: '主管评分截止' },
-  { key: 'deadlineHrCalibration', label: 'HR校准截止' },
+  { key: 'deadlineHrCalibration', label: '绩效校准截止' },
   { key: 'deadlineApproval', label: '结果审批截止' },
   { key: 'deadlinePublish', label: '结果公示截止' },
 ] as const;
@@ -115,8 +72,8 @@ const CREATE_SCHEDULE_NODES = [
   { number: '04', key: 'selfEvalOpenAt', label: '员工自评开放', helper: '周期结束后的第 1 个工作日 · 09:00', stage: 'result' },
   { number: '05', key: 'deadlineSelfEval', label: '员工自评截止', helper: '开放日起第 3 个工作日 · 18:00', stage: 'result' },
   { number: '06', key: 'deadlineManagerScore', label: '主管评分截止', helper: '自评截止后第 3 个工作日 · 18:00', stage: 'result' },
-  { number: '07', key: 'deadlineHrCalibration', label: 'HR校准截止', helper: '主管评分后第 2 个工作日 · 18:00', stage: 'result' },
-  { number: '08', key: 'deadlineApproval', label: '结果审批截止', helper: 'HR校准后第 2 个工作日 · 18:00', stage: 'result' },
+  { number: '07', key: 'deadlineHrCalibration', label: '绩效校准截止', helper: '主管评分后第 2 个工作日 · 18:00', stage: 'result' },
+  { number: '08', key: 'deadlineApproval', label: '结果审批截止', helper: '绩效校准后第 2 个工作日 · 18:00', stage: 'result' },
   { number: '09', key: 'deadlinePublish', label: '结果公示截止', helper: '结果审批后第 1 个工作日 · 18:00', stage: 'result' },
 ] as const;
 
@@ -175,25 +132,23 @@ const canEditCyclePlan = computed(() => (
   || auth.user?.hrCapabilities?.includes('cycle_plan_edit')
 ));
 const canReviewCyclePlan = computed(() => auth.user?.sysRole === 'hr');
+const canRemindCycleReview = computed(() => (
+  auth.user?.sysRole === 'hr_user'
+  && auth.user.hrCapabilities?.includes('cycle_plan_edit')
+));
 const canManageGlobalNotificationSettings = computed(() => (
   auth.user?.sysRole === 'system_admin'
   || auth.user?.sysRole === 'hr'
 ));
 
-const initialStatus = CYCLE_STATUS_OPTIONS.some((item) => item.value === route.query.status)
-  ? route.query.status as CycleStatus
-  : '';
 const initialType = CYCLE_TYPE_OPTIONS.some((item) => item.value === route.query.type)
   ? route.query.type as CycleType
   : '';
 const initialGroup = CYCLE_STATUS_GROUPS.some((item) => item.value === route.query.group)
   ? route.query.group as CycleListGroup
-  : initialStatus
-    ? cycleStatusGroup(initialStatus)
-    : 'all';
+  : 'all';
 
 const statusGroup = ref<CycleListGroup>(initialGroup);
-const statusFilter = ref<CycleStatus | ''>(initialStatus);
 const typeFilter = ref<CycleType | ''>(initialType);
 const keyword = ref(typeof route.query.keyword === 'string' ? route.query.keyword : '');
 
@@ -238,11 +193,12 @@ const participantRecordLoading = ref(false);
 const participantRecordError = ref('');
 const participantRecord = ref<CycleParticipantRecord | null>(null);
 const launchActionMode = ref<'launch' | 'schedule' | null>(null);
+const reviewActionMode = ref<'review' | 'remind' | null>(null);
 const detailLoading = ref(false);
 const detailError = ref('');
 const cycleDetail = ref<AssessmentCycle | null>(null);
 const isCycleWorkspace = computed(() => typeof route.query.cycleId === 'string' && route.query.cycleId.length > 0);
-const hasListFilters = computed(() => Boolean(statusFilter.value || typeFilter.value || keyword.value.trim()));
+const hasListFilters = computed(() => Boolean(typeFilter.value || keyword.value.trim()));
 const emptyStateDescription = computed(() => {
   if (hasListFilters.value) return '没有符合筛选条件的周期';
   if (statusGroup.value === 'active') return '暂无进行中的周期';
@@ -1513,8 +1469,7 @@ function handlePrimaryCycleAction(cycle: AssessmentCycle) {
 
 function buildQuery(): CycleQuery {
   const query: CycleQuery & Record<string, unknown> = {};
-  if (statusFilter.value) query.status = statusFilter.value;
-  else if (statusGroup.value !== 'all') query.group = statusGroup.value;
+  if (statusGroup.value !== 'all') query.group = statusGroup.value;
   if (typeFilter.value) query.type = typeFilter.value;
   if (keyword.value.trim()) query.keyword = keyword.value.trim();
   return withParams(query);
@@ -1524,8 +1479,7 @@ async function syncListRoute() {
   const query = { ...route.query };
   if (statusGroup.value === 'all') delete query.group;
   else query.group = statusGroup.value;
-  if (statusFilter.value) query.status = statusFilter.value;
-  else delete query.status;
+  delete query.status;
   if (typeFilter.value) query.type = typeFilter.value;
   else delete query.type;
   if (keyword.value.trim()) query.keyword = keyword.value.trim();
@@ -1558,7 +1512,6 @@ async function handleSearch() {
 
 async function handleReset() {
   statusGroup.value = 'all';
-  statusFilter.value = '';
   typeFilter.value = '';
   keyword.value = '';
   page.value = 1;
@@ -1567,31 +1520,27 @@ async function handleReset() {
 }
 
 async function selectStatusGroup(group: CycleListGroup) {
-  if (statusGroup.value === group && !statusFilter.value) return;
+  if (statusGroup.value === group) return;
   statusGroup.value = group;
-  statusFilter.value = '';
   page.value = 1;
   await syncListRoute();
   await loadCycles();
 }
 
-async function handleStatusFilterChange(status: CycleStatus | '') {
-  if (status) statusGroup.value = cycleStatusGroup(status);
-  await handleSearch();
-}
-
 async function handleReviewCycle(cycle: AssessmentCycle) {
+  if (reviewActionMode.value) return;
+  reviewActionMode.value = 'review';
   const scoringSummary = cycle.workflowVersion === 2
     ? cycle.scoringFrequency === 'monthly'
       ? `月度跟进，共 ${cycle.periodSchedules?.length ?? 0} 期`
       : '周期结束统一评分，共 1 期'
     : '历史流程';
   const reviewSummary = cycle.workflowVersion === 2
-    ? `结果按周期审核；已调整月份 ${cycle.periodSchedules?.filter((schedule) => schedule.isException).length ?? 0} 个；公司最终审定人 ${cycle.companyFinalApprover?.name || '未配置'}；`
+    ? `已调整月份 ${cycle.periodSchedules?.filter((schedule) => schedule.isException).length ?? 0} 个；结果审批人 ${cycle.companyFinalApprover?.name || '未配置'}；`
     : '';
   try {
     await ElMessageBox.confirm(
-      `确认审核通过「${cycle.name}」？${scoringSummary}。${reviewSummary}通过后创建人可执行发起检查。`,
+      `确认审核通过「${cycle.name}」？${scoringSummary}。${reviewSummary}通过后创建人可发起考核。`,
       '审核考核周期',
       { confirmButtonText: '审核通过', cancelButtonText: '取消', type: 'warning' },
     );
@@ -1604,6 +1553,29 @@ async function handleReviewCycle(cycle: AssessmentCycle) {
     if (isCycleWorkspace.value) await loadCycleDetail(cycle.id);
   } catch {
     // 用户取消或接口错误由拦截器展示。
+  } finally {
+    reviewActionMode.value = null;
+  }
+}
+
+async function handleRemindCycleReview() {
+  const cycle = cycleDetail.value;
+  if (!cycle || reviewActionMode.value) return;
+  reviewActionMode.value = 'remind';
+  try {
+    const result = await cyclesApi.remindReview(cycle.id);
+    ElMessage.success(`已站内提醒 ${result.recipientCount} 名 HR 管理员`);
+    if (preflight.value) {
+      preflight.value = {
+        ...preflight.value,
+        reviewReminderAvailableAt: result.reminderAvailableAt,
+      };
+    }
+    await loadCycleDetail(cycle.id);
+  } catch {
+    // 写请求失败已由 HTTP 拦截器展示业务文案。
+  } finally {
+    reviewActionMode.value = null;
   }
 }
 
@@ -1640,12 +1612,17 @@ onMounted(() => {
       :participant-record-loading="participantRecordLoading"
       :participant-record-error="participantRecordError"
       :launch-action="launchActionMode"
+      :review-action="reviewActionMode"
       :can-edit="canEditCyclePlan"
+      :can-review="canReviewCyclePlan"
+      :can-remind-review="canRemindCycleReview"
       @back="closeCycleWorkspace"
       @retry="retryCycleDetail"
       @launch="handleWorkspaceLaunch"
       @schedule="handleWorkspaceSchedule"
       @edit="handleWorkspaceEditCycle"
+      @review="cycleDetail && handleReviewCycle(cycleDetail)"
+      @remind-review="handleRemindCycleReview"
       @resolve-blocker="handleResolvePreflightBlocker"
     />
 
@@ -1690,15 +1667,6 @@ onMounted(() => {
         </div>
 
         <div class="filter-row">
-        <el-select
-          v-model="statusFilter"
-          placeholder="精确状态"
-          clearable
-          style="width: 160px"
-          @change="handleStatusFilterChange"
-        >
-          <el-option v-for="opt in CYCLE_STATUS_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
-        </el-select>
         <el-select v-model="typeFilter" placeholder="全部类型" clearable style="width: 160px" @change="handleSearch">
           <el-option v-for="opt in CYCLE_TYPE_OPTIONS" :key="opt.value" :label="opt.label" :value="opt.value" />
         </el-select>
@@ -1934,7 +1902,7 @@ onMounted(() => {
             <div class="schedule-stage__title">
               <span class="schedule-stage__phase-number">{{ isWorkflowV2Form ? 3 : 2 }}</span>
               <strong id="schedule-stage-result">结果考评</strong>
-              <el-tooltip :content="isWorkflowV2Form ? '最后一期评分后完成结果审核和公示' : '考核结束后完成结果审核和公示'" placement="top">
+              <el-tooltip :content="isWorkflowV2Form ? '最后一期评分后完成结果审批和公示' : '考核结束后完成结果审批和公示'" placement="top">
                 <el-icon class="schedule-stage__help"><QuestionFilled /></el-icon>
               </el-tooltip>
             </div>

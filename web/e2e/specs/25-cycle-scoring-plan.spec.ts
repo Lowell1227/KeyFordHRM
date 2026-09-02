@@ -900,9 +900,9 @@ test.describe('cycle scoring plan integration', () => {
     await expect(page.getByTestId(`cycle-scoring-summary-${integratedCycle.id}`)).toHaveText('月度跟进 · 3期');
     await page.getByText(integratedCycle.name, { exact: true }).first().click();
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('月度跟进 · 3期');
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('结果审核：按周期审核');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).not.toContainText('结果审核：按周期审核');
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('已调整月份：1个');
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('公司最终审定人：李宏');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('结果审批人：李宏');
 
     await page.getByRole('button', { name: '发起考核' }).click();
     const preflightSummary = page.getByTestId('cycle-preflight-summary');

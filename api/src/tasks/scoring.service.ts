@@ -49,7 +49,7 @@ const DEFAULT_GRADE_MAPPING = { A: 90, B: 75, C: 60 };
  * - kpi/attitude 维度：Σ(指标 final_score × 指标 weight) × 维度 weight
  * - bonus 维度：+ Σ(final_score)（直加，不乘维度权重，也不乘指标权重）
  * - penalty 维度：- Σ(final_score)（直扣，不乘维度权重，也不乘指标权重）
- * - veto 类型实例：不参与数值总分（一票否决由 HR 校准阶段处理）
+ * - veto 类型实例：不参与数值总分（一票否决由绩效校准阶段处理）
  */
 @Injectable()
 export class ScoringService {

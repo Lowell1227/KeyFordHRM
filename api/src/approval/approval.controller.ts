@@ -36,7 +36,7 @@ export class ApprovalController {
 export class ApprovalTaskController {
   constructor(private readonly approvalService: ApprovalService) {}
 
-  /** POST /tasks/:id/approval/reject — 退回 HR 校准。 */
+  /** POST /tasks/:id/approval/reject — 退回绩效校准。 */
   @Post('approval/reject')
   @HttpCode(200)
   rejectTask(

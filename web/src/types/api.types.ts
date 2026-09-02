@@ -475,6 +475,7 @@ export interface AssessmentCycle {
   snapshotCount?: number;
   taskStats?: {
     total: number;
+    approved?: number;
     unsubmitted: number;
     pendingManagerReview: number;
     pendingEmployeeConfirmation: number;
@@ -862,6 +863,7 @@ export interface LaunchPreflightResult {
   }>;
   blockers: Array<{ code: string; message: string }>;
   warnings: Array<{ code: string; message: string }>;
+  reviewReminderAvailableAt: string | null;
 }
 
 export interface CycleParticipantRecord {
