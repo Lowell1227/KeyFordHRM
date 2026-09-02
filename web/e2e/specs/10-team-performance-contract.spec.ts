@@ -1314,7 +1314,7 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('team-task-empty')).toHaveCount(0);
   });
 
-  test('goal review separates review decisions from reference targets and operation history', async ({ page }) => {
+  test('goal review keeps operation history inline and reference targets separate from review decisions', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await mockGoalReviewWorkspace(page);
     await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
@@ -1338,7 +1338,8 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('indicator-weight-total')).toHaveCount(1);
 
     await expect(page.getByTestId('goal-review-reference-open')).toHaveText('参考目标');
-    await expect(page.getByTestId('goal-review-history-open')).toHaveText('操作记录');
+    await expect(page.getByTestId('goal-review-history-open')).toHaveCount(0);
+    await expect(page.getByRole('dialog', { name: '操作记录' })).toHaveCount(0);
     await expect(page.getByTestId('goal-review-reference-panel')).toHaveCount(0);
     await page.getByTestId('goal-review-reference-open').click();
     const referenceDialog = page.getByRole('dialog', { name: '参考目标' });
@@ -1348,9 +1349,13 @@ test.describe('team list manager workspace', () => {
     await expect(referenceDialog.getByText('流程历史', { exact: true })).toHaveCount(0);
     await page.keyboard.press('Escape');
 
-    await page.getByTestId('goal-review-history-open').click();
-    await expect(page.getByRole('dialog', { name: '操作记录' })).toBeVisible();
-    await expect(page.getByTestId('indicator-operation-timeline')).toBeVisible();
+    const operationTimeline = page.getByTestId('indicator-operation-timeline');
+    await expect(operationTimeline).toBeVisible();
+    const tableBox = await table.boundingBox();
+    const historyBox = await operationTimeline.boundingBox();
+    expect(tableBox).not.toBeNull();
+    expect(historyBox).not.toBeNull();
+    expect(historyBox!.y).toBeGreaterThan(tableBox!.y + tableBox!.height - 1);
   });
 
   test('goal review keeps rows compact, edits all visibility scopes, and uses scoped references', async ({ page }) => {
@@ -1867,7 +1872,7 @@ test.describe('team list manager workspace', () => {
     });
   }
 
-  test('goal review automatically opens and focuses a rejected indicator', async ({ page }) => {
+  test('goal review keeps a task rejection in the shared operation history instead of the first indicator', async ({ page }) => {
     const rejectedDetail = structuredClone(goalReviewDetailFixture);
     rejectedDetail.flowRecords = [
       ...(rejectedDetail.flowRecords ?? []),
@@ -1888,9 +1893,16 @@ test.describe('team list manager workspace', () => {
 
     await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
 
-    await expect(page.getByTestId('indicator-details-ind-1')).toBeVisible();
-    await expect(page.getByTestId('indicator-row-ind-1')).toBeFocused();
-    await expect(page.getByTestId('indicator-details-ind-1')).toContainText('目标口径需要补充');
+    const firstIndicator = page.getByTestId('indicator-row-ind-1');
+    const history = page.getByTestId('indicator-operation-timeline');
+    await expect(firstIndicator).not.toHaveClass(/is-invalid/);
+    await expect(firstIndicator.locator('.performance-review-table__rejection')).toHaveCount(0);
+    await expect(page.getByTestId('goal-review-history-open')).toHaveCount(0);
+    await expect(history).toBeVisible();
+    await expect(history.getByTestId('indicator-operation-record').first()).toContainText('Test Manager');
+    await expect(history.getByTestId('indicator-operation-record').first()).toContainText('退回指标');
+    await expect(history.getByTestId('indicator-operation-record').first()).toContainText('退回原因');
+    await expect(history.getByTestId('indicator-operation-record').first()).toContainText('目标口径需要补充');
   });
 
   for (const containerWidth of [970, 1024]) {

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
-import { Clock, Connection, EditPen, Refresh } from '@element-plus/icons-vue';
+import { Connection, EditPen, Refresh } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { tasksApi } from '@/api/tasks.api';
 import { useAuthStore } from '@/stores/auth.store';
@@ -77,7 +77,6 @@ const auth = useAuthStore();
 const loading = ref(false);
 const error = ref('');
 const referenceOpen = ref(false);
-const historyOpen = ref(false);
 const editing = ref(false);
 const draftIndicators = reactive<IndicatorInstance[]>([]);
 const validationIndicatorIds = ref<string[]>([]);
@@ -93,19 +92,7 @@ const pendingSaveOperations = new Map<string, {
 }>();
 const latestSaveOperationByTask = new Map<string, string>();
 
-const latestRejection = computed(() => [...(task.value?.flowRecords ?? [])]
-  .filter((record) => record.action === 'reject')
-  .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]);
-const rejectedIndicatorId = computed(() => (
-  latestRejection.value ? draftIndicators[0]?.id : undefined
-));
-const indicatorIdsToReveal = computed(() => {
-  const ids = [...validationIndicatorIds.value];
-  if (rejectedIndicatorId.value && !ids.includes(rejectedIndicatorId.value)) {
-    ids.push(rejectedIndicatorId.value);
-  }
-  return ids;
-});
+const indicatorIdsToReveal = computed(() => [...validationIndicatorIds.value]);
 const totalWeight = computed(() => draftIndicators.reduce(
   (sum, indicator) => sum + Number(indicator.weight || 0),
   0,
@@ -139,9 +126,6 @@ const reviewRows = computed<PerformanceIndicatorRow[]>(() => draftIndicators.map
   targetValueText: indicator.targetValueText,
   unit: indicator.unit,
   alignedObjectives: indicator.alignedObjectives,
-  rejectionReason: indicator.id === rejectedIndicatorId.value
-    ? latestRejection.value?.comment
-    : undefined,
 })));
 
 function cloneIndicators(indicators: IndicatorInstance[]) {
@@ -454,13 +438,6 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
             权重合计 {{ displayedWeightTotal.percentText }}%
           </strong>
           <el-button
-            :icon="Clock"
-            data-testid="goal-review-history-open"
-            @click="historyOpen = true"
-          >
-            操作记录
-          </el-button>
-          <el-button
             :icon="Connection"
             data-testid="goal-review-reference-open"
             @click="referenceOpen = true"
@@ -645,6 +622,10 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
         </template>
       </PerformanceReviewTable>
 
+      <div class="goal-review__history">
+        <IndicatorOperationTimeline :records="task.flowRecords" />
+      </div>
+
       <footer v-if="isReviewable" class="goal-review__decision">
         <div>
           <strong>{{ editing ? '正在编辑目标' : '审核处理' }}</strong>
@@ -686,14 +667,6 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
         />
       </el-drawer>
 
-      <el-drawer
-        v-model="historyOpen"
-        title="操作记录"
-        size="460px"
-        class="goal-review-history-drawer"
-      >
-        <IndicatorOperationTimeline :records="task.flowRecords" />
-      </el-drawer>
     </template>
 
     <el-empty v-else :image-size="52" description="暂无目标审核详情" />
@@ -945,6 +918,19 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
   padding: 0 16px 16px;
 }
 
+.goal-review__history {
+  padding: 0 18px 18px;
+  background: #f7f9fc;
+}
+
+.goal-review__history :deep(.operation-timeline) {
+  margin-top: 0;
+  padding: 18px;
+  border: 1px solid #e7ebf1;
+  border-radius: 12px;
+  background: #fff;
+}
+
 .goal-review__decision {
   min-height: 70px;
   display: flex;
@@ -993,13 +979,8 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
   padding: 0;
 }
 
-:global(.goal-review-history-drawer .el-drawer__body) {
-  padding: 0 18px 18px;
-}
-
 @media (max-width: 720px) {
-  :global(.goal-review-reference-drawer),
-  :global(.goal-review-history-drawer) {
+  :global(.goal-review-reference-drawer) {
     width: 92vw !important;
   }
 }
@@ -1026,6 +1007,14 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
 
   .goal-review :deep(.performance-review-table) {
     padding: 0 10px 10px;
+  }
+
+  .goal-review__history {
+    padding: 0 10px 10px;
+  }
+
+  .goal-review__history :deep(.operation-timeline) {
+    padding: 14px;
   }
 
   .goal-review :deep(.performance-review-table__cells) {
