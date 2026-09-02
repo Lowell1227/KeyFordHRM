@@ -29,11 +29,12 @@ const canEdit = computed(() => Boolean(detail.value?.permissions.canEditManager)
 const selectedIndicator = computed(() => detail.value?.indicators[selectedIndex.value]);
 const periodTitle = computed(() => {
   const period = detail.value?.period;
-  if (!period) return '复盘与评分';
-  if (period.periodType === 'cycle') return '整周期复盘与评分';
+  if (!period) return '主管评分';
+  if (period.periodType === 'cycle') return '整周期主管评分';
   const [year, month] = period.periodKey.split('-');
-  return `${year}年${Number(month)}月复盘与评分`;
+  return `${year}年${Number(month)}月主管评分`;
 });
+const followUpName = computed(() => detail.value?.period.periodType === 'cycle' ? '周期跟进' : '月度跟进');
 const completedCount = computed(() => formItems.filter((item) => item.managerScore != null).length);
 const selfScoreTotal = computed(() => {
   if (detail.value?.period.selfScoreTotal != null) return detail.value.period.selfScoreTotal;
@@ -141,7 +142,7 @@ async function returnReview() {
   if (!canEdit.value || returning.value || submitting.value) return;
   let reason = '';
   try {
-    const result = await ElMessageBox.prompt('可填写需要员工补充的内容；不填写也可退回。', '退回复盘', {
+    const result = await ElMessageBox.prompt('可填写需要员工补充的内容；不填写也可退回。', `退回${followUpName.value}`, {
       confirmButtonText: '确认退回', cancelButtonText: '取消', inputType: 'textarea', inputPlaceholder: '选填退回原因',
     });
     reason = result.value;
@@ -195,7 +196,7 @@ watch(() => props.periodId, loadReview, { immediate: true });
     <template v-else-if="detail">
       <div class="manager-review__period-bar">
         <div><strong>{{ periodTitle }}</strong><span>{{ detail.context.statusLabel }}</span></div>
-        <small>主管截止 {{ new Date(detail.period.managerDueAt).toLocaleString('zh-CN', { hour12: false }) }}</small>
+        <small>主管评分截止 {{ new Date(detail.period.managerDueAt).toLocaleString('zh-CN', { hour12: false }) }}</small>
       </div>
 
       <div class="manager-review__totals" data-testid="manager-review-totals">
@@ -211,7 +212,11 @@ watch(() => props.periodId, loadReview, { immediate: true });
         </div>
       </div>
 
-      <PerformanceFormWorkspace reference-title="员工复盘参考" reference-test-id="manager-review-reference">
+      <PerformanceFormWorkspace
+        reference-title="参考信息"
+        reference-test-id="manager-review-reference"
+        workspace-test-id="manager-review-form-workspace"
+      >
         <template #main>
           <div class="manager-review__goals">
             <article
@@ -251,16 +256,17 @@ watch(() => props.periodId, loadReview, { immediate: true });
           </div>
         </template>
         <template #reference><MonthlyReviewReferencePanel :indicator="selectedIndicator" /></template>
+        <template #actions>
+          <footer v-if="canEdit" class="manager-review-actions" data-testid="manager-review-actions">
+            <div><strong>评分完成 {{ completedCount }}/{{ formItems.length }}</strong><span>主管说明选填；分差和低分只提醒，不阻止提交</span></div>
+            <div>
+              <el-button :loading="returning" :disabled="saving || submitting" @mousedown.prevent @click="returnReview">退回员工补充</el-button>
+              <el-button :loading="saving" :disabled="returning || submitting" @mousedown.prevent @click="saveDraft">保存草稿</el-button>
+              <el-button type="primary" :loading="submitting" :disabled="saving || returning" @mousedown.prevent @click="submitReview">提交主管评分</el-button>
+            </div>
+          </footer>
+        </template>
       </PerformanceFormWorkspace>
-
-      <footer v-if="canEdit" class="manager-review-actions" data-testid="manager-review-actions">
-        <div><strong>评分完成 {{ completedCount }}/{{ formItems.length }}</strong><span>主管说明选填；分差和低分只提醒，不阻止提交</span></div>
-        <div>
-          <el-button :loading="returning" :disabled="saving || submitting" @click="returnReview">退回员工补充</el-button>
-          <el-button :loading="saving" :disabled="returning || submitting" @click="saveDraft">保存草稿</el-button>
-          <el-button type="primary" :loading="submitting" :disabled="saving || returning" @click="submitReview">提交主管评分</el-button>
-        </div>
-      </footer>
     </template>
   </section>
 </template>
@@ -299,7 +305,7 @@ watch(() => props.periodId, loadReview, { immediate: true });
 .manager-score-card__form em { color: #e64f4f; font-size: 11px; font-style: normal; }
 .manager-score-card__warnings { display: flex; gap: 8px; padding: 0 15px 13px; }
 .manager-score-card__warnings span { padding: 5px 8px; border-radius: 5px; background: #fff4e5; color: #a56a0a; font-size: 11px; }
-.manager-review-actions { position: sticky; z-index: 5; bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid #dfe5f0; border-radius: 12px; background: rgb(255 255 255 / 96%); box-shadow: 0 8px 24px rgb(31 45 61 / 10%); }
+.manager-review-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid #dfe5f0; border-radius: 12px; background: #fff; box-shadow: 0 8px 24px rgb(31 45 61 / 10%); }
 .manager-review-actions > div:first-child { display: grid; gap: 2px; }
 .manager-review-actions strong { color: #30394a; font-size: 13px; }
 .manager-review-actions span { color: #8a93a3; font-size: 11px; }

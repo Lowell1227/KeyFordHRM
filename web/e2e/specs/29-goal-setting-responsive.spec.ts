@@ -208,8 +208,10 @@ test.describe('goal setting responsive workspace', () => {
 
     const workspace = page.getByTestId('goal-setting-workspace');
     await expect(workspace).toBeVisible();
-    await expect(page.getByTestId('performance-form-reference')).toHaveCount(0);
-    await expect(page.getByTestId('goal-setting-reference-open')).toBeVisible();
+    const reference = page.getByTestId('goal-setting-reference');
+    await expect(reference).toBeVisible();
+    await expect(page.getByTestId('goal-setting-reference-open')).toHaveCount(0);
+    await expect(page.getByTestId('goal-setting-reference-drawer')).toHaveCount(0);
     await expect(page.getByTestId('goal-setting-simple-editor')).toBeVisible();
     await expect(page.getByTestId('goal-setting-complete-fields')).toHaveCount(0);
     await expect(page.getByRole('button', { name: '添加目标' })).toBeVisible();
@@ -218,6 +220,12 @@ test.describe('goal setting responsive workspace', () => {
     await expect(page.getByRole('button', { name: '提交上级审核' })).toBeVisible();
     await expect(page.getByTestId('indicator-visibility-indicator-1')).toBeVisible();
     await expect(page.getByTestId('goal-align-open-0')).toBeVisible();
+
+    const editorBox = await page.getByTestId('goal-setting-simple-editor').boundingBox();
+    const referenceBox = await reference.boundingBox();
+    expect(editorBox).not.toBeNull();
+    expect(referenceBox).not.toBeNull();
+    expect(referenceBox!.x).toBeGreaterThan(editorBox!.x + editorBox!.width - 1);
 
     await expect(page.getByTestId('goal-setting-mode-switch')).toHaveAccessibleName('切换到完整模式');
 
@@ -278,8 +286,6 @@ test.describe('goal setting responsive workspace', () => {
     await expect.poll(() => requests.length).toBe(2);
     expect(requests[1].postDataJSON()).toMatchObject({ action: 'submit' });
 
-    await page.getByTestId('goal-setting-reference-open').click();
-    await expect(page.getByTestId('goal-setting-reference-drawer')).toBeVisible();
     await expect(page.getByTestId('performance-reference-panel')).toBeVisible();
   });
 
@@ -338,9 +344,11 @@ test.describe('goal setting responsive workspace', () => {
 
     await page.goto('/tasks/task-goal-1?stage=goal-setting');
 
+    const reference = page.getByTestId('goal-setting-reference');
+    await reference.getByRole('button', { name: '展开参考信息' }).click();
+    await reference.getByRole('tab', { name: '操作记录' }).click();
     const timeline = page.getByTestId('indicator-operation-timeline');
     await expect(timeline).toBeVisible();
-    await expect(timeline).toContainText('共 7 条');
     const visibleRecords = timeline.getByTestId('indicator-operation-record');
     await expect(visibleRecords).toHaveCount(5);
     await expect(visibleRecords.first()).toContainText('王主管');

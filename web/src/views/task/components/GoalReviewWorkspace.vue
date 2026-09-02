@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
-import { Connection, EditPen, Refresh } from '@element-plus/icons-vue';
+import { EditPen, Refresh } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { tasksApi } from '@/api/tasks.api';
 import { useAuthStore } from '@/stores/auth.store';
@@ -14,8 +14,8 @@ import IndicatorVisibilityEditor, {
   type VisibilityDepartmentOption,
   type VisibilityUserOption,
 } from './IndicatorVisibilityEditor.vue';
-import GoalReviewReferencePanel from './GoalReviewReferencePanel.vue';
-import IndicatorOperationTimeline from './IndicatorOperationTimeline.vue';
+import PerformanceFormWorkspace from './PerformanceFormWorkspace.vue';
+import GoalReviewSupportPanel from './GoalReviewSupportPanel.vue';
 import { normalizeDisplayedWeightTotal } from '../indicator-weight';
 import {
   indicatorVisibilitySummary,
@@ -76,7 +76,6 @@ const task = ref<TaskDetail>();
 const auth = useAuthStore();
 const loading = ref(false);
 const error = ref('');
-const referenceOpen = ref(false);
 const editing = ref(false);
 const draftIndicators = reactive<IndicatorInstance[]>([]);
 const validationIndicatorIds = ref<string[]>([]);
@@ -438,13 +437,6 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
             权重合计 {{ displayedWeightTotal.percentText }}%
           </strong>
           <el-button
-            :icon="Connection"
-            data-testid="goal-review-reference-open"
-            @click="referenceOpen = true"
-          >
-            参考目标
-          </el-button>
-          <el-button
             v-if="isReviewable && !editing"
             type="primary"
             plain
@@ -470,13 +462,20 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
         </div>
       </header>
 
-      <PerformanceReviewTable
-        :rows="reviewRows"
-        :columns="goalReviewColumns"
-        :invalid-indicator-ids="indicatorIdsToReveal"
-        :weight-total="totalWeight"
-        :show-weight-total="false"
+      <PerformanceFormWorkspace
+        class="goal-review__form"
+        reference-title="参考信息"
+        reference-test-id="goal-review-reference"
+        workspace-test-id="goal-review-form-workspace"
       >
+        <template #main>
+          <PerformanceReviewTable
+            :rows="reviewRows"
+            :columns="goalReviewColumns"
+            :invalid-indicator-ids="indicatorIdsToReveal"
+            :weight-total="totalWeight"
+            :show-weight-total="false"
+          >
         <template #cell-indicator="{ index }">
           <div class="goal-review-cell goal-review-cell--name">
             <span class="goal-review-cell__index">{{ index + 1 }}</span>
@@ -620,52 +619,48 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
             </strong>
           </div>
         </template>
-      </PerformanceReviewTable>
+          </PerformanceReviewTable>
+        </template>
 
-      <div class="goal-review__history">
-        <IndicatorOperationTimeline :records="task.flowRecords" />
-      </div>
+        <template #reference>
+          <GoalReviewSupportPanel
+            :cycle-id="task.cycleId"
+            :employee-id="task.employeeId"
+            :indicators="draftIndicators"
+            :flow-records="task.flowRecords"
+          />
+        </template>
 
-      <footer v-if="isReviewable" class="goal-review__decision">
-        <div>
-          <strong>{{ editing ? '正在编辑目标' : '审核处理' }}</strong>
-          <span>{{ editing ? '请先保存修改，再进行通过或退回操作。' : '退回时需要填写原因，员工修改后可重新提交。' }}</span>
-        </div>
-        <div>
-          <el-button
-            type="danger"
-            plain
-            data-testid="goal-review-reject"
-            :disabled="editing"
-            :loading="busy"
-            @click="handleReject"
-          >
-            退回修改
-          </el-button>
-          <el-button
-            type="primary"
-            data-testid="goal-review-approve"
-            :disabled="editing"
-            :loading="busy"
-            @click="handleApprove"
-          >
-            通过
-          </el-button>
-        </div>
-      </footer>
-
-      <el-drawer
-        v-model="referenceOpen"
-        title="参考目标"
-        size="430px"
-        class="goal-review-reference-drawer"
-      >
-        <GoalReviewReferencePanel
-          :cycle-id="task.cycleId"
-          :employee-id="task.employeeId"
-          :indicators="draftIndicators"
-        />
-      </el-drawer>
+        <template #actions>
+          <footer v-if="isReviewable" class="goal-review__decision">
+            <div>
+              <strong>{{ editing ? '正在编辑目标' : '审核处理' }}</strong>
+              <span>{{ editing ? '请先保存修改，再进行通过或退回操作。' : '退回时需要填写原因，员工修改后可重新提交。' }}</span>
+            </div>
+            <div>
+              <el-button
+                type="danger"
+                plain
+                data-testid="goal-review-reject"
+                :disabled="editing"
+                :loading="busy"
+                @click="handleReject"
+              >
+                退回修改
+              </el-button>
+              <el-button
+                type="primary"
+                data-testid="goal-review-approve"
+                :disabled="editing"
+                :loading="busy"
+                @click="handleApprove"
+              >
+                通过
+              </el-button>
+            </div>
+          </footer>
+        </template>
+      </PerformanceFormWorkspace>
 
     </template>
 
@@ -812,8 +807,13 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
 }
 
 .goal-review :deep(.performance-review-table) {
-  padding: 0 18px 18px;
+  padding: 0;
   border-top: 1px solid #edf0f5;
+  background: #f7f9fc;
+}
+
+.goal-review__form {
+  padding: 0 18px 18px;
   background: #f7f9fc;
 }
 
@@ -918,19 +918,6 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
   padding: 0 16px 16px;
 }
 
-.goal-review__history {
-  padding: 0 18px 18px;
-  background: #f7f9fc;
-}
-
-.goal-review__history :deep(.operation-timeline) {
-  margin-top: 0;
-  padding: 18px;
-  border: 1px solid #e7ebf1;
-  border-radius: 12px;
-  background: #fff;
-}
-
 .goal-review__decision {
   min-height: 70px;
   display: flex;
@@ -975,16 +962,6 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
   box-shadow: 0 0 0 1px #e4e9f1 inset;
 }
 
-:global(.goal-review-reference-drawer .el-drawer__body) {
-  padding: 0;
-}
-
-@media (max-width: 720px) {
-  :global(.goal-review-reference-drawer) {
-    width: 92vw !important;
-  }
-}
-
 @container goal-review (max-width: 720px) {
   .goal-review__header {
     display: grid;
@@ -1006,16 +983,10 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
   }
 
   .goal-review :deep(.performance-review-table) {
-    padding: 0 10px 10px;
+    padding: 0;
   }
 
-  .goal-review__history {
-    padding: 0 10px 10px;
-  }
-
-  .goal-review__history :deep(.operation-timeline) {
-    padding: 14px;
-  }
+  .goal-review__form { padding: 0 10px 10px; }
 
   .goal-review :deep(.performance-review-table__cells) {
     grid-template-columns: minmax(0, 1fr) !important;

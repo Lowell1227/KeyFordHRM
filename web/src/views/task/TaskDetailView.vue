@@ -40,7 +40,6 @@ const cycle = ref<AssessmentCycle | null>(null);
 const cycleLoading = ref(false);
 const actionLoading = ref(false);
 const reminding = ref(false);
-const goalSettingReferenceOpen = ref(false);
 type GoalSettingMode = 'simple' | 'complete';
 function readGoalSettingMode(): GoalSettingMode {
   try {
@@ -134,11 +133,12 @@ const isManagerPeriodReview = computed(() => Boolean(
   && task.value?.managerId === authStore.user?.id,
 ));
 const showGoalSettingReference = computed(() => (
-  requestedPerformanceStage.value === 'goal-setting' && !isPeriodReviewPage.value
+  ['goal-setting', 'goal-confirmation'].includes(requestedPerformanceStage.value)
+  && !isPeriodReviewPage.value
 ));
 const periodReviewTitle = computed(() => activePerformancePeriod.value?.periodType === 'cycle'
-  ? '整周期复盘与评分'
-  : '本期复盘与评分');
+  ? '整周期跟进'
+  : '月度跟进');
 const performanceStageTitle = computed(() => isPeriodReviewPage.value
   ? periodReviewTitle.value
   : performanceStageLabels[requestedPerformanceStage.value]);
@@ -443,14 +443,6 @@ async function handleRemind() {
         </div>
         <div class="performance-detail__topbar-actions">
           <el-button
-            v-if="showGoalSettingReference"
-            data-testid="goal-setting-reference-open"
-            plain
-            @click="goalSettingReferenceOpen = true"
-          >
-            参考信息
-          </el-button>
-          <el-button
             v-if="showGoalSettingReference && canEditIndicators"
             plain
             data-testid="goal-setting-mode-switch"
@@ -492,7 +484,9 @@ async function handleRemind() {
       </section>
 
       <PerformanceFormWorkspace
-        :show-reference="false"
+        :show-reference="showGoalSettingReference"
+        reference-title="参考信息"
+        reference-test-id="goal-setting-reference"
         :workspace-test-id="showGoalSettingReference ? 'goal-setting-workspace' : undefined"
       >
         <template #main>
@@ -537,6 +531,7 @@ async function handleRemind() {
             :employee-id="task.employeeId"
             :can-use-template="canEditIndicators"
             :flow-records="task.flowRecords"
+            :show-operation-history="!showGoalSettingReference"
             :loading="actionLoading"
             :save-label="indicatorSaveLabel"
             :submit-label="indicatorSubmitLabel"
@@ -637,21 +632,6 @@ async function handleRemind() {
           />
         </template>
       </PerformanceFormWorkspace>
-
-      <el-drawer
-        v-model="goalSettingReferenceOpen"
-        title="参考信息"
-        size="min(430px, 92vw)"
-        class="goal-setting-reference-drawer"
-        data-testid="goal-setting-reference-drawer"
-      >
-        <PerformanceReferencePanel
-          :cycle-id="task.cycleId"
-          :employee-id="task.employeeId"
-          :indicators="task.indicatorInstances"
-          :flow-records="task.flowRecords"
-        />
-      </el-drawer>
     </template>
 
     <div v-else-if="taskStore.error" class="error-state">

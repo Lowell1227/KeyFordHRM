@@ -47,6 +47,9 @@ const referenceActionLabel = computed(() => referenceOpen.value ? '收起参考�
         <slot name="reference" />
       </div>
     </aside>
+    <div v-if="$slots.actions" class="performance-form-workspace__actions">
+      <slot name="actions" />
+    </div>
   </div>
 </template>
 
@@ -64,7 +67,8 @@ const referenceActionLabel = computed(() => referenceOpen.value ? '收起参考�
 }
 
 .performance-form-workspace__main,
-.performance-form-workspace__reference {
+.performance-form-workspace__reference,
+.performance-form-workspace__actions {
   min-width: 0;
 }
 
@@ -79,6 +83,10 @@ const referenceActionLabel = computed(() => referenceOpen.value ? '收起参考�
   border-radius: 14px;
   background: #fff;
   box-shadow: 0 1px 2px rgb(31 45 61 / 4%);
+}
+
+.performance-form-workspace__actions {
+  grid-column: 1 / -1;
 }
 
 .performance-form-workspace__reference-heading {
@@ -100,6 +108,7 @@ const referenceActionLabel = computed(() => referenceOpen.value ? '收起参考�
   .performance-form-workspace.has-reference {
     grid-template-columns: minmax(0, 1fr);
   }
+
 }
 
 @media (max-width: 767px) {

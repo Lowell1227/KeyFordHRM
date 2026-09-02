@@ -1314,7 +1314,7 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('team-task-empty')).toHaveCount(0);
   });
 
-  test('goal review keeps operation history inline and reference targets separate from review decisions', async ({ page }) => {
+  test('goal review keeps reference information beside the review form and decisions at the bottom', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 900 });
     await mockGoalReviewWorkspace(page);
     await page.goto('/tasks?scope=team&stage=goal-review&cycleId=cycle-1&stageState=pending&taskId=task-1');
@@ -1337,25 +1337,32 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('goal-review-reject')).toHaveText('退回修改');
     await expect(page.getByTestId('indicator-weight-total')).toHaveCount(1);
 
-    await expect(page.getByTestId('goal-review-reference-open')).toHaveText('参考目标');
+    const formWorkspace = page.getByTestId('goal-review-form-workspace');
+    const supportPanel = page.getByTestId('goal-review-support-panel');
+    await expect(formWorkspace).toBeVisible();
+    await expect(supportPanel).toBeVisible();
+    await expect(page.getByTestId('goal-review-reference-open')).toHaveCount(0);
     await expect(page.getByTestId('goal-review-history-open')).toHaveCount(0);
     await expect(page.getByRole('dialog', { name: '操作记录' })).toHaveCount(0);
-    await expect(page.getByTestId('goal-review-reference-panel')).toHaveCount(0);
-    await page.getByTestId('goal-review-reference-open').click();
-    const referenceDialog = page.getByRole('dialog', { name: '参考目标' });
-    await expect(referenceDialog).toContainText('仅用于判断员工目标是否与上级、部门方向一致');
-    await expect(referenceDialog.getByRole('heading', { name: '本次已对齐', exact: true })).toBeVisible();
-    await expect(referenceDialog.getByRole('heading', { name: '其他可参考目标', exact: true })).toBeVisible();
-    await expect(referenceDialog.getByText('流程历史', { exact: true })).toHaveCount(0);
-    await page.keyboard.press('Escape');
-
     const operationTimeline = page.getByTestId('indicator-operation-timeline');
+    const reviewDecision = page.locator('.goal-review__decision');
     await expect(operationTimeline).toBeVisible();
+    await expect(supportPanel.getByRole('tab', { name: '操作记录' })).toHaveAttribute('aria-selected', 'true');
+    await supportPanel.getByRole('tab', { name: '参考目标' }).click();
+    const referencePanel = page.getByTestId('goal-review-reference-panel');
+    await expect(referencePanel).toContainText('仅用于判断员工目标是否与上级、部门方向一致');
+    await expect(referencePanel.getByRole('heading', { name: '本次已对齐', exact: true })).toBeVisible();
+    await expect(referencePanel.getByRole('heading', { name: '其他可参考目标', exact: true })).toBeVisible();
+    await expect(page.getByText('流程历史', { exact: true })).toHaveCount(0);
+    await expect(reviewDecision).toBeVisible();
     const tableBox = await table.boundingBox();
-    const historyBox = await operationTimeline.boundingBox();
+    const supportBox = await page.getByTestId('goal-review-reference').boundingBox();
+    const decisionBox = await reviewDecision.boundingBox();
     expect(tableBox).not.toBeNull();
-    expect(historyBox).not.toBeNull();
-    expect(historyBox!.y).toBeGreaterThan(tableBox!.y + tableBox!.height - 1);
+    expect(supportBox).not.toBeNull();
+    expect(decisionBox).not.toBeNull();
+    expect(supportBox!.x).toBeGreaterThan(tableBox!.x + tableBox!.width - 1);
+    expect(decisionBox!.y).toBeGreaterThan(tableBox!.y + tableBox!.height - 1);
   });
 
   test('goal review keeps rows compact, edits all visibility scopes, and uses scoped references', async ({ page }) => {
@@ -1411,16 +1418,13 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('visibility-department-count')).toContainText('1');
     await expect(page.getByTestId('visibility-user-count')).toContainText('1');
 
-    await page.getByTestId('goal-review-reference-open').click();
+    await page.getByTestId('goal-review-support-reference-tab').click();
     const referencePanel = page.getByTestId('goal-review-reference-panel');
     await expect(referencePanel).toContainText('Launch the customer portal');
     await expect(referencePanel).toContainText('Prior delivery target');
     await expect.poll(() => referenceRequests[referenceRequests.length - 1]?.searchParams.get('cycleId')).toBe('cycle-1');
     await expect.poll(() => referenceRequests[referenceRequests.length - 1]?.searchParams.get('ownerId')).toBe('employee-1');
     expect(referenceRequests.every((url) => url.pathname.endsWith('/tasks/reference-indicators'))).toBe(true);
-    await page.keyboard.press('Escape');
-    await expect(page.getByRole('dialog', { name: '参考目标' })).toBeHidden();
-
     await page.getByTestId('goal-review-save').click();
     await expect.poll(() => savedBody).toEqual(expect.objectContaining({
       expectedUpdatedAt: '2026-08-09T00:00:00.000Z',
@@ -1921,7 +1925,7 @@ test.describe('team list manager workspace', () => {
         (element) => element.getBoundingClientRect().width,
       );
       expect(Math.abs(workspaceWidth - containerWidth)).toBeLessThanOrEqual(1);
-      await expect(page.getByTestId('goal-review-reference-panel')).toHaveCount(0);
+      await expect(page.getByTestId('goal-review-support-panel')).toBeVisible();
       await expect(page.getByTestId('performance-review-table').locator('[role="columnheader"]'))
         .toHaveCount(5);
       await expect(page.getByTestId('performance-review-table').locator('[role="columnheader"]').first())
@@ -1931,7 +1935,7 @@ test.describe('team list manager workspace', () => {
 
       for (const testId of [
         'indicator-visibility-ind-1',
-        'goal-review-reference-open',
+        'goal-review-support-reference-tab',
         'goal-review-save',
       ]) {
         const control = page.getByTestId(testId);

@@ -20,9 +20,11 @@ interface OperationRecordView {
 const props = withDefaults(defineProps<{
   records?: FlowRecord[];
   initialVisibleCount?: number;
+  showHeader?: boolean;
 }>(), {
   records: () => [],
   initialVisibleCount: 5,
+  showHeader: true,
 });
 
 const expanded = ref(false);
@@ -98,7 +100,7 @@ function formatOperationTime(value: string): string {
     data-testid="indicator-operation-timeline"
     aria-labelledby="indicator-operation-title"
   >
-    <header class="operation-timeline__header">
+    <header v-if="showHeader" class="operation-timeline__header">
       <div>
         <h3 id="indicator-operation-title">操作记录</h3>
         <span>共 {{ operationRecords.length }} 条</span>

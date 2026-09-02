@@ -76,7 +76,7 @@ test('same-name cycles remain selectable and the employee can enter the exact re
 
   const selector = page.getByTestId('goal-tracking-cycle');
   await expect(selector.locator('option')).toHaveCount(2);
-  await expect(selector.locator('option').nth(0)).toContainText('每月复盘');
+  await expect(selector.locator('option').nth(0)).toContainText('月度跟进');
   await expect(selector.locator('option').nth(1)).toContainText('已豁免');
   await expect(page.getByTestId('goal-tracking-summary')).toContainText('1 已完成');
   await expect(page.getByTestId('goal-tracking-surface')).toContainText('完成重点客户续约');
@@ -170,7 +170,15 @@ test('frozen manager can save and formally submit per-indicator scores', async (
   await page.goto(`/tasks/task-manager-1?stage=self-eval&periodId=${periodId}`);
 
   const cards = page.getByTestId('manager-review-goal-card');
+  await expect(page.getByTestId('manager-review-form-workspace')).toBeVisible();
+  await expect(page.getByTestId('manager-review-reference')).toBeVisible();
+  await expect(page.getByText('2026年8月主管评分', { exact: true })).toBeVisible();
   await expect(cards).toHaveCount(2);
+  const cardBox = await cards.first().boundingBox();
+  const referenceBox = await page.getByTestId('manager-review-reference').boundingBox();
+  expect(cardBox).not.toBeNull();
+  expect(referenceBox).not.toBeNull();
+  expect(referenceBox!.x).toBeGreaterThan(cardBox!.x + cardBox!.width - 1);
   await cards.nth(0).getByRole('button', { name: '同意自评' }).click();
   await cards.nth(1).getByLabel('主管评分').fill('55');
   await expect(cards.nth(1)).toContainText('低于60分');

@@ -112,7 +112,7 @@ export function selectTrackingAction(context: PerformanceCycleContext): Tracking
   if (employeePeriod) {
     return {
       kind: 'review',
-      label: employeePeriod.periodType === 'cycle' ? '进入整周期复盘' : '进入本期复盘',
+      label: employeePeriod.periodType === 'cycle' ? '进入整周期跟进' : '进入月度跟进',
       taskId: context.task.id,
       periodId: employeePeriod.id,
     };
@@ -158,13 +158,13 @@ function shortDate(value: string): string {
 }
 
 export function formatGoalTrackingContextLabel(context: PerformanceCycleContext): string {
-  const mode = context.scoringFrequency === 'monthly' ? '每月复盘' : '整周期评分';
+  const mode = context.scoringFrequency === 'monthly' ? '月度跟进' : '整周期跟进';
   const participation = context.task.isExempt ? '已豁免' : '正常参与';
   return `${context.name}｜${shortDate(context.startDate)}-${shortDate(context.endDate)}｜${mode}｜${participation}`;
 }
 
 export function formatGoalTrackingContextMeta(context: PerformanceCycleContext): string {
-  return `${context.scoringFrequency === 'monthly' ? '月度跟进' : '整周期评分'} · ${context.task.isExempt ? '已豁免' : '正常参与'} · 开放 ${new Date(context.openedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}`;
+  return `${context.scoringFrequency === 'monthly' ? '月度跟进' : '整周期跟进'} · ${context.task.isExempt ? '已豁免' : '正常参与'} · 开放 ${new Date(context.openedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}`;
 }
 
 export type GoalTrackingHealthStatus = 'on_track' | 'at_risk' | 'blocked' | 'completed';

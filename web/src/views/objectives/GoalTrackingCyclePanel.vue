@@ -46,7 +46,7 @@ const actionHint = computed(() => {
     exempt: props.selectedContext?.task.exemptReason || '本周期无需制定、跟进或评分',
     'goal-setting': '目标尚未完成制定，先完成目标再进入日常跟进',
     'goal-confirmation': '目标等待本人确认，确认后进入持续跟进',
-    review: activePeriod.value?.employeeSubmittedAt ? '已提交，等待主管评分' : '本期复盘已开放，可从这里继续填写',
+    review: activePeriod.value?.employeeSubmittedAt ? '已提交，等待主管评分' : '月度跟进已开放，可从这里继续填写',
     waiting: action.value.label,
     complete: '全部评分期次已完成，等待周期结果流转',
     none: '目标已确认，可持续更新进展',
@@ -98,7 +98,7 @@ function periodStatus(period: PerformanceCycleContext['periods'][number]) {
     return '未开放';
   }
   if (period.status === 'self_eval') return period.employeeSubmittedAt ? '待主管评分' : '待填写';
-  if (period.status === 'manager_scoring') return period.employeeSubmittedAt ? '待主管评分' : '复盘逾期待补交';
+  if (period.status === 'manager_scoring') return period.employeeSubmittedAt ? '待主管评分' : '月度跟进逾期待补交';
   if (period.status === 'completed') return '已评分';
   return '无结果';
 }
@@ -144,7 +144,7 @@ function dueDate(value: string) {
     <section v-if="selectedContext" class="tracking-cycle__summary" data-testid="goal-tracking-summary">
       <div>
         <span>评分方式</span>
-        <strong>{{ selectedContext.scoringFrequency === 'monthly' ? '月度跟进' : '整周期评分' }}</strong>
+        <strong>{{ selectedContext.scoringFrequency === 'monthly' ? '月度跟进' : '整周期跟进' }}</strong>
       </div>
       <div>
         <span>期次进度</span>
@@ -221,12 +221,12 @@ function dueDate(value: string) {
       </main>
 
       <aside v-if="selectedContext && !selectedContext.task.isExempt" class="tracking-cycle__periods" aria-label="评分期次">
-        <header><h2>复盘与评分</h2><span>{{ selectedContext.scoringFrequency === 'monthly' ? '按月推进' : '整周期一次完成' }}</span></header>
+        <header><h2>目标跟进</h2><span>{{ selectedContext.scoringFrequency === 'monthly' ? '按月推进' : '整周期一次完成' }}</span></header>
         <ol v-if="selectedContext.periods.length">
           <li v-for="period in selectedContext.periods" :key="period.id" :class="`is-${period.status}`">
             <i aria-hidden="true" />
             <div><strong>{{ periodName(selectedContext, period) }}</strong><span>{{ periodStatus(period) }}</span></div>
-            <small>{{ period.status === 'manager_scoring' ? `主管截止 ${dueDate(period.managerDueAt)}` : `员工截止 ${dueDate(period.selfEvalDueAt)}` }}</small>
+            <small>{{ period.status === 'manager_scoring' ? `主管评分截止 ${dueDate(period.managerDueAt)}` : `自评截止 ${dueDate(period.selfEvalDueAt)}` }}</small>
           </li>
         </ol>
         <div v-else class="tracking-cycle__period-empty">目标确认后将生成正式复盘期次</div>

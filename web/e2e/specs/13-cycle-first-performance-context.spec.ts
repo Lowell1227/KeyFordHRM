@@ -89,8 +89,8 @@ test('distinguishes same-name task cycles by date, scoring mode, and personal pa
   exempt.scoringFrequency = 'cycle';
   exempt.personalTask = { id: 'task-exempt', employeeId: 'employee-1', status: 'exempted', isExempt: true };
 
-  expect(formatPerformanceCycleOption(active)).toContain('每月复盘｜正常参与');
-  expect(formatPerformanceCycleOption(exempt)).toContain('整周期评分｜已豁免');
+  expect(formatPerformanceCycleOption(active)).toContain('月度跟进｜正常参与');
+  expect(formatPerformanceCycleOption(exempt)).toContain('整周期跟进｜已豁免');
 });
 
 const apiResponse = (data: unknown) => ({

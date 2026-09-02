@@ -105,6 +105,7 @@ const props = defineProps<{
   selfEvalUserId?: string;
   taskStatus?: TaskStatus;
   canWithdraw?: boolean;
+  showOperationHistory?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -1890,7 +1891,7 @@ function handleAttachmentsChange(attachments: Attachment[]) {
       </div>
     </div>
 
-    <IndicatorOperationTimeline :records="flowRecords" />
+    <IndicatorOperationTimeline v-if="showOperationHistory !== false" :records="flowRecords" />
 
     <RejectModal
       v-model:visible="rejectVisible"

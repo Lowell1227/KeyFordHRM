@@ -61,6 +61,10 @@ const periodLabel = computed(() => {
   return `${year}年${Number(month)}月`;
 });
 const periodNoun = computed(() => detail.value?.period.periodType === 'cycle' ? '本期' : '本月');
+const followUpName = computed(() => detail.value?.period.periodType === 'cycle' ? '周期跟进' : '月度跟进');
+const reviewTitle = computed(() => detail.value?.period.periodType === 'cycle'
+  ? '整周期跟进'
+  : `${periodLabel.value}月度跟进`);
 
 function optionalText(value: string): string | null {
   return value.trim() || null;
@@ -92,7 +96,7 @@ async function loadReview() {
     replaceForm(await periodReviewsApi.findOne(props.periodId));
   } catch (loadError) {
     const candidate = loadError as { message?: string; response?: { data?: { message?: string } } };
-    error.value = candidate.response?.data?.message || candidate.message || '复盘与自评加载失败';
+    error.value = candidate.response?.data?.message || candidate.message || `${followUpName.value}加载失败`;
   } finally {
     loading.value = false;
   }
@@ -188,7 +192,7 @@ async function submitReview() {
       detail.value.period.status = result.status;
       detail.value.permissions.canEditEmployee = false;
     }
-    ElMessage.success('复盘与自评已提交');
+    ElMessage.success(`${followUpName.value}已提交`);
     emit('submitted');
   } finally {
     submitting.value = false;
@@ -201,21 +205,22 @@ watch(() => props.periodId, loadReview, { immediate: true });
 <template>
   <section class="monthly-review" data-testid="monthly-review-workspace">
     <el-skeleton v-if="loading" animated :rows="10" />
-    <el-result v-else-if="error" icon="error" title="复盘与自评加载失败" :sub-title="error">
+    <el-result v-else-if="error" icon="error" :title="`${followUpName}加载失败`" :sub-title="error">
       <template #extra><el-button @click="loadReview">重新加载</el-button></template>
     </el-result>
     <template v-else-if="detail">
       <div class="monthly-review__period-bar">
         <div>
-          <strong>{{ periodLabel }}复盘与评分</strong>
+          <strong>{{ reviewTitle }}</strong>
           <span>{{ detail.context.statusLabel }}</span>
         </div>
-        <small>员工截止 {{ new Date(detail.period.selfEvalDueAt).toLocaleString('zh-CN', { hour12: false }) }}</small>
+        <small>自评截止 {{ new Date(detail.period.selfEvalDueAt).toLocaleString('zh-CN', { hour12: false }) }}</small>
       </div>
 
       <PerformanceFormWorkspace
         reference-title="参考信息"
         reference-test-id="monthly-review-reference"
+        workspace-test-id="monthly-review-form-workspace"
       >
         <template #main>
           <div class="monthly-review__goals">
@@ -311,7 +316,7 @@ watch(() => props.periodId, loadReview, { immediate: true });
                 </label>
                 <label class="monthly-field">
                   <span>补充说明 <i>选填</i></span>
-                  <el-input v-model="formItems[index].employeeComment" :disabled="!canEdit" type="textarea" :rows="2" placeholder="其他需要补充的复盘信息" />
+                  <el-input v-model="formItems[index].employeeComment" :disabled="!canEdit" type="textarea" :rows="2" placeholder="其他需要补充的跟进信息" />
                 </label>
               </div>
             </article>
@@ -320,18 +325,21 @@ watch(() => props.periodId, loadReview, { immediate: true });
         <template #reference>
           <MonthlyReviewReferencePanel :indicator="selectedIndicator" />
         </template>
+        <template #actions>
+          <footer v-if="canEdit" class="monthly-review-actions" data-testid="monthly-review-actions">
+            <div class="monthly-review-actions__progress">
+              <strong>本期填写完成 {{ completedCount }}/{{ formItems.length }}</strong>
+              <span>进度、状态和自评分为必填，其余说明选填</span>
+            </div>
+            <div class="monthly-review-actions__buttons">
+              <el-button :loading="saving" :disabled="submitting" @mousedown.prevent @click="saveDraft">保存草稿</el-button>
+              <el-button type="primary" :loading="submitting" :disabled="saving" @mousedown.prevent @click="submitReview">
+                提交{{ followUpName }}
+              </el-button>
+            </div>
+          </footer>
+        </template>
       </PerformanceFormWorkspace>
-
-      <footer v-if="canEdit" class="monthly-review-actions" data-testid="monthly-review-actions">
-        <div class="monthly-review-actions__progress">
-          <strong>本期填写完成 {{ completedCount }}/{{ formItems.length }}</strong>
-          <span>进度、状态和自评分为必填，其余说明选填</span>
-        </div>
-        <div class="monthly-review-actions__buttons">
-          <el-button :loading="saving" :disabled="submitting" @click="saveDraft">保存草稿</el-button>
-          <el-button type="primary" :loading="submitting" :disabled="saving" @click="submitReview">提交复盘</el-button>
-        </div>
-      </footer>
     </template>
   </section>
 </template>
@@ -368,7 +376,7 @@ watch(() => props.periodId, loadReview, { immediate: true });
 .monthly-health-options button { min-width: 0; height: 32px; overflow: hidden; padding: 0 5px; border: 1px solid #dfe4ec; border-radius: 6px; background: #fff; color: #687386; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .monthly-health-options button.is-active { border-color: #6076db; background: #eef2ff; color: #4f67d8; font-weight: 600; }
 .monthly-health-options button:disabled { cursor: default; opacity: .72; }
-.monthly-review-actions { position: sticky; z-index: 5; bottom: 10px; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid #dfe5f0; border-radius: 12px; background: rgb(255 255 255 / 96%); box-shadow: 0 8px 24px rgb(31 45 61 / 10%); backdrop-filter: blur(10px); }
+.monthly-review-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid #dfe5f0; border-radius: 12px; background: #fff; box-shadow: 0 8px 24px rgb(31 45 61 / 10%); }
 .monthly-review-actions__progress { min-width: 0; display: grid; gap: 2px; }
 .monthly-review-actions__progress strong { color: #30394a; font-size: 13px; }
 .monthly-review-actions__progress span { color: #8a93a3; font-size: 11px; }

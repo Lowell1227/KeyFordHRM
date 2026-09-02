@@ -84,7 +84,7 @@ function compactDate(value: string): string {
 }
 
 export function formatPerformanceCycleOption(cycle: AssessmentCycle): string {
-  const mode = cycle.scoringFrequency === 'monthly' ? '每月复盘' : '整周期评分';
+  const mode = cycle.scoringFrequency === 'monthly' ? '月度跟进' : '整周期跟进';
   const participation = cycle.personalTask
     ? cycle.personalTask.isExempt ? '已豁免' : '正常参与'
     : '团队周期';
