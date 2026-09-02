@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, nextTick, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import { useTaskStore } from '@/stores/task.store';
 import { tasksApi } from '@/api/tasks.api';
@@ -30,6 +30,7 @@ import {
   type TaskStageKey,
   type TaskStageState,
 } from './task-stage';
+import { employeeCanWithdrawIndicators } from './indicator-workflow-state';
 
 const route = useRoute();
 const router = useRouter();
@@ -40,6 +41,15 @@ const cycleLoading = ref(false);
 const actionLoading = ref(false);
 const reminding = ref(false);
 const goalSettingReferenceOpen = ref(false);
+type GoalSettingMode = 'simple' | 'complete';
+function readGoalSettingMode(): GoalSettingMode {
+  try {
+    return window.localStorage.getItem('kayford.goal-setting.mode') === 'complete' ? 'complete' : 'simple';
+  } catch {
+    return 'simple';
+  }
+}
+const goalSettingMode = ref<GoalSettingMode>(readGoalSettingMode());
 const indicatorSnapshotRef = ref<{ clearSelfEvalDraft: () => void; addGoal: () => void } | null>(null);
 
 const task = computed(() => taskStore.detail);
@@ -202,6 +212,12 @@ const canRejectIndicators = computed(() => {
   if (t.status === 'indicator_confirming') return permission.isTaskSelf.value;
   return false;
 });
+const canWithdrawIndicators = computed(() => (
+  Boolean(task.value)
+  && permission.isTaskSelf.value
+  && isCurrentPerformanceStage.value
+  && employeeCanWithdrawIndicators(task.value?.status, task.value?.flowRecords ?? [])
+));
 const rejectIndicatorLabel = computed(() =>
   task.value?.status === 'indicator_confirming' ? '退回修改' : '退回员工修改',
 );
@@ -331,6 +347,28 @@ async function handleSaveIndicators(body: Omit<SetIndicatorBody, 'expectedUpdate
     actionLoading.value = false;
   }
 }
+
+async function handleWithdrawIndicators() {
+  const currentTask = task.value;
+  if (!currentTask?.id || !currentTask.updatedAt) return;
+  try {
+    await ElMessageBox.confirm(
+      '撤回后可继续修改目标，修改完成需重新提交主管审核。',
+      '确认撤回目标？',
+      { confirmButtonText: '撤回并编辑', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+  actionLoading.value = true;
+  try {
+    await tasksApi.withdrawIndicators(currentTask.id, { expectedUpdatedAt: currentTask.updatedAt });
+    ElMessage.success('目标已撤回，可继续编辑');
+    await loadDetail();
+  } finally {
+    actionLoading.value = false;
+  }
+}
 async function handleSubmitSelfEval(body: SubmitSelfEvalBody, actualValues: ActualValueItem[]) {
   const id = task.value?.id;
   if (!id) return;
@@ -413,6 +451,15 @@ async function handleRemind() {
             参考信息
           </el-button>
           <el-button
+            v-if="showGoalSettingReference && canEditIndicators"
+            plain
+            data-testid="goal-setting-mode-switch"
+            :aria-label="goalSettingMode === 'simple' ? '切换到完整模式' : '切换到简洁模式'"
+            @click="goalSettingMode = goalSettingMode === 'simple' ? 'complete' : 'simple'"
+          >
+            {{ goalSettingMode === 'simple' ? '完整模式' : '简洁模式' }}
+          </el-button>
+          <el-button
             v-if="workflowContext.canRemind && isCurrentPerformanceStage"
             plain
             :loading="reminding"
@@ -421,13 +468,6 @@ async function handleRemind() {
           >
             {{ reminderOnCooldown ? '24小时内已催办' : '催办' }}
           </el-button>
-          <span
-            class="performance-stage-state"
-            :class="`is-${performanceStageState}`"
-            data-testid="performance-stage-state"
-          >
-            {{ performanceStageStateLabel }}
-          </span>
         </div>
       </header>
 
@@ -437,6 +477,13 @@ async function handleRemind() {
           <div class="employee-summary__name-line">
             <strong>{{ task.employeeName || '绩效员工' }}</strong>
             <span>个人绩效</span>
+            <span
+              class="performance-stage-state"
+              :class="`is-${performanceStageState}`"
+              data-testid="performance-stage-state"
+            >
+              {{ performanceStageStateLabel }}
+            </span>
           </div>
           <div v-if="employeeMeta.length" class="employee-summary__meta">
             <span v-for="item in employeeMeta" :key="item">{{ item }}</span>
@@ -498,12 +545,16 @@ async function handleRemind() {
             :self-eval-readonly="!isCurrentPerformanceStage || !permission.canEditSelfEval.value"
             :self-eval-summary="task.selfEvalSummary"
             :self-eval-user-id="authStore.user?.id"
+            :task-status="task.status"
+            :can-withdraw="canWithdrawIndicators"
+            v-model:goal-setting-mode="goalSettingMode"
             @save="handleSaveIndicators"
             @save-and-add="handleSaveIndicators($event, true)"
             @confirm="handleConfirmIndicators"
             @reject="handleRejectIndicators"
             @submit-self-eval="handleSubmitSelfEval"
             @save-self-eval-draft="goBack"
+            @withdraw="handleWithdrawIndicators"
           />
 
           <ChartCard v-if="showResultView" class="result-view">

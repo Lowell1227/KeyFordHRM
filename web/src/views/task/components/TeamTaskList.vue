@@ -201,7 +201,7 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
           :loading="batchBusy"
           @click="emit('batch-reject', selectedVersions)"
         >
-          批量驳回
+          批量退回
         </el-button>
         <el-button
           data-testid="team-batch-approve"

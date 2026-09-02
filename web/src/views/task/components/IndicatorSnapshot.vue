@@ -28,6 +28,7 @@ import type {
   FlowRecord,
   Indicator,
   IndicatorAlignmentCandidate,
+  IndicatorAlignmentOwner,
   IndicatorInstance,
   Objective,
   Paginated,
@@ -37,13 +38,14 @@ import type {
   TemplateIndicator,
   TemplateListItem,
 } from '@/types/api.types';
-import type { DimensionType, IndicatorType } from '@/types/enums';
+import type { DimensionType, IndicatorType, TaskStatus } from '@/types/enums';
 import {
   normalizeIndicatorVisibilityScopes,
   primaryIndicatorVisibilityScope,
 } from '../indicator-visibility';
 import { isValidScore } from '@/utils/score';
 import { normalizeDisplayedWeightTotal } from '../indicator-weight';
+import { activeIndicatorReturn, indicatorTaskStatusLabel } from '../indicator-workflow-state';
 
 export interface ActualValueItem {
   id: string;
@@ -100,6 +102,8 @@ const props = defineProps<{
   selfEvalSummary?: SelfEvalSummary | null;
   taskId?: string;
   selfEvalUserId?: string;
+  taskStatus?: TaskStatus;
+  canWithdraw?: boolean;
 }>();
 
 const emit = defineEmits<{
@@ -109,6 +113,7 @@ const emit = defineEmits<{
   (e: 'reject', reason: string): void;
   (e: 'submit-self-eval', body: SubmitSelfEvalBody, actualValues: ActualValueItem[]): void;
   (e: 'save-self-eval-draft'): void;
+  (e: 'withdraw'): void;
 }>();
 
 const rejectVisible = ref(false);
@@ -150,32 +155,24 @@ const snapshotWeightError = ref('');
 const advancedSettingIds = ref(new Set<string>());
 type GoalSettingMode = 'simple' | 'complete';
 const GOAL_SETTING_MODE_KEY = 'kayford.goal-setting.mode';
-const goalSettingMode = ref<GoalSettingMode>(readGoalSettingMode());
+const goalSettingMode = defineModel<GoalSettingMode>('goalSettingMode', { default: 'simple' });
 const goalSettingOptionsLoading = ref(false);
 const goalSettingOptionsLoaded = ref(false);
 const goalAlignmentOptions = ref<Objective[]>([]);
 const parentIndicatorAlignmentOptions = ref<IndicatorAlignmentCandidate[]>([]);
+const parentIndicatorAlignmentOwners = ref<IndicatorAlignmentOwner[]>([]);
 const parentIndicatorAlignmentReason = ref('');
 const goalVisibilityDepartments = ref<VisibilityDepartmentOption[]>([]);
 const goalVisibilityUsers = ref<VisibilityUserOption[]>([]);
 const auth = useAuthStore();
 
-function readGoalSettingMode(): GoalSettingMode {
-  try {
-    return window.localStorage.getItem(GOAL_SETTING_MODE_KEY) === 'complete' ? 'complete' : 'simple';
-  } catch {
-    return 'simple';
-  }
-}
-
-function setGoalSettingMode(mode: GoalSettingMode) {
-  goalSettingMode.value = mode;
+watch(goalSettingMode, (mode) => {
   try {
     window.localStorage.setItem(GOAL_SETTING_MODE_KEY, mode);
   } catch {
     // The editor still works when browser storage is unavailable.
   }
-}
+});
 
 const indicatorOptions = computed(() => {
   const keyword = indicatorSearchKeyword.value.trim().toLowerCase();
@@ -257,28 +254,22 @@ const selfEvalDraftStatusText = computed(() => {
 const editableRowIds = computed(() => editableItems.map((_, index) => (
   props.instances[index]?.id ?? `draft-indicator-${index + 1}`
 )));
-const latestIndicatorRejection = computed(() => [...(props.flowRecords ?? [])]
-  .filter((record) => record.action === 'reject')
-  .sort((left, right) => right.createdAt.localeCompare(left.createdAt))[0]);
-const rejectedSnapshotIndicatorId = computed(() => (
-  latestIndicatorRejection.value
-    ? (props.canEdit ? editableRowIds.value[0] : props.instances[0]?.id)
-    : undefined
+const latestIndicatorRejection = computed(() => activeIndicatorReturn(
+  props.taskStatus,
+  props.flowRecords ?? [],
 ));
-const snapshotRevealIds = computed(() => {
-  const ids = [...snapshotValidationIds.value];
-  if (rejectedSnapshotIndicatorId.value && !ids.includes(rejectedSnapshotIndicatorId.value)) {
-    ids.push(rejectedSnapshotIndicatorId.value);
-  }
-  return ids;
-});
+const snapshotRevealIds = computed(() => [...snapshotValidationIds.value]);
+const indicatorStatusLabel = computed(() => indicatorTaskStatusLabel(
+  props.taskStatus,
+  Boolean(latestIndicatorRejection.value),
+));
 const editableDisclosureRows = computed<PerformanceIndicatorRow[]>(() => editableItems.map((item, index) => ({
   id: editableRowIds.value[index],
   name: item.name,
-  weight: item.weight,
+  weight: Number(item.weight ?? 0),
   visibilityScope: item.visibilityScope,
   visibilityScopes: item.visibilityScopes,
-  statusLabel: latestIndicatorRejection.value ? '待修改' : '草稿',
+  statusLabel: indicatorStatusLabel.value,
   description: item.description,
   scoringStandard: item.scoringStandard,
   dataSource: item.dataSource,
@@ -287,9 +278,6 @@ const editableDisclosureRows = computed<PerformanceIndicatorRow[]>(() => editabl
   targetValueText: item.targetValueText,
   unit: item.unit,
   alignedObjectives: props.instances[index]?.alignedObjectives ?? [],
-  rejectionReason: editableRowIds.value[index] === rejectedSnapshotIndicatorId.value
-    ? latestIndicatorRejection.value?.comment
-    : undefined,
 })));
 
 function hasAdvancedSettings(id: string): boolean {
@@ -308,7 +296,7 @@ const readonlyDisclosureRows = computed<PerformanceIndicatorRow[]>(() => props.i
   weight: item.weight,
   visibilityScope: item.visibilityScope,
   visibilityScopes: item.visibilityScopes,
-  statusLabel: latestIndicatorRejection.value ? '已驳回' : '已提交',
+  statusLabel: indicatorStatusLabel.value,
   description: item.description,
   scoringStandard: item.scoringStandard,
   dataSource: item.dataSource,
@@ -317,9 +305,6 @@ const readonlyDisclosureRows = computed<PerformanceIndicatorRow[]>(() => props.i
   targetValueText: item.targetValueText,
   unit: item.unit,
   alignedObjectives: item.alignedObjectives,
-  rejectionReason: item.id === rejectedSnapshotIndicatorId.value
-    ? latestIndicatorRejection.value?.comment
-    : undefined,
 })));
 
 watch(
@@ -656,7 +641,7 @@ async function loadGoalSettingOptions() {
       departmentsApi.findAll({ isActive: true, flat: true }),
       props.taskId
         ? objectivesApi.getIndicatorAlignmentCandidates(props.taskId)
-        : Promise.resolve({ items: [], reason: '当前任务暂不可设置指标对齐' }),
+        : Promise.resolve({ items: [], owners: [], reason: '当前任务暂不可设置指标对齐' }),
       shouldLoadAllUsers
         ? usersApi.findAll({ page: 1, pageSize: 200, status: 'active' })
         : shouldLoadReports && auth.user?.id
@@ -682,6 +667,15 @@ async function loadGoalSettingOptions() {
     }
     if (parentIndicatorResult.status === 'fulfilled') {
       parentIndicatorAlignmentOptions.value = parentIndicatorResult.value.items;
+      parentIndicatorAlignmentOwners.value = parentIndicatorResult.value.owners?.length
+        ? parentIndicatorResult.value.owners
+        : [...new Map(parentIndicatorResult.value.items.map((item) => [item.owner.id, {
+            id: item.owner.id,
+            name: item.owner.name,
+            avatarUrl: null,
+            relation: 'performance_manager' as const,
+            items: parentIndicatorResult.value.items.filter((candidate) => candidate.owner.id === item.owner.id),
+          }])).values()];
       parentIndicatorAlignmentReason.value = parentIndicatorResult.value.reason ?? '';
     }
     const loadedUsers = userResult.status === 'fulfilled'
@@ -744,7 +738,7 @@ function createEmptyItem(): SetIndicatorBody['instances'][number] {
     targetValue: undefined,
     targetValueText: '',
     unit: '',
-    weight: 1,
+    weight: undefined,
     indicatorType: 'kpi',
     dimensionName: 'KPI维度',
     dimensionWeight: 1,
@@ -772,7 +766,7 @@ function libraryIndicatorToItem(indicator: Indicator, sortOrder: number): SetInd
     targetValue: indicator.targetValue,
     targetValueText: indicator.targetValueText,
     unit: indicator.unit,
-    weight: editableItems.length ? 0 : 1,
+    weight: undefined,
     indicatorType: indicator.type,
     dimensionName: indicator.category || indicator.groupName || 'KPI维度',
     dimensionWeight: 1,
@@ -898,7 +892,7 @@ function toEditableItem(instance: IndicatorInstance): SetIndicatorBody['instance
 function addItem() {
   editableItems.push({
     ...createEmptyItem(),
-    weight: editableItems.length ? Number((1 / (editableItems.length + 1)).toFixed(4)) : 1,
+    weight: undefined,
     sortOrder: editableItems.length,
   });
 }
@@ -922,20 +916,24 @@ function formatTargetValue(row: Pick<IndicatorInstance, 'targetValue' | 'targetV
   return '-';
 }
 
-function toPercent(weight: number | undefined): number {
-  return Number(((weight ?? 0) * 100).toFixed(2));
+function toPercent(weight: number | undefined): number | undefined {
+  return weight == null ? undefined : Number((weight * 100).toFixed(2));
 }
 
 function setWeightPercent(row: unknown, value: number | undefined) {
-  if (value == null || Number.isNaN(value)) return;
   const item = row as SetIndicatorBody['instances'][number];
+  if (value == null || Number.isNaN(value)) {
+    item.weight = undefined;
+    snapshotWeightError.value = '';
+    return;
+  }
   item.weight = Number((value / 100).toFixed(6));
   snapshotWeightError.value = '';
 }
 
 function adjustWeightPercent(row: unknown, deltaPercent: number) {
   const item = row as SetIndicatorBody['instances'][number];
-  const current = toPercent(item.weight);
+  const current = toPercent(item.weight) ?? 0;
   const next = Math.min(100, Math.max(0, Number((current + deltaPercent).toFixed(2))));
   setWeightPercent(item, next);
 }
@@ -1219,20 +1217,13 @@ function handleAttachmentsChange(attachments: Attachment[]) {
     <template #title>{{ title || '考核指标明细' }}</template>
     <template #extra>
       <div
-        v-if="canEdit || canConfirm || canReject"
+        v-if="canEdit || canConfirm || canReject || canWithdraw"
         class="goal-card-head-actions"
         data-testid="performance-stage-actions"
       >
-        <el-button
-          v-if="canEdit"
-          plain
-          class="goal-setting-mode-switch"
-          :aria-label="goalSettingMode === 'simple' ? '切换到完整模式' : '切换到简洁模式'"
-          @click="setGoalSettingMode(goalSettingMode === 'simple' ? 'complete' : 'simple')"
-        >
-          {{ goalSettingMode === 'simple' ? '完整模式' : '简洁模式' }}
+        <el-button v-if="canWithdraw" plain type="primary" :loading="loading" @click="emit('withdraw')">
+          撤回并编辑
         </el-button>
-        <span v-if="canEdit" class="goal-weight-pill">维度权重：{{ displayedWeightTotal.percentText }}%</span>
         <el-button v-if="canReject" plain type="danger" :icon="Close" :loading="loading" @click="rejectVisible = true">
           {{ rejectLabel || '退回指标' }}
         </el-button>
@@ -1241,6 +1232,16 @@ function handleAttachmentsChange(attachments: Attachment[]) {
         </el-button>
       </div>
     </template>
+
+    <div
+      v-if="latestIndicatorRejection"
+      class="indicator-return-notice"
+      data-testid="indicator-return-notice"
+      role="status"
+    >
+      <strong>退回原因</strong>
+      <span>{{ latestIndicatorRejection.comment || '请修改目标后重新提交' }}</span>
+    </div>
 
     <template v-if="canEdit">
       <div
@@ -1260,56 +1261,7 @@ function handleAttachmentsChange(attachments: Attachment[]) {
               <el-popover
                 trigger="click"
                 placement="bottom-start"
-                :width="380"
-                @show="loadGoalSettingOptions"
-              >
-                <template #reference>
-                  <el-button
-                    link
-                    type="primary"
-                    :data-testid="`goal-parent-align-open-${index}`"
-                  >
-                    + 对齐绩效直属上级指标
-                  </el-button>
-                </template>
-                <div class="goal-alignment-picker">
-                  <strong>对齐绩效直属上级指标（可多选）</strong>
-                  <el-select
-                    v-model="item.alignedParentIndicatorIds"
-                    multiple
-                    filterable
-                    collapse-tags
-                    collapse-tags-tooltip
-                    :loading="goalSettingOptionsLoading"
-                    :data-testid="`goal-parent-align-select-${index}`"
-                    placeholder="搜索上级指标"
-                  >
-                    <el-option
-                      v-for="candidate in parentIndicatorAlignmentOptions"
-                      :key="candidate.id"
-                      :label="`${candidate.name}（${candidate.owner.name}）`"
-                      :value="candidate.id"
-                    />
-                  </el-select>
-                  <el-empty
-                    v-if="!goalSettingOptionsLoading && parentIndicatorAlignmentOptions.length === 0"
-                    :description="parentIndicatorAlignmentReason || '当前周期暂无可对齐的绩效直属上级指标'"
-                    :image-size="44"
-                  />
-                </div>
-              </el-popover>
-              <el-tag
-                v-for="parentIndicatorId in item.alignedParentIndicatorIds"
-                :key="`parent-${parentIndicatorId}`"
-                size="small"
-                effect="plain"
-              >
-                {{ parentIndicatorLabel(parentIndicatorId, index) }}
-              </el-tag>
-              <el-popover
-                trigger="click"
-                placement="bottom-start"
-                :width="360"
+                :width="420"
                 @show="loadGoalSettingOptions"
               >
                 <template #reference>
@@ -1322,31 +1274,73 @@ function handleAttachmentsChange(attachments: Attachment[]) {
                   </el-button>
                 </template>
                 <div class="goal-alignment-picker">
-                  <strong>选择要对齐的上级或协同目标</strong>
-                  <el-select
-                    v-model="item.alignedObjectiveIds"
-                    multiple
-                    filterable
-                    collapse-tags
-                    collapse-tags-tooltip
-                    :loading="goalSettingOptionsLoading"
-                    :data-testid="`goal-align-select-${index}`"
-                    placeholder="搜索目标"
+                  <strong>选择对齐对象</strong>
+                  <section
+                    v-for="owner in parentIndicatorAlignmentOwners"
+                    :key="owner.id"
+                    class="alignment-owner"
+                    :data-testid="`alignment-owner-${owner.id}`"
                   >
-                    <el-option
-                      v-for="objective in goalAlignmentOptions"
-                      :key="objective.id"
-                      :label="objective.title"
-                      :value="objective.id"
-                    />
-                  </el-select>
-                  <el-empty
-                    v-if="!goalSettingOptionsLoading && goalAlignmentOptions.length === 0"
-                    description="当前周期暂无可对齐目标"
-                    :image-size="44"
-                  />
+                    <div class="alignment-owner__person">
+                      <img v-if="owner.avatarUrl" :src="owner.avatarUrl" :alt="owner.name" />
+                      <span v-else>{{ owner.name.slice(0, 1) }}</span>
+                      <div>
+                        <b>{{ owner.name }}</b>
+                        <small>绩效直属上级</small>
+                      </div>
+                    </div>
+                    <el-checkbox-group
+                      v-if="owner.items.length"
+                      v-model="item.alignedParentIndicatorIds"
+                      :data-testid="`goal-parent-align-select-${index}`"
+                    >
+                      <el-checkbox
+                        v-for="candidate in owner.items"
+                        :key="candidate.id"
+                        :label="candidate.id"
+                        :value="candidate.id"
+                      >
+                        {{ candidate.name }}
+                      </el-checkbox>
+                    </el-checkbox-group>
+                    <p v-else>暂无可对齐目标</p>
+                  </section>
+                  <p
+                    v-if="!goalSettingOptionsLoading && parentIndicatorAlignmentOwners.length === 0"
+                    class="alignment-empty"
+                  >
+                    {{ parentIndicatorAlignmentReason || '当前周期暂无可对齐对象' }}
+                  </p>
+                  <section v-if="goalAlignmentOptions.length" class="alignment-owner alignment-owner--other">
+                    <strong>其他已授权目标</strong>
+                    <el-select
+                      v-model="item.alignedObjectiveIds"
+                      multiple
+                      filterable
+                      collapse-tags
+                      collapse-tags-tooltip
+                      :loading="goalSettingOptionsLoading"
+                      :data-testid="`goal-align-select-${index}`"
+                      placeholder="搜索目标或人员"
+                    >
+                      <el-option
+                        v-for="objective in goalAlignmentOptions"
+                        :key="objective.id"
+                        :label="`${objective.title}${objective.ownerName ? `（${objective.ownerName}）` : ''}`"
+                        :value="objective.id"
+                      />
+                    </el-select>
+                  </section>
                 </div>
               </el-popover>
+              <el-tag
+                v-for="parentIndicatorId in item.alignedParentIndicatorIds"
+                :key="`parent-${parentIndicatorId}`"
+                size="small"
+                effect="plain"
+              >
+                {{ parentIndicatorLabel(parentIndicatorId, index) }}
+              </el-tag>
               <el-tag
                 v-for="objectiveId in item.alignedObjectiveIds"
                 :key="objectiveId"
@@ -1358,7 +1352,6 @@ function handleAttachmentsChange(attachments: Attachment[]) {
             </div>
             <IndicatorVisibilityEditor
               class="goal-setting-row__visibility"
-              :class="{ 'is-custom': item.visibilityScopes?.includes('custom') }"
               :model-value="{
                 visibilityScope: item.visibilityScope,
                 visibilityScopes: item.visibilityScopes || [item.visibilityScope],
@@ -1970,7 +1963,8 @@ function handleAttachmentsChange(attachments: Attachment[]) {
 
 <style scoped>
 .goal-card-head-actions { display: flex; align-items: center; gap: 8px; }
-.goal-weight-pill { display: inline-flex; min-height: 30px; align-items: center; padding: 0 10px; border-radius: 6px; background: #fff7df; color: #d99016; font-size: 12px; font-weight: 600; }
+.indicator-return-notice { display: flex; gap: 10px; margin: 0 0 14px; padding: 10px 12px; border-left: 3px solid #f04438; border-radius: 4px; background: #fff1f0; color: #b42318; font-size: 13px; }
+.indicator-return-notice strong { white-space: nowrap; }
 .goal-setting-editor { display: grid; gap: 0; }
 .goal-setting-row { position: relative; min-width: 0; padding: 10px 0 14px 28px; border-bottom: 1px solid #edf0f5; }
 .goal-setting-row:first-child { padding-top: 2px; }
@@ -1981,7 +1975,6 @@ function handleAttachmentsChange(attachments: Attachment[]) {
 .goal-setting-row__alignment :deep(.el-button) { padding: 0; font-size: 12px; }
 .goal-setting-row__alignment :deep(.el-tag) { max-width: min(260px, 100%); }
 .goal-setting-row__visibility { justify-self: end; width: min(100%, 240px); }
-.goal-setting-row__visibility.is-custom { width: min(100%, 560px); }
 .goal-setting-row__visibility :deep(.el-select__wrapper) {
   min-height: 30px;
   border-radius: 999px;
@@ -2019,10 +2012,21 @@ function handleAttachmentsChange(attachments: Attachment[]) {
 .goal-quantity-inputs { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) minmax(70px, .42fr); gap: 6px; }
 .goal-setting-tools { display: grid; justify-items: start; gap: 14px; padding-top: 14px; }
 .goal-setting-tools__add { display: flex; flex-wrap: wrap; gap: 8px; }
-.goal-setting-mode-switch { color: #2685eb; border-color: #2685eb; }
 .goal-alignment-picker { display: grid; gap: 10px; }
 .goal-alignment-picker > strong { color: #303744; font-size: 13px; }
 .goal-alignment-picker :deep(.el-select) { width: 100%; }
+.alignment-owner { display: grid; gap: 8px; padding: 10px; border: 1px solid #e4eaf2; border-radius: 8px; background: #fafcff; }
+.alignment-owner__person { display: flex; align-items: center; gap: 9px; }
+.alignment-owner__person > img,
+.alignment-owner__person > span { width: 32px; height: 32px; display: inline-flex; align-items: center; justify-content: center; flex: 0 0 32px; overflow: hidden; border-radius: 50%; background: #eaf2ff; color: #3675d3; font-weight: 700; object-fit: cover; }
+.alignment-owner__person > div { min-width: 0; display: grid; gap: 2px; }
+.alignment-owner__person b { color: #273142; font-size: 13px; }
+.alignment-owner__person small,
+.alignment-owner > p,
+.alignment-empty { margin: 0; color: #8b95a7; font-size: 12px; }
+.alignment-owner :deep(.el-checkbox-group) { display: grid; gap: 4px; }
+.alignment-owner :deep(.el-checkbox) { margin-right: 0; }
+.alignment-owner--other > strong { color: #596579; font-size: 12px; }
 .goal-field-error { color: var(--el-color-danger); font-size: 12px; font-style: normal; line-height: 18px; }
 .goal-setting-action-bar { position: sticky; z-index: 5; bottom: 10px; display: flex; align-items: center; justify-content: flex-end; gap: 16px; margin-top: 16px; padding: 12px 14px; border: 1px solid #dfe5f0; border-radius: 10px; background: rgb(255 255 255 / 96%); box-shadow: 0 8px 24px rgb(31 45 61 / 10%); backdrop-filter: blur(10px); }
 .goal-setting-action-bar > span { color: #9a6814; font-size: 13px; }
@@ -2682,7 +2686,6 @@ function handleAttachmentsChange(attachments: Attachment[]) {
   .goal-setting-row__meta { grid-template-columns: 24px minmax(0, 1fr); gap: 7px; }
   .goal-setting-row__alignment { grid-column: 2; }
   .goal-setting-row__visibility { grid-column: 2; justify-self: end; width: min(100%, 240px); }
-  .goal-setting-row__visibility.is-custom { width: 100%; }
   .goal-setting-row__primary { grid-template-columns: minmax(0, 1fr) 102px 26px; gap: 7px; padding-top: 8px; }
   .goal-weight-input > span:first-child { display: none; }
   .goal-weight-input { grid-template-columns: minmax(0, 1fr) auto; }

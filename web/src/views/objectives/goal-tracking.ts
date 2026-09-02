@@ -96,7 +96,7 @@ export type TrackingAction =
 export function selectTrackingAction(context: PerformanceCycleContext): TrackingAction {
   if (context.task.isExempt) return { kind: 'exempt', label: '本周期已豁免' };
   if (['pending', 'indicator_drafting', 'indicator_setting'].includes(context.task.status)) {
-    return { kind: 'goal-setting', label: '进入目标制定', taskId: context.task.id };
+    return { kind: 'goal-setting', label: '开始制定', taskId: context.task.id };
   }
   if (context.task.status === 'indicator_confirming') {
     return { kind: 'goal-confirmation', label: '确认目标', taskId: context.task.id };

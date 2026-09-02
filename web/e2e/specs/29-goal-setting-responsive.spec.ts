@@ -97,9 +97,8 @@ async function mockGoalSetting(
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ page: 1, pageSize: 20, total: 0, items: [] })),
   }));
-  await page.route('**/api/v1/objectives**', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify(apiResponse([{
+  await page.route('**/api/v1/objectives**', (route) => {
+    const objective = {
       id: '11111111-1111-4111-8111-111111111111',
       title: '提升公司重点客户续约率',
       description: null,
@@ -130,8 +129,19 @@ async function mockGoalSetting(
       creatorName: null,
       createdAt: '2026-08-01T00:00:00.000Z',
       updatedAt: '2026-08-01T00:00:00.000Z',
-    }])),
-  }));
+    };
+    const data = route.request().url().includes('/alignment-candidates')
+      ? {
+          items: [],
+          owners: [{
+            id: 'manager-1', name: '王主管', avatarUrl: null,
+            relation: 'performance_manager', items: [],
+          }],
+          reason: null,
+        }
+      : [objective];
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(data)) });
+  });
   await page.route('**/api/v1/departments**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(apiResponse([{ id: 'dept-1', name: '销售部', isActive: true, children: [] }])),
@@ -209,12 +219,9 @@ test.describe('goal setting responsive workspace', () => {
     await expect(page.getByTestId('indicator-visibility-indicator-1')).toBeVisible();
     await expect(page.getByTestId('goal-align-open-0')).toBeVisible();
 
-    const headerActions = page.getByTestId('performance-stage-actions');
-    await expect(headerActions.getByRole('button', { name: '切换到完整模式' })).toBeVisible();
+    await expect(page.getByTestId('goal-setting-mode-switch')).toHaveAccessibleName('切换到完整模式');
 
-    const visibilityWrapper = page
-      .getByTestId('indicator-visibility-indicator-1')
-      .locator('.el-select__wrapper');
+    const visibilityWrapper = page.getByTestId('indicator-visibility-indicator-1');
     const nameWrapper = page.locator('.goal-name .el-input__wrapper').first();
     await expect(visibilityWrapper).toHaveCSS('background-color', 'rgb(239, 246, 255)');
     await expect(visibilityWrapper).toHaveCSS('border-radius', '999px');
@@ -237,12 +244,15 @@ test.describe('goal setting responsive workspace', () => {
     await page.getByTestId('goal-unit-input-0').fill('%');
 
     await page.getByTestId('goal-align-open-0').click();
+    await expect(page.getByTestId('alignment-owner-manager-1')).toContainText('王主管');
+    await expect(page.getByTestId('alignment-owner-manager-1')).toContainText('暂无可对齐目标');
     await page.getByTestId('goal-align-select-0').click();
     await page.getByRole('option', { name: '提升公司重点客户续约率' }).click();
     await page.keyboard.press('Escape');
 
-    await page.getByTestId('indicator-visibility-indicator-1').locator('.el-select__caret').click();
-    await page.getByRole('option', { name: '全公司可见' }).click();
+    await page.getByTestId('indicator-visibility-indicator-1').click();
+    await page.getByText('全公司可见', { exact: true }).click();
+    await page.keyboard.press('Escape');
 
     await page.getByRole('button', { name: '保存草稿' }).click();
     await expect.poll(() => requests.length).toBe(1);
@@ -273,6 +283,65 @@ test.describe('goal setting responsive workspace', () => {
     await expect(page.getByTestId('performance-reference-panel')).toBeVisible();
   });
 
+  test('starts each newly added goal with an empty weight', async ({ page }) => {
+    await mockGoalSetting(page, []);
+    await page.goto('/tasks/task-goal-1?stage=goal-setting');
+
+    await page.getByRole('button', { name: '添加目标' }).click();
+    await expect(page.getByTestId('goal-weight-input-1').locator('input')).toHaveValue('');
+    await expect(page.getByTestId('goal-weight-feedback')).toContainText('80.00%');
+  });
+
+  test('shows an active return once and clears it after resubmission', async ({ page }) => {
+    const returnedAt = '2026-09-02T08:00:00.000Z';
+    const submittedAt = '2026-09-02T09:00:00.000Z';
+    const returned = {
+      ...goalTaskDetail(1),
+      status: 'indicator_drafting',
+      flowRecords: [{
+        id: 'return-1', taskId: 'task-goal-1', cycleId: 'cycle-2027-q1',
+        nodeType: 'indicator_setting', action: 'reject', comment: '内容不完整', createdAt: returnedAt,
+      }],
+    };
+    await mockGoalSetting(page, [], returned);
+    await page.goto('/tasks/task-goal-1?stage=goal-setting');
+
+    await expect(page.getByTestId('indicator-return-notice')).toHaveText(/退回原因.*内容不完整/);
+    await expect(page.getByTestId('goal-name-input-0')).toBeEditable();
+
+    const resubmitted = {
+      ...returned,
+      status: 'indicator_reviewing',
+      flowRecords: [...returned.flowRecords, {
+        id: 'submit-2', taskId: 'task-goal-1', cycleId: 'cycle-2027-q1',
+        nodeType: 'indicator_setting', action: 'submit', createdAt: submittedAt,
+        extraData: { type: 'indicator_employee_submitted' },
+      }],
+    };
+    await page.unroute('**/api/v1/tasks/task-goal-1');
+    await page.route('**/api/v1/tasks/task-goal-1', (route) => route.fulfill({
+      contentType: 'application/json', body: JSON.stringify(apiResponse(resubmitted)),
+    }));
+    await page.reload();
+
+    await expect(page.getByTestId('indicator-return-notice')).toHaveCount(0);
+    await expect(page.getByText('待主管审核', { exact: true })).toBeVisible();
+    const withdrawRequests: Request[] = [];
+    await page.route('**/api/v1/tasks/task-goal-1/indicators/withdraw', (route) => {
+      withdrawRequests.push(route.request());
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          id: 'task-goal-1', status: 'indicator_drafting', updatedAt: submittedAt,
+        })),
+      });
+    });
+    await page.getByRole('button', { name: '撤回并编辑' }).click();
+    await page.getByRole('button', { name: '撤回并编辑' }).last().click();
+    await expect.poll(() => withdrawRequests.length).toBe(1);
+    expect(withdrawRequests[0].postDataJSON()).toEqual({ expectedUpdatedAt: returned.updatedAt });
+  });
+
   test('turns both modes into mobile cards with no horizontal overflow or covered final row', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await mockGoalSetting(page, []);
@@ -280,6 +349,14 @@ test.describe('goal setting responsive workspace', () => {
     await page.goto('/tasks/task-goal-1?stage=goal-setting');
 
     await expect(page.getByTestId('goal-setting-simple-editor')).toBeVisible();
+    await page.getByTestId('indicator-visibility-indicator-1').click();
+    const visibilityPanel = page.locator('.indicator-visibility-popper');
+    await expect(visibilityPanel).toBeVisible();
+    const visibilityBox = await visibilityPanel.boundingBox();
+    expect(visibilityBox).not.toBeNull();
+    expect((visibilityBox?.x ?? 0) + (visibilityBox?.width ?? 0)).toBeLessThanOrEqual(390);
+    await page.getByTestId('indicator-visibility-indicator-1').click();
+    await expect(visibilityPanel).toBeHidden();
     await page.getByRole('button', { name: '切换到完整模式' }).click();
     await expect(page.getByTestId('goal-setting-complete-editor')).toBeVisible();
 

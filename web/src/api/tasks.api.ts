@@ -104,7 +104,7 @@ export function createTasksApi(client: TasksApiClient) {
       return apiPost("/tasks/team/indicator-review/batch-approve", body);
     },
 
-    /** POST /tasks/team/indicator-review/batch-reject — 批量驳回目标审核。 */
+    /** POST /tasks/team/indicator-review/batch-reject — 批量退回目标审核。 */
     batchRejectIndicators(
       body: BatchRejectIndicatorReviewBody,
     ): Promise<BatchReviewResult> {
@@ -152,12 +152,20 @@ export function createTasksApi(client: TasksApiClient) {
       return apiPost(`/tasks/${id}/indicators/confirm`);
     },
 
-    /** POST /tasks/:id/indicators/reject — 员工驳回指标 */
+    /** POST /tasks/:id/indicators/reject — 退回指标 */
     rejectIndicators(
       id: string,
       body: { comment?: string },
     ): Promise<TaskActionResult> {
       return apiPost(`/tasks/${id}/indicators/reject`, body);
+    },
+
+    /** POST /tasks/:id/indicators/withdraw — 主管开始审核前撤回 */
+    withdrawIndicators(
+      id: string,
+      body: { expectedUpdatedAt: string },
+    ): Promise<TaskActionResult & { updatedAt: string }> {
+      return apiPost(`/tasks/${id}/indicators/withdraw`, body);
     },
 
     /** POST /tasks/:id/indicator-proposal — 员工提交指标建议 */

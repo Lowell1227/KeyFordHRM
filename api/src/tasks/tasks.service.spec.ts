@@ -1750,6 +1750,56 @@ describe('TasksService', () => {
       expect(flowService.transition).not.toHaveBeenCalled();
     });
 
+    it('allows an employee to withdraw submitted indicators before the manager starts review', async () => {
+      const task = {
+        ...makeTask('indicator_reviewing'),
+        updatedAt: new Date('2026-09-02T08:00:00.000Z'),
+      };
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+      transactionClient.flowRecord.findFirst
+        .mockResolvedValueOnce({ id: 'employee-submit', createdAt: new Date('2026-09-02T07:00:00.000Z') })
+        .mockResolvedValueOnce(null);
+
+      await expect(service.withdrawIndicators(
+        'task-1',
+        { expectedUpdatedAt: task.updatedAt.toISOString() },
+        makeViewer({ id: 'emp-1' }),
+      )).resolves.toMatchObject({ id: 'task-1', status: 'indicator_drafting' });
+
+      expect(transactionClient.assessmentTask.update).toHaveBeenCalledWith({
+        where: { id: 'task-1' },
+        data: expect.objectContaining({ status: 'indicator_drafting' }),
+      });
+      expect(transactionClient.flowRecord.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          taskId: 'task-1',
+          action: 'withdraw',
+          extraData: { type: 'indicator_employee_withdrawn' },
+        }),
+      });
+    });
+
+    it('blocks employee withdrawal after the manager has saved review changes', async () => {
+      const task = {
+        ...makeTask('indicator_reviewing'),
+        updatedAt: new Date('2026-09-02T08:00:00.000Z'),
+      };
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+      transactionClient.flowRecord.findFirst
+        .mockResolvedValueOnce({ id: 'employee-submit', createdAt: new Date('2026-09-02T07:00:00.000Z') })
+        .mockResolvedValueOnce({ id: 'manager-save' });
+
+      await expect(service.withdrawIndicators(
+        'task-1',
+        { expectedUpdatedAt: task.updatedAt.toISOString() },
+        makeViewer({ id: 'emp-1' }),
+      )).rejects.toMatchObject({
+        response: expect.objectContaining({ message: '主管已开始审核，请联系主管退回修改' }),
+      });
+
+      expect(transactionClient.assessmentTask.update).not.toHaveBeenCalled();
+    });
+
     it('keeps a confirmed goal waiting when self evaluation has not opened', async () => {
       prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('indicator_confirming'));
       prisma.assessmentCycle.findUnique.mockResolvedValue({

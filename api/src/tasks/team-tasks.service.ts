@@ -308,7 +308,7 @@ export class TeamTasksService {
     if (!reason) {
       throw new BadRequestException({
         code: ERROR_CODE.PARAM_INVALID,
-        message: "请填写驳回原因",
+        message: "请填写退回原因",
       });
     }
 
@@ -577,11 +577,11 @@ export class TeamTasksService {
         cycleId: task.cycleId,
         taskId: task.id,
         type: "indicator_setting_notice",
-        title: action === "approve" ? "考核指标待确认" : "指标被驳回",
+        title: action === "approve" ? "考核指标待确认" : "指标已退回",
         content:
           action === "approve"
             ? "主管已审核本周期正式考核指标，请进入“我的绩效”确认。"
-            : `主管已驳回考核指标：${comment}，请重新调整。`,
+            : `主管已退回考核指标：${comment}，请重新调整。`,
       });
     } catch (error) {
       this.logger.error(

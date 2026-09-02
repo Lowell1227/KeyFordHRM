@@ -67,6 +67,11 @@ async function mockGoalSetting(page: Page, requests: Request[]) {
     const data = route.request().url().includes('/alignment-candidates')
       ? {
           items: [{ id: parentIndicatorId, name: '人力成本优化', owner: { id: 'manager-1', name: '姚瑶' } }],
+          owners: [{
+            id: 'manager-1', name: '姚瑶', avatarUrl: 'https://example.com/yaoyao.png',
+            relation: 'performance_manager',
+            items: [{ id: parentIndicatorId, name: '人力成本优化', owner: { id: 'manager-1', name: '姚瑶' } }],
+          }],
           reason: null,
         }
       : [];
@@ -91,19 +96,19 @@ test('goal setting persists grouped multi-scope permissions and frozen-manager i
   await page.goto(`/tasks/${taskId}?stage=goal-setting`);
 
   const visibility = page.getByTestId('indicator-visibility-indicator-1');
-  await expect(visibility).toContainText('绩效直属上级可见');
-  await visibility.locator('.el-select__caret').click();
+  await expect(visibility).toContainText('可见范围：已选 1 项');
+  await visibility.click();
   await expect(page.getByText('汇报关系', { exact: true })).toBeVisible();
   await expect(page.getByText('组织范围', { exact: true })).toBeVisible();
   await expect(page.getByText('指定范围', { exact: true })).toBeVisible();
-  await page.getByRole('option', { name: '本部门可见' }).click();
-  await page.keyboard.press('Escape');
-  await expect(visibility).toContainText('绩效直属上级可见');
-  await expect(visibility).toContainText('本部门可见');
+  await page.getByText('本部门可见', { exact: true }).click();
+  await expect(visibility).toContainText('可见范围：已选 2 项');
 
-  await page.getByTestId('goal-parent-align-open-0').click();
-  await page.getByTestId('goal-parent-align-select-0').click();
-  await page.getByRole('option', { name: '人力成本优化（姚瑶）' }).click();
+  await page.keyboard.press('Escape');
+  await page.getByTestId('goal-align-open-0').click();
+  await expect(page.getByTestId('alignment-owner-manager-1')).toContainText('姚瑶');
+  await expect(page.getByTestId('alignment-owner-manager-1').locator('img')).toHaveAttribute('alt', '姚瑶');
+  await page.getByTestId('alignment-owner-manager-1').getByText('人力成本优化', { exact: true }).click();
   await page.keyboard.press('Escape');
 
   await page.getByRole('button', { name: '保存草稿' }).click();
@@ -121,11 +126,9 @@ test('company visibility is exclusive and at least one permission always remains
   await mockGoalSetting(page, []);
   await page.goto(`/tasks/${taskId}?stage=goal-setting`);
   const visibility = page.getByTestId('indicator-visibility-indicator-1');
-  await visibility.locator('.el-select__caret').click();
-  await page.getByRole('option', { name: '全公司可见' }).click();
-  await page.keyboard.press('Escape');
-  await expect(visibility).toContainText('全公司可见');
-  await expect(visibility).not.toContainText('绩效直属上级可见');
+  await visibility.click();
+  await page.getByText('全公司可见', { exact: true }).click();
+  await expect(visibility).toContainText('可见范围：已选 1 项');
 });
 
 test('custom visibility expands department and employee multi-selects', async ({ page }) => {
@@ -133,9 +136,8 @@ test('custom visibility expands department and employee multi-selects', async ({
   await mockGoalSetting(page, requests);
   await page.goto(`/tasks/${taskId}?stage=goal-setting`);
   const visibility = page.getByTestId('indicator-visibility-indicator-1');
-  await visibility.locator('.el-select__caret').click();
-  await page.getByRole('option', { name: '自定义部门或员工' }).click();
-  await page.keyboard.press('Escape');
+  await visibility.click();
+  await page.getByText('自定义部门或员工', { exact: true }).click();
   await expect(page.getByTestId('visibility-departments')).toBeVisible();
   await expect(page.getByTestId('visibility-users')).toBeVisible();
   await page.getByTestId('visibility-users').locator('.el-select__caret').click();

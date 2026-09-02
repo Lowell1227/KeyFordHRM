@@ -32,7 +32,7 @@ export const FLOW_TRANSITIONS: FlowTransition[] = [
   // 自评开放时间已到时，迟交的目标确认可直接进入自评
   { from: 'indicator_setting', action: 'submit', to: 'self_eval', nodeType: 'indicator_confirm' },
   { from: 'indicator_confirming', action: 'submit', to: 'self_eval', nodeType: 'indicator_confirm' },
-  // 员工驳回指标，回到主管调整
+  // 员工退回指标，回到主管调整
   { from: 'indicator_setting', action: 'reject', to: 'indicator_setting', nodeType: 'indicator_confirm' },
   { from: 'indicator_confirming', action: 'reject', to: 'indicator_reviewing', nodeType: 'indicator_confirm' },
 

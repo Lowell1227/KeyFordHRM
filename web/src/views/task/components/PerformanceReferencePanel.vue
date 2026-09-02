@@ -89,15 +89,16 @@ function formatFlowAction(record: FlowRecord): string {
     indicator_employee_submitted: '提交主管审核',
     indicator_review_saved: '保存审核调整',
     indicator_review_approved: '审核通过',
-    indicator_review_rejected: '驳回指标',
+    indicator_review_rejected: '退回指标',
   };
   if (typeLabels[type]) return typeLabels[type];
   const actionLabels: Record<FlowRecord['action'], string> = {
     submit: '提交',
     approve: '通过',
-    reject: '驳回',
+    reject: '退回',
     transfer: '转交',
     comment: '记录',
+    withdraw: '撤回',
   };
   return actionLabels[record.action];
 }

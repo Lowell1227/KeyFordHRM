@@ -362,12 +362,12 @@ async function handleApprove() {
 async function handleReject() {
   if (!isReviewable.value || !task.value?.updatedAt) return;
   try {
-    const { value } = await ElMessageBox.prompt('请输入驳回原因', '驳回目标审核', {
-      confirmButtonText: '驳回',
+    const { value } = await ElMessageBox.prompt('请输入退回原因', '退回目标审核', {
+      confirmButtonText: '退回',
       cancelButtonText: '取消',
-      inputPlaceholder: '请输入驳回原因',
+      inputPlaceholder: '请输入退回原因',
       inputPattern: /\S+/,
-      inputErrorMessage: '请输入驳回原因',
+      inputErrorMessage: '请输入退回原因',
       type: 'warning',
     });
     emit('reject', {
@@ -443,12 +443,12 @@ defineExpose<GoalReviewWorkspaceHandle>({ reload: loadTask, acknowledgeSavedTask
                 @click="handleApprove"
               />
             </el-tooltip>
-            <el-tooltip content="驳回审核" placement="top">
+            <el-tooltip content="退回审核" placement="top">
               <el-button
                 type="danger"
                 :icon="Close"
                 data-testid="goal-review-reject"
-                aria-label="驳回目标审核"
+                aria-label="退回目标审核"
                 :loading="busy"
                 @click="handleReject"
               />

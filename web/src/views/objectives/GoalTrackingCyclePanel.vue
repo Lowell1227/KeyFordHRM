@@ -52,6 +52,13 @@ const actionHint = computed(() => {
     none: '目标已确认，可持续更新进展',
   }[action.value.kind];
 });
+const actionStateLabel = computed(() => {
+  if (!action.value) return '查看目标';
+  if (action.value.kind === 'goal-setting') return '目标待制定';
+  if (action.value.kind === 'goal-confirmation') return '目标待本人确认';
+  if (action.value.kind === 'review') return activePeriod.value?.employeeSubmittedAt ? '待主管评分' : '待填写';
+  return action.value.label;
+});
 
 function handleCycleChange(event: Event) {
   emit('cycleChange', (event.target as HTMLSelectElement).value);
@@ -85,8 +92,12 @@ function periodName(context: PerformanceCycleContext, period: PerformanceCycleCo
 }
 
 function periodStatus(period: PerformanceCycleContext['periods'][number]) {
-  if (period.status === 'unopened') return '未开放';
-  if (period.status === 'self_eval') return '待复盘';
+  if (period.status === 'unopened') {
+    if (action.value?.kind === 'goal-setting') return '待目标制定';
+    if (action.value?.kind === 'goal-confirmation') return '待目标确认';
+    return '未开放';
+  }
+  if (period.status === 'self_eval') return period.employeeSubmittedAt ? '待主管评分' : '待填写';
   if (period.status === 'manager_scoring') return period.employeeSubmittedAt ? '待主管评分' : '复盘逾期待补交';
   if (period.status === 'completed') return '已评分';
   return '无结果';
@@ -145,7 +156,7 @@ function dueDate(value: string) {
       </div>
       <div class="tracking-cycle__next">
         <span>当前动作</span>
-        <strong>{{ action?.label || '查看目标' }}</strong>
+        <strong>{{ actionStateLabel }}</strong>
         <small>{{ actionHint }}</small>
       </div>
       <el-button
@@ -160,7 +171,6 @@ function dueDate(value: string) {
       <main class="tracking-cycle__main" data-testid="goal-tracking-surface">
         <header class="tracking-cycle__section-title">
           <div><h2>考核指标</h2><span>持续记录结果、风险与下一步动作</span></div>
-          <span v-if="selectedContext && !selectedContext.task.isExempt">维度权重 {{ result.totalWeight }}%</span>
         </header>
 
         <div v-if="cyclesLoading" class="tracking-cycle__state"><el-skeleton :rows="4" animated /></div>
@@ -183,11 +193,6 @@ function dueDate(value: string) {
         <div v-else-if="result.items.length === 0" class="tracking-cycle__state">
           <strong>{{ action?.kind === 'goal-setting' ? '目标待制定' : action?.kind === 'goal-confirmation' ? '目标待本人确认' : action?.kind === 'waiting' ? action.label : '正式目标版本尚未生成' }}</strong>
           <span>{{ actionHint }}</span>
-          <el-button
-            v-if="isSelf && action && ['goal-setting', 'goal-confirmation'].includes(action.kind)"
-            type="primary"
-            @click="openAction"
-          >{{ action.label }}</el-button>
         </div>
         <div v-else class="tracking-cycle__cards">
           <article v-for="(item, index) in result.items" :key="item.id" class="tracking-goal-card" :data-testid="`goal-tracking-row-${item.id}`">

@@ -95,7 +95,7 @@ watch(
             class="performance-review-table__extra"
           >
             <div v-if="row.rejectionReason" class="performance-review-table__rejection" role="status">
-              <strong>驳回原因</strong>
+              <strong>退回原因</strong>
               <span>{{ row.rejectionReason }}</span>
             </div>
             <slot name="row-extra" :row="row" :index="index" />

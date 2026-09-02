@@ -18,6 +18,7 @@ import { SubmitSelfEvalDto } from './dto/submit-self-eval.dto';
 import { SubmitManagerScoreDto } from './dto/submit-manager-score.dto';
 import { SaveManagerEvaluationDraftDto } from './dto/save-manager-evaluation-draft.dto';
 import { WithdrawManagerScoreDto } from './dto/withdraw-manager-score.dto';
+import { WithdrawIndicatorsDto } from './dto/withdraw-indicators.dto';
 import { DeptReviewDto } from './dto/dept-review.dto';
 import { RejectIndicatorsDto } from './dto/reject-indicators.dto';
 import { SubmitIndicatorProposalDto } from './dto/submit-indicator-proposal.dto';
@@ -109,7 +110,7 @@ export class TasksController {
     return this.tasksService.confirmIndicators(id, viewer);
   }
 
-  /** POST /tasks/:id/indicators/reject — 员工驳回指标。 */
+  /** POST /tasks/:id/indicators/reject — 退回指标。 */
   @Post(':id/indicators/reject')
   @HttpCode(200)
   rejectIndicators(
@@ -118,6 +119,17 @@ export class TasksController {
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.tasksService.rejectIndicators(id, dto.comment, viewer);
+  }
+
+  /** POST /tasks/:id/indicators/withdraw — 员工在主管开始审核前撤回指标。 */
+  @Post(':id/indicators/withdraw')
+  @HttpCode(200)
+  withdrawIndicators(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: WithdrawIndicatorsDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.tasksService.withdrawIndicators(id, dto, viewer);
   }
 
   /** POST /tasks/:id/indicator-proposal — 员工在目标制定阶段提交考核指标建议。 */

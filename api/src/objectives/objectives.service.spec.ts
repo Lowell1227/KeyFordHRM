@@ -1119,6 +1119,7 @@ describe('ObjectivesService visibility helpers', () => {
       employeeId: viewer.id,
       managerId: 'director-1',
       deptId: 'dept-1',
+      manager: { id: 'director-1', name: 'Director', avatarUrl: 'https://example.com/director.png' },
     });
     prisma.indicatorInstance.findMany.mockResolvedValue([{
       id: 'parent-1',
@@ -1130,6 +1131,13 @@ describe('ObjectivesService visibility helpers', () => {
 
     expect(result).toEqual({
       items: [{ id: 'parent-1', name: '部门交付目标', owner: { id: 'director-1', name: 'Director' } }],
+      owners: [{
+        id: 'director-1',
+        name: 'Director',
+        avatarUrl: 'https://example.com/director.png',
+        relation: 'performance_manager',
+        items: [{ id: 'parent-1', name: '部门交付目标', owner: { id: 'director-1', name: 'Director' } }],
+      }],
       reason: null,
     });
     const query = JSON.stringify(prisma.indicatorInstance.findMany.mock.calls[0][0]);

@@ -814,14 +814,14 @@ async function approveTeamTasks(tasks: TeamTaskVersion[]) {
 
 async function rejectTeamTasks(tasks: TeamTaskVersion[]) {
   try {
-    const { value } = await ElMessageBox.prompt('请输入驳回原因', '批量驳回', {
-      confirmButtonText: '驳回',
+    const { value } = await ElMessageBox.prompt('请输入退回原因', '批量退回', {
+      confirmButtonText: '退回',
       cancelButtonText: '取消',
       inputPattern: /\S+/,
-      inputErrorMessage: '请输入驳回原因',
+      inputErrorMessage: '请输入退回原因',
       type: 'warning',
     });
-    await executeTeamRejection(tasks, value.trim(), '批量驳回');
+    await executeTeamRejection(tasks, value.trim(), '批量退回');
   } catch (error) {
     if (error === 'cancel' || error === 'close') return;
   }
@@ -915,7 +915,7 @@ async function rejectSingleGoalReview(payload: GoalReviewRejectPayload) {
   const task = { taskId: payload.taskId, updatedAt: payload.expectedUpdatedAt };
   await executeSingleGoalReview(
     task,
-    '单项驳回',
+    '单项退回',
     () => tasksApi.batchRejectIndicators({ tasks: [task], reason: payload.reason }),
   );
 }

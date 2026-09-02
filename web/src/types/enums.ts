@@ -80,7 +80,7 @@ export type FlowNodeType =
   | 'employee_confirm'
   | 'appeal';
 
-export type FlowAction = 'submit' | 'approve' | 'reject' | 'transfer' | 'comment';
+export type FlowAction = 'submit' | 'approve' | 'reject' | 'transfer' | 'comment' | 'withdraw';
 
 export type SignatureBusinessType = 'assessment_task' | 'probation_task' | 'interview';
 

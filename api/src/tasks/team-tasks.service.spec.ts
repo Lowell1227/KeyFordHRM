@@ -756,7 +756,7 @@ describe("TeamTasksService", () => {
         },
         managerViewer,
       ),
-    ).rejects.toThrow("请填写驳回原因");
+    ).rejects.toThrow("请填写退回原因");
 
     expect(prisma.assessmentTask.findUnique).not.toHaveBeenCalled();
     expect(prisma.$transaction).not.toHaveBeenCalled();

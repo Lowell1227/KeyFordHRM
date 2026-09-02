@@ -642,6 +642,7 @@ export class ObjectivesService {
         employeeId: true,
         managerId: true,
         deptId: true,
+        manager: { select: { id: true, name: true, avatarUrl: true } },
       },
     });
     if (!task) {
@@ -652,7 +653,7 @@ export class ObjectivesService {
     }
     this.assertCanMaintainIndicatorAlignment(task, viewer);
     if (!task.managerId) {
-      return { items: [], reason: '本周期未设置绩效直属上级' };
+      return { items: [], owners: [], reason: '本周期未设置绩效直属上级' };
     }
 
     const where = await this.buildIndicatorAlignmentCandidateWhere(task);
@@ -669,12 +670,23 @@ export class ObjectivesService {
       },
       orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
     });
-    return {
-      items: indicators.map((indicator) => ({
+    const items = indicators.map((indicator) => ({
         id: indicator.id,
         name: indicator.name,
         owner: indicator.task.employee,
-      })),
+      }));
+    const manager = task.manager ?? {
+      id: task.managerId,
+      name: items[0]?.owner.name ?? '绩效直属上级',
+      avatarUrl: null,
+    };
+    return {
+      items,
+      owners: [{
+        ...manager,
+        relation: 'performance_manager' as const,
+        items,
+      }],
       reason: indicators.length ? null : '绩效直属上级暂无对你可见的指标',
     };
   }

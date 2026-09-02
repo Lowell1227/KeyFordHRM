@@ -130,7 +130,6 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
 <template>
   <section ref="rootRef" class="performance-indicators" data-testid="performance-indicator-list">
     <header class="performance-indicators__toolbar">
-      <span>{{ rows.length }} 项指标</span>
       <div class="performance-indicators__commands">
         <el-tooltip content="全部展开" placement="top">
           <el-button
@@ -233,7 +232,7 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
           :aria-labelledby="disclosureNameId(row.id)"
         >
           <div v-if="row.rejectionReason" class="indicator-details__rejection" role="status">
-            <strong>驳回原因</strong>
+            <strong>退回原因</strong>
             <span>{{ row.rejectionReason }}</span>
           </div>
           <slot name="details" :row="row" :index="index">
@@ -291,7 +290,7 @@ defineExpose({ expandAll, collapseAll, toggleIndicator });
   min-height: 40px;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-end;
   gap: 10px;
   color: #5d687a;
   font-size: 12px;

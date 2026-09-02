@@ -14,6 +14,7 @@ import { SubmitSelfEvalDto } from './dto/submit-self-eval.dto';
 import { SubmitManagerScoreDto } from './dto/submit-manager-score.dto';
 import { SaveManagerEvaluationDraftDto } from './dto/save-manager-evaluation-draft.dto';
 import { WithdrawManagerScoreDto } from './dto/withdraw-manager-score.dto';
+import { WithdrawIndicatorsDto } from './dto/withdraw-indicators.dto';
 import { DeptReviewDto } from './dto/dept-review.dto';
 import { SubmitIndicatorProposalDto } from './dto/submit-indicator-proposal.dto';
 import { SetIndicatorItemDto, SetIndicatorsDto } from './dto/set-indicators.dto';
@@ -441,10 +442,10 @@ export class TasksService {
       this.objectivesService.findVisibleByIds(alignedObjectiveIds, viewer),
       canMaintainAlignment
         ? this.objectivesService.findIndicatorAlignmentCandidates(task.id, viewer)
-        : Promise.resolve({ items: [], reason: null }),
+        : Promise.resolve({ items: [], owners: [], reason: null }),
     ]);
     const visibleParentIndicators = new Map(
-      alignmentCandidates.items.map((item) => [item.id, item]),
+      alignmentCandidates.items.map((item) => [item.id, item] as const),
     );
     const detail = this.buildTaskDetail(
       task,
@@ -651,13 +652,13 @@ export class TasksService {
         cycleId: task.cycleId,
         taskId: task.id,
         type: 'indicator_rejected',
-        title: '指标被驳回',
-        content: `员工对考核指标提出驳回${comment ? `：${comment}` : ''}，请重新调整。`,
+        title: '指标已退回',
+        content: `员工退回了考核指标${comment ? `：${comment}` : ''}，请重新调整。`,
       });
     }
 
     if (isEmployee) {
-      await this.notifyHr(task, viewer, '指标被驳回', `员工对考核指标提出驳回${comment ? `：${comment}` : ''}，请重新调整。`);
+      await this.notifyHr(task, viewer, '指标已退回', `员工退回了考核指标${comment ? `：${comment}` : ''}，请重新调整。`);
     } else {
       await this.notificationsService.create({
         userId: task.employeeId,
@@ -671,6 +672,103 @@ export class TasksService {
     }
 
     return { id: task.id, status: result.newStatus };
+  }
+
+  /** POST /tasks/:id/indicators/withdraw */
+  async withdrawIndicators(
+    id: string,
+    dto: WithdrawIndicatorsDto,
+    viewer: AuthUser,
+  ): Promise<{ id: string; status: TaskStatus; updatedAt: string }> {
+    const task = await this.getTaskOrThrow(id);
+    this.assertEmployee(task, viewer);
+    if (task.status !== 'indicator_reviewing') {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: '当前状态不允许撤回目标',
+      });
+    }
+    assertTaskVersion(task.updatedAt, dto.expectedUpdatedAt);
+
+    const claimedUpdatedAt = await this.prisma.$transaction(async (tx) => {
+      const claimedUpdatedAt = await claimTaskVersion(
+        tx,
+        task.id,
+        dto.expectedUpdatedAt,
+        'indicator_reviewing',
+      );
+      const submission = await tx.flowRecord.findFirst({
+        where: {
+          taskId: task.id,
+          nodeType: 'indicator_setting',
+          action: 'submit',
+          actorId: viewer.id,
+          extraData: { path: ['type'], equals: 'indicator_employee_submitted' },
+        },
+        select: { id: true, createdAt: true },
+        orderBy: { createdAt: 'desc' },
+      });
+      if (!submission) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '未找到可撤回的目标提交记录',
+        });
+      }
+      const reviewSaved = await tx.flowRecord.findFirst({
+        where: {
+          taskId: task.id,
+          nodeType: 'indicator_setting',
+          createdAt: { gt: submission.createdAt },
+          extraData: { path: ['type'], equals: 'indicator_review_saved' },
+        },
+        select: { id: true },
+      });
+      if (reviewSaved) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '主管已开始审核，请联系主管退回修改',
+        });
+      }
+
+      await tx.assessmentTask.update({
+        where: { id: task.id },
+        data: {
+          status: 'indicator_drafting',
+          indicatorSetAt: null,
+          indicatorConfirmedAt: null,
+          updatedAt: claimedUpdatedAt,
+        },
+      });
+      await tx.flowRecord.create({
+        data: {
+          taskId: task.id,
+          cycleId: task.cycleId,
+          nodeType: 'indicator_setting',
+          actorId: viewer.id,
+          action: 'withdraw',
+          extraData: { type: 'indicator_employee_withdrawn' },
+        },
+      });
+      return claimedUpdatedAt;
+    });
+
+    if (task.managerId) {
+      try {
+        await this.notificationsService.create({
+          userId: task.managerId,
+          senderId: viewer.id,
+          cycleId: task.cycleId,
+          taskId: task.id,
+          type: 'indicator_setting_notice',
+          title: '员工已撤回目标',
+          content: `${viewer.name ?? '员工'}撤回了本周期目标，将修改后重新提交。`,
+        });
+      } catch (error) {
+        this.logger.warn(`目标撤回已完成，但通知主管失败: ${error instanceof Error ? error.message : String(error)}`);
+      }
+    }
+
+    return { id: task.id, status: 'indicator_drafting', updatedAt: claimedUpdatedAt.toISOString() };
   }
 
   /** POST /tasks/:id/indicator-proposal */

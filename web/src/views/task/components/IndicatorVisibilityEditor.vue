@@ -50,6 +50,7 @@ const normalizedScopes = computed(() => normalizeIndicatorVisibilityScopes(
   props.modelValue.visibilityScope,
 ));
 const isCustom = computed(() => normalizedScopes.value.includes('custom'));
+const selectedCount = computed(() => normalizedScopes.value.length);
 
 function normalizeIds(ids: string[]): string[] {
   const normalized = new Map<string, string>();
@@ -62,7 +63,11 @@ function normalizeIds(ids: string[]): string[] {
   return [...normalized.values()];
 }
 
-function updateScopes(rawScopes: IndicatorVisibilityScope[]) {
+function updateScopes(rawValues: Array<string | number>) {
+  const rawScopes = rawValues.filter((value): value is IndicatorVisibilityScope => (
+    typeof value === 'string'
+    && indicatorVisibilityGroups.some((group) => group.options.some((option) => option.value === value))
+  ));
   if (!rawScopes.length) {
     ElMessage.warning('至少保留一个可见范围');
     return;
@@ -108,80 +113,89 @@ function updateUsers(ids: string[]) {
 
 <template>
   <div class="visibility-editor" @click.stop>
-    <el-select
-      multiple
-      :model-value="normalizedScopes"
-      :data-testid="`indicator-visibility-${indicatorId}`"
-      :aria-label="`指标 ${indicatorId} 可见范围`"
-      :disabled="disabled"
-      placeholder="请选择可见范围"
-      @update:model-value="updateScopes"
+    <el-popover
+      trigger="click"
+      placement="bottom-end"
+      :width="380"
+      popper-class="indicator-visibility-popper"
     >
-      <el-option-group
-        v-for="group in indicatorVisibilityGroups"
-        :key="group.label"
-        :label="group.label"
-      >
-        <el-option
-          v-for="option in group.options"
-          :key="option.value"
-          :label="option.label"
-          :value="option.value"
-        />
-      </el-option-group>
-    </el-select>
-
-    <div v-if="isCustom" class="visibility-editor__custom">
-      <label>
-        <span>部门</span>
-        <el-select
-          :model-value="modelValue.visibleDepartmentIds"
-          data-testid="visibility-departments"
-          aria-label="自定义可见部门"
-          multiple
-          filterable
-          collapse-tags
-          collapse-tags-tooltip
+      <template #reference>
+        <el-button
+          class="visibility-editor__trigger"
+          :data-testid="`indicator-visibility-${indicatorId}`"
+          :aria-label="`指标 ${indicatorId} 可见范围，已选 ${selectedCount} 项`"
           :disabled="disabled"
-          @update:model-value="updateDepartments"
         >
-          <el-option
-            v-for="department in departments"
-            :key="department.id"
-            :label="department.name"
-            :value="department.id"
-          />
-        </el-select>
-        <small data-testid="visibility-department-count">
-          已选 {{ modelValue.visibleDepartmentIds.length }} 个部门
-        </small>
-      </label>
+          可见范围：已选 {{ selectedCount }} 项
+        </el-button>
+      </template>
 
-      <label>
-        <span>员工</span>
-        <el-select
-          :model-value="modelValue.visibleUserIds"
-          data-testid="visibility-users"
-          aria-label="自定义可见员工"
-          multiple
-          filterable
-          collapse-tags
-          collapse-tags-tooltip
-          :disabled="disabled"
-          @update:model-value="updateUsers"
-        >
-          <el-option
-            v-for="user in users"
-            :key="user.id"
-            :label="`${user.name}${user.employeeNo ? `（${user.employeeNo}）` : ''}`"
-            :value="user.id"
-          />
-        </el-select>
-        <small data-testid="visibility-user-count">
-          已选 {{ modelValue.visibleUserIds.length }} 名员工
-        </small>
-      </label>
-    </div>
+      <div class="visibility-editor__panel" :aria-label="`指标 ${indicatorId} 可见范围选项`">
+        <div class="visibility-editor__groups">
+          <section v-for="group in indicatorVisibilityGroups" :key="group.label">
+            <strong>{{ group.label }}</strong>
+            <el-checkbox-group :model-value="normalizedScopes" @update:model-value="updateScopes">
+              <el-checkbox
+                v-for="option in group.options"
+                :key="option.value"
+                :label="option.value"
+                :value="option.value"
+              >
+                {{ option.label }}
+              </el-checkbox>
+            </el-checkbox-group>
+          </section>
+        </div>
+
+        <div v-if="isCustom" class="visibility-editor__custom">
+          <label>
+            <span>部门</span>
+            <el-select
+              :model-value="modelValue.visibleDepartmentIds"
+              data-testid="visibility-departments"
+              aria-label="自定义可见部门"
+              multiple
+              filterable
+              collapse-tags
+              collapse-tags-tooltip
+              :disabled="disabled"
+              @update:model-value="updateDepartments"
+            >
+              <el-option
+                v-for="department in departments"
+                :key="department.id"
+                :label="department.name"
+                :value="department.id"
+              />
+            </el-select>
+            <small data-testid="visibility-department-count">已选 {{ modelValue.visibleDepartmentIds.length }} 个部门</small>
+          </label>
+
+          <label>
+            <span>员工</span>
+            <el-select
+              :model-value="modelValue.visibleUserIds"
+              data-testid="visibility-users"
+              aria-label="自定义可见员工"
+              multiple
+              filterable
+              collapse-tags
+              collapse-tags-tooltip
+              :disabled="disabled"
+              @update:model-value="updateUsers"
+            >
+              <el-option
+                v-for="user in users"
+                :key="user.id"
+                :label="`${user.name}${user.employeeNo ? `（${user.employeeNo}）` : ''}`"
+                :value="user.id"
+              />
+            </el-select>
+            <small data-testid="visibility-user-count">已选 {{ modelValue.visibleUserIds.length }} 名员工</small>
+          </label>
+        </div>
+      </div>
+    </el-popover>
   </div>
 </template>
 
@@ -190,8 +204,46 @@ function updateUsers(ids: string[]) {
   min-width: 0;
 }
 
-.visibility-editor :deep(.el-select) {
+.visibility-editor__trigger {
   width: 100%;
+  justify-content: flex-start;
+  overflow: hidden;
+  border-color: #bfdbfe;
+  border-radius: 999px;
+  background: #eff6ff;
+  color: #2563eb;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.visibility-editor__panel {
+  max-height: min(520px, 62vh);
+  overflow-y: auto;
+  padding-right: 4px;
+}
+
+.visibility-editor__groups {
+  display: grid;
+  gap: 12px;
+}
+
+.visibility-editor__groups section {
+  display: grid;
+  gap: 6px;
+}
+
+.visibility-editor__groups strong {
+  color: #98a2b3;
+  font-size: 12px;
+}
+
+.visibility-editor__groups :deep(.el-checkbox-group) {
+  display: grid;
+  gap: 4px;
+}
+
+.visibility-editor__groups :deep(.el-checkbox) {
+  margin-right: 0;
 }
 
 .visibility-editor__custom {
@@ -220,5 +272,9 @@ function updateUsers(ids: string[]) {
   .visibility-editor__custom {
     grid-template-columns: minmax(0, 1fr);
   }
+}
+
+:global(.indicator-visibility-popper) {
+  max-width: calc(100vw - 24px);
 }
 </style>

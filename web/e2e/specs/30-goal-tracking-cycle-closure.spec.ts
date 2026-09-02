@@ -80,10 +80,12 @@ test('same-name cycles remain selectable and the employee can enter the exact re
   await expect(selector.locator('option').nth(1)).toContainText('已豁免');
   await expect(page.getByTestId('goal-tracking-summary')).toContainText('1 已完成');
   await expect(page.getByTestId('goal-tracking-surface')).toContainText('完成重点客户续约');
-  await expect(page.getByRole('complementary', { name: '评分期次' })).toContainText('待复盘');
+  await expect(page.getByRole('complementary', { name: '评分期次' })).toContainText('待填写');
 
-  await page.getByTestId('goal-tracking-primary-action').click();
-  await expect(page).toHaveURL(new RegExp(`/tasks/task-active\\?.*stage=self-eval.*periodId=${periodId}`));
+  await Promise.all([
+    page.waitForURL(new RegExp(`/tasks/task-active\\?.*stage=self-eval.*periodId=${periodId}`)),
+    page.getByTestId('goal-tracking-primary-action').click(),
+  ]);
 });
 
 test('mobile goal tracking uses cards without horizontal overflow and preserves exempt context', async ({ page }) => {
@@ -97,6 +99,31 @@ test('mobile goal tracking uses cards without horizontal overflow and preserves 
   await page.getByTestId('goal-tracking-cycle').selectOption(exemptCycleId);
   await expect(page.getByTestId('goal-tracking-surface')).toContainText('本周期已豁免');
   await expect(page.getByTestId('goal-tracking-surface')).toContainText('HR按部门设置为本周期豁免');
+});
+
+test('distinguishes missing goals from a follow-up period that is not open', async ({ page }) => {
+  await authenticate(page);
+  const pendingContext = {
+    ...trackingContexts()[0],
+    task: { ...trackingContexts()[0].task, status: 'indicator_drafting' },
+    periods: [{ ...trackingContexts()[0].periods[0], status: 'unopened' }],
+  };
+  await page.route('**/api/v1/cycles/tracking-contexts?**', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse([pendingContext])),
+  }));
+  await page.route('**/api/v1/objectives/tracking?**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      taskId: 'task-active', taskStatus: 'indicator_drafting', canEdit: true, totalWeight: 0, items: [],
+    })),
+  }));
+
+  await page.goto('/action-items');
+
+  await expect(page.getByTestId('goal-tracking-summary')).toContainText('目标待制定');
+  await expect(page.getByTestId('goal-tracking-primary-action')).toHaveText('开始制定');
+  await expect(page.getByTestId('goal-tracking-surface').getByRole('button')).toHaveCount(0);
+  await expect(page.getByRole('complementary', { name: '评分期次' })).toContainText('待目标制定');
 });
 
 function managerTask() {

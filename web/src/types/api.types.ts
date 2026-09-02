@@ -633,8 +633,17 @@ export interface IndicatorAlignmentCandidate {
   owner: { id: string; name: string };
 }
 
+export interface IndicatorAlignmentOwner {
+  id: string;
+  name: string;
+  avatarUrl: string | null;
+  relation: 'performance_manager';
+  items: IndicatorAlignmentCandidate[];
+}
+
 export interface IndicatorAlignmentCandidatesResult {
   items: IndicatorAlignmentCandidate[];
+  owners: IndicatorAlignmentOwner[];
   reason: string | null;
 }
 
@@ -1001,7 +1010,7 @@ export interface BatchCreateTaskBody {
 export interface SetIndicatorBody {
   expectedUpdatedAt: string;
   instances: Array<
-    Pick<
+    Omit<Pick<
       IndicatorInstance,
       | 'templateIndicatorId'
       | 'name'
@@ -1012,7 +1021,6 @@ export interface SetIndicatorBody {
       | 'targetValue'
       | 'targetValueText'
       | 'unit'
-      | 'weight'
       | 'indicatorType'
       | 'dimensionName'
       | 'dimensionWeight'
@@ -1020,7 +1028,8 @@ export interface SetIndicatorBody {
       | 'visibilityScope'
       | 'visibleDepartmentIds'
       | 'visibleUserIds'
-    > & {
+    >, 'id'> & {
+      weight?: number;
       visibilityScopes?: IndicatorVisibilityScope[];
       alignedObjectiveIds: string[];
       alignedParentIndicatorIds?: string[];
@@ -1100,6 +1109,10 @@ export interface SaveManagerEvaluationDraftBody {
 }
 
 export interface WithdrawManagerScoreBody {
+  expectedUpdatedAt: string;
+}
+
+export interface WithdrawIndicatorsBody {
   expectedUpdatedAt: string;
 }
 
