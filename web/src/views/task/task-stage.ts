@@ -76,6 +76,8 @@ export interface EmployeeTaskEntry {
   actionLabel: string;
   periodId?: string;
   progressLabel?: string;
+  hintLabel?: string;
+  actionPath?: string;
 }
 
 const employeeResultPendingStatuses = new Set<TaskStatus>(['published', 'appealing']);
@@ -89,7 +91,7 @@ const resultProcessingStatuses = new Set<TaskStatus>([
 
 function employeeCanSubmitPeriod(period: AssessmentPeriodSummary): boolean {
   return (
-    (period.status === 'self_eval' || period.status === 'manager_scoring')
+    period.status === 'self_eval'
     && !period.employeeSubmittedAt
     && !period.managerSubmittedAt
   );
@@ -99,9 +101,31 @@ export function getEmployeeActionablePeriod(
   task: EmployeeTaskStageSource,
 ): AssessmentPeriodSummary | undefined {
   if (task.workflowVersion !== 2) return undefined;
-  const actionable = (task.periods ?? []).filter(employeeCanSubmitPeriod);
-  return actionable.find((period) => period.status === 'self_eval')
-    ?? actionable.find((period) => period.status === 'manager_scoring');
+  return [...(task.periods ?? [])]
+    .filter(employeeCanSubmitPeriod)
+    .sort((left, right) => left.sequence - right.sequence)[0];
+}
+
+function getEmployeeWaitingPeriod(task: EmployeeTaskStageSource): AssessmentPeriodSummary | undefined {
+  if (task.workflowVersion !== 2) return undefined;
+  return [...(task.periods ?? [])]
+    .filter((period) => Boolean(period.employeeSubmittedAt) && !period.managerSubmittedAt)
+    .sort((left, right) => right.sequence - left.sequence)[0];
+}
+
+function monthlyPeriodLabel(period: AssessmentPeriodSummary): string {
+  const monthMatch = /^(\d{4})-(\d{2})$/.exec(period.periodKey);
+  return monthMatch
+    ? `${monthMatch[1]}年${Number(monthMatch[2])}月月度自评`
+    : '月度自评';
+}
+
+function monthlyProgressLabel(periods: AssessmentPeriodSummary[], period?: AssessmentPeriodSummary): string {
+  const position = period ? periods.findIndex((item) => item.id === period.id) + 1 : 0;
+  const submitted = periods.filter((item) => Boolean(item.employeeSubmittedAt)).length;
+  return position > 0
+    ? `第${position}/${periods.length}期 · 已提交 ${submitted}/${periods.length}`
+    : `已提交 ${submitted}/${periods.length}`;
 }
 
 export function getEmployeeTaskStageState(
@@ -138,30 +162,46 @@ export function getEmployeeTaskStageState(
 
 export function resolveEmployeeTaskStage(task: EmployeeTaskStageSource): TaskStageKey {
   if (getEmployeeActionablePeriod(task)) return 'self-eval';
+  if (getEmployeeWaitingPeriod(task)) return 'self-eval';
   return TASK_STATUS_STAGE[task.status];
 }
 
 export function resolveEmployeeTaskEntry(task: EmployeeTaskStageSource): EmployeeTaskEntry {
+  const monthlyPeriods = [...(task.periods ?? [])]
+    .filter((item) => item.periodType === 'month')
+    .sort((left, right) => left.sequence - right.sequence);
   const period = getEmployeeActionablePeriod(task);
   if (period) {
     const monthly = period.periodType === 'month';
-    const monthlyPeriods = (task.periods ?? [])
-      .filter((item) => item.periodType === 'month')
-      .sort((left, right) => left.sequence - right.sequence);
-    const currentPeriodPosition = monthlyPeriods.findIndex((item) => item.id === period.id) + 1;
-    const submittedPeriodCount = monthlyPeriods.filter((item) => Boolean(item.employeeSubmittedAt)).length;
-    const monthMatch = /^(\d{4})-(\d{2})$/.exec(period.periodKey);
-    const monthlyLabel = monthMatch
-      ? `${monthMatch[1]}年${Number(monthMatch[2])}月月度自评`
-      : '月度自评';
     return {
       stage: 'self-eval',
-      label: monthly ? monthlyLabel : '周期自评',
+      label: monthly ? monthlyPeriodLabel(period) : '周期自评',
       actionLabel: monthly ? '填写月度自评' : '填写周期自评',
       periodId: period.id,
-      progressLabel: monthly && currentPeriodPosition > 0
-        ? `第${currentPeriodPosition}/${monthlyPeriods.length}期 · 已提交 ${submittedPeriodCount}/${monthlyPeriods.length}`
+      progressLabel: monthly
+        ? monthlyProgressLabel(monthlyPeriods, period)
         : undefined,
+    };
+  }
+  const waitingPeriod = getEmployeeWaitingPeriod(task);
+  if (waitingPeriod?.periodType === 'month') {
+    return {
+      stage: 'self-eval',
+      label: monthlyPeriodLabel(waitingPeriod),
+      actionLabel: '等待主管月度评分',
+      periodId: waitingPeriod.id,
+      progressLabel: monthlyProgressLabel(monthlyPeriods, waitingPeriod),
+    };
+  }
+  const nextUnopened = monthlyPeriods.find((item) => item.status === 'unopened');
+  if (task.workflowVersion === 2 && nextUnopened) {
+    return {
+      stage: 'self-eval',
+      label: '目标跟进',
+      actionLabel: '更新目标进展',
+      progressLabel: monthlyProgressLabel(monthlyPeriods),
+      hintLabel: '下一期月度自评尚未开放',
+      actionPath: '/action-items',
     };
   }
   if (resultProcessingStatuses.has(task.status)) {

@@ -6,24 +6,18 @@ import type {
   EmployeePeriodReviewItemBody,
   GoalTrackingHealthStatus,
   PeriodReviewDetail,
-  PeriodReviewIndicator,
   SubmitEmployeePeriodReviewBody,
 } from '@/types/api.types';
 import PerformanceFormWorkspace from './PerformanceFormWorkspace.vue';
 import MonthlyReviewReferencePanel from './MonthlyReviewReferencePanel.vue';
 
-type RequiredField = 'progress' | 'healthStatus' | 'selfScore';
+type RequiredField = 'selfScore';
 
 interface ReviewFormItem {
   indicatorVersionItemId: string;
   progress: number | null;
   healthStatus: GoalTrackingHealthStatus | null;
-  actualValueText: string;
   employeeComment: string;
-  problemReason: string;
-  nextMonthPlan: string;
-  supportNeeded: string;
-  attachments: PeriodReviewIndicator['attachments'];
   selfScore: number | null;
 }
 
@@ -49,8 +43,9 @@ const healthOptions: Array<{ value: GoalTrackingHealthStatus; label: string }> =
 
 const selectedIndicator = computed(() => detail.value?.indicators[selectedIndex.value]);
 const canEdit = computed(() => Boolean(detail.value?.permissions.canEditEmployee));
-const completedCount = computed(() => formItems.filter((item) => (
-  item.progress != null && item.healthStatus != null && item.selfScore != null
+const scoreRequiredCount = computed(() => detail.value?.indicators.filter((item) => item.isScoreRequired).length ?? 0);
+const completedCount = computed(() => formItems.filter((item, index) => (
+  detail.value?.indicators[index]?.isScoreRequired && item.selfScore != null
 )).length);
 const periodLabel = computed(() => {
   const period = detail.value?.period;
@@ -61,10 +56,10 @@ const periodLabel = computed(() => {
   return `${year}年${Number(month)}月`;
 });
 const periodNoun = computed(() => detail.value?.period.periodType === 'cycle' ? '本期' : '本月');
-const followUpName = computed(() => detail.value?.period.periodType === 'cycle' ? '周期跟进' : '月度跟进');
+const followUpName = computed(() => detail.value?.period.periodType === 'cycle' ? '整周期自评' : '月度自评');
 const reviewTitle = computed(() => detail.value?.period.periodType === 'cycle'
-  ? '整周期跟进'
-  : `${periodLabel.value}月度跟进`);
+  ? '整周期自评'
+  : `${periodLabel.value}月度自评`);
 
 function optionalText(value: string): string | null {
   return value.trim() || null;
@@ -78,12 +73,7 @@ function replaceForm(next: PeriodReviewDetail) {
     indicatorVersionItemId: item.indicatorVersionItemId,
     progress: item.progress,
     healthStatus: item.healthStatus,
-    actualValueText: item.actualValueText ?? '',
     employeeComment: item.employeeComment ?? '',
-    problemReason: item.problemReason ?? '',
-    nextMonthPlan: item.nextMonthPlan ?? '',
-    supportNeeded: item.supportNeeded ?? '',
-    attachments: [...item.attachments],
     selfScore: item.selfScore,
   })));
   for (const key of Object.keys(validationErrors)) delete validationErrors[key];
@@ -107,12 +97,7 @@ function bodyItems(): EmployeePeriodReviewItemBody[] {
     indicatorVersionItemId: item.indicatorVersionItemId,
     progress: item.progress,
     healthStatus: item.healthStatus,
-    actualValueText: optionalText(item.actualValueText),
     employeeComment: optionalText(item.employeeComment),
-    problemReason: optionalText(item.problemReason),
-    nextMonthPlan: optionalText(item.nextMonthPlan),
-    supportNeeded: optionalText(item.supportNeeded),
-    attachments: item.attachments,
     selfScore: item.selfScore,
   }));
 }
@@ -126,9 +111,9 @@ function validateForSubmit(): boolean {
   let firstInvalid = -1;
   formItems.forEach((item, index) => {
     const errors: Partial<Record<RequiredField, string>> = {};
-    if (item.progress == null) errors.progress = `请填写${periodNoun.value}完成进度`;
-    if (!item.healthStatus) errors.healthStatus = `请选择${periodNoun.value}完成状态`;
-    if (item.selfScore == null) errors.selfScore = `请填写 0-100 分的${periodNoun.value}自评分`;
+    if (detail.value?.indicators[index]?.isScoreRequired && item.selfScore == null) {
+      errors.selfScore = `请填写 0-100 分的${periodNoun.value}自评分`;
+    }
     if (Object.keys(errors).length) {
       validationErrors[item.indicatorVersionItemId] = errors;
       if (firstInvalid < 0) firstInvalid = index;
@@ -173,16 +158,10 @@ function newIdempotencyKey(): string {
 
 async function submitReview() {
   if (!canEdit.value || saving.value || submitting.value || !validateForSubmit()) return;
-  const indicators = bodyItems().map((item, index) => ({
-    ...item,
-    progress: formItems[index].progress!,
-    healthStatus: formItems[index].healthStatus!,
-    selfScore: formItems[index].selfScore!,
-  }));
   const body: SubmitEmployeePeriodReviewBody = {
     expectedVersion: draftVersion.value,
     idempotencyKey: newIdempotencyKey(),
-    indicators,
+    indicators: bodyItems(),
   };
   submitting.value = true;
   try {
@@ -244,7 +223,7 @@ watch(() => props.periodId, loadReview, { immediate: true });
 
               <div class="monthly-goal-card__core">
                 <label class="monthly-field">
-                  <span>{{ periodNoun }}完成进度 <b>*</b></span>
+                  <span>进度 <i>选填</i></span>
                   <el-input-number
                     v-model="formItems[index].progress"
                     :min="0"
@@ -253,16 +232,12 @@ watch(() => props.periodId, loadReview, { immediate: true });
                     :disabled="!canEdit"
                     :aria-label="`${periodNoun}完成进度`"
                     placeholder="0-100"
-                    @change="clearItemError(indicator.indicatorVersionItemId, 'progress')"
                   />
                   <small>%</small>
-                  <em v-if="validationErrors[indicator.indicatorVersionItemId]?.progress">
-                    {{ validationErrors[indicator.indicatorVersionItemId].progress }}
-                  </em>
                 </label>
 
                 <div class="monthly-field monthly-field--status">
-                  <span>{{ periodNoun }}完成状态 <b>*</b></span>
+                  <span>状态 <i>选填</i></span>
                   <div class="monthly-health-options">
                     <button
                       v-for="option in healthOptions"
@@ -270,16 +245,13 @@ watch(() => props.periodId, loadReview, { immediate: true });
                       type="button"
                       :class="{ 'is-active': formItems[index].healthStatus === option.value }"
                       :disabled="!canEdit"
-                      @click.stop="formItems[index].healthStatus = option.value; clearItemError(indicator.indicatorVersionItemId, 'healthStatus')"
+                      @click.stop="formItems[index].healthStatus = option.value"
                     >{{ option.label }}</button>
                   </div>
-                  <em v-if="validationErrors[indicator.indicatorVersionItemId]?.healthStatus">
-                    {{ validationErrors[indicator.indicatorVersionItemId].healthStatus }}
-                  </em>
                 </div>
 
-                <label class="monthly-field">
-                  <span>{{ periodNoun }}自评分 <b>*</b></span>
+                <label v-if="indicator.isScoreRequired" class="monthly-field">
+                  <span>自评分 <b>*</b></span>
                   <el-input-number
                     v-model="formItems[index].selfScore"
                     :min="0"
@@ -295,29 +267,20 @@ watch(() => props.periodId, loadReview, { immediate: true });
                     {{ validationErrors[indicator.indicatorVersionItemId].selfScore }}
                   </em>
                 </label>
+                <div v-else class="monthly-field monthly-field--score-exempt">
+                  <span>自评分</span>
+                  <strong>不参与评分</strong>
+                </div>
               </div>
 
               <div class="monthly-goal-card__details">
                 <label class="monthly-field is-wide">
-                  <span>{{ periodNoun }}完成情况 <i>选填</i></span>
-                  <el-input v-model="formItems[index].actualValueText" :disabled="!canEdit" maxlength="200" placeholder="填写关键结果、完成数量或交付结果" />
+                  <span>描述 <i>选填</i></span>
+                  <el-input v-model="formItems[index].employeeComment" :disabled="!canEdit" type="textarea" :rows="2" placeholder="简要说明本月进展和结果" />
                 </label>
-                <label class="monthly-field">
-                  <span>问题原因 <i>选填</i></span>
-                  <el-input v-model="formItems[index].problemReason" :disabled="!canEdit" type="textarea" :rows="2" placeholder="如有偏差，简要说明原因" />
-                </label>
-                <label class="monthly-field">
-                  <span>下一步计划 <i>选填</i></span>
-                  <el-input v-model="formItems[index].nextMonthPlan" :disabled="!canEdit" type="textarea" :rows="2" placeholder="填写下一步重点动作" />
-                </label>
-                <label class="monthly-field">
-                  <span>所需支持 <i>选填</i></span>
-                  <el-input v-model="formItems[index].supportNeeded" :disabled="!canEdit" type="textarea" :rows="2" placeholder="需要主管或协同方提供什么支持" />
-                </label>
-                <label class="monthly-field">
-                  <span>补充说明 <i>选填</i></span>
-                  <el-input v-model="formItems[index].employeeComment" :disabled="!canEdit" type="textarea" :rows="2" placeholder="其他需要补充的跟进信息" />
-                </label>
+                <p v-if="indicator.monthlyProgressSource === 'none'" class="monthly-goal-card__empty-progress">
+                  本月未更新，可只填写自评分后提交
+                </p>
               </div>
             </article>
           </div>
@@ -328,8 +291,8 @@ watch(() => props.periodId, loadReview, { immediate: true });
         <template #actions>
           <footer v-if="canEdit" class="monthly-review-actions" data-testid="monthly-review-actions">
             <div class="monthly-review-actions__progress">
-              <strong>本期填写完成 {{ completedCount }}/{{ formItems.length }}</strong>
-              <span>进度、状态和自评分为必填，其余说明选填</span>
+              <strong>自评分已填写 {{ completedCount }}/{{ scoreRequiredCount }}</strong>
+              <span>状态、进度和描述可留空；有效权重指标的自评分必填</span>
             </div>
             <div class="monthly-review-actions__buttons">
               <el-button :loading="saving" :disabled="submitting" @mousedown.prevent @click="saveDraft">保存草稿</el-button>

@@ -29,6 +29,13 @@ import { GoalTrackingQueryDto } from './dto/goal-tracking-query.dto';
 import { buildActionItemVisibilityWhere } from '@/action-items/action-item-visibility';
 import { buildVisibilityScopeWhere } from '@/tasks/indicator-visibility.rules';
 import { IndicatorMapNode, IndicatorMapResult } from './indicator-map.types';
+import {
+  currentGoalProgress,
+  progressBusinessPeriodKey,
+  progressSource,
+  sortGoalProgress,
+  type GoalProgressSource,
+} from './goal-tracking-progress';
 
 /** include 定义（字面量，便于 Prisma 推导类型）。 */
 const objectiveIncludeDef = {
@@ -68,6 +75,8 @@ export interface GoalTrackingLatestProgress {
   createdBy?: string;
   creatorName?: string;
   updatedAt: Date;
+  businessPeriodKey: string;
+  source: GoalProgressSource;
 }
 
 export interface GoalTrackingItem {
@@ -102,6 +111,14 @@ export interface GoalTrackingResult {
   taskStatus?: TaskStatus | null;
   canEdit?: boolean;
   monthlyFollowUpRequired?: boolean;
+  summary?: {
+    periodCount: number;
+    employeeSubmittedCount: number;
+    managerCompletedCount: number;
+    activeBusinessPeriodKey: string | null;
+    activeUpdatedGoalCount: number;
+    goalCount: number;
+  };
   totalWeight: number;
   items: GoalTrackingItem[];
 }
@@ -110,7 +127,6 @@ export interface UpdateIndicatorProgressInput {
   progress: number;
   healthStatus: IndicatorProgressHealth;
   content: string;
-  attachments: Array<{ name: string; url: string; size?: number }>;
   expectedLatestUpdateAt?: string | null;
 }
 
@@ -467,6 +483,11 @@ export class ObjectivesService {
           title: action.title,
           progress: action.progress,
           updatedAt: action.updatedAt,
+          businessPeriodKey: progressBusinessPeriodKey({
+            id: action.id,
+            createdAt: action.updatedAt,
+          }),
+          source: 'active_progress',
         });
       }
     }
@@ -541,7 +562,25 @@ export class ObjectivesService {
       where: { cycleId_employeeId: { cycleId, employeeId: ownerId } },
       include: {
         employee: { select: { id: true, name: true } },
-        cycle: { select: { id: true, name: true, monthlyFollowUpRequired: true } },
+        cycle: {
+          select: {
+            id: true,
+            name: true,
+            monthlyFollowUpRequired: true,
+            workflowVersion: true,
+            openedAt: true,
+            publishedAt: true,
+          },
+        },
+        periods: {
+          orderBy: { sequence: 'asc' },
+          select: {
+            periodKey: true,
+            status: true,
+            employeeSubmittedAt: true,
+            managerSubmittedAt: true,
+          },
+        },
         indicatorInstances: {
           ...(indicatorWhere ? { where: indicatorWhere } : {}),
           orderBy: { sortOrder: 'asc' },
@@ -559,8 +598,10 @@ export class ObjectivesService {
             },
             progressUpdates: {
               orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-              take: 1,
-              include: { creator: { select: { id: true, name: true } } },
+              include: {
+                creator: { select: { id: true, name: true } },
+                period: { select: { periodKey: true } },
+              },
             },
           },
         },
@@ -571,16 +612,9 @@ export class ObjectivesService {
       return { taskId: null, taskStatus: null, canEdit: false, totalWeight: 0, items: [] };
     }
 
-    const editableStatuses = new Set<TaskStatus>([
-      TaskStatus.indicator_setting,
-      TaskStatus.indicator_confirming,
-      TaskStatus.self_eval,
-    ]);
-    const canEdit = task.employeeId === viewer.id
-      && task.selfEvalSubmittedAt == null
-      && editableStatuses.has(task.status);
+    const canEdit = this.canSubmitActiveProgress(task, viewer);
     const items = task.indicatorInstances.map((indicator) => {
-      const latest = indicator.progressUpdates[0] ?? null;
+      const latest = currentGoalProgress(indicator.progressUpdates);
       const weight = Math.round(indicator.weight.toNumber() * 10_000) / 100;
       return {
         id: indicator.id,
@@ -618,16 +652,39 @@ export class ObjectivesService {
               createdBy: latest.creator.id,
               creatorName: latest.creator.name,
               updatedAt: latest.createdAt,
+              businessPeriodKey: progressBusinessPeriodKey(latest),
+              source: progressSource(latest),
             }
           : null,
       } satisfies GoalTrackingItem;
     });
+    const periods = task.periods ?? [];
+    const activePeriod = periods.find((period) => (
+      ['self_eval', 'manager_scoring'].includes(period.status)
+      && !period.employeeSubmittedAt
+    )) ?? periods[periods.length - 1] ?? null;
+    const activeBusinessPeriodKey = activePeriod?.periodKey ?? null;
 
     return {
       taskId: task.id,
       taskStatus: task.status,
       canEdit,
       monthlyFollowUpRequired: task.cycle.monthlyFollowUpRequired,
+      summary: {
+        periodCount: periods.length,
+        employeeSubmittedCount: periods.filter((period) => Boolean(period.employeeSubmittedAt)).length,
+        managerCompletedCount: periods.filter((period) => (
+          period.status === 'completed' && Boolean(period.managerSubmittedAt)
+        )).length,
+        activeBusinessPeriodKey,
+        activeUpdatedGoalCount: activeBusinessPeriodKey
+          ? task.indicatorInstances.filter((indicator) => indicator.progressUpdates.some((progress) => (
+            progressSource(progress) === 'active_progress'
+            && progressBusinessPeriodKey(progress) === activeBusinessPeriodKey
+          ))).length
+          : 0,
+        goalCount: items.length,
+      },
       totalWeight: Math.round(items.reduce((sum, item) => sum + (item.weight ?? 0), 0) * 100) / 100,
       items,
     };
@@ -790,6 +847,14 @@ export class ObjectivesService {
             employeeId: true,
             status: true,
             selfEvalSubmittedAt: true,
+            publishedAt: true,
+            cycle: {
+              select: {
+                workflowVersion: true,
+                openedAt: true,
+                publishedAt: true,
+              },
+            },
           },
         },
       },
@@ -806,12 +871,7 @@ export class ObjectivesService {
         message: '只能更新本人的考核指标进展',
       });
     }
-    const editableStatuses = new Set<TaskStatus>([
-      TaskStatus.indicator_setting,
-      TaskStatus.indicator_confirming,
-      TaskStatus.self_eval,
-    ]);
-    if (!editableStatuses.has(indicator.task.status) || indicator.task.selfEvalSubmittedAt) {
+    if (!this.canSubmitActiveProgress(indicator.task, viewer)) {
       throw new ConflictException({
         code: ERROR_CODE.CONFLICT,
         message: '当前考核阶段不允许更新进展',
@@ -838,7 +898,7 @@ export class ObjectivesService {
           progress: input.progress,
           healthStatus: input.healthStatus,
           content: input.content,
-          attachments: input.attachments as Prisma.InputJsonValue,
+          attachments: [],
           createdBy: viewer.id,
         },
         include: { creator: { select: { id: true, name: true } } },
@@ -874,6 +934,8 @@ export class ObjectivesService {
         createdBy: created.creator.id,
         creatorName: created.creator.name,
         updatedAt: created.createdAt,
+        businessPeriodKey: progressBusinessPeriodKey(created),
+        source: progressSource(created),
       };
     });
   }
@@ -946,7 +1008,15 @@ export class ObjectivesService {
         task: {
           include: {
             employee: { select: { id: true, name: true } },
-            cycle: { select: { id: true, name: true } },
+            cycle: {
+              select: {
+                id: true,
+                name: true,
+                workflowVersion: true,
+                openedAt: true,
+                publishedAt: true,
+              },
+            },
           },
         },
         objectiveAlignments: {
@@ -958,7 +1028,10 @@ export class ObjectivesService {
         },
         progressUpdates: {
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-          include: { creator: { select: { id: true, name: true } } },
+          include: {
+            creator: { select: { id: true, name: true } },
+            period: { select: { periodKey: true } },
+          },
         },
       },
     });
@@ -980,12 +1053,8 @@ export class ObjectivesService {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
       include: { user: { select: { id: true, name: true } } },
     });
-    const editableStatuses = new Set<TaskStatus>([
-      TaskStatus.indicator_setting,
-      TaskStatus.indicator_confirming,
-      TaskStatus.self_eval,
-    ]);
     const effectiveWeight = Math.round(indicator.weight.toNumber() * 10_000) / 100;
+    const orderedProgress = sortGoalProgress(indicator.progressUpdates);
 
     return {
       id: indicator.id,
@@ -1013,11 +1082,9 @@ export class ObjectivesService {
       cycleId: indicator.task.cycle.id,
       cycleName: indicator.task.cycle.name,
       taskStatus: indicator.task.status,
-      canEdit: indicator.task.employeeId === viewer.id
-        && indicator.task.selfEvalSubmittedAt == null
-        && editableStatuses.has(indicator.task.status),
+      canEdit: this.canSubmitActiveProgress(indicator.task, viewer),
       alignedObjectives: indicator.objectiveAlignments.map(({ objective }) => objective),
-      progressUpdates: indicator.progressUpdates.map((progress) => ({
+      progressUpdates: orderedProgress.map((progress) => ({
         id: progress.id,
         progress: progress.progress,
         healthStatus: progress.healthStatus,
@@ -1026,6 +1093,8 @@ export class ObjectivesService {
         createdBy: progress.creator.id,
         creatorName: progress.creator.name,
         updatedAt: progress.createdAt,
+        businessPeriodKey: progressBusinessPeriodKey(progress),
+        source: progressSource(progress),
       })),
       changeRecords: changeRecords.map((record) => ({
         id: record.id,
@@ -1039,6 +1108,25 @@ export class ObjectivesService {
       createdAt: indicator.createdAt,
       updatedAt: indicator.updatedAt,
     };
+  }
+
+  private canSubmitActiveProgress(
+    task: {
+      employeeId: string;
+      publishedAt: Date | null;
+      cycle: {
+        workflowVersion: number;
+        openedAt: Date | null;
+        publishedAt: Date | null;
+      };
+    },
+    viewer: AuthUser,
+  ): boolean {
+    return task.employeeId === viewer.id
+      && task.cycle.workflowVersion === 2
+      && task.cycle.openedAt != null
+      && task.cycle.publishedAt == null
+      && task.publishedAt == null;
   }
 
   async assertVisibleIds(ids: string[], viewer: AuthUser): Promise<void> {

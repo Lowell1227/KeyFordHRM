@@ -67,6 +67,10 @@ const personalTaskProgressLabel = computed(() => {
   return personalTaskEntry.value?.progressLabel ?? '';
 });
 
+const personalTaskHintLabel = computed(() => {
+  return personalTaskEntry.value?.hintLabel ?? '';
+});
+
 function latestOpenTask(items: TaskListItem[]): TaskListItem | null {
   return items.find((task) => !isTerminalTaskStatus(task.status)) ?? null;
 }
@@ -138,6 +142,10 @@ function openTask(taskId: string) {
 
 function openPersonalTask(task: TaskListItem) {
   const entry = resolveEmployeeTaskEntry(task);
+  if (entry.actionPath) {
+    void router.push({ path: entry.actionPath, query: { cycleId: task.cycleId } });
+    return;
+  }
   void router.push({
     name: 'TaskDetail',
     params: { id: task.id },
@@ -318,6 +326,7 @@ function avatarColor(name: string): string {
             <span class="task-entry-card__eyebrow">当前阶段</span>
             <strong>{{ personalTaskStageLabel }}</strong>
             <span v-if="personalTaskProgressLabel" class="task-entry-card__progress">{{ personalTaskProgressLabel }}</span>
+            <span v-if="personalTaskHintLabel" class="task-entry-card__meta">{{ personalTaskHintLabel }}</span>
             <span class="task-entry-card__meta">{{ personalTask.cycleName || '当前考核周期' }}</span>
           </div>
           <el-button data-testid="employee-current-task-open" type="primary" @click="openPersonalTask(personalTask)">
@@ -354,6 +363,7 @@ function avatarColor(name: string): string {
               <span class="task-entry-card__eyebrow">我的任务</span>
               <strong>{{ personalTaskStageLabel }}</strong>
               <span v-if="personalTaskProgressLabel" class="task-entry-card__progress">{{ personalTaskProgressLabel }}</span>
+              <span v-if="personalTaskHintLabel" class="task-entry-card__meta">{{ personalTaskHintLabel }}</span>
               <span class="task-entry-card__meta">{{ personalTask.cycleName || '当前考核周期' }}</span>
             </div>
             <el-button text type="primary" @click="openPersonalTask(personalTask)">查看</el-button>

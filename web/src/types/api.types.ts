@@ -1296,6 +1296,8 @@ export interface PeriodReviewIndicator {
   targetValueText: string | null;
   unit: string | null;
   weight: number;
+  isScoreRequired: boolean;
+  monthlyProgressSource: 'draft_or_result' | 'active_progress' | 'none';
   progress: number | null;
   healthStatus: GoalTrackingHealthStatus | null;
   actualValueText: string | null;
@@ -1344,12 +1346,7 @@ export interface EmployeePeriodReviewItemBody {
   indicatorVersionItemId: string;
   progress?: number | null;
   healthStatus?: GoalTrackingHealthStatus | null;
-  actualValueText?: string | null;
   employeeComment?: string | null;
-  problemReason?: string | null;
-  nextMonthPlan?: string | null;
-  supportNeeded?: string | null;
-  attachments?: Attachment[];
   selfScore?: number | null;
 }
 
@@ -1361,11 +1358,7 @@ export interface SaveEmployeePeriodReviewDraftBody {
 export interface SubmitEmployeePeriodReviewBody {
   expectedVersion: number;
   idempotencyKey: string;
-  indicators: Array<EmployeePeriodReviewItemBody & {
-    progress: number;
-    healthStatus: GoalTrackingHealthStatus;
-    selfScore: number;
-  }>;
+  indicators: EmployeePeriodReviewItemBody[];
 }
 
 export interface PeriodReviewActionResult {
@@ -1377,7 +1370,7 @@ export interface PeriodReviewActionResult {
 
 export interface ManagerPeriodReviewItemBody {
   indicatorVersionItemId: string;
-  managerScore: number;
+  managerScore?: number | null;
   managerComment?: string | null;
 }
 
@@ -1561,6 +1554,7 @@ export interface Notification {
   type: string;
   title: string;
   content: string | null;
+  extraData?: Record<string, unknown> | null;
   channel: string;
   status: 'pending' | 'sent' | 'failed';
   isRead: boolean;
@@ -1945,6 +1939,8 @@ export interface GoalTrackingLatestProgress {
   createdBy?: string;
   creatorName?: string;
   updatedAt: string;
+  businessPeriodKey: string;
+  source: 'active_progress' | 'monthly_self_evaluation';
 }
 
 export type GoalTrackingHealthStatus = 'on_track' | 'at_risk' | 'blocked' | 'completed';
@@ -1981,6 +1977,14 @@ export interface GoalTrackingResult {
   taskStatus?: TaskStatus | null;
   canEdit?: boolean;
   monthlyFollowUpRequired?: boolean;
+  summary?: {
+    periodCount: number;
+    employeeSubmittedCount: number;
+    managerCompletedCount: number;
+    activeBusinessPeriodKey: string | null;
+    activeUpdatedGoalCount: number;
+    goalCount: number;
+  };
   totalWeight: number;
   items: GoalTrackingItem[];
 }
@@ -2017,8 +2021,58 @@ export interface UpdateGoalTrackingProgressBody {
   progress: number;
   healthStatus: GoalTrackingHealthStatus;
   content: string;
-  attachments: Attachment[];
   expectedLatestUpdateAt?: string | null;
+}
+
+export type PeriodMonitoringStatus = 'employee_pending' | 'employee_overdue' | 'manager_pending' | 'manager_completed';
+
+export interface PeriodMonitoringQuery {
+  page?: number;
+  pageSize?: number;
+  periodKey?: string;
+  status?: PeriodMonitoringStatus;
+  keyword?: string;
+}
+
+export interface PeriodMonitoringRow {
+  id: string;
+  taskId: string;
+  periodKey: string;
+  sequence: number;
+  status: AssessmentPeriodStatus;
+  derivedStatus: PeriodMonitoringStatus;
+  draftVersion: number;
+  employeeId: string;
+  employeeNo: string | null;
+  employeeName: string;
+  deptName: string | null;
+  managerName: string | null;
+  selfEvalOpenAt: string;
+  selfEvalDueAt: string;
+  managerDueAt: string;
+  employeeSubmittedAt: string | null;
+  managerSubmittedAt: string | null;
+  lockedAt: string | null;
+  selfScoreTotal: number | null;
+  managerScoreTotal: number | null;
+  canReopen: boolean;
+  reopenBlockedReason: string | null;
+}
+
+export interface PeriodMonitoringResult extends Paginated<PeriodMonitoringRow> {
+  cycle: { id: string; name: string };
+  summary: {
+    employeePending: number;
+    employeeOverdue: number;
+    managerPending: number;
+    managerCompleted: number;
+    total: number;
+  };
+}
+
+export interface ReopenPeriodReviewBody {
+  expectedVersion: number;
+  reason: string;
 }
 
 export interface GoalTrackingQuery {

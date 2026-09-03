@@ -52,7 +52,7 @@ function notificationLabel(cycle: AssessmentCycle): string {
 function scoringSummary(cycle: AssessmentCycle): string {
   if (cycle.workflowVersion !== 2) return '历史流程';
   return cycle.scoringFrequency === 'monthly'
-    ? `月度跟进 · ${cycle.periodSchedules?.length ?? 0}期`
+    ? `月度自评 · ${cycle.periodSchedules?.length ?? 0}期`
     : '周期结束统一评分';
 }
 

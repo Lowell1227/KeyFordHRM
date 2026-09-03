@@ -1,6 +1,5 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayMaxSize,
   ArrayMinSize,
   IsArray,
   IsEnum,
@@ -15,58 +14,33 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { IndicatorProgressHealth } from '@prisma/client';
-import { PeriodReviewAttachmentDto } from './period-review-attachment.dto';
 
 export class SubmitEmployeePeriodReviewItemDto {
   @IsUUID()
   indicatorVersionItemId!: string;
 
+  @IsOptional()
   @Type(() => Number)
   @IsInt()
   @Min(0)
   @Max(100)
-  progress!: number;
+  progress?: number | null;
 
+  @IsOptional()
   @IsEnum(IndicatorProgressHealth)
-  healthStatus!: IndicatorProgressHealth;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(200)
-  actualValueText?: string;
+  healthStatus?: IndicatorProgressHealth | null;
 
   @IsOptional()
   @IsString()
   @MaxLength(10_000)
-  employeeComment?: string;
+  employeeComment?: string | null;
 
   @IsOptional()
-  @IsString()
-  @MaxLength(10_000)
-  problemReason?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(10_000)
-  nextMonthPlan?: string;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(10_000)
-  supportNeeded?: string;
-
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(10)
-  @ValidateNested({ each: true })
-  @Type(() => PeriodReviewAttachmentDto)
-  attachments?: PeriodReviewAttachmentDto[];
-
   @Type(() => Number)
   @IsNumber()
   @Min(0)
   @Max(100)
-  selfScore!: number;
+  selfScore?: number | null;
 }
 
 export class SubmitEmployeePeriodReviewDto {

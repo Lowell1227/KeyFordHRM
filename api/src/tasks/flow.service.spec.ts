@@ -229,4 +229,50 @@ describe('FlowService', () => {
       );
     });
   });
+
+  describe('reopenPeriodTx', () => {
+    it.each([
+      TaskStatus.manager_scoring,
+      TaskStatus.dept_review,
+      TaskStatus.hr_calibration,
+      TaskStatus.approval,
+      TaskStatus.self_eval,
+    ])('将 %s 恢复为月度自评并保留一条撤回流程记录', async (status) => {
+      tx.assessmentTask.update.mockResolvedValue({ ...makeTask(status), status: TaskStatus.self_eval });
+
+      await service.reopenPeriodTx(tx as unknown as Prisma.TransactionClient, {
+        task: makeTask(status),
+        actorId: 'hr-1',
+        reason: '员工需要修正本月自评分',
+        periodId: 'period-1',
+        periodKey: '2026-09',
+        taskUpdate: { managerScoredAt: null, deptReviewedAt: null },
+      });
+
+      expect(tx.assessmentTask.update).toHaveBeenCalledWith({
+        where: { id: 'task-1' },
+        data: {
+          status: TaskStatus.self_eval,
+          managerScoredAt: null,
+          deptReviewedAt: null,
+        },
+      });
+      expect(tx.flowRecord.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          taskId: 'task-1',
+          cycleId: 'cycle-1',
+          nodeType: 'self_eval',
+          actorId: 'hr-1',
+          action: 'withdraw',
+          comment: '员工需要修正本月自评分',
+          extraData: expect.objectContaining({
+            type: 'monthly_self_evaluation_reopened',
+            periodId: 'period-1',
+            periodKey: '2026-09',
+            oldTaskStatus: status,
+          }),
+        }),
+      });
+    });
+  });
 });

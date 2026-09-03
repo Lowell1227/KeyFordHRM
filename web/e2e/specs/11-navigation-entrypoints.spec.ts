@@ -1228,6 +1228,32 @@ test.describe("11-navigation-entrypoints notification task links", () => {
     ).toBeNull();
   });
 
+  test("opens the exact month from monthly reminders and reopen messages", () => {
+    expect(resolveNotificationTarget(notificationItem({
+      taskId: 'task-monthly',
+      type: 'monthly_self_evaluation_reopened',
+      extraData: { periodId: 'period-september', action: 'employee_period_review' },
+    }), false)).toEqual({
+      name: 'TaskDetail',
+      params: { id: 'task-monthly' },
+      query: { stage: 'self-eval', periodId: 'period-september' },
+    });
+    expect(resolveNotificationTarget(notificationItem({
+      taskId: 'task-monthly',
+      type: 'monthly_self_eval_overdue_manager_notice',
+      extraData: { periodId: 'period-september', action: 'manager_period_review' },
+    }), true)).toEqual({
+      path: '/tasks',
+      query: {
+        scope: 'team',
+        stage: 'manager-eval',
+        cycleId: workspaceCycle.id,
+        taskId: 'task-monthly',
+        periodId: 'period-september',
+      },
+    });
+  });
+
   test("opens the cycle workspace from an in-app cycle review reminder", () => {
     expect(resolveNotificationTarget(notificationItem({
       taskId: null,

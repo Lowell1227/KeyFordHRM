@@ -18,35 +18,38 @@ describe('PeriodAggregationService', () => {
     flow.transitionTx.mockResolvedValue({ newStatus: 'dept_review' });
   });
 
-  it('equally averages completed valid periods and excludes no-result periods', async () => {
+  it('does not create a quarter score when a required month has no result', async () => {
     tx.assessmentTask.findUnique.mockResolvedValue({
       id: 'task-1', cycleId: 'cycle-1', status: 'manager_scoring',
       managerId: 'manager-1', deptHeadId: 'head-1',
       periods: [
-        { status: 'completed', managerScoreTotal: new Prisma.Decimal(80) },
-        { status: 'completed', managerScoreTotal: new Prisma.Decimal(90) },
-        { status: 'no_result', managerScoreTotal: null },
+        completedPeriod(80),
+        completedPeriod(90),
+        { status: 'no_result', managerScoreTotal: null, employeeSubmittedAt: null, managerSubmittedAt: null, lockedAt: null },
       ],
     });
 
     const result = await service.refreshTask('task-1', tx as any, 'manager-1');
 
-    expect(result).toEqual({ complete: true, score: 85, targetStatus: 'dept_review' });
-    expect(tx.gradeResult.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      create: expect.objectContaining({ calculatedScore: 85, rawGrade: 'B' }),
-      update: expect.objectContaining({ calculatedScore: 85, rawGrade: 'B' }),
-    }));
-    expect(flow.transitionTx).toHaveBeenCalledWith(tx, expect.objectContaining({
-      targetStatus: 'dept_review', actorId: 'manager-1',
-    }));
-    expect(tx.auditLog.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        action: 'period_scores_aggregated',
-        entityType: 'assessment_task',
-        entityId: 'task-1',
-        newValue: expect.objectContaining({ score: 85, validPeriodCount: 2, targetStatus: 'dept_review' }),
-      }),
+    expect(result).toEqual({ complete: false, score: null, targetStatus: null });
+    expect(tx.gradeResult.upsert).not.toHaveBeenCalled();
+    expect(flow.transitionTx).not.toHaveBeenCalled();
+  });
+
+  it('equally averages every completed monthly total after all submissions lock', async () => {
+    tx.assessmentTask.findUnique.mockResolvedValue({
+      id: 'task-1', cycleId: 'cycle-1', status: 'manager_scoring',
+      managerId: 'manager-1', deptHeadId: 'head-1', cycle: { workflowVersion: 2 },
+      periods: [completedPeriod(80), completedPeriod(90), completedPeriod(85.555)],
     });
+
+    const result = await service.refreshTask('task-1', tx as any, 'manager-1');
+
+    expect(result).toEqual({ complete: true, score: 85.19, targetStatus: 'dept_review' });
+    expect(tx.gradeResult.upsert).toHaveBeenCalledWith(expect.objectContaining({
+      create: expect.objectContaining({ calculatedScore: 85.19, rawGrade: 'B' }),
+      update: expect.objectContaining({ calculatedScore: 85.19, rawGrade: 'B' }),
+    }));
   });
 
   it('does not create an early score while any required period is unfinished', async () => {
@@ -54,8 +57,8 @@ describe('PeriodAggregationService', () => {
       id: 'task-1', cycleId: 'cycle-1', status: 'manager_scoring',
       managerId: 'manager-1', deptHeadId: 'head-1',
       periods: [
-        { status: 'completed', managerScoreTotal: new Prisma.Decimal(88) },
-        { status: 'self_eval', managerScoreTotal: null },
+        completedPeriod(88),
+        { status: 'self_eval', managerScoreTotal: null, employeeSubmittedAt: null, managerSubmittedAt: null, lockedAt: null },
       ],
     });
 
@@ -69,7 +72,7 @@ describe('PeriodAggregationService', () => {
     tx.assessmentTask.findUnique.mockResolvedValue({
       id: 'task-1', cycleId: 'cycle-1', status: 'manager_scoring',
       managerId: 'manager-1', deptHeadId: 'manager-1',
-      periods: [{ status: 'completed', managerScoreTotal: new Prisma.Decimal(92) }],
+      periods: [completedPeriod(92)],
     });
 
     await expect(service.refreshTask('task-1', tx as any, 'manager-1'))
@@ -84,7 +87,7 @@ describe('PeriodAggregationService', () => {
       id: 'task-1', cycleId: 'cycle-1', status: 'hr_calibration',
       managerId: 'manager-1', deptHeadId: 'manager-1',
       cycle: { workflowVersion: 2 },
-      periods: [{ status: 'completed', managerScoreTotal: new Prisma.Decimal(90) }],
+      periods: [completedPeriod(90)],
     });
 
     await expect(service.refreshTask('task-1', tx as any, 'manager-1'))
@@ -94,4 +97,14 @@ describe('PeriodAggregationService', () => {
     }));
     expect(flow.transitionTx).not.toHaveBeenCalled();
   });
+
+  function completedPeriod(score: number) {
+    return {
+      status: 'completed',
+      managerScoreTotal: new Prisma.Decimal(score),
+      employeeSubmittedAt: new Date('2026-07-30T08:00:00.000Z'),
+      managerSubmittedAt: new Date('2026-07-31T08:00:00.000Z'),
+      lockedAt: new Date('2026-07-31T08:00:00.000Z'),
+    };
+  }
 });

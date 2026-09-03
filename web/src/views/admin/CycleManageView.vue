@@ -11,6 +11,7 @@ import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.v
 import EmptyState from '@/components/common/EmptyState.vue';
 import CycleCompactTable from './components/CycleCompactTable.vue';
 import CycleWorkspaceShell from './components/CycleWorkspaceShell.vue';
+import CycleMonthlyProgressPanel from './components/CycleMonthlyProgressPanel.vue';
 import CycleParticipantScopePicker, { type ParticipantScopeMode } from './components/CycleParticipantScopePicker.vue';
 import CycleScoringSettings from './components/CycleScoringSettings.vue';
 import CycleMonthlyScheduleEditor from './components/CycleMonthlyScheduleEditor.vue';
@@ -1532,7 +1533,7 @@ async function handleReviewCycle(cycle: AssessmentCycle) {
   reviewActionMode.value = 'review';
   const scoringSummary = cycle.workflowVersion === 2
     ? cycle.scoringFrequency === 'monthly'
-      ? `月度跟进，共 ${cycle.periodSchedules?.length ?? 0} 期`
+      ? `月度自评，共 ${cycle.periodSchedules?.length ?? 0} 期`
       : '周期结束统一评分，共 1 期'
     : '历史流程';
   const reviewSummary = cycle.workflowVersion === 2
@@ -1624,7 +1625,16 @@ onMounted(() => {
       @review="cycleDetail && handleReviewCycle(cycleDetail)"
       @remind-review="handleRemindCycleReview"
       @resolve-blocker="handleResolvePreflightBlocker"
-    />
+    >
+      <template #monthly-progress>
+        <CycleMonthlyProgressPanel
+          v-if="cycleDetail?.openedAt && cycleDetail.workflowVersion === 2 && cycleDetail.scoringFrequency === 'monthly'"
+          :cycle-id="cycleDetail.id"
+          :period-keys="cycleDetail.periodSchedules?.map((schedule) => schedule.periodKey) ?? []"
+          :can-edit="canEditCyclePlan"
+        />
+      </template>
+    </CycleWorkspaceShell>
 
     <template v-else>
     <ChartCard class="list-page-header-card">
@@ -1880,7 +1890,7 @@ onMounted(() => {
             <div class="schedule-stage__title schedule-stage__title--tracking">
               <span class="schedule-stage__phase-number">2</span>
               <strong id="schedule-stage-tracking">目标跟进</strong>
-              <el-tooltip content="每月或者每个周期进行一次目标复盘和评分" placement="top">
+              <el-tooltip content="每月或者每个周期进行一次自评与评分" placement="top">
                 <el-icon class="schedule-stage__help"><QuestionFilled /></el-icon>
               </el-tooltip>
               <CycleScoringSettings

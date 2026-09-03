@@ -26,32 +26,40 @@ const formItems = reactive<ManagerFormItem[]>([]);
 const validationErrors = reactive<Record<string, string>>({});
 
 const canEdit = computed(() => Boolean(detail.value?.permissions.canEditManager));
+const employeeSubmitted = computed(() => Boolean(detail.value?.period.employeeSubmittedAt));
 const selectedIndicator = computed(() => detail.value?.indicators[selectedIndex.value]);
 const periodTitle = computed(() => {
   const period = detail.value?.period;
   if (!period) return '主管评分';
   if (period.periodType === 'cycle') return '整周期主管评分';
   const [year, month] = period.periodKey.split('-');
-  return `${year}年${Number(month)}月主管评分`;
+  return `${year}年${Number(month)}月主管月度评分`;
 });
-const followUpName = computed(() => detail.value?.period.periodType === 'cycle' ? '周期跟进' : '月度跟进');
-const completedCount = computed(() => formItems.filter((item) => item.managerScore != null).length);
+const followUpName = computed(() => detail.value?.period.periodType === 'cycle' ? '整周期自评' : '月度自评');
+const scoreRequiredCount = computed(() => detail.value?.indicators.filter((item) => item.isScoreRequired).length ?? 0);
+const completedCount = computed(() => formItems.filter((item, index) => (
+  detail.value?.indicators[index]?.isScoreRequired && item.managerScore != null
+)).length);
 const selfScoreTotal = computed(() => {
   if (detail.value?.period.selfScoreTotal != null) return detail.value.period.selfScoreTotal;
-  if (!detail.value || detail.value.indicators.some((item) => item.selfScore == null)) return null;
+  if (!detail.value || detail.value.indicators.some((item) => item.isScoreRequired && item.selfScore == null)) return null;
   return weightedTotal(detail.value.indicators.map((item) => item.selfScore));
 });
 const managerScoreTotal = computed(() => {
   if (!detail.value || formItems.length !== detail.value.indicators.length) return null;
-  if (formItems.some((item) => item.managerScore == null)) return null;
+  if (formItems.some((item, index) => detail.value?.indicators[index]?.isScoreRequired && item.managerScore == null)) return null;
   return weightedTotal(formItems.map((item) => item.managerScore));
 });
 
 function weightedTotal(scores: Array<number | null>): number {
-  const total = scores.reduce<number>((sum, score, index) => (
-    sum + (score ?? 0) * (detail.value?.indicators[index]?.weight ?? 0)
-  ), 0);
-  return Math.round(total * 100) / 100;
+  const weighted = scores.reduce<number>((sum, score, index) => {
+    const indicator = detail.value?.indicators[index];
+    return indicator?.isScoreRequired ? sum + (score ?? 0) * indicator.weight : sum;
+  }, 0);
+  const weight = detail.value?.indicators.reduce((sum, indicator) => (
+    indicator.isScoreRequired ? sum + indicator.weight : sum
+  ), 0) ?? 0;
+  return weight > 0 ? Math.round((weighted / weight) * 100) / 100 : 0;
 }
 
 function replaceForm(next: PeriodReviewDetail) {
@@ -80,9 +88,9 @@ async function loadReview() {
 }
 
 function bodyItems() {
-  return formItems.filter((item) => item.managerScore != null).map((item) => ({
+  return formItems.map((item, index) => ({
     indicatorVersionItemId: item.indicatorVersionItemId,
-    managerScore: item.managerScore!,
+    managerScore: detail.value?.indicators[index]?.isScoreRequired ? item.managerScore : null,
     managerComment: item.managerComment.trim() || null,
   }));
 }
@@ -115,8 +123,10 @@ function warningFor(index: number): string[] {
 
 function validate(): boolean {
   for (const key of Object.keys(validationErrors)) delete validationErrors[key];
-  formItems.forEach((item) => {
-    if (item.managerScore == null) validationErrors[item.indicatorVersionItemId] = '请填写0-100分的主管评分';
+  formItems.forEach((item, index) => {
+    if (detail.value?.indicators[index]?.isScoreRequired && item.managerScore == null) {
+      validationErrors[item.indicatorVersionItemId] = '请填写0-100分的主管评分';
+    }
   });
   const firstInvalid = formItems.findIndex((item) => validationErrors[item.indicatorVersionItemId]);
   if (firstInvalid >= 0) selectedIndex.value = firstInvalid;
@@ -203,16 +213,25 @@ watch(() => props.periodId, loadReview, { immediate: true });
         <div>
           <span>自评总分</span>
           <strong data-testid="manager-review-self-total">{{ selfScoreTotal ?? '--' }}</strong>
-          <small>Σ 自评分 × 权重</small>
+          <small>按有效权重自动计算</small>
         </div>
         <div>
           <span>主管总分</span>
           <strong data-testid="manager-review-manager-total">{{ managerScoreTotal ?? '--' }}</strong>
-          <small>Σ 主管评分 × 权重</small>
+          <small>按有效权重自动计算</small>
         </div>
       </div>
 
+      <el-alert
+        v-if="!employeeSubmitted"
+        title="员工尚未提交月度自评，主管评分暂未开放"
+        type="info"
+        :closable="false"
+        show-icon
+      />
+
       <PerformanceFormWorkspace
+        v-else
         reference-title="参考信息"
         reference-test-id="manager-review-reference"
         workspace-test-id="manager-review-form-workspace"
@@ -235,15 +254,17 @@ watch(() => props.periodId, loadReview, { immediate: true });
               <div class="manager-score-card__employee">
                 <div><span>员工完成度</span><strong>{{ indicator.progress ?? '--' }}{{ indicator.progress == null ? '' : '%' }}</strong></div>
                 <div><span>员工自评分</span><strong>{{ indicator.selfScore ?? '--' }}{{ indicator.selfScore == null ? '' : '分' }}</strong></div>
-                <div class="is-wide"><span>完成情况</span><strong>{{ indicator.actualValueText || indicator.employeeComment || '员工未填写说明' }}</strong></div>
+                <div><span>状态</span><strong>{{ indicator.healthStatus === 'on_track' ? '正常推进' : indicator.healthStatus === 'at_risk' ? '存在风险' : indicator.healthStatus === 'blocked' ? '当前受阻' : indicator.healthStatus === 'completed' ? '已经完成' : '本月未更新' }}</strong></div>
+                <div class="is-wide"><span>描述</span><strong>{{ indicator.employeeComment || '员工未填写描述' }}</strong></div>
               </div>
               <div class="manager-score-card__form">
-                <label>
+                <label v-if="indicator.isScoreRequired">
                   <span>主管评分 <b>*</b></span>
                   <el-input-number v-model="formItems[index].managerScore" :min="0" :max="100" :controls="false" :disabled="!canEdit" aria-label="主管评分" placeholder="0-100" @change="delete validationErrors[indicator.indicatorVersionItemId]" />
                   <em v-if="validationErrors[indicator.indicatorVersionItemId]">{{ validationErrors[indicator.indicatorVersionItemId] }}</em>
                 </label>
-                <el-button :disabled="!canEdit || indicator.selfScore == null" @click.stop="useSelfScore(index)">同意自评</el-button>
+                <div v-else class="manager-score-card__exempt">不参与评分</div>
+                <el-button v-if="indicator.isScoreRequired" :disabled="!canEdit || indicator.selfScore == null" @click.stop="useSelfScore(index)">同意自评</el-button>
                 <label class="is-comment">
                   <span>主管说明 <i>选填</i></span>
                   <el-input v-model="formItems[index].managerComment" :disabled="!canEdit" type="textarea" :rows="2" placeholder="填写评价依据或反馈建议" />
@@ -258,7 +279,7 @@ watch(() => props.periodId, loadReview, { immediate: true });
         <template #reference><MonthlyReviewReferencePanel :indicator="selectedIndicator" /></template>
         <template #actions>
           <footer v-if="canEdit" class="manager-review-actions" data-testid="manager-review-actions">
-            <div><strong>评分完成 {{ completedCount }}/{{ formItems.length }}</strong><span>主管说明选填；分差和低分只提醒，不阻止提交</span></div>
+            <div><strong>评分完成 {{ completedCount }}/{{ scoreRequiredCount }}</strong><span>主管说明选填；分差和低分只提醒，不阻止提交</span></div>
             <div>
               <el-button :loading="returning" :disabled="saving || submitting" @mousedown.prevent @click="returnReview">退回员工补充</el-button>
               <el-button :loading="saving" :disabled="returning || submitting" @mousedown.prevent @click="saveDraft">保存草稿</el-button>

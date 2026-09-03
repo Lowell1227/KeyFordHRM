@@ -1,6 +1,5 @@
 import { Type } from 'class-transformer';
 import {
-  ArrayMaxSize,
   IsArray,
   IsEnum,
   IsInt,
@@ -14,7 +13,6 @@ import {
   ValidateNested,
 } from 'class-validator';
 import { IndicatorProgressHealth } from '@prisma/client';
-import { PeriodReviewAttachmentDto } from './period-review-attachment.dto';
 
 export class EmployeePeriodReviewDraftItemDto {
   @IsUUID()
@@ -33,35 +31,8 @@ export class EmployeePeriodReviewDraftItemDto {
 
   @IsOptional()
   @IsString()
-  @MaxLength(200)
-  actualValueText?: string | null;
-
-  @IsOptional()
-  @IsString()
   @MaxLength(10_000)
   employeeComment?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(10_000)
-  problemReason?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(10_000)
-  nextMonthPlan?: string | null;
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(10_000)
-  supportNeeded?: string | null;
-
-  @IsOptional()
-  @IsArray()
-  @ArrayMaxSize(10)
-  @ValidateNested({ each: true })
-  @Type(() => PeriodReviewAttachmentDto)
-  attachments?: PeriodReviewAttachmentDto[];
 
   @IsOptional()
   @Type(() => Number)

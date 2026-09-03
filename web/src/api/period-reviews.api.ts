@@ -7,9 +7,19 @@ import type {
   SaveManagerPeriodReviewDraftBody,
   ReturnManagerPeriodReviewBody,
   SubmitManagerPeriodReviewBody,
+  PeriodMonitoringQuery,
+  PeriodMonitoringResult,
+  ReopenPeriodReviewBody,
 } from '@/types/api.types';
 
 export const periodReviewsApi = {
+  findCycleMonitoring(
+    cycleId: string,
+    query: PeriodMonitoringQuery,
+  ): Promise<PeriodMonitoringResult> {
+    return http.get(`/assessment-periods/cycle/${cycleId}/monitoring`, { params: query }) as unknown as Promise<PeriodMonitoringResult>;
+  },
+
   findOne(periodId: string): Promise<PeriodReviewDetail> {
     return http.get(`/assessment-periods/${periodId}/review`) as unknown as Promise<PeriodReviewDetail>;
   },
@@ -47,5 +57,12 @@ export const periodReviewsApi = {
     body: SubmitManagerPeriodReviewBody,
   ): Promise<PeriodReviewActionResult> {
     return http.post(`/assessment-periods/${periodId}/manager-submit`, body) as unknown as Promise<PeriodReviewActionResult>;
+  },
+
+  reopenPeriodReview(
+    periodId: string,
+    body: ReopenPeriodReviewBody,
+  ): Promise<PeriodReviewActionResult> {
+    return http.post(`/assessment-periods/${periodId}/reopen`, body) as unknown as Promise<PeriodReviewActionResult>;
   },
 };

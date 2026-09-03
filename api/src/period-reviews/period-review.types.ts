@@ -4,6 +4,7 @@ import type {
   IndicatorProgressHealth,
   ObjectiveLevel,
 } from '@prisma/client';
+import type { PeriodMonitoringStatus } from './dto/query-period-monitoring.dto';
 
 export interface PeriodReviewHistoryItem {
   periodKey: string;
@@ -52,6 +53,8 @@ export interface PeriodReviewDetail {
     targetValueText: string | null;
     unit: string | null;
     weight: number;
+    isScoreRequired: boolean;
+    monthlyProgressSource: 'draft_or_result' | 'active_progress' | 'none';
     progress: number | null;
     healthStatus: IndicatorProgressHealth | null;
     actualValueText: string | null;
@@ -80,4 +83,44 @@ export interface PeriodReviewActionResult {
   status: AssessmentPeriodStatus;
   draftVersion: number;
   savedAt: Date;
+}
+
+export interface PeriodMonitoringRow {
+  id: string;
+  taskId: string;
+  periodKey: string;
+  sequence: number;
+  status: AssessmentPeriodStatus;
+  derivedStatus: PeriodMonitoringStatus;
+  draftVersion: number;
+  employeeId: string;
+  employeeNo: string | null;
+  employeeName: string;
+  deptName: string | null;
+  managerName: string | null;
+  selfEvalOpenAt: Date;
+  selfEvalDueAt: Date;
+  managerDueAt: Date;
+  employeeSubmittedAt: Date | null;
+  managerSubmittedAt: Date | null;
+  lockedAt: Date | null;
+  selfScoreTotal: number | null;
+  managerScoreTotal: number | null;
+  canReopen: boolean;
+  reopenBlockedReason: string | null;
+}
+
+export interface PeriodMonitoringResult {
+  cycle: { id: string; name: string };
+  summary: {
+    employeePending: number;
+    employeeOverdue: number;
+    managerPending: number;
+    managerCompleted: number;
+    total: number;
+  };
+  total: number;
+  page: number;
+  pageSize: number;
+  items: PeriodMonitoringRow[];
 }

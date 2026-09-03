@@ -20,7 +20,10 @@ import type { SaveManagerPeriodReviewDraftDto } from './dto/save-manager-period-
 import type { ReturnManagerPeriodReviewDto } from './dto/return-manager-period-review.dto';
 import type { SubmitManagerPeriodReviewDto } from './dto/submit-manager-period-review.dto';
 import { PeriodAggregationService } from './period-aggregation.service';
-import { periodReviewNoun, periodReviewTitle } from './period-review-labels';
+import { FlowService } from '@/tasks/flow.service';
+import { hasHrCapability } from '@/auth/hr-capabilities';
+import type { ReopenPeriodReviewDto } from './dto/reopen-period-review.dto';
+import { managerPeriodReviewTitle, periodReviewNoun, periodReviewTitle } from './period-review-labels';
 import type { PeriodReviewActionResult, PeriodReviewDetail } from './period-review.types';
 
 const periodInclude = {
@@ -29,7 +32,16 @@ const periodInclude = {
       employee: { select: { id: true, name: true, employeeNo: true } },
       manager: { select: { id: true, name: true } },
       dept: { select: { id: true, name: true } },
-      cycle: { select: { id: true, name: true, notificationMode: true } },
+      cycle: { select: { id: true, name: true, notificationMode: true, publishedAt: true } },
+      gradeResult: {
+        select: {
+          isPublished: true,
+          publishedAt: true,
+          calculatedScore: true,
+          rawGrade: true,
+          calibratedGrade: true,
+        },
+      },
     },
   },
   indicatorVersion: {
@@ -73,6 +85,7 @@ export class PeriodReviewsService {
     private readonly prisma: PrismaService,
     private readonly notifications: NotificationsService,
     private readonly aggregation: PeriodAggregationService,
+    private readonly flow: FlowService,
   ) {}
 
   async getReview(periodId: string, viewer: AuthUser): Promise<PeriodReviewDetail> {
@@ -82,6 +95,7 @@ export class PeriodReviewsService {
     const sourceIds = (period.indicatorVersion?.items ?? [])
       .map((item) => item.sourceInstanceId)
       .filter((id): id is string => Boolean(id));
+    const progressRange = this.progressRange(period);
     const [sources, previousPeriods]: [SourceContext[], PreviousPeriodContext[]] = await Promise.all([
       sourceIds.length
         ? this.prisma.indicatorInstance.findMany({
@@ -90,7 +104,10 @@ export class PeriodReviewsService {
             ...sourceSelect,
             progressUpdates: {
               ...sourceSelect.progressUpdates,
-              where: { createdAt: { gte: period.periodStart, lte: period.periodEnd } },
+              where: {
+                periodId: null,
+                createdAt: { gte: progressRange.gte, lt: progressRange.lt },
+              },
             },
           },
         })
@@ -131,12 +148,21 @@ export class PeriodReviewsService {
       },
       permissions: {
         canEditEmployee: this.canEditEmployee(period, viewer),
-        canEditManager: period.managerId === viewer.id && period.status === 'manager_scoring' && !period.managerSubmittedAt,
+        canEditManager: period.managerId === viewer.id
+          && period.status === 'manager_scoring'
+          && period.employeeSubmittedAt != null
+          && !period.managerSubmittedAt,
       },
       indicators: (period.indicatorVersion?.items ?? []).map((item) => {
         const review = currentByItem.get(item.id);
         const source = item.sourceInstanceId ? sourceById.get(item.sourceInstanceId) : undefined;
         const latest = source?.progressUpdates[0];
+        const monthlyProgressSource = review
+          ? 'draft_or_result'
+          : latest
+            ? 'active_progress'
+            : 'none';
+        const isScoreRequired = this.isScoreRequired(item.weight);
         return {
           indicatorVersionItemId: item.id,
           sourceInstanceId: item.sourceInstanceId,
@@ -147,15 +173,17 @@ export class PeriodReviewsService {
           targetValueText: item.targetValueText,
           unit: item.unit,
           weight: item.weight.toNumber(),
-          progress: review?.progress ?? null,
-          healthStatus: review?.healthStatus ?? null,
+          isScoreRequired,
+          monthlyProgressSource,
+          progress: review ? review.progress : latest?.progress ?? null,
+          healthStatus: review ? review.healthStatus : latest?.healthStatus ?? null,
           actualValueText: review?.actualValueText ?? null,
-          employeeComment: review?.employeeComment ?? null,
+          employeeComment: review ? review.employeeComment : latest?.content ?? null,
           problemReason: review?.problemReason ?? null,
           nextMonthPlan: review?.nextMonthPlan ?? null,
           supportNeeded: review?.supportNeeded ?? null,
           attachments: this.jsonArray(review?.employeeAttachments),
-          selfScore: this.decimalNumber(review?.selfScore),
+          selfScore: isScoreRequired ? this.decimalNumber(review?.selfScore) : null,
           managerScore: this.decimalNumber(review?.managerScore),
           managerComment: review?.managerComment ?? null,
           latestProgress: latest ? {
@@ -181,11 +209,13 @@ export class PeriodReviewsService {
     this.assertEmployeeEditable(period, viewer);
     this.assertKnownItems(period, dto.indicators.map((item) => item.indicatorVersionItemId), false);
     const savedAt = new Date();
+    const itemsById = new Map((period.indicatorVersion?.items ?? []).map((item) => [item.id, item]));
 
     const draftVersion = await this.prisma.$transaction(async (tx) => {
       const nextVersion = await this.claimDraftVersion(tx, period, dto.expectedVersion);
       for (const item of dto.indicators) {
-        const data = this.employeeReviewData(item);
+        const versionItem = itemsById.get(item.indicatorVersionItemId)!;
+        const data = this.employeeReviewData(item, this.isScoreRequired(versionItem.weight));
         await tx.assessmentPeriodIndicatorReview.upsert({
           where: {
             periodId_indicatorVersionItemId: {
@@ -216,12 +246,14 @@ export class PeriodReviewsService {
     const period = await this.getPeriod(periodId);
     this.assertEmployeeEditable(period, viewer);
     this.assertKnownItems(period, dto.indicators.map((item) => item.indicatorVersionItemId), true);
+    this.assertEmployeeScores(period, dto.indicators);
     const submittedAt = new Date();
     const itemsById = new Map((period.indicatorVersion?.items ?? []).map((item) => [item.id, item]));
-    const selfScoreTotal = Number(dto.indicators.reduce((sum, item) => {
-      const weight = itemsById.get(item.indicatorVersionItemId)?.weight.toNumber() ?? 0;
-      return sum + item.selfScore * weight;
-    }, 0).toFixed(2));
+    const selfScoreTotal = this.weightedScoreTotal(
+      itemsById,
+      dto.indicators,
+      (item) => item.selfScore,
+    );
 
     const result = await this.prisma.$transaction(async (tx) => {
       const draftVersion = await this.claimDraftVersion(tx, period, dto.expectedVersion);
@@ -238,12 +270,7 @@ export class PeriodReviewsService {
           indicatorVersionItemId: item.indicatorVersionItemId,
           progress: item.progress,
           healthStatus: item.healthStatus,
-          actualValueText: item.actualValueText ?? null,
           employeeComment: item.employeeComment ?? null,
-          problemReason: item.problemReason ?? null,
-          nextMonthPlan: item.nextMonthPlan ?? null,
-          supportNeeded: item.supportNeeded ?? null,
-          attachments: this.attachmentsJson(item.attachments),
           selfScore: item.selfScore,
         })) as Prisma.InputJsonArray,
       };
@@ -259,7 +286,8 @@ export class PeriodReviewsService {
       });
       for (const item of dto.indicators) {
         const versionItem = itemsById.get(item.indicatorVersionItemId)!;
-        const data = this.employeeReviewData(item);
+        const scoreRequired = this.isScoreRequired(versionItem.weight);
+        const data = this.employeeReviewData(item, scoreRequired);
         await tx.assessmentPeriodIndicatorReview.upsert({
           where: {
             periodId_indicatorVersionItemId: {
@@ -270,7 +298,11 @@ export class PeriodReviewsService {
           create: { periodId, indicatorVersionItemId: item.indicatorVersionItemId, ...data },
           update: data,
         });
-        if (versionItem.sourceInstanceId) {
+        if (
+          versionItem.sourceInstanceId
+          && item.progress != null
+          && item.healthStatus != null
+        ) {
           await tx.indicatorProgressUpdate.create({
             data: {
               indicatorInstanceId: versionItem.sourceInstanceId,
@@ -278,9 +310,8 @@ export class PeriodReviewsService {
               periodReviewRevisionId: formalRevision.id,
               progress: item.progress,
               healthStatus: item.healthStatus,
-              content: this.optionalText(item.employeeComment)
-                ?? this.progressSummary(period.periodType, item.progress, item.healthStatus),
-              attachments: this.attachmentsJson(item.attachments),
+              content: this.optionalText(item.employeeComment) ?? '',
+              attachments: [],
               createdBy: viewer.id,
             },
           });
@@ -328,9 +359,14 @@ export class PeriodReviewsService {
         cycleId: period.task.cycleId,
         taskId: period.taskId,
         type: 'monthly_manager_score_opened',
-        title: `员工已提交${periodReviewNoun(period.periodType)}与自评`,
+        title: `员工已提交${periodReviewNoun(period.periodType)}`,
         content: `${period.task.employee.name}已提交${periodReviewTitle(period.periodType, period.periodKey)}，请完成评分。`,
-        extraData: { periodId, periodKey: period.periodKey },
+        extraData: {
+          taskId: period.taskId,
+          periodId,
+          periodKey: period.periodKey,
+          action: 'manager_period_review',
+        },
       });
     }
     return result;
@@ -342,14 +378,16 @@ export class PeriodReviewsService {
     viewer: AuthUser,
   ): Promise<PeriodReviewActionResult> {
     const period = await this.getPeriod(periodId);
-    this.assertManagerEditable(period, viewer, false);
+    this.assertManagerEditable(period, viewer, true);
     this.assertKnownItems(period, dto.indicators.map((item) => item.indicatorVersionItemId), false);
     const savedAt = new Date();
+    const itemsById = new Map((period.indicatorVersion?.items ?? []).map((item) => [item.id, item]));
 
     const draftVersion = await this.prisma.$transaction(async (tx) => {
       const nextVersion = await this.claimManagerDraftVersion(tx, period, dto.expectedVersion);
       for (const item of dto.indicators) {
-        const data = this.managerReviewData(item);
+        const versionItem = itemsById.get(item.indicatorVersionItemId)!;
+        const data = this.managerReviewData(item, this.isScoreRequired(versionItem.weight));
         await tx.assessmentPeriodIndicatorReview.upsert({
           where: {
             periodId_indicatorVersionItemId: {
@@ -452,9 +490,14 @@ export class PeriodReviewsService {
         type: 'period_employee_review_returned',
         title: `${periodReviewTitle(period.periodType, period.periodKey)}已退回`,
         content: reason
-          ? `主管退回了本期复盘：${reason}`
-          : '主管退回了本期复盘，请补充后重新提交。',
-        extraData: { periodId, periodKey: period.periodKey },
+          ? `主管退回了本期自评：${reason}`
+          : '主管退回了本期自评，请修改后重新提交。',
+        extraData: {
+          taskId: period.taskId,
+          periodId,
+          periodKey: period.periodKey,
+          action: 'employee_period_review',
+        },
       });
     }
     return result;
@@ -471,14 +514,16 @@ export class PeriodReviewsService {
     if (previous) return this.actionResultFromRevision(previous.snapshot, periodId);
 
     const period = await this.getPeriod(periodId);
-    this.assertManagerEditable(period, viewer, false);
+    this.assertManagerEditable(period, viewer, true);
     this.assertKnownItems(period, dto.indicators.map((item) => item.indicatorVersionItemId), true);
+    this.assertManagerScores(period, dto.indicators);
     const submittedAt = new Date();
     const itemsById = new Map((period.indicatorVersion?.items ?? []).map((item) => [item.id, item]));
-    const managerScoreTotal = Number(dto.indicators.reduce((sum, item) => {
-      const weight = itemsById.get(item.indicatorVersionItemId)?.weight.toNumber() ?? 0;
-      return sum + item.managerScore * weight;
-    }, 0).toFixed(2));
+    const managerScoreTotal = this.weightedScoreTotal(
+      itemsById,
+      dto.indicators,
+      (item) => item.managerScore,
+    );
 
     const result = await this.prisma.$transaction(async (tx) => {
       const draftVersion = await this.claimManagerDraftVersion(tx, period, dto.expectedVersion);
@@ -509,7 +554,8 @@ export class PeriodReviewsService {
         },
       });
       for (const item of dto.indicators) {
-        const data = this.managerReviewData(item);
+        const versionItem = itemsById.get(item.indicatorVersionItemId)!;
+        const data = this.managerReviewData(item, this.isScoreRequired(versionItem.weight));
         await tx.assessmentPeriodIndicatorReview.upsert({
           where: {
             periodId_indicatorVersionItemId: {
@@ -550,12 +596,198 @@ export class PeriodReviewsService {
         cycleId: period.task.cycleId,
         taskId: period.taskId,
         type: 'period_manager_review_completed',
-        title: `${periodReviewTitle(period.periodType, period.periodKey)}已完成`,
+        title: `${managerPeriodReviewTitle(period.periodType, period.periodKey)}已完成`,
         content: '主管已完成本期评分，最终周期结果将在全部期间评分完成后汇总。',
-        extraData: { periodId, periodKey: period.periodKey },
+        extraData: {
+          taskId: period.taskId,
+          periodId,
+          periodKey: period.periodKey,
+          action: 'employee_period_review',
+        },
       });
     }
     return result;
+  }
+
+  async reopenPeriodReview(
+    periodId: string,
+    dto: ReopenPeriodReviewDto,
+    viewer: AuthUser,
+  ): Promise<PeriodReviewActionResult> {
+    if (!hasHrCapability(viewer, 'cycle_plan_edit')) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权重新开放月度自评' });
+    }
+    const reason = this.optionalText(dto.reason);
+    if (!reason) {
+      throw new ConflictException({ code: ERROR_CODE.PARAM_INVALID, message: '请填写重新开放原因' });
+    }
+    const reopenedAt = new Date();
+
+    const context = await this.prisma.$transaction(async (tx) => {
+      const period = await tx.assessmentPeriod.findUnique({
+        where: { id: periodId },
+        include: periodInclude,
+      });
+      if (!period) {
+        throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '月度自评不存在' });
+      }
+      if (period.periodType !== 'month') {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '仅月度自评支持重新开放' });
+      }
+      const gradeResult = period.task.gradeResult;
+      if (
+        period.task.cycle.publishedAt
+        || period.task.publishedAt
+        || gradeResult?.isPublished
+        || gradeResult?.publishedAt
+        || ['published', 'confirmed', 'appealing', 'closed'].includes(period.task.status)
+      ) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '结果已经公示，请走现有结果更正流程',
+        });
+      }
+      if (
+        period.status !== AssessmentPeriodStatus.completed
+        || !period.employeeSubmittedAt
+        || !period.managerSubmittedAt
+        || !period.lockedAt
+      ) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '主管尚未提交并锁定本月评分，请使用主管退回',
+        });
+      }
+
+      const claimed = await tx.assessmentPeriod.updateMany({
+        where: {
+          id: periodId,
+          draftVersion: dto.expectedVersion,
+          status: AssessmentPeriodStatus.completed,
+          managerSubmittedAt: { not: null },
+          lockedAt: { not: null },
+        },
+        data: { draftVersion: { increment: 1 } },
+      });
+      if (claimed.count !== 1) {
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: '月份状态已更新，请刷新后重试',
+        });
+      }
+      const draftVersion = dto.expectedVersion + 1;
+
+      await tx.assessmentPeriodIndicatorReview.updateMany({
+        where: { periodId },
+        data: { managerScore: null, managerComment: null },
+      });
+      await tx.assessmentPeriod.update({
+        where: { id: periodId },
+        data: {
+          status: AssessmentPeriodStatus.self_eval,
+          employeeSubmittedAt: null,
+          managerSubmittedAt: null,
+          lockedAt: null,
+          selfScoreTotal: null,
+          managerScoreTotal: null,
+        },
+      });
+      await this.flow.reopenPeriodTx(tx, {
+        task: period.task,
+        actorId: viewer.id,
+        reason,
+        periodId,
+        periodKey: period.periodKey,
+        taskUpdate: {
+          selfEvalSubmittedAt: null,
+          managerScoredAt: null,
+          deptReviewedAt: null,
+          hrCalibratedAt: null,
+          approvedAt: null,
+          employeeConfirmedAt: null,
+          closedAt: null,
+        },
+      });
+      await tx.gradeResult.updateMany({
+        where: { taskId: period.taskId, isPublished: false },
+        data: {
+          calculatedScore: null,
+          rawGrade: null,
+          calibratedGrade: null,
+          calibrationNote: null,
+          isVeto: false,
+          vetoReason: null,
+          vetoOperatorId: null,
+          coefficient: null,
+          hrCalibratorId: null,
+          hrCalibratedAt: null,
+          approverId: null,
+          approvedAt: null,
+          employeeConfirmedAt: null,
+          publishedAt: null,
+        },
+      });
+      await tx.auditLog.create({
+        data: {
+          userId: viewer.id,
+          action: 'monthly_self_evaluation_reopened',
+          entityType: 'assessment_period',
+          entityId: periodId,
+          oldValue: {
+            status: period.status,
+            taskStatus: period.task.status,
+            draftVersion: period.draftVersion,
+            employeeSubmittedAt: period.employeeSubmittedAt.toISOString(),
+            managerSubmittedAt: period.managerSubmittedAt.toISOString(),
+            lockedAt: period.lockedAt.toISOString(),
+            selfScoreTotal: this.decimalNumber(period.selfScoreTotal),
+            managerScoreTotal: this.decimalNumber(period.managerScoreTotal),
+          },
+          newValue: {
+            status: AssessmentPeriodStatus.self_eval,
+            taskStatus: 'self_eval',
+            draftVersion,
+            reason,
+            reopenedAt: reopenedAt.toISOString(),
+          },
+        },
+      });
+
+      return {
+        periodId,
+        status: AssessmentPeriodStatus.self_eval,
+        draftVersion,
+        savedAt: reopenedAt,
+        taskId: period.taskId,
+        cycleId: period.task.cycleId,
+        employeeId: period.task.employeeId,
+        periodKey: period.periodKey,
+      };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+
+    await this.notifications.create({
+      dedupeKey: `period-reopened:${periodId}:${context.draftVersion}:${context.employeeId}`,
+      userId: context.employeeId,
+      senderId: viewer.id,
+      cycleId: context.cycleId,
+      taskId: context.taskId,
+      type: 'monthly_self_evaluation_reopened',
+      title: '月度自评已重新开放',
+      content: `${context.periodKey}月度自评已重新开放，原因：${reason}。请修改后重新提交。`,
+      extraData: {
+        periodId,
+        periodKey: context.periodKey,
+        taskId: context.taskId,
+        action: 'employee_period_review',
+      },
+    });
+
+    return {
+      periodId: context.periodId,
+      status: context.status,
+      draftVersion: context.draftVersion,
+      savedAt: context.savedAt,
+    };
   }
 
   private async getPeriod(periodId: string): Promise<PeriodWithContext> {
@@ -563,7 +795,7 @@ export class PeriodReviewsService {
       where: { id: periodId },
       include: periodInclude,
     });
-    if (!period) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '复盘与评分任务不存在' });
+    if (!period) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '月度自评任务不存在' });
     if (!period.indicatorVersion) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '本期目标版本尚未确认' });
     }
@@ -590,7 +822,7 @@ export class PeriodReviewsService {
 
   private assertEmployeeEditable(period: PeriodWithContext, viewer: AuthUser): void {
     if (period.task.employeeId !== viewer.id) {
-      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅员工本人可填写本期复盘' });
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅员工本人可填写本期自评' });
     }
     if (!this.canEditEmployee(period, viewer)) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前复盘不可编辑' });
@@ -605,7 +837,7 @@ export class PeriodReviewsService {
     if (!valid || !complete) {
       throw new ConflictException({
         code: ERROR_CODE.PARAM_INVALID,
-        message: requireComplete ? '请完成每一项目标的本期复盘' : '包含不属于本期目标的内容',
+        message: requireComplete ? '请提交每一项目标的本期自评' : '包含不属于本期目标的内容',
       });
     }
   }
@@ -622,7 +854,7 @@ export class PeriodReviewsService {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前期间不可进行主管评分' });
     }
     if (requireEmployeeSubmission && !period.employeeSubmittedAt) {
-      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '员工尚未提交本期复盘' });
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '员工尚未提交本期自评' });
     }
   }
 
@@ -678,33 +910,30 @@ export class PeriodReviewsService {
   private employeeReviewData(item: {
     progress?: number | null;
     healthStatus?: IndicatorProgressHealth | null;
-    actualValueText?: string | null;
     employeeComment?: string | null;
-    problemReason?: string | null;
-    nextMonthPlan?: string | null;
-    supportNeeded?: string | null;
-    attachments?: Array<{ name: string; url: string; size?: number }>;
     selfScore?: number | null;
-  }) {
+  }, scoreRequired: boolean) {
     return {
       progress: item.progress,
       healthStatus: item.healthStatus,
-      actualValueText: this.optionalText(item.actualValueText),
       employeeComment: this.optionalText(item.employeeComment),
-      problemReason: this.optionalText(item.problemReason),
-      nextMonthPlan: this.optionalText(item.nextMonthPlan),
-      supportNeeded: this.optionalText(item.supportNeeded),
-      employeeAttachments: this.attachmentsJson(item.attachments),
-      selfScore: item.selfScore,
+      selfScore: scoreRequired ? item.selfScore : null,
     };
   }
 
-  private managerReviewData(item: { managerScore: number; managerComment?: string | null }) {
-    if (!Number.isFinite(item.managerScore) || item.managerScore < 0 || item.managerScore > 100) {
+  private managerReviewData(
+    item: { managerScore?: number | null; managerComment?: string | null },
+    scoreRequired: boolean,
+  ) {
+    if (item.managerScore != null && (
+      !Number.isFinite(item.managerScore)
+      || item.managerScore < 0
+      || item.managerScore > 100
+    )) {
       throw new ConflictException({ code: ERROR_CODE.PARAM_INVALID, message: '主管评分须为0至100分' });
     }
     return {
-      managerScore: item.managerScore,
+      managerScore: scoreRequired ? item.managerScore ?? null : null,
       managerComment: this.optionalText(item.managerComment) ?? null,
     };
   }
@@ -764,18 +993,114 @@ export class PeriodReviewsService {
     }[status];
   }
 
-  private progressSummary(
-    periodType: PeriodWithContext['periodType'],
-    progress: number,
-    health: IndicatorProgressHealth,
-  ): string {
-    const labels: Record<IndicatorProgressHealth, string> = {
-      on_track: '正常',
-      at_risk: '有风险',
-      blocked: '受阻',
-      completed: '已完成',
+  private isScoreRequired(weight: Prisma.Decimal): boolean {
+    return weight.greaterThan(0);
+  }
+
+  private assertEmployeeScores(
+    period: PeriodWithContext,
+    items: Array<{ indicatorVersionItemId: string; selfScore?: number | null }>,
+  ): void {
+    const versionItems = new Map(
+      (period.indicatorVersion?.items ?? []).map((item) => [item.id, item]),
+    );
+    for (const item of items) {
+      const versionItem = versionItems.get(item.indicatorVersionItemId)!;
+      const required = this.isScoreRequired(versionItem.weight);
+      if (required && (
+        item.selfScore == null
+        || !Number.isFinite(item.selfScore)
+        || item.selfScore < 0
+        || item.selfScore > 100
+      )) {
+        throw new ConflictException({
+          code: ERROR_CODE.PARAM_INVALID,
+          message: '请填写每项有效权重指标的月度自评分',
+        });
+      }
+      if (!required && item.selfScore != null) {
+        throw new ConflictException({
+          code: ERROR_CODE.PARAM_INVALID,
+          message: '零权重指标不参与月度评分',
+        });
+      }
+    }
+  }
+
+  private assertManagerScores(
+    period: PeriodWithContext,
+    items: Array<{ indicatorVersionItemId: string; managerScore?: number | null }>,
+  ): void {
+    const versionItems = new Map(
+      (period.indicatorVersion?.items ?? []).map((item) => [item.id, item]),
+    );
+    for (const item of items) {
+      const versionItem = versionItems.get(item.indicatorVersionItemId)!;
+      const required = this.isScoreRequired(versionItem.weight);
+      if (required && (
+        item.managerScore == null
+        || !Number.isFinite(item.managerScore)
+        || item.managerScore < 0
+        || item.managerScore > 100
+      )) {
+        throw new ConflictException({
+          code: ERROR_CODE.PARAM_INVALID,
+          message: '请填写每项有效权重指标的主管月度评分',
+        });
+      }
+      if (!required && item.managerScore != null) {
+        throw new ConflictException({
+          code: ERROR_CODE.PARAM_INVALID,
+          message: '零权重指标不参与主管月度评分',
+        });
+      }
+    }
+  }
+
+  private weightedScoreTotal<T extends { indicatorVersionItemId: string }>(
+    versionItems: Map<string, { weight: Prisma.Decimal }>,
+    items: T[],
+    scoreOf: (item: T) => number | null | undefined,
+  ): number | null {
+    let weightedScore = 0;
+    let totalWeight = 0;
+    for (const item of items) {
+      const weight = versionItems.get(item.indicatorVersionItemId)?.weight.toNumber() ?? 0;
+      if (weight <= 0) continue;
+      const score = scoreOf(item);
+      if (score == null) return null;
+      weightedScore += score * weight;
+      totalWeight += weight;
+    }
+    return totalWeight > 0
+      ? Number((weightedScore / totalWeight).toFixed(2))
+      : null;
+  }
+
+  private progressRange(period: Pick<PeriodWithContext, 'periodKey' | 'periodStart' | 'periodEnd'>) {
+    const monthly = /^(\d{4})-(\d{2})$/.exec(period.periodKey);
+    if (monthly) {
+      const year = Number(monthly[1]);
+      const month = Number(monthly[2]);
+      return {
+        gte: new Date(Date.UTC(year, month - 1, 1) - 8 * 60 * 60 * 1000),
+        lt: new Date(Date.UTC(year, month, 1) - 8 * 60 * 60 * 1000),
+      };
+    }
+    const start = period.periodStart;
+    const end = period.periodEnd;
+    return {
+      gte: new Date(Date.UTC(
+        start.getUTCFullYear(),
+        start.getUTCMonth(),
+        start.getUTCDate(),
+      ) - 8 * 60 * 60 * 1000),
+      lt: new Date(Date.UTC(
+        end.getUTCFullYear(),
+        end.getUTCMonth(),
+        end.getUTCDate() + 1,
+      ) - 8 * 60 * 60 * 1000),
     };
-    return `${periodReviewNoun(periodType)}：完成度 ${progress}%，状态${labels[health]}`;
   }
 
   private optionalText(value: string | null | undefined): string | null | undefined {

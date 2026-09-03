@@ -87,7 +87,7 @@ function blockerActionLabel(code: string): string {
 function scoringSummary(cycle: AssessmentCycle): string {
   if (cycle.workflowVersion !== 2) return '历史流程';
   return cycle.scoringFrequency === 'monthly'
-    ? `月度跟进 · ${cycle.periodSchedules?.length ?? 0}期`
+    ? `月度自评 · ${cycle.periodSchedules?.length ?? 0}期`
     : '周期结束统一评分';
 }
 
@@ -335,6 +335,8 @@ watch(() => props.cycle?.id, () => {
             <div><span>逾期未完成</span><strong :class="{ 'is-danger': cycle.taskStats.overdue > 0 }">{{ cycle.taskStats.overdue }}人</strong></div>
           </div>
         </section>
+
+        <slot name="monthly-progress" />
 
         <section
           v-if="isPrelaunch"

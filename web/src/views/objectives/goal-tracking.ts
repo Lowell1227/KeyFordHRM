@@ -105,23 +105,23 @@ export function selectTrackingAction(context: PerformanceCycleContext): Tracking
     return { kind: 'waiting', label: '等待绩效直属上级审核', taskId: context.task.id };
   }
   const employeePeriod = context.periods.find((period) => (
-    ['self_eval', 'manager_scoring'].includes(period.status)
+    period.status === 'self_eval'
     && !period.employeeSubmittedAt
     && !period.managerSubmittedAt
   ));
   if (employeePeriod) {
     return {
       kind: 'review',
-      label: employeePeriod.periodType === 'cycle' ? '进入整周期跟进' : '进入月度跟进',
+      label: employeePeriod.periodType === 'cycle' ? '填写整周期自评' : '填写月度自评',
       taskId: context.task.id,
       periodId: employeePeriod.id,
     };
   }
-  if (context.periods.some((period) => period.status === 'manager_scoring')) {
-    return { kind: 'waiting', label: '等待主管评分', taskId: context.task.id };
+  if (context.periods.some((period) => period.status === 'manager_scoring' && Boolean(period.employeeSubmittedAt))) {
+    return { kind: 'waiting', label: '等待主管月度评分', taskId: context.task.id };
   }
   if (context.periods.length > 0 && context.periods.every((period) => ['completed', 'no_result'].includes(period.status))) {
-    return { kind: 'complete', label: '评分期次已完成', taskId: context.task.id };
+    return { kind: 'complete', label: '月度评分期次已完成', taskId: context.task.id };
   }
   return { kind: 'none', label: '持续跟进目标', taskId: context.task.id };
 }
@@ -158,13 +158,13 @@ function shortDate(value: string): string {
 }
 
 export function formatGoalTrackingContextLabel(context: PerformanceCycleContext): string {
-  const mode = context.scoringFrequency === 'monthly' ? '月度跟进' : '整周期跟进';
+  const mode = context.scoringFrequency === 'monthly' ? '月度自评' : '整周期自评';
   const participation = context.task.isExempt ? '已豁免' : '正常参与';
   return `${context.name}｜${shortDate(context.startDate)}-${shortDate(context.endDate)}｜${mode}｜${participation}`;
 }
 
 export function formatGoalTrackingContextMeta(context: PerformanceCycleContext): string {
-  return `${context.scoringFrequency === 'monthly' ? '月度跟进' : '整周期跟进'} · ${context.task.isExempt ? '已豁免' : '正常参与'} · 开放 ${new Date(context.openedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}`;
+  return `${context.scoringFrequency === 'monthly' ? '月度自评' : '整周期自评'} · ${context.task.isExempt ? '已豁免' : '正常参与'} · 开放 ${new Date(context.openedAt).toLocaleString('zh-CN', { month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false })}`;
 }
 
 export type GoalTrackingHealthStatus = 'on_track' | 'at_risk' | 'blocked' | 'completed';

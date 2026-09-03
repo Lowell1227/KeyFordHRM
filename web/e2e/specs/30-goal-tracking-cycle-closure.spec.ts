@@ -55,11 +55,19 @@ async function mockTracking(page: Page) {
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({
       taskId: 'task-active', taskStatus: 'self_eval', canEdit: true, totalWeight: 100,
+      summary: {
+        periodCount: 1,
+        employeeSubmittedCount: 0,
+        managerCompletedCount: 0,
+        activeBusinessPeriodKey: '2026-08',
+        activeUpdatedGoalCount: 1,
+        goalCount: 2,
+      },
       items: [{
         id: 'indicator-1', title: '完成重点客户续约', description: '完成年度重点客户续约与回款',
         scoringStandard: '续约率达到95%', ownerId: 'employee-1', ownerName: '方园', cycleId: activeCycleId,
         cycleName: '2026年08月绩效考核', priority: 1, status: 'active', progress: 68, weight: 60,
-        latestProgress: { id: 'progress-1', progress: 68, healthStatus: 'on_track', content: '已完成7家重点客户续约', updatedAt: '2026-08-29T08:00:00.000Z' },
+        latestProgress: { id: 'progress-1', progress: 68, healthStatus: 'on_track', content: '已完成7家重点客户续约', updatedAt: '2026-08-29T08:00:00.000Z', businessPeriodKey: '2026-08', source: 'active_progress' },
       }, {
         id: 'indicator-2', title: '提升客户回款及时率', description: '控制逾期回款并完成风险客户跟踪',
         ownerId: 'employee-1', ownerName: '方园', cycleId: activeCycleId, cycleName: '2026年08月绩效考核',
@@ -76,11 +84,11 @@ test('same-name cycles remain selectable and the employee can enter the exact re
 
   const selector = page.getByTestId('goal-tracking-cycle');
   await expect(selector.locator('option')).toHaveCount(2);
-  await expect(selector.locator('option').nth(0)).toContainText('月度跟进');
+  await expect(selector.locator('option').nth(0)).toContainText('月度自评');
   await expect(selector.locator('option').nth(1)).toContainText('已豁免');
-  await expect(page.getByTestId('goal-tracking-summary')).toContainText('1 已完成');
+  await expect(page.getByTestId('goal-tracking-summary')).toContainText('本月目标已更新 1/2');
   await expect(page.getByTestId('goal-tracking-surface')).toContainText('完成重点客户续约');
-  await expect(page.getByRole('complementary', { name: '评分期次' })).toContainText('待填写');
+  await expect(page.getByRole('complementary', { name: '评分期次' })).toContainText('待月度自评');
 
   await Promise.all([
     page.waitForURL(new RegExp(`/tasks/task-active\\?.*stage=self-eval.*periodId=${periodId}`)),
@@ -144,6 +152,7 @@ function managerReviewDetail() {
   const item = (id: string, name: string, selfScore: number) => ({
     indicatorVersionItemId: id, sourceInstanceId: null, name, description: `${name}目标说明`, scoringStandard: '达到目标得90分',
     targetValue: 100, targetValueText: '100%', unit: '%', weight: .5, progress: 80, healthStatus: 'on_track',
+    isScoreRequired: true, monthlyProgressSource: 'draft_or_result',
     actualValueText: '已完成主要交付', employeeComment: '按计划推进', problemReason: null, nextMonthPlan: null, supportNeeded: null,
     attachments: [], selfScore, managerScore: null, managerComment: null, latestProgress: null, alignedObjectives: [], history: [],
   });
@@ -172,7 +181,7 @@ test('frozen manager can save and formally submit per-indicator scores', async (
   const cards = page.getByTestId('manager-review-goal-card');
   await expect(page.getByTestId('manager-review-form-workspace')).toBeVisible();
   await expect(page.getByTestId('manager-review-reference')).toBeVisible();
-  await expect(page.getByText('2026年8月主管评分', { exact: true })).toBeVisible();
+  await expect(page.getByText('2026年8月主管月度评分', { exact: true })).toBeVisible();
   await expect(cards).toHaveCount(2);
   const cardBox = await cards.first().boundingBox();
   const referenceBox = await page.getByTestId('manager-review-reference').boundingBox();

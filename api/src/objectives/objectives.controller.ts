@@ -94,7 +94,7 @@ export class ObjectivesController {
   ) {
     return this.objectivesService.updateIndicatorProgress(
       id,
-      { ...dto, attachments: dto.attachments ?? [] },
+      dto,
       viewer,
     );
   }

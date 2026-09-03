@@ -181,10 +181,23 @@ describe('ObjectivesService visibility helpers', () => {
       id: 'task-1',
       employeeId: 'manager-1',
       cycleId: 'cycle-1',
-      status: 'self_eval',
-      selfEvalSubmittedAt: null,
+      status: 'manager_scoring',
+      selfEvalSubmittedAt: new Date('2026-08-18T08:00:00.000Z'),
+      publishedAt: null,
       employee: { id: 'manager-1', name: 'Manager' },
-      cycle: { id: 'cycle-1', name: '2026-Q3' },
+      cycle: {
+        id: 'cycle-1',
+        name: '2026-Q3',
+        monthlyFollowUpRequired: true,
+        workflowVersion: 2,
+        openedAt: new Date('2026-07-01T00:00:00.000Z'),
+        publishedAt: null,
+      },
+      periods: [
+        { periodKey: '2026-07', status: 'completed', employeeSubmittedAt: new Date(), managerSubmittedAt: new Date() },
+        { periodKey: '2026-08', status: 'completed', employeeSubmittedAt: new Date(), managerSubmittedAt: null },
+        { periodKey: '2026-09', status: 'self_eval', employeeSubmittedAt: null, managerSubmittedAt: null },
+      ],
       indicatorInstances: [
         {
           id: 'indicator-revenue',
@@ -209,12 +222,25 @@ describe('ObjectivesService visibility helpers', () => {
           objectiveAlignments: [],
           progressUpdates: [
             {
+              id: 'progress-july-formal',
+              progress: 99,
+              healthStatus: 'completed',
+              content: '七月月度自评结果',
+              attachments: [],
+              createdAt: new Date('2026-09-03T02:00:00.000Z'),
+              periodReviewRevisionId: 'revision-july',
+              period: { periodKey: '2026-07' },
+              creator: { id: 'manager-1', name: 'Manager' },
+            },
+            {
               id: 'progress-1',
               progress: 45,
               healthStatus: 'on_track',
               content: '首轮方案已经完成评审',
               attachments: [],
               createdAt: new Date('2026-08-15T08:00:00.000Z'),
+              periodReviewRevisionId: null,
+              period: null,
               creator: { id: 'manager-1', name: 'Manager' },
             },
           ],
@@ -265,8 +291,17 @@ describe('ObjectivesService visibility helpers', () => {
     });
     expect(result).toEqual({
       taskId: 'task-1',
-      taskStatus: 'self_eval',
+      taskStatus: 'manager_scoring',
       canEdit: true,
+      monthlyFollowUpRequired: true,
+      summary: {
+        periodCount: 3,
+        employeeSubmittedCount: 2,
+        managerCompletedCount: 1,
+        activeBusinessPeriodKey: '2026-09',
+        activeUpdatedGoalCount: 0,
+        goalCount: 2,
+      },
       totalWeight: 36,
       items: [
         expect.objectContaining({
@@ -283,6 +318,8 @@ describe('ObjectivesService visibility helpers', () => {
           creatorName: 'Manager',
           attachments: [],
           updatedAt: new Date('2026-08-15T08:00:00.000Z'),
+          businessPeriodKey: '2026-08',
+          source: 'active_progress',
         },
       }),
         expect.objectContaining({
@@ -804,8 +841,14 @@ describe('ObjectivesService visibility helpers', () => {
       task: {
         id: 'task-1',
         employeeId: viewer.id,
-        status: 'self_eval',
-        selfEvalSubmittedAt: null,
+        status: 'manager_scoring',
+        selfEvalSubmittedAt: new Date('2026-08-16T07:00:00.000Z'),
+        publishedAt: null,
+        cycle: {
+          workflowVersion: 2,
+          openedAt: new Date('2026-07-01T00:00:00.000Z'),
+          publishedAt: null,
+        },
       },
     });
     prisma.indicatorProgressUpdate.findFirst.mockResolvedValue(null);
@@ -815,7 +858,7 @@ describe('ObjectivesService visibility helpers', () => {
       progress: 45,
       healthStatus: 'on_track',
       content: '首轮方案已经完成评审',
-      attachments: [{ name: 'review.pdf', url: '/files/review.pdf', size: 1024 }],
+      attachments: [],
       createdBy: viewer.id,
       createdAt: new Date('2026-08-16T08:00:00.000Z'),
       creator: { id: viewer.id, name: viewer.name },
@@ -827,7 +870,6 @@ describe('ObjectivesService visibility helpers', () => {
         progress: 45,
         healthStatus: 'on_track',
         content: '首轮方案已经完成评审',
-        attachments: [{ name: 'review.pdf', url: '/files/review.pdf', size: 1024 }],
         expectedLatestUpdateAt: null,
       },
       viewer,
@@ -839,7 +881,7 @@ describe('ObjectivesService visibility helpers', () => {
         progress: 45,
         healthStatus: 'on_track',
         content: '首轮方案已经完成评审',
-        attachments: [{ name: 'review.pdf', url: '/files/review.pdf', size: 1024 }],
+        attachments: [],
         createdBy: viewer.id,
       },
       include: { creator: { select: { id: true, name: true } } },
@@ -883,9 +925,23 @@ describe('ObjectivesService visibility helpers', () => {
   });
 
   it.each([
-    { status: 'closed', selfEvalSubmittedAt: null },
-    { status: 'self_eval', selfEvalSubmittedAt: new Date('2026-08-16T07:00:00.000Z') },
-  ])('does not append progress after the task is locked: %o', async (taskState) => {
+    {
+      status: 'self_eval',
+      selfEvalSubmittedAt: null,
+      publishedAt: null,
+      cycle: { workflowVersion: 2, openedAt: null, publishedAt: null },
+    },
+    {
+      status: 'self_eval',
+      selfEvalSubmittedAt: null,
+      publishedAt: new Date('2026-09-15T07:00:00.000Z'),
+      cycle: {
+        workflowVersion: 2,
+        openedAt: new Date('2026-07-01T00:00:00.000Z'),
+        publishedAt: new Date('2026-09-15T07:00:00.000Z'),
+      },
+    },
+  ])('does not append progress outside an open unpublished cycle: %o', async (taskState) => {
     prisma.indicatorInstance.findUnique.mockResolvedValue({
       id: 'indicator-1',
       name: 'GMV 达成率',
@@ -894,7 +950,7 @@ describe('ObjectivesService visibility helpers', () => {
 
     await expect((service as any).updateIndicatorProgress(
       'indicator-1',
-      { progress: 80, healthStatus: 'on_track', content: '迟到更新', attachments: [] },
+      { progress: 80, healthStatus: 'on_track', content: '迟到更新' },
       viewer,
     )).rejects.toBeInstanceOf(ConflictException);
 
@@ -910,6 +966,12 @@ describe('ObjectivesService visibility helpers', () => {
         employeeId: viewer.id,
         status: 'self_eval',
         selfEvalSubmittedAt: null,
+        publishedAt: null,
+        cycle: {
+          workflowVersion: 2,
+          openedAt: new Date('2026-07-01T00:00:00.000Z'),
+          publishedAt: null,
+        },
       },
     });
     prisma.indicatorProgressUpdate.findFirst.mockResolvedValue({
@@ -925,7 +987,6 @@ describe('ObjectivesService visibility helpers', () => {
         progress: 60,
         healthStatus: 'on_track',
         content: '旧编辑器提交',
-        attachments: [],
         expectedLatestUpdateAt: '2026-08-16T08:00:00.000Z',
       },
       viewer,
@@ -961,8 +1022,15 @@ describe('ObjectivesService visibility helpers', () => {
         employeeId: viewer.id,
         status: 'self_eval',
         selfEvalSubmittedAt: null,
+        publishedAt: null,
         employee: { id: viewer.id, name: viewer.name },
-        cycle: { id: 'cycle-1', name: '2026-Q3' },
+        cycle: {
+          id: 'cycle-1',
+          name: '2026-Q3',
+          workflowVersion: 2,
+          openedAt: new Date('2026-07-01T00:00:00.000Z'),
+          publishedAt: null,
+        },
       },
       objectiveAlignments: [
         { objective: { id: 'objective-1', title: '提升经营质量', level: 'company', ownerId: 'vp-1' } },
@@ -975,6 +1043,8 @@ describe('ObjectivesService visibility helpers', () => {
           content: '渠道转化低于预期，已调整投放',
           attachments: [],
           createdAt: new Date('2026-08-16T08:00:00.000Z'),
+          periodReviewRevisionId: null,
+          period: null,
           creator: { id: viewer.id, name: viewer.name },
         },
         {
@@ -984,6 +1054,8 @@ describe('ObjectivesService visibility helpers', () => {
           content: '完成首轮投放',
           attachments: [],
           createdAt: new Date('2026-08-01T08:00:00.000Z'),
+          periodReviewRevisionId: null,
+          period: null,
           creator: { id: viewer.id, name: viewer.name },
         },
       ],

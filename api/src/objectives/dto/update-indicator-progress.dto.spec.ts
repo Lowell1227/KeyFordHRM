@@ -1,6 +1,5 @@
 import 'reflect-metadata';
-import { plainToInstance } from 'class-transformer';
-import { validate } from 'class-validator';
+import { ValidationPipe } from '@nestjs/common';
 import { UpdateIndicatorProgressDto } from './update-indicator-progress.dto';
 
 describe('UpdateIndicatorProgressDto', () => {
@@ -10,35 +9,23 @@ describe('UpdateIndicatorProgressDto', () => {
     content: '渠道转化低于预期，已调整投放',
   };
 
-  it('accepts uploaded attachment metadata from the existing storage API', async () => {
-    const dto = plainToInstance(UpdateIndicatorProgressDto, {
+  it('keeps only status, progress, description and concurrency metadata', async () => {
+    const dto = await new ValidationPipe({
+      whitelist: true,
+      transform: true,
+      forbidNonWhitelisted: false,
+    }).transform({
       ...validBody,
+      expectedLatestUpdateAt: '2026-09-03T10:00:00.000Z',
       attachments: [{ name: '复盘记录.pdf', url: '/uploads/progress/review.pdf', size: 1024 }],
+    }, {
+      type: 'body',
+      metatype: UpdateIndicatorProgressDto,
     });
 
-    await expect(validate(dto)).resolves.toHaveLength(0);
-  });
-
-  it('rejects unsafe or incomplete attachment metadata', async () => {
-    const dto = plainToInstance(UpdateIndicatorProgressDto, {
+    expect(dto).toEqual({
       ...validBody,
-      attachments: [{ name: ' ', url: 'javascript:alert(1)' }],
+      expectedLatestUpdateAt: '2026-09-03T10:00:00.000Z',
     });
-
-    const errors = await validate(dto);
-    expect(errors.some((error) => error.property === 'attachments' && error.children?.length)).toBe(true);
-  });
-
-  it('rejects more than ten attachments', async () => {
-    const dto = plainToInstance(UpdateIndicatorProgressDto, {
-      ...validBody,
-      attachments: Array.from({ length: 11 }, (_, index) => ({
-        name: `附件-${index}.txt`,
-        url: `/uploads/progress/${index}.txt`,
-      })),
-    });
-
-    const errors = await validate(dto);
-    expect(errors.some((error) => error.property === 'attachments')).toBe(true);
   });
 });

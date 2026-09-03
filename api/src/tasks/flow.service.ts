@@ -83,6 +83,15 @@ export interface TransitionInput {
   taskUpdate?: Prisma.AssessmentTaskUpdateInput;
 }
 
+export interface ReopenPeriodFlowInput {
+  task: Pick<AssessmentTask, 'id' | 'status' | 'cycleId' | 'employeeId' | 'managerId' | 'deptHeadId' | 'approverId'>;
+  actorId: string;
+  reason: string;
+  periodId: string;
+  periodKey: string;
+  taskUpdate: Prisma.AssessmentTaskUpdateInput;
+}
+
 /**
  * 流程服务。
  *
@@ -183,5 +192,57 @@ export class FlowService {
     });
 
     return { oldStatus: task.status, newStatus: updatedTask.status, nodeType: transition.nodeType };
+  }
+
+  /**
+   * HR 在结果公示前重新开放一个已锁定月份。
+   *
+   * 这是月份级纠错动作，不属于常规前进转换；保留既有流程记录，追加 withdraw 留痕，
+   * 并将任务当前节点统一恢复为月度自评。
+   */
+  async reopenPeriodTx(
+    tx: Prisma.TransactionClient,
+    input: ReopenPeriodFlowInput,
+  ): Promise<{ oldStatus: TaskStatus; newStatus: TaskStatus }> {
+    const allowed: TaskStatus[] = [
+      TaskStatus.manager_scoring,
+      TaskStatus.dept_review,
+      TaskStatus.hr_calibration,
+      TaskStatus.approval,
+      TaskStatus.self_eval,
+    ];
+    if (!allowed.includes(input.task.status)) {
+      throw new ConflictException({
+        code: ERROR_CODE.CONFLICT,
+        message: `当前任务状态 ${input.task.status} 不允许重新开放月度自评`,
+      });
+    }
+
+    await tx.assessmentTask.update({
+      where: { id: input.task.id },
+      data: {
+        status: TaskStatus.self_eval,
+        ...input.taskUpdate,
+      },
+    });
+    await tx.flowRecord.create({
+      data: {
+        taskId: input.task.id,
+        cycleId: input.task.cycleId,
+        nodeType: 'self_eval',
+        actorId: input.actorId,
+        action: 'withdraw',
+        comment: input.reason,
+        extraData: {
+          type: 'monthly_self_evaluation_reopened',
+          periodId: input.periodId,
+          periodKey: input.periodKey,
+          oldTaskStatus: input.task.status,
+          newTaskStatus: TaskStatus.self_eval,
+        },
+      },
+    });
+
+    return { oldStatus: input.task.status, newStatus: TaskStatus.self_eval };
   }
 }

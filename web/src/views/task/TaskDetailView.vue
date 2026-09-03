@@ -136,9 +136,12 @@ const showGoalSettingReference = computed(() => (
   ['goal-setting', 'goal-confirmation'].includes(requestedPerformanceStage.value)
   && !isPeriodReviewPage.value
 ));
-const periodReviewTitle = computed(() => activePerformancePeriod.value?.periodType === 'cycle'
-  ? '整周期跟进'
-  : '月度跟进');
+const periodReviewTitle = computed(() => {
+  if (activePerformancePeriod.value?.periodType === 'cycle') {
+    return isManagerPeriodReview.value ? '整周期评分' : '整周期自评';
+  }
+  return isManagerPeriodReview.value ? '主管月度评分' : '月度自评';
+});
 const performanceStageTitle = computed(() => isPeriodReviewPage.value
   ? periodReviewTitle.value
   : performanceStageLabels[requestedPerformanceStage.value]);

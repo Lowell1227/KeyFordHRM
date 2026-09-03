@@ -61,6 +61,8 @@ function reviewDetail() {
     targetValueText: '100%',
     unit: '%',
     weight,
+    isScoreRequired: weight > 0,
+    monthlyProgressSource: 'none',
     progress: null,
     healthStatus: null,
     actualValueText: null,
@@ -111,6 +113,7 @@ function reviewDetail() {
     indicators: [
       indicator('21111111-1111-4111-8111-111111111111', '重点客户续约', 0.6),
       indicator('31111111-1111-4111-8111-111111111111', '新客户拓展', 0.4),
+      indicator('41111111-1111-4111-8111-111111111111', '协同支持', 0),
     ],
   };
 }
@@ -178,12 +181,11 @@ async function mockMonthlyReview(page: Page, requests: Request[]) {
 
 async function completeRequiredFields(page: Page) {
   const cards = page.getByTestId('monthly-review-goal-card');
-  for (let index = 0; index < 2; index += 1) {
-    const card = cards.nth(index);
-    await card.getByLabel('本月完成进度').fill(index === 0 ? '85' : '70');
-    await card.getByRole('button', { name: '正常推进' }).click();
-    await card.getByLabel('本月自评分').fill(index === 0 ? '90' : '82');
-  }
+  const firstCard = cards.nth(0);
+  await firstCard.getByLabel('本月完成进度').fill('85');
+  await firstCard.getByRole('button', { name: '正常推进' }).click();
+  await firstCard.getByLabel('本月自评分').fill('90');
+  await cards.nth(1).getByLabel('本月自评分').fill('82');
 }
 
 test.describe('monthly goal review responsive workspace', () => {
@@ -199,9 +201,9 @@ test.describe('monthly goal review responsive workspace', () => {
     await expect(page.getByTestId('monthly-review-workspace')).toBeVisible();
     await expect(page.getByTestId('monthly-review-reference')).toBeVisible();
     await expect(page.getByTestId('monthly-review-form-workspace')).toBeVisible();
-    await expect(page.getByText('2027年1月月度跟进', { exact: true })).toBeVisible();
+    await expect(page.getByText('2027年1月月度自评', { exact: true })).toBeVisible();
     await expect(page.getByTestId('performance-stage-state')).toHaveText('待处理');
-    await expect(page.getByTestId('monthly-review-goal-card')).toHaveCount(2);
+    await expect(page.getByTestId('monthly-review-goal-card')).toHaveCount(3);
     await expect(page.getByTestId('performance-employee-summary')).toContainText('方园');
     await expect(page.getByTestId('performance-employee-summary')).toContainText('绩效直属上级 王主管');
 
@@ -214,23 +216,32 @@ test.describe('monthly goal review responsive workspace', () => {
     expect(referenceBox!.x).toBeGreaterThan(firstCardBox!.x + firstCardBox!.width - 1);
     expect(actionBox!.y).toBeGreaterThan(firstCardBox!.y + firstCardBox!.height - 1);
 
-    await page.getByRole('button', { name: '提交月度跟进' }).click();
-    await expect(page.getByTestId('monthly-review-goal-card').nth(0).getByText('请填写本月完成进度')).toBeVisible();
+    await expect(page.getByTestId('monthly-review-goal-card').first()).not.toContainText('问题原因');
+    await expect(page.getByTestId('monthly-review-goal-card').first()).not.toContainText('下一步计划');
+    await expect(page.getByTestId('monthly-review-goal-card').first()).not.toContainText('所需支持');
+    await expect(page.getByTestId('monthly-review-goal-card').first()).not.toContainText('补充说明');
+    await expect(page.getByTestId('monthly-review-goal-card').nth(2)).toContainText('不参与评分');
+    await expect(page.getByTestId('monthly-review-goal-card').first()).toContainText('本月未更新，可只填写自评分后提交');
+
+    await page.getByRole('button', { name: '提交月度自评' }).click();
+    await expect(page.getByTestId('monthly-review-goal-card').nth(0).getByText('请填写 0-100 分的本月自评分')).toBeVisible();
 
     await completeRequiredFields(page);
     await page.getByRole('button', { name: '保存草稿' }).click();
     await expect.poll(() => requests.filter((request) => request.method() === 'PUT').length).toBe(1);
     const draftBody = requests.find((request) => request.method() === 'PUT')?.postDataJSON();
     expect(draftBody).toMatchObject({ expectedVersion: 0 });
-    expect(draftBody.indicators).toHaveLength(2);
+    expect(draftBody.indicators).toHaveLength(3);
     expect(draftBody.indicators[0]).toMatchObject({ progress: 85, healthStatus: 'on_track', selfScore: 90 });
+    expect(draftBody.indicators[1]).toMatchObject({ progress: null, healthStatus: null, selfScore: 82 });
+    expect(draftBody.indicators[2]).toMatchObject({ progress: null, healthStatus: null, selfScore: null });
 
-    await page.getByRole('button', { name: '提交月度跟进' }).click();
+    await page.getByRole('button', { name: '提交月度自评' }).click();
     await expect.poll(() => requests.filter((request) => request.method() === 'POST').length).toBe(1);
     const submitBody = requests.find((request) => request.method() === 'POST')?.postDataJSON();
     expect(submitBody).toMatchObject({ expectedVersion: 1 });
     expect(submitBody.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
-    expect(submitBody.indicators).toHaveLength(2);
+    expect(submitBody.indicators).toHaveLength(3);
   });
 
   test('switches to one column at 390 with collapsible references and an unobstructed fixed action bar', async ({ page }) => {
@@ -247,7 +258,7 @@ test.describe('monthly goal review responsive workspace', () => {
 
     const actionBar = page.getByTestId('monthly-review-actions');
     await expect(actionBar).toHaveCSS('position', 'fixed');
-    await expect(page.getByRole('button', { name: '提交月度跟进' })).toBeVisible();
+    await expect(page.getByRole('button', { name: '提交月度自评' })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
     const lastCard = page.getByTestId('monthly-review-goal-card').last();
     const lastCardBox = await lastCard.boundingBox();

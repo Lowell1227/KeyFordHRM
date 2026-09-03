@@ -2,11 +2,10 @@
 import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { objectivesApi } from '@/api/objectives.api';
-import { uploadApi } from '@/api/upload.api';
 import type {
-  Attachment,
   GoalTrackingHealthStatus,
   GoalTrackingIndicatorDetail,
+  GoalTrackingLatestProgress,
 } from '@/types/api.types';
 import { buildIndicatorVersionHistory } from './indicator-version-history';
 import { indicatorVisibilitySummary } from '@/views/task/indicator-visibility';
@@ -19,8 +18,6 @@ const loading = ref(false);
 const loadError = ref('');
 const editing = ref(false);
 const submitting = ref(false);
-const uploading = ref(false);
-const fileInput = ref<HTMLInputElement>();
 const contentInput = ref<HTMLTextAreaElement>();
 let requestSerial = 0;
 
@@ -28,16 +25,21 @@ const form = reactive<{
   healthStatus: GoalTrackingHealthStatus;
   progress: number;
   content: string;
-  attachments: Attachment[];
 }>({
   healthStatus: 'on_track',
   progress: 0,
   content: '',
-  attachments: [],
 });
 
 const opened = computed(() => Boolean(props.indicatorId));
 const latestProgress = computed(() => detail.value?.progressUpdates[0] ?? null);
+const historyGroups = computed(() => {
+  const groups = new Map<string, GoalTrackingLatestProgress[]>();
+  for (const progress of detail.value?.progressUpdates.slice(1) ?? []) {
+    groups.set(progress.businessPeriodKey, [...(groups.get(progress.businessPeriodKey) ?? []), progress]);
+  }
+  return [...groups.entries()].map(([periodKey, items]) => ({ periodKey, items }));
+});
 const indicatorVersions = computed(() => buildIndicatorVersionHistory(detail.value?.changeRecords ?? []));
 const displayDescription = computed(() => (
   detail.value?.description?.trim().replace(/^realistic-demo-v\d+\s*[；;:：]\s*/i, '') ?? ''
@@ -74,7 +76,6 @@ function startEditing() {
   form.healthStatus = latestProgress.value?.healthStatus ?? 'on_track';
   form.progress = latestProgress.value?.progress ?? 0;
   form.content = '';
-  form.attachments = [];
   editing.value = true;
   void nextTick(() => contentInput.value?.focus());
 }
@@ -82,7 +83,6 @@ function startEditing() {
 function cancelEditing() {
   editing.value = false;
   form.content = '';
-  form.attachments = [];
 }
 
 function validateForm() {
@@ -109,70 +109,17 @@ async function submitProgress() {
       progress: form.progress,
       healthStatus: form.healthStatus,
       content: form.content.trim(),
-      attachments: form.attachments,
       expectedLatestUpdateAt: latestProgress.value?.updatedAt ?? null,
     });
     detail.value.progress = created.progress;
     detail.value.progressUpdates = [created, ...detail.value.progressUpdates];
     editing.value = false;
     form.content = '';
-    form.attachments = [];
     ElMessage.success('进展已更新');
     emit('updated');
   } finally {
     submitting.value = false;
   }
-}
-
-function triggerUpload() {
-  fileInput.value?.click();
-}
-
-async function handleFiles(event: Event) {
-  const input = event.target as HTMLInputElement;
-  const files = [...(input.files ?? [])];
-  input.value = '';
-  if (!files.length) return;
-  uploading.value = true;
-  try {
-    for (const file of files) {
-      if (form.attachments.length >= 10) {
-        ElMessage.warning('每次进展最多上传 10 个附件');
-        break;
-      }
-      form.attachments.push(await uploadApi.upload(file));
-    }
-  } finally {
-    uploading.value = false;
-  }
-}
-
-function removeAttachment(index: number) {
-  form.attachments.splice(index, 1);
-}
-
-function wrapSelection(prefix: string, suffix = prefix) {
-  const input = contentInput.value;
-  if (!input) return;
-  const start = input.selectionStart;
-  const end = input.selectionEnd;
-  const selected = form.content.slice(start, end);
-  form.content = `${form.content.slice(0, start)}${prefix}${selected}${suffix}${form.content.slice(end)}`;
-  void nextTick(() => {
-    input.focus();
-    input.setSelectionRange(start + prefix.length, end + prefix.length);
-  });
-}
-
-function prefixLines(prefix: string) {
-  const input = contentInput.value;
-  if (!input) return;
-  const start = input.selectionStart;
-  const end = input.selectionEnd;
-  const selected = form.content.slice(start, end) || '列表内容';
-  const replacement = selected.split('\n').map((line) => `${prefix}${line}`).join('\n');
-  form.content = `${form.content.slice(0, start)}${replacement}${form.content.slice(end)}`;
-  void nextTick(() => input.focus());
 }
 
 function scrollToSection(id: string) {
@@ -193,6 +140,10 @@ function healthLabel(status?: GoalTrackingHealthStatus) {
     blocked: '已阻塞',
     completed: '已完成',
   }[status ?? 'on_track'];
+}
+
+function progressSourceLabel(progress: GoalTrackingLatestProgress) {
+  return progress.source === 'monthly_self_evaluation' ? '月度自评结果' : '主动进展';
 }
 
 </script>
@@ -249,9 +200,23 @@ function healthLabel(status?: GoalTrackingHealthStatus) {
         <div class="goal-detail__section-title">
           <h3>进展</h3>
           <button v-if="detail.canEdit && !editing" type="button" @click="startEditing">
-            填写更多详细进展
+            更新进展
           </button>
         </div>
+
+        <div v-if="latestProgress" class="current-progress" data-testid="goal-tracking-current-progress">
+          <div class="current-progress__meta">
+            <span>{{ latestProgress.businessPeriodKey }}</span>
+            <span>{{ progressSourceLabel(latestProgress) }}</span>
+            <time>{{ formatDate(latestProgress.updatedAt) }}</time>
+          </div>
+          <div class="current-progress__values">
+            <span :data-health="latestProgress.healthStatus">{{ healthLabel(latestProgress.healthStatus) }}</span>
+            <strong>{{ latestProgress.progress }}%</strong>
+          </div>
+          <p>{{ latestProgress.content || '未填写描述' }}</p>
+        </div>
+        <p v-else class="goal-detail__empty">当前尚未记录进展</p>
 
         <form
           v-if="editing"
@@ -275,64 +240,51 @@ function healthLabel(status?: GoalTrackingHealthStatus) {
               <b>%</b>
             </label>
           </div>
-          <div class="progress-editor__composer">
-            <div class="progress-editor__toolbar" aria-label="格式工具栏">
-              <button type="button" aria-label="加粗" @click="wrapSelection('**')"><b>B</b></button>
-              <button type="button" aria-label="斜体" @click="wrapSelection('_')"><i>I</i></button>
-              <button type="button" aria-label="下划线" @click="wrapSelection('<u>', '</u>')"><u>U</u></button>
-              <button type="button" aria-label="无序列表" @click="prefixLines('- ')">☷</button>
-              <button type="button" aria-label="有序列表" @click="prefixLines('1. ')">☰</button>
-              <button type="button" aria-label="链接" @click="wrapSelection('[', '](https://)')">↗</button>
-            </div>
+          <label class="progress-editor__composer">
+            <span>描述</span>
             <textarea
               ref="contentInput"
               v-model="form.content"
-              aria-label="进展说明"
+              aria-label="进展描述"
               maxlength="10000"
-              placeholder="填写更多详细进展"
-              rows="6"
+              placeholder="简要说明当前进展"
+              rows="4"
             />
-          </div>
+          </label>
           <div class="progress-editor__footer">
-            <div>
-              <input ref="fileInput" class="visually-hidden" type="file" multiple @change="handleFiles">
-              <button type="button" class="progress-editor__upload" :disabled="uploading" @click="triggerUpload">
-                ⇧ {{ uploading ? '上传中' : '点击上传' }}
-              </button>
-            </div>
+            <span>只需填写状态、进度和描述</span>
             <div class="progress-editor__actions">
               <el-button @click="cancelEditing">取消</el-button>
               <el-button type="primary" native-type="submit" :loading="submitting">更新进度</el-button>
             </div>
           </div>
-          <ul v-if="form.attachments.length" class="progress-editor__attachments">
-            <li v-for="(attachment, index) in form.attachments" :key="attachment.url">
-              <a :href="attachment.url" target="_blank" rel="noopener">{{ attachment.name }}</a>
-              <button type="button" :aria-label="`移除附件 ${attachment.name}`" @click="removeAttachment(index)">×</button>
-            </li>
-          </ul>
         </form>
 
-        <ol v-if="detail.progressUpdates.length" class="goal-progress-timeline">
-          <li v-for="progress in detail.progressUpdates" :key="progress.id">
-            <span class="goal-progress-timeline__dot" aria-hidden="true" />
-            <div class="goal-progress-timeline__head">
-              <strong>{{ progress.creatorName || detail.ownerName }}</strong>
-              <time>{{ formatDate(progress.updatedAt) }}</time>
-            </div>
-            <div class="goal-progress-timeline__tags">
-              <span :data-health="progress.healthStatus">{{ healthLabel(progress.healthStatus) }}</span>
-              <span>{{ progress.progress }}%</span>
-            </div>
-            <p>{{ progress.content || progress.title }}</p>
-            <div v-if="progress.attachments?.length" class="goal-progress-timeline__files">
-              <a v-for="attachment in progress.attachments" :key="attachment.url" :href="attachment.url" target="_blank" rel="noopener">
-                {{ attachment.name }}
-              </a>
-            </div>
-          </li>
-        </ol>
-        <p v-else class="goal-detail__empty">暂无进展记录</p>
+        <details v-if="historyGroups.length" class="goal-progress-history" data-testid="goal-tracking-history">
+          <summary>历史目标进展（{{ detail.progressUpdates.length - 1 }}）</summary>
+          <section v-for="group in historyGroups" :key="group.periodKey">
+            <h4>{{ group.periodKey }}</h4>
+            <ol class="goal-progress-timeline">
+              <li v-for="progress in group.items" :key="progress.id" :class="{ 'is-monthly': progress.source === 'monthly_self_evaluation' }">
+                <span class="goal-progress-timeline__dot" aria-hidden="true" />
+                <div class="goal-progress-timeline__head">
+                  <strong>{{ progressSourceLabel(progress) }}</strong>
+                  <time>{{ formatDate(progress.updatedAt) }}</time>
+                </div>
+                <div class="goal-progress-timeline__tags">
+                  <span :data-health="progress.healthStatus">{{ healthLabel(progress.healthStatus) }}</span>
+                  <span>{{ progress.progress }}%</span>
+                </div>
+                <p>{{ progress.content || progress.title || '未填写描述' }}</p>
+                <div v-if="progress.attachments?.length" class="goal-progress-timeline__files">
+                  <a v-for="attachment in progress.attachments" :key="attachment.url" :href="attachment.url" target="_blank" rel="noopener">
+                    {{ attachment.name }}
+                  </a>
+                </div>
+              </li>
+            </ol>
+          </section>
+        </details>
       </section>
 
       <section id="goal-detail-info" class="goal-detail__card goal-detail__section">
@@ -609,6 +561,19 @@ function healthLabel(status?: GoalTrackingHealthStatus) {
   background: transparent;
   cursor: pointer;
 }
+
+.current-progress { display: grid; gap: 10px; margin-bottom: 16px; padding: 14px; border: 1px solid #dfe6f2; border-radius: 11px; background: #f9fbff; }
+.current-progress__meta, .current-progress__values { display: flex; align-items: center; gap: 8px; }
+.current-progress__meta span { padding: 3px 7px; border-radius: 999px; background: #edf3ff; color: #4770cf; font-size: 11px; }
+.current-progress__meta time { margin-left: auto; color: #8d97a8; font-size: 11px; }
+.current-progress__values { justify-content: space-between; }
+.current-progress__values span { color: #33845c; font-size: 12px; }
+.current-progress__values strong { font-size: 22px; }
+.current-progress p { margin: 0; color: #425069; white-space: pre-wrap; word-break: break-word; }
+.goal-progress-history { margin-top: 14px; border-top: 1px solid #edf0f5; }
+.goal-progress-history > summary { padding: 14px 0 4px; color: #60708a; cursor: pointer; font-weight: 600; }
+.goal-progress-history > section h4 { margin: 14px 0 4px; color: #8490a4; font-size: 12px; }
+.goal-progress-timeline > li.is-monthly { border-radius: 8px; background: #f4f8ff; }
 
 .progress-editor {
   margin-bottom: 18px;

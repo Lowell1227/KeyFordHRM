@@ -24,6 +24,7 @@ export interface NotificationInboxItem {
   type: string;
   title: string;
   content: string | null;
+  extraData: Prisma.JsonValue | null;
   channel: string;
   status: string;
   isRead: boolean;
@@ -48,6 +49,7 @@ type NotificationInboxClient = Pick<Prisma.TransactionClient, 'notificationLog'>
 export type TaskReminderNodeType = 'employee' | 'manager' | 'deptHead' | 'hr' | 'approver';
 
 interface CreateNotificationParams {
+  dedupeKey?: string | null;
   userId: string;
   senderId?: string | null;
   taskId?: string | null;
@@ -172,7 +174,25 @@ export class NotificationsService {
    * 推送失败不抛异常，避免阻断业务。
    */
   async create(params: CreateNotificationParams): Promise<string | null> {
-    const { userId, senderId = null, taskId = null, cycleId = null, type, title, content, extraData } = params;
+    const {
+      dedupeKey = null,
+      userId,
+      senderId = null,
+      taskId = null,
+      cycleId = null,
+      type,
+      title,
+      content,
+      extraData,
+    } = params;
+
+    if (dedupeKey) {
+      const existing = await this.prisma.notificationLog.findUnique({
+        where: { dedupeKey },
+        select: { id: true, status: true },
+      });
+      if (existing) return this.reuseDedupedNotification(existing, params);
+    }
 
     const user = await this.prisma.user.findUnique({
       where: { id: userId, deletedAt: null },
@@ -183,25 +203,64 @@ export class NotificationsService {
       return null;
     }
 
-    const log = await this.prisma.notificationLog.create({
-      data: {
-        userId,
-        senderId,
-        taskId,
-        cycleId,
-        type,
-        title,
-        content,
-        status: 'pending',
-        channel: 'dingtalk',
-        isRead: false,
-        readAt: null,
-        extraData,
-      },
-    });
+    let log: { id: string };
+    try {
+      log = await this.prisma.notificationLog.create({
+        data: {
+          dedupeKey,
+          userId,
+          senderId,
+          taskId,
+          cycleId,
+          type,
+          title,
+          content,
+          status: 'pending',
+          channel: 'dingtalk',
+          isRead: false,
+          readAt: null,
+          extraData,
+        },
+        select: { id: true },
+      });
+    } catch (error) {
+      if (dedupeKey && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const existing = await this.prisma.notificationLog.findUnique({
+          where: { dedupeKey },
+          select: { id: true, status: true },
+        });
+        if (existing) return this.reuseDedupedNotification(existing, params);
+      }
+      throw error;
+    }
 
     await this.deliver(log.id, params, user.dingtalkId);
     return log.id;
+  }
+
+  private async reuseDedupedNotification(
+    existing: { id: string; status: string },
+    params: CreateNotificationParams,
+  ): Promise<string | null> {
+    if (existing.status !== 'failed') return existing.id;
+    const claimed = await this.prisma.notificationLog.updateMany({
+      where: { id: existing.id, status: 'failed' },
+      data: { status: 'pending', errorMsg: null },
+    });
+    if (claimed.count !== 1) return existing.id;
+    const user = await this.prisma.user.findUnique({
+      where: { id: params.userId, deletedAt: null },
+      select: { dingtalkId: true },
+    });
+    if (!user) {
+      await this.prisma.notificationLog.updateMany({
+        where: { id: existing.id, status: 'pending' },
+        data: { status: 'failed', errorMsg: '接收用户不存在' },
+      });
+      return null;
+    }
+    await this.deliver(existing.id, params, user.dingtalkId);
+    return existing.id;
   }
 
   private async deliver(
@@ -262,6 +321,7 @@ export class NotificationsService {
       type: row.type,
       title: row.title,
       content: row.content,
+      extraData: row.extraData,
       channel: row.channel,
       status: row.status,
       isRead: row.isRead,

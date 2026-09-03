@@ -30,7 +30,7 @@ describe('SchedulerService', () => {
         updateMany: jest.fn(),
       },
       assessmentPeriod: {
-        findMany: jest.fn(),
+        findMany: jest.fn().mockResolvedValue([]),
         updateMany: jest.fn(),
       },
       performanceArchive: { upsert: jest.fn() },
@@ -143,6 +143,124 @@ describe('SchedulerService', () => {
 
       expect(notificationsService.sendBatchReminders).toHaveBeenCalledWith('cycle-3', 'employee');
 
+      jest.useRealTimers();
+    });
+
+    it('reminds the employee and frozen manager on the first overdue day without advancing status', async () => {
+      const now = new Date('2026-09-11T01:00:00.000Z');
+      jest.useFakeTimers().setSystemTime(now);
+      prisma.systemConfig.findUnique.mockResolvedValue(null);
+      prisma.assessmentCycle.findMany.mockResolvedValue([]);
+      prisma.assessmentPeriod.findMany.mockResolvedValue([{
+        id: 'period-september',
+        taskId: 'task-1',
+        periodKey: '2026-09',
+        selfEvalDueAt: new Date('2026-09-10T10:00:00.000Z'),
+        employeeSubmittedAt: null,
+        task: {
+          cycleId: 'cycle-1',
+          employeeId: 'employee-1',
+          managerId: 'manager-1',
+          cycle: { notificationMode: 'dingtalk' },
+        },
+      }]);
+
+      await service.runDeadlineReminders();
+
+      expect(notificationsService.create).toHaveBeenCalledTimes(2);
+      expect(notificationsService.create).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'employee-1',
+        type: 'monthly_self_eval_overdue',
+        dedupeKey: 'monthly-self-eval:period-september:employee-1:overdue_1:2026-09-11',
+      }));
+      expect(notificationsService.create).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'manager-1',
+        type: 'monthly_self_eval_overdue_manager_notice',
+      }));
+      expect(prisma.assessmentPeriod.updateMany).not.toHaveBeenCalled();
+      expect(prisma.assessmentTask.updateMany).not.toHaveBeenCalled();
+      jest.useRealTimers();
+    });
+
+    it('reminds the frozen manager after the employee submits without reopening the employee stage', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-09-10T01:00:00.000Z'));
+      prisma.systemConfig.findUnique.mockResolvedValue({ value: 3 });
+      prisma.assessmentCycle.findMany.mockResolvedValue([]);
+      prisma.assessmentPeriod.findMany.mockResolvedValue([{
+        id: 'period-september',
+        taskId: 'task-1',
+        periodKey: '2026-09',
+        status: 'manager_scoring',
+        selfEvalDueAt: new Date('2026-09-05T10:00:00.000Z'),
+        managerDueAt: new Date('2026-09-10T10:00:00.000Z'),
+        employeeSubmittedAt: new Date('2026-09-05T01:00:00.000Z'),
+        managerSubmittedAt: null,
+        task: {
+          cycleId: 'cycle-1',
+          employeeId: 'employee-1',
+          managerId: 'manager-1',
+          cycle: { notificationMode: 'dingtalk' },
+        },
+      }]);
+
+      await service.runDeadlineReminders();
+
+      expect(notificationsService.create).toHaveBeenCalledTimes(1);
+      expect(notificationsService.create).toHaveBeenCalledWith(expect.objectContaining({
+        userId: 'manager-1',
+        type: 'monthly_manager_score_reminder',
+        dedupeKey: 'monthly-manager-score:period-september:manager-1:due_today:2026-09-10',
+        extraData: expect.objectContaining({
+          periodId: 'period-september',
+          action: 'manager_period_review',
+        }),
+      }));
+      expect(prisma.assessmentPeriod.updateMany).not.toHaveBeenCalled();
+      expect(prisma.assessmentTask.updateMany).not.toHaveBeenCalled();
+      jest.useRealTimers();
+    });
+
+    it('does not send external reminders when the cycle notification mode is off', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-09-10T01:00:00.000Z'));
+      prisma.systemConfig.findUnique.mockResolvedValue(null);
+      prisma.assessmentCycle.findMany.mockResolvedValue([]);
+      prisma.assessmentPeriod.findMany.mockResolvedValue([{
+        id: 'period-september',
+        taskId: 'task-1',
+        periodKey: '2026-09',
+        selfEvalDueAt: new Date('2026-09-10T10:00:00.000Z'),
+        employeeSubmittedAt: null,
+        task: {
+          cycleId: 'cycle-1', employeeId: 'employee-1', managerId: 'manager-1',
+          cycle: { notificationMode: 'off' },
+        },
+      }]);
+
+      await service.runDeadlineReminders();
+
+      expect(notificationsService.create).not.toHaveBeenCalled();
+      jest.useRealTimers();
+    });
+
+    it('does not duplicate legacy employee reminders for workflow v2 monthly cycles', async () => {
+      jest.useFakeTimers().setSystemTime(new Date('2026-09-10T01:00:00.000Z'));
+      prisma.systemConfig.findUnique.mockResolvedValue({ value: 3 });
+      prisma.assessmentPeriod.findMany.mockResolvedValue([]);
+      prisma.assessmentCycle.findMany.mockResolvedValue([{
+        id: 'cycle-v2',
+        status: 'self_eval',
+        workflowVersion: 2,
+        scoringFrequency: 'monthly',
+        deadlineIndicatorConfirm: null,
+        deadlineSelfEval: new Date('2026-09-10T10:00:00.000Z'),
+        deadlineManagerScore: null,
+        deadlineHrCalibration: null,
+        deadlineApproval: null,
+      }]);
+
+      await service.runDeadlineReminders();
+
+      expect(notificationsService.sendBatchReminders).not.toHaveBeenCalled();
       jest.useRealTimers();
     });
   });
@@ -277,35 +395,15 @@ describe('SchedulerService', () => {
     });
   });
 
-  describe('runPeriodManagerOpenings', () => {
-    it('moves overdue employee periods to manager scoring without fabricating employee submission', async () => {
-      prisma.assessmentPeriod.updateMany.mockResolvedValue({ count: 2 });
+  describe('monthly self evaluation opening', () => {
+    it('never advances an overdue employee period from the opening cron', async () => {
+      jest.spyOn(service, 'runSelfEvalOpenings').mockResolvedValue();
+      jest.spyOn(service, 'runPeriodSelfEvalOpenings').mockResolvedValue();
 
-      await (service as any).runPeriodManagerOpenings();
+      await service.openSelfEvaluations();
 
-      expect(prisma.assessmentPeriod.updateMany).toHaveBeenCalledWith({
-        where: {
-          status: 'self_eval',
-          selfEvalDueAt: { lte: expect.any(Date) },
-          managerSubmittedAt: null,
-          task: { cycle: { workflowVersion: 2 } },
-        },
-        data: { status: 'manager_scoring' },
-      });
-      expect(prisma.assessmentTask.updateMany).toHaveBeenCalledWith({
-        where: {
-          status: 'self_eval',
-          cycle: { workflowVersion: 2 },
-          periods: {
-            some: {
-              status: 'manager_scoring',
-              selfEvalDueAt: { lte: expect.any(Date) },
-              managerSubmittedAt: null,
-            },
-          },
-        },
-        data: { status: 'manager_scoring' },
-      });
+      expect(prisma.assessmentPeriod.updateMany).not.toHaveBeenCalled();
+      expect(prisma.assessmentTask.updateMany).not.toHaveBeenCalled();
     });
   });
 

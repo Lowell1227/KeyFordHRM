@@ -12,7 +12,11 @@ import {
   selectDefaultTrackingCycle,
   selectGoalTrackingCycles,
 } from '../../src/views/objectives/goal-tracking';
-import { getTaskStageState, TASK_STATUS_STAGE } from '../../src/views/task/task-stage';
+import {
+  getTaskStageState,
+  resolveEmployeeTaskEntry,
+  TASK_STATUS_STAGE,
+} from '../../src/views/task/task-stage';
 import { buildIndicatorVersionHistory } from '../../src/views/objectives/indicator-version-history';
 
 test('目标确认后该环节显示已完成，但不提前开放自评', () => {
@@ -90,6 +94,69 @@ test('builds self and the cycle-frozen performance manager instead of the curren
     canViewAll: false,
   }, [{ ...context, task: { ...context.task, manager: null } }], 'cycle-1')
     .map((group) => group.key)).toEqual(['self']);
+});
+
+test('工作台按月份真实提交状态显示月度自评进度，不被任务粗状态改写', () => {
+  const period = (sequence: number, options: Record<string, unknown> = {}) => ({
+    id: `period-${sequence}`,
+    periodKey: `2026-0${sequence + 6}`,
+    periodType: 'month' as const,
+    sequence,
+    status: 'unopened' as const,
+    selfEvalOpenAt: '2026-09-01T00:00:00.000Z',
+    selfEvalDueAt: '2026-09-10T10:00:00.000Z',
+    managerDueAt: '2026-09-15T10:00:00.000Z',
+    employeeSubmittedAt: null,
+    managerSubmittedAt: null,
+    ...options,
+  });
+
+  expect(resolveEmployeeTaskEntry({
+    status: 'manager_scoring',
+    workflowVersion: 2,
+    periods: [
+      period(1, { status: 'self_eval' }),
+      period(2),
+      period(3),
+    ],
+  })).toMatchObject({
+    label: '2026年7月月度自评',
+    progressLabel: '第1/3期 · 已提交 0/3',
+    actionLabel: '填写月度自评',
+    periodId: 'period-1',
+  });
+
+  expect(resolveEmployeeTaskEntry({
+    status: 'manager_scoring',
+    workflowVersion: 2,
+    periods: [
+      period(1, { status: 'completed', employeeSubmittedAt: '2026-07-31T08:00:00.000Z', managerSubmittedAt: '2026-08-02T08:00:00.000Z' }),
+      period(2, { status: 'completed', employeeSubmittedAt: '2026-08-31T08:00:00.000Z', managerSubmittedAt: '2026-09-02T08:00:00.000Z' }),
+      period(3, { status: 'manager_scoring', employeeSubmittedAt: '2026-09-03T08:00:00.000Z' }),
+    ],
+  })).toMatchObject({
+    label: '2026年9月月度自评',
+    progressLabel: '第3/3期 · 已提交 3/3',
+    actionLabel: '等待主管月度评分',
+    periodId: 'period-3',
+  });
+
+  expect(resolveEmployeeTaskEntry({
+    status: 'manager_scoring',
+    workflowVersion: 2,
+    periods: [
+      period(1, { status: 'completed', employeeSubmittedAt: '2026-07-31T08:00:00.000Z', managerSubmittedAt: '2026-08-02T08:00:00.000Z' }),
+      period(2),
+      period(3),
+    ],
+  })).toMatchObject({
+    actionLabel: '更新目标进展',
+    hintLabel: '下一期月度自评尚未开放',
+    actionPath: '/action-items',
+  });
+
+  expect(resolveEmployeeTaskEntry({ status: 'hr_calibration', workflowVersion: 2, periods: [] }))
+    .not.toMatchObject({ label: '结果确认' });
 });
 
 test('chooses the date-current cycle regardless of lifecycle status', () => {
@@ -170,7 +237,7 @@ test('keeps same-name opened cycles distinct and selects the actionable employee
   }], '2026-08-30');
 
   expect(contexts.map((context) => context.id)).toEqual(['cycle-active', 'cycle-exempt']);
-  expect(formatGoalTrackingContextLabel(contexts[0])).toContain('每月复盘');
+  expect(formatGoalTrackingContextLabel(contexts[0])).toContain('月度自评');
   expect(formatGoalTrackingContextLabel(contexts[1])).toContain('已豁免');
   expect(selectTrackingAction(contexts[0])).toMatchObject({ kind: 'review', periodId: 'period-aug' });
   expect(selectTrackingAction(contexts[1])).toMatchObject({ kind: 'exempt' });

@@ -195,7 +195,7 @@ test.describe('goal setting responsive workspace', () => {
 
     await expect(page.getByTestId('performance-stage-title')).toHaveText('目标制定');
     await expect(page.getByTestId('goal-setting-workspace')).toBeVisible();
-    await expect(page.getByText('月度复盘加载失败')).toHaveCount(0);
+    await expect(page.getByText('月度自评加载失败')).toHaveCount(0);
     expect(monthlyReviewRequests).toBe(0);
   });
 

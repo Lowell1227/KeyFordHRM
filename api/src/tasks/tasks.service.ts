@@ -1605,7 +1605,7 @@ export class TasksService {
     if (task.cycle?.workflowVersion === 2 && task.periods?.length) {
       throw new ConflictException({
         code: ERROR_CODE.CONFLICT,
-        message: '本周期使用分期复盘，请在本期复盘中完成主管评分',
+        message: '本周期使用月度自评，请在对应月份完成主管月度评分',
       });
     }
   }

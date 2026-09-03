@@ -18,6 +18,9 @@ export class LoginPage {
   }
 
   async loginWithPassword(employeeNo: string, password: string) {
+    if (!(await this.employeeNoInput.isVisible())) {
+      await this.page.getByTestId('password-login-toggle').click();
+    }
     await this.employeeNoInput.fill(employeeNo);
     await this.passwordInput.fill(password);
     await this.submitButton.click();

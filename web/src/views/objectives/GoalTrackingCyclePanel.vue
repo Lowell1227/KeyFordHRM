@@ -34,19 +34,25 @@ const emit = defineEmits<{
 }>();
 
 const action = computed(() => props.selectedContext ? selectTrackingAction(props.selectedContext) : null);
-const completedPeriods = computed(() => props.selectedContext?.periods.filter((period) => (
-  ['completed', 'no_result'].includes(period.status)
-)).length ?? 0);
-const activePeriod = computed(() => props.selectedContext?.periods.find((period) => (
-  ['self_eval', 'manager_scoring'].includes(period.status)
-)) ?? props.selectedContext?.periods[props.selectedContext.periods.length - 1] ?? null);
+const summary = computed(() => props.result.summary);
+const activePeriod = computed(() => {
+  const periods = props.selectedContext?.periods ?? [];
+  const actionPeriodId = action.value?.kind === 'review' ? action.value.periodId : '';
+  return periods.find((period) => period.id === actionPeriodId)
+    ?? periods.find((period) => (
+      period.status === 'self_eval'
+      || (period.status === 'manager_scoring' && Boolean(period.employeeSubmittedAt))
+    ))
+    ?? periods[periods.length - 1]
+    ?? null;
+});
 const actionHint = computed(() => {
   if (!action.value) return '';
   return {
     exempt: props.selectedContext?.task.exemptReason || '本周期无需制定、跟进或评分',
     'goal-setting': '目标尚未完成制定，先完成目标再进入日常跟进',
     'goal-confirmation': '目标等待本人确认，确认后进入持续跟进',
-    review: activePeriod.value?.employeeSubmittedAt ? '已提交，等待主管评分' : '月度跟进已开放，可从这里继续填写',
+    review: activePeriod.value?.employeeSubmittedAt ? '已提交，等待主管月度评分' : '月度自评已开放，可从这里填写',
     waiting: action.value.label,
     complete: '全部评分期次已完成，等待周期结果流转',
     none: '目标已确认，可持续更新进展',
@@ -56,7 +62,7 @@ const actionStateLabel = computed(() => {
   if (!action.value) return '查看目标';
   if (action.value.kind === 'goal-setting') return '目标待制定';
   if (action.value.kind === 'goal-confirmation') return '目标待本人确认';
-  if (action.value.kind === 'review') return activePeriod.value?.employeeSubmittedAt ? '待主管评分' : '待填写';
+  if (action.value.kind === 'review') return activePeriod.value?.employeeSubmittedAt ? '待主管月度评分' : '待月度自评';
   return action.value.label;
 });
 
@@ -97,9 +103,9 @@ function periodStatus(period: PerformanceCycleContext['periods'][number]) {
     if (action.value?.kind === 'goal-confirmation') return '待目标确认';
     return '未开放';
   }
-  if (period.status === 'self_eval') return period.employeeSubmittedAt ? '待主管评分' : '待填写';
-  if (period.status === 'manager_scoring') return period.employeeSubmittedAt ? '待主管评分' : '月度跟进逾期待补交';
-  if (period.status === 'completed') return '已评分';
+  if (period.status === 'self_eval') return period.employeeSubmittedAt ? '待主管月度评分' : '待月度自评';
+  if (period.status === 'manager_scoring') return period.employeeSubmittedAt ? '待主管月度评分' : '月度自评逾期待补交';
+  if (period.status === 'completed') return '主管月度评分已完成';
   return '无结果';
 }
 
@@ -143,16 +149,16 @@ function dueDate(value: string) {
 
     <section v-if="selectedContext" class="tracking-cycle__summary" data-testid="goal-tracking-summary">
       <div>
-        <span>评分方式</span>
-        <strong>{{ selectedContext.scoringFrequency === 'monthly' ? '月度跟进' : '整周期跟进' }}</strong>
+        <span>月度自评</span>
+        <strong>{{ summary ? `已提交 ${summary.employeeSubmittedCount}/${summary.periodCount}` : '暂未生成期次' }}</strong>
       </div>
       <div>
-        <span>期次进度</span>
-        <strong>{{ completedPeriods }}/{{ selectedContext.periods.length || 0 }} 已完成</strong>
+        <span>本月目标</span>
+        <strong>{{ summary ? `已更新 ${summary.activeUpdatedGoalCount}/${summary.goalCount}` : '暂无统计' }}</strong>
       </div>
       <div>
-        <span>指标权重</span>
-        <strong>{{ result.totalWeight }}%</strong>
+        <span>主管月度评分</span>
+        <strong>{{ summary ? `已完成 ${summary.managerCompletedCount}/${summary.periodCount}` : '暂未生成期次' }}</strong>
       </div>
       <div class="tracking-cycle__next">
         <span>当前动作</span>
@@ -170,7 +176,7 @@ function dueDate(value: string) {
     <div class="tracking-cycle__layout">
       <main class="tracking-cycle__main" data-testid="goal-tracking-surface">
         <header class="tracking-cycle__section-title">
-          <div><h2>考核指标</h2><span>持续记录结果、风险与下一步动作</span></div>
+          <div><h2>考核指标</h2><span>持续记录状态、进度和描述</span></div>
         </header>
 
         <div v-if="cyclesLoading" class="tracking-cycle__state"><el-skeleton :rows="4" animated /></div>
@@ -209,7 +215,10 @@ function dueDate(value: string) {
               <div class="tracking-goal-card__latest">
                 <span>最新进展</span>
                 <strong>{{ item.latestProgress?.content || item.latestProgress?.title || '尚未记录进展' }}</strong>
-                <small v-if="item.latestProgress">{{ new Date(item.latestProgress.updatedAt).toLocaleString('zh-CN', { hour12: false }) }}</small>
+                <small v-if="item.latestProgress">
+                  {{ item.latestProgress.businessPeriodKey }} · {{ item.latestProgress.source === 'monthly_self_evaluation' ? '月度自评结果' : '主动进展' }} ·
+                  {{ new Date(item.latestProgress.updatedAt).toLocaleString('zh-CN', { hour12: false }) }}
+                </small>
               </div>
               <span class="tracking-goal-card__status">{{ goalTrackingStatus({ status: item.status, progress: item.progress, healthStatus: item.latestProgress?.healthStatus }) }}</span>
               <button type="button" :data-testid="`goal-tracking-indicator-button-${item.id}`" @click="emit('openIndicator', item.id)">
@@ -221,7 +230,7 @@ function dueDate(value: string) {
       </main>
 
       <aside v-if="selectedContext && !selectedContext.task.isExempt" class="tracking-cycle__periods" aria-label="评分期次">
-        <header><h2>目标跟进</h2><span>{{ selectedContext.scoringFrequency === 'monthly' ? '按月推进' : '整周期一次完成' }}</span></header>
+        <header><h2>{{ selectedContext.scoringFrequency === 'monthly' ? '月度自评' : '整周期自评' }}</h2><span>{{ selectedContext.scoringFrequency === 'monthly' ? '按月完成' : '整周期一次完成' }}</span></header>
         <ol v-if="selectedContext.periods.length">
           <li v-for="period in selectedContext.periods" :key="period.id" :class="`is-${period.status}`">
             <i aria-hidden="true" />
@@ -229,7 +238,7 @@ function dueDate(value: string) {
             <small>{{ period.status === 'manager_scoring' ? `主管评分截止 ${dueDate(period.managerDueAt)}` : `自评截止 ${dueDate(period.selfEvalDueAt)}` }}</small>
           </li>
         </ol>
-        <div v-else class="tracking-cycle__period-empty">目标确认后将生成正式复盘期次</div>
+        <div v-else class="tracking-cycle__period-empty">目标确认后将生成月度自评期次</div>
       </aside>
     </div>
   </section>

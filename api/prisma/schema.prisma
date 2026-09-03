@@ -1704,6 +1704,7 @@ model SystemConfig {
 
 model NotificationLog {
   id        String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  dedupeKey String?   @unique @map("dedupe_key") @db.VarChar(160)
   userId    String    @map("user_id") @db.Uuid
   senderId  String?   @map("sender_id") @db.Uuid
   taskId    String?   @map("task_id") @db.Uuid

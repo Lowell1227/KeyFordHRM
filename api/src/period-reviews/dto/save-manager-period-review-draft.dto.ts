@@ -5,11 +5,12 @@ export class ManagerPeriodReviewItemDto {
   @IsUUID('4')
   indicatorVersionItemId!: string;
 
+  @IsOptional()
   @Type(() => Number)
   @IsNumber()
   @Min(0)
   @Max(100)
-  managerScore!: number;
+  managerScore?: number | null;
 
   @IsOptional()
   @IsString()

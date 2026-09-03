@@ -27,7 +27,13 @@ export class PeriodAggregationService {
       include: {
         cycle: { select: { workflowVersion: true } },
         periods: {
-          select: { status: true, managerScoreTotal: true },
+          select: {
+            status: true,
+            employeeSubmittedAt: true,
+            managerSubmittedAt: true,
+            managerScoreTotal: true,
+            lockedAt: true,
+          },
           orderBy: { sequence: 'asc' },
         },
       },
@@ -36,22 +42,29 @@ export class PeriodAggregationService {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '绩效任务不存在' });
     }
 
-    const unfinished = task.periods.some((period) => !['completed', 'no_result'].includes(period.status));
-    const valid = task.periods.filter((period) => (
-      period.status === 'completed' && period.managerScoreTotal != null
+    const completePeriods = task.periods.filter((period) => (
+      period.status === 'completed'
+      && period.employeeSubmittedAt != null
+      && period.managerSubmittedAt != null
+      && period.managerScoreTotal != null
+      && period.lockedAt != null
     ));
+    const allPeriodsComplete = task.periods.length > 0
+      && completePeriods.length === task.periods.length;
     const legacyAdvancedWorkflowV2 = task.cycle?.workflowVersion === 2
       && (task.status === TaskStatus.dept_review || task.status === TaskStatus.hr_calibration);
     if (
-      unfinished
-      || valid.length === 0
+      !allPeriodsComplete
       || (task.status !== TaskStatus.manager_scoring && !legacyAdvancedWorkflowV2)
     ) {
       return { complete: false, score: null, targetStatus: null };
     }
 
-    const total = valid.reduce((sum, period) => sum + period.managerScoreTotal!.toNumber(), 0);
-    const score = Number((total / valid.length).toFixed(2));
+    const total = completePeriods.reduce(
+      (sum, period) => sum + period.managerScoreTotal!.toNumber(),
+      0,
+    );
+    const score = Number((total / completePeriods.length).toFixed(2));
     const gradeConfig = await tx.systemConfig.findUnique({ where: { key: 'grade_score_mapping' } });
     const mapping = (gradeConfig?.value as Record<string, number> | undefined) ?? { A: 90, B: 75, C: 60 };
     const rawGrade = this.scoring.calcRawGrade(score, mapping);
@@ -106,8 +119,7 @@ export class PeriodAggregationService {
         entityId: taskId,
         newValue: {
           score,
-          validPeriodCount: valid.length,
-          excludedNoResultCount: task.periods.filter((period) => period.status === 'no_result').length,
+          periodCount: completePeriods.length,
           targetStatus,
         },
       },

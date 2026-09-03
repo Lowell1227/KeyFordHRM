@@ -19,6 +19,7 @@ function makePrismaMock() {
       count: jest.fn(),
       findMany: jest.fn(),
       findFirst: jest.fn(),
+      findUnique: jest.fn(),
     },
     assessmentTask: { findUnique: jest.fn(), findMany: jest.fn() },
     auditLog: { create: jest.fn() },
@@ -129,6 +130,52 @@ describe('NotificationsService', () => {
 
       expect(id).toBeNull();
       expect(prisma.notificationLog.create).not.toHaveBeenCalled();
+    });
+
+    it('returns an existing sent notification for the same dedupe key without delivering again', async () => {
+      jest.spyOn(prisma.notificationLog, 'findUnique').mockResolvedValue({
+        id: 'existing-log',
+        status: 'sent',
+      } as any);
+
+      const id = await (service as any).create({
+        userId: 'u-1',
+        type: 'monthly_self_eval_reminder',
+        title: '9月月度自评待完成',
+        content: '请完成月度自评',
+        dedupeKey: 'monthly-self-eval:period-1:u-1:due_today:2026-09-10',
+      });
+
+      expect(id).toBe('existing-log');
+      expect(prisma.notificationLog.create).not.toHaveBeenCalled();
+      expect(pushProvider.push).not.toHaveBeenCalled();
+    });
+
+    it('reclaims one failed notification for retry instead of inserting a duplicate row', async () => {
+      jest.spyOn(prisma.user, 'findUnique').mockResolvedValue({ dingtalkId: 'dt-1' } as any);
+      jest.spyOn(prisma.notificationLog, 'findUnique').mockResolvedValue({
+        id: 'failed-log',
+        status: 'failed',
+      } as any);
+      jest.spyOn(prisma.notificationLog, 'updateMany')
+        .mockResolvedValueOnce({ count: 1 } as any)
+        .mockResolvedValueOnce({ count: 1 } as any);
+
+      const id = await (service as any).create({
+        userId: 'u-1',
+        type: 'monthly_self_eval_reminder',
+        title: '9月月度自评已逾期',
+        content: '请尽快完成月度自评',
+        dedupeKey: 'monthly-self-eval:period-1:u-1:overdue_1:2026-09-11',
+      });
+
+      expect(id).toBe('failed-log');
+      expect(prisma.notificationLog.create).not.toHaveBeenCalled();
+      expect(prisma.notificationLog.updateMany).toHaveBeenNthCalledWith(1, {
+        where: { id: 'failed-log', status: 'failed' },
+        data: { status: 'pending', errorMsg: null },
+      });
+      expect(pushProvider.push).toHaveBeenCalledTimes(1);
     });
   });
 

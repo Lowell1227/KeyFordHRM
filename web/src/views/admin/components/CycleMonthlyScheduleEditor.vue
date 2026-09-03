@@ -67,7 +67,7 @@ function rowIssues(schedule: CyclePeriodSchedule) {
 </script>
 
 <template>
-  <section class="cycle-monthly-schedule-editor" aria-label="月度跟进时间安排">
+  <section class="cycle-monthly-schedule-editor" aria-label="月度自评时间安排">
     <div data-testid="cycle-schedule-column-header" class="cycle-monthly-schedule-grid__header">
       <span class="cycle-schedule-help-label">{{ isCycleSchedule ? '周期' : '月份' }}
         <el-tooltip :content="isCycleSchedule ? '下方时间为整个周期的目标跟进安排。' : '下方时间为每月目标跟进安排。'" placement="top">

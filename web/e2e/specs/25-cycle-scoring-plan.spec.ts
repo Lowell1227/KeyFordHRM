@@ -389,12 +389,10 @@ test.describe('cycle scoring plan controls', () => {
     await page.getByTestId('cycle-create').click();
     await page.getByTestId('cycle-type-quarterly').click();
     await expect(page.getByTestId('cycle-monthly-review-switch').locator('input')).not.toBeChecked();
-    await expect(page.getByTestId('cycle-scoring-settings')).toContainText('月度跟进');
-    await expect(page.getByTestId('cycle-scoring-settings')).not.toContainText('月度复盘评分');
+    await expect(page.getByTestId('cycle-scoring-settings')).toContainText('月度自评');
     await expect(page.getByText('按月度评分', { exact: true })).toHaveCount(0);
-    await expect(page.getByText('月度跟进', { exact: true })).toBeVisible();
+    await expect(page.getByText('月度自评', { exact: true })).toBeVisible();
     await expect(page.getByTestId('cycle-review-frequency')).toHaveCount(0);
-    await expect(page.getByText('复盘与评分', { exact: true })).toHaveCount(0);
     await expect(page.getByText('评分计划', { exact: true })).toHaveCount(0);
     await expect(page.getByText('结果审核按整个周期统一进行', { exact: true })).toHaveCount(0);
     await expect(page.getByTestId('cycle-schedule-column-header')).toContainText('周期');
@@ -414,7 +412,7 @@ test.describe('cycle scoring plan controls', () => {
     await page.getByTestId('cycle-type-custom').click();
     await expect(page.getByTestId('cycle-monthly-review-switch').locator('input')).not.toBeChecked();
     await expect(page.getByTestId('cycle-monthly-review-switch')).toHaveClass(/is-disabled/);
-    await expect(page.getByTestId('cycle-scoring-settings')).toContainText('当前周期不支持月度跟进');
+    await expect(page.getByTestId('cycle-scoring-settings')).toContainText('当前周期不支持月度自评');
   });
 
   test('shows six and twelve monthly schedule rows for semiannual and annual cycles', async ({ page }) => {
@@ -530,7 +528,7 @@ test.describe('cycle scoring plan integration', () => {
       element.scrollWidth <= element.clientWidth
     ))).toBe(true);
     await expect(createDialog.getByText('审核人', { exact: true })).toHaveCount(0);
-    await expect(createDialog.getByText('月度跟进', { exact: true })).toBeVisible();
+    await expect(createDialog.getByText('月度自评', { exact: true })).toBeVisible();
     await expect(page.getByTestId('cycle-month-schedule-row')).toHaveCount(3);
     const secondRow = page.getByTestId('cycle-month-schedule-row').nth(1);
     const managerDueInput = secondRow.getByTestId('manager-due-at').locator('input');
@@ -757,7 +755,7 @@ test.describe('cycle scoring plan integration', () => {
 
     await expect(page.getByTestId('cycle-workspace')).toBeVisible();
     expect(updateBodies).toHaveLength(0);
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('月度跟进 · 3期');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('月度自评 · 3期');
   });
 
   test('treats persisted schedule ids as non-semantic after an approved plan is changed then restored', async ({ page }) => {
@@ -897,9 +895,9 @@ test.describe('cycle scoring plan integration', () => {
     await mockIntegratedCyclePage(page, { cycles: [integratedCycle] });
     await page.goto('/cycles?group=attention');
 
-    await expect(page.getByTestId(`cycle-scoring-summary-${integratedCycle.id}`)).toHaveText('月度跟进 · 3期');
+    await expect(page.getByTestId(`cycle-scoring-summary-${integratedCycle.id}`)).toHaveText('月度自评 · 3期');
     await page.getByText(integratedCycle.name, { exact: true }).first().click();
-    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('月度跟进 · 3期');
+    await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('月度自评 · 3期');
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).not.toContainText('结果审核：按周期审核');
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('已调整月份：1个');
     await expect(page.getByTestId('cycle-workspace-scoring-summary')).toContainText('结果审批人：李宏');

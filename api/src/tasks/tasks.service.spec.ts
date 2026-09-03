@@ -1098,7 +1098,7 @@ describe('TasksService', () => {
           { expectedUpdatedAt: updatedAt.toISOString(), indicators: [], evalSummary: {} },
           makeViewer({ id: 'mgr-1', sysRole: SysRole.manager }),
         ),
-      ).rejects.toThrow('请在本期复盘中完成主管评分');
+      ).rejects.toThrow('请在对应月份完成主管月度评分');
 
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
@@ -1312,7 +1312,7 @@ describe('TasksService', () => {
           },
           manager(),
         ),
-      ).rejects.toThrow('请在本期复盘中完成主管评分');
+      ).rejects.toThrow('请在对应月份完成主管月度评分');
 
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });

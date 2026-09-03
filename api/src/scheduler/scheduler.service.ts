@@ -6,6 +6,11 @@ import { NotificationsService, TaskReminderNodeType } from '@/notifications/noti
 import { LaunchService } from '@/cycles/launch.service';
 import { AuthUser } from '@/common/types/auth.types';
 import { EmployeeEffectiveDateService } from '@/employee-archives/employee-effective-date.service';
+import {
+  monthlyEmployeeReminderKind,
+  monthlyReminderKind,
+  shanghaiDateKey,
+} from '@/period-reviews/monthly-reminder-policy';
 
 /** 进行中的周期状态（draft/closed 除外）。 */
 const ACTIVE_CYCLE_STATUSES: CycleStatus[] = [
@@ -91,7 +96,6 @@ export class SchedulerService {
     try {
       await this.runSelfEvalOpenings();
       await this.runPeriodSelfEvalOpenings();
-      await this.runPeriodManagerOpenings();
     } catch (err) {
       this.logger.error('开放绩效自评定时任务异常', err);
     }
@@ -132,6 +136,7 @@ export class SchedulerService {
   async runDeadlineReminders(): Promise<void> {
     const reminderDays = await this.loadDeadlineReminderDays();
     const now = new Date();
+    await this.runMonthlyPeriodReminders(now);
 
     const cycles = await this.prisma.assessmentCycle.findMany({
       where: { status: { in: ACTIVE_CYCLE_STATUSES } },
@@ -143,11 +148,20 @@ export class SchedulerService {
         deadlineManagerScore: true,
         deadlineHrCalibration: true,
         deadlineApproval: true,
+        workflowVersion: true,
+        scoringFrequency: true,
       },
     });
 
     for (const cycle of cycles) {
       for (const node of REMINDER_NODES) {
+        if (
+          cycle.workflowVersion === 2
+          && cycle.scoringFrequency === 'monthly'
+          && ['employee', 'manager', 'deptHead'].includes(node.nodeType)
+        ) {
+          continue;
+        }
         const shouldRemind = node.deadlineFields.some((field) => {
           const deadline = cycle[field];
           return deadline ? this.isOverdueOrNear(deadline, reminderDays, now) : false;
@@ -279,7 +293,7 @@ export class SchedulerService {
     }
   }
 
-  /** 按月评分周期逐期开放员工复盘，不沿用旧周期的一次性开放。 */
+  /** 按月评分周期逐期开放员工月度自评，不沿用旧周期的一次性开放。 */
   async runPeriodSelfEvalOpenings(): Promise<void> {
     const now = new Date();
     const periods = await this.prisma.assessmentPeriod.findMany({
@@ -325,42 +339,118 @@ export class SchedulerService {
           cycleId: period.task.cycleId,
           taskId: period.taskId,
           type: 'monthly_employee_review_opened',
-          title: '本月目标复盘已开放',
-          content: `${period.periodKey}目标复盘已开放，请按计划完成填写。`,
-          extraData: { periodId: period.id, periodKey: period.periodKey },
+          title: '本月月度自评已开放',
+          content: `${period.periodKey}月度自评已开放，请按计划完成填写。`,
+          extraData: {
+            taskId: period.taskId,
+            periodId: period.id,
+            periodKey: period.periodKey,
+            action: 'employee_period_review',
+          },
         });
       }
     }
   }
 
-  /** 员工截止后开放主管评分；不伪造员工提交，员工仍可在主管提交前补交。 */
-  async runPeriodManagerOpenings(): Promise<void> {
-    const now = new Date();
-    await this.prisma.$transaction(async (tx) => {
-      await tx.assessmentPeriod.updateMany({
-        where: {
-          status: 'self_eval',
-          selfEvalDueAt: { lte: now },
-          managerSubmittedAt: null,
-          task: { cycle: { workflowVersion: 2 } },
-        },
-        data: { status: 'manager_scoring' },
-      });
-      await tx.assessmentTask.updateMany({
-        where: {
-          status: 'self_eval',
-          cycle: { workflowVersion: 2 },
-          periods: {
-            some: {
-              status: 'manager_scoring',
-              selfEvalDueAt: { lte: now },
-              managerSubmittedAt: null,
-            },
+  private async runMonthlyPeriodReminders(now: Date): Promise<void> {
+    const periods = await this.prisma.assessmentPeriod.findMany({
+      where: {
+        task: { cycle: { workflowVersion: 2, scoringFrequency: 'monthly' } },
+        OR: [
+          { status: 'self_eval', employeeSubmittedAt: null },
+          {
+            status: 'manager_scoring',
+            employeeSubmittedAt: { not: null },
+            managerSubmittedAt: null,
+            managerId: { not: null },
+          },
+        ],
+      },
+      select: {
+        id: true,
+        taskId: true,
+        periodKey: true,
+        status: true,
+        selfEvalDueAt: true,
+        managerDueAt: true,
+        employeeSubmittedAt: true,
+        managerSubmittedAt: true,
+        task: {
+          select: {
+            cycleId: true,
+            employeeId: true,
+            managerId: true,
+            cycle: { select: { notificationMode: true } },
           },
         },
-        data: { status: 'manager_scoring' },
-      });
+      },
+      orderBy: [{ selfEvalDueAt: 'asc' }, { id: 'asc' }],
     });
+    const dateKey = shanghaiDateKey(now);
+    for (const period of periods) {
+      if (period.task.cycle.notificationMode === 'off') continue;
+      if (period.status === 'manager_scoring') {
+        if (!period.task.managerId) continue;
+        const managerKind = monthlyReminderKind(now, period.managerDueAt, period.managerSubmittedAt);
+        if (!managerKind) continue;
+        const managerOverdue = managerKind === 'overdue_1' || managerKind === 'overdue_every_3';
+        await this.notificationsService.create({
+          dedupeKey: `monthly-manager-score:${period.id}:${period.task.managerId}:${managerKind}:${dateKey}`,
+          userId: period.task.managerId,
+          cycleId: period.task.cycleId,
+          taskId: period.taskId,
+          type: managerOverdue ? 'monthly_manager_score_overdue' : 'monthly_manager_score_reminder',
+          title: managerOverdue ? `${period.periodKey}主管月度评分已逾期` : `${period.periodKey}主管月度评分待完成`,
+          content: managerOverdue ? '主管月度评分已超过截止时间，请尽快完成。' : '员工已提交月度自评，请按计划完成主管月度评分。',
+          extraData: {
+            taskId: period.taskId,
+            periodId: period.id,
+            periodKey: period.periodKey,
+            action: 'manager_period_review',
+          },
+        });
+        continue;
+      }
+      const kind = monthlyEmployeeReminderKind(
+        now,
+        period.selfEvalDueAt,
+        period.employeeSubmittedAt,
+      );
+      if (!kind) continue;
+      const overdue = kind === 'overdue_1' || kind === 'overdue_every_3';
+      await this.notificationsService.create({
+        dedupeKey: `monthly-self-eval:${period.id}:${period.task.employeeId}:${kind}:${dateKey}`,
+        userId: period.task.employeeId,
+        cycleId: period.task.cycleId,
+        taskId: period.taskId,
+        type: overdue ? 'monthly_self_eval_overdue' : 'monthly_self_eval_reminder',
+        title: overdue ? `${period.periodKey}月度自评已逾期` : `${period.periodKey}月度自评待完成`,
+        content: overdue ? '月度自评已超过截止时间，请尽快完成。' : '请按计划完成本月月度自评。',
+        extraData: {
+          taskId: period.taskId,
+          periodId: period.id,
+          periodKey: period.periodKey,
+          action: 'employee_period_review',
+        },
+      });
+      if (overdue && period.task.managerId) {
+        await this.notificationsService.create({
+          dedupeKey: `monthly-self-eval:${period.id}:${period.task.managerId}:${kind}:${dateKey}`,
+          userId: period.task.managerId,
+          cycleId: period.task.cycleId,
+          taskId: period.taskId,
+          type: 'monthly_self_eval_overdue_manager_notice',
+          title: `${period.periodKey}员工月度自评已逾期`,
+          content: '该员工尚未提交月度自评，系统仅提醒，不会自动推进主管评分。',
+          extraData: {
+            taskId: period.taskId,
+            periodId: period.id,
+            periodKey: period.periodKey,
+            action: 'manager_period_review',
+          },
+        });
+      }
+    }
   }
 
   // ---------------------------------------------------------------------------
