@@ -34,6 +34,7 @@ const emit = defineEmits<{
 
 const action = computed(() => props.selectedContext ? selectTrackingAction(props.selectedContext) : null);
 const summary = computed(() => props.result.summary);
+const latestSelfEvaluation = computed(() => summary.value?.latestSelfEvaluation ?? null);
 const activeBusinessPeriodLabel = computed(() => {
   const key = summary.value?.activeBusinessPeriodKey;
   if (key === 'cycle') return '本周期';
@@ -133,6 +134,16 @@ function periodName(period: PerformanceCycleContext['periods'][number]) {
   const [, month = period.periodKey] = period.periodKey.split('-');
   return `${Number(month)}月`;
 }
+
+function shortPeriodLabel(periodKey: string) {
+  if (periodKey === 'cycle') return '整周期';
+  const match = /^(\d{4})-(\d{2})$/.exec(periodKey);
+  return match ? `${Number(match[2])}月` : periodKey;
+}
+
+function scoreLabel(score: number | null, emptyLabel = '不参与评分') {
+  return score === null ? emptyLabel : `${score}分`;
+}
 </script>
 
 <template>
@@ -171,6 +182,9 @@ function periodName(period: PerformanceCycleContext['periods'][number]) {
       <div>
         <span>{{ selectedContext.scoringFrequency === 'monthly' ? '月度自评' : '整周期自评' }}</span>
         <strong>{{ reviewProgressText }}</strong>
+        <small v-if="latestSelfEvaluation" data-testid="goal-tracking-latest-total-score">
+          最近：{{ shortPeriodLabel(latestSelfEvaluation.periodKey) }}自评总分 {{ scoreLabel(latestSelfEvaluation.selfScoreTotal, '暂无总分') }}
+        </small>
       </div>
       <div>
         <span>{{ activeBusinessPeriodLabel ? `${activeBusinessPeriodLabel}日常跟进` : '日常跟进' }}</span>
@@ -238,6 +252,13 @@ function periodName(period: PerformanceCycleContext['periods'][number]) {
               <div class="tracking-goal-card__progress">
                 <div><span>当前完成度</span><strong>{{ item.progress }}%</strong></div>
                 <el-progress :percentage="item.progress" :stroke-width="8" :show-text="false" />
+                <small
+                  v-if="item.latestSelfEvaluation"
+                  class="tracking-goal-card__score"
+                  :data-testid="`goal-tracking-indicator-score-${item.id}`"
+                >
+                  {{ shortPeriodLabel(item.latestSelfEvaluation.periodKey) }}自评 {{ scoreLabel(item.latestSelfEvaluation.selfScore) }}
+                </small>
               </div>
               <div class="tracking-goal-card__latest">
                 <span>最新进展</span>
@@ -305,6 +326,7 @@ function periodName(period: PerformanceCycleContext['periods'][number]) {
 .tracking-goal-card__weight { margin-top: 14px; padding: 4px 8px; border-radius: 5px; background: #f3f5f8; color: #69758a; font-size: 11px; }
 .tracking-goal-card__body { min-width: 0; display: grid; grid-template-columns: minmax(155px, .7fr) minmax(220px, 1.4fr) auto auto; align-items: center; gap: 18px; padding: 13px 15px; }
 .tracking-goal-card__progress, .tracking-goal-card__latest { min-width: 0; display: grid; gap: 5px; }
+.tracking-goal-card__score { color: #4d6fca !important; font-weight: 600; }
 .tracking-goal-card__progress > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .tracking-goal-card__body span, .tracking-goal-card__latest small { color: #929bac; font-size: 11px; }
 .tracking-goal-card__body strong { overflow: hidden; color: #39455a; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }

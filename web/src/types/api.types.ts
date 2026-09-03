@@ -1948,6 +1948,12 @@ export interface GoalTrackingLatestProgress {
 
 export type GoalTrackingHealthStatus = 'on_track' | 'at_risk' | 'blocked' | 'completed';
 
+export interface GoalTrackingSelfEvaluationResult {
+  periodKey: string;
+  selfScore: number | null;
+  submittedAt: string;
+}
+
 export interface GoalTrackingItem {
   id: string;
   title: string;
@@ -1973,6 +1979,7 @@ export interface GoalTrackingItem {
   progress: number;
   weight: number | null;
   latestProgress: GoalTrackingLatestProgress | null;
+  latestSelfEvaluation: GoalTrackingSelfEvaluationResult | null;
 }
 
 export interface GoalTrackingResult {
@@ -1987,6 +1994,11 @@ export interface GoalTrackingResult {
     activeBusinessPeriodKey: string | null;
     activeUpdatedGoalCount: number;
     goalCount: number;
+    latestSelfEvaluation: {
+      periodKey: string;
+      selfScoreTotal: number | null;
+      submittedAt: string;
+    } | null;
   };
   totalWeight: number;
   items: GoalTrackingItem[];
@@ -2016,6 +2028,7 @@ export interface GoalTrackingIndicatorDetail extends GoalTrackingItem {
   }>;
   alignedParentIndicators?: IndicatorAlignmentCandidate[];
   progressUpdates: GoalTrackingLatestProgress[];
+  selfEvaluationResults: GoalTrackingSelfEvaluationResult[];
   changeRecords: GoalTrackingChangeRecord[];
   createdAt: string;
   updatedAt: string;

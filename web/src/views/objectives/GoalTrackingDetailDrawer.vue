@@ -39,6 +39,8 @@ const activeBusinessPeriodKey = computed(() => (
 ));
 const activePeriodLabel = computed(() => formatBusinessPeriod(activeBusinessPeriodKey.value));
 const updateActionLabel = computed(() => `更新${activePeriodLabel.value}目标进展`);
+const selfEvaluationResults = computed(() => detail.value?.selfEvaluationResults ?? []);
+const latestSelfEvaluation = computed(() => selfEvaluationResults.value[0] ?? null);
 const historyGroups = computed(() => {
   const groups = new Map<string, GoalTrackingLatestProgress[]>();
   for (const progress of detail.value?.progressUpdates.slice(1) ?? []) {
@@ -180,6 +182,10 @@ function progressSourceLabel(progress: GoalTrackingLatestProgress) {
   return progress.source === 'monthly_self_evaluation' ? '月度自评结果' : '主动进展';
 }
 
+function scoreLabel(score: number | null) {
+  return score === null ? '不参与评分' : `${score}分`;
+}
+
 function formatBusinessPeriod(periodKey?: string | null) {
   if (periodKey === 'cycle') return '本考核周期';
   const match = /^(\d{4})-(\d{2})$/.exec(periodKey ?? '');
@@ -258,6 +264,33 @@ function formatBusinessPeriod(periodKey?: string | null) {
           <p>{{ latestProgress.content || '未填写描述' }}</p>
         </div>
         <p v-else class="goal-detail__empty">当前尚未记录进展</p>
+
+        <section
+          v-if="latestSelfEvaluation"
+          class="self-evaluation-results"
+          data-testid="goal-tracking-self-evaluation-results"
+        >
+          <header>
+            <h4>月度自评结果</h4>
+            <span>按月保留</span>
+          </header>
+          <div class="self-evaluation-results__latest">
+            <div>
+              <strong>{{ formatBusinessPeriod(latestSelfEvaluation.periodKey) }}</strong>
+              <time>{{ formatDate(latestSelfEvaluation.submittedAt) }} 提交</time>
+            </div>
+            <b>{{ scoreLabel(latestSelfEvaluation.selfScore) }}</b>
+          </div>
+          <details v-if="selfEvaluationResults.length > 1">
+            <summary>历史自评分（{{ selfEvaluationResults.length - 1 }}）</summary>
+            <ol>
+              <li v-for="result in selfEvaluationResults.slice(1)" :key="result.periodKey">
+                <span>{{ formatBusinessPeriod(result.periodKey) }}</span>
+                <strong>{{ scoreLabel(result.selfScore) }}</strong>
+              </li>
+            </ol>
+          </details>
+        </section>
 
         <form
           v-if="editing"
@@ -693,6 +726,20 @@ function formatBusinessPeriod(periodKey?: string | null) {
 .current-progress__values span { color: #33845c; font-size: 12px; }
 .current-progress__values strong { font-size: 22px; }
 .current-progress p { margin: 0; color: #425069; white-space: pre-wrap; word-break: break-word; }
+.self-evaluation-results { display: grid; gap: 10px; margin: 14px 0 16px; padding: 13px 14px; border: 1px solid #e2e8f3; border-radius: 11px; background: #fbfcff; }
+.self-evaluation-results > header, .self-evaluation-results__latest, .self-evaluation-results__latest > div, .self-evaluation-results li { display: flex; align-items: center; }
+.self-evaluation-results > header, .self-evaluation-results__latest, .self-evaluation-results li { justify-content: space-between; gap: 12px; }
+.self-evaluation-results > header h4 { margin: 0; color: #2c3850; font-size: 14px; }
+.self-evaluation-results > header span, .self-evaluation-results time { color: #8d97a8; font-size: 11px; }
+.self-evaluation-results__latest { padding: 10px 12px; border-radius: 8px; background: #eef4ff; }
+.self-evaluation-results__latest > div { gap: 10px; }
+.self-evaluation-results__latest strong { color: #3a4a66; font-size: 13px; }
+.self-evaluation-results__latest b { color: #355dc9; font-size: 20px; }
+.self-evaluation-results details { border-top: 1px solid #e7ebf3; }
+.self-evaluation-results summary { padding-top: 10px; color: #66748b; font-size: 12px; font-weight: 600; cursor: pointer; }
+.self-evaluation-results ol { display: grid; gap: 6px; margin: 8px 0 0; padding: 0; list-style: none; }
+.self-evaluation-results li { padding: 7px 10px; border-radius: 7px; background: #f5f7fb; color: #66748b; font-size: 12px; }
+.self-evaluation-results li strong { color: #3a4a66; }
 .goal-progress-history { margin-top: 14px; border-top: 1px solid #edf0f5; }
 .goal-progress-history > summary { padding: 14px 0 4px; color: #60708a; cursor: pointer; font-weight: 600; }
 .goal-progress-history > section h4 { margin: 14px 0 4px; color: #8490a4; font-size: 12px; }

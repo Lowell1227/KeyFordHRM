@@ -79,6 +79,12 @@ export interface GoalTrackingLatestProgress {
   source: GoalProgressSource;
 }
 
+export interface GoalTrackingSelfEvaluationResult {
+  periodKey: string;
+  selfScore: number | null;
+  submittedAt: Date;
+}
+
 export interface GoalTrackingItem {
   id: string;
   title: string;
@@ -104,6 +110,7 @@ export interface GoalTrackingItem {
   progress: number;
   weight: number | null;
   latestProgress: GoalTrackingLatestProgress | null;
+  latestSelfEvaluation: GoalTrackingSelfEvaluationResult | null;
 }
 
 export interface GoalTrackingResult {
@@ -118,6 +125,11 @@ export interface GoalTrackingResult {
     activeBusinessPeriodKey: string | null;
     activeUpdatedGoalCount: number;
     goalCount: number;
+    latestSelfEvaluation: {
+      periodKey: string;
+      selfScoreTotal: number | null;
+      submittedAt: Date;
+    } | null;
   };
   totalWeight: number;
   items: GoalTrackingItem[];
@@ -553,6 +565,7 @@ export class ObjectivesService {
       progress: objective.progress,
       weight: objective.weight?.toNumber() ?? null,
       latestProgress: latestByObjective.get(objective.id) ?? null,
+      latestSelfEvaluation: null,
     }));
     return {
       totalWeight: items.reduce((sum, item) => sum + (item.weight ?? 0), 0),
@@ -632,6 +645,13 @@ export class ObjectivesService {
             status: true,
             employeeSubmittedAt: true,
             managerSubmittedAt: true,
+            selfScoreTotal: true,
+            indicatorReviews: {
+              select: {
+                selfScore: true,
+                indicatorVersionItem: { select: { sourceInstanceId: true } },
+              },
+            },
           },
         },
         indicatorInstances: {
@@ -666,6 +686,20 @@ export class ObjectivesService {
     }
 
     const canEdit = this.canSubmitActiveProgress(task, viewer);
+    const periods = task.periods ?? [];
+    const latestSelfEvaluationByIndicator = new Map<string, GoalTrackingSelfEvaluationResult>();
+    for (const period of periods) {
+      if (!period.employeeSubmittedAt) continue;
+      for (const review of period.indicatorReviews ?? []) {
+        const sourceInstanceId = review.indicatorVersionItem.sourceInstanceId;
+        if (!sourceInstanceId) continue;
+        latestSelfEvaluationByIndicator.set(sourceInstanceId, {
+          periodKey: period.periodKey,
+          selfScore: review.selfScore?.toNumber() ?? null,
+          submittedAt: period.employeeSubmittedAt,
+        });
+      }
+    }
     const items = task.indicatorInstances.map((indicator) => {
       const latest = currentGoalProgress(indicator.progressUpdates);
       const weight = Math.round(indicator.weight.toNumber() * 10_000) / 100;
@@ -709,10 +743,11 @@ export class ObjectivesService {
               source: progressSource(latest),
             }
           : null,
+        latestSelfEvaluation: latestSelfEvaluationByIndicator.get(indicator.id) ?? null,
       } satisfies GoalTrackingItem;
     });
-    const periods = task.periods ?? [];
     const activeBusinessPeriodKey = activeGoalTrackingBusinessPeriodKey(periods);
+    const latestSubmittedPeriod = [...periods].reverse().find((period) => period.employeeSubmittedAt) ?? null;
 
     return {
       taskId: task.id,
@@ -733,6 +768,13 @@ export class ObjectivesService {
           ))).length
           : 0,
         goalCount: items.length,
+        latestSelfEvaluation: latestSubmittedPeriod
+          ? {
+              periodKey: latestSubmittedPeriod.periodKey,
+              selfScoreTotal: latestSubmittedPeriod.selfScoreTotal?.toNumber() ?? null,
+              submittedAt: latestSubmittedPeriod.employeeSubmittedAt!,
+            }
+          : null,
       },
       totalWeight: Math.round(items.reduce((sum, item) => sum + (item.weight ?? 0), 0) * 100) / 100,
       items,
@@ -1092,6 +1134,16 @@ export class ObjectivesService {
                 periodEnd: true,
                 status: true,
                 employeeSubmittedAt: true,
+                selfScoreTotal: true,
+                indicatorReviews: {
+                  where: {
+                    indicatorVersionItem: { sourceInstanceId: indicatorId },
+                  },
+                  select: {
+                    selfScore: true,
+                    indicatorVersionItem: { select: { sourceInstanceId: true } },
+                  },
+                },
               },
             },
             cycle: {
@@ -1142,6 +1194,16 @@ export class ObjectivesService {
     });
     const effectiveWeight = Math.round(indicator.weight.toNumber() * 10_000) / 100;
     const orderedProgress = sortGoalProgress(indicator.progressUpdates);
+    const selfEvaluationResults = (indicator.task.periods ?? [])
+      .flatMap((period) => {
+        if (!period.employeeSubmittedAt) return [];
+        return (period.indicatorReviews ?? []).map((review) => ({
+          periodKey: period.periodKey,
+          selfScore: review.selfScore?.toNumber() ?? null,
+          submittedAt: period.employeeSubmittedAt!,
+        }));
+      })
+      .reverse();
 
     return {
       id: indicator.id,
@@ -1184,6 +1246,7 @@ export class ObjectivesService {
         businessPeriodKey: progressBusinessPeriodKey(progress),
         source: progressSource(progress),
       })),
+      selfEvaluationResults,
       changeRecords: changeRecords.map((record) => ({
         id: record.id,
         action: record.action,

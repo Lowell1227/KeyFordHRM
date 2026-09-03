@@ -206,9 +206,28 @@ describe('ObjectivesService visibility helpers', () => {
         closedAt: null,
       },
       periods: [
-        { periodKey: '2026-07', periodStart: new Date('2026-07-01T00:00:00.000Z'), periodEnd: new Date('2026-07-31T00:00:00.000Z'), status: 'completed', employeeSubmittedAt: new Date(), managerSubmittedAt: new Date() },
-        { periodKey: '2026-08', periodStart: new Date('2026-08-01T00:00:00.000Z'), periodEnd: new Date('2026-08-31T00:00:00.000Z'), status: 'completed', employeeSubmittedAt: new Date(), managerSubmittedAt: null },
-        { periodKey: '2026-09', periodStart: new Date('2026-09-01T00:00:00.000Z'), periodEnd: new Date('2026-09-30T00:00:00.000Z'), status: 'self_eval', employeeSubmittedAt: null, managerSubmittedAt: null },
+        {
+          id: 'period-july', periodKey: '2026-07', periodStart: new Date('2026-07-01T00:00:00.000Z'), periodEnd: new Date('2026-07-31T00:00:00.000Z'),
+          status: 'completed', employeeSubmittedAt: new Date('2026-08-01T08:00:00.000Z'), managerSubmittedAt: new Date('2026-08-03T08:00:00.000Z'),
+          selfScoreTotal: new Prisma.Decimal('82'),
+          indicatorReviews: [
+            { selfScore: new Prisma.Decimal('80'), indicatorVersionItem: { sourceInstanceId: 'indicator-revenue' } },
+            { selfScore: new Prisma.Decimal('84'), indicatorVersionItem: { sourceInstanceId: 'indicator-attitude' } },
+          ],
+        },
+        {
+          id: 'period-august', periodKey: '2026-08', periodStart: new Date('2026-08-01T00:00:00.000Z'), periodEnd: new Date('2026-08-31T00:00:00.000Z'),
+          status: 'completed', employeeSubmittedAt: new Date('2026-09-01T08:00:00.000Z'), managerSubmittedAt: null,
+          selfScoreTotal: new Prisma.Decimal('91'),
+          indicatorReviews: [
+            { selfScore: new Prisma.Decimal('90'), indicatorVersionItem: { sourceInstanceId: 'indicator-revenue' } },
+            { selfScore: new Prisma.Decimal('92'), indicatorVersionItem: { sourceInstanceId: 'indicator-attitude' } },
+          ],
+        },
+        {
+          id: 'period-september', periodKey: '2026-09', periodStart: new Date('2026-09-01T00:00:00.000Z'), periodEnd: new Date('2026-09-30T00:00:00.000Z'),
+          status: 'self_eval', employeeSubmittedAt: null, managerSubmittedAt: null, selfScoreTotal: null, indicatorReviews: [],
+        },
       ],
       indicatorInstances: [
         {
@@ -313,6 +332,11 @@ describe('ObjectivesService visibility helpers', () => {
         activeBusinessPeriodKey: '2026-09',
         activeUpdatedGoalCount: 0,
         goalCount: 2,
+        latestSelfEvaluation: {
+          periodKey: '2026-08',
+          selfScoreTotal: 91,
+          submittedAt: new Date('2026-09-01T08:00:00.000Z'),
+        },
       },
       totalWeight: 36,
       items: [
@@ -333,6 +357,11 @@ describe('ObjectivesService visibility helpers', () => {
           businessPeriodKey: '2026-08',
           source: 'active_progress',
         },
+        latestSelfEvaluation: {
+          periodKey: '2026-08',
+          selfScore: 90,
+          submittedAt: new Date('2026-09-01T08:00:00.000Z'),
+        },
       }),
         expect.objectContaining({
           id: 'indicator-attitude',
@@ -340,6 +369,11 @@ describe('ObjectivesService visibility helpers', () => {
           weight: 20,
           progress: 0,
           latestProgress: null,
+          latestSelfEvaluation: {
+            periodKey: '2026-08',
+            selfScore: 92,
+            submittedAt: new Date('2026-09-01T08:00:00.000Z'),
+          },
         }),
       ],
     });
@@ -1294,9 +1328,17 @@ describe('ObjectivesService visibility helpers', () => {
           closedAt: null,
         },
         periods: [
-          { periodKey: '2026-07', status: 'manager_scoring', employeeSubmittedAt: new Date('2026-08-01T00:00:00.000Z') },
-          { periodKey: '2026-08', status: 'self_eval', employeeSubmittedAt: null },
-          { periodKey: '2026-09', status: 'unopened', employeeSubmittedAt: null },
+          {
+            id: 'period-july', periodKey: '2026-07', status: 'manager_scoring',
+            employeeSubmittedAt: new Date('2026-08-01T00:00:00.000Z'), selfScoreTotal: new Prisma.Decimal('82'),
+            indicatorReviews: [{ selfScore: new Prisma.Decimal('80'), indicatorVersionItem: { sourceInstanceId: 'indicator-1' } }],
+          },
+          {
+            id: 'period-august', periodKey: '2026-08', status: 'completed',
+            employeeSubmittedAt: new Date('2026-09-01T00:00:00.000Z'), selfScoreTotal: new Prisma.Decimal('91'),
+            indicatorReviews: [{ selfScore: new Prisma.Decimal('90'), indicatorVersionItem: { sourceInstanceId: 'indicator-1' } }],
+          },
+          { id: 'period-september', periodKey: '2026-09', status: 'unopened', employeeSubmittedAt: null, selfScoreTotal: null, indicatorReviews: [] },
         ],
       },
       objectiveAlignments: [
@@ -1358,13 +1400,17 @@ describe('ObjectivesService visibility helpers', () => {
       actualNote: '截至季度末完成预算的 96%',
       weight: 16,
       canEdit: true,
-      activeBusinessPeriodKey: '2026-08',
+      activeBusinessPeriodKey: '2026-09',
       alignedObjectives: [
         { id: 'objective-1', title: '提升经营质量', level: 'company', ownerId: 'vp-1' },
       ],
       progressUpdates: [
         expect.objectContaining({ id: 'progress-2', progress: 60, creatorName: viewer.name }),
         expect.objectContaining({ id: 'progress-1', progress: 40, creatorName: viewer.name }),
+      ],
+      selfEvaluationResults: [
+        { periodKey: '2026-08', selfScore: 90, submittedAt: new Date('2026-09-01T00:00:00.000Z') },
+        { periodKey: '2026-07', selfScore: 80, submittedAt: new Date('2026-08-01T00:00:00.000Z') },
       ],
       changeRecords: [
         expect.objectContaining({ id: 'audit-1', action: 'indicator_updated', actorName: 'Manager' }),

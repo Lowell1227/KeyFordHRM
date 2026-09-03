@@ -1557,6 +1557,10 @@ test.describe('09-performance-workspace tracking behavior', () => {
         activeBusinessPeriodKey: '2026-09',
         activeUpdatedGoalCount: 0,
         goalCount: 1,
+        latestSelfEvaluation: {
+          periodKey: '2026-08', selfScoreTotal: 88,
+          submittedAt: '2026-09-01T08:00:00.000Z',
+        },
       },
       totalWeight: 16,
       items: [{
@@ -1568,6 +1572,10 @@ test.describe('09-performance-workspace tracking behavior', () => {
           attachments: [], createdBy: 'employee-1', creatorName: '刘伟',
           updatedAt: '2026-08-01T08:00:00.000Z',
           businessPeriodKey: '2026-08', source: 'active_progress',
+        },
+        latestSelfEvaluation: {
+          periodKey: '2026-08', selfScore: 90,
+          submittedAt: '2026-09-01T08:00:00.000Z',
         },
       }],
     };
@@ -1591,6 +1599,10 @@ test.describe('09-performance-workspace tracking behavior', () => {
       activeBusinessPeriodKey: '2026-09',
       alignedObjectives: [{ id: 'objective-1', title: '提升经营质量', level: 'company', ownerId: 'vp-1' }],
       progressUpdates: [listResult.items[0].latestProgress],
+      selfEvaluationResults: [
+        { periodKey: '2026-08', selfScore: 90, submittedAt: '2026-09-01T08:00:00.000Z' },
+        { periodKey: '2026-07', selfScore: 84, submittedAt: '2026-08-01T08:00:00.000Z' },
+      ],
       changeRecords: [
         {
           id: 'audit-v2', action: 'indicator_updated',
@@ -1650,6 +1662,8 @@ test.describe('09-performance-workspace tracking behavior', () => {
     });
 
     await page.goto('/action-items?employeeId=employee-1&cycleId=cycle-2');
+    await expect(page.getByTestId('goal-tracking-latest-total-score')).toHaveText('最近：8月自评总分 88分');
+    await expect(page.getByTestId('goal-tracking-indicator-score-indicator-1')).toHaveText('8月自评 90分');
     await expect(page.getByTestId('goal-tracking-indicator-button-indicator-1'))
       .toHaveText('更新9月进展');
     await page.getByTestId('goal-tracking-indicator-summary-indicator-1').click();
@@ -1659,6 +1673,11 @@ test.describe('09-performance-workspace tracking behavior', () => {
     await expect(drawer.getByRole('heading', { name: 'GMV 达成率' })).toBeVisible();
     await expect(drawer).toContainText('有效权重 16%');
     await expect(drawer).toContainText('完成首轮投放');
+    const selfEvaluationResults = drawer.getByTestId('goal-tracking-self-evaluation-results');
+    await expect(selfEvaluationResults).toContainText('月度自评结果');
+    await expect(selfEvaluationResults).toContainText('2026年8月');
+    await expect(selfEvaluationResults).toContainText('90分');
+    await expect(selfEvaluationResults).toContainText('历史自评分（1）');
     const infoSection = drawer.locator('#goal-detail-info');
     await expect(infoSection.getByText('指标描述', { exact: true })).toBeVisible();
     await expect(infoSection).toContainText('销售、门店与B2B：跟进季度 GMV 达成情况');
