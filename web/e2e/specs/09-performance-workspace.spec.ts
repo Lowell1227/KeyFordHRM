@@ -1663,7 +1663,17 @@ test.describe('09-performance-workspace tracking behavior', () => {
 
     await page.goto('/action-items?employeeId=employee-1&cycleId=cycle-2');
     await expect(page.getByTestId('goal-tracking-latest-total-score')).toHaveText('最近：8月自评总分 88分');
-    await expect(page.getByTestId('goal-tracking-indicator-score-indicator-1')).toHaveText('8月自评 90分');
+    const indicatorRow = page.getByTestId('goal-tracking-row-indicator-1');
+    const indicatorHeader = indicatorRow.locator('header');
+    const indicatorScore = page.getByTestId('goal-tracking-indicator-score-indicator-1');
+    const indicatorWeight = indicatorHeader.locator('.tracking-goal-card__weight');
+    await expect(indicatorHeader.getByTestId('goal-tracking-indicator-score-indicator-1')).toHaveText('8月自评 90分');
+    await expect(indicatorRow.locator('.tracking-goal-card__progress')).not.toContainText('8月自评');
+    const scoreBox = await indicatorScore.boundingBox();
+    const weightBox = await indicatorWeight.boundingBox();
+    expect(scoreBox).not.toBeNull();
+    expect(weightBox).not.toBeNull();
+    expect(Math.ceil(scoreBox!.x + scoreBox!.width)).toBeLessThanOrEqual(Math.ceil(weightBox!.x));
     await expect(page.getByTestId('goal-tracking-indicator-button-indicator-1'))
       .toHaveText('更新9月进展');
     await page.getByTestId('goal-tracking-indicator-summary-indicator-1').click();

@@ -246,19 +246,21 @@ function scoreLabel(score: number | null, emptyLabel = '不参与评分') {
                   <span>{{ item.description || item.scoringStandard || '暂无目标说明' }}</span>
                 </span>
               </button>
-              <span class="tracking-goal-card__weight">权重 {{ item.weight === null ? '--' : `${item.weight}%` }}</span>
-            </header>
-            <div class="tracking-goal-card__body">
-              <div class="tracking-goal-card__progress">
-                <div><span>当前完成度</span><strong>{{ item.progress }}%</strong></div>
-                <el-progress :percentage="item.progress" :stroke-width="8" :show-text="false" />
-                <small
+              <div class="tracking-goal-card__meta">
+                <span
                   v-if="item.latestSelfEvaluation"
                   class="tracking-goal-card__score"
                   :data-testid="`goal-tracking-indicator-score-${item.id}`"
                 >
                   {{ shortPeriodLabel(item.latestSelfEvaluation.periodKey) }}自评 {{ scoreLabel(item.latestSelfEvaluation.selfScore) }}
-                </small>
+                </span>
+                <span class="tracking-goal-card__weight">权重 {{ item.weight === null ? '--' : `${item.weight}%` }}</span>
+              </div>
+            </header>
+            <div class="tracking-goal-card__body">
+              <div class="tracking-goal-card__progress">
+                <div><span>当前完成度</span><strong>{{ item.progress }}%</strong></div>
+                <el-progress :percentage="item.progress" :stroke-width="8" :show-text="false" />
               </div>
               <div class="tracking-goal-card__latest">
                 <span>最新进展</span>
@@ -323,10 +325,12 @@ function scoreLabel(score: number | null, emptyLabel = '不参与评分') {
 .tracking-goal-card__copy { min-width: 0; display: grid; gap: 4px; }
 .tracking-goal-card__copy strong { overflow: hidden; color: #27334a; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
 .tracking-goal-card__copy > span { overflow: hidden; color: #8a94a6; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.tracking-goal-card__weight { margin-top: 14px; padding: 4px 8px; border-radius: 5px; background: #f3f5f8; color: #69758a; font-size: 11px; }
+.tracking-goal-card__meta { display: flex; align-items: center; gap: 7px; margin-top: 14px; white-space: nowrap; }
+.tracking-goal-card__weight, .tracking-goal-card__score { padding: 4px 8px; border-radius: 5px; font-size: 11px; }
+.tracking-goal-card__weight { background: #f3f5f8; color: #69758a; }
 .tracking-goal-card__body { min-width: 0; display: grid; grid-template-columns: minmax(155px, .7fr) minmax(220px, 1.4fr) auto auto; align-items: center; gap: 18px; padding: 13px 15px; }
 .tracking-goal-card__progress, .tracking-goal-card__latest { min-width: 0; display: grid; gap: 5px; }
-.tracking-goal-card__score { color: #4d6fca !important; font-weight: 600; }
+.tracking-goal-card__score { background: #eef3ff; color: #4d6fca; font-weight: 600; }
 .tracking-goal-card__progress > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .tracking-goal-card__body span, .tracking-goal-card__latest small { color: #929bac; font-size: 11px; }
 .tracking-goal-card__body strong { overflow: hidden; color: #39455a; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
@@ -355,7 +359,7 @@ function scoreLabel(score: number | null, emptyLabel = '不参与评分') {
   .tracking-cycle__cards { padding: 10px; }
   .tracking-goal-card > header { grid-template-columns: minmax(0, 1fr) auto; padding-right: 12px; }
   .tracking-goal-card__summary { padding: 12px; }
-  .tracking-goal-card__weight { margin-top: 12px; }
+  .tracking-goal-card__meta { margin-top: 12px; }
   .tracking-goal-card__body { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 12px; }
   .tracking-goal-card__progress, .tracking-goal-card__latest { grid-column: 1 / -1; }
 }
