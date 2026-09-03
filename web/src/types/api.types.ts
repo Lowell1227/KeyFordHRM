@@ -813,6 +813,8 @@ export interface TaskListItem extends AssessmentTask {
   totalScore?: number;
   grade?: PerfGrade;
   rawGrade?: PerfGrade;
+  workflowVersion?: number;
+  periods?: AssessmentPeriodSummary[];
 }
 
 export interface TaskDetail extends AssessmentTask {

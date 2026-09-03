@@ -333,6 +333,42 @@ test.describe('cycle-first task contracts', () => {
     await expect(page).toHaveURL(/\/tasks\/personal-task-1\?.*stage=result/);
   });
 
+  test('keeps workflow-v2 monthly self-evaluation pending after the coarse task enters manager scoring', async ({ page }) => {
+    const taskRequests: URL[] = [];
+    const currentCycle = cycle('current-monthly', '2026-07-01', '2026-09-30');
+    const personalTask: TaskListItem = {
+      id: 'personal-task-monthly',
+      cycleId: currentCycle.id,
+      cycleName: '2026 Q3 季度考核（902LW测试）',
+      employeeId: 'manager-1',
+      employeeName: '方园',
+      status: 'manager_scoring',
+      isExempt: false,
+      workflowVersion: 2,
+      periods: [{
+        id: 'period-2026-08',
+        periodKey: '2026-08',
+        periodType: 'month',
+        sequence: 2,
+        status: 'self_eval',
+        selfEvalOpenAt: '2026-09-01T01:00:00.000Z',
+        selfEvalDueAt: '2026-09-18T10:00:00.000Z',
+        managerDueAt: '2026-09-19T10:00:00.000Z',
+        employeeSubmittedAt: null,
+        managerSubmittedAt: null,
+      }],
+      updatedAt: '2026-09-02T13:30:00.000Z',
+    };
+    await mockTaskCycleShell(page, [currentCycle], taskRequests, [personalTask]);
+
+    await page.goto('/tasks?scope=mine&stage=self-eval&cycleId=current-monthly');
+
+    await expect(page.getByTestId('task-stage-self-eval').locator('.task-stage-item__state')).toHaveText('待处理');
+    await expect(page.getByTestId('task-stage-result').locator('.task-stage-item__state')).toHaveText('未开始');
+    await page.getByTestId('task-stage-self-eval').click();
+    await expect(page.locator('.personal-task-card__state')).toHaveText('待处理');
+  });
+
   test('reloads the personal performance task after switching assessment cycle', async ({ page }) => {
     const taskRequests: URL[] = [];
     const activeCycle = cycle('cycle-active', '2026-08-01', '2026-08-30');

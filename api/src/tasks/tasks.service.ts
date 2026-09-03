@@ -55,6 +55,19 @@ export interface TaskListItem {
   totalScore: number | null;
   rawGrade: string | null;
   updatedAt: Date;
+  workflowVersion?: number;
+  periods?: Array<{
+    id: string;
+    periodKey: string;
+    periodType: AssessmentPeriodType;
+    sequence: number;
+    status: AssessmentPeriodStatus;
+    selfEvalOpenAt: Date;
+    selfEvalDueAt: Date;
+    managerDueAt: Date;
+    employeeSubmittedAt: Date | null;
+    managerSubmittedAt: Date | null;
+  }>;
 }
 
 /** 任务详情。 */
@@ -309,9 +322,24 @@ export class TasksService {
         take: dto.take,
         include: {
           employee: { select: { name: true } },
-          cycle: { select: { name: true } },
+          cycle: { select: { name: true, workflowVersion: true } },
           dept: { select: { name: true } },
           gradeResult: { select: { calculatedScore: true, rawGrade: true } },
+          periods: {
+            orderBy: { sequence: 'asc' },
+            select: {
+              id: true,
+              periodKey: true,
+              periodType: true,
+              sequence: true,
+              status: true,
+              selfEvalOpenAt: true,
+              selfEvalDueAt: true,
+              managerDueAt: true,
+              employeeSubmittedAt: true,
+              managerSubmittedAt: true,
+            },
+          },
         },
         orderBy: [{ cycle: { startDate: 'desc' } }, { updatedAt: 'desc' }],
       }),
@@ -332,6 +360,8 @@ export class TasksService {
       totalScore: t.gradeResult?.calculatedScore?.toNumber() ?? null,
       rawGrade: t.gradeResult?.rawGrade ?? null,
       updatedAt: t.updatedAt,
+      workflowVersion: t.cycle?.workflowVersion ?? 1,
+      periods: t.periods,
     }));
 
     return paginated(items, total, dto);

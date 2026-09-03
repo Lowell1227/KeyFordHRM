@@ -1,4 +1,5 @@
 import type { TaskStatus } from '@/types/enums';
+import type { AssessmentPeriodSummary } from '@/types/api.types';
 
 export type TaskStageKey = 'goal-setting' | 'goal-confirmation' | 'self-eval' | 'result';
 export type TaskStageState = 'pending' | 'progress' | 'completed' | 'not-started' | 'exempted';
@@ -60,4 +61,105 @@ export function getTaskStageStateForStatus(status: TaskStatus, stage: TaskStageK
   if (stageIndex < currentIndex) return 'completed';
   if (stageIndex > currentIndex) return 'not-started';
   return getTaskStageState([status]);
+}
+
+export interface EmployeeTaskStageSource {
+  status: TaskStatus;
+  isExempt?: boolean;
+  workflowVersion?: number;
+  periods?: AssessmentPeriodSummary[];
+}
+
+export interface EmployeeTaskEntry {
+  stage: TaskStageKey;
+  label: string;
+  actionLabel: string;
+  periodId?: string;
+}
+
+const employeeResultPendingStatuses = new Set<TaskStatus>(['published', 'appealing']);
+const employeeResultCompletedStatuses = new Set<TaskStatus>(['confirmed', 'closed']);
+const resultProcessingStatuses = new Set<TaskStatus>([
+  'manager_scoring',
+  'dept_review',
+  'hr_calibration',
+  'approval',
+]);
+
+function employeeCanSubmitPeriod(period: AssessmentPeriodSummary): boolean {
+  return (
+    (period.status === 'self_eval' || period.status === 'manager_scoring')
+    && !period.employeeSubmittedAt
+    && !period.managerSubmittedAt
+  );
+}
+
+export function getEmployeeActionablePeriod(
+  task: EmployeeTaskStageSource,
+): AssessmentPeriodSummary | undefined {
+  if (task.workflowVersion !== 2) return undefined;
+  const actionable = (task.periods ?? []).filter(employeeCanSubmitPeriod);
+  return actionable.find((period) => period.status === 'self_eval')
+    ?? actionable.find((period) => period.status === 'manager_scoring');
+}
+
+export function getEmployeeTaskStageState(
+  task: EmployeeTaskStageSource,
+  stage: TaskStageKey,
+): TaskStageState {
+  if (task.isExempt || task.status === 'exempted') return 'exempted';
+  if (task.workflowVersion !== 2 || !(task.periods?.length)) {
+    if (stage === 'result') {
+      if (employeeResultCompletedStatuses.has(task.status)) return 'completed';
+      if (employeeResultPendingStatuses.has(task.status)) return 'pending';
+      if (resultProcessingStatuses.has(task.status)) return 'not-started';
+    }
+    return getTaskStageStateForStatus(task.status, stage);
+  }
+  if (stage === 'result') {
+    if (employeeResultCompletedStatuses.has(task.status)) return 'completed';
+    if (employeeResultPendingStatuses.has(task.status)) return 'pending';
+    return 'not-started';
+  }
+  if (stage !== 'self-eval') return getTaskStageStateForStatus(task.status, stage);
+
+  if (getEmployeeActionablePeriod(task)) return 'pending';
+  const periods = task.periods;
+  if (periods.every((period) => period.status === 'unopened')) return 'not-started';
+  const allEmployeeReviewsFinished = periods.every((period) => (
+    period.status === 'completed'
+    || period.status === 'no_result'
+    || Boolean(period.employeeSubmittedAt)
+    || Boolean(period.managerSubmittedAt)
+  ));
+  return allEmployeeReviewsFinished ? 'completed' : 'progress';
+}
+
+export function resolveEmployeeTaskStage(task: EmployeeTaskStageSource): TaskStageKey {
+  if (getEmployeeActionablePeriod(task)) return 'self-eval';
+  return TASK_STATUS_STAGE[task.status];
+}
+
+export function resolveEmployeeTaskEntry(task: EmployeeTaskStageSource): EmployeeTaskEntry {
+  const period = getEmployeeActionablePeriod(task);
+  if (period) {
+    const monthly = period.periodType === 'month';
+    return {
+      stage: 'self-eval',
+      label: monthly ? '月度自评' : '周期自评',
+      actionLabel: monthly ? '填写月度自评' : '填写周期自评',
+      periodId: period.id,
+    };
+  }
+  if (resultProcessingStatuses.has(task.status)) {
+    return { stage: 'result', label: '结果处理中', actionLabel: '查看进度' };
+  }
+  const stage = TASK_STATUS_STAGE[task.status];
+  const labels: Record<TaskStageKey, Pick<EmployeeTaskEntry, 'label' | 'actionLabel'>> = {
+    'goal-setting': { label: '目标制定', actionLabel: '继续制定目标' },
+    'goal-confirmation': { label: '目标确认', actionLabel: '确认绩效目标' },
+    'self-eval': { label: '自评', actionLabel: '填写绩效自评' },
+    result: { label: '结果确认', actionLabel: '查看并确认结果' },
+  };
+  return { stage, ...labels[stage] };
 }

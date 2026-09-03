@@ -11,8 +11,7 @@ import { getGradeLabel, getGradeStyle } from '@/utils/grade';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 import {
   isTerminalTaskStatus,
-  TASK_STATUS_STAGE,
-  type TaskStageKey,
+  resolveEmployeeTaskEntry,
 } from '@/views/task/task-stage';
 import type { AssessmentCycle, ReportSummary, TaskListItem } from '@/types/api.types';
 import type { PerfGrade, TeamTaskStage } from '@/types/enums';
@@ -52,28 +51,16 @@ const teamErrors = ref<Record<TeamTaskStage, boolean>>({
 });
 let taskEntryRequestSerial = 0;
 
-const taskStageLabels: Record<TaskStageKey, string> = {
-  'goal-setting': '目标制定',
-  'goal-confirmation': '目标确认',
-  'self-eval': '自评',
-  result: '结果确认',
-};
+const personalTaskEntry = computed(() => (
+  personalTask.value ? resolveEmployeeTaskEntry(personalTask.value) : null
+));
 
 const personalTaskStageLabel = computed(() => {
-  const task = personalTask.value;
-  return task ? taskStageLabels[TASK_STATUS_STAGE[task.status]] : '';
+  return personalTaskEntry.value?.label ?? '';
 });
 
 const personalTaskActionLabel = computed(() => {
-  const task = personalTask.value;
-  if (!task) return '查看任务';
-  const actionLabels: Record<TaskStageKey, string> = {
-    'goal-setting': '继续制定目标',
-    'goal-confirmation': '确认绩效目标',
-    'self-eval': '填写绩效自评',
-    result: '查看并确认结果',
-  };
-  return actionLabels[TASK_STATUS_STAGE[task.status]];
+  return personalTaskEntry.value?.actionLabel ?? '查看任务';
 });
 
 function latestOpenTask(items: TaskListItem[]): TaskListItem | null {
@@ -143,6 +130,18 @@ function loadTaskEntries() {
 
 function openTask(taskId: string) {
   void router.push({ name: 'TaskDetail', params: { id: taskId }, query: { returnTo: '/tasks' } });
+}
+
+function openPersonalTask(task: TaskListItem) {
+  const entry = resolveEmployeeTaskEntry(task);
+  void router.push({
+    name: 'TaskDetail',
+    params: { id: task.id },
+    query: {
+      returnTo: '/tasks',
+      ...(entry.periodId ? { stage: entry.stage, periodId: entry.periodId } : {}),
+    },
+  });
 }
 
 function openTeamWorkspace(stage: TeamTaskStage) {
@@ -316,7 +315,7 @@ function avatarColor(name: string): string {
             <strong>{{ personalTaskStageLabel }}</strong>
             <span class="task-entry-card__meta">{{ personalTask.cycleName || '当前考核周期' }}</span>
           </div>
-          <el-button data-testid="employee-current-task-open" type="primary" @click="openTask(personalTask.id)">
+          <el-button data-testid="employee-current-task-open" type="primary" @click="openPersonalTask(personalTask)">
             {{ personalTaskActionLabel }}
           </el-button>
         </template>
@@ -351,7 +350,7 @@ function avatarColor(name: string): string {
               <strong>{{ personalTaskStageLabel }}</strong>
               <span class="task-entry-card__meta">{{ personalTask.cycleName || '当前考核周期' }}</span>
             </div>
-            <el-button text type="primary" @click="openTask(personalTask.id)">查看</el-button>
+            <el-button text type="primary" @click="openPersonalTask(personalTask)">查看</el-button>
           </template>
           <div v-else class="task-entry-card__empty">当前没有个人绩效任务</div>
         </article>

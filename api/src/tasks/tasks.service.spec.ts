@@ -324,6 +324,46 @@ describe('TasksService', () => {
     };
   }
 
+  describe('findMine', () => {
+    it('returns workflow-v2 period submission state for employee task status derivation', async () => {
+      const openAt = new Date('2026-09-01T01:00:00.000Z');
+      prisma.assessmentTask.count.mockResolvedValue(1);
+      prisma.assessmentTask.findMany.mockResolvedValue([{
+        ...makeTask(TaskStatus.manager_scoring),
+        employee: { name: '方园' },
+        dept: { name: '人事组' },
+        cycle: { name: '2026 Q3 季度考核（902LW测试）', workflowVersion: 2 },
+        gradeResult: null,
+        periods: [{
+          id: 'period-2026-08',
+          periodKey: '2026-08',
+          periodType: 'month',
+          sequence: 2,
+          status: 'self_eval',
+          selfEvalOpenAt: openAt,
+          selfEvalDueAt: new Date('2026-09-18T10:00:00.000Z'),
+          managerDueAt: new Date('2026-09-19T10:00:00.000Z'),
+          employeeSubmittedAt: null,
+          managerSubmittedAt: null,
+        }],
+      }]);
+
+      const result = await service.findMine({ page: 1, pageSize: 20 } as any, makeViewer({ id: 'emp-1' }));
+
+      expect(result.items[0]).toMatchObject({
+        status: TaskStatus.manager_scoring,
+        workflowVersion: 2,
+        periods: [{
+          id: 'period-2026-08',
+          periodKey: '2026-08',
+          status: 'self_eval',
+          employeeSubmittedAt: null,
+          managerSubmittedAt: null,
+        }],
+      });
+    });
+  });
+
   describe('findOne', () => {
     it('returns workflow v2 monthly periods so the employee can enter the active review', async () => {
       const task: any = buildFullTask('self_eval');

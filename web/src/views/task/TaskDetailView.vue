@@ -25,8 +25,8 @@ import type { AssessmentCycle, TaskDetail, SetIndicatorBody, SubmitSelfEvalBody 
 import type { SignatureRole } from '@/types/enums';
 import { TASK_STATUS_META } from '@/types/enums';
 import {
-  TASK_STATUS_STAGE,
-  getTaskStageStateForStatus,
+  getEmployeeTaskStageState,
+  resolveEmployeeTaskStage,
   type TaskStageKey,
   type TaskStageState,
 } from './task-stage';
@@ -104,8 +104,8 @@ function safeTaskListReturnTo(value: unknown): string | null {
 }
 
 const currentPerformanceStage = computed<TaskStageKey | null>(() => {
-  const status = task.value?.status;
-  return status ? TASK_STATUS_STAGE[status] : null;
+  const current = task.value;
+  return current ? resolveEmployeeTaskStage(current) : null;
 });
 
 const requestedPerformanceStage = computed<TaskStageKey>(() =>
@@ -146,9 +146,9 @@ const performanceStageCardTitle = computed(() => isPeriodReviewPage.value
   ? periodReviewTitle.value
   : performanceStageCardTitles[requestedPerformanceStage.value]);
 const performanceStageState = computed<TaskStageState>(() => {
-  const status = task.value?.status;
-  return status
-    ? getTaskStageStateForStatus(status, requestedPerformanceStage.value)
+  const current = task.value;
+  return current
+    ? getEmployeeTaskStageState(current, requestedPerformanceStage.value)
     : 'not-started';
 });
 const performanceStageStateLabel = computed(() => {

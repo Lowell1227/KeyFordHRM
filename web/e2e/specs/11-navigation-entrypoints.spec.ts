@@ -465,6 +465,53 @@ test.describe("11-navigation-entrypoints dashboard task entry points", () => {
       ["returnTo", "/tasks"],
     ]);
   });
+
+  test("workflow-v2 employee sees an unsubmitted monthly self-evaluation before result confirmation", async ({
+    page,
+  }) => {
+    const monthlyTask = {
+      ...taskItem({
+        id: "task-monthly",
+        cycleId: "cycle-monthly",
+        cycleName: "2026 Q3 季度考核（902LW测试）",
+        status: "manager_scoring",
+      }),
+      workflowVersion: 2,
+      periods: [
+        {
+          id: "period-august",
+          periodKey: "2026-08",
+          periodType: "month",
+          sequence: 2,
+          status: "self_eval",
+          selfEvalOpenAt: "2026-09-01T01:00:00.000Z",
+          selfEvalDueAt: "2026-09-18T10:00:00.000Z",
+          managerDueAt: "2026-09-19T10:00:00.000Z",
+          employeeSubmittedAt: null,
+          managerSubmittedAt: null,
+        },
+      ],
+    } as TaskListItem;
+    await page.route("**/api/v1/tasks/mine**", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(apiResponse(taskPage([monthlyTask]))),
+      }),
+    );
+
+    const dashboard = new DashboardPage(page);
+    await dashboard.goto();
+
+    await expect(dashboard.currentEmployeeTask()).toContainText("月度自评");
+    await expect(dashboard.currentEmployeeTask()).not.toContainText("结果确认");
+    await dashboard.currentEmployeeTaskOpen().click();
+    await expect(page).toHaveURL(/\/tasks\/task-monthly\?/);
+
+    const destination = new URL(page.url());
+    expect(destination.pathname).toBe("/tasks/task-monthly");
+    expect(destination.searchParams.get("stage")).toBe("self-eval");
+    expect(destination.searchParams.get("periodId")).toBe("period-august");
+  });
 });
 
 test.describe("11-navigation-entrypoints manager dashboard task entry points", () => {

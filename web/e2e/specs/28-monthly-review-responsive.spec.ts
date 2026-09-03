@@ -22,7 +22,7 @@ function taskDetail() {
     deptName: '销售部',
     managerId: 'manager-1',
     managerName: '王主管',
-    status: 'self_eval',
+    status: 'manager_scoring',
     isExempt: false,
     indicatorInstances: [],
     periods: [{
@@ -200,6 +200,7 @@ test.describe('monthly goal review responsive workspace', () => {
     await expect(page.getByTestId('monthly-review-reference')).toBeVisible();
     await expect(page.getByTestId('monthly-review-form-workspace')).toBeVisible();
     await expect(page.getByText('2027年1月月度跟进', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('performance-stage-state')).toHaveText('待处理');
     await expect(page.getByTestId('monthly-review-goal-card')).toHaveCount(2);
     await expect(page.getByTestId('performance-employee-summary')).toContainText('方园');
     await expect(page.getByTestId('performance-employee-summary')).toContainText('绩效直属上级 王主管');

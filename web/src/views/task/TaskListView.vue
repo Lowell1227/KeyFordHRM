@@ -35,7 +35,7 @@ import type {
 } from '@/types/api.types';
 import type { TeamStageState, TeamTaskStage } from '@/types/enums';
 import {
-  getTaskStageStateForStatus,
+  getEmployeeTaskStageState,
   type TaskStageKey as MappedTaskStageKey,
   type TaskStageState,
 } from './task-stage';
@@ -221,7 +221,7 @@ const selectedStageLabel = computed(() => {
 
 function stageState(stage: MappedTaskStageKey): TaskStageState {
   if (list.value.length === 0) return 'not-started';
-  const states = list.value.map((task) => getTaskStageStateForStatus(task.status, stage));
+  const states = list.value.map((task) => getEmployeeTaskStageState(task, stage));
   if (states.every((state) => state === 'exempted')) return 'exempted';
   if (states.includes('pending')) return 'pending';
   if (states.includes('progress')) return 'progress';
