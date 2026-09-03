@@ -4,7 +4,8 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { periodReviewsApi } from '@/api/period-reviews.api';
 import type { PeriodReviewDetail } from '@/types/api.types';
 import PerformanceFormWorkspace from './PerformanceFormWorkspace.vue';
-import MonthlyReviewReferencePanel from './MonthlyReviewReferencePanel.vue';
+import PeriodReviewIndicatorContext from './PeriodReviewIndicatorContext.vue';
+import PeriodReviewToolbar from './PeriodReviewToolbar.vue';
 
 interface ManagerFormItem {
   indicatorVersionItemId: string;
@@ -27,13 +28,12 @@ const validationErrors = reactive<Record<string, string>>({});
 
 const canEdit = computed(() => Boolean(detail.value?.permissions.canEditManager));
 const employeeSubmitted = computed(() => Boolean(detail.value?.period.employeeSubmittedAt));
-const selectedIndicator = computed(() => detail.value?.indicators[selectedIndex.value]);
 const periodTitle = computed(() => {
   const period = detail.value?.period;
-  if (!period) return '主管评分';
-  if (period.periodType === 'cycle') return '整周期主管评分';
+  if (!period) return '直属上级评分';
+  if (period.periodType === 'cycle') return '整周期直属上级评分';
   const [year, month] = period.periodKey.split('-');
-  return `${year}年${Number(month)}月主管月度评分`;
+  return `${year}年${Number(month)}月直属上级月度评分`;
 });
 const followUpName = computed(() => detail.value?.period.periodType === 'cycle' ? '整周期自评' : '月度自评');
 const scoreRequiredCount = computed(() => detail.value?.indicators.filter((item) => item.isScoreRequired).length ?? 0);
@@ -87,7 +87,7 @@ async function loadReview() {
     replaceForm(next);
   } catch (loadError) {
     const candidate = loadError as { message?: string; response?: { data?: { message?: string } } };
-    error.value = candidate.response?.data?.message || candidate.message || '主管评分加载失败';
+    error.value = candidate.response?.data?.message || candidate.message || '直属上级评分加载失败';
   } finally {
     loading.value = false;
   }
@@ -122,7 +122,7 @@ function warningFor(index: number): string[] {
   const selfScore = detail.value?.indicators[index]?.selfScore;
   if (managerScore == null) return [];
   return [
-    managerScore < 60 ? '主管评分低于60分，请确认评价依据' : '',
+    managerScore < 60 ? '直属上级评分低于60分，请确认评价依据' : '',
     selfScore != null && Math.abs(managerScore - selfScore) >= 10 ? `与员工自评分相差${Math.abs(managerScore - selfScore)}分` : '',
   ].filter(Boolean);
 }
@@ -131,7 +131,7 @@ function validate(): boolean {
   for (const key of Object.keys(validationErrors)) delete validationErrors[key];
   formItems.forEach((item, index) => {
     if (detail.value?.indicators[index]?.isScoreRequired && item.managerScore == null) {
-      validationErrors[item.indicatorVersionItemId] = '请填写0-100分的主管评分';
+      validationErrors[item.indicatorVersionItemId] = '请填写0-100分的直属上级评分';
     }
   });
   const firstInvalid = formItems.findIndex((item) => validationErrors[item.indicatorVersionItemId]);
@@ -148,7 +148,7 @@ async function saveDraft() {
       indicators: bodyItems(),
     });
     draftVersion.value = result.draftVersion;
-    ElMessage.success('主管评分草稿已保存');
+    ElMessage.success('直属上级评分草稿已保存');
   } finally {
     saving.value = false;
   }
@@ -193,7 +193,7 @@ async function submitReview() {
       detail.value.period.status = result.status;
       detail.value.permissions.canEditManager = false;
     }
-    ElMessage.success('主管评分已提交');
+    ElMessage.success('直属上级评分已提交');
     emit('submitted');
   } finally {
     submitting.value = false;
@@ -206,14 +206,26 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
 <template>
   <section class="manager-review" data-testid="manager-period-review-workspace">
     <el-skeleton v-if="loading" animated :rows="10" />
-    <el-result v-else-if="error" icon="error" title="主管评分加载失败" :sub-title="error">
+    <el-result v-else-if="error" icon="error" title="直属上级评分加载失败" :sub-title="error">
       <template #extra><el-button @click="loadReview">重新加载</el-button></template>
     </el-result>
     <template v-else-if="detail">
-      <div class="manager-review__period-bar">
-        <div><strong>{{ periodTitle }}</strong><span>{{ detail.context.statusLabel }}</span></div>
-        <small>主管评分截止 {{ new Date(detail.period.managerDueAt).toLocaleString('zh-CN', { hour12: false }) }}</small>
-      </div>
+      <PeriodReviewToolbar
+        :title="periodTitle"
+        :status-label="detail.context.statusLabel.replace(/主管/g, '直属上级')"
+        :due-text="`直属上级评分截止 ${new Date(detail.period.managerDueAt).toLocaleString('zh-CN', { hour12: false })}`"
+        :progress-text="`评分完成 ${completedCount}/${scoreRequiredCount}`"
+        progress-hint="直属上级说明选填；分差和低分只提醒，不阻止提交"
+        :show-actions="canEdit"
+        toolbar-test-id="manager-review-period-bar"
+        actions-test-id="manager-review-actions"
+      >
+        <template #actions>
+          <el-button :loading="returning" :disabled="saving || submitting" @mousedown.prevent @click="returnReview">退回员工补充</el-button>
+          <el-button :loading="saving" :disabled="returning || submitting" @mousedown.prevent @click="saveDraft">保存草稿</el-button>
+          <el-button type="primary" :loading="submitting" :disabled="saving || returning" @mousedown.prevent @click="submitReview">提交直属上级评分</el-button>
+        </template>
+      </PeriodReviewToolbar>
 
       <div class="manager-review__totals" data-testid="manager-review-totals">
         <div>
@@ -222,7 +234,7 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
           <small>按有效权重自动计算</small>
         </div>
         <div>
-          <span>主管总分</span>
+          <span>直属上级总分</span>
           <strong data-testid="manager-review-manager-total">{{ managerScoreTotal ?? '--' }}</strong>
           <small>按有效权重自动计算</small>
         </div>
@@ -230,7 +242,7 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
 
       <el-alert
         v-if="!employeeSubmitted"
-        title="员工尚未提交月度自评，主管评分暂未开放"
+        title="员工尚未提交月度自评，直属上级评分暂未开放"
         type="info"
         :closable="false"
         show-icon
@@ -238,8 +250,7 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
 
       <PerformanceFormWorkspace
         v-else
-        reference-title="参考信息"
-        reference-test-id="manager-review-reference"
+        :show-reference="false"
         workspace-test-id="manager-review-form-workspace"
       >
         <template #main>
@@ -257,6 +268,7 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
                 <div><h3>{{ indicator.name }}</h3><p>{{ indicator.description || '暂无目标说明' }}</p></div>
                 <b>权重 {{ Math.round(indicator.weight * 100) }}%</b>
               </header>
+              <PeriodReviewIndicatorContext :indicator="indicator" />
               <div class="manager-score-card__employee">
                 <div><span>员工完成度</span><strong>{{ indicator.progress ?? '--' }}{{ indicator.progress == null ? '' : '%' }}</strong></div>
                 <div><span>员工自评分</span><strong>{{ indicator.selfScore ?? '--' }}{{ indicator.selfScore == null ? '' : '分' }}</strong></div>
@@ -265,14 +277,14 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
               </div>
               <div class="manager-score-card__form">
                 <label v-if="indicator.isScoreRequired">
-                  <span>主管评分 <b>*</b></span>
-                  <el-input-number v-model="formItems[index].managerScore" :min="0" :max="100" :controls="false" :disabled="!canEdit" aria-label="主管评分" placeholder="0-100" @change="delete validationErrors[indicator.indicatorVersionItemId]" />
+                  <span>直属上级评分 <b>*</b></span>
+                  <el-input-number v-model="formItems[index].managerScore" :min="0" :max="100" :controls="false" :disabled="!canEdit" aria-label="直属上级评分" placeholder="0-100" @change="delete validationErrors[indicator.indicatorVersionItemId]" />
                   <em v-if="validationErrors[indicator.indicatorVersionItemId]">{{ validationErrors[indicator.indicatorVersionItemId] }}</em>
                 </label>
                 <div v-else class="manager-score-card__exempt">不参与评分</div>
                 <el-button v-if="indicator.isScoreRequired" :disabled="!canEdit || indicator.selfScore == null" @click.stop="useSelfScore(index)">同意自评</el-button>
                 <label class="is-comment">
-                  <span>主管说明 <i>选填</i></span>
+                  <span>直属上级说明 <i>选填</i></span>
                   <el-input v-model="formItems[index].managerComment" :disabled="!canEdit" type="textarea" :rows="2" placeholder="填写评价依据或反馈建议" />
                 </label>
               </div>
@@ -282,17 +294,6 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
             </article>
           </div>
         </template>
-        <template #reference><MonthlyReviewReferencePanel :indicator="selectedIndicator" /></template>
-        <template #actions>
-          <footer v-if="canEdit" class="manager-review-actions" data-testid="manager-review-actions">
-            <div><strong>评分完成 {{ completedCount }}/{{ scoreRequiredCount }}</strong><span>主管说明选填；分差和低分只提醒，不阻止提交</span></div>
-            <div>
-              <el-button :loading="returning" :disabled="saving || submitting" @mousedown.prevent @click="returnReview">退回员工补充</el-button>
-              <el-button :loading="saving" :disabled="returning || submitting" @mousedown.prevent @click="saveDraft">保存草稿</el-button>
-              <el-button type="primary" :loading="submitting" :disabled="saving || returning" @mousedown.prevent @click="submitReview">提交主管评分</el-button>
-            </div>
-          </footer>
-        </template>
       </PerformanceFormWorkspace>
     </template>
   </section>
@@ -300,11 +301,6 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
 
 <style scoped>
 .manager-review { min-width: 0; display: grid; gap: 14px; }
-.manager-review__period-bar { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 16px; border: 1px solid #e5eaf2; border-radius: 12px; background: #fff; }
-.manager-review__period-bar > div { display: flex; align-items: center; gap: 9px; }
-.manager-review__period-bar strong { color: #202a3d; font-size: 16px; }
-.manager-review__period-bar span { padding: 3px 8px; border-radius: 4px; background: #eef2ff; color: #5068d8; font-size: 11px; }
-.manager-review__period-bar small { color: #7c8799; font-size: 12px; }
 .manager-review__totals { display: grid; grid-template-columns: repeat(2, minmax(0, 220px)); gap: 12px; }
 .manager-review__totals > div { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 3px 12px; padding: 12px 15px; border: 1px solid #e5eaf2; border-radius: 10px; background: #fff; }
 .manager-review__totals span { color: #697487; font-size: 12px; }
@@ -332,15 +328,8 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
 .manager-score-card__form em { color: #e64f4f; font-size: 11px; font-style: normal; }
 .manager-score-card__warnings { display: flex; gap: 8px; padding: 0 15px 13px; }
 .manager-score-card__warnings span { padding: 5px 8px; border-radius: 5px; background: #fff4e5; color: #a56a0a; font-size: 11px; }
-.manager-review-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid #dfe5f0; border-radius: 12px; background: #fff; box-shadow: 0 8px 24px rgb(31 45 61 / 10%); }
-.manager-review-actions > div:first-child { display: grid; gap: 2px; }
-.manager-review-actions strong { color: #30394a; font-size: 13px; }
-.manager-review-actions span { color: #8a93a3; font-size: 11px; }
-.manager-review-actions > div:last-child { display: flex; gap: 8px; }
 @media (max-width: 767px) {
   .manager-review { padding-bottom: 112px; }
-  .manager-review__period-bar { align-items: flex-start; padding: 12px; }
-  .manager-review__period-bar > div { align-items: flex-start; flex-direction: column; gap: 5px; }
   .manager-review__totals { grid-template-columns: 1fr 1fr; }
   .manager-score-card > header { grid-template-columns: 27px minmax(0, 1fr); padding: 12px; }
   .manager-score-card > header b { grid-column: 2; justify-self: start; }
@@ -348,9 +337,5 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
   .manager-score-card__employee .is-wide { grid-column: 1; }
   .manager-score-card__form > .el-button { justify-self: start; }
   .manager-score-card__warnings { flex-direction: column; padding-right: 12px; padding-left: 12px; }
-  .manager-review-actions { position: fixed; z-index: 40; right: 0; bottom: 0; left: 0; align-items: stretch; flex-direction: column; gap: 7px; padding: 9px 10px calc(9px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 0; }
-  .manager-review-actions > div:first-child span { display: none; }
-  .manager-review-actions > div:last-child { display: grid; grid-template-columns: 1fr 1fr 1.2fr; }
-  .manager-review-actions :deep(.el-button) { min-width: 0; margin-left: 0; padding-right: 6px; padding-left: 6px; font-size: 12px; }
 }
 </style>

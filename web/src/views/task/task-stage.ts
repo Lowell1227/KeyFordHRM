@@ -188,7 +188,7 @@ export function resolveEmployeeTaskEntry(task: EmployeeTaskStageSource): Employe
     return {
       stage: 'self-eval',
       label: monthlyPeriodLabel(waitingPeriod),
-      actionLabel: '等待主管月度评分',
+      actionLabel: '等待直属上级月度评分',
       periodId: waitingPeriod.id,
       progressLabel: monthlyProgressLabel(monthlyPeriods, waitingPeriod),
     };

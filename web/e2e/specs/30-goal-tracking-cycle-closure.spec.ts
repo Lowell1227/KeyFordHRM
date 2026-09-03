@@ -86,9 +86,11 @@ test('same-name cycles remain selectable and the employee can enter the exact re
   await expect(selector.locator('option')).toHaveCount(2);
   await expect(selector.locator('option').nth(0)).toContainText('月度自评');
   await expect(selector.locator('option').nth(1)).toContainText('已豁免');
-  await expect(page.getByTestId('goal-tracking-summary')).toContainText('8月目标已更新 1/2');
+  await expect(page.getByTestId('goal-tracking-summary')).toContainText('月度自评已提交 0/1个月');
+  await expect(page.getByTestId('goal-tracking-summary')).toContainText('8月日常跟进1/2个目标有更新');
+  await expect(page.getByTestId('goal-tracking-summary')).toContainText('当前阶段待填写8月月度自评');
   await expect(page.getByTestId('goal-tracking-surface')).toContainText('完成重点客户续约');
-  await expect(page.getByRole('complementary', { name: '评分期次' })).toContainText('待月度自评');
+  await expect(page.getByRole('complementary', { name: '评分期次' })).toHaveCount(0);
 
   await Promise.all([
     page.waitForURL(new RegExp(`/tasks/task-active\\?.*stage=self-eval.*periodId=${periodId}`)),
@@ -131,7 +133,7 @@ test('distinguishes missing goals from a follow-up period that is not open', asy
   await expect(page.getByTestId('goal-tracking-summary')).toContainText('目标待制定');
   await expect(page.getByTestId('goal-tracking-primary-action')).toHaveText('开始制定');
   await expect(page.getByTestId('goal-tracking-surface').getByRole('button')).toHaveCount(0);
-  await expect(page.getByRole('complementary', { name: '评分期次' })).toContainText('待目标制定');
+  await expect(page.getByRole('complementary', { name: '评分期次' })).toHaveCount(0);
 });
 
 function managerTask() {
@@ -173,28 +175,43 @@ async function mockManagerReview(page: Page, requests: Request[]) {
   await page.route(`**/api/v1/assessment-periods/${periodId}/manager-submit`, (route) => { requests.push(route.request()); return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ periodId, status: 'completed', draftVersion: 2, savedAt: new Date().toISOString() })) }); });
 }
 
-test('frozen manager can save and formally submit per-indicator scores', async ({ page }) => {
+test('direct manager uses the same full-width period structure and can submit per-indicator scores', async ({ page }) => {
   const requests: Request[] = [];
   await mockManagerReview(page, requests);
   await page.goto(`/tasks/task-manager-1?stage=self-eval&periodId=${periodId}`);
 
   const cards = page.getByTestId('manager-review-goal-card');
+  const periodBar = page.getByTestId('manager-review-period-bar');
+  await expect(page.getByTestId('performance-stage-title')).toHaveText('直属上级月度评分');
   await expect(page.getByTestId('manager-review-form-workspace')).toBeVisible();
-  await expect(page.getByTestId('manager-review-reference')).toBeVisible();
-  await expect(page.getByText('2026年8月主管月度评分', { exact: true })).toBeVisible();
+  await expect(page.getByTestId('manager-review-reference')).toHaveCount(0);
+  await expect(periodBar.getByText('2026年8月直属上级月度评分', { exact: true })).toBeVisible();
   await expect(cards).toHaveCount(2);
+  await expect(periodBar.getByTestId('manager-review-actions')).toBeVisible();
   const cardBox = await cards.first().boundingBox();
-  const referenceBox = await page.getByTestId('manager-review-reference').boundingBox();
   expect(cardBox).not.toBeNull();
-  expect(referenceBox).not.toBeNull();
-  expect(referenceBox!.x).toBeGreaterThan(cardBox!.x + cardBox!.width - 1);
+  expect(cardBox!.width).toBeGreaterThan(900);
+  await expect(cards.first().getByTestId('period-review-indicator-context')).toContainText('达到目标得90分');
   await cards.nth(0).getByRole('button', { name: '同意自评' }).click();
-  await cards.nth(1).getByLabel('主管评分').fill('55');
+  await cards.nth(1).getByLabel('直属上级评分').fill('55');
   await expect(cards.nth(1)).toContainText('低于60分');
   await expect(cards.nth(1)).toContainText('相差27分');
   await page.getByRole('button', { name: '保存草稿' }).click();
   await expect.poll(() => requests.filter((request) => request.method() === 'PUT').length).toBe(1);
-  await page.getByRole('button', { name: '提交主管评分' }).click();
+  await page.getByRole('button', { name: '提交直属上级评分' }).click();
   await expect.poll(() => requests.filter((request) => request.method() === 'POST').length).toBe(1);
   expect(requests.find((request) => request.method() === 'POST')?.postDataJSON()).toMatchObject({ expectedVersion: 1 });
+});
+
+test('direct manager keeps the shared card structure and fixed actions on mobile', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mockManagerReview(page, []);
+  await page.goto(`/tasks/task-manager-1?stage=self-eval&periodId=${periodId}`);
+
+  await expect(page.getByTestId('manager-review-reference')).toHaveCount(0);
+  await expect(page.getByTestId('manager-review-goal-card')).toHaveCount(2);
+  const actions = page.getByTestId('manager-review-actions');
+  await expect(actions).toHaveCSS('position', 'fixed');
+  await expect(actions.getByRole('button')).toHaveCount(3);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });

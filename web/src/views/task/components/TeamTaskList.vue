@@ -95,7 +95,7 @@ function periodLabel(item: TeamTaskListItem): string {
 
 function managerStatusLabel(item: TeamTaskListItem): string {
   const status = item.periodReview?.status;
-  if (status === 'manager_scoring') return '主管评分中';
+  if (status === 'manager_scoring') return '直属上级评分中';
   if (status === 'self_eval') return '员工自评中';
   if (status === 'completed') return '本期已完成';
   if (status === 'no_result') return '本期无结果';
@@ -300,7 +300,7 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
             <span data-testid="team-self-score-total">{{ row.periodReview?.selfScoreTotal ?? '-' }}</span>
           </template>
         </el-table-column>
-        <el-table-column v-if="stage === 'manager-eval' && !narrowColumns" label="主管总分" width="96" align="right">
+        <el-table-column v-if="stage === 'manager-eval' && !narrowColumns" label="直属上级总分" width="112" align="right">
           <template #default="{ row }">
             <span data-testid="team-manager-score-total">{{ row.periodReview ? (row.periodReview.managerScoreTotal ?? '-') : (row.totalScore ?? '-') }}</span>
           </template>

@@ -26,14 +26,14 @@ defineEmits<{
   'member-selected': [taskId: string];
 }>();
 
-const title = computed(() => props.stage === 'goal-review' ? '目标审核' : '主管评分');
+const title = computed(() => props.stage === 'goal-review' ? '目标审核' : '直属上级评分');
 const pendingMemberCount = computed(() => (
   props.members.filter((member) => member.stageState === 'pending').length
 ));
 
 const managerPeriodStatus = computed(() => {
   const status = props.task?.periodReview?.status;
-  if (status === 'manager_scoring') return '主管评分中';
+  if (status === 'manager_scoring') return '直属上级评分中';
   if (status === 'self_eval') return '员工自评中';
   if (status === 'completed') return '本期已完成';
   if (status === 'no_result') return '本期无结果';

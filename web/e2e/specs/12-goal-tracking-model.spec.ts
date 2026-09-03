@@ -137,7 +137,7 @@ test('工作台按月份真实提交状态显示月度自评进度，不被任�
   })).toMatchObject({
     label: '2026年9月月度自评',
     progressLabel: '第3/3期 · 已提交 3/3',
-    actionLabel: '等待主管月度评分',
+    actionLabel: '等待直属上级月度评分',
     periodId: 'period-3',
   });
 

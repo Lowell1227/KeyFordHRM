@@ -785,7 +785,7 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('team-task-list')).toBeVisible();
   });
 
-  test('monthly manager work shows the employee weighted total and opens the matching period review', async ({ page }) => {
+  test('monthly direct-manager work shows the employee weighted total and opens the matching period review', async ({ page }) => {
     await page.setViewportSize({ width: 1920, height: 1080 });
     await mockTaskWorkspaceIdentity(page, 'manager');
     const monthlyPage = {
@@ -868,11 +868,11 @@ test.describe('team list manager workspace', () => {
     await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1');
 
     await expect(page.getByRole('columnheader', { name: '自评总分', exact: true })).toBeVisible();
-    await expect(page.getByRole('columnheader', { name: '主管总分', exact: true })).toBeVisible();
+    await expect(page.getByRole('columnheader', { name: '直属上级总分', exact: true })).toBeVisible();
     const row = page.getByRole('row').filter({ hasText: '方园' });
     await expect(row.getByTestId('team-self-score-total')).toHaveText('80');
     await expect(row.getByTestId('team-manager-score-total')).toHaveText('-');
-    await expect(row).toContainText('主管评分中');
+    await expect(row).toContainText('直属上级评分中');
     await row.getByRole('button', { name: '处理 方园' }).click();
 
     await expect(page.getByTestId('manager-period-review-workspace')).toBeVisible();
@@ -881,8 +881,8 @@ test.describe('team list manager workspace', () => {
     const cards = page.getByTestId('manager-review-goal-card');
     await expect(cards.nth(0)).toContainText('员工自评分70分');
     await expect(cards.nth(1)).toContainText('员工自评分90分');
-    await cards.nth(0).getByLabel('主管评分').fill('80');
-    await cards.nth(1).getByLabel('主管评分').fill('90');
+    await cards.nth(0).getByLabel('直属上级评分').fill('80');
+    await cards.nth(1).getByLabel('直属上级评分').fill('90');
     await expect(page.getByTestId('manager-review-manager-total')).toContainText('85');
   });
 
@@ -1170,7 +1170,7 @@ test.describe('team list manager workspace', () => {
 
     await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-off-page&periodId=period-september&page=2');
 
-    await expect(page.getByTestId('manager-period-review-workspace')).toContainText('2026年9月主管月度评分');
+    await expect(page.getByTestId('manager-period-review-workspace')).toContainText('2026年9月直属上级月度评分');
     await expect(page).toHaveURL(/periodId=period-september/);
     expect(requestedPeriods).toHaveLength(1);
     expect(requestedPeriods[0]).toContain('/assessment-periods/period-september/review');
@@ -2183,7 +2183,7 @@ test.describe('manager evaluation workspace', () => {
     await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-2');
 
     await expect(page.getByTestId('team-task-workspace')).toBeVisible();
-    await expect(page.getByRole('heading', { level: 1, name: '主管评分', exact: true })).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: '直属上级评分', exact: true })).toBeVisible();
     await expect(page.getByTestId('manager-evaluation-workspace')).toBeVisible();
     await expect(page.getByTestId('goal-review-workspace')).toHaveCount(0);
 

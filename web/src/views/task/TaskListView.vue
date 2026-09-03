@@ -195,7 +195,7 @@ const filteredTeamRoster = computed(() => {
 });
 const teamStageTabs: Array<{ key: TeamTaskStage; label: string }> = [
   { key: 'goal-review', label: '目标审核' },
-  { key: 'manager-eval', label: '主管评分' },
+  { key: 'manager-eval', label: '直属上级评分' },
 ];
 const teamCountTabs = computed<Array<{
   key: TeamStageState | undefined;
@@ -1281,7 +1281,7 @@ watch(
       <header class="team-workspace__header">
         <div>
           <span>绩效环节</span>
-          <h2>{{ workspaceQuery.state.value.stage === 'goal-review' ? '目标审核' : '主管评分' }}</h2>
+          <h2>{{ workspaceQuery.state.value.stage === 'goal-review' ? '目标审核' : '直属上级评分' }}</h2>
         </div>
         <span>待办人：直属下属</span>
       </header>

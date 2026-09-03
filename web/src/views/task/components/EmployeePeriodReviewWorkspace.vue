@@ -9,7 +9,8 @@ import type {
   SubmitEmployeePeriodReviewBody,
 } from '@/types/api.types';
 import PerformanceFormWorkspace from './PerformanceFormWorkspace.vue';
-import MonthlyReviewReferencePanel from './MonthlyReviewReferencePanel.vue';
+import PeriodReviewIndicatorContext from './PeriodReviewIndicatorContext.vue';
+import PeriodReviewToolbar from './PeriodReviewToolbar.vue';
 
 type RequiredField = 'selfScore';
 
@@ -41,7 +42,6 @@ const healthOptions: Array<{ value: GoalTrackingHealthStatus; label: string }> =
   { value: 'completed', label: '已经完成' },
 ];
 
-const selectedIndicator = computed(() => detail.value?.indicators[selectedIndex.value]);
 const canEdit = computed(() => Boolean(detail.value?.permissions.canEditEmployee));
 const scoreRequiredCount = computed(() => detail.value?.indicators.filter((item) => item.isScoreRequired).length ?? 0);
 const completedCount = computed(() => formItems.filter((item, index) => (
@@ -188,17 +188,26 @@ watch(() => props.periodId, loadReview, { immediate: true });
       <template #extra><el-button @click="loadReview">重新加载</el-button></template>
     </el-result>
     <template v-else-if="detail">
-      <div class="monthly-review__period-bar">
-        <div>
-          <strong>{{ reviewTitle }}</strong>
-          <span>{{ detail.context.statusLabel }}</span>
-        </div>
-        <small>自评截止 {{ new Date(detail.period.selfEvalDueAt).toLocaleString('zh-CN', { hour12: false }) }}</small>
-      </div>
+      <PeriodReviewToolbar
+        :title="reviewTitle"
+        :status-label="detail.context.statusLabel"
+        :due-text="`自评截止 ${new Date(detail.period.selfEvalDueAt).toLocaleString('zh-CN', { hour12: false })}`"
+        :progress-text="`自评分已填写 ${completedCount}/${scoreRequiredCount}`"
+        progress-hint="状态、进度和描述可留空；有效权重指标的自评分必填"
+        :show-actions="canEdit"
+        toolbar-test-id="monthly-review-period-bar"
+        actions-test-id="monthly-review-actions"
+      >
+        <template #actions>
+          <el-button :loading="saving" :disabled="submitting" @mousedown.prevent @click="saveDraft">保存草稿</el-button>
+          <el-button type="primary" :loading="submitting" :disabled="saving" @mousedown.prevent @click="submitReview">
+            提交{{ followUpName }}
+          </el-button>
+        </template>
+      </PeriodReviewToolbar>
 
       <PerformanceFormWorkspace
-        reference-title="参考信息"
-        reference-test-id="monthly-review-reference"
+        :show-reference="false"
         workspace-test-id="monthly-review-form-workspace"
       >
         <template #main>
@@ -220,6 +229,8 @@ watch(() => props.periodId, loadReview, { immediate: true });
                 </div>
                 <span class="monthly-goal-card__weight">权重 {{ Math.round(indicator.weight * 100) }}%</span>
               </header>
+
+              <PeriodReviewIndicatorContext :indicator="indicator" />
 
               <div class="monthly-goal-card__core">
                 <label class="monthly-field">
@@ -285,23 +296,6 @@ watch(() => props.periodId, loadReview, { immediate: true });
             </article>
           </div>
         </template>
-        <template #reference>
-          <MonthlyReviewReferencePanel :indicator="selectedIndicator" />
-        </template>
-        <template #actions>
-          <footer v-if="canEdit" class="monthly-review-actions" data-testid="monthly-review-actions">
-            <div class="monthly-review-actions__progress">
-              <strong>自评分已填写 {{ completedCount }}/{{ scoreRequiredCount }}</strong>
-              <span>状态、进度和描述可留空；有效权重指标的自评分必填</span>
-            </div>
-            <div class="monthly-review-actions__buttons">
-              <el-button :loading="saving" :disabled="submitting" @mousedown.prevent @click="saveDraft">保存草稿</el-button>
-              <el-button type="primary" :loading="submitting" :disabled="saving" @mousedown.prevent @click="submitReview">
-                提交{{ followUpName }}
-              </el-button>
-            </div>
-          </footer>
-        </template>
       </PerformanceFormWorkspace>
     </template>
   </section>
@@ -309,11 +303,6 @@ watch(() => props.periodId, loadReview, { immediate: true });
 
 <style scoped>
 .monthly-review { min-width: 0; display: grid; gap: 14px; }
-.monthly-review__period-bar { min-width: 0; display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 13px 16px; border: 1px solid #e7ebf2; border-radius: 12px; background: #fff; }
-.monthly-review__period-bar > div { min-width: 0; display: flex; align-items: center; gap: 9px; }
-.monthly-review__period-bar strong { color: #20283a; font-size: 16px; }
-.monthly-review__period-bar span { padding: 3px 8px; border-radius: 4px; background: #fff3df; color: #cc8317; font-size: 11px; }
-.monthly-review__period-bar small { color: #7a8495; font-size: 12px; }
 .monthly-review__goals { min-width: 0; display: grid; gap: 12px; }
 .monthly-goal-card { min-width: 0; overflow: hidden; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; box-shadow: 0 1px 2px rgb(31 45 61 / 4%); transition: border-color .15s ease, box-shadow .15s ease; }
 .monthly-goal-card.is-selected { border-color: #bdc8f8; box-shadow: 0 3px 12px rgb(79 103 216 / 9%); }
@@ -339,12 +328,6 @@ watch(() => props.periodId, loadReview, { immediate: true });
 .monthly-health-options button { min-width: 0; height: 32px; overflow: hidden; padding: 0 5px; border: 1px solid #dfe4ec; border-radius: 6px; background: #fff; color: #687386; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; cursor: pointer; }
 .monthly-health-options button.is-active { border-color: #6076db; background: #eef2ff; color: #4f67d8; font-weight: 600; }
 .monthly-health-options button:disabled { cursor: default; opacity: .72; }
-.monthly-review-actions { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 12px 14px; border: 1px solid #dfe5f0; border-radius: 12px; background: #fff; box-shadow: 0 8px 24px rgb(31 45 61 / 10%); }
-.monthly-review-actions__progress { min-width: 0; display: grid; gap: 2px; }
-.monthly-review-actions__progress strong { color: #30394a; font-size: 13px; }
-.monthly-review-actions__progress span { color: #8a93a3; font-size: 11px; }
-.monthly-review-actions__buttons { flex: 0 0 auto; display: flex; gap: 8px; }
-
 @media (max-width: 900px) {
   .monthly-goal-card__core { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .monthly-field--status { grid-column: 1 / -1; order: 3; }
@@ -353,9 +336,6 @@ watch(() => props.periodId, loadReview, { immediate: true });
 @media (max-width: 767px) {
   .monthly-review { padding-bottom: 96px; }
   .monthly-goal-card { scroll-margin-bottom: 112px; }
-  .monthly-review__period-bar { align-items: flex-start; padding: 12px; }
-  .monthly-review__period-bar > div { align-items: flex-start; flex-direction: column; gap: 5px; }
-  .monthly-review__period-bar small { max-width: 135px; text-align: right; }
   .monthly-goal-card__header { grid-template-columns: 28px minmax(0, 1fr); padding: 13px 12px 11px; }
   .monthly-goal-card__weight { grid-column: 2; justify-self: start; }
   .monthly-goal-card__core,
@@ -363,9 +343,5 @@ watch(() => props.periodId, loadReview, { immediate: true });
   .monthly-field.is-wide,
   .monthly-field--status { grid-column: 1; }
   .monthly-health-options { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .monthly-review-actions { position: fixed; z-index: 40; right: 0; bottom: 0; left: 0; min-width: 0; align-items: stretch; padding: 10px 12px calc(10px + env(safe-area-inset-bottom)); border-width: 1px 0 0; border-radius: 0; }
-  .monthly-review-actions__progress span { display: none; }
-  .monthly-review-actions__buttons { flex: 1; }
-  .monthly-review-actions__buttons :deep(.el-button) { min-width: 0; flex: 1; margin-left: 0; }
 }
 </style>

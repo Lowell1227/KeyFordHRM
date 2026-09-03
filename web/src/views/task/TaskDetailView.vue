@@ -138,9 +138,9 @@ const showGoalSettingReference = computed(() => (
 ));
 const periodReviewTitle = computed(() => {
   if (activePerformancePeriod.value?.periodType === 'cycle') {
-    return isManagerPeriodReview.value ? '整周期评分' : '整周期自评';
+    return isManagerPeriodReview.value ? '整周期直属上级评分' : '整周期自评';
   }
-  return isManagerPeriodReview.value ? '主管月度评分' : '月度自评';
+  return isManagerPeriodReview.value ? '直属上级月度评分' : '月度自评';
 });
 const performanceStageTitle = computed(() => isPeriodReviewPage.value
   ? periodReviewTitle.value

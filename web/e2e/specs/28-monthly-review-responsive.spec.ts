@@ -191,7 +191,7 @@ async function completeRequiredFields(page: Page) {
 test.describe('monthly goal review responsive workspace', () => {
   test.use({ baseURL: 'http://localhost:5173' });
 
-  test('uses a compact two-column workspace at 1440 and sends distinct draft/submit requests', async ({ page }) => {
+  test('uses the shared full-width period workspace at 1440 and sends distinct draft/submit requests', async ({ page }) => {
     await page.setViewportSize({ width: 1440, height: 1000 });
     const requests: Request[] = [];
     await mockMonthlyReview(page, requests);
@@ -199,7 +199,7 @@ test.describe('monthly goal review responsive workspace', () => {
     await page.goto('/tasks/task-monthly-1?stage=self-eval');
 
     await expect(page.getByTestId('monthly-review-workspace')).toBeVisible();
-    await expect(page.getByTestId('monthly-review-reference')).toBeVisible();
+    await expect(page.getByTestId('monthly-review-reference')).toHaveCount(0);
     await expect(page.getByTestId('monthly-review-form-workspace')).toBeVisible();
     await expect(page.getByText('2027年1月月度自评', { exact: true })).toBeVisible();
     await expect(page.getByTestId('performance-stage-state')).toHaveText('待处理');
@@ -207,14 +207,19 @@ test.describe('monthly goal review responsive workspace', () => {
     await expect(page.getByTestId('performance-employee-summary')).toContainText('方园');
     await expect(page.getByTestId('performance-employee-summary')).toContainText('绩效直属上级 王主管');
 
-    const firstCardBox = await page.getByTestId('monthly-review-goal-card').first().boundingBox();
-    const referenceBox = await page.getByTestId('monthly-review-reference').boundingBox();
+    const periodBar = page.getByTestId('monthly-review-period-bar');
+    const firstCard = page.getByTestId('monthly-review-goal-card').first();
+    const firstCardBox = await firstCard.boundingBox();
     const actionBox = await page.getByTestId('monthly-review-actions').boundingBox();
+    const periodBarBox = await periodBar.boundingBox();
     expect(firstCardBox).not.toBeNull();
-    expect(referenceBox).not.toBeNull();
     expect(actionBox).not.toBeNull();
-    expect(referenceBox!.x).toBeGreaterThan(firstCardBox!.x + firstCardBox!.width - 1);
-    expect(actionBox!.y).toBeGreaterThan(firstCardBox!.y + firstCardBox!.height - 1);
+    expect(periodBarBox).not.toBeNull();
+    expect(firstCardBox!.width).toBeGreaterThan(900);
+    expect(actionBox!.y).toBeGreaterThanOrEqual(periodBarBox!.y);
+    expect(actionBox!.y + actionBox!.height).toBeLessThanOrEqual(periodBarBox!.y + periodBarBox!.height + 1);
+    await expect(firstCard.getByTestId('period-review-indicator-context')).toContainText('达到目标得 90 分');
+    await expect(firstCard.getByTestId('period-review-indicator-context')).toContainText('历史月度结果 1条');
 
     await expect(page.getByTestId('monthly-review-goal-card').first()).not.toContainText('问题原因');
     await expect(page.getByTestId('monthly-review-goal-card').first()).not.toContainText('下一步计划');
@@ -244,17 +249,14 @@ test.describe('monthly goal review responsive workspace', () => {
     expect(submitBody.indicators).toHaveLength(3);
   });
 
-  test('switches to one column at 390 with collapsible references and an unobstructed fixed action bar', async ({ page }) => {
+  test('keeps the same full-width card structure at 390 with an unobstructed fixed action bar', async ({ page }) => {
     await page.setViewportSize({ width: 390, height: 844 });
     await mockMonthlyReview(page, []);
 
     await page.goto('/tasks/task-monthly-1?stage=self-eval');
 
-    const reference = page.getByTestId('monthly-review-reference');
-    await expect(reference.getByRole('button', { name: '展开参考信息' })).toBeVisible();
-    await expect(reference.getByText('达到目标得 90 分')).toBeHidden();
-    await reference.getByRole('button', { name: '展开参考信息' }).click();
-    await expect(reference.getByText('达到目标得 90 分')).toBeVisible();
+    await expect(page.getByTestId('monthly-review-reference')).toHaveCount(0);
+    await expect(page.getByTestId('period-review-indicator-context')).toHaveCount(3);
 
     const actionBar = page.getByTestId('monthly-review-actions');
     await expect(actionBar).toHaveCSS('position', 'fixed');

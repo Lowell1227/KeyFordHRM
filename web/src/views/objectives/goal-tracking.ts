@@ -118,7 +118,7 @@ export function selectTrackingAction(context: PerformanceCycleContext): Tracking
     };
   }
   if (context.periods.some((period) => period.status === 'manager_scoring' && Boolean(period.employeeSubmittedAt))) {
-    return { kind: 'waiting', label: '等待主管月度评分', taskId: context.task.id };
+    return { kind: 'waiting', label: '等待直属上级月度评分', taskId: context.task.id };
   }
   if (context.periods.length > 0 && context.periods.every((period) => ['completed', 'no_result'].includes(period.status))) {
     return { kind: 'complete', label: '月度评分期次已完成', taskId: context.task.id };

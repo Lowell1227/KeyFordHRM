@@ -41,6 +41,26 @@ const activeBusinessPeriodLabel = computed(() => {
   const match = /^(\d{4})-(\d{2})$/.exec(key ?? '');
   return match ? `${Number(match[2])}月` : '';
 });
+const reviewProgressText = computed(() => {
+  if (!summary.value || summary.value.periodCount === 0) return '暂未生成月份';
+  if (props.selectedContext?.scoringFrequency !== 'monthly') {
+    return summary.value.employeeSubmittedCount > 0 ? '整周期已提交' : '整周期待提交';
+  }
+  if (summary.value.employeeSubmittedCount === summary.value.periodCount) {
+    return `${summary.value.periodCount}个月均已提交`;
+  }
+  return `已提交 ${summary.value.employeeSubmittedCount}/${summary.value.periodCount}个月`;
+});
+const activeGoalProgressText = computed(() => (
+  summary.value
+    ? `${summary.value.activeUpdatedGoalCount}/${summary.value.goalCount}个目标有更新`
+    : '暂无统计'
+));
+const pendingManagerPeriodCount = computed(() => (
+  props.selectedContext?.periods.filter((period) => (
+    Boolean(period.employeeSubmittedAt) && !period.managerSubmittedAt
+  )).length ?? 0
+));
 const activePeriod = computed(() => {
   const periods = props.selectedContext?.periods ?? [];
   const actionPeriodId = action.value?.kind === 'review' ? action.value.periodId : '';
@@ -58,8 +78,10 @@ const actionHint = computed(() => {
     exempt: props.selectedContext?.task.exemptReason || '本周期无需制定、跟进或评分',
     'goal-setting': '目标尚未完成制定，先完成目标再进入日常跟进',
     'goal-confirmation': '目标等待本人确认，确认后进入持续跟进',
-    review: activePeriod.value?.employeeSubmittedAt ? '已提交，等待主管月度评分' : '月度自评已开放，可从这里填写',
-    waiting: action.value.label,
+    review: activePeriod.value?.employeeSubmittedAt ? '已提交，等待直属上级月度评分' : '月度自评已开放，可从这里填写',
+    waiting: props.isSelf
+      ? `仍可继续更新${activeBusinessPeriodLabel.value}目标进展`
+      : `员工仍可继续更新${activeBusinessPeriodLabel.value}目标进展`,
     complete: '全部评分期次已完成，等待周期结果流转',
     none: '目标已确认，可持续更新进展',
   }[action.value.kind];
@@ -68,7 +90,15 @@ const actionStateLabel = computed(() => {
   if (!action.value) return '查看目标';
   if (action.value.kind === 'goal-setting') return '目标待制定';
   if (action.value.kind === 'goal-confirmation') return '目标待本人确认';
-  if (action.value.kind === 'review') return activePeriod.value?.employeeSubmittedAt ? '待主管月度评分' : '待月度自评';
+  if (action.value.kind === 'review') {
+    if (activePeriod.value?.employeeSubmittedAt) return '待直属上级月度评分';
+    if (activePeriod.value?.periodType === 'cycle') return '待填写整周期自评';
+    const periodLabel = activePeriod.value ? periodName(activePeriod.value) : '';
+    return periodLabel ? `待填写${periodLabel}月度自评` : '待填写月度自评';
+  }
+  if (action.value.kind === 'waiting' && pendingManagerPeriodCount.value > 0) {
+    return `${pendingManagerPeriodCount.value}个月待直属上级评分`;
+  }
   return action.value.label;
 });
 
@@ -97,26 +127,10 @@ async function openAction() {
   });
 }
 
-function periodName(context: PerformanceCycleContext, period: PerformanceCycleContext['periods'][number]) {
+function periodName(period: PerformanceCycleContext['periods'][number]) {
   if (period.periodType === 'cycle') return '整周期';
   const [, month = period.periodKey] = period.periodKey.split('-');
   return `${Number(month)}月`;
-}
-
-function periodStatus(period: PerformanceCycleContext['periods'][number]) {
-  if (period.status === 'unopened') {
-    if (action.value?.kind === 'goal-setting') return '待目标制定';
-    if (action.value?.kind === 'goal-confirmation') return '待目标确认';
-    return '未开放';
-  }
-  if (period.status === 'self_eval') return period.employeeSubmittedAt ? '待主管月度评分' : '待月度自评';
-  if (period.status === 'manager_scoring') return period.employeeSubmittedAt ? '待主管月度评分' : '月度自评逾期待补交';
-  if (period.status === 'completed') return '主管月度评分已完成';
-  return '无结果';
-}
-
-function dueDate(value: string) {
-  return new Date(value).toLocaleDateString('zh-CN', { month: 'numeric', day: 'numeric' });
 }
 </script>
 
@@ -155,19 +169,15 @@ function dueDate(value: string) {
 
     <section v-if="selectedContext" class="tracking-cycle__summary" data-testid="goal-tracking-summary">
       <div>
-        <span>月度自评</span>
-        <strong>{{ summary ? `已提交 ${summary.employeeSubmittedCount}/${summary.periodCount}` : '暂未生成期次' }}</strong>
+        <span>{{ selectedContext.scoringFrequency === 'monthly' ? '月度自评' : '整周期自评' }}</span>
+        <strong>{{ reviewProgressText }}</strong>
       </div>
       <div>
-        <span>{{ activeBusinessPeriodLabel ? `${activeBusinessPeriodLabel}目标` : '本月目标' }}</span>
-        <strong>{{ summary ? `已更新 ${summary.activeUpdatedGoalCount}/${summary.goalCount}` : '暂无统计' }}</strong>
-      </div>
-      <div>
-        <span>主管月度评分</span>
-        <strong>{{ summary ? `已完成 ${summary.managerCompletedCount}/${summary.periodCount}` : '暂未生成期次' }}</strong>
+        <span>{{ activeBusinessPeriodLabel ? `${activeBusinessPeriodLabel}日常跟进` : '日常跟进' }}</span>
+        <strong>{{ activeGoalProgressText }}</strong>
       </div>
       <div class="tracking-cycle__next">
-        <span>当前动作</span>
+        <span>当前阶段</span>
         <strong>{{ actionStateLabel }}</strong>
         <small>{{ actionHint }}</small>
       </div>
@@ -235,17 +245,6 @@ function dueDate(value: string) {
         </div>
       </main>
 
-      <aside v-if="selectedContext && !selectedContext.task.isExempt" class="tracking-cycle__periods" aria-label="评分期次">
-        <header><h2>{{ selectedContext.scoringFrequency === 'monthly' ? '月度自评' : '整周期自评' }}</h2><span>{{ selectedContext.scoringFrequency === 'monthly' ? '按月完成' : '整周期一次完成' }}</span></header>
-        <ol v-if="selectedContext.periods.length">
-          <li v-for="period in selectedContext.periods" :key="period.id" :class="`is-${period.status}`">
-            <i aria-hidden="true" />
-            <div><strong>{{ periodName(selectedContext, period) }}</strong><span>{{ periodStatus(period) }}</span></div>
-            <small>{{ period.status === 'manager_scoring' ? `主管评分截止 ${dueDate(period.managerDueAt)}` : `自评截止 ${dueDate(period.selfEvalDueAt)}` }}</small>
-          </li>
-        </ol>
-        <div v-else class="tracking-cycle__period-empty">目标确认后将生成月度自评期次</div>
-      </aside>
     </div>
   </section>
 </template>
@@ -264,18 +263,18 @@ function dueDate(value: string) {
 .tracking-cycle__selector select:focus { border-color: #5873df; box-shadow: 0 0 0 3px rgb(88 115 223 / 12%); }
 .tracking-cycle__selector small { grid-column: 2; overflow: hidden; color: #8a94a5; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .tracking-cycle__notice { margin: 0; padding: 9px 12px; border: 1px solid #f0d29a; border-radius: 8px; background: #fff8e8; color: #936200; font-size: 12px; }
-.tracking-cycle__summary { min-width: 0; display: grid; grid-template-columns: repeat(3, minmax(95px, .55fr)) minmax(220px, 1.35fr) auto; align-items: center; gap: 1px; overflow: hidden; border: 1px solid #e8ecf3; border-radius: 14px; background: #fff; }
+.tracking-cycle__summary { min-width: 0; display: grid; grid-template-columns: repeat(2, minmax(145px, .7fr)) minmax(240px, 1.4fr) auto; align-items: center; gap: 1px; overflow: hidden; border: 1px solid #e8ecf3; border-radius: 14px; background: #fff; }
 .tracking-cycle__summary > div { min-width: 0; min-height: 76px; display: grid; align-content: center; gap: 4px; padding: 12px 16px; border-right: 1px solid #edf0f5; }
 .tracking-cycle__summary span { color: #8b95a6; font-size: 11px; }
 .tracking-cycle__summary strong { overflow: hidden; color: #293349; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .tracking-cycle__summary small { overflow: hidden; color: #8892a3; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .tracking-cycle__summary :deep(.el-button) { margin: 0 16px; }
-.tracking-cycle__layout { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) 268px; align-items: start; gap: 14px; }
-.tracking-cycle__main, .tracking-cycle__periods { overflow: hidden; border: 1px solid #e8ecf3; border-radius: 15px; background: #fff; }
-.tracking-cycle__section-title, .tracking-cycle__periods > header { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 18px; border-bottom: 1px solid #edf0f5; }
+.tracking-cycle__layout { min-width: 0; }
+.tracking-cycle__main { overflow: hidden; border: 1px solid #e8ecf3; border-radius: 15px; background: #fff; }
+.tracking-cycle__section-title { min-height: 58px; display: flex; align-items: center; justify-content: space-between; gap: 10px; padding: 0 18px; border-bottom: 1px solid #edf0f5; }
 .tracking-cycle__section-title > div { min-width: 0; }
-.tracking-cycle__section-title h2, .tracking-cycle__periods h2 { margin: 0; color: #222d42; font-size: 16px; }
-.tracking-cycle__section-title span, .tracking-cycle__periods header span { color: #919bad; font-size: 11px; }
+.tracking-cycle__section-title h2 { margin: 0; color: #222d42; font-size: 16px; }
+.tracking-cycle__section-title span { color: #919bad; font-size: 11px; }
 .tracking-cycle__section-title > span { flex: 0 0 auto; }
 .tracking-cycle__state { min-height: 230px; display: grid; place-content: center; justify-items: center; gap: 8px; padding: 28px; text-align: center; color: #8b95a7; }
 .tracking-cycle__state strong { color: #39455a; font-size: 17px; }
@@ -297,23 +296,9 @@ function dueDate(value: string) {
 .tracking-goal-card__body strong { overflow: hidden; color: #39455a; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .tracking-goal-card__status { padding: 4px 8px; border-radius: 999px; background: #eef7f1; color: #398559 !important; white-space: nowrap; }
 .tracking-goal-card button { padding: 6px 11px; border: 1px solid #cfd8e7; border-radius: 7px; background: #fff; color: #346fd3; font-size: 12px; cursor: pointer; }
-.tracking-cycle__periods ol { position: relative; display: grid; gap: 0; margin: 0; padding: 12px 16px 16px; list-style: none; }
-.tracking-cycle__periods li { position: relative; min-height: 58px; display: grid; grid-template-columns: 15px minmax(0, 1fr); gap: 9px; padding: 8px 0 8px; }
-.tracking-cycle__periods li:not(:last-child)::after { content: ''; position: absolute; top: 26px; bottom: -16px; left: 5px; width: 1px; background: #dce2ec; }
-.tracking-cycle__periods li i { z-index: 1; width: 11px; height: 11px; margin-top: 4px; border: 3px solid #fff; border-radius: 50%; background: #aeb7c6; box-shadow: 0 0 0 1px #cbd2de; }
-.tracking-cycle__periods li.is-self_eval i, .tracking-cycle__periods li.is-manager_scoring i { background: #5873df; box-shadow: 0 0 0 1px #5873df; }
-.tracking-cycle__periods li.is-completed i { background: #42a66b; box-shadow: 0 0 0 1px #42a66b; }
-.tracking-cycle__periods li div { min-width: 0; display: flex; align-items: baseline; justify-content: space-between; gap: 8px; }
-.tracking-cycle__periods li strong { font-size: 13px; }
-.tracking-cycle__periods li span, .tracking-cycle__periods li small { color: #8a94a5; font-size: 11px; }
-.tracking-cycle__periods li small { grid-column: 2; }
-.tracking-cycle__period-empty { padding: 24px 16px; color: #8b95a6; font-size: 12px; text-align: center; }
-
 @media (max-width: 1100px) {
-  .tracking-cycle__layout { grid-template-columns: minmax(0, 1fr); }
-  .tracking-cycle__periods ol { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
-  .tracking-cycle__periods li { min-height: auto; padding: 8px; border: 1px solid #e7ebf2; border-radius: 8px; }
-  .tracking-cycle__periods li::after { display: none; }
+  .tracking-cycle__summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .tracking-cycle__summary :deep(.el-button) { grid-column: 1 / -1; justify-self: end; margin-bottom: 12px; }
 }
 
 @media (max-width: 768px) {
@@ -336,7 +321,5 @@ function dueDate(value: string) {
   .tracking-goal-card__weight { grid-column: 2; justify-self: start; }
   .tracking-goal-card__body { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 12px; }
   .tracking-goal-card__progress, .tracking-goal-card__latest { grid-column: 1 / -1; }
-  .tracking-cycle__periods ol { display: flex; overflow-x: auto; }
-  .tracking-cycle__periods li { min-width: 170px; flex: 0 0 170px; }
 }
 </style>
