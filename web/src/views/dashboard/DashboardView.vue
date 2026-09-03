@@ -63,6 +63,10 @@ const personalTaskActionLabel = computed(() => {
   return personalTaskEntry.value?.actionLabel ?? '查看任务';
 });
 
+const personalTaskProgressLabel = computed(() => {
+  return personalTaskEntry.value?.progressLabel ?? '';
+});
+
 function latestOpenTask(items: TaskListItem[]): TaskListItem | null {
   return items.find((task) => !isTerminalTaskStatus(task.status)) ?? null;
 }
@@ -313,6 +317,7 @@ function avatarColor(name: string): string {
           <div class="task-entry-card__main">
             <span class="task-entry-card__eyebrow">当前阶段</span>
             <strong>{{ personalTaskStageLabel }}</strong>
+            <span v-if="personalTaskProgressLabel" class="task-entry-card__progress">{{ personalTaskProgressLabel }}</span>
             <span class="task-entry-card__meta">{{ personalTask.cycleName || '当前考核周期' }}</span>
           </div>
           <el-button data-testid="employee-current-task-open" type="primary" @click="openPersonalTask(personalTask)">
@@ -348,6 +353,7 @@ function avatarColor(name: string): string {
             <div class="task-entry-card__main">
               <span class="task-entry-card__eyebrow">我的任务</span>
               <strong>{{ personalTaskStageLabel }}</strong>
+              <span v-if="personalTaskProgressLabel" class="task-entry-card__progress">{{ personalTaskProgressLabel }}</span>
               <span class="task-entry-card__meta">{{ personalTask.cycleName || '当前考核周期' }}</span>
             </div>
             <el-button text type="primary" @click="openPersonalTask(personalTask)">查看</el-button>
@@ -574,10 +580,16 @@ function avatarColor(name: string): string {
 }
 
 .task-entry-card__eyebrow,
+.task-entry-card__progress,
 .task-entry-card__meta,
 .task-entry-card__empty {
   color: var(--app-text-secondary);
   font-size: 13px;
+}
+
+.task-entry-card__progress {
+  color: var(--app-primary-color);
+  font-weight: 600;
 }
 
 .task-entry-card__main strong {

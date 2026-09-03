@@ -75,6 +75,7 @@ export interface EmployeeTaskEntry {
   label: string;
   actionLabel: string;
   periodId?: string;
+  progressLabel?: string;
 }
 
 const employeeResultPendingStatuses = new Set<TaskStatus>(['published', 'appealing']);
@@ -144,11 +145,23 @@ export function resolveEmployeeTaskEntry(task: EmployeeTaskStageSource): Employe
   const period = getEmployeeActionablePeriod(task);
   if (period) {
     const monthly = period.periodType === 'month';
+    const monthlyPeriods = (task.periods ?? [])
+      .filter((item) => item.periodType === 'month')
+      .sort((left, right) => left.sequence - right.sequence);
+    const currentPeriodPosition = monthlyPeriods.findIndex((item) => item.id === period.id) + 1;
+    const submittedPeriodCount = monthlyPeriods.filter((item) => Boolean(item.employeeSubmittedAt)).length;
+    const monthMatch = /^(\d{4})-(\d{2})$/.exec(period.periodKey);
+    const monthlyLabel = monthMatch
+      ? `${monthMatch[1]}年${Number(monthMatch[2])}月月度自评`
+      : '月度自评';
     return {
       stage: 'self-eval',
-      label: monthly ? '月度自评' : '周期自评',
+      label: monthly ? monthlyLabel : '周期自评',
       actionLabel: monthly ? '填写月度自评' : '填写周期自评',
       periodId: period.id,
+      progressLabel: monthly && currentPeriodPosition > 0
+        ? `第${currentPeriodPosition}/${monthlyPeriods.length}期 · 已提交 ${submittedPeriodCount}/${monthlyPeriods.length}`
+        : undefined,
     };
   }
   if (resultProcessingStatuses.has(task.status)) {

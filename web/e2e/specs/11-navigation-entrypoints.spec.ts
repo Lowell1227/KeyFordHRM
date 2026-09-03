@@ -479,6 +479,18 @@ test.describe("11-navigation-entrypoints dashboard task entry points", () => {
       workflowVersion: 2,
       periods: [
         {
+          id: "period-july",
+          periodKey: "2026-07",
+          periodType: "month",
+          sequence: 1,
+          status: "manager_scoring",
+          selfEvalOpenAt: "2026-08-13T01:00:00.000Z",
+          selfEvalDueAt: "2026-08-14T10:00:00.000Z",
+          managerDueAt: "2026-08-15T10:00:00.000Z",
+          employeeSubmittedAt: null,
+          managerSubmittedAt: null,
+        },
+        {
           id: "period-august",
           periodKey: "2026-08",
           periodType: "month",
@@ -487,6 +499,18 @@ test.describe("11-navigation-entrypoints dashboard task entry points", () => {
           selfEvalOpenAt: "2026-09-01T01:00:00.000Z",
           selfEvalDueAt: "2026-09-18T10:00:00.000Z",
           managerDueAt: "2026-09-19T10:00:00.000Z",
+          employeeSubmittedAt: null,
+          managerSubmittedAt: null,
+        },
+        {
+          id: "period-september",
+          periodKey: "2026-09",
+          periodType: "month",
+          sequence: 3,
+          status: "manager_scoring",
+          selfEvalOpenAt: "2026-09-01T01:00:00.000Z",
+          selfEvalDueAt: "2026-09-01T10:00:00.000Z",
+          managerDueAt: "2026-09-01T10:00:00.000Z",
           employeeSubmittedAt: null,
           managerSubmittedAt: null,
         },
@@ -502,7 +526,9 @@ test.describe("11-navigation-entrypoints dashboard task entry points", () => {
     const dashboard = new DashboardPage(page);
     await dashboard.goto();
 
-    await expect(dashboard.currentEmployeeTask()).toContainText("月度自评");
+    await expect(dashboard.currentEmployeeTask()).toContainText("2026年8月月度自评");
+    await expect(dashboard.currentEmployeeTask()).toContainText("第2/3期 · 已提交 0/3");
+    await expect(dashboard.currentEmployeeTask()).toContainText("2026 Q3 季度考核（902LW测试）");
     await expect(dashboard.currentEmployeeTask()).not.toContainText("结果确认");
     await dashboard.currentEmployeeTaskOpen().click();
     await expect(page).toHaveURL(/\/tasks\/task-monthly\?/);
@@ -516,6 +542,75 @@ test.describe("11-navigation-entrypoints dashboard task entry points", () => {
 
 test.describe("11-navigation-entrypoints manager dashboard task entry points", () => {
   test.use({ storageState: "e2e/auth-state/manager.json" });
+
+  test("manager personal card shows the current monthly period and submitted progress", async ({
+    page,
+  }) => {
+    const monthlyTask = taskItem({
+      id: "manager-personal-monthly",
+      cycleId: "cycle-monthly",
+      cycleName: "2026 Q3 季度考核（902LW测试）",
+      status: "manager_scoring",
+      workflowVersion: 2,
+      periods: [
+        {
+          id: "period-july",
+          periodKey: "2026-07",
+          periodType: "month",
+          sequence: 1,
+          status: "manager_scoring",
+          selfEvalOpenAt: "2026-08-13T01:00:00.000Z",
+          selfEvalDueAt: "2026-08-14T10:00:00.000Z",
+          managerDueAt: "2026-08-15T10:00:00.000Z",
+          employeeSubmittedAt: "2026-08-14T09:00:00.000Z",
+          managerSubmittedAt: null,
+        },
+        {
+          id: "period-august",
+          periodKey: "2026-08",
+          periodType: "month",
+          sequence: 2,
+          status: "self_eval",
+          selfEvalOpenAt: "2026-09-01T01:00:00.000Z",
+          selfEvalDueAt: "2026-09-18T10:00:00.000Z",
+          managerDueAt: "2026-09-19T10:00:00.000Z",
+          employeeSubmittedAt: null,
+          managerSubmittedAt: null,
+        },
+        {
+          id: "period-september",
+          periodKey: "2026-09",
+          periodType: "month",
+          sequence: 3,
+          status: "unopened",
+          selfEvalOpenAt: "2026-10-01T01:00:00.000Z",
+          selfEvalDueAt: "2026-10-08T10:00:00.000Z",
+          managerDueAt: "2026-10-15T10:00:00.000Z",
+          employeeSubmittedAt: null,
+          managerSubmittedAt: null,
+        },
+      ],
+    });
+    await page.route("**/api/v1/tasks/mine**", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(apiResponse(taskPage([monthlyTask]))),
+      }),
+    );
+    await page.route("**/api/v1/tasks/team**", (route) =>
+      route.fulfill({
+        contentType: "application/json",
+        body: JSON.stringify(apiResponse(teamPage(0))),
+      }),
+    );
+
+    const dashboard = new DashboardPage(page);
+    await dashboard.goto();
+
+    await expect(dashboard.managerPersonalTask()).toContainText("2026年8月月度自评");
+    await expect(dashboard.managerPersonalTask()).toContainText("第2/3期 · 已提交 1/3");
+    await expect(dashboard.managerPersonalTask()).toContainText("2026 Q3 季度考核（902LW测试）");
+  });
 
   test("manager sees true pending counts and opens the matching team workspace", async ({
     page,
