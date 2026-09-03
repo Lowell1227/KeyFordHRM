@@ -37,9 +37,18 @@ const periodTitle = computed(() => {
 });
 const followUpName = computed(() => detail.value?.period.periodType === 'cycle' ? '整周期自评' : '月度自评');
 const scoreRequiredCount = computed(() => detail.value?.indicators.filter((item) => item.isScoreRequired).length ?? 0);
+const scoreExcludedCount = computed(() => (detail.value?.indicators.length ?? 0) - scoreRequiredCount.value);
 const completedCount = computed(() => formItems.filter((item, index) => (
   detail.value?.indicators[index]?.isScoreRequired && item.managerScore != null
 )).length);
+const scoreProgressText = computed(() => (
+  `评分完成 ${completedCount.value}/${scoreRequiredCount.value}${scoreExcludedCount.value > 0 ? ` · 不参与评分 ${scoreExcludedCount.value}项` : ''}`
+));
+const scoreProgressHint = computed(() => (
+  scoreExcludedCount.value > 0
+    ? `共${detail.value?.indicators.length ?? 0}项；${scoreRequiredCount.value}项参与评分，${scoreExcludedCount.value}项零权重不参与评分。是否评分与正常/受阻状态无关。`
+    : '直属上级说明选填；分差和低分只提醒，不阻止提交'
+));
 const selfScoreTotal = computed(() => {
   if (detail.value?.period.selfScoreTotal != null) return detail.value.period.selfScoreTotal;
   if (!detail.value || detail.value.indicators.some((item) => item.isScoreRequired && item.selfScore == null)) return null;
@@ -214,8 +223,8 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
         :title="periodTitle"
         :status-label="detail.context.statusLabel.replace(/主管/g, '直属上级')"
         :due-text="`直属上级评分截止 ${new Date(detail.period.managerDueAt).toLocaleString('zh-CN', { hour12: false })}`"
-        :progress-text="`评分完成 ${completedCount}/${scoreRequiredCount}`"
-        progress-hint="直属上级说明选填；分差和低分只提醒，不阻止提交"
+        :progress-text="scoreProgressText"
+        :progress-hint="scoreProgressHint"
         :show-actions="canEdit"
         toolbar-test-id="manager-review-period-bar"
         actions-test-id="manager-review-actions"

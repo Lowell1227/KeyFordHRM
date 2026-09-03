@@ -208,6 +208,8 @@ test.describe('monthly goal review responsive workspace', () => {
     await expect(page.getByTestId('performance-employee-summary')).toContainText('绩效直属上级 王主管');
 
     const periodBar = page.getByTestId('monthly-review-period-bar');
+    await expect(periodBar).toContainText('自评分已填写 0/2 · 不参与评分 1项');
+    await expect(periodBar).toContainText('共3项；2项参与评分，1项零权重不参与评分。是否评分与正常/受阻状态无关。');
     const firstCard = page.getByTestId('monthly-review-goal-card').first();
     const firstCardBox = await firstCard.boundingBox();
     const actionBox = await page.getByTestId('monthly-review-actions').boundingBox();

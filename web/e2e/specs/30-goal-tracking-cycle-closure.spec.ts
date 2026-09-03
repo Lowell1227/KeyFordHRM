@@ -162,7 +162,18 @@ function managerReviewDetail() {
     period: { id: periodId, taskId: 'task-manager-1', periodKey: '2026-08', periodType: 'month', status: 'manager_scoring', selfEvalOpenAt: '2026-08-29T10:00:00.000Z', selfEvalDueAt: '2026-08-31T10:00:00.000Z', managerDueAt: '2026-09-03T10:00:00.000Z', employeeSubmittedAt: '2026-08-30T08:00:00.000Z', managerSubmittedAt: null, selfScoreTotal: 86, managerScoreTotal: null, draftVersion: 0 },
     context: { cycleName: '2026年08月绩效考核', employeeName: '方园', employeeNo: 'KF001', deptName: '人事组', managerName: '王主管', statusLabel: '主管评分' },
     permissions: { canEditEmployee: false, canEditManager: true },
-    indicators: [item('41111111-1111-4111-8111-111111111111', '重点客户续约', 90), item('51111111-1111-4111-8111-111111111111', '回款及时率', 82)],
+    indicators: [
+      item('41111111-1111-4111-8111-111111111111', '重点客户续约', 90),
+      item('51111111-1111-4111-8111-111111111111', '回款及时率', 82),
+      {
+        ...item('61111111-1111-4111-8111-111111111111', '协同支持', 0),
+        weight: 0,
+        isScoreRequired: false,
+        progress: null,
+        healthStatus: 'blocked',
+        selfScore: null,
+      },
+    ],
   };
 }
 
@@ -186,14 +197,17 @@ test('direct manager uses the same full-width period structure and can submit pe
   await expect(page.getByTestId('manager-review-form-workspace')).toBeVisible();
   await expect(page.getByTestId('manager-review-reference')).toHaveCount(0);
   await expect(periodBar.getByText('2026年8月直属上级月度评分', { exact: true })).toBeVisible();
-  await expect(cards).toHaveCount(2);
+  await expect(cards).toHaveCount(3);
   await expect(periodBar.getByTestId('manager-review-actions')).toBeVisible();
+  await expect(periodBar).toContainText('评分完成 0/2 · 不参与评分 1项');
+  await expect(periodBar).toContainText('共3项；2项参与评分，1项零权重不参与评分。是否评分与正常/受阻状态无关。');
   const cardBox = await cards.first().boundingBox();
   expect(cardBox).not.toBeNull();
   expect(cardBox!.width).toBeGreaterThan(900);
   await expect(cards.first().getByTestId('period-review-indicator-context')).toContainText('达到目标得90分');
   await cards.nth(0).getByRole('button', { name: '同意自评' }).click();
   await cards.nth(1).getByLabel('直属上级评分').fill('55');
+  await expect(periodBar).toContainText('评分完成 2/2 · 不参与评分 1项');
   await expect(cards.nth(1)).toContainText('低于60分');
   await expect(cards.nth(1)).toContainText('相差27分');
   await page.getByRole('button', { name: '保存草稿' }).click();
@@ -209,7 +223,7 @@ test('direct manager keeps the shared card structure and fixed actions on mobile
   await page.goto(`/tasks/task-manager-1?stage=self-eval&periodId=${periodId}`);
 
   await expect(page.getByTestId('manager-review-reference')).toHaveCount(0);
-  await expect(page.getByTestId('manager-review-goal-card')).toHaveCount(2);
+  await expect(page.getByTestId('manager-review-goal-card')).toHaveCount(3);
   const actions = page.getByTestId('manager-review-actions');
   await expect(actions).toHaveCSS('position', 'fixed');
   await expect(actions.getByRole('button')).toHaveCount(3);

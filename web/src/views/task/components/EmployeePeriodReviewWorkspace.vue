@@ -44,9 +44,18 @@ const healthOptions: Array<{ value: GoalTrackingHealthStatus; label: string }> =
 
 const canEdit = computed(() => Boolean(detail.value?.permissions.canEditEmployee));
 const scoreRequiredCount = computed(() => detail.value?.indicators.filter((item) => item.isScoreRequired).length ?? 0);
+const scoreExcludedCount = computed(() => (detail.value?.indicators.length ?? 0) - scoreRequiredCount.value);
 const completedCount = computed(() => formItems.filter((item, index) => (
   detail.value?.indicators[index]?.isScoreRequired && item.selfScore != null
 )).length);
+const scoreProgressText = computed(() => (
+  `自评分已填写 ${completedCount.value}/${scoreRequiredCount.value}${scoreExcludedCount.value > 0 ? ` · 不参与评分 ${scoreExcludedCount.value}项` : ''}`
+));
+const scoreProgressHint = computed(() => (
+  scoreExcludedCount.value > 0
+    ? `共${detail.value?.indicators.length ?? 0}项；${scoreRequiredCount.value}项参与评分，${scoreExcludedCount.value}项零权重不参与评分。是否评分与正常/受阻状态无关。`
+    : '状态、进度和描述可留空；有效权重指标的自评分必填'
+));
 const periodLabel = computed(() => {
   const period = detail.value?.period;
   if (!period) return '';
@@ -192,8 +201,8 @@ watch(() => props.periodId, loadReview, { immediate: true });
         :title="reviewTitle"
         :status-label="detail.context.statusLabel"
         :due-text="`自评截止 ${new Date(detail.period.selfEvalDueAt).toLocaleString('zh-CN', { hour12: false })}`"
-        :progress-text="`自评分已填写 ${completedCount}/${scoreRequiredCount}`"
-        progress-hint="状态、进度和描述可留空；有效权重指标的自评分必填"
+        :progress-text="scoreProgressText"
+        :progress-hint="scoreProgressHint"
         :show-actions="canEdit"
         toolbar-test-id="monthly-review-period-bar"
         actions-test-id="monthly-review-actions"
