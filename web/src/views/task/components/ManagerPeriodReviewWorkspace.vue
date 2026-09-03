@@ -232,7 +232,7 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
         <template #actions>
           <el-button :loading="returning" :disabled="saving || submitting" @mousedown.prevent @click="returnReview">退回员工补充</el-button>
           <el-button :loading="saving" :disabled="returning || submitting" @mousedown.prevent @click="saveDraft">保存草稿</el-button>
-          <el-button type="primary" :loading="submitting" :disabled="saving || returning" @mousedown.prevent @click="submitReview">提交直属上级评分</el-button>
+          <el-button type="primary" :loading="submitting" :disabled="saving || returning" @mousedown.prevent @click="submitReview">提交评分</el-button>
         </template>
       </PeriodReviewToolbar>
 
@@ -284,18 +284,31 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
                 <div><span>状态</span><strong>{{ indicator.healthStatus === 'on_track' ? '正常推进' : indicator.healthStatus === 'at_risk' ? '存在风险' : indicator.healthStatus === 'blocked' ? '当前受阻' : indicator.healthStatus === 'completed' ? '已经完成' : '本月未更新' }}</strong></div>
                 <div class="is-wide"><span>描述</span><strong>{{ indicator.employeeComment || '员工未填写描述' }}</strong></div>
               </div>
-              <div class="manager-score-card__form">
-                <label v-if="indicator.isScoreRequired">
+              <div v-if="canEdit" class="manager-score-card__form">
+                <div v-if="indicator.isScoreRequired" class="manager-score-card__score-group" data-testid="manager-review-score-group">
                   <span>直属上级评分 <b>*</b></span>
-                  <el-input-number v-model="formItems[index].managerScore" :min="0" :max="100" :controls="false" :disabled="!canEdit" aria-label="直属上级评分" placeholder="0-100" @change="delete validationErrors[indicator.indicatorVersionItemId]" />
+                  <div class="manager-score-card__score-controls">
+                    <el-input-number v-model="formItems[index].managerScore" :min="0" :max="100" :controls="false" aria-label="直属上级评分" placeholder="0-100" @change="delete validationErrors[indicator.indicatorVersionItemId]" />
+                    <el-button :disabled="indicator.selfScore == null" @click.stop="useSelfScore(index)">同意自评</el-button>
+                  </div>
                   <em v-if="validationErrors[indicator.indicatorVersionItemId]">{{ validationErrors[indicator.indicatorVersionItemId] }}</em>
-                </label>
+                </div>
                 <div v-else class="manager-score-card__exempt">不参与评分</div>
-                <el-button v-if="indicator.isScoreRequired" :disabled="!canEdit || indicator.selfScore == null" @click.stop="useSelfScore(index)">同意自评</el-button>
-                <label class="is-comment">
+                <label class="is-comment" data-testid="manager-review-comment-field">
                   <span>直属上级说明 <i>选填</i></span>
-                  <el-input v-model="formItems[index].managerComment" :disabled="!canEdit" type="textarea" :rows="2" placeholder="填写评价依据或反馈建议" />
+                  <el-input v-model="formItems[index].managerComment" type="textarea" :rows="2" placeholder="填写评价依据或反馈建议" />
                 </label>
+              </div>
+              <div v-else class="manager-score-card__result" data-testid="manager-review-score-result">
+                <div>
+                  <span>直属上级评分</span>
+                  <strong v-if="indicator.isScoreRequired">{{ formItems[index].managerScore ?? '--' }}{{ formItems[index].managerScore == null ? '' : '分' }}</strong>
+                  <strong v-else>不参与评分</strong>
+                </div>
+                <div class="is-wide">
+                  <span>直属上级说明</span>
+                  <strong>{{ formItems[index].managerComment || '未填写' }}</strong>
+                </div>
               </div>
               <div v-if="warningFor(index).length" class="manager-score-card__warnings">
                 <span v-for="warning in warningFor(index)" :key="warning">{{ warning }}</span>
@@ -328,13 +341,21 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
 .manager-score-card__employee > div { min-width: 0; display: grid; gap: 4px; }
 .manager-score-card__employee span, .manager-score-card__form label > span { color: #7f899b; font-size: 11px; }
 .manager-score-card__employee strong { overflow: hidden; color: #394559; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
-.manager-score-card__form { display: grid; grid-template-columns: 160px auto minmax(0, 1fr); align-items: end; gap: 10px; padding: 13px 15px 15px; }
+.manager-score-card__form { display: grid; grid-template-columns: minmax(240px, .55fr) minmax(320px, 1.45fr); align-items: start; gap: 16px; padding: 14px 15px 16px; }
 .manager-score-card__form label { min-width: 0; display: grid; gap: 6px; }
-.manager-score-card__form label > span b { color: #e85353; }
+.manager-score-card__form label > span b, .manager-score-card__score-group > span b { color: #e85353; }
 .manager-score-card__form label > span i { color: #a1a8b4; font-style: normal; }
+.manager-score-card__score-group { min-width: 0; display: grid; align-content: start; gap: 6px; }
+.manager-score-card__score-group > span { color: #7f899b; font-size: 11px; }
+.manager-score-card__score-controls { display: grid; grid-template-columns: minmax(110px, 1fr) auto; gap: 8px; }
 .manager-score-card__form :deep(.el-input-number) { width: 100%; }
 .manager-score-card__form :deep(.el-input-number .el-input__inner) { text-align: left; }
-.manager-score-card__form em { color: #e64f4f; font-size: 11px; font-style: normal; }
+.manager-score-card__form em, .manager-score-card__score-group em { color: #e64f4f; font-size: 11px; font-style: normal; }
+.manager-score-card__exempt { align-self: center; color: #667085; font-size: 13px; font-weight: 600; }
+.manager-score-card__result { display: grid; grid-template-columns: minmax(180px, .4fr) minmax(0, 1.6fr); gap: 16px; padding: 13px 15px 15px; border-top: 1px solid #edf0f5; background: #fff; }
+.manager-score-card__result > div { min-width: 0; display: grid; gap: 5px; }
+.manager-score-card__result span { color: #7f899b; font-size: 11px; }
+.manager-score-card__result strong { overflow-wrap: anywhere; color: #394559; font-size: 13px; font-weight: 600; }
 .manager-score-card__warnings { display: flex; gap: 8px; padding: 0 15px 13px; }
 .manager-score-card__warnings span { padding: 5px 8px; border-radius: 5px; background: #fff4e5; color: #a56a0a; font-size: 11px; }
 @media (max-width: 767px) {
@@ -342,9 +363,9 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
   .manager-review__totals { grid-template-columns: 1fr 1fr; }
   .manager-score-card > header { grid-template-columns: 27px minmax(0, 1fr); padding: 12px; }
   .manager-score-card > header b { grid-column: 2; justify-self: start; }
-  .manager-score-card__employee, .manager-score-card__form { grid-template-columns: minmax(0, 1fr); padding-right: 12px; padding-left: 12px; }
+  .manager-score-card__employee, .manager-score-card__form, .manager-score-card__result { grid-template-columns: minmax(0, 1fr); padding-right: 12px; padding-left: 12px; }
   .manager-score-card__employee .is-wide { grid-column: 1; }
-  .manager-score-card__form > .el-button { justify-self: start; }
+  .manager-score-card__score-controls { grid-template-columns: minmax(0, 1fr) auto; }
   .manager-score-card__warnings { flex-direction: column; padding-right: 12px; padding-left: 12px; }
 }
 </style>

@@ -1,4 +1,6 @@
 <script setup lang="ts">
+import { QuestionFilled } from '@element-plus/icons-vue';
+
 withDefaults(defineProps<{
   title: string;
   statusLabel: string;
@@ -28,8 +30,14 @@ withDefaults(defineProps<{
     </div>
     <div v-if="showActions" class="period-review-toolbar__actions" :data-testid="actionsTestId">
       <div class="period-review-toolbar__progress">
-        <strong>{{ progressText }}</strong>
-        <span>{{ progressHint }}</span>
+        <div class="period-review-toolbar__progress-summary">
+          <strong>{{ progressText }}</strong>
+          <el-tooltip v-if="progressHint" :content="progressHint" placement="top" :show-after="120">
+            <button type="button" class="period-review-toolbar__help" aria-label="查看评分说明">
+              <el-icon><QuestionFilled /></el-icon>
+            </button>
+          </el-tooltip>
+        </div>
       </div>
       <div class="period-review-toolbar__buttons">
         <slot name="actions" />
@@ -100,8 +108,12 @@ withDefaults(defineProps<{
 
 .period-review-toolbar__progress {
   min-width: 130px;
-  display: grid;
-  gap: 2px;
+}
+
+.period-review-toolbar__progress-summary {
+  display: flex;
+  align-items: center;
+  gap: 5px;
 }
 
 .period-review-toolbar__progress strong {
@@ -109,13 +121,25 @@ withDefaults(defineProps<{
   font-size: 13px;
 }
 
-.period-review-toolbar__progress span {
-  max-width: 260px;
-  overflow: hidden;
-  color: #8a93a3;
-  font-size: 11px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+.period-review-toolbar__help {
+  width: 20px;
+  height: 20px;
+  display: grid;
+  flex: 0 0 auto;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #8993a5;
+  cursor: help;
+}
+
+.period-review-toolbar__help:hover,
+.period-review-toolbar__help:focus-visible {
+  background: #eef2ff;
+  color: #5068d8;
+  outline: none;
 }
 
 .period-review-toolbar__buttons {
@@ -165,10 +189,6 @@ withDefaults(defineProps<{
 
   .period-review-toolbar__progress {
     min-width: 0;
-  }
-
-  .period-review-toolbar__progress span {
-    display: none;
   }
 
   .period-review-toolbar__buttons {

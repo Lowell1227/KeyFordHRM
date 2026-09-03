@@ -209,7 +209,10 @@ test.describe('monthly goal review responsive workspace', () => {
 
     const periodBar = page.getByTestId('monthly-review-period-bar');
     await expect(periodBar).toContainText('自评分已填写 0/2 · 不参与评分 1项');
-    await expect(periodBar).toContainText('共3项；2项参与评分，1项零权重不参与评分。是否评分与正常/受阻状态无关。');
+    const scoreHelp = periodBar.getByRole('button', { name: '查看评分说明' });
+    await expect(scoreHelp).toBeVisible();
+    await scoreHelp.hover();
+    await expect(page.getByRole('tooltip')).toContainText('共3项；2项参与评分，1项零权重不参与评分。是否评分与正常/受阻状态无关。');
     const firstCard = page.getByTestId('monthly-review-goal-card').first();
     const firstCardBox = await firstCard.boundingBox();
     const actionBox = await page.getByTestId('monthly-review-actions').boundingBox();

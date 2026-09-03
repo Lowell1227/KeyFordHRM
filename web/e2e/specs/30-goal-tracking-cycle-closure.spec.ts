@@ -200,10 +200,20 @@ test('direct manager uses the same full-width period structure and can submit pe
   await expect(cards).toHaveCount(3);
   await expect(periodBar.getByTestId('manager-review-actions')).toBeVisible();
   await expect(periodBar).toContainText('评分完成 0/2 · 不参与评分 1项');
-  await expect(periodBar).toContainText('共3项；2项参与评分，1项零权重不参与评分。是否评分与正常/受阻状态无关。');
+  const scoreHelp = periodBar.getByRole('button', { name: '查看评分说明' });
+  await expect(scoreHelp).toBeVisible();
+  await scoreHelp.hover();
+  await expect(page.getByRole('tooltip')).toContainText('共3项；2项参与评分，1项零权重不参与评分。是否评分与正常/受阻状态无关。');
   const cardBox = await cards.first().boundingBox();
+  const scoreGroupBox = await cards.first().getByTestId('manager-review-score-group').boundingBox();
+  const commentBox = await cards.first().getByTestId('manager-review-comment-field').boundingBox();
   expect(cardBox).not.toBeNull();
+  expect(scoreGroupBox).not.toBeNull();
+  expect(commentBox).not.toBeNull();
   expect(cardBox!.width).toBeGreaterThan(900);
+  expect(scoreGroupBox!.x).toBeLessThan(commentBox!.x);
+  expect(Math.abs(scoreGroupBox!.y - commentBox!.y)).toBeLessThanOrEqual(2);
+  expect(commentBox!.width).toBeGreaterThan(scoreGroupBox!.width);
   await expect(cards.first().getByTestId('period-review-indicator-context')).toContainText('达到目标得90分');
   await cards.nth(0).getByRole('button', { name: '同意自评' }).click();
   await cards.nth(1).getByLabel('直属上级评分').fill('55');
@@ -212,9 +222,14 @@ test('direct manager uses the same full-width period structure and can submit pe
   await expect(cards.nth(1)).toContainText('相差27分');
   await page.getByRole('button', { name: '保存草稿' }).click();
   await expect.poll(() => requests.filter((request) => request.method() === 'PUT').length).toBe(1);
-  await page.getByRole('button', { name: '提交直属上级评分' }).click();
+  await page.getByRole('button', { name: '提交评分', exact: true }).click();
   await expect.poll(() => requests.filter((request) => request.method() === 'POST').length).toBe(1);
   expect(requests.find((request) => request.method() === 'POST')?.postDataJSON()).toMatchObject({ expectedVersion: 1 });
+  await expect(cards.first().getByTestId('manager-review-score-result')).toContainText('直属上级评分90分');
+  await expect(cards.first().getByTestId('manager-review-score-result')).toContainText('直属上级说明未填写');
+  await expect(cards.first().getByLabel('直属上级评分')).toHaveCount(0);
+  await expect(cards.first().getByRole('button', { name: '同意自评' })).toHaveCount(0);
+  await expect(cards.nth(2).getByTestId('manager-review-score-result')).toContainText('不参与评分');
 });
 
 test('direct manager keeps the shared card structure and fixed actions on mobile', async ({ page }) => {
@@ -226,6 +241,18 @@ test('direct manager keeps the shared card structure and fixed actions on mobile
   await expect(page.getByTestId('manager-review-goal-card')).toHaveCount(3);
   const actions = page.getByTestId('manager-review-actions');
   await expect(actions).toHaveCSS('position', 'fixed');
-  await expect(actions.getByRole('button')).toHaveCount(3);
+  const scoreHelp = actions.getByRole('button', { name: '查看评分说明' });
+  await expect(scoreHelp).toBeVisible();
+  await scoreHelp.click();
+  await expect(page.getByRole('tooltip')).toContainText('零权重不参与评分');
+  await expect(actions.getByRole('button', { name: '退回员工补充' })).toBeVisible();
+  await expect(actions.getByRole('button', { name: '保存草稿' })).toBeVisible();
+  await expect(actions.getByRole('button', { name: '提交评分', exact: true })).toBeVisible();
+  const firstCard = page.getByTestId('manager-review-goal-card').first();
+  const scoreGroupBox = await firstCard.getByTestId('manager-review-score-group').boundingBox();
+  const commentBox = await firstCard.getByTestId('manager-review-comment-field').boundingBox();
+  expect(scoreGroupBox).not.toBeNull();
+  expect(commentBox).not.toBeNull();
+  expect(commentBox!.y).toBeGreaterThan(scoreGroupBox!.y + scoreGroupBox!.height - 2);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= document.documentElement.clientWidth)).toBe(true);
 });
