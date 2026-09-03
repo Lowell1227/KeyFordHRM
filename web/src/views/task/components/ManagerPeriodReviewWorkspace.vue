@@ -12,7 +12,7 @@ interface ManagerFormItem {
   managerComment: string;
 }
 
-const props = defineProps<{ periodId: string }>();
+const props = defineProps<{ periodId: string; taskId?: string }>();
 const emit = defineEmits<{ submitted: []; returned: [] }>();
 const detail = ref<PeriodReviewDetail>();
 const loading = ref(false);
@@ -78,7 +78,13 @@ async function loadReview() {
   loading.value = true;
   error.value = '';
   try {
-    replaceForm(await periodReviewsApi.findOne(props.periodId));
+    const next = await periodReviewsApi.findOne(props.periodId);
+    if (props.taskId && next.period.taskId !== props.taskId) {
+      detail.value = undefined;
+      error.value = '该月份不属于当前员工的绩效任务';
+      return;
+    }
+    replaceForm(next);
   } catch (loadError) {
     const candidate = loadError as { message?: string; response?: { data?: { message?: string } } };
     error.value = candidate.response?.data?.message || candidate.message || '主管评分加载失败';
@@ -194,7 +200,7 @@ async function submitReview() {
   }
 }
 
-watch(() => props.periodId, loadReview, { immediate: true });
+watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
 </script>
 
 <template>

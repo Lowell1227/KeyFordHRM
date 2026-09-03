@@ -45,7 +45,7 @@ function toStableQuery(state: TaskWorkspaceQuery): Record<string, string> {
     stage: state.stage,
   };
 
-  for (const key of ['cycleId', 'deptId', 'employeeId', 'taskId', 'stageState', 'keyword'] as const) {
+  for (const key of ['cycleId', 'deptId', 'employeeId', 'taskId', 'periodId', 'stageState', 'keyword'] as const) {
     const value = state[key];
     if (value) query[key] = value;
   }
@@ -79,6 +79,7 @@ export function parseTaskWorkspaceQuery(query: LocationQuery): TaskWorkspaceQuer
     deptId: firstNonEmptyValue(query.deptId),
     employeeId: firstNonEmptyValue(query.employeeId),
     taskId: firstNonEmptyValue(query.taskId),
+    periodId: firstNonEmptyValue(query.periodId),
     stageState:
       stageState && stageStates.has(stageState as NonNullable<TaskWorkspaceQuery['stageState']>)
         ? (stageState as NonNullable<TaskWorkspaceQuery['stageState']>)

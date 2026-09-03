@@ -307,6 +307,32 @@ describe('PeriodReviewsService', () => {
     expect(notifications.create).not.toHaveBeenCalled();
   });
 
+  it.each([
+    { progress: null, healthStatus: null, employeeComment: '仅填写本月结果描述' },
+    { progress: 73, healthStatus: null, employeeComment: null },
+    { progress: null, healthStatus: 'at_risk' as const, employeeComment: null },
+  ])('keeps each partially completed monthly result in the goal history: %o', async (partial) => {
+    await service.submitEmployeeReview(period.id, {
+      expectedVersion: 2,
+      idempotencyKey: '21212121-2121-4121-8121-212121212121',
+      indicators: [{
+        indicatorVersionItemId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        selfScore: 88,
+        ...partial,
+      }],
+    }, employee);
+
+    expect(tx.indicatorProgressUpdate.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        indicatorInstanceId: '12121212-1212-4212-8212-121212121212',
+        periodId: period.id,
+        progress: partial.progress,
+        healthStatus: partial.healthStatus,
+        content: partial.employeeComment ?? '',
+      }),
+    });
+  });
+
   it('requires scores only for positive-weight indicators and accepts empty monthly progress', async () => {
     const zeroWeightItem = {
       ...period.indicatorVersion.items[0],

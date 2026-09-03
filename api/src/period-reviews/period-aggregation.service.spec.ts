@@ -3,6 +3,7 @@ import { PeriodAggregationService } from './period-aggregation.service';
 
 describe('PeriodAggregationService', () => {
   const tx = {
+    $queryRaw: jest.fn(),
     assessmentTask: { findUnique: jest.fn() },
     systemConfig: { findUnique: jest.fn() },
     gradeResult: { upsert: jest.fn() },
@@ -16,6 +17,24 @@ describe('PeriodAggregationService', () => {
     jest.clearAllMocks();
     tx.systemConfig.findUnique.mockResolvedValue({ value: { A: 90, B: 75, C: 60 } });
     flow.transitionTx.mockResolvedValue({ newStatus: 'dept_review' });
+    tx.$queryRaw.mockResolvedValue([]);
+  });
+
+  it('serializes task aggregation before reading period completion', async () => {
+    const order: string[] = [];
+    tx.$queryRaw.mockImplementation(async () => { order.push('lock'); return []; });
+    tx.assessmentTask.findUnique.mockImplementation(async () => {
+      order.push('read');
+      return {
+        id: 'task-1', cycleId: 'cycle-1', status: 'manager_scoring',
+        managerId: 'manager-1', deptHeadId: 'head-1', cycle: { workflowVersion: 2 },
+        periods: [completedPeriod(88)],
+      };
+    });
+
+    await service.refreshTask('task-1', tx as any, 'manager-1');
+
+    expect(order.slice(0, 2)).toEqual(['lock', 'read']);
   });
 
   it('does not create a quarter score when a required month has no result', async () => {

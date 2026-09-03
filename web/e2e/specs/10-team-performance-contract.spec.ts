@@ -842,17 +842,17 @@ test.describe('team list manager workspace', () => {
           indicatorVersionItemId: 'period-item-1', sourceInstanceId: 'indicator-1', name: '111',
           description: '1111', scoringStandard: '1111', targetValue: null, targetValueText: null,
           unit: null, weight: 0.5, progress: 50, healthStatus: 'on_track', actualValueText: null,
-          employeeComment: '1111', problemReason: null, nextMonthPlan: null, supportNeeded: null,
-          attachments: [], selfScore: 70, managerScore: null, managerComment: null,
-          latestProgress: null, alignedObjectives: [], history: [],
+           employeeComment: '1111', problemReason: null, nextMonthPlan: null, supportNeeded: null,
+           attachments: [], selfScore: 70, managerScore: null, managerComment: null,
+           isScoreRequired: true, latestProgress: null, alignedObjectives: [], history: [],
         },
         {
           indicatorVersionItemId: 'period-item-2', sourceInstanceId: 'indicator-2', name: '2222',
           description: '2222', scoringStandard: '2222', targetValue: null, targetValueText: null,
           unit: null, weight: 0.5, progress: 90, healthStatus: 'on_track', actualValueText: null,
-          employeeComment: '1111', problemReason: null, nextMonthPlan: null, supportNeeded: null,
-          attachments: [], selfScore: 90, managerScore: null, managerComment: null,
-          latestProgress: null, alignedObjectives: [], history: [],
+           employeeComment: '1111', problemReason: null, nextMonthPlan: null, supportNeeded: null,
+           attachments: [], selfScore: 90, managerScore: null, managerComment: null,
+           isScoreRequired: true, latestProgress: null, alignedObjectives: [], history: [],
         },
       ],
     };
@@ -1133,6 +1133,47 @@ test.describe('team list manager workspace', () => {
     await page.reload();
     await expect(page.getByTestId('team-task-workspace')).toContainText('Off Page Member');
     await expect(page).toHaveURL(/taskId=task-off-page/);
+  });
+
+  test('monthly manager deep link keeps the exact period when the task is outside the current page', async ({ page }) => {
+    await mockTaskWorkspaceIdentity(page, 'manager');
+    const requestedPeriods: string[] = [];
+    await page.route('**/api/v1/tasks/task-off-page', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ ...offPageTaskFixture, status: 'manager_scoring' })),
+    }));
+    await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(teamPageWith([teamPageFixture.items[0]], { total: 21 }))),
+    }));
+    await page.route('**/api/v1/assessment-periods/*/review', (route) => {
+      requestedPeriods.push(route.request().url());
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          period: {
+            id: 'period-september', taskId: 'task-off-page', periodKey: '2026-09', periodType: 'month',
+            status: 'manager_scoring', selfEvalOpenAt: '2026-09-01T00:00:00.000Z',
+            selfEvalDueAt: '2026-09-10T00:00:00.000Z', managerDueAt: '2026-09-15T00:00:00.000Z',
+            employeeSubmittedAt: '2026-09-09T00:00:00.000Z', managerSubmittedAt: null,
+            selfScoreTotal: 88, managerScoreTotal: null, draftVersion: 0,
+          },
+          context: {
+            cycleName: '2026 H1', employeeName: 'Off Page Member', employeeNo: 'E099',
+            deptName: 'Operations', managerName: 'Test manager', statusLabel: '主管评分',
+          },
+          permissions: { canEditEmployee: false, canEditManager: true },
+          indicators: [],
+        })),
+      });
+    });
+
+    await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-off-page&periodId=period-september&page=2');
+
+    await expect(page.getByTestId('manager-period-review-workspace')).toContainText('2026年9月主管月度评分');
+    await expect(page).toHaveURL(/periodId=period-september/);
+    expect(requestedPeriods).toHaveLength(1);
+    expect(requestedPeriods[0]).toContain('/assessment-periods/period-september/review');
   });
 
   for (const role of ['dept_head', 'hr'] as const) {
@@ -2636,6 +2677,7 @@ test('normalizes team workspace query', () => {
       stage: 'manager-eval',
       cycleId: 'cycle-1',
       taskId: 'task-1',
+      periodId: 'period-2',
     }),
   ).toEqual(
     expect.objectContaining({
@@ -2643,6 +2685,7 @@ test('normalizes team workspace query', () => {
       stage: 'manager-eval',
       cycleId: 'cycle-1',
       taskId: 'task-1',
+      periodId: 'period-2',
     }),
   );
 });
@@ -2739,6 +2782,29 @@ test('preserves a valid page for task selection while resetting it for filters',
       stage: 'manager-eval',
       taskId: 'task-1',
       page: '2',
+    },
+  });
+});
+
+test('preserves the exact monthly review id in a stable manager workspace query', async () => {
+  let replacement: unknown;
+  const router = {
+    replace: async (location: unknown) => { replacement = location; },
+  } as unknown as Router;
+
+  await updateTaskWorkspaceQuery(
+    router,
+    { scope: 'team', stage: 'manager-eval', cycleId: 'cycle-1', taskId: 'task-1' },
+    { periodId: 'period-september' },
+  );
+
+  expect(replacement).toEqual({
+    query: {
+      scope: 'team',
+      stage: 'manager-eval',
+      cycleId: 'cycle-1',
+      taskId: 'task-1',
+      periodId: 'period-september',
     },
   });
 });

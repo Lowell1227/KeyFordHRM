@@ -67,8 +67,8 @@ export interface PeriodReviewDetail {
     managerScore: number | null;
     managerComment: string | null;
     latestProgress: {
-      progress: number;
-      healthStatus: IndicatorProgressHealth;
+      progress: number | null;
+      healthStatus: IndicatorProgressHealth | null;
       content: string;
       attachments: unknown[];
       createdAt: Date;

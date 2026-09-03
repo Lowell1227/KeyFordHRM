@@ -111,7 +111,7 @@ async function submitProgress() {
       content: form.content.trim(),
       expectedLatestUpdateAt: latestProgress.value?.updatedAt ?? null,
     });
-    detail.value.progress = created.progress;
+    detail.value.progress = created.progress ?? 0;
     detail.value.progressUpdates = [created, ...detail.value.progressUpdates];
     editing.value = false;
     form.content = '';
@@ -133,13 +133,14 @@ function formatDate(value: string) {
   }).format(new Date(value));
 }
 
-function healthLabel(status?: GoalTrackingHealthStatus) {
+function healthLabel(status?: GoalTrackingHealthStatus | null) {
+  if (!status) return '本月未更新';
   return {
     on_track: '正常',
     at_risk: '存在风险',
     blocked: '已阻塞',
     completed: '已完成',
-  }[status ?? 'on_track'];
+  }[status];
 }
 
 function progressSourceLabel(progress: GoalTrackingLatestProgress) {
@@ -212,7 +213,7 @@ function progressSourceLabel(progress: GoalTrackingLatestProgress) {
           </div>
           <div class="current-progress__values">
             <span :data-health="latestProgress.healthStatus">{{ healthLabel(latestProgress.healthStatus) }}</span>
-            <strong>{{ latestProgress.progress }}%</strong>
+            <strong>{{ latestProgress.progress == null ? '本月未更新' : `${latestProgress.progress}%` }}</strong>
           </div>
           <p>{{ latestProgress.content || '未填写描述' }}</p>
         </div>
@@ -273,7 +274,7 @@ function progressSourceLabel(progress: GoalTrackingLatestProgress) {
                 </div>
                 <div class="goal-progress-timeline__tags">
                   <span :data-health="progress.healthStatus">{{ healthLabel(progress.healthStatus) }}</span>
-                  <span>{{ progress.progress }}%</span>
+                  <span>{{ progress.progress == null ? '本月未更新' : `${progress.progress}%` }}</span>
                 </div>
                 <p>{{ progress.content || progress.title || '未填写描述' }}</p>
                 <div v-if="progress.attachments?.length" class="goal-progress-timeline__files">

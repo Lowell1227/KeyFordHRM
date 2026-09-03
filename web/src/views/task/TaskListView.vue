@@ -160,6 +160,9 @@ const selectedTeamTask = computed(() => {
   return teamPage.value.items.find((item) => item.id === taskId)
     ?? (hydratedTeamTask.value?.id === taskId ? hydratedTeamTask.value : undefined);
 });
+const selectedManagerPeriodId = computed(() => (
+  workspaceQuery.state.value.periodId ?? selectedTeamTask.value?.periodReview?.id
+));
 const workspaceMembers = computed(() => {
   const current = selectedTeamTask.value;
   if (current && !teamPage.value.items.some((item) => item.id === current.id)) return [current];
@@ -291,6 +294,7 @@ async function normalizeTaskCycle(): Promise<string> {
       cycleId,
       employeeId: undefined,
       taskId: undefined,
+      periodId: undefined,
       page: undefined,
     });
   } else if (!cycleId && requestedCycleId) {
@@ -298,6 +302,7 @@ async function normalizeTaskCycle(): Promise<string> {
       cycleId: undefined,
       employeeId: undefined,
       taskId: undefined,
+      periodId: undefined,
       page: undefined,
     });
   }
@@ -402,7 +407,7 @@ async function denyTeamTaskAccess(taskId: string) {
   const message = '无权访问非直属下属的绩效任务';
   hydratedTeamTask.value = undefined;
   teamDetailError.value = message;
-  await workspaceQuery.update({ taskId: undefined });
+  await workspaceQuery.update({ taskId: undefined, periodId: undefined });
   ElMessage.warning(message);
 }
 
@@ -683,11 +688,11 @@ async function selectTeamTask(payload: { taskId: string; employeeId: string }) {
 
 async function switchTeamTask(taskId: string) {
   if (taskId === workspaceQuery.state.value.taskId) return;
-  await workspaceQuery.update({ taskId });
+  await workspaceQuery.update({ taskId, periodId: undefined });
 }
 
 async function closeTeamTaskWorkspace() {
-  await workspaceQuery.update({ taskId: undefined });
+  await workspaceQuery.update({ taskId: undefined, periodId: undefined });
   await nextTick();
   await teamListRef.value?.focusList();
 }
@@ -971,6 +976,7 @@ watch(
         cycleId: canonicalCycleId,
         employeeId: undefined,
         taskId: undefined,
+        periodId: undefined,
         page: undefined,
       });
       return;
@@ -1214,8 +1220,9 @@ watch(
         @reject="rejectSingleGoalReview"
       />
       <ManagerPeriodReviewWorkspace
-        v-else-if="workspaceQuery.state.value.stage === 'manager-eval' && selectedTeamTask?.periodReview"
-        :period-id="selectedTeamTask.periodReview.id"
+        v-else-if="workspaceQuery.state.value.stage === 'manager-eval' && selectedTeamTask && selectedManagerPeriodId"
+        :period-id="selectedManagerPeriodId"
+        :task-id="selectedTeamTask.id"
         @submitted="loadTeam"
         @returned="loadTeam"
       />

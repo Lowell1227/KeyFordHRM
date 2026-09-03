@@ -1272,8 +1272,8 @@ model IndicatorProgressUpdate {
   indicatorInstanceId    String                  @map("indicator_instance_id") @db.Uuid
   periodId               String?                 @map("period_id") @db.Uuid
   periodReviewRevisionId String?                 @map("period_review_revision_id") @db.Uuid
-  progress               Int                     @db.SmallInt
-  healthStatus           IndicatorProgressHealth @map("health_status")
+  progress               Int?                     @db.SmallInt
+  healthStatus           IndicatorProgressHealth? @map("health_status")
   content                String                  @db.Text
   attachments            Json                    @default("[]") @db.JsonB
   createdBy              String                  @map("created_by") @db.Uuid

@@ -111,6 +111,9 @@ type TeamListTask = Prisma.AssessmentTaskGetPayload<{
     periodType: AssessmentPeriodType;
     sequence: number;
     status: AssessmentPeriodStatus;
+    employeeSubmittedAt: Date | null;
+    managerSubmittedAt: Date | null;
+    lockedAt: Date | null;
     selfScoreTotal: Prisma.Decimal | null;
     managerScoreTotal: Prisma.Decimal | null;
   }>;
@@ -238,6 +241,9 @@ export class TeamTasksService {
               periodType: true,
               sequence: true,
               status: true,
+              employeeSubmittedAt: true,
+              managerSubmittedAt: true,
+              lockedAt: true,
               selfScoreTotal: true,
               managerScoreTotal: true,
             },
@@ -413,7 +419,10 @@ export class TeamTasksService {
   ): TeamStageState {
     if (task.isExempt || task.status === TaskStatus.exempted) return "exempted";
     if (!period) return getTeamStageState(task.status, "manager-eval");
-    if (period.status === AssessmentPeriodStatus.manager_scoring) return "pending";
+    if (period.status === AssessmentPeriodStatus.manager_scoring) {
+      if (period.employeeSubmittedAt == null) return "not_started";
+      if (period.managerSubmittedAt == null) return "pending";
+    }
     if (
       period.status === AssessmentPeriodStatus.unopened
       || period.status === AssessmentPeriodStatus.self_eval

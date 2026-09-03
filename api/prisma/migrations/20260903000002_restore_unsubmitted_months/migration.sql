@@ -9,11 +9,16 @@ WITH repair_candidates AS MATERIALIZED (
   INNER JOIN "assessment_cycles" AS cycle ON cycle."id" = task."cycle_id"
   LEFT JOIN "grade_results" AS grade_result ON grade_result."task_id" = task."id"
   WHERE cycle."workflow_version" = 2
+    AND cycle."scoring_frequency" = 'monthly'
     AND cycle."opened_at" IS NOT NULL
     AND cycle."published_at" IS NULL
+    AND cycle."closed_at" IS NULL
+    AND task."status" = 'manager_scoring'
     AND task."published_at" IS NULL
+    AND task."closed_at" IS NULL
     AND COALESCE(grade_result."is_published", FALSE) = FALSE
     AND grade_result."published_at" IS NULL
+    AND period."period_type" = 'month'
     AND period."status" = 'manager_scoring'
     AND period."employee_submitted_at" IS NULL
     AND period."manager_submitted_at" IS NULL
@@ -50,7 +55,8 @@ WITH repair_candidates AS MATERIALIZED (
     jsonb_build_object(
       'status', 'self_eval',
       'reason', 'restore_unsubmitted_month_after_legacy_deadline_advance',
-      'migration', '20260903000002_restore_unsubmitted_months'
+      'migration', '20260903000002_restore_unsubmitted_months',
+      'actor', 'system_migration'
     ),
     CURRENT_TIMESTAMP
   FROM repaired

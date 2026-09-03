@@ -22,6 +22,8 @@ const periodKey = ref('');
 const status = ref<PeriodMonitoringStatus | ''>('');
 const keyword = ref('');
 const reopeningId = ref('');
+const page = ref(1);
+const pageSize = 20;
 
 const statusOptions: Array<{ value: PeriodMonitoringStatus; label: string }> = [
   { value: 'employee_pending', label: '待员工月度自评' },
@@ -47,8 +49,8 @@ async function load() {
   loading.value = true;
   error.value = '';
   const query: PeriodMonitoringQuery = {
-    page: 1,
-    pageSize: 100,
+    page: page.value,
+    pageSize,
     periodKey: periodKey.value || undefined,
     status: status.value || undefined,
     keyword: keyword.value.trim() || undefined,
@@ -61,6 +63,16 @@ async function load() {
   } finally {
     loading.value = false;
   }
+}
+
+function applyFilters() {
+  page.value = 1;
+  void load();
+}
+
+function changePage(nextPage: number) {
+  page.value = nextPage;
+  void load();
 }
 
 async function reopen(row: PeriodMonitoringRow) {
@@ -95,7 +107,10 @@ async function reopen(row: PeriodMonitoringRow) {
   }
 }
 
-watch(() => props.cycleId, () => void load());
+watch(() => props.cycleId, () => {
+  page.value = 1;
+  void load();
+});
 onMounted(() => void load());
 </script>
 
@@ -115,14 +130,14 @@ onMounted(() => void load());
         <div><span>主管月度评分已完成</span><strong>{{ result.summary.managerCompleted }}</strong></div>
       </div>
       <div class="monthly-monitor__filters">
-        <el-select v-model="periodKey" clearable placeholder="全部月份" @change="load">
+        <el-select v-model="periodKey" clearable placeholder="全部月份" @change="applyFilters">
           <el-option v-for="key in periodKeys" :key="key" :label="key" :value="key" />
         </el-select>
-        <el-select v-model="status" clearable placeholder="全部状态" @change="load">
+        <el-select v-model="status" clearable placeholder="全部状态" @change="applyFilters">
           <el-option v-for="item in statusOptions" :key="item.value" :label="item.label" :value="item.value" />
         </el-select>
-        <el-input v-model="keyword" clearable placeholder="搜索员工姓名或工号" @keyup.enter="load" />
-        <el-button type="primary" @click="load">查询</el-button>
+        <el-input v-model="keyword" clearable placeholder="搜索员工姓名或工号" @keyup.enter="applyFilters" />
+        <el-button type="primary" @click="applyFilters">查询</el-button>
       </div>
       <el-table class="monthly-monitor__table" :data="rows" empty-text="暂无符合条件的月度自评记录">
         <el-table-column label="月份" prop="periodKey" width="105" />
@@ -150,6 +165,17 @@ onMounted(() => void load());
           <small v-else>{{ row.reopenBlockedReason || '—' }}</small>
         </article>
       </div>
+      <el-pagination
+        v-if="result.total > pageSize"
+        class="monthly-monitor__pagination"
+        data-testid="cycle-monthly-progress-pagination"
+        background
+        layout="prev, pager, next, total"
+        :current-page="result.page"
+        :page-size="pageSize"
+        :total="result.total"
+        @current-change="changePage"
+      />
     </template>
   </section>
 </template>
@@ -169,6 +195,7 @@ onMounted(() => void load());
 .monthly-monitor__table small, .monthly-monitor__table strong { display: block; }
 .monthly-monitor__table small, .monthly-monitor__blocked { color: #929bad; font-size: 11px; }
 .monthly-monitor__cards { display: none; }
+.monthly-monitor__pagination { justify-content: flex-end; }
 @media (max-width: 767px) {
   .monthly-monitor { padding: 14px; }
   .monthly-monitor__summary { grid-template-columns: 1fr 1fr; }
@@ -179,5 +206,6 @@ onMounted(() => void load());
   .monthly-monitor__cards article header { display: flex; justify-content: space-between; }
   .monthly-monitor__cards article p { color: #7d889a; font-size: 12px; }
   .monthly-monitor__cards article small { color: #929bad; }
+  .monthly-monitor__pagination { justify-content: center; overflow-x: auto; }
 }
 </style>

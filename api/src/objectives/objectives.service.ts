@@ -69,8 +69,8 @@ export interface GoalTrackingLatestProgress {
   id: string;
   title?: string;
   content?: string;
-  progress: number;
-  healthStatus?: 'on_track' | 'at_risk' | 'blocked' | 'completed';
+  progress: number | null;
+  healthStatus?: 'on_track' | 'at_risk' | 'blocked' | 'completed' | null;
   attachments?: unknown[];
   createdBy?: string;
   creatorName?: string;
@@ -570,6 +570,7 @@ export class ObjectivesService {
             workflowVersion: true,
             openedAt: true,
             publishedAt: true,
+            closedAt: true,
           },
         },
         periods: {
@@ -846,6 +847,10 @@ export class ObjectivesService {
             id: true,
             employeeId: true,
             status: true,
+            isExempt: true,
+            participantDisposition: true,
+            indicatorConfirmedAt: true,
+            closedAt: true,
             selfEvalSubmittedAt: true,
             publishedAt: true,
             cycle: {
@@ -853,6 +858,7 @@ export class ObjectivesService {
                 workflowVersion: true,
                 openedAt: true,
                 publishedAt: true,
+                closedAt: true,
               },
             },
           },
@@ -879,6 +885,11 @@ export class ObjectivesService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw<Array<{ id: string }>>`
+        SELECT "id" FROM "indicator_instances"
+        WHERE "id" = ${indicatorId}::uuid
+        FOR UPDATE
+      `;
       const latest = await tx.indicatorProgressUpdate.findFirst({
         where: { indicatorInstanceId: indicatorId },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -1015,6 +1026,7 @@ export class ObjectivesService {
                 workflowVersion: true,
                 openedAt: true,
                 publishedAt: true,
+                closedAt: true,
               },
             },
           },
@@ -1113,11 +1125,16 @@ export class ObjectivesService {
   private canSubmitActiveProgress(
     task: {
       employeeId: string;
+      isExempt: boolean;
+      participantDisposition: string;
+      indicatorConfirmedAt: Date | null;
+      closedAt: Date | null;
       publishedAt: Date | null;
       cycle: {
         workflowVersion: number;
         openedAt: Date | null;
         publishedAt: Date | null;
+        closedAt: Date | null;
       };
     },
     viewer: AuthUser,
@@ -1125,6 +1142,11 @@ export class ObjectivesService {
     return task.employeeId === viewer.id
       && task.cycle.workflowVersion === 2
       && task.cycle.openedAt != null
+      && task.indicatorConfirmedAt != null
+      && !task.isExempt
+      && task.participantDisposition === 'active'
+      && task.closedAt == null
+      && task.cycle.closedAt == null
       && task.cycle.publishedAt == null
       && task.publishedAt == null;
   }

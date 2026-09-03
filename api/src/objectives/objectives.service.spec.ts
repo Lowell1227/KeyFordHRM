@@ -24,6 +24,7 @@ describe('ObjectivesService visibility helpers', () => {
     indicatorInstance: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock; count: jest.Mock };
     indicatorProgressUpdate: { findFirst: jest.Mock; create: jest.Mock };
     auditLog: { create: jest.Mock; findMany: jest.Mock };
+    $queryRaw: jest.Mock;
     $transaction: jest.Mock;
   };
   let dataScope: { getVisibleEmployeeFilter: jest.Mock; getAncestorDeptIds: jest.Mock };
@@ -96,6 +97,7 @@ describe('ObjectivesService visibility helpers', () => {
       },
       indicatorProgressUpdate: { findFirst: jest.fn(), create: jest.fn() },
       auditLog: { create: jest.fn(), findMany: jest.fn() },
+      $queryRaw: jest.fn().mockResolvedValue([]),
       $transaction: jest.fn(async (callback: (tx: unknown) => unknown) => callback(prisma)),
     };
     dataScope = {
@@ -182,6 +184,10 @@ describe('ObjectivesService visibility helpers', () => {
       employeeId: 'manager-1',
       cycleId: 'cycle-1',
       status: 'manager_scoring',
+      isExempt: false,
+      participantDisposition: 'active',
+      indicatorConfirmedAt: new Date('2026-07-02T00:00:00.000Z'),
+      closedAt: null,
       selfEvalSubmittedAt: new Date('2026-08-18T08:00:00.000Z'),
       publishedAt: null,
       employee: { id: 'manager-1', name: 'Manager' },
@@ -192,6 +198,7 @@ describe('ObjectivesService visibility helpers', () => {
         workflowVersion: 2,
         openedAt: new Date('2026-07-01T00:00:00.000Z'),
         publishedAt: null,
+        closedAt: null,
       },
       periods: [
         { periodKey: '2026-07', status: 'completed', employeeSubmittedAt: new Date(), managerSubmittedAt: new Date() },
@@ -842,12 +849,17 @@ describe('ObjectivesService visibility helpers', () => {
         id: 'task-1',
         employeeId: viewer.id,
         status: 'manager_scoring',
+        isExempt: false,
+        participantDisposition: 'active',
+        indicatorConfirmedAt: new Date('2026-07-02T00:00:00.000Z'),
+        closedAt: null,
         selfEvalSubmittedAt: new Date('2026-08-16T07:00:00.000Z'),
         publishedAt: null,
         cycle: {
           workflowVersion: 2,
           openedAt: new Date('2026-07-01T00:00:00.000Z'),
           publishedAt: null,
+          closedAt: null,
         },
       },
     });
@@ -886,6 +898,7 @@ describe('ObjectivesService visibility helpers', () => {
       },
       include: { creator: { select: { id: true, name: true } } },
     });
+    expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     expect(prisma.auditLog.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         userId: viewer.id,
@@ -927,18 +940,27 @@ describe('ObjectivesService visibility helpers', () => {
   it.each([
     {
       status: 'self_eval',
+      isExempt: false,
+      participantDisposition: 'active',
+      indicatorConfirmedAt: new Date('2026-07-02T00:00:00.000Z'),
+      closedAt: null,
       selfEvalSubmittedAt: null,
       publishedAt: null,
-      cycle: { workflowVersion: 2, openedAt: null, publishedAt: null },
+      cycle: { workflowVersion: 2, openedAt: null, publishedAt: null, closedAt: null },
     },
     {
       status: 'self_eval',
+      isExempt: false,
+      participantDisposition: 'active',
+      indicatorConfirmedAt: new Date('2026-07-02T00:00:00.000Z'),
+      closedAt: null,
       selfEvalSubmittedAt: null,
       publishedAt: new Date('2026-09-15T07:00:00.000Z'),
       cycle: {
         workflowVersion: 2,
         openedAt: new Date('2026-07-01T00:00:00.000Z'),
         publishedAt: new Date('2026-09-15T07:00:00.000Z'),
+        closedAt: null,
       },
     },
   ])('does not append progress outside an open unpublished cycle: %o', async (taskState) => {
@@ -965,12 +987,17 @@ describe('ObjectivesService visibility helpers', () => {
         id: 'task-1',
         employeeId: viewer.id,
         status: 'self_eval',
+        isExempt: false,
+        participantDisposition: 'active',
+        indicatorConfirmedAt: new Date('2026-07-02T00:00:00.000Z'),
+        closedAt: null,
         selfEvalSubmittedAt: null,
         publishedAt: null,
         cycle: {
           workflowVersion: 2,
           openedAt: new Date('2026-07-01T00:00:00.000Z'),
           publishedAt: null,
+          closedAt: null,
         },
       },
     });
@@ -989,6 +1016,35 @@ describe('ObjectivesService visibility helpers', () => {
         content: '旧编辑器提交',
         expectedLatestUpdateAt: '2026-08-16T08:00:00.000Z',
       },
+      viewer,
+    )).rejects.toBeInstanceOf(ConflictException);
+
+    expect(prisma.indicatorProgressUpdate.create).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { indicatorConfirmedAt: null },
+    { isExempt: true },
+    { participantDisposition: 'cycle_exempt' },
+    { closedAt: new Date('2026-09-30T00:00:00.000Z') },
+    { cycle: { workflowVersion: 2, openedAt: new Date('2026-07-01T00:00:00.000Z'), publishedAt: null, closedAt: new Date('2026-09-30T00:00:00.000Z') } },
+  ])('does not append progress until the task is confirmed, active, non-exempt, and open: %o', async (override) => {
+    const base = {
+      id: 'task-1', employeeId: viewer.id, status: 'self_eval', isExempt: false,
+      participantDisposition: 'active', indicatorConfirmedAt: new Date('2026-07-02T00:00:00.000Z'),
+      closedAt: null, selfEvalSubmittedAt: null, publishedAt: null,
+      cycle: {
+        workflowVersion: 2, openedAt: new Date('2026-07-01T00:00:00.000Z'),
+        publishedAt: null, closedAt: null,
+      },
+    };
+    prisma.indicatorInstance.findUnique.mockResolvedValue({
+      id: 'indicator-1', name: 'GMV 达成率', task: { ...base, ...override },
+    });
+
+    await expect((service as any).updateIndicatorProgress(
+      'indicator-1',
+      { progress: 80, healthStatus: 'on_track', content: '迟到更新' },
       viewer,
     )).rejects.toBeInstanceOf(ConflictException);
 
@@ -1021,6 +1077,10 @@ describe('ObjectivesService visibility helpers', () => {
         id: 'task-1',
         employeeId: viewer.id,
         status: 'self_eval',
+        isExempt: false,
+        participantDisposition: 'active',
+        indicatorConfirmedAt: new Date('2026-07-02T00:00:00.000Z'),
+        closedAt: null,
         selfEvalSubmittedAt: null,
         publishedAt: null,
         employee: { id: viewer.id, name: viewer.name },
@@ -1030,6 +1090,7 @@ describe('ObjectivesService visibility helpers', () => {
           workflowVersion: 2,
           openedAt: new Date('2026-07-01T00:00:00.000Z'),
           publishedAt: null,
+          closedAt: null,
         },
       },
       objectiveAlignments: [

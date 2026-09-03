@@ -994,6 +994,7 @@ export interface TaskWorkspaceQuery {
   deptId?: string;
   employeeId?: string;
   taskId?: string;
+  periodId?: string;
   stageState?: TeamStageState;
   keyword?: string;
   page?: number;
@@ -1933,8 +1934,8 @@ export interface GoalTrackingLatestProgress {
   id: string;
   title?: string;
   content?: string;
-  progress: number;
-  healthStatus?: GoalTrackingHealthStatus;
+  progress: number | null;
+  healthStatus?: GoalTrackingHealthStatus | null;
   attachments?: Attachment[];
   createdBy?: string;
   creatorName?: string;

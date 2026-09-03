@@ -22,6 +22,11 @@ export class PeriodAggregationService {
     tx: Prisma.TransactionClient,
     actorId: string,
   ): Promise<PeriodAggregationResult> {
+    await tx.$queryRaw<Array<{ id: string }>>`
+      SELECT "id" FROM "assessment_tasks"
+      WHERE "id" = ${taskId}::uuid
+      FOR UPDATE
+    `;
     const task = await tx.assessmentTask.findUnique({
       where: { id: taskId },
       include: {

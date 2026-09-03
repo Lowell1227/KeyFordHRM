@@ -205,7 +205,13 @@ describe("TeamTasksService", () => {
         }),
         include: expect.objectContaining({
           periods: expect.objectContaining({
-            select: expect.objectContaining({ selfScoreTotal: true, managerScoreTotal: true }),
+            select: expect.objectContaining({
+              selfScoreTotal: true,
+              managerScoreTotal: true,
+              employeeSubmittedAt: true,
+              managerSubmittedAt: true,
+              lockedAt: true,
+            }),
           }),
         }),
       }),
@@ -296,6 +302,9 @@ describe("TeamTasksService", () => {
               periodType: "month",
               sequence: 1,
               status: "manager_scoring",
+              employeeSubmittedAt: new Date("2026-08-30T08:00:00.000Z"),
+              managerSubmittedAt: null,
+              lockedAt: null,
               selfScoreTotal: new Prisma.Decimal(80),
               managerScoreTotal: null,
             },
@@ -337,6 +346,39 @@ describe("TeamTasksService", () => {
         },
       }),
     ]);
+  });
+
+  it('does not expose a corrupted unsubmitted manager-scoring month as actionable', async () => {
+    const query = Object.assign(new TeamTaskQueryDto(), {
+      page: 1,
+      pageSize: 20,
+      stage: 'manager-eval' as const,
+      cycleId: 'cycle-1',
+    });
+    prisma.assessmentTask.findMany
+      .mockResolvedValueOnce([{
+        id: 'task-corrupt', cycleId: 'cycle-1', employeeId: 'employee-1', deptId: 'dept-1',
+        managerId: managerViewer.id, status: 'manager_scoring' as TaskStatus, isExempt: false,
+        exemptReason: null, updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+        cycle: { name: '2026 Q3' },
+        employee: { name: '方园', employeeNo: '319', avatarUrl: null, position: 'HRBP' },
+        dept: { name: '人事组' }, gradeResult: null,
+        periods: [{
+          id: 'period-september', periodKey: '2026-09', periodType: 'month', sequence: 3,
+          status: 'manager_scoring', employeeSubmittedAt: null, managerSubmittedAt: null,
+          lockedAt: null, selfScoreTotal: null, managerScoreTotal: null,
+        }],
+      }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
+
+    const result = await service.findAll(query, managerViewer);
+
+    expect(result.items[0]).toMatchObject({
+      stageState: 'not_started',
+      periodReview: expect.objectContaining({ id: 'period-september' }),
+    });
+    expect(result.counts).toMatchObject({ pending: 0, notStarted: 1 });
   });
 
   it("filters goal-review exempted items without indexing an undefined stage array", async () => {

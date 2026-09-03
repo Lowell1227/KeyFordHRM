@@ -300,8 +300,11 @@ export class PeriodReviewsService {
         });
         if (
           versionItem.sourceInstanceId
-          && item.progress != null
-          && item.healthStatus != null
+          && (
+            item.progress != null
+            || item.healthStatus != null
+            || this.optionalText(item.employeeComment) != null
+          )
         ) {
           await tx.indicatorProgressUpdate.create({
             data: {

@@ -38,13 +38,13 @@ const cycle = {
   })),
 };
 
-function monitoringResult() {
+function monitoringResult(page = 1) {
   return {
     cycle: { id: cycleId, name: cycle.name },
     summary: { employeePending: 1, employeeOverdue: 1, managerPending: 1, managerCompleted: 1, total: 4 },
-    total: 2,
-    page: 1,
-    pageSize: 100,
+    total: 42,
+    page,
+    pageSize: 20,
     items: [{
       id: periodId,
       taskId: '33333333-3333-4333-8333-333333333333',
@@ -119,7 +119,8 @@ async function mockCycleWorkspace(page: Page, requests: Request[]) {
   }));
   await page.route(`**/api/v1/assessment-periods/cycle/${cycleId}/monitoring**`, (route) => {
     requests.push(route.request());
-    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(monitoringResult())) });
+    const requestedPage = Number(new URL(route.request().url()).searchParams.get('page') || 1);
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(monitoringResult(requestedPage))) });
   });
   await page.route(`**/api/v1/assessment-periods/${periodId}/reopen`, (route) => {
     requests.push(route.request());
@@ -172,6 +173,18 @@ test('HR monitors monthly self evaluation progress and reopens only an eligible 
   await expect(panel).toContainText('主管月度评分已完成1');
   await expect(panel).toContainText('方园');
   await expect(panel).toContainText('结果已经公示，请走现有结果更正流程');
+  await expect(page.getByTestId('cycle-monthly-progress-pagination')).toBeVisible();
+  expect(new URL(requests.find((request) => request.method() === 'GET')!.url()).searchParams.get('pageSize')).toBe('20');
+
+  const pagination = page.getByTestId('cycle-monthly-progress-pagination');
+  await pagination.getByRole('listitem', { name: '第 2 页' }).click();
+  await expect.poll(() => requests.some((request) => (
+    request.method() === 'GET' && new URL(request.url()).searchParams.get('page') === '2'
+  ))).toBe(true);
+  await pagination.getByRole('listitem', { name: '第 1 页' }).click();
+  await expect.poll(() => requests.filter((request) => (
+    request.method() === 'GET' && new URL(request.url()).searchParams.get('page') === '1'
+  )).length).toBeGreaterThan(1);
 
   await panel.getByRole('button', { name: '重新开放月度自评' }).click();
   const dialog = page.getByRole('dialog', { name: '重新开放2026-08月度自评' });
