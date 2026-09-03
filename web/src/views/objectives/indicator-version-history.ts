@@ -44,7 +44,6 @@ export interface IndicatorVersionView {
   isBaseline: boolean;
   isCurrent: boolean;
   businessLabel: string;
-  currentBasisLabel: string;
   changes: IndicatorVersionDiff[];
   emptyMessage: string;
 }
@@ -114,8 +113,7 @@ export function buildIndicatorVersionHistory(
       reason: typeof record.newValue?.reason === 'string' ? record.newValue.reason : '',
       isBaseline,
       isCurrent: version === currentVersion,
-      businessLabel: isBaseline ? '目标已确认' : `目标已调整（第${Math.max(1, version - 1)}次）`,
-      currentBasisLabel: version === 1 ? '当前按已确认目标执行' : `当前按第${version}版目标执行`,
+      businessLabel: isBaseline ? '完成目标确认' : '调整目标',
       changes: buildDiffs(record),
       emptyMessage: isBaseline
         ? '目标确认后形成首个正式记录。'

@@ -295,10 +295,8 @@ test('keeps execution updates out of formal indicator versions and shows only ch
     after: '完成开发及验收',
   }]);
   expect(versions[0].reason).toBe('增加验收要求');
-  expect(versions[0].businessLabel).toBe('目标已调整（第1次）');
-  expect(versions[0].currentBasisLabel).toBe('当前按第2版目标执行');
-  expect(versions[1].businessLabel).toBe('目标已确认');
-  expect(versions[1].currentBasisLabel).toBe('当前按已确认目标执行');
+  expect(versions[0].businessLabel).toBe('调整目标');
+  expect(versions[1].businessLabel).toBe('完成目标确认');
 });
 
 test('validates persisted visible columns and collapse booleans', () => {

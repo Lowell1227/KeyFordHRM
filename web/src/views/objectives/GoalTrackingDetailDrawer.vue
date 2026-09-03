@@ -47,7 +47,6 @@ const historyGroups = computed(() => {
   return [...groups.entries()].map(([periodKey, items]) => ({ periodKey, items }));
 });
 const indicatorVersions = computed(() => buildIndicatorVersionHistory(detail.value?.changeRecords ?? []));
-const currentGoalBasis = computed(() => indicatorVersions.value[0] ?? null);
 const displayDescription = computed(() => (
   detail.value?.description?.trim().replace(/^realistic-demo-v\d+\s*[；;:：]\s*/i, '') ?? ''
 ));
@@ -336,15 +335,6 @@ function formatBusinessPeriod(periodKey?: string | null) {
           </section>
         </details>
 
-        <div v-if="currentGoalBasis" class="current-goal-basis" data-testid="goal-tracking-current-basis">
-          <div>
-            <span>当前目标依据</span>
-            <strong>{{ currentGoalBasis.currentBasisLabel }}</strong>
-            <small>{{ currentGoalBasis.actorName }} · {{ formatDate(currentGoalBasis.createdAt) }}</small>
-            <small v-if="currentGoalBasis.reason" class="current-goal-basis__reason">调整原因：{{ currentGoalBasis.reason }}</small>
-          </div>
-          <button type="button" @click="scrollToSection('goal-detail-changes')">查看目标变更记录</button>
-        </div>
       </section>
 
       <section id="goal-detail-info" class="goal-detail__card goal-detail__section">
@@ -372,15 +362,14 @@ function formatBusinessPeriod(periodKey?: string | null) {
             :key="version.id"
             :data-testid="`indicator-version-${version.id}`"
           >
-            <details :open="version.isCurrent && version.changes.length > 0">
+            <span class="goal-change-list__dot" aria-hidden="true" />
+            <details>
               <summary>
-                <span class="goal-change-list__version">
-                  {{ version.businessLabel }}
-                  <em v-if="version.isCurrent">当前使用</em>
+                <span class="goal-change-list__event">
+                  <time>{{ formatDate(version.createdAt) }}</time>
+                  <span><strong>{{ version.actorName }}</strong> {{ version.businessLabel }}</span>
                 </span>
-                <span class="goal-change-list__meta">
-                  {{ version.actorName }} · {{ formatDate(version.createdAt) }}
-                </span>
+                <span class="goal-change-list__detail-link">查看详情</span>
               </summary>
               <div v-if="version.changes.length" class="goal-change-list__diffs">
                 <div v-for="change in version.changes" :key="change.field" class="goal-change-list__diff">
@@ -394,6 +383,10 @@ function formatBusinessPeriod(periodKey?: string | null) {
             </details>
           </li>
         </ol>
+        <p v-if="indicatorVersions.length" class="goal-change-list__end" data-testid="goal-change-list-end">
+          <span aria-hidden="true" />
+          已展示全部记录
+        </p>
         <p v-else class="goal-detail__empty">目标确认后将在这里保留正式记录</p>
       </section>
     </article>
@@ -545,23 +538,40 @@ function formatBusinessPeriod(periodKey?: string | null) {
 }
 
 .goal-change-list {
-  display: grid;
-  gap: 10px;
   margin: 14px 0 0;
-  padding: 0;
+  padding: 0 0 0 6px;
   list-style: none;
 }
 
 .goal-change-list > li {
+  position: relative;
+  margin-left: 4px;
+  padding: 0 0 14px 20px;
+  border-left: 1px dashed #c9d9ee;
+}
+
+.goal-change-list > li details {
   overflow: hidden;
-  border: 1px solid #e6eaf1;
-  border-radius: 10px;
+  border: 1px solid #e7ebf2;
+  border-radius: 9px;
   background: #fff;
+}
+
+.goal-change-list__dot {
+  position: absolute;
+  top: 17px;
+  left: -5px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #1684ee;
+  box-shadow: 0 0 0 1px #1684ee;
 }
 
 .goal-change-list summary {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: center;
   gap: 10px;
   padding: 12px 14px;
@@ -573,28 +583,31 @@ function formatBusinessPeriod(periodKey?: string | null) {
   display: none;
 }
 
-.goal-change-list__version {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: #276ed8;
+.goal-change-list__event {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.goal-change-list__event time {
+  color: #2b3850;
+  font-size: 14px;
   font-weight: 600;
 }
 
-.goal-change-list__version em {
-  padding: 2px 7px;
-  border-radius: 999px;
-  color: #278557;
-  background: #eaf7f0;
-  font-size: 11px;
-  font-style: normal;
-  font-weight: 600;
-}
-
-.goal-change-list__meta {
+.goal-change-list__event > span {
   color: #8a95a8;
   font-size: 12px;
-  text-align: right;
+}
+
+.goal-change-list__event strong {
+  color: #66748c;
+}
+
+.goal-change-list__detail-link {
+  color: #177edb;
+  font-size: 13px;
+  white-space: nowrap;
 }
 
 .goal-change-list__diffs {
@@ -645,57 +658,30 @@ function formatBusinessPeriod(periodKey?: string | null) {
   font-size: 13px;
 }
 
+.goal-change-list__end {
+  position: relative;
+  margin: 0 0 0 10px;
+  padding-left: 20px;
+  color: #8a95a8;
+  font-size: 12px;
+}
+
+.goal-change-list__end > span {
+  position: absolute;
+  top: 4px;
+  left: -4px;
+  width: 8px;
+  height: 8px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #1684ee;
+  box-shadow: 0 0 0 1px #1684ee;
+}
+
 .goal-detail__section-title button {
   border: 0;
   color: #8a95a8;
   background: transparent;
-  cursor: pointer;
-}
-
-.current-goal-basis {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  margin-top: 16px;
-  padding: 13px 14px;
-  border: 1px solid #dfe7f5;
-  border-radius: 10px;
-  background: #f7faff;
-}
-
-.current-goal-basis > div {
-  min-width: 0;
-  display: grid;
-  gap: 3px;
-}
-
-.current-goal-basis span,
-.current-goal-basis small {
-  color: #8792a5;
-  font-size: 11px;
-}
-
-.current-goal-basis__reason {
-  margin-top: 2px;
-  color: #66758e !important;
-  line-height: 1.5;
-  white-space: pre-wrap;
-  word-break: break-word;
-}
-
-.current-goal-basis strong {
-  color: #2f3c55;
-  font-size: 14px;
-}
-
-.current-goal-basis button {
-  flex: 0 0 auto;
-  padding: 6px 10px;
-  border: 1px solid #cdd9ec;
-  border-radius: 7px;
-  color: #316ed4;
-  background: #fff;
   cursor: pointer;
 }
 
@@ -969,21 +955,12 @@ function formatBusinessPeriod(periodKey?: string | null) {
     grid-template-columns: minmax(0, 1fr);
   }
 
-  .goal-change-list__meta {
-    text-align: left;
-  }
-
   .goal-change-list__diff {
     grid-template-columns: minmax(0, 1fr);
   }
 
   .goal-change-list__diff > strong {
     padding-top: 0;
-  }
-
-  .current-goal-basis {
-    align-items: flex-start;
-    flex-direction: column;
   }
 
   .progress-editor__fields {
