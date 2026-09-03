@@ -219,8 +219,19 @@ function periodName(period: PerformanceCycleContext['periods'][number]) {
         <div v-else class="tracking-cycle__cards">
           <article v-for="(item, index) in result.items" :key="item.id" class="tracking-goal-card" :data-testid="`goal-tracking-row-${item.id}`">
             <header>
-              <span class="tracking-goal-card__index">{{ index + 1 }}</span>
-              <div><h3>{{ item.title }}</h3><p>{{ item.description || item.scoringStandard || '暂无目标说明' }}</p></div>
+              <button
+                type="button"
+                class="tracking-goal-card__summary"
+                :data-testid="`goal-tracking-indicator-summary-${item.id}`"
+                :aria-label="`查看${item.title}详情`"
+                @click="emit('openIndicator', item.id)"
+              >
+                <span class="tracking-goal-card__index">{{ index + 1 }}</span>
+                <span class="tracking-goal-card__copy">
+                  <strong>{{ item.title }}</strong>
+                  <span>{{ item.description || item.scoringStandard || '暂无目标说明' }}</span>
+                </span>
+              </button>
               <span class="tracking-goal-card__weight">权重 {{ item.weight === null ? '--' : `${item.weight}%` }}</span>
             </header>
             <div class="tracking-goal-card__body">
@@ -283,19 +294,22 @@ function periodName(period: PerformanceCycleContext['periods'][number]) {
 .tracking-cycle__state.is-error strong { color: #cc4e4e; }
 .tracking-cycle__cards { display: grid; gap: 11px; padding: 14px; background: #f7f9fc; }
 .tracking-goal-card { min-width: 0; overflow: hidden; border: 1px solid #e4e9f1; border-radius: 12px; background: #fff; }
-.tracking-goal-card > header { min-width: 0; display: grid; grid-template-columns: 28px minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 14px 15px 11px; border-bottom: 1px solid #edf0f4; }
+.tracking-goal-card > header { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 10px; padding: 0 15px 0 0; border-bottom: 1px solid #edf0f4; }
+.tracking-goal-card__summary { min-width: 0; display: grid; grid-template-columns: 28px minmax(0, 1fr); align-items: start; gap: 10px; padding: 14px 15px 11px; border: 0; border-radius: 10px; outline: 0; background: transparent; text-align: left; cursor: pointer; transition: background-color .15s ease, box-shadow .15s ease; }
+.tracking-goal-card__summary:hover { background: #f7f9fd; }
+.tracking-goal-card__summary:focus-visible { box-shadow: inset 0 0 0 2px #6b86e8; }
 .tracking-goal-card__index { width: 27px; height: 27px; display: grid; place-items: center; border-radius: 7px; background: #eaf3ff; color: #3483e8; font-size: 12px; font-weight: 700; }
-.tracking-goal-card h3, .tracking-goal-card p { margin: 0; }
-.tracking-goal-card h3 { overflow: hidden; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
-.tracking-goal-card p { margin-top: 4px; overflow: hidden; color: #8a94a6; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
-.tracking-goal-card__weight { padding: 4px 8px; border-radius: 5px; background: #f3f5f8; color: #69758a; font-size: 11px; }
+.tracking-goal-card__copy { min-width: 0; display: grid; gap: 4px; }
+.tracking-goal-card__copy strong { overflow: hidden; color: #27334a; font-size: 15px; text-overflow: ellipsis; white-space: nowrap; }
+.tracking-goal-card__copy > span { overflow: hidden; color: #8a94a6; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.tracking-goal-card__weight { margin-top: 14px; padding: 4px 8px; border-radius: 5px; background: #f3f5f8; color: #69758a; font-size: 11px; }
 .tracking-goal-card__body { min-width: 0; display: grid; grid-template-columns: minmax(155px, .7fr) minmax(220px, 1.4fr) auto auto; align-items: center; gap: 18px; padding: 13px 15px; }
 .tracking-goal-card__progress, .tracking-goal-card__latest { min-width: 0; display: grid; gap: 5px; }
 .tracking-goal-card__progress > div { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
 .tracking-goal-card__body span, .tracking-goal-card__latest small { color: #929bac; font-size: 11px; }
 .tracking-goal-card__body strong { overflow: hidden; color: #39455a; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
 .tracking-goal-card__status { padding: 4px 8px; border-radius: 999px; background: #eef7f1; color: #398559 !important; white-space: nowrap; }
-.tracking-goal-card button { padding: 6px 11px; border: 1px solid #cfd8e7; border-radius: 7px; background: #fff; color: #346fd3; font-size: 12px; cursor: pointer; }
+.tracking-goal-card__body > button { padding: 6px 11px; border: 1px solid #cfd8e7; border-radius: 7px; background: #fff; color: #346fd3; font-size: 12px; cursor: pointer; }
 @media (max-width: 1100px) {
   .tracking-cycle__summary { grid-template-columns: repeat(3, minmax(0, 1fr)); }
   .tracking-cycle__summary :deep(.el-button) { grid-column: 1 / -1; justify-self: end; margin-bottom: 12px; }
@@ -317,8 +331,9 @@ function periodName(period: PerformanceCycleContext['periods'][number]) {
   .tracking-cycle__section-title { min-height: 52px; padding: 0 13px; }
   .tracking-cycle__section-title > div > span { display: none; }
   .tracking-cycle__cards { padding: 10px; }
-  .tracking-goal-card > header { grid-template-columns: 27px minmax(0, 1fr); padding: 12px; }
-  .tracking-goal-card__weight { grid-column: 2; justify-self: start; }
+  .tracking-goal-card > header { grid-template-columns: minmax(0, 1fr) auto; padding-right: 12px; }
+  .tracking-goal-card__summary { padding: 12px; }
+  .tracking-goal-card__weight { margin-top: 12px; }
   .tracking-goal-card__body { grid-template-columns: minmax(0, 1fr) auto; gap: 12px; padding: 12px; }
   .tracking-goal-card__progress, .tracking-goal-card__latest { grid-column: 1 / -1; }
 }

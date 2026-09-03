@@ -43,6 +43,8 @@ export interface IndicatorVersionView {
   reason: string;
   isBaseline: boolean;
   isCurrent: boolean;
+  businessLabel: string;
+  currentBasisLabel: string;
   changes: IndicatorVersionDiff[];
   emptyMessage: string;
 }
@@ -101,18 +103,23 @@ export function buildIndicatorVersionHistory(
   }));
   const currentVersion = Math.max(0, ...withVersions.map((item) => item.version));
 
-  return withVersions.reverse().map(({ record, version }) => ({
-    id: record.id,
-    version,
-    action: record.action,
-    actorName: record.actorName || '系统',
-    createdAt: record.createdAt,
-    reason: typeof record.newValue?.reason === 'string' ? record.newValue.reason : '',
-    isBaseline: record.action === 'indicator_baseline_confirmed',
-    isCurrent: version === currentVersion,
-    changes: buildDiffs(record),
-    emptyMessage: record.action === 'indicator_baseline_confirmed'
-      ? '审批确认后形成首个正式版本。'
-      : '本次正式变更未涉及可展示字段。',
-  }));
+  return withVersions.reverse().map(({ record, version }) => {
+    const isBaseline = record.action === 'indicator_baseline_confirmed';
+    return {
+      id: record.id,
+      version,
+      action: record.action,
+      actorName: record.actorName || '系统',
+      createdAt: record.createdAt,
+      reason: typeof record.newValue?.reason === 'string' ? record.newValue.reason : '',
+      isBaseline,
+      isCurrent: version === currentVersion,
+      businessLabel: isBaseline ? '目标已确认' : `目标已调整（第${Math.max(1, version - 1)}次）`,
+      currentBasisLabel: version === 1 ? '当前按已确认目标执行' : `当前按第${version}版目标执行`,
+      changes: buildDiffs(record),
+      emptyMessage: isBaseline
+        ? '目标确认后形成首个正式记录。'
+        : '本次正式调整未涉及可展示字段。',
+    };
+  });
 }

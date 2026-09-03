@@ -1595,7 +1595,7 @@ test.describe('09-performance-workspace tracking behavior', () => {
         {
           id: 'audit-v2', action: 'indicator_updated',
           oldValue: { version: 1, targetValueText: '完成季度预算的 95%', description: '跟进季度 GMV 达成情况' },
-          newValue: { version: 2, targetValueText: '完成季度预算的 100%', description: '覆盖销售、门店与 B2B' },
+          newValue: { version: 2, targetValueText: '完成季度预算的 100%', description: '覆盖销售、门店与 B2B', reason: '统一验收口径' },
           actorId: 'manager-1', actorName: '林治', createdAt: '2026-08-10T08:00:00.000Z',
         },
         {
@@ -1652,7 +1652,7 @@ test.describe('09-performance-workspace tracking behavior', () => {
     await page.goto('/action-items?employeeId=employee-1&cycleId=cycle-2');
     await expect(page.getByTestId('goal-tracking-indicator-button-indicator-1'))
       .toHaveText('更新9月进展');
-    await page.getByTestId('goal-tracking-indicator-button-indicator-1').click();
+    await page.getByTestId('goal-tracking-indicator-summary-indicator-1').click();
 
     const drawer = page.getByTestId('goal-tracking-detail');
     await expect(drawer).toBeVisible();
@@ -1670,12 +1670,18 @@ test.describe('09-performance-workspace tracking behavior', () => {
     await expect(infoSection.getByText('经营报表', { exact: true })).toHaveCount(0);
     await expect(infoSection.getByText('财务确认口径', { exact: true })).toHaveCount(0);
     await expect(drawer.getByRole('button', { name: '查看数据说明' })).toHaveCount(0);
-    await expect(drawer.getByTestId('indicator-version-audit-v2')).toContainText('V2 · 当前版本');
+    await expect(drawer.getByTestId('goal-tracking-current-basis')).toContainText('当前目标依据');
+    await expect(drawer.getByTestId('goal-tracking-current-basis')).toContainText('当前按第2版目标执行');
+    await expect(drawer.getByTestId('goal-tracking-current-basis')).toContainText('调整原因：统一验收口径');
+    await expect(drawer.getByRole('button', { name: '目标变更记录', exact: true })).toBeVisible();
+    await expect(drawer.getByTestId('indicator-version-audit-v2')).toContainText('目标已调整（第1次）');
+    await expect(drawer.getByTestId('indicator-version-audit-v2')).toContainText('当前使用');
     await expect(drawer.getByTestId('indicator-version-audit-v2')).toContainText('目标值');
     await expect(drawer.getByTestId('indicator-version-audit-v2')).toContainText('完成季度预算的 95%');
     await expect(drawer.getByTestId('indicator-version-audit-v2')).toContainText('完成季度预算的 100%');
-    await expect(drawer.getByTestId('indicator-version-audit-v1')).toContainText('V1 · 审批基线');
+    await expect(drawer.getByTestId('indicator-version-audit-v1')).toContainText('目标已确认');
     await expect(drawer.getByTestId('indicator-version-audit-v1')).not.toContainText('更新指标进展');
+    await expect(drawer.getByText('V1 · 审批基线', { exact: true })).toHaveCount(0);
     await expect(drawer.getByTestId('goal-tracking-update-trigger'))
       .toHaveText('更新2026年9月目标进展');
     await drawer.getByTestId('goal-tracking-update-trigger').click();

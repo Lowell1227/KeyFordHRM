@@ -47,6 +47,7 @@ const historyGroups = computed(() => {
   return [...groups.entries()].map(([periodKey, items]) => ({ periodKey, items }));
 });
 const indicatorVersions = computed(() => buildIndicatorVersionHistory(detail.value?.changeRecords ?? []));
+const currentGoalBasis = computed(() => indicatorVersions.value[0] ?? null);
 const displayDescription = computed(() => (
   detail.value?.description?.trim().replace(/^realistic-demo-v\d+\s*[；;:：]\s*/i, '') ?? ''
 ));
@@ -233,7 +234,7 @@ function formatBusinessPeriod(periodKey?: string | null) {
         <nav class="goal-detail__tabs" aria-label="指标详情区块">
           <button type="button" @click="scrollToSection('goal-detail-progress')">进展</button>
           <button type="button" @click="scrollToSection('goal-detail-info')">指标详情</button>
-          <button type="button" @click="scrollToSection('goal-detail-changes')">指标变更记录</button>
+          <button type="button" @click="scrollToSection('goal-detail-changes')">目标变更记录</button>
         </nav>
       </header>
 
@@ -334,6 +335,16 @@ function formatBusinessPeriod(periodKey?: string | null) {
             </ol>
           </section>
         </details>
+
+        <div v-if="currentGoalBasis" class="current-goal-basis" data-testid="goal-tracking-current-basis">
+          <div>
+            <span>当前目标依据</span>
+            <strong>{{ currentGoalBasis.currentBasisLabel }}</strong>
+            <small>{{ currentGoalBasis.actorName }} · {{ formatDate(currentGoalBasis.createdAt) }}</small>
+            <small v-if="currentGoalBasis.reason" class="current-goal-basis__reason">调整原因：{{ currentGoalBasis.reason }}</small>
+          </div>
+          <button type="button" @click="scrollToSection('goal-detail-changes')">查看目标变更记录</button>
+        </div>
       </section>
 
       <section id="goal-detail-info" class="goal-detail__card goal-detail__section">
@@ -351,12 +362,9 @@ function formatBusinessPeriod(periodKey?: string | null) {
       <section id="goal-detail-changes" class="goal-detail__card goal-detail__section">
         <div class="goal-detail__section-title">
           <div>
-            <h3>指标版本</h3>
-            <p class="goal-change-list__hint">只记录审批基线和正式变更，草稿与自动保存不生成版本。</p>
+            <h3>目标变更记录</h3>
+            <p class="goal-change-list__hint">记录目标确认及正式调整，日常进展和月度自评不会改变目标内容。</p>
           </div>
-          <span v-if="indicatorVersions.length" class="goal-change-list__current">
-            当前 V{{ indicatorVersions[0].version }}
-          </span>
         </div>
         <ol v-if="indicatorVersions.length" class="goal-change-list">
           <li
@@ -367,7 +375,8 @@ function formatBusinessPeriod(periodKey?: string | null) {
             <details :open="version.isCurrent && version.changes.length > 0">
               <summary>
                 <span class="goal-change-list__version">
-                  V{{ version.version }} · {{ version.isBaseline ? '审批基线' : version.isCurrent ? '当前版本' : '历史版本' }}<template v-if="version.isBaseline && version.isCurrent">（当前）</template>
+                  {{ version.businessLabel }}
+                  <em v-if="version.isCurrent">当前使用</em>
                 </span>
                 <span class="goal-change-list__meta">
                   {{ version.actorName }} · {{ formatDate(version.createdAt) }}
@@ -385,7 +394,7 @@ function formatBusinessPeriod(periodKey?: string | null) {
             </details>
           </li>
         </ol>
-        <p v-else class="goal-detail__empty">目标确认后将自动形成审批基线 V1</p>
+        <p v-else class="goal-detail__empty">目标确认后将在这里保留正式记录</p>
       </section>
     </article>
   </el-drawer>
@@ -535,15 +544,6 @@ function formatBusinessPeriod(periodKey?: string | null) {
   font-size: 12px;
 }
 
-.goal-change-list__current {
-  padding: 4px 9px;
-  border-radius: 999px;
-  color: #278557;
-  background: #eaf7f0;
-  font-size: 12px;
-  font-weight: 600;
-}
-
 .goal-change-list {
   display: grid;
   gap: 10px;
@@ -574,7 +574,20 @@ function formatBusinessPeriod(periodKey?: string | null) {
 }
 
 .goal-change-list__version {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
   color: #276ed8;
+  font-weight: 600;
+}
+
+.goal-change-list__version em {
+  padding: 2px 7px;
+  border-radius: 999px;
+  color: #278557;
+  background: #eaf7f0;
+  font-size: 11px;
+  font-style: normal;
   font-weight: 600;
 }
 
@@ -636,6 +649,53 @@ function formatBusinessPeriod(periodKey?: string | null) {
   border: 0;
   color: #8a95a8;
   background: transparent;
+  cursor: pointer;
+}
+
+.current-goal-basis {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  margin-top: 16px;
+  padding: 13px 14px;
+  border: 1px solid #dfe7f5;
+  border-radius: 10px;
+  background: #f7faff;
+}
+
+.current-goal-basis > div {
+  min-width: 0;
+  display: grid;
+  gap: 3px;
+}
+
+.current-goal-basis span,
+.current-goal-basis small {
+  color: #8792a5;
+  font-size: 11px;
+}
+
+.current-goal-basis__reason {
+  margin-top: 2px;
+  color: #66758e !important;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.current-goal-basis strong {
+  color: #2f3c55;
+  font-size: 14px;
+}
+
+.current-goal-basis button {
+  flex: 0 0 auto;
+  padding: 6px 10px;
+  border: 1px solid #cdd9ec;
+  border-radius: 7px;
+  color: #316ed4;
+  background: #fff;
   cursor: pointer;
 }
 
@@ -919,6 +979,11 @@ function formatBusinessPeriod(periodKey?: string | null) {
 
   .goal-change-list__diff > strong {
     padding-top: 0;
+  }
+
+  .current-goal-basis {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .progress-editor__fields {
