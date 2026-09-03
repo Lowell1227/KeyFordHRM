@@ -276,4 +276,29 @@ test.describe('monthly goal review responsive workspace', () => {
     expect(actionBox).not.toBeNull();
     expect(scrolledLastCardBox!.y + scrolledLastCardBox!.height).toBeLessThanOrEqual(actionBox!.y);
   });
+
+  test('makes an early monthly self-evaluation submission an explicit confirmation', async ({ page }) => {
+    const requests: Request[] = [];
+    await mockMonthlyReview(page, requests);
+    await page.route(`**/api/v1/assessment-periods/${periodId}/review`, (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({
+        ...reviewDetail(),
+        period: {
+          ...reviewDetail().period,
+          periodStart: '2026-09-01T00:00:00.000Z',
+          periodEnd: '2026-09-06T00:00:00.000Z',
+        },
+      })),
+    }));
+
+    await page.goto('/tasks/task-monthly-1?stage=self-eval');
+    await completeRequiredFields(page);
+
+    await page.getByRole('button', { name: '提前提交月度自评' }).click();
+    const dialog = page.getByRole('dialog', { name: '提前提交月度自评' });
+    await expect(dialog).toContainText('提交后，本期月度自评结果将锁定，不能再更新本期进展');
+    await dialog.getByRole('button', { name: '确认提前提交' }).click();
+    await expect.poll(() => requests.filter((request) => request.method() === 'POST').length).toBe(1);
+  });
 });

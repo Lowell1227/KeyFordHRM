@@ -22,6 +22,8 @@ export interface PeriodReviewDetail {
     periodKey: string;
     periodType: AssessmentPeriodType;
     status: AssessmentPeriodStatus;
+    periodStart: Date;
+    periodEnd: Date;
     selfEvalOpenAt: Date;
     selfEvalDueAt: Date;
     managerDueAt: Date;

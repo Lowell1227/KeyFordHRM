@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
-import { ElMessage } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import { periodReviewsApi } from '@/api/period-reviews.api';
 import type {
   EmployeePeriodReviewItemBody,
@@ -69,6 +69,25 @@ const followUpName = computed(() => detail.value?.period.periodType === 'cycle' 
 const reviewTitle = computed(() => detail.value?.period.periodType === 'cycle'
   ? '整周期自评'
   : `${periodLabel.value}月度自评`);
+const SHANGHAI_DATE_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+const isEarlySubmission = computed(() => {
+  const periodEnd = detail.value?.period.periodEnd;
+  if (!periodEnd) return false;
+  const parts = SHANGHAI_DATE_FORMATTER.formatToParts(new Date());
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+  if (!year || !month || !day) return false;
+  return `${year}-${month}-${day}` < periodEnd.slice(0, 10);
+});
+const submitActionLabel = computed(() => (
+  `${isEarlySubmission.value ? '提前提交' : '提交'}${followUpName.value}`
+));
 
 function optionalText(value: string): string | null {
   return value.trim() || null;
@@ -167,6 +186,21 @@ function newIdempotencyKey(): string {
 
 async function submitReview() {
   if (!canEdit.value || saving.value || submitting.value || !validateForSubmit()) return;
+  if (isEarlySubmission.value) {
+    try {
+      await ElMessageBox.confirm(
+        `当前考核期尚未结束。提交后，本期${followUpName.value}结果将锁定，不能再更新本期进展。`,
+        `提前提交${followUpName.value}`,
+        {
+          type: 'warning',
+          confirmButtonText: '确认提前提交',
+          cancelButtonText: '继续填写',
+        },
+      );
+    } catch {
+      return;
+    }
+  }
   const body: SubmitEmployeePeriodReviewBody = {
     expectedVersion: draftVersion.value,
     idempotencyKey: newIdempotencyKey(),
@@ -210,7 +244,7 @@ watch(() => props.periodId, loadReview, { immediate: true });
         <template #actions>
           <el-button :loading="saving" :disabled="submitting" @mousedown.prevent @click="saveDraft">保存草稿</el-button>
           <el-button type="primary" :loading="submitting" :disabled="saving" @mousedown.prevent @click="submitReview">
-            提交{{ followUpName }}
+            {{ submitActionLabel }}
           </el-button>
         </template>
       </PeriodReviewToolbar>

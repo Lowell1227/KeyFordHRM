@@ -111,6 +111,54 @@ test('mobile goal tracking uses cards without horizontal overflow and preserves 
   await expect(page.getByTestId('goal-tracking-surface')).toContainText('HR按部门设置为本周期豁免');
 });
 
+test('submitted final monthly self evaluation closes employee progress without adding another cycle confirmation', async ({ page }) => {
+  await authenticate(page);
+  const completedContext = {
+    ...trackingContexts()[0],
+    endDate: '2026-09-06',
+    task: { ...trackingContexts()[0].task, status: 'dept_review' },
+    periods: ['2026-07', '2026-08', '2026-09'].map((periodKey, index) => ({
+      ...trackingContexts()[0].periods[0],
+      id: `${index + 4}3333333-3333-4333-8333-333333333333`,
+      periodKey,
+      sequence: index + 1,
+      status: 'completed',
+      employeeSubmittedAt: '2026-09-02T08:00:00.000Z',
+      managerSubmittedAt: '2026-09-03T08:00:00.000Z',
+    })),
+  };
+  await page.route('**/api/v1/cycles/tracking-contexts?**', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse([completedContext])),
+  }));
+  await page.route('**/api/v1/objectives/tracking?**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({
+      taskId: 'task-active', taskStatus: 'dept_review', canEdit: false, totalWeight: 100,
+      summary: {
+        periodCount: 3, employeeSubmittedCount: 3, managerCompletedCount: 3,
+        activeBusinessPeriodKey: '2026-09', activeUpdatedGoalCount: 2, goalCount: 2,
+      },
+      items: [{
+        id: 'indicator-1', title: '完成重点客户续约', description: '完成年度重点客户续约与回款',
+        ownerId: 'employee-1', ownerName: '方园', cycleId: activeCycleId, cycleName: '2026年08月绩效考核',
+        priority: 1, status: 'active', progress: 98, weight: 60, latestProgress: null,
+      }],
+    })),
+  }));
+
+  await page.goto('/action-items');
+
+  const summary = page.getByTestId('goal-tracking-summary');
+  await expect(page.getByText('我的目标跟进', { exact: true })).toHaveCount(0);
+  await expect(page.getByText(/月度自评 · 正常参与 · 开放/)).toHaveCount(0);
+  await expect(summary).toContainText('月度评分已完成');
+  await expect(summary).not.toContainText('全部评分期次已完成');
+  await expect(summary).not.toContainText('员工输入已结束');
+  await expect(summary).not.toContainText('等待周期结果流转');
+  await expect(page.getByTestId('goal-tracking-indicator-button-indicator-1')).toHaveText('查看详情');
+  await expect(page.getByRole('button', { name: /更新9月进展/ })).toHaveCount(0);
+});
+
 test('distinguishes missing goals from a follow-up period that is not open', async ({ page }) => {
   await authenticate(page);
   const pendingContext = {

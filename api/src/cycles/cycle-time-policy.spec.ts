@@ -1,6 +1,7 @@
 import {
   launchTimeSequenceWarnings,
   launchTimeStructuralBlockers,
+  scoringScheduleSequenceIssues,
 } from './cycle-time-policy';
 
 describe('cycle launch time policy', () => {
@@ -18,6 +19,7 @@ describe('cycle launch time policy', () => {
   const baseSchedules = () => [{
     periodKey: '2027-01',
     sequence: 1,
+    periodEnd: at(4),
     selfEvalOpenAt: at(4),
     selfEvalDueAt: at(5),
     managerDueAt: at(6),
@@ -26,6 +28,17 @@ describe('cycle launch time policy', () => {
   it('allows every adjacent workflow point and the performance period boundaries to be equal', () => {
     expect(launchTimeStructuralBlockers(baseCycle())).toEqual([]);
     expect(launchTimeSequenceWarnings(baseCycle(), baseSchedules())).toEqual([]);
+  });
+
+  it('does not warn when the self-evaluation deadline falls on the period end date in Shanghai', () => {
+    const schedules = [{
+      ...baseSchedules()[0],
+      periodEnd: new Date('2027-01-04T00:00:00.000Z'),
+      selfEvalOpenAt: new Date('2027-01-03T15:00:00.000Z'),
+      selfEvalDueAt: new Date('2027-01-04T00:00:00+08:00'),
+    }];
+
+    expect(scoringScheduleSequenceIssues(schedules)).toEqual([]);
   });
 
   it.each([

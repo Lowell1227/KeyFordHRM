@@ -4,7 +4,6 @@ import { useRoute, useRouter } from 'vue-router';
 import type { GoalTrackingResult, PerformanceCycleContext } from '@/types/api.types';
 import {
   formatGoalTrackingContextLabel,
-  formatGoalTrackingContextMeta,
   goalTrackingStatus,
   selectTrackingAction,
   type GoalTrackingPerson,
@@ -79,11 +78,13 @@ const actionHint = computed(() => {
     'goal-setting': '目标尚未完成制定，先完成目标再进入日常跟进',
     'goal-confirmation': '目标等待本人确认，确认后进入持续跟进',
     review: activePeriod.value?.employeeSubmittedAt ? '已提交，等待直属上级月度评分' : '月度自评已开放，可从这里填写',
-    waiting: props.isSelf
-      ? `仍可继续更新${activeBusinessPeriodLabel.value}目标进展`
-      : `员工仍可继续更新${activeBusinessPeriodLabel.value}目标进展`,
-    complete: '全部评分期次已完成，等待周期结果流转',
-    none: '目标已确认，可持续更新进展',
+    waiting: props.result.canEdit
+      ? props.isSelf
+        ? `仍可继续更新${activeBusinessPeriodLabel.value}目标进展`
+        : `员工仍可继续更新${activeBusinessPeriodLabel.value}目标进展`
+      : '月度自评已提交，等待直属上级评分',
+    complete: '',
+    none: props.result.canEdit ? '目标已确认，可持续更新进展' : '当前暂无可更新的目标进展',
   }[action.value.kind];
 });
 const actionStateLabel = computed(() => {
@@ -143,7 +144,7 @@ function periodName(period: PerformanceCycleContext['periods'][number]) {
       </span>
       <div class="tracking-cycle__identity">
         <strong>{{ person?.name || '未选择人员' }}</strong>
-        <span>{{ isSelf ? '我的目标跟进' : '目标执行情况' }}</span>
+        <span v-if="!isSelf">目标执行情况</span>
       </div>
       <div class="tracking-cycle__selector">
         <label for="goal-tracking-cycle">考核周期</label>
@@ -160,7 +161,6 @@ function periodName(period: PerformanceCycleContext['periods'][number]) {
               {{ formatGoalTrackingContextLabel(context) }}
             </option>
           </select>
-          <small v-if="selectedContext">{{ formatGoalTrackingContextMeta(selectedContext) }}</small>
         </template>
       </div>
     </header>
@@ -179,7 +179,7 @@ function periodName(period: PerformanceCycleContext['periods'][number]) {
       <div class="tracking-cycle__next">
         <span>当前阶段</span>
         <strong>{{ actionStateLabel }}</strong>
-        <small>{{ actionHint }}</small>
+        <small v-if="actionHint">{{ actionHint }}</small>
       </div>
       <el-button
         v-if="isSelf && action && ['goal-setting', 'goal-confirmation', 'review'].includes(action.kind)"

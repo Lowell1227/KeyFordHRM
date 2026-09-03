@@ -129,6 +129,8 @@ export class PeriodReviewsService {
         periodKey: period.periodKey,
         periodType: period.periodType,
         status: period.status,
+        periodStart: period.periodStart,
+        periodEnd: period.periodEnd,
         selfEvalOpenAt: period.selfEvalOpenAt,
         selfEvalDueAt: period.selfEvalDueAt,
         managerDueAt: period.managerDueAt,

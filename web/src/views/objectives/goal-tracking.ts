@@ -121,7 +121,7 @@ export function selectTrackingAction(context: PerformanceCycleContext): Tracking
     return { kind: 'waiting', label: '等待直属上级月度评分', taskId: context.task.id };
   }
   if (context.periods.length > 0 && context.periods.every((period) => ['completed', 'no_result'].includes(period.status))) {
-    return { kind: 'complete', label: '月度评分期次已完成', taskId: context.task.id };
+    return { kind: 'complete', label: '月度评分已完成', taskId: context.task.id };
   }
   return { kind: 'none', label: '持续跟进目标', taskId: context.task.id };
 }

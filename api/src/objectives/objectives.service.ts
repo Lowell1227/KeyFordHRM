@@ -139,13 +139,53 @@ export interface IndicatorAlignmentTaskContext {
 }
 
 function activeGoalTrackingBusinessPeriodKey(
-  periods: Array<{ periodKey: string; status: string; employeeSubmittedAt: Date | null }> = [],
+  periods: GoalTrackingPeriodWindow[] = [],
 ): string | null {
-  const activePeriod = periods.find((period) => (
+  return currentGoalTrackingPeriod(periods)?.periodKey ?? null;
+}
+
+type GoalTrackingPeriodWindow = {
+  periodKey: string;
+  periodStart?: Date;
+  periodEnd?: Date;
+  status: string;
+  employeeSubmittedAt: Date | null;
+};
+
+const SHANGHAI_DATE_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+function shanghaiDateKey(date: Date): string {
+  const parts = SHANGHAI_DATE_FORMATTER.formatToParts(date);
+  const year = parts.find((part) => part.type === 'year')?.value;
+  const month = parts.find((part) => part.type === 'month')?.value;
+  const day = parts.find((part) => part.type === 'day')?.value;
+  if (!year || !month || !day) throw new RangeError('无法计算目标跟进所属日期');
+  return `${year}-${month}-${day}`;
+}
+
+function currentGoalTrackingPeriod(
+  periods: GoalTrackingPeriodWindow[] = [],
+  now = new Date(),
+): GoalTrackingPeriodWindow | null {
+  if (periods.length === 0) return null;
+  const allPeriodsHaveBounds = periods.every((period) => period.periodStart && period.periodEnd);
+  if (allPeriodsHaveBounds) {
+    const today = shanghaiDateKey(now);
+    return periods.find((period) => (
+      period.periodStart!.toISOString().slice(0, 10) <= today
+      && period.periodEnd!.toISOString().slice(0, 10) >= today
+    )) ?? null;
+  }
+
+  return periods.find((period) => (
     ['self_eval', 'manager_scoring'].includes(period.status)
     && !period.employeeSubmittedAt
   )) ?? periods[periods.length - 1] ?? null;
-  return activePeriod?.periodKey ?? null;
 }
 
 /** 目标树节点。 */
@@ -587,6 +627,8 @@ export class ObjectivesService {
           orderBy: { sequence: 'asc' },
           select: {
             periodKey: true,
+            periodStart: true,
+            periodEnd: true,
             status: true,
             employeeSubmittedAt: true,
             managerSubmittedAt: true,
@@ -859,6 +901,16 @@ export class ObjectivesService {
             closedAt: true,
             selfEvalSubmittedAt: true,
             publishedAt: true,
+            periods: {
+              orderBy: { sequence: 'asc' },
+              select: {
+                periodKey: true,
+                periodStart: true,
+                periodEnd: true,
+                status: true,
+                employeeSubmittedAt: true,
+              },
+            },
             cycle: {
               select: {
                 workflowVersion: true,
@@ -884,9 +936,14 @@ export class ObjectivesService {
       });
     }
     if (!this.canSubmitActiveProgress(indicator.task, viewer)) {
+      const currentPeriod = currentGoalTrackingPeriod(indicator.task.periods);
       throw new ConflictException({
         code: ERROR_CODE.CONFLICT,
-        message: '当前考核阶段不允许更新进展',
+        message: currentPeriod?.employeeSubmittedAt
+          ? '本期月度自评已提交，不能再更新当期进展'
+          : currentPeriod == null && (indicator.task.periods?.length ?? 0) > 0
+            ? '当前不在可更新进展的考核期间'
+            : '当前考核阶段不允许更新进展',
       });
     }
 
@@ -1031,6 +1088,8 @@ export class ObjectivesService {
               orderBy: { sequence: 'asc' },
               select: {
                 periodKey: true,
+                periodStart: true,
+                periodEnd: true,
                 status: true,
                 employeeSubmittedAt: true,
               },
@@ -1147,6 +1206,7 @@ export class ObjectivesService {
       indicatorConfirmedAt: Date | null;
       closedAt: Date | null;
       publishedAt: Date | null;
+      periods?: GoalTrackingPeriodWindow[];
       cycle: {
         workflowVersion: number;
         openedAt: Date | null;
@@ -1156,7 +1216,7 @@ export class ObjectivesService {
     },
     viewer: AuthUser,
   ): boolean {
-    return task.employeeId === viewer.id
+    const baseEditable = task.employeeId === viewer.id
       && task.cycle.workflowVersion === 2
       && task.cycle.openedAt != null
       && task.indicatorConfirmedAt != null
@@ -1166,6 +1226,13 @@ export class ObjectivesService {
       && task.cycle.closedAt == null
       && task.cycle.publishedAt == null
       && task.publishedAt == null;
+    if (!baseEditable) return false;
+    if (!task.periods?.length) return true;
+
+    const currentPeriod = currentGoalTrackingPeriod(task.periods);
+    return currentPeriod != null
+      && currentPeriod.employeeSubmittedAt == null
+      && !['completed', 'no_result'].includes(currentPeriod.status);
   }
 
   async assertVisibleIds(ids: string[], viewer: AuthUser): Promise<void> {

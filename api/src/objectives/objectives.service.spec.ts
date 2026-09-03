@@ -112,6 +112,10 @@ describe('ObjectivesService visibility helpers', () => {
     );
   });
 
+  afterEach(() => {
+    jest.useRealTimers();
+  });
+
   it('uses the same visibility predicate for submitted-id validation and read filtering', async () => {
     prisma.objective.count.mockResolvedValue(1);
     prisma.objective.findMany.mockResolvedValue([visibleObjective]);
@@ -179,6 +183,7 @@ describe('ObjectivesService visibility helpers', () => {
   });
 
   it('returns the employee-cycle assessment indicators with effective weights', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-03T08:00:00.000Z'));
     prisma.assessmentTask.findUnique.mockResolvedValue({
       id: 'task-1',
       employeeId: 'manager-1',
@@ -201,9 +206,9 @@ describe('ObjectivesService visibility helpers', () => {
         closedAt: null,
       },
       periods: [
-        { periodKey: '2026-07', status: 'completed', employeeSubmittedAt: new Date(), managerSubmittedAt: new Date() },
-        { periodKey: '2026-08', status: 'completed', employeeSubmittedAt: new Date(), managerSubmittedAt: null },
-        { periodKey: '2026-09', status: 'self_eval', employeeSubmittedAt: null, managerSubmittedAt: null },
+        { periodKey: '2026-07', periodStart: new Date('2026-07-01T00:00:00.000Z'), periodEnd: new Date('2026-07-31T00:00:00.000Z'), status: 'completed', employeeSubmittedAt: new Date(), managerSubmittedAt: new Date() },
+        { periodKey: '2026-08', periodStart: new Date('2026-08-01T00:00:00.000Z'), periodEnd: new Date('2026-08-31T00:00:00.000Z'), status: 'completed', employeeSubmittedAt: new Date(), managerSubmittedAt: null },
+        { periodKey: '2026-09', periodStart: new Date('2026-09-01T00:00:00.000Z'), periodEnd: new Date('2026-09-30T00:00:00.000Z'), status: 'self_eval', employeeSubmittedAt: null, managerSubmittedAt: null },
       ],
       indicatorInstances: [
         {
@@ -338,6 +343,50 @@ describe('ObjectivesService visibility helpers', () => {
         }),
       ],
     });
+  });
+
+  it('keeps the current month visible but closes active progress after its monthly self evaluation is submitted', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-03T08:00:00.000Z'));
+    prisma.assessmentTask.findUnique.mockResolvedValue({
+      id: 'task-1',
+      employeeId: viewer.id,
+      cycleId: 'cycle-1',
+      status: 'manager_scoring',
+      isExempt: false,
+      participantDisposition: 'active',
+      indicatorConfirmedAt: new Date('2026-07-02T00:00:00.000Z'),
+      closedAt: null,
+      selfEvalSubmittedAt: new Date('2026-09-02T08:00:00.000Z'),
+      publishedAt: null,
+      employee: { id: viewer.id, name: viewer.name },
+      cycle: {
+        id: 'cycle-1', name: '2026-Q3', monthlyFollowUpRequired: true, workflowVersion: 2,
+        openedAt: new Date('2026-07-01T00:00:00.000Z'), publishedAt: null, closedAt: null,
+      },
+      periods: [{
+        periodKey: '2026-09',
+        periodStart: new Date('2026-09-01T00:00:00.000Z'),
+        periodEnd: new Date('2026-09-06T00:00:00.000Z'),
+        status: 'manager_scoring',
+        employeeSubmittedAt: new Date('2026-09-02T08:00:00.000Z'),
+        managerSubmittedAt: null,
+      }],
+      indicatorInstances: [],
+    });
+
+    try {
+      const result = await service.findTracking(
+        { ownerId: viewer.id, cycleId: 'cycle-1' },
+        viewer,
+      );
+
+      expect(result).toEqual(expect.objectContaining({
+        canEdit: false,
+        summary: expect.objectContaining({ activeBusinessPeriodKey: '2026-09' }),
+      }));
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('lets a standard user create an individual objective for their direct report', async () => {
@@ -842,6 +891,7 @@ describe('ObjectivesService visibility helpers', () => {
   });
 
   it('appends an employee progress update and its audit record without overwriting history', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-03T08:00:00.000Z'));
     prisma.indicatorInstance.findUnique.mockResolvedValue({
       id: 'indicator-1',
       name: 'GMV 达成率',
@@ -855,6 +905,13 @@ describe('ObjectivesService visibility helpers', () => {
         closedAt: null,
         selfEvalSubmittedAt: new Date('2026-08-16T07:00:00.000Z'),
         publishedAt: null,
+        periods: [{
+          periodKey: '2026-09',
+          periodStart: new Date('2026-09-01T00:00:00.000Z'),
+          periodEnd: new Date('2026-09-30T00:00:00.000Z'),
+          status: 'self_eval',
+          employeeSubmittedAt: null,
+        }],
         cycle: {
           workflowVersion: 2,
           openedAt: new Date('2026-07-01T00:00:00.000Z'),
@@ -876,16 +933,21 @@ describe('ObjectivesService visibility helpers', () => {
       creator: { id: viewer.id, name: viewer.name },
     });
 
-    const result = await (service as any).updateIndicatorProgress(
-      'indicator-1',
-      {
-        progress: 45,
-        healthStatus: 'on_track',
-        content: '首轮方案已经完成评审',
-        expectedLatestUpdateAt: null,
-      },
-      viewer,
-    );
+    let result;
+    try {
+      result = await (service as any).updateIndicatorProgress(
+        'indicator-1',
+        {
+          progress: 45,
+          healthStatus: 'on_track',
+          content: '首轮方案已经完成评审',
+          expectedLatestUpdateAt: null,
+        },
+        viewer,
+      );
+    } finally {
+      jest.useRealTimers();
+    }
 
     expect(prisma.indicatorProgressUpdate.create).toHaveBeenCalledWith({
       data: {
@@ -914,6 +976,78 @@ describe('ObjectivesService visibility helpers', () => {
       progress: 45,
       creatorName: viewer.name,
     }));
+  });
+
+  it('rejects another progress update after the current month self evaluation is submitted early', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-03T08:00:00.000Z'));
+    prisma.indicatorInstance.findUnique.mockResolvedValue({
+      id: 'indicator-1',
+      name: 'GMV 达成率',
+      task: {
+        id: 'task-1', employeeId: viewer.id, status: 'manager_scoring', isExempt: false,
+        participantDisposition: 'active', indicatorConfirmedAt: new Date('2026-07-02T00:00:00.000Z'),
+        closedAt: null, selfEvalSubmittedAt: new Date('2026-09-02T08:00:00.000Z'), publishedAt: null,
+        periods: [{
+          periodKey: '2026-09',
+          periodStart: new Date('2026-09-01T00:00:00.000Z'),
+          periodEnd: new Date('2026-09-06T00:00:00.000Z'),
+          status: 'manager_scoring',
+          employeeSubmittedAt: new Date('2026-09-02T08:00:00.000Z'),
+        }],
+        cycle: {
+          workflowVersion: 2, openedAt: new Date('2026-07-01T00:00:00.000Z'),
+          publishedAt: null, closedAt: null,
+        },
+      },
+    });
+
+    try {
+      await expect((service as any).updateIndicatorProgress(
+        'indicator-1',
+        { progress: 90, healthStatus: 'on_track', content: '提前提交后的更新' },
+        viewer,
+      )).rejects.toMatchObject({
+        response: expect.objectContaining({ message: '本期月度自评已提交，不能再更新当期进展' }),
+      });
+      expect(prisma.indicatorProgressUpdate.create).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
+  });
+
+  it('rejects progress after the assessment period ends even when the monthly self evaluation is overdue', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-09-07T08:00:00.000Z'));
+    prisma.indicatorInstance.findUnique.mockResolvedValue({
+      id: 'indicator-1',
+      name: 'GMV 达成率',
+      task: {
+        id: 'task-1', employeeId: viewer.id, status: 'self_eval', isExempt: false,
+        participantDisposition: 'active', indicatorConfirmedAt: new Date('2026-07-02T00:00:00.000Z'),
+        closedAt: null, selfEvalSubmittedAt: null, publishedAt: null,
+        periods: [{
+          periodKey: '2026-09',
+          periodStart: new Date('2026-09-01T00:00:00.000Z'),
+          periodEnd: new Date('2026-09-06T00:00:00.000Z'),
+          status: 'self_eval',
+          employeeSubmittedAt: null,
+        }],
+        cycle: {
+          workflowVersion: 2, openedAt: new Date('2026-07-01T00:00:00.000Z'),
+          publishedAt: null, closedAt: null,
+        },
+      },
+    });
+
+    try {
+      await expect((service as any).updateIndicatorProgress(
+        'indicator-1',
+        { progress: 90, healthStatus: 'on_track', content: '期末后的更新' },
+        viewer,
+      )).rejects.toBeInstanceOf(ConflictException);
+      expect(prisma.indicatorProgressUpdate.create).not.toHaveBeenCalled();
+    } finally {
+      jest.useRealTimers();
+    }
   });
 
   it('does not let a viewer update another employee indicator', async () => {

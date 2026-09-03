@@ -1322,6 +1322,8 @@ export interface PeriodReviewDetail {
     periodKey: string;
     periodType: 'month' | 'cycle';
     status: AssessmentPeriodStatus;
+    periodStart: string;
+    periodEnd: string;
     selfEvalOpenAt: string;
     selfEvalDueAt: string;
     managerDueAt: string;

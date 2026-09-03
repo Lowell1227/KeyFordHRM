@@ -7,6 +7,7 @@ export type CycleTimeIssue = {
 export type CycleTimeSchedule = {
   periodKey: string;
   sequence: number;
+  periodEnd: Date;
   selfEvalOpenAt: Date;
   selfEvalDueAt: Date;
   managerDueAt: Date;
@@ -23,11 +24,30 @@ export type CycleTimePlan = {
   deadlinePublish?: Date | null;
 };
 
+const SHANGHAI_DATE_FORMATTER = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'Asia/Shanghai',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+});
+
+function shanghaiDateKey(date: Date): string {
+  const parts = new Map(SHANGHAI_DATE_FORMATTER.formatToParts(date).map((part) => [part.type, part.value]));
+  return `${parts.get('year')}-${parts.get('month')}-${parts.get('day')}`;
+}
+
 export function scoringScheduleSequenceIssues(
   schedules: CycleTimeSchedule[],
 ): CycleTimeIssue[] {
   const issues: CycleTimeIssue[] = [];
   for (const schedule of schedules) {
+    if (shanghaiDateKey(schedule.selfEvalDueAt) < schedule.periodEnd.toISOString().slice(0, 10)) {
+      issues.push({
+        code: 'SELF_EVAL_DUE_BEFORE_PERIOD_END',
+        periodKey: schedule.periodKey,
+        message: '自评截止早于本期结束',
+      });
+    }
     if (schedule.selfEvalOpenAt > schedule.selfEvalDueAt) {
       issues.push({
         code: 'SELF_EVAL_OPEN_AFTER_DUE',

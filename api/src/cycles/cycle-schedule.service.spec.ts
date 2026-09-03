@@ -91,6 +91,28 @@ describe('CycleScheduleService', () => {
     expect(plan.warnings).toEqual([]);
   });
 
+  it('warns when the self-evaluation deadline would force confirmation before the period ends', () => {
+    const plan = service.normalizeAndValidate({
+      type: 'quarterly',
+      scoringFrequency: 'monthly',
+      startDate: new Date('2026-07-09T00:00:00.000Z'),
+      endDate: new Date('2026-09-06T00:00:00.000Z'),
+      schedules: [{
+        periodKey: '2026-09',
+        selfEvalOpenAt: new Date('2026-09-01T09:00:00+08:00'),
+        selfEvalDueAt: new Date('2026-09-01T18:00:00+08:00'),
+        managerDueAt: new Date('2026-09-02T18:00:00+08:00'),
+      }],
+    });
+
+    expect(plan.blockers).toEqual([]);
+    expect(plan.warnings).toContainEqual(expect.objectContaining({
+      code: 'SELF_EVAL_DUE_BEFORE_PERIOD_END',
+      periodKey: '2026-09',
+      message: '自评截止早于本期结束',
+    }));
+  });
+
   it('keeps a reversed scoring schedule saveable and returns one concise warning per conflict', () => {
     const plan = service.normalizeAndValidate({
       type: 'monthly',
