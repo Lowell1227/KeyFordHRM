@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
+import axios from 'axios';
 import { objectivesApi } from '@/api/objectives.api';
 import type {
   GoalTrackingHealthStatus,
@@ -33,6 +34,11 @@ const form = reactive<{
 
 const opened = computed(() => Boolean(props.indicatorId));
 const latestProgress = computed(() => detail.value?.progressUpdates[0] ?? null);
+const activeBusinessPeriodKey = computed(() => (
+  detail.value?.activeBusinessPeriodKey ?? latestProgress.value?.businessPeriodKey ?? null
+));
+const activePeriodLabel = computed(() => formatBusinessPeriod(activeBusinessPeriodKey.value));
+const updateActionLabel = computed(() => `更新${activePeriodLabel.value}目标进展`);
 const historyGroups = computed(() => {
   const groups = new Map<string, GoalTrackingLatestProgress[]>();
   for (const progress of detail.value?.progressUpdates.slice(1) ?? []) {
@@ -105,18 +111,45 @@ async function submitProgress() {
   if (!detail.value || !validateForm()) return;
   submitting.value = true;
   try {
-    const created = await objectivesApi.updateTrackingIndicatorProgress(detail.value.id, {
-      progress: form.progress,
-      healthStatus: form.healthStatus,
-      content: form.content.trim(),
-      expectedLatestUpdateAt: latestProgress.value?.updatedAt ?? null,
-    });
+    const created = await objectivesApi.updateTrackingIndicatorProgress(
+      detail.value.id,
+      {
+        progress: form.progress,
+        healthStatus: form.healthStatus,
+        content: form.content.trim(),
+        expectedLatestUpdateAt: latestProgress.value?.updatedAt ?? null,
+      },
+      { skipErrorMessage: true },
+    );
     detail.value.progress = created.progress ?? 0;
     detail.value.progressUpdates = [created, ...detail.value.progressUpdates];
     editing.value = false;
     form.content = '';
     ElMessage.success('进展已更新');
     emit('updated');
+  } catch (error) {
+    const responseMessage = axios.isAxiosError(error)
+      ? error.response?.data?.message
+      : null;
+    if (
+      axios.isAxiosError(error)
+      && error.response?.status === 409
+      && responseMessage === '进展已被更新，请刷新后重试'
+    ) {
+      const draftContent = form.content;
+      await loadDetail();
+      if (detail.value) {
+        form.healthStatus = latestProgress.value?.healthStatus ?? 'on_track';
+        form.progress = latestProgress.value?.progress ?? 0;
+        form.content = draftContent;
+        editing.value = true;
+        ElMessage.warning('进展已更新，已加载最新状态；刚才填写的描述已保留，请确认后再次提交');
+      } else {
+        ElMessage.error('进展已更新，但最新状态加载失败，请稍后重试');
+      }
+      return;
+    }
+    ElMessage.error(typeof responseMessage === 'string' ? responseMessage : '更新进展失败，请稍后重试');
   } finally {
     submitting.value = false;
   }
@@ -147,6 +180,13 @@ function progressSourceLabel(progress: GoalTrackingLatestProgress) {
   return progress.source === 'monthly_self_evaluation' ? '月度自评结果' : '主动进展';
 }
 
+function formatBusinessPeriod(periodKey?: string | null) {
+  if (periodKey === 'cycle') return '本考核周期';
+  const match = /^(\d{4})-(\d{2})$/.exec(periodKey ?? '');
+  if (match) return `${match[1]}年${Number(match[2])}月`;
+  return periodKey || '当前阶段';
+}
+
 </script>
 
 <template>
@@ -167,7 +207,7 @@ function progressSourceLabel(progress: GoalTrackingLatestProgress) {
           data-testid="goal-tracking-update-trigger"
           @click="startEditing"
         >
-          更新进展
+          {{ updateActionLabel }}
         </el-button>
       </div>
     </template>
@@ -201,7 +241,7 @@ function progressSourceLabel(progress: GoalTrackingLatestProgress) {
         <div class="goal-detail__section-title">
           <h3>进展</h3>
           <button v-if="detail.canEdit && !editing" type="button" @click="startEditing">
-            更新进展
+            {{ updateActionLabel }}
           </button>
         </div>
 
@@ -225,6 +265,14 @@ function progressSourceLabel(progress: GoalTrackingLatestProgress) {
           data-testid="goal-tracking-progress-form"
           @submit.prevent="submitProgress"
         >
+          <div class="progress-editor__context" data-testid="goal-tracking-progress-context">
+            <div><span>本次归属</span><strong>{{ activePeriodLabel }}</strong></div>
+            <p v-if="latestProgress">
+              当前记录：{{ healthLabel(latestProgress.healthStatus) }} · {{ latestProgress.progress ?? 0 }}%，来自
+              {{ formatBusinessPeriod(latestProgress.businessPeriodKey) }}{{ progressSourceLabel(latestProgress) }}
+            </p>
+            <p v-else>当前尚无进展记录</p>
+          </div>
           <div class="progress-editor__fields">
             <label>
               <span>状态</span>
@@ -355,6 +403,34 @@ function progressSourceLabel(progress: GoalTrackingLatestProgress) {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+}
+
+.progress-editor__context {
+  display: grid;
+  gap: 6px;
+  padding: 10px 12px;
+  border: 1px solid #dfe6f4;
+  border-radius: 8px;
+  background: #f7f9fd;
+}
+
+.progress-editor__context > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.progress-editor__context span,
+.progress-editor__context p {
+  margin: 0;
+  color: #7d889c;
+  font-size: 12px;
+}
+
+.progress-editor__context strong {
+  color: #355dc9;
+  font-size: 13px;
 }
 
 .goal-detail__header {

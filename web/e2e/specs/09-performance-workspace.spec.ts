@@ -1524,10 +1524,40 @@ test.describe('09-performance-workspace tracking behavior', () => {
 
   test('employee opens a real indicator drawer and appends a progress update', async ({ page }) => {
     await mockGoalTrackingShell(page);
+    await page.route('**/api/v1/cycles/tracking-contexts?**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(trackingCycles.map((cycle) => ({
+        id: cycle.id,
+        name: cycle.name,
+        type: cycle.type,
+        startDate: cycle.startDate,
+        endDate: cycle.endDate,
+        openedAt: `${cycle.startDate}T00:00:00.000Z`,
+        scoringFrequency: 'cycle',
+        task: {
+          id: `task-employee-1-${cycle.id}`,
+          status: 'goal_confirmed',
+          isExempt: false,
+          exemptReason: null,
+          participantDisposition: 'active',
+          manager: { id: 'manager-1', name: '林治' },
+        },
+        periods: [],
+      })))),
+    }));
     const listResult = {
       taskId: 'task-1',
       taskStatus: 'self_eval',
       canEdit: true,
+      monthlyFollowUpRequired: true,
+      summary: {
+        periodCount: 3,
+        employeeSubmittedCount: 2,
+        managerCompletedCount: 0,
+        activeBusinessPeriodKey: '2026-09',
+        activeUpdatedGoalCount: 0,
+        goalCount: 1,
+      },
       totalWeight: 16,
       items: [{
         id: 'indicator-1', taskId: 'task-1', title: 'GMV 达成率',
@@ -1537,6 +1567,7 @@ test.describe('09-performance-workspace tracking behavior', () => {
           id: 'progress-1', content: '完成首轮投放', progress: 40, healthStatus: 'on_track',
           attachments: [], createdBy: 'employee-1', creatorName: '刘伟',
           updatedAt: '2026-08-01T08:00:00.000Z',
+          businessPeriodKey: '2026-08', source: 'active_progress',
         },
       }],
     };
@@ -1557,6 +1588,7 @@ test.describe('09-performance-workspace tracking behavior', () => {
       actualNote: null,
       taskStatus: 'self_eval',
       canEdit: true,
+      activeBusinessPeriodKey: '2026-09',
       alignedObjectives: [{ id: 'objective-1', title: '提升经营质量', level: 'company', ownerId: 'vp-1' }],
       progressUpdates: [listResult.items[0].latestProgress],
       changeRecords: [
@@ -1579,24 +1611,47 @@ test.describe('09-performance-workspace tracking behavior', () => {
       contentType: 'application/json',
       body: JSON.stringify(apiResponse(listResult)),
     }));
-    await page.route('**/api/v1/objectives/tracking/indicators/indicator-1', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(apiResponse(detailResult)),
-    }));
-    let submittedBody: Record<string, unknown> | null = null;
+    const concurrentProgress = {
+      id: 'progress-concurrent', progress: 48, healthStatus: 'blocked',
+      content: '另一窗口刚刚更新', attachments: [],
+      createdBy: 'employee-1', creatorName: '刘伟', updatedAt: '2026-09-03T03:05:00.000Z',
+      businessPeriodKey: '2026-09', source: 'active_progress',
+    };
+    let detailCalls = 0;
+    await page.route('**/api/v1/objectives/tracking/indicators/indicator-1', (route) => {
+      detailCalls += 1;
+      const nextDetail = detailCalls === 1
+        ? detailResult
+        : { ...detailResult, progress: 48, progressUpdates: [concurrentProgress, ...detailResult.progressUpdates] };
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(nextDetail)),
+      });
+    });
+    const submittedBodies: Record<string, unknown>[] = [];
     await page.route('**/api/v1/objectives/tracking/indicators/indicator-1/progress', async (route) => {
-      submittedBody = route.request().postDataJSON() as Record<string, unknown>;
+      submittedBodies.push(route.request().postDataJSON() as Record<string, unknown>);
+      if (submittedBodies.length === 1) {
+        return route.fulfill({
+          status: 409,
+          contentType: 'application/json',
+          body: JSON.stringify({ statusCode: 409, message: '进展已被更新，请刷新后重试' }),
+        });
+      }
       return route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify(apiResponse({
           id: 'progress-2', progress: 55, healthStatus: 'at_risk',
           content: '渠道转化低于预期，已调整投放', attachments: [],
           createdBy: 'employee-1', creatorName: '刘伟', updatedAt: '2026-08-16T09:00:00.000Z',
+          businessPeriodKey: '2026-09', source: 'active_progress',
         })),
       });
     });
 
     await page.goto('/action-items?employeeId=employee-1&cycleId=cycle-2');
+    await expect(page.getByTestId('goal-tracking-indicator-button-indicator-1'))
+      .toHaveText('更新9月进展');
     await page.getByTestId('goal-tracking-indicator-button-indicator-1').click();
 
     const drawer = page.getByTestId('goal-tracking-detail');
@@ -1621,23 +1676,47 @@ test.describe('09-performance-workspace tracking behavior', () => {
     await expect(drawer.getByTestId('indicator-version-audit-v2')).toContainText('完成季度预算的 100%');
     await expect(drawer.getByTestId('indicator-version-audit-v1')).toContainText('V1 · 审批基线');
     await expect(drawer.getByTestId('indicator-version-audit-v1')).not.toContainText('更新指标进展');
-    await drawer.getByRole('button', { name: '更新进展' }).click();
+    await expect(drawer.getByTestId('goal-tracking-update-trigger'))
+      .toHaveText('更新2026年9月目标进展');
+    await drawer.getByTestId('goal-tracking-update-trigger').click();
 
     const form = drawer.getByTestId('goal-tracking-progress-form');
+    await expect(form).toContainText('本次归属');
+    await expect(form).toContainText('2026年9月');
+    await expect(form).toContainText('当前记录：正常 · 40%，来自 2026年8月主动进展');
     await form.getByLabel('进展状态').selectOption('at_risk');
     await form.getByLabel('完成进度').fill('55');
-    await form.getByLabel('进展说明').fill('渠道转化低于预期，已调整投放');
+    await form.getByLabel('进展描述').fill('渠道转化低于预期，已调整投放');
     await form.getByRole('button', { name: '更新进度' }).click();
 
-    await expect.poll(() => submittedBody).toEqual({
+    await expect(page.getByText('进展已更新，已加载最新状态；刚才填写的描述已保留，请确认后再次提交', { exact: true }))
+      .toHaveCount(1);
+    await expect(page.getByText('页面出错', { exact: true })).toHaveCount(0);
+    await expect(form).toBeVisible();
+    await expect(form.getByLabel('进展状态')).toHaveValue('blocked');
+    await expect(form.getByLabel('完成进度')).toHaveValue('48');
+    await expect(form.getByLabel('进展描述')).toHaveValue('渠道转化低于预期，已调整投放');
+
+    await form.getByLabel('进展状态').selectOption('at_risk');
+    await form.getByLabel('完成进度').fill('55');
+    await form.getByRole('button', { name: '更新进度' }).click();
+
+    await expect.poll(() => submittedBodies[1]).toEqual({
       progress: 55,
       healthStatus: 'at_risk',
       content: '渠道转化低于预期，已调整投放',
-      attachments: [],
-      expectedLatestUpdateAt: '2026-08-01T08:00:00.000Z',
+      expectedLatestUpdateAt: '2026-09-03T03:05:00.000Z',
     });
     await expect(form).not.toBeVisible();
     await expect(drawer).toContainText('渠道转化低于预期，已调整投放');
+
+    await page.setViewportSize({ width: 390, height: 844 });
+    await expect(drawer.getByTestId('goal-tracking-update-trigger')).toBeVisible();
+    const triggerBox = await drawer.getByTestId('goal-tracking-update-trigger').boundingBox();
+    expect(triggerBox).not.toBeNull();
+    expect(Math.ceil(triggerBox!.x + triggerBox!.width)).toBeLessThanOrEqual(390);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth))
+      .toBeLessThanOrEqual(1);
   });
 
   test('indicator drawer follows browser history and keeps direct-manager details read-only', async ({ page }) => {

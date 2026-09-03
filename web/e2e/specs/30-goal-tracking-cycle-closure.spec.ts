@@ -86,7 +86,7 @@ test('same-name cycles remain selectable and the employee can enter the exact re
   await expect(selector.locator('option')).toHaveCount(2);
   await expect(selector.locator('option').nth(0)).toContainText('月度自评');
   await expect(selector.locator('option').nth(1)).toContainText('已豁免');
-  await expect(page.getByTestId('goal-tracking-summary')).toContainText('本月目标已更新 1/2');
+  await expect(page.getByTestId('goal-tracking-summary')).toContainText('8月目标已更新 1/2');
   await expect(page.getByTestId('goal-tracking-surface')).toContainText('完成重点客户续约');
   await expect(page.getByRole('complementary', { name: '评分期次' })).toContainText('待月度自评');
 

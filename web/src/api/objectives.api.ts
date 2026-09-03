@@ -45,10 +45,12 @@ export const objectivesApi = {
   updateTrackingIndicatorProgress(
     id: string,
     body: UpdateGoalTrackingProgressBody,
+    options?: { skipErrorMessage?: boolean },
   ): Promise<GoalTrackingLatestProgress> {
     return http.patch(
       `/objectives/tracking/indicators/${id}/progress`,
       body,
+      options,
     ) as unknown as Promise<GoalTrackingLatestProgress>;
   },
 

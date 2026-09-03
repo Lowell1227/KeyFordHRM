@@ -2003,6 +2003,7 @@ export interface GoalTrackingChangeRecord {
 export interface GoalTrackingIndicatorDetail extends GoalTrackingItem {
   taskStatus: TaskStatus;
   canEdit: boolean;
+  activeBusinessPeriodKey: string | null;
   actualValue: number | null;
   actualNote: string | null;
   alignedObjectives: Array<{

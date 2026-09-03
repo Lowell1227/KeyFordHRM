@@ -138,6 +138,16 @@ export interface IndicatorAlignmentTaskContext {
   deptId: string | null;
 }
 
+function activeGoalTrackingBusinessPeriodKey(
+  periods: Array<{ periodKey: string; status: string; employeeSubmittedAt: Date | null }> = [],
+): string | null {
+  const activePeriod = periods.find((period) => (
+    ['self_eval', 'manager_scoring'].includes(period.status)
+    && !period.employeeSubmittedAt
+  )) ?? periods[periods.length - 1] ?? null;
+  return activePeriod?.periodKey ?? null;
+}
+
 /** 目标树节点。 */
 export interface ObjectiveNode {
   id: string;
@@ -660,11 +670,7 @@ export class ObjectivesService {
       } satisfies GoalTrackingItem;
     });
     const periods = task.periods ?? [];
-    const activePeriod = periods.find((period) => (
-      ['self_eval', 'manager_scoring'].includes(period.status)
-      && !period.employeeSubmittedAt
-    )) ?? periods[periods.length - 1] ?? null;
-    const activeBusinessPeriodKey = activePeriod?.periodKey ?? null;
+    const activeBusinessPeriodKey = activeGoalTrackingBusinessPeriodKey(periods);
 
     return {
       taskId: task.id,
@@ -890,10 +896,12 @@ export class ObjectivesService {
         WHERE "id" = ${indicatorId}::uuid
         FOR UPDATE
       `;
-      const latest = await tx.indicatorProgressUpdate.findFirst({
+      const progressUpdates = await tx.indicatorProgressUpdate.findMany({
         where: { indicatorInstanceId: indicatorId },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+        include: { period: { select: { periodKey: true } } },
       });
+      const latest = currentGoalProgress(progressUpdates);
       if (input.expectedLatestUpdateAt !== undefined) {
         const actualLatestUpdateAt = latest?.createdAt.toISOString() ?? null;
         if (actualLatestUpdateAt !== input.expectedLatestUpdateAt) {
@@ -1019,6 +1027,14 @@ export class ObjectivesService {
         task: {
           include: {
             employee: { select: { id: true, name: true } },
+            periods: {
+              orderBy: { sequence: 'asc' },
+              select: {
+                periodKey: true,
+                status: true,
+                employeeSubmittedAt: true,
+              },
+            },
             cycle: {
               select: {
                 id: true,
@@ -1095,6 +1111,7 @@ export class ObjectivesService {
       cycleName: indicator.task.cycle.name,
       taskStatus: indicator.task.status,
       canEdit: this.canSubmitActiveProgress(indicator.task, viewer),
+      activeBusinessPeriodKey: activeGoalTrackingBusinessPeriodKey(indicator.task.periods),
       alignedObjectives: indicator.objectiveAlignments.map(({ objective }) => objective),
       progressUpdates: orderedProgress.map((progress) => ({
         id: progress.id,

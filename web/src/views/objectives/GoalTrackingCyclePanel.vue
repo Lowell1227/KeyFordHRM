@@ -35,6 +35,12 @@ const emit = defineEmits<{
 
 const action = computed(() => props.selectedContext ? selectTrackingAction(props.selectedContext) : null);
 const summary = computed(() => props.result.summary);
+const activeBusinessPeriodLabel = computed(() => {
+  const key = summary.value?.activeBusinessPeriodKey;
+  if (key === 'cycle') return '本周期';
+  const match = /^(\d{4})-(\d{2})$/.exec(key ?? '');
+  return match ? `${Number(match[2])}月` : '';
+});
 const activePeriod = computed(() => {
   const periods = props.selectedContext?.periods ?? [];
   const actionPeriodId = action.value?.kind === 'review' ? action.value.periodId : '';
@@ -153,7 +159,7 @@ function dueDate(value: string) {
         <strong>{{ summary ? `已提交 ${summary.employeeSubmittedCount}/${summary.periodCount}` : '暂未生成期次' }}</strong>
       </div>
       <div>
-        <span>本月目标</span>
+        <span>{{ activeBusinessPeriodLabel ? `${activeBusinessPeriodLabel}目标` : '本月目标' }}</span>
         <strong>{{ summary ? `已更新 ${summary.activeUpdatedGoalCount}/${summary.goalCount}` : '暂无统计' }}</strong>
       </div>
       <div>
@@ -222,7 +228,7 @@ function dueDate(value: string) {
               </div>
               <span class="tracking-goal-card__status">{{ goalTrackingStatus({ status: item.status, progress: item.progress, healthStatus: item.latestProgress?.healthStatus }) }}</span>
               <button type="button" :data-testid="`goal-tracking-indicator-button-${item.id}`" @click="emit('openIndicator', item.id)">
-                {{ result.canEdit && isSelf ? '更新进展' : '查看详情' }}
+                {{ result.canEdit && isSelf ? `更新${activeBusinessPeriodLabel}进展` : '查看详情' }}
               </button>
             </div>
           </article>

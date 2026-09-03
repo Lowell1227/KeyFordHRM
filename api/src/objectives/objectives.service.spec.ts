@@ -22,7 +22,7 @@ describe('ObjectivesService visibility helpers', () => {
     user: { findMany: jest.Mock; findUnique: jest.Mock };
     assessmentTask: { findUnique: jest.Mock; findMany: jest.Mock };
     indicatorInstance: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock; count: jest.Mock };
-    indicatorProgressUpdate: { findFirst: jest.Mock; create: jest.Mock };
+    indicatorProgressUpdate: { findMany: jest.Mock; create: jest.Mock };
     auditLog: { create: jest.Mock; findMany: jest.Mock };
     $queryRaw: jest.Mock;
     $transaction: jest.Mock;
@@ -95,7 +95,7 @@ describe('ObjectivesService visibility helpers', () => {
         findMany: jest.fn(),
         count: jest.fn(),
       },
-      indicatorProgressUpdate: { findFirst: jest.fn(), create: jest.fn() },
+      indicatorProgressUpdate: { findMany: jest.fn(), create: jest.fn() },
       auditLog: { create: jest.fn(), findMany: jest.fn() },
       $queryRaw: jest.fn().mockResolvedValue([]),
       $transaction: jest.fn(async (callback: (tx: unknown) => unknown) => callback(prisma)),
@@ -863,7 +863,7 @@ describe('ObjectivesService visibility helpers', () => {
         },
       },
     });
-    prisma.indicatorProgressUpdate.findFirst.mockResolvedValue(null);
+    prisma.indicatorProgressUpdate.findMany.mockResolvedValue([]);
     prisma.indicatorProgressUpdate.create.mockResolvedValue({
       id: 'progress-1',
       indicatorInstanceId: 'indicator-1',
@@ -1001,12 +1001,14 @@ describe('ObjectivesService visibility helpers', () => {
         },
       },
     });
-    prisma.indicatorProgressUpdate.findFirst.mockResolvedValue({
+    prisma.indicatorProgressUpdate.findMany.mockResolvedValue([{
       id: 'progress-newer',
       progress: 55,
       healthStatus: 'at_risk',
       createdAt: new Date('2026-08-16T09:00:00.000Z'),
-    });
+      periodReviewRevisionId: null,
+      period: null,
+    }]);
 
     await expect((service as any).updateIndicatorProgress(
       'indicator-1',
@@ -1020,6 +1022,71 @@ describe('ObjectivesService visibility helpers', () => {
     )).rejects.toBeInstanceOf(ConflictException);
 
     expect(prisma.indicatorProgressUpdate.create).not.toHaveBeenCalled();
+  });
+
+  it('uses the latest business month for concurrency when an older month was archived later', async () => {
+    prisma.indicatorInstance.findUnique.mockResolvedValue({
+      id: 'indicator-1',
+      name: 'GMV 达成率',
+      task: {
+        id: 'task-1',
+        employeeId: viewer.id,
+        status: 'self_eval',
+        isExempt: false,
+        participantDisposition: 'active',
+        indicatorConfirmedAt: new Date('2026-07-02T00:00:00.000Z'),
+        closedAt: null,
+        selfEvalSubmittedAt: null,
+        publishedAt: null,
+        cycle: {
+          workflowVersion: 2,
+          openedAt: new Date('2026-07-01T00:00:00.000Z'),
+          publishedAt: null,
+          closedAt: null,
+        },
+      },
+    });
+    const augustCreatedAt = new Date('2026-09-03T02:42:07.893Z');
+    prisma.indicatorProgressUpdate.findMany.mockResolvedValue([
+      {
+        id: 'july-archived-later',
+        progress: 99,
+        healthStatus: 'on_track',
+        createdAt: new Date('2026-09-03T02:52:15.301Z'),
+        periodReviewRevisionId: 'revision-july',
+        period: { periodKey: '2026-07' },
+      },
+      {
+        id: 'august-current',
+        progress: 80,
+        healthStatus: 'on_track',
+        createdAt: augustCreatedAt,
+        periodReviewRevisionId: 'revision-august',
+        period: { periodKey: '2026-08' },
+      },
+    ]);
+    prisma.indicatorProgressUpdate.create.mockResolvedValue({
+      id: 'progress-new',
+      indicatorInstanceId: 'indicator-1',
+      progress: 87,
+      healthStatus: 'on_track',
+      content: '更新8月进展',
+      attachments: [],
+      createdBy: viewer.id,
+      createdAt: new Date('2026-09-03T03:00:00.000Z'),
+      creator: { id: viewer.id, name: viewer.name },
+    });
+
+    await expect((service as any).updateIndicatorProgress(
+      'indicator-1',
+      {
+        progress: 87,
+        healthStatus: 'on_track',
+        content: '更新8月进展',
+        expectedLatestUpdateAt: augustCreatedAt.toISOString(),
+      },
+      viewer,
+    )).resolves.toEqual(expect.objectContaining({ id: 'progress-new', progress: 87 }));
   });
 
   it.each([
@@ -1092,6 +1159,11 @@ describe('ObjectivesService visibility helpers', () => {
           publishedAt: null,
           closedAt: null,
         },
+        periods: [
+          { periodKey: '2026-07', status: 'manager_scoring', employeeSubmittedAt: new Date('2026-08-01T00:00:00.000Z') },
+          { periodKey: '2026-08', status: 'self_eval', employeeSubmittedAt: null },
+          { periodKey: '2026-09', status: 'unopened', employeeSubmittedAt: null },
+        ],
       },
       objectiveAlignments: [
         { objective: { id: 'objective-1', title: '提升经营质量', level: 'company', ownerId: 'vp-1' } },
@@ -1152,6 +1224,7 @@ describe('ObjectivesService visibility helpers', () => {
       actualNote: '截至季度末完成预算的 96%',
       weight: 16,
       canEdit: true,
+      activeBusinessPeriodKey: '2026-08',
       alignedObjectives: [
         { id: 'objective-1', title: '提升经营质量', level: 'company', ownerId: 'vp-1' },
       ],
