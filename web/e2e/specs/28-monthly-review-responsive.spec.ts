@@ -236,6 +236,10 @@ test.describe('monthly goal review responsive workspace', () => {
     await expect(page.getByTestId('monthly-review-goal-card').nth(2)).toContainText('不参与评分');
     await expect(page.getByTestId('monthly-review-goal-card').first()).toContainText('本月未更新，可只填写自评分后提交');
     await expect(page.getByTestId('monthly-review-overall-grade')).toContainText('本月自评等级');
+    await expect(page.getByText('按有效权重自动计算', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('等级与分数分别填写，不自动换算', { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel('自评总分计算说明')).toHaveAttribute('title', '按有效权重自动计算');
+    await expect(page.getByLabel('自评等级填写说明')).toHaveAttribute('title', '等级与分数分别填写，不自动换算');
 
     await page.getByRole('button', { name: '提交月度自评' }).click();
     await expect(page.getByTestId('monthly-review-grade-error')).toContainText('请选择本月自评等级');

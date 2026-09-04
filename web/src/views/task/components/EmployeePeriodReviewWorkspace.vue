@@ -283,14 +283,18 @@ watch(() => props.periodId, loadReview, { immediate: true });
 
       <div class="monthly-review__summary" data-testid="monthly-review-overall-grade">
         <div class="monthly-review__total">
-          <span>自评总分</span>
+          <span>
+            自评总分
+            <i class="monthly-review__help" tabindex="0" aria-label="自评总分计算说明" title="按有效权重自动计算">?</i>
+          </span>
           <strong>{{ selfScoreTotal ?? '--' }}</strong>
-          <small>按有效权重自动计算</small>
         </div>
         <div class="monthly-review__grade">
           <div>
-            <span>本月自评等级 <b>*</b></span>
-            <small>等级与分数分别填写，不自动换算</small>
+            <span>
+              本月自评等级 <b>*</b>
+              <i class="monthly-review__help" tabindex="0" aria-label="自评等级填写说明" title="等级与分数分别填写，不自动换算">?</i>
+            </span>
           </div>
           <div v-if="canEdit" class="monthly-review__grade-options">
             <button
@@ -410,12 +414,14 @@ watch(() => props.periodId, loadReview, { immediate: true });
 .monthly-review__total { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 3px 12px; }
 .monthly-review__total span,
 .monthly-review__grade span { color: #697487; font-size: 12px; }
+.monthly-review__total span,
+.monthly-review__grade span { display: inline-flex; align-items: center; gap: 5px; }
 .monthly-review__total strong { justify-self: end; color: #202a3d; font-size: 22px; }
-.monthly-review__total small { grid-column: 1 / -1; color: #9aa3b2; font-size: 11px; }
 .monthly-review__grade { display: grid; grid-template-columns: minmax(190px, 1fr) auto; align-items: center; gap: 7px 16px; }
 .monthly-review__grade > div:first-child { display: grid; gap: 3px; }
 .monthly-review__grade span b { color: #e85353; }
-.monthly-review__grade small { color: #9aa3b2; font-size: 11px; }
+.monthly-review__help { display: inline-grid; width: 15px; height: 15px; place-items: center; border: 1px solid #cbd3df; border-radius: 50%; color: #8c98aa; font-size: 10px; font-style: normal; line-height: 1; cursor: help; }
+.monthly-review__help:focus-visible { outline: 2px solid #9cadf2; outline-offset: 2px; }
 .monthly-review__grade em { grid-column: 1 / -1; color: #e64f4f; font-size: 11px; font-style: normal; }
 .monthly-review__grade-options { display: grid; grid-template-columns: repeat(4, 42px); gap: 6px; }
 .monthly-review__grade-options button { height: 32px; border: 1px solid #dfe4ec; border-radius: 7px; background: #fff; color: #596579; font-weight: 700; cursor: pointer; }

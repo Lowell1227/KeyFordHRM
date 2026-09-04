@@ -890,6 +890,10 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('manager-review-self-total')).toContainText('80');
     await expect(page.getByTestId('manager-review-self-grade')).toContainText('B');
     await expect(page.getByTestId('manager-review-overall-grade')).toContainText('本月直属上级等级');
+    await expect(page.getByText('按有效权重自动计算', { exact: true })).toHaveCount(0);
+    await expect(page.getByText('等级与分数分别填写，不自动换算', { exact: true })).toHaveCount(0);
+    await expect(page.getByLabel('自评总分计算说明')).toHaveAttribute('title', '按有效权重自动计算');
+    await expect(page.getByLabel('直属上级等级填写说明')).toHaveAttribute('title', '等级与分数分别填写，不自动换算');
     const cards = page.getByTestId('manager-review-goal-card');
     await expect(cards.nth(0)).toContainText('员工自评分70分');
     await expect(cards.nth(1)).toContainText('员工自评分90分');

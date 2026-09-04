@@ -252,14 +252,16 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
       <div class="manager-review__totals" data-testid="manager-review-totals">
         <div class="manager-review__total-card">
           <div class="manager-review__metric">
-            <span>自评总分</span>
+            <span>
+              自评总分
+              <i class="manager-review__help" tabindex="0" aria-label="自评总分计算说明" title="按有效权重自动计算">?</i>
+            </span>
             <strong data-testid="manager-review-self-total">{{ selfScoreTotal ?? '--' }}</strong>
           </div>
           <div class="manager-review__readonly-grade">
             <span>员工自评等级</span>
             <strong data-testid="manager-review-self-grade">{{ detail.period.selfGrade ?? '--' }}</strong>
           </div>
-          <small>按有效权重自动计算</small>
         </div>
         <div class="manager-review__total-card" data-testid="manager-review-overall-grade">
           <div class="manager-review__metric">
@@ -267,7 +269,10 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
             <strong data-testid="manager-review-manager-total">{{ managerScoreTotal ?? '--' }}</strong>
           </div>
           <div class="manager-review__grade-field">
-            <span>本月直属上级等级 <b>*</b></span>
+            <span>
+              本月直属上级等级 <b>*</b>
+              <i class="manager-review__help" tabindex="0" aria-label="直属上级等级填写说明" title="等级与分数分别填写，不自动换算">?</i>
+            </span>
             <div v-if="canEdit" class="manager-review__grade-options">
               <button
                 v-for="grade in gradeOptions"
@@ -281,7 +286,6 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
             </div>
             <strong v-else class="manager-review__grade-result">{{ managerGrade ?? '--' }}</strong>
           </div>
-          <small>等级与分数分别填写，不自动换算</small>
           <em v-if="managerGradeError" data-testid="manager-review-grade-error">{{ managerGradeError }}</em>
         </div>
       </div>
@@ -374,7 +378,10 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
 .manager-review__grade-options button.is-active { border-color: #6076db; background: #eef2ff; color: #4f67d8; }
 .manager-review__grade-options button:disabled { cursor: default; opacity: .75; }
 .manager-review__grade-result { min-width: 38px; padding: 5px 11px; border-radius: 7px; background: #eef2ff; color: #4f67d8; font-size: 15px; text-align: center; }
-.manager-review__totals small { color: #9aa3b2; font-size: 11px; }
+.manager-review__metric span,
+.manager-review__grade-field span { display: inline-flex; align-items: center; gap: 5px; }
+.manager-review__help { display: inline-grid; width: 15px; height: 15px; place-items: center; border: 1px solid #cbd3df; border-radius: 50%; color: #8c98aa; font-size: 10px; font-style: normal; line-height: 1; cursor: help; }
+.manager-review__help:focus-visible { outline: 2px solid #9cadf2; outline-offset: 2px; }
 .manager-review__totals em { color: #e64f4f; font-size: 11px; font-style: normal; }
 .manager-review__goals { display: grid; gap: 12px; }
 .manager-score-card { overflow: hidden; border: 1px solid #e5eaf2; border-radius: 13px; background: #fff; }
