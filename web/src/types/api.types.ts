@@ -1331,6 +1331,8 @@ export interface PeriodReviewDetail {
     managerSubmittedAt: string | null;
     selfScoreTotal: number | null;
     managerScoreTotal: number | null;
+    selfGrade: PerfGrade | null;
+    managerGrade: PerfGrade | null;
     draftVersion: number;
   };
   context: {
@@ -1355,12 +1357,14 @@ export interface EmployeePeriodReviewItemBody {
 
 export interface SaveEmployeePeriodReviewDraftBody {
   expectedVersion: number;
+  selfGrade?: PerfGrade | null;
   indicators: EmployeePeriodReviewItemBody[];
 }
 
 export interface SubmitEmployeePeriodReviewBody {
   expectedVersion: number;
   idempotencyKey: string;
+  selfGrade: PerfGrade;
   indicators: EmployeePeriodReviewItemBody[];
 }
 
@@ -1379,6 +1383,7 @@ export interface ManagerPeriodReviewItemBody {
 
 export interface SaveManagerPeriodReviewDraftBody {
   expectedVersion: number;
+  managerGrade?: PerfGrade | null;
   indicators: ManagerPeriodReviewItemBody[];
 }
 
@@ -1390,6 +1395,7 @@ export interface ReturnManagerPeriodReviewBody {
 
 export interface SubmitManagerPeriodReviewBody extends SaveManagerPeriodReviewDraftBody {
   idempotencyKey: string;
+  managerGrade: PerfGrade;
 }
 
 /** 申诉列表项（对齐后端 AppealListItem，不含 coefficient）。 */
@@ -2072,6 +2078,8 @@ export interface PeriodMonitoringRow {
   lockedAt: string | null;
   selfScoreTotal: number | null;
   managerScoreTotal: number | null;
+  selfGrade: PerfGrade | null;
+  managerGrade: PerfGrade | null;
   canReopen: boolean;
   reopenBlockedReason: string | null;
 }

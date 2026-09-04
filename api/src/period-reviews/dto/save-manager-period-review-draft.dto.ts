@@ -1,5 +1,6 @@
 import { Type } from 'class-transformer';
-import { IsArray, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateNested } from 'class-validator';
+import { IsArray, IsEnum, IsInt, IsNumber, IsOptional, IsString, IsUUID, Max, MaxLength, Min, ValidateNested } from 'class-validator';
+import { PerfGrade } from '@prisma/client';
 
 export class ManagerPeriodReviewItemDto {
   @IsUUID('4')
@@ -23,6 +24,10 @@ export class SaveManagerPeriodReviewDraftDto {
   @IsInt()
   @Min(0)
   expectedVersion!: number;
+
+  @IsOptional()
+  @IsEnum(PerfGrade)
+  managerGrade?: PerfGrade | null;
 
   @IsArray()
   @ValidateNested({ each: true })

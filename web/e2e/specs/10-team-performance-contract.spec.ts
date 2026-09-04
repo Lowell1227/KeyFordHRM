@@ -788,6 +788,7 @@ test.describe('team list manager workspace', () => {
   test('monthly direct-manager work shows the employee weighted total and opens the matching period review', async ({ page }) => {
     await page.setViewportSize({ width: 1920, height: 1080 });
     await mockTaskWorkspaceIdentity(page, 'manager');
+    const managerRequests: Request[] = [];
     const monthlyPage = {
       total: 1,
       page: 1,
@@ -830,7 +831,7 @@ test.describe('team list manager workspace', () => {
         status: 'manager_scoring', selfEvalOpenAt: '2026-08-29T00:00:00.000Z',
         selfEvalDueAt: '2026-08-30T00:00:00.000Z', managerDueAt: '2026-08-31T00:00:00.000Z',
         employeeSubmittedAt: '2026-08-30T12:02:40.000Z', managerSubmittedAt: null,
-        selfScoreTotal: 80, managerScoreTotal: null, draftVersion: 0,
+        selfScoreTotal: 80, managerScoreTotal: null, selfGrade: 'B', managerGrade: null, draftVersion: 0,
       },
       context: {
         cycleName: '2026年09月绩效考核', employeeName: '方园', employeeNo: '319',
@@ -864,6 +865,15 @@ test.describe('team list manager workspace', () => {
       contentType: 'application/json',
       body: JSON.stringify(apiResponse(periodDetail)),
     }));
+    await page.route('**/api/v1/assessment-periods/period-august/manager-draft', (route) => {
+      managerRequests.push(route.request());
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          periodId: 'period-august', status: 'manager_scoring', draftVersion: 1, savedAt: new Date().toISOString(),
+        })),
+      });
+    });
 
     await page.goto('/tasks?scope=team&stage=manager-eval&cycleId=cycle-1');
 
@@ -878,12 +888,18 @@ test.describe('team list manager workspace', () => {
     await expect(page.getByTestId('manager-period-review-workspace')).toBeVisible();
     await expect(page.getByTestId('manager-evaluation-workspace')).toHaveCount(0);
     await expect(page.getByTestId('manager-review-self-total')).toContainText('80');
+    await expect(page.getByTestId('manager-review-self-grade')).toContainText('B');
+    await expect(page.getByTestId('manager-review-overall-grade')).toContainText('本月直属上级等级');
     const cards = page.getByTestId('manager-review-goal-card');
     await expect(cards.nth(0)).toContainText('员工自评分70分');
     await expect(cards.nth(1)).toContainText('员工自评分90分');
     await cards.nth(0).getByLabel('直属上级评分').fill('80');
     await cards.nth(1).getByLabel('直属上级评分').fill('90');
     await expect(page.getByTestId('manager-review-manager-total')).toContainText('85');
+    await page.getByRole('button', { name: '直属上级等级 A' }).click();
+    await page.getByRole('button', { name: '保存草稿' }).click();
+    await expect.poll(() => managerRequests.length).toBe(1);
+    expect(managerRequests[0].postDataJSON()).toMatchObject({ managerGrade: 'A' });
   });
 
   test('team list applies URL filters and limits batch commands to pending goal reviews', async ({ page }) => {

@@ -8,6 +8,7 @@ import type {
   PeriodReviewDetail,
   SubmitEmployeePeriodReviewBody,
 } from '@/types/api.types';
+import type { PerfGrade } from '@/types/enums';
 import PerformanceFormWorkspace from './PerformanceFormWorkspace.vue';
 import PeriodReviewIndicatorContext from './PeriodReviewIndicatorContext.vue';
 import PeriodReviewToolbar from './PeriodReviewToolbar.vue';
@@ -34,6 +35,9 @@ const draftVersion = ref(0);
 const selectedIndex = ref(0);
 const formItems = reactive<ReviewFormItem[]>([]);
 const validationErrors = reactive<Record<string, Partial<Record<RequiredField, string>>>>({});
+const overallGrade = ref<PerfGrade | null>(null);
+const overallGradeError = ref('');
+const gradeOptions: PerfGrade[] = ['A', 'B', 'C', 'D'];
 
 const healthOptions: Array<{ value: GoalTrackingHealthStatus; label: string }> = [
   { value: 'on_track', label: '正常推进' },
@@ -48,6 +52,18 @@ const scoreExcludedCount = computed(() => (detail.value?.indicators.length ?? 0)
 const completedCount = computed(() => formItems.filter((item, index) => (
   detail.value?.indicators[index]?.isScoreRequired && item.selfScore != null
 )).length);
+const selfScoreTotal = computed(() => {
+  if (!detail.value || formItems.length !== detail.value.indicators.length) return null;
+  if (formItems.some((item, index) => detail.value?.indicators[index]?.isScoreRequired && item.selfScore == null)) return null;
+  const weighted = formItems.reduce((sum, item, index) => {
+    const indicator = detail.value?.indicators[index];
+    return indicator?.isScoreRequired ? sum + (item.selfScore ?? 0) * indicator.weight : sum;
+  }, 0);
+  const weight = detail.value.indicators.reduce((sum, indicator) => (
+    indicator.isScoreRequired ? sum + indicator.weight : sum
+  ), 0);
+  return weight > 0 ? Math.round((weighted / weight) * 100) / 100 : 0;
+});
 const scoreProgressText = computed(() => (
   `自评分已填写 ${completedCount.value}/${scoreRequiredCount.value}${scoreExcludedCount.value > 0 ? ` · 不参与评分 ${scoreExcludedCount.value}项` : ''}`
 ));
@@ -96,6 +112,8 @@ function optionalText(value: string): string | null {
 function replaceForm(next: PeriodReviewDetail) {
   detail.value = next;
   draftVersion.value = next.period.draftVersion;
+  overallGrade.value = next.period.selfGrade;
+  overallGradeError.value = '';
   selectedIndex.value = 0;
   formItems.splice(0, formItems.length, ...next.indicators.map((item) => ({
     indicatorVersionItemId: item.indicatorVersionItemId,
@@ -137,6 +155,7 @@ function clearItemError(itemId: string, field: RequiredField) {
 function validateForSubmit(): boolean {
   for (const key of Object.keys(validationErrors)) delete validationErrors[key];
   let firstInvalid = -1;
+  if (!overallGrade.value) overallGradeError.value = '请选择本月自评等级';
   formItems.forEach((item, index) => {
     const errors: Partial<Record<RequiredField, string>> = {};
     if (detail.value?.indicators[index]?.isScoreRequired && item.selfScore == null) {
@@ -157,6 +176,13 @@ function validateForSubmit(): boolean {
     });
     return false;
   }
+  if (overallGradeError.value) {
+    document.querySelector<HTMLElement>('[data-testid="monthly-review-overall-grade"]')?.scrollIntoView({
+      behavior: 'smooth',
+      block: 'center',
+    });
+    return false;
+  }
   return true;
 }
 
@@ -166,6 +192,7 @@ async function saveDraft() {
   try {
     const result = await periodReviewsApi.saveEmployeeDraft(props.periodId, {
       expectedVersion: draftVersion.value,
+      selfGrade: overallGrade.value,
       indicators: bodyItems(),
     });
     draftVersion.value = result.draftVersion;
@@ -186,6 +213,8 @@ function newIdempotencyKey(): string {
 
 async function submitReview() {
   if (!canEdit.value || saving.value || submitting.value || !validateForSubmit()) return;
+  const selfGrade = overallGrade.value;
+  if (!selfGrade) return;
   if (isEarlySubmission.value) {
     try {
       await ElMessageBox.confirm(
@@ -204,6 +233,7 @@ async function submitReview() {
   const body: SubmitEmployeePeriodReviewBody = {
     expectedVersion: draftVersion.value,
     idempotencyKey: newIdempotencyKey(),
+    selfGrade,
     indicators: bodyItems(),
   };
   submitting.value = true;
@@ -212,6 +242,8 @@ async function submitReview() {
     draftVersion.value = result.draftVersion;
     if (detail.value) {
       detail.value.period.status = result.status;
+      detail.value.period.selfGrade = selfGrade;
+      detail.value.period.selfScoreTotal = selfScoreTotal.value;
       detail.value.permissions.canEditEmployee = false;
     }
     ElMessage.success(`${followUpName.value}已提交`);
@@ -248,6 +280,33 @@ watch(() => props.periodId, loadReview, { immediate: true });
           </el-button>
         </template>
       </PeriodReviewToolbar>
+
+      <div class="monthly-review__summary" data-testid="monthly-review-overall-grade">
+        <div class="monthly-review__total">
+          <span>自评总分</span>
+          <strong>{{ selfScoreTotal ?? '--' }}</strong>
+          <small>按有效权重自动计算</small>
+        </div>
+        <div class="monthly-review__grade">
+          <div>
+            <span>本月自评等级 <b>*</b></span>
+            <small>等级与分数分别填写，不自动换算</small>
+          </div>
+          <div v-if="canEdit" class="monthly-review__grade-options">
+            <button
+              v-for="grade in gradeOptions"
+              :key="grade"
+              type="button"
+              :aria-label="`自评等级 ${grade}`"
+              :class="{ 'is-active': overallGrade === grade }"
+              :disabled="!canEdit"
+              @click="overallGrade = grade; overallGradeError = ''"
+            >{{ grade }}</button>
+          </div>
+          <strong v-else class="monthly-review__grade-result">{{ overallGrade ?? '--' }}</strong>
+          <em v-if="overallGradeError" data-testid="monthly-review-grade-error">{{ overallGradeError }}</em>
+        </div>
+      </div>
 
       <PerformanceFormWorkspace
         :show-reference="false"
@@ -346,6 +405,23 @@ watch(() => props.periodId, loadReview, { immediate: true });
 
 <style scoped>
 .monthly-review { min-width: 0; display: grid; gap: 14px; }
+.monthly-review__summary { display: grid; grid-template-columns: minmax(180px, 220px) minmax(360px, 1fr); gap: 12px; }
+.monthly-review__summary > div { min-width: 0; padding: 12px 15px; border: 1px solid #e5eaf2; border-radius: 10px; background: #fff; }
+.monthly-review__total { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 3px 12px; }
+.monthly-review__total span,
+.monthly-review__grade span { color: #697487; font-size: 12px; }
+.monthly-review__total strong { justify-self: end; color: #202a3d; font-size: 22px; }
+.monthly-review__total small { grid-column: 1 / -1; color: #9aa3b2; font-size: 11px; }
+.monthly-review__grade { display: grid; grid-template-columns: minmax(190px, 1fr) auto; align-items: center; gap: 7px 16px; }
+.monthly-review__grade > div:first-child { display: grid; gap: 3px; }
+.monthly-review__grade span b { color: #e85353; }
+.monthly-review__grade small { color: #9aa3b2; font-size: 11px; }
+.monthly-review__grade em { grid-column: 1 / -1; color: #e64f4f; font-size: 11px; font-style: normal; }
+.monthly-review__grade-options { display: grid; grid-template-columns: repeat(4, 42px); gap: 6px; }
+.monthly-review__grade-options button { height: 32px; border: 1px solid #dfe4ec; border-radius: 7px; background: #fff; color: #596579; font-weight: 700; cursor: pointer; }
+.monthly-review__grade-options button.is-active { border-color: #6076db; background: #eef2ff; color: #4f67d8; }
+.monthly-review__grade-options button:disabled { cursor: default; opacity: .75; }
+.monthly-review__grade-result { min-width: 42px; padding: 5px 12px; border-radius: 7px; background: #eef2ff; color: #4f67d8; font-size: 15px; text-align: center; }
 .monthly-review__goals { min-width: 0; display: grid; gap: 12px; }
 .monthly-goal-card { min-width: 0; overflow: hidden; border: 1px solid #e7ebf2; border-radius: 14px; background: #fff; box-shadow: 0 1px 2px rgb(31 45 61 / 4%); transition: border-color .15s ease, box-shadow .15s ease; }
 .monthly-goal-card.is-selected { border-color: #bdc8f8; box-shadow: 0 3px 12px rgb(79 103 216 / 9%); }
@@ -378,6 +454,9 @@ watch(() => props.periodId, loadReview, { immediate: true });
 
 @media (max-width: 767px) {
   .monthly-review { padding-bottom: 96px; }
+  .monthly-review__summary { grid-template-columns: minmax(0, 1fr); }
+  .monthly-review__grade { grid-template-columns: minmax(0, 1fr); }
+  .monthly-review__grade-options { grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .monthly-goal-card { scroll-margin-bottom: 112px; }
   .monthly-goal-card__header { grid-template-columns: 28px minmax(0, 1fr); padding: 13px 12px 11px; }
   .monthly-goal-card__weight { grid-column: 2; justify-self: start; }

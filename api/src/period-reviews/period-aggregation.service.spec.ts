@@ -5,17 +5,14 @@ describe('PeriodAggregationService', () => {
   const tx = {
     $queryRaw: jest.fn(),
     assessmentTask: { findUnique: jest.fn() },
-    systemConfig: { findUnique: jest.fn() },
     gradeResult: { upsert: jest.fn() },
     auditLog: { create: jest.fn() },
   };
-  const scoring = { calcRawGrade: jest.fn().mockReturnValue('B') };
   const flow = { transitionTx: jest.fn() };
-  const service = new PeriodAggregationService(scoring as any, flow as any);
+  const service = new PeriodAggregationService(flow as any);
 
   beforeEach(() => {
     jest.clearAllMocks();
-    tx.systemConfig.findUnique.mockResolvedValue({ value: { A: 90, B: 75, C: 60 } });
     flow.transitionTx.mockResolvedValue({ newStatus: 'dept_review' });
     tx.$queryRaw.mockResolvedValue([]);
   });
@@ -55,19 +52,19 @@ describe('PeriodAggregationService', () => {
     expect(flow.transitionTx).not.toHaveBeenCalled();
   });
 
-  it('equally averages every completed monthly total after all submissions lock', async () => {
+  it('averages monthly totals and uses the final month manager grade as the cycle initial grade', async () => {
     tx.assessmentTask.findUnique.mockResolvedValue({
       id: 'task-1', cycleId: 'cycle-1', status: 'manager_scoring',
       managerId: 'manager-1', deptHeadId: 'head-1', cycle: { workflowVersion: 2 },
-      periods: [completedPeriod(80), completedPeriod(90), completedPeriod(85.555)],
+      periods: [completedPeriod(80, null), completedPeriod(90, null), completedPeriod(85.555, 'C')],
     });
 
     const result = await service.refreshTask('task-1', tx as any, 'manager-1');
 
     expect(result).toEqual({ complete: true, score: 85.19, targetStatus: 'dept_review' });
     expect(tx.gradeResult.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      create: expect.objectContaining({ calculatedScore: 85.19, rawGrade: 'B' }),
-      update: expect.objectContaining({ calculatedScore: 85.19, rawGrade: 'B' }),
+      create: expect.objectContaining({ calculatedScore: 85.19, rawGrade: 'C' }),
+      update: expect.objectContaining({ calculatedScore: 85.19, rawGrade: 'C' }),
     }));
   });
 
@@ -101,6 +98,19 @@ describe('PeriodAggregationService', () => {
     }));
   });
 
+  it('waits for the final month manager grade even when all monthly scores are complete', async () => {
+    tx.assessmentTask.findUnique.mockResolvedValue({
+      id: 'task-1', cycleId: 'cycle-1', status: 'manager_scoring',
+      managerId: 'manager-1', deptHeadId: 'head-1', cycle: { workflowVersion: 2 },
+      periods: [completedPeriod(80, null), completedPeriod(90, null)],
+    });
+
+    await expect(service.refreshTask('task-1', tx as any, 'manager-1'))
+      .resolves.toEqual({ complete: false, score: null, targetStatus: null });
+    expect(tx.gradeResult.upsert).not.toHaveBeenCalled();
+    expect(flow.transitionTx).not.toHaveBeenCalled();
+  });
+
   it('repairs a workflow v2 score already advanced by the legacy route without transitioning twice', async () => {
     tx.assessmentTask.findUnique.mockResolvedValue({
       id: 'task-1', cycleId: 'cycle-1', status: 'hr_calibration',
@@ -117,10 +127,11 @@ describe('PeriodAggregationService', () => {
     expect(flow.transitionTx).not.toHaveBeenCalled();
   });
 
-  function completedPeriod(score: number) {
+  function completedPeriod(score: number, managerGrade: 'A' | 'B' | 'C' | 'D' | null = 'B') {
     return {
       status: 'completed',
       managerScoreTotal: new Prisma.Decimal(score),
+      managerGrade,
       employeeSubmittedAt: new Date('2026-07-30T08:00:00.000Z'),
       managerSubmittedAt: new Date('2026-07-31T08:00:00.000Z'),
       lockedAt: new Date('2026-07-31T08:00:00.000Z'),

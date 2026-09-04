@@ -99,6 +99,8 @@ function reviewDetail() {
       managerSubmittedAt: null,
       selfScoreTotal: null,
       managerScoreTotal: null,
+      selfGrade: null,
+      managerGrade: null,
       draftVersion: 0,
     },
     context: {
@@ -180,6 +182,7 @@ async function mockMonthlyReview(page: Page, requests: Request[]) {
 }
 
 async function completeRequiredFields(page: Page) {
+  await page.getByRole('button', { name: '自评等级 B' }).click();
   const cards = page.getByTestId('monthly-review-goal-card');
   const firstCard = cards.nth(0);
   await firstCard.getByLabel('本月完成进度').fill('85');
@@ -232,15 +235,17 @@ test.describe('monthly goal review responsive workspace', () => {
     await expect(page.getByTestId('monthly-review-goal-card').first()).not.toContainText('补充说明');
     await expect(page.getByTestId('monthly-review-goal-card').nth(2)).toContainText('不参与评分');
     await expect(page.getByTestId('monthly-review-goal-card').first()).toContainText('本月未更新，可只填写自评分后提交');
+    await expect(page.getByTestId('monthly-review-overall-grade')).toContainText('本月自评等级');
 
     await page.getByRole('button', { name: '提交月度自评' }).click();
+    await expect(page.getByTestId('monthly-review-grade-error')).toContainText('请选择本月自评等级');
     await expect(page.getByTestId('monthly-review-goal-card').nth(0).getByText('请填写 0-100 分的本月自评分')).toBeVisible();
 
     await completeRequiredFields(page);
     await page.getByRole('button', { name: '保存草稿' }).click();
     await expect.poll(() => requests.filter((request) => request.method() === 'PUT').length).toBe(1);
     const draftBody = requests.find((request) => request.method() === 'PUT')?.postDataJSON();
-    expect(draftBody).toMatchObject({ expectedVersion: 0 });
+    expect(draftBody).toMatchObject({ expectedVersion: 0, selfGrade: 'B' });
     expect(draftBody.indicators).toHaveLength(3);
     expect(draftBody.indicators[0]).toMatchObject({ progress: 85, healthStatus: 'on_track', selfScore: 90 });
     expect(draftBody.indicators[1]).toMatchObject({ progress: null, healthStatus: null, selfScore: 82 });
@@ -249,7 +254,7 @@ test.describe('monthly goal review responsive workspace', () => {
     await page.getByRole('button', { name: '提交月度自评' }).click();
     await expect.poll(() => requests.filter((request) => request.method() === 'POST').length).toBe(1);
     const submitBody = requests.find((request) => request.method() === 'POST')?.postDataJSON();
-    expect(submitBody).toMatchObject({ expectedVersion: 1 });
+    expect(submitBody).toMatchObject({ expectedVersion: 1, selfGrade: 'B' });
     expect(submitBody.idempotencyKey).toMatch(/^[0-9a-f-]{36}$/);
     expect(submitBody.indicators).toHaveLength(3);
   });

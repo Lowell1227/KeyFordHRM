@@ -13,7 +13,7 @@ import {
   Min,
   ValidateNested,
 } from 'class-validator';
-import { IndicatorProgressHealth } from '@prisma/client';
+import { IndicatorProgressHealth, PerfGrade } from '@prisma/client';
 
 export class SubmitEmployeePeriodReviewItemDto {
   @IsUUID()
@@ -51,6 +51,9 @@ export class SubmitEmployeePeriodReviewDto {
 
   @IsUUID()
   idempotencyKey!: string;
+
+  @IsEnum(PerfGrade)
+  selfGrade!: PerfGrade;
 
   @IsArray()
   @ArrayMinSize(1)

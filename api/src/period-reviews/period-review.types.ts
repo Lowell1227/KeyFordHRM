@@ -3,6 +3,7 @@ import type {
   AssessmentPeriodType,
   IndicatorProgressHealth,
   ObjectiveLevel,
+  PerfGrade,
 } from '@prisma/client';
 import type { PeriodMonitoringStatus } from './dto/query-period-monitoring.dto';
 
@@ -31,6 +32,8 @@ export interface PeriodReviewDetail {
     managerSubmittedAt: Date | null;
     selfScoreTotal: number | null;
     managerScoreTotal: number | null;
+    selfGrade: PerfGrade | null;
+    managerGrade: PerfGrade | null;
     draftVersion: number;
   };
   context: {
@@ -108,6 +111,8 @@ export interface PeriodMonitoringRow {
   lockedAt: Date | null;
   selfScoreTotal: number | null;
   managerScoreTotal: number | null;
+  selfGrade: PerfGrade | null;
+  managerGrade: PerfGrade | null;
   canReopen: boolean;
   reopenBlockedReason: string | null;
 }

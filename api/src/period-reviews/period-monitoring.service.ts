@@ -22,6 +22,8 @@ const monitoringSelect = {
   lockedAt: true,
   selfScoreTotal: true,
   managerScoreTotal: true,
+  selfGrade: true,
+  managerGrade: true,
   task: {
     select: {
       id: true,
@@ -152,6 +154,8 @@ export class PeriodMonitoringService {
       lockedAt: period.lockedAt,
       selfScoreTotal: period.selfScoreTotal?.toNumber() ?? null,
       managerScoreTotal: period.managerScoreTotal?.toNumber() ?? null,
+      selfGrade: period.selfGrade,
+      managerGrade: period.managerGrade,
       canReopen: reopenBlockedReason == null,
       reopenBlockedReason,
     };

@@ -2,7 +2,6 @@ import { Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, TaskStatus } from '@prisma/client';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { FlowService } from '@/tasks/flow.service';
-import { ScoringService } from '@/tasks/scoring.service';
 
 export interface PeriodAggregationResult {
   complete: boolean;
@@ -13,7 +12,6 @@ export interface PeriodAggregationResult {
 @Injectable()
 export class PeriodAggregationService {
   constructor(
-    private readonly scoring: ScoringService,
     private readonly flow: FlowService,
   ) {}
 
@@ -37,6 +35,7 @@ export class PeriodAggregationService {
             employeeSubmittedAt: true,
             managerSubmittedAt: true,
             managerScoreTotal: true,
+            managerGrade: true,
             lockedAt: true,
           },
           orderBy: { sequence: 'asc' },
@@ -70,9 +69,11 @@ export class PeriodAggregationService {
       0,
     );
     const score = Number((total / completePeriods.length).toFixed(2));
-    const gradeConfig = await tx.systemConfig.findUnique({ where: { key: 'grade_score_mapping' } });
-    const mapping = (gradeConfig?.value as Record<string, number> | undefined) ?? { A: 90, B: 75, C: 60 };
-    const rawGrade = this.scoring.calcRawGrade(score, mapping);
+    const finalPeriod = completePeriods[completePeriods.length - 1]!;
+    if (!finalPeriod.managerGrade) {
+      return { complete: false, score: null, targetStatus: null };
+    }
+    const rawGrade = finalPeriod.managerGrade!;
     const resetCalibration = {
       calibratedGrade: null,
       calibrationNote: null,
@@ -124,6 +125,8 @@ export class PeriodAggregationService {
         entityId: taskId,
         newValue: {
           score,
+          rawGrade,
+          gradeSource: 'final_period_manager_grade',
           periodCount: completePeriods.length,
           targetStatus,
         },

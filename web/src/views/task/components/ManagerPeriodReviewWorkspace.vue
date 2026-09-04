@@ -3,6 +3,7 @@ import { computed, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { periodReviewsApi } from '@/api/period-reviews.api';
 import type { PeriodReviewDetail } from '@/types/api.types';
+import type { PerfGrade } from '@/types/enums';
 import PerformanceFormWorkspace from './PerformanceFormWorkspace.vue';
 import PeriodReviewIndicatorContext from './PeriodReviewIndicatorContext.vue';
 import PeriodReviewToolbar from './PeriodReviewToolbar.vue';
@@ -25,6 +26,9 @@ const draftVersion = ref(0);
 const selectedIndex = ref(0);
 const formItems = reactive<ManagerFormItem[]>([]);
 const validationErrors = reactive<Record<string, string>>({});
+const managerGrade = ref<PerfGrade | null>(null);
+const managerGradeError = ref('');
+const gradeOptions: PerfGrade[] = ['A', 'B', 'C', 'D'];
 
 const canEdit = computed(() => Boolean(detail.value?.permissions.canEditManager));
 const employeeSubmitted = computed(() => Boolean(detail.value?.period.employeeSubmittedAt));
@@ -74,6 +78,8 @@ function weightedTotal(scores: Array<number | null>): number {
 function replaceForm(next: PeriodReviewDetail) {
   detail.value = next;
   draftVersion.value = next.period.draftVersion;
+  managerGrade.value = next.period.managerGrade;
+  managerGradeError.value = '';
   selectedIndex.value = 0;
   formItems.splice(0, formItems.length, ...next.indicators.map((item) => ({
     indicatorVersionItemId: item.indicatorVersionItemId,
@@ -138,6 +144,7 @@ function warningFor(index: number): string[] {
 
 function validate(): boolean {
   for (const key of Object.keys(validationErrors)) delete validationErrors[key];
+  managerGradeError.value = managerGrade.value ? '' : '请选择本月直属上级评分等级';
   formItems.forEach((item, index) => {
     if (detail.value?.indicators[index]?.isScoreRequired && item.managerScore == null) {
       validationErrors[item.indicatorVersionItemId] = '请填写0-100分的直属上级评分';
@@ -145,7 +152,7 @@ function validate(): boolean {
   });
   const firstInvalid = formItems.findIndex((item) => validationErrors[item.indicatorVersionItemId]);
   if (firstInvalid >= 0) selectedIndex.value = firstInvalid;
-  return firstInvalid < 0;
+  return firstInvalid < 0 && !managerGradeError.value;
 }
 
 async function saveDraft() {
@@ -154,6 +161,7 @@ async function saveDraft() {
   try {
     const result = await periodReviewsApi.saveManagerDraft(props.periodId, {
       expectedVersion: draftVersion.value,
+      managerGrade: managerGrade.value,
       indicators: bodyItems(),
     });
     draftVersion.value = result.draftVersion;
@@ -190,16 +198,21 @@ async function returnReview() {
 
 async function submitReview() {
   if (!canEdit.value || saving.value || submitting.value || !validate()) return;
+  const selectedGrade = managerGrade.value;
+  if (!selectedGrade) return;
   submitting.value = true;
   try {
     const result = await periodReviewsApi.submitManagerReview(props.periodId, {
       expectedVersion: draftVersion.value,
       idempotencyKey: newIdempotencyKey(),
+      managerGrade: selectedGrade,
       indicators: bodyItems(),
     });
     draftVersion.value = result.draftVersion;
     if (detail.value) {
       detail.value.period.status = result.status;
+      detail.value.period.managerGrade = selectedGrade;
+      detail.value.period.managerScoreTotal = managerScoreTotal.value;
       detail.value.permissions.canEditManager = false;
     }
     ElMessage.success('直属上级评分已提交');
@@ -237,15 +250,39 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
       </PeriodReviewToolbar>
 
       <div class="manager-review__totals" data-testid="manager-review-totals">
-        <div>
-          <span>自评总分</span>
-          <strong data-testid="manager-review-self-total">{{ selfScoreTotal ?? '--' }}</strong>
+        <div class="manager-review__total-card">
+          <div class="manager-review__metric">
+            <span>自评总分</span>
+            <strong data-testid="manager-review-self-total">{{ selfScoreTotal ?? '--' }}</strong>
+          </div>
+          <div class="manager-review__readonly-grade">
+            <span>员工自评等级</span>
+            <strong data-testid="manager-review-self-grade">{{ detail.period.selfGrade ?? '--' }}</strong>
+          </div>
           <small>按有效权重自动计算</small>
         </div>
-        <div>
-          <span>直属上级总分</span>
-          <strong data-testid="manager-review-manager-total">{{ managerScoreTotal ?? '--' }}</strong>
-          <small>按有效权重自动计算</small>
+        <div class="manager-review__total-card" data-testid="manager-review-overall-grade">
+          <div class="manager-review__metric">
+            <span>直属上级总分</span>
+            <strong data-testid="manager-review-manager-total">{{ managerScoreTotal ?? '--' }}</strong>
+          </div>
+          <div class="manager-review__grade-field">
+            <span>本月直属上级等级 <b>*</b></span>
+            <div v-if="canEdit" class="manager-review__grade-options">
+              <button
+                v-for="grade in gradeOptions"
+                :key="grade"
+                type="button"
+                :aria-label="`直属上级等级 ${grade}`"
+                :class="{ 'is-active': managerGrade === grade }"
+                :disabled="!canEdit"
+                @click="managerGrade = grade; managerGradeError = ''"
+              >{{ grade }}</button>
+            </div>
+            <strong v-else class="manager-review__grade-result">{{ managerGrade ?? '--' }}</strong>
+          </div>
+          <small>等级与分数分别填写，不自动换算</small>
+          <em v-if="managerGradeError" data-testid="manager-review-grade-error">{{ managerGradeError }}</em>
         </div>
       </div>
 
@@ -323,11 +360,22 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
 
 <style scoped>
 .manager-review { min-width: 0; display: grid; gap: 14px; }
-.manager-review__totals { display: grid; grid-template-columns: repeat(2, minmax(0, 220px)); gap: 12px; }
-.manager-review__totals > div { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 3px 12px; padding: 12px 15px; border: 1px solid #e5eaf2; border-radius: 10px; background: #fff; }
+.manager-review__totals { display: grid; grid-template-columns: repeat(2, minmax(260px, 1fr)); gap: 12px; }
+.manager-review__total-card { min-width: 0; display: grid; gap: 8px; padding: 12px 15px; border: 1px solid #e5eaf2; border-radius: 10px; background: #fff; }
+.manager-review__metric,
+.manager-review__readonly-grade,
+.manager-review__grade-field { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
 .manager-review__totals span { color: #697487; font-size: 12px; }
-.manager-review__totals strong { justify-self: end; color: #202a3d; font-size: 22px; }
-.manager-review__totals small { grid-column: 1 / -1; color: #9aa3b2; font-size: 11px; }
+.manager-review__metric strong { color: #202a3d; font-size: 22px; }
+.manager-review__readonly-grade strong { color: #4f67d8; font-size: 15px; }
+.manager-review__grade-field span b { color: #e85353; }
+.manager-review__grade-options { display: grid; grid-template-columns: repeat(4, 38px); gap: 6px; }
+.manager-review__grade-options button { height: 30px; border: 1px solid #dfe4ec; border-radius: 7px; background: #fff; color: #596579; font-weight: 700; cursor: pointer; }
+.manager-review__grade-options button.is-active { border-color: #6076db; background: #eef2ff; color: #4f67d8; }
+.manager-review__grade-options button:disabled { cursor: default; opacity: .75; }
+.manager-review__grade-result { min-width: 38px; padding: 5px 11px; border-radius: 7px; background: #eef2ff; color: #4f67d8; font-size: 15px; text-align: center; }
+.manager-review__totals small { color: #9aa3b2; font-size: 11px; }
+.manager-review__totals em { color: #e64f4f; font-size: 11px; font-style: normal; }
 .manager-review__goals { display: grid; gap: 12px; }
 .manager-score-card { overflow: hidden; border: 1px solid #e5eaf2; border-radius: 13px; background: #fff; }
 .manager-score-card.is-selected { border-color: #bdc8f8; box-shadow: 0 3px 12px rgb(79 103 216 / 9%); }
@@ -360,7 +408,9 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
 .manager-score-card__warnings span { padding: 5px 8px; border-radius: 5px; background: #fff4e5; color: #a56a0a; font-size: 11px; }
 @media (max-width: 767px) {
   .manager-review { padding-bottom: 112px; }
-  .manager-review__totals { grid-template-columns: 1fr 1fr; }
+  .manager-review__totals { grid-template-columns: minmax(0, 1fr); }
+  .manager-review__grade-field { align-items: flex-start; flex-direction: column; }
+  .manager-review__grade-options { width: 100%; grid-template-columns: repeat(4, minmax(0, 1fr)); }
   .manager-score-card > header { grid-template-columns: 27px minmax(0, 1fr); padding: 12px; }
   .manager-score-card > header b { grid-column: 2; justify-self: start; }
   .manager-score-card__employee, .manager-score-card__form, .manager-score-card__result { grid-template-columns: minmax(0, 1fr); padding-right: 12px; padding-left: 12px; }

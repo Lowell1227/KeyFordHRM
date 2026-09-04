@@ -7,6 +7,7 @@ import {
 import {
   AssessmentPeriodStatus,
   IndicatorProgressHealth,
+  PerfGrade,
   Prisma,
   SysRole,
 } from '@prisma/client';
@@ -138,6 +139,8 @@ export class PeriodReviewsService {
         managerSubmittedAt: period.managerSubmittedAt,
         selfScoreTotal: this.decimalNumber(period.selfScoreTotal),
         managerScoreTotal: this.decimalNumber(period.managerScoreTotal),
+        selfGrade: period.selfGrade,
+        managerGrade: period.managerGrade,
         draftVersion: period.draftVersion,
       },
       context: {
@@ -229,6 +232,10 @@ export class PeriodReviewsService {
           update: data,
         });
       }
+      await tx.assessmentPeriod.update({
+        where: { id: periodId },
+        data: { selfGrade: dto.selfGrade },
+      });
       return nextVersion;
     });
 
@@ -249,6 +256,7 @@ export class PeriodReviewsService {
     this.assertEmployeeEditable(period, viewer);
     this.assertKnownItems(period, dto.indicators.map((item) => item.indicatorVersionItemId), true);
     this.assertEmployeeScores(period, dto.indicators);
+    this.assertGrade(dto.selfGrade, '请选择本月自评等级');
     const submittedAt = new Date();
     const itemsById = new Map((period.indicatorVersion?.items ?? []).map((item) => [item.id, item]));
     const selfScoreTotal = this.weightedScoreTotal(
@@ -268,6 +276,7 @@ export class PeriodReviewsService {
         draftVersion,
         submittedAt: submittedAt.toISOString(),
         selfScoreTotal,
+        selfGrade: dto.selfGrade,
         indicators: dto.indicators.map((item) => ({
           indicatorVersionItemId: item.indicatorVersionItemId,
           progress: item.progress,
@@ -328,6 +337,7 @@ export class PeriodReviewsService {
           status: 'manager_scoring',
           employeeSubmittedAt: submittedAt,
           selfScoreTotal,
+          selfGrade: dto.selfGrade,
         },
       });
       await tx.assessmentTask.updateMany({
@@ -404,6 +414,10 @@ export class PeriodReviewsService {
           update: data,
         });
       }
+      await tx.assessmentPeriod.update({
+        where: { id: periodId },
+        data: { managerGrade: dto.managerGrade },
+      });
       return nextVersion;
     });
 
@@ -459,6 +473,7 @@ export class PeriodReviewsService {
           employeeSubmittedAt: null,
           managerSubmittedAt: null,
           managerScoreTotal: null,
+          managerGrade: null,
           lockedAt: null,
         },
       });
@@ -495,8 +510,8 @@ export class PeriodReviewsService {
         type: 'period_employee_review_returned',
         title: `${periodReviewTitle(period.periodType, period.periodKey)}已退回`,
         content: reason
-          ? `主管退回了本期自评：${reason}`
-          : '主管退回了本期自评，请修改后重新提交。',
+          ? `绩效直属上级退回了本期自评：${reason}`
+          : '绩效直属上级退回了本期自评，请修改后重新提交。',
         extraData: {
           taskId: period.taskId,
           periodId,
@@ -522,6 +537,7 @@ export class PeriodReviewsService {
     this.assertManagerEditable(period, viewer, true);
     this.assertKnownItems(period, dto.indicators.map((item) => item.indicatorVersionItemId), true);
     this.assertManagerScores(period, dto.indicators);
+    this.assertGrade(dto.managerGrade, '请选择本月直属上级评分等级');
     const submittedAt = new Date();
     const itemsById = new Map((period.indicatorVersion?.items ?? []).map((item) => [item.id, item]));
     const managerScoreTotal = this.weightedScoreTotal(
@@ -542,6 +558,7 @@ export class PeriodReviewsService {
         draftVersion,
         submittedAt: submittedAt.toISOString(),
         managerScoreTotal,
+        managerGrade: dto.managerGrade,
         indicators: dto.indicators.map((item) => ({
           indicatorVersionItemId: item.indicatorVersionItemId,
           managerScore: item.managerScore,
@@ -578,6 +595,7 @@ export class PeriodReviewsService {
           status: 'completed',
           managerSubmittedAt: submittedAt,
           managerScoreTotal,
+          managerGrade: dto.managerGrade,
           lockedAt: submittedAt,
         },
       });
@@ -602,7 +620,7 @@ export class PeriodReviewsService {
         taskId: period.taskId,
         type: 'period_manager_review_completed',
         title: `${managerPeriodReviewTitle(period.periodType, period.periodKey)}已完成`,
-        content: '主管已完成本期评分，最终周期结果将在全部期间评分完成后汇总。',
+        content: '绩效直属上级已完成本期评分，最终周期结果将在全部期间评分完成后汇总。',
         extraData: {
           taskId: period.taskId,
           periodId,
@@ -695,6 +713,8 @@ export class PeriodReviewsService {
           lockedAt: null,
           selfScoreTotal: null,
           managerScoreTotal: null,
+          selfGrade: null,
+          managerGrade: null,
         },
       });
       await this.flow.reopenPeriodTx(tx, {
@@ -747,6 +767,8 @@ export class PeriodReviewsService {
             lockedAt: period.lockedAt.toISOString(),
             selfScoreTotal: this.decimalNumber(period.selfScoreTotal),
             managerScoreTotal: this.decimalNumber(period.managerScoreTotal),
+            selfGrade: period.selfGrade,
+            managerGrade: period.managerGrade,
           },
           newValue: {
             status: AssessmentPeriodStatus.self_eval,
@@ -856,7 +878,7 @@ export class PeriodReviewsService {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅本期冻结的绩效直属上级可评分' });
     }
     if (period.status !== 'manager_scoring' || period.managerSubmittedAt || period.lockedAt) {
-      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前期间不可进行主管评分' });
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '当前期间不可进行绩效直属上级评分' });
     }
     if (requireEmployeeSubmission && !period.employeeSubmittedAt) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '员工尚未提交本期自评' });
@@ -1050,15 +1072,21 @@ export class PeriodReviewsService {
       )) {
         throw new ConflictException({
           code: ERROR_CODE.PARAM_INVALID,
-          message: '请填写每项有效权重指标的主管月度评分',
+          message: '请填写每项有效权重指标的直属上级月度评分',
         });
       }
       if (!required && item.managerScore != null) {
         throw new ConflictException({
           code: ERROR_CODE.PARAM_INVALID,
-          message: '零权重指标不参与主管月度评分',
+          message: '零权重指标不参与直属上级月度评分',
         });
       }
+    }
+  }
+
+  private assertGrade(grade: PerfGrade | null | undefined, message: string): asserts grade is PerfGrade {
+    if (!grade || !Object.values(PerfGrade).includes(grade)) {
+      throw new ConflictException({ code: ERROR_CODE.PARAM_INVALID, message });
     }
   }
 

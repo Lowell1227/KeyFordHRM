@@ -77,6 +77,8 @@ describe('PeriodReviewsService', () => {
     managerSubmittedAt: null,
     selfScoreTotal: null,
     managerScoreTotal: null,
+    selfGrade: null,
+    managerGrade: null,
     task: {
       id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       cycleId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
@@ -245,6 +247,7 @@ describe('PeriodReviewsService', () => {
   it('saves the lightweight monthly fields under an optimistic draft version without overwriting legacy fields', async () => {
     const result = await service.saveEmployeeDraft(period.id, {
       expectedVersion: 2,
+      selfGrade: 'C',
       indicators: [{
         indicatorVersionItemId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
         progress: 80,
@@ -266,6 +269,10 @@ describe('PeriodReviewsService', () => {
         selfScore: 88,
       },
     }));
+    expect(tx.assessmentPeriod.update).toHaveBeenCalledWith({
+      where: { id: period.id },
+      data: { selfGrade: 'C' },
+    });
     expect(result).toMatchObject({ periodId: period.id, draftVersion: 3 });
     expect(tx.indicatorProgressUpdate.create).not.toHaveBeenCalled();
   });
@@ -274,6 +281,7 @@ describe('PeriodReviewsService', () => {
     const result = await service.submitEmployeeReview(period.id, {
       expectedVersion: 2,
       idempotencyKey: '13131313-1313-4313-8313-131313131313',
+      selfGrade: 'B',
       indicators: [{
         indicatorVersionItemId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
         progress: 80,
@@ -281,7 +289,7 @@ describe('PeriodReviewsService', () => {
         employeeComment: '完成尾款签署',
         selfScore: 88,
       }],
-    }, employee);
+    } as any, employee);
 
     expect(tx.indicatorProgressUpdate.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -297,11 +305,14 @@ describe('PeriodReviewsService', () => {
       data: expect.objectContaining({
         stage: 'employee',
         idempotencyKey: '13131313-1313-4313-8313-131313131313',
-        snapshot: expect.objectContaining({ indicators: [expect.objectContaining({ employeeComment: '完成尾款签署' })] }),
+        snapshot: expect.objectContaining({
+          selfGrade: 'B',
+          indicators: [expect.objectContaining({ employeeComment: '完成尾款签署' })],
+        }),
       }),
     });
     expect(tx.assessmentPeriod.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ status: 'manager_scoring', selfScoreTotal: 88 }),
+      data: expect.objectContaining({ status: 'manager_scoring', selfScoreTotal: 88, selfGrade: 'B' }),
     }));
     expect(result).toMatchObject({ periodId: period.id, status: 'manager_scoring', draftVersion: 3 });
     expect(notifications.create).not.toHaveBeenCalled();
@@ -315,12 +326,13 @@ describe('PeriodReviewsService', () => {
     await service.submitEmployeeReview(period.id, {
       expectedVersion: 2,
       idempotencyKey: '21212121-2121-4121-8121-212121212121',
+      selfGrade: 'B',
       indicators: [{
         indicatorVersionItemId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
         selfScore: 88,
         ...partial,
       }],
-    }, employee);
+    } as any, employee);
 
     expect(tx.indicatorProgressUpdate.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -354,6 +366,7 @@ describe('PeriodReviewsService', () => {
     await expect(service.submitEmployeeReview(period.id, {
       expectedVersion: 2,
       idempotencyKey: '17171717-1717-4717-8717-171717171717',
+      selfGrade: 'B',
       indicators: [{
         indicatorVersionItemId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
         progress: null,
@@ -379,6 +392,7 @@ describe('PeriodReviewsService', () => {
     await expect(service.submitEmployeeReview(period.id, {
       expectedVersion: 2,
       idempotencyKey: '18181818-1818-4818-8818-181818181818',
+      selfGrade: 'B',
       indicators: [{
         indicatorVersionItemId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
         progress: null,
@@ -387,6 +401,17 @@ describe('PeriodReviewsService', () => {
         selfScore: null,
       }],
     }, employee)).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('rejects an employee submission without an overall self grade', async () => {
+    await expect(service.submitEmployeeReview(period.id, {
+      expectedVersion: 2,
+      idempotencyKey: '28282828-2828-4828-8828-282828282828',
+      indicators: [{
+        indicatorVersionItemId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        selfScore: 88,
+      }],
+    } as any, employee)).rejects.toBeInstanceOf(ConflictException);
   });
 
   it('rejects unrelated employees and stale draft versions', async () => {
@@ -407,6 +432,7 @@ describe('PeriodReviewsService', () => {
 
     const result = await (service as any).saveManagerDraft(period.id, {
       expectedVersion: 2,
+      managerGrade: 'B',
       indicators: [{
         indicatorVersionItemId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
         managerScore: 90,
@@ -417,6 +443,10 @@ describe('PeriodReviewsService', () => {
     expect(tx.assessmentPeriodIndicatorReview.upsert).toHaveBeenCalledWith(expect.objectContaining({
       update: { managerScore: 90, managerComment: '交付质量良好' },
     }));
+    expect(tx.assessmentPeriod.update).toHaveBeenCalledWith({
+      where: { id: period.id },
+      data: { managerGrade: 'B' },
+    });
     expect(result).toMatchObject({ periodId: period.id, status: 'manager_scoring', draftVersion: 3 });
     await expect((service as any).saveManagerDraft(period.id, {
       expectedVersion: 2,
@@ -474,6 +504,7 @@ describe('PeriodReviewsService', () => {
     const result = await (service as any).submitManagerReview(period.id, {
       expectedVersion: 2,
       idempotencyKey: '16161616-1616-4616-8616-161616161616',
+      managerGrade: 'A',
       indicators: [{
         indicatorVersionItemId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
         managerScore: 90,
@@ -482,13 +513,39 @@ describe('PeriodReviewsService', () => {
     }, manager);
 
     expect(tx.assessmentPeriodReviewRevision.create).toHaveBeenCalledWith({
-      data: expect.objectContaining({ stage: 'manager', idempotencyKey: '16161616-1616-4616-8616-161616161616' }),
+      data: expect.objectContaining({
+        stage: 'manager',
+        idempotencyKey: '16161616-1616-4616-8616-161616161616',
+        snapshot: expect.objectContaining({ managerGrade: 'A' }),
+      }),
     });
     expect(tx.assessmentPeriod.update).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ status: 'completed', managerScoreTotal: 90, lockedAt: expect.any(Date) }),
+      data: expect.objectContaining({
+        status: 'completed',
+        managerScoreTotal: 90,
+        managerGrade: 'A',
+        lockedAt: expect.any(Date),
+      }),
     }));
     expect(aggregation.refreshTask).toHaveBeenCalledWith(period.taskId, tx, manager.id);
     expect(result).toMatchObject({ status: 'completed', draftVersion: 3 });
+  });
+
+  it('rejects a manager submission without an overall manager grade', async () => {
+    prisma.assessmentPeriod.findUnique.mockResolvedValue({
+      ...period,
+      status: 'manager_scoring',
+      employeeSubmittedAt: new Date('2027-02-02T08:00:00.000Z'),
+    });
+
+    await expect((service as any).submitManagerReview(period.id, {
+      expectedVersion: 2,
+      idempotencyKey: '29292929-2929-4929-8929-292929292929',
+      indicators: [{
+        indicatorVersionItemId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
+        managerScore: 90,
+      }],
+    }, manager)).rejects.toBeInstanceOf(ConflictException);
   });
 
   it('requires manager scores only for positive-weight indicators', async () => {
@@ -513,6 +570,7 @@ describe('PeriodReviewsService', () => {
     await expect((service as any).submitManagerReview(period.id, {
       expectedVersion: 2,
       idempotencyKey: '20202020-2020-4020-8020-202020202020',
+      managerGrade: 'B',
       indicators: [{
         indicatorVersionItemId: 'ffffffff-ffff-4fff-8fff-ffffffffffff',
         managerScore: 87,
@@ -540,6 +598,8 @@ describe('PeriodReviewsService', () => {
       lockedAt: new Date('2027-02-04T08:00:00.000Z'),
       selfScoreTotal: new Prisma.Decimal(88),
       managerScoreTotal: new Prisma.Decimal(90),
+      selfGrade: 'B',
+      managerGrade: 'A',
       task: {
         ...period.task,
         status: 'hr_calibration',
@@ -637,6 +697,8 @@ describe('PeriodReviewsService', () => {
           lockedAt: null,
           selfScoreTotal: null,
           managerScoreTotal: null,
+          selfGrade: null,
+          managerGrade: null,
         },
       });
       expect(flow.reopenPeriodTx).toHaveBeenCalledWith(tx, expect.objectContaining({
