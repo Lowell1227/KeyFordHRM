@@ -1,6 +1,6 @@
 {
   "name": "kayford-performance-api",
-  "version": "0.1.0",
+  "version": "0.8.0",
   "description": "孚德智能绩效管理系统 后端（NestJS + Prisma）",
   "author": "Kayford",
   "private": true,

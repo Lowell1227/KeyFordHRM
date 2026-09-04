@@ -1,4 +1,6 @@
 <script setup lang="ts">
+const productVersion = '0.8';
+
 type CapabilityStatus = 'available' | 'partial' | 'pending' | 'paused';
 
 type CapabilityItem = {
@@ -94,7 +96,7 @@ const capabilities: CapabilityItem[] = [
           集中记录当前已有能力和缺失项，避免后续规划遗漏。本页只展示状态，不提供配置操作。
         </p>
       </div>
-      <span class="read-only-tag">只读</span>
+      <span class="read-only-tag">版本 {{ productVersion }} · 只读</span>
     </header>
 
     <section class="capability-panel" aria-label="系统能力状态">

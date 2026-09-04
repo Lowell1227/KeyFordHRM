@@ -1,6 +1,6 @@
 {
   "name": "kayford-performance-web",
-  "version": "0.1.0",
+  "version": "0.8.0",
   "description": "孚德智能绩效管理系统 前端（Vue3 + Element Plus）",
   "private": true,
   "type": "module",
