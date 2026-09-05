@@ -8,7 +8,8 @@ import { ERROR_CODE } from '@/common/constants/error-codes';
 describe('FlowService', () => {
   let service: FlowService;
   let tx: {
-    assessmentTask: { update: jest.Mock };
+    assessmentTask: { update: jest.Mock; groupBy: jest.Mock };
+    assessmentCycle: { findUnique: jest.Mock; update: jest.Mock };
     flowRecord: { create: jest.Mock };
   };
   let prisma: { $transaction: jest.Mock };
@@ -32,7 +33,8 @@ describe('FlowService', () => {
 
   beforeEach(async () => {
     tx = {
-      assessmentTask: { update: jest.fn() },
+      assessmentTask: { update: jest.fn(), groupBy: jest.fn().mockResolvedValue([]) },
+      assessmentCycle: { findUnique: jest.fn(), update: jest.fn() },
       flowRecord: { create: jest.fn() },
     };
     prisma = {
@@ -273,6 +275,95 @@ describe('FlowService', () => {
           }),
         }),
       });
+    });
+  });
+
+  describe('syncCycleStage 周期阶段同步', () => {
+    function mockCycleStatus(status: string | null) {
+      tx.assessmentCycle.findUnique.mockResolvedValue(status ? { status } : null);
+    }
+
+    it('有任务进入 hr_calibration 时周期推进到 hr_calibration', async () => {
+      mockCycleStatus('manager_score');
+      tx.assessmentTask.groupBy.mockResolvedValue([
+        { status: 'hr_calibration', _count: { _all: 1 } },
+        { status: 'manager_scoring', _count: { _all: 3 } },
+      ]);
+
+      await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
+
+      expect(tx.assessmentCycle.update).toHaveBeenCalledWith({
+        where: { id: 'cycle-1' },
+        data: { status: 'hr_calibration' },
+      });
+    });
+
+    it('全部任务过了校准后周期推进到 approval', async () => {
+      mockCycleStatus('hr_calibration');
+      tx.assessmentTask.groupBy.mockResolvedValue([
+        { status: 'approval', _count: { _all: 2 } },
+      ]);
+
+      await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
+
+      expect(tx.assessmentCycle.update).toHaveBeenCalledWith({
+        where: { id: 'cycle-1' },
+        data: { status: 'approval' },
+      });
+    });
+
+    it('审批退回校准时周期回退到 hr_calibration', async () => {
+      mockCycleStatus('approval');
+      tx.assessmentTask.groupBy.mockResolvedValue([
+        { status: 'approval', _count: { _all: 1 } },
+        { status: 'hr_calibration', _count: { _all: 1 } },
+      ]);
+
+      await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
+
+      expect(tx.assessmentCycle.update).toHaveBeenCalledWith({
+        where: { id: 'cycle-1' },
+        data: { status: 'hr_calibration' },
+      });
+    });
+
+    it('校准驳回后任务回到评分中时周期回退到 manager_score', async () => {
+      mockCycleStatus('hr_calibration');
+      tx.assessmentTask.groupBy.mockResolvedValue([
+        { status: 'manager_scoring', _count: { _all: 2 } },
+      ]);
+
+      await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
+
+      expect(tx.assessmentCycle.update).toHaveBeenCalledWith({
+        where: { id: 'cycle-1' },
+        data: { status: 'manager_score' },
+      });
+    });
+
+    it('公示后的周期不介入', async () => {
+      mockCycleStatus('published');
+      await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
+      expect(tx.assessmentTask.groupBy).not.toHaveBeenCalled();
+      expect(tx.assessmentCycle.update).not.toHaveBeenCalled();
+    });
+
+    it('目标制定阶段的周期不介入', async () => {
+      mockCycleStatus('indicator_setting');
+      await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
+      expect(tx.assessmentTask.groupBy).not.toHaveBeenCalled();
+      expect(tx.assessmentCycle.update).not.toHaveBeenCalled();
+    });
+
+    it('阶段已一致时不写库', async () => {
+      mockCycleStatus('hr_calibration');
+      tx.assessmentTask.groupBy.mockResolvedValue([
+        { status: 'hr_calibration', _count: { _all: 1 } },
+      ]);
+
+      await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
+
+      expect(tx.assessmentCycle.update).not.toHaveBeenCalled();
     });
   });
 });

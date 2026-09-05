@@ -1,5 +1,5 @@
 import { ConflictException, Injectable } from '@nestjs/common';
-import { AssessmentTask, FlowAction, FlowNodeType, Prisma, TaskStatus } from '@prisma/client';
+import { AssessmentTask, CycleStatus, FlowAction, FlowNodeType, Prisma, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 
@@ -105,6 +105,47 @@ export class FlowService {
   constructor(private readonly prisma: PrismaService) {}
 
   /**
+   * 周期阶段跟随任务状态自动推进/回退。
+   *
+   * 只处理进行中的周期（self_eval/manager_score/hr_calibration/approval），
+   * 公示及之后由 publish/scheduler 自己管理，draft/indicator_setting 阶段不介入。
+   *
+   * 规则（按优先级取第一个命中）：
+   * - 有任务处于 dept_review / hr_calibration → 周期 hr_calibration
+   * - 否则有任务处于 approval → 周期 approval
+   * - 否则有任务处于 manager_scoring → 周期 manager_score
+   * - 否则保持不变
+   */
+  async syncCycleStage(
+    tx: Prisma.TransactionClient,
+    cycleId: string,
+  ): Promise<void> {
+    const cycle = await tx.assessmentCycle.findUnique({
+      where: { id: cycleId },
+      select: { status: true },
+    });
+    const guard: CycleStatus[] = ['self_eval', 'manager_score', 'hr_calibration', 'approval'];
+    if (!cycle || !guard.includes(cycle.status)) return;
+
+    const agg = await tx.assessmentTask.groupBy({
+      by: ['status'],
+      where: { cycleId, isExempt: false },
+      _count: { _all: true },
+    });
+    const has = (...statuses: TaskStatus[]) => agg.some((g) => statuses.includes(g.status));
+
+    let target: CycleStatus | null = null;
+    if (has('dept_review', 'hr_calibration')) target = 'hr_calibration';
+    else if (has('approval')) target = 'approval';
+    else if (has('manager_scoring')) target = 'manager_score';
+
+    if (target && target !== cycle.status) {
+      await tx.assessmentCycle.update({ where: { id: cycleId }, data: { status: target } });
+    }
+  }
+
+
+  /**
    * 执行状态转换。
    *
    * 1. 在 FLOW_TRANSITIONS 中查找 (from, action, to) 匹配项；未找到抛 4009。
@@ -146,6 +187,8 @@ export class FlowService {
           extraData,
         },
       });
+
+      await this.syncCycleStage(tx, task.cycleId);
 
       return updatedTask;
     });
@@ -192,6 +235,8 @@ export class FlowService {
         extraData,
       },
     });
+
+    await this.syncCycleStage(tx, task.cycleId);
 
     return { oldStatus: task.status, newStatus: updatedTask.status, nodeType: transition.nodeType };
   }
@@ -244,6 +289,8 @@ export class FlowService {
         },
       },
     });
+
+    await this.syncCycleStage(tx, input.task.cycleId);
 
     return { oldStatus: input.task.status, newStatus: TaskStatus.self_eval };
   }
