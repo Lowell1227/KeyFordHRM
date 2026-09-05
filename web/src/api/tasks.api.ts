@@ -25,8 +25,9 @@ import type {
   ExemptTaskBody,
   FlowRecord,
   PerformanceInterview,
+  FinalGradeDetail,
 } from "@/types/api.types";
-import type { TaskStatus } from "@/types/enums";
+import type { PerfGrade, TaskStatus } from "@/types/enums";
 
 export interface TasksApiClient {
   get(
@@ -247,6 +248,17 @@ export function createTasksApi(client: TasksApiClient) {
     /** GET /tasks/:id/flow-records — 任务操作日志 */
     getFlowRecords(id: string): Promise<FlowRecord[]> {
       return apiGet(`/tasks/${id}/flow-records`);
+    },
+
+    // 整周期结果评定
+    /** GET /tasks/:id/final-grade — 评定页数据 */
+    getFinalGrade(id: string): Promise<FinalGradeDetail> {
+      return apiGet(`/tasks/${id}/final-grade`);
+    },
+
+    /** POST /tasks/:id/final-grade — 提交整周期最终等级 */
+    submitFinalGrade(id: string, body: { grade: PerfGrade }): Promise<TaskActionResult> {
+      return apiPost(`/tasks/${id}/final-grade`, body);
     },
   };
 }

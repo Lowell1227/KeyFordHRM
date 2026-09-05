@@ -84,7 +84,8 @@ export type HrCapability =
   | 'employee_archive_review'
   | 'organization_edit'
   | 'cycle_plan_edit'
-  | 'cycle_plan_review';
+  | 'cycle_plan_review'
+  | 'performance_calibration';
 
 export interface CurrentUser {
   id: string;
@@ -1093,6 +1094,12 @@ export interface ManagerScoreIndicatorItem {
   extraScores?: ExtraScoreItem[];
 }
 
+/** V1 周期级评分的一票否决字段（校准环节的一票否决已移除）。 */
+export interface VetoGradeBody {
+  isVeto?: boolean;
+  vetoReason?: string;
+}
+
 export interface SubmitManagerScoreBody {
   expectedUpdatedAt: string;
   indicators: ManagerScoreIndicatorItem[];
@@ -1159,36 +1166,124 @@ export interface GradeDistributionEntry {
 export interface CalibrationCandidate {
   taskId: string;
   employeeName: string;
-  deptName?: string;
-  position?: string;
+  deptName?: string | null;
+  position?: string | null;
+  status: TaskStatus;
   // 未到评分阶段的任务这两项为 null（workbench 返回全员在途任务）
   calculatedScore: number | null;
+  /** 直属上级独立录入的整周期最终等级。 */
   rawGrade: PerfGrade | null;
-  calibratedGrade?: PerfGrade;
-  isVeto?: boolean;
-  managerName?: string;
+  finalGradeSubmittedAt?: string | null;
+  managerName?: string | null;
+}
+
+export interface CalibrationProgress {
+  /** 评定中：月度评分/整周期结果评定未完成。 */
+  finalGrading: number;
+  /** 待部门复核。 */
+  deptReview: number;
+  /** 待 HR 校准。 */
+  pending: number;
+  /** 审批中。 */
+  inApproval: number;
+  /** 已定级完成（公示及之后）。 */
+  done: number;
 }
 
 export interface CalibrationSummary {
   gradeDistribution: Record<PerfGrade, GradeDistributionEntry>;
   totalActive: number;
-  pendingCalibration: number;
+  progress: CalibrationProgress;
 }
 
-export interface SubmitCalibrationBody {
-  submit: boolean;
-  calibrations: {
-    taskId: string;
-    calibratedGrade: PerfGrade;
-    calibrationNote?: string;
-    isVeto?: boolean;
-    vetoReason?: string;
-  }[];
+/** POST /cycles/:id/calibration/confirm 请求体。 */
+export interface ConfirmCalibrationBody {
+  taskIds: string[];
 }
 
-export interface VetoGradeBody {
-  isVeto: boolean;
-  vetoReason?: string;
+/** POST /cycles/:id/calibration/reject 请求体。 */
+export interface RejectCalibrationBody {
+  taskIds: string[];
+  reason: string;
+}
+
+/** 个人详情抽屉（校准依据）。 */
+export interface CalibrationCandidateDetail {
+  taskId: string;
+  employeeName: string;
+  deptName: string | null;
+  position: string | null;
+  managerName: string | null;
+  status: TaskStatus;
+  calculatedScore: number | null;
+  finalGrade: PerfGrade | null;
+  periods: Array<{
+    periodKey: string;
+    status: string;
+    selfGrade: PerfGrade | null;
+    managerGrade: PerfGrade | null;
+    selfScoreTotal: number | null;
+    managerScoreTotal: number | null;
+  }>;
+  indicators: Array<{
+    name: string;
+    weight: number;
+    type: string;
+    avgSelfScore: number | null;
+    avgManagerScore: number | null;
+  }>;
+  rejectHistory: Array<{
+    nodeType: string;
+    comment: string | null;
+    createdAt: string;
+    actorName: string | null;
+  }>;
+}
+
+/** 整周期结果评定页数据。 */
+export interface FinalGradeDetail {
+  taskId: string;
+  cycleId: string;
+  cycleName: string;
+  employeeName: string;
+  deptName: string | null;
+  position: string | null;
+  status: TaskStatus;
+  managerName: string | null;
+  periods: Array<{
+    periodKey: string;
+    periodType: string;
+    status: string;
+    selfGrade: PerfGrade | null;
+    managerGrade: PerfGrade | null;
+    selfScoreTotal: number | null;
+    managerScoreTotal: number | null;
+  }>;
+  calculatedScore: number | null;
+  currentGrade: PerfGrade | null;
+  allPeriodsComplete: boolean;
+  canSubmit: boolean;
+  latestReject: {
+    nodeType: string;
+    comment: string | null;
+    createdAt: string;
+    actorName: string | null;
+  } | null;
+}
+
+/** 审批概览（全校准分布只读 + 退回记录）。 */
+export interface ApprovalOverview {
+  gradeDistribution: Record<PerfGrade, GradeDistributionEntry>;
+  ownPending: number;
+  ownTotal: number;
+  cyclePending: number;
+  rejects: Array<{
+    employeeName: string;
+    nodeType: string;
+    comment: string | null;
+    createdAt: string;
+    actorName: string | null;
+  }>;
 }
 
 export interface ApprovalTaskView {

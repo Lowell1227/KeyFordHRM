@@ -5,11 +5,15 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { approvalApi } from '@/api/approval.api';
 import { cyclesApi } from '@/api/cycles.api';
 import GradeTag from '@/components/common/GradeTag.vue';
+import GradeDistChart from '@/components/charts/GradeDistChart.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
-import type { ApprovalTaskView, AssessmentCycle } from '@/types/api.types';
+import type { ApprovalOverview, ApprovalTaskView, AssessmentCycle } from '@/types/api.types';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 import { useAuthStore } from '@/stores/auth.store';
+import { TASK_STATUS_META, type PerfGrade } from '@/types/enums';
+import { GRADE_LABELS } from '@/utils/grade';
+import { formatDateTime } from '@/utils/date';
 import {
   canOperatePerformanceApproval,
   canOperatePerformanceApprovalTask,
@@ -22,10 +26,13 @@ const auth = useAuthStore();
 const cycles = ref<AssessmentCycle[]>([]);
 const selectedCycleId = ref('');
 const tasks = ref<ApprovalTaskView[]>([]);
+const overview = ref<ApprovalOverview | null>(null);
 const loading = ref(false);
 const submitting = ref(false);
 const selectedTaskIds = ref<string[]>([]);
 let approvalReady = false;
+
+const GRADES = ['A', 'B', 'C', 'D'] as const;
 
 const selectedCycle = computed(() =>
   cycles.value.find((c) => c.id === selectedCycleId.value),
@@ -42,6 +49,33 @@ const rejectDialog = ref({
   taskId: undefined as string | undefined,
   comment: '',
 });
+
+const gradeCounts = computed<Record<PerfGrade, number>>(() => {
+  const counts: Record<PerfGrade, number> = { A: 0, B: 0, C: 0, D: 0 };
+  const dist = overview.value?.gradeDistribution;
+  if (dist) {
+    (Object.keys(counts) as PerfGrade[]).forEach((g) => {
+      counts[g] = dist[g]?.count ?? 0;
+    });
+  }
+  return counts;
+});
+
+const distTotal = computed(() =>
+  (Object.keys(gradeCounts.value) as PerfGrade[]).reduce((sum, g) => sum + gradeCounts.value[g], 0),
+);
+
+function statusLabel(status: ApprovalTaskView['status']): string {
+  return TASK_STATUS_META[status]?.label ?? status;
+}
+
+const TAG_TYPES = ['info', 'primary', 'success', 'warning', 'danger'] as const;
+type TagType = (typeof TAG_TYPES)[number];
+
+function statusType(status: ApprovalTaskView['status']): TagType {
+  const type = TASK_STATUS_META[status]?.type;
+  return (TAG_TYPES as readonly string[]).includes(type) ? (type as TagType) : 'info';
+}
 
 async function loadCycles() {
   try {
@@ -71,6 +105,7 @@ async function normalizeApprovalCycle() {
 
 function clearApprovalState() {
   tasks.value = [];
+  overview.value = null;
   selectedTaskIds.value = [];
   rejectDialog.value = {
     visible: false,
@@ -88,13 +123,20 @@ async function selectApprovalCycle(cycleId: string) {
 async function loadTasks() {
   if (!selectedCycleId.value) {
     tasks.value = [];
+    overview.value = null;
     return;
   }
   loading.value = true;
   try {
-    tasks.value = await approvalApi.getApprovalList(selectedCycleId.value);
+    const [list, overviewData] = await Promise.all([
+      approvalApi.getApprovalList(selectedCycleId.value),
+      approvalApi.getOverview(selectedCycleId.value),
+    ]);
+    tasks.value = list;
+    overview.value = overviewData;
   } catch {
     tasks.value = [];
+    overview.value = null;
   } finally {
     loading.value = false;
   }
@@ -330,6 +372,68 @@ function handleBatchReject() {
           description="你可以查看审批结果，但只有任务指定的最终业务审批人可以通过或退回。"
           show-icon
         />
+
+        <div v-if="overview" class="approval-view__overview">
+          <ChartCard class="approval-view__overview-card">
+            <template #title>全校准分布（只读）</template>
+            <GradeDistChart :data="gradeCounts" title="" :height="220" />
+            <div class="ratio-row">
+              <div
+                v-for="grade in GRADES"
+                :key="grade"
+                class="ratio-item"
+                :class="{ 'ratio-item--warning': overview.gradeDistribution[grade]?.isOverLimit }"
+              >
+                <span class="ratio-item__grade">{{ GRADE_LABELS[grade] }}</span>
+                <span class="ratio-item__value">
+                  {{ gradeCounts[grade] }} 人
+                  <template v-if="distTotal > 0">
+                    · {{ ((gradeCounts[grade] / distTotal) * 100).toFixed(1) }}%
+                  </template>
+                </span>
+                <span v-if="overview.gradeDistribution[grade]?.isOverLimit" class="ratio-item__warn">
+                  超上限
+                </span>
+              </div>
+            </div>
+          </ChartCard>
+
+          <ChartCard class="approval-view__overview-card">
+            <template #title>审批进度</template>
+            <div class="progress-grid">
+              <div class="progress-cell">
+                <span class="progress-cell__num">{{ overview.ownPending }}</span>
+                <span class="progress-cell__label">待我审批</span>
+              </div>
+              <div class="progress-cell">
+                <span class="progress-cell__num">{{ overview.ownTotal }}</span>
+                <span class="progress-cell__label">我的审批范围</span>
+              </div>
+              <div class="progress-cell">
+                <span class="progress-cell__num">{{ overview.cyclePending }}</span>
+                <span class="progress-cell__label">全周期待审批</span>
+              </div>
+            </div>
+            <template v-if="overview.rejects.length > 0">
+              <p class="reject-list__title">最近退回记录</p>
+              <div class="reject-list">
+                <div v-for="(r, idx) in overview.rejects" :key="idx" class="reject-item">
+                  <div class="reject-item__head">
+                    <span class="reject-item__name">{{ r.employeeName }}</span>
+                    <el-tag size="small" :type="r.nodeType === 'approval' ? 'danger' : 'warning'">
+                      {{ r.nodeType === 'approval' ? '审批退回' : '校准驳回' }}
+                    </el-tag>
+                    <span class="reject-item__meta">
+                      {{ r.actorName ?? '系统' }} · {{ formatDateTime(r.createdAt) }}
+                    </span>
+                  </div>
+                  <p v-if="r.comment" class="reject-item__comment">{{ r.comment }}</p>
+                </div>
+              </div>
+            </template>
+            <EmptyState v-else description="暂无退回记录" />
+          </ChartCard>
+        </div>
         <el-table
           class="app-table"
           v-loading="loading"
@@ -352,25 +456,14 @@ function handleBatchReject() {
               {{ row.totalScore.toFixed(2) }}
             </template>
           </el-table-column>
-          <el-table-column label="原始等级" width="100">
+          <el-table-column label="最终等级" width="100">
             <template #default="{ row }">
               <GradeTag :grade="row.rawGrade" size="small" />
             </template>
           </el-table-column>
-          <el-table-column label="校准等级" width="100">
-            <template #default="{ row }">
-              <GradeTag :grade="row.calibratedGrade" size="small" />
-            </template>
-          </el-table-column>
-          <el-table-column label="一票否决" width="100" align="center">
-            <template #default="{ row }">
-              <el-tag v-if="row.isVeto" type="danger" size="small">已否决</el-tag>
-              <span v-else>-</span>
-            </template>
-          </el-table-column>
           <el-table-column label="状态" width="140">
             <template #default="{ row }">
-              {{ row.status }}
+              <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column v-if="canOperateApproval" label="操作" width="160" fixed="right">
@@ -454,5 +547,115 @@ function handleBatchReject() {
   margin: 0 0 16px;
   color: #606266;
   font-size: 14px;
+}
+
+.approval-view__overview {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  margin-bottom: 16px;
+}
+
+@media (max-width: 1100px) {
+  .approval-view__overview {
+    grid-template-columns: 1fr;
+  }
+}
+
+.ratio-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 12px;
+  margin-top: 8px;
+}
+
+.ratio-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+.ratio-item__grade {
+  font-weight: 600;
+}
+
+.ratio-item--warning {
+  color: var(--el-color-danger);
+}
+
+.ratio-item__warn {
+  font-size: 12px;
+  padding: 0 6px;
+  border: 1px solid currentColor;
+  border-radius: 4px;
+}
+
+.progress-grid {
+  display: flex;
+  gap: 24px;
+  padding: 8px 0 4px;
+}
+
+.progress-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.progress-cell__num {
+  font-size: 24px;
+  font-weight: 600;
+  color: var(--el-color-primary);
+}
+
+.progress-cell__label {
+  font-size: 13px;
+  color: var(--el-text-color-secondary);
+}
+
+.reject-list__title {
+  margin: 14px 0 8px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--el-text-color-regular);
+}
+
+.reject-list {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.reject-item {
+  padding: 8px 12px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 6px;
+}
+
+.reject-item__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.reject-item__name {
+  font-weight: 600;
+  font-size: 13px;
+}
+
+.reject-item__meta {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.reject-item__comment {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+  white-space: pre-wrap;
 }
 </style>

@@ -4,6 +4,8 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { FlowService } from '@/tasks/flow.service';
+import { NotificationsService } from '@/notifications/notifications.service';
+import { buildGradeDistribution } from '@/calibration/calibration.service';
 import { BulkApprovalDto } from './dto/bulk-approval.dto';
 import { ApprovalRejectDto } from './dto/approval-reject.dto';
 
@@ -35,6 +37,7 @@ export class ApprovalService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly flowService: FlowService,
+    private readonly notificationsService: NotificationsService,
   ) {}
 
   /** GET /cycles/:id/approval — 按审批人过滤的待审批列表。 */
@@ -62,6 +65,55 @@ export class ApprovalService {
     });
 
     return tasks.map((task) => this.mapToListItem(task));
+  }
+
+  /**
+   * GET /cycles/:id/approval/overview — 审批概览（全校准分布只读 + 名下进度）。
+   *
+   * 分管总可查看整个周期的等级分布作为审批参照，但只能操作自己名下的任务。
+   */
+  async getOverview(cycleId: string, viewer: AuthUser) {
+    const cycle = await this.getCycleOrThrow(cycleId);
+    const allTasks = await this.prisma.assessmentTask.findMany({
+      where: { cycleId, isExempt: false },
+      include: { gradeResult: { select: { calibratedGrade: true, rawGrade: true } } },
+    });
+
+    const ownPending = allTasks.filter(
+      (t) => t.status === 'approval' && t.approverId === viewer.id,
+    ).length;
+    const ownTotal = allTasks.filter((t) => t.approverId === viewer.id).length;
+    const cyclePending = allTasks.filter((t) => t.status === 'approval').length;
+
+    // 校准环节退回记录（HR 驳回 + 部门复核退回），供审批人了解重评背景
+    const rejectRecords = await this.prisma.flowRecord.findMany({
+      where: {
+        cycleId,
+        action: 'reject',
+        nodeType: { in: ['hr_calibration', 'dept_review'] },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 50,
+      include: {
+        actor: { select: { name: true } },
+        task: { select: { employee: { select: { name: true } } } },
+      },
+    });
+
+    return {
+      gradeDistribution: buildGradeDistribution(allTasks, cycle),
+      ownPending,
+      ownTotal,
+      /** 周期内仍处审批中的任务数；为 0 表示已全部通过或退回。 */
+      cyclePending,
+      rejects: rejectRecords.map((r) => ({
+        employeeName: r.task?.employee?.name ?? '',
+        nodeType: r.nodeType,
+        comment: r.comment,
+        createdAt: r.createdAt,
+        actorName: r.actor?.name ?? null,
+      })),
+    };
   }
 
   /** POST /cycles/:id/approval — 批量审批（只写 GradeResult，不改 status）。 */
@@ -129,7 +181,10 @@ export class ApprovalService {
   ): Promise<{ id: string; status: TaskStatus }> {
     const task = await this.prisma.assessmentTask.findUnique({
       where: { id: taskId },
-      include: { gradeResult: { select: { approvedAt: true } } },
+      include: {
+        employee: { select: { name: true } },
+        gradeResult: { select: { approvedAt: true } },
+      },
     });
 
     if (!task) {
@@ -169,6 +224,30 @@ export class ApprovalService {
       },
       { timeout: 60000, maxWait: 10000 },
     );
+
+    // 通知 HR（优先通知执行确认的 HR，否则通知周期 HR 负责人）
+    const gradeResult = await this.prisma.gradeResult.findUnique({
+      where: { taskId: task.id },
+      select: { hrCalibratorId: true },
+    });
+    const cycle = await this.prisma.assessmentCycle.findUnique({
+      where: { id: task.cycleId },
+      select: { hrOwnerId: true, name: true },
+    });
+    const notifyUserId = gradeResult?.hrCalibratorId ?? cycle?.hrOwnerId ?? null;
+    if (notifyUserId) {
+      await this.notificationsService.create({
+        userId: notifyUserId,
+        senderId: viewer.id,
+        cycleId: task.cycleId,
+        taskId: task.id,
+        type: 'approval_rejected',
+        title: '绩效结果审批被退回',
+        content: `${cycle?.name ?? ''}：${task.employee?.name ?? '员工'} 的绩效结果被审批退回：${dto.comment}。请在校准环节重新处理。`,
+      }).catch(() => {
+        // 推送失败不阻断业务
+      });
+    }
 
     return { id: task.id, status: 'hr_calibration' };
   }

@@ -61,6 +61,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '绩效校准',
       roles: ['hr', 'system_admin'],
+      hrCapabilities: ['performance_calibration'],
       navigation: { module: 'performance', label: '绩效校准', order: 30, group: 'performance', groupLabel: '绩效运营' },
     },
   },
@@ -225,6 +226,12 @@ export const routes: RouteRecordRaw[] = [
     name: 'TaskDetail',
     component: () => import('@/views/task/TaskDetailView.vue'),
     meta: { requiresAuth: true, title: '任务详情' },
+  },
+  {
+    path: '/tasks/:id/final-grade',
+    name: 'FinalGrade',
+    component: () => import('@/views/task/FinalGradeView.vue'),
+    meta: { requiresAuth: true, title: '整周期结果评定', activeNavigationPath: '/tasks' },
   },
   {
     path: '/improvement-plans',

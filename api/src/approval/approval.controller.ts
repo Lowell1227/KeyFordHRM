@@ -19,6 +19,15 @@ export class ApprovalController {
     return this.approvalService.getApprovalList(id, viewer);
   }
 
+  /** GET /cycles/:id/approval/overview — 审批概览（全校准分布只读 + 退回记录）。 */
+  @Get('approval/overview')
+  getOverview(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.approvalService.getOverview(id, viewer);
+  }
+
   /** POST /cycles/:id/approval — 批量审批。 */
   @Post('approval')
   @HttpCode(200)

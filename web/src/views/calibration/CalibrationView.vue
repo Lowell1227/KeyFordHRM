@@ -9,20 +9,15 @@ import GradeTag from '@/components/common/GradeTag.vue';
 import GradeDistChart from '@/components/charts/GradeDistChart.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
-import type { CalibrationCandidate, CalibrationSummary, AssessmentCycle } from '@/types/api.types';
-import type { PerfGrade } from '@/types/enums';
+import type { CalibrationCandidate, CalibrationCandidateDetail, CalibrationSummary, AssessmentCycle } from '@/types/api.types';
+import type { PerfGrade, TaskStatus } from '@/types/enums';
 import { GRADE_LABELS } from '@/utils/grade';
+import { TASK_STATUS_META } from '@/types/enums';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
-
-interface LocalEdit {
-  calibratedGrade: PerfGrade;
-  calibrationNote: string;
-  isVeto: boolean;
-  vetoReason?: string;
-}
 
 type SortField = 'calculatedScore' | 'rawGrade' | 'employeeName';
 type SortOrder = 'asc' | 'desc';
+type StatusFilter = '' | 'pending' | 'dept_review' | 'final_grading' | 'inApproval' | 'done';
 
 const cycleStore = useCycleStore();
 const route = useRoute();
@@ -33,17 +28,17 @@ const selectedCycleId = ref<string>('');
 const candidates = ref<CalibrationCandidate[]>([]);
 const summary = ref<CalibrationSummary | null>(null);
 const loading = ref(false);
-const submitting = ref(false);
+const acting = ref(false);
+let calibrationReady = false;
 
-const edits = ref<Record<string, LocalEdit>>({});
 const selectedTaskIds = ref<string[]>([]);
 const deptFilter = ref<string>('');
+const statusFilter = ref<StatusFilter>('');
 const sortField = ref<SortField>('calculatedScore');
 const sortOrder = ref<SortOrder>('desc');
 
-const batchGrade = ref<PerfGrade>('B');
-const batchNote = ref('');
-let calibrationReady = false;
+/** 个人详情抽屉。 */
+const drawer = ref({ visible: false, loading: false, detail: null as CalibrationCandidateDetail | null });
 
 const GRADES: PerfGrade[] = ['A', 'B', 'C', 'D'];
 
@@ -57,10 +52,22 @@ const departments = computed(() => {
   return Array.from(set).sort();
 });
 
+/** 状态过滤分组：评定中 = 非评定链路状态。 */
+function statusGroup(c: CalibrationCandidate): StatusFilter {
+  if (c.status === 'hr_calibration') return 'pending';
+  if (c.status === 'dept_review') return 'dept_review';
+  if (c.status === 'approval') return 'inApproval';
+  if (c.status === 'published' || c.status === 'confirmed' || c.status === 'appealing' || c.status === 'closed') return 'done';
+  return 'final_grading';
+}
+
 const filteredCandidates = computed(() => {
   let list = candidates.value;
   if (deptFilter.value) {
     list = list.filter((c) => c.deptName === deptFilter.value);
+  }
+  if (statusFilter.value) {
+    list = list.filter((c) => statusGroup(c) === statusFilter.value);
   }
   return list.slice().sort((a, b) => {
     const order = sortOrder.value === 'asc' ? 1 : -1;
@@ -75,20 +82,28 @@ const filteredCandidates = computed(() => {
   });
 });
 
-const totalCandidates = computed(() => candidates.value.length);
+const pendingCandidates = computed(() => candidates.value.filter((c) => c.status === 'hr_calibration'));
+
+/** 分布仅统计已进入评定链路的任务（与后端口径一致）。 */
+const countedTotal = computed(() => {
+  const p = summary.value?.progress;
+  if (!p) return 0;
+  return p.deptReview + p.pending + p.inApproval + p.done;
+});
 
 const gradeCounts = computed<Record<PerfGrade, number>>(() => {
   const counts: Record<PerfGrade, number> = { A: 0, B: 0, C: 0, D: 0 };
   candidates.value.forEach((c) => {
-    const grade = edits.value[c.taskId]?.calibratedGrade ?? c.calibratedGrade ?? c.rawGrade;
-    if (grade) counts[grade] = (counts[grade] ?? 0) + 1; // 未评分(grade=null)不计入分布
+    if (statusGroup(c) === 'final_grading') return;
+    const grade = c.rawGrade;
+    if (grade) counts[grade] = (counts[grade] ?? 0) + 1;
   });
   return counts;
 });
 
 const gradeWarnings = computed(() => {
   const cycle = selectedCycle.value;
-  if (!cycle || totalCandidates.value === 0) return [] as { grade: PerfGrade; ratio: number; limit: number }[];
+  if (!cycle || countedTotal.value === 0) return [] as { grade: PerfGrade; ratio: number; limit: number }[];
   const warnings: { grade: PerfGrade; ratio: number; limit: number }[] = [];
   const limits: Record<PerfGrade, keyof AssessmentCycle> = {
     A: 'gradeAMaxRatio',
@@ -99,7 +114,7 @@ const gradeWarnings = computed(() => {
   (Object.keys(gradeCounts.value) as PerfGrade[]).forEach((grade) => {
     const limit = Number(cycle[limits[grade]]) || 0;
     const count = gradeCounts.value[grade] || 0;
-    const ratio = count / totalCandidates.value;
+    const ratio = count / countedTotal.value;
     if (limit > 0 && ratio > limit) {
       warnings.push({ grade, ratio, limit });
     }
@@ -108,8 +123,6 @@ const gradeWarnings = computed(() => {
 });
 
 const hasWarnings = computed(() => gradeWarnings.value.length > 0);
-
-const hasEdits = computed(() => Object.keys(edits.value).length > 0);
 
 function handleSelectionChange(rows: CalibrationCandidate[]) {
   selectedTaskIds.value = rows.map((r) => r.taskId);
@@ -130,50 +143,12 @@ function fmtScore(s: number | null | undefined): string {
   return s == null ? '—' : s.toFixed(2);
 }
 
-function getDefaultGrade(candidate: CalibrationCandidate): PerfGrade | undefined {
-  return candidate.calibratedGrade ?? candidate.rawGrade ?? undefined;
+function statusLabel(status: TaskStatus): string {
+  return TASK_STATUS_META[status]?.label ?? status;
 }
 
-function getDisplayGrade(taskId: string, candidate: CalibrationCandidate): PerfGrade | undefined {
-  return edits.value[taskId]?.calibratedGrade ?? getDefaultGrade(candidate);
-}
-
-function ensureEdit(taskId: string, candidate: CalibrationCandidate) {
-  if (!edits.value[taskId]) {
-    edits.value[taskId] = {
-      calibratedGrade: getDefaultGrade(candidate) ?? 'B',
-      calibrationNote: '',
-      isVeto: candidate.isVeto ?? false,
-      vetoReason: undefined,
-    };
-  }
-}
-
-function handleGradeChange(taskId: string, candidate: CalibrationCandidate, grade: PerfGrade) {
-  ensureEdit(taskId, candidate);
-  edits.value[taskId].calibratedGrade = grade;
-}
-
-function handleNoteChange(taskId: string, candidate: CalibrationCandidate, note: string) {
-  ensureEdit(taskId, candidate);
-  edits.value[taskId].calibrationNote = note;
-}
-
-function applyBatchGrade() {
-  if (selectedTaskIds.value.length === 0) {
-    ElMessage.warning('请先勾选要批量调整的人员');
-    return;
-  }
-  selectedTaskIds.value.forEach((taskId) => {
-    const c = candidates.value.find((x) => x.taskId === taskId);
-    if (!c) return;
-    ensureEdit(taskId, c);
-    edits.value[taskId].calibratedGrade = batchGrade.value;
-    if (batchNote.value) {
-      edits.value[taskId].calibrationNote = batchNote.value;
-    }
-  });
-  ElMessage.success(`已批量调整 ${selectedTaskIds.value.length} 人等级为 ${GRADE_LABELS[batchGrade.value]}`);
+function statusTagType(status: TaskStatus): string {
+  return TASK_STATUS_META[status]?.type ?? 'info';
 }
 
 async function loadCycles() {
@@ -207,9 +182,8 @@ function clearCalibrationState() {
   candidates.value = [];
   summary.value = null;
   selectedTaskIds.value = [];
-  edits.value = {};
-  batchNote.value = '';
   deptFilter.value = '';
+  statusFilter.value = '';
 }
 
 async function selectCalibrationCycle(cycleId: string) {
@@ -229,12 +203,11 @@ async function loadCandidates() {
     summary.value = {
       gradeDistribution: res.gradeDistribution,
       totalActive: res.totalActive,
-      pendingCalibration: res.pendingCalibration,
+      progress: res.progress,
     };
     selectedTaskIds.value = [];
-    edits.value = {};
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '获取校准候选人失败');
+    ElMessage.error(e instanceof Error ? e.message : '获取校准名单失败');
     candidates.value = [];
     summary.value = null;
   } finally {
@@ -242,69 +215,75 @@ async function loadCandidates() {
   }
 }
 
-async function handleSubmit() {
+/** 打开个人详情抽屉。 */
+async function openDetail(taskId: string) {
   if (!selectedCycleId.value) return;
-  const calibrations = Object.entries(edits.value).map(([taskId, edit]) => ({
-    taskId,
-    calibratedGrade: edit.calibratedGrade,
-    calibrationNote: edit.calibrationNote || undefined,
-    isVeto: edit.isVeto,
-    vetoReason: edit.isVeto ? edit.vetoReason : undefined,
-  }));
-  if (calibrations.length === 0) {
-    ElMessage.warning('没有待提交的校准调整');
-    return;
-  }
-  if (hasWarnings.value) {
-    try {
-      await ElMessageBox.confirm(
-        `当前 ${gradeWarnings.value.map((w) => `${GRADE_LABELS[w.grade]} ${formatRatio(w.ratio)} 超上限 ${formatRatio(w.limit)}`).join('、')}，是否仍要提交？`,
-        '强制分布告警',
-        { confirmButtonText: '仍要提交', cancelButtonText: '返回调整', type: 'warning' },
-      );
-    } catch {
-      return;
-    }
-  }
-  submitting.value = true;
+  drawer.value = { visible: true, loading: true, detail: null };
   try {
-    const res = await calibrationApi.submit(selectedCycleId.value, { submit: true, calibrations });
-    ElMessage.success(`提交成功，已更新 ${res.updated} 条记录`);
-    edits.value = {};
-    selectedTaskIds.value = [];
-    await loadCandidates();
+    drawer.value.detail = await calibrationApi.getCandidateDetail(selectedCycleId.value, taskId);
   } catch (e) {
-    ElMessage.error(e instanceof Error ? e.message : '提交校准失败');
+    ElMessage.error(e instanceof Error ? e.message : '获取详情失败');
+    drawer.value.visible = false;
   } finally {
-    submitting.value = false;
+    drawer.value.loading = false;
   }
 }
 
-async function toggleVeto(taskId: string, candidate: CalibrationCandidate) {
-  const currentVeto = edits.value[taskId]?.isVeto ?? candidate.isVeto ?? false;
-  const next = !currentVeto;
+/** 确认（单人或批量）。 */
+async function handleConfirm(taskIds: string[]) {
+  if (!selectedCycleId.value || taskIds.length === 0) return;
+  try {
+    await ElMessageBox.confirm(
+      `确认后 ${taskIds.length} 人将进入结果审批并通知审批人，是否继续？`,
+      '校准确认',
+      { confirmButtonText: '确认', cancelButtonText: '取消', type: 'warning' },
+    );
+  } catch {
+    return;
+  }
+  acting.value = true;
+  try {
+    const res = await calibrationApi.confirm(selectedCycleId.value, { taskIds });
+    ElMessage.success(`已确认 ${res.updated} 人，进入结果审批`);
+    selectedTaskIds.value = [];
+    await loadCandidates();
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '确认失败');
+  } finally {
+    acting.value = false;
+  }
+}
+
+/** 驳回（单人或批量，原因必填）。 */
+async function handleReject(taskIds: string[]) {
+  if (!selectedCycleId.value || taskIds.length === 0) return;
   let reason = '';
-  if (next) {
-    try {
-      const input = await ElMessageBox.prompt('请输入一票否决原因', '一票否决', {
-        confirmButtonText: '确认否决',
+  try {
+    const input = await ElMessageBox.prompt(
+      `驳回后任务将退回直属上级，可重新编写月度结果与最终等级。${taskIds.length > 1 ? `（共 ${taskIds.length} 人，使用同一原因）` : ''}`,
+      '校准驳回',
+      {
+        confirmButtonText: '确认驳回',
         cancelButtonText: '取消',
-        inputPlaceholder: '否决原因',
-        inputValidator: (v) => (v.trim() ? true : '否决原因不能为空'),
-      });
-      reason = input.value.trim();
-    } catch {
-      return;
-    }
+        inputPlaceholder: '驳回原因（必填）',
+        inputValidator: (v) => (v && v.trim() ? true : '驳回原因不能为空'),
+      },
+    );
+    reason = input.value.trim();
+  } catch {
+    return;
   }
-  ensureEdit(taskId, candidate);
-  edits.value[taskId].isVeto = next;
-  edits.value[taskId].vetoReason = reason || undefined;
-  // 一票否决时等级强制为 D
-  if (next) {
-    edits.value[taskId].calibratedGrade = 'D';
+  acting.value = true;
+  try {
+    const res = await calibrationApi.reject(selectedCycleId.value, { taskIds, reason });
+    ElMessage.success(`已驳回 ${res.updated} 人，退回直属上级重新评定`);
+    selectedTaskIds.value = [];
+    await loadCandidates();
+  } catch (e) {
+    ElMessage.error(e instanceof Error ? e.message : '驳回失败');
+  } finally {
+    acting.value = false;
   }
-  ElMessage.success(next ? '已标记一票否决' : '已取消一票否决');
 }
 
 watch(
@@ -370,71 +349,86 @@ onMounted(async () => {
           <el-descriptions-item label="周期">{{ selectedCycle.name }}</el-descriptions-item>
           <el-descriptions-item label="状态">{{ selectedCycle.status }}</el-descriptions-item>
           <el-descriptions-item label="校准截止">{{ selectedCycle.deadlineHrCalibration ?? '未设置' }}</el-descriptions-item>
-          <el-descriptions-item label="人数">{{ summary?.totalActive ?? candidates.length }}</el-descriptions-item>
+          <el-descriptions-item label="参与人数">{{ summary?.totalActive ?? candidates.length }}</el-descriptions-item>
         </el-descriptions>
+        <div v-if="summary" class="progress-row">
+          <span class="progress-item">评定中 <b>{{ summary.progress.finalGrading }}</b></span>
+          <span class="progress-item">待部门复核 <b>{{ summary.progress.deptReview }}</b></span>
+          <span class="progress-item progress-item--pending">待校准 <b>{{ summary.progress.pending }}</b></span>
+          <span class="progress-item">审批中 <b>{{ summary.progress.inApproval }}</b></span>
+          <span class="progress-item">已定级 <b>{{ summary.progress.done }}</b></span>
+        </div>
       </div>
     </ChartCard>
 
     <EmptyState v-if="!selectedCycle" description="暂无可校准的考核周期" />
 
-    <el-row v-else :gutter="16" class="middle-row">
-      <el-col :xs="24" :md="14">
-        <ChartCard class="chart-card">
-          <template #title>当前等级分布</template>
-          <template #extra>
-            <el-tag v-if="hasWarnings" type="danger" effect="dark">存在超限</el-tag>
-          </template>
-          <GradeDistChart :data="gradeCounts" title="" :height="240" />
-          <div class="ratio-row">
-            <div
-              v-for="grade in GRADES"
-              :key="grade"
-              class="ratio-item"
-              :class="{ 'ratio-item--warning': gradeWarnings.some((w) => w.grade === grade) }"
-            >
-              <GradeTag :grade="grade" size="small" />
-              <span class="ratio-count">{{ gradeCounts[grade] }}人</span>
-              <span class="ratio-percent">{{ formatRatio(totalCandidates ? gradeCounts[grade] / totalCandidates : 0) }}</span>
-              <span class="ratio-limit">上限 {{ formatRatio(getGradeMaxRatio(selectedCycle, grade)) }}</span>
+    <template v-else>
+      <el-row :gutter="16" class="middle-row">
+        <el-col :xs="24" :md="14">
+          <ChartCard class="chart-card">
+            <template #title>等级分布（评定链路 {{ countedTotal }} 人）</template>
+            <template #extra>
+              <el-tag v-if="hasWarnings" type="danger" effect="dark">存在超限</el-tag>
+            </template>
+            <GradeDistChart :data="gradeCounts" title="" :height="240" />
+            <div class="ratio-row">
+              <div
+                v-for="grade in GRADES"
+                :key="grade"
+                class="ratio-item"
+                :class="{ 'ratio-item--warning': gradeWarnings.some((w) => w.grade === grade) }"
+              >
+                <GradeTag :grade="grade" size="small" />
+                <span class="ratio-count">{{ gradeCounts[grade] }}人</span>
+                <span class="ratio-percent">{{ formatRatio(countedTotal ? gradeCounts[grade] / countedTotal : 0) }}</span>
+                <span class="ratio-limit">上限 {{ formatRatio(getGradeMaxRatio(selectedCycle, grade)) }}</span>
+              </div>
             </div>
-          </div>
-        </ChartCard>
-      </el-col>
-      <el-col :xs="24" :md="10">
-        <ChartCard class="warning-card">
-          <template #title>分布告警</template>
-          <el-alert
-            v-if="!hasWarnings"
-            title="当前分布未超过各等级上限"
-            type="success"
-            :closable="false"
-            show-icon
-          />
-          <div v-else class="warning-list">
+          </ChartCard>
+        </el-col>
+        <el-col :xs="24" :md="10">
+          <ChartCard class="warning-card">
+            <template #title>分布告警（仅作校准参考，不阻止操作）</template>
             <el-alert
-              v-for="w in gradeWarnings"
-              :key="w.grade"
-              :title="`${GRADE_LABELS[w.grade]} 等级占比 ${formatRatio(w.ratio)}，超过上限 ${formatRatio(w.limit)}`"
-              type="error"
+              v-if="!hasWarnings"
+              title="当前分布未超过各等级上限"
+              type="success"
               :closable="false"
               show-icon
             />
-            <p class="warning-tip">请在校准说明中解释原因，仍可提交。</p>
-          </div>
-        </ChartCard>
-      </el-col>
-    </el-row>
+            <div v-else class="warning-list">
+              <el-alert
+                v-for="w in gradeWarnings"
+                :key="w.grade"
+                :title="`${GRADE_LABELS[w.grade]} 等级占比 ${formatRatio(w.ratio)}，超过上限 ${formatRatio(w.limit)}`"
+                type="error"
+                :closable="false"
+                show-icon
+              />
+              <p class="warning-tip">可通过驳回相应人员，退回直属上级重新评定。</p>
+            </div>
+          </ChartCard>
+        </el-col>
+      </el-row>
 
-    <ChartCard>
-      <template #title>校准名单</template>
-      <div class="toolbar">
+      <ChartCard>
+        <template #title>校准名单</template>
+        <div class="toolbar">
           <div class="toolbar-left">
-            <el-select v-model="deptFilter" placeholder="全部部门" clearable style="width: 180px">
+            <el-select v-model="deptFilter" placeholder="全部部门" clearable style="width: 160px">
               <el-option v-for="d in departments" :key="d" :label="d" :value="d" />
             </el-select>
-            <el-select v-model="sortField" placeholder="排序字段" style="width: 140px">
-              <el-option label="计算分" value="calculatedScore" />
-              <el-option label="原始等级" value="rawGrade" />
+            <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width: 150px">
+              <el-option label="待校准" value="pending" />
+              <el-option label="待部门复核" value="dept_review" />
+              <el-option label="评定中" value="final_grading" />
+              <el-option label="审批中" value="inApproval" />
+              <el-option label="已定级" value="done" />
+            </el-select>
+            <el-select v-model="sortField" placeholder="排序字段" style="width: 130px">
+              <el-option label="参考均分" value="calculatedScore" />
+              <el-option label="最终等级" value="rawGrade" />
               <el-option label="姓名" value="employeeName" />
             </el-select>
             <el-radio-group v-model="sortOrder" size="small">
@@ -443,80 +437,167 @@ onMounted(async () => {
             </el-radio-group>
           </div>
           <div class="toolbar-right">
-            <el-select v-model="batchGrade" placeholder="批量等级" style="width: 120px">
-              <el-option v-for="g in GRADES" :key="g" :label="GRADE_LABELS[g]" :value="g" />
-            </el-select>
-            <el-input v-model="batchNote" placeholder="批量说明" style="width: 180px" clearable />
-            <el-button type="primary" plain @click="applyBatchGrade">批量调整</el-button>
-            <el-button type="success" :loading="submitting" @click="handleSubmit">提交校准</el-button>
+            <el-button
+              type="primary"
+              plain
+              :disabled="selectedTaskIds.length === 0"
+              :loading="acting"
+              @click="handleConfirm(selectedTaskIds)"
+            >批量确认</el-button>
+            <el-button
+              type="danger"
+              plain
+              :disabled="selectedTaskIds.length === 0"
+              :loading="acting"
+              @click="handleReject(selectedTaskIds)"
+            >批量驳回</el-button>
           </div>
         </div>
 
-      <el-table
-        v-loading="loading"
-        class="app-table"
-        :data="filteredCandidates as CalibrationCandidate[]"
-        row-key="taskId"
-        @selection-change="handleSelectionChange"
-      >
-        <el-table-column type="selection" width="50" reserve-selection />
-        <el-table-column prop="employeeName" label="姓名" min-width="100" />
-        <el-table-column prop="deptName" label="部门" min-width="140" />
-        <el-table-column prop="position" label="岗位" min-width="140" />
-        <el-table-column prop="calculatedScore" label="计算分" width="110" sortable>
-          <template #default="{ row }">
-            <span class="score-cell">{{ fmtScore((row as CalibrationCandidate).calculatedScore) }}</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="rawGrade" label="原始等级" width="110">
-          <template #default="{ row }">
-            <GradeTag v-if="(row as CalibrationCandidate).rawGrade" :grade="(row as CalibrationCandidate).rawGrade!" size="small" />
-            <span v-else class="score-cell" style="color: var(--el-text-color-placeholder)">—</span>
-          </template>
-        </el-table-column>
-        <el-table-column prop="managerName" label="主管" width="120" />
-        <el-table-column label="校准等级" width="140">
-          <template #default="{ row }">
-            <el-select
-              :model-value="getDisplayGrade((row as CalibrationCandidate).taskId, row as CalibrationCandidate)"
-              placeholder="等级"
-              size="small"
-              style="width: 100px"
-              @update:model-value="handleGradeChange((row as CalibrationCandidate).taskId, row as CalibrationCandidate, $event as PerfGrade)"
-            >
-              <el-option v-for="g in GRADES" :key="g" :label="GRADE_LABELS[g]" :value="g" />
-            </el-select>
-          </template>
-        </el-table-column>
-        <el-table-column label="校准说明" min-width="180">
-          <template #default="{ row }">
-            <el-input
-              :model-value="edits[(row as CalibrationCandidate).taskId]?.calibrationNote ?? ''"
-              placeholder="调整原因"
-              size="small"
-              clearable
-              @update:model-value="handleNoteChange((row as CalibrationCandidate).taskId, row as CalibrationCandidate, $event)"
-            />
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
-          <template #default="{ row }">
-            <el-button
-              :type="(edits[(row as CalibrationCandidate).taskId]?.isVeto ?? (row as CalibrationCandidate).isVeto) ? 'danger' : 'info'"
-              link
-              size="small"
-              @click="toggleVeto((row as CalibrationCandidate).taskId, row as CalibrationCandidate)"
-            >
-              {{ (edits[(row as CalibrationCandidate).taskId]?.isVeto ?? (row as CalibrationCandidate).isVeto) ? '取消否决' : '一票否决' }}
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+        <el-table
+          v-loading="loading"
+          class="app-table"
+          :data="filteredCandidates as CalibrationCandidate[]"
+          row-key="taskId"
+          @selection-change="handleSelectionChange"
+        >
+          <el-table-column type="selection" width="50" reserve-selection :selectable="(row: CalibrationCandidate) => row.status === 'hr_calibration'" />
+          <el-table-column prop="employeeName" label="姓名" min-width="100" />
+          <el-table-column prop="deptName" label="部门" min-width="130" />
+          <el-table-column prop="position" label="岗位" min-width="130" />
+          <el-table-column prop="managerName" label="直属上级" width="110" />
+          <el-table-column prop="calculatedScore" label="参考均分" width="110" sortable>
+            <template #default="{ row }">
+              <span class="score-cell">{{ fmtScore((row as CalibrationCandidate).calculatedScore) }}</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="最终等级" width="100">
+            <template #default="{ row }">
+              <GradeTag v-if="(row as CalibrationCandidate).rawGrade" :grade="(row as CalibrationCandidate).rawGrade!" size="small" />
+              <span v-else class="score-cell" style="color: var(--el-text-color-placeholder)">—</span>
+            </template>
+          </el-table-column>
+          <el-table-column label="状态" width="110">
+            <template #default="{ row }">
+              <el-tag :type="statusTagType((row as CalibrationCandidate).status) as any" size="small">
+                {{ statusLabel((row as CalibrationCandidate).status) }}
+              </el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column label="操作" width="200" fixed="right">
+            <template #default="{ row }">
+              <el-button link size="small" @click="openDetail((row as CalibrationCandidate).taskId)">详情</el-button>
+              <template v-if="(row as CalibrationCandidate).status === 'hr_calibration'">
+                <el-button link type="primary" size="small" :loading="acting" @click="handleConfirm([(row as CalibrationCandidate).taskId])">确认</el-button>
+                <el-button link type="danger" size="small" :loading="acting" @click="handleReject([(row as CalibrationCandidate).taskId])">驳回</el-button>
+              </template>
+            </template>
+          </el-table-column>
+        </el-table>
 
-      <div v-if="hasEdits" class="submit-hint">
-        <el-alert title="尚有未提交的校准调整，记得点击「提交校准」" type="info" :closable="false" />
+        <div v-if="pendingCandidates.length === 0 && summary" class="submit-hint">
+          <el-alert
+            :title="summary.progress.inApproval > 0 || summary.progress.done > 0
+              ? '本周期待校准任务已处理完毕'
+              : '本周期尚无待校准任务，等待直属上级完成整周期结果评定'"
+            type="info"
+            :closable="false"
+          />
+        </div>
+      </ChartCard>
+    </template>
+
+    <el-drawer
+      v-model="drawer.visible"
+      :title="drawer.detail ? `${drawer.detail.employeeName} · 校准依据` : '校准依据'"
+      size="560px"
+    >
+      <div v-loading="drawer.loading">
+        <template v-if="drawer.detail">
+          <el-descriptions :column="2" size="small" border>
+            <el-descriptions-item label="部门">{{ drawer.detail.deptName ?? '—' }}</el-descriptions-item>
+            <el-descriptions-item label="岗位">{{ drawer.detail.position ?? '—' }}</el-descriptions-item>
+            <el-descriptions-item label="直属上级">{{ drawer.detail.managerName ?? '—' }}</el-descriptions-item>
+            <el-descriptions-item label="当前状态">
+              <el-tag :type="statusTagType(drawer.detail.status) as any" size="small">{{ statusLabel(drawer.detail.status) }}</el-tag>
+            </el-descriptions-item>
+          </el-descriptions>
+
+          <div class="drawer-section">
+            <h4>整周期结果</h4>
+            <div class="result-row">
+              <div class="result-item">
+                <span class="result-label">参考均分</span>
+                <span class="score-cell">{{ fmtScore(drawer.detail.calculatedScore) }}</span>
+                <span class="result-hint">（分数与等级无换算关系）</span>
+              </div>
+              <div class="result-item">
+                <span class="result-label">最终等级（直属上级录入）</span>
+                <GradeTag v-if="drawer.detail.finalGrade" :grade="drawer.detail.finalGrade" />
+                <span v-else class="result-hint">未录入</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="drawer-section">
+            <h4>月度结果</h4>
+            <el-table :data="drawer.detail.periods" size="small" border>
+              <el-table-column prop="periodKey" label="月份" width="90" />
+              <el-table-column label="自评等级" width="90">
+                <template #default="{ row }">
+                  <GradeTag v-if="row.selfGrade" :grade="row.selfGrade" size="small" />
+                  <span v-else>—</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="上级等级" width="90">
+                <template #default="{ row }">
+                  <GradeTag v-if="row.managerGrade" :grade="row.managerGrade" size="small" />
+                  <span v-else>—</span>
+                </template>
+              </el-table-column>
+              <el-table-column label="自评分" width="80">
+                <template #default="{ row }">{{ fmtScore(row.selfScoreTotal) }}</template>
+              </el-table-column>
+              <el-table-column label="上级评分">
+                <template #default="{ row }">{{ fmtScore(row.managerScoreTotal) }}</template>
+              </el-table-column>
+            </el-table>
+          </div>
+
+          <el-collapse class="drawer-section">
+            <el-collapse-item title="指标汇总（跨月平均）" name="indicators">
+              <el-table :data="drawer.detail.indicators" size="small" border>
+                <el-table-column prop="name" label="指标" min-width="140" show-overflow-tooltip />
+                <el-table-column label="权重" width="70">
+                  <template #default="{ row }">{{ formatRatio(row.weight) }}</template>
+                </el-table-column>
+                <el-table-column label="自评均分" width="90">
+                  <template #default="{ row }">{{ fmtScore(row.avgSelfScore) }}</template>
+                </el-table-column>
+                <el-table-column label="上级均分" width="90">
+                  <template #default="{ row }">{{ fmtScore(row.avgManagerScore) }}</template>
+                </el-table-column>
+              </el-table>
+            </el-collapse-item>
+            <el-collapse-item
+              v-if="drawer.detail.rejectHistory.length > 0"
+              :title="`驳回历史（${drawer.detail.rejectHistory.length}）`"
+              name="rejects"
+            >
+              <div v-for="(r, i) in drawer.detail.rejectHistory" :key="i" class="reject-item">
+                <div class="reject-meta">
+                  <el-tag size="small" :type="r.nodeType === 'hr_calibration' ? 'danger' : 'warning'">
+                    {{ r.nodeType === 'hr_calibration' ? '校准驳回' : '复核退回' }}
+                  </el-tag>
+                  <span>{{ r.actorName ?? '系统' }} · {{ new Date(r.createdAt).toLocaleString('zh-CN') }}</span>
+                </div>
+                <p class="reject-comment">{{ r.comment ?? '—' }}</p>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
+        </template>
       </div>
-    </ChartCard>
+    </el-drawer>
   </div>
 </template>
 
@@ -525,15 +606,27 @@ onMounted(async () => {
   margin-top: 8px;
 }
 
+.progress-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-top: 12px;
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+.progress-item b {
+  color: var(--el-text-color-primary);
+  margin-left: 2px;
+}
+
+.progress-item--pending b {
+  color: var(--el-color-primary);
+}
+
 .chart-card,
 .warning-card {
   height: 100%;
-}
-
-.chart-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
 }
 
 .ratio-row {
@@ -583,10 +676,6 @@ onMounted(async () => {
   font-size: 13px;
 }
 
-.table-card {
-  margin-bottom: 16px;
-}
-
 .toolbar {
   display: flex;
   flex-wrap: wrap;
@@ -610,6 +699,60 @@ onMounted(async () => {
 
 .submit-hint {
   margin-top: 16px;
+}
+
+.drawer-section {
+  margin-top: 16px;
+}
+
+.drawer-section h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+}
+
+.result-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 24px;
+}
+
+.result-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.result-label {
+  font-size: 13px;
+  color: var(--el-text-color-regular);
+}
+
+.result-hint {
+  font-size: 12px;
+  color: var(--el-text-color-placeholder);
+}
+
+.reject-item {
+  padding: 8px 0;
+  border-bottom: 1px dashed var(--el-border-color-lighter);
+}
+
+.reject-item:last-child {
+  border-bottom: none;
+}
+
+.reject-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
+.reject-comment {
+  margin: 6px 0 0;
+  font-size: 13px;
+  color: var(--el-text-color-primary);
 }
 
 @media (max-width: 768px) {

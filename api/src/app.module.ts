@@ -11,6 +11,7 @@ import { NotificationsModule } from './notifications/notifications.module';
 import { DingtalkModule } from './dingtalk/dingtalk.module';
 import { TasksModule } from './tasks/tasks.module';
 import { CalibrationModule } from './calibration/calibration.module';
+import { FinalGradeModule } from './final-grade/final-grade.module';
 import { AuthModule } from './auth/auth.module';
 import { HealthModule } from './health/health.module';
 import { DataScopeModule } from './common/services/data-scope.module';
@@ -70,6 +71,7 @@ import { PositionsModule } from './positions/positions.module';
     DingtalkModule,
     TasksModule,
     CalibrationModule,
+    FinalGradeModule,
     ApprovalModule,
     PublishModule,
     SchedulerModule,

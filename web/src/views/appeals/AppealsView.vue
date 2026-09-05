@@ -496,10 +496,10 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
           <el-descriptions-item label="计算分">
             {{ detailDialog.appeal.taskGrade?.calculatedScore?.toFixed(2) ?? '-' }}
           </el-descriptions-item>
-          <el-descriptions-item label="原始等级">
+          <el-descriptions-item label="最终等级">
             <GradeTag :grade="asGrade(detailDialog.appeal.taskGrade?.rawGrade)" size="small" />
           </el-descriptions-item>
-          <el-descriptions-item label="校准等级">
+          <el-descriptions-item v-if="detailDialog.appeal.taskGrade?.calibratedGrade" label="更正后等级">
             <GradeTag :grade="asGrade(detailDialog.appeal.taskGrade?.calibratedGrade)" size="small" />
           </el-descriptions-item>
         </el-descriptions>

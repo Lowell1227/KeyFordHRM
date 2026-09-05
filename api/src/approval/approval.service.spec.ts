@@ -4,6 +4,7 @@ import { AssessmentTask, Prisma, TaskStatus } from '@prisma/client';
 import { ApprovalService, ApprovalListItem } from './approval.service';
 import { PrismaService } from '@/prisma/prisma.service';
 import { FlowService } from '@/tasks/flow.service';
+import { NotificationsService } from '@/notifications/notifications.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 
@@ -69,6 +70,8 @@ describe('ApprovalService', () => {
       $transaction: jest.fn((cb: any) => cb(tx)),
       assessmentCycle: { findUnique: jest.fn() },
       assessmentTask: { findMany: jest.fn(), findUnique: jest.fn() },
+      gradeResult: { findUnique: jest.fn() },
+      flowRecord: { findMany: jest.fn() },
     };
 
     flowService = {
@@ -80,6 +83,7 @@ describe('ApprovalService', () => {
         ApprovalService,
         { provide: PrismaService, useValue: prisma },
         { provide: FlowService, useValue: flowService },
+        { provide: NotificationsService, useValue: { create: jest.fn() } },
       ],
     }).compile();
 

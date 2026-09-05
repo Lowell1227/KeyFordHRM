@@ -9,6 +9,13 @@ export interface PeriodAggregationResult {
   targetStatus: TaskStatus | null;
 }
 
+/**
+ * 月度结果聚合。
+ *
+ * 所有月度评分锁定后，仅刷新整周期参考总分（各月上级评分均分）。
+ * 整周期最终等级由直属上级在「整周期结果评定」中独立录入，
+ * 本服务不再从最后一月 managerGrade 推导 rawGrade，也不自动流转状态。
+ */
 @Injectable()
 export class PeriodAggregationService {
   constructor(
@@ -35,7 +42,6 @@ export class PeriodAggregationService {
             employeeSubmittedAt: true,
             managerSubmittedAt: true,
             managerScoreTotal: true,
-            managerGrade: true,
             lockedAt: true,
           },
           orderBy: { sequence: 'asc' },
@@ -69,54 +75,18 @@ export class PeriodAggregationService {
       0,
     );
     const score = Number((total / completePeriods.length).toFixed(2));
-    const finalPeriod = completePeriods[completePeriods.length - 1]!;
-    if (!finalPeriod.managerGrade) {
-      return { complete: false, score: null, targetStatus: null };
-    }
-    const rawGrade = finalPeriod.managerGrade!;
-    const resetCalibration = {
-      calibratedGrade: null,
-      calibrationNote: null,
-      coefficient: null,
-      hrCalibratorId: null,
-      hrCalibratedAt: null,
-    };
 
     await tx.gradeResult.upsert({
       where: { taskId },
       create: {
         taskId,
         calculatedScore: score,
-        rawGrade,
-        isVeto: false,
-        vetoReason: null,
-        vetoOperatorId: null,
-        ...resetCalibration,
       },
       update: {
         calculatedScore: score,
-        rawGrade,
-        isVeto: false,
-        vetoReason: null,
-        vetoOperatorId: null,
-        ...resetCalibration,
       },
     });
 
-    const targetStatus: TaskStatus = legacyAdvancedWorkflowV2
-      ? task.status
-      : task.managerId === task.deptHeadId
-        ? TaskStatus.hr_calibration
-        : TaskStatus.dept_review;
-    if (!legacyAdvancedWorkflowV2) {
-      await this.flow.transitionTx(tx, {
-        task,
-        action: 'submit',
-        targetStatus,
-        actorId,
-        taskUpdate: { managerScoredAt: new Date() },
-      });
-    }
     await tx.auditLog.create({
       data: {
         userId: actorId,
@@ -125,13 +95,11 @@ export class PeriodAggregationService {
         entityId: taskId,
         newValue: {
           score,
-          rawGrade,
-          gradeSource: 'final_period_manager_grade',
+          gradeSource: 'final_grade_independently_entered',
           periodCount: completePeriods.length,
-          targetStatus,
         },
       },
     });
-    return { complete: true, score, targetStatus };
+    return { complete: true, score, targetStatus: null };
   }
 }

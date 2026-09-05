@@ -1,8 +1,10 @@
 import http from './http';
 import type {
   CalibrationCandidate,
+  CalibrationCandidateDetail,
   CalibrationSummary,
-  SubmitCalibrationBody,
+  ConfirmCalibrationBody,
+  RejectCalibrationBody,
   GradeDistributionEntry,
 } from '@/types/api.types';
 import type { PerfGrade } from '@/types/enums';
@@ -15,19 +17,13 @@ function apiPost<T>(url: string, data?: unknown): Promise<T> {
   return http.post(url, data) as unknown as Promise<T>;
 }
 
-export interface CalibrationWorkbench {
-  gradeDistribution: Record<PerfGrade, GradeDistributionEntry>;
-  totalActive: number;
-  pendingCalibration: number;
+export interface CalibrationWorkbench extends CalibrationSummary {
   items: CalibrationCandidate[];
 }
 
-export interface CalibrationSubmitResult {
-  submit: boolean;
+export interface CalibrationActionResult {
   updated: number;
-  transitioned: number;
   gradeDistribution: Record<PerfGrade, GradeDistributionEntry>;
-  warnings: string[];
 }
 
 export const calibrationApi = {
@@ -41,8 +37,18 @@ export const calibrationApi = {
     return apiGet(`/cycles/${cycleId}/grade-distribution`);
   },
 
-  /** POST /cycles/:id/calibration — 提交校准结果 */
-  submit(cycleId: string, body: SubmitCalibrationBody): Promise<CalibrationSubmitResult> {
-    return apiPost(`/cycles/${cycleId}/calibration`, body);
+  /** GET /cycles/:id/calibration/tasks/:taskId — 个人详情（校准依据） */
+  getCandidateDetail(cycleId: string, taskId: string): Promise<CalibrationCandidateDetail> {
+    return apiGet(`/cycles/${cycleId}/calibration/tasks/${taskId}`);
+  },
+
+  /** POST /cycles/:id/calibration/confirm — 确认（逐人即时流转到审批） */
+  confirm(cycleId: string, body: ConfirmCalibrationBody): Promise<CalibrationActionResult> {
+    return apiPost(`/cycles/${cycleId}/calibration/confirm`, body);
+  },
+
+  /** POST /cycles/:id/calibration/reject — 驳回（退回直属上级重新评定） */
+  reject(cycleId: string, body: RejectCalibrationBody): Promise<CalibrationActionResult> {
+    return apiPost(`/cycles/${cycleId}/calibration/reject`, body);
   },
 };

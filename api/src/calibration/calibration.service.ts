@@ -1,11 +1,12 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { AssessmentCycle, PerfGrade, Prisma } from '@prisma/client';
+import { AssessmentCycle, PerfGrade, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { FlowService } from '@/tasks/flow.service';
-import { CalibrateGradesDto, CalibrationItemDto } from './dto/calibrate-grades.dto';
+import { ConfirmCalibrationDto } from './dto/confirm-calibration.dto';
+import { RejectCalibrationDto } from './dto/reject-calibration.dto';
 import { claimTaskVersion } from '@/tasks/task-version';
 
 /** 等级分布单项。 */
@@ -22,37 +23,76 @@ export interface CalibrationWorkbenchItem {
   employeeName: string;
   deptName: string | null;
   position: string | null;
+  status: TaskStatus;
   calculatedScore: number | null;
   rawGrade: PerfGrade | null;
-  calibratedGrade: PerfGrade | null;
-  isVeto: boolean;
+  /** 直属上级提交整周期结果评定的时间。 */
+  finalGradeSubmittedAt: Date | null;
   managerName: string | null;
+}
+
+/** 校准工作台阶段进度。 */
+export interface CalibrationProgress {
+  /** 评定中：月度评分/整周期结果评定未完成。 */
+  finalGrading: number;
+  /** 待部门复核。 */
+  deptReview: number;
+  /** 待 HR 校准。 */
+  pending: number;
+  /** 审批中。 */
+  inApproval: number;
+  /** 已定级完成（公示及之后）。 */
+  done: number;
 }
 
 /** 校准工作台响应。 */
 export interface CalibrationWorkbench {
   gradeDistribution: Record<PerfGrade, GradeDistributionEntry>;
   totalActive: number;
-  pendingCalibration: number;
+  progress: CalibrationProgress;
   items: CalibrationWorkbenchItem[];
 }
 
-/** 批量校准提交响应。 */
-export interface CalibrateGradesResult {
-  submit: boolean;
+/** 确认/驳回响应。 */
+export interface CalibrationActionResult {
   updated: number;
-  transitioned: number;
   gradeDistribution: Record<PerfGrade, GradeDistributionEntry>;
-  warnings: string[];
 }
 
-/** 默认等级系数（system_configs.grade_coefficients 未配置时回退）。 */
-const DEFAULT_COEFFICIENTS: Record<PerfGrade, number> = {
-  A: 1,
-  B: 1,
-  C: 1,
-  D: 1,
-};
+/** 校准详情（个人抽屉）。 */
+export interface CalibrationCandidateDetail {
+  taskId: string;
+  employeeName: string;
+  deptName: string | null;
+  position: string | null;
+  managerName: string | null;
+  status: TaskStatus;
+  calculatedScore: number | null;
+  finalGrade: PerfGrade | null;
+  periods: Array<{
+    periodKey: string;
+    status: string;
+    selfGrade: PerfGrade | null;
+    managerGrade: PerfGrade | null;
+    selfScoreTotal: number | null;
+    managerScoreTotal: number | null;
+  }>;
+  /** 各指标跨月汇总（权重 + 平均分，分数与等级无换算关系）。 */
+  indicators: Array<{
+    name: string;
+    weight: number;
+    type: string;
+    avgSelfScore: number | null;
+    avgManagerScore: number | null;
+  }>;
+  /** 复核/校准退回历史（新→旧）。 */
+  rejectHistory: Array<{
+    nodeType: string;
+    comment: string | null;
+    createdAt: Date;
+    actorName: string | null;
+  }>;
+}
 
 const GRADES: PerfGrade[] = ['A', 'B', 'C', 'D'];
 
@@ -72,9 +112,7 @@ export class CalibrationService {
     return {
       gradeDistribution: buildGradeDistribution(tasks, cycle),
       totalActive: tasks.length,
-      pendingCalibration: tasks.filter(
-        (t) => t.status === 'hr_calibration' && t.gradeResult?.calibratedGrade == null,
-      ).length,
+      progress: buildProgress(tasks),
       items: tasks.map((t) => this.mapToWorkbenchItem(t)),
     };
   }
@@ -91,156 +129,262 @@ export class CalibrationService {
     };
   }
 
-  /** POST /cycles/:id/calibration — 批量提交校准。 */
-  async calibrateGrades(
-    cycleId: string,
-    dto: CalibrateGradesDto,
-    viewer: AuthUser,
-  ): Promise<CalibrateGradesResult> {
-    const cycle = await this.getCycleOrThrow(cycleId);
-    const coefficients = await this.loadGradeCoefficients();
-
-    const taskIds = dto.calibrations.map((c) => c.taskId);
-    const tasks = await this.findActiveTasksByIds(cycleId, taskIds);
-    const taskMap = new Map(tasks.map((t) => [t.id, t]));
-
-    const warnings: string[] = [];
-    let transitioned = 0;
-    let transitionedTaskIds: string[] = [];
-
-    await this.prisma.$transaction(
-      async (tx) => {
-        const claimedVersions = new Map<string, Date>();
-        for (const item of dto.calibrations) {
-          const task = taskMap.get(item.taskId);
-          if (!task) {
-            throw new BadRequestException({
-              code: ERROR_CODE.PARAM_INVALID,
-              message: `任务 ${item.taskId} 不存在或非本周期非豁免任务`,
-            });
-          }
-
-          const veto = normalizeVeto(item);
-          const coefficient = coefficients[veto.grade];
-          if (!claimedVersions.has(task.id)) {
-            claimedVersions.set(
-              task.id,
-              await claimTaskVersion(tx, task.id, task.updatedAt.toISOString(), 'hr_calibration'),
-            );
-          }
-
-          await tx.gradeResult.upsert({
-            where: { taskId: task.id },
-            create: {
-              taskId: task.id,
-              calculatedScore: task.gradeResult?.calculatedScore ?? null,
-              rawGrade: task.gradeResult?.rawGrade ?? null,
-              calibratedGrade: veto.grade,
-              calibrationNote: item.calibrationNote ?? null,
-              isVeto: veto.isVeto,
-              vetoReason: veto.vetoReason ?? null,
-              vetoOperatorId: veto.isVeto ? viewer.id : null,
-              coefficient: new Prisma.Decimal(coefficient),
-              hrCalibratorId: viewer.id,
-              hrCalibratedAt: new Date(),
-            },
-            update: {
-              calibratedGrade: veto.grade,
-              calibrationNote: item.calibrationNote ?? null,
-              isVeto: veto.isVeto,
-              vetoReason: veto.vetoReason ?? null,
-              vetoOperatorId: veto.isVeto ? viewer.id : null,
-              coefficient: new Prisma.Decimal(coefficient),
-              hrCalibratorId: viewer.id,
-              hrCalibratedAt: new Date(),
-            },
-          });
-        }
-
-        if (dto.submit) {
-          const hrCalibrationTasks = await tx.assessmentTask.findMany({
-            where: { cycleId, status: 'hr_calibration', isExempt: false },
-            include: { gradeResult: { select: { calibratedGrade: true } } },
-          });
-
-          const missing = hrCalibrationTasks.filter((t) => t.gradeResult?.calibratedGrade == null);
-          if (missing.length > 0) {
-            throw new BadRequestException({
-              code: ERROR_CODE.PARAM_INVALID,
-              message: `存在未填写校准等级的任务：${missing.map((t) => t.id).join(', ')}`,
-            });
-          }
-
-          for (const task of hrCalibrationTasks) {
-            let claimedUpdatedAt = claimedVersions.get(task.id);
-            if (!claimedUpdatedAt) {
-              claimedUpdatedAt = await claimTaskVersion(
-                tx,
-                task.id,
-                task.updatedAt.toISOString(),
-                'hr_calibration',
-              );
-            }
-            await this.flowService.transitionTx(tx, {
-              task,
-              action: 'submit',
-              targetStatus: 'approval',
-              actorId: viewer.id,
-              comment: '绩效校准完成，提交结果审批',
-              taskUpdate: { hrCalibratedAt: new Date(), updatedAt: claimedUpdatedAt },
-            });
-          }
-
-          transitioned = hrCalibrationTasks.length;
-          transitionedTaskIds = hrCalibrationTasks.map((t) => t.id);
-        }
+  /** GET /cycles/:id/calibration/tasks/:taskId — 个人详情（校准依据）。 */
+  async getCandidateDetail(cycleId: string, taskId: string): Promise<CalibrationCandidateDetail> {
+    await this.getCycleOrThrow(cycleId);
+    const task = await this.prisma.assessmentTask.findFirst({
+      where: { id: taskId, cycleId, isExempt: false },
+      include: {
+        employee: { select: { name: true, position: true } },
+        dept: { select: { name: true } },
+        manager: { select: { name: true } },
+        gradeResult: { select: { calculatedScore: true, rawGrade: true } },
+        periods: {
+          orderBy: { sequence: 'asc' },
+          select: {
+            periodKey: true,
+            status: true,
+            selfGrade: true,
+            managerGrade: true,
+            selfScoreTotal: true,
+            managerScoreTotal: true,
+          },
+        },
+        indicatorInstances: {
+          select: { name: true, weight: true, indicatorType: true },
+          orderBy: { sortOrder: 'asc' },
+        },
+        flowRecords: {
+          where: { action: 'reject', nodeType: { in: ['dept_review', 'hr_calibration'] } },
+          orderBy: { createdAt: 'desc' },
+          include: { actor: { select: { name: true } } },
+        },
       },
-      { timeout: 60000, maxWait: 10000 },
-    );
-
-    if (dto.submit && transitionedTaskIds.length > 0) {
-      const transitionedTasks = await this.prisma.assessmentTask.findMany({
-        where: { id: { in: transitionedTaskIds } },
-        select: { id: true, approverId: true, employee: { select: { name: true } } },
-      });
-
-      const byApprover = groupBy(transitionedTasks, (t) => t.approverId ?? '__none__');
-      for (const [approverId, approverTasks] of byApprover) {
-        if (approverId === '__none__' || !approverId) continue;
-        const names = approverTasks.map((t) => t.employee?.name ?? '员工').join('、');
-        await this.notificationsService.create({
-          userId: approverId,
-          senderId: viewer.id,
-          cycleId,
-          type: 'calibration_submitted',
-          title: '绩效校准结果待审批',
-          content: `HR 已完成 ${cycle.name} 的等级校准，涉及员工：${names}，请审批。`,
-        }).catch(() => {
-          // 推送失败不阻断业务
-        });
-      }
+    });
+    if (!task) {
+      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '任务不存在' });
     }
 
-    const refreshedTasks = await this.findActiveTasksWithResult(cycleId);
-    const distribution = buildGradeDistribution(refreshedTasks, cycle);
-    for (const grade of GRADES) {
-      if (distribution[grade].isOverLimit) {
-        warnings.push(`${grade} 等级比例 ${(distribution[grade].ratio * 100).toFixed(1)}% 超过上限 ${(distribution[grade].maxRatio * 100).toFixed(1)}%`);
-      }
+    // 指标跨月平均分：按指标名称对齐（快照/实例名称一致）
+    const reviews = await this.prisma.assessmentPeriodIndicatorReview.findMany({
+      where: { period: { taskId } },
+      include: {
+        period: { select: { periodKey: true } },
+        indicatorVersionItem: { select: { name: true } },
+      },
+    });
+    const scoreMap = new Map<string, { self: number[]; manager: number[] }>();
+    for (const r of reviews) {
+      const name = r.indicatorVersionItem?.name;
+      if (!name) continue;
+      const entry = scoreMap.get(name) ?? { self: [], manager: [] };
+      if (r.selfScore != null) entry.self.push(Number(r.selfScore));
+      if (r.managerScore != null) entry.manager.push(Number(r.managerScore));
+      scoreMap.set(name, entry);
     }
+    const avg = (list: number[]) => (list.length ? Number((list.reduce((a, b) => a + b, 0) / list.length).toFixed(2)) : null);
+
+    const indicatorDefs = task.indicatorInstances;
 
     return {
-      submit: dto.submit,
-      updated: dto.calibrations.length,
-      transitioned,
-      gradeDistribution: distribution,
-      warnings,
+      taskId: task.id,
+      employeeName: task.employee?.name ?? '',
+      deptName: task.dept?.name ?? null,
+      position: task.employee?.position ?? null,
+      managerName: task.manager?.name ?? null,
+      status: task.status,
+      calculatedScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
+      finalGrade: task.gradeResult?.rawGrade ?? null,
+      periods: task.periods.map((p) => ({
+        periodKey: p.periodKey,
+        status: p.status,
+        selfGrade: p.selfGrade,
+        managerGrade: p.managerGrade,
+        selfScoreTotal: p.selfScoreTotal?.toNumber() ?? null,
+        managerScoreTotal: p.managerScoreTotal?.toNumber() ?? null,
+      })),
+      indicators: indicatorDefs.map((def) => ({
+        name: def.name,
+        weight: def.weight.toNumber(),
+        type: def.indicatorType,
+        avgSelfScore: avg(scoreMap.get(def.name)?.self ?? []),
+        avgManagerScore: avg(scoreMap.get(def.name)?.manager ?? []),
+      })),
+      rejectHistory: task.flowRecords.map((r) => ({
+        nodeType: r.nodeType,
+        comment: r.comment,
+        createdAt: r.createdAt,
+        actorName: r.actor?.name ?? null,
+      })),
+    };
+  }
+
+  /**
+   * POST /cycles/:id/calibration/confirm — HR 确认（逐人即时流转到审批）。
+   *
+   * HR 在校准环节不修改任何绩效结果，确认即表示审核通过，
+   * 任务立即进入结果审批并通知审批人。
+   */
+  async confirm(
+    cycleId: string,
+    dto: ConfirmCalibrationDto,
+    viewer: AuthUser,
+  ): Promise<CalibrationActionResult> {
+    const cycle = await this.getCycleOrThrow(cycleId);
+    const tasks = await this.findActiveTasksByIds(cycleId, dto.taskIds);
+    if (tasks.length !== dto.taskIds.length) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '存在非本周期或非待校准状态的任务',
+      });
+    }
+
+    const now = new Date();
+    await this.prisma.$transaction(async (tx) => {
+      for (const task of tasks) {
+        if (task.status !== TaskStatus.hr_calibration) {
+          throw new BadRequestException({
+            code: ERROR_CODE.PARAM_INVALID,
+            message: `任务 ${task.employee?.name ?? task.id} 当前状态不允许确认`,
+          });
+        }
+        const claimedUpdatedAt = await claimTaskVersion(
+          tx,
+          task.id,
+          task.updatedAt.toISOString(),
+          TaskStatus.hr_calibration,
+        );
+        await tx.gradeResult.updateMany({
+          where: { taskId: task.id },
+          data: { hrCalibratorId: viewer.id, hrCalibratedAt: now },
+        });
+        await this.flowService.transitionTx(tx, {
+          task,
+          action: 'submit',
+          targetStatus: 'approval',
+          actorId: viewer.id,
+          comment: '绩效校准确认，提交结果审批',
+          taskUpdate: { hrCalibratedAt: now, updatedAt: claimedUpdatedAt },
+        });
+      }
+    });
+
+    // 通知审批人（按审批人分组，一条通知覆盖多名员工）
+    const notified = new Set<string>();
+    for (const task of tasks) {
+      const approverId = task.approverId;
+      if (!approverId || notified.has(approverId)) continue;
+      notified.add(approverId);
+      const names = tasks
+        .filter((t) => t.approverId === approverId)
+        .map((t) => t.employee?.name ?? '员工')
+        .join('、');
+      await this.notificationsService.create({
+        userId: approverId,
+        senderId: viewer.id,
+        cycleId,
+        type: 'calibration_confirmed',
+        title: '绩效结果待审批',
+        content: `HR 已完成 ${cycle.name} 的绩效校准确认，涉及员工：${names}，请审批。`,
+      }).catch(() => {
+        // 推送失败不阻断业务
+      });
+    }
+
+    const refreshed = await this.findActiveTasksWithResult(cycleId);
+    return {
+      updated: tasks.length,
+      gradeDistribution: buildGradeDistribution(refreshed, cycle),
+    };
+  }
+
+  /**
+   * POST /cycles/:id/calibration/reject — HR 驳回（退回直属上级重新评定）。
+   */
+  async reject(
+    cycleId: string,
+    dto: RejectCalibrationDto,
+    viewer: AuthUser,
+  ): Promise<CalibrationActionResult> {
+    const cycle = await this.getCycleOrThrow(cycleId);
+    const reason = dto.reason?.trim();
+    if (!reason) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '驳回原因不能为空',
+      });
+    }
+    const tasks = await this.findActiveTasksByIds(cycleId, dto.taskIds);
+    if (tasks.length !== dto.taskIds.length) {
+      throw new BadRequestException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '存在非本周期或非待校准状态的任务',
+      });
+    }
+
+    await this.prisma.$transaction(async (tx) => {
+      for (const task of tasks) {
+        if (task.status !== TaskStatus.hr_calibration) {
+          throw new BadRequestException({
+            code: ERROR_CODE.PARAM_INVALID,
+            message: `任务 ${task.employee?.name ?? task.id} 当前状态不允许驳回`,
+          });
+        }
+        const claimedUpdatedAt = await claimTaskVersion(
+          tx,
+          task.id,
+          task.updatedAt.toISOString(),
+          TaskStatus.hr_calibration,
+        );
+        await this.flowService.transitionTx(tx, {
+          task,
+          action: 'reject',
+          targetStatus: 'manager_scoring',
+          actorId: viewer.id,
+          comment: reason,
+          extraData: { type: 'calibration_rejected' },
+          taskUpdate: { approvedAt: null, updatedAt: claimedUpdatedAt },
+        });
+      }
+    });
+
+    for (const task of tasks) {
+      if (!task.managerId) continue;
+      await this.notificationsService.create({
+        userId: task.managerId,
+        senderId: viewer.id,
+        cycleId,
+        taskId: task.id,
+        type: 'calibration_rejected',
+        title: '整周期结果评定被驳回',
+        content: `${cycle.name}：${task.employee?.name ?? '员工'} 的整周期结果评定被 HR 驳回：${reason}。请修改月度结果或最终等级后重新提交。`,
+      }).catch(() => {
+        // 推送失败不阻断业务
+      });
+    }
+
+    const refreshed = await this.findActiveTasksWithResult(cycleId);
+    return {
+      updated: tasks.length,
+      gradeDistribution: buildGradeDistribution(refreshed, cycle),
     };
   }
 
   // ---------------------------------------------------------------------------
   // 内部辅助
   // ---------------------------------------------------------------------------
+
+  /** 加载等级系数配置（供申诉/更正等模块复用）。 */
+  async loadGradeCoefficients(): Promise<Record<PerfGrade, number>> {
+    const config = await this.prisma.systemConfig.findUnique({ where: { key: 'grade_coefficients' } });
+    const value = config?.value as Record<string, number> | undefined;
+    return {
+      A: value?.A ?? 1,
+      B: value?.B ?? 1,
+      C: value?.C ?? 1,
+      D: value?.D ?? 1,
+    };
+  }
 
   private async getCycleOrThrow(cycleId: string): Promise<AssessmentCycle> {
     const cycle = await this.prisma.assessmentCycle.findUnique({ where: { id: cycleId } });
@@ -266,20 +410,11 @@ export class CalibrationService {
   private async findActiveTasksByIds(cycleId: string, taskIds: string[]) {
     return this.prisma.assessmentTask.findMany({
       where: { cycleId, isExempt: false, id: { in: taskIds } },
-      include: { gradeResult: { select: { calculatedScore: true, rawGrade: true } } },
+      include: {
+        employee: { select: { name: true } },
+        gradeResult: { select: { calculatedScore: true, rawGrade: true } },
+      },
     });
-  }
-
-  /** 加载等级系数配置。 */
-  async loadGradeCoefficients(): Promise<Record<PerfGrade, number>> {
-    const config = await this.prisma.systemConfig.findUnique({ where: { key: 'grade_coefficients' } });
-    const value = config?.value as Record<string, number> | undefined;
-    return {
-      A: value?.A ?? DEFAULT_COEFFICIENTS.A,
-      B: value?.B ?? DEFAULT_COEFFICIENTS.B,
-      C: value?.C ?? DEFAULT_COEFFICIENTS.C,
-      D: value?.D ?? DEFAULT_COEFFICIENTS.D,
-    };
   }
 
   private mapToWorkbenchItem(task: Awaited<ReturnType<CalibrationService['findActiveTasksWithResult']>>[number]): CalibrationWorkbenchItem {
@@ -288,53 +423,34 @@ export class CalibrationService {
       employeeName: task.employee?.name ?? '',
       deptName: task.dept?.name ?? null,
       position: task.employee?.position ?? null,
+      status: task.status,
       calculatedScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
       rawGrade: task.gradeResult?.rawGrade ?? null,
-      calibratedGrade: task.gradeResult?.calibratedGrade ?? null,
-      isVeto: task.gradeResult?.isVeto ?? false,
+      finalGradeSubmittedAt: task.managerScoredAt ?? null,
       managerName: task.manager?.name ?? null,
     };
   }
 }
 
-/** 校验并规范化一票否决输入。 */
-export function normalizeVeto(item: CalibrationItemDto): {
-  isVeto: boolean;
-  grade: PerfGrade;
-  vetoReason?: string;
-} {
-  const isVeto = item.isVeto === true;
-
-  if (isVeto && item.calibratedGrade !== 'D') {
-    throw new BadRequestException({
-      code: ERROR_CODE.PARAM_INVALID,
-      message: '一票否决时校准等级必须为 D',
-    });
-  }
-
-  if (isVeto && (!item.vetoReason || item.vetoReason.trim() === '')) {
-    throw new BadRequestException({
-      code: ERROR_CODE.PARAM_INVALID,
-      message: '一票否决时必须填写否决原因',
-    });
-  }
-
-  return {
-    isVeto,
-    grade: isVeto ? 'D' : item.calibratedGrade,
-    vetoReason: item.vetoReason,
-  };
-}
-
 /** 构建等级分布。 */
 export function buildGradeDistribution(
-  tasks: Array<{ gradeResult?: { calibratedGrade: PerfGrade | null; rawGrade: PerfGrade | null } | null }>,
+  tasks: Array<{ status: TaskStatus; gradeResult?: { calibratedGrade: PerfGrade | null; rawGrade: PerfGrade | null } | null }>,
   cycle: Pick<AssessmentCycle, 'gradeAMaxRatio' | 'gradeBMaxRatio' | 'gradeCMaxRatio' | 'gradeDMaxRatio'>,
 ): Record<PerfGrade, GradeDistributionEntry> {
-  const total = tasks.length;
+  // 分母：已进入评定链路的任务（部门复核/校准/审批/公示及之后），评定中的不计入
+  const counted = tasks.filter((t) => (
+    t.status === 'dept_review'
+    || t.status === 'hr_calibration'
+    || t.status === 'approval'
+    || t.status === 'published'
+    || t.status === 'confirmed'
+    || t.status === 'appealing'
+    || t.status === 'closed'
+  ));
+  const total = counted.length;
   const counts: Record<PerfGrade, number> = { A: 0, B: 0, C: 0, D: 0 };
 
-  for (const task of tasks) {
+  for (const task of counted) {
     const effectiveGrade = task.gradeResult?.calibratedGrade ?? task.gradeResult?.rawGrade ?? null;
     if (effectiveGrade && GRADES.includes(effectiveGrade)) {
       counts[effectiveGrade]++;
@@ -363,13 +479,28 @@ export function buildGradeDistribution(
   return result;
 }
 
-function groupBy<T, K extends string | number>(items: T[], keyFn: (item: T) => K): Map<K, T[]> {
-  const map = new Map<K, T[]>();
-  for (const item of items) {
-    const key = keyFn(item);
-    const list = map.get(key) ?? [];
-    list.push(item);
-    map.set(key, list);
+/** 构建阶段进度。 */
+export function buildProgress(
+  tasks: Array<{ status: TaskStatus }>,
+): CalibrationProgress {
+  const progress: CalibrationProgress = {
+    finalGrading: 0,
+    deptReview: 0,
+    pending: 0,
+    inApproval: 0,
+    done: 0,
+  };
+  for (const task of tasks) {
+    if (task.status === 'hr_calibration') progress.pending++;
+    else if (task.status === 'dept_review') progress.deptReview++;
+    else if (task.status === 'approval') progress.inApproval++;
+    else if (
+      task.status === 'published'
+      || task.status === 'confirmed'
+      || task.status === 'appealing'
+      || task.status === 'closed'
+    ) progress.done++;
+    else progress.finalGrading++;
   }
-  return map;
+  return progress;
 }

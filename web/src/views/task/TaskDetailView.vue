@@ -170,7 +170,22 @@ const isCurrentPerformanceStage = computed(() =>
 const showPerformanceStageContent = computed(() => performanceStageState.value !== 'not-started');
 
 const performanceCycleName = computed(() => task.value?.cycleName || cycle.value?.name || '本期绩效');
-const employeeInitial = computed(() => (task.value?.employeeName || '绩').slice(0, 1));
+
+/** 整周期结果评定入口：直属上级在全部月度评分锁定后进入独立评定步骤。 */
+const allPeriodsCompleted = computed(() => {
+  const periods = task.value?.periods ?? [];
+  return periods.length > 0
+    && periods.every((p) => p.status === 'completed' && p.managerSubmittedAt);
+});
+const showFinalGradeEntry = computed(() => (
+  Boolean(task.value)
+  && task.value!.status === 'manager_scoring'
+  && (permission.isTaskManager.value || permission.isAdminLike.value)
+));
+function goFinalGrade() {
+  if (!task.value) return;
+  router.push({ path: `/tasks/${task.value.id}/final-grade` });
+}const employeeInitial = computed(() => (task.value?.employeeName || '绩').slice(0, 1));
 const employeeMeta = computed(() => {
   const current = task.value;
   if (!current) return [];
@@ -486,6 +501,27 @@ async function handleRemind() {
         </div>
       </section>
 
+      <el-alert
+        v-if="showFinalGradeEntry && allPeriodsCompleted"
+        class="final-grade-entry"
+        type="warning"
+        :closable="false"
+        show-icon
+      >
+        <template #title>
+          全部月度评分已完成，请进行整周期结果评定（独立录入最终等级）。
+        </template>
+        <el-button size="small" type="primary" plain @click="goFinalGrade">进入整周期结果评定</el-button>
+      </el-alert>
+      <el-alert
+        v-else-if="showFinalGradeEntry"
+        class="final-grade-entry"
+        type="info"
+        :closable="false"
+        show-icon
+        title="完成全部月度评分后，需进行整周期结果评定，提交后进入部门复核。"
+      />
+
       <PerformanceFormWorkspace
         :show-reference="showGoalSettingReference"
         reference-title="参考信息"
@@ -644,6 +680,10 @@ async function handleRemind() {
 </template>
 
 <style scoped>
+.final-grade-entry {
+  margin: 0;
+}
+
 .performance-detail {
   min-height: 100%;
   display: grid;

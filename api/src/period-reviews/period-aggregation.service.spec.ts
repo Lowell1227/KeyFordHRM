@@ -1,6 +1,10 @@
 import { Prisma } from '@prisma/client';
 import { PeriodAggregationService } from './period-aggregation.service';
 
+/**
+ * 新模型：聚合只刷新整周期参考总分，不推导 rawGrade、不自动流转状态。
+ * 最终等级由直属上级在「整周期结果评定」中独立录入。
+ */
 describe('PeriodAggregationService', () => {
   const tx = {
     $queryRaw: jest.fn(),
@@ -13,7 +17,6 @@ describe('PeriodAggregationService', () => {
 
   beforeEach(() => {
     jest.clearAllMocks();
-    flow.transitionTx.mockResolvedValue({ newStatus: 'dept_review' });
     tx.$queryRaw.mockResolvedValue([]);
   });
 
@@ -52,20 +55,24 @@ describe('PeriodAggregationService', () => {
     expect(flow.transitionTx).not.toHaveBeenCalled();
   });
 
-  it('averages monthly totals and uses the final month manager grade as the cycle initial grade', async () => {
+  it('averages monthly totals into the reference score without deriving rawGrade or transitioning', async () => {
     tx.assessmentTask.findUnique.mockResolvedValue({
       id: 'task-1', cycleId: 'cycle-1', status: 'manager_scoring',
       managerId: 'manager-1', deptHeadId: 'head-1', cycle: { workflowVersion: 2 },
-      periods: [completedPeriod(80, null), completedPeriod(90, null), completedPeriod(85.555, 'C')],
+      periods: [completedPeriod(80), completedPeriod(90), completedPeriod(85.555, 'C')],
     });
 
     const result = await service.refreshTask('task-1', tx as any, 'manager-1');
 
-    expect(result).toEqual({ complete: true, score: 85.19, targetStatus: 'dept_review' });
+    expect(result).toEqual({ complete: true, score: 85.19, targetStatus: null });
     expect(tx.gradeResult.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      create: expect.objectContaining({ calculatedScore: 85.19, rawGrade: 'C' }),
-      update: expect.objectContaining({ calculatedScore: 85.19, rawGrade: 'C' }),
+      create: expect.objectContaining({ calculatedScore: 85.19 }),
+      update: expect.objectContaining({ calculatedScore: 85.19 }),
     }));
+    expect(tx.gradeResult.upsert).toHaveBeenCalledWith(expect.not.objectContaining({
+      create: expect.objectContaining({ rawGrade: expect.anything() }),
+    }));
+    expect(flow.transitionTx).not.toHaveBeenCalled();
   });
 
   it('does not create an early score while any required period is unfinished', async () => {
@@ -84,34 +91,7 @@ describe('PeriodAggregationService', () => {
     expect(flow.transitionTx).not.toHaveBeenCalled();
   });
 
-  it('moves directly to HR calibration when the manager is also the department head', async () => {
-    tx.assessmentTask.findUnique.mockResolvedValue({
-      id: 'task-1', cycleId: 'cycle-1', status: 'manager_scoring',
-      managerId: 'manager-1', deptHeadId: 'manager-1',
-      periods: [completedPeriod(92)],
-    });
-
-    await expect(service.refreshTask('task-1', tx as any, 'manager-1'))
-      .resolves.toEqual({ complete: true, score: 92, targetStatus: 'hr_calibration' });
-    expect(flow.transitionTx).toHaveBeenCalledWith(tx, expect.objectContaining({
-      targetStatus: 'hr_calibration',
-    }));
-  });
-
-  it('waits for the final month manager grade even when all monthly scores are complete', async () => {
-    tx.assessmentTask.findUnique.mockResolvedValue({
-      id: 'task-1', cycleId: 'cycle-1', status: 'manager_scoring',
-      managerId: 'manager-1', deptHeadId: 'head-1', cycle: { workflowVersion: 2 },
-      periods: [completedPeriod(80, null), completedPeriod(90, null)],
-    });
-
-    await expect(service.refreshTask('task-1', tx as any, 'manager-1'))
-      .resolves.toEqual({ complete: false, score: null, targetStatus: null });
-    expect(tx.gradeResult.upsert).not.toHaveBeenCalled();
-    expect(flow.transitionTx).not.toHaveBeenCalled();
-  });
-
-  it('repairs a workflow v2 score already advanced by the legacy route without transitioning twice', async () => {
+  it('still refreshes the score for a workflow v2 task already advanced, without touching rawGrade', async () => {
     tx.assessmentTask.findUnique.mockResolvedValue({
       id: 'task-1', cycleId: 'cycle-1', status: 'hr_calibration',
       managerId: 'manager-1', deptHeadId: 'manager-1',
@@ -120,7 +100,7 @@ describe('PeriodAggregationService', () => {
     });
 
     await expect(service.refreshTask('task-1', tx as any, 'manager-1'))
-      .resolves.toEqual({ complete: true, score: 90, targetStatus: 'hr_calibration' });
+      .resolves.toEqual({ complete: true, score: 90, targetStatus: null });
     expect(tx.gradeResult.upsert).toHaveBeenCalledWith(expect.objectContaining({
       update: expect.objectContaining({ calculatedScore: 90 }),
     }));

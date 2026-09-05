@@ -1,9 +1,7 @@
 import { IsBoolean, IsOptional, IsString } from 'class-validator';
 
 /**
- * 一票否决字段 DTO。
- *
- * 可在校准批量提交中内嵌使用，也可作为未来独立否决端点的基础结构。
+ * 一票否决字段 DTO（V1 周期级评分使用；校准环节的一票否决已移除）。
  */
 export class VetoDto {
   @IsOptional()
