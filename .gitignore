@@ -66,3 +66,4 @@ api/api/
 # Codex/Superpowers 隔离工作区与任务账本
 .worktrees/
 .superpowers/
+walk/

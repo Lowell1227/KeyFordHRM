@@ -153,7 +153,9 @@ function statusTagType(status: TaskStatus): string {
 
 async function loadCycles() {
   try {
-    const res = await cyclesApi.findAll({ status: 'hr_calibration' });
+    // 逐人流转设计下周期级状态会滞后/跳跃，不能按 status=hr_calibration 过滤，
+    // 否则页面大部分时间为空；取 active 组（指标确认~申诉），由任务级状态做真正门禁。
+    const res = await cyclesApi.findAll({ group: 'active' });
     cycles.value = res.items;
   } catch (e) {
     cycles.value = [];

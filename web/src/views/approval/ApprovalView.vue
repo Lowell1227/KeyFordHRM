@@ -79,7 +79,8 @@ function statusType(status: ApprovalTaskView['status']): TagType {
 
 async function loadCycles() {
   try {
-    const res = await cyclesApi.findAll({ status: 'approval' });
+    // 周期级状态滞后于逐人流转，按 active 组取周期，待办由 approver_id 过滤。
+    const res = await cyclesApi.findAll({ group: 'active' });
     cycles.value = res.items;
   } catch {
     cycles.value = [];

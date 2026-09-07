@@ -56,7 +56,8 @@ function rowClassName({ row }: { row: TaskListItem }): string {
 
 async function loadCycles() {
   try {
-    const res = await cyclesApi.findAll({ status: 'approval' });
+    // 周期级状态滞后于逐人流转，按 active 组取周期，可公示任务由后端按状态过滤。
+    const res = await cyclesApi.findAll({ group: 'active' });
     cycles.value = res.items;
   } catch {
     cycles.value = [];
