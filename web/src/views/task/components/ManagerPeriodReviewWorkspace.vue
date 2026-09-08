@@ -30,8 +30,23 @@ const validationErrors = reactive<Record<string, string>>({});
 const managerGrade = ref<PerfGrade | null>(null);
 const managerGradeError = ref('');
 const gradeOptions: PerfGrade[] = ['A', 'B', 'C', 'D'];
+let reviewLoadSequence = 0;
+const lastAction = ref<{ taskId: string; periodId: string; label: string; action: 'returned' | 'submitted' }>();
 
-const canEdit = computed(() => Boolean(detail.value?.permissions.canEditManager));
+const canEdit = computed(() => Boolean(!loading.value && detail.value?.period.id === props.periodId && detail.value?.permissions.canEditManager));
+function periodLabel(period: PeriodReviewDetail['period']): string {
+  if (period.periodType === 'cycle') return '整周期';
+  const [year, month] = period.periodKey.split('-');
+  return `${year}年${Number(month)}月`;
+}
+const actionNotice = computed(() => {
+  const action = lastAction.value;
+  const current = detail.value;
+  if (!action || !current || action.taskId !== current.period.taskId) return '';
+  const outcome = `${action.label}${action.action === 'returned' ? '已退回员工补充' : '评分已提交'}`;
+  if (action.periodId !== current.period.id) return `${outcome}；${canEdit.value ? '已切换至' : '当前查看'}${periodLabel(current.period)}评分。`;
+  return `${outcome}${action.action === 'returned' ? '，等待员工重新提交' : ''}。`;
+});
 const employeeSubmitted = computed(() => Boolean(detail.value?.period.employeeSubmittedAt));
 const periodTitle = computed(() => {
   const period = detail.value?.period;
@@ -91,21 +106,26 @@ function replaceForm(next: PeriodReviewDetail) {
 }
 
 async function loadReview() {
+  const sequence = ++reviewLoadSequence;
+  const periodId = props.periodId;
+  const taskId = props.taskId;
   loading.value = true;
   error.value = '';
   try {
-    const next = await periodReviewsApi.findOne(props.periodId);
-    if (props.taskId && next.period.taskId !== props.taskId) {
+    const next = await periodReviewsApi.findOne(periodId);
+    if (sequence !== reviewLoadSequence || periodId !== props.periodId || taskId !== props.taskId) return;
+    if (taskId && next.period.taskId !== taskId) {
       detail.value = undefined;
       error.value = '该月份不属于当前员工的绩效任务';
       return;
     }
     replaceForm(next);
   } catch (loadError) {
+    if (sequence !== reviewLoadSequence) return;
     const candidate = loadError as { message?: string; response?: { data?: { message?: string } } };
     error.value = candidate.response?.data?.message || candidate.message || '直属上级评分加载失败';
   } finally {
-    loading.value = false;
+    if (sequence === reviewLoadSequence) loading.value = false;
   }
 }
 
@@ -173,24 +193,30 @@ async function saveDraft() {
 }
 
 async function returnReview() {
-  if (!canEdit.value || returning.value || submitting.value) return;
+  if (!canEdit.value || saving.value || returning.value || submitting.value || !detail.value) return;
+  const current = detail.value;
+  const action = { taskId: current.period.taskId, periodId: current.period.id, label: periodLabel(current.period), action: 'returned' as const };
   let reason = '';
   try {
-    const result = await ElMessageBox.prompt('可填写需要员工补充的内容；不填写也可退回。', `退回${followUpName.value}`, {
+    const result = await ElMessageBox.prompt(`${current.context.cycleName} · ${action.label}。可填写需要员工补充的内容；不填写也可退回。`, `退回${followUpName.value}`, {
       confirmButtonText: '确认退回', cancelButtonText: '取消', inputType: 'textarea', inputPlaceholder: '选填退回原因',
     });
     reason = result.value;
   } catch {
     return;
   }
+  if (detail.value !== current || !canEdit.value) return;
   returning.value = true;
   try {
-    await periodReviewsApi.returnManagerReview(props.periodId, {
+    await periodReviewsApi.returnManagerReview(action.periodId, {
       expectedVersion: draftVersion.value,
       idempotencyKey: newIdempotencyKey(),
       reason: reason.trim() || null,
     });
-    ElMessage.success('已退回员工补充');
+    ElMessage.success(`${current.context.cycleName} · ${action.label}已退回员工补充`);
+    if (detail.value !== current || props.periodId !== action.periodId) return;
+    lastAction.value = action;
+    await loadReview();
     emit('returned');
   } finally {
     returning.value = false;
@@ -198,25 +224,30 @@ async function returnReview() {
 }
 
 async function submitReview() {
-  if (!canEdit.value || saving.value || submitting.value || !validate()) return;
+  if (!canEdit.value || saving.value || returning.value || submitting.value || !validate() || !detail.value) return;
+  const current = detail.value;
+  const action = { taskId: current.period.taskId, periodId: current.period.id, label: periodLabel(current.period), action: 'submitted' as const };
   const selectedGrade = managerGrade.value;
   if (!selectedGrade) return;
   submitting.value = true;
   try {
-    const result = await periodReviewsApi.submitManagerReview(props.periodId, {
+    const result = await periodReviewsApi.submitManagerReview(action.periodId, {
       expectedVersion: draftVersion.value,
       idempotencyKey: newIdempotencyKey(),
       managerGrade: selectedGrade,
       indicators: bodyItems(),
     });
+    ElMessage.success(`${current.context.cycleName} · ${action.label}评分已提交`);
+    if (detail.value !== current || props.periodId !== action.periodId) return;
+    lastAction.value = action;
     draftVersion.value = result.draftVersion;
     if (detail.value) {
       detail.value.period.status = result.status;
       detail.value.period.managerGrade = selectedGrade;
       detail.value.period.managerScoreTotal = managerScoreTotal.value;
       detail.value.permissions.canEditManager = false;
+      detail.value.context.statusLabel = '评分已完成';
     }
-    ElMessage.success('直属上级评分已提交');
     emit('submitted');
   } finally {
     submitting.value = false;
@@ -233,8 +264,10 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
       <template #extra><el-button @click="loadReview">重新加载</el-button></template>
     </el-result>
     <template v-else-if="detail">
+      <p v-if="actionNotice" class="manager-review__notice" role="status" data-testid="manager-period-action-notice">{{ actionNotice }}</p>
       <PeriodReviewToolbar
         :title="periodTitle"
+        :cycle-name="detail.context.cycleName"
         :status-label="detail.context.statusLabel.replace(/主管/g, '直属上级')"
         :due-text="`直属上级评分截止 ${new Date(detail.period.managerDueAt).toLocaleString('zh-CN', { hour12: false })}`"
         :progress-text="scoreProgressText"
@@ -366,6 +399,7 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
 
 <style scoped>
 .manager-review { min-width: 0; display: grid; gap: 14px; }
+.manager-review__notice { margin: 0; padding: 10px 14px; border-radius: 8px; background: #edf4ff; color: #426095; font-size: 13px; overflow-wrap: anywhere; }
 .manager-review__totals { display: grid; grid-template-columns: repeat(2, minmax(260px, 1fr)); gap: 12px; }
 .manager-review__total-card { min-width: 0; display: grid; gap: 8px; padding: 12px 15px; border: 1px solid #e5eaf2; border-radius: 10px; background: #fff; }
 .manager-review__metric,

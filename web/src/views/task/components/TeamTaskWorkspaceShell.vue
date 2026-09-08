@@ -35,7 +35,7 @@ const managerPeriodStatus = computed(() => {
   const status = props.task?.periodReview?.status;
   if (status === 'manager_scoring') return '直属上级评分中';
   if (status === 'self_eval') return '员工自评中';
-  if (status === 'completed') return '本期已完成';
+  if (status === 'completed') return props.task?.status === 'manager_scoring' ? '待整周期结果评定' : '月度评分已完成';
   if (status === 'no_result') return '本期无结果';
   if (status === 'unopened') return '未开始';
   return '';

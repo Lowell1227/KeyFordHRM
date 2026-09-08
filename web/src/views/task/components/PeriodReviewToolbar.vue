@@ -3,6 +3,7 @@ import { QuestionFilled } from '@element-plus/icons-vue';
 
 withDefaults(defineProps<{
   title: string;
+  cycleName?: string;
   statusLabel: string;
   dueText: string;
   progressText?: string;
@@ -12,6 +13,7 @@ withDefaults(defineProps<{
   actionsTestId?: string;
 }>(), {
   progressText: '',
+  cycleName: '',
   progressHint: '',
   showActions: false,
   toolbarTestId: undefined,
@@ -21,6 +23,7 @@ withDefaults(defineProps<{
 
 <template>
   <header class="period-review-toolbar" :data-testid="toolbarTestId">
+    <p v-if="cycleName" class="period-review-toolbar__cycle">所属周期：{{ cycleName }}</p>
     <div class="period-review-toolbar__context">
       <div>
         <strong>{{ title }}</strong>
@@ -66,6 +69,8 @@ withDefaults(defineProps<{
   gap: 14px;
 }
 
+.period-review-toolbar__cycle { margin: 0; color: #697487; font-size: 12px; overflow-wrap: anywhere; }
+
 .period-review-toolbar__context > div {
   min-width: 0;
   display: flex;
@@ -74,11 +79,9 @@ withDefaults(defineProps<{
 }
 
 .period-review-toolbar__context strong {
-  overflow: hidden;
   color: #202a3d;
   font-size: 16px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  overflow-wrap: anywhere;
 }
 
 .period-review-toolbar__context span {

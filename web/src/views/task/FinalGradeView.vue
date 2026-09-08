@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
@@ -12,38 +12,52 @@ import { GRADE_LABELS } from '@/utils/grade';
 
 const route = useRoute();
 const router = useRouter();
+const props = defineProps<{ taskId?: string; embedded?: boolean }>();
+const emit = defineEmits<{ submitted: [] }>();
 
-const taskId = computed(() => String(route.params.id));
+const taskId = computed(() => props.taskId || String(route.params.id));
 const detail = ref<FinalGradeDetail | null>(null);
 const loading = ref(false);
 const submitting = ref(false);
 const selectedGrade = ref<PerfGrade | null>(null);
+let loadSequence = 0;
 
 const GRADES: PerfGrade[] = ['A', 'B', 'C', 'D'];
 
 const fmtScore = (s: number | null | undefined) => (s == null ? '—' : s.toFixed(2));
 
 const allPeriodsComplete = computed(() => detail.value?.allPeriodsComplete ?? false);
+const cycleScoreHint = computed(() => detail.value?.periods.every(period => period.periodType === 'month')
+  ? `由${detail.value.periods.length}个月的直属上级评分取平均；周期等级由直属上级独立评定。`
+  : '由本周期各期直属上级评分取平均；周期等级由直属上级独立评定。');
 
 async function loadDetail() {
+  const sequence = ++loadSequence;
+  const requestedTaskId = taskId.value;
   loading.value = true;
   try {
-    detail.value = await tasksApi.getFinalGrade(taskId.value);
+    const result = await tasksApi.getFinalGrade(requestedTaskId);
+    if (sequence !== loadSequence || requestedTaskId !== taskId.value) return;
+    detail.value = result;
     selectedGrade.value = detail.value.currentGrade;
   } catch (e) {
+    if (sequence !== loadSequence) return;
     ElMessage.error(e instanceof Error ? e.message : '获取评定数据失败');
     detail.value = null;
   } finally {
-    loading.value = false;
+    if (sequence === loadSequence) loading.value = false;
   }
 }
 
 async function handleSubmit() {
-  if (!detail.value || !selectedGrade.value) {
+  if (loading.value || submitting.value || !detail.value?.canSubmit) return;
+  if (!selectedGrade.value) {
     ElMessage.warning('请选择整周期最终等级');
     return;
   }
   const grade = selectedGrade.value;
+  const current = detail.value;
+  const requestedTaskId = taskId.value;
   try {
     await ElMessageBox.confirm(
       `提交后 ${detail.value.employeeName} 的整周期最终等级为 ${GRADE_LABELS[grade]}，进入部门复核。提交后不可直接修改，如被退回可重新评定。`,
@@ -53,11 +67,12 @@ async function handleSubmit() {
   } catch {
     return;
   }
+  if (requestedTaskId !== taskId.value || detail.value !== current || !detail.value.canSubmit) return;
   submitting.value = true;
   try {
-    await tasksApi.submitFinalGrade(taskId.value, { grade });
+    await tasksApi.submitFinalGrade(requestedTaskId, { grade });
     ElMessage.success('整周期结果评定已提交');
-    await loadDetail();
+    if (requestedTaskId === taskId.value) { await loadDetail(); emit('submitted'); }
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '提交失败');
   } finally {
@@ -69,16 +84,16 @@ function goBack() {
   router.push({ name: 'TaskDetail', params: { id: taskId.value } });
 }
 
-onMounted(loadDetail);
+watch(taskId, loadDetail, { immediate: true });
 </script>
 
 <template>
-  <div v-loading="loading" class="final-grade-view page-stack">
+  <div v-loading="loading" class="final-grade-view page-stack" data-testid="manager-period-results">
     <template v-if="detail">
-      <ChartCard>
+      <ChartCard :padded="true">
         <template #title>
           <span class="title-row">
-            <el-button :icon="ArrowLeft" link aria-label="返回任务详情" @click="goBack" />
+            <el-button v-if="!embedded" :icon="ArrowLeft" link aria-label="返回任务详情" @click="goBack" />
             整周期结果评定 · {{ detail.employeeName }}
           </span>
         </template>
@@ -100,56 +115,50 @@ onMounted(loadDetail);
           {{ detail.latestReject.comment }}
         </el-alert>
 
-        <el-descriptions :column="4" size="small" border>
+        <el-descriptions :column="2" size="small" border>
           <el-descriptions-item label="部门">{{ detail.deptName ?? '—' }}</el-descriptions-item>
           <el-descriptions-item label="岗位">{{ detail.position ?? '—' }}</el-descriptions-item>
           <el-descriptions-item label="直属上级">{{ detail.managerName ?? '—' }}</el-descriptions-item>
-          <el-descriptions-item label="参考均分">
-            <span class="score-cell">{{ fmtScore(detail.calculatedScore) }}</span>
-          </el-descriptions-item>
         </el-descriptions>
-        <p class="hint">参考均分为各月直属上级评分自动平均，仅作参考，<b>分数与等级无换算关系</b>；最终等级由你独立评定。</p>
       </ChartCard>
 
-      <ChartCard>
+      <ChartCard :padded="true">
         <template #title>月度结果回顾</template>
-        <el-table :data="detail.periods" size="small" border>
-          <el-table-column prop="periodKey" label="月份" width="100" />
-          <el-table-column label="自评等级" width="100">
+        <el-table :data="detail.periods" size="small" border class="monthly-results-table">
+          <el-table-column prop="periodKey" label="月份" width="90" />
+          <el-table-column label="员工自评" min-width="110">
             <template #default="{ row }">
-              <GradeTag v-if="row.selfGrade" :grade="row.selfGrade" size="small" />
-              <span v-else>—</span>
+              <div class="period-result-cell"><strong>{{ fmtScore(row.selfScoreTotal) }}</strong><GradeTag v-if="row.selfGrade" :grade="row.selfGrade" size="small" /><span v-else>未评等级</span></div>
             </template>
           </el-table-column>
-          <el-table-column label="上级等级" width="100">
+          <el-table-column label="直属上级评分" min-width="110">
             <template #default="{ row }">
-              <GradeTag v-if="row.managerGrade" :grade="row.managerGrade" size="small" />
-              <span v-else>—</span>
+              <div class="period-result-cell"><strong>{{ fmtScore(row.managerScoreTotal) }}</strong><GradeTag v-if="row.managerGrade" :grade="row.managerGrade" size="small" /><span v-else>未评等级</span></div>
             </template>
-          </el-table-column>
-          <el-table-column label="自评分" width="100">
-            <template #default="{ row }">{{ fmtScore(row.selfScoreTotal) }}</template>
-          </el-table-column>
-          <el-table-column label="上级评分">
-            <template #default="{ row }">{{ fmtScore(row.managerScoreTotal) }}</template>
           </el-table-column>
         </el-table>
       </ChartCard>
 
-      <ChartCard>
-        <template #title>整周期最终等级</template>
+      <ChartCard :padded="true">
+        <template #title>周期结果</template>
+        <div class="cycle-result-score"><span>周期得分</span><strong data-testid="cycle-result-score">{{ allPeriodsComplete ? `${fmtScore(detail.calculatedScore)}分` : '待月度评分完成' }}</strong></div>
+        <p class="hint">{{ cycleScoreHint }}</p>
+        <h3 class="cycle-grade-title">周期等级</h3>
         <div v-if="detail.canSubmit" class="grade-picker">
-          <div
+          <button
             v-for="grade in GRADES"
             :key="grade"
+            type="button"
+            :aria-label="`整周期最终等级 ${grade}`"
             class="grade-option"
             :class="{ 'grade-option--active': selectedGrade === grade }"
             @click="selectedGrade = grade"
           >
             <GradeTag :grade="grade" size="large" />
             <span class="grade-label">{{ GRADE_LABELS[grade] }}</span>
-          </div>
+          </button>
         </div>
+        <GradeTag v-else-if="detail.currentGrade" :grade="detail.currentGrade" size="large" class="final-grade-readonly" />
         <el-alert
           v-else-if="detail.status !== 'manager_scoring'"
           type="info"
@@ -182,6 +191,15 @@ onMounted(loadDetail);
 </template>
 
 <style scoped>
+.final-grade-view { min-width: 0; }
+.final-grade-view :deep(.chart-card) { min-width: 0; }
+.monthly-results-table { width: 100%; }
+.period-result-cell { display: flex; align-items: flex-start; flex-direction: column; gap: 5px; }
+.period-result-cell strong { color: #394559; }
+.final-grade-readonly { margin-bottom: 12px; }
+.cycle-result-score { display: flex; align-items: baseline; gap: 16px; color: #697487; font-size: 13px; }
+.cycle-result-score strong { color: #202a3d; font-size: 24px; }
+.cycle-grade-title { margin: 18px 0 10px; color: #394559; font-size: 13px; }
 .title-row {
   display: inline-flex;
   align-items: center;
@@ -191,6 +209,7 @@ onMounted(loadDetail);
 .cycle-name {
   font-size: 13px;
   color: var(--el-text-color-secondary);
+  overflow-wrap: anywhere;
 }
 
 .reject-alert {
@@ -223,6 +242,7 @@ onMounted(loadDetail);
   border: 1px solid var(--el-border-color);
   border-radius: 8px;
   cursor: pointer;
+  background: #fff;
   transition: all 0.15s;
 }
 
@@ -242,5 +262,11 @@ onMounted(loadDetail);
 
 .submit-row {
   margin-top: 20px;
+}
+@media (max-width: 767px) {
+  .title-row { font-size: 15px; flex-wrap: wrap; }
+  .grade-picker { gap: 8px; }
+  .grade-option { flex: 1; padding: 12px 8px; }
+  .final-grade-view :deep(.chart-card__head) { flex-wrap: wrap; gap: 8px; }
 }
 </style>

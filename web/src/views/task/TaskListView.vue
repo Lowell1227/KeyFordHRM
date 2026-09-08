@@ -23,6 +23,7 @@ import GoalReviewWorkspace, {
 } from './components/GoalReviewWorkspace.vue';
 import ManagerEvaluationWorkspace from './components/ManagerEvaluationWorkspace.vue';
 import ManagerPeriodReviewWorkspace from './components/ManagerPeriodReviewWorkspace.vue';
+import FinalGradeView from './FinalGradeView.vue';
 import type {
   AssessmentCycle,
   BatchReviewResult,
@@ -377,6 +378,16 @@ function detailStageState(detail: TaskDetail, stage: TeamTaskStage): TeamStageSt
 }
 
 function toTeamTaskItem(detail: TaskDetail, stage: TeamTaskStage): TeamTaskListItem {
+  const periods = stage === 'manager-eval' && detail.workflowVersion === 2
+    ? [...(detail.periods ?? [])].sort((left, right) => left.sequence - right.sequence) : [];
+  const period = periods.find(item => item.status === 'manager_scoring')
+    ?? periods.find(item => item.status === 'self_eval')
+    ?? periods.find(item => item.status === 'unopened')
+    ?? periods[periods.length - 1];
+  const stageState = detail.isExempt ? 'exempted' : period
+    ? period.status === 'manager_scoring' && period.employeeSubmittedAt && !period.managerSubmittedAt ? 'pending'
+      : period.status === 'self_eval' || period.status === 'unopened' ? 'not_started' : 'completed'
+    : detailStageState(detail, stage);
   return {
     id: detail.id,
     cycleId: detail.cycleId,
@@ -393,8 +404,9 @@ function toTeamTaskItem(detail: TaskDetail, stage: TeamTaskStage): TeamTaskListI
     employeeNo: detail.employeeNo ?? null,
     avatarUrl: null,
     position: null,
-    stageState: detailStageState(detail, stage),
-    periodReview: null,
+    stageState,
+    periodReview: period ? { id: period.id, periodKey: period.periodKey, periodType: period.periodType, status: period.status,
+      selfScoreTotal: null, managerScoreTotal: null } : null,
   };
 }
 
@@ -1218,6 +1230,12 @@ watch(
         @save="saveSingleGoalReview"
         @approve="approveSingleGoalReview"
         @reject="rejectSingleGoalReview"
+      />
+      <FinalGradeView
+        v-else-if="workspaceQuery.state.value.stage === 'manager-eval' && selectedTeamTask && !workspaceQuery.state.value.periodId && ['completed', 'no_result'].includes(selectedTeamTask.periodReview?.status || '')"
+        :task-id="selectedTeamTask.id"
+        embedded
+        @submitted="loadTeam"
       />
       <ManagerPeriodReviewWorkspace
         v-else-if="workspaceQuery.state.value.stage === 'manager-eval' && selectedTeamTask && selectedManagerPeriodId"

@@ -39,6 +39,7 @@ export default defineConfig({
     '42-dashboard-multi-cycle.spec.ts',
     '43-monthly-progress-reference.spec.ts',
     '44-manager-progress-reference.spec.ts',
+    '45-manager-period-context.spec.ts',
   ],
   workers: 1,
 });
