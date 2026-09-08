@@ -261,7 +261,7 @@ export function createTasksApi(client: TasksApiClient) {
     },
 
     /** POST /tasks/:id/final-grade — 提交整周期最终等级 */
-    submitFinalGrade(id: string, body: { grade: PerfGrade }): Promise<TaskActionResult> {
+    submitFinalGrade(id: string, body: { grade: PerfGrade; comment?: string }): Promise<TaskActionResult> {
       return apiPost(`/tasks/${id}/final-grade`, body);
     },
   };

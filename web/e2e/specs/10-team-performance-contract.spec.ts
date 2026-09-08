@@ -2343,7 +2343,7 @@ test.describe('manager evaluation workspace', () => {
     await expect(page.getByTestId('manager-evaluation-save')).toHaveCount(0);
     await expect(page.getByTestId('manager-evaluation-submit')).toHaveCount(0);
     await expect(page.getByTestId('manager-evaluation-total')).toContainText('89.2');
-    await expect(page.getByTestId('manager-evaluation-grade')).toContainText('良好');
+    await expect(page.getByTestId('manager-evaluation-grade')).toHaveText('B');
     await expect(page.getByTestId('manager-evaluation-withdraw')).toBeVisible();
     expect(mocked.submitBodies).toHaveLength(1);
     expect((mocked.submitBodies[0] as { expectedUpdatedAt: string }).expectedUpdatedAt)

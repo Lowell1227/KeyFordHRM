@@ -819,6 +819,7 @@ export interface TaskListItem extends AssessmentTask {
 }
 
 export interface TaskDetail extends AssessmentTask {
+  managerStageState?: TeamStageState;
   workflowVersion?: number;
   periods?: AssessmentPeriodSummary[];
   workflowContext?: TaskWorkflowContext;
@@ -1242,6 +1243,7 @@ export interface CalibrationCandidateDetail {
 
 /** 整周期结果评定页数据。 */
 export interface FinalGradeDetail {
+  comment?: string | null;
   taskId: string;
   cycleId: string;
   cycleName: string;

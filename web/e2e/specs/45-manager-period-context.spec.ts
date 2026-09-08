@@ -25,7 +25,7 @@ function review(id: string, month: number, employeeTaskId = taskId): PeriodRevie
   };
 }
 
-async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFirst?: boolean; wholeCycle?: boolean; finished?: boolean; finishOnSubmit?: boolean } = {}) {
+async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFirst?: boolean; wholeCycle?: boolean; finished?: boolean; finishOnSubmit?: boolean; includeFinishedInTeam?: boolean } = {}) {
   const august = review(augustId, 8);
   const july = review('55555555-5555-4555-8555-555555555555', 7);
   const september = review(septemberId, 9, options.slowFirst ? 'task-second' : taskId);
@@ -33,6 +33,7 @@ async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFir
   let current = august;
   let finished = Boolean(options.finished);
   let finalSubmitted = false;
+  let finalComment: string | null = null;
   if (finished) for (const item of [july, august, september]) { item.period.status = 'completed'; item.period.managerSubmittedAt = '2026-09-08T10:00:00.000Z'; item.permissions.canEditManager = false; }
   const writes: Array<{ path: string; body: any }> = [];
   let releaseFirst!: () => void;
@@ -40,8 +41,8 @@ async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFir
   let firstStarted = false;
   const teamItem = (detail: PeriodReviewDetail) => ({
     id: detail.period.taskId, cycleId, cycleName, employeeId: detail.period.taskId, employeeName: detail.context.employeeName,
-    employeeNo: 'MOCK', deptId: 'test-dept', deptName: '测试部', managerId: 'manager', status: 'manager_scoring',
-    stageState: detail.permissions.canEditManager ? 'pending' : 'not_started', totalScore: null, rawGrade: null,
+    employeeNo: 'MOCK', deptId: 'test-dept', deptName: '测试部', managerId: 'manager', status: finalSubmitted ? 'dept_review' : 'manager_scoring',
+    stageState: finalSubmitted ? 'completed' : finished || detail.permissions.canEditManager ? 'pending' : 'not_started', totalScore: null, rawGrade: null,
     updatedAt: '2026-09-08T10:00:00.000Z', avatarUrl: null, position: '测试岗位', periodReview: detail.period,
   });
   await page.addInitScript(() => {
@@ -56,6 +57,7 @@ async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFir
       writes.push({ path, body: request.postDataJSON() });
       if (path.endsWith('/final-grade')) {
         finalSubmitted = true;
+        finalComment = request.postDataJSON().comment?.trim() || null;
         await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ code: 0, data: { taskId, status: 'dept_review' } }) });
         return;
       }
@@ -74,14 +76,14 @@ async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFir
     else if (path.endsWith('/notifications/unread-count')) data = 0;
     else if (path.endsWith('/cycles/mine')) data = [{ id: cycleId, name: cycleName, type: 'quarterly', status: 'manager_score', startDate: '2026-07-01', endDate: '2026-09-30' }];
     else if (path.endsWith('/tasks/team')) data = {
-      items: finished ? [] : options.slowFirst ? [teamItem(august), teamItem(september)] : [teamItem(current)],
+      items: finished && !options.includeFinishedInTeam ? [] : options.slowFirst ? [teamItem(august), teamItem(september)] : [teamItem(current)],
       total: options.slowFirst ? 2 : 1, page: 1, pageSize: 20,
-      counts: { all: 1, pending: 1, completed: 0, notStarted: 0, exempted: 0 }, facets: { employees: [], departments: [] },
+      counts: { all: 1, pending: finalSubmitted ? 0 : 1, completed: finalSubmitted ? 1 : 0, notStarted: 0, exempted: 0 }, facets: { employees: [], departments: [] },
     };
     else if (path.endsWith('/tasks/mine')) data = { items: [], total: 0, page: 1, pageSize: 100 };
     else if (path.endsWith(`/tasks/${taskId}/final-grade`)) data = {
       taskId, cycleId, cycleName, employeeName: '虚拟员工甲', deptName: '测试部', position: '测试岗位', managerName: '虚拟主管',
-      status: finalSubmitted ? 'dept_review' : 'manager_scoring', currentGrade: finalSubmitted ? 'B' : null, calculatedScore: 84.33,
+      status: finalSubmitted ? 'dept_review' : 'manager_scoring', currentGrade: finalSubmitted ? 'B' : null, calculatedScore: 84.33, comment: finalComment,
       allPeriodsComplete: true, canSubmit: !finalSubmitted, latestReject: null,
       periods: [
         { periodKey: '2026-07', periodType: 'month', status: 'completed', selfScoreTotal: 78, managerScoreTotal: 80, selfGrade: 'B', managerGrade: 'B' },
@@ -92,6 +94,7 @@ async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFir
     else if (path.endsWith(`/tasks/${taskId}`)) data = {
       id: taskId, cycleId, cycleName, employeeId: taskId, employeeName: '虚拟员工甲', employeeNo: 'MOCK', managerId: 'manager', managerName: '虚拟主管',
       workflowVersion: 2, status: finalSubmitted ? 'dept_review' : 'manager_scoring', isExempt: false, deptName: '测试部',
+      managerStageState: finalSubmitted ? 'completed' : finished ? 'pending' : 'not_started',
       periods: (finished ? [july, august, september] : [august, september]).map((item, index) => ({ ...item.period, sequence: index + 1 })), indicatorInstances: [], flowRecords: [],
     };
     else if (path.endsWith(`/assessment-periods/${augustId}/review`)) {
@@ -172,6 +175,7 @@ for (const width of [1440, 390]) {
   test(`全部月度完成后补载任务仍显示月度评分回顾，禁止回落旧评分表单 ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     const state = await mockTeam(page, { finished: true });
+    await expect(page.getByTestId(`team-task-row-${taskId}`)).toContainText('待周期结果评定');
     const results = page.getByTestId('manager-period-results');
     await expect(results).toBeVisible();
     await expect(results).toContainText(cycleName);
@@ -193,7 +197,7 @@ for (const width of [1440, 390]) {
     expect(state.writes).toHaveLength(0);
     await page.getByRole('dialog').getByRole('button', { name: '提交', exact: true }).click();
     await expect.poll(() => state.writes.length).toBe(1);
-    expect(state.writes[0]).toEqual({ path: `/api/v1/tasks/${taskId}/final-grade`, body: { grade: 'B' } });
+    expect(state.writes[0]).toEqual({ path: `/api/v1/tasks/${taskId}/final-grade`, body: { grade: 'B', comment: '' } });
   });
 }
 
@@ -204,3 +208,42 @@ test('最后一月提交后直接进入月度结果回顾而非空白旧表单',
   await expect(page.getByTestId('manager-evaluation-workspace')).toHaveCount(0);
   expect(state.writes).toHaveLength(1);
 });
+
+for (const width of [1440, 390]) {
+  test(`周期评定保持待办，ABCD等级和评语提交后回显并完成任务 ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    const state = await mockTeam(page, { finished: true, includeFinishedInTeam: true });
+    await page.goto('/');
+    await expect(page.getByTestId('manager-evaluation-count')).toHaveText('1');
+    await page.getByTestId('manager-evaluation-open').click();
+    await page.getByTestId('team-task-list').getByRole('button', {name:'处理 虚拟员工甲',exact:true}).click();
+    await expect(page.getByTestId(`team-task-row-${taskId}`)).toContainText('待周期结果评定');
+    await expect(page.getByTestId('manager-evaluation-pending-count')).toHaveText('1 人待处理');
+    await page.getByTestId('team-task-workspace-back').click();
+    await expect(page.getByTestId('team-count-pending')).toContainText('1');
+    await expect(page.getByTestId('manager-team-stage-manager-eval')).toContainText('待处理 1');
+    await expect(page.getByTestId('team-task-list')).toContainText('待周期结果评定');
+    await page.getByTestId('team-task-list').getByRole('button', {name:'处理 虚拟员工甲',exact:true}).click();
+    const results = page.getByTestId('manager-period-results');
+    const grades = results.locator('.grade-tag');
+    await expect(grades.first()).toBeVisible();
+    for (const label of await grades.allTextContents()) expect(label.trim()).toMatch(/^[ABCD]$/);
+    for (const grade of ['A','B','C','D']) await expect(results.getByLabel(`整周期最终等级 ${grade}`, {exact:true})).toHaveText(grade);
+    await results.getByLabel('整周期最终等级 B', {exact:true}).click();
+    const comment = '本周期稳定完成交付。\n下周期加强协作和风险预警。';
+    await results.getByRole('textbox', {name:'周期评语'}).fill(comment);
+    await results.getByRole('button', {name:'提交评定',exact:true}).click();
+    await page.getByRole('dialog').getByRole('button', {name:'提交',exact:true}).click();
+    await expect(results.getByTestId('cycle-comment-readonly')).toHaveText(comment);
+    await expect(page.getByTestId('manager-evaluation-pending-count')).toHaveText('0 人待处理');
+    await expect(page.getByTestId(`team-task-row-${taskId}`)).toContainText('已完成');
+    expect(state.writes).toEqual([{ path:`/api/v1/tasks/${taskId}/final-grade`, body:{grade:'B',comment} }]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({path:testInfo.outputPath('cycle-grade-comment-completed.png'),fullPage:true});
+    await page.getByTestId('team-task-workspace-back').click();
+    await expect(page.getByTestId('team-count-completed')).toContainText('1');
+    await expect(page.getByTestId('team-count-pending')).toContainText('0');
+    await page.goto('/');
+    await expect(page.getByTestId('manager-evaluation-count')).toHaveText('0');
+  });
+}

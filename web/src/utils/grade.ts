@@ -23,15 +23,15 @@ export function getGradeStyle(grade?: PerfGrade | null): GradeStyle {
   };
 }
 
-/** 等级中文映射。 */
+/** 等级统一使用字母展示。 */
 export const GRADE_LABELS: Record<PerfGrade, string> = {
-  A: '优秀',
-  B: '良好',
-  C: '待改进',
-  D: '不合格',
+  A: 'A',
+  B: 'B',
+  C: 'C',
+  D: 'D',
 };
 
-/** 获取等级中文标签。 */
+/** 获取等级标签。 */
 export function getGradeLabel(grade?: PerfGrade | null): string {
   if (!grade) return '未评级';
   return GRADE_LABELS[grade] ?? grade;

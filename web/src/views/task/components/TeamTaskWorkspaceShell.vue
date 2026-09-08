@@ -32,16 +32,19 @@ const pendingMemberCount = computed(() => (
 ));
 
 const managerPeriodStatus = computed(() => {
+  if (props.task?.stageState === 'exempted') return '已豁免';
   const status = props.task?.periodReview?.status;
   if (status === 'manager_scoring') return '直属上级评分中';
   if (status === 'self_eval') return '员工自评中';
-  if (status === 'completed') return props.task?.status === 'manager_scoring' ? '待整周期结果评定' : '月度评分已完成';
+  if (status === 'completed') return props.task?.stageState === 'pending' ? '待周期结果评定' : '上级评分已完成';
   if (status === 'no_result') return '本期无结果';
   if (status === 'unopened') return '未开始';
   return '';
 });
 
-function stageStateLabel(state: TeamStageState): string {
+function stageStateLabel(member: TeamTaskListItem): string {
+  const state = member.stageState;
+  if (props.stage === 'manager-eval' && state === 'pending' && member.periodReview?.status === 'completed') return '待周期结果评定';
   if (props.stage === 'goal-review') {
     const goalReviewLabels: Record<TeamStageState, string> = {
       not_started: '未提交',
@@ -85,7 +88,7 @@ function stageStateLabel(state: TeamStageState): string {
           <span v-if="stage === 'goal-review'" data-testid="goal-review-pending-count">
             {{ pendingMemberCount }} 人待我审核
           </span>
-          <span v-else>{{ pendingMemberCount }} 人待评分</span>
+          <span v-else data-testid="manager-evaluation-pending-count">{{ pendingMemberCount }} 人待处理</span>
         </div>
         <button
           v-for="member in members"
@@ -103,7 +106,7 @@ function stageStateLabel(state: TeamStageState): string {
           </el-avatar>
           <span class="team-task-workspace__member-copy">
             <strong>{{ member.employeeName }}</strong>
-            <small>{{ stageStateLabel(member.stageState) }}</small>
+            <small>{{ stageStateLabel(member) }}</small>
           </span>
         </button>
       </nav>

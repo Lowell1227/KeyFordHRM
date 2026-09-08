@@ -30,6 +30,8 @@ import { FlowService } from "./flow.service";
 import { assertTaskVersion, claimTaskVersion } from "./task-version";
 import {
   getTeamStageState,
+  getManagerStageState,
+  pickManagerPeriod,
   getTeamStageStatuses,
   TEAM_STAGE_STATUSES,
   TeamStageState,
@@ -369,7 +371,7 @@ export class TeamTasksService {
     stage: TeamTaskQueryDto["stage"],
   ): TeamTaskListItem {
     const periodReview = stage === "manager-eval"
-      ? this.pickManagerPeriod(task.periods ?? [])
+      ? pickManagerPeriod(task.periods ?? [])
       : null;
     return {
       id: task.id,
@@ -390,7 +392,7 @@ export class TeamTasksService {
       avatarUrl: task.employee.avatarUrl,
       position: task.employee.position,
       stageState: stage === "manager-eval"
-        ? this.managerStageState(task, periodReview)
+        ? getManagerStageState(task)
         : getTeamStageState(task.status, stage),
       periodReview: periodReview
         ? {
@@ -403,31 +405,6 @@ export class TeamTasksService {
           }
         : null,
     };
-  }
-
-  private pickManagerPeriod(periods: NonNullable<TeamListTask["periods"]>) {
-    return periods.find((period) => period.status === AssessmentPeriodStatus.manager_scoring)
-      ?? periods.find((period) => period.status === AssessmentPeriodStatus.self_eval)
-      ?? periods.find((period) => period.status === AssessmentPeriodStatus.unopened)
-      ?? periods.at(-1)
-      ?? null;
-  }
-
-  private managerStageState(
-    task: TeamListTask,
-    period: ReturnType<TeamTasksService["pickManagerPeriod"]>,
-  ): TeamStageState {
-    if (task.isExempt || task.status === TaskStatus.exempted) return "exempted";
-    if (!period) return getTeamStageState(task.status, "manager-eval");
-    if (period.status === AssessmentPeriodStatus.manager_scoring) {
-      if (period.employeeSubmittedAt == null) return "not_started";
-      if (period.managerSubmittedAt == null) return "pending";
-    }
-    if (
-      period.status === AssessmentPeriodStatus.unopened
-      || period.status === AssessmentPeriodStatus.self_eval
-    ) return "not_started";
-    return "completed";
   }
 
   private async reviewBatch(

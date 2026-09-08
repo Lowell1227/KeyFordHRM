@@ -381,6 +381,28 @@ describe("TeamTasksService", () => {
     expect(result.counts).toMatchObject({ pending: 0, notStarted: 1 });
   });
 
+  it.each([1, 3])('keeps the final cycle grade pending after all %i monthly reviews complete, including a returned grade', async (monthCount) => {
+    const doneAt = new Date('2026-09-08T10:00:00Z');
+    const base = {
+      id: 'awaiting-grade', cycleId: 'cycle-1', employeeId: 'employee-1', deptId: 'dept-1', managerId: managerViewer.id,
+      status: 'manager_scoring', isExempt: false, exemptReason: null, updatedAt: doneAt,
+      cycle: { name: '虚拟计划' }, employee: { name: '虚拟员工', employeeNo: 'MOCK', avatarUrl: null, position: null }, dept: null, gradeResult: null,
+      periods: Array.from({ length: monthCount }, (_, index) => ({
+        id: `period-${index}`, periodKey: `2026-0${7 + index}`, periodType: 'month', sequence: index + 1, status: 'completed',
+        employeeSubmittedAt: doneAt, managerSubmittedAt: doneAt, lockedAt: doneAt,
+        selfScoreTotal: new Prisma.Decimal(80), managerScoreTotal: new Prisma.Decimal(90),
+      })),
+    };
+    const tasks = [base, { ...base, id: 'returned-grade', gradeResult: { rawGrade: 'B', calculatedScore: new Prisma.Decimal(90) } },
+      { ...base, id: 'submitted-grade', status: 'dept_review' }, { ...base, id: 'exempt', isExempt: true }];
+    prisma.assessmentTask.findMany.mockImplementation(async ({ include }) => include ? tasks : []);
+    for (const stageState of [undefined, 'pending', 'completed'] as const) {
+      const result = await service.findAll(Object.assign(new TeamTaskQueryDto(), { stage: 'manager-eval', cycleId: 'cycle-1', stageState, page: 1, pageSize: 20 }), managerViewer);
+      expect(result.counts).toEqual({ all: 4, pending: 2, completed: 1, notStarted: 0, exempted: 1 });
+      expect(result.items.map(item => item.id)).toEqual(stageState === 'pending' ? ['awaiting-grade', 'returned-grade'] : stageState === 'completed' ? ['submitted-grade'] : tasks.map(task => task.id));
+    }
+  });
+
   it("filters goal-review exempted items without indexing an undefined stage array", async () => {
       const query = Object.assign(new TeamTaskQueryDto(), {
         stage: "goal-review" as const,

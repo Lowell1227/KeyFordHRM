@@ -30,6 +30,7 @@ import {
 import { ReferenceIndicatorQueryDto } from './dto/reference-indicator-query.dto';
 import { assertTaskVersion, claimTaskVersion } from './task-version';
 import { IndicatorVersionService } from './indicator-version.service';
+import { getManagerStageState, TeamStageState } from './team-task-stage';
 
 type IndicatorBaselineSource = IndicatorInstance & {
   visibleDepartments: Array<{ departmentId: string }>;
@@ -72,6 +73,7 @@ export interface TaskListItem {
 
 /** 任务详情。 */
 export interface TaskDetail extends TaskListItem {
+  managerStageState: TeamStageState;
   workflowVersion: number;
   employeeNo: string | null;
   managerName: string | null;
@@ -451,6 +453,8 @@ export class TasksService {
             managerDueAt: true,
             employeeSubmittedAt: true,
             managerSubmittedAt: true,
+            lockedAt: true,
+            managerScoreTotal: true,
           },
         },
         flowRecords: {
@@ -1882,6 +1886,7 @@ export class TasksService {
       deptHeadId: task.deptHeadId ?? null,
       deptHeadName: task.deptHead?.name ?? null,
       workflowVersion: task.cycle?.workflowVersion ?? 1,
+      managerStageState: getManagerStageState(task),
       periods: (task.periods ?? []).map((period: any) => ({
         id: period.id,
         periodKey: period.periodKey,
@@ -2237,6 +2242,7 @@ export class TasksService {
 
     if (!visible.manager_comment) {
       masked.managerEvalSummary = null;
+      masked.flowRecords = this.maskCycleComments(detail.flowRecords);
       if (masked.gradeResult) {
         masked.gradeResult.isVeto = false;
         masked.gradeResult.vetoReason = null;
@@ -2256,6 +2262,7 @@ export class TasksService {
     masked.rawGrade = null;
     masked.gradeResult = null;
     masked.managerEvalSummary = null;
+    masked.flowRecords = this.maskCycleComments(detail.flowRecords);
 
     masked.indicatorInstances = detail.indicatorInstances.map((ind) => ({
       ...ind,
@@ -2266,5 +2273,13 @@ export class TasksService {
     }));
 
     return masked;
+  }
+
+  private maskCycleComments(records: TaskDetail['flowRecords']): TaskDetail['flowRecords'] {
+    return records.map(record => {
+      const data = record.extraData;
+      if (!data || typeof data !== 'object' || Array.isArray(data) || data.type !== 'final_grade_submitted') return record;
+      return { ...record, extraData: { ...data, comment: null } };
+    });
   }
 }

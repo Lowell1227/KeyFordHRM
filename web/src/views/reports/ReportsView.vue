@@ -547,7 +547,7 @@ onMounted(async () => {
                 <div class="detail-filters">
                   <el-input v-model="detailKeyword" clearable placeholder="搜索姓名 / 工号 / 部门" />
                   <el-select v-model="detailGrade" clearable placeholder="全部等级">
-                    <el-option v-for="grade in GRADES" :key="grade" :label="`${grade} ${GRADE_LABELS[grade]}`" :value="grade" />
+                    <el-option v-for="grade in GRADES" :key="grade" :label="GRADE_LABELS[grade]" :value="grade" />
                   </el-select>
                 </div>
               </template>
@@ -612,13 +612,13 @@ onMounted(async () => {
             <el-alert title="以下名单属于当前所选周期；用于人才盘点和绩效辅导，不替代业务判断。" type="info" :closable="false" show-icon />
             <el-row :gutter="16">
               <el-col :xs="24" :md="8">
-                <ChartCard><template #title>优秀表现（{{ gradeList.aList.length }} 人）</template><el-table :data="gradeList.aList" size="small" max-height="360"><el-table-column prop="employeeName" label="姓名" min-width="100" /><el-table-column prop="deptName" label="部门" min-width="130" show-overflow-tooltip /><el-table-column label="总分" width="80"><template #default="{ row }">{{ formatScore(row.totalScore) }}</template></el-table-column></el-table></ChartCard>
+                <ChartCard><template #title>A 等级（{{ gradeList.aList.length }} 人）</template><el-table :data="gradeList.aList" size="small" max-height="360"><el-table-column prop="employeeName" label="姓名" min-width="100" /><el-table-column prop="deptName" label="部门" min-width="130" show-overflow-tooltip /><el-table-column label="总分" width="80"><template #default="{ row }">{{ formatScore(row.totalScore) }}</template></el-table-column></el-table></ChartCard>
               </el-col>
               <el-col :xs="24" :md="8">
-                <ChartCard><template #title>待改进（{{ gradeList.cList.length }} 人）</template><el-table :data="gradeList.cList" size="small" max-height="360"><el-table-column prop="employeeName" label="姓名" min-width="100" /><el-table-column prop="deptName" label="部门" min-width="130" show-overflow-tooltip /><el-table-column label="总分" width="80"><template #default="{ row }">{{ formatScore(row.totalScore) }}</template></el-table-column></el-table></ChartCard>
+                <ChartCard><template #title>C 等级（{{ gradeList.cList.length }} 人）</template><el-table :data="gradeList.cList" size="small" max-height="360"><el-table-column prop="employeeName" label="姓名" min-width="100" /><el-table-column prop="deptName" label="部门" min-width="130" show-overflow-tooltip /><el-table-column label="总分" width="80"><template #default="{ row }">{{ formatScore(row.totalScore) }}</template></el-table-column></el-table></ChartCard>
               </el-col>
               <el-col :xs="24" :md="8">
-                <ChartCard><template #title>不合格（{{ gradeList.dList.length }} 人）</template><el-table :data="gradeList.dList" size="small" max-height="360"><el-table-column prop="employeeName" label="姓名" min-width="100" /><el-table-column prop="deptName" label="部门" min-width="130" show-overflow-tooltip /><el-table-column label="总分" width="80"><template #default="{ row }">{{ formatScore(row.totalScore) }}</template></el-table-column></el-table></ChartCard>
+                <ChartCard><template #title>D 等级（{{ gradeList.dList.length }} 人）</template><el-table :data="gradeList.dList" size="small" max-height="360"><el-table-column prop="employeeName" label="姓名" min-width="100" /><el-table-column prop="deptName" label="部门" min-width="130" show-overflow-tooltip /><el-table-column label="总分" width="80"><template #default="{ row }">{{ formatScore(row.totalScore) }}</template></el-table-column></el-table></ChartCard>
               </el-col>
             </el-row>
           </div>

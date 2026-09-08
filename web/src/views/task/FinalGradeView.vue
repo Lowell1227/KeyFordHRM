@@ -20,6 +20,7 @@ const detail = ref<FinalGradeDetail | null>(null);
 const loading = ref(false);
 const submitting = ref(false);
 const selectedGrade = ref<PerfGrade | null>(null);
+const comment = ref('');
 let loadSequence = 0;
 
 const GRADES: PerfGrade[] = ['A', 'B', 'C', 'D'];
@@ -40,6 +41,7 @@ async function loadDetail() {
     if (sequence !== loadSequence || requestedTaskId !== taskId.value) return;
     detail.value = result;
     selectedGrade.value = detail.value.currentGrade;
+    comment.value = detail.value.comment ?? '';
   } catch (e) {
     if (sequence !== loadSequence) return;
     ElMessage.error(e instanceof Error ? e.message : '获取评定数据失败');
@@ -56,6 +58,7 @@ async function handleSubmit() {
     return;
   }
   const grade = selectedGrade.value;
+  const submittedComment = comment.value.trim();
   const current = detail.value;
   const requestedTaskId = taskId.value;
   try {
@@ -70,7 +73,7 @@ async function handleSubmit() {
   if (requestedTaskId !== taskId.value || detail.value !== current || !detail.value.canSubmit) return;
   submitting.value = true;
   try {
-    await tasksApi.submitFinalGrade(requestedTaskId, { grade });
+    await tasksApi.submitFinalGrade(requestedTaskId, { grade, comment: submittedComment });
     ElMessage.success('整周期结果评定已提交');
     if (requestedTaskId === taskId.value) { await loadDetail(); emit('submitted'); }
   } catch (e) {
@@ -155,7 +158,6 @@ watch(taskId, loadDetail, { immediate: true });
             @click="selectedGrade = grade"
           >
             <GradeTag :grade="grade" size="large" />
-            <span class="grade-label">{{ GRADE_LABELS[grade] }}</span>
           </button>
         </div>
         <GradeTag v-else-if="detail.currentGrade" :grade="detail.currentGrade" size="large" class="final-grade-readonly" />
@@ -173,6 +175,13 @@ watch(taskId, loadDetail, { immediate: true });
           show-icon
           title="全部月度评分完成后才能提交整周期结果评定"
         />
+        <div class="cycle-comment">
+          <label for="cycle-comment" class="cycle-grade-title">周期评语<span v-if="detail.canSubmit" class="optional">选填</span></label>
+          <el-input v-if="detail.canSubmit" id="cycle-comment" v-model="comment" type="textarea" aria-label="周期评语"
+            :rows="4" :maxlength="2000" show-word-limit :disabled="submitting"
+            placeholder="评价本周期整体表现、主要成果及改进建议" />
+          <p v-else class="cycle-comment__readonly" data-testid="cycle-comment-readonly">{{ detail.comment || '暂无评语' }}</p>
+        </div>
         <div class="submit-row">
           <el-button
             v-if="detail.canSubmit"
@@ -200,6 +209,9 @@ watch(taskId, loadDetail, { immediate: true });
 .cycle-result-score { display: flex; align-items: baseline; gap: 16px; color: #697487; font-size: 13px; }
 .cycle-result-score strong { color: #202a3d; font-size: 24px; }
 .cycle-grade-title { margin: 18px 0 10px; color: #394559; font-size: 13px; }
+.cycle-comment label { display: block; }
+.cycle-comment .optional { margin-left: 6px; color: #929ba8; font-weight: normal; }
+.cycle-comment__readonly { white-space: pre-wrap; overflow-wrap: anywhere; color: #394559; }
 .title-row {
   display: inline-flex;
   align-items: center;

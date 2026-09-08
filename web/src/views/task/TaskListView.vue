@@ -384,7 +384,7 @@ function toTeamTaskItem(detail: TaskDetail, stage: TeamTaskStage): TeamTaskListI
     ?? periods.find(item => item.status === 'self_eval')
     ?? periods.find(item => item.status === 'unopened')
     ?? periods[periods.length - 1];
-  const stageState = detail.isExempt ? 'exempted' : period
+  const stageState = detail.isExempt ? 'exempted' : stage === 'manager-eval' && detail.managerStageState ? detail.managerStageState : period
     ? period.status === 'manager_scoring' && period.employeeSubmittedAt && !period.managerSubmittedAt ? 'pending'
       : period.status === 'self_eval' || period.status === 'unopened' ? 'not_started' : 'completed'
     : detailStageState(detail, stage);

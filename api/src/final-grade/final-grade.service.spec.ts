@@ -2,6 +2,8 @@ import { ForbiddenException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { FinalGradeService } from './final-grade.service';
 import { AuthUser } from '@/common/types/auth.types';
+import { validate } from 'class-validator';
+import { SubmitFinalGradeDto } from './dto/submit-final-grade.dto';
 
 describe('FinalGradeService department review access', () => {
   const task = {
@@ -27,5 +29,26 @@ describe('FinalGradeService department review access', () => {
   });
   it('does not reveal an unpublished result to its employee who is also the frozen department head', async () => {
     await expect(makeService({ deptHeadId: task.employeeId }).getFinalGrade(task.id, viewer(task.employeeId))).rejects.toThrow(ForbiddenException);
+  });
+
+  it('saves the cycle comment with the grade and reads it back after submission or return', async () => {
+    let submittedRecord: any = null;
+    const prisma: any = {
+      assessmentTask: { findUnique: jest.fn().mockResolvedValue({ ...task, updatedAt: new Date() }), updateMany: jest.fn().mockResolvedValue({count:1}) },
+      gradeResult: { upsert: jest.fn() },
+      flowRecord: { findFirst: jest.fn().mockImplementation(async ({where}) => where.action === 'submit' ? submittedRecord : null) },
+      $transaction: (work: any) => work(prisma),
+    };
+    const flow = { transitionTx: jest.fn().mockImplementation(async (_tx, input) => { submittedRecord = {extraData: input.extraData}; }) };
+    const service = new FinalGradeService(prisma, flow as any, {create: jest.fn()} as any);
+    await service.submitFinalGrade(task.id, {grade:'B', comment:'  持续推进交付。\n下周期加强风险预警。  '} as any, viewer('manager-1'));
+    expect(await service.getFinalGrade(task.id, viewer('manager-1'))).toMatchObject({comment:'持续推进交付。\n下周期加强风险预警。'});
+    await service.submitFinalGrade(task.id, {grade:'A', comment:''} as any, viewer('manager-1'));
+    expect(await service.getFinalGrade(task.id, viewer('head-1'))).toMatchObject({comment:null});
+  });
+
+  it.each([42, '字'.repeat(2001)])('rejects invalid cycle comments instead of saving them', async (comment) => {
+    const errors = await validate(Object.assign(new SubmitFinalGradeDto(), {grade:'B', comment}));
+    expect(errors.some(error => error.property === 'comment')).toBe(true);
   });
 });

@@ -365,6 +365,31 @@ describe('TasksService', () => {
   });
 
   describe('findOne', () => {
+    it.each([
+      ['manager_scoring', true, 'emp-1', false],
+      ['published', false, 'emp-1', false],
+      ['published', true, 'emp-1', true],
+      ['manager_scoring', false, 'mgr-1', true],
+    ] as const)('respects cycle-comment visibility for %s, configured %s, viewer %s', async (status, visible, viewerId, canRead) => {
+      const task: any = buildFullTask(status, {manager_comment:visible});
+      task.flowRecords = [{id:'record-1',nodeType:'manager_score',action:'submit',actorId:'mgr-1',actor:{name:'主管'},createdAt:new Date(),
+        comment:'整周期结果评定',extraData:{type:'final_grade_submitted',comment:'仅在允许时可见的周期评语'}}];
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+      const result = await service.findOne('task-1',makeViewer({id:viewerId}));
+      expect(JSON.stringify(result).includes('仅在允许时可见的周期评语')).toBe(canRead);
+    });
+
+    it('hydrates the same pending cycle grade state without exposing monthly manager scores', async () => {
+      const task: any = buildFullTask('manager_scoring');
+      task.cycle.workflowVersion = 2;
+      task.periods = [{ id: 'done-month', periodKey: '2026-09', periodType: 'month', sequence: 1, status: 'completed',
+        employeeSubmittedAt: new Date(), managerSubmittedAt: new Date(), lockedAt: new Date(), managerScoreTotal: new Prisma.Decimal(90) }];
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+      const result = await service.findOne('task-1', makeViewer({ id: 'mgr-1' }));
+      expect(result).toMatchObject({ managerStageState: 'pending' });
+      expect(result.periods[0]).not.toHaveProperty('managerScoreTotal');
+    });
+
     it('returns workflow v2 monthly periods so the employee can enter the active review', async () => {
       const task: any = buildFullTask('self_eval');
       const openAt = new Date('2027-02-01T01:00:00.000Z');

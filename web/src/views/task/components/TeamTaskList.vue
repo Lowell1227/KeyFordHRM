@@ -94,10 +94,11 @@ function periodLabel(item: TeamTaskListItem): string {
 }
 
 function managerStatusLabel(item: TeamTaskListItem): string {
+  if (item.stageState === 'exempted') return '已豁免';
   const status = item.periodReview?.status;
   if (status === 'manager_scoring') return '直属上级评分中';
   if (status === 'self_eval') return '员工自评中';
-  if (status === 'completed') return '本期已完成';
+  if (status === 'completed') return item.stageState === 'pending' ? '待周期结果评定' : '已完成';
   if (status === 'no_result') return '本期无结果';
   if (status === 'unopened') return '未开始';
   return stageStateLabel(item.stageState);

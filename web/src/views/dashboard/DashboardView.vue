@@ -119,7 +119,7 @@ function displayScore(score: number | null): string {
 }
 
 function displayGrade(grade: PerfGrade | null): string {
-  return grade ? `${grade}${getGradeLabel(grade)}` : '-';
+  return grade ? getGradeLabel(grade) : '-';
 }
 
 function pickDefaultCycle(items: AssessmentCycle[]): AssessmentCycle | undefined {

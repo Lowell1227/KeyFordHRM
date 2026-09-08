@@ -4,13 +4,14 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
-import { PerfGrade, TaskStatus } from '@prisma/client';
+import { PerfGrade, Prisma, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { FlowService } from '@/tasks/flow.service';
 import { claimTaskVersion } from '@/tasks/task-version';
+import { isManagerPeriodComplete } from '@/tasks/team-task-stage';
 import { SubmitFinalGradeDto } from './dto/submit-final-grade.dto';
 
 /** 月度结果摘要。 */
@@ -47,6 +48,8 @@ export interface FinalGradeDetail {
   calculatedScore: number | null;
   /** 已录入的整周期最终等级（未录入为 null）。 */
   currentGrade: PerfGrade | null;
+  /** 最近一次周期评定的评语，随评定流程记录持久化。 */
+  comment: string | null;
   /** 全部月度是否已完成且锁定。 */
   allPeriodsComplete: boolean;
   /** 当前是否可提交/修改最终等级。 */
@@ -85,6 +88,13 @@ export class FinalGradeService {
       include: { actor: { select: { name: true } } },
     });
 
+    const latestSubmission = await this.prisma.flowRecord.findFirst({
+      where: { taskId, action: 'submit', nodeType: 'manager_score', extraData: { path: ['type'], equals: 'final_grade_submitted' } },
+      orderBy: { createdAt: 'desc' },
+      select: { extraData: true },
+    });
+    const submissionData = latestSubmission?.extraData as Prisma.JsonObject | null | undefined;
+
     const periods: FinalGradePeriodItem[] = task.periods.map((p) => ({
       periodKey: p.periodKey,
       periodType: p.periodType,
@@ -96,13 +106,7 @@ export class FinalGradeService {
     }));
 
     const allPeriodsComplete = task.periods.length > 0
-      && task.periods.every((p) => (
-        p.status === 'completed'
-        && p.employeeSubmittedAt != null
-        && p.managerSubmittedAt != null
-        && p.managerScoreTotal != null
-        && p.lockedAt != null
-      ));
+      && task.periods.every(isManagerPeriodComplete);
 
     return {
       taskId: task.id,
@@ -116,6 +120,7 @@ export class FinalGradeService {
       periods,
       calculatedScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
       currentGrade: task.gradeResult?.rawGrade ?? null,
+      comment: typeof submissionData?.comment === 'string' ? submissionData.comment : null,
       allPeriodsComplete,
       canSubmit: allPeriodsComplete && task.status === TaskStatus.manager_scoring
         && (task.managerId === viewer.id || viewer.sysRole === 'system_admin'),
@@ -146,13 +151,7 @@ export class FinalGradeService {
       });
     }
 
-    const completePeriods = task.periods.filter((p) => (
-      p.status === 'completed'
-      && p.employeeSubmittedAt != null
-      && p.managerSubmittedAt != null
-      && p.managerScoreTotal != null
-      && p.lockedAt != null
-    ));
+    const completePeriods = task.periods.filter(isManagerPeriodComplete);
     if (task.periods.length === 0 || completePeriods.length !== task.periods.length) {
       throw new BadRequestException({
         code: ERROR_CODE.PARAM_INVALID,
@@ -161,6 +160,7 @@ export class FinalGradeService {
     }
 
     const total = completePeriods.reduce((sum, p) => sum + p.managerScoreTotal!.toNumber(), 0);
+    const comment = dto.comment?.trim() || null;
     const score = Number((total / completePeriods.length).toFixed(2));
     const targetStatus = task.managerId === task.deptHeadId
       ? TaskStatus.hr_calibration
@@ -193,7 +193,7 @@ export class FinalGradeService {
         targetStatus,
         actorId: viewer.id,
         comment: `整周期结果评定：最终等级 ${dto.grade}（参考均分 ${score}）`,
-        extraData: { type: 'final_grade_submitted', grade: dto.grade, calculatedScore: score },
+        extraData: { type: 'final_grade_submitted', grade: dto.grade, calculatedScore: score, comment },
         taskUpdate: { managerScoredAt: new Date(), updatedAt: claimedUpdatedAt },
       });
     });

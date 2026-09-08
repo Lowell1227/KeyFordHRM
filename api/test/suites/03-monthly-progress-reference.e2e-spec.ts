@@ -15,6 +15,9 @@ import { PeriodAggregationService } from '@/period-reviews/period-aggregation.se
 import { PrismaService } from '@/prisma/prisma.service';
 import { FlowService } from '@/tasks/flow.service';
 import { FixtureFactory } from '../fixtures/fixture-factory';
+import { FinalGradeService } from '@/final-grade/final-grade.service';
+import { TeamTasksService } from '@/tasks/team-tasks.service';
+import { TeamTaskQueryDto } from '@/tasks/dto/team-task-query.dto';
 
 function signal() {
   let resolve!: () => void;
@@ -125,6 +128,38 @@ describe('Monthly progress references (isolated PostgreSQL)', () => {
     }
     return { employee, cycle, task, indicator, item: version.items[0], periods };
   }
+
+  it('counts cycle grading as pending until submitted and persists comments through a returned re-evaluation', async () => {
+    const data = await fixture();
+    const doneAt = new Date();
+    await prisma.assessmentTask.update({where:{id:data.task.id},data:{status:'manager_scoring'}});
+    for (const [index, period] of data.periods.entries()) {
+      await prisma.assessmentPeriod.update({where:{id:period.id},data:{status:'completed',employeeSubmittedAt:doneAt,managerSubmittedAt:doneAt,
+        lockedAt:doneAt,selfScoreTotal:80 + index,managerScoreTotal:[80,85,90][index],selfGrade:'B',managerGrade:'B'}});
+    }
+    const team = new TeamTasksService(prisma, flow, notifications);
+    const final = new FinalGradeService(prisma, flow, notifications);
+    const query = (stageState?: string) => Object.assign(new TeamTaskQueryDto(), {stage:'manager-eval',cycleId:data.cycle.id,stageState,page:1,pageSize:20});
+    const pending = await team.findAll(query('pending'),manager);
+    expect(pending.counts).toEqual({all:1,pending:1,completed:0,notStarted:0,exempted:0});
+    expect(pending.items[0].id).toBe(data.task.id);
+    expect((await team.findAll(query(),data.employee)).items).toEqual([]);
+    expect((await final.getFinalGrade(data.task.id,manager)).comment).toBeNull();
+    const comment = '稳定交付。\n下周期加强风险沟通。';
+    await final.submitFinalGrade(data.task.id,{grade:'A',comment},manager);
+    const submitted = await final.getFinalGrade(data.task.id,manager);
+    expect(submitted).toMatchObject({currentGrade:'A',calculatedScore:85,comment,canSubmit:false});
+    expect((await team.findAll(query('pending'),manager)).items).toEqual([]);
+    expect((await team.findAll(query('completed'),manager)).items[0].id).toBe(data.task.id);
+    const completedTask = await prisma.assessmentTask.findUniqueOrThrow({where:{id:data.task.id}});
+    await flow.transition({task:completedTask,action:'reject',targetStatus:'manager_scoring',actorId:manager.id,comment:'补充周期说明'});
+    expect((await team.findAll(query('pending'),manager)).items[0].id).toBe(data.task.id);
+    expect(await final.getFinalGrade(data.task.id,manager)).toMatchObject({currentGrade:'A',comment,canSubmit:true});
+    await final.submitFinalGrade(data.task.id,{grade:'B',comment:''},manager);
+    expect(await final.getFinalGrade(data.task.id,manager)).toMatchObject({currentGrade:'B',comment:null,canSubmit:false});
+    expect(await prisma.flowRecord.count({where:{taskId:data.task.id,extraData:{path:['type'],equals:'final_grade_submitted'}}})).toBe(2);
+    expect((await prisma.assessmentPeriod.findMany({where:{taskId:data.task.id},orderBy:{sequence:'asc'}})).map(period=>period.managerScoreTotal?.toNumber())).toEqual([80,85,90]);
+  });
 
   it('keeps current progress current, syncs historical references without replacing grades, and freezes submitted months', async () => {
     const data = await fixture();
