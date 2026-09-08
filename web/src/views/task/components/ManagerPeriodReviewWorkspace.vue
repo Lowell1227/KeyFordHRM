@@ -6,6 +6,7 @@ import type { PeriodReviewDetail } from '@/types/api.types';
 import type { PerfGrade } from '@/types/enums';
 import PerformanceFormWorkspace from './PerformanceFormWorkspace.vue';
 import PeriodReviewIndicatorContext from './PeriodReviewIndicatorContext.vue';
+import PeriodReviewProgressReference from './PeriodReviewProgressReference.vue';
 import PeriodReviewToolbar from './PeriodReviewToolbar.vue';
 
 interface ManagerFormItem {
@@ -325,6 +326,7 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
                 <div><span>状态</span><strong>{{ indicator.healthStatus === 'on_track' ? '正常推进' : indicator.healthStatus === 'at_risk' ? '存在风险' : indicator.healthStatus === 'blocked' ? '当前受阻' : indicator.healthStatus === 'completed' ? '已经完成' : '本月未更新' }}</strong></div>
                 <div class="is-wide"><span>描述</span><strong>{{ indicator.employeeComment || '员工未填写描述' }}</strong></div>
               </div>
+              <PeriodReviewProgressReference :indicator="indicator" :period="detail.period" :can-sync="false" collapsed />
               <div v-if="canEdit" class="manager-score-card__form">
                 <div v-if="indicator.isScoreRequired" class="manager-score-card__score-group" data-testid="manager-review-score-group">
                   <span>直属上级评分 <b>*</b></span>
@@ -394,8 +396,10 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
 .manager-score-card > header b { padding: 4px 8px; border-radius: 5px; background: #f4f6f9; color: #6c778a; font-size: 11px; font-weight: 500; }
 .manager-score-card__employee { display: grid; grid-template-columns: 150px 150px minmax(0, 1fr); gap: 12px; padding: 12px 15px; background: #f8fafc; }
 .manager-score-card__employee > div { min-width: 0; display: grid; gap: 4px; }
+.manager-score-card__employee .is-wide { grid-column: 1 / -1; }
 .manager-score-card__employee span, .manager-score-card__form label > span { color: #7f899b; font-size: 11px; }
 .manager-score-card__employee strong { overflow: hidden; color: #394559; font-size: 13px; text-overflow: ellipsis; white-space: nowrap; }
+.manager-score-card__employee .is-wide strong { overflow: visible; overflow-wrap: anywhere; white-space: pre-wrap; }
 .manager-score-card__form { display: grid; grid-template-columns: minmax(240px, .55fr) minmax(320px, 1.45fr); align-items: start; gap: 16px; padding: 14px 15px 16px; }
 .manager-score-card__form label { min-width: 0; display: grid; gap: 6px; }
 .manager-score-card__form label > span b, .manager-score-card__score-group > span b { color: #e85353; }

@@ -38,6 +38,7 @@ export default defineConfig({
     '41-goal-progress-entry.spec.ts',
     '42-dashboard-multi-cycle.spec.ts',
     '43-monthly-progress-reference.spec.ts',
+    '44-manager-progress-reference.spec.ts',
   ],
   workers: 1,
 });

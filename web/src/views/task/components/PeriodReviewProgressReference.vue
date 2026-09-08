@@ -1,40 +1,22 @@
 <script setup lang="ts">
 import { computed } from 'vue';
 import type { PeriodReviewDetail, PeriodReviewIndicator, PeriodReviewProgressReference } from '@/types/api.types';
+import { belongsToReviewPeriod, compareProgressRecordedAt, progressReferencesFor } from './period-progress-summary';
 
 const props = defineProps<{
   indicator: PeriodReviewIndicator;
   period: PeriodReviewDetail['period'];
   canSync: boolean;
+  collapsed?: boolean;
 }>();
-const emit = defineEmits<{ sync: [record: PeriodReviewProgressReference] }>();
+const emit = defineEmits<{ summarize: [] }>();
 
-const records = computed<PeriodReviewProgressReference[]>(() => {
-  if (props.indicator.progressReferences) return props.indicator.progressReferences;
-  const latest = props.indicator.latestProgress;
-  return latest?.source === 'active_progress' ? [{
-    id: latest.id,
-    periodKey: latest.businessPeriodKey,
-    progress: latest.progress,
-    healthStatus: latest.healthStatus ?? null,
-    content: latest.content ?? '',
-    attachments: latest.attachments ?? [],
-    createdAt: latest.updatedAt,
-  }] : [];
-});
-
-function belongsToPeriod(record: PeriodReviewProgressReference) {
-  if (props.period.periodType === 'month') return record.periodKey === props.period.periodKey;
-  const startMonth = props.period.periodStart?.slice(0, 7);
-  const endMonth = props.period.periodEnd?.slice(0, 7);
-  return Boolean(startMonth && endMonth && /^\d{4}-\d{2}$/.test(record.periodKey)
-    && record.periodKey >= startMonth && record.periodKey <= endMonth);
-}
-
-const currentRecords = computed(() => records.value.filter(belongsToPeriod)
-  .slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
-const otherRecords = computed(() => records.value.filter(record => !belongsToPeriod(record))
-  .slice().sort((a, b) => b.periodKey.localeCompare(a.periodKey) || b.createdAt.localeCompare(a.createdAt)));
+const records = computed(() => progressReferencesFor(props.indicator));
+const currentRecords = computed(() => records.value.filter(record => belongsToReviewPeriod(record, props.period))
+  .sort((a, b) => compareProgressRecordedAt(b, a)));
+const otherRecords = computed(() => records.value.filter(record => !belongsToReviewPeriod(record, props.period))
+  .sort((a, b) => b.periodKey.localeCompare(a.periodKey) || compareProgressRecordedAt(b, a)));
+const periodNoun = computed(() => props.period.periodType === 'month' ? '本月' : '本期');
 const groups = computed(() => [
   { id: 'latest', label: '本期最新进展', current: true, records: currentRecords.value.slice(0, 1) },
   { id: 'current', label: `本期其他记录（${Math.max(0, currentRecords.value.length - 1)}）`, current: true, records: currentRecords.value.slice(1) },
@@ -53,8 +35,12 @@ function formatDate(value: string) {
 </script>
 
 <template>
-  <section class="progress-reference" data-testid="monthly-progress-reference" aria-label="日常进展参考">
-    <header><h4>日常进展参考</h4><span v-if="canSync && currentRecords.length">同步后可继续修改</span></header>
+  <component :is="collapsed ? 'details' : 'section'" class="progress-reference" data-testid="monthly-progress-reference" aria-label="日常进展参考">
+    <summary v-if="collapsed">{{ periodNoun }}跟进记录（{{ currentRecords.length }}条）</summary>
+    <header v-if="!collapsed">
+      <h4>日常进展参考</h4>
+      <el-button v-if="canSync && currentRecords.length" type="primary" plain size="small" @click.stop="emit('summarize')">汇总{{ periodNoun }}进展到自评</el-button>
+    </header>
     <p v-if="!currentRecords.length" class="progress-reference__empty">本期暂无日常进展</p>
     <component :is="group.id === 'latest' ? 'div' : 'details'" v-for="group in groups" :key="group.id" class="progress-reference__group">
       <summary v-if="group.id !== 'latest'">{{ group.label }}</summary>
@@ -67,17 +53,17 @@ function formatDate(value: string) {
         <div class="progress-reference__status">
           <span :data-health="record.healthStatus">{{ healthLabel(record.healthStatus) }}</span>
           <b>{{ record.progress == null ? '未填写进度' : `${record.progress}%` }}</b>
-          <el-button v-if="canSync && group.current" type="primary" plain size="small" @click.stop="emit('sync', record)">一键同步到自评</el-button>
         </div>
         <p>{{ record.content || '未填写描述' }}</p>
       </article>
     </component>
-  </section>
+  </component>
 </template>
 
 <style scoped>
 .progress-reference { min-width: 0; padding: 12px 16px; border-bottom: 1px solid #edf0f5; background: #fff; }
 .progress-reference > header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px 12px; }
+.progress-reference > summary { color: #6f7c90; font-size: 12px; cursor: pointer; }
 .progress-reference h4 { margin: 0; color: #566174; font-size: 12px; }
 .progress-reference > header > span, .progress-reference__empty { margin: 0; color: #8b95a6; font-size: 11px; }
 .progress-reference__empty { margin-top: 8px; }

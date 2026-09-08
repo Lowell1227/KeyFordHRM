@@ -6,7 +6,6 @@ import type {
   EmployeePeriodReviewItemBody,
   GoalTrackingHealthStatus,
   PeriodReviewDetail,
-  PeriodReviewProgressReference,
   SubmitEmployeePeriodReviewBody,
 } from '@/types/api.types';
 import type { PerfGrade } from '@/types/enums';
@@ -14,6 +13,7 @@ import PerformanceFormWorkspace from './PerformanceFormWorkspace.vue';
 import PeriodReviewIndicatorContext from './PeriodReviewIndicatorContext.vue';
 import PeriodReviewToolbar from './PeriodReviewToolbar.vue';
 import PeriodReviewProgressReferencePanel from './PeriodReviewProgressReference.vue';
+import { summarizePeriodProgress, type PeriodProgressSummary } from './period-progress-summary';
 
 type RequiredField = 'selfScore';
 
@@ -40,6 +40,10 @@ const validationErrors = reactive<Record<string, Partial<Record<RequiredField, s
 const overallGrade = ref<PerfGrade | null>(null);
 const overallGradeError = ref('');
 const gradeOptions: PerfGrade[] = ['A', 'B', 'C', 'D'];
+const summaryPreview = ref<{
+  item: ReviewFormItem; periodId: string; summary: PeriodProgressSummary; content: string;
+} | null>(null);
+const summaryTooLong = computed(() => [...(summaryPreview.value?.content ?? '')].length > 10_000);
 
 const healthOptions: Array<{ value: GoalTrackingHealthStatus; label: string }> = [
   { value: 'on_track', label: '正常推进' },
@@ -150,30 +154,36 @@ function bodyItems(): EmployeePeriodReviewItemBody[] {
   }));
 }
 
-async function syncProgressReference(index: number, record: PeriodReviewProgressReference) {
-  if (!canEdit.value || saving.value || submitting.value) return;
+function summarizeProgressReference(index: number) {
+  if (!canEdit.value || saving.value || submitting.value || !detail.value) return;
   const item = formItems[index];
-  const periodId = props.periodId;
-  if (!item) return;
-  const replacesContent = (item.progress != null && item.progress !== record.progress)
-    || (item.healthStatus != null && item.healthStatus !== record.healthStatus)
-    || (Boolean(item.employeeComment.trim()) && item.employeeComment !== record.content);
-  if (replacesContent) {
-    try {
-      await ElMessageBox.confirm(
-        '将用这条日常进展替换当前填写的进度、状态和描述。自评分及自评等级保持不变。',
-        '同步进展到自评',
-        { type: 'warning', confirmButtonText: '替换并同步', cancelButtonText: '保留当前填写' },
-      );
-    } catch {
-      return;
-    }
+  const indicator = detail.value.indicators[index];
+  if (!item || !indicator) return;
+  const summary = summarizePeriodProgress(indicator, detail.value.period);
+  if (!summary) return;
+  const replacesContent = (item.progress != null && item.progress !== summary.progress)
+    || (item.healthStatus != null && item.healthStatus !== summary.healthStatus)
+    || (Boolean(item.employeeComment.trim()) && item.employeeComment !== summary.content);
+  if (replacesContent || [...summary.content].length > 10_000) {
+    summaryPreview.value = { item, periodId: props.periodId, summary, content: summary.content };
+    return;
   }
-  if (periodId !== props.periodId || !canEdit.value || saving.value || submitting.value || formItems[index] !== item) return;
-  item.progress = record.progress;
-  item.healthStatus = record.healthStatus;
-  item.employeeComment = record.content;
-  ElMessage.success('已同步到自评填写区，请检查后保存或提交');
+  fillProgressSummary(item, summary, summary.content);
+}
+
+function fillProgressSummary(item: ReviewFormItem, summary: PeriodProgressSummary, content: string) {
+  item.progress = summary.progress;
+  item.healthStatus = summary.healthStatus;
+  item.employeeComment = content;
+  ElMessage.success('已汇总到自评填写区，请检查后保存或提交');
+}
+
+function confirmProgressSummary() {
+  const preview = summaryPreview.value;
+  if (!preview || summaryTooLong.value || preview.periodId !== props.periodId
+    || !canEdit.value || saving.value || submitting.value || !formItems.includes(preview.item)) return;
+  fillProgressSummary(preview.item, preview.summary, preview.content);
+  summaryPreview.value = null;
 }
 
 function clearItemError(itemId: string, field: RequiredField) {
@@ -281,7 +291,7 @@ async function submitReview() {
   }
 }
 
-watch(() => props.periodId, loadReview, { immediate: true });
+watch(() => props.periodId, () => { summaryPreview.value = null; void loadReview(); }, { immediate: true });
 </script>
 
 <template>
@@ -370,7 +380,7 @@ watch(() => props.periodId, loadReview, { immediate: true });
                 :indicator="indicator"
                 :period="detail.period"
                 :can-sync="canEdit && !saving && !submitting"
-                @sync="syncProgressReference(index, $event)"
+                @summarize="summarizeProgressReference(index)"
               />
 
               <div class="monthly-goal-card__core">
@@ -428,7 +438,7 @@ watch(() => props.periodId, loadReview, { immediate: true });
               <div class="monthly-goal-card__details">
                 <label class="monthly-field is-wide">
                   <span>描述 <i>选填</i></span>
-                  <el-input v-model="formItems[index].employeeComment" :disabled="!canEdit" type="textarea" :rows="2" placeholder="简要说明本月进展和结果" />
+                  <el-input v-model="formItems[index].employeeComment" :disabled="!canEdit" type="textarea" :autosize="{ minRows: 2, maxRows: 8 }" placeholder="简要说明本月进展和结果" />
                 </label>
               </div>
             </article>
@@ -436,11 +446,38 @@ watch(() => props.periodId, loadReview, { immediate: true });
         </template>
       </PerformanceFormWorkspace>
     </template>
+    <el-dialog
+      :model-value="Boolean(summaryPreview)"
+      :title="`汇总${periodNoun}进展`"
+      width="min(620px, calc(100vw - 32px))"
+      append-to-body
+      :close-on-click-modal="false"
+      @update:model-value="summaryPreview = null"
+    >
+      <div v-if="summaryPreview" class="progress-summary-preview">
+        <div class="progress-summary-preview__facts">
+          <span>{{ summaryPreview.summary.recordCount }}条记录</span>
+          <span>最新进度 {{ summaryPreview.summary.progress == null ? '未填写' : `${summaryPreview.summary.progress}%` }}</span>
+          <span>最新状态 {{ healthOptions.find(option => option.value === summaryPreview?.summary.healthStatus)?.label ?? '未填写' }}</span>
+        </div>
+        <el-input v-model="summaryPreview.content" type="textarea" :autosize="{ minRows: 6, maxRows: 12 }" aria-label="汇总描述预览" />
+        <p v-if="summaryTooLong" class="progress-summary-preview__error">描述最多10000字，请精简后再填入；原始跟进记录仍会保留。</p>
+        <p v-else>可编辑汇总描述；填入后替换当前进度、状态和描述，自评分及等级保持不变。</p>
+      </div>
+      <template #footer>
+        <el-button @click="summaryPreview = null">保留当前填写</el-button>
+        <el-button type="primary" :disabled="summaryTooLong || !canEdit || saving || submitting" @click="confirmProgressSummary">替换并填入</el-button>
+      </template>
+    </el-dialog>
   </section>
 </template>
 
 <style scoped>
 .monthly-review { min-width: 0; display: grid; gap: 14px; }
+.progress-summary-preview { display: grid; gap: 12px; }
+.progress-summary-preview__facts { display: flex; flex-wrap: wrap; gap: 6px 18px; color: #697487; font-size: 12px; }
+.progress-summary-preview p { margin: 0; color: #8993a3; font-size: 12px; }
+.progress-summary-preview .progress-summary-preview__error { color: #e44f4f; }
 .monthly-review__summary { display: grid; grid-template-columns: minmax(180px, 220px) minmax(360px, 1fr); gap: 12px; }
 .monthly-review__summary > div { min-width: 0; padding: 12px 15px; border: 1px solid #e5eaf2; border-radius: 10px; background: #fff; }
 .monthly-review__total { display: grid; grid-template-columns: auto 1fr; align-items: baseline; gap: 3px 12px; }

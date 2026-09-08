@@ -10,8 +10,9 @@ const references = [
   { id: 'september', periodKey: '2026-09', progress: 80, healthStatus: 'on_track', content: '九月进展，仅供跨月参考', attachments: [], createdAt: '2026-09-08T07:00:00.000Z' },
   { id: 'outside', periodKey: '2026-06', progress: 10, healthStatus: 'on_track', content: '周期外记录，仅供参考', attachments: [], createdAt: '2026-06-30T07:00:00.000Z' },
 ];
+const expectedMonthlyDescription = `${references[1].content}\n\n${references[0].content}`;
 
-async function mockApp(page: Page, options: { review?: boolean; readonly?: boolean; cycle?: boolean; empty?: boolean; julyEmpty?: boolean; septemberLocked?: boolean; trackingCycle?: boolean } = {}) {
+async function mockApp(page: Page, options: { review?: boolean; readonly?: boolean; cycle?: boolean; empty?: boolean; julyEmpty?: boolean; septemberLocked?: boolean; trackingCycle?: boolean; records?: typeof references } = {}) {
   const writes: Array<{ endpoint: string; body: any }> = [];
   let updates = options.julyEmpty ? [september] : [september, july];
   const period = {
@@ -74,7 +75,7 @@ async function mockApp(page: Page, options: { review?: boolean; readonly?: boole
         targetValue: 100, targetValueText: '100%', unit: '%', weight: 1, isScoreRequired: true, monthlyProgressSource: 'draft_or_result',
         progress: 42, healthStatus: 'on_track', employeeComment: '我的未保存自评说明', selfScore: 91,
         actualValueText: null, problemReason: null, nextMonthPlan: null, supportNeeded: null, attachments: [], managerScore: null, managerComment: null,
-        latestProgress: null, progressReferences: options.empty ? [] : references, alignedObjectives: [], history: [],
+        latestProgress: null, progressReferences: options.empty ? [] : options.records ?? references, alignedObjectives: [], history: [],
       }],
     };
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ code: 0, message: 'success', data }) });
@@ -129,10 +130,12 @@ for (const width of [1440, 390]) {
     await reference.getByText('其他月份（2）', { exact: true }).click();
     await expect(reference.getByTestId('progress-reference-september')).toContainText('九月进展');
     await expect(reference.getByTestId('progress-reference-september').getByRole('button')).toHaveCount(0);
-    const sync = reference.getByTestId('progress-reference-july-latest').getByRole('button', { name: '一键同步到自评' });
+    const sync = reference.getByRole('button', { name: '汇总本月进展到自评' });
+    await expect(sync).toBeVisible();
     await sync.click();
-    const confirmation = page.locator('.el-message-box');
+    const confirmation = page.getByRole('dialog', { name: '汇总本月进展' });
     await expect(confirmation).toBeVisible();
+    await expect(confirmation.getByRole('textbox', { name: '汇总描述预览' })).toHaveValue(expectedMonthlyDescription);
     await page.screenshot({ path: testInfo.outputPath('sync-confirmation.png'), fullPage: true, animations: 'disabled' });
     const confirmationBox = await confirmation.boundingBox();
     expect(confirmationBox!.x).toBeGreaterThanOrEqual(0);
@@ -141,17 +144,17 @@ for (const width of [1440, 390]) {
     await expect(card.getByLabel('本月完成进度')).toHaveValue('42');
     await expect(card.getByRole('textbox')).toHaveValue('我的未保存自评说明');
     await sync.click();
-    await page.getByRole('button', { name: '替换并同步', exact: true }).click();
+    await page.getByRole('button', { name: '替换并填入', exact: true }).click();
     await expect(card.getByLabel('本月完成进度')).toHaveValue('65');
     await expect(card.getByRole('button', { name: '当前受阻', exact: true })).toHaveClass(/is-active/);
-    await expect(card.getByRole('textbox')).toHaveValue(references[0].content);
+    await expect(card.getByRole('textbox')).toHaveValue(expectedMonthlyDescription);
     await expect(card.getByLabel('本月自评分')).toHaveValue('91');
     await expect(page.getByRole('button', { name: '自评等级 B', exact: true })).toHaveClass(/is-active/);
     expect(writes).toHaveLength(0);
     await page.getByRole('button', { name: '保存草稿', exact: true }).click();
     await expect.poll(() => writes.length).toBe(1);
     expect(writes[0].endpoint).toContain('/employee-draft');
-    expect(writes[0].body).toEqual({ expectedVersion: 3, selfGrade: 'B', indicators: [{ indicatorVersionItemId: 'item-1', progress: 65, healthStatus: 'blocked', employeeComment: references[0].content, selfScore: 91 }] });
+    expect(writes[0].body).toEqual({ expectedVersion: 3, selfGrade: 'B', indicators: [{ indicatorVersionItemId: 'item-1', progress: 65, healthStatus: 'blocked', employeeComment: expectedMonthlyDescription, selfScore: 91 }] });
     await page.screenshot({ path: testInfo.outputPath('monthly-reference-expanded.png'), fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
   });
@@ -184,12 +187,13 @@ test('整周期明确返回空月份列表时仍可更新当前进展', async ({
 
 test('同步后的相同内容可再次同步，无覆盖确认也不写入接口', async ({ page }) => {
   const writes = await mockApp(page, { review: true });
-  const sync = page.getByTestId('progress-reference-july-latest').getByRole('button', { name: '一键同步到自评' });
+  const sync = page.getByRole('button', { name: '汇总本月进展到自评' });
   await sync.click();
-  await page.getByRole('button', { name: '替换并同步', exact: true }).click();
+  await page.getByRole('button', { name: '替换并填入', exact: true }).click();
   await expect(page.getByLabel('本月完成进度')).toHaveValue('65');
   await sync.click();
-  await expect(page.getByRole('button', { name: '替换并同步', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '替换并填入', exact: true })).toHaveCount(0);
+  await expect(page.getByTestId('monthly-review-goal-card').getByRole('textbox')).toHaveValue(expectedMonthlyDescription);
   expect(writes).toHaveLength(0);
 });
 
@@ -206,9 +210,47 @@ test('整周期按起止范围允许本期月份同步，即使 periodKey 不是
   await mockApp(page, { review: true, cycle: true });
   const reference = page.getByTestId('monthly-progress-reference');
   await reference.getByText('本期其他记录（2）', { exact: true }).click();
-  await expect(reference.getByTestId('progress-reference-september').getByRole('button', { name: '一键同步到自评' })).toBeVisible();
+  await expect(reference.getByRole('button', { name: '汇总本期进展到自评' })).toBeVisible();
   await reference.getByText('其他月份（1）', { exact: true }).click();
   await expect(reference.getByTestId('progress-reference-outside').getByRole('button')).toHaveCount(0);
+  await reference.getByRole('button', { name: '汇总本期进展到自评' }).click();
+  await expect(page.getByRole('textbox', { name: '汇总描述预览' })).toHaveValue(`${references[1].content}\n\n${references[2].content}\n\n${references[0].content}`);
+});
+
+test('最新记录只更新状态进度时，汇总仍保留全部已有文字并排除其他月份', async ({ page }) => {
+  await mockApp(page, { review: true, records: [
+    ...references,
+    { ...references[0], id: 'july-empty-latest', progress: 100, healthStatus: 'completed', content: '  ', createdAt: '2026-09-09T08:00:00.000Z' },
+  ] });
+  await page.getByRole('button', { name: '汇总本月进展到自评' }).click();
+  await expect(page.getByRole('textbox', { name: '汇总描述预览' })).toHaveValue(expectedMonthlyDescription);
+  await page.getByRole('button', { name: '替换并填入' }).click();
+  await expect(page.getByLabel('本月完成进度')).toHaveValue('100');
+  await expect(page.getByRole('button', { name: '已经完成', exact: true })).toHaveClass(/is-active/);
+});
+
+test('汇总超过描述上限时完整预览并允许精简，确认前不覆盖草稿也不截断', async ({ page }) => {
+  const content = '项目进展原始记录'.repeat(1600);
+  const writes = await mockApp(page, { review: true, records: [{ ...references[0], content }] });
+  await page.getByRole('button', { name: '汇总本月进展到自评' }).click();
+  const preview = page.getByRole('textbox', { name: '汇总描述预览' });
+  await expect(preview).toHaveValue(content);
+  await expect(page.getByRole('button', { name: '替换并填入' })).toBeDisabled();
+  await expect(page.getByTestId('monthly-review-goal-card').getByRole('textbox')).toHaveValue('我的未保存自评说明');
+  await preview.fill('员工检查后精简的本月交付记录');
+  await page.getByRole('button', { name: '替换并填入' }).click();
+  await expect(page.getByTestId('monthly-review-goal-card').getByRole('textbox')).toHaveValue('员工检查后精简的本月交付记录');
+  expect(writes).toHaveLength(0);
+});
+
+test('仅其他月份有记录时可查看但不能汇总到本月', async ({ page }) => {
+  const writes = await mockApp(page, { review: true, records: [references[2]] });
+  const panel = page.getByTestId('monthly-progress-reference');
+  await expect(panel).toContainText('本期暂无日常进展');
+  await expect(panel.getByRole('button')).toHaveCount(0);
+  await panel.getByText('其他月份（1）', { exact: true }).click();
+  await expect(panel).toContainText(references[2].content);
+  expect(writes).toHaveLength(0);
 });
 
 test('无日常进展显示紧凑空态，不影响本人填写', async ({ page }) => {
