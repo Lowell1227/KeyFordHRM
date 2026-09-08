@@ -1,4 +1,5 @@
 import { AccountType, Prisma, SysRole } from '@prisma/client';
+import { createHash } from 'crypto';
 import { LaunchService } from './launch.service';
 import { AuthUser } from '@/common/types/auth.types';
 
@@ -22,6 +23,7 @@ describe('LaunchService preflight', () => {
     name: '测试员工',
     deptId: '33333333-3333-4333-8333-333333333333',
     directManagerId: '44444444-4444-4444-8444-444444444444',
+    directManager: { name: '直属上级' },
     entryDate: new Date('2020-01-01T00:00:00.000Z'),
     leaveDate: null,
   };
@@ -340,6 +342,145 @@ describe('LaunchService preflight', () => {
       deptName: '产品部',
       managerId: candidate.directManagerId,
       isExempt: false,
+    }));
+  });
+
+  it('previews and freezes the same manager, department reviewer, and nearest explicit result approver', async () => {
+    const parentDepartmentId = '99999999-9999-4999-8999-999999999999';
+    const departmentReviewerId = '66666666-6666-4666-8666-666666666666';
+    const parentLeaderId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa';
+    const parentApproverId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    tx.department.findMany.mockResolvedValue([
+      {
+        id: candidate.deptId,
+        name: '产品组',
+        parentId: parentDepartmentId,
+        leaderId: departmentReviewerId,
+        leader: { name: '产品组负责人', directManagerId: null, directManager: null },
+        approverId: null,
+        approver: null,
+      },
+      {
+        id: parentDepartmentId,
+        name: '产品事业部',
+        parentId: null,
+        leaderId: parentLeaderId,
+        leader: { name: '事业部负责人', directManagerId: null, directManager: null },
+        approverId: parentApproverId,
+        approver: { name: '事业部结果审批人' },
+      },
+    ]);
+
+    const checked = await service.preflight(cycleId);
+
+    expect(checked.participants).toContainEqual(expect.objectContaining({
+      employeeId: candidate.id,
+      managerId: candidate.directManagerId,
+      managerName: '直属上级',
+      managerSource: 'employee_direct_manager',
+      deptHeadId: departmentReviewerId,
+      deptHeadName: '产品组负责人',
+      deptHeadSource: 'department_leader',
+      approverId: parentApproverId,
+      approverName: '事业部结果审批人',
+      approverSource: 'ancestor_explicit',
+      approverSourceDeptId: parentDepartmentId,
+      approverSourceDeptName: '产品事业部',
+    }));
+
+    await service.launch(cycleId, operator, {
+      now: new Date('2026-12-23T00:00:00.000Z'),
+      expectedPlanHash: checked.planHash!,
+    });
+
+    expect(tx.assessmentTask.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        employeeId: candidate.id,
+        managerId: candidate.directManagerId,
+        deptHeadId: departmentReviewerId,
+        approverId: parentApproverId,
+      }),
+    });
+  });
+
+  it('shows the top reachable department leader manager as the default result approver source', async () => {
+    const parentDepartmentId = '99999999-9999-4999-8999-999999999999';
+    const topLeaderManagerId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb';
+    tx.department.findMany.mockResolvedValue([
+      {
+        id: candidate.deptId,
+        name: '产品组',
+        parentId: parentDepartmentId,
+        leaderId: '66666666-6666-4666-8666-666666666666',
+        leader: { name: '产品组负责人', directManagerId: null, directManager: null },
+        approverId: null,
+        approver: null,
+      },
+      {
+        id: parentDepartmentId,
+        name: '公司',
+        parentId: null,
+        leaderId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+        leader: {
+          name: '公司负责人',
+          directManagerId: topLeaderManagerId,
+          directManager: { name: '公司负责人直属上级' },
+        },
+        approverId: null,
+        approver: null,
+      },
+    ]);
+
+    const checked = await service.preflight(cycleId);
+
+    expect(checked.ready).toBe(true);
+    expect(checked.participants).toContainEqual(expect.objectContaining({
+      employeeId: candidate.id,
+      approverId: topLeaderManagerId,
+      approverName: '公司负责人直属上级',
+      approverSource: 'top_department_leader_manager',
+      approverSourceDeptName: '公司',
+    }));
+  });
+
+  it('blocks a workflow v2 participant from being their own result approver', async () => {
+    tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle());
+    tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
+    mockV2Users();
+    tx.department.findMany.mockResolvedValue([{
+      id: candidate.deptId,
+      name: '产品部',
+      parentId: null,
+      leaderId: '66666666-6666-4666-8666-666666666666',
+      leader: { name: '部门负责人', directManagerId: null, directManager: null },
+      approverId: candidate.id,
+      approver: { name: candidate.name },
+    }]);
+
+    await expect(service.preflight(cycleId)).resolves.toEqual(expect.objectContaining({
+      ready: false,
+      blockers: expect.arrayContaining([expect.objectContaining({
+        code: 'ORGANIZATION_RELATION_INVALID',
+        message: expect.stringContaining('以下员工的结果审批人不能是本人：测试员工'),
+      })]),
+    }));
+  });
+
+  it('blocks a workflow v2 participant from being their own performance manager', async () => {
+    tx.assessmentCycle.findUnique.mockResolvedValue(v2Cycle());
+    tx.cyclePeriodSchedule.findMany.mockResolvedValue(periodSchedules);
+    mockV2Users([{
+      ...activeCandidate,
+      directManagerId: candidate.id,
+      directManager: { name: candidate.name },
+    }]);
+
+    await expect(service.preflight(cycleId)).resolves.toEqual(expect.objectContaining({
+      ready: false,
+      blockers: expect.arrayContaining([expect.objectContaining({
+        code: 'ORGANIZATION_RELATION_INVALID',
+        message: expect.stringContaining('以下员工的绩效直属上级不能是本人：测试员工'),
+      })]),
     }));
   });
 
@@ -1052,12 +1193,20 @@ describe('LaunchService preflight', () => {
     jest.useRealTimers();
   });
 
-  it('blocks a scheduled opening when the approved participant plan has drifted', async () => {
+  it('blocks a scheduled opening when the frozen result approver relationship has drifted', async () => {
     tx.assessmentTemplate.findMany.mockResolvedValue([
       template('aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa'),
     ]);
     const checked = await service.preflight('55555555-5555-4555-8555-555555555555');
-    tx.user.findMany.mockResolvedValue([{ ...candidate, directManagerId: '88888888-8888-4888-8888-888888888888' }]);
+    tx.department.findMany.mockResolvedValue([{
+      id: candidate.deptId,
+      name: '产品部',
+      parentId: null,
+      leaderId: '66666666-6666-4666-8666-666666666666',
+      leader: { name: '部门负责人', directManagerId: null, directManager: null },
+      approverId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      approver: { name: '变更后的审批人' },
+    }]);
     tx.assessmentCycle.findUnique.mockResolvedValue({
       id: '55555555-5555-4555-8555-555555555555',
       name: '2027年第一季度',
@@ -1280,6 +1429,89 @@ describe('LaunchService preflight', () => {
     expect(after.planHash).not.toBe(before.planHash);
   });
 
+  it('keeps the legacy plan hash when only approval preview metadata is added', () => {
+    const legacyParticipant = {
+      employeeId: candidate.id,
+      employeeName: candidate.name,
+      deptId: candidate.deptId,
+      deptName: '产品部',
+      managerId: candidate.directManagerId,
+      managerName: '直属上级',
+      deptHeadId: '66666666-6666-4666-8666-666666666666',
+      approverId: '77777777-7777-4777-8777-777777777777',
+      entryDate: '2020-01-01T00:00:00.000Z',
+      leaveDate: null,
+      templateId: null,
+      templateName: null,
+      templateVersion: null,
+      isExempt: false,
+      exemptReason: null,
+    };
+    const legacyPlan = {
+      cycleStartDate: '2027-01-01T00:00:00.000Z',
+      participants: [legacyParticipant],
+    };
+    const planWithPreviewMetadata = {
+      cycleStartDate: legacyPlan.cycleStartDate,
+      participants: [{
+        employeeId: legacyParticipant.employeeId,
+        employeeName: legacyParticipant.employeeName,
+        deptId: legacyParticipant.deptId,
+        deptName: legacyParticipant.deptName,
+        managerId: legacyParticipant.managerId,
+        managerName: legacyParticipant.managerName,
+        managerSource: 'employee_direct_manager',
+        deptHeadId: legacyParticipant.deptHeadId,
+        deptHeadName: '产品部负责人',
+        deptHeadSource: 'department_leader',
+        approverId: legacyParticipant.approverId,
+        approverName: '结果审批人',
+        approverSource: 'department_explicit',
+        approverSourceDeptId: candidate.deptId,
+        approverSourceDeptName: '产品部',
+        entryDate: legacyParticipant.entryDate,
+        leaveDate: legacyParticipant.leaveDate,
+        templateId: legacyParticipant.templateId,
+        templateName: legacyParticipant.templateName,
+        templateVersion: legacyParticipant.templateVersion,
+        isExempt: legacyParticipant.isExempt,
+        exemptReason: legacyParticipant.exemptReason,
+      }],
+    };
+    const hashLaunchPlan = (plan: Record<string, unknown>) => (
+      service as unknown as { hashLaunchPlan(value: Record<string, unknown>): string }
+    ).hashLaunchPlan(plan);
+    const expectedLegacyHash = createHash('sha256')
+      .update(JSON.stringify(legacyPlan))
+      .digest('hex');
+
+    expect(hashLaunchPlan(planWithPreviewMetadata)).toBe(expectedLegacyHash);
+  });
+
+  it('still changes the plan hash when the frozen result approver ID changes', () => {
+    const basePlan = {
+      participants: [{
+        employeeId: candidate.id,
+        managerId: candidate.directManagerId,
+        deptHeadId: '66666666-6666-4666-8666-666666666666',
+        approverId: '77777777-7777-4777-8777-777777777777',
+        approverName: '仅用于展示的姓名',
+        approverSource: 'department_explicit',
+      }],
+    };
+    const changedPlan = {
+      participants: [{
+        ...basePlan.participants[0],
+        approverId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa',
+      }],
+    };
+    const hashLaunchPlan = (plan: Record<string, unknown>) => (
+      service as unknown as { hashLaunchPlan(value: Record<string, unknown>): string }
+    ).hashLaunchPlan(plan);
+
+    expect(hashLaunchPlan(changedPlan)).not.toBe(hashLaunchPlan(basePlan));
+  });
+
   it('returns the existing result when a concurrent request already opened the cycle', async () => {
     tx.assessmentCycle.findUnique.mockResolvedValue({
       id: '55555555-5555-4555-8555-555555555555',
@@ -1298,6 +1530,7 @@ describe('LaunchService preflight', () => {
         activeTasks: 2,
     });
     expect(tx.assessmentTask.create).not.toHaveBeenCalled();
+    expect(tx.department.findMany).not.toHaveBeenCalled();
   });
 
   it('returns existing workflow v2 child counts without creating duplicate rows', async () => {
@@ -1330,5 +1563,6 @@ describe('LaunchService preflight', () => {
     expect(tx.assessmentTask.create).not.toHaveBeenCalled();
     expect(tx.assessmentPeriod.createMany).not.toHaveBeenCalled();
     expect(tx.indicatorVersion.create).not.toHaveBeenCalled();
+    expect(tx.department.findMany).not.toHaveBeenCalled();
   });
 });

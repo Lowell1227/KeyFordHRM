@@ -9,6 +9,7 @@ import { departmentsApi } from '@/api/departments.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
+import UserSelect from '@/components/common/UserSelect.vue';
 import CycleCompactTable from './components/CycleCompactTable.vue';
 import CycleWorkspaceShell from './components/CycleWorkspaceShell.vue';
 import CycleMonthlyProgressPanel from './components/CycleMonthlyProgressPanel.vue';
@@ -383,7 +384,7 @@ function resetCreateForm() {
   createForm.endDate = undefined;
   createForm.goalSettingOpenAt = undefined;
   createForm.selfEvalOpenAt = undefined;
-  createForm.hrOwnerId = auth.user?.sysRole === 'hr' ? auth.user.id : undefined;
+  createForm.hrOwnerId = auth.user?.sysRole === 'hr' || auth.user?.sysRole === 'hr_user' ? auth.user.id : undefined;
   createForm.monthlyFollowUpRequired = false;
   createForm.participantDeptIds = [];
   createForm.participantUserIds = [];
@@ -1469,7 +1470,7 @@ function handlePrimaryCycleAction(cycle: AssessmentCycle) {
 }
 
 function buildQuery(): CycleQuery {
-  const query: CycleQuery & Record<string, unknown> = {};
+  const query: CycleQuery & Record<string, unknown> = { purpose: 'manage' };
   if (statusGroup.value !== 'all') query.group = statusGroup.value;
   if (typeFilter.value) query.type = typeFilter.value;
   if (keyword.value.trim()) query.keyword = keyword.value.trim();
@@ -1614,7 +1615,7 @@ onMounted(() => {
       :participant-record-error="participantRecordError"
       :launch-action="launchActionMode"
       :review-action="reviewActionMode"
-      :can-edit="canEditCyclePlan"
+      :can-edit="canEditCyclePlan && cycleDetail?.canManagePlan !== false"
       :can-review="canReviewCyclePlan"
       :can-remind-review="canRemindCycleReview"
       @back="closeCycleWorkspace"
@@ -1631,7 +1632,7 @@ onMounted(() => {
           v-if="cycleDetail?.openedAt && cycleDetail.workflowVersion === 2 && cycleDetail.scoringFrequency === 'monthly'"
           :cycle-id="cycleDetail.id"
           :period-keys="cycleDetail.periodSchedules?.map((schedule) => schedule.periodKey) ?? []"
-          :can-edit="canEditCyclePlan"
+          :can-edit="canEditCyclePlan && cycleDetail?.canManagePlan !== false"
         />
       </template>
     </CycleWorkspaceShell>
@@ -1946,6 +1947,10 @@ onMounted(() => {
           </section>
         </section>
 
+        <el-form-item label="周期负责人" prop="hrOwnerId">
+          <UserSelect v-if="canManageGlobalNotificationSettings" :model-value="createForm.hrOwnerId" eligible-for="cycle_owner" placeholder="选择负责本周期的 HR" @update:model-value="(value) => createForm.hrOwnerId = typeof value === 'string' ? value : undefined" />
+          <span v-else>{{ auth.user?.name }}</span>
+        </el-form-item>
         <el-form-item label="考核范围" prop="participantDeptIds" class="cycle-participant-field">
           <template #label>
             <span class="form-label-with-help">考核范围

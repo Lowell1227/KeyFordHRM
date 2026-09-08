@@ -8,6 +8,7 @@ import GradeTag from '@/components/common/GradeTag.vue';
 import GradeDistChart from '@/components/charts/GradeDistChart.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ReviewHistory from '@/components/common/ReviewHistory.vue';
+import PerformanceResultSummary from '@/components/common/PerformanceResultSummary.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import type { CalibrationCandidate, CalibrationCandidateDetail, CalibrationSummary, AssessmentCycle } from '@/types/api.types';
 import type { PerfGrade, TaskStatus } from '@/types/enums';
@@ -545,30 +546,19 @@ onMounted(async () => {
     >
       <div v-loading="drawer.loading">
         <template v-if="drawer.detail">
-          <el-descriptions :column="2" size="small" border>
-            <el-descriptions-item label="部门">{{ drawer.detail.deptName ?? '—' }}</el-descriptions-item>
-            <el-descriptions-item label="岗位">{{ drawer.detail.position ?? '—' }}</el-descriptions-item>
-            <el-descriptions-item label="直属上级">{{ drawer.detail.managerName ?? '—' }}</el-descriptions-item>
-            <el-descriptions-item label="当前状态">
-              <el-tag :type="statusTagType(drawer.detail.status) as any" size="small">{{ statusLabel(drawer.detail.status) }}</el-tag>
-            </el-descriptions-item>
-          </el-descriptions>
-
-          <div class="drawer-section">
-            <h4>整周期结果</h4>
-            <div class="result-row">
-              <div class="result-item">
-                <span class="result-label">参考均分</span>
-                <span class="score-cell">{{ fmtScore(drawer.detail.calculatedScore) }}</span>
-                <span class="result-hint">（分数与等级无换算关系）</span>
-              </div>
-              <div class="result-item">
-                <span class="result-label">最终等级（直属上级录入）</span>
-                <GradeTag v-if="drawer.detail.finalGrade" :grade="drawer.detail.finalGrade" />
-                <span v-else class="result-hint">未录入</span>
-              </div>
-            </div>
-          </div>
+          <PerformanceResultSummary
+            :cycle-name="selectedCycle?.name"
+            :employee-name="drawer.detail.employeeName"
+            :status-label="statusLabel(drawer.detail.status)"
+            :status-type="statusTagType(drawer.detail.status) as any"
+            :department-name="drawer.detail.deptName"
+            :position="drawer.detail.position"
+            :manager-name="drawer.detail.managerName"
+            :score="drawer.detail.calculatedScore"
+            score-hint="分数与等级无换算关系"
+            :raw-grade="drawer.detail.finalGrade"
+            raw-grade-label="直属上级评定等级"
+          />
 
           <div class="drawer-section">
             <h4>月度结果</h4>
@@ -732,28 +722,6 @@ onMounted(async () => {
 .drawer-section h4 {
   margin: 0 0 8px;
   font-size: 14px;
-}
-
-.result-row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 24px;
-}
-
-.result-item {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.result-label {
-  font-size: 13px;
-  color: var(--el-text-color-regular);
-}
-
-.result-hint {
-  font-size: 12px;
-  color: var(--el-text-color-placeholder);
 }
 
 .reject-item {

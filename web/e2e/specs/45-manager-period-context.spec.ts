@@ -118,9 +118,9 @@ for (const [finalStatus, label] of [['dept_review', '部门复核'], ['hr_calibr
     const dialog = page.getByRole('dialog');
     await dialog.getByRole('button', { name: '提交', exact: true }).click();
     await expect(page.getByText(`整周期结果评定已提交，已进入${label}。`, { exact: true })).toBeVisible();
-    await expect(results.getByTestId('cycle-current-stage')).toContainText(label);
+    await expect(results.getByTestId('performance-result-summary')).toContainText(label);
     await page.reload();
-    await expect(results.getByTestId('cycle-current-stage')).toContainText(label);
+    await expect(results.getByTestId('performance-result-summary')).toContainText(label);
     expect(state.writes).toHaveLength(1);
   });
 }

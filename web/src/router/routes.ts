@@ -96,6 +96,7 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '结果公示',
       roles: ['hr', 'system_admin'],
+      hrCapabilities: ['performance_publish'],
       navigation: { module: 'performance', label: '结果公示', order: 70, group: 'performance', groupLabel: '绩效运营' },
     },
   },

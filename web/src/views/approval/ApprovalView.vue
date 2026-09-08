@@ -7,6 +7,7 @@ import { cyclesApi } from '@/api/cycles.api';
 import { tasksApi } from '@/api/tasks.api';
 import GradeTag from '@/components/common/GradeTag.vue';
 import ReviewHistory from '@/components/common/ReviewHistory.vue';
+import PerformanceResultSummary from '@/components/common/PerformanceResultSummary.vue';
 import GradeDistChart from '@/components/charts/GradeDistChart.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
@@ -577,13 +578,18 @@ function handleBatchReject() {
         <el-button @click="openDetail(detailDrawer.taskId)">重试</el-button>
       </div>
       <template v-else-if="detailDrawer.detail">
-        <el-descriptions :column="1" border class="approval-view__detail-summary">
-          <el-descriptions-item label="员工">{{ detailDrawer.detail.employeeName || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="考核周期">{{ detailDrawer.detail.cycleName || selectedCycle?.name || '—' }}</el-descriptions-item>
-          <el-descriptions-item label="状态">{{ detailDrawer.detail.status === 'approval' && detailDrawer.detail.approvedAt ? '已通过，待公示' : statusLabel(detailDrawer.detail.status) }}</el-descriptions-item>
-          <el-descriptions-item label="总分">{{ formatScore(detailDrawer.detail.gradeResult?.calculatedScore) }}</el-descriptions-item>
-          <el-descriptions-item label="最终等级"><GradeTag :grade="detailDrawer.detail.gradeResult?.calibratedGrade ?? detailDrawer.detail.gradeResult?.rawGrade" size="small" /></el-descriptions-item>
-        </el-descriptions>
+        <PerformanceResultSummary
+          class="approval-view__detail-summary"
+          :cycle-name="detailDrawer.detail.cycleName || selectedCycle?.name"
+          :employee-name="detailDrawer.detail.employeeName || '—'"
+          :status-label="detailDrawer.detail.status === 'approval' && detailDrawer.detail.approvedAt ? '已通过，待公示' : statusLabel(detailDrawer.detail.status)"
+          :status-type="detailDrawer.detail.status === 'approval' && detailDrawer.detail.approvedAt ? 'success' : statusType(detailDrawer.detail.status)"
+          :department-name="detailDrawer.detail.deptName"
+          :manager-name="detailDrawer.detail.managerName"
+          :score="detailDrawer.detail.gradeResult?.calculatedScore"
+          :raw-grade="detailDrawer.detail.gradeResult?.rawGrade"
+          :calibrated-grade="detailDrawer.detail.gradeResult?.calibratedGrade"
+        />
         <ReviewHistory :records="detailDrawer.detail.flowRecords" />
       </template>
     </el-drawer>

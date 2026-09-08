@@ -19,7 +19,10 @@ import {
 import { NotificationsService } from '@/notifications/notifications.service';
 import { ExemptService } from './exempt.service';
 import { serializeDecimals } from '@/common/interceptors/response.interceptor';
-import { buildEffectiveApproverMap } from '@/departments/department-relations';
+import {
+  buildPerformanceApproverMap,
+  PerformanceApproverSource,
+} from './performance-approval-relations';
 import { validateTemplateWeights } from '@/templates/templates.validation';
 import { buildPeriodDefinitions, businessDateKey } from './cycle-scoring-plan';
 
@@ -101,7 +104,12 @@ interface LaunchDepartment {
   name: string;
   parentId: string | null;
   leaderId: string | null;
+  leaderName: string | null;
   effectiveApproverId: string | null;
+  effectiveApproverName: string | null;
+  effectiveApproverSource: PerformanceApproverSource;
+  approverSourceDeptId: string | null;
+  approverSourceDeptName: string | null;
 }
 
 /** launch 返回结果。 */
@@ -140,8 +148,15 @@ export interface LaunchPreflightResult {
     deptName: string | null;
     managerId: string | null;
     managerName: string | null;
+    managerSource: 'employee_direct_manager' | 'legacy_root_self' | 'unresolved';
     deptHeadId: string | null;
+    deptHeadName: string | null;
+    deptHeadSource: 'department_leader' | 'unresolved';
     approverId: string | null;
+    approverName: string | null;
+    approverSource: PerformanceApproverSource;
+    approverSourceDeptId: string | null;
+    approverSourceDeptName: string | null;
     templateId: null;
     templateName: null;
     templateVersion: null;
@@ -504,10 +519,13 @@ export class LaunchService {
       const exemptManagerIds = new Set<string>();
       let periodCount = 0;
       let indicatorVersionCount = 0;
+      const participantPlanByEmployeeId = new Map(
+        currentPlan.participants.map((participant) => [participant.employeeId, participant]),
+      );
 
       for (const candidate of candidates) {
-        const dept = candidate.deptId ? deptMap.get(candidate.deptId) : null;
-        const manager = this.resolveLaunchManager(candidate, dept, effectiveCycle);
+        const participantPlan = participantPlanByEmployeeId.get(candidate.id)!;
+        const manager = { id: participantPlan.managerId, name: participantPlan.managerName };
 
         const disposition = this.resolveParticipantDisposition(candidate, effectiveCycle, ratio);
 
@@ -519,8 +537,8 @@ export class LaunchService {
               employeeId: candidate.id,
               deptId: candidate.deptId,
               managerId: manager.id,
-              deptHeadId: dept?.leaderId ?? null,
-              approverId: dept?.effectiveApproverId ?? null,
+              deptHeadId: participantPlan.deptHeadId,
+              approverId: participantPlan.approverId,
               status: 'exempted',
               isExempt: true,
               exemptReason: disposition.reason,
@@ -542,8 +560,8 @@ export class LaunchService {
             employeeId: candidate.id,
             deptId: candidate.deptId,
             managerId: manager.id,
-            deptHeadId: dept?.leaderId ?? null,
-            approverId: dept?.effectiveApproverId ?? null,
+            deptHeadId: participantPlan.deptHeadId,
+            approverId: participantPlan.approverId,
             status: 'indicator_drafting',
             isExempt: false,
             ...(isWorkflowV2 && { participantDisposition: 'active' }),
@@ -871,8 +889,15 @@ export class LaunchService {
         deptName: dept?.name ?? null,
         managerId: manager.id,
         managerName: manager.name,
+        managerSource: manager.source,
         deptHeadId: dept?.leaderId ?? null,
+        deptHeadName: dept?.leaderName ?? null,
+        deptHeadSource: dept?.leaderId ? 'department_leader' as const : 'unresolved' as const,
         approverId: dept?.effectiveApproverId ?? null,
+        approverName: dept?.effectiveApproverName ?? null,
+        approverSource: dept?.effectiveApproverSource ?? 'unresolved',
+        approverSourceDeptId: dept?.approverSourceDeptId ?? null,
+        approverSourceDeptName: dept?.approverSourceDeptName ?? null,
         entryDate: candidate.entryDate?.toISOString() ?? null,
         leaveDate: candidate.leaveDate?.toISOString() ?? null,
         templateId: null,
@@ -991,7 +1016,23 @@ export class LaunchService {
   }
 
   private hashLaunchPlan(plan: ReturnType<LaunchService['buildLaunchPlan']>): string {
-    return createHash('sha256').update(JSON.stringify(plan)).digest('hex');
+    const hashablePlan = {
+      ...plan,
+      participants: plan.participants.map((participant) => {
+        const {
+          managerSource: _managerSource,
+          deptHeadName: _deptHeadName,
+          deptHeadSource: _deptHeadSource,
+          approverName: _approverName,
+          approverSource: _approverSource,
+          approverSourceDeptId: _approverSourceDeptId,
+          approverSourceDeptName: _approverSourceDeptName,
+          ...legacyParticipant
+        } = participant;
+        return legacyParticipant;
+      }),
+    };
+    return createHash('sha256').update(JSON.stringify(hashablePlan)).digest('hex');
   }
 
   private async existingLaunchResult(
@@ -1272,7 +1313,7 @@ export class LaunchService {
       },
     });
 
-    const effectiveApproverMap = buildEffectiveApproverMap(
+    const effectiveApproverMap = buildPerformanceApproverMap(
       depts.map((dept) => ({
         id: dept.id,
         name: dept.name,
@@ -1293,7 +1334,12 @@ export class LaunchService {
           name: dept.name,
           parentId: dept.parentId ?? null,
           leaderId: dept.leaderId ?? null,
-          effectiveApproverId: effectiveApproverMap.get(dept.id)?.effectiveApproverId ?? null,
+          leaderName: dept.leader?.name ?? null,
+          effectiveApproverId: effectiveApproverMap.get(dept.id)?.approverId ?? null,
+          effectiveApproverName: effectiveApproverMap.get(dept.id)?.approverName ?? null,
+          effectiveApproverSource: effectiveApproverMap.get(dept.id)?.source ?? 'unresolved',
+          approverSourceDeptId: effectiveApproverMap.get(dept.id)?.sourceDeptId ?? null,
+          approverSourceDeptName: effectiveApproverMap.get(dept.id)?.sourceDeptName ?? null,
         },
       ]),
     );
@@ -1311,6 +1357,8 @@ export class LaunchService {
     const missingManagers = new Set<string>();
     const missingDeptLeaders = new Set<string>();
     const missingApprovers = new Set<string>();
+    const selfManagers = new Set<string>();
+    const selfApprovers = new Set<string>();
 
     for (const candidate of candidates) {
       if (!candidate.deptId) {
@@ -1324,7 +1372,8 @@ export class LaunchService {
         continue;
       }
 
-      if (!this.resolveLaunchManager(candidate, dept, cycle).id
+      const manager = this.resolveLaunchManager(candidate, dept, cycle);
+      if (!manager.id
         && !(this.isWorkflowV2(cycle) && candidate.id === cycle.companyFinalApproverId)) {
         missingManagers.add(candidate.name);
       }
@@ -1335,6 +1384,14 @@ export class LaunchService {
 
       if (!dept.effectiveApproverId) {
         missingApprovers.add(dept.name);
+      }
+
+      const permitsLegacyRootSelf = manager.source === 'legacy_root_self';
+      const isWorkflowTopLeader = this.isWorkflowV2(cycle)
+        && candidate.id === cycle.companyFinalApproverId;
+      if (!permitsLegacyRootSelf && !isWorkflowTopLeader) {
+        if (manager.id === candidate.id) selfManagers.add(candidate.name);
+        if (dept.effectiveApproverId === candidate.id) selfApprovers.add(candidate.name);
       }
     }
 
@@ -1356,6 +1413,15 @@ export class LaunchService {
         `以下部门未设置${approverCopy}，请补齐部门负责人及其直属上级；最高层级可手动设置：${Array.from(missingApprovers).join('、')}`,
       );
     }
+    if (selfManagers.size > 0) {
+      messages.push(`以下员工的绩效直属上级不能是本人：${Array.from(selfManagers).join('、')}`);
+    }
+    if (selfApprovers.size > 0) {
+      const approverCopy = this.isWorkflowV2(cycle)
+        ? '结果审批人'
+        : '最终业务审批人';
+      messages.push(`以下员工的${approverCopy}不能是本人：${Array.from(selfApprovers).join('、')}`);
+    }
 
     if (messages.length > 0) {
       throw new BadRequestException({
@@ -1373,20 +1439,25 @@ export class LaunchService {
       workflowVersion?: number | null;
       companyFinalApproverId?: string | null;
     },
-  ): { id: string | null; name: string | null } {
+  ): {
+    id: string | null;
+    name: string | null;
+    source: 'employee_direct_manager' | 'legacy_root_self' | 'unresolved';
+  } {
     if (candidate.directManagerId) {
       return {
         id: candidate.directManagerId,
         name: candidate.directManager?.name ?? null,
+        source: 'employee_direct_manager',
       };
     }
     if (this.isWorkflowV2(cycle)) {
-      return { id: null, name: null };
+      return { id: null, name: null, source: 'unresolved' };
     }
     if (dept?.parentId === null && dept.leaderId === candidate.id) {
-      return { id: candidate.id, name: candidate.name };
+      return { id: candidate.id, name: candidate.name, source: 'legacy_root_self' };
     }
-    return { id: null, name: null };
+    return { id: null, name: null, source: 'unresolved' };
   }
 
   /** 读取系统配置的豁免阈值比例。 */

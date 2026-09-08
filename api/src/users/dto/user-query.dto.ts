@@ -1,9 +1,13 @@
-import { IsOptional, IsUUID, IsEnum, IsString, IsBoolean } from 'class-validator';
+import { IsOptional, IsUUID, IsEnum, IsString, IsBoolean, IsIn } from 'class-validator';
 import { UserStatus, EmploymentType, SysRole } from '@prisma/client';
 import { PaginationDto } from '../../common/dto/pagination.dto';
 import { Transform } from 'class-transformer';
 
 export class UserQueryDto extends PaginationDto {
+  @IsOptional()
+  @IsIn(['cycle_owner'])
+  eligibleFor?: 'cycle_owner';
+
   @IsOptional()
   @IsUUID()
   deptId?: string;

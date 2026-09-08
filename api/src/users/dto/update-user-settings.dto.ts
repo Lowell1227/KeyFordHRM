@@ -1,5 +1,6 @@
 import { SysRole } from '@prisma/client';
 import { IsArray, IsBoolean, IsIn, IsOptional, IsUUID } from 'class-validator';
+import { HR_CAPABILITIES } from '@/auth/hr-capabilities';
 
 export class UpdateUserSettingsDto {
   @IsOptional()
@@ -12,13 +13,7 @@ export class UpdateUserSettingsDto {
 
   @IsOptional()
   @IsArray()
-  @IsIn([
-    'employee_archive_edit',
-    'employee_archive_review',
-    'organization_edit',
-    'cycle_plan_edit',
-    'cycle_plan_review',
-  ], { each: true })
+  @IsIn(HR_CAPABILITIES, { each: true })
   hrCapabilities?: string[];
 
   @IsOptional()

@@ -6,11 +6,12 @@ import { ExemptService } from './exempt.service';
 import { PrismaModule } from '@/prisma/prisma.module';
 import { NotificationsModule } from '@/notifications/notifications.module';
 import { CycleScheduleService } from './cycle-schedule.service';
+import { CycleManagementGuard } from './cycle-management.guard';
 
 @Module({
   imports: [PrismaModule, NotificationsModule],
   controllers: [CyclesController],
-  providers: [CyclesService, LaunchService, ExemptService, CycleScheduleService],
+  providers: [CyclesService, LaunchService, ExemptService, CycleScheduleService, CycleManagementGuard],
   exports: [LaunchService, CycleScheduleService],
 })
 export class CyclesModule {}

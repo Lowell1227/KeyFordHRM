@@ -190,7 +190,14 @@ const filteredParticipantRows = computed(() => {
     if (participantFilter.value === 'active' && participant.isExempt) return false;
     if (participantFilter.value === 'exempted' && !participant.isExempt) return false;
     if (!keyword) return true;
-    return [participant.employeeName, participant.deptName, participant.managerName]
+    return [
+      participant.employeeName,
+      participant.deptName,
+      participant.managerName,
+      'deptHeadName' in participant ? participant.deptHeadName : null,
+      'approverName' in participant ? participant.approverName : null,
+      'approverSourceDeptName' in participant ? participant.approverSourceDeptName : null,
+    ]
       .filter(Boolean)
       .some((value) => String(value).toLocaleLowerCase().includes(keyword));
   });
@@ -206,6 +213,29 @@ const preflightActiveCount = computed(() => (
 
 function participantReason(participant: ParticipantRow): string {
   return participant.exemptReason || (participant.isExempt ? '本周期豁免' : '—');
+}
+
+function managerSourceLabel(participant: V2PreflightParticipant): string {
+  if (participant.managerSource === 'employee_direct_manager') return '员工档案中的绩效直属上级';
+  if (participant.managerSource === 'legacy_root_self') return '历史流程最高负责人自管';
+  return '未解析';
+}
+
+function deptHeadSourceLabel(participant: V2PreflightParticipant): string {
+  if (participant.deptHeadSource === 'department_leader') {
+    return `${participant.deptName || '所属部门'}的部门负责人`;
+  }
+  return '未解析';
+}
+
+function approverSourceLabel(participant: V2PreflightParticipant): string {
+  const sourceDepartment = participant.approverSourceDeptName || participant.deptName || '所属部门';
+  if (participant.approverSource === 'department_explicit') return `${sourceDepartment}明确配置`;
+  if (participant.approverSource === 'ancestor_explicit') return `继承${sourceDepartment}明确配置`;
+  if (participant.approverSource === 'top_department_leader_manager') {
+    return `${sourceDepartment}负责人直属上级（默认）`;
+  }
+  return '未解析';
 }
 
 function recordSourceLabel(record: CycleParticipantRecord): string {
@@ -517,7 +547,34 @@ watch(() => props.cycle?.id, () => {
             >
               <el-table-column prop="employeeName" label="员工" min-width="100" />
               <el-table-column prop="deptName" label="部门" min-width="130" />
-              <el-table-column prop="managerName" label="绩效直属上级" min-width="130" />
+              <el-table-column label="绩效直属上级" min-width="190">
+                <template #default="{ row }">
+                  <div class="cycle-relation-cell">
+                    <strong>{{ row.managerName || '未配置' }}</strong>
+                    <span v-if="isPrelaunch">{{ managerSourceLabel(row as V2PreflightParticipant) }}</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column v-if="isPrelaunch" label="部门复核人" min-width="180">
+                <template #default="{ row }">
+                  <div class="cycle-relation-cell">
+                    <strong>{{ row.deptHeadName || '未配置' }}</strong>
+                    <span>{{ deptHeadSourceLabel(row as V2PreflightParticipant) }}</span>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column
+                v-if="isPrelaunch"
+                :label="cycle.workflowVersion === 2 ? '结果审批人' : '最终业务审批人'"
+                min-width="210"
+              >
+                <template #default="{ row }">
+                  <div class="cycle-relation-cell">
+                    <strong>{{ row.approverName || '未配置' }}</strong>
+                    <span>{{ approverSourceLabel(row as V2PreflightParticipant) }}</span>
+                  </div>
+                </template>
+              </el-table-column>
               <el-table-column label="参与结果" min-width="120">
                 <template #default="{ row }">
                   <el-tag :type="row.isExempt ? 'info' : 'success'" effect="light" size="small">
@@ -1001,6 +1058,24 @@ watch(() => props.cycle?.id, () => {
   background: var(--el-fill-color-blank);
   border: 1px solid var(--el-border-color-lighter);
   border-radius: 6px;
+}
+
+.cycle-relation-cell {
+  display: grid;
+  gap: 3px;
+  line-height: 1.35;
+}
+
+.cycle-relation-cell strong {
+  color: var(--el-text-color-primary);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+.cycle-relation-cell span {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
+  white-space: normal;
 }
 
 @media (max-width: 767px) {

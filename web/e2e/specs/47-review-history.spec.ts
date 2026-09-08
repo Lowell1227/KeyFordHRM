@@ -47,7 +47,7 @@ async function mockApprovalHistory(page: Page, options: { failFirstDetail?: bool
         { id: `task-${cycleId}-first`, employeeId: 'employee-first', employeeName: cycleId === approvalCycleA ? '虚拟员工甲' : '虚拟员工乙', totalScore: 86 },
         { id: `task-${cycleId}-second`, employeeId: 'employee-second', employeeName: '虚拟员工丙', totalScore: null },
         { id: `task-${cycleId}-self`, employeeId: 'history-approver', employeeName: '虚拟审批人', totalScore: null, rawGrade: null, approverId: 'other-approver' },
-      ].map((row) => ({ cycleId, status: 'approval', approverId: 'history-approver', approvedAt: null, rawGrade: 'B', isVeto: false, ...row }));
+      ].map((row) => ({ cycleId, status: 'approval', approverId: 'history-approver', approvedAt: row.id.endsWith('-first') ? '2026-09-06T14:00:00.000Z' : null, rawGrade: 'B', isVeto: false, ...row }));
     } else if (path.startsWith('/api/v1/tasks/task-')) {
       const taskId = path.split('/').at(-1)!;
       const firstTask = taskId === `task-${approvalCycleA}-first`;
@@ -63,7 +63,7 @@ async function mockApprovalHistory(page: Page, options: { failFirstDetail?: bool
       const employeeName = taskId.endsWith('second') ? '虚拟员工丙' : cycleId === approvalCycleA ? '虚拟员工甲' : '虚拟员工乙';
       data = {
         id: taskId, cycleId, cycleName: cycles.find((cycle) => cycle.id === cycleId)!.name,
-        employeeId: 'employee-other', employeeName, status: 'approval', deptName: '验收部门', indicatorInstances: [],
+        employeeId: 'employee-other', employeeName, status: 'approval', approvedAt: firstTask ? '2026-09-06T14:00:00.000Z' : null, deptName: '验收部门', managerName: '虚拟直属上级', indicatorInstances: [],
         gradeResult: { calculatedScore: taskId.endsWith('second') ? null : 86, rawGrade: 'B', calibratedGrade: 'A' },
         flowRecords: [
           { id: 'cycle-grade', nodeType: 'manager_score', action: 'submit', actorName: '虚拟直属上级', createdAt: '2026-09-06T10:00:00.000Z', comment: '周期评定提交', extraData: { type: 'final_grade_submitted', comment: `${employeeName}的周期评语：稳定交付。` } },
@@ -94,6 +94,13 @@ for (const width of [1440, 390]) {
     await approvalHistoryRow(page, '虚拟员工甲').getByRole('button', { name: '详情', exact: true }).click();
     const drawer = page.getByTestId('approval-detail-drawer');
     await expect(drawer).toBeVisible();
+    const summary = drawer.getByTestId('performance-result-summary');
+    await expect(summary).toContainText('虚拟员工甲');
+    await expect(summary).toContainText('审批历史周期甲');
+    await expect(summary).toContainText('已通过，待公示');
+    await expect(summary).toContainText('86.00');
+    await expect(summary.getByText('B', { exact: true })).toBeVisible();
+    await expect(summary.getByText('A', { exact: true })).toBeVisible();
     await drawer.getByRole('button', { name: '查看全部 4 条记录', exact: true }).click();
     for (const text of ['虚拟员工甲', '审批历史周期甲', '86.00', '虚拟员工甲的周期评语：稳定交付。', '部门复核意见：成果依据完整。', '校准意见：同意提交审批。', '历史审批意见：请补充交付依据。']) {
       await expect(drawer).toContainText(text);

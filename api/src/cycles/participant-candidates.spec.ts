@@ -7,6 +7,7 @@ import { CyclesController } from './cycles.controller';
 import { CyclesService } from './cycles.service';
 import { LaunchService } from './launch.service';
 import { CycleScheduleService } from './cycle-schedule.service';
+import { CycleManagementGuard } from './cycle-management.guard';
 import { RolesGuard } from '@/common/guards/roles.guard';
 
 describe('cycle participant candidates', () => {
@@ -33,7 +34,10 @@ describe('cycle participant candidates', () => {
         { provide: LaunchService, useValue: {} },
         { provide: CycleScheduleService, useValue: {} },
       ],
-    }).compile();
+    })
+      .overrideGuard(CycleManagementGuard)
+      .useValue({ canActivate: () => true })
+      .compile();
     app = module.createNestApplication();
     app.use((req: any, _res: any, next: () => void) => {
       req.user = { id: 'viewer', sysRole: role, hrCapabilities: capabilities, canViewAll: false, deptId: null };

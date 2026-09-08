@@ -225,7 +225,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
         <div class="cycle-actions" @click.stop>
           <template v-if="(row as AssessmentCycle).status === 'draft'">
             <el-button
-              v-if="canEdit && (row as AssessmentCycle).reviewStatus === 'approved'"
+              v-if="canEdit && (row as AssessmentCycle).canManagePlan !== false && (row as AssessmentCycle).reviewStatus === 'approved'"
               :data-testid="`cycle-primary-${(row as AssessmentCycle).id}`"
               link
               type="primary"
@@ -238,14 +238,14 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
               @click="emit('review', row as AssessmentCycle)"
             >审核</el-button>
             <el-button
-              v-if="canEdit"
+              v-if="canEdit && (row as AssessmentCycle).canManagePlan !== false"
               :data-testid="`cycle-edit-${(row as AssessmentCycle).id}`"
               link
               type="primary"
               @click="emit('edit-cycle', row as AssessmentCycle)"
             >编辑</el-button>
             <el-button
-              v-if="canEdit"
+              v-if="canEdit && (row as AssessmentCycle).canManagePlan !== false"
               :data-testid="`cycle-delete-${(row as AssessmentCycle).id}`"
               link
               type="danger"
@@ -264,6 +264,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
               {{ cyclePrimaryActionLabel(row as AssessmentCycle) }}
             </el-button>
             <el-dropdown
+              v-if="canEdit && (row as AssessmentCycle).canManagePlan !== false"
               trigger="click"
               @command="handleMore($event as string, row as AssessmentCycle)"
             >
@@ -332,7 +333,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
       <footer @click.stop>
         <template v-if="cycle.status === 'draft'">
           <el-button
-            v-if="canEdit && cycle.reviewStatus === 'approved'"
+            v-if="canEdit && cycle.canManagePlan !== false && cycle.reviewStatus === 'approved'"
             :data-testid="`cycle-primary-mobile-${cycle.id}`"
             type="primary"
             size="small"
@@ -345,14 +346,14 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
             @click="emit('review', cycle)"
           >审核</el-button>
           <el-button
-            v-if="canEdit"
+            v-if="canEdit && cycle.canManagePlan !== false"
             :data-testid="`cycle-edit-mobile-${cycle.id}`"
             type="primary"
             size="small"
             @click="emit('edit-cycle', cycle)"
           >编辑</el-button>
           <el-button
-            v-if="canEdit"
+            v-if="canEdit && cycle.canManagePlan !== false"
             :data-testid="`cycle-delete-mobile-${cycle.id}`"
             type="danger"
             plain
@@ -371,7 +372,7 @@ function assessmentScopeSummary(cycle: AssessmentCycle) {
           >
             {{ cyclePrimaryActionLabel(cycle) }}
           </el-button>
-          <el-dropdown trigger="click" @command="handleMore($event as string, cycle)">
+          <el-dropdown v-if="canEdit && cycle.canManagePlan !== false" trigger="click" @command="handleMore($event as string, cycle)">
             <el-button :icon="MoreFilled" text aria-label="更多操作" />
             <template #dropdown>
               <el-dropdown-menu>

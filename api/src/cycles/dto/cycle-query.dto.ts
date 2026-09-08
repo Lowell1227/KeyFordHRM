@@ -1,4 +1,4 @@
-import { IsEnum, IsOptional, IsString } from 'class-validator';
+import { IsEnum, IsIn, IsOptional, IsString } from 'class-validator';
 import { CycleStatus, CycleType } from '@prisma/client';
 import { PaginationDto } from '@/common/dto/pagination.dto';
 
@@ -9,6 +9,10 @@ export enum CycleStatusGroup {
 }
 
 export class CycleQueryDto extends PaginationDto {
+  @IsOptional()
+  @IsIn(['manage', 'publish'])
+  purpose?: 'manage' | 'publish';
+
   @IsOptional()
   @IsEnum(CycleStatus)
   status?: CycleStatus;

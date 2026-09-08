@@ -21,7 +21,7 @@ async function setup(page: Page) {
     else if (path === '/api/v1/calibration/cycles') data = [cycle];
     else if (path.endsWith('/calibration/confirm')) { submitted = true; data = { updated: 1 }; }
     else if (path.endsWith('/calibration/tasks/other-task')) data = {
-      taskId: 'other-task', employeeName: '虚拟员工甲', status: 'hr_calibration', calculatedScore: 85, finalGrade: 'B',
+      taskId: 'other-task', employeeName: '虚拟员工甲', deptName: '测试部', position: '跨区域绩效运营与业务协同高级专员', managerName: '直属上级甲', status: 'hr_calibration', calculatedScore: 85, finalGrade: 'B',
       periods: [], indicators: [], rejectHistory: [],
       flowRecords: [
         { id: '0', nodeType: 'manager_score', action: 'reject', actorName: '直属上级甲', comment: '七月自评需补充成果', extraData: { type: 'manager_period_review_returned', periodKey: '2026-07' }, createdAt: '2026-08-31T09:00:00Z' },
@@ -53,6 +53,13 @@ for (const width of [1440, 390]) {
     const calls = await setup(page);
     await page.goto(`/calibration?cycleId=${cycleId}`);
     await page.getByRole('row').filter({ hasText: '虚拟员工甲' }).getByRole('button', { name: '详情', exact: true }).click();
+    const summary = page.getByTestId('performance-result-summary');
+    await expect(summary).toContainText('负责人范围验收周期');
+    await expect(summary).toContainText('虚拟员工甲');
+    await expect(summary).toContainText('绩效校准中');
+    await expect(summary).toContainText('85.00');
+    await expect(summary.getByText('B', { exact: true })).toBeVisible();
+    await expect(summary).toContainText('分数与等级无换算关系');
     const history = page.getByTestId('review-history');
     await expect(history.getByText('部门已核实交付成果，复核通过。')).toBeVisible();
     await expect(history.getByText('已补齐验收记录。\n本周期目标完成。')).toBeVisible();

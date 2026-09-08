@@ -85,7 +85,8 @@ export type HrCapability =
   | 'organization_edit'
   | 'cycle_plan_edit'
   | 'cycle_plan_review'
-  | 'performance_calibration';
+  | 'performance_calibration'
+  | 'performance_publish';
 
 export interface CurrentUser {
   id: string;
@@ -162,6 +163,7 @@ export interface DirectReport {
 }
 
 export interface UserQuery {
+  eligibleFor?: 'cycle_owner';
   page?: number;
   pageSize?: number;
   deptId?: string;
@@ -423,6 +425,7 @@ export interface CycleSchedulePreview {
 }
 
 export interface AssessmentCycle {
+  canManagePlan?: boolean;
   id: string;
   planVersion: number;
   name: string;
@@ -504,6 +507,7 @@ export interface AssessmentCycle {
 }
 
 export interface CycleQuery {
+  purpose?: 'manage' | 'publish';
   page?: number;
   pageSize?: number;
   status?: CycleStatus;
@@ -865,7 +869,14 @@ export interface LaunchPreflightResult {
     managerId: string | null;
     managerName: string | null;
     deptHeadId: string | null;
+    deptHeadName?: string | null;
+    managerSource?: 'employee_direct_manager' | 'legacy_root_self' | 'unresolved';
+    deptHeadSource?: 'department_leader' | 'unresolved';
     approverId: string | null;
+    approverName?: string | null;
+    approverSource?: 'department_explicit' | 'ancestor_explicit' | 'top_department_leader_manager' | 'unresolved';
+    approverSourceDeptId?: string | null;
+    approverSourceDeptName?: string | null;
     templateId: string | null;
     templateName: string | null;
     templateVersion: number | null;
@@ -1267,6 +1278,7 @@ export interface FinalGradeDetail {
   deptName: string | null;
   position: string | null;
   status: TaskStatus;
+  approvedAt?: string | null;
   managerName: string | null;
   periods: Array<{
     periodKey: string;

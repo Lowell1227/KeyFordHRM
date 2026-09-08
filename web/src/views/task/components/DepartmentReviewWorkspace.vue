@@ -4,8 +4,10 @@ import { ElMessage } from 'element-plus';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ReviewHistory from '@/components/common/ReviewHistory.vue';
 import GradeTag from '@/components/common/GradeTag.vue';
+import PerformanceResultSummary from '@/components/common/PerformanceResultSummary.vue';
 import { tasksApi } from '@/api/tasks.api';
 import type { FinalGradeDetail, TaskDetail } from '@/types/api.types';
+import { TASK_STATUS_META } from '@/types/enums';
 
 const props = defineProps<{ task: TaskDetail; canReview: boolean }>();
 const emit = defineEmits<{ reviewed: [] }>();
@@ -19,11 +21,18 @@ let loadSequence = 0;
 const lastReview = computed(() => [...(detail.value?.flowRecords ?? props.task.flowRecords ?? [])]
   .filter(r => r.nodeType === 'dept_review' && ['approve', 'reject'].includes(r.action))
   .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0]);
-const outcome = computed(() => props.task.status === 'hr_calibration'
-  ? lastReview.value?.action === 'approve' ? '部门复核已通过，已进入绩效校准。' : '当前已进入绩效校准。'
-  : props.task.status === 'approval'
-    ? lastReview.value?.action === 'approve' ? '部门复核已完成，已进入结果审批。' : '当前已进入结果审批。'
-    : props.task.status === 'manager_scoring' && lastReview.value?.action === 'reject' ? '已退回直属上级重新评定。' : '');
+const approvedWaitingPublish = computed(() => (detail.value?.status ?? props.task.status) === 'approval'
+  && Boolean(detail.value?.approvedAt ?? props.task.approvedAt));
+const outcome = computed(() => {
+  if (approvedWaitingPublish.value) return '部门复核已完成，结果审批已通过，等待公示。';
+  if (props.task.status === 'hr_calibration') {
+    return lastReview.value?.action === 'approve' ? '部门复核已通过，已进入绩效校准。' : '当前已进入绩效校准。';
+  }
+  if (props.task.status === 'approval') {
+    return lastReview.value?.action === 'approve' ? '部门复核已完成，已进入结果审批。' : '当前已进入结果审批。';
+  }
+  return props.task.status === 'manager_scoring' && lastReview.value?.action === 'reject' ? '已退回直属上级重新评定。' : '';
+});
 const score = (value: number | null | undefined) => value == null ? '—' : value.toFixed(2);
 async function load() {
   const sequence = ++loadSequence;
@@ -55,11 +64,17 @@ watch(() => props.task.id, () => { comment.value = ''; validation.value = ''; })
       <el-alert v-if="outcome" type="success" :closable="false" :title="outcome" />
       <el-alert v-if="error" type="error" :closable="false" :title="error"><el-button link @click="load">重试</el-button></el-alert>
       <template v-if="detail">
-        <dl class="review-summary">
-          <div><dt>绩效直属上级</dt><dd>{{ detail.managerName || '—' }}</dd></div>
-          <div><dt>参考均分</dt><dd>{{ score(detail.calculatedScore) }}</dd></div>
-          <div><dt>上级评定等级</dt><dd><GradeTag :grade="detail.currentGrade" /></dd></div>
-        </dl>
+        <PerformanceResultSummary
+          :cycle-name="detail.cycleName"
+          :employee-name="detail.employeeName"
+          :status-label="detail.status === 'approval' && detail.approvedAt ? '已通过，待公示' : TASK_STATUS_META[detail.status]?.label ?? detail.status"
+          :status-type="detail.status === 'approval' && detail.approvedAt ? 'success' : (TASK_STATUS_META[detail.status]?.type as any) || 'info'"
+          :department-name="detail.deptName"
+          :position="detail.position"
+          :manager-name="detail.managerName"
+          :score="detail.calculatedScore"
+          :raw-grade="detail.currentGrade"
+        />
         <h3>月度结果回顾</h3>
         <div class="review-periods">
           <article v-for="period in detail.periods" :key="period.periodKey">
@@ -85,9 +100,6 @@ watch(() => props.task.id, () => { comment.value = ''; validation.value = ''; })
 
 <style scoped>
 .department-review-workspace { min-width: 0; }
-.review-summary { display: flex; flex-wrap: wrap; gap: 20px 36px; margin: 18px 0; }
-.review-summary dt { color: var(--el-text-color-secondary); font-size: 12px; }
-.review-summary dd { margin: 6px 0 0; }
 h3 { margin: 16px 0 8px; font-size: 14px; }
 .review-periods article { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px; padding: 12px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
 .review-periods span { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }

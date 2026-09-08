@@ -1,4 +1,4 @@
-import { Controller, Delete, Get, Post, Patch, Param, Body, Query, ParseUUIDPipe, HttpCode } from '@nestjs/common';
+import { Controller, Delete, Get, Post, Patch, Param, Body, Query, ParseUUIDPipe, HttpCode, UseGuards } from '@nestjs/common';
 import { SysRole } from '@prisma/client';
 import { Roles } from '@/common/decorators/roles.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
@@ -17,9 +17,11 @@ import { CycleScheduleService } from './cycle-schedule.service';
 import { PreviewCycleScheduleDto } from './dto/preview-cycle-schedule.dto';
 import { TrackingContextQueryDto } from './dto/tracking-context-query.dto';
 import { ParticipantCandidateQueryDto } from './dto/participant-candidate-query.dto';
+import { CycleManagementGuard } from './cycle-management.guard';
 
 // 管理员可以查看全量周期；其他角色只能读取已开放周期，避免草稿和预约信息泄露。
 @Controller('cycles')
+@UseGuards(CycleManagementGuard)
 export class CyclesController {
   constructor(
     private readonly cyclesService: CyclesService,

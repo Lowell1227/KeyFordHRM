@@ -22,6 +22,11 @@ describe('FinalGradeService department review access', () => {
     expect(detail.periods[0].managerGrade).toBe('A');
     expect(detail.canSubmit).toBe(false);
   });
+  it('returns the task approval time so detail views can distinguish approved results waiting for publication', async () => {
+    const approvedAt = new Date('2026-09-08T12:00:00.000Z');
+    const detail = await makeService({ status: 'approval', approvedAt }).getFinalGrade(task.id, viewer('head-1'));
+    expect(detail.approvedAt).toEqual(approvedAt);
+  });
   it.each([
     { managerId: 'manager-1', deptHeadId: 'manager-1', deptHead: { name: '虚拟上级' }, expected: { combined: true, reviewerName: '虚拟上级' } },
     { managerId: 'manager-1', deptHeadId: 'head-1', deptHead: { name: '虚拟复核人' }, expected: { combined: false, reviewerName: '虚拟复核人' } },

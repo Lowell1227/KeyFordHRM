@@ -42,6 +42,9 @@ export default defineConfig({
     '45-manager-period-context.spec.ts',
     '46-cycle-owner-calibration.spec.ts',
     '47-review-history.spec.ts',
+    '48-performance-publication.spec.ts',
+    '48-shared-performance-result-summary.spec.ts',
+    '49-performance-specialist.spec.ts',
   ],
   workers: 1,
 });

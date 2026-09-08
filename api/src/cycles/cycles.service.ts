@@ -16,6 +16,7 @@ import { businessDateKey, canonicalDateOnly, normalizeScoringFrequency } from '.
 import type { PerformanceCycleContext } from './tracking-context.types';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { ParticipantCandidateQueryDto } from './dto/participant-candidate-query.dto';
+import { assertCycleOperator, cycleOperatorWhere, isGlobalCycleOperator } from './cycle-operator-scope';
 
 const DEADLINE_FIELDS = [
   'deadlineIndicatorSetting',
@@ -197,6 +198,7 @@ export class CyclesService {
       if (!cycle) {
         throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
       }
+      assertCycleOperator(user, cycle);
       const editableStatuses: CycleStatus[] = [CycleStatus.draft, CycleStatus.scheduled, CycleStatus.launch_blocked];
       if (!editableStatuses.includes(cycle.status)) {
         throw new ConflictException({
@@ -234,6 +236,7 @@ export class CyclesService {
       if (!cycle) {
         throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
       }
+      assertCycleOperator(user, cycle);
       if (cycle.status !== CycleStatus.draft) {
         throw new ConflictException({
           code: ERROR_CODE.CONFLICT,
@@ -278,6 +281,7 @@ export class CyclesService {
       if (!cycle) {
         throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
       }
+      assertCycleOperator(user, cycle);
       if (cycle.status !== CycleStatus.draft) {
         throw new ConflictException({
           code: ERROR_CODE.CONFLICT,
@@ -513,12 +517,26 @@ export class CyclesService {
 
   /** GET /cycles — 查询周期列表。 */
   async findAll(query: CycleQueryDto, viewer: AuthUser) {
+    const forPublication = query.purpose === 'publish';
+    if (forPublication && !hasHrCapability(viewer, 'performance_publish')) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权管理结果公示' });
+    }
     const canManageCycles = viewer.sysRole === SysRole.hr
       || viewer.sysRole === SysRole.system_admin
       || hasHrCapability(viewer, 'cycle_plan_edit')
-      || hasHrCapability(viewer, 'cycle_plan_review');
+      || hasHrCapability(viewer, 'cycle_plan_review')
+      || forPublication;
     const visibleTaskWhere = this.visibleTaskWhere(viewer);
+    const operatorScope: Prisma.AssessmentCycleWhereInput = isGlobalCycleOperator(viewer) ? {}
+      : forPublication ? cycleOperatorWhere(viewer)
+      : canManageCycles ? { OR: [
+        ...(hasHrCapability(viewer, 'cycle_plan_edit') ? [{ hrOwnerId: viewer.id }] : []),
+        ...(hasHrCapability(viewer, 'cycle_plan_review') ? [{ reviewerId: viewer.id }] : []),
+        ...(query.purpose !== 'manage' ? [{ tasks: { some: visibleTaskWhere } }] : []),
+      ] } : {};
     const where: Prisma.AssessmentCycleWhereInput = {
+      ...operatorScope,
+      ...(forPublication && { tasks: { some: { status: { in: ['approval', 'published', 'confirmed', 'appealing', 'closed'] } } } }),
       ...(query.status && { status: query.status }),
       ...(!query.status && query.group && { status: { in: CYCLE_STATUS_GROUPS[query.group] } }),
       ...(!canManageCycles && { status: { notIn: ['draft', 'scheduled', 'launch_blocked'] } }),
@@ -560,7 +578,8 @@ export class CyclesService {
     }
 
     return paginated(items.map((cycle) => {
-      const publicCycle = this.withPlanFields(cycle);
+      const publicCycle = { ...this.withPlanFields(cycle), canManagePlan: isGlobalCycleOperator(viewer)
+        || (hasHrCapability(viewer, 'cycle_plan_edit') && cycle.hrOwnerId === viewer.id) };
       const byStatus = statusCountsByCycle.get(cycle.id);
       return byStatus
         ? { ...publicCycle, taskStats: this.buildTaskStats(cycle, byStatus, undefined, approvedCountsByCycle.get(cycle.id)) }
@@ -696,8 +715,8 @@ export class CyclesService {
     const canManageCycles = !viewer
       || viewer.sysRole === SysRole.hr
       || viewer.sysRole === SysRole.system_admin
-      || hasHrCapability(viewer, 'cycle_plan_edit')
-      || hasHrCapability(viewer, 'cycle_plan_review');
+      || (hasHrCapability(viewer, 'cycle_plan_edit') && cycle.hrOwnerId === viewer.id)
+      || (hasHrCapability(viewer, 'cycle_plan_review') && cycle.reviewerId === viewer.id);
     if (!canManageCycles && ['draft', 'scheduled', 'launch_blocked'].includes(cycle.status)) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权查看尚未发起的周期' });
     }
@@ -731,6 +750,8 @@ export class CyclesService {
     const publicCycle = Object.fromEntries(
       Object.entries(cycle).filter(([key]) => key !== 'launchPlan' && key !== 'launchPlanHash'),
     );
+    publicCycle.canManagePlan = !viewer || isGlobalCycleOperator(viewer)
+      || (hasHrCapability(viewer, 'cycle_plan_edit') && cycle.hrOwnerId === viewer.id);
 
     return {
       ...publicCycle,
@@ -845,6 +866,7 @@ export class CyclesService {
       if (!cycle) {
         throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
       }
+      assertCycleOperator(user, cycle);
       if (['scheduled', 'launch_blocked'].includes(cycle.status)) {
         throw new ConflictException({
           code: ERROR_CODE.PARAM_INVALID,
@@ -1107,6 +1129,9 @@ export class CyclesService {
   }
 
   private async resolveHrOwnerId(requestedId: string | undefined, operator: AuthUser): Promise<string> {
+    if (operator.sysRole === SysRole.hr_user && requestedId && requestedId !== operator.id) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '请由 HR 管理员分配周期负责人' });
+    }
     const operatorIsEligibleOwner = operator.sysRole === SysRole.hr
       || (operator.sysRole === SysRole.hr_user && hasHrCapability(operator, 'cycle_plan_edit'));
     if (!requestedId && operatorIsEligibleOwner) {

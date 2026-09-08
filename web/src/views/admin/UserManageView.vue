@@ -140,7 +140,9 @@ function normalizeSystemRole(user: Pick<ManagedUser, 'sysRole' | 'systemPermissi
   return 'employee';
 }
 
-function systemPermissionLabel(user: Pick<ManagedUser, 'sysRole' | 'systemPermission'>): string {
+function systemPermissionLabel(user: Pick<ManagedUser, 'sysRole' | 'systemPermission' | 'hrCapabilities'>): string {
+  if (normalizeSystemRole(user) === 'hr_user'
+    && user.hrCapabilities?.includes('cycle_plan_edit') && user.hrCapabilities.includes('performance_publish')) return '绩效专员';
   return user.systemPermission
     ? systemPermissionLabels[user.systemPermission]
     : roleLabels[user.sysRole];
@@ -157,6 +159,7 @@ const hrCapabilityOptions: { label: string; value: HrCapability }[] = [
   { label: '考核周期创建与编辑', value: 'cycle_plan_edit' },
   { label: '考核周期审核', value: 'cycle_plan_review' },
   { label: '绩效校准', value: 'performance_calibration' },
+  { label: '结果公示', value: 'performance_publish' },
 ];
 
 const statusOptions: { label: string; value: UserStatus }[] = [
@@ -875,6 +878,15 @@ const personSettingsDialog = ref({
 });
 let managerLookupRequestId = 0;
 
+function setPerformanceSpecialist(enabled: string | number | boolean) {
+  const capabilities = new Set(personSettingsDialog.value.hrCapabilities);
+  for (const capability of ['cycle_plan_edit', 'performance_publish'] as const) {
+    if (enabled) capabilities.add(capability);
+    else capabilities.delete(capability);
+  }
+  personSettingsDialog.value.hrCapabilities = [...capabilities];
+}
+
 function openPersonSettingsDialog(row: ManagedUser) {
   personSettingsDialog.value = {
     visible: true,
@@ -919,12 +931,12 @@ watch(
 );
 
 const selectedManagerRelationChanged = computed(() =>
-  personSettingsDialog.value.selectedManager?.id !== personSettingsDialog.value.originalDirectManagerId,
+  personSettingsDialog.value.directManagerId !== personSettingsDialog.value.originalDirectManagerId,
 );
 
 async function confirmPersonSettings() {
   if (!personSettingsDialog.value.userId) return;
-  if (!personSettingsDialog.value.directManagerId && !personSettingsDialog.value.isTopLevelLeader) {
+  if (selectedManagerRelationChanged.value && !personSettingsDialog.value.directManagerId && !personSettingsDialog.value.isTopLevelLeader) {
     ElMessage.warning('请选择绩效直属上级');
     return;
   }
@@ -1945,6 +1957,13 @@ onBeforeUnmount(() => {
         </div>
       </div>
       <el-form label-position="top" class="person-settings__form">
+        <el-form-item v-if="isSystemAdmin && personSettingsDialog.sysRole === 'hr_user'" label="职责角色">
+          <el-checkbox :model-value="personSettingsDialog.hrCapabilities.includes('cycle_plan_edit') && personSettingsDialog.hrCapabilities.includes('performance_publish')"
+            data-testid="performance-specialist-role" @change="setPerformanceSpecialist">
+            绩效专员
+          </el-checkbox>
+          <p class="dialog-tip person-settings__role-tip">管理本人负责的周期和结果公示；审批通过后方可公示。</p>
+        </el-form-item>
         <el-form-item v-if="isSystemAdmin && personSettingsDialog.sysRole === 'hr_user'" label="普通 HR 可操作能力">
           <el-checkbox-group v-model="personSettingsDialog.hrCapabilities" class="hr-capability-options">
             <el-checkbox v-for="item in hrCapabilityOptions" :key="item.value" :value="item.value">
@@ -2023,7 +2042,7 @@ onBeforeUnmount(() => {
       </el-form>
       <template #footer>
         <el-button @click="personSettingsDialog.visible = false">取消</el-button>
-        <el-button type="primary" :loading="personSettingsDialog.saving" @click="confirmPersonSettings">提交审核</el-button>
+        <el-button type="primary" :loading="personSettingsDialog.saving" @click="confirmPersonSettings">{{ selectedManagerRelationChanged ? '提交审核' : '保存权限' }}</el-button>
       </template>
     </el-dialog>
 
@@ -2037,7 +2056,7 @@ onBeforeUnmount(() => {
     </el-dialog>
 
     <el-dialog v-model="approverDialog.visible" title="设置最终业务审批人" width="480px" :close-on-click-modal="false" destroy-on-close>
-      <p class="dialog-tip">二级及以下部门默认由上一级部门负责人审批；一级部门默认由部门负责人的绩效直属上级审批。HR 只负责校准，跨部门或最高层级可手动设置。</p>
+      <p class="dialog-tip">绩效新周期优先采用本部门明确设置的审批人，未设置时向上查找。实际审批人员以发起前检查为准，已启动周期保留原审批关系。</p>
       <UserSelect v-model="approverDialog.approverId" placeholder="搜索姓名或工号，留空则恢复自动匹配" />
       <template #footer>
         <el-button @click="approverDialog.visible = false">取消</el-button>
@@ -2048,6 +2067,7 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.person-settings__role-tip { width: 100%; margin: 4px 0 0; }
 .page-title {
   display: flex;
   align-items: flex-start;

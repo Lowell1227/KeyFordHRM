@@ -45,6 +45,7 @@ export interface FinalGradeDetail {
   deptName: string | null;
   position: string | null;
   status: TaskStatus;
+  approvedAt: Date | null;
   managerName: string | null;
   /** 依据任务冻结关系确定本次是否合并部门复核。 */
   departmentReview: { combined: boolean; reviewerName: string | null };
@@ -122,6 +123,7 @@ export class FinalGradeService {
       deptName: task.dept?.name ?? null,
       position: task.employee?.position ?? null,
       status: task.status,
+      approvedAt: task.approvedAt,
       managerName: task.manager?.name ?? null,
       departmentReview: {
         combined: this.isCombinedDepartmentReview(task),

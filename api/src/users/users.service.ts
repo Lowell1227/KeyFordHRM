@@ -161,6 +161,12 @@ export class UsersService {
     if (Object.keys(scopeFilter).length > 0) {
       where.AND = [scopeFilter];
     }
+    if (dto.eligibleFor === 'cycle_owner') {
+      where.AND = [scopeFilter, { status: { not: UserStatus.resigned }, OR: [
+        { sysRole: SysRole.hr },
+        { sysRole: SysRole.hr_user, hrCapabilities: { has: 'cycle_plan_edit' } },
+      ] }];
+    }
 
     const [total, users] = await Promise.all([
       this.prisma.user.count({ where }),
@@ -392,6 +398,16 @@ export class UsersService {
         where: { id },
         data: updateData,
       });
+      if (operator && (dto.sysRole !== undefined || dto.hrCapabilities !== undefined)) {
+        await tx.auditLog.create({ data: {
+          userId: operator.id,
+          action: 'user_permissions_updated',
+          entityType: 'user',
+          entityId: id,
+          oldValue: { sysRole: targetUser.sysRole, hrCapabilities: targetUser.hrCapabilities ?? [] },
+          newValue: { sysRole: assignedUser.sysRole, hrCapabilities: assignedUser.hrCapabilities ?? [] },
+        } });
+      }
       return assignedUser;
     });
 

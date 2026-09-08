@@ -7,6 +7,7 @@ import { tasksApi } from '@/api/tasks.api';
 import GradeTag from '@/components/common/GradeTag.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ReviewHistory from '@/components/common/ReviewHistory.vue';
+import PerformanceResultSummary from '@/components/common/PerformanceResultSummary.vue';
 import type { FinalGradeDetail } from '@/types/api.types';
 import type { PerfGrade } from '@/types/enums';
 import { FLOW_NODE_LABELS, TASK_STATUS_META } from '@/types/enums';
@@ -128,12 +129,19 @@ watch(taskId, loadDetail, { immediate: true });
           {{ detail.latestReject.comment }}
         </el-alert>
 
-        <el-descriptions :column="2" size="small" border>
-          <el-descriptions-item label="部门">{{ detail.deptName ?? '—' }}</el-descriptions-item>
-          <el-descriptions-item label="岗位">{{ detail.position ?? '—' }}</el-descriptions-item>
-          <el-descriptions-item label="直属上级">{{ detail.managerName ?? '—' }}</el-descriptions-item>
-          <el-descriptions-item v-if="!detail.canSubmit" label="当前环节"><span data-testid="cycle-current-stage">{{ TASK_STATUS_META[detail.status]?.label ?? detail.status }}</span></el-descriptions-item>
-        </el-descriptions>
+        <PerformanceResultSummary
+          :cycle-name="detail.cycleName"
+          :employee-name="detail.employeeName"
+          :status-label="detail.status === 'approval' && detail.approvedAt ? '已通过，待公示' : TASK_STATUS_META[detail.status]?.label ?? detail.status"
+          :status-type="detail.status === 'approval' && detail.approvedAt ? 'success' : (TASK_STATUS_META[detail.status]?.type as any) || 'info'"
+          :department-name="detail.deptName"
+          :position="detail.position"
+          :manager-name="detail.managerName"
+          :score="detail.canSubmit ? undefined : (allPeriodsComplete ? detail.calculatedScore : null)"
+          :raw-grade="detail.canSubmit ? undefined : detail.currentGrade"
+          score-label="周期得分"
+          raw-grade-label="周期等级"
+        />
       </ChartCard>
 
       <ChartCard :padded="true">

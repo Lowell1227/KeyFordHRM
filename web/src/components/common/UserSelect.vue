@@ -19,6 +19,7 @@ const props = withDefaults(
     departmentIds?: string[];
     clearable?: boolean;
     includeTestAccounts?: boolean;
+    eligibleFor?: 'cycle_owner';
   }>(),
   { multiple: false, placeholder: '搜索姓名 / 工号', clearable: true },
 );
@@ -76,6 +77,7 @@ async function search(keyword: string) {
       status: props.status,
       sysRole: props.sysRole,
       includeTestAccounts: props.includeTestAccounts,
+      eligibleFor: props.eligibleFor,
       deptId,
     })));
     if (requestId !== searchRequestId) return;

@@ -144,8 +144,15 @@ const blockedPreflight: LaunchPreflightResult = {
     deptName: '销售部',
     managerId: 'manager-1',
     managerName: '周强',
+    managerSource: 'employee_direct_manager',
     deptHeadId: 'manager-1',
+    deptHeadName: '周强',
+    deptHeadSource: 'department_leader',
     approverId: 'approver-1',
+    approverName: '事业部结果审批人',
+    approverSource: 'ancestor_explicit',
+    approverSourceDeptId: 'sales-division',
+    approverSourceDeptName: '销售事业部',
     templateId: '',
     templateName: '未匹配',
     templateVersion: 0,
@@ -336,7 +343,7 @@ async function mockCyclePage(
     const reviewReminderId = url.pathname.match(/\/cycles\/([^/]+)\/review-reminder$/)?.[1];
     if (route.request().method() === 'POST' && reviewReminderId) {
       options.reviewReminderRequests?.push(reviewReminderId);
-      const reminderAvailableAt = '2026-09-03T02:00:00.000Z';
+      const reminderAvailableAt = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
       if (options.preflight) options.preflight.reviewReminderAvailableAt = reminderAvailableAt;
       return route.fulfill({
         contentType: 'application/json',
@@ -808,11 +815,54 @@ test.describe('compact cycle management list', () => {
     await expect(participantDetails).toContainText('林晓');
     await expect(participantDetails).toContainText('销售部');
     await expect(participantDetails).toContainText('周强');
+    await expect(participantDetails.getByRole('columnheader', { name: '部门复核人' })).toBeVisible();
+    await expect(participantDetails.getByRole('columnheader', { name: '最终业务审批人' })).toBeVisible();
+    await expect(participantDetails).toContainText('员工档案中的绩效直属上级');
+    await expect(participantDetails).toContainText('继承销售事业部明确配置');
     await expect(page.getByTestId('participant-filter-all')).toBeVisible();
     await expect(page.getByTestId('participant-search')).toBeVisible();
     await expect(page.getByRole('button', { name: '发起考核', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '预约发起', exact: true })).toBeVisible();
     await expect(page.getByRole('button', { name: '开始发起检查', exact: true })).toHaveCount(0);
+  });
+
+  test('shows every frozen approval relation and its source in the mobile launch preview', async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    const relationshipPreflight: LaunchPreflightResult = {
+      ...blockedPreflight,
+      participants: [{
+        ...blockedPreflight.participants[0],
+        managerName: '周强',
+        managerSource: 'employee_direct_manager',
+        deptHeadName: '王敏',
+        deptHeadSource: 'department_leader',
+        approverName: '事业部结果审批人',
+        approverSource: 'ancestor_explicit',
+        approverSourceDeptId: 'sales-division',
+        approverSourceDeptName: '销售事业部',
+      }],
+    };
+    await mockCyclePage(page, [], {
+      cycles: [{ ...draftCycle, workflowVersion: 2 }],
+      preflight: relationshipPreflight,
+    });
+
+    await page.goto('/cycles?group=attention&cycleId=cycle-draft');
+
+    const details = page.getByTestId('cycle-preflight-details');
+    await expect(details.getByRole('columnheader', { name: '绩效直属上级' })).toBeVisible();
+    await expect(details.getByRole('columnheader', { name: '部门复核人' })).toBeVisible();
+    await expect(details.getByRole('columnheader', { name: '结果审批人' })).toBeVisible();
+    await expect(details).toContainText('周强');
+    await expect(details).toContainText('员工档案中的绩效直属上级');
+    await expect(details).toContainText('王敏');
+    await expect(details).toContainText('销售部的部门负责人');
+    await expect(details).toContainText('事业部结果审批人');
+    await expect(details).toContainText('继承销售事业部明确配置');
+
+    await page.getByTestId('participant-search').fill('事业部结果审批人');
+    await expect(details).toContainText('林晓');
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
   });
 
   test('opens a full-page five-stage workspace and restores list context on return', async ({ page }) => {
