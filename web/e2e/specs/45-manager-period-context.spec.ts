@@ -25,7 +25,8 @@ function review(id: string, month: number, employeeTaskId = taskId): PeriodRevie
   };
 }
 
-async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFirst?: boolean; wholeCycle?: boolean; finished?: boolean; finishOnSubmit?: boolean; includeFinishedInTeam?: boolean } = {}) {
+async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFirst?: boolean; wholeCycle?: boolean; finished?: boolean; finishOnSubmit?: boolean; includeFinishedInTeam?: boolean; finalStatus?: 'dept_review' | 'hr_calibration' } = {}) {
+  const finalStatus = options.finalStatus ?? 'dept_review';
   const august = review(augustId, 8);
   const july = review('55555555-5555-4555-8555-555555555555', 7);
   const september = review(septemberId, 9, options.slowFirst ? 'task-second' : taskId);
@@ -41,7 +42,7 @@ async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFir
   let firstStarted = false;
   const teamItem = (detail: PeriodReviewDetail) => ({
     id: detail.period.taskId, cycleId, cycleName, employeeId: detail.period.taskId, employeeName: detail.context.employeeName,
-    employeeNo: 'MOCK', deptId: 'test-dept', deptName: '测试部', managerId: 'manager', status: finalSubmitted ? 'dept_review' : 'manager_scoring',
+    employeeNo: 'MOCK', deptId: 'test-dept', deptName: '测试部', managerId: 'manager', status: finalSubmitted ? finalStatus : 'manager_scoring',
     stageState: finalSubmitted ? 'completed' : finished || detail.permissions.canEditManager ? 'pending' : 'not_started', totalScore: null, rawGrade: null,
     updatedAt: '2026-09-08T10:00:00.000Z', avatarUrl: null, position: '测试岗位', periodReview: detail.period,
   });
@@ -58,7 +59,7 @@ async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFir
       if (path.endsWith('/final-grade')) {
         finalSubmitted = true;
         finalComment = request.postDataJSON().comment?.trim() || null;
-        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ code: 0, data: { taskId, status: 'dept_review' } }) });
+        await route.fulfill({ contentType: 'application/json', body: JSON.stringify({ code: 0, data: { taskId, status: finalStatus } }) });
         return;
       }
       const returned = path.endsWith('/manager-return');
@@ -83,7 +84,7 @@ async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFir
     else if (path.endsWith('/tasks/mine')) data = { items: [], total: 0, page: 1, pageSize: 100 };
     else if (path.endsWith(`/tasks/${taskId}/final-grade`)) data = {
       taskId, cycleId, cycleName, employeeName: '虚拟员工甲', deptName: '测试部', position: '测试岗位', managerName: '虚拟主管',
-      status: finalSubmitted ? 'dept_review' : 'manager_scoring', currentGrade: finalSubmitted ? 'B' : null, calculatedScore: 84.33, comment: finalComment,
+      status: finalSubmitted ? finalStatus : 'manager_scoring', currentGrade: finalSubmitted ? 'B' : null, calculatedScore: 84.33, comment: finalComment,
       allPeriodsComplete: true, canSubmit: !finalSubmitted, latestReject: null,
       periods: [
         { periodKey: '2026-07', periodType: 'month', status: 'completed', selfScoreTotal: 78, managerScoreTotal: 80, selfGrade: 'B', managerGrade: 'B' },
@@ -93,7 +94,7 @@ async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFir
     };
     else if (path.endsWith(`/tasks/${taskId}`)) data = {
       id: taskId, cycleId, cycleName, employeeId: taskId, employeeName: '虚拟员工甲', employeeNo: 'MOCK', managerId: 'manager', managerName: '虚拟主管',
-      workflowVersion: 2, status: finalSubmitted ? 'dept_review' : 'manager_scoring', isExempt: false, deptName: '测试部',
+      workflowVersion: 2, status: finalSubmitted ? finalStatus : 'manager_scoring', isExempt: false, deptName: '测试部',
       managerStageState: finalSubmitted ? 'completed' : finished ? 'pending' : 'not_started',
       periods: (finished ? [july, august, september] : [august, september]).map((item, index) => ({ ...item.period, sequence: index + 1 })), indicatorInstances: [], flowRecords: [],
     };
@@ -105,6 +106,23 @@ async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFir
   });
   await page.goto(`/tasks?scope=team&stage=manager-eval&cycleId=${cycleId}&taskId=${taskId}${options.explicitPeriod ? `&periodId=${augustId}` : ''}`);
   return { writes, releaseFirst, firstStarted: () => firstStarted };
+}
+
+for (const [finalStatus, label] of [['dept_review', '部门复核'], ['hr_calibration', '绩效校准']] as const) {
+  test(`周期评定提交后按实际流转状态提示${label}`, async ({ page }) => {
+    const state = await mockTeam(page, { finished: true, includeFinishedInTeam: true, finalStatus });
+    const results = page.getByTestId('manager-period-results');
+    await results.getByLabel('整周期最终等级 B', { exact: true }).click();
+    await results.getByRole('button', { name: '提交评定', exact: true }).click();
+    const dialog = page.getByRole('dialog');
+    await expect(dialog).not.toContainText('进入部门复核');
+    await dialog.getByRole('button', { name: '提交', exact: true }).click();
+    await expect(page.getByText(`整周期结果评定已提交，已进入${label}。`, { exact: true })).toBeVisible();
+    await expect(results.getByTestId('cycle-current-stage')).toContainText(label);
+    await page.reload();
+    await expect(results.getByTestId('cycle-current-stage')).toContainText(label);
+    expect(state.writes).toHaveLength(1);
+  });
 }
 
 for (const width of [1440, 390]) {

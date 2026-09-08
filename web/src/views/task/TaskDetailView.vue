@@ -529,7 +529,7 @@ async function handleRemind() {
         type="info"
         :closable="false"
         show-icon
-        title="完成全部月度评分后，需进行整周期结果评定，提交后进入部门复核。"
+        title="完成全部月度评分后，需进行整周期结果评定。"
       />
 
       <PerformanceFormWorkspace

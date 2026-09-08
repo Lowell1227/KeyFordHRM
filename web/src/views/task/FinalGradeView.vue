@@ -8,6 +8,7 @@ import GradeTag from '@/components/common/GradeTag.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import type { FinalGradeDetail } from '@/types/api.types';
 import type { PerfGrade } from '@/types/enums';
+import { FLOW_NODE_LABELS, TASK_STATUS_META } from '@/types/enums';
 import { GRADE_LABELS } from '@/utils/grade';
 
 const route = useRoute();
@@ -63,7 +64,7 @@ async function handleSubmit() {
   const requestedTaskId = taskId.value;
   try {
     await ElMessageBox.confirm(
-      `提交后 ${detail.value.employeeName} 的整周期最终等级为 ${GRADE_LABELS[grade]}，进入部门复核。提交后不可直接修改，如被退回可重新评定。`,
+      `提交后 ${detail.value.employeeName} 的整周期最终等级为 ${GRADE_LABELS[grade]}。提交后不可直接修改，如被退回可重新评定。`,
       '提交整周期结果评定',
       { confirmButtonText: '提交', cancelButtonText: '再想想', type: 'warning' },
     );
@@ -73,8 +74,10 @@ async function handleSubmit() {
   if (requestedTaskId !== taskId.value || detail.value !== current || !detail.value.canSubmit) return;
   submitting.value = true;
   try {
-    await tasksApi.submitFinalGrade(requestedTaskId, { grade, comment: submittedComment });
-    ElMessage.success('整周期结果评定已提交');
+    const result = await tasksApi.submitFinalGrade(requestedTaskId, { grade, comment: submittedComment });
+    const nextStage = result.status === 'dept_review' || result.status === 'hr_calibration'
+      ? FLOW_NODE_LABELS[result.status] : null;
+    ElMessage.success(nextStage ? `整周期结果评定已提交，已进入${nextStage}。` : '整周期结果评定已提交');
     if (requestedTaskId === taskId.value) { await loadDetail(); emit('submitted'); }
   } catch (e) {
     ElMessage.error(e instanceof Error ? e.message : '提交失败');
@@ -122,6 +125,7 @@ watch(taskId, loadDetail, { immediate: true });
           <el-descriptions-item label="部门">{{ detail.deptName ?? '—' }}</el-descriptions-item>
           <el-descriptions-item label="岗位">{{ detail.position ?? '—' }}</el-descriptions-item>
           <el-descriptions-item label="直属上级">{{ detail.managerName ?? '—' }}</el-descriptions-item>
+          <el-descriptions-item v-if="!detail.canSubmit" label="当前环节"><span data-testid="cycle-current-stage">{{ TASK_STATUS_META[detail.status]?.label ?? detail.status }}</span></el-descriptions-item>
         </el-descriptions>
       </ChartCard>
 
