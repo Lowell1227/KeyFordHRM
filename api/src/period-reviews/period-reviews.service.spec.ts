@@ -144,6 +144,10 @@ describe('PeriodReviewsService', () => {
       id: '12121212-1212-4212-8212-121212121212',
       objectiveAlignments: [{ objective: { id: 'objective-1', title: '公司年度增长', level: 'company' } }],
       progressUpdates: [{
+        id: 'progress-current',
+        periodId: null,
+        periodReviewRevisionId: null,
+        period: null,
         progress: 65,
         healthStatus: 'on_track',
         content: '已推进核心客户',
@@ -199,21 +203,6 @@ describe('PeriodReviewsService', () => {
 
     const result = await service.getReview(period.id, employee);
 
-    expect(prisma.indicatorInstance.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({
-        select: expect.objectContaining({
-          progressUpdates: expect.objectContaining({
-            where: expect.objectContaining({
-              periodId: null,
-              createdAt: expect.objectContaining({
-                gte: new Date('2026-12-31T16:00:00.000Z'),
-                lt: new Date('2027-01-31T16:00:00.000Z'),
-              }),
-            }),
-          }),
-        }),
-      }),
-    );
     expect(result.indicators[0]).toMatchObject({
       progress: 65,
       healthStatus: 'on_track',
@@ -241,6 +230,239 @@ describe('PeriodReviewsService', () => {
       healthStatus: null,
       employeeComment: null,
       monthlyProgressSource: 'none',
+    });
+  });
+
+  describe('daily progress references', () => {
+    type ProgressFixture = {
+      id: string;
+      periodId: string | null;
+      periodReviewRevisionId: string | null;
+      period: { periodKey: string } | null;
+      progress: number | null;
+      healthStatus: 'on_track' | 'at_risk' | null;
+      content: string;
+      attachments: Prisma.JsonValue;
+      createdAt: Date;
+    };
+
+    function progressRecord(overrides: Partial<ProgressFixture> = {}): ProgressFixture {
+      return {
+        id: 'daily-progress',
+        periodId: null,
+        periodReviewRevisionId: null,
+        period: null,
+        progress: 40,
+        healthStatus: 'at_risk',
+        content: '本月已完成首批交付',
+        attachments: [{ name: '交付记录.pdf', url: '/evidence/delivery.pdf' }],
+        createdAt: new Date('2027-01-20T08:00:00.000Z'),
+        ...overrides,
+      };
+    }
+
+    // Prisma is the external boundary. This small read double applies the query's
+    // source scope, daily-record filter, date range, and limit to hand-built rows.
+    function useProgressRows(
+      rows: ProgressFixture[],
+      sourceTaskId = period.taskId,
+    ): void {
+      prisma.indicatorInstance.findMany.mockImplementation(async ({ where, select }) => {
+        const sourceId = period.indicatorVersion.items[0].sourceInstanceId;
+        if (!where.id.in.includes(sourceId) || (where.taskId && where.taskId !== sourceTaskId)) {
+          return [];
+        }
+        const progressQuery = select.progressUpdates;
+        const progressWhere = progressQuery.where ?? {};
+        let updates = rows.filter((row) => {
+          if ('periodId' in progressWhere && row.periodId !== progressWhere.periodId) return false;
+          if ('periodReviewRevisionId' in progressWhere
+            && row.periodReviewRevisionId !== progressWhere.periodReviewRevisionId) return false;
+          if (progressWhere.createdAt?.gte && row.createdAt < progressWhere.createdAt.gte) return false;
+          if (progressWhere.createdAt?.lt && row.createdAt >= progressWhere.createdAt.lt) return false;
+          return true;
+        }).sort((left, right) => right.createdAt.getTime() - left.createdAt.getTime());
+        if (progressQuery.take != null) updates = updates.slice(0, progressQuery.take);
+        return [{ id: sourceId, objectiveAlignments: [], progressUpdates: updates }];
+      });
+    }
+
+    beforeEach(() => {
+      prisma.assessmentPeriod.findUnique.mockResolvedValue({ ...period, indicatorReviews: [] });
+    });
+
+    it('prefills July from a September entry explicitly assigned to July', async () => {
+      prisma.assessmentPeriod.findUnique.mockResolvedValue({
+        ...period,
+        periodKey: '2026-07',
+        indicatorReviews: [],
+      });
+      useProgressRows([progressRecord({
+        id: 'july-backfill',
+        periodId: period.id,
+        period: { periodKey: '2026-07' },
+        createdAt: new Date('2026-09-08T08:00:00.000Z'),
+      })]);
+
+      const result = await service.getReview(period.id, employee);
+
+      expect(result.indicators[0]).toMatchObject({
+        monthlyProgressSource: 'active_progress',
+        progress: 40,
+        healthStatus: 'at_risk',
+        employeeComment: '本月已完成首批交付',
+        selfScore: null,
+        latestProgress: { createdAt: new Date('2026-09-08T08:00:00.000Z') },
+        progressReferences: [{
+          id: 'july-backfill',
+          periodKey: '2026-07',
+          progress: 40,
+          healthStatus: 'at_risk',
+          content: '本月已完成首批交付',
+          attachments: [{ name: '交付记录.pdf', url: '/evidence/delivery.pdf' }],
+          createdAt: new Date('2026-09-08T08:00:00.000Z'),
+        }],
+      });
+      expect(result.period.selfGrade).toBeNull();
+    });
+
+    it('shows a July backfill as reference in September without treating it as September progress', async () => {
+      prisma.assessmentPeriod.findUnique.mockResolvedValue({
+        ...period,
+        periodKey: '2026-09',
+        indicatorReviews: [],
+      });
+      useProgressRows([progressRecord({
+        id: 'july-backfill',
+        periodId: 'july-period',
+        period: { periodKey: '2026-07' },
+        createdAt: new Date('2026-09-08T08:00:00.000Z'),
+      })]);
+
+      const result = await service.getReview(period.id, employee);
+
+      expect(result.indicators[0]).toMatchObject({
+        monthlyProgressSource: 'none',
+        progress: null,
+        healthStatus: null,
+        employeeComment: null,
+        latestProgress: null,
+        progressReferences: [{ id: 'july-backfill', periodKey: '2026-07' }],
+      });
+    });
+
+    it('sorts all daily references by business month then entry time and excludes submitted review mirrors', async () => {
+      useProgressRows([
+        progressRecord({ id: 'january-older', createdAt: new Date('2027-01-05T08:00:00.000Z') }),
+        progressRecord({
+          id: 'december-backfill',
+          periodId: 'december-period',
+          period: { periodKey: '2026-12' },
+          createdAt: new Date('2027-02-05T08:00:00.000Z'),
+        }),
+        progressRecord({ id: 'january-latest', progress: 65 }),
+        progressRecord({
+          id: 'self-evaluation-mirror',
+          periodId: period.id,
+          periodReviewRevisionId: 'submitted-review',
+          period: { periodKey: '2027-01' },
+          progress: 100,
+          createdAt: new Date('2027-02-06T08:00:00.000Z'),
+        }),
+      ]);
+
+      const result = await service.getReview(period.id, employee);
+
+      expect(result.indicators[0]).toMatchObject({
+        progress: 65,
+        latestProgress: { progress: 65 },
+        progressReferences: [
+          { id: 'january-latest', periodKey: '2027-01' },
+          { id: 'january-older', periodKey: '2027-01' },
+          { id: 'december-backfill', periodKey: '2026-12' },
+        ],
+      });
+    });
+
+    it('does not expose progress from a source instance belonging to another task', async () => {
+      useProgressRows([progressRecord()], 'another-task');
+
+      const result = await service.getReview(period.id, employee);
+
+      expect(result.indicators[0]).toMatchObject({
+        monthlyProgressSource: 'none',
+        latestProgress: null,
+        progressReferences: [],
+      });
+    });
+
+    it('preserves a saved draft including cleared values while still returning the daily reference', async () => {
+      prisma.assessmentPeriod.findUnique.mockResolvedValue({
+        ...period,
+        indicatorReviews: [{
+          ...period.indicatorReviews[0],
+          progress: null,
+          healthStatus: null,
+          employeeComment: null,
+          selfScore: null,
+        }],
+      });
+      useProgressRows([progressRecord()]);
+
+      const result = await service.getReview(period.id, employee);
+
+      expect(result.indicators[0]).toMatchObject({
+        monthlyProgressSource: 'draft_or_result',
+        progress: null,
+        healthStatus: null,
+        employeeComment: null,
+        selfScore: null,
+        latestProgress: { progress: 40, healthStatus: 'at_risk' },
+        progressReferences: [{ id: 'daily-progress' }],
+      });
+    });
+
+    it.each([
+      ['2026-12-31T15:59:59.999Z', '2026-12', false],
+      ['2026-12-31T16:00:00.000Z', '2027-01', true],
+      ['2027-01-31T15:59:59.999Z', '2027-01', true],
+      ['2027-01-31T16:00:00.000Z', '2027-02', false],
+    ])('assigns a legacy entry at %s to Shanghai month %s', async (createdAt, monthKey, inMonth) => {
+      useProgressRows([progressRecord({ createdAt: new Date(createdAt) })]);
+
+      const result = await service.getReview(period.id, employee);
+
+      expect(result.indicators[0]).toMatchObject({
+        monthlyProgressSource: inMonth ? 'active_progress' : 'none',
+        progress: inMonth ? 40 : null,
+        progressReferences: [{ id: 'daily-progress', periodKey: monthKey }],
+      });
+    });
+
+    it('uses the full cycle date window even when the cycle key resembles a month', async () => {
+      prisma.assessmentPeriod.findUnique.mockResolvedValue({
+        ...period,
+        periodType: 'cycle',
+        periodEnd: new Date('2027-03-31T00:00:00.000Z'),
+        indicatorReviews: [],
+      });
+      useProgressRows([
+        progressRecord({ id: 'before-cycle', createdAt: new Date('2026-12-31T15:59:59.999Z') }),
+        progressRecord({ id: 'cycle-start', createdAt: new Date('2026-12-31T16:00:00.000Z') }),
+        progressRecord({ id: 'cycle-end', progress: 90, createdAt: new Date('2027-03-31T15:59:59.999Z') }),
+        progressRecord({ id: 'after-cycle', progress: 100, createdAt: new Date('2027-03-31T16:00:00.000Z') }),
+      ]);
+
+      const result = await service.getReview(period.id, employee);
+
+      expect(result.indicators[0]).toMatchObject({
+        progress: 90,
+        latestProgress: { progress: 90 },
+        progressReferences: [
+          { id: 'cycle-end', periodKey: '2027-03' },
+          { id: 'cycle-start', periodKey: '2027-01' },
+        ],
+      });
     });
   });
 

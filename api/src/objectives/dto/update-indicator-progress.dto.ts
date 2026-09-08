@@ -5,6 +5,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  IsUUID,
   Matches,
   Max,
   MaxLength,
@@ -13,6 +14,10 @@ import {
 import { IndicatorProgressHealth } from '@prisma/client';
 
 export class UpdateIndicatorProgressDto {
+  @IsOptional()
+  @IsUUID()
+  periodId?: string;
+
   @Type(() => Number)
   @IsInt()
   @Min(0)

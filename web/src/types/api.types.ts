@@ -1382,6 +1382,16 @@ export interface PeriodReviewHistoryItem {
   managerScore: number | null;
 }
 
+export interface PeriodReviewProgressReference {
+  id: string;
+  periodKey: string;
+  progress: number | null;
+  healthStatus: GoalTrackingHealthStatus | null;
+  content: string;
+  attachments: unknown[];
+  createdAt: string;
+}
+
 export interface PeriodReviewIndicator {
   indicatorVersionItemId: string;
   sourceInstanceId: string | null;
@@ -1407,6 +1417,7 @@ export interface PeriodReviewIndicator {
   managerComment: string | null;
   latestProgress: GoalTrackingLatestProgress | null;
   alignedObjectives: Array<{ id: string; title: string; level: ObjectiveLevel }>;
+  progressReferences?: PeriodReviewProgressReference[];
   history: PeriodReviewHistoryItem[];
 }
 
@@ -2119,6 +2130,7 @@ export interface GoalTrackingIndicatorDetail extends GoalTrackingItem {
   taskStatus: TaskStatus;
   canEdit: boolean;
   activeBusinessPeriodKey: string | null;
+  progressPeriods?: Array<{ id: string; periodKey: string; canEdit: boolean; reason: string | null }>;
   actualValue: number | null;
   actualNote: string | null;
   alignedObjectives: Array<{
@@ -2136,6 +2148,7 @@ export interface GoalTrackingIndicatorDetail extends GoalTrackingItem {
 }
 
 export interface UpdateGoalTrackingProgressBody {
+  periodId?: string;
   progress: number;
   healthStatus: GoalTrackingHealthStatus;
   content: string;

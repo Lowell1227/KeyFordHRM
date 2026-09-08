@@ -136,6 +136,7 @@ export interface GoalTrackingResult {
 }
 
 export interface UpdateIndicatorProgressInput {
+  periodId?: string;
   progress: number;
   healthStatus: IndicatorProgressHealth;
   content: string;
@@ -157,12 +158,32 @@ function activeGoalTrackingBusinessPeriodKey(
 }
 
 type GoalTrackingPeriodWindow = {
+  id?: string;
+  periodType?: string;
   periodKey: string;
   periodStart?: Date;
   periodEnd?: Date;
   status: string;
   employeeSubmittedAt: Date | null;
+  managerSubmittedAt?: Date | null;
+  lockedAt?: Date | null;
+  indicatorVersion?: { items: Array<{ sourceInstanceId: string | null }> } | null;
 };
+
+function isMonthlyProgressPeriod(period: GoalTrackingPeriodWindow): boolean {
+  return period.periodType !== 'cycle' && /^\d{4}-(0[1-9]|1[0-2])$/.test(period.periodKey);
+}
+
+function progressPeriodBlockReason(period: GoalTrackingPeriodWindow, indicatorId?: string): string | null {
+  if (period.employeeSubmittedAt || period.managerSubmittedAt || period.lockedAt
+    || ['completed', 'no_result'].includes(period.status)) return '该月份自评已提交或已锁定';
+  const today = shanghaiDateKey(new Date());
+  if ((period.periodStart && period.periodStart.toISOString().slice(0, 10) > today)
+    || (isMonthlyProgressPeriod(period) && period.periodKey > today.slice(0, 7))) return '该月份尚未开始';
+  if (indicatorId && period.indicatorVersion !== undefined
+    && !period.indicatorVersion?.items.some(item => item.sourceInstanceId === indicatorId)) return '该月份不包含此指标';
+  return null;
+}
 
 const SHANGHAI_DATE_FORMATTER = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'Asia/Shanghai',
@@ -371,7 +392,10 @@ export class ObjectivesService {
         },
         visibilityRules: { orderBy: { scope: 'asc' }, select: { scope: true } },
         childAlignments: { select: { parentIndicatorId: true } },
-        progressUpdates: { orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1, select: { progress: true } },
+        progressUpdates: {
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          select: { id: true, createdAt: true, progress: true, period: { select: { periodKey: true } } },
+        },
       },
     });
 
@@ -403,7 +427,7 @@ export class ObjectivesService {
       name: indicator.name,
       description: indicator.description,
       weight: Math.round(indicator.weight.toNumber() * 10_000) / 100,
-      progress: indicator.progressUpdates[0]?.progress ?? 0,
+      progress: currentGoalProgress(indicator.progressUpdates)?.progress ?? 0,
       sortOrder: indicator.sortOrder,
       visibilityScopes: indicator.visibilityRules.length
         ? indicator.visibilityRules.map((rule) => rule.scope)
@@ -639,12 +663,15 @@ export class ObjectivesService {
         periods: {
           orderBy: { sequence: 'asc' },
           select: {
+            id: true,
+            periodType: true,
             periodKey: true,
             periodStart: true,
             periodEnd: true,
             status: true,
             employeeSubmittedAt: true,
             managerSubmittedAt: true,
+            lockedAt: true,
             selfScoreTotal: true,
             indicatorReviews: {
               select: {
@@ -946,11 +973,18 @@ export class ObjectivesService {
             periods: {
               orderBy: { sequence: 'asc' },
               select: {
+                id: true,
+                periodType: true,
                 periodKey: true,
                 periodStart: true,
                 periodEnd: true,
                 status: true,
                 employeeSubmittedAt: true,
+                managerSubmittedAt: true,
+                lockedAt: true,
+                indicatorVersion: {
+                  select: { items: { where: { sourceInstanceId: indicatorId }, select: { sourceInstanceId: true } } },
+                },
               },
             },
             cycle: {
@@ -977,8 +1011,15 @@ export class ObjectivesService {
         message: '只能更新本人的考核指标进展',
       });
     }
-    if (!this.canSubmitActiveProgress(indicator.task, viewer)) {
-      const currentPeriod = currentGoalTrackingPeriod(indicator.task.periods);
+    const currentPeriod = currentGoalTrackingPeriod(indicator.task.periods);
+    const selectedPeriod = input.periodId
+      ? indicator.task.periods.find(period => period.id === input.periodId)
+      : currentPeriod;
+    if (input.periodId && (!selectedPeriod || !isMonthlyProgressPeriod(selectedPeriod))) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '请选择本考核计划内的有效月份' });
+    }
+    if (!this.canSubmitActiveProgress(indicator.task, viewer, selectedPeriod ?? null)
+      || (selectedPeriod && progressPeriodBlockReason(selectedPeriod, indicatorId))) {
       throw new ConflictException({
         code: ERROR_CODE.CONFLICT,
         message: currentPeriod?.employeeSubmittedAt
@@ -990,6 +1031,27 @@ export class ObjectivesService {
     }
 
     return this.prisma.$transaction(async (tx) => {
+      // Match monthly submission's lock order: period first, then indicator.
+      const progressPeriodId = selectedPeriod?.id && isMonthlyProgressPeriod(selectedPeriod) ? selectedPeriod.id : null;
+      if (progressPeriodId) {
+        await tx.$queryRaw<Array<{ id: string }>>`
+          SELECT "id" FROM "assessment_periods" WHERE "id" = ${progressPeriodId}::uuid FOR UPDATE
+        `;
+        const freshPeriod = await tx.assessmentPeriod.findUnique({
+          where: { id: progressPeriodId },
+          select: {
+            id: true, taskId: true, periodType: true, periodKey: true, periodStart: true, periodEnd: true,
+            status: true, employeeSubmittedAt: true, managerSubmittedAt: true, lockedAt: true,
+            indicatorVersion: {
+              select: { items: { where: { sourceInstanceId: indicatorId }, select: { sourceInstanceId: true } } },
+            },
+          },
+        });
+        const reason = freshPeriod ? progressPeriodBlockReason(freshPeriod, indicatorId) : null;
+        if (!freshPeriod || freshPeriod.taskId !== indicator.task.id || !isMonthlyProgressPeriod(freshPeriod) || reason) {
+          throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: reason ?? '该月份已不可更新，请刷新后重试' });
+        }
+      }
       await tx.$queryRaw<Array<{ id: string }>>`
         SELECT "id" FROM "indicator_instances"
         WHERE "id" = ${indicatorId}::uuid
@@ -1000,7 +1062,9 @@ export class ObjectivesService {
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
         include: { period: { select: { periodKey: true } } },
       });
-      const latest = currentGoalProgress(progressUpdates);
+      const latest = currentGoalProgress(input.periodId
+        ? progressUpdates.filter(update => progressBusinessPeriodKey(update) === selectedPeriod!.periodKey)
+        : progressUpdates);
       if (input.expectedLatestUpdateAt !== undefined) {
         const actualLatestUpdateAt = latest?.createdAt.toISOString() ?? null;
         if (actualLatestUpdateAt !== input.expectedLatestUpdateAt) {
@@ -1013,13 +1077,14 @@ export class ObjectivesService {
       const created = await tx.indicatorProgressUpdate.create({
         data: {
           indicatorInstanceId: indicatorId,
+          ...(progressPeriodId ? { periodId: progressPeriodId } : {}),
           progress: input.progress,
           healthStatus: input.healthStatus,
           content: input.content,
           attachments: [],
           createdBy: viewer.id,
         },
-        include: { creator: { select: { id: true, name: true } } },
+        include: { creator: { select: { id: true, name: true } }, period: { select: { periodKey: true } } },
       });
       await tx.auditLog.create({
         data: {
@@ -1035,6 +1100,8 @@ export class ObjectivesService {
               } satisfies Prisma.InputJsonObject)
             : Prisma.JsonNull,
           newValue: {
+            periodId: progressPeriodId,
+            businessPeriodKey: progressBusinessPeriodKey(created),
             progress: created.progress,
             healthStatus: created.healthStatus,
             content: created.content,
@@ -1129,11 +1196,18 @@ export class ObjectivesService {
             periods: {
               orderBy: { sequence: 'asc' },
               select: {
+                id: true,
+                periodType: true,
                 periodKey: true,
                 periodStart: true,
                 periodEnd: true,
                 status: true,
                 employeeSubmittedAt: true,
+                managerSubmittedAt: true,
+                lockedAt: true,
+                indicatorVersion: {
+                  select: { items: { where: { sourceInstanceId: indicatorId }, select: { sourceInstanceId: true } } },
+                },
                 selfScoreTotal: true,
                 indicatorReviews: {
                   where: {
@@ -1231,7 +1305,12 @@ export class ObjectivesService {
       cycleId: indicator.task.cycle.id,
       cycleName: indicator.task.cycle.name,
       taskStatus: indicator.task.status,
-      canEdit: this.canSubmitActiveProgress(indicator.task, viewer),
+      canEdit: this.canSubmitActiveProgress(indicator.task, viewer, undefined, indicatorId),
+      progressPeriods: (indicator.task.periods ?? []).filter(period => period.id && isMonthlyProgressPeriod(period)).map(period => {
+        const canEdit = this.canSubmitActiveProgress(indicator.task, viewer, period, indicatorId);
+        return { id: period.id, periodKey: period.periodKey, canEdit,
+          reason: canEdit ? null : progressPeriodBlockReason(period, indicatorId) ?? '当前考核阶段不允许更新进展' };
+      }),
       activeBusinessPeriodKey: activeGoalTrackingBusinessPeriodKey(indicator.task.periods),
       alignedObjectives: indicator.objectiveAlignments.map(({ objective }) => objective),
       progressUpdates: orderedProgress.map((progress) => ({
@@ -1278,6 +1357,8 @@ export class ObjectivesService {
       };
     },
     viewer: AuthUser,
+    targetPeriod?: GoalTrackingPeriodWindow | null,
+    indicatorId?: string,
   ): boolean {
     const baseEditable = task.employeeId === viewer.id
       && task.cycle.workflowVersion === 2
@@ -1291,6 +1372,14 @@ export class ObjectivesService {
       && task.publishedAt == null;
     if (!baseEditable) return false;
     if (!task.periods?.length) return true;
+
+    if (targetPeriod !== undefined) {
+      return targetPeriod != null && progressPeriodBlockReason(targetPeriod, indicatorId) == null;
+    }
+    const monthlyPeriods = task.periods.filter(period => period.id && isMonthlyProgressPeriod(period));
+    if (monthlyPeriods.length) {
+      return monthlyPeriods.some(period => progressPeriodBlockReason(period, indicatorId) == null);
+    }
 
     const currentPeriod = currentGoalTrackingPeriod(task.periods);
     return currentPeriod != null

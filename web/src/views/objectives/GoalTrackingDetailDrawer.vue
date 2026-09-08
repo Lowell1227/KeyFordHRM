@@ -21,6 +21,14 @@ const loadError = ref('');
 const editing = ref(false);
 const submitting = ref(false);
 const contentInput = ref<HTMLTextAreaElement>();
+const selectedPeriodId = ref('');
+const expectedLatestUpdateAt = ref<string | null>(null);
+const periodDrafts = new Map<string, {
+  healthStatus: GoalTrackingHealthStatus;
+  progress: number;
+  content: string;
+  expectedLatestUpdateAt: string | null;
+}>();
 let requestSerial = 0;
 
 const form = reactive<{
@@ -38,7 +46,11 @@ const latestProgress = computed(() => detail.value?.progressUpdates[0] ?? null);
 const activeBusinessPeriodKey = computed(() => (
   detail.value?.activeBusinessPeriodKey ?? latestProgress.value?.businessPeriodKey ?? null
 ));
-const activePeriodLabel = computed(() => formatBusinessPeriod(activeBusinessPeriodKey.value));
+const selectedPeriod = computed(() => detail.value?.progressPeriods?.find(period => period.id === selectedPeriodId.value));
+const selectedPeriodLabel = computed(() => formatBusinessPeriod(selectedPeriod.value?.periodKey ?? activeBusinessPeriodKey.value));
+const selectedProgress = computed(() => detail.value?.progressPeriods?.length
+  ? detail.value.progressUpdates.find(update => update.businessPeriodKey === selectedPeriod.value?.periodKey) ?? null
+  : latestProgress.value);
 const updateActionLabel = '更新进展';
 const selfEvaluationResults = computed(() => detail.value?.selfEvaluationResults ?? []);
 const latestSelfEvaluation = computed(() => selfEvaluationResults.value[0] ?? null);
@@ -56,6 +68,8 @@ const displayDescription = computed(() => (
 
 watch(() => props.indicatorId, (indicatorId) => {
   editing.value = false;
+  periodDrafts.clear();
+  selectedPeriodId.value = '';
   if (!indicatorId) {
     detail.value = null;
     return;
@@ -82,15 +96,35 @@ async function loadDetail(indicatorId = props.indicatorId) {
 
 function startEditing() {
   if (!detail.value?.canEdit) return;
-  form.healthStatus = latestProgress.value?.healthStatus ?? 'on_track';
-  form.progress = latestProgress.value?.progress ?? 0;
-  form.content = '';
+  const editablePeriods = detail.value.progressPeriods?.length
+    ? detail.value.progressPeriods.filter(period => period.canEdit) : undefined;
+  if (editablePeriods && !editablePeriods.length) return;
+  selectedPeriodId.value = editablePeriods?.find(period => period.periodKey === activeBusinessPeriodKey.value)?.id
+    ?? editablePeriods?.slice().sort((a, b) => b.periodKey.localeCompare(a.periodKey))[0]?.id ?? '';
+  restorePeriodDraft();
   editing.value = true;
   void nextTick(() => contentInput.value?.focus());
 }
 
+function restorePeriodDraft() {
+  const draft = periodDrafts.get(selectedPeriodId.value);
+  form.healthStatus = draft?.healthStatus ?? selectedProgress.value?.healthStatus ?? 'on_track';
+  form.progress = draft?.progress ?? selectedProgress.value?.progress ?? 0;
+  form.content = draft?.content ?? '';
+  expectedLatestUpdateAt.value = draft ? draft.expectedLatestUpdateAt : selectedProgress.value?.updatedAt ?? null;
+}
+
+function changePeriod(event: Event) {
+  const periodId = (event.target as HTMLSelectElement).value;
+  if (!detail.value?.progressPeriods?.some(period => period.id === periodId && period.canEdit)) return;
+  periodDrafts.set(selectedPeriodId.value, { ...form, expectedLatestUpdateAt: expectedLatestUpdateAt.value });
+  selectedPeriodId.value = periodId;
+  restorePeriodDraft();
+}
+
 function cancelEditing() {
   editing.value = false;
+  periodDrafts.delete(selectedPeriodId.value);
   form.content = '';
 }
 
@@ -111,23 +145,25 @@ function validateForm() {
 }
 
 async function submitProgress() {
-  if (!detail.value || !validateForm()) return;
+  if (!detail.value?.canEdit || submitting.value || !validateForm()) return;
+  if (detail.value.progressPeriods?.length && !selectedPeriod.value?.canEdit) return;
   submitting.value = true;
   try {
-    const created = await objectivesApi.updateTrackingIndicatorProgress(
+    await objectivesApi.updateTrackingIndicatorProgress(
       detail.value.id,
       {
+        ...(selectedPeriod.value ? { periodId: selectedPeriod.value.id } : {}),
         progress: form.progress,
         healthStatus: form.healthStatus,
         content: form.content.trim(),
-        expectedLatestUpdateAt: latestProgress.value?.updatedAt ?? null,
+        expectedLatestUpdateAt: expectedLatestUpdateAt.value,
       },
       { skipErrorMessage: true },
     );
-    detail.value.progress = created.progress ?? 0;
-    detail.value.progressUpdates = [created, ...detail.value.progressUpdates];
+    periodDrafts.delete(selectedPeriodId.value);
     editing.value = false;
     form.content = '';
+    await loadDetail();
     ElMessage.success('进展已更新');
     emit('updated');
   } catch (error) {
@@ -142,8 +178,9 @@ async function submitProgress() {
       const draftContent = form.content;
       await loadDetail();
       if (detail.value) {
-        form.healthStatus = latestProgress.value?.healthStatus ?? 'on_track';
-        form.progress = latestProgress.value?.progress ?? 0;
+        form.healthStatus = selectedProgress.value?.healthStatus ?? 'on_track';
+        form.progress = selectedProgress.value?.progress ?? 0;
+        expectedLatestUpdateAt.value = selectedProgress.value?.updatedAt ?? null;
         form.content = draftContent;
         editing.value = true;
         ElMessage.warning('进展已更新，已加载最新状态；刚才填写的描述已保留，请确认后再次提交');
@@ -297,17 +334,25 @@ function formatBusinessPeriod(periodKey?: string | null) {
           @submit.prevent="submitProgress"
         >
           <div class="progress-editor__context" data-testid="goal-tracking-progress-context">
-            <div><span>本次归属</span><strong>{{ activePeriodLabel }}</strong></div>
-            <p v-if="latestProgress">
-              当前记录：{{ healthLabel(latestProgress.healthStatus) }} · {{ latestProgress.progress ?? 0 }}%，来自
-              {{ formatBusinessPeriod(latestProgress.businessPeriodKey) }}{{ progressSourceLabel(latestProgress) }}
+            <label v-if="detail.progressPeriods?.length" class="progress-editor__period">
+              <span>归属月份</span>
+              <select :value="selectedPeriodId" aria-label="归属月份" :disabled="submitting" @change="changePeriod">
+                <option v-for="period in detail.progressPeriods" :key="period.id" :value="period.id" :disabled="!period.canEdit">
+                  {{ formatBusinessPeriod(period.periodKey) }}{{ period.canEdit ? '' : ` · ${period.reason || '不可更新'}` }}
+                </option>
+              </select>
+            </label>
+            <div v-else><span>本次归属</span><strong>{{ selectedPeriodLabel }}</strong></div>
+            <p v-if="selectedProgress">
+              当前记录：{{ healthLabel(selectedProgress.healthStatus) }} · {{ selectedProgress.progress ?? 0 }}%，来自
+              {{ formatBusinessPeriod(selectedProgress.businessPeriodKey) }}{{ progressSourceLabel(selectedProgress) }}
             </p>
-            <p v-else>当前尚无进展记录</p>
+            <p v-else>本期尚无进展记录</p>
           </div>
           <div class="progress-editor__fields">
             <label>
               <span>状态</span>
-              <select v-model="form.healthStatus" aria-label="进展状态">
+              <select v-model="form.healthStatus" aria-label="进展状态" :disabled="submitting">
                 <option value="on_track">正常</option>
                 <option value="at_risk">存在风险</option>
                 <option value="blocked">已阻塞</option>
@@ -316,7 +361,7 @@ function formatBusinessPeriod(periodKey?: string | null) {
             </label>
             <label>
               <span>进度</span>
-              <input v-model.number="form.progress" aria-label="完成进度" type="number" min="0" max="100" step="1">
+              <input v-model.number="form.progress" aria-label="完成进度" type="number" min="0" max="100" step="1" :disabled="submitting">
               <b>%</b>
             </label>
           </div>
@@ -325,6 +370,7 @@ function formatBusinessPeriod(periodKey?: string | null) {
             <textarea
               ref="contentInput"
               v-model="form.content"
+              :disabled="submitting"
               aria-label="进展描述"
               maxlength="10000"
               placeholder="简要说明当前进展"
@@ -333,7 +379,7 @@ function formatBusinessPeriod(periodKey?: string | null) {
           </label>
           <div class="progress-editor__footer">
             <div class="progress-editor__actions">
-              <el-button @click="cancelEditing">取消</el-button>
+              <el-button :disabled="submitting" @click="cancelEditing">取消</el-button>
               <el-button type="primary" native-type="submit" :loading="submitting">更新进展</el-button>
             </div>
           </div>
@@ -464,6 +510,9 @@ function formatBusinessPeriod(periodKey?: string | null) {
   color: #355dc9;
   font-size: 13px;
 }
+
+.progress-editor__period { min-width: 0; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: center; gap: 10px; }
+.progress-editor__period select { width: 100%; min-width: 0; padding: 6px 8px; border: 1px solid #dfe4ec; border-radius: 6px; background: #fff; color: #355dc9; font: inherit; font-size: 13px; }
 
 .goal-detail__header {
   width: 100%;

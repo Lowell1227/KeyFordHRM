@@ -882,7 +882,10 @@ describe('ObjectivesService visibility helpers', () => {
         id: 'child-1', name: '完成招聘交付', description: null, weight: new Prisma.Decimal('0.7'), sortOrder: 0,
         visibilityScope: 'supervisors', visibilityRules: [{ scope: 'supervisors' }],
         task: { employeeId: 'manager-1', deptId: 'dept-1', employee: { id: 'manager-1', name: 'Manager' }, dept: { id: 'dept-1', name: 'HR' } },
-        childAlignments: [{ parentIndicatorId: 'parent-1' }], progressUpdates: [{ progress: 60 }],
+        childAlignments: [{ parentIndicatorId: 'parent-1' }], progressUpdates: [
+          { id: 'backfilled-july', progress: 20, createdAt: new Date('2026-09-08'), period: { periodKey: '2026-07' } },
+          { id: 'current-september', progress: 60, createdAt: new Date('2026-09-01'), period: { periodKey: '2026-09' } },
+        ],
       },
       {
         id: 'peer-1', name: '推动培训落地', description: null, weight: new Prisma.Decimal('0.5'), sortOrder: 0,
@@ -992,7 +995,7 @@ describe('ObjectivesService visibility helpers', () => {
         attachments: [],
         createdBy: viewer.id,
       },
-      include: { creator: { select: { id: true, name: true } } },
+      include: { creator: { select: { id: true, name: true } }, period: { select: { periodKey: true } } },
     });
     expect(prisma.$queryRaw).toHaveBeenCalledTimes(1);
     expect(prisma.auditLog.create).toHaveBeenCalledWith({

@@ -78,6 +78,15 @@ export interface PeriodReviewDetail {
       attachments: unknown[];
       createdAt: Date;
     } | null;
+    progressReferences: Array<{
+      id: string;
+      periodKey: string;
+      progress: number | null;
+      healthStatus: IndicatorProgressHealth | null;
+      content: string;
+      attachments: unknown[];
+      createdAt: Date;
+    }>;
     alignedObjectives: Array<{ id: string; title: string; level: ObjectiveLevel }>;
     history: PeriodReviewHistoryItem[];
   }>;

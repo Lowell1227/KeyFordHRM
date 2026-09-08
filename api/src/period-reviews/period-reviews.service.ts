@@ -23,6 +23,7 @@ import type { SubmitManagerPeriodReviewDto } from './dto/submit-manager-period-r
 import { PeriodAggregationService } from './period-aggregation.service';
 import { FlowService } from '@/tasks/flow.service';
 import { hasHrCapability } from '@/auth/hr-capabilities';
+import { shanghaiMonthKey } from '@/objectives/goal-tracking-progress';
 import type { ReopenPeriodReviewDto } from './dto/reopen-period-review.dto';
 import { managerPeriodReviewTitle, periodReviewNoun, periodReviewTitle } from './period-review-labels';
 import type { PeriodReviewActionResult, PeriodReviewDetail } from './period-review.types';
@@ -60,8 +61,10 @@ const sourceSelect = {
   },
   progressUpdates: {
     orderBy: { createdAt: 'desc' as const },
-    take: 1,
     select: {
+      id: true,
+      periodId: true,
+      period: { select: { periodKey: true } },
       progress: true,
       healthStatus: true,
       content: true,
@@ -100,14 +103,16 @@ export class PeriodReviewsService {
     const [sources, previousPeriods]: [SourceContext[], PreviousPeriodContext[]] = await Promise.all([
       sourceIds.length
         ? this.prisma.indicatorInstance.findMany({
-          where: { id: { in: sourceIds } },
+          where: { id: { in: sourceIds }, taskId: period.taskId },
           select: {
             ...sourceSelect,
             progressUpdates: {
               ...sourceSelect.progressUpdates,
               where: {
-                periodId: null,
-                createdAt: { gte: progressRange.gte, lt: progressRange.lt },
+                periodReviewRevisionId: null,
+                ...(period.periodType === 'cycle'
+                  ? { createdAt: { gte: progressRange.gte, lt: progressRange.lt } }
+                  : {}),
               },
             },
           },
@@ -161,7 +166,28 @@ export class PeriodReviewsService {
       indicators: (period.indicatorVersion?.items ?? []).map((item) => {
         const review = currentByItem.get(item.id);
         const source = item.sourceInstanceId ? sourceById.get(item.sourceInstanceId) : undefined;
-        const latest = source?.progressUpdates[0];
+        const updates = (source?.progressUpdates ?? []).filter((update) => (
+          period.periodType !== 'cycle' || update.periodId == null || update.periodId === period.id
+        ));
+        const latest = updates.find((update) => (
+          period.periodType === 'cycle'
+            || (update.periodId != null
+              ? update.periodId === period.id
+              : shanghaiMonthKey(update.createdAt) === period.periodKey)
+        ));
+        const progressReferences = updates.map((update) => ({
+          id: update.id,
+          periodKey: update.period?.periodKey ?? shanghaiMonthKey(update.createdAt),
+          progress: update.progress,
+          healthStatus: update.healthStatus,
+          content: update.content,
+          attachments: this.jsonArray(update.attachments),
+          createdAt: update.createdAt,
+        })).sort((left, right) => (
+          right.periodKey.localeCompare(left.periodKey)
+            || right.createdAt.getTime() - left.createdAt.getTime()
+            || right.id.localeCompare(left.id)
+        ));
         const monthlyProgressSource = review
           ? 'draft_or_result'
           : latest
@@ -198,6 +224,7 @@ export class PeriodReviewsService {
             attachments: this.jsonArray(latest.attachments),
             createdAt: latest.createdAt,
           } : null,
+          progressReferences,
           alignedObjectives: (source?.objectiveAlignments ?? []).map((alignment) => alignment.objective),
           history: this.historyForSource(previousPeriods, item.sourceInstanceId),
         };
@@ -1111,8 +1138,10 @@ export class PeriodReviewsService {
       : null;
   }
 
-  private progressRange(period: Pick<PeriodWithContext, 'periodKey' | 'periodStart' | 'periodEnd'>) {
-    const monthly = /^(\d{4})-(\d{2})$/.exec(period.periodKey);
+  private progressRange(
+    period: Pick<PeriodWithContext, 'periodType' | 'periodKey' | 'periodStart' | 'periodEnd'>,
+  ) {
+    const monthly = period.periodType === 'month' && /^(\d{4})-(\d{2})$/.exec(period.periodKey);
     if (monthly) {
       const year = Number(monthly[1]);
       const month = Number(monthly[2]);

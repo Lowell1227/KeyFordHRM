@@ -234,7 +234,7 @@ test.describe('monthly goal review responsive workspace', () => {
     await expect(page.getByTestId('monthly-review-goal-card').first()).not.toContainText('所需支持');
     await expect(page.getByTestId('monthly-review-goal-card').first()).not.toContainText('补充说明');
     await expect(page.getByTestId('monthly-review-goal-card').nth(2)).toContainText('不参与评分');
-    await expect(page.getByTestId('monthly-review-goal-card').first()).toContainText('本月未更新，可只填写自评分后提交');
+    await expect(page.getByTestId('monthly-review-goal-card').first()).toContainText('本期暂无日常进展');
     await expect(page.getByTestId('monthly-review-overall-grade')).toContainText('本月自评等级');
     await expect(page.getByText('按有效权重自动计算', { exact: true })).toHaveCount(0);
     await expect(page.getByText('等级与分数分别填写，不自动换算', { exact: true })).toHaveCount(0);
@@ -287,6 +287,7 @@ test.describe('monthly goal review responsive workspace', () => {
   });
 
   test('makes an early monthly self-evaluation submission an explicit confirmation', async ({ page }) => {
+    await page.clock.setFixedTime(new Date('2026-09-05T08:00:00.000Z'));
     const requests: Request[] = [];
     await mockMonthlyReview(page, requests);
     await page.route(`**/api/v1/assessment-periods/${periodId}/review`, (route) => route.fulfill({

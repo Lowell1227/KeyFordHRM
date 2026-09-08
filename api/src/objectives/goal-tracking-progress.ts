@@ -26,7 +26,7 @@ export function shanghaiMonthKey(date: Date): string {
 }
 
 export function progressBusinessPeriodKey(record: GoalProgressRecord): string {
-  if (record.periodReviewRevisionId && record.period?.periodKey) {
+  if (record.period?.periodKey) {
     return record.period.periodKey;
   }
   return shanghaiMonthKey(record.createdAt);

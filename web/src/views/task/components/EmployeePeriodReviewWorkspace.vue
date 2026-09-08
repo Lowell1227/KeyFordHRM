@@ -6,12 +6,14 @@ import type {
   EmployeePeriodReviewItemBody,
   GoalTrackingHealthStatus,
   PeriodReviewDetail,
+  PeriodReviewProgressReference,
   SubmitEmployeePeriodReviewBody,
 } from '@/types/api.types';
 import type { PerfGrade } from '@/types/enums';
 import PerformanceFormWorkspace from './PerformanceFormWorkspace.vue';
 import PeriodReviewIndicatorContext from './PeriodReviewIndicatorContext.vue';
 import PeriodReviewToolbar from './PeriodReviewToolbar.vue';
+import PeriodReviewProgressReferencePanel from './PeriodReviewProgressReference.vue';
 
 type RequiredField = 'selfScore';
 
@@ -146,6 +148,32 @@ function bodyItems(): EmployeePeriodReviewItemBody[] {
     employeeComment: optionalText(item.employeeComment),
     selfScore: item.selfScore,
   }));
+}
+
+async function syncProgressReference(index: number, record: PeriodReviewProgressReference) {
+  if (!canEdit.value || saving.value || submitting.value) return;
+  const item = formItems[index];
+  const periodId = props.periodId;
+  if (!item) return;
+  const replacesContent = (item.progress != null && item.progress !== record.progress)
+    || (item.healthStatus != null && item.healthStatus !== record.healthStatus)
+    || (Boolean(item.employeeComment.trim()) && item.employeeComment !== record.content);
+  if (replacesContent) {
+    try {
+      await ElMessageBox.confirm(
+        '将用这条日常进展替换当前填写的进度、状态和描述。自评分及自评等级保持不变。',
+        '同步进展到自评',
+        { type: 'warning', confirmButtonText: '替换并同步', cancelButtonText: '保留当前填写' },
+      );
+    } catch {
+      return;
+    }
+  }
+  if (periodId !== props.periodId || !canEdit.value || saving.value || submitting.value || formItems[index] !== item) return;
+  item.progress = record.progress;
+  item.healthStatus = record.healthStatus;
+  item.employeeComment = record.content;
+  ElMessage.success('已同步到自评填写区，请检查后保存或提交');
 }
 
 function clearItemError(itemId: string, field: RequiredField) {
@@ -338,6 +366,13 @@ watch(() => props.periodId, loadReview, { immediate: true });
 
               <PeriodReviewIndicatorContext :indicator="indicator" />
 
+              <PeriodReviewProgressReferencePanel
+                :indicator="indicator"
+                :period="detail.period"
+                :can-sync="canEdit && !saving && !submitting"
+                @sync="syncProgressReference(index, $event)"
+              />
+
               <div class="monthly-goal-card__core">
                 <label class="monthly-field">
                   <span>进度 <i>选填</i></span>
@@ -395,9 +430,6 @@ watch(() => props.periodId, loadReview, { immediate: true });
                   <span>描述 <i>选填</i></span>
                   <el-input v-model="formItems[index].employeeComment" :disabled="!canEdit" type="textarea" :rows="2" placeholder="简要说明本月进展和结果" />
                 </label>
-                <p v-if="indicator.monthlyProgressSource === 'none'" class="monthly-goal-card__empty-progress">
-                  本月未更新，可只填写自评分后提交
-                </p>
               </div>
             </article>
           </div>

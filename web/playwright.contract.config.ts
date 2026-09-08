@@ -37,6 +37,7 @@ export default defineConfig({
     '40-approval-pending.spec.ts',
     '41-goal-progress-entry.spec.ts',
     '42-dashboard-multi-cycle.spec.ts',
+    '43-monthly-progress-reference.spec.ts',
   ],
   workers: 1,
 });

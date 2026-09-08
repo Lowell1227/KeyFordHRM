@@ -1630,11 +1630,13 @@ test.describe('09-performance-workspace tracking behavior', () => {
       businessPeriodKey: '2026-09', source: 'active_progress',
     };
     let detailCalls = 0;
+    let savedProgress: typeof concurrentProgress | null = null;
     await page.route('**/api/v1/objectives/tracking/indicators/indicator-1', (route) => {
       detailCalls += 1;
       const nextDetail = detailCalls === 1
         ? detailResult
-        : { ...detailResult, progress: 48, progressUpdates: [concurrentProgress, ...detailResult.progressUpdates] };
+        : { ...detailResult, progress: savedProgress?.progress ?? 48,
+          progressUpdates: [...(savedProgress ? [savedProgress] : []), concurrentProgress, ...detailResult.progressUpdates] };
       return route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify(apiResponse(nextDetail)),
@@ -1650,14 +1652,15 @@ test.describe('09-performance-workspace tracking behavior', () => {
           body: JSON.stringify({ statusCode: 409, message: '进展已被更新，请刷新后重试' }),
         });
       }
-      return route.fulfill({
-        contentType: 'application/json',
-        body: JSON.stringify(apiResponse({
+      savedProgress = {
           id: 'progress-2', progress: 55, healthStatus: 'at_risk',
           content: '渠道转化低于预期，已调整投放', attachments: [],
-          createdBy: 'employee-1', creatorName: '刘伟', updatedAt: '2026-08-16T09:00:00.000Z',
+          createdBy: 'employee-1', creatorName: '刘伟', updatedAt: '2026-09-03T03:06:00.000Z',
           businessPeriodKey: '2026-09', source: 'active_progress',
-        })),
+      };
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse(savedProgress)),
       });
     });
 
