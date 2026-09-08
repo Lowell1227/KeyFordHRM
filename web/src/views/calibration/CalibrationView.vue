@@ -7,6 +7,7 @@ import { useCycleStore } from '@/stores/cycle.store';
 import GradeTag from '@/components/common/GradeTag.vue';
 import GradeDistChart from '@/components/charts/GradeDistChart.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import ReviewHistory from '@/components/common/ReviewHistory.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import type { CalibrationCandidate, CalibrationCandidateDetail, CalibrationSummary, AssessmentCycle } from '@/types/api.types';
 import type { PerfGrade, TaskStatus } from '@/types/enums';
@@ -594,6 +595,7 @@ onMounted(async () => {
             </el-table>
           </div>
 
+          <ReviewHistory :records="drawer.detail.flowRecords" />
           <el-collapse class="drawer-section">
             <el-collapse-item title="指标汇总（跨月平均）" name="indicators">
               <el-table :data="drawer.detail.indicators" size="small" border>
@@ -608,21 +610,6 @@ onMounted(async () => {
                   <template #default="{ row }">{{ fmtScore(row.avgManagerScore) }}</template>
                 </el-table-column>
               </el-table>
-            </el-collapse-item>
-            <el-collapse-item
-              v-if="drawer.detail.rejectHistory.length > 0"
-              :title="`驳回历史（${drawer.detail.rejectHistory.length}）`"
-              name="rejects"
-            >
-              <div v-for="(r, i) in drawer.detail.rejectHistory" :key="i" class="reject-item">
-                <div class="reject-meta">
-                  <el-tag size="small" :type="r.nodeType === 'hr_calibration' ? 'danger' : 'warning'">
-                    {{ r.nodeType === 'hr_calibration' ? '校准驳回' : '复核退回' }}
-                  </el-tag>
-                  <span>{{ r.actorName ?? '系统' }} · {{ new Date(r.createdAt).toLocaleString('zh-CN') }}</span>
-                </div>
-                <p class="reject-comment">{{ r.comment ?? '—' }}</p>
-              </div>
             </el-collapse-item>
           </el-collapse>
         </template>

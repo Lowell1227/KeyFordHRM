@@ -14,6 +14,7 @@ import { resolveCalibrationRecipient } from '@/calibration/calibration-recipient
 import { claimTaskVersion } from '@/tasks/task-version';
 import { isManagerPeriodComplete } from '@/tasks/team-task-stage';
 import { SubmitFinalGradeDto } from './dto/submit-final-grade.dto';
+import { mapReviewHistory, REVIEW_HISTORY_NODES } from '@/tasks/review-history';
 
 /** 月度结果摘要。 */
 export interface FinalGradePeriodItem {
@@ -36,6 +37,7 @@ export interface FinalGradeRejectInfo {
 
 /** GET /tasks/:id/final-grade 响应。 */
 export interface FinalGradeDetail {
+  flowRecords: ReturnType<typeof mapReviewHistory>;
   taskId: string;
   cycleId: string;
   cycleName: string;
@@ -112,6 +114,7 @@ export class FinalGradeService {
       && task.periods.every(isManagerPeriodComplete);
 
     return {
+      flowRecords: mapReviewHistory(task.flowRecords),
       taskId: task.id,
       cycleId: task.cycleId,
       cycleName: task.cycle.name,
@@ -272,6 +275,11 @@ export class FinalGradeService {
         dept: { select: { name: true } },
         manager: { select: { name: true } },
         deptHead: { select: { name: true } },
+        flowRecords: {
+          where: { nodeType: { in: REVIEW_HISTORY_NODES } },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          include: { actor: { select: { name: true } } },
+        },
         gradeResult: { select: { calculatedScore: true, rawGrade: true } },
         cycle: { select: { name: true } },
         periods: {

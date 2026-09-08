@@ -6,6 +6,7 @@ import { ArrowLeft } from '@element-plus/icons-vue';
 import { tasksApi } from '@/api/tasks.api';
 import GradeTag from '@/components/common/GradeTag.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import ReviewHistory from '@/components/common/ReviewHistory.vue';
 import type { FinalGradeDetail } from '@/types/api.types';
 import type { PerfGrade } from '@/types/enums';
 import { FLOW_NODE_LABELS, TASK_STATUS_META } from '@/types/enums';
@@ -205,6 +206,7 @@ watch(taskId, loadDetail, { immediate: true });
           </el-button>
         </div>
       </ChartCard>
+      <ChartCard v-if="detail.flowRecords?.length"><ReviewHistory :records="detail.flowRecords" /></ChartCard>
     </template>
   </div>
 </template>

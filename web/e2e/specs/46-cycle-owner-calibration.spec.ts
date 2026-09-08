@@ -20,6 +20,17 @@ async function setup(page: Page) {
     else if (path.endsWith('/notifications/unread-count')) data = 0;
     else if (path === '/api/v1/calibration/cycles') data = [cycle];
     else if (path.endsWith('/calibration/confirm')) { submitted = true; data = { updated: 1 }; }
+    else if (path.endsWith('/calibration/tasks/other-task')) data = {
+      taskId: 'other-task', employeeName: '虚拟员工甲', status: 'hr_calibration', calculatedScore: 85, finalGrade: 'B',
+      periods: [], indicators: [], rejectHistory: [],
+      flowRecords: [
+        { id: '0', nodeType: 'manager_score', action: 'reject', actorName: '直属上级甲', comment: '七月自评需补充成果', extraData: { type: 'manager_period_review_returned', periodKey: '2026-07' }, createdAt: '2026-08-31T09:00:00Z' },
+        { id: '1', nodeType: 'manager_score', action: 'submit', actorName: '直属上级甲', comment: '系统评定摘要', extraData: { type: 'final_grade_submitted', comment: '按期完成季度交付，需加强沟通。' }, createdAt: '2026-09-01T09:00:00Z' },
+        { id: '2', nodeType: 'dept_review', action: 'reject', actorName: '部门负责人乙', comment: '请补充项目验收依据', createdAt: '2026-09-02T09:00:00Z' },
+        { id: '3', nodeType: 'manager_score', action: 'submit', actorName: '直属上级甲', extraData: { type: 'final_grade_submitted', comment: '已补齐验收记录。\n本周期目标完成。' }, createdAt: '2026-09-03T09:00:00Z' },
+        { id: '4', nodeType: 'dept_review', action: 'approve', actorName: '部门负责人乙', comment: '部门已核实交付成果，复核通过。', createdAt: '2026-09-04T09:00:00Z' },
+      ],
+    };
     else if (path === `/api/v1/cycles/${cycleId}/calibration`) data = {
       totalActive: 2, progress: { finalGrading: 0, deptReview: 0, pending: submitted ? 1 : 2, inApproval: submitted ? 1 : 0, done: 0 },
       gradeDistribution: Object.fromEntries(['A','B','C','D'].map(grade => [grade, { count: grade === 'B' ? 1 : 0, ratio: grade === 'B' ? 1 : 0, maxRatio: 0.4, isOverLimit: grade === 'B' }])),
@@ -37,6 +48,24 @@ async function setup(page: Page) {
 }
 
 for (const width of [1440, 390]) {
+  test(`校准详情保留复核意见、退回及周期评语 ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    const calls = await setup(page);
+    await page.goto(`/calibration?cycleId=${cycleId}`);
+    await page.getByRole('row').filter({ hasText: '虚拟员工甲' }).getByRole('button', { name: '详情', exact: true }).click();
+    const history = page.getByTestId('review-history');
+    await expect(history.getByText('部门已核实交付成果，复核通过。')).toBeVisible();
+    await expect(history.getByText('已补齐验收记录。\n本周期目标完成。')).toBeVisible();
+    await expect(history.getByText('请补充项目验收依据')).toBeVisible();
+    await history.getByRole('button', { name: '查看全部 5 条记录' }).click();
+    await expect(history.getByText('按期完成季度交付，需加强沟通。')).toBeVisible();
+    await expect(history.getByText('系统评定摘要')).toHaveCount(0);
+    await expect(history.getByText('2026-07 月度评价')).toBeVisible();
+    await expect(history.getByText('七月自评需补充成果')).toBeVisible();
+    expect(calls.filter(call => call.body)).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath('calibration-review-history.png'), fullPage: true });
+  });
   test(`负责人限定周期校准、本人不展示结果且不可操作 ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     const calls = await setup(page);

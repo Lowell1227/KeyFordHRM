@@ -9,6 +9,7 @@ import { ConfirmCalibrationDto } from './dto/confirm-calibration.dto';
 import { RejectCalibrationDto } from './dto/reject-calibration.dto';
 import { claimTaskVersion } from '@/tasks/task-version';
 import { hasHrCapability } from '@/auth/hr-capabilities';
+import { mapReviewHistory, REVIEW_HISTORY_NODES } from '@/tasks/review-history';
 
 /** 等级分布单项。 */
 export interface GradeDistributionEntry {
@@ -65,6 +66,7 @@ export interface CalibrationActionResult {
 
 /** 校准详情（个人抽屉）。 */
 export interface CalibrationCandidateDetail {
+  flowRecords: ReturnType<typeof mapReviewHistory>;
   taskId: string;
   employeeName: string;
   deptName: string | null;
@@ -170,8 +172,8 @@ export class CalibrationService {
           orderBy: { sortOrder: 'asc' },
         },
         flowRecords: {
-          where: { action: 'reject', nodeType: { in: ['dept_review', 'hr_calibration'] } },
-          orderBy: { createdAt: 'desc' },
+          where: { nodeType: { in: REVIEW_HISTORY_NODES } },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           include: { actor: { select: { name: true } } },
         },
       },
@@ -226,7 +228,8 @@ export class CalibrationService {
         avgSelfScore: avg(scoreMap.get(def.name)?.self ?? []),
         avgManagerScore: avg(scoreMap.get(def.name)?.manager ?? []),
       })),
-      rejectHistory: task.flowRecords.map((r) => ({
+      flowRecords: mapReviewHistory(task.flowRecords),
+      rejectHistory: task.flowRecords.filter(r => r.action === 'reject' && ['dept_review', 'hr_calibration'].includes(r.nodeType)).map((r) => ({
         nodeType: r.nodeType,
         comment: r.comment,
         createdAt: r.createdAt,

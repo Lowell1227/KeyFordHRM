@@ -72,9 +72,10 @@ const permission = usePermission({ task, cycle });
 
 const flowActions = computed(() => flow.actions.value);
 const isDepartmentReviewView = computed(() => Boolean(
-  permission.isTaskDeptHead.value && !permission.isTaskSelf.value && task.value?.managerId !== authStore.user?.id
+  permission.isTaskDeptHead.value && !permission.isTaskSelf.value
   && requestedPerformanceStage.value === 'result'
-  && ['manager_scoring', 'dept_review', 'hr_calibration', 'approval'].includes(task.value?.status ?? ''),
+  && (route.query.returnTo === '/department-review' || (task.value?.managerId !== authStore.user?.id
+    && ['manager_scoring', 'dept_review', 'hr_calibration', 'approval', 'published', 'confirmed', 'appealing', 'closed'].includes(task.value?.status ?? ''))),
 ));
 
 const performanceStageLabels: Record<TaskStageKey, string> = {

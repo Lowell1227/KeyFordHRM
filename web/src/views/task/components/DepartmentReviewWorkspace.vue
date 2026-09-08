@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import ChartCard from '@/components/common/ChartCard.vue';
+import ReviewHistory from '@/components/common/ReviewHistory.vue';
 import GradeTag from '@/components/common/GradeTag.vue';
 import { tasksApi } from '@/api/tasks.api';
 import type { FinalGradeDetail, TaskDetail } from '@/types/api.types';
@@ -14,16 +15,22 @@ const busy = ref(false);
 const comment = ref('');
 const validation = ref('');
 const error = ref('');
+let loadSequence = 0;
+const lastReview = computed(() => [...(detail.value?.flowRecords ?? props.task.flowRecords ?? [])]
+  .filter(r => r.nodeType === 'dept_review' && ['approve', 'reject'].includes(r.action))
+  .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0]);
 const outcome = computed(() => props.task.status === 'hr_calibration'
-  ? '部门复核已通过，已进入绩效校准。'
-  : props.task.status === 'approval' ? '部门复核已完成，已进入结果审批。'
-    : props.task.status === 'manager_scoring' ? '已退回直属上级重新评定。' : '');
+  ? lastReview.value?.action === 'approve' ? '部门复核已通过，已进入绩效校准。' : '当前已进入绩效校准。'
+  : props.task.status === 'approval'
+    ? lastReview.value?.action === 'approve' ? '部门复核已完成，已进入结果审批。' : '当前已进入结果审批。'
+    : props.task.status === 'manager_scoring' && lastReview.value?.action === 'reject' ? '已退回直属上级重新评定。' : '');
 const score = (value: number | null | undefined) => value == null ? '—' : value.toFixed(2);
 async function load() {
+  const sequence = ++loadSequence;
   loading.value = true; error.value = ''; detail.value = null;
-  try { detail.value = await tasksApi.getFinalGrade(props.task.id); }
-  catch { error.value = '获取复核依据失败，请重试'; }
-  finally { loading.value = false; }
+  try { const result = await tasksApi.getFinalGrade(props.task.id); if (sequence === loadSequence) detail.value = result; }
+  catch { if (sequence === loadSequence) error.value = '获取复核依据失败，请重试'; }
+  finally { if (sequence === loadSequence) loading.value = false; }
 }
 async function review(action: 'approve' | 'reject') {
   if (!props.canReview || busy.value || !detail.value) return;
@@ -38,6 +45,7 @@ async function review(action: 'approve' | 'reject') {
   } finally { busy.value = false; }
 }
 watch(() => [props.task.id, props.task.status], load, { immediate: true });
+watch(() => props.task.id, () => { comment.value = ''; validation.value = ''; });
 </script>
 
 <template>
@@ -60,6 +68,7 @@ watch(() => [props.task.id, props.task.status], load, { immediate: true });
             <span>上级评价 {{ score(period.managerScoreTotal) }} <GradeTag :grade="period.managerGrade" size="small" /></span>
           </article>
         </div>
+        <ReviewHistory :records="detail.flowRecords ?? task.flowRecords" />
         <el-form v-if="canReview" label-position="top" class="review-form">
           <el-form-item label="复核意见" :error="validation">
             <el-input v-model="comment" type="textarea" :rows="3" maxlength="2000" aria-label="复核意见" placeholder="通过时选填，退回时请说明原因" />

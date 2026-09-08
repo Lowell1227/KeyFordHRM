@@ -26,6 +26,7 @@ import type {
   FlowRecord,
   PerformanceInterview,
   FinalGradeDetail,
+  DepartmentReviewListPage,
 } from "@/types/api.types";
 import type { PerfGrade, TaskStatus } from "@/types/enums";
 
@@ -76,7 +77,7 @@ export function createTasksApi(client: TasksApiClient) {
       return apiGet("/tasks", query as Record<string, unknown>);
     },
 
-    findDepartmentReviews(query?: Pick<TaskQuery, 'cycleId' | 'keyword' | 'page' | 'pageSize'>): Promise<Paginated<TaskListItem>> {
+    findDepartmentReviews(query?: Pick<TaskQuery, 'cycleId' | 'keyword' | 'status' | 'page' | 'pageSize'>): Promise<DepartmentReviewListPage> {
       return apiGet('/tasks/department-review', query as Record<string, unknown>);
     },
 

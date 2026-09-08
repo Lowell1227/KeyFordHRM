@@ -4,11 +4,13 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { approvalApi } from '@/api/approval.api';
 import { cyclesApi } from '@/api/cycles.api';
+import { tasksApi } from '@/api/tasks.api';
 import GradeTag from '@/components/common/GradeTag.vue';
+import ReviewHistory from '@/components/common/ReviewHistory.vue';
 import GradeDistChart from '@/components/charts/GradeDistChart.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
-import type { ApprovalOverview, ApprovalTaskView, AssessmentCycle } from '@/types/api.types';
+import type { ApprovalOverview, ApprovalTaskView, AssessmentCycle, TaskDetail } from '@/types/api.types';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 import { useAuthStore } from '@/stores/auth.store';
 import { TASK_STATUS_META, type PerfGrade } from '@/types/enums';
@@ -28,9 +30,13 @@ const selectedCycleId = ref('');
 const tasks = ref<ApprovalTaskView[]>([]);
 const overview = ref<ApprovalOverview | null>(null);
 const loading = ref(false);
+const listError = ref('');
 const submitting = ref(false);
 const selectedTaskIds = ref<string[]>([]);
+const detailDrawer = ref({ visible: false, loading: false, taskId: '', error: '', detail: null as TaskDetail | null });
 let approvalReady = false;
+let listRequest = 0;
+let detailRequest = 0;
 
 const GRADES = ['A', 'B', 'C', 'D'] as const;
 
@@ -77,6 +83,49 @@ function statusType(status: ApprovalTaskView['status']): TagType {
   return (TAG_TYPES as readonly string[]).includes(type) ? (type as TagType) : 'info';
 }
 
+function formatScore(score?: number | null): string {
+  return score == null ? '—' : score.toFixed(2);
+}
+
+function canViewTaskDetail(task: unknown): boolean {
+  const approvalTask = task as Pick<ApprovalTaskView, 'employeeId' | 'status'>;
+  return Boolean(auth.user && approvalTask.employeeId && (approvalTask.employeeId !== auth.user.id
+    || ['published', 'confirmed', 'appealing', 'closed'].includes(approvalTask.status)));
+}
+
+function readErrorMessage(error: unknown): string {
+  const responseMessage = (error as { response?: { data?: { message?: string | string[] } } })?.response?.data?.message;
+  return Array.isArray(responseMessage) ? responseMessage.join('；')
+    : responseMessage || (error instanceof Error ? error.message : '读取失败，请重试');
+}
+
+function closeDetail() {
+  detailRequest++;
+  detailDrawer.value = { visible: false, loading: false, taskId: '', error: '', detail: null };
+}
+
+async function openDetail(taskId: string) {
+  const task = tasks.value.find((item) => item.id === taskId);
+  if (!task || !canViewTaskDetail(task) || task.cycleId !== selectedCycleId.value) return;
+  const cycleId = selectedCycleId.value;
+  const request = ++detailRequest;
+  detailDrawer.value = { visible: true, loading: true, taskId, error: '', detail: null };
+  try {
+    const detail = await tasksApi.findOne(taskId);
+    if (request !== detailRequest || cycleId !== selectedCycleId.value || !detailDrawer.value.visible) return;
+    if (!detail || detail.id !== taskId || detail.cycleId !== cycleId) {
+      throw new Error('任务详情与当前考核周期不一致，请重试');
+    }
+    if (!canViewTaskDetail(detail)) throw new Error('本人结果公示后可查看');
+    detailDrawer.value.detail = detail;
+  } catch (error) {
+    if (request !== detailRequest || cycleId !== selectedCycleId.value) return;
+    detailDrawer.value.error = readErrorMessage(error);
+  } finally {
+    if (request === detailRequest) detailDrawer.value.loading = false;
+  }
+}
+
 async function loadCycles() {
   try {
     // 周期级状态滞后于逐人流转，按 active 组取周期，待办由 approver_id 过滤。
@@ -105,8 +154,11 @@ async function normalizeApprovalCycle() {
 }
 
 function clearApprovalState() {
+  listRequest++;
+  closeDetail();
   tasks.value = [];
   overview.value = null;
+  listError.value = '';
   selectedTaskIds.value = [];
   rejectDialog.value = {
     visible: false,
@@ -122,24 +174,31 @@ async function selectApprovalCycle(cycleId: string) {
 }
 
 async function loadTasks() {
+  const request = ++listRequest;
+  const cycleId = selectedCycleId.value;
+  listError.value = '';
   if (!selectedCycleId.value) {
     tasks.value = [];
     overview.value = null;
+    loading.value = false;
     return;
   }
   loading.value = true;
   try {
     const [list, overviewData] = await Promise.all([
-      approvalApi.getApprovalList(selectedCycleId.value),
-      approvalApi.getOverview(selectedCycleId.value),
+      approvalApi.getApprovalList(cycleId),
+      approvalApi.getOverview(cycleId),
     ]);
+    if (request !== listRequest || cycleId !== selectedCycleId.value) return;
     tasks.value = list;
     overview.value = overviewData;
-  } catch {
+  } catch (error) {
+    if (request !== listRequest || cycleId !== selectedCycleId.value) return;
     tasks.value = [];
     overview.value = null;
+    listError.value = readErrorMessage(error);
   } finally {
-    loading.value = false;
+    if (request === listRequest) loading.value = false;
   }
 }
 
@@ -365,6 +424,10 @@ function handleBatchReject() {
       </div>
 
       <template v-else>
+        <div v-if="listError" class="approval-view__load-error" role="alert">
+          <span>{{ listError }}</span>
+          <el-button @click="loadTasks">重试</el-button>
+        </div>
         <el-alert
           v-if="!canOperateApproval"
           class="approval-view__readonly"
@@ -455,7 +518,7 @@ function handleBatchReject() {
           <el-table-column prop="deptName" label="部门" min-width="160" show-overflow-tooltip />
           <el-table-column label="总分" width="100">
             <template #default="{ row }">
-              {{ row.totalScore.toFixed(2) }}
+              {{ formatScore(row.totalScore) }}
             </template>
           </el-table-column>
           <el-table-column label="最终等级" width="100">
@@ -470,8 +533,9 @@ function handleBatchReject() {
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column v-if="canOperateApproval" label="操作" width="160" fixed="right">
+          <el-table-column label="操作" :width="canOperateApproval ? 190 : 90" fixed="right">
             <template #default="{ row }">
+              <el-button v-if="canViewTaskDetail(row)" link type="primary" size="small" @click="openDetail(row.id)">详情</el-button>
               <template v-if="canOperateTask(row)">
                 <el-button
                   link
@@ -492,12 +556,37 @@ function handleBatchReject() {
                   退回
                 </el-button>
               </template>
-              <span v-else class="text-secondary">仅查看</span>
+              <span v-if="!canViewTaskDetail(row)" class="text-secondary">公示后可查看</span>
             </template>
           </el-table-column>
         </el-table>
       </template>
     </ChartCard>
+
+    <el-drawer
+      v-model="detailDrawer.visible"
+      title="审批详情"
+      size="min(640px, 100vw)"
+      data-testid="approval-detail-drawer"
+      destroy-on-close
+      @close="closeDetail"
+    >
+      <el-skeleton v-if="detailDrawer.loading" :rows="8" animated />
+      <div v-else-if="detailDrawer.error" class="approval-view__load-error" role="alert">
+        <span>{{ detailDrawer.error }}</span>
+        <el-button @click="openDetail(detailDrawer.taskId)">重试</el-button>
+      </div>
+      <template v-else-if="detailDrawer.detail">
+        <el-descriptions :column="1" border class="approval-view__detail-summary">
+          <el-descriptions-item label="员工">{{ detailDrawer.detail.employeeName || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="考核周期">{{ detailDrawer.detail.cycleName || selectedCycle?.name || '—' }}</el-descriptions-item>
+          <el-descriptions-item label="状态">{{ detailDrawer.detail.status === 'approval' && detailDrawer.detail.approvedAt ? '已通过，待公示' : statusLabel(detailDrawer.detail.status) }}</el-descriptions-item>
+          <el-descriptions-item label="总分">{{ formatScore(detailDrawer.detail.gradeResult?.calculatedScore) }}</el-descriptions-item>
+          <el-descriptions-item label="最终等级"><GradeTag :grade="detailDrawer.detail.gradeResult?.calibratedGrade ?? detailDrawer.detail.gradeResult?.rawGrade" size="small" /></el-descriptions-item>
+        </el-descriptions>
+        <ReviewHistory :records="detailDrawer.detail.flowRecords" />
+      </template>
+    </el-drawer>
 
     <el-dialog
       v-model="rejectDialog.visible"
@@ -532,6 +621,20 @@ function handleBatchReject() {
 </template>
 
 <style scoped>
+.approval-view__load-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 0;
+  color: var(--el-color-danger);
+  overflow-wrap: anywhere;
+}
+
+.approval-view__detail-summary {
+  margin-bottom: 20px;
+  overflow-wrap: anywhere;
+}
+
 .approval-view__toolbar {
   display: flex;
   align-items: center;

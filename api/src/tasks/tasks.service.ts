@@ -308,29 +308,50 @@ export class TasksService {
     return paginated(items, total, dto);
   }
 
-  /** GET /tasks/department-review — 周期快照中本人负责的待复核任务。 */
-  async findDepartmentReviews(dto: TaskQueryDto, viewer: AuthUser): Promise<Paginated<TaskListItem>> {
-    const where: Prisma.AssessmentTaskWhereInput = {
-      deptHeadId: viewer.id, employeeId: { not: viewer.id }, status: 'dept_review', isExempt: false,
+  /** GET /tasks/department-review — 周期快照中本人负责的全部复核记录。 */
+  async findDepartmentReviews(dto: TaskQueryDto, viewer: AuthUser) {
+    const scopeWhere: Prisma.AssessmentTaskWhereInput = {
+      deptHeadId: viewer.id, employeeId: { not: viewer.id }, isExempt: false,
       ...(dto.cycleId ? { cycleId: dto.cycleId } : {}),
       ...(dto.keyword ? { employee: { name: { contains: dto.keyword, mode: 'insensitive' as const } } } : {}),
     };
-    const [total, tasks] = await Promise.all([
+    const where: Prisma.AssessmentTaskWhereInput = { ...scopeWhere, ...(dto.status ? { status: dto.status } : {}) };
+    const [total, pendingTotal, tasks] = await Promise.all([
       this.prisma.assessmentTask.count({ where }),
+      this.prisma.assessmentTask.count({ where: { ...scopeWhere, status: 'dept_review' } }),
       this.prisma.assessmentTask.findMany({
         where, skip: dto.skip, take: dto.take,
-        include: { employee: { select: { name: true } }, cycle: { select: { name: true } }, dept: { select: { name: true } }, gradeResult: { select: { calculatedScore: true, rawGrade: true } } },
-        orderBy: [{ cycle: { startDate: 'desc' } }, { updatedAt: 'desc' }],
+        include: {
+          employee: { select: { name: true } }, cycle: { select: { name: true } }, dept: { select: { name: true } },
+          gradeResult: { select: { calculatedScore: true, rawGrade: true } },
+          flowRecords: {
+            where: { nodeType: 'dept_review', action: { in: ['approve', 'reject'] } },
+            orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1,
+            select: { action: true, createdAt: true, extraData: true },
+          },
+        },
+        orderBy: [{ cycle: { startDate: 'desc' } }, { updatedAt: 'desc' }, { id: 'asc' }],
       }),
     ]);
-    return paginated(tasks.map(t => ({
-      id: t.id, cycleId: t.cycleId, cycleName: t.cycle.name,
-      employeeId: t.employeeId, employeeName: t.employee.name,
-      deptId: t.deptId, deptName: t.dept?.name ?? null, managerId: t.managerId,
-      status: t.status, isExempt: t.isExempt, exemptReason: t.exemptReason,
-      totalScore: t.gradeResult?.calculatedScore?.toNumber() ?? null,
-      rawGrade: t.gradeResult?.rawGrade ?? null, updatedAt: t.updatedAt,
-    })), total, dto);
+    const items = tasks.map(t => {
+      const latest = t.flowRecords[0];
+      return {
+        id: t.id, cycleId: t.cycleId, cycleName: t.cycle.name,
+        employeeId: t.employeeId, employeeName: t.employee.name,
+        deptId: t.deptId, deptName: t.dept?.name ?? null, managerId: t.managerId,
+        status: t.status, isExempt: t.isExempt, exemptReason: t.exemptReason,
+        totalScore: t.gradeResult?.calculatedScore?.toNumber() ?? null,
+        rawGrade: t.gradeResult?.rawGrade ?? null, updatedAt: t.updatedAt,
+        departmentReview: {
+          canReview: t.status === TaskStatus.dept_review,
+          latest: latest ? {
+            action: latest.action as 'approve' | 'reject', createdAt: latest.createdAt,
+            combined: latest.action === 'approve' && (latest.extraData as Prisma.JsonObject | null)?.type === 'combined_department_review',
+          } : null,
+        },
+      };
+    });
+    return { ...paginated(items, total, dto), pendingTotal };
   }
 
   /** GET /tasks/mine — 仅查看当前用户自己的考核任务。 */

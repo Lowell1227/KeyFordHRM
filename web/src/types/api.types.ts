@@ -818,6 +818,11 @@ export interface TaskListItem extends AssessmentTask {
   periods?: AssessmentPeriodSummary[];
 }
 
+export interface DepartmentReviewListItem extends TaskListItem {
+  departmentReview: { canReview: boolean; latest: { action: 'approve' | 'reject'; createdAt: string; combined: boolean } | null };
+}
+export interface DepartmentReviewListPage extends Paginated<DepartmentReviewListItem> { pendingTotal: number }
+
 export interface TaskDetail extends AssessmentTask {
   managerStageState?: TeamStageState;
   workflowVersion?: number;
@@ -1212,7 +1217,13 @@ export interface RejectCalibrationBody {
 }
 
 /** 个人详情抽屉（校准依据）。 */
+export interface ReviewHistoryRecord {
+  id?: string; nodeType: string; action: string; actorName?: string | null;
+  comment?: string | null; extraData?: unknown; createdAt: string;
+}
+
 export interface CalibrationCandidateDetail {
+  flowRecords?: ReviewHistoryRecord[];
   taskId: string;
   employeeName: string;
   deptName: string | null;
@@ -1246,6 +1257,7 @@ export interface CalibrationCandidateDetail {
 
 /** 整周期结果评定页数据。 */
 export interface FinalGradeDetail {
+  flowRecords?: ReviewHistoryRecord[];
   comment?: string | null;
   departmentReview?: { combined: boolean; reviewerName: string | null };
   taskId: string;
