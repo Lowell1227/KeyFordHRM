@@ -10,6 +10,7 @@ import type {
 } from '@/types/api.types';
 import { buildIndicatorVersionHistory } from './indicator-version-history';
 import { indicatorVisibilitySummary } from '@/views/task/indicator-visibility';
+import { goalTrackingProgressSourceLabel } from './goal-tracking';
 
 const props = defineProps<{ indicatorId: string }>();
 const emit = defineEmits<{ close: []; updated: [] }>();
@@ -38,7 +39,7 @@ const activeBusinessPeriodKey = computed(() => (
   detail.value?.activeBusinessPeriodKey ?? latestProgress.value?.businessPeriodKey ?? null
 ));
 const activePeriodLabel = computed(() => formatBusinessPeriod(activeBusinessPeriodKey.value));
-const updateActionLabel = computed(() => `更新${activePeriodLabel.value}目标进展`);
+const updateActionLabel = '更新进展';
 const selfEvaluationResults = computed(() => detail.value?.selfEvaluationResults ?? []);
 const latestSelfEvaluation = computed(() => selfEvaluationResults.value[0] ?? null);
 const historyGroups = computed(() => {
@@ -179,7 +180,7 @@ function healthLabel(status?: GoalTrackingHealthStatus | null) {
 }
 
 function progressSourceLabel(progress: GoalTrackingLatestProgress) {
-  return progress.source === 'monthly_self_evaluation' ? '月度自评结果' : '主动进展';
+  return goalTrackingProgressSourceLabel(progress.source);
 }
 
 function scoreLabel(score: number | null) {
@@ -207,14 +208,6 @@ function formatBusinessPeriod(periodKey?: string | null) {
     <template #header>
       <div class="goal-detail__header">
         <span>指标详情</span>
-        <el-button
-          v-if="detail?.canEdit && !editing"
-          type="primary"
-          data-testid="goal-tracking-update-trigger"
-          @click="startEditing"
-        >
-          {{ updateActionLabel }}
-        </el-button>
       </div>
     </template>
 
@@ -246,9 +239,9 @@ function formatBusinessPeriod(periodKey?: string | null) {
       <section id="goal-detail-progress" class="goal-detail__card goal-detail__section">
         <div class="goal-detail__section-title">
           <h3>进展</h3>
-          <button v-if="detail.canEdit && !editing" type="button" @click="startEditing">
+          <el-button v-if="detail.canEdit && latestProgress && !editing" type="primary" data-testid="goal-tracking-update-trigger" @click="startEditing">
             {{ updateActionLabel }}
-          </button>
+          </el-button>
         </div>
 
         <div v-if="latestProgress" class="current-progress" data-testid="goal-tracking-current-progress">
@@ -263,7 +256,12 @@ function formatBusinessPeriod(periodKey?: string | null) {
           </div>
           <p>{{ latestProgress.content || '未填写描述' }}</p>
         </div>
-        <p v-else class="goal-detail__empty">当前尚未记录进展</p>
+        <div v-else-if="!editing" class="goal-detail__empty goal-detail__empty--progress">
+          <p>当前尚未记录进展</p>
+          <el-button v-if="detail.canEdit" type="primary" data-testid="goal-tracking-update-trigger" @click="startEditing">
+            {{ updateActionLabel }}
+          </el-button>
+        </div>
 
         <section
           v-if="latestSelfEvaluation"
@@ -334,10 +332,9 @@ function formatBusinessPeriod(periodKey?: string | null) {
             />
           </label>
           <div class="progress-editor__footer">
-            <span>只需填写状态、进度和描述</span>
             <div class="progress-editor__actions">
               <el-button @click="cancelEditing">取消</el-button>
-              <el-button type="primary" native-type="submit" :loading="submitting">更新进度</el-button>
+              <el-button type="primary" native-type="submit" :loading="submitting">更新进展</el-button>
             </div>
           </div>
         </form>
@@ -350,8 +347,8 @@ function formatBusinessPeriod(periodKey?: string | null) {
               <li v-for="progress in group.items" :key="progress.id" :class="{ 'is-monthly': progress.source === 'monthly_self_evaluation' }">
                 <span class="goal-progress-timeline__dot" aria-hidden="true" />
                 <div class="goal-progress-timeline__head">
-                  <strong>{{ progressSourceLabel(progress) }}</strong>
                   <time>{{ formatDate(progress.updatedAt) }}</time>
+                  <span class="goal-progress-timeline__source">{{ progressSourceLabel(progress) }}</span>
                 </div>
                 <div class="goal-progress-timeline__tags">
                   <span :data-health="progress.healthStatus">{{ healthLabel(progress.healthStatus) }}</span>
@@ -711,19 +708,14 @@ function formatBusinessPeriod(periodKey?: string | null) {
   box-shadow: 0 0 0 1px #1684ee;
 }
 
-.goal-detail__section-title button {
-  border: 0;
-  color: #8a95a8;
-  background: transparent;
-  cursor: pointer;
-}
-
 .current-progress { display: grid; gap: 10px; margin-bottom: 16px; padding: 14px; border: 1px solid #dfe6f2; border-radius: 11px; background: #f9fbff; }
-.current-progress__meta, .current-progress__values { display: flex; align-items: center; gap: 8px; }
-.current-progress__meta span { padding: 3px 7px; border-radius: 999px; background: #edf3ff; color: #4770cf; font-size: 11px; }
+.current-progress__meta, .current-progress__values { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.current-progress__meta span { color: #7d889c; font-size: 12px; }
 .current-progress__meta time { margin-left: auto; color: #8d97a8; font-size: 11px; }
 .current-progress__values { justify-content: space-between; }
 .current-progress__values span { color: #33845c; font-size: 12px; }
+.current-progress__values [data-health='at_risk'] { color: #a66a00; }
+.current-progress__values [data-health='blocked'] { color: #c34545; }
 .current-progress__values strong { font-size: 22px; }
 .current-progress p { margin: 0; color: #425069; white-space: pre-wrap; word-break: break-word; }
 .self-evaluation-results { display: grid; gap: 10px; margin: 14px 0 16px; padding: 13px 14px; border: 1px solid #e2e8f3; border-radius: 11px; background: #fbfcff; }
@@ -743,7 +735,7 @@ function formatBusinessPeriod(periodKey?: string | null) {
 .goal-progress-history { margin-top: 14px; border-top: 1px solid #edf0f5; }
 .goal-progress-history > summary { padding: 14px 0 4px; color: #60708a; cursor: pointer; font-weight: 600; }
 .goal-progress-history > section h4 { margin: 14px 0 4px; color: #8490a4; font-size: 12px; }
-.goal-progress-timeline > li.is-monthly { border-radius: 8px; background: #f4f8ff; }
+.goal-progress-timeline__source { color: #7d889c; font-size: 12px; font-weight: 400; }
 
 .progress-editor {
   margin-bottom: 18px;
@@ -830,6 +822,7 @@ function formatBusinessPeriod(periodKey?: string | null) {
 
 .progress-editor__footer {
   margin-top: 10px;
+  justify-content: flex-end;
 }
 
 .progress-editor__upload {
@@ -891,6 +884,8 @@ function formatBusinessPeriod(periodKey?: string | null) {
   color: #98a2b4;
   font-size: 12px;
 }
+
+.goal-progress-timeline__head { flex-wrap: wrap; }
 
 .goal-progress-timeline__tags {
   display: flex;
@@ -965,6 +960,9 @@ function formatBusinessPeriod(periodKey?: string | null) {
   color: #8e99ab;
   text-align: center;
 }
+
+.goal-detail__empty--progress { display: flex; flex-direction: column; align-items: center; gap: 14px; padding: 20px 0 26px; }
+.goal-detail__empty--progress p { margin: 0; font-size: 14px; }
 
 .visually-hidden {
   position: absolute;

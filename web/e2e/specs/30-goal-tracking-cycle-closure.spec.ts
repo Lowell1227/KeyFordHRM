@@ -156,7 +156,7 @@ test('submitted final monthly self evaluation closes employee progress without a
   await expect(summary).not.toContainText('员工输入已结束');
   await expect(summary).not.toContainText('等待周期结果流转');
   await expect(page.getByTestId('goal-tracking-indicator-button-indicator-1')).toHaveText('查看详情');
-  await expect(page.getByRole('button', { name: /更新9月进展/ })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '更新进展', exact: true })).toHaveCount(0);
 });
 
 test('distinguishes missing goals from a follow-up period that is not open', async ({ page }) => {
@@ -268,11 +268,12 @@ test('direct manager uses the same full-width period structure and can submit pe
   await expect(periodBar).toContainText('评分完成 2/2 · 不参与评分 1项');
   await expect(cards.nth(1)).toContainText('低于60分');
   await expect(cards.nth(1)).toContainText('相差27分');
+  await page.getByRole('button', { name: '直属上级等级 C', exact: true }).click();
   await page.getByRole('button', { name: '保存草稿' }).click();
   await expect.poll(() => requests.filter((request) => request.method() === 'PUT').length).toBe(1);
   await page.getByRole('button', { name: '提交评分', exact: true }).click();
   await expect.poll(() => requests.filter((request) => request.method() === 'POST').length).toBe(1);
-  expect(requests.find((request) => request.method() === 'POST')?.postDataJSON()).toMatchObject({ expectedVersion: 1 });
+  expect(requests.find((request) => request.method() === 'POST')?.postDataJSON()).toMatchObject({ expectedVersion: 1, managerGrade: 'C' });
   await expect(cards.first().getByTestId('manager-review-score-result')).toContainText('直属上级评分90分');
   await expect(cards.first().getByTestId('manager-review-score-result')).toContainText('直属上级说明未填写');
   await expect(cards.first().getByLabel('直属上级评分')).toHaveCount(0);

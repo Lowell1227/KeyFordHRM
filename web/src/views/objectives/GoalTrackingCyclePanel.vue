@@ -5,6 +5,7 @@ import type { GoalTrackingResult, PerformanceCycleContext } from '@/types/api.ty
 import {
   formatGoalTrackingContextLabel,
   goalTrackingStatus,
+  goalTrackingProgressSourceLabel,
   selectTrackingAction,
   type GoalTrackingPerson,
 } from './goal-tracking';
@@ -266,13 +267,13 @@ function scoreLabel(score: number | null, emptyLabel = '不参与评分') {
                 <span>最新进展</span>
                 <strong>{{ item.latestProgress?.content || item.latestProgress?.title || '尚未记录进展' }}</strong>
                 <small v-if="item.latestProgress">
-                  {{ item.latestProgress.businessPeriodKey }} · {{ item.latestProgress.source === 'monthly_self_evaluation' ? '月度自评结果' : '主动进展' }} ·
+                  {{ item.latestProgress.businessPeriodKey }} · {{ goalTrackingProgressSourceLabel(item.latestProgress.source) }} ·
                   {{ new Date(item.latestProgress.updatedAt).toLocaleString('zh-CN', { hour12: false }) }}
                 </small>
               </div>
               <span class="tracking-goal-card__status">{{ goalTrackingStatus({ status: item.status, progress: item.progress, healthStatus: item.latestProgress?.healthStatus }) }}</span>
               <button type="button" :data-testid="`goal-tracking-indicator-button-${item.id}`" @click="emit('openIndicator', item.id)">
-                {{ result.canEdit && isSelf ? `更新${activeBusinessPeriodLabel}进展` : '查看详情' }}
+                {{ result.canEdit && isSelf ? '更新进展' : '查看详情' }}
               </button>
             </div>
           </article>

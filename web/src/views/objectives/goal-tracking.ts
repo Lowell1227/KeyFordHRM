@@ -1,4 +1,4 @@
-import type { AssessmentCycle, CurrentUser, PerformanceCycleContext } from '@/types/api.types';
+import type { AssessmentCycle, CurrentUser, GoalTrackingLatestProgress, PerformanceCycleContext } from '@/types/api.types';
 import type { ObjectiveStatus } from '@/types/enums';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 
@@ -13,6 +13,10 @@ export type GoalTrackingPeopleGroup = {
   label: '我' | '绩效直属上级';
   people: GoalTrackingPerson[];
 };
+
+export function goalTrackingProgressSourceLabel(source: GoalTrackingLatestProgress['source']) {
+  return source === 'monthly_self_evaluation' ? '月度自评' : '日常更新';
+}
 
 type GoalTrackingQuarter = {
   year: number;

@@ -35,6 +35,8 @@ export default defineConfig({
     '34-cycle-participant-selection.spec.ts',
     '35-department-review-workflow.spec.ts',
     '40-approval-pending.spec.ts',
+    '41-goal-progress-entry.spec.ts',
+    '42-dashboard-multi-cycle.spec.ts',
   ],
   workers: 1,
 });

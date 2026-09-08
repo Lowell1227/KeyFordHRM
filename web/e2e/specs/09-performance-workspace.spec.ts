@@ -1675,7 +1675,7 @@ test.describe('09-performance-workspace tracking behavior', () => {
     expect(weightBox).not.toBeNull();
     expect(Math.ceil(scoreBox!.x + scoreBox!.width)).toBeLessThanOrEqual(Math.ceil(weightBox!.x));
     await expect(page.getByTestId('goal-tracking-indicator-button-indicator-1'))
-      .toHaveText('更新9月进展');
+      .toHaveText('更新进展');
     await page.getByTestId('goal-tracking-indicator-summary-indicator-1').click();
 
     const drawer = page.getByTestId('goal-tracking-detail');
@@ -1714,17 +1714,17 @@ test.describe('09-performance-workspace tracking behavior', () => {
     await expect(drawer).not.toContainText('第2版');
     await expect(drawer.getByText('V1 · 审批基线', { exact: true })).toHaveCount(0);
     await expect(drawer.getByTestId('goal-tracking-update-trigger'))
-      .toHaveText('更新2026年9月目标进展');
+      .toHaveText('更新进展');
     await drawer.getByTestId('goal-tracking-update-trigger').click();
 
     const form = drawer.getByTestId('goal-tracking-progress-form');
     await expect(form).toContainText('本次归属');
     await expect(form).toContainText('2026年9月');
-    await expect(form).toContainText('当前记录：正常 · 40%，来自 2026年8月主动进展');
+    await expect(form).toContainText('当前记录：正常 · 40%，来自 2026年8月日常更新');
     await form.getByLabel('进展状态').selectOption('at_risk');
     await form.getByLabel('完成进度').fill('55');
     await form.getByLabel('进展描述').fill('渠道转化低于预期，已调整投放');
-    await form.getByRole('button', { name: '更新进度' }).click();
+    await form.getByRole('button', { name: '更新进展' }).click();
 
     await expect(page.getByText('进展已更新，已加载最新状态；刚才填写的描述已保留，请确认后再次提交', { exact: true }))
       .toHaveCount(1);
@@ -1736,7 +1736,7 @@ test.describe('09-performance-workspace tracking behavior', () => {
 
     await form.getByLabel('进展状态').selectOption('at_risk');
     await form.getByLabel('完成进度').fill('55');
-    await form.getByRole('button', { name: '更新进度' }).click();
+    await form.getByRole('button', { name: '更新进展' }).click();
 
     await expect.poll(() => submittedBodies[1]).toEqual({
       progress: 55,
@@ -1758,6 +1758,14 @@ test.describe('09-performance-workspace tracking behavior', () => {
 
   test('indicator drawer follows browser history and keeps direct-manager details read-only', async ({ page }) => {
     await mockGoalTrackingShell(page);
+    await page.route('**/api/v1/cycles/tracking-contexts?**', (route) => route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse([{
+        ...trackingCycles.find((cycle) => cycle.id === 'cycle-2'),
+        scoringFrequency: 'cycle', periods: [],
+        task: { id: 'task-manager', status: 'goal_confirmed', isExempt: false, participantDisposition: 'active', manager: { id: 'manager-1', name: '林治' } },
+      }])),
+    }));
     const managerList = {
       taskId: 'task-manager', taskStatus: 'self_eval', canEdit: false, totalWeight: 20,
       items: [{

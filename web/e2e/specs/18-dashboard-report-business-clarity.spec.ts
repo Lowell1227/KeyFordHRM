@@ -12,6 +12,27 @@ const resultCycle = {
   endDate: '2026-06-30',
 };
 
+const currentCycle = {
+  ...resultCycle,
+  id: 'current-cycle',
+  name: '2026年第三季度',
+  status: 'in_progress',
+  startDate: '2026-07-01',
+  endDate: '2026-09-30',
+};
+
+async function mockCycles(page: Page, items: typeof resultCycle[]) {
+  await page.route('**/api/v1/cycles**', (route) => {
+    const data = new URL(route.request().url()).pathname.endsWith('/cycles/mine')
+      ? items
+      : { total: items.length, page: 1, pageSize: 50, items };
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse(data)),
+    });
+  });
+}
+
 const emptyCapabilities = {
   canManageTeam: false,
   canReviewDepartment: false,
@@ -98,10 +119,7 @@ const reportSummary = {
 };
 
 async function mockReportShell(page: Page) {
-  await page.route('**/api/v1/cycles**', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 50, items: [resultCycle] })),
-  }));
+  await mockCycles(page, [resultCycle]);
   await page.route('**/api/v1/departments**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(apiResponse([{ id: 'dept-1', name: '研发部', children: [] }])),
@@ -148,7 +166,7 @@ test.describe('dashboard and reports business clarity', () => {
     await expect(page.getByRole('button', { name: '查看完整报表' })).toBeVisible();
   });
 
-  test('manager zero-pending cards offer a neutral list entry instead of a processing action', async ({ page }) => {
+  test('manager plan with completed team tasks and zero pending offers a neutral list entry', async ({ page }) => {
     await mockIdentity(page, 'manager');
     await page.route('**/api/v1/tasks/mine**', (route) => route.fulfill({
       contentType: 'application/json',
@@ -157,23 +175,31 @@ test.describe('dashboard and reports business clarity', () => {
     await page.route('**/api/v1/tasks/team**', (route) => route.fulfill({
       contentType: 'application/json',
       body: JSON.stringify(apiResponse({
-        total: 0,
+        total: 1,
         page: 1,
         pageSize: 1,
-        items: [],
-        counts: { all: 0, notStarted: 0, pending: 0, completed: 0, exempted: 0 },
+        items: [{
+          id: 'completed-team-task', cycleId: currentCycle.id, cycleName: currentCycle.name,
+          employeeId: 'team-employee', employeeName: '团队员工', employeeNo: 'E001',
+          deptId: 'dept-1', deptName: '研发部', position: '工程师', avatarUrl: null,
+          managerId: 'manager-1', status: 'dept_review', stageState: 'completed',
+          isExempt: false, periodReview: null, totalScore: null, grade: null,
+        }],
+        counts: { all: 1, notStarted: 0, pending: 0, completed: 1, exempted: 0 },
         facets: { departments: [], employees: [] },
       })),
     }));
-    await page.route('**/api/v1/cycles**', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 50, items: [] })),
-    }));
+    await mockCycles(page, [currentCycle]);
 
     await page.goto('/dashboard');
 
+    await expect(page.getByTestId('dashboard-cycle-entry')).toHaveCount(1);
+    await expect(page.getByTestId('dashboard-cycle-entry')).toContainText(currentCycle.name);
+    await expect(page.getByTestId('manager-goal-review-count')).toHaveText('0');
+    await expect(page.getByTestId('manager-evaluation-count')).toHaveText('0');
     await expect(page.getByTestId('manager-goal-review-open')).toHaveText('查看全部');
     await expect(page.getByTestId('manager-evaluation-open')).toHaveText('查看全部');
+    await expect(page.getByTestId('dashboard-cycle-entry').getByRole('button', { name: '处理', exact: true })).toHaveCount(0);
   });
 
   test('personal center keeps dynamic business duties out of stable account information', async ({ page }) => {
@@ -202,10 +228,7 @@ test.describe('dashboard and reports business clarity', () => {
         facets: { departments: [], employees: [] },
       })),
     }));
-    await page.route('**/api/v1/cycles**', (route) => route.fulfill({
-      contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 50, items: [] })),
-    }));
+    await mockCycles(page, []);
 
     await page.goto('/dashboard');
 
@@ -221,8 +244,8 @@ test.describe('dashboard and reports business clarity', () => {
     await expect(personalCenter).not.toContainText('绩效直属上级');
     await expect(personalCenter).not.toContainText('最终业务审批人');
     await page.getByTestId('header-user-menu').click();
-    await expect(page.getByTestId('manager-goal-review-open')).toBeVisible();
-    await expect(page.getByTestId('manager-evaluation-open')).toBeVisible();
+    await expect(page.getByText('当前没有进行中的本人任务或团队任务。', { exact: true })).toBeVisible();
+    await expect(page.getByTestId('dashboard-cycle-entry')).toHaveCount(0);
     await expect(page.getByTestId('dashboard-quick-actions')).toContainText('结果审批');
     await expect(page.getByTestId('dashboard-result-summary')).toHaveCount(0);
   });

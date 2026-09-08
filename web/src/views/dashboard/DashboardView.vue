@@ -1,26 +1,20 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref, watch } from 'vue';
+import { computed, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { cyclesApi } from '@/api/cycles.api';
 import { reportsApi } from '@/api/reports.api';
-import { tasksApi } from '@/api/tasks.api';
 import { useAuthStore } from '@/stores/auth.store';
 import ChartCard from '@/components/common/ChartCard.vue';
-import EmptyState from '@/components/common/EmptyState.vue';
+import DashboardTaskEntries from './DashboardTaskEntries.vue';
 import { getGradeLabel, getGradeStyle } from '@/utils/grade';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
-import {
-  isTerminalTaskStatus,
-  resolveEmployeeTaskEntry,
-} from '@/views/task/task-stage';
-import type { AssessmentCycle, ReportSummary, TaskListItem } from '@/types/api.types';
-import type { PerfGrade, TeamTaskStage } from '@/types/enums';
+import type { AssessmentCycle, ReportSummary } from '@/types/api.types';
+import type { PerfGrade } from '@/types/enums';
 
 const auth = useAuthStore();
 const router = useRouter();
 
 const userRole = computed(() => auth.user?.sysRole ?? '');
-const userId = computed(() => auth.user?.id ?? '');
 const isDirectManager = computed(() => auth.isManager);
 const canViewReports = computed(() => Boolean(auth.user?.businessCapabilities?.canViewReports));
 const canOpenManagementTask = computed(() => Boolean(
@@ -34,130 +28,8 @@ const cycles = ref<AssessmentCycle[]>([]);
 const selectedCycleId = ref('');
 const summary = ref<ReportSummary | null>(null);
 
-const personalTask = ref<TaskListItem | null>(null);
-const personalTaskLoading = ref(false);
-const personalTaskError = ref(false);
-const teamPending = ref<Record<TeamTaskStage, number | null>>({
-  'goal-review': null,
-  'manager-eval': null,
-});
-const teamLoading = ref<Record<TeamTaskStage, boolean>>({
-  'goal-review': false,
-  'manager-eval': false,
-});
-const teamErrors = ref<Record<TeamTaskStage, boolean>>({
-  'goal-review': false,
-  'manager-eval': false,
-});
-let taskEntryRequestSerial = 0;
-
-const personalTaskEntry = computed(() => (
-  personalTask.value ? resolveEmployeeTaskEntry(personalTask.value) : null
-));
-
-const personalTaskStageLabel = computed(() => {
-  return personalTaskEntry.value?.label ?? '';
-});
-
-const personalTaskActionLabel = computed(() => {
-  return personalTaskEntry.value?.actionLabel ?? '查看任务';
-});
-
-const personalTaskProgressLabel = computed(() => {
-  return personalTaskEntry.value?.progressLabel ?? '';
-});
-
-const personalTaskHintLabel = computed(() => {
-  return personalTaskEntry.value?.hintLabel ?? '';
-});
-
-function latestOpenTask(items: TaskListItem[]): TaskListItem | null {
-  return items.find((task) => !isTerminalTaskStatus(task.status)) ?? null;
-}
-
-function resetTaskEntries() {
-  personalTask.value = null;
-  personalTaskError.value = false;
-  teamPending.value = { 'goal-review': null, 'manager-eval': null };
-  teamErrors.value = { 'goal-review': false, 'manager-eval': false };
-}
-
-function isCurrentTaskEntryRequest(requestId: number): boolean {
-  return requestId === taskEntryRequestSerial;
-}
-
-async function loadPersonalTask(requestId: number) {
-  try {
-    const response = await tasksApi.findMine({ page: 1, pageSize: 20 });
-    if (!isCurrentTaskEntryRequest(requestId)) return;
-    personalTask.value = latestOpenTask(response.items);
-  } catch {
-    if (!isCurrentTaskEntryRequest(requestId)) return;
-    personalTaskError.value = true;
-  } finally {
-    if (isCurrentTaskEntryRequest(requestId)) {
-      personalTaskLoading.value = false;
-    }
-  }
-}
-
-async function loadTeamTaskCount(requestId: number, stage: TeamTaskStage) {
-  try {
-    const response = await tasksApi.findTeam({ page: 1, pageSize: 1, stage });
-    if (!isCurrentTaskEntryRequest(requestId)) return;
-    teamPending.value = { ...teamPending.value, [stage]: response.counts.pending };
-  } catch {
-    if (!isCurrentTaskEntryRequest(requestId)) return;
-    teamErrors.value = { ...teamErrors.value, [stage]: true };
-  } finally {
-    if (isCurrentTaskEntryRequest(requestId)) {
-      teamLoading.value = { ...teamLoading.value, [stage]: false };
-    }
-  }
-}
-
-function loadTaskEntries() {
-  const requestId = ++taskEntryRequestSerial;
-  const loadPersonal = Boolean(auth.user);
-  const loadTeam = isDirectManager.value;
-  resetTaskEntries();
-  personalTaskLoading.value = loadPersonal;
-  teamLoading.value = { 'goal-review': loadTeam, 'manager-eval': loadTeam };
-
-  if (loadPersonal) {
-    void loadPersonalTask(requestId);
-  } else {
-    personalTaskLoading.value = false;
-  }
-
-  if (loadTeam) {
-    void loadTeamTaskCount(requestId, 'goal-review');
-    void loadTeamTaskCount(requestId, 'manager-eval');
-  }
-}
-
 function openTask(taskId: string) {
-  void router.push({ name: 'TaskDetail', params: { id: taskId }, query: { returnTo: '/tasks' } });
-}
-
-function openPersonalTask(task: TaskListItem) {
-  const entry = resolveEmployeeTaskEntry(task);
-  if (entry.actionPath) {
-    void router.push({ path: entry.actionPath, query: { cycleId: task.cycleId } });
-    return;
-  }
-  void router.push({
-    name: 'TaskDetail',
-    params: { id: task.id },
-    query: {
-      returnTo: '/tasks',
-      ...(entry.periodId ? { stage: entry.stage, periodId: entry.periodId } : {}),
-    },
-  });
-}
-
-function openTeamWorkspace(stage: TeamTaskStage) {
-  void router.push({ path: '/tasks', query: { scope: 'team', stage } });
+  void router.push({ name: 'TaskDetail', params: { id: taskId }, query: { cycleId: selectedCycleId.value, returnTo: '/tasks' } });
 }
 
 const selectedCycle = computed(() => cycles.value.find((cycle) => cycle.id === selectedCycleId.value));
@@ -284,18 +156,6 @@ watch(
   { immediate: true },
 );
 
-watch(
-  [userRole, userId, isDirectManager],
-  () => {
-    loadTaskEntries();
-  },
-  { immediate: true },
-);
-
-onUnmounted(() => {
-  taskEntryRequestSerial += 1;
-});
-
 function avatarColor(name: string): string {
   const colors = ['#2a9d8f', '#457b9d', '#e76f51', '#7b2cbf', '#f4a261'];
   let sum = 0;
@@ -310,116 +170,15 @@ function avatarColor(name: string): string {
       <section class="employee-hero">
         <div>
           <h2>{{ auth.user?.name || '员工' }}，这里是你的绩效工作台</h2>
-          <p>只展示当前可继续处理的绩效任务。</p>
+          <p>查看各计划任务，继续处理当前待办。</p>
         </div>
-      </section>
-
-      <section class="task-entry-card" data-testid="employee-current-task">
-        <template v-if="personalTaskLoading">
-          <el-skeleton :rows="2" animated />
-        </template>
-        <template v-else-if="personalTaskError">
-          <el-alert title="当前任务暂时无法加载，请稍后重试。" type="warning" :closable="false" show-icon />
-        </template>
-        <template v-else-if="personalTask">
-          <div class="task-entry-card__main">
-            <span class="task-entry-card__eyebrow">当前阶段</span>
-            <strong>{{ personalTaskStageLabel }}</strong>
-            <span v-if="personalTaskProgressLabel" class="task-entry-card__progress">{{ personalTaskProgressLabel }}</span>
-            <span v-if="personalTaskHintLabel" class="task-entry-card__meta">{{ personalTaskHintLabel }}</span>
-            <span class="task-entry-card__meta">{{ personalTask.cycleName || '当前考核周期' }}</span>
-          </div>
-          <el-button data-testid="employee-current-task-open" type="primary" @click="openPersonalTask(personalTask)">
-            {{ personalTaskActionLabel }}
-          </el-button>
-        </template>
-        <EmptyState v-else description="HR 发起考核任务后，会在这里显示你的待办。" />
       </section>
     </template>
 
+    <DashboardTaskEntries />
+
     <template v-if="!isEmployee || isDirectManager || roleQuickActions.length">
       <div v-loading="dashboardLoading" class="dashboard-admin">
-      <section v-if="isDirectManager" class="manager-task-entry" aria-label="团队绩效待办">
-        <header class="manager-task-entry__header">
-          <div>
-            <h2>当前周期待办</h2>
-            <p>优先处理团队当前阶段任务；下方结果区仅展示最近已公示周期。</p>
-          </div>
-        </header>
-        <article
-          class="task-entry-card task-entry-card--personal"
-          data-testid="manager-personal-task"
-          :data-state="personalTaskLoading ? 'loading' : personalTaskError ? 'error' : personalTask ? 'ready' : 'empty'"
-          :aria-busy="personalTaskLoading"
-        >
-          <template v-if="personalTaskLoading">
-            <el-skeleton :rows="2" animated />
-          </template>
-          <template v-else-if="personalTaskError">
-            <el-alert title="个人任务暂时无法加载。" type="warning" :closable="false" />
-          </template>
-          <template v-else-if="personalTask">
-            <div class="task-entry-card__main">
-              <span class="task-entry-card__eyebrow">我的任务</span>
-              <strong>{{ personalTaskStageLabel }}</strong>
-              <span v-if="personalTaskProgressLabel" class="task-entry-card__progress">{{ personalTaskProgressLabel }}</span>
-              <span v-if="personalTaskHintLabel" class="task-entry-card__meta">{{ personalTaskHintLabel }}</span>
-              <span class="task-entry-card__meta">{{ personalTask.cycleName || '当前考核周期' }}</span>
-            </div>
-            <el-button text type="primary" @click="openPersonalTask(personalTask)">查看</el-button>
-          </template>
-          <div v-else class="task-entry-card__empty">当前没有个人绩效任务</div>
-        </article>
-
-        <article
-          class="task-entry-card"
-          data-testid="manager-goal-review-card"
-          :data-state="teamLoading['goal-review'] ? 'loading' : teamErrors['goal-review'] ? 'error' : 'ready'"
-          :aria-busy="teamLoading['goal-review']"
-        >
-          <template v-if="teamLoading['goal-review']">
-            <el-skeleton :rows="2" animated />
-          </template>
-          <template v-else-if="teamErrors['goal-review']">
-            <el-alert title="目标审核待办暂时无法加载。" type="warning" :closable="false" />
-          </template>
-          <template v-else>
-            <div class="task-entry-card__main">
-              <span class="task-entry-card__eyebrow">团队待办</span>
-              <strong data-testid="manager-goal-review-count">{{ teamPending['goal-review'] }}</strong>
-              <span class="task-entry-card__meta">目标审核</span>
-            </div>
-            <el-button data-testid="manager-goal-review-open" text type="primary" @click="openTeamWorkspace('goal-review')">
-              {{ teamPending['goal-review'] === 0 ? '查看全部' : '处理' }}
-            </el-button>
-          </template>
-        </article>
-
-        <article
-          class="task-entry-card"
-          data-testid="manager-evaluation-card"
-          :data-state="teamLoading['manager-eval'] ? 'loading' : teamErrors['manager-eval'] ? 'error' : 'ready'"
-          :aria-busy="teamLoading['manager-eval']"
-        >
-          <template v-if="teamLoading['manager-eval']">
-            <el-skeleton :rows="2" animated />
-          </template>
-          <template v-else-if="teamErrors['manager-eval']">
-            <el-alert title="上级评价待办暂时无法加载。" type="warning" :closable="false" />
-          </template>
-          <template v-else>
-            <div class="task-entry-card__main">
-              <span class="task-entry-card__eyebrow">团队待办</span>
-              <strong data-testid="manager-evaluation-count">{{ teamPending['manager-eval'] }}</strong>
-              <span class="task-entry-card__meta">上级评价</span>
-            </div>
-            <el-button data-testid="manager-evaluation-open" text type="primary" @click="openTeamWorkspace('manager-eval')">
-              {{ teamPending['manager-eval'] === 0 ? '查看全部' : '处理' }}
-            </el-button>
-          </template>
-        </article>
-      </section>
-
       <section v-if="roleQuickActions.length" class="quick-actions" data-testid="dashboard-quick-actions">
         <header class="quick-actions__header">
           <h2>常用工作入口</h2>
@@ -551,90 +310,6 @@ function avatarColor(name: string): string {
 .employee-hero p {
   margin: 0;
   color: var(--app-text-secondary);
-}
-
-.task-entry-card,
-.manager-task-entry {
-  display: grid;
-  gap: 12px;
-}
-
-.task-entry-card {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  min-height: 92px;
-  padding: 18px 20px;
-  background: var(--app-card-bg);
-  border: 1px solid var(--app-border-color);
-  border-radius: var(--app-radius);
-  box-sizing: border-box;
-}
-
-.task-entry-card :deep(.el-skeleton) {
-  grid-column: 1 / -1;
-}
-
-.task-entry-card :deep(.el-alert),
-.task-entry-card .empty-state {
-  grid-column: 1 / -1;
-}
-
-.task-entry-card .empty-state {
-  padding: 0;
-}
-
-.task-entry-card__main {
-  min-width: 0;
-  display: grid;
-  gap: 4px;
-}
-
-.task-entry-card__eyebrow,
-.task-entry-card__progress,
-.task-entry-card__meta,
-.task-entry-card__empty {
-  color: var(--app-text-secondary);
-  font-size: 13px;
-}
-
-.task-entry-card__progress {
-  color: var(--app-primary-color);
-  font-weight: 600;
-}
-
-.task-entry-card__main strong {
-  color: var(--app-text-primary);
-  font-size: 18px;
-  line-height: 1.25;
-}
-
-.manager-task-entry {
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-}
-
-.manager-task-entry__header {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.manager-task-entry__header h2 {
-  margin: 0 0 4px;
-  color: var(--app-text-primary);
-  font-size: 18px;
-}
-
-.manager-task-entry__header p {
-  margin: 0;
-  color: var(--app-text-secondary);
-  font-size: 13px;
-}
-
-.manager-task-entry .task-entry-card {
-  min-height: 112px;
-  box-shadow: var(--app-shadow);
 }
 
 .quick-actions {
@@ -838,10 +513,6 @@ function avatarColor(name: string): string {
     align-items: flex-start;
     flex-direction: column;
   }
-
-  .manager-task-entry {
-    grid-template-columns: 1fr;
-  }
 }
 
 @media (max-width: 560px) {
@@ -852,14 +523,6 @@ function avatarColor(name: string): string {
   .quick-actions__header {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .task-entry-card {
-    padding: 16px;
-  }
-
-  .task-entry-card__main strong {
-    font-size: 17px;
   }
 
   .result-summary {
