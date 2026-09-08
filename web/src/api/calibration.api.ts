@@ -1,5 +1,6 @@
 import http from './http';
 import type {
+  AssessmentCycle,
   CalibrationCandidate,
   CalibrationCandidateDetail,
   CalibrationSummary,
@@ -27,6 +28,10 @@ export interface CalibrationActionResult {
 }
 
 export const calibrationApi = {
+  listCycles(): Promise<AssessmentCycle[]> {
+    return apiGet('/calibration/cycles');
+  },
+
   /** GET /cycles/:id/calibration — 校准工作台 */
   getWorkbench(cycleId: string): Promise<CalibrationWorkbench> {
     return apiGet(`/cycles/${cycleId}/calibration`);

@@ -49,6 +49,7 @@ declare module 'vue-router' {
     title?: string;
     roles?: string[];
     capability?: BusinessCapabilityKey;
+    scopedCapability?: BusinessCapabilityKey;
     hrCapabilities?: HrCapability[];
     navigation?: NavigationMeta;
     activeNavigationPath?: string;

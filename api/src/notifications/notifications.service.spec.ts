@@ -10,7 +10,7 @@ function makePrismaMock() {
   return {
     $transaction: jest.fn(),
     $executeRaw: jest.fn().mockResolvedValue(1),
-    user: { findUnique: jest.fn() },
+    user: { findUnique: jest.fn(), findFirst: jest.fn() },
     notificationLog: {
       create: jest.fn(),
       createMany: jest.fn(),
@@ -495,6 +495,22 @@ describe('NotificationsService', () => {
   });
 
   describe('sendBatchReminders', () => {
+    it.each(['manual', 'batch'] as const)('routes %s HR reminders for the owner own result to an eligible reviewer', async mode => {
+      const task = { id: 't-own', cycleId: 'c1', status: 'hr_calibration', employeeId: 'owner',
+        managerId: 'head', deptHeadId: 'head', approverId: 'head', cycle: { hrOwnerId: 'owner' } };
+      jest.spyOn(prisma.assessmentTask, 'findUnique').mockResolvedValue(task as any);
+      jest.spyOn(prisma.assessmentTask, 'findMany').mockResolvedValue([task] as any);
+      jest.spyOn(prisma.user, 'findFirst').mockResolvedValue({ id: 'head' } as any);
+      jest.spyOn(prisma.user, 'findUnique').mockResolvedValue({ dingtalkId: null } as any);
+      jest.spyOn(prisma.notificationLog, 'findFirst').mockResolvedValue(null);
+      jest.spyOn(prisma.notificationLog, 'create').mockResolvedValue({ id: 'isolated-reminder' } as any);
+      jest.spyOn(prisma.notificationLog, 'updateMany').mockResolvedValue({ count: 1 });
+      if (mode === 'manual') await service.sendTaskReminder('t-own', 'hr', 'sender');
+      else await service.sendBatchReminders('c1', 'hr');
+      expect(prisma.notificationLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({ userId: 'head' }) }));
+      expect(pushProvider.push).toHaveBeenCalledWith(expect.objectContaining({ userId: 'head' }));
+    });
+
     it('批量 HR 催办只发送给周期指定的 HR 负责人', async () => {
       prisma.assessmentTask.findMany = jest.fn().mockResolvedValue([{
         id: 't-hr',

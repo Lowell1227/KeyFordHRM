@@ -2,7 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { ForbiddenException, NotFoundException, StreamableFile } from '@nestjs/common';
 import { PerfGrade, Prisma, SysRole, TaskStatus } from '@prisma/client';
 import * as ExcelJS from 'exceljs';
-import { ReportsService } from './reports.service';
+import { ReportsService, ReportSummary } from './reports.service';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DataScopeService } from '@/common/services/data-scope.service';
 import { AuthUser } from '@/common/types/auth.types';
@@ -28,6 +28,7 @@ function makeTask(overrides: Record<string, unknown> = {}) {
     deptId: 'dept-1',
     managerId: 'mgr-1',
     approverId: 'vp-1',
+    status: TaskStatus.hr_calibration as TaskStatus,
     isExempt: false,
     employee: { id: 'emp-1', name: '张三', employeeNo: 'E001', position: '工程师' },
     dept: { name: '研发部' },
@@ -62,6 +63,20 @@ async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
     chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
   }
   return Buffer.concat(chunks);
+}
+
+/** Evaluate the Prisma predicates used by report queries against isolated fixtures. */
+function matchesReportWhere(value: any, where: any): boolean {
+  if (where === null || typeof where !== 'object') return value === where;
+  return Object.entries(where).every(([key, condition]) => {
+    if (key === 'AND') return [condition].flat().every((part) => matchesReportWhere(value, part));
+    if (key === 'OR') return (condition as any[]).some((part) => matchesReportWhere(value, part));
+    if (key === 'NOT') return [condition].flat().every((part) => !matchesReportWhere(value, part));
+    if (key === 'not') return !matchesReportWhere(value, condition);
+    if (key === 'in') return (condition as any[]).includes(value);
+    if (key === 'notIn') return !(condition as any[]).includes(value);
+    return matchesReportWhere(value?.[key], condition);
+  });
 }
 
 describe('ReportsService', () => {
@@ -101,6 +116,101 @@ describe('ReportsService', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+  });
+
+  describe('D18 report result visibility', () => {
+    function resultTask(id: string, employeeId: string, status: TaskStatus, grade: PerfGrade) {
+      return makeTask({
+        id, employeeId, status,
+        employee: { id: employeeId, name: id, employeeNo: id, position: '工程师' },
+        gradeResult: { calculatedScore: new Prisma.Decimal(90), rawGrade: grade, calibratedGrade: null },
+      });
+    }
+
+    function useTasks(tasks: ReturnType<typeof makeTask>[]) {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      prisma.assessmentTask.findMany.mockImplementation(async ({ where }) => (
+        tasks.filter((task) => matchesReportWhere(task, where))
+      ));
+    }
+
+    it.each([SysRole.employee, SysRole.hr, SysRole.system_admin, SysRole.chairman])(
+      'excludes own unpublished result before statistics without enlarging the %s viewer scope',
+      async (sysRole) => {
+        const viewer = makeViewer({ sysRole, canViewAll: sysRole === SysRole.chairman });
+        const own = resultTask('own-hidden', viewer.id, TaskStatus.hr_calibration, 'A');
+        const managed = { ...resultTask('managed', 'employee-managed', TaskStatus.hr_calibration, 'C'), managerId: viewer.id };
+        const unrelated = resultTask('unrelated', 'employee-unrelated', TaskStatus.hr_calibration, 'B');
+        useTasks([own, managed, unrelated]);
+        dataScope.getVisibleEmployeeFilter.mockResolvedValue({ id: viewer.id });
+
+        const result = await service.getCycleSummary('cycle-1', {}, viewer) as ReportSummary;
+        const expectedIds = sysRole === SysRole.employee ? ['managed'] : ['managed', 'unrelated'];
+        expect(result.items.map((item) => item.taskId)).toEqual(expectedIds);
+        expect(result.stats).toMatchObject({ total: expectedIds.length, resulted: expectedIds.length, pending: 0 });
+        expect(result.stats.grades.A).toEqual({ count: 0, ratio: 0 });
+      },
+    );
+
+    it.each([TaskStatus.manager_scoring, TaskStatus.dept_review, TaskStatus.hr_calibration, TaskStatus.approval])(
+      'does not reveal an own %s result by probing each grade filter',
+      async (status) => {
+        const viewer = makeViewer({ sysRole: SysRole.employee });
+        useTasks([resultTask('own-hidden', viewer.id, status, 'A')]);
+        dataScope.getVisibleEmployeeFilter.mockResolvedValue({ id: viewer.id });
+
+        for (const grade of ['A', 'B', 'C', 'D'] as PerfGrade[]) {
+          const result = await service.getCycleSummary('cycle-1', { grade }, viewer) as ReportSummary;
+          expect(result.items).toEqual([]);
+          expect(result.stats).toMatchObject({ total: 0, resulted: 0, pending: 0 });
+          expect(result.stats.grades[grade]).toEqual({ count: 0, ratio: 0 });
+        }
+      },
+    );
+
+    it.each([TaskStatus.published, TaskStatus.confirmed, TaskStatus.appealing, TaskStatus.closed])(
+      'retains an own %s result and matching grade filter',
+      async (status) => {
+        const viewer = makeViewer({ sysRole: SysRole.employee });
+        useTasks([resultTask('own-published', viewer.id, status, 'A')]);
+        dataScope.getVisibleEmployeeFilter.mockResolvedValue({ id: viewer.id });
+
+        const result = await service.getCycleSummary('cycle-1', { grade: 'A' }, viewer) as ReportSummary;
+        expect(result.items.map((item) => item.taskId)).toEqual(['own-published']);
+        expect(result.stats).toMatchObject({ total: 1, resulted: 1 });
+        expect(result.stats.grades.A).toEqual({ count: 1, ratio: 1 });
+      },
+    );
+
+    it.each([SysRole.hr, SysRole.system_admin])(
+      'keeps the %s grade list and both Excel exports consistent before and after own publication',
+      async (sysRole) => {
+        const viewer = makeViewer({ sysRole });
+        const own = resultTask('own-result', viewer.id, TaskStatus.hr_calibration, 'A');
+        useTasks([own, resultTask('other-result', 'other-employee', TaskStatus.hr_calibration, 'C')]);
+
+        for (const status of [TaskStatus.hr_calibration, TaskStatus.published]) {
+          own.status = status;
+          const expectedNames = status === TaskStatus.published ? ['own-result', 'other-result'] : ['other-result'];
+          const summary = await service.getCycleSummary('cycle-1', {}, viewer) as ReportSummary;
+          const lists = await service.getCycleGradeList('cycle-1', viewer);
+          expect(summary.items.map((item) => item.employeeName)).toEqual(expectedNames);
+          expect([...lists.aList, ...lists.cList, ...lists.dList].map((item) => item.employeeName)).toEqual(expectedNames);
+
+          const summaryExcel = await service.getCycleSummary('cycle-1', { format: ReportFormat.excel }, viewer) as StreamableFile;
+          const exportExcel = await service.exportCycle('cycle-1', viewer);
+          for (const [file, sheetName] of [[summaryExcel, '明细'], [exportExcel, '考核明细']] as const) {
+            const workbook = new ExcelJS.Workbook();
+            await workbook.xlsx.load(await streamToBuffer(file.getStream()) as any);
+            const names: string[] = [];
+            workbook.getWorksheet(sheetName)?.eachRow((row, rowNumber) => {
+              if (rowNumber > 1) names.push(String(row.getCell(1).value));
+            });
+            expect(names).toEqual(expectedNames);
+          }
+        }
+      },
+    );
   });
 
   describe('getCycleSummary', () => {
@@ -468,7 +578,7 @@ describe('ReportsService', () => {
         }),
       ]);
 
-      const result = await service.getCycleGradeList('cycle-1');
+      const result = await service.getCycleGradeList('cycle-1', makeViewer());
 
       expect(result.aList).toHaveLength(1);
       expect(result.aList[0].grade).toBe('A');
@@ -576,7 +686,7 @@ describe('ReportsService', () => {
     it('返回 StreamableFile', async () => {
       prisma.assessmentTask.findMany.mockResolvedValue([makeTask()]);
 
-      const result = await service.exportCycle('cycle-1');
+      const result = await service.exportCycle('cycle-1', makeViewer());
 
       expect(result).toBeInstanceOf(StreamableFile);
     });

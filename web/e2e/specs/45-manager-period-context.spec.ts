@@ -25,7 +25,7 @@ function review(id: string, month: number, employeeTaskId = taskId): PeriodRevie
   };
 }
 
-async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFirst?: boolean; wholeCycle?: boolean; finished?: boolean; finishOnSubmit?: boolean; includeFinishedInTeam?: boolean; finalStatus?: 'dept_review' | 'hr_calibration' } = {}) {
+async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFirst?: boolean; wholeCycle?: boolean; finished?: boolean; finishOnSubmit?: boolean; includeFinishedInTeam?: boolean; finalStatus?: 'dept_review' | 'hr_calibration'; reviewerName?: string | null } = {}) {
   const finalStatus = options.finalStatus ?? 'dept_review';
   const august = review(augustId, 8);
   const july = review('55555555-5555-4555-8555-555555555555', 7);
@@ -86,6 +86,7 @@ async function mockTeam(page: Page, options: { explicitPeriod?: boolean; slowFir
       taskId, cycleId, cycleName, employeeName: '虚拟员工甲', deptName: '测试部', position: '测试岗位', managerName: '虚拟主管',
       status: finalSubmitted ? finalStatus : 'manager_scoring', currentGrade: finalSubmitted ? 'B' : null, calculatedScore: 84.33, comment: finalComment,
       allPeriodsComplete: true, canSubmit: !finalSubmitted, latestReject: null,
+      departmentReview: { combined: finalStatus === 'hr_calibration', reviewerName: options.reviewerName === undefined ? finalStatus === 'hr_calibration' ? '虚拟主管' : '虚拟部门负责人' : options.reviewerName },
       periods: [
         { periodKey: '2026-07', periodType: 'month', status: 'completed', selfScoreTotal: 78, managerScoreTotal: 80, selfGrade: 'B', managerGrade: 'B' },
         { periodKey: '2026-08', periodType: 'month', status: 'completed', selfScoreTotal: 81, managerScoreTotal: 85, selfGrade: 'B', managerGrade: 'B' },
@@ -115,7 +116,6 @@ for (const [finalStatus, label] of [['dept_review', '部门复核'], ['hr_calibr
     await results.getByLabel('整周期最终等级 B', { exact: true }).click();
     await results.getByRole('button', { name: '提交评定', exact: true }).click();
     const dialog = page.getByRole('dialog');
-    await expect(dialog).not.toContainText('进入部门复核');
     await dialog.getByRole('button', { name: '提交', exact: true }).click();
     await expect(page.getByText(`整周期结果评定已提交，已进入${label}。`, { exact: true })).toBeVisible();
     await expect(results.getByTestId('cycle-current-stage')).toContainText(label);
@@ -124,6 +124,55 @@ for (const [finalStatus, label] of [['dept_review', '部门复核'], ['hr_calibr
     expect(state.writes).toHaveLength(1);
   });
 }
+
+for (const width of [1440, 390]) {
+  for (const finalStatus of ['dept_review', 'hr_calibration'] as const) {
+    test(`周期评定确认弹窗说明复核职责，按钮与标题保持简洁 ${finalStatus} ${width}px`, async ({ page }, testInfo) => {
+      await page.setViewportSize({ width, height: 900 });
+      const state = await mockTeam(page, { finished: true, includeFinishedInTeam: true, finalStatus });
+      const results = page.getByTestId('manager-period-results');
+      await expect(results).not.toContainText('合并完成部门复核');
+      await expect(results).not.toContainText('虚拟部门负责人');
+      await results.getByLabel('整周期最终等级 B', { exact: true }).click();
+      await results.getByRole('button', { name: '提交评定', exact: true }).click();
+      const dialog = page.getByRole('dialog', { name: '提交整周期结果评定', exact: true });
+      await expect(dialog).toBeVisible();
+      if (finalStatus === 'hr_calibration') {
+        await expect(dialog).toContainText('绩效直属上级与部门负责人为同一人');
+        await expect(dialog).toContainText('合并完成部门复核');
+        await expect(dialog).toContainText('进入绩效校准');
+      } else {
+        await expect(dialog).toContainText('虚拟部门负责人');
+        await expect(dialog).toContainText('部门复核');
+        await expect(dialog).not.toContainText('合并完成部门复核');
+      }
+      expect(state.writes).toHaveLength(0);
+      const dialogBox = await dialog.locator('.el-message-box').boundingBox();
+      expect(dialogBox!.x).toBeGreaterThanOrEqual(0);
+      expect(dialogBox!.x + dialogBox!.width).toBeLessThanOrEqual(width);
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+      await page.screenshot({ path: testInfo.outputPath('cycle-review-confirmation.png'), fullPage: true, animations: 'disabled' });
+      await dialog.getByRole('button', { name: '再想想', exact: true }).click();
+      await expect(dialog).toBeHidden();
+      expect(state.writes).toHaveLength(0);
+      await results.getByRole('button', { name: '提交评定', exact: true }).click();
+      await dialog.getByRole('button', { name: '提交', exact: true }).click();
+      await expect.poll(() => state.writes.length).toBe(1);
+      expect(state.writes[0]).toEqual({ path: `/api/v1/tasks/${taskId}/final-grade`, body: { grade: 'B', comment: '' } });
+    });
+  }
+}
+
+test('缺少冻结复核人姓名时确认弹窗不虚构办理人', async ({ page }) => {
+  await mockTeam(page, { finished: true, finalStatus: 'dept_review', reviewerName: null });
+  const results = page.getByTestId('manager-period-results');
+  await results.getByLabel('整周期最终等级 B', { exact: true }).click();
+  await results.getByRole('button', { name: '提交评定', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await expect(dialog).toContainText('进入部门复核');
+  await expect(dialog).not.toContainText('虚拟部门负责人');
+  await expect(dialog).not.toContainText('合并完成部门复核');
+});
 
 for (const width of [1440, 390]) {
   test(`退回后明确所属周期和当前月份，标题数据截止时间同步切换 ${width}px`, async ({ page }, testInfo) => {

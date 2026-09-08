@@ -30,8 +30,11 @@ export class ReportsController {
   /** GET /reports/cycle/:id/grade-list — 当期 A/D 级名单。 */
   @Get('cycle/:id/grade-list')
   @Roles(SysRole.hr, SysRole.system_admin)
-  getCycleGradeList(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
-    return this.reportsService.getCycleGradeList(id);
+  getCycleGradeList(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.reportsService.getCycleGradeList(id, viewer);
   }
 
   /** GET /reports/employee/:id/archive — 员工历史绩效趋势。 */
@@ -53,7 +56,10 @@ export class ReportsController {
   /** GET /reports/cycle/:id/export — 当期全量 Excel 导出。 */
   @Get('cycle/:id/export')
   @Roles(SysRole.hr, SysRole.system_admin)
-  async exportCycle(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string): Promise<StreamableFile> {
-    return this.reportsService.exportCycle(id);
+  async exportCycle(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @CurrentUser() viewer: AuthUser,
+  ): Promise<StreamableFile> {
+    return this.reportsService.exportCycle(id, viewer);
   }
 }

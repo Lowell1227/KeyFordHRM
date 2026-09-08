@@ -62,6 +62,7 @@ export const routes: RouteRecordRaw[] = [
       title: '绩效校准',
       roles: ['hr', 'system_admin'],
       hrCapabilities: ['performance_calibration'],
+      scopedCapability: 'canHandleHrCycle',
       navigation: { module: 'performance', label: '绩效校准', order: 30, group: 'performance', groupLabel: '绩效运营' },
     },
   },

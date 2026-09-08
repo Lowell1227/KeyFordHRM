@@ -31,6 +31,7 @@ import { ReferenceIndicatorQueryDto } from './dto/reference-indicator-query.dto'
 import { assertTaskVersion, claimTaskVersion } from './task-version';
 import { IndicatorVersionService } from './indicator-version.service';
 import { getManagerStageState, TeamStageState } from './team-task-stage';
+import { resolveCalibrationRecipient } from '@/calibration/calibration-recipient';
 
 type IndicatorBaselineSource = IndicatorInstance & {
   visibleDepartments: Array<{ departmentId: string }>;
@@ -299,8 +300,8 @@ export class TasksService {
       status: t.status,
       isExempt: t.isExempt,
       exemptReason: t.exemptReason,
-      totalScore: t.gradeResult?.calculatedScore?.toNumber() ?? null,
-      rawGrade: t.gradeResult?.rawGrade ?? null,
+      totalScore: this.isOwnUnpublishedResult(t, viewer) ? null : t.gradeResult?.calculatedScore?.toNumber() ?? null,
+      rawGrade: this.isOwnUnpublishedResult(t, viewer) ? null : t.gradeResult?.rawGrade ?? null,
       updatedAt: t.updatedAt,
     }));
 
@@ -386,8 +387,8 @@ export class TasksService {
       status: t.status,
       isExempt: t.isExempt,
       exemptReason: t.exemptReason,
-      totalScore: t.gradeResult?.calculatedScore?.toNumber() ?? null,
-      rawGrade: t.gradeResult?.rawGrade ?? null,
+      totalScore: this.isOwnUnpublishedResult(t, viewer) ? null : t.gradeResult?.calculatedScore?.toNumber() ?? null,
+      rawGrade: this.isOwnUnpublishedResult(t, viewer) ? null : t.gradeResult?.rawGrade ?? null,
       updatedAt: t.updatedAt,
       workflowVersion: t.cycle?.workflowVersion ?? 1,
       periods: t.periods,
@@ -541,7 +542,7 @@ export class TasksService {
     }) as AssessmentTask & { cycle: { hrOwnerId: string | null; hrOwner: { id: string; name: string } | null } };
     this.assertCanView(task, viewer);
 
-    const target = this.resolveReminderTarget(task);
+    const target = await this.resolveReminderTarget(task);
     if (!target) {
       throw new ConflictException({
         code: ERROR_CODE.CONFLICT,
@@ -1401,7 +1402,7 @@ export class TasksService {
           content: '主管已完成评分，请进行部门负责人复核。',
         });
       } else {
-        await this.notifyHr(task, viewer, '主管评分待绩效校准', '主管已完成评分，请进行绩效校准。');
+        await this.notifyHr(task, viewer, '主管评分待绩效校准', '主管已完成评分，请进行绩效校准。', true);
       }
     } catch (error) {
       this.logger.error(
@@ -1539,7 +1540,7 @@ export class TasksService {
         });
       });
 
-      await this.notifyHr(task, viewer, '部门复核通过，待绩效校准', '部门负责人已复核通过，请进行绩效校准。');
+      await this.notifyHr(task, viewer, '部门复核通过，待绩效校准', '部门负责人已复核通过，请进行绩效校准。', true);
       return { id: task.id, status: 'hr_calibration' };
     }
 
@@ -1732,15 +1733,19 @@ export class TasksService {
     sender: AuthUser,
     title: string,
     content: string,
+    calibration = false,
   ): Promise<void> {
     // 通知周期明确指定的 HR 负责人。
     const cycle = await this.prisma.assessmentCycle.findUnique({
       where: { id: task.cycleId },
       select: { hrOwnerId: true },
     });
-    if (cycle?.hrOwnerId) {
+    const userId = calibration
+      ? await resolveCalibrationRecipient(this.prisma, task, cycle?.hrOwnerId ?? null)
+      : cycle?.hrOwnerId;
+    if (userId) {
       await this.notificationsService.create({
-        userId: cycle.hrOwnerId,
+        userId,
         senderId: sender.id,
         cycleId: task.cycleId,
         taskId: task.id,
@@ -2068,7 +2073,10 @@ export class TasksService {
   }
 
   private async buildWorkflowContext(task: any, viewer: AuthUser): Promise<TaskWorkflowContext> {
-    const target = this.resolveReminderTarget(task);
+    const target = await this.resolveReminderTarget(task);
+    const handlerName = target?.nodeType === 'hr' && target.handlerId !== task.cycle?.hrOwnerId
+      ? (await this.prisma.user.findUnique({ where: { id: target.handlerId }, select: { name: true } }))?.name ?? '校准处理人'
+      : target ? this.resolveHandlerName(task, target.nodeType) : null;
     const canRemind = Boolean(
       target && this.canViewerRemind(task, viewer, target.nodeType, target.handlerId),
     );
@@ -2107,7 +2115,7 @@ export class TasksService {
       currentHandler: target
         ? {
             id: target.handlerId,
-            name: this.resolveHandlerName(task, target.nodeType),
+            name: handlerName!,
             nodeType: target.nodeType,
           }
         : null,
@@ -2118,12 +2126,12 @@ export class TasksService {
     };
   }
 
-  private resolveReminderTarget(
+  private async resolveReminderTarget(
     task: Pick<AssessmentTask, 'status' | 'employeeId' | 'managerId' | 'deptHeadId' | 'approverId'> & {
       cycle?: { hrOwnerId?: string | null };
       approvedAt?: Date | null;
     },
-  ): { nodeType: TaskReminderNodeType; handlerId: string } | null {
+  ): Promise<{ nodeType: TaskReminderNodeType; handlerId: string } | null> {
     if (task.status === 'approval' && task.approvedAt) return null;
     const mapping: Partial<Record<TaskStatus, TaskReminderNodeType>> = {
       indicator_drafting: 'employee',
@@ -2147,7 +2155,7 @@ export class TasksService {
         : nodeType === 'deptHead'
           ? task.deptHeadId
           : nodeType === 'hr'
-            ? task.cycle?.hrOwnerId ?? null
+            ? await resolveCalibrationRecipient(this.prisma, task, task.cycle?.hrOwnerId ?? null)
             : task.approverId;
     return handlerId ? { nodeType, handlerId } : null;
   }
@@ -2255,6 +2263,10 @@ export class TasksService {
   }
 
   /** 公示前：员工本人无条件隐藏所有主管评估结果、总分、等级。 */
+  private isOwnUnpublishedResult(task: { employeeId: string; status: TaskStatus }, viewer: AuthUser): boolean {
+    return task.employeeId === viewer.id && !(['published', 'confirmed', 'appealing', 'closed'] as TaskStatus[]).includes(task.status);
+  }
+
   private applyPrePublishMask(detail: TaskDetail): TaskDetail {
     const masked = { ...detail };
 
@@ -2262,7 +2274,10 @@ export class TasksService {
     masked.rawGrade = null;
     masked.gradeResult = null;
     masked.managerEvalSummary = null;
-    masked.flowRecords = this.maskCycleComments(detail.flowRecords);
+    masked.flowRecords = detail.flowRecords.map(record =>
+      ['manager_score', 'dept_review', 'hr_calibration', 'approval'].includes(record.nodeType)
+        ? { ...record, comment: null, extraData: null }
+        : record);
 
     masked.indicatorInstances = detail.indicatorInstances.map((ind) => ({
       ...ind,

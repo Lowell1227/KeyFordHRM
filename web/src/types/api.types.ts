@@ -1166,6 +1166,9 @@ export interface GradeDistributionEntry {
 
 export interface CalibrationCandidate {
   taskId: string;
+  canCalibrate?: boolean;
+  canViewDetail?: boolean;
+  actionHint?: string | null;
   employeeName: string;
   deptName?: string | null;
   position?: string | null;
@@ -1244,6 +1247,7 @@ export interface CalibrationCandidateDetail {
 /** 整周期结果评定页数据。 */
 export interface FinalGradeDetail {
   comment?: string | null;
+  departmentReview?: { combined: boolean; reviewerName: string | null };
   taskId: string;
   cycleId: string;
   cycleName: string;

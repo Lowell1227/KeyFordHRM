@@ -145,12 +145,12 @@ export class ReportsService {
   // GET /reports/cycle/:id/grade-list
   // ============================================================================
 
-  async getCycleGradeList(cycleId: string): Promise<{
+  async getCycleGradeList(cycleId: string, viewer: AuthUser): Promise<{
     aList: GradeListItem[];
     cList: GradeListItem[];
     dList: GradeListItem[];
   }> {
-    const tasks = await this.findSummaryTasks(cycleId, {});
+    const tasks = await this.findSummaryTasks(cycleId, {}, viewer);
     const items = tasks.map((t) => this.mapToSummaryItem(t));
 
     return {
@@ -216,8 +216,8 @@ export class ReportsService {
   // GET /reports/cycle/:id/export
   // ============================================================================
 
-  async exportCycle(cycleId: string): Promise<StreamableFile> {
-    const tasks = await this.findSummaryTasks(cycleId, {});
+  async exportCycle(cycleId: string, viewer: AuthUser): Promise<StreamableFile> {
+    const tasks = await this.findSummaryTasks(cycleId, {}, viewer);
     const items = tasks.map((t) => this.mapToSummaryItem(t));
 
     const workbook = await buildExportWorkbook({
@@ -313,10 +313,17 @@ export class ReportsService {
       grade?: PerfGrade;
       employeeWhere?: Prisma.UserWhereInput;
     },
+    viewer: AuthUser,
   ) {
     const where: Prisma.AssessmentTaskWhereInput = {
       cycleId,
       isExempt: false,
+      // D18 also applies to privileged viewers: exclude their unpublished result
+      // before grade filtering, totals, lists, or Excel generation can reveal it.
+      OR: [
+        { employeeId: { not: viewer.id } },
+        { status: { in: [TaskStatus.published, TaskStatus.confirmed, TaskStatus.appealing, TaskStatus.closed] } },
+      ],
     };
 
     if (options.approverId) {
@@ -396,7 +403,7 @@ export class ReportsService {
       options.grade = dto.grade;
     }
 
-    const tasks = await this.findSummaryTasks(cycleId, options);
+    const tasks = await this.findSummaryTasks(cycleId, options, viewer);
     const items = tasks.map((t) => this.mapToSummaryItem(t));
 
     const total = items.length;

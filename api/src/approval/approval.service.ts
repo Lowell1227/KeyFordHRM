@@ -6,6 +6,7 @@ import { AuthUser } from '@/common/types/auth.types';
 import { FlowService } from '@/tasks/flow.service';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { buildGradeDistribution } from '@/calibration/calibration.service';
+import { resolveCalibrationRecipient } from '@/calibration/calibration-recipient';
 import { BulkApprovalDto } from './dto/bulk-approval.dto';
 import { ApprovalRejectDto } from './dto/approval-reject.dto';
 
@@ -65,13 +66,13 @@ export class ApprovalService {
       orderBy: { updatedAt: 'desc' },
     });
 
-    return tasks.map((task) => this.mapToListItem(task));
+    return tasks.map((task) => this.mapToListItem(task, viewer));
   }
 
   /**
    * GET /cycles/:id/approval/overview — 审批概览（全校准分布只读 + 名下进度）。
    *
-   * 分管总可查看整个周期的等级分布作为审批参照，但只能操作自己名下的任务。
+   * 有冻结审批关系或全局读取能力的用户可查看排除本人后的周期参照。
    */
   async getOverview(cycleId: string, viewer: AuthUser) {
     const cycle = await this.getCycleOrThrow(cycleId);
@@ -79,6 +80,9 @@ export class ApprovalService {
       where: { cycleId, isExempt: false },
       include: { gradeResult: { select: { calibratedGrade: true, rawGrade: true } } },
     });
+    if (!this.canViewAll(viewer) && !allTasks.some(task => task.approverId === viewer.id && task.employeeId !== viewer.id)) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权查看该周期的审批概览' });
+    }
 
     const ownPending = allTasks.filter(
       (t) => t.status === 'approval' && !t.approvedAt && t.approverId === viewer.id,
@@ -92,6 +96,7 @@ export class ApprovalService {
         cycleId,
         action: 'reject',
         nodeType: { in: ['hr_calibration', 'dept_review'] },
+        task: { employeeId: { not: viewer.id } },
       },
       orderBy: { createdAt: 'desc' },
       take: 50,
@@ -102,7 +107,7 @@ export class ApprovalService {
     });
 
     return {
-      gradeDistribution: buildGradeDistribution(allTasks, cycle),
+      gradeDistribution: buildGradeDistribution(allTasks.filter(task => task.employeeId !== viewer.id), cycle),
       ownPending,
       ownTotal,
       /** 周期内仍处审批中的任务数；为 0 表示已全部通过或退回。 */
@@ -237,7 +242,9 @@ export class ApprovalService {
       where: { id: task.cycleId },
       select: { hrOwnerId: true, name: true },
     });
-    const notifyUserId = gradeResult?.hrCalibratorId ?? cycle?.hrOwnerId ?? null;
+    const notifyUserId = gradeResult?.hrCalibratorId && gradeResult.hrCalibratorId !== task.employeeId
+      ? gradeResult.hrCalibratorId
+      : await resolveCalibrationRecipient(this.prisma, task, cycle?.hrOwnerId ?? null);
     if (notifyUserId) {
       await this.notificationsService.create({
         userId: notifyUserId,
@@ -334,7 +341,10 @@ export class ApprovalService {
         approvedAt: Date | null;
       } | null;
     },
+    viewer: AuthUser,
   ): ApprovalListItem {
+    // 待审批列表中的本人结果尚未公示，仅保留办理状态和责任人。
+    const hideOwnResult = task.employeeId === viewer.id;
     return {
       id: task.id,
       cycleId: task.cycleId,
@@ -344,10 +354,10 @@ export class ApprovalService {
       deptId: task.deptId,
       deptName: task.dept?.name ?? null,
       status: task.status,
-      totalScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
-      rawGrade: task.gradeResult?.rawGrade ?? null,
-      calibratedGrade: task.gradeResult?.calibratedGrade ?? null,
-      isVeto: task.gradeResult?.isVeto ?? false,
+      totalScore: hideOwnResult ? null : task.gradeResult?.calculatedScore?.toNumber() ?? null,
+      rawGrade: hideOwnResult ? null : task.gradeResult?.rawGrade ?? null,
+      calibratedGrade: hideOwnResult ? null : task.gradeResult?.calibratedGrade ?? null,
+      isVeto: hideOwnResult ? false : task.gradeResult?.isVeto ?? false,
       approverId: task.approverId ?? null,
       approvedAt: task.approvedAt,
     };

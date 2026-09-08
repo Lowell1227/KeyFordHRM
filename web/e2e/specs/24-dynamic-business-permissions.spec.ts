@@ -82,6 +82,21 @@ test('team capability opens the team route without changing base role', () => {
   })).toBe(false);
 });
 
+test('cycle ownership opens only calibration and preserves global HR access', () => {
+  const calibration = routes.find(route => route.path === '/calibration')!;
+  const creator = { sysRole: 'hr_user' as const, canViewAll: false, hrCapabilities: ['cycle_plan_edit' as const], businessCapabilities: emptyCapabilities };
+  expect(canAccessRoute(calibration, creator)).toBe(false);
+  const owner = { ...creator, businessCapabilities: { ...emptyCapabilities, canHandleHrCycle: true } };
+  expect(canAccessRoute(calibration, owner)).toBe(true);
+  const labels = JSON.stringify(buildNavigation(routes, owner));
+  expect(labels).toContain('绩效校准');
+  expect(labels).not.toContain('结果审批');
+  expect(labels).not.toContain('结果公示');
+  for (const sysRole of ['hr', 'system_admin'] as const) {
+    expect(canAccessRoute(calibration, { sysRole, canViewAll: false })).toBe(true);
+  }
+});
+
 test('personnel change review is visible only to HR reviewers and administrators', () => {
   const reviewRoute = routes.find((route) => route.path === '/personnel-change-reviews');
   expect(reviewRoute).toBeTruthy();

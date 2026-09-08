@@ -1,5 +1,4 @@
 import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
-import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import { CalibrationService } from './calibration.service';
@@ -10,11 +9,9 @@ import { RejectCalibrationDto } from './dto/reject-calibration.dto';
  * 绩效校准接口（审核制）。
  *
  * HR 在校准环节不修改绩效结果，仅执行 确认/驳回；
- * 权限通过 performance_calibration 能力点控制
- * （hr / system_admin 默认具备，hr_user 需显式授权）。
+ * 每个接口由服务校验全局校准能力或该周期 hrOwnerId；不能仅按菜单放行。
  */
 @Controller('cycles/:id')
-@HrCapabilities('performance_calibration')
 export class CalibrationController {
   constructor(private readonly calibrationService: CalibrationService) {}
 
@@ -31,8 +28,9 @@ export class CalibrationController {
   @Get('grade-distribution')
   getGradeDistribution(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @CurrentUser() viewer: AuthUser,
   ) {
-    return this.calibrationService.getGradeDistribution(id);
+    return this.calibrationService.getGradeDistribution(id, viewer);
   }
 
   /** GET /cycles/:id/calibration/tasks/:taskId — 个人详情（校准依据）。 */
@@ -40,8 +38,9 @@ export class CalibrationController {
   getCandidateDetail(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @Param('taskId', new ParseUUIDPipe({ version: '4' })) taskId: string,
+    @CurrentUser() viewer: AuthUser,
   ) {
-    return this.calibrationService.getCandidateDetail(id, taskId);
+    return this.calibrationService.getCandidateDetail(id, taskId, viewer);
   }
 
   /** POST /cycles/:id/calibration/confirm — 确认（逐人即时流转到审批）。 */
@@ -64,5 +63,15 @@ export class CalibrationController {
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.calibrationService.reject(id, dto, viewer);
+  }
+}
+
+@Controller('calibration')
+export class CalibrationCyclesController {
+  constructor(private readonly calibrationService: CalibrationService) {}
+
+  @Get('cycles')
+  listCycles(@CurrentUser() viewer: AuthUser) {
+    return this.calibrationService.listCycles(viewer);
   }
 }

@@ -747,6 +747,7 @@ async function authenticateCyclePage(
       sysRole: role,
       isAssessorOnly: false,
       canViewAll: role === 'hr',
+      businessCapabilities: { canViewPerformanceApproval: role === 'vp', canOperatePerformanceApproval: role === 'vp', canViewReports: role === 'hr' },
     })),
   }));
 }
@@ -872,6 +873,9 @@ async function mockLifecycleCycleShell(
   }));
 
   if (kind === 'calibration') {
+    await page.route('**/api/v1/calibration/cycles', route => route.fulfill({
+      contentType: 'application/json', body: JSON.stringify(apiResponse(cycleItems)),
+    }));
     await page.route('**/api/v1/cycles/*/calibration**', (route) => {
       const match = new URL(route.request().url()).pathname.match(/\/cycles\/([^/]+)\/calibration/);
       if (match?.[1]) businessCycles.push(match[1]);
@@ -881,17 +885,22 @@ async function mockLifecycleCycleShell(
           gradeDistribution: {},
           totalActive: 0,
           pendingCalibration: 0,
+          progress: { finalGrading: 0, deptReview: 0, pending: 0, inApproval: 0, done: 0 },
           items: [],
         })),
       });
     });
   } else if (kind === 'approval') {
     await page.route('**/api/v1/cycles/*/approval**', (route) => {
-      const match = new URL(route.request().url()).pathname.match(/\/cycles\/([^/]+)\/approval/);
-      if (match?.[1]) businessCycles.push(match[1]);
+      const path = new URL(route.request().url()).pathname;
+      const match = path.match(/\/cycles\/([^/]+)\/approval/);
+      const overview = path.endsWith('/overview');
+      if (match?.[1] && !overview) businessCycles.push(match[1]);
       return route.fulfill({
         contentType: 'application/json',
-        body: JSON.stringify(apiResponse([])),
+        body: JSON.stringify(apiResponse(overview
+          ? { gradeDistribution: {}, ownPending: 0, ownTotal: 0, cyclePending: 0, rejects: [] }
+          : [])),
       });
     });
   } else {
@@ -907,7 +916,7 @@ async function mockLifecycleCycleShell(
 }
 
 test.describe('cycle-first lifecycle workbench contracts', () => {
-  test.use({ baseURL: 'http://localhost:5173' });
+  test.use({ baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://127.0.0.1:4173' });
 
   for (const entry of [
     { kind: 'calibration' as const, path: '/calibration', testId: 'calibration-cycle-select' },

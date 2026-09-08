@@ -40,6 +40,7 @@ export default defineConfig({
     '43-monthly-progress-reference.spec.ts',
     '44-manager-progress-reference.spec.ts',
     '45-manager-period-context.spec.ts',
+    '46-cycle-owner-calibration.spec.ts',
   ],
   workers: 1,
 });

@@ -10,6 +10,7 @@ import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { FlowService } from '@/tasks/flow.service';
+import { resolveCalibrationRecipient } from '@/calibration/calibration-recipient';
 import { claimTaskVersion } from '@/tasks/task-version';
 import { isManagerPeriodComplete } from '@/tasks/team-task-stage';
 import { SubmitFinalGradeDto } from './dto/submit-final-grade.dto';
@@ -43,6 +44,8 @@ export interface FinalGradeDetail {
   position: string | null;
   status: TaskStatus;
   managerName: string | null;
+  /** 依据任务冻结关系确定本次是否合并部门复核。 */
+  departmentReview: { combined: boolean; reviewerName: string | null };
   periods: FinalGradePeriodItem[];
   /** 整周期参考总分（各月上级评分均分，分数与等级无换算关系）。 */
   calculatedScore: number | null;
@@ -62,7 +65,7 @@ export interface FinalGradeDetail {
  *
  * 直属上级在各月评分全部锁定后，参考系统自动均分与各月等级，
  * 独立录入整周期最终等级 A/B/C/D。录入后任务进入部门复核
- * （直属上级即部门负责人时直接进入绩效校准）。
+ * （直属上级即部门负责人时合并办理部门复核，再进入绩效校准）。
  */
 @Injectable()
 export class FinalGradeService {
@@ -117,6 +120,10 @@ export class FinalGradeService {
       position: task.employee?.position ?? null,
       status: task.status,
       managerName: task.manager?.name ?? null,
+      departmentReview: {
+        combined: this.isCombinedDepartmentReview(task),
+        reviewerName: task.deptHead?.name ?? null,
+      },
       periods,
       calculatedScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
       currentGrade: task.gradeResult?.rawGrade ?? null,
@@ -162,7 +169,8 @@ export class FinalGradeService {
     const total = completePeriods.reduce((sum, p) => sum + p.managerScoreTotal!.toNumber(), 0);
     const comment = dto.comment?.trim() || null;
     const score = Number((total / completePeriods.length).toFixed(2));
-    const targetStatus = task.managerId === task.deptHeadId
+    const combinedDepartmentReview = this.isCombinedDepartmentReview(task);
+    const targetStatus = combinedDepartmentReview
       ? TaskStatus.hr_calibration
       : TaskStatus.dept_review;
 
@@ -190,12 +198,28 @@ export class FinalGradeService {
       await this.flowService.transitionTx(tx, {
         task,
         action: 'submit',
-        targetStatus,
+        targetStatus: TaskStatus.dept_review,
         actorId: viewer.id,
         comment: `整周期结果评定：最终等级 ${dto.grade}（参考均分 ${score}）`,
         extraData: { type: 'final_grade_submitted', grade: dto.grade, calculatedScore: score, comment },
         taskUpdate: { managerScoredAt: new Date(), updatedAt: claimedUpdatedAt },
       });
+
+      if (combinedDepartmentReview) {
+        await this.flowService.transitionTx(tx, {
+          task: { ...task, status: TaskStatus.dept_review },
+          action: 'approve',
+          targetStatus: TaskStatus.hr_calibration,
+          actorId: viewer.id,
+          comment: '绩效直属上级与部门负责人为同一人，本次提交合并完成部门复核。',
+          extraData: {
+            type: 'combined_department_review',
+            managerId: task.managerId,
+            deptHeadId: task.deptHeadId,
+          },
+          taskUpdate: { deptReviewedAt: new Date(), updatedAt: claimedUpdatedAt },
+        });
+      }
     });
 
     // 通知下一环节处理人
@@ -211,14 +235,15 @@ export class FinalGradeService {
           title: '整周期结果待复核',
           content: `直属上级已完成 ${task.employee?.name ?? '员工'} 的整周期结果评定，请进行部门复核。`,
         });
-      } else {
+      } else if (targetStatus === TaskStatus.hr_calibration) {
         const cycle = await this.prisma.assessmentCycle.findUnique({
           where: { id: task.cycleId },
           select: { hrOwnerId: true },
         });
-        if (cycle?.hrOwnerId) {
+        const userId = await resolveCalibrationRecipient(this.prisma, task, cycle?.hrOwnerId ?? null);
+        if (userId) {
           await this.notificationsService.create({
-            userId: cycle.hrOwnerId,
+            userId,
             senderId: viewer.id,
             cycleId: task.cycleId,
             taskId: task.id,
@@ -246,6 +271,7 @@ export class FinalGradeService {
         employee: { select: { name: true, position: true } },
         dept: { select: { name: true } },
         manager: { select: { name: true } },
+        deptHead: { select: { name: true } },
         gradeResult: { select: { calculatedScore: true, rawGrade: true } },
         cycle: { select: { name: true } },
         periods: {
@@ -260,14 +286,18 @@ export class FinalGradeService {
   }
 
   private assertManager(
-    task: { managerId: string | null },
+    task: { managerId: string | null; employeeId: string },
     viewer: AuthUser,
   ): void {
-    if (viewer.sysRole !== 'system_admin' && task.managerId !== viewer.id) {
+    if (task.employeeId === viewer.id || (viewer.sysRole !== 'system_admin' && task.managerId !== viewer.id)) {
       throw new ForbiddenException({
         code: ERROR_CODE.FORBIDDEN,
         message: '仅直属上级可操作',
       });
     }
+  }
+
+  private isCombinedDepartmentReview(task: { managerId: string | null; deptHeadId: string | null }): boolean {
+    return Boolean(task.managerId && task.deptHeadId && task.managerId === task.deptHeadId);
   }
 }

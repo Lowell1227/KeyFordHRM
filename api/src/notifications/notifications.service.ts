@@ -5,6 +5,7 @@ import { ERROR_CODE } from '@/common/constants/error-codes';
 import { paginated, Paginated } from '@/common/dto/pagination.dto';
 import { NotificationQueryDto } from './dto/notification-query.dto';
 import { MESSAGE_PUSH_PROVIDER, MessagePushProvider } from './message-push.provider';
+import { resolveCalibrationRecipient } from '@/calibration/calibration-recipient';
 
 const notificationInboxInclude = {
   sender: { select: { name: true } },
@@ -337,7 +338,7 @@ export class NotificationsService {
    */
   async sendTaskReminder(taskId: string, nodeType: TaskReminderNodeType, senderId: string) {
     const task = await this.findTaskOrThrow(taskId);
-    const recipientId = this.resolveTaskHandler(task, nodeType);
+    const recipientId = await this.resolveTaskHandler(task, nodeType);
     if (!recipientId) {
       throw new NotFoundException({
         code: ERROR_CODE.NOT_FOUND,
@@ -524,7 +525,9 @@ export class NotificationsService {
 
     const results: string[] = [];
     for (const task of tasks) {
-      const recipientId = nodeType === 'hr' ? task.cycle.hrOwnerId : task[handlerField!];
+      const recipientId = nodeType === 'hr'
+        ? await resolveCalibrationRecipient(this.prisma, task, task.cycle.hrOwnerId)
+        : task[handlerField!];
       if (!recipientId) continue;
 
       try {
@@ -638,8 +641,8 @@ export class NotificationsService {
     return { ...task, hrId: task.cycle?.hrOwnerId ?? null };
   }
 
-  private resolveTaskHandler(task: TaskHandlerSnapshot, nodeType: TaskReminderNodeType): string | null {
-    if (nodeType === 'hr') return task.hrId;
+  private async resolveTaskHandler(task: TaskHandlerSnapshot, nodeType: TaskReminderNodeType): Promise<string | null> {
+    if (nodeType === 'hr') return resolveCalibrationRecipient(this.prisma, task, task.hrId);
     const field = this.nodeTypeToHandlerField(nodeType);
     return task[field];
   }

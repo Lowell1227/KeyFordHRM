@@ -32,6 +32,8 @@ export function canAccessRoute(
   route: Pick<RouteRecordRaw, 'meta'>,
   user: NavigationUser,
 ): boolean {
+  const scopedCapability = route.meta?.scopedCapability;
+  if (scopedCapability && user.businessCapabilities?.[scopedCapability]) return true;
   const capability = route.meta?.capability;
   if (capability) {
     return Boolean(user.businessCapabilities?.[capability]);

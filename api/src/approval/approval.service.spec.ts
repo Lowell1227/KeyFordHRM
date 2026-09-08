@@ -125,6 +125,71 @@ describe('ApprovalService', () => {
       expect(result.gradeDistribution.C.count).toBe(1);
     });
 
+    it.each([
+      makeViewer({ id: 'cycle-owner', sysRole: 'employee' }),
+      makeViewer({ id: 'unrelated', sysRole: 'employee' }),
+      makeViewer({ id: 'hr-without-global-read', sysRole: 'hr' }),
+    ])('rejects an overview without an existing approval read relation for $id', async (viewer) => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue({ ...makeCycle(), hrOwnerId: 'cycle-owner', createdBy: 'cycle-owner' });
+      prisma.assessmentTask.findMany.mockResolvedValue([{ ...makeTask('hr_calibration'), gradeResult: { rawGrade: 'A', calibratedGrade: null } }]);
+      prisma.flowRecord.findMany.mockResolvedValue([]);
+      await expect(service.getOverview('cycle-1', viewer)).rejects.toBeInstanceOf(ForbiddenException);
+      expect(prisma.flowRecord.findMany).not.toHaveBeenCalled();
+    });
+
+    it('does not grant overview access from an approval assignment on the viewer own result alone', async () => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      prisma.assessmentTask.findMany.mockResolvedValue([{ ...makeTask('approval', { employeeId: 'vp-1' }), gradeResult: { rawGrade: 'A', calibratedGrade: null } }]);
+      prisma.flowRecord.findMany.mockResolvedValue([]);
+      await expect(service.getOverview('cycle-1', makeViewer())).rejects.toBeInstanceOf(ForbiddenException);
+    });
+
+    it.each(['manager_scoring', 'hr_calibration', 'approval', 'published'] as TaskStatus[])('preserves approval reference access from a frozen assignment at %s', async (status) => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      prisma.assessmentTask.findMany.mockResolvedValue([{ ...makeTask(status), gradeResult: { rawGrade: 'B', calibratedGrade: null } }]);
+      prisma.flowRecord.findMany.mockResolvedValue([]);
+      await expect(service.getOverview('cycle-1', makeViewer())).resolves.toMatchObject({ ownTotal: 1 });
+    });
+
+    it.each([makeViewer({ sysRole: 'system_admin' }), makeViewer({ canViewAll: true })])('preserves existing global overview read access for $sysRole / $canViewAll', async (viewer) => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      prisma.assessmentTask.findMany.mockResolvedValue([{ ...makeTask('approval', { approverId: 'other-approver' }), gradeResult: { rawGrade: 'B', calibratedGrade: null } }]);
+      prisma.flowRecord.findMany.mockResolvedValue([]);
+      await expect(service.getOverview('cycle-1', viewer)).resolves.toMatchObject({ ownTotal: 0, gradeDistribution: { B: { count: 1 } } });
+    });
+
+    it.each([makeViewer(), makeViewer({ sysRole: 'system_admin' }), makeViewer({ canViewAll: true })])('excludes the viewer from overview distribution and rejection reasons even with $sysRole / $canViewAll access', async (viewer) => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      prisma.assessmentTask.findMany.mockResolvedValue([
+        { ...makeTask('approval', { id: 'own-result', employeeId: viewer.id }), gradeResult: { rawGrade: 'A', calibratedGrade: null } },
+        { ...makeTask('approval', { id: 'other-result' }), gradeResult: { rawGrade: 'B', calibratedGrade: null } },
+      ]);
+      const rejectionRecords = [
+        { task: { employeeId: viewer.id, employee: { name: '本人' } }, nodeType: 'hr_calibration', comment: '本人未公示等级 A 的退回依据', actor: { name: 'HR' }, createdAt: new Date() },
+        { task: { employeeId: 'emp-1', employee: { name: '其他员工' } }, nodeType: 'dept_review', comment: '其他员工退回依据', actor: { name: '复核人' }, createdAt: new Date() },
+      ];
+      prisma.flowRecord.findMany.mockImplementation(async ({ where }) => rejectionRecords.filter(record => record.task.employeeId !== where.task?.employeeId?.not));
+      const result = await service.getOverview('cycle-1', viewer);
+      expect(result.gradeDistribution.A.count).toBe(0);
+      expect(result.gradeDistribution.B).toMatchObject({ count: 1, ratio: 1 });
+      expect(result.rejects.map(record => record.comment)).toEqual(['其他员工退回依据']);
+    });
+
+    it.each([makeViewer(), makeViewer({ sysRole: 'system_admin' }), makeViewer({ canViewAll: true })])('masks the viewer unpublished scores, grades and veto without removing their workflow row for $sysRole / $canViewAll', async (viewer) => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      const basis = { calculatedScore: new Prisma.Decimal(98), rawGrade: 'A', calibratedGrade: 'D', isVeto: true, approverId: viewer.id, approvedAt: null };
+      const row = { ...makeTask('approval', { employeeId: viewer.id }), employee: { name: '本人', position: '测试岗位' }, dept: { name: '测试部门' }, gradeResult: basis };
+      prisma.assessmentTask.findMany.mockResolvedValue([
+        row,
+        { ...row, id: 'other-result', employeeId: 'emp-2', employee: { name: '其他员工', position: '测试岗位' } },
+      ]);
+      const result = await service.getApprovalList('cycle-1', viewer);
+      expect(result).toHaveLength(2);
+      expect(result[0]).toMatchObject({ id: 'task-1', employeeId: viewer.id, approverId: viewer.id, status: 'approval', totalScore: null, rawGrade: null, calibratedGrade: null, isVeto: false });
+      expect(result[1]).toMatchObject({ id: 'other-result', totalScore: 98, rawGrade: 'A', calibratedGrade: 'D', isVeto: true });
+      expect(basis).toMatchObject({ rawGrade: 'A', calibratedGrade: 'D', isVeto: true });
+    });
+
     it('普通审批人只返回 approver_id 为自己的任务', async () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
       prisma.assessmentTask.findMany.mockResolvedValue([

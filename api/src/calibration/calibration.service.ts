@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { AssessmentCycle, PerfGrade, Prisma, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
@@ -8,6 +8,7 @@ import { FlowService } from '@/tasks/flow.service';
 import { ConfirmCalibrationDto } from './dto/confirm-calibration.dto';
 import { RejectCalibrationDto } from './dto/reject-calibration.dto';
 import { claimTaskVersion } from '@/tasks/task-version';
+import { hasHrCapability } from '@/auth/hr-capabilities';
 
 /** 等级分布单项。 */
 export interface GradeDistributionEntry {
@@ -19,6 +20,9 @@ export interface GradeDistributionEntry {
 
 /** 校准工作台列表项。 */
 export interface CalibrationWorkbenchItem {
+  canCalibrate: boolean;
+  canViewDetail: boolean;
+  actionHint: string | null;
   taskId: string;
   employeeName: string;
   deptName: string | null;
@@ -104,23 +108,34 @@ export class CalibrationService {
     private readonly notificationsService: NotificationsService,
   ) {}
 
+  /** A cycle assignment grants access to that cycle only; creation alone grants nothing. */
+  async listCycles(viewer: AuthUser) {
+    return this.prisma.assessmentCycle.findMany({
+      where: {
+        status: { in: ['indicator_setting', 'self_eval', 'manager_score', 'hr_calibration', 'approval', 'published', 'appeal'] },
+        ...(!hasHrCapability(viewer, 'performance_calibration') ? { hrOwnerId: viewer.id } : {}),
+      },
+      orderBy: [{ startDate: 'desc' }, { id: 'asc' }],
+    });
+  }
+
   /** GET /cycles/:id/calibration — 校准工作台。 */
-  async getWorkbench(cycleId: string, _viewer: AuthUser): Promise<CalibrationWorkbench> {
-    const cycle = await this.getCycleOrThrow(cycleId);
+  async getWorkbench(cycleId: string, viewer: AuthUser): Promise<CalibrationWorkbench> {
+    const cycle = await this.getCycleOrThrow(cycleId, viewer);
     const tasks = await this.findActiveTasksWithResult(cycleId);
 
     return {
-      gradeDistribution: buildGradeDistribution(tasks, cycle),
+      gradeDistribution: buildGradeDistribution(tasks.filter(t => t.employeeId !== viewer.id), cycle),
       totalActive: tasks.length,
       progress: buildProgress(tasks),
-      items: tasks.map((t) => this.mapToWorkbenchItem(t)),
+      items: tasks.map((t) => this.mapToWorkbenchItem(t, viewer)),
     };
   }
 
   /** GET /cycles/:id/grade-distribution — 仅返回分布。 */
-  async getGradeDistribution(cycleId: string): Promise<{ total: number; distribution: Record<PerfGrade, GradeDistributionEntry> } & Record<PerfGrade, GradeDistributionEntry>> {
-    const cycle = await this.getCycleOrThrow(cycleId);
-    const tasks = await this.findActiveTasksWithResult(cycleId);
+  async getGradeDistribution(cycleId: string, viewer: AuthUser): Promise<{ total: number; distribution: Record<PerfGrade, GradeDistributionEntry> } & Record<PerfGrade, GradeDistributionEntry>> {
+    const cycle = await this.getCycleOrThrow(cycleId, viewer);
+    const tasks = (await this.findActiveTasksWithResult(cycleId)).filter(t => t.employeeId !== viewer.id);
     const distribution = buildGradeDistribution(tasks, cycle);
     return {
       total: tasks.length,
@@ -130,8 +145,8 @@ export class CalibrationService {
   }
 
   /** GET /cycles/:id/calibration/tasks/:taskId — 个人详情（校准依据）。 */
-  async getCandidateDetail(cycleId: string, taskId: string): Promise<CalibrationCandidateDetail> {
-    await this.getCycleOrThrow(cycleId);
+  async getCandidateDetail(cycleId: string, taskId: string, viewer: AuthUser): Promise<CalibrationCandidateDetail> {
+    await this.getCycleOrThrow(cycleId, viewer);
     const task = await this.prisma.assessmentTask.findFirst({
       where: { id: taskId, cycleId, isExempt: false },
       include: {
@@ -164,6 +179,7 @@ export class CalibrationService {
     if (!task) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '任务不存在' });
     }
+    this.assertNotSelf([task], viewer);
 
     // 指标跨月平均分：按指标名称对齐（快照/实例名称一致）
     const reviews = await this.prisma.assessmentPeriodIndicatorReview.findMany({
@@ -230,7 +246,7 @@ export class CalibrationService {
     dto: ConfirmCalibrationDto,
     viewer: AuthUser,
   ): Promise<CalibrationActionResult> {
-    const cycle = await this.getCycleOrThrow(cycleId);
+    const cycle = await this.getCycleOrThrow(cycleId, viewer);
     const tasks = await this.findActiveTasksByIds(cycleId, dto.taskIds);
     if (tasks.length !== dto.taskIds.length) {
       throw new BadRequestException({
@@ -238,6 +254,7 @@ export class CalibrationService {
         message: '存在非本周期或非待校准状态的任务',
       });
     }
+    this.assertNotSelf(tasks, viewer);
 
       const now = new Date();
       await this.prisma.$transaction(async (tx) => {
@@ -247,6 +264,7 @@ export class CalibrationService {
           WHERE "id" IN (${Prisma.join(tasks.map((task) => Prisma.sql`${task.id}::uuid`))})
           ORDER BY "id" FOR NO KEY UPDATE
         `);
+        await this.recheckOwnerTx(tx, cycleId, viewer);
         for (const task of tasks) {
         if (task.status !== TaskStatus.hr_calibration) {
           throw new BadRequestException({
@@ -300,7 +318,7 @@ export class CalibrationService {
     const refreshed = await this.findActiveTasksWithResult(cycleId);
     return {
       updated: tasks.length,
-      gradeDistribution: buildGradeDistribution(refreshed, cycle),
+      gradeDistribution: buildGradeDistribution(refreshed.filter(t => t.employeeId !== viewer.id), cycle),
     };
   }
 
@@ -312,7 +330,7 @@ export class CalibrationService {
     dto: RejectCalibrationDto,
     viewer: AuthUser,
   ): Promise<CalibrationActionResult> {
-    const cycle = await this.getCycleOrThrow(cycleId);
+    const cycle = await this.getCycleOrThrow(cycleId, viewer);
     const reason = dto.reason?.trim();
     if (!reason) {
       throw new BadRequestException({
@@ -327,6 +345,7 @@ export class CalibrationService {
         message: '存在非本周期或非待校准状态的任务',
       });
     }
+    this.assertNotSelf(tasks, viewer);
 
       await this.prisma.$transaction(async (tx) => {
         // Use the same task-before-cycle lock order as individual task transitions.
@@ -335,6 +354,7 @@ export class CalibrationService {
           WHERE "id" IN (${Prisma.join(tasks.map((task) => Prisma.sql`${task.id}::uuid`))})
           ORDER BY "id" FOR NO KEY UPDATE
         `);
+        await this.recheckOwnerTx(tx, cycleId, viewer);
         for (const task of tasks) {
         if (task.status !== TaskStatus.hr_calibration) {
           throw new BadRequestException({
@@ -378,7 +398,7 @@ export class CalibrationService {
     const refreshed = await this.findActiveTasksWithResult(cycleId);
     return {
       updated: tasks.length,
-      gradeDistribution: buildGradeDistribution(refreshed, cycle),
+      gradeDistribution: buildGradeDistribution(refreshed.filter(t => t.employeeId !== viewer.id), cycle),
     };
   }
 
@@ -398,11 +418,33 @@ export class CalibrationService {
     };
   }
 
-  private async getCycleOrThrow(cycleId: string): Promise<AssessmentCycle> {
+  private assertCycleAccess(cycle: Pick<AssessmentCycle, 'hrOwnerId'>, viewer: AuthUser) {
+    if (!hasHrCapability(viewer, 'performance_calibration') && cycle.hrOwnerId !== viewer.id) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权处理该周期的绩效校准' });
+    }
+  }
+
+  private assertNotSelf(tasks: Array<{ employeeId: string }>, viewer: AuthUser) {
+    if (tasks.some(task => task.employeeId === viewer.id)) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '本人结果由其他有权限的 HR 处理' });
+    }
+  }
+
+  private async recheckOwnerTx(tx: Prisma.TransactionClient, cycleId: string, viewer: AuthUser) {
+    if (hasHrCapability(viewer, 'performance_calibration')) return;
+    // Match FlowService's task-before-cycle lock order and hold the assignment until commit.
+    await tx.$queryRaw`SELECT "id" FROM "assessment_cycles" WHERE "id" = ${cycleId}::uuid FOR UPDATE`;
+    const cycle = await tx.assessmentCycle.findUnique({ where: { id: cycleId }, select: { hrOwnerId: true } });
+    if (!cycle) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
+    this.assertCycleAccess(cycle, viewer);
+  }
+
+  private async getCycleOrThrow(cycleId: string, viewer: AuthUser): Promise<AssessmentCycle> {
     const cycle = await this.prisma.assessmentCycle.findUnique({ where: { id: cycleId } });
     if (!cycle) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核周期不存在' });
     }
+    this.assertCycleAccess(cycle, viewer);
     return cycle;
   }
 
@@ -429,15 +471,19 @@ export class CalibrationService {
     });
   }
 
-  private mapToWorkbenchItem(task: Awaited<ReturnType<CalibrationService['findActiveTasksWithResult']>>[number]): CalibrationWorkbenchItem {
+  private mapToWorkbenchItem(task: Awaited<ReturnType<CalibrationService['findActiveTasksWithResult']>>[number], viewer: AuthUser): CalibrationWorkbenchItem {
+    const ownResult = task.employeeId === viewer.id;
     return {
+      canCalibrate: !ownResult && task.status === 'hr_calibration',
+      canViewDetail: !ownResult,
+      actionHint: ownResult ? '本人结果由其他有权限的 HR 处理' : null,
       taskId: task.id,
       employeeName: task.employee?.name ?? '',
       deptName: task.dept?.name ?? null,
       position: task.employee?.position ?? null,
       status: task.status,
-      calculatedScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
-      rawGrade: task.gradeResult?.rawGrade ?? null,
+      calculatedScore: ownResult ? null : task.gradeResult?.calculatedScore?.toNumber() ?? null,
+      rawGrade: ownResult ? null : task.gradeResult?.rawGrade ?? null,
       finalGradeSubmittedAt: task.managerScoredAt ?? null,
       managerName: task.manager?.name ?? null,
     };

@@ -3,7 +3,6 @@ import { ref, computed, watch, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { calibrationApi } from '@/api/calibration.api';
-import { cyclesApi } from '@/api/cycles.api';
 import { useCycleStore } from '@/stores/cycle.store';
 import GradeTag from '@/components/common/GradeTag.vue';
 import GradeDistChart from '@/components/charts/GradeDistChart.vue';
@@ -32,6 +31,8 @@ const summary = ref<CalibrationSummary | null>(null);
 const loading = ref(false);
 const acting = ref(false);
 let calibrationReady = false;
+let listRequest = 0;
+let detailRequest = 0;
 
 const selectedTaskIds = ref<string[]>([]);
 const deptFilter = ref<string>('');
@@ -84,19 +85,21 @@ const filteredCandidates = computed(() => {
   });
 });
 
-const pendingCandidates = computed(() => candidates.value.filter((c) => c.status === 'hr_calibration'));
+function canCalibrate(candidate: CalibrationCandidate): boolean {
+  return candidate.status === 'hr_calibration' && candidate.canCalibrate !== false;
+}
+
+const pendingCandidates = computed(() => candidates.value.filter(canCalibrate));
 
 /** 分布仅统计已进入评定链路的任务（与后端口径一致）。 */
 const countedTotal = computed(() => {
-  const p = summary.value?.progress;
-  if (!p) return 0;
-  return p.deptReview + p.pending + p.inApproval + p.done;
+  return candidates.value.filter((c) => c.canViewDetail !== false && statusGroup(c) !== 'final_grading').length;
 });
 
 const gradeCounts = computed<Record<PerfGrade, number>>(() => {
   const counts: Record<PerfGrade, number> = { A: 0, B: 0, C: 0, D: 0 };
   candidates.value.forEach((c) => {
-    if (statusGroup(c) === 'final_grading') return;
+    if (c.canViewDetail === false || statusGroup(c) === 'final_grading') return;
     const grade = c.rawGrade;
     if (grade) counts[grade] = (counts[grade] ?? 0) + 1;
   });
@@ -127,7 +130,7 @@ const gradeWarnings = computed(() => {
 const hasWarnings = computed(() => gradeWarnings.value.length > 0);
 
 function handleSelectionChange(rows: CalibrationCandidate[]) {
-  selectedTaskIds.value = rows.map((r) => r.taskId);
+  selectedTaskIds.value = rows.filter(canCalibrate).map((r) => r.taskId);
 }
 
 function getGradeMaxRatio(cycle: AssessmentCycle | null, grade: PerfGrade): number {
@@ -155,10 +158,7 @@ function statusTagType(status: TaskStatus): string {
 
 async function loadCycles() {
   try {
-    // 逐人流转设计下周期级状态会滞后/跳跃，不能按 status=hr_calibration 过滤，
-    // 否则页面大部分时间为空；取 active 组（指标确认~申诉），由任务级状态做真正门禁。
-    const res = await cyclesApi.findAll({ group: 'active' });
-    cycles.value = res.items;
+    cycles.value = await calibrationApi.listCycles();
   } catch (e) {
     cycles.value = [];
     ElMessage.error(e instanceof Error ? e.message : '获取可校准周期失败');
@@ -183,6 +183,9 @@ async function normalizeCalibrationCycle() {
 }
 
 function clearCalibrationState() {
+  listRequest++;
+  detailRequest++;
+  drawer.value = { visible: false, loading: false, detail: null };
   candidates.value = [];
   summary.value = null;
   selectedTaskIds.value = [];
@@ -201,8 +204,11 @@ async function loadCandidates() {
     return;
   }
   loading.value = true;
+  const cycleId = selectedCycleId.value;
+  const request = ++listRequest;
   try {
-    const res = await calibrationApi.getWorkbench(selectedCycleId.value);
+    const res = await calibrationApi.getWorkbench(cycleId);
+    if (request !== listRequest || cycleId !== selectedCycleId.value) return;
     candidates.value = res.items;
     summary.value = {
       gradeDistribution: res.gradeDistribution,
@@ -211,31 +217,39 @@ async function loadCandidates() {
     };
     selectedTaskIds.value = [];
   } catch (e) {
+    if (request !== listRequest || cycleId !== selectedCycleId.value) return;
     ElMessage.error(e instanceof Error ? e.message : '获取校准名单失败');
     candidates.value = [];
     summary.value = null;
   } finally {
-    loading.value = false;
+    if (request === listRequest) loading.value = false;
   }
 }
 
 /** 打开个人详情抽屉。 */
 async function openDetail(taskId: string) {
-  if (!selectedCycleId.value) return;
+  if (!selectedCycleId.value || !candidates.value.some((c) => c.taskId === taskId && c.canViewDetail !== false)) return;
+  const cycleId = selectedCycleId.value;
+  const request = ++detailRequest;
   drawer.value = { visible: true, loading: true, detail: null };
   try {
-    drawer.value.detail = await calibrationApi.getCandidateDetail(selectedCycleId.value, taskId);
+    const detail = await calibrationApi.getCandidateDetail(cycleId, taskId);
+    if (request !== detailRequest || cycleId !== selectedCycleId.value) return;
+    drawer.value.detail = detail;
   } catch (e) {
+    if (request !== detailRequest || cycleId !== selectedCycleId.value) return;
     ElMessage.error(e instanceof Error ? e.message : '获取详情失败');
     drawer.value.visible = false;
   } finally {
-    drawer.value.loading = false;
+    if (request === detailRequest) drawer.value.loading = false;
   }
 }
 
 /** 确认（单人或批量）。 */
 async function handleConfirm(taskIds: string[]) {
-  if (!selectedCycleId.value || taskIds.length === 0) return;
+  if (!selectedCycleId.value || !areActionable(taskIds) || acting.value) return;
+  const cycleId = selectedCycleId.value;
+  const requestedTaskIds = [...taskIds];
   try {
     await ElMessageBox.confirm(
       `确认后 ${taskIds.length} 人将进入结果审批并通知审批人，是否继续？`,
@@ -245,9 +259,10 @@ async function handleConfirm(taskIds: string[]) {
   } catch {
     return;
   }
+  if (cycleId !== selectedCycleId.value || !areActionable(requestedTaskIds)) return;
   acting.value = true;
   try {
-    const res = await calibrationApi.confirm(selectedCycleId.value, { taskIds });
+    const res = await calibrationApi.confirm(cycleId, { taskIds: requestedTaskIds });
     ElMessage.success(`已确认 ${res.updated} 人，进入结果审批`);
     selectedTaskIds.value = [];
     await loadCandidates();
@@ -260,7 +275,9 @@ async function handleConfirm(taskIds: string[]) {
 
 /** 驳回（单人或批量，原因必填）。 */
 async function handleReject(taskIds: string[]) {
-  if (!selectedCycleId.value || taskIds.length === 0) return;
+  if (!selectedCycleId.value || !areActionable(taskIds) || acting.value) return;
+  const cycleId = selectedCycleId.value;
+  const requestedTaskIds = [...taskIds];
   let reason = '';
   try {
     const input = await ElMessageBox.prompt(
@@ -277,9 +294,10 @@ async function handleReject(taskIds: string[]) {
   } catch {
     return;
   }
+  if (cycleId !== selectedCycleId.value || !areActionable(requestedTaskIds)) return;
   acting.value = true;
   try {
-    const res = await calibrationApi.reject(selectedCycleId.value, { taskIds, reason });
+    const res = await calibrationApi.reject(cycleId, { taskIds: requestedTaskIds, reason });
     ElMessage.success(`已驳回 ${res.updated} 人，退回直属上级重新评定`);
     selectedTaskIds.value = [];
     await loadCandidates();
@@ -288,6 +306,10 @@ async function handleReject(taskIds: string[]) {
   } finally {
     acting.value = false;
   }
+}
+
+function areActionable(taskIds: string[]): boolean {
+  return taskIds.length > 0 && taskIds.every((id) => candidates.value.some((c) => c.taskId === id && canCalibrate(c)));
 }
 
 watch(
@@ -459,13 +481,14 @@ onMounted(async () => {
         </div>
 
         <el-table
+          :key="selectedCycleId"
           v-loading="loading"
           class="app-table"
           :data="filteredCandidates as CalibrationCandidate[]"
           row-key="taskId"
           @selection-change="handleSelectionChange"
         >
-          <el-table-column type="selection" width="50" reserve-selection :selectable="(row: CalibrationCandidate) => row.status === 'hr_calibration'" />
+          <el-table-column type="selection" width="50" :selectable="canCalibrate" />
           <el-table-column prop="employeeName" label="姓名" min-width="100" />
           <el-table-column prop="deptName" label="部门" min-width="130" />
           <el-table-column prop="position" label="岗位" min-width="130" />
@@ -490,8 +513,9 @@ onMounted(async () => {
           </el-table-column>
           <el-table-column label="操作" width="200" fixed="right">
             <template #default="{ row }">
-              <el-button link size="small" @click="openDetail((row as CalibrationCandidate).taskId)">详情</el-button>
-              <template v-if="(row as CalibrationCandidate).status === 'hr_calibration'">
+              <span v-if="row.actionHint" class="action-hint">{{ row.actionHint }}</span>
+              <el-button v-if="row.canViewDetail !== false" link size="small" @click="openDetail((row as CalibrationCandidate).taskId)">详情</el-button>
+              <template v-if="canCalibrate(row as CalibrationCandidate)">
                 <el-button link type="primary" size="small" :loading="acting" @click="handleConfirm([(row as CalibrationCandidate).taskId])">确认</el-button>
                 <el-button link type="danger" size="small" :loading="acting" @click="handleReject([(row as CalibrationCandidate).taskId])">驳回</el-button>
               </template>
@@ -501,7 +525,9 @@ onMounted(async () => {
 
         <div v-if="pendingCandidates.length === 0 && summary" class="submit-hint">
           <el-alert
-            :title="summary.progress.inApproval > 0 || summary.progress.done > 0
+            :title="summary.progress.pending > 0
+              ? '暂无可由你处理的校准任务，其他任务仍待处理'
+              : summary.progress.inApproval > 0 || summary.progress.done > 0
               ? '本周期待校准任务已处理完毕'
               : '本周期尚无待校准任务，等待直属上级完成整周期结果评定'"
             type="info"
@@ -514,7 +540,7 @@ onMounted(async () => {
     <el-drawer
       v-model="drawer.visible"
       :title="drawer.detail ? `${drawer.detail.employeeName} · 校准依据` : '校准依据'"
-      size="560px"
+      size="min(560px, 100vw)"
     >
       <div v-loading="drawer.loading">
         <template v-if="drawer.detail">
@@ -606,6 +632,13 @@ onMounted(async () => {
 </template>
 
 <style scoped>
+.action-hint {
+  display: block;
+  white-space: normal;
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+}
+
 .cycle-info {
   margin-top: 8px;
 }

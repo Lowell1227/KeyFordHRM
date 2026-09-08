@@ -18,6 +18,9 @@ import { FixtureFactory } from '../fixtures/fixture-factory';
 import { FinalGradeService } from '@/final-grade/final-grade.service';
 import { TeamTasksService } from '@/tasks/team-tasks.service';
 import { TeamTaskQueryDto } from '@/tasks/dto/team-task-query.dto';
+import { CalibrationService } from '@/calibration/calibration.service';
+import { ApprovalService } from '@/approval/approval.service';
+import { PublishService } from '@/publish/publish.service';
 
 function signal() {
   let resolve!: () => void;
@@ -34,6 +37,10 @@ describe('Monthly progress references (isolated PostgreSQL)', () => {
   let reviews: PeriodReviewsService;
   let flow: FlowService;
   let manager: AuthUser;
+  let cycleOwner: AuthUser;
+  let approver: AuthUser;
+  let administrator: AuthUser;
+  let publisher: AuthUser;
   let deptId: string;
   let sequence = 0;
   const notifications = { create: jest.fn(async () => undefined) } as unknown as NotificationsService;
@@ -75,11 +82,20 @@ describe('Monthly progress references (isolated PostgreSQL)', () => {
       sysRole: SysRole.manager, deptId, password: randomUUID(),
     });
     manager = { id: user.id, name: user.name, sysRole: user.sysRole, deptId, isAssessorOnly: false, canViewAll: false };
+    [cycleOwner, approver, administrator, publisher] = await Promise.all([
+      createRole('CYCLE-OWNER', SysRole.employee), createRole('APPROVER', SysRole.employee),
+      createRole('ADMIN', SysRole.system_admin), createRole('PUBLISHER', SysRole.hr),
+    ]);
   }, 120000);
 
   afterAll(async () => {
     try { await prisma?.$disconnect(); } finally { await container?.stop(); }
   }, 30000);
+
+  async function createRole(label: string, sysRole: SysRole): Promise<AuthUser> {
+    const user = await factory.createUser({ employeeNo: `MONTHLY-REF-${label}`, name: `Virtual ${label}`, sysRole, deptId, password: randomUUID() });
+    return { id: user.id, name: user.name, sysRole, deptId, isAssessorOnly: false, canViewAll: false };
+  }
 
   async function fixture() {
     sequence += 1;
@@ -128,6 +144,260 @@ describe('Monthly progress references (isolated PostgreSQL)', () => {
     }
     return { employee, cycle, task, indicator, item: version.items[0], periods };
   }
+
+  async function completedMonthlyFixture() {
+    const data = await fixture();
+    const completedAt = new Date();
+    await prisma.assessmentCycle.update({ where: { id: data.cycle.id }, data: { status: 'manager_score', hrOwnerId: cycleOwner.id } });
+    await prisma.assessmentTask.update({ where: { id: data.task.id }, data: { status: 'manager_scoring', deptHeadId: manager.id, approverId: approver.id } });
+    for (const [index, period] of data.periods.entries()) {
+      await prisma.assessmentPeriod.update({ where: { id: period.id }, data: {
+        status: 'completed', employeeSubmittedAt: completedAt, managerSubmittedAt: completedAt, lockedAt: completedAt,
+        selfScoreTotal: 80 + index, managerScoreTotal: [80, 85, 90][index], selfGrade: 'B', managerGrade: 'B',
+      } });
+    }
+    return data;
+  }
+
+  async function taskEvidence(taskId: string) {
+    const [task, periods, records] = await Promise.all([
+      prisma.assessmentTask.findUniqueOrThrow({ where: { id: taskId }, include: { gradeResult: true } }),
+      prisma.assessmentPeriod.findMany({ where: { taskId }, orderBy: { sequence: 'asc' } }),
+      prisma.flowRecord.findMany({ where: { taskId }, orderBy: { createdAt: 'asc' } }),
+    ]);
+    return { task, periods, records };
+  }
+
+  async function expectBlockedBy(backendPid: number) {
+    const deadline = Date.now() + 2500;
+    while (Date.now() < deadline) {
+      const rows = await prisma.$queryRaw<Array<{ count: bigint }>>`
+        SELECT count(*) FROM pg_stat_activity
+        WHERE datname = current_database() AND wait_event_type = 'Lock'
+          AND ${backendPid}::int = ANY(pg_blocking_pids(pid))
+      `;
+      if (Number(rows[0].count) > 0) return;
+      await new Promise(resolve => setTimeout(resolve, 20));
+    }
+    throw new Error('Expected the competing operation to wait on the isolated task lock');
+  }
+
+  it.each(['manager', 'administrator'])('persists both combined-review flow records with the actual %s actor and leaves months unchanged', async (actorRole) => {
+    const data = await completedMonthlyFixture();
+    const before = await taskEvidence(data.task.id);
+    const actor = actorRole === 'manager' ? manager : administrator;
+    const final = new FinalGradeService(prisma, flow, notifications);
+    expect(await final.getFinalGrade(data.task.id, actor)).toMatchObject({ departmentReview: { combined: true, reviewerName: manager.name } });
+    expect(await final.submitFinalGrade(data.task.id, { grade: 'C', comment: '独立周期判断，保留月度依据。' }, actor)).toMatchObject({ status: 'hr_calibration', grade: 'C' });
+    const after = await taskEvidence(data.task.id);
+    expect(after.periods).toEqual(before.periods);
+    expect(after.task).toMatchObject({ status: 'hr_calibration', approvedAt: null, publishedAt: null });
+    expect(after.task.deptReviewedAt).toBeInstanceOf(Date);
+    expect(after.task.managerScoredAt).toBeInstanceOf(Date);
+    expect(after.task.gradeResult).toMatchObject({ rawGrade: 'C', calculatedScore: new Prisma.Decimal(85), hrCalibratedAt: null, approvedAt: null, isPublished: false });
+    expect(after.records).toHaveLength(2);
+    expect(after.records.find(record => record.nodeType === 'manager_score')).toMatchObject({ actorId: actor.id, action: 'submit', extraData: { type: 'final_grade_submitted', grade: 'C', calculatedScore: 85, comment: '独立周期判断，保留月度依据。' } });
+    expect(after.records.find(record => record.nodeType === 'dept_review')).toMatchObject({ actorId: actor.id, action: 'approve', extraData: { type: 'combined_department_review', managerId: manager.id, deptHeadId: manager.id } });
+  });
+
+  it('rolls back both real transitions, the grade and cycle stage when the second audit insert violates its actor foreign key', async () => {
+    const data = await completedMonthlyFixture();
+    const before = await taskEvidence(data.task.id);
+    const beforeCycle = await prisma.assessmentCycle.findUniqueOrThrow({ where: { id: data.cycle.id } });
+    const absentActor = randomUUID();
+    // Inject a real PostgreSQL FK failure only at the second audit insert. Every
+    // preceding task, grade and cycle write runs through the real transaction.
+    const failingPrisma = new Proxy(prisma, {
+      get(target, property) {
+        if (property !== '$transaction') return Reflect.get(target, property);
+        return (handler: (tx: Prisma.TransactionClient) => Promise<unknown>) => target.$transaction(async tx => handler(new Proxy(tx, {
+          get(client, member) {
+            if (member !== 'flowRecord') return Reflect.get(client, member);
+            return new Proxy(client.flowRecord, {
+              get(delegate, action) {
+                if (action !== 'create') return Reflect.get(delegate, action);
+                return (args: Omit<Prisma.FlowRecordCreateArgs, 'data'> & { data: Prisma.FlowRecordUncheckedCreateInput }) => delegate.create({ ...args, data: args.data.nodeType === 'dept_review' ? { ...args.data, actorId: absentActor } : args.data });
+              },
+            });
+          },
+        })));
+      },
+    });
+    await expect(new FinalGradeService(failingPrisma, flow, notifications).submitFinalGrade(data.task.id, { grade: 'C' }, manager)).rejects.toMatchObject({ code: 'P2003' });
+    expect(await taskEvidence(data.task.id)).toEqual(before);
+    expect(await prisma.assessmentCycle.findUniqueOrThrow({ where: { id: data.cycle.id } })).toEqual(beforeCycle);
+  });
+
+  it('serializes concurrent combined submissions so one grade and exactly two flow records commit', async () => {
+    const data = await completedMonthlyFixture();
+    const before = await taskEvidence(data.task.id);
+    const locked = signal();
+    const release = signal();
+    let backendPid: number | undefined;
+    const holdingPrisma = new Proxy(prisma, {
+      get(target, property) {
+        if (property !== '$transaction') return Reflect.get(target, property);
+        return (handler: (tx: Prisma.TransactionClient) => Promise<unknown>) => target.$transaction(async tx => handler(new Proxy(tx, {
+          get(client, member) {
+            if (member !== 'assessmentTask') return Reflect.get(client, member);
+            return new Proxy(client.assessmentTask, {
+              get(delegate, action) {
+                if (action !== 'updateMany') return Reflect.get(delegate, action);
+                return async (args: Prisma.AssessmentTaskUpdateManyArgs) => {
+                  const result = await delegate.updateMany(args);
+                  if (args.where?.id === data.task.id) {
+                    backendPid = (await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`)[0].pid;
+                    locked.resolve();
+                    await release.promise;
+                  }
+                  return result;
+                };
+              },
+            });
+          },
+        })), { timeout: 10000, maxWait: 3000 });
+      },
+    });
+    const winner = new FinalGradeService(holdingPrisma, flow, notifications).submitFinalGrade(data.task.id, { grade: 'B' }, manager);
+    const winnerOutcome = winner.then(value => ({ status: 'fulfilled' as const, value }), reason => { locked.resolve(); return { status: 'rejected' as const, reason }; });
+    let outcomes: Promise<PromiseSettledResult<unknown>[]> | undefined;
+    try {
+      await locked.promise;
+      expect(backendPid).toBeDefined();
+      const loser = new FinalGradeService(prisma, flow, notifications).submitFinalGrade(data.task.id, { grade: 'A' }, manager);
+      outcomes = Promise.allSettled([winner, loser]);
+      await expectBlockedBy(backendPid!);
+      release.resolve();
+      const [submitted, conflicted] = await outcomes;
+      expect(submitted.status).toBe('fulfilled');
+      expect(conflicted.status).toBe('rejected');
+      if (conflicted.status === 'rejected') expect(conflicted.reason).toBeInstanceOf(ConflictException);
+      const after = await taskEvidence(data.task.id);
+      expect(after.records).toHaveLength(2);
+      expect(after.task.gradeResult?.rawGrade).toBe('B');
+      expect(after.task.status).toBe('hr_calibration');
+      expect(after.periods).toEqual(before.periods);
+    } finally {
+      release.resolve();
+      await winnerOutcome;
+      await outcomes;
+    }
+  });
+
+  it('lets an assigned ordinary cycle owner confirm another employee and keeps approval and publication independent', async () => {
+    const data = await completedMonthlyFixture();
+    const final = new FinalGradeService(prisma, flow, notifications);
+    const calibration = new CalibrationService(prisma, flow, notifications);
+    const approval = new ApprovalService(prisma, flow, notifications);
+    const publication = new PublishService(prisma, flow, notifications);
+    await final.submitFinalGrade(data.task.id, { grade: 'C' }, manager);
+    expect(cycleOwner.sysRole).toBe('employee');
+    expect(await calibration.getCandidateDetail(data.cycle.id, data.task.id, cycleOwner)).toMatchObject({ calculatedScore: 85, finalGrade: 'C' });
+    expect((await calibration.getWorkbench(data.cycle.id, cycleOwner)).items[0]).toMatchObject({ taskId: data.task.id, canCalibrate: true, canViewDetail: true });
+    const beforePeriods = (await taskEvidence(data.task.id)).periods;
+    expect(await calibration.confirm(data.cycle.id, { taskIds: [data.task.id] }, cycleOwner)).toMatchObject({ updated: 1 });
+    const calibrated = await taskEvidence(data.task.id);
+    expect(calibrated.task).toMatchObject({ status: 'approval', approvedAt: null, publishedAt: null });
+    expect(calibrated.task.gradeResult).toMatchObject({ rawGrade: 'C', calculatedScore: new Prisma.Decimal(85), hrCalibratorId: cycleOwner.id, approvedAt: null, isPublished: false });
+    expect(calibrated.records.filter(record => record.nodeType === 'hr_calibration')).toHaveLength(1);
+    expect(calibrated.records.some(record => record.nodeType === 'approval' || record.nodeType === 'publish')).toBe(false);
+    await expect(publication.publishCycle(data.cycle.id, { taskIds: [data.task.id], sendDingtalkNotification: false }, publisher)).rejects.toBeInstanceOf(ConflictException);
+    await expect(approval.approveTasks(data.cycle.id, { taskIds: [data.task.id] }, cycleOwner)).rejects.toBeInstanceOf(ConflictException);
+    expect(await approval.approveTasks(data.cycle.id, { taskIds: [data.task.id] }, approver)).toEqual({ approved: 1 });
+    const approved = await taskEvidence(data.task.id);
+    expect(approved.task).toMatchObject({ status: 'approval', publishedAt: null });
+    expect(approved.task.approvedAt).toBeInstanceOf(Date);
+    expect(approved.task.gradeResult).toMatchObject({ approverId: approver.id, isPublished: false });
+    expect(approved.records.some(record => record.nodeType === 'publish')).toBe(false);
+    expect(await publication.publishCycle(data.cycle.id, { taskIds: [data.task.id], sendDingtalkNotification: false }, publisher)).toMatchObject({ published: 1 });
+    const published = await taskEvidence(data.task.id);
+    expect(published.task.status).toBe('published');
+    expect(published.task.gradeResult).toMatchObject({ rawGrade: 'C', isPublished: true });
+    expect(published.records.find(record => record.nodeType === 'publish')).toMatchObject({ actorId: publisher.id, action: 'approve' });
+    expect(published.periods).toEqual(beforePeriods);
+  });
+
+  it('redacts the cycle owner own result and rejects own or mixed-batch decisions without any writes', async () => {
+    const data = await completedMonthlyFixture();
+    await new FinalGradeService(prisma, flow, notifications).submitFinalGrade(data.task.id, { grade: 'B' }, manager);
+    const ownTask = await factory.createTaskInStatus({ cycleId: data.cycle.id, employeeId: cycleOwner.id, managerId: manager.id, deptHeadId: manager.id, approverId: approver.id, deptId, status: 'hr_calibration', hasManagerScore: true, rawGrade: 'A', calculatedScore: 99 });
+    const calibration = new CalibrationService(prisma, flow, notifications);
+    const workbench = await calibration.getWorkbench(data.cycle.id, cycleOwner);
+    expect(workbench.items.find(row => row.taskId === ownTask.id)).toMatchObject({ canCalibrate: false, canViewDetail: false, calculatedScore: null, rawGrade: null });
+    expect(workbench.gradeDistribution.A.count).toBe(0);
+    expect(workbench.gradeDistribution.B.count).toBe(1);
+    expect(await calibration.getGradeDistribution(data.cycle.id, cycleOwner)).toMatchObject({ total: 1, A: { count: 0 }, B: { count: 1 } });
+    const beforeOwn = await taskEvidence(ownTask.id);
+    const beforeOther = await taskEvidence(data.task.id);
+    await expect(calibration.getCandidateDetail(data.cycle.id, ownTask.id, cycleOwner)).rejects.toBeInstanceOf(ForbiddenException);
+    for (const taskIds of [[ownTask.id], [data.task.id, ownTask.id]]) {
+      await expect(calibration.confirm(data.cycle.id, { taskIds }, cycleOwner)).rejects.toBeInstanceOf(ForbiddenException);
+      await expect(calibration.reject(data.cycle.id, { taskIds, reason: '测试边界' }, cycleOwner)).rejects.toBeInstanceOf(ForbiddenException);
+    }
+    expect(await taskEvidence(ownTask.id)).toEqual(beforeOwn);
+    expect(await taskEvidence(data.task.id)).toEqual(beforeOther);
+  });
+
+  it('rejects every calibration read and write for an unrelated cycle even when the viewer created it', async () => {
+    const data = await completedMonthlyFixture();
+    await prisma.assessmentCycle.update({ where: { id: data.cycle.id }, data: { createdBy: cycleOwner.id, hrOwnerId: manager.id } });
+    await new FinalGradeService(prisma, flow, notifications).submitFinalGrade(data.task.id, { grade: 'B' }, manager);
+    const calibration = new CalibrationService(prisma, flow, notifications);
+    const before = await taskEvidence(data.task.id);
+    expect((await calibration.listCycles(cycleOwner)).some(cycle => cycle.id === data.cycle.id)).toBe(false);
+    await expect(calibration.getWorkbench(data.cycle.id, cycleOwner)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(calibration.getGradeDistribution(data.cycle.id, cycleOwner)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(calibration.getCandidateDetail(data.cycle.id, data.task.id, cycleOwner)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(calibration.confirm(data.cycle.id, { taskIds: [data.task.id] }, cycleOwner)).rejects.toBeInstanceOf(ForbiddenException);
+    await expect(calibration.reject(data.cycle.id, { taskIds: [data.task.id], reason: '无关周期不可退回' }, cycleOwner)).rejects.toBeInstanceOf(ForbiddenException);
+    expect(await taskEvidence(data.task.id)).toEqual(before);
+  });
+
+  it('lets the cycle owner return another employee to re-evaluation while preserving monthly scores and the submitted grade', async () => {
+    const data = await completedMonthlyFixture();
+    await new FinalGradeService(prisma, flow, notifications).submitFinalGrade(data.task.id, { grade: 'C', comment: '需要补充周期依据' }, manager);
+    const before = await taskEvidence(data.task.id);
+    const calibration = new CalibrationService(prisma, flow, notifications);
+    expect(await calibration.reject(data.cycle.id, { taskIds: [data.task.id], reason: '请补充周期评语' }, cycleOwner)).toMatchObject({ updated: 1 });
+    const after = await taskEvidence(data.task.id);
+    expect(after.task.status).toBe('manager_scoring');
+    expect(after.task.gradeResult).toEqual(before.task.gradeResult);
+    expect(after.periods).toEqual(before.periods);
+    expect(after.records.find(record => record.nodeType === 'hr_calibration')).toMatchObject({ actorId: cycleOwner.id, action: 'reject', comment: '请补充周期评语' });
+    expect(await new FinalGradeService(prisma, flow, notifications).getFinalGrade(data.task.id, manager)).toMatchObject({ currentGrade: 'C', comment: '需要补充周期依据', canSubmit: true });
+  });
+
+  it('revokes a waiting calibration request when the cycle owner changes before its task lock is acquired', async () => {
+    const data = await completedMonthlyFixture();
+    await new FinalGradeService(prisma, flow, notifications).submitFinalGrade(data.task.id, { grade: 'B' }, manager);
+    const before = await taskEvidence(data.task.id);
+    const locked = signal();
+    const release = signal();
+    let backendPid: number | undefined;
+    const blocker = prisma.$transaction(async tx => {
+      await tx.$queryRaw`SELECT "id" FROM "assessment_tasks" WHERE "id" = ${data.task.id}::uuid FOR NO KEY UPDATE`;
+      backendPid = (await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`)[0].pid;
+      locked.resolve();
+      await release.promise;
+    }, { timeout: 10000 });
+    const blockerOutcome = blocker.catch(reason => { locked.resolve(); throw reason; });
+    let confirmationOutcome: Promise<unknown> | undefined;
+    try {
+      await locked.promise;
+      expect(backendPid).toBeDefined();
+      const confirmation = new CalibrationService(prisma, flow, notifications).confirm(data.cycle.id, { taskIds: [data.task.id] }, cycleOwner);
+      confirmationOutcome = confirmation.then(value => ({ value }), reason => ({ reason }));
+      await expectBlockedBy(backendPid!);
+      await prisma.assessmentCycle.update({ where: { id: data.cycle.id }, data: { hrOwnerId: manager.id } });
+      release.resolve();
+      await expect(confirmation).rejects.toBeInstanceOf(ForbiddenException);
+      expect(await taskEvidence(data.task.id)).toEqual(before);
+    } finally {
+      release.resolve();
+      await blockerOutcome;
+      await confirmationOutcome;
+    }
+  });
 
   it('counts cycle grading as pending until submitted and persists comments through a returned re-evaluation', async () => {
     const data = await fixture();

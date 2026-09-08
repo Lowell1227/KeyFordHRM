@@ -325,6 +325,18 @@ describe('TasksService', () => {
   }
 
   describe('findMine', () => {
+    it.each(['findMine', 'findAll'] as const)('masks the employee unpublished result in %s while retaining other-employee and published results', async method => {
+      const base = buildFullTask('hr_calibration');
+      prisma.assessmentTask.count.mockResolvedValue(3);
+      prisma.assessmentTask.findMany.mockResolvedValue([
+        base, { ...base, id: 'other-task', employeeId: 'other' },
+        { ...base, id: 'published-task', status: 'published' },
+      ]);
+      const result = await service[method]({ page: 1, pageSize: 20 } as any, makeViewer({ id: 'emp-1', sysRole: SysRole.hr }));
+      expect(result.items[0]).toMatchObject({ totalScore: null, rawGrade: null });
+      expect(result.items[1]).toMatchObject({ totalScore: 85, rawGrade: 'B' });
+      expect(result.items[2]).toMatchObject({ totalScore: 85, rawGrade: 'B' });
+    });
     it('returns workflow-v2 period submission state for employee task status derivation', async () => {
       const openAt = new Date('2026-09-01T01:00:00.000Z');
       prisma.assessmentTask.count.mockResolvedValue(1);
@@ -365,6 +377,19 @@ describe('TasksService', () => {
   });
 
   describe('findOne', () => {
+    it('masks result-bearing workflow metadata before publication, even for an HR employee', async () => {
+      const task: any = buildFullTask('hr_calibration');
+      task.flowRecords = ['manager_score', 'dept_review', 'hr_calibration', 'approval'].map(nodeType => ({
+        id: nodeType, nodeType, action: 'submit', actorId: 'mgr-1', actor: { name: '主管' }, createdAt: new Date(),
+        comment: '最终等级 A（参考均分 93.17）',
+        extraData: { type: 'final_grade_submitted', grade: 'A', calculatedScore: 93.17, comment: '私密周期评语' },
+      }));
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+      const result = await service.findOne('task-1', makeViewer({ id: 'emp-1', sysRole: SysRole.hr }));
+      expect(result.flowRecords).toHaveLength(4);
+      for (const record of result.flowRecords) expect(record).toMatchObject({ comment: null, extraData: null });
+      expect(JSON.stringify(result)).not.toContain('93.17');
+    });
     it.each([
       ['manager_scoring', true, 'emp-1', false],
       ['published', false, 'emp-1', false],
