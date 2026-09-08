@@ -66,6 +66,17 @@ export const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/department-review',
+    name: 'DepartmentReview',
+    component: () => import('@/views/task/DepartmentReviewListView.vue'),
+    meta: {
+      requiresAuth: true,
+      title: '部门复核',
+      capability: 'canReviewDepartment',
+      navigation: { module: 'performance', label: '部门复核', order: 25, group: 'performance', groupLabel: '绩效运营' },
+    },
+  },
+  {
     path: '/appeals',
     name: 'Appeals',
     component: () => import('@/views/appeals/AppealsView.vue'),

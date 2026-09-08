@@ -6,6 +6,7 @@ import { NotificationsService, TaskReminderNodeType } from '@/notifications/noti
 import { LaunchService } from '@/cycles/launch.service';
 import { AuthUser } from '@/common/types/auth.types';
 import { EmployeeEffectiveDateService } from '@/employee-archives/employee-effective-date.service';
+import { FlowService } from '@/tasks/flow.service';
 import {
   monthlyEmployeeReminderKind,
   monthlyReminderKind,
@@ -67,6 +68,7 @@ export class SchedulerService {
     private readonly prisma: PrismaService,
     private readonly launchService: LaunchService,
     private readonly employeeEffectiveDates: EmployeeEffectiveDateService,
+    private readonly flow: FlowService,
   ) {}
 
   /** 每天 00:10 把已审核、当天生效的任职记录投影到员工当前状态。 */
@@ -319,20 +321,25 @@ export class SchedulerService {
     });
 
     for (const period of periods) {
-      const claimed = await this.prisma.assessmentPeriod.updateMany({
-        where: {
-          id: period.id,
-          status: 'unopened',
-          indicatorVersionId: { not: null },
-        },
-        data: { status: 'self_eval', openedAt: now },
-      });
-      if (claimed.count !== 1) continue;
+      const opened = await this.prisma.$transaction(async (tx) => {
+        const claimed = await tx.assessmentPeriod.updateMany({
+          where: {
+            id: period.id,
+            status: 'unopened',
+            indicatorVersionId: { not: null },
+          },
+          data: { status: 'self_eval', openedAt: now },
+        });
+        if (claimed.count !== 1) return false;
 
-      await this.prisma.assessmentTask.updateMany({
-        where: { id: period.taskId, status: 'goal_confirmed' },
-        data: { status: 'self_eval' },
+        await tx.assessmentTask.updateMany({
+          where: { id: period.taskId, status: 'goal_confirmed' },
+          data: { status: 'self_eval' },
+        });
+        await this.flow.syncCycleStage(tx, period.task.cycleId);
+        return true;
       });
+      if (!opened) continue;
       if (period.task.cycle.notificationMode !== 'off') {
         await this.notificationsService.create({
           userId: period.task.employeeId,

@@ -108,7 +108,7 @@ export function useTaskFlow(options: UseTaskFlowOptions = {}) {
       canConfirmIndicator: !exempt && s === 'indicator_confirming' && isSelf,
       canSelfEval: permission.canEditSelfEval.value,
       canManagerScore: permission.canEditManagerScore.value,
-      canDeptReview: !exempt && s === 'dept_review' && (isDeptHead || isAdmin),
+      canDeptReview: !exempt && s === 'dept_review' && isDeptHead && !isSelf,
       canHrCalibrate: !exempt && s === 'hr_calibration' && isAdmin,
       canApprove: !exempt && s === 'approval' && (isAdmin || task.value?.approverId === task.value?.employeeId),
       canPublish: !exempt && s === 'approval' && isAdmin,

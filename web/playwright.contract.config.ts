@@ -32,6 +32,9 @@ export default defineConfig({
     '31-indicator-visibility-and-map.spec.ts',
     '32-personnel-master-maintenance.spec.ts',
     '33-auth-session-transition.spec.ts',
+    '34-cycle-participant-selection.spec.ts',
+    '35-department-review-workflow.spec.ts',
+    '40-approval-pending.spec.ts',
   ],
   workers: 1,
 });

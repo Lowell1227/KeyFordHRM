@@ -506,7 +506,11 @@ export class NotificationsService {
     const statuses = this.nodeTypeToTaskStatuses(nodeType);
 
     const tasks = await this.prisma.assessmentTask.findMany({
-      where: { cycleId, status: { in: statuses } },
+      where: {
+        cycleId,
+        status: { in: statuses },
+        ...(nodeType === 'approver' ? { approvedAt: null } : {}),
+      },
       select: {
         id: true,
         cycleId: true,

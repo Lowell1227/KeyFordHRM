@@ -180,13 +180,15 @@ onMounted(async () => {
 });
 
 function onSelectionChange(rows: ApprovalTaskView[]) {
-  selectedTaskIds.value = rows.map((r) => r.id);
+  selectedTaskIds.value = rows.filter(canOperateTask).map((r) => r.id);
 }
 
 function canOperateTask(task: unknown): boolean {
   const approvalTask = task as ApprovalTaskView;
   return Boolean(
     auth.user
+    && approvalTask.status === 'approval'
+    && !approvalTask.approvedAt
     && canOperatePerformanceApprovalTask(auth.user, approvalTask.approverId),
   );
 }
@@ -446,7 +448,6 @@ function handleBatchReject() {
             v-if="canOperateApproval"
             type="selection"
             width="50"
-            reserve-selection
             :selectable="isTaskSelectable"
           />
           <el-table-column prop="employeeName" label="员工" min-width="120" />
@@ -464,7 +465,9 @@ function handleBatchReject() {
           </el-table-column>
           <el-table-column label="状态" width="140">
             <template #default="{ row }">
-              <el-tag :type="statusType(row.status)" size="small">{{ statusLabel(row.status) }}</el-tag>
+              <el-tag :type="row.approvedAt ? 'success' : statusType(row.status)" size="small">
+                {{ row.approvedAt ? '已通过，待公示' : statusLabel(row.status) }}
+              </el-tag>
             </template>
           </el-table-column>
           <el-table-column v-if="canOperateApproval" label="操作" width="160" fixed="right">

@@ -75,6 +75,8 @@ export interface TaskDetail extends TaskListItem {
   workflowVersion: number;
   employeeNo: string | null;
   managerName: string | null;
+  deptHeadId: string | null;
+  deptHeadName: string | null;
   periods: Array<{
     id: string;
     periodKey: string;
@@ -301,6 +303,31 @@ export class TasksService {
     }));
 
     return paginated(items, total, dto);
+  }
+
+  /** GET /tasks/department-review — 周期快照中本人负责的待复核任务。 */
+  async findDepartmentReviews(dto: TaskQueryDto, viewer: AuthUser): Promise<Paginated<TaskListItem>> {
+    const where: Prisma.AssessmentTaskWhereInput = {
+      deptHeadId: viewer.id, employeeId: { not: viewer.id }, status: 'dept_review', isExempt: false,
+      ...(dto.cycleId ? { cycleId: dto.cycleId } : {}),
+      ...(dto.keyword ? { employee: { name: { contains: dto.keyword, mode: 'insensitive' as const } } } : {}),
+    };
+    const [total, tasks] = await Promise.all([
+      this.prisma.assessmentTask.count({ where }),
+      this.prisma.assessmentTask.findMany({
+        where, skip: dto.skip, take: dto.take,
+        include: { employee: { select: { name: true } }, cycle: { select: { name: true } }, dept: { select: { name: true } }, gradeResult: { select: { calculatedScore: true, rawGrade: true } } },
+        orderBy: [{ cycle: { startDate: 'desc' } }, { updatedAt: 'desc' }],
+      }),
+    ]);
+    return paginated(tasks.map(t => ({
+      id: t.id, cycleId: t.cycleId, cycleName: t.cycle.name,
+      employeeId: t.employeeId, employeeName: t.employee.name,
+      deptId: t.deptId, deptName: t.dept?.name ?? null, managerId: t.managerId,
+      status: t.status, isExempt: t.isExempt, exemptReason: t.exemptReason,
+      totalScore: t.gradeResult?.calculatedScore?.toNumber() ?? null,
+      rawGrade: t.gradeResult?.rawGrade ?? null, updatedAt: t.updatedAt,
+    })), total, dto);
   }
 
   /** GET /tasks/mine — 仅查看当前用户自己的考核任务。 */
@@ -1852,6 +1879,8 @@ export class TasksService {
       deptName: task.dept?.name ?? null,
       managerId: task.managerId,
       managerName: task.manager?.name ?? null,
+      deptHeadId: task.deptHeadId ?? null,
+      deptHeadName: task.deptHead?.name ?? null,
       workflowVersion: task.cycle?.workflowVersion ?? 1,
       periods: (task.periods ?? []).map((period: any) => ({
         id: period.id,
@@ -2067,7 +2096,9 @@ export class TasksService {
 
     return {
       stage: this.resolveBusinessStage(task.status),
-      statusLabel: statusLabels[task.status as TaskStatus] ?? task.status,
+      statusLabel: task.status === 'approval' && task.approvedAt
+        ? '审批已通过，待公示'
+        : statusLabels[task.status as TaskStatus] ?? task.status,
       currentHandler: target
         ? {
             id: target.handlerId,
@@ -2085,8 +2116,10 @@ export class TasksService {
   private resolveReminderTarget(
     task: Pick<AssessmentTask, 'status' | 'employeeId' | 'managerId' | 'deptHeadId' | 'approverId'> & {
       cycle?: { hrOwnerId?: string | null };
+      approvedAt?: Date | null;
     },
   ): { nodeType: TaskReminderNodeType; handlerId: string } | null {
+    if (task.status === 'approval' && task.approvedAt) return null;
     const mapping: Partial<Record<TaskStatus, TaskReminderNodeType>> = {
       indicator_drafting: 'employee',
       indicator_reviewing: 'manager',
@@ -2145,6 +2178,7 @@ export class TasksService {
 
   private resolveCurrentDeadline(task: any): Date | null {
     const cycle = task.cycle ?? {};
+    if (task.status === 'approval' && task.approvedAt) return cycle.deadlinePublish ?? null;
     const deadlines: Partial<Record<TaskStatus, Date | null | undefined>> = {
       indicator_drafting: cycle.deadlineIndicatorSetting,
       indicator_reviewing: cycle.deadlineIndicatorSetting,

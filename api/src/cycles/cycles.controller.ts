@@ -16,6 +16,7 @@ import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
 import { CycleScheduleService } from './cycle-schedule.service';
 import { PreviewCycleScheduleDto } from './dto/preview-cycle-schedule.dto';
 import { TrackingContextQueryDto } from './dto/tracking-context-query.dto';
+import { ParticipantCandidateQueryDto } from './dto/participant-candidate-query.dto';
 
 // 管理员可以查看全量周期；其他角色只能读取已开放周期，避免草稿和预约信息泄露。
 @Controller('cycles')
@@ -55,6 +56,13 @@ export class CyclesController {
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.cyclesService.findTrackingContexts(query.ownerId, viewer);
+  }
+
+  @Get('participant-candidates')
+  @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('cycle_plan_edit')
+  participantCandidates(@Query() query: ParticipantCandidateQueryDto) {
+    return this.cyclesService.findParticipantCandidates(query);
   }
 
   @Get(':id')

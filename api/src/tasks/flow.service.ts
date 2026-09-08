@@ -107,8 +107,8 @@ export class FlowService {
   /**
    * 周期阶段跟随任务状态自动推进/回退。
    *
-   * 只处理进行中的周期（self_eval/manager_score/hr_calibration/approval），
-   * 公示及之后由 publish/scheduler 自己管理，draft/indicator_setting 阶段不介入。
+   * 只处理已发起且未公示的周期；公示及之后由 publish/scheduler 自己管理。
+   * 目标期必须没有尚未完成的目标任务，且已有实际评价任务，才可进入评价阶段。
    *
    * 规则（按优先级取第一个命中）：
    * - 有任务处于 dept_review / hr_calibration → 周期 hr_calibration
@@ -120,11 +120,15 @@ export class FlowService {
     tx: Prisma.TransactionClient,
     cycleId: string,
   ): Promise<void> {
-    const cycle = await tx.assessmentCycle.findUnique({
-      where: { id: cycleId },
-      select: { status: true },
-    });
-    const guard: CycleStatus[] = ['self_eval', 'manager_score', 'hr_calibration', 'approval'];
+    // Serialize aggregation for concurrent task submissions. Read the task counts only
+    // after the preceding transaction commits, including when no stage write is needed.
+    // NO KEY UPDATE remains compatible with cycle FK checks from new flow records.
+    const [cycle] = await tx.$queryRaw<Array<{ status: CycleStatus }>>`
+      SELECT "status" FROM "assessment_cycles"
+      WHERE "id" = ${cycleId}::uuid
+      FOR NO KEY UPDATE
+    `;
+    const guard: CycleStatus[] = ['indicator_setting', 'self_eval', 'manager_score', 'hr_calibration', 'approval'];
     if (!cycle || !guard.includes(cycle.status)) return;
 
     const agg = await tx.assessmentTask.groupBy({
@@ -134,13 +138,22 @@ export class FlowService {
     });
     const has = (...statuses: TaskStatus[]) => agg.some((g) => statuses.includes(g.status));
 
+    if (cycle.status === 'indicator_setting' && has(
+      'pending', 'indicator_drafting', 'indicator_reviewing', 'indicator_setting', 'indicator_confirming',
+    )) return;
+
     let target: CycleStatus | null = null;
     if (has('dept_review', 'hr_calibration')) target = 'hr_calibration';
     else if (has('approval')) target = 'approval';
     else if (has('manager_scoring')) target = 'manager_score';
+    else if (cycle.status === 'indicator_setting' && has('self_eval')) target = 'self_eval';
 
     if (target && target !== cycle.status) {
-      await tx.assessmentCycle.update({ where: { id: cycleId }, data: { status: target } });
+      // Compare the observed stage so a concurrent publish/close cannot be overwritten.
+      await tx.assessmentCycle.updateMany({
+        where: { id: cycleId, status: cycle.status },
+        data: { status: target },
+      });
     }
   }
 

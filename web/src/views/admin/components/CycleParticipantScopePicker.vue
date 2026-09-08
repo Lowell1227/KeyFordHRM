@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref, watch } from 'vue';
-import UserSelect from '@/components/common/UserSelect.vue';
+import CycleParticipantSelect from './CycleParticipantSelect.vue';
 import type { Department } from '@/types/api.types';
 
 export type ParticipantScopeMode = 'all' | 'custom';
@@ -124,10 +124,10 @@ function selectedDepartmentIds(
   excludedDepartmentIds: string[],
 ) {
   if (scope === 'custom') {
-    const excluded = new Set(expandDepartmentSelection(excludedDepartmentIds));
-    return expandDepartmentSelection(departmentIds).filter((id) => !excluded.has(id));
+    const excluded = new Set(excludedDepartmentIds);
+    return uniqueIds(departmentIds).filter((id) => departmentById.value.has(id) && !excluded.has(id));
   }
-  const excluded = new Set(expandDepartmentSelection(excludedDepartmentIds));
+  const excluded = new Set(excludedDepartmentIds);
   return selectableDepartmentIds.value.filter((id) => !excluded.has(id));
 }
 
@@ -170,6 +170,18 @@ function syncDepartmentDraft() {
   );
 }
 
+function checkDepartment(department: DepartmentTreeNode, checked: { checkedKeys: Array<string | number> }) {
+  // A parent click selects its subtree; selecting every child never selects the parent's direct members.
+  const selected = new Set(departmentDraft.value);
+  const shouldSelect = checked.checkedKeys.map(String).includes(department.id);
+  expandDepartmentSelection([department.id]).forEach((id) => {
+    if (shouldSelect) selected.add(id);
+    else selected.delete(id);
+  });
+  departmentDraft.value = [...selected];
+  departmentTreeRef.value?.setCheckedKeys(departmentDraft.value);
+}
+
 function updateUserDraft(value: string | string[] | undefined) {
   userDraft.value = Array.isArray(value) ? value : value ? [value] : [];
 }
@@ -193,14 +205,12 @@ function clearDepartments() {
 
 function applySelection() {
   syncDepartmentDraft();
-  const expanded = expandDepartmentSelection(departmentDraft.value);
+  const selected = [...departmentDraft.value];
   const allSelected = selectableDepartmentIds.value.length > 0
-    && selectableDepartmentIds.value.every((id) => expanded.includes(id));
+    && selectableDepartmentIds.value.every((id) => selected.includes(id));
   emit('update:scope', allSelected && userDraft.value.length === 0 ? 'all' : 'custom');
-  emit('update:departmentIds', allSelected && userDraft.value.length === 0 ? [] : expanded);
+  emit('update:departmentIds', allSelected && userDraft.value.length === 0 ? [] : selected);
   emit('update:userIds', [...userDraft.value]);
-  emit('update:excludedDepartmentIds', []);
-  emit('update:excludedUserIds', []);
   emit('change');
   drawerVisible.value = false;
 }
@@ -265,9 +275,10 @@ watch(activeTab, async (value) => {
               :props="treeProps"
               node-key="id"
               show-checkbox
+              check-strictly
               default-expand-all
               :filter-node-method="departmentMatches"
-              @check="syncDepartmentDraft"
+              @check="checkDepartment"
             />
           </div>
         </el-tab-pane>
@@ -275,9 +286,8 @@ watch(activeTab, async (value) => {
         <el-tab-pane label="按人员" name="users">
           <div class="people-picker-panel" data-testid="cycle-scope-user-select">
             <p>可补充未包含在所选部门内的员工。</p>
-            <UserSelect
+            <CycleParticipantSelect
               :model-value="userDraft"
-              multiple
               placeholder="按姓名或工号搜索并选择人员"
               @update:model-value="updateUserDraft"
             />

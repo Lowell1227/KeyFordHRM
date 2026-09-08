@@ -4,6 +4,7 @@ import { NotificationsService } from '@/notifications/notifications.service';
 import { PrismaService } from '@/prisma/prisma.service';
 import { LaunchService } from '@/cycles/launch.service';
 import { EmployeeEffectiveDateService } from '@/employee-archives/employee-effective-date.service';
+import { FlowService } from '@/tasks/flow.service';
 
 describe('SchedulerService', () => {
   let service: SchedulerService;
@@ -18,6 +19,7 @@ describe('SchedulerService', () => {
     } as unknown as jest.Mocked<NotificationsService>;
 
     prisma = {
+      $queryRaw: jest.fn().mockResolvedValue([{ status: 'indicator_setting' }]),
       systemConfig: { findUnique: jest.fn() },
       assessmentCycle: {
         findMany: jest.fn(),
@@ -26,6 +28,7 @@ describe('SchedulerService', () => {
       },
       assessmentTask: {
         findMany: jest.fn(),
+        groupBy: jest.fn().mockResolvedValue([{ status: 'self_eval', _count: { _all: 1 } }]),
         update: jest.fn(),
         updateMany: jest.fn(),
       },
@@ -41,6 +44,7 @@ describe('SchedulerService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         SchedulerService,
+        FlowService,
         { provide: NotificationsService, useValue: notificationsMock },
         { provide: PrismaService, useValue: prisma },
         { provide: LaunchService, useValue: launchService },
@@ -485,6 +489,32 @@ describe('SchedulerService', () => {
       });
       expect(notificationsService.create).not.toHaveBeenCalled();
       jest.useRealTimers();
+    });
+
+    it('synchronizes the cycle to self evaluation when its monthly reviews open', async () => {
+      prisma.assessmentPeriod.findMany.mockResolvedValue([{
+        id: 'period-1', taskId: 'task-1', periodKey: '2027-01',
+        task: { cycleId: 'cycle-1', employeeId: 'emp-1', cycle: { notificationMode: 'off' } },
+      }]);
+      prisma.assessmentPeriod.updateMany.mockResolvedValue({ count: 1 });
+      prisma.assessmentCycle.updateMany.mockResolvedValue({ count: 1 });
+      await service.runPeriodSelfEvalOpenings();
+      expect(prisma.assessmentCycle.updateMany).toHaveBeenCalledWith({
+        where: { id: 'cycle-1', status: 'indicator_setting' }, data: { status: 'self_eval' },
+      });
+      expect(prisma.$transaction).toHaveBeenCalled();
+    });
+
+    it('does not update tasks or notify when another worker already opened the month', async () => {
+      prisma.assessmentPeriod.findMany.mockResolvedValue([{
+        id: 'period-1', taskId: 'task-1', periodKey: '2027-01',
+        task: { cycleId: 'cycle-1', employeeId: 'emp-1', cycle: { notificationMode: 'in_app' } },
+      }]);
+      prisma.assessmentPeriod.updateMany.mockResolvedValue({ count: 0 });
+      await service.runPeriodSelfEvalOpenings();
+      expect(prisma.assessmentTask.updateMany).not.toHaveBeenCalled();
+      expect(prisma.assessmentCycle.updateMany).not.toHaveBeenCalled();
+      expect(notificationsService.create).not.toHaveBeenCalled();
     });
 
     it('notifies the assigned HR owner when an automatic opening becomes blocked', async () => {

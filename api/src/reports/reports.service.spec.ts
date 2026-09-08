@@ -391,6 +391,22 @@ describe('ReportsService', () => {
   });
 
   describe('getCycleProgress', () => {
+    it('approved results awaiting publication are not overdue approval work', async () => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle({ deadlineApproval: new Date('2000-01-01') }));
+      prisma.assessmentTask.groupBy.mockResolvedValue([
+        { status: 'approval', _count: { status: 2 } },
+      ]);
+      prisma.assessmentTask.findMany.mockResolvedValue([
+        { status: 'approval', approvedAt: null },
+        { status: 'approval', approvedAt: new Date('2000-01-02') },
+      ]);
+
+      const result = await service.getCycleProgress('cycle-1');
+
+      expect(result.overdueByNode.find((node) => node.node === 'approval')?.overdueCount).toBe(1);
+      expect(result.byStatus.approval).toBe(2);
+    });
+
     it('按状态计数并计算超期节点', async () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(
         makeCycle({

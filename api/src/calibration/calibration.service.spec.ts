@@ -117,6 +117,7 @@ describe('CalibrationService（确认/驳回）', () => {
 
   beforeEach(async () => {
     transactionClient = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       assessmentTask: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       gradeResult: { updateMany: jest.fn() },
     };
@@ -161,6 +162,9 @@ describe('CalibrationService（确认/驳回）', () => {
       expect.objectContaining({ task, action: 'submit', targetStatus: 'approval' }),
     );
     expect(result.updated).toBe(1);
+    expect(transactionClient.$queryRaw).toHaveBeenCalled();
+    expect(transactionClient.$queryRaw.mock.invocationCallOrder[0])
+      .toBeLessThan(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0]);
   });
 
   it('确认：任务不在待校准状态时抛 4001', async () => {
@@ -191,6 +195,9 @@ describe('CalibrationService（确认/驳回）', () => {
       }),
     );
     expect(result.updated).toBe(1);
+    expect(transactionClient.$queryRaw).toHaveBeenCalled();
+    expect(transactionClient.$queryRaw.mock.invocationCallOrder[0])
+      .toBeLessThan(transactionClient.assessmentTask.updateMany.mock.invocationCallOrder[0]);
   });
 
   it('驳回：原因为空时抛 4001', async () => {

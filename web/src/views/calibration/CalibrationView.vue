@@ -14,6 +14,8 @@ import type { PerfGrade, TaskStatus } from '@/types/enums';
 import { GRADE_LABELS } from '@/utils/grade';
 import { TASK_STATUS_META } from '@/types/enums';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
+import { formatDate } from '@/utils/date';
+import { cycleBusinessState } from '@/views/admin/cycle-management';
 
 type SortField = 'calculatedScore' | 'rawGrade' | 'employeeName';
 type SortOrder = 'asc' | 'desc';
@@ -349,8 +351,8 @@ onMounted(async () => {
       <div v-if="selectedCycle" class="cycle-info">
         <el-descriptions :column="4" size="small" border>
           <el-descriptions-item label="周期">{{ selectedCycle.name }}</el-descriptions-item>
-          <el-descriptions-item label="状态">{{ selectedCycle.status }}</el-descriptions-item>
-          <el-descriptions-item label="校准截止">{{ selectedCycle.deadlineHrCalibration ?? '未设置' }}</el-descriptions-item>
+          <el-descriptions-item label="状态">{{ cycleBusinessState(selectedCycle).label }}</el-descriptions-item>
+          <el-descriptions-item label="校准截止">{{ selectedCycle.deadlineHrCalibration ? formatDate(selectedCycle.deadlineHrCalibration) : '未设置' }}</el-descriptions-item>
           <el-descriptions-item label="参与人数">{{ summary?.totalActive ?? candidates.length }}</el-descriptions-item>
         </el-descriptions>
         <div v-if="summary" class="progress-row">

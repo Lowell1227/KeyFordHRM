@@ -76,6 +76,10 @@ export function createTasksApi(client: TasksApiClient) {
       return apiGet("/tasks", query as Record<string, unknown>);
     },
 
+    findDepartmentReviews(query?: Pick<TaskQuery, 'cycleId' | 'keyword' | 'page' | 'pageSize'>): Promise<Paginated<TaskListItem>> {
+      return apiGet('/tasks/department-review', query as Record<string, unknown>);
+    },
+
     /** GET /tasks/mine — 我的任务列表 */
     findMine(
       query?: Omit<TaskQuery, "employeeId">,

@@ -133,7 +133,7 @@ export class ReportsService {
 
     const tasks = await this.prisma.assessmentTask.findMany({
       where: { cycleId },
-      select: { status: true },
+      select: { status: true, approvedAt: true },
     });
 
     const overdueByNode = this.buildOverdueByNode(tasks, cycle);
@@ -449,7 +449,7 @@ export class ReportsService {
   }
 
   private buildOverdueByNode(
-    tasks: Array<{ status: TaskStatus }>,
+    tasks: Array<{ status: TaskStatus; approvedAt: Date | null }>,
     cycle: Pick<
       AssessmentCycle,
       | 'deadlineIndicatorSetting'
@@ -510,7 +510,9 @@ export class ReportsService {
     return nodes.map(({ node, statuses, deadlineFor }) => ({
       node,
       overdueCount: tasks.filter(
-        (t) => statuses.includes(t.status) && isOverdue(deadlineFor(t.status)),
+        (t) => statuses.includes(t.status)
+          && !(t.status === 'approval' && t.approvedAt)
+          && isOverdue(deadlineFor(t.status)),
       ).length,
     }));
   }

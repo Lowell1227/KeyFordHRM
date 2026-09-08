@@ -72,7 +72,8 @@ export class FinalGradeService {
   /** GET /tasks/:id/final-grade — 评定页数据。 */
   async getFinalGrade(taskId: string, viewer: AuthUser): Promise<FinalGradeDetail> {
     const task = await this.getTaskOrThrow(taskId);
-    this.assertManager(task, viewer);
+    // 复核人可读取评定依据，写入仍仅允许绩效直属上级/系统管理员。
+    if (task.deptHeadId !== viewer.id || task.employeeId === viewer.id) this.assertManager(task, viewer);
 
     const latestReject = await this.prisma.flowRecord.findFirst({
       where: {
@@ -116,7 +117,8 @@ export class FinalGradeService {
       calculatedScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
       currentGrade: task.gradeResult?.rawGrade ?? null,
       allPeriodsComplete,
-      canSubmit: allPeriodsComplete && task.status === TaskStatus.manager_scoring,
+      canSubmit: allPeriodsComplete && task.status === TaskStatus.manager_scoring
+        && (task.managerId === viewer.id || viewer.sysRole === 'system_admin'),
       latestReject: latestReject
         ? {
             nodeType: latestReject.nodeType,

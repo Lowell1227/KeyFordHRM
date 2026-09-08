@@ -47,6 +47,7 @@ export class ApprovalService {
     const where: Prisma.AssessmentTaskWhereInput = {
       cycleId,
       status: 'approval',
+      approvedAt: null,
       isExempt: false,
     };
 
@@ -80,10 +81,10 @@ export class ApprovalService {
     });
 
     const ownPending = allTasks.filter(
-      (t) => t.status === 'approval' && t.approverId === viewer.id,
+      (t) => t.status === 'approval' && !t.approvedAt && t.approverId === viewer.id,
     ).length;
     const ownTotal = allTasks.filter((t) => t.approverId === viewer.id).length;
-    const cyclePending = allTasks.filter((t) => t.status === 'approval').length;
+    const cyclePending = allTasks.filter((t) => t.status === 'approval' && !t.approvedAt).length;
 
     // 校准环节退回记录（HR 驳回 + 部门复核退回），供审批人了解重评背景
     const rejectRecords = await this.prisma.flowRecord.findMany({
@@ -116,7 +117,7 @@ export class ApprovalService {
     };
   }
 
-  /** POST /cycles/:id/approval — 批量审批（只写 GradeResult，不改 status）。 */
+  /** POST /cycles/:id/approval — 批量审批，保留 approval 状态供 HR 公示。 */
   async approveTasks(
     cycleId: string,
     dto: BulkApprovalDto,
@@ -128,7 +129,7 @@ export class ApprovalService {
     if (tasks.length !== dto.taskIds.length) {
       throw new ConflictException({
         code: ERROR_CODE.CONFLICT,
-        message: '存在非本周期、非审批状态或无权审批的任务',
+        message: '存在非本周期、已审批、非审批状态或无权审批的任务',
       });
     }
 
@@ -136,7 +137,9 @@ export class ApprovalService {
 
     await this.prisma.$transaction(
       async (tx) => {
-        for (const task of tasks) {
+        for (const task of [...tasks].sort((a, b) => a.id.localeCompare(b.id))) {
+          await this.claimPendingTask(tx, task, viewer, { approvedAt: now });
+
           await tx.gradeResult.upsert({
             where: { taskId: task.id },
             create: {
@@ -148,11 +151,6 @@ export class ApprovalService {
               approverId: viewer.id,
               approvedAt: now,
             },
-          });
-
-          await tx.assessmentTask.update({
-            where: { id: task.id },
-            data: { approvedAt: now },
           });
 
           await tx.flowRecord.create({
@@ -203,8 +201,13 @@ export class ApprovalService {
       });
     }
 
+    if (task.approvedAt || task.isExempt) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '任务已审批或已免考，请刷新后重试' });
+    }
+
     await this.prisma.$transaction(
       async (tx) => {
+        await this.claimPendingTask(tx, task, viewer);
         await this.flowService.transitionTx(tx, {
           task,
           action: 'reject',
@@ -256,6 +259,30 @@ export class ApprovalService {
   // 内部辅助
   // ---------------------------------------------------------------------------
 
+  /** 同一待审批版本只允许一次通过或退回；事务持有行锁直到留痕完成。 */
+  private async claimPendingTask(
+    tx: Prisma.TransactionClient,
+    task: AssessmentTask,
+    viewer: AuthUser,
+    data: Prisma.AssessmentTaskUpdateManyMutationInput = {},
+  ): Promise<void> {
+    const claimed = await tx.assessmentTask.updateMany({
+      where: {
+        id: task.id,
+        cycleId: task.cycleId,
+        status: 'approval',
+        approvedAt: null,
+        isExempt: false,
+        approverId: viewer.id,
+        updatedAt: task.updatedAt,
+      },
+      data: { ...data, updatedAt: new Date(Math.max(Date.now(), task.updatedAt.getTime() + 1)) },
+    });
+    if (claimed.count !== 1) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '任务已被其他操作更新，请刷新后重试' });
+    }
+  }
+
   private async getCycleOrThrow(cycleId: string) {
     const cycle = await this.prisma.assessmentCycle.findUnique({ where: { id: cycleId } });
     if (!cycle) {
@@ -272,6 +299,7 @@ export class ApprovalService {
       id: { in: taskIds },
       cycleId,
       status: 'approval',
+      approvedAt: null,
       isExempt: false,
     };
 
@@ -321,7 +349,7 @@ export class ApprovalService {
       calibratedGrade: task.gradeResult?.calibratedGrade ?? null,
       isVeto: task.gradeResult?.isVeto ?? false,
       approverId: task.approverId ?? null,
-      approvedAt: task.gradeResult?.approvedAt ?? null,
+      approvedAt: task.approvedAt,
     };
   }
 }

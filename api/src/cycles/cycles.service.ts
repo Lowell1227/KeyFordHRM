@@ -1,5 +1,5 @@
 import { Injectable, BadRequestException, ConflictException, ForbiddenException, NotFoundException } from '@nestjs/common';
-import { CycleStatus, CycleType, Prisma, ScoringFrequency, SysRole } from '@prisma/client';
+import { AccountType, CycleStatus, CycleType, Prisma, ScoringFrequency, SysRole, UserStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
@@ -15,6 +15,7 @@ import { CycleScheduleService, NormalizedCycleSchedulePlan } from './cycle-sched
 import { businessDateKey, canonicalDateOnly, normalizeScoringFrequency } from './cycle-scoring-plan';
 import type { PerformanceCycleContext } from './tracking-context.types';
 import { NotificationsService } from '@/notifications/notifications.service';
+import { ParticipantCandidateQueryDto } from './dto/participant-candidate-query.dto';
 
 const DEADLINE_FIELDS = [
   'deadlineIndicatorSetting',
@@ -68,6 +69,36 @@ export class CyclesService {
     private readonly notificationsService: NotificationsService,
     private readonly cycleScheduleService: CycleScheduleService = new CycleScheduleService(),
   ) {}
+
+  /** Cycle editors may identify participants without gaining employee archive access. */
+  async findParticipantCandidates(dto: ParticipantCandidateQueryDto) {
+    const keyword = dto.keyword?.trim();
+    const where: Prisma.UserWhereInput = {
+      deletedAt: null,
+      accountType: AccountType.employee,
+      isAssessorOnly: false,
+      status: { in: [UserStatus.active, UserStatus.probation] },
+      ...(dto.ids && { id: { in: dto.ids } }),
+      ...(keyword && { OR: [
+        { name: { contains: keyword, mode: 'insensitive' as const } },
+        { employeeNo: { contains: keyword, mode: 'insensitive' as const } },
+      ] }),
+    };
+    const [total, users] = await Promise.all([
+      this.prisma.user.count({ where }),
+      this.prisma.user.findMany({
+        where,
+        skip: dto.skip,
+        take: dto.take,
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        select: { id: true, name: true, employeeNo: true, deptId: true, position: true, dept: { select: { name: true } } },
+      }),
+    ]);
+    return paginated(users.map((user) => ({
+      id: user.id, name: user.name, employeeNo: user.employeeNo,
+      deptId: user.deptId, deptName: user.dept?.name ?? null, position: user.position,
+    })), total, dto);
+  }
 
   /** POST /cycles — 创建考核周期。 */
   async create(dto: CreateCycleDto, user: AuthUser) {

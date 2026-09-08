@@ -344,6 +344,7 @@ export class PeriodReviewsService {
         where: { id: period.taskId, status: { in: ['goal_confirmed', 'self_eval'] } },
         data: { status: 'manager_scoring' },
       });
+      await this.flow.syncCycleStage(tx, period.task.cycleId);
       await tx.flowRecord.create({
         data: {
           taskId: period.taskId,

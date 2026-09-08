@@ -55,6 +55,12 @@ export class TasksController {
     return this.teamTasksService.findAll(dto, viewer);
   }
 
+  /** 仅包含周期任务快照中由本人负责的待部门复核任务。 */
+  @Get('department-review')
+  findDepartmentReviews(@Query() dto: TaskQueryDto, @CurrentUser() viewer: AuthUser) {
+    return this.tasksService.findDepartmentReviews(dto, viewer);
+  }
+
   @Post('team/indicator-review/batch-approve')
   @HttpCode(200)
   batchApproveIndicatorReview(

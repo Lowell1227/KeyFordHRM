@@ -92,6 +92,12 @@ export class PublishService {
 
     await this.prisma.$transaction(
       async (tx) => {
+        // Acquire all task locks before the first transition synchronizes the cycle.
+        await tx.$queryRaw(Prisma.sql`
+          SELECT "id" FROM "assessment_tasks"
+          WHERE "id" IN (${Prisma.join(tasks.map((task) => Prisma.sql`${task.id}::uuid`))})
+          ORDER BY "id" FOR NO KEY UPDATE
+        `);
         for (const task of tasks) {
           await this.flowService.transitionTx(tx, {
             task,

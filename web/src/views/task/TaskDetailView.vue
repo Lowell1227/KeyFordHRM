@@ -13,6 +13,7 @@ import PerformanceReferencePanel from './components/PerformanceReferencePanel.vu
 import PerformanceFormWorkspace from './components/PerformanceFormWorkspace.vue';
 import EmployeePeriodReviewWorkspace from './components/EmployeePeriodReviewWorkspace.vue';
 import ManagerPeriodReviewWorkspace from './components/ManagerPeriodReviewWorkspace.vue';
+import DepartmentReviewWorkspace from './components/DepartmentReviewWorkspace.vue';
 import ExemptView from './components/ExemptView.vue';
 import ScoreMask from './components/ScoreMask.vue';
 import InterviewCard from './components/InterviewCard.vue';
@@ -70,6 +71,11 @@ const flow = useTaskFlow({ task, cycle });
 const permission = usePermission({ task, cycle });
 
 const flowActions = computed(() => flow.actions.value);
+const isDepartmentReviewView = computed(() => Boolean(
+  permission.isTaskDeptHead.value && !permission.isTaskSelf.value && task.value?.managerId !== authStore.user?.id
+  && requestedPerformanceStage.value === 'result'
+  && ['manager_scoring', 'dept_review', 'hr_calibration', 'approval'].includes(task.value?.status ?? ''),
+));
 
 const performanceStageLabels: Record<TaskStageKey, string> = {
   'goal-setting': '目标制定',
@@ -94,10 +100,10 @@ function asTaskStage(value: unknown): TaskStageKey | null {
 
 function safeTaskListReturnTo(value: unknown): string | null {
   const raw = Array.isArray(value) ? value[0] : value;
-  if (typeof raw !== 'string' || (!raw.startsWith('/tasks') && !raw.startsWith('/action-items'))) return null;
+  if (typeof raw !== 'string' || (!raw.startsWith('/tasks') && !raw.startsWith('/action-items') && raw !== '/department-review')) return null;
   try {
     const parsed = new URL(raw, window.location.origin);
-    return ['/tasks', '/action-items'].includes(parsed.pathname) ? `${parsed.pathname}${parsed.search}` : null;
+    return ['/tasks', '/action-items', '/department-review'].includes(parsed.pathname) ? `${parsed.pathname}${parsed.search}` : null;
   } catch {
     return null;
   }
@@ -142,13 +148,17 @@ const periodReviewTitle = computed(() => {
   }
   return isManagerPeriodReview.value ? '直属上级月度评分' : '月度自评';
 });
-const performanceStageTitle = computed(() => isPeriodReviewPage.value
+const performanceStageTitle = computed(() => isDepartmentReviewView.value ? '部门复核' : isPeriodReviewPage.value
   ? periodReviewTitle.value
   : performanceStageLabels[requestedPerformanceStage.value]);
 const performanceStageCardTitle = computed(() => isPeriodReviewPage.value
   ? periodReviewTitle.value
   : performanceStageCardTitles[requestedPerformanceStage.value]);
 const performanceStageState = computed<TaskStageState>(() => {
+  if (isDepartmentReviewView.value) {
+    return task.value?.status === 'dept_review' ? 'pending'
+      : task.value?.status === 'manager_scoring' ? 'progress' : 'completed';
+  }
   const current = task.value;
   return current
     ? getEmployeeTaskStageState(current, requestedPerformanceStage.value)
@@ -241,7 +251,7 @@ const rejectIndicatorLabel = computed(() =>
 );
 
 const showResultView = computed(() => {
-  return requestedPerformanceStage.value === 'result' && showPerformanceStageContent.value;
+  return !isDepartmentReviewView.value && requestedPerformanceStage.value === 'result' && showPerformanceStageContent.value;
 });
 
 const reminderOnCooldown = computed(() => {
@@ -530,8 +540,14 @@ async function handleRemind() {
       >
         <template #main>
           <section class="performance-detail__main">
+          <DepartmentReviewWorkspace
+            v-if="isDepartmentReviewView"
+            :task="task"
+            :can-review="flowActions.canDeptReview"
+            @reviewed="loadDetail"
+          />
           <ChartCard
-            v-if="!showPerformanceStageContent"
+            v-else-if="!showPerformanceStageContent"
             class="stage-unavailable-card"
             data-testid="performance-stage-unavailable"
           >

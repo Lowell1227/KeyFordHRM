@@ -439,6 +439,27 @@ describe('TasksService', () => {
       });
     });
 
+    it('详情返回冻结的部门复核人供页面识别真实操作身份', async () => {
+      const task: any = buildFullTask('dept_review');
+      task.deptHeadId = 'head-1';
+      task.deptHead = { id: 'head-1', name: '虚拟部门负责人' };
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+      const result = await service.findOne('task-1', makeViewer({ id: 'head-1' }));
+      expect(result).toMatchObject({ deptHeadId: 'head-1', deptHeadName: '虚拟部门负责人' });
+    });
+
+    it('已审批待公示不再向审批人展示待办或催办', async () => {
+      const task: any = buildFullTask('approval');
+      task.approvedAt = new Date();
+      task.cycle.deadlinePublish = new Date('2027-04-01T00:00:00Z');
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+      const result = await service.findOne('task-1', makeViewer({ id: 'emp-1' }));
+      expect(result.workflowContext).toMatchObject({
+        statusLabel: '审批已通过，待公示', currentHandler: null, canRemind: false,
+        reminderNodeType: null, currentDeadline: task.cycle.deadlinePublish,
+      });
+    });
+
     it('目标确认后、自评未开放时清晰标识等待状态', async () => {
       const selfEvalOpenAt = new Date('2027-04-01T00:00:00.000Z');
       const task: any = buildFullTask('goal_confirmed');

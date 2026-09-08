@@ -18,6 +18,15 @@ import type {
 } from '@/types/api.types';
 import type { CycleType, ScoringFrequency } from '@/types/enums';
 
+export interface CycleParticipantCandidate {
+  id: string;
+  name: string;
+  employeeNo: string | null;
+  deptId: string | null;
+  deptName: string | null;
+  position: string | null;
+}
+
 function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
   return http.get(url, { params }) as unknown as Promise<T>;
 }
@@ -35,6 +44,10 @@ function apiDelete<T>(url: string): Promise<T> {
 }
 
 export const cyclesApi = {
+  findParticipantCandidates(query: { keyword?: string; ids?: string[]; page?: number; pageSize?: number } = {}): Promise<Paginated<CycleParticipantCandidate>> {
+    return apiGet('/cycles/participant-candidates', { ...query, ids: query.ids?.join(',') });
+  },
+
   /** GET /cycles — 查询周期列表（hr/system_admin/vp/chairman 可访问） */
   findAll(query?: CycleQuery): Promise<Paginated<AssessmentCycle>> {
     return apiGet('/cycles', query as Record<string, unknown>);

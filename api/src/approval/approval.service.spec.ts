@@ -50,7 +50,11 @@ function makeTask(status: TaskStatus, overrides?: Partial<AssessmentTask>): Asse
 }
 
 function makeCycle() {
-  return { id: 'cycle-1', name: '2026 Q1', status: 'approval' as any };
+  return {
+    id: 'cycle-1', name: '2026 Q1', status: 'approval' as any,
+    gradeAMaxRatio: new Prisma.Decimal(0.2), gradeBMaxRatio: new Prisma.Decimal(0.4),
+    gradeCMaxRatio: new Prisma.Decimal(0.3), gradeDMaxRatio: new Prisma.Decimal(0.1),
+  };
 }
 
 describe('ApprovalService', () => {
@@ -62,7 +66,7 @@ describe('ApprovalService', () => {
   beforeEach(async () => {
     tx = {
       gradeResult: { upsert: jest.fn(), updateMany: jest.fn() },
-      assessmentTask: { update: jest.fn() },
+      assessmentTask: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       flowRecord: { create: jest.fn() },
     };
 
@@ -95,6 +99,32 @@ describe('ApprovalService', () => {
   });
 
   describe('GET /cycles/:id/approval 数据范围', () => {
+    it('pending query excludes approved tasks which remain in approval until publish', async () => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      prisma.assessmentTask.findMany.mockResolvedValue([]);
+
+      await service.getApprovalList('cycle-1', makeViewer());
+
+      expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ status: 'approval', approvedAt: null }),
+      }));
+    });
+
+    it('overview counts only unapproved tasks while retaining approval scope and grade distribution', async () => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      prisma.flowRecord.findMany.mockResolvedValue([]);
+      prisma.assessmentTask.findMany.mockResolvedValue([
+        { ...makeTask('approval'), gradeResult: { rawGrade: 'B', calibratedGrade: null } },
+        { ...makeTask('approval', { id: 'approved', approvedAt: new Date() }), gradeResult: { rawGrade: 'C', calibratedGrade: null } },
+        { ...makeTask('approval', { id: 'other', approverId: 'vp-2' }), gradeResult: { rawGrade: 'D', calibratedGrade: null } },
+      ]);
+
+      const result = await service.getOverview('cycle-1', makeViewer());
+
+      expect(result).toMatchObject({ ownPending: 1, ownTotal: 2, cyclePending: 2 });
+      expect(result.gradeDistribution.C.count).toBe(1);
+    });
+
     it('普通审批人只返回 approver_id 为自己的任务', async () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
       prisma.assessmentTask.findMany.mockResolvedValue([
@@ -182,6 +212,17 @@ describe('ApprovalService', () => {
   });
 
   describe('POST /cycles/:id/approval 批量审批', () => {
+    it('rejects a stale approval claim before overwriting grade approval or creating audit', async () => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      prisma.assessmentTask.findMany.mockResolvedValue([makeTask('approval')]);
+      tx.assessmentTask.updateMany = jest.fn().mockResolvedValue({ count: 0 });
+
+      await expect(service.approveTasks('cycle-1', { taskIds: ['task-1'] }, makeViewer()))
+        .rejects.toThrow(ConflictException);
+      expect(tx.gradeResult.upsert).not.toHaveBeenCalled();
+      expect(tx.flowRecord.create).not.toHaveBeenCalled();
+    });
+
     it('在同一事务内写 GradeResult.approver_id/approved_at、Task.approved_at 与 FlowRecord，不改 status', async () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
       prisma.assessmentTask.findMany.mockResolvedValue([makeTask('approval')]);
@@ -204,10 +245,10 @@ describe('ApprovalService', () => {
           update: expect.objectContaining({ approverId: 'vp-1', approvedAt: expect.any(Date) }),
         }),
       );
-      expect(tx.assessmentTask.update).toHaveBeenCalledWith(
+      expect(tx.assessmentTask.updateMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: { id: 'task-1' },
-          data: { approvedAt: expect.any(Date) },
+          where: expect.objectContaining({ id: 'task-1', status: 'approval', approvedAt: null, approverId: 'vp-1' }),
+          data: { approvedAt: expect.any(Date), updatedAt: expect.any(Date) },
         }),
       );
       expect(tx.flowRecord.create).toHaveBeenCalledWith(
@@ -271,6 +312,22 @@ describe('ApprovalService', () => {
   });
 
   describe('POST /tasks/:id/approval/reject 退回', () => {
+    it('cannot reject an already approved result awaiting HR publication', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('approval', { approvedAt: new Date() }));
+
+      await expect(service.rejectTask('task-1', {}, makeViewer())).rejects.toThrow(ConflictException);
+      expect(flowService.transitionTx).not.toHaveBeenCalled();
+    });
+
+    it('cannot reject after concurrent approval claims the same pending task', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue(makeTask('approval'));
+      tx.assessmentTask.updateMany = jest.fn().mockResolvedValue({ count: 0 });
+
+      await expect(service.rejectTask('task-1', {}, makeViewer())).rejects.toThrow(ConflictException);
+      expect(flowService.transitionTx).not.toHaveBeenCalled();
+      expect(tx.gradeResult.updateMany).not.toHaveBeenCalled();
+    });
+
     it('flow.transitionTx 到 hr_calibration 并清空 GradeResult 审批痕迹', async () => {
       prisma.assessmentTask.findUnique.mockResolvedValue({
         ...makeTask('approval'),

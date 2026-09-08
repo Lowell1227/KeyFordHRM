@@ -51,7 +51,7 @@ describe('PeriodReviewsService', () => {
   };
   const notifications = { create: jest.fn() };
   const aggregation = { refreshTask: jest.fn() };
-  const flow = { reopenPeriodTx: jest.fn() };
+  const flow = { reopenPeriodTx: jest.fn(), syncCycleStage: jest.fn() };
   const service: PeriodReviewsService = new (PeriodReviewsService as any)(
     prisma,
     notifications,
@@ -314,6 +314,7 @@ describe('PeriodReviewsService', () => {
     expect(tx.assessmentPeriod.update).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({ status: 'manager_scoring', selfScoreTotal: 88, selfGrade: 'B' }),
     }));
+    expect(flow.syncCycleStage).toHaveBeenCalledWith(tx, period.task.cycleId);
     expect(result).toMatchObject({ periodId: period.id, status: 'manager_scoring', draftVersion: 3 });
     expect(notifications.create).not.toHaveBeenCalled();
   });

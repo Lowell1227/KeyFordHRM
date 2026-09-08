@@ -130,6 +130,7 @@ describe('PublishService', () => {
 
   beforeEach(async () => {
     tx = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       assessmentCycle: { update: jest.fn() },
       assessmentTask: { update: jest.fn(), count: jest.fn() },
       flowRecord: { create: jest.fn() },
@@ -280,6 +281,9 @@ describe('PublishService', () => {
       );
 
       expect(result.published).toBe(2);
+      expect(tx.$queryRaw).toHaveBeenCalled();
+      expect(tx.$queryRaw.mock.invocationCallOrder[0])
+        .toBeLessThan((flowService.transitionTx as jest.Mock).mock.invocationCallOrder[0]);
       expect(tx.assessmentCycle.update).toHaveBeenCalledWith(
         expect.objectContaining({
           where: { id: 'cycle-1' },

@@ -8,8 +8,9 @@ import { ERROR_CODE } from '@/common/constants/error-codes';
 describe('FlowService', () => {
   let service: FlowService;
   let tx: {
+    $queryRaw: jest.Mock;
     assessmentTask: { update: jest.Mock; groupBy: jest.Mock };
-    assessmentCycle: { findUnique: jest.Mock; update: jest.Mock };
+    assessmentCycle: { updateMany: jest.Mock };
     flowRecord: { create: jest.Mock };
   };
   let prisma: { $transaction: jest.Mock };
@@ -33,8 +34,9 @@ describe('FlowService', () => {
 
   beforeEach(async () => {
     tx = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
       assessmentTask: { update: jest.fn(), groupBy: jest.fn().mockResolvedValue([]) },
-      assessmentCycle: { findUnique: jest.fn(), update: jest.fn() },
+      assessmentCycle: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       flowRecord: { create: jest.fn() },
     };
     prisma = {
@@ -280,7 +282,7 @@ describe('FlowService', () => {
 
   describe('syncCycleStage 周期阶段同步', () => {
     function mockCycleStatus(status: string | null) {
-      tx.assessmentCycle.findUnique.mockResolvedValue(status ? { status } : null);
+      tx.$queryRaw.mockResolvedValue(status ? [{ status }] : []);
     }
 
     it('有任务进入 hr_calibration 时周期推进到 hr_calibration', async () => {
@@ -292,8 +294,8 @@ describe('FlowService', () => {
 
       await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
 
-      expect(tx.assessmentCycle.update).toHaveBeenCalledWith({
-        where: { id: 'cycle-1' },
+      expect(tx.assessmentCycle.updateMany).toHaveBeenCalledWith({
+        where: { id: 'cycle-1', status: 'manager_score' },
         data: { status: 'hr_calibration' },
       });
     });
@@ -306,8 +308,8 @@ describe('FlowService', () => {
 
       await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
 
-      expect(tx.assessmentCycle.update).toHaveBeenCalledWith({
-        where: { id: 'cycle-1' },
+      expect(tx.assessmentCycle.updateMany).toHaveBeenCalledWith({
+        where: { id: 'cycle-1', status: 'hr_calibration' },
         data: { status: 'approval' },
       });
     });
@@ -321,8 +323,8 @@ describe('FlowService', () => {
 
       await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
 
-      expect(tx.assessmentCycle.update).toHaveBeenCalledWith({
-        where: { id: 'cycle-1' },
+      expect(tx.assessmentCycle.updateMany).toHaveBeenCalledWith({
+        where: { id: 'cycle-1', status: 'approval' },
         data: { status: 'hr_calibration' },
       });
     });
@@ -335,8 +337,8 @@ describe('FlowService', () => {
 
       await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
 
-      expect(tx.assessmentCycle.update).toHaveBeenCalledWith({
-        where: { id: 'cycle-1' },
+      expect(tx.assessmentCycle.updateMany).toHaveBeenCalledWith({
+        where: { id: 'cycle-1', status: 'hr_calibration' },
         data: { status: 'manager_score' },
       });
     });
@@ -345,14 +347,81 @@ describe('FlowService', () => {
       mockCycleStatus('published');
       await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
       expect(tx.assessmentTask.groupBy).not.toHaveBeenCalled();
-      expect(tx.assessmentCycle.update).not.toHaveBeenCalled();
+      expect(tx.assessmentCycle.updateMany).not.toHaveBeenCalled();
     });
 
-    it('目标制定阶段的周期不介入', async () => {
+    it('没有任务的目标制定周期不推进', async () => {
       mockCycleStatus('indicator_setting');
       await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
+      expect(tx.assessmentCycle.updateMany).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ['self_eval', 'self_eval'],
+      ['manager_scoring', 'manager_score'],
+      ['dept_review', 'hr_calibration'],
+      ['hr_calibration', 'hr_calibration'],
+      ['approval', 'approval'],
+    ])('目标均完成后按实际任务 %s 同步为 %s', async (taskStatus, expected) => {
+      mockCycleStatus('indicator_setting');
+      tx.assessmentTask.groupBy.mockResolvedValue([{ status: taskStatus, _count: { _all: 3 } }]);
+      await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
+      expect(tx.assessmentCycle.updateMany).toHaveBeenCalledWith({
+        where: { id: 'cycle-1', status: 'indicator_setting' },
+        data: { status: expected },
+      });
+      expect(tx.assessmentTask.groupBy).toHaveBeenCalledWith(expect.objectContaining({
+        where: { cycleId: 'cycle-1', isExempt: false },
+      }));
+    });
+
+    it.each(['pending', 'indicator_drafting', 'indicator_reviewing', 'indicator_setting', 'indicator_confirming'])
+    ('有 %s 目标未完成时不提前推进整个周期', async (status) => {
+      mockCycleStatus('indicator_setting');
+      tx.assessmentTask.groupBy.mockResolvedValue([
+        { status, _count: { _all: 1 } },
+        { status: 'hr_calibration', _count: { _all: 2 } },
+      ]);
+      await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
+      expect(tx.assessmentCycle.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('仅完成目标而未开始评价时保持目标期', async () => {
+      mockCycleStatus('indicator_setting');
+      tx.assessmentTask.groupBy.mockResolvedValue([{ status: 'goal_confirmed', _count: { _all: 3 } }]);
+      await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
+      expect(tx.assessmentCycle.updateMany).not.toHaveBeenCalled();
+    });
+
+    it.each(['draft', 'scheduled', 'launch_blocked', 'published', 'appeal', 'closed'])
+    ('保护生命周期状态 %s', async (status) => {
+      mockCycleStatus(status);
+      await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
       expect(tx.assessmentTask.groupBy).not.toHaveBeenCalled();
-      expect(tx.assessmentCycle.update).not.toHaveBeenCalled();
+      expect(tx.assessmentCycle.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('已有后半程周期不因遗留目标任务退回目标期', async () => {
+      mockCycleStatus('hr_calibration');
+      tx.assessmentTask.groupBy.mockResolvedValue([
+        { status: 'indicator_setting', _count: { _all: 1 } },
+        { status: 'self_eval', _count: { _all: 1 } },
+      ]);
+      await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
+      expect(tx.assessmentCycle.updateMany).not.toHaveBeenCalled();
+    });
+
+    it('等待周期锁后重新聚合已提交任务，避免并发最后提交造成阶段滞后', async () => {
+      mockCycleStatus('indicator_setting');
+      tx.$queryRaw.mockImplementation(async () => {
+        // The competing employee transaction commits while this transaction waits for the cycle lock.
+        tx.assessmentTask.groupBy.mockResolvedValue([{ status: 'hr_calibration', _count: { _all: 2 } }]);
+        return [{ status: 'indicator_setting' }];
+      });
+      await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
+      expect(tx.assessmentCycle.updateMany).toHaveBeenCalledWith({
+        where: { id: 'cycle-1', status: 'indicator_setting' }, data: { status: 'hr_calibration' },
+      });
     });
 
     it('阶段已一致时不写库', async () => {
@@ -363,7 +432,7 @@ describe('FlowService', () => {
 
       await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
 
-      expect(tx.assessmentCycle.update).not.toHaveBeenCalled();
+      expect(tx.assessmentCycle.updateMany).not.toHaveBeenCalled();
     });
   });
 });

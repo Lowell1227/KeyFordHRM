@@ -1143,7 +1143,7 @@ export interface ReferenceIndicatorQuery {
 }
 
 export interface DeptReviewBody {
-  action: 'pass' | 'reject';
+  action: 'approve' | 'reject';
   comment?: string;
 }
 

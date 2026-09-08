@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { AssessmentCycle, PerfGrade, TaskStatus } from '@prisma/client';
+import { AssessmentCycle, PerfGrade, Prisma, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
@@ -239,9 +239,15 @@ export class CalibrationService {
       });
     }
 
-    const now = new Date();
-    await this.prisma.$transaction(async (tx) => {
-      for (const task of tasks) {
+      const now = new Date();
+      await this.prisma.$transaction(async (tx) => {
+        // Lock the whole batch before flow synchronization locks the cycle row.
+        await tx.$queryRaw(Prisma.sql`
+          SELECT "id" FROM "assessment_tasks"
+          WHERE "id" IN (${Prisma.join(tasks.map((task) => Prisma.sql`${task.id}::uuid`))})
+          ORDER BY "id" FOR NO KEY UPDATE
+        `);
+        for (const task of tasks) {
         if (task.status !== TaskStatus.hr_calibration) {
           throw new BadRequestException({
             code: ERROR_CODE.PARAM_INVALID,
@@ -322,8 +328,14 @@ export class CalibrationService {
       });
     }
 
-    await this.prisma.$transaction(async (tx) => {
-      for (const task of tasks) {
+      await this.prisma.$transaction(async (tx) => {
+        // Use the same task-before-cycle lock order as individual task transitions.
+        await tx.$queryRaw(Prisma.sql`
+          SELECT "id" FROM "assessment_tasks"
+          WHERE "id" IN (${Prisma.join(tasks.map((task) => Prisma.sql`${task.id}::uuid`))})
+          ORDER BY "id" FOR NO KEY UPDATE
+        `);
+        for (const task of tasks) {
         if (task.status !== TaskStatus.hr_calibration) {
           throw new BadRequestException({
             code: ERROR_CODE.PARAM_INVALID,

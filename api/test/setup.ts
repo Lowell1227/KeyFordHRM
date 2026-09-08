@@ -14,7 +14,7 @@ function runMigrationsAndSeed(dbUrl: string): void {
     process.env.JWT_SECRET || "e2e-test-secret-do-not-use-in-production";
   process.env.NODE_ENV = "test";
 
-  console.log("▶ DATABASE_URL=", dbUrl);
+  console.log("▶ E2E database connection configured (credentials omitted)");
 
   const apiRoot = path.resolve(__dirname, "..");
 
