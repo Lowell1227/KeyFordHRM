@@ -17,6 +17,32 @@ function createService() {
 }
 
 describe('BusinessCapabilitiesService', () => {
+  it('历史冻结关系保留查看入口，但不恢复办理权限或业务身份', async () => {
+    const { service, prisma } = createService();
+    prisma.user.count.mockResolvedValue(0);
+    prisma.department.findMany.mockResolvedValue([]);
+    prisma.assessmentTask.count.mockImplementation(({ where }) =>
+      Promise.resolve(where.status.in && where.employeeId?.not === 'historical-user' ? 1 : 0));
+    prisma.assessmentCycle.count.mockImplementation(({ where }) =>
+      Promise.resolve(where.status === 'closed' ? 1 : 0));
+    prisma.performanceInterview.count.mockResolvedValue(0);
+    prisma.probationReview.count.mockResolvedValue(0);
+    prisma.confirmationApplication.count.mockResolvedValue(0);
+
+    await expect(service.getForUser({ id: 'historical-user', sysRole: 'employee', canViewAll: false })).resolves.toMatchObject({
+      canViewDepartmentReview: true,
+      canViewPerformanceCalibration: true,
+      canViewPerformanceApproval: true,
+      canReviewDepartment: false,
+      canHandleHrCycle: false,
+      canOperatePerformanceApproval: false,
+      canManageTeam: false,
+      canViewReports: false,
+      canManageObjectives: false,
+      identities: [],
+    });
+  });
+
   it('由实时组织关系和历史任务归属组合多个业务身份', async () => {
     const { service, prisma } = createService();
     prisma.user.count.mockResolvedValue(2);
@@ -56,6 +82,8 @@ describe('BusinessCapabilitiesService', () => {
     })).resolves.toEqual({
       canManageTeam: true,
       canReviewDepartment: true,
+      canViewDepartmentReview: true,
+      canViewPerformanceCalibration: true,
       canViewPerformanceApproval: true,
       canOperatePerformanceApproval: true,
       canHandleHrCycle: true,
@@ -101,6 +129,8 @@ describe('BusinessCapabilitiesService', () => {
       canManageTeam: false,
       canReviewDepartment: false,
       canViewPerformanceApproval: true,
+      canViewDepartmentReview: false,
+      canViewPerformanceCalibration: false,
       canOperatePerformanceApproval: false,
       canHandleHrCycle: false,
       canHandleInterviews: true,

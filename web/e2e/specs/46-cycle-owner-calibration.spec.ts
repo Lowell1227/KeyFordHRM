@@ -16,7 +16,7 @@ async function setup(page: Page) {
     calls.push({ path, body });
     let data: unknown = [];
     if (path.endsWith('/auth/me')) data = { id: 'owner', name: '虚拟周期负责人', sysRole: 'hr_user', canViewAll: false,
-      hrCapabilities: ['cycle_plan_edit'], businessCapabilities: { canHandleHrCycle: true } };
+      hrCapabilities: ['cycle_plan_edit'], businessCapabilities: { canHandleHrCycle: true, canViewPerformanceCalibration: true } };
     else if (path.endsWith('/notifications/unread-count')) data = 0;
     else if (path === '/api/v1/calibration/cycles') data = [cycle];
     else if (path.endsWith('/calibration/confirm')) { submitted = true; data = { updated: 1 }; }

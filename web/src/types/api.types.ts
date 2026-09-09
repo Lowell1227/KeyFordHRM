@@ -66,6 +66,8 @@ export interface BusinessIdentity {
 export interface BusinessCapabilities {
   canManageTeam: boolean;
   canReviewDepartment: boolean;
+  canViewDepartmentReview?: boolean;
+  canViewPerformanceCalibration?: boolean;
   canViewPerformanceApproval: boolean;
   canOperatePerformanceApproval: boolean;
   canHandleHrCycle: boolean;

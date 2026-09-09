@@ -18,6 +18,8 @@ export interface BusinessIdentity {
 export interface BusinessCapabilities {
   canManageTeam: boolean;
   canReviewDepartment: boolean;
+  canViewDepartmentReview: boolean;
+  canViewPerformanceCalibration: boolean;
   canViewPerformanceApproval: boolean;
   canOperatePerformanceApproval: boolean;
   canHandleHrCycle: boolean;
@@ -52,6 +54,9 @@ export class BusinessCapabilitiesService {
       interviewCount,
       probationReviewCount,
       confirmationApprovalCount,
+      historicalDepartmentTaskCount,
+      historicalApprovalTaskCount,
+      closedHrCycleCount,
     ] =
       await Promise.all([
         this.prisma.user.count({
@@ -100,6 +105,11 @@ export class BusinessCapabilitiesService {
             ],
           },
         }),
+        this.countHistoricalTasks('deptHeadId', user.id),
+        this.countHistoricalTasks('approverId', user.id),
+        this.prisma.assessmentCycle.count({
+          where: { hrOwnerId: user.id, status: 'closed' },
+        }),
       ]);
 
     const relationRecords = departments.map((department) => ({
@@ -131,8 +141,10 @@ export class BusinessCapabilitiesService {
     return {
       canManageTeam: managerScopeCount > 0,
       canReviewDepartment: departmentScopeCount > 0,
+      canViewDepartmentReview: departmentScopeCount > 0 || historicalDepartmentTaskCount > 0,
+      canViewPerformanceCalibration: hrCycleCount > 0 || closedHrCycleCount > 0,
       canViewPerformanceApproval:
-        canOperatePerformanceApproval || user.canViewAll || user.sysRole === SysRole.system_admin,
+        canOperatePerformanceApproval || historicalApprovalTaskCount > 0 || user.canViewAll || user.sysRole === SysRole.system_admin,
       canOperatePerformanceApproval,
       canHandleHrCycle: hrCycleCount > 0,
       canHandleInterviews: interviewCount > 0 || isSystemManager || user.canViewAll,
@@ -244,6 +256,18 @@ export class BusinessCapabilitiesService {
     }
 
     return result;
+  }
+
+  // Historical access follows frozen task ownership, independently of current duties.
+  private countHistoricalTasks(relation: 'deptHeadId' | 'approverId', userId: string): Promise<number> {
+    return this.prisma.assessmentTask.count({
+      where: {
+        [relation]: userId,
+        employeeId: { not: userId },
+        status: { in: ['confirmed', 'closed'] },
+        isExempt: false,
+      },
+    });
   }
 
   private countActiveTasks(

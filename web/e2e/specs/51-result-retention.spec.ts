@@ -46,3 +46,27 @@ for (const width of [1440, 390]) {
     expect(writes).toEqual(['/api/v1/cycles/retention-cycle/approval', '/api/v1/tasks/task-1/approval/reject']);
   });
 }
+
+test('历史专属关系刷新后仍可进入复核、校准和审批页面', async ({ page }) => {
+  await page.addInitScript(() => { localStorage.setItem('token', 'history-only'); localStorage.setItem('expiresAt', String(Date.now() + 600000)); });
+  const writes: string[] = [];
+  await page.route('**/api/v1/**', async route => {
+    const request = route.request(); const path = new URL(request.url()).pathname;
+    if (request.method() !== 'GET') writes.push(path);
+    let data: unknown = [];
+    if (path.endsWith('/auth/me')) data = { id: 'historical-user', name: '历史任务负责人', sysRole: 'employee', status: 'active', hrCapabilities: [], businessCapabilities: {
+      identities: [], canReviewDepartment: false, canHandleHrCycle: false, canOperatePerformanceApproval: false,
+      canViewDepartmentReview: true, canViewPerformanceCalibration: true, canViewPerformanceApproval: true,
+    } };
+    else if (path.endsWith('/cycles') || path.endsWith('/tasks/mine')) data = path.includes('/calibration/') ? [] : { items: [], total: 0 };
+    else if (path.endsWith('/notifications/unread-count')) data = 0;
+    await route.fulfill({ json: { code: 0, data } });
+  });
+  for (const path of ['/department-review', '/calibration', '/approval']) {
+    await page.goto(path);
+    await page.reload();
+    await expect(page).toHaveURL(new RegExp(`${path}$`));
+    await expect(page.locator('.performance-result-page')).toBeVisible();
+  }
+  expect(writes).toEqual([]);
+});
