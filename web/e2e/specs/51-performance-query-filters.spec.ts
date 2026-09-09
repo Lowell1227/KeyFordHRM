@@ -67,9 +67,14 @@ for (const pageCase of pageCases) {
     const cycleFilter = page.getByTestId('performance-cycle-filter');
     const departmentFilter = page.getByTestId('performance-department-filter');
     const employeeFilter = page.getByTestId('performance-employee-filter');
+    const filterRegion = page.getByRole('region', { name: '查询条件' });
     await expect(cycleFilter).toContainText('最新创建周期');
     await expect(departmentFilter).toBeVisible();
     await expect(employeeFilter).toBeVisible();
+    await expect(filterRegion.locator('label')).toHaveCount(0);
+    await expect(filterRegion.getByRole('combobox', { name: '绩效周期计划' })).toBeVisible();
+    await expect(filterRegion.getByRole('combobox', { name: '部门' })).toBeVisible();
+    await expect(filterRegion.getByRole('textbox', { name: '员工姓名或工号' })).toBeVisible();
 
     const positions = await Promise.all([cycleFilter, departmentFilter, employeeFilter].map(async locator => (await locator.boundingBox())!.x));
     expect(positions[0]).toBeLessThan(positions[1]);

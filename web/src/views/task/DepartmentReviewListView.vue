@@ -162,7 +162,6 @@ onMounted(async () => {
         @reset="resetFilters"
       >
         <div class="performance-record-filter-extra">
-          <label for="department-review-stage">当前环节</label>
           <el-select id="department-review-stage" v-model="status" aria-label="当前环节" placeholder="全部环节" clearable @change="changeStage">
             <el-option v-for="[value, meta] in stages" :key="value" :label="meta.label" :value="value" />
           </el-select>

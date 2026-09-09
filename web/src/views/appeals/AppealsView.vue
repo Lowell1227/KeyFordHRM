@@ -323,8 +323,7 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
         @reset="resetFilters"
       >
         <div class="performance-record-filter-extra">
-          <label>状态</label>
-          <el-select v-model="filters.status" placeholder="全部状态" clearable>
+          <el-select v-model="filters.status" aria-label="状态" placeholder="全部状态" clearable>
             <el-option label="待处理" value="pending" />
             <el-option label="已处理" value="resolved" />
           </el-select>

@@ -133,8 +133,7 @@ function statusLabel(status: InterviewStatus): string {
         @reset="onReset"
       >
           <div class="performance-record-filter-extra">
-            <label>状态</label>
-            <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
+            <el-select v-model="filters.status" aria-label="状态" placeholder="全部状态" clearable style="width: 160px">
               <el-option
                 v-for="s in statusOptions"
                 :key="s"

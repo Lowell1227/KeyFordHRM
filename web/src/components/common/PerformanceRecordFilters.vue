@@ -41,9 +41,9 @@ const departmentOptions = computed(() => {
 <template>
   <section class="performance-record-filters" aria-label="查询条件">
     <div class="performance-record-filters__field" data-testid="performance-cycle-filter">
-      <label>绩效周期计划</label>
       <el-select
         :data-testid="cycleTestId"
+        aria-label="绩效周期计划"
         :model-value="cycleId"
         :disabled="disabled || cycles.length === 0"
         :placeholder="cycles.length ? '选择绩效周期计划' : '暂无绩效周期计划'"
@@ -54,9 +54,9 @@ const departmentOptions = computed(() => {
       </el-select>
     </div>
     <div class="performance-record-filters__field">
-      <label>部门</label>
       <el-select
         data-testid="performance-department-filter"
+        aria-label="部门"
         :model-value="deptId"
         clearable
         filterable
@@ -68,9 +68,9 @@ const departmentOptions = computed(() => {
       </el-select>
     </div>
     <div class="performance-record-filters__field">
-      <label>员工姓名/工号</label>
       <el-input
         data-testid="performance-employee-filter"
+        aria-label="员工姓名或工号"
         :model-value="keyword"
         clearable
         placeholder="输入员工姓名或工号"
@@ -96,14 +96,7 @@ const departmentOptions = computed(() => {
   min-width: 0;
 }
 .performance-record-filters__field {
-  display: grid;
-  gap: 6px;
   min-width: 0;
-}
-.performance-record-filters__field label {
-  color: var(--el-text-color-regular);
-  font-size: 13px;
-  line-height: 18px;
 }
 .performance-record-filters__field :deep(.el-select),
 .performance-record-filters__field :deep(.el-input) { width: 220px; }
@@ -115,8 +108,7 @@ const departmentOptions = computed(() => {
   padding-bottom: 1px;
 }
 .performance-record-filters__actions :deep(.el-button + .el-button) { margin-left: 0; }
-.performance-record-filters :deep(.performance-record-filter-extra) { display: grid; gap: 6px; min-width: 0; }
-.performance-record-filters :deep(.performance-record-filter-extra > label) { color: var(--el-text-color-regular); font-size: 13px; line-height: 18px; }
+.performance-record-filters :deep(.performance-record-filter-extra) { min-width: 0; }
 .performance-record-filters :deep(.performance-record-filter-extra .el-select) { width: 180px; }
 @media (max-width: 768px) {
   .performance-record-filters { display: grid; grid-template-columns: minmax(0, 1fr); width: 100%; gap: 10px; }
