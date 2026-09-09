@@ -109,6 +109,41 @@ describe('ImprovementPlansService', () => {
         }),
       );
     });
+
+    it('叠加周期、部门和姓名或工号筛选且保留原数据范围', async () => {
+      const visibleScope = {
+        OR: [
+          { id: 'viewer-1' },
+          { directManagerId: 'viewer-1' },
+          { deptId: { in: ['dept-1'] } },
+        ],
+      };
+      (dataScope.getVisibleEmployeeFilter as jest.Mock).mockResolvedValue(visibleScope);
+      prisma.improvementPlan.count.mockResolvedValue(0);
+      prisma.improvementPlan.findMany.mockResolvedValue([]);
+
+      await service.findAll(
+        { cycleId: 'cycle-1', deptId: 'dept-1', keyword: 'E001' } as any,
+        { page: 1, pageSize: 20, skip: 0, take: 20 } as any,
+        makeViewer(),
+      );
+
+      expect(prisma.improvementPlan.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: {
+          cycleId: 'cycle-1',
+          employee: {
+            AND: [
+              visibleScope,
+              { deptId: 'dept-1' },
+              { OR: [
+                { name: { contains: 'E001', mode: 'insensitive' } },
+                { employeeNo: { contains: 'E001', mode: 'insensitive' } },
+              ] },
+            ],
+          },
+        },
+      }));
+    });
   });
 
   describe('findOne', () => {

@@ -15,6 +15,7 @@ function cycle(id: string, startDate: string, endDate: string): AssessmentCycle 
     startDate,
     endDate,
     status: 'self_eval',
+    createdAt: `${startDate}T00:00:00.000Z`,
     publishVisibleFields: {
       totalScore: true,
       grade: true,
@@ -871,6 +872,10 @@ async function mockLifecycleCycleShell(
       items: cycleItems,
     })),
   }));
+  await page.route('**/api/v1/departments**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([])),
+  }));
 
   if (kind === 'calibration') {
     await page.route('**/api/v1/calibration/cycles', route => route.fulfill({
@@ -904,9 +909,9 @@ async function mockLifecycleCycleShell(
       });
     });
   } else {
-    await page.route('**/api/v1/tasks**', (route) => {
-      const cycleId = new URL(route.request().url()).searchParams.get('cycleId');
-      if (cycleId) businessCycles.push(cycleId);
+    await page.route('**/api/v1/cycles/*/publication-records**', (route) => {
+      const match = new URL(route.request().url()).pathname.match(/\/cycles\/([^/]+)\/publication-records/);
+      if (match?.[1]) businessCycles.push(match[1]);
       return route.fulfill({
         contentType: 'application/json',
         body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),

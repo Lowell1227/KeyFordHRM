@@ -205,7 +205,7 @@ describe('AppealsService', () => {
       pagination.pageSize = 20;
 
       const result = await service.findAll(
-        { status: 'pending', deptId: 'dept-1', keyword: '员工A', cycleId: 'cycle-1' },
+        { status: 'pending', deptId: 'dept-1', keyword: 'E001', cycleId: 'cycle-1' },
         pagination,
       );
 
@@ -218,7 +218,10 @@ describe('AppealsService', () => {
             cycleId: 'cycle-1',
             status: 'pending',
             task: { deptId: 'dept-1' },
-            appellant: { name: { contains: '员工A', mode: 'insensitive' } },
+            appellant: { OR: [
+              { name: { contains: 'E001', mode: 'insensitive' } },
+              { employeeNo: { contains: 'E001', mode: 'insensitive' } },
+            ] },
           }),
           skip: 0,
           take: 20,

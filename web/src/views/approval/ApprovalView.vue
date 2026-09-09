@@ -15,8 +15,10 @@ import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
-import type { ApprovalOverview, ApprovalTaskView, AssessmentCycle, TaskDetail } from '@/types/api.types';
-import { resolvePerformanceCycle } from '@/utils/performance-cycle';
+import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilters.vue';
+import { departmentsApi } from '@/api/departments.api';
+import type { ApprovalOverview, ApprovalTaskView, AssessmentCycle, Department, TaskDetail } from '@/types/api.types';
+import { resolvePerformanceCycleByCreatedAt } from '@/utils/performance-cycle';
 import { useAuthStore } from '@/stores/auth.store';
 import { type PerfGrade } from '@/types/enums';
 import { GRADE_LABELS } from '@/utils/grade';
@@ -32,6 +34,9 @@ const auth = useAuthStore();
 
 const cycles = ref<AssessmentCycle[]>([]);
 const selectedCycleId = ref('');
+const departments = ref<Department[]>([]);
+const deptFilter = ref('');
+const keywordFilter = ref('');
 const tasks = ref<ApprovalTaskView[]>([]);
 const overview = ref<ApprovalOverview | null>(null);
 const loading = ref(false);
@@ -151,7 +156,7 @@ async function normalizeApprovalCycle() {
   const requestedCycleId = typeof route.query.cycleId === 'string'
     ? route.query.cycleId
     : undefined;
-  const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+  const resolved = resolvePerformanceCycleByCreatedAt(cycles.value, requestedCycleId);
   cycles.value = resolved.orderedCycles;
   selectedCycleId.value = resolved.selectedCycle?.id ?? '';
 
@@ -198,7 +203,10 @@ async function loadTasks() {
   loading.value = true;
   try {
     const [list, overviewData] = await Promise.all([
-      approvalApi.getApprovalList(cycleId),
+      approvalApi.getApprovalList(cycleId, {
+        deptId: deptFilter.value || undefined,
+        keyword: keywordFilter.value.trim() || undefined,
+      }),
       approvalApi.getOverview(cycleId),
     ]);
     if (request !== listRequest || cycleId !== selectedCycleId.value) return;
@@ -225,7 +233,7 @@ watch(
   async (cycleId) => {
     if (!approvalReady) return;
     const requestedCycleId = typeof cycleId === 'string' ? cycleId : undefined;
-    const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+    const resolved = resolvePerformanceCycleByCreatedAt(cycles.value, requestedCycleId);
     const canonicalCycleId = resolved.selectedCycle?.id ?? '';
     if (canonicalCycleId && requestedCycleId !== canonicalCycleId) {
       await router.replace({ query: { ...route.query, cycleId: canonicalCycleId } });
@@ -245,11 +253,33 @@ watch(
 );
 
 onMounted(async () => {
-  await loadCycles();
+  await Promise.all([
+    loadCycles(),
+    departmentsApi.findAll({ isActive: true, pageSize: 1000 })
+      .then((items) => { departments.value = items; })
+      .catch(() => { departments.value = []; }),
+  ]);
   await normalizeApprovalCycle();
   approvalReady = true;
   await loadTasks();
 });
+
+function searchApproval() {
+  page.value = 1;
+  void loadTasks();
+}
+
+async function resetApprovalFilters() {
+  deptFilter.value = '';
+  keywordFilter.value = '';
+  page.value = 1;
+  const latestCycleId = cycles.value[0]?.id ?? '';
+  if (latestCycleId && latestCycleId !== selectedCycleId.value) {
+    await selectApprovalCycle(latestCycleId);
+  } else {
+    await loadTasks();
+  }
+}
 
 function onSelectionChange(rows: ApprovalTaskView[]) {
   selectedTaskIds.value = rows.filter(canOperateTask).map((r) => r.id);
@@ -399,26 +429,20 @@ function handleBatchReject() {
   <div class="approval-view page-stack performance-result-page">
     <ChartCard :padded="true" class="list-result-card">
       <template #title>结果审批</template>
-      <template #extra>
-        <div class="approval-view__toolbar performance-result-toolbar">
-          <el-select
-            :model-value="selectedCycleId"
-            data-testid="approval-cycle-select"
-            :placeholder="cycles.length ? '选择考核周期' : '暂无考核周期'"
-            style="width: 260px"
-            :disabled="cycles.length === 0"
-            @change="selectApprovalCycle"
-          >
-            <el-option v-if="cycles.length === 0" label="暂无考核周期" value="" disabled />
-            <el-option
-              v-for="cycle in cycles"
-              :key="cycle.id"
-              :label="cycle.name"
-              :value="cycle.id"
-            />
-          </el-select>
+      <PerformanceRecordFilters
+        :cycle-id="selectedCycleId"
+        v-model:dept-id="deptFilter"
+        v-model:keyword="keywordFilter"
+        :cycles="cycles"
+        :departments="departments"
+        cycle-test-id="approval-cycle-select"
+        :loading="loading"
+        @update:cycle-id="selectApprovalCycle"
+        @search="searchApproval"
+        @reset="resetApprovalFilters"
+      />
+      <div v-if="canOperateApproval" class="approval-view__bulk-actions performance-result-actions">
           <el-button
-            v-if="canOperateApproval"
             type="primary"
             :disabled="!hasSelection"
             :loading="submitting"
@@ -427,7 +451,6 @@ function handleBatchReject() {
             批量通过
           </el-button>
           <el-button
-            v-if="canOperateApproval"
             type="danger"
             plain
             :disabled="!hasSelection"
@@ -436,8 +459,7 @@ function handleBatchReject() {
           >
             批量退回
           </el-button>
-        </div>
-      </template>
+      </div>
 
       <div v-if="!selectedCycle" class="approval-view__empty">
         <EmptyState description="暂无可审批的考核周期" />

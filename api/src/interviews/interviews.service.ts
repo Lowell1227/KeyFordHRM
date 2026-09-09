@@ -19,8 +19,9 @@ import dayjs from 'dayjs';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
-import { Paginated, paginated, PaginationDto } from '@/common/dto/pagination.dto';
+import { Paginated, paginated } from '@/common/dto/pagination.dto';
 import { UpdateInterviewDto } from './dto/update-interview.dto';
+import { InterviewQueryDto } from './dto/interview-query.dto';
 
 /** 面谈记录列表项。 */
 export interface InterviewListItem {
@@ -30,6 +31,7 @@ export interface InterviewListItem {
   cycleName: string | null;
   employeeId: string;
   employeeName: string;
+  employeeNo: string | null;
   position: string | null;
   deptId: string | null;
   deptName: string | null;
@@ -55,8 +57,21 @@ export class InterviewsService {
   constructor(private readonly prisma: PrismaService) {}
 
   /** GET /interviews — 主管面谈列表。 */
-  async findAll(dto: PaginationDto, viewer: AuthUser): Promise<Paginated<InterviewListItem>> {
-    const where: Prisma.PerformanceInterviewWhereInput = {};
+  async findAll(dto: InterviewQueryDto, viewer: AuthUser): Promise<Paginated<InterviewListItem>> {
+    const keyword = dto.keyword?.trim();
+    const where: Prisma.PerformanceInterviewWhereInput = {
+      ...(dto.cycleId ? { cycleId: dto.cycleId } : {}),
+      ...(dto.status ? { status: dto.status } : {}),
+      ...(dto.deptId || keyword ? {
+        task: {
+          ...(dto.deptId ? { deptId: dto.deptId } : {}),
+          ...(keyword ? { employee: { OR: [
+            { name: { contains: keyword, mode: 'insensitive' as const } },
+            { employeeNo: { contains: keyword, mode: 'insensitive' as const } },
+          ] } } : {}),
+        },
+      } : {}),
+    };
     if (!this.canViewAll(viewer)) {
       where.interviewerId = viewer.id;
     }
@@ -70,7 +85,7 @@ export class InterviewsService {
         include: {
           task: {
             include: {
-              employee: { select: { name: true, position: true } },
+              employee: { select: { name: true, employeeNo: true, position: true } },
               dept: { select: { name: true } },
               cycle: { select: { name: true } },
             },
@@ -84,8 +99,12 @@ export class InterviewsService {
   }
 
   /** GET /interviews/mine — 员工自己的面谈列表。 */
-  async findMine(dto: PaginationDto, viewer: AuthUser): Promise<Paginated<InterviewListItem>> {
-    const where: Prisma.PerformanceInterviewWhereInput = { employeeId: viewer.id };
+  async findMine(dto: InterviewQueryDto, viewer: AuthUser): Promise<Paginated<InterviewListItem>> {
+    const where: Prisma.PerformanceInterviewWhereInput = {
+      employeeId: viewer.id,
+      ...(dto.cycleId ? { cycleId: dto.cycleId } : {}),
+      ...(dto.status ? { status: dto.status } : {}),
+    };
 
     const [total, items] = await Promise.all([
       this.prisma.performanceInterview.count({ where }),
@@ -96,7 +115,7 @@ export class InterviewsService {
         include: {
           task: {
             include: {
-              employee: { select: { name: true, position: true } },
+              employee: { select: { name: true, employeeNo: true, position: true } },
               dept: { select: { name: true } },
               cycle: { select: { name: true } },
             },
@@ -407,7 +426,7 @@ export class InterviewsService {
       include: {
         task: {
           include: {
-            employee: { select: { name: true; position: true } };
+            employee: { select: { name: true; employeeNo: true; position: true } };
             dept: { select: { name: true } };
             cycle: { select: { name: true } };
           };
@@ -422,6 +441,7 @@ export class InterviewsService {
       cycleName: interview.task.cycle?.name ?? null,
       employeeId: interview.employeeId,
       employeeName: interview.task.employee?.name ?? '',
+      employeeNo: interview.task.employee?.employeeNo ?? null,
       position: interview.task.employee?.position ?? null,
       deptId: interview.task.deptId,
       deptName: interview.task.dept?.name ?? null,

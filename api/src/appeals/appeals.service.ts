@@ -194,7 +194,13 @@ export class AppealsService {
     }
 
     if (query.keyword?.trim()) {
-      where.appellant = { name: { contains: query.keyword.trim(), mode: 'insensitive' } };
+      const keyword = query.keyword.trim();
+      where.appellant = {
+        OR: [
+          { name: { contains: keyword, mode: 'insensitive' } },
+          { employeeNo: { contains: keyword, mode: 'insensitive' } },
+        ],
+      };
     }
 
     const [total, appeals] = await Promise.all([

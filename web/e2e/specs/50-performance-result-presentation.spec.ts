@@ -27,6 +27,8 @@ async function mockResultPages(page: Page) {
     let data: unknown = {};
     if (path.endsWith('/auth/me')) data = { id: 'test-manager', name: '虚拟部门负责人', sysRole: 'hr', status: 'active', canViewAll: true, businessCapabilities: { identities: [], canReviewDepartment: true, canViewDepartmentReview: true, canOperateDepartmentReview: true, canViewPerformanceCalibration: true, canOperatePerformanceCalibration: true, canViewPerformanceApproval: true, canOperatePerformanceApproval: true } };
     else if (path.endsWith('/notifications/unread-count')) data = 0;
+    else if (path === '/api/v1/cycles/mine') data = [cycle];
+    else if (path === '/api/v1/departments') data = [];
     else if (path.endsWith('/calibration/cycles')) data = [cycle];
     else if (path === '/api/v1/cycles') data = { items: [cycle], total: 1 };
     else if (path.includes('department-review')) data = { items: [{ ...row, departmentReview: { canReview: false, latest: { action: 'approve', combined: false, createdAt: '2026-09-07T10:00:00Z' } } }], total: 1, pendingTotal: 0 };

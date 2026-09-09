@@ -27,6 +27,8 @@ async function setup(page: Page, role: 'head' | 'employee' | 'employee-head' = '
     let data: unknown = {};
     if (endpoint.endsWith('/auth/me')) data = { id: userId, name: '虚拟复核账号', sysRole: 'employee', canViewAll: false, businessCapabilities: { canReviewDepartment: role === 'head', canManageTeam: false } };
     else if (endpoint.endsWith('/notifications/unread-count')) data = 0;
+    else if (endpoint === '/api/v1/cycles/mine') data = [{ id: cycleId, name: '部门复核回归周期', status: 'manager_score' }];
+    else if (endpoint === '/api/v1/departments') data = [];
     else if (endpoint === '/api/v1/cycles') data = { items: [{ id: cycleId, name: '部门复核回归周期', status: 'manager_score' }], total: 1 };
     else if (endpoint === '/api/v1/cycles/' + cycleId) data = { id: cycleId, name: '部门复核回归周期', workflowVersion: 2, status: 'manager_score', publishVisibleFields: {} };
     else if (endpoint === '/api/v1/tasks/department-review') data = { items: [{ id: taskId, cycleId, employeeName: '虚拟员工甲', employeeNo: 'QA_EMPLOYEE', cycleName: '部门复核回归周期', deptName: '人事组', position: '绩效专员', status, approvedAt: options.approvedAt, totalScore: 92.4, rawGrade: 'B', calibratedGrade: 'A', departmentReview: { canReview: status === 'dept_review', latest: latestReview } }], total: 1, pendingTotal: status === 'dept_review' ? 1 : 0, page: 1, pageSize: 20 };
@@ -237,14 +239,13 @@ test('当前环节筛选重置页码并保留待复核总数，清除后恢复�
   await page.goto('/department-review');
   await page.locator('.el-pagination .btn-next').click();
   await expect.poll(() => state.requests.at(-1)?.page).toBe(2);
-  await page.locator('.review-filters .el-select').click();
+  await page.locator('.performance-record-filter-extra .el-select').click();
   await page.getByRole('option', { name: '绩效校准中', exact: true }).click();
   await expect.poll(() => state.requests.at(-1)).toEqual({ status: 'hr_calibration', page: 1 });
   await expect(page.getByTestId('department-review-pending-total')).toHaveCount(0);
   await expect(page.getByRole('row').filter({ hasText: '虚拟已通过成员' })).toBeVisible();
   await expect(page.getByRole('row').filter({ hasText: '虚拟待复核成员' })).toHaveCount(0);
-  await page.locator('.review-filters .el-select').click();
-  await page.getByRole('option', { name: '全部环节', exact: true }).click();
+  await page.getByRole('button', { name: '重置', exact: true }).click();
   await expect.poll(() => state.requests.at(-1)).toEqual({ status: null, page: 1 });
   await expect(page.getByRole('row').filter({ hasText: '虚拟待复核成员' })).toBeVisible();
 });
@@ -252,10 +253,10 @@ test('当前环节筛选重置页码并保留待复核总数，清除后恢复�
 test('切换环节后迟到的旧列表不能覆盖当前筛选结果', async ({ page }) => {
   const state = await setupRecords(page, { slowCalibration: true });
   await page.goto('/department-review');
-  await page.locator('.review-filters .el-select').click();
+  await page.locator('.performance-record-filter-extra .el-select').click();
   await page.getByRole('option', { name: '绩效校准中', exact: true }).click();
   await expect.poll(() => state.requests.at(-1)?.status).toBe('hr_calibration');
-  await page.locator('.review-filters .el-select').click();
+  await page.locator('.performance-record-filter-extra .el-select').click();
   await page.getByRole('option', { name: '结果审批中', exact: true }).click();
   await expect(page.getByRole('row').filter({ hasText: '虚拟合并办理成员' })).toBeVisible();
   const oldResponse = page.waitForResponse(response => response.url().includes('/tasks/department-review') && response.url().includes('hr_calibration'));

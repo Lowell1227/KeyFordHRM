@@ -74,6 +74,7 @@ declare module 'vue' {
     NotificationBell: typeof import('./src/components/layout/NotificationBell.vue')['default']
     PerformanceContextPanel: typeof import('./src/components/performance/PerformanceContextPanel.vue')['default']
     PerformancePeriodResults: typeof import('./src/components/common/PerformancePeriodResults.vue')['default']
+    PerformanceRecordFilters: typeof import('./src/components/common/PerformanceRecordFilters.vue')['default']
     PerformanceResultDrawer: typeof import('./src/components/common/PerformanceResultDrawer.vue')['default']
     PerformanceResultEvidence: typeof import('./src/components/common/PerformanceResultEvidence.vue')['default']
     PerformanceResultSummary: typeof import('./src/components/common/PerformanceResultSummary.vue')['default']

@@ -33,8 +33,8 @@ export const calibrationApi = {
   },
 
   /** GET /cycles/:id/calibration — 校准工作台 */
-  getWorkbench(cycleId: string): Promise<CalibrationWorkbench> {
-    return apiGet(`/cycles/${cycleId}/calibration`);
+  getWorkbench(cycleId: string, query: { deptId?: string; keyword?: string } = {}): Promise<CalibrationWorkbench> {
+    return apiGet(`/cycles/${cycleId}/calibration`, query);
   },
 
   /** GET /cycles/:id/grade-distribution — 等级分布 */

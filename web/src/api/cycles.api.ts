@@ -27,6 +27,10 @@ export interface CycleParticipantCandidate {
   position: string | null;
 }
 
+export interface CycleParticipantPreview extends Paginated<CycleParticipantCandidate> {
+  departmentCount: number;
+}
+
 function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
   return http.get(url, { params }) as unknown as Promise<T>;
 }
@@ -44,6 +48,19 @@ function apiDelete<T>(url: string): Promise<T> {
 }
 
 export const cyclesApi = {
+  previewParticipants(body: {
+    scope: 'all' | 'custom';
+    departmentIds: string[];
+    userIds: string[];
+    excludedDepartmentIds: string[];
+    excludedUserIds: string[];
+    keyword?: string;
+    page?: number;
+    pageSize?: number;
+  }): Promise<CycleParticipantPreview> {
+    return apiPost('/cycles/participant-preview', body);
+  },
+
   findParticipantCandidates(query: { keyword?: string; ids?: string[]; page?: number; pageSize?: number } = {}): Promise<Paginated<CycleParticipantCandidate>> {
     return apiGet('/cycles/participant-candidates', { ...query, ids: query.ids?.join(',') });
   },
@@ -51,6 +68,20 @@ export const cyclesApi = {
   /** GET /cycles — 查询周期列表（hr/system_admin/vp/chairman 可访问） */
   findAll(query?: CycleQuery): Promise<Paginated<AssessmentCycle>> {
     return apiGet('/cycles', query as Record<string, unknown>);
+  },
+
+  /** 管理视图的完整周期选项，避免首屏分页遗漏历史周期。 */
+  async findAllOptions(query: Omit<CycleQuery, 'page' | 'pageSize'> = {}): Promise<AssessmentCycle[]> {
+    const items: AssessmentCycle[] = [];
+    let page = 1;
+    let total = 0;
+    do {
+      const result = await apiGet<Paginated<AssessmentCycle>>('/cycles', { ...query, page, pageSize: 100 });
+      items.push(...result.items);
+      total = result.total;
+      page += 1;
+    } while (items.length < total);
+    return items;
   },
 
   /** GET /cycles/mine — 已开放且与本人或直属团队任务相关的周期 */

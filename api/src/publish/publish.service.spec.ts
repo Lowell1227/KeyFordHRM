@@ -340,6 +340,27 @@ describe("PublishService", () => {
       prisma.assessmentTask.count = jest.fn().mockResolvedValue(6);
     });
 
+    it("按部门和员工姓名或工号过滤公示记录", async () => {
+      prisma.assessmentTask.count.mockResolvedValue(0);
+      prisma.assessmentTask.findMany.mockResolvedValue([]);
+
+      await service.getPublicationRecords(
+        "cycle-1",
+        { page: 1, pageSize: 20, skip: 0, take: 20, deptId: "dept-1", keyword: "E001" } as any,
+        makeViewer(),
+      );
+
+      expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          cycleId: "cycle-1", deptId: "dept-1",
+          employee: { OR: [
+            { name: { contains: "E001", mode: "insensitive" } },
+            { employeeNo: { contains: "E001", mode: "insensitive" } },
+          ] },
+        }),
+      }));
+    });
+
     it("分页保留各公示阶段并区分待审批和待公示", async () => {
       prisma.assessmentTask.findMany.mockResolvedValue([
         { ...makeTask("approval", null), employee, dept },

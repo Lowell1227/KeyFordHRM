@@ -16,6 +16,7 @@ import { businessDateKey, canonicalDateOnly, normalizeScoringFrequency } from '.
 import type { PerformanceCycleContext } from './tracking-context.types';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { ParticipantCandidateQueryDto } from './dto/participant-candidate-query.dto';
+import { ParticipantPreviewDto } from './dto/participant-preview.dto';
 import { assertCycleOperator, cycleOperatorWhere, isGlobalCycleOperator } from './cycle-operator-scope';
 
 const DEADLINE_FIELDS = [
@@ -99,6 +100,75 @@ export class CyclesService {
       id: user.id, name: user.name, employeeNo: user.employeeNo,
       deptId: user.deptId, deptName: user.dept?.name ?? null, position: user.position,
     })), total, dto);
+  }
+
+  /** Resolve the active/probation employees represented by the current scope draft. */
+  async previewParticipants(dto: ParticipantPreviewDto) {
+    const departmentIds = this.normalizeIdSet(dto.departmentIds);
+    const userIds = this.normalizeIdSet(dto.userIds);
+    const excludedDepartmentIds = this.normalizeIdSet(dto.excludedDepartmentIds);
+    const excludedUserIds = this.normalizeIdSet(dto.excludedUserIds);
+    const keyword = dto.keyword?.trim();
+
+    if (dto.scope === 'custom' && departmentIds.length === 0 && userIds.length === 0) {
+      return { ...paginated([], 0, dto), departmentCount: 0 };
+    }
+
+    const excludedClauses: Prisma.UserWhereInput[] = [
+      ...(excludedDepartmentIds.length > 0 ? [{ deptId: { in: excludedDepartmentIds } }] : []),
+      ...(excludedUserIds.length > 0 ? [{ id: { in: excludedUserIds } }] : []),
+    ];
+    const where: Prisma.UserWhereInput = {
+      deletedAt: null,
+      accountType: AccountType.employee,
+      isAssessorOnly: false,
+      status: { in: [UserStatus.active, UserStatus.probation] },
+      ...(dto.scope === 'custom' ? { OR: [
+        ...(departmentIds.length > 0 ? [{ deptId: { in: departmentIds } }] : []),
+        ...(userIds.length > 0 ? [{ id: { in: userIds } }] : []),
+      ] } : {}),
+      ...(excludedClauses.length === 1 ? { NOT: excludedClauses[0] } : {}),
+      ...(excludedClauses.length > 1 ? { NOT: { OR: excludedClauses } } : {}),
+      ...(keyword ? { AND: [{ OR: [
+        { name: { contains: keyword, mode: 'insensitive' as const } },
+        { employeeNo: { contains: keyword, mode: 'insensitive' as const } },
+      ] }] } : {}),
+    };
+
+    const [total, users, representedDepartments] = await Promise.all([
+      this.prisma.user.count({ where }),
+      this.prisma.user.findMany({
+        where,
+        skip: dto.skip,
+        take: dto.take,
+        orderBy: [{ dept: { sortOrder: 'asc' } }, { name: 'asc' }, { id: 'asc' }],
+        select: {
+          id: true,
+          name: true,
+          employeeNo: true,
+          deptId: true,
+          position: true,
+          dept: { select: { name: true } },
+        },
+      }),
+      this.prisma.user.findMany({
+        where,
+        distinct: ['deptId'],
+        select: { deptId: true },
+      }),
+    ]);
+    const items = users.map((user) => ({
+      id: user.id,
+      name: user.name,
+      employeeNo: user.employeeNo,
+      deptId: user.deptId,
+      deptName: user.dept?.name ?? null,
+      position: user.position,
+    }));
+    return {
+      ...paginated(items, total, dto),
+      departmentCount: representedDepartments.filter((item) => item.deptId).length,
+    };
   }
 
   /** POST /cycles — 创建考核周期。 */

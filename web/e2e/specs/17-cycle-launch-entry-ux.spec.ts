@@ -255,6 +255,42 @@ async function mockCycleLaunchPage(
     });
   });
   await page.route('**/api/v1/cycles**', (route) => {
+    if (route.request().url().endsWith('/cycles/participant-preview')) {
+      const body = route.request().postDataJSON() as {
+        scope: 'all' | 'custom';
+        departmentIds?: string[];
+        userIds?: string[];
+        excludedDepartmentIds?: string[];
+        excludedUserIds?: string[];
+      };
+      const departmentSizes: Record<string, number> = {
+        'company-root': 1,
+        sales: 10,
+        'sales-b2b': 8,
+        product: 8,
+      };
+      const selectedDepartments = body.scope === 'all'
+        ? Object.keys(departmentSizes)
+        : body.departmentIds ?? [];
+      const excludedDepartments = new Set(body.excludedDepartmentIds ?? []);
+      const selectedDepartmentTotal = selectedDepartments
+        .filter(id => !excludedDepartments.has(id))
+        .reduce((total, id) => total + (departmentSizes[id] ?? 0), 0);
+      const total = selectedDepartmentTotal + (body.userIds?.length ?? 0) - (body.excludedUserIds?.length ?? 0);
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          total,
+          page: 1,
+          pageSize: 20,
+          departmentCount: 2,
+          items: [
+            { id: 'employee-1', name: '陈晨', employeeNo: 'E001', deptId: 'sales', deptName: '销售部', position: '销售专员' },
+            { id: 'employee-2', name: '周舟', employeeNo: 'E002', deptId: 'product', deptName: '产品部', position: '产品专员' },
+          ],
+        })),
+      });
+    }
     if (route.request().url().endsWith('/cycles/schedule-preview')) {
       const body = route.request().postDataJSON() as {
         type: string;
@@ -385,7 +421,7 @@ test.describe('cycle launch entry UX', () => {
     await expect(page.locator('.app-pager')).toHaveCount(0);
   });
 
-  test('uses one multi-select scope picker without all-company or custom modes', async ({ page }) => {
+  test('uses one compact scope entry and previews the exact included employees', async ({ page }) => {
     await mockCycleLaunchPage(page, { cycles: [] });
     await page.goto('/cycles?group=attention');
     await page.getByTestId('cycle-create').click();
@@ -393,7 +429,9 @@ test.describe('cycle launch entry UX', () => {
     const dialog = page.getByRole('dialog', { name: '新建考核周期' });
     await expect(dialog.getByTestId('cycle-scope-all')).toHaveCount(0);
     await expect(dialog.getByTestId('cycle-scope-custom')).toHaveCount(0);
-    await expect(dialog.getByTestId('cycle-scope-picker-open')).toHaveText('选择考核对象');
+    await expect(dialog.getByTestId('cycle-scope-picker-open')).toHaveCount(1);
+    await expect(dialog.getByTestId('cycle-scope-picker-open')).toContainText('查看与调整');
+    await expect(dialog.getByText('选择考核对象', { exact: true })).toHaveCount(0);
     await dialog.getByTestId('cycle-scope-picker-open').click();
 
     const drawer = page.getByRole('dialog', { name: '选择考核对象' });
@@ -403,6 +441,11 @@ test.describe('cycle launch entry UX', () => {
     await expect(drawer.getByTestId('cycle-scope-select-all')).toHaveText('全选');
     await expect(drawer.getByTestId('cycle-scope-invert')).toHaveText('反选');
     await expect(drawer.getByTestId('cycle-scope-clear')).toHaveText('清空');
+    await expect(drawer.getByTestId('cycle-scope-preview')).toContainText('陈晨');
+    await expect(drawer.getByTestId('cycle-scope-preview')).toContainText('E001');
+    await expect(drawer.getByTestId('cycle-scope-preview')).toContainText('销售部');
+    await expect(drawer.getByTestId('cycle-scope-preview')).toContainText('发起前仍会按周期规则完成参与与豁免预检');
+    await expect(drawer.getByTestId('cycle-scope-preview')).not.toContainText('实际纳入人员');
   });
 
   test('saves one unified department selection with no exclusion payload', async ({ page }) => {
@@ -587,6 +630,10 @@ test.describe('cycle launch entry UX', () => {
     expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(footerBox!.y + 1);
     await expect.poll(() => body.evaluate((element) => getComputedStyle(element).overflowY)).toBe('hidden');
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    const preview = drawer.getByTestId('cycle-scope-preview');
+    await preview.scrollIntoViewIfNeeded();
+    await expect(preview).toBeVisible();
+    await expect(preview).toContainText('陈晨');
   });
 
   test('counts a checked parent separately from its automatically included descendants', async ({ page }) => {
@@ -881,7 +928,7 @@ test.describe('cycle launch entry UX', () => {
     await expect(cycleRow).toBeVisible();
     await expect(cycleRow).toContainText('半年');
 
-    await page.locator('.filter-row .el-select').nth(1).click();
+    await page.locator('.filter-row .el-select').click();
     await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '半年' }).click();
     await expect.poll(() => cycleUrls.some((url) => new URL(url).searchParams.get('type') === 'semiannual')).toBe(true);
   });

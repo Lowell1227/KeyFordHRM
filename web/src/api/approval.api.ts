@@ -11,8 +11,8 @@ function apiPost<T>(url: string, data?: unknown): Promise<T> {
 
 export const approvalApi = {
   /** GET /cycles/:id/approval — 审批人待办与已办理记录 */
-  getApprovalList(cycleId: string): Promise<ApprovalTaskView[]> {
-    return apiGet(`/cycles/${cycleId}/approval`);
+  getApprovalList(cycleId: string, query: { deptId?: string; keyword?: string } = {}): Promise<ApprovalTaskView[]> {
+    return apiGet(`/cycles/${cycleId}/approval`, query);
   },
 
   /** GET /cycles/:id/approval/overview — 审批概览（全校准分布只读 + 退回记录） */
