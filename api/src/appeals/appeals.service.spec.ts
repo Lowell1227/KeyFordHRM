@@ -1,3 +1,4 @@
+import { FlowService } from '@/tasks/flow.service';
 import { Test, TestingModule } from '@nestjs/testing';
 import { BadRequestException, ConflictException, NotFoundException } from '@nestjs/common';
 import { Appeal, AppealResult, Prisma, SysRole } from '@prisma/client';
@@ -23,7 +24,8 @@ function makeTask(overrides: Partial<Prisma.AssessmentTaskUncheckedCreateInput> 
     cycleId: 'cycle-1',
     employeeId: 'emp-1',
     deptId: 'dept-1',
-    status: 'published',
+    status: 'approval',
+    managerId: 'manager-1', approvedAt: new Date('2026-09-01'), publishedAt: null,
     isExempt: false,
     ...overrides,
   } as Prisma.AssessmentTaskGetPayload<{ include: { gradeResult: true; employee: true; cycle: true } }>;
@@ -36,7 +38,7 @@ function makeGradeResult(overrides: Partial<Prisma.GradeResultUncheckedCreateInp
     calculatedScore: new Prisma.Decimal(85),
     rawGrade: 'B' as const,
     calibratedGrade: 'B' as const,
-    coefficient: new Prisma.Decimal(1.0),
+    coefficient: new Prisma.Decimal(1.0), approvedAt: new Date('2026-09-01'),
     ...overrides,
   };
 }
@@ -69,6 +71,9 @@ describe('AppealsService', () => {
     };
 
     const client = {
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      flowRecord: { findFirst: jest.fn().mockResolvedValue(null) },
+      notificationLog: { create: jest.fn() },
       appeal,
       assessmentTask,
       gradeResult,
@@ -87,6 +92,7 @@ describe('AppealsService', () => {
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         AppealsService,
+        { provide: FlowService, useValue: { transitionTx: jest.fn() } },
         { provide: PrismaService, useValue: prisma },
         { provide: CalibrationService, useValue: calibrationService },
       ],

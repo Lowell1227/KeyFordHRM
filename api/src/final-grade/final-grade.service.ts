@@ -48,6 +48,7 @@ export interface FinalGradeDetail {
   position: string | null;
   status: TaskStatus;
   approvedAt: Date | null;
+  publishedAt: Date | null;
   managerName: string | null;
   /** 依据任务冻结关系确定本次是否合并部门复核。 */
   departmentReview: { combined: boolean; reviewerName: string | null };
@@ -90,7 +91,7 @@ export class FinalGradeService {
       where: {
         taskId,
         action: 'reject',
-        nodeType: { in: ['dept_review', 'hr_calibration'] },
+        nodeType: { in: ['dept_review', 'hr_calibration', 'appeal'] },
       },
       orderBy: { createdAt: 'desc' },
       include: { actor: { select: { name: true } } },
@@ -127,6 +128,7 @@ export class FinalGradeService {
       position: task.employee?.position ?? null,
       status: task.status,
       approvedAt: task.approvedAt,
+      publishedAt: task.publishedAt ?? null,
       managerName: task.manager?.name ?? null,
       departmentReview: {
         combined: this.isCombinedDepartmentReview(task),

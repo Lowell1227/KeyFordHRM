@@ -1,3 +1,4 @@
+import { isResultPublished, ResultPublicationFact } from '@/tasks/result-publication';
 import { buildResultEvidence, RESULT_PERIOD_SELECT, ResultEvidence } from '@/tasks/result-evidence';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { AssessmentCycle, PerfGrade, Prisma, TaskStatus } from '@prisma/client';
@@ -35,6 +36,7 @@ export interface CalibrationWorkbenchItem {
   rawGrade: PerfGrade | null;
   calibratedGrade: PerfGrade | null;
   approvedAt: Date | null;
+  publishedAt: Date | null;
   /** 直属上级提交整周期结果评定的时间。 */
   finalGradeSubmittedAt: Date | null;
   managerName: string | null;
@@ -83,6 +85,7 @@ export interface CalibrationCandidateDetail {
   finalGrade: PerfGrade | null;
   calibratedGrade: PerfGrade | null;
   approvedAt: Date | null;
+  publishedAt: Date | null;
   periods: Array<{
     periodKey: string;
     status: string;
@@ -194,6 +197,7 @@ export class CalibrationService {
       finalGrade: task.gradeResult?.rawGrade ?? null,
       calibratedGrade: task.gradeResult?.calibratedGrade ?? null,
       approvedAt: task.approvedAt ?? null,
+      publishedAt: task.publishedAt ?? null,
       resultEvidence,
       periods: resultEvidence.periods,
       indicators: resultEvidence.indicators,
@@ -459,6 +463,7 @@ export class CalibrationService {
       rawGrade: ownResult ? null : task.gradeResult?.rawGrade ?? null,
       calibratedGrade: ownResult ? null : task.gradeResult?.calibratedGrade ?? null,
       approvedAt: task.approvedAt ?? null,
+      publishedAt: task.publishedAt ?? null,
       finalGradeSubmittedAt: task.managerScoredAt ?? null,
       managerName: task.manager?.name ?? null,
     };
@@ -514,7 +519,7 @@ export function buildGradeDistribution(
 
 /** 构建阶段进度。 */
 export function buildProgress(
-  tasks: Array<{ status: TaskStatus }>,
+  tasks: ResultPublicationFact[],
 ): CalibrationProgress {
   const progress: CalibrationProgress = {
     finalGrading: 0,
@@ -526,7 +531,7 @@ export function buildProgress(
   for (const task of tasks) {
     if (task.status === 'hr_calibration') progress.pending++;
     else if (task.status === 'dept_review') progress.deptReview++;
-    else if (task.status === 'approval') progress.inApproval++;
+    else if (task.status === 'approval' || (task.status === 'confirmed' && !isResultPublished(task))) progress.inApproval++;
     else if (
       task.status === 'published'
       || task.status === 'confirmed'

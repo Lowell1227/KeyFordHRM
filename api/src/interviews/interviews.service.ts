@@ -1,3 +1,4 @@
+import { isResultPublished } from '@/tasks/result-publication';
 import {
   BadRequestException,
   ForbiddenException,
@@ -48,7 +49,6 @@ export interface InterviewDetail extends PerformanceInterview {
   interviewerName: string | null;
 }
 
-const POST_PUBLISH_STATUSES: TaskStatus[] = ['published', 'confirmed', 'appealing', 'closed'];
 
 @Injectable()
 export class InterviewsService {
@@ -168,7 +168,7 @@ export class InterviewsService {
 
     this.assertInterviewer(interview, viewer);
 
-    if (!POST_PUBLISH_STATUSES.includes(interview.task.status)) {
+    if (!isResultPublished(interview.task)) {
       throw new BadRequestException({
         code: ERROR_CODE.CONFLICT,
         message: '仅公示及之后的任务可填写面谈记录',
@@ -217,7 +217,7 @@ export class InterviewsService {
 
     this.assertInterviewer(interview, viewer);
 
-    if (!POST_PUBLISH_STATUSES.includes(interview.task.status)) {
+    if (!isResultPublished(interview.task)) {
       throw new BadRequestException({
         code: ERROR_CODE.CONFLICT,
         message: '仅公示及之后的任务可签字',
@@ -283,7 +283,7 @@ export class InterviewsService {
 
     this.assertEmployee(interview, viewer);
 
-    if (!POST_PUBLISH_STATUSES.includes(interview.task.status)) {
+    if (!isResultPublished(interview.task)) {
       throw new BadRequestException({
         code: ERROR_CODE.CONFLICT,
         message: '仅公示及之后的任务可签字',

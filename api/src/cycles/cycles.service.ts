@@ -536,7 +536,10 @@ export class CyclesService {
       ] } : {};
     const where: Prisma.AssessmentCycleWhereInput = {
       ...operatorScope,
-      ...(forPublication && { tasks: { some: { status: { in: ['approval', 'published', 'confirmed', 'appealing', 'closed'] } } } }),
+      ...(forPublication && { tasks: { some: { OR: [
+        { status: { in: ['approval', 'published', 'confirmed', 'appealing', 'closed'] } },
+        { flowRecords: { some: { nodeType: 'approval' } } },
+      ] } } }),
       ...(query.status && { status: query.status }),
       ...(!query.status && query.group && { status: { in: CYCLE_STATUS_GROUPS[query.group] } }),
       ...(!canManageCycles && { status: { notIn: ['draft', 'scheduled', 'launch_blocked'] } }),

@@ -1,3 +1,4 @@
+import { PUBLISHED_RESULT_WHERE } from '@/tasks/result-publication';
 import { ForbiddenException, Injectable, NotFoundException, StreamableFile } from '@nestjs/common';
 import { AssessmentCycle, PerfGrade, Prisma, SysRole, TaskStatus } from '@prisma/client';
 import dayjs from 'dayjs';
@@ -322,7 +323,7 @@ export class ReportsService {
       // before grade filtering, totals, lists, or Excel generation can reveal it.
       OR: [
         { employeeId: { not: viewer.id } },
-        { status: { in: [TaskStatus.published, TaskStatus.confirmed, TaskStatus.appealing, TaskStatus.closed] } },
+        PUBLISHED_RESULT_WHERE,
       ],
     };
 

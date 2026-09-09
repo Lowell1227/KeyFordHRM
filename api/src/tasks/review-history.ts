@@ -1,6 +1,6 @@
 import { FlowNodeType, Prisma } from '@prisma/client';
 
-export const REVIEW_HISTORY_NODES: FlowNodeType[] = ['manager_score', 'dept_review', 'hr_calibration', 'approval', 'publish'];
+export const REVIEW_HISTORY_NODES: FlowNodeType[] = ['manager_score', 'dept_review', 'hr_calibration', 'approval', 'employee_confirm', 'appeal', 'publish'];
 
 type ReviewRecord = {
   id: string; nodeType: string; action: string; comment: string | null;

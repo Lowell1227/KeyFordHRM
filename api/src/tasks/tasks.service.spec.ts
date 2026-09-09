@@ -315,7 +315,7 @@ describe('TasksService', () => {
         vetoOperatorId: 'mgr-1',
         vetoOperator: { id: 'mgr-1', name: 'Manager A' },
         coefficient: new Prisma.Decimal(1.0),
-        isPublished: true,
+        isPublished: ['published', 'confirmed', 'appealing', 'closed'].includes(status),
         employeeConfirmedAt: null,
       },
       flowRecords: [],
@@ -533,15 +533,15 @@ describe('TasksService', () => {
       expect(result).toMatchObject({ deptHeadId: 'head-1', deptHeadName: '虚拟部门负责人' });
     });
 
-    it('已审批待公示不再向审批人展示待办或催办', async () => {
+    it('已审批后由员工确认，员工本人不显示催办', async () => {
       const task: any = buildFullTask('approval');
       task.approvedAt = new Date();
       task.cycle.deadlinePublish = new Date('2027-04-01T00:00:00Z');
       prisma.assessmentTask.findUnique.mockResolvedValue(task);
       const result = await service.findOne('task-1', makeViewer({ id: 'emp-1' }));
       expect(result.workflowContext).toMatchObject({
-        statusLabel: '审批已通过，待公示', currentHandler: null, canRemind: false,
-        reminderNodeType: null, currentDeadline: task.cycle.deadlinePublish,
+        statusLabel: '待确认结果', currentHandler: { id: 'emp-1', nodeType: 'employee' }, canRemind: false,
+        reminderNodeType: 'employee', currentDeadline: task.cycle.deadlinePublish,
       });
     });
 

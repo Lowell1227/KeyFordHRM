@@ -67,11 +67,12 @@ async function streamToBuffer(stream: NodeJS.ReadableStream): Promise<Buffer> {
 
 /** Evaluate the Prisma predicates used by report queries against isolated fixtures. */
 function matchesReportWhere(value: any, where: any): boolean {
-  if (where === null || typeof where !== 'object') return value === where;
+  if (where === null || typeof where !== 'object') return (value ?? null) === where;
   return Object.entries(where).every(([key, condition]) => {
     if (key === 'AND') return [condition].flat().every((part) => matchesReportWhere(value, part));
     if (key === 'OR') return (condition as any[]).some((part) => matchesReportWhere(value, part));
     if (key === 'NOT') return [condition].flat().every((part) => !matchesReportWhere(value, part));
+    if (key === 'is') return value != null && matchesReportWhere(value, condition);
     if (key === 'not') return !matchesReportWhere(value, condition);
     if (key === 'in') return (condition as any[]).includes(value);
     if (key === 'notIn') return !(condition as any[]).includes(value);
@@ -122,6 +123,7 @@ describe('ReportsService', () => {
     function resultTask(id: string, employeeId: string, status: TaskStatus, grade: PerfGrade) {
       return makeTask({
         id, employeeId, status,
+        publishedAt: status === TaskStatus.confirmed ? new Date('2026-09-01') : null,
         employee: { id: employeeId, name: id, employeeNo: id, position: '工程师' },
         gradeResult: { calculatedScore: new Prisma.Decimal(90), rawGrade: grade, calibratedGrade: null },
       });

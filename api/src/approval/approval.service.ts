@@ -27,6 +27,7 @@ export interface ApprovalListItem {
   isVeto: boolean;
   approverId: string | null;
   approvedAt: Date | null;
+  publishedAt: Date | null;
 }
 
 /** 批量审批结果。 */
@@ -125,7 +126,7 @@ export class ApprovalService {
     };
   }
 
-  /** POST /cycles/:id/approval — 批量审批，保留 approval 状态供 HR 公示。 */
+  /** POST /cycles/:id/approval — 批量审批，保留 approval 状态等待员工确认。 */
   async approveTasks(
     cycleId: string,
     dto: BulkApprovalDto,
@@ -160,6 +161,13 @@ export class ApprovalService {
               approvedAt: now,
             },
           });
+
+          await tx.notificationLog.create({ data: {
+            userId: task.employeeId, senderId: viewer.id, taskId: task.id, cycleId: task.cycleId,
+            type: 'result_confirmation_required', title: '请确认绩效结果',
+            content: '绩效结果已审批通过，请查看并确认结果。如有疑问，请线下联系 HR。',
+            channel: 'system', status: 'sent', sentAt: now,
+          } });
 
           await tx.flowRecord.create({
             data: {
@@ -364,6 +372,7 @@ export class ApprovalService {
       isVeto: hideOwnResult ? false : task.gradeResult?.isVeto ?? false,
       approverId: task.approverId ?? null,
       approvedAt: task.approvedAt,
+      publishedAt: task.publishedAt ?? null,
     };
   }
 }

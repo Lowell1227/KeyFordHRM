@@ -173,11 +173,11 @@ describe('FlowService', () => {
   });
 
   describe('审批节点转换（#11）', () => {
-    it('approval → published 的 nodeType 为 publish', async () => {
-      tx.assessmentTask.update.mockResolvedValue({ ...makeTask('approval'), status: 'published' });
+    it('confirmed → published 的 nodeType 为 publish', async () => {
+      tx.assessmentTask.update.mockResolvedValue({ ...makeTask('confirmed'), status: 'published' });
 
       const result = await service.transition({
-        task: makeTask('approval'),
+        task: makeTask('confirmed'),
         action: 'approve',
         targetStatus: 'published',
         actorId: 'vp-1',

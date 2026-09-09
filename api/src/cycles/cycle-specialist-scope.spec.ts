@@ -23,7 +23,7 @@ describe('cycle specialist scope in services', () => {
     const query = Object.assign(new CycleQueryDto(), { purpose: 'publish' });
     await service.findAll(query, viewer);
     expect(prisma.assessmentCycle.findMany.mock.calls[0][0].where.hrOwnerId).toBe(viewer.id);
-    expect(prisma.assessmentCycle.findMany.mock.calls[0][0].where.tasks.some.status.in).toContain('closed');
+    expect(prisma.assessmentCycle.findMany.mock.calls[0][0].where.tasks.some.OR[0].status.in).toContain('closed');
     await expect(service.findAll(query, { ...viewer, hrCapabilities: ['cycle_plan_edit'] })).rejects.toThrow(ForbiddenException);
   });
   it('keeps independently assigned approval and team cycles visible in general selectors', async () => {

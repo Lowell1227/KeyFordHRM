@@ -1,3 +1,4 @@
+import { isResultPublished, canEmployeeViewResult, PUBLISHED_RESULT_WHERE } from '@/tasks/result-publication';
 import { buildResultEvidence, maskResultEvidence, RESULT_PERIOD_SELECT, ResultEvidence } from '@/tasks/result-evidence';
 import {
   BadRequestException,
@@ -29,6 +30,7 @@ export interface PublishResult {
 }
 
 export type PublicationState =
+  | "pending_confirmation"
   | "pending_approval"
   | "ready_to_publish"
   | "published"
@@ -66,13 +68,6 @@ export interface PublicationRecordDetail extends PublicationRecord {
 
 const PUBLICATION_TASK_STATUSES: TaskStatus[] = [
   TaskStatus.approval,
-  TaskStatus.published,
-  TaskStatus.confirmed,
-  TaskStatus.appealing,
-  TaskStatus.closed,
-];
-
-const PUBLISHED_TASK_STATUSES: TaskStatus[] = [
   TaskStatus.published,
   TaskStatus.confirmed,
   TaskStatus.appealing,
@@ -132,7 +127,7 @@ export class PublishService {
     const cycle = await this.getAuthorizedCycleOrThrow(cycleId, viewer);
     const where: Prisma.AssessmentTaskWhereInput = {
       cycleId,
-      status: { in: PUBLICATION_TASK_STATUSES },
+      OR: [{ status: { in: PUBLICATION_TASK_STATUSES } }, { flowRecords: { some: { nodeType: "approval" } } }],
       isExempt: false,
     };
     const [total, tasks] = await Promise.all([
@@ -150,6 +145,7 @@ export class PublishService {
           publishedAt: true,
           employeeConfirmedAt: true,
           updatedAt: true,
+          appeals: { where: { status: "pending" }, select: { id: true } },
           employee: {
             select: { name: true, employeeNo: true, position: true },
           },
@@ -161,6 +157,8 @@ export class PublishService {
               rawGrade: true,
               calibratedGrade: true,
               publishedAt: true,
+              isPublished: true,
+              employeeConfirmedAt: true,
             },
           },
         },
@@ -187,10 +185,11 @@ export class PublishService {
         id: taskId,
         cycleId,
         isExempt: false,
-        status: { in: PUBLICATION_TASK_STATUSES },
+        AND: [{ OR: [{ status: { in: PUBLICATION_TASK_STATUSES } }, { flowRecords: { some: { nodeType: "approval" } } }] }],
         OR: [
           { employeeId: { not: viewer.id } },
-          { status: { in: PUBLISHED_TASK_STATUSES } },
+          PUBLISHED_RESULT_WHERE,
+          { status: { in: ["approval", "confirmed"] }, approvedAt: { not: null } },
         ],
       },
       select: {
@@ -202,6 +201,7 @@ export class PublishService {
         publishedAt: true,
         employeeConfirmedAt: true,
         updatedAt: true,
+        appeals: { where: { status: "pending" }, select: { id: true } },
         employee: { select: { name: true, employeeNo: true, position: true } },
         dept: { select: { name: true } },
         manager: { select: { name: true } },
@@ -212,6 +212,8 @@ export class PublishService {
             rawGrade: true,
             calibratedGrade: true,
             publishedAt: true,
+            isPublished: true,
+            employeeConfirmedAt: true,
           },
         },
         periods: { orderBy: { sequence: "asc" }, select: RESULT_PERIOD_SELECT },
@@ -240,7 +242,7 @@ export class PublishService {
       resultEvidence: task.employeeId === viewer.id ? maskResultEvidence(evidence, visibleFields) : evidence,
       flowRecords:
         task.employeeId === viewer.id &&
-        PUBLISHED_TASK_STATUSES.includes(task.status)
+        canEmployeeViewResult(task)
           ? this.maskOwnPublishedHistory(flowRecords, visibleFields)
           : flowRecords,
     };
@@ -282,13 +284,19 @@ export class PublishService {
           where: {
             id: { in: dto.taskIds },
             cycleId,
-            status: TaskStatus.approval,
+            status: TaskStatus.confirmed,
+            employeeConfirmedAt: { not: null },
+            NOT: PUBLISHED_RESULT_WHERE,
             isExempt: false,
           },
           include: {
+            appeals: { where: { status: "pending" }, select: { id: true } },
             gradeResult: {
               select: {
                 approvedAt: true,
+                employeeConfirmedAt: true,
+                isPublished: true,
+                publishedAt: true,
                 calibratedGrade: true,
                 rawGrade: true,
               },
@@ -303,12 +311,13 @@ export class PublishService {
           });
         }
         const notApproved = lockedTasks.filter(
-          (task) => !task.gradeResult?.approvedAt,
+          (task) => task.status !== "confirmed" || !task.approvedAt || !task.gradeResult?.approvedAt
+            || !task.employeeConfirmedAt || !task.gradeResult?.employeeConfirmedAt || isResultPublished(task) || task.appeals.length > 0,
         );
         if (notApproved.length > 0) {
           throw new ConflictException({
             code: ERROR_CODE.CONFLICT,
-            message: `存在未审批的任务：${notApproved.map((task) => task.id).join(", ")}`,
+            message: `存在未审批、未确认或申诉未完成的任务：${notApproved.map((task) => task.id).join(", ")}`,
           });
         }
 
@@ -378,16 +387,16 @@ export class PublishService {
           }
         }
 
-        // 仅当本周期已无处于 approval 的非豁免任务时，才将周期状态推进为 published
-        const remainingApprovalTasks = await tx.assessmentTask.count({
-          where: { cycleId, status: "approval", isExempt: false },
+        // 全部非豁免任务均已实际公示后才推进周期，申诉重评和待确认任务仍阻止整周期完成。
+        const remainingUnpublishedTasks = await tx.assessmentTask.count({
+          where: { cycleId, isExempt: false, NOT: PUBLISHED_RESULT_WHERE },
         });
 
         const cycleData: Prisma.AssessmentCycleUpdateInput = {
           publishedAt,
           deadlineAppeal,
         };
-        if (remainingApprovalTasks === 0) {
+        if (remainingUnpublishedTasks === 0) {
           cycleData.status = "published";
         }
 
@@ -449,19 +458,10 @@ export class PublishService {
     return cycle;
   }
 
-  private publicationState(task: {
-    status: TaskStatus;
-    gradeResult?: { approvedAt: Date | null } | null;
-  }): PublicationState {
-    if (task.status === TaskStatus.approval) {
-      return task.gradeResult?.approvedAt
-        ? "ready_to_publish"
-        : "pending_approval";
-    }
-    return task.status as Exclude<
-      PublicationState,
-      "pending_approval" | "ready_to_publish"
-    >;
+  private publicationState(task: any): PublicationState {
+    if (isResultPublished(task)) return task.status as PublicationState;
+    if (task.status === TaskStatus.confirmed && task.employeeConfirmedAt && task.gradeResult?.approvedAt) return 'ready_to_publish';
+    return task.gradeResult?.approvedAt ? 'pending_confirmation' : 'pending_approval';
   }
 
   private mapPublicationRecord(
@@ -469,10 +469,10 @@ export class PublishService {
     cycle: { name: string; publishVisibleFields: Prisma.JsonValue },
     viewer: AuthUser,
   ): PublicationRecord {
-    const published = PUBLISHED_TASK_STATUSES.includes(task.status);
-    const resultMasked = task.employeeId === viewer.id && !published;
+    const canViewOwnResult = canEmployeeViewResult(task);
+    const resultMasked = task.employeeId === viewer.id && !canViewOwnResult;
     const ownVisibleFields =
-      task.employeeId === viewer.id && published
+      task.employeeId === viewer.id && canViewOwnResult
         ? this.parsePublishVisibleFields(cycle.publishVisibleFields)
         : DEFAULT_PUBLISH_VISIBLE_FIELDS;
     return {
@@ -487,8 +487,8 @@ export class PublishService {
       status: task.status,
       publicationState: this.publicationState(task),
       canPublish:
-        task.status === TaskStatus.approval &&
-        Boolean(task.gradeResult?.approvedAt),
+        task.status === TaskStatus.confirmed && !isResultPublished(task) &&
+        Boolean(task.approvedAt && task.employeeConfirmedAt && task.gradeResult?.approvedAt && task.gradeResult?.employeeConfirmedAt) && !(task.appeals?.length),
       resultMasked,
       totalScore:
         resultMasked || !ownVisibleFields.total_score

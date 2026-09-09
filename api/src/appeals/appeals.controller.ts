@@ -37,6 +37,11 @@ export class AppealsController {
     return this.appealsService.findAll(query, query);
   }
 
+  @Get('candidates')
+  findCandidates(@Query() query: AppealQueryDto) {
+    return this.appealsService.findCandidates(query, query);
+  }
+
   @Get('mine')
   mineDeprecated() {
     throw new NotFoundException();

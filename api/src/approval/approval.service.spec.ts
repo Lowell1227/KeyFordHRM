@@ -65,6 +65,7 @@ describe('ApprovalService', () => {
 
   beforeEach(async () => {
     tx = {
+      notificationLog: { create: jest.fn() },
       gradeResult: { upsert: jest.fn(), updateMany: jest.fn() },
       assessmentTask: { update: jest.fn(), updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       flowRecord: { create: jest.fn() },

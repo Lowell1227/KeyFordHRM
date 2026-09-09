@@ -53,12 +53,17 @@ export const FLOW_TRANSITIONS: FlowTransition[] = [
   // HR 校准驳回：退回直属上级重新评定（整周期结果评定）
   { from: 'hr_calibration', action: 'reject', to: 'manager_scoring', nodeType: 'hr_calibration' },
 
-  // 审批通过 → 公示发布（#11 范围）
-  { from: 'approval', action: 'approve', to: 'published', nodeType: 'publish' },
+  // 员工确认后由 HR 公示发布
+  { from: 'confirmed', action: 'approve', to: 'published', nodeType: 'publish' },
   // 审批人退回绩效校准（#11 范围）
   { from: 'approval', action: 'reject', to: 'hr_calibration', nodeType: 'approval' },
 
+  // HR 代录公示前异议，沿原链路重新评定
+  { from: 'approval', action: 'reject', to: 'manager_scoring', nodeType: 'appeal' },
+  { from: 'confirmed', action: 'reject', to: 'manager_scoring', nodeType: 'appeal' },
+
   // 员工确认结果
+  { from: 'approval', action: 'approve', to: 'confirmed', nodeType: 'employee_confirm' },
   { from: 'published', action: 'approve', to: 'confirmed', nodeType: 'employee_confirm' },
   // 员工申诉（#12 范围）
   { from: 'published', action: 'reject', to: 'appealing', nodeType: 'appeal' },

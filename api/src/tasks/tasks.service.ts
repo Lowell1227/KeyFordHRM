@@ -1,3 +1,4 @@
+import { canEmployeeViewResult, isResultPublished, ResultPublicationFact } from './result-publication';
 import { buildResultEvidence, maskResultEvidence, RESULT_PERIOD_SELECT, ResultEvidence } from '@/tasks/result-evidence';
 import { ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AssessmentPeriodStatus, AssessmentPeriodType, AssessmentTask, IndicatorInstance, IndicatorVisibilityScope, ObjectiveLevel, Prisma, SysRole, TaskStatus } from '@prisma/client';
@@ -44,6 +45,9 @@ type IndicatorBaselineSource = IndicatorInstance & {
 
 /** 任务列表项。 */
 export interface TaskListItem {
+  publishedAt?: Date | null;
+  employeeConfirmedAt?: Date | null;
+  approvedAt?: Date | null;
   id: string;
   cycleId: string;
   cycleName: string;
@@ -284,9 +288,9 @@ export class TasksService {
         take: dto.take,
         include: {
           employee: { select: { name: true } },
-          cycle: { select: { name: true } },
+          cycle: { select: { name: true, publishVisibleFields: true } },
           dept: { select: { name: true } },
-          gradeResult: { select: { calculatedScore: true, rawGrade: true } },
+          gradeResult: { select: { calculatedScore: true, rawGrade: true, approvedAt: true, publishedAt: true, isPublished: true } },
         },
         orderBy: [{ cycle: { startDate: 'desc' } }, { updatedAt: 'desc' }],
       }),
@@ -302,10 +306,13 @@ export class TasksService {
       deptName: t.dept?.name ?? null,
       managerId: t.managerId,
       status: t.status,
+      approvedAt: t.approvedAt ?? null,
       isExempt: t.isExempt,
       exemptReason: t.exemptReason,
-      totalScore: this.isOwnUnpublishedResult(t, viewer) ? null : t.gradeResult?.calculatedScore?.toNumber() ?? null,
-      rawGrade: this.isOwnUnpublishedResult(t, viewer) ? null : t.gradeResult?.rawGrade ?? null,
+      totalScore: this.isOwnUnpublishedResult(t, viewer) || (t.employeeId === viewer.id && !this.parsePublishVisibleFields(t.cycle?.publishVisibleFields).total_score) ? null : t.gradeResult?.calculatedScore?.toNumber() ?? null,
+      rawGrade: this.isOwnUnpublishedResult(t, viewer) || (t.employeeId === viewer.id && !this.parsePublishVisibleFields(t.cycle?.publishVisibleFields).grade) ? null : t.gradeResult?.rawGrade ?? null,
+      publishedAt: t.publishedAt ?? null,
+      employeeConfirmedAt: t.employeeConfirmedAt ?? null,
       updatedAt: t.updatedAt,
     }));
 
@@ -326,7 +333,7 @@ export class TasksService {
       this.prisma.assessmentTask.findMany({
         where, skip: dto.skip, take: dto.take,
         include: {
-          employee: { select: { name: true, employeeNo: true, position: true } }, cycle: { select: { name: true } }, dept: { select: { name: true } },
+          employee: { select: { name: true, employeeNo: true, position: true } }, cycle: { select: { name: true, publishVisibleFields: true } }, dept: { select: { name: true } },
           gradeResult: { select: { calculatedScore: true, rawGrade: true, calibratedGrade: true } },
           flowRecords: {
             where: { nodeType: 'dept_review', action: { in: ['approve', 'reject'] } },
@@ -349,6 +356,8 @@ export class TasksService {
         rawGrade: t.gradeResult?.rawGrade ?? null,
         calibratedGrade: t.gradeResult?.calibratedGrade ?? null,
         approvedAt: t.approvedAt ?? null,
+        publishedAt: t.publishedAt ?? null,
+        employeeConfirmedAt: t.employeeConfirmedAt ?? null,
         updatedAt: t.updatedAt,
         departmentReview: {
           canReview: t.status === TaskStatus.dept_review,
@@ -381,9 +390,9 @@ export class TasksService {
         take: dto.take,
         include: {
           employee: { select: { name: true } },
-          cycle: { select: { name: true, workflowVersion: true } },
+          cycle: { select: { name: true, workflowVersion: true, publishVisibleFields: true } },
           dept: { select: { name: true } },
-          gradeResult: { select: { calculatedScore: true, rawGrade: true } },
+          gradeResult: { select: { calculatedScore: true, rawGrade: true, approvedAt: true, publishedAt: true, isPublished: true } },
           periods: {
             orderBy: { sequence: 'asc' },
             select: {
@@ -414,10 +423,13 @@ export class TasksService {
       deptName: t.dept?.name ?? null,
       managerId: t.managerId,
       status: t.status,
+      approvedAt: t.approvedAt ?? null,
       isExempt: t.isExempt,
       exemptReason: t.exemptReason,
-      totalScore: this.isOwnUnpublishedResult(t, viewer) ? null : t.gradeResult?.calculatedScore?.toNumber() ?? null,
-      rawGrade: this.isOwnUnpublishedResult(t, viewer) ? null : t.gradeResult?.rawGrade ?? null,
+      totalScore: this.isOwnUnpublishedResult(t, viewer) || (t.employeeId === viewer.id && !this.parsePublishVisibleFields(t.cycle?.publishVisibleFields).total_score) ? null : t.gradeResult?.calculatedScore?.toNumber() ?? null,
+      rawGrade: this.isOwnUnpublishedResult(t, viewer) || (t.employeeId === viewer.id && !this.parsePublishVisibleFields(t.cycle?.publishVisibleFields).grade) ? null : t.gradeResult?.rawGrade ?? null,
+      publishedAt: t.publishedAt ?? null,
+      employeeConfirmedAt: t.employeeConfirmedAt ?? null,
       updatedAt: t.updatedAt,
       workflowVersion: t.cycle?.workflowVersion ?? 1,
       periods: t.periods,
@@ -547,15 +559,15 @@ export class TasksService {
     detail.resultEvidence = buildResultEvidence(task.periods);
     detail.workflowContext = await this.buildWorkflowContext(task, viewer);
 
-    // D18：员工本人需区分公示前/公示后
+    // 员工本人在批准后可查看结果，仍遵守周期字段可见配置。
     const isEmployee = viewer.id === task.employeeId;
-    const isPublished = (['published', 'confirmed', 'appealing', 'closed'] as TaskStatus[]).includes(task.status);
+    const isPublished = canEmployeeViewResult(task);
     if (isEmployee && !isPublished) {
-      // 公示前：无条件隐藏所有主管评估结果、总分、等级
+      // 批准前：隐藏所有主管评估结果、总分、等级
       return this.applyPrePublishMask(detail);
     }
     if (isEmployee && isPublished) {
-      // 公示后：按 cycle.publishVisibleFields 遮蔽
+      // 批准后：按 cycle.publishVisibleFields 遮蔽
       const visibleFields = this.parsePublishVisibleFields(task.cycle.publishVisibleFields);
       return this.applyMask(detail, visibleFields);
     }
@@ -1610,25 +1622,40 @@ export class TasksService {
 
   /** POST /tasks/:id/employee-confirm */
   async employeeConfirm(id: string, viewer: AuthUser): Promise<{ id: string; status: TaskStatus }> {
-    const task = await this.getTaskOrThrow(id);
-    this.assertEmployee(task, viewer);
-
-    await this.prisma.$transaction(async (tx) => {
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "assessment_tasks" WHERE "id" = ${id}::uuid FOR NO KEY UPDATE`;
+      const task = await tx.assessmentTask.findUnique({ where: { id }, include: { gradeResult: true } });
+      if (!task) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核任务不存在' });
+      this.assertEmployee(task, viewer);
+      const legacy = task.status === 'published' && isResultPublished(task);
+      if (task.isExempt || task.employeeConfirmedAt || task.gradeResult?.employeeConfirmedAt || (!legacy && (
+        task.status !== 'approval' || !task.approvedAt || !task.gradeResult?.approvedAt || isResultPublished(task)
+      ))) throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '结果尚未审批通过、已经确认或状态已变化，请刷新后重试' });
+      const now = new Date();
       await this.flowService.transitionTx(tx, {
-        task,
-        action: 'approve',
-        targetStatus: 'confirmed',
-        actorId: viewer.id,
-        taskUpdate: { employeeConfirmedAt: new Date() },
+        task, action: 'approve', targetStatus: 'confirmed', actorId: viewer.id,
+        comment: '员工确认绩效结果', taskUpdate: { employeeConfirmedAt: now },
       });
-
-      await tx.gradeResult.updateMany({
-        where: { taskId: id },
-        data: { employeeConfirmedAt: new Date() },
-      });
+      await tx.gradeResult.updateMany({ where: { taskId: id }, data: { employeeConfirmedAt: now } });
+      const pending = await tx.appeal.findMany({ where: { taskId: id, status: 'pending' } });
+      for (const appeal of pending) {
+        const record = await tx.flowRecord.findFirst({ where: {
+          taskId: id, nodeType: 'appeal',
+          AND: [{ extraData: { path: ['type'], equals: 'prepublication_appeal' } }, { extraData: { path: ['appealId'], equals: appeal.id } }],
+        } });
+        if (!record) continue;
+        const original = (record.extraData as Prisma.JsonObject)?.originalResult as Prisma.JsonObject | undefined;
+        const previousGrade = original?.calibratedGrade ?? original?.rawGrade;
+        const currentGrade = task.gradeResult?.calibratedGrade ?? task.gradeResult?.rawGrade;
+        await tx.appeal.update({ where: { id: appeal.id }, data: {
+          status: 'resolved', hrResolvedAt: now, finalResult: previousGrade === currentGrade ? 'maintained' : 'modified',
+          hrResolution: '已沿原评定审批流程重新办理，员工已再次确认结果',
+        } });
+      }
+      await tx.auditLog.create({ data: { userId: viewer.id, action: 'employee_confirm_result', entityType: 'assessment_task', entityId: id,
+        newValue: { employeeConfirmedAt: now.toISOString(), status: 'confirmed' } } });
+      return { id: task.id, status: 'confirmed' as TaskStatus };
     });
-
-    return { id: task.id, status: 'confirmed' };
   }
 
   // ---------------------------------------------------------------------------
@@ -1941,6 +1968,8 @@ export class TasksService {
       exemptReason: task.exemptReason,
       managerScoredAt: task.managerScoredAt,
       approvedAt: task.approvedAt,
+      publishedAt: task.publishedAt ?? null,
+      employeeConfirmedAt: task.employeeConfirmedAt ?? null,
       totalScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
       rawGrade: task.gradeResult?.rawGrade ?? null,
       updatedAt: task.updatedAt,
@@ -2133,18 +2162,19 @@ export class TasksService {
       dept_review: '待部门复核',
       hr_calibration: '待绩效校准',
       approval: '待结果审批',
-      published: '结果已公示，待员工确认',
-      confirmed: '结果已确认',
+      published: '已公示',
+      confirmed: '已确认，待公示',
       appealing: '申诉处理中',
       closed: '已完成',
       exempted: '已豁免',
     };
 
     return {
-      stage: this.resolveBusinessStage(task.status),
+      stage: (task.status === 'approval' && task.approvedAt) || (task.status === 'confirmed' && !isResultPublished(task))
+        ? 'result' : this.resolveBusinessStage(task.status),
       statusLabel: task.status === 'approval' && task.approvedAt
-        ? '审批已通过，待公示'
-        : statusLabels[task.status as TaskStatus] ?? task.status,
+        ? '待确认结果'
+        : task.status === 'confirmed' && isResultPublished(task) ? '员工已确认' : statusLabels[task.status as TaskStatus] ?? task.status,
       currentHandler: target
         ? {
             id: target.handlerId,
@@ -2163,9 +2193,11 @@ export class TasksService {
     task: Pick<AssessmentTask, 'status' | 'employeeId' | 'managerId' | 'deptHeadId' | 'approverId'> & {
       cycle?: { hrOwnerId?: string | null };
       approvedAt?: Date | null;
+      employeeConfirmedAt?: Date | null;
     },
   ): Promise<{ nodeType: TaskReminderNodeType; handlerId: string } | null> {
-    if (task.status === 'approval' && task.approvedAt) return null;
+    if (task.status === 'published' && task.employeeConfirmedAt) return null;
+    if (task.status === 'approval' && task.approvedAt) return { nodeType: 'employee', handlerId: task.employeeId };
     const mapping: Partial<Record<TaskStatus, TaskReminderNodeType>> = {
       indicator_drafting: 'employee',
       indicator_reviewing: 'manager',
@@ -2251,6 +2283,9 @@ export class TasksService {
 
   private applyMask(detail: TaskDetail, visible: PublishVisibleFields): TaskDetail {
     const masked = { ...detail };
+    if (!visible.grade) masked.rawGrade = null;
+    // Appeal original snapshots are HR audit data, never employee detail payloads.
+    masked.flowRecords = detail.flowRecords.map(record => record.nodeType === 'appeal' ? { ...record, extraData: null } : record);
     if (detail.resultEvidence) masked.resultEvidence = maskResultEvidence(detail.resultEvidence, visible);
 
     if (!visible.total_score) {
@@ -2284,7 +2319,7 @@ export class TasksService {
 
     if (!visible.manager_comment) {
       masked.managerEvalSummary = null;
-      masked.flowRecords = this.maskCycleComments(detail.flowRecords);
+      masked.flowRecords = this.maskCycleComments(masked.flowRecords);
       if (masked.gradeResult) {
         masked.gradeResult.isVeto = false;
         masked.gradeResult.vetoReason = null;
@@ -2293,12 +2328,17 @@ export class TasksService {
       }
     }
 
+    if (!visible.total_score || !visible.grade) {
+      masked.flowRecords = masked.flowRecords.map(record =>
+        ['manager_score', 'dept_review', 'hr_calibration', 'approval', 'appeal'].includes(record.nodeType)
+          ? { ...record, comment: null, extraData: null } : record);
+    }
     return masked;
   }
 
-  /** 公示前：员工本人无条件隐藏所有主管评估结果、总分、等级。 */
-  private isOwnUnpublishedResult(task: { employeeId: string; status: TaskStatus }, viewer: AuthUser): boolean {
-    return task.employeeId === viewer.id && !(['published', 'confirmed', 'appealing', 'closed'] as TaskStatus[]).includes(task.status);
+  /** 员工本人在审批通过前隐藏评定结果。 */
+  private isOwnUnpublishedResult(task: ResultPublicationFact & { employeeId: string }, viewer: AuthUser): boolean {
+    return task.employeeId === viewer.id && !canEmployeeViewResult(task);
   }
 
   private applyPrePublishMask(detail: TaskDetail): TaskDetail {
@@ -2310,7 +2350,7 @@ export class TasksService {
     masked.gradeResult = null;
     masked.managerEvalSummary = null;
     masked.flowRecords = detail.flowRecords.map(record =>
-      ['manager_score', 'dept_review', 'hr_calibration', 'approval'].includes(record.nodeType)
+      ['manager_score', 'dept_review', 'hr_calibration', 'approval', 'appeal'].includes(record.nodeType)
         ? { ...record, comment: null, extraData: null }
         : record);
 

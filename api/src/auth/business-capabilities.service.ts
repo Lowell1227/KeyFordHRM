@@ -1,3 +1,4 @@
+import { PUBLISHED_RESULT_WHERE } from '@/tasks/result-publication';
 import { Injectable } from '@nestjs/common';
 import { SysRole, TaskStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -37,7 +38,7 @@ export interface BusinessCapabilitySubject {
   canViewAll: boolean;
 }
 
-const TERMINAL_TASK_STATUSES: TaskStatus[] = ['confirmed', 'closed', 'exempted'];
+const TERMINAL_TASK_STATUSES: TaskStatus[] = ['closed', 'exempted'];
 
 @Injectable()
 export class BusinessCapabilitiesService {
@@ -265,6 +266,7 @@ export class BusinessCapabilitiesService {
         [relation]: userId,
         employeeId: { not: userId },
         status: { in: ['confirmed', 'closed'] },
+        AND: [PUBLISHED_RESULT_WHERE],
         isExempt: false,
       },
     });
@@ -278,6 +280,7 @@ export class BusinessCapabilitiesService {
       where: {
         [relation]: userId,
         status: { notIn: TERMINAL_TASK_STATUSES },
+        NOT: { status: 'confirmed', AND: [PUBLISHED_RESULT_WHERE] },
         isExempt: false,
       },
     });
@@ -292,6 +295,7 @@ export class BusinessCapabilitiesService {
       where: {
         [relation]: { in: userIds },
         status: { notIn: TERMINAL_TASK_STATUSES },
+        NOT: { status: 'confirmed', AND: [PUBLISHED_RESULT_WHERE] },
         isExempt: false,
       },
       _count: { _all: true },

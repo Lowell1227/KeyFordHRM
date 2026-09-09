@@ -85,14 +85,16 @@ function makeTask(
     managerScoredAt: null,
     deptReviewedAt: null,
     hrCalibratedAt: null,
-    approvedAt: null,
+    approvedAt: approvedAt ?? null,
     publishedAt: null,
-    employeeConfirmedAt: null,
+    employeeConfirmedAt: status === "confirmed" ? new Date("2026-09-02") : null,
     closedAt: null,
     createdAt: new Date(),
     updatedAt: new Date(),
+    appeals: [],
     gradeResult: {
       approvedAt,
+      employeeConfirmedAt: status === "confirmed" ? new Date("2026-09-02") : null,
       calibratedGrade: (gradeResult?.calibratedGrade ?? null) as any,
       rawGrade: (gradeResult?.rawGrade ?? null) as any,
     },
@@ -391,7 +393,7 @@ describe("PublishService", () => {
       expect(result.total).toBe(6);
       expect(result.items.map((item) => item.publicationState)).toEqual([
         "pending_approval",
-        "ready_to_publish",
+        "pending_confirmation",
         "published",
         "confirmed",
         "appealing",
@@ -399,7 +401,7 @@ describe("PublishService", () => {
       ]);
       expect(result.items.map((item) => item.canPublish)).toEqual([
         false,
-        true,
+        false,
         false,
         false,
         false,
@@ -409,9 +411,10 @@ describe("PublishService", () => {
         expect.objectContaining({
           where: expect.objectContaining({
             cycleId: "cycle-1",
-            status: {
-              in: ["approval", "published", "confirmed", "appealing", "closed"],
-            },
+            OR: [
+              { status: { in: ["approval", "published", "confirmed", "appealing", "closed"] } },
+              { flowRecords: { some: { nodeType: "approval" } } },
+            ],
           }),
           skip: 0,
           take: 20,
@@ -419,7 +422,7 @@ describe("PublishService", () => {
       );
     });
 
-    it("所有角色读取本人未公示记录时遮罩分数和等级", async () => {
+    it("所有角色读取本人已审批未公示结果时遵守可见字段", async () => {
       prisma.assessmentTask.count.mockResolvedValue(1);
       prisma.assessmentTask.findMany.mockResolvedValue([
         {
@@ -445,10 +448,10 @@ describe("PublishService", () => {
       );
 
       expect(result.items[0]).toMatchObject({
-        resultMasked: true,
-        totalScore: null,
-        rawGrade: null,
-        calibratedGrade: null,
+        resultMasked: false,
+        totalScore: 91,
+        rawGrade: "A",
+        calibratedGrade: "A",
       });
     });
 
@@ -696,7 +699,7 @@ describe("PublishService", () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
       prisma.systemConfig.findUnique.mockResolvedValue(null);
       tx.assessmentTask.findMany.mockResolvedValue([
-        makeTask("approval", new Date()),
+        makeTask("confirmed", new Date()),
       ]);
       tx.gradeResult.updateMany.mockResolvedValue({ count: 0 });
 
@@ -711,7 +714,7 @@ describe("PublishService", () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
       prisma.systemConfig.findUnique.mockResolvedValue(null);
       tx.assessmentTask.findMany.mockResolvedValue([
-        makeTask("approval", new Date()),
+        makeTask("confirmed", new Date()),
       ]);
       (flowService.transitionTx as jest.Mock).mockResolvedValue({
         oldStatus: "approval",
@@ -740,8 +743,8 @@ describe("PublishService", () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
       prisma.systemConfig.findUnique.mockResolvedValue({ value: 30 });
       tx.assessmentTask.findMany.mockResolvedValue([
-        makeTask("approval", new Date()),
-        makeTask("approval", new Date(), { id: "task-2" }),
+        makeTask("confirmed", new Date()),
+        makeTask("confirmed", new Date(), { id: "task-2" }),
       ]);
       (flowService.transitionTx as jest.Mock).mockResolvedValue({
         oldStatus: "approval",
@@ -777,7 +780,7 @@ describe("PublishService", () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(cycle);
       prisma.systemConfig.findUnique.mockResolvedValue({ value: 15 });
       tx.assessmentTask.findMany.mockResolvedValue([
-        makeTask("approval", new Date()),
+        makeTask("confirmed", new Date()),
       ]);
       (flowService.transitionTx as jest.Mock).mockResolvedValue({
         oldStatus: "approval",
@@ -805,7 +808,7 @@ describe("PublishService", () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
       prisma.systemConfig.findUnique.mockResolvedValue(null);
       tx.assessmentTask.findMany.mockResolvedValue([
-        makeTask("approval", new Date()),
+        makeTask("confirmed", new Date()),
       ]);
       (flowService.transitionTx as jest.Mock).mockResolvedValue({
         oldStatus: "approval",
@@ -832,7 +835,7 @@ describe("PublishService", () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
       prisma.systemConfig.findUnique.mockResolvedValue(null);
       tx.assessmentTask.findMany.mockResolvedValue([
-        makeTask("approval", new Date()),
+        makeTask("confirmed", new Date()),
       ]);
       (flowService.transitionTx as jest.Mock).mockResolvedValue({
         oldStatus: "approval",
@@ -855,7 +858,7 @@ describe("PublishService", () => {
       prisma.systemConfig.findUnique.mockResolvedValue(null);
       tx.assessmentTask.findMany.mockResolvedValue([
         makeTask(
-          "approval",
+          "confirmed",
           new Date(),
           { id: "task-1" },
           { calibratedGrade: "D", rawGrade: "D" },
@@ -893,7 +896,7 @@ describe("PublishService", () => {
       prisma.systemConfig.findUnique.mockResolvedValue(null);
       tx.assessmentTask.findMany.mockResolvedValue([
         makeTask(
-          "approval",
+          "confirmed",
           new Date(),
           { id: "task-1" },
           { calibratedGrade: "C", rawGrade: "C" },
