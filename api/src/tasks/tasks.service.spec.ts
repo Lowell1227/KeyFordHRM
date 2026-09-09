@@ -377,6 +377,18 @@ describe('TasksService', () => {
   });
 
   describe('findOne', () => {
+    it.each(['approval', 'manager_scoring', 'published'] as const)('retains employee objection attribution without original snapshots for own %s detail', async status => {
+      const task: any = buildFullTask(status, { total_score: false, grade: false });
+      if (status === 'approval') task.approvedAt = new Date();
+      task.flowRecords = [{ id: 'objection-1', nodeType: 'appeal', action: 'reject', actorId: 'emp-1', actor: { name: '员工' }, createdAt: new Date(),
+        comment: '员工异议原因', extraData: { type: 'prepublication_appeal', source: 'employee', appealId: 'private-appeal-id', originalResult: { rawGrade: 'A', comment: 'private-original-snapshot' } } }];
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+      const result = await service.findOne('task-1', makeViewer({ id: 'emp-1' }));
+      expect(result.flowRecords[0].extraData).toEqual({ type: 'prepublication_appeal', source: 'employee' });
+      expect(JSON.stringify(result)).not.toContain('private-original-snapshot');
+      expect(JSON.stringify(result)).not.toContain('private-appeal-id');
+    });
+
     it.each([
       ['approval', 'head-1', null, 88],
       ['approval', 'emp-1', null, null],

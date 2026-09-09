@@ -1,5 +1,6 @@
 import { canEmployeeViewResult, isResultPublished, ResultPublicationFact } from './result-publication';
 import { buildResultEvidence, maskResultEvidence, RESULT_PERIOD_SELECT, ResultEvidence } from '@/tasks/result-evidence';
+import { appealAttribution } from '@/tasks/review-history';
 import { ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AssessmentPeriodStatus, AssessmentPeriodType, AssessmentTask, IndicatorInstance, IndicatorVisibilityScope, ObjectiveLevel, Prisma, SysRole, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -1651,7 +1652,7 @@ export class TasksService {
         const record = await tx.flowRecord.findFirst({ where: {
           taskId: id, nodeType: 'appeal',
           AND: [{ extraData: { path: ['type'], equals: 'prepublication_appeal' } }, { extraData: { path: ['appealId'], equals: appeal.id } }],
-        } });
+        }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] });
         if (!record) continue;
         const original = (record.extraData as Prisma.JsonObject)?.originalResult as Prisma.JsonObject | undefined;
         const previousGrade = original?.calibratedGrade ?? original?.rawGrade;
@@ -2294,7 +2295,7 @@ export class TasksService {
     const masked = { ...detail };
     if (!visible.grade) masked.rawGrade = null;
     // Appeal original snapshots are HR audit data, never employee detail payloads.
-    masked.flowRecords = detail.flowRecords.map(record => record.nodeType === 'appeal' ? { ...record, extraData: null } : record);
+    masked.flowRecords = detail.flowRecords.map(record => record.nodeType === 'appeal' ? { ...record, extraData: appealAttribution(record.extraData) } : record);
     if (detail.resultEvidence) masked.resultEvidence = maskResultEvidence(detail.resultEvidence, visible);
 
     if (!visible.total_score) {
@@ -2340,7 +2341,7 @@ export class TasksService {
     if (!visible.total_score || !visible.grade) {
       masked.flowRecords = masked.flowRecords.map(record =>
         ['manager_score', 'dept_review', 'hr_calibration', 'approval', 'appeal'].includes(record.nodeType)
-          ? { ...record, comment: null, extraData: null } : record);
+          ? { ...record, comment: null, extraData: record.nodeType === 'appeal' ? appealAttribution(record.extraData) : null } : record);
     }
     return masked;
   }
@@ -2360,7 +2361,7 @@ export class TasksService {
     masked.managerEvalSummary = null;
     masked.flowRecords = detail.flowRecords.map(record =>
       ['manager_score', 'dept_review', 'hr_calibration', 'approval', 'appeal'].includes(record.nodeType)
-        ? { ...record, comment: null, extraData: null }
+        ? { ...record, comment: null, extraData: record.nodeType === 'appeal' ? appealAttribution(record.extraData) : null }
         : record);
 
     masked.indicatorInstances = detail.indicatorInstances.map((ind) => ({

@@ -7,6 +7,12 @@ type ReviewRecord = {
   extraData: Prisma.JsonValue; createdAt: Date; actor: { name: string } | null;
 };
 
+/** Employee-visible attribution only; original result snapshots stay in the appeal audit. */
+export function appealAttribution(data: Prisma.JsonValue) {
+  return data && typeof data === 'object' && !Array.isArray(data) && data.type === 'prepublication_appeal'
+    ? { type: 'prepublication_appeal', source: data.source === 'employee' ? 'employee' : 'hr' } : null;
+}
+
 /** Keep recorded opinions and attribution; do not expose unrelated workflow payloads. */
 export function mapReviewHistory(records: ReviewRecord[] = []) {
   return records.map(record => {
@@ -15,6 +21,7 @@ export function mapReviewHistory(records: ReviewRecord[] = []) {
       ? data.type === 'final_grade_submitted'
         ? { type: data.type, comment: typeof data.comment === 'string' ? data.comment : null }
         : data.type === 'combined_department_review' ? { type: data.type }
+          : data.type === 'prepublication_appeal' ? appealAttribution(data)
           : data.type === 'manager_period_review_returned'
             ? { type: data.type, periodKey: typeof data.periodKey === 'string' ? data.periodKey : null } : null
       : null;

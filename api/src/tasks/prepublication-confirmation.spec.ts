@@ -69,7 +69,8 @@ describe('公示前员工确认与 HR 申诉', () => {
   const {service} = fixture();
   const detail = {indicatorInstances:[], flowRecords:[{nodeType:'appeal',comment:'申诉涉及 A 等',extraData:{type:'prepublication_appeal',originalResult:{rawGrade:'A'}}}]};
   const result = service.applyPrePublishMask(detail);
-  expect(result.flowRecords[0]).toMatchObject({comment:null,extraData:null});
+  expect(result.flowRecords[0]).toMatchObject({comment:null,extraData:{type:'prepublication_appeal',source:'hr'}});
+  expect(result.flowRecords[0].extraData).not.toHaveProperty('originalResult');
  });
  it('批准后字段设置仍遮罩流程记录中的等级、分数和意见', () => {
   const {service} = fixture();

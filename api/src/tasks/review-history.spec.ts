@@ -40,4 +40,10 @@ describe('key review history', () => {
     const history = mapReviewHistory([{ ...records[0], action: 'reject', extraData: { type: 'manager_period_review_returned', periodKey: '2026-07', periodId: 'internal-period-id' } }]);
     expect(history[0].extraData).toEqual({ type: 'manager_period_review_returned', periodKey: '2026-07' });
   });
+  it('attributes an employee objection without disclosing stored result snapshots', () => {
+    const history = mapReviewHistory([{...records[0],nodeType:'appeal',action:'reject',comment:'请核实结果',extraData:{type:'prepublication_appeal',source:'employee',appealId:'internal',originalResult:{calculatedScore:85,coefficient:1.5}}}]);
+    expect(history[0]).toMatchObject({comment:'请核实结果',extraData:{type:'prepublication_appeal',source:'employee'}});
+    expect(history[0].extraData).not.toHaveProperty('originalResult');
+    expect(history[0].extraData).not.toHaveProperty('appealId');
+  });
 });

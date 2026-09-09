@@ -109,20 +109,46 @@ export class AppealsService {
     if (!['hr', 'system_admin'].includes(viewer.sysRole)) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅 HR 可录入申诉' });
     }
-    if (!dto.reason.trim()) throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '请填写申诉事由' });
+    return this.createPrepublicationAppeal(dto, viewer, 'hr');
+  }
+
+  /** 员工只可对本人的待确认结果提出异议，直接回到冻结的绩效直属上级。 */
+  async employeeDisagree(taskId: string, reason: string, viewer: AuthUser) {
+    await this.createPrepublicationAppeal({ taskId, reason }, viewer, 'employee');
+    return { id: taskId, status: 'manager_scoring' as const };
+  }
+
+  private async createPrepublicationAppeal(dto: CreateAppealDto, viewer: AuthUser, source: 'hr' | 'employee'): Promise<Appeal> {
+    if (!dto.reason.trim()) throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: source === 'employee' ? '请填写异议原因' : '请填写申诉事由' });
+    if (source === 'employee' && dto.reason.length > 2000) throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '异议原因不能超过2000字' });
     return this.prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT "id" FROM "assessment_tasks" WHERE "id" = ${dto.taskId}::uuid FOR NO KEY UPDATE`;
       const task = await tx.assessmentTask.findUnique({ where: { id: dto.taskId }, include: { gradeResult: true } });
       if (!task) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '任务不存在' });
+      if (source === 'employee' && (task.employeeId !== viewer.id || viewer.isAssessorOnly)) {
+        throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '只能对本人的绩效结果提出异议' });
+      }
+      if (source === 'employee' && (task.status !== 'approval' || task.employeeConfirmedAt || task.gradeResult?.employeeConfirmedAt)) {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '结果不在待确认环节，请刷新后重试' });
+      }
       if (!task.gradeResult) throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '该任务尚未评分，无法录入申诉' });
       if (task.isExempt || !['approval', 'confirmed'].includes(task.status) || !task.approvedAt || !task.gradeResult.approvedAt
         || isResultPublished(task) || !task.managerId) {
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '仅已审批、未公示且有绩效直属上级的任务可录入申诉' });
       }
+      let existing: Appeal | null = null;
       if (await tx.appeal.count({ where: { taskId: task.id, status: 'pending' } })) {
-        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '该任务已存在未处理的申诉' });
+        // 重评已再次审批通过时，员工可补充异议；沿同一申诉继续流转并追加历史。
+        if (source === 'employee') {
+          const pending = await tx.appeal.findMany({ where: { taskId: task.id, status: 'pending' }, take: 2 });
+          if (pending.length === 1 && await tx.flowRecord.findFirst({ where: {
+            taskId: task.id, nodeType: 'appeal',
+            AND: [{ extraData: { path: ['type'], equals: 'prepublication_appeal' } }, { extraData: { path: ['appealId'], equals: pending[0].id } }],
+          } })) existing = pending[0];
+        }
+        if (!existing) throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '该任务已存在未处理的申诉' });
       }
-      const created = await tx.appeal.create({ data: {
+      const created = existing ?? await tx.appeal.create({ data: {
         taskId: task.id, cycleId: task.cycleId, appellantId: task.employeeId,
         reason: dto.reason.trim(), attachments: (dto.attachments ?? []) as Prisma.InputJsonValue,
         status: 'pending', appealDeadline: null,
@@ -136,7 +162,7 @@ export class AppealsService {
       })) as Prisma.InputJsonObject;
       await this.flowService.transitionTx(tx, {
         task, action: 'reject', targetStatus: 'manager_scoring', actorId: viewer.id, comment: dto.reason.trim(),
-        extraData: { type: 'prepublication_appeal', appealId: created.id, originalResult },
+        extraData: { type: 'prepublication_appeal', source, appealId: created.id, originalResult },
         taskUpdate: { approvedAt: null, employeeConfirmedAt: null, managerScoredAt: null, deptReviewedAt: null, hrCalibratedAt: null },
       });
       await tx.gradeResult.update({ where: { taskId: task.id }, data: {
@@ -145,12 +171,13 @@ export class AppealsService {
         isVeto: false, vetoReason: null, vetoOperatorId: null,
       } });
       await tx.auditLog.create({ data: {
-        userId: viewer.id, action: 'create_appeal', entityType: 'appeal', entityId: created.id,
-        newValue: { taskId: created.taskId, reason: created.reason, appellantId: created.appellantId, workflowType: 'prepublication' },
+        userId: viewer.id, action: source === 'employee' ? 'employee_disagree_result' : 'create_appeal', entityType: 'appeal', entityId: created.id,
+        newValue: { taskId: created.taskId, reason: dto.reason.trim(), appellantId: created.appellantId, workflowType: 'prepublication', source },
       } });
       await tx.notificationLog.create({ data: {
         userId: task.managerId, senderId: viewer.id, taskId: task.id, cycleId: task.cycleId,
-        type: 'prepublication_appeal', title: '绩效结果需要重新评定', content: 'HR 已录入员工线下反馈，请查看申诉事由并重新评定周期结果。',
+        type: 'prepublication_appeal', title: '绩效结果需要重新评定',
+        content: source === 'employee' ? '员工对绩效结果提出异议，请查看异议原因并重新评定周期结果。' : 'HR 已录入员工线下反馈，请查看申诉事由并重新评定周期结果。',
         channel: 'system', status: 'sent', sentAt: new Date(),
       } });
       return created;
@@ -422,10 +449,10 @@ export class AppealsService {
   }
 
   private appealRecord(appeal: AppealWithTask): Prisma.JsonObject | null {
-    const record = appeal.task?.flowRecords?.find(record => {
+    const record = appeal.task?.flowRecords?.filter(record => {
       const data = record.extraData as Prisma.JsonObject | null;
       return data?.type === 'prepublication_appeal' && data.appealId === appeal.id;
-    });
+    }).sort((a, b) => a.createdAt.getTime() - b.createdAt.getTime() || a.id.localeCompare(b.id))[0];
     return record?.extraData as Prisma.JsonObject | null ?? null;
   }
 

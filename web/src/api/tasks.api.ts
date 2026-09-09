@@ -238,6 +238,10 @@ export function createTasksApi(client: TasksApiClient) {
       return apiPost(`/tasks/${id}/employee-confirm`);
     },
 
+    disagreeResult(id: string, reason: string): Promise<TaskActionResult> {
+      return apiPost(`/tasks/${id}/employee-disagree`, { reason }, { skipErrorMessage: true });
+    },
+
     /** GET /tasks/:id/interview — 任务详情页查看面谈记录 */
     getInterview(id: string): Promise<PerformanceInterview> {
       return apiGet(`/tasks/${id}/interview`);
