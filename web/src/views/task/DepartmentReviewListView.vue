@@ -2,6 +2,8 @@
 import { onMounted, ref } from 'vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import GradeTag from '@/components/common/GradeTag.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import PerformanceResultDrawer from '@/components/common/PerformanceResultDrawer.vue';
 import DepartmentReviewWorkspace from './components/DepartmentReviewWorkspace.vue';
 import { tasksApi } from '@/api/tasks.api';
@@ -13,8 +15,8 @@ import { formatResultScore, resultStage } from '@/utils/performance-result-prese
 
 const items = ref<DepartmentReviewListItem[]>([]);
 const total = ref(0);
-const pendingTotal = ref(0);
 const page = ref(1);
+const pageSize = ref(10);
 const status = ref<TaskStatus | ''>('');
 const loading = ref(false);
 const error = ref('');
@@ -43,13 +45,12 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const result = await tasksApi.findDepartmentReviews({ page: page.value, pageSize: 20, ...(status.value ? { status: status.value } : {}) });
+    const result = await tasksApi.findDepartmentReviews({ page: page.value, pageSize: pageSize.value, ...(status.value ? { status: status.value } : {}) });
     if (sequence !== loadSequence) return;
     items.value = result.items;
     total.value = result.total;
-    pendingTotal.value = result.pendingTotal;
   } catch {
-    if (sequence === loadSequence) { error.value = '获取部门复核任务失败，请重试'; items.value = []; total.value = 0; pendingTotal.value = 0; }
+    if (sequence === loadSequence) { error.value = '获取部门复核任务失败，请重试'; items.value = []; total.value = 0; }
   }
   finally { if (sequence === loadSequence) loading.value = false; }
 }
@@ -109,18 +110,17 @@ onMounted(load);
 
 <template>
   <div class="page-stack department-review-list performance-result-page">
-    <ChartCard :padded="true">
+    <ChartCard :padded="true" class="list-result-card">
       <template #title>部门复核</template>
-      <template #extra><span data-testid="department-review-pending-total">待复核 {{ pendingTotal }} 项</span></template>
       <div class="review-filters performance-result-toolbar">
         <label for="department-review-stage">当前环节</label>
         <el-select id="department-review-stage" v-model="status" aria-label="当前环节" placeholder="全部环节" @change="changeStage">
           <el-option label="全部环节" value="" />
           <el-option v-for="[value, meta] in stages" :key="value" :label="meta.label" :value="value" />
         </el-select>
-        <span class="review-total">共 {{ total }} 条记录</span>
       </div>
       <el-alert v-if="error" type="error" :title="error" :closable="false"><el-button link @click="load">重试</el-button></el-alert>
+      <div class="desktop-result-table">
       <el-table v-loading="loading" :data="items" row-key="id" class="performance-result-table" empty-text="暂无部门复核记录" style="width: 100%">
         <el-table-column prop="employeeName" label="员工" min-width="150" show-overflow-tooltip>
           <template #default="{ row }"><div class="performance-result-employee"><span>{{ row.employeeName }}</span><span class="performance-result-meta">{{ row.employeeNo || '—' }}</span></div></template>
@@ -141,7 +141,19 @@ onMounted(load);
         </el-table-column>
         <el-table-column label="操作" width="180" fixed="right"><template #default="{ row }"><div class="performance-result-actions"><el-button link type="primary" @click="openTask(row as DepartmentReviewListItem)">{{ canReview(row as DepartmentReviewListItem) ? '进入复核' : '查看详情' }}</el-button></div></template></el-table-column>
       </el-table>
-      <el-pagination v-if="total > 20" v-model:current-page="page" :page-size="20" :total="total" layout="prev, pager, next" @current-change="load" />
+      </div>
+      <div v-loading="loading" class="mobile-result-list department-review-mobile-list">
+        <MobileResultCard v-for="item in items" :key="item.id">
+          <template #title>{{ item.employeeName }} · {{ item.employeeNo || '—' }}</template>
+          <template #status><el-tag :type="resultStage(item.status, item.approvedAt).type" size="small">{{ resultStage(item.status, item.approvedAt).label }}</el-tag></template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 岗位</span><span class="mobile-result-field__value">{{ item.deptName || '—' }} · {{ item.position || '—' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">周期结果</span><span class="mobile-result-field__value">{{ formatResultScore(item.totalScore) }} · {{ item.calibratedGrade ?? item.rawGrade ?? '—' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">考核周期</span><span class="mobile-result-field__value">{{ item.cycleName || '—' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">最近复核</span><span class="mobile-result-field__value">{{ reviewState(item).label }}<template v-if="item.departmentReview?.latest"> · {{ formatDateTime(item.departmentReview.latest.createdAt) }}</template></span></div>
+          <template #actions><el-button link type="primary" @click="openTask(item)">{{ canReview(item) ? '进入复核' : '查看详情' }}</el-button></template>
+        </MobileResultCard>
+      </div>
+      <ListPagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" @change="load" />
     </ChartCard>
     <PerformanceResultDrawer
       v-model="detailVisible"
@@ -168,8 +180,6 @@ onMounted(load);
 .review-filters { display: flex; align-items: center; flex-wrap: wrap; gap: 10px; margin-bottom: 14px; font-size: 13px; }
 .review-filters label { color: var(--el-text-color-regular); }
 .review-filters .el-select { width: 180px; }
-.review-total { margin-left: auto; color: var(--el-text-color-secondary); }
 .review-time { margin-top: 5px; font-size: 12px; line-height: 1.4; color: var(--el-text-color-secondary); white-space: normal; }
 .department-review-detail { min-height: 180px; }
-@media (max-width: 600px) { .review-total { margin-left: 0; } }
 </style>

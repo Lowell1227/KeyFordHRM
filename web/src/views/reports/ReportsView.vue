@@ -15,6 +15,8 @@ import GradeTag from '@/components/common/GradeTag.vue';
 import DeptTree from '@/components/common/DeptTree.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import type {
   ReportSummary,
   ReportSummaryItem,
@@ -62,7 +64,7 @@ const deptFilter = ref<string>('');
 const detailKeyword = ref('');
 const detailGrade = ref<PerfGrade | ''>('');
 const detailPage = ref(1);
-const detailPageSize = 20;
+const detailPageSize = ref(20);
 
 // 进度
 const progress = ref<ReportCycleProgress | null>(null);
@@ -177,8 +179,8 @@ const filteredSummaryItems = computed(() => {
 });
 
 const pagedSummaryItems = computed(() => {
-  const start = (detailPage.value - 1) * detailPageSize;
-  return filteredSummaryItems.value.slice(start, start + detailPageSize);
+  const start = (detailPage.value - 1) * detailPageSize.value;
+  return filteredSummaryItems.value.slice(start, start + detailPageSize.value);
 });
 
 const progressPieData = computed(() => {
@@ -551,6 +553,7 @@ onMounted(async () => {
                   </el-select>
                 </div>
               </template>
+              <div class="desktop-result-table report-detail-desktop">
               <el-table :data="pagedSummaryItems" size="small">
                 <el-table-column label="姓名" min-width="110" fixed="left">
                   <template #default="{ row }"><span data-testid="report-detail-row">{{ row.employeeName }}</span></template>
@@ -562,17 +565,22 @@ onMounted(async () => {
                 <el-table-column label="等级" width="100"><template #default="{ row }"><GradeTag :grade="row.grade" size="small" /></template></el-table-column>
                 <el-table-column prop="managerName" label="主管" min-width="110" />
               </el-table>
-              <div class="detail-pagination" data-testid="report-detail-pagination">
-                <span>共 {{ filteredSummaryItems.length }} 人</span>
-                <el-pagination
-                  v-if="filteredSummaryItems.length > detailPageSize"
-                  v-model:current-page="detailPage"
-                  background
-                  layout="prev, pager, next"
-                  :page-size="detailPageSize"
-                  :total="filteredSummaryItems.length"
-                />
               </div>
+              <div class="mobile-result-list report-detail-mobile">
+                <MobileResultCard v-for="item in pagedSummaryItems" :key="`${item.employeeNo}-${item.employeeName}`">
+                  <template #title>{{ item.employeeName }} · {{ item.employeeNo || '-' }}</template>
+                  <template #status><GradeTag :grade="item.grade" size="small" /></template>
+                  <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 职位</span><span class="mobile-result-field__value">{{ item.deptName || '-' }} · {{ item.position || '-' }}</span></div>
+                  <div class="mobile-result-field"><span class="mobile-result-field__label">总分</span><span class="mobile-result-field__value">{{ formatScore(item.totalScore) }}</span></div>
+                  <div class="mobile-result-field"><span class="mobile-result-field__label">主管</span><span class="mobile-result-field__value">{{ item.managerName || '-' }}</span></div>
+                </MobileResultCard>
+              </div>
+              <ListPagination
+                v-model:current-page="detailPage"
+                v-model:page-size="detailPageSize"
+                :total="filteredSummaryItems.length"
+                data-testid="report-detail-pagination"
+              />
             </ChartCard>
           </div>
           <EmptyState v-else description="选择考核周期后查看结果概览" />

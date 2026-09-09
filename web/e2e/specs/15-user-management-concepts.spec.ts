@@ -21,6 +21,10 @@ test.beforeEach(async ({ page }) => {
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
   }));
+  await page.route('**/api/v1/positions**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse([])),
+  }));
 });
 
 test('uses concise and consistent organization relationship concepts', async () => {
@@ -161,7 +165,7 @@ test('keeps the employee roster pager visible while the table scrolls independen
   await expect(roster.getByText('员工21', { exact: true })).toBeVisible();
 });
 
-test('collapses and restores roster filters without hiding the result workspace', async ({ page }) => {
+test('keeps roster filters visible without redundant filter labels', async ({ page }) => {
   const employee = {
     id: 'employee-1', name: '员工01', employeeNo: '001', deptId: 'dept-hr', deptName: '人事行政部',
     position: '专员', employmentType: 'full_time', status: 'active', directManagerId: 'manager-1',
@@ -200,12 +204,10 @@ test('collapses and restores roster filters without hiding the result workspace'
   const roster = page.locator('.directory-view');
   const filterInput = roster.getByPlaceholder('搜索姓名或工号');
   await expect(filterInput).toBeVisible();
-  await roster.getByRole('button', { name: '收起筛选' }).click();
-  await expect(filterInput).toBeHidden();
+  await expect(roster.getByText('筛选条件', { exact: true })).toHaveCount(0);
+  await expect(roster.getByRole('button', { name: /展开筛选|收起筛选/ })).toHaveCount(0);
   await expect(roster.getByText('员工01', { exact: true })).toBeVisible();
   await expect(roster.locator('.el-pagination')).toBeVisible();
-  await roster.getByRole('button', { name: '展开筛选' }).click();
-  await expect(filterInput).toBeVisible();
 });
 
 test('filters direct-manager candidates by employee name', async ({ page }) => {

@@ -1,6 +1,11 @@
 import { expect, test, type Page } from '@playwright/test';
 
 const cycleId = '11111111-1111-4111-8111-111111111111';
+function calibrationItem(page: Page, width: number, employeeName: string) {
+  return width <= 768
+    ? page.locator('.calibration-mobile-list .mobile-result-card').filter({ hasText: employeeName })
+    : page.getByRole('row').filter({ hasText: employeeName });
+}
 async function setup(page: Page) {
   const calls: Array<{ path: string; body?: unknown }> = [];
   let submitted = false;
@@ -52,7 +57,7 @@ for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     const calls = await setup(page);
     await page.goto(`/calibration?cycleId=${cycleId}`);
-    await page.getByRole('row').filter({ hasText: '虚拟员工甲' }).getByRole('button', { name: '查看详情', exact: true }).click();
+    await calibrationItem(page, width, '虚拟员工甲').getByRole('button', { name: '查看详情', exact: true }).click();
     const summary = page.getByTestId('performance-result-summary');
     await expect(summary).toContainText('负责人范围验收周期');
     await expect(summary).toContainText('虚拟员工甲');
@@ -78,8 +83,8 @@ for (const width of [1440, 390]) {
     const calls = await setup(page);
     await page.goto(`/calibration?cycleId=${cycleId}`);
     await expect(page.getByTestId('calibration-cycle-select')).toContainText('负责人范围验收周期');
-    const ownRow = page.getByRole('row').filter({ hasText: '虚拟周期负责人' });
-    const employeeRow = page.getByRole('row').filter({ hasText: '虚拟员工甲' });
+    const ownRow = calibrationItem(page, width, '虚拟周期负责人');
+    const employeeRow = calibrationItem(page, width, '虚拟员工甲');
     await expect(ownRow).toContainText('本人结果由其他有权限的 HR 处理');
     await expect(ownRow.getByRole('checkbox')).toBeDisabled();
     await expect(ownRow.getByRole('button')).toHaveCount(0);

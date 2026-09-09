@@ -7,7 +7,8 @@ import dayjs from 'dayjs';
 import { cyclesApi } from '@/api/cycles.api';
 import { departmentsApi } from '@/api/departments.api';
 import ChartCard from '@/components/common/ChartCard.vue';
-import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
 import CycleCompactTable from './components/CycleCompactTable.vue';
@@ -1661,7 +1662,7 @@ onMounted(() => {
         </div>
       </template>
 
-      <CollapsibleFilterPanel title="周期筛选" class="page-filter-panel">
+      <QueryFilterPanel class="page-filter-panel">
         <div class="cycle-list-toolbar">
         <div class="cycle-group-tabs" aria-label="周期状态分组">
           <button
@@ -1692,7 +1693,7 @@ onMounted(() => {
         <el-button @click="handleReset">重置</el-button>
         </div>
         </div>
-      </CollapsibleFilterPanel>
+      </QueryFilterPanel>
     </ChartCard>
 
     <ChartCard :padded="false" class="list-result-card">
@@ -1731,16 +1732,12 @@ onMounted(() => {
         </EmptyState>
       </div>
 
-      <div v-if="listLoading || total > 0" class="app-pager">
-        <el-pagination
+      <ListPagination
           v-model:current-page="page"
           v-model:page-size="pageSize"
           :page-sizes="pageSizeOptions"
           :total="total"
-          layout="total, sizes, prev, pager, next"
-          background
-        />
-      </div>
+      />
     </ChartCard>
 
     </template>

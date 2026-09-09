@@ -7,6 +7,8 @@ import { useCycleStore } from '@/stores/cycle.store';
 import GradeTag from '@/components/common/GradeTag.vue';
 import GradeDistChart from '@/components/charts/GradeDistChart.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import PerformanceResultEvidence from '@/components/common/PerformanceResultEvidence.vue';
 import PerformanceResultSummary from '@/components/common/PerformanceResultSummary.vue';
 import PerformanceResultDrawer from '@/components/common/PerformanceResultDrawer.vue';
@@ -43,6 +45,8 @@ const deptFilter = ref<string>('');
 const statusFilter = ref<StatusFilter>('');
 const sortField = ref<SortField>('calculatedScore');
 const sortOrder = ref<SortOrder>('desc');
+const page = ref(1);
+const pageSize = ref(10);
 
 /** 个人详情抽屉。 */
 const drawer = ref({ visible: false, loading: false, detail: null as CalibrationCandidateDetail | null });
@@ -89,6 +93,14 @@ const filteredCandidates = computed(() => {
     const gradeB = b.calibratedGrade ?? b.rawGrade;
     return ((gradeA ? map[gradeA] : 0) - (gradeB ? map[gradeB] : 0)) * order;
   });
+});
+const pagedCandidates = computed(() => {
+  const start = (page.value - 1) * pageSize.value;
+  return filteredCandidates.value.slice(start, start + pageSize.value);
+});
+
+watch([deptFilter, statusFilter, sortField, sortOrder, pageSize], () => {
+  page.value = 1;
 });
 
 function canCalibrate(candidate: CalibrationCandidate): boolean {
@@ -137,6 +149,13 @@ const hasWarnings = computed(() => gradeWarnings.value.length > 0);
 
 function handleSelectionChange(rows: CalibrationCandidate[]) {
   selectedTaskIds.value = rows.filter(canCalibrate).map((r) => r.taskId);
+}
+
+function toggleMobileSelection(item: CalibrationCandidate, checked: boolean) {
+  if (!canCalibrate(item)) return;
+  const selected = new Set(selectedTaskIds.value);
+  if (checked) selected.add(item.taskId); else selected.delete(item.taskId);
+  selectedTaskIds.value = [...selected];
 }
 
 function getGradeMaxRatio(cycle: AssessmentCycle | null, grade: PerfGrade): number {
@@ -189,6 +208,7 @@ function clearCalibrationState() {
   selectedTaskIds.value = [];
   deptFilter.value = '';
   statusFilter.value = '';
+  page.value = 1;
 }
 
 async function selectCalibrationCycle(cycleId: string) {
@@ -388,13 +408,11 @@ onMounted(async () => {
     <EmptyState v-if="!selectedCycle" description="暂无可校准的考核周期" />
 
     <template v-else>
-      <el-row :gutter="16" class="middle-row">
-        <el-col :xs="24" :md="14">
-          <ChartCard :padded="true" class="chart-card">
-            <template #title>等级分布（评定链路 {{ countedTotal }} 人）</template>
-            <template #extra>
-              <el-tag v-if="hasWarnings" type="danger" effect="dark">存在超限</el-tag>
-            </template>
+      <ChartCard :padded="true" class="calibration-analysis">
+        <template #title>等级分布（评定链路 {{ countedTotal }} 人）</template>
+        <template #extra><el-tag v-if="hasWarnings" type="danger" effect="dark">存在超限</el-tag></template>
+        <div class="calibration-analysis__grid">
+          <div class="calibration-analysis__chart">
             <GradeDistChart :data="gradeCounts" title="" :height="220" />
             <div class="ratio-row">
               <div
@@ -409,11 +427,10 @@ onMounted(async () => {
                 <span class="ratio-limit">上限 {{ formatRatio(getGradeMaxRatio(selectedCycle, grade)) }}</span>
               </div>
             </div>
-          </ChartCard>
-        </el-col>
-        <el-col :xs="24" :md="10">
-          <ChartCard :padded="true" class="warning-card">
-            <template #title>分布告警（仅作校准参考，不阻止操作）</template>
+          </div>
+          <aside class="calibration-analysis__warning" aria-label="分布告警">
+            <h3>分布告警</h3>
+            <p class="warning-context">仅作校准参考，不阻止操作</p>
             <el-alert
               v-if="!hasWarnings"
               title="当前分布未超过各等级上限"
@@ -432,11 +449,11 @@ onMounted(async () => {
               />
               <p class="warning-tip">可通过驳回相应人员，退回直属上级重新评定。</p>
             </div>
-          </ChartCard>
-        </el-col>
-      </el-row>
+          </aside>
+        </div>
+      </ChartCard>
 
-      <ChartCard :padded="true">
+      <ChartCard :padded="true" class="list-result-card">
         <template #title>校准名单</template>
         <div class="toolbar performance-result-toolbar">
           <div class="toolbar-left">
@@ -477,11 +494,12 @@ onMounted(async () => {
           </div>
         </div>
 
+        <div class="desktop-result-table">
         <el-table
           :key="selectedCycleId"
           v-loading="loading"
           class="app-table performance-result-table"
-          :data="filteredCandidates as CalibrationCandidate[]"
+          :data="pagedCandidates as CalibrationCandidate[]"
           row-key="taskId"
           @selection-change="handleSelectionChange"
         >
@@ -523,6 +541,25 @@ onMounted(async () => {
             </template>
           </el-table-column>
         </el-table>
+        </div>
+
+        <div v-loading="loading" class="mobile-result-list calibration-mobile-list">
+          <MobileResultCard v-for="item in pagedCandidates" :key="item.taskId">
+            <template #title><el-checkbox :model-value="selectedTaskIds.includes(item.taskId)" :disabled="!canCalibrate(item)" @change="toggleMobileSelection(item, Boolean($event))">{{ item.employeeName }} · {{ item.employeeNo || '—' }}</el-checkbox></template>
+            <template #status><el-tag :type="resultStage(item.status, item.approvedAt).type" size="small">{{ resultStage(item.status, item.approvedAt).label }}</el-tag></template>
+            <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 岗位</span><span class="mobile-result-field__value">{{ item.deptName || '—' }} · {{ item.position || '—' }}</span></div>
+            <div class="mobile-result-field"><span class="mobile-result-field__label">周期结果</span><span class="mobile-result-field__value">{{ fmtScore(item.calculatedScore) }} · {{ item.calibratedGrade ?? item.rawGrade ?? '—' }}</span></div>
+            <div class="mobile-result-field"><span class="mobile-result-field__label">绩效上级</span><span class="mobile-result-field__value">{{ item.managerName || '—' }}</span></div>
+            <div v-if="item.actionHint" class="mobile-result-field"><span class="mobile-result-field__label">说明</span><span class="mobile-result-field__value">{{ item.actionHint }}</span></div>
+            <template #actions>
+              <el-button v-if="item.canViewDetail !== false" link type="primary" @click="openDetail(item.taskId)">查看详情</el-button>
+              <el-button v-if="canCalibrate(item)" link type="primary" :loading="acting" @click="handleConfirm([item.taskId])">确认校准</el-button>
+              <el-button v-if="canCalibrate(item)" link type="danger" :loading="acting" @click="handleReject([item.taskId])">驳回</el-button>
+            </template>
+          </MobileResultCard>
+        </div>
+
+        <ListPagination v-model:current-page="page" v-model:page-size="pageSize" :total="filteredCandidates.length" />
 
         <div v-if="pendingCandidates.length === 0 && summary" class="submit-hint">
           <el-alert
@@ -576,6 +613,26 @@ onMounted(async () => {
 
 .cycle-info {
   margin-top: 8px;
+}
+
+.calibration-analysis__grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.4fr) minmax(280px, 0.8fr);
+  gap: 20px;
+}
+
+.calibration-analysis__warning {
+  min-width: 0;
+  padding-left: 20px;
+  border-left: 1px solid var(--el-border-color-lighter);
+}
+
+.calibration-analysis__warning h3 { margin: 0; font-size: 15px; }
+.warning-context { margin: 4px 0 14px; color: var(--el-text-color-secondary); font-size: 12px; }
+
+@media (max-width: 900px) {
+  .calibration-analysis__grid { grid-template-columns: 1fr; }
+  .calibration-analysis__warning { padding: 16px 0 0; border-left: 0; border-top: 1px solid var(--el-border-color-lighter); }
 }
 
 .progress-row {

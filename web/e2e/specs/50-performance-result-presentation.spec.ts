@@ -55,32 +55,40 @@ for (const width of [1440, 390]) {
       await page.goto(`/${path}?cycleId=${cycleId}`);
       const view = page.locator('.performance-result-page');
       const table = view.locator('.performance-result-table').last();
-      await expect(table).toContainText(employeeName);
-      const headers = await table.locator('thead th').allTextContents();
-      const commonFields = ['员工', '部门', '岗位', '周期得分', '周期等级', '当前环节'];
-      expect(headers.map(value => value.trim()).filter(value => commonFields.includes(value))).toEqual(commonFields);
-      for (const [field, expectedWidth] of [['周期得分', 110], ['周期等级', 100], ['操作', 180]] as const) {
-        const actualWidth = await table.locator('thead th').evaluateAll((elements, label) => elements.find(element => element.textContent?.trim() === label)?.getBoundingClientRect().width, field);
-        expect(Math.round(actualWidth!)).toBe(expectedWidth);
-      }
-      await expect(table).toContainText('QA019');
-      await expect(table).toContainText('88.00');
-      await expect(table).toContainText('已审批，待公示');
+      const mobile = width <= 768;
+      const resultSurface = mobile ? view.locator('.mobile-result-list').last() : table;
+      await expect(resultSurface).toContainText(employeeName);
+      await expect(resultSurface).toContainText('QA019');
+      await expect(resultSurface).toContainText('88.00');
+      await expect(resultSurface).toContainText('已审批，待公示');
       if (path === 'calibration') {
         await expect(view.locator('.ratio-item').filter({ has: page.locator('.grade-tag', { hasText: /^A$/ }) }).locator('.ratio-count')).toHaveText('1人');
       }
-      const metrics = await table.evaluate(element => {
-        const header = element.querySelector('thead th:not(.el-table-column--selection)')!;
-        const cell = element.querySelector('tbody td:not(.el-table-column--selection)')!;
-        return { headerFont: getComputedStyle(header).fontSize, bodyFont: getComputedStyle(cell).fontSize, headerHeight: header.getBoundingClientRect().height, bodyHeight: cell.getBoundingClientRect().height };
-      });
-      expect(metrics.headerFont).toBe('13px');
-      expect(metrics.bodyFont).toBe('13px');
-      expect(metrics.headerHeight).toBe(40);
-      expect(metrics.bodyHeight).toBeGreaterThanOrEqual(56);
-      const identity = table.locator('.performance-result-employee').first();
-      expect(await identity.evaluate(element => element.children[1].getBoundingClientRect().top >= element.children[0].getBoundingClientRect().bottom)).toBe(true);
-      await table.getByRole('button', { name: '查看详情', exact: true }).click();
+      let metrics: unknown;
+      if (!mobile) {
+        const headers = await table.locator('thead th').allTextContents();
+        const commonFields = ['员工', '部门', '岗位', '周期得分', '周期等级', '当前环节'];
+        expect(headers.map(value => value.trim()).filter(value => commonFields.includes(value))).toEqual(commonFields);
+        for (const [field, expectedWidth] of [['周期得分', 110], ['周期等级', 100], ['操作', 180]] as const) {
+          const actualWidth = await table.locator('thead th').evaluateAll((elements, label) => elements.find(element => element.textContent?.trim() === label)?.getBoundingClientRect().width, field);
+          expect(Math.round(actualWidth!)).toBe(expectedWidth);
+        }
+        metrics = await table.evaluate(element => {
+          const header = element.querySelector('thead th:not(.el-table-column--selection)')!;
+          const cell = element.querySelector('tbody td:not(.el-table-column--selection)')!;
+          return { headerFont: getComputedStyle(header).fontSize, bodyFont: getComputedStyle(cell).fontSize, headerHeight: header.getBoundingClientRect().height, bodyHeight: cell.getBoundingClientRect().height };
+        });
+        expect((metrics as { headerFont: string }).headerFont).toBe('13px');
+        expect((metrics as { bodyFont: string }).bodyFont).toBe('13px');
+        expect((metrics as { headerHeight: number }).headerHeight).toBe(40);
+        expect((metrics as { bodyHeight: number }).bodyHeight).toBeGreaterThanOrEqual(56);
+        const identity = table.locator('.performance-result-employee').first();
+        expect(await identity.evaluate(element => element.children[1].getBoundingClientRect().top >= element.children[0].getBoundingClientRect().bottom)).toBe(true);
+      } else {
+        await expect(view.locator('.desktop-result-table').last()).toBeHidden();
+        await expect(resultSurface.locator('.mobile-result-card')).toHaveCount(1);
+      }
+      await resultSurface.getByRole('button', { name: '查看详情', exact: true }).click();
       const drawer = page.locator('.performance-result-drawer');
       await expect(drawer).toBeVisible();
       await expect(drawer.getByTestId('performance-result-summary')).toContainText(cycleName);
@@ -108,8 +116,8 @@ for (const width of [1440, 390]) {
       await page.screenshot({ path: testInfo.outputPath(`${path}-drawer-${width}.png`), fullPage: true, animations: 'disabled' });
       await drawer.getByRole('button', { name: '关闭', exact: true }).click();
       await expect(drawer).toBeHidden();
-      await expect(table).toContainText(employeeName);
-      await table.locator('.el-scrollbar__wrap').evaluateAll(elements => elements.forEach(element => { element.scrollLeft = 0; }));
+      await expect(resultSurface).toContainText(employeeName);
+      if (!mobile) await table.locator('.el-scrollbar__wrap').evaluateAll(elements => elements.forEach(element => { element.scrollLeft = 0; }));
       await page.screenshot({ path: testInfo.outputPath(`${path}-list-${width}.png`), fullPage: true, animations: 'disabled' });
       expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     expect(writes).toEqual([]);

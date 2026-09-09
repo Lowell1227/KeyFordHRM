@@ -149,7 +149,7 @@ test('HR administrator reviews employee and department changes from the independ
   await expect(workspace.getByRole('button', { name: '员工档案 2' })).toBeVisible();
   await expect(workspace.getByRole('button', { name: '组织架构 1' })).toBeVisible();
   await expect(workspace.getByRole('button', { name: '岗位目录 1' })).toBeVisible();
-  const reviewTables = workspace.locator('.review-category-section > .review-table');
+  const reviewTables = workspace.locator('.review-category-section > .desktop-result-table > .review-table');
   await expect(reviewTables).toHaveCount(3);
   const expectedReviewColumns = ['序号', '变更类型', '审核对象', '变更内容', '提交人', '提交时间', '操作'];
   let referenceColumnWidths: number[] = [];
@@ -169,16 +169,16 @@ test('HR administrator reviews employee and department changes from the independ
   }
   await expect(workspace.getByText('可审核', { exact: true })).toHaveCount(0);
   await expect(workspace.locator('.department-review-card')).toHaveCount(0);
-  await expect(workspace.getByText('员工一', { exact: true })).toBeVisible();
-  await expect(workspace.getByText('员工二', { exact: true })).toBeVisible();
-  await expect(workspace.getByText('项目中心 → 项目管理中心')).toBeVisible();
-  await expect(workspace.getByText('项目经理', { exact: true })).toBeVisible();
+  await expect(reviewTables.nth(0).getByText('员工一', { exact: true })).toBeVisible();
+  await expect(reviewTables.nth(0).getByText('员工二', { exact: true })).toBeVisible();
+  await expect(reviewTables.nth(1).getByText('项目中心 → 项目管理中心')).toBeVisible();
+  await expect(reviewTables.nth(2).getByText('项目经理', { exact: true })).toBeVisible();
   await expect(workspace.getByText('余焱玲', { exact: true }).first()).toBeVisible();
   await expect(workspace.getByText('基础档案审核', { exact: true })).toHaveCount(0);
   await expect(workspace.getByText('绩效关系审核', { exact: true })).toHaveCount(0);
   await expect(workspace.getByText('无变更', { exact: true })).toHaveCount(0);
-  await expect(workspace.getByText('需补充', { exact: true })).toBeVisible();
-  await expect(workspace.getByText(/合同修改/)).toBeVisible();
+  await expect(reviewTables.nth(0).getByText('需补充', { exact: true })).toBeVisible();
+  await expect(reviewTables.nth(0).getByText(/合同修改/)).toBeVisible();
   await workspace.getByRole('button', { name: '查看合同明细' }).click();
   await expect(workspace.getByText('合同变更明细', { exact: true })).toBeVisible();
   await expect(workspace.getByText('变更前：签约公司：孚德；签订日期：2024-01-01；生效日期：2024-01-02；到期日期：2026-12-31')).toBeVisible();
@@ -197,8 +197,8 @@ test('HR administrator reviews employee and department changes from the independ
   await expect(page.getByText('已通过 1 人；1 人需补充信息')).toBeVisible();
 
   await workspace.getByRole('button', { name: '组织架构 1' }).click();
-  await expect(workspace.getByText('项目中心 → 项目管理中心')).toBeVisible();
-  await expect(workspace.getByText('余焱玲', { exact: true })).toBeVisible();
+  await expect(workspace.locator('.desktop-result-table').getByText('项目中心 → 项目管理中心')).toBeVisible();
+  await expect(workspace.locator('.desktop-result-table').getByText('余焱玲', { exact: true })).toBeVisible();
   await workspace.locator('.review-table .el-table__body-wrapper .el-checkbox').click();
   await workspace.getByRole('button', { name: '批量通过（1）' }).click();
   await expect.poll(() => approvedDepartmentId).toBe(departmentChange.id);

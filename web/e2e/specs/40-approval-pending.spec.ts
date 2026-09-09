@@ -1,4 +1,10 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+function approvalItem(page: Page, width: number, employeeName: string) {
+  return width <= 768
+    ? page.locator('.approval-mobile-list .mobile-result-card').filter({ hasText: employeeName })
+    : page.getByRole('row').filter({ hasText: employeeName });
+}
 
 for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 }]) {
   test(`approved result cannot be selected, approved or rejected at ${viewport.width}px`, async ({ page }) => {
@@ -30,8 +36,8 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     });
 
     await page.goto('/approval?cycleId=cycle-approval');
-    const approved = page.locator('.el-table__body tr').filter({ hasText: '已审批员工' });
-    const pending = page.locator('.el-table__body tr').filter({ hasText: '待审批员工' });
+    const approved = approvalItem(page, viewport.width, '已审批员工');
+    const pending = approvalItem(page, viewport.width, '待审批员工');
     await expect(approved).toBeVisible();
     await expect(approved.getByRole('checkbox')).toBeDisabled();
     await expect(approved.getByRole('button', { name: '通过', exact: true })).toHaveCount(0);

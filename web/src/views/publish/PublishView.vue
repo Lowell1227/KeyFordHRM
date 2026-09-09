@@ -12,6 +12,8 @@ import {
 import GradeTag from "@/components/common/GradeTag.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import ChartCard from "@/components/common/ChartCard.vue";
+import ListPagination from "@/components/common/ListPagination.vue";
+import MobileResultCard from "@/components/common/MobileResultCard.vue";
 import PerformanceResultSummary from "@/components/common/PerformanceResultSummary.vue";
 import PerformanceResultDrawer from "@/components/common/PerformanceResultDrawer.vue";
 import { resultStage, formatResultScore } from "@/utils/performance-result-presentation";
@@ -215,6 +217,13 @@ function onSelectionChange(rows: PublicationRecord[]) {
     .map((row) => row.taskId);
 }
 
+function toggleMobileSelection(row: PublicationRecord, checked: boolean) {
+  if (!rowSelectable(row)) return;
+  const selected = new Set(selectedTaskIds.value);
+  if (checked) selected.add(row.taskId); else selected.delete(row.taskId);
+  selectedTaskIds.value = [...selected];
+}
+
 function selectAllOnPage() {
   if (interactionLocked.value) return;
   records.value
@@ -382,6 +391,7 @@ function closeDetail() {
     </ChartCard>
 
     <ChartCard :padded="true" v-if="selectedCycle" class="list-result-card">
+      <div class="desktop-result-table">
       <el-table
         ref="tableRef"
         class="app-table performance-result-table"
@@ -450,22 +460,39 @@ function closeDetail() {
           </template>
         </el-table-column>
       </el-table>
+      </div>
+
+      <div v-loading="loading" class="mobile-result-list publish-mobile-list">
+        <MobileResultCard v-for="item in records" :key="item.taskId">
+          <template #title>
+            <el-checkbox
+              v-if="item.canPublish"
+              :model-value="selectedTaskIds.includes(item.taskId)"
+              :disabled="interactionLocked"
+              @change="toggleMobileSelection(item, Boolean($event))"
+            >{{ item.employeeName }} · {{ item.employeeNo || '—' }}</el-checkbox>
+            <span v-else>{{ item.employeeName }} · {{ item.employeeNo || '—' }}</span>
+          </template>
+          <template #status><el-tag :type="resultStage(item.status, item.approvedAt).type" size="small">{{ resultStage(item.status, item.approvedAt).label }}</el-tag></template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 岗位</span><span class="mobile-result-field__value">{{ item.deptName || '—' }} · {{ item.position || '—' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">周期结果</span><span class="mobile-result-field__value">{{ item.resultMasked ? '公示前不可查看本人结果' : `${formatResultScore(item.totalScore)} · ${item.calibratedGrade ?? item.rawGrade ?? '—'}` }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">公示时间</span><span class="mobile-result-field__value">{{ item.publishedAt ? formatDateTime(item.publishedAt) : '—' }}</span></div>
+          <template #actions><el-button v-if="!item.resultMasked" link type="primary" :disabled="interactionLocked" @click="openDetail(item)">查看详情</el-button><span v-else class="text-secondary">公示后查看</span></template>
+        </MobileResultCard>
+      </div>
 
       <EmptyState
         v-if="!loading && records.length === 0"
         class="publish-view__empty"
         description="该周期暂无公示记录"
       />
-      <div v-if="total > 0" class="app-pager">
-        <el-pagination
-          v-model:current-page="page"
-          v-model:page-size="pageSize"
-          :page-sizes="pageSizeOptions"
-          :total="total"
-          layout="total, sizes, prev, pager, next"
-          :disabled="interactionLocked"
-        />
-      </div>
+      <ListPagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :page-sizes="pageSizeOptions"
+        :total="total"
+        :disabled="interactionLocked"
+      />
     </ChartCard>
 
     <PerformanceResultDrawer

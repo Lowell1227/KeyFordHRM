@@ -21,7 +21,9 @@ import {
 import { usersApi } from '@/api/users.api';
 import { uploadApi } from '@/api/upload.api';
 import ChartCard from '@/components/common/ChartCard.vue';
-import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
+import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
 import EmployeeArchiveInlineEditor from './components/EmployeeArchiveInlineEditor.vue';
 import DepartmentEditDrawer from './components/DepartmentEditDrawer.vue';
@@ -226,6 +228,14 @@ const userQuery = ref<UserQuery>({
   deptId: undefined,
   sysRole: undefined,
   status: undefined,
+});
+const userPage = computed({
+  get: () => userQuery.value.page ?? 1,
+  set: (value: number) => { userQuery.value.page = value; },
+});
+const userPageSize = computed({
+  get: () => userQuery.value.pageSize ?? 20,
+  set: (value: number) => { userQuery.value.pageSize = value; },
 });
 const checkUsers = ref<ManagedUser[]>([]);
 const checkLoading = ref(false);
@@ -887,6 +897,12 @@ function setPerformanceSpecialist(enabled: string | number | boolean) {
   personSettingsDialog.value.hrCapabilities = [...capabilities];
 }
 
+function toggleOrgMemberSelection(item: ManagedUser, checked: boolean) {
+  selectedOrgMembers.value = checked
+    ? [...selectedOrgMembers.value.filter((row) => row.id !== item.id), item]
+    : selectedOrgMembers.value.filter((row) => row.id !== item.id);
+}
+
 function openPersonSettingsDialog(row: ManagedUser) {
   personSettingsDialog.value = {
     visible: true,
@@ -1325,6 +1341,7 @@ onBeforeUnmount(() => {
             <div><h3>{{ selectedOrgIsUnassigned ? '未分配人员' : '部门人员' }}</h3><span>{{ selectedOrgIsUnassigned ? '尚未归属有效部门的人员' : '含当前部门及下级部门' }}</span></div>
             <el-button v-if="selectedOrgIsUnassigned && selectedOrgMembers.length" type="primary" @click="openBatchAssignment">批量归属部门（{{ selectedOrgMembers.length }}）</el-button>
           </div>
+          <div class="desktop-result-table">
           <el-table v-loading="orgMemberLoading" :data="orgMembers" row-key="id" class="app-table compact-table" @selection-change="selectedOrgMembers = $event">
             <el-table-column v-if="selectedOrgIsUnassigned" type="selection" width="48" />
             <el-table-column label="人员" min-width="180">
@@ -1379,19 +1396,32 @@ onBeforeUnmount(() => {
               </template>
             </el-table-column>
           </el-table>
-          <el-pagination
-            v-model:current-page="orgMemberPage"
+          </div>
+          <div v-loading="orgMemberLoading" class="mobile-result-list org-member-mobile-list">
+            <MobileResultCard v-for="item in orgMembers" :key="item.id">
+              <template #title>
+                <el-checkbox v-if="selectedOrgIsUnassigned" :model-value="selectedOrgMembers.some((row) => row.id === item.id)" @change="toggleOrgMemberSelection(item, Boolean($event))">{{ item.name }} · {{ item.employeeNo || '工号待补充' }}</el-checkbox>
+                <span v-else>{{ item.name }} · {{ item.employeeNo || '工号待补充' }}</span>
+              </template>
+              <template #status><el-tag :type="statusTagType[item.status]" size="small">{{ statusLabels[item.status] }}</el-tag></template>
+              <div class="mobile-result-field"><span class="mobile-result-field__label">岗位</span><span class="mobile-result-field__value">{{ item.position || '未设置' }}</span></div>
+              <div class="mobile-result-field"><span class="mobile-result-field__label">绩效上级</span><span class="mobile-result-field__value">{{ item.directManagerName || '未设置' }}</span></div>
+              <div class="mobile-result-field"><span class="mobile-result-field__label">系统权限</span><span class="mobile-result-field__value">{{ systemPermissionLabel(item) }}</span></div>
+              <template #actions><el-button link type="primary" @click="openEmployeeArchive(item)">查看档案</el-button><el-button link type="primary" @click="openPersonSettingsDialog(item)">人员设置</el-button></template>
+            </MobileResultCard>
+          </div>
+          <ListPagination
+            :current-page="orgMemberPage"
             :page-size="8"
             :total="orgMemberTotal"
-            layout="total, prev, pager, next"
-            class="table-pagination"
-            @current-change="loadOrgMembers"
+            :show-page-size="false"
+            @update:current-page="orgMemberPage = $event; loadOrgMembers()"
           />
         </main>
       </section>
 
       <section v-else-if="activeView === 'users'" class="directory-view">
-        <CollapsibleFilterPanel class="roster-filter-panel">
+        <QueryFilterPanel class="roster-filter-panel">
           <div class="light-filter">
             <el-input
               v-model="userQuery.keyword"
@@ -1419,9 +1449,9 @@ onBeforeUnmount(() => {
             <el-button type="primary" @click="onUserQueryChange">查询</el-button>
             <el-button @click="resetUserFilters">重置</el-button>
           </div>
-        </CollapsibleFilterPanel>
+        </QueryFilterPanel>
 
-          <div class="directory-table-region">
+          <div class="directory-table-region desktop-result-table">
           <el-table v-loading="userLoading" :data="userList" row-key="id" height="100%" class="app-table compact-table">
             <el-table-column label="人员" min-width="180">
             <template #default="{ row }">
@@ -1495,15 +1525,27 @@ onBeforeUnmount(() => {
             </el-table-column>
           </el-table>
           </div>
-          <el-pagination
-            v-model:current-page="userQuery.page"
-            v-model:page-size="userQuery.pageSize"
+          <div v-loading="userLoading" class="mobile-result-list roster-mobile-list">
+            <MobileResultCard v-for="item in userList" :key="item.id">
+              <template #title>{{ item.name }} · {{ item.employeeNo || '工号待补充' }}</template>
+              <template #status><el-tag :type="statusTagType[item.status]" size="small">{{ statusLabels[item.status] }}</el-tag></template>
+              <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 岗位</span><span class="mobile-result-field__value">{{ item.deptName || '未分配部门' }} · {{ item.position || '未设置' }}</span></div>
+              <div class="mobile-result-field"><span class="mobile-result-field__label">绩效上级</span><span class="mobile-result-field__value">{{ item.directManagerName || '未设置' }}</span></div>
+              <div class="mobile-result-field"><span class="mobile-result-field__label">系统权限</span><span class="mobile-result-field__value">{{ systemPermissionLabel(item) }}</span></div>
+              <div class="mobile-result-field"><span class="mobile-result-field__label">钉钉登录</span><span class="mobile-result-field__value">{{ dingtalkStateLabels[item.dingtalkBindingState ?? 'unbound'] }}</span></div>
+              <template #actions>
+                <el-button link type="primary" @click="openEmployeeArchive(item)">查看档案</el-button>
+                <el-button link type="primary" @click="openPersonSettingsDialog(item)">人员设置</el-button>
+                <el-button v-if="canResetPassword" link type="primary" @click="resetPassword(item)">重置密码</el-button>
+              </template>
+            </MobileResultCard>
+          </div>
+          <ListPagination
+            v-model:current-page="userPage"
+            v-model:page-size="userPageSize"
             :total="userTotal"
             :page-sizes="[10, 20, 50, 100]"
-            layout="total, sizes, prev, pager, next"
-            class="table-pagination"
-            @current-change="loadUsers"
-            @size-change="onUserQueryChange"
+            @change="loadUsers"
           />
       </section>
 

@@ -5,7 +5,9 @@ import { Plus, Download, Upload, Document } from '@element-plus/icons-vue';
 import type { UploadFile } from 'element-plus';
 import { indicatorsApi } from '@/api/indicators.api';
 import ChartCard from '@/components/common/ChartCard.vue';
-import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
+import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import { useExport } from '@/composables/useExport';
 import { usePagination } from '@/composables/usePagination';
 import type { Indicator, IndicatorQuery, CreateIndicatorBody } from '@/types/api.types';
@@ -452,7 +454,7 @@ onMounted(() => {
 <template>
   <div class="indicator-library-view page-stack app-list-page">
     <ChartCard class="filter-card list-page-header-card">
-      <CollapsibleFilterPanel title="指标筛选" class="page-filter-panel">
+      <QueryFilterPanel class="page-filter-panel">
         <el-form :model="queryForm" class="query-form">
         <div class="filter-panel">
           <el-form-item label="关键词" class="query-item query-item--keyword">
@@ -528,7 +530,7 @@ onMounted(() => {
           </div>
         </div>
         </el-form>
-      </CollapsibleFilterPanel>
+      </QueryFilterPanel>
     </ChartCard>
 
     <ChartCard :padded="false" class="list-result-card">
@@ -542,6 +544,7 @@ onMounted(() => {
         </div>
       </template>
 
+      <div class="desktop-result-table">
       <el-table v-loading="loading" class="app-table" :data="list" row-key="id" height="100%">
         <el-table-column prop="name" label="指标名称" min-width="180" show-overflow-tooltip />
         <el-table-column prop="code" label="编码" min-width="140" show-overflow-tooltip />
@@ -580,18 +583,30 @@ onMounted(() => {
           </template>
         </el-table-column>
       </el-table>
-
-      <div class="app-pager">
-        <el-pagination
-          v-model:current-page="page"
-          v-model:page-size="pageSize"
-          :page-sizes="pageSizeOptions"
-          :total="total"
-          layout="total, sizes, prev, pager, next, jumper"
-          @current-change="loadList"
-          @size-change="(size: number) => { setPageSize(size); loadList(); }"
-        />
       </div>
+
+      <div v-loading="loading" class="mobile-result-list">
+        <MobileResultCard v-for="item in list" :key="item.id">
+          <template #title>{{ item.name }}</template>
+          <template #status><el-tag :type="item.isActive ? 'success' : 'info'" size="small">{{ activeLabel(item.isActive) }}</el-tag></template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">编码</span><span class="mobile-result-field__value">{{ item.code || '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">类型</span><span class="mobile-result-field__value">{{ TYPE_LABEL_MAP[item.type] }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">考核维度</span><span class="mobile-result-field__value">{{ item.category || '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">数据来源</span><span class="mobile-result-field__value">{{ item.dataSource || '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">目标值</span><span class="mobile-result-field__value">{{ targetValueDisplay(item) }}</span></div>
+          <template #actions>
+            <el-button link type="primary" @click="openEdit(item)">编辑</el-button>
+            <el-button link :type="item.isActive ? 'danger' : 'success'" @click="toggleActive(item)">{{ item.isActive ? '停用' : '启用' }}</el-button>
+          </template>
+        </MobileResultCard>
+      </div>
+      <ListPagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :page-sizes="pageSizeOptions"
+        :total="total"
+        @change="loadList"
+      />
     </ChartCard>
 
     <!-- 新建/编辑弹窗 -->

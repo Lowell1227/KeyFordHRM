@@ -13,6 +13,8 @@ import {
   type DepartmentChangeRequest,
 } from '@/api/departments.api';
 import UserSelect from '@/components/common/UserSelect.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import { positionsApi, type PositionChangeRequest } from '@/api/positions.api';
 
 const props = defineProps<{
@@ -33,14 +35,20 @@ function notifyPersonnelChanged() {
 const activeCategory = ref<'all' | 'employee' | 'department' | 'position'>('all');
 const employeeItems = ref<EmployeeDataReview[]>([]);
 const employeeTotal = ref(0);
+const employeePage = ref(1);
+const employeePageSize = ref(10);
 const employeeLoading = ref(false);
 const selectedEmployees = ref<EmployeeDataReview[]>([]);
 const departmentItems = ref<DepartmentChangeRequest[]>([]);
 const departmentTotal = ref(0);
+const departmentPage = ref(1);
+const departmentPageSize = ref(10);
 const departmentLoading = ref(false);
 const selectedDepartments = ref<DepartmentChangeRequest[]>([]);
 const positionItems = ref<PositionChangeRequest[]>([]);
 const positionTotal = ref(0);
+const positionPage = ref(1);
+const positionPageSize = ref(10);
 const positionLoading = ref(false);
 const selectedPositions = ref<PositionChangeRequest[]>([]);
 const reviewTableColumns = Object.freeze({
@@ -277,7 +285,7 @@ async function loadEmployeeReviews() {
   if (!props.canReviewEmployee) return;
   employeeLoading.value = true;
   try {
-    const result = await employeeArchivesApi.listReviews({ status: 'pending', page: 1, pageSize: 50 });
+    const result = await employeeArchivesApi.listReviews({ status: 'pending', page: employeePage.value, pageSize: employeePageSize.value });
     employeeItems.value = result.items;
     employeeTotal.value = result.total;
     selectedEmployees.value = [];
@@ -290,7 +298,7 @@ async function loadDepartmentReviews() {
   if (!props.canReviewDepartment) return;
   departmentLoading.value = true;
   try {
-    const result = await departmentsApi.listChangeRequests({ status: 'pending', page: 1, pageSize: 50 });
+    const result = await departmentsApi.listChangeRequests({ status: 'pending', page: departmentPage.value, pageSize: departmentPageSize.value });
     departmentItems.value = result.items;
     departmentTotal.value = result.total;
     selectedDepartments.value = [];
@@ -303,7 +311,7 @@ async function loadPositionReviews() {
   if (!props.canReviewPosition) return;
   positionLoading.value = true;
   try {
-    const result = await positionsApi.listChangeRequests({ status: 'pending', page: 1, pageSize: 50 });
+    const result = await positionsApi.listChangeRequests({ status: 'pending', page: positionPage.value, pageSize: positionPageSize.value });
     positionItems.value = result.items;
     positionTotal.value = result.total;
     selectedPositions.value = [];
@@ -476,6 +484,24 @@ function positionActionLabel(action: PositionChangeRequest['action']) {
   return ({ create: '新增岗位', update: '编辑岗位', deactivate: '停用岗位' })[action];
 }
 
+function toggleEmployeeSelection(item: EmployeeDataReview, checked: boolean) {
+  selectedEmployees.value = checked
+    ? [...selectedEmployees.value.filter((row) => row.id !== item.id), item]
+    : selectedEmployees.value.filter((row) => row.id !== item.id);
+}
+
+function toggleDepartmentSelection(item: DepartmentChangeRequest, checked: boolean) {
+  selectedDepartments.value = checked
+    ? [...selectedDepartments.value.filter((row) => row.id !== item.id), item]
+    : selectedDepartments.value.filter((row) => row.id !== item.id);
+}
+
+function togglePositionSelection(item: PositionChangeRequest, checked: boolean) {
+  selectedPositions.value = checked
+    ? [...selectedPositions.value.filter((row) => row.id !== item.id), item]
+    : selectedPositions.value.filter((row) => row.id !== item.id);
+}
+
 onMounted(async () => {
   await Promise.all([loadEmployeeReviews(), loadDepartmentReviews(), loadPositionReviews()]);
 });
@@ -506,6 +532,7 @@ onMounted(async () => {
         <el-button :loading="employeeLoading" @click="rejectSelectedEmployees">批量退回</el-button>
         <el-button type="primary" :loading="employeeLoading" @click="approveSelectedEmployees">批量通过（{{ selectedEmployees.length }}）</el-button>
       </div>
+      <div class="desktop-result-table">
       <el-table
         v-loading="employeeLoading"
         :data="employeeItems"
@@ -551,6 +578,25 @@ onMounted(async () => {
           </template>
         </el-table-column>
       </el-table>
+      </div>
+      <div v-loading="employeeLoading" class="mobile-result-list review-mobile-list">
+        <MobileResultCard v-for="item in employeeItems" :key="item.id">
+          <template #title>
+            <el-checkbox :model-value="selectedEmployees.some((row) => row.id === item.id)" :disabled="!reviewIsPending(item)" @change="toggleEmployeeSelection(item, Boolean($event))">{{ item.employeeName }}</el-checkbox>
+          </template>
+          <template #status><el-tag type="warning" effect="plain">{{ employeeChangeType(item) }}</el-tag></template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">变更内容</span><span class="mobile-result-field__value">{{ employeeChangeSummary(item) }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">提交人</span><span class="mobile-result-field__value">{{ item.createdBy?.name || '系统导入' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">提交时间</span><span class="mobile-result-field__value">{{ formatDateTime(item.createdAt) }}</span></div>
+          <template #actions>
+            <el-button v-if="contractDiffs(item).length" link type="primary" @click="openContractReviewDialog(item)">合同明细</el-button>
+            <el-button v-if="reviewHasPerformanceBlocker(item)" link type="primary" @click="openManagerDialog(item)">补充上级</el-button>
+            <el-button :loading="employeeLoading" @click="rejectEmployee(item)">退回</el-button>
+            <el-button type="primary" :loading="employeeLoading" @click="approveEmployee(item)">通过</el-button>
+          </template>
+        </MobileResultCard>
+      </div>
+      <ListPagination v-model:current-page="employeePage" v-model:page-size="employeePageSize" :total="employeeTotal" @change="loadEmployeeReviews" />
       <el-empty v-if="activeCategory === 'employee' && !employeeLoading && !employeeItems.length" description="暂无员工档案待审核变更" />
     </div>
 
@@ -561,6 +607,7 @@ onMounted(async () => {
         <el-button :loading="departmentLoading" @click="rejectDepartments(selectedDepartments)">批量退回</el-button>
         <el-button type="primary" :loading="departmentLoading" @click="approveDepartments(selectedDepartments)">批量通过（{{ selectedDepartments.length }}）</el-button>
       </div>
+      <div class="desktop-result-table">
       <el-table v-loading="departmentLoading" :data="departmentItems" row-key="id" class="app-table compact-table review-table" @selection-change="selectedDepartments = $event">
         <el-table-column type="selection" :width="reviewTableColumns.selection" />
         <el-table-column type="index" label="序号" :width="reviewTableColumns.index" align="center" />
@@ -571,6 +618,18 @@ onMounted(async () => {
         <el-table-column label="提交时间" :width="reviewTableColumns.submittedAt"><template #default="{ row }">{{ formatDateTime((row as DepartmentChangeRequest).createdAt) }}</template></el-table-column>
         <el-table-column label="操作" :width="reviewTableColumns.actions" fixed="right"><template #default="{ row }"><el-button @click="rejectDepartment(row as DepartmentChangeRequest)">退回</el-button><el-button type="primary" @click="approveDepartment(row as DepartmentChangeRequest)">通过</el-button></template></el-table-column>
       </el-table>
+      </div>
+      <div v-loading="departmentLoading" class="mobile-result-list review-mobile-list">
+        <MobileResultCard v-for="item in departmentItems" :key="item.id">
+          <template #title><el-checkbox :model-value="selectedDepartments.some((row) => row.id === item.id)" @change="toggleDepartmentSelection(item, Boolean($event))">{{ item.departmentName }}</el-checkbox></template>
+          <template #status><el-tag type="warning" effect="plain">{{ departmentActionLabel(item.action) }}</el-tag></template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">变更内容</span><span class="mobile-result-field__value">{{ departmentChangeSummary(item) }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">提交人</span><span class="mobile-result-field__value">{{ item.createdBy?.name || '未知' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">提交时间</span><span class="mobile-result-field__value">{{ formatDateTime(item.createdAt) }}</span></div>
+          <template #actions><el-button @click="rejectDepartment(item)">退回</el-button><el-button type="primary" @click="approveDepartment(item)">通过</el-button></template>
+        </MobileResultCard>
+      </div>
+      <ListPagination v-model:current-page="departmentPage" v-model:page-size="departmentPageSize" :total="departmentTotal" @change="loadDepartmentReviews" />
       <el-empty v-if="activeCategory === 'department' && !departmentLoading && !departmentItems.length" description="暂无部门架构待审核变更" />
     </div>
 
@@ -581,6 +640,7 @@ onMounted(async () => {
         <el-button :loading="positionLoading" @click="rejectPositions(selectedPositions)">批量退回</el-button>
         <el-button type="primary" :loading="positionLoading" @click="approvePositions(selectedPositions)">批量通过（{{ selectedPositions.length }}）</el-button>
       </div>
+      <div class="desktop-result-table">
       <el-table v-loading="positionLoading" :data="positionItems" row-key="id" class="app-table compact-table review-table" @selection-change="selectedPositions = $event">
         <el-table-column type="selection" :width="reviewTableColumns.selection" />
         <el-table-column type="index" label="序号" :width="reviewTableColumns.index" align="center" />
@@ -591,6 +651,18 @@ onMounted(async () => {
         <el-table-column label="提交时间" :width="reviewTableColumns.submittedAt"><template #default="{ row }">{{ formatDateTime((row as PositionChangeRequest).createdAt) }}</template></el-table-column>
         <el-table-column label="操作" :width="reviewTableColumns.actions" fixed="right"><template #default="{ row }"><el-button @click="rejectPosition(row as PositionChangeRequest)">退回</el-button><el-button type="primary" @click="approvePosition(row as PositionChangeRequest)">通过</el-button></template></el-table-column>
       </el-table>
+      </div>
+      <div v-loading="positionLoading" class="mobile-result-list review-mobile-list">
+        <MobileResultCard v-for="item in positionItems" :key="item.id">
+          <template #title><el-checkbox :model-value="selectedPositions.some((row) => row.id === item.id)" @change="togglePositionSelection(item, Boolean($event))">{{ item.positionName }}</el-checkbox></template>
+          <template #status><el-tag type="warning" effect="plain">{{ positionActionLabel(item.action) }}</el-tag></template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">岗位信息</span><span class="mobile-result-field__value">{{ item.proposedValue.code || '-' }} · {{ item.proposedValue.jobFamily || '未分类' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">提交人</span><span class="mobile-result-field__value">{{ item.createdBy?.name || '未知' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">提交时间</span><span class="mobile-result-field__value">{{ formatDateTime(item.createdAt) }}</span></div>
+          <template #actions><el-button @click="rejectPosition(item)">退回</el-button><el-button type="primary" @click="approvePosition(item)">通过</el-button></template>
+        </MobileResultCard>
+      </div>
+      <ListPagination v-model:current-page="positionPage" v-model:page-size="positionPageSize" :total="positionTotal" @change="loadPositionReviews" />
       <el-empty v-if="activeCategory === 'position' && !positionLoading && !positionItems.length" description="暂无岗位待审核变更" />
     </div>
 
@@ -646,6 +718,6 @@ onMounted(async () => {
   .pending-review-workspace__head { align-items: stretch; flex-direction: column; }
   .pending-review-workspace__tabs { width: 100%; }
   .pending-review-workspace__tabs button { flex: 1; }
-  .review-table { min-width: 860px; }
+  .review-mobile-list { padding: 0 0 12px; }
 }
 </style>

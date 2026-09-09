@@ -9,7 +9,9 @@ import { IMPROVEMENT_PLAN_STATUS_META } from '@/types/enums';
 import { formatDate } from '@/utils/date';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
-import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
+import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import type { ImprovementPlan } from '@/types/api.types';
 import type { ImprovementPlanStatus } from '@/types/enums';
 
@@ -101,7 +103,7 @@ function formatMeasuresCount(row: any): string {
         <el-tag v-if="!isManagerOrHR" type="info" size="small">仅展示我的改进计划</el-tag>
       </template>
 
-      <CollapsibleFilterPanel class="page-filter-panel">
+      <QueryFilterPanel class="page-filter-panel">
         <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
         <el-form-item label="状态">
           <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
@@ -126,10 +128,11 @@ function formatMeasuresCount(row: any): string {
           <el-button :icon="RefreshRight" @click="onReset">重置</el-button>
         </el-form-item>
         </el-form>
-      </CollapsibleFilterPanel>
+      </QueryFilterPanel>
     </ChartCard>
 
     <ChartCard :padded="false" class="list-result-card">
+      <div class="desktop-result-table">
       <el-table v-loading="loading" :data="list" height="100%" class="app-table" @row-click="goDetail">
         <el-table-column label="员工" min-width="140">
           <template #default="{ row }">
@@ -161,18 +164,27 @@ function formatMeasuresCount(row: any): string {
           </template>
         </el-table-column>
       </el-table>
-
-      <div v-if="list.length > 0" class="app-pager">
-        <el-pagination
-          v-model:current-page="page"
-          v-model:page-size="pageSize"
-          :page-sizes="pageSizeOptions"
-          :total="total"
-          layout="total, sizes, prev, pager, next"
-          @change="loadList"
-        />
       </div>
-      <EmptyState v-else description="暂无改进计划" />
+
+      <div v-loading="loading" class="mobile-result-list">
+        <MobileResultCard v-for="item in list" :key="item.id" @click="goDetail(item)">
+          <template #title>{{ item.employeeName || '-' }}</template>
+          <template #status><el-tag :type="statusType(item.status) as any" size="small">{{ statusLabel(item.status) }}</el-tag></template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">考核周期</span><span class="mobile-result-field__value">{{ item.cycleName || '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">目标日期</span><span class="mobile-result-field__value">{{ item.targetDate ? formatDate(item.targetDate) : '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">措施</span><span class="mobile-result-field__value">{{ formatMeasuresCount(item) }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">制定人</span><span class="mobile-result-field__value">{{ item.creatorName || '-' }}</span></div>
+          <template #actions><el-button link type="primary" @click.stop="goDetail(item)">查看</el-button></template>
+        </MobileResultCard>
+      </div>
+      <ListPagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :page-sizes="pageSizeOptions"
+        :total="total"
+        @change="loadList"
+      />
+      <EmptyState v-if="!loading && list.length === 0" description="暂无改进计划" />
     </ChartCard>
   </div>
 </template>

@@ -4,7 +4,9 @@ import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { confirmationApi } from '@/api/confirmation.api';
 import ChartCard from '@/components/common/ChartCard.vue';
-import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
+import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import { usePagination } from '@/composables/usePagination';
 import { CONFIRMATION_STATUS_META, VOTE_RESULT_LABELS } from '@/types/enums';
 import { formatDate } from '@/utils/date';
@@ -91,7 +93,7 @@ function pendingLabel(row: ConfirmationApplication): string {
     <ChartCard class="header-card list-page-header-card">
       <template #title>转正审批台</template>
 
-      <CollapsibleFilterPanel class="page-filter-panel">
+      <QueryFilterPanel class="page-filter-panel">
         <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
         <el-form-item label="姓名">
           <el-input v-model="filters.keyword" placeholder="请输入姓名" clearable style="width: 220px" />
@@ -101,10 +103,11 @@ function pendingLabel(row: ConfirmationApplication): string {
           <el-button @click="onReset">重置</el-button>
         </el-form-item>
         </el-form>
-      </CollapsibleFilterPanel>
+      </QueryFilterPanel>
     </ChartCard>
 
     <ChartCard :padded="false" class="list-result-card">
+      <div class="desktop-result-table">
       <el-table v-loading="loading" :data="list" height="100%" class="app-table">
         <el-table-column label="员工" min-width="120">
           <template #default="{ row }">{{ (row as ConfirmationApplication).employee?.name }}</template>
@@ -144,17 +147,25 @@ function pendingLabel(row: ConfirmationApplication): string {
           </template>
         </el-table-column>
       </el-table>
-
-      <div class="app-pager">
-        <el-pagination
-          v-model:current-page="page"
-          v-model:page-size="pageSize"
-          :page-sizes="pageSizeOptions"
-          :total="total"
-          layout="total, sizes, prev, pager, next"
-          @change="loadList"
-        />
       </div>
+
+      <div v-loading="loading" class="mobile-result-list">
+        <MobileResultCard v-for="item in list" :key="item.id">
+          <template #title>{{ item.employee?.name || '-' }}</template>
+          <template #status><el-tag :type="statusType(item.status) as any" size="small">{{ statusLabel(item.status) }}</el-tag></template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">待审节点</span><span class="mobile-result-field__value">{{ pendingLabel(item) }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">表决结果</span><span class="mobile-result-field__value">{{ voteLabel(item.voteResult) }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">转正日期</span><span class="mobile-result-field__value">{{ formatDate(item.actualRegularDate) }}</span></div>
+          <template #actions><el-button link type="primary" @click="goDetail(item)">去审批</el-button></template>
+        </MobileResultCard>
+      </div>
+      <ListPagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :page-sizes="pageSizeOptions"
+        :total="total"
+        @change="loadList"
+      />
     </ChartCard>
   </div>
 </template>

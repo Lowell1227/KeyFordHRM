@@ -6,7 +6,9 @@ import { Plus, Warning } from '@element-plus/icons-vue';
 import { confirmationApi } from '@/api/confirmation.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
-import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
+import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import { usePagination } from '@/composables/usePagination';
 import {
   CONFIRMATION_STATUS_META,
@@ -256,7 +258,7 @@ function voteType(result?: string | null): string {
         <el-button data-testid="confirmation-create" type="primary" :icon="Plus" @click="openCreate">发起转正申请</el-button>
       </template>
 
-      <CollapsibleFilterPanel class="page-filter-panel">
+      <QueryFilterPanel class="page-filter-panel">
         <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
         <el-form-item label="状态">
           <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
@@ -276,10 +278,11 @@ function voteType(result?: string | null): string {
           <el-button @click="onReset">重置</el-button>
         </el-form-item>
         </el-form>
-      </CollapsibleFilterPanel>
+      </QueryFilterPanel>
     </ChartCard>
 
     <ChartCard :padded="false" class="list-result-card">
+      <div class="desktop-result-table">
       <el-table v-loading="loading" :data="list" height="100%" class="app-table">
         <el-table-column label="员工" min-width="120">
           <template #default="{ row }">{{ (row as ConfirmationApplication).employee?.name }}</template>
@@ -336,17 +339,29 @@ function voteType(result?: string | null): string {
           </template>
         </el-table-column>
       </el-table>
-
-      <div class="app-pager">
-        <el-pagination
-          v-model:current-page="page"
-          v-model:page-size="pageSize"
-          :page-sizes="pageSizeOptions"
-          :total="total"
-          layout="total, sizes, prev, pager, next"
-          @change="loadList"
-        />
       </div>
+
+      <div v-loading="loading" class="mobile-result-list">
+        <MobileResultCard v-for="item in list" :key="item.id">
+          <template #title>{{ item.employee?.name || '-' }}</template>
+          <template #status><el-tag :type="statusType(item.status) as any" size="small">{{ statusLabel(item.status) }}</el-tag></template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">主管</span><span class="mobile-result-field__value">{{ item.manager?.name || '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">表决结果</span><span class="mobile-result-field__value">{{ voteLabel(item.voteResult) }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">转正日期</span><span class="mobile-result-field__value">{{ formatDate(item.actualRegularDate) }}</span></div>
+          <template #actions>
+            <el-button link type="primary" @click="goDetail(item)">查看</el-button>
+            <el-button v-if="item.status === 'draft'" link type="warning" @click="openEdit(item)">编辑</el-button>
+            <el-button v-if="item.status === 'draft'" link type="success" :loading="submitting" @click="handleSubmit(item)">提交</el-button>
+          </template>
+        </MobileResultCard>
+      </div>
+      <ListPagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :page-sizes="pageSizeOptions"
+        :total="total"
+        @change="loadList"
+      />
     </ChartCard>
 
     <el-dialog

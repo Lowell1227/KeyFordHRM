@@ -13,6 +13,8 @@ import { resultStage } from '@/utils/performance-result-presentation';
 import GradeDistChart from '@/components/charts/GradeDistChart.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import type { ApprovalOverview, ApprovalTaskView, AssessmentCycle, TaskDetail } from '@/types/api.types';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 import { useAuthStore } from '@/stores/auth.store';
@@ -36,6 +38,8 @@ const loading = ref(false);
 const listError = ref('');
 const submitting = ref(false);
 const selectedTaskIds = ref<string[]>([]);
+const page = ref(1);
+const pageSize = ref(10);
 const detailDrawer = ref({ visible: false, loading: false, taskId: '', error: '', detail: null as TaskDetail | null });
 let approvalReady = false;
 let listRequest = 0;
@@ -73,6 +77,12 @@ const gradeCounts = computed<Record<PerfGrade, number>>(() => {
 const distTotal = computed(() =>
   (Object.keys(gradeCounts.value) as PerfGrade[]).reduce((sum, g) => sum + gradeCounts.value[g], 0),
 );
+const pagedTasks = computed(() => {
+  const start = (page.value - 1) * pageSize.value;
+  return tasks.value.slice(start, start + pageSize.value);
+});
+
+watch(pageSize, () => { page.value = 1; });
 
 function formatScore(score?: number | null): string {
   return score == null ? '—' : score.toFixed(2);
@@ -160,6 +170,7 @@ function clearApprovalState() {
   overview.value = null;
   listError.value = '';
   selectedTaskIds.value = [];
+  page.value = 1;
   rejectDialog.value = {
     visible: false,
     mode: 'single',
@@ -192,6 +203,7 @@ async function loadTasks() {
     if (request !== listRequest || cycleId !== selectedCycleId.value) return;
     tasks.value = list;
     overview.value = overviewData;
+    page.value = Math.min(page.value, Math.max(1, Math.ceil(list.length / pageSize.value)));
   } catch (error) {
     if (request !== listRequest || cycleId !== selectedCycleId.value) return;
     tasks.value = [];
@@ -240,6 +252,13 @@ onMounted(async () => {
 
 function onSelectionChange(rows: ApprovalTaskView[]) {
   selectedTaskIds.value = rows.filter(canOperateTask).map((r) => r.id);
+}
+
+function toggleMobileSelection(item: ApprovalTaskView, checked: boolean) {
+  if (!canOperateTask(item)) return;
+  const selected = new Set(selectedTaskIds.value);
+  if (checked) selected.add(item.id); else selected.delete(item.id);
+  selectedTaskIds.value = [...selected];
 }
 
 function canOperateTask(task: unknown): boolean {
@@ -377,7 +396,7 @@ function handleBatchReject() {
 
 <template>
   <div class="approval-view page-stack performance-result-page">
-    <ChartCard :padded="true">
+    <ChartCard :padded="true" class="list-result-card">
       <template #title>结果审批</template>
       <template #extra>
         <div class="approval-view__toolbar performance-result-toolbar">
@@ -500,10 +519,11 @@ function handleBatchReject() {
             <EmptyState v-else description="暂无退回记录" />
           </ChartCard>
         </div>
+        <div class="desktop-result-table">
         <el-table
           class="app-table performance-result-table"
           v-loading="loading"
-          :data="tasks"
+          :data="pagedTasks"
           row-key="id"
           @selection-change="onSelectionChange"
         >
@@ -564,6 +584,25 @@ function handleBatchReject() {
             </template>
           </el-table-column>
         </el-table>
+        </div>
+        <div v-loading="loading" class="mobile-result-list approval-mobile-list">
+          <MobileResultCard v-for="item in pagedTasks" :key="item.id">
+            <template #title>
+              <el-checkbox v-if="canOperateApproval" :model-value="selectedTaskIds.includes(item.id)" :disabled="!canOperateTask(item)" @change="toggleMobileSelection(item, Boolean($event))">{{ item.employeeName }} · {{ item.employeeNo || '—' }}</el-checkbox>
+              <span v-else>{{ item.employeeName }} · {{ item.employeeNo || '—' }}</span>
+            </template>
+            <template #status><el-tag :type="resultStage(item.status, item.approvedAt).type" size="small">{{ resultStage(item.status, item.approvedAt).label }}</el-tag></template>
+            <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 岗位</span><span class="mobile-result-field__value">{{ item.deptName || '—' }} · {{ item.position || '—' }}</span></div>
+            <div class="mobile-result-field"><span class="mobile-result-field__label">周期结果</span><span class="mobile-result-field__value">{{ formatScore(item.totalScore) }} · {{ item.calibratedGrade ?? item.rawGrade ?? '—' }}</span></div>
+            <template #actions>
+              <el-button v-if="canViewTaskDetail(item)" link type="primary" @click="openDetail(item.id)">查看详情</el-button>
+              <el-button v-if="canOperateTask(item)" link type="primary" :loading="submitting" @click="handleApproveSingleWithConfirm(item.id)">通过</el-button>
+              <el-button v-if="canOperateTask(item)" link type="danger" :loading="submitting" @click="handleRejectSingle(item.id)">退回</el-button>
+              <span v-if="!canViewTaskDetail(item)" class="text-secondary">公示后可查看</span>
+            </template>
+          </MobileResultCard>
+        </div>
+        <ListPagination v-model:current-page="page" v-model:page-size="pageSize" :total="tasks.length" />
       </template>
     </ChartCard>
 

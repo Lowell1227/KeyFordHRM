@@ -26,7 +26,7 @@ test('HR can submit a position from the position directory', async ({ page }) =>
   });
 
   await page.goto(`${webBaseUrl}/positions`);
-  await expect(page.getByText('销售专员', { exact: true })).toBeVisible();
+  await expect(page.locator('.desktop-result-table').getByText('销售专员', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '新增岗位' }).click();
   const dialog = page.getByRole('dialog', { name: '新增岗位' });
   await dialog.locator('.el-form-item').filter({ hasText: '岗位编码' }).locator('input').fill('OPS-01');
@@ -100,7 +100,7 @@ test('HR administrator can review self-submitted department and position changes
   }));
 
   await page.goto(`${webBaseUrl}/personnel-change-reviews`);
-  await expect(page.locator('.review-category-section > .review-table')).toHaveCount(2);
+  await expect(page.locator('.review-category-section > .desktop-result-table > .review-table')).toHaveCount(2);
   await expect(page.locator('.department-review-card')).toHaveCount(0);
   await page.getByRole('button', { name: '组织架构 1' }).click();
   const departmentRow = page.locator('.review-table .el-table__row').filter({ hasText: '自建部门' });

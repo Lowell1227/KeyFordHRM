@@ -4,6 +4,12 @@ const taskId = '11111111-1111-4111-8111-111111111111';
 const cycleId = '22222222-2222-4222-8222-222222222222';
 const response = (data: unknown) => ({ code: 0, message: 'success', data });
 
+function reviewItem(page: Page, width: number, employeeName: string) {
+  return width <= 768
+    ? page.locator('.department-review-mobile-list .mobile-result-card').filter({ hasText: employeeName })
+    : page.getByRole('row').filter({ hasText: employeeName });
+}
+
 async function setup(page: Page, role: 'head' | 'employee' | 'employee-head' = 'head', options: { status?: string; combined?: boolean; approvedAt?: string; reviewGate?: Promise<void> } = {}) {
   let status = options.status ?? 'dept_review';
   let latestReview: { action: 'approve' | 'reject'; createdAt: string; combined: boolean } | null = options.combined ? { action: 'approve', createdAt: '2026-09-08T10:00:00Z', combined: true } : null;
@@ -81,17 +87,17 @@ for (const width of [1440, 390]) {
     await expect(summary).toContainText('92.40');
     await expect(summary.getByText('B', { exact: true })).toBeVisible();
     await expect(page.getByTestId('performance-stage-unavailable')).toHaveCount(0);
-    await expect(page.getByText('92.40', { exact: true }).first()).toBeVisible();
+    await expect(summary.getByText('92.40', { exact: true })).toBeVisible();
     await expect(page.getByTestId('department-review-workspace').getByTestId('review-history')).toContainText('周期交付稳定，建议加强协作。');
     await page.getByRole('textbox', { name: '复核意见' }).fill('复核确认交付依据充分');
     await page.getByRole('button', { name: '复核通过', exact: true }).click();
     await expect.poll(() => submissions).toEqual([{ action: 'approve', comment: '复核确认交付依据充分' }]);
     await expect(page.getByText('部门复核已通过，已进入绩效校准。', { exact: true })).toBeVisible();
     await page.goto('/department-review');
-    const row = page.getByRole('row').filter({ hasText: '虚拟员工甲' });
+    const row = reviewItem(page, width, '虚拟员工甲');
     await expect(row).toContainText('复核通过');
     await expect(row).toContainText('绩效校准中');
-    await expect(page.getByTestId('department-review-pending-total')).toHaveText('待复核 0 项');
+    await expect(page.getByTestId('department-review-pending-total')).toHaveCount(0);
     await expect(row.getByRole('button', { name: '进入复核', exact: true })).toHaveCount(0);
     await row.getByRole('button', { name: '查看详情', exact: true }).click();
     await expect(page.getByTestId('department-review-workspace')).toBeVisible();
@@ -108,7 +114,7 @@ for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     const submissions = await setup(page, 'head', { status: 'published', combined: true });
     await page.goto('/department-review');
-    const row = page.getByRole('row').filter({ hasText: '虚拟员工甲' });
+    const row = reviewItem(page, width, '虚拟员工甲');
     await expect(row).toContainText('合并复核通过');
     await expect(row).toContainText('已公示');
     await row.getByRole('button', { name: '查看详情', exact: true }).click();
@@ -148,7 +154,7 @@ test('复核请求未完成时抽屉不可关闭，完成后仍刷新名单', as
   await expect(drawer).toBeVisible();
 
   releaseReview();
-  await expect(page.getByTestId('department-review-pending-total')).toHaveText('待复核 0 项');
+  await expect(page.getByTestId('department-review-pending-total')).toHaveCount(0);
   await expect(drawer.getByRole('button', { name: '关闭', exact: true })).toBeEnabled();
   await drawer.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(drawer).toBeHidden();
@@ -190,8 +196,8 @@ for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     const state = await setupRecords(page);
     await page.goto('/department-review');
-    await expect(page.getByTestId('department-review-pending-total')).toHaveText('待复核 1 项');
-    const table = page.getByRole('table').last();
+    await expect(page.getByTestId('department-review-pending-total')).toHaveCount(0);
+    const resultSurface = width <= 768 ? page.locator('.department-review-mobile-list') : page.getByRole('table').last();
     for (const [name, handling, stage] of [
       ['虚拟待复核成员', '待复核', '部门复核中'],
       ['虚拟已通过成员', '复核通过', '绩效校准中'],
@@ -200,12 +206,16 @@ for (const width of [1440, 390]) {
       ['虚拟尚未开始成员', '待开始', '目标制定中'],
       ['虚拟历史无记录成员', '暂无复核记录', '已公示'],
     ]) {
-      const row = table.getByRole('row').filter({ hasText: name });
+      const row = width <= 768
+        ? resultSurface.locator('.mobile-result-card').filter({ hasText: name })
+        : resultSurface.getByRole('row').filter({ hasText: name });
       await expect(row).toContainText(handling);
       await expect(row).toContainText(stage);
       await expect(row.getByRole('button', { name: name === '虚拟待复核成员' ? '进入复核' : '查看详情', exact: true })).toBeVisible();
     }
-    const notStarted = table.getByRole('row').filter({ hasText: '虚拟尚未开始成员' });
+    const notStarted = width <= 768
+      ? resultSurface.locator('.mobile-result-card').filter({ hasText: '虚拟尚未开始成员' })
+      : resultSurface.getByRole('row').filter({ hasText: '虚拟尚未开始成员' });
     await expect(notStarted).not.toContainText('92.40');
     await expect(notStarted).not.toContainText('复核通过');
     await expect(page.getByRole('button', { name: '进入复核', exact: true })).toHaveCount(1);
@@ -213,12 +223,11 @@ for (const width of [1440, 390]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath('department-review-all-records.png'), fullPage: true, animations: 'disabled' });
     if (width === 390) {
-      await page.locator('.el-table__body-wrapper .el-scrollbar__wrap').evaluate(element => { element.scrollLeft = 430; });
-      await page.screenshot({ path: testInfo.outputPath('department-review-status-scroll.png'), fullPage: true, animations: 'disabled' });
-      await page.locator('.el-table__body-wrapper .el-scrollbar__wrap').evaluate(element => { element.scrollLeft = element.scrollWidth; });
-      const actionBox = await table.getByRole('button', { name: '进入复核', exact: true }).boundingBox();
+      await expect(page.locator('.department-review-list .desktop-result-table')).toBeHidden();
+      await expect(resultSurface).toBeVisible();
+      const actionBox = await resultSurface.getByRole('button', { name: '进入复核', exact: true }).boundingBox();
       expect(actionBox!.x + actionBox!.width).toBeLessThanOrEqual(width);
-      await page.screenshot({ path: testInfo.outputPath('department-review-action-scroll.png'), fullPage: true, animations: 'disabled' });
+      await page.screenshot({ path: testInfo.outputPath('department-review-mobile-cards.png'), fullPage: true, animations: 'disabled' });
     }
   });
 }
@@ -231,7 +240,7 @@ test('当前环节筛选重置页码并保留待复核总数，清除后恢复�
   await page.locator('.review-filters .el-select').click();
   await page.getByRole('option', { name: '绩效校准中', exact: true }).click();
   await expect.poll(() => state.requests.at(-1)).toEqual({ status: 'hr_calibration', page: 1 });
-  await expect(page.getByTestId('department-review-pending-total')).toHaveText('待复核 1 项');
+  await expect(page.getByTestId('department-review-pending-total')).toHaveCount(0);
   await expect(page.getByRole('row').filter({ hasText: '虚拟已通过成员' })).toBeVisible();
   await expect(page.getByRole('row').filter({ hasText: '虚拟待复核成员' })).toHaveCount(0);
   await page.locator('.review-filters .el-select').click();

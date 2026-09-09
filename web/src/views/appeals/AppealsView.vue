@@ -10,7 +10,9 @@ import FileUpload from '@/components/common/FileUpload.vue';
 import DeptTree from '@/components/common/DeptTree.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
-import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
+import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import { usePagination } from '@/composables/usePagination';
 import { formatDateTime } from '@/utils/date';
 import type {
@@ -310,7 +312,7 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
         <el-button type="primary" @click="openCreateDialog">录入申诉</el-button>
       </template>
 
-      <CollapsibleFilterPanel class="page-filter-panel">
+      <QueryFilterPanel class="page-filter-panel">
         <div class="appeals-view__filters">
         <el-select
           v-model="filters.cycleId"
@@ -354,10 +356,11 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
         <el-button type="primary" :loading="loading" @click="search">查询</el-button>
         <el-button @click="resetFilters">重置</el-button>
         </div>
-      </CollapsibleFilterPanel>
+      </QueryFilterPanel>
     </ChartCard>
 
     <ChartCard :padded="false" class="list-result-card">
+      <div class="desktop-result-table">
       <el-table v-loading="loading" :data="appeals" row-key="id" height="100%" class="app-table">
         <el-table-column prop="appellant.name" label="员工" min-width="120">
           <template #default="{ row }">
@@ -400,20 +403,32 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
           </template>
         </el-table-column>
       </el-table>
+      </div>
+
+      <div v-loading="loading" class="mobile-result-list">
+        <MobileResultCard v-for="appeal in appeals" :key="appeal.id">
+          <template #title>{{ appeal.appellant?.name ?? '-' }}</template>
+          <template #status>
+            <el-tag :type="appeal.status === 'pending' ? 'warning' : 'success'" size="small">{{ statusText(appeal.status) }}</el-tag>
+          </template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">部门</span><span class="mobile-result-field__value">{{ appeal.dept?.name ?? '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">考核周期</span><span class="mobile-result-field__value">{{ appeal.cycle?.name ?? '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">处理结果</span><span class="mobile-result-field__value">{{ appeal.finalResult ? resultText(appeal.finalResult) : '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">创建时间</span><span class="mobile-result-field__value">{{ formatDateTime(appeal.createdAt) }}</span></div>
+          <template #actions><el-button link type="primary" @click="openDetail(appeal)">详情</el-button></template>
+        </MobileResultCard>
+      </div>
 
       <div v-if="!loading && appeals.length === 0" class="appeals-view__empty">
         <EmptyState description="暂无申诉记录" />
       </div>
 
-      <div v-if="total > 0" class="app-pager">
-        <el-pagination
-          v-model:current-page="page"
-          v-model:page-size="pageSize"
-          :page-sizes="pageSizeOptions"
-          :total="total"
-          layout="total, sizes, prev, pager, next"
-        />
-      </div>
+      <ListPagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :page-sizes="pageSizeOptions"
+        :total="total"
+      />
     </ChartCard>
 
     <!-- 录入申诉 -->

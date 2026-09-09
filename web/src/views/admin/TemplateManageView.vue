@@ -9,7 +9,9 @@ import { departmentsApi } from '@/api/departments.api';
 import { usersApi } from '@/api/users.api';
 import DeptTree from '@/components/common/DeptTree.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
-import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
+import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import { formatDateTime } from '@/utils/date';
 import {
   isWeightComplete,
@@ -519,7 +521,7 @@ onMounted(() => {
         <el-button type="primary" :icon="Plus" data-testid="template-create" @click="openCreate">新建模板</el-button>
       </template>
 
-      <CollapsibleFilterPanel class="page-filter-panel">
+      <QueryFilterPanel class="page-filter-panel">
         <div class="filter-row">
         <el-input
           v-model="query.keyword"
@@ -540,10 +542,11 @@ onMounted(() => {
         </el-select>
         <el-button type="primary" @click="query.page = 1; loadList()">查询</el-button>
         </div>
-      </CollapsibleFilterPanel>
+      </QueryFilterPanel>
     </ChartCard>
 
     <ChartCard :padded="false" class="list-result-card">
+      <div class="desktop-result-table">
       <el-table
         v-loading="listLoading"
         class="app-table"
@@ -642,17 +645,30 @@ onMounted(() => {
           </template>
         </el-table-column>
       </el-table>
-
-      <div class="app-pager">
-        <el-pagination
-          v-model:current-page="query.page"
-          v-model:page-size="query.pageSize"
-          :total="total"
-          :page-sizes="[10, 20, 50]"
-          layout="total, sizes, prev, pager, next"
-          @change="loadList"
-        />
       </div>
+
+      <div v-loading="listLoading" class="mobile-result-list">
+        <MobileResultCard v-for="item in templates" :key="item.id">
+          <template #title>{{ item.name }}</template>
+          <template #status><el-tag :type="item.isActive ? 'success' : 'info'" size="small">{{ item.isActive ? '启用' : '停用' }}</el-tag></template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">编辑状态</span><span class="mobile-result-field__value">{{ editStateLabel(item) }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">适用范围</span><span class="mobile-result-field__value">{{ formatScope(item) }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">维度数</span><span class="mobile-result-field__value">{{ item.dimensionCount }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">最近更新</span><span class="mobile-result-field__value">{{ formatDateTime(item.updatedAt ?? item.createdAt) }}</span></div>
+          <template #actions>
+            <el-button link @click="openView(item)">查看</el-button>
+            <el-button link :disabled="isTemplateLocked(item)" @click="openEdit(item)">编辑</el-button>
+            <el-button link @click="handleDuplicate(item)">复制</el-button>
+          </template>
+        </MobileResultCard>
+      </div>
+      <ListPagination
+        v-model:current-page="query.page"
+        v-model:page-size="query.pageSize"
+        :total="total"
+        :page-sizes="[10, 20, 50]"
+        @change="loadList"
+      />
     </ChartCard>
 
     <el-dialog

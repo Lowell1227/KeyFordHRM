@@ -232,6 +232,33 @@ body,
   padding: 14px 20px;
 }
 
+.desktop-result-table {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+}
+
+.desktop-result-table > .el-table {
+  flex: 1;
+  min-height: 0;
+}
+
+.mobile-result-list {
+  display: none;
+}
+
+.query-filter-panel {
+  min-width: 0;
+  padding: 12px 14px;
+  border: 1px solid #e8edf5;
+  border-radius: 8px;
+  background: #fbfcff;
+}
+
+.query-filter-panel .el-form-item {
+  margin-bottom: 0;
+}
+
 .el-dialog {
   display: flex;
   max-height: calc(100dvh - 48px);
@@ -318,6 +345,51 @@ body,
 
   .app-list-page .list-result-card .el-table {
     height: auto !important;
+  }
+
+  .desktop-result-table {
+    display: none !important;
+  }
+
+  .mobile-result-list {
+    display: grid;
+    gap: 10px;
+    padding: 0 12px 12px;
+  }
+
+  .query-filter-panel {
+    padding: 12px;
+  }
+
+  .query-filter-panel .el-form--inline,
+  .query-filter-panel .el-form,
+  .query-filter-panel > div {
+    display: flex;
+    width: 100%;
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+
+  .query-filter-panel .el-form--inline .el-form-item,
+  .query-filter-panel .el-form-item,
+  .query-filter-panel .el-form-item__content,
+  .query-filter-panel .el-input,
+  .query-filter-panel .el-select,
+  .query-filter-panel .el-date-editor {
+    width: 100% !important;
+    margin-right: 0;
+  }
+
+  .query-filter-panel .el-form-item:last-child .el-form-item__content {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .query-filter-panel .el-form-item:last-child .el-button {
+    width: 100%;
+    margin-left: 0;
   }
 
   .el-card {

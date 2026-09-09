@@ -17,6 +17,12 @@ async function authenticate(page: Page) {
   });
 }
 
+function publicationItem(page: Page, width: number, employeeName: string) {
+  return width <= 768
+    ? page.locator('.publish-mobile-list .mobile-result-card').filter({ hasText: employeeName })
+    : page.getByRole('row').filter({ hasText: employeeName });
+}
+
 for (const width of [1440, 390]) {
   test(`公示台保留历史、遮罩本人结果并按通知开关确认 ${width}px`, async ({
     page,
@@ -233,33 +239,17 @@ for (const width of [1440, 390]) {
     });
 
     await page.goto(`/publish?cycleId=${cycleA}`);
-    await expect(page.getByText("待审批员工")).toBeVisible();
-    await expect(
-      page.getByRole("row").filter({ hasText: "待审批员工" }),
-    ).toContainText("待审批");
-    await expect(
-      page.getByRole("row").filter({ hasText: "待公示员工" }),
-    ).toContainText("待公示");
-    await expect(
-      page.getByRole("row").filter({ hasText: "已公示员工" }),
-    ).toContainText("已公示");
-    await expect(
-      page.getByRole("row").filter({ hasText: "已归档员工" }),
-    ).toContainText("已归档");
-    await expect(
-      page.getByRole("row").filter({ hasText: "系统管理员" }),
-    ).toContainText("公示前不可查看本人结果");
-    await expect(
-      page
-        .getByRole("row")
-        .filter({ hasText: "待审批员工" })
-        .getByRole("checkbox"),
-    ).toBeDisabled();
-    await page
-      .getByRole("row")
-      .filter({ hasText: "待公示员工" })
-      .locator(".el-checkbox")
-      .click();
+    const pendingApproval = publicationItem(page, width, "待审批员工");
+    const readyToPublish = publicationItem(page, width, "待公示员工");
+    await expect(pendingApproval).toBeVisible();
+    await expect(pendingApproval).toContainText("待审批");
+    await expect(readyToPublish).toContainText("待公示");
+    await expect(publicationItem(page, width, "已公示员工")).toContainText("已公示");
+    await expect(publicationItem(page, width, "已归档员工")).toContainText("已归档");
+    await expect(publicationItem(page, width, "系统管理员")).toContainText("公示前不可查看本人结果");
+    if (width <= 768) await expect(pendingApproval.getByRole("checkbox")).toHaveCount(0);
+    else await expect(pendingApproval.getByRole("checkbox")).toBeDisabled();
+    await readyToPublish.locator(".el-checkbox").click();
     await page.getByRole("button", { name: "发布公示", exact: true }).click();
     const dialog = page.getByRole("dialog");
     await expect(dialog).toContainText("不会发送钉钉通知");
@@ -288,9 +278,7 @@ for (const width of [1440, 390]) {
       requests.find((request) => request.path === "/api/v1/cycles")?.query,
     ).toContain("pageSize=100");
 
-    await page
-      .getByRole("row")
-      .filter({ hasText: "已公示员工" })
+    await publicationItem(page, width, "已公示员工")
       .getByRole("button", { name: "查看详情", exact: true })
       .click();
     await expect(page.getByTestId("performance-result-summary")).toContainText(
@@ -409,9 +397,9 @@ test("切换周期后较早请求不会覆盖当前公示列表", async ({ page 
   await page.goto(`/publish?cycleId=${cycleA}`);
   await page.getByTestId("publish-cycle-select").click();
   await page.getByRole("option", { name: "周期乙" }).click();
-  await expect(page.getByText("乙周期当前结果")).toBeVisible();
+  await expect(page.getByText("乙周期当前结果", { exact: true })).toBeVisible();
   releaseCycleA();
   await page.waitForTimeout(100);
-  await expect(page.getByText("乙周期当前结果")).toBeVisible();
+  await expect(page.getByText("乙周期当前结果", { exact: true })).toBeVisible();
   await expect(page.getByText("甲周期旧结果")).toHaveCount(0);
 });

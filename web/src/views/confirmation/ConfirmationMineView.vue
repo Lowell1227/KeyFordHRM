@@ -3,6 +3,8 @@ import { ref, reactive, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
 import { confirmationApi } from '@/api/confirmation.api';
 import ChartCard from '@/components/common/ChartCard.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import { usePagination } from '@/composables/usePagination';
 import { CONFIRMATION_STATUS_META } from '@/types/enums';
 import { formatDate } from '@/utils/date';
@@ -62,6 +64,7 @@ function statusType(status: string): string {
     </ChartCard>
 
     <ChartCard :padded="false" class="list-result-card">
+      <div class="desktop-result-table">
       <el-table v-loading="loading" :data="list" height="100%" class="app-table">
         <el-table-column label="状态" width="130">
           <template #default="{ row }">
@@ -90,17 +93,26 @@ function statusType(status: string): string {
           </template>
         </el-table-column>
       </el-table>
-
-      <div class="app-pager">
-        <el-pagination
-          v-model:current-page="page"
-          v-model:page-size="pageSize"
-          :page-sizes="pageSizeOptions"
-          :total="total"
-          layout="total, sizes, prev, pager, next"
-          @change="loadList"
-        />
       </div>
+
+      <div v-loading="loading" class="mobile-result-list">
+        <MobileResultCard v-for="item in list" :key="item.id">
+          <template #title>转正申请</template>
+          <template #status><el-tag :type="statusType(item.status) as any" size="small">{{ statusLabel(item.status) }}</el-tag></template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">主管</span><span class="mobile-result-field__value">{{ item.manager?.name || '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">HR</span><span class="mobile-result-field__value">{{ item.hr?.name || '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">公司审批人</span><span class="mobile-result-field__value">{{ item.companyApprover?.name || '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">转正日期</span><span class="mobile-result-field__value">{{ formatDate(item.actualRegularDate) }}</span></div>
+          <template #actions><el-button link type="primary" @click="goDetail(item)">查看</el-button></template>
+        </MobileResultCard>
+      </div>
+      <ListPagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :page-sizes="pageSizeOptions"
+        :total="total"
+        @change="loadList"
+      />
     </ChartCard>
   </div>
 </template>

@@ -9,7 +9,9 @@ import { usePagination } from '@/composables/usePagination';
 import { PROBATION_STATUS_META } from '@/types/enums';
 import { formatDate } from '@/utils/date';
 import ChartCard from '@/components/common/ChartCard.vue';
-import CollapsibleFilterPanel from '@/components/common/CollapsibleFilterPanel.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
+import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import type { ProbationReview } from '@/types/api.types';
 import type { ProbationReviewStatus } from '@/types/enums';
 
@@ -149,7 +151,7 @@ function actionLabel(row: ProbationReview): string {
         <slot name="header-extra" />
       </template>
 
-      <CollapsibleFilterPanel class="page-filter-panel">
+      <QueryFilterPanel class="page-filter-panel">
         <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
         <el-form-item label="状态">
           <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
@@ -174,10 +176,11 @@ function actionLabel(row: ProbationReview): string {
           <el-button :icon="RefreshRight" @click="onReset">重置</el-button>
         </el-form-item>
         </el-form>
-      </CollapsibleFilterPanel>
+      </QueryFilterPanel>
     </ChartCard>
 
     <ChartCard :padded="false" class="list-result-card">
+      <div class="desktop-result-table">
       <el-table v-loading="loading" :data="list" height="100%" class="app-table"
         >
         <el-table-column label="员工" min-width="140">
@@ -223,17 +226,31 @@ function actionLabel(row: ProbationReview): string {
           </template>
         </el-table-column>
       </el-table>
-
-      <div class="app-pager">
-        <el-pagination
-          v-model:current-page="page"
-          v-model:page-size="pageSize"
-          :page-sizes="pageSizeOptions"
-          :total="total"
-          layout="total, sizes, prev, pager, next"
-          @change="loadList"
-        />
       </div>
+
+      <div v-loading="loading" class="mobile-result-list">
+        <MobileResultCard v-for="item in list" :key="item.id">
+          <template #title>{{ item.employee?.name || '-' }}</template>
+          <template #status>
+            <el-tag :type="statusType(item.status) as any" size="small">{{ statusLabel(item.status) }}</el-tag>
+          </template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">主管</span><span class="mobile-result-field__value">{{ item.manager?.name || '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">HR</span><span class="mobile-result-field__value">{{ item.hr?.name || '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">计划转正</span><span class="mobile-result-field__value">{{ formatDate(item.plannedRegularDate) }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">签字状态</span><span class="mobile-result-field__value">{{ signSummary(item) }}</span></div>
+          <template #actions>
+            <el-button link type="primary" @click="goDetail(item)">{{ actionLabel(item) }}</el-button>
+            <el-button v-if="canEdit(item)" link type="warning" @click="emit('edit', item)">编辑</el-button>
+          </template>
+        </MobileResultCard>
+      </div>
+      <ListPagination
+        v-model:current-page="page"
+        v-model:page-size="pageSize"
+        :page-sizes="pageSizeOptions"
+        :total="total"
+        @change="loadList"
+      />
     </ChartCard>
   </div>
 </template>

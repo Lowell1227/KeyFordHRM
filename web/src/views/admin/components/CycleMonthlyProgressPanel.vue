@@ -2,6 +2,7 @@
 import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { periodReviewsApi } from '@/api/period-reviews.api';
+import ListPagination from '@/components/common/ListPagination.vue';
 import type {
   PeriodMonitoringQuery,
   PeriodMonitoringResult,
@@ -67,11 +68,6 @@ async function load() {
 
 function applyFilters() {
   page.value = 1;
-  void load();
-}
-
-function changePage(nextPage: number) {
-  page.value = nextPage;
   void load();
 }
 
@@ -165,16 +161,14 @@ onMounted(() => void load());
           <small v-else>{{ row.reopenBlockedReason || '—' }}</small>
         </article>
       </div>
-      <el-pagination
-        v-if="result.total > pageSize"
-        class="monthly-monitor__pagination"
+      <ListPagination
+        v-if="result.total > 0"
         data-testid="cycle-monthly-progress-pagination"
-        background
-        layout="prev, pager, next, total"
         :current-page="result.page"
         :page-size="pageSize"
         :total="result.total"
-        @current-change="changePage"
+        :show-page-size="false"
+        @update:current-page="page = $event; load()"
       />
     </template>
   </section>

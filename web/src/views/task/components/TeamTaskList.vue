@@ -3,6 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Check, Close } from '@element-plus/icons-vue';
 import type { TableInstance } from 'element-plus';
 import EmptyState from '@/components/common/EmptyState.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
+import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import StatusBadge from '@/components/common/StatusBadge.vue';
 import type { DirectReport, TeamTaskListItem } from '@/types/api.types';
 import type { TeamStageState, TeamTaskStage } from '@/types/enums';
@@ -127,6 +129,12 @@ function onSelectionChange(rows: TeamTaskListItem[]) {
   selectedRows.value = rows.filter(isEligible);
 }
 
+function toggleMobileSelection(item: TeamTaskListItem, checked: boolean) {
+  const selected = new Set(selectedRows.value.map((row) => row.id));
+  if (checked) selected.add(item.id); else selected.delete(item.id);
+  void syncSelection(selected);
+}
+
 async function syncSelection(taskIds: ReadonlySet<string>) {
   await nextTick();
   const eligibleRows = props.items.filter((item) => isEligible(item) && taskIds.has(item.id));
@@ -223,6 +231,7 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
       class="team-task-list__table-wrap"
       data-testid="team-task-table-wrap"
     >
+      <div class="desktop-result-table team-task-list__desktop">
       <el-table
         v-if="!showRosterOnly"
         ref="tableRef"
@@ -356,6 +365,38 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
           </template>
         </el-table-column>
       </el-table>
+      </div>
+
+      <div class="mobile-result-list team-task-list__mobile">
+        <template v-if="!showRosterOnly">
+          <MobileResultCard v-for="item in items" :key="item.id">
+            <template #title>
+              <el-checkbox
+                v-if="showBatchCommands && isEligible(item)"
+                :model-value="selectedRows.some((row) => row.id === item.id)"
+                :disabled="batchBusy"
+                @change="toggleMobileSelection(item, Boolean($event))"
+              >{{ item.employeeName }} · {{ item.employeeNo || '-' }}</el-checkbox>
+              <span v-else>{{ item.employeeName }} · {{ item.employeeNo || '-' }}</span>
+            </template>
+            <template #status>
+              <el-tag v-if="stage === 'manager-eval'" size="small" :type="item.stageState === 'pending' ? 'warning' : item.stageState === 'completed' ? 'success' : 'info'">{{ managerStatusLabel(item) }}</el-tag>
+              <StatusBadge v-else :status="item.status" size="small" />
+            </template>
+            <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 职位</span><span class="mobile-result-field__value">{{ item.deptName || '-' }} · {{ item.position || '-' }}</span></div>
+            <div class="mobile-result-field"><span class="mobile-result-field__label">考核周期</span><span class="mobile-result-field__value">{{ item.cycleName || '-' }}</span></div>
+            <div v-if="stage === 'manager-eval'" class="mobile-result-field"><span class="mobile-result-field__label">复盘期间</span><span class="mobile-result-field__value">{{ periodLabel(item) }}</span></div>
+            <template #actions><el-button link type="primary" @click="selectTask(item)">{{ taskActionLabel(item) }}</el-button></template>
+          </MobileResultCard>
+        </template>
+        <template v-else>
+          <MobileResultCard v-for="person in roster" :key="person.id">
+            <template #title>{{ person.name }} · {{ person.employeeNo || '工号待补充' }}</template>
+            <template #status><el-tag type="info" size="small">待发起考核</el-tag></template>
+            <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 职位</span><span class="mobile-result-field__value">{{ person.deptName || '-' }} · {{ person.position || '-' }}</span></div>
+          </MobileResultCard>
+        </template>
+      </div>
 
       <div
         v-if="!loading && !error && items.length === 0 && roster.length === 0"
@@ -366,13 +407,11 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
     </div>
 
     <footer v-if="total > 0" class="team-task-list__footer">
-      <el-pagination
-        background
-        small
+      <ListPagination
         :current-page="page"
         :page-size="pageSize"
         :total="total"
-        layout="total, prev, pager, next"
+        :show-page-size="false"
         @update:current-page="emit('page-change', $event)"
       />
     </footer>
