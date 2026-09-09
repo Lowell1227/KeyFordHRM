@@ -4,7 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { ArrowDown } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth.store';
 import UserAvatar from '@/components/common/UserAvatar.vue';
-import { isPerformanceWorkspacePath } from '@/router/performance-workspace';
+import { isPerformanceModulePath } from '@/router/performance-workspace';
 import NotificationBell from './NotificationBell.vue';
 
 const auth = useAuthStore();
@@ -13,7 +13,7 @@ const route = useRoute();
 
 const userName = computed(() => auth.user?.name ?? '未登录');
 const pageTitle = computed(() => (route.meta.title as string) ?? '孚德绩效管理');
-const isPerformanceWorkspace = computed(() => isPerformanceWorkspacePath(route.path));
+const isPerformanceModule = computed(() => isPerformanceModulePath(route.path));
 const profileMeta = computed(() => [auth.user?.deptName, auth.user?.position].filter(Boolean).join(' · '));
 const employmentStatusLabel = computed(() => {
   const labels: Record<string, string> = {
@@ -48,7 +48,7 @@ async function onLogout() {
 
 <template>
   <el-header class="app-header">
-    <div v-if="!isPerformanceWorkspace" class="app-header__left">
+    <div v-if="!isPerformanceModule" class="app-header__left">
       <div class="page-title" data-testid="app-route-title">
         <span>{{ pageTitle }}</span>
       </div>

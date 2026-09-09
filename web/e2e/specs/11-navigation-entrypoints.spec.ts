@@ -1,6 +1,9 @@
 import { test, expect, type Page } from "@playwright/test";
 import { buildNavigation } from "../../src/router/navigation";
-import { isPerformanceWorkspacePath } from "../../src/router/performance-workspace";
+import {
+  isPerformanceModulePath,
+  isPerformanceWorkspacePath,
+} from "../../src/router/performance-workspace";
 import {
   navigateNotificationTarget,
   resolveNotificationTarget,
@@ -1095,7 +1098,7 @@ test.describe("11-navigation-entrypoints header", () => {
     await expect(page.getByTestId("performance-workspace-title")).toHaveCount(
       0,
     );
-    await expect(page.getByTestId("app-route-title")).toHaveCount(1);
+    await expect(page.getByTestId("app-route-title")).toHaveCount(0);
   });
 
   test("keeps notifications and user menu right-aligned without overlap at 390px", async ({
@@ -1140,13 +1143,44 @@ test.describe("11-navigation-entrypoints header", () => {
   });
 });
 
-test.describe("11-navigation-entrypoints non-workspace header", () => {
-  test.use({ storageState: "e2e/auth-state/hr.json" });
+test.describe("11-navigation-entrypoints module header", () => {
+  test.use({ storageState: "e2e/auth-state/admin.json" });
 
-  test("non-workspace pages retain one plain route title", async ({ page }) => {
-    await page.goto("/reports");
+  test("classifies every performance entry and detail path for the simplified header", () => {
+    const performanceEntryPaths = routes
+      .filter((route) => route.meta?.navigation?.module === "performance")
+      .map((route) => route.path);
+    const performanceDetailPaths = [
+      "/tasks/task-title-audit",
+      "/tasks/task-title-audit/final-grade",
+      "/improvement-plans/plan-title-audit",
+      "/probation-reviews/review-title-audit",
+      "/confirmation-applications/application-title-audit",
+      "/objectives",
+      "/action-items",
+    ];
 
-    await expect(page.getByTestId("app-route-title")).toHaveText("绩效报表");
+    for (const path of [...performanceEntryPaths, ...performanceDetailPaths]) {
+      expect(isPerformanceModulePath(path), path).toBe(true);
+    }
+
+    for (const path of ["/dashboard", "/users", "/system", "/tasks-extra"]) {
+      expect(isPerformanceModulePath(path), path).toBe(false);
+    }
+  });
+
+  test("cycle management keeps only its local business title", async ({ page }) => {
+    await page.goto("/cycles");
+
+    await expect(page.getByTestId("header-user-menu")).toBeVisible();
+    await expect(page.getByTestId("app-route-title")).toHaveCount(0);
+    await expect(page.locator(".list-page-header-card .chart-card__title")).toHaveText("考核周期管理");
+  });
+
+  test("non-performance pages retain one plain route title", async ({ page }) => {
+    await page.goto("/users");
+
+    await expect(page.getByTestId("app-route-title")).toHaveText("员工档案");
     await expect(page.getByTestId("app-route-title")).toHaveCount(1);
   });
 });
