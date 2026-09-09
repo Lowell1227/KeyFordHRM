@@ -1,9 +1,10 @@
-import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import { CalibrationService } from './calibration.service';
 import { ConfirmCalibrationDto } from './dto/confirm-calibration.dto';
 import { RejectCalibrationDto } from './dto/reject-calibration.dto';
+import { CalibrationQueryDto } from './dto/calibration-query.dto';
 
 /**
  * 绩效校准接口（审核制）。
@@ -19,9 +20,10 @@ export class CalibrationController {
   @Get('calibration')
   getWorkbench(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Query() query: CalibrationQueryDto,
     @CurrentUser() viewer: AuthUser,
   ) {
-    return this.calibrationService.getWorkbench(id, viewer);
+    return this.calibrationService.getWorkbench(id, viewer, query);
   }
 
   /** GET /cycles/:id/grade-distribution — 等级分布（供轮询/刷新）。 */

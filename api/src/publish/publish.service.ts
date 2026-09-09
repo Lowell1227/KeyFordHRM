@@ -130,10 +130,16 @@ export class PublishService {
     viewer: AuthUser,
   ): Promise<Paginated<PublicationRecord>> {
     const cycle = await this.getAuthorizedCycleOrThrow(cycleId, viewer);
+    const keyword = dto.keyword?.trim();
     const where: Prisma.AssessmentTaskWhereInput = {
       cycleId,
       status: { in: PUBLICATION_TASK_STATUSES },
       isExempt: false,
+      ...(dto.deptId ? { deptId: dto.deptId } : {}),
+      ...(keyword ? { employee: { OR: [
+        { name: { contains: keyword, mode: "insensitive" as const } },
+        { employeeNo: { contains: keyword, mode: "insensitive" as const } },
+      ] } } : {}),
     };
     const [total, tasks] = await Promise.all([
       this.prisma.assessmentTask.count({ where }),

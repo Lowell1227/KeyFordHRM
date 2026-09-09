@@ -73,6 +73,38 @@ describe('cycle participant candidates', () => {
     expect(response.body.items[0]).not.toHaveProperty('phone');
   });
 
+  it('previews the final included employees from departments and explicit people while applying exclusions', async () => {
+    const departmentId = '22222222-2222-4222-8222-222222222222';
+    const excludedId = '33333333-3333-4333-8333-333333333333';
+    const response = await request(app.getHttpServer())
+      .post('/cycles/participant-preview')
+      .send({
+        scope: 'custom',
+        departmentIds: [departmentId],
+        userIds: [id],
+        excludedDepartmentIds: [],
+        excludedUserIds: [excludedId],
+        keyword: 'EMP',
+        page: 1,
+        pageSize: 20,
+      });
+
+    expect(response.status).toBe(201);
+    expect(response.body).toMatchObject({ total: 1, page: 1, pageSize: 20, departmentCount: 1 });
+    expect(findMany.mock.calls[0][0].where).toEqual({
+      deletedAt: null,
+      accountType: AccountType.employee,
+      isAssessorOnly: false,
+      status: { in: [UserStatus.active, UserStatus.probation] },
+      OR: [{ deptId: { in: [departmentId] } }, { id: { in: [id] } }],
+      NOT: { id: { in: [excludedId] } },
+      AND: [{ OR: [
+        { name: { contains: 'EMP', mode: 'insensitive' } },
+        { employeeNo: { contains: 'EMP', mode: 'insensitive' } },
+      ] }],
+    });
+  });
+
   it.each([SysRole.hr, SysRole.system_admin])('keeps the existing %s cycle-create role authorized', async (allowedRole) => {
     role = allowedRole;
     capabilities = [];

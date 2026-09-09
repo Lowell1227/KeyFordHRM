@@ -12,13 +12,15 @@ import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import PerformanceResultEvidence from '@/components/common/PerformanceResultEvidence.vue';
 import PerformanceResultSummary from '@/components/common/PerformanceResultSummary.vue';
 import PerformanceResultDrawer from '@/components/common/PerformanceResultDrawer.vue';
+import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilters.vue';
+import { departmentsApi } from '@/api/departments.api';
 import { resultStage } from '@/utils/performance-result-presentation';
 import EmptyState from '@/components/common/EmptyState.vue';
-import type { CalibrationCandidate, CalibrationCandidateDetail, CalibrationSummary, AssessmentCycle } from '@/types/api.types';
+import type { CalibrationCandidate, CalibrationCandidateDetail, CalibrationSummary, AssessmentCycle, Department } from '@/types/api.types';
 import type { PerfGrade } from '@/types/enums';
 import { GRADE_LABELS } from '@/utils/grade';
 
-import { resolvePerformanceCycle } from '@/utils/performance-cycle';
+import { resolvePerformanceCycleByCreatedAt } from '@/utils/performance-cycle';
 import { formatDate } from '@/utils/date';
 import { cycleBusinessState } from '@/views/admin/cycle-management';
 
@@ -41,7 +43,9 @@ let listRequest = 0;
 let detailRequest = 0;
 
 const selectedTaskIds = ref<string[]>([]);
+const departmentOptions = ref<Department[]>([]);
 const deptFilter = ref<string>('');
+const keywordFilter = ref<string>('');
 const statusFilter = ref<StatusFilter>('');
 const sortField = ref<SortField>('calculatedScore');
 const sortOrder = ref<SortOrder>('desc');
@@ -55,14 +59,6 @@ const GRADES: PerfGrade[] = ['A', 'B', 'C', 'D'];
 
 const selectedCycle = computed(() => cycles.value.find((c) => c.id === selectedCycleId.value) ?? null);
 
-const departments = computed(() => {
-  const set = new Set<string>();
-  candidates.value.forEach((c) => {
-    if (c.deptName) set.add(c.deptName);
-  });
-  return Array.from(set).sort();
-});
-
 /** 状态过滤分组：评定中 = 非评定链路状态。 */
 function statusGroup(c: CalibrationCandidate): StatusFilter {
   if (c.status === 'hr_calibration') return 'pending';
@@ -74,9 +70,6 @@ function statusGroup(c: CalibrationCandidate): StatusFilter {
 
 const filteredCandidates = computed(() => {
   let list = candidates.value;
-  if (deptFilter.value) {
-    list = list.filter((c) => c.deptName === deptFilter.value);
-  }
   if (statusFilter.value) {
     list = list.filter((c) => statusGroup(c) === statusFilter.value);
   }
@@ -99,7 +92,7 @@ const pagedCandidates = computed(() => {
   return filteredCandidates.value.slice(start, start + pageSize.value);
 });
 
-watch([deptFilter, statusFilter, sortField, sortOrder, pageSize], () => {
+watch([statusFilter, sortField, sortOrder, pageSize], () => {
   page.value = 1;
 });
 
@@ -111,15 +104,16 @@ const pendingCandidates = computed(() => candidates.value.filter(canCalibrate));
 
 /** 分布仅统计已进入评定链路的任务（与后端口径一致）。 */
 const countedTotal = computed(() => {
-  return candidates.value.filter((c) => c.canViewDetail !== false && statusGroup(c) !== 'final_grading').length;
+  return (Object.values(summary.value?.gradeDistribution ?? {}) as Array<{ count?: number }>).reduce(
+    (total, item) => total + (item?.count ?? 0),
+    0,
+  );
 });
 
 const gradeCounts = computed<Record<PerfGrade, number>>(() => {
   const counts: Record<PerfGrade, number> = { A: 0, B: 0, C: 0, D: 0 };
-  candidates.value.forEach((c) => {
-    if (c.canViewDetail === false || statusGroup(c) === 'final_grading') return;
-    const grade = c.calibratedGrade ?? c.rawGrade;
-    if (grade) counts[grade] = (counts[grade] ?? 0) + 1;
+  (Object.keys(counts) as PerfGrade[]).forEach((grade) => {
+    counts[grade] = summary.value?.gradeDistribution?.[grade]?.count ?? 0;
   });
   return counts;
 });
@@ -186,7 +180,7 @@ async function normalizeCalibrationCycle() {
   const requestedCycleId = typeof route.query.cycleId === 'string'
     ? route.query.cycleId
     : undefined;
-  const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+  const resolved = resolvePerformanceCycleByCreatedAt(cycles.value, requestedCycleId);
   cycles.value = resolved.orderedCycles;
   selectedCycleId.value = resolved.selectedCycle?.id ?? '';
 
@@ -206,7 +200,6 @@ function clearCalibrationState() {
   candidates.value = [];
   summary.value = null;
   selectedTaskIds.value = [];
-  deptFilter.value = '';
   statusFilter.value = '';
   page.value = 1;
 }
@@ -225,7 +218,10 @@ async function loadCandidates() {
   const cycleId = selectedCycleId.value;
   const request = ++listRequest;
   try {
-    const res = await calibrationApi.getWorkbench(cycleId);
+    const res = await calibrationApi.getWorkbench(cycleId, {
+      deptId: deptFilter.value || undefined,
+      keyword: keywordFilter.value.trim() || undefined,
+    });
     if (request !== listRequest || cycleId !== selectedCycleId.value) return;
     candidates.value = res.items;
     summary.value = {
@@ -335,7 +331,7 @@ watch(
   async (cycleId) => {
     if (!calibrationReady) return;
     const requestedCycleId = typeof cycleId === 'string' ? cycleId : undefined;
-    const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+    const resolved = resolvePerformanceCycleByCreatedAt(cycles.value, requestedCycleId);
     const canonicalCycleId = resolved.selectedCycle?.id ?? '';
     if (canonicalCycleId && requestedCycleId !== canonicalCycleId) {
       await router.replace({ query: { ...route.query, cycleId: canonicalCycleId } });
@@ -356,37 +352,53 @@ watch(
 );
 
 onMounted(async () => {
-  await loadCycles();
+  await Promise.all([
+    loadCycles(),
+    departmentsApi.findAll({ isActive: true, pageSize: 1000 })
+      .then((items) => { departmentOptions.value = items; })
+      .catch(() => { departmentOptions.value = []; }),
+  ]);
   await normalizeCalibrationCycle();
   calibrationReady = true;
   cycleStore.setCurrent(selectedCycle.value);
   await loadCandidates();
 });
+
+function searchCalibration() {
+  page.value = 1;
+  void loadCandidates();
+}
+
+async function resetCalibrationFilters() {
+  deptFilter.value = '';
+  keywordFilter.value = '';
+  statusFilter.value = '';
+  page.value = 1;
+  const latestCycleId = cycles.value[0]?.id ?? '';
+  if (latestCycleId && latestCycleId !== selectedCycleId.value) {
+    await selectCalibrationCycle(latestCycleId);
+  } else {
+    await loadCandidates();
+  }
+}
 </script>
 
 <template>
   <div class="calibration-view page-stack performance-result-page">
     <ChartCard :padded="true">
       <template #title>绩效校准</template>
-      <template #extra>
-        <el-select
-          :model-value="selectedCycleId"
-          data-testid="calibration-cycle-select"
-          :placeholder="cycles.length ? '选择考核周期' : '暂无考核周期'"
-          style="width: 280px"
-          :loading="loading"
-          :disabled="cycles.length === 0"
-          @change="selectCalibrationCycle"
-        >
-          <el-option v-if="cycles.length === 0" label="暂无考核周期" value="" disabled />
-          <el-option
-            v-for="cycle in cycles"
-            :key="cycle.id"
-            :label="cycle.name"
-            :value="cycle.id"
-          />
-        </el-select>
-      </template>
+      <PerformanceRecordFilters
+        :cycle-id="selectedCycleId"
+        v-model:dept-id="deptFilter"
+        v-model:keyword="keywordFilter"
+        :cycles="cycles"
+        :departments="departmentOptions"
+        cycle-test-id="calibration-cycle-select"
+        :loading="loading"
+        @update:cycle-id="selectCalibrationCycle"
+        @search="searchCalibration"
+        @reset="resetCalibrationFilters"
+      />
 
       <div v-if="selectedCycle" class="cycle-info">
         <el-descriptions :column="4" size="small" border>
@@ -457,9 +469,6 @@ onMounted(async () => {
         <template #title>校准名单</template>
         <div class="toolbar performance-result-toolbar">
           <div class="toolbar-left">
-            <el-select v-model="deptFilter" placeholder="全部部门" clearable style="width: 160px">
-              <el-option v-for="d in departments" :key="d" :label="d" :value="d" />
-            </el-select>
             <el-select v-model="statusFilter" placeholder="全部状态" clearable style="width: 150px">
               <el-option label="待校准" value="pending" />
               <el-option label="待部门复核" value="dept_review" />

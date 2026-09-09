@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue';
 import { ElMessage } from 'element-plus';
-import { Search, RefreshRight } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth.store';
 import { interviewsApi } from '@/api/interviews.api';
 import { usePagination } from '@/composables/usePagination';
@@ -11,8 +10,11 @@ import InterviewDrawer from './InterviewDrawer.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
-import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
-import type { PerformanceInterview } from '@/types/api.types';
+import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilters.vue';
+import { cyclesApi } from '@/api/cycles.api';
+import { departmentsApi } from '@/api/departments.api';
+import { orderPerformanceCyclesByCreatedAt } from '@/utils/performance-cycle';
+import type { AssessmentCycle, Department, PerformanceInterview } from '@/types/api.types';
 import type { InterviewStatus } from '@/types/enums';
 
 const auth = useAuthStore();
@@ -20,7 +22,11 @@ const user = computed(() => auth.user);
 
 const list = ref<PerformanceInterview[]>([]);
 const loading = ref(false);
-const filters = reactive<{ status: InterviewStatus | ''; keyword: string }>({
+const cycles = ref<AssessmentCycle[]>([]);
+const departments = ref<Department[]>([]);
+const filters = reactive<{ cycleId: string; deptId: string; status: InterviewStatus | ''; keyword: string }>({
+  cycleId: '',
+  deptId: '',
   status: '',
   keyword: '',
 });
@@ -40,8 +46,17 @@ const selectedReadonly = ref(false);
 
 const statusOptions: InterviewStatus[] = ['pending', 'filled', 'employee_signed', 'closed'];
 
-onMounted(() => {
-  loadList();
+onMounted(async () => {
+  const [cycleItems, departmentItems] = await Promise.all([
+    (['hr', 'system_admin'].includes(user.value?.sysRole ?? '')
+      ? cyclesApi.findAllOptions()
+      : cyclesApi.findMine()).catch(() => [] as AssessmentCycle[]),
+    departmentsApi.findAll({ isActive: true, pageSize: 1000 }).catch(() => [] as Department[]),
+  ]);
+  cycles.value = orderPerformanceCyclesByCreatedAt(cycleItems);
+  departments.value = departmentItems;
+  filters.cycleId = cycles.value[0]?.id ?? '';
+  await loadList();
 });
 
 async function loadList() {
@@ -50,6 +65,8 @@ async function loadList() {
     const res = await interviewsApi.findAll(
       withParams({
         status: filters.status || undefined,
+        cycleId: filters.cycleId || undefined,
+        deptId: filters.deptId || undefined,
         keyword: filters.keyword || undefined,
       } as Record<string, unknown>),
     );
@@ -70,6 +87,8 @@ function onSearch() {
 
 function onReset() {
   filters.status = '';
+  filters.cycleId = cycles.value[0]?.id ?? '';
+  filters.deptId = '';
   filters.keyword = '';
   resetPagination();
   loadList();
@@ -102,9 +121,19 @@ function statusLabel(status: InterviewStatus): string {
         <el-tag type="info" size="small">仅展示需由我面谈的记录</el-tag>
       </template>
 
-      <QueryFilterPanel class="page-filter-panel">
-        <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
-          <el-form-item label="状态">
+      <PerformanceRecordFilters
+        v-model:cycle-id="filters.cycleId"
+        v-model:dept-id="filters.deptId"
+        v-model:keyword="filters.keyword"
+        :cycles="cycles"
+        :departments="departments"
+        :loading="loading"
+        class="page-filter-panel"
+        @search="onSearch"
+        @reset="onReset"
+      >
+          <div class="performance-record-filter-extra">
+            <label>状态</label>
             <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
               <el-option
                 v-for="s in statusOptions"
@@ -113,21 +142,8 @@ function statusLabel(status: InterviewStatus): string {
                 :value="s"
               />
             </el-select>
-          </el-form-item>
-          <el-form-item label="姓名/工号">
-            <el-input
-              v-model="filters.keyword"
-              placeholder="请输入姓名或工号"
-              clearable
-              style="width: 220px"
-            />
-          </el-form-item>
-          <el-form-item>
-            <el-button type="primary" :icon="Search" @click="onSearch">查询</el-button>
-            <el-button :icon="RefreshRight" @click="onReset">重置</el-button>
-          </el-form-item>
-        </el-form>
-      </QueryFilterPanel>
+          </div>
+      </PerformanceRecordFilters>
     </ChartCard>
 
     <ChartCard :padded="false" class="list-card list-result-card">
@@ -137,12 +153,13 @@ function statusLabel(status: InterviewStatus): string {
           <template #default="{ row }">
             <div class="employee-cell">
               <span class="employee-name">{{ row.employeeName || '-' }}</span>
+              <span v-if="row.employeeNo" class="employee-no">{{ row.employeeNo }}</span>
             </div>
           </template>
         </el-table-column>
         <el-table-column prop="deptName" label="部门" min-width="140" />
         <el-table-column label="考核周期" min-width="140">
-          <template #default="{ row }">{{ row.cycleId || '-' }}</template>
+          <template #default="{ row }">{{ row.cycleName || '-' }}</template>
         </el-table-column>
         <el-table-column label="状态" width="120">
           <template #default="{ row }">
@@ -189,7 +206,7 @@ function statusLabel(status: InterviewStatus): string {
 
       <div v-loading="loading" class="mobile-result-list">
         <MobileResultCard v-for="item in list" :key="item.id">
-          <template #title>{{ item.employeeName || '-' }}</template>
+          <template #title>{{ item.employeeName || '-' }}<template v-if="item.employeeNo"> · {{ item.employeeNo }}</template></template>
           <template #status>
             <el-tag :type="statusType(item.status) as any" size="small">{{ statusLabel(item.status) }}</el-tag>
           </template>
@@ -199,7 +216,7 @@ function statusLabel(status: InterviewStatus): string {
           </div>
           <div class="mobile-result-field">
             <span class="mobile-result-field__label">考核周期</span>
-            <span class="mobile-result-field__value">{{ item.cycleId || '-' }}</span>
+            <span class="mobile-result-field__value">{{ item.cycleName || '-' }}</span>
           </div>
           <div class="mobile-result-field">
             <span class="mobile-result-field__label">截止日</span>
@@ -244,10 +261,6 @@ function statusLabel(status: InterviewStatus): string {
 </template>
 
 <style scoped>
-.filter-form :deep(.el-form-item) {
-  margin-bottom: 0;
-}
-
 .employee-cell {
   display: flex;
   flex-direction: column;
@@ -256,6 +269,11 @@ function statusLabel(status: InterviewStatus): string {
 
 .employee-name {
   font-weight: 500;
+}
+
+.employee-no {
+  color: var(--el-text-color-secondary);
+  font-size: 12px;
 }
 
 .deadline-tag {

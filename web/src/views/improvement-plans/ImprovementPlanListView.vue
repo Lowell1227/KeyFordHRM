@@ -1,7 +1,6 @@
 <script setup lang="ts">
 import { ref, reactive, computed, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { Search, RefreshRight } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth.store';
 import { improvementPlansApi } from '@/api/improvement-plans.api';
 import { usePagination } from '@/composables/usePagination';
@@ -11,8 +10,11 @@ import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
-import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
-import type { ImprovementPlan } from '@/types/api.types';
+import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilters.vue';
+import { cyclesApi } from '@/api/cycles.api';
+import { departmentsApi } from '@/api/departments.api';
+import { orderPerformanceCyclesByCreatedAt } from '@/utils/performance-cycle';
+import type { AssessmentCycle, Department, ImprovementPlan } from '@/types/api.types';
 import type { ImprovementPlanStatus } from '@/types/enums';
 
 const auth = useAuthStore();
@@ -20,7 +22,11 @@ const router = useRouter();
 
 const list = ref<ImprovementPlan[]>([]);
 const loading = ref(false);
-const filters = reactive<{ status: ImprovementPlanStatus | ''; keyword: string }>({
+const cycles = ref<AssessmentCycle[]>([]);
+const departments = ref<Department[]>([]);
+const filters = reactive<{ cycleId: string; deptId: string; status: ImprovementPlanStatus | ''; keyword: string }>({
+  cycleId: '',
+  deptId: '',
   status: '',
   keyword: '',
 });
@@ -42,8 +48,17 @@ const isManagerOrHR = computed(() =>
 
 const statusOptions: ImprovementPlanStatus[] = ['draft', 'in_progress', 'completed'];
 
-onMounted(() => {
-  loadList();
+onMounted(async () => {
+  const [cycleItems, departmentItems] = await Promise.all([
+    (['hr', 'system_admin'].includes(auth.user?.sysRole ?? '')
+      ? cyclesApi.findAllOptions()
+      : cyclesApi.findMine()).catch(() => [] as AssessmentCycle[]),
+    departmentsApi.findAll({ isActive: true, pageSize: 1000 }).catch(() => [] as Department[]),
+  ]);
+  cycles.value = orderPerformanceCyclesByCreatedAt(cycleItems);
+  departments.value = departmentItems;
+  filters.cycleId = cycles.value[0]?.id ?? '';
+  await loadList();
 });
 
 async function loadList() {
@@ -52,6 +67,8 @@ async function loadList() {
     const res = await improvementPlansApi.findAll(
       withParams({
         status: filters.status || undefined,
+        cycleId: filters.cycleId || undefined,
+        deptId: filters.deptId || undefined,
         keyword: filters.keyword || undefined,
       } as Record<string, unknown>),
     );
@@ -72,6 +89,8 @@ function onSearch() {
 
 function onReset() {
   filters.status = '';
+  filters.cycleId = cycles.value[0]?.id ?? '';
+  filters.deptId = '';
   filters.keyword = '';
   resetPagination();
   loadList();
@@ -103,9 +122,19 @@ function formatMeasuresCount(row: any): string {
         <el-tag v-if="!isManagerOrHR" type="info" size="small">仅展示我的改进计划</el-tag>
       </template>
 
-      <QueryFilterPanel class="page-filter-panel">
-        <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
-        <el-form-item label="状态">
+      <PerformanceRecordFilters
+        v-model:cycle-id="filters.cycleId"
+        v-model:dept-id="filters.deptId"
+        v-model:keyword="filters.keyword"
+        :cycles="cycles"
+        :departments="departments"
+        :loading="loading"
+        class="page-filter-panel"
+        @search="onSearch"
+        @reset="onReset"
+      >
+        <div class="performance-record-filter-extra">
+          <label>状态</label>
           <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
             <el-option
               v-for="s in statusOptions"
@@ -114,21 +143,8 @@ function formatMeasuresCount(row: any): string {
               :value="s"
             />
           </el-select>
-        </el-form-item>
-        <el-form-item label="姓名/工号">
-          <el-input
-            v-model="filters.keyword"
-            placeholder="请输入姓名或工号"
-            clearable
-            style="width: 220px"
-          />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" :icon="Search" @click="onSearch">查询</el-button>
-          <el-button :icon="RefreshRight" @click="onReset">重置</el-button>
-        </el-form-item>
-        </el-form>
-      </QueryFilterPanel>
+        </div>
+      </PerformanceRecordFilters>
     </ChartCard>
 
     <ChartCard :padded="false" class="list-result-card">
@@ -190,10 +206,6 @@ function formatMeasuresCount(row: any): string {
 </template>
 
 <style scoped>
-.filter-form :deep(.el-form-item) {
-  margin-bottom: 0;
-}
-
 .employee-cell {
   display: flex;
   flex-direction: column;

@@ -1,9 +1,10 @@
-import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Query } from '@nestjs/common';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import { ApprovalService } from './approval.service';
 import { BulkApprovalDto } from './dto/bulk-approval.dto';
 import { ApprovalRejectDto } from './dto/approval-reject.dto';
+import { ApprovalQueryDto } from './dto/approval-query.dto';
 
 /** 周期级审批接口。 */
 @Controller('cycles/:id')
@@ -15,8 +16,9 @@ export class ApprovalController {
   getApprovalList(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @CurrentUser() viewer: AuthUser,
+    @Query() query: ApprovalQueryDto,
   ) {
-    return this.approvalService.getApprovalList(id, viewer);
+    return this.approvalService.getApprovalList(id, viewer, query);
   }
 
   /** GET /cycles/:id/approval/overview — 审批概览（全校准分布只读 + 退回记录）。 */

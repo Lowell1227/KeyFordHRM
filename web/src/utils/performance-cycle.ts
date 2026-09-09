@@ -61,6 +61,37 @@ export function orderPerformanceCycles(
   });
 }
 
+/** Query workspaces default to the cycle most recently created, not the date-active cycle. */
+export function orderPerformanceCyclesByCreatedAt(cycles: AssessmentCycle[]): AssessmentCycle[] {
+  const originalIndex = new Map(cycles.map((item, index) => [item.id, index]));
+  return [...cycles].sort((left, right) => {
+    const leftCreatedAt = Date.parse(left.createdAt ?? '');
+    const rightCreatedAt = Date.parse(right.createdAt ?? '');
+    if (Number.isFinite(leftCreatedAt) && Number.isFinite(rightCreatedAt) && leftCreatedAt !== rightCreatedAt) {
+      return rightCreatedAt - leftCreatedAt;
+    }
+    if (Number.isFinite(leftCreatedAt) !== Number.isFinite(rightCreatedAt)) {
+      return Number.isFinite(rightCreatedAt) ? 1 : -1;
+    }
+    return (originalIndex.get(left.id) ?? 0) - (originalIndex.get(right.id) ?? 0);
+  });
+}
+
+export function resolvePerformanceCycleByCreatedAt(
+  cycles: AssessmentCycle[],
+  requestedCycleId?: string,
+): PerformanceCycleResolution {
+  const orderedCycles = orderPerformanceCyclesByCreatedAt(cycles);
+  const requestedCycle = requestedCycleId
+    ? orderedCycles.find((item) => item.id === requestedCycleId) ?? null
+    : null;
+  return {
+    orderedCycles,
+    selectedCycle: requestedCycle ?? orderedCycles[0] ?? null,
+    requestedCycleIsValid: Boolean(requestedCycle),
+  };
+}
+
 export function resolvePerformanceCycle(
   cycles: AssessmentCycle[],
   requestedCycleId?: string,

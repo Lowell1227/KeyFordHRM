@@ -33,7 +33,11 @@ describe('department review task records', () => {
       && (where.isExempt === undefined || task.isExempt === where.isExempt)
       && (!where.status || task.status === where.status)
       && (!where.cycleId || task.cycleId === where.cycleId)
-      && (!where.employee?.name?.contains || task.employee.name.toLowerCase().includes(where.employee.name.contains.toLowerCase()));
+      && (!where.deptId || task.deptId === where.deptId)
+      && (!where.employee?.OR || where.employee.OR.some((condition: any) => {
+        const [field, filter] = Object.entries(condition)[0] as [string, any];
+        return String(task.employee[field] ?? '').toLowerCase().includes(filter.contains.toLowerCase());
+      }));
     const prisma = { assessmentTask: {
       count: jest.fn(async ({ where }) => rows.filter(task => matches(where, task)).length),
       findMany: jest.fn(async ({ where, skip, take, include }) => rows.filter(task => matches(where, task)).slice(skip, skip + take).map(task => ({
@@ -67,6 +71,27 @@ describe('department review task records', () => {
     const secondPage = await service.findDepartmentReviews(Object.assign(new TaskQueryDto(), { page: 2, pageSize: 2 }), viewer);
     expect(secondPage).toMatchObject({ total: 7, pendingTotal: 2 });
     expect(secondPage.items.map(item => item.id)).toEqual(['combined', 'returned']);
+  });
+
+  it('combines the selected department with employee name or number without weakening frozen reviewer scope', async () => {
+    const { service, prisma } = setup();
+    await service.findDepartmentReviews(Object.assign(new TaskQueryDto(), {
+      cycleId: 'cycle-1', deptId: 'dept-1', keyword: 'E-approved',
+    }), viewer);
+
+    expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        deptHeadId: viewer.id,
+        employeeId: { not: viewer.id },
+        isExempt: false,
+        cycleId: 'cycle-1',
+        deptId: 'dept-1',
+        employee: { OR: [
+          { name: { contains: 'E-approved', mode: 'insensitive' } },
+          { employeeNo: { contains: 'E-approved', mode: 'insensitive' } },
+        ] },
+      },
+    }));
   });
 
   it('returns only the most recent actual department decision and identifies combined handling from its audit record', async () => {

@@ -7,12 +7,11 @@ import { cyclesApi } from '@/api/cycles.api';
 import { departmentsApi } from '@/api/departments.api';
 import GradeTag from '@/components/common/GradeTag.vue';
 import FileUpload from '@/components/common/FileUpload.vue';
-import DeptTree from '@/components/common/DeptTree.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
-import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
+import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilters.vue';
 import { usePagination } from '@/composables/usePagination';
 import { formatDateTime } from '@/utils/date';
 import type {
@@ -24,6 +23,7 @@ import type {
   TaskListItem,
 } from '@/types/api.types';
 import type { AppealStatus, AppealResult, PerfGrade } from '@/types/enums';
+import { orderPerformanceCyclesByCreatedAt } from '@/utils/performance-cycle';
 
 const loading = ref(false);
 const submitting = ref(false);
@@ -33,9 +33,9 @@ const cycles = ref<AssessmentCycle[]>([]);
 const departments = ref<Department[]>([]);
 
 const filters = reactive({
-  cycleId: undefined as string | undefined,
+  cycleId: '',
   status: undefined as AppealStatus | undefined,
-  deptId: undefined as string | undefined,
+  deptId: '',
   keyword: '',
 });
 
@@ -50,8 +50,16 @@ const {
 
 async function loadCycles() {
   try {
-    const res = await cyclesApi.findAll({});
-    cycles.value = res.items;
+    const items: AssessmentCycle[] = [];
+    let cyclePage = 1;
+    while (true) {
+      const res = await cyclesApi.findAll({ page: cyclePage, pageSize: 100 });
+      items.push(...res.items);
+      if (items.length >= res.total || res.items.length === 0) break;
+      cyclePage += 1;
+    }
+    cycles.value = orderPerformanceCyclesByCreatedAt(items);
+    filters.cycleId = cycles.value[0]?.id ?? '';
   } catch {
     cycles.value = [];
   }
@@ -88,9 +96,9 @@ async function loadList() {
 }
 
 function resetFilters() {
-  filters.cycleId = undefined;
+  filters.cycleId = cycles.value[0]?.id ?? '';
   filters.status = undefined;
-  filters.deptId = undefined;
+  filters.deptId = '';
   filters.keyword = '';
   resetPagination();
   loadList();
@@ -312,51 +320,25 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
         <el-button type="primary" @click="openCreateDialog">录入申诉</el-button>
       </template>
 
-      <QueryFilterPanel class="page-filter-panel">
-        <div class="appeals-view__filters">
-        <el-select
-          v-model="filters.cycleId"
-          placeholder="考核周期"
-          clearable
-          style="width: 200px"
-        >
-          <el-option
-            v-for="cycle in cycles"
-            :key="cycle.id"
-            :label="cycle.name"
-            :value="cycle.id"
-          />
-        </el-select>
-
-        <el-select
-          v-model="filters.status"
-          placeholder="状态"
-          clearable
-          style="width: 140px"
-        >
-          <el-option label="待处理" value="pending" />
-          <el-option label="已处理" value="resolved" />
-        </el-select>
-
-        <DeptTree
-          v-model="filters.deptId"
-          :departments="departments"
-          placeholder="选择部门"
-          style="width: 220px"
-        />
-
-        <el-input
-          v-model="filters.keyword"
-          placeholder="员工姓名"
-          clearable
-          style="width: 200px"
-          @keyup.enter="search"
-        />
-
-        <el-button type="primary" :loading="loading" @click="search">查询</el-button>
-        <el-button @click="resetFilters">重置</el-button>
+      <PerformanceRecordFilters
+        v-model:cycle-id="filters.cycleId"
+        v-model:dept-id="filters.deptId"
+        v-model:keyword="filters.keyword"
+        :cycles="cycles"
+        :departments="departments"
+        :loading="loading"
+        class="page-filter-panel"
+        @search="search"
+        @reset="resetFilters"
+      >
+        <div class="performance-record-filter-extra">
+          <label>状态</label>
+          <el-select v-model="filters.status" placeholder="全部状态" clearable>
+            <el-option label="待处理" value="pending" />
+            <el-option label="已处理" value="resolved" />
+          </el-select>
         </div>
-      </QueryFilterPanel>
+      </PerformanceRecordFilters>
     </ChartCard>
 
     <ChartCard :padded="false" class="list-result-card">

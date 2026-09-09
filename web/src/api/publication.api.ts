@@ -46,7 +46,7 @@ const apiPost = <T>(url: string, data: unknown): Promise<T> =>
 export const publicationApi = {
   getRecords(
     cycleId: string,
-    query: { page: number; pageSize: number },
+    query: { page: number; pageSize: number; deptId?: string; keyword?: string },
   ): Promise<Paginated<PublicationRecord>> {
     return apiGet(`/cycles/${cycleId}/publication-records`, query);
   },

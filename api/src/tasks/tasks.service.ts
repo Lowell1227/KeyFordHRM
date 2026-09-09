@@ -314,10 +314,19 @@ export class TasksService {
 
   /** GET /tasks/department-review — 周期快照中本人负责的全部复核记录。 */
   async findDepartmentReviews(dto: TaskQueryDto, viewer: AuthUser) {
+    const keyword = dto.keyword?.trim();
     const scopeWhere: Prisma.AssessmentTaskWhereInput = {
       deptHeadId: viewer.id, employeeId: { not: viewer.id }, isExempt: false,
       ...(dto.cycleId ? { cycleId: dto.cycleId } : {}),
-      ...(dto.keyword ? { employee: { name: { contains: dto.keyword, mode: 'insensitive' as const } } } : {}),
+      ...(dto.deptId ? { deptId: dto.deptId } : {}),
+      ...(keyword ? {
+        employee: {
+          OR: [
+            { name: { contains: keyword, mode: 'insensitive' as const } },
+            { employeeNo: { contains: keyword, mode: 'insensitive' as const } },
+          ],
+        },
+      } : {}),
     };
     const where: Prisma.AssessmentTaskWhereInput = { ...scopeWhere, ...(dto.status ? { status: dto.status } : {}) };
     const [total, pendingTotal, tasks] = await Promise.all([

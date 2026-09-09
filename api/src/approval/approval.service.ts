@@ -9,6 +9,7 @@ import { buildGradeDistribution } from '@/calibration/calibration.service';
 import { resolveCalibrationRecipient } from '@/calibration/calibration-recipient';
 import { BulkApprovalDto } from './dto/bulk-approval.dto';
 import { ApprovalRejectDto } from './dto/approval-reject.dto';
+import { ApprovalQueryDto } from './dto/approval-query.dto';
 
 /** 审批列表项。 */
 export interface ApprovalListItem {
@@ -43,12 +44,22 @@ export class ApprovalService {
   ) {}
 
   /** GET /cycles/:id/approval — 按冻结审批人保留待办及已办理记录。 */
-  async getApprovalList(cycleId: string, viewer: AuthUser): Promise<ApprovalListItem[]> {
+  async getApprovalList(
+    cycleId: string,
+    viewer: AuthUser,
+    query: ApprovalQueryDto = {},
+  ): Promise<ApprovalListItem[]> {
     await this.getCycleOrThrow(cycleId);
+    const keyword = query.keyword?.trim();
 
     const where: Prisma.AssessmentTaskWhereInput = {
       cycleId,
       isExempt: false,
+      ...(query.deptId ? { deptId: query.deptId } : {}),
+      ...(keyword ? { employee: { OR: [
+        { name: { contains: keyword, mode: 'insensitive' as const } },
+        { employeeNo: { contains: keyword, mode: 'insensitive' as const } },
+      ] } } : {}),
       OR: [
         { status: { in: ['approval', 'published', 'confirmed', 'appealing', 'closed'] } },
         { flowRecords: { some: { nodeType: 'approval' } } },

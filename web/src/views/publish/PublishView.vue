@@ -16,18 +16,23 @@ import ListPagination from "@/components/common/ListPagination.vue";
 import MobileResultCard from "@/components/common/MobileResultCard.vue";
 import PerformanceResultSummary from "@/components/common/PerformanceResultSummary.vue";
 import PerformanceResultDrawer from "@/components/common/PerformanceResultDrawer.vue";
+import PerformanceRecordFilters from "@/components/common/PerformanceRecordFilters.vue";
+import { departmentsApi } from "@/api/departments.api";
 import { resultStage, formatResultScore } from "@/utils/performance-result-presentation";
 import PerformanceResultEvidence from '@/components/common/PerformanceResultEvidence.vue';
 import { usePagination } from "@/composables/usePagination";
 
 import { formatDateTime } from "@/utils/date";
-import type { AssessmentCycle } from "@/types/api.types";
-import { resolvePerformanceCycle } from "@/utils/performance-cycle";
+import type { AssessmentCycle, Department } from "@/types/api.types";
+import { resolvePerformanceCycleByCreatedAt } from "@/utils/performance-cycle";
 
 const route = useRoute();
 const router = useRouter();
 const cycles = ref<AssessmentCycle[]>([]);
 const selectedCycleId = ref("");
+const departments = ref<Department[]>([]);
+const deptFilter = ref("");
+const keywordFilter = ref("");
 const records = ref<PublicationRecord[]>([]);
 const loading = ref(false);
 const publishing = ref(false);
@@ -99,7 +104,7 @@ async function loadCycles() {
 async function normalizePublishCycle() {
   const requestedCycleId =
     typeof route.query.cycleId === "string" ? route.query.cycleId : undefined;
-  const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+  const resolved = resolvePerformanceCycleByCreatedAt(cycles.value, requestedCycleId);
   cycles.value = resolved.orderedCycles;
   selectedCycleId.value = resolved.selectedCycle?.id ?? "";
   if (selectedCycleId.value && requestedCycleId !== selectedCycleId.value) {
@@ -141,6 +146,8 @@ async function loadRecords() {
     const res = await publicationApi.getRecords(cycleId, {
       page: page.value,
       pageSize: pageSize.value,
+      deptId: deptFilter.value || undefined,
+      keyword: keywordFilter.value.trim() || undefined,
     });
     if (
       requestSequence !== recordsRequestSequence ||
@@ -174,7 +181,7 @@ watch(
   async (cycleId) => {
     if (!publishReady) return;
     const requestedCycleId = typeof cycleId === "string" ? cycleId : undefined;
-    const resolved = resolvePerformanceCycle(cycles.value, requestedCycleId);
+    const resolved = resolvePerformanceCycleByCreatedAt(cycles.value, requestedCycleId);
     const canonicalCycleId = resolved.selectedCycle?.id ?? "";
     if (canonicalCycleId && requestedCycleId !== canonicalCycleId) {
       await router.replace({
@@ -204,11 +211,33 @@ watch([page, pageSize], () => {
 });
 
 onMounted(async () => {
-  await loadCycles();
+  await Promise.all([
+    loadCycles(),
+    departmentsApi.findAll({ isActive: true, pageSize: 1000 })
+      .then((items) => { departments.value = items; })
+      .catch(() => { departments.value = []; }),
+  ]);
   await normalizePublishCycle();
   publishReady = true;
   await loadRecords();
 });
+
+function searchPublicationRecords() {
+  resetPagination();
+  void loadRecords();
+}
+
+async function resetPublicationFilters() {
+  deptFilter.value = "";
+  keywordFilter.value = "";
+  resetPagination();
+  const latestCycleId = cycles.value[0]?.id ?? "";
+  if (latestCycleId && latestCycleId !== selectedCycleId.value) {
+    await selectPublishCycle(latestCycleId);
+  } else {
+    await loadRecords();
+  }
+}
 
 function onSelectionChange(rows: PublicationRecord[]) {
   if (interactionLocked.value) return;
@@ -322,29 +351,20 @@ function closeDetail() {
   >
     <ChartCard :padded="true" class="list-page-header-card">
       <template #title>结果公示</template>
-      <template #extra>
-        <div class="publish-view__toolbar performance-result-toolbar">
-          <el-select
-            :model-value="selectedCycleId"
-            data-testid="publish-cycle-select"
-            :placeholder="cycles.length ? '选择考核周期' : '暂无考核周期'"
-            style="width: 260px"
-            :disabled="cycles.length === 0 || interactionLocked"
-            @change="selectPublishCycle"
-          >
-            <el-option
-              v-if="cycles.length === 0"
-              label="暂无考核周期"
-              value=""
-              disabled
-            />
-            <el-option
-              v-for="cycle in cycles"
-              :key="cycle.id"
-              :label="cycle.name"
-              :value="cycle.id"
-            />
-          </el-select>
+      <PerformanceRecordFilters
+        :cycle-id="selectedCycleId"
+        v-model:dept-id="deptFilter"
+        v-model:keyword="keywordFilter"
+        :cycles="cycles"
+        :departments="departments"
+        cycle-test-id="publish-cycle-select"
+        :loading="loading"
+        :disabled="interactionLocked"
+        @update:cycle-id="selectPublishCycle"
+        @search="searchPublicationRecords"
+        @reset="resetPublicationFilters"
+      />
+      <div class="publish-view__toolbar performance-result-toolbar">
           <el-checkbox
             v-model="sendDingtalk"
             class="dingtalk-checkbox"
@@ -359,8 +379,7 @@ function closeDetail() {
           >
             发布公示
           </el-button>
-        </div>
-      </template>
+      </div>
 
       <EmptyState
         v-if="!selectedCycle"

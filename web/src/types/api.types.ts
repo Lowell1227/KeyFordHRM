@@ -721,6 +721,7 @@ export interface PerformanceInterview {
   id: string;
   taskId: string;
   cycleId: string;
+  cycleName?: string | null;
   employeeId: string;
   interviewerId: string;
   status: InterviewStatus;
@@ -740,7 +741,8 @@ export interface PerformanceInterview {
   createdAt?: string;
   updatedAt?: string;
   // 详情视图附加
-  employeeName?: string | null;
+    employeeName?: string | null;
+    employeeNo?: string | null;
   deptName?: string | null;
   interviewerName?: string | null;
 }
@@ -1783,7 +1785,9 @@ export interface ImprovementPlanQuery {
   pageSize?: number;
   status?: ImprovementPlanStatus;
   employeeId?: string;
-  cycleId?: string;
+    cycleId?: string;
+    deptId?: string;
+    keyword?: string;
 }
 
 export interface FillImprovementPlanBody {

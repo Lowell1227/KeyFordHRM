@@ -54,6 +54,8 @@ export interface ConsecutiveDWarning {
 export interface ImprovementPlanQuery {
   employeeId?: string;
   cycleId?: string;
+  deptId?: string;
+  keyword?: string;
   status?: ImprovementPlanStatus;
 }
 
@@ -72,9 +74,22 @@ export class ImprovementPlansService {
   ): Promise<Paginated<ImprovementPlanListItem>> {
     const scopeFilter = await this.dataScope.getVisibleEmployeeFilter(viewer);
 
+    const keyword = query.keyword?.trim();
+    const employeeConditions: Prisma.UserWhereInput[] = [
+      scopeFilter,
+      ...(query.deptId ? [{ deptId: query.deptId }] : []),
+      ...(keyword ? [{ OR: [
+        { name: { contains: keyword, mode: 'insensitive' as const } },
+        { employeeNo: { contains: keyword, mode: 'insensitive' as const } },
+      ] }] : []),
+    ];
+    const employeeFilter: Prisma.UserWhereInput = employeeConditions.length === 1
+      ? scopeFilter
+      : { AND: employeeConditions };
+
     const where: Prisma.ImprovementPlanWhereInput = {};
-    if (Object.keys(scopeFilter).length > 0) {
-      where.employee = scopeFilter;
+    if (Object.keys(scopeFilter).length > 0 || query.deptId || keyword) {
+      where.employee = employeeFilter;
     }
     if (query.employeeId) {
       where.employeeId = query.employeeId;

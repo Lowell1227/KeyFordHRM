@@ -160,6 +160,26 @@ describe('CalibrationService（确认/驳回）', () => {
     }));
   });
 
+  it('filters only the workbench list by department and employee number while keeping cycle summary complete', async () => {
+    const matched = makeTask({
+      id: 'task-matched', deptId: 'dept-1', employeeId: 'employee-1',
+      employee: { name: 'Matched', employeeNo: 'E001', position: 'Specialist' },
+      dept: { name: 'Department One' }, manager: { name: 'Manager' },
+    });
+    const other = makeTask({
+      id: 'task-other', deptId: 'dept-2', employeeId: 'employee-2',
+      employee: { name: 'Other', employeeNo: 'E002', position: 'Specialist' },
+      dept: { name: 'Department Two' }, manager: { name: 'Manager' },
+    });
+    prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', name: 'Cycle', ...makeCycle() });
+    prisma.assessmentTask.findMany.mockResolvedValue([matched, other]);
+
+    const result = await service.getWorkbench('cycle-1', hrViewer, { deptId: 'dept-1', keyword: 'E001' });
+
+    expect(result.items.map(item => item.taskId)).toEqual(['task-matched']);
+    expect(result.totalActive).toBe(2);
+  });
+
   it('candidate detail returns calibrated grade and approval time without replacing the raw grade', async () => {
     prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', name: 'Cycle', ...makeCycle() });
     prisma.assessmentTask.findFirst.mockResolvedValue({

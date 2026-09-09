@@ -77,7 +77,7 @@ export function createTasksApi(client: TasksApiClient) {
       return apiGet("/tasks", query as Record<string, unknown>);
     },
 
-    findDepartmentReviews(query?: Pick<TaskQuery, 'cycleId' | 'keyword' | 'status' | 'page' | 'pageSize'>): Promise<DepartmentReviewListPage> {
+    findDepartmentReviews(query?: Pick<TaskQuery, 'cycleId' | 'deptId' | 'keyword' | 'status' | 'page' | 'pageSize'>): Promise<DepartmentReviewListPage> {
       return apiGet('/tasks/department-review', query as Record<string, unknown>);
     },
 

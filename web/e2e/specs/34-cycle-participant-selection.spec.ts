@@ -9,6 +9,13 @@ async function apply(page: Page) { await page.getByRole('button', { name: 'чбохо
 
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/v1/**', (route) => route.fulfill({ json: envelope({ items: [], total: 0, page: 1, pageSize: 50 }) }));
+  await page.route('**/api/v1/cycles/participant-preview', async (route) => {
+    const body = route.request().postDataJSON() as { scope: 'all' | 'custom'; departmentIds?: string[]; userIds?: string[] };
+    const sizes: Record<string, number> = { parent: 4, child: 3, peer: 2 };
+    const departmentIds = body.scope === 'all' ? Object.keys(sizes) : body.departmentIds ?? [];
+    const total = departmentIds.reduce((sum, id) => sum + (sizes[id] ?? 0), 0) + (body.userIds?.length ?? 0);
+    await route.fulfill({ json: envelope({ items: [], total, departmentCount: departmentIds.length, page: 1, pageSize: 1 }) });
+  });
 });
 
 test('sole child selection excludes parent direct employees and survives editing', async ({ page }) => {

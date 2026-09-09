@@ -113,6 +113,23 @@ describe('ApprovalService', () => {
       }));
     });
 
+    it('adds department and employee-name-or-number filters without replacing approval scope', async () => {
+      prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
+      prisma.assessmentTask.findMany.mockResolvedValue([]);
+
+      await service.getApprovalList('cycle-1', makeViewer(), { deptId: 'dept-1', keyword: 'E001' });
+
+      expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({
+          cycleId: 'cycle-1', approverId: 'vp-1', isExempt: false, deptId: 'dept-1',
+          employee: { OR: [
+            { name: { contains: 'E001', mode: 'insensitive' } },
+            { employeeNo: { contains: 'E001', mode: 'insensitive' } },
+          ] },
+        }),
+      }));
+    });
+
     it('overview counts only unapproved tasks while retaining approval scope and grade distribution', async () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
       prisma.flowRecord.findMany.mockResolvedValue([]);

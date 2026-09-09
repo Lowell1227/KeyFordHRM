@@ -2,6 +2,9 @@
 import { computed, nextTick, ref, watch } from 'vue';
 import CycleParticipantSelect from './CycleParticipantSelect.vue';
 import type { Department } from '@/types/api.types';
+import { cyclesApi, type CycleParticipantCandidate } from '@/api/cycles.api';
+import EmptyState from '@/components/common/EmptyState.vue';
+import ListPagination from '@/components/common/ListPagination.vue';
 
 export type ParticipantScopeMode = 'all' | 'custom';
 
@@ -33,6 +36,16 @@ const activeTab = ref<'departments' | 'users'>('departments');
 const departmentKeyword = ref('');
 const departmentDraft = ref<string[]>([]);
 const userDraft = ref<string[]>([]);
+const previewItems = ref<CycleParticipantCandidate[]>([]);
+const previewTotal = ref(0);
+const previewDepartmentCount = ref(0);
+const previewLoading = ref(false);
+const previewKeyword = ref('');
+const previewPage = ref(1);
+const previewPageSize = ref(10);
+const savedScopeTotal = ref<number | null>(null);
+let previewRequest = 0;
+let summaryRequest = 0;
 
 type DepartmentTreeRef = {
   filter: (value: string) => void;
@@ -131,19 +144,12 @@ function selectedDepartmentIds(
   return selectableDepartmentIds.value.filter((id) => !excluded.has(id));
 }
 
-function countMembers(ids: string[]) {
-  return uniqueIds(ids).reduce(
-    (total, id) => total + (departmentById.value.get(id)?.directMemberCount ?? 0),
-    0,
-  );
-}
-
-function buildSummary(departmentIds: string[], userIds: string[]) {
+function buildSummary(departmentIds: string[], total?: number | null) {
   const selection = departmentSelection(departmentIds);
   const allSelected = selectableDepartmentIds.value.length > 0
     && selectableDepartmentIds.value.every((id) => departmentIds.includes(id));
   const departmentCopy = allSelected ? '已选择全部部门' : `已选择 ${selection.rootIds.length} 个部门`;
-  return `${departmentCopy}，共 ${countMembers(departmentIds) + userIds.length} 人`;
+  return total == null ? departmentCopy : `${departmentCopy}，共 ${total} 人`;
 }
 
 const selectedDepartments = computed(() => selectedDepartmentIds(
@@ -151,8 +157,26 @@ const selectedDepartments = computed(() => selectedDepartmentIds(
   props.departmentIds,
   props.excludedDepartmentIds,
 ));
-const summary = computed(() => buildSummary(selectedDepartments.value, props.userIds));
-const draftSummary = computed(() => buildSummary(departmentDraft.value, userDraft.value));
+const summary = computed(() => buildSummary(selectedDepartments.value, savedScopeTotal.value));
+const draftSummary = computed(() => `${buildSummary(departmentDraft.value)}，请核对右侧人员明细`);
+
+async function loadSavedScopeSummary() {
+  const request = ++summaryRequest;
+  try {
+    const result = await cyclesApi.previewParticipants({
+      scope: props.scope,
+      departmentIds: props.departmentIds,
+      userIds: props.userIds,
+      excludedDepartmentIds: props.excludedDepartmentIds,
+      excludedUserIds: props.excludedUserIds,
+      page: 1,
+      pageSize: 1,
+    });
+    if (request === summaryRequest) savedScopeTotal.value = result.total;
+  } catch {
+    if (request === summaryRequest) savedScopeTotal.value = null;
+  }
+}
 
 async function openPicker() {
   departmentDraft.value = [...selectedDepartments.value];
@@ -162,6 +186,39 @@ async function openPicker() {
   drawerVisible.value = true;
   await nextTick();
   departmentTreeRef.value?.setCheckedKeys(departmentDraft.value);
+  await loadPreview();
+}
+
+async function loadPreview() {
+  if (!drawerVisible.value) return;
+  const request = ++previewRequest;
+  const allSelected = selectableDepartmentIds.value.length > 0
+    && selectableDepartmentIds.value.every((id) => departmentDraft.value.includes(id));
+  const scope: ParticipantScopeMode = allSelected && userDraft.value.length === 0 ? 'all' : 'custom';
+  previewLoading.value = true;
+  try {
+    const result = await cyclesApi.previewParticipants({
+      scope,
+      departmentIds: scope === 'all' ? [] : departmentDraft.value,
+      userIds: userDraft.value,
+      excludedDepartmentIds: props.excludedDepartmentIds,
+      excludedUserIds: props.excludedUserIds,
+      keyword: previewKeyword.value.trim() || undefined,
+      page: previewPage.value,
+      pageSize: previewPageSize.value,
+    });
+    if (request !== previewRequest) return;
+    previewItems.value = result.items;
+    previewTotal.value = result.total;
+    previewDepartmentCount.value = result.departmentCount;
+  } catch {
+    if (request !== previewRequest) return;
+    previewItems.value = [];
+    previewTotal.value = 0;
+    previewDepartmentCount.value = 0;
+  } finally {
+    if (request === previewRequest) previewLoading.value = false;
+  }
 }
 
 function syncDepartmentDraft() {
@@ -223,27 +280,38 @@ function departmentMatches(value: string, data: unknown) {
 }
 
 watch(departmentKeyword, (value) => departmentTreeRef.value?.filter(value));
+watch([departmentDraft, userDraft], () => {
+  if (!drawerVisible.value) return;
+  previewPage.value = 1;
+  void loadPreview();
+}, { deep: true });
+watch(previewKeyword, () => {
+  if (!drawerVisible.value) return;
+  previewPage.value = 1;
+  void loadPreview();
+});
 watch(activeTab, async (value) => {
   if (value !== 'departments') return;
   await nextTick();
   departmentTreeRef.value?.setCheckedKeys(departmentDraft.value);
 });
+watch(
+  () => [props.scope, props.departmentIds, props.userIds, props.excludedDepartmentIds, props.excludedUserIds],
+  () => void loadSavedScopeSummary(),
+  { deep: true, immediate: true },
+);
 </script>
 
 <template>
   <div class="participant-scope-picker">
     <button
       type="button"
-      class="participant-scope-toolbar"
+      class="participant-scope-summary"
       data-testid="cycle-scope-picker-open"
       @click="openPicker"
     >
-      <strong>选择考核对象</strong>
-    </button>
-
-    <button type="button" class="participant-scope-summary" @click="openPicker">
       <span data-testid="cycle-scope-summary">{{ summary }}</span>
-      <strong>查看与选择</strong>
+      <strong>查看与调整</strong>
     </button>
   </div>
 
@@ -251,13 +319,14 @@ watch(activeTab, async (value) => {
     v-model="drawerVisible"
     class="cycle-scope-drawer"
     title="选择考核对象"
-    size="620px"
+    size="960px"
     append-to-body
     destroy-on-close
   >
     <div class="scope-drawer-content">
       <el-alert title="勾选需要参加本周期考核的部门或人员" type="info" :closable="false" show-icon />
 
+      <div class="scope-selection-grid">
       <el-tabs v-model="activeTab" class="scope-tabs">
         <el-tab-pane label="按部门" name="departments">
           <div class="department-picker-toolbar">
@@ -294,6 +363,31 @@ watch(activeTab, async (value) => {
           </div>
         </el-tab-pane>
       </el-tabs>
+      <aside class="scope-preview" data-testid="cycle-scope-preview">
+        <div class="scope-preview__header">
+          <div>
+            <strong>当前选择范围</strong>
+            <p>{{ previewTotal }} 人<template v-if="previewDepartmentCount"> · {{ previewDepartmentCount }} 个部门</template></p>
+          </div>
+          <el-input v-model="previewKeyword" clearable placeholder="搜索当前范围人员" />
+        </div>
+        <p class="scope-preview__hint">此处展示当前勾选范围；发起前仍会按周期规则完成参与与豁免预检。</p>
+        <div v-loading="previewLoading" class="scope-preview__list">
+          <div v-for="person in previewItems" :key="person.id" class="scope-preview__person">
+            <div><strong>{{ person.name }}</strong><span>{{ person.employeeNo || '无工号' }}</span></div>
+            <p>{{ person.deptName || '未分配部门' }}<template v-if="person.position"> · {{ person.position }}</template></p>
+          </div>
+          <EmptyState v-if="!previewLoading && previewItems.length === 0" description="当前选择范围暂无人员" />
+        </div>
+        <ListPagination
+          v-model:current-page="previewPage"
+          v-model:page-size="previewPageSize"
+          :total="previewTotal"
+          :page-sizes="[10, 20, 50]"
+          @change="loadPreview"
+        />
+      </aside>
+      </div>
     </div>
 
     <template #footer>
@@ -315,7 +409,6 @@ watch(activeTab, async (value) => {
   width: 100%;
 }
 
-.participant-scope-toolbar,
 .participant-scope-summary {
   display: flex;
   align-items: center;
@@ -329,32 +422,23 @@ watch(activeTab, async (value) => {
   border-radius: 8px;
 }
 
-.participant-scope-toolbar {
-  color: var(--el-color-primary);
-  background: var(--el-color-primary-light-9);
-  border: 0;
-}
-
 .participant-scope-summary {
   color: var(--el-text-color-regular);
   background: var(--el-fill-color-light);
   border: 1px solid var(--el-border-color-lighter);
 }
 
-.participant-scope-toolbar span,
 .participant-scope-summary strong {
   flex: none;
   color: var(--el-color-primary);
   font-size: 13px;
 }
 
-.participant-scope-toolbar:hover,
 .participant-scope-summary:hover {
   border-color: var(--el-color-primary-light-5);
   background: var(--el-color-primary-light-8);
 }
 
-.participant-scope-toolbar:focus-visible,
 .participant-scope-summary:focus-visible {
   outline: 2px solid var(--el-color-primary);
   outline-offset: 2px;
@@ -364,6 +448,14 @@ watch(activeTab, async (value) => {
   display: flex;
   flex: 1;
   flex-direction: column;
+  gap: 16px;
+  min-height: 0;
+}
+
+.scope-selection-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(320px, 0.9fr);
+  flex: 1;
   gap: 16px;
   min-height: 0;
 }
@@ -422,6 +514,33 @@ watch(activeTab, async (value) => {
   font-size: 13px;
 }
 
+.scope-preview {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  padding: 14px;
+  border: 1px solid var(--el-border-color-lighter);
+  border-radius: 8px;
+  background: var(--el-fill-color-extra-light);
+}
+.scope-preview__header {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 180px;
+  align-items: center;
+  gap: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.scope-preview__header p,
+.scope-preview__person p { margin: 3px 0 0; color: var(--el-text-color-secondary); font-size: 12px; }
+.scope-preview__hint { margin: 9px 0 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; }
+.scope-preview__list { flex: 1; min-height: 0; overflow: auto; }
+.scope-preview__person { padding: 11px 4px; border-bottom: 1px solid var(--el-border-color-extra-light); }
+.scope-preview__person > div { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; }
+.scope-preview__person span { color: var(--el-text-color-secondary); font-size: 12px; }
+.scope-preview :deep(.list-pagination) { padding: 12px 0 0; }
+
 .scope-drawer-footer,
 .scope-drawer-footer > div {
   display: flex;
@@ -444,7 +563,6 @@ watch(activeTab, async (value) => {
 }
 
 @media (max-width: 640px) {
-  .participant-scope-toolbar,
   .participant-scope-summary,
   .scope-drawer-footer,
   .department-picker-toolbar {
@@ -456,5 +574,14 @@ watch(activeTab, async (value) => {
     display: grid;
     grid-template-columns: 1fr 1fr;
   }
+  .scope-selection-grid { display: flex; flex-direction: column; overflow-y: auto; }
+  .scope-tabs { flex: 0 0 360px; height: 360px; min-height: 0; }
+  .scope-tabs :deep(.el-tabs__content) { height: 306px; }
+  .scope-preview { flex: 0 0 320px; min-height: 0; }
+  .scope-preview__header { grid-template-columns: 1fr; }
+}
+
+@media (max-width: 768px) {
+  :global(.cycle-scope-drawer) { width: 100% !important; }
 }
 </style>

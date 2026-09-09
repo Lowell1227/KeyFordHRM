@@ -1,4 +1,3 @@
-import { Type } from 'class-transformer';
 import { IsOptional, IsEnum, IsString, IsUUID } from 'class-validator';
 import { InterviewStatus } from '@prisma/client';
 import { PaginationDto } from '@/common/dto/pagination.dto';
@@ -8,6 +7,10 @@ export class InterviewQueryDto extends PaginationDto {
   @IsOptional()
   @IsUUID()
   cycleId?: string;
+
+  @IsOptional()
+  @IsUUID()
+  deptId?: string;
 
   @IsOptional()
   @IsEnum(InterviewStatus)

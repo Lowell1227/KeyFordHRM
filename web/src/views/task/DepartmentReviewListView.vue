@@ -5,19 +5,28 @@ import GradeTag from '@/components/common/GradeTag.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import PerformanceResultDrawer from '@/components/common/PerformanceResultDrawer.vue';
+import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilters.vue';
 import DepartmentReviewWorkspace from './components/DepartmentReviewWorkspace.vue';
 import { tasksApi } from '@/api/tasks.api';
-import type { DepartmentReviewListItem, TaskDetail } from '@/types/api.types';
+import { cyclesApi } from '@/api/cycles.api';
+import { departmentsApi } from '@/api/departments.api';
+import type { AssessmentCycle, Department, DepartmentReviewListItem, TaskDetail } from '@/types/api.types';
 import type { PerfGrade, TaskStatus } from '@/types/enums';
 import { TASK_STATUS_META } from '@/types/enums';
 import { formatDateTime } from '@/utils/date';
 import { formatResultScore, resultStage } from '@/utils/performance-result-presentation';
+import { orderPerformanceCyclesByCreatedAt } from '@/utils/performance-cycle';
 
 const items = ref<DepartmentReviewListItem[]>([]);
 const total = ref(0);
 const page = ref(1);
 const pageSize = ref(10);
 const status = ref<TaskStatus | ''>('');
+const cycles = ref<AssessmentCycle[]>([]);
+const departments = ref<Department[]>([]);
+const cycleId = ref('');
+const deptId = ref('');
+const keyword = ref('');
 const loading = ref(false);
 const error = ref('');
 const detailVisible = ref(false);
@@ -45,7 +54,14 @@ async function load() {
   loading.value = true;
   error.value = '';
   try {
-    const result = await tasksApi.findDepartmentReviews({ page: page.value, pageSize: pageSize.value, ...(status.value ? { status: status.value } : {}) });
+    const result = await tasksApi.findDepartmentReviews({
+      page: page.value,
+      pageSize: pageSize.value,
+      cycleId: cycleId.value || undefined,
+      deptId: deptId.value || undefined,
+      keyword: keyword.value.trim() || undefined,
+      ...(status.value ? { status: status.value } : {}),
+    });
     if (sequence !== loadSequence) return;
     items.value = result.items;
     total.value = result.total;
@@ -57,6 +73,26 @@ async function load() {
 function changeStage() {
   page.value = 1;
   void load();
+}
+function search() {
+  page.value = 1;
+  void load();
+}
+function resetFilters() {
+  cycleId.value = cycles.value[0]?.id ?? '';
+  deptId.value = '';
+  keyword.value = '';
+  status.value = '';
+  search();
+}
+async function loadFilters() {
+  const [cycleItems, departmentItems] = await Promise.all([
+    cyclesApi.findMine().catch(() => [] as AssessmentCycle[]),
+    departmentsApi.findAll({ isActive: true, pageSize: 1000 }).catch(() => [] as Department[]),
+  ]);
+  cycles.value = orderPerformanceCyclesByCreatedAt(cycleItems);
+  departments.value = departmentItems;
+  cycleId.value = cycles.value[0]?.id ?? '';
 }
 async function loadTaskDetail(id: string) {
   const sequence = ++detailSequence;
@@ -105,20 +141,33 @@ async function handleReviewed() {
   const refreshed = items.value.find(item => item.id === id);
   selectedCanReview.value = refreshed ? canReview(refreshed) : false;
 }
-onMounted(load);
+onMounted(async () => {
+  await loadFilters();
+  await load();
+});
 </script>
 
 <template>
   <div class="page-stack department-review-list performance-result-page">
     <ChartCard :padded="true" class="list-result-card">
       <template #title>部门复核</template>
-      <div class="review-filters performance-result-toolbar">
-        <label for="department-review-stage">当前环节</label>
-        <el-select id="department-review-stage" v-model="status" aria-label="当前环节" placeholder="全部环节" @change="changeStage">
-          <el-option label="全部环节" value="" />
-          <el-option v-for="[value, meta] in stages" :key="value" :label="meta.label" :value="value" />
-        </el-select>
-      </div>
+      <PerformanceRecordFilters
+        v-model:cycle-id="cycleId"
+        v-model:dept-id="deptId"
+        v-model:keyword="keyword"
+        :cycles="cycles"
+        :departments="departments"
+        :loading="loading"
+        @search="search"
+        @reset="resetFilters"
+      >
+        <div class="performance-record-filter-extra">
+          <label for="department-review-stage">当前环节</label>
+          <el-select id="department-review-stage" v-model="status" aria-label="当前环节" placeholder="全部环节" clearable @change="changeStage">
+            <el-option v-for="[value, meta] in stages" :key="value" :label="meta.label" :value="value" />
+          </el-select>
+        </div>
+      </PerformanceRecordFilters>
       <el-alert v-if="error" type="error" :title="error" :closable="false"><el-button link @click="load">重试</el-button></el-alert>
       <div class="desktop-result-table">
       <el-table v-loading="loading" :data="items" row-key="id" class="performance-result-table" empty-text="暂无部门复核记录" style="width: 100%">

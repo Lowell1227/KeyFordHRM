@@ -11,6 +11,7 @@ import { RejectCalibrationDto } from './dto/reject-calibration.dto';
 import { claimTaskVersion } from '@/tasks/task-version';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { mapReviewHistory, REVIEW_HISTORY_NODES } from '@/tasks/review-history';
+import { CalibrationQueryDto } from './dto/calibration-query.dto';
 
 /** 等级分布单项。 */
 export interface GradeDistributionEntry {
@@ -130,15 +131,27 @@ export class CalibrationService {
   }
 
   /** GET /cycles/:id/calibration — 校准工作台。 */
-  async getWorkbench(cycleId: string, viewer: AuthUser): Promise<CalibrationWorkbench> {
+  async getWorkbench(
+    cycleId: string,
+    viewer: AuthUser,
+    query: CalibrationQueryDto = {},
+  ): Promise<CalibrationWorkbench> {
     const cycle = await this.getCycleOrThrow(cycleId, viewer);
     const tasks = await this.findActiveTasksWithResult(cycleId);
+    const keyword = query.keyword?.trim().toLocaleLowerCase();
+    const visibleTasks = tasks.filter((task) => {
+      if (query.deptId && task.deptId !== query.deptId) return false;
+      if (!keyword) return true;
+      return `${task.employee?.name ?? ''} ${task.employee?.employeeNo ?? ''}`
+        .toLocaleLowerCase()
+        .includes(keyword);
+    });
 
     return {
       gradeDistribution: buildGradeDistribution(tasks.filter(t => t.employeeId !== viewer.id), cycle),
       totalActive: tasks.length,
       progress: buildProgress(tasks),
-      items: tasks.map((t) => this.mapToWorkbenchItem(t, viewer)),
+      items: visibleTasks.map((t) => this.mapToWorkbenchItem(t, viewer)),
     };
   }
 
