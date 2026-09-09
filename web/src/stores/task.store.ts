@@ -1,4 +1,5 @@
 import { defineStore } from 'pinia';
+import { isApprovedResultAvailable, needsEmployeeResultConfirmation } from '@/utils/result-confirmation';
 import { tasksApi } from '@/api/tasks.api';
 import type { TaskDetail } from '@/types/api.types';
 import type { TaskStatus } from '@/types/enums';
@@ -29,30 +30,25 @@ export const useTaskStore = defineStore('task', {
       return state.detail?.status === 'manager_scoring';
     },
 
-    /** 是否可以申诉（公示后且未豁免）。 */
-    canAppeal: (state) => {
-      if (state.detail?.isExempt) return false;
-      return state.detail?.status === 'published';
-    },
+    /** 员工在线不发起申诉，由 HR 代录。 */
+    canAppeal: () => false,
 
-    /** 是否可以确认结果（公示后员工确认）。 */
+    /** 是否可以确认结果（审批通过后员工确认）。 */
     canConfirmResult: (state) => {
       if (state.detail?.isExempt) return false;
-      return state.detail?.status === 'published';
+      return Boolean(state.detail && needsEmployeeResultConfirmation(state.detail));
     },
 
     /** 是否可以查看主管评分（公示后或拥有管理权限）。 */
     canViewManagerScore: (state) => {
       if (!state.detail) return false;
-      return ['published', 'confirmed', 'appealing', 'closed', 'exempted'].includes(
-        state.detail.status,
-      );
+      return isApprovedResultAvailable(state.detail);
     },
 
     /** 是否可以查看总分/等级（公示后）。 */
     canViewScore: (state) => {
       if (!state.detail) return false;
-      return ['published', 'confirmed', 'appealing', 'closed'].includes(state.detail.status);
+      return isApprovedResultAvailable(state.detail);
     },
   },
 

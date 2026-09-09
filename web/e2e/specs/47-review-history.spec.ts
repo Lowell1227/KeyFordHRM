@@ -79,7 +79,7 @@ async function mockApprovalHistory(page: Page, options: { failFirstDetail?: bool
 }
 
 function approvalHistoryRow(page: Page, employeeName: string) {
-  return page.locator('.el-table__body tr').filter({ hasText: employeeName });
+  return page.locator('.el-table__body tr:visible, .mobile-result-card:visible').filter({ hasText: employeeName });
 }
 
 for (const width of [1440, 390]) {
@@ -97,7 +97,7 @@ for (const width of [1440, 390]) {
     const summary = drawer.getByTestId('performance-result-summary');
     await expect(summary).toContainText('虚拟员工甲');
     await expect(summary).toContainText('审批历史周期甲');
-    await expect(summary).toContainText('已审批，待公示');
+    await expect(summary).toContainText('待员工确认');
     await expect(summary).toContainText('86.00');
     await expect(summary.getByText('B', { exact: true })).toBeVisible();
     await expect(summary.getByText('A', { exact: true })).toBeVisible();

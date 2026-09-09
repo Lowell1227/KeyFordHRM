@@ -5,7 +5,7 @@ import { formatDateTime } from '@/utils/date';
 
 const props = defineProps<{ records?: ReviewHistoryRecord[] }>();
 const expanded = ref(false);
-const nodes: Record<string, string> = { manager_score: '上级周期评定', dept_review: '部门复核', hr_calibration: '绩效校准', approval: '结果审批', publish: '结果公示' };
+const nodes: Record<string, string> = { manager_score: '上级周期评定', dept_review: '部门复核', hr_calibration: '绩效校准', approval: '结果审批', employee_confirm: '员工确认', publish: '结果公示', appeal: 'HR 发起申诉' };
 const actions: Record<string, string> = { submit: '已提交', approve: '已通过', reject: '已退回', withdraw: '已撤回' };
 const entries = computed(() => (props.records ?? []).filter(r => nodes[r.nodeType] && actions[r.action])
   .map(record => {

@@ -25,11 +25,12 @@ for (const width of [1440, 390]) {
       await route.fulfill({ json: { code: 0, data } });
     });
     await page.goto(`/approval?cycleId=${cycle.id}`);
-    const first = page.locator('.el-table__body tr').filter({ hasText: '通过测试员工' });
-    const second = page.locator('.el-table__body tr').filter({ hasText: '退回测试员工' });
+    const items = width <= 768 ? page.locator('.mobile-result-card') : page.locator('.el-table__body tr');
+    const first = items.filter({ hasText: '通过测试员工' });
+    const second = items.filter({ hasText: '退回测试员工' });
     await first.getByRole('button', { name: '通过', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: '通过', exact: true }).click();
-    await expect(first).toContainText('已审批，待公示');
+    await expect(first).toContainText('待员工确认');
     await second.getByRole('button', { name: '退回', exact: true }).click();
     await page.getByPlaceholder('请输入审批意见（必填）').fill('补充校准依据');
     await page.getByRole('button', { name: '确认退回', exact: true }).click();

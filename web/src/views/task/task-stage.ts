@@ -1,5 +1,6 @@
 import type { TaskStatus } from '@/types/enums';
 import type { AssessmentPeriodSummary } from '@/types/api.types';
+import { isResultPublished, needsEmployeeResultConfirmation, type ResultConfirmationSource } from '@/utils/result-confirmation';
 
 export type TaskStageKey = 'goal-setting' | 'goal-confirmation' | 'self-eval' | 'result';
 export type TaskStageState = 'pending' | 'progress' | 'completed' | 'not-started' | 'exempted';
@@ -63,7 +64,7 @@ export function getTaskStageStateForStatus(status: TaskStatus, stage: TaskStageK
   return getTaskStageState([status]);
 }
 
-export interface EmployeeTaskStageSource {
+export interface EmployeeTaskStageSource extends ResultConfirmationSource {
   status: TaskStatus;
   isExempt?: boolean;
   workflowVersion?: number;
@@ -133,6 +134,10 @@ export function getEmployeeTaskStageState(
   stage: TaskStageKey,
 ): TaskStageState {
   if (task.isExempt || task.status === 'exempted') return 'exempted';
+  if (stage === 'result') {
+    if (needsEmployeeResultConfirmation(task)) return 'pending';
+    if (task.employeeConfirmedAt || task.status === 'confirmed' || task.status === 'closed') return 'completed';
+  }
   if (task.workflowVersion !== 2 || !(task.periods?.length)) {
     if (stage === 'result') {
       if (employeeResultCompletedStatuses.has(task.status)) return 'completed';
@@ -161,12 +166,17 @@ export function getEmployeeTaskStageState(
 }
 
 export function resolveEmployeeTaskStage(task: EmployeeTaskStageSource): TaskStageKey {
+  if (needsEmployeeResultConfirmation(task) || task.status === 'confirmed' || isResultPublished(task)) return 'result';
   if (getEmployeeActionablePeriod(task)) return 'self-eval';
   if (getEmployeeWaitingPeriod(task)) return 'self-eval';
   return TASK_STATUS_STAGE[task.status];
 }
 
 export function resolveEmployeeTaskEntry(task: EmployeeTaskStageSource): EmployeeTaskEntry {
+  if (needsEmployeeResultConfirmation(task)) return { stage: 'result', label: '结果确认', actionLabel: '查看并确认结果' };
+  if (task.status === 'confirmed' || task.employeeConfirmedAt || isResultPublished(task)) {
+    return { stage: 'result', label: isResultPublished(task) ? '结果已公示' : '已确认，待公示', actionLabel: '查看结果' };
+  }
   const monthlyPeriods = [...(task.periods ?? [])]
     .filter((item) => item.periodType === 'month')
     .sort((left, right) => left.sequence - right.sequence);

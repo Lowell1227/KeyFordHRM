@@ -57,7 +57,7 @@ async function setup(page: Page, role: 'head' | 'employee' | 'employee-head' = '
   return submissions;
 }
 
-test('部门复核详情识别结果审批已通过并等待公示', async ({ page }) => {
+test('部门复核详情识别结果审批已通过并等待员工确认', async ({ page }) => {
   await setup(page, 'head', { status: 'approval', combined: true, approvedAt: '2026-09-08T12:00:00.000Z' });
   await page.goto('/department-review');
   await page.getByRole('row').filter({ hasText: '虚拟员工甲' }).getByRole('button', { name: '查看详情', exact: true }).click();
@@ -66,8 +66,8 @@ test('部门复核详情识别结果审批已通过并等待公示', async ({ pa
   await expect(drawer).toBeVisible();
   const workspace = drawer.getByTestId('department-review-workspace');
   await expect(workspace.locator('.chart-card')).toHaveCount(0);
-  await expect(workspace.getByTestId('performance-result-summary')).toContainText('已审批，待公示');
-  await expect(workspace).toContainText('部门复核已完成，结果审批已通过，等待公示。');
+  await expect(workspace.getByTestId('performance-result-summary')).toContainText('待员工确认');
+  await expect(workspace).toContainText('部门复核已完成，结果审批已通过，等待员工确认。');
   await drawer.getByRole('button', { name: '关闭', exact: true }).click();
   await expect(drawer).toBeHidden();
 });
@@ -201,7 +201,7 @@ for (const width of [1440, 390]) {
     for (const [name, handling, stage] of [
       ['虚拟待复核成员', '待复核', '部门复核中'],
       ['虚拟已通过成员', '复核通过', '绩效校准中'],
-      ['虚拟合并办理成员', '合并复核通过', '已审批，待公示'],
+      ['虚拟合并办理成员', '合并复核通过', '待员工确认'],
       ['虚拟已退回成员', '已退回', '直属上级评分中'],
       ['虚拟尚未开始成员', '待开始', '目标制定中'],
       ['虚拟历史无记录成员', '暂无复核记录', '已公示'],

@@ -5,6 +5,8 @@ import type { TaskFlowNode, TaskActions, TaskViewMode } from '@/types/task.types
 import type { FlowNodeType, TaskStatus } from '@/types/enums';
 import type { MaybeRef } from 'vue';
 import { usePermission } from './usePermission';
+import { useAuthStore } from '@/stores/auth.store';
+import { isResultPublished, needsEmployeeResultConfirmation } from '@/utils/result-confirmation';
 
 const FLOW_SEQUENCE: FlowNodeType[] = [
   'indicator_setting',
@@ -14,12 +16,15 @@ const FLOW_SEQUENCE: FlowNodeType[] = [
   'dept_review',
   'hr_calibration',
   'approval',
-  'publish',
   'employee_confirm',
+  'publish',
 ];
 
 /** 将 TaskStatus 映射到当前所在流程节点。 */
-function statusToNode(status: TaskStatus): FlowNodeType {
+function statusToNode(task: TaskDetail | null): FlowNodeType {
+  const status: TaskStatus = task?.status ?? 'pending';
+  if (task && needsEmployeeResultConfirmation(task)) return 'employee_confirm';
+  if (task && (task.status === 'confirmed' || isResultPublished(task))) return 'publish';
   switch (status) {
     case 'pending':
       return 'indicator_setting';
@@ -68,6 +73,13 @@ function getNodeStatus(
 
   if (task?.status === 'goal_confirmed' && node === 'self_eval') return 'pending';
 
+  // 历史公示后确认与新流程都以实际时间为准。
+  if (task && node === 'publish' && isResultPublished(task)) return 'done';
+  if (task && node === 'employee_confirm') {
+    if (task.employeeConfirmedAt || task.gradeResult?.employeeConfirmedAt) return 'done';
+    if (needsEmployeeResultConfirmation(task)) return 'active';
+  }
+
   if (nodeIndex < currentIndex) return 'done';
   if (nodeIndex === currentIndex) return 'active';
   return 'pending';
@@ -81,9 +93,10 @@ export interface UseTaskFlowOptions {
 
 export function useTaskFlow(options: UseTaskFlowOptions = {}) {
   const task = computed(() => unref(options.task) ?? null);
+  const auth = useAuthStore();
   const permission = usePermission({ task: options.task, cycle: options.cycle });
 
-  const currentNode = computed(() => statusToNode(task.value?.status ?? 'pending'));
+  const currentNode = computed(() => statusToNode(task.value));
 
   const flowNodes = computed<TaskFlowNode[]>(() => {
     const t = task.value;
@@ -110,8 +123,8 @@ export function useTaskFlow(options: UseTaskFlowOptions = {}) {
       canManagerScore: permission.canEditManagerScore.value,
       canDeptReview: !exempt && s === 'dept_review' && isDeptHead && !isSelf,
       canHrCalibrate: !exempt && s === 'hr_calibration' && isAdmin,
-      canApprove: !exempt && s === 'approval' && (isAdmin || task.value?.approverId === task.value?.employeeId),
-      canPublish: !exempt && s === 'approval' && isAdmin,
+      canApprove: !exempt && !isSelf && s === 'approval' && !task.value?.approvedAt && task.value?.approverId === auth.user?.id,
+      canPublish: !exempt && s === 'confirmed' && !permission.isPublished.value && Boolean(task.value?.employeeConfirmedAt) && Boolean(auth.user?.sysRole === 'system_admin' || auth.user?.systemPermission === 'hr_admin' || auth.user?.hrCapabilities?.includes('performance_publish')),
       canAppeal: permission.canAppeal.value,
       canConfirmResult: permission.canConfirmResult.value,
       canExempt: !exempt && isAdmin,
@@ -157,9 +170,9 @@ function getCompletedAt(task: TaskDetail | null | undefined, node: FlowNodeType)
     case 'approval':
       return task.approvedAt ?? undefined;
     case 'publish':
-      return task.publishedAt;
+      return task.publishedAt ?? undefined;
     case 'employee_confirm':
-      return task.employeeConfirmedAt;
+      return task.employeeConfirmedAt ?? undefined;
     default:
       return undefined;
   }

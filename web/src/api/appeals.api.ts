@@ -5,6 +5,7 @@ import type {
   AppealListItem,
   AppealDetail,
   AppealQuery,
+  AppealCandidate,
   CreateAppealBody,
   ResolveAppealBody,
 } from '@/types/api.types';
@@ -18,6 +19,10 @@ function apiPost<T>(url: string, data?: unknown): Promise<T> {
 }
 
 export const appealsApi = {
+  /** 已审批且未公示、允许 HR 发起重评的任务。 */
+  findCandidates(query?: Pick<AppealQuery, 'cycleId' | 'keyword' | 'page' | 'pageSize'>): Promise<Paginated<AppealCandidate>> {
+    return apiGet('/appeals/candidates', query as Record<string, unknown>);
+  },
   /** GET /appeals — 申诉列表 */
   findAll(query?: AppealQuery): Promise<Paginated<AppealListItem>> {
     return apiGet('/appeals', query as Record<string, unknown>);

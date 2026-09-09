@@ -22,10 +22,10 @@ let loadSequence = 0;
 const lastReview = computed(() => [...(detail.value?.flowRecords ?? props.task.flowRecords ?? [])]
   .filter(r => r.nodeType === 'dept_review' && ['approve', 'reject'].includes(r.action))
   .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime())[0]);
-const approvedWaitingPublish = computed(() => (detail.value?.status ?? props.task.status) === 'approval'
+const approvedWaitingConfirmation = computed(() => (detail.value?.status ?? props.task.status) === 'approval'
   && Boolean(detail.value?.approvedAt ?? props.task.approvedAt));
 const outcome = computed(() => {
-  if (approvedWaitingPublish.value) return '部门复核已完成，结果审批已通过，等待公示。';
+  if (approvedWaitingConfirmation.value) return '部门复核已完成，结果审批已通过，等待员工确认。';
   if (props.task.status === 'hr_calibration') {
     return lastReview.value?.action === 'approve' ? '部门复核已通过，已进入绩效校准。' : '当前已进入绩效校准。';
   }
@@ -68,8 +68,8 @@ watch(() => props.task.id, () => { comment.value = ''; validation.value = ''; })
           score-hint="分数与等级无换算关系"
           :cycle-name="detail.cycleName"
           :employee-name="detail.employeeName"
-          :status-label="resultStage(detail.status, detail.approvedAt).label"
-          :status-type="resultStage(detail.status, detail.approvedAt).type"
+          :status-label="resultStage(detail.status, detail.approvedAt, detail.publishedAt ?? null).label"
+          :status-type="resultStage(detail.status, detail.approvedAt, detail.publishedAt ?? null).type"
           :department-name="detail.deptName"
           :position="detail.position"
           :manager-name="detail.managerName"

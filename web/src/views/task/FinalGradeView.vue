@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { resultStage } from '@/utils/performance-result-presentation';
 import { ref, computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
@@ -132,7 +133,7 @@ watch(taskId, loadDetail, { immediate: true });
         <PerformanceResultSummary
           :cycle-name="detail.cycleName"
           :employee-name="detail.employeeName"
-          :status-label="detail.status === 'approval' && detail.approvedAt ? '已通过，待公示' : TASK_STATUS_META[detail.status]?.label ?? detail.status"
+          :status-label="resultStage(detail.status, detail.approvedAt, detail.publishedAt ?? null).label"
           :status-type="detail.status === 'approval' && detail.approvedAt ? 'success' : (TASK_STATUS_META[detail.status]?.type as any) || 'info'"
           :department-name="detail.deptName"
           :position="detail.position"

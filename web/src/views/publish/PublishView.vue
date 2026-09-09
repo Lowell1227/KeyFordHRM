@@ -436,8 +436,8 @@ function closeDetail() {
         </el-table-column>
         <el-table-column label="当前环节" min-width="150">
           <template #default="{ row }">
-            <el-tag :type="resultStage(row.status, row.approvedAt).type" size="small">{{
-              resultStage(row.status, row.approvedAt).label
+            <el-tag :type="resultStage(row.status, row.approvedAt, row.publishedAt ?? null).type" size="small">{{
+              resultStage(row.status, row.approvedAt, row.publishedAt ?? null).label
             }}</el-tag>
           </template>
         </el-table-column>
@@ -473,7 +473,7 @@ function closeDetail() {
             >{{ item.employeeName }} · {{ item.employeeNo || '—' }}</el-checkbox>
             <span v-else>{{ item.employeeName }} · {{ item.employeeNo || '—' }}</span>
           </template>
-          <template #status><el-tag :type="resultStage(item.status, item.approvedAt).type" size="small">{{ resultStage(item.status, item.approvedAt).label }}</el-tag></template>
+          <template #status><el-tag :type="resultStage(item.status, item.approvedAt, item.publishedAt ?? null).type" size="small">{{ resultStage(item.status, item.approvedAt, item.publishedAt ?? null).label }}</el-tag></template>
           <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 岗位</span><span class="mobile-result-field__value">{{ item.deptName || '—' }} · {{ item.position || '—' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">周期结果</span><span class="mobile-result-field__value">{{ item.resultMasked ? '公示前不可查看本人结果' : `${formatResultScore(item.totalScore)} · ${item.calibratedGrade ?? item.rawGrade ?? '—'}` }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">公示时间</span><span class="mobile-result-field__value">{{ item.publishedAt ? formatDateTime(item.publishedAt) : '—' }}</span></div>
@@ -524,8 +524,8 @@ function closeDetail() {
           score-hint="分数与等级无换算关系"
           :cycle-name="detailDrawer.detail.cycleName"
           :employee-name="detailDrawer.detail.employeeName"
-          :status-label="resultStage(detailDrawer.detail.status, detailDrawer.detail.approvedAt).label"
-          :status-type="resultStage(detailDrawer.detail.status, detailDrawer.detail.approvedAt).type"
+          :status-label="resultStage(detailDrawer.detail.status, detailDrawer.detail.approvedAt, detailDrawer.detail.publishedAt ?? null).label"
+          :status-type="resultStage(detailDrawer.detail.status, detailDrawer.detail.approvedAt, detailDrawer.detail.publishedAt ?? null).type"
           :department-name="detailDrawer.detail.deptName"
           :position="detailDrawer.detail.position"
           :manager-name="detailDrawer.detail.managerName"

@@ -3,6 +3,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import type { TaskDetail, CurrentUser, AssessmentCycle, PublishVisibleFields } from '@/types/api.types';
 import type { TaskStatus } from '@/types/enums';
 import type { MaybeRef } from 'vue';
+import { isResultPublished, isApprovedResultAvailable, needsEmployeeResultConfirmation } from '@/utils/result-confirmation';
 
 const DEFAULT_VISIBLE_FIELDS: PublishVisibleFields = {
   totalScore: true,
@@ -42,7 +43,7 @@ function isHrOrAdmin(user: CurrentUser): boolean {
  * 任务相关权限判断。
  *
  * 核心规则（对应 04 前端设计文档 5.3）：
- * - 员工在公示前看不到主管评分；公示后员工本人可见。
+ * - 员工在审批通过后可查看本人结果，仍受结果字段配置限制。
  * - 主管/HR/审批人在评分阶段开始后即可查看主管评分。
  */
 export function usePermission(ctx?: PermissionContext) {
@@ -60,23 +61,18 @@ export function usePermission(ctx?: PermissionContext) {
   const status = computed<TaskStatus | null>(() => task.value?.status ?? null);
   const isExempt = computed(() => task.value?.isExempt ?? false);
 
-  /** 员工视角：任务/周期是否已公示。 */
-  const isPublished = computed(() => {
-    if (!task.value) return false;
-    if (task.value.publishedAt) return true;
-    if (task.value.gradeResult?.isPublished) return true;
-    if (cycle.value?.publishedAt) return true;
-    return false;
-  });
+  /** 员工视角：任务是否已实际公示。 */
+  const isPublished = computed(() => Boolean(task.value && isResultPublished(task.value)));
+  const isResultAvailable = computed(() => Boolean(task.value && isApprovedResultAvailable(task.value)));
 
   const publishVisibleFields = computed(() => cycle.value?.publishVisibleFields ?? DEFAULT_VISIBLE_FIELDS);
 
   const maskMessage = computed(() => {
     if (!isTaskSelf.value) return null;
-    if (!isPublished.value) {
-      return '绩效结果尚未公示，评分、总分及等级将在公示后开放查看。';
+    if (!isResultAvailable.value) {
+      return '绩效结果尚未审批通过，审批后可查看并确认。';
     }
-    return '该字段未在公示范围内展示。';
+    return '该字段未在结果可见范围内展示。';
   });
 
   /** 员工是否可以编辑自评。 */
@@ -93,16 +89,16 @@ export function usePermission(ctx?: PermissionContext) {
 
   /**
    * 是否可以查看主管评分（含指标得分、主管评语等）。
-   * 关键约束：员工在公示前看不到主管评分；公示后按 publishVisibleFields.indicatorScores 控制。
+   * 关键约束：员工在审批通过后可查看主管评分，按 publishVisibleFields.indicatorScores 控制。
    */
   const canViewManagerScore = computed(() => {
     if (!task.value || !user.value) return false;
     const s = status.value;
     if (!s) return false;
 
-    // 员工本人：仅在公示及以后可见，且受字段配置控制
+    // 员工本人：审批通过后可见，且受字段配置控制
     if (isTaskSelf.value) {
-      if (!isPublished.value) return false;
+      if (!isResultAvailable.value) return false;
       return publishVisibleFields.value.indicatorScores ?? true;
     }
 
@@ -114,47 +110,47 @@ export function usePermission(ctx?: PermissionContext) {
     );
   });
 
-  /** 是否可以查看主管评语（公示后按 managerComment 配置）。 */
+  /** 是否可以查看主管评语（审批后按 managerComment 配置）。 */
   const canViewManagerComment = computed(() => {
     if (!task.value || !user.value) return false;
     if (!isTaskSelf.value) return true;
-    if (!isPublished.value) return false;
+    if (!isResultAvailable.value) return false;
     return publishVisibleFields.value.managerComment ?? true;
   });
 
-  /** 是否可以查看总分（公示后按 totalScore 配置）。 */
+  /** 是否可以查看总分（审批后按 totalScore 配置）。 */
   const canViewTotalScore = computed(() => {
     if (!task.value || !user.value) return false;
     if (!isTaskSelf.value) return true;
-    if (!isPublished.value) return false;
+    if (!isResultAvailable.value) return false;
     return publishVisibleFields.value.totalScore ?? true;
   });
 
-  /** 是否可以查看系数（公示后按 coefficient 配置）。 */
+  /** 是否可以查看系数（审批后按 coefficient 配置）。 */
   const canViewCoefficient = computed(() => {
     if (!task.value || !user.value) return false;
     if (!isTaskSelf.value) return true;
-    if (!isPublished.value) return false;
+    if (!isResultAvailable.value) return false;
     return publishVisibleFields.value.coefficient ?? true;
   });
 
   /** 是否可以申诉。 */
   const canAppeal = computed(() => {
     if (!task.value || !user.value || isExempt.value) return false;
-    return status.value === 'published' && isTaskSelf.value;
+    return false;
   });
 
   /** 是否可以确认结果。 */
   const canConfirmResult = computed(() => {
     if (!task.value || !user.value || isExempt.value) return false;
-    return status.value === 'published' && isTaskSelf.value;
+    return needsEmployeeResultConfirmation(task.value) && isTaskSelf.value;
   });
 
-  /** 是否可以查看绩效校准结果/等级（公示后按 grade 配置）。 */
+  /** 是否可以查看绩效校准结果/等级（审批后按 grade 配置）。 */
   const canViewCalibration = computed(() => {
     if (!task.value || !user.value) return false;
     if (isTaskSelf.value) {
-      if (!isPublished.value) return false;
+      if (!isResultAvailable.value) return false;
       return publishVisibleFields.value.grade ?? true;
     }
     return isTaskManager.value || isTaskDeptHead.value || isAdminLike.value;
@@ -166,6 +162,7 @@ export function usePermission(ctx?: PermissionContext) {
     isTaskDeptHead,
     isAdminLike,
     isPublished,
+    isResultAvailable,
     canEditSelfEval,
     canEditManagerScore,
     canViewManagerScore,

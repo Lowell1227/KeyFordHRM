@@ -129,7 +129,7 @@ onMounted(load);
         <el-table-column prop="position" label="岗位" min-width="130" show-overflow-tooltip><template #default="{ row }">{{ row.position || '—' }}</template></el-table-column>
         <el-table-column label="周期得分" width="110" align="right"><template #default="{ row }"><span class="performance-result-score">{{ formatResultScore(row.totalScore) }}</span></template></el-table-column>
         <el-table-column label="周期等级" width="100" align="center"><template #default="{ row }"><GradeTag :grade="(row.calibratedGrade ?? row.rawGrade) as PerfGrade" size="small" /></template></el-table-column>
-        <el-table-column label="当前环节" min-width="150"><template #default="{ row }"><el-tag :type="resultStage(row.status, row.approvedAt).type" size="small">{{ resultStage(row.status, row.approvedAt).label }}</el-tag></template></el-table-column>
+        <el-table-column label="当前环节" min-width="150"><template #default="{ row }"><el-tag :type="resultStage(row.status, row.approvedAt, row.publishedAt ?? null).type" size="small">{{ resultStage(row.status, row.approvedAt, row.publishedAt ?? null).label }}</el-tag></template></el-table-column>
         <el-table-column prop="cycleName" label="考核周期" min-width="200" show-overflow-tooltip />
         <el-table-column label="最近复核" min-width="170">
           <template #default="{ row }">
@@ -145,7 +145,7 @@ onMounted(load);
       <div v-loading="loading" class="mobile-result-list department-review-mobile-list">
         <MobileResultCard v-for="item in items" :key="item.id">
           <template #title>{{ item.employeeName }} · {{ item.employeeNo || '—' }}</template>
-          <template #status><el-tag :type="resultStage(item.status, item.approvedAt).type" size="small">{{ resultStage(item.status, item.approvedAt).label }}</el-tag></template>
+          <template #status><el-tag :type="resultStage(item.status, item.approvedAt, item.publishedAt ?? null).type" size="small">{{ resultStage(item.status, item.approvedAt, item.publishedAt ?? null).label }}</el-tag></template>
           <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 岗位</span><span class="mobile-result-field__value">{{ item.deptName || '—' }} · {{ item.position || '—' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">周期结果</span><span class="mobile-result-field__value">{{ formatResultScore(item.totalScore) }} · {{ item.calibratedGrade ?? item.rawGrade ?? '—' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">考核周期</span><span class="mobile-result-field__value">{{ item.cycleName || '—' }}</span></div>

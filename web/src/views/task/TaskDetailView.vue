@@ -20,6 +20,8 @@ import InterviewCard from './components/InterviewCard.vue';
 import SignBlock from '@/components/common/SignBlock.vue';
 import GradeTag from '@/components/common/GradeTag.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
+import PerformanceResultEvidence from '@/components/common/PerformanceResultEvidence.vue';
+import { resultStage } from '@/utils/performance-result-presentation';
 import { useAuthStore } from '@/stores/auth.store';
 import { formatScore } from '@/utils/score';
 import type { AssessmentCycle, TaskDetail, SetIndicatorBody, SubmitSelfEvalBody } from '@/types/api.types';
@@ -616,6 +618,10 @@ async function handleRemind() {
               </el-button>
             </template>
 
+            <el-tag class="result-confirmation-stage" :type="resultStage(task.status, task.approvedAt, task.publishedAt ?? null).type">
+              {{ resultStage(task.status, task.approvedAt, task.publishedAt ?? null).label }}
+            </el-tag>
+
             <el-descriptions :column="2" border size="small">
               <el-descriptions-item v-if="permission.canViewTotalScore.value" label="计算总分">
                 {{ formatScore(task.gradeResult?.calculatedScore) }}
@@ -656,13 +662,14 @@ async function handleRemind() {
               </el-descriptions-item>
             </el-descriptions>
 
-            <div v-if="!permission.isPublished.value" class="result-view__mask">
+            <PerformanceResultEvidence v-if="permission.isResultAvailable.value" :evidence="task.resultEvidence" :records="task.flowRecords" />
+            <div v-if="!permission.isResultAvailable.value" class="result-view__mask">
               <ScoreMask :message="permission.maskMessage.value" />
             </div>
           </ChartCard>
 
           <SignBlock
-            v-if="requestedPerformanceStage === 'result' && ['published','confirmed','appealing','closed'].includes(task.status)"
+            v-if="requestedPerformanceStage === 'result' && permission.isPublished.value"
             class="sign-block-card"
             business-type="assessment_task"
             :business-record-id="task.id"
@@ -671,7 +678,7 @@ async function handleRemind() {
           />
 
           <InterviewCard
-            v-if="requestedPerformanceStage === 'result' && ['published','confirmed','appealing','closed'].includes(task.status)"
+            v-if="requestedPerformanceStage === 'result' && permission.isPublished.value"
             :task="task"
             :interview="task.performanceInterview"
             @refresh="loadDetail"
@@ -697,6 +704,8 @@ async function handleRemind() {
 </template>
 
 <style scoped>
+.result-view { min-width: 0; }
+.result-confirmation-stage { margin-bottom: 12px; }
 .final-grade-entry {
   margin: 0;
 }

@@ -522,8 +522,8 @@ onMounted(async () => {
           </el-table-column>
           <el-table-column label="当前环节" min-width="150">
             <template #default="{ row }">
-              <el-tag :type="resultStage(row.status, row.approvedAt).type" size="small">
-                {{ resultStage(row.status, row.approvedAt).label }}
+              <el-tag :type="resultStage(row.status, row.approvedAt, row.publishedAt ?? null).type" size="small">
+                {{ resultStage(row.status, row.approvedAt, row.publishedAt ?? null).label }}
               </el-tag>
             </template>
           </el-table-column>
@@ -546,7 +546,7 @@ onMounted(async () => {
         <div v-loading="loading" class="mobile-result-list calibration-mobile-list">
           <MobileResultCard v-for="item in pagedCandidates" :key="item.taskId">
             <template #title><el-checkbox :model-value="selectedTaskIds.includes(item.taskId)" :disabled="!canCalibrate(item)" @change="toggleMobileSelection(item, Boolean($event))">{{ item.employeeName }} · {{ item.employeeNo || '—' }}</el-checkbox></template>
-            <template #status><el-tag :type="resultStage(item.status, item.approvedAt).type" size="small">{{ resultStage(item.status, item.approvedAt).label }}</el-tag></template>
+            <template #status><el-tag :type="resultStage(item.status, item.approvedAt, item.publishedAt ?? null).type" size="small">{{ resultStage(item.status, item.approvedAt, item.publishedAt ?? null).label }}</el-tag></template>
             <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 岗位</span><span class="mobile-result-field__value">{{ item.deptName || '—' }} · {{ item.position || '—' }}</span></div>
             <div class="mobile-result-field"><span class="mobile-result-field__label">周期结果</span><span class="mobile-result-field__value">{{ fmtScore(item.calculatedScore) }} · {{ item.calibratedGrade ?? item.rawGrade ?? '—' }}</span></div>
             <div class="mobile-result-field"><span class="mobile-result-field__label">绩效上级</span><span class="mobile-result-field__value">{{ item.managerName || '—' }}</span></div>
@@ -586,8 +586,8 @@ onMounted(async () => {
           score-hint="分数与等级无换算关系"
             :cycle-name="selectedCycle?.name"
             :employee-name="drawer.detail.employeeName"
-            :status-label="resultStage(drawer.detail.status, drawer.detail.approvedAt).label"
-            :status-type="resultStage(drawer.detail.status, drawer.detail.approvedAt).type"
+            :status-label="resultStage(drawer.detail.status, drawer.detail.approvedAt, drawer.detail.publishedAt ?? null).label"
+            :status-type="resultStage(drawer.detail.status, drawer.detail.approvedAt, drawer.detail.publishedAt ?? null).type"
             :department-name="drawer.detail.deptName"
             :position="drawer.detail.position"
             :manager-name="drawer.detail.managerName"

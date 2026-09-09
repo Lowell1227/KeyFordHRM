@@ -2,11 +2,12 @@
 import { ref, reactive, computed, onMounted, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { appealsApi } from '@/api/appeals.api';
-import { tasksApi } from '@/api/tasks.api';
 import { cyclesApi } from '@/api/cycles.api';
 import { departmentsApi } from '@/api/departments.api';
 import GradeTag from '@/components/common/GradeTag.vue';
-import FileUpload from '@/components/common/FileUpload.vue';
+import PerformanceResultDrawer from '@/components/common/PerformanceResultDrawer.vue';
+import ReviewHistory from '@/components/common/ReviewHistory.vue';
+import { resultStage } from '@/utils/performance-result-presentation';
 import DeptTree from '@/components/common/DeptTree.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
@@ -18,10 +19,9 @@ import { formatDateTime } from '@/utils/date';
 import type {
   AppealListItem,
   AppealDetail,
-  Attachment,
   AssessmentCycle,
   Department,
-  TaskListItem,
+  AppealCandidate,
 } from '@/types/api.types';
 import type { AppealStatus, AppealResult, PerfGrade } from '@/types/enums';
 
@@ -121,8 +121,7 @@ const createDialog = reactive({
   visible: false,
   taskId: '',
   reason: '',
-  attachments: [] as Attachment[],
-  taskOptions: [] as TaskListItem[],
+  taskOptions: [] as AppealCandidate[],
   taskLoading: false,
 });
 
@@ -130,7 +129,6 @@ function openCreateDialog() {
   createDialog.visible = true;
   createDialog.taskId = '';
   createDialog.reason = '';
-  createDialog.attachments = [];
   createDialog.taskOptions = [];
   loadTaskOptions('');
 }
@@ -144,8 +142,8 @@ function onTaskSelectFocus() {
 async function loadTaskOptions(keyword: string) {
   createDialog.taskLoading = true;
   try {
-    const res = await tasksApi.findAll({
-      status: 'published',
+    const res = await appealsApi.findCandidates({
+      cycleId: filters.cycleId,
       keyword: keyword.trim() || undefined,
       pageSize: 20,
     });
@@ -157,20 +155,8 @@ async function loadTaskOptions(keyword: string) {
   }
 }
 
-function taskOptionLabel(task: TaskListItem): string {
-  const gradeText = task.grade ?? '未评级';
-  return `${task.employeeName ?? task.employeeNo ?? '未知员工'} - ${task.deptName ?? '-'}（等级 ${gradeText}）`;
-}
-
-function handleCreateUpload(files: File[]) {
-  for (const file of files) {
-    createDialog.attachments.push({
-      name: file.name,
-      url: URL.createObjectURL(file),
-      size: file.size,
-    });
-  }
-  ElMessage.warning('附件上传功能待后端通用上传接口对接，当前仅在本地预览。');
+function taskOptionLabel(task: AppealCandidate): string {
+  return `${task.employeeName}（${task.employeeNo ?? '—'}）· ${task.cycleName}`;
 }
 
 async function submitCreate() {
@@ -187,9 +173,8 @@ async function submitCreate() {
     await appealsApi.create({
       taskId: createDialog.taskId,
       reason: createDialog.reason.trim(),
-      attachments: createDialog.attachments,
     });
-    ElMessage.success('申诉录入成功');
+    ElMessage.success('申诉已发起，已退回直属上级重新评定');
     createDialog.visible = false;
     search();
   } finally {
@@ -229,6 +214,12 @@ async function loadDetail(id: string) {
 }
 
 const isModified = computed(() => detailDialog.result === 'modified');
+const canResolve = computed(() => detailDialog.appeal?.canResolve === true);
+
+function appealStage(appeal: AppealListItem): string {
+  if (appeal.workflowType === 'prepublication' && appeal.taskStatus === 'manager_scoring') return '待直属上级重新评定';
+  return appeal.taskStatus ? resultStage(appeal.taskStatus, appeal.approvedAt, appeal.publishedAt ?? null).label : '—';
+}
 
 function asGrade(value: string | null | undefined): PerfGrade | null {
   if (!value) return null;
@@ -237,7 +228,7 @@ function asGrade(value: string | null | undefined): PerfGrade | null {
 
 async function submitResolve() {
   const appeal = detailDialog.appeal;
-  if (!appeal) return;
+  if (!appeal || !canResolve.value) return;
 
   if (!detailDialog.resolution.trim()) {
     ElMessage.warning('请填写处理说明');
@@ -392,6 +383,9 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
             <span v-else>-</span>
           </template>
         </el-table-column>
+        <el-table-column label="当前环节" min-width="180">
+          <template #default="{ row }">{{ appealStage(row as AppealListItem) }}</template>
+        </el-table-column>
         <el-table-column label="创建时间" width="170">
           <template #default="{ row }">
             {{ formatDateTime(row.createdAt) }}
@@ -399,7 +393,7 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
         </el-table-column>
         <el-table-column label="操作" width="100" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openDetail(row as AppealListItem)">详情</el-button>
+            <el-button link type="primary" size="small" @click="openDetail(row as AppealListItem)">查看详情</el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -415,7 +409,8 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
           <div class="mobile-result-field"><span class="mobile-result-field__label">考核周期</span><span class="mobile-result-field__value">{{ appeal.cycle?.name ?? '-' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">处理结果</span><span class="mobile-result-field__value">{{ appeal.finalResult ? resultText(appeal.finalResult) : '-' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">创建时间</span><span class="mobile-result-field__value">{{ formatDateTime(appeal.createdAt) }}</span></div>
-          <template #actions><el-button link type="primary" @click="openDetail(appeal)">详情</el-button></template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">当前环节</span><span class="mobile-result-field__value">{{ appealStage(appeal) }}</span></div>
+          <template #actions><el-button link type="primary" @click="openDetail(appeal)">查看详情</el-button></template>
         </MobileResultCard>
       </div>
 
@@ -435,15 +430,15 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
     <el-dialog
       v-model="createDialog.visible"
       title="录入申诉"
-      width="560px"
+      width="min(560px, calc(100vw - 24px))"
       :close-on-click-modal="false"
       destroy-on-close
     >
       <el-form label-width="90px">
-        <el-form-item label="被申诉任务" required>
+        <el-form-item label="员工及周期" required>
           <el-select
             v-model="createDialog.taskId"
-            placeholder="搜索已公示任务"
+            placeholder="搜索已审批、未公示的员工结果"
             filterable
             remote
             clearable
@@ -472,26 +467,18 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
           />
         </el-form-item>
 
-        <el-form-item label="附件">
-          <FileUpload
-            :model-value="createDialog.attachments"
-            @upload="handleCreateUpload"
-            @update:model-value="createDialog.attachments = $event"
-          />
-        </el-form-item>
       </el-form>
 
       <template #footer>
         <el-button @click="createDialog.visible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="submitCreate">提交</el-button>
+        <el-button type="primary" :loading="submitting" @click="submitCreate">发起重评</el-button>
       </template>
     </el-dialog>
 
     <!-- 详情 / 处理 -->
-    <el-dialog
+    <PerformanceResultDrawer
       v-model="detailDialog.visible"
       title="申诉详情"
-      width="640px"
       :close-on-click-modal="false"
       destroy-on-close
     >
@@ -508,6 +495,7 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
           <el-descriptions-item label="考核周期" :span="2">
             {{ detailDialog.appeal.cycle?.name ?? '-' }}
           </el-descriptions-item>
+          <el-descriptions-item label="当前环节" :span="2">{{ appealStage(detailDialog.appeal) }}</el-descriptions-item>
           <el-descriptions-item label="计算分">
             {{ detailDialog.appeal.taskGrade?.calculatedScore?.toFixed(2) ?? '-' }}
           </el-descriptions-item>
@@ -519,12 +507,17 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
           </el-descriptions-item>
         </el-descriptions>
 
+        <el-descriptions v-if="detailDialog.appeal.originalResult" :column="2" border class="appeals-view__section">
+          <el-descriptions-item label="申诉前得分">{{ detailDialog.appeal.originalResult.calculatedScore?.toFixed(2) ?? '—' }}</el-descriptions-item>
+          <el-descriptions-item label="申诉前等级"><GradeTag :grade="detailDialog.appeal.originalResult.calibratedGrade ?? detailDialog.appeal.originalResult.rawGrade" size="small" /></el-descriptions-item>
+        </el-descriptions>
+
         <div class="appeals-view__section">
           <div class="appeals-view__section-title">申诉事由</div>
           <div class="appeals-view__section-body">{{ detailDialog.appeal.reason }}</div>
         </div>
 
-        <div class="appeals-view__section">
+        <div v-if="detailDialog.appeal.attachments?.length" class="appeals-view__section">
           <div class="appeals-view__section-title">附件</div>
           <ul v-if="detailDialog.appeal.attachments?.length" class="appeals-view__attachments">
             <li v-for="(file, idx) in detailDialog.appeal.attachments" :key="idx">
@@ -554,7 +547,7 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
         </template>
 
         <!-- 待处理表单 -->
-        <template v-else>
+        <template v-else-if="canResolve">
           <el-divider />
           <el-form label-width="90px">
             <el-form-item label="处理结果" required>
@@ -597,12 +590,13 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
             </el-form-item>
           </el-form>
         </template>
+        <ReviewHistory :records="detailDialog.appeal.flowRecords" />
       </template>
 
       <template #footer>
         <el-button @click="detailDialog.visible = false">关闭</el-button>
         <el-button
-          v-if="detailDialog.appeal?.status === 'pending'"
+          v-if="canResolve"
           type="primary"
           :loading="submitting"
           @click="submitResolve"
@@ -610,7 +604,7 @@ function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | '
           提交处理
         </el-button>
       </template>
-    </el-dialog>
+    </PerformanceResultDrawer>
   </div>
 </template>
 

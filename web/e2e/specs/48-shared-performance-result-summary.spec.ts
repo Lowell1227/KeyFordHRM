@@ -45,10 +45,10 @@ async function setup(page: Page, options: { status?: string; approvedAt?: string
   return writes;
 }
 
-test('整周期结果详情识别结果审批已通过并等待公示', async ({ page }) => {
+test('整周期结果详情识别结果审批已通过并等待员工确认', async ({ page }) => {
   await setup(page, { status: 'approval', approvedAt: '2026-09-08T12:00:00.000Z' });
   await page.goto(`/tasks/${taskId}/final-grade`);
-  await expect(page.getByTestId('manager-period-results').getByTestId('performance-result-summary')).toContainText('已通过，待公示');
+  await expect(page.getByTestId('manager-period-results').getByTestId('performance-result-summary')).toContainText('待员工确认');
 });
 
 for (const width of [1440, 390]) {

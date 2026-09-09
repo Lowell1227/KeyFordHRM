@@ -89,8 +89,9 @@ function formatScore(score?: number | null): string {
 }
 
 function canViewTaskDetail(task: unknown): boolean {
-  const approvalTask = task as Pick<ApprovalTaskView, 'employeeId' | 'status'>;
+  const approvalTask = task as Pick<ApprovalTaskView, 'employeeId' | 'status' | 'approvedAt'>;
   return Boolean(auth.user && approvalTask.employeeId && (approvalTask.employeeId !== auth.user.id
+    || (approvalTask.status === 'approval' && approvalTask.approvedAt)
     || ['published', 'confirmed', 'appealing', 'closed'].includes(approvalTask.status)));
 }
 
@@ -117,7 +118,7 @@ async function openDetail(taskId: string) {
     if (!detail || detail.id !== taskId || detail.cycleId !== cycleId) {
       throw new Error('任务详情与当前考核周期不一致，请重试');
     }
-    if (!canViewTaskDetail(detail)) throw new Error('本人结果公示后可查看');
+    if (!canViewTaskDetail(detail)) throw new Error('本人结果审批通过后可查看');
     detailDrawer.value.detail = detail;
   } catch (error) {
     if (request !== detailRequest || cycleId !== selectedCycleId.value) return;
@@ -550,8 +551,8 @@ function handleBatchReject() {
           </el-table-column>
           <el-table-column label="当前环节" min-width="150">
             <template #default="{ row }">
-              <el-tag :type="resultStage(row.status, row.approvedAt).type" size="small">
-                {{ resultStage(row.status, row.approvedAt).label }}
+              <el-tag :type="resultStage(row.status, row.approvedAt, row.publishedAt ?? null).type" size="small">
+                {{ resultStage(row.status, row.approvedAt, row.publishedAt ?? null).label }}
               </el-tag>
             </template>
           </el-table-column>
@@ -579,7 +580,7 @@ function handleBatchReject() {
                   退回
                 </el-button>
               </template>
-              <span v-if="!canViewTaskDetail(row)" class="text-secondary">公示后可查看</span>
+              <span v-if="!canViewTaskDetail(row)" class="text-secondary">审批通过后可查看</span>
               </div>
             </template>
           </el-table-column>
@@ -591,14 +592,14 @@ function handleBatchReject() {
               <el-checkbox v-if="canOperateApproval" :model-value="selectedTaskIds.includes(item.id)" :disabled="!canOperateTask(item)" @change="toggleMobileSelection(item, Boolean($event))">{{ item.employeeName }} · {{ item.employeeNo || '—' }}</el-checkbox>
               <span v-else>{{ item.employeeName }} · {{ item.employeeNo || '—' }}</span>
             </template>
-            <template #status><el-tag :type="resultStage(item.status, item.approvedAt).type" size="small">{{ resultStage(item.status, item.approvedAt).label }}</el-tag></template>
+            <template #status><el-tag :type="resultStage(item.status, item.approvedAt, item.publishedAt ?? null).type" size="small">{{ resultStage(item.status, item.approvedAt, item.publishedAt ?? null).label }}</el-tag></template>
             <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 岗位</span><span class="mobile-result-field__value">{{ item.deptName || '—' }} · {{ item.position || '—' }}</span></div>
             <div class="mobile-result-field"><span class="mobile-result-field__label">周期结果</span><span class="mobile-result-field__value">{{ formatScore(item.totalScore) }} · {{ item.calibratedGrade ?? item.rawGrade ?? '—' }}</span></div>
             <template #actions>
               <el-button v-if="canViewTaskDetail(item)" link type="primary" @click="openDetail(item.id)">查看详情</el-button>
               <el-button v-if="canOperateTask(item)" link type="primary" :loading="submitting" @click="handleApproveSingleWithConfirm(item.id)">通过</el-button>
               <el-button v-if="canOperateTask(item)" link type="danger" :loading="submitting" @click="handleRejectSingle(item.id)">退回</el-button>
-              <span v-if="!canViewTaskDetail(item)" class="text-secondary">公示后可查看</span>
+              <span v-if="!canViewTaskDetail(item)" class="text-secondary">审批通过后可查看</span>
             </template>
           </MobileResultCard>
         </div>
@@ -623,8 +624,8 @@ function handleBatchReject() {
           class="approval-view__detail-summary"
           :cycle-name="detailDrawer.detail.cycleName || selectedCycle?.name"
           :employee-name="detailDrawer.detail.employeeName || '—'"
-          :status-label="resultStage(detailDrawer.detail.status, detailDrawer.detail.approvedAt).label"
-          :status-type="resultStage(detailDrawer.detail.status, detailDrawer.detail.approvedAt).type"
+          :status-label="resultStage(detailDrawer.detail.status, detailDrawer.detail.approvedAt, detailDrawer.detail.publishedAt ?? null).label"
+          :status-type="resultStage(detailDrawer.detail.status, detailDrawer.detail.approvedAt, detailDrawer.detail.publishedAt ?? null).type"
           :department-name="detailDrawer.detail.deptName"
           :position="detailDrawer.detail.position"
           :manager-name="detailDrawer.detail.managerName"

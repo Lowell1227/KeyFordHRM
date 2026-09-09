@@ -502,7 +502,7 @@ export interface AssessmentCycle {
     status: TaskStatus;
     isExempt: boolean;
   }>;
-  publishedAt?: string;
+  publishedAt?: string | null;
   closedAt?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -771,14 +771,14 @@ export interface GradeResult {
   vetoOperatorName?: string;
   coefficient?: number;
   isPublished: boolean;
-  publishedAt?: string;
+  publishedAt?: string | null;
   hrCalibratorId?: string;
   hrCalibratorName?: string;
   hrCalibratedAt?: string;
   approverId?: string;
   approverName?: string;
   approvedAt?: string;
-  employeeConfirmedAt?: string;
+  employeeConfirmedAt?: string | null;
 }
 
 export interface AssessmentTask {
@@ -808,8 +808,8 @@ export interface AssessmentTask {
   deptReviewedAt?: string;
   hrCalibratedAt?: string;
   approvedAt?: string | null;
-  publishedAt?: string;
-  employeeConfirmedAt?: string;
+  publishedAt?: string | null;
+  employeeConfirmedAt?: string | null;
   closedAt?: string;
   createdAt?: string;
   updatedAt?: string;
@@ -1189,6 +1189,8 @@ export interface GradeDistributionEntry {
 }
 
 export interface CalibrationCandidate {
+  publishedAt?: string | null;
+  employeeConfirmedAt?: string | null;
   taskId: string;
   canCalibrate?: boolean;
   canViewDetail?: boolean;
@@ -1245,6 +1247,8 @@ export interface ReviewHistoryRecord {
 }
 
 export interface CalibrationCandidateDetail {
+  publishedAt?: string | null;
+  employeeConfirmedAt?: string | null;
   resultEvidence?: ResultEvidence;
   flowRecords?: ReviewHistoryRecord[];
   taskId: string;
@@ -1283,6 +1287,8 @@ export interface CalibrationCandidateDetail {
 
 /** 整周期结果评定页数据。 */
 export interface FinalGradeDetail {
+  publishedAt?: string | null;
+  employeeConfirmedAt?: string | null;
   resultEvidence?: ResultEvidence;
   flowRecords?: ReviewHistoryRecord[];
   comment?: string | null;
@@ -1333,6 +1339,8 @@ export interface ApprovalOverview {
 }
 
 export interface ApprovalTaskView {
+  publishedAt?: string | null;
+  employeeConfirmedAt?: string | null;
   id: string;
   cycleId: string;
   employeeId: string;
@@ -1553,6 +1561,12 @@ export interface SubmitManagerPeriodReviewBody extends SaveManagerPeriodReviewDr
 
 /** 申诉列表项（对齐后端 AppealListItem，不含 coefficient）。 */
 export interface AppealListItem {
+  workflowType?: 'prepublication' | 'legacy';
+  taskStatus?: TaskStatus;
+  approvedAt?: string | null;
+  employeeConfirmedAt?: string | null;
+  publishedAt?: string | null;
+  canResolve?: boolean;
   id: string;
   taskId: string;
   cycleId: string;
@@ -1569,6 +1583,12 @@ export interface AppealListItem {
 
 /** 申诉详情（对齐后端 AppealDetail）。 */
 export interface AppealDetail extends AppealListItem {
+  flowRecords?: ReviewHistoryRecord[];
+  originalResult?: {
+    calculatedScore: number | null;
+    rawGrade: PerfGrade | null;
+    calibratedGrade: PerfGrade | null;
+  } | null;
   appellantId: string;
   attachments: Attachment[];
   appealDeadline: string | null;
@@ -1608,6 +1628,16 @@ export interface AppealQuery {
   cycleId?: string;
   deptId?: string;
   keyword?: string;
+}
+
+export interface AppealCandidate {
+  id: string;
+  employeeName: string;
+  employeeNo: string | null;
+  deptName: string | null;
+  cycleName: string;
+  status: TaskStatus;
+  approvedAt: string | null;
 }
 
 export interface CreateAppealBody {

@@ -4,6 +4,7 @@ import type { PerfGrade, TaskStatus } from "@/types/enums";
 
 export type PublicationState =
   | "pending_approval"
+  | "pending_confirmation"
   | "ready_to_publish"
   | "published"
   | "confirmed"

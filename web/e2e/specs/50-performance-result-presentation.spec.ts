@@ -60,7 +60,7 @@ for (const width of [1440, 390]) {
       await expect(resultSurface).toContainText(employeeName);
       await expect(resultSurface).toContainText('QA019');
       await expect(resultSurface).toContainText('88.00');
-      await expect(resultSurface).toContainText('已审批，待公示');
+      await expect(resultSurface).toContainText('待员工确认');
       if (path === 'calibration') {
         await expect(view.locator('.ratio-item').filter({ has: page.locator('.grade-tag', { hasText: /^A$/ }) }).locator('.ratio-count')).toHaveText('1人');
       }
