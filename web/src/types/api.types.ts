@@ -833,6 +833,7 @@ export interface DepartmentReviewListItem extends TaskListItem {
 export interface DepartmentReviewListPage extends Paginated<DepartmentReviewListItem> { pendingTotal: number }
 
 export interface TaskDetail extends AssessmentTask {
+  resultEvidence?: ResultEvidence;
   managerStageState?: TeamStageState;
   workflowVersion?: number;
   periods?: AssessmentPeriodSummary[];
@@ -1242,6 +1243,7 @@ export interface ReviewHistoryRecord {
 }
 
 export interface CalibrationCandidateDetail {
+  resultEvidence?: ResultEvidence;
   flowRecords?: ReviewHistoryRecord[];
   taskId: string;
   employeeName: string;
@@ -1279,6 +1281,7 @@ export interface CalibrationCandidateDetail {
 
 /** 整周期结果评定页数据。 */
 export interface FinalGradeDetail {
+  resultEvidence?: ResultEvidence;
   flowRecords?: ReviewHistoryRecord[];
   comment?: string | null;
   departmentReview?: { combined: boolean; reviewerName: string | null };
@@ -2305,4 +2308,10 @@ export type UpdateActionItemBody = Partial<Omit<CreateActionItemBody, 'objective
 
 export interface UpdateActionItemProgressBody {
   progress: number;
+}
+
+/** Shared, read-only result evidence supplied after the current workflow's authorization. */
+export interface ResultEvidence {
+  periods: Array<{ periodKey: string; status?: string; selfScoreTotal?: number | null; managerScoreTotal?: number | null; selfGrade?: PerfGrade | null; managerGrade?: PerfGrade | null }>;
+  indicators: Array<{ id?: string; name: string; weight: number; type?: string; avgSelfScore: number | null; avgManagerScore: number | null }>;
 }

@@ -377,6 +377,22 @@ describe('TasksService', () => {
   });
 
   describe('findOne', () => {
+    it.each([
+      ['approval', 'head-1', null, 88],
+      ['approval', 'emp-1', null, null],
+      ['published', 'emp-1', { total_score: false, grade: false, indicator_scores: false }, null],
+      ['published', 'emp-1', { total_score: true, grade: true, indicator_scores: true }, 88],
+    ] as const)('shared evidence keeps authorization and own visibility for %s / %s', async (status, id, visible, managerScore) => {
+      const task: any = buildFullTask(status, visible);
+      task.periods = [{ periodKey: '2026-07', status: 'completed', selfScoreTotal: new Prisma.Decimal(84), managerScoreTotal: new Prisma.Decimal(88), selfGrade: 'B', managerGrade: 'A', indicatorReviews: [{ selfScore: new Prisma.Decimal(84), managerScore: new Prisma.Decimal(88), indicatorVersionItem: { id: 'version-one', sourceInstanceId: 'ind-1', name: '指标A', weight: new Prisma.Decimal(1), indicatorType: 'kpi' } }] }];
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+      const result = await service.findOne('task-1', makeViewer({ id }));
+      expect(result.resultEvidence?.periods[0]).toMatchObject({ selfScoreTotal: 84, managerScoreTotal: managerScore, managerGrade: managerScore == null ? null : 'A' });
+      expect(result.resultEvidence?.indicators[0]).toMatchObject({ name: '指标A', avgSelfScore: 84, avgManagerScore: managerScore });
+      const query = prisma.assessmentTask.findUnique.mock.calls[0][0];
+      expect(query.include.periods.select.indicatorReviews.select.indicatorVersionItem.select.sourceInstanceId).toBe(true);
+    });
+
     it('returns position and approval time needed by the embedded result drawer', async () => {
       const task: any = buildFullTask('approval');
       task.approvedAt = new Date('2026-09-09T02:30:00.000Z');

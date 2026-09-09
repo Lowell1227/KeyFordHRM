@@ -1,3 +1,4 @@
+import { buildResultEvidence, maskResultEvidence, RESULT_PERIOD_SELECT, ResultEvidence } from '@/tasks/result-evidence';
 import {
   BadRequestException,
   ConflictException,
@@ -58,6 +59,7 @@ export interface PublicationRecord {
 }
 
 export interface PublicationRecordDetail extends PublicationRecord {
+  resultEvidence?: ResultEvidence;
   managerName: string | null;
   flowRecords: ReturnType<typeof mapReviewHistory>;
 }
@@ -81,12 +83,14 @@ interface PublishVisibleFields {
   total_score: boolean;
   grade: boolean;
   manager_comment: boolean;
+  indicator_scores: boolean;
 }
 
 const DEFAULT_PUBLISH_VISIBLE_FIELDS: PublishVisibleFields = {
   total_score: true,
   grade: true,
   manager_comment: true,
+  indicator_scores: true,
 };
 
 /**
@@ -210,6 +214,7 @@ export class PublishService {
             publishedAt: true,
           },
         },
+        periods: { orderBy: { sequence: "asc" }, select: RESULT_PERIOD_SELECT },
         flowRecords: {
           where: { nodeType: { in: REVIEW_HISTORY_NODES } },
           orderBy: [{ createdAt: "desc" }, { id: "desc" }],
@@ -228,9 +233,11 @@ export class PublishService {
       cycle.publishVisibleFields,
     );
     const flowRecords = mapReviewHistory(task.flowRecords);
+    const evidence = buildResultEvidence(task.periods);
     return {
       ...this.mapPublicationRecord(task, cycle, viewer),
       managerName: task.manager?.name ?? null,
+      resultEvidence: task.employeeId === viewer.id ? maskResultEvidence(evidence, visibleFields) : evidence,
       flowRecords:
         task.employeeId === viewer.id &&
         PUBLISHED_TASK_STATUSES.includes(task.status)
@@ -513,6 +520,7 @@ export class PublishService {
       total_score:
         typeof fields.total_score === "boolean" ? fields.total_score : true,
       grade: typeof fields.grade === "boolean" ? fields.grade : true,
+      indicator_scores: typeof fields.indicator_scores === "boolean" ? fields.indicator_scores : true,
       manager_comment:
         typeof fields.manager_comment === "boolean"
           ? fields.manager_comment

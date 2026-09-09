@@ -42,15 +42,17 @@ export class ApprovalService {
     private readonly notificationsService: NotificationsService,
   ) {}
 
-  /** GET /cycles/:id/approval — 按审批人过滤的待审批列表。 */
+  /** GET /cycles/:id/approval — 按冻结审批人保留待办及已办理记录。 */
   async getApprovalList(cycleId: string, viewer: AuthUser): Promise<ApprovalListItem[]> {
     await this.getCycleOrThrow(cycleId);
 
     const where: Prisma.AssessmentTaskWhereInput = {
       cycleId,
-      status: 'approval',
-      approvedAt: null,
       isExempt: false,
+      OR: [
+        { status: { in: ['approval', 'published', 'confirmed', 'appealing', 'closed'] } },
+        { flowRecords: { some: { nodeType: 'approval' } } },
+      ],
     };
 
     if (!this.canViewAll(viewer)) {

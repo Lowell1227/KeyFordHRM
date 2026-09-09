@@ -482,6 +482,7 @@ describe("PublishService", () => {
         employee,
         dept,
         manager,
+        periods: [{ periodKey: "2026-07", status: "completed", selfScoreTotal: new Prisma.Decimal(84), managerScoreTotal: new Prisma.Decimal(88), selfGrade: "B", managerGrade: "A", indicatorReviews: [{ selfScore: new Prisma.Decimal(84), managerScore: new Prisma.Decimal(88), indicatorVersionItem: { id: "v-one", sourceInstanceId: "goal-one", name: "月度指标", weight: new Prisma.Decimal(1), indicatorType: "kpi" } }] }],
         gradeResult: {
           approvedAt: new Date("2026-09-01"),
           calculatedScore: new Prisma.Decimal(88),
@@ -520,6 +521,7 @@ describe("PublishService", () => {
         rawGrade: "B",
         calibratedGrade: "A",
         publicationState: "published",
+        resultEvidence: { periods: [{ periodKey: "2026-07", selfScoreTotal: 84, managerScoreTotal: 88 }], indicators: [{ name: "月度指标", avgManagerScore: 88 }] },
         flowRecords: [{ actorName: "审批人丙", comment: "同意公示" }],
       });
       expect(result).not.toHaveProperty("selfEvalSummary");
@@ -560,6 +562,7 @@ describe("PublishService", () => {
           employee,
           dept,
           manager,
+        periods: [{ periodKey: "2026-07", status: "completed", selfScoreTotal: new Prisma.Decimal(84), managerScoreTotal: new Prisma.Decimal(88), selfGrade: "B", managerGrade: "A", indicatorReviews: [{ selfScore: new Prisma.Decimal(84), managerScore: new Prisma.Decimal(88), indicatorVersionItem: { id: "v-one", sourceInstanceId: "goal-one", name: "月度指标", weight: new Prisma.Decimal(1), indicatorType: "kpi" } }] }],
           gradeResult: {
             approvedAt: new Date("2026-09-01"),
             calculatedScore: new Prisma.Decimal(96),
@@ -598,6 +601,7 @@ describe("PublishService", () => {
           makeViewer(),
         );
 
+        expect(result.resultEvidence?.periods[0]).toMatchObject({ managerScoreTotal: visible.total_score === false ? null : 88, managerGrade: visible.grade === false ? null : 'A' });
         expect(result).toMatchObject({
           totalScore: expected.totalScore,
           rawGrade: expected.rawGrade,
@@ -635,6 +639,7 @@ describe("PublishService", () => {
         employee,
         dept,
         manager,
+        periods: [{ periodKey: "2026-07", status: "completed", selfScoreTotal: new Prisma.Decimal(84), managerScoreTotal: new Prisma.Decimal(88), selfGrade: "B", managerGrade: "A", indicatorReviews: [{ selfScore: new Prisma.Decimal(84), managerScore: new Prisma.Decimal(88), indicatorVersionItem: { id: "v-one", sourceInstanceId: "goal-one", name: "月度指标", weight: new Prisma.Decimal(1), indicatorType: "kpi" } }] }],
         gradeResult: {
           approvedAt: new Date("2026-09-01"),
           calculatedScore: new Prisma.Decimal(96),

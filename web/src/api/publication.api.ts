@@ -1,5 +1,5 @@
 import http from "./http";
-import type { Paginated, ReviewHistoryRecord } from "@/types/api.types";
+import type { Paginated, ReviewHistoryRecord, ResultEvidence } from "@/types/api.types";
 import type { PerfGrade, TaskStatus } from "@/types/enums";
 
 export type PublicationState =
@@ -33,6 +33,7 @@ export interface PublicationRecord {
 }
 
 export interface PublicationRecordDetail extends PublicationRecord {
+  resultEvidence?: ResultEvidence;
   managerName: string | null;
   flowRecords: ReviewHistoryRecord[];
 }

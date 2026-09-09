@@ -10,7 +10,7 @@ function apiPost<T>(url: string, data?: unknown): Promise<T> {
 }
 
 export const approvalApi = {
-  /** GET /cycles/:id/approval — 审批人待审批列表 */
+  /** GET /cycles/:id/approval — 审批人待办与已办理记录 */
   getApprovalList(cycleId: string): Promise<ApprovalTaskView[]> {
     return apiGet(`/cycles/${cycleId}/approval`);
   },

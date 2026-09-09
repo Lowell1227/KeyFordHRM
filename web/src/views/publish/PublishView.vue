@@ -15,7 +15,7 @@ import ChartCard from "@/components/common/ChartCard.vue";
 import PerformanceResultSummary from "@/components/common/PerformanceResultSummary.vue";
 import PerformanceResultDrawer from "@/components/common/PerformanceResultDrawer.vue";
 import { resultStage, formatResultScore } from "@/utils/performance-result-presentation";
-import ReviewHistory from "@/components/common/ReviewHistory.vue";
+import PerformanceResultEvidence from '@/components/common/PerformanceResultEvidence.vue';
 import { usePagination } from "@/composables/usePagination";
 
 import { formatDateTime } from "@/utils/date";
@@ -494,6 +494,7 @@ function closeDetail() {
       </div>
       <template v-else-if="detailDrawer.detail">
         <PerformanceResultSummary
+          score-hint="分数与等级无换算关系"
           :cycle-name="detailDrawer.detail.cycleName"
           :employee-name="detailDrawer.detail.employeeName"
           :status-label="resultStage(detailDrawer.detail.status, detailDrawer.detail.approvedAt).label"
@@ -501,11 +502,11 @@ function closeDetail() {
           :department-name="detailDrawer.detail.deptName"
           :position="detailDrawer.detail.position"
           :manager-name="detailDrawer.detail.managerName"
-          :score="detailDrawer.detail.totalScore"
-          :raw-grade="detailDrawer.detail.rawGrade"
-          :calibrated-grade="detailDrawer.detail.calibratedGrade"
+          :score="(detailDrawer.detail.totalScore) ?? null"
+          :raw-grade="(detailDrawer.detail.rawGrade) ?? null"
+          :calibrated-grade="(detailDrawer.detail.calibratedGrade) ?? null"
         />
-        <ReviewHistory :records="detailDrawer.detail.flowRecords" />
+        <PerformanceResultEvidence :evidence="detailDrawer.detail.resultEvidence" :records="detailDrawer.detail.flowRecords" />
       </template>
     </PerformanceResultDrawer>
   </div>

@@ -7,10 +7,9 @@ import { useCycleStore } from '@/stores/cycle.store';
 import GradeTag from '@/components/common/GradeTag.vue';
 import GradeDistChart from '@/components/charts/GradeDistChart.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
-import ReviewHistory from '@/components/common/ReviewHistory.vue';
+import PerformanceResultEvidence from '@/components/common/PerformanceResultEvidence.vue';
 import PerformanceResultSummary from '@/components/common/PerformanceResultSummary.vue';
 import PerformanceResultDrawer from '@/components/common/PerformanceResultDrawer.vue';
-import PerformancePeriodResults from '@/components/common/PerformancePeriodResults.vue';
 import { resultStage } from '@/utils/performance-result-presentation';
 import EmptyState from '@/components/common/EmptyState.vue';
 import type { CalibrationCandidate, CalibrationCandidateDetail, CalibrationSummary, AssessmentCycle } from '@/types/api.types';
@@ -547,6 +546,7 @@ onMounted(async () => {
       <div v-loading="drawer.loading">
         <template v-if="drawer.detail">
           <PerformanceResultSummary
+          score-hint="分数与等级无换算关系"
             :cycle-name="selectedCycle?.name"
             :employee-name="drawer.detail.employeeName"
             :status-label="resultStage(drawer.detail.status, drawer.detail.approvedAt).label"
@@ -554,31 +554,12 @@ onMounted(async () => {
             :department-name="drawer.detail.deptName"
             :position="drawer.detail.position"
             :manager-name="drawer.detail.managerName"
-            :score="drawer.detail.calculatedScore"
-            score-hint="分数与等级无换算关系"
-            :raw-grade="drawer.detail.finalGrade"
-            :calibrated-grade="drawer.detail.calibratedGrade"
+            :score="(drawer.detail.calculatedScore) ?? null"
+            :raw-grade="(drawer.detail.finalGrade) ?? null"
+            :calibrated-grade="(drawer.detail.calibratedGrade) ?? null"
           />
 
-          <PerformancePeriodResults :periods="drawer.detail.periods" />
-
-          <ReviewHistory :records="drawer.detail.flowRecords" />
-          <el-collapse class="drawer-section">
-            <el-collapse-item title="指标汇总（跨月平均）" name="indicators">
-              <el-table :data="drawer.detail.indicators" class="performance-result-table">
-                <el-table-column prop="name" label="指标" min-width="140" show-overflow-tooltip />
-                <el-table-column label="权重" width="70">
-                  <template #default="{ row }">{{ formatRatio(row.weight) }}</template>
-                </el-table-column>
-                <el-table-column label="自评均分" width="90">
-                  <template #default="{ row }">{{ fmtScore(row.avgSelfScore) }}</template>
-                </el-table-column>
-                <el-table-column label="上级均分" width="90">
-                  <template #default="{ row }">{{ fmtScore(row.avgManagerScore) }}</template>
-                </el-table-column>
-              </el-table>
-            </el-collapse-item>
-          </el-collapse>
+          <PerformanceResultEvidence :evidence="drawer.detail.resultEvidence" :periods="drawer.detail.periods" :indicators="drawer.detail.indicators" :records="drawer.detail.flowRecords" />
         </template>
       </div>
     </PerformanceResultDrawer>

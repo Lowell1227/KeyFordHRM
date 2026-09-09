@@ -6,7 +6,7 @@ import { approvalApi } from '@/api/approval.api';
 import { cyclesApi } from '@/api/cycles.api';
 import { tasksApi } from '@/api/tasks.api';
 import GradeTag from '@/components/common/GradeTag.vue';
-import ReviewHistory from '@/components/common/ReviewHistory.vue';
+import PerformanceResultEvidence from '@/components/common/PerformanceResultEvidence.vue';
 import PerformanceResultSummary from '@/components/common/PerformanceResultSummary.vue';
 import PerformanceResultDrawer from '@/components/common/PerformanceResultDrawer.vue';
 import { resultStage } from '@/utils/performance-result-presentation';
@@ -119,9 +119,18 @@ async function openDetail(taskId: string) {
 
 async function loadCycles() {
   try {
-    // 周期级状态滞后于逐人流转，按 active 组取周期，待办由 approver_id 过滤。
-    const res = await cyclesApi.findAll({ group: 'active' });
-    cycles.value = res.items;
+    // Retained records remain reachable after cycle closure; server scope stays unchanged.
+    const items: AssessmentCycle[] = [];
+    for (const group of ['active', 'finished'] as const) {
+      let page = 1;
+      while (true) {
+        const res = await cyclesApi.findAll({ group, page, pageSize: 100 });
+        items.push(...res.items);
+        if (page * 100 >= res.total || res.items.length < 100) break;
+        page++;
+      }
+    }
+    cycles.value = [...new Map(items.map(cycle => [cycle.id, cycle])).values()];
   } catch {
     cycles.value = [];
   }
@@ -571,6 +580,7 @@ function handleBatchReject() {
       </div>
       <template v-else-if="detailDrawer.detail">
         <PerformanceResultSummary
+          score-hint="分数与等级无换算关系"
           class="approval-view__detail-summary"
           :cycle-name="detailDrawer.detail.cycleName || selectedCycle?.name"
           :employee-name="detailDrawer.detail.employeeName || '—'"
@@ -579,11 +589,11 @@ function handleBatchReject() {
           :department-name="detailDrawer.detail.deptName"
           :position="detailDrawer.detail.position"
           :manager-name="detailDrawer.detail.managerName"
-          :score="detailDrawer.detail.gradeResult?.calculatedScore"
-          :raw-grade="detailDrawer.detail.gradeResult?.rawGrade"
-          :calibrated-grade="detailDrawer.detail.gradeResult?.calibratedGrade"
+          :score="(detailDrawer.detail.gradeResult?.calculatedScore) ?? null"
+          :raw-grade="(detailDrawer.detail.gradeResult?.rawGrade) ?? null"
+          :calibrated-grade="(detailDrawer.detail.gradeResult?.calibratedGrade) ?? null"
         />
-        <ReviewHistory :records="detailDrawer.detail.flowRecords" />
+        <PerformanceResultEvidence :evidence="detailDrawer.detail.resultEvidence" :records="detailDrawer.detail.flowRecords" />
       </template>
     </PerformanceResultDrawer>
 

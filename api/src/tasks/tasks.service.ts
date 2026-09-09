@@ -1,3 +1,4 @@
+import { buildResultEvidence, maskResultEvidence, RESULT_PERIOD_SELECT, ResultEvidence } from '@/tasks/result-evidence';
 import { ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AssessmentPeriodStatus, AssessmentPeriodType, AssessmentTask, IndicatorInstance, IndicatorVisibilityScope, ObjectiveLevel, Prisma, SysRole, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -74,6 +75,7 @@ export interface TaskListItem {
 
 /** 任务详情。 */
 export interface TaskDetail extends TaskListItem {
+  resultEvidence?: ResultEvidence;
   managerStageState: TeamStageState;
   workflowVersion: number;
   employeeNo: string | null;
@@ -472,6 +474,7 @@ export class TasksService {
           orderBy: { sequence: 'asc' },
           select: {
             id: true,
+            ...RESULT_PERIOD_SELECT,
             periodKey: true,
             periodType: true,
             sequence: true,
@@ -541,6 +544,7 @@ export class TasksService {
       new Set(visibleObjectives.map((objective) => objective.id)),
       visibleParentIndicators,
     );
+    detail.resultEvidence = buildResultEvidence(task.periods);
     detail.workflowContext = await this.buildWorkflowContext(task, viewer);
 
     // D18：员工本人需区分公示前/公示后
@@ -2247,6 +2251,7 @@ export class TasksService {
 
   private applyMask(detail: TaskDetail, visible: PublishVisibleFields): TaskDetail {
     const masked = { ...detail };
+    if (detail.resultEvidence) masked.resultEvidence = maskResultEvidence(detail.resultEvidence, visible);
 
     if (!visible.total_score) {
       masked.totalScore = null;
@@ -2298,6 +2303,7 @@ export class TasksService {
 
   private applyPrePublishMask(detail: TaskDetail): TaskDetail {
     const masked = { ...detail };
+    if (detail.resultEvidence) masked.resultEvidence = maskResultEvidence(detail.resultEvidence, { total_score: false, grade: false, indicator_scores: false });
 
     masked.totalScore = null;
     masked.rawGrade = null;

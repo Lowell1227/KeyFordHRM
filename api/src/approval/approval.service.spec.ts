@@ -99,14 +99,17 @@ describe('ApprovalService', () => {
   });
 
   describe('GET /cycles/:id/approval 数据范围', () => {
-    it('pending query excludes approved tasks which remain in approval until publish', async () => {
+    it('retains reached and handled approval records within the frozen approver scope', async () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
       prisma.assessmentTask.findMany.mockResolvedValue([]);
 
       await service.getApprovalList('cycle-1', makeViewer());
 
       expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({
-        where: expect.objectContaining({ status: 'approval', approvedAt: null }),
+        where: expect.objectContaining({ cycleId: 'cycle-1', approverId: 'vp-1', isExempt: false, OR: [
+          { status: { in: ['approval', 'published', 'confirmed', 'appealing', 'closed'] } },
+          { flowRecords: { some: { nodeType: 'approval' } } },
+        ] }),
       }));
     });
 
@@ -205,7 +208,7 @@ describe('ApprovalService', () => {
 
       expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ cycleId: 'cycle-1', status: 'approval', approverId: 'vp-1' }),
+          where: expect.objectContaining({ cycleId: 'cycle-1', approverId: 'vp-1' }),
         }),
       );
       expect(result).toHaveLength(1);
@@ -231,7 +234,7 @@ describe('ApprovalService', () => {
 
       expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(
         expect.objectContaining({
-          where: expect.objectContaining({ cycleId: 'cycle-1', status: 'approval' }),
+          where: expect.objectContaining({ cycleId: 'cycle-1' }),
         }),
       );
       expect(result[0].approverId).toBe('vp-2');

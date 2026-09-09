@@ -1,3 +1,4 @@
+import { buildResultEvidence, RESULT_PERIOD_SELECT, ResultEvidence } from '@/tasks/result-evidence';
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { AssessmentCycle, PerfGrade, Prisma, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -69,6 +70,7 @@ export interface CalibrationActionResult {
 
 /** 校准详情（个人抽屉）。 */
 export interface CalibrationCandidateDetail {
+  resultEvidence?: ResultEvidence;
   flowRecords: ReturnType<typeof mapReviewHistory>;
   taskId: string;
   employeeName: string;
@@ -120,7 +122,7 @@ export class CalibrationService {
   async listCycles(viewer: AuthUser) {
     return this.prisma.assessmentCycle.findMany({
       where: {
-        status: { in: ['indicator_setting', 'self_eval', 'manager_score', 'hr_calibration', 'approval', 'published', 'appeal'] },
+        status: { in: ['indicator_setting', 'self_eval', 'manager_score', 'hr_calibration', 'approval', 'published', 'appeal', 'closed'] },
         ...(!hasHrCapability(viewer, 'performance_calibration') ? { hrOwnerId: viewer.id } : {}),
       },
       orderBy: [{ startDate: 'desc' }, { id: 'asc' }],
@@ -164,18 +166,7 @@ export class CalibrationService {
         gradeResult: { select: { calculatedScore: true, rawGrade: true, calibratedGrade: true } },
         periods: {
           orderBy: { sequence: 'asc' },
-          select: {
-            periodKey: true,
-            status: true,
-            selfGrade: true,
-            managerGrade: true,
-            selfScoreTotal: true,
-            managerScoreTotal: true,
-          },
-        },
-        indicatorInstances: {
-          select: { name: true, weight: true, indicatorType: true },
-          orderBy: { sortOrder: 'asc' },
+          select: RESULT_PERIOD_SELECT,
         },
         flowRecords: {
           where: { nodeType: { in: REVIEW_HISTORY_NODES } },
@@ -189,26 +180,7 @@ export class CalibrationService {
     }
     this.assertNotSelf([task], viewer);
 
-    // 指标跨月平均分：按指标名称对齐（快照/实例名称一致）
-    const reviews = await this.prisma.assessmentPeriodIndicatorReview.findMany({
-      where: { period: { taskId } },
-      include: {
-        period: { select: { periodKey: true } },
-        indicatorVersionItem: { select: { name: true } },
-      },
-    });
-    const scoreMap = new Map<string, { self: number[]; manager: number[] }>();
-    for (const r of reviews) {
-      const name = r.indicatorVersionItem?.name;
-      if (!name) continue;
-      const entry = scoreMap.get(name) ?? { self: [], manager: [] };
-      if (r.selfScore != null) entry.self.push(Number(r.selfScore));
-      if (r.managerScore != null) entry.manager.push(Number(r.managerScore));
-      scoreMap.set(name, entry);
-    }
-    const avg = (list: number[]) => (list.length ? Number((list.reduce((a, b) => a + b, 0) / list.length).toFixed(2)) : null);
-
-    const indicatorDefs = task.indicatorInstances;
+    const resultEvidence = buildResultEvidence(task.periods);
 
     return {
       taskId: task.id,
@@ -222,21 +194,9 @@ export class CalibrationService {
       finalGrade: task.gradeResult?.rawGrade ?? null,
       calibratedGrade: task.gradeResult?.calibratedGrade ?? null,
       approvedAt: task.approvedAt ?? null,
-      periods: task.periods.map((p) => ({
-        periodKey: p.periodKey,
-        status: p.status,
-        selfGrade: p.selfGrade,
-        managerGrade: p.managerGrade,
-        selfScoreTotal: p.selfScoreTotal?.toNumber() ?? null,
-        managerScoreTotal: p.managerScoreTotal?.toNumber() ?? null,
-      })),
-      indicators: indicatorDefs.map((def) => ({
-        name: def.name,
-        weight: def.weight.toNumber(),
-        type: def.indicatorType,
-        avgSelfScore: avg(scoreMap.get(def.name)?.self ?? []),
-        avgManagerScore: avg(scoreMap.get(def.name)?.manager ?? []),
-      })),
+      resultEvidence,
+      periods: resultEvidence.periods,
+      indicators: resultEvidence.indicators,
       flowRecords: mapReviewHistory(task.flowRecords),
       rejectHistory: task.flowRecords.filter(r => r.action === 'reject' && ['dept_review', 'hr_calibration'].includes(r.nodeType)).map((r) => ({
         nodeType: r.nodeType,

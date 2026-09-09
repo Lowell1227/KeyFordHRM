@@ -20,6 +20,7 @@ describe('FinalGradeService department review access', () => {
     const detail = await makeService().getFinalGrade(task.id, viewer('head-1'));
     expect(detail.calculatedScore).toBe(92.4);
     expect(detail.periods[0].managerGrade).toBe('A');
+    expect(detail.resultEvidence?.periods[0]).toMatchObject({ periodKey: '2026-09', selfScoreTotal: 92.4, managerScoreTotal: 92.4, managerGrade: 'A' });
     expect(detail.canSubmit).toBe(false);
   });
   it('returns the task approval time so detail views can distinguish approved results waiting for publication', async () => {

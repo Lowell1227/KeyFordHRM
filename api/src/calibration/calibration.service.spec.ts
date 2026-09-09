@@ -164,10 +164,13 @@ describe('CalibrationService（确认/驳回）', () => {
     prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', name: 'Cycle', ...makeCycle() });
     prisma.assessmentTask.findFirst.mockResolvedValue({
       ...makeTask(),
-      dept: { name: 'Department' }, manager: { name: 'Manager' }, periods: [], indicatorInstances: [], flowRecords: [],
+      dept: { name: 'Department' }, manager: { name: 'Manager' }, periods: [{ periodKey: '2026-07', status: 'completed', selfScoreTotal: new Prisma.Decimal(84), managerScoreTotal: new Prisma.Decimal(88), selfGrade: 'B', managerGrade: 'A' }], flowRecords: [],
     });
 
     const result = await service.getCandidateDetail('cycle-1', makeTask().id, hrViewer);
+    expect(result.resultEvidence?.periods[0]).toMatchObject({ periodKey: '2026-07', selfScoreTotal: 84, managerScoreTotal: 88 });
+    expect(result.resultEvidence?.periods).toEqual(result.periods);
+    expect(prisma.assessmentTask.findFirst.mock.calls[0][0].include.periods.select.indicatorReviews).toBeDefined();
 
     expect(result).toMatchObject({
       employeeNo: 'E001',

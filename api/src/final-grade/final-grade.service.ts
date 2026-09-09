@@ -1,3 +1,4 @@
+import { buildResultEvidence, RESULT_PERIOD_SELECT, ResultEvidence } from '@/tasks/result-evidence';
 import {
   BadRequestException,
   ForbiddenException,
@@ -37,6 +38,7 @@ export interface FinalGradeRejectInfo {
 
 /** GET /tasks/:id/final-grade 响应。 */
 export interface FinalGradeDetail {
+  resultEvidence?: ResultEvidence;
   flowRecords: ReturnType<typeof mapReviewHistory>;
   taskId: string;
   cycleId: string;
@@ -115,6 +117,7 @@ export class FinalGradeService {
       && task.periods.every(isManagerPeriodComplete);
 
     return {
+      resultEvidence: buildResultEvidence(task.periods),
       flowRecords: mapReviewHistory(task.flowRecords),
       taskId: task.id,
       cycleId: task.cycleId,
@@ -285,6 +288,7 @@ export class FinalGradeService {
         gradeResult: { select: { calculatedScore: true, rawGrade: true } },
         cycle: { select: { name: true } },
         periods: {
+          include: { indicatorReviews: RESULT_PERIOD_SELECT.indicatorReviews },
           orderBy: { sequence: 'asc' },
         },
       },

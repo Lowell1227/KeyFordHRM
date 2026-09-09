@@ -23,7 +23,7 @@ async function mockResultPages(page: Page) {
       return route.fulfill({ status: 405, json: { code: 405, message: '展示验收禁止写入' } });
     }
     const cycle = { id: cycleId, name: cycleName, type: 'quarterly', status: 'approval', startDate: '2026-07-01', endDate: '2026-09-30', gradeAMaxRatio: 1, gradeBMaxRatio: 1 };
-    const row = { id: 'presentation-task', taskId: 'presentation-task', cycleId, cycleName, employeeId: 'other-employee', employeeName, employeeNo: 'QA019', deptName: '跨区域业务协作部', position: '项目交付专员', managerName: '虚拟直属上级', status: 'approval', approvedAt: '2026-09-08T10:00:00Z', totalScore: 88, calculatedScore: 88, rawGrade: 'B', calibratedGrade: 'A', isExempt: false };
+    const row = { resultEvidence: { periods, indicators: [{ id: 'goal-one', name: '季度交付指标', weight: 1, avgSelfScore: 84, avgManagerScore: 88 }] }, id: 'presentation-task', taskId: 'presentation-task', cycleId, cycleName, employeeId: 'other-employee', employeeName, employeeNo: 'QA019', deptName: '跨区域业务协作部', position: '项目交付专员', managerName: '虚拟直属上级', status: 'approval', approvedAt: '2026-09-08T10:00:00Z', totalScore: 88, calculatedScore: 88, rawGrade: 'B', calibratedGrade: 'A', isExempt: false };
     let data: unknown = {};
     if (path.endsWith('/auth/me')) data = { id: 'test-manager', name: '虚拟部门负责人', sysRole: 'hr', status: 'active', canViewAll: true, businessCapabilities: { identities: [], canReviewDepartment: true, canViewDepartmentReview: true, canOperateDepartmentReview: true, canViewPerformanceCalibration: true, canOperatePerformanceCalibration: true, canViewPerformanceApproval: true, canOperatePerformanceApproval: true } };
     else if (path.endsWith('/notifications/unread-count')) data = 0;
@@ -86,6 +86,11 @@ for (const width of [1440, 390]) {
       await expect(drawer.getByTestId('performance-result-summary')).toContainText(cycleName);
       await expect(drawer.getByTestId('performance-result-summary')).toContainText('周期得分');
       await expect(drawer.locator('.el-drawer__title')).toContainText(title);
+      await expect(drawer.getByRole('heading', { name: '月度结果回顾' })).toBeVisible();
+      await expect(drawer.locator('.performance-period-table')).toContainText('2026-07');
+      await expect(drawer.locator('.performance-period-table')).toContainText('88.00');
+      await drawer.getByText('指标汇总（跨月平均）', { exact: true }).click();
+      await expect(drawer.getByText('季度交付指标', { exact: true })).toBeVisible();
       await drawer.getByRole('button', { name: '查看全部 8 条记录' }).click();
       await drawer.locator('.el-drawer__body').evaluate(element => { element.scrollTop = element.scrollHeight; });
       await expect(drawer.getByRole('button', { name: '关闭', exact: true })).toBeVisible();

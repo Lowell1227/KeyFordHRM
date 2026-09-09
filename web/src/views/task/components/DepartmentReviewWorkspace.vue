@@ -2,9 +2,8 @@
 import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import ChartCard from '@/components/common/ChartCard.vue';
-import ReviewHistory from '@/components/common/ReviewHistory.vue';
+import PerformanceResultEvidence from '@/components/common/PerformanceResultEvidence.vue';
 import PerformanceResultSummary from '@/components/common/PerformanceResultSummary.vue';
-import PerformancePeriodResults from '@/components/common/PerformancePeriodResults.vue';
 import { tasksApi } from '@/api/tasks.api';
 import type { FinalGradeDetail, TaskDetail } from '@/types/api.types';
 import type { PerfGrade } from '@/types/enums';
@@ -66,6 +65,7 @@ watch(() => props.task.id, () => { comment.value = ''; validation.value = ''; })
       <el-alert v-if="error" type="error" :closable="false" :title="error"><el-button link @click="load">重试</el-button></el-alert>
       <template v-if="detail">
         <PerformanceResultSummary
+          score-hint="分数与等级无换算关系"
           :cycle-name="detail.cycleName"
           :employee-name="detail.employeeName"
           :status-label="resultStage(detail.status, detail.approvedAt).label"
@@ -73,12 +73,11 @@ watch(() => props.task.id, () => { comment.value = ''; validation.value = ''; })
           :department-name="detail.deptName"
           :position="detail.position"
           :manager-name="detail.managerName"
-          :score="detail.calculatedScore"
-          :raw-grade="detail.currentGrade"
-          :calibrated-grade="task.gradeResult?.calibratedGrade as PerfGrade | null | undefined"
+          :score="(detail.calculatedScore) ?? null"
+          :raw-grade="(detail.currentGrade) ?? null"
+          :calibrated-grade="(task.gradeResult?.calibratedGrade as PerfGrade | null | undefined) ?? null"
         />
-        <PerformancePeriodResults :periods="detail.periods" />
-        <ReviewHistory :records="detail.flowRecords ?? task.flowRecords" />
+        <PerformanceResultEvidence :evidence="detail.resultEvidence" :periods="detail.periods" :records="detail.flowRecords ?? task.flowRecords" />
         <el-form v-if="canReview" label-position="top" class="review-form">
           <el-form-item label="复核意见" :error="validation">
             <el-input v-model="comment" type="textarea" :rows="3" maxlength="2000" aria-label="复核意见" placeholder="通过时选填，退回时请说明原因" />
