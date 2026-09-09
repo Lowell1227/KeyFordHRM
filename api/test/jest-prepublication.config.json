@@ -1,0 +1,9 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": ".",
+  "testRegex": "suites/03-prepublication-confirmation\\.e2e-spec\\.ts$",
+  "transform": { "^.+\\.ts$": "ts-jest" },
+  "testEnvironment": "node",
+  "moduleNameMapper": { "^@/(.*)$": "<rootDir>/../src/$1" },
+  "testTimeout": 30000
+}

@@ -128,7 +128,7 @@ export class AppealsService {
         status: 'pending', appealDeadline: null,
       } });
       const originalResult = JSON.parse(JSON.stringify({
-        calculatedScore: task.gradeResult.calculatedScore, rawGrade: task.gradeResult.rawGrade,
+        calculatedScore: task.gradeResult.calculatedScore?.toNumber() ?? null, rawGrade: task.gradeResult.rawGrade,
         calibratedGrade: task.gradeResult.calibratedGrade, calibrationNote: task.gradeResult.calibrationNote,
         isVeto: task.gradeResult.isVeto, vetoReason: task.gradeResult.vetoReason,
         approvedAt: task.approvedAt, employeeConfirmedAt: task.employeeConfirmedAt,
@@ -423,6 +423,13 @@ export class AppealsService {
     return record?.extraData as Prisma.JsonObject | null ?? null;
   }
 
+  private originalResult(appeal: AppealWithTask): Prisma.JsonValue | null {
+    const original = this.appealRecord(appeal)?.originalResult;
+    if (!original || typeof original !== 'object' || Array.isArray(original)) return null;
+    const score = original.calculatedScore == null ? null : Number(original.calculatedScore);
+    return { ...original, calculatedScore: score != null && Number.isFinite(score) ? score : null };
+  }
+
   private workflowMetadata(appeal: AppealWithTask): AppealWorkflowMetadata {
     const prepublication = Boolean(this.appealRecord(appeal));
     return { workflowType: prepublication ? 'prepublication' : 'legacy',
@@ -472,7 +479,7 @@ export class AppealsService {
       appellant: appeal.appellant,
       dept: appeal.task?.dept ?? null,
       cycle: appeal.cycle,
-      originalResult: this.appealRecord(appeal)?.originalResult ?? null,
+      originalResult: this.originalResult(appeal),
       flowRecords: mapReviewHistory(appeal.task?.flowRecords),
       taskGrade: appeal.task?.gradeResult
         ? {

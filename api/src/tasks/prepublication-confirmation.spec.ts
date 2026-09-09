@@ -1,3 +1,5 @@
+import { Prisma } from '@prisma/client';
+import { ReportsService } from '@/reports/reports.service';
 import { ConflictException } from '@nestjs/common';
 import { TasksService } from './tasks.service';
 import { FlowService } from './flow.service';
@@ -140,6 +142,21 @@ describe('公示前员工确认与 HR 申诉', () => {
   await publish.getPublicationRecords('cycle',{skip:0,take:20,page:1,pageSize:20} as any,hr);
   const where=tx.assessmentTask.findMany.mock.calls[0][0].where;
   expect(where.OR).toEqual(expect.arrayContaining([{flowRecords:{some:{nodeType:'approval'}}}]));
+ });
+
+ it('原结果快照将真实 Decimal 分数序列化为数字，并兼容已保存的字符串分数', async () => {
+  const {task,tx,flow,records}=fixture(); task.gradeResult.calculatedScore=new Prisma.Decimal('91.25');
+  const appeals=new AppealsService(tx,{} as any,flow); await appeals.create({taskId:'task',reason:'复核依据'},hr);
+  expect(records[0].extraData.originalResult.calculatedScore).toBe(91.25);
+  tx.appeal.findUnique.mockResolvedValue({id:'appeal',taskId:'task',status:'pending',task:{...task,flowRecords:[{...records[0],extraData:{...records[0].extraData,originalResult:{calculatedScore:'91.25'}}}]},appellant:null,cycle:null});
+  expect((await appeals.findOne('appeal')).originalResult).toMatchObject({calculatedScore:91.25});
+ });
+ it('公示逾期仅统计已确认尚未公示的任务', () => {
+  const service=new ReportsService({} as any,{} as any);
+  const tasks=[{status:'published',employeeConfirmedAt:new Date(),publishedAt:new Date()},{status:'confirmed',publishedAt:null},{status:'confirmed',publishedAt:new Date()}];
+  const result=(service as any).buildOverdueByNode(tasks,{deadlinePublish:new Date('2020-01-01')});
+  expect(result.find((row:any)=>row.node==='published').overdueCount).toBe(1);
+  expect((service as any).buildOverdueByNode([tasks[0],tasks[2]],{deadlinePublish:new Date('2020-01-01')}).find((row:any)=>row.node==='published').overdueCount).toBe(0);
  });
 
 });

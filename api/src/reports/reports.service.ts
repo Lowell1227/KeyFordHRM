@@ -1,4 +1,4 @@
-import { PUBLISHED_RESULT_WHERE } from '@/tasks/result-publication';
+import { PUBLISHED_RESULT_WHERE, isResultPublished, ResultPublicationFact } from '@/tasks/result-publication';
 import { ForbiddenException, Injectable, NotFoundException, StreamableFile } from '@nestjs/common';
 import { AssessmentCycle, PerfGrade, Prisma, SysRole, TaskStatus } from '@prisma/client';
 import dayjs from 'dayjs';
@@ -134,7 +134,7 @@ export class ReportsService {
 
     const tasks = await this.prisma.assessmentTask.findMany({
       where: { cycleId },
-      select: { status: true, approvedAt: true },
+      select: { status: true, approvedAt: true, publishedAt: true, gradeResult: { select: { isPublished: true, publishedAt: true } } },
     });
 
     const overdueByNode = this.buildOverdueByNode(tasks, cycle);
@@ -457,7 +457,7 @@ export class ReportsService {
   }
 
   private buildOverdueByNode(
-    tasks: Array<{ status: TaskStatus; approvedAt: Date | null }>,
+    tasks: ResultPublicationFact[],
     cycle: Pick<
       AssessmentCycle,
       | 'deadlineIndicatorSetting'
@@ -510,7 +510,7 @@ export class ReportsService {
       },
       {
         node: 'published',
-        statuses: ['published'],
+        statuses: ['confirmed'],
         deadlineFor: () => cycle.deadlinePublish,
       },
     ];
@@ -519,6 +519,7 @@ export class ReportsService {
       node,
       overdueCount: tasks.filter(
         (t) => statuses.includes(t.status)
+          && !(node === 'published' && isResultPublished(t))
           && !(t.status === 'approval' && t.approvedAt)
           && isOverdue(deadlineFor(t.status)),
       ).length,
