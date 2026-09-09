@@ -9,11 +9,14 @@ import GradeDistChart from '@/components/charts/GradeDistChart.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ReviewHistory from '@/components/common/ReviewHistory.vue';
 import PerformanceResultSummary from '@/components/common/PerformanceResultSummary.vue';
+import PerformanceResultDrawer from '@/components/common/PerformanceResultDrawer.vue';
+import PerformancePeriodResults from '@/components/common/PerformancePeriodResults.vue';
+import { resultStage } from '@/utils/performance-result-presentation';
 import EmptyState from '@/components/common/EmptyState.vue';
 import type { CalibrationCandidate, CalibrationCandidateDetail, CalibrationSummary, AssessmentCycle } from '@/types/api.types';
-import type { PerfGrade, TaskStatus } from '@/types/enums';
+import type { PerfGrade } from '@/types/enums';
 import { GRADE_LABELS } from '@/utils/grade';
-import { TASK_STATUS_META } from '@/types/enums';
+
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 import { formatDate } from '@/utils/date';
 import { cycleBusinessState } from '@/views/admin/cycle-management';
@@ -83,7 +86,9 @@ const filteredCandidates = computed(() => {
       return a.employeeName.localeCompare(b.employeeName, 'zh-CN') * order;
     }
     const map: Record<PerfGrade, number> = { A: 4, B: 3, C: 2, D: 1 };
-    return ((a.rawGrade ? map[a.rawGrade] : 0) - (b.rawGrade ? map[b.rawGrade] : 0)) * order;
+    const gradeA = a.calibratedGrade ?? a.rawGrade;
+    const gradeB = b.calibratedGrade ?? b.rawGrade;
+    return ((gradeA ? map[gradeA] : 0) - (gradeB ? map[gradeB] : 0)) * order;
   });
 });
 
@@ -102,7 +107,7 @@ const gradeCounts = computed<Record<PerfGrade, number>>(() => {
   const counts: Record<PerfGrade, number> = { A: 0, B: 0, C: 0, D: 0 };
   candidates.value.forEach((c) => {
     if (c.canViewDetail === false || statusGroup(c) === 'final_grading') return;
-    const grade = c.rawGrade;
+    const grade = c.calibratedGrade ?? c.rawGrade;
     if (grade) counts[grade] = (counts[grade] ?? 0) + 1;
   });
   return counts;
@@ -148,14 +153,6 @@ function formatRatio(n: number): string {
 /** 计算分可能为 null（未到评分阶段），统一兜底显示。 */
 function fmtScore(s: number | null | undefined): string {
   return s == null ? '—' : s.toFixed(2);
-}
-
-function statusLabel(status: TaskStatus): string {
-  return TASK_STATUS_META[status]?.label ?? status;
-}
-
-function statusTagType(status: TaskStatus): string {
-  return TASK_STATUS_META[status]?.type ?? 'info';
 }
 
 async function loadCycles() {
@@ -349,9 +346,9 @@ onMounted(async () => {
 </script>
 
 <template>
-  <div class="calibration-view page-stack">
-    <ChartCard>
-      <template #title>绩效校准工作台</template>
+  <div class="calibration-view page-stack performance-result-page">
+    <ChartCard :padded="true">
+      <template #title>绩效校准</template>
       <template #extra>
         <el-select
           :model-value="selectedCycleId"
@@ -394,12 +391,12 @@ onMounted(async () => {
     <template v-else>
       <el-row :gutter="16" class="middle-row">
         <el-col :xs="24" :md="14">
-          <ChartCard class="chart-card">
+          <ChartCard :padded="true" class="chart-card">
             <template #title>等级分布（评定链路 {{ countedTotal }} 人）</template>
             <template #extra>
               <el-tag v-if="hasWarnings" type="danger" effect="dark">存在超限</el-tag>
             </template>
-            <GradeDistChart :data="gradeCounts" title="" :height="240" />
+            <GradeDistChart :data="gradeCounts" title="" :height="220" />
             <div class="ratio-row">
               <div
                 v-for="grade in GRADES"
@@ -416,7 +413,7 @@ onMounted(async () => {
           </ChartCard>
         </el-col>
         <el-col :xs="24" :md="10">
-          <ChartCard class="warning-card">
+          <ChartCard :padded="true" class="warning-card">
             <template #title>分布告警（仅作校准参考，不阻止操作）</template>
             <el-alert
               v-if="!hasWarnings"
@@ -440,9 +437,9 @@ onMounted(async () => {
         </el-col>
       </el-row>
 
-      <ChartCard>
+      <ChartCard :padded="true">
         <template #title>校准名单</template>
-        <div class="toolbar">
+        <div class="toolbar performance-result-toolbar">
           <div class="toolbar-left">
             <el-select v-model="deptFilter" placeholder="全部部门" clearable style="width: 160px">
               <el-option v-for="d in departments" :key="d" :label="d" :value="d" />
@@ -455,8 +452,8 @@ onMounted(async () => {
               <el-option label="已定级" value="done" />
             </el-select>
             <el-select v-model="sortField" placeholder="排序字段" style="width: 130px">
-              <el-option label="参考均分" value="calculatedScore" />
-              <el-option label="最终等级" value="rawGrade" />
+              <el-option label="周期得分" value="calculatedScore" />
+              <el-option label="周期等级" value="rawGrade" />
               <el-option label="姓名" value="employeeName" />
             </el-select>
             <el-radio-group v-model="sortOrder" size="small">
@@ -464,14 +461,13 @@ onMounted(async () => {
               <el-radio-button :value="'asc'">升序</el-radio-button>
             </el-radio-group>
           </div>
-          <div class="toolbar-right">
+          <div class="toolbar-right performance-result-actions">
             <el-button
               type="primary"
-              plain
               :disabled="selectedTaskIds.length === 0"
               :loading="acting"
               @click="handleConfirm(selectedTaskIds)"
-            >批量确认</el-button>
+            >批量确认校准</el-button>
             <el-button
               type="danger"
               plain
@@ -485,42 +481,46 @@ onMounted(async () => {
         <el-table
           :key="selectedCycleId"
           v-loading="loading"
-          class="app-table"
+          class="app-table performance-result-table"
           :data="filteredCandidates as CalibrationCandidate[]"
           row-key="taskId"
           @selection-change="handleSelectionChange"
         >
           <el-table-column type="selection" width="50" :selectable="canCalibrate" />
-          <el-table-column prop="employeeName" label="姓名" min-width="100" />
-          <el-table-column prop="deptName" label="部门" min-width="130" />
-          <el-table-column prop="position" label="岗位" min-width="130" />
-          <el-table-column prop="managerName" label="直属上级" width="110" />
-          <el-table-column prop="calculatedScore" label="参考均分" width="110" sortable>
+          <el-table-column prop="employeeName" label="员工" min-width="150" show-overflow-tooltip>
+            <template #default="{ row }"><div class="performance-result-employee"><div>{{ row.employeeName }}</div><div class="performance-result-meta">{{ row.employeeNo || '—' }}</div></div></template>
+          </el-table-column>
+          <el-table-column prop="deptName" label="部门" min-width="130" show-overflow-tooltip />
+          <el-table-column prop="position" label="岗位" min-width="130" show-overflow-tooltip />
+          <el-table-column prop="calculatedScore" label="周期得分" width="110" align="right" sortable>
             <template #default="{ row }">
-              <span class="score-cell">{{ fmtScore((row as CalibrationCandidate).calculatedScore) }}</span>
+              <span class="performance-result-score">{{ fmtScore((row as CalibrationCandidate).calculatedScore) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="最终等级" width="100">
+          <el-table-column label="周期等级" width="100" align="center">
             <template #default="{ row }">
-              <GradeTag v-if="(row as CalibrationCandidate).rawGrade" :grade="(row as CalibrationCandidate).rawGrade!" size="small" />
+              <GradeTag v-if="row.calibratedGrade ?? row.rawGrade" :grade="row.calibratedGrade ?? row.rawGrade" size="small" />
               <span v-else class="score-cell" style="color: var(--el-text-color-placeholder)">—</span>
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="110">
+          <el-table-column label="当前环节" min-width="150">
             <template #default="{ row }">
-              <el-tag :type="statusTagType((row as CalibrationCandidate).status) as any" size="small">
-                {{ statusLabel((row as CalibrationCandidate).status) }}
+              <el-tag :type="resultStage(row.status, row.approvedAt).type" size="small">
+                {{ resultStage(row.status, row.approvedAt).label }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="200" fixed="right">
+          <el-table-column prop="managerName" label="绩效直属上级" min-width="140" show-overflow-tooltip />
+          <el-table-column label="操作" width="180" fixed="right">
             <template #default="{ row }">
               <span v-if="row.actionHint" class="action-hint">{{ row.actionHint }}</span>
-              <el-button v-if="row.canViewDetail !== false" link size="small" @click="openDetail((row as CalibrationCandidate).taskId)">详情</el-button>
+              <div class="performance-result-actions">
+              <el-button v-if="row.canViewDetail !== false" link type="primary" @click="openDetail((row as CalibrationCandidate).taskId)">查看详情</el-button>
               <template v-if="canCalibrate(row as CalibrationCandidate)">
-                <el-button link type="primary" size="small" :loading="acting" @click="handleConfirm([(row as CalibrationCandidate).taskId])">确认</el-button>
+                <el-button link type="primary" :loading="acting" @click="handleConfirm([(row as CalibrationCandidate).taskId])">确认校准</el-button>
                 <el-button link type="danger" size="small" :loading="acting" @click="handleReject([(row as CalibrationCandidate).taskId])">驳回</el-button>
               </template>
+              </div>
             </template>
           </el-table-column>
         </el-table>
@@ -539,56 +539,33 @@ onMounted(async () => {
       </ChartCard>
     </template>
 
-    <el-drawer
+    <PerformanceResultDrawer
       v-model="drawer.visible"
-      :title="drawer.detail ? `${drawer.detail.employeeName} · 校准依据` : '校准依据'"
-      size="min(560px, 100vw)"
+      :title="drawer.detail ? `${drawer.detail.employeeName} · 绩效校准` : '绩效校准详情'"
+      data-testid="calibration-detail-drawer"
     >
       <div v-loading="drawer.loading">
         <template v-if="drawer.detail">
           <PerformanceResultSummary
             :cycle-name="selectedCycle?.name"
             :employee-name="drawer.detail.employeeName"
-            :status-label="statusLabel(drawer.detail.status)"
-            :status-type="statusTagType(drawer.detail.status) as any"
+            :status-label="resultStage(drawer.detail.status, drawer.detail.approvedAt).label"
+            :status-type="resultStage(drawer.detail.status, drawer.detail.approvedAt).type"
             :department-name="drawer.detail.deptName"
             :position="drawer.detail.position"
             :manager-name="drawer.detail.managerName"
             :score="drawer.detail.calculatedScore"
             score-hint="分数与等级无换算关系"
             :raw-grade="drawer.detail.finalGrade"
-            raw-grade-label="直属上级评定等级"
+            :calibrated-grade="drawer.detail.calibratedGrade"
           />
 
-          <div class="drawer-section">
-            <h4>月度结果</h4>
-            <el-table :data="drawer.detail.periods" size="small" border>
-              <el-table-column prop="periodKey" label="月份" width="90" />
-              <el-table-column label="自评等级" width="90">
-                <template #default="{ row }">
-                  <GradeTag v-if="row.selfGrade" :grade="row.selfGrade" size="small" />
-                  <span v-else>—</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="上级等级" width="90">
-                <template #default="{ row }">
-                  <GradeTag v-if="row.managerGrade" :grade="row.managerGrade" size="small" />
-                  <span v-else>—</span>
-                </template>
-              </el-table-column>
-              <el-table-column label="自评分" width="80">
-                <template #default="{ row }">{{ fmtScore(row.selfScoreTotal) }}</template>
-              </el-table-column>
-              <el-table-column label="上级评分">
-                <template #default="{ row }">{{ fmtScore(row.managerScoreTotal) }}</template>
-              </el-table-column>
-            </el-table>
-          </div>
+          <PerformancePeriodResults :periods="drawer.detail.periods" />
 
           <ReviewHistory :records="drawer.detail.flowRecords" />
           <el-collapse class="drawer-section">
             <el-collapse-item title="指标汇总（跨月平均）" name="indicators">
-              <el-table :data="drawer.detail.indicators" size="small" border>
+              <el-table :data="drawer.detail.indicators" class="performance-result-table">
                 <el-table-column prop="name" label="指标" min-width="140" show-overflow-tooltip />
                 <el-table-column label="权重" width="70">
                   <template #default="{ row }">{{ formatRatio(row.weight) }}</template>
@@ -604,7 +581,7 @@ onMounted(async () => {
           </el-collapse>
         </template>
       </div>
-    </el-drawer>
+    </PerformanceResultDrawer>
   </div>
 </template>
 

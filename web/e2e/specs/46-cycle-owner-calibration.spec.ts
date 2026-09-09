@@ -52,7 +52,7 @@ for (const width of [1440, 390]) {
     await page.setViewportSize({ width, height: 900 });
     const calls = await setup(page);
     await page.goto(`/calibration?cycleId=${cycleId}`);
-    await page.getByRole('row').filter({ hasText: '虚拟员工甲' }).getByRole('button', { name: '详情', exact: true }).click();
+    await page.getByRole('row').filter({ hasText: '虚拟员工甲' }).getByRole('button', { name: '查看详情', exact: true }).click();
     const summary = page.getByTestId('performance-result-summary');
     await expect(summary).toContainText('负责人范围验收周期');
     await expect(summary).toContainText('虚拟员工甲');
@@ -84,7 +84,7 @@ for (const width of [1440, 390]) {
     await expect(ownRow.getByRole('checkbox')).toBeDisabled();
     await expect(ownRow.getByRole('button')).toHaveCount(0);
     await expect(employeeRow.getByRole('checkbox')).toBeEnabled();
-    await employeeRow.getByRole('button', { name: '确认', exact: true }).click();
+    await employeeRow.getByRole('button', { name: '确认校准', exact: true }).click();
     await page.getByRole('dialog').getByRole('button', { name: '确认', exact: true }).click();
     await expect(employeeRow).toContainText('结果审批中');
     expect(calls.filter(call => call.body)).toEqual([{ path: `/api/v1/cycles/${cycleId}/calibration/confirm`, body: { taskIds: ['other-task'] } }]);

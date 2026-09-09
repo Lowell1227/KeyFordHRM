@@ -12,9 +12,9 @@ describe('department review task records', () => {
   function setup() {
     const row = (id: string, status: string, overrides = {}) => ({
       id, status, cycleId: 'cycle-1', deptHeadId: viewer.id, employeeId: `employee-${id}`,
-      employee: { name: `虚拟员工 ${id}` }, cycle: { name: '测试周期' }, dept: { name: '测试部门' }, deptId: 'dept-1',
+      employee: { name: `虚拟员工 ${id}`, employeeNo: `E-${id}`, position: '测试岗位' }, cycle: { name: '测试周期' }, dept: { name: '测试部门' }, deptId: 'dept-1',
       managerId: 'manager-1', isExempt: false, exemptReason: null, updatedAt: latest,
-      gradeResult: { calculatedScore: new Prisma.Decimal(85), rawGrade: 'B' }, flowRecords: [] as ReturnType<typeof review>[], ...overrides,
+      gradeResult: { calculatedScore: new Prisma.Decimal(85), rawGrade: 'B', calibratedGrade: 'A' }, flowRecords: [] as ReturnType<typeof review>[], ...overrides,
     });
     const rows = [
       row('pending', 'dept_review'),
@@ -82,6 +82,26 @@ describe('department review task records', () => {
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1,
       select: { action: true, createdAt: true, extraData: true },
     } }) }));
+  });
+
+  it('returns the employee display metadata and calibrated result without changing reviewer scope', async () => {
+    const { service, prisma } = setup();
+    const result = await service.findDepartmentReviews(new TaskQueryDto(), viewer);
+
+    expect(result.items[0]).toMatchObject({
+      employeeNo: 'E-pending',
+      position: '测试岗位',
+      approvedAt: null,
+      rawGrade: 'B',
+      calibratedGrade: 'A',
+    });
+    expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { deptHeadId: viewer.id, employeeId: { not: viewer.id }, isExempt: false },
+      include: expect.objectContaining({
+        employee: { select: { name: true, employeeNo: true, position: true } },
+        gradeResult: { select: { calculatedScore: true, rawGrade: true, calibratedGrade: true } },
+      }),
+    }));
   });
 
   it('does not invent review history from the task stage or a legacy review timestamp', async () => {

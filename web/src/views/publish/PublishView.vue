@@ -7,15 +7,17 @@ import {
   publicationApi,
   type PublicationRecord,
   type PublicationRecordDetail,
-  type PublicationState,
+
 } from "@/api/publication.api";
 import GradeTag from "@/components/common/GradeTag.vue";
 import EmptyState from "@/components/common/EmptyState.vue";
 import ChartCard from "@/components/common/ChartCard.vue";
 import PerformanceResultSummary from "@/components/common/PerformanceResultSummary.vue";
+import PerformanceResultDrawer from "@/components/common/PerformanceResultDrawer.vue";
+import { resultStage, formatResultScore } from "@/utils/performance-result-presentation";
 import ReviewHistory from "@/components/common/ReviewHistory.vue";
 import { usePagination } from "@/composables/usePagination";
-import { formatScore } from "@/utils/score";
+
 import { formatDateTime } from "@/utils/date";
 import type { AssessmentCycle } from "@/types/api.types";
 import { resolvePerformanceCycle } from "@/utils/performance-cycle";
@@ -65,22 +67,6 @@ const interactionLocked = computed(
   () => publishing.value || publishDialogOpen.value,
 );
 const hasSelection = computed(() => selectedTaskIds.value.length > 0);
-
-const publicationMeta: Record<
-  PublicationState,
-  { label: string; type: "info" | "success" | "warning" | "danger" }
-> = {
-  pending_approval: { label: "待审批", type: "warning" },
-  ready_to_publish: { label: "待公示", type: "warning" },
-  published: { label: "已公示", type: "success" },
-  confirmed: { label: "员工已确认", type: "success" },
-  appealing: { label: "申诉中", type: "danger" },
-  closed: { label: "已归档", type: "info" },
-};
-
-function stateMeta(state: PublicationState) {
-  return publicationMeta[state];
-}
 
 function rowSelectable(row: PublicationRecord) {
   return row.canPublish && !interactionLocked.value;
@@ -323,13 +309,12 @@ function closeDetail() {
 
 <template>
   <div
-    class="publish-view page-stack"
-    :class="{ 'app-list-page': selectedCycle }"
+    class="publish-view page-stack performance-result-page"
   >
-    <ChartCard class="list-page-header-card">
-      <template #title>结果公示发布台</template>
+    <ChartCard :padded="true" class="list-page-header-card">
+      <template #title>结果公示</template>
       <template #extra>
-        <div class="publish-view__toolbar">
+        <div class="publish-view__toolbar performance-result-toolbar">
           <el-select
             :model-value="selectedCycleId"
             data-testid="publish-cycle-select"
@@ -396,13 +381,12 @@ function closeDetail() {
       </div>
     </ChartCard>
 
-    <ChartCard v-if="selectedCycle" :padded="false" class="list-result-card">
+    <ChartCard :padded="true" v-if="selectedCycle" class="list-result-card">
       <el-table
         ref="tableRef"
-        class="app-table"
+        class="app-table performance-result-table"
         v-loading="loading"
         :data="records"
-        height="100%"
         row-key="taskId"
         @selection-change="onSelectionChange"
       >
@@ -412,23 +396,25 @@ function closeDetail() {
           :selectable="rowSelectable"
           reserve-selection
         />
-        <el-table-column prop="employeeName" label="员工" min-width="120" />
-        <el-table-column prop="employeeNo" label="工号" min-width="110" />
+        <el-table-column prop="employeeName" label="员工" min-width="150" show-overflow-tooltip>
+          <template #default="{ row }"><div class="performance-result-employee"><div>{{ row.employeeName }}</div><div class="performance-result-meta">{{ row.employeeNo || '—' }}</div></div></template>
+        </el-table-column>
         <el-table-column
           prop="deptName"
           label="部门"
-          min-width="150"
+          min-width="130"
           show-overflow-tooltip
         />
-        <el-table-column label="总分" width="105">
+        <el-table-column prop="position" label="岗位" min-width="130" show-overflow-tooltip />
+        <el-table-column label="周期得分" width="110" align="right">
           <template #default="{ row }">
             <span v-if="row.resultMasked" class="masked-result"
               >公示前不可查看本人结果</span
             >
-            <span v-else>{{ formatScore(row.totalScore) }}</span>
+            <span v-else class="performance-result-score">{{ formatResultScore(row.totalScore) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="等级" width="100">
+        <el-table-column label="周期等级" width="100" align="center">
           <template #default="{ row }">
             <span v-if="row.resultMasked">—</span>
             <GradeTag
@@ -438,10 +424,10 @@ function closeDetail() {
             />
           </template>
         </el-table-column>
-        <el-table-column label="公示状态" width="120">
+        <el-table-column label="当前环节" min-width="150">
           <template #default="{ row }">
-            <el-tag :type="stateMeta(row.publicationState).type" size="small">{{
-              stateMeta(row.publicationState).label
+            <el-tag :type="resultStage(row.status, row.approvedAt).type" size="small">{{
+              resultStage(row.status, row.approvedAt).label
             }}</el-tag>
           </template>
         </el-table-column>
@@ -450,7 +436,7 @@ function closeDetail() {
             row.publishedAt ? formatDateTime(row.publishedAt) : "—"
           }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="90" fixed="right">
+        <el-table-column label="操作" width="180" fixed="right">
           <template #default="{ row }">
             <el-button
               v-if="!row.resultMasked"
@@ -458,7 +444,7 @@ function closeDetail() {
               type="primary"
               :disabled="interactionLocked"
               @click="openDetail(row as PublicationRecord)"
-              >详情</el-button
+              >查看详情</el-button
             >
             <span v-else class="text-secondary">公示后查看</span>
           </template>
@@ -482,12 +468,10 @@ function closeDetail() {
       </div>
     </ChartCard>
 
-    <el-drawer
+    <PerformanceResultDrawer
       v-model="detailDrawer.visible"
-      title="公示详情"
-      size="min(640px, 100vw)"
+      :title="detailDrawer.detail ? `${detailDrawer.detail.employeeName} · 结果公示` : '结果公示详情'"
       data-testid="publication-detail-drawer"
-      destroy-on-close
       @close="closeDetail"
     >
       <el-skeleton v-if="detailDrawer.loading" :rows="8" animated />
@@ -512,8 +496,8 @@ function closeDetail() {
         <PerformanceResultSummary
           :cycle-name="detailDrawer.detail.cycleName"
           :employee-name="detailDrawer.detail.employeeName"
-          :status-label="stateMeta(detailDrawer.detail.publicationState).label"
-          :status-type="stateMeta(detailDrawer.detail.publicationState).type"
+          :status-label="resultStage(detailDrawer.detail.status, detailDrawer.detail.approvedAt).label"
+          :status-type="resultStage(detailDrawer.detail.status, detailDrawer.detail.approvedAt).type"
           :department-name="detailDrawer.detail.deptName"
           :position="detailDrawer.detail.position"
           :manager-name="detailDrawer.detail.managerName"
@@ -523,7 +507,7 @@ function closeDetail() {
         />
         <ReviewHistory :records="detailDrawer.detail.flowRecords" />
       </template>
-    </el-drawer>
+    </PerformanceResultDrawer>
   </div>
 </template>
 

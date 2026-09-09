@@ -22,7 +22,7 @@ const props = withDefaults(defineProps<{
   calibratedGradeLabel?: string;
 }>(), {
   statusType: 'info',
-  scoreLabel: '参考均分',
+  scoreLabel: '周期得分',
   rawGradeLabel: '上级评定等级',
   calibratedGradeLabel: '校准后等级',
 });
@@ -42,7 +42,7 @@ const formatScore = (score: number | null | undefined) => score == null ? '—' 
         <dd>{{ employeeName || '—' }}</dd>
       </div>
       <div>
-        <dt>当前状态</dt>
+        <dt>当前环节</dt>
         <dd><el-tag :type="props.statusType" size="small">{{ statusLabel }}</el-tag></dd>
       </div>
       <div v-if="departmentName !== undefined">

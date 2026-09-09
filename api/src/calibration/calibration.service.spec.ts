@@ -109,8 +109,9 @@ describe('CalibrationService（确认/驳回）', () => {
       managerId: 'mgr-1',
       deptHeadId: 'head-1',
       approverId: 'vp-1',
-      employee: { name: 'Employee', position: null },
-      gradeResult: { calculatedScore: new Prisma.Decimal(88), rawGrade: 'B' },
+      employee: { name: 'Employee', employeeNo: 'E001', position: null },
+      approvedAt: new Date('2026-09-09T03:00:00.000Z'),
+      gradeResult: { calculatedScore: new Prisma.Decimal(88), rawGrade: 'B', calibratedGrade: 'A' },
       ...overrides,
     };
   }
@@ -123,7 +124,8 @@ describe('CalibrationService（确认/驳回）', () => {
     };
     prisma = {
       assessmentCycle: { findUnique: jest.fn() },
-      assessmentTask: { findMany: jest.fn() },
+      assessmentTask: { findMany: jest.fn(), findFirst: jest.fn() },
+      assessmentPeriodIndicatorReview: { findMany: jest.fn().mockResolvedValue([]) },
       systemConfig: { findUnique: jest.fn().mockResolvedValue(null) },
       $transaction: jest.fn(async (callback: (tx: any) => unknown) => callback(transactionClient)),
     };
@@ -138,6 +140,41 @@ describe('CalibrationService（确认/驳回）', () => {
     }).compile();
 
     service = module.get<CalibrationService>(CalibrationService);
+  });
+
+  it('workbench returns employee number, calibrated grade and approval time for result presentation', async () => {
+    const task = makeTask({ dept: { name: 'Department' }, manager: { name: 'Manager' } });
+    prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', name: 'Cycle', ...makeCycle() });
+    prisma.assessmentTask.findMany.mockResolvedValue([task]);
+
+    const result = await service.getWorkbench('cycle-1', hrViewer);
+
+    expect(result.items[0]).toMatchObject({
+      employeeNo: 'E001',
+      calibratedGrade: 'A',
+      approvedAt: new Date('2026-09-09T03:00:00.000Z'),
+    });
+    expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: { cycleId: 'cycle-1', isExempt: false },
+      include: expect.objectContaining({ employee: { select: { name: true, employeeNo: true, position: true } } }),
+    }));
+  });
+
+  it('candidate detail returns calibrated grade and approval time without replacing the raw grade', async () => {
+    prisma.assessmentCycle.findUnique.mockResolvedValue({ id: 'cycle-1', name: 'Cycle', ...makeCycle() });
+    prisma.assessmentTask.findFirst.mockResolvedValue({
+      ...makeTask(),
+      dept: { name: 'Department' }, manager: { name: 'Manager' }, periods: [], indicatorInstances: [], flowRecords: [],
+    });
+
+    const result = await service.getCandidateDetail('cycle-1', makeTask().id, hrViewer);
+
+    expect(result).toMatchObject({
+      employeeNo: 'E001',
+      finalGrade: 'B',
+      calibratedGrade: 'A',
+      approvedAt: new Date('2026-09-09T03:00:00.000Z'),
+    });
   });
 
   it('确认：认领版本后流转到审批并通知审批人', async () => {

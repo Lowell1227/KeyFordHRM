@@ -77,6 +77,8 @@ export interface TaskDetail extends TaskListItem {
   managerStageState: TeamStageState;
   workflowVersion: number;
   employeeNo: string | null;
+  position: string | null;
+  approvedAt: Date | null;
   managerName: string | null;
   deptHeadId: string | null;
   deptHeadName: string | null;
@@ -322,8 +324,8 @@ export class TasksService {
       this.prisma.assessmentTask.findMany({
         where, skip: dto.skip, take: dto.take,
         include: {
-          employee: { select: { name: true } }, cycle: { select: { name: true } }, dept: { select: { name: true } },
-          gradeResult: { select: { calculatedScore: true, rawGrade: true } },
+          employee: { select: { name: true, employeeNo: true, position: true } }, cycle: { select: { name: true } }, dept: { select: { name: true } },
+          gradeResult: { select: { calculatedScore: true, rawGrade: true, calibratedGrade: true } },
           flowRecords: {
             where: { nodeType: 'dept_review', action: { in: ['approve', 'reject'] } },
             orderBy: [{ createdAt: 'desc' }, { id: 'desc' }], take: 1,
@@ -338,10 +340,14 @@ export class TasksService {
       return {
         id: t.id, cycleId: t.cycleId, cycleName: t.cycle.name,
         employeeId: t.employeeId, employeeName: t.employee.name,
+        employeeNo: t.employee.employeeNo ?? null, position: t.employee.position ?? null,
         deptId: t.deptId, deptName: t.dept?.name ?? null, managerId: t.managerId,
         status: t.status, isExempt: t.isExempt, exemptReason: t.exemptReason,
         totalScore: t.gradeResult?.calculatedScore?.toNumber() ?? null,
-        rawGrade: t.gradeResult?.rawGrade ?? null, updatedAt: t.updatedAt,
+        rawGrade: t.gradeResult?.rawGrade ?? null,
+        calibratedGrade: t.gradeResult?.calibratedGrade ?? null,
+        approvedAt: t.approvedAt ?? null,
+        updatedAt: t.updatedAt,
         departmentReview: {
           canReview: t.status === TaskStatus.dept_review,
           latest: latest ? {
@@ -430,7 +436,7 @@ export class TasksService {
     const task = await this.prisma.assessmentTask.findUnique({
       where: { id },
       include: {
-        employee: { select: { name: true, employeeNo: true } },
+        employee: { select: { name: true, employeeNo: true, position: true } },
         dept: { select: { name: true } },
         manager: { select: { id: true, name: true } },
         deptHead: { select: { id: true, name: true } },
@@ -1905,6 +1911,7 @@ export class TasksService {
       employeeId: task.employeeId,
       employeeName: task.employee?.name ?? '',
       employeeNo: task.employee?.employeeNo ?? null,
+      position: task.employee?.position ?? null,
       deptId: task.deptId,
       deptName: task.dept?.name ?? null,
       managerId: task.managerId,
@@ -1929,6 +1936,7 @@ export class TasksService {
       isExempt: task.isExempt,
       exemptReason: task.exemptReason,
       managerScoredAt: task.managerScoredAt,
+      approvedAt: task.approvedAt,
       totalScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
       rawGrade: task.gradeResult?.rawGrade ?? null,
       updatedAt: task.updatedAt,

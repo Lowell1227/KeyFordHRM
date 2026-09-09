@@ -3,20 +3,22 @@ import { computed, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ReviewHistory from '@/components/common/ReviewHistory.vue';
-import GradeTag from '@/components/common/GradeTag.vue';
 import PerformanceResultSummary from '@/components/common/PerformanceResultSummary.vue';
+import PerformancePeriodResults from '@/components/common/PerformancePeriodResults.vue';
 import { tasksApi } from '@/api/tasks.api';
 import type { FinalGradeDetail, TaskDetail } from '@/types/api.types';
-import { TASK_STATUS_META } from '@/types/enums';
+import type { PerfGrade } from '@/types/enums';
+import { resultStage } from '@/utils/performance-result-presentation';
 
-const props = defineProps<{ task: TaskDetail; canReview: boolean }>();
-const emit = defineEmits<{ reviewed: [] }>();
+const props = withDefaults(defineProps<{ task: TaskDetail; canReview: boolean; embedded?: boolean }>(), { embedded: false });
+const emit = defineEmits<{ reviewed: []; busy: [value: boolean] }>();
 const detail = ref<FinalGradeDetail | null>(null);
 const loading = ref(false);
 const busy = ref(false);
 const comment = ref('');
 const validation = ref('');
 const error = ref('');
+const workspaceContainer = computed(() => props.embedded ? 'div' : ChartCard);
 let loadSequence = 0;
 const lastReview = computed(() => [...(detail.value?.flowRecords ?? props.task.flowRecords ?? [])]
   .filter(r => r.nodeType === 'dept_review' && ['approve', 'reject'].includes(r.action))
@@ -33,7 +35,6 @@ const outcome = computed(() => {
   }
   return props.task.status === 'manager_scoring' && lastReview.value?.action === 'reject' ? '已退回直属上级重新评定。' : '';
 });
-const score = (value: number | null | undefined) => value == null ? '—' : value.toFixed(2);
 async function load() {
   const sequence = ++loadSequence;
   loading.value = true; error.value = ''; detail.value = null;
@@ -47,11 +48,12 @@ async function review(action: 'approve' | 'reject') {
   const reason = comment.value.trim();
   if (action === 'reject' && !reason) { validation.value = '请填写退回原因'; return; }
   busy.value = true;
+  emit('busy', true);
   try {
     await tasksApi.deptReview(props.task.id, { action, ...(reason ? { comment: reason } : {}) });
     ElMessage.success(action === 'approve' ? '部门复核通过' : '已退回直属上级');
     emit('reviewed');
-  } finally { busy.value = false; }
+  } finally { busy.value = false; emit('busy', false); }
 }
 watch(() => [props.task.id, props.task.status], load, { immediate: true });
 watch(() => props.task.id, () => { comment.value = ''; validation.value = ''; });
@@ -59,30 +61,23 @@ watch(() => props.task.id, () => { comment.value = ''; validation.value = ''; })
 
 <template>
   <div v-loading="loading" class="department-review-workspace" data-testid="department-review-workspace">
-    <ChartCard>
-      <template #title>部门复核</template>
+    <component :is="workspaceContainer" :title="embedded ? undefined : '部门复核'" :padded="embedded ? undefined : true" :class="{ 'department-review-workspace__embedded': embedded }">
       <el-alert v-if="outcome" type="success" :closable="false" :title="outcome" />
       <el-alert v-if="error" type="error" :closable="false" :title="error"><el-button link @click="load">重试</el-button></el-alert>
       <template v-if="detail">
         <PerformanceResultSummary
           :cycle-name="detail.cycleName"
           :employee-name="detail.employeeName"
-          :status-label="detail.status === 'approval' && detail.approvedAt ? '已通过，待公示' : TASK_STATUS_META[detail.status]?.label ?? detail.status"
-          :status-type="detail.status === 'approval' && detail.approvedAt ? 'success' : (TASK_STATUS_META[detail.status]?.type as any) || 'info'"
+          :status-label="resultStage(detail.status, detail.approvedAt).label"
+          :status-type="resultStage(detail.status, detail.approvedAt).type"
           :department-name="detail.deptName"
           :position="detail.position"
           :manager-name="detail.managerName"
           :score="detail.calculatedScore"
           :raw-grade="detail.currentGrade"
+          :calibrated-grade="task.gradeResult?.calibratedGrade as PerfGrade | null | undefined"
         />
-        <h3>月度结果回顾</h3>
-        <div class="review-periods">
-          <article v-for="period in detail.periods" :key="period.periodKey">
-            <strong>{{ period.periodKey }}</strong>
-            <span>员工自评 {{ score(period.selfScoreTotal) }} <GradeTag :grade="period.selfGrade" size="small" /></span>
-            <span>上级评价 {{ score(period.managerScoreTotal) }} <GradeTag :grade="period.managerGrade" size="small" /></span>
-          </article>
-        </div>
+        <PerformancePeriodResults :periods="detail.periods" />
         <ReviewHistory :records="detail.flowRecords ?? task.flowRecords" />
         <el-form v-if="canReview" label-position="top" class="review-form">
           <el-form-item label="复核意见" :error="validation">
@@ -94,17 +89,14 @@ watch(() => props.task.id, () => { comment.value = ''; validation.value = ''; })
           </div>
         </el-form>
       </template>
-    </ChartCard>
+    </component>
   </div>
 </template>
 
 <style scoped>
 .department-review-workspace { min-width: 0; }
-h3 { margin: 16px 0 8px; font-size: 14px; }
-.review-periods article { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 24px; padding: 12px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
-.review-periods span { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; }
+.department-review-workspace__embedded { min-width: 0; }
 .review-form { margin-top: 18px; }
 .review-actions { display: flex; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
 .review-actions .el-button { margin: 0; }
-@media (max-width: 600px) { .review-periods article { align-items: flex-start; flex-direction: column; } }
 </style>

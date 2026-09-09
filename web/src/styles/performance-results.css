@@ -1,0 +1,92 @@
+/* Shared presentation for the four performance result workspaces and their teleported drawers. */
+.performance-result-page {
+  min-width: 0;
+  gap: 16px;
+}
+.performance-result-page .chart-card {
+  min-width: 0;
+  height: auto;
+  border: 1px solid var(--el-border-color-extra-light);
+  border-radius: 10px;
+  box-shadow: none;
+}
+.performance-result-page .chart-card .chart-card__head {
+  min-height: 56px;
+  box-sizing: border-box;
+  gap: 12px;
+  padding: 16px 20px;
+  flex-wrap: wrap;
+}
+.performance-result-page .chart-card .chart-card__title {
+  font-size: 14px;
+  line-height: 22px;
+  font-weight: 600;
+  color: var(--el-text-color-primary);
+}
+.performance-result-page > .chart-card:first-child > .chart-card__head .chart-card__title {
+  font-size: 16px;
+  line-height: 24px;
+}
+.performance-result-page .chart-card .chart-card__body--padded { padding: 0 20px 20px; }
+.performance-result-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+.performance-result-page .chart-card__extra .performance-result-toolbar { margin-bottom: 0; }
+.performance-result-page .chart-card__extra > .el-select,
+.performance-result-page .chart-card__extra .el-select { width: 280px !important; }
+.performance-result-actions { display: flex; align-items: center; justify-content: flex-end; flex-wrap: wrap; gap: 8px; }
+.performance-result-page .el-button + .el-button,
+.performance-result-drawer .el-button + .el-button { margin-left: 0; }
+.performance-result-page .el-button:not(.is-link),
+.performance-result-drawer .el-button:not(.is-link) { height: 32px; padding: 8px 14px; font-size: 13px; border-radius: 6px; }
+.performance-result-page .el-select__wrapper { min-height: 32px; }
+.performance-result-page .el-button.is-link,
+.performance-result-drawer .el-button.is-link { font-size: 13px; font-weight: 500; }
+.performance-result-table.el-table { width: 100%; min-width: 0; font-size: 13px; border-color: var(--el-border-color-lighter); }
+.performance-result-table.el-table th.el-table__cell {
+  height: 40px;
+  font-size: 13px;
+  font-weight: 600;
+}
+.performance-result-table.el-table td.el-table__cell { height: 56px; box-sizing: border-box; font-size: 13px; }
+.performance-result-table.el-table .el-table__cell { padding: 8px 0; border-right: 0; border-bottom: 1px solid var(--el-border-color-extra-light); }
+.performance-result-table.el-table .cell { padding: 0 12px; line-height: 20px; }
+.performance-result-table.el-table .el-button { font-size: 13px; }
+.performance-result-employee { min-width: 0; line-height: 20px; }
+.performance-result-employee > * { display: block; }
+.performance-result-employee > :first-child { font-weight: 500; color: var(--el-text-color-primary); }
+.performance-result-meta { font-size: 12px; line-height: 18px; color: var(--el-text-color-secondary); }
+.performance-result-score { color: var(--el-text-color-primary); font-weight: 600; font-variant-numeric: tabular-nums; }
+.performance-result-drawer .el-drawer__header {
+  margin: 0;
+  padding: 18px 24px;
+  border-bottom: 1px solid var(--el-border-color-lighter);
+}
+.performance-result-drawer .el-drawer__title { font-size: 16px; font-weight: 600; line-height: 24px; color: var(--el-text-color-primary); overflow-wrap: anywhere; }
+.performance-result-drawer .el-drawer__body { padding: 20px 24px; }
+.performance-result-drawer .el-drawer__footer { padding: 14px 24px; border-top: 1px solid var(--el-border-color-lighter); }
+.performance-result-section { min-width: 0; margin-top: 20px; }
+.performance-result-section h3,
+.performance-result-drawer .review-history h3 { margin: 0 0 12px; font-size: 14px; line-height: 22px; font-weight: 600; }
+.performance-result-drawer .review-history { margin-top: 20px; }
+.performance-result-drawer .el-collapse-item__header { font-size: 14px; font-weight: 600; }
+.performance-period-table.el-table td.el-table__cell { height: 44px; }
+.performance-result-dialog .el-dialog__title { font-size: 16px; font-weight: 600; }
+.performance-result-dialog .el-dialog__body { font-size: 13px; }
+.performance-result-dialog .el-button { height: 32px; font-size: 13px; border-radius: 6px; }
+@media (max-width: 768px) {
+  .performance-result-page .chart-card .chart-card__head { padding: 14px 12px; align-items: flex-start; }
+  .performance-result-page .chart-card .chart-card__body--padded { padding: 0 12px 14px; }
+  .performance-result-page .chart-card__extra { min-width: 0; max-width: 100%; }
+  .performance-result-page .chart-card__extra:has(.el-select) { width: 100%; }
+  .performance-result-page .chart-card__extra > .el-select,
+  .performance-result-page .chart-card__extra .el-select { width: 100% !important; }
+  .performance-result-toolbar { width: 100%; gap: 8px; }
+  .performance-result-drawer .el-drawer__header { padding: 16px; }
+  .performance-result-drawer .el-drawer__body { padding: 16px; }
+  .performance-result-drawer .el-drawer__footer { padding: 12px 16px; }
+}

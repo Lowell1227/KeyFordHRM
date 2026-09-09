@@ -89,15 +89,15 @@ for (const width of [1440, 390]) {
     page.on('pageerror', (error) => errors.push(error.message));
     const state = await mockApprovalHistory(page);
     await page.goto(`/approval?cycleId=${approvalCycleA}`);
-    await expect(approvalHistoryRow(page, '虚拟审批人').getByRole('button', { name: '详情', exact: true })).toHaveCount(0);
+    await expect(approvalHistoryRow(page, '虚拟审批人').getByRole('button', { name: '查看详情', exact: true })).toHaveCount(0);
     await expect(approvalHistoryRow(page, '虚拟员工丙')).toContainText('—');
-    await approvalHistoryRow(page, '虚拟员工甲').getByRole('button', { name: '详情', exact: true }).click();
+    await approvalHistoryRow(page, '虚拟员工甲').getByRole('button', { name: '查看详情', exact: true }).click();
     const drawer = page.getByTestId('approval-detail-drawer');
     await expect(drawer).toBeVisible();
     const summary = drawer.getByTestId('performance-result-summary');
     await expect(summary).toContainText('虚拟员工甲');
     await expect(summary).toContainText('审批历史周期甲');
-    await expect(summary).toContainText('已通过，待公示');
+    await expect(summary).toContainText('已审批，待公示');
     await expect(summary).toContainText('86.00');
     await expect(summary.getByText('B', { exact: true })).toBeVisible();
     await expect(summary.getByText('A', { exact: true })).toBeVisible();
@@ -145,7 +145,7 @@ for (const width of [1440, 390]) {
 test('审批详情读取失败有明确错误和重试入口', async ({ page }) => {
   const state = await mockApprovalHistory(page, { failFirstDetail: true });
   await page.goto(`/approval?cycleId=${approvalCycleA}`);
-  await approvalHistoryRow(page, '虚拟员工甲').getByRole('button', { name: '详情', exact: true }).click();
+  await approvalHistoryRow(page, '虚拟员工甲').getByRole('button', { name: '查看详情', exact: true }).click();
   const drawer = page.getByTestId('approval-detail-drawer');
   await expect(drawer).toContainText('历史意见暂时无法读取');
   await drawer.getByRole('button', { name: '重试', exact: true }).click();
@@ -157,11 +157,11 @@ test('审批详情读取失败有明确错误和重试入口', async ({ page }) 
 test('审批详情切换员工后忽略前一员工迟到的响应', async ({ page }) => {
   const state = await mockApprovalHistory(page, { slowDetail: true });
   await page.goto(`/approval?cycleId=${approvalCycleA}`);
-  await approvalHistoryRow(page, '虚拟员工甲').getByRole('button', { name: '详情', exact: true }).click();
+  await approvalHistoryRow(page, '虚拟员工甲').getByRole('button', { name: '查看详情', exact: true }).click();
   await expect.poll(() => state.calls.some((call) => call.path.endsWith(`task-${approvalCycleA}-first`))).toBe(true);
   await page.keyboard.press('Escape');
   await expect(page.getByTestId('approval-detail-drawer')).toBeHidden();
-  await approvalHistoryRow(page, '虚拟员工丙').getByRole('button', { name: '详情', exact: true }).click();
+  await approvalHistoryRow(page, '虚拟员工丙').getByRole('button', { name: '查看详情', exact: true }).click();
   const drawer = page.getByTestId('approval-detail-drawer');
   await drawer.getByRole('button', { name: '查看全部 4 条记录', exact: true }).click();
   await expect(drawer).toContainText('虚拟员工丙的周期评语：稳定交付。');
@@ -184,6 +184,6 @@ test('审批切换周期后忽略前一周期迟到的任务名单', async ({ pa
   await late;
   await expect(approvalHistoryRow(page, '虚拟员工乙')).toBeVisible();
   await expect(approvalHistoryRow(page, '虚拟员工甲')).toHaveCount(0);
-  await approvalHistoryRow(page, '虚拟员工乙').getByRole('button', { name: '详情', exact: true }).click();
+  await approvalHistoryRow(page, '虚拟员工乙').getByRole('button', { name: '查看详情', exact: true }).click();
   await expect(page.getByTestId('approval-detail-drawer')).toContainText('审批历史周期乙');
 });

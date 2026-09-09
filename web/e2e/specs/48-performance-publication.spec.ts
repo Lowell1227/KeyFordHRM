@@ -291,7 +291,7 @@ for (const width of [1440, 390]) {
     await page
       .getByRole("row")
       .filter({ hasText: "已公示员工" })
-      .getByRole("button", { name: "详情", exact: true })
+      .getByRole("button", { name: "查看详情", exact: true })
       .click();
     await expect(page.getByTestId("performance-result-summary")).toContainText(
       "92",

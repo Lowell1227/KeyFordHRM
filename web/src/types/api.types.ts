@@ -786,7 +786,8 @@ export interface AssessmentTask {
   snapshotId: string;
   employeeId: string;
   employeeName?: string;
-  employeeNo?: string;
+  employeeNo?: string | null;
+  position?: string | null;
   deptId?: string | null;
   deptName?: string;
   managerId?: string | null;
@@ -804,7 +805,7 @@ export interface AssessmentTask {
   managerScoredAt?: string;
   deptReviewedAt?: string;
   hrCalibratedAt?: string;
-  approvedAt?: string;
+  approvedAt?: string | null;
   publishedAt?: string;
   employeeConfirmedAt?: string;
   closedAt?: string;
@@ -823,6 +824,10 @@ export interface TaskListItem extends AssessmentTask {
 }
 
 export interface DepartmentReviewListItem extends TaskListItem {
+  employeeNo: string | null;
+  position: string | null;
+  calibratedGrade: PerfGrade | null;
+  approvedAt: string | null;
   departmentReview: { canReview: boolean; latest: { action: 'approve' | 'reject'; createdAt: string; combined: boolean } | null };
 }
 export interface DepartmentReviewListPage extends Paginated<DepartmentReviewListItem> { pendingTotal: number }
@@ -1186,6 +1191,7 @@ export interface CalibrationCandidate {
   canViewDetail?: boolean;
   actionHint?: string | null;
   employeeName: string;
+  employeeNo: string | null;
   deptName?: string | null;
   position?: string | null;
   status: TaskStatus;
@@ -1193,6 +1199,8 @@ export interface CalibrationCandidate {
   calculatedScore: number | null;
   /** 直属上级独立录入的整周期最终等级。 */
   rawGrade: PerfGrade | null;
+  calibratedGrade: PerfGrade | null;
+  approvedAt: string | null;
   finalGradeSubmittedAt?: string | null;
   managerName?: string | null;
 }
@@ -1237,12 +1245,15 @@ export interface CalibrationCandidateDetail {
   flowRecords?: ReviewHistoryRecord[];
   taskId: string;
   employeeName: string;
+  employeeNo: string | null;
   deptName: string | null;
   position: string | null;
   managerName: string | null;
   status: TaskStatus;
   calculatedScore: number | null;
   finalGrade: PerfGrade | null;
+  calibratedGrade: PerfGrade | null;
+  approvedAt: string | null;
   periods: Array<{
     periodKey: string;
     status: string;
@@ -1321,11 +1332,12 @@ export interface ApprovalTaskView {
   cycleId: string;
   employeeId: string;
   employeeName: string;
+  employeeNo: string | null;
   position?: string | null;
   deptId?: string | null;
   deptName?: string;
   status: TaskStatus;
-  totalScore: number;
+  totalScore: number | null;
   rawGrade?: string | null;
   calibratedGrade?: string | null;
   isVeto: boolean;

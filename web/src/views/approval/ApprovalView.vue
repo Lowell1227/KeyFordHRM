@@ -8,13 +8,15 @@ import { tasksApi } from '@/api/tasks.api';
 import GradeTag from '@/components/common/GradeTag.vue';
 import ReviewHistory from '@/components/common/ReviewHistory.vue';
 import PerformanceResultSummary from '@/components/common/PerformanceResultSummary.vue';
+import PerformanceResultDrawer from '@/components/common/PerformanceResultDrawer.vue';
+import { resultStage } from '@/utils/performance-result-presentation';
 import GradeDistChart from '@/components/charts/GradeDistChart.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import type { ApprovalOverview, ApprovalTaskView, AssessmentCycle, TaskDetail } from '@/types/api.types';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 import { useAuthStore } from '@/stores/auth.store';
-import { TASK_STATUS_META, type PerfGrade } from '@/types/enums';
+import { type PerfGrade } from '@/types/enums';
 import { GRADE_LABELS } from '@/utils/grade';
 import { formatDateTime } from '@/utils/date';
 import {
@@ -71,18 +73,6 @@ const gradeCounts = computed<Record<PerfGrade, number>>(() => {
 const distTotal = computed(() =>
   (Object.keys(gradeCounts.value) as PerfGrade[]).reduce((sum, g) => sum + gradeCounts.value[g], 0),
 );
-
-function statusLabel(status: ApprovalTaskView['status']): string {
-  return TASK_STATUS_META[status]?.label ?? status;
-}
-
-const TAG_TYPES = ['info', 'primary', 'success', 'warning', 'danger'] as const;
-type TagType = (typeof TAG_TYPES)[number];
-
-function statusType(status: ApprovalTaskView['status']): TagType {
-  const type = TASK_STATUS_META[status]?.type;
-  return (TAG_TYPES as readonly string[]).includes(type) ? (type as TagType) : 'info';
-}
 
 function formatScore(score?: number | null): string {
   return score == null ? '—' : score.toFixed(2);
@@ -377,11 +367,11 @@ function handleBatchReject() {
 </script>
 
 <template>
-  <div class="approval-view page-stack">
-    <ChartCard :padded="false">
+  <div class="approval-view page-stack performance-result-page">
+    <ChartCard :padded="true">
       <template #title>结果审批</template>
       <template #extra>
-        <div class="approval-view__toolbar">
+        <div class="approval-view__toolbar performance-result-toolbar">
           <el-select
             :model-value="selectedCycleId"
             data-testid="approval-cycle-select"
@@ -441,7 +431,7 @@ function handleBatchReject() {
         />
 
         <div v-if="overview" class="approval-view__overview">
-          <ChartCard class="approval-view__overview-card">
+          <ChartCard :padded="true" class="approval-view__overview-card">
             <template #title>全校准分布（只读）</template>
             <GradeDistChart :data="gradeCounts" title="" :height="220" />
             <div class="ratio-row">
@@ -465,7 +455,7 @@ function handleBatchReject() {
             </div>
           </ChartCard>
 
-          <ChartCard class="approval-view__overview-card">
+          <ChartCard :padded="true" class="approval-view__overview-card">
             <template #title>审批进度</template>
             <div class="progress-grid">
               <div class="progress-cell">
@@ -502,7 +492,7 @@ function handleBatchReject() {
           </ChartCard>
         </div>
         <el-table
-          class="app-table"
+          class="app-table performance-result-table"
           v-loading="loading"
           :data="tasks"
           row-key="id"
@@ -514,29 +504,32 @@ function handleBatchReject() {
             width="50"
             :selectable="isTaskSelectable"
           />
-          <el-table-column prop="employeeName" label="员工" min-width="120" />
-          <el-table-column prop="position" label="岗位" min-width="120" />
-          <el-table-column prop="deptName" label="部门" min-width="160" show-overflow-tooltip />
-          <el-table-column label="总分" width="100">
+          <el-table-column prop="employeeName" label="员工" min-width="150" show-overflow-tooltip>
+            <template #default="{ row }"><div class="performance-result-employee"><div>{{ row.employeeName }}</div><div class="performance-result-meta">{{ row.employeeNo || '—' }}</div></div></template>
+          </el-table-column>
+          <el-table-column prop="deptName" label="部门" min-width="130" show-overflow-tooltip />
+          <el-table-column prop="position" label="岗位" min-width="130" show-overflow-tooltip />
+          <el-table-column label="周期得分" width="110" align="right">
             <template #default="{ row }">
-              {{ formatScore(row.totalScore) }}
+              <span class="performance-result-score">{{ formatScore(row.totalScore) }}</span>
             </template>
           </el-table-column>
-          <el-table-column label="最终等级" width="100">
+          <el-table-column label="周期等级" width="100" align="center">
             <template #default="{ row }">
-              <GradeTag :grade="row.rawGrade" size="small" />
+              <GradeTag :grade="row.calibratedGrade ?? row.rawGrade" size="small" />
             </template>
           </el-table-column>
-          <el-table-column label="状态" width="140">
+          <el-table-column label="当前环节" min-width="150">
             <template #default="{ row }">
-              <el-tag :type="row.approvedAt ? 'success' : statusType(row.status)" size="small">
-                {{ row.approvedAt ? '已通过，待公示' : statusLabel(row.status) }}
+              <el-tag :type="resultStage(row.status, row.approvedAt).type" size="small">
+                {{ resultStage(row.status, row.approvedAt).label }}
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" :width="canOperateApproval ? 190 : 90" fixed="right">
+          <el-table-column label="操作" width="180" fixed="right">
             <template #default="{ row }">
-              <el-button v-if="canViewTaskDetail(row)" link type="primary" size="small" @click="openDetail(row.id)">详情</el-button>
+              <div class="performance-result-actions">
+              <el-button v-if="canViewTaskDetail(row)" link type="primary" @click="openDetail(row.id)">查看详情</el-button>
               <template v-if="canOperateTask(row)">
                 <el-button
                   link
@@ -558,18 +551,17 @@ function handleBatchReject() {
                 </el-button>
               </template>
               <span v-if="!canViewTaskDetail(row)" class="text-secondary">公示后可查看</span>
+              </div>
             </template>
           </el-table-column>
         </el-table>
       </template>
     </ChartCard>
 
-    <el-drawer
+    <PerformanceResultDrawer
       v-model="detailDrawer.visible"
-      title="审批详情"
-      size="min(640px, 100vw)"
+      :title="detailDrawer.detail ? `${detailDrawer.detail.employeeName} · 结果审批` : '结果审批详情'"
       data-testid="approval-detail-drawer"
-      destroy-on-close
       @close="closeDetail"
     >
       <el-skeleton v-if="detailDrawer.loading" :rows="8" animated />
@@ -582,9 +574,10 @@ function handleBatchReject() {
           class="approval-view__detail-summary"
           :cycle-name="detailDrawer.detail.cycleName || selectedCycle?.name"
           :employee-name="detailDrawer.detail.employeeName || '—'"
-          :status-label="detailDrawer.detail.status === 'approval' && detailDrawer.detail.approvedAt ? '已通过，待公示' : statusLabel(detailDrawer.detail.status)"
-          :status-type="detailDrawer.detail.status === 'approval' && detailDrawer.detail.approvedAt ? 'success' : statusType(detailDrawer.detail.status)"
+          :status-label="resultStage(detailDrawer.detail.status, detailDrawer.detail.approvedAt).label"
+          :status-type="resultStage(detailDrawer.detail.status, detailDrawer.detail.approvedAt).type"
           :department-name="detailDrawer.detail.deptName"
+          :position="detailDrawer.detail.position"
           :manager-name="detailDrawer.detail.managerName"
           :score="detailDrawer.detail.gradeResult?.calculatedScore"
           :raw-grade="detailDrawer.detail.gradeResult?.rawGrade"
@@ -592,12 +585,13 @@ function handleBatchReject() {
         />
         <ReviewHistory :records="detailDrawer.detail.flowRecords" />
       </template>
-    </el-drawer>
+    </PerformanceResultDrawer>
 
     <el-dialog
       v-model="rejectDialog.visible"
       title="退回绩效校准"
-      width="520px"
+      width="min(520px, calc(100vw - 32px))"
+      class="performance-result-dialog"
       :close-on-click-modal="false"
       destroy-on-close
     >

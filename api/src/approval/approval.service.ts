@@ -16,6 +16,7 @@ export interface ApprovalListItem {
   cycleId: string;
   employeeId: string;
   employeeName: string;
+  employeeNo: string | null;
   position: string | null;
   deptId: string | null;
   deptName: string | null;
@@ -59,7 +60,7 @@ export class ApprovalService {
     const tasks = await this.prisma.assessmentTask.findMany({
       where,
       include: {
-        employee: { select: { name: true, position: true } },
+        employee: { select: { name: true, employeeNo: true, position: true } },
         dept: { select: { name: true } },
         gradeResult: true,
       },
@@ -330,7 +331,7 @@ export class ApprovalService {
 
   private mapToListItem(
     task: AssessmentTask & {
-      employee: { name: string; position: string | null } | null;
+      employee: { name: string; employeeNo: string | null; position: string | null } | null;
       dept: { name: string } | null;
       gradeResult: {
         calculatedScore: Prisma.Decimal | null;
@@ -350,6 +351,7 @@ export class ApprovalService {
       cycleId: task.cycleId,
       employeeId: task.employeeId,
       employeeName: task.employee?.name ?? '',
+      employeeNo: task.employee?.employeeNo ?? null,
       position: task.employee?.position ?? null,
       deptId: task.deptId,
       deptName: task.dept?.name ?? null,

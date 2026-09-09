@@ -286,7 +286,7 @@ describe('TasksService', () => {
   function buildFullTask(status: TaskStatus, publishVisibleFields: Prisma.JsonValue = null) {
     return {
       ...makeTask(status),
-      employee: { name: '员工A', employeeNo: 'E001' },
+      employee: { name: '员工A', employeeNo: 'E001', position: '高级工程师' },
       dept: { name: '部门A' },
       manager: { id: 'mgr-1', name: '主管A' },
       indicatorInstances: [makeIndicator()],
@@ -377,6 +377,25 @@ describe('TasksService', () => {
   });
 
   describe('findOne', () => {
+    it('returns position and approval time needed by the embedded result drawer', async () => {
+      const task: any = buildFullTask('approval');
+      task.approvedAt = new Date('2026-09-09T02:30:00.000Z');
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+
+      const result = await service.findOne('task-1', makeViewer({ id: 'head-1' }));
+
+      expect(result).toMatchObject({
+        employeeNo: 'E001',
+        position: '高级工程师',
+        approvedAt: new Date('2026-09-09T02:30:00.000Z'),
+      });
+      expect(prisma.assessmentTask.findUnique).toHaveBeenCalledWith(expect.objectContaining({
+        include: expect.objectContaining({
+          employee: { select: { name: true, employeeNo: true, position: true } },
+        }),
+      }));
+    });
+
     it('masks result-bearing workflow metadata before publication, even for an HR employee', async () => {
       const task: any = buildFullTask('hr_calibration');
       task.flowRecords = ['manager_score', 'dept_review', 'hr_calibration', 'approval'].map(nodeType => ({

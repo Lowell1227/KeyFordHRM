@@ -195,7 +195,7 @@ describe('ApprovalService', () => {
       prisma.assessmentTask.findMany.mockResolvedValue([
         {
           ...makeTask('approval'),
-          employee: { name: '张三', position: '工程师' },
+          employee: { name: '张三', employeeNo: 'E001', position: '工程师' },
           dept: { name: '研发部' },
           gradeResult: null,
         },
@@ -210,6 +210,10 @@ describe('ApprovalService', () => {
       );
       expect(result).toHaveLength(1);
       expect(result[0].approverId).toBe('vp-1');
+      expect(result[0]).toMatchObject({ employeeNo: 'E001', position: '工程师' });
+      expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        include: expect.objectContaining({ employee: { select: { name: true, employeeNo: true, position: true } } }),
+      }));
     });
 
     it('system_admin 返回全量', async () => {

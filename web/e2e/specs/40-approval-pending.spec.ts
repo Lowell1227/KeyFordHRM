@@ -36,7 +36,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 390, height: 844 
     await expect(approved.getByRole('checkbox')).toBeDisabled();
     await expect(approved.getByRole('button', { name: '通过', exact: true })).toHaveCount(0);
     await expect(approved.getByRole('button', { name: '退回', exact: true })).toHaveCount(0);
-    await expect(approved).toContainText('已通过，待公示');
+    await expect(approved).toContainText('已审批，待公示');
     await expect(pending.getByRole('checkbox')).toBeEnabled();
     await expect(pending.getByRole('button', { name: '通过', exact: true })).toBeVisible();
   });

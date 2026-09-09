@@ -26,11 +26,14 @@ export interface CalibrationWorkbenchItem {
   actionHint: string | null;
   taskId: string;
   employeeName: string;
+  employeeNo: string | null;
   deptName: string | null;
   position: string | null;
   status: TaskStatus;
   calculatedScore: number | null;
   rawGrade: PerfGrade | null;
+  calibratedGrade: PerfGrade | null;
+  approvedAt: Date | null;
   /** 直属上级提交整周期结果评定的时间。 */
   finalGradeSubmittedAt: Date | null;
   managerName: string | null;
@@ -69,12 +72,15 @@ export interface CalibrationCandidateDetail {
   flowRecords: ReturnType<typeof mapReviewHistory>;
   taskId: string;
   employeeName: string;
+  employeeNo: string | null;
   deptName: string | null;
   position: string | null;
   managerName: string | null;
   status: TaskStatus;
   calculatedScore: number | null;
   finalGrade: PerfGrade | null;
+  calibratedGrade: PerfGrade | null;
+  approvedAt: Date | null;
   periods: Array<{
     periodKey: string;
     status: string;
@@ -152,10 +158,10 @@ export class CalibrationService {
     const task = await this.prisma.assessmentTask.findFirst({
       where: { id: taskId, cycleId, isExempt: false },
       include: {
-        employee: { select: { name: true, position: true } },
+        employee: { select: { name: true, employeeNo: true, position: true } },
         dept: { select: { name: true } },
         manager: { select: { name: true } },
-        gradeResult: { select: { calculatedScore: true, rawGrade: true } },
+        gradeResult: { select: { calculatedScore: true, rawGrade: true, calibratedGrade: true } },
         periods: {
           orderBy: { sequence: 'asc' },
           select: {
@@ -207,12 +213,15 @@ export class CalibrationService {
     return {
       taskId: task.id,
       employeeName: task.employee?.name ?? '',
+      employeeNo: task.employee?.employeeNo ?? null,
       deptName: task.dept?.name ?? null,
       position: task.employee?.position ?? null,
       managerName: task.manager?.name ?? null,
       status: task.status,
       calculatedScore: task.gradeResult?.calculatedScore?.toNumber() ?? null,
       finalGrade: task.gradeResult?.rawGrade ?? null,
+      calibratedGrade: task.gradeResult?.calibratedGrade ?? null,
+      approvedAt: task.approvedAt ?? null,
       periods: task.periods.map((p) => ({
         periodKey: p.periodKey,
         status: p.status,
@@ -455,7 +464,7 @@ export class CalibrationService {
     return this.prisma.assessmentTask.findMany({
       where: { cycleId, isExempt: false },
       include: {
-        employee: { select: { name: true, position: true } },
+        employee: { select: { name: true, employeeNo: true, position: true } },
         dept: { select: { name: true } },
         manager: { select: { name: true } },
         gradeResult: true,
@@ -482,11 +491,14 @@ export class CalibrationService {
       actionHint: ownResult ? '本人结果由其他有权限的 HR 处理' : null,
       taskId: task.id,
       employeeName: task.employee?.name ?? '',
+      employeeNo: task.employee?.employeeNo ?? null,
       deptName: task.dept?.name ?? null,
       position: task.employee?.position ?? null,
       status: task.status,
       calculatedScore: ownResult ? null : task.gradeResult?.calculatedScore?.toNumber() ?? null,
       rawGrade: ownResult ? null : task.gradeResult?.rawGrade ?? null,
+      calibratedGrade: ownResult ? null : task.gradeResult?.calibratedGrade ?? null,
+      approvedAt: task.approvedAt ?? null,
       finalGradeSubmittedAt: task.managerScoredAt ?? null,
       managerName: task.manager?.name ?? null,
     };

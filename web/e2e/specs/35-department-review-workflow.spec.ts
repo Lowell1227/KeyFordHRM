@@ -4,7 +4,7 @@ const taskId = '11111111-1111-4111-8111-111111111111';
 const cycleId = '22222222-2222-4222-8222-222222222222';
 const response = (data: unknown) => ({ code: 0, message: 'success', data });
 
-async function setup(page: Page, role: 'head' | 'employee' | 'employee-head' = 'head', options: { status?: string; combined?: boolean; approvedAt?: string } = {}) {
+async function setup(page: Page, role: 'head' | 'employee' | 'employee-head' = 'head', options: { status?: string; combined?: boolean; approvedAt?: string; reviewGate?: Promise<void> } = {}) {
   let status = options.status ?? 'dept_review';
   let latestReview: { action: 'approve' | 'reject'; createdAt: string; combined: boolean } | null = options.combined ? { action: 'approve', createdAt: '2026-09-08T10:00:00Z', combined: true } : null;
   const flowRecords = [{ id: 'grade-record', nodeType: 'manager_score', action: 'submit', actorName: '虚拟直属上级', createdAt: '2026-09-08T09:00:00Z', comment: '整周期结果评定：最终等级 B', extraData: { type: 'final_grade_submitted', comment: '周期交付稳定，建议加强协作。' } }];
@@ -23,9 +23,10 @@ async function setup(page: Page, role: 'head' | 'employee' | 'employee-head' = '
     else if (endpoint.endsWith('/notifications/unread-count')) data = 0;
     else if (endpoint === '/api/v1/cycles') data = { items: [{ id: cycleId, name: '部门复核回归周期', status: 'manager_score' }], total: 1 };
     else if (endpoint === '/api/v1/cycles/' + cycleId) data = { id: cycleId, name: '部门复核回归周期', workflowVersion: 2, status: 'manager_score', publishVisibleFields: {} };
-    else if (endpoint === '/api/v1/tasks/department-review') data = { items: [{ id: taskId, cycleId, employeeName: '虚拟员工甲', cycleName: '部门复核回归周期', deptName: '人事组', status, approvedAt: options.approvedAt, totalScore: 92.4, rawGrade: 'B', departmentReview: { canReview: status === 'dept_review', latest: latestReview } }], total: 1, pendingTotal: status === 'dept_review' ? 1 : 0, page: 1, pageSize: 20 };
+    else if (endpoint === '/api/v1/tasks/department-review') data = { items: [{ id: taskId, cycleId, employeeName: '虚拟员工甲', employeeNo: 'QA_EMPLOYEE', cycleName: '部门复核回归周期', deptName: '人事组', position: '绩效专员', status, approvedAt: options.approvedAt, totalScore: 92.4, rawGrade: 'B', calibratedGrade: 'A', departmentReview: { canReview: status === 'dept_review', latest: latestReview } }], total: 1, pendingTotal: status === 'dept_review' ? 1 : 0, page: 1, pageSize: 20 };
     else if (endpoint.endsWith('/dept-review') && route.request().method() === 'POST') {
       const body = route.request().postDataJSON(); submissions.push(body);
+      if (options.reviewGate) await options.reviewGate;
       latestReview = { action: body.action, createdAt: '2026-09-08T10:00:00Z', combined: false };
       flowRecords.push({ id: 'department-record', nodeType: 'dept_review', action: body.action, actorName: '虚拟复核账号', createdAt: '2026-09-08T10:00:00Z', comment: body.comment ?? '', extraData: { type: '', comment: '' } });
       status = body.action === 'approve' ? 'hr_calibration' : 'manager_scoring'; data = { id: taskId, status };
@@ -36,10 +37,10 @@ async function setup(page: Page, role: 'head' | 'employee' | 'employee-head' = '
       periods: [{ periodKey: '2026-09', selfGrade: 'A', managerGrade: 'A', selfScoreTotal: 92.4, managerScoreTotal: 92.4 }],
     };
     else if (endpoint === '/api/v1/tasks/' + taskId) data = {
-      id: taskId, cycleId, cycleName: '部门复核回归周期', employeeId: 'employee-1', employeeName: '虚拟员工甲', employeeNo: 'QA_EMPLOYEE', deptName: '人事组',
+      id: taskId, cycleId, cycleName: '部门复核回归周期', employeeId: 'employee-1', employeeName: '虚拟员工甲', employeeNo: 'QA_EMPLOYEE', deptName: '人事组', position: '绩效制度与组织发展高级专员（跨团队协作与长期项目跟进）',
       managerId: options.combined ? 'head-1' : 'manager-1', managerName: '虚拟直属上级', deptHeadId: role === 'employee-head' ? 'employee-1' : 'head-1', status, approvedAt: options.approvedAt, isExempt: false, workflowVersion: 2,
       periods: [{ id: 'period-1', periodKey: '2026-09', status: 'completed', sequence: 1, periodType: 'month', managerSubmittedAt: '2026-10-01T00:00:00Z', employeeSubmittedAt: '2026-10-01T00:00:00Z' }],
-      gradeResult: role === 'head' ? { calculatedScore: 92.4, rawGrade: 'B', isPublished: false } : null,
+      gradeResult: role === 'head' ? { calculatedScore: 92.4, rawGrade: 'B', calibratedGrade: 'A', isPublished: false } : null,
       indicatorInstances: [], flowRecords: role === 'head' ? flowRecords : [],
       workflowContext: { stage: 'review', statusLabel: '待部门复核', currentHandler: null, canRemind: false },
     };
@@ -54,9 +55,15 @@ test('部门复核详情识别结果审批已通过并等待公示', async ({ pa
   await setup(page, 'head', { status: 'approval', combined: true, approvedAt: '2026-09-08T12:00:00.000Z' });
   await page.goto('/department-review');
   await page.getByRole('row').filter({ hasText: '虚拟员工甲' }).getByRole('button', { name: '查看详情', exact: true }).click();
-  const workspace = page.getByTestId('department-review-workspace');
-  await expect(workspace.getByTestId('performance-result-summary')).toContainText('已通过，待公示');
+  await expect(page).toHaveURL(/\/department-review$/);
+  const drawer = page.getByTestId('department-review-detail-drawer');
+  await expect(drawer).toBeVisible();
+  const workspace = drawer.getByTestId('department-review-workspace');
+  await expect(workspace.locator('.chart-card')).toHaveCount(0);
+  await expect(workspace.getByTestId('performance-result-summary')).toContainText('已审批，待公示');
   await expect(workspace).toContainText('部门复核已完成，结果审批已通过，等待公示。');
+  await drawer.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(drawer).toBeHidden();
 });
 
 for (const width of [1440, 390]) {
@@ -128,14 +135,33 @@ test('退回必须填写原因，提交后进入上级重评', async ({ page }) 
   await expect(page.getByText('已退回直属上级重新评定。', { exact: true })).toBeVisible();
 });
 
+test('复核请求未完成时抽屉不可关闭，完成后仍刷新名单', async ({ page }) => {
+  let releaseReview!: () => void;
+  const reviewGate = new Promise<void>(resolve => { releaseReview = resolve; });
+  await setup(page, 'head', { reviewGate });
+  await page.goto('/department-review');
+  await page.getByRole('button', { name: '进入复核', exact: true }).click();
+  const drawer = page.getByTestId('department-review-detail-drawer');
+  await drawer.getByRole('button', { name: '复核通过', exact: true }).click();
+  await expect(drawer.getByRole('button', { name: '关闭', exact: true })).toBeDisabled();
+  await page.keyboard.press('Escape');
+  await expect(drawer).toBeVisible();
+
+  releaseReview();
+  await expect(page.getByTestId('department-review-pending-total')).toHaveText('待复核 0 项');
+  await expect(drawer.getByRole('button', { name: '关闭', exact: true })).toBeEnabled();
+  await drawer.getByRole('button', { name: '关闭', exact: true }).click();
+  await expect(drawer).toBeHidden();
+});
+
 async function setupRecords(page: Page, options: { paginated?: boolean; slowCalibration?: boolean } = {}) {
   await setup(page);
   const requests: Array<{ status: string | null; page: number }> = [];
   let releaseCalibration!: () => void;
   const calibrationGate = new Promise<void>(resolve => { releaseCalibration = resolve; });
   const record = (id: string, employeeName: string, status: string, latest: { action: 'approve' | 'reject'; combined: boolean } | null = null) => ({
-    id, cycleId, employeeName, cycleName: '2026年度部门复核记录与完整周期处理状态展示验证周期', deptName: '测试部门', status,
-    totalScore: status === 'indicator_setting' ? null : 92.4, rawGrade: status === 'indicator_setting' ? null : 'B',
+    id, cycleId, employeeName, employeeNo: `E-${id}`, cycleName: '2026年度部门复核记录与完整周期处理状态展示验证周期', deptName: '测试部门', position: '测试岗位', status,
+    totalScore: status === 'indicator_setting' ? null : 92.4, rawGrade: status === 'indicator_setting' ? null : 'B', calibratedGrade: status === 'indicator_setting' ? null : 'A', approvedAt: status === 'approval' ? '2026-09-08T12:00:00.000Z' : null,
     departmentReview: { canReview: status === 'dept_review', latest: latest ? { ...latest, createdAt: '2026-09-08T10:00:00Z' } : null },
   });
   const rows = [
@@ -169,7 +195,7 @@ for (const width of [1440, 390]) {
     for (const [name, handling, stage] of [
       ['虚拟待复核成员', '待复核', '部门复核中'],
       ['虚拟已通过成员', '复核通过', '绩效校准中'],
-      ['虚拟合并办理成员', '合并复核通过', '结果审批中'],
+      ['虚拟合并办理成员', '合并复核通过', '已审批，待公示'],
       ['虚拟已退回成员', '已退回', '直属上级评分中'],
       ['虚拟尚未开始成员', '待开始', '目标制定中'],
       ['虚拟历史无记录成员', '暂无复核记录', '已公示'],
@@ -228,6 +254,45 @@ test('切换环节后迟到的旧列表不能覆盖当前筛选结果', async ({
   await oldResponse;
   await expect(page.getByRole('row').filter({ hasText: '虚拟合并办理成员' })).toBeVisible();
   await expect(page.getByRole('row').filter({ hasText: '虚拟已通过成员' })).toHaveCount(0);
+});
+
+test('关闭后切换员工时迟到的旧详情不会串到新抽屉', async ({ page }) => {
+  await setupRecords(page);
+  let releasePending!: () => void;
+  const pendingGate = new Promise<void>(resolve => { releasePending = resolve; });
+  const detail = (id: string, employeeName: string, status: string) => ({
+    id, cycleId, cycleName: '部门复核回归周期', employeeId: `employee-${id}`, employeeName,
+    employeeNo: `E-${id}`, deptName: '测试部门', position: '测试岗位', managerId: 'manager-1', managerName: '虚拟上级',
+    deptHeadId: 'head-1', status, approvedAt: null, isExempt: false, workflowVersion: 2, periods: [],
+    gradeResult: { calculatedScore: 92.4, rawGrade: 'B', calibratedGrade: null, isPublished: false },
+    indicatorInstances: [], flowRecords: [], workflowContext: { stage: 'result', statusLabel: '', currentHandler: null, canRemind: false },
+  });
+  await page.route('**/api/v1/tasks/pending', async route => {
+    await pendingGate;
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify(response(detail('pending', '虚拟待复核成员', 'dept_review'))) });
+  });
+  await page.route('**/api/v1/tasks/approved', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(response(detail('approved', '虚拟已通过成员', 'hr_calibration'))),
+  }));
+  await page.route('**/api/v1/tasks/approved/final-grade', route => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(response({
+      taskId: 'approved', cycleId, cycleName: '部门复核回归周期', employeeName: '虚拟已通过成员', status: 'hr_calibration',
+      deptName: '测试部门', position: '测试岗位', managerName: '虚拟上级', calculatedScore: 92.4, currentGrade: 'B',
+      canSubmit: false, allPeriodsComplete: true, latestReject: null, flowRecords: [], periods: [],
+    })),
+  }));
+
+  await page.goto('/department-review');
+  await page.getByRole('row').filter({ hasText: '虚拟待复核成员' }).getByRole('button', { name: '进入复核', exact: true }).click();
+  await page.getByTestId('department-review-detail-drawer').getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByRole('row').filter({ hasText: '虚拟已通过成员' }).getByRole('button', { name: '查看详情', exact: true }).click();
+  const drawer = page.getByTestId('department-review-detail-drawer');
+  await expect(drawer.getByTestId('performance-result-summary')).toContainText('虚拟已通过成员');
+  releasePending();
+  await expect(drawer.getByTestId('performance-result-summary')).toContainText('虚拟已通过成员');
+  await expect(drawer).not.toContainText('虚拟待复核成员');
 });
 
 test('员工公示前不能看到复核操作及未公示结果', async ({ page }) => {

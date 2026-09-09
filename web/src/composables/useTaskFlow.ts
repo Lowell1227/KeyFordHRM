@@ -155,7 +155,7 @@ function getCompletedAt(task: TaskDetail | null | undefined, node: FlowNodeType)
     case 'hr_calibration':
       return task.hrCalibratedAt;
     case 'approval':
-      return task.approvedAt;
+      return task.approvedAt ?? undefined;
     case 'publish':
       return task.publishedAt;
     case 'employee_confirm':
