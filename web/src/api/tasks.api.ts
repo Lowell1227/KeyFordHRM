@@ -24,7 +24,6 @@ import type {
   DeptReviewBody,
   ExemptTaskBody,
   FlowRecord,
-  PerformanceInterview,
   FinalGradeDetail,
   DepartmentReviewListPage,
 } from "@/types/api.types";
@@ -240,11 +239,6 @@ export function createTasksApi(client: TasksApiClient) {
 
     disagreeResult(id: string, reason: string): Promise<TaskActionResult> {
       return apiPost(`/tasks/${id}/employee-disagree`, { reason }, { skipErrorMessage: true });
-    },
-
-    /** GET /tasks/:id/interview — 任务详情页查看面谈记录 */
-    getInterview(id: string): Promise<PerformanceInterview> {
-      return apiGet(`/tasks/${id}/interview`);
     },
 
     // 豁免

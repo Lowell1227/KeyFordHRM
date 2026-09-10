@@ -1,5 +1,4 @@
-import { IsOptional, IsEnum, IsString, IsUUID } from 'class-validator';
-import { InterviewStatus } from '@prisma/client';
+import { IsOptional, IsString, IsUUID, MaxLength } from 'class-validator';
 import { PaginationDto } from '@/common/dto/pagination.dto';
 
 /** 面谈记录列表查询参数。 */
@@ -13,10 +12,7 @@ export class InterviewQueryDto extends PaginationDto {
   deptId?: string;
 
   @IsOptional()
-  @IsEnum(InterviewStatus)
-  status?: InterviewStatus;
-
-  @IsOptional()
   @IsString()
+  @MaxLength(100)
   keyword?: string;
 }

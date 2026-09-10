@@ -52,16 +52,52 @@ async function setup(page: Page, role: 'employee' | 'hr' | 'manager', approved =
     else if (path === '/api/v1/tasks') data = { items: [], total: 0 };
     await route.fulfill({ contentType: 'application/json', body: wrap(data) });
   });
-  return { writes, signatureRequests, candidatesRead: () => candidatesRead };
+  return { writes, signatureRequests, candidatesRead: () => candidatesRead, task };
 }
 
 for (const width of [1440, 390]) {
-  test(`历史已公示结果仅确认，面谈内容只读且不请求签字 ${width}px`, async ({ page }) => {
+  test(`结果关键节点按节点、办理信息、意见分行展示 ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 960 });
+    const state = await setup(page, 'employee');
+    const opinion = '交付成果已核实。\n后续请按双方沟通的计划推进，并定期记录进展。';
+    await page.route(`**/api/v1/tasks/${taskId}`, route => route.fulfill({ contentType: 'application/json', body: wrap({
+      ...state.task(), flowRecords: [
+        { id: '1', nodeType: 'manager_score', action: 'submit', actorName: '虚拟上级', createdAt: '2026-09-01T08:00:00Z', comment: opinion },
+        { id: '2', nodeType: 'dept_review', action: 'approve', actorName: '部门负责人', createdAt: '2026-09-02T08:00:00Z', comment: '复核依据完整。' },
+        { id: '3', nodeType: 'hr_calibration', action: 'submit', actorName: '虚拟HR', createdAt: '2026-09-03T08:00:00Z', comment: null },
+        { id: '4', nodeType: 'approval', action: 'approve', actorName: '分管负责人', createdAt: '2026-09-04T08:00:00Z', comment: '同意本次评定。' },
+      ],
+    }) }));
+    await page.goto(`/tasks/${taskId}?stage=result`);
+    const history = page.getByTestId('review-history');
+    await expect(history.locator('li')).toHaveCount(3);
+    await expect(history.locator('li').first()).toContainText('结果审批');
+    await expect(history).not.toContainText('未填写意见');
+    await history.getByRole('button', { name: '查看全部 4 条记录' }).click();
+    await expect(history.locator('li')).toHaveCount(4);
+    await expect(history.locator('li').last().locator('p')).toHaveText(opinion);
+    const boxes = await history.locator('li').first().evaluate(li => {
+      const heading = li.querySelector('.review-history__heading')!.getBoundingClientRect();
+      const meta = li.querySelector('.review-history__meta')!.getBoundingClientRect();
+      const note = li.querySelector('p')!.getBoundingClientRect();
+      return { headingBottom: heading.bottom, metaTop: meta.top, metaBottom: meta.bottom, noteTop: note.top };
+    });
+    expect(boxes.metaTop).toBeGreaterThanOrEqual(boxes.headingBottom);
+    expect(boxes.noteTop).toBeGreaterThan(boxes.metaBottom);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await history.screenshot({ path: test.info().outputPath(`readable-history-${width}.png`) });
+    await history.getByRole('button', { name: '收起记录' }).click();
+    await expect(history.locator('li')).toHaveCount(3);
+    expect(state.writes).toEqual([]);
+  });
+
+  test(`历史已公示结果仅确认，不展示面谈也不请求签字 ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 960 });
     const state = await setup(page, 'employee', true, true);
     await page.goto(`/tasks/${taskId}?stage=result`);
     await expect(page.getByRole('button', { name: '确认结果', exact: true })).toBeVisible();
-    await expect(page.getByText('已沟通本周期交付及改进措施')).toBeVisible();
+    await expect(page.getByText('已沟通本周期交付及改进措施')).toHaveCount(0);
+    await expect(page.getByText('绩效面谈', { exact: true })).toHaveCount(0);
     await expect(page.getByText('考核表三方签字', { exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: /签字|签名/ })).toHaveCount(0);
     expect(state.signatureRequests).toEqual([]);
@@ -69,7 +105,7 @@ for (const width of [1440, 390]) {
     await expect(page.getByRole('button', { name: '确认结果', exact: true })).toHaveCount(0);
     expect(state.writes.map(write => write.path)).toEqual([`/api/v1/tasks/${taskId}/employee-confirm`]);
     await page.reload();
-    await expect(page.getByText('已沟通本周期交付及改进措施')).toBeVisible();
+    await expect(page.getByText('已沟通本周期交付及改进措施')).toHaveCount(0);
     await expect(page.getByRole('button', { name: /签字|签名/ })).toHaveCount(0);
     expect(state.signatureRequests).toEqual([]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);

@@ -1,51 +1,27 @@
 import http from './http';
-import type {
-  Paginated,
-  PerformanceInterview,
-  UpdateInterviewBody,
-} from '@/types/api.types';
+import type { Paginated, PerformanceInterview, UpdateInterviewBody, CreateInterviewBody, AssessmentCycle } from '@/types/api.types';
 import type { InterviewQuery } from '@/types/interview.types';
 
-function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
-  return http.get(url, { params }) as unknown as Promise<T>;
-}
-
-function apiPost<T>(url: string, data?: unknown): Promise<T> {
-  return http.post(url, data) as unknown as Promise<T>;
-}
-
-function apiPut<T>(url: string, data?: unknown): Promise<T> {
-  return http.put(url, data) as unknown as Promise<T>;
-}
+export interface InterviewPerson { id: string; name: string; employeeNo: string | null; dept?: { name: string } | null }
+export type InterviewCycle = Pick<AssessmentCycle, 'id' | 'name' | 'createdAt'>;
 
 export const interviewsApi = {
-  /** GET /interviews — 主管面谈列表 */
   findAll(query?: InterviewQuery): Promise<Paginated<PerformanceInterview>> {
-    return apiGet('/interviews', query as Record<string, unknown>);
+    return http.get('/interviews', { params: query }) as unknown as Promise<Paginated<PerformanceInterview>>;
   },
-
-  /** GET /interviews/mine — 员工自己的面谈列表 */
-  findMine(query?: InterviewQuery): Promise<Paginated<PerformanceInterview>> {
-    return apiGet('/interviews/mine', query as Record<string, unknown>);
+  people(keyword = ''): Promise<InterviewPerson[]> {
+    return http.get('/interviews/people', { params: { keyword, pageSize: 50 } }) as unknown as Promise<InterviewPerson[]>;
   },
-
-  /** GET /interviews/:id — 面谈详情 */
+  cycles(): Promise<InterviewCycle[]> {
+    return http.get('/interviews/cycles') as unknown as Promise<InterviewCycle[]>;
+  },
   findOne(id: string): Promise<PerformanceInterview> {
-    return apiGet(`/interviews/${id}`);
+    return http.get('/interviews/' + id, { skipErrorMessage: true }) as unknown as Promise<PerformanceInterview>;
   },
-
-  /** PUT /interviews/:id — 主管填写/更新面谈记录 */
+  create(body: CreateInterviewBody): Promise<PerformanceInterview> {
+    return http.post('/interviews', body, { skipErrorMessage: true }) as unknown as Promise<PerformanceInterview>;
+  },
   update(id: string, body: UpdateInterviewBody): Promise<PerformanceInterview> {
-    return apiPut(`/interviews/${id}`, body);
-  },
-
-  /** POST /interviews/:id/manager-sign — 主管签字 */
-  managerSign(id: string): Promise<PerformanceInterview> {
-    return apiPost(`/interviews/${id}/manager-sign`);
-  },
-
-  /** POST /interviews/:id/employee-sign — 员工签字 */
-  employeeSign(id: string): Promise<PerformanceInterview> {
-    return apiPost(`/interviews/${id}/employee-sign`);
+    return http.put('/interviews/' + id, body, { skipErrorMessage: true }) as unknown as Promise<PerformanceInterview>;
   },
 };

@@ -1,478 +1,127 @@
-import { isResultPublished } from '@/tasks/result-publication';
-import {
-  BadRequestException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
-import {
-  InterviewStatus,
-  PerformanceInterview,
-  Prisma,
-  SignatureBusinessType,
-  SignatureMethod,
-  SignatureRole,
-  SysRole,
-  TaskStatus,
-} from '@prisma/client';
-import dayjs from 'dayjs';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { Prisma, SysRole } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
-import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
-import { Paginated, paginated } from '@/common/dto/pagination.dto';
+import { paginated } from '@/common/dto/pagination.dto';
 import { UpdateInterviewDto } from './dto/update-interview.dto';
+import { CreateInterviewDto } from './dto/create-interview.dto';
 import { InterviewQueryDto } from './dto/interview-query.dto';
 
-/** 面谈记录列表项。 */
-export interface InterviewListItem {
-  id: string;
-  taskId: string;
-  cycleId: string;
-  cycleName: string | null;
-  employeeId: string;
-  employeeName: string;
-  employeeNo: string | null;
-  position: string | null;
-  deptId: string | null;
-  deptName: string | null;
-  status: InterviewStatus;
-  deadline: Date | null;
-  method: string | null;
-  scoreInformed: boolean;
-  managerSignedAt: Date | null;
-  employeeSignedAt: Date | null;
-  updatedAt: Date;
-}
+const include = Prisma.validator<Prisma.PerformanceInterviewInclude>()({
+  employee: { select: { name: true, employeeNo: true, position: true, deptId: true, dept: { select: { name: true } } } },
+  interviewer: { select: { name: true } },
+  recordedBy: { select: { name: true } },
+  cycle: { select: { name: true } },
+});
+type Interview = Prisma.PerformanceInterviewGetPayload<{ include: typeof include }>;
 
-/** 面谈记录详情。 */
-export interface InterviewDetail extends PerformanceInterview {
-  employeeName: string | null;
-  deptName: string | null;
-  interviewerName: string | null;
-}
-
-
+/** HR 管理台账：只保存沟通记录，不参与绩效状态流转或签字。 */
 @Injectable()
 export class InterviewsService {
   constructor(private readonly prisma: PrismaService) {}
 
-  /** GET /interviews — 主管面谈列表。 */
-  async findAll(dto: InterviewQueryDto, viewer: AuthUser): Promise<Paginated<InterviewListItem>> {
+  async findAll(dto: InterviewQueryDto, viewer: AuthUser) {
+    this.assertHr(viewer);
     const keyword = dto.keyword?.trim();
     const where: Prisma.PerformanceInterviewWhereInput = {
       ...(dto.cycleId ? { cycleId: dto.cycleId } : {}),
-      ...(dto.status ? { status: dto.status } : {}),
-      ...(dto.deptId || keyword ? {
-        task: {
-          ...(dto.deptId ? { deptId: dto.deptId } : {}),
-          ...(keyword ? { employee: { OR: [
-            { name: { contains: keyword, mode: 'insensitive' as const } },
-            { employeeNo: { contains: keyword, mode: 'insensitive' as const } },
-          ] } } : {}),
-        },
-      } : {}),
+      employee: {
+        ...(dto.deptId ? { deptId: dto.deptId } : {}),
+        ...(keyword ? { OR: [
+          { name: { contains: keyword, mode: 'insensitive' } },
+          { employeeNo: { contains: keyword, mode: 'insensitive' } },
+        ] } : {}),
+      },
     };
-    if (!this.canViewAll(viewer)) {
-      where.interviewerId = viewer.id;
-    }
-
     const [total, items] = await Promise.all([
       this.prisma.performanceInterview.count({ where }),
-      this.prisma.performanceInterview.findMany({
-        where,
-        skip: dto.skip,
-        take: dto.take,
-        include: {
-          task: {
-            include: {
-              employee: { select: { name: true, employeeNo: true, position: true } },
-              dept: { select: { name: true } },
-              cycle: { select: { name: true } },
-            },
-          },
-        },
-        orderBy: { deadline: 'asc' },
-      }),
+      this.prisma.performanceInterview.findMany({ where, skip: dto.skip, take: dto.take, include,
+        orderBy: [{ interviewTime: { sort: 'desc', nulls: 'last' } }, { createdAt: 'desc' }, { id: 'desc' }] }),
     ]);
-
-    return paginated(items.map((i) => this.mapToListItem(i)), total, dto);
+    return paginated(items.map(item => this.summary(item)), total, dto);
   }
 
-  /** GET /interviews/mine — 员工自己的面谈列表。 */
-  async findMine(dto: InterviewQueryDto, viewer: AuthUser): Promise<Paginated<InterviewListItem>> {
-    const where: Prisma.PerformanceInterviewWhereInput = {
-      employeeId: viewer.id,
-      ...(dto.cycleId ? { cycleId: dto.cycleId } : {}),
-      ...(dto.status ? { status: dto.status } : {}),
-    };
-
-    const [total, items] = await Promise.all([
-      this.prisma.performanceInterview.count({ where }),
-      this.prisma.performanceInterview.findMany({
-        where,
-        skip: dto.skip,
-        take: dto.take,
-        include: {
-          task: {
-            include: {
-              employee: { select: { name: true, employeeNo: true, position: true } },
-              dept: { select: { name: true } },
-              cycle: { select: { name: true } },
-            },
-          },
-        },
-        orderBy: { deadline: 'asc' },
-      }),
-    ]);
-
-    return paginated(items.map((i) => this.mapToListItem(i)), total, dto);
-  }
-
-  /** GET /interviews/:id 或 GET /tasks/:id/interview。 */
-  async findOne(id: string, viewer: AuthUser): Promise<InterviewDetail> {
-    const interview = await this.prisma.performanceInterview.findUnique({
-      where: { id },
-      include: {
-        task: {
-          include: {
-            employee: { select: { name: true } },
-            dept: { select: { name: true } },
-            manager: { select: { name: true } },
-          },
-        },
-      },
-    });
-
-    if (!interview) {
-      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '面谈记录不存在' });
-    }
-
-    this.assertCanView(interview, viewer);
-    return this.mapToDetail(interview);
-  }
-
-  /** GET /tasks/:id/interview — 按任务 ID 查看面谈。 */
-  async findByTaskId(taskId: string, viewer: AuthUser): Promise<InterviewDetail> {
-    const interview = await this.prisma.performanceInterview.findUnique({
-      where: { taskId },
-      include: {
-        task: {
-          include: {
-            employee: { select: { name: true } },
-            dept: { select: { name: true } },
-            manager: { select: { name: true } },
-          },
-        },
-      },
-    });
-
-    if (!interview) {
-      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '面谈记录不存在' });
-    }
-
-    this.assertCanView(interview, viewer);
-    return this.mapToDetail(interview);
-  }
-
-  /** PUT /interviews/:id — 主管填写/更新面谈内容。 */
-  async update(id: string, dto: UpdateInterviewDto, viewer: AuthUser): Promise<InterviewDetail> {
-    const interview = await this.prisma.performanceInterview.findUnique({
-      where: { id },
-      include: { task: true },
-    });
-
-    if (!interview) {
-      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '面谈记录不存在' });
-    }
-
-    this.assertInterviewer(interview, viewer);
-
-    if (!isResultPublished(interview.task)) {
-      throw new BadRequestException({
-        code: ERROR_CODE.CONFLICT,
-        message: '仅公示及之后的任务可填写面谈记录',
-      });
-    }
-
-    if (interview.employeeSignedAt) {
-      throw new BadRequestException({
-        code: ERROR_CODE.CONFLICT,
-        message: '员工已签字，面谈记录不可再修改',
-      });
-    }
-
-    const updateData: Prisma.PerformanceInterviewUpdateInput = {
-      ...dto,
-      status: interview.status === InterviewStatus.pending ? InterviewStatus.filled : interview.status,
-    };
-
-    const updated = await this.prisma.performanceInterview.update({
-      where: { id },
-      data: updateData,
-      include: {
-        task: {
-          include: {
-            employee: { select: { name: true } },
-            dept: { select: { name: true } },
-            manager: { select: { name: true } },
-          },
-        },
-      },
-    });
-
-    return this.mapToDetail(updated);
-  }
-
-  /** POST /interviews/:id/manager-sign — 主管签字占位。 */
-  async managerSign(id: string, viewer: AuthUser): Promise<InterviewDetail> {
-    const interview = await this.prisma.performanceInterview.findUnique({
-      where: { id },
-      include: { task: true },
-    });
-
-    if (!interview) {
-      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '面谈记录不存在' });
-    }
-
-    this.assertInterviewer(interview, viewer);
-
-    if (!isResultPublished(interview.task)) {
-      throw new BadRequestException({
-        code: ERROR_CODE.CONFLICT,
-        message: '仅公示及之后的任务可签字',
-      });
-    }
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.signature.upsert({
-        where: {
-          businessType_businessRecordId_role: {
-            businessType: SignatureBusinessType.interview,
-            businessRecordId: interview.id,
-            role: SignatureRole.assessor,
-          },
-        },
-        create: {
-          businessType: SignatureBusinessType.interview,
-          businessRecordId: interview.id,
-          role: SignatureRole.assessor,
-          signerId: viewer.id,
-          method: SignatureMethod.online_confirm,
-        },
-        update: {
-          signerId: viewer.id,
-          signedAt: new Date(),
-          method: SignatureMethod.online_confirm,
-        },
-      });
-
-      const nextStatus = interview.employeeSignedAt ? InterviewStatus.closed : InterviewStatus.filled;
-
-      return tx.performanceInterview.update({
-        where: { id },
-        data: {
-          managerSignedAt: new Date(),
-          status: nextStatus,
-        },
-        include: {
-          task: {
-            include: {
-              employee: { select: { name: true } },
-              dept: { select: { name: true } },
-              manager: { select: { name: true } },
-            },
-          },
-        },
-      });
-    });
-
-    return this.mapToDetail(updated);
-  }
-
-  /** POST /interviews/:id/employee-sign — 员工签字占位。 */
-  async employeeSign(id: string, viewer: AuthUser): Promise<InterviewDetail> {
-    const interview = await this.prisma.performanceInterview.findUnique({
-      where: { id },
-      include: { task: true },
-    });
-
-    if (!interview) {
-      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '面谈记录不存在' });
-    }
-
-    this.assertEmployee(interview, viewer);
-
-    if (!isResultPublished(interview.task)) {
-      throw new BadRequestException({
-        code: ERROR_CODE.CONFLICT,
-        message: '仅公示及之后的任务可签字',
-      });
-    }
-
-    if (interview.status === InterviewStatus.pending) {
-      throw new BadRequestException({
-        code: ERROR_CODE.CONFLICT,
-        message: '面谈记录尚未填写，无法签字',
-      });
-    }
-
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.signature.upsert({
-        where: {
-          businessType_businessRecordId_role: {
-            businessType: SignatureBusinessType.interview,
-            businessRecordId: interview.id,
-            role: SignatureRole.assessee,
-          },
-        },
-        create: {
-          businessType: SignatureBusinessType.interview,
-          businessRecordId: interview.id,
-          role: SignatureRole.assessee,
-          signerId: viewer.id,
-          method: SignatureMethod.online_confirm,
-        },
-        update: {
-          signerId: viewer.id,
-          signedAt: new Date(),
-          method: SignatureMethod.online_confirm,
-        },
-      });
-
-      return tx.performanceInterview.update({
-        where: { id },
-        data: {
-          employeeSignedAt: new Date(),
-          status: InterviewStatus.closed,
-        },
-        include: {
-          task: {
-            include: {
-              employee: { select: { name: true } },
-              dept: { select: { name: true } },
-              manager: { select: { name: true } },
-            },
-          },
-        },
-      });
-    });
-
-    return this.mapToDetail(updated);
-  }
-
-  /** 公示时自动创建面谈记录。 */
-  async createOnPublish(
-    tx: Prisma.TransactionClient,
-    task: { id: string; cycleId: string; employeeId: string; managerId: string | null; approvedAt: Date | null },
-  ): Promise<void> {
-    if (!task.managerId || !task.approvedAt) {
-      return;
-    }
-
-    const deadline = dayjs(task.approvedAt).add(20, 'day').startOf('day').toDate();
-
-    await tx.performanceInterview.upsert({
-      where: { taskId: task.id },
-      create: {
-        taskId: task.id,
-        cycleId: task.cycleId,
-        employeeId: task.employeeId,
-        interviewerId: task.managerId,
-        deadline,
-        status: InterviewStatus.pending,
-      },
-      update: {},
+  // Only identity fields needed for recording an interview; no personnel-file permissions are granted.
+  async people(dto: InterviewQueryDto, viewer: AuthUser) {
+    this.assertHr(viewer);
+    const keyword = dto.keyword?.trim();
+    return this.prisma.user.findMany({
+      where: { deletedAt: null, accountType: 'employee', ...(keyword ? { OR: [
+        { name: { contains: keyword, mode: 'insensitive' } },
+        { employeeNo: { contains: keyword, mode: 'insensitive' } },
+      ] } : {}) },
+      select: { id: true, name: true, employeeNo: true, dept: { select: { name: true } } },
+      orderBy: [{ name: 'asc' }, { id: 'asc' }], skip: dto.skip, take: dto.take,
     });
   }
 
-  // ---------------------------------------------------------------------------
-  // 内部辅助
-  // ---------------------------------------------------------------------------
-
-  private canViewAll(viewer: AuthUser): boolean {
-    return viewer.sysRole === SysRole.hr || viewer.sysRole === SysRole.system_admin || viewer.canViewAll === true;
+  async cycles(viewer: AuthUser) {
+    this.assertHr(viewer);
+    return this.prisma.assessmentCycle.findMany({
+      where: { status: { notIn: ['draft', 'scheduled', 'launch_blocked'] } },
+      select: { id: true, name: true, createdAt: true }, orderBy: { createdAt: 'desc' },
+    });
   }
 
-  private assertCanView(
-    interview: { employeeId: string; interviewerId: string },
-    viewer: AuthUser,
-  ): void {
-    if (this.canViewAll(viewer)) return;
-    if (interview.employeeId === viewer.id) return;
-    if (interview.interviewerId === viewer.id) return;
-    throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权查看该面谈记录' });
+  async findOne(id: string, viewer: AuthUser) {
+    this.assertHr(viewer);
+    const item = await this.prisma.performanceInterview.findUnique({ where: { id }, include });
+    if (!item) throw new NotFoundException('面谈记录不存在');
+    return { ...this.summary(item), ...this.content(item) };
   }
 
-  private assertInterviewer(
-    interview: { interviewerId: string },
-    viewer: AuthUser,
-  ): void {
-    if (interview.interviewerId !== viewer.id) {
-      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅面谈人可填写该面谈记录' });
+  async create(dto: CreateInterviewDto, viewer: AuthUser) {
+    this.assertHr(viewer);
+    const id = await this.prisma.$transaction(async tx => {
+      const interviewerId = dto.interviewerId ?? viewer.id;
+      const ids = [...new Set([dto.employeeId, interviewerId])];
+      const people = await tx.user.count({ where: { id: { in: ids }, deletedAt: null } });
+      if (people !== ids.length) throw new BadRequestException('员工或面谈人不存在，请重新选择');
+      if (dto.cycleId && !(await tx.assessmentCycle.findUnique({ where: { id: dto.cycleId }, select: { id: true } }))) {
+        throw new BadRequestException('关联周期不存在，请重新选择');
+      }
+      const item = await tx.performanceInterview.create({ data: {
+        employeeId: dto.employeeId, interviewerId, cycleId: dto.cycleId ?? null,
+        recordedById: viewer.id, status: 'filled', ...this.content(dto),
+      } });
+      await tx.auditLog.create({ data: { userId: viewer.id, action: 'create', entityType: 'performance_interview', entityId: item.id,
+        newValue: JSON.parse(JSON.stringify(item)) as Prisma.InputJsonValue } });
+      return item.id;
+    });
+    return this.findOne(id, viewer);
+  }
+
+  async update(id: string, dto: UpdateInterviewDto, viewer: AuthUser) {
+    this.assertHr(viewer);
+    await this.prisma.$transaction(async tx => {
+      const before = await tx.performanceInterview.findUnique({ where: { id } });
+      if (!before) throw new NotFoundException('面谈记录不存在');
+      const after = await tx.performanceInterview.update({ where: { id }, data: { ...this.content(dto), updatedAt: new Date() } });
+      await tx.auditLog.create({ data: { userId: viewer.id, action: 'update', entityType: 'performance_interview', entityId: id,
+        oldValue: JSON.parse(JSON.stringify(before)) as Prisma.InputJsonValue,
+        newValue: JSON.parse(JSON.stringify(after)) as Prisma.InputJsonValue } });
+    });
+    return this.findOne(id, viewer);
+  }
+
+  private assertHr(viewer: AuthUser) {
+    if (viewer.sysRole !== SysRole.hr_user && viewer.sysRole !== SysRole.hr && viewer.sysRole !== SysRole.system_admin) {
+      throw new ForbiddenException('绩效面谈台账仅供 HR 人员维护');
     }
   }
 
-  private assertEmployee(
-    interview: { employeeId: string },
-    viewer: AuthUser,
-  ): void {
-    if (interview.employeeId !== viewer.id) {
-      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅员工本人可签字' });
-    }
+  private summary(item: Interview) {
+    return { id: item.id, cycleId: item.cycleId, cycleName: item.cycle?.name ?? null,
+      employeeId: item.employeeId, employeeName: item.employee.name, employeeNo: item.employee.employeeNo,
+      deptId: item.employee.deptId, deptName: item.employee.dept?.name ?? null, position: item.employee.position,
+      interviewerId: item.interviewerId, interviewerName: item.interviewer.name,
+      recordedByName: item.recordedBy?.name ?? null, interviewTime: item.interviewTime,
+      method: item.method, createdAt: item.createdAt, updatedAt: item.updatedAt };
   }
 
-  private mapToListItem(
-    interview: Prisma.PerformanceInterviewGetPayload<{
-      include: {
-        task: {
-          include: {
-            employee: { select: { name: true; employeeNo: true; position: true } };
-            dept: { select: { name: true } };
-            cycle: { select: { name: true } };
-          };
-        };
-      };
-    }>,
-  ): InterviewListItem {
-    return {
-      id: interview.id,
-      taskId: interview.taskId,
-      cycleId: interview.cycleId,
-      cycleName: interview.task.cycle?.name ?? null,
-      employeeId: interview.employeeId,
-      employeeName: interview.task.employee?.name ?? '',
-      employeeNo: interview.task.employee?.employeeNo ?? null,
-      position: interview.task.employee?.position ?? null,
-      deptId: interview.task.deptId,
-      deptName: interview.task.dept?.name ?? null,
-      status: interview.status,
-      deadline: interview.deadline,
-      method: interview.method,
-      scoreInformed: interview.scoreInformed,
-      managerSignedAt: interview.managerSignedAt,
-      employeeSignedAt: interview.employeeSignedAt,
-      updatedAt: interview.updatedAt,
-    };
-  }
-
-  private mapToDetail(
-    interview: Prisma.PerformanceInterviewGetPayload<{
-      include: {
-        task: {
-          include: {
-            employee: { select: { name: true } };
-            dept: { select: { name: true } };
-            manager: { select: { name: true } };
-          };
-        };
-      };
-    }>,
-  ): InterviewDetail {
-    return {
-      ...interview,
-      employeeName: interview.task.employee?.name ?? null,
-      deptName: interview.task.dept?.name ?? null,
-      interviewerName: interview.task.manager?.name ?? null,
-    };
+  private content(item: UpdateInterviewDto | Interview) {
+    return { interviewTime: item.interviewTime, location: item.location, method: item.method,
+      scoreInformed: item.scoreInformed, achievements: item.achievements, weaknesses: item.weaknesses,
+      nextGoals: item.nextGoals, remediation: item.remediation, supportNeeded: item.supportNeeded, otherMatters: item.otherMatters };
   }
 }

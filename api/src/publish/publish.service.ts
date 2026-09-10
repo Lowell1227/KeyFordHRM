@@ -355,25 +355,6 @@ export class PublishService {
             });
           }
 
-          // A1：公示时自动为每个已审批任务创建绩效面谈记录，截止日 = 审批通过 +20 日
-          const approved = dayjs(task.gradeResult?.approvedAt ?? publishedAt);
-          const deadline = new Date(
-            Date.UTC(approved.year(), approved.month(), approved.date() + 20),
-          );
-
-          await tx.performanceInterview.upsert({
-            where: { taskId: task.id },
-            create: {
-              taskId: task.id,
-              cycleId: task.cycleId,
-              employeeId: task.employeeId,
-              interviewerId: task.managerId ?? viewer.id,
-              deadline,
-              status: "pending",
-            },
-            update: {},
-          });
-
           // A2：最终等级为 D 时自动生成绩效改进计划（壳）
           const effectiveGrade =
             task.gradeResult?.calibratedGrade ?? task.gradeResult?.rawGrade;

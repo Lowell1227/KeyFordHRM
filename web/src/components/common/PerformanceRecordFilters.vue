@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import type { AssessmentCycle, Department } from '@/types/api.types';
 
 const props = withDefaults(defineProps<{
-  cycles: AssessmentCycle[];
+  cycles: Pick<AssessmentCycle, 'id' | 'name'>[];
   departments: Department[];
   cycleId: string;
   deptId: string;
@@ -11,6 +11,7 @@ const props = withDefaults(defineProps<{
   cycleTestId?: string;
   loading?: boolean;
   disabled?: boolean;
+  allowAllCycles?: boolean;
 }>(), {
   loading: false,
   disabled: false,
@@ -45,11 +46,12 @@ const departmentOptions = computed(() => {
         :data-testid="cycleTestId"
         aria-label="绩效周期计划"
         :model-value="cycleId"
-        :disabled="disabled || cycles.length === 0"
-        :placeholder="cycles.length ? '选择绩效周期计划' : '暂无绩效周期计划'"
+        :disabled="disabled || (!allowAllCycles && cycles.length === 0)"
+        :placeholder="allowAllCycles ? '全部周期' : cycles.length ? '选择绩效周期计划' : '暂无绩效周期计划'"
         @update:model-value="emit('update:cycleId', String($event ?? ''))"
       >
-        <el-option v-if="cycles.length === 0" label="暂无绩效周期计划" value="" disabled />
+        <el-option v-if="allowAllCycles" label="全部周期" value="" />
+        <el-option v-else-if="cycles.length === 0" label="暂无绩效周期计划" value="" disabled />
         <el-option v-for="cycle in cycles" :key="cycle.id" :label="cycle.name" :value="cycle.id" />
       </el-select>
     </div>

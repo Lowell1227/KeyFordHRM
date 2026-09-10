@@ -1,370 +1,171 @@
 <script setup lang="ts">
 import { ref, reactive, watch, computed } from 'vue';
-import { ElMessage, ElMessageBox } from 'element-plus';
-import { interviewsApi } from '@/api/interviews.api';
-import { INTERVIEW_METHOD_LABELS, INTERVIEW_STATUS_LABELS } from '@/types/enums';
-import { formatDateTime, formatDate, isOverdue, daysUntilDeadline } from '@/utils/date';
+import { isAxiosError } from 'axios';
+import { ElMessage, type FormInstance } from 'element-plus';
+import { interviewsApi, type InterviewPerson, type InterviewCycle } from '@/api/interviews.api';
+import { useAuthStore } from '@/stores/auth.store';
+import { INTERVIEW_METHOD_LABELS } from '@/types/enums';
+import { formatDateTime } from '@/utils/date';
 import type { PerformanceInterview, UpdateInterviewBody } from '@/types/api.types';
-import type { InterviewMethod } from '@/types/enums';
 
-const props = defineProps<{
-  interviewId: string;
-  readonly?: boolean;
-}>();
-
-const emit = defineEmits<{
-  (e: 'saved'): void;
-  (e: 'signed'): void;
-}>();
-
+const props = defineProps<{ interviewId?: string; readonly?: boolean; cycles: InterviewCycle[] }>();
+const emit = defineEmits<{ saved: []; cancel: [] }>();
+const auth = useAuthStore();
 const loading = ref(false);
 const saving = ref(false);
-const signing = ref(false);
-const interview = ref<PerformanceInterview | null>(null);
-
-const form = reactive<UpdateInterviewBody>({
-  interviewTime: undefined,
-  location: undefined,
-  method: undefined,
-  scoreInformed: false,
-  achievements: undefined,
-  weaknesses: undefined,
-  nextGoals: undefined,
-  remediation: undefined,
-  supportNeeded: undefined,
-  otherMatters: undefined,
-});
-
-const canEdit = computed(() => !props.readonly && !interview.value?.employeeSignedAt);
-const isFilled = computed(() => !!interview.value && interview.value.status !== 'pending');
-const canManagerSign = computed(
-  () =>
-    !props.readonly &&
-    isFilled.value &&
-    !interview.value?.managerSignedAt &&
-    !interview.value?.employeeSignedAt,
-);
-
-const methodOptions: InterviewMethod[] = ['one_on_one', 'phone', 'performance_meeting'];
-
-watch(
-  () => props.interviewId,
-  () => {
-    if (props.interviewId) loadDetail();
-  },
-  { immediate: true },
-);
-
-function resetForm() {
-  form.interviewTime = undefined;
-  form.location = undefined;
-  form.method = undefined;
-  form.scoreInformed = false;
-  form.achievements = undefined;
-  form.weaknesses = undefined;
-  form.nextGoals = undefined;
-  form.remediation = undefined;
-  form.supportNeeded = undefined;
-  form.otherMatters = undefined;
+const loadError = ref('');
+const saveError = ref('');
+const peopleLoading = ref(false);
+const peopleError = ref('');
+const people = ref<InterviewPerson[]>([]);
+const interview = ref<PerformanceInterview>();
+const formRef = ref<FormInstance>();
+const identity = reactive({ employeeId: '', interviewerId: auth.user?.id ?? '', cycleId: '' });
+const form = reactive<UpdateInterviewBody>({});
+const newRecord = computed(() => !props.interviewId);
+const editable = computed(() => !props.readonly);
+const fields = [
+  { key: 'achievements', label: '突出业绩', placeholder: '记录突出业绩和具体事例' },
+  { key: 'weaknesses', label: '不足与待提升', placeholder: '记录不足与待提升项' },
+  { key: 'nextGoals', label: '后续目标', placeholder: '记录后续目标和计划' },
+  { key: 'remediation', label: '改进行动', placeholder: '记录商定的改进行动' },
+  { key: 'supportNeeded', label: '所需支持', placeholder: '记录需协调的困难或资源' },
+  { key: 'otherMatters', label: '其他沟通事项', placeholder: '记录其他沟通事项' },
+] as const;
+let detailRequest = 0;
+let searchRequest = 0;
+const personLabel = (person: InterviewPerson) => [person.name, person.employeeNo, person.dept?.name].filter(Boolean).join(' · ');
+function errorText(error: unknown, fallback: string) {
+  const message = isAxiosError(error) ? error.response?.data?.message : error instanceof Error ? error.message : null;
+  return typeof message === 'string' && message ? message : fallback;
 }
 
-function initForm(data: PerformanceInterview) {
-  form.interviewTime = data.interviewTime ?? undefined;
-  form.location = data.location ?? undefined;
-  form.method = data.method ?? undefined;
-  form.scoreInformed = data.scoreInformed ?? false;
-  form.achievements = data.achievements ?? undefined;
-  form.weaknesses = data.weaknesses ?? undefined;
-  form.nextGoals = data.nextGoals ?? undefined;
-  form.remediation = data.remediation ?? undefined;
-  form.supportNeeded = data.supportNeeded ?? undefined;
-  form.otherMatters = data.otherMatters ?? undefined;
-}
+watch(() => props.interviewId, async () => {
+  if (props.interviewId) await loadDetail();
+  else {
+    interview.value = undefined;
+    if (auth.user) people.value = [{ id: auth.user.id, name: auth.user.name, employeeNo: null }];
+    await searchPeople('');
+  }
+}, { immediate: true });
 
+async function searchPeople(keyword: string) {
+  const request = ++searchRequest;
+  peopleLoading.value = true;
+  peopleError.value = '';
+  try {
+    const result = await interviewsApi.people(keyword);
+    if (request !== searchRequest) return;
+    const selected = people.value.filter(person => person.id === identity.employeeId || person.id === identity.interviewerId);
+    people.value = [...new Map([...selected, ...result].map(person => [person.id, person])).values()];
+  } catch { if (request === searchRequest) peopleError.value = '人员暂时无法读取，请重新搜索'; }
+  finally { if (request === searchRequest) peopleLoading.value = false; }
+}
 async function loadDetail() {
+  const request = ++detailRequest;
   loading.value = true;
+  loadError.value = '';
   try {
-    const data = await interviewsApi.findOne(props.interviewId);
-    interview.value = data;
-    initForm(data);
-  } catch {
-    interview.value = null;
-    resetForm();
-  } finally {
-    loading.value = false;
-  }
+    const result = await interviewsApi.findOne(props.interviewId!);
+    if (request !== detailRequest) return;
+    interview.value = result;
+    Object.assign(form, {
+      interviewTime: result.interviewTime ?? undefined, location: result.location ?? '', method: result.method ?? undefined,
+      scoreInformed: result.scoreInformed, ...Object.fromEntries(fields.map(field => [field.key, result[field.key] ?? ''])),
+    });
+  } catch (error) {
+    if (request !== detailRequest) return;
+    loadError.value = errorText(error, '面谈记录暂时无法读取，请重试');
+  } finally { if (request === detailRequest) loading.value = false; }
 }
-
-async function handleSave() {
-  if (!interview.value) return;
+async function save() {
+  if (saving.value || !(await formRef.value?.validate().catch(() => false))) return;
   saving.value = true;
+  saveError.value = '';
   try {
-    await interviewsApi.update(interview.value.id, { ...form });
-    ElMessage.success('保存成功');
+    if (props.interviewId) await interviewsApi.update(props.interviewId, { ...form });
+    else await interviewsApi.create({ ...form, employeeId: identity.employeeId, interviewTime: form.interviewTime!,
+      interviewerId: identity.interviewerId || undefined, cycleId: identity.cycleId || undefined });
+    ElMessage.success('面谈记录已保存');
     emit('saved');
-    await loadDetail();
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function handleManagerSign() {
-  if (!interview.value) return;
-  try {
-    await ElMessageBox.confirm('确认以主管身份签字？', '签字确认', { type: 'warning' });
-  } catch {
-    return;
-  }
-  signing.value = true;
-  try {
-    await interviewsApi.managerSign(interview.value.id);
-    ElMessage.success('签字成功');
-    emit('signed');
-    await loadDetail();
-  } finally {
-    signing.value = false;
-  }
+  } catch (error) { saveError.value = errorText(error, '保存失败，请重试'); }
+  finally { saving.value = false; }
 }
 </script>
 
 <template>
   <div v-loading="loading" class="interview-drawer">
-    <template v-if="interview">
-      <el-descriptions :column="2" border size="small" class="info-section">
-        <el-descriptions-item label="员工">{{ interview.employeeName || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="部门">{{ interview.deptName || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="考核周期">{{ interview.cycleId || '-' }}</el-descriptions-item>
-        <el-descriptions-item label="状态">
-          <el-tag
-            :type="(INTERVIEW_STATUS_LABELS[interview.status]?.type || 'info') as any"
-            size="small"
-          >
-            {{ INTERVIEW_STATUS_LABELS[interview.status]?.label || interview.status }}
-          </el-tag>
-        </el-descriptions-item>
-        <el-descriptions-item label="面谈截止日">
-          <span :class="{ 'text-danger': interview.deadline && isOverdue(interview.deadline) }">
-            {{ interview.deadline ? formatDate(interview.deadline) : '-' }}
-            <el-tag
-              v-if="interview.deadline && daysUntilDeadline(interview.deadline) !== null"
-              size="small"
-              :type="isOverdue(interview.deadline) ? 'danger' : 'warning'"
-              class="deadline-tag"
-            >
-              {{ isOverdue(interview.deadline) ? '已逾期' : `剩余 ${daysUntilDeadline(interview.deadline)} 天` }}
-            </el-tag>
-          </span>
-        </el-descriptions-item>
-      </el-descriptions>
-
-      <el-form label-position="top" class="interview-form">
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="面谈时间">
-              <el-date-picker
-                v-model="form.interviewTime"
-                type="datetime"
-                placeholder="选择面谈时间"
-                style="width: 100%"
-                value-format="YYYY-MM-DDTHH:mm:ss"
-                :disabled="!canEdit"
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="面谈地点">
-              <el-input
-                v-model="form.location"
-                placeholder="填写地点"
-                maxlength="200"
-                show-word-limit
-                :disabled="!canEdit"
-              />
-            </el-form-item>
-          </el-col>
-        </el-row>
-
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="面谈方式">
-              <el-select v-model="form.method" placeholder="选择面谈方式" style="width: 100%" :disabled="!canEdit">
-                <el-option
-                  v-for="m in methodOptions"
-                  :key="m"
-                  :label="INTERVIEW_METHOD_LABELS[m]"
-                  :value="m"
-                />
+    <el-alert v-if="loadError" :title="loadError" type="error" :closable="false">
+      <el-button link type="primary" @click="loadDetail">重试</el-button>
+    </el-alert>
+    <template v-else-if="newRecord || interview">
+      <div v-if="interview" class="record-info">
+        <div v-for="field in [
+          ['员工', [interview.employeeName, interview.employeeNo].filter(Boolean).join(' · ')],
+          ['部门', interview.deptName || '—'], ['关联周期', interview.cycleName || '未关联周期'],
+          ['面谈人', interview.interviewerName || '—'], ['录入人', interview.recordedByName || '—'],
+          ['最近更新', interview.updatedAt ? formatDateTime(interview.updatedAt) : '—'],
+        ]" :key="field[0]"><span>{{ field[0] }}</span><div>{{ field[1] }}</div></div>
+      </div>
+      <el-form ref="formRef" :model="{ ...identity, ...form }" label-position="top" :disabled="!editable || saving" class="interview-form">
+        <template v-if="newRecord">
+          <el-alert v-if="peopleError" :title="peopleError" type="error" :closable="false" />
+          <el-form-item label="员工" prop="employeeId" :rules="[{ required: true, message: '请选择员工', trigger: 'change' }]">
+            <el-select v-model="identity.employeeId" filterable remote :remote-method="searchPeople" :loading="peopleLoading" placeholder="搜索员工姓名或工号" aria-label="员工">
+              <el-option v-for="person in people" :key="person.id" :label="personLabel(person)" :value="person.id" />
+            </el-select>
+          </el-form-item>
+          <div class="form-grid">
+            <el-form-item label="面谈人" prop="interviewerId" :rules="[{ required: true, message: '请选择面谈人', trigger: 'change' }]">
+              <el-select v-model="identity.interviewerId" filterable remote :remote-method="searchPeople" :loading="peopleLoading" placeholder="搜索面谈人" aria-label="面谈人">
+                <el-option v-for="person in people" :key="person.id" :label="personLabel(person)" :value="person.id" />
               </el-select>
             </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item>
-              <el-checkbox v-model="form.scoreInformed" :disabled="!canEdit">
-                已告知绩效分数
-              </el-checkbox>
+            <el-form-item label="关联周期（选填）">
+              <el-select v-model="identity.cycleId" clearable filterable placeholder="可不关联周期" aria-label="关联周期">
+                <el-option v-for="cycle in cycles" :key="cycle.id" :label="cycle.name" :value="cycle.id" />
+              </el-select>
             </el-form-item>
-          </el-col>
-        </el-row>
-
-        <el-form-item label="① 突出业绩">
-          <el-input
-            v-model="form.achievements"
-            type="textarea"
-            :rows="3"
-            placeholder="填写员工本周期突出业绩"
-            maxlength="4000"
-            show-word-limit
-            :disabled="!canEdit"
-          />
-        </el-form-item>
-
-        <el-form-item label="② 不足与待提升">
-          <el-input
-            v-model="form.weaknesses"
-            type="textarea"
-            :rows="3"
-            placeholder="填写不足与待提升项"
-            maxlength="4000"
-            show-word-limit
-            :disabled="!canEdit"
-          />
-        </el-form-item>
-
-        <el-form-item label="③ 下周期目标计划">
-          <el-input
-            v-model="form.nextGoals"
-            type="textarea"
-            :rows="3"
-            placeholder="填写下周期目标计划"
-            maxlength="4000"
-            show-word-limit
-            :disabled="!canEdit"
-          />
-        </el-form-item>
-
-        <el-form-item label="④ 弥补改进行动">
-          <el-input
-            v-model="form.remediation"
-            type="textarea"
-            :rows="3"
-            placeholder="填写弥补改进行动"
-            maxlength="4000"
-            show-word-limit
-            :disabled="!canEdit"
-          />
-        </el-form-item>
-
-        <el-form-item label="⑤ 需协调的困难/资源">
-          <el-input
-            v-model="form.supportNeeded"
-            type="textarea"
-            :rows="3"
-            placeholder="填写需协调的困难或资源"
-            maxlength="4000"
-            show-word-limit
-            :disabled="!canEdit"
-          />
-        </el-form-item>
-
-        <el-form-item label="⑥ 其他沟通事项">
-          <el-input
-            v-model="form.otherMatters"
-            type="textarea"
-            :rows="3"
-            placeholder="填写其他沟通事项"
-            maxlength="4000"
-            show-word-limit
-            :disabled="!canEdit"
-          />
-        </el-form-item>
+          </div>
+        </template>
+        <div class="form-grid">
+          <el-form-item label="面谈时间" prop="interviewTime" :rules="[{ required: editable, message: '请选择面谈时间', trigger: 'change' }]">
+            <el-date-picker v-model="form.interviewTime" type="datetime" placeholder="选择面谈时间" value-format="YYYY-MM-DDTHH:mm:ssZ" />
+          </el-form-item>
+          <el-form-item label="面谈地点"><el-input v-model="form.location" placeholder="填写地点" maxlength="200" show-word-limit /></el-form-item>
+          <el-form-item label="面谈方式">
+            <el-select v-model="form.method" clearable :value-on-clear="null" placeholder="选择面谈方式" aria-label="面谈方式">
+              <el-option v-for="(label, key) in INTERVIEW_METHOD_LABELS" :key="key" :label="label" :value="key" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="结果沟通"><el-checkbox v-model="form.scoreInformed">已告知绩效分数</el-checkbox></el-form-item>
+        </div>
+        <template v-for="field in fields" :key="field.key">
+          <el-form-item v-if="editable" :label="field.label">
+            <el-input v-model="form[field.key]" type="textarea" :rows="3" :placeholder="field.placeholder" maxlength="4000" show-word-limit />
+          </el-form-item>
+          <section v-else class="record-note"><h3>{{ field.label }}</h3><p>{{ form[field.key] || '—' }}</p></section>
+        </template>
       </el-form>
-
-      <div class="sign-section">
-        <div class="sign-block">
-          <span class="sign-label">面谈人签字</span>
-          <span v-if="interview.managerSignedAt" class="signed-at">
-            已签 {{ formatDateTime(interview.managerSignedAt) }}
-          </span>
-          <el-button
-            v-else-if="canManagerSign"
-            type="primary"
-            size="small"
-            :loading="signing"
-            @click="handleManagerSign"
-          >
-            主管签字
-          </el-button>
-          <span v-else class="unsigned">待签字</span>
-        </div>
-        <div class="sign-block">
-          <span class="sign-label">员工签字</span>
-          <span v-if="interview.employeeSignedAt" class="signed-at">
-            已签 {{ formatDateTime(interview.employeeSignedAt) }}
-          </span>
-          <span v-else class="unsigned">待员工在「我的绩效」中确认</span>
-        </div>
-      </div>
-
+      <el-alert v-if="saveError" :title="saveError" type="error" :closable="false" class="save-error" />
       <div class="drawer-footer">
-        <el-button v-if="canEdit" type="primary" :loading="saving" @click="handleSave">保存面谈记录</el-button>
-        <el-tag v-else-if="interview.employeeSignedAt" type="success">员工已签字，记录已锁定</el-tag>
+        <el-button :disabled="saving" @click="emit('cancel')">{{ editable ? '取消' : '关闭' }}</el-button>
+        <el-button v-if="editable" type="primary" :loading="saving" @click="save">保存面谈记录</el-button>
       </div>
     </template>
   </div>
 </template>
 
 <style scoped>
-.interview-drawer {
-  padding-bottom: 24px;
-}
-
-.info-section {
-  margin-bottom: 16px;
-}
-
-.interview-form {
-  margin-top: 16px;
-}
-
-.deadline-tag {
-  margin-left: 8px;
-}
-
-.text-danger {
-  color: var(--el-color-danger);
-}
-
-.sign-section {
-  display: flex;
-  gap: 24px;
-  margin: 24px 0;
-  padding: 16px;
-  background: #f7f8fa;
-  border-radius: 4px;
-}
-
-.sign-block {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 14px;
-}
-
-.sign-label {
-  color: var(--el-text-color-regular);
-}
-
-.signed-at {
-  color: var(--el-color-success);
-}
-
-.unsigned {
-  color: var(--el-text-color-placeholder);
-}
-
-.drawer-footer {
-  display: flex;
-  justify-content: flex-end;
-  margin-top: 24px;
-}
+.interview-drawer { min-width: 0; }
+.record-info, .form-grid { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 0 20px; }
+.record-info { padding: 16px; gap: 16px 20px; background: var(--el-fill-color-light); border-radius: 6px; margin-bottom: 20px; font-size: 14px; overflow-wrap: anywhere; }
+.record-info span { display: block; margin-bottom: 6px; color: var(--el-text-color-secondary); font-size: 12px; }
+:deep(.el-select), :deep(.el-date-editor.el-input) { width: 100%; }
+.record-note { padding: 14px 0; border-top: 1px solid var(--el-border-color-lighter); }
+.record-note h3 { margin: 0 0 8px; font-size: 14px; }
+.record-note p { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.75; color: var(--el-text-color-regular); }
+.drawer-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 16px 0 0; position: sticky; bottom: 0; background: var(--el-bg-color); }
+.save-error { margin-bottom: 12px; }
+@media (max-width: 600px) { .form-grid { grid-template-columns: minmax(0, 1fr); } }
 </style>

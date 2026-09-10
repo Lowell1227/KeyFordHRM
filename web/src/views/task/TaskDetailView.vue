@@ -17,7 +17,6 @@ import ManagerPeriodReviewWorkspace from './components/ManagerPeriodReviewWorksp
 import DepartmentReviewWorkspace from './components/DepartmentReviewWorkspace.vue';
 import ExemptView from './components/ExemptView.vue';
 import ScoreMask from './components/ScoreMask.vue';
-import InterviewCard from './components/InterviewCard.vue';
 import GradeTag from '@/components/common/GradeTag.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import PerformanceResultEvidence from '@/components/common/PerformanceResultEvidence.vue';
@@ -709,11 +708,6 @@ async function handleRemind() {
             </div>
           </ChartCard>
 
-          <InterviewCard
-            v-if="requestedPerformanceStage === 'result' && permission.isPublished.value"
-            :task="task"
-            :interview="task.performanceInterview"
-          />
           </section>
         </template>
 

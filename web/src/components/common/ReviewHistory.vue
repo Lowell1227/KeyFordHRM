@@ -14,6 +14,9 @@ const entries = computed(() => (props.records ?? []).filter(r => nodes[r.nodeTyp
       nodeLabel: data?.type === 'prepublication_appeal' && data.source === 'employee' ? '员工提出异议'
         : data?.type === 'manager_period_review_returned' ? `${typeof data.periodKey === 'string' ? data.periodKey + ' ' : ''}月度评价` : nodes[record.nodeType],
       opinion: data?.type === 'final_grade_submitted' ? (typeof data.comment === 'string' ? data.comment : '') : record.comment,
+      actionLabel: data?.type === 'prepublication_appeal' ? '已提出'
+        : record.nodeType === 'employee_confirm' && record.action === 'approve' ? '已确认'
+        : record.nodeType === 'publish' && record.action === 'approve' ? '已公示' : actions[record.action],
       combined: data?.type === 'combined_department_review',
     };
   }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
@@ -26,15 +29,18 @@ watch(() => props.records, () => { expanded.value = false; });
     <h3>关键节点记录<span>{{ entries.length }} 条</span></h3>
     <p v-if="!entries.length" class="review-history__empty">暂无关键节点记录</p>
     <ol v-else>
-      <li v-for="(record, index) in visibleEntries" :key="record.id ?? index">
-        <div class="review-history__meta">
+      <li v-for="(record, index) in visibleEntries" :key="record.id ?? index" :class="`review-history__entry--${record.action}`">
+        <time :datetime="record.createdAt">{{ formatDateTime(record.createdAt) }}</time>
+        <div class="review-history__heading">
           <strong>{{ record.nodeLabel }}</strong>
-          <span :class="{ 'review-history__returned': record.action === 'reject' }">{{ actions[record.action] }}</span>
-          <span v-if="record.combined">合并办理</span>
-          <span>{{ record.actorName || '系统' }}</span>
-          <time>{{ formatDateTime(record.createdAt) }}</time>
+          <span v-if="record.combined" class="review-history__combined">合并办理</span>
         </div>
-        <p>{{ record.opinion || '未填写意见' }}</p>
+        <div class="review-history__meta">
+          <span class="review-history__avatar" aria-hidden="true">{{ (record.actorName || '系统').slice(0, 1) }}</span>
+          <span>{{ record.actorName || '系统' }}</span>
+          <span class="review-history__action">{{ record.actionLabel }}</span>
+        </div>
+        <p v-if="record.opinion?.trim()">{{ record.opinion }}</p>
       </li>
     </ol>
     <el-button v-if="entries.length > 3" link type="primary" @click="expanded = !expanded">{{ expanded ? '收起记录' : `查看全部 ${entries.length} 条记录` }}</el-button>
@@ -45,11 +51,19 @@ watch(() => props.records, () => { expanded.value = false; });
 .review-history { min-width: 0; margin-top: 18px; }
 h3 { margin: 0 0 12px; font-size: 14px; }
 h3 span { margin-left: 8px; font-size: 12px; font-weight: normal; color: var(--el-text-color-secondary); }
-ol { margin: 0; padding: 0; list-style: none; }
-li { padding: 12px 0; border-top: 1px solid var(--el-border-color-lighter); }
-.review-history__meta { display: flex; flex-wrap: wrap; gap: 6px 12px; align-items: baseline; font-size: 12px; color: var(--el-text-color-secondary); }
-.review-history__meta strong { color: var(--el-text-color-regular); font-size: 13px; }
-.review-history__returned { color: var(--el-color-danger); }
-li p { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.6; color: var(--el-text-color-regular); }
+ol { margin: 0; padding: 0 0 0 6px; list-style: none; }
+li { --node-color: var(--el-color-primary); position: relative; padding: 0 0 22px 22px; border-left: 2px solid var(--el-border-color-lighter); }
+li:last-child { border-left-color: transparent; padding-bottom: 8px; }
+li::before { content: ''; position: absolute; left: -6px; top: 4px; width: 10px; height: 10px; box-sizing: border-box; border: 2px solid var(--node-color); background: var(--el-bg-color); border-radius: 50%; }
+.review-history__entry--approve { --node-color: var(--el-color-success); }
+.review-history__entry--reject, .review-history__entry--withdraw { --node-color: var(--el-color-danger); }
+time { display: block; margin-bottom: 7px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 18px; }
+.review-history__heading { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-bottom: 8px; }
+.review-history__heading strong { font-size: 14px; color: var(--el-text-color-primary); }
+.review-history__action { color: var(--node-color); font-weight: 600; }
+.review-history__combined { font-size: 12px; color: var(--el-text-color-secondary); }
+.review-history__meta { display: flex; flex-wrap: wrap; gap: 4px 7px; align-items: center; font-size: 13px; color: var(--el-text-color-regular); }
+.review-history__avatar { display: inline-flex; align-items: center; justify-content: center; width: 22px; height: 22px; border-radius: 50%; font-size: 11px; background: var(--el-fill-color); color: var(--el-text-color-secondary); }
+li p { margin: 10px 0 0; padding: 9px 12px; border-radius: 5px; background: var(--el-fill-color-light); white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.75; color: var(--el-text-color-regular); }
 .review-history__empty { color: var(--el-text-color-secondary); font-size: 13px; }
 </style>

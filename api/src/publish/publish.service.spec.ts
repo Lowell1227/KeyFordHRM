@@ -754,6 +754,7 @@ describe("PublishService", () => {
       );
 
       expect(result.published).toBe(1);
+      expect(tx.performanceInterview.upsert).not.toHaveBeenCalled();
       const updateData = tx.assessmentCycle.update.mock.calls[0][0].data;
       expect(updateData).toHaveProperty("publishedAt");
       expect(updateData).toHaveProperty("deadlineAppeal");

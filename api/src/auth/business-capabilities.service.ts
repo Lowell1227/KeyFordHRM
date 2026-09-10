@@ -52,7 +52,6 @@ export class BusinessCapabilitiesService {
       deptHeadTaskCount,
       approverTaskCount,
       hrCycleCount,
-      interviewCount,
       probationReviewCount,
       confirmationApprovalCount,
       historicalDepartmentTaskCount,
@@ -90,9 +89,6 @@ export class BusinessCapabilitiesService {
         this.countActiveTasks('approverId', user.id),
         this.prisma.assessmentCycle.count({
           where: { hrOwnerId: user.id, status: { not: 'closed' } },
-        }),
-        this.prisma.performanceInterview.count({
-          where: { interviewerId: user.id, status: { not: 'closed' } },
         }),
         this.prisma.probationReview.count({
           where: { managerId: user.id, status: { not: 'closed' } },
@@ -148,7 +144,7 @@ export class BusinessCapabilitiesService {
         canOperatePerformanceApproval || historicalApprovalTaskCount > 0 || user.canViewAll || user.sysRole === SysRole.system_admin,
       canOperatePerformanceApproval,
       canHandleHrCycle: hrCycleCount > 0,
-      canHandleInterviews: interviewCount > 0 || isSystemManager || user.canViewAll,
+      canHandleInterviews: isSystemManager || user.sysRole === SysRole.hr_user,
       canHandleProbationReviews: probationReviewCount > 0,
       canHandleConfirmationApprovals: confirmationApprovalCount > 0,
       canViewReports:

@@ -170,23 +170,6 @@ export interface TaskDetail extends TaskListItem {
     isPublished: boolean;
     employeeConfirmedAt: Date | null;
   } | null;
-  performanceInterview: {
-    id: string;
-    status: string;
-    interviewTime: Date | null;
-    location: string | null;
-    method: string | null;
-    scoreInformed: boolean;
-    achievements: string | null;
-    weaknesses: string | null;
-    nextGoals: string | null;
-    remediation: string | null;
-    supportNeeded: string | null;
-    otherMatters: string | null;
-    deadline: Date | null;
-    managerSignedAt: Date | null;
-    employeeSignedAt: Date | null;
-  } | null;
   flowRecords: Array<{
     id: string;
     taskId: string;
@@ -491,7 +474,6 @@ export class TasksService {
         gradeResult: {
           include: { vetoOperator: { select: { id: true, name: true } } },
         },
-        performanceInterview: true,
         periods: {
           orderBy: { sequence: 'asc' },
           select: {
@@ -2067,25 +2049,6 @@ export class TasksService {
             vetoOperatorName: task.gradeResult.vetoOperator?.name ?? null,
             isPublished: task.gradeResult.isPublished,
             employeeConfirmedAt: task.gradeResult.employeeConfirmedAt,
-          }
-        : null,
-      performanceInterview: task.performanceInterview
-        ? {
-            id: task.performanceInterview.id,
-            status: task.performanceInterview.status,
-            interviewTime: task.performanceInterview.interviewTime,
-            location: task.performanceInterview.location,
-            method: task.performanceInterview.method,
-            scoreInformed: task.performanceInterview.scoreInformed,
-            achievements: task.performanceInterview.achievements,
-            weaknesses: task.performanceInterview.weaknesses,
-            nextGoals: task.performanceInterview.nextGoals,
-            remediation: task.performanceInterview.remediation,
-            supportNeeded: task.performanceInterview.supportNeeded,
-            otherMatters: task.performanceInterview.otherMatters,
-            deadline: task.performanceInterview.deadline,
-            managerSignedAt: task.performanceInterview.managerSignedAt,
-            employeeSignedAt: task.performanceInterview.employeeSignedAt,
           }
         : null,
       flowRecords: task.flowRecords.map((fr: any) => ({

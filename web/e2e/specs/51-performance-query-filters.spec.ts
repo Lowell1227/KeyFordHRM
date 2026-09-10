@@ -29,6 +29,7 @@ async function mockPerformancePages(page: Page, requests: string[]) {
   await page.route('**/api/v1/**', async (route) => {
     const url = new URL(route.request().url());
     const path = url.pathname;
+    if (path === '/api/v1/interviews/cycles') return route.fulfill({ json: apiResponse(cycles) });
     requests.push(route.request().url());
     if (route.request().method() !== 'GET') return route.fulfill({ status: 405, json: apiResponse(null) });
     if (path.endsWith('/auth/me')) return route.fulfill({ json: apiResponse({
@@ -68,7 +69,11 @@ for (const pageCase of pageCases) {
     const departmentFilter = page.getByTestId('performance-department-filter');
     const employeeFilter = page.getByTestId('performance-employee-filter');
     const filterRegion = page.getByRole('region', { name: '查询条件' });
-    await expect(cycleFilter).toContainText('最新创建周期');
+    if (pageCase.path === '/interviews') {
+      await expect(cycleFilter).toContainText('全部周期');
+      await cycleFilter.click();
+      await page.getByRole('option', { name: '最新创建周期', exact: true }).click();
+    } else await expect(cycleFilter).toContainText('最新创建周期');
     await expect(departmentFilter).toBeVisible();
     await expect(employeeFilter).toBeVisible();
     await expect(filterRegion.locator('label')).toHaveCount(0);
@@ -99,8 +104,7 @@ test('HR interview and improvement pages load the full visible cycle catalogue',
   await mockPerformancePages(page, requests);
 
   await page.goto('/interviews');
-  await expect(page.getByTestId('performance-cycle-filter')).toContainText('最新创建周期');
-  expect(requests.some(value => new URL(value).pathname.endsWith('/cycles'))).toBe(true);
+  await expect(page.getByTestId('performance-cycle-filter')).toContainText('全部周期');
   expect(requests.some(value => new URL(value).pathname.endsWith('/cycles/mine'))).toBe(false);
 
   requests.length = 0;

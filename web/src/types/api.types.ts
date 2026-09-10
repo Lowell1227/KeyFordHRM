@@ -20,7 +20,6 @@ import type {
   SignatureRole,
   SignatureMethod,
   InterviewMethod,
-  InterviewStatus,
   ImprovementPlanStatus,
   ProbationReviewStatus,
   ProbationIndicatorType,
@@ -719,12 +718,10 @@ export interface ManagerEvalSummary {
 
 export interface PerformanceInterview {
   id: string;
-  taskId: string;
-  cycleId: string;
+  cycleId: string | null;
   cycleName?: string | null;
   employeeId: string;
   interviewerId: string;
-  status: InterviewStatus;
   interviewTime?: string | null;
   location?: string | null;
   method?: InterviewMethod | null;
@@ -735,9 +732,6 @@ export interface PerformanceInterview {
   remediation?: string | null;
   supportNeeded?: string | null;
   otherMatters?: string | null;
-  deadline?: string | null;
-  managerSignedAt?: string | null;
-  employeeSignedAt?: string | null;
   createdAt?: string;
   updatedAt?: string;
   // 详情视图附加
@@ -745,12 +739,21 @@ export interface PerformanceInterview {
     employeeNo?: string | null;
   deptName?: string | null;
   interviewerName?: string | null;
+  position?: string | null;
+  recordedByName?: string | null;
+}
+
+export interface CreateInterviewBody extends UpdateInterviewBody {
+  employeeId: string;
+  interviewTime: string;
+  cycleId?: string;
+  interviewerId?: string;
 }
 
 export interface UpdateInterviewBody {
   interviewTime?: string;
   location?: string;
-  method?: InterviewMethod;
+  method?: InterviewMethod | null;
   scoreInformed?: boolean;
   achievements?: string;
   weaknesses?: string;
@@ -846,7 +849,6 @@ export interface TaskDetail extends AssessmentTask {
   selfEvalSummary?: SelfEvalSummary;
   managerEvalSummary?: ManagerEvalSummary;
   gradeResult?: GradeResult;
-  performanceInterview?: PerformanceInterview | null;
   flowRecords?: FlowRecord[];
 }
 

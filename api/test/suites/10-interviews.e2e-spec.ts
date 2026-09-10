@@ -1,230 +1,139 @@
-import { buildTestApp, closeTestApp, TestApp } from '../test-app';
+import 'reflect-metadata';
+import { execFileSync } from 'child_process';
+import { randomUUID } from 'crypto';
+import path from 'path';
+import { INestApplication, UnauthorizedException, ValidationPipe } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+import { PostgreSqlContainer, StartedPostgreSqlContainer } from '@testcontainers/postgresql';
+import { SysRole } from '@prisma/client';
+import { PrismaService } from '@/prisma/prisma.service';
+import { AuthUser } from '@/common/types/auth.types';
+import { RolesGuard } from '@/common/guards/roles.guard';
+import { InterviewsController } from '@/interviews/interviews.controller';
+import { InterviewsService } from '@/interviews/interviews.service';
 import { FixtureFactory } from '../fixtures/fixture-factory';
-import { login } from '../helpers/auth-helper';
-import { assertNoCoefficientKey } from '../helpers/scoring-assertions';
-import { SysRole, TaskStatus, PerfGrade } from '@prisma/client';
-import dayjs from 'dayjs';
 
-describe('10-interviews', () => {
-  let app: TestApp;
+/** Always owns its database; never uses external DATABASE_URL or notification providers. */
+describe('Interview ledger HTTP and persistence', () => {
+  let container: StartedPostgreSqlContainer | undefined;
+  let prisma: PrismaService;
+  let app: INestApplication;
   let factory: FixtureFactory;
-
+  let viewer: AuthUser | undefined;
+  let hr: AuthUser, employee: AuthUser, manager: AuthUser;
+  let deptId: string;
+  let recordId: string;
   beforeAll(async () => {
-    app = await buildTestApp();
-    factory = new FixtureFactory(app.prisma);
-  });
-
+    container = await new PostgreSqlContainer('postgres:15-alpine').withDatabase('hrm_interview_ledger').withStartupTimeout(60000).start();
+    const databaseUrl = container.getConnectionUri();
+    try {
+      execFileSync(process.execPath, [require.resolve('prisma/build/index.js'), 'migrate', 'deploy'], {
+        cwd: path.resolve(__dirname, '../..'), env: { ...process.env, DATABASE_URL: databaseUrl }, stdio: 'pipe', timeout: 60000,
+      });
+    } catch { throw new Error('Interview ledger migrations failed in disposable database'); }
+    prisma = new PrismaService({ datasources: { db: { url: databaseUrl } } });
+    await prisma.$connect();
+    factory = new FixtureFactory(prisma);
+    deptId = (await factory.createDept({ name: 'Virtual ledger department' })).id;
+    async function role(name: string, sysRole: SysRole): Promise<AuthUser> {
+      const user = await factory.createUser({ employeeNo: 'LEDGER-' + name, name, sysRole, deptId, password: randomUUID() });
+      return { id: user.id, name, sysRole, deptId, isAssessorOnly: false, canViewAll: false };
+    }
+    hr = await role('HR', SysRole.hr_user);
+    employee = await role('Employee', SysRole.employee);
+    manager = await role('Manager', SysRole.employee);
+    const module = await Test.createTestingModule({
+      controllers: [InterviewsController],
+      providers: [InterviewsService, { provide: PrismaService, useValue: prisma }],
+    }).compile();
+    app = module.createNestApplication();
+    app.useGlobalPipes(new ValidationPipe({ whitelist: true, forbidNonWhitelisted: true, transform: true }));
+    app.useGlobalGuards({ canActivate(context) {
+      if (!viewer) throw new UnauthorizedException();
+      context.switchToHttp().getRequest().user = viewer;
+      return true;
+    } }, new RolesGuard(new Reflector()));
+    await app.init();
+  }, 120000);
   afterAll(async () => {
-    await closeTestApp(app);
+    try { await app?.close(); await prisma?.$disconnect(); } finally { await container?.stop(); }
+  }, 30000);
+
+  it('ordinary HR records two interviews for the same employee without any cycle or task', async () => {
+    viewer = hr;
+    const body = { employeeId: employee.id, interviewerId: manager.id, interviewTime: '2026-09-10T10:30:00+08:00', achievements: 'Private HR notes' };
+    const first = await request(app.getHttpServer()).post('/interviews').send(body).expect(201);
+    recordId = first.body.id;
+    const second = await request(app.getHttpServer()).post('/interviews').send(body).expect(201);
+    expect(first.body.cycleId).toBeNull();
+    expect(first.body.recordedByName).toBe('HR');
+    expect(second.body.id).not.toBe(recordId);
+    expect(await prisma.assessmentTask.count()).toBe(0);
+    expect(await prisma.flowRecord.count()).toBe(0);
+    expect(await prisma.signature.count()).toBe(0);
+    expect(await prisma.notificationLog.count()).toBe(0);
+    expect(await prisma.auditLog.count({ where: { entityType: 'performance_interview', userId: hr.id, action: 'create' } })).toBe(2);
+    expect((await prisma.performanceInterview.findUniqueOrThrow({ where: { id: recordId } })).interviewTime?.toISOString()).toBe('2026-09-10T02:30:00.000Z');
   });
-
-  beforeEach(async () => {
-    await factory.resetDataTables();
+  it('validates create input and prevents clients assigning workflow/recorder fields', async () => {
+    viewer = hr;
+    for (const body of [{ employeeId: employee.id }, { employeeId: employee.id, interviewTime: 'bad' },
+      { employeeId: employee.id, interviewTime: '2026-09-10T10:00:00Z', recordedById: employee.id },
+      { employeeId: employee.id, interviewTime: '2026-09-10T10:00:00Z', taskId: randomUUID() }]) {
+      await request(app.getHttpServer()).post('/interviews').send(body).expect(400);
+    }
+    expect(await prisma.performanceInterview.count()).toBe(2);
   });
-
-  async function createRoleSet() {
-    const dept = await factory.getSeedDept();
-    const hr = await factory.createUser({ employeeNo: 'HR001', name: 'HR', sysRole: SysRole.hr, deptId: dept.id });
-    const manager = await factory.createUser({ employeeNo: 'MGR001', name: '主管', sysRole: SysRole.manager, deptId: dept.id });
-    const deptHead = await factory.createUser({ employeeNo: 'DEPT001', name: '部门负责人', sysRole: SysRole.dept_head, deptId: dept.id });
-    const approver = await factory.createUser({ employeeNo: 'VP001', name: '审批人', sysRole: SysRole.vp, deptId: dept.id });
-    const employee = await factory.createUser({
-      employeeNo: 'EMP001',
-      name: '员工',
-      sysRole: SysRole.employee,
-      deptId: dept.id,
-      directManagerId: manager.id,
-    });
-
-    await factory.updateDeptLeader(dept.id, deptHead.id);
-    await factory.updateDeptApprover(dept.id, approver.id);
-
-    return { dept, hr, manager, deptHead, approver, employee };
-  }
-
-  async function publishTask(employeeId: string, managerId: string, deptHeadId: string, approverId: string, hrId: string) {
-    const task = await factory.createTaskInStatus({
-      employeeId,
-      managerId,
-      deptHeadId,
-      approverId,
-      status: 'approval',
-      calculatedScore: 85,
-      rawGrade: PerfGrade.B,
-    });
-
-    const approvedAt = new Date('2026-02-10T10:00:00');
-
-    await app.prisma.assessmentTask.update({
-      where: { id: task.id },
-      data: { approvedAt },
-    });
-
-    await app.prisma.gradeResult.updateMany({
-      where: { taskId: task.id },
-      data: { approvedAt, approverId },
-    });
-
-    const hrToken = await login(app.http, { employeeNo: 'HR001', password: 'test123' });
-    const publishRes = await app.http
-      .post(`/api/v1/cycles/${task.cycleId}/publish`)
-      .set('Authorization', `Bearer ${hrToken}`)
-      .send({ taskIds: [task.id], sendDingtalkNotification: false })
-      .expect((res) => {
-        if (![200, 201].includes(res.status)) {
-          throw new Error(`Expected 200 or 201, got ${res.status}`);
-        }
-      });
-
-    return { task, approvedAt, publishRes: publishRes.body.data };
-  }
-
-  async function getTokens() {
-    return {
-      emp: await login(app.http, { employeeNo: 'EMP001', password: 'test123' }),
-      mgr: await login(app.http, { employeeNo: 'MGR001', password: 'test123' }),
-      head: await login(app.http, { employeeNo: 'DEPT001', password: 'test123' }),
-      hr: await login(app.http, { employeeNo: 'HR001', password: 'test123' }),
-      approver: await login(app.http, { employeeNo: 'VP001', password: 'test123' }),
-    };
-  }
-
-  it('公示后自动创建 PerformanceInterview，deadline = approvedAt + 20 天', async () => {
-    const { hr, manager, deptHead, approver, employee } = await createRoleSet();
-    const { task, approvedAt } = await publishTask(employee.id, manager.id, deptHead.id, approver.id, hr.id);
-
-    const taskAfter = await app.prisma.assessmentTask.findUnique({
-      where: { id: task.id },
-      include: { performanceInterview: true, gradeResult: true },
-    });
-
-    expect(taskAfter?.status).toBe(TaskStatus.published);
-    expect(taskAfter?.performanceInterview).not.toBeNull();
-    expect(taskAfter?.performanceInterview?.interviewerId).toBe(manager.id);
-    expect(taskAfter?.performanceInterview?.employeeId).toBe(employee.id);
-
-    const expectedDeadline = dayjs(approvedAt).add(20, 'day').format('YYYY-MM-DD');
-    expect(dayjs(taskAfter?.performanceInterview?.deadline).format('YYYY-MM-DD')).toBe(expectedDeadline);
+  it('HR can edit and reread a record, with an audit of the previous content', async () => {
+    viewer = hr;
+    await request(app.getHttpServer()).put('/interviews/' + recordId).send({ achievements: 'Updated notes' }).expect(200);
+    const res = await request(app.getHttpServer()).get('/interviews/' + recordId).expect(200);
+    expect(res.body.achievements).toBe('Updated notes');
+    const audit = await prisma.auditLog.findFirstOrThrow({ where: { entityId: recordId, action: 'update' } });
+    expect(audit.oldValue).toMatchObject({ achievements: 'Private HR notes' });
+    expect(audit.newValue).toMatchObject({ achievements: 'Updated notes' });
   });
-
-  it('主管可填写面谈记录，六项内容落库并回显', async () => {
-    const { hr, manager, deptHead, approver, employee } = await createRoleSet();
-    const { task } = await publishTask(employee.id, manager.id, deptHead.id, approver.id, hr.id);
-    const tokens = await getTokens();
-
-    const interview = await app.prisma.performanceInterview.findUnique({ where: { taskId: task.id } });
-    if (!interview) throw new Error('interview not found');
-
-    const updateRes = await app.http
-      .put(`/api/v1/interviews/${interview.id}`)
-      .set('Authorization', `Bearer ${tokens.mgr}`)
-      .send({
-        interviewTime: '2026-02-20T14:00:00',
-        location: '会议室 A',
-        method: 'one_on_one',
-        scoreInformed: true,
-        achievements: '业绩突出',
-        weaknesses: '待提升',
-        nextGoals: '下周期目标',
-        remediation: '改进行动',
-        supportNeeded: '资源支持',
-        otherMatters: '其他事项',
-      })
-      .expect(200);
-
-    expect(updateRes.body.data.status).toBe('filled');
-    expect(updateRes.body.data.method).toBe('one_on_one');
-    expect(updateRes.body.data.achievements).toBe('业绩突出');
-    assertNoCoefficientKey(updateRes.body.data);
-
-    const detailRes = await app.http
-      .get(`/api/v1/tasks/${task.id}/interview`)
-      .set('Authorization', `Bearer ${tokens.emp}`)
-      .expect(200);
-
-    expect(detailRes.body.data.method).toBe('one_on_one');
-    expect(detailRes.body.data.supportNeeded).toBe('资源支持');
-    assertNoCoefficientKey(detailRes.body.data);
+  it('employee and the named interviewer have no ledger reads or writes', async () => {
+    for (const user of [employee, { ...manager, canViewAll: true }]) {
+      viewer = user;
+      for (const url of ['/interviews', '/interviews/' + recordId, '/interviews/people', '/interviews/cycles']) {
+        await request(app.getHttpServer()).get(url).expect(403);
+      }
+      await request(app.getHttpServer()).post('/interviews').send({ employeeId: employee.id, interviewTime: new Date().toISOString() }).expect(403);
+      await request(app.getHttpServer()).put('/interviews/' + recordId).send({ achievements: 'Forbidden' }).expect(403);
+    }
+    viewer = hr;
+    for (const action of ['manager-sign', 'employee-sign']) {
+      await request(app.getHttpServer()).post('/interviews/' + recordId + '/' + action).expect(404);
+    }
+    await request(app.getHttpServer()).get('/tasks/' + randomUUID() + '/interview').expect(404);
   });
-
-  it('非主管无法填写面谈记录，非员工无法签字', async () => {
-    const { hr, manager, deptHead, approver, employee } = await createRoleSet();
-    const { task } = await publishTask(employee.id, manager.id, deptHead.id, approver.id, hr.id);
-    const tokens = await getTokens();
-
-    const interview = await app.prisma.performanceInterview.findUnique({ where: { taskId: task.id } });
-    if (!interview) throw new Error('interview not found');
-
-    await app.http
-      .put(`/api/v1/interviews/${interview.id}`)
-      .set('Authorization', `Bearer ${tokens.emp}`)
-      .send({ achievements: '员工越权' })
-      .expect(403);
-
-    await app.http
-      .post(`/api/v1/interviews/${interview.id}/employee-sign`)
-      .set('Authorization', `Bearer ${tokens.mgr}`)
-      .expect(403);
+  it('filters and pages independent records, and returns only needed identity fields', async () => {
+    viewer = hr;
+    const res = await request(app.getHttpServer()).get('/interviews').query({ deptId, keyword: 'LEDGER-Employee', pageSize: 1, page: 2 }).expect(200);
+    expect(res.body.total).toBe(2);
+    expect(res.body.items).toHaveLength(1);
+    expect(res.body.items[0]).not.toHaveProperty('achievements');
+    const people = await request(app.getHttpServer()).get('/interviews/people').query({ keyword: 'Employee' }).expect(200);
+    expect(people.body).toHaveLength(1);
+    expect(Object.keys(people.body[0]).sort()).toEqual(['dept', 'employeeNo', 'id', 'name']);
   });
-
-  it('双签占位：主管签字后员工签字，signatures 表留痕', async () => {
-    const { hr, manager, deptHead, approver, employee } = await createRoleSet();
-    const { task } = await publishTask(employee.id, manager.id, deptHead.id, approver.id, hr.id);
-    const tokens = await getTokens();
-
-    const interview = await app.prisma.performanceInterview.findUnique({ where: { taskId: task.id } });
-    if (!interview) throw new Error('interview not found');
-
-    await app.http
-      .put(`/api/v1/interviews/${interview.id}`)
-      .set('Authorization', `Bearer ${tokens.mgr}`)
-      .send({ achievements: '业绩突出' })
-      .expect(200);
-
-    const mgrSignRes = await app.http
-      .post(`/api/v1/interviews/${interview.id}/manager-sign`)
-      .set('Authorization', `Bearer ${tokens.mgr}`)
-      .expect((res) => {
-        if (![200, 201].includes(res.status)) {
-          throw new Error(`Expected 200 or 201, got ${res.status}`);
-        }
-      });
-
-    expect(mgrSignRes.body.data.managerSignedAt).not.toBeNull();
-
-    const empSignRes = await app.http
-      .post(`/api/v1/interviews/${interview.id}/employee-sign`)
-      .set('Authorization', `Bearer ${tokens.emp}`)
-      .expect((res) => {
-        if (![200, 201].includes(res.status)) {
-          throw new Error(`Expected 200 or 201, got ${res.status}`);
-        }
-      });
-
-    expect(empSignRes.body.data.employeeSignedAt).not.toBeNull();
-    expect(empSignRes.body.data.status).toBe('closed');
-
-    const signatures = await app.prisma.signature.findMany({
-      where: { businessType: 'interview', businessRecordId: interview.id },
-    });
-    expect(signatures).toHaveLength(2);
-    const roles = signatures.map((s) => s.role).sort();
-    expect(roles).toEqual(['assessee', 'assessor']);
-  });
-
-  it('面谈响应不含 coefficient（D13）', async () => {
-    const { hr, manager, deptHead, approver, employee } = await createRoleSet();
-    const { task } = await publishTask(employee.id, manager.id, deptHead.id, approver.id, hr.id);
-    const tokens = await getTokens();
-
-    const interview = await app.prisma.performanceInterview.findUnique({ where: { taskId: task.id } });
-    if (!interview) throw new Error('interview not found');
-
-    const res = await app.http
-      .get(`/api/v1/interviews/${interview.id}`)
-      .set('Authorization', `Bearer ${tokens.mgr}`)
-      .expect(200);
-
-    assertNoCoefficientKey(res.body.data);
+  it('retains legacy notes and signatures while unlinking the ledger from task deletion', async () => {
+    const task = await factory.createTaskInStatus({ deptId, employeeId: employee.id, managerId: manager.id, deptHeadId: manager.id, approverId: manager.id, status: 'published' });
+    const legacy = await prisma.performanceInterview.create({ data: {
+      taskId: task.id, cycleId: task.cycleId, employeeId: employee.id, interviewerId: manager.id,
+      achievements: 'Legacy notes', status: 'closed', managerSignedAt: new Date(), employeeSignedAt: new Date(),
+    } });
+    await prisma.signature.create({ data: { businessType: 'interview', businessRecordId: legacy.id, role: 'assessee', signerId: employee.id } });
+    viewer = hr;
+    await request(app.getHttpServer()).put('/interviews/' + legacy.id).send({ otherMatters: 'Additional ledger note' }).expect(200);
+    const saved = await prisma.performanceInterview.findUniqueOrThrow({ where: { id: legacy.id } });
+    expect(saved.achievements).toBe('Legacy notes');
+    expect(saved.employeeSignedAt).not.toBeNull();
+    await prisma.assessmentTask.delete({ where: { id: task.id } });
+    expect((await prisma.performanceInterview.findUniqueOrThrow({ where: { id: legacy.id } })).taskId).toBeNull();
+    expect(await prisma.signature.count({ where: { businessRecordId: legacy.id } })).toBe(1);
   });
 });

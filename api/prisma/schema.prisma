@@ -558,6 +558,7 @@ model User {
   signatures                                Signature[]
   interviewedAsEmployee                     PerformanceInterview[]           @relation("InterviewEmployee")
   interviewedAsInterviewer                  PerformanceInterview[]           @relation("InterviewInterviewer")
+  recordedInterviews                        PerformanceInterview[]           @relation("InterviewRecorder")
   probationReviewsAsEmployee                ProbationReview[]                @relation("ProbationReviewEmployee")
   probationReviewsAsManager                 ProbationReview[]                @relation("ProbationReviewManager")
   probationReviewsAsHr                      ProbationReview[]                @relation("ProbationReviewHr")
@@ -1490,8 +1491,9 @@ model PerformanceArchive {
 
 model PerformanceInterview {
   id               String           @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  taskId           String           @unique @map("task_id") @db.Uuid
-  cycleId          String           @map("cycle_id") @db.Uuid
+  taskId           String?          @unique @map("task_id") @db.Uuid
+  cycleId          String?          @map("cycle_id") @db.Uuid
+  recordedById     String?          @map("recorded_by_id") @db.Uuid
   employeeId       String           @map("employee_id") @db.Uuid
   interviewerId    String           @map("interviewer_id") @db.Uuid
   status           InterviewStatus  @default(pending)
@@ -1511,8 +1513,9 @@ model PerformanceInterview {
   createdAt        DateTime         @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt        DateTime         @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  task        AssessmentTask  @relation(fields: [taskId], references: [id], onDelete: Cascade)
-  cycle       AssessmentCycle @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  task        AssessmentTask?  @relation(fields: [taskId], references: [id], onDelete: SetNull)
+  cycle       AssessmentCycle? @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  recordedBy  User?            @relation("InterviewRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
   employee    User            @relation("InterviewEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
   interviewer User            @relation("InterviewInterviewer", fields: [interviewerId], references: [id], onDelete: Restrict)
 

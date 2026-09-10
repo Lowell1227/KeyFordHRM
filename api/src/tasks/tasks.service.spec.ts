@@ -377,6 +377,15 @@ describe('TasksService', () => {
   });
 
   describe('findOne', () => {
+    it('does not return HR interview records in an employee result', async () => {
+      const task: any = buildFullTask('published', null);
+      task.performanceInterview = { achievements: 'HR-only interview notes' };
+      prisma.assessmentTask.findUnique.mockResolvedValue(task);
+      const result = await service.findOne('task-1', makeViewer({ id: 'emp-1' }));
+      expect(result).not.toHaveProperty('performanceInterview');
+      expect(JSON.stringify(result)).not.toContain('HR-only interview notes');
+      expect(prisma.assessmentTask.findUnique.mock.calls[0][0].include).not.toHaveProperty('performanceInterview');
+    });
     it.each(['approval', 'manager_scoring', 'published'] as const)('retains employee objection attribution without original snapshots for own %s detail', async status => {
       const task: any = buildFullTask(status, { total_score: false, grade: false });
       if (status === 'approval') task.approvedAt = new Date();
