@@ -176,7 +176,7 @@ export class ApprovalService {
           await tx.notificationLog.create({ data: {
             userId: task.employeeId, senderId: viewer.id, taskId: task.id, cycleId: task.cycleId,
             type: 'result_confirmation_required', title: '请确认绩效结果',
-            content: '绩效结果已审批通过，请查看并确认结果。如有疑问，请线下联系 HR。',
+            content: '绩效结果已审批通过，请查看并确认结果。如不同意，可填写异议原因，提交后将由绩效直属上级重新评定，并再次审核。确认结果后由 HR 公示。',
             channel: 'system', status: 'sent', sentAt: now,
           } });
 

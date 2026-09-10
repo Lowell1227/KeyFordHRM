@@ -388,6 +388,26 @@ async function mockCyclePage(
   });
 }
 
+for (const width of [1440, 390]) {
+  test(`周期列表正确区分确认与公示 ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 960 });
+    const cycles = ['approval', 'confirmed', 'published'].map((status, index) => ({
+      ...draftCycle, id: `result-state-${index}`, name: `结果状态示例${index + 1}`, status: status === 'published' ? 'published' : 'approval',
+      taskStats: { total: 2, approved: 2, exempted: 0, unsubmitted: 0, pendingManagerReview: 0, pendingEmployeeConfirmation: 0,
+        goalCompleted: 2, overdue: 0, byStatus: { [status]: 2 } },
+    } as AssessmentCycle));
+    await mockCyclePage(page, [], { cycles });
+    await page.goto('/cycles');
+    const labels = ['待员工确认', '待公示', '已公示'];
+    for (const [index, cycle] of cycles.entries()) {
+      const row = width <= 768 ? page.getByTestId(`cycle-compact-card-${cycle.id}`) : page.getByRole('row').filter({ hasText: cycle.name });
+      await expect(row).toContainText(labels[index]);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`cycle-result-states-${width}.png`), fullPage: true });
+  });
+}
+
 test('maps cycle states to the compact group, action, and five-stage workflow', () => {
   expect(cycleStatusGroup('draft')).toBe('attention');
   expect(cycleStatusGroup('scheduled')).toBe('attention');
@@ -411,7 +431,7 @@ test('maps cycle states to the compact group, action, and five-stage workflow', 
       overdue: 0,
       byStatus: { approval: 3 },
     },
-  }).label).toBe('待公示');
+  }).label).toBe('待员工确认');
   expect(cycleBusinessState({
     ...draftCycle,
     status: 'indicator_setting',

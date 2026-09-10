@@ -83,6 +83,17 @@ for (const width of [1440, 390]) {
     await dialog.getByPlaceholder('请说明不同意的原因，供直属上级重新评定时参考').fill('请核实本周期等级依据。');
     await page.screenshot({path:test.info().outputPath(`employee-objection-${width}.png`),fullPage:true,animations:'disabled'});
     await dialog.getByRole('button', { name: '提交异议', exact: true }).click();
+    await expect(dialog).toContainText('确认提交异议');
+    await expect(dialog).toContainText('重新评定');
+    await expect(dialog).toContainText('结果审批');
+    expect(state.writes).toHaveLength(0);
+    await dialog.getByRole('button', { name: '返回修改', exact: true }).click();
+    await expect(dialog.getByRole('textbox')).toHaveValue('请核实本周期等级依据。');
+    expect(state.writes).toHaveLength(0);
+    await dialog.getByRole('button', { name: '提交异议', exact: true }).click();
+    await page.screenshot({path:test.info().outputPath(`employee-objection-confirm-${width}.png`),fullPage:true,animations:'disabled'});
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await dialog.getByRole('button', { name: '提交异议并重新评定', exact: true }).click();
     await expect(dialog).toBeHidden();
     await expect(page.getByRole('button', { name: '确认结果', exact: true })).toHaveCount(0);
     await expect(page.getByRole('button', { name: '不同意', exact: true })).toHaveCount(0);
@@ -177,6 +188,7 @@ test('异议提交失败时保留原因并在表单中显示错误', async ({pag
   const dialog=page.getByRole('dialog');
   await dialog.getByRole('textbox').fill('保留这条异议原因');
   await dialog.getByRole('button',{name:'提交异议',exact:true}).click();
+  await dialog.getByRole('button',{name:'提交异议并重新评定',exact:true}).click();
   await expect(dialog).toBeVisible();
   await expect(dialog.getByRole('textbox')).toHaveValue('保留这条异议原因');
   await expect(dialog.locator('.el-form-item__error')).toContainText('结果状态已变化');

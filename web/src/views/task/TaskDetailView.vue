@@ -73,6 +73,7 @@ const workflowContext = computed(() => {
 const flow = useTaskFlow({ task, cycle });
 const permission = usePermission({ task, cycle });
 const objectionVisible = ref(false);
+const objectionStep = ref<'reason' | 'confirm'>('reason');
 const objectionReason = ref('');
 const objectionError = ref('');
 const objectionTaskId = ref('');
@@ -451,17 +452,26 @@ async function handleConfirmResult() {
 function openResultObjection() {
   if (!canDisagreeResult.value || actionLoading.value || !task.value) return;
   objectionTaskId.value = task.value.id;
+  objectionStep.value = 'reason';
   objectionReason.value = '';
   objectionError.value = '';
   objectionVisible.value = true;
 }
 
-async function handleDisagreeResult() {
+function reviewResultObjection() {
   if (actionLoading.value || !canDisagreeResult.value || task.value?.id !== objectionTaskId.value) return;
   const reason = objectionReason.value.trim();
   if (!reason) { objectionError.value = '请填写异议原因'; return; }
-  const id = objectionTaskId.value;
   objectionError.value = '';
+  objectionStep.value = 'confirm';
+}
+
+async function handleDisagreeResult() {
+  if (objectionStep.value !== 'confirm' || actionLoading.value || !canDisagreeResult.value
+    || task.value?.id !== objectionTaskId.value || !objectionVisible.value) return;
+  const id = objectionTaskId.value;
+  const reason = objectionReason.value.trim();
+  if (!reason) { objectionStep.value = 'reason'; objectionError.value = '请填写异议原因'; return; }
   actionLoading.value = true;
   try {
     await tasksApi.disagreeResult(id, reason);
@@ -473,6 +483,7 @@ async function handleDisagreeResult() {
   } catch (error) {
     if (route.params.id === id) {
       const message = isAxiosError(error) ? error.response?.data?.message : error instanceof Error ? error.message : null;
+      objectionStep.value = 'reason';
       objectionError.value = typeof message === 'string' && message.trim() ? message : '提交失败，请稍后重试';
     }
   } finally {
@@ -747,18 +758,28 @@ async function handleRemind() {
     <div v-else-if="taskStore.error" class="error-state">
       <el-empty :description="taskStore.error" />
     </div>
-    <el-dialog v-model="objectionVisible" title="绩效结果异议" width="min(520px, calc(100vw - 32px))"
+    <el-dialog v-model="objectionVisible" :title="objectionStep === 'reason' ? '绩效结果异议' : '确认提交异议'" width="min(520px, calc(100vw - 32px))"
       :close-on-click-modal="false" :close-on-press-escape="!actionLoading" :show-close="!actionLoading" :before-close="closeResultObjection">
-      <p class="result-objection-hint">提交后由绩效直属上级{{ task?.managerName ? ` ${task.managerName}` : '' }}重新评定，再按原流程审核。</p>
-      <el-form label-position="top" @submit.prevent="handleDisagreeResult">
+      <template v-if="objectionStep === 'confirm'">
+        <p class="result-objection-hint">你将对「{{ task?.cycleName }}」的绩效结果提出异议。</p>
+        <p class="result-objection-hint">提交后，结果将退回绩效直属上级{{ task?.managerName ? ` ${task.managerName}` : '' }}重新评定，再经过部门复核、绩效校准和结果审批，最后由你重新确认。完成确认前不会公示。</p>
+        <div class="result-objection-preview"><span>异议原因</span><p>{{ objectionReason.trim() }}</p></div>
+      </template>
+      <el-form v-else label-position="top" @submit.prevent="reviewResultObjection">
         <el-form-item label="异议原因" required :error="objectionError">
           <el-input v-model="objectionReason" type="textarea" :rows="5" maxlength="2000" show-word-limit :disabled="actionLoading"
             placeholder="请说明不同意的原因，供直属上级重新评定时参考" @input="objectionError = ''" />
         </el-form-item>
       </el-form>
       <template #footer>
-        <el-button :disabled="actionLoading" @click="objectionVisible = false">取消</el-button>
-        <el-button type="primary" :loading="actionLoading" @click="handleDisagreeResult">提交异议</el-button>
+        <template v-if="objectionStep === 'confirm'">
+          <el-button :disabled="actionLoading" @click="objectionStep = 'reason'">返回修改</el-button>
+          <el-button type="primary" :loading="actionLoading" @click="handleDisagreeResult">提交异议并重新评定</el-button>
+        </template>
+        <template v-else>
+          <el-button @click="objectionVisible = false">取消</el-button>
+          <el-button type="primary" @click="reviewResultObjection">提交异议</el-button>
+        </template>
       </template>
     </el-dialog>
   </div>
@@ -768,6 +789,9 @@ async function handleRemind() {
 .result-view { min-width: 0; }
 .result-confirmation-stage { margin-bottom: 12px; }
 .result-objection-hint { margin: 0 0 16px; color: var(--el-text-color-secondary); line-height: 1.6; }
+.result-objection-preview { padding: 12px; background: var(--el-fill-color-light); border-radius: 6px; }
+.result-objection-preview > span { color: var(--el-text-color-secondary); font-size: 13px; }
+.result-objection-preview > p { margin: 8px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 160px; overflow-y: auto; line-height: 1.6; }
 .final-grade-entry {
   margin: 0;
 }

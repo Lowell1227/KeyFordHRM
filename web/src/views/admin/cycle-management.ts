@@ -12,6 +12,7 @@ export type CycleBusinessStatus =
   | 'goal_preparation'
   | 'goal_tracking'
   | 'result_assessment'
+  | 'pending_confirmation'
   | 'pending_publish'
   | 'published'
   | 'appealing'
@@ -33,6 +34,7 @@ const BUSINESS_STATE_META: Record<CycleBusinessStatus, Omit<CycleBusinessState, 
   goal_preparation: { label: '目标准备中', tagType: 'warning', phaseIndex: 1 },
   goal_tracking: { label: '目标跟进中', tagType: 'primary', phaseIndex: 2 },
   result_assessment: { label: '结果考评中', tagType: 'primary', phaseIndex: 3 },
+  pending_confirmation: { label: '待员工确认', tagType: 'warning', phaseIndex: 3 },
   pending_publish: { label: '待公示', tagType: 'warning', phaseIndex: 4 },
   published: { label: '已公示', tagType: 'success', phaseIndex: 4 },
   appealing: { label: '申诉处理中', tagType: 'danger', phaseIndex: 4 },
@@ -97,10 +99,12 @@ function resolveBusinessStatus(cycle: AssessmentCycle): CycleBusinessStatus {
     if (hasAnyTaskStatus(cycle, GOAL_TRACKING_STATUSES)) return 'goal_tracking';
     if (hasAnyTaskStatus(cycle, RESULT_ASSESSMENT_STATUSES)) {
       const activeCount = cycle.taskStats.total - cycle.taskStats.exempted;
-      if (activeCount > 0 && (cycle.taskStats.approved ?? 0) >= activeCount) return 'pending_publish';
+      if (activeCount > 0 && (cycle.taskStats.approved ?? 0) >= activeCount) return 'pending_confirmation';
       return 'result_assessment';
     }
     if (hasAnyTaskStatus(cycle, ['appealing'])) return 'appealing';
+    // 旧周期可能在公示后保留 confirmed；新流程 confirmed 表示员工已确认、尚待 HR 公示。
+    if (hasAnyTaskStatus(cycle, ['confirmed']) && cycle.status !== 'published') return 'pending_publish';
     if (hasAnyTaskStatus(cycle, ['published', 'confirmed'])) return 'published';
     const finishedCount = (cycle.taskStats.byStatus.closed ?? 0) + (cycle.taskStats.byStatus.exempted ?? 0);
     if (finishedCount >= cycle.taskStats.total) return 'finished';
@@ -144,7 +148,6 @@ function currentTaskAction(cycle: AssessmentCycle, fallback: string): string {
   if ((byStatus.hr_calibration ?? 0) > 0) return '绩效校准';
   if ((byStatus.approval ?? 0) > 0) return '结果审批';
   if ((byStatus.appealing ?? 0) > 0) return '处理申诉';
-  if ((byStatus.published ?? 0) + (byStatus.confirmed ?? 0) > 0) return '员工结果确认';
   return fallback;
 }
 
@@ -180,8 +183,10 @@ export function cycleNextStep(cycle: AssessmentCycle): CycleNextStep {
       return { label: currentTaskAction(cycle, '结果审批'), time: cycle.deadlineApproval ?? cycle.deadlineHrCalibration };
     case 'pending_publish':
       return { label: '公示结果', time: cycle.deadlinePublish };
+    case 'pending_confirmation':
+      return { label: '员工结果确认' };
     case 'published':
-      return { label: currentTaskAction(cycle, '员工结果确认'), time: cycle.deadlineAppeal };
+      return { label: '等待归档', time: cycle.deadlineAppeal };
     case 'appealing':
       return { label: '处理申诉', time: cycle.deadlineAppeal };
     case 'finished':
