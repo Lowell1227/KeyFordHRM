@@ -762,7 +762,7 @@ async function handleRemind() {
       :close-on-click-modal="false" :close-on-press-escape="!actionLoading" :show-close="!actionLoading" :before-close="closeResultObjection">
       <template v-if="objectionStep === 'confirm'">
         <p class="result-objection-hint">你将对「{{ task?.cycleName }}」的绩效结果提出异议。</p>
-        <p class="result-objection-hint">提交后，结果将退回绩效直属上级{{ task?.managerName ? ` ${task.managerName}` : '' }}重新评定，再经过部门复核、绩效校准和结果审批，最后由你重新确认。完成确认前不会公示。</p>
+        <p class="result-objection-hint">提交后，结果将退回绩效直属上级重新评定，再经过部门复核、绩效校准和结果审批，最后由你重新确认。</p>
         <div class="result-objection-preview"><span>异议原因</span><p>{{ objectionReason.trim() }}</p></div>
       </template>
       <el-form v-else label-position="top" @submit.prevent="reviewResultObjection">
