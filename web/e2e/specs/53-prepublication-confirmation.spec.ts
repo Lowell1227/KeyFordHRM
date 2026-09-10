@@ -6,19 +6,21 @@ const appealId = '33333333-3333-4333-8333-333333333333';
 const time = '2026-09-09T08:00:00.000Z';
 const wrap = (data: unknown) => JSON.stringify({ code: 0, message: 'success', data });
 
-async function setup(page: Page, role: 'employee' | 'hr' | 'manager', approved = true) {
+async function setup(page: Page, role: 'employee' | 'hr' | 'manager', approved = true, published = false) {
   let confirmed = false;
   let appealed = role === 'manager';
   let candidatesRead = 0;
   const writes: Array<{ path: string; body: unknown }> = [];
+  const signatureRequests: string[] = [];
   const cycle = { id: cycleId, name: '确认与申诉回归周期', status: 'approval', workflowVersion: 2, publishVisibleFields: { totalScore: true, grade: true, indicatorScores: true, managerComment: true } };
   const records = [{ id: 'appeal-flow', nodeType: 'appeal', action: 'reject', actorName: role === 'hr' ? '虚拟HR' : '虚拟员工', createdAt: time, comment: '员工线下反馈，需核实周期评定依据。', extraData: {type:'prepublication_appeal',source:role === 'hr' ? 'hr' : 'employee'} }];
   const task = () => ({
     id: taskId, cycleId, cycleName: cycle.name, employeeId: 'employee-1', employeeName: '虚拟员工', employeeNo: 'QA_EMP', deptName: '测试部门', position: '专员', managerId: 'manager-1', managerName: '虚拟上级', deptHeadId: 'head-1', approverId: 'approver-1',
-    status: appealed ? 'manager_scoring' : confirmed ? 'confirmed' : 'approval', isExempt: false, workflowVersion: 2,
-    approvedAt: approved && !appealed ? time : null, publishedAt: null, employeeConfirmedAt: confirmed && !appealed ? time : null,
+    status: appealed ? 'manager_scoring' : confirmed ? 'confirmed' : published ? 'published' : 'approval', isExempt: false, workflowVersion: 2,
+    approvedAt: approved && !appealed ? time : null, publishedAt: published ? time : null, employeeConfirmedAt: confirmed && !appealed ? time : null,
     periods: [{ id: 'period-1', periodKey: '2026-09', periodType: 'month', sequence: 1, status: 'completed', employeeSubmittedAt: time, managerSubmittedAt: time, managerScoreTotal: 86, lockedAt: time }],
-    gradeResult: { calculatedScore: approved ? 86 : null, rawGrade: approved ? 'B' : null, calibratedGrade: null, isPublished: false, employeeConfirmedAt: confirmed ? time : null },
+    gradeResult: { calculatedScore: approved ? 86 : null, rawGrade: approved ? 'B' : null, calibratedGrade: null, isPublished: published, employeeConfirmedAt: confirmed ? time : null },
+    performanceInterview: published ? { id: 'interview-1', taskId, status: 'filled', method: 'one_on_one', achievements: '已沟通本周期交付及改进措施', managerSignedAt: null, employeeSignedAt: null } : null,
     managerEvalSummary: { strengths: '稳定完成本周期交付', improvements: '', developmentPlan: '' }, indicatorInstances: [], flowRecords: appealed ? records : [],
     workflowContext: { stage: 'result', statusLabel: appealed ? '待直属上级重新评定' : confirmed ? '已确认，待公示' : approved ? '待员工确认' : '结果审批中', currentHandler: null, canRemind: false },
   });
@@ -26,6 +28,7 @@ async function setup(page: Page, role: 'employee' | 'hr' | 'manager', approved =
   await page.addInitScript(() => { localStorage.setItem('token', 'isolated-confirmation-contract'); localStorage.setItem('expiresAt', String(Date.now() + 3600_000)); });
   await page.route('**/api/v1/**', async route => {
     const request = route.request(); const path = new URL(request.url()).pathname;
+    if (path.includes('/signatures') || path.endsWith('-sign')) signatureRequests.push(path);
     let data: unknown = {};
     if (request.method() !== 'GET') writes.push({ path, body: request.postDataJSON() });
     if (path.endsWith('/auth/me')) data = { id: role === 'hr' ? 'hr-1' : role === 'manager' ? 'manager-1' : 'employee-1', name: role === 'hr' ? '虚拟HR' : role === 'manager' ? '虚拟上级' : '虚拟员工', sysRole: role === 'manager' ? 'employee' : role, canViewAll: role === 'hr', hrCanPublish: true, businessCapabilities: { canPublishPerformance: role === 'hr', canManageTeam: role === 'manager' } };
@@ -49,10 +52,30 @@ async function setup(page: Page, role: 'employee' | 'hr' | 'manager', approved =
     else if (path === '/api/v1/tasks') data = { items: [], total: 0 };
     await route.fulfill({ contentType: 'application/json', body: wrap(data) });
   });
-  return { writes, candidatesRead: () => candidatesRead };
+  return { writes, signatureRequests, candidatesRead: () => candidatesRead };
 }
 
 for (const width of [1440, 390]) {
+  test(`历史已公示结果仅确认，面谈内容只读且不请求签字 ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 960 });
+    const state = await setup(page, 'employee', true, true);
+    await page.goto(`/tasks/${taskId}?stage=result`);
+    await expect(page.getByRole('button', { name: '确认结果', exact: true })).toBeVisible();
+    await expect(page.getByText('已沟通本周期交付及改进措施')).toBeVisible();
+    await expect(page.getByText('考核表三方签字', { exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: /签字|签名/ })).toHaveCount(0);
+    expect(state.signatureRequests).toEqual([]);
+    await page.getByRole('button', { name: '确认结果', exact: true }).click();
+    await expect(page.getByRole('button', { name: '确认结果', exact: true })).toHaveCount(0);
+    expect(state.writes.map(write => write.path)).toEqual([`/api/v1/tasks/${taskId}/employee-confirm`]);
+    await page.reload();
+    await expect(page.getByText('已沟通本周期交付及改进措施')).toBeVisible();
+    await expect(page.getByRole('button', { name: /签字|签名/ })).toHaveCount(0);
+    expect(state.signatureRequests).toEqual([]);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+    await page.screenshot({ path: test.info().outputPath(`result-without-signatures-${width}.png`), fullPage: true });
+  });
+
   test(`审批后本人可确认或不同意，确认后不能重复操作 ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 960 });
     const state = await setup(page, 'employee');

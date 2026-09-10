@@ -18,7 +18,6 @@ import DepartmentReviewWorkspace from './components/DepartmentReviewWorkspace.vu
 import ExemptView from './components/ExemptView.vue';
 import ScoreMask from './components/ScoreMask.vue';
 import InterviewCard from './components/InterviewCard.vue';
-import SignBlock from '@/components/common/SignBlock.vue';
 import GradeTag from '@/components/common/GradeTag.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import PerformanceResultEvidence from '@/components/common/PerformanceResultEvidence.vue';
@@ -26,7 +25,6 @@ import { resultStage } from '@/utils/performance-result-presentation';
 import { useAuthStore } from '@/stores/auth.store';
 import { formatScore } from '@/utils/score';
 import type { AssessmentCycle, TaskDetail, SetIndicatorBody, SubmitSelfEvalBody } from '@/types/api.types';
-import type { SignatureRole } from '@/types/enums';
 import { TASK_STATUS_META } from '@/types/enums';
 import {
   getEmployeeTaskStageState,
@@ -268,21 +266,6 @@ const showResultView = computed(() => {
 const reminderOnCooldown = computed(() => {
   const value = workflowContext.value.reminderAvailableAt;
   return Boolean(value && new Date(value).getTime() > Date.now());
-});
-
-/**
- * 当前登录用户在该考核表上的签字角色位，按真实身份判定（非粗角色门）：
- * 被考核人=任务员工本人 / 考核人=任务主管本人 / HR=HR或系统管理员。
- * 旁观者（部门负责人、分管总等）返回 null，仅查看签字状态、无签字按钮。
- */
-const signatureRole = computed<SignatureRole | null>(() => {
-  const t = task.value;
-  const uid = authStore.user?.id;
-  if (!t || !uid) return null;
-  if (t.employeeId === uid) return 'assessee';
-  if (t.managerId === uid) return 'assessor';
-  if (authStore.user?.sysRole === 'hr' || authStore.user?.sysRole === 'system_admin') return 'hr';
-  return null;
 });
 
 async function loadCycle(taskDetail?: TaskDetail | null) {
@@ -726,20 +709,10 @@ async function handleRemind() {
             </div>
           </ChartCard>
 
-          <SignBlock
-            v-if="requestedPerformanceStage === 'result' && permission.isPublished.value"
-            class="sign-block-card"
-            business-type="assessment_task"
-            :business-record-id="task.id"
-            :role="signatureRole"
-            title="考核表三方签字"
-          />
-
           <InterviewCard
             v-if="requestedPerformanceStage === 'result' && permission.isPublished.value"
             :task="task"
             :interview="task.performanceInterview"
-            @refresh="loadDetail"
           />
           </section>
         </template>
