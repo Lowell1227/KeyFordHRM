@@ -88,7 +88,9 @@ export type InterviewMethod = 'one_on_one' | 'phone' | 'performance_meeting';
 
 export type InterviewStatus = 'pending' | 'filled' | 'employee_signed' | 'closed';
 
-export type ImprovementPlanStatus = 'draft' | 'in_progress' | 'completed';
+export type ImprovementPlanStatus = 'draft' | 'goal_dept_review' | 'goal_employee_confirm'
+  | 'goal_revision' | 'self_eval' | 'manager_review' | 'dept_review' | 'vp_review'
+  | 'in_progress' | 'completed';
 
 export type ProbationReviewStatus =
   | 'pending'
@@ -136,8 +138,15 @@ export const INTERVIEW_STATUS_LABELS: Record<InterviewStatus, { label: string; t
 };
 
 export const IMPROVEMENT_PLAN_STATUS_META: Record<ImprovementPlanStatus, { label: string; type: string }> = {
-  draft: { label: '待制定', type: 'warning' },
-  in_progress: { label: '进行中', type: 'primary' },
+  draft: { label: '待发起人提交', type: 'warning' },
+  goal_dept_review: { label: '待部门负责人确认目标', type: 'warning' },
+  goal_employee_confirm: { label: '待员工确认目标', type: 'warning' },
+  goal_revision: { label: '待发起人修改目标', type: 'danger' },
+  self_eval: { label: '待员工自评', type: 'primary' },
+  manager_review: { label: '待直属上级评价', type: 'primary' },
+  dept_review: { label: '待部门负责人评价', type: 'primary' },
+  vp_review: { label: '待分管总审核', type: 'primary' },
+  in_progress: { label: '历史计划进行中', type: 'info' },
   completed: { label: '已完成', type: 'success' },
 };
 

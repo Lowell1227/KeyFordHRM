@@ -355,23 +355,6 @@ export class PublishService {
             });
           }
 
-          // A2：最终等级为 D 时自动生成绩效改进计划（壳）
-          const effectiveGrade =
-            task.gradeResult?.calibratedGrade ?? task.gradeResult?.rawGrade;
-          if (effectiveGrade === "D") {
-            await tx.improvementPlan.upsert({
-              where: {
-                employeeId_cycleId: { employeeId: task.employeeId, cycleId },
-              },
-              create: {
-                employeeId: task.employeeId,
-                cycleId,
-                taskId: task.id,
-                status: "draft",
-              },
-              update: {},
-            });
-          }
         }
 
         // 全部非豁免任务均已实际公示后才推进周期，申诉重评和待确认任务仍阻止整周期完成。

@@ -3,9 +3,10 @@ import { computed, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { cyclesApi } from '@/api/cycles.api';
 import { tasksApi } from '@/api/tasks.api';
+import { improvementPlansApi } from '@/api/improvement-plans.api';
 import { useAuthStore } from '@/stores/auth.store';
 import { getEmployeeTaskStageState, isTerminalTaskStatus, resolveEmployeeTaskEntry } from '@/views/task/task-stage';
-import type { AssessmentCycle, TaskListItem } from '@/types/api.types';
+import type { AssessmentCycle, TaskListItem, ImprovementPlan } from '@/types/api.types';
 import type { TeamTaskStage } from '@/types/enums';
 
 const auth = useAuthStore();
@@ -13,6 +14,8 @@ const router = useRouter();
 const selectedPlanId = ref('');
 const cycles = ref<AssessmentCycle[]>([]);
 const personalTasks = ref<TaskListItem[]>([]);
+const improvementPending = ref<ImprovementPlan[]>([]);
+const improvementError = ref(false);
 const loading = ref(false);
 const personalError = ref(false);
 const cyclesError = ref(false);
@@ -112,12 +115,18 @@ async function loadEntries() {
   selectedPlanId.value = '';
   cycles.value = [];
   personalTasks.value = [];
+  improvementPending.value = [];
+  improvementError.value = false;
   teamCounts.value = {};
   personalError.value = false;
   cyclesError.value = false;
   loading.value = Boolean(auth.user);
   if (!auth.user) return;
-  await Promise.all([loadPersonalTasks(requestId), loadCycles(requestId)]);
+  await Promise.all([loadPersonalTasks(requestId), loadCycles(requestId),
+    improvementPlansApi.myPending().then((items) => {
+      if (requestId === requestSerial) improvementPending.value = items;
+    }).catch(() => { if (requestId === requestSerial) improvementError.value = true; }),
+  ]);
   if (requestId !== requestSerial) return;
   if (auth.isManager) {
     const candidates = candidatePlans.value;
@@ -149,6 +158,15 @@ function openPersonalTask(task: TaskListItem) {
 
 function openTeamWorkspace(cycleId: string, stage: TeamTaskStage) {
   void router.push({ path: '/tasks', query: { scope: 'team', stage, cycleId } });
+}
+
+function improvementAction(status: ImprovementPlan['status']): string {
+  const labels: Record<string, string> = {
+    draft: '提交目标', goal_revision: '修改目标', goal_dept_review: '确认目标',
+    goal_employee_confirm: '确认目标', self_eval: '员工自评', manager_review: '直属上级评价',
+    dept_review: '部门负责人评价', vp_review: '最终审核',
+  };
+  return labels[status] ?? '查看计划';
 }
 
 watch(() => [auth.user?.id, auth.user?.sysRole, auth.isManager], () => void loadEntries(), { immediate: true });
@@ -207,9 +225,24 @@ onUnmounted(() => { requestSerial += 1; });
       <p v-if="!visiblePlans.length && !personalError && !cyclesError" class="dashboard-tasks__empty">当前没有进行中的本人任务{{ auth.isManager ? '或团队任务' : '' }}。</p>
     </template>
   </section>
+  <section v-if="improvementPending.length || improvementError" class="dashboard-improvement" aria-label="改进计划待办">
+    <h2>改进计划待办</h2>
+    <p v-if="improvementError" class="task-note">改进计划待办暂时无法加载。</p>
+    <router-link v-for="item in improvementPending" :key="item.id" :to="`/improvement-plans/${item.id}`" class="dashboard-improvement__item">
+      <span><strong>{{ item.employeeName }}</strong> · {{ improvementAction(item.status) }}</span>
+      <small v-if="item.targetDate">预计完成 {{ item.targetDate.slice(0, 10) }}<em v-if="new Date(item.targetDate).getTime() < Date.now()"> · 已逾期</em></small>
+      <span class="dashboard-improvement__open">去处理</span>
+    </router-link>
+  </section>
 </template>
 
 <style scoped>
+.dashboard-improvement { display:grid; gap:8px; margin-top:12px; padding:16px 18px; background:var(--app-card-bg); border:1px solid var(--app-border-color); border-radius:var(--app-radius); }
+.dashboard-improvement h2 { margin:0; font-size:18px; }
+.dashboard-improvement__item { display:flex; align-items:center; gap:12px; padding:9px 10px; color:var(--app-text-primary); text-decoration:none; border:1px solid var(--app-border-color); border-radius:5px; }
+.dashboard-improvement__item small { margin-left:auto; color:var(--app-text-secondary); }
+.dashboard-improvement__item em { color:var(--el-color-warning); font-style:normal; }
+.dashboard-improvement__open { color:var(--el-color-primary); }
 .dashboard-tasks { display: grid; gap: 12px; min-width: 0; }
 .dashboard-tasks__header { display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .dashboard-tasks__header h2 { margin: 0 0 4px; font-size: 18px; }
@@ -237,6 +270,8 @@ onUnmounted(() => { requestSerial += 1; });
   .team-task { padding-left: 0; border-left: 0; padding-top: 12px; border-top: 1px solid var(--app-border-color); }
 }
 @media (max-width: 560px) {
+  .dashboard-improvement__item { align-items:flex-start; flex-direction:column; gap:5px; }
+  .dashboard-improvement__item small { margin-left:0; }
   .dashboard-tasks__header { align-items: stretch; flex-direction: column; gap: 12px; }
   .dashboard-tasks__filter select { flex: 1; width: 0; }
   .plan-entry { padding: 14px; }

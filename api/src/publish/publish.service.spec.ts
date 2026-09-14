@@ -875,7 +875,7 @@ describe("PublishService", () => {
       expect(notificationsService.sendResultPublished).not.toHaveBeenCalled();
     });
 
-    it("最终等级为 D 时自动创建 draft 绩效改进计划", async () => {
+    it("最终等级为 D 时也不自动创建绩效改进计划", async () => {
       prisma.assessmentCycle.findUnique.mockResolvedValue(makeCycle());
       prisma.systemConfig.findUnique.mockResolvedValue(null);
       tx.assessmentTask.findMany.mockResolvedValue([
@@ -899,18 +899,7 @@ describe("PublishService", () => {
         makeViewer(),
       );
 
-      expect(tx.improvementPlan.upsert).toHaveBeenCalledWith({
-        where: {
-          employeeId_cycleId: { employeeId: "emp-1", cycleId: "cycle-1" },
-        },
-        create: {
-          employeeId: "emp-1",
-          cycleId: "cycle-1",
-          taskId: "task-1",
-          status: "draft",
-        },
-        update: {},
-      });
+      expect(tx.improvementPlan.upsert).not.toHaveBeenCalled();
     });
 
     it("最终等级非 D 时不创建绩效改进计划", async () => {

@@ -3,9 +3,10 @@ import type {
   Paginated,
   ImprovementPlan,
   ImprovementPlanQuery,
-  FillImprovementPlanBody,
-  CompleteImprovementPlanBody,
-  ConsecutiveDWarning,
+  CreateImprovementPlanBody,
+  UpdateImprovementPlanBody,
+  ImprovementDecisionBody,
+  ImprovementEvaluationBody,
 } from '@/types/api.types';
 
 function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
@@ -23,18 +24,31 @@ export const improvementPlansApi = {
     return apiGet(`/improvement-plans/${id}`);
   },
 
-  /** POST /improvement-plans/:id/fill — 填写计划。 */
-  fill(id: string, body: FillImprovementPlanBody): Promise<ImprovementPlan> {
-    return http.post(`/improvement-plans/${id}/fill`, body) as unknown as Promise<ImprovementPlan>;
+  eligibleEmployees(): Promise<Array<{ id: string; name: string; employeeNo: string | null; deptName: string | null }>> {
+    return apiGet('/improvement-plans/eligible-employees');
   },
 
-  /** POST /improvement-plans/:id/complete — 录最终评分。 */
-  complete(id: string, body: CompleteImprovementPlanBody): Promise<ImprovementPlan> {
-    return http.post(`/improvement-plans/${id}/complete`, body) as unknown as Promise<ImprovementPlan>;
+  cycles(): Promise<Array<{ id: string; name: string }>> { return apiGet('/improvement-plans/cycles'); },
+  myPending(): Promise<ImprovementPlan[]> { return apiGet('/improvement-plans/my-pending'); },
+  create(body: CreateImprovementPlanBody): Promise<ImprovementPlan> {
+    return http.post('/improvement-plans', body) as unknown as Promise<ImprovementPlan>;
   },
-
-  /** GET /improvement-plans/employee/:employeeId/consecutive-d-warning */
-  getConsecutiveDWarning(employeeId: string): Promise<ConsecutiveDWarning> {
-    return apiGet(`/improvement-plans/employee/${employeeId}/consecutive-d-warning`);
+  update(id: string, body: UpdateImprovementPlanBody): Promise<ImprovementPlan> {
+    return http.patch(`/improvement-plans/${id}`, body) as unknown as Promise<ImprovementPlan>;
+  },
+  submitGoals(id: string): Promise<ImprovementPlan> {
+    return http.post(`/improvement-plans/${id}/submit-goals`) as unknown as Promise<ImprovementPlan>;
+  },
+  decideGoals(id: string, body: ImprovementDecisionBody): Promise<ImprovementPlan> {
+    return http.post(`/improvement-plans/${id}/decide-goals`, body) as unknown as Promise<ImprovementPlan>;
+  },
+  evaluate(id: string, body: ImprovementEvaluationBody): Promise<ImprovementPlan> {
+    return http.post(`/improvement-plans/${id}/evaluate`, body) as unknown as Promise<ImprovementPlan>;
+  },
+  saveEvaluation(id: string, body: ImprovementEvaluationBody): Promise<ImprovementPlan> {
+    return http.post(`/improvement-plans/${id}/save-evaluation`, body) as unknown as Promise<ImprovementPlan>;
+  },
+  decideFinal(id: string, body: ImprovementDecisionBody): Promise<ImprovementPlan> {
+    return http.post(`/improvement-plans/${id}/decide-final`, body) as unknown as Promise<ImprovementPlan>;
   },
 };

@@ -262,6 +262,13 @@ enum AppealResult {
 
 enum ImprovementPlanStatus {
   draft
+  goal_dept_review
+  goal_employee_confirm
+  goal_revision
+  self_eval
+  manager_review
+  dept_review
+  vp_review
   in_progress
   completed
 
@@ -1558,25 +1565,31 @@ model PerformanceInterview {
 model ImprovementPlan {
   id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   employeeId      String                @map("employee_id") @db.Uuid
-  cycleId         String                @map("cycle_id") @db.Uuid
-  taskId          String                @unique @map("task_id") @db.Uuid
+  cycleId         String?               @map("cycle_id") @db.Uuid
+  taskId          String?               @unique @map("task_id") @db.Uuid
   creatorId       String?               @map("creator_id") @db.Uuid
   improvementNeed String?               @map("improvement_need") @db.Text
   importance      String?               @map("importance") @db.Text
   improvementGoal String?               @map("improvement_goal") @db.Text
   targetDate      DateTime?             @map("target_date") @db.Date
   measures        Json                  @default("[]") @map("measures") @db.JsonB
-  finalScore      Int?                  @map("final_score")
+  finalScore      Float?                @map("final_score")
   status          ImprovementPlanStatus @default(draft)
+  workflowVersion Int                   @default(1) @map("workflow_version")
+  goals           Json                  @default("[]") @db.JsonB
+  selfEvaluation  Json?                 @map("self_evaluation") @db.JsonB
+  managerEvaluation Json?               @map("manager_evaluation") @db.JsonB
+  departmentEvaluation Json?            @map("department_evaluation") @db.JsonB
+  startedAt       DateTime?             @map("started_at") @db.Timestamptz(6)
+  completedAt     DateTime?             @map("completed_at") @db.Timestamptz(6)
   createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt       DateTime              @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   employee User            @relation("ImprovementPlanEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
-  cycle    AssessmentCycle @relation(fields: [cycleId], references: [id], onDelete: Restrict)
-  task     AssessmentTask  @relation(fields: [taskId], references: [id], onDelete: Restrict)
+  cycle    AssessmentCycle? @relation(fields: [cycleId], references: [id], onDelete: Restrict)
+  task     AssessmentTask?  @relation(fields: [taskId], references: [id], onDelete: Restrict)
   creator  User?           @relation("ImprovementPlanCreator", fields: [creatorId], references: [id], onDelete: SetNull)
 
-  @@unique([employeeId, cycleId])
   @@index([employeeId])
   @@index([cycleId])
   @@index([status])

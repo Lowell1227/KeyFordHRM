@@ -1738,15 +1738,38 @@ export interface ImprovementMeasure {
   deadline: string;
 }
 
+export interface ImprovementGoal {
+  id: string;
+  name: string;
+  description: string;
+  weight: number;
+}
+
+export interface ImprovementEvaluation {
+  items: Array<{ goalId: string; score: number | null; comment: string }>;
+  overallComment: string;
+  weightedScore: number | null;
+  draft?: boolean;
+}
+
+export interface ImprovementPlanRecord {
+  id: string;
+  action: string;
+  actorName: string;
+  createdAt: string;
+  oldValue: Record<string, unknown> | null;
+  newValue: Record<string, unknown> | null;
+}
+
 export interface ImprovementPlan {
   id: string;
   employeeId: string;
   employeeName?: string;
   employeeNo?: string;
   deptName?: string;
-  cycleId: string;
-  cycleName?: string;
-  taskId: string;
+  cycleId: string | null;
+  cycleName?: string | null;
+  taskId: string | null;
   creatorId: string | null;
   creatorName?: string;
   improvementNeed: string | null;
@@ -1754,7 +1777,17 @@ export interface ImprovementPlan {
   improvementGoal: string | null;
   targetDate: string | null;
   measures: ImprovementMeasure[];
+  goals: ImprovementGoal[];
+  selfEvaluation: ImprovementEvaluation | null;
+  managerEvaluation: ImprovementEvaluation | null;
+  departmentEvaluation: ImprovementEvaluation | null;
   finalScore: number | null;
+  workflowVersion: number;
+  startedAt: string | null;
+  completedAt: string | null;
+  currentOwnerId: string | null;
+  allowedActions: string[];
+  records?: ImprovementPlanRecord[];
   status: ImprovementPlanStatus;
   createdAt: string;
   updatedAt: string;
@@ -1765,22 +1798,22 @@ export interface ImprovementPlanQuery {
   pageSize?: number;
   status?: ImprovementPlanStatus;
   employeeId?: string;
-    cycleId?: string;
-    deptId?: string;
-    keyword?: string;
+  cycleId?: string;
+  deptId?: string;
+  keyword?: string;
 }
 
-export interface FillImprovementPlanBody {
+export interface CreateImprovementPlanBody {
+  employeeId: string;
+  cycleId?: string | null;
   improvementNeed: string;
-  importance: string;
-  improvementGoal: string;
-  targetDate: string;
-  measures: ImprovementMeasure[];
+  targetDate?: string | null;
+  goals: ImprovementGoal[];
 }
 
-export interface CompleteImprovementPlanBody {
-  finalScore: number;
-}
+export type UpdateImprovementPlanBody = Omit<CreateImprovementPlanBody, 'employeeId'>;
+export interface ImprovementDecisionBody { approve: boolean; comment?: string }
+export interface ImprovementEvaluationBody { items: ImprovementEvaluation['items']; overallComment: string }
 
 export interface ConsecutiveDWarning {
   hasWarning: boolean;

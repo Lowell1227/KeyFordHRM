@@ -43,6 +43,8 @@ async function mockPerformancePages(page: Page, requests: string[]) {
     }) });
     if (path.endsWith('/notifications/unread-count')) return route.fulfill({ json: apiResponse(0) });
     if (path.endsWith('/departments')) return route.fulfill({ json: apiResponse(departments) });
+    if (path.endsWith('/improvement-plans/cycles')) return route.fulfill({ json: apiResponse(cycles) });
+    if (path.endsWith('/improvement-plans/eligible-employees')) return route.fulfill({ json: apiResponse([]) });
     if (path.endsWith('/calibration/cycles')) return route.fulfill({ json: apiResponse(cycles) });
     if (path.endsWith('/cycles/mine')) return route.fulfill({ json: apiResponse(cycles) });
     if (path.endsWith('/cycles')) return route.fulfill({ json: apiResponse({ items: cycles, total: cycles.length, page: 1, pageSize: 100 }) });
@@ -69,7 +71,7 @@ for (const pageCase of pageCases) {
     const departmentFilter = page.getByTestId('performance-department-filter');
     const employeeFilter = page.getByTestId('performance-employee-filter');
     const filterRegion = page.getByRole('region', { name: '查询条件' });
-    if (pageCase.path === '/interviews') {
+    if (pageCase.path === '/interviews' || pageCase.path === '/improvement-plans') {
       await expect(cycleFilter).toContainText('全部周期');
       await cycleFilter.click();
       await page.getByRole('option', { name: '最新创建周期', exact: true }).click();
@@ -109,8 +111,8 @@ test('HR interview and improvement pages load the full visible cycle catalogue',
 
   requests.length = 0;
   await page.goto('/improvement-plans');
-  await expect(page.getByTestId('performance-cycle-filter')).toContainText('最新创建周期');
-  expect(requests.some(value => new URL(value).pathname.endsWith('/cycles'))).toBe(true);
+  await expect(page.getByTestId('performance-cycle-filter')).toContainText('全部周期');
+  expect(requests.some(value => new URL(value).pathname.endsWith('/improvement-plans/cycles'))).toBe(true);
   expect(requests.some(value => new URL(value).pathname.endsWith('/cycles/mine'))).toBe(false);
 });
 
