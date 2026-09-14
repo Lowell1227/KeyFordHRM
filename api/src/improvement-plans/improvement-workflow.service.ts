@@ -24,6 +24,9 @@ export interface PlanDraftInput {
   goals?: ImprovementGoal[];
 }
 export interface PlanDecisionInput { approve: boolean; comment?: string }
+export interface PlanGoalDecisionInput extends PlanDecisionInput {
+  suggestions?: Array<{ goalId: string; comment: string }>;
+}
 export interface PlanEvaluationInput { items: Array<{ goalId: string; score: number; comment: string }>; overallComment: string }
 export interface PlanEvaluationDraftInput { items: Array<{ goalId: string; score: number | null; comment: string }>; overallComment: string }
 export interface PlanQuery { employeeId?: string; cycleId?: string; deptId?: string; keyword?: string; status?: ImprovementPlanStatus }
@@ -312,17 +315,33 @@ export class ImprovementWorkflowService {
     return this.findOne(id, viewer);
   }
 
-  async decideGoals(id: string, input: PlanDecisionInput, viewer: AuthUser) {
+  async decideGoals(id: string, input: PlanGoalDecisionInput, viewer: AuthUser) {
     const plan = await this.load(id);
     this.assertNew(plan);
     if (!['goal_dept_review', 'goal_employee_confirm'].includes(plan.status)) throw new ConflictException('当前无需确认目标');
     const org = await this.org(plan.employeeId);
     if (this.owner(plan, org) !== viewer.id) throw new ForbiddenException('当前不是你的目标确认待办');
-    if (!input.approve && !input.comment?.trim()) throw new BadRequestException('驳回目标必须填写理由');
+    const requested = input.suggestions ?? [];
+    if (!Array.isArray(requested)) throw new BadRequestException('逐项目标建议格式不正确');
+    if (requested.length && (input.approve || plan.status !== 'goal_employee_confirm')) {
+      throw new BadRequestException('逐项目标建议仅可由员工退回目标时填写');
+    }
+    const goals = new Map(this.goals(plan).map((goal) => [goal.id, goal]));
+    const seen = new Set<string>();
+    const suggestions = requested.map((item) => {
+      const goal = goals.get(item.goalId);
+      const comment = item.comment?.trim();
+      if (!goal || !comment || seen.has(item.goalId)) throw new BadRequestException('请为当前目标逐项填写不重复的建议');
+      seen.add(item.goalId);
+      return { goalId: goal.id, goalName: goal.name, comment };
+    });
+    if (!input.approve && !input.comment?.trim() && !suggestions.length) {
+      throw new BadRequestException('退回目标时，请填写具体目标建议或整体意见');
+    }
     const status = !input.approve ? 'goal_revision' : plan.status === 'goal_dept_review' ? 'goal_employee_confirm' : 'self_eval';
     await this.change(plan, viewer, input.approve ? 'confirm_goals' : 'reject_goals', {
       status, ...(status === 'self_eval' ? { startedAt: new Date() } : {}),
-    }, { status, comment: input.comment?.trim() ?? '' });
+    }, { status, comment: input.comment?.trim() ?? '', ...(suggestions.length ? { suggestions } : {}) });
     await this.notify(this.owner({ ...plan, status } as Plan, org), viewer.id, id,
       status === 'goal_revision' ? '改进计划目标被退回' : status === 'self_eval' ? '请填写改进计划自评' : '改进计划目标待确认');
     return this.findOne(id, viewer);

@@ -1745,6 +1745,12 @@ export interface ImprovementGoal {
   weight: number;
 }
 
+export interface ImprovementGoalSuggestion {
+  goalId: string;
+  goalName?: string;
+  comment: string;
+}
+
 export interface ImprovementEvaluation {
   items: Array<{ goalId: string; score: number | null; comment: string }>;
   overallComment: string;
@@ -1813,6 +1819,7 @@ export interface CreateImprovementPlanBody {
 
 export type UpdateImprovementPlanBody = Omit<CreateImprovementPlanBody, 'employeeId'>;
 export interface ImprovementDecisionBody { approve: boolean; comment?: string }
+export interface ImprovementGoalDecisionBody extends ImprovementDecisionBody { suggestions?: ImprovementGoalSuggestion[] }
 export interface ImprovementEvaluationBody { items: ImprovementEvaluation['items']; overallComment: string }
 
 export interface ConsecutiveDWarning {
@@ -1965,6 +1972,7 @@ export interface ConfirmationApplication {
   canApprove?: boolean;
   canReject?: boolean;
   canReturn?: boolean;
+  canViewInternalMeeting?: boolean;
     pendingRole?: 'manager' | 'hr' | 'company' | null;
     history?: Array<{ id: string; label: string; actorName: string | null; occurredAt: string; submissionVersion: number | null; note: string | null;
       snapshot?: { summary?: string; managerRecommendation?: boolean; managerComment?: string;

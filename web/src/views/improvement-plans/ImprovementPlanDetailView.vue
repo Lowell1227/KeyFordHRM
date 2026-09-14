@@ -7,7 +7,7 @@ import { IMPROVEMENT_PLAN_STATUS_META } from '@/types/enums';
 import { formatDate, formatDateTime } from '@/utils/date';
 import ChartCard from '@/components/common/ChartCard.vue';
 import EmptyState from '@/components/common/EmptyState.vue';
-import type { ImprovementEvaluation, ImprovementGoal, ImprovementPlan, ImprovementPlanRecord } from '@/types/api.types';
+import type { ImprovementEvaluation, ImprovementGoal, ImprovementGoalSuggestion, ImprovementPlan, ImprovementPlanRecord } from '@/types/api.types';
 
 const route = useRoute();
 const router = useRouter();
@@ -16,6 +16,7 @@ const cycles = ref<Array<{ id: string; name: string }>>([]);
 const loading = ref(false);
 const busy = ref(false);
 const decisionComment = ref('');
+const goalSuggestions = reactive<Record<string, string>>({});
 const errors = reactive<Record<string, string>>({});
 const form = reactive<{ improvementNeed: string; cycleId: string; targetDate: string; goals: ImprovementGoal[] }>({
   improvementNeed: '', cycleId: '', targetDate: '', goals: [],
@@ -25,6 +26,9 @@ const evaluation = reactive<{ items: Array<{ goalId: string; score: number | nul
 });
 const canEdit = computed(() => plan.value?.allowedActions.includes('edit') ?? false);
 const canDecideGoals = computed(() => plan.value?.allowedActions.includes('decide_goals') ?? false);
+const employeeGoalConfirmation = computed(() => canDecideGoals.value && plan.value?.status === 'goal_employee_confirm');
+const latestGoalRejection = computed(() => plan.value?.status === 'goal_revision'
+  ? plan.value.records?.find((record) => record.action === 'reject_goals') ?? null : null);
 const canEvaluate = computed(() => plan.value?.allowedActions.includes('evaluate') ?? false);
 const canDecideFinal = computed(() => plan.value?.allowedActions.includes('decide_final') ?? false);
 const weightTotal = computed(() => form.goals.reduce((sum, goal) => sum + Number(goal.weight || 0), 0));
@@ -68,6 +72,7 @@ function sync(value: ImprovementPlan) {
   }));
   evaluation.overallComment = previous?.overallComment ?? '';
   decisionComment.value = '';
+  Object.keys(goalSuggestions).forEach((key) => delete goalSuggestions[key]);
   Object.keys(errors).forEach((key) => delete errors[key]);
 }
 function addGoal() { form.goals.push({ id: crypto.randomUUID(), name: '', description: '', weight: 0 }); }
@@ -98,10 +103,20 @@ async function saveTargets(submit: boolean) {
 }
 async function decideGoals(approve: boolean) {
   if (!plan.value) return;
-  if (!approve && !decisionComment.value.trim()) { errors.decision = '退回时请填写理由'; return; }
+  delete errors.decision;
+  const suggestions = employeeGoalConfirmation.value ? plan.value.goals
+    .map((goal) => ({ goalId: goal.id, comment: goalSuggestions[goal.id]?.trim() ?? '' }))
+    .filter((item) => item.comment) : [];
+  if (approve && suggestions.length) {
+    errors.decision = '已填写修改建议，请退回发起人修改或清空建议'; return;
+  }
+  if (!approve && !decisionComment.value.trim() && !suggestions.length) {
+    errors.decision = employeeGoalConfirmation.value ? '请填写具体目标建议或整体意见' : '退回时请填写理由'; return;
+  }
   busy.value = true;
   try {
-    sync(await improvementPlansApi.decideGoals(plan.value.id, { approve, comment: decisionComment.value }));
+    sync(await improvementPlansApi.decideGoals(plan.value.id, { approve, comment: decisionComment.value,
+      ...(suggestions.length ? { suggestions } : {}) }));
     ElMessage.success(approve ? '目标已确认' : '目标已退回发起人修改');
   } finally { busy.value = false; }
 }
@@ -161,6 +176,13 @@ function recordAuto(record: ImprovementPlanRecord) {
 function recordGoals(record: ImprovementPlanRecord): ImprovementGoal[] {
   return Array.isArray(record.newValue?.goals) ? record.newValue.goals as ImprovementGoal[] : [];
 }
+function recordSuggestions(record: ImprovementPlanRecord): ImprovementGoalSuggestion[] {
+  return Array.isArray(record.newValue?.suggestions) ? record.newValue.suggestions as ImprovementGoalSuggestion[] : [];
+}
+function latestSuggestion(goalId: string): string {
+  return latestGoalRejection.value
+    ? recordSuggestions(latestGoalRejection.value).find((item) => item.goalId === goalId)?.comment ?? '' : '';
+}
 function recordEvaluation(record: ImprovementPlanRecord): ImprovementEvaluation | null {
   const value = record.newValue?.evaluation;
   return value && typeof value === 'object' && !Array.isArray(value) ? value as ImprovementEvaluation : null;
@@ -207,6 +229,9 @@ function goalName(goalId: string): string {
           </el-form>
         </template>
         <p v-else class="background-text">{{ plan.improvementNeed || '未填写改进背景' }}</p>
+        <div v-if="canEdit && latestGoalRejection && recordNote(latestGoalRejection)" class="feedback-note">
+          <b>上轮整体意见</b><span>{{ recordNote(latestGoalRejection) }}</span>
+        </div>
         <div class="section-heading"><strong>改进目标</strong><span>权重合计 {{ canEdit ? weightTotal : plan.goals.reduce((sum, goal) => sum + goal.weight, 0) }}%</span><el-button v-if="canEdit" link type="primary" @click="addGoal">添加目标</el-button></div>
         <small v-if="errors.goals || errors.total" class="field-error">{{ errors.goals || errors.total }}</small>
         <div v-for="(goal, index) in (canEdit ? form.goals : plan.goals)" :key="goal.id" class="goal-card">
@@ -218,16 +243,24 @@ function goalName(goalId: string): string {
             <small v-if="errors[`description-${index}`]" class="field-error">{{ errors[`description-${index}`] }}</small>
             <label class="weight-field">权重 <input v-model.number="goal.weight" type="number" min="0" max="100" step="0.01" :aria-label="`目标权重 ${index + 1}`">%</label>
             <small v-if="errors[`weight-${index}`]" class="field-error">{{ errors[`weight-${index}`] }}</small>
+            <div v-if="latestSuggestion(goal.id)" class="feedback-note"><b>员工修改建议</b><span>{{ latestSuggestion(goal.id) }}</span></div>
           </template>
-          <p v-else>{{ goal.description }}</p>
+          <template v-else>
+            <p>{{ goal.description }}</p>
+            <el-input v-if="employeeGoalConfirmation" v-model="goalSuggestions[goal.id]"
+              :aria-label="`目标 ${index + 1} 修改建议`" type="textarea" :rows="2" maxlength="4000"
+              placeholder="对这项目标的修改建议（选填；退回时提交）" />
+          </template>
         </div>
         <div v-if="canEdit" class="form-actions"><el-button :loading="busy" @click="saveTargets(false)">保存草稿</el-button><el-button type="primary" :loading="busy" @click="saveTargets(true)">提交目标</el-button></div>
       </ChartCard>
 
       <ChartCard v-if="canDecideGoals">
         <template #title>目标确认</template>
-        <p>请核对上方目标；退回时需写明理由，由发起人修改后重新确认。</p>
-        <el-input v-model="decisionComment" aria-label="目标确认意见" type="textarea" :rows="2" placeholder="补充意见；退回时必填" />
+        <p>{{ employeeGoalConfirmation ? '可在上方逐项目标填写建议，或在下方填写整体意见；退回后由发起人修改并重新确认。' : '请核对上方目标；退回时需写明理由，由发起人修改后重新确认。' }}</p>
+        <el-input v-model="decisionComment" :aria-label="employeeGoalConfirmation ? '整体意见' : '目标确认意见'"
+          type="textarea" :rows="2" maxlength="4000"
+          :placeholder="employeeGoalConfirmation ? '整体意见（选填；退回时可与逐项建议二选一）' : '补充意见；退回时必填'" />
         <small v-if="errors.decision" class="field-error">{{ errors.decision }}</small>
         <div class="form-actions"><el-button type="danger" plain :loading="busy" @click="decideGoals(false)">退回发起人修改</el-button><el-button type="primary" :loading="busy" @click="decideGoals(true)">确认目标</el-button></div>
       </ChartCard>
@@ -272,6 +305,11 @@ function goalName(goalId: string): string {
           <li v-for="record in plan.records" :key="record.id">
             <div><strong>{{ record.actorName }}</strong> {{ actionLabel(record) }} <time>{{ formatDateTime(record.createdAt) }}</time></div>
             <p v-if="recordNote(record)">{{ recordNote(record) }}</p>
+            <div v-if="recordSuggestions(record).length" class="record-snapshot">
+              <div v-for="item in recordSuggestions(record)" :key="item.goalId">
+                <b>{{ item.goalName || goalName(item.goalId) }}的修改建议</b><span>{{ item.comment }}</span>
+              </div>
+            </div>
             <small v-if="recordAuto(record)">{{ recordAuto(record) }}</small>
             <details v-if="recordGoals(record).length || recordEvaluation(record)">
               <summary>查看本次内容</summary>
@@ -311,6 +349,7 @@ function goalName(goalId: string): string {
 .prior-score { display:grid; grid-template-columns:110px 1fr; gap:8px; padding:8px 10px; background:var(--el-fill-color-light); font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .weighted-total { font-weight:600; }
 .field-error { display:block; color:var(--el-color-danger); line-height:1.5; }
+.feedback-note { display:grid; gap:3px; padding:8px 10px; background:var(--el-fill-color-light); font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .form-actions { justify-content:flex-end; margin-top:16px; }
 .operation-list { list-style:none; margin:0; padding:0; }
 .operation-list li { border-left:2px solid var(--el-border-color); padding:0 0 16px 16px; margin-left:5px; }

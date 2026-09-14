@@ -3,7 +3,7 @@ import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import { ImprovementWorkflowService } from './improvement-workflow.service';
 import { ImprovementPlanQueryDto } from './dto/improvement-plan-query.dto';
-import { CreateImprovementPlanDto, UpdateImprovementPlanDto, ImprovementDecisionDto,
+import { CreateImprovementPlanDto, UpdateImprovementPlanDto, ImprovementDecisionDto, ImprovementGoalDecisionDto,
   ImprovementEvaluationDto, ImprovementEvaluationDraftDto } from './dto/improvement-workflow.dto';
 
 @Controller('improvement-plans')
@@ -47,7 +47,7 @@ export class ImprovementPlansController {
 
   @Post(':id/decide-goals') @HttpCode(200)
   decideGoals(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
-    @Body() dto: ImprovementDecisionDto, @CurrentUser() viewer: AuthUser) {
+    @Body() dto: ImprovementGoalDecisionDto, @CurrentUser() viewer: AuthUser) {
     return this.service.decideGoals(id, dto, viewer);
   }
 

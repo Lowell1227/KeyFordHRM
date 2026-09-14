@@ -71,3 +71,58 @@ test('mobile creation keeps employee, background and goal fields usable without 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(1);
 });
+
+test('employee can return a specific goal suggestion without editing the approved goal', async ({ page }) => {
+  await page.setViewportSize({ width: 390, height: 844 });
+  await mock(page);
+  const original = { id: 'g1', name: '交付质量', description: '减少返工', weight: 100 };
+  const plan = { id: 'plan-employee', employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+    cycleId: null, cycleName: null, taskId: null, creatorId: 'manager', creatorName: '上级',
+    improvementNeed: '需要提升交付质量', importance: null, improvementGoal: null, targetDate: null, measures: [],
+    goals: [original], selfEvaluation: null, managerEvaluation: null, departmentEvaluation: null, finalScore: null,
+    status: 'goal_employee_confirm', workflowVersion: 2, startedAt: null, completedAt: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    currentOwnerId: 'employee', allowedActions: ['decide_goals'], records: [] };
+  await page.route('**/api/v1/improvement-plans/plan-employee**', (route) => route.fulfill({
+    json: envelope(route.request().method() === 'POST' ? { ...plan, status: 'goal_revision', allowedActions: [] } : plan),
+  }));
+  await page.goto('/improvement-plans/plan-employee');
+  const suggestion = page.getByRole('textbox', { name: '目标 1 修改建议' });
+  await expect(suggestion).toBeVisible();
+  await expect(page.getByText('减少返工')).toBeVisible();
+  await page.getByRole('button', { name: '退回发起人修改' }).click();
+  await expect(page.getByText('请填写具体目标建议或整体意见')).toBeVisible();
+  await suggestion.fill('建议写明每周返工次数上限');
+  await page.getByRole('button', { name: '确认目标' }).click();
+  await expect(page.getByText('已填写修改建议，请退回发起人修改或清空建议')).toBeVisible();
+  const requestPromise = page.waitForRequest((request) => request.url().endsWith('/decide-goals'));
+  await page.getByRole('button', { name: '退回发起人修改' }).click();
+  expect((await requestPromise).postDataJSON()).toMatchObject({ approve: false, comment: '', suggestions: [
+    { goalId: original.id, comment: '建议写明每周返工次数上限' },
+  ] });
+  expect(plan.goals[0]).toEqual(original);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+});
+
+test('initiator sees the employee suggestion beside the goal and in the operation record', async ({ page }) => {
+  await mock(page);
+  await page.route('**/api/v1/improvement-plans/plan-revision', (route) => route.fulfill({ json: envelope({
+    id: 'plan-revision', employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+    cycleId: null, cycleName: null, taskId: null, creatorId: 'manager', creatorName: '上级',
+    improvementNeed: '需要提升交付质量', importance: null, improvementGoal: null, targetDate: null, measures: [],
+    goals: [{ id: 'g1', name: '交付质量', description: '减少返工', weight: 100 }],
+    selfEvaluation: null, managerEvaluation: null, departmentEvaluation: null, finalScore: null,
+    status: 'goal_revision', workflowVersion: 2, startedAt: null, completedAt: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    currentOwnerId: 'manager', allowedActions: ['edit', 'submit_goals'], records: [{
+      id: 'record', action: 'reject_goals', actorName: '张员工', createdAt: new Date().toISOString(),
+      oldValue: null, newValue: { comment: '', suggestions: [{
+        goalId: 'g1', goalName: '交付质量', comment: '建议写明每周返工次数上限',
+      }] },
+    }],
+  }) }));
+  await page.goto('/improvement-plans/plan-revision');
+  await expect(page.getByText('员工修改建议')).toBeVisible();
+  await expect(page.getByText('建议写明每周返工次数上限')).toHaveCount(2);
+  await expect(page.getByText('交付质量的修改建议')).toBeVisible();
+});

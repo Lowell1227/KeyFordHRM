@@ -31,6 +31,16 @@ export class ImprovementDecisionDto {
   @IsOptional() @IsString() @MaxLength(4000) comment?: string;
 }
 
+export class ImprovementGoalSuggestionDto {
+  @IsString() @IsNotEmpty() goalId: string;
+  @IsString() @IsNotEmpty() @MaxLength(4000) comment: string;
+}
+
+export class ImprovementGoalDecisionDto extends ImprovementDecisionDto {
+  @IsOptional() @IsArray() @ArrayMaxSize(30) @ValidateNested({ each: true }) @Type(() => ImprovementGoalSuggestionDto)
+  suggestions?: ImprovementGoalSuggestionDto[];
+}
+
 export class ImprovementGoalEvaluationDto {
   @IsString() @IsNotEmpty() goalId: string;
   @IsNumber() @Min(0) @Max(100) score: number;

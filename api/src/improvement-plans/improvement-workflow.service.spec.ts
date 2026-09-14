@@ -1,4 +1,4 @@
-import { ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException } from '@nestjs/common';
 import { ImprovementWorkflowService } from './improvement-workflow.service';
 
 const viewer = (id: string, role = 'employee') => ({
@@ -131,6 +131,46 @@ describe('ImprovementWorkflowService', () => {
     prisma.improvementPlan.findMany.mockResolvedValue([plan({ employeeId: 'head', status: 'goal_dept_review' })]);
     const pending = await service.myPending(viewer('upper-head'));
     expect(pending).toHaveLength(1);
+  });
+
+  it('accepts a specific employee suggestion as the rejection reason and snapshots its goal name', async () => {
+    prisma.improvementPlan.findUnique.mockResolvedValue(plan({ status: 'goal_employee_confirm' }));
+    await service.decideGoals('plan', { approve: false, suggestions: [
+      { goalId: 'g1', comment: '建议把交付质量要求写得更具体' },
+    ] }, viewer('emp'));
+    expect(prisma.improvementPlan.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: { status: 'goal_revision' },
+    }));
+    expect(prisma.auditLog.create).toHaveBeenCalledWith(expect.objectContaining({ data: expect.objectContaining({
+      action: 'reject_goals', newValue: expect.objectContaining({ suggestions: [
+        { goalId: 'g1', goalName: '质量', comment: '建议把交付质量要求写得更具体' },
+      ] }),
+    }) }));
+  });
+
+  it('rejects suggestions for another goal and does not change the plan', async () => {
+    prisma.improvementPlan.findUnique.mockResolvedValue(plan({ status: 'goal_employee_confirm' }));
+    await expect(service.decideGoals('plan', { approve: false, suggestions: [
+      { goalId: 'other', comment: '无关目标' },
+    ] }, viewer('emp'))).rejects.toThrow(BadRequestException);
+    expect(prisma.improvementPlan.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('does not silently discard suggestions when the employee approves', async () => {
+    prisma.improvementPlan.findUnique.mockResolvedValue(plan({ status: 'goal_employee_confirm' }));
+    await expect(service.decideGoals('plan', { approve: true, suggestions: [
+      { goalId: 'g1', comment: '请修改' },
+    ] }, viewer('emp'))).rejects.toThrow(BadRequestException);
+    expect(prisma.improvementPlan.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('keeps the department head on the existing overall-reason rule', async () => {
+    prisma.improvementPlan.findUnique.mockResolvedValue(plan({ status: 'goal_dept_review' }));
+    await expect(service.decideGoals('plan', { approve: false, suggestions: [
+      { goalId: 'g1', comment: '请修改' },
+    ] }, viewer('head'))).rejects.toThrow(BadRequestException);
+    await expect(service.decideGoals('plan', { approve: false }, viewer('head'))).rejects.toThrow(BadRequestException);
+    expect(prisma.improvementPlan.updateMany).not.toHaveBeenCalled();
   });
 
   it('shows only current and lower management scope in the creation employee picker', async () => {

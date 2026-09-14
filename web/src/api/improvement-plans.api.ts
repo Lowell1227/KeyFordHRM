@@ -6,6 +6,7 @@ import type {
   CreateImprovementPlanBody,
   UpdateImprovementPlanBody,
   ImprovementDecisionBody,
+  ImprovementGoalDecisionBody,
   ImprovementEvaluationBody,
 } from '@/types/api.types';
 
@@ -39,7 +40,7 @@ export const improvementPlansApi = {
   submitGoals(id: string): Promise<ImprovementPlan> {
     return http.post(`/improvement-plans/${id}/submit-goals`) as unknown as Promise<ImprovementPlan>;
   },
-  decideGoals(id: string, body: ImprovementDecisionBody): Promise<ImprovementPlan> {
+  decideGoals(id: string, body: ImprovementGoalDecisionBody): Promise<ImprovementPlan> {
     return http.post(`/improvement-plans/${id}/decide-goals`, body) as unknown as Promise<ImprovementPlan>;
   },
   evaluate(id: string, body: ImprovementEvaluationBody): Promise<ImprovementPlan> {

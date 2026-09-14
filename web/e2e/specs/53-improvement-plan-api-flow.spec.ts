@@ -58,7 +58,16 @@ test('real organization roles can complete the independent plan and rejection lo
     await call('manager', 'POST', `/improvement-plans/${planId}/submit-goals`);
     await decide('deptHead', true);
     expect((await detail('employee')).status).toBe('goal_employee_confirm');
-    await decide('employee', false, '第二项目标需要调整');
+    await call('employee', 'POST', `/improvement-plans/${planId}/decide-goals`, { approve: false,
+      suggestions: [{ goalId: 'not-a-plan-goal', comment: '无关目标' }] }, 400);
+    await call('employee', 'POST', `/improvement-plans/${planId}/decide-goals`, { approve: true,
+      suggestions: [{ goalId: 'planning', comment: '需要调整' }] }, 400);
+    await call('employee', 'POST', `/improvement-plans/${planId}/decide-goals`, { approve: false,
+      suggestions: [{ goalId: 'planning', comment: '建议明确每周跟进任务' }] });
+    const returned = await detail('manager');
+    expect(returned.status).toBe('goal_revision');
+    expect(returned.records.find((record: { action: string }) => record.action === 'reject_goals').newValue.suggestions)
+      .toEqual([{ goalId: 'planning', goalName: '计划管理', comment: '建议明确每周跟进任务' }]);
     await call('manager', 'PATCH', `/improvement-plans/${planId}`, { goals: [goals[0],
       { ...goals[1], description: '每周跟进任务' }] });
     await call('manager', 'POST', `/improvement-plans/${planId}/submit-goals`);
