@@ -433,3 +433,10 @@ Git 提交与远端状态：
 - 用户确认“申诉事项”“诉求内容”合为一个“申诉内容”；“处理情况”“处理结论”维持原有自由文本，不新增逐条跟进或结果选择。员工异议流转和 HR 台账权限边界不变。
 - 功能提交 `e43aeb4` 已推送 `origin/main` 并发布。迁移 `20260914180000_simplify_hr_appeal_content` 将旧事项中正文未包含的文字合入正文，再移除独立字段；发布时新台账记录数为 0，旧 `appeals` 保持 1 条。发布前已备份并保留原 API/Web 回滚镜像，仅替换 API/Web；PostgreSQL、Redis、MinIO 容器未变，测试快捷登录关闭。
 - API 85 套/1010 项单元测试与构建、独立临时 PostgreSQL 上的申诉 HTTP 用例 2 项、Web 类型检查及 PC/390px 页面用例 2 项通过。外部首页与健康接口返回 200，实际加载的“申诉记录”资源只显示“申诉内容”且保留处理情况/结论；正式真实角色路径尚待业务验收。发布证据和备份校验见 `C:\Users\lwei\kayford-releases\e43aeb4-single-appeal-content\release-manifest.json`。
+
+### 2026-09-14：试用期参与周期考核与员工发起转正（已发布，待业务验收）
+
+- 试用期身份不再自动豁免周期与计划选人；本轮未更改通用在岗时间规则。转正由员工填写工作小结并提交，花名册直属主管给出文字评价，HR 记录线下评议及拟生效日期，公司审批人确认最终决定；不新增独立试用期评分，旧记录只读保留。
+- 功能提交 `fd570dc` 已合并并推送 `origin/main`。仅替换 `kayford-deploy` 的 API、Web；迁移 `20260914191000_confirmation_employee_draft` 已应用，旧版转正草稿 1 条、已拒绝 1 条保持原样，PostgreSQL、Redis、MinIO 容器未更换。发布前数据库自定义格式备份和原 API/Web 镜像回滚标签均已验证，`ENABLE_TEST_QUICK_LOGIN=false`。
+- API 88 套／1049 项测试、API 构建、Web 类型检查和转正／周期页面针对性浏览器用例通过；生产外部首页、健康接口返回 200 且数据库为 `ok`，新版转正管理资源与运行容器哈希一致，未登录访问转正接口返回 401。当前没有已登录的生产角色会话，员工、直属主管、HR、公司审批人的真实办理路径仍待业务验收；不得将上线核验视为流程验收。发布清单见 `C:\Users\lwei\kayford-releases\probation-confirmation-20260914\release-manifest.json`。
+- 合并前主工作区未跟踪的同名需求稿已完整保留为 `docs/requirements/2026-09-14-probation-confirmation.original-untracked.md`，并在发布证据目录留有哈希一致的副本；该原稿未被覆盖或提交。
