@@ -549,6 +549,8 @@ model User {
   flowRecords                               FlowRecord[]
   indicatorVisibilityUsers                  IndicatorVisibilityUser[]
   appeals                                   Appeal[]                         @relation("AppealAppellant")
+  hrAppealRecordsAsEmployee                 HrAppealRecord[]               @relation("HrAppealEmployee")
+  recordedHrAppeals                         HrAppealRecord[]               @relation("HrAppealRecorder")
   deptResolvedAppeals                       Appeal[]                         @relation("AppealDeptResolver")
   hrResolvedAppeals                         Appeal[]                         @relation("AppealHrResolver")
   archives                                  PerformanceArchive[]
@@ -990,6 +992,7 @@ model AssessmentCycle {
   tasks                 AssessmentTask[]
   flowRecords           FlowRecord[]
   appeals               Appeal[]
+  hrAppealRecords       HrAppealRecord[]
   archives              PerformanceArchive[]
   improvementPlans      ImprovementPlan[]
   performanceInterviews PerformanceInterview[]
@@ -1487,6 +1490,29 @@ model PerformanceArchive {
   @@index([employeeId])
   @@index([cycleId])
   @@map("performance_archives")
+}
+
+model HrAppealRecord {
+  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId   String    @map("employee_id") @db.Uuid
+  cycleId      String?   @map("cycle_id") @db.Uuid
+  receivedAt   DateTime  @map("received_at") @db.Date
+  subject      String    @db.VarChar(200)
+  content      String    @db.Text
+  handlingNote String?   @map("handling_note") @db.Text
+  conclusion   String?   @db.Text
+  recordedById String?   @map("recorded_by_id") @db.Uuid
+  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  employee   User             @relation("HrAppealEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
+  cycle      AssessmentCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
+  recordedBy User?            @relation("HrAppealRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
+
+  @@index([employeeId])
+  @@index([cycleId])
+  @@index([receivedAt])
+  @@map("hr_appeal_records")
 }
 
 model PerformanceInterview {

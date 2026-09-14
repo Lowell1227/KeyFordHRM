@@ -257,7 +257,7 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
           "改进计划",
           "结果审批",
           "结果公示",
-          "申诉管理",
+          "申诉记录",
         ],
       },
       { label: "绩效分析", items: ["绩效报表"] },

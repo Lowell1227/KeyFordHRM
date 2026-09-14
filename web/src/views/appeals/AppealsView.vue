@@ -1,636 +1,206 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted, watch } from 'vue';
-import { ElMessage } from 'element-plus';
-import { appealsApi } from '@/api/appeals.api';
-import { cyclesApi } from '@/api/cycles.api';
+import { onMounted, reactive, ref } from 'vue';
+import { isAxiosError } from 'axios';
+import { ElMessage, type FormInstance } from 'element-plus';
+import { appealsApi, type AppealCycle } from '@/api/appeals.api';
 import { departmentsApi } from '@/api/departments.api';
-import GradeTag from '@/components/common/GradeTag.vue';
-import PerformanceResultDrawer from '@/components/common/PerformanceResultDrawer.vue';
-import ReviewHistory from '@/components/common/ReviewHistory.vue';
-import { resultStage } from '@/utils/performance-result-presentation';
-import EmptyState from '@/components/common/EmptyState.vue';
+import { usePagination } from '@/composables/usePagination';
+import { formatDate } from '@/utils/date';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilters.vue';
-import { usePagination } from '@/composables/usePagination';
-import { formatDateTime } from '@/utils/date';
-import type {
-  AppealListItem,
-  AppealDetail,
-  AssessmentCycle,
-  Department,
-  AppealCandidate,
-} from '@/types/api.types';
-import type { AppealStatus, AppealResult, PerfGrade } from '@/types/enums';
-import { orderPerformanceCyclesByCreatedAt } from '@/utils/performance-cycle';
+import type { AppealPerson, AppealRecord, AppealRecordBody, Department } from '@/types/api.types';
 
+const list = ref<AppealRecord[]>([]);
 const loading = ref(false);
-const submitting = ref(false);
-
-const appeals = ref<AppealListItem[]>([]);
-const cycles = ref<AssessmentCycle[]>([]);
+const loadError = ref('');
+const cycles = ref<AppealCycle[]>([]);
 const departments = ref<Department[]>([]);
-
-const filters = reactive({
-  cycleId: '',
-  status: undefined as AppealStatus | undefined,
-  deptId: '',
-  keyword: '',
-});
-
-const {
-  page,
-  pageSize,
-  total,
-  pageSizeOptions,
-  withParams,
-  reset: resetPagination,
-} = usePagination({ defaultPageSize: 10 });
-
-async function loadCycles() {
-  try {
-    const items: AssessmentCycle[] = [];
-    let cyclePage = 1;
-    while (true) {
-      const res = await cyclesApi.findAll({ page: cyclePage, pageSize: 100 });
-      items.push(...res.items);
-      if (items.length >= res.total || res.items.length === 0) break;
-      cyclePage += 1;
-    }
-    cycles.value = orderPerformanceCyclesByCreatedAt(items);
-    filters.cycleId = cycles.value[0]?.id ?? '';
-  } catch {
-    cycles.value = [];
-  }
-}
-
-async function loadDepartments() {
-  try {
-    const res = await departmentsApi.findAll({ isActive: true, pageSize: 1000 });
-    departments.value = res;
-  } catch {
-    departments.value = [];
-  }
-}
-
-async function loadList() {
-  loading.value = true;
-  try {
-    const res = await appealsApi.findAll(
-      withParams({
-        ...(filters.cycleId ? { cycleId: filters.cycleId } : {}),
-        ...(filters.status ? { status: filters.status } : {}),
-        ...(filters.deptId ? { deptId: filters.deptId } : {}),
-        ...(filters.keyword.trim() ? { keyword: filters.keyword.trim() } : {}),
-      }),
-    );
-    appeals.value = res.items;
-    total.value = res.total;
-  } catch {
-    appeals.value = [];
-    total.value = 0;
-  } finally {
-    loading.value = false;
-  }
-}
-
-function resetFilters() {
-  filters.cycleId = cycles.value[0]?.id ?? '';
-  filters.status = undefined;
-  filters.deptId = '';
-  filters.keyword = '';
-  resetPagination();
-  loadList();
-}
-
-function search() {
-  resetPagination();
-  loadList();
-}
-
-watch(pageSize, () => {
-  page.value = 1;
-  loadList();
-});
-
-watch(page, () => {
-  loadList();
-});
+const filters = reactive({ cycleId: '', deptId: '', keyword: '' });
+const { page, pageSize, total, pageSizeOptions, reset, withParams } = usePagination({ defaultPageSize: 10 });
+const dialogVisible = ref(false);
+const editingId = ref<string>();
+const dialogLoading = ref(false);
+const saving = ref(false);
+const saveError = ref('');
+const peopleLoading = ref(false);
+const peopleError = ref('');
+const people = ref<AppealPerson[]>([]);
+const formRef = ref<FormInstance>();
+const form = reactive<AppealRecordBody>({ employeeId: '', cycleId: '', receivedAt: '', subject: '', content: '', handlingNote: '', conclusion: '' });
+let listRequest = 0;
+let peopleRequest = 0;
 
 onMounted(async () => {
-  await Promise.all([loadCycles(), loadDepartments()]);
-  loadList();
+  const results = await Promise.allSettled([
+    appealsApi.cycles(),
+    departmentsApi.findAll({ isActive: true, pageSize: 1000 }),
+  ]);
+  if (results[0].status === 'fulfilled') cycles.value = results[0].value;
+  if (results[1].status === 'fulfilled') departments.value = results[1].value;
+  await loadList();
 });
 
-// ---------- 录入申诉 ----------
-
-const createDialog = reactive({
-  visible: false,
-  taskId: '',
-  reason: '',
-  taskOptions: [] as AppealCandidate[],
-  taskLoading: false,
-});
-
-function openCreateDialog() {
-  createDialog.visible = true;
-  createDialog.taskId = '';
-  createDialog.reason = '';
-  createDialog.taskOptions = [];
-  loadTaskOptions('');
-}
-
-function onTaskSelectFocus() {
-  if (createDialog.taskOptions.length === 0) {
-    loadTaskOptions('');
-  }
-}
-
-async function loadTaskOptions(keyword: string) {
-  createDialog.taskLoading = true;
+async function loadList() {
+  const id = ++listRequest;
+  loading.value = true;
+  loadError.value = '';
   try {
-    const res = await appealsApi.findCandidates({
-      cycleId: filters.cycleId,
-      keyword: keyword.trim() || undefined,
-      pageSize: 20,
-    });
-    createDialog.taskOptions = res.items;
+    const result = await appealsApi.findAll(withParams({ cycleId: filters.cycleId || undefined,
+      deptId: filters.deptId || undefined, keyword: filters.keyword.trim() || undefined }));
+    if (id !== listRequest) return;
+    list.value = result.items;
+    total.value = result.total;
   } catch {
-    createDialog.taskOptions = [];
-  } finally {
-    createDialog.taskLoading = false;
-  }
+    if (id !== listRequest) return;
+    list.value = [];
+    total.value = 0;
+    loadError.value = '申诉记录暂时无法读取，请重试';
+  } finally { if (id === listRequest) loading.value = false; }
 }
-
-function taskOptionLabel(task: AppealCandidate): string {
-  return `${task.employeeName}（${task.employeeNo ?? '—'}）· ${task.cycleName}`;
+function onSearch() { reset(); void loadList(); }
+function onReset() { Object.assign(filters, { cycleId: '', deptId: '', keyword: '' }); onSearch(); }
+function clearValidation(field: string) { formRef.value?.clearValidate(field); }
+function personLabel(person: AppealPerson) { return [person.name, person.employeeNo, person.dept?.name].filter(Boolean).join(' · '); }
+function errorText(error: unknown, fallback: string) {
+  const message = isAxiosError(error) ? error.response?.data?.message : error instanceof Error ? error.message : null;
+  return typeof message === 'string' && message ? message : fallback;
 }
-
-async function submitCreate() {
-  if (!createDialog.taskId) {
-    ElMessage.warning('请选择被申诉任务');
-    return;
-  }
-  if (!createDialog.reason.trim()) {
-    ElMessage.warning('请填写申诉事由');
-    return;
-  }
-  submitting.value = true;
+async function searchPeople(keyword: string) {
+  const id = ++peopleRequest;
+  peopleLoading.value = true;
+  peopleError.value = '';
   try {
-    await appealsApi.create({
-      taskId: createDialog.taskId,
-      reason: createDialog.reason.trim(),
-    });
-    ElMessage.success('申诉已发起，已退回直属上级重新评定');
-    createDialog.visible = false;
-    search();
-  } finally {
-    submitting.value = false;
-  }
+    const result = await appealsApi.people(keyword);
+    if (id !== peopleRequest) return;
+    const selected = people.value.filter(person => person.id === form.employeeId);
+    people.value = [...new Map([...selected, ...result].map(person => [person.id, person])).values()];
+  } catch { if (id === peopleRequest) peopleError.value = '人员暂时无法读取，请重新搜索'; }
+  finally { if (id === peopleRequest) peopleLoading.value = false; }
 }
-
-// ---------- 详情 / 处理 ----------
-
-const detailDialog = reactive({
-  visible: false,
-  appeal: null as AppealDetail | null,
-  loading: false,
-  result: 'maintained' as AppealResult,
-  newGrade: undefined as PerfGrade | undefined,
-  newGradeNote: '',
-  resolution: '',
-});
-
-function openDetail(row: AppealListItem) {
-  detailDialog.visible = true;
-  detailDialog.appeal = null;
-  detailDialog.result = 'maintained';
-  detailDialog.newGrade = undefined;
-  detailDialog.newGradeNote = '';
-  detailDialog.resolution = '';
-  loadDetail(row.id);
-}
-
-async function loadDetail(id: string) {
-  detailDialog.loading = true;
+async function openDialog(item?: AppealRecord) {
+  editingId.value = item?.id;
+  saveError.value = '';
+  Object.assign(form, { employeeId: '', cycleId: '', receivedAt: new Date().toLocaleDateString('sv-SE'),
+    subject: '', content: '', handlingNote: '', conclusion: '' });
+  people.value = item ? [{ id: item.employeeId, name: item.employeeName, employeeNo: item.employeeNo,
+    dept: item.deptName ? { name: item.deptName } : null }] : [];
+  dialogVisible.value = true;
+  void searchPeople('');
+  if (!item) return;
+  dialogLoading.value = true;
   try {
-    detailDialog.appeal = await appealsApi.findOne(id);
-  } finally {
-    detailDialog.loading = false;
-  }
+    const detail = await appealsApi.findOne(item.id);
+    if (editingId.value !== item.id || !dialogVisible.value) return;
+    Object.assign(form, { employeeId: detail.employeeId, cycleId: detail.cycleId ?? '',
+      receivedAt: formatDate(detail.receivedAt), subject: detail.subject, content: detail.content,
+      handlingNote: detail.handlingNote ?? '', conclusion: detail.conclusion ?? '' });
+  } catch (error) { saveError.value = errorText(error, '申诉记录暂时无法读取，请重试'); }
+  finally { dialogLoading.value = false; }
 }
-
-const isModified = computed(() => detailDialog.result === 'modified');
-const canResolve = computed(() => detailDialog.appeal?.canResolve === true);
-
-function appealStage(appeal: AppealListItem): string {
-  if (appeal.workflowType === 'prepublication' && appeal.taskStatus === 'manager_scoring') return '待直属上级重新评定';
-  return appeal.taskStatus ? resultStage(appeal.taskStatus, appeal.approvedAt, appeal.publishedAt ?? null).label : '—';
-}
-
-function asGrade(value: string | null | undefined): PerfGrade | null {
-  if (!value) return null;
-  return value as PerfGrade;
-}
-
-async function submitResolve() {
-  const appeal = detailDialog.appeal;
-  if (!appeal || !canResolve.value) return;
-
-  if (!detailDialog.resolution.trim()) {
-    ElMessage.warning('请填写处理说明');
-    return;
-  }
-  if (isModified.value && !detailDialog.newGrade) {
-    ElMessage.warning('改判时必须选择新等级');
-    return;
-  }
-
-  submitting.value = true;
+async function save() {
+  if (saving.value || dialogLoading.value || !(await formRef.value?.validate().catch(() => false))) return;
+  saving.value = true;
+  saveError.value = '';
   try {
-    const body: {
-      resolution: string;
-      result: AppealResult;
-      newGrade?: PerfGrade;
-      newGradeNote?: string;
-    } = {
-      resolution: detailDialog.resolution.trim(),
-      result: detailDialog.result,
-    };
-    if (isModified.value) {
-      body.newGrade = detailDialog.newGrade;
-      if (detailDialog.newGradeNote.trim()) {
-        body.newGradeNote = detailDialog.newGradeNote.trim();
-      }
-    }
-    const updated = await appealsApi.resolve(appeal.id, body);
-    detailDialog.appeal = updated;
-    ElMessage.success('处理成功');
-    loadList();
-  } finally {
-    submitting.value = false;
-  }
-}
-
-// ---------- 展示辅助 ----------
-
-const statusLabel: Record<AppealStatus, string> = {
-  pending: '待处理',
-  resolved: '已处理',
-};
-
-const resultLabel: Record<AppealResult, string> = {
-  maintained: '维持原判',
-  modified: '改判',
-};
-
-const resultType: Record<AppealResult, 'info' | 'success' | 'warning' | 'danger'> = {
-  maintained: 'info',
-  modified: 'warning',
-};
-
-function statusText(status: AppealStatus): string {
-  return statusLabel[status];
-}
-
-function resultText(result: AppealResult): string {
-  return resultLabel[result];
-}
-
-function resultTagType(result: AppealResult): 'info' | 'success' | 'warning' | 'danger' {
-  return resultType[result];
+    const body = { ...form, cycleId: form.cycleId || null };
+    if (editingId.value) await appealsApi.update(editingId.value, body);
+    else await appealsApi.create(body);
+    ElMessage.success('申诉记录已保存');
+    dialogVisible.value = false;
+    await loadList();
+  } catch (error) { saveError.value = errorText(error, '保存失败，请重试'); }
+  finally { saving.value = false; }
 }
 </script>
 
 <template>
-  <div class="appeals-view page-stack app-list-page">
+  <div class="page-stack app-list-page">
     <ChartCard class="list-page-header-card">
-      <template #title>申诉处理</template>
-      <template #extra>
-        <el-button type="primary" @click="openCreateDialog">录入申诉</el-button>
-      </template>
-
-      <PerformanceRecordFilters
-        v-model:cycle-id="filters.cycleId"
-        v-model:dept-id="filters.deptId"
-        v-model:keyword="filters.keyword"
-        :cycles="cycles"
-        :departments="departments"
-        :loading="loading"
-        class="page-filter-panel"
-        @search="search"
-        @reset="resetFilters"
-      >
-        <div class="performance-record-filter-extra">
-          <el-select v-model="filters.status" aria-label="状态" placeholder="全部状态" clearable>
-            <el-option label="待处理" value="pending" />
-            <el-option label="已处理" value="resolved" />
-          </el-select>
-        </div>
-      </PerformanceRecordFilters>
+      <template #title>申诉记录</template>
+      <template #extra><el-button type="primary" @click="openDialog()">新增申诉记录</el-button></template>
+      <PerformanceRecordFilters v-model:cycle-id="filters.cycleId" v-model:dept-id="filters.deptId"
+        v-model:keyword="filters.keyword" :cycles="cycles" :departments="departments" :loading="loading"
+        allow-all-cycles class="page-filter-panel" @search="onSearch" @reset="onReset" />
     </ChartCard>
-
-    <ChartCard :padded="false" class="list-result-card">
+    <ChartCard :padded="false" class="list-card list-result-card">
+      <el-alert v-if="loadError" :title="loadError" type="error" :closable="false">
+        <el-button link type="primary" @click="loadList">重试</el-button>
+      </el-alert>
       <div class="desktop-result-table">
-      <el-table v-loading="loading" :data="appeals" row-key="id" height="100%" class="app-table">
-        <el-table-column prop="appellant.name" label="员工" min-width="120">
-          <template #default="{ row }">
-            {{ row.appellant?.name ?? '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="dept.name" label="部门" min-width="160" show-overflow-tooltip>
-          <template #default="{ row }">
-            {{ row.dept?.name ?? '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column prop="cycle.name" label="考核周期" min-width="160" show-overflow-tooltip>
-          <template #default="{ row }">
-            {{ row.cycle?.name ?? '-' }}
-          </template>
-        </el-table-column>
-        <el-table-column label="状态" width="100">
-          <template #default="{ row }">
-            <el-tag :type="row.status === 'pending' ? 'warning' : 'success'" size="small">
-              {{ statusText(row.status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="处理结果" width="120">
-          <template #default="{ row }">
-            <el-tag v-if="row.finalResult" :type="resultTagType(row.finalResult)" size="small">
-              {{ resultText(row.finalResult) }}
-            </el-tag>
-            <span v-else>-</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="当前环节" min-width="180">
-          <template #default="{ row }">{{ appealStage(row as AppealListItem) }}</template>
-        </el-table-column>
-        <el-table-column label="创建时间" width="170">
-          <template #default="{ row }">
-            {{ formatDateTime(row.createdAt) }}
-          </template>
-        </el-table-column>
-        <el-table-column label="操作" width="100" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="openDetail(row as AppealListItem)">查看详情</el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+        <el-table v-loading="loading" class="app-table" :data="list" height="100%" empty-text="暂无申诉记录">
+          <el-table-column label="员工" min-width="130">
+            <template #default="{ row }"><div class="employee-cell"><span>{{ row.employeeName }}</span><span class="employee-no">{{ row.employeeNo || '—' }}</span></div></template>
+          </el-table-column>
+          <el-table-column prop="deptName" label="部门" min-width="120" />
+          <el-table-column label="收到日期" width="120"><template #default="{ row }">{{ formatDate(row.receivedAt) }}</template></el-table-column>
+          <el-table-column prop="subject" label="申诉事项" min-width="190" show-overflow-tooltip />
+          <el-table-column label="关联周期" min-width="170" show-overflow-tooltip><template #default="{ row }">{{ row.cycleName || '未关联周期' }}</template></el-table-column>
+          <el-table-column label="处理结论" min-width="170" show-overflow-tooltip><template #default="{ row }">{{ row.conclusion || '待补充' }}</template></el-table-column>
+          <el-table-column prop="recordedByName" label="记录人" width="110" />
+          <el-table-column label="操作" width="90" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openDialog(row as AppealRecord)">编辑</el-button></template></el-table-column>
+        </el-table>
       </div>
-
       <div v-loading="loading" class="mobile-result-list">
-        <MobileResultCard v-for="appeal in appeals" :key="appeal.id">
-          <template #title>{{ appeal.appellant?.name ?? '-' }}</template>
-          <template #status>
-            <el-tag :type="appeal.status === 'pending' ? 'warning' : 'success'" size="small">{{ statusText(appeal.status) }}</el-tag>
-          </template>
-          <div class="mobile-result-field"><span class="mobile-result-field__label">部门</span><span class="mobile-result-field__value">{{ appeal.dept?.name ?? '-' }}</span></div>
-          <div class="mobile-result-field"><span class="mobile-result-field__label">考核周期</span><span class="mobile-result-field__value">{{ appeal.cycle?.name ?? '-' }}</span></div>
-          <div class="mobile-result-field"><span class="mobile-result-field__label">处理结果</span><span class="mobile-result-field__value">{{ appeal.finalResult ? resultText(appeal.finalResult) : '-' }}</span></div>
-          <div class="mobile-result-field"><span class="mobile-result-field__label">创建时间</span><span class="mobile-result-field__value">{{ formatDateTime(appeal.createdAt) }}</span></div>
-          <div class="mobile-result-field"><span class="mobile-result-field__label">当前环节</span><span class="mobile-result-field__value">{{ appealStage(appeal) }}</span></div>
-          <template #actions><el-button link type="primary" @click="openDetail(appeal)">查看详情</el-button></template>
+        <el-empty v-if="!loading && !list.length && !loadError" description="暂无申诉记录" />
+        <MobileResultCard v-for="item in list" :key="item.id">
+          <template #title>{{ item.employeeName }}<template v-if="item.employeeNo"> · {{ item.employeeNo }}</template></template>
+          <div v-for="field in [['部门', item.deptName || '—'], ['收到日期', formatDate(item.receivedAt)],
+            ['申诉事项', item.subject], ['关联周期', item.cycleName || '未关联周期'],
+            ['处理结论', item.conclusion || '待补充'], ['记录人', item.recordedByName || '—']]"
+            :key="field[0]" class="mobile-result-field">
+            <span class="mobile-result-field__label">{{ field[0] }}</span><span class="mobile-result-field__value">{{ field[1] }}</span>
+          </div>
+          <template #actions><el-button link type="primary" @click="openDialog(item)">编辑</el-button></template>
         </MobileResultCard>
       </div>
-
-      <div v-if="!loading && appeals.length === 0" class="appeals-view__empty">
-        <EmptyState description="暂无申诉记录" />
-      </div>
-
-      <ListPagination
-        v-model:current-page="page"
-        v-model:page-size="pageSize"
-        :page-sizes="pageSizeOptions"
-        :total="total"
-      />
+      <ListPagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="pageSizeOptions" :total="total" @change="loadList" />
     </ChartCard>
 
-    <!-- 录入申诉 -->
-    <el-dialog
-      v-model="createDialog.visible"
-      title="录入申诉"
-      width="min(560px, calc(100vw - 24px))"
-      :close-on-click-modal="false"
-      destroy-on-close
-    >
-      <el-form label-width="90px">
-        <el-form-item label="员工及周期" required>
-          <el-select
-            v-model="createDialog.taskId"
-            placeholder="搜索已审批、未公示的员工结果"
-            filterable
-            remote
-            clearable
-            :remote-method="loadTaskOptions"
-            :loading="createDialog.taskLoading"
-            style="width: 100%"
-            @focus="onTaskSelectFocus"
-          >
-            <el-option
-              v-for="task in createDialog.taskOptions"
-              :key="task.id"
-              :label="taskOptionLabel(task)"
-              :value="task.id"
-            />
-          </el-select>
-        </el-form-item>
-
-        <el-form-item label="申诉事由" required>
-          <el-input
-            v-model="createDialog.reason"
-            type="textarea"
-            :rows="4"
-            placeholder="请输入申诉事由"
-            maxlength="1000"
-            show-word-limit
-          />
-        </el-form-item>
-
-      </el-form>
-
+    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑申诉记录' : '新增申诉记录'" width="min(620px, 96vw)" destroy-on-close>
+      <div v-loading="dialogLoading">
+        <el-alert v-if="saveError" :title="saveError" type="error" :closable="false" class="dialog-alert" />
+        <el-alert v-if="peopleError" :title="peopleError" type="error" :closable="false" class="dialog-alert" />
+        <el-form ref="formRef" :model="form" label-position="top" :disabled="dialogLoading || saving" class="appeal-form">
+          <el-form-item label="员工" prop="employeeId" :rules="[{ required: true, message: '请选择员工', trigger: 'change' }]">
+            <el-select v-model="form.employeeId" filterable remote :remote-method="searchPeople" :loading="peopleLoading"
+              placeholder="搜索员工姓名或工号" aria-label="员工" @change="clearValidation('employeeId')">
+              <el-option v-for="person in people" :key="person.id" :label="personLabel(person)" :value="person.id" />
+            </el-select>
+          </el-form-item>
+          <div class="appeal-form__grid">
+            <el-form-item label="收到日期" prop="receivedAt" :rules="[{ required: true, message: '请选择收到日期', trigger: 'change' }]">
+              <el-date-picker v-model="form.receivedAt" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" @change="clearValidation('receivedAt')" />
+            </el-form-item>
+            <el-form-item label="关联绩效周期（选填）">
+              <el-select v-model="form.cycleId" clearable filterable placeholder="可不关联周期" aria-label="关联绩效周期">
+                <el-option v-for="cycle in cycles" :key="cycle.id" :label="cycle.name" :value="cycle.id" />
+              </el-select>
+            </el-form-item>
+          </div>
+          <el-form-item label="申诉事项" prop="subject" :rules="[{ required: true, whitespace: true, message: '请填写申诉事项', trigger: 'blur' }]">
+            <el-input v-model="form.subject" maxlength="200" show-word-limit placeholder="简要概括申诉事项" @input="clearValidation('subject')" />
+          </el-form-item>
+          <el-form-item label="诉求内容" prop="content" :rules="[{ required: true, whitespace: true, message: '请填写诉求内容', trigger: 'blur' }]">
+            <el-input v-model="form.content" type="textarea" :rows="3" maxlength="10000" show-word-limit placeholder="记录员工提出的具体诉求" @input="clearValidation('content')" />
+          </el-form-item>
+          <el-form-item label="处理情况（可后续补充）"><el-input v-model="form.handlingNote" type="textarea" :rows="3" maxlength="10000" placeholder="记录沟通、核实和处理经过" /></el-form-item>
+          <el-form-item label="处理结论（可后续补充）"><el-input v-model="form.conclusion" type="textarea" :rows="3" maxlength="10000" placeholder="记录最终处理结论" /></el-form-item>
+        </el-form>
+      </div>
       <template #footer>
-        <el-button @click="createDialog.visible = false">取消</el-button>
-        <el-button type="primary" :loading="submitting" @click="submitCreate">发起重评</el-button>
+        <el-button :disabled="saving" @click="dialogVisible = false">取消</el-button>
+        <el-button type="primary" :loading="saving" :disabled="dialogLoading" @click="save">保存</el-button>
       </template>
     </el-dialog>
-
-    <!-- 详情 / 处理 -->
-    <PerformanceResultDrawer
-      v-model="detailDialog.visible"
-      title="申诉详情"
-      :close-on-click-modal="false"
-      destroy-on-close
-    >
-      <el-skeleton v-if="detailDialog.loading" :rows="6" animated />
-
-      <template v-else-if="detailDialog.appeal">
-        <el-descriptions :column="2" border>
-          <el-descriptions-item label="员工">
-            {{ detailDialog.appeal.appellant?.name ?? '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="部门">
-            {{ detailDialog.appeal.dept?.name ?? '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="考核周期" :span="2">
-            {{ detailDialog.appeal.cycle?.name ?? '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="当前环节" :span="2">{{ appealStage(detailDialog.appeal) }}</el-descriptions-item>
-          <el-descriptions-item label="计算分">
-            {{ detailDialog.appeal.taskGrade?.calculatedScore?.toFixed(2) ?? '-' }}
-          </el-descriptions-item>
-          <el-descriptions-item label="最终等级">
-            <GradeTag :grade="asGrade(detailDialog.appeal.taskGrade?.rawGrade)" size="small" />
-          </el-descriptions-item>
-          <el-descriptions-item v-if="detailDialog.appeal.taskGrade?.calibratedGrade" label="更正后等级">
-            <GradeTag :grade="asGrade(detailDialog.appeal.taskGrade?.calibratedGrade)" size="small" />
-          </el-descriptions-item>
-        </el-descriptions>
-
-        <el-descriptions v-if="detailDialog.appeal.originalResult" :column="2" border class="appeals-view__section">
-          <el-descriptions-item label="申诉前得分">{{ detailDialog.appeal.originalResult.calculatedScore?.toFixed(2) ?? '—' }}</el-descriptions-item>
-          <el-descriptions-item label="申诉前等级"><GradeTag :grade="detailDialog.appeal.originalResult.calibratedGrade ?? detailDialog.appeal.originalResult.rawGrade" size="small" /></el-descriptions-item>
-        </el-descriptions>
-
-        <div class="appeals-view__section">
-          <div class="appeals-view__section-title">申诉事由</div>
-          <div class="appeals-view__section-body">{{ detailDialog.appeal.reason }}</div>
-        </div>
-
-        <div v-if="detailDialog.appeal.attachments?.length" class="appeals-view__section">
-          <div class="appeals-view__section-title">附件</div>
-          <ul v-if="detailDialog.appeal.attachments?.length" class="appeals-view__attachments">
-            <li v-for="(file, idx) in detailDialog.appeal.attachments" :key="idx">
-              <a :href="file.url" target="_blank" rel="noopener">{{ file.name }}</a>
-            </li>
-          </ul>
-          <div v-else class="appeals-view__section-body">无附件</div>
-        </div>
-
-        <!-- 已处理结果展示 -->
-        <template v-if="detailDialog.appeal.status === 'resolved'">
-          <el-divider />
-          <el-descriptions :column="2" border>
-            <el-descriptions-item label="处理结果">
-              <el-tag :type="resultTagType(detailDialog.appeal.finalResult as AppealResult)" size="small">
-                {{ detailDialog.appeal.finalResult ? resultLabel[detailDialog.appeal.finalResult] : '-' }}
-              </el-tag>
-            </el-descriptions-item>
-            <el-descriptions-item v-if="detailDialog.appeal.finalResult === 'modified'" label="新等级">
-              <GradeTag :grade="asGrade(detailDialog.appeal.taskGrade?.calibratedGrade)" size="small" />
-            </el-descriptions-item>
-          </el-descriptions>
-          <div class="appeals-view__section">
-            <div class="appeals-view__section-title">处理说明</div>
-            <div class="appeals-view__section-body">{{ detailDialog.appeal.hrResolution ?? '-' }}</div>
-          </div>
-        </template>
-
-        <!-- 待处理表单 -->
-        <template v-else-if="canResolve">
-          <el-divider />
-          <el-form label-width="90px">
-            <el-form-item label="处理结果" required>
-              <el-radio-group v-model="detailDialog.result">
-                <el-radio label="maintained">维持原判</el-radio>
-                <el-radio label="modified">改判</el-radio>
-              </el-radio-group>
-            </el-form-item>
-
-            <template v-if="isModified">
-              <el-form-item label="新等级" required>
-                <el-select v-model="detailDialog.newGrade" placeholder="选择新等级" clearable>
-                  <el-option label="A" value="A" />
-                  <el-option label="B" value="B" />
-                  <el-option label="C" value="C" />
-                  <el-option label="D" value="D" />
-                </el-select>
-              </el-form-item>
-              <el-form-item label="改判说明">
-                <el-input
-                  v-model="detailDialog.newGradeNote"
-                  type="textarea"
-                  :rows="2"
-                  placeholder="请输入改判说明（可选）"
-                  maxlength="500"
-                  show-word-limit
-                />
-              </el-form-item>
-            </template>
-
-            <el-form-item label="处理说明" required>
-              <el-input
-                v-model="detailDialog.resolution"
-                type="textarea"
-                :rows="4"
-                placeholder="请输入处理说明"
-                maxlength="1000"
-                show-word-limit
-              />
-            </el-form-item>
-          </el-form>
-        </template>
-        <ReviewHistory :records="detailDialog.appeal.flowRecords" />
-      </template>
-
-      <template #footer>
-        <el-button @click="detailDialog.visible = false">关闭</el-button>
-        <el-button
-          v-if="canResolve"
-          type="primary"
-          :loading="submitting"
-          @click="submitResolve"
-        >
-          提交处理
-        </el-button>
-      </template>
-    </PerformanceResultDrawer>
   </div>
 </template>
 
 <style scoped>
-.appeals-view__filters {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-}
-
-.appeals-view__empty {
-  padding: 24px 0;
-}
-
-.appeals-view__section {
-  margin-top: 16px;
-}
-
-.appeals-view__section-title {
-  font-size: 14px;
-  font-weight: 500;
-  color: var(--el-text-color-regular);
-  margin-bottom: 8px;
-}
-
-.appeals-view__section-body {
-  font-size: 14px;
-  color: var(--el-text-color-primary);
-  line-height: 1.6;
-  white-space: pre-wrap;
-}
-
-.appeals-view__attachments {
-  margin: 0;
-  padding: 0;
-  list-style: none;
-}
-
-.appeals-view__attachments li {
-  margin-bottom: 6px;
-}
-
-.appeals-view__attachments a {
-  color: var(--el-color-primary);
-  text-decoration: none;
-}
+.employee-cell { display: flex; flex-direction: column; gap: 4px; }
+.employee-no { font-size: 12px; color: var(--el-text-color-secondary); }
+.appeal-form__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
+.dialog-alert { margin-bottom: 12px; }
+@media (max-width: 600px) { .appeal-form__grid { grid-template-columns: 1fr; gap: 0; } }
 </style>

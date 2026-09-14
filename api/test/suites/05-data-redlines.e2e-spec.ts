@@ -2,7 +2,7 @@ import { buildTestApp, closeTestApp, TestApp } from "../test-app";
 import { FixtureFactory } from "../fixtures/fixture-factory";
 import { login } from "../helpers/auth-helper";
 import { assertNoCoefficientKey } from "../helpers/scoring-assertions";
-import { SysRole, TaskStatus, CycleStatus, PerfGrade } from "@prisma/client";
+import { CompanyCode, SysRole, TaskStatus, CycleStatus, PerfGrade } from "@prisma/client";
 import { LaunchService } from "@/cycles/launch.service";
 
 describe("05-data-redlines", () => {
@@ -323,6 +323,7 @@ describe("05-data-redlines", () => {
 
   it("D13：/appeals/* 响应无 coefficient 字段", async () => {
     const { dept, hr, manager, employee } = await createRoleSet();
+    await app.prisma.employmentRecord.create({ data: { userId: hr.id, effectiveFrom: new Date('2020-01-01'), company: CompanyCode.fuede, deptId: dept.id, changeType: 'hire' } });
     const cycle = await factory.createCycle({
       name: "D13申诉",
       createdBy: hr.id,
@@ -347,8 +348,8 @@ describe("05-data-redlines", () => {
     const createRes = await app.http
       .post("/api/v1/appeals")
       .set("Authorization", `Bearer ${hrToken}`)
-      .send({ taskId: task.id, reason: "测试申诉" })
-      .expect(200);
+      .send({ employeeId: employee.id, cycleId: cycle.id, receivedAt: '2026-09-14', subject: '测试申诉', content: '核查记录' })
+      .expect(201);
 
     const appealId = createRes.body.data.id;
     const detail = await app.http

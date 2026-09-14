@@ -244,34 +244,4 @@ describe('08-negative-boundary', () => {
     expect(res.body.code).toBe(4009);
   });
 
-  it('对同任务重复建 pending 申诉 → 409', async () => {
-    const { dept, hr, manager, employee } = await createRoleSet();
-    const cycle = await factory.createCycle({ name: '重复申诉', createdBy: hr.id });
-    const task = await factory.createTaskInStatus({
-      cycleId: cycle.id,
-      employeeId: employee.id,
-      managerId: manager.id,
-      status: TaskStatus.published,
-      deptId: dept.id,
-      hasManagerScore: true,
-      calculatedScore: 82,
-      rawGrade: 'B',
-      calibratedGrade: 'B',
-    });
-
-    const hrToken = await login(app.http, { employeeNo: 'HR001', password: 'test123' });
-
-    await app.http
-      .post('/api/v1/appeals')
-      .set('Authorization', `Bearer ${hrToken}`)
-      .send({ taskId: task.id, reason: '第一次' })
-      .expect(200);
-
-    const res = await app.http
-      .post('/api/v1/appeals')
-      .set('Authorization', `Bearer ${hrToken}`)
-      .send({ taskId: task.id, reason: '第二次' })
-      .expect(409);
-    expect(res.body.code).toBe(4009);
-  });
 });

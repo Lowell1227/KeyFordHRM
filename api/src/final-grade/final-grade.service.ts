@@ -91,7 +91,7 @@ export class FinalGradeService {
       where: {
         taskId,
         action: 'reject',
-        nodeType: { in: ['dept_review', 'hr_calibration', 'appeal'] },
+        nodeType: { in: ['dept_review', 'hr_calibration', 'appeal', 'employee_confirm'] },
       },
       orderBy: { createdAt: 'desc' },
       include: { actor: { select: { name: true } } },

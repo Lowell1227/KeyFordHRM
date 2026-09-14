@@ -158,7 +158,7 @@ test.describe('dashboard and reports business clarity', () => {
     await expect(page.getByTestId('dashboard-quick-actions')).toContainText('周期与计划');
     await expect(page.getByTestId('dashboard-quick-actions')).toContainText('绩效校准');
     await expect(page.getByTestId('dashboard-quick-actions')).toContainText('结果公示');
-    await expect(page.getByTestId('dashboard-quick-actions')).toContainText('申诉管理');
+    await expect(page.getByTestId('dashboard-quick-actions')).toContainText('申诉记录');
     await expect(page.getByTestId('dashboard-result-summary')).toContainText('应参评12人');
     await expect(page.getByTestId('dashboard-result-summary')).toContainText('已出结果1人');
     await expect(page.getByTestId('dashboard-result-summary')).toContainText('待出结果11人');

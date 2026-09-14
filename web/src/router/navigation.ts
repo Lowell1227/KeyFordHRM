@@ -16,6 +16,11 @@ export type NavigationUser = {
   hrCapabilities?: HrCapability[];
 };
 
+export function canAccessAppealLedger(user: NavigationUser): boolean {
+  return user.sysRole === 'hr' || (user.sysRole === 'hr_user'
+    && Boolean(user.hrCapabilities?.includes('cycle_plan_edit') && user.hrCapabilities.includes('performance_publish')));
+}
+
 const moduleDefinitions: Record<
   NavigationModuleKey,
   Pick<NavigationModule, 'label' | 'order' | 'status'>
@@ -32,6 +37,7 @@ export function canAccessRoute(
   route: Pick<RouteRecordRaw, 'meta'>,
   user: NavigationUser,
 ): boolean {
+  if (route.meta?.appealLedgerOnly) return canAccessAppealLedger(user);
   const scopedCapability = route.meta?.scopedCapability;
   if (scopedCapability && user.businessCapabilities?.[scopedCapability]) return true;
   const capability = route.meta?.capability;

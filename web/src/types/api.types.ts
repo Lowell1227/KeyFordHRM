@@ -12,8 +12,6 @@ import type {
   DimensionType,
   PerfGrade,
   TaskStatus,
-  AppealStatus,
-  AppealResult,
   FlowNodeType,
   FlowAction,
   SignatureBusinessType,
@@ -1563,98 +1561,49 @@ export interface SubmitManagerPeriodReviewBody extends SaveManagerPeriodReviewDr
   managerGrade: PerfGrade;
 }
 
-/** 申诉列表项（对齐后端 AppealListItem，不含 coefficient）。 */
-export interface AppealListItem {
-  workflowType?: 'prepublication' | 'legacy';
-  taskStatus?: TaskStatus;
-  approvedAt?: string | null;
-  employeeConfirmedAt?: string | null;
-  publishedAt?: string | null;
-  canResolve?: boolean;
+/** 独立 HR 人事台账；不关联考核任务或申诉流程。 */
+export interface AppealRecord {
   id: string;
-  taskId: string;
-  cycleId: string;
-  status: AppealStatus;
-  reason: string;
-  finalResult: AppealResult | null;
-  hrResolution: string | null;
+  employeeId: string;
+  employeeName: string;
+  employeeNo: string | null;
+  deptId: string | null;
+  deptName: string | null;
+  cycleId: string | null;
+  cycleName: string | null;
+  receivedAt: string;
+  subject: string;
+  content: string;
+  handlingNote: string | null;
+  conclusion: string | null;
+  recordedByName: string | null;
   createdAt: string;
-  hrResolvedAt: string | null;
-  appellant: { id: string; name: string } | null;
-  dept: { id: string; name: string | null } | null;
-  cycle: { id: string; name: string } | null;
-}
-
-/** 申诉详情（对齐后端 AppealDetail）。 */
-export interface AppealDetail extends AppealListItem {
-  flowRecords?: ReviewHistoryRecord[];
-  originalResult?: {
-    calculatedScore: number | null;
-    rawGrade: PerfGrade | null;
-    calibratedGrade: PerfGrade | null;
-  } | null;
-  appellantId: string;
-  attachments: Attachment[];
-  appealDeadline: string | null;
   updatedAt: string;
-  taskGrade: {
-    calculatedScore: number | null;
-    rawGrade: PerfGrade | null;
-    calibratedGrade: PerfGrade | null;
-  } | null;
-}
-
-/** 旧版完整 Appeal 对象，保留供兼容；新代码优先使用 AppealListItem / AppealDetail。 */
-export interface Appeal {
-  id: string;
-  taskId: string;
-  cycleId: string;
-  cycleName?: string;
-  appellantId: string;
-  appellantName?: string;
-  reason: string;
-  attachments: Attachment[];
-  status: AppealStatus;
-  hrResolution?: string;
-  hrResolvedAt?: string;
-  hrResolverId?: string;
-  hrResolverName?: string;
-  finalResult?: AppealResult;
-  appealDeadline: string;
-  createdAt: string;
-  updatedAt?: string;
 }
 
 export interface AppealQuery {
   page?: number;
   pageSize?: number;
-  status?: AppealStatus;
   cycleId?: string;
   deptId?: string;
   keyword?: string;
 }
 
-export interface AppealCandidate {
+export interface AppealPerson {
   id: string;
-  employeeName: string;
+  name: string;
   employeeNo: string | null;
-  deptName: string | null;
-  cycleName: string;
-  status: TaskStatus;
-  approvedAt: string | null;
+  dept?: { name: string } | null;
 }
 
-export interface CreateAppealBody {
-  taskId: string;
-  reason: string;
-  attachments?: Attachment[];
-}
-
-export interface ResolveAppealBody {
-  resolution: string;
-  result: AppealResult;
-  newGrade?: PerfGrade;
-  newGradeNote?: string;
+export interface AppealRecordBody {
+  employeeId: string;
+  cycleId?: string | null;
+  receivedAt: string;
+  subject: string;
+  content: string;
+  handlingNote?: string;
+  conclusion?: string;
 }
 
 // ---------------------------------------------------------------------------

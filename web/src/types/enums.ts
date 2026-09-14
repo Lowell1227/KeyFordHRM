@@ -64,10 +64,6 @@ export type DimensionType = 'kpi' | 'attitude' | 'bonus' | 'penalty';
 
 export type PerfGrade = 'A' | 'B' | 'C' | 'D';
 
-export type AppealStatus = 'pending' | 'resolved';
-
-export type AppealResult = 'maintained' | 'modified';
-
 export type FlowNodeType =
   | 'indicator_setting'
   | 'indicator_confirm'

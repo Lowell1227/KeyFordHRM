@@ -124,7 +124,7 @@ watch(taskId, loadDetail, { immediate: true });
           class="reject-alert"
         >
           <template #title>
-            {{ detail.latestReject.nodeType === 'appeal' ? '结果异议退回，待重新评定' : detail.latestReject.nodeType === 'hr_calibration' ? '评定被 HR 校准驳回' : '评定被部门复核退回' }}
+            {{ detail.latestReject.nodeType === 'appeal' || detail.latestReject.nodeType === 'employee_confirm' ? '结果异议退回，待重新评定' : detail.latestReject.nodeType === 'hr_calibration' ? '评定被 HR 校准驳回' : '评定被部门复核退回' }}
             （{{ detail.latestReject.actorName ?? '系统' }}）
           </template>
           {{ detail.latestReject.comment }}

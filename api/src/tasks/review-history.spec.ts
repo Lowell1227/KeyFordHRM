@@ -46,4 +46,10 @@ describe('key review history', () => {
     expect(history[0].extraData).not.toHaveProperty('originalResult');
     expect(history[0].extraData).not.toHaveProperty('appealId');
   });
+  it('keeps a task-only employee objection distinct from HR appeal data', () => {
+    const history = mapReviewHistory([{ ...records[0], nodeType: 'employee_confirm', action: 'reject',
+      comment: '请复核周期等级', extraData: { type: 'employee_result_objection' } }]);
+    expect(history[0]).toMatchObject({ nodeType: 'employee_confirm', comment: '请复核周期等级',
+      extraData: { type: 'employee_result_objection' } });
+  });
 });

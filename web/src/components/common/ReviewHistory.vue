@@ -11,10 +11,10 @@ const entries = computed(() => (props.records ?? []).filter(r => nodes[r.nodeTyp
   .map(record => {
     const data = record.extraData && typeof record.extraData === 'object' ? record.extraData as Record<string, unknown> : null;
     return { ...record,
-      nodeLabel: data?.type === 'prepublication_appeal' && data.source === 'employee' ? '员工提出异议'
+      nodeLabel: data?.type === 'employee_result_objection' || (data?.type === 'prepublication_appeal' && data.source === 'employee') ? '员工提出异议'
         : data?.type === 'manager_period_review_returned' ? `${typeof data.periodKey === 'string' ? data.periodKey + ' ' : ''}月度评价` : nodes[record.nodeType],
       opinion: data?.type === 'final_grade_submitted' ? (typeof data.comment === 'string' ? data.comment : '') : record.comment,
-      actionLabel: data?.type === 'prepublication_appeal' ? '已提出'
+      actionLabel: data?.type === 'prepublication_appeal' || data?.type === 'employee_result_objection' ? '已提出'
         : record.nodeType === 'employee_confirm' && record.action === 'approve' ? '已确认'
         : record.nodeType === 'publish' && record.action === 'approve' ? '已公示' : actions[record.action],
       combined: data?.type === 'combined_department_review',

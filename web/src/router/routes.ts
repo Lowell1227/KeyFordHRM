@@ -84,9 +84,9 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/appeals/AppealsView.vue'),
     meta: {
       requiresAuth: true,
-      title: '申诉管理',
-      roles: ['hr', 'system_admin'],
-      navigation: { module: 'performance', label: '申诉管理', order: 80, group: 'performance', groupLabel: '绩效运营' },
+      title: '申诉记录',
+      appealLedgerOnly: true,
+      navigation: { module: 'performance', label: '申诉记录', order: 80, group: 'performance', groupLabel: '绩效运营' },
     },
   },
   {

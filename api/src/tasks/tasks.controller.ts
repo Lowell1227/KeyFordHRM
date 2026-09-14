@@ -20,6 +20,7 @@ import { SaveManagerEvaluationDraftDto } from './dto/save-manager-evaluation-dra
 import { WithdrawManagerScoreDto } from './dto/withdraw-manager-score.dto';
 import { WithdrawIndicatorsDto } from './dto/withdraw-indicators.dto';
 import { DeptReviewDto } from './dto/dept-review.dto';
+import { EmployeeResultObjectionDto } from './dto/employee-result-objection.dto';
 import { RejectIndicatorsDto } from './dto/reject-indicators.dto';
 import { SubmitIndicatorProposalDto } from './dto/submit-indicator-proposal.dto';
 import { SetIndicatorsDto } from './dto/set-indicators.dto';
@@ -229,5 +230,15 @@ export class TasksController {
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.tasksService.employeeConfirm(id, viewer);
+  }
+
+  @Post(':id/employee-disagree')
+  @HttpCode(200)
+  employeeDisagree(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: EmployeeResultObjectionDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.tasksService.employeeDisagree(id, dto.reason, viewer);
   }
 }

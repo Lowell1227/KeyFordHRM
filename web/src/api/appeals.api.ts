@@ -1,45 +1,25 @@
 import http from './http';
-import type {
-  Paginated,
-  Appeal,
-  AppealListItem,
-  AppealDetail,
-  AppealQuery,
-  AppealCandidate,
-  CreateAppealBody,
-  ResolveAppealBody,
-} from '@/types/api.types';
+import type { Paginated, AppealRecord, AppealPerson, AppealQuery, AppealRecordBody, AssessmentCycle } from '@/types/api.types';
 
-function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
-  return http.get(url, { params }) as unknown as Promise<T>;
-}
-
-function apiPost<T>(url: string, data?: unknown): Promise<T> {
-  return http.post(url, data) as unknown as Promise<T>;
-}
+export type AppealCycle = Pick<AssessmentCycle, 'id' | 'name' | 'createdAt'>;
 
 export const appealsApi = {
-  /** 已审批且未公示、允许 HR 发起重评的任务。 */
-  findCandidates(query?: Pick<AppealQuery, 'cycleId' | 'keyword' | 'page' | 'pageSize'>): Promise<Paginated<AppealCandidate>> {
-    return apiGet('/appeals/candidates', query as Record<string, unknown>);
+  findAll(query?: AppealQuery): Promise<Paginated<AppealRecord>> {
+    return http.get('/appeals', { params: query }) as unknown as Promise<Paginated<AppealRecord>>;
   },
-  /** GET /appeals — 申诉列表 */
-  findAll(query?: AppealQuery): Promise<Paginated<AppealListItem>> {
-    return apiGet('/appeals', query as Record<string, unknown>);
+  people(keyword = ''): Promise<AppealPerson[]> {
+    return http.get('/appeals/people', { params: { keyword, pageSize: 50 } }) as unknown as Promise<AppealPerson[]>;
   },
-
-  /** GET /appeals/:id — 申诉详情 */
-  findOne(id: string): Promise<AppealDetail> {
-    return apiGet(`/appeals/${id}`);
+  cycles(): Promise<AppealCycle[]> {
+    return http.get('/appeals/cycles') as unknown as Promise<AppealCycle[]>;
   },
-
-  /** POST /appeals — HR 录入申诉记录 */
-  create(body: CreateAppealBody): Promise<Appeal> {
-    return apiPost('/appeals', body);
+  findOne(id: string): Promise<AppealRecord> {
+    return http.get(`/appeals/${id}`, { skipErrorMessage: true }) as unknown as Promise<AppealRecord>;
   },
-
-  /** POST /appeals/:id/resolve — HR 录入处理结论 */
-  resolve(id: string, body: ResolveAppealBody): Promise<AppealDetail> {
-    return apiPost(`/appeals/${id}/resolve`, body);
+  create(body: AppealRecordBody): Promise<AppealRecord> {
+    return http.post('/appeals', body, { skipErrorMessage: true }) as unknown as Promise<AppealRecord>;
+  },
+  update(id: string, body: AppealRecordBody): Promise<AppealRecord> {
+    return http.put(`/appeals/${id}`, body, { skipErrorMessage: true }) as unknown as Promise<AppealRecord>;
   },
 };

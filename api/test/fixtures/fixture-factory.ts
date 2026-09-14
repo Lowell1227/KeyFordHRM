@@ -439,6 +439,7 @@ export class FixtureFactory {
       'signatures',
       'notification_logs',
       'flow_records',
+      'hr_appeal_records',
       'appeals',
       'performance_archives',
       'performance_interviews',

@@ -58,18 +58,12 @@ export const FLOW_TRANSITIONS: FlowTransition[] = [
   // 审批人退回绩效校准（#11 范围）
   { from: 'approval', action: 'reject', to: 'hr_calibration', nodeType: 'approval' },
 
-  // HR 代录公示前异议，沿原链路重新评定
-  { from: 'approval', action: 'reject', to: 'manager_scoring', nodeType: 'appeal' },
-  { from: 'confirmed', action: 'reject', to: 'manager_scoring', nodeType: 'appeal' },
+  // 员工不同意评定结果，退回冻结的直属上级
+  { from: 'approval', action: 'reject', to: 'manager_scoring', nodeType: 'employee_confirm' },
 
   // 员工确认结果
   { from: 'approval', action: 'approve', to: 'confirmed', nodeType: 'employee_confirm' },
   { from: 'published', action: 'approve', to: 'confirmed', nodeType: 'employee_confirm' },
-  // 员工申诉（#12 范围）
-  { from: 'published', action: 'reject', to: 'appealing', nodeType: 'appeal' },
-
-  // 申诉完结（#12 范围）
-  { from: 'appealing', action: 'approve', to: 'closed', nodeType: 'appeal' },
 ];
 
 /** 转换请求参数。 */

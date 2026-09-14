@@ -22,6 +22,7 @@ export function mapReviewHistory(records: ReviewRecord[] = []) {
         ? { type: data.type, comment: typeof data.comment === 'string' ? data.comment : null }
         : data.type === 'combined_department_review' ? { type: data.type }
           : data.type === 'prepublication_appeal' ? appealAttribution(data)
+          : data.type === 'employee_result_objection' ? { type: data.type }
           : data.type === 'manager_period_review_returned'
             ? { type: data.type, periodKey: typeof data.periodKey === 'string' ? data.periodKey : null } : null
       : null;

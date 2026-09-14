@@ -9,11 +9,15 @@ test('performance specialist receives cycle and publication entries without unre
   }));
   expect(navigation).toContain('结果公示');
   expect(navigation).toContain('周期与计划');
+  expect(navigation).toContain('申诉记录');
   expect(navigation).not.toContain('结果审批');
   expect(navigation).not.toContain('绩效校准');
   expect(navigation).not.toContain('人员管理');
   const editor = JSON.stringify(buildNavigation(routes, { sysRole: 'hr_user', hrCapabilities: ['cycle_plan_edit'] }));
   expect(editor).not.toContain('结果公示');
+  expect(editor).not.toContain('申诉记录');
+  expect(JSON.stringify(buildNavigation(routes, { sysRole: 'hr', hrCapabilities: [] }))).toContain('申诉记录');
+  expect(JSON.stringify(buildNavigation(routes, { sysRole: 'system_admin', hrCapabilities: [] }))).not.toContain('申诉记录');
 });
 
 for (const width of [1440, 390]) test(`administrator assigns specialist while preserving other HR abilities ${width}`, async ({ page }, testInfo) => {

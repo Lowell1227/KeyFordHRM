@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router';
 import { cyclesApi } from '@/api/cycles.api';
 import { reportsApi } from '@/api/reports.api';
 import { useAuthStore } from '@/stores/auth.store';
+import { canAccessAppealLedger } from '@/router/navigation';
 import ChartCard from '@/components/common/ChartCard.vue';
 import DashboardTaskEntries from './DashboardTaskEntries.vue';
 import { getGradeLabel, getGradeStyle } from '@/utils/grade';
@@ -80,8 +81,10 @@ const roleQuickActions = computed<DashboardQuickAction[]>(() => {
       { label: '周期与计划', description: '发起周期、检查节点与参与范围', path: '/cycles' },
       { label: '绩效校准', description: '核对等级分布并完成校准', path: '/calibration' },
       { label: '结果公示', description: '确认审批状态并公示结果', path: '/publish' },
-      { label: '申诉管理', description: '集中处理员工绩效申诉', path: '/appeals' },
     );
+  }
+  if (auth.user && canAccessAppealLedger(auth.user)) {
+    actions.push({ label: '申诉记录', description: '记录和查询员工绩效申诉', path: '/appeals' });
   }
   if (auth.canAccessPerformanceApproval) {
     actions.push(

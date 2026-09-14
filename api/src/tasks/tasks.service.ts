@@ -1,7 +1,7 @@
 import { canEmployeeViewResult, isResultPublished, ResultPublicationFact } from './result-publication';
 import { buildResultEvidence, maskResultEvidence, RESULT_PERIOD_SELECT, ResultEvidence } from '@/tasks/result-evidence';
 import { appealAttribution } from '@/tasks/review-history';
-import { ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AssessmentPeriodStatus, AssessmentPeriodType, AssessmentTask, IndicatorInstance, IndicatorVisibilityScope, ObjectiveLevel, Prisma, SysRole, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DataScopeService } from '@/common/services/data-scope.service';
@@ -1650,6 +1650,46 @@ export class TasksService {
     });
   }
 
+  /** 员工对待确认结果提出异议；仅记录任务流转，不写入 HR 申诉台账。 */
+  async employeeDisagree(id: string, reason: string, viewer: AuthUser): Promise<{ id: string; status: TaskStatus }> {
+    const normalizedReason = reason.trim();
+    if (!normalizedReason) throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '请填写异议原因' });
+    if (reason.length > 2000) throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '异议原因不能超过2000字' });
+    return this.prisma.$transaction(async (tx) => {
+      await tx.$queryRaw`SELECT "id" FROM "assessment_tasks" WHERE "id" = ${id}::uuid FOR NO KEY UPDATE`;
+      const task = await tx.assessmentTask.findUnique({ where: { id }, include: { gradeResult: true } });
+      if (!task) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '考核任务不存在' });
+      if (task.employeeId !== viewer.id || viewer.isAssessorOnly) {
+        throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '只能对本人的绩效结果提出异议' });
+      }
+      if (task.isExempt || task.status !== 'approval' || !task.approvedAt || !task.gradeResult?.approvedAt
+        || task.employeeConfirmedAt || task.gradeResult.employeeConfirmedAt || isResultPublished(task) || !task.managerId) {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '结果不在待确认环节，请刷新后重试' });
+      }
+      await this.flowService.transitionTx(tx, {
+        task, action: 'reject', targetStatus: 'manager_scoring',
+        actorId: viewer.id, comment: normalizedReason, extraData: { type: 'employee_result_objection' },
+        taskUpdate: { approvedAt: null, employeeConfirmedAt: null, managerScoredAt: null, deptReviewedAt: null, hrCalibratedAt: null },
+      });
+      await tx.gradeResult.update({ where: { taskId: id }, data: {
+        approvedAt: null, approverId: null, employeeConfirmedAt: null, hrCalibratedAt: null, hrCalibratorId: null,
+        calibratedGrade: null, calibrationNote: null, coefficient: null,
+        isVeto: false, vetoReason: null, vetoOperatorId: null,
+      } });
+      await tx.auditLog.create({ data: {
+        userId: viewer.id, action: 'employee_disagree_result', entityType: 'assessment_task', entityId: id,
+        newValue: { reason: normalizedReason, status: 'manager_scoring' },
+      } });
+      await tx.notificationLog.create({ data: {
+        userId: task.managerId, senderId: viewer.id, taskId: id, cycleId: task.cycleId,
+        type: 'employee_result_objection', title: '绩效结果需要重新评定',
+        content: '员工对绩效结果提出异议，请查看异议原因并重新评定周期结果。',
+        channel: 'system', status: 'sent', sentAt: new Date(),
+      } });
+      return { id, status: 'manager_scoring' as TaskStatus };
+    });
+  }
+
   // ---------------------------------------------------------------------------
   // 权限与辅助
   // ---------------------------------------------------------------------------
@@ -2303,7 +2343,7 @@ export class TasksService {
 
     if (!visible.total_score || !visible.grade) {
       masked.flowRecords = masked.flowRecords.map(record =>
-        ['manager_score', 'dept_review', 'hr_calibration', 'approval', 'appeal'].includes(record.nodeType)
+        ['manager_score', 'dept_review', 'hr_calibration', 'approval', 'appeal', 'employee_confirm'].includes(record.nodeType)
           ? { ...record, comment: null, extraData: record.nodeType === 'appeal' ? appealAttribution(record.extraData) : null } : record);
     }
     return masked;
@@ -2323,7 +2363,7 @@ export class TasksService {
     masked.gradeResult = null;
     masked.managerEvalSummary = null;
     masked.flowRecords = detail.flowRecords.map(record =>
-      ['manager_score', 'dept_review', 'hr_calibration', 'approval', 'appeal'].includes(record.nodeType)
+      ['manager_score', 'dept_review', 'hr_calibration', 'approval', 'appeal', 'employee_confirm'].includes(record.nodeType)
         ? { ...record, comment: null, extraData: record.nodeType === 'appeal' ? appealAttribution(record.extraData) : null }
         : record);
 

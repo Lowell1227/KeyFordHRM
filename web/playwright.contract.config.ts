@@ -45,6 +45,7 @@ export default defineConfig({
     '48-performance-publication.spec.ts',
     '48-shared-performance-result-summary.spec.ts',
     '49-performance-specialist.spec.ts',
+    '53-prepublication-confirmation.spec.ts',
   ],
   workers: 1,
 });

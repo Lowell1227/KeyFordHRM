@@ -9,11 +9,11 @@ const wrap = (data: unknown) => JSON.stringify({ code: 0, message: 'success', da
 async function setup(page: Page, role: 'employee' | 'hr' | 'manager', approved = true, published = false) {
   let confirmed = false;
   let appealed = role === 'manager';
-  let candidatesRead = 0;
+  let savedRecord: Record<string, unknown> | null = null;
   const writes: Array<{ path: string; body: unknown }> = [];
   const signatureRequests: string[] = [];
   const cycle = { id: cycleId, name: '确认与申诉回归周期', status: 'approval', workflowVersion: 2, publishVisibleFields: { totalScore: true, grade: true, indicatorScores: true, managerComment: true } };
-  const records = [{ id: 'appeal-flow', nodeType: 'appeal', action: 'reject', actorName: role === 'hr' ? '虚拟HR' : '虚拟员工', createdAt: time, comment: '员工线下反馈，需核实周期评定依据。', extraData: {type:'prepublication_appeal',source:role === 'hr' ? 'hr' : 'employee'} }];
+  const records = [{ id: 'objection-flow', nodeType: 'employee_confirm', action: 'reject', actorName: '虚拟员工', createdAt: time, comment: '员工线下反馈，需核实周期评定依据。', extraData: {type:'employee_result_objection'} }];
   const task = () => ({
     id: taskId, cycleId, cycleName: cycle.name, employeeId: 'employee-1', employeeName: '虚拟员工', employeeNo: 'QA_EMP', deptName: '测试部门', position: '专员', managerId: 'manager-1', managerName: '虚拟上级', deptHeadId: 'head-1', approverId: 'approver-1',
     status: appealed ? 'manager_scoring' : confirmed ? 'confirmed' : published ? 'published' : 'approval', isExempt: false, workflowVersion: 2,
@@ -24,7 +24,9 @@ async function setup(page: Page, role: 'employee' | 'hr' | 'manager', approved =
     managerEvalSummary: { strengths: '稳定完成本周期交付', improvements: '', developmentPlan: '' }, indicatorInstances: [], flowRecords: appealed ? records : [],
     workflowContext: { stage: 'result', statusLabel: appealed ? '待直属上级重新评定' : confirmed ? '已确认，待公示' : approved ? '待员工确认' : '结果审批中', currentHandler: null, canRemind: false },
   });
-  const appeal = () => ({ id: appealId, taskId, cycleId, status: 'pending', reason: records[0].comment, workflowType: 'prepublication', taskStatus: 'manager_scoring', approvedAt: null, employeeConfirmedAt: null, publishedAt: null, canResolve: false, finalResult: null, hrResolution: null, createdAt: time, hrResolvedAt: null, appellant: { id: 'employee-1', name: '虚拟员工' }, dept: { id: 'dept-1', name: '测试部门' }, cycle: { id: cycleId, name: cycle.name }, originalResult: { calculatedScore: 86, rawGrade: 'B', calibratedGrade: null }, attachments: [], taskGrade: { calculatedScore: 86, rawGrade: 'B', calibratedGrade: null }, flowRecords: records });
+  const appeal = () => ({ id: appealId, employeeId: 'employee-1', employeeName: '虚拟员工', employeeNo: 'QA_EMP', deptId: 'dept-1', deptName: '测试部门', cycleId, cycleName: cycle.name,
+    receivedAt: '2026-09-14T00:00:00.000Z', subject: '考核等级依据', content: '希望核实周期评定依据', handlingNote: null, conclusion: null,
+    recordedByName: '虚拟HR', createdAt: time, updatedAt: time, ...savedRecord });
   await page.addInitScript(() => { localStorage.setItem('token', 'isolated-confirmation-contract'); localStorage.setItem('expiresAt', String(Date.now() + 3600_000)); });
   await page.route('**/api/v1/**', async route => {
     const request = route.request(); const path = new URL(request.url()).pathname;
@@ -36,13 +38,15 @@ async function setup(page: Page, role: 'employee' | 'hr' | 'manager', approved =
     else if (path === '/api/v1/cycles') data = { items: [cycle], total: 1, page: 1, pageSize: 20 };
     else if (path === `/api/v1/cycles/${cycleId}`) data = cycle;
     else if (path === '/api/v1/departments') data = [];
-    else if (path === '/api/v1/appeals/candidates') { candidatesRead++; data = { items: [task()], total: 1, page: 1, pageSize: 20 }; }
-    else if (path === '/api/v1/appeals' && request.method() === 'POST') { appealed = true; data = appeal(); }
-    else if (path === '/api/v1/appeals') data = { items: appealed ? [appeal()] : [], total: appealed ? 1 : 0, page: 1, pageSize: 10 };
+    else if (path === '/api/v1/appeals/people') data = [{ id: 'employee-1', name: '虚拟员工', employeeNo: 'QA_EMP', dept: { name: '测试部门' } }];
+    else if (path === '/api/v1/appeals/cycles') data = [{ id: cycleId, name: cycle.name, createdAt: time }];
+    else if (path === '/api/v1/appeals' && request.method() === 'POST') { savedRecord = request.postDataJSON(); data = appeal(); }
+    else if (path === '/api/v1/appeals') data = { items: savedRecord ? [appeal()] : [], total: savedRecord ? 1 : 0, page: 1, pageSize: 10 };
+    else if (path === `/api/v1/appeals/${appealId}` && request.method() === 'PUT') { savedRecord = { ...savedRecord, ...request.postDataJSON() }; data = appeal(); }
     else if (path === `/api/v1/appeals/${appealId}`) data = appeal();
     else if (path === `/api/v1/tasks/${taskId}/employee-confirm`) { confirmed = true; data = { id: taskId, status: 'confirmed' }; }
     else if (path === `/api/v1/tasks/${taskId}/employee-disagree`) { appealed = true; data = { id: taskId, status: 'manager_scoring' }; }
-    else if (path === `/api/v1/tasks/${taskId}/final-grade`) data = {...task(),canSubmit:true,allPeriodsComplete:true,currentGrade:'B',calculatedScore:86,comment:'原周期评语',latestReject:{nodeType:'appeal',comment:records[0].comment,actorName:'虚拟员工',createdAt:time}};
+    else if (path === `/api/v1/tasks/${taskId}/final-grade`) data = {...task(),canSubmit:true,allPeriodsComplete:true,currentGrade:'B',calculatedScore:86,comment:'原周期评语',latestReject:{nodeType:'employee_confirm',comment:records[0].comment,actorName:'虚拟员工',createdAt:time}};
     else if (path === `/api/v1/tasks/${taskId}`) data = task();
     else if (path.endsWith('/publication-records')) data = { items: [
       { ...task(), taskId, publicationState: 'pending_confirmation', canPublish: false, totalScore: 86, rawGrade: 'B', calibratedGrade: null, resultMasked: false, updatedAt: time },
@@ -52,7 +56,7 @@ async function setup(page: Page, role: 'employee' | 'hr' | 'manager', approved =
     else if (path === '/api/v1/tasks') data = { items: [], total: 0 };
     await route.fulfill({ contentType: 'application/json', body: wrap(data) });
   });
-  return { writes, signatureRequests, candidatesRead: () => candidatesRead, task };
+  return { writes, signatureRequests, task };
 }
 
 for (const width of [1440, 390]) {
@@ -177,41 +181,47 @@ for (const width of [1440, 390]) {
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
   });
 
-  test(`HR 代录公示前申诉后查看重评流转，无直接改判 ${width}px`, async ({ page }) => {
+  test(`HR 保存申诉记录并补充结论，不改变考核任务 ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 960 });
     const state = await setup(page, 'hr');
     await page.goto('/appeals');
-    await page.getByRole('button', { name: '录入申诉', exact: true }).click();
+    await page.getByRole('button', { name: '新增申诉记录', exact: true }).click();
     const dialog = page.getByRole('dialog');
-    await expect.poll(state.candidatesRead).toBeGreaterThan(0);
-    await dialog.locator('.el-select').click();
+    await expect(dialog.getByRole('button', { name: '取消', exact: true })).toBeVisible();
+    await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeVisible();
+    await dialog.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(dialog.locator('.el-form-item__error')).toContainText(['请选择员工', '请填写申诉事项', '请填写诉求内容']);
+    await dialog.getByRole('combobox', { name: '员工', exact: true }).click();
     await page.getByRole('option').filter({ hasText: '虚拟员工' }).click();
-    await dialog.getByPlaceholder('请输入申诉事由').fill('员工线下反馈，需核实周期评定依据。');
-    await dialog.getByRole('button', { name: '发起重评', exact: true }).click();
+    await dialog.getByPlaceholder('简要概括申诉事项').fill('考核等级依据');
+    await dialog.getByPlaceholder('记录员工提出的具体诉求').fill('希望核实周期评定依据');
+    await expect(dialog.locator('.el-form-item__error')).toHaveCount(0);
+    const dialogBounds = await dialog.boundingBox();
+    expect(dialogBounds).not.toBeNull();
+    expect(dialogBounds!.x).toBeGreaterThanOrEqual(0);
+    expect(dialogBounds!.x + dialogBounds!.width).toBeLessThanOrEqual(width + 1);
+    await dialog.screenshot({ path: test.info().outputPath(`hr-appeal-form-${width}.png`), animations: 'disabled' });
+    await dialog.getByRole('button', { name: '保存', exact: true }).click();
     await expect(dialog).toBeHidden();
     const item = width <= 768 ? page.locator('.mobile-result-card').filter({ hasText: '虚拟员工' }) : page.getByRole('row').filter({ hasText: '虚拟员工' });
-    await expect(item).toContainText('上级');
-    await item.getByRole('button', { name: '查看详情', exact: true }).click();
-    const detail = page.getByRole('dialog');
-    await expect(detail.locator('.el-drawer__title')).toHaveText('申诉详情');
-    await expect(detail.locator('.el-drawer__title')).toBeVisible();
-    await expect(detail).toContainText('员工线下反馈');
-    await expect(detail).toContainText('申诉前得分');
-    await expect(detail).toContainText('86.00');
-    await expect(detail.getByTestId('review-history')).toContainText('HR 发起申诉');
-    await expect(detail.getByRole('button', { name: '提交处理', exact: true })).toHaveCount(0);
-    await expect(detail.getByText('改判', { exact: true })).toHaveCount(0);
-    await detail.evaluate(async element => {
+    await expect(item).toContainText('考核等级依据');
+    await item.getByRole('button', { name: '编辑', exact: true }).click();
+    await expect(dialog.getByPlaceholder('记录员工提出的具体诉求')).toHaveValue('希望核实周期评定依据');
+    await dialog.getByPlaceholder('记录沟通、核实和处理经过').fill('已与员工沟通');
+    await dialog.getByPlaceholder('记录最终处理结论').fill('记录完成');
+    await dialog.getByRole('button', { name: '保存', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    await expect(item).toContainText('记录完成');
+    await page.getByRole('button', { name: '新增申诉记录', exact: true }).click();
+    await dialog.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(dialog).toBeHidden();
+    expect(state.writes.map(write => write.path)).toEqual(['/api/v1/appeals', `/api/v1/appeals/${appealId}`]);
+    await page.getByRole('button', { name: '新增申诉记录', exact: true }).evaluate(async element => {
       const animations = element.parentElement?.getAnimations({ subtree: true }) ?? [];
       await Promise.all(animations.filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => undefined)));
     });
-    const bounds = await detail.boundingBox();
-    expect(bounds).not.toBeNull();
-    expect(bounds!.x).toBeGreaterThanOrEqual(0);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(width + 1);
-    expect(state.writes).toEqual([{ path: '/api/v1/appeals', body: { taskId, reason: '员工线下反馈，需核实周期评定依据。' } }]);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
-    await page.screenshot({ path: test.info().outputPath(`hr-appeal-${width}.png`), fullPage: true, animations: 'disabled' });
+    await page.screenshot({ path: test.info().outputPath(`hr-appeal-record-${width}.png`), fullPage: true, animations: 'disabled' });
   });
 
   test(`公示列表区分待确认和已确认待公示 ${width}px`, async ({ page }) => {
