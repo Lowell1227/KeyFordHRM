@@ -13,6 +13,7 @@ import { BackfillMeetingDateDto } from './dto/backfill-meeting-date.dto';
 import { ReturnConfirmationDto } from './dto/return-confirmation.dto';
 import { AssignConfirmationHandlersDto } from './dto/assign-confirmation-handlers.dto';
 import { DataScopeService } from '@/common/services/data-scope.service';
+import { NotificationsService } from '@/notifications/notifications.service';
 
 export interface ConfirmationListItem {
   id: string;
@@ -47,6 +48,8 @@ export interface ApprovalStep {
 }
 
 export interface ConfirmationDetail extends ConfirmationListItem {
+  roster: { employeeNo: string | null; company: string | null; deptName: string | null;
+    position: string | null; entryDate: Date | null; plannedRegularDate: Date | null };
   probationReviewId: string | null;
   summary: string | null;
   managerRecommendation: boolean | null;
@@ -65,7 +68,10 @@ export interface ConfirmationDetail extends ConfirmationListItem {
   canReject: boolean;
   canReturn: boolean;
   pendingRole: 'manager' | 'hr' | 'company' | null;
-  history: Array<{ id: string; label: string; actorName: string | null; occurredAt: Date; submissionVersion: number | null; note: string | null }>;
+  history: Array<{ id: string; label: string; actorName: string | null; occurredAt: Date;
+    submissionVersion: number | null; note: string | null;
+    snapshot: { summary?: string; managerRecommendation?: boolean; managerComment?: string;
+      voteResult?: VoteResult; voteComment?: string; hrComment?: string; proposedRegularDate?: string } | null }>;
 }
 
 export interface WarningItem {
@@ -86,9 +92,23 @@ export class ConfirmationService {
     private readonly prisma: PrismaService,
     private readonly storage: StorageService,
     private readonly dataScope: DataScopeService,
+    private readonly notifications: NotificationsService,
   ) {}
 
-  /** 转正管理只配置未首次提交的草稿；正式审批关系随后固定。 */
+  private async notifyApplication(
+    id: string, version: number, recipientIds: Array<string | null>, senderId: string,
+    type: string, title: string, content: string,
+  ): Promise<void> {
+    await Promise.allSettled([...new Set(recipientIds.filter((recipient): recipient is string => Boolean(recipient)))].map((userId) =>
+      this.notifications.create({
+        dedupeKey: `confirmation:${id}:${version}:${type}:${userId}`,
+        userId, senderId, type, title, content,
+        extraData: { applicationId: id },
+      }),
+    ));
+  }
+
+  /** 授权 HR 配置或改派尚未结束的申请；已完成意见的负责人保持不变。 */
   async assignHandlers(id: string, dto: AssignConfirmationHandlersDto, viewer: AuthUser) {
     this.assertConfirmationManager(viewer);
     const app = await this.prisma.confirmationApplication.findUnique({
@@ -99,8 +119,18 @@ export class ConfirmationService {
     if (!app || app.workflowVersion !== 2) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '转正申请不存在' });
     }
-    if (app.status !== ConfirmationStatus.draft || app.submissionVersion !== 0) {
-      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '仅首次提交前的草稿可配置办理人' });
+    if (app.employeeId === viewer.id) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '不能为自己的转正申请指定办理人' });
+    }
+    if (!([ConfirmationStatus.draft, ConfirmationStatus.submitted, ConfirmationStatus.manager_approved, ConfirmationStatus.hr_approved] as ConfirmationStatus[]).includes(app.status)) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '仅办理中的申请可调整办理人' });
+    }
+    const isReassignment = app.submissionVersion > 0;
+    if (isReassignment && !dto.reason?.trim()) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '请填写改派原因' });
+    }
+    if (app.status === ConfirmationStatus.hr_approved && dto.hrId !== app.hrId) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: 'HR 已提交评议结论，不能改派该环节' });
     }
     const scope = await this.dataScope.getConfirmationEmployeeFilter(viewer);
     const visible = await this.prisma.user.count({ where: { AND: [scope, { id: app.employeeId, status: UserStatus.probation, deletedAt: null }] } });
@@ -113,15 +143,21 @@ export class ConfirmationService {
     if (!employee?.directManagerId) {
       throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '请先在员工档案中维护花名册直属主管' });
     }
+    const mayRefreshManager = app.status === ConfirmationStatus.draft || app.status === ConfirmationStatus.submitted;
+    const managerId = mayRefreshManager ? employee.directManagerId : app.managerId;
+    if (!managerId) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '直属主管尚未配置' });
+    }
     if (dto.hrId === dto.companyApproverId || dto.hrId === app.employeeId || dto.companyApproverId === app.employeeId || dto.companyApproverId === viewer.id) {
       throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '公司审批人须与申请员工、HR 办理人及指定人员不同' });
     }
+    const hrOpinionAlreadySubmitted = app.status === ConfirmationStatus.hr_approved;
     const candidates = await this.prisma.user.findMany({
-      where: { id: { in: [dto.hrId, dto.companyApproverId] }, deletedAt: null, status: UserStatus.active },
+      where: { AND: [scope], id: { in: hrOpinionAlreadySubmitted ? [dto.companyApproverId] : [dto.hrId, dto.companyApproverId] }, deletedAt: null, status: UserStatus.active },
       select: { id: true, sysRole: true, hrCapabilities: true },
     });
     const handler = candidates.find((person) => person.id === dto.hrId);
-    if (!handler || !(handler.sysRole === SysRole.hr || (handler.sysRole === SysRole.hr_user && handler.hrCapabilities.includes('confirmation_manage')))) {
+    if (!hrOpinionAlreadySubmitted && (!handler || !(handler.sysRole === SysRole.hr || (handler.sysRole === SysRole.hr_user && handler.hrCapabilities.includes('confirmation_manage'))))) {
       throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '请选择在职且具备转正办理权限的 HR' });
     }
     if (!candidates.some((person) => person.id === dto.companyApproverId)) {
@@ -129,27 +165,40 @@ export class ConfirmationService {
     }
     await this.prisma.$transaction(async (tx) => {
       const updated = await tx.confirmationApplication.updateMany({
-        where: { id, workflowVersion: 2, status: ConfirmationStatus.draft, submissionVersion: 0,
+        where: { id, workflowVersion: 2, status: app.status, submissionVersion: app.submissionVersion,
           managerId: app.managerId, hrId: app.hrId, companyApproverId: app.companyApproverId },
-        data: { managerId: employee.directManagerId, hrId: dto.hrId, companyApproverId: dto.companyApproverId },
+        data: { managerId, hrId: dto.hrId, companyApproverId: dto.companyApproverId },
       });
       if (updated.count !== 1) {
         throw new ConflictException({ code: ERROR_CODE.PARAM_INVALID, message: '申请状态已变化，请刷新后重试' });
       }
       await tx.auditLog.create({ data: {
-        userId: viewer.id, action: 'confirmation_handlers_assigned',
+        userId: viewer.id, action: isReassignment ? 'confirmation_handlers_reassigned' : 'confirmation_handlers_assigned',
         entityType: 'confirmation_application', entityId: id,
         oldValue: { managerId: app.managerId, hrId: app.hrId, companyApproverId: app.companyApproverId },
-        newValue: { managerId: employee.directManagerId, hrId: dto.hrId, companyApproverId: dto.companyApproverId },
+        newValue: { managerId, hrId: dto.hrId, companyApproverId: dto.companyApproverId,
+          reason: dto.reason?.trim() || null, submissionVersion: app.submissionVersion },
       } });
     });
-    return { id, hrId: dto.hrId, companyApproverId: dto.companyApproverId };
+    const pendingRecipient = app.status === ConfirmationStatus.submitted ? managerId
+      : app.status === ConfirmationStatus.manager_approved ? dto.hrId
+        : app.status === ConfirmationStatus.hr_approved ? dto.companyApproverId : null;
+    const previousRecipient = app.status === ConfirmationStatus.submitted ? app.managerId
+      : app.status === ConfirmationStatus.manager_approved ? app.hrId
+        : app.status === ConfirmationStatus.hr_approved ? app.companyApproverId : null;
+    if (pendingRecipient && pendingRecipient !== previousRecipient) {
+      await this.notifyApplication(id, app.submissionVersion, [pendingRecipient], viewer.id,
+        'confirmation_handler_reassigned', '转正申请待您办理', '一份办理中的转正申请已改派给您，请查看当前待办。');
+    }
+    return { id, managerId, hrId: dto.hrId, companyApproverId: dto.companyApproverId };
   }
 
   async handlerCandidates(keyword: string | undefined, viewer: AuthUser) {
     this.assertConfirmationManager(viewer);
+    const scope = await this.dataScope.getConfirmationEmployeeFilter(viewer);
     const people = await this.prisma.user.findMany({
       where: { status: UserStatus.active, deletedAt: null,
+        AND: [scope],
         ...(keyword?.trim() ? { OR: [
           { name: { contains: keyword.trim(), mode: 'insensitive' as const } },
           { employeeNo: { contains: keyword.trim(), mode: 'insensitive' as const } },
@@ -161,6 +210,20 @@ export class ConfirmationService {
     return people.map((person) => ({ id: person.id, name: person.name, employeeNo: person.employeeNo,
       deptName: person.dept?.name ?? null,
       hrEligible: person.sysRole === SysRole.hr || (person.sysRole === SysRole.hr_user && person.hrCapabilities.includes('confirmation_manage')) }));
+  }
+
+  async myRoster(viewer: AuthUser) {
+    const employee = await this.prisma.user.findUnique({
+      where: { id: viewer.id, deletedAt: null },
+      select: { name: true, employeeNo: true, position: true, entryDate: true,
+        plannedRegularDate: true, dept: { select: { name: true, company: true } },
+        directManager: { select: { name: true } } },
+    });
+    if (!employee) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '员工档案不存在' });
+    return { name: employee.name, managerName: employee.directManager?.name ?? null,
+      employeeNo: employee.employeeNo, company: employee.dept?.company ?? null,
+      deptName: employee.dept?.name ?? null, position: employee.position,
+      entryDate: employee.entryDate, plannedRegularDate: employee.plannedRegularDate };
   }
 
   /** 仅指定 HR 办理人可为新版申请上传内部评议依据。 */
@@ -219,10 +282,14 @@ export class ConfirmationService {
   async meetingAttachmentKey(id: string, attachmentId: string, viewer: AuthUser): Promise<string> {
     const attachment = await this.prisma.confirmationMeetingAttachment.findUnique({
       where: { id: attachmentId },
-      include: { application: { select: { id: true, workflowVersion: true, hrId: true, companyApproverId: true } } },
+      include: { application: { select: { id: true, workflowVersion: true, submissionVersion: true,
+        status: true, hrId: true, companyApproverId: true } } },
     });
     if (!attachment || attachment.applicationId !== id || attachment.application.workflowVersion !== 2) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '评议附件不存在' });
+    }
+    if (attachment.application.status === ConfirmationStatus.draft || attachment.submissionVersion !== attachment.application.submissionVersion) {
+      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '评议附件不属于当前办理轮次' });
     }
     if (attachment.application.hrId !== viewer.id && attachment.application.companyApproverId !== viewer.id) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权下载内部评议附件' });
@@ -292,6 +359,7 @@ export class ConfirmationService {
     const existing = await this.prisma.confirmationApplication.findFirst({
       where: {
         employeeId: viewer.id,
+        workflowVersion: 2,
         status: { in: [
           ConfirmationStatus.draft,
           ConfirmationStatus.submitted,
@@ -398,7 +466,9 @@ export class ConfirmationService {
     }
     await this.prisma.$transaction(async (tx) => {
       const updated = await tx.confirmationApplication.updateMany({
-        where: { id, status: ConfirmationStatus.draft, employeeId: viewer.id },
+        where: { id, workflowVersion: 2, status: ConfirmationStatus.draft, employeeId: viewer.id,
+          submissionVersion: app.submissionVersion, summary: app.summary,
+          managerId: app.managerId, hrId: app.hrId, companyApproverId: app.companyApproverId },
         data: {
           status: ConfirmationStatus.submitted,
           submissionVersion: { increment: 1 },
@@ -429,6 +499,8 @@ export class ConfirmationService {
       });
     });
 
+    await this.notifyApplication(id, app.submissionVersion + 1, [app.managerId], viewer.id,
+      'confirmation_manager_pending', '转正申请待直属主管评价', '有一份员工转正申请待您评价。');
     return { id, status: ConfirmationStatus.submitted };
   }
 
@@ -523,10 +595,11 @@ export class ConfirmationService {
     if (!app) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '转正申请不存在' });
     }
-    this.assertCanView(app as unknown as ConfirmationWithRelations, viewer);
+    await this.assertCanView(app as unknown as ConfirmationWithRelations, viewer);
     const detail = this.mapToDetail(app as unknown as ConfirmationWithRelations, viewer);
     if (app.workflowVersion !== 2) return { ...detail, history: [] };
     const isInternalViewer = app.hrId === viewer.id || app.companyApproverId === viewer.id;
+    const canSeeManagerOpinion = isInternalViewer || app.managerId === viewer.id || this.isConfirmationManager(viewer);
     const logs = await this.prisma.auditLog.findMany({
       where: { entityType: 'confirmation_application', entityId: id, action: { startsWith: 'confirmation_' } },
       select: { id: true, action: true, createdAt: true, newValue: true, oldValue: true, user: { select: { name: true } } },
@@ -534,6 +607,7 @@ export class ConfirmationService {
     });
     const labels: Record<string, string> = {
       confirmation_handlers_assigned: 'HR 指定办理人',
+      confirmation_handlers_reassigned: 'HR 调整办理人',
       confirmation_employee_submitted: '员工提交申请',
       confirmation_manager_evaluated: '直属主管提交评价',
       confirmation_hr_conclusion_recorded: 'HR 记录线下评议',
@@ -554,8 +628,24 @@ export class ConfirmationService {
           : typeof newValue?.reason === 'string' ? newValue.reason : null)
         : log.action === 'confirmation_company_declined'
           ? (typeof newValue?.reason === 'string' ? newValue.reason : null) : null;
+      const snapshot = log.action === 'confirmation_returned_for_supplement' && oldValue
+        ? {
+          ...(typeof oldValue.summary === 'string' ? { summary: oldValue.summary } : {}),
+          ...(canSeeManagerOpinion && typeof oldValue.managerRecommendation === 'boolean'
+            ? { managerRecommendation: oldValue.managerRecommendation } : {}),
+          ...(canSeeManagerOpinion && typeof oldValue.managerComment === 'string'
+            ? { managerComment: oldValue.managerComment } : {}),
+          ...(isInternalViewer && typeof oldValue.voteResult === 'string'
+            ? { voteResult: oldValue.voteResult as VoteResult } : {}),
+          ...(isInternalViewer && typeof oldValue.voteComment === 'string'
+            ? { voteComment: oldValue.voteComment } : {}),
+          ...(isInternalViewer && typeof oldValue.hrComment === 'string'
+            ? { hrComment: oldValue.hrComment } : {}),
+          ...(isInternalViewer && typeof oldValue.proposedRegularDate === 'string'
+            ? { proposedRegularDate: oldValue.proposedRegularDate } : {}),
+        } : null;
       return [{ id: log.id, label: labels[log.action], actorName: log.user?.name ?? null,
-        occurredAt: log.createdAt, submissionVersion, note }];
+        occurredAt: log.createdAt, submissionVersion, note, snapshot }];
     });
     return detail;
   }
@@ -627,6 +717,8 @@ export class ConfirmationService {
           },
         });
       });
+      await this.notifyApplication(id, app.submissionVersion, [app.employeeId, app.hrId], viewer.id,
+        'confirmation_approved', '转正申请已同意', '公司已同意转正，请查看最终结论和生效日期。');
       return { id, status: ConfirmationStatus.approved };
     }
 
@@ -699,6 +791,12 @@ export class ConfirmationService {
       });
     });
 
+    await this.notifyApplication(id, app.submissionVersion,
+      [pendingRole === 'manager' ? app.hrId : app.companyApproverId], viewer.id,
+      pendingRole === 'manager' ? 'confirmation_hr_pending' : 'confirmation_company_pending',
+      pendingRole === 'manager' ? '转正申请待 HR 办理' : '转正申请待公司审批',
+      '有一份员工转正申请待您办理。');
+
     return { id, status: updateData.status as ConfirmationStatus };
   }
 
@@ -749,6 +847,8 @@ export class ConfirmationService {
         },
       });
     });
+    await this.notifyApplication(id, app.submissionVersion, [app.employeeId, app.hrId], viewer.id,
+      'confirmation_declined', '转正申请未获同意', '公司已作出转正决定，请查看办理结论。');
     return { id, status: ConfirmationStatus.rejected };
   }
 
@@ -824,10 +924,12 @@ export class ConfirmationService {
         },
       });
     });
+    await this.notifyApplication(id, app.submissionVersion, [app.employeeId], viewer.id,
+      'confirmation_returned', '转正申请需补充', '您的转正申请已退回，请查看原因并补充工作小结。');
     return { id, status: ConfirmationStatus.draft, returnReason: dto.reason.trim() };
   }
 
-  /** 预警：计划转正日期距今 ≤ 7 天且未提交/通过转正申请的试用期员工。 */
+  /** 预警：临期、逾期或缺少计划转正日期的试用期员工。 */
   async warnings(viewer: AuthUser): Promise<WarningItem[]> {
     this.assertConfirmationManager(viewer);
 
@@ -838,7 +940,7 @@ export class ConfirmationService {
       where: {
         status: UserStatus.probation,
         deletedAt: null,
-        plannedRegularDate: { lte: deadline },
+        OR: [{ plannedRegularDate: { lte: deadline } }, { plannedRegularDate: null }],
         AND: [scope],
       },
       select: {
@@ -884,20 +986,22 @@ export class ConfirmationService {
   // ---------------------------------------------------------------------------
 
   private assertConfirmationManager(viewer: AuthUser): void {
-    if (viewer.sysRole === SysRole.hr || (viewer.sysRole === SysRole.hr_user && viewer.hrCapabilities?.includes('confirmation_manage'))) return;
+    if (this.isConfirmationManager(viewer)) return;
     throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅获授权的 HR 可管理转正申请' });
   }
 
-  private assertCanView(app: ConfirmationWithRelations, viewer: AuthUser): void {
+  private isConfirmationManager(viewer: AuthUser): boolean {
+    return viewer.sysRole === SysRole.hr || (viewer.sysRole === SysRole.hr_user && Boolean(viewer.hrCapabilities?.includes('confirmation_manage')));
+  }
+
+  private async assertCanView(app: ConfirmationWithRelations, viewer: AuthUser): Promise<void> {
     if (app.workflowVersion === 2) {
       if (app.status === ConfirmationStatus.draft && !app.submissionVersion) {
         if (app.employeeId === viewer.id || app.hrId === viewer.id) return;
-        throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权查看该转正申请' });
+      } else if ([app.employeeId, app.managerId, app.hrId, app.companyApproverId].includes(viewer.id)) {
+        return;
       }
-      if ([app.employeeId, app.managerId, app.hrId, app.companyApproverId].includes(viewer.id)) return;
-      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权查看该转正申请' });
-    }
-    if (
+    } else if (
       app.employeeId === viewer.id ||
       app.managerId === viewer.id ||
       app.hrId === viewer.id ||
@@ -907,6 +1011,11 @@ export class ConfirmationService {
       viewer.sysRole === SysRole.system_admin
     ) {
       return;
+    }
+    if (this.isConfirmationManager(viewer)) {
+      const scope = await this.dataScope.getConfirmationEmployeeFilter(viewer);
+      const count = await this.prisma.user.count({ where: { AND: [scope, { id: app.employeeId }] } });
+      if (count === 1) return;
     }
     throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权查看该转正申请' });
   }
@@ -958,7 +1067,8 @@ export class ConfirmationService {
 
   private detailInclude(): Prisma.ConfirmationApplicationInclude {
     return {
-      employee: { select: { id: true, name: true } },
+      employee: { select: { id: true, name: true, employeeNo: true, position: true,
+        entryDate: true, plannedRegularDate: true, dept: { select: { name: true, company: true } } } },
       manager: { select: { id: true, name: true } },
       hr: { select: { id: true, name: true } },
       companyApprover: { select: { id: true, name: true } },
@@ -1066,6 +1176,9 @@ export class ConfirmationService {
 
     return {
       ...this.mapToListItem(app, viewer),
+      roster: { employeeNo: app.employee.employeeNo ?? null, company: app.employee.dept?.company ?? null,
+        deptName: app.employee.dept?.name ?? null, position: app.employee.position ?? null,
+        entryDate: app.employee.entryDate ?? null, plannedRegularDate: app.employee.plannedRegularDate ?? null },
       probationReviewId: app.probationReviewId,
       summary: app.summary,
       managerRecommendation: app.managerRecommendation,
@@ -1079,7 +1192,7 @@ export class ConfirmationService {
           ? (app.salary as unknown as { toNumber: () => number }).toNumber()
           : null
         : null,
-      voteParticipants: app.voteParticipants as string[],
+      voteParticipants: canViewInternalMeeting ? app.voteParticipants as string[] : [],
       voteComment: canViewInternalMeeting ? app.voteComment : null,
       rejectedBy: app.rejectedBy,
       rejectedAt: app.rejectedAt,
@@ -1142,7 +1255,9 @@ interface ConfirmationWithRelations {
   createdBy: string | null;
   createdAt: Date;
   updatedAt: Date;
-  employee: { id: string; name: string };
+  employee: { id: string; name: string; employeeNo?: string | null; position?: string | null;
+    entryDate?: Date | null; plannedRegularDate?: Date | null;
+    dept?: { name: string; company: string } | null };
   manager: { id: string; name: string } | null;
   hr: { id: string; name: string } | null;
   companyApprover: { id: string; name: string } | null;

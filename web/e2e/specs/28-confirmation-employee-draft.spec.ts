@@ -17,6 +17,10 @@ async function mockEmployeePage(page: import('@playwright/test').Page, status: '
   await page.route('**/api/v1/confirmation-applications**', async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
+    if (path.endsWith('/my-roster')) return route.fulfill({ json: apiResponse({
+      name: '试用期员工', employeeNo: 'E001', company: 'fuede', deptName: '业务部', position: '业务专员',
+      entryDate: '2026-07-01', plannedRegularDate: '2026-10-01', managerName: '花名册直属主管',
+    }) });
     if (path.endsWith('/mine')) {
       const items = draft ? [draft] : [];
       return route.fulfill({ json: apiResponse({ items, total: items.length, page: 1, pageSize: 10 }) });
@@ -49,6 +53,8 @@ test('probation employee saves a self-authored draft and sees the missing approv
   await page.goto('/confirmation-applications/mine');
   await page.getByRole('button', { name: '发起转正申请' }).click();
   const dialog = page.getByRole('dialog', { name: '转正申请 · 工作小结' });
+  await expect(dialog).toContainText('业务部 / 业务专员');
+  await expect(dialog).toContainText('2026-10-01');
   await dialog.getByRole('button', { name: '提交转正申请' }).click();
   await expect(dialog).toContainText('请填写试用期工作小结');
   expect(createBodies).toHaveLength(0);
@@ -343,7 +349,10 @@ test('HR assigns the two handlers from transfer management before employee submi
   let assigned: { hrId: string; companyApproverId: string } | null = null;
   await page.route('**/api/v1/confirmation-applications**', (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path.endsWith('/warnings')) return route.fulfill({ json: apiResponse([]) });
+    if (path.endsWith('/warnings')) return route.fulfill({ json: apiResponse([
+      { employeeId: 'employee-2', employeeName: '缺日期员工', employeeNo: 'E002', deptName: '业务部', plannedRegularDate: null, daysUntil: null, hasApplication: false },
+      { employeeId: 'employee-3', employeeName: '临期员工', employeeNo: 'E003', deptName: '业务部', plannedRegularDate: '2026-09-17', daysUntil: 3, hasApplication: false },
+    ]) });
     if (path.endsWith('/handler-candidates')) return route.fulfill({ json: apiResponse([
       { id: 'hr-1', name: 'HR 管理员', employeeNo: 'H001', deptName: '人事部', hrEligible: true },
       { id: 'approver-1', name: '公司审批人', employeeNo: 'C001', deptName: '管理层', hrEligible: false },
@@ -362,6 +371,8 @@ test('HR assigns the two handlers from transfer management before employee submi
     }) });
   });
   await page.goto('/confirmation-applications/manage');
+  await expect(page.getByText('缺日期员工')).toBeVisible();
+  await expect(page.getByText('计划转正日期待核实')).toBeVisible();
   await page.getByRole('button', { name: '指定办理人' }).last().click();
   const dialog = page.getByRole('dialog', { name: '指定转正办理人' });
   await dialog.getByRole('button', { name: '保存办理人' }).click();

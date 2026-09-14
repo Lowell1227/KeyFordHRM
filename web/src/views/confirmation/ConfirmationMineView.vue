@@ -11,12 +11,14 @@ import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import { usePagination } from '@/composables/usePagination';
 import { CONFIRMATION_STATUS_META } from '@/types/enums';
 import { formatDate } from '@/utils/date';
-import type { ConfirmationApplication } from '@/types/api.types';
+import type { ConfirmationApplication, ConfirmationRoster } from '@/types/api.types';
 
 const router = useRouter();
 const auth = useAuthStore();
 
 const list = ref<ConfirmationApplication[]>([]);
+const roster = ref<ConfirmationRoster | null>(null);
+const companyLabels: Record<string, string> = { fuede: '孚德', beijing_fuede: '北京孚德', fuede_sports: '孚德体育文化', fansibao: '凡思堡' };
 const loading = ref(false);
 const saving = ref(false);
 const draftDialogVisible = ref(false);
@@ -40,6 +42,7 @@ const {
 
 onMounted(() => {
   loadList();
+  confirmationApi.myRoster().then((data) => { roster.value = data; }).catch(() => { roster.value = null; });
 });
 
 async function loadList() {
@@ -205,6 +208,13 @@ function statusType(status: string): string {
 
     <el-dialog v-model="draftDialogVisible" title="转正申请 · 工作小结" width="min(560px, 96vw)" :close-on-click-modal="false">
       <p v-if="draftReturnReason" class="return-reason">退回原因：{{ draftReturnReason }}</p>
+      <div v-if="roster" class="roster-check" data-testid="confirmation-roster-check">
+        <div><span>员工</span><strong>{{ roster.name }}</strong></div>
+        <div><span>所属公司</span><strong>{{ companyLabels[roster.company ?? ''] || '待核实' }}</strong></div>
+        <div><span>部门 / 岗位</span><strong>{{ roster.deptName || '待核实' }} / {{ roster.position || '待核实' }}</strong></div>
+        <div><span>入职 / 计划转正</span><strong>{{ formatDate(roster.entryDate) }} / {{ formatDate(roster.plannedRegularDate) }}</strong></div>
+        <div><span>花名册直属主管</span><strong>{{ roster.managerName || '待 HR 核实' }}</strong></div>
+      </div>
       <div class="draft-field">
         <label for="confirmation-summary">试用期工作小结 <span class="required">*</span></label>
         <el-input id="confirmation-summary" v-model="summary" type="textarea" :rows="8" maxlength="4000" show-word-limit placeholder="简述工作成果、目标进展、需要改进的地方和后续计划" @input="summaryError = ''" />
@@ -232,5 +242,9 @@ function statusType(status: string): string {
 .required, .field-error { color: var(--el-color-danger); }
 .field-error { margin: 0; font-size: 12px; }
 .return-reason { margin: 0 0 12px; padding: 10px 12px; background: var(--el-color-warning-light-9); border-radius: 4px; overflow-wrap: anywhere; }
+.roster-check { display: grid; gap: 4px; padding: 8px 0 12px; margin-bottom: 12px; border-bottom: 1px solid var(--el-border-color-lighter); }
+.roster-check > div { display: grid; grid-template-columns: 108px minmax(0, 1fr); gap: 8px; font-size: 12px; line-height: 1.5; }
+.roster-check span { color: var(--el-text-color-secondary); }
+.roster-check strong { font-weight: 500; overflow-wrap: anywhere; }
 @media (max-width: 640px) { .header-actions { align-items: flex-start; flex-direction: column; } }
 </style>

@@ -1912,6 +1912,8 @@ export interface ConfirmationApplication {
   companyApproverId: string | null;
   companyApprover: { id: string; name: string } | null;
   summary?: string | null;
+  roster?: { employeeNo: string | null; company: CompanyCode | null; deptName: string | null;
+    position: string | null; entryDate: string | null; plannedRegularDate: string | null };
   managerRecommendation?: boolean | null;
   salary?: number | null;
   voteResult?: VoteResult | null;
@@ -1931,9 +1933,22 @@ export interface ConfirmationApplication {
   canReject?: boolean;
   canReturn?: boolean;
     pendingRole?: 'manager' | 'hr' | 'company' | null;
-    history?: Array<{ id: string; label: string; actorName: string | null; occurredAt: string; submissionVersion: number | null; note: string | null }>;
+    history?: Array<{ id: string; label: string; actorName: string | null; occurredAt: string; submissionVersion: number | null; note: string | null;
+      snapshot?: { summary?: string; managerRecommendation?: boolean; managerComment?: string;
+        voteResult?: VoteResult; voteComment?: string; hrComment?: string; proposedRegularDate?: string } | null }>;
   createdAt?: string;
   updatedAt?: string;
+}
+
+export interface ConfirmationRoster {
+  name: string;
+  managerName: string | null;
+  employeeNo: string | null;
+  company: CompanyCode | null;
+  deptName: string | null;
+  position: string | null;
+  entryDate: string | null;
+  plannedRegularDate: string | null;
 }
 
 export interface ApprovalStep {

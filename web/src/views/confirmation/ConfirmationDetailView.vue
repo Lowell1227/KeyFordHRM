@@ -15,6 +15,7 @@ const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 const user = computed(() => auth.user);
+const companyLabels: Record<string, string> = { fuede: '孚德', beijing_fuede: '北京孚德', fuede_sports: '孚德体育文化', fansibao: '凡思堡' };
 
 const appId = computed(() => route.params.id as string);
 const app = ref<ConfirmationApplication | null>(null);
@@ -292,6 +293,11 @@ function sortedSteps(steps?: ApprovalStep[]): ApprovalStep[] {
             <el-tag :type="statusType(app.status) as any" size="small">{{ app.status === 'draft' && app.returnReason ? '退回补充' : statusLabel(app.status) }}</el-tag>
           </el-descriptions-item>
           <el-descriptions-item label="主管">{{ app.manager?.name || '待 HR 核实' }}</el-descriptions-item>
+          <el-descriptions-item label="所属公司">{{ companyLabels[app.roster?.company ?? ''] || '待核实' }}</el-descriptions-item>
+          <el-descriptions-item label="部门">{{ app.roster?.deptName || '待核实' }}</el-descriptions-item>
+          <el-descriptions-item label="岗位">{{ app.roster?.position || '待核实' }}</el-descriptions-item>
+          <el-descriptions-item label="入职日期">{{ formatDate(app.roster?.entryDate) }}</el-descriptions-item>
+          <el-descriptions-item label="计划转正日期">{{ formatDate(app.roster?.plannedRegularDate) }}</el-descriptions-item>
           <el-descriptions-item label="HR">{{ app.hr?.name || '待 HR 配置' }}</el-descriptions-item>
           <el-descriptions-item label="公司审批人">{{ app.companyApprover?.name || '待 HR 配置' }}</el-descriptions-item>
           <el-descriptions-item label="实际转正日期">
@@ -402,6 +408,15 @@ function sortedSteps(steps?: ApprovalStep[]): ApprovalStep[] {
               <span>{{ event.submissionVersion ? `第 ${event.submissionVersion} 次提交 · ` : '' }}{{ event.label }}</span>
               <span>{{ event.actorName || '系统' }} · {{ formatDateTime(event.occurredAt) }}</span>
               <p v-if="event.note">{{ event.note }}</p>
+              <div v-if="event.snapshot && Object.keys(event.snapshot).length" class="history-snapshot">
+                <div v-if="event.snapshot.summary">原工作小结：{{ event.snapshot.summary }}</div>
+                <div v-if="event.snapshot.managerRecommendation !== undefined">原主管建议：{{ event.snapshot.managerRecommendation ? '建议转正' : '暂不建议转正' }}</div>
+                <div v-if="event.snapshot.managerComment">原主管评价：{{ event.snapshot.managerComment }}</div>
+                <div v-if="event.snapshot.voteResult">原 HR 评议结论：{{ VOTE_RESULT_LABELS[event.snapshot.voteResult] }}</div>
+                <div v-if="event.snapshot.voteComment">原结论依据：{{ event.snapshot.voteComment }}</div>
+                <div v-if="event.snapshot.hrComment">原 HR 办理意见：{{ event.snapshot.hrComment }}</div>
+                <div v-if="event.snapshot.proposedRegularDate">原拟生效日期：{{ formatDate(event.snapshot.proposedRegularDate) }}</div>
+              </div>
             </div>
           </el-collapse-item>
         </el-collapse>
@@ -530,6 +545,7 @@ function sortedSteps(steps?: ApprovalStep[]): ApprovalStep[] {
 .history-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 8px 0; border-bottom: 1px solid var(--el-border-color-lighter); overflow-wrap: anywhere; }
 .history-row span:last-of-type { color: var(--el-text-color-secondary); font-size: 12px; }
 .history-row p { flex-basis: 100%; margin: 0; white-space: pre-wrap; }
+.history-snapshot { flex-basis: 100%; display: grid; gap: 4px; padding: 6px 8px; background: var(--el-fill-color-light); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
 
 .steps {
   display: flex;

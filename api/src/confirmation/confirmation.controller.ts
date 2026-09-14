@@ -60,6 +60,11 @@ export class ConfirmationController {
     return this.confirmationService.findMine(dto, viewer);
   }
 
+  @Get('my-roster')
+  myRoster(@CurrentUser() viewer: AuthUser) {
+    return this.confirmationService.myRoster(viewer);
+  }
+
   @Get('warnings')
   @Roles(SysRole.hr)
   @HrCapabilities('confirmation_manage')
@@ -86,7 +91,7 @@ export class ConfirmationController {
   }
 
   @Post(':id/meeting-attachments')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
   addMeetingAttachment(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @UploadedFile() file: Express.Multer.File,

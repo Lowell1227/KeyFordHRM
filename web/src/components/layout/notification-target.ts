@@ -11,6 +11,11 @@ export function resolveNotificationTarget(
   if (notification.type === 'cycle_review_reminder' && cycleId) {
     return { path: '/cycles', query: { group: 'attention', cycleId } };
   }
+  const applicationId = typeof notification.extraData?.applicationId === 'string'
+    ? notification.extraData.applicationId : null;
+  if (notification.type.startsWith('confirmation_') && applicationId) {
+    return { name: 'ConfirmationDetail', params: { id: applicationId } };
+  }
   if (!taskId) return null;
   const periodId = typeof notification.extraData?.periodId === 'string'
     ? notification.extraData.periodId

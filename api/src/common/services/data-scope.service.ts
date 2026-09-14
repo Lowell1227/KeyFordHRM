@@ -22,7 +22,7 @@ export class DataScopeService {
     const operator = await this.prisma.user.findUnique({
       where: { id: viewer.id }, select: { dept: { select: { company: true } } },
     });
-    if (!operator?.dept?.company) return { id: viewer.id };
+    if (!operator?.dept?.company) return { id: { in: [] } };
     return { dept: { is: { company: operator.dept.company } } };
   }
 

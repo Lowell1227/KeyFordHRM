@@ -61,7 +61,7 @@ describe('DataScopeService', () => {
     it('does not grant company access without a roster department', async () => {
       jest.spyOn(prisma.user, 'findUnique').mockResolvedValue({ dept: null } as never);
       expect(await service.getConfirmationEmployeeFilter(makeUser({ sysRole: SysRole.hr_user })))
-        .toEqual({ id: 'user-1' });
+        .toEqual({ id: { in: [] } });
     });
   });
 
