@@ -440,3 +440,10 @@ Git 提交与远端状态：
 - 功能提交 `fd570dc` 已合并并推送 `origin/main`。仅替换 `kayford-deploy` 的 API、Web；迁移 `20260914191000_confirmation_employee_draft` 已应用，旧版转正草稿 1 条、已拒绝 1 条保持原样，PostgreSQL、Redis、MinIO 容器未更换。发布前数据库自定义格式备份和原 API/Web 镜像回滚标签均已验证，`ENABLE_TEST_QUICK_LOGIN=false`。
 - API 88 套／1049 项测试、API 构建、Web 类型检查和转正／周期页面针对性浏览器用例通过；生产外部首页、健康接口返回 200 且数据库为 `ok`，新版转正管理资源与运行容器哈希一致，未登录访问转正接口返回 401。当前没有已登录的生产角色会话，员工、直属主管、HR、公司审批人的真实办理路径仍待业务验收；不得将上线核验视为流程验收。发布清单见 `C:\Users\lwei\kayford-releases\probation-confirmation-20260914\release-manifest.json`。
 - 合并前主工作区未跟踪的同名需求稿已完整保留为 `docs/requirements/2026-09-14-probation-confirmation.original-untracked.md`，并在发布证据目录留有哈希一致的副本；该原稿未被覆盖或提交。
+
+### 2026-09-14：绩效改进计划独立流程（已发布，待业务验收）
+
+- 用户确认主管或更高层上级按实时管理链与部门范围为本级及下级员工随时发起，不依赖绩效结果公示或周期任务；关联周期选填且不限次数。发起人提交目标后依次由部门负责人、员工确认；退回写理由并反复重走目标确认。目标有名称、描述和合计 100% 的权重，计划预计完成日期选填。
+- 目标确认后由员工自评、当前直属上级评价、当前部门负责人评价、分管总审核；同人环节自动沿用，分管总驳回退当前直属上级重评。各评价环节逐项目标按百分制评分和填写内容，综合分按权重计算，HR/绩效专员全量查看但不办理，不回写周期绩效。工作台另列待办，操作记录保留每轮内容和理由；历史自动生成记录只读保留。
+- 功能提交 `9acee6f` 已推送 `origin/main` 并发布到 `kayford-deploy`。迁移 `20260914223000_independent_improvement_plan` 与 `20260914231000_improvement_plan_score_scale` 已应用；历史改进计划草稿仍为 1 条。发布前数据库自定义格式备份与 API/Web 回滚镜像已验证，仅替换 API/Web，PostgreSQL、Redis、MinIO 容器未变，测试快捷登录关闭。
+- API 89 套／1051 项测试及构建、Web 类型检查和生产构建、开发环境真实角色完整流转与 PC/390px 浏览器用例通过。外部健康接口、计划页面和资源返回 200，未登录待办接口返回 401，数据库迁移状态为最新；正式环境尚未用真实业务账号办理，业务验收待完成。发布证据见 `C:\Users\lwei\kayford-releases\9acee6f-improvement-plan\release-manifest.json`。
