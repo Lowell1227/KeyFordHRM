@@ -44,4 +44,16 @@ describe('StorageController contract material access', () => {
     )).rejects.toMatchObject({ response: expect.objectContaining({ message: '无权限管理合同材料' }) });
     expect(storage.uploadFile).not.toHaveBeenCalled();
   });
+
+  it('does not expose internal confirmation meeting files through generic download', async () => {
+    const storage = { pipeDownload: jest.fn() };
+    const controller = new StorageController(storage as any);
+
+    await expect((controller as any).download(
+      'confirmation-internal%2F2026%2F09%2F14%2Fminutes.pdf',
+      response(),
+      { id: 'admin-1', sysRole: SysRole.system_admin, hrCapabilities: [] },
+    )).rejects.toMatchObject({ response: expect.objectContaining({ message: '请从转正申请中下载内部评议附件' }) });
+    expect(storage.pipeDownload).not.toHaveBeenCalled();
+  });
 });

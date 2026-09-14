@@ -651,7 +651,7 @@ export class LaunchService {
     return result;
   }
 
-  /** 选出范围内员工；v2 保留试用期员工，并在计划中标记为豁免。 */
+  /** 选出范围内员工；v2 的试用期员工与正式员工按相同参与规则处理。 */
   private async findCandidates(
     tx: Prisma.TransactionClient,
     cycle: {
@@ -975,13 +975,6 @@ export class LaunchService {
         participantDisposition: 'top_leader_exempt',
         isExempt: true,
         reason: '最高负责人豁免',
-      };
-    }
-    if (this.isWorkflowV2(cycle) && candidate.status === UserStatus.probation) {
-      return {
-        participantDisposition: 'cycle_exempt',
-        isExempt: true,
-        reason: '试用期员工不参与本绩效计划',
       };
     }
     const exemption = this.resolveExemption(candidate, cycle, exemptRatio);

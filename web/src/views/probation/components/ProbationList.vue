@@ -1,9 +1,7 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue';
+import { ref, reactive, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
 import { Search, RefreshRight } from '@element-plus/icons-vue';
-import { useAuthStore } from '@/stores/auth.store';
 import { probationApi } from '@/api/probation.api';
 import { usePagination } from '@/composables/usePagination';
 import { PROBATION_STATUS_META } from '@/types/enums';
@@ -21,13 +19,7 @@ const props = defineProps<{
   mode: ListMode;
 }>();
 
-const emit = defineEmits<{
-  (e: 'edit', row: ProbationReview): void;
-}>();
-
 const router = useRouter();
-const auth = useAuthStore();
-const user = computed(() => auth.user);
 
 const list = ref<ProbationReview[]>([]);
 const loading = ref(false);
@@ -54,9 +46,9 @@ const statusOptions: ProbationReviewStatus[] = [
 ];
 
 const titleMap: Record<ListMode, string> = {
-  manage: '试用期考核管理',
-  manager: '试用期评分工作台',
-  mine: '我的试用期考核',
+  manage: '试用期历史记录',
+  manager: '试用期历史记录',
+  mine: '我的试用期历史记录',
 };
 
 onMounted(() => {
@@ -122,25 +114,6 @@ function signSummary(row: ProbationReview): string {
   return parts.length ? parts.join(' / ') : '未签字';
 }
 
-function canEdit(row: ProbationReview): boolean {
-  return props.mode === 'manage' && row.status !== 'closed';
-}
-
-function currentUserRole(row: ProbationReview): 'assessee' | 'assessor' | 'hr' | null {
-  if (!user.value) return null;
-  if (row.employeeId === user.value.id) return 'assessee';
-  if (row.managerId === user.value.id) return 'assessor';
-  if (['hr', 'system_admin'].includes(user.value.sysRole)) return 'hr';
-  return null;
-}
-
-function actionLabel(row: ProbationReview): string {
-  const role = currentUserRole(row);
-  if (role === 'assessee' && row.status === 'self_eval') return '去自评';
-  if (role === 'assessor' && row.status === 'manager_scoring') return '去评分';
-  if (role === 'hr' && row.status !== 'closed') return '去归档';
-  return '查看';
-}
 </script>
 
 <template>
@@ -209,20 +182,11 @@ function actionLabel(row: ProbationReview): string {
             <span class="sign-summary">{{ signSummary(row as ProbationReview) }}</span>
           </template>
         </el-table-column>
-        <el-table-column label="操作" width="160" fixed="right">
+        <el-table-column label="操作" width="100" fixed="right">
           <template #default="{ row }">
             <el-button link type="primary" size="small" @click="goDetail(row as ProbationReview)"
-              >{{ actionLabel(row as ProbationReview) }}</el-button
+              >查看</el-button
             >
-            <el-button
-              v-if="canEdit(row as ProbationReview)"
-              link
-              type="warning"
-              size="small"
-              @click="emit('edit', row as ProbationReview)"
-            >
-              编辑
-            </el-button>
           </template>
         </el-table-column>
       </el-table>
@@ -239,8 +203,7 @@ function actionLabel(row: ProbationReview): string {
           <div class="mobile-result-field"><span class="mobile-result-field__label">计划转正</span><span class="mobile-result-field__value">{{ formatDate(item.plannedRegularDate) }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">签字状态</span><span class="mobile-result-field__value">{{ signSummary(item) }}</span></div>
           <template #actions>
-            <el-button link type="primary" @click="goDetail(item)">{{ actionLabel(item) }}</el-button>
-            <el-button v-if="canEdit(item)" link type="warning" @click="emit('edit', item)">编辑</el-button>
+            <el-button link type="primary" @click="goDetail(item)">查看</el-button>
           </template>
         </MobileResultCard>
       </div>

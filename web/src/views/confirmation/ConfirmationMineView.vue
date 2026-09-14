@@ -1,7 +1,10 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import { computed, ref, onMounted } from 'vue';
 import { useRouter } from 'vue-router';
+import { isAxiosError } from 'axios';
+import { ElMessage } from 'element-plus';
 import { confirmationApi } from '@/api/confirmation.api';
+import { useAuthStore } from '@/stores/auth.store';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
@@ -11,9 +14,20 @@ import { formatDate } from '@/utils/date';
 import type { ConfirmationApplication } from '@/types/api.types';
 
 const router = useRouter();
+const auth = useAuthStore();
 
 const list = ref<ConfirmationApplication[]>([]);
 const loading = ref(false);
+const saving = ref(false);
+const draftDialogVisible = ref(false);
+const draftId = ref<string | null>(null);
+const summary = ref('');
+const summaryError = ref('');
+const actionError = ref('');
+const draftReturnReason = ref('');
+const canStart = computed(() => auth.user?.status === 'probation' && !list.value.some((item) =>
+  item.workflowVersion === 2 && ['draft', 'submitted', 'manager_approved', 'hr_approved'].includes(item.status),
+));
 
 const {
   page,
@@ -46,8 +60,78 @@ function goDetail(row: ConfirmationApplication) {
   router.push(`/confirmation-applications/${row.id}`);
 }
 
+function openCreate() {
+  draftId.value = null;
+  summary.value = '';
+  summaryError.value = '';
+  actionError.value = '';
+  draftReturnReason.value = '';
+  draftDialogVisible.value = true;
+}
+
+async function openDraft(row: ConfirmationApplication) {
+  const detail = await confirmationApi.findOne(row.id);
+  draftId.value = detail.id;
+  summary.value = detail.summary ?? '';
+  summaryError.value = '';
+  actionError.value = '';
+  draftReturnReason.value = detail.returnReason ?? '';
+  draftDialogVisible.value = true;
+}
+
+function errorText(error: unknown): string {
+  const message = isAxiosError(error) ? error.response?.data?.message : error instanceof Error ? error.message : null;
+  return typeof message === 'string' && message.trim() ? message : '操作未完成，请稍后重试';
+}
+
+async function persistDraft(): Promise<string> {
+  const saved = draftId.value
+    ? await confirmationApi.saveSelfDraft(draftId.value, summary.value)
+    : await confirmationApi.createSelfDraft(summary.value);
+  draftId.value = saved.id;
+  return saved.id;
+}
+
+async function saveDraft() {
+  saving.value = true;
+  actionError.value = '';
+  try {
+    await persistDraft();
+    draftDialogVisible.value = false;
+    ElMessage.success('草稿已保存');
+    await loadList();
+  } catch (error) {
+    actionError.value = errorText(error);
+  } finally {
+    saving.value = false;
+  }
+}
+
+async function submitDraft() {
+  summaryError.value = summary.value.trim() ? '' : '请填写试用期工作小结';
+  if (summaryError.value) return;
+  saving.value = true;
+  actionError.value = '';
+  try {
+    const id = await persistDraft();
+    await confirmationApi.submitSelf(id);
+    draftDialogVisible.value = false;
+    ElMessage.success('申请已提交，下一步由直属主管评价');
+    await loadList();
+  } catch (error) {
+    actionError.value = errorText(error);
+    await loadList();
+  } finally {
+    saving.value = false;
+  }
+}
+
 function statusLabel(status: string): string {
   return CONFIRMATION_STATUS_META[status as keyof typeof CONFIRMATION_STATUS_META]?.label ?? status;
+}
+
+function applicationStatusLabel(item: ConfirmationApplication): string {
+  return item.status === 'draft' && item.returnReason ? '退回补充' : statusLabel(item.status);
 }
 
 function statusType(status: string): string {
@@ -60,7 +144,11 @@ function statusType(status: string): string {
     <ChartCard class="header-card list-page-header-card">
       <template #title>我的转正申请</template>
 
-      <p class="tip">此处展示与您相关的转正申请进度，转正薪资等敏感信息不对员工本人展示。</p>
+      <div class="header-actions">
+        <span class="tip">填写工作小结后提交，由直属主管、HR 和公司审批人依次办理。</span>
+        <el-button link type="primary" @click="router.push('/probation-reviews/mine')">查看试用期历史记录</el-button>
+        <el-button v-if="canStart" type="primary" @click="openCreate">发起转正申请</el-button>
+      </div>
     </ChartCard>
 
     <ChartCard :padded="false" class="list-result-card">
@@ -69,7 +157,7 @@ function statusType(status: string): string {
         <el-table-column label="状态" width="130">
           <template #default="{ row }">
             <el-tag :type="statusType((row as ConfirmationApplication).status) as any" size="small">
-              {{ statusLabel((row as ConfirmationApplication).status) }}
+              {{ applicationStatusLabel(row as ConfirmationApplication) }}
             </el-tag>
           </template>
         </el-table-column>
@@ -85,10 +173,10 @@ function statusType(status: string): string {
         <el-table-column label="实际转正日期" width="130">
           <template #default="{ row }">{{ formatDate((row as ConfirmationApplication).actualRegularDate) }}</template>
         </el-table-column>
-        <el-table-column label="操作" width="100" fixed="right">
+        <el-table-column label="操作" width="120" fixed="right">
           <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="goDetail(row as ConfirmationApplication)">
-              查看
+            <el-button link type="primary" size="small" @click="(row as ConfirmationApplication).workflowVersion === 2 && (row as ConfirmationApplication).status === 'draft' ? openDraft(row as ConfirmationApplication) : goDetail(row as ConfirmationApplication)">
+              {{ (row as ConfirmationApplication).workflowVersion === 2 && (row as ConfirmationApplication).status === 'draft' ? '继续填写' : '查看' }}
             </el-button>
           </template>
         </el-table-column>
@@ -98,12 +186,12 @@ function statusType(status: string): string {
       <div v-loading="loading" class="mobile-result-list">
         <MobileResultCard v-for="item in list" :key="item.id">
           <template #title>转正申请</template>
-          <template #status><el-tag :type="statusType(item.status) as any" size="small">{{ statusLabel(item.status) }}</el-tag></template>
+          <template #status><el-tag :type="statusType(item.status) as any" size="small">{{ applicationStatusLabel(item) }}</el-tag></template>
           <div class="mobile-result-field"><span class="mobile-result-field__label">主管</span><span class="mobile-result-field__value">{{ item.manager?.name || '-' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">HR</span><span class="mobile-result-field__value">{{ item.hr?.name || '-' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">公司审批人</span><span class="mobile-result-field__value">{{ item.companyApprover?.name || '-' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">转正日期</span><span class="mobile-result-field__value">{{ formatDate(item.actualRegularDate) }}</span></div>
-          <template #actions><el-button link type="primary" @click="goDetail(item)">查看</el-button></template>
+          <template #actions><el-button link type="primary" @click="item.workflowVersion === 2 && item.status === 'draft' ? openDraft(item) : goDetail(item)">{{ item.workflowVersion === 2 && item.status === 'draft' ? '继续填写' : '查看' }}</el-button></template>
         </MobileResultCard>
       </div>
       <ListPagination
@@ -114,6 +202,21 @@ function statusType(status: string): string {
         @change="loadList"
       />
     </ChartCard>
+
+    <el-dialog v-model="draftDialogVisible" title="转正申请 · 工作小结" width="min(560px, 96vw)" :close-on-click-modal="false">
+      <p v-if="draftReturnReason" class="return-reason">退回原因：{{ draftReturnReason }}</p>
+      <div class="draft-field">
+        <label for="confirmation-summary">试用期工作小结 <span class="required">*</span></label>
+        <el-input id="confirmation-summary" v-model="summary" type="textarea" :rows="8" maxlength="4000" show-word-limit placeholder="简述工作成果、目标进展、需要改进的地方和后续计划" @input="summaryError = ''" />
+        <p v-if="summaryError" class="field-error">{{ summaryError }}</p>
+        <p v-if="actionError" class="field-error">{{ actionError }}</p>
+      </div>
+      <template #footer>
+        <el-button @click="draftDialogVisible = false">取消</el-button>
+        <el-button :loading="saving" @click="saveDraft">保存草稿</el-button>
+        <el-button type="primary" :loading="saving" @click="submitDraft">提交转正申请</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 
@@ -123,4 +226,11 @@ function statusType(status: string): string {
   font-size: 13px;
   margin: 0;
 }
+.header-actions { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.draft-field { display: grid; gap: 8px; }
+.draft-field label { font-size: 13px; font-weight: 600; }
+.required, .field-error { color: var(--el-color-danger); }
+.field-error { margin: 0; font-size: 12px; }
+.return-reason { margin: 0 0 12px; padding: 10px 12px; background: var(--el-color-warning-light-9); border-radius: 4px; overflow-wrap: anywhere; }
+@media (max-width: 640px) { .header-actions { align-items: flex-start; flex-direction: column; } }
 </style>

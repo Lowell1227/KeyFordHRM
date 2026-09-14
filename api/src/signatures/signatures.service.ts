@@ -55,6 +55,9 @@ export class SignaturesService {
 
   /** POST /signatures — 在线签字（幂等：同一记录+角色仅保留一条）。 */
   async create(dto: CreateSignatureDto, viewer: AuthUser): Promise<SignatureItem> {
+    if (dto.businessType === SignatureBusinessType.probation_task) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '独立试用期评分已停用，历史签字仅供查阅' });
+    }
     await this.assertCanSignAs(dto.businessType, dto.businessRecordId, dto.role, viewer);
 
     const method = dto.method ?? (dto.imageUrl ? SignatureMethod.handwritten_image : SignatureMethod.online_confirm);

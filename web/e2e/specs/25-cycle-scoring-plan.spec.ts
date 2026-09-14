@@ -221,6 +221,12 @@ async function mockIntegratedCyclePage(
         })),
       });
     }
+    if (path.endsWith('/cycles/participant-preview')) {
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({ items: [], total: 3, page: 1, pageSize: 1, departmentCount: 0 })),
+      });
+    }
     if (path.endsWith('/preflight')) {
       return route.fulfill({
         contentType: 'application/json',
@@ -234,7 +240,7 @@ async function mockIntegratedCyclePage(
             status: integratedCycle.status,
             goalSettingOpenAt: integratedCycle.goalSettingOpenAt,
           },
-          participantCount: 2,
+          participantCount: 3,
           templateCount: 0,
           participants: [
             {
@@ -246,6 +252,22 @@ async function mockIntegratedCyclePage(
               managerName: '王强',
               deptHeadId: 'manager-1',
               approverId: 'leader-1',
+              templateId: null,
+              templateName: null,
+              templateVersion: null,
+              isExempt: false,
+              exemptReason: null,
+              participantDisposition: 'active',
+            },
+            {
+              employeeId: 'probation-1',
+              employeeName: '孙珊',
+              deptId: null,
+              deptName: null,
+              managerId: 'manager-1',
+              managerName: '直属上级',
+              deptHeadId: null,
+              approverId: null,
               templateId: null,
               templateName: null,
               templateVersion: null,
@@ -270,12 +292,7 @@ async function mockIntegratedCyclePage(
               participantDisposition: 'top_leader_exempt',
             },
           ],
-          exclusions: [{
-            employeeId: 'probation-1',
-            employeeName: '孙珊',
-            reasonCode: 'PROBATION_NOT_IN_PLAN',
-            reason: '试用期员工不进入本绩效计划',
-          }],
+          exclusions: [],
           blockers: [],
           warnings: [],
         })),
@@ -308,7 +325,7 @@ async function mockIntegratedCyclePage(
         })),
       });
     }
-    if (request.method() === 'POST') {
+    if (request.method() === 'POST' && path === '/api/v1/cycles') {
       const body = request.postDataJSON() as Record<string, unknown>;
       options.createBodies?.push(body);
       return route.fulfill({
@@ -904,15 +921,16 @@ test.describe('cycle scoring plan integration', () => {
 
     await page.getByRole('button', { name: '发起考核' }).click();
     const preflightSummary = page.getByTestId('cycle-preflight-summary');
-    await expect(preflightSummary).toContainText('范围人数2人');
-    await expect(preflightSummary).toContainText('参与人员1人');
+    await expect(preflightSummary).toContainText('范围人数3人');
+    await expect(preflightSummary).toContainText('参与人员2人');
     await expect(preflightSummary).toContainText('豁免人员1人');
-    await expect(preflightSummary).toContainText('未进入范围1人');
+    await expect(preflightSummary).not.toContainText('未进入范围');
     await expect(preflightSummary).not.toContainText('公司最终审定人');
 
     const participantDetails = page.getByTestId('cycle-preflight-details');
     await participantDetails.locator('summary').click();
     await expect(participantDetails).toContainText('李宏');
+    await expect(participantDetails).toContainText('孙珊');
     await expect(participantDetails).toContainText('最高负责人豁免');
   });
 });

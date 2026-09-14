@@ -16,6 +16,16 @@ import { hasHrCapability } from '@/auth/hr-capabilities';
 export class DataScopeService {
   constructor(private readonly prisma: PrismaService) {}
 
+  /** 转正管理专用：普通 HR 的授权限定在花名册所属公司，不扩大其他员工档案权限。 */
+  async getConfirmationEmployeeFilter(viewer: AuthUser): Promise<Prisma.UserWhereInput> {
+    if (viewer.sysRole === SysRole.hr) return {};
+    const operator = await this.prisma.user.findUnique({
+      where: { id: viewer.id }, select: { dept: { select: { company: true } } },
+    });
+    if (!operator?.dept?.company) return { id: viewer.id };
+    return { dept: { is: { company: operator.dept.company } } };
+  }
+
   /**
    * 获取指定部门自身及其所有后代部门的 id 列表。
    *

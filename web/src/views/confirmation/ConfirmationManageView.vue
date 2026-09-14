@@ -1,101 +1,109 @@
 <script setup lang="ts">
-import { ref, reactive, computed, onMounted } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
+import { isAxiosError } from 'axios';
 import { ElMessage } from 'element-plus';
-import { Plus, Warning } from '@element-plus/icons-vue';
 import { confirmationApi } from '@/api/confirmation.api';
-import UserSelect from '@/components/common/UserSelect.vue';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import { usePagination } from '@/composables/usePagination';
-import {
-  CONFIRMATION_STATUS_META,
-  VOTE_RESULT_LABELS,
-} from '@/types/enums';
+import { CONFIRMATION_STATUS_META } from '@/types/enums';
 import { formatDate } from '@/utils/date';
-import type {
-  ConfirmationApplication,
-  ConfirmationWarning,
-} from '@/types/api.types';
+import type { ConfirmationApplication } from '@/types/api.types';
 import type { ConfirmationStatus } from '@/types/enums';
+import { useAuthStore } from '@/stores/auth.store';
 
 const router = useRouter();
-
+const auth = useAuthStore();
 const list = ref<ConfirmationApplication[]>([]);
 const loading = ref(false);
-const warnings = ref<ConfirmationWarning[]>([]);
-const warningsLoading = ref(false);
+const warnings = ref<Array<{ employeeId: string; employeeName: string; hasApplication: boolean; daysUntil: number | null }>>([]);
+type Candidate = { id: string; name: string; employeeNo: string | null; deptName: string | null; hrEligible: boolean };
+const candidates = ref<Candidate[]>([]);
+const candidateLoading = ref(false);
+const assignmentOpen = ref(false);
+const assignmentRow = ref<ConfirmationApplication | null>(null);
+const assignment = reactive<{ hrId: string; companyApproverId: string }>({ hrId: '', companyApproverId: '' });
+const assignmentError = ref('');
+const assignmentSaving = ref(false);
+const hrCandidates = computed(() => candidates.value.filter((person) => person.hrEligible));
+const missingApplications = computed(() => warnings.value.filter((item) => !item.hasApplication));
+const filters = reactive<{ keyword: string; status: ConfirmationStatus | '' }>({ keyword: '', status: '' });
+const statusOptions: ConfirmationStatus[] = ['draft', 'submitted', 'manager_approved', 'hr_approved', 'approved', 'rejected'];
+const { page, pageSize, total, pageSizeOptions, reset: resetPagination, withParams } = usePagination({ defaultPageSize: 10 });
 
-const filters = reactive<{
-  status: ConfirmationStatus | '';
-  keyword: string;
-}>({ status: '', keyword: '' });
+onMounted(() => { void loadList(); void loadWarnings(); });
 
-const {
-  page,
-  pageSize,
-  total,
-  pageSizeOptions,
-  reset: resetPagination,
-  withParams,
-} = usePagination({ defaultPageSize: 10 });
+async function loadWarnings() {
+  try { warnings.value = await confirmationApi.warnings(); }
+  catch { warnings.value = []; }
+}
 
-const dialogVisible = ref(false);
-const dialogTitle = computed(() => (form.id ? '编辑转正申请' : '发起转正申请'));
-const saving = ref(false);
-const submitting = ref(false);
+async function searchCandidates(keyword: string) {
+  candidateLoading.value = true;
+  try {
+    const found = await confirmationApi.handlerCandidates(keyword);
+    candidates.value = [...new Map([...candidates.value, ...found].map((person) => [person.id, person])).values()];
+  } finally { candidateLoading.value = false; }
+}
 
-const emptyForm = () => ({
-  id: '',
-  employeeId: '',
-  probationReviewId: '',
-  managerId: '',
-  hrId: '',
-  companyApproverId: '',
-  summary: '',
-  salary: undefined as number | undefined,
-  voteResult: '' as 'pass' | 'extend' | 'fail' | '',
-  voteParticipants: [] as string[],
-  voteComment: '',
-  voteMeetingTime: '',
-  actualRegularDate: '',
-});
+function canConfigure(row: ConfirmationApplication) {
+  return row.workflowVersion === 2 && row.status === 'draft' && (row.submissionVersion ?? 0) === 0;
+}
 
-const form = reactive(emptyForm());
+function canView(row: ConfirmationApplication) {
+  return row.workflowVersion === 1 ? auth.user?.sysRole === 'hr' : row.hrId === auth.user?.id;
+}
 
-const statusOptions: ConfirmationStatus[] = [
-  'draft',
-  'submitted',
-  'manager_approved',
-  'hr_approved',
-  'approved',
-  'rejected',
-];
+function openAssignment(row: ConfirmationApplication) {
+  assignmentRow.value = row;
+  assignment.hrId = row.hrId ?? '';
+  assignment.companyApproverId = row.companyApproverId ?? '';
+  assignmentError.value = '';
+  candidates.value = [
+    ...(row.hr ? [{ ...row.hr, employeeNo: null, deptName: null, hrEligible: true }] : []),
+    ...(row.companyApprover ? [{ ...row.companyApprover, employeeNo: null, deptName: null, hrEligible: false }] : []),
+  ];
+  assignmentOpen.value = true;
+  void searchCandidates('');
+}
 
-const voteOptions: Array<{ value: 'pass' | 'extend' | 'fail'; label: string }> = [
-  { value: 'pass', label: '通过' },
-  { value: 'extend', label: '延期' },
-  { value: 'fail', label: '不通过' },
-];
+function candidateLabel(person: Candidate) {
+  return [person.name, person.employeeNo, person.deptName].filter(Boolean).join(' · ');
+}
 
-onMounted(() => {
-  loadList();
-  loadWarnings();
-});
+async function saveAssignment() {
+  if (!assignmentRow.value) return;
+  if (!assignment.hrId || !assignment.companyApproverId) {
+    assignmentError.value = '请选择 HR 办理人和公司审批人'; return;
+  }
+  if (assignment.hrId === assignment.companyApproverId) {
+    assignmentError.value = '两项办理职责请指定不同人员'; return;
+  }
+  assignmentSaving.value = true;
+  assignmentError.value = '';
+  try {
+    await confirmationApi.assignHandlers(assignmentRow.value.id, { ...assignment });
+    assignmentOpen.value = false;
+    ElMessage.success('办理人已指定，员工现在可以提交申请');
+    await loadList();
+  } catch (error) {
+    assignmentError.value = isAxiosError(error) ? error.response?.data?.message ?? '指定失败，请重试'
+      : error instanceof Error ? error.message : '指定失败，请重试';
+  } finally { assignmentSaving.value = false; }
+}
 
 async function loadList() {
   loading.value = true;
   try {
-    const res = await confirmationApi.findAll(
-      withParams({
-        status: filters.status || undefined,
-        keyword: filters.keyword || undefined,
-      } as Record<string, unknown>),
-    );
-    list.value = res.items;
-    total.value = res.total;
+    const result = await confirmationApi.findAll(withParams({
+      keyword: filters.keyword || undefined,
+      status: filters.status || undefined,
+    }));
+    list.value = result.items;
+    total.value = result.total;
   } catch {
     list.value = [];
     total.value = 0;
@@ -104,417 +112,107 @@ async function loadList() {
   }
 }
 
-async function loadWarnings() {
-  warningsLoading.value = true;
-  try {
-    warnings.value = await confirmationApi.warnings();
-  } catch {
-    warnings.value = [];
-  } finally {
-    warningsLoading.value = false;
-  }
-}
-
-
-function onSearch() {
+function search() {
   resetPagination();
   loadList();
 }
 
-function onReset() {
-  filters.status = '';
+function reset() {
   filters.keyword = '';
-  resetPagination();
-  loadList();
+  filters.status = '';
+  search();
 }
 
-function openCreate() {
-  Object.assign(form, emptyForm());
-  dialogVisible.value = true;
+function statusLabel(row: ConfirmationApplication) {
+  if (row.status === 'draft' && row.returnReason) return '退回补充';
+  return CONFIRMATION_STATUS_META[row.status]?.label ?? row.status;
 }
 
-function openEdit(row: ConfirmationApplication) {
-  Object.assign(form, {
-    id: row.id,
-    employeeId: row.employeeId,
-    probationReviewId: row.probationReviewId ?? '',
-    managerId: row.managerId,
-    hrId: row.hrId,
-    companyApproverId: row.companyApproverId,
-    summary: row.summary ?? '',
-    salary: row.salary ?? undefined,
-    voteResult: row.voteResult ?? '',
-    voteParticipants: row.voteParticipants ?? [],
-    voteComment: row.voteComment ?? '',
-    voteMeetingTime: row.voteMeetingTime ?? '',
-    actualRegularDate: row.actualRegularDate ?? '',
-  });
-  dialogVisible.value = true;
+function statusType(row: ConfirmationApplication) {
+  return CONFIRMATION_STATUS_META[row.status]?.type ?? 'info';
 }
-
-async function handleSave() {
-  if (!form.employeeId || !form.managerId || !form.hrId || !form.companyApproverId) {
-    ElMessage.warning('请完整填写员工、主管、HR、公司审批人');
-    return;
-  }
-  saving.value = true;
-  try {
-    const payload = {
-      employeeId: form.employeeId,
-      probationReviewId: form.probationReviewId || undefined,
-      managerId: form.managerId,
-      hrId: form.hrId,
-      companyApproverId: form.companyApproverId,
-      summary: form.summary || undefined,
-      salary: form.salary,
-      voteResult: form.voteResult || undefined,
-      voteParticipants: form.voteParticipants.length ? form.voteParticipants : undefined,
-      voteComment: form.voteComment || undefined,
-      voteMeetingTime: form.voteMeetingTime || undefined,
-      actualRegularDate: form.actualRegularDate || undefined,
-    };
-    if (form.id) {
-      await confirmationApi.update(form.id, payload);
-    } else {
-      await confirmationApi.create(payload);
-    }
-    ElMessage.success(form.id ? '更新成功' : '发起成功');
-    dialogVisible.value = false;
-    loadList();
-    loadWarnings();
-  } finally {
-    saving.value = false;
-  }
-}
-
-async function handleSubmit(row: ConfirmationApplication) {
-  if (row.status !== 'draft') return;
-  submitting.value = true;
-  try {
-    await confirmationApi.submit(row.id);
-    ElMessage.success('已提交审批');
-    loadList();
-  } finally {
-    submitting.value = false;
-  }
-}
-
-function goDetail(row: ConfirmationApplication) {
-  router.push(`/confirmation-applications/${row.id}`);
-}
-
-function statusLabel(status: ConfirmationStatus): string {
-  return CONFIRMATION_STATUS_META[status]?.label ?? status;
-}
-
-function statusType(status: ConfirmationStatus): string {
-  return CONFIRMATION_STATUS_META[status]?.type ?? 'info';
-}
-
-function voteLabel(result?: string | null): string {
-  if (!result) return '-';
-  return VOTE_RESULT_LABELS[result as keyof typeof VOTE_RESULT_LABELS]?.label ?? result;
-}
-
-function voteType(result?: string | null): string {
-  if (!result) return 'info';
-  return VOTE_RESULT_LABELS[result as keyof typeof VOTE_RESULT_LABELS]?.type ?? 'info';
-}
-
 </script>
 
 <template>
-  <div class="confirmation-manage page-stack app-list-page">
-    <!-- 预警卡片 -->
-    <ChartCard class="warning-card list-auxiliary-card">
-      <template #title>
-        <span class="warning-title">
-          <el-icon class="warning-icon"><Warning /></el-icon>
-          转正申请预警（计划转正日期 ≤ 7 天且未提交申请）
-        </span>
-      </template>
-
-      <el-table v-loading="warningsLoading" :data="warnings" class="app-table" size="small">
-        <el-table-column label="员工" prop="employeeName" />
-        <el-table-column label="工号" prop="employeeNo" />
-        <el-table-column label="部门" prop="deptName" />
-        <el-table-column label="计划转正日期">
-          <template #default="{ row }">{{ formatDate(row.plannedRegularDate) }}</template>
-        </el-table-column>
-        <el-table-column label="剩余天数" prop="daysUntil" />
-        <el-table-column label="状态">
-          <template #default="{ row }">
-            <el-tag :type="row.hasApplication ? 'success' : 'danger'" size="small">
-              {{ row.hasApplication ? '已创建申请' : '未创建申请' }}
-            </el-tag>
-          </template>
-        </el-table-column>
-      </el-table>
-    </ChartCard>
-
-    <ChartCard class="header-card list-page-header-card">
-      <template #title>转正申请管理</template>
+  <div class="page-stack app-list-page">
+    <ChartCard class="list-page-header-card">
+      <template #title>转正管理</template>
       <template #extra>
-        <el-button data-testid="confirmation-create" type="primary" :icon="Plus" @click="openCreate">发起转正申请</el-button>
+        <el-button link type="primary" @click="router.push('/probation-reviews/manage')">查看试用期历史记录</el-button>
       </template>
-
       <QueryFilterPanel class="page-filter-panel">
-        <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
-        <el-form-item label="状态">
-          <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
-            <el-option
-              v-for="s in statusOptions"
-              :key="s"
-              :label="statusLabel(s)"
-              :value="s"
-            />
-          </el-select>
-        </el-form-item>
-        <el-form-item label="姓名">
-          <el-input v-model="filters.keyword" placeholder="请输入姓名" clearable style="width: 220px" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" @click="onSearch">查询</el-button>
-          <el-button @click="onReset">重置</el-button>
-        </el-form-item>
+        <el-form :inline="true" class="filter-form" @submit.prevent="search">
+          <el-form-item label="状态">
+            <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
+              <el-option v-for="status in statusOptions" :key="status" :label="CONFIRMATION_STATUS_META[status]?.label ?? status" :value="status" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="姓名"><el-input v-model="filters.keyword" placeholder="请输入姓名" clearable style="width: 220px" /></el-form-item>
+          <el-form-item><el-button type="primary" @click="search">查询</el-button><el-button @click="reset">重置</el-button></el-form-item>
         </el-form>
       </QueryFilterPanel>
+      <div v-if="missingApplications.length" class="confirmation-warning" data-testid="confirmation-missing-applications">
+        {{ missingApplications.length }} 名试用期员工临近或超过计划转正日期，尚未提交申请。请提醒员工发起；员工保存草稿后可在下方指定办理人。
+      </div>
     </ChartCard>
 
     <ChartCard :padded="false" class="list-result-card">
       <div class="desktop-result-table">
-      <el-table v-loading="loading" :data="list" height="100%" class="app-table">
-        <el-table-column label="员工" min-width="120">
-          <template #default="{ row }">{{ (row as ConfirmationApplication).employee?.name }}</template>
-        </el-table-column>
-        <el-table-column label="主管" min-width="120">
-          <template #default="{ row }">{{ (row as ConfirmationApplication).manager?.name }}</template>
-        </el-table-column>
-        <el-table-column label="状态" width="130">
-          <template #default="{ row }">
-            <el-tag :type="statusType((row as ConfirmationApplication).status) as any" size="small">
-              {{ statusLabel((row as ConfirmationApplication).status) }}
-            </el-tag>
-          </template>
-        </el-table-column>
-        <el-table-column label="表决结果" width="100">
-          <template #default="{ row }">
-            <el-tag
-              v-if="(row as ConfirmationApplication).voteResult"
-              :type="voteType((row as ConfirmationApplication).voteResult) as any"
-              size="small"
-            >
-              {{ voteLabel((row as ConfirmationApplication).voteResult) }}
-            </el-tag>
-            <span v-else class="text-placeholder">-</span>
-          </template>
-        </el-table-column>
-        <el-table-column label="实际转正日期" width="130">
-          <template #default="{ row }">{{ formatDate((row as ConfirmationApplication).actualRegularDate) }}</template>
-        </el-table-column>
-        <el-table-column label="操作" width="180" fixed="right">
-          <template #default="{ row }">
-            <el-button link type="primary" size="small" @click="goDetail(row as ConfirmationApplication)">
-              查看
-            </el-button>
-            <el-button
-              v-if="(row as ConfirmationApplication).status === 'draft'"
-              link
-              type="warning"
-              size="small"
-              @click="openEdit(row as ConfirmationApplication)"
-            >
-              编辑
-            </el-button>
-            <el-button
-              v-if="(row as ConfirmationApplication).status === 'draft'"
-              link
-              type="success"
-              size="small"
-              :loading="submitting"
-              @click="handleSubmit(row as ConfirmationApplication)"
-            >
-              提交
-            </el-button>
-          </template>
-        </el-table-column>
-      </el-table>
+        <el-table v-loading="loading" :data="list" height="100%" class="app-table">
+          <el-table-column label="员工" min-width="120"><template #default="{ row }">{{ (row as ConfirmationApplication).employee?.name }}</template></el-table-column>
+          <el-table-column label="状态" width="130"><template #default="{ row }"><el-tag :type="statusType(row as ConfirmationApplication) as any" size="small">{{ statusLabel(row as ConfirmationApplication) }}</el-tag></template></el-table-column>
+          <el-table-column label="直属主管" min-width="120"><template #default="{ row }">{{ (row as ConfirmationApplication).manager?.name || '待核实' }}</template></el-table-column>
+          <el-table-column label="HR 办理人" min-width="120"><template #default="{ row }">{{ (row as ConfirmationApplication).hr?.name || '待配置' }}</template></el-table-column>
+          <el-table-column label="公司审批人" min-width="120"><template #default="{ row }">{{ (row as ConfirmationApplication).companyApprover?.name || '待配置' }}</template></el-table-column>
+          <el-table-column label="实际转正日期" width="135"><template #default="{ row }">{{ formatDate((row as ConfirmationApplication).actualRegularDate) }}</template></el-table-column>
+          <el-table-column label="操作" width="135" fixed="right"><template #default="{ row }">
+            <el-button v-if="canConfigure(row as ConfirmationApplication)" link type="primary" @click="openAssignment(row as ConfirmationApplication)">指定办理人</el-button>
+            <el-button v-else-if="canView(row as ConfirmationApplication)" link type="primary" @click="router.push(`/confirmation-applications/${(row as ConfirmationApplication).id}`)">查看</el-button>
+            <span v-else class="muted-action">仅办理人查看</span>
+          </template></el-table-column>
+        </el-table>
       </div>
-
       <div v-loading="loading" class="mobile-result-list">
         <MobileResultCard v-for="item in list" :key="item.id">
           <template #title>{{ item.employee?.name || '-' }}</template>
-          <template #status><el-tag :type="statusType(item.status) as any" size="small">{{ statusLabel(item.status) }}</el-tag></template>
-          <div class="mobile-result-field"><span class="mobile-result-field__label">主管</span><span class="mobile-result-field__value">{{ item.manager?.name || '-' }}</span></div>
-          <div class="mobile-result-field"><span class="mobile-result-field__label">表决结果</span><span class="mobile-result-field__value">{{ voteLabel(item.voteResult) }}</span></div>
+          <template #status><el-tag :type="statusType(item) as any" size="small">{{ statusLabel(item) }}</el-tag></template>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">直属主管</span><span class="mobile-result-field__value">{{ item.manager?.name || '待核实' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">HR 办理人</span><span class="mobile-result-field__value">{{ item.hr?.name || '待配置' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">公司审批人</span><span class="mobile-result-field__value">{{ item.companyApprover?.name || '待配置' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">转正日期</span><span class="mobile-result-field__value">{{ formatDate(item.actualRegularDate) }}</span></div>
           <template #actions>
-            <el-button link type="primary" @click="goDetail(item)">查看</el-button>
-            <el-button v-if="item.status === 'draft'" link type="warning" @click="openEdit(item)">编辑</el-button>
-            <el-button v-if="item.status === 'draft'" link type="success" :loading="submitting" @click="handleSubmit(item)">提交</el-button>
+            <el-button v-if="canConfigure(item)" link type="primary" @click="openAssignment(item)">指定办理人</el-button>
+            <el-button v-else-if="canView(item)" link type="primary" @click="router.push(`/confirmation-applications/${item.id}`)">查看</el-button>
+            <span v-else class="muted-action">仅办理人查看</span>
           </template>
         </MobileResultCard>
       </div>
-      <ListPagination
-        v-model:current-page="page"
-        v-model:page-size="pageSize"
-        :page-sizes="pageSizeOptions"
-        :total="total"
-        @change="loadList"
-      />
+      <ListPagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="pageSizeOptions" :total="total" @change="loadList" />
     </ChartCard>
-
-    <el-dialog
-      v-model="dialogVisible"
-      data-testid="confirmation-dialog"
-      :title="dialogTitle"
-      width="720"
-      destroy-on-close
-      :close-on-click-modal="false"
-    >
+    <el-dialog v-model="assignmentOpen" title="指定转正办理人" width="min(480px, 94vw)" append-to-body>
+      <p class="assignment-tip">{{ assignmentRow?.employee?.name }}的直属主管由花名册确定。员工提交前，请指定后续办理人。</p>
       <el-form label-position="top">
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="试用期员工">
-              <UserSelect v-model="form.employeeId" status="probation" placeholder="搜索试用期员工" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="试用期考核 ID（可选）">
-              <el-input v-model="form.probationReviewId" placeholder="关联试用期考核" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-
-        <el-row :gutter="16">
-          <el-col :span="8">
-            <el-form-item label="主管审批人">
-              <UserSelect v-model="form.managerId" placeholder="搜索主管" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="HR 审批人">
-              <UserSelect v-model="form.hrId" placeholder="搜索 HR 审批人" />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="公司审批人">
-              <UserSelect v-model="form.companyApproverId" placeholder="搜索公司审批人" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-
-        <el-form-item label="试用期小结">
-          <el-input
-            v-model="form.summary"
-            type="textarea"
-            :rows="4"
-            maxlength="4000"
-            show-word-limit
-            placeholder="填写试用期小结"
-          />
+        <el-form-item label="HR 办理人" required>
+          <el-select v-model="assignment.hrId" filterable remote :remote-method="searchCandidates" :loading="candidateLoading" placeholder="搜索具备转正办理权限的 HR" style="width: 100%">
+            <el-option v-for="person in hrCandidates" :key="person.id" :value="person.id" :label="candidateLabel(person)" :disabled="person.id === assignmentRow?.employeeId" />
+          </el-select>
         </el-form-item>
-
-        <el-row :gutter="16">
-          <el-col :span="8">
-            <el-form-item label="转正后薪资（仅 HR/审批链可见）">
-              <el-input-number
-                v-model="form.salary"
-                :min="0"
-                :precision="2"
-                placeholder="薪资"
-                style="width: 100%"
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="实际转正日期">
-              <el-date-picker
-                v-model="form.actualRegularDate"
-                type="date"
-                placeholder="选择日期"
-                value-format="YYYY-MM-DD"
-                style="width: 100%"
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="8">
-            <el-form-item label="表决结果">
-              <el-select v-model="form.voteResult" placeholder="选择表决结果" clearable style="width: 100%">
-                <el-option
-                  v-for="opt in voteOptions"
-                  :key="opt.value"
-                  :label="opt.label"
-                  :value="opt.value"
-                />
-              </el-select>
-            </el-form-item>
-          </el-col>
-        </el-row>
-
-        <el-row :gutter="16">
-          <el-col :span="12">
-            <el-form-item label="会议时间">
-              <el-date-picker
-                v-model="form.voteMeetingTime"
-                type="datetime"
-                placeholder="选择会议时间"
-                value-format="YYYY-MM-DDTHH:mm:ss"
-                style="width: 100%"
-              />
-            </el-form-item>
-          </el-col>
-          <el-col :span="12">
-            <el-form-item label="参与人（多选）">
-              <UserSelect v-model="form.voteParticipants" multiple placeholder="搜索参与人（多选）" />
-            </el-form-item>
-          </el-col>
-        </el-row>
-
-        <el-form-item label="表决意见">
-          <el-input
-            v-model="form.voteComment"
-            type="textarea"
-            :rows="3"
-            maxlength="4000"
-            show-word-limit
-            placeholder="填写表决意见"
-          />
+        <el-form-item label="公司审批人" required>
+          <el-select v-model="assignment.companyApproverId" filterable remote :remote-method="searchCandidates" :loading="candidateLoading" placeholder="搜索公司审批人" style="width: 100%">
+            <el-option v-for="person in candidates" :key="person.id" :value="person.id" :label="candidateLabel(person)" :disabled="person.id === assignmentRow?.employeeId || person.id === assignment.hrId || person.id === auth.user?.id" />
+          </el-select>
         </el-form-item>
+        <p v-if="assignmentError" class="field-error" role="alert">{{ assignmentError }}</p>
       </el-form>
-
-      <template #footer>
-        <div class="dialog-footer">
-          <el-button @click="dialogVisible = false">取消</el-button>
-          <el-button type="primary" :loading="saving" @click="handleSave">保存</el-button>
-        </div>
-      </template>
+      <template #footer><el-button @click="assignmentOpen = false">取消</el-button><el-button type="primary" :loading="assignmentSaving" @click="saveAssignment">保存办理人</el-button></template>
     </el-dialog>
   </div>
 </template>
 
 <style scoped>
-.warning-title {
-  display: inline-flex;
-  align-items: center;
-}
-
-.warning-icon {
-  color: var(--el-color-danger);
-  margin-right: 6px;
-}
-
-.filter-form :deep(.el-form-item) {
-  margin-bottom: 0;
-}
-
-.text-placeholder {
-  color: var(--el-text-color-placeholder);
-}
-
-.dialog-footer {
-  display: flex;
-  justify-content: flex-end;
-  gap: 12px;
-}
+.filter-form :deep(.el-form-item) { margin-bottom: 0; }
+.confirmation-warning { margin-top: 12px; color: var(--el-color-warning-dark-2); font-size: 13px; line-height: 1.5; }
+.assignment-tip { margin: 0 0 12px; color: var(--el-text-color-regular); font-size: 13px; }
+.field-error { color: var(--el-color-danger); font-size: 12px; margin: -4px 0 4px; }
+.muted-action { color: var(--el-text-color-placeholder); font-size: 12px; }
 </style>

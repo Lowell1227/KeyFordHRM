@@ -95,10 +95,12 @@ export class BusinessCapabilitiesService {
         }),
         this.prisma.confirmationApplication.count({
           where: {
+            workflowVersion: 2,
+            submissionVersion: { gt: 0 },
             OR: [
-              { status: 'submitted', managerId: user.id },
-              { status: 'manager_approved', hrId: user.id },
-              { status: 'hr_approved', companyApproverId: user.id },
+              { managerId: user.id },
+              { hrId: user.id },
+              { companyApproverId: user.id },
             ],
           },
         }),

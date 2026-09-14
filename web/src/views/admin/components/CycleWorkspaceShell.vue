@@ -104,23 +104,8 @@ type V2PreflightParticipant = LaunchPreflightResult['participants'][number] & {
   participantDisposition?: 'active' | 'cycle_exempt' | 'top_leader_exempt';
 };
 
-type V2PreflightExclusion = {
-  employeeId: string;
-  employeeName: string;
-  reasonCode: 'PROBATION_NOT_IN_PLAN';
-  reason: string;
-};
-
 function preflightParticipants(result: LaunchPreflightResult): V2PreflightParticipant[] {
   return result.participants as V2PreflightParticipant[];
-}
-
-function preflightExclusions(result: LaunchPreflightResult): V2PreflightExclusion[] {
-  return (result as LaunchPreflightResult & { exclusions?: V2PreflightExclusion[] }).exclusions ?? [];
-}
-
-function probationExclusionCount(result: LaunchPreflightResult): number {
-  return preflightExclusions(result).filter((item) => item.reasonCode === 'PROBATION_NOT_IN_PLAN').length;
 }
 
 type PreflightIssue = LaunchPreflightResult['warnings'][number];
@@ -509,7 +494,6 @@ watch(() => props.cycle?.id, () => {
                 <span>范围人数<strong>{{ preflight.participantCount }}</strong>人</span>
                 <span>参与人员<strong>{{ preflightActiveCount }}</strong>人</span>
                 <span>豁免人员<strong>{{ preflightExemptedCount }}</strong>人</span>
-                <span v-if="cycle.workflowVersion === 2 && probationExclusionCount(preflight) > 0">未进入范围<strong>{{ probationExclusionCount(preflight) }}</strong>人</span>
               </span>
               <span v-else-if="participantRecord" class="cycle-participant-summary" data-testid="cycle-participant-summary">
                 <span>范围人数<strong>{{ participantRecord.summary.total }}</strong>人</span>

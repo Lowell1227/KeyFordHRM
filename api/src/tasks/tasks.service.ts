@@ -255,6 +255,10 @@ export class TasksService {
       where.cycleId = dto.cycleId;
     }
 
+    if (dto.employeeId) {
+      where.employeeId = dto.employeeId;
+    }
+
     if (dto.status) {
       where.status = dto.status;
     }

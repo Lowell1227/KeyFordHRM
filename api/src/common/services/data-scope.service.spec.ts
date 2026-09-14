@@ -33,6 +33,7 @@ describe('DataScopeService', () => {
             },
             user: {
               findMany: jest.fn(),
+              findUnique: jest.fn(),
             },
           },
         },
@@ -45,6 +46,23 @@ describe('DataScopeService', () => {
 
   afterEach(() => {
     jest.clearAllMocks();
+  });
+
+  describe('getConfirmationEmployeeFilter', () => {
+    it('keeps full HR scope but limits an authorized ordinary HR to the roster company', async () => {
+      expect(await service.getConfirmationEmployeeFilter(makeUser({ sysRole: SysRole.hr }))).toEqual({});
+      jest.spyOn(prisma.user, 'findUnique').mockResolvedValue({ dept: { company: 'fuede' } } as never);
+      const filter = await service.getConfirmationEmployeeFilter(makeUser({
+        sysRole: SysRole.hr_user, hrCapabilities: ['confirmation_manage'],
+      }));
+      expect(filter).toEqual({ dept: { is: { company: 'fuede' } } });
+    });
+
+    it('does not grant company access without a roster department', async () => {
+      jest.spyOn(prisma.user, 'findUnique').mockResolvedValue({ dept: null } as never);
+      expect(await service.getConfirmationEmployeeFilter(makeUser({ sysRole: SysRole.hr_user })))
+        .toEqual({ id: 'user-1' });
+    });
   });
 
   describe('getSubDeptIds', () => {

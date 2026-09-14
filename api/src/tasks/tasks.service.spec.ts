@@ -325,6 +325,15 @@ describe('TasksService', () => {
   }
 
   describe('findMine', () => {
+    it('keeps a requested employee filter inside the existing task data scope', async () => {
+      dataScope.getVisibleEmployeeFilter.mockResolvedValue({ id: { in: ['emp-1'] } });
+      prisma.assessmentTask.count.mockResolvedValue(0);
+      prisma.assessmentTask.findMany.mockResolvedValue([]);
+      await service.findAll({ employeeId: 'emp-2', page: 1, pageSize: 10 } as any, makeViewer({ id: 'manager-1' }));
+      expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ employeeId: 'emp-2', employee: { id: { in: ['emp-1'] } } }),
+      }));
+    });
     it.each(['findMine', 'findAll'] as const)('masks the employee unpublished result in %s while retaining other-employee and published results', async method => {
       const base = buildFullTask('hr_calibration');
       prisma.assessmentTask.count.mockResolvedValue(3);

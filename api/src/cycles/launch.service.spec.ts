@@ -770,7 +770,7 @@ describe('LaunchService preflight', () => {
     }));
   });
 
-  it('keeps probation employees visible in the workflow v2 roster as exempt participants', async () => {
+  it('keeps probation employees active in the workflow v2 roster and creates normal tasks', async () => {
     const probationEmployee = {
       ...candidate,
       id: '99999999-9999-4999-8999-999999999999',
@@ -791,24 +791,24 @@ describe('LaunchService preflight', () => {
     expect(preflight.participantCount).toBe(3);
     expect(preflight.participants).toContainEqual(expect.objectContaining({
       employeeId: probationEmployee.id,
-      participantDisposition: 'cycle_exempt',
-      isExempt: true,
-      exemptReason: '试用期员工不参与本绩效计划',
+      participantDisposition: 'active',
+      isExempt: false,
+      exemptReason: null,
     }));
     expect(preflight.exclusions).toEqual([]);
 
-    await service.launch(cycleId, operator, {
+    const launch = await service.launch(cycleId, operator, {
       now: new Date('2026-12-23T00:00:00.000Z'),
       expectedPlanHash: preflight.planHash!,
     });
 
+    expect(launch).toEqual(expect.objectContaining({ activeTasks: 2, exemptedTasks: 1 }));
     expect(tx.assessmentTask.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         employeeId: probationEmployee.id,
-        status: 'exempted',
-        isExempt: true,
-        participantDisposition: 'cycle_exempt',
-        exemptReason: '试用期员工不参与本绩效计划',
+        status: 'indicator_drafting',
+        isExempt: false,
+        participantDisposition: 'active',
       }),
     });
   });

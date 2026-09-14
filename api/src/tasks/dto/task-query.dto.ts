@@ -7,6 +7,10 @@ import { PaginationDto } from '@/common/dto/pagination.dto';
 export class TaskQueryDto extends PaginationDto {
   @IsOptional()
   @IsUUID()
+  employeeId?: string;
+
+  @IsOptional()
+  @IsUUID()
   cycleId?: string;
 
   @IsOptional()

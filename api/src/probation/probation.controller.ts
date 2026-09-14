@@ -2,6 +2,7 @@ import {
   Body,
   Controller,
   Get,
+  GoneException,
   Param,
   ParseUUIDPipe,
   Post,
@@ -26,7 +27,7 @@ export class ProbationController {
   @Post()
   @Roles(SysRole.hr, SysRole.system_admin)
   create(@Body() dto: CreateProbationReviewDto, @CurrentUser() viewer: AuthUser) {
-    return this.probationService.create(dto, viewer);
+    return this.retired();
   }
 
   @Get()
@@ -57,7 +58,7 @@ export class ProbationController {
     @Body() dto: UpdateProbationReviewDto,
     @CurrentUser() viewer: AuthUser,
   ) {
-    return this.probationService.update(id, dto, viewer);
+    return this.retired();
   }
 
   @Post(':id/self-eval')
@@ -66,7 +67,7 @@ export class ProbationController {
     @Body() dto: SubmitSelfEvalDto,
     @CurrentUser() viewer: AuthUser,
   ) {
-    return this.probationService.submitSelfEval(id, dto, viewer);
+    return this.retired();
   }
 
   @Post(':id/manager-score')
@@ -75,12 +76,16 @@ export class ProbationController {
     @Body() dto: SubmitManagerScoreDto,
     @CurrentUser() viewer: AuthUser,
   ) {
-    return this.probationService.submitManagerScore(id, dto, viewer);
+    return this.retired();
   }
 
   @Post(':id/close')
   @Roles(SysRole.hr, SysRole.system_admin)
   close(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() viewer: AuthUser) {
-    return this.probationService.close(id, viewer);
+    return this.retired();
+  }
+
+  private retired(): never {
+    throw new GoneException('独立试用期评分已停用。绩效考核请进入周期与计划；转正请由员工本人发起申请。');
   }
 }

@@ -7,30 +7,40 @@ import {
   Post,
   Put,
   Query,
+  Res,
+  UploadedFile,
+  UseInterceptors,
 } from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import { Response } from 'express';
 import { SysRole } from '@prisma/client';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { Roles } from '@/common/decorators/roles.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import { ConfirmationService } from './confirmation.service';
-import { CreateConfirmationDto } from './dto/create-confirmation.dto';
-import { UpdateConfirmationDto } from './dto/update-confirmation.dto';
+import { CreateSelfConfirmationDto } from './dto/create-self-confirmation.dto';
+import { SaveSelfConfirmationDto } from './dto/save-self-confirmation.dto';
 import { ConfirmationQueryDto } from './dto/confirmation-query.dto';
 import { ApproveConfirmationDto } from './dto/approve-confirmation.dto';
 import { RejectConfirmationDto } from './dto/reject-confirmation.dto';
+import { StorageService } from '@/storage/storage.service';
+import { BackfillMeetingDateDto } from './dto/backfill-meeting-date.dto';
+import { ReturnConfirmationDto } from './dto/return-confirmation.dto';
+import { AssignConfirmationHandlersDto } from './dto/assign-confirmation-handlers.dto';
+import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
 
 @Controller('confirmation-applications')
 export class ConfirmationController {
-  constructor(private readonly confirmationService: ConfirmationService) {}
+  constructor(private readonly confirmationService: ConfirmationService, private readonly storageService: StorageService) {}
 
   @Post()
-  @Roles(SysRole.hr, SysRole.system_admin)
-  create(@Body() dto: CreateConfirmationDto, @CurrentUser() viewer: AuthUser) {
+  create(@Body() dto: CreateSelfConfirmationDto, @CurrentUser() viewer: AuthUser) {
     return this.confirmationService.create(dto, viewer);
   }
 
   @Get()
-  @Roles(SysRole.hr, SysRole.system_admin)
+  @Roles(SysRole.hr)
+  @HrCapabilities('confirmation_manage')
   findAll(@Query() dto: ConfirmationQueryDto, @CurrentUser() viewer: AuthUser) {
     return this.confirmationService.findAll(dto, viewer);
   }
@@ -40,15 +50,69 @@ export class ConfirmationController {
     return this.confirmationService.findPending(dto, viewer);
   }
 
+  @Get('assigned-history')
+  findAssignedHistory(@Query() dto: ConfirmationQueryDto, @CurrentUser() viewer: AuthUser) {
+    return this.confirmationService.findAssignedHistory(dto, viewer);
+  }
+
   @Get('mine')
   findMine(@Query() dto: ConfirmationQueryDto, @CurrentUser() viewer: AuthUser) {
     return this.confirmationService.findMine(dto, viewer);
   }
 
   @Get('warnings')
-  @Roles(SysRole.hr, SysRole.system_admin)
+  @Roles(SysRole.hr)
+  @HrCapabilities('confirmation_manage')
   warnings(@CurrentUser() viewer: AuthUser) {
     return this.confirmationService.warnings(viewer);
+  }
+
+  @Get('handler-candidates')
+  @Roles(SysRole.hr)
+  @HrCapabilities('confirmation_manage')
+  handlerCandidates(@Query('keyword') keyword: string | undefined, @CurrentUser() viewer: AuthUser) {
+    return this.confirmationService.handlerCandidates(keyword, viewer);
+  }
+
+  @Put(':id/handlers')
+  @Roles(SysRole.hr)
+  @HrCapabilities('confirmation_manage')
+  assignHandlers(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: AssignConfirmationHandlersDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.confirmationService.assignHandlers(id, dto, viewer);
+  }
+
+  @Post(':id/meeting-attachments')
+  @UseInterceptors(FileInterceptor('file'))
+  addMeetingAttachment(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.confirmationService.addMeetingAttachment(id, file, viewer);
+  }
+
+  @Get(':id/meeting-attachments/:attachmentId/download')
+  async downloadMeetingAttachment(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('attachmentId', new ParseUUIDPipe({ version: '4' })) attachmentId: string,
+    @Res() res: Response,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    const key = await this.confirmationService.meetingAttachmentKey(id, attachmentId, viewer);
+    await this.storageService.pipeDownload(key, res);
+  }
+
+  @Put(':id/meeting-date')
+  backfillMeetingDate(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: BackfillMeetingDateDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.confirmationService.backfillMeetingDate(id, dto, viewer);
   }
 
   @Get(':id')
@@ -57,19 +121,26 @@ export class ConfirmationController {
   }
 
   @Put(':id')
-  @Roles(SysRole.hr, SysRole.system_admin)
   update(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
-    @Body() dto: UpdateConfirmationDto,
+    @Body() dto: SaveSelfConfirmationDto,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.confirmationService.update(id, dto, viewer);
   }
 
   @Post(':id/submit')
-  @Roles(SysRole.hr, SysRole.system_admin)
   submit(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() viewer: AuthUser) {
     return this.confirmationService.submit(id, viewer);
+  }
+
+  @Post(':id/return')
+  returnForSupplement(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: ReturnConfirmationDto,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.confirmationService.returnForSupplement(id, dto, viewer);
   }
 
   @Post(':id/approve')

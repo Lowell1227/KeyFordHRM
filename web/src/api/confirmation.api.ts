@@ -3,8 +3,6 @@ import type {
   Paginated,
   ConfirmationApplication,
   ConfirmationQuery,
-  CreateConfirmationBody,
-  UpdateConfirmationBody,
   ConfirmationWarning,
 } from '@/types/api.types';
 
@@ -12,18 +10,71 @@ function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
   return http.get(url, { params }) as unknown as Promise<T>;
 }
 
-function apiPost<T>(url: string, data?: unknown): Promise<T> {
-  return http.post(url, data) as unknown as Promise<T>;
-}
-
-function apiPut<T>(url: string, data?: unknown): Promise<T> {
-  return http.put(url, data) as unknown as Promise<T>;
-}
-
 export const confirmationApi = {
-  /** POST /confirmation-applications — HR 创建转正申请 */
-  create(body: CreateConfirmationBody): Promise<ConfirmationApplication> {
-    return apiPost('/confirmation-applications', body);
+  handlerCandidates(keyword?: string): Promise<Array<{ id: string; name: string; employeeNo: string | null; deptName: string | null; hrEligible: boolean }>> {
+    return apiGet('/confirmation-applications/handler-candidates', { keyword });
+  },
+
+  assignHandlers(id: string, body: { hrId: string; companyApproverId: string }): Promise<{ id: string; hrId: string; companyApproverId: string }> {
+    return http.put(`/confirmation-applications/${id}/handlers`, body, { skipErrorMessage: true }) as unknown as Promise<{ id: string; hrId: string; companyApproverId: string }>;
+  },
+  /** 新流程：试用期员工本人创建草稿。 */
+  createSelfDraft(summary: string): Promise<ConfirmationApplication> {
+    return http.post('/confirmation-applications', { summary }, { skipErrorMessage: true }) as unknown as Promise<ConfirmationApplication>;
+  },
+
+  /** 新流程：员工本人保存工作小结。 */
+  saveSelfDraft(id: string, summary: string): Promise<ConfirmationApplication> {
+    return http.put(`/confirmation-applications/${id}`, { summary }, { skipErrorMessage: true }) as unknown as Promise<ConfirmationApplication>;
+  },
+
+  /** 新流程：员工本人提交。 */
+  submitSelf(id: string): Promise<{ id: string; status: string }> {
+    return http.post(`/confirmation-applications/${id}/submit`, {}, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
+  },
+
+  submitManagerEvaluation(id: string, recommendation: boolean, comment: string): Promise<{ id: string; status: string }> {
+    return http.post(`/confirmation-applications/${id}/approve`, { recommendation, comment }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
+  },
+
+  submitHrConclusion(id: string, body: {
+    voteResult: 'pass' | 'extend' | 'fail';
+    voteComment?: string;
+    meetingDate?: string;
+    proposedRegularDate: string;
+    comment?: string;
+  }): Promise<{ id: string; status: string }> {
+    return http.post(`/confirmation-applications/${id}/approve`, body, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
+  },
+
+  uploadMeetingAttachment(id: string, file: File): Promise<{ id: string; name: string; size: number; mimeType: string; uploadedById: string; createdAt: string }> {
+    const formData = new FormData();
+    formData.append('file', file);
+    return http.post(`/confirmation-applications/${id}/meeting-attachments`, formData, {
+      headers: { 'Content-Type': 'multipart/form-data' }, skipErrorMessage: true,
+    }) as unknown as Promise<{ id: string; name: string; size: number; mimeType: string; uploadedById: string; createdAt: string }>;
+  },
+
+  downloadMeetingAttachment(id: string, attachmentId: string): Promise<Blob> {
+    return http.get(`/confirmation-applications/${id}/meeting-attachments/${attachmentId}/download`, {
+      responseType: 'blob', skipErrorMessage: true,
+    }).then((response) => (response as unknown as { data: Blob }).data);
+  },
+
+  backfillMeetingDate(id: string, meetingDate: string): Promise<{ id: string; meetingDate: string }> {
+    return http.put(`/confirmation-applications/${id}/meeting-date`, { meetingDate }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; meetingDate: string }>;
+  },
+
+  approveCompany(id: string, confirmedRegularDate: string, comment?: string): Promise<{ id: string; status: string }> {
+    return http.post(`/confirmation-applications/${id}/approve`, { confirmedRegularDate, comment }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
+  },
+
+  declineCompany(id: string, reason: string): Promise<{ id: string; status: string }> {
+    return http.post(`/confirmation-applications/${id}/reject`, { reason }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
+  },
+
+  returnForSupplement(id: string, reason: string): Promise<{ id: string; status: string; returnReason: string }> {
+    return http.post(`/confirmation-applications/${id}/return`, { reason }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string; returnReason: string }>;
   },
 
   /** GET /confirmation-applications — HR 管理列表 */
@@ -34,6 +85,10 @@ export const confirmationApi = {
   /** GET /confirmation-applications/pending — 当前用户待审批列表 */
   findPending(query?: ConfirmationQuery): Promise<Paginated<ConfirmationApplication>> {
     return apiGet('/confirmation-applications/pending', query as Record<string, unknown>);
+  },
+
+  findAssignedHistory(query?: ConfirmationQuery): Promise<Paginated<ConfirmationApplication>> {
+    return apiGet('/confirmation-applications/assigned-history', query as Record<string, unknown>);
   },
 
   /** GET /confirmation-applications/mine — 员工查看自己的 */
@@ -51,23 +106,4 @@ export const confirmationApi = {
     return apiGet(`/confirmation-applications/${id}`);
   },
 
-  /** PUT /confirmation-applications/:id — HR 修改草稿 */
-  update(id: string, body: UpdateConfirmationBody): Promise<ConfirmationApplication> {
-    return apiPut(`/confirmation-applications/${id}`, body);
-  },
-
-  /** POST /confirmation-applications/:id/submit — HR 提交审批 */
-  submit(id: string): Promise<{ id: string; status: string }> {
-    return apiPost(`/confirmation-applications/${id}/submit`);
-  },
-
-  /** POST /confirmation-applications/:id/approve — 审批通过 */
-  approve(id: string, comment?: string): Promise<{ id: string; status: string }> {
-    return apiPost(`/confirmation-applications/${id}/approve`, { comment });
-  },
-
-  /** POST /confirmation-applications/:id/reject — 驳回 */
-  reject(id: string, reason: string): Promise<{ id: string; status: string }> {
-    return apiPost(`/confirmation-applications/${id}/reject`, { reason });
-  },
 };

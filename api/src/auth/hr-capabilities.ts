@@ -6,6 +6,7 @@ export const HR_CAPABILITIES = [
   'cycle_plan_review',
   'performance_calibration',
   'performance_publish',
+  'confirmation_manage',
 ] as const;
 
 export type HrCapability = typeof HR_CAPABILITIES[number];

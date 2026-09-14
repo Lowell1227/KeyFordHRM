@@ -12,7 +12,7 @@ export interface UploadedFileMeta {
   mimeType: string;
 }
 
-export type UploadPurpose = 'general' | 'employee-contract-image' | 'employee-contract-attachment';
+export type UploadPurpose = 'general' | 'employee-contract-image' | 'employee-contract-attachment' | 'confirmation-internal';
 
 const ALLOWED_MIME_TYPES = new Set([
   'image/jpeg',
@@ -74,7 +74,7 @@ export class StorageService implements OnModuleInit {
       ? 'employee-contracts/images'
       : purpose === 'employee-contract-attachment'
         ? 'employee-contracts/attachments'
-        : 'uploads';
+        : purpose === 'confirmation-internal' ? 'confirmation-internal' : 'uploads';
     const safeOriginalName = file.originalname.replace(/[\\/]/g, '_');
     const objectName = `${prefix}/${today}/${randomUUID()}-${safeOriginalName}`;
 
@@ -108,7 +108,7 @@ export class StorageService implements OnModuleInit {
     const originalName = this.extractOriginalFilename(objectName);
     res.setHeader('Content-Type', stat.metaData?.['content-type'] ?? 'application/octet-stream');
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    const disposition = objectName.startsWith('employee-contracts/') ? 'attachment' : 'inline';
+    const disposition = objectName.startsWith('employee-contracts/') || objectName.startsWith('confirmation-internal/') ? 'attachment' : 'inline';
     res.setHeader('Content-Disposition', `${disposition}; filename*=UTF-8''${encodeURIComponent(originalName)}`);
     stream.pipe(res);
   }

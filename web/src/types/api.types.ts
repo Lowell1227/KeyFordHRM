@@ -85,7 +85,8 @@ export type HrCapability =
   | 'cycle_plan_edit'
   | 'cycle_plan_review'
   | 'performance_calibration'
-  | 'performance_publish';
+  | 'performance_publish'
+  | 'confirmation_manage';
 
 export interface CurrentUser {
   id: string;
@@ -1896,22 +1897,31 @@ export interface ProbationReviewActionResult {
 
 export interface ConfirmationApplication {
   id: string;
+  workflowVersion?: number;
+  submissionVersion?: number;
+  returnReason?: string | null;
+  returnedAt?: string | null;
   status: ConfirmationStatus;
   employeeId: string;
   employee: { id: string; name: string };
   probationReviewId?: string | null;
-  managerId: string;
-  manager: { id: string; name: string };
-  hrId: string;
-  hr: { id: string; name: string };
-  companyApproverId: string;
-  companyApprover: { id: string; name: string };
+  managerId: string | null;
+  manager: { id: string; name: string } | null;
+  hrId: string | null;
+  hr: { id: string; name: string } | null;
+  companyApproverId: string | null;
+  companyApprover: { id: string; name: string } | null;
   summary?: string | null;
+  managerRecommendation?: boolean | null;
   salary?: number | null;
   voteResult?: VoteResult | null;
   voteParticipants?: string[];
   voteComment?: string | null;
   voteMeetingTime?: string | null;
+  meetingDate?: string | null;
+  proposedRegularDate?: string | null;
+  voteRecordedAt?: string | null;
+  meetingAttachments?: Array<{ id: string; name: string; size: number; mimeType: string; uploadedById: string; createdAt: string }>;
   actualRegularDate?: string | null;
   rejectedBy?: { id: string; name: string } | null;
   rejectedAt?: string | null;
@@ -1919,7 +1929,9 @@ export interface ConfirmationApplication {
   steps?: ApprovalStep[];
   canApprove?: boolean;
   canReject?: boolean;
-  pendingRole?: 'manager' | 'hr' | 'company' | null;
+  canReturn?: boolean;
+    pendingRole?: 'manager' | 'hr' | 'company' | null;
+    history?: Array<{ id: string; label: string; actorName: string | null; occurredAt: string; submissionVersion: number | null; note: string | null }>;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -1939,23 +1951,6 @@ export interface ConfirmationQuery {
   status?: ConfirmationStatus;
   keyword?: string;
 }
-
-export interface CreateConfirmationBody {
-  employeeId: string;
-  probationReviewId?: string;
-  managerId: string;
-  hrId: string;
-  companyApproverId: string;
-  summary?: string;
-  salary?: number;
-  voteResult?: VoteResult;
-  voteParticipants?: string[];
-  voteComment?: string;
-  voteMeetingTime?: string;
-  actualRegularDate?: string;
-}
-
-export type UpdateConfirmationBody = Partial<CreateConfirmationBody>;
 
 export interface ConfirmationWarning {
   employeeId: string;
