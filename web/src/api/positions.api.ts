@@ -26,7 +26,7 @@ export const positionsApi = {
   findAll(params: { keyword?: string; includeInactive?: boolean } = {}): Promise<PositionRecord[]> {
     return http.get('/positions', { params }) as unknown as Promise<PositionRecord[]>;
   },
-  create(body: { code: string; name: string; jobFamily?: string | null }): Promise<PositionChangeRequest> {
+  create(body: { name: string; jobFamily?: string | null }): Promise<PositionChangeRequest> {
     return http.post('/positions', body) as unknown as Promise<PositionChangeRequest>;
   },
   update(id: string, body: { code?: string; name?: string; jobFamily?: string | null }): Promise<PositionChangeRequest> {

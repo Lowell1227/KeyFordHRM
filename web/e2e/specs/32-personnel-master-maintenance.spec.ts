@@ -2,7 +2,6 @@ import { expect, test } from '@playwright/test';
 import { routes } from '../../src/router/routes';
 
 const apiResponse = (data: unknown) => ({ code: 0, message: 'success', data, timestamp: Date.now() });
-const webBaseUrl = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173';
 
 test('personnel master data has four independent routes', () => {
   expect(routes.filter((route) => ['/users', '/organization', '/positions', '/personnel-change-reviews'].includes(route.path)).map((route) => route.meta?.title))
@@ -12,11 +11,11 @@ test('personnel master data has four independent routes', () => {
 test('HR can submit a position from the position directory', async ({ page }) => {
   let submitted: unknown = null;
   await page.addInitScript(() => {
-    localStorage.setItem('token', 'mock-admin-token');
+    localStorage.setItem('token', 'mock-hr-token');
     localStorage.setItem('expiresAt', String(Date.now() + 600_000));
   });
   await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(0)) }));
-  await page.route('**/api/v1/auth/me', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ id: 'admin-1', name: '系统管理员', sysRole: 'system_admin', canViewAll: true })) }));
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ id: 'hr-1', name: 'HR', sysRole: 'hr', hrCapabilities: ['organization_edit', 'employee_archive_edit'] })) }));
   await page.route('**/api/v1/positions**', async (route) => {
     if (route.request().method() === 'POST') {
       submitted = route.request().postDataJSON();
@@ -25,15 +24,21 @@ test('HR can submit a position from the position directory', async ({ page }) =>
     return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse([{ id: 'p1', code: 'SALES-01', name: '销售专员', jobFamily: '销售', isActive: true, activeEmployeeCount: 6 }])) });
   });
 
-  await page.goto(`${webBaseUrl}/positions`);
+  await page.goto('/positions');
   await expect(page.locator('.desktop-result-table').getByText('销售专员', { exact: true })).toBeVisible();
+  await expect(page.getByText('SALES-01')).toHaveCount(0);
   await page.getByRole('button', { name: '新增岗位' }).click();
   const dialog = page.getByRole('dialog', { name: '新增岗位' });
-  await dialog.locator('.el-form-item').filter({ hasText: '岗位编码' }).locator('input').fill('OPS-01');
+  await expect(dialog.getByText('岗位编码')).toHaveCount(0);
   await dialog.locator('.el-form-item').filter({ hasText: '岗位名称' }).locator('input').fill('运营专员');
   await dialog.locator('.el-form-item').filter({ hasText: '岗位族' }).locator('input').fill('运营');
   await dialog.getByRole('button', { name: '提交审核' }).click();
-  await expect.poll(() => submitted).toEqual({ code: 'OPS-01', name: '运营专员', jobFamily: '运营' });
+  await expect.poll(() => submitted).toEqual({ name: '运营专员', jobFamily: '运营' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('.mobile-result-list').getByText('销售专员', { exact: true })).toBeVisible();
+  await expect(page.getByText('SALES-01')).toHaveCount(0);
+  await page.locator('.mobile-result-list').getByRole('button', { name: '编辑' }).click();
+  await expect(page.getByRole('dialog', { name: '编辑岗位' }).getByText('岗位编码')).toHaveCount(0);
 });
 
 test('HR administrator can review self-submitted department and position changes', async ({ page }) => {
@@ -99,7 +104,7 @@ test('HR administrator can review self-submitted department and position changes
     })),
   }));
 
-  await page.goto(`${webBaseUrl}/personnel-change-reviews`);
+  await page.goto('/personnel-change-reviews');
   await expect(page.locator('.review-category-section > .desktop-result-table > .review-table')).toHaveCount(2);
   await expect(page.locator('.department-review-card')).toHaveCount(0);
   await page.getByRole('button', { name: '组织架构 1' }).click();
@@ -109,6 +114,7 @@ test('HR administrator can review self-submitted department and position changes
 
   await page.getByRole('button', { name: '岗位目录 1' }).click();
   const positionRow = page.locator('.review-table .el-table__row').filter({ hasText: '自建岗位' });
+  await expect(positionRow.getByText('SELF-01')).toHaveCount(0);
   await expect(positionRow.getByRole('button', { name: '退回' })).toBeEnabled();
   await expect(positionRow.getByRole('button', { name: '通过' })).toBeEnabled();
 });

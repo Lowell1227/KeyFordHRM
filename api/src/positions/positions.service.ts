@@ -4,6 +4,7 @@ import {
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
+import { randomUUID } from 'node:crypto';
 import { AccountType, Prisma, SysRole, UserStatus } from '@prisma/client';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import type { AuthUser } from '@/common/types/auth.types';
@@ -56,7 +57,7 @@ export class PositionsService {
   }
 
   async create(dto: CreatePositionDto, operator: AuthUser) {
-    const proposedValue = this.normalized(dto);
+    const proposedValue = this.normalized({ ...dto, code: dto.code || `POS-${randomUUID()}` });
     return this.prisma.$transaction(async (tx) => {
       const duplicates = await tx.position.findFirst({
         where: {
@@ -65,19 +66,19 @@ export class PositionsService {
             { name: { equals: proposedValue.name, mode: 'insensitive' } },
           ],
         },
-        select: { code: true, name: true },
+        select: { name: true },
       });
       const warnings = duplicates
-        ? [`已存在相似岗位：${duplicates.code} · ${duplicates.name}`]
+        ? [`已存在相似岗位：${duplicates.name}`]
         : [];
       const pendingCreates = await tx.positionChangeRequest.findMany({
         where: { action: 'create', status: { in: ['pending', 'applying'] } },
         select: { id: true, proposedValue: true },
       });
-      if (pendingCreates.some((item) => this.samePositionValue(
-        proposedValue,
-        this.record(item.proposedValue),
-      ))) {
+      if (pendingCreates.some((item) => {
+        const pending = this.record(item.proposedValue);
+        return pending.name === proposedValue.name && pending.jobFamily === proposedValue.jobFamily;
+      })) {
         throw new ConflictException({
           code: ERROR_CODE.CONFLICT,
           message: '相同岗位已有变更审核中，请先处理现有申请',

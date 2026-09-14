@@ -249,7 +249,7 @@ defineExpose({ submit, reset, isDirty });
           <el-select v-model="form.employee.company"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select>
         </el-form-item>
         <el-form-item label="所属部门"><el-tree-select v-model="form.employee.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
-        <el-form-item label="岗位"><el-select v-model="form.employee.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="`${position.code} · ${position.name}`" :value="position.id" /></el-select></el-form-item>
+        <el-form-item label="岗位"><el-select v-model="form.employee.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
         <el-form-item label="职级"><el-input v-model="form.employee.jobGrade" /></el-form-item>
         <el-form-item label="职系"><el-input v-model="form.employee.jobFamily" /></el-form-item>
         <el-form-item label="花名册直属主管"><UserSelect v-model="form.employee.managerId" :disabled-ids="archive ? [archive.id] : []" /></el-form-item>

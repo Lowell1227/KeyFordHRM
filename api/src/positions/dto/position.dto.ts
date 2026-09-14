@@ -24,10 +24,11 @@ export class PositionQueryDto {
 }
 
 export class CreatePositionDto {
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(40)
-  code!: string;
+  code?: string;
 
   @IsString()
   @MinLength(1)

@@ -40,7 +40,6 @@ describe('PositionsService', () => {
     const service = new PositionsService(prisma as any);
 
     await expect(service.create({
-      code: 'HRBP',
       name: 'HRBP',
       jobFamily: '人力资源',
     }, submitter)).resolves.toMatchObject({ status: 'pending', action: 'create' });
@@ -52,7 +51,7 @@ describe('PositionsService', () => {
         status: 'pending',
         createdById: submitter.id,
         proposedValue: expect.objectContaining({
-          code: 'HRBP',
+          code: expect.stringMatching(/^POS-[0-9A-F-]{36}$/),
           name: 'HRBP',
           jobFamily: '人力资源',
           isActive: true,
@@ -68,7 +67,7 @@ describe('PositionsService', () => {
       positionChangeRequest: {
         findMany: jest.fn().mockResolvedValue([{
           id: 'position-create-pending',
-          proposedValue: { code: 'HRBP', name: 'HRBP', jobFamily: '人力资源', isActive: true },
+          proposedValue: { code: 'POS-EXISTING', name: 'HRBP', jobFamily: '人力资源', isActive: true },
         }]),
         create: jest.fn(),
       },
@@ -79,7 +78,6 @@ describe('PositionsService', () => {
     } as any);
 
     await expect(service.create({
-      code: ' hrbp ',
       name: 'HRBP',
       jobFamily: ' 人力资源 ',
     }, submitter)).rejects.toMatchObject({
@@ -88,7 +86,7 @@ describe('PositionsService', () => {
     expect(tx.positionChangeRequest.create).not.toHaveBeenCalled();
   });
 
-  it('岗位编码名称和岗位族未变化时不生成审核', async () => {
+  it('岗位名称和岗位族未变化时不生成审核', async () => {
     const create = jest.fn();
     const prisma = {
       position: {
@@ -101,7 +99,6 @@ describe('PositionsService', () => {
     const service = new PositionsService(prisma as any);
 
     await expect(service.update('position-1', {
-      code: ' hrbp ',
       name: 'HRBP',
       jobFamily: ' 人力资源 ',
     }, submitter)).rejects.toMatchObject({

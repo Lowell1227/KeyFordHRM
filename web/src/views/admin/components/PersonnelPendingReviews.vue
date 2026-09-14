@@ -646,7 +646,7 @@ onMounted(async () => {
         <el-table-column type="index" label="序号" :width="reviewTableColumns.index" align="center" />
         <el-table-column label="变更类型" :width="reviewTableColumns.changeType"><template #default="{ row }"><el-tag type="warning" effect="plain">{{ positionActionLabel((row as PositionChangeRequest).action) }}</el-tag></template></el-table-column>
         <el-table-column prop="positionName" label="审核对象" :width="reviewTableColumns.subject" />
-        <el-table-column label="变更内容" :min-width="reviewTableColumns.content"><template #default="{ row }"><div>岗位编码：{{ (row as PositionChangeRequest).proposedValue.code || '-' }}；岗位族：{{ (row as PositionChangeRequest).proposedValue.jobFamily || '未分类' }}</div><div v-if="(row as PositionChangeRequest).warnings?.length" class="review-warning">{{ (row as PositionChangeRequest).warnings.join('；') }}</div></template></el-table-column>
+        <el-table-column label="变更内容" :min-width="reviewTableColumns.content"><template #default="{ row }"><div>岗位名称：{{ (row as PositionChangeRequest).proposedValue.name || '-' }}；岗位族：{{ (row as PositionChangeRequest).proposedValue.jobFamily || '未分类' }}</div><div v-if="(row as PositionChangeRequest).warnings?.length" class="review-warning">{{ (row as PositionChangeRequest).warnings.join('；') }}</div></template></el-table-column>
         <el-table-column label="提交人" :width="reviewTableColumns.submitter"><template #default="{ row }">{{ (row as PositionChangeRequest).createdBy?.name || '未知' }}</template></el-table-column>
         <el-table-column label="提交时间" :width="reviewTableColumns.submittedAt"><template #default="{ row }">{{ formatDateTime((row as PositionChangeRequest).createdAt) }}</template></el-table-column>
         <el-table-column label="操作" :width="reviewTableColumns.actions" fixed="right"><template #default="{ row }"><el-button @click="rejectPosition(row as PositionChangeRequest)">退回</el-button><el-button type="primary" @click="approvePosition(row as PositionChangeRequest)">通过</el-button></template></el-table-column>
@@ -656,7 +656,7 @@ onMounted(async () => {
         <MobileResultCard v-for="item in positionItems" :key="item.id">
           <template #title><el-checkbox :model-value="selectedPositions.some((row) => row.id === item.id)" @change="togglePositionSelection(item, Boolean($event))">{{ item.positionName }}</el-checkbox></template>
           <template #status><el-tag type="warning" effect="plain">{{ positionActionLabel(item.action) }}</el-tag></template>
-          <div class="mobile-result-field"><span class="mobile-result-field__label">岗位信息</span><span class="mobile-result-field__value">{{ item.proposedValue.code || '-' }} · {{ item.proposedValue.jobFamily || '未分类' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">岗位信息</span><span class="mobile-result-field__value">{{ item.proposedValue.name || '-' }} · {{ item.proposedValue.jobFamily || '未分类' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">提交人</span><span class="mobile-result-field__value">{{ item.createdBy?.name || '未知' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">提交时间</span><span class="mobile-result-field__value">{{ formatDateTime(item.createdAt) }}</span></div>
           <template #actions><el-button @click="rejectPosition(item)">退回</el-button><el-button type="primary" @click="approvePosition(item)">通过</el-button></template>
