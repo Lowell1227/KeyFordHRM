@@ -269,8 +269,9 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/probation/ProbationManageView.vue'),
     meta: {
       requiresAuth: true,
-      title: '试用期历史记录',
+      title: '试用期考核历史',
       roles: ['hr', 'system_admin'],
+      navigation: { module: 'performance', label: '试用期考核历史', order: 190, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -279,8 +280,9 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/probation/ProbationManagerView.vue'),
     meta: {
       requiresAuth: true,
-      title: '试用期历史记录',
+      title: '负责的试用期考核历史',
       capability: 'canHandleProbationReviews',
+      navigation: { module: 'performance', label: '负责的考核历史', order: 200, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -289,14 +291,15 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/probation/ProbationMineView.vue'),
     meta: {
       requiresAuth: true,
-      title: '我的试用期历史记录',
+      title: '我的试用期考核历史',
+      navigation: { module: 'performance', label: '我的试用期考核历史', order: 210, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
   },
   {
     path: '/probation-reviews/:id',
     name: 'ProbationDetail',
     component: () => import('@/views/probation/ProbationDetailView.vue'),
-    meta: { requiresAuth: true, title: '试用期历史记录详情' },
+    meta: { requiresAuth: true, title: '试用期考核历史详情' },
   },
   {
     path: '/confirmation-applications/manage',

@@ -33,7 +33,7 @@ onMounted(async () => {
   <div v-loading="loading" class="page-stack">
     <div class="page-header">
       <el-button link :icon="ArrowLeft" @click="router.back()">返回</el-button>
-      <h2>试用期历史记录</h2>
+      <h2>试用期考核历史</h2>
     </div>
 
     <template v-if="review">

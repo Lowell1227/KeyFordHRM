@@ -23,6 +23,7 @@ const warnings = ref<ConfirmationWarning[]>([]);
 type Candidate = { id: string; name: string; employeeNo: string | null; deptName: string | null; hrEligible: boolean };
 const candidates = ref<Candidate[]>([]);
 const candidateLoading = ref(false);
+const attentionOpen = ref(false);
 const assignmentOpen = ref(false);
 const assignmentRow = ref<ConfirmationApplication | null>(null);
 const assignment = reactive<{ hrId: string; companyApproverId: string; reason: string }>({ hrId: '', companyApproverId: '', reason: '' });
@@ -142,7 +143,7 @@ function statusType(row: ConfirmationApplication) {
     <ChartCard class="list-page-header-card">
       <template #title>转正管理</template>
       <template #extra>
-        <el-button link type="primary" @click="router.push('/probation-reviews/manage')">查看试用期历史记录</el-button>
+        <el-button v-if="attentionItems.length" link type="warning" data-testid="confirmation-attention-trigger" @click="attentionOpen = true">待关注 {{ attentionItems.length }} 人</el-button>
       </template>
       <QueryFilterPanel class="page-filter-panel">
         <el-form :inline="true" class="filter-form" @submit.prevent="search">
@@ -155,15 +156,6 @@ function statusType(row: ConfirmationApplication) {
           <el-form-item><el-button type="primary" @click="search">查询</el-button><el-button @click="reset">重置</el-button></el-form-item>
         </el-form>
       </QueryFilterPanel>
-      <div v-if="attentionItems.length" class="confirmation-warning" data-testid="confirmation-missing-applications">
-        <strong>{{ attentionItems.length }} 名试用期员工需要关注</strong>
-        <div v-for="item in attentionItems.slice(0, 10)" :key="item.employeeId" class="confirmation-warning__row">
-          <span>{{ item.employeeName }}<span v-if="item.deptName"> · {{ item.deptName }}</span></span>
-          <span>{{ item.plannedRegularDate ? `${formatDate(item.plannedRegularDate)}${(item.daysUntil ?? 0) < 0 ? '（已逾期）' : '（临近）'}` : '计划转正日期待核实' }}</span>
-          <span>{{ item.hasApplication ? '已提交申请' : '尚未提交申请' }}</span>
-        </div>
-        <div v-if="attentionItems.length > 10" class="confirmation-warning__more">另有 {{ attentionItems.length - 10 }} 人，请通过员工档案核实。</div>
-      </div>
     </ChartCard>
 
     <ChartCard :padded="false" class="list-result-card">
@@ -197,6 +189,18 @@ function statusType(row: ConfirmationApplication) {
       </div>
       <ListPagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="pageSizeOptions" :total="total" @change="loadList" />
     </ChartCard>
+    <el-drawer v-model="attentionOpen" title="试用期员工待关注" size="min(480px, 100vw)" append-to-body>
+      <p class="attention-intro">计划转正日期临近、已过或缺失的员工。请核实档案，并提醒尚未提交申请的员工发起转正。</p>
+      <div class="attention-list" role="list">
+        <div v-for="item in attentionItems" :key="item.employeeId" class="attention-item" role="listitem">
+          <div class="attention-item__head"><strong>{{ item.employeeName }}</strong><span>{{ item.deptName || '部门待核实' }}</span></div>
+          <div class="attention-item__meta">
+            <span>{{ item.plannedRegularDate ? `${formatDate(item.plannedRegularDate)}${(item.daysUntil ?? 0) < 0 ? '（已逾期）' : '（临近）'}` : '计划转正日期待核实' }}</span>
+            <el-tag :type="item.hasApplication ? 'info' : 'warning'" size="small">{{ item.hasApplication ? '已提交申请' : '尚未提交申请' }}</el-tag>
+          </div>
+        </div>
+      </div>
+    </el-drawer>
     <el-dialog v-model="assignmentOpen" :title="assignmentRow?.submissionVersion ? '调整转正办理人' : '指定转正办理人'" width="min(480px, 94vw)" append-to-body>
       <p class="assignment-tip">{{ assignmentRow?.employee?.name }}的直属主管来自花名册。{{ ['draft', 'submitted'].includes(assignmentRow?.status ?? '') ? '保存时将按最新花名册核对主管。' : '已提交的主管评价和 HR 结论不会被改写。' }}</p>
       <el-form label-position="top">
@@ -222,10 +226,13 @@ function statusType(row: ConfirmationApplication) {
 
 <style scoped>
 .filter-form :deep(.el-form-item) { margin-bottom: 0; }
-.confirmation-warning { margin-top: 12px; color: var(--el-color-warning-dark-2); font-size: 13px; line-height: 1.5; }
-.confirmation-warning__row { display: flex; flex-wrap: wrap; gap: 4px 14px; padding-top: 5px; }
-.confirmation-warning__row > :first-child { min-width: 130px; color: var(--el-text-color-primary); }
-.confirmation-warning__more { margin-top: 6px; }
+.list-page-header-card :deep(.chart-card__head) { flex-wrap: wrap; gap: 4px 8px; }
+.attention-intro { margin: 0 0 16px; color: var(--el-text-color-regular); font-size: 13px; line-height: 1.6; }
+.attention-list { display: grid; gap: 8px; }
+.attention-item { padding: 10px 12px; border: 1px solid var(--el-border-color-lighter); border-radius: 6px; }
+.attention-item__head, .attention-item__meta { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 4px 12px; }
+.attention-item__head { margin-bottom: 6px; }
+.attention-item__head span, .attention-item__meta { color: var(--el-text-color-regular); font-size: 13px; }
 .assignment-tip { margin: 0 0 12px; color: var(--el-text-color-regular); font-size: 13px; }
 .field-error { color: var(--el-color-danger); font-size: 12px; margin: -4px 0 4px; }
 </style>

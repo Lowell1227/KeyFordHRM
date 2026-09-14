@@ -46,9 +46,9 @@ const statusOptions: ProbationReviewStatus[] = [
 ];
 
 const titleMap: Record<ListMode, string> = {
-  manage: '试用期历史记录',
-  manager: '试用期历史记录',
-  mine: '我的试用期历史记录',
+  manage: '试用期考核历史',
+  manager: '负责的试用期考核历史',
+  mine: '我的试用期考核历史',
 };
 
 onMounted(() => {
@@ -123,6 +123,8 @@ function signSummary(row: ProbationReview): string {
       <template #extra>
         <slot name="header-extra" />
       </template>
+
+      <p class="probation-archive-note">原独立试用期考核记录，仅供查阅。</p>
 
       <QueryFilterPanel class="page-filter-panel">
         <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
@@ -219,6 +221,7 @@ function signSummary(row: ProbationReview): string {
 </template>
 
 <style scoped>
+.probation-archive-note { margin: 0 0 12px; color: var(--el-text-color-regular); font-size: 13px; }
 .filter-form :deep(.el-form-item) {
   margin-bottom: 0;
 }

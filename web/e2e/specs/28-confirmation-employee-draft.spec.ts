@@ -1,4 +1,7 @@
 import { expect, test } from '@playwright/test';
+import { buildNavigation } from '../../src/router/navigation';
+import { routes } from '../../src/router/routes';
+import type { HrCapability } from '../../src/types/api.types';
 
 const apiResponse = (data: unknown) => ({ code: 0, message: 'success', data, timestamp: Date.now() });
 
@@ -304,6 +307,25 @@ test('assigned manager can switch from current transfer work to handled history'
   await expect(page.getByRole('button', { name: '查看' }).first()).toBeVisible();
 });
 
+test('old probation scoring history has a clear menu entry without widening access', () => {
+  const historyLabels = (sysRole: 'hr' | 'system_admin' | 'hr_user' | 'employee', hrCapabilities: HrCapability[] = []) =>
+    buildNavigation(routes, { sysRole, canViewAll: false, hrCapabilities })
+      .find((module) => module.key === 'performance')?.groups
+      .find((group) => group.key === 'performance-probation')?.items
+      .filter((item) => item.path.startsWith('/probation-reviews/'))
+      .map((item) => ({ path: item.path, label: item.label })) ?? [];
+
+  expect(historyLabels('hr')).toContainEqual({ path: '/probation-reviews/manage', label: '试用期考核历史' });
+  expect(historyLabels('system_admin')).toContainEqual({ path: '/probation-reviews/manage', label: '试用期考核历史' });
+  expect(historyLabels('hr_user', ['confirmation_manage'])).not.toContainEqual({ path: '/probation-reviews/manage', label: '试用期考核历史' });
+  expect(historyLabels('employee')).toEqual([{ path: '/probation-reviews/mine', label: '我的试用期考核历史' }]);
+  const managerItems = buildNavigation(routes, {
+    sysRole: 'employee', canViewAll: false, businessCapabilities: { canHandleProbationReviews: true },
+  }).find((module) => module.key === 'performance')?.groups
+    .find((group) => group.key === 'performance-probation')?.items ?? [];
+  expect(managerItems).toContainEqual(expect.objectContaining({ path: '/probation-reviews/manager', label: '负责的考核历史' }));
+});
+
 test('old probation scoring stays available as read-only history on mobile', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(() => {
@@ -327,7 +349,8 @@ test('old probation scoring stays available as read-only history on mobile', asy
   });
   await page.route('**/api/v1/signatures**', (route) => route.fulfill({ json: apiResponse([]) }));
   await page.goto('/probation-reviews/manage');
-  await expect(page.getByText('试用期历史记录').first()).toBeVisible();
+  await expect(page.getByText('试用期考核历史').first()).toBeVisible();
+  await expect(page.getByText('原独立试用期考核记录，仅供查阅。')).toBeVisible();
   await expect(page.getByRole('button', { name: '发起试用期考核' })).toHaveCount(0);
   await page.getByRole('button', { name: '查看' }).last().click();
   await expect(page).toHaveURL(/\/probation-reviews\/11111111-1111-4111-8111-111111111111$/);
@@ -371,8 +394,17 @@ test('HR assigns the two handlers from transfer management before employee submi
     }) });
   });
   await page.goto('/confirmation-applications/manage');
-  await expect(page.getByText('缺日期员工')).toBeVisible();
-  await expect(page.getByText('计划转正日期待核实')).toBeVisible();
+  await expect(page.getByRole('button', { name: '查看试用期历史记录' })).toHaveCount(0);
+  const attentionTrigger = page.getByTestId('confirmation-attention-trigger');
+  await expect(attentionTrigger).toHaveText('待关注 2 人');
+  await expect(page.getByText('缺日期员工')).not.toBeVisible();
+  await attentionTrigger.click();
+  const attentionDrawer = page.getByRole('dialog', { name: '试用期员工待关注' });
+  await expect(attentionDrawer.getByText('缺日期员工')).toBeVisible();
+  await expect(attentionDrawer.getByText('计划转正日期待核实')).toBeVisible();
+  await expect(attentionDrawer.getByText('临期员工')).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(attentionDrawer).not.toBeVisible();
   await page.getByRole('button', { name: '指定办理人' }).last().click();
   const dialog = page.getByRole('dialog', { name: '指定转正办理人' });
   await dialog.getByRole('button', { name: '保存办理人' }).click();
@@ -386,4 +418,8 @@ test('HR assigns the two handlers from transfer management before employee submi
   expect(assigned).toEqual({ hrId: 'hr-1', companyApproverId: 'approver-1' });
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(1);
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await expect(attentionTrigger).toBeVisible();
+  const desktopOverflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(desktopOverflow).toBeLessThanOrEqual(1);
 });

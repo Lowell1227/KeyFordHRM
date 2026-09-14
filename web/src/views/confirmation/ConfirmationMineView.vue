@@ -149,7 +149,6 @@ function statusType(status: string): string {
 
       <div class="header-actions">
         <span class="tip">填写工作小结后提交，由直属主管、HR 和公司审批人依次办理。</span>
-        <el-button link type="primary" @click="router.push('/probation-reviews/mine')">查看试用期历史记录</el-button>
         <el-button v-if="canStart" type="primary" @click="openCreate">发起转正申请</el-button>
       </div>
     </ChartCard>
