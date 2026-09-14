@@ -25,7 +25,7 @@ async function setup(page: Page, role: 'employee' | 'hr' | 'manager', approved =
     workflowContext: { stage: 'result', statusLabel: appealed ? '待直属上级重新评定' : confirmed ? '已确认，待公示' : approved ? '待员工确认' : '结果审批中', currentHandler: null, canRemind: false },
   });
   const appeal = () => ({ id: appealId, employeeId: 'employee-1', employeeName: '虚拟员工', employeeNo: 'QA_EMP', deptId: 'dept-1', deptName: '测试部门', cycleId, cycleName: cycle.name,
-    receivedAt: '2026-09-14T00:00:00.000Z', subject: '考核等级依据', content: '希望核实周期评定依据', handlingNote: null, conclusion: null,
+    receivedAt: '2026-09-14T00:00:00.000Z', content: '希望核实周期评定依据', handlingNote: null, conclusion: null,
     recordedByName: '虚拟HR', createdAt: time, updatedAt: time, ...savedRecord });
   await page.addInitScript(() => { localStorage.setItem('token', 'isolated-confirmation-contract'); localStorage.setItem('expiresAt', String(Date.now() + 3600_000)); });
   await page.route('**/api/v1/**', async route => {
@@ -190,11 +190,10 @@ for (const width of [1440, 390]) {
     await expect(dialog.getByRole('button', { name: '取消', exact: true })).toBeVisible();
     await expect(dialog.getByRole('button', { name: '保存', exact: true })).toBeVisible();
     await dialog.getByRole('button', { name: '保存', exact: true }).click();
-    await expect(dialog.locator('.el-form-item__error')).toContainText(['请选择员工', '请填写申诉事项', '请填写诉求内容']);
+    await expect(dialog.locator('.el-form-item__error')).toContainText(['请选择员工', '请填写申诉内容']);
     await dialog.getByRole('combobox', { name: '员工', exact: true }).click();
     await page.getByRole('option').filter({ hasText: '虚拟员工' }).click();
-    await dialog.getByPlaceholder('简要概括申诉事项').fill('考核等级依据');
-    await dialog.getByPlaceholder('记录员工提出的具体诉求').fill('希望核实周期评定依据');
+    await dialog.getByPlaceholder('记录员工提出的申诉内容').fill('希望核实周期评定依据');
     await expect(dialog.locator('.el-form-item__error')).toHaveCount(0);
     const dialogBounds = await dialog.boundingBox();
     expect(dialogBounds).not.toBeNull();
@@ -204,9 +203,9 @@ for (const width of [1440, 390]) {
     await dialog.getByRole('button', { name: '保存', exact: true }).click();
     await expect(dialog).toBeHidden();
     const item = width <= 768 ? page.locator('.mobile-result-card').filter({ hasText: '虚拟员工' }) : page.getByRole('row').filter({ hasText: '虚拟员工' });
-    await expect(item).toContainText('考核等级依据');
+    await expect(item).toContainText('希望核实周期评定依据');
     await item.getByRole('button', { name: '编辑', exact: true }).click();
-    await expect(dialog.getByPlaceholder('记录员工提出的具体诉求')).toHaveValue('希望核实周期评定依据');
+    await expect(dialog.getByPlaceholder('记录员工提出的申诉内容')).toHaveValue('希望核实周期评定依据');
     await dialog.getByPlaceholder('记录沟通、核实和处理经过').fill('已与员工沟通');
     await dialog.getByPlaceholder('记录最终处理结论').fill('记录完成');
     await dialog.getByRole('button', { name: '保存', exact: true }).click();
@@ -216,6 +215,8 @@ for (const width of [1440, 390]) {
     await dialog.getByRole('button', { name: '取消', exact: true }).click();
     await expect(dialog).toBeHidden();
     expect(state.writes.map(write => write.path)).toEqual(['/api/v1/appeals', `/api/v1/appeals/${appealId}`]);
+    expect(state.writes[0].body).toMatchObject({ content: '希望核实周期评定依据' });
+    expect(state.writes[0].body).not.toHaveProperty('subject');
     await page.getByRole('button', { name: '新增申诉记录', exact: true }).evaluate(async element => {
       const animations = element.parentElement?.getAnimations({ subtree: true }) ?? [];
       await Promise.all(animations.filter(animation => animation.effect?.getTiming().iterations !== Infinity).map(animation => animation.finished.catch(() => undefined)));

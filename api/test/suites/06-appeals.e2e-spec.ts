@@ -23,13 +23,14 @@ describe('06-HR appeal records', () => {
     const before = await app.prisma.assessmentTask.findUniqueOrThrow({ where: { id: task.id }, include: { gradeResult: true, flowRecords: true, appeals: true } });
     const token = await login(app.http, { employeeNo: 'HR001', password: 'test123' });
     const createRes = await app.http.post('/api/v1/appeals').set('Authorization', `Bearer ${token}`)
-      .send({ employeeId: employee.id, cycleId: cycle.id, receivedAt: '2026-09-14', subject: '考核等级依据', content: '希望核查评分依据' }).expect(201);
-    expect(createRes.body.data).toMatchObject({ employeeId: employee.id, cycleId: cycle.id, subject: '考核等级依据', content: '希望核查评分依据', recordedByName: 'HR' });
+      .send({ employeeId: employee.id, cycleId: cycle.id, receivedAt: '2026-09-14', content: '希望核查评分依据' }).expect(201);
+    expect(createRes.body.data).toMatchObject({ employeeId: employee.id, cycleId: cycle.id, content: '希望核查评分依据', recordedByName: 'HR' });
+    expect(createRes.body.data).not.toHaveProperty('subject');
     const id = createRes.body.data.id;
     const updateRes = await app.http.put(`/api/v1/appeals/${id}`).set('Authorization', `Bearer ${token}`)
       .send({ cycleId: null, handlingNote: '已与主管沟通', conclusion: '记录完成' }).expect(200);
     expect(updateRes.body.data).toMatchObject({ cycleId: null, handlingNote: '已与主管沟通', conclusion: '记录完成' });
-    const list = await app.http.get('/api/v1/appeals').set('Authorization', `Bearer ${token}`).expect(200);
+    const list = await app.http.get('/api/v1/appeals?keyword=评分依据').set('Authorization', `Bearer ${token}`).expect(200);
     expect(list.body.data.items.map((item: { id: string }) => item.id)).toContain(id);
     expect(await app.prisma.assessmentTask.findUniqueOrThrow({ where: { id: task.id }, include: { gradeResult: true, flowRecords: true, appeals: true } })).toEqual(before);
     expect(await app.prisma.appeal.count()).toBe(0);

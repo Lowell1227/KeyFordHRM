@@ -1497,7 +1497,6 @@ model HrAppealRecord {
   employeeId   String    @map("employee_id") @db.Uuid
   cycleId      String?   @map("cycle_id") @db.Uuid
   receivedAt   DateTime  @map("received_at") @db.Date
-  subject      String    @db.VarChar(200)
   content      String    @db.Text
   handlingNote String?   @map("handling_note") @db.Text
   conclusion   String?   @db.Text

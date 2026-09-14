@@ -28,7 +28,7 @@ const peopleLoading = ref(false);
 const peopleError = ref('');
 const people = ref<AppealPerson[]>([]);
 const formRef = ref<FormInstance>();
-const form = reactive<AppealRecordBody>({ employeeId: '', cycleId: '', receivedAt: '', subject: '', content: '', handlingNote: '', conclusion: '' });
+const form = reactive<AppealRecordBody>({ employeeId: '', cycleId: '', receivedAt: '', content: '', handlingNote: '', conclusion: '' });
 let listRequest = 0;
 let peopleRequest = 0;
 
@@ -83,7 +83,7 @@ async function openDialog(item?: AppealRecord) {
   editingId.value = item?.id;
   saveError.value = '';
   Object.assign(form, { employeeId: '', cycleId: '', receivedAt: new Date().toLocaleDateString('sv-SE'),
-    subject: '', content: '', handlingNote: '', conclusion: '' });
+    content: '', handlingNote: '', conclusion: '' });
   people.value = item ? [{ id: item.employeeId, name: item.employeeName, employeeNo: item.employeeNo,
     dept: item.deptName ? { name: item.deptName } : null }] : [];
   dialogVisible.value = true;
@@ -94,7 +94,7 @@ async function openDialog(item?: AppealRecord) {
     const detail = await appealsApi.findOne(item.id);
     if (editingId.value !== item.id || !dialogVisible.value) return;
     Object.assign(form, { employeeId: detail.employeeId, cycleId: detail.cycleId ?? '',
-      receivedAt: formatDate(detail.receivedAt), subject: detail.subject, content: detail.content,
+      receivedAt: formatDate(detail.receivedAt), content: detail.content,
       handlingNote: detail.handlingNote ?? '', conclusion: detail.conclusion ?? '' });
   } catch (error) { saveError.value = errorText(error, '申诉记录暂时无法读取，请重试'); }
   finally { dialogLoading.value = false; }
@@ -135,7 +135,7 @@ async function save() {
           </el-table-column>
           <el-table-column prop="deptName" label="部门" min-width="120" />
           <el-table-column label="收到日期" width="120"><template #default="{ row }">{{ formatDate(row.receivedAt) }}</template></el-table-column>
-          <el-table-column prop="subject" label="申诉事项" min-width="190" show-overflow-tooltip />
+          <el-table-column prop="content" label="申诉内容" min-width="190" show-overflow-tooltip />
           <el-table-column label="关联周期" min-width="170" show-overflow-tooltip><template #default="{ row }">{{ row.cycleName || '未关联周期' }}</template></el-table-column>
           <el-table-column label="处理结论" min-width="170" show-overflow-tooltip><template #default="{ row }">{{ row.conclusion || '待补充' }}</template></el-table-column>
           <el-table-column prop="recordedByName" label="记录人" width="110" />
@@ -147,7 +147,7 @@ async function save() {
         <MobileResultCard v-for="item in list" :key="item.id">
           <template #title>{{ item.employeeName }}<template v-if="item.employeeNo"> · {{ item.employeeNo }}</template></template>
           <div v-for="field in [['部门', item.deptName || '—'], ['收到日期', formatDate(item.receivedAt)],
-            ['申诉事项', item.subject], ['关联周期', item.cycleName || '未关联周期'],
+            ['申诉内容', item.content], ['关联周期', item.cycleName || '未关联周期'],
             ['处理结论', item.conclusion || '待补充'], ['记录人', item.recordedByName || '—']]"
             :key="field[0]" class="mobile-result-field">
             <span class="mobile-result-field__label">{{ field[0] }}</span><span class="mobile-result-field__value">{{ field[1] }}</span>
@@ -179,11 +179,8 @@ async function save() {
               </el-select>
             </el-form-item>
           </div>
-          <el-form-item label="申诉事项" prop="subject" :rules="[{ required: true, whitespace: true, message: '请填写申诉事项', trigger: 'blur' }]">
-            <el-input v-model="form.subject" maxlength="200" show-word-limit placeholder="简要概括申诉事项" @input="clearValidation('subject')" />
-          </el-form-item>
-          <el-form-item label="诉求内容" prop="content" :rules="[{ required: true, whitespace: true, message: '请填写诉求内容', trigger: 'blur' }]">
-            <el-input v-model="form.content" type="textarea" :rows="3" maxlength="10000" show-word-limit placeholder="记录员工提出的具体诉求" @input="clearValidation('content')" />
+          <el-form-item label="申诉内容" prop="content" :rules="[{ required: true, whitespace: true, message: '请填写申诉内容', trigger: 'blur' }]">
+            <el-input v-model="form.content" type="textarea" :rows="3" maxlength="10000" show-word-limit placeholder="记录员工提出的申诉内容" @input="clearValidation('content')" />
           </el-form-item>
           <el-form-item label="处理情况（可后续补充）"><el-input v-model="form.handlingNote" type="textarea" :rows="3" maxlength="10000" placeholder="记录沟通、核实和处理经过" /></el-form-item>
           <el-form-item label="处理结论（可后续补充）"><el-input v-model="form.conclusion" type="textarea" :rows="3" maxlength="10000" placeholder="记录最终处理结论" /></el-form-item>

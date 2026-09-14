@@ -1572,7 +1572,6 @@ export interface AppealRecord {
   cycleId: string | null;
   cycleName: string | null;
   receivedAt: string;
-  subject: string;
   content: string;
   handlingNote: string | null;
   conclusion: string | null;
@@ -1600,7 +1599,6 @@ export interface AppealRecordBody {
   employeeId: string;
   cycleId?: string | null;
   receivedAt: string;
-  subject: string;
   content: string;
   handlingNote?: string;
   conclusion?: string;

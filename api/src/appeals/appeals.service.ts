@@ -27,7 +27,7 @@ export class AppealsService {
       ...(dto.cycleId ? { cycleId: dto.cycleId } : {}),
       ...(dto.deptId ? { employee: { deptId: dto.deptId } } : {}),
       ...(keyword ? { OR: [
-        { subject: { contains: keyword, mode: 'insensitive' } },
+        { content: { contains: keyword, mode: 'insensitive' } },
         { employee: { name: { contains: keyword, mode: 'insensitive' } } },
         { employee: { employeeNo: { contains: keyword, mode: 'insensitive' } } },
       ] } : {}),
@@ -73,8 +73,7 @@ export class AppealsService {
       await this.validateReferences(tx, dto.employeeId, dto.cycleId);
       const item = await tx.hrAppealRecord.create({ data: {
         employeeId: dto.employeeId, cycleId: dto.cycleId ?? null,
-        receivedAt: this.date(dto.receivedAt), subject: this.required(dto.subject, '申诉事项'),
-        content: this.required(dto.content, '诉求内容'),
+        receivedAt: this.date(dto.receivedAt), content: this.required(dto.content, '申诉内容'),
         handlingNote: this.optional(dto.handlingNote), conclusion: this.optional(dto.conclusion),
         recordedById: viewer.id,
       } });
@@ -95,8 +94,7 @@ export class AppealsService {
       if (dto.employeeId !== undefined) data.employee = { connect: { id: dto.employeeId } };
       if (dto.cycleId !== undefined) data.cycle = dto.cycleId ? { connect: { id: dto.cycleId } } : { disconnect: true };
       if (dto.receivedAt !== undefined) data.receivedAt = this.date(dto.receivedAt);
-      if (dto.subject !== undefined) data.subject = this.required(dto.subject, '申诉事项');
-      if (dto.content !== undefined) data.content = this.required(dto.content, '诉求内容');
+      if (dto.content !== undefined) data.content = this.required(dto.content, '申诉内容');
       if (dto.handlingNote !== undefined) data.handlingNote = this.optional(dto.handlingNote);
       if (dto.conclusion !== undefined) data.conclusion = this.optional(dto.conclusion);
       const after = await tx.hrAppealRecord.update({ where: { id }, data });
@@ -142,7 +140,7 @@ export class AppealsService {
     return { id: item.id, employeeId: item.employeeId, employeeName: item.employee.name,
       employeeNo: item.employee.employeeNo, deptId: item.employee.deptId, deptName: item.employee.dept?.name ?? null,
       cycleId: item.cycleId, cycleName: item.cycle?.name ?? null, receivedAt: item.receivedAt.toISOString().slice(0, 10),
-      subject: item.subject, content: item.content, handlingNote: item.handlingNote,
+      content: item.content, handlingNote: item.handlingNote,
       conclusion: item.conclusion, recordedByName: item.recordedBy?.name ?? null,
       createdAt: item.createdAt, updatedAt: item.updatedAt };
   }

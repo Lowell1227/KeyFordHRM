@@ -14,11 +14,6 @@ export class CreateAppealDto {
 
   @IsString()
   @IsNotEmpty()
-  @MaxLength(200)
-  subject!: string;
-
-  @IsString()
-  @IsNotEmpty()
   @MaxLength(10000)
   content!: string;
 

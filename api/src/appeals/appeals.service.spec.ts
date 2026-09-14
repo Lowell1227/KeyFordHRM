@@ -24,4 +24,34 @@ describe('AppealsService HR personnel ledger', () => {
     }));
     expect(Object.keys(db)).toEqual(['hrAppealRecord']);
   });
+
+  it('saves an appeal from one content field without requiring a subject', async () => {
+    const receivedAt = new Date('2026-09-14T00:00:00.000Z');
+    let saved: Record<string, unknown> | undefined;
+    const tx = {
+      user: { findFirst: jest.fn().mockResolvedValue({ id: 'employee' }) },
+      hrAppealRecord: { create: jest.fn(async ({ data }: { data: Record<string, unknown> }) => {
+        saved = data;
+        return { id: 'record' };
+      }) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const db = {
+      $transaction: (callback: (client: typeof tx) => Promise<unknown>) => callback(tx),
+      hrAppealRecord: { findUnique: jest.fn(async () => ({
+        id: 'record', employeeId: 'employee', cycleId: null, receivedAt,
+        content: saved?.content, handlingNote: null, conclusion: null,
+        createdAt: receivedAt, updatedAt: receivedAt,
+        employee: { name: '员工', employeeNo: 'EMP001', deptId: null, dept: null },
+        cycle: null, recordedBy: { name: 'HR' },
+      })) },
+    };
+    const service = new AppealsService(db as any);
+
+    const result = await service.create({ employeeId: 'employee', receivedAt: '2026-09-14',
+      content: '希望核查评分依据' } as any, hr);
+
+    expect(result.content).toBe('希望核查评分依据');
+    expect(result).not.toHaveProperty('subject');
+  });
 });
