@@ -427,3 +427,9 @@ Git 提交与远端状态：
 - 台账字段为员工、收到日期、申诉事项、诉求内容；绩效周期选填，处理情况和结论可后续补充，记录人自动写入。弹窗按钮为“保存”“取消”。新表 `hr_appeal_records` 与旧 `appeals` 分开；历史流程申诉数据保留，不自动迁移到新台账。
 - 功能提交 `b1c2c9f` 已推送 `origin/main`，并于 2026-09-14 发布到 `kayford-deploy`。发布前备份 `kayford_perf` 并保留原 API/Web 镜像回滚标签；仅重建 API/Web，PostgreSQL、Redis、MinIO 容器未变。迁移 `20260914120000_hr_appeal_records` 已完成，旧 `appeals` 记录数保持 1，新台账记录数为 0；测试快捷登录关闭。
 - 外部首页和健康接口均返回 200，健康数据中的数据库状态为 `ok`；正式页面加载的申诉台账与任务详情资源包含新版文案，未登录访问申诉接口返回 401。隔离数据库及 PC/390px 针对性用例已通过；正式环境尚未用真实员工、直属上级和 HR 账号完成业务路径验收。发布清单和备份校验记录见 `C:\Users\lwei\kayford-releases\b1c2c9f-appeal-ledger\release-manifest.json`。
+
+### 2026-09-14：申诉记录简化为一项申诉内容（已发布，待业务验收）
+
+- 用户确认“申诉事项”“诉求内容”合为一个“申诉内容”；“处理情况”“处理结论”维持原有自由文本，不新增逐条跟进或结果选择。员工异议流转和 HR 台账权限边界不变。
+- 功能提交 `e43aeb4` 已推送 `origin/main` 并发布。迁移 `20260914180000_simplify_hr_appeal_content` 将旧事项中正文未包含的文字合入正文，再移除独立字段；发布时新台账记录数为 0，旧 `appeals` 保持 1 条。发布前已备份并保留原 API/Web 回滚镜像，仅替换 API/Web；PostgreSQL、Redis、MinIO 容器未变，测试快捷登录关闭。
+- API 85 套/1010 项单元测试与构建、独立临时 PostgreSQL 上的申诉 HTTP 用例 2 项、Web 类型检查及 PC/390px 页面用例 2 项通过。外部首页与健康接口返回 200，实际加载的“申诉记录”资源只显示“申诉内容”且保留处理情况/结论；正式真实角色路径尚待业务验收。发布证据和备份校验见 `C:\Users\lwei\kayford-releases\e43aeb4-single-appeal-content\release-manifest.json`。
