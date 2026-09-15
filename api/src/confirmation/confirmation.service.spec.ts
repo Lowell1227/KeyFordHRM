@@ -576,19 +576,17 @@ describe('employee confirmation draft', () => {
     }));
   });
 
-  it('keeps the employee on probation when the company approver declines', async () => {
+  it('keeps the employee on probation when the company approver declines without an optional reason', async () => {
     const approverId = '55555555-5555-4555-8555-555555555555';
     prisma.confirmationApplication.findUnique.mockResolvedValue({
       id: '33333333-3333-4333-8333-333333333333', workflowVersion: 2,
       status: ConfirmationStatus.hr_approved, submissionVersion: 1, employeeId,
       hrId: '44444444-4444-4444-8444-444444444444', companyApproverId: approverId,
     });
-    await service.reject('33333333-3333-4333-8333-333333333333', {
-      reason: '本次不同意转正，后续人事安排由 HR 另行办理',
-    }, { ...viewer, id: approverId });
+    await service.reject('33333333-3333-4333-8333-333333333333', {}, { ...viewer, id: approverId });
 
     expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ status: ConfirmationStatus.rejected, rejectReason: expect.any(String) }),
+      data: expect.objectContaining({ status: ConfirmationStatus.rejected, rejectReason: null }),
     }));
     expect(prisma.user.updateMany).not.toHaveBeenCalled();
     expect(prisma.auditLog.create).toHaveBeenCalled();

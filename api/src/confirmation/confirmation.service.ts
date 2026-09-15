@@ -760,9 +760,7 @@ export class ConfirmationService {
     if (app.status !== ConfirmationStatus.hr_approved || app.companyApproverId !== viewer.id) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅当前公司审批人可作最终决定' });
     }
-    if (!dto.reason?.trim()) {
-      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '请填写不同意转正的原因' });
-    }
+    const reason = dto.reason?.trim() || null;
     const now = new Date();
     await this.prisma.$transaction(async (tx) => {
       const updated = await tx.confirmationApplication.updateMany({
@@ -771,7 +769,7 @@ export class ConfirmationService {
           status: ConfirmationStatus.rejected,
           rejectedById: viewer.id,
           rejectedAt: now,
-          rejectReason: dto.reason.trim(),
+          rejectReason: reason,
         },
       });
       if (updated.count !== 1) {
@@ -784,7 +782,7 @@ export class ConfirmationService {
           entityType: 'confirmation_application',
           entityId: id,
           oldValue: { status: app.status },
-          newValue: { status: ConfirmationStatus.rejected, reason: dto.reason.trim(), submissionVersion: app.submissionVersion },
+          newValue: { status: ConfirmationStatus.rejected, reason, submissionVersion: app.submissionVersion },
         },
       });
     });

@@ -1,8 +1,8 @@
-import { IsNotEmpty, IsString, MaxLength } from 'class-validator';
+import { IsOptional, IsString, MaxLength } from 'class-validator';
 
 export class RejectConfirmationDto {
+  @IsOptional()
   @IsString()
-  @IsNotEmpty()
   @MaxLength(1000)
-  reason!: string;
+  reason?: string;
 }

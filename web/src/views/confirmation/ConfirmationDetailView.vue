@@ -38,11 +38,8 @@ const uploading = ref(false);
 const backfillDate = ref('');
 const backfillError = ref('');
 const backfilling = ref(false);
-const companyDateConfirmed = ref(false);
-const companyComment = ref('');
+const companyReason = ref('');
 const companyError = ref('');
-const declineMode = ref(false);
-const declineReason = ref('');
 const declining = ref(false);
 const returnMode = ref(false);
 const returnReason = ref('');
@@ -210,12 +207,11 @@ async function handleMeetingDateBackfill() {
 
 async function handleCompanyApprove() {
   if (!app.value) return;
-  companyError.value = !app.value.proposedRegularDate || !companyDateConfirmed.value
-    ? '请核对并确认 HR 填写的拟生效日期' : '';
+  companyError.value = !app.value.proposedRegularDate ? '拟生效日期缺失，请联系 HR 补充' : '';
   if (companyError.value) return;
   approving.value = true;
   try {
-    await confirmationApi.approveCompany(app.value.id, app.value.proposedRegularDate!, companyComment.value.trim() || undefined);
+    await confirmationApi.approveCompany(app.value.id, app.value.proposedRegularDate!, companyReason.value.trim() || undefined);
     approvalDialogVisible.value = false;
     ElMessage.success('已同意转正，员工状态和实际转正日期已更新');
     await loadDetail();
@@ -228,11 +224,10 @@ async function handleCompanyApprove() {
 
 async function handleCompanyDecline() {
   if (!app.value) return;
-  companyError.value = declineReason.value.trim() ? '' : '请填写不同意转正的原因';
-  if (companyError.value) return;
+  companyError.value = '';
   declining.value = true;
   try {
-    await confirmationApi.declineCompany(app.value.id, declineReason.value.trim());
+    await confirmationApi.declineCompany(app.value.id, companyReason.value.trim() || undefined);
     approvalDialogVisible.value = false;
     ElMessage.success('已记录不同意转正，后续人事安排由 HR 另行办理');
     await loadDetail();
@@ -532,19 +527,17 @@ function actorInitial(name: string): string {
           </div>
           <div v-else-if="app.pendingRole === 'company'" class="company-decision">
             <p>HR 拟生效日期：<b>{{ formatDate(app.proposedRegularDate) }}</b></p>
-            <el-checkbox v-model="companyDateConfirmed">已核对并确认上述生效日期</el-checkbox>
-            <el-input v-model="companyComment" type="textarea" :rows="3" maxlength="1000" placeholder="同意意见（选填）" />
+            <label class="company-reason">
+              <span>理由（选填）</span>
+              <el-input v-model="companyReason" type="textarea" :rows="3" maxlength="1000" show-word-limit placeholder="请输入理由（选填）" @input="companyError = ''" />
+            </label>
             <p v-if="companyError" class="field-error">{{ companyError }}</p>
             <div class="company-actions">
-              <el-button type="primary" :loading="approving" @click="handleCompanyApprove">同意转正</el-button>
-              <el-button v-if="app.canReject" @click="declineMode = !declineMode">不同意转正</el-button>
-            </div>
-            <div v-if="declineMode" class="company-decline">
-              <el-input v-model="declineReason" type="textarea" :rows="3" maxlength="1000" placeholder="请说明不同意转正的原因" @input="companyError = ''" />
-              <el-button type="danger" :loading="declining" @click="handleCompanyDecline">提交不同意决定</el-button>
+              <el-button type="primary" :loading="approving" :disabled="declining" @click="handleCompanyApprove">同意</el-button>
+              <el-button v-if="app.canReject" type="danger" plain :loading="declining" :disabled="approving" @click="handleCompanyDecline">不同意</el-button>
             </div>
           </div>
-          <div v-if="app.canReturn" class="return-action">
+          <div v-if="app.canReturn && app.pendingRole !== 'company'" class="return-action">
             <el-button @click="returnMode = !returnMode">退回员工补充</el-button>
             <div v-if="returnMode" class="return-form">
               <el-input v-model="returnReason" type="textarea" :rows="3" maxlength="1000" placeholder="请说明需要员工补充的内容" @input="returnError = ''" />
@@ -623,9 +616,10 @@ function actorInitial(name: string): string {
 }
 .manager-evaluation { display: grid; gap: 10px; width: min(100%, 560px); }
 .hr-evaluation { display: grid; gap: 10px; width: min(100%, 600px); }
-.company-decision, .company-decline { display: grid; gap: 10px; width: min(100%, 560px); }
+.company-decision { display: grid; gap: 16px; width: min(100%, 480px); }
 .company-decision p { margin: 0; }
-.company-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.company-reason { display: grid; gap: 8px; color: var(--el-text-color-regular); font-size: 14px; }
+.company-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .return-action, .return-form { display: grid; gap: 8px; width: min(100%, 560px); }
 .return-reason { margin: 0; padding: 10px 12px; background: var(--el-color-warning-light-9); border-radius: 4px; overflow-wrap: anywhere; }
 .internal-record { display: grid; gap: 8px; overflow-wrap: anywhere; }

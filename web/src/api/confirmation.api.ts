@@ -66,7 +66,7 @@ export const confirmationApi = {
     return http.post(`/confirmation-applications/${id}/approve`, { confirmedRegularDate, comment }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
   },
 
-  declineCompany(id: string, reason: string): Promise<{ id: string; status: string }> {
+  declineCompany(id: string, reason?: string): Promise<{ id: string; status: string }> {
     return http.post(`/confirmation-applications/${id}/reject`, { reason }, { skipErrorMessage: true }) as unknown as Promise<{ id: string; status: string }>;
   },
 
