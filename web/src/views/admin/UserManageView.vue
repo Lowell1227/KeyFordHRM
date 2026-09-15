@@ -166,10 +166,15 @@ const hrCapabilityOptions: { label: string; value: HrCapability }[] = [
   { label: '转正管理与 HR 审批', value: 'confirmation_manage' },
 ];
 
-const statusOptions: { label: string; value: UserStatus }[] = [
+type EmployeeDirectoryCategory = 'all' | UserStatus | 'draft' | 'archived';
+
+const employeeCategoryOptions: { label: string; value: EmployeeDirectoryCategory }[] = [
+  { label: '全部', value: 'all' },
   { label: '在职', value: 'active' },
   { label: '试用期', value: 'probation' },
   { label: '已离职', value: 'resigned' },
+  { label: '草稿', value: 'draft' },
+  { label: '已归档', value: 'archived' },
 ];
 
 const departments = ref<Department[]>([]);
@@ -223,7 +228,12 @@ const selectedOrgIsUnassigned = computed(() => selectedDeptId.value === UNASSIGN
 const userList = ref<ManagedUser[]>([]);
 const userTotal = ref(0);
 const userLoading = ref(false);
-const userArchiveView = ref(false);
+const employeeCategory = ref<EmployeeDirectoryCategory>('all');
+const userArchiveView = computed(() => employeeCategory.value === 'archived');
+const isDraftCategory = computed(() => employeeCategory.value === 'draft');
+const canSelectEmployeesForArchive = computed(() => (
+  canEditArchive.value && ['all', 'resigned'].includes(employeeCategory.value)
+));
 const selectedUsers = ref<ManagedUser[]>([]);
 const userQuery = ref<UserQuery>({
   page: 1,
@@ -410,9 +420,14 @@ async function loadOrgMembers() {
 async function loadUsers() {
   userLoading.value = true;
   try {
+    const categoryStatus = ['active', 'probation', 'resigned'].includes(employeeCategory.value)
+      ? employeeCategory.value as UserStatus
+      : undefined;
     const res = await usersApi.findAll({
       ...userQuery.value,
+      status: categoryStatus,
       archived: userArchiveView.value || undefined,
+      includeResigned: employeeCategory.value === 'all' || undefined,
       keyword: userQuery.value.keyword || undefined,
     });
     userList.value = res.items;
@@ -425,16 +440,22 @@ async function loadUsers() {
   }
 }
 
-function changeUserArchiveView(archived: boolean) {
-  userArchiveView.value = archived;
+async function changeEmployeeCategory(category: EmployeeDirectoryCategory) {
+  employeeCategory.value = category;
   selectedUsers.value = [];
+  draftDialog.value.selected = [];
   userQuery.value.page = 1;
-  if (archived) userQuery.value.status = undefined;
-  void loadUsers();
+  if (category === 'draft') {
+    draftDialog.value.state = 'draft';
+    draftDialog.value.page = 1;
+    await loadDrafts();
+    return;
+  }
+  await loadUsers();
 }
 
 function canSelectEmployeeForArchive(row: ManagedUser) {
-  return canEditArchive.value && !userArchiveView.value && row.status === 'resigned' && !row.archivedAt;
+  return canSelectEmployeesForArchive.value && row.status === 'resigned' && !row.archivedAt;
 }
 
 function onEmployeeSelectionChange(rows: ManagedUser[]) {
@@ -482,7 +503,6 @@ function resetUserFilters() {
     keyword: '',
     deptId: undefined,
     sysRole: undefined,
-    status: undefined,
   };
   loadUsers();
 }
@@ -557,6 +577,7 @@ async function jumpToIssue(item: IssueItem) {
   }
 
   activeView.value = 'users';
+  employeeCategory.value = 'all';
   userQuery.value.page = 1;
   userQuery.value.keyword = item.keyword ?? '';
   await loadUsers();
@@ -568,7 +589,8 @@ function refreshCurrentView() {
     return;
   }
   if (activeView.value === 'users') {
-    loadUsers();
+    if (isDraftCategory.value) loadDrafts();
+    else loadUsers();
     return;
   }
   loadUsers();
@@ -761,13 +783,25 @@ const employmentRecordDrawerVisible = ref(false);
 const employmentRecordDrawerArchive = ref<EmployeeArchive | null>(null);
 const employmentRecordDrawerMode = ref<'default' | 'resignation'>('default');
 const draftDialog = ref({
-  visible: false,
   loading: false,
   state: 'draft' as 'draft' | 'archived',
+  page: 1,
+  pageSize: 20,
   items: [] as EmployeeDataReview[],
   total: 0,
   selected: [] as EmployeeDataReview[],
 });
+const draftPage = computed({
+  get: () => draftDialog.value.page,
+  set: (value: number) => { draftDialog.value.page = value; },
+});
+const draftPageSize = computed({
+  get: () => draftDialog.value.pageSize,
+  set: (value: number) => { draftDialog.value.pageSize = value; },
+});
+const selectedArchiveCount = computed(() => (
+  isDraftCategory.value ? draftDialog.value.selected.length : selectedUsers.value.length
+));
 const departmentMergeDialog = ref({ visible: false, source: null as Department | null, targetId: '', saving: false });
 const departmentContextMenu = ref({ visible: false, x: 0, y: 0, department: null as Department | null });
 const orgDragEnabled = ref(false);
@@ -780,7 +814,7 @@ function openEmployeeCreate() {
 
 function afterEmployeeDraftSaved() {
   employeeCreateDraft.value = null;
-  if (draftDialog.value.visible) void loadDrafts();
+  if (isDraftCategory.value) void loadDrafts();
 }
 
 function afterEmployeeSubmitted() {
@@ -799,8 +833,8 @@ async function loadDrafts() {
   draftDialog.value.loading = true;
   try {
     const result = await employeeArchivesApi.listDrafts({
-      page: 1,
-      pageSize: 100,
+      page: draftDialog.value.page,
+      pageSize: draftDialog.value.pageSize,
       state: draftDialog.value.state,
     });
     draftDialog.value.items = result.items;
@@ -811,20 +845,21 @@ async function loadDrafts() {
   }
 }
 
-function openDraftDialog() {
-  draftDialog.value.visible = true;
-  draftDialog.value.state = 'draft';
-  void loadDrafts();
-}
-
 function changeDraftState(value: string | number | boolean | undefined) {
   const state = value === 'archived' ? 'archived' : 'draft';
   draftDialog.value.state = state;
+  draftDialog.value.page = 1;
   void loadDrafts();
 }
 
 function onDraftSelectionChange(rows: EmployeeDataReview[]) {
   draftDialog.value.selected = rows;
+}
+
+function toggleDraftSelection(draft: EmployeeDataReview, selected: boolean) {
+  draftDialog.value.selected = selected
+    ? [...draftDialog.value.selected.filter((item) => item.id !== draft.id), draft]
+    : draftDialog.value.selected.filter((item) => item.id !== draft.id);
 }
 
 function draftTypeLabel(draft: EmployeeDataReview) {
@@ -836,7 +871,6 @@ function draftObjectLabel(draft: EmployeeDataReview) {
 }
 
 async function continueDraft(draft: EmployeeDataReview) {
-  draftDialog.value.visible = false;
   if (draft.sourceType === 'manual_employee_create') {
     employeeCreateDraft.value = draft;
     employeeCreateDrawerVisible.value = true;
@@ -864,7 +898,7 @@ async function archiveSelectedDrafts() {
   if (!draftDialog.value.selected.length) return;
   try {
     await ElMessageBox.confirm(
-      `确认归档所选 ${draftDialog.value.selected.length} 条草稿？草稿会保留，但不会进入审核。`,
+      `确认归档 ${draftDialog.value.selected.length} 条草稿？草稿会保留，但不会进入审核。`,
       '归档草稿',
       { confirmButtonText: '确认归档', cancelButtonText: '取消', type: 'warning' },
     );
@@ -874,6 +908,16 @@ async function archiveSelectedDrafts() {
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') throw error;
   }
+}
+
+function archiveDraft(draft: EmployeeDataReview) {
+  draftDialog.value.selected = [draft];
+  void archiveSelectedDrafts();
+}
+
+function archiveCurrentSelection() {
+  if (isDraftCategory.value) void archiveSelectedDrafts();
+  else void archiveSelectedEmployees();
 }
 
 function openEmploymentRecord(archive: EmployeeArchive, mode: 'default' | 'resignation' = 'default') {
@@ -1431,15 +1475,11 @@ onBeforeUnmount(() => {
             </template>
             <template v-else>
               <el-button v-if="canEditArchive && !userArchiveView" type="primary" @click="openEmployeeCreate">新增员工</el-button>
-              <el-button v-if="canEditArchive" @click="openDraftDialog">草稿箱</el-button>
-              <el-button v-if="canEditArchive" @click="changeUserArchiveView(!userArchiveView)">
-                {{ userArchiveView ? '返回员工档案' : '已归档' }}
-              </el-button>
               <el-button
                 v-if="canEditArchive && !userArchiveView"
-                :disabled="selectedUsers.length === 0"
-                @click="archiveSelectedEmployees"
-              >归档所选（{{ selectedUsers.length }}）</el-button>
+                :disabled="selectedArchiveCount === 0"
+                @click="archiveCurrentSelection"
+              >归档</el-button>
               <el-dropdown v-if="canEditArchive" trigger="click" @command="(command: string) => command === 'roster' && openRosterImportDialog()">
                 <el-button>批量操作</el-button>
                 <template #dropdown><el-dropdown-menu><el-dropdown-item command="roster" :icon="UploadFilled">导入花名册</el-dropdown-item></el-dropdown-menu></template>
@@ -1636,135 +1676,136 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else-if="activeView === 'users'" class="directory-view">
-        <QueryFilterPanel class="roster-filter-panel">
-          <div class="light-filter">
-            <el-input
-              v-model="userQuery.keyword"
-              :prefix-icon="Search"
-              placeholder="搜索姓名或工号"
-              clearable
-              class="filter-keyword"
-              @keyup.enter="onUserQueryChange"
-            />
-            <el-tree-select
-              v-model="userQuery.deptId"
-              :data="departments"
-              node-key="id"
-              :props="{ label: 'name', children: 'children' }"
-              placeholder="全部部门"
-              clearable
-              filterable
-            />
-            <el-select
-              v-model="userQuery.status"
-              :placeholder="userArchiveView ? '已离职' : '全部状态'"
-              :disabled="userArchiveView"
-              clearable
-            >
-              <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-            </el-select>
-            <el-select v-model="userQuery.sysRole" placeholder="全部系统权限" clearable>
-              <el-option v-for="opt in sysRoleOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-            </el-select>
-            <el-button type="primary" @click="onUserQueryChange">查询</el-button>
-            <el-button @click="resetUserFilters">重置</el-button>
-          </div>
-        </QueryFilterPanel>
+        <nav class="employee-category-tabs" role="tablist" aria-label="员工档案分类">
+          <button
+            v-for="item in employeeCategoryOptions"
+            :key="item.value"
+            type="button"
+            role="tab"
+            :class="{ active: employeeCategory === item.value }"
+            :aria-selected="employeeCategory === item.value"
+            @click="changeEmployeeCategory(item.value)"
+          >
+            {{ item.label }}
+          </button>
+        </nav>
+
+        <template v-if="!isDraftCategory">
+          <QueryFilterPanel class="roster-filter-panel">
+            <div class="light-filter">
+              <el-input
+                v-model="userQuery.keyword"
+                :prefix-icon="Search"
+                placeholder="搜索姓名或工号"
+                clearable
+                class="filter-keyword"
+                @keyup.enter="onUserQueryChange"
+              />
+              <el-tree-select
+                v-model="userQuery.deptId"
+                :data="departments"
+                node-key="id"
+                :props="{ label: 'name', children: 'children' }"
+                placeholder="全部部门"
+                clearable
+                filterable
+              />
+              <el-select v-model="userQuery.sysRole" placeholder="全部系统权限" clearable>
+                <el-option v-for="opt in sysRoleOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+              </el-select>
+              <el-button type="primary" @click="onUserQueryChange">查询</el-button>
+              <el-button @click="resetUserFilters">重置</el-button>
+            </div>
+          </QueryFilterPanel>
 
           <div class="directory-table-region desktop-result-table">
-          <el-table
-            v-loading="userLoading"
-            :data="userList"
-            row-key="id"
-            height="100%"
-            class="app-table compact-table"
-            @selection-change="onEmployeeSelectionChange"
-          >
-            <el-table-column
-              v-if="canEditArchive && !userArchiveView"
-              type="selection"
-              width="48"
-              fixed="left"
-              :selectable="canSelectEmployeeForArchive"
-            />
-            <el-table-column label="人员" min-width="180">
-            <template #default="{ row }">
-              <div class="person-cell">
-                <span class="avatar">{{ (row as ManagedUser).name.slice(0, 1) }}</span>
-                <div>
-                  <strong>{{ (row as ManagedUser).name }}</strong>
-                  <small>{{ (row as ManagedUser).employeeNo || '工号待补充' }}</small>
-                </div>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column prop="deptName" label="部门" min-width="160" show-overflow-tooltip />
-          <el-table-column label="岗位" min-width="140" show-overflow-tooltip>
-            <template #default="{ row }">{{ (row as ManagedUser).position || '未设置' }}</template>
-          </el-table-column>
-          <el-table-column label="绩效直属上级" min-width="140">
-            <template #default="{ row }">{{ (row as ManagedUser).directManagerName || '未设置' }}</template>
-          </el-table-column>
-          <el-table-column label="系统权限" width="150">
-            <template #default="{ row }">
-              <div>{{ systemPermissionLabel(row as ManagedUser) }}</div>
-              <el-tag v-if="(row as ManagedUser).canViewAll" size="small" type="info" effect="plain">全量只读</el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="业务职责" min-width="220">
-            <template #default="{ row }">
-              <div class="business-identity-tags">
-                <el-tag size="small" effect="plain">员工</el-tag>
-                <el-tag
-                  v-for="identity in (row as ManagedUser).businessIdentities"
-                  :key="identity.type"
-                  size="small"
-                  effect="plain"
-                >
-                  {{ businessIdentityText(identity) }}
-                </el-tag>
-              </div>
-            </template>
-          </el-table-column>
-          <el-table-column label="钉钉登录" width="130">
-            <template #default="{ row }">
-              <el-tag
-                :type="dingtalkStateTagType[(row as ManagedUser).dingtalkBindingState ?? 'unbound']"
-                size="small"
-                effect="plain"
-              >
-                {{ dingtalkStateLabels[(row as ManagedUser).dingtalkBindingState ?? 'unbound'] }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="状态" width="110">
-            <template #default="{ row }">
-              <el-tag :type="statusTagType[(row as ManagedUser).status]" size="small">
-                {{ statusLabels[(row as ManagedUser).status] }}
-              </el-tag>
-            </template>
-          </el-table-column>
-          <el-table-column label="操作" width="360" fixed="right">
-            <template #default="{ row }">
-              <el-button link type="primary" size="small" @click="openEmployeeArchive(row as ManagedUser)">
-                查看档案
-              </el-button>
-              <el-button v-if="!userArchiveView" link type="primary" size="small" :icon="Setting" @click="openPersonSettingsDialog(row as ManagedUser)">
-                人员设置
-              </el-button>
-              <el-button
-                v-if="canEditArchive && !userArchiveView && (row as ManagedUser).status !== 'resigned'"
-                link
-                type="primary"
-                size="small"
-                @click="openResignation(row as ManagedUser)"
-              >办理离职</el-button>
-              <el-button v-if="canResetPassword && !userArchiveView" link type="primary" size="small" :icon="Key" @click="resetPassword(row as ManagedUser)">
-                重置密码
-              </el-button>
-            </template>
-            </el-table-column>
-          </el-table>
+            <el-table
+              v-loading="userLoading"
+              :data="userList"
+              row-key="id"
+              height="100%"
+              class="app-table compact-table"
+              @selection-change="onEmployeeSelectionChange"
+            >
+              <el-table-column
+                v-if="canSelectEmployeesForArchive"
+                type="selection"
+                width="48"
+                fixed="left"
+                :selectable="canSelectEmployeeForArchive"
+              />
+              <el-table-column label="人员" min-width="180">
+                <template #default="{ row }">
+                  <div class="person-cell">
+                    <span class="avatar">{{ (row as ManagedUser).name.slice(0, 1) }}</span>
+                    <div>
+                      <strong>{{ (row as ManagedUser).name }}</strong>
+                      <small>{{ (row as ManagedUser).employeeNo || '工号待补充' }}</small>
+                    </div>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column prop="deptName" label="部门" min-width="160" show-overflow-tooltip />
+              <el-table-column label="岗位" min-width="140" show-overflow-tooltip>
+                <template #default="{ row }">{{ (row as ManagedUser).position || '未设置' }}</template>
+              </el-table-column>
+              <el-table-column label="绩效直属上级" min-width="140">
+                <template #default="{ row }">{{ (row as ManagedUser).directManagerName || '未设置' }}</template>
+              </el-table-column>
+              <el-table-column label="系统权限" width="150">
+                <template #default="{ row }">
+                  <div>{{ systemPermissionLabel(row as ManagedUser) }}</div>
+                  <el-tag v-if="(row as ManagedUser).canViewAll" size="small" type="info" effect="plain">全量只读</el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="业务职责" min-width="220">
+                <template #default="{ row }">
+                  <div class="business-identity-tags">
+                    <el-tag size="small" effect="plain">员工</el-tag>
+                    <el-tag
+                      v-for="identity in (row as ManagedUser).businessIdentities"
+                      :key="identity.type"
+                      size="small"
+                      effect="plain"
+                    >
+                      {{ businessIdentityText(identity) }}
+                    </el-tag>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="钉钉登录" width="130">
+                <template #default="{ row }">
+                  <el-tag
+                    :type="dingtalkStateTagType[(row as ManagedUser).dingtalkBindingState ?? 'unbound']"
+                    size="small"
+                    effect="plain"
+                  >
+                    {{ dingtalkStateLabels[(row as ManagedUser).dingtalkBindingState ?? 'unbound'] }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="状态" width="110">
+                <template #default="{ row }">
+                  <el-tag :type="statusTagType[(row as ManagedUser).status]" size="small">
+                    {{ statusLabels[(row as ManagedUser).status] }}
+                  </el-tag>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="360" fixed="right">
+                <template #default="{ row }">
+                  <el-button link type="primary" size="small" @click="openEmployeeArchive(row as ManagedUser)">查看档案</el-button>
+                  <el-button v-if="!userArchiveView" link type="primary" size="small" :icon="Setting" @click="openPersonSettingsDialog(row as ManagedUser)">人员设置</el-button>
+                  <el-button
+                    v-if="canEditArchive && !userArchiveView && (row as ManagedUser).status !== 'resigned'"
+                    link
+                    type="primary"
+                    size="small"
+                    @click="openResignation(row as ManagedUser)"
+                  >办理离职</el-button>
+                  <el-button v-if="canResetPassword && !userArchiveView" link type="primary" size="small" :icon="Key" @click="resetPassword(row as ManagedUser)">重置密码</el-button>
+                </template>
+              </el-table-column>
+            </el-table>
           </div>
           <div v-loading="userLoading" class="mobile-result-list roster-mobile-list">
             <MobileResultCard v-for="item in userList" :key="item.id">
@@ -1790,6 +1831,66 @@ onBeforeUnmount(() => {
             :page-sizes="[10, 20, 50, 100]"
             @change="loadUsers"
           />
+        </template>
+
+        <div v-else class="draft-workspace">
+          <div class="draft-workspace__toolbar">
+            <el-radio-group :model-value="draftDialog.state" @change="changeDraftState">
+              <el-radio-button value="draft">当前草稿</el-radio-button>
+              <el-radio-button value="archived">已归档草稿</el-radio-button>
+            </el-radio-group>
+          </div>
+          <div class="directory-table-region desktop-result-table">
+            <el-table
+              v-loading="draftDialog.loading"
+              :data="draftDialog.items"
+              row-key="id"
+              height="100%"
+              class="app-table compact-table"
+              @selection-change="onDraftSelectionChange"
+            >
+              <el-table-column v-if="draftDialog.state === 'draft'" type="selection" width="48" fixed="left" />
+              <el-table-column type="index" label="序号" width="64" />
+              <el-table-column label="类型" width="120"><template #default="{ row }">{{ draftTypeLabel(row as EmployeeDataReview) }}</template></el-table-column>
+              <el-table-column label="员工" min-width="180"><template #default="{ row }">{{ draftObjectLabel(row as EmployeeDataReview) }}</template></el-table-column>
+              <el-table-column label="保存人" min-width="150"><template #default="{ row }">{{ row.createdBy?.name || '未知' }}</template></el-table-column>
+              <el-table-column label="保存时间" width="180"><template #default="{ row }">{{ formatDateTime(row.updatedAt) }}</template></el-table-column>
+              <el-table-column label="操作" width="140" fixed="right">
+                <template #default="{ row }">
+                  <el-button v-if="draftDialog.state === 'draft'" link type="primary" @click="continueDraft(row as EmployeeDataReview)">继续编辑</el-button>
+                  <span v-else class="muted-text">只读保留</span>
+                </template>
+              </el-table-column>
+            </el-table>
+          </div>
+          <div v-loading="draftDialog.loading" class="mobile-result-list draft-mobile-list">
+            <MobileResultCard v-for="item in draftDialog.items" :key="item.id">
+              <template #title>
+                <el-checkbox
+                  v-if="draftDialog.state === 'draft'"
+                  :model-value="draftDialog.selected.some((row) => row.id === item.id)"
+                  @change="toggleDraftSelection(item, Boolean($event))"
+                >{{ draftObjectLabel(item) }}</el-checkbox>
+                <span v-else>{{ draftObjectLabel(item) }}</span>
+              </template>
+              <template #status><el-tag size="small" effect="plain">{{ draftTypeLabel(item) }}</el-tag></template>
+              <div class="mobile-result-field"><span class="mobile-result-field__label">保存人</span><span class="mobile-result-field__value">{{ item.createdBy?.name || '未知' }}</span></div>
+              <div class="mobile-result-field"><span class="mobile-result-field__label">保存时间</span><span class="mobile-result-field__value">{{ formatDateTime(item.updatedAt) }}</span></div>
+              <template v-if="draftDialog.state === 'draft'" #actions>
+                <el-button link type="primary" @click="continueDraft(item)">继续编辑</el-button>
+                <el-button link type="primary" @click="archiveDraft(item)">归档</el-button>
+              </template>
+            </MobileResultCard>
+          </div>
+          <el-empty v-if="!draftDialog.loading && draftDialog.items.length === 0" :description="draftDialog.state === 'draft' ? '暂无草稿' : '暂无已归档草稿'" :image-size="64" />
+          <ListPagination
+            v-model:current-page="draftPage"
+            v-model:page-size="draftPageSize"
+            :total="draftDialog.total"
+            :page-sizes="[10, 20, 50, 100]"
+            @change="loadDrafts"
+          />
+        </div>
       </section>
 
     </ChartCard>
@@ -2148,47 +2249,6 @@ onBeforeUnmount(() => {
           提交审核
         </el-button>
       </template>
-    </el-dialog>
-
-    <el-dialog
-      v-model="draftDialog.visible"
-      title="人事档案草稿"
-      width="min(920px, 94vw)"
-      :close-on-click-modal="false"
-    >
-      <div class="draft-dialog-toolbar">
-        <el-radio-group :model-value="draftDialog.state" @change="changeDraftState">
-          <el-radio-button value="draft">草稿</el-radio-button>
-          <el-radio-button value="archived">已归档</el-radio-button>
-        </el-radio-group>
-        <el-button
-          v-if="draftDialog.state === 'draft'"
-          :disabled="draftDialog.selected.length === 0"
-          @click="archiveSelectedDrafts"
-        >归档所选</el-button>
-      </div>
-      <el-table
-        v-loading="draftDialog.loading"
-        :data="draftDialog.items"
-        row-key="id"
-        class="app-table compact-table"
-        @selection-change="onDraftSelectionChange"
-      >
-        <el-table-column v-if="draftDialog.state === 'draft'" type="selection" width="48" />
-        <el-table-column type="index" label="序号" width="64" />
-        <el-table-column label="类型" width="110"><template #default="{ row }">{{ draftTypeLabel(row as EmployeeDataReview) }}</template></el-table-column>
-        <el-table-column label="员工" min-width="160"><template #default="{ row }">{{ draftObjectLabel(row as EmployeeDataReview) }}</template></el-table-column>
-        <el-table-column label="保存人" min-width="140"><template #default="{ row }">{{ row.createdBy?.name || '未知' }}</template></el-table-column>
-        <el-table-column label="保存时间" width="170"><template #default="{ row }">{{ formatDateTime(row.updatedAt) }}</template></el-table-column>
-        <el-table-column label="操作" width="120" fixed="right">
-          <template #default="{ row }">
-            <el-button v-if="draftDialog.state === 'draft'" link type="primary" @click="continueDraft(row as EmployeeDataReview)">继续编辑</el-button>
-            <span v-else class="muted-text">只读保留</span>
-          </template>
-        </el-table-column>
-      </el-table>
-      <el-empty v-if="!draftDialog.loading && draftDialog.items.length === 0" :description="draftDialog.state === 'draft' ? '暂无草稿' : '暂无已归档草稿'" :image-size="64" />
-      <template #footer><el-button @click="draftDialog.visible = false">关闭</el-button></template>
     </el-dialog>
 
     <DepartmentEditDrawer
@@ -3120,7 +3180,7 @@ onBeforeUnmount(() => {
 
 .light-filter {
   display: grid;
-  grid-template-columns: minmax(260px, 1.5fr) repeat(3, minmax(160px, 1fr)) auto auto;
+  grid-template-columns: minmax(260px, 1.5fr) repeat(2, minmax(160px, 1fr)) auto auto;
   gap: 12px;
   align-items: center;
   padding: 0;
@@ -3136,6 +3196,68 @@ onBeforeUnmount(() => {
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
+}
+
+.employee-category-tabs {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 20px;
+  padding: 0 8px;
+  overflow-x: auto;
+  border-bottom: 1px solid #e7ecf4;
+  scrollbar-width: none;
+}
+
+.employee-category-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.employee-category-tabs button {
+  position: relative;
+  flex: 0 0 auto;
+  height: 42px;
+  padding: 0 4px;
+  border: 0;
+  background: transparent;
+  color: #667085;
+  font: inherit;
+  cursor: pointer;
+}
+
+.employee-category-tabs button::after {
+  position: absolute;
+  right: 4px;
+  bottom: -1px;
+  left: 4px;
+  height: 2px;
+  border-radius: 2px;
+  background: transparent;
+  content: '';
+}
+
+.employee-category-tabs button:hover,
+.employee-category-tabs button.active {
+  color: var(--el-color-primary);
+}
+
+.employee-category-tabs button.active {
+  font-weight: 600;
+}
+
+.employee-category-tabs button.active::after {
+  background: var(--el-color-primary);
+}
+
+.draft-workspace {
+  display: flex;
+  flex: 1;
+  min-height: 0;
+  flex-direction: column;
+}
+
+.draft-workspace__toolbar {
+  flex: 0 0 auto;
+  padding: 12px 0;
 }
 
 .directory-table-region {
@@ -3175,14 +3297,6 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
-}
-
-.draft-dialog-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
 }
 
 .muted-text {
@@ -3647,6 +3761,10 @@ onBeforeUnmount(() => {
   .directory-view {
     display: block;
     overflow: visible;
+  }
+
+  .draft-workspace {
+    display: block;
   }
 
   .review-workspace {

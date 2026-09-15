@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 const apiResponse = (data: unknown) => ({ code: 0, message: 'success', data, timestamp: Date.now() });
 
-test('员工草稿、办理离职和手动归档使用彼此独立的入口', async ({ page }) => {
+test('员工分类贴近列表，草稿页内维护，归档动作统一', async ({ page }) => {
   const activeEmployee = {
     id: '10000000-0000-4000-8000-000000000001', name: '在职员工', employeeNo: '001',
     deptId: '30000000-0000-4000-8000-000000000001', deptName: '人事部', position: '专员',
@@ -61,9 +61,19 @@ test('员工草稿、办理离职和手动归档使用彼此独立的入口', as
     createdBy: { id: 'hr-1', name: 'HR管理员', sysRole: 'hr' },
     createdAt: '2026-09-15T01:00:00.000Z', updatedAt: '2026-09-15T01:00:00.000Z',
   };
+  const archivedDraft = {
+    ...draft,
+    id: '50000000-0000-4000-8000-000000000002',
+    employeeNo: '004',
+    employeeName: '已归档草稿',
+    recordStatus: 'archived',
+    archivedAt: '2026-09-15T02:30:00.000Z',
+  };
   let resignationBody: Record<string, unknown> | null = null;
   let archivedEmployeeIds: string[] = [];
   let archivedDraftIds: string[] = [];
+  const userQueryUrls: string[] = [];
+  const draftQueryUrls: string[] = [];
 
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-hr-token');
@@ -89,14 +99,27 @@ test('员工草稿、办理离职和手动归档使用彼此独立的入口', as
   await page.route('**/api/v1/positions**', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse([])),
   }));
-  await page.route('**/api/v1/users**', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify(apiResponse({ total: 3, page: 1, pageSize: 20, items: [activeEmployee, resignedEmployee, resignedEmployeeTwo] })),
-  }));
-  await page.route('**/api/v1/employee-archives/drafts/list**', (route) => route.fulfill({
-    contentType: 'application/json',
-    body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 100, items: [draft] })),
-  }));
+  await page.route('**/api/v1/users**', (route) => {
+    const url = new URL(route.request().url());
+    userQueryUrls.push(url.toString());
+    let items = [activeEmployee];
+    if (url.searchParams.get('archived') === 'true') items = [{ ...resignedEmployee, archivedAt: archivedArchive.archivedAt }];
+    else if (url.searchParams.get('status') === 'resigned') items = [resignedEmployee, resignedEmployeeTwo];
+    else if (url.searchParams.get('includeResigned') === 'true') items = [activeEmployee, resignedEmployee, resignedEmployeeTwo];
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: items.length, page: 1, pageSize: 20, items })),
+    });
+  });
+  await page.route('**/api/v1/employee-archives/drafts/list**', (route) => {
+    const url = new URL(route.request().url());
+    draftQueryUrls.push(url.toString());
+    const items = url.searchParams.get('state') === 'archived' ? [archivedDraft] : [draft];
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 20, items })),
+    });
+  });
   await page.route('**/api/v1/employee-archives/drafts/archive', async (route) => {
     archivedDraftIds = route.request().postDataJSON().ids;
     return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ archived: 1 })) });
@@ -120,9 +143,15 @@ test('员工草稿、办理离职和手动归档使用彼此独立的入口', as
   });
 
   await page.goto('/users');
-  await expect(page.getByRole('button', { name: '草稿箱' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '已归档' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '归档所选（0）', exact: true })).toBeDisabled();
+  const categoryTabs = page.getByRole('tablist', { name: '员工档案分类' });
+  await expect(categoryTabs.getByRole('tab')).toHaveText(['全部', '在职', '试用期', '已离职', '草稿', '已归档']);
+  await expect(categoryTabs.getByRole('tab', { name: '全部' })).toHaveAttribute('aria-selected', 'true');
+  await expect.poll(() => userQueryUrls.some((url) => new URL(url).searchParams.get('includeResigned') === 'true')).toBeTruthy();
+  await expect(page.getByRole('button', { name: '草稿箱' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '归档所选（0）', exact: true })).toHaveCount(0);
+  await expect(page.getByPlaceholder('全部状态')).toHaveCount(0);
+  const archiveAction = page.locator('.page-title__actions').getByRole('button', { name: '归档', exact: true });
+  await expect(archiveAction).toBeDisabled();
 
   const activeRow = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '在职员工' });
   await activeRow.getByRole('button', { name: '办理离职' }).click();
@@ -135,32 +164,42 @@ test('员工草稿、办理离职和手动归档使用彼此独立的入口', as
     changeType: 'resignation', employeeStatus: 'resigned', reason: '个人原因',
   });
 
+  await categoryTabs.getByRole('tab', { name: '已离职' }).click();
+  await expect.poll(() => userQueryUrls.some((url) => new URL(url).searchParams.get('status') === 'resigned')).toBeTruthy();
   const resignedRow = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '离职员工' });
   await resignedRow.filter({ hasNotText: '离职员工二' }).locator('.el-checkbox').click();
   const resignedRowTwo = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '离职员工二' });
   await resignedRowTwo.locator('.el-checkbox').click();
-  await page.getByRole('button', { name: '归档所选（2）', exact: true }).click();
+  await expect(archiveAction).toBeEnabled();
+  await archiveAction.click();
   await page.getByRole('dialog', { name: '归档离职员工' }).getByRole('button', { name: '确认归档' }).click();
   await expect.poll(() => archivedEmployeeIds).toEqual([resignedEmployee.id, resignedEmployeeTwo.id]);
 
-  await page.getByRole('button', { name: '已归档' }).click();
+  await categoryTabs.getByRole('tab', { name: '已归档' }).click();
+  await expect.poll(() => userQueryUrls.some((url) => new URL(url).searchParams.get('archived') === 'true')).toBeTruthy();
   const archivedRow = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '离职员工' }).filter({ hasNotText: '离职员工二' });
   await archivedRow.getByRole('button', { name: '查看档案' }).click();
   const archivedDrawer = page.getByRole('dialog', { name: '员工档案' });
   await expect(archivedDrawer.getByRole('button', { name: '编辑档案' })).toHaveCount(0);
   await expect(archivedDrawer.getByRole('button', { name: '新增任职记录' })).toHaveCount(0);
   await archivedDrawer.getByLabel('关闭此对话框').click();
-  await page.getByRole('button', { name: '返回员工档案' }).click();
 
-  await page.getByRole('button', { name: '草稿箱' }).click();
-  const draftDialog = page.getByRole('dialog', { name: '人事档案草稿' });
-  await expect(draftDialog.getByText('草稿员工')).toBeVisible();
-  await draftDialog.locator('.el-table__body-wrapper .el-checkbox').click();
-  await draftDialog.getByRole('button', { name: '归档所选' }).click();
-  await page.getByRole('dialog', { name: '归档草稿' }).getByRole('button', { name: '确认归档' }).click();
+  await categoryTabs.getByRole('tab', { name: '草稿' }).click();
+  await expect(page.getByRole('dialog', { name: '人事档案草稿' })).toHaveCount(0);
+  const draftWorkspace = page.locator('.draft-workspace');
+  await expect(draftWorkspace.locator('.desktop-result-table').getByText('草稿员工')).toBeVisible();
+  await draftWorkspace.locator('.el-table__body-wrapper .el-checkbox').click();
+  await expect(archiveAction).toBeEnabled();
+  await archiveAction.click();
+  const archiveDraftDialog = page.getByRole('dialog', { name: '归档草稿' });
+  await archiveDraftDialog.getByRole('button', { name: '确认归档' }).click();
   await expect.poll(() => archivedDraftIds).toEqual([draft.id]);
+  await expect(archiveDraftDialog).toBeHidden();
 
-  await draftDialog.getByRole('button', { name: '关闭', exact: true }).click();
+  await draftWorkspace.getByText('已归档草稿', { exact: true }).first().click();
+  await expect(draftWorkspace.locator('.desktop-result-table').getByText('已归档草稿')).toBeVisible();
+  await expect.poll(() => draftQueryUrls.some((url) => new URL(url).searchParams.get('state') === 'archived')).toBeTruthy();
+
   await page.getByRole('button', { name: '新增员工' }).click();
   const createDrawer = page.getByRole('dialog', { name: '新增员工' });
   await expect(createDrawer.getByRole('button', { name: '保存草稿' })).toBeVisible();

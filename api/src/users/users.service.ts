@@ -137,7 +137,7 @@ export class UsersService {
       where.status = UserStatus.resigned;
     } else if (dto.status) {
       where.status = dto.status;
-    } else {
+    } else if (!dto.includeResigned) {
       where.status = { not: UserStatus.resigned };
     }
 

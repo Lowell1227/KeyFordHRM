@@ -174,6 +174,7 @@ export interface UserQuery {
   keyword?: string;
   includeTestAccounts?: boolean;
   archived?: boolean;
+  includeResigned?: boolean;
   unassigned?: boolean;
 }
 

@@ -99,6 +99,27 @@ describe('UsersService', () => {
       });
     });
 
+    it('全部分类返回所有未归档员工并包含已离职员工', async () => {
+      const count = jest.fn().mockResolvedValue(0);
+      const findMany = jest.fn().mockResolvedValue([]);
+      const service = new UsersService(
+        { user: { count, findMany } } as any,
+        { getVisibleEmployeeFilter: jest.fn().mockResolvedValue({}) } as any,
+        noBusinessIdentities as any,
+      );
+
+      await service.findAll({
+        page: 1, pageSize: 20, skip: 0, take: 20, includeResigned: true,
+      } as any, {
+        id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null,
+        isAssessorOnly: false, canViewAll: true,
+      });
+
+      const where = count.mock.calls[0][0].where;
+      expect(where).toEqual(expect.objectContaining({ archivedAt: null }));
+      expect(where).not.toHaveProperty('status');
+    });
+
     it('未分配人员筛选只查询根节点人员且不展开部门范围', async () => {
       const count = jest.fn().mockResolvedValue(0);
       const findMany = jest.fn().mockResolvedValue([]);
