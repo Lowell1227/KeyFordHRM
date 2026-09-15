@@ -1,16 +1,23 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
 import { employeeArchivesApi, type EmployeeArchive } from '@/api/employee-archives.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import type { Department } from '@/types/api.types';
 
-const props = defineProps<{ modelValue: boolean; archive: EmployeeArchive | null; departments: Department[] }>();
+const props = withDefaults(defineProps<{
+  modelValue: boolean;
+  archive: EmployeeArchive | null;
+  departments: Department[];
+  mode?: 'default' | 'resignation';
+}>(), { mode: 'default' });
 const emit = defineEmits<{ 'update:modelValue': [value: boolean]; submitted: [] }>();
 const positions = ref<PositionRecord[]>([]);
 const saving = ref(false);
 const form = reactive<Record<string, any>>({});
+const isResignation = computed(() => props.mode === 'resignation');
+const drawerTitle = computed(() => isResignation.value ? '办理离职' : '新增任职记录');
 function flatten(items: Department[]): Department[] { return items.flatMap((item) => [item, ...flatten(item.children ?? [])]); }
 function reset() {
   const archive = props.archive; const current = archive?.currentEmployment ?? archive?.employmentHistory[0];
@@ -23,14 +30,39 @@ function reset() {
     actualRegularDate: current?.actualRegularDate?.slice(0, 10) ?? null, leaveDate: current?.leaveDate?.slice(0, 10) ?? null,
     probationMonths: current?.probationMonths ?? null, changeType: 'transfer', reason: '',
   });
+  if (isResignation.value) {
+    const today = new Date();
+    const localDate = new Date(today.getTime() - today.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+    Object.assign(form, {
+      effectiveFrom: localDate,
+      leaveDate: localDate,
+      employeeStatus: 'resigned',
+      changeType: 'resignation',
+      reason: '',
+    });
+  }
 }
-watch(() => props.modelValue, (open) => { if (open) reset(); });
+watch(() => [props.modelValue, props.mode] as const, ([open]) => { if (open) reset(); });
 async function submit() {
-  if (!props.archive || !form.effectiveFrom || !form.deptId) { ElMessage.warning('请填写生效日期和部门'); return; }
+  if (!props.archive || !form.deptId) { ElMessage.warning('员工档案缺少当前部门，暂不能提交'); return; }
+  if (isResignation.value) {
+    if (!form.leaveDate || !form.reason?.trim()) {
+      ElMessage.warning('请填写最后工作日和离职原因');
+      return;
+    }
+    form.effectiveFrom = form.leaveDate;
+    form.employeeStatus = 'resigned';
+    form.changeType = 'resignation';
+  } else if (!form.effectiveFrom) {
+    ElMessage.warning('请填写生效日期');
+    return;
+  }
   saving.value = true;
   try {
     await employeeArchivesApi.createEmployment(props.archive.id, { ...form, positionId: form.positionId || null });
-    ElMessage.success('任职变更已提交审核；历史补录和未来生效记录都不会直接覆盖当前档案');
+    ElMessage.success(isResignation.value
+      ? '离职申请已提交审核；审核生效后可由操作员手动归档'
+      : '任职变更已提交审核；历史补录和未来生效记录都不会直接覆盖当前档案');
     emit('update:modelValue', false); emit('submitted');
   } finally { saving.value = false; }
 }
@@ -38,8 +70,14 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
 </script>
 
 <template>
-  <el-drawer :model-value="modelValue" title="新增任职记录" size="min(720px, 100vw)" @update:model-value="emit('update:modelValue', $event)">
-    <el-form label-position="top" class="employment-grid">
+  <el-drawer :model-value="modelValue" :title="drawerTitle" size="min(720px, 100vw)" destroy-on-close @update:model-value="emit('update:modelValue', $event)">
+    <el-form v-if="isResignation" label-position="top" class="employment-grid">
+      <el-form-item label="员工"><el-input :model-value="archive?.name" disabled /></el-form-item>
+      <el-form-item label="当前部门"><el-input :model-value="archive?.dept?.fullPath || archive?.dept?.name || '未设置'" disabled /></el-form-item>
+      <el-form-item label="最后工作日"><el-date-picker v-model="form.leaveDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+      <el-form-item label="离职原因" class="span-2"><el-input v-model="form.reason" type="textarea" :rows="3" /></el-form-item>
+    </el-form>
+    <el-form v-else label-position="top" class="employment-grid">
       <el-form-item label="变更类型"><el-select v-model="form.changeType"><el-option label="调动" value="transfer" /><el-option label="晋升" value="promotion" /><el-option label="上级变更" value="manager_change" /><el-option label="状态变更" value="status_change" /><el-option label="离职" value="resignation" /><el-option label="返聘" value="rehire" /><el-option label="历史补录" value="data_correction" /></el-select></el-form-item>
       <el-form-item label="生效日期"><el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
       <el-form-item label="结束日期"><el-date-picker v-model="form.effectiveTo" type="date" value-format="YYYY-MM-DD" clearable /></el-form-item>
@@ -50,7 +88,7 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
       <el-form-item label="用工类型"><el-select v-model="form.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
       <el-form-item label="原因" class="span-2"><el-input v-model="form.reason" type="textarea" :rows="3" /></el-form-item>
     </el-form>
-    <p class="employment-help">生效日期早于今天视为历史补录；晚于今天则审核后等待到期自动生效。时间重叠会提醒，但不阻断提交。</p>
+    <p class="employment-help">{{ isResignation ? '离职审核生效后停用员工登录，但不会删除档案，也不会自动归档。' : '生效日期早于今天视为历史补录；晚于今天则审核后等待到期自动生效。时间重叠会提醒，但不阻断提交。' }}</p>
     <template #footer><el-button @click="emit('update:modelValue', false)">取消</el-button><el-button type="primary" :loading="saving" @click="submit">提交审核</el-button></template>
   </el-drawer>
 </template>

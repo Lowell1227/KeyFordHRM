@@ -36,5 +36,10 @@ export class UserQueryDto extends PaginationDto {
   @IsOptional()
   @IsBoolean()
   @Transform(({ value }) => value === 'true' || value === true)
+  archived?: boolean;
+
+  @IsOptional()
+  @IsBoolean()
+  @Transform(({ value }) => value === 'true' || value === true)
   unassigned?: boolean;
 }

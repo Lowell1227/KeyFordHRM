@@ -4,6 +4,7 @@ import {
   IsDate,
   IsEnum,
   IsInt,
+  IsIn,
   IsNotEmpty,
   IsArray,
   ArrayMaxSize,
@@ -17,8 +18,13 @@ import {
   Min,
 } from 'class-validator';
 import { CompanyCode, EmploymentType, UserStatus } from '@prisma/client';
+import { PartialType } from '@nestjs/mapped-types';
 
 export class CreateEmployeeDto {
+  @IsOptional()
+  @IsUUID('4')
+  draftId?: string;
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(30)
@@ -83,6 +89,10 @@ export class UpdateEmployeeProfileDto {
 }
 
 export class SubmitEmployeeArchiveDraftDto {
+  @IsOptional()
+  @IsUUID('4')
+  draftId?: string;
+
   @IsObject()
   employee!: Record<string, unknown>;
 
@@ -96,6 +106,35 @@ export class SubmitEmployeeArchiveDraftDto {
   @IsOptional()
   @IsObject()
   performance?: Record<string, unknown>;
+}
+
+export class SaveEmployeeCreateDraftDto extends PartialType(CreateEmployeeDto) {}
+
+export class EmployeeDraftQueryDto {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  page = 1;
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(1)
+  @Max(100)
+  pageSize = 20;
+
+  @IsOptional()
+  @IsIn(['draft', 'archived'])
+  state: 'draft' | 'archived' = 'draft';
+}
+
+export class ArchivePersonnelRecordsDto {
+  @IsArray()
+  @ArrayMinSize(1)
+  @ArrayMaxSize(100)
+  @IsUUID('4', { each: true })
+  ids!: string[];
 }
 
 export class SubmitDepartmentAssignmentsDto {

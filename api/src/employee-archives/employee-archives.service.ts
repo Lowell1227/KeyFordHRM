@@ -13,8 +13,11 @@ import {
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
-import type { SubmitEmployeeArchiveDraftDto } from './dto/employee-archive.dto';
-import type { CreateEmployeeDto } from './dto/employee-archive.dto';
+import type {
+  CreateEmployeeDto,
+  SaveEmployeeCreateDraftDto,
+  SubmitEmployeeArchiveDraftDto,
+} from './dto/employee-archive.dto';
 import { employmentWarnings, selectEmploymentAt } from './employment-timeline';
 
 export interface UpsertEmployeeProfileInput {
@@ -97,6 +100,8 @@ export class EmployeeArchivesService {
         where: {
           employeeNo,
           sourceType: 'manual_employee_create',
+          recordStatus: 'submitted',
+          archivedAt: null,
           profileReviewStatus: { in: ['pending', 'applying'] },
         },
         select: { id: true },
@@ -129,8 +134,7 @@ export class EmployeeArchivesService {
         warnings.push('任职结束日期早于生效日期');
       }
       const performanceManagerId = input.performanceManagerId ?? null;
-      const request = await tx.employeeDataChangeRequest.create({
-        data: {
+      const requestData = {
           userId: null,
           employeeNo,
           employeeName: name,
@@ -169,8 +173,26 @@ export class EmployeeArchivesService {
           validationErrors: this.toJson([]),
           validationWarnings: this.toJson(warnings),
           createdById: operator.id,
-        },
-      });
+          recordStatus: 'submitted',
+          archivedAt: null,
+      } satisfies Prisma.EmployeeDataChangeRequestUncheckedCreateInput;
+      if (input.draftId) {
+        const draft = await tx.employeeDataChangeRequest.findFirst({
+          where: {
+            id: input.draftId,
+            sourceType: 'manual_employee_create',
+            recordStatus: 'draft',
+            archivedAt: null,
+          },
+          select: { id: true },
+        });
+        if (!draft) {
+          throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
+        }
+      }
+      const request = input.draftId
+        ? await tx.employeeDataChangeRequest.update({ where: { id: input.draftId }, data: requestData })
+        : await tx.employeeDataChangeRequest.create({ data: requestData });
       await tx.auditLog.create({
         data: {
           userId: operator.id,
@@ -182,6 +204,179 @@ export class EmployeeArchivesService {
       });
       return request;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  async saveEmployeeCreateDraft(input: SaveEmployeeCreateDraftDto, operator: AuthUser) {
+    const employeeNo = input.employeeNo?.trim() || null;
+    const employeeName = input.name?.trim() || '未命名员工草稿';
+    const proposedValue = this.toJson({
+      employee: {
+        employeeNo,
+        name: input.name?.trim() || null,
+        phone: input.phone?.trim() || null,
+        company: input.company ?? null,
+        deptId: input.deptId ?? null,
+        positionId: input.positionId ?? null,
+        managerId: input.rosterManagerId ?? null,
+        entryDate: input.entryDate ?? null,
+        effectiveFrom: input.effectiveFrom ?? null,
+        effectiveTo: input.effectiveTo ?? null,
+        employmentType: input.employmentType ?? null,
+        employeeStatus: input.employeeStatus ?? null,
+        changeType: 'hire',
+      },
+      profile: { phone: input.phone?.trim() || null },
+      contracts: [],
+      performance: { managerId: input.performanceManagerId ?? null },
+    });
+    return this.prisma.$transaction(async (tx) => {
+      const data = {
+        userId: null,
+        employeeNo,
+        employeeName,
+        sourceType: 'manual_employee_create',
+        baseValue: this.toJson({ employee: {}, profile: {}, contracts: [], performance: { managerId: null } }),
+        proposedValue,
+        profileReviewStatus: 'pending',
+        performanceReviewStatus: input.performanceManagerId ? 'pending' : 'not_required',
+        validationErrors: this.toJson([]),
+        validationWarnings: this.toJson([]),
+        createdById: operator.id,
+        recordStatus: 'draft',
+        archivedAt: null,
+        rejectedReason: null,
+      } satisfies Prisma.EmployeeDataChangeRequestUncheckedCreateInput;
+      if (input.draftId) {
+        const draft = await tx.employeeDataChangeRequest.findFirst({
+          where: {
+            id: input.draftId,
+            sourceType: 'manual_employee_create',
+            recordStatus: 'draft',
+            archivedAt: null,
+          },
+          select: { id: true },
+        });
+        if (!draft) {
+          throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
+        }
+      }
+      const request = input.draftId
+        ? await tx.employeeDataChangeRequest.update({ where: { id: input.draftId }, data })
+        : await tx.employeeDataChangeRequest.create({ data });
+      await tx.auditLog.create({
+        data: {
+          userId: operator.id,
+          action: 'save_employee_create_draft',
+          entityType: 'employee_data_change_request',
+          entityId: request.id,
+          newValue: this.toJson({ employeeNo, employeeName }),
+        },
+      });
+      return request;
+    });
+  }
+
+  async listDrafts(query: { page: number; pageSize: number; state: 'draft' | 'archived' }) {
+    const where: Prisma.EmployeeDataChangeRequestWhereInput = query.state === 'archived'
+      ? { recordStatus: 'archived', archivedAt: { not: null } }
+      : { recordStatus: 'draft', archivedAt: null };
+    const [items, total] = await Promise.all([
+      this.prisma.employeeDataChangeRequest.findMany({
+        where,
+        include: { createdBy: { select: { id: true, name: true, sysRole: true } } },
+        orderBy: { updatedAt: 'desc' },
+        skip: (query.page - 1) * query.pageSize,
+        take: query.pageSize,
+      }),
+      this.prisma.employeeDataChangeRequest.count({ where }),
+    ]);
+    return { items, total, page: query.page, pageSize: query.pageSize };
+  }
+
+  async archiveEmployees(userIds: string[], operator: AuthUser): Promise<{ archived: number }> {
+    const ids = [...new Set(userIds)];
+    return this.prisma.$transaction(async (tx) => {
+      const users = await tx.user.findMany({
+        where: { id: { in: ids }, deletedAt: null },
+        select: { id: true, name: true, status: true, archivedAt: true },
+      });
+      if (users.length !== ids.length) {
+        throw new BadRequestException({ code: ERROR_CODE.NOT_FOUND, message: '部分员工不存在，请刷新后重试' });
+      }
+      const ineligible = users.filter((user) => user.status !== UserStatus.resigned || user.archivedAt);
+      if (ineligible.length > 0) {
+        throw new BadRequestException({
+          code: ERROR_CODE.PARAM_INVALID,
+          message: `只能归档已离职员工：${ineligible.map((user) => user.name).join('、')}`,
+        });
+      }
+      const pendingReviews = await tx.employeeDataChangeRequest.findMany({
+        where: {
+          userId: { in: ids },
+          recordStatus: 'submitted',
+          archivedAt: null,
+          OR: [
+            { profileReviewStatus: { in: ['pending', 'applying'] } },
+            { performanceReviewStatus: { in: ['pending', 'applying'] } },
+          ],
+        },
+        select: { userId: true, employeeName: true },
+      });
+      if (pendingReviews.length > 0) {
+        const names = [...new Set(pendingReviews.map((item) => item.employeeName).filter(Boolean))].join('、');
+        throw new ConflictException({
+          code: ERROR_CODE.CONFLICT,
+          message: `${names || '所选员工'}还有待审核变更，请先处理后再归档`,
+        });
+      }
+      const archivedAt = new Date();
+      const result = await tx.user.updateMany({
+        where: { id: { in: ids }, archivedAt: null },
+        data: { archivedAt },
+      });
+      for (const user of users) {
+        await tx.auditLog.create({
+          data: {
+            userId: operator.id,
+            action: 'archive_resigned_employee',
+            entityType: 'user',
+            entityId: user.id,
+            newValue: this.toJson({ archivedAt, status: user.status }),
+          },
+        });
+      }
+      return { archived: result.count };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  async archiveDrafts(requestIds: string[], operator: AuthUser): Promise<{ archived: number }> {
+    const ids = [...new Set(requestIds)];
+    return this.prisma.$transaction(async (tx) => {
+      const drafts = await tx.employeeDataChangeRequest.findMany({
+        where: { id: { in: ids }, recordStatus: 'draft', archivedAt: null },
+        select: { id: true, employeeName: true },
+      });
+      if (drafts.length !== ids.length) {
+        throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '部分草稿已提交或已归档，请刷新后重试' });
+      }
+      const archivedAt = new Date();
+      const result = await tx.employeeDataChangeRequest.updateMany({
+        where: { id: { in: ids }, recordStatus: 'draft', archivedAt: null },
+        data: { recordStatus: 'archived', archivedAt },
+      });
+      for (const draft of drafts) {
+        await tx.auditLog.create({
+          data: {
+            userId: operator.id,
+            action: 'archive_employee_draft',
+            entityType: 'employee_data_change_request',
+            entityId: draft.id,
+            newValue: this.toJson({ archivedAt, employeeName: draft.employeeName }),
+          },
+        });
+      }
+      return { archived: result.count };
+    });
   }
 
   async findOne(userId: string) {
@@ -297,6 +492,7 @@ export class EmployeeArchivesService {
         message: '员工不存在',
       });
     }
+    this.assertEmployeeEditable(user);
 
     const currentEmployment = user.employmentHistory[0] ?? null;
     const currentProfile = this.profileReviewData(user.employeeProfile);
@@ -314,7 +510,13 @@ export class EmployeeArchivesService {
       });
     }
     const pending = await this.prisma.employeeDataChangeRequest.findFirst({
-      where: { userId, sourceType: 'manual_profile_change', profileReviewStatus: 'pending' },
+      where: {
+        userId,
+        sourceType: 'manual_profile_change',
+        recordStatus: 'submitted',
+        archivedAt: null,
+        profileReviewStatus: 'pending',
+      },
       orderBy: { createdAt: 'desc' },
     });
     const data = {
@@ -354,14 +556,29 @@ export class EmployeeArchivesService {
   }
 
   async submitDraft(userId: string, input: SubmitEmployeeArchiveDraftDto, operator: AuthUser) {
-    return this.submitDraftWithClient(this.prisma, userId, input, operator);
+    return this.persistArchiveChangeWithClient(this.prisma, userId, input, operator, 'submitted');
   }
 
-  private async submitDraftWithClient(
+  async saveArchiveDraft(userId: string, input: SubmitEmployeeArchiveDraftDto, operator: AuthUser) {
+    const request = await this.persistArchiveChangeWithClient(this.prisma, userId, input, operator, 'draft');
+    await this.prisma.auditLog.create({
+      data: {
+        userId: operator.id,
+        action: 'save_employee_archive_draft',
+        entityType: 'employee_data_change_request',
+        entityId: request.id,
+        newValue: this.toJson({ userId }),
+      },
+    });
+    return request;
+  }
+
+  private async persistArchiveChangeWithClient(
     client: Pick<Prisma.TransactionClient, 'user' | 'employeeDataChangeRequest'>,
     userId: string,
     input: SubmitEmployeeArchiveDraftDto,
     operator: AuthUser,
+    recordStatus: 'draft' | 'submitted',
   ) {
     const user = await client.user.findUnique({
       where: { id: userId, deletedAt: null },
@@ -378,6 +595,7 @@ export class EmployeeArchivesService {
     if (!user) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '员工不存在' });
     }
+    this.assertEmployeeEditable(user);
 
     const employment = user.employmentHistory[0] ?? null;
     const baseEmployee = this.employeeReviewData(user, employment);
@@ -433,22 +651,37 @@ export class EmployeeArchivesService {
       createdById: operator.id,
       rejectedReason: null,
     };
-    const pending = await client.employeeDataChangeRequest.findFirst({
-      where: {
-        userId,
-        sourceType: 'manual_archive_change',
-        OR: [
-          { profileReviewStatus: 'pending' },
-          { performanceReviewStatus: 'pending' },
-        ],
-      },
+    const existing = await client.employeeDataChangeRequest.findFirst({
+      where: input.draftId
+        ? {
+          id: input.draftId,
+          userId,
+          sourceType: 'manual_archive_change',
+          recordStatus: 'draft',
+          archivedAt: null,
+        }
+        : {
+          userId,
+          sourceType: 'manual_archive_change',
+          recordStatus,
+          archivedAt: null,
+          OR: [
+            { profileReviewStatus: 'pending' },
+            { performanceReviewStatus: 'pending' },
+          ],
+        },
       orderBy: { createdAt: 'desc' },
     });
-    if (pending) {
+    if (input.draftId && !existing) {
+      throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
+    }
+    if (existing) {
       return client.employeeDataChangeRequest.update({
-        where: { id: pending.id },
+        where: { id: existing.id },
         data: {
           ...data,
+          recordStatus,
+          archivedAt: null,
           profileReviewStatus: profileChanged ? 'pending' : 'not_required',
           performanceReviewStatus: performanceChanged ? 'pending' : 'not_required',
         },
@@ -460,6 +693,7 @@ export class EmployeeArchivesService {
         employeeNo: user.employeeNo,
         employeeName: user.name,
         sourceType: 'manual_archive_change',
+        recordStatus,
         ...data,
         profileReviewStatus: profileChanged ? 'pending' : 'not_required',
         performanceReviewStatus: performanceChanged ? 'pending' : 'not_required',
@@ -495,7 +729,12 @@ export class EmployeeArchivesService {
       if (changedUserIds.length === 0) return { submitted: 0 };
 
       const pendingReviews = await tx.employeeDataChangeRequest.findMany({
-        where: { userId: { in: changedUserIds }, profileReviewStatus: 'pending' },
+        where: {
+          userId: { in: changedUserIds },
+          recordStatus: 'submitted',
+          archivedAt: null,
+          profileReviewStatus: 'pending',
+        },
         select: { userId: true, employeeName: true },
       });
       if (pendingReviews.length > 0) {
@@ -507,10 +746,10 @@ export class EmployeeArchivesService {
       }
 
       for (const userId of changedUserIds) {
-        await this.submitDraftWithClient(tx, userId, {
+        await this.persistArchiveChangeWithClient(tx, userId, {
           employee: { deptId: departmentId },
           profile: {},
-        }, operator);
+        }, operator, 'submitted');
       }
       return { submitted: changedUserIds.length };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -534,11 +773,14 @@ export class EmployeeArchivesService {
         message: '员工不存在',
       });
     }
+    this.assertEmployeeEditable(user);
 
     const pendingEmploymentChange = await this.prisma.employeeDataChangeRequest.findFirst({
       where: {
         userId,
         sourceType: 'manual_employment_change',
+        recordStatus: 'submitted',
+        archivedAt: null,
         profileReviewStatus: { in: ['pending', 'applying'] },
       },
       select: { id: true },
@@ -608,6 +850,7 @@ export class EmployeeArchivesService {
         employeeNo: user.employeeNo,
         employeeName: user.name,
         sourceType: 'manual_employment_change',
+        recordStatus: 'submitted',
         sourceBatchId: input.sourceBatchId ?? null,
         baseValue: this.toJson({
           employee: baseEmployee,
@@ -730,6 +973,15 @@ export class EmployeeArchivesService {
       });
       return binding;
     });
+  }
+
+  private assertEmployeeEditable(user: { archivedAt?: Date | null }) {
+    if (user.archivedAt) {
+      throw new BadRequestException({
+        code: ERROR_CODE.CONFLICT,
+        message: '员工档案已归档，只能查看',
+      });
+    }
   }
 
   private employeeReviewData(

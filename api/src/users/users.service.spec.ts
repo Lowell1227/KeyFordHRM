@@ -69,7 +69,32 @@ describe('UsersService', () => {
       expect((service as any).prisma.user.count).toHaveBeenCalledWith({
         where: expect.objectContaining({
           accountType: 'employee',
+          archivedAt: null,
           status: { not: 'resigned' },
+        }),
+      });
+    });
+
+    it('已归档视图只返回已离职且已归档员工', async () => {
+      const count = jest.fn().mockResolvedValue(0);
+      const findMany = jest.fn().mockResolvedValue([]);
+      const service = new UsersService(
+        { user: { count, findMany } } as any,
+        { getVisibleEmployeeFilter: jest.fn().mockResolvedValue({}) } as any,
+        noBusinessIdentities as any,
+      );
+
+      await service.findAll({
+        page: 1, pageSize: 20, skip: 0, take: 20, archived: true,
+      } as any, {
+        id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null,
+        isAssessorOnly: false, canViewAll: true,
+      });
+
+      expect(count).toHaveBeenCalledWith({
+        where: expect.objectContaining({
+          archivedAt: { not: null },
+          status: UserStatus.resigned,
         }),
       });
     });

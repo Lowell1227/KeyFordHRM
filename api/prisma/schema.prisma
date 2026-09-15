@@ -529,6 +529,7 @@ model User {
   sysRole            SysRole        @default(employee) @map("sys_role")
   isAssessorOnly     Boolean        @default(false) @map("is_assessor_only")
   canViewAll         Boolean        @default(false) @map("can_view_all") // 全量只读（董事长李宏=true，审批权另由 approver_id 决定）
+  archivedAt         DateTime?      @map("archived_at") @db.Timestamptz(6)
   deletedAt          DateTime?      @map("deleted_at") @db.Timestamptz(6)
   createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime       @default(now()) @map("updated_at") @db.Timestamptz(6)
@@ -618,6 +619,7 @@ model User {
   @@index([deptId])
   @@index([positionId])
   @@index([directManagerId])
+  @@index([archivedAt])
   @@index([status])
   @@index([accountType])
   @@index([dingtalkId])
@@ -811,6 +813,8 @@ model EmployeeDataChangeRequest {
   performanceReviewStatus String    @default("not_required") @map("performance_review_status") @db.VarChar(20)
   validationErrors        Json      @default("[]") @map("validation_errors") @db.JsonB
   validationWarnings      Json      @default("[]") @map("validation_warnings") @db.JsonB
+  recordStatus            String    @default("submitted") @map("record_status") @db.VarChar(20)
+  archivedAt              DateTime? @map("archived_at") @db.Timestamptz(6)
   createdById             String    @map("created_by_id") @db.Uuid
   profileReviewedById     String?   @map("profile_reviewed_by_id") @db.Uuid
   profileReviewedAt       DateTime? @map("profile_reviewed_at") @db.Timestamptz(6)
@@ -831,6 +835,7 @@ model EmployeeDataChangeRequest {
   @@index([profileReviewStatus, createdAt(sort: Desc)])
   @@index([performanceReviewStatus, createdAt(sort: Desc)])
   @@index([userId, createdAt(sort: Desc)])
+  @@index([recordStatus, createdAt(sort: Desc)])
   @@map("employee_data_change_requests")
 }
 

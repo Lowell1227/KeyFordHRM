@@ -41,7 +41,10 @@ export class EmployeeDataReviewsService {
   constructor(private readonly prisma: PrismaService) {}
 
   async findAll(query: EmployeeReviewQuery) {
-    const where: Prisma.EmployeeDataChangeRequestWhereInput = {};
+    const where: Prisma.EmployeeDataChangeRequestWhereInput = {
+      recordStatus: 'submitted',
+      archivedAt: null,
+    };
     const filters: Prisma.EmployeeDataChangeRequestWhereInput[] = [];
     if (query.keyword?.trim()) {
       const keyword = query.keyword.trim();
@@ -146,6 +149,8 @@ export class EmployeeDataReviewsService {
     const pending = await this.prisma.employeeDataChangeRequest.findFirst({
       where: {
         userId,
+        recordStatus: 'submitted',
+        archivedAt: null,
         performanceReviewStatus: 'pending',
       },
       orderBy: { createdAt: 'desc' },
@@ -205,6 +210,12 @@ export class EmployeeDataReviewsService {
     if (!request) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '审核记录不存在' });
     }
+    if (request.recordStatus === 'draft') {
+      throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿尚未提交审核' });
+    }
+    if (request.recordStatus === 'archived' || request.archivedAt) {
+      throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '该记录已归档' });
+    }
     if (request.performanceReviewStatus !== 'pending') {
       throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '绩效关系审核已处理' });
     }
@@ -255,6 +266,12 @@ export class EmployeeDataReviewsService {
         if (!request) {
           throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '审核记录不存在' });
         }
+        if (request.recordStatus === 'draft') {
+          throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿尚未提交审核' });
+        }
+        if (request.recordStatus === 'archived' || request.archivedAt) {
+          throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '该记录已归档' });
+        }
         const status = scope === 'profile'
           ? request.profileReviewStatus
           : request.performanceReviewStatus;
@@ -270,11 +287,11 @@ export class EmployeeDataReviewsService {
 
         const claimed = scope === 'profile'
           ? await tx.employeeDataChangeRequest.updateMany({
-            where: { id: requestId, profileReviewStatus: 'pending' },
+            where: { id: requestId, recordStatus: 'submitted', archivedAt: null, profileReviewStatus: 'pending' },
             data: { profileReviewStatus: 'applying' },
           })
           : await tx.employeeDataChangeRequest.updateMany({
-            where: { id: requestId, performanceReviewStatus: 'pending' },
+            where: { id: requestId, recordStatus: 'submitted', archivedAt: null, performanceReviewStatus: 'pending' },
             data: { performanceReviewStatus: 'applying' },
           });
         if (claimed.count !== 1) return false;
@@ -379,6 +396,12 @@ export class EmployeeDataReviewsService {
         await this.prisma.$transaction(async (tx) => {
           const request = await tx.employeeDataChangeRequest.findUnique({ where: { id: requestId } });
           if (!request) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '审核记录不存在' });
+          if (request.recordStatus === 'draft') {
+            throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿尚未提交审核' });
+          }
+          if (request.recordStatus === 'archived' || request.archivedAt) {
+            throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '该记录已归档' });
+          }
           const profilePending = request.profileReviewStatus === 'pending';
           const performancePending = request.performanceReviewStatus === 'pending';
           if (!profilePending && !performancePending) {
@@ -1147,6 +1170,8 @@ export class EmployeeDataReviewsService {
     const remaining = await tx.employeeDataChangeRequest.count({
       where: {
         sourceBatchId: batchId,
+        recordStatus: 'submitted',
+        archivedAt: null,
         OR: [
           { profileReviewStatus: { in: ['pending', 'applying'] } },
           { performanceReviewStatus: { in: ['pending', 'applying'] } },

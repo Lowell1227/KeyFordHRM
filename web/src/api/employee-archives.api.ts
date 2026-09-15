@@ -46,6 +46,8 @@ export interface EmployeeDataReview {
   rejectedReason?: string | null;
   createdAt: string;
   updatedAt: string;
+  recordStatus?: 'draft' | 'submitted' | 'archived';
+  archivedAt?: string | null;
 }
 
 export interface EmployeeDataReviewPage {
@@ -54,6 +56,8 @@ export interface EmployeeDataReviewPage {
   pageSize: number;
   items: EmployeeDataReview[];
 }
+
+export type EmployeeDraftPage = EmployeeDataReviewPage;
 
 export interface EmployeeReviewBatchResult {
   succeeded: Array<{ requestId: string; scopes: EmployeeReviewScope[] }>;
@@ -187,6 +191,7 @@ export interface EmployeeArchive {
     attachments: Array<{ name: string; url: string; size: number; mimeType: string }>;
   }>;
   dingtalkBindingState: 'unbound' | 'enabled' | 'disabled';
+  archivedAt?: string | null;
   dingtalkBinding: {
     id: string;
     status: 'enabled' | 'disabled';
@@ -199,6 +204,7 @@ export interface EmployeeArchive {
 
 export const employeeArchivesApi = {
   createEmployee(body: {
+    draftId?: string;
     employeeNo: string;
     name: string;
     phone?: string | null;
@@ -214,6 +220,37 @@ export const employeeArchivesApi = {
     performanceManagerId?: string | null;
   }): Promise<EmployeeDataReview> {
     return http.post('/employee-archives', body) as unknown as Promise<EmployeeDataReview>;
+  },
+
+  saveEmployeeCreateDraft(body: Partial<{
+    draftId: string;
+    employeeNo: string;
+    name: string;
+    phone: string | null;
+    company: string;
+    deptId: string;
+    positionId: string | null;
+    entryDate: string;
+    effectiveFrom: string;
+    effectiveTo: string | null;
+    employmentType: string;
+    employeeStatus: string;
+    rosterManagerId: string | null;
+    performanceManagerId: string | null;
+  }>): Promise<EmployeeDataReview> {
+    return http.post('/employee-archives/drafts', body) as unknown as Promise<EmployeeDataReview>;
+  },
+
+  listDrafts(params: { page?: number; pageSize?: number; state?: 'draft' | 'archived' } = {}): Promise<EmployeeDraftPage> {
+    return http.get('/employee-archives/drafts/list', { params }) as unknown as Promise<EmployeeDraftPage>;
+  },
+
+  archiveDrafts(ids: string[]): Promise<{ archived: number }> {
+    return http.post('/employee-archives/drafts/archive', { ids }) as unknown as Promise<{ archived: number }>;
+  },
+
+  archiveEmployees(ids: string[]): Promise<{ archived: number }> {
+    return http.post('/employee-archives/archive', { ids }) as unknown as Promise<{ archived: number }>;
   },
 
   getDiagnostics(): Promise<{ blocking: false; total: number; items: Array<{ code: string; label: string; userIds: string[]; detail: string }> }> {
@@ -232,12 +269,23 @@ export const employeeArchivesApi = {
   },
 
   submitDraft(userId: string, body: {
+    draftId?: string;
     employee: Record<string, unknown>;
     profile: Record<string, unknown>;
     contracts: Record<string, unknown>[];
     performance: Record<string, unknown>;
   }): Promise<EmployeeDataReview> {
     return http.patch(`/employee-archives/${userId}/draft`, body) as unknown as Promise<EmployeeDataReview>;
+  },
+
+  saveArchiveDraft(userId: string, body: {
+    draftId?: string;
+    employee: Record<string, unknown>;
+    profile: Record<string, unknown>;
+    contracts: Record<string, unknown>[];
+    performance: Record<string, unknown>;
+  }): Promise<EmployeeDataReview> {
+    return http.patch(`/employee-archives/${userId}/draft/save`, body) as unknown as Promise<EmployeeDataReview>;
   },
 
   submitDepartmentAssignments(userIds: string[], departmentId: string): Promise<{ submitted: number }> {

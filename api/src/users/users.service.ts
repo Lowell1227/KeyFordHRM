@@ -57,6 +57,7 @@ export interface UserListItem {
   canViewAll: boolean;
   entryDate: Date | null;
   dingtalkBindingState: 'unbound' | 'enabled' | 'disabled';
+  archivedAt: Date | null;
 }
 
 /** 用户详情字段 */
@@ -84,6 +85,7 @@ export interface UserDetail {
   entryDate: Date | null;
   leaveDate: Date | null;
   createdAt: Date;
+  archivedAt: Date | null;
 }
 
 /** 用户摘要（用于更新后返回） */
@@ -116,6 +118,7 @@ export class UsersService {
   async findAll(dto: UserQueryDto, viewer: AuthUser): Promise<Paginated<UserListItem>> {
     const where: Prisma.UserWhereInput = {
       deletedAt: null,
+      archivedAt: dto.archived ? { not: null } : null,
       ...(dto.includeTestAccounts
         ? { accountType: { in: [AccountType.employee, AccountType.test] } }
         : { accountType: AccountType.employee }),
@@ -130,7 +133,9 @@ export class UsersService {
     }
 
     // 状态过滤
-    if (dto.status) {
+    if (dto.archived) {
+      where.status = UserStatus.resigned;
+    } else if (dto.status) {
       where.status = dto.status;
     } else {
       where.status = { not: UserStatus.resigned };
@@ -212,6 +217,7 @@ export class UsersService {
       canViewAll: u.canViewAll,
       entryDate: u.entryDate,
       dingtalkBindingState: u.externalIdentityBindings[0]?.status ?? 'unbound',
+      archivedAt: u.archivedAt,
     }));
 
     return paginated(items, total, dto);
@@ -288,6 +294,7 @@ export class UsersService {
       entryDate: user.entryDate,
       leaveDate: user.leaveDate,
       createdAt: user.createdAt,
+      archivedAt: user.archivedAt,
     };
   }
 

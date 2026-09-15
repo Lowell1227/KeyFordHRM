@@ -3,7 +3,7 @@ import { onMounted, reactive, ref, watch } from 'vue';
 import { Delete, Plus } from '@element-plus/icons-vue';
 import { ElMessage, type UploadRequestOptions } from 'element-plus';
 import type { Department } from '@/types/api.types';
-import type { EmployeeArchive } from '@/api/employee-archives.api';
+import type { EmployeeArchive, EmployeeDataReview } from '@/api/employee-archives.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import { uploadApi } from '@/api/upload.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
@@ -11,16 +11,21 @@ import { positionsApi, type PositionRecord } from '@/api/positions.api';
 const props = defineProps<{
   editing: boolean;
   archive: EmployeeArchive | null;
+  draft?: EmployeeDataReview | null;
   departments: Department[];
 }>();
 
+type ArchiveChangePayload = {
+  draftId?: string;
+  employee: Record<string, unknown>;
+  profile: Record<string, unknown>;
+  contracts: Record<string, unknown>[];
+  performance: Record<string, unknown>;
+};
+
 const emit = defineEmits<{
-  submit: [value: {
-    employee: Record<string, unknown>;
-    profile: Record<string, unknown>;
-    contracts: Record<string, unknown>[];
-    performance: Record<string, unknown>;
-  }];
+  submit: [value: ArchiveChangePayload];
+  save: [value: ArchiveChangePayload];
 }>();
 const positions = ref<PositionRecord[]>([]);
 
@@ -122,10 +127,22 @@ function reset() {
       images: [...(item.images ?? [])],
       attachments: [...(item.attachments ?? [])],
     }));
+  if (props.draft?.userId === archive.id && props.draft.recordStatus === 'draft') {
+    const proposed = props.draft.proposedValue ?? {};
+    replaceRecord(form.employee, { ...form.employee, ...(proposed.employee ?? {}) });
+    replaceRecord(form.profile, { ...form.profile, ...(proposed.profile ?? {}) });
+    replaceRecord(form.performance, { ...form.performance, ...(proposed.performance ?? {}) });
+    if (Array.isArray(proposed.contracts)) {
+      form.contracts = proposed.contracts.map((item: Record<string, any>, index: number) => ({
+        ...item,
+        __key: item.id || `draft-${index}`,
+      }));
+    }
+  }
   initialSnapshot = formSnapshot();
 }
 
-watch(() => [props.editing, props.archive?.id] as const, ([editing]) => {
+watch(() => [props.editing, props.archive?.id, props.draft?.id] as const, ([editing]) => {
   if (editing) reset();
 }, { immediate: true });
 onMounted(async () => { positions.value = await positionsApi.findAll(); });
@@ -208,31 +225,44 @@ async function openUploadedMaterial(item: { name: string; url: string; mimeType?
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-function submit() {
-  if (!isDirty()) {
-    ElMessage.info('未检测到变更，无需提交审核');
-    return;
-  }
+function changePayload(): ArchiveChangePayload {
   form.employee.phone = form.profile.phone || null;
-  emit('submit', {
+  return {
+    draftId: props.draft?.id,
     employee: { ...form.employee },
     profile: { ...form.profile },
     contracts: form.contracts.map(({ __key, ...item }, index) => ({ ...item, sequence: index })),
     performance: { ...form.performance },
-  });
+  };
+}
+
+function submit() {
+  if (!isDirty() && !props.draft) {
+    ElMessage.info('未检测到变更，无需提交审核');
+    return;
+  }
+  emit('submit', changePayload());
+}
+
+function saveDraft() {
+  if (!isDirty() && !props.draft) {
+    ElMessage.info('未检测到变更，无需保存草稿');
+    return;
+  }
+  emit('save', changePayload());
 }
 
 function isDirty() {
   return Boolean(initialSnapshot) && formSnapshot() !== initialSnapshot;
 }
 
-defineExpose({ submit, reset, isDirty });
+defineExpose({ submit, saveDraft, reset, isDirty });
 </script>
 
 <template>
   <div v-if="editing" class="archive-inline-editor">
     <el-alert
-      title="保存后进入人事变更审核，HR 管理员审核通过前不会修改正式档案。"
+      title="保存草稿不会进入审核；只有点击提交审核后，才进入人事变更审核。"
       type="info"
       show-icon
       :closable="false"

@@ -14,6 +14,7 @@ import { departmentsApi } from '@/api/departments.api';
 import {
   employeeArchivesApi,
   type EmployeeArchive,
+  type EmployeeDataReview,
   type EmployeeRosterImportRow,
   type EmployeeRosterImportMode,
   type EmployeeRosterPreviewResult,
@@ -222,6 +223,8 @@ const selectedOrgIsUnassigned = computed(() => selectedDeptId.value === UNASSIGN
 const userList = ref<ManagedUser[]>([]);
 const userTotal = ref(0);
 const userLoading = ref(false);
+const userArchiveView = ref(false);
+const selectedUsers = ref<ManagedUser[]>([]);
 const userQuery = ref<UserQuery>({
   page: 1,
   pageSize: 20,
@@ -409,6 +412,7 @@ async function loadUsers() {
   try {
     const res = await usersApi.findAll({
       ...userQuery.value,
+      archived: userArchiveView.value || undefined,
       keyword: userQuery.value.keyword || undefined,
     });
     userList.value = res.items;
@@ -419,6 +423,45 @@ async function loadUsers() {
   } finally {
     userLoading.value = false;
   }
+}
+
+function changeUserArchiveView(archived: boolean) {
+  userArchiveView.value = archived;
+  selectedUsers.value = [];
+  userQuery.value.page = 1;
+  if (archived) userQuery.value.status = undefined;
+  void loadUsers();
+}
+
+function canSelectEmployeeForArchive(row: ManagedUser) {
+  return canEditArchive.value && !userArchiveView.value && row.status === 'resigned' && !row.archivedAt;
+}
+
+function onEmployeeSelectionChange(rows: ManagedUser[]) {
+  selectedUsers.value = rows;
+}
+
+async function archiveSelectedEmployees() {
+  if (!selectedUsers.value.length) return;
+  const names = selectedUsers.value.map((item) => item.name).join('、');
+  try {
+    await ElMessageBox.confirm(
+      `确认归档 ${selectedUsers.value.length} 名已离职员工（${names}）？档案和历史业务记录会保留，可在“已归档”中查看。`,
+      '归档离职员工',
+      { confirmButtonText: '确认归档', cancelButtonText: '取消', type: 'warning' },
+    );
+    const result = await employeeArchivesApi.archiveEmployees(selectedUsers.value.map((item) => item.id));
+    ElMessage.success(`已归档 ${result.archived} 名员工`);
+    selectedUsers.value = [];
+    await loadUsers();
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') throw error;
+  }
+}
+
+function archiveEmployee(row: ManagedUser) {
+  selectedUsers.value = [row];
+  void archiveSelectedEmployees();
 }
 
 function onDeptSelect(deptId: string) {
@@ -542,8 +585,11 @@ const archiveCurrentEmployment = computed(() => (
   ?? employeeArchiveDrawer.value.data?.employmentHistory[0]
   ?? null
 ));
+const archiveReadOnly = computed(() => Boolean(employeeArchiveDrawer.value.data?.archivedAt));
 const archiveEditing = ref(false);
 const archiveEditSaving = ref(false);
+const archiveEditAction = ref<'draft' | 'submit' | null>(null);
+const activeArchiveDraft = ref<EmployeeDataReview | null>(null);
 const archiveEditorRef = ref<InstanceType<typeof EmployeeArchiveInlineEditor> | null>(null);
 
 function archiveDisplayValue(value: unknown, emptyText = '未填写') {
@@ -553,6 +599,7 @@ function archiveDisplayValue(value: unknown, emptyText = '未填写') {
 async function openEmployeeArchive(row: ManagedUser) {
   employeeArchiveDrawer.value.visible = true;
   archiveEditing.value = false;
+  activeArchiveDraft.value = null;
   employeeArchiveDrawer.value.loading = true;
   employeeArchiveDrawer.value.data = null;
   try {
@@ -565,6 +612,7 @@ async function openEmployeeArchive(row: ManagedUser) {
 }
 
 async function submitArchiveDraft(value: {
+  draftId?: string;
   employee: Record<string, unknown>;
   profile: Record<string, unknown>;
   contracts: Record<string, unknown>[];
@@ -573,10 +621,12 @@ async function submitArchiveDraft(value: {
   const data = employeeArchiveDrawer.value.data;
   if (!data) return;
   archiveEditSaving.value = true;
+  archiveEditAction.value = 'submit';
   try {
     await employeeArchivesApi.submitDraft(data.id, value);
     ElMessage.success('档案变更已提交审核，审核通过后生效');
     archiveEditing.value = false;
+    activeArchiveDraft.value = null;
     employeeArchiveDrawer.value.data = await employeeArchivesApi.getArchive(data.id);
     employeeArchiveDrawer.value.visible = false;
     activeView.value = 'users';
@@ -584,6 +634,32 @@ async function submitArchiveDraft(value: {
     // 由 HTTP 拦截器展示错误
   } finally {
     archiveEditSaving.value = false;
+    archiveEditAction.value = null;
+  }
+}
+
+async function saveArchiveDraft(value: {
+  draftId?: string;
+  employee: Record<string, unknown>;
+  profile: Record<string, unknown>;
+  contracts: Record<string, unknown>[];
+  performance: Record<string, unknown>;
+}) {
+  const data = employeeArchiveDrawer.value.data;
+  if (!data) return;
+  archiveEditSaving.value = true;
+  archiveEditAction.value = 'draft';
+  try {
+    await employeeArchivesApi.saveArchiveDraft(data.id, value);
+    ElMessage.success('草稿已保存，尚未提交审核');
+    archiveEditing.value = false;
+    activeArchiveDraft.value = null;
+    employeeArchiveDrawer.value.visible = false;
+  } catch {
+    // 由 HTTP 拦截器展示错误
+  } finally {
+    archiveEditSaving.value = false;
+    archiveEditAction.value = null;
   }
 }
 
@@ -680,11 +756,140 @@ async function confirmBatchAssignment() {
 const departmentEditDrawer = ref({ visible: false, department: null as Department | null, saving: false });
 const departmentCreateDrawer = ref({ visible: false, parent: null as Department | null });
 const employeeCreateDrawerVisible = ref(false);
+const employeeCreateDraft = ref<EmployeeDataReview | null>(null);
 const employmentRecordDrawerVisible = ref(false);
+const employmentRecordDrawerArchive = ref<EmployeeArchive | null>(null);
+const employmentRecordDrawerMode = ref<'default' | 'resignation'>('default');
+const draftDialog = ref({
+  visible: false,
+  loading: false,
+  state: 'draft' as 'draft' | 'archived',
+  items: [] as EmployeeDataReview[],
+  total: 0,
+  selected: [] as EmployeeDataReview[],
+});
 const departmentMergeDialog = ref({ visible: false, source: null as Department | null, targetId: '', saving: false });
 const departmentContextMenu = ref({ visible: false, x: 0, y: 0, department: null as Department | null });
 const orgDragEnabled = ref(false);
 let orgLongPressTimer: ReturnType<typeof setTimeout> | null = null;
+
+function openEmployeeCreate() {
+  employeeCreateDraft.value = null;
+  employeeCreateDrawerVisible.value = true;
+}
+
+function afterEmployeeDraftSaved() {
+  employeeCreateDraft.value = null;
+  if (draftDialog.value.visible) void loadDrafts();
+}
+
+function afterEmployeeSubmitted() {
+  employeeCreateDraft.value = null;
+  void Promise.all([loadUsers(), loadDrafts()]);
+}
+
+function afterEmploymentSubmitted() {
+  employeeArchiveDrawer.value.visible = false;
+  employmentRecordDrawerArchive.value = null;
+  employmentRecordDrawerMode.value = 'default';
+  void loadUsers();
+}
+
+async function loadDrafts() {
+  draftDialog.value.loading = true;
+  try {
+    const result = await employeeArchivesApi.listDrafts({
+      page: 1,
+      pageSize: 100,
+      state: draftDialog.value.state,
+    });
+    draftDialog.value.items = result.items;
+    draftDialog.value.total = result.total;
+    draftDialog.value.selected = [];
+  } finally {
+    draftDialog.value.loading = false;
+  }
+}
+
+function openDraftDialog() {
+  draftDialog.value.visible = true;
+  draftDialog.value.state = 'draft';
+  void loadDrafts();
+}
+
+function changeDraftState(value: string | number | boolean | undefined) {
+  const state = value === 'archived' ? 'archived' : 'draft';
+  draftDialog.value.state = state;
+  void loadDrafts();
+}
+
+function onDraftSelectionChange(rows: EmployeeDataReview[]) {
+  draftDialog.value.selected = rows;
+}
+
+function draftTypeLabel(draft: EmployeeDataReview) {
+  return draft.sourceType === 'manual_employee_create' ? '新增员工' : '档案修改';
+}
+
+function draftObjectLabel(draft: EmployeeDataReview) {
+  return draft.employeeName || draft.proposedValue?.employee?.name || '未命名员工草稿';
+}
+
+async function continueDraft(draft: EmployeeDataReview) {
+  draftDialog.value.visible = false;
+  if (draft.sourceType === 'manual_employee_create') {
+    employeeCreateDraft.value = draft;
+    employeeCreateDrawerVisible.value = true;
+    return;
+  }
+  if (!draft.userId) {
+    ElMessage.warning('该草稿没有关联员工，无法继续编辑');
+    return;
+  }
+  employeeArchiveDrawer.value.visible = true;
+  employeeArchiveDrawer.value.loading = true;
+  employeeArchiveDrawer.value.data = null;
+  try {
+    employeeArchiveDrawer.value.data = await employeeArchivesApi.getArchive(draft.userId);
+    activeArchiveDraft.value = draft;
+    archiveEditing.value = true;
+  } catch {
+    employeeArchiveDrawer.value.visible = false;
+  } finally {
+    employeeArchiveDrawer.value.loading = false;
+  }
+}
+
+async function archiveSelectedDrafts() {
+  if (!draftDialog.value.selected.length) return;
+  try {
+    await ElMessageBox.confirm(
+      `确认归档所选 ${draftDialog.value.selected.length} 条草稿？草稿会保留，但不会进入审核。`,
+      '归档草稿',
+      { confirmButtonText: '确认归档', cancelButtonText: '取消', type: 'warning' },
+    );
+    const result = await employeeArchivesApi.archiveDrafts(draftDialog.value.selected.map((item) => item.id));
+    ElMessage.success(`已归档 ${result.archived} 条草稿`);
+    await loadDrafts();
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') throw error;
+  }
+}
+
+function openEmploymentRecord(archive: EmployeeArchive, mode: 'default' | 'resignation' = 'default') {
+  employmentRecordDrawerArchive.value = archive;
+  employmentRecordDrawerMode.value = mode;
+  employmentRecordDrawerVisible.value = true;
+}
+
+async function openResignation(row: ManagedUser) {
+  try {
+    const archive = await employeeArchivesApi.getArchive(row.id);
+    openEmploymentRecord(archive, 'resignation');
+  } catch {
+    // 由 HTTP 拦截器展示错误
+  }
+}
 
 function openDepartmentEdit(row: Department) {
   departmentContextMenu.value.visible = false;
@@ -1225,7 +1430,16 @@ onBeforeUnmount(() => {
               <el-button v-if="canEditOrganization && selectedDept && !selectedOrgIsUnassigned" type="primary" @click="openDepartmentCreate(selectedDept)">新增下级部门</el-button>
             </template>
             <template v-else>
-              <el-button v-if="canEditArchive" type="primary" @click="employeeCreateDrawerVisible = true">新增员工</el-button>
+              <el-button v-if="canEditArchive && !userArchiveView" type="primary" @click="openEmployeeCreate">新增员工</el-button>
+              <el-button v-if="canEditArchive" @click="openDraftDialog">草稿箱</el-button>
+              <el-button v-if="canEditArchive" @click="changeUserArchiveView(!userArchiveView)">
+                {{ userArchiveView ? '返回员工档案' : '已归档' }}
+              </el-button>
+              <el-button
+                v-if="canEditArchive && !userArchiveView"
+                :disabled="selectedUsers.length === 0"
+                @click="archiveSelectedEmployees"
+              >归档</el-button>
               <el-dropdown v-if="canEditArchive" trigger="click" @command="(command: string) => command === 'roster' && openRosterImportDialog()">
                 <el-button>批量操作</el-button>
                 <template #dropdown><el-dropdown-menu><el-dropdown-item command="roster" :icon="UploadFilled">导入花名册</el-dropdown-item></el-dropdown-menu></template>
@@ -1441,7 +1655,12 @@ onBeforeUnmount(() => {
               clearable
               filterable
             />
-            <el-select v-model="userQuery.status" placeholder="全部状态" clearable>
+            <el-select
+              v-model="userQuery.status"
+              :placeholder="userArchiveView ? '已离职' : '全部状态'"
+              :disabled="userArchiveView"
+              clearable
+            >
               <el-option v-for="opt in statusOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
             </el-select>
             <el-select v-model="userQuery.sysRole" placeholder="全部系统权限" clearable>
@@ -1453,7 +1672,21 @@ onBeforeUnmount(() => {
         </QueryFilterPanel>
 
           <div class="directory-table-region desktop-result-table">
-          <el-table v-loading="userLoading" :data="userList" row-key="id" height="100%" class="app-table compact-table">
+          <el-table
+            v-loading="userLoading"
+            :data="userList"
+            row-key="id"
+            height="100%"
+            class="app-table compact-table"
+            @selection-change="onEmployeeSelectionChange"
+          >
+            <el-table-column
+              v-if="canEditArchive && !userArchiveView"
+              type="selection"
+              width="48"
+              fixed="left"
+              :selectable="canSelectEmployeeForArchive"
+            />
             <el-table-column label="人员" min-width="180">
             <template #default="{ row }">
               <div class="person-cell">
@@ -1511,15 +1744,22 @@ onBeforeUnmount(() => {
               </el-tag>
             </template>
           </el-table-column>
-          <el-table-column label="操作" width="290" fixed="right">
+          <el-table-column label="操作" width="360" fixed="right">
             <template #default="{ row }">
               <el-button link type="primary" size="small" @click="openEmployeeArchive(row as ManagedUser)">
                 查看档案
               </el-button>
-              <el-button link type="primary" size="small" :icon="Setting" @click="openPersonSettingsDialog(row as ManagedUser)">
+              <el-button v-if="!userArchiveView" link type="primary" size="small" :icon="Setting" @click="openPersonSettingsDialog(row as ManagedUser)">
                 人员设置
               </el-button>
-              <el-button v-if="canResetPassword" link type="primary" size="small" :icon="Key" @click="resetPassword(row as ManagedUser)">
+              <el-button
+                v-if="canEditArchive && !userArchiveView && (row as ManagedUser).status !== 'resigned'"
+                link
+                type="primary"
+                size="small"
+                @click="openResignation(row as ManagedUser)"
+              >办理离职</el-button>
+              <el-button v-if="canResetPassword && !userArchiveView" link type="primary" size="small" :icon="Key" @click="resetPassword(row as ManagedUser)">
                 重置密码
               </el-button>
             </template>
@@ -1536,8 +1776,10 @@ onBeforeUnmount(() => {
               <div class="mobile-result-field"><span class="mobile-result-field__label">钉钉登录</span><span class="mobile-result-field__value">{{ dingtalkStateLabels[item.dingtalkBindingState ?? 'unbound'] }}</span></div>
               <template #actions>
                 <el-button link type="primary" @click="openEmployeeArchive(item)">查看档案</el-button>
-                <el-button link type="primary" @click="openPersonSettingsDialog(item)">人员设置</el-button>
-                <el-button v-if="canResetPassword" link type="primary" @click="resetPassword(item)">重置密码</el-button>
+                <el-button v-if="!userArchiveView" link type="primary" @click="openPersonSettingsDialog(item)">人员设置</el-button>
+                <el-button v-if="canEditArchive && !userArchiveView && item.status !== 'resigned'" link type="primary" @click="openResignation(item)">办理离职</el-button>
+                <el-button v-if="canEditArchive && !userArchiveView && item.status === 'resigned'" link type="primary" @click="archiveEmployee(item)">归档</el-button>
+                <el-button v-if="canResetPassword && !userArchiveView" link type="primary" @click="resetPassword(item)">重置密码</el-button>
               </template>
             </MobileResultCard>
           </div>
@@ -1577,11 +1819,21 @@ onBeforeUnmount(() => {
                 · {{ employeeArchiveDrawer.data.position || '未设置岗位' }}
               </p>
             </div>
-            <div v-if="canEditArchive" class="employee-archive__global-actions">
+            <div v-if="canEditArchive && !archiveReadOnly" class="employee-archive__global-actions">
               <el-button v-if="!archiveEditing" type="primary" @click="archiveEditing = true">编辑档案</el-button>
               <template v-else>
                 <el-button :disabled="archiveEditSaving" @click="cancelArchiveEditing">取消</el-button>
-                <el-button type="primary" :loading="archiveEditSaving" @click="archiveEditorRef?.submit()">保存并提交审核</el-button>
+                <el-button
+                  :loading="archiveEditAction === 'draft'"
+                  :disabled="archiveEditAction === 'submit'"
+                  @click="archiveEditorRef?.saveDraft()"
+                >保存草稿</el-button>
+                <el-button
+                  type="primary"
+                  :loading="archiveEditAction === 'submit'"
+                  :disabled="archiveEditAction === 'draft'"
+                  @click="archiveEditorRef?.submit()"
+                >提交审核</el-button>
               </template>
             </div>
           </div>
@@ -1590,7 +1842,9 @@ onBeforeUnmount(() => {
             ref="archiveEditorRef"
             :editing="archiveEditing"
             :archive="employeeArchiveDrawer.data"
+            :draft="activeArchiveDraft"
             :departments="departments"
+            @save="saveArchiveDraft"
             @submit="submitArchiveDraft"
           />
 
@@ -1685,7 +1939,7 @@ onBeforeUnmount(() => {
                 <span>仅影响钉钉登录和消息通知，不读取或同步钉钉组织</span>
               </div>
               <el-switch
-                v-if="employeeArchiveDrawer.data.dingtalkBinding"
+                v-if="employeeArchiveDrawer.data.dingtalkBinding && !archiveReadOnly"
                 :model-value="employeeArchiveDrawer.data.dingtalkBindingState === 'enabled'"
                 :loading="employeeArchiveDrawer.dingtalkSaving"
                 inline-prompt
@@ -1712,7 +1966,7 @@ onBeforeUnmount(() => {
                 <h3>任职历史</h3>
                 <span>支持历史补录和未来生效；重叠只提醒，不覆盖记录</span>
               </div>
-              <el-button v-if="canEditArchive" @click="employmentRecordDrawerVisible = true">新增任职记录</el-button>
+              <el-button v-if="canEditArchive && !archiveReadOnly" @click="openEmploymentRecord(employeeArchiveDrawer.data)">新增任职记录</el-button>
             </div>
             <el-tag v-if="employeeArchiveDrawer.data.employmentWarnings?.length" type="warning" effect="plain" size="small">{{ employeeArchiveDrawer.data.employmentWarnings.join('；') }}</el-tag>
             <el-table :data="employeeArchiveDrawer.data.employmentHistory" size="small" class="app-table">
@@ -1896,6 +2150,47 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
+    <el-dialog
+      v-model="draftDialog.visible"
+      title="人事档案草稿"
+      width="min(920px, 94vw)"
+      :close-on-click-modal="false"
+    >
+      <div class="draft-dialog-toolbar">
+        <el-radio-group :model-value="draftDialog.state" @change="changeDraftState">
+          <el-radio-button value="draft">草稿</el-radio-button>
+          <el-radio-button value="archived">已归档</el-radio-button>
+        </el-radio-group>
+        <el-button
+          v-if="draftDialog.state === 'draft'"
+          :disabled="draftDialog.selected.length === 0"
+          @click="archiveSelectedDrafts"
+        >归档所选</el-button>
+      </div>
+      <el-table
+        v-loading="draftDialog.loading"
+        :data="draftDialog.items"
+        row-key="id"
+        class="app-table compact-table"
+        @selection-change="onDraftSelectionChange"
+      >
+        <el-table-column v-if="draftDialog.state === 'draft'" type="selection" width="48" />
+        <el-table-column type="index" label="序号" width="64" />
+        <el-table-column label="类型" width="110"><template #default="{ row }">{{ draftTypeLabel(row as EmployeeDataReview) }}</template></el-table-column>
+        <el-table-column label="员工" min-width="160"><template #default="{ row }">{{ draftObjectLabel(row as EmployeeDataReview) }}</template></el-table-column>
+        <el-table-column label="保存人" min-width="140"><template #default="{ row }">{{ row.createdBy?.name || '未知' }}</template></el-table-column>
+        <el-table-column label="保存时间" width="170"><template #default="{ row }">{{ formatDateTime(row.updatedAt) }}</template></el-table-column>
+        <el-table-column label="操作" width="120" fixed="right">
+          <template #default="{ row }">
+            <el-button v-if="draftDialog.state === 'draft'" link type="primary" @click="continueDraft(row as EmployeeDataReview)">继续编辑</el-button>
+            <span v-else class="muted-text">只读保留</span>
+          </template>
+        </el-table-column>
+      </el-table>
+      <el-empty v-if="!draftDialog.loading && draftDialog.items.length === 0" :description="draftDialog.state === 'draft' ? '暂无草稿' : '暂无已归档草稿'" :image-size="64" />
+      <template #footer><el-button @click="draftDialog.visible = false">关闭</el-button></template>
+    </el-dialog>
+
     <DepartmentEditDrawer
       v-model="departmentEditDrawer.visible"
       :department="departmentEditDrawer.department"
@@ -1913,14 +2208,17 @@ onBeforeUnmount(() => {
     <EmployeeCreateDrawer
       v-model="employeeCreateDrawerVisible"
       :departments="departments"
-      @submitted="loadUsers"
+      :draft="employeeCreateDraft"
+      @saved="afterEmployeeDraftSaved"
+      @submitted="afterEmployeeSubmitted"
     />
 
     <EmploymentRecordDrawer
       v-model="employmentRecordDrawerVisible"
-      :archive="employeeArchiveDrawer.data"
+      :archive="employmentRecordDrawerArchive"
       :departments="departments"
-      @submitted="employeeArchiveDrawer.visible = false"
+      :mode="employmentRecordDrawerMode"
+      @submitted="afterEmploymentSubmitted"
     />
 
     <el-dialog v-model="departmentMergeDialog.visible" title="合并部门" width="520px" :close-on-click-modal="false">
@@ -2877,6 +3175,14 @@ onBeforeUnmount(() => {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
+}
+
+.draft-dialog-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
 }
 
 .muted-text {

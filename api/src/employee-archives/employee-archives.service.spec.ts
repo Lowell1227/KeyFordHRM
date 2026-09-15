@@ -891,4 +891,165 @@ describe('EmployeeArchivesService', () => {
     });
     expect(create).not.toHaveBeenCalled();
   });
+
+  it('保存员工档案草稿时不进入审核队列', async () => {
+    const user = archiveEditorUser();
+    const draftCreate = jest.fn().mockResolvedValue({
+      id: 'draft-1',
+      recordStatus: 'draft',
+      profileReviewStatus: 'pending',
+    });
+    const prisma = {
+      user: { findUnique: jest.fn().mockResolvedValue(user) },
+      employeeDataChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: draftCreate,
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new EmployeeArchivesService(prisma as any);
+
+    await service.saveArchiveDraft(user.id, {
+      employee: { position: '高级专员' },
+      profile: {},
+      contracts: [],
+      performance: {},
+    }, hrOperator);
+
+    expect(draftCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: user.id,
+        sourceType: 'manual_archive_change',
+        recordStatus: 'draft',
+      }),
+    });
+  });
+
+  it('已归档员工档案只能查看，不能再保存草稿', async () => {
+    const user = { ...archiveEditorUser(), archivedAt: new Date('2026-09-15T00:00:00.000Z') };
+    const draftCreate = jest.fn();
+    const prisma = {
+      user: { findUnique: jest.fn().mockResolvedValue(user) },
+      employeeDataChangeRequest: {
+        findFirst: jest.fn(),
+        create: draftCreate,
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new EmployeeArchivesService(prisma as any);
+
+    await expect(service.saveArchiveDraft(user.id, {
+      employee: { position: '高级专员' },
+      profile: {},
+      contracts: [],
+      performance: {},
+    }, hrOperator)).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '员工档案已归档，只能查看' }),
+    });
+    expect(draftCreate).not.toHaveBeenCalled();
+  });
+
+  it('只有已离职员工可以手动归档且不物理删除', async () => {
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const deleteMany = jest.fn();
+    const tx = {
+      user: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: archiveEditorUser().id,
+          name: '员工甲',
+          status: UserStatus.resigned,
+          archivedAt: null,
+        }]),
+        updateMany,
+        deleteMany,
+      },
+      employeeDataChangeRequest: { findMany: jest.fn().mockResolvedValue([]) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const service = new EmployeeArchivesService({
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any);
+
+    await expect(service.archiveEmployees([archiveEditorUser().id], hrOperator)).resolves.toEqual({ archived: 1 });
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: { in: [archiveEditorUser().id] }, archivedAt: null },
+      data: { archivedAt: expect.any(Date) },
+    });
+    expect(deleteMany).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ action: 'archive_resigned_employee', entityId: archiveEditorUser().id }),
+    });
+  });
+
+  it('离职员工仍有待审核变更时不能归档', async () => {
+    const tx = {
+      user: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: archiveEditorUser().id,
+          name: '员工甲',
+          status: UserStatus.resigned,
+          archivedAt: null,
+        }]),
+        updateMany: jest.fn(),
+      },
+      employeeDataChangeRequest: {
+        findMany: jest.fn().mockResolvedValue([{ userId: archiveEditorUser().id, employeeName: '员工甲' }]),
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new EmployeeArchivesService({
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any);
+
+    await expect(service.archiveEmployees([archiveEditorUser().id], hrOperator)).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '员工甲还有待审核变更，请先处理后再归档' }),
+    });
+    expect(tx.user.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('在职或试用期员工不能归档', async () => {
+    const tx = {
+      user: {
+        findMany: jest.fn().mockResolvedValue([{
+          id: archiveEditorUser().id,
+          name: '员工甲',
+          status: UserStatus.active,
+          archivedAt: null,
+        }]),
+        updateMany: jest.fn(),
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new EmployeeArchivesService({
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any);
+
+    await expect(service.archiveEmployees([archiveEditorUser().id], hrOperator)).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '只能归档已离职员工：员工甲' }),
+    });
+    expect(tx.user.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('草稿由操作员手动归档并保留记录', async () => {
+    const updateMany = jest.fn().mockResolvedValue({ count: 1 });
+    const deleteMany = jest.fn();
+    const tx = {
+      employeeDataChangeRequest: {
+        findMany: jest.fn().mockResolvedValue([{ id: 'draft-1', employeeName: '员工草稿' }]),
+        updateMany,
+        deleteMany,
+      },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const service = new EmployeeArchivesService({
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any);
+
+    await expect(service.archiveDrafts(['draft-1'], hrOperator)).resolves.toEqual({ archived: 1 });
+    expect(updateMany).toHaveBeenCalledWith({
+      where: { id: { in: ['draft-1'] }, recordStatus: 'draft', archivedAt: null },
+      data: { recordStatus: 'archived', archivedAt: expect.any(Date) },
+    });
+    expect(deleteMany).not.toHaveBeenCalled();
+  });
 });

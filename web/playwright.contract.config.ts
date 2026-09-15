@@ -46,6 +46,7 @@ export default defineConfig({
     '48-shared-performance-result-summary.spec.ts',
     '49-performance-specialist.spec.ts',
     '53-prepublication-confirmation.spec.ts',
+    '54-personnel-resignation-archive.spec.ts',
   ],
   workers: 1,
 });

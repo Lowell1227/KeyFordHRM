@@ -18,9 +18,12 @@ import { Roles } from '@/common/decorators/roles.decorator';
 import { AuthUser } from '@/common/types/auth.types';
 import {
   BindDingtalkIdentityDto,
+  ArchivePersonnelRecordsDto,
   CreateEmployeeDto,
   CreateEmploymentRecordDto,
+  EmployeeDraftQueryDto,
   PreviewEmployeeRosterDto,
+  SaveEmployeeCreateDraftDto,
   SetDingtalkIdentityStateDto,
   UpdateEmployeeProfileDto,
   SubmitEmployeeArchiveDraftDto,
@@ -119,6 +122,39 @@ export class EmployeeArchivesController {
     return this.archives.createEmployee(dto, operator);
   }
 
+  @Post('drafts')
+  @HrCapabilities('employee_archive_edit')
+  saveEmployeeCreateDraft(
+    @Body() dto: SaveEmployeeCreateDraftDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.archives.saveEmployeeCreateDraft(dto, operator);
+  }
+
+  @Get('drafts/list')
+  @HrCapabilities('employee_archive_edit')
+  listDrafts(@Query() dto: EmployeeDraftQueryDto) {
+    return this.archives.listDrafts(dto);
+  }
+
+  @Post('drafts/archive')
+  @HrCapabilities('employee_archive_edit')
+  archiveDrafts(
+    @Body() dto: ArchivePersonnelRecordsDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.archives.archiveDrafts(dto.ids, operator);
+  }
+
+  @Post('archive')
+  @HrCapabilities('employee_archive_edit')
+  archiveEmployees(
+    @Body() dto: ArchivePersonnelRecordsDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.archives.archiveEmployees(dto.ids, operator);
+  }
+
   @Get(':id')
   @HrCapabilities('employee_archive_edit', 'employee_archive_review')
   findOne(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
@@ -143,6 +179,16 @@ export class EmployeeArchivesController {
     @CurrentUser() operator: AuthUser,
   ) {
     return this.archives.submitDraft(id, dto, operator);
+  }
+
+  @Patch(':id/draft/save')
+  @HrCapabilities('employee_archive_edit')
+  saveArchiveDraft(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() dto: SubmitEmployeeArchiveDraftDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.archives.saveArchiveDraft(id, dto, operator);
   }
 
   @Post('department-assignments')

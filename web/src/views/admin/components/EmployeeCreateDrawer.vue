@@ -1,16 +1,21 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { employeeArchivesApi } from '@/api/employee-archives.api';
+import { employeeArchivesApi, type EmployeeDataReview } from '@/api/employee-archives.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import type { Department } from '@/types/api.types';
 
-const props = defineProps<{ modelValue: boolean; departments: Department[] }>();
-const emit = defineEmits<{ 'update:modelValue': [value: boolean]; submitted: [] }>();
-const saving = ref(false);
+const props = defineProps<{
+  modelValue: boolean;
+  departments: Department[];
+  draft?: EmployeeDataReview | null;
+}>();
+const emit = defineEmits<{ 'update:modelValue': [value: boolean]; submitted: []; saved: [] }>();
+const savingAction = ref<'draft' | 'submit' | null>(null);
 const positions = ref<PositionRecord[]>([]);
 const form = reactive({
+  draftId: undefined as string | undefined,
   employeeNo: '', name: '', phone: '', company: 'fuede', deptId: '', positionId: '',
   entryDate: '', effectiveFrom: '', employmentType: 'full_time', employeeStatus: 'probation',
   rosterManagerId: null as string | null, performanceManagerId: null as string | null,
@@ -20,24 +25,68 @@ function flatten(items: Department[]): Department[] {
   return items.flatMap((item) => [item, ...flatten(item.children ?? [])]);
 }
 
+function dateValue(value: unknown): string {
+  return typeof value === 'string' && value ? value.slice(0, 10) : '';
+}
+
+function reset() {
+  const proposed = props.draft?.proposedValue ?? {};
+  const employee = proposed.employee ?? {};
+  const performance = proposed.performance ?? {};
+  Object.assign(form, {
+    draftId: props.draft?.id,
+    employeeNo: employee.employeeNo ?? '',
+    name: employee.name ?? '',
+    phone: employee.phone ?? '',
+    company: employee.company ?? 'fuede',
+    deptId: employee.deptId ?? '',
+    positionId: employee.positionId ?? '',
+    entryDate: dateValue(employee.entryDate),
+    effectiveFrom: dateValue(employee.effectiveFrom),
+    employmentType: employee.employmentType ?? 'full_time',
+    employeeStatus: employee.employeeStatus ?? 'probation',
+    rosterManagerId: employee.managerId ?? null,
+    performanceManagerId: performance.managerId ?? null,
+  });
+}
+
+watch(() => props.modelValue, (open) => { if (open) reset(); });
+
+function requestBody() {
+  return {
+    ...form,
+    phone: form.phone.trim() || null,
+    positionId: form.positionId || null,
+    rosterManagerId: form.rosterManagerId,
+    performanceManagerId: form.performanceManagerId,
+  };
+}
+
+async function saveDraft() {
+  savingAction.value = 'draft';
+  try {
+    const body = Object.fromEntries(
+      Object.entries(requestBody()).filter(([, value]) => value !== ''),
+    );
+    await employeeArchivesApi.saveEmployeeCreateDraft(body);
+    ElMessage.success('草稿已保存，尚未提交审核');
+    emit('update:modelValue', false);
+    emit('saved');
+  } finally { savingAction.value = null; }
+}
+
 async function submit() {
   if (!form.employeeNo.trim() || !form.name.trim() || !form.deptId || !form.entryDate || !form.effectiveFrom) {
     ElMessage.warning('请填写工号、姓名、部门、入职日期和生效日期');
     return;
   }
-  saving.value = true;
+  savingAction.value = 'submit';
   try {
-    await employeeArchivesApi.createEmployee({
-      ...form,
-      phone: form.phone.trim() || null,
-      positionId: form.positionId || null,
-      rosterManagerId: form.rosterManagerId,
-      performanceManagerId: form.performanceManagerId,
-    });
+    await employeeArchivesApi.createEmployee(requestBody());
     ElMessage.success('已提交新增员工，HR 管理员审核后进入正式名册');
     emit('update:modelValue', false);
     emit('submitted');
-  } finally { saving.value = false; }
+  } finally { savingAction.value = null; }
 }
 
 onMounted(async () => { positions.value = await positionsApi.findAll(); });
@@ -61,7 +110,11 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
       </div>
       <p class="form-help">可先保存不完整的主管关系；系统会提醒，审核人员可在通过前补充。</p>
     </el-form>
-    <template #footer><el-button @click="emit('update:modelValue', false)">取消</el-button><el-button type="primary" :loading="saving" @click="submit">提交审核</el-button></template>
+    <template #footer>
+      <el-button @click="emit('update:modelValue', false)">取消</el-button>
+      <el-button :loading="savingAction === 'draft'" :disabled="savingAction === 'submit'" @click="saveDraft">保存草稿</el-button>
+      <el-button type="primary" :loading="savingAction === 'submit'" :disabled="savingAction === 'draft'" @click="submit">提交审核</el-button>
+    </template>
   </el-drawer>
 </template>
 

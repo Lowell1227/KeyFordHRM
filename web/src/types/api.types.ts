@@ -147,6 +147,7 @@ export interface User {
   createdAt?: string;
   updatedAt?: string;
   dingtalkBindingState?: 'unbound' | 'enabled' | 'disabled';
+  archivedAt?: string | null;
 }
 
 export interface DirectReport {
@@ -172,6 +173,7 @@ export interface UserQuery {
   sysRole?: SysRole;
   keyword?: string;
   includeTestAccounts?: boolean;
+  archived?: boolean;
   unassigned?: boolean;
 }
 

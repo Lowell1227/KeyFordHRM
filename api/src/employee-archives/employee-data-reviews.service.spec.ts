@@ -100,7 +100,7 @@ describe('EmployeeDataReviewsService', () => {
       performanceReviewStatus: 'not_required',
       createdBy: { id: 'ordinary-hr-1', name: '余焱玲', sysRole: SysRole.hr_user },
     };
-    const prisma = {
+  const prisma = {
       employeeDataChangeRequest: {
         findMany: jest.fn().mockResolvedValue([item]),
         count: jest.fn().mockResolvedValue(1),
@@ -115,12 +115,45 @@ describe('EmployeeDataReviewsService', () => {
       createdBy: { name: '余焱玲', sysRole: SysRole.hr_user },
     });
     expect(prisma.employeeDataChangeRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        recordStatus: 'submitted',
+        archivedAt: null,
+      }),
       include: {
         createdBy: { select: { id: true, name: true, sysRole: true } },
         profileReviewedBy: { select: { id: true, name: true } },
         performanceReviewedBy: { select: { id: true, name: true } },
       },
     }));
+  });
+
+  it('草稿不能绕过提交动作直接审核', async () => {
+    const request = {
+      id: 'draft-review',
+      userId: 'employee-1',
+      recordStatus: 'draft',
+      profileReviewStatus: 'pending',
+      performanceReviewStatus: 'not_required',
+      validationErrors: [],
+      baseValue: {},
+      proposedValue: {},
+    };
+    const tx = {
+      employeeDataChangeRequest: {
+        findUnique: jest.fn().mockResolvedValue(request),
+        updateMany: jest.fn(),
+        update: jest.fn(),
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new EmployeeDataReviewsService({
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any);
+
+    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, operator);
+
+    expect(result).toEqual({ succeeded: [], failed: [{ requestId: request.id, reason: '草稿尚未提交审核' }] });
+    expect(tx.employeeDataChangeRequest.updateMany).not.toHaveBeenCalled();
   });
 
   it('批量审核隔离异常员工，合法绩效关系仍然生效', async () => {
