@@ -136,6 +136,23 @@ describe('employee confirmation draft', () => {
     }));
   });
 
+  it('routes company approval to the top department leader manager instead of the parent department leader', async () => {
+    const departmentLeaderId = '44444444-4444-4444-8444-444444444444';
+    const divisionApproverId = '55555555-5555-4555-8555-555555555555';
+    prisma.department.findMany.mockResolvedValue([
+      { id: 'dept-1', name: '人事组', parentId: 'dept-parent', leaderId: null, approverId: null,
+        leader: null, approver: null },
+      { id: 'dept-parent', name: '人事行政部', parentId: null, leaderId: departmentLeaderId, approverId: null,
+        leader: { name: '部门负责人', directManagerId: divisionApproverId, directManager: { name: '分管总' } }, approver: null },
+    ]);
+
+    await service.submit('33333333-3333-4333-8333-333333333333', viewer);
+
+    expect(prisma.confirmationApplication.updateMany).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ companyApproverId: divisionApproverId }),
+    }));
+  });
+
   it('keeps the draft when the organization has no effective company approver', async () => {
     prisma.department.findMany.mockResolvedValue([{ id: 'dept-1', name: '人事组', parentId: null,
       leaderId: null, approverId: null, leader: null, approver: null }]);

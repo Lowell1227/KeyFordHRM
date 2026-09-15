@@ -124,6 +124,9 @@ test('roster manager submits a narrative recommendation without a second score',
       companyApproverId: 'approver-1', companyApprover: { id: 'approver-1', name: '公司审批人' },
       summary: '完成项目交付，继续改进协作', salary: null, actualRegularDate: null,
       canApprove: status === 'submitted', canReject: false, pendingRole: status === 'submitted' ? 'manager' : 'hr',
+      history: [
+        { id: 'history-submit', label: '员工提交申请', actorName: '试用期员工', occurredAt: '2026-09-15T02:32:00.000Z', submissionVersion: 1, note: null },
+      ],
       steps: [
         { role: 'manager', status: 'pending', approver: { id: 'manager-1', name: '花名册直属主管' }, comment: null, actedAt: null },
         { role: 'hr', status: 'pending', approver: { id: 'hr-1', name: 'HR 办理人' }, comment: null, actedAt: null },
@@ -132,6 +135,17 @@ test('roster manager submits a narrative recommendation without a second score',
     }) });
   });
   await page.goto('/confirmation-applications/11111111-1111-4111-8111-111111111111');
+  const performanceHelp = page.getByLabel('绩效参考说明');
+  await expect(performanceHelp).toBeVisible();
+  await expect(page.getByText('仅展示您按绩效模块原有权限可见的记录；绩效等级以已发布的正式结果为准。', { exact: true })).toHaveCount(0);
+  await performanceHelp.hover();
+  await expect(page.getByRole('tooltip')).toContainText('仅展示您按绩效模块原有权限可见的记录；绩效等级以已发布的正式结果为准。');
+  const approvalTimeline = page.getByTestId('confirmation-approval-timeline');
+  await expect(approvalTimeline).toBeVisible();
+  await expect(approvalTimeline.locator('.approval-timeline__title').filter({ hasText: '员工提交申请' })).toBeVisible();
+  await expect(approvalTimeline.getByText('直属主管', { exact: true })).toBeVisible();
+  await expect(approvalTimeline.getByText('待办理', { exact: true })).toBeVisible();
+  await expect(page.getByText('办理记录（1）', { exact: true })).toHaveCount(0);
   await page.getByText('查看可见的绩效记录（最近 2 条）').click();
   await expect(page.getByText('查看已发布等级')).toHaveCount(1);
   await expect(page.getByText('UNPUBLISHED_SECRET_GRADE')).toHaveCount(0);
@@ -229,10 +243,20 @@ test('company approver explicitly confirms the HR date before agreeing on mobile
       summary: '完成工作交付', voteResult: 'pass', proposedRegularDate: '2026-10-01',
       meetingAttachments: [], actualRegularDate: status === 'approved' ? '2026-10-01' : null,
       canApprove: status === 'hr_approved', canReject: status === 'hr_approved', pendingRole: status === 'hr_approved' ? 'company' : null,
-      steps: [],
+      history: [
+        { id: 'history-submit', label: '员工提交申请', actorName: '试用期员工', occurredAt: '2026-09-15T02:32:00.000Z', submissionVersion: 1, note: null },
+        { id: 'history-manager', label: '直属主管提交评价', actorName: '直属主管', occurredAt: '2026-09-15T03:00:00.000Z', submissionVersion: 1, note: null },
+        { id: 'history-hr', label: 'HR 记录线下评议', actorName: 'HR 办理人', occurredAt: '2026-09-15T04:00:00.000Z', submissionVersion: 1, note: null },
+      ],
+      steps: [
+        { role: 'manager', status: 'approved', approver: { id: 'manager-1', name: '直属主管' }, comment: '建议转正', actedAt: '2026-09-15T03:00:00.000Z' },
+        { role: 'hr', status: 'approved', approver: { id: 'hr-1', name: 'HR 办理人' }, comment: '评议通过', actedAt: '2026-09-15T04:00:00.000Z' },
+        { role: 'company', status: 'pending', approver: { id: 'approver-1', name: '公司审批人' }, comment: null, actedAt: null },
+      ],
     }) });
   });
   await page.goto('/confirmation-applications/11111111-1111-4111-8111-111111111111');
+  await expect(page.getByTestId('confirmation-approval-timeline').getByText('公司审批', { exact: true })).toBeVisible();
   await page.getByRole('button', { name: '同意转正', exact: true }).click();
   await expect(page.getByText('请核对并确认 HR 填写的拟生效日期')).toBeVisible();
   await page.getByText('已核对并确认上述生效日期').click();

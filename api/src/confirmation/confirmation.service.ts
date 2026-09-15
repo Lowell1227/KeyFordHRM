@@ -13,7 +13,7 @@ import { BackfillMeetingDateDto } from './dto/backfill-meeting-date.dto';
 import { ReturnConfirmationDto } from './dto/return-confirmation.dto';
 import { DataScopeService } from '@/common/services/data-scope.service';
 import { NotificationsService } from '@/notifications/notifications.service';
-import { buildEffectiveApproverMap } from '@/departments/department-relations';
+import { buildPerformanceApproverMap } from '@/cycles/performance-approval-relations';
 
 export interface ConfirmationListItem {
   id: string;
@@ -337,13 +337,13 @@ export class ConfirmationService {
       leader: { select: { name: true, directManagerId: true, directManager: { select: { name: true } } } },
       approver: { select: { name: true } },
     } });
-    const approverId = buildEffectiveApproverMap(departments.map((dept) => ({
+    const approverId = buildPerformanceApproverMap(departments.map((dept) => ({
       id: dept.id, name: dept.name, parentId: dept.parentId, leaderId: dept.leaderId,
       leaderName: dept.leader?.name ?? null,
       leaderDirectManagerId: dept.leader?.directManagerId ?? null,
       leaderDirectManagerName: dept.leader?.directManager?.name ?? null,
       approverId: dept.approverId, approverName: dept.approver?.name ?? null,
-    }))).get(deptId)?.effectiveApproverId;
+    }))).get(deptId)?.approverId;
     if (!approverId) {
       throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '所属部门尚无有效的最终业务审批人，请联系 HR 核实组织设置' });
     }

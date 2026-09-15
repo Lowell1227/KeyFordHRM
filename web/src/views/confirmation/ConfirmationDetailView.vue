@@ -2,7 +2,7 @@
 import { ref, computed, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
-import { ArrowLeft } from '@element-plus/icons-vue';
+import { ArrowLeft, QuestionFilled } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth.store';
 import { confirmationApi } from '@/api/confirmation.api';
 import { tasksApi } from '@/api/tasks.api';
@@ -74,12 +74,6 @@ function statusType(status: string): string {
   return CONFIRMATION_STATUS_META[status as keyof typeof CONFIRMATION_STATUS_META]?.type ?? 'info';
 }
 
-function stepStatusType(status: string): string {
-  if (status === 'approved') return 'success';
-  if (status === 'rejected') return 'danger';
-  return 'info';
-}
-
 function stepStatusLabel(status: string): string {
   if (status === 'approved') return '已通过';
   if (status === 'rejected') return '已驳回';
@@ -87,9 +81,9 @@ function stepStatusLabel(status: string): string {
 }
 
 function roleLabel(role: string): string {
-  if (role === 'manager') return '主管';
+  if (role === 'manager') return '直属主管';
   if (role === 'hr') return 'HR';
-  if (role === 'company') return '公司';
+  if (role === 'company') return '公司审批';
   return role;
 }
 
@@ -275,6 +269,108 @@ function sortedSteps(steps?: ApprovalStep[]): ApprovalStep[] {
   const order = ['manager', 'hr', 'company'];
   return [...steps].sort((a, b) => order.indexOf(a.role) - order.indexOf(b.role));
 }
+
+type TimelineTone = 'success' | 'danger' | 'current' | 'waiting' | 'neutral';
+
+interface TimelineItem {
+  key: string;
+  title: string;
+  actorName: string;
+  action: string;
+  time: string;
+  tone: TimelineTone;
+  note: string | null;
+  submissionVersion: number | null;
+  snapshot: NonNullable<NonNullable<ConfirmationApplication['history']>[number]['snapshot']> | null;
+  current: boolean;
+}
+
+function historyRole(label: string): ApprovalStep['role'] | null {
+  if (label.includes('直属主管')) return 'manager';
+  if (label.startsWith('HR')) return 'hr';
+  if (label.startsWith('公司')) return 'company';
+  return null;
+}
+
+function historyTitle(label: string): string {
+  const role = historyRole(label);
+  return role ? roleLabel(role) : label;
+}
+
+function historyAction(label: string): string {
+  if (label === '员工提交申请') return '提交送审';
+  if (label === '直属主管提交评价') return '已提交评价';
+  if (label === 'HR 记录线下评议') return '已记录评议';
+  if (label === '公司同意转正') return '审批同意';
+  if (label === '公司不同意转正') return '不同意转正';
+  if (label === '退回员工补充') return '已退回';
+  if (label.includes('附件')) return '已上传';
+  if (label.includes('补录')) return '已补录';
+  return '已记录';
+}
+
+function historyTone(label: string): TimelineTone {
+  if (label.includes('不同意') || label.includes('退回')) return 'danger';
+  if (label.includes('同意') || label.includes('提交评价') || label.includes('记录线下评议')) return 'success';
+  return 'neutral';
+}
+
+function currentStepComment(role: ApprovalStep['role'], submissionVersion: number | null): string | null {
+  if (!app.value || submissionVersion !== app.value.submissionVersion) return null;
+  return app.value.steps?.find((step) => step.role === role)?.comment ?? null;
+}
+
+const approvalTimeline = computed<TimelineItem[]>(() => {
+  if (!app.value) return [];
+  const items: TimelineItem[] = (app.value.history ?? []).map((event) => {
+    const role = historyRole(event.label);
+    return {
+      key: `history-${event.id}`,
+      title: historyTitle(event.label),
+      actorName: event.actorName || '系统',
+      action: historyAction(event.label),
+      time: formatDateTime(event.occurredAt),
+      tone: historyTone(event.label),
+      note: event.note || (role ? currentStepComment(role, event.submissionVersion) : null),
+      submissionVersion: event.submissionVersion,
+      snapshot: event.snapshot ?? null,
+      current: false,
+    };
+  });
+
+  const currentVersion = app.value.submissionVersion ?? null;
+  const completedRoles = new Set(
+    (app.value.history ?? [])
+      .filter((event) => event.submissionVersion === currentVersion)
+      .map((event) => historyRole(event.label))
+      .filter((role): role is ApprovalStep['role'] => role !== null),
+  );
+  const flowActive = ['submitted', 'manager_approved', 'hr_approved'].includes(app.value.status);
+  if (!flowActive && app.value.workflowVersion === 2) return items;
+
+  for (const step of sortedSteps(app.value.steps)) {
+    if (app.value.workflowVersion === 2 && completedRoles.has(step.role)) continue;
+    const current = app.value.pendingRole === step.role;
+    const handled = Boolean(step.actedAt);
+    items.push({
+      key: `step-${step.role}`,
+      title: roleLabel(step.role),
+      actorName: step.approver?.name || (step.role === 'hr' ? '授权 HR 办理' : '待确定'),
+      action: handled ? stepStatusLabel(step.status) : current ? '待办理' : '待前序完成',
+      time: step.actedAt ? formatDateTime(step.actedAt) : current ? '当前节点' : '后续节点',
+      tone: handled ? (step.status === 'rejected' ? 'danger' : 'success') : current ? 'current' : 'waiting',
+      note: step.comment,
+      submissionVersion: currentVersion,
+      snapshot: null,
+      current,
+    });
+  }
+  return items;
+});
+
+function actorInitial(name: string): string {
+  return name.trim().slice(0, 1) || '系';
+}
 </script>
 
 <template>
@@ -311,8 +407,14 @@ function sortedSteps(steps?: ApprovalStep[]): ApprovalStep[] {
       </ChartCard>
 
       <ChartCard class="section-card">
-        <template #title>绩效参考</template>
-        <p class="reference-note">仅展示您按绩效模块原有权限可见的记录；绩效等级以已发布的正式结果为准。</p>
+        <template #title>
+          <span class="section-title-with-help">
+            绩效参考
+            <el-tooltip content="仅展示您按绩效模块原有权限可见的记录；绩效等级以已发布的正式结果为准。" placement="top">
+              <el-icon class="section-help" tabindex="0" aria-label="绩效参考说明"><QuestionFilled /></el-icon>
+            </el-tooltip>
+          </span>
+        </template>
         <p v-if="performanceLoading" class="text-placeholder">正在读取绩效记录…</p>
         <p v-else-if="performanceUnavailable" class="text-placeholder">暂无法读取绩效记录，请到绩效页面查看。</p>
         <p v-else-if="!performanceItems.length" class="text-placeholder">暂无可引用的绩效记录，不影响转正办理。</p>
@@ -379,46 +481,38 @@ function sortedSteps(steps?: ApprovalStep[]): ApprovalStep[] {
       </ChartCard>
 
       <ChartCard class="section-card">
-        <template #title>审批轨迹</template>
-        <div class="steps">
-          <div
-            v-for="step in sortedSteps(app.steps)"
-            :key="step.role"
-            class="step-row"
-            :class="{ 'step-row--current': step.status === 'pending' && app.status !== 'rejected' }"
+        <template #title>审批流程</template>
+        <ol class="approval-timeline" data-testid="confirmation-approval-timeline">
+          <li
+            v-for="item in approvalTimeline"
+            :key="item.key"
+            class="approval-timeline__item"
+            :class="`is-${item.tone}`"
+            :aria-current="item.current ? 'step' : undefined"
           >
-            <div class="step-role">
-              <span class="step-role-label">{{ roleLabel(step.role) }}</span>
-              <el-tag :type="stepStatusType(step.status) as any" size="small">
-                {{ stepStatusLabel(step.status) }}
-              </el-tag>
+            <span class="approval-timeline__dot" aria-hidden="true" />
+            <time>{{ item.time }}</time>
+            <div class="approval-timeline__title">
+              {{ item.title }}
+              <span v-if="item.submissionVersion" class="approval-timeline__version">第 {{ item.submissionVersion }} 次提交</span>
             </div>
-            <div class="step-info">
-              <div v-if="step.approver">审批人：{{ step.approver.name }}</div>
-              <div v-if="step.actedAt">时间：{{ formatDateTime(step.actedAt) }}</div>
-              <div v-if="step.comment">意见：{{ step.comment }}</div>
+            <div class="approval-timeline__actor">
+              <span class="approval-timeline__avatar">{{ actorInitial(item.actorName) }}</span>
+              <span>{{ item.actorName }}</span>
+              <strong>{{ item.action }}</strong>
             </div>
-          </div>
-        </div>
-
-        <el-collapse v-if="app.workflowVersion === 2 && app.history?.length" class="history-collapse">
-          <el-collapse-item :title="`办理记录（${app.history.length}）`" name="history">
-            <div v-for="event in app.history" :key="event.id" class="history-row">
-              <span>{{ event.submissionVersion ? `第 ${event.submissionVersion} 次提交 · ` : '' }}{{ event.label }}</span>
-              <span>{{ event.actorName || '系统' }} · {{ formatDateTime(event.occurredAt) }}</span>
-              <p v-if="event.note">{{ event.note }}</p>
-              <div v-if="event.snapshot && Object.keys(event.snapshot).length" class="history-snapshot">
-                <div v-if="event.snapshot.summary">原工作小结：{{ event.snapshot.summary }}</div>
-                <div v-if="event.snapshot.managerRecommendation !== undefined">原主管建议：{{ event.snapshot.managerRecommendation ? '建议转正' : '暂不建议转正' }}</div>
-                <div v-if="event.snapshot.managerComment">原主管评价：{{ event.snapshot.managerComment }}</div>
-                <div v-if="event.snapshot.voteResult">原 HR 评议结论：{{ VOTE_RESULT_LABELS[event.snapshot.voteResult] }}</div>
-                <div v-if="event.snapshot.voteComment">原结论依据：{{ event.snapshot.voteComment }}</div>
-                <div v-if="event.snapshot.hrComment">原 HR 办理意见：{{ event.snapshot.hrComment }}</div>
-                <div v-if="event.snapshot.proposedRegularDate">原拟生效日期：{{ formatDate(event.snapshot.proposedRegularDate) }}</div>
-              </div>
+            <div v-if="item.note" class="approval-timeline__note">{{ item.note }}</div>
+            <div v-if="item.snapshot && Object.keys(item.snapshot).length" class="approval-timeline__note approval-timeline__snapshot">
+              <div v-if="item.snapshot.summary">原工作小结：{{ item.snapshot.summary }}</div>
+              <div v-if="item.snapshot.managerRecommendation !== undefined">原主管建议：{{ item.snapshot.managerRecommendation ? '建议转正' : '暂不建议转正' }}</div>
+              <div v-if="item.snapshot.managerComment">原主管评价：{{ item.snapshot.managerComment }}</div>
+              <div v-if="item.snapshot.voteResult">原 HR 评议结论：{{ VOTE_RESULT_LABELS[item.snapshot.voteResult] }}</div>
+              <div v-if="item.snapshot.voteComment">原结论依据：{{ item.snapshot.voteComment }}</div>
+              <div v-if="item.snapshot.hrComment">原 HR 办理意见：{{ item.snapshot.hrComment }}</div>
+              <div v-if="item.snapshot.proposedRegularDate">原拟生效日期：{{ formatDate(item.snapshot.proposedRegularDate) }}</div>
             </div>
-          </el-collapse-item>
-        </el-collapse>
+          </li>
+        </ol>
 
         <div v-if="app.canApprove" class="detail-actions">
           <div v-if="app.pendingRole === 'manager'" class="manager-evaluation">
@@ -536,53 +630,120 @@ function sortedSteps(steps?: ApprovalStep[]): ApprovalStep[] {
   color: var(--el-text-color-placeholder);
 }
 
-.reference-note { margin: 0 0 10px; color: var(--el-text-color-secondary); font-size: 13px; }
+.section-title-with-help { display: inline-flex; align-items: center; gap: 6px; }
+.section-help { color: var(--el-text-color-secondary); cursor: help; }
 .reference-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; padding: 9px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
 .reference-row__main { display: flex; gap: 10px; align-items: baseline; flex: 1 1 220px; min-width: 0; overflow-wrap: anywhere; }
 .reference-row__main span { color: var(--el-text-color-secondary); font-size: 12px; }
-.history-collapse { margin-top: 12px; }
-.history-row { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 4px 12px; padding: 8px 0; border-bottom: 1px solid var(--el-border-color-lighter); overflow-wrap: anywhere; }
-.history-row span:last-of-type { color: var(--el-text-color-secondary); font-size: 12px; }
-.history-row p { flex-basis: 100%; margin: 0; white-space: pre-wrap; }
-.history-snapshot { flex-basis: 100%; display: grid; gap: 4px; padding: 6px 8px; background: var(--el-fill-color-light); font-size: 12px; white-space: pre-wrap; overflow-wrap: anywhere; }
-
-.steps {
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+.approval-timeline {
+  width: min(100%, 720px);
+  margin: 0;
+  padding: 2px 0 0;
+  list-style: none;
 }
 
-.step-row {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  padding: 12px 16px;
-  background: var(--el-fill-color-light);
-  border-radius: 4px;
+.approval-timeline__item {
+  position: relative;
+  padding: 0 0 26px 28px;
+  overflow-wrap: anywhere;
 }
 
-.step-row--current {
-  background: var(--el-color-primary-light-9);
+.approval-timeline__item:not(:last-child)::before {
+  content: '';
+  position: absolute;
+  top: 15px;
+  bottom: -3px;
+  left: 6px;
+  width: 2px;
+  background: var(--el-border-color-lighter);
 }
 
-.step-role {
+.approval-timeline__item:last-child { padding-bottom: 4px; }
+
+.approval-timeline__dot {
+  position: absolute;
+  top: 4px;
+  left: 0;
+  width: 12px;
+  height: 12px;
+  border: 3px solid var(--el-border-color);
+  border-radius: 50%;
+  background: var(--el-bg-color);
+  box-sizing: border-box;
+}
+
+.approval-timeline__item.is-success .approval-timeline__dot { border-color: var(--el-color-success); }
+.approval-timeline__item.is-danger .approval-timeline__dot { border-color: var(--el-color-danger); }
+.approval-timeline__item.is-current .approval-timeline__dot { border-color: var(--el-color-primary); }
+
+.approval-timeline time {
+  display: block;
+  margin-bottom: 8px;
+  color: var(--el-text-color-secondary);
+  font-size: 13px;
+  line-height: 20px;
+}
+
+.approval-timeline__title {
   display: flex;
   align-items: center;
   gap: 8px;
+  margin-bottom: 8px;
+  color: var(--el-text-color-primary);
+  font-size: 16px;
+  font-weight: 600;
+  line-height: 24px;
 }
 
-.step-role-label {
-  font-weight: 500;
+.approval-timeline__version {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-secondary);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 18px;
 }
 
-.step-info {
-  text-align: right;
-  font-size: 13px;
-  color: var(--el-text-color-regular);
+.approval-timeline__actor {
   display: flex;
-  flex-direction: column;
-  gap: 4px;
+  align-items: center;
+  gap: 6px;
+  min-height: 26px;
+  color: var(--el-text-color-regular);
+  font-size: 14px;
 }
+
+.approval-timeline__avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border-radius: 50%;
+  background: var(--el-fill-color-dark);
+  color: var(--el-text-color-regular);
+  font-size: 12px;
+}
+
+.approval-timeline__actor strong { color: var(--el-color-success); font-weight: 600; }
+.approval-timeline__item.is-danger .approval-timeline__actor strong { color: var(--el-color-danger); }
+.approval-timeline__item.is-current .approval-timeline__actor strong { color: var(--el-color-primary); }
+.approval-timeline__item.is-waiting .approval-timeline__actor strong,
+.approval-timeline__item.is-neutral .approval-timeline__actor strong { color: var(--el-text-color-secondary); }
+
+.approval-timeline__note {
+  margin-top: 10px;
+  padding: 9px 12px;
+  border-radius: 5px;
+  background: var(--el-fill-color-light);
+  color: var(--el-text-color-regular);
+  font-size: 13px;
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+.approval-timeline__snapshot { display: grid; gap: 4px; }
 
 .detail-actions {
   display: flex;
