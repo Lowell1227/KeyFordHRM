@@ -1,9 +1,7 @@
 <script setup lang="ts">
 import { computed, ref, reactive, onMounted } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import { ElMessage } from 'element-plus';
 import { confirmationApi } from '@/api/confirmation.api';
-import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
@@ -105,32 +103,32 @@ function pendingLabel(row: ConfirmationApplication): string {
 
 <template>
   <BusinessListPage variant="workflow" :loading="loading" class="confirmation-approval">
-    <template #workspace>
-    <ChartCard class="header-card list-page-header-card">
-      <template #title>转正管理</template>
+    <template #title>转正管理</template>
 
+    <template #summary>
       <div class="list-modes">
         <el-radio-group :model-value="viewMode" size="small" @change="changeMode($event as 'pending' | 'history')">
           <el-radio-button value="pending">待我办理</el-radio-button>
           <el-radio-button value="history">办理记录</el-radio-button>
         </el-radio-group>
       </div>
+    </template>
 
+    <template #filters>
       <QueryFilterPanel class="page-filter-panel">
         <el-form :inline="true" class="filter-form" @submit.prevent="onSearch">
-        <el-form-item label="姓名">
-          <el-input v-model="filters.keyword" placeholder="请输入姓名" clearable style="width: 220px" />
-        </el-form-item>
-        <el-form-item>
-          <el-button type="primary" @click="onSearch">查询</el-button>
-          <el-button @click="onReset">重置</el-button>
-        </el-form-item>
+          <el-form-item label="姓名">
+            <el-input v-model="filters.keyword" placeholder="请输入姓名" clearable style="width: 220px" />
+          </el-form-item>
+          <el-form-item>
+            <el-button type="primary" @click="onSearch">查询</el-button>
+            <el-button @click="onReset">重置</el-button>
+          </el-form-item>
         </el-form>
       </QueryFilterPanel>
-    </ChartCard>
+    </template>
 
-    <ChartCard :padded="false" class="list-result-card">
-      <div class="desktop-result-table">
+    <template #desktop-list>
       <el-table v-loading="loading" :data="list" height="100%" class="app-table">
         <el-table-column label="员工" min-width="120">
           <template #default="{ row }">{{ (row as ConfirmationApplication).employee?.name }}</template>
@@ -156,9 +154,10 @@ function pendingLabel(row: ConfirmationApplication): string {
           </template>
         </el-table-column>
       </el-table>
-      </div>
+    </template>
 
-      <div v-loading="loading" class="mobile-result-list">
+    <template #mobile-list>
+      <div v-loading="loading" class="confirmation-mobile-list">
         <MobileResultCard v-for="item in list" :key="item.id">
           <template #title>{{ item.employee?.name || '-' }}</template>
           <template #status><el-tag :type="statusType(item.status) as any" size="small">{{ statusLabel(item.status) }}</el-tag></template>
@@ -166,6 +165,9 @@ function pendingLabel(row: ConfirmationApplication): string {
           <template #actions><el-button link type="primary" @click="goDetail(item)">{{ viewMode === 'pending' ? '去办理' : '查看' }}</el-button></template>
         </MobileResultCard>
       </div>
+    </template>
+
+    <template #pagination>
       <ListPagination
         v-model:current-page="page"
         v-model:page-size="pageSize"
@@ -173,15 +175,17 @@ function pendingLabel(row: ConfirmationApplication): string {
         :total="total"
         @change="loadList"
       />
-    </ChartCard>
-    <BusinessDetailDrawer
-      :model-value="detailOpen"
-      title="转正申请详情"
-      variant="workflow"
-      @update:model-value="handleDetailVisibility"
-    >
-      <RouterView v-slot="{ Component }"><component :is="Component" @changed="loadList" /></RouterView>
-    </BusinessDetailDrawer>
+    </template>
+
+    <template #detail>
+      <BusinessDetailDrawer
+        :model-value="detailOpen"
+        title="转正申请详情"
+        variant="workflow"
+        @update:model-value="handleDetailVisibility"
+      >
+        <RouterView v-slot="{ Component }"><component :is="Component" @changed="loadList" /></RouterView>
+      </BusinessDetailDrawer>
     </template>
   </BusinessListPage>
 </template>
@@ -192,7 +196,5 @@ function pendingLabel(row: ConfirmationApplication): string {
   margin-bottom: 0;
 }
 
-.text-placeholder {
-  color: var(--el-text-color-placeholder);
-}
+.confirmation-mobile-list { display: grid; gap: 10px; }
 </style>

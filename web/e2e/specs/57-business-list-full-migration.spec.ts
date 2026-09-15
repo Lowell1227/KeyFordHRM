@@ -98,6 +98,18 @@ test('all active migration pages use their approved business-list template', asy
   }
 });
 
+test('role-specific confirmation lists share the standard workflow frame', async ({ page }) => {
+  await mockAuthenticatedAdmin(page);
+  await page.setViewportSize({ width: 1440, height: 900 });
+
+  for (const path of ['/confirmation-applications/manage', '/confirmation-applications/approvals']) {
+    await page.goto(path);
+    const listPage = page.getByTestId('business-list-page');
+    await expect(listPage.locator(':scope > .business-list-page__header'), path).toBeVisible();
+    await expect(listPage.locator(':scope > .business-list-page__results'), path).toBeVisible();
+  }
+});
+
 test('confirmation, probation and department-review direct URLs stay inside workflow drawers', async ({ page }) => {
   await mockAuthenticatedAdmin(page);
   await page.route('**/api/v1/confirmation-applications/confirmation-drawer', (route) => route.fulfill({ json: envelope({
