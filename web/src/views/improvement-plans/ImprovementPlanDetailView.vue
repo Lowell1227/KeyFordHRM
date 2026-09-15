@@ -17,6 +17,9 @@ const cycles = ref<Array<{ id: string; name: string }>>([]);
 const loading = ref(false);
 const busy = ref(false);
 const decisionComment = ref('');
+type DecisionDialogAction = 'goals-approve' | 'goals-reject' | 'final-approve' | 'final-reject';
+const decisionDialogOpen = ref(false);
+const decisionDialogAction = ref<DecisionDialogAction>('goals-approve');
 const goalSuggestions = reactive<Record<string, string>>({});
 const errors = reactive<Record<string, string>>({});
 const form = reactive<{ improvementNeed: string; cycleId: string; targetDate: string; goals: ImprovementGoal[] }>({
@@ -32,6 +35,14 @@ const latestGoalRejection = computed(() => plan.value?.status === 'goal_revision
   ? plan.value.records?.find((record) => record.action === 'reject_goals') ?? null : null);
 const canEvaluate = computed(() => plan.value?.allowedActions.includes('evaluate') ?? false);
 const canDecideFinal = computed(() => plan.value?.allowedActions.includes('decide_final') ?? false);
+const decisionDialogForGoals = computed(() => decisionDialogAction.value.startsWith('goals-'));
+const decisionDialogReject = computed(() => decisionDialogAction.value.endsWith('-reject'));
+const decisionDialogTitle = computed(() => {
+  if (decisionDialogAction.value === 'goals-approve') return '确认目标';
+  if (decisionDialogAction.value === 'goals-reject') return '退回发起人修改';
+  if (decisionDialogAction.value === 'final-approve') return '审核确认';
+  return '退回直属上级重评';
+});
 const showEvaluation = computed(() => canEvaluate.value || Boolean(plan.value?.selfEvaluation
   || plan.value?.managerEvaluation || plan.value?.departmentEvaluation));
 const currentEvaluationLabel = computed(() => {
@@ -80,6 +91,7 @@ function sync(value: ImprovementPlan) {
     comment: previous?.items.find((item) => item.goalId === goal.id)?.comment ?? '',
   }));
   evaluation.overallComment = previous?.overallComment ?? '';
+  decisionDialogOpen.value = false;
   decisionComment.value = '';
   Object.keys(goalSuggestions).forEach((key) => delete goalSuggestions[key]);
   Object.keys(errors).forEach((key) => delete errors[key]);
@@ -178,6 +190,15 @@ async function decideFinal(approve: boolean) {
     ElMessage.success(approve ? '改进计划已审核完成' : '已退回当前直属上级重新评价');
   } finally { busy.value = false; }
 }
+function openDecisionDialog(action: DecisionDialogAction) {
+  delete errors.decision;
+  decisionDialogAction.value = action;
+  decisionDialogOpen.value = true;
+}
+async function submitDecisionDialog() {
+  if (decisionDialogForGoals.value) await decideGoals(!decisionDialogReject.value);
+  else await decideFinal(!decisionDialogReject.value);
+}
 function priorScore(kind: 'self' | 'manager' | 'department', goalId: string) {
   const source = kind === 'self' ? plan.value?.selfEvaluation
     : kind === 'manager' ? plan.value?.managerEvaluation : plan.value?.departmentEvaluation;
@@ -240,9 +261,21 @@ function goalName(goalId: string): string {
 <template>
   <div v-loading="loading" class="improvement-detail page-stack">
     <template v-if="plan">
-      <ChartCard>
+      <ChartCard class="plan-overview-card">
         <template #title><div class="title-row"><el-button link @click="router.push('/improvement-plans')">返回列表</el-button><strong>绩效改进计划</strong></div></template>
-        <template #extra><el-tag :type="IMPROVEMENT_PLAN_STATUS_META[plan.status]?.type as any">{{ IMPROVEMENT_PLAN_STATUS_META[plan.status]?.label }}</el-tag></template>
+        <template #extra>
+          <div class="header-actions">
+            <el-tag :type="IMPROVEMENT_PLAN_STATUS_META[plan.status]?.type as any">{{ IMPROVEMENT_PLAN_STATUS_META[plan.status]?.label }}</el-tag>
+            <template v-if="canDecideGoals">
+              <el-button type="danger" plain :loading="busy" @click="openDecisionDialog('goals-reject')">退回发起人修改</el-button>
+              <el-button type="primary" :loading="busy" @click="openDecisionDialog('goals-approve')">确认目标</el-button>
+            </template>
+            <template v-else-if="canDecideFinal">
+              <el-button type="danger" plain :loading="busy" @click="openDecisionDialog('final-reject')">退回直属上级重评</el-button>
+              <el-button type="primary" :loading="busy" @click="openDecisionDialog('final-approve')">审核确认</el-button>
+            </template>
+          </div>
+        </template>
         <el-descriptions :column="2" border size="small" class="plan-info">
           <el-descriptions-item label="员工">{{ plan.employeeName }}（{{ plan.employeeNo || '-' }}）</el-descriptions-item>
           <el-descriptions-item label="部门">{{ plan.deptName || '-' }}</el-descriptions-item>
@@ -293,9 +326,6 @@ function goalName(goalId: string): string {
           </template>
           <template v-else>
             <p>{{ goal.description }}</p>
-            <el-input v-if="employeeGoalConfirmation" v-model="goalSuggestions[goal.id]"
-              :aria-label="`目标 ${index + 1} 修改建议`" type="textarea" :rows="2" maxlength="4000"
-              placeholder="对这项目标的修改建议（选填；退回时提交）" />
             <div v-if="showEvaluation" class="goal-evaluation">
               <div class="evaluation-stage"><strong>评价进展</strong><el-tag v-if="canEvaluate" size="small" type="primary">当前环节 · {{ currentEvaluationLabel }}</el-tag></div>
               <div v-if="priorScore('self', goal.id) && plan.status !== 'self_eval'" class="prior-score"><b>员工自评</b>{{ priorScore('self', goal.id) }}</div>
@@ -311,14 +341,6 @@ function goalName(goalId: string): string {
           </template>
         </div>
         <div v-if="canEdit" class="form-actions"><el-button :loading="busy" @click="saveTargets(false)">保存草稿</el-button><el-button type="primary" :loading="busy" @click="saveTargets(true)">提交目标</el-button></div>
-        <div v-if="canDecideGoals" class="goal-decision">
-          <div class="decision-label">{{ employeeGoalConfirmation ? '整体意见（选填）' : '确认意见（退回时必填）' }}</div>
-          <el-input v-model="decisionComment" :aria-label="employeeGoalConfirmation ? '整体意见' : '目标确认意见'"
-            type="textarea" :rows="2" maxlength="4000"
-            :placeholder="employeeGoalConfirmation ? '填写整体意见' : '填写确认意见'" />
-          <small v-if="errors.decision" class="field-error">{{ errors.decision }}</small>
-          <div class="form-actions"><el-button type="danger" plain :loading="busy" @click="decideGoals(false)">退回发起人修改</el-button><el-button type="primary" :loading="busy" @click="decideGoals(true)">确认目标</el-button></div>
-        </div>
         <template v-if="canEvaluate">
           <div class="evaluation-summary">
             <p class="weighted-total">加权综合分：{{ draftTotal ?? '待填写全部评分' }}</p>
@@ -327,15 +349,6 @@ function goalName(goalId: string): string {
           </div>
         </template>
         <template v-else-if="plan.status === 'completed'"><p class="weighted-total">最终综合分：{{ plan.finalScore ?? '-' }}</p><p>{{ plan.departmentEvaluation?.overallComment || '-' }}</p></template>
-      </ChartCard>
-
-      <ChartCard v-if="canDecideFinal">
-        <template #title>分管总审核</template>
-        <p>请查看目标、自评及业务评价，确认或退回直属上级重新评价。最终综合分以部门负责人评价为准。</p>
-        <p class="weighted-total">待确认综合分：{{ plan.departmentEvaluation?.weightedScore ?? '-' }}</p>
-        <el-input v-model="decisionComment" aria-label="分管总审核意见" type="textarea" :rows="2" placeholder="审核意见；退回时必填" />
-        <small v-if="errors.decision" class="field-error">{{ errors.decision }}</small>
-        <div class="form-actions"><el-button type="danger" plain :loading="busy" @click="decideFinal(false)">退回直属上级重评</el-button><el-button type="primary" :loading="busy" @click="decideFinal(true)">审核确认</el-button></div>
       </ChartCard>
 
       <ChartCard v-if="plan.workflowVersion === 1"><template #title>历史计划内容</template><p>改进目标：{{ plan.improvementGoal || '-' }}</p><p>最终评分（原 1–10 分制）：{{ plan.finalScore ?? '-' }}</p></ChartCard>
@@ -379,13 +392,45 @@ function goalName(goalId: string): string {
           </li>
         </ol>
       </ChartCard>
+
+      <el-dialog v-model="decisionDialogOpen" :title="decisionDialogTitle" width="min(560px, calc(100vw - 32px))"
+        :close-on-click-modal="false" destroy-on-close>
+        <template v-if="decisionDialogForGoals">
+          <p>{{ employeeGoalConfirmation ? '请确认目标；如需调整，可填写具体目标建议后退回发起人修改。' : '请确认目标，或填写理由后退回发起人修改。' }}</p>
+          <div v-if="employeeGoalConfirmation" class="dialog-suggestions">
+            <label v-for="(goal, index) in plan.goals" :key="goal.id">
+              <span>{{ index + 1 }}. {{ goal.name }}的修改建议（选填）</span>
+              <el-input v-model="goalSuggestions[goal.id]" :aria-label="`目标 ${index + 1} 修改建议`"
+                type="textarea" :rows="2" maxlength="4000" placeholder="填写这项目标的修改建议" />
+            </label>
+          </div>
+          <div class="decision-label">{{ employeeGoalConfirmation ? '整体意见（选填）' : '确认意见（退回时必填）' }}</div>
+          <el-input v-model="decisionComment" :aria-label="employeeGoalConfirmation ? '整体意见' : '目标确认意见'"
+            type="textarea" :rows="3" maxlength="4000"
+            :placeholder="employeeGoalConfirmation ? '填写整体意见' : '填写确认意见'" />
+        </template>
+        <template v-else>
+          <p>请查看目标、自评及业务评价，确认或退回直属上级重新评价。最终综合分以部门负责人评价为准。</p>
+          <p class="weighted-total">待确认综合分：{{ plan.departmentEvaluation?.weightedScore ?? '-' }}</p>
+          <div class="decision-label">审核意见（退回时必填）</div>
+          <el-input v-model="decisionComment" aria-label="分管总审核意见" type="textarea" :rows="3" maxlength="4000" placeholder="填写审核意见" />
+        </template>
+        <small v-if="errors.decision" class="field-error">{{ errors.decision }}</small>
+        <template #footer>
+          <el-button :disabled="busy" @click="decisionDialogOpen = false">取消</el-button>
+          <el-button :type="decisionDialogReject ? 'danger' : 'primary'" :loading="busy" @click="submitDecisionDialog">
+            {{ decisionDialogReject ? '确认退回' : decisionDialogForGoals ? '确认目标' : '确认审核' }}
+          </el-button>
+        </template>
+      </el-dialog>
     </template>
     <EmptyState v-else-if="!loading" description="改进计划不存在或无权查看" />
   </div>
 </template>
 
 <style scoped>
-.title-row,.section-heading,.goal-card__head,.form-actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.title-row,.header-actions,.section-heading,.goal-card__head,.form-actions { display:flex; align-items:center; gap:12px; flex-wrap:wrap; }
+.header-actions { justify-content:flex-end; }
 .section-heading,.goal-card__head { justify-content:space-between; }
 .section-heading { margin:20px 0 10px; }
 .plan-info { margin-bottom:14px; }
@@ -404,8 +449,9 @@ function goalName(goalId: string): string {
 .weighted-total { font-weight:600; }
 .field-error { display:block; color:var(--el-color-danger); line-height:1.5; }
 .feedback-note { display:grid; gap:3px; padding:8px 10px; background:var(--el-fill-color-light); font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; }
-.goal-decision { margin-top:18px; padding-top:16px; border-top:1px solid var(--el-border-color-lighter); }
 .decision-label { margin-bottom:8px; font-weight:600; }
+.dialog-suggestions { display:grid; gap:12px; margin:14px 0; }
+.dialog-suggestions label { display:grid; gap:6px; }
 .form-actions { justify-content:flex-end; margin-top:16px; }
 .improvement-operation { width:min(100%,760px); list-style:none; margin:0; padding:2px 0 0; }
 .improvement-operation li { position:relative; padding:0 0 26px 28px; overflow-wrap:anywhere; }
@@ -428,5 +474,16 @@ function goalName(goalId: string): string {
 .record-snapshot div { display:grid; gap:3px; overflow-wrap:anywhere; }
 .record-snapshot span { white-space:pre-wrap; }
 .empty-note { color:var(--el-text-color-secondary); }
-@media(max-width:600px) { .plan-fields { grid-template-columns:1fr; gap:0; } .goal-card { padding:10px; } .prior-score { grid-template-columns:1fr; } .form-actions { justify-content:stretch; } .form-actions :deep(.el-button) { flex:1; margin-left:0; } }
+@media(max-width:600px) {
+  .plan-overview-card :deep(.chart-card__head) { align-items:flex-start; flex-wrap:wrap; gap:10px; }
+  .plan-overview-card :deep(.chart-card__extra) { width:100%; }
+  .header-actions { display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1fr); width:100%; }
+  .header-actions :deep(.el-tag) { grid-column:1 / -1; justify-self:start; }
+  .header-actions :deep(.el-button) { width:100%; margin-left:0; }
+  .plan-fields { grid-template-columns:1fr; gap:0; }
+  .goal-card { padding:10px; }
+  .prior-score { grid-template-columns:1fr; }
+  .form-actions { justify-content:stretch; }
+  .form-actions :deep(.el-button) { flex:1; margin-left:0; }
+}
 </style>
