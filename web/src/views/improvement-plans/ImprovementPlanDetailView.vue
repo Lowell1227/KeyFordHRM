@@ -253,16 +253,14 @@ function goalName(goalId: string): string {
           </template>
         </div>
         <div v-if="canEdit" class="form-actions"><el-button :loading="busy" @click="saveTargets(false)">保存草稿</el-button><el-button type="primary" :loading="busy" @click="saveTargets(true)">提交目标</el-button></div>
-      </ChartCard>
-
-      <ChartCard v-if="canDecideGoals">
-        <template #title>目标确认</template>
-        <p>{{ employeeGoalConfirmation ? '可在上方逐项目标填写建议，或在下方填写整体意见；退回后由发起人修改并重新确认。' : '请核对上方目标；退回时需写明理由，由发起人修改后重新确认。' }}</p>
-        <el-input v-model="decisionComment" :aria-label="employeeGoalConfirmation ? '整体意见' : '目标确认意见'"
-          type="textarea" :rows="2" maxlength="4000"
-          :placeholder="employeeGoalConfirmation ? '整体意见（选填；退回时可与逐项建议二选一）' : '补充意见；退回时必填'" />
-        <small v-if="errors.decision" class="field-error">{{ errors.decision }}</small>
-        <div class="form-actions"><el-button type="danger" plain :loading="busy" @click="decideGoals(false)">退回发起人修改</el-button><el-button type="primary" :loading="busy" @click="decideGoals(true)">确认目标</el-button></div>
+        <div v-if="canDecideGoals" class="goal-decision">
+          <div class="decision-label">{{ employeeGoalConfirmation ? '整体意见（选填）' : '确认意见（退回时必填）' }}</div>
+          <el-input v-model="decisionComment" :aria-label="employeeGoalConfirmation ? '整体意见' : '目标确认意见'"
+            type="textarea" :rows="2" maxlength="4000"
+            :placeholder="employeeGoalConfirmation ? '填写整体意见' : '填写确认意见'" />
+          <small v-if="errors.decision" class="field-error">{{ errors.decision }}</small>
+          <div class="form-actions"><el-button type="danger" plain :loading="busy" @click="decideGoals(false)">退回发起人修改</el-button><el-button type="primary" :loading="busy" @click="decideGoals(true)">确认目标</el-button></div>
+        </div>
       </ChartCard>
 
       <ChartCard v-if="canEvaluate || plan.selfEvaluation || plan.managerEvaluation || plan.departmentEvaluation">
@@ -350,6 +348,8 @@ function goalName(goalId: string): string {
 .weighted-total { font-weight:600; }
 .field-error { display:block; color:var(--el-color-danger); line-height:1.5; }
 .feedback-note { display:grid; gap:3px; padding:8px 10px; background:var(--el-fill-color-light); font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.goal-decision { margin-top:18px; padding-top:16px; border-top:1px solid var(--el-border-color-lighter); }
+.decision-label { margin-bottom:8px; font-weight:600; }
 .form-actions { justify-content:flex-end; margin-top:16px; }
 .operation-list { list-style:none; margin:0; padding:0; }
 .operation-list li { border-left:2px solid var(--el-border-color); padding:0 0 16px 16px; margin-left:5px; }

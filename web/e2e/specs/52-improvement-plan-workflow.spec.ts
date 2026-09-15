@@ -87,6 +87,11 @@ test('employee can return a specific goal suggestion without editing the approve
     json: envelope(route.request().method() === 'POST' ? { ...plan, status: 'goal_revision', allowedActions: [] } : plan),
   }));
   await page.goto('/improvement-plans/plan-employee');
+  const goalsSection = page.locator('.chart-card').filter({ has: page.getByText('改进背景与目标', { exact: true }) });
+  await expect(goalsSection.getByRole('textbox', { name: '整体意见' })).toBeVisible();
+  await expect(goalsSection.getByRole('button', { name: '确认目标' })).toBeVisible();
+  await expect(page.getByText('目标确认', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('可在上方逐项目标填写建议', { exact: false })).toHaveCount(0);
   const suggestion = page.getByRole('textbox', { name: '目标 1 修改建议' });
   await expect(suggestion).toBeVisible();
   await expect(page.getByText('减少返工')).toBeVisible();
