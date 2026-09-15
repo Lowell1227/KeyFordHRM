@@ -53,6 +53,37 @@ test('manager can create an unlinked plan with background and weighted goals', a
   expect(body.cycleId ?? null).toBeNull();
 });
 
+test('invalid creation weights stay beside the fields and do not reach the API', async ({ page }) => {
+  await mock(page);
+  let createRequests = 0;
+  page.on('request', (request) => {
+    if (new URL(request.url()).pathname.endsWith('/improvement-plans') && request.method() === 'POST') createRequests += 1;
+  });
+  await page.goto('/improvement-plans');
+  await page.getByRole('button', { name: '新建改进计划' }).click();
+  const dialog = page.getByRole('dialog', { name: '创建改进计划' });
+  await dialog.getByRole('combobox', { name: '员工' }).click();
+  await page.getByRole('option', { name: /张员工/ }).click();
+  await dialog.getByRole('textbox', { name: '改进背景' }).fill('需要提升交付质量');
+  await dialog.getByRole('textbox', { name: '目标名称 1' }).fill('减少返工');
+  await dialog.getByRole('textbox', { name: '目标描述 1' }).fill('按时完成交付');
+  await dialog.getByRole('spinbutton', { name: '目标权重 1' }).fill('120');
+  await dialog.getByRole('button', { name: '保存草稿' }).click();
+
+  const goalCard = dialog.locator('.goal-card').first();
+  await expect(goalCard.getByText('权重须大于 0 且不超过 100%')).toBeVisible();
+  await expect(dialog.getByText('当前合计 120%，权重合计必须为 100%')).toHaveCount(0);
+  expect(createRequests).toBe(0);
+  await dialog.screenshot({ path: test.info().outputPath('creation-weight-field-error-desktop.png') });
+
+  await dialog.getByRole('spinbutton', { name: '目标权重 1' }).fill('80');
+  await dialog.getByRole('button', { name: '保存草稿' }).click();
+  await expect(goalCard.getByText('权重须大于 0 且不超过 100%')).toHaveCount(0);
+  await expect(dialog.getByText('当前合计 80%，权重合计必须为 100%')).toBeVisible();
+  expect(createRequests).toBe(0);
+  await dialog.screenshot({ path: test.info().outputPath('creation-weight-validation-desktop.png') });
+});
+
 test('workbench shows the current improvement-plan action independently of cycle tasks', async ({ page }) => {
   await mock(page);
   await page.goto('/dashboard');
@@ -107,14 +138,6 @@ test('employee can return a specific goal suggestion without editing the approve
   await dialog.getByRole('button', { name: '确认退回' }).click();
   await expect(page.getByText('请填写具体目标建议或整体意见')).toBeVisible();
   await suggestion.fill('建议写明每周返工次数上限');
-  await dialog.getByRole('button', { name: '取消' }).click();
-  await overview.getByRole('button', { name: '确认目标' }).click();
-  dialog = page.getByRole('dialog', { name: '确认目标' });
-  await dialog.getByRole('button', { name: '确认目标' }).click();
-  await expect(page.getByText('已填写修改建议，请退回发起人修改或清空建议')).toBeVisible();
-  await dialog.getByRole('button', { name: '取消' }).click();
-  await overview.getByRole('button', { name: '退回发起人修改' }).click();
-  dialog = page.getByRole('dialog', { name: '退回发起人修改' });
   const requestPromise = page.waitForRequest((request) => request.url().endsWith('/decide-goals'));
   await dialog.getByRole('button', { name: '确认退回' }).click();
   expect((await requestPromise).postDataJSON()).toMatchObject({ approve: false, comment: '', suggestions: [
@@ -252,7 +275,8 @@ test('goal confirmation actions stay in the page header and open the decision fo
   };
   await page.route('**/api/v1/improvement-plans/plan-goal-dialog**', (route) => {
     if (route.request().method() === 'POST') {
-      return route.fulfill({ json: envelope({ ...plan, status: 'goal_revision', allowedActions: [] }) });
+      const body = route.request().postDataJSON() as { approve: boolean };
+      return route.fulfill({ json: envelope({ ...plan, status: body.approve ? 'self_eval' : 'goal_revision', allowedActions: [] }) });
     }
     return route.fulfill({ json: envelope(plan) });
   });
@@ -262,7 +286,8 @@ test('goal confirmation actions stay in the page header and open the decision fo
   const content = page.getByTestId('improvement-content-evaluation');
   const rejectButton = overview.getByRole('button', { name: '退回发起人修改' });
   await expect(rejectButton).toBeVisible();
-  await expect(overview.getByRole('button', { name: '确认目标' })).toBeVisible();
+  const approveButton = overview.getByRole('button', { name: '确认目标' });
+  await expect(approveButton).toBeVisible();
   expect((await rejectButton.boundingBox())!.y).toBeLessThan((await content.boundingBox())!.y);
   await expect(page.getByRole('textbox', { name: '目标 1 修改建议' })).toHaveCount(0);
   await expect(page.getByRole('textbox', { name: '整体意见' })).toHaveCount(0);
@@ -287,12 +312,17 @@ test('goal confirmation actions stay in the page header and open the decision fo
   await expect(dialog.getByRole('textbox', { name: '整体意见' })).toBeVisible();
   await dialog.getByRole('textbox', { name: '目标 1 修改建议' }).fill('请明确每周返工次数上限');
   await dialog.screenshot({ path: test.info().outputPath('goal-decision-dialog-mobile.png') });
+  await dialog.getByRole('button', { name: '取消' }).click();
+
+  await approveButton.click();
+  const approveDialog = page.getByRole('dialog', { name: '确认目标' });
+  await expect(approveDialog.getByRole('textbox')).toHaveCount(0);
+  await expect(approveDialog).toContainText('确认后将进入员工自评，无需填写意见');
+  await approveDialog.screenshot({ path: test.info().outputPath('goal-approve-dialog-mobile.png') });
   const requestPromise = page.waitForRequest((request) => request.url().endsWith('/decide-goals'));
-  await dialog.getByRole('button', { name: '确认退回' }).click();
-  expect((await requestPromise).postDataJSON()).toMatchObject({ approve: false, comment: '', suggestions: [
-    { goalId: 'g1', comment: '请明确每周返工次数上限' },
-  ] });
-  await expect(dialog).toBeHidden();
+  await approveDialog.getByRole('button', { name: '确认目标' }).click();
+  expect((await requestPromise).postDataJSON()).toEqual({ approve: true, comment: '' });
+  await expect(approveDialog).toBeHidden();
 });
 
 test('final review actions stay in the page header and the return dialog keeps required-opinion validation', async ({ page }) => {
@@ -325,7 +355,8 @@ test('final review actions stay in the page header and the return dialog keeps r
   await overview.getByRole('button', { name: '审核确认' }).click();
   const approveDialog = page.getByRole('dialog', { name: '审核确认' });
   await expect(approveDialog).toContainText('待确认综合分：76');
-  await expect(approveDialog.getByRole('textbox', { name: '分管总审核意见' })).toBeVisible();
+  await expect(approveDialog.getByRole('textbox')).toHaveCount(0);
+  await expect(approveDialog).toContainText('确认后将完成改进计划，无需填写审核意见');
   await approveDialog.screenshot({ path: test.info().outputPath('final-review-dialog-desktop.png') });
   await approveDialog.getByRole('button', { name: '取消' }).click();
 

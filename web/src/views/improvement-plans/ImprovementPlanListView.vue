@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { improvementPlansApi } from '@/api/improvement-plans.api';
@@ -22,6 +22,7 @@ const eligibleEmployees = ref<Array<{ id: string; name: string; employeeNo: stri
 const loading = ref(false);
 const creating = ref(false);
 const createOpen = ref(false);
+const showCreateWeightErrors = ref(false);
 const filters = reactive<{ cycleId: string; deptId: string; status: ImprovementPlanStatus | ''; keyword: string }>({
   cycleId: '', deptId: '', status: '', keyword: '',
 });
@@ -30,6 +31,10 @@ const draft = reactive<{ employeeId: string; cycleId: string; improvementNeed: s
 });
 const { page, pageSize, total, reset: resetPagination, withParams } = usePagination({ defaultPageSize: 10 });
 const statuses = Object.keys(IMPROVEMENT_PLAN_STATUS_META) as ImprovementPlanStatus[];
+const createWeightTotal = computed(() => draft.goals.reduce((sum, goal) => sum + Number(goal.weight || 0), 0));
+const createWeightTotalError = computed(() => showCreateWeightErrors.value && draft.goals.every(isGoalWeightValid)
+  && Math.abs(createWeightTotal.value - 100) > 0.001
+  ? `当前合计 ${createWeightTotal.value}%，权重合计必须为 100%` : '');
 
 onMounted(async () => {
   const [cycleItems, departmentItems, employeeItems] = await Promise.all([
@@ -58,13 +63,24 @@ function search() { resetPagination(); void loadList(); }
 function reset() { Object.assign(filters, { cycleId: '', deptId: '', status: '', keyword: '' }); search(); }
 function openCreate() {
   Object.assign(draft, { employeeId: '', cycleId: '', improvementNeed: '', targetDate: '', goals: [] });
+  showCreateWeightErrors.value = false;
   addGoal();
   createOpen.value = true;
 }
 function addGoal() { draft.goals.push({ id: crypto.randomUUID(), name: '', description: '', weight: 0 }); }
 function removeGoal(index: number) { draft.goals.splice(index, 1); }
+function isGoalWeightValid(goal: ImprovementGoal) {
+  const weight = Number(goal.weight);
+  return Number.isFinite(weight) && weight > 0 && weight <= 100;
+}
+function goalWeightError(goal: ImprovementGoal) {
+  if (!showCreateWeightErrors.value) return '';
+  return isGoalWeightValid(goal) ? '' : '权重须大于 0 且不超过 100%';
+}
 async function saveDraft() {
   if (!draft.employeeId) { ElMessage.warning('请选择员工'); return; }
+  showCreateWeightErrors.value = true;
+  if (draft.goals.some((goal) => goalWeightError(goal)) || createWeightTotalError.value) return;
   creating.value = true;
   try {
     const created = await improvementPlansApi.create({
@@ -144,12 +160,16 @@ function goDetail(id: string) { void router.push(`/improvement-plans/${id}`); }
         <el-form-item label="改进背景"><el-input v-model="draft.improvementNeed" aria-label="改进背景" type="textarea" :rows="3" maxlength="4000" placeholder="说明为什么需要制定这份改进计划" /></el-form-item>
         <el-form-item label="预计完成日期（选填）"><el-date-picker v-model="draft.targetDate" aria-label="预计完成日期" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" /></el-form-item>
       </el-form>
-      <div class="goal-heading"><strong>改进目标</strong><el-button type="primary" link @click="addGoal">添加目标</el-button></div>
+      <div class="goal-heading"><strong>改进目标</strong><div class="goal-heading__actions"><span>权重合计 {{ createWeightTotal }}%</span><el-button type="primary" link @click="addGoal">添加目标</el-button></div></div>
+      <small v-if="createWeightTotalError" class="field-error goal-total-error">{{ createWeightTotalError }}</small>
       <div v-for="(goal, index) in draft.goals" :key="goal.id" class="goal-card">
         <div class="goal-card__header"><strong>目标 {{ index + 1 }}</strong><el-button link type="danger" @click="removeGoal(index)">删除</el-button></div>
         <el-input v-model="goal.name" :aria-label="`目标名称 ${index + 1}`" placeholder="目标名称" maxlength="200" />
         <el-input v-model="goal.description" :aria-label="`目标描述 ${index + 1}`" type="textarea" :rows="2" placeholder="目标描述" maxlength="4000" />
-        <label class="goal-weight">权重 <input v-model.number="goal.weight" type="number" min="0" max="100" step="0.01" :aria-label="`目标权重 ${index + 1}`">%</label>
+        <label class="goal-weight">权重 <input v-model.number="goal.weight" type="number" min="0" max="100" step="0.01"
+          :aria-label="`目标权重 ${index + 1}`" :aria-invalid="Boolean(goalWeightError(goal))">%
+          <small v-if="goalWeightError(goal)" class="field-error">{{ goalWeightError(goal) }}</small>
+        </label>
       </div>
       <template #footer><el-button @click="createOpen = false">取消</el-button><el-button type="primary" :loading="creating" @click="saveDraft">保存草稿</el-button></template>
     </el-dialog>
@@ -157,10 +177,14 @@ function goDetail(id: string) { void router.push(`/improvement-plans/${id}`); }
 </template>
 
 <style scoped>
-.goal-heading,.goal-card__header { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.goal-heading,.goal-heading__actions,.goal-card__header { display:flex; justify-content:space-between; align-items:center; gap:12px; }
 .goal-heading { margin:18px 0 8px; }
+.goal-heading__actions { justify-content:flex-end; color:var(--el-text-color-secondary); font-size:13px; }
+.field-error { color:var(--el-color-danger); }
+.goal-total-error { display:block; margin:-4px 0 8px; }
 .goal-card { display:grid; gap:10px; margin-bottom:10px; padding:12px; border:1px solid var(--el-border-color); border-radius:6px; }
-.goal-weight { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--el-text-color-regular); }
+.goal-weight { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:13px; color:var(--el-text-color-regular); }
 .goal-weight input { width:100px; height:32px; padding:0 8px; border:1px solid var(--el-border-color); border-radius:4px; }
+.field-error { display:block; font-size:12px; line-height:1.5; }
 @media(max-width:560px) { .improvement-list :deep(.el-dialog) { margin:10px auto; } .goal-card { padding:10px; } }
 </style>

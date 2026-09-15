@@ -125,12 +125,9 @@ async function saveTargets(submit: boolean) {
 async function decideGoals(approve: boolean) {
   if (!plan.value) return;
   delete errors.decision;
-  const suggestions = employeeGoalConfirmation.value ? plan.value.goals
+  const suggestions = !approve && employeeGoalConfirmation.value ? plan.value.goals
     .map((goal) => ({ goalId: goal.id, comment: goalSuggestions[goal.id]?.trim() ?? '' }))
     .filter((item) => item.comment) : [];
-  if (approve && suggestions.length) {
-    errors.decision = '已填写修改建议，请退回发起人修改或清空建议'; return;
-  }
   if (!approve && !decisionComment.value.trim() && !suggestions.length) {
     errors.decision = employeeGoalConfirmation.value ? '请填写具体目标建议或整体意见' : '退回时请填写理由'; return;
   }
@@ -140,7 +137,7 @@ async function decideGoals(approve: boolean) {
     ? plan.value.status === 'goal_dept_review' ? 'goal_employee_confirm' : 'self_eval'
     : 'goal_revision';
   try {
-    sync(await improvementPlansApi.decideGoals(id, { approve, comment: decisionComment.value,
+    sync(await improvementPlansApi.decideGoals(id, { approve, comment: approve ? '' : decisionComment.value,
       ...(suggestions.length ? { suggestions } : {}) }));
     ElMessage.success(approve ? '目标已确认' : '目标已退回发起人修改');
   } catch (error) {
@@ -186,7 +183,7 @@ async function decideFinal(approve: boolean) {
   if (!approve && !decisionComment.value.trim()) { errors.decision = '驳回时请填写理由'; return; }
   busy.value = true;
   try {
-    sync(await improvementPlansApi.decideFinal(plan.value.id, { approve, comment: decisionComment.value }));
+    sync(await improvementPlansApi.decideFinal(plan.value.id, { approve, comment: approve ? '' : decisionComment.value }));
     ElMessage.success(approve ? '改进计划已审核完成' : '已退回当前直属上级重新评价');
   } finally { busy.value = false; }
 }
@@ -396,24 +393,30 @@ function goalName(goalId: string): string {
       <el-dialog v-model="decisionDialogOpen" :title="decisionDialogTitle" width="min(560px, calc(100vw - 32px))"
         :close-on-click-modal="false" destroy-on-close>
         <template v-if="decisionDialogForGoals">
-          <p>{{ employeeGoalConfirmation ? '请确认目标；如需调整，可填写具体目标建议后退回发起人修改。' : '请确认目标，或填写理由后退回发起人修改。' }}</p>
-          <div v-if="employeeGoalConfirmation" class="dialog-suggestions">
-            <label v-for="(goal, index) in plan.goals" :key="goal.id">
-              <span>{{ index + 1 }}. {{ goal.name }}的修改建议（选填）</span>
-              <el-input v-model="goalSuggestions[goal.id]" :aria-label="`目标 ${index + 1} 修改建议`"
-                type="textarea" :rows="2" maxlength="4000" placeholder="填写这项目标的修改建议" />
-            </label>
-          </div>
-          <div class="decision-label">{{ employeeGoalConfirmation ? '整体意见（选填）' : '确认意见（退回时必填）' }}</div>
-          <el-input v-model="decisionComment" :aria-label="employeeGoalConfirmation ? '整体意见' : '目标确认意见'"
-            type="textarea" :rows="3" maxlength="4000"
-            :placeholder="employeeGoalConfirmation ? '填写整体意见' : '填写确认意见'" />
+          <p v-if="!decisionDialogReject">{{ employeeGoalConfirmation ? '确认后将进入员工自评，无需填写意见。' : '确认后将进入员工确认，无需填写意见。' }}</p>
+          <template v-else>
+            <p>{{ employeeGoalConfirmation ? '请填写需要调整的具体目标建议或整体意见。' : '请填写退回原因。' }}</p>
+            <div v-if="employeeGoalConfirmation" class="dialog-suggestions">
+              <label v-for="(goal, index) in plan.goals" :key="goal.id">
+                <span>{{ index + 1 }}. {{ goal.name }}的修改建议（选填）</span>
+                <el-input v-model="goalSuggestions[goal.id]" :aria-label="`目标 ${index + 1} 修改建议`"
+                  type="textarea" :rows="2" maxlength="4000" placeholder="填写这项目标的修改建议" />
+              </label>
+            </div>
+            <div class="decision-label">{{ employeeGoalConfirmation ? '整体意见（选填）' : '退回原因（必填）' }}</div>
+            <el-input v-model="decisionComment" :aria-label="employeeGoalConfirmation ? '整体意见' : '目标退回原因'"
+              type="textarea" :rows="3" maxlength="4000"
+              :placeholder="employeeGoalConfirmation ? '填写整体意见' : '填写退回原因'" />
+          </template>
         </template>
         <template v-else>
           <p>请查看目标、自评及业务评价，确认或退回直属上级重新评价。最终综合分以部门负责人评价为准。</p>
           <p class="weighted-total">待确认综合分：{{ plan.departmentEvaluation?.weightedScore ?? '-' }}</p>
-          <div class="decision-label">审核意见（退回时必填）</div>
-          <el-input v-model="decisionComment" aria-label="分管总审核意见" type="textarea" :rows="3" maxlength="4000" placeholder="填写审核意见" />
+          <template v-if="decisionDialogReject">
+            <div class="decision-label">退回原因（必填）</div>
+            <el-input v-model="decisionComment" aria-label="分管总审核意见" type="textarea" :rows="3" maxlength="4000" placeholder="填写退回原因" />
+          </template>
+          <p v-else>确认后将完成改进计划，无需填写审核意见。</p>
         </template>
         <small v-if="errors.decision" class="field-error">{{ errors.decision }}</small>
         <template #footer>
