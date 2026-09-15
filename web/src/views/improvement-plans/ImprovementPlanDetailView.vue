@@ -186,6 +186,21 @@ function actionLabel(record: ImprovementPlanRecord) {
   };
   return labels[record.action] ?? record.action;
 }
+function recordTitle(record: ImprovementPlanRecord) {
+  const titles: Record<string, string> = {
+    create: '改进目标', save_draft: '改进目标', submit_goals: '改进目标',
+    confirm_goals: '目标确认', reject_goals: '目标确认',
+    save_evaluation_draft: '评价内容', submit_selfEvaluation: '员工自评',
+    submit_managerEvaluation: '直属上级评价', submit_departmentEvaluation: '部门负责人评价',
+    approve_final: '分管总审核', reject_final: '分管总审核',
+  };
+  return titles[record.action] ?? actionLabel(record);
+}
+function recordTone(record: ImprovementPlanRecord) {
+  if (record.action === 'reject_goals' || record.action === 'reject_final') return 'danger';
+  if (record.action === 'create' || record.action === 'save_draft' || record.action === 'save_evaluation_draft') return 'neutral';
+  return 'success';
+}
 function recordNote(record: ImprovementPlanRecord) {
   const value = record.newValue;
   const evaluation = value?.evaluation as { overallComment?: string } | undefined;
@@ -321,31 +336,40 @@ function goalName(goalId: string): string {
 
       <ChartCard><template #title>操作记录</template>
         <p v-if="!plan.records?.length" class="empty-note">暂无操作记录</p>
-        <ol v-else class="operation-list">
-          <li v-for="record in plan.records" :key="record.id">
-            <div><strong>{{ record.actorName }}</strong> {{ actionLabel(record) }} <time>{{ formatDateTime(record.createdAt) }}</time></div>
-            <p v-if="recordNote(record)">{{ recordNote(record) }}</p>
-            <div v-if="recordSuggestions(record).length" class="record-snapshot">
+        <ol v-else class="improvement-operation" data-testid="improvement-operation-timeline" aria-label="操作记录">
+          <li v-for="record in plan.records" :key="record.id" :class="`is-${recordTone(record)}`" data-testid="improvement-operation-record">
+            <span class="improvement-operation__dot" aria-hidden="true" />
+            <article class="improvement-operation__content">
+              <time :datetime="record.createdAt">{{ formatDateTime(record.createdAt) }}</time>
+              <div class="improvement-operation__title">{{ recordTitle(record) }}</div>
+              <div class="improvement-operation__actor">
+                <span class="improvement-operation__avatar" aria-hidden="true">{{ (record.actorName || '系统').slice(0, 1) }}</span>
+                <span>{{ record.actorName || '系统' }}</span>
+                <strong>{{ actionLabel(record) }}</strong>
+                <small v-if="recordAuto(record)">{{ recordAuto(record) }}</small>
+              </div>
+              <p v-if="recordNote(record)" class="improvement-operation__note">{{ recordNote(record) }}</p>
+              <div v-if="recordSuggestions(record).length" class="record-snapshot improvement-operation__note">
               <div v-for="item in recordSuggestions(record)" :key="item.goalId">
                 <b>{{ item.goalName || goalName(item.goalId) }}的修改建议</b><span>{{ item.comment }}</span>
               </div>
-            </div>
-            <small v-if="recordAuto(record)">{{ recordAuto(record) }}</small>
-            <details v-if="recordGoals(record).length || recordEvaluation(record)">
-              <summary>查看本次内容</summary>
-              <div v-if="recordGoals(record).length" class="record-snapshot">
-                <p v-if="record.newValue?.background"><b>改进背景</b> {{ record.newValue.background }}</p>
-                <div v-for="goal in recordGoals(record)" :key="goal.id">
-                  <b>{{ goal.name }}（{{ goal.weight }}%）</b><span>{{ goal.description }}</span>
                 </div>
-              </div>
-              <div v-if="recordEvaluation(record)" class="record-snapshot">
-                <div v-for="item in recordEvaluation(record)?.items" :key="item.goalId">
-                  <b>{{ goalName(item.goalId) }} · {{ item.score ?? '未评分' }}{{ item.score == null ? '' : ' 分' }}</b><span>{{ item.comment || '未填写评价' }}</span>
+              <details v-if="recordGoals(record).length || recordEvaluation(record)">
+                <summary>查看本次内容</summary>
+                <div v-if="recordGoals(record).length" class="record-snapshot">
+                  <p v-if="record.newValue?.background"><b>改进背景</b> {{ record.newValue.background }}</p>
+                  <div v-for="goal in recordGoals(record)" :key="goal.id">
+                    <b>{{ goal.name }}（{{ goal.weight }}%）</b><span>{{ goal.description }}</span>
+                  </div>
                 </div>
-                <p v-if="recordEvaluation(record)?.weightedScore != null">加权综合分：{{ recordEvaluation(record)?.weightedScore }}</p>
-              </div>
-            </details>
+                <div v-if="recordEvaluation(record)" class="record-snapshot">
+                  <div v-for="item in recordEvaluation(record)?.items" :key="item.goalId">
+                    <b>{{ goalName(item.goalId) }} · {{ item.score ?? '未评分' }}{{ item.score == null ? '' : ' 分' }}</b><span>{{ item.comment || '未填写评价' }}</span>
+                  </div>
+                  <p v-if="recordEvaluation(record)?.weightedScore != null">加权综合分：{{ recordEvaluation(record)?.weightedScore }}</p>
+                </div>
+              </details>
+            </article>
           </li>
         </ol>
       </ChartCard>
@@ -373,12 +397,23 @@ function goalName(goalId: string): string {
 .goal-decision { margin-top:18px; padding-top:16px; border-top:1px solid var(--el-border-color-lighter); }
 .decision-label { margin-bottom:8px; font-weight:600; }
 .form-actions { justify-content:flex-end; margin-top:16px; }
-.operation-list { list-style:none; margin:0; padding:0; }
-.operation-list li { border-left:2px solid var(--el-border-color); padding:0 0 16px 16px; margin-left:5px; }
-.operation-list li::before { content:''; display:block; position:relative; top:8px; left:-22px; width:10px; height:10px; border-radius:50%; background:var(--el-color-primary); }
-.operation-list time { color:var(--el-text-color-secondary); font-size:12px; margin-left:8px; }
-.operation-list p { margin:8px 0; padding:8px 10px; background:var(--el-fill-color-light); white-space:pre-wrap; overflow-wrap:anywhere; }
-.operation-list details { margin-top:8px; font-size:12px; }
+.improvement-operation { width:min(100%,760px); list-style:none; margin:0; padding:2px 0 0; }
+.improvement-operation li { position:relative; padding:0 0 26px 28px; overflow-wrap:anywhere; }
+.improvement-operation li:not(:last-child)::before { content:''; position:absolute; top:15px; bottom:-3px; left:6px; width:2px; background:var(--el-border-color-lighter); }
+.improvement-operation li:last-child { padding-bottom:4px; }
+.improvement-operation__dot { position:absolute; top:4px; left:0; width:12px; height:12px; border:3px solid var(--el-border-color); border-radius:50%; background:var(--el-bg-color); box-sizing:border-box; }
+.improvement-operation li.is-success .improvement-operation__dot { border-color:var(--el-color-success); }
+.improvement-operation li.is-danger .improvement-operation__dot { border-color:var(--el-color-danger); }
+.improvement-operation__content time { display:block; margin-bottom:8px; color:var(--el-text-color-secondary); font-size:13px; line-height:20px; }
+.improvement-operation__title { margin-bottom:8px; color:var(--el-text-color-primary); font-size:16px; font-weight:600; line-height:24px; }
+.improvement-operation__actor { display:flex; align-items:center; gap:6px; min-height:26px; color:var(--el-text-color-regular); font-size:14px; }
+.improvement-operation__avatar { display:inline-flex; width:24px; height:24px; align-items:center; justify-content:center; border-radius:50%; background:var(--el-fill-color-dark); color:var(--el-text-color-regular); font-size:12px; }
+.improvement-operation__actor strong { color:var(--el-color-success); font-weight:600; }
+.improvement-operation li.is-danger .improvement-operation__actor strong { color:var(--el-color-danger); }
+.improvement-operation li.is-neutral .improvement-operation__actor strong { color:var(--el-text-color-secondary); }
+.improvement-operation__actor small { color:var(--el-text-color-secondary); }
+.improvement-operation__note { margin:10px 0 0; padding:9px 12px; border-radius:5px; background:var(--el-fill-color-light); color:var(--el-text-color-regular); font-size:13px; line-height:1.6; white-space:pre-wrap; overflow-wrap:anywhere; }
+.improvement-operation details { margin-top:10px; font-size:12px; }
 .record-snapshot { display:grid; gap:8px; margin-top:8px; padding:10px; background:var(--el-fill-color-light); }
 .record-snapshot div { display:grid; gap:3px; overflow-wrap:anywhere; }
 .record-snapshot span { white-space:pre-wrap; }

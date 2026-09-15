@@ -140,3 +140,46 @@ test('initiator sees the employee suggestion beside the goal and in the operatio
   await expect(page.getByText('建议写明每周返工次数上限')).toHaveCount(2);
   await expect(page.getByText('交付质量的修改建议')).toBeVisible();
 });
+
+test('operation records follow the time-first approval timeline visual hierarchy', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mock(page);
+  await page.route('**/api/v1/improvement-plans/plan-history', (route) => route.fulfill({ json: envelope({
+    id: 'plan-history', employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+    cycleId: null, cycleName: null, taskId: null, creatorId: 'manager', creatorName: '上级',
+    improvementNeed: '需要提升交付质量', importance: null, improvementGoal: null, targetDate: null, measures: [],
+    goals: [{ id: 'g1', name: '交付质量', description: '减少返工', weight: 100 }],
+    selfEvaluation: null, managerEvaluation: null, departmentEvaluation: null, finalScore: null,
+    status: 'goal_revision', workflowVersion: 2, startedAt: null, completedAt: null,
+    createdAt: '2026-09-15T02:00:00.000Z', updatedAt: '2026-09-15T03:00:00.000Z',
+    currentOwnerId: 'manager', allowedActions: ['edit', 'submit_goals'], records: [
+      { id: 'reject', action: 'reject_goals', actorName: '张员工', createdAt: '2026-09-15T03:00:00.000Z',
+        oldValue: null, newValue: { comment: '请补充每周返工次数上限', suggestions: [] } },
+      { id: 'submit', action: 'submit_goals', actorName: '上级', createdAt: '2026-09-15T02:30:00.000Z',
+        oldValue: null, newValue: { goals: [{ id: 'g1', name: '交付质量', description: '减少返工', weight: 100 }] } },
+      { id: 'draft', action: 'save_draft', actorName: '上级', createdAt: '2026-09-15T02:00:00.000Z',
+        oldValue: null, newValue: {} },
+    ],
+  }) }));
+
+  await page.goto('/improvement-plans/plan-history');
+  const timeline = page.getByTestId('improvement-operation-timeline');
+  const records = timeline.getByTestId('improvement-operation-record');
+  await expect(records).toHaveCount(3);
+  await expect(records.nth(0)).toHaveClass(/is-danger/);
+  await expect(records.nth(1)).toHaveClass(/is-success/);
+  await expect(records.nth(2)).toHaveClass(/is-neutral/);
+  await expect(records.nth(0).locator('.improvement-operation__title')).toHaveText('目标确认');
+  await expect(records.nth(0).locator('.improvement-operation__actor')).toContainText('张员工退回目标');
+  await expect(records.nth(0).locator('.improvement-operation__note')).toHaveText('请补充每周返工次数上限');
+
+  const positions = await records.nth(0).evaluate((record) => ({
+    time: record.querySelector('time')!.getBoundingClientRect().top,
+    title: record.querySelector('.improvement-operation__title')!.getBoundingClientRect().top,
+  }));
+  expect(positions.time).toBeLessThan(positions.title);
+  await timeline.screenshot({ path: test.info().outputPath('operation-timeline-desktop.png') });
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+  await timeline.screenshot({ path: test.info().outputPath('operation-timeline-mobile.png') });
+});
