@@ -45,11 +45,37 @@ const decisionDialogTitle = computed(() => {
 });
 const showEvaluation = computed(() => canEvaluate.value || Boolean(plan.value?.selfEvaluation
   || plan.value?.managerEvaluation || plan.value?.departmentEvaluation));
+const currentStageLabel = computed(() => {
+  switch (plan.value?.status) {
+    case 'draft': return '目标制定';
+    case 'goal_revision': return '目标修改';
+    case 'goal_dept_review': return '部门负责人确认目标';
+    case 'goal_employee_confirm': return '员工确认目标';
+    case 'self_eval': return '员工自评';
+    case 'manager_review': return '直属上级评价';
+    case 'dept_review': return '部门负责人评价';
+    case 'vp_review': return '分管总审核';
+    case 'completed': return '已完成';
+    default: return '历史记录';
+  }
+});
 const currentEvaluationLabel = computed(() => {
   if (plan.value?.status === 'self_eval') return '员工自评';
   if (plan.value?.status === 'manager_review') return '直属上级评价';
   if (plan.value?.status === 'dept_review') return '部门负责人评价';
   return '评价';
+});
+const evaluationSubmitLabel = computed(() => `提交${currentEvaluationLabel.value}`);
+const priorEvaluations = computed(() => {
+  const values = [
+    { status: 'self_eval', label: '员工自评', value: plan.value?.selfEvaluation },
+    { status: 'manager_review', label: '直属上级评价', value: plan.value?.managerEvaluation },
+    { status: 'dept_review', label: '部门负责人评价', value: plan.value?.departmentEvaluation },
+  ];
+  return values.filter((item) => item.value && plan.value?.status !== item.status).map((item) => ({
+    label: item.label,
+    summary: `${item.label} ${item.value?.weightedScore ?? '-'} 分 · ${item.value?.overallComment || '未填写总体评价'}`,
+  }));
 });
 const weightTotal = computed(() => form.goals.reduce((sum, goal) => sum + Number(goal.weight || 0), 0));
 const draftTotal = computed(() => {
@@ -286,7 +312,8 @@ function goalName(goalId: string): string {
       </ChartCard>
 
       <ChartCard data-testid="improvement-content-evaluation">
-        <template #title>{{ showEvaluation ? '改进内容与评价' : '改进背景与目标' }}</template>
+        <template #title>改进内容与评价</template>
+        <div class="stage-strip"><el-tag size="small" type="primary">当前环节 · {{ currentStageLabel }}</el-tag></div>
         <template v-if="canEdit">
           <el-form label-position="top">
             <el-form-item label="改进背景" required>
@@ -324,7 +351,6 @@ function goalName(goalId: string): string {
           <template v-else>
             <p>{{ goal.description }}</p>
             <div v-if="showEvaluation" class="goal-evaluation">
-              <div class="evaluation-stage"><strong>评价进展</strong><el-tag v-if="canEvaluate" size="small" type="primary">当前环节 · {{ currentEvaluationLabel }}</el-tag></div>
               <div v-if="priorScore('self', goal.id) && plan.status !== 'self_eval'" class="prior-score"><b>员工自评</b>{{ priorScore('self', goal.id) }}</div>
               <div v-if="priorScore('manager', goal.id) && plan.status !== 'manager_review'" class="prior-score"><b>直属上级评价</b>{{ priorScore('manager', goal.id) }}</div>
               <div v-if="priorScore('department', goal.id) && plan.status !== 'dept_review'" class="prior-score"><b>部门负责人评价</b>{{ priorScore('department', goal.id) }}</div>
@@ -338,14 +364,18 @@ function goalName(goalId: string): string {
           </template>
         </div>
         <div v-if="canEdit" class="form-actions"><el-button :loading="busy" @click="saveTargets(false)">保存草稿</el-button><el-button type="primary" :loading="busy" @click="saveTargets(true)">提交目标</el-button></div>
+        <div v-if="showEvaluation && priorEvaluations.length" class="evaluation-overview">
+          <div class="section-heading"><strong>评价汇总</strong></div>
+          <div v-for="item in priorEvaluations" :key="item.label" class="prior-overall">{{ item.summary }}</div>
+        </div>
         <template v-if="canEvaluate">
           <div class="evaluation-summary">
             <p class="weighted-total">加权综合分：{{ draftTotal ?? '待填写全部评分' }}</p>
             <el-form label-position="top"><el-form-item label="总体评价内容" required><el-input v-model="evaluation.overallComment" aria-label="总体评价内容" type="textarea" :rows="3" maxlength="4000" /><small v-if="errors.overall" class="field-error">{{ errors.overall }}</small></el-form-item></el-form>
-            <div class="form-actions"><el-button :loading="busy" @click="saveEvaluation(false)">保存草稿</el-button><el-button type="primary" :loading="busy" @click="saveEvaluation(true)">提交评价</el-button></div>
+            <div class="form-actions"><el-button :loading="busy" @click="saveEvaluation(false)">保存草稿</el-button><el-button type="primary" :loading="busy" @click="saveEvaluation(true)">{{ evaluationSubmitLabel }}</el-button></div>
           </div>
         </template>
-        <template v-else-if="plan.status === 'completed'"><p class="weighted-total">最终综合分：{{ plan.finalScore ?? '-' }}</p><p>{{ plan.departmentEvaluation?.overallComment || '-' }}</p></template>
+        <template v-else-if="plan.status === 'completed'"><p class="weighted-total">最终综合分：{{ plan.finalScore ?? '-' }}</p></template>
       </ChartCard>
 
       <ChartCard v-if="plan.workflowVersion === 1"><template #title>历史计划内容</template><p>改进目标：{{ plan.improvementGoal || '-' }}</p><p>最终评分（原 1–10 分制）：{{ plan.finalScore ?? '-' }}</p></ChartCard>
@@ -436,6 +466,7 @@ function goalName(goalId: string): string {
 .header-actions { justify-content:flex-end; }
 .section-heading,.goal-card__head { justify-content:space-between; }
 .section-heading { margin:20px 0 10px; }
+.stage-strip { display:flex; margin-bottom:16px; padding:8px 10px; border-radius:6px; background:var(--el-fill-color-light); }
 .plan-info { margin-bottom:14px; }
 .plan-fields { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
 .plan-fields :deep(.el-select),.plan-fields :deep(.el-date-editor) { width:100%; }
@@ -446,8 +477,9 @@ function goalName(goalId: string): string {
 .weight-field input,.score-field input { width:100px; height:34px; padding:0 8px; border:1px solid var(--el-border-color); border-radius:4px; }
 .prior-score { display:grid; grid-template-columns:110px 1fr; gap:8px; padding:8px 10px; background:var(--el-fill-color-light); font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .goal-evaluation { display:grid; gap:8px; margin-top:4px; padding-top:12px; border-top:1px solid var(--el-border-color-lighter); }
-.evaluation-stage { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
 .current-evaluation { display:grid; gap:8px; padding:10px 12px; border-radius:6px; background:var(--el-color-primary-light-9); }
+.evaluation-overview { margin-top:18px; padding-top:1px; border-top:1px solid var(--el-border-color-lighter); }
+.prior-overall { margin-top:8px; padding:8px 10px; background:var(--el-fill-color-light); font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; }
 .evaluation-summary { margin-top:18px; padding-top:16px; border-top:1px solid var(--el-border-color-lighter); }
 .weighted-total { font-weight:600; }
 .field-error { display:block; color:var(--el-color-danger); line-height:1.5; }

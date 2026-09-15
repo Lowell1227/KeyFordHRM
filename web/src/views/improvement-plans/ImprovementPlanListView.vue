@@ -35,6 +35,7 @@ const createWeightTotal = computed(() => draft.goals.reduce((sum, goal) => sum +
 const createWeightTotalError = computed(() => showCreateWeightErrors.value && draft.goals.every(isGoalWeightValid)
   && Math.abs(createWeightTotal.value - 100) > 0.001
   ? `当前合计 ${createWeightTotal.value}%，权重合计必须为 100%` : '');
+const createEmployeeError = computed(() => showCreateWeightErrors.value && !draft.employeeId ? '请选择员工' : '');
 
 onMounted(async () => {
   const [cycleItems, departmentItems, employeeItems] = await Promise.all([
@@ -78,9 +79,8 @@ function goalWeightError(goal: ImprovementGoal) {
   return isGoalWeightValid(goal) ? '' : '权重须大于 0 且不超过 100%';
 }
 async function saveDraft() {
-  if (!draft.employeeId) { ElMessage.warning('请选择员工'); return; }
   showCreateWeightErrors.value = true;
-  if (draft.goals.some((goal) => goalWeightError(goal)) || createWeightTotalError.value) return;
+  if (createEmployeeError.value || draft.goals.some((goal) => goalWeightError(goal)) || createWeightTotalError.value) return;
   creating.value = true;
   try {
     const created = await improvementPlansApi.create({
@@ -144,21 +144,26 @@ function goDetail(id: string) { void router.push(`/improvement-plans/${id}`); }
       <EmptyState v-if="!loading && list.length === 0" description="暂无改进计划" />
     </ChartCard>
 
-    <el-dialog v-model="createOpen" title="创建改进计划" width="min(680px, 96vw)" class="improvement-create-dialog">
+    <el-dialog v-model="createOpen" title="创建改进计划" width="min(680px, 96vw)" class="improvement-create-dialog"
+      :close-on-click-modal="false" destroy-on-close>
+      <div class="form-section-heading"><strong>基本信息</strong></div>
       <el-form label-position="top">
         <el-form-item label="员工" required>
           <el-select v-model="draft.employeeId" aria-label="员工" filterable placeholder="选择管理范围内的员工" style="width: 100%">
             <el-option v-for="employee in eligibleEmployees" :key="employee.id" :value="employee.id"
               :label="`${employee.name} · ${employee.employeeNo || ''} · ${employee.deptName || ''}`" />
           </el-select>
-        </el-form-item>
-        <el-form-item label="关联绩效周期计划（选填）">
-          <el-select v-model="draft.cycleId" aria-label="关联绩效周期计划" clearable placeholder="不关联" style="width: 100%">
-            <el-option v-for="cycle in cycles" :key="cycle.id" :label="cycle.name" :value="cycle.id" />
-          </el-select>
+          <small v-if="createEmployeeError" class="field-error">{{ createEmployeeError }}</small>
         </el-form-item>
         <el-form-item label="改进背景"><el-input v-model="draft.improvementNeed" aria-label="改进背景" type="textarea" :rows="3" maxlength="4000" placeholder="说明为什么需要制定这份改进计划" /></el-form-item>
-        <el-form-item label="预计完成日期（选填）"><el-date-picker v-model="draft.targetDate" aria-label="预计完成日期" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" /></el-form-item>
+        <div class="create-plan-fields">
+          <el-form-item label="关联绩效周期计划（选填）">
+            <el-select v-model="draft.cycleId" aria-label="关联绩效周期计划" clearable placeholder="不关联">
+              <el-option v-for="cycle in cycles" :key="cycle.id" :label="cycle.name" :value="cycle.id" />
+            </el-select>
+          </el-form-item>
+          <el-form-item label="预计完成日期（选填）"><el-date-picker v-model="draft.targetDate" aria-label="预计完成日期" type="date" value-format="YYYY-MM-DD" placeholder="选择日期" /></el-form-item>
+        </div>
       </el-form>
       <div class="goal-heading"><strong>改进目标</strong><div class="goal-heading__actions"><span>权重合计 {{ createWeightTotal }}%</span><el-button type="primary" link @click="addGoal">添加目标</el-button></div></div>
       <small v-if="createWeightTotalError" class="field-error goal-total-error">{{ createWeightTotalError }}</small>
@@ -178,6 +183,9 @@ function goDetail(id: string) { void router.push(`/improvement-plans/${id}`); }
 
 <style scoped>
 .goal-heading,.goal-heading__actions,.goal-card__header { display:flex; justify-content:space-between; align-items:center; gap:12px; }
+.form-section-heading { margin-bottom:12px; }
+.create-plan-fields { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
+.create-plan-fields :deep(.el-select),.create-plan-fields :deep(.el-date-editor) { width:100%; }
 .goal-heading { margin:18px 0 8px; }
 .goal-heading__actions { justify-content:flex-end; color:var(--el-text-color-secondary); font-size:13px; }
 .field-error { color:var(--el-color-danger); }
@@ -186,5 +194,5 @@ function goDetail(id: string) { void router.push(`/improvement-plans/${id}`); }
 .goal-weight { display:flex; align-items:center; gap:8px; flex-wrap:wrap; font-size:13px; color:var(--el-text-color-regular); }
 .goal-weight input { width:100px; height:32px; padding:0 8px; border:1px solid var(--el-border-color); border-radius:4px; }
 .field-error { display:block; font-size:12px; line-height:1.5; }
-@media(max-width:560px) { .improvement-list :deep(.el-dialog) { margin:10px auto; } .goal-card { padding:10px; } }
+@media(max-width:560px) { .improvement-list :deep(.el-dialog) { margin:10px auto; } .create-plan-fields { grid-template-columns:1fr; gap:0; } .goal-card { padding:10px; } }
 </style>

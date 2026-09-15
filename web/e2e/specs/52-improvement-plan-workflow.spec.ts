@@ -39,8 +39,15 @@ test('manager can create an unlinked plan with background and weighted goals', a
   await page.goto('/improvement-plans');
   await page.getByRole('button', { name: '新建改进计划' }).click();
   const dialog = page.getByRole('dialog', { name: '创建改进计划' });
+  await expect(dialog.getByText('基本信息', { exact: true })).toBeVisible();
+  const cycleField = await dialog.getByRole('combobox', { name: '关联绩效周期计划' }).boundingBox();
+  const targetDateField = await dialog.getByPlaceholder('选择日期').boundingBox();
+  expect(Math.abs(cycleField!.y - targetDateField!.y)).toBeLessThanOrEqual(4);
+  await dialog.getByRole('button', { name: '保存草稿' }).click();
+  await expect(dialog.getByText('请选择员工', { exact: true })).toBeVisible();
   await dialog.getByRole('combobox', { name: '员工' }).click();
   await page.getByRole('option', { name: /张员工/ }).click();
+  await expect(dialog.getByText('请选择员工', { exact: true })).toHaveCount(0);
   await dialog.getByRole('textbox', { name: '改进背景' }).fill('需要提升交付质量');
   await dialog.getByRole('textbox', { name: '目标名称 1' }).fill('减少返工');
   await dialog.getByRole('textbox', { name: '目标描述 1' }).fill('按时完成交付');
@@ -167,6 +174,9 @@ test('initiator sees the employee suggestion beside the goal and in the operatio
     }],
   }) }));
   await page.goto('/improvement-plans/plan-revision');
+  const content = page.getByTestId('improvement-content-evaluation');
+  await expect(content.getByText('改进内容与评价', { exact: true })).toBeVisible();
+  await expect(content.getByText('当前环节 · 目标修改', { exact: true })).toBeVisible();
   await expect(page.getByText('员工修改建议')).toBeVisible();
   await expect(page.getByText('建议写明每周返工次数上限')).toHaveCount(2);
   await expect(page.getByText('交付质量的修改建议')).toBeVisible();
@@ -251,13 +261,40 @@ test('evaluation stage keeps each goal and its reviews in one compact card', asy
   await expect(page.getByText('每周返工不超过两次', { exact: true })).toHaveCount(1);
   await expect(goalCards.first()).toContainText('员工自评80 分 · 返工次数已有下降');
   await expect(goalCards.first()).toContainText('直属上级评价78 分 · 仍需稳定交付节奏');
-  await expect(goalCards.first()).toContainText('当前环节 · 部门负责人评价');
+  await expect(content.getByText('当前环节 · 部门负责人评价', { exact: true })).toHaveCount(1);
+  await expect(goalCards.first().getByText('当前环节 · 部门负责人评价', { exact: true })).toHaveCount(0);
+  await expect(content.getByText('员工自评 82 分 · 员工总体自评', { exact: true })).toBeVisible();
+  await expect(content.getByText('直属上级评价 79.2 分 · 直属上级总体评价', { exact: true })).toBeVisible();
   await expect(goalCards.first().getByRole('spinbutton', { name: '目标评分 1' })).toBeVisible();
+  await expect(content.getByRole('button', { name: '提交部门负责人评价' })).toBeVisible();
   await content.screenshot({ path: test.info().outputPath('unified-evaluation-desktop.png') });
 
   await page.setViewportSize({ width: 390, height: 844 });
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
   await content.screenshot({ path: test.info().outputPath('unified-evaluation-mobile.png') });
+});
+
+test('each evaluation role gets an explicit submit action', async ({ page }) => {
+  await mock(page);
+  const stages = [
+    { id: 'self', status: 'self_eval', label: '提交员工自评' },
+    { id: 'manager', status: 'manager_review', label: '提交直属上级评价' },
+    { id: 'department', status: 'dept_review', label: '提交部门负责人评价' },
+  ];
+  for (const stage of stages) {
+    await page.route(`**/api/v1/improvement-plans/plan-role-${stage.id}`, (route) => route.fulfill({ json: envelope({
+      id: `plan-role-${stage.id}`, employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+      cycleId: null, cycleName: null, taskId: null, creatorId: 'manager', creatorName: '上级',
+      improvementNeed: '需要提升交付质量', importance: null, improvementGoal: null, targetDate: null, measures: [],
+      goals: [{ id: 'g1', name: '交付质量', description: '每周返工不超过两次', weight: 100 }],
+      selfEvaluation: null, managerEvaluation: null, departmentEvaluation: null, finalScore: null,
+      status: stage.status, workflowVersion: 2, startedAt: '2026-09-15T04:31:00.000Z', completedAt: null,
+      createdAt: '2026-09-15T02:00:00.000Z', updatedAt: '2026-09-15T04:31:00.000Z',
+      currentOwnerId: 'manager', allowedActions: ['evaluate'], records: [],
+    }) }));
+    await page.goto(`/improvement-plans/plan-role-${stage.id}`);
+    await expect(page.getByTestId('improvement-content-evaluation').getByRole('button', { name: stage.label })).toBeVisible();
+  }
 });
 
 test('goal confirmation actions stay in the page header and open the decision form in a dialog', async ({ page }) => {
