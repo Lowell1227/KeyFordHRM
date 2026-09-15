@@ -12,6 +12,8 @@ import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
+import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
+import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import { formatDateTime } from '@/utils/date';
 import {
   isWeightComplete,
@@ -505,7 +507,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="template-manage-view page-stack app-list-page">
+  <BusinessListPage variant="record" :loading="listLoading" class="template-manage-view">
+    <template #workspace>
     <ChartCard class="list-page-header-card">
       <template #title>考核模板</template>
       <template #extra>
@@ -671,13 +674,12 @@ onMounted(() => {
       />
     </ChartCard>
 
-    <el-dialog
+    <BusinessDetailDrawer
       v-model="dialogVisible"
       :title="dialogTitle"
-      width="960px"
-      destroy-on-close
-      :close-on-click-modal="false"
-      @close="handleDialogClose"
+      variant="wide"
+      :saving="submitLoading"
+      @closed="handleDialogClose"
     >
       <el-form
         ref="formRef"
@@ -940,8 +942,9 @@ onMounted(() => {
           {{ form.id ? '保存' : '创建' }}
         </el-button>
       </template>
-    </el-dialog>
-  </div>
+    </BusinessDetailDrawer>
+    </template>
+  </BusinessListPage>
 </template>
 
 <style scoped>

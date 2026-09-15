@@ -6,6 +6,8 @@ import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
+import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
+import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 
 const items = ref<PositionRecord[]>([]);
 const loading = ref(false);
@@ -63,7 +65,8 @@ onMounted(load);
 </script>
 
 <template>
-  <div class="position-directory page-stack app-list-page">
+  <BusinessListPage variant="record" :loading="loading" class="position-directory">
+    <template #workspace>
     <ChartCard class="list-page-header-card">
       <template #title>岗位目录</template>
       <template #extra><el-button type="primary" @click="openCreate">新增岗位</el-button></template>
@@ -90,11 +93,12 @@ onMounted(load);
       </div>
       <ListPagination v-model:current-page="page" v-model:page-size="pageSize" :total="items.length" />
     </ChartCard>
-    <el-dialog v-model="dialog.visible" :title="dialog.editingId ? '编辑岗位' : '新增岗位'" width="520px">
+    <BusinessDetailDrawer v-model="dialog.visible" :title="dialog.editingId ? '编辑岗位' : '新增岗位'" variant="standard" :saving="dialog.saving">
       <el-form label-position="top"><el-form-item label="岗位名称"><el-input v-model="dialog.name" /></el-form-item><el-form-item label="岗位族"><el-input v-model="dialog.jobFamily" placeholder="选填，例如销售、供应链、职能" /></el-form-item></el-form>
       <template #footer><el-button @click="dialog.visible = false">取消</el-button><el-button type="primary" :loading="dialog.saving" @click="submit">提交审核</el-button></template>
-    </el-dialog>
-  </div>
+    </BusinessDetailDrawer>
+    </template>
+  </BusinessListPage>
 </template>
 
 <style scoped>

@@ -10,6 +10,8 @@ import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilters.vue';
+import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
+import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import type { Department, PerformanceInterview } from '@/types/api.types';
 
 const list = ref<PerformanceInterview[]>([]);
@@ -65,7 +67,8 @@ function onSaved() { drawerVisible.value = false; void loadList(); }
 </script>
 
 <template>
-  <div class="interview-list page-stack app-list-page">
+  <BusinessListPage variant="record" :loading="loading" class="interview-list">
+    <template #workspace>
     <ChartCard class="list-page-header-card">
       <template #title>绩效面谈台账</template>
       <template #extra><el-button type="primary" @click="openDrawer()">新增面谈记录</el-button></template>
@@ -115,11 +118,12 @@ function onSaved() { drawerVisible.value = false; void loadList(); }
       </div>
       <ListPagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="pageSizeOptions" :total="total" @change="loadList" />
     </ChartCard>
-    <el-drawer v-model="drawerVisible" :title="!selectedInterviewId ? '新增面谈记录' : readonly ? '面谈详情' : '编辑面谈记录'"
-      size="min(800px, 100vw)" destroy-on-close class="performance-result-drawer">
+    <BusinessDetailDrawer v-model="drawerVisible" :title="!selectedInterviewId ? '新增面谈记录' : readonly ? '面谈详情' : '编辑面谈记录'"
+      variant="standard" class="performance-result-drawer">
       <InterviewDrawer v-if="drawerVisible" :interview-id="selectedInterviewId" :readonly="readonly" :cycles="cycles" @saved="onSaved" @cancel="drawerVisible = false" />
-    </el-drawer>
-  </div>
+    </BusinessDetailDrawer>
+    </template>
+  </BusinessListPage>
 </template>
 
 <style scoped>

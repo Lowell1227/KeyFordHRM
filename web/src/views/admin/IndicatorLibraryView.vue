@@ -8,6 +8,8 @@ import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
+import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
+import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import { useExport } from '@/composables/useExport';
 import { usePagination } from '@/composables/usePagination';
 import type { Indicator, IndicatorQuery, CreateIndicatorBody } from '@/types/api.types';
@@ -452,7 +454,8 @@ onMounted(() => {
 </script>
 
 <template>
-  <div class="indicator-library-view page-stack app-list-page">
+  <BusinessListPage variant="record" :loading="loading" class="indicator-library-view">
+    <template #workspace>
     <ChartCard class="filter-card list-page-header-card">
       <QueryFilterPanel class="page-filter-panel">
         <el-form :model="queryForm" class="query-form">
@@ -610,17 +613,15 @@ onMounted(() => {
     </ChartCard>
 
     <!-- 新建/编辑弹窗 -->
-    <el-dialog
+    <BusinessDetailDrawer
       v-model="dialogVisible"
-      data-testid="indicator-dialog"
       :title="dialogTitle"
-      width="min(960px, calc(100vw - 32px))"
-      destroy-on-close
-      :close-on-click-modal="false"
+      variant="wide"
+      :saving="saving"
       class="indicator-dialog"
-      @close="closeDialog"
+      @closed="closeDialog"
     >
-      <div class="indicator-editor">
+      <div class="indicator-editor" data-testid="indicator-dialog">
         <el-form
           ref="formRef"
           :model="form"
@@ -815,7 +816,7 @@ onMounted(() => {
           </div>
         </div>
       </template>
-    </el-dialog>
+    </BusinessDetailDrawer>
 
     <el-dialog
       v-model="importDialogVisible"
@@ -884,7 +885,8 @@ onMounted(() => {
         <el-button type="primary" :loading="importLoading" :disabled="!importFile" @click="submitImport">开始导入</el-button>
       </template>
     </el-dialog>
-  </div>
+    </template>
+  </BusinessListPage>
 </template>
 
 <style scoped>
