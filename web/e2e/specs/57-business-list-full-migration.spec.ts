@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import { routes as appRoutes } from '../../src/router/routes';
 
 const envelope = (data: unknown) => ({ code: 0, message: 'success', data, timestamp: Date.now() });
 
@@ -63,6 +64,23 @@ const routes = [
   ['/improvement-plans', 'workflow'],
 ] as const;
 
+test('workflow list routes own their reusable detail routes', () => {
+  const expected = new Map<string, string[]>([
+    ['/improvement-plans', ['ImprovementPlanDetail']],
+    ['/confirmation-applications/approvals', ['ConfirmationApprovalDetail']],
+    ['/confirmation-applications/mine', ['ConfirmationMineDetail']],
+    ['/probation-reviews/manage', ['ProbationManageDetail']],
+    ['/probation-reviews/manager', ['ProbationManagerDetail']],
+    ['/probation-reviews/mine', ['ProbationMineDetail']],
+    ['/department-review', ['DepartmentReviewDetail']],
+  ]);
+
+  for (const [path, names] of expected) {
+    const route = appRoutes.find((item) => item.path === path);
+    expect(route?.children?.map((child) => child.name), path).toEqual(names);
+  }
+});
+
 test('all active migration pages use their approved business-list template', async ({ page }) => {
   await mockAuthenticatedAdmin(page);
 
@@ -77,5 +95,42 @@ test('all active migration pages use their approved business-list template', asy
       bodyOverflow: document.body.scrollWidth - document.body.clientWidth,
     })), { message: path }).toEqual({ documentOverflow: 0, bodyOverflow: 0 });
     await page.setViewportSize({ width: 1440, height: 900 });
+  }
+});
+
+test('confirmation, probation and department-review direct URLs stay inside workflow drawers', async ({ page }) => {
+  await mockAuthenticatedAdmin(page);
+  await page.route('**/api/v1/confirmation-applications/confirmation-drawer', (route) => route.fulfill({ json: envelope({
+    id: 'confirmation-drawer', employeeId: 'employee', employee: { id: 'employee', name: '抽屉验收员工' },
+    status: 'approved', manager: { id: 'manager', name: '直属主管' }, hr: { id: 'hr', name: 'HR 经办人' },
+    companyApprover: { id: 'approver', name: '公司审批人' }, roster: {}, workflowVersion: 2,
+    canViewInternalMeeting: false, canApprove: false, pendingRole: null, steps: [], history: [], meetingAttachments: [],
+  }) }));
+  await page.route('**/api/v1/probation-reviews/probation-drawer', (route) => route.fulfill({ json: envelope({
+    id: 'probation-drawer', status: 'closed', employee: { id: 'employee', name: '试用期员工' },
+    manager: { id: 'manager', name: '直属主管' }, hr: { id: 'hr', name: 'HR 经办人' },
+    plannedRegularDate: '2026-09-30', indicators: [], signatures: [], strengths: null, improvements: null,
+  }) }));
+  await page.route('**/api/v1/tasks/department-drawer', (route) => route.fulfill({ json: envelope({
+    id: 'department-drawer', cycleId: 'cycle', cycleName: '抽屉验收周期', employeeId: 'employee',
+    employeeName: '部门复核员工', employeeNo: 'E001', deptName: '业务部', position: '专员',
+    managerId: 'manager', managerName: '直属主管', deptHeadId: 'admin', status: 'dept_review',
+    approvedAt: null, isExempt: false, workflowVersion: 2, periods: [], indicatorInstances: [], flowRecords: [],
+    gradeResult: { calculatedScore: 90, rawGrade: 'B', calibratedGrade: null, isPublished: false },
+    workflowContext: { stage: 'review', statusLabel: '待部门复核', currentHandler: null, canRemind: false },
+  }) }));
+
+  for (const [path, parentPath] of [
+    ['/confirmation-applications/approvals/confirmation-drawer', '/confirmation-applications/approvals'],
+    ['/confirmation-applications/mine/confirmation-drawer', '/confirmation-applications/mine'],
+    ['/probation-reviews/manage/probation-drawer', '/probation-reviews/manage'],
+    ['/department-review/department-drawer', '/department-review'],
+  ] as const) {
+    await page.goto(path);
+    await expect(page.getByTestId('business-list-page'), path).toHaveAttribute('data-list-variant', 'workflow');
+    await expect(page.getByTestId('business-detail-drawer'), path).toHaveAttribute('data-drawer-variant', 'workflow');
+    await page.keyboard.press('Escape');
+    await expect(page).toHaveURL(new RegExp(`${parentPath}$`));
+    await expect(page.getByTestId('business-list-page')).toBeVisible();
   }
 });

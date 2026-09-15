@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, ref, reactive, onMounted } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { Search, RefreshRight } from '@element-plus/icons-vue';
 import { probationApi } from '@/api/probation.api';
 import { usePagination } from '@/composables/usePagination';
@@ -10,6 +10,8 @@ import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
+import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
+import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import type { ProbationReview } from '@/types/api.types';
 import type { ProbationReviewStatus } from '@/types/enums';
 
@@ -19,6 +21,7 @@ const props = defineProps<{
   mode: ListMode;
 }>();
 
+const route = useRoute();
 const router = useRouter();
 
 const list = ref<ProbationReview[]>([]);
@@ -50,6 +53,18 @@ const titleMap: Record<ListMode, string> = {
   manager: '负责的试用期考核历史',
   mine: '我的试用期考核历史',
 };
+const detailRouteMap: Record<ListMode, string> = {
+  manage: 'ProbationManageDetail',
+  manager: 'ProbationManagerDetail',
+  mine: 'ProbationMineDetail',
+};
+const parentRouteMap: Record<ListMode, string> = {
+  manage: 'ProbationManage',
+  manager: 'ProbationManager',
+  mine: 'ProbationMine',
+};
+const detailOpen = computed(() => route.name === detailRouteMap[props.mode]);
+const detailOpenedFromList = ref(false);
 
 onMounted(() => {
   loadList();
@@ -102,7 +117,21 @@ function statusType(status: ProbationReviewStatus): string {
 }
 
 function goDetail(row: ProbationReview) {
-  router.push(`/probation-reviews/${row.id}`);
+  detailOpenedFromList.value = true;
+  void router.push({ name: detailRouteMap[props.mode], params: { id: row.id }, query: route.query });
+}
+
+function closeDetail() {
+  if (detailOpenedFromList.value) {
+    detailOpenedFromList.value = false;
+    router.back();
+    return;
+  }
+  void router.replace({ name: parentRouteMap[props.mode], query: route.query });
+}
+
+function handleDetailVisibility(value: boolean) {
+  if (!value && detailOpen.value) closeDetail();
 }
 
 function signSummary(row: ProbationReview): string {
@@ -117,7 +146,8 @@ function signSummary(row: ProbationReview): string {
 </script>
 
 <template>
-  <div class="probation-list page-stack app-list-page">
+  <BusinessListPage variant="workflow" :loading="loading" class="probation-list">
+    <template #workspace>
     <ChartCard class="list-page-header-card">
       <template #title>{{ titleMap[mode] }}</template>
       <template #extra>
@@ -217,7 +247,16 @@ function signSummary(row: ProbationReview): string {
         @change="loadList"
       />
     </ChartCard>
-  </div>
+    <BusinessDetailDrawer
+      :model-value="detailOpen"
+      title="试用期考核历史详情"
+      variant="workflow"
+      @update:model-value="handleDetailVisibility"
+    >
+      <RouterView />
+    </BusinessDetailDrawer>
+    </template>
+  </BusinessListPage>
 </template>
 
 <style scoped>

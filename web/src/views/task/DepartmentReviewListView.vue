@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import ChartCard from '@/components/common/ChartCard.vue';
 import GradeTag from '@/components/common/GradeTag.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
-import PerformanceResultDrawer from '@/components/common/PerformanceResultDrawer.vue';
 import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilters.vue';
+import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
+import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import DepartmentReviewWorkspace from './components/DepartmentReviewWorkspace.vue';
 import { tasksApi } from '@/api/tasks.api';
 import { cyclesApi } from '@/api/cycles.api';
@@ -17,6 +19,8 @@ import { formatDateTime } from '@/utils/date';
 import { formatResultScore, resultStage } from '@/utils/performance-result-presentation';
 import { orderPerformanceCyclesByCreatedAt } from '@/utils/performance-cycle';
 
+const route = useRoute();
+const router = useRouter();
 const items = ref<DepartmentReviewListItem[]>([]);
 const total = ref(0);
 const page = ref(1);
@@ -29,7 +33,6 @@ const deptId = ref('');
 const keyword = ref('');
 const loading = ref(false);
 const error = ref('');
-const detailVisible = ref(false);
 const detailLoading = ref(false);
 const detailActionBusy = ref(false);
 const detailError = ref('');
@@ -37,6 +40,8 @@ const selectedTaskId = ref('');
 const selectedEmployeeName = ref('');
 const selectedTask = ref<TaskDetail | null>(null);
 const selectedCanReview = ref(false);
+const detailOpen = computed(() => route.name === 'DepartmentReviewDetail');
+const detailOpenedFromList = ref(false);
 let loadSequence = 0;
 let detailSequence = 0;
 const stages = Object.entries(TASK_STATUS_META).filter(([value]) => value !== 'exempted');
@@ -100,7 +105,12 @@ async function loadTaskDetail(id: string) {
   detailError.value = '';
   try {
     const task = await tasksApi.findOne(id);
-    if (sequence === detailSequence && selectedTaskId.value === id) selectedTask.value = task;
+    if (sequence === detailSequence && selectedTaskId.value === id) {
+      selectedTask.value = task;
+      selectedEmployeeName.value ||= task.employeeName ?? '';
+      const listItem = items.value.find((item) => item.id === id);
+      selectedCanReview.value = listItem ? canReview(listItem) : task.status === 'dept_review';
+    }
   } catch {
     if (sequence === detailSequence && selectedTaskId.value === id) {
       selectedTask.value = null;
@@ -111,16 +121,15 @@ async function loadTaskDetail(id: string) {
   }
 }
 function openTask(item: DepartmentReviewListItem) {
+  detailOpenedFromList.value = true;
   selectedTaskId.value = item.id;
   selectedEmployeeName.value = item.employeeName ?? '';
   selectedCanReview.value = canReview(item);
   selectedTask.value = null;
-  detailVisible.value = true;
-  void loadTaskDetail(item.id);
+  void router.push({ name: 'DepartmentReviewDetail', params: { id: item.id }, query: route.query });
 }
-function closeDetail() {
+function resetDetailState() {
   detailSequence += 1;
-  detailVisible.value = false;
   detailLoading.value = false;
   detailActionBusy.value = false;
   detailError.value = '';
@@ -129,8 +138,16 @@ function closeDetail() {
   selectedTask.value = null;
   selectedCanReview.value = false;
 }
-function beforeDetailClose(done: () => void) {
-  if (!detailActionBusy.value) done();
+function closeDetail() {
+  if (detailOpenedFromList.value) {
+    detailOpenedFromList.value = false;
+    router.back();
+    return;
+  }
+  void router.replace({ name: 'DepartmentReview', query: route.query });
+}
+function handleDetailVisibility(value: boolean) {
+  if (!value && detailOpen.value && !detailActionBusy.value) closeDetail();
 }
 async function handleReviewed() {
   const id = selectedTaskId.value;
@@ -145,10 +162,22 @@ onMounted(async () => {
   await loadFilters();
   await load();
 });
+watch(() => [route.name, route.params.id] as const, ([name, id]) => {
+  if (name !== 'DepartmentReviewDetail' || !id) {
+    resetDetailState();
+    return;
+  }
+  const nextId = String(id);
+  if (selectedTaskId.value === nextId && selectedTask.value) return;
+  selectedTaskId.value = nextId;
+  selectedTask.value = null;
+  void loadTaskDetail(nextId);
+}, { immediate: true });
 </script>
 
 <template>
-  <div class="page-stack department-review-list performance-result-page">
+  <BusinessListPage variant="workflow" :loading="loading" class="department-review-list performance-result-page">
+    <template #workspace>
     <ChartCard :padded="true" class="list-result-card">
       <template #title>部门复核</template>
       <PerformanceRecordFilters
@@ -203,23 +232,23 @@ onMounted(async () => {
       </div>
       <ListPagination v-model:current-page="page" v-model:page-size="pageSize" :total="total" @change="load" />
     </ChartCard>
-    <PerformanceResultDrawer
-      v-model="detailVisible"
+    <BusinessDetailDrawer
+      :model-value="detailOpen"
       :title="selectedEmployeeName ? `${selectedEmployeeName} · 部门复核` : '部门复核详情'"
-      data-testid="department-review-detail-drawer"
-      :before-close="beforeDetailClose"
-      :close-on-click-modal="!detailActionBusy"
-      :close-on-press-escape="!detailActionBusy"
-      :show-close="!detailActionBusy"
-      @close="closeDetail"
+      variant="workflow"
+      :saving="detailActionBusy"
+      class="department-review-detail-drawer performance-result-drawer"
+      @update:model-value="handleDetailVisibility"
+      @closed="resetDetailState"
     >
       <div v-loading="detailLoading" class="department-review-detail">
         <el-alert v-if="detailError" type="error" :closable="false" :title="detailError"><el-button link @click="loadTaskDetail(selectedTaskId)">重试</el-button></el-alert>
         <DepartmentReviewWorkspace v-if="selectedTask" :task="selectedTask" :can-review="selectedCanReview" embedded @busy="detailActionBusy = $event" @reviewed="handleReviewed" />
       </div>
-      <template #footer><el-button :disabled="detailActionBusy" @click="detailVisible = false">关闭</el-button></template>
-    </PerformanceResultDrawer>
-  </div>
+      <template #footer><el-button :disabled="detailActionBusy" @click="closeDetail">关闭</el-button></template>
+    </BusinessDetailDrawer>
+    </template>
+  </BusinessListPage>
 </template>
 
 <style scoped>

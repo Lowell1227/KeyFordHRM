@@ -165,7 +165,7 @@ test('employee can return a specific goal suggestion without editing the approve
       : plan) });
   });
   await page.goto('/improvement-plans/plan-employee');
-  const overview = page.locator('.chart-card').first();
+  const overview = page.getByTestId('business-detail-drawer').locator('.chart-card').first();
   await expect(overview.getByRole('button', { name: '退回发起人修改' })).toBeVisible();
   await expect(overview.getByRole('button', { name: '确认目标' })).toBeVisible();
   await expect(page.getByText('目标确认', { exact: true })).toHaveCount(0);
@@ -352,7 +352,7 @@ test('goal confirmation actions stay in the page header and open the decision fo
   });
 
   await page.goto('/improvement-plans/plan-goal-dialog');
-  const overview = page.locator('.chart-card').first();
+  const overview = page.getByTestId('business-detail-drawer').locator('.chart-card').first();
   const content = page.getByTestId('improvement-content-evaluation');
   const rejectButton = overview.getByRole('button', { name: '退回发起人修改' });
   await expect(rejectButton).toBeVisible();
@@ -417,7 +417,7 @@ test('final review actions stay in the page header and the return dialog keeps r
   });
 
   await page.goto('/improvement-plans/plan-final-dialog');
-  const overview = page.locator('.chart-card').first();
+  const overview = page.getByTestId('business-detail-drawer').locator('.chart-card').first();
   await expect(overview.getByRole('button', { name: '退回直属上级重评' })).toBeVisible();
   await expect(overview.getByRole('button', { name: '审核确认' })).toBeVisible();
   await expect(page.locator('.chart-card').filter({ has: page.getByText('分管总审核', { exact: true }) })).toHaveCount(0);

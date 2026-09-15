@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import { probationApi } from '@/api/probation.api';
@@ -11,6 +11,7 @@ import type { ProbationReview } from '@/types/api.types';
 
 const route = useRoute();
 const router = useRouter();
+const props = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
 const review = ref<ProbationReview | null>(null);
 const loading = ref(false);
 
@@ -27,11 +28,20 @@ onMounted(async () => {
     loading.value = false;
   }
 });
+watch(() => route.params.id, async (id, previousId) => {
+  if (!id || id === previousId) return;
+  loading.value = true;
+  try {
+    review.value = await probationApi.findOne(id as string);
+  } finally {
+    loading.value = false;
+  }
+});
 </script>
 
 <template>
   <div v-loading="loading" class="page-stack">
-    <div class="page-header">
+    <div v-if="!props.embedded" class="page-header">
       <el-button link :icon="ArrowLeft" @click="router.back()">返回</el-button>
       <h2>试用期考核历史</h2>
     </div>

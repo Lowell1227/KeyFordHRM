@@ -63,8 +63,8 @@ test('部门复核详情识别结果审批已通过并等待员工确认', async
   await setup(page, 'head', { status: 'approval', combined: true, approvedAt: '2026-09-08T12:00:00.000Z' });
   await page.goto('/department-review');
   await page.getByRole('row').filter({ hasText: '虚拟员工甲' }).getByRole('button', { name: '查看详情', exact: true }).click();
-  await expect(page).toHaveURL(/\/department-review$/);
-  const drawer = page.getByTestId('department-review-detail-drawer');
+  await expect(page).toHaveURL(new RegExp(`/department-review/${taskId}$`));
+  const drawer = page.getByTestId('business-detail-drawer');
   await expect(drawer).toBeVisible();
   const workspace = drawer.getByTestId('department-review-workspace');
   await expect(workspace.locator('.chart-card')).toHaveCount(0);
@@ -149,7 +149,7 @@ test('复核请求未完成时抽屉不可关闭，完成后仍刷新名单', as
   await setup(page, 'head', { reviewGate });
   await page.goto('/department-review');
   await page.getByRole('button', { name: '进入复核', exact: true }).click();
-  const drawer = page.getByTestId('department-review-detail-drawer');
+  const drawer = page.getByTestId('business-detail-drawer');
   await drawer.getByRole('button', { name: '复核通过', exact: true }).click();
   await expect(drawer.getByRole('button', { name: '关闭', exact: true })).toBeDisabled();
   await page.keyboard.press('Escape');
@@ -296,9 +296,9 @@ test('关闭后切换员工时迟到的旧详情不会串到新抽屉', async ({
 
   await page.goto('/department-review');
   await page.getByRole('row').filter({ hasText: '虚拟待复核成员' }).getByRole('button', { name: '进入复核', exact: true }).click();
-  await page.getByTestId('department-review-detail-drawer').getByRole('button', { name: '关闭', exact: true }).click();
+  await page.getByTestId('business-detail-drawer').getByRole('button', { name: '关闭', exact: true }).click();
   await page.getByRole('row').filter({ hasText: '虚拟已通过成员' }).getByRole('button', { name: '查看详情', exact: true }).click();
-  const drawer = page.getByTestId('department-review-detail-drawer');
+  const drawer = page.getByTestId('business-detail-drawer');
   await expect(drawer.getByTestId('performance-result-summary')).toContainText('虚拟已通过成员');
   releasePending();
   await expect(drawer.getByTestId('performance-result-summary')).toContainText('虚拟已通过成员');

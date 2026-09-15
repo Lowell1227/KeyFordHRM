@@ -104,7 +104,8 @@ for (const width of [1440, 390]) {
       await drawer.getByRole('button', { name: '查看全部 8 条记录' }).click();
       await drawer.locator('.el-drawer__body').evaluate(element => { element.scrollTop = element.scrollHeight; });
       await expect(drawer.getByRole('button', { name: '关闭', exact: true })).toBeVisible();
-      await expect.poll(async () => Math.round((await drawer.boundingBox())!.width)).toBe(Math.min(720, width));
+      const expectedDrawerWidth = path === 'department-review' ? Math.min(960, width) : Math.min(720, width);
+      await expect.poll(async () => Math.round((await drawer.boundingBox())!.width)).toBe(expectedDrawerWidth);
       const drawerMetrics = await drawer.evaluate(element => {
         const titleElement = element.querySelector('.el-drawer__title')!;
         const body = element.querySelector('.el-drawer__body')!;

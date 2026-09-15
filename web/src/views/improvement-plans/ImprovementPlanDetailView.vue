@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { isAxiosError } from 'axios';
 import { ElMessage } from 'element-plus';
@@ -12,6 +12,8 @@ import type { ImprovementEvaluation, ImprovementGoal, ImprovementGoalSuggestion,
 
 const route = useRoute();
 const router = useRouter();
+withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
+const emit = defineEmits<{ changed: [] }>();
 const plan = ref<ImprovementPlan | null>(null);
 const cycles = ref<Array<{ id: string; name: string }>>([]);
 const loading = ref(false);
@@ -97,6 +99,9 @@ onMounted(async () => {
   cycles.value = await improvementPlansApi.cycles().catch(() => []);
   await load();
 });
+watch(() => route.params.id, (id, previousId) => {
+  if (id && id !== previousId) void load();
+});
 async function load() {
   const id = String(route.params.id || '');
   if (!id) return;
@@ -145,6 +150,7 @@ async function saveTargets(submit: boolean) {
     await improvementPlansApi.update(plan.value.id, draftBody());
     const updated = submit ? await improvementPlansApi.submitGoals(plan.value.id) : await improvementPlansApi.getDetail(plan.value.id);
     sync(updated);
+    emit('changed');
     ElMessage.success(submit ? '目标已提交，等待部门负责人或员工确认' : '草稿已保存');
   } finally { busy.value = false; }
 }
@@ -165,6 +171,7 @@ async function decideGoals(approve: boolean) {
   try {
     sync(await improvementPlansApi.decideGoals(id, { approve, comment: approve ? '' : decisionComment.value,
       ...(suggestions.length ? { suggestions } : {}) }));
+    emit('changed');
     ElMessage.success(approve ? '目标已确认' : '目标已退回发起人修改');
   } catch (error) {
     if (isAxiosError(error) && !error.response) {
@@ -172,6 +179,7 @@ async function decideGoals(approve: boolean) {
         const updated = await improvementPlansApi.getDetail(id);
         if (updated.status === expectedStatus) {
           sync(updated);
+          emit('changed');
           ElMessage.success(approve ? '目标已确认' : '目标已退回发起人修改');
           return;
         }
@@ -201,6 +209,7 @@ async function saveEvaluation(submit: boolean) {
     const body = { items: evaluation.items, overallComment: evaluation.overallComment };
     sync(submit ? await improvementPlansApi.evaluate(plan.value.id, body)
       : await improvementPlansApi.saveEvaluation(plan.value.id, body));
+    emit('changed');
     ElMessage.success(submit ? '评价已提交' : '评价草稿已保存');
   } finally { busy.value = false; }
 }
@@ -210,6 +219,7 @@ async function decideFinal(approve: boolean) {
   busy.value = true;
   try {
     sync(await improvementPlansApi.decideFinal(plan.value.id, { approve, comment: approve ? '' : decisionComment.value }));
+    emit('changed');
     ElMessage.success(approve ? '改进计划已审核完成' : '已退回当前直属上级重新评价');
   } finally { busy.value = false; }
 }
@@ -285,7 +295,7 @@ function goalName(goalId: string): string {
   <div v-loading="loading" class="improvement-detail page-stack">
     <template v-if="plan">
       <ChartCard class="plan-overview-card">
-        <template #title><div class="title-row"><el-button link @click="router.push('/improvement-plans')">返回列表</el-button><strong>绩效改进计划</strong></div></template>
+        <template #title><div class="title-row"><el-button v-if="!embedded" link @click="router.push('/improvement-plans')">返回列表</el-button><strong>绩效改进计划</strong></div></template>
         <template #extra>
           <div class="header-actions">
             <el-tag :type="IMPROVEMENT_PLAN_STATUS_META[plan.status]?.type as any">{{ IMPROVEMENT_PLAN_STATUS_META[plan.status]?.label }}</el-tag>

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { improvementPlansApi } from '@/api/improvement-plans.api';
 import { departmentsApi } from '@/api/departments.api';
@@ -12,8 +12,11 @@ import EmptyState from '@/components/common/EmptyState.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilters.vue';
+import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
+import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import type { Department, ImprovementGoal, ImprovementPlan } from '@/types/api.types';
 
+const route = useRoute();
 const router = useRouter();
 const list = ref<ImprovementPlan[]>([]);
 const cycles = ref<Array<{ id: string; name: string }>>([]);
@@ -36,6 +39,8 @@ const createWeightTotalError = computed(() => showCreateWeightErrors.value && dr
   && Math.abs(createWeightTotal.value - 100) > 0.001
   ? `当前合计 ${createWeightTotal.value}%，权重合计必须为 100%` : '');
 const createEmployeeError = computed(() => showCreateWeightErrors.value && !draft.employeeId ? '请选择员工' : '');
+const detailOpen = computed(() => route.name === 'ImprovementPlanDetail');
+const detailOpenedFromList = ref(false);
 
 onMounted(async () => {
   const [cycleItems, departmentItems, employeeItems] = await Promise.all([
@@ -90,7 +95,7 @@ async function saveDraft() {
     });
     createOpen.value = false;
     ElMessage.success('草稿已保存，请检查目标后正式提交');
-    await router.push(`/improvement-plans/${created.id}`);
+    openDetail(created.id);
   } finally { creating.value = false; }
 }
 function statusLabel(status: ImprovementPlanStatus) { return IMPROVEMENT_PLAN_STATUS_META[status]?.label ?? status; }
@@ -98,11 +103,27 @@ function scoreLabel(item: ImprovementPlan) {
   return item.finalScore == null ? '-' : item.workflowVersion === 1
     ? `${item.finalScore} / 10（历史）` : `${item.finalScore} / 100`;
 }
-function goDetail(id: string) { void router.push(`/improvement-plans/${id}`); }
+function openDetail(id: string) {
+  detailOpenedFromList.value = true;
+  void router.push({ name: 'ImprovementPlanDetail', params: { id }, query: route.query });
+}
+function closeDetail() {
+  if (detailOpenedFromList.value) {
+    detailOpenedFromList.value = false;
+    router.back();
+    return;
+  }
+  void router.replace({ name: 'ImprovementPlans', query: route.query });
+}
+function handleDetailVisibility(value: boolean) {
+  if (!value && detailOpen.value) closeDetail();
+}
+function goDetail(id: string) { openDetail(id); }
 </script>
 
 <template>
-  <div class="improvement-list page-stack app-list-page">
+  <BusinessListPage variant="workflow" :loading="loading" class="improvement-list">
+    <template #workspace>
     <ChartCard class="list-page-header-card">
       <template #title>绩效改进计划</template>
       <template #extra><el-button v-if="eligibleEmployees.length" type="primary" @click="openCreate">新建改进计划</el-button></template>
@@ -178,7 +199,18 @@ function goDetail(id: string) { void router.push(`/improvement-plans/${id}`); }
       </div>
       <template #footer><el-button @click="createOpen = false">取消</el-button><el-button type="primary" :loading="creating" @click="saveDraft">保存草稿</el-button></template>
     </el-dialog>
-  </div>
+    <BusinessDetailDrawer
+      :model-value="detailOpen"
+      title="改进计划详情"
+      variant="workflow"
+      @update:model-value="handleDetailVisibility"
+    >
+      <RouterView v-slot="{ Component }">
+        <component :is="Component" @changed="loadList" />
+      </RouterView>
+    </BusinessDetailDrawer>
+    </template>
+  </BusinessListPage>
 </template>
 
 <style scoped>

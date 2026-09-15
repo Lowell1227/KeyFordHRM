@@ -70,6 +70,15 @@ export const routes: RouteRecordRaw[] = [
     path: '/department-review',
     name: 'DepartmentReview',
     component: () => import('@/views/task/DepartmentReviewListView.vue'),
+    children: [
+      {
+        path: ':id',
+        name: 'DepartmentReviewDetail',
+        component: () => import('@/views/task/TaskDetailView.vue'),
+        props: { embedded: true },
+        meta: { requiresAuth: true, title: '部门复核详情', activeNavigationPath: '/department-review' },
+      },
+    ],
     meta: {
       requiresAuth: true,
       title: '部门复核',
@@ -251,6 +260,15 @@ export const routes: RouteRecordRaw[] = [
     path: '/improvement-plans',
     name: 'ImprovementPlans',
     component: () => import('@/views/improvement-plans/ImprovementPlanListView.vue'),
+    children: [
+      {
+        path: ':id',
+        name: 'ImprovementPlanDetail',
+        component: () => import('@/views/improvement-plans/ImprovementPlanDetailView.vue'),
+        props: { embedded: true },
+        meta: { requiresAuth: true, title: '改进计划详情', activeNavigationPath: '/improvement-plans' },
+      },
+    ],
     meta: {
       requiresAuth: true,
       title: '改进计划',
@@ -258,15 +276,18 @@ export const routes: RouteRecordRaw[] = [
     },
   },
   {
-    path: '/improvement-plans/:id',
-    name: 'ImprovementPlanDetail',
-    component: () => import('@/views/improvement-plans/ImprovementPlanDetailView.vue'),
-    meta: { requiresAuth: true, title: '改进计划详情' },
-  },
-  {
     path: '/probation-reviews/manage',
     name: 'ProbationManage',
     component: () => import('@/views/probation/ProbationManageView.vue'),
+    children: [
+      {
+        path: ':id',
+        name: 'ProbationManageDetail',
+        component: () => import('@/views/probation/ProbationDetailView.vue'),
+        props: { embedded: true },
+        meta: { requiresAuth: true, title: '试用期考核历史详情', activeNavigationPath: '/probation-reviews/manage' },
+      },
+    ],
     meta: {
       requiresAuth: true,
       title: '试用期考核历史',
@@ -277,6 +298,15 @@ export const routes: RouteRecordRaw[] = [
     path: '/probation-reviews/manager',
     name: 'ProbationManager',
     component: () => import('@/views/probation/ProbationManagerView.vue'),
+    children: [
+      {
+        path: ':id',
+        name: 'ProbationManagerDetail',
+        component: () => import('@/views/probation/ProbationDetailView.vue'),
+        props: { embedded: true },
+        meta: { requiresAuth: true, title: '试用期考核历史详情', activeNavigationPath: '/probation-reviews/manager' },
+      },
+    ],
     meta: {
       requiresAuth: true,
       title: '负责的试用期考核历史',
@@ -287,6 +317,15 @@ export const routes: RouteRecordRaw[] = [
     path: '/probation-reviews/mine',
     name: 'ProbationMine',
     component: () => import('@/views/probation/ProbationMineView.vue'),
+    children: [
+      {
+        path: ':id',
+        name: 'ProbationMineDetail',
+        component: () => import('@/views/probation/ProbationDetailView.vue'),
+        props: { embedded: true },
+        meta: { requiresAuth: true, title: '试用期考核历史详情', activeNavigationPath: '/probation-reviews/mine' },
+      },
+    ],
     meta: {
       requiresAuth: true,
       title: '我的试用期考核历史',
@@ -327,6 +366,15 @@ export const routes: RouteRecordRaw[] = [
     path: '/confirmation-applications/approvals',
     name: 'ConfirmationApprovals',
     component: () => import('@/views/confirmation/ConfirmationApprovalView.vue'),
+    children: [
+      {
+        path: ':id',
+        name: 'ConfirmationApprovalDetail',
+        component: () => import('@/views/confirmation/ConfirmationDetailView.vue'),
+        props: { embedded: true },
+        meta: { requiresAuth: true, title: '转正申请详情', activeNavigationPath: '/confirmation-applications/approvals' },
+      },
+    ],
     meta: {
       requiresAuth: true,
       title: '转正管理',
@@ -338,6 +386,15 @@ export const routes: RouteRecordRaw[] = [
     path: '/confirmation-applications/mine',
     name: 'ConfirmationMine',
     component: () => import('@/views/confirmation/ConfirmationMineView.vue'),
+    children: [
+      {
+        path: ':id',
+        name: 'ConfirmationMineDetail',
+        component: () => import('@/views/confirmation/ConfirmationDetailView.vue'),
+        props: { embedded: true },
+        meta: { requiresAuth: true, title: '转正申请详情', activeNavigationPath: '/confirmation-applications/mine' },
+      },
+    ],
     meta: {
       requiresAuth: true,
       title: '我的转正申请',

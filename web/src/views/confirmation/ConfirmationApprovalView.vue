@@ -1,22 +1,27 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { computed, ref, reactive, onMounted } from 'vue';
+import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { confirmationApi } from '@/api/confirmation.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
+import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
+import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import { usePagination } from '@/composables/usePagination';
 import { CONFIRMATION_STATUS_META } from '@/types/enums';
 import type { ConfirmationApplication } from '@/types/api.types';
 
+const route = useRoute();
 const router = useRouter();
 
 const list = ref<ConfirmationApplication[]>([]);
 const loading = ref(false);
 const viewMode = ref<'pending' | 'history'>('pending');
 const filters = reactive<{ keyword: string }>({ keyword: '' });
+const detailOpen = computed(() => route.name === 'ConfirmationApprovalDetail');
+const detailOpenedFromList = ref(false);
 
 const {
   page,
@@ -65,7 +70,21 @@ function changeMode(mode: 'pending' | 'history') {
 }
 
 function goDetail(row: ConfirmationApplication) {
-  router.push(`/confirmation-applications/${row.id}`);
+  detailOpenedFromList.value = true;
+  void router.push({ name: 'ConfirmationApprovalDetail', params: { id: row.id }, query: route.query });
+}
+
+function closeDetail() {
+  if (detailOpenedFromList.value) {
+    detailOpenedFromList.value = false;
+    router.back();
+    return;
+  }
+  void router.replace({ name: 'ConfirmationApprovals', query: route.query });
+}
+
+function handleDetailVisibility(value: boolean) {
+  if (!value && detailOpen.value) closeDetail();
 }
 
 function statusLabel(status: string): string {
@@ -85,7 +104,8 @@ function pendingLabel(row: ConfirmationApplication): string {
 </script>
 
 <template>
-  <div class="confirmation-approval page-stack app-list-page">
+  <BusinessListPage variant="workflow" :loading="loading" class="confirmation-approval">
+    <template #workspace>
     <ChartCard class="header-card list-page-header-card">
       <template #title>转正管理</template>
 
@@ -154,7 +174,16 @@ function pendingLabel(row: ConfirmationApplication): string {
         @change="loadList"
       />
     </ChartCard>
-  </div>
+    <BusinessDetailDrawer
+      :model-value="detailOpen"
+      title="转正申请详情"
+      variant="workflow"
+      @update:model-value="handleDetailVisibility"
+    >
+      <RouterView v-slot="{ Component }"><component :is="Component" @changed="loadList" /></RouterView>
+    </BusinessDetailDrawer>
+    </template>
+  </BusinessListPage>
 </template>
 
 <style scoped>

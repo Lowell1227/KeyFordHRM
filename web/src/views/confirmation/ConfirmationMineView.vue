@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, onMounted } from 'vue';
-import { useRouter } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import { isAxiosError } from 'axios';
 import { ElMessage } from 'element-plus';
 import { confirmationApi } from '@/api/confirmation.api';
@@ -8,11 +8,14 @@ import { useAuthStore } from '@/stores/auth.store';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
+import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
+import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import { usePagination } from '@/composables/usePagination';
 import { CONFIRMATION_STATUS_META } from '@/types/enums';
 import { formatDate } from '@/utils/date';
 import type { ConfirmationApplication, ConfirmationRoster } from '@/types/api.types';
 
+const route = useRoute();
 const router = useRouter();
 const auth = useAuthStore();
 
@@ -27,6 +30,8 @@ const summary = ref('');
 const summaryError = ref('');
 const actionError = ref('');
 const draftReturnReason = ref('');
+const detailOpen = computed(() => route.name === 'ConfirmationMineDetail');
+const detailOpenedFromList = ref(false);
 const canStart = computed(() => auth.user?.status === 'probation' && !list.value.some((item) =>
   item.workflowVersion === 2 && ['draft', 'submitted', 'manager_approved', 'hr_approved'].includes(item.status),
 ));
@@ -60,7 +65,21 @@ async function loadList() {
 }
 
 function goDetail(row: ConfirmationApplication) {
-  router.push(`/confirmation-applications/${row.id}`);
+  detailOpenedFromList.value = true;
+  void router.push({ name: 'ConfirmationMineDetail', params: { id: row.id }, query: route.query });
+}
+
+function closeDetail() {
+  if (detailOpenedFromList.value) {
+    detailOpenedFromList.value = false;
+    router.back();
+    return;
+  }
+  void router.replace({ name: 'ConfirmationMine', query: route.query });
+}
+
+function handleDetailVisibility(value: boolean) {
+  if (!value && detailOpen.value) closeDetail();
 }
 
 function openCreate() {
@@ -143,7 +162,8 @@ function statusType(status: string): string {
 </script>
 
 <template>
-  <div class="confirmation-mine page-stack app-list-page">
+  <BusinessListPage variant="workflow" :loading="loading" class="confirmation-mine">
+    <template #workspace>
     <ChartCard class="header-card list-page-header-card">
       <template #title>我的转正申请</template>
 
@@ -226,7 +246,16 @@ function statusType(status: string): string {
         <el-button type="primary" :loading="saving" @click="submitDraft">提交转正申请</el-button>
       </template>
     </el-dialog>
-  </div>
+    <BusinessDetailDrawer
+      :model-value="detailOpen"
+      title="转正申请详情"
+      variant="workflow"
+      @update:model-value="handleDetailVisibility"
+    >
+      <RouterView v-slot="{ Component }"><component :is="Component" @changed="loadList" /></RouterView>
+    </BusinessDetailDrawer>
+    </template>
+  </BusinessListPage>
 </template>
 
 <style scoped>
