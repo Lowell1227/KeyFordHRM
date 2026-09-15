@@ -481,41 +481,8 @@ function actorInitial(name: string): string {
         </div>
       </ChartCard>
 
-      <ChartCard class="section-card">
-        <template #title>审批流程</template>
-        <ol class="approval-timeline" data-testid="confirmation-approval-timeline">
-          <li
-            v-for="item in approvalTimeline"
-            :key="item.key"
-            class="approval-timeline__item"
-            :class="`is-${item.tone}`"
-            :aria-current="item.current ? 'step' : undefined"
-          >
-            <span class="approval-timeline__dot" aria-hidden="true" />
-            <time>{{ item.time }}</time>
-            <div class="approval-timeline__title">
-              {{ item.title }}
-              <span v-if="item.submissionVersion" class="approval-timeline__version">第 {{ item.submissionVersion }} 次提交</span>
-            </div>
-            <div class="approval-timeline__actor">
-              <span class="approval-timeline__avatar">{{ actorInitial(item.actorName) }}</span>
-              <span>{{ item.actorName }}</span>
-              <strong>{{ item.action }}</strong>
-            </div>
-            <div v-if="item.note" class="approval-timeline__note">{{ item.note }}</div>
-            <div v-if="item.snapshot && Object.keys(item.snapshot).length" class="approval-timeline__note approval-timeline__snapshot">
-              <div v-if="item.snapshot.summary">原工作小结：{{ item.snapshot.summary }}</div>
-              <div v-if="item.snapshot.managerRecommendation !== undefined">原主管建议：{{ item.snapshot.managerRecommendation ? '建议转正' : '暂不建议转正' }}</div>
-              <div v-if="item.snapshot.managerComment">原主管评价：{{ item.snapshot.managerComment }}</div>
-              <div v-if="item.snapshot.voteResult">原 HR 评议结论：{{ VOTE_RESULT_LABELS[item.snapshot.voteResult] }}</div>
-              <div v-if="item.snapshot.voteComment">原结论依据：{{ item.snapshot.voteComment }}</div>
-              <div v-if="item.snapshot.hrComment">原 HR 办理意见：{{ item.snapshot.hrComment }}</div>
-              <div v-if="item.snapshot.proposedRegularDate">原拟生效日期：{{ formatDate(item.snapshot.proposedRegularDate) }}</div>
-            </div>
-          </li>
-        </ol>
-
-        <div v-if="app.canApprove" class="detail-actions">
+      <ChartCard v-if="app.canApprove" class="section-card">
+        <div class="detail-actions">
           <div v-if="app.pendingRole === 'manager'" class="manager-evaluation">
             <strong>直属主管评价</strong>
             <el-radio-group v-model="managerRecommendation">
@@ -568,6 +535,41 @@ function actorInitial(name: string): string {
             </div>
           </div>
         </div>
+      </ChartCard>
+
+      <ChartCard class="section-card">
+        <template #title>审批流程</template>
+        <ol class="approval-timeline" data-testid="confirmation-approval-timeline">
+          <li
+            v-for="item in approvalTimeline"
+            :key="item.key"
+            class="approval-timeline__item"
+            :class="`is-${item.tone}`"
+            :aria-current="item.current ? 'step' : undefined"
+          >
+            <span class="approval-timeline__dot" aria-hidden="true" />
+            <time>{{ item.time }}</time>
+            <div class="approval-timeline__title">
+              {{ item.title }}
+              <span v-if="item.submissionVersion" class="approval-timeline__version">第 {{ item.submissionVersion }} 次提交</span>
+            </div>
+            <div class="approval-timeline__actor">
+              <span class="approval-timeline__avatar">{{ actorInitial(item.actorName) }}</span>
+              <span>{{ item.actorName }}</span>
+              <strong>{{ item.action }}</strong>
+            </div>
+            <div v-if="item.note" class="approval-timeline__note">{{ item.note }}</div>
+            <div v-if="item.snapshot && Object.keys(item.snapshot).length" class="approval-timeline__note approval-timeline__snapshot">
+              <div v-if="item.snapshot.summary">原工作小结：{{ item.snapshot.summary }}</div>
+              <div v-if="item.snapshot.managerRecommendation !== undefined">原主管建议：{{ item.snapshot.managerRecommendation ? '建议转正' : '暂不建议转正' }}</div>
+              <div v-if="item.snapshot.managerComment">原主管评价：{{ item.snapshot.managerComment }}</div>
+              <div v-if="item.snapshot.voteResult">原 HR 评议结论：{{ VOTE_RESULT_LABELS[item.snapshot.voteResult] }}</div>
+              <div v-if="item.snapshot.voteComment">原结论依据：{{ item.snapshot.voteComment }}</div>
+              <div v-if="item.snapshot.hrComment">原 HR 办理意见：{{ item.snapshot.hrComment }}</div>
+              <div v-if="item.snapshot.proposedRegularDate">原拟生效日期：{{ formatDate(item.snapshot.proposedRegularDate) }}</div>
+            </div>
+          </li>
+        </ol>
 
         <div v-if="app.status === 'rejected' && app.rejectReason" class="reject-section">
           <div class="reject-title">驳回原因</div>

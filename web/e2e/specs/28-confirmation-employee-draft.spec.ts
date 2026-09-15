@@ -198,6 +198,9 @@ test('authorized HR can submit an attachment-only conclusion with optional meeti
     }) });
   });
   await page.goto('/confirmation-applications/11111111-1111-4111-8111-111111111111');
+  const actionTop = await page.locator('.detail-actions').evaluate((element) => element.getBoundingClientRect().top);
+  const timelineTop = await page.getByTestId('confirmation-approval-timeline').evaluate((element) => element.getBoundingClientRect().top);
+  expect(actionTop).toBeLessThan(timelineTop);
   await page.getByRole('button', { name: '提交公司审批' }).click();
   await expect(page.getByText('请填写评议结论和拟生效日期')).toBeVisible();
   await page.getByText('选择评议结论', { exact: true }).click();
