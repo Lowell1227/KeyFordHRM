@@ -21,7 +21,11 @@ async function mock(page: Page) {
         allowedActions: ['edit', 'submit_goals'], targetDate: null, cycleName: null },
     ]) });
     if (path.endsWith('/improvement-plans') && route.request().method() === 'GET') {
-      return route.fulfill({ json: envelope({ items: [], total: 0, page: 1, pageSize: 10 }) });
+      return route.fulfill({ json: envelope({ items: [{
+        id: 'plan-drawer', employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+        cycleId: null, cycleName: null, creatorId: 'manager', creatorName: '上级', targetDate: null,
+        status: 'goal_revision', workflowVersion: 2, finalScore: null,
+      }], total: 1, page: 1, pageSize: 10 }) });
     }
     if (path.endsWith('/improvement-plans') && route.request().method() === 'POST') {
       return route.fulfill({ json: envelope({ id: 'new-plan' }) });
@@ -108,6 +112,35 @@ test('mobile creation keeps employee, background and goal fields usable without 
   await expect(dialog.getByRole('textbox', { name: '目标描述 1' })).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(1);
+});
+
+test('improvement-plan detail opens in a routed drawer and browser back keeps the list', async ({ page }) => {
+  await mock(page);
+  await page.route('**/api/v1/improvement-plans/plan-drawer', (route) => route.fulfill({ json: envelope({
+    id: 'plan-drawer', employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+    cycleId: null, cycleName: null, taskId: null, creatorId: 'manager', creatorName: '上级',
+    improvementNeed: '需要提升交付质量', importance: null, improvementGoal: null, targetDate: null, measures: [],
+    goals: [{ id: 'g1', name: '交付质量', description: '减少返工', weight: 100 }],
+    selfEvaluation: null, managerEvaluation: null, departmentEvaluation: null, finalScore: null,
+    status: 'goal_revision', workflowVersion: 2, startedAt: null, completedAt: null,
+    createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
+    currentOwnerId: 'manager', allowedActions: ['edit', 'submit_goals'], records: [],
+  }) }));
+
+  await page.goto('/improvement-plans');
+  await page.getByRole('button', { name: '查看' }).first().click();
+  await expect(page).toHaveURL(/\/improvement-plans\/plan-drawer$/);
+  await expect(page.getByTestId('business-detail-drawer')).toHaveAttribute('data-drawer-variant', 'workflow');
+  await expect(page.getByTestId('business-list-page')).toBeAttached();
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect.poll(() => page.getByTestId('business-detail-drawer').evaluate((element) => (
+    Math.round(element.getBoundingClientRect().width)
+  ))).toBe(390);
+
+  await page.goBack();
+  await expect(page.getByTestId('business-detail-drawer')).toBeHidden();
+  await expect(page.getByTestId('business-list-page')).toHaveAttribute('data-list-variant', 'workflow');
 });
 
 test('employee can return a specific goal suggestion without editing the approved goal', async ({ page }) => {
