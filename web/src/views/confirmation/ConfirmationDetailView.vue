@@ -304,6 +304,7 @@ function historyAction(label: string): string {
   if (label === '公司同意转正') return '审批同意';
   if (label === '公司不同意转正') return '不同意转正';
   if (label === '退回员工补充') return '已退回';
+  if (label === '分管审批人已更正') return '已更正';
   if (label.includes('附件')) return '已上传';
   if (label.includes('补录')) return '已补录';
   return '已记录';

@@ -498,14 +498,18 @@ describe('employee confirmation draft', () => {
         oldValue: { submissionVersion: 1 }, newValue: { submissionVersion: 2 }, user: { name: employee.name } },
       { id: 'log-3', action: 'confirmation_meeting_attachment_added', createdAt: new Date(),
         oldValue: null, newValue: { name: '内部材料.pdf' }, user: { name: 'HR' } },
+      { id: 'log-4', action: 'confirmation_company_approver_corrected', createdAt: new Date(),
+        oldValue: { submissionVersion: 2 },
+        newValue: { submissionVersion: 2, reason: '按最新组织审批链更正为李宏' }, user: null },
     ]);
     const employeeDetail = await service.findOne('33333333-3333-4333-8333-333333333333', viewer);
-    expect(employeeDetail.history.map((event) => event.label)).toEqual(['退回员工补充', '员工提交申请']);
+    expect(employeeDetail.history.map((event) => event.label)).toEqual(['退回员工补充', '员工提交申请', '分管审批人已更正']);
     expect(employeeDetail.history[1].submissionVersion).toBe(2);
     expect(employeeDetail.history[0].snapshot).toEqual({ summary: '原工作小结' });
+    expect(employeeDetail.history[2].note).toBe('按最新组织审批链更正为李宏');
     expect(JSON.stringify(employeeDetail.history)).not.toContain('内部材料');
     const hrDetail = await service.findOne('33333333-3333-4333-8333-333333333333', { ...viewer, id: hrId, sysRole: SysRole.hr });
-    expect(hrDetail.history).toHaveLength(3);
+    expect(hrDetail.history).toHaveLength(4);
     expect(hrDetail.history[0].snapshot).toMatchObject({ summary: '原工作小结', managerComment: '主管旧评价', voteComment: '内部评议依据' });
   });
 

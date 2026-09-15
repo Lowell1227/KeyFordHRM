@@ -553,6 +553,7 @@ export class ConfirmationService {
       confirmation_returned_for_supplement: '退回员工补充',
       confirmation_meeting_attachment_added: '内部评议附件已上传',
       confirmation_meeting_date_backfilled: 'HR 补录会议日期',
+      confirmation_company_approver_corrected: '分管审批人已更正',
     };
     detail.history = logs.flatMap((log) => {
       if (!labels[log.action] || (!isInternalViewer && log.action === 'confirmation_meeting_attachment_added')) return [];
@@ -563,7 +564,7 @@ export class ConfirmationService {
       const note = log.action === 'confirmation_returned_for_supplement'
         ? (typeof newValue?.returnReason === 'string' ? newValue.returnReason
           : typeof newValue?.reason === 'string' ? newValue.reason : null)
-        : log.action === 'confirmation_company_declined'
+        : ['confirmation_company_declined', 'confirmation_company_approver_corrected'].includes(log.action)
           ? (typeof newValue?.reason === 'string' ? newValue.reason : null) : null;
       const snapshot = log.action === 'confirmation_returned_for_supplement' && oldValue
         ? {
