@@ -183,3 +183,48 @@ test('operation records follow the time-first approval timeline visual hierarchy
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
   await timeline.screenshot({ path: test.info().outputPath('operation-timeline-mobile.png') });
 });
+
+test('evaluation stage keeps each goal and its reviews in one compact card', async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await mock(page);
+  const goals = [
+    { id: 'g1', name: '稳定交付质量', description: '每周返工不超过两次', weight: 40 },
+    { id: 'g2', name: '提升响应效率', description: '需求当天完成反馈', weight: 60 },
+  ];
+  await page.route('**/api/v1/improvement-plans/plan-evaluation-layout', (route) => route.fulfill({ json: envelope({
+    id: 'plan-evaluation-layout', employeeId: 'employee', employeeName: '张员工', employeeNo: 'E001', deptName: '业务部',
+    cycleId: null, cycleName: null, taskId: null, creatorId: 'manager', creatorName: '上级',
+    improvementNeed: '需要同步提升交付质量与响应速度', importance: null, improvementGoal: null, targetDate: null, measures: [],
+    goals,
+    selfEvaluation: { weightedScore: 82, overallComment: '员工总体自评', items: [
+      { goalId: 'g1', score: 80, comment: '返工次数已有下降' },
+      { goalId: 'g2', score: 84, comment: '响应速度有所提升' },
+    ] },
+    managerEvaluation: { weightedScore: 79.2, overallComment: '直属上级总体评价', items: [
+      { goalId: 'g1', score: 78, comment: '仍需稳定交付节奏' },
+      { goalId: 'g2', score: 80, comment: '反馈较为及时' },
+    ] },
+    departmentEvaluation: null, finalScore: null,
+    status: 'dept_review', workflowVersion: 2, startedAt: '2026-09-15T04:31:00.000Z', completedAt: null,
+    createdAt: '2026-09-15T02:00:00.000Z', updatedAt: '2026-09-15T04:31:00.000Z',
+    currentOwnerId: 'manager', allowedActions: ['evaluate'], records: [],
+  }) }));
+
+  await page.goto('/improvement-plans/plan-evaluation-layout');
+  const content = page.getByTestId('improvement-content-evaluation');
+  const goalCards = content.getByTestId('improvement-goal-evaluation');
+  await expect(page.getByText('改进内容与评价', { exact: true })).toBeVisible();
+  await expect(page.getByText('逐项目标评价', { exact: true })).toHaveCount(0);
+  await expect(goalCards).toHaveCount(2);
+  await expect(page.getByText('1. 稳定交付质量', { exact: true })).toHaveCount(1);
+  await expect(page.getByText('每周返工不超过两次', { exact: true })).toHaveCount(1);
+  await expect(goalCards.first()).toContainText('员工自评80 分 · 返工次数已有下降');
+  await expect(goalCards.first()).toContainText('直属上级评价78 分 · 仍需稳定交付节奏');
+  await expect(goalCards.first()).toContainText('当前环节 · 部门负责人评价');
+  await expect(goalCards.first().getByRole('spinbutton', { name: '目标评分 1' })).toBeVisible();
+  await content.screenshot({ path: test.info().outputPath('unified-evaluation-desktop.png') });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+  await content.screenshot({ path: test.info().outputPath('unified-evaluation-mobile.png') });
+});

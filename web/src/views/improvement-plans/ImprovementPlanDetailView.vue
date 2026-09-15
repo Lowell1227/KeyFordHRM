@@ -32,6 +32,14 @@ const latestGoalRejection = computed(() => plan.value?.status === 'goal_revision
   ? plan.value.records?.find((record) => record.action === 'reject_goals') ?? null : null);
 const canEvaluate = computed(() => plan.value?.allowedActions.includes('evaluate') ?? false);
 const canDecideFinal = computed(() => plan.value?.allowedActions.includes('decide_final') ?? false);
+const showEvaluation = computed(() => canEvaluate.value || Boolean(plan.value?.selfEvaluation
+  || plan.value?.managerEvaluation || plan.value?.departmentEvaluation));
+const currentEvaluationLabel = computed(() => {
+  if (plan.value?.status === 'self_eval') return '员工自评';
+  if (plan.value?.status === 'manager_review') return '直属上级评价';
+  if (plan.value?.status === 'dept_review') return '部门负责人评价';
+  return '评价';
+});
 const weightTotal = computed(() => form.goals.reduce((sum, goal) => sum + Number(goal.weight || 0), 0));
 const draftTotal = computed(() => {
   if (!plan.value || evaluation.items.some((item) => item.score === null || item.score === undefined)) return null;
@@ -247,8 +255,8 @@ function goalName(goalId: string): string {
         <el-alert v-else-if="deadlineHint" type="warning" :closable="false" :title="deadlineHint" />
       </ChartCard>
 
-      <ChartCard>
-        <template #title>改进背景与目标</template>
+      <ChartCard data-testid="improvement-content-evaluation">
+        <template #title>{{ showEvaluation ? '改进内容与评价' : '改进背景与目标' }}</template>
         <template v-if="canEdit">
           <el-form label-position="top">
             <el-form-item label="改进背景" required>
@@ -271,7 +279,8 @@ function goalName(goalId: string): string {
         </div>
         <div class="section-heading"><strong>改进目标</strong><span>权重合计 {{ canEdit ? weightTotal : plan.goals.reduce((sum, goal) => sum + goal.weight, 0) }}%</span><el-button v-if="canEdit" link type="primary" @click="addGoal">添加目标</el-button></div>
         <small v-if="errors.goals || errors.total" class="field-error">{{ errors.goals || errors.total }}</small>
-        <div v-for="(goal, index) in (canEdit ? form.goals : plan.goals)" :key="goal.id" class="goal-card">
+        <div v-for="(goal, index) in (canEdit ? form.goals : plan.goals)" :key="goal.id" class="goal-card"
+          :data-testid="showEvaluation ? 'improvement-goal-evaluation' : undefined">
           <div class="goal-card__head"><strong>{{ index + 1 }}. {{ canEdit ? '改进目标' : goal.name }}</strong><el-button v-if="canEdit" link type="danger" @click="removeGoal(index)">删除</el-button><span v-else>{{ goal.weight }}%</span></div>
           <template v-if="canEdit">
             <el-input v-model="goal.name" :aria-label="`目标名称 ${index + 1}`" placeholder="目标名称" maxlength="200" />
@@ -287,6 +296,18 @@ function goalName(goalId: string): string {
             <el-input v-if="employeeGoalConfirmation" v-model="goalSuggestions[goal.id]"
               :aria-label="`目标 ${index + 1} 修改建议`" type="textarea" :rows="2" maxlength="4000"
               placeholder="对这项目标的修改建议（选填；退回时提交）" />
+            <div v-if="showEvaluation" class="goal-evaluation">
+              <div class="evaluation-stage"><strong>评价进展</strong><el-tag v-if="canEvaluate" size="small" type="primary">当前环节 · {{ currentEvaluationLabel }}</el-tag></div>
+              <div v-if="priorScore('self', goal.id) && plan.status !== 'self_eval'" class="prior-score"><b>员工自评</b>{{ priorScore('self', goal.id) }}</div>
+              <div v-if="priorScore('manager', goal.id) && plan.status !== 'manager_review'" class="prior-score"><b>直属上级评价</b>{{ priorScore('manager', goal.id) }}</div>
+              <div v-if="priorScore('department', goal.id) && plan.status !== 'dept_review'" class="prior-score"><b>部门负责人评价</b>{{ priorScore('department', goal.id) }}</div>
+              <div v-if="canEvaluate" class="current-evaluation">
+                <label class="score-field">本环节评分 <input v-model.number="evaluation.items[index].score" type="number" min="0" max="100" step="0.1" :aria-label="`目标评分 ${index + 1}`"> 分</label>
+                <small v-if="errors[`score-${index}`]" class="field-error">{{ errors[`score-${index}`] }}</small>
+                <el-input v-model="evaluation.items[index].comment" :aria-label="`目标评价 ${index + 1}`" type="textarea" :rows="2" placeholder="填写这项目标的评价内容" />
+                <small v-if="errors[`comment-${index}`]" class="field-error">{{ errors[`comment-${index}`] }}</small>
+              </div>
+            </div>
           </template>
         </div>
         <div v-if="canEdit" class="form-actions"><el-button :loading="busy" @click="saveTargets(false)">保存草稿</el-button><el-button type="primary" :loading="busy" @click="saveTargets(true)">提交目标</el-button></div>
@@ -298,27 +319,12 @@ function goalName(goalId: string): string {
           <small v-if="errors.decision" class="field-error">{{ errors.decision }}</small>
           <div class="form-actions"><el-button type="danger" plain :loading="busy" @click="decideGoals(false)">退回发起人修改</el-button><el-button type="primary" :loading="busy" @click="decideGoals(true)">确认目标</el-button></div>
         </div>
-      </ChartCard>
-
-      <ChartCard v-if="canEvaluate || plan.selfEvaluation || plan.managerEvaluation || plan.departmentEvaluation">
-        <template #title>逐项目标评价</template>
-        <div v-for="(goal, index) in plan.goals" :key="goal.id" class="evaluation-card">
-          <div class="goal-card__head"><strong>{{ index + 1 }}. {{ goal.name }}</strong><span>权重 {{ goal.weight }}%</span></div>
-          <p>{{ goal.description }}</p>
-          <div v-if="priorScore('self', goal.id) && plan.status !== 'self_eval'" class="prior-score"><b>员工自评</b>{{ priorScore('self', goal.id) }}</div>
-          <div v-if="priorScore('manager', goal.id) && plan.status !== 'manager_review'" class="prior-score"><b>直属上级评价</b>{{ priorScore('manager', goal.id) }}</div>
-          <div v-if="priorScore('department', goal.id) && plan.status !== 'dept_review'" class="prior-score"><b>部门负责人评价</b>{{ priorScore('department', goal.id) }}</div>
-          <template v-if="canEvaluate">
-            <label class="score-field">本环节评分 <input v-model.number="evaluation.items[index].score" type="number" min="0" max="100" step="0.1" :aria-label="`目标评分 ${index + 1}`"> 分</label>
-            <small v-if="errors[`score-${index}`]" class="field-error">{{ errors[`score-${index}`] }}</small>
-            <el-input v-model="evaluation.items[index].comment" :aria-label="`目标评价 ${index + 1}`" type="textarea" :rows="2" placeholder="填写这项目标的评价内容" />
-            <small v-if="errors[`comment-${index}`]" class="field-error">{{ errors[`comment-${index}`] }}</small>
-          </template>
-        </div>
         <template v-if="canEvaluate">
-          <p class="weighted-total">加权综合分：{{ draftTotal ?? '待填写全部评分' }}</p>
-          <el-form label-position="top"><el-form-item label="总体评价内容" required><el-input v-model="evaluation.overallComment" aria-label="总体评价内容" type="textarea" :rows="3" maxlength="4000" /><small v-if="errors.overall" class="field-error">{{ errors.overall }}</small></el-form-item></el-form>
-          <div class="form-actions"><el-button :loading="busy" @click="saveEvaluation(false)">保存草稿</el-button><el-button type="primary" :loading="busy" @click="saveEvaluation(true)">提交评价</el-button></div>
+          <div class="evaluation-summary">
+            <p class="weighted-total">加权综合分：{{ draftTotal ?? '待填写全部评分' }}</p>
+            <el-form label-position="top"><el-form-item label="总体评价内容" required><el-input v-model="evaluation.overallComment" aria-label="总体评价内容" type="textarea" :rows="3" maxlength="4000" /><small v-if="errors.overall" class="field-error">{{ errors.overall }}</small></el-form-item></el-form>
+            <div class="form-actions"><el-button :loading="busy" @click="saveEvaluation(false)">保存草稿</el-button><el-button type="primary" :loading="busy" @click="saveEvaluation(true)">提交评价</el-button></div>
+          </div>
         </template>
         <template v-else-if="plan.status === 'completed'"><p class="weighted-total">最终综合分：{{ plan.finalScore ?? '-' }}</p><p>{{ plan.departmentEvaluation?.overallComment || '-' }}</p></template>
       </ChartCard>
@@ -385,12 +391,16 @@ function goalName(goalId: string): string {
 .plan-info { margin-bottom:14px; }
 .plan-fields { display:grid; grid-template-columns:1fr 1fr; gap:14px; }
 .plan-fields :deep(.el-select),.plan-fields :deep(.el-date-editor) { width:100%; }
-.background-text,.goal-card p,.evaluation-card p { white-space:pre-wrap; overflow-wrap:anywhere; }
-.goal-card,.evaluation-card { display:grid; gap:10px; margin:10px 0; padding:14px; border:1px solid var(--el-border-color); border-radius:6px; }
+.background-text,.goal-card p { white-space:pre-wrap; overflow-wrap:anywhere; }
+.goal-card { display:grid; gap:10px; margin:10px 0; padding:14px; border:1px solid var(--el-border-color); border-radius:6px; }
 .goal-card__head span { color:var(--el-text-color-secondary); font-size:13px; }
 .weight-field,.score-field { display:flex; align-items:center; gap:8px; font-size:13px; }
 .weight-field input,.score-field input { width:100px; height:34px; padding:0 8px; border:1px solid var(--el-border-color); border-radius:4px; }
 .prior-score { display:grid; grid-template-columns:110px 1fr; gap:8px; padding:8px 10px; background:var(--el-fill-color-light); font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; }
+.goal-evaluation { display:grid; gap:8px; margin-top:4px; padding-top:12px; border-top:1px solid var(--el-border-color-lighter); }
+.evaluation-stage { display:flex; align-items:center; justify-content:space-between; gap:10px; flex-wrap:wrap; }
+.current-evaluation { display:grid; gap:8px; padding:10px 12px; border-radius:6px; background:var(--el-color-primary-light-9); }
+.evaluation-summary { margin-top:18px; padding-top:16px; border-top:1px solid var(--el-border-color-lighter); }
 .weighted-total { font-weight:600; }
 .field-error { display:block; color:var(--el-color-danger); line-height:1.5; }
 .feedback-note { display:grid; gap:3px; padding:8px 10px; background:var(--el-fill-color-light); font-size:13px; white-space:pre-wrap; overflow-wrap:anywhere; }
@@ -418,5 +428,5 @@ function goalName(goalId: string): string {
 .record-snapshot div { display:grid; gap:3px; overflow-wrap:anywhere; }
 .record-snapshot span { white-space:pre-wrap; }
 .empty-note { color:var(--el-text-color-secondary); }
-@media(max-width:600px) { .plan-fields { grid-template-columns:1fr; gap:0; } .goal-card,.evaluation-card { padding:10px; } .prior-score { grid-template-columns:1fr; } .form-actions { justify-content:stretch; } .form-actions :deep(.el-button) { flex:1; margin-left:0; } }
+@media(max-width:600px) { .plan-fields { grid-template-columns:1fr; gap:0; } .goal-card { padding:10px; } .prior-score { grid-template-columns:1fr; } .form-actions { justify-content:stretch; } .form-actions :deep(.el-button) { flex:1; margin-left:0; } }
 </style>
