@@ -99,6 +99,8 @@ export interface EmployeeArchive {
   rosterManager: { id: string; name: string; employeeNo: string | null } | null;
   currentEmployment: {
     id: string;
+    effectiveFrom: string;
+    effectiveTo: string | null;
     company: string;
     deptId: string | null;
     positionId: string | null;

@@ -18,6 +18,22 @@ const saving = ref(false);
 const form = reactive<Record<string, any>>({});
 const isResignation = computed(() => props.mode === 'resignation');
 const drawerTitle = computed(() => isResignation.value ? '办理离职' : '新增任职记录');
+const overlapWarning = computed(() => {
+  const start = String(isResignation.value ? form.leaveDate ?? '' : form.effectiveFrom ?? '').slice(0, 10);
+  if (!start) return '';
+  const end = String(isResignation.value ? '' : form.effectiveTo ?? '').slice(0, 10) || '9999-12-31';
+  const history = props.archive?.employmentHistory?.length
+    ? props.archive.employmentHistory
+    : props.archive?.currentEmployment ? [props.archive.currentEmployment] : [];
+  const count = history.filter((record) => {
+    const recordStart = String(record.effectiveFrom ?? '').slice(0, 10);
+    const recordEnd = String(record.effectiveTo ?? '').slice(0, 10) || '9999-12-31';
+    return Boolean(recordStart) && start <= recordEnd && recordStart <= end;
+  }).length;
+  return count > 0
+    ? `与 ${count} 条已有任职记录时间重叠，仅作提醒，不影响提交和审核`
+    : '';
+});
 function flatten(items: Department[]): Department[] { return items.flatMap((item) => [item, ...flatten(item.children ?? [])]); }
 function reset() {
   const archive = props.archive; const current = archive?.currentEmployment ?? archive?.employmentHistory[0];
@@ -74,12 +90,22 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
     <el-form v-if="isResignation" label-position="top" class="employment-grid">
       <el-form-item label="员工"><el-input :model-value="archive?.name" disabled /></el-form-item>
       <el-form-item label="当前部门"><el-input :model-value="archive?.dept?.fullPath || archive?.dept?.name || '未设置'" disabled /></el-form-item>
-      <el-form-item label="最后工作日"><el-date-picker v-model="form.leaveDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+      <el-form-item label="最后工作日">
+        <div class="employment-field">
+          <el-date-picker v-model="form.leaveDate" type="date" value-format="YYYY-MM-DD" />
+          <span v-if="overlapWarning" class="employment-field__warning">{{ overlapWarning }}</span>
+        </div>
+      </el-form-item>
       <el-form-item label="离职原因" class="span-2"><el-input v-model="form.reason" type="textarea" :rows="3" /></el-form-item>
     </el-form>
     <el-form v-else label-position="top" class="employment-grid">
       <el-form-item label="变更类型"><el-select v-model="form.changeType"><el-option label="调动" value="transfer" /><el-option label="晋升" value="promotion" /><el-option label="上级变更" value="manager_change" /><el-option label="状态变更" value="status_change" /><el-option label="离职" value="resignation" /><el-option label="返聘" value="rehire" /><el-option label="历史补录" value="data_correction" /></el-select></el-form-item>
-      <el-form-item label="生效日期"><el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+      <el-form-item label="生效日期">
+        <div class="employment-field">
+          <el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" />
+          <span v-if="overlapWarning" class="employment-field__warning">{{ overlapWarning }}</span>
+        </div>
+      </el-form-item>
       <el-form-item label="结束日期"><el-date-picker v-model="form.effectiveTo" type="date" value-format="YYYY-MM-DD" clearable /></el-form-item>
       <el-form-item label="部门"><el-select v-model="form.deptId" filterable><el-option v-for="dept in flatten(departments)" :key="dept.id" :label="dept.fullPath || dept.name" :value="dept.id" /></el-select></el-form-item>
       <el-form-item label="岗位"><el-select v-model="form.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
@@ -94,6 +120,6 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
 </template>
 
 <style scoped>
-.employment-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }.employment-grid :deep(.el-select), .employment-grid :deep(.el-date-editor) { width: 100%; }.span-2 { grid-column: span 2; }.employment-help { color: #667085; font-size: 13px; }
+.employment-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }.employment-grid :deep(.el-select), .employment-grid :deep(.el-date-editor) { width: 100%; }.employment-field { width: 100%; }.employment-field__warning { display: block; margin-top: 6px; color: #d97706; font-size: 12px; line-height: 1.5; }.span-2 { grid-column: span 2; }.employment-help { color: #667085; font-size: 13px; }
 @media (max-width: 640px) { .employment-grid { grid-template-columns: 1fr; }.span-2 { grid-column: auto; } }
 </style>

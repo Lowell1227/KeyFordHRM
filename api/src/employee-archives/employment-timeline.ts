@@ -41,5 +41,7 @@ export function employmentWarnings<T extends EmploymentInterval>(
   const overlapCount = records.filter((record) => (
     record.id !== proposed.id && intervalsOverlap(record, proposed)
   )).length;
-  return overlapCount > 0 ? [`任职时间与 ${overlapCount} 条已有记录重叠`] : [];
+  return overlapCount > 0
+    ? [`与 ${overlapCount} 条已有任职记录时间重叠，仅作提醒，不影响提交和审核`]
+    : [];
 }

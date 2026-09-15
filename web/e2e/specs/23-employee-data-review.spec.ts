@@ -194,7 +194,7 @@ test('HR administrator reviews employee and department changes from the independ
     requestIds: [reviews[0].id, reviews[1].id],
     scopes: ['profile', 'performance'],
   });
-  await expect(page.getByText('已通过 1 人；1 人需补充信息')).toBeVisible();
+  await expect(page.getByText('已通过 1 人；未通过 1 人：员工二—绩效直属上级待设置')).toBeVisible();
 
   await workspace.getByRole('button', { name: '组织架构 1' }).click();
   await expect(workspace.locator('.desktop-result-table').getByText('项目中心 → 项目管理中心')).toBeVisible();

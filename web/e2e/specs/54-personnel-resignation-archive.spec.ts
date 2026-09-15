@@ -18,18 +18,31 @@ test('员工草稿、办理离职和手动归档使用彼此独立的入口', as
     status: 'resigned',
     dingtalkBindingState: 'disabled',
   };
+  const resignedEmployeeTwo = {
+    ...resignedEmployee,
+    id: '10000000-0000-4000-8000-000000000003',
+    name: '离职员工二',
+    employeeNo: '003',
+  };
   const archive = {
     ...activeEmployee,
     dept: { id: activeEmployee.deptId, name: '人事部', fullPath: '人事行政部 / 人事部', company: 'fuede' },
     performanceManager: null,
     rosterManager: null,
     currentEmployment: {
-      id: 'employment-1', company: 'fuede', deptId: activeEmployee.deptId, positionId: null,
+      id: 'employment-1', effectiveFrom: '2025-01-01', effectiveTo: null,
+      company: 'fuede', deptId: activeEmployee.deptId, positionId: null,
       position: '专员', jobGrade: null, jobFamily: null, directManagerId: null, workLocation: null,
       employmentType: 'full_time', employeeStatus: 'active', entryDate: '2025-01-01',
       plannedRegularDate: null, actualRegularDate: null, leaveDate: null, probationMonths: null,
     },
-    employmentHistory: [],
+    employmentHistory: [{
+      id: 'employment-1', effectiveFrom: '2025-01-01', effectiveTo: null,
+      company: 'fuede', deptId: activeEmployee.deptId, positionId: null,
+      position: '专员', jobGrade: null, jobFamily: null, directManagerId: null, workLocation: null,
+      employmentType: 'full_time', employeeStatus: 'active', entryDate: '2025-01-01',
+      plannedRegularDate: null, actualRegularDate: null, leaveDate: null, probationMonths: null,
+    }],
     employeeProfile: null,
     employeeContracts: [],
     dingtalkBinding: null,
@@ -78,7 +91,7 @@ test('员工草稿、办理离职和手动归档使用彼此独立的入口', as
   }));
   await page.route('**/api/v1/users**', (route) => route.fulfill({
     contentType: 'application/json',
-    body: JSON.stringify(apiResponse({ total: 2, page: 1, pageSize: 20, items: [activeEmployee, resignedEmployee] })),
+    body: JSON.stringify(apiResponse({ total: 3, page: 1, pageSize: 20, items: [activeEmployee, resignedEmployee, resignedEmployeeTwo] })),
   }));
   await page.route('**/api/v1/employee-archives/drafts/list**', (route) => route.fulfill({
     contentType: 'application/json',
@@ -90,13 +103,16 @@ test('员工草稿、办理离职和手动归档使用彼此独立的入口', as
   });
   await page.route('**/api/v1/employee-archives/archive', async (route) => {
     archivedEmployeeIds = route.request().postDataJSON().ids;
-    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ archived: 1 })) });
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ archived: 2 })) });
   });
   await page.route(`**/api/v1/employee-archives/${activeEmployee.id}`, (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse(archive)),
   }));
   await page.route(`**/api/v1/employee-archives/${resignedEmployee.id}`, (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse(archivedArchive)),
+  }));
+  await page.route(`**/api/v1/employee-archives/${resignedEmployeeTwo.id}`, (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse({ ...archivedArchive, ...resignedEmployeeTwo })),
   }));
   await page.route(`**/api/v1/employee-archives/${activeEmployee.id}/employments`, async (route) => {
     resignationBody = route.request().postDataJSON();
@@ -106,12 +122,13 @@ test('员工草稿、办理离职和手动归档使用彼此独立的入口', as
   await page.goto('/users');
   await expect(page.getByRole('button', { name: '草稿箱' })).toBeVisible();
   await expect(page.getByRole('button', { name: '已归档' })).toBeVisible();
-  await expect(page.getByRole('button', { name: '归档', exact: true })).toBeDisabled();
+  await expect(page.getByRole('button', { name: '归档所选（0）', exact: true })).toBeDisabled();
 
   const activeRow = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '在职员工' });
   await activeRow.getByRole('button', { name: '办理离职' }).click();
   const resignationDrawer = page.getByRole('dialog', { name: '办理离职' });
   await expect(resignationDrawer.getByText('不会自动归档')).toBeVisible();
+  await expect(resignationDrawer.getByText('与 1 条已有任职记录时间重叠，仅作提醒，不影响提交和审核')).toBeVisible();
   await resignationDrawer.locator('.el-form-item').filter({ hasText: '离职原因' }).locator('textarea').fill('个人原因');
   await resignationDrawer.getByRole('button', { name: '提交审核' }).click();
   await expect.poll(() => resignationBody).toMatchObject({
@@ -119,13 +136,15 @@ test('员工草稿、办理离职和手动归档使用彼此独立的入口', as
   });
 
   const resignedRow = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '离职员工' });
-  await resignedRow.locator('.el-checkbox').click();
-  await page.getByRole('button', { name: '归档', exact: true }).click();
+  await resignedRow.filter({ hasNotText: '离职员工二' }).locator('.el-checkbox').click();
+  const resignedRowTwo = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '离职员工二' });
+  await resignedRowTwo.locator('.el-checkbox').click();
+  await page.getByRole('button', { name: '归档所选（2）', exact: true }).click();
   await page.getByRole('dialog', { name: '归档离职员工' }).getByRole('button', { name: '确认归档' }).click();
-  await expect.poll(() => archivedEmployeeIds).toEqual([resignedEmployee.id]);
+  await expect.poll(() => archivedEmployeeIds).toEqual([resignedEmployee.id, resignedEmployeeTwo.id]);
 
   await page.getByRole('button', { name: '已归档' }).click();
-  const archivedRow = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '离职员工' });
+  const archivedRow = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '离职员工' }).filter({ hasNotText: '离职员工二' });
   await archivedRow.getByRole('button', { name: '查看档案' }).click();
   const archivedDrawer = page.getByRole('dialog', { name: '员工档案' });
   await expect(archivedDrawer.getByRole('button', { name: '编辑档案' })).toHaveCount(0);

@@ -333,9 +333,16 @@ async function approveEmployeeReviews(rows: EmployeeDataReview[]) {
       const partialCount = result.succeeded.filter((item) => failedIds.has(item.requestId)).length;
       const passedCount = result.succeeded.length - partialCount;
       const failedCount = result.failed.length - partialCount;
-      ElMessage.warning(partialCount > 0
-        ? `已通过 ${passedCount} 人；${partialCount} 人部分通过；${failedCount} 人未通过`
-        : `已通过 ${passedCount} 人；${result.failed.length} 人需补充信息`);
+      const names = new Map(rows.map((row) => [row.id, row.employeeName || '未命名员工']));
+      const reasons = result.failed
+        .map((item) => `${names.get(item.requestId) ?? '员工'}—${item.reason}`)
+        .join('；');
+      const summary = [
+        `已通过 ${passedCount} 人`,
+        ...(partialCount > 0 ? [`${partialCount} 人部分通过`] : []),
+        `未通过 ${failedCount || result.failed.length} 人`,
+      ].join('；');
+      ElMessage.warning(`${summary}：${reasons}`);
     } else {
       ElMessage.success(`已通过 ${result.succeeded.length} 人`);
     }
@@ -561,7 +568,9 @@ onMounted(async () => {
                   <el-tag size="small" :type="reviewStatusType(row as EmployeeDataReview, 'performance')" effect="plain">{{ reviewStatusLabel(row as EmployeeDataReview, 'performance') }}</el-tag>
                 </span>
               </div>
-              <div v-if="(row as EmployeeDataReview).validationWarnings?.length" class="review-warning">{{ (row as EmployeeDataReview).validationWarnings?.join('；') }}</div>
+              <div v-if="(row as EmployeeDataReview).validationWarnings?.length" class="review-warning">
+                {{ (row as EmployeeDataReview).validationWarnings?.map((warning) => warning.includes('仅作提醒') ? warning : `${warning}，仅作提醒，不影响审核`).join('；') }}
+              </div>
             </div>
           </template>
         </el-table-column>

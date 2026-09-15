@@ -1439,7 +1439,7 @@ onBeforeUnmount(() => {
                 v-if="canEditArchive && !userArchiveView"
                 :disabled="selectedUsers.length === 0"
                 @click="archiveSelectedEmployees"
-              >归档</el-button>
+              >归档所选（{{ selectedUsers.length }}）</el-button>
               <el-dropdown v-if="canEditArchive" trigger="click" @command="(command: string) => command === 'roster' && openRosterImportDialog()">
                 <el-button>批量操作</el-button>
                 <template #dropdown><el-dropdown-menu><el-dropdown-item command="roster" :icon="UploadFilled">导入花名册</el-dropdown-item></el-dropdown-menu></template>

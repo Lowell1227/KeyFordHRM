@@ -317,7 +317,7 @@ describe('EmployeeArchivesService', () => {
 
     expect(reviewCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
-        validationWarnings: ['任职时间与 1 条已有记录重叠'],
+        validationWarnings: ['与 1 条已有任职记录时间重叠，仅作提醒，不影响提交和审核'],
       }),
     });
   });

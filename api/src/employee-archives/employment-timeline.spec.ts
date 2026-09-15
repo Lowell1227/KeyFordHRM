@@ -28,6 +28,6 @@ describe('employment timeline', () => {
       effectiveTo: new Date('2025-03-31T00:00:00.000Z'),
     });
 
-    expect(warnings).toEqual(['任职时间与 1 条已有记录重叠']);
+    expect(warnings).toEqual(['与 1 条已有任职记录时间重叠，仅作提醒，不影响提交和审核']);
   });
 });
