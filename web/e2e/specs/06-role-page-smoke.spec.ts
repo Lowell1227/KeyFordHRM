@@ -90,7 +90,7 @@ test.describe("06-role-page-smoke approver", () => {
     "/dashboard",
     "/approval",
     "/reports",
-    "/confirmation-applications/approvals",
+    "/confirmation-applications/manage",
   ]) {
     test(`approver page works: ${path}`, async ({ page }) => {
       await expectPageHealthy(page, path);
@@ -105,7 +105,7 @@ test.describe("06-role-page-smoke chairman", () => {
     "/dashboard",
     "/approval",
     "/reports",
-    "/confirmation-applications/approvals",
+    "/confirmation-applications/manage",
   ]) {
     test(`chairman page works: ${path}`, async ({ page }) => {
       await expectPageHealthy(page, path);

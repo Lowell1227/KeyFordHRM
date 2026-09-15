@@ -8,6 +8,7 @@ import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import { usePagination } from '@/composables/usePagination';
+import { useAuthStore } from '@/stores/auth.store';
 import { CONFIRMATION_STATUS_META } from '@/types/enums';
 import { formatDate } from '@/utils/date';
 import type { ConfirmationApplication, ConfirmationWarning } from '@/types/api.types';
@@ -15,6 +16,7 @@ import type { ConfirmationStatus } from '@/types/enums';
 
 const route = useRoute();
 const router = useRouter();
+const auth = useAuthStore();
 const list = ref<ConfirmationApplication[]>([]);
 const loading = ref(false);
 const warnings = ref<ConfirmationWarning[]>([]);
@@ -22,11 +24,17 @@ const attentionOpen = ref(false);
 const attentionItems = computed(() => warnings.value.filter((item) => !item.hasApplication || !item.plannedRegularDate));
 const filters = reactive<{ keyword: string; status: ConfirmationStatus | '' }>({ keyword: '', status: '' });
 const statusOptions: ConfirmationStatus[] = ['draft', 'submitted', 'manager_approved', 'hr_approved', 'approved', 'rejected'];
+const hasManagementScope = computed(() => auth.user?.sysRole === 'hr'
+  || Boolean(auth.user?.hrCapabilities?.includes('confirmation_manage')));
+const viewMode = ref<'all' | 'pending' | 'history'>(hasManagementScope.value ? 'all' : 'pending');
 const { page, pageSize, total, pageSizeOptions, reset: resetPagination, withParams } = usePagination({ defaultPageSize: 10 });
 const detailOpen = computed(() => route.name === 'ConfirmationManageDetail');
 const detailOpenedFromList = ref(false);
 
-onMounted(() => { void loadList(); void loadWarnings(); });
+onMounted(() => {
+  void loadList();
+  if (hasManagementScope.value) void loadWarnings();
+});
 
 async function loadWarnings() {
   try { warnings.value = await confirmationApi.warnings(); }
@@ -36,10 +44,16 @@ async function loadWarnings() {
 async function loadList() {
   loading.value = true;
   try {
-    const result = await confirmationApi.findAll(withParams({
+    const params = withParams({
       keyword: filters.keyword || undefined,
-      status: filters.status || undefined,
-    }));
+      status: viewMode.value === 'all' ? filters.status || undefined : undefined,
+    });
+    const request = viewMode.value === 'all'
+      ? confirmationApi.findAll
+      : viewMode.value === 'pending'
+        ? confirmationApi.findPending
+        : confirmationApi.findAssignedHistory;
+    const result = await request(params);
     list.value = result.items;
     total.value = result.total;
   } catch {
@@ -70,9 +84,20 @@ function statusType(row: ConfirmationApplication) {
   return CONFIRMATION_STATUS_META[row.status]?.type ?? 'info';
 }
 
+function changeMode(mode: 'all' | 'pending' | 'history') {
+  viewMode.value = mode;
+  filters.status = '';
+  resetPagination();
+  void loadList();
+}
+
 function openDetail(id: string) {
   detailOpenedFromList.value = true;
   void router.push({ name: 'ConfirmationManageDetail', params: { id }, query: route.query });
+}
+
+function actionLabel() {
+  return viewMode.value === 'pending' ? '去办理' : '查看';
 }
 
 function closeDetail() {
@@ -93,12 +118,20 @@ function handleDetailVisibility(value: boolean) {
   <BusinessListPage variant="workflow" :loading="loading">
     <template #title>转正管理</template>
     <template #primary-action>
-      <el-button v-if="attentionItems.length && !detailOpen" link type="warning" data-testid="confirmation-attention-trigger" @click="attentionOpen = true">待关注 {{ attentionItems.length }} 人</el-button>
+      <el-button v-if="viewMode === 'all' && attentionItems.length && !detailOpen" link type="warning" data-testid="confirmation-attention-trigger" @click="attentionOpen = true">待关注 {{ attentionItems.length }} 人</el-button>
+    </template>
+    <template v-if="!hasManagementScope" #summary>
+      <div class="list-modes">
+        <el-radio-group :model-value="viewMode" size="small" @change="changeMode($event as 'pending' | 'history')">
+          <el-radio-button value="pending">待我办理</el-radio-button>
+          <el-radio-button value="history">办理记录</el-radio-button>
+        </el-radio-group>
+      </div>
     </template>
     <template #filters>
       <QueryFilterPanel class="page-filter-panel">
         <el-form :inline="true" class="filter-form" @submit.prevent="search">
-          <el-form-item label="状态">
+          <el-form-item v-if="viewMode === 'all'" label="状态">
             <el-select v-model="filters.status" placeholder="全部状态" clearable style="width: 160px">
               <el-option v-for="status in statusOptions" :key="status" :label="CONFIRMATION_STATUS_META[status]?.label ?? status" :value="status" />
             </el-select>
@@ -118,7 +151,7 @@ function handleDetailVisibility(value: boolean) {
         <el-table-column label="公司审批人" min-width="120"><template #default="{ row }">{{ (row as ConfirmationApplication).companyApprover?.name || '提交时确定' }}</template></el-table-column>
         <el-table-column label="实际转正日期" width="135"><template #default="{ row }">{{ formatDate((row as ConfirmationApplication).actualRegularDate) }}</template></el-table-column>
         <el-table-column label="操作" width="90" fixed="right"><template #default="{ row }">
-          <el-button link type="primary" @click="openDetail((row as ConfirmationApplication).id)">查看</el-button>
+          <el-button link type="primary" @click="openDetail((row as ConfirmationApplication).id)">{{ actionLabel() }}</el-button>
         </template></el-table-column>
       </el-table>
     </template>
@@ -131,7 +164,7 @@ function handleDetailVisibility(value: boolean) {
           <div class="mobile-result-field"><span class="mobile-result-field__label">HR 实际经办</span><span class="mobile-result-field__value">{{ item.hr?.name || '尚未办理' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">公司审批人</span><span class="mobile-result-field__value">{{ item.companyApprover?.name || '提交时确定' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">转正日期</span><span class="mobile-result-field__value">{{ formatDate(item.actualRegularDate) }}</span></div>
-          <template #actions><el-button link type="primary" @click="openDetail(item.id)">查看</el-button></template>
+          <template #actions><el-button link type="primary" @click="openDetail(item.id)">{{ actionLabel() }}</el-button></template>
         </MobileResultCard>
       </div>
     </template>
@@ -167,6 +200,7 @@ function handleDetailVisibility(value: boolean) {
 
 <style scoped>
 .filter-form :deep(.el-form-item) { margin-bottom: 0; }
+.list-modes { margin: 0 0 12px; }
 .list-page-header-card :deep(.chart-card__head) { flex-wrap: wrap; gap: 4px 8px; }
 .confirmation-mobile-list { display: grid; gap: 10px; }
 .attention-intro { margin: 0 0 16px; color: var(--el-text-color-regular); font-size: 13px; line-height: 1.6; }

@@ -339,7 +339,7 @@ test('company approver can decline without filling the optional reason', async (
   await expect(companyDialog).not.toBeVisible();
 });
 
-test('assigned manager can switch from current transfer work to handled history', async ({ page }) => {
+test('assigned manager uses the canonical transfer management page and can view handled history', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-manager-token');
     localStorage.setItem('expiresAt', String(Date.now() + 60_000));
@@ -358,10 +358,19 @@ test('assigned manager can switch from current transfer work to handled history'
     }], total: 1, page: 1, pageSize: 10,
   }) }));
   await page.goto('/confirmation-applications/approvals');
+  await expect(page).toHaveURL(/\/confirmation-applications\/manage$/);
   await expect(page.getByText('转正管理', { exact: true }).first()).toBeVisible();
   await page.getByText('办理记录', { exact: true }).click();
   await expect(page.getByText('办理过的员工').first()).toBeVisible();
   await expect(page.getByRole('button', { name: '查看' }).first()).toBeVisible();
+  for (const column of ['直属主管', 'HR 实际经办', '公司审批人', '实际转正日期']) {
+    await expect(page.getByRole('columnheader', { name: column })).toBeVisible();
+  }
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('.mobile-result-list').getByText('HR 实际经办')).toBeVisible();
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
 });
 
 test('probation and confirmation navigation only exposes personal application and role management', () => {
@@ -393,7 +402,7 @@ test('probation and confirmation navigation only exposes personal application an
     { path: '/confirmation-applications/mine', label: '我的转正申请' },
   ]);
   expect(labels('employee', [], { canHandleConfirmationApprovals: true })).toEqual([
-    { path: '/confirmation-applications/approvals', label: '转正管理' },
+    { path: '/confirmation-applications/manage', label: '转正管理' },
     { path: '/confirmation-applications/mine', label: '我的转正申请' },
   ]);
 

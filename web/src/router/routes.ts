@@ -359,27 +359,24 @@ export const routes: RouteRecordRaw[] = [
       title: '转正管理',
       roles: ['hr'],
       hrCapabilities: ['confirmation_manage'],
+      scopedCapability: 'canHandleConfirmationApprovals',
       navigation: { module: 'performance', label: '转正管理', order: 160, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
   },
   {
-    path: '/confirmation-applications/approvals',
-    name: 'ConfirmationApprovals',
-    component: () => import('@/views/confirmation/ConfirmationApprovalView.vue'),
-    children: [
-      {
-        path: ':id',
-        name: 'ConfirmationApprovalDetail',
-        component: () => import('@/views/confirmation/ConfirmationDetailView.vue'),
-        props: { embedded: true },
-        meta: { requiresAuth: true, title: '转正申请详情', activeNavigationPath: '/confirmation-applications/approvals' },
-      },
-    ],
+    path: '/confirmation-applications/approvals/:id?',
+    name: 'ConfirmationApprovalsLegacy',
+    redirect: (to) => ({
+      path: `/confirmation-applications/manage${to.params.id ? `/${String(to.params.id)}` : ''}`,
+      query: to.query,
+      hash: to.hash,
+    }),
     meta: {
       requiresAuth: true,
       title: '转正管理',
-      capability: 'canHandleConfirmationApprovals',
-      navigation: { module: 'performance', label: '转正管理', order: 170, group: 'performance-probation', groupLabel: '试用期与转正' },
+      roles: ['hr'],
+      hrCapabilities: ['confirmation_manage'],
+      scopedCapability: 'canHandleConfirmationApprovals',
     },
   },
   {

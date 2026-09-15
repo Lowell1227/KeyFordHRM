@@ -59,7 +59,7 @@ const routes = [
   ['/probation-reviews/manage', 'workflow'],
   ['/probation-reviews/manager', 'workflow'],
   ['/probation-reviews/mine', 'workflow'],
-  ['/confirmation-applications/approvals', 'workflow'],
+  ['/confirmation-applications/manage', 'workflow'],
   ['/confirmation-applications/mine', 'workflow'],
   ['/improvement-plans', 'workflow'],
 ] as const;
@@ -67,7 +67,7 @@ const routes = [
 test('workflow list routes own their reusable detail routes', () => {
   const expected = new Map<string, string[]>([
     ['/improvement-plans', ['ImprovementPlanDetail']],
-    ['/confirmation-applications/approvals', ['ConfirmationApprovalDetail']],
+    ['/confirmation-applications/manage', ['ConfirmationManageDetail']],
     ['/confirmation-applications/mine', ['ConfirmationMineDetail']],
     ['/probation-reviews/manage', ['ProbationManageDetail']],
     ['/probation-reviews/manager', ['ProbationManagerDetail']],
@@ -98,16 +98,15 @@ test('all active migration pages use their approved business-list template', asy
   }
 });
 
-test('role-specific confirmation lists share the standard workflow frame', async ({ page }) => {
+test('legacy confirmation approval URLs redirect into the canonical management page', async ({ page }) => {
   await mockAuthenticatedAdmin(page);
   await page.setViewportSize({ width: 1440, height: 900 });
 
-  for (const path of ['/confirmation-applications/manage', '/confirmation-applications/approvals']) {
-    await page.goto(path);
-    const listPage = page.getByTestId('business-list-page');
-    await expect(listPage.locator(':scope > .business-list-page__header'), path).toBeVisible();
-    await expect(listPage.locator(':scope > .business-list-page__results'), path).toBeVisible();
-  }
+  await page.goto('/confirmation-applications/approvals');
+  await expect(page).toHaveURL(/\/confirmation-applications\/manage$/);
+  const listPage = page.getByTestId('business-list-page');
+  await expect(listPage.locator(':scope > .business-list-page__header')).toBeVisible();
+  await expect(listPage.locator(':scope > .business-list-page__results')).toBeVisible();
 });
 
 test('confirmation, probation and department-review direct URLs stay inside workflow drawers', async ({ page }) => {
@@ -133,7 +132,7 @@ test('confirmation, probation and department-review direct URLs stay inside work
   }) }));
 
   for (const [path, parentPath] of [
-    ['/confirmation-applications/approvals/confirmation-drawer', '/confirmation-applications/approvals'],
+    ['/confirmation-applications/approvals/confirmation-drawer', '/confirmation-applications/manage'],
     ['/confirmation-applications/mine/confirmation-drawer', '/confirmation-applications/mine'],
     ['/probation-reviews/manage/probation-drawer', '/probation-reviews/manage'],
     ['/department-review/department-drawer', '/department-review'],
