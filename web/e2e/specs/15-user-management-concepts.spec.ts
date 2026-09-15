@@ -413,7 +413,8 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await expect(summary).toContainText('标准用户');
   await expect(summary.getByText('员工', { exact: true })).toBeVisible();
   await expect(dialog.getByText('当前业务职责', { exact: true })).toBeVisible();
-  await expect(dialog.getByText('绩效直属上级 · 负责 2 项', { exact: true })).toBeVisible();
+  await expect(dialog.getByLabel('当前业务职责').getByText('绩效直属上级', { exact: true })).toBeVisible();
+  await expect(dialog.getByText(/负责 \d+ 项/)).toHaveCount(0);
   await expect(dialog.getByText('当前业务身份', { exact: true })).toHaveCount(0);
   await expect(dialog.getByText('余焱玲的岗位', { exact: true })).toHaveCount(0);
   await expect(dialog.getByText('余焱玲的系统权限', { exact: true })).toHaveCount(0);
@@ -426,7 +427,9 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await expect(managerTooltip).toContainText('人事变更审核 → 员工档案');
   await dialog.getByRole('button', { name: '业务职责说明' }).hover();
   const responsibilityTooltip = page.locator('.el-popper[role="tooltip"]:visible').filter({ hasText: '员工是基础人员身份' });
-  await expect(responsibilityTooltip.locator('.person-settings__tooltip-line')).toHaveCount(3);
+  await expect(responsibilityTooltip.locator('.person-settings__tooltip-line')).toHaveCount(2);
+  await expect(responsibilityTooltip).toContainText('具体工作和待办在工作台查看');
+  await expect(responsibilityTooltip).not.toContainText('职责数量');
   await summary.hover();
   await expect(responsibilityTooltip).toBeHidden();
   await dialog.locator('.el-form-item').filter({ hasText: '绩效直属上级' }).locator('.el-select').click();

@@ -2058,8 +2058,7 @@ onBeforeUnmount(() => {
                 <template #content>
                   <div class="person-settings__tooltip-content">
                     <div class="person-settings__tooltip-line"><strong>人员身份：</strong>员工是基础人员身份，不会额外赋权。</div>
-                    <div class="person-settings__tooltip-line"><strong>业务职责：</strong>根据组织关系和当前业务记录自动计算。</div>
-                    <div class="person-settings__tooltip-line"><strong>职责数量：</strong>表示当前负责的关系或业务事项，不等同于下属人数。</div>
+                    <div class="person-settings__tooltip-line"><strong>业务职责：</strong>根据组织关系和当前业务记录自动计算；这里只显示职责标签，具体工作和待办在工作台查看。</div>
                   </div>
                 </template>
                 <button type="button" class="person-settings__help" aria-label="业务职责说明">

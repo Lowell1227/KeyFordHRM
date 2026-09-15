@@ -111,13 +111,13 @@ test('personnel change review is visible only to HR reviewers and administrators
   })).toBe(true);
 });
 
-test('multiple business identities retain clear labels and counts', () => {
+test('business identity labels stay separate from workload counts', () => {
   expect([
     { type: 'performance_manager' as const, label: '绩效直属上级', count: 3 },
     { type: 'performance_approver' as const, label: '最终业务审批人', count: 1 },
   ].map(formatBusinessIdentityLabel)).toEqual([
-    '绩效直属上级 · 负责 3 项',
-    '最终业务审批人 · 负责 1 项',
+    '绩效直属上级',
+    '最终业务审批人',
   ]);
 });
 
