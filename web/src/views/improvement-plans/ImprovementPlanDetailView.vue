@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { isAxiosError } from 'axios';
 import { ElMessage } from 'element-plus';
 import { improvementPlansApi } from '@/api/improvement-plans.api';
 import { IMPROVEMENT_PLAN_STATUS_META } from '@/types/enums';
@@ -114,10 +115,31 @@ async function decideGoals(approve: boolean) {
     errors.decision = employeeGoalConfirmation.value ? '请填写具体目标建议或整体意见' : '退回时请填写理由'; return;
   }
   busy.value = true;
+  const id = plan.value.id;
+  const expectedStatus = approve
+    ? plan.value.status === 'goal_dept_review' ? 'goal_employee_confirm' : 'self_eval'
+    : 'goal_revision';
   try {
-    sync(await improvementPlansApi.decideGoals(plan.value.id, { approve, comment: decisionComment.value,
+    sync(await improvementPlansApi.decideGoals(id, { approve, comment: decisionComment.value,
       ...(suggestions.length ? { suggestions } : {}) }));
     ElMessage.success(approve ? '目标已确认' : '目标已退回发起人修改');
+  } catch (error) {
+    if (isAxiosError(error) && !error.response) {
+      try {
+        const updated = await improvementPlansApi.getDetail(id);
+        if (updated.status === expectedStatus) {
+          sync(updated);
+          ElMessage.success(approve ? '目标已确认' : '目标已退回发起人修改');
+          return;
+        }
+      } catch { /* 下面统一提示当前结果无法确认。 */ }
+      ElMessage.error('处理结果暂未确认，请刷新页面查看，避免重复提交');
+      return;
+    }
+    const message = isAxiosError<{ message?: string }>(error)
+      ? error.response?.data?.message
+      : error instanceof Error ? error.message : null;
+    ElMessage.error(typeof message === 'string' && message.trim() ? message : '操作未完成，请稍后重试');
   } finally { busy.value = false; }
 }
 function validateEvaluation() {

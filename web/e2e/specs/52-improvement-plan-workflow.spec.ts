@@ -83,9 +83,16 @@ test('employee can return a specific goal suggestion without editing the approve
     status: 'goal_employee_confirm', workflowVersion: 2, startedAt: null, completedAt: null,
     createdAt: new Date().toISOString(), updatedAt: new Date().toISOString(),
     currentOwnerId: 'employee', allowedActions: ['decide_goals'], records: [] };
-  await page.route('**/api/v1/improvement-plans/plan-employee**', (route) => route.fulfill({
-    json: envelope(route.request().method() === 'POST' ? { ...plan, status: 'goal_revision', allowedActions: [] } : plan),
-  }));
+  let decisionCommitted = false;
+  await page.route('**/api/v1/improvement-plans/plan-employee**', (route) => {
+    if (route.request().method() === 'POST') {
+      decisionCommitted = true;
+      return route.abort('timedout');
+    }
+    return route.fulfill({ json: envelope(decisionCommitted
+      ? { ...plan, status: 'goal_revision', allowedActions: [] }
+      : plan) });
+  });
   await page.goto('/improvement-plans/plan-employee');
   const goalsSection = page.locator('.chart-card').filter({ has: page.getByText('改进背景与目标', { exact: true }) });
   await expect(goalsSection.getByRole('textbox', { name: '整体意见' })).toBeVisible();
@@ -105,6 +112,8 @@ test('employee can return a specific goal suggestion without editing the approve
   expect((await requestPromise).postDataJSON()).toMatchObject({ approve: false, comment: '', suggestions: [
     { goalId: original.id, comment: '建议写明每周返工次数上限' },
   ] });
+  await expect(page.getByText('目标已退回发起人修改', { exact: true })).toBeVisible();
+  await expect(page.getByText('网络错误，请稍后重试', { exact: true })).toHaveCount(0);
   expect(plan.goals[0]).toEqual(original);
   expect(await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
 });
