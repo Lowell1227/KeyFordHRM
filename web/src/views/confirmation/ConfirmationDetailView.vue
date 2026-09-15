@@ -24,6 +24,7 @@ const performanceItems = ref<TaskListItem[]>([]);
 const performanceLoading = ref(false);
 const performanceUnavailable = ref(false);
 const approving = ref(false);
+const approvalDialogVisible = ref(false);
 const managerRecommendation = ref<boolean | undefined>(undefined);
 const managerComment = ref('');
 const managerError = ref('');
@@ -48,6 +49,11 @@ const returnReason = ref('');
 const returnError = ref('');
 const returning = ref(false);
 const isInternalViewer = computed(() => Boolean(app.value?.canViewInternalMeeting));
+const approvalDialogTitle = computed(() => {
+  if (app.value?.pendingRole === 'manager') return '直属主管评价';
+  if (app.value?.pendingRole === 'hr') return 'HR 线下评议';
+  return '公司最终决定';
+});
 
 onMounted(() => {
   loadDetail();
@@ -105,6 +111,7 @@ async function handleApprove() {
   approving.value = true;
   try {
     await confirmationApi.submitManagerEvaluation(app.value.id, managerRecommendation.value!, managerComment.value.trim());
+    approvalDialogVisible.value = false;
     ElMessage.success('评价已提交，下一步由 HR 办理');
     await loadDetail();
   } catch (error) {
@@ -146,6 +153,7 @@ async function handleHrSubmit() {
       proposedRegularDate: hrProposedDate.value,
       comment: hrComment.value.trim() || undefined,
     });
+    approvalDialogVisible.value = false;
     ElMessage.success('评议结论已提交，下一步由公司审批人决定');
     await loadDetail();
   } catch (error) {
@@ -208,6 +216,7 @@ async function handleCompanyApprove() {
   approving.value = true;
   try {
     await confirmationApi.approveCompany(app.value.id, app.value.proposedRegularDate!, companyComment.value.trim() || undefined);
+    approvalDialogVisible.value = false;
     ElMessage.success('已同意转正，员工状态和实际转正日期已更新');
     await loadDetail();
   } catch (error) {
@@ -224,6 +233,7 @@ async function handleCompanyDecline() {
   declining.value = true;
   try {
     await confirmationApi.declineCompany(app.value.id, declineReason.value.trim());
+    approvalDialogVisible.value = false;
     ElMessage.success('已记录不同意转正，后续人事安排由 HR 另行办理');
     await loadDetail();
   } catch (error) {
@@ -240,6 +250,7 @@ async function handleReturn() {
   returning.value = true;
   try {
     await confirmationApi.returnForSupplement(app.value.id, returnReason.value.trim());
+    approvalDialogVisible.value = false;
     ElMessage.success('已退回员工补充；重新提交后将从直属主管重新流转');
     returnMode.value = false;
     await loadDetail();
@@ -481,10 +492,19 @@ function actorInitial(name: string): string {
         </div>
       </ChartCard>
 
-      <ChartCard v-if="app.canApprove" class="section-card">
-        <div class="detail-actions">
+      <div v-if="app.canApprove" class="detail-actions">
+        <el-button type="primary" @click="approvalDialogVisible = true">办理</el-button>
+      </div>
+
+      <el-dialog
+        v-model="approvalDialogVisible"
+        :title="approvalDialogTitle"
+        width="min(640px, calc(100vw - 32px))"
+        :close-on-click-modal="false"
+        class="approval-dialog"
+      >
+        <div class="approval-form">
           <div v-if="app.pendingRole === 'manager'" class="manager-evaluation">
-            <strong>直属主管评价</strong>
             <el-radio-group v-model="managerRecommendation">
               <el-radio :value="true">建议转正</el-radio>
               <el-radio :value="false">暂不建议转正</el-radio>
@@ -494,7 +514,6 @@ function actorInitial(name: string): string {
             <el-button type="primary" :loading="approving" @click="handleApprove">提交评价</el-button>
           </div>
           <div v-else-if="app.pendingRole === 'hr'" class="hr-evaluation">
-            <strong>HR 线下评议结论</strong>
             <el-select v-model="hrResult" placeholder="选择评议结论" @change="hrError = ''">
               <el-option label="建议转正" value="pass" />
               <el-option label="建议延长试用" value="extend" />
@@ -512,7 +531,6 @@ function actorInitial(name: string): string {
             <el-button type="primary" :loading="approving" @click="handleHrSubmit">提交公司审批</el-button>
           </div>
           <div v-else-if="app.pendingRole === 'company'" class="company-decision">
-            <strong>公司最终决定</strong>
             <p>HR 拟生效日期：<b>{{ formatDate(app.proposedRegularDate) }}</b></p>
             <el-checkbox v-model="companyDateConfirmed">已核对并确认上述生效日期</el-checkbox>
             <el-input v-model="companyComment" type="textarea" :rows="3" maxlength="1000" placeholder="同意意见（选填）" />
@@ -535,7 +553,7 @@ function actorInitial(name: string): string {
             </div>
           </div>
         </div>
-      </ChartCard>
+      </el-dialog>
 
       <ChartCard class="section-card">
         <template #title>审批流程</template>
@@ -615,6 +633,7 @@ function actorInitial(name: string): string {
 .attachment-upload { display: grid; gap: 6px; font-size: 13px; }
 .attachment-upload input { max-width: 100%; }
 .field-error { color: var(--el-color-danger); font-size: 12px; margin: 0; }
+.approval-dialog :deep(.el-dialog__body) { max-height: calc(100vh - 160px); overflow-y: auto; }
 
 .salary-text {
   font-size: 18px;
@@ -752,7 +771,6 @@ function actorInitial(name: string): string {
   display: flex;
   justify-content: flex-end;
   gap: 12px;
-  margin-top: 16px;
 }
 
 .reject-section {
