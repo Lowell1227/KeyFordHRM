@@ -85,6 +85,7 @@ export function buildNavigation(routes: readonly RouteRecordRaw[], user: Navigat
       group = { key, label: meta.groupLabel ?? '', items: [] };
       module.groups.push(group);
     }
+    if (group.items.some((item) => item.label === meta.label)) continue;
 
     const item: NavigationItem = {
       name: route.name as NavigationItem['name'],

@@ -313,60 +313,50 @@ test('assigned manager can switch from current transfer work to handled history'
     }], total: 1, page: 1, pageSize: 10,
   }) }));
   await page.goto('/confirmation-applications/approvals');
+  await expect(page.getByText('转正管理', { exact: true }).first()).toBeVisible();
   await page.getByText('办理记录', { exact: true }).click();
   await expect(page.getByText('办理过的员工').first()).toBeVisible();
   await expect(page.getByRole('button', { name: '查看' }).first()).toBeVisible();
 });
 
-test('old probation scoring history has a clear menu entry without widening access', () => {
-  const historyLabels = (sysRole: 'hr' | 'system_admin' | 'hr_user' | 'employee', hrCapabilities: HrCapability[] = []) =>
-    buildNavigation(routes, { sysRole, canViewAll: false, hrCapabilities })
+test('probation and confirmation navigation only exposes personal application and role management', () => {
+  const menuItems = (
+    sysRole: 'hr' | 'system_admin' | 'hr_user' | 'employee',
+    hrCapabilities: HrCapability[] = [],
+    businessCapabilities: { canHandleConfirmationApprovals?: boolean; canHandleProbationReviews?: boolean } = {},
+  ) =>
+    buildNavigation(routes, { sysRole, canViewAll: false, hrCapabilities, businessCapabilities })
       .find((module) => module.key === 'performance')?.groups
-      .find((group) => group.key === 'performance-probation')?.items
-      .filter((item) => item.path.startsWith('/probation-reviews/'))
-      .map((item) => ({ path: item.path, label: item.label })) ?? [];
+      .find((group) => group.key === 'performance-probation')?.items ?? [];
 
-  expect(historyLabels('hr')).toContainEqual({ path: '/probation-reviews/manage', label: '试用期考核历史' });
-  expect(historyLabels('system_admin')).toContainEqual({ path: '/probation-reviews/manage', label: '试用期考核历史' });
-  expect(historyLabels('hr_user', ['confirmation_manage'])).not.toContainEqual({ path: '/probation-reviews/manage', label: '试用期考核历史' });
-  expect(historyLabels('employee')).toEqual([{ path: '/probation-reviews/mine', label: '我的试用期考核历史' }]);
+  const labels = (
+    sysRole: 'hr' | 'system_admin' | 'hr_user' | 'employee',
+    hrCapabilities: HrCapability[] = [],
+    businessCapabilities: { canHandleConfirmationApprovals?: boolean; canHandleProbationReviews?: boolean } = {},
+  ) => menuItems(sysRole, hrCapabilities, businessCapabilities)
+    .map((item) => ({ path: item.path, label: item.label }));
+
+  expect(labels('employee')).toEqual([
+    { path: '/confirmation-applications/mine', label: '我的转正申请' },
+  ]);
+  expect(labels('hr', ['confirmation_manage'])).toEqual([
+    { path: '/confirmation-applications/manage', label: '转正管理' },
+    { path: '/confirmation-applications/mine', label: '我的转正申请' },
+  ]);
+  expect(labels('hr', ['confirmation_manage'], { canHandleConfirmationApprovals: true })).toEqual([
+    { path: '/confirmation-applications/manage', label: '转正管理' },
+    { path: '/confirmation-applications/mine', label: '我的转正申请' },
+  ]);
+  expect(labels('employee', [], { canHandleConfirmationApprovals: true })).toEqual([
+    { path: '/confirmation-applications/approvals', label: '转正管理' },
+    { path: '/confirmation-applications/mine', label: '我的转正申请' },
+  ]);
+
   const managerItems = buildNavigation(routes, {
     sysRole: 'employee', canViewAll: false, businessCapabilities: { canHandleProbationReviews: true },
   }).find((module) => module.key === 'performance')?.groups
     .find((group) => group.key === 'performance-probation')?.items ?? [];
-  expect(managerItems).toContainEqual(expect.objectContaining({ path: '/probation-reviews/manager', label: '负责的考核历史' }));
-});
-
-test('old probation scoring stays available as read-only history on mobile', async ({ page }) => {
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.addInitScript(() => {
-    localStorage.setItem('token', 'mock-hr-token');
-    localStorage.setItem('expiresAt', String(Date.now() + 60_000));
-  });
-  await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({ json: apiResponse(0) }));
-  await page.route('**/api/v1/auth/me', (route) => route.fulfill({ json: apiResponse({
-    id: 'hr-1', name: 'HR', status: 'active', sysRole: 'hr', deptId: null,
-    isAssessorOnly: false, canViewAll: false,
-  }) }));
-  await page.route('**/api/v1/probation-reviews**', (route) => {
-    const item = {
-      id: '11111111-1111-4111-8111-111111111111', status: 'manager_scoring',
-      employee: { id: 'employee-1', name: '历史员工' }, manager: { id: 'manager-1', name: '主管' },
-      hr: { id: 'hr-1', name: 'HR' }, indicators: [], signatures: [],
-    };
-    const path = new URL(route.request().url()).pathname;
-    return route.fulfill({ json: apiResponse(path.endsWith('/probation-reviews')
-      ? { items: [item], total: 1, page: 1, pageSize: 10 } : item) });
-  });
-  await page.route('**/api/v1/signatures**', (route) => route.fulfill({ json: apiResponse([]) }));
-  await page.goto('/probation-reviews/manage');
-  await expect(page.getByText('试用期考核历史').first()).toBeVisible();
-  await expect(page.getByText('原独立试用期考核记录，仅供查阅。')).toBeVisible();
-  await expect(page.getByRole('button', { name: '发起试用期考核' })).toHaveCount(0);
-  await page.getByRole('button', { name: '查看' }).last().click();
-  await expect(page).toHaveURL(/\/probation-reviews\/11111111-1111-4111-8111-111111111111$/);
-  await expect(page.getByText('本记录仅供查阅')).toBeVisible();
-  await expect(page.getByRole('button', { name: '提交评分' })).toHaveCount(0);
+  expect(managerItems.filter((item) => item.path.startsWith('/probation-reviews/'))).toEqual([]);
 });
 
 test('transfer management shows attention without handler assignment on mobile and desktop', async ({ page }) => {

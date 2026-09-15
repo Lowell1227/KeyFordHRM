@@ -271,7 +271,6 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '试用期考核历史',
       roles: ['hr', 'system_admin'],
-      navigation: { module: 'performance', label: '试用期考核历史', order: 190, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -282,7 +281,6 @@ export const routes: RouteRecordRaw[] = [
       requiresAuth: true,
       title: '负责的试用期考核历史',
       capability: 'canHandleProbationReviews',
-      navigation: { module: 'performance', label: '负责的考核历史', order: 200, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -292,7 +290,6 @@ export const routes: RouteRecordRaw[] = [
     meta: {
       requiresAuth: true,
       title: '我的试用期考核历史',
-      navigation: { module: 'performance', label: '我的试用期考核历史', order: 210, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
   },
   {
@@ -319,9 +316,9 @@ export const routes: RouteRecordRaw[] = [
     component: () => import('@/views/confirmation/ConfirmationApprovalView.vue'),
     meta: {
       requiresAuth: true,
-      title: '转正待办',
+      title: '转正管理',
       capability: 'canHandleConfirmationApprovals',
-      navigation: { module: 'performance', label: '转正待办', order: 170, group: 'performance-probation', groupLabel: '试用期与转正' },
+      navigation: { module: 'performance', label: '转正管理', order: 170, group: 'performance-probation', groupLabel: '试用期与转正' },
     },
   },
   {

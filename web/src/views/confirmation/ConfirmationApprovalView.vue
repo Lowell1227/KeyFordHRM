@@ -87,7 +87,7 @@ function pendingLabel(row: ConfirmationApplication): string {
 <template>
   <div class="confirmation-approval page-stack app-list-page">
     <ChartCard class="header-card list-page-header-card">
-      <template #title>转正待办</template>
+      <template #title>转正管理</template>
 
       <div class="list-modes">
         <el-radio-group :model-value="viewMode" size="small" @change="changeMode($event as 'pending' | 'history')">
