@@ -469,3 +469,9 @@ Git 提交与远端状态：
 - “试用期与转正”分组只保留两个用户概念：所有员工看到“我的转正申请”；直属主管、公司审批人和有转正管理权限的 HR 看到“转正管理”。兼任多种身份时同名管理菜单只显示一次，进入后仍按原业务关系和授权返回不同范围与动作。
 - “试用期考核历史”“我的试用期考核历史”“负责的考核历史”全部退出功能导航。旧试用期评分数据、只读页面和后端权限暂时保留，未删除或迁移数据，也未重新并入转正申请状态。
 - 提交 `e7a4f5a` 已推送 `origin/main`，仅替换 `kayford-deploy` Web；API、PostgreSQL、Redis、MinIO 容器未变。Web 类型检查、生产构建及转正页面 9 项 Playwright 回归通过；外部健康和首页资源返回 200，生产主资源已确认不含三个旧菜单标签，管理者页面资源显示“转正管理”，测试快捷登录关闭。真实员工、直属主管、HR 和公司审批人登录后的菜单与办理路径仍待业务验收。发布记录见 `C:\Users\lwei\kayford-releases\e7a4f5a-confirmation-navigation\release-manifest.json`。
+
+### 2026-09-15：转正主管与 HR 分角色办理（已发布，待真实角色验收）
+
+- 直属主管评价与 HR 审批固定为两个独立节点；同一人兼任两种身份时，也要先提交主管评价，再在 HR 节点单独办理。转正管理人员可以按权限查看记录，只有显式获得 `confirmation_manage` 能力的普通 HR 可以办理 HR 节点。
+- 主管和 HR 的“退回员工”复用当前环节的说明输入框，不再动态展开另一套理由输入框和提交按钮。生产已为方园追加 `confirmation_manage` 并写入 `user_permissions_updated` 审计；申请状态、审批轨迹、历史办理人和公司审批人均未改动。
+- 功能提交 `f025b65` 已推送并发布到 `kayford-deploy`，仅替换 API/Web；PostgreSQL、Redis、MinIO 容器未更换，测试快捷登录关闭。生产两条转正申请的数量和逐行哈希发布前后一致。API 89 套／1055 项测试及构建、Web 类型检查和生产构建、转正页面 9 项 Playwright 通过；外部页面和健康接口返回 200，数据库为 `ok`。方园需重新登录一次刷新令牌中的能力，正式主管、HR、公司审批人流转仍待业务验收。发布证据见 `C:\Users\lwei\kayford-releases\f025b65-confirmation-hr-fangyuan\release-manifest.json`。
