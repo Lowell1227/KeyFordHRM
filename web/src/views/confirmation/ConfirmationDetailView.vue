@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue';
+import { ref, computed, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { ArrowLeft, QuestionFilled } from '@element-plus/icons-vue';
@@ -13,6 +13,8 @@ import type { ConfirmationApplication, ApprovalStep, TaskListItem } from '@/type
 
 const route = useRoute();
 const router = useRouter();
+const props = withDefaults(defineProps<{ embedded?: boolean }>(), { embedded: false });
+const emit = defineEmits<{ changed: [] }>();
 const auth = useAuthStore();
 const user = computed(() => auth.user);
 const companyLabels: Record<string, string> = { fuede: '孚德', beijing_fuede: '北京孚德', fuede_sports: '孚德体育文化', fansibao: '凡思堡' };
@@ -49,10 +51,6 @@ const approvalDialogTitle = computed(() => {
   return '公司最终决定';
 });
 
-onMounted(() => {
-  loadDetail();
-});
-
 async function loadDetail() {
   if (!appId.value) return;
   loading.value = true;
@@ -64,6 +62,13 @@ async function loadDetail() {
   } finally {
     loading.value = false;
   }
+}
+
+watch(appId, () => { void loadDetail(); }, { immediate: true });
+
+async function reloadAfterChange() {
+  await loadDetail();
+  emit('changed');
 }
 
 function statusLabel(status: string): string {
@@ -107,7 +112,7 @@ async function handleApprove() {
     await confirmationApi.submitManagerEvaluation(app.value.id, managerRecommendation.value!, managerComment.value.trim());
     approvalDialogVisible.value = false;
     ElMessage.success('评价已提交，下一步由 HR 办理');
-    await loadDetail();
+    await reloadAfterChange();
   } catch (error) {
     managerError.value = error instanceof Error ? error.message : '提交失败，请稍后重试';
   } finally {
@@ -149,7 +154,7 @@ async function handleHrSubmit() {
     });
     approvalDialogVisible.value = false;
     ElMessage.success('评议结论已提交，下一步由公司审批人决定');
-    await loadDetail();
+    await reloadAfterChange();
   } catch (error) {
     hrError.value = error instanceof Error ? error.message : '提交失败，请稍后重试';
   } finally {
@@ -166,7 +171,7 @@ async function handleAttachmentUpload(event: Event) {
   try {
     await confirmationApi.uploadMeetingAttachment(app.value.id, file);
     ElMessage.success('内部附件已上传');
-    await loadDetail();
+    await reloadAfterChange();
   } catch (error) {
     hrError.value = error instanceof Error ? error.message : '附件上传失败';
   } finally {
@@ -194,7 +199,7 @@ async function handleMeetingDateBackfill() {
   try {
     await confirmationApi.backfillMeetingDate(app.value.id, backfillDate.value);
     ElMessage.success('会议日期已补录');
-    await loadDetail();
+    await reloadAfterChange();
   } catch (error) {
     backfillError.value = error instanceof Error ? error.message : '补录失败，请稍后重试';
   } finally {
@@ -211,7 +216,7 @@ async function handleCompanyApprove() {
     await confirmationApi.approveCompany(app.value.id, app.value.proposedRegularDate!, companyReason.value.trim() || undefined);
     approvalDialogVisible.value = false;
     ElMessage.success('已同意转正，员工状态和实际转正日期已更新');
-    await loadDetail();
+    await reloadAfterChange();
   } catch (error) {
     companyError.value = error instanceof Error ? error.message : '审批失败，请稍后重试';
   } finally {
@@ -227,7 +232,7 @@ async function handleCompanyDecline() {
     await confirmationApi.declineCompany(app.value.id, companyReason.value.trim() || undefined);
     approvalDialogVisible.value = false;
     ElMessage.success('已记录不同意转正，后续人事安排由 HR 另行办理');
-    await loadDetail();
+    await reloadAfterChange();
   } catch (error) {
     companyError.value = error instanceof Error ? error.message : '办理失败，请稍后重试';
   } finally {
@@ -248,7 +253,7 @@ async function handleReturn(reason: string, role: 'manager' | 'hr') {
     await confirmationApi.returnForSupplement(app.value.id, trimmedReason);
     approvalDialogVisible.value = false;
     ElMessage.success('已退回员工补充；重新提交后将从直属主管重新流转');
-    await loadDetail();
+    await reloadAfterChange();
   } catch (error) {
     const message = error instanceof Error ? error.message : '退回失败，请稍后重试';
     if (role === 'manager') managerError.value = message;
@@ -384,7 +389,7 @@ function actorInitial(name: string): string {
 
 <template>
   <div v-loading="loading" class="confirmation-detail page-stack">
-    <div class="page-header">
+    <div v-if="!props.embedded" class="page-header">
       <el-button link :icon="ArrowLeft" @click="goBack">返回</el-button>
       <h2>转正申请详情</h2>
     </div>

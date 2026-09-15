@@ -6,10 +6,11 @@ import { appealsApi, type AppealCycle } from '@/api/appeals.api';
 import { departmentsApi } from '@/api/departments.api';
 import { usePagination } from '@/composables/usePagination';
 import { formatDate } from '@/utils/date';
-import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilters.vue';
+import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
+import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import type { AppealPerson, AppealRecord, AppealRecordBody, Department } from '@/types/api.types';
 
 const list = ref<AppealRecord[]>([]);
@@ -116,19 +117,20 @@ async function save() {
 </script>
 
 <template>
-  <div class="page-stack app-list-page">
-    <ChartCard class="list-page-header-card">
-      <template #title>申诉记录</template>
-      <template #extra><el-button type="primary" @click="openDialog()">新增申诉记录</el-button></template>
+  <BusinessListPage variant="record" :loading="loading">
+    <template #title>申诉记录</template>
+    <template #primary-action><el-button type="primary" @click="openDialog()">新增申诉记录</el-button></template>
+    <template #filters>
       <PerformanceRecordFilters v-model:cycle-id="filters.cycleId" v-model:dept-id="filters.deptId"
         v-model:keyword="filters.keyword" :cycles="cycles" :departments="departments" :loading="loading"
         allow-all-cycles class="page-filter-panel" @search="onSearch" @reset="onReset" />
-    </ChartCard>
-    <ChartCard :padded="false" class="list-card list-result-card">
+    </template>
+    <template #feedback>
       <el-alert v-if="loadError" :title="loadError" type="error" :closable="false">
         <el-button link type="primary" @click="loadList">重试</el-button>
       </el-alert>
-      <div class="desktop-result-table">
+    </template>
+    <template #desktop-list>
         <el-table v-loading="loading" class="app-table" :data="list" height="100%" empty-text="暂无申诉记录">
           <el-table-column label="员工" min-width="130">
             <template #default="{ row }"><div class="employee-cell"><span>{{ row.employeeName }}</span><span class="employee-no">{{ row.employeeNo || '—' }}</span></div></template>
@@ -141,8 +143,9 @@ async function save() {
           <el-table-column prop="recordedByName" label="记录人" width="110" />
           <el-table-column label="操作" width="90" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openDialog(row as AppealRecord)">编辑</el-button></template></el-table-column>
         </el-table>
-      </div>
-      <div v-loading="loading" class="mobile-result-list">
+    </template>
+    <template #mobile-list>
+      <div v-loading="loading" class="appeal-mobile-list">
         <el-empty v-if="!loading && !list.length && !loadError" description="暂无申诉记录" />
         <MobileResultCard v-for="item in list" :key="item.id">
           <template #title>{{ item.employeeName }}<template v-if="item.employeeNo"> · {{ item.employeeNo }}</template></template>
@@ -155,10 +158,12 @@ async function save() {
           <template #actions><el-button link type="primary" @click="openDialog(item)">编辑</el-button></template>
         </MobileResultCard>
       </div>
+    </template>
+    <template #pagination>
       <ListPagination v-model:current-page="page" v-model:page-size="pageSize" :page-sizes="pageSizeOptions" :total="total" @change="loadList" />
-    </ChartCard>
-
-    <el-dialog v-model="dialogVisible" :title="editingId ? '编辑申诉记录' : '新增申诉记录'" width="min(620px, 96vw)" destroy-on-close>
+    </template>
+    <template #detail>
+    <BusinessDetailDrawer v-model="dialogVisible" :title="editingId ? '编辑申诉记录' : '新增申诉记录'" variant="standard" :saving="saving">
       <div v-loading="dialogLoading">
         <el-alert v-if="saveError" :title="saveError" type="error" :closable="false" class="dialog-alert" />
         <el-alert v-if="peopleError" :title="peopleError" type="error" :closable="false" class="dialog-alert" />
@@ -190,13 +195,15 @@ async function save() {
         <el-button :disabled="saving" @click="dialogVisible = false">取消</el-button>
         <el-button type="primary" :loading="saving" :disabled="dialogLoading" @click="save">保存</el-button>
       </template>
-    </el-dialog>
-  </div>
+    </BusinessDetailDrawer>
+    </template>
+  </BusinessListPage>
 </template>
 
 <style scoped>
 .employee-cell { display: flex; flex-direction: column; gap: 4px; }
 .employee-no { font-size: 12px; color: var(--el-text-color-secondary); }
+.appeal-mobile-list { display: grid; gap: 10px; }
 .appeal-form__grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px; }
 .dialog-alert { margin-bottom: 12px; }
 @media (max-width: 600px) { .appeal-form__grid { grid-template-columns: 1fr; gap: 0; } }

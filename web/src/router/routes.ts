@@ -302,6 +302,19 @@ export const routes: RouteRecordRaw[] = [
     path: '/confirmation-applications/manage',
     name: 'ConfirmationManage',
     component: () => import('@/views/confirmation/ConfirmationManageView.vue'),
+    children: [
+      {
+        path: ':id',
+        name: 'ConfirmationManageDetail',
+        component: () => import('@/views/confirmation/ConfirmationDetailView.vue'),
+        props: { embedded: true },
+        meta: {
+          requiresAuth: true,
+          title: '转正申请详情',
+          activeNavigationPath: '/confirmation-applications/manage',
+        },
+      },
+    ],
     meta: {
       requiresAuth: true,
       title: '转正管理',

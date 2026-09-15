@@ -9,6 +9,8 @@ declare module 'vue' {
   export interface GlobalComponents {
     AppHeader: typeof import('./src/components/layout/AppHeader.vue')['default']
     AppSidebar: typeof import('./src/components/layout/AppSidebar.vue')['default']
+    BusinessDetailDrawer: typeof import('./src/components/common/business-list/BusinessDetailDrawer.vue')['default']
+    BusinessListPage: typeof import('./src/components/common/business-list/BusinessListPage.vue')['default']
     ChartCard: typeof import('./src/components/common/ChartCard.vue')['default']
     DeptResultChart: typeof import('./src/components/charts/DeptResultChart.vue')['default']
     DeptTree: typeof import('./src/components/common/DeptTree.vue')['default']
@@ -88,6 +90,7 @@ declare module 'vue' {
     ScoreInput: typeof import('./src/components/common/ScoreInput.vue')['default']
     ScoreTrendChart: typeof import('./src/components/charts/ScoreTrendChart.vue')['default']
     SignBlock: typeof import('./src/components/common/SignBlock.vue')['default']
+    SplitListLayout: typeof import('./src/components/common/business-list/SplitListLayout.vue')['default']
     StatCard: typeof import('./src/components/common/StatCard.vue')['default']
     StatusBadge: typeof import('./src/components/common/StatusBadge.vue')['default']
     UserAvatar: typeof import('./src/components/common/UserAvatar.vue')['default']
