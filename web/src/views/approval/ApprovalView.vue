@@ -16,6 +16,7 @@ import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilters.vue';
+import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import { departmentsApi } from '@/api/departments.api';
 import type { ApprovalOverview, ApprovalTaskView, AssessmentCycle, Department, TaskDetail } from '@/types/api.types';
 import { resolvePerformanceCycleByCreatedAt } from '@/utils/performance-cycle';
@@ -426,7 +427,8 @@ function handleBatchReject() {
 </script>
 
 <template>
-  <div class="approval-view page-stack performance-result-page">
+  <BusinessListPage variant="workflow" :loading="loading" class="approval-view performance-result-page">
+    <template #workspace>
     <ChartCard :padded="true" class="list-result-card">
       <template #title>结果审批</template>
       <PerformanceRecordFilters
@@ -689,7 +691,8 @@ function handleBatchReject() {
         </el-button>
       </template>
     </el-dialog>
-  </div>
+    </template>
+  </BusinessListPage>
 </template>
 
 <style scoped>

@@ -17,6 +17,7 @@ import MobileResultCard from "@/components/common/MobileResultCard.vue";
 import PerformanceResultSummary from "@/components/common/PerformanceResultSummary.vue";
 import PerformanceResultDrawer from "@/components/common/PerformanceResultDrawer.vue";
 import PerformanceRecordFilters from "@/components/common/PerformanceRecordFilters.vue";
+import BusinessListPage from "@/components/common/business-list/BusinessListPage.vue";
 import { departmentsApi } from "@/api/departments.api";
 import { resultStage, formatResultScore } from "@/utils/performance-result-presentation";
 import PerformanceResultEvidence from '@/components/common/PerformanceResultEvidence.vue';
@@ -346,9 +347,12 @@ function closeDetail() {
 </script>
 
 <template>
-  <div
+  <BusinessListPage
+    variant="workflow"
+    :loading="loading"
     class="publish-view page-stack performance-result-page"
   >
+    <template #workspace>
     <ChartCard :padded="true" class="list-page-header-card">
       <template #title>结果公示</template>
       <PerformanceRecordFilters
@@ -555,7 +559,8 @@ function closeDetail() {
         <PerformanceResultEvidence :evidence="detailDrawer.detail.resultEvidence" :records="detailDrawer.detail.flowRecords" />
       </template>
     </PerformanceResultDrawer>
-  </div>
+    </template>
+  </BusinessListPage>
 </template>
 
 <style scoped>

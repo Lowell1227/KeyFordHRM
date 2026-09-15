@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import { useAuthStore } from '@/stores/auth.store';
 import PersonnelPendingReviews from './components/PersonnelPendingReviews.vue';
+import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 
 const auth = useAuthStore();
 const canReviewEmployee = computed(() => (
@@ -13,13 +14,15 @@ const canReviewPosition = canReviewDepartment;
 </script>
 
 <template>
-  <div class="personnel-review-page page-stack">
-    <PersonnelPendingReviews
-      :can-review-employee="canReviewEmployee"
-      :can-review-department="canReviewDepartment"
-      :can-review-position="canReviewPosition"
-    />
-  </div>
+  <BusinessListPage variant="workflow" :loading="false" class="personnel-review-page">
+    <template #workspace>
+      <PersonnelPendingReviews
+        :can-review-employee="canReviewEmployee"
+        :can-review-department="canReviewDepartment"
+        :can-review-position="canReviewPosition"
+      />
+    </template>
+  </BusinessListPage>
 </template>
 
 <style scoped>

@@ -13,6 +13,7 @@ import PerformanceResultEvidence from '@/components/common/PerformanceResultEvid
 import PerformanceResultSummary from '@/components/common/PerformanceResultSummary.vue';
 import PerformanceResultDrawer from '@/components/common/PerformanceResultDrawer.vue';
 import PerformanceRecordFilters from '@/components/common/PerformanceRecordFilters.vue';
+import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import { departmentsApi } from '@/api/departments.api';
 import { resultStage } from '@/utils/performance-result-presentation';
 import EmptyState from '@/components/common/EmptyState.vue';
@@ -384,7 +385,8 @@ async function resetCalibrationFilters() {
 </script>
 
 <template>
-  <div class="calibration-view page-stack performance-result-page">
+  <BusinessListPage variant="workflow" :loading="loading" scrollable class="calibration-view performance-result-page">
+    <template #workspace>
     <ChartCard :padded="true">
       <template #title>绩效校准</template>
       <PerformanceRecordFilters
@@ -609,7 +611,8 @@ async function resetCalibrationFilters() {
         </template>
       </div>
     </PerformanceResultDrawer>
-  </div>
+    </template>
+  </BusinessListPage>
 </template>
 
 <style scoped>

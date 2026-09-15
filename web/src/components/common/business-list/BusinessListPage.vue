@@ -5,14 +5,17 @@ import type { BusinessListVariant } from './types';
 withDefaults(defineProps<{
   variant: BusinessListVariant;
   loading?: boolean;
+  scrollable?: boolean;
 }>(), {
   loading: false,
+  scrollable: false,
 });
 </script>
 
 <template>
   <div
     class="page-stack app-list-page business-list-page"
+    :class="{ 'business-list-page--scrollable': scrollable }"
     data-testid="business-list-page"
     :data-list-variant="variant"
     :aria-busy="loading"
@@ -53,6 +56,16 @@ withDefaults(defineProps<{
 
 .business-list-page__results {
   min-width: 0;
+}
+
+.business-list-page--scrollable {
+  height: auto;
+  min-height: 100%;
+  overflow: visible;
+}
+
+.business-list-page--scrollable > :deep(.list-result-card) {
+  flex: 0 0 auto;
 }
 
 @media (max-width: 768px) {
