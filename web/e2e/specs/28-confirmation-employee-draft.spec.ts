@@ -163,6 +163,7 @@ test('authorized HR can submit an attachment-only conclusion with optional meeti
   const submitted: unknown[] = [];
   let status = 'manager_approved';
   const attachments: Array<Record<string, unknown>> = [];
+  const attachmentContentTypes: string[] = [];
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-hr-token');
     localStorage.setItem('expiresAt', String(Date.now() + 60_000));
@@ -175,6 +176,7 @@ test('authorized HR can submit an attachment-only conclusion with optional meeti
   await page.route('**/api/v1/confirmation-applications/11111111-1111-4111-8111-111111111111**', (route) => {
     const path = new URL(route.request().url()).pathname;
     if (route.request().method() === 'POST' && path.endsWith('/meeting-attachments')) {
+      attachmentContentTypes.push(route.request().headers()['content-type'] ?? '');
       const attachment = { id: 'file-1', name: '依据.pdf', size: 12, mimeType: 'application/pdf', uploadedById: 'hr-1', createdAt: new Date().toISOString() };
       attachments.push(attachment);
       return route.fulfill({ json: apiResponse(attachment) });
@@ -211,6 +213,8 @@ test('authorized HR can submit an attachment-only conclusion with optional meeti
   await expect(page.getByText('请填写结论依据或上传内部附件')).toBeVisible();
   await page.locator('input[type="file"]').setInputFiles({ name: '依据.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n') });
   await expect(page.getByText('已上传 1 个附件')).toBeVisible();
+  expect(attachmentContentTypes).toHaveLength(1);
+  expect(attachmentContentTypes[0]).toMatch(/^multipart\/form-data; boundary=/);
   await page.getByRole('button', { name: '提交公司审批' }).click();
   await expect.poll(() => submitted).toHaveLength(1);
   expect(submitted[0]).toMatchObject({ voteResult: 'extend', proposedRegularDate: '2026-10-01' });

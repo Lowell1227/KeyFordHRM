@@ -661,7 +661,7 @@ export class ConfirmationService {
     }
 
     const now = new Date();
-    let updateData: Prisma.ConfirmationApplicationUpdateInput;
+    let updateData: Prisma.ConfirmationApplicationUncheckedUpdateManyInput;
     let auditAction: string;
     let auditNewValue: Prisma.InputJsonObject;
     if (pendingRole === 'manager') {
@@ -688,7 +688,7 @@ export class ConfirmationService {
         voteComment: basis || null,
         meetingDate: dto.meetingDate ?? null,
         voteRecordedAt: now,
-        voteRecordedBy: { connect: { id: viewer.id } },
+        voteRecordedById: viewer.id,
         proposedRegularDate: dto.proposedRegularDate,
         hrComment: dto.comment?.trim() || null,
         hrApprovedAt: now,

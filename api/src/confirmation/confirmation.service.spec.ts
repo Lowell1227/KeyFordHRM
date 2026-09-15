@@ -452,8 +452,11 @@ describe('employee confirmation draft', () => {
         meetingDate: null,
         proposedRegularDate: new Date('2026-10-01T00:00:00.000Z'),
         voteRecordedAt: expect.any(Date),
+        voteRecordedById: hrId,
       }),
     }));
+    expect(prisma.confirmationApplication.updateMany.mock.calls[0]?.[0]?.data)
+      .not.toHaveProperty('voteRecordedBy');
     expect(prisma.user.update).not.toHaveBeenCalled();
   });
 
