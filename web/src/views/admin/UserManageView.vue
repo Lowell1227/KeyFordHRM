@@ -162,7 +162,7 @@ const hrCapabilityOptions: { label: string; value: HrCapability }[] = [
   { label: '考核周期审核', value: 'cycle_plan_review' },
   { label: '绩效校准', value: 'performance_calibration' },
   { label: '结果公示', value: 'performance_publish' },
-  { label: '转正管理与办理人指定', value: 'confirmation_manage' },
+  { label: '转正管理与办理', value: 'confirmation_manage' },
 ];
 
 const statusOptions: { label: string; value: UserStatus }[] = [

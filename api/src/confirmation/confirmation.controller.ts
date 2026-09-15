@@ -26,7 +26,6 @@ import { RejectConfirmationDto } from './dto/reject-confirmation.dto';
 import { StorageService } from '@/storage/storage.service';
 import { BackfillMeetingDateDto } from './dto/backfill-meeting-date.dto';
 import { ReturnConfirmationDto } from './dto/return-confirmation.dto';
-import { AssignConfirmationHandlersDto } from './dto/assign-confirmation-handlers.dto';
 import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
 
 @Controller('confirmation-applications')
@@ -70,24 +69,6 @@ export class ConfirmationController {
   @HrCapabilities('confirmation_manage')
   warnings(@CurrentUser() viewer: AuthUser) {
     return this.confirmationService.warnings(viewer);
-  }
-
-  @Get('handler-candidates')
-  @Roles(SysRole.hr)
-  @HrCapabilities('confirmation_manage')
-  handlerCandidates(@Query('keyword') keyword: string | undefined, @CurrentUser() viewer: AuthUser) {
-    return this.confirmationService.handlerCandidates(keyword, viewer);
-  }
-
-  @Put(':id/handlers')
-  @Roles(SysRole.hr)
-  @HrCapabilities('confirmation_manage')
-  assignHandlers(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
-    @Body() dto: AssignConfirmationHandlersDto,
-    @CurrentUser() viewer: AuthUser,
-  ) {
-    return this.confirmationService.assignHandlers(id, dto, viewer);
   }
 
   @Post(':id/meeting-attachments')

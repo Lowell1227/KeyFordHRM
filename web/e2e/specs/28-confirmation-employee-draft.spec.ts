@@ -5,6 +5,12 @@ import type { HrCapability } from '../../src/types/api.types';
 
 const apiResponse = (data: unknown) => ({ code: 0, message: 'success', data, timestamp: Date.now() });
 
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/tasks**', (route) => route.fulfill({ json: apiResponse({
+    items: [], total: 0, page: 1, pageSize: 50,
+  }) }));
+});
+
 async function mockEmployeePage(page: import('@playwright/test').Page, status: 'probation' | 'active') {
   let draft: Record<string, unknown> | null = null;
   const createBodies: unknown[] = [];
@@ -42,8 +48,10 @@ async function mockEmployeePage(page: import('@playwright/test').Page, status: '
       draft = { ...draft, summary: (request.postDataJSON() as { summary: string }).summary };
       return route.fulfill({ json: apiResponse(draft) });
     }
-    if (request.method() === 'POST' && path.endsWith('/submit')) {
-      return route.fulfill({ status: 400, json: { message: '请联系 HR 配置办理人和公司审批人' } });
+    if (request.method() === 'POST' && path.endsWith('/submit') && draft) {
+      draft = { ...draft, status: 'submitted', hr: null,
+        companyApprover: { id: 'approver-1', name: '公司审批人' } };
+      return route.fulfill({ json: apiResponse({ id: draft.id, status: 'submitted' }) });
     }
     if (request.method() === 'GET' && draft) return route.fulfill({ json: apiResponse(draft) });
     return route.fulfill({ status: 404, json: { message: '未找到' } });
@@ -51,7 +59,7 @@ async function mockEmployeePage(page: import('@playwright/test').Page, status: '
   return { createBodies };
 }
 
-test('probation employee saves a self-authored draft and sees the missing approval chain inline', async ({ page }) => {
+test('probation employee saves a draft then submits without HR assignment', async ({ page }) => {
   const { createBodies } = await mockEmployeePage(page, 'probation');
   await page.goto('/confirmation-applications/mine');
   await page.getByRole('button', { name: '发起转正申请' }).click();
@@ -69,8 +77,9 @@ test('probation employee saves a self-authored draft and sees the missing approv
 
   await page.getByRole('button', { name: '继续填写' }).click();
   await dialog.getByRole('button', { name: '提交转正申请' }).click();
-  await expect(dialog).toContainText('请联系 HR 配置办理人和公司审批人');
-  await expect(page.getByRole('button', { name: '继续填写' })).toBeVisible();
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole('button', { name: '继续填写' })).toHaveCount(0);
+  await expect(page.getByText('公司审批人').first()).toBeVisible();
 });
 
 test('formal employee has no new probation application action on mobile', async ({ page }) => {
@@ -136,7 +145,7 @@ test('roster manager submits a narrative recommendation without a second score',
   await expect(page.getByText('述职表决')).toHaveCount(0);
 });
 
-test('assigned HR can submit an attachment-only conclusion with optional meeting date', async ({ page }) => {
+test('authorized HR can submit an attachment-only conclusion with optional meeting date', async ({ page }) => {
   const submitted: unknown[] = [];
   let status = 'manager_approved';
   const attachments: Array<Record<string, unknown>> = [];
@@ -165,10 +174,12 @@ test('assigned HR can submit an attachment-only conclusion with optional meeting
       id: '11111111-1111-4111-8111-111111111111', workflowVersion: 2, status,
       employeeId: 'employee-1', employee: { id: 'employee-1', name: '试用期员工' },
       managerId: 'manager-1', manager: { id: 'manager-1', name: '直属主管' },
-      hrId: 'hr-1', hr: { id: 'hr-1', name: 'HR 办理人' },
+      hrId: status === 'hr_approved' ? 'hr-1' : null,
+      hr: status === 'hr_approved' ? { id: 'hr-1', name: '实际经办 HR' } : null,
       companyApproverId: 'approver-1', companyApprover: { id: 'approver-1', name: '公司审批人' },
       summary: '完成工作交付', meetingAttachments: attachments, voteResult: status === 'hr_approved' ? 'extend' : null,
-      canApprove: status === 'manager_approved', canReject: false, pendingRole: status === 'manager_approved' ? 'hr' : 'company',
+      canApprove: status === 'manager_approved', canReject: false, canViewInternalMeeting: true,
+      pendingRole: status === 'manager_approved' ? 'hr' : 'company',
       steps: [],
     }) });
   });
@@ -358,7 +369,7 @@ test('old probation scoring stays available as read-only history on mobile', asy
   await expect(page.getByRole('button', { name: '提交评分' })).toHaveCount(0);
 });
 
-test('HR assigns the two handlers from transfer management before employee submission', async ({ page }) => {
+test('transfer management shows attention without handler assignment on mobile and desktop', async ({ page }) => {
   await page.setViewportSize({ width: 390, height: 844 });
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-hr-token');
@@ -369,27 +380,17 @@ test('HR assigns the two handlers from transfer management before employee submi
     id: 'hr-1', name: 'HR 管理员', status: 'active', sysRole: 'hr', deptId: null,
     isAssessorOnly: false, canViewAll: false,
   }) }));
-  let assigned: { hrId: string; companyApproverId: string } | null = null;
   await page.route('**/api/v1/confirmation-applications**', (route) => {
     const path = new URL(route.request().url()).pathname;
     if (path.endsWith('/warnings')) return route.fulfill({ json: apiResponse([
       { employeeId: 'employee-2', employeeName: '缺日期员工', employeeNo: 'E002', deptName: '业务部', plannedRegularDate: null, daysUntil: null, hasApplication: false },
       { employeeId: 'employee-3', employeeName: '临期员工', employeeNo: 'E003', deptName: '业务部', plannedRegularDate: '2026-09-17', daysUntil: 3, hasApplication: false },
     ]) });
-    if (path.endsWith('/handler-candidates')) return route.fulfill({ json: apiResponse([
-      { id: 'hr-1', name: 'HR 管理员', employeeNo: 'H001', deptName: '人事部', hrEligible: true },
-      { id: 'approver-1', name: '公司审批人', employeeNo: 'C001', deptName: '管理层', hrEligible: false },
-    ]) });
-    if (route.request().method() === 'PUT' && path.endsWith('/handlers')) {
-      assigned = route.request().postDataJSON() as { hrId: string; companyApproverId: string };
-      return route.fulfill({ json: apiResponse({ id: 'app-1', ...assigned }) });
-    }
     return route.fulfill({ json: apiResponse({
       items: [{ id: 'app-1', workflowVersion: 2, submissionVersion: 0, status: 'draft',
         employeeId: 'employee-1', employee: { id: 'employee-1', name: '待转正员工' },
         manager: { id: 'manager-1', name: '花名册直属主管' },
-        hr: assigned ? { id: 'hr-1', name: 'HR 管理员' } : null,
-        companyApprover: assigned ? { id: 'approver-1', name: '公司审批人' } : null,
+        hr: null, companyApprover: null,
       }], total: 1, page: 1, pageSize: 10,
     }) });
   });
@@ -405,17 +406,8 @@ test('HR assigns the two handlers from transfer management before employee submi
   await expect(attentionDrawer.getByText('临期员工')).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(attentionDrawer).not.toBeVisible();
-  await page.getByRole('button', { name: '指定办理人' }).last().click();
-  const dialog = page.getByRole('dialog', { name: '指定转正办理人' });
-  await dialog.getByRole('button', { name: '保存办理人' }).click();
-  await expect(dialog).toContainText('请选择 HR 办理人和公司审批人');
-  await dialog.getByRole('combobox', { name: /HR 办理人/ }).click();
-  await page.getByRole('option', { name: /HR 管理员/ }).click();
-  await dialog.getByRole('combobox', { name: /公司审批人/ }).click();
-  await page.getByRole('option', { name: /公司审批人/ }).click();
-  await dialog.getByRole('button', { name: '保存办理人' }).click();
-  await expect(dialog).not.toBeVisible();
-  expect(assigned).toEqual({ hrId: 'hr-1', companyApproverId: 'approver-1' });
+  await expect(page.getByRole('button', { name: '指定办理人' })).toHaveCount(0);
+  await expect(page.locator('.mobile-result-list').getByText('HR 实际经办')).toBeVisible();
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(1);
   await page.setViewportSize({ width: 1440, height: 900 });

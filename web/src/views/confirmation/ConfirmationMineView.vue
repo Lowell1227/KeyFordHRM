@@ -166,8 +166,8 @@ function statusType(status: string): string {
         <el-table-column label="主管" min-width="120">
           <template #default="{ row }">{{ (row as ConfirmationApplication).manager?.name }}</template>
         </el-table-column>
-        <el-table-column label="HR" min-width="120">
-          <template #default="{ row }">{{ (row as ConfirmationApplication).hr?.name }}</template>
+        <el-table-column label="HR 实际经办" min-width="120">
+          <template #default="{ row }">{{ (row as ConfirmationApplication).hr?.name || '尚未办理' }}</template>
         </el-table-column>
         <el-table-column label="公司审批人" min-width="120">
           <template #default="{ row }">{{ (row as ConfirmationApplication).companyApprover?.name }}</template>
@@ -190,7 +190,7 @@ function statusType(status: string): string {
           <template #title>转正申请</template>
           <template #status><el-tag :type="statusType(item.status) as any" size="small">{{ applicationStatusLabel(item) }}</el-tag></template>
           <div class="mobile-result-field"><span class="mobile-result-field__label">主管</span><span class="mobile-result-field__value">{{ item.manager?.name || '-' }}</span></div>
-          <div class="mobile-result-field"><span class="mobile-result-field__label">HR</span><span class="mobile-result-field__value">{{ item.hr?.name || '-' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">HR 实际经办</span><span class="mobile-result-field__value">{{ item.hr?.name || '尚未办理' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">公司审批人</span><span class="mobile-result-field__value">{{ item.companyApprover?.name || '-' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">转正日期</span><span class="mobile-result-field__value">{{ formatDate(item.actualRegularDate) }}</span></div>
           <template #actions><el-button link type="primary" @click="item.workflowVersion === 2 && item.status === 'draft' ? openDraft(item) : goDetail(item)">{{ item.workflowVersion === 2 && item.status === 'draft' ? '继续填写' : '查看' }}</el-button></template>

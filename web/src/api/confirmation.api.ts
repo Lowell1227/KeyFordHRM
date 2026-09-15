@@ -15,13 +15,6 @@ export const confirmationApi = {
   myRoster(): Promise<ConfirmationRoster> {
     return apiGet('/confirmation-applications/my-roster');
   },
-  handlerCandidates(keyword?: string): Promise<Array<{ id: string; name: string; employeeNo: string | null; deptName: string | null; hrEligible: boolean }>> {
-    return apiGet('/confirmation-applications/handler-candidates', { keyword });
-  },
-
-  assignHandlers(id: string, body: { hrId: string; companyApproverId: string; reason?: string }): Promise<{ id: string; managerId: string; hrId: string; companyApproverId: string }> {
-    return http.put(`/confirmation-applications/${id}/handlers`, body, { skipErrorMessage: true }) as unknown as Promise<{ id: string; managerId: string; hrId: string; companyApproverId: string }>;
-  },
   /** 新流程：试用期员工本人创建草稿。 */
   createSelfDraft(summary: string): Promise<ConfirmationApplication> {
     return http.post('/confirmation-applications', { summary }, { skipErrorMessage: true }) as unknown as Promise<ConfirmationApplication>;

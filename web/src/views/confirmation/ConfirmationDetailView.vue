@@ -47,8 +47,7 @@ const returnMode = ref(false);
 const returnReason = ref('');
 const returnError = ref('');
 const returning = ref(false);
-const isInternalViewer = computed(() => Boolean(app.value && user.value
-  && (app.value.hrId === user.value.id || app.value.companyApproverId === user.value.id)));
+const isInternalViewer = computed(() => Boolean(app.value?.canViewInternalMeeting));
 
 onMounted(() => {
   loadDetail();
@@ -298,8 +297,8 @@ function sortedSteps(steps?: ApprovalStep[]): ApprovalStep[] {
           <el-descriptions-item label="岗位">{{ app.roster?.position || '待核实' }}</el-descriptions-item>
           <el-descriptions-item label="入职日期">{{ formatDate(app.roster?.entryDate) }}</el-descriptions-item>
           <el-descriptions-item label="计划转正日期">{{ formatDate(app.roster?.plannedRegularDate) }}</el-descriptions-item>
-          <el-descriptions-item label="HR">{{ app.hr?.name || '待 HR 配置' }}</el-descriptions-item>
-          <el-descriptions-item label="公司审批人">{{ app.companyApprover?.name || '待 HR 配置' }}</el-descriptions-item>
+          <el-descriptions-item label="HR 实际经办">{{ app.hr?.name || '尚未办理' }}</el-descriptions-item>
+          <el-descriptions-item label="公司审批人">{{ app.companyApprover?.name || '提交时确定' }}</el-descriptions-item>
           <el-descriptions-item label="实际转正日期">
             {{ formatDate(app.actualRegularDate) }}
           </el-descriptions-item>
@@ -441,7 +440,7 @@ function sortedSteps(steps?: ApprovalStep[]): ApprovalStep[] {
             </el-select>
             <el-date-picker v-model="hrMeetingDate" type="date" value-format="YYYY-MM-DD" placeholder="会议日期（可后补）" style="width: 100%" />
             <el-input v-model="hrBasis" type="textarea" :rows="4" maxlength="4000" show-word-limit placeholder="简述结论依据；也可只上传附件" @input="hrError = ''" />
-            <label class="attachment-upload">内部评议附件（仅指定 HR 和公司审批人可见）
+            <label class="attachment-upload">内部评议附件（仅授权 HR 和公司审批人可见）
               <input type="file" :disabled="uploading" @change="handleAttachmentUpload" />
             </label>
             <span v-if="app.meetingAttachments?.length">已上传 {{ app.meetingAttachments.length }} 个附件</span>
