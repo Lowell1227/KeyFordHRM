@@ -188,7 +188,8 @@ export class ConfirmationService {
     if (attachment.application.status === ConfirmationStatus.draft || attachment.submissionVersion !== attachment.application.submissionVersion) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '评议附件不属于当前办理轮次' });
     }
-    if (!(await this.canHandleHr(attachment.application.employeeId, viewer, attachment.application.companyApproverId))
+    if (attachment.application.hrId !== viewer.id
+      && !(await this.canViewAsHr(attachment.application.employeeId, viewer))
       && attachment.application.companyApproverId !== viewer.id) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权下载内部评议附件' });
     }
@@ -442,7 +443,7 @@ export class ConfirmationService {
 
   /** 当前用户作为审批人待审批列表。 */
   async findPending(dto: PaginationDto, viewer: AuthUser): Promise<Paginated<ConfirmationListItem>> {
-    const hrScope = this.isConfirmationManager(viewer)
+    const hrScope = this.isConfirmationHrHandler(viewer)
       ? await this.dataScope.getConfirmationEmployeeFilter(viewer) : { id: { in: [] } };
     const where: Prisma.ConfirmationApplicationWhereInput = {
       workflowVersion: 2,
@@ -460,10 +461,13 @@ export class ConfirmationService {
   async findAssignedHistory(dto: PaginationDto, viewer: AuthUser): Promise<Paginated<ConfirmationListItem>> {
     const hrScope = this.isConfirmationManager(viewer)
       ? await this.dataScope.getConfirmationEmployeeFilter(viewer) : { id: { in: [] } };
+    const hrPendingScope = this.isConfirmationHrHandler(viewer)
+      ? await this.dataScope.getConfirmationEmployeeFilter(viewer) : { id: { in: [] } };
     const pending: Prisma.ConfirmationApplicationWhereInput = {
       OR: [
         { status: ConfirmationStatus.submitted, managerId: viewer.id },
-        { status: ConfirmationStatus.manager_approved, hrId: viewer.id },
+        { status: ConfirmationStatus.manager_approved, employeeId: { not: viewer.id },
+          companyApproverId: { not: viewer.id }, employee: { is: hrPendingScope } },
         { status: ConfirmationStatus.hr_approved, companyApproverId: viewer.id },
       ],
     };
@@ -515,8 +519,11 @@ export class ConfirmationService {
     ]);
 
     return paginated(
-      await Promise.all(items.map(async (item) => this.mapToListItem(item as unknown as ConfirmationWithRelations,
-        viewer, await this.canHandleHr(item.employeeId, viewer, item.companyApproverId)))),
+      await Promise.all(items.map(async (item) => {
+        const hrCanHandle = await this.canHandleHr(item.employeeId, viewer, item.companyApproverId);
+        const hrCanView = hrCanHandle || await this.canViewAsHr(item.employeeId, viewer);
+        return this.mapToListItem(item as unknown as ConfirmationWithRelations, viewer, hrCanView, hrCanHandle);
+      })),
       total,
       dto,
     );
@@ -532,11 +539,12 @@ export class ConfirmationService {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '转正申请不存在' });
     }
     await this.assertCanView(app as unknown as ConfirmationWithRelations, viewer);
-    const hrScoped = await this.canHandleHr(app.employeeId, viewer, app.companyApproverId);
-    const detail = this.mapToDetail(app as unknown as ConfirmationWithRelations, viewer, hrScoped);
+    const hrCanHandle = await this.canHandleHr(app.employeeId, viewer, app.companyApproverId);
+    const hrCanView = hrCanHandle || await this.canViewAsHr(app.employeeId, viewer);
+    const detail = this.mapToDetail(app as unknown as ConfirmationWithRelations, viewer, hrCanView, hrCanHandle);
     if (app.workflowVersion !== 2) return { ...detail, history: [] };
-    const isInternalViewer = hrScoped || app.companyApproverId === viewer.id;
-    const canSeeManagerOpinion = isInternalViewer || app.managerId === viewer.id || hrScoped;
+    const isInternalViewer = hrCanView || app.companyApproverId === viewer.id;
+    const canSeeManagerOpinion = isInternalViewer || app.managerId === viewer.id;
     const logs = await this.prisma.auditLog.findMany({
       where: { entityType: 'confirmation_application', entityId: id, action: { startsWith: 'confirmation_' } },
       select: { id: true, action: true, createdAt: true, newValue: true, oldValue: true, user: { select: { name: true } } },
@@ -934,21 +942,30 @@ export class ConfirmationService {
     return viewer.sysRole === SysRole.hr || (viewer.sysRole === SysRole.hr_user && Boolean(viewer.hrCapabilities?.includes('confirmation_manage')));
   }
 
+  private isConfirmationHrHandler(viewer: AuthUser): boolean {
+    return viewer.sysRole === SysRole.hr_user && Boolean(viewer.hrCapabilities?.includes('confirmation_manage'));
+  }
+
+  private async canViewAsHr(employeeId: string, viewer: AuthUser): Promise<boolean> {
+    if (!this.isConfirmationManager(viewer) || employeeId === viewer.id) return false;
+    const scope = await this.dataScope.getConfirmationEmployeeFilter(viewer);
+    return await this.prisma.user.count({ where: { AND: [scope, { id: employeeId }] } }) === 1;
+  }
+
   private async canHandleHr(employeeId: string, viewer: AuthUser, companyApproverId?: string | null): Promise<boolean> {
-    if (!this.isConfirmationManager(viewer) || employeeId === viewer.id || companyApproverId === viewer.id) return false;
+    if (!this.isConfirmationHrHandler(viewer) || employeeId === viewer.id || companyApproverId === viewer.id) return false;
     const scope = await this.dataScope.getConfirmationEmployeeFilter(viewer);
     return await this.prisma.user.count({ where: { AND: [scope, { id: employeeId }] } }) === 1;
   }
 
   private async hrRecipients(company: CompanyCode | null, employeeId: string, companyApproverId: string | null): Promise<string[]> {
+    if (!company) return [];
     const people = await this.prisma.user.findMany({ where: {
       id: { notIn: [employeeId, ...(companyApproverId ? [companyApproverId] : [])] },
       status: UserStatus.active, deletedAt: null,
-      OR: [
-        { sysRole: SysRole.hr },
-        ...(company ? [{ sysRole: SysRole.hr_user, hrCapabilities: { has: 'confirmation_manage' },
-          dept: { is: { company } } }] : []),
-      ],
+      sysRole: SysRole.hr_user,
+      hrCapabilities: { has: 'confirmation_manage' },
+      dept: { is: { company } },
     }, select: { id: true } });
     return people.map((person) => person.id);
   }
@@ -1055,8 +1072,13 @@ export class ConfirmationService {
     );
   }
 
-  private mapToListItem(app: ConfirmationWithRelations, viewer: AuthUser, hrScoped = false): ConfirmationListItem {
-    const canViewInternalMeeting = app.workflowVersion !== 2 || hrScoped || app.companyApproverId === viewer.id;
+  private mapToListItem(
+    app: ConfirmationWithRelations,
+    viewer: AuthUser,
+    hrCanView = false,
+    hrCanHandle = hrCanView,
+  ): ConfirmationListItem {
+    const canViewInternalMeeting = app.workflowVersion !== 2 || hrCanView || app.companyApproverId === viewer.id;
     const pendingRole = this.determinePendingRole(app.status);
     return {
       id: app.id,
@@ -1068,7 +1090,7 @@ export class ConfirmationService {
       hrId: app.workflowVersion !== 2 || app.hrApprovedAt ? app.hrId : null,
       companyApproverId: app.companyApproverId,
       status: app.status,
-      pendingRole: pendingRole && this.isPendingApprover(app, pendingRole, viewer, hrScoped) ? pendingRole : null,
+      pendingRole: pendingRole && this.isPendingApprover(app, pendingRole, viewer, hrCanHandle) ? pendingRole : null,
       employee: app.employee,
       manager: app.manager,
       hr: app.workflowVersion !== 2 || app.hrApprovedAt ? app.hr : null,
@@ -1083,8 +1105,13 @@ export class ConfirmationService {
     };
   }
 
-  private mapToDetail(app: ConfirmationWithRelations, viewer: AuthUser, hrScoped = false): ConfirmationDetail {
-    const canViewInternalMeeting = app.workflowVersion !== 2 || hrScoped || app.companyApproverId === viewer.id;
+  private mapToDetail(
+    app: ConfirmationWithRelations,
+    viewer: AuthUser,
+    hrCanView = false,
+    hrCanHandle = hrCanView,
+  ): ConfirmationDetail {
+    const canViewInternalMeeting = app.workflowVersion !== 2 || hrCanView || app.companyApproverId === viewer.id;
     const pendingRole = this.determinePendingRole(app.status);
     const steps: ApprovalStep[] = [
       {
@@ -1137,7 +1164,7 @@ export class ConfirmationService {
     ];
 
     return {
-      ...this.mapToListItem(app, viewer, hrScoped),
+      ...this.mapToListItem(app, viewer, hrCanView, hrCanHandle),
       roster: { employeeNo: app.employee.employeeNo ?? null, company: app.employee.dept?.company ?? null,
         deptName: app.employee.dept?.name ?? null, position: app.employee.position ?? null,
         entryDate: app.employee.entryDate ?? null, plannedRegularDate: app.employee.plannedRegularDate ?? null },
@@ -1147,7 +1174,7 @@ export class ConfirmationService {
       returnReason: app.returnReason,
       returnedAt: app.returnedAt,
       voteRecordedAt: canViewInternalMeeting ? app.voteRecordedAt : null,
-      meetingAttachments: app.workflowVersion === 2 && (hrScoped || viewer.id === app.companyApproverId)
+      meetingAttachments: app.workflowVersion === 2 && (hrCanView || viewer.id === app.companyApproverId)
         ? (app.meetingAttachments ?? []).filter((attachment) => attachment.submissionVersion === app.submissionVersion) : [],
       salary: app.workflowVersion !== 2 && this.canViewSalary(app, viewer)
         ? app.salary
@@ -1161,11 +1188,11 @@ export class ConfirmationService {
       rejectReason: app.rejectReason,
       steps,
       canApprove: app.workflowVersion === 2 && pendingRole !== null
-        ? this.isPendingApprover(app, pendingRole, viewer, hrScoped) : false,
+        ? this.isPendingApprover(app, pendingRole, viewer, hrCanHandle) : false,
       canReject: app.workflowVersion === 2 && pendingRole === 'company'
-        ? this.isPendingApprover(app, pendingRole, viewer, hrScoped) : false,
+        ? this.isPendingApprover(app, pendingRole, viewer, hrCanHandle) : false,
       canReturn: app.workflowVersion === 2 && pendingRole !== null
-        ? this.isPendingApprover(app, pendingRole, viewer, hrScoped) : false,
+        ? this.isPendingApprover(app, pendingRole, viewer, hrCanHandle) : false,
       canViewInternalMeeting,
       pendingRole,
       history: [],
@@ -1176,10 +1203,10 @@ export class ConfirmationService {
     app: ConfirmationWithRelations,
     role: 'manager' | 'hr' | 'company',
     viewer: AuthUser,
-    hrScoped = false,
+    hrCanHandle = false,
   ): boolean {
     if (role === 'manager') return app.managerId === viewer.id;
-    if (role === 'hr') return hrScoped;
+    if (role === 'hr') return hrCanHandle;
     return app.companyApproverId === viewer.id;
   }
 }

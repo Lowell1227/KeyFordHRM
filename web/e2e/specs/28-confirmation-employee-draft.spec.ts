@@ -92,7 +92,7 @@ test('formal employee has no new probation application action on mobile', async 
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
-test('roster manager submits a narrative recommendation without a second score', async ({ page }) => {
+test('the same person completes manager evaluation before a separate HR step', async ({ page }) => {
   const submitted: unknown[] = [];
   let status = 'submitted';
   await page.addInitScript(() => {
@@ -101,7 +101,8 @@ test('roster manager submits a narrative recommendation without a second score',
   });
   await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({ json: apiResponse(0) }));
   await page.route('**/api/v1/auth/me', (route) => route.fulfill({ json: apiResponse({
-    id: 'manager-1', name: '花名册直属主管', status: 'active', sysRole: 'employee', deptId: null,
+    id: 'manager-1', name: '方园', status: 'active', sysRole: 'hr_user', deptId: null,
+    hrCapabilities: ['confirmation_manage'],
     isAssessorOnly: false, canViewAll: false,
   }) }));
   await page.route('**/api/v1/tasks**', (route) => route.fulfill({ json: apiResponse({
@@ -123,7 +124,8 @@ test('roster manager submits a narrative recommendation without a second score',
       hrId: 'hr-1', hr: { id: 'hr-1', name: 'HR 办理人' },
       companyApproverId: 'approver-1', companyApprover: { id: 'approver-1', name: '公司审批人' },
       summary: '完成项目交付，继续改进协作', salary: null, actualRegularDate: null,
-      canApprove: status === 'submitted', canReject: false, pendingRole: status === 'submitted' ? 'manager' : 'hr',
+      canApprove: ['submitted', 'manager_approved'].includes(status), canReturn: true, canReject: false,
+      pendingRole: status === 'submitted' ? 'manager' : 'hr',
       history: [
         { id: 'history-submit', label: '员工提交申请', actorName: '试用期员工', occurredAt: '2026-09-15T02:32:00.000Z', submissionVersion: 1, note: null },
       ],
@@ -160,7 +162,9 @@ test('roster manager submits a narrative recommendation without a second score',
   await managerDialog.getByRole('button', { name: '提交评价' }).click();
   await expect.poll(() => submitted).toEqual([{ recommendation: false, comment: '需要继续改进协作' }]);
   await expect(managerDialog).not.toBeVisible();
-  await expect(page.getByRole('button', { name: '办理', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '办理', exact: true })).toBeVisible();
+  await page.getByRole('button', { name: '办理', exact: true }).click();
+  await expect(page.getByRole('dialog', { name: 'HR 线下评议' })).toBeVisible();
   await expect(page.getByText('述职表决')).toHaveCount(0);
 });
 
@@ -175,7 +179,8 @@ test('authorized HR can submit an attachment-only conclusion with optional meeti
   });
   await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({ json: apiResponse(0) }));
   await page.route('**/api/v1/auth/me', (route) => route.fulfill({ json: apiResponse({
-    id: 'hr-1', name: 'HR 办理人', status: 'active', sysRole: 'hr', deptId: null,
+    id: 'hr-1', name: 'HR 办理人', status: 'active', sysRole: 'hr_user', deptId: null,
+    hrCapabilities: ['confirmation_manage'],
     isAssessorOnly: false, canViewAll: false,
   }) }));
   await page.route('**/api/v1/confirmation-applications/11111111-1111-4111-8111-111111111111**', (route) => {
@@ -199,7 +204,7 @@ test('authorized HR can submit an attachment-only conclusion with optional meeti
       hr: status === 'hr_approved' ? { id: 'hr-1', name: '实际经办 HR' } : null,
       companyApproverId: 'approver-1', companyApprover: { id: 'approver-1', name: '公司审批人' },
       summary: '完成工作交付', meetingAttachments: attachments, voteResult: status === 'hr_approved' ? 'extend' : null,
-      canApprove: status === 'manager_approved', canReject: false, canViewInternalMeeting: true,
+      canApprove: status === 'manager_approved', canReturn: status === 'manager_approved', canReject: false, canViewInternalMeeting: true,
       pendingRole: status === 'manager_approved' ? 'hr' : 'company',
       steps: [],
     }) });
@@ -212,6 +217,11 @@ test('authorized HR can submit an attachment-only conclusion with optional meeti
   await page.getByRole('button', { name: '办理', exact: true }).click();
   const hrDialog = page.getByRole('dialog', { name: 'HR 线下评议' });
   await expect(hrDialog).toBeVisible();
+  await expect(hrDialog.getByRole('button', { name: '退回员工', exact: true })).toBeVisible();
+  await hrDialog.getByRole('button', { name: '退回员工', exact: true }).click();
+  await expect(hrDialog.getByText('请填写退回员工的原因')).toBeVisible();
+  await expect(hrDialog.getByPlaceholder('请说明需要员工补充的内容')).toHaveCount(0);
+  await expect(hrDialog.getByRole('button', { name: '提交退回补充' })).toHaveCount(0);
   await hrDialog.getByRole('button', { name: '提交公司审批' }).click();
   await expect(hrDialog.getByText('请填写评议结论和拟生效日期')).toBeVisible();
   await page.getByText('选择评议结论', { exact: true }).click();

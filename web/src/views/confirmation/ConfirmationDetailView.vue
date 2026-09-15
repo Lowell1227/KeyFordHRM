@@ -41,9 +41,6 @@ const backfilling = ref(false);
 const companyReason = ref('');
 const companyError = ref('');
 const declining = ref(false);
-const returnMode = ref(false);
-const returnReason = ref('');
-const returnError = ref('');
 const returning = ref(false);
 const isInternalViewer = computed(() => Boolean(app.value?.canViewInternalMeeting));
 const approvalDialogTitle = computed(() => {
@@ -238,19 +235,24 @@ async function handleCompanyDecline() {
   }
 }
 
-async function handleReturn() {
+async function handleReturn(reason: string, role: 'manager' | 'hr') {
   if (!app.value) return;
-  returnError.value = returnReason.value.trim() ? '' : '请填写退回补充原因';
-  if (returnError.value) return;
+  const trimmedReason = reason.trim();
+  if (!trimmedReason) {
+    if (role === 'manager') managerError.value = '请填写退回员工的原因';
+    else hrError.value = '请填写退回员工的原因';
+    return;
+  }
   returning.value = true;
   try {
-    await confirmationApi.returnForSupplement(app.value.id, returnReason.value.trim());
+    await confirmationApi.returnForSupplement(app.value.id, trimmedReason);
     approvalDialogVisible.value = false;
     ElMessage.success('已退回员工补充；重新提交后将从直属主管重新流转');
-    returnMode.value = false;
     await loadDetail();
   } catch (error) {
-    returnError.value = error instanceof Error ? error.message : '退回失败，请稍后重试';
+    const message = error instanceof Error ? error.message : '退回失败，请稍后重试';
+    if (role === 'manager') managerError.value = message;
+    else hrError.value = message;
   } finally {
     returning.value = false;
   }
@@ -506,7 +508,10 @@ function actorInitial(name: string): string {
             </el-radio-group>
             <el-input v-model="managerComment" type="textarea" :rows="4" maxlength="1000" show-word-limit placeholder="请说明工作表现和评价原因" @input="managerError = ''" />
             <p v-if="managerError" class="field-error">{{ managerError }}</p>
-            <el-button type="primary" :loading="approving" @click="handleApprove">提交评价</el-button>
+            <div class="approval-actions">
+              <el-button type="primary" :loading="approving" :disabled="returning" @click="handleApprove">提交评价</el-button>
+              <el-button v-if="app.canReturn" type="danger" plain :loading="returning" :disabled="approving" @click="handleReturn(managerComment, 'manager')">退回员工</el-button>
+            </div>
           </div>
           <div v-else-if="app.pendingRole === 'hr'" class="hr-evaluation">
             <el-select v-model="hrResult" placeholder="选择评议结论" @change="hrError = ''">
@@ -521,9 +526,12 @@ function actorInitial(name: string): string {
             </label>
             <span v-if="app.meetingAttachments?.length">已上传 {{ app.meetingAttachments.length }} 个附件</span>
             <el-date-picker v-model="hrProposedDate" type="date" value-format="YYYY-MM-DD" placeholder="拟生效日期（必填）" style="width: 100%" @change="hrError = ''" />
-            <el-input v-model="hrComment" type="textarea" :rows="3" maxlength="1000" placeholder="HR 办理意见（选填）" />
+            <el-input v-model="hrComment" type="textarea" :rows="3" maxlength="1000" placeholder="办理说明（选填；退回时请填写原因）" @input="hrError = ''" />
             <p v-if="hrError" class="field-error">{{ hrError }}</p>
-            <el-button type="primary" :loading="approving" @click="handleHrSubmit">提交公司审批</el-button>
+            <div class="approval-actions">
+              <el-button type="primary" :loading="approving" :disabled="returning" @click="handleHrSubmit">提交公司审批</el-button>
+              <el-button v-if="app.canReturn" type="danger" plain :loading="returning" :disabled="approving || uploading" @click="handleReturn(hrComment, 'hr')">退回员工</el-button>
+            </div>
           </div>
           <div v-else-if="app.pendingRole === 'company'" class="company-decision">
             <p>HR 拟生效日期：<b>{{ formatDate(app.proposedRegularDate) }}</b></p>
@@ -535,14 +543,6 @@ function actorInitial(name: string): string {
             <div class="company-actions">
               <el-button type="primary" :loading="approving" :disabled="declining" @click="handleCompanyApprove">同意</el-button>
               <el-button v-if="app.canReject" type="danger" plain :loading="declining" :disabled="approving" @click="handleCompanyDecline">不同意</el-button>
-            </div>
-          </div>
-          <div v-if="app.canReturn && app.pendingRole !== 'company'" class="return-action">
-            <el-button @click="returnMode = !returnMode">退回员工补充</el-button>
-            <div v-if="returnMode" class="return-form">
-              <el-input v-model="returnReason" type="textarea" :rows="3" maxlength="1000" placeholder="请说明需要员工补充的内容" @input="returnError = ''" />
-              <p v-if="returnError" class="field-error">{{ returnError }}</p>
-              <el-button :loading="returning" @click="handleReturn">提交退回补充</el-button>
             </div>
           </div>
         </div>
@@ -619,8 +619,7 @@ function actorInitial(name: string): string {
 .company-decision { display: grid; gap: 16px; width: min(100%, 480px); }
 .company-decision p { margin: 0; }
 .company-reason { display: grid; gap: 8px; color: var(--el-text-color-regular); font-size: 14px; }
-.company-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
-.return-action, .return-form { display: grid; gap: 8px; width: min(100%, 560px); }
+.company-actions, .approval-actions { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .return-reason { margin: 0; padding: 10px 12px; background: var(--el-color-warning-light-9); border-radius: 4px; overflow-wrap: anywhere; }
 .internal-record { display: grid; gap: 8px; overflow-wrap: anywhere; }
 .meeting-date-backfill { display: grid; gap: 8px; width: min(100%, 320px); }
