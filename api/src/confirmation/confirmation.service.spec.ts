@@ -369,6 +369,30 @@ describe('employee confirmation draft', () => {
     }));
   });
 
+  it('lists every submitted application assigned to the viewer in one filtered ledger', async () => {
+    prisma.confirmationApplication.findMany.mockResolvedValue([]);
+    const companyApproverId = '55555555-5555-4555-8555-555555555555';
+
+    await service.findAssigned({
+      page: 1, pageSize: 10, skip: 0, take: 10, status: ConfirmationStatus.approved, keyword: '余',
+    } as never, { ...viewer, id: companyApproverId });
+
+    expect(prisma.confirmationApplication.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ AND: [
+        {
+          workflowVersion: 2,
+          submissionVersion: { gt: 0 },
+          OR: [
+            { managerId: companyApproverId },
+            { companyApproverId },
+          ],
+        },
+        { status: ConfirmationStatus.approved },
+        { employee: { name: { contains: '余', mode: 'insensitive' } } },
+      ] }),
+    }));
+  });
+
   it('shows HR managers scoped draft records', async () => {
     prisma.confirmationApplication.findMany.mockResolvedValue([]);
     const hrId = '44444444-4444-4444-8444-444444444444';

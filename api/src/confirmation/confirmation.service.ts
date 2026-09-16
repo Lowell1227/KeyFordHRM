@@ -441,6 +441,18 @@ export class ConfirmationService {
     return this.findMany(dto, { employee: { is: scope } }, viewer);
   }
 
+  /** 直属主管或公司审批人查看分配给本人的全部已提交记录。 */
+  async findAssigned(dto: PaginationDto, viewer: AuthUser): Promise<Paginated<ConfirmationListItem>> {
+    return this.findMany(dto, {
+      workflowVersion: 2,
+      submissionVersion: { gt: 0 },
+      OR: [
+        { managerId: viewer.id },
+        { companyApproverId: viewer.id },
+      ],
+    }, viewer);
+  }
+
   /** 当前用户作为审批人待审批列表。 */
   async findPending(dto: PaginationDto, viewer: AuthUser): Promise<Paginated<ConfirmationListItem>> {
     const hrScope = this.isConfirmationHrHandler(viewer)

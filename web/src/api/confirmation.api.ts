@@ -79,6 +79,11 @@ export const confirmationApi = {
     return apiGet('/confirmation-applications', query as Record<string, unknown>);
   },
 
+  /** GET /confirmation-applications/assigned — 分配给当前用户的全部已提交记录 */
+  findAssigned(query?: ConfirmationQuery): Promise<Paginated<ConfirmationApplication>> {
+    return apiGet('/confirmation-applications/assigned', query as Record<string, unknown>);
+  },
+
   /** GET /confirmation-applications/pending — 当前用户待审批列表 */
   findPending(query?: ConfirmationQuery): Promise<Paginated<ConfirmationApplication>> {
     return apiGet('/confirmation-applications/pending', query as Record<string, unknown>);

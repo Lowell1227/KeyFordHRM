@@ -339,35 +339,48 @@ test('company approver can decline without filling the optional reason', async (
   await expect(companyDialog).not.toBeVisible();
 });
 
-test('assigned manager uses the canonical transfer management page and can view handled history', async ({ page }) => {
+test('assigned approver uses the same transfer management filters, columns and row actions as HR', async ({ page }) => {
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-manager-token');
     localStorage.setItem('expiresAt', String(Date.now() + 60_000));
   });
   await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({ json: apiResponse(0) }));
   await page.route('**/api/v1/auth/me', (route) => route.fulfill({ json: apiResponse({
-    id: 'manager-1', name: '直属主管', status: 'active', sysRole: 'employee', deptId: null,
+    id: 'approver-1', name: '分管审批人', status: 'active', sysRole: 'employee', deptId: null,
     isAssessorOnly: false, canViewAll: false,
     businessCapabilities: { canHandleConfirmationApprovals: true },
   }) }));
-  await page.route('**/api/v1/confirmation-applications/pending**', (route) => route.fulfill({ json: apiResponse({ items: [], total: 0, page: 1, pageSize: 10 }) }));
-  await page.route('**/api/v1/confirmation-applications/assigned-history**', (route) => route.fulfill({ json: apiResponse({
-    items: [{
-      id: '11111111-1111-4111-8111-111111111111', workflowVersion: 2,
-      employee: { id: 'employee-1', name: '办理过的员工' }, status: 'manager_approved', pendingRole: null,
-    }], total: 1, page: 1, pageSize: 10,
+  await page.route('**/api/v1/confirmation-applications/assigned**', (route) => route.fulfill({ json: apiResponse({
+    items: [
+      {
+        id: '11111111-1111-4111-8111-111111111111', workflowVersion: 2,
+        employee: { id: 'employee-1', name: '已办理员工' }, status: 'approved', pendingRole: null,
+        manager: { id: 'manager-1', name: '直属主管甲' }, hr: { id: 'hr-1', name: 'HR 甲' },
+        companyApprover: { id: 'approver-1', name: '分管审批人' }, actualRegularDate: '2026-09-01',
+      },
+      {
+        id: '22222222-2222-4222-8222-222222222222', workflowVersion: 2,
+        employee: { id: 'employee-2', name: '待办理员工' }, status: 'hr_approved', pendingRole: 'company',
+        manager: { id: 'manager-2', name: '直属主管乙' }, hr: { id: 'hr-2', name: 'HR 乙' },
+        companyApprover: { id: 'approver-1', name: '分管审批人' }, actualRegularDate: null,
+      },
+    ], total: 2, page: 1, pageSize: 10,
   }) }));
   await page.goto('/confirmation-applications/approvals');
   await expect(page).toHaveURL(/\/confirmation-applications\/manage$/);
   await expect(page.getByText('转正管理', { exact: true }).first()).toBeVisible();
-  await page.getByText('办理记录', { exact: true }).click();
-  await expect(page.getByText('办理过的员工').first()).toBeVisible();
+  await expect(page.getByText('待我办理', { exact: true })).toHaveCount(0);
+  await expect(page.getByText('办理记录', { exact: true })).toHaveCount(0);
+  await expect(page.getByRole('combobox', { name: '状态' })).toBeVisible();
+  await expect(page.getByText('已办理员工').first()).toBeVisible();
+  await expect(page.getByText('待办理员工').first()).toBeVisible();
   await expect(page.getByRole('button', { name: '查看' }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: '办理' }).first()).toBeVisible();
   for (const column of ['直属主管', 'HR 实际经办', '公司审批人', '实际转正日期']) {
     await expect(page.getByRole('columnheader', { name: column })).toBeVisible();
   }
   await page.setViewportSize({ width: 390, height: 844 });
-  await expect(page.locator('.mobile-result-list').getByText('HR 实际经办')).toBeVisible();
+  await expect(page.locator('.mobile-result-list').getByText('HR 实际经办').first()).toBeVisible();
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);
   await page.setViewportSize({ width: 1024, height: 768 });
   await expect.poll(() => page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth)).toBeLessThanOrEqual(1);

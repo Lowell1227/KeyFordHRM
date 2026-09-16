@@ -44,6 +44,11 @@ export class ConfirmationController {
     return this.confirmationService.findAll(dto, viewer);
   }
 
+  @Get('assigned')
+  findAssigned(@Query() dto: ConfirmationQueryDto, @CurrentUser() viewer: AuthUser) {
+    return this.confirmationService.findAssigned(dto, viewer);
+  }
+
   @Get('pending')
   findPending(@Query() dto: ConfirmationQueryDto, @CurrentUser() viewer: AuthUser) {
     return this.confirmationService.findPending(dto, viewer);
