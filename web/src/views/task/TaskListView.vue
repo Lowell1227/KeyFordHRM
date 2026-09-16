@@ -212,6 +212,7 @@ const teamCountTabs = computed<Array<{
 ]);
 const allowedPerformanceSections = computed(() =>
   auth.user?.sysRole === 'employee'
+    && !auth.user?.businessCapabilities?.canManageObjectives
     ? (['tracking', 'tasks'] as const)
     : (['tracking', 'map', 'tasks'] as const),
 );

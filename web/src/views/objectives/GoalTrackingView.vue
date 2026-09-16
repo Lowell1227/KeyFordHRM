@@ -16,6 +16,7 @@ const selectedIndicatorId = ref(
   typeof route.query.indicatorId === 'string' ? route.query.indicatorId : '',
 );
 const sections = computed(() => auth.user?.sysRole === 'employee'
+  && !auth.user?.businessCapabilities?.canManageObjectives
   ? (['tracking', 'tasks'] as const)
   : (['tracking', 'map', 'tasks'] as const));
 
