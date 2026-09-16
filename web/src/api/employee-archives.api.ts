@@ -44,6 +44,9 @@ export interface EmployeeDataReview {
   profileReviewedBy?: { id: string; name: string } | null;
   performanceReviewedBy?: { id: string; name: string } | null;
   rejectedReason?: string | null;
+  profileReviewedAt?: string | null;
+  performanceReviewedAt?: string | null;
+  appliedAt?: string | null;
   createdAt: string;
   updatedAt: string;
   recordStatus?: 'draft' | 'submitted' | 'archived';
@@ -202,6 +205,7 @@ export interface EmployeeArchive {
     disabledReason: string | null;
     lastLoginAt: string | null;
   } | null;
+  latestResignationReview?: EmployeeDataReview | null;
 }
 
 export const employeeArchivesApi = {

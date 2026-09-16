@@ -54,8 +54,18 @@ describe('EmployeeArchivesService', () => {
       externalIdentityBindings: [],
       employeeContracts: [],
     };
+    const resignationReview = {
+      id: '50000000-0000-4000-8000-000000000099',
+      sourceType: 'manual_employment_change',
+      profileReviewStatus: 'pending',
+      proposedValue: { employee: { changeType: 'resignation' } },
+      createdBy: { id: 'hr-1', name: 'HR管理员', sysRole: SysRole.hr },
+      profileReviewedBy: null,
+    };
+    const findLatestResignationReview = jest.fn().mockResolvedValue(resignationReview);
     const prisma = {
       user: { findUnique: jest.fn().mockResolvedValue(archive) },
+      employeeDataChangeRequest: { findFirst: findLatestResignationReview },
     };
     const service = new EmployeeArchivesService(prisma as any);
 
@@ -64,6 +74,15 @@ describe('EmployeeArchivesService', () => {
     expect(result.currentEmployment).toEqual(expect.objectContaining({
       id: 'employment-current',
       company: CompanyCode.beijing_fuede,
+    }));
+    expect(result.latestResignationReview).toEqual(resignationReview);
+    expect(findLatestResignationReview).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({
+        userId: 'user-1',
+        sourceType: 'manual_employment_change',
+        proposedValue: { path: ['employee', 'changeType'], equals: 'resignation' },
+      }),
+      orderBy: { createdAt: 'desc' },
     }));
   });
 
@@ -229,6 +248,10 @@ describe('EmployeeArchivesService', () => {
           }),
         }),
       }),
+      include: {
+        createdBy: { select: { id: true, name: true, sysRole: true } },
+        profileReviewedBy: { select: { id: true, name: true } },
+      },
     });
     expect(employmentCreate).not.toHaveBeenCalled();
     expect(userUpdate).not.toHaveBeenCalled();
@@ -319,6 +342,10 @@ describe('EmployeeArchivesService', () => {
       data: expect.objectContaining({
         validationWarnings: ['与 1 条已有任职记录时间重叠，仅作提醒，不影响提交和审核'],
       }),
+      include: {
+        createdBy: { select: { id: true, name: true, sysRole: true } },
+        profileReviewedBy: { select: { id: true, name: true } },
+      },
     });
   });
 

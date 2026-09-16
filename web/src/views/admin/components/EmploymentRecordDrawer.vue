@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage } from 'element-plus';
-import { employeeArchivesApi, type EmployeeArchive } from '@/api/employee-archives.api';
+import { employeeArchivesApi, type EmployeeArchive, type EmployeeDataReview } from '@/api/employee-archives.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import type { Department } from '@/types/api.types';
@@ -16,8 +16,54 @@ const emit = defineEmits<{ 'update:modelValue': [value: boolean]; submitted: [] 
 const positions = ref<PositionRecord[]>([]);
 const saving = ref(false);
 const form = reactive<Record<string, any>>({});
+const resignationReview = ref<EmployeeDataReview | null>(null);
 const isResignation = computed(() => props.mode === 'resignation');
 const drawerTitle = computed(() => isResignation.value ? '办理离职' : '新增任职记录');
+const resignationReviewState = computed<'not_submitted' | 'pending' | 'approved' | 'rejected'>(() => {
+  const status = resignationReview.value?.profileReviewStatus;
+  if (status === 'pending') return 'pending';
+  if (status === 'approved') return 'approved';
+  if (status === 'rejected') return 'rejected';
+  return 'not_submitted';
+});
+const resignationReviewLabel = computed(() => ({
+  not_submitted: '待提交',
+  pending: '待 HR 审核',
+  approved: '已通过',
+  rejected: '已退回',
+})[resignationReviewState.value]);
+const resignationReviewLocked = computed(() => ['pending', 'approved'].includes(resignationReviewState.value));
+const resignationStepActive = computed(() => ({ not_submitted: 0, pending: 1, rejected: 1, approved: 3 })[resignationReviewState.value]);
+const resignationProcessStatus = computed(() => resignationReviewState.value === 'rejected' ? 'error' : 'process');
+const resignationTagType = computed<'info' | 'warning' | 'success' | 'danger'>(() => ({
+  not_submitted: 'info',
+  pending: 'warning',
+  approved: 'success',
+  rejected: 'danger',
+})[resignationReviewState.value] as 'info' | 'warning' | 'success' | 'danger');
+function formatDateTime(value?: string | null): string {
+  if (!value) return '';
+  return new Intl.DateTimeFormat('zh-CN', {
+    year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
+  }).format(new Date(value));
+}
+const resignationSubmitDescription = computed(() => {
+  const review = resignationReview.value;
+  if (!review) return '填写离职信息后提交';
+  const creator = review.createdBy?.name || '已提交';
+  return `${creator} · ${formatDateTime(review.createdAt)}`;
+});
+const resignationReviewDescription = computed(() => {
+  const review = resignationReview.value;
+  if (!review) return '提交后由 HR 管理员审核';
+  if (review.profileReviewStatus === 'pending') return '等待 HR 管理员审核';
+  const reviewer = review.profileReviewedBy?.name || 'HR 管理员';
+  const reviewedAt = formatDateTime(review.profileReviewedAt || review.updatedAt);
+  return `${reviewer}${reviewedAt ? ` · ${reviewedAt}` : ''}`;
+});
+const resignationEffectiveDescription = computed(() => resignationReviewState.value === 'approved'
+  ? `最后工作日 ${String((resignationReview.value?.proposedValue.employee as Record<string, unknown> | undefined)?.leaveDate || form.leaveDate || '').slice(0, 10)}`
+  : '审核通过后生效');
 const overlapWarning = computed(() => {
   const start = String(isResignation.value ? form.leaveDate ?? '' : form.effectiveFrom ?? '').slice(0, 10);
   if (!start) return '';
@@ -37,6 +83,7 @@ const overlapWarning = computed(() => {
 function flatten(items: Department[]): Department[] { return items.flatMap((item) => [item, ...flatten(item.children ?? [])]); }
 function reset() {
   const archive = props.archive; const current = archive?.currentEmployment ?? archive?.employmentHistory[0];
+  resignationReview.value = archive?.latestResignationReview ?? null;
   Object.assign(form, {
     effectiveFrom: '', effectiveTo: null, company: current?.company ?? archive?.dept?.company ?? 'fuede',
     deptId: current?.deptId ?? archive?.dept?.id ?? null, positionId: current?.positionId ?? null,
@@ -75,11 +122,13 @@ async function submit() {
   }
   saving.value = true;
   try {
-    await employeeArchivesApi.createEmployment(props.archive.id, { ...form, positionId: form.positionId || null });
+    const review = await employeeArchivesApi.createEmployment(props.archive.id, { ...form, positionId: form.positionId || null });
+    resignationReview.value = review;
     ElMessage.success(isResignation.value
       ? '离职申请已提交审核；审核生效后可由操作员手动归档'
       : '任职变更已提交审核；历史补录和未来生效记录都不会直接覆盖当前档案');
-    emit('update:modelValue', false); emit('submitted');
+    if (!isResignation.value) emit('update:modelValue', false);
+    emit('submitted');
   } finally { saving.value = false; }
 }
 onMounted(async () => { positions.value = await positionsApi.findAll(); });
@@ -87,7 +136,7 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
 
 <template>
   <el-drawer :model-value="modelValue" :title="drawerTitle" size="min(720px, 100vw)" destroy-on-close @update:model-value="emit('update:modelValue', $event)">
-    <el-form v-if="isResignation" label-position="top" class="employment-grid">
+    <el-form v-if="isResignation" label-position="top" class="employment-grid" :disabled="resignationReviewLocked">
       <el-form-item label="员工"><el-input :model-value="archive?.name" disabled /></el-form-item>
       <el-form-item label="当前部门"><el-input :model-value="archive?.dept?.fullPath || archive?.dept?.name || '未设置'" disabled /></el-form-item>
       <el-form-item label="最后工作日">
@@ -114,12 +163,31 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
       <el-form-item label="用工类型"><el-select v-model="form.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
       <el-form-item label="原因" class="span-2"><el-input v-model="form.reason" type="textarea" :rows="3" /></el-form-item>
     </el-form>
+    <section v-if="isResignation" class="approval-flow" aria-labelledby="resignation-approval-title">
+      <div class="approval-flow__header">
+        <h3 id="resignation-approval-title">审批流程</h3>
+        <el-tag :type="resignationTagType" effect="plain">{{ resignationReviewLabel }}</el-tag>
+      </div>
+      <el-steps :active="resignationStepActive" finish-status="success" :process-status="resignationProcessStatus" align-center>
+        <el-step title="提交离职" :description="resignationSubmitDescription" />
+        <el-step title="HR 审核" :description="resignationReviewDescription" />
+        <el-step title="离职生效" :description="resignationEffectiveDescription" />
+      </el-steps>
+      <p v-if="resignationReviewState === 'rejected' && resignationReview?.rejectedReason" class="approval-flow__reason">
+        退回原因：{{ resignationReview.rejectedReason }}
+      </p>
+    </section>
     <p class="employment-help">{{ isResignation ? '离职审核生效后停用员工登录，但不会删除档案，也不会自动归档。' : '生效日期早于今天视为历史补录；晚于今天则审核后等待到期自动生效。时间重叠会提醒，但不阻断提交。' }}</p>
-    <template #footer><el-button @click="emit('update:modelValue', false)">取消</el-button><el-button type="primary" :loading="saving" @click="submit">提交审核</el-button></template>
+    <template #footer>
+      <el-button @click="emit('update:modelValue', false)">{{ resignationReviewLocked ? '关闭' : '取消' }}</el-button>
+      <el-button v-if="!isResignation || !resignationReviewLocked" type="primary" :loading="saving" @click="submit">
+        {{ isResignation && resignationReviewState === 'rejected' ? '重新提交审核' : '提交审核' }}
+      </el-button>
+    </template>
   </el-drawer>
 </template>
 
 <style scoped>
-.employment-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }.employment-grid :deep(.el-select), .employment-grid :deep(.el-date-editor) { width: 100%; }.employment-field { width: 100%; }.employment-field__warning { display: block; margin-top: 6px; color: #d97706; font-size: 12px; line-height: 1.5; }.span-2 { grid-column: span 2; }.employment-help { color: #667085; font-size: 13px; }
+.employment-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }.employment-grid :deep(.el-select), .employment-grid :deep(.el-date-editor) { width: 100%; }.employment-field { width: 100%; }.employment-field__warning { display: block; margin-top: 6px; color: #d97706; font-size: 12px; line-height: 1.5; }.span-2 { grid-column: span 2; }.approval-flow { margin-top: 8px; padding: 16px 12px 10px; border-top: 1px solid #ebeef5; }.approval-flow__header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 16px; }.approval-flow__header h3 { margin: 0; font-size: 16px; }.approval-flow :deep(.el-step__description) { padding: 0 8px; line-height: 1.4; }.approval-flow__reason { margin: 14px 0 0; color: #d14343; font-size: 13px; }.employment-help { color: #667085; font-size: 13px; }
 @media (max-width: 640px) { .employment-grid { grid-template-columns: 1fr; }.span-2 { grid-column: auto; } }
 </style>

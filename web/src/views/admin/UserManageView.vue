@@ -824,9 +824,11 @@ function afterEmployeeSubmitted() {
 }
 
 function afterEmploymentSubmitted() {
-  employeeArchiveDrawer.value.visible = false;
-  employmentRecordDrawerArchive.value = null;
-  employmentRecordDrawerMode.value = 'default';
+  if (employmentRecordDrawerMode.value !== 'resignation') {
+    employeeArchiveDrawer.value.visible = false;
+    employmentRecordDrawerArchive.value = null;
+    employmentRecordDrawerMode.value = 'default';
+  }
   void loadUsers();
 }
 

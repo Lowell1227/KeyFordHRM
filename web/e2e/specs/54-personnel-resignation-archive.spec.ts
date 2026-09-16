@@ -46,6 +46,7 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
     employeeProfile: null,
     employeeContracts: [],
     dingtalkBinding: null,
+    latestResignationReview: null,
   };
   const archivedArchive = {
     ...archive,
@@ -139,7 +140,32 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   }));
   await page.route(`**/api/v1/employee-archives/${activeEmployee.id}/employments`, async (route) => {
     resignationBody = route.request().postDataJSON();
-    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ id: 'review-1' })) });
+    return route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({
+        id: '50000000-0000-4000-8000-000000000099',
+        userId: activeEmployee.id,
+        employeeNo: activeEmployee.employeeNo,
+        employeeName: activeEmployee.name,
+        sourceType: 'manual_employment_change',
+        profileReviewStatus: 'pending',
+        performanceReviewStatus: 'not_required',
+        validationErrors: [],
+        validationWarnings: [],
+        baseValue: {},
+        proposedValue: { employee: { changeType: 'resignation', leaveDate: '2026-09-16' } },
+        createdBy: { id: 'hr-1', name: 'HR管理员', sysRole: 'hr' },
+        profileReviewedBy: null,
+        performanceReviewedBy: null,
+        rejectedReason: null,
+        profileReviewedAt: null,
+        appliedAt: null,
+        createdAt: '2026-09-16T02:00:00.000Z',
+        updatedAt: '2026-09-16T02:00:00.000Z',
+        recordStatus: 'submitted',
+        archivedAt: null,
+      })),
+    });
   });
 
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -172,6 +198,8 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   const activeRow = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '在职员工' });
   await activeRow.getByRole('button', { name: '办理离职' }).click();
   const resignationDrawer = page.getByRole('dialog', { name: '办理离职' });
+  await expect(resignationDrawer.getByRole('heading', { name: '审批流程' })).toBeVisible();
+  await expect(resignationDrawer.getByText('待提交', { exact: true })).toBeVisible();
   await expect(resignationDrawer.getByText('不会自动归档')).toBeVisible();
   await expect(resignationDrawer.getByText('与 1 条已有任职记录时间重叠，仅作提醒，不影响提交和审核')).toBeVisible();
   await resignationDrawer.locator('.el-form-item').filter({ hasText: '离职原因' }).locator('textarea').fill('个人原因');
@@ -179,6 +207,12 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   await expect.poll(() => resignationBody).toMatchObject({
     changeType: 'resignation', employeeStatus: 'resigned', reason: '个人原因',
   });
+  await expect(resignationDrawer).toBeVisible();
+  await expect(resignationDrawer.getByText('待 HR 审核', { exact: true })).toBeVisible();
+  await expect(resignationDrawer.getByText('HR管理员 · 2026/09/16 10:00', { exact: true })).toBeVisible();
+  await expect(resignationDrawer.getByRole('button', { name: '关闭', exact: true })).toBeVisible();
+  await expect(resignationDrawer.getByRole('button', { name: '提交审核' })).toHaveCount(0);
+  await resignationDrawer.getByRole('button', { name: '关闭', exact: true }).click();
 
   await categoryTabs.getByRole('tab', { name: '已离职' }).click();
   await expect.poll(() => userQueryUrls.some((url) => new URL(url).searchParams.get('status') === 'resigned')).toBeTruthy();

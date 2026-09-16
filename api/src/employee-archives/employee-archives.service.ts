@@ -450,6 +450,20 @@ export class EmployeeArchivesService {
     if (!archive) {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '员工不存在' });
     }
+    const latestResignationReview = await this.prisma.employeeDataChangeRequest.findFirst({
+      where: {
+        userId,
+        sourceType: 'manual_employment_change',
+        recordStatus: 'submitted',
+        archivedAt: null,
+        proposedValue: { path: ['employee', 'changeType'], equals: 'resignation' },
+      },
+      include: {
+        createdBy: { select: { id: true, name: true, sysRole: true } },
+        profileReviewedBy: { select: { id: true, name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
     const [dingtalkBinding] = archive.externalIdentityBindings;
     const now = new Date();
     const employmentSelection = selectEmploymentAt(archive.employmentHistory, now);
@@ -470,6 +484,7 @@ export class EmployeeArchivesService {
       directManager: undefined,
       dingtalkBindingState: !dingtalkBinding ? 'unbound' : dingtalkBinding.status,
       dingtalkBinding: dingtalkBinding ?? null,
+      latestResignationReview,
       externalIdentityBindings: undefined,
     };
   }
@@ -869,6 +884,10 @@ export class EmployeeArchivesService {
         validationErrors: this.toJson([]),
         validationWarnings: this.toJson(warnings),
         createdById: operator.id,
+      },
+      include: {
+        createdBy: { select: { id: true, name: true, sysRole: true } },
+        profileReviewedBy: { select: { id: true, name: true } },
       },
     });
   }
