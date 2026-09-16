@@ -27,7 +27,6 @@ import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
-import SplitListLayout from '@/components/common/business-list/SplitListLayout.vue';
 import EmployeeArchiveInlineEditor from './components/EmployeeArchiveInlineEditor.vue';
 import DepartmentEditDrawer from './components/DepartmentEditDrawer.vue';
 import DepartmentCreateDrawer from './components/DepartmentCreateDrawer.vue';
@@ -244,11 +243,6 @@ const userQuery = ref<UserQuery>({
   deptId: undefined,
   sysRole: undefined,
   status: undefined,
-});
-const rosterScopeOpen = ref(false);
-const selectedRosterScopeLabel = computed(() => {
-  const department = flattenedDepartments.value.find((item) => item.id === userQuery.value.deptId);
-  return department?.fullPath || department?.name || '全部部门';
 });
 const userPage = computed({
   get: () => userQuery.value.page ?? 1,
@@ -512,12 +506,6 @@ function resetUserFilters() {
     sysRole: undefined,
   };
   loadUsers();
-}
-
-function selectRosterScope(deptId?: string) {
-  userQuery.value.deptId = deptId;
-  rosterScopeOpen.value = false;
-  onUserQueryChange();
 }
 
 function getFinalApproverRule(dept: Department | null): string {
@@ -1474,7 +1462,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <BusinessListPage variant="split-master" :loading="deptLoading || userLoading" class="user-manage-view">
+  <BusinessListPage :variant="activeView === 'org' ? 'split-master' : 'record'" :loading="deptLoading || userLoading" class="user-manage-view">
     <template #workspace>
     <ChartCard>
       <template #title>
@@ -1690,37 +1678,32 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else-if="activeView === 'users'" class="directory-view">
-        <SplitListLayout
-          v-model:scope-open="rosterScopeOpen"
-          scope-title="选择部门范围"
-          :selected-scope-label="selectedRosterScopeLabel"
-        >
-          <template #scope>
-            <div class="roster-scope-panel">
-              <div class="panel-head">
-                <strong>部门范围</strong>
-                <span>{{ flattenedDepartments.length }} 个部门</span>
-              </div>
-              <button
-                type="button"
-                class="roster-scope-all"
-                :class="{ active: !userQuery.deptId }"
-                @click="selectRosterScope()"
-              >
-                全部部门
-              </button>
-              <el-tree
-                v-loading="deptLoading"
-                :data="departments"
-                node-key="id"
-                :props="{ label: 'name', children: 'children' }"
-                default-expand-all
-                highlight-current
-                :current-node-key="userQuery.deptId"
-                @node-click="(data: Department) => selectRosterScope(data.id)"
+        <QueryFilterPanel v-if="!isDraftCategory" class="roster-filter-panel">
+          <div class="light-filter">
+            <el-input
+              v-model="userQuery.keyword"
+              :prefix-icon="Search"
+              placeholder="搜索姓名或工号"
+              clearable
+              class="filter-keyword"
+              @keyup.enter="onUserQueryChange"
+            />
+            <el-select v-model="userQuery.deptId" aria-label="部门" placeholder="全部部门" clearable filterable>
+              <el-option
+                v-for="dept in flattenedDepartments"
+                :key="dept.id"
+                :label="dept.fullPath || dept.name"
+                :value="dept.id"
               />
-            </div>
-          </template>
+            </el-select>
+            <el-select v-model="userQuery.sysRole" placeholder="全部系统权限" clearable>
+              <el-option v-for="opt in sysRoleOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
+            </el-select>
+            <el-button type="primary" @click="onUserQueryChange">查询</el-button>
+            <el-button @click="resetUserFilters">重置</el-button>
+          </div>
+        </QueryFilterPanel>
+
         <nav class="employee-category-tabs" role="tablist" aria-label="员工档案分类">
           <button
             v-for="item in employeeCategoryOptions"
@@ -1736,24 +1719,6 @@ onBeforeUnmount(() => {
         </nav>
 
         <template v-if="!isDraftCategory">
-          <QueryFilterPanel class="roster-filter-panel">
-            <div class="light-filter">
-              <el-input
-                v-model="userQuery.keyword"
-                :prefix-icon="Search"
-                placeholder="搜索姓名或工号"
-                clearable
-                class="filter-keyword"
-                @keyup.enter="onUserQueryChange"
-              />
-              <el-select v-model="userQuery.sysRole" placeholder="全部系统权限" clearable>
-                <el-option v-for="opt in sysRoleOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
-              </el-select>
-              <el-button type="primary" @click="onUserQueryChange">查询</el-button>
-              <el-button @click="resetUserFilters">重置</el-button>
-            </div>
-          </QueryFilterPanel>
-
           <div class="directory-table-region desktop-result-table">
             <el-table
               v-loading="userLoading"
@@ -1927,7 +1892,6 @@ onBeforeUnmount(() => {
             @change="loadDrafts"
           />
         </div>
-        </SplitListLayout>
       </section>
 
     </ChartCard>
@@ -3218,7 +3182,7 @@ onBeforeUnmount(() => {
 
 .light-filter {
   display: grid;
-  grid-template-columns: minmax(260px, 1.5fr) minmax(160px, 1fr) auto auto;
+  grid-template-columns: minmax(260px, 1.5fr) minmax(180px, 1fr) minmax(160px, 1fr) auto auto;
   gap: 12px;
   align-items: center;
   padding: 0;
@@ -3234,37 +3198,6 @@ onBeforeUnmount(() => {
   min-height: 0;
   flex-direction: column;
   overflow: hidden;
-}
-
-.directory-view :deep(.split-list-layout) {
-  flex: 1;
-}
-
-.directory-view :deep(.split-list-layout__content) {
-  overflow: hidden;
-}
-
-.roster-scope-panel {
-  min-width: 0;
-}
-
-.roster-scope-all {
-  width: 100%;
-  margin-bottom: 6px;
-  padding: 9px 12px;
-  border: 0;
-  border-radius: 6px;
-  background: transparent;
-  color: var(--el-text-color-regular);
-  font: inherit;
-  text-align: left;
-  cursor: pointer;
-}
-
-.roster-scope-all:hover,
-.roster-scope-all.active {
-  background: var(--el-color-primary-light-9);
-  color: var(--el-color-primary);
 }
 
 .employee-category-tabs {
@@ -3829,10 +3762,6 @@ onBeforeUnmount(() => {
 
   .directory-view {
     display: block;
-    overflow: visible;
-  }
-
-  .directory-view :deep(.split-list-layout__content) {
     overflow: visible;
   }
 

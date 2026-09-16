@@ -637,7 +637,7 @@ test('edits the whole employee archive in place and supports contract row change
   expect(await editorSection('个人与教育').locator('.el-form-item__label').allTextContents()).toEqual(personalLabels);
   expect(await editorSection('联系与保障').locator('.el-form-item__label').allTextContents()).toEqual(contactLabels);
   await expect(drawer.getByRole('textbox', { name: '姓名' })).toHaveValue('余焱玲');
-  await drawer.getByRole('button', { name: '保存并提交审核' }).click();
+  await drawer.getByRole('button', { name: '提交审核', exact: true }).click();
   await expect(page.getByText('未检测到变更，无需提交审核')).toBeVisible();
   expect(submittedDraft).toBeNull();
   const firstContract = drawer.locator('.contract-card').first();
@@ -654,7 +654,7 @@ test('edits the whole employee archive in place and supports contract row change
   await drawer.getByRole('button', { name: '新增合同' }).click();
   await expect(drawer.locator('.contract-card')).toHaveCount(2);
   await drawer.locator('.contract-card').nth(1).getByRole('button', { name: '移除' }).click();
-  await drawer.getByRole('button', { name: '保存并提交审核' }).click();
+  await drawer.getByRole('button', { name: '提交审核', exact: true }).click();
   await expect.poll(() => submittedDraft).toMatchObject({
     employee: { name: '余焱玲' },
     contracts: [{

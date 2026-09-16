@@ -142,8 +142,24 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
     return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ id: 'review-1' })) });
   });
 
+  await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/users');
+  await expect(page.getByTestId('business-list-page')).toHaveAttribute('data-list-variant', 'record');
   const categoryTabs = page.getByRole('tablist', { name: '员工档案分类' });
+  const filterPanel = page.locator('.roster-filter-panel');
+  await expect(page.locator('.roster-scope-panel')).toHaveCount(0);
+  await expect(filterPanel.getByRole('combobox', { name: '部门' })).toBeVisible();
+  await expect.poll(async () => {
+    const filterBox = await filterPanel.boundingBox();
+    const categoryBox = await categoryTabs.boundingBox();
+    return Boolean(filterBox && categoryBox && filterBox.y < categoryBox.y);
+  }).toBeTruthy();
+  await filterPanel.getByRole('combobox', { name: '部门' }).click();
+  await page.getByRole('option', { name: '人事行政部 / 人事部' }).click();
+  await filterPanel.getByRole('button', { name: '查询' }).click();
+  await expect.poll(() => userQueryUrls.some((url) => (
+    new URL(url).searchParams.get('deptId') === activeEmployee.deptId
+  ))).toBeTruthy();
   await expect(categoryTabs.getByRole('tab')).toHaveText(['全部', '在职', '试用期', '已离职', '草稿', '已归档']);
   await expect(categoryTabs.getByRole('tab', { name: '全部' })).toHaveAttribute('aria-selected', 'true');
   await expect.poll(() => userQueryUrls.some((url) => new URL(url).searchParams.get('includeResigned') === 'true')).toBeTruthy();
@@ -204,4 +220,16 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   const createDrawer = page.getByRole('dialog', { name: '新增员工' });
   await expect(createDrawer.getByRole('button', { name: '保存草稿' })).toBeVisible();
   await expect(createDrawer.getByRole('button', { name: '提交审核' })).toBeVisible();
+  await createDrawer.getByLabel('关闭此对话框').click();
+
+  await categoryTabs.getByRole('tab', { name: '全部' }).click();
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await expect(page.locator('.desktop-result-table')).toBeVisible();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await expect(page.locator('.roster-mobile-list')).toBeVisible();
+  await expect(page.getByRole('button', { name: '选择范围' })).toHaveCount(0);
+  await expect.poll(() => page.evaluate(() => ({
+    documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    bodyOverflow: document.body.scrollWidth - document.body.clientWidth,
+  }))).toEqual({ documentOverflow: 0, bodyOverflow: 0 });
 });

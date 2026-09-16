@@ -97,20 +97,16 @@ test.describe('HR business list templates', () => {
 test.describe('administrator business list templates', () => {
   test.use({ storageState: 'e2e/auth-state/admin.json' });
 
-  test('employee roster uses the split master-data template', async ({ page }) => {
+  test('employee roster uses one record list without a duplicate organization scope', async ({ page }) => {
     await page.goto('/users');
 
     const listPage = page.getByTestId('business-list-page');
-    const splitLayout = page.getByTestId('split-list-layout');
-    await expect(listPage).toHaveAttribute('data-list-variant', 'split-master');
-    await expect(splitLayout).toBeVisible();
-    await expect(splitLayout.locator('.split-list-layout__scope')).toBeVisible();
+    await expect(listPage).toHaveAttribute('data-list-variant', 'record');
+    await expect(page.getByTestId('split-list-layout')).toHaveCount(0);
+    await expect(page.getByRole('combobox', { name: '部门' })).toBeVisible();
 
     await page.setViewportSize({ width: 390, height: 844 });
-    await expect(splitLayout.locator('.split-list-layout__scope')).toBeHidden();
-    await page.getByRole('button', { name: '选择范围' }).click();
-    await expect(page.getByRole('dialog', { name: '选择部门范围' })).toBeVisible();
-    await expect(page.getByRole('dialog', { name: '选择部门范围' }).getByText('全部部门')).toBeVisible();
+    await expect(page.getByRole('button', { name: '选择范围' })).toHaveCount(0);
     await expect.poll(() => page.evaluate(() => ({
       documentOverflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
       bodyOverflow: document.body.scrollWidth - document.body.clientWidth,
