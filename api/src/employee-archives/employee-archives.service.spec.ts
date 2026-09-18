@@ -1,4 +1,5 @@
 import { CompanyCode, EmploymentType, SysRole, UserStatus } from '@prisma/client';
+import { ConflictException } from '@nestjs/common';
 import { EmployeeArchivesService } from './employee-archives.service';
 
 describe('EmployeeArchivesService', () => {
@@ -822,6 +823,7 @@ describe('EmployeeArchivesService', () => {
   it('手工新增员工只创建待审核申请，审核前不创建正式账号', async () => {
     const userCreate = jest.fn();
     const tx = {
+      $executeRaw: jest.fn(),
       user: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: userCreate,
@@ -904,9 +906,10 @@ describe('EmployeeArchivesService', () => {
       proposedValue: data.proposedValue,
     }));
     const tx = {
+      $executeRaw: jest.fn(),
       department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept-1', isActive: true }) },
       position: { findUnique: jest.fn().mockResolvedValue({ id: 'position-1', name: 'HRBP', jobFamily: '人力资源', isActive: true }) },
-      employeeDataChangeRequest: { create: requestCreate, update: requestUpdate },
+      employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: requestCreate, update: requestUpdate },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     const numberService = { reserveNext: jest.fn().mockResolvedValue('903') };
@@ -1086,6 +1089,7 @@ describe('EmployeeArchivesService', () => {
     const update = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'draft-create-1', ...data }));
     const findFirst = jest.fn().mockResolvedValue({
       id: 'draft-create-1',
+      requestVersion: 3,
       proposedValue: {
         employee: { name: '草稿员工' },
         profile: {
@@ -1114,11 +1118,18 @@ describe('EmployeeArchivesService', () => {
     } as any, hrOperator);
 
     expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      select: expect.objectContaining({ id: true, proposedValue: true }),
+      select: expect.objectContaining({ id: true, proposedValue: true, requestVersion: true }),
     }));
     expect(update).toHaveBeenCalledWith({
-      where: { id: 'draft-create-1' },
+      where: {
+        id: 'draft-create-1',
+        sourceType: 'manual_employee_create',
+        recordStatus: 'draft',
+        archivedAt: null,
+        requestVersion: 3,
+      },
       data: expect.objectContaining({
+        requestVersion: { increment: 1 },
         proposedValue: expect.objectContaining({
           profile: expect.objectContaining({
             education: '本科',
@@ -1133,21 +1144,25 @@ describe('EmployeeArchivesService', () => {
   });
 
   it('由草稿提交新增员工时空白敏感字段仍保留已加密内容', async () => {
-    const findFirst = jest.fn().mockResolvedValue({
-      id: 'draft-create-1',
-      proposedValue: {
-        profile: {
-          idNumberEncrypted: 'encrypted-id-number',
-          idNumberFingerprint: 'id-number-fingerprint',
-          bankAccountEncrypted: 'encrypted-bank-account',
-          bankAccountFingerprint: 'bank-account-fingerprint',
+    const findFirst = jest.fn()
+      .mockResolvedValueOnce({
+        id: 'draft-create-1',
+        requestVersion: 4,
+        proposedValue: {
+          profile: {
+            idNumberEncrypted: 'encrypted-id-number',
+            idNumberFingerprint: 'id-number-fingerprint',
+            bankAccountEncrypted: 'encrypted-bank-account',
+            bankAccountFingerprint: 'bank-account-fingerprint',
+          },
         },
-      },
-    });
+      })
+      .mockResolvedValueOnce(null);
     const update = jest.fn()
       .mockImplementationOnce(({ data }) => Promise.resolve({ id: 'draft-create-1', ...data }))
       .mockImplementationOnce(({ data }) => Promise.resolve({ id: 'draft-create-1', employeeNo: '903', ...data }));
     const tx = {
+      $executeRaw: jest.fn(),
       department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept-1', isActive: true }) },
       position: { findUnique: jest.fn().mockResolvedValue(null) },
       employeeDataChangeRequest: { findFirst, update },
@@ -1174,11 +1189,18 @@ describe('EmployeeArchivesService', () => {
     } as any, hrOperator);
 
     expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({
-      select: expect.objectContaining({ id: true, proposedValue: true }),
+      select: expect.objectContaining({ id: true, proposedValue: true, requestVersion: true }),
     }));
     expect(update).toHaveBeenNthCalledWith(1, {
-      where: { id: 'draft-create-1' },
+      where: {
+        id: 'draft-create-1',
+        sourceType: 'manual_employee_create',
+        recordStatus: 'draft',
+        archivedAt: null,
+        requestVersion: 4,
+      },
       data: expect.objectContaining({
+        requestVersion: { increment: 1 },
         proposedValue: expect.objectContaining({
           profile: expect.objectContaining({
             education: '本科',
@@ -1188,6 +1210,165 @@ describe('EmployeeArchivesService', () => {
         }),
       }),
     });
+  });
+
+  it('由草稿提交时使用已保存身份证指纹再次查重', async () => {
+    const fingerprint = 'a'.repeat(64);
+    const findFirst = jest.fn().mockResolvedValue({
+      id: 'draft-create-1',
+      requestVersion: 2,
+      proposedValue: {
+        employee: { name: '草稿员工' },
+        profile: { idNumberEncrypted: 'encrypted-id', idNumberFingerprint: fingerprint },
+      },
+    });
+    const update = jest.fn();
+    const tx = {
+      $executeRaw: jest.fn(),
+      department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept-1', isActive: true }) },
+      position: { findUnique: jest.fn().mockResolvedValue(null) },
+      employeeDataChangeRequest: { findFirst, update },
+      auditLog: { create: jest.fn() },
+    };
+    const identityMatcher = {
+      lookupStoredIdentity: jest.fn().mockResolvedValue({ outcome: 'identity_match', candidates: [{ id: 'existing' }] }),
+    };
+    const service = new EmployeeArchivesService({
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any, undefined, { reserveNext: jest.fn() } as any, identityMatcher as any);
+
+    await expect(service.createEmployee({
+      draftId: 'draft-create-1',
+      name: '草稿员工',
+      company: CompanyCode.fuede,
+      deptId: 'dept-1',
+      entryDate: new Date('2026-09-18T00:00:00.000Z'),
+      effectiveFrom: new Date('2026-09-18T00:00:00.000Z'),
+      employmentType: EmploymentType.full_time,
+      employeeStatus: UserStatus.probation,
+      employee: {}, profile: {}, contracts: [], performance: {},
+    } as any, hrOperator)).rejects.toBeInstanceOf(ConflictException);
+
+    expect(identityMatcher.lookupStoredIdentity).toHaveBeenCalledWith({
+      phone: undefined,
+      idNumberFingerprint: fingerprint,
+    });
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('拒绝与待审核新增员工申请相同的身份证号', async () => {
+    const pendingFingerprint = 'b'.repeat(64);
+    const findFirst = jest.fn().mockResolvedValue({
+      proposedValue: { profile: { idNumberFingerprint: pendingFingerprint } },
+    });
+    const tx = {
+      $executeRaw: jest.fn(),
+      department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept-1', isActive: true }) },
+      position: { findUnique: jest.fn().mockResolvedValue(null) },
+      employeeDataChangeRequest: { findFirst, create: jest.fn(), update: jest.fn() },
+      auditLog: { create: jest.fn() },
+    };
+    const identityMatcher = {
+      lookupStoredIdentity: jest.fn().mockResolvedValue({ outcome: 'none', candidates: [] }),
+    };
+    const config = { get: jest.fn().mockReturnValue('test-employee-archive-secret') };
+    const service = new EmployeeArchivesService({
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any, config as any, { reserveNext: jest.fn() } as any, identityMatcher as any);
+    jest.spyOn(service as any, 'encryptAndFingerprint').mockReturnValue({
+      encrypted: Buffer.from('encrypted-id'), fingerprint: pendingFingerprint,
+    });
+
+    await expect(service.createEmployee({
+      name: '重复待审员工', idNumber: '330100199001011234', company: CompanyCode.fuede,
+      deptId: 'dept-1', entryDate: new Date('2026-09-18T00:00:00.000Z'),
+      effectiveFrom: new Date('2026-09-18T00:00:00.000Z'),
+      employmentType: EmploymentType.full_time, employeeStatus: UserStatus.probation,
+      employee: {}, profile: {}, contracts: [], performance: {},
+    } as any, hrOperator)).rejects.toMatchObject({
+      response: expect.objectContaining({ message: '相同身份证号已有待审核的新增员工申请，请先处理该申请' }),
+    });
+
+    expect(tx.$executeRaw).toHaveBeenCalled();
+    expect(findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ sourceType: 'manual_employee_create', recordStatus: 'submitted' }),
+    }));
+    expect(tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
+  });
+
+  it('草稿版本已变化时拒绝晚到的自动保存', async () => {
+    const update = jest.fn().mockRejectedValue({ code: 'P2025' });
+    const tx = {
+      employeeDataChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'draft-create-1', requestVersion: 5, proposedValue: { employee: {}, profile: {} },
+        }),
+        update,
+      },
+      auditLog: { create: jest.fn() },
+    };
+    const service = new EmployeeArchivesService({
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any);
+
+    await expect(service.saveEmployeeCreateDraft({
+      draftId: 'draft-create-1', name: '草稿员工', saveMode: 'auto',
+    } as any, hrOperator)).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('新增员工仅保留向导允许的档案字段', async () => {
+    const create = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'request-allowlist', ...data }));
+    const update = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'request-allowlist', ...data }));
+    const tx = {
+      department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept-1', isActive: true }) },
+      position: { findUnique: jest.fn().mockResolvedValue(null) },
+      employeeDataChangeRequest: { create, update },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const service = new EmployeeArchivesService({
+      $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
+    } as any, undefined, { reserveNext: jest.fn().mockResolvedValue('904') } as any);
+
+    await service.createEmployee({
+      name: '白名单员工', company: CompanyCode.fuede, deptId: 'dept-1',
+      entryDate: new Date('2026-09-18T00:00:00.000Z'), effectiveFrom: new Date('2026-09-18T00:00:00.000Z'),
+      employmentType: EmploymentType.full_time, employeeStatus: UserStatus.probation,
+      employee: { jobGrade: 'P2', organizationEnsurePaths: [['不应创建的部门']], sysRole: 'admin' },
+      profile: { education: '本科', unexpectedSecret: 'drop-me' },
+      contracts: [{ contractType: 'contract', name: '劳动合同', organizationPath: ['drop-me'] }],
+      performance: { managerId: null, canApproveAnything: true },
+    } as any, hrOperator);
+
+    const proposedValue = (create.mock.calls[0][0].data.proposedValue ?? {}) as Record<string, any>;
+    expect(proposedValue.employee).toMatchObject({ jobGrade: 'P2' });
+    expect(proposedValue.employee).not.toHaveProperty('organizationEnsurePaths');
+    expect(proposedValue.employee).not.toHaveProperty('sysRole');
+    expect(proposedValue.profile).not.toHaveProperty('unexpectedSecret');
+    expect(proposedValue.contracts[0]).not.toHaveProperty('organizationPath');
+    expect(proposedValue.performance).toEqual({ managerId: null });
+  });
+
+  it('草稿响应只返回敏感字段已配置标记', async () => {
+    const create = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'draft-create-1', ...data }));
+    const service = new EmployeeArchivesService({
+      $transaction: jest.fn(async (callback: (client: any) => unknown) => callback({
+        employeeDataChangeRequest: { create }, auditLog: { create: jest.fn() },
+      })),
+    } as any, { get: jest.fn().mockReturnValue('test-secret') } as any);
+
+    const result = await service.saveEmployeeCreateDraft({
+      name: '安全草稿', idNumber: '330100199001011234',
+      profile: { bankAccount: '6222000000000000' }, saveMode: 'auto',
+    } as any, hrOperator) as any;
+
+    expect(result.proposedValue.profile).toMatchObject({
+      idNumberConfigured: true,
+      bankAccountConfigured: true,
+    });
+    expect(JSON.stringify(result)).not.toContain('idNumberEncrypted');
+    expect(JSON.stringify(result)).not.toContain('idNumberFingerprint');
+    expect(JSON.stringify(result)).not.toContain('bankAccountEncrypted');
+    expect(JSON.stringify(result)).not.toContain('bankAccountFingerprint');
   });
 
   it('保存员工档案草稿时不进入审核队列', async () => {

@@ -15,9 +15,14 @@ const department = {
   children: [],
 };
 
-async function setupPersonnelPage(page: Page) {
+async function setupPersonnelPage(page: Page, options: {
+  initialDraft?: Record<string, any> | null;
+  draftDelayMs?: number;
+} = {}) {
   const draftBodies: Array<Record<string, any>> = [];
-  let currentDraft: Record<string, any> | null = null;
+  const createBodies: Array<Record<string, any>> = [];
+  const events: string[] = [];
+  let currentDraft: Record<string, any> | null = options.initialDraft ?? null;
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-hr-token');
     localStorage.setItem('expiresAt', String(Date.now() + 600_000));
@@ -58,6 +63,8 @@ async function setupPersonnelPage(page: Page) {
   await page.route('**/api/v1/employee-archives/drafts', async (route) => {
     const body = route.request().postDataJSON() as Record<string, any>;
     draftBodies.push(body);
+    events.push('draft-start');
+    if (options.draftDelayMs) await new Promise((resolve) => setTimeout(resolve, options.draftDelayMs));
     currentDraft = {
       id: 'draft-create-1', userId: null, employeeNo: null, employeeName: body.name,
       sourceType: 'manual_employee_create', profileReviewStatus: 'pending',
@@ -70,12 +77,22 @@ async function setupPersonnelPage(page: Page) {
       },
       createdAt: '2026-09-18T08:00:00.000Z', updatedAt: '2026-09-18T08:00:00.000Z',
     };
+    events.push('draft-finished');
     await route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(currentDraft)) });
+  });
+  await page.route('**/api/v1/employee-archives', async (route) => {
+    const body = route.request().postDataJSON() as Record<string, any>;
+    createBodies.push(body);
+    events.push('create');
+    await route.fulfill({
+      contentType: 'application/json',
+      body: JSON.stringify(apiResponse({ id: 'submitted-1', ...body, recordStatus: 'submitted' })),
+    });
   });
   await page.route('**/api/v1/employee-archives/diagnostics', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse({ blocking: false, total: 0, items: [] })),
   }));
-  return { draftBodies, getDraft: () => currentDraft };
+  return { draftBodies, createBodies, events, getDraft: () => currentDraft };
 }
 
 test('新增员工采用完整七步向导且最后一步才提交审核', async ({ page }) => {
@@ -125,4 +142,54 @@ test('输入姓名后静默自动保存并从上次步骤继续填写', async ({
   await resumed.getByLabel('入职日期').press('Enter');
   await expect(resumed.getByLabel('本次记录生效日期')).toHaveValue('2026-09-18');
   await expect(resumed.getByLabel('预计转正日期')).toHaveValue('2026-12-18');
+});
+
+test('提交审核会等待正在进行的自动保存完成', async ({ page }) => {
+  const initialDraft = {
+    id: 'draft-create-1', userId: null, employeeNo: null, employeeName: '待提交员工',
+    sourceType: 'manual_employee_create', profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
+    validationErrors: [], validationWarnings: [], baseValue: {}, recordStatus: 'draft',
+    proposedValue: {
+      employee: {
+        name: '待提交员工', phone: null, company: 'fuede', deptId: department.id,
+        entryDate: '2026-09-18', effectiveFrom: '2026-09-18', employmentType: 'full_time',
+        employeeStatus: 'probation', probationMonths: 3, plannedRegularDate: '2026-12-18',
+      },
+      profile: {}, contracts: [], performance: { managerId: null },
+      draftMeta: { currentStep: 6, completedSteps: [0, 1, 2, 3, 4, 5] },
+    },
+    createdAt: '2026-09-18T08:00:00.000Z', updatedAt: '2026-09-18T08:00:00.000Z',
+  };
+  const state = await setupPersonnelPage(page, { initialDraft, draftDelayMs: 900 });
+  await page.goto('/users');
+  await page.getByText('草稿', { exact: true }).click();
+  await page.getByRole('button', { name: '继续编辑' }).click();
+
+  const drawer = page.getByRole('dialog', { name: '新增员工' });
+  await drawer.getByLabel('姓名').evaluate((input: HTMLInputElement) => {
+    input.value = '待提交员工（更新）';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+  await expect.poll(() => state.events).toContain('draft-start');
+  await drawer.getByRole('button', { name: '提交审核' }).click();
+  await expect.poll(() => state.createBodies.length).toBe(1);
+
+  expect(state.events.indexOf('draft-finished')).toBeLessThan(state.events.indexOf('create'));
+  expect(state.createBodies[0]).toMatchObject({ draftId: 'draft-create-1', name: '待提交员工（更新）' });
+});
+
+test('390px 手机宽度下向导保持单列且可继续填写', async ({ page }) => {
+  await setupPersonnelPage(page);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.goto('/users');
+  await page.getByRole('button', { name: '新增员工' }).click();
+
+  const drawer = page.getByRole('dialog', { name: '新增员工' });
+  await expect(drawer.locator('.mobile-step')).toHaveText('1/7 身份核验');
+  await expect(drawer.locator('.desktop-steps')).toBeHidden();
+  await drawer.getByLabel('姓名').fill('手机端员工');
+  await drawer.getByRole('button', { name: '下一步' }).click();
+  await expect(drawer.locator('.mobile-step')).toHaveText('2/7 任职信息');
+  await expect(drawer.getByLabel('所属公司')).toBeVisible();
+  expect(await drawer.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
 });

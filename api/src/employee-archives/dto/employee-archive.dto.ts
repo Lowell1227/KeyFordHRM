@@ -2,6 +2,7 @@ import { Type } from 'class-transformer';
 import {
   IsBoolean,
   IsDate,
+  IsDateString,
   IsEnum,
   IsInt,
   IsIn,
@@ -10,15 +11,102 @@ import {
   ArrayMaxSize,
   ArrayMinSize,
   IsObject,
+  IsNumber,
   IsOptional,
   IsString,
   IsUUID,
   Max,
   MaxLength,
   Min,
+  ValidateNested,
 } from 'class-validator';
 import { CompanyCode, EmploymentType, UserStatus } from '@prisma/client';
 import { PartialType } from '@nestjs/mapped-types';
+
+class EmployeeCreateDetailsDto {
+  @IsOptional() @IsString() @MaxLength(100) position?: string | null;
+  @IsOptional() @IsString() @MaxLength(50) jobGrade?: string | null;
+  @IsOptional() @IsString() @MaxLength(100) jobFamily?: string | null;
+  @IsOptional() @IsString() @MaxLength(100) workLocation?: string | null;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(12) probationMonths?: number | null;
+  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) plannedRegularDate?: string | null;
+  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) actualRegularDate?: string | null;
+  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) leaveDate?: string | null;
+}
+
+class EmployeeCreateProfileDto {
+  @IsOptional() @IsString() @MaxLength(20) phone?: string | null;
+  @IsOptional() @IsString() @MaxLength(30) gender?: string | null;
+  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) birthDate?: string | null;
+  @IsOptional() @IsString() @MaxLength(50) ethnicity?: string | null;
+  @IsOptional() @IsString() @MaxLength(50) education?: string | null;
+  @IsOptional() @IsString() @MaxLength(100) professionalTitle?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) school?: string | null;
+  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) graduationDate?: string | null;
+  @IsOptional() @IsString() @MaxLength(100) major?: string | null;
+  @IsOptional() @IsString() @MaxLength(30) maritalStatus?: string | null;
+  @IsOptional() @IsString() @MaxLength(50) childrenStatus?: string | null;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(20) childrenCount?: number | null;
+  @IsOptional() @IsString() @MaxLength(50) politicalStatus?: string | null;
+  @IsOptional() @IsString() @MaxLength(100) nativePlace?: string | null;
+  @IsOptional() @IsString() @MaxLength(50) householdType?: string | null;
+  @IsOptional() @IsString() @MaxLength(500) idAddress?: string | null;
+  @IsOptional() @IsString() @MaxLength(30) idNumber?: string | null;
+  @IsOptional() @IsString() @MaxLength(500) currentAddress?: string | null;
+  @IsOptional() @IsString() @MaxLength(100) emergencyContactName?: string | null;
+  @IsOptional() @IsString() @MaxLength(50) emergencyContactRelation?: string | null;
+  @IsOptional() @IsString() @MaxLength(30) emergencyContactPhone?: string | null;
+  @IsOptional() @IsString() @MaxLength(50) socialSecurityStatus?: string | null;
+  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) socialSecurityStartDate?: string | null;
+  @IsOptional() @IsString() @MaxLength(50) housingFundStatus?: string | null;
+  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) housingFundStartDate?: string | null;
+  @IsOptional() @IsString() @MaxLength(100) bankName?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) bankBranch?: string | null;
+  @IsOptional() @IsString() @MaxLength(50) bankAccount?: string | null;
+}
+
+class EmployeeContractMaterialDto {
+  @IsString() @IsNotEmpty() @MaxLength(255) name!: string;
+  @IsString() @IsNotEmpty() @MaxLength(2048) url!: string;
+  @Type(() => Number) @IsNumber() @Min(0) size!: number;
+  @IsString() @IsNotEmpty() @MaxLength(150) mimeType!: string;
+}
+
+class EmployeeCreateContractDto {
+  @IsOptional() @IsString() @MaxLength(50) contractType?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) name?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) signingCompany?: string | null;
+  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) signedAt?: string | null;
+  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) effectiveFrom?: string | null;
+  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) expiresAt?: string | null;
+  @IsOptional() @IsString() @MaxLength(100) termType?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) originalCompany?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) newCompany?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) confidentialityAgreement?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) nonCompeteAgreement?: string | null;
+  @IsOptional() @IsString() @MaxLength(200) portraitAgreement?: string | null;
+  @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(100) sequence?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(5)
+  @ValidateNested({ each: true })
+  @Type(() => EmployeeContractMaterialDto)
+  images?: EmployeeContractMaterialDto[];
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(10)
+  @ValidateNested({ each: true })
+  @Type(() => EmployeeContractMaterialDto)
+  attachments?: EmployeeContractMaterialDto[];
+}
+
+class EmployeeCreatePerformanceDto {
+  @IsOptional()
+  @IsUUID('4')
+  managerId?: string | null;
+}
 
 export class CreateEmployeeDto {
   @IsOptional()
@@ -82,21 +170,26 @@ export class CreateEmployeeDto {
   performanceManagerId?: string | null;
 
   @IsOptional()
-  @IsObject()
-  employee?: Record<string, unknown>;
+  @ValidateNested()
+  @Type(() => EmployeeCreateDetailsDto)
+  employee?: EmployeeCreateDetailsDto;
 
   @IsOptional()
-  @IsObject()
-  profile?: Record<string, unknown>;
+  @ValidateNested()
+  @Type(() => EmployeeCreateProfileDto)
+  profile?: EmployeeCreateProfileDto;
 
   @IsOptional()
   @IsArray()
   @ArrayMaxSize(20)
-  contracts?: Record<string, unknown>[];
+  @ValidateNested({ each: true })
+  @Type(() => EmployeeCreateContractDto)
+  contracts?: EmployeeCreateContractDto[];
 
   @IsOptional()
-  @IsObject()
-  performance?: Record<string, unknown>;
+  @ValidateNested()
+  @Type(() => EmployeeCreatePerformanceDto)
+  performance?: EmployeeCreatePerformanceDto;
 }
 
 export class UpdateEmployeeProfileDto {

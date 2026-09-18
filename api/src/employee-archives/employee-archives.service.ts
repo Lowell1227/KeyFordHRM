@@ -21,6 +21,7 @@ import type {
 import { employmentWarnings, selectEmploymentAt } from './employment-timeline';
 import { EmployeeIdentityMatchService } from './employee-identity-match.service';
 import { EmployeeNumberService } from './employee-number.service';
+import { employeeDataChangeView } from './employee-data-change-view';
 
 export interface UpsertEmployeeProfileInput {
   phone?: string | null;
@@ -81,18 +82,6 @@ export class EmployeeArchivesService {
   ) {}
 
   async createEmployee(input: CreateEmployeeDto, operator: AuthUser) {
-    if (this.identityMatcher && (input.phone?.trim() || input.idNumber?.trim())) {
-      const identity = await this.identityMatcher.lookup({
-        phone: input.phone?.trim() || undefined,
-        idNumber: input.idNumber?.trim() || undefined,
-      });
-      if (identity.outcome === 'identity_match' || identity.outcome === 'conflict') {
-        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '发现已存在员工，请进入原档案处理再入职或资料维护' });
-      }
-      if (identity.outcome === 'phone_candidates' && !input.phoneDuplicateAcknowledged) {
-        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '该手机号与已有员工相同，请确认不是同一人后再继续' });
-      }
-    }
     return this.prisma.$transaction(async (tx) => {
       const name = input.name.trim();
       const department = await tx.department.findUnique({
@@ -121,6 +110,7 @@ export class EmployeeArchivesService {
         name: position.name,
         jobFamily: position.jobFamily,
       } : null);
+      let draftVersion: number | null = null;
       if (input.draftId) {
         const draft = await tx.employeeDataChangeRequest.findFirst({
           where: {
@@ -129,13 +119,20 @@ export class EmployeeArchivesService {
             recordStatus: 'draft',
             archivedAt: null,
           },
-          select: { id: true, proposedValue: true },
+          select: { id: true, proposedValue: true, requestVersion: true },
         });
         if (!draft) {
           throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
         }
         proposedValue = this.preserveSensitiveProfile(proposedValue, draft.proposedValue);
+        draftVersion = draft.requestVersion;
       }
+      await this.assertEmployeeCreateIdentity(
+        tx,
+        proposedValue,
+        input.phoneDuplicateAcknowledged,
+        input.draftId,
+      );
       const performanceManagerId = this.nullableString(
         this.record(proposedValue.performance).managerId,
       );
@@ -162,9 +159,15 @@ export class EmployeeArchivesService {
           recordStatus: 'submitted',
           archivedAt: null,
       } satisfies Prisma.EmployeeDataChangeRequestUncheckedCreateInput;
-      const request = input.draftId
-        ? await tx.employeeDataChangeRequest.update({ where: { id: input.draftId }, data: requestData })
-        : await tx.employeeDataChangeRequest.create({ data: requestData });
+      let request;
+      if (input.draftId && draftVersion !== null) {
+        request = await this.updateEmployeeCreateDraft(tx, input.draftId, draftVersion, {
+          ...requestData,
+          requestVersion: { increment: 1 },
+        });
+      } else {
+        request = await tx.employeeDataChangeRequest.create({ data: requestData });
+      }
       if (!this.employeeNumbers) {
         throw new BadRequestException({ code: ERROR_CODE.INTERNAL, message: '员工工号服务未就绪' });
       }
@@ -187,7 +190,7 @@ export class EmployeeArchivesService {
           newValue: this.toJson({ employeeNo, name, effectiveFrom: input.effectiveFrom, warnings }),
         },
       });
-      return updated;
+      return employeeDataChangeView(updated);
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
@@ -200,6 +203,7 @@ export class EmployeeArchivesService {
       completedSteps: [...new Set(input.completedSteps ?? [])].sort((a, b) => a - b),
     };
     return this.prisma.$transaction(async (tx) => {
+      let draftVersion: number | null = null;
       if (input.draftId) {
         const draft = await tx.employeeDataChangeRequest.findFirst({
           where: {
@@ -208,12 +212,13 @@ export class EmployeeArchivesService {
             recordStatus: 'draft',
             archivedAt: null,
           },
-          select: { id: true, proposedValue: true },
+          select: { id: true, proposedValue: true, requestVersion: true },
         });
         if (!draft) {
           throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
         }
         proposed = this.preserveSensitiveProfile(proposed, draft.proposedValue);
+        draftVersion = draft.requestVersion;
       }
       const proposedValue = this.toJson(proposed);
       const performanceManagerId = this.nullableString(
@@ -235,9 +240,15 @@ export class EmployeeArchivesService {
         archivedAt: null,
         rejectedReason: null,
       } satisfies Prisma.EmployeeDataChangeRequestUncheckedCreateInput;
-      const request = input.draftId
-        ? await tx.employeeDataChangeRequest.update({ where: { id: input.draftId }, data })
-        : await tx.employeeDataChangeRequest.create({ data });
+      let request;
+      if (input.draftId && draftVersion !== null) {
+        request = await this.updateEmployeeCreateDraft(tx, input.draftId, draftVersion, {
+          ...data,
+          requestVersion: { increment: 1 },
+        });
+      } else {
+        request = await tx.employeeDataChangeRequest.create({ data });
+      }
       if (!input.draftId || input.saveMode !== 'auto') {
         await tx.auditLog.create({
           data: {
@@ -249,7 +260,7 @@ export class EmployeeArchivesService {
           },
         });
       }
-      return request;
+      return employeeDataChangeView(request);
     });
   }
 
@@ -257,28 +268,50 @@ export class EmployeeArchivesService {
     input: Partial<CreateEmployeeDto>,
     resolvedPosition: { id: string; name: string; jobFamily: string | null } | null,
   ): Record<string, unknown> {
-    const inputEmployee = this.record(input.employee);
+    const phone = input.phone?.trim()
+      .replace(/[\s-]/g, '')
+      .replace(/^\+86/, '') || null;
+    const inputEmployee = this.pickFields(this.record(input.employee), [
+      'position', 'jobGrade', 'jobFamily', 'workLocation', 'probationMonths',
+      'plannedRegularDate', 'actualRegularDate', 'leaveDate',
+    ]);
     const employee: Record<string, unknown> = {
-      ...inputEmployee,
       employeeNo: null,
-      name: input.name?.trim() || this.nullableString(inputEmployee.name),
-      phone: input.phone?.trim() || this.nullableString(inputEmployee.phone),
-      company: input.company ?? inputEmployee.company ?? null,
-      deptId: input.deptId ?? inputEmployee.deptId ?? null,
-      positionId: resolvedPosition?.id ?? input.positionId ?? inputEmployee.positionId ?? null,
+      name: input.name?.trim() || null,
+      phone,
+      company: input.company ?? null,
+      deptId: input.deptId ?? null,
+      positionId: resolvedPosition?.id ?? input.positionId ?? null,
       position: resolvedPosition?.name ?? inputEmployee.position ?? null,
       jobFamily: resolvedPosition?.jobFamily ?? inputEmployee.jobFamily ?? null,
-      managerId: input.rosterManagerId ?? inputEmployee.managerId ?? null,
-      entryDate: input.entryDate ?? inputEmployee.entryDate ?? null,
-      effectiveFrom: input.effectiveFrom ?? inputEmployee.effectiveFrom ?? null,
-      effectiveTo: input.effectiveTo ?? inputEmployee.effectiveTo ?? null,
-      employmentType: input.employmentType ?? inputEmployee.employmentType ?? null,
-      employeeStatus: input.employeeStatus ?? inputEmployee.employeeStatus ?? null,
+      jobGrade: inputEmployee.jobGrade ?? null,
+      workLocation: inputEmployee.workLocation ?? null,
+      probationMonths: inputEmployee.probationMonths ?? null,
+      plannedRegularDate: inputEmployee.plannedRegularDate ?? null,
+      actualRegularDate: inputEmployee.actualRegularDate ?? null,
+      leaveDate: inputEmployee.leaveDate ?? null,
+      managerId: input.rosterManagerId ?? null,
+      entryDate: input.entryDate ?? null,
+      effectiveFrom: input.effectiveFrom ?? null,
+      effectiveTo: input.effectiveTo ?? null,
+      employmentType: input.employmentType ?? null,
+      employeeStatus: input.employeeStatus ?? null,
       changeType: 'hire',
     };
+    const inputProfile = this.pickFields(this.record(input.profile), [
+      'phone', 'gender', 'birthDate', 'ethnicity', 'education', 'professionalTitle', 'school',
+      'graduationDate', 'major', 'maritalStatus', 'childrenStatus', 'childrenCount', 'politicalStatus',
+      'nativePlace', 'householdType', 'idAddress', 'idNumber', 'currentAddress',
+      'emergencyContactName', 'emergencyContactRelation', 'emergencyContactPhone',
+      'socialSecurityStatus', 'socialSecurityStartDate', 'housingFundStatus', 'housingFundStartDate',
+      'bankName', 'bankBranch', 'bankAccount',
+    ]);
+    const profilePhone = this.nullableString(inputProfile.phone)
+      ?.replace(/[\s-]/g, '')
+      .replace(/^\+86/, '') ?? null;
     const profile: Record<string, unknown> = {
-      ...this.record(input.profile),
-      phone: input.phone?.trim() || this.nullableString(this.record(input.profile).phone),
+      ...inputProfile,
+      phone: phone ?? profilePhone,
     };
     delete profile.idNumberEncrypted;
     delete profile.idNumberFingerprint;
@@ -294,13 +327,20 @@ export class EmployeeArchivesService {
     delete profile.idNumber;
     delete profile.bankAccount;
     const contracts = (input.contracts ?? []).map((contract, index) => {
-      this.assertContractMaterials(contract);
+      const safeContract = this.pickFields(this.record(contract), [
+        'contractType', 'name', 'signingCompany', 'signedAt', 'effectiveFrom', 'expiresAt',
+        'termType', 'originalCompany', 'newCompany', 'confidentialityAgreement',
+        'nonCompeteAgreement', 'portraitAgreement', 'sequence',
+      ]);
+      safeContract.images = this.contractMaterials(this.record(contract).images);
+      safeContract.attachments = this.contractMaterials(this.record(contract).attachments);
+      this.assertContractMaterials(safeContract);
       return {
-        ...contract,
-        sequence: typeof contract.sequence === 'number' ? contract.sequence : index,
+        ...safeContract,
+        sequence: typeof safeContract.sequence === 'number' ? safeContract.sequence : index,
       };
     });
-    const inputPerformance = this.record(input.performance);
+    const inputPerformance = this.pickFields(this.record(input.performance), ['managerId']);
     const performance = {
       ...inputPerformance,
       managerId: input.performanceManagerId ?? inputPerformance.managerId ?? null,
@@ -325,6 +365,114 @@ export class EmployeeArchivesService {
     return { ...proposed, profile };
   }
 
+  private async assertEmployeeCreateIdentity(
+    tx: Prisma.TransactionClient,
+    proposedValue: Record<string, unknown>,
+    phoneDuplicateAcknowledged = false,
+    excludedRequestId?: string,
+  ): Promise<void> {
+    const employee = this.record(proposedValue.employee);
+    const profile = this.record(proposedValue.profile);
+    const phone = (this.nullableString(employee.phone) ?? this.nullableString(profile.phone))
+      ?.replace(/[\s-]/g, '')
+      .replace(/^\+86/, '') ?? null;
+    const idNumberFingerprint = this.nullableString(profile.idNumberFingerprint)?.toLowerCase() ?? null;
+    if (!phone && !idNumberFingerprint) return;
+
+    await this.lockEmployeeCreateIdentities(tx, phone, idNumberFingerprint);
+
+    if (this.identityMatcher) {
+      const identity = await this.identityMatcher.lookupStoredIdentity({
+        phone: phone ?? undefined,
+        idNumberFingerprint: idNumberFingerprint ?? undefined,
+      });
+      if (identity.outcome === 'identity_match' || identity.outcome === 'conflict') {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '发现已存在员工，请进入原档案处理再入职或资料维护' });
+      }
+      if (identity.outcome === 'phone_candidates' && !phoneDuplicateAcknowledged) {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '该手机号与已有员工相同，请确认不是同一人后再继续' });
+      }
+    }
+
+    const pendingBaseWhere: Prisma.EmployeeDataChangeRequestWhereInput = {
+      ...(excludedRequestId ? { id: { not: excludedRequestId } } : {}),
+      sourceType: 'manual_employee_create',
+      recordStatus: 'submitted',
+      archivedAt: null,
+    };
+    if (idNumberFingerprint && await tx.employeeDataChangeRequest.findFirst({
+      where: {
+        ...pendingBaseWhere,
+        proposedValue: { path: ['profile', 'idNumberFingerprint'], equals: idNumberFingerprint },
+      },
+      select: { id: true },
+    })) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '相同身份证号已有待审核的新增员工申请，请先处理该申请' });
+    }
+    if (phone && !phoneDuplicateAcknowledged && await tx.employeeDataChangeRequest.findFirst({
+      where: {
+        ...pendingBaseWhere,
+        OR: [
+          { proposedValue: { path: ['employee', 'phone'], equals: phone } },
+          { proposedValue: { path: ['profile', 'phone'], equals: phone } },
+        ],
+      },
+      select: { id: true },
+    })) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '该手机号与已有员工相同，请确认不是同一人后再继续' });
+    }
+  }
+
+  private async lockEmployeeCreateIdentities(
+    tx: Prisma.TransactionClient,
+    phone: string | null,
+    idNumberFingerprint: string | null,
+  ): Promise<void> {
+    const keys = [
+      ...(phone ? [`employee-create:phone:${phone}`] : []),
+      ...(idNumberFingerprint ? [`employee-create:id:${idNumberFingerprint}`] : []),
+    ].sort();
+    for (const key of keys) {
+      await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+    }
+  }
+
+  private async updateEmployeeCreateDraft(
+    tx: Prisma.TransactionClient,
+    draftId: string,
+    requestVersion: number,
+    data: Prisma.EmployeeDataChangeRequestUncheckedUpdateInput,
+  ) {
+    try {
+      return await tx.employeeDataChangeRequest.update({
+        where: {
+          id: draftId,
+          sourceType: 'manual_employee_create',
+          recordStatus: 'draft',
+          archivedAt: null,
+          requestVersion,
+        },
+        data,
+      });
+    } catch (error) {
+      if (this.record(error).code === 'P2025') {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '草稿已变化或已提交，请刷新后重试' });
+      }
+      throw error;
+    }
+  }
+
+  private pickFields(source: Record<string, unknown>, fields: readonly string[]): Record<string, unknown> {
+    return Object.fromEntries(fields
+      .filter((field) => source[field] !== undefined)
+      .map((field) => [field, source[field]]));
+  }
+
+  private contractMaterials(value: unknown): Record<string, unknown>[] {
+    if (!Array.isArray(value)) return [];
+    return value.map((item) => this.pickFields(this.record(item), ['name', 'url', 'size', 'mimeType']));
+  }
+
   async listDrafts(query: { page: number; pageSize: number; state: 'draft' | 'archived' }) {
     const where: Prisma.EmployeeDataChangeRequestWhereInput = query.state === 'archived'
       ? { recordStatus: 'archived', archivedAt: { not: null } }
@@ -339,7 +487,12 @@ export class EmployeeArchivesService {
       }),
       this.prisma.employeeDataChangeRequest.count({ where }),
     ]);
-    return { items, total, page: query.page, pageSize: query.pageSize };
+    return {
+      items: items.map((item) => employeeDataChangeView(item)),
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+    };
   }
 
   async archiveEmployees(userIds: string[], operator: AuthUser): Promise<{ archived: number }> {

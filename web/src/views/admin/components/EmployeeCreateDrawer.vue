@@ -43,6 +43,7 @@ const positions = ref<PositionRecord[]>([]);
 const hydrating = ref(false);
 const idNumberConfigured = ref(false);
 const bankAccountConfigured = ref(false);
+const plannedRegularDateAuto = ref(true);
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let draftSavePromise: Promise<boolean> | null = null;
 
@@ -164,6 +165,11 @@ function reset() {
     actualRegularDate: dateValue(employee.actualRegularDate),
     leaveDate: dateValue(employee.leaveDate),
   });
+  const automaticRegularDate = form.entryDate && form.employee.probationMonths != null
+    ? dayjs(form.entryDate).add(form.employee.probationMonths, 'month').format('YYYY-MM-DD')
+    : '';
+  plannedRegularDateAuto.value = !form.employee.plannedRegularDate
+    || form.employee.plannedRegularDate === automaticRegularDate;
   Object.assign(form.profile, {
     gender: profile.gender ?? '', birthDate: dateValue(profile.birthDate), ethnicity: profile.ethnicity ?? '',
     education: profile.education ?? '', professionalTitle: profile.professionalTitle ?? '', school: profile.school ?? '',
@@ -180,13 +186,16 @@ function reset() {
   form.contracts = Array.isArray(proposed.contracts)
     ? proposed.contracts.map((item: Record<string, any>, index: number) => ({ ...item, __key: item.id || `draft-${index}` }))
     : [];
-  idNumberConfigured.value = Boolean(profile.idNumberEncrypted || profile.idNumberFingerprint);
-  bankAccountConfigured.value = Boolean(profile.bankAccountEncrypted || profile.bankAccountFingerprint);
+  idNumberConfigured.value = Boolean(profile.idNumberConfigured);
+  bankAccountConfigured.value = Boolean(profile.bankAccountConfigured);
   identityResult.value = null;
   phoneDuplicateAcknowledged.value = false;
   lastIdentityKey.value = '';
   saveState.value = props.draft ? 'saved' : 'idle';
-  nextTick(() => { hydrating.value = false; });
+  nextTick(() => {
+    hydrating.value = false;
+    fillPlannedRegularDate();
+  });
 }
 
 watch(() => props.modelValue, (open) => { if (open) reset(); });
@@ -213,7 +222,7 @@ watch(form, scheduleAutosave, { deep: true });
 watch([currentStep, completedSteps], scheduleAutosave, { deep: true });
 
 function fillPlannedRegularDate() {
-  if (!form.entryDate || form.employee.plannedRegularDate || form.employee.probationMonths == null) return;
+  if (!plannedRegularDateAuto.value || !form.entryDate || form.employee.probationMonths == null) return;
   form.employee.plannedRegularDate = dayjs(form.entryDate).add(form.employee.probationMonths, 'month').format('YYYY-MM-DD');
 }
 
@@ -282,7 +291,7 @@ function requestBody(): EmployeeCreateDraftPayload {
 }
 
 function scheduleAutosave() {
-  if (hydrating.value || !props.modelValue || !form.name.trim()) return;
+  if (hydrating.value || savingAction.value === 'submit' || !props.modelValue || !form.name.trim()) return;
   if (autosaveTimer) clearTimeout(autosaveTimer);
   saveState.value = 'idle';
   autosaveTimer = setTimeout(() => { void persistDraft('auto'); }, 700);
@@ -290,9 +299,11 @@ function scheduleAutosave() {
 
 async function persistDraft(saveMode: 'auto' | 'manual') {
   if (!form.name.trim()) return false;
+  if (saveMode === 'auto' && savingAction.value === 'submit') return false;
   if (autosaveTimer) clearTimeout(autosaveTimer);
   autosaveTimer = null;
   if (draftSavePromise) await draftSavePromise;
+  if (saveMode === 'auto' && savingAction.value === 'submit') return false;
   saveState.value = 'saving';
   if (saveMode === 'manual') savingAction.value = 'draft';
   const save = (async () => {
@@ -373,8 +384,10 @@ async function submit() {
     return;
   }
   if (autosaveTimer) clearTimeout(autosaveTimer);
+  autosaveTimer = null;
   savingAction.value = 'submit';
   try {
+    if (draftSavePromise && !(await draftSavePromise)) return;
     await employeeArchivesApi.createEmployee(requestBody() as EmployeeCreatePayload);
     ElMessage.success('已提交新增员工，工号已自动生成，HR 管理员审核后生效');
     emit('update:modelValue', false);
@@ -494,7 +507,7 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
             <el-form-item label="本次记录生效日期"><el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
             <el-form-item label="本次记录结束日期"><el-date-picker v-model="form.effectiveTo" type="date" value-format="YYYY-MM-DD" /></el-form-item>
             <el-form-item label="试用期（月）"><el-input-number v-model="form.employee.probationMonths" :min="0" :max="12" /></el-form-item>
-            <el-form-item label="预计转正日期"><el-date-picker v-model="form.employee.plannedRegularDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item label="预计转正日期"><el-date-picker v-model="form.employee.plannedRegularDate" type="date" value-format="YYYY-MM-DD" @change="plannedRegularDateAuto = false" /></el-form-item>
             <el-form-item label="实际转正日期"><el-date-picker v-model="form.employee.actualRegularDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
           </div>
         </section>

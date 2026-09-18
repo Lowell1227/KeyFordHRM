@@ -18,6 +18,7 @@ import * as bcrypt from 'bcrypt';
 import { EmployeeOnboardingService } from './employee-onboarding.service';
 import { RESIGNATION_BINDING_DISABLED_REASON } from './employee-effective-date.service';
 import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
+import { employeeDataChangeView } from './employee-data-change-view';
 
 export type EmployeeReviewScope = 'profile' | 'performance';
 
@@ -99,7 +100,12 @@ export class EmployeeDataReviewsService {
       }),
       this.prisma.employeeDataChangeRequest.count({ where }),
     ]);
-    return { total, page: query.page, pageSize: query.pageSize, items };
+    return {
+      total,
+      page: query.page,
+      pageSize: query.pageSize,
+      items: items.map((item) => employeeDataChangeView(item)),
+    };
   }
 
   async proposePerformanceManager(

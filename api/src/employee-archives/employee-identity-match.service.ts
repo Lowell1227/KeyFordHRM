@@ -23,9 +23,31 @@ export class EmployeeIdentityMatchService {
       throw new BadRequestException('请输入完整手机号或身份证号');
     }
 
+    return this.lookupNormalized(phone, idNumber ? this.fingerprint(idNumber) : null);
+  }
+
+  async lookupStoredIdentity(input: {
+    phone?: string | null;
+    idNumberFingerprint?: string | null;
+  }): Promise<EmployeeIdentityLookupResult> {
+    const phone = input.phone ? this.normalizePhone(input.phone) : null;
+    const idNumberFingerprint = input.idNumberFingerprint?.trim().toLowerCase() || null;
+    if (!phone && !idNumberFingerprint) {
+      throw new BadRequestException('请输入完整手机号或身份证号');
+    }
+    if (idNumberFingerprint && !/^[a-f0-9]{64}$/.test(idNumberFingerprint)) {
+      throw new BadRequestException('员工身份证指纹格式无效');
+    }
+    return this.lookupNormalized(phone, idNumberFingerprint);
+  }
+
+  private async lookupNormalized(
+    phone: string | null,
+    idNumberFingerprint: string | null,
+  ): Promise<EmployeeIdentityLookupResult> {
     const phoneUsers = phone ? await this.findPhone(phone) : [];
-    const idUsers = idNumber ? await this.findId(this.fingerprint(idNumber)) : [];
-    if (phone && idNumber) {
+    const idUsers = idNumberFingerprint ? await this.findId(idNumberFingerprint) : [];
+    if (phone && idNumberFingerprint) {
       const phoneIds = new Set(phoneUsers.map((item) => item.id));
       if (phoneUsers.length > 0 && idUsers.length > 0 && idUsers.some((item) => !phoneIds.has(item.id))) {
         return { outcome: 'conflict', candidates: [] };
