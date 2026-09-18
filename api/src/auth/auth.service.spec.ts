@@ -192,7 +192,10 @@ describe('AuthService DingTalk identity boundary', () => {
       where: expect.objectContaining({
         provider: 'dingtalk',
         externalUnionId: 'union-enabled',
-        status: 'enabled',
+        OR: [
+          { status: 'enabled' },
+          { status: 'disabled', disabledReason: '员工档案审核为离职' },
+        ],
         endedAt: null,
       }),
     }));

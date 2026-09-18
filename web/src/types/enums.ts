@@ -4,7 +4,7 @@ export type SysRole = 'system_admin' | 'hr' | 'hr_user' | 'chairman' | 'vp' | 'd
 
 export type EmploymentType = 'full_time' | 'part_time' | 'rehire' | 'external';
 
-export type UserStatus = 'active' | 'probation' | 'resigned';
+export type UserStatus = 'active' | 'probation' | 'pending_entry' | 'resigned';
 
 export type CompanyCode = 'fuede' | 'fuede_sports' | 'beijing_fuede' | 'fansibao';
 

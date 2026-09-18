@@ -35,9 +35,36 @@ enum EmploymentType {
 enum UserStatus {
   active
   probation
+  pending_entry
   resigned
 
   @@map("user_status")
+}
+
+enum OnboardingIntakeType {
+  new_hire
+  reentry
+
+  @@map("onboarding_intake_type")
+}
+
+enum OnboardingStatus {
+  draft
+  submitted
+  pending_entry
+  effective
+  cancelled
+
+  @@map("onboarding_status")
+}
+
+enum EmployeeNumberStatus {
+  reserved
+  current
+  historical
+  released
+
+  @@map("employee_number_status")
 }
 
 enum CompanyCode {
@@ -458,13 +485,13 @@ model DepartmentChangeRequest {
 }
 
 model Position {
-  id          String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  code        String   @unique @db.VarChar(40)
-  name        String   @db.VarChar(100)
-  jobFamily   String?  @map("job_family") @db.VarChar(100)
-  isActive    Boolean  @default(true) @map("is_active")
-  createdAt   DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt   DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id        String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  code      String   @unique @db.VarChar(40)
+  name      String   @db.VarChar(100)
+  jobFamily String?  @map("job_family") @db.VarChar(100)
+  isActive  Boolean  @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   users             User[]                  @relation("UserPosition")
   employmentRecords EmploymentRecord[]
@@ -492,9 +519,9 @@ model PositionChangeRequest {
   createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt      DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  position  Position? @relation(fields: [positionId], references: [id], onDelete: SetNull)
-  createdBy User      @relation("PositionChangeCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  reviewedBy User?    @relation("PositionChangeReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
+  position   Position? @relation(fields: [positionId], references: [id], onDelete: SetNull)
+  createdBy  User      @relation("PositionChangeCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  reviewedBy User?     @relation("PositionChangeReviewedBy", fields: [reviewedById], references: [id], onDelete: SetNull)
 
   @@index([status, createdAt(sort: Desc)])
   @@index([positionId, createdAt(sort: Desc)])
@@ -557,8 +584,8 @@ model User {
   flowRecords                               FlowRecord[]
   indicatorVisibilityUsers                  IndicatorVisibilityUser[]
   appeals                                   Appeal[]                         @relation("AppealAppellant")
-  hrAppealRecordsAsEmployee                 HrAppealRecord[]               @relation("HrAppealEmployee")
-  recordedHrAppeals                         HrAppealRecord[]               @relation("HrAppealRecorder")
+  hrAppealRecordsAsEmployee                 HrAppealRecord[]                 @relation("HrAppealEmployee")
+  recordedHrAppeals                         HrAppealRecord[]                 @relation("HrAppealRecorder")
   deptResolvedAppeals                       Appeal[]                         @relation("AppealDeptResolver")
   hrResolvedAppeals                         Appeal[]                         @relation("AppealHrResolver")
   archives                                  PerformanceArchive[]
@@ -579,9 +606,9 @@ model User {
   confirmationApplicationsAsCompanyApprover ConfirmationApplication[]        @relation("ConfirmationApplicationCompanyApprover")
   confirmationApplicationsRejected          ConfirmationApplication[]        @relation("ConfirmationApplicationRejectedBy")
   createdConfirmationApplications           ConfirmationApplication[]        @relation("ConfirmationApplicationCreator")
-  uploadedConfirmationMeetingAttachments     ConfirmationMeetingAttachment[] @relation("ConfirmationMeetingAttachmentUploader")
-  recordedConfirmationMeetings               ConfirmationApplication[]        @relation("ConfirmationMeetingRecorder")
-  returnedConfirmationApplications           ConfirmationApplication[]        @relation("ConfirmationApplicationReturner")
+  uploadedConfirmationMeetingAttachments    ConfirmationMeetingAttachment[]  @relation("ConfirmationMeetingAttachmentUploader")
+  recordedConfirmationMeetings              ConfirmationApplication[]        @relation("ConfirmationMeetingRecorder")
+  returnedConfirmationApplications          ConfirmationApplication[]        @relation("ConfirmationApplicationReturner")
   ownedObjectives                           Objective[]                      @relation("ObjectiveOwner")
   createdObjectives                         Objective[]                      @relation("ObjectiveCreator")
   reviewedObjectives                        Objective[]                      @relation("ObjectiveReviewer")
@@ -615,6 +642,8 @@ model User {
   reviewedDepartmentChangeRequests          DepartmentChangeRequest[]        @relation("DepartmentChangeReviewedBy")
   createdPositionChangeRequests             PositionChangeRequest[]          @relation("PositionChangeCreatedBy")
   reviewedPositionChangeRequests            PositionChangeRequest[]          @relation("PositionChangeReviewedBy")
+  employeeNumberAssignments                 EmployeeNumberAssignment[]
+  cancelledEmployeeChanges                  EmployeeDataChangeRequest[]      @relation("EmployeeChangeCancelledBy")
 
   @@index([deptId])
   @@index([positionId])
@@ -726,15 +755,18 @@ model EmploymentRecord {
   reason             String?        @db.Text
   sourceType         String?        @map("source_type") @db.VarChar(30)
   sourceBatchId      String?        @map("source_batch_id") @db.Uuid
+  employeeNo         String?        @map("employee_no") @db.VarChar(30)
+  sourceRequestId    String?        @unique @map("source_request_id") @db.Uuid
   createdById        String?        @map("created_by_id") @db.Uuid
   createdAt          DateTime       @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt          DateTime       @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  user          User        @relation("EmployeeEmployment", fields: [userId], references: [id], onDelete: Restrict)
-  dept          Department? @relation(fields: [deptId], references: [id], onDelete: Restrict)
-  positionRef   Position?   @relation(fields: [positionId], references: [id], onDelete: SetNull)
-  directManager User?       @relation("EmploymentManager", fields: [directManagerId], references: [id], onDelete: Restrict)
-  createdBy     User?       @relation("EmploymentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  user          User                       @relation("EmployeeEmployment", fields: [userId], references: [id], onDelete: Restrict)
+  dept          Department?                @relation(fields: [deptId], references: [id], onDelete: Restrict)
+  positionRef   Position?                  @relation(fields: [positionId], references: [id], onDelete: SetNull)
+  directManager User?                      @relation("EmploymentManager", fields: [directManagerId], references: [id], onDelete: Restrict)
+  createdBy     User?                      @relation("EmploymentCreator", fields: [createdById], references: [id], onDelete: SetNull)
+  sourceRequest EmployeeDataChangeRequest? @relation("EmploymentSourceRequest", fields: [sourceRequestId], references: [id], onDelete: SetNull)
 
   @@index([userId, effectiveFrom])
   @@index([deptId, effectiveFrom])
@@ -800,43 +832,79 @@ model EmployeeImportBatch {
 }
 
 model EmployeeDataChangeRequest {
-  id                      String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  userId                  String?   @map("user_id") @db.Uuid
-  employeeNo              String?   @map("employee_no") @db.VarChar(30)
-  employeeName            String    @map("employee_name") @db.VarChar(50)
-  sourceType              String    @map("source_type") @db.VarChar(40)
-  sourceBatchId           String?   @map("source_batch_id") @db.Uuid
-  sourceRowNumber         Int?      @map("source_row_number")
-  baseValue               Json      @default("{}") @map("base_value") @db.JsonB
-  proposedValue           Json      @map("proposed_value") @db.JsonB
-  profileReviewStatus     String    @default("pending") @map("profile_review_status") @db.VarChar(20)
-  performanceReviewStatus String    @default("not_required") @map("performance_review_status") @db.VarChar(20)
-  validationErrors        Json      @default("[]") @map("validation_errors") @db.JsonB
-  validationWarnings      Json      @default("[]") @map("validation_warnings") @db.JsonB
-  recordStatus            String    @default("submitted") @map("record_status") @db.VarChar(20)
-  archivedAt              DateTime? @map("archived_at") @db.Timestamptz(6)
-  createdById             String    @map("created_by_id") @db.Uuid
-  profileReviewedById     String?   @map("profile_reviewed_by_id") @db.Uuid
-  profileReviewedAt       DateTime? @map("profile_reviewed_at") @db.Timestamptz(6)
-  performanceReviewedById String?   @map("performance_reviewed_by_id") @db.Uuid
-  performanceReviewedAt   DateTime? @map("performance_reviewed_at") @db.Timestamptz(6)
-  rejectedReason          String?   @map("rejected_reason") @db.Text
-  appliedAt               DateTime? @map("applied_at") @db.Timestamptz(6)
-  createdAt               DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt               DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id                      String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId                  String?               @map("user_id") @db.Uuid
+  employeeNo              String?               @map("employee_no") @db.VarChar(30)
+  employeeName            String                @map("employee_name") @db.VarChar(50)
+  sourceType              String                @map("source_type") @db.VarChar(40)
+  sourceBatchId           String?               @map("source_batch_id") @db.Uuid
+  sourceRowNumber         Int?                  @map("source_row_number")
+  sourceSystem            String?               @map("source_system") @db.VarChar(40)
+  sourceReference         String?               @map("source_reference") @db.VarChar(100)
+  intakeType              OnboardingIntakeType? @map("intake_type")
+  onboardingStatus        OnboardingStatus?     @map("onboarding_status")
+  requestVersion          Int                   @default(1) @map("request_version")
+  revisionHistory         Json                  @default("[]") @map("revision_history") @db.JsonB
+  baseValue               Json                  @default("{}") @map("base_value") @db.JsonB
+  proposedValue           Json                  @map("proposed_value") @db.JsonB
+  profileReviewStatus     String                @default("pending") @map("profile_review_status") @db.VarChar(20)
+  performanceReviewStatus String                @default("not_required") @map("performance_review_status") @db.VarChar(20)
+  validationErrors        Json                  @default("[]") @map("validation_errors") @db.JsonB
+  validationWarnings      Json                  @default("[]") @map("validation_warnings") @db.JsonB
+  recordStatus            String                @default("submitted") @map("record_status") @db.VarChar(20)
+  archivedAt              DateTime?             @map("archived_at") @db.Timestamptz(6)
+  cancelledAt             DateTime?             @map("cancelled_at") @db.Timestamptz(6)
+  cancelledById           String?               @map("cancelled_by_id") @db.Uuid
+  cancelledReason         String?               @map("cancelled_reason") @db.Text
+  createdById             String                @map("created_by_id") @db.Uuid
+  profileReviewedById     String?               @map("profile_reviewed_by_id") @db.Uuid
+  profileReviewedAt       DateTime?             @map("profile_reviewed_at") @db.Timestamptz(6)
+  performanceReviewedById String?               @map("performance_reviewed_by_id") @db.Uuid
+  performanceReviewedAt   DateTime?             @map("performance_reviewed_at") @db.Timestamptz(6)
+  rejectedReason          String?               @map("rejected_reason") @db.Text
+  appliedAt               DateTime?             @map("applied_at") @db.Timestamptz(6)
+  createdAt               DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt               DateTime              @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  user                  User?                @relation("EmployeeChangeSubject", fields: [userId], references: [id], onDelete: SetNull)
-  sourceBatch           EmployeeImportBatch? @relation(fields: [sourceBatchId], references: [id], onDelete: SetNull)
-  createdBy             User                 @relation("EmployeeChangeCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
-  profileReviewedBy     User?                @relation("EmployeeProfileReviewedBy", fields: [profileReviewedById], references: [id], onDelete: SetNull)
-  performanceReviewedBy User?                @relation("EmployeePerformanceReviewedBy", fields: [performanceReviewedById], references: [id], onDelete: SetNull)
+  user                  User?                      @relation("EmployeeChangeSubject", fields: [userId], references: [id], onDelete: SetNull)
+  sourceBatch           EmployeeImportBatch?       @relation(fields: [sourceBatchId], references: [id], onDelete: SetNull)
+  createdBy             User                       @relation("EmployeeChangeCreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+  profileReviewedBy     User?                      @relation("EmployeeProfileReviewedBy", fields: [profileReviewedById], references: [id], onDelete: SetNull)
+  performanceReviewedBy User?                      @relation("EmployeePerformanceReviewedBy", fields: [performanceReviewedById], references: [id], onDelete: SetNull)
+  cancelledBy           User?                      @relation("EmployeeChangeCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
+  employmentRecords     EmploymentRecord[]         @relation("EmploymentSourceRequest")
+  employeeNumbers       EmployeeNumberAssignment[]
 
   @@unique([sourceBatchId, sourceRowNumber])
+  @@unique([sourceSystem, sourceReference], map: "employee_change_source_key")
   @@index([profileReviewStatus, createdAt(sort: Desc)])
   @@index([performanceReviewStatus, createdAt(sort: Desc)])
   @@index([userId, createdAt(sort: Desc)])
   @@index([recordStatus, createdAt(sort: Desc)])
+  @@index([intakeType, onboardingStatus, createdAt(sort: Desc)])
   @@map("employee_data_change_requests")
+}
+
+model EmployeeNumberAssignment {
+  id              String               @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  userId          String?              @map("user_id") @db.Uuid
+  employeeNo      String               @map("employee_no") @db.VarChar(30)
+  status          EmployeeNumberStatus
+  effectiveFrom   DateTime?            @map("effective_from") @db.Date
+  effectiveTo     DateTime?            @map("effective_to") @db.Date
+  sourceRequestId String?              @map("source_request_id") @db.Uuid
+  releasedAt      DateTime?            @map("released_at") @db.Timestamptz(6)
+  createdAt       DateTime             @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt       DateTime             @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  user          User?                      @relation(fields: [userId], references: [id], onDelete: Restrict)
+  sourceRequest EmployeeDataChangeRequest? @relation(fields: [sourceRequestId], references: [id], onDelete: SetNull)
+
+  @@unique([userId, employeeNo])
+  @@index([employeeNo, status])
+  @@index([userId, status])
+  @@index([sourceRequestId])
+  @@map("employee_number_assignments")
 }
 
 model EmployeeImportRow {
@@ -1236,8 +1304,8 @@ model AssessmentPeriodReviewRevision {
   createdById    String                        @map("created_by_id") @db.Uuid
   createdAt      DateTime                      @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  period    AssessmentPeriod @relation(fields: [periodId], references: [id], onDelete: Cascade)
-  createdBy User             @relation("PeriodReviewRevisionCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  period          AssessmentPeriod          @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  createdBy       User                      @relation("PeriodReviewRevisionCreator", fields: [createdById], references: [id], onDelete: Restrict)
   progressUpdates IndicatorProgressUpdate[]
 
   @@unique([periodId, stage, revision])
@@ -1280,8 +1348,8 @@ model IndicatorInstance {
   visibleUsers        IndicatorVisibilityUser[]
   visibilityRules     IndicatorVisibilityRule[]
   objectiveAlignments IndicatorObjectiveAlignment[]
-  parentAlignments    IndicatorInstanceAlignment[]     @relation("IndicatorAlignmentParent")
-  childAlignments     IndicatorInstanceAlignment[]     @relation("IndicatorAlignmentChild")
+  parentAlignments    IndicatorInstanceAlignment[]    @relation("IndicatorAlignmentParent")
+  childAlignments     IndicatorInstanceAlignment[]    @relation("IndicatorAlignmentChild")
   progressUpdates     IndicatorProgressUpdate[]
 
   @@index([taskId])
@@ -1289,16 +1357,16 @@ model IndicatorInstance {
 }
 
 model IndicatorProgressUpdate {
-  id                     String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  indicatorInstanceId    String                  @map("indicator_instance_id") @db.Uuid
-  periodId               String?                 @map("period_id") @db.Uuid
-  periodReviewRevisionId String?                 @map("period_review_revision_id") @db.Uuid
+  id                     String                   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  indicatorInstanceId    String                   @map("indicator_instance_id") @db.Uuid
+  periodId               String?                  @map("period_id") @db.Uuid
+  periodReviewRevisionId String?                  @map("period_review_revision_id") @db.Uuid
   progress               Int?                     @db.SmallInt
   healthStatus           IndicatorProgressHealth? @map("health_status")
-  content                String                  @db.Text
-  attachments            Json                    @default("[]") @db.JsonB
-  createdBy              String                  @map("created_by") @db.Uuid
-  createdAt              DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  content                String                   @db.Text
+  attachments            Json                     @default("[]") @db.JsonB
+  createdBy              String                   @map("created_by") @db.Uuid
+  createdAt              DateTime                 @default(now()) @map("created_at") @db.Timestamptz(6)
 
   indicatorInstance    IndicatorInstance               @relation(fields: [indicatorInstanceId], references: [id], onDelete: Cascade)
   period               AssessmentPeriod?               @relation(fields: [periodId], references: [id], onDelete: SetNull)
@@ -1508,16 +1576,16 @@ model PerformanceArchive {
 }
 
 model HrAppealRecord {
-  id           String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  employeeId   String    @map("employee_id") @db.Uuid
-  cycleId      String?   @map("cycle_id") @db.Uuid
-  receivedAt   DateTime  @map("received_at") @db.Date
-  content      String    @db.Text
-  handlingNote String?   @map("handling_note") @db.Text
-  conclusion   String?   @db.Text
-  recordedById String?   @map("recorded_by_id") @db.Uuid
-  createdAt    DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt    DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId   String   @map("employee_id") @db.Uuid
+  cycleId      String?  @map("cycle_id") @db.Uuid
+  receivedAt   DateTime @map("received_at") @db.Date
+  content      String   @db.Text
+  handlingNote String?  @map("handling_note") @db.Text
+  conclusion   String?  @db.Text
+  recordedById String?  @map("recorded_by_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt    DateTime @default(now()) @map("updated_at") @db.Timestamptz(6)
 
   employee   User             @relation("HrAppealEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
   cycle      AssessmentCycle? @relation(fields: [cycleId], references: [id], onDelete: SetNull)
@@ -1556,8 +1624,8 @@ model PerformanceInterview {
   task        AssessmentTask?  @relation(fields: [taskId], references: [id], onDelete: SetNull)
   cycle       AssessmentCycle? @relation(fields: [cycleId], references: [id], onDelete: Restrict)
   recordedBy  User?            @relation("InterviewRecorder", fields: [recordedById], references: [id], onDelete: SetNull)
-  employee    User            @relation("InterviewEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
-  interviewer User            @relation("InterviewInterviewer", fields: [interviewerId], references: [id], onDelete: Restrict)
+  employee    User             @relation("InterviewEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
+  interviewer User             @relation("InterviewInterviewer", fields: [interviewerId], references: [id], onDelete: Restrict)
 
   @@index([cycleId])
   @@index([employeeId])
@@ -1568,32 +1636,32 @@ model PerformanceInterview {
 }
 
 model ImprovementPlan {
-  id              String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  employeeId      String                @map("employee_id") @db.Uuid
-  cycleId         String?               @map("cycle_id") @db.Uuid
-  taskId          String?               @unique @map("task_id") @db.Uuid
-  creatorId       String?               @map("creator_id") @db.Uuid
-  improvementNeed String?               @map("improvement_need") @db.Text
-  importance      String?               @map("importance") @db.Text
-  improvementGoal String?               @map("improvement_goal") @db.Text
-  targetDate      DateTime?             @map("target_date") @db.Date
-  measures        Json                  @default("[]") @map("measures") @db.JsonB
-  finalScore      Float?                @map("final_score")
-  status          ImprovementPlanStatus @default(draft)
-  workflowVersion Int                   @default(1) @map("workflow_version")
-  goals           Json                  @default("[]") @db.JsonB
-  selfEvaluation  Json?                 @map("self_evaluation") @db.JsonB
-  managerEvaluation Json?               @map("manager_evaluation") @db.JsonB
-  departmentEvaluation Json?            @map("department_evaluation") @db.JsonB
-  startedAt       DateTime?             @map("started_at") @db.Timestamptz(6)
-  completedAt     DateTime?             @map("completed_at") @db.Timestamptz(6)
-  createdAt       DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt       DateTime              @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id                   String                @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId           String                @map("employee_id") @db.Uuid
+  cycleId              String?               @map("cycle_id") @db.Uuid
+  taskId               String?               @unique @map("task_id") @db.Uuid
+  creatorId            String?               @map("creator_id") @db.Uuid
+  improvementNeed      String?               @map("improvement_need") @db.Text
+  importance           String?               @map("importance") @db.Text
+  improvementGoal      String?               @map("improvement_goal") @db.Text
+  targetDate           DateTime?             @map("target_date") @db.Date
+  measures             Json                  @default("[]") @map("measures") @db.JsonB
+  finalScore           Float?                @map("final_score")
+  status               ImprovementPlanStatus @default(draft)
+  workflowVersion      Int                   @default(1) @map("workflow_version")
+  goals                Json                  @default("[]") @db.JsonB
+  selfEvaluation       Json?                 @map("self_evaluation") @db.JsonB
+  managerEvaluation    Json?                 @map("manager_evaluation") @db.JsonB
+  departmentEvaluation Json?                 @map("department_evaluation") @db.JsonB
+  startedAt            DateTime?             @map("started_at") @db.Timestamptz(6)
+  completedAt          DateTime?             @map("completed_at") @db.Timestamptz(6)
+  createdAt            DateTime              @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt            DateTime              @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  employee User            @relation("ImprovementPlanEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
+  employee User             @relation("ImprovementPlanEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
   cycle    AssessmentCycle? @relation(fields: [cycleId], references: [id], onDelete: Restrict)
   task     AssessmentTask?  @relation(fields: [taskId], references: [id], onDelete: Restrict)
-  creator  User?           @relation("ImprovementPlanCreator", fields: [creatorId], references: [id], onDelete: SetNull)
+  creator  User?            @relation("ImprovementPlanCreator", fields: [creatorId], references: [id], onDelete: SetNull)
 
   @@index([employeeId])
   @@index([cycleId])
@@ -1656,52 +1724,52 @@ model ProbationReviewIndicator {
 }
 
 model ConfirmationApplication {
-  id                String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  employeeId        String             @map("employee_id") @db.Uuid
-  probationReviewId String?            @map("probation_review_id") @db.Uuid
-  managerId         String?            @map("manager_id") @db.Uuid
-  hrId              String?            @map("hr_id") @db.Uuid
-  companyApproverId String?            @map("company_approver_id") @db.Uuid
-  workflowVersion   Int                @default(1) @map("workflow_version")
-  submissionVersion Int                @default(0) @map("submission_version")
-  status            ConfirmationStatus @default(draft)
-  summary           String?            @db.Text
-  salary            Decimal?           @db.Decimal(12, 2)
-  voteResult        VoteResult?        @map("vote_result")
-  voteParticipants  Json               @default("[]") @map("vote_participants") @db.JsonB
-  voteComment       String?            @map("vote_comment") @db.Text
-  voteMeetingTime   DateTime?          @map("vote_meeting_time") @db.Timestamptz(6)
-  meetingDate       DateTime?          @map("meeting_date") @db.Date
-  voteRecordedAt    DateTime?          @map("vote_recorded_at") @db.Timestamptz(6)
-  voteRecordedById  String?            @map("vote_recorded_by_id") @db.Uuid
-  proposedRegularDate DateTime?        @map("proposed_regular_date") @db.Date
-  managerComment    String?            @map("manager_comment") @db.Text
-  managerRecommendation Boolean?        @map("manager_recommendation")
-  managerApprovedAt DateTime?          @map("manager_approved_at") @db.Timestamptz(6)
-  hrComment         String?            @map("hr_comment") @db.Text
-  hrApprovedAt      DateTime?          @map("hr_approved_at") @db.Timestamptz(6)
-  companyComment    String?            @map("company_comment") @db.Text
-  companyApprovedAt DateTime?          @map("company_approved_at") @db.Timestamptz(6)
-  rejectedById      String?            @map("rejected_by_id") @db.Uuid
-  rejectedAt        DateTime?          @map("rejected_at") @db.Timestamptz(6)
-  rejectReason      String?            @map("reject_reason") @db.Text
-  returnReason      String?            @map("return_reason") @db.Text
-  returnedAt        DateTime?          @map("returned_at") @db.Timestamptz(6)
-  returnedById      String?            @map("returned_by_id") @db.Uuid
-  actualRegularDate DateTime?          @map("actual_regular_date") @db.Date
-  createdBy         String?            @map("created_by") @db.Uuid
-  createdAt         DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
-  updatedAt         DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
+  id                    String             @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  employeeId            String             @map("employee_id") @db.Uuid
+  probationReviewId     String?            @map("probation_review_id") @db.Uuid
+  managerId             String?            @map("manager_id") @db.Uuid
+  hrId                  String?            @map("hr_id") @db.Uuid
+  companyApproverId     String?            @map("company_approver_id") @db.Uuid
+  workflowVersion       Int                @default(1) @map("workflow_version")
+  submissionVersion     Int                @default(0) @map("submission_version")
+  status                ConfirmationStatus @default(draft)
+  summary               String?            @db.Text
+  salary                Decimal?           @db.Decimal(12, 2)
+  voteResult            VoteResult?        @map("vote_result")
+  voteParticipants      Json               @default("[]") @map("vote_participants") @db.JsonB
+  voteComment           String?            @map("vote_comment") @db.Text
+  voteMeetingTime       DateTime?          @map("vote_meeting_time") @db.Timestamptz(6)
+  meetingDate           DateTime?          @map("meeting_date") @db.Date
+  voteRecordedAt        DateTime?          @map("vote_recorded_at") @db.Timestamptz(6)
+  voteRecordedById      String?            @map("vote_recorded_by_id") @db.Uuid
+  proposedRegularDate   DateTime?          @map("proposed_regular_date") @db.Date
+  managerComment        String?            @map("manager_comment") @db.Text
+  managerRecommendation Boolean?           @map("manager_recommendation")
+  managerApprovedAt     DateTime?          @map("manager_approved_at") @db.Timestamptz(6)
+  hrComment             String?            @map("hr_comment") @db.Text
+  hrApprovedAt          DateTime?          @map("hr_approved_at") @db.Timestamptz(6)
+  companyComment        String?            @map("company_comment") @db.Text
+  companyApprovedAt     DateTime?          @map("company_approved_at") @db.Timestamptz(6)
+  rejectedById          String?            @map("rejected_by_id") @db.Uuid
+  rejectedAt            DateTime?          @map("rejected_at") @db.Timestamptz(6)
+  rejectReason          String?            @map("reject_reason") @db.Text
+  returnReason          String?            @map("return_reason") @db.Text
+  returnedAt            DateTime?          @map("returned_at") @db.Timestamptz(6)
+  returnedById          String?            @map("returned_by_id") @db.Uuid
+  actualRegularDate     DateTime?          @map("actual_regular_date") @db.Date
+  createdBy             String?            @map("created_by") @db.Uuid
+  createdAt             DateTime           @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime           @default(now()) @map("updated_at") @db.Timestamptz(6)
 
-  employee        User             @relation("ConfirmationApplicationEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
-  manager         User?            @relation("ConfirmationApplicationManager", fields: [managerId], references: [id], onDelete: Restrict)
-  hr              User?            @relation("ConfirmationApplicationHr", fields: [hrId], references: [id], onDelete: Restrict)
-  companyApprover User?            @relation("ConfirmationApplicationCompanyApprover", fields: [companyApproverId], references: [id], onDelete: Restrict)
-  rejectedBy      User?            @relation("ConfirmationApplicationRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
-  creator         User?            @relation("ConfirmationApplicationCreator", fields: [createdBy], references: [id], onDelete: SetNull)
-  probationReview ProbationReview? @relation(fields: [probationReviewId], references: [id], onDelete: SetNull)
-  voteRecordedBy  User?            @relation("ConfirmationMeetingRecorder", fields: [voteRecordedById], references: [id], onDelete: SetNull)
-  returnedBy      User?            @relation("ConfirmationApplicationReturner", fields: [returnedById], references: [id], onDelete: SetNull)
+  employee           User                            @relation("ConfirmationApplicationEmployee", fields: [employeeId], references: [id], onDelete: Restrict)
+  manager            User?                           @relation("ConfirmationApplicationManager", fields: [managerId], references: [id], onDelete: Restrict)
+  hr                 User?                           @relation("ConfirmationApplicationHr", fields: [hrId], references: [id], onDelete: Restrict)
+  companyApprover    User?                           @relation("ConfirmationApplicationCompanyApprover", fields: [companyApproverId], references: [id], onDelete: Restrict)
+  rejectedBy         User?                           @relation("ConfirmationApplicationRejectedBy", fields: [rejectedById], references: [id], onDelete: SetNull)
+  creator            User?                           @relation("ConfirmationApplicationCreator", fields: [createdBy], references: [id], onDelete: SetNull)
+  probationReview    ProbationReview?                @relation(fields: [probationReviewId], references: [id], onDelete: SetNull)
+  voteRecordedBy     User?                           @relation("ConfirmationMeetingRecorder", fields: [voteRecordedById], references: [id], onDelete: SetNull)
+  returnedBy         User?                           @relation("ConfirmationApplicationReturner", fields: [returnedById], references: [id], onDelete: SetNull)
   meetingAttachments ConfirmationMeetingAttachment[]
 
   @@index([employeeId])
@@ -1715,18 +1783,18 @@ model ConfirmationApplication {
 }
 
 model ConfirmationMeetingAttachment {
-  id            String                  @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
-  applicationId String                  @map("application_id") @db.Uuid
-  objectKey     String                  @unique @map("object_key") @db.VarChar(600)
-  name          String                  @db.VarChar(255)
-  size          Int
-  mimeType      String                  @map("mime_type") @db.VarChar(150)
-  uploadedById  String                  @map("uploaded_by_id") @db.Uuid
-  submissionVersion Int                  @default(1) @map("submission_version")
-  createdAt     DateTime                @default(now()) @map("created_at") @db.Timestamptz(6)
+  id                String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  applicationId     String   @map("application_id") @db.Uuid
+  objectKey         String   @unique @map("object_key") @db.VarChar(600)
+  name              String   @db.VarChar(255)
+  size              Int
+  mimeType          String   @map("mime_type") @db.VarChar(150)
+  uploadedById      String   @map("uploaded_by_id") @db.Uuid
+  submissionVersion Int      @default(1) @map("submission_version")
+  createdAt         DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
 
-  application   ConfirmationApplication @relation(fields: [applicationId], references: [id], onDelete: Restrict)
-  uploadedBy    User                    @relation("ConfirmationMeetingAttachmentUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
+  application ConfirmationApplication @relation(fields: [applicationId], references: [id], onDelete: Restrict)
+  uploadedBy  User                    @relation("ConfirmationMeetingAttachmentUploader", fields: [uploadedById], references: [id], onDelete: Restrict)
 
   @@index([applicationId, createdAt])
   @@map("confirmation_meeting_attachments")

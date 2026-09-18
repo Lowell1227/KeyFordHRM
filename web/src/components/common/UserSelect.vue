@@ -19,7 +19,7 @@ const props = withDefaults(
     departmentIds?: string[];
     clearable?: boolean;
     includeTestAccounts?: boolean;
-    eligibleFor?: 'cycle_owner';
+    eligibleFor?: 'cycle_owner' | 'direct_manager';
   }>(),
   { multiple: false, placeholder: '搜索姓名 / 工号', clearable: true },
 );

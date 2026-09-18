@@ -5,8 +5,8 @@ import { Transform } from 'class-transformer';
 
 export class UserQueryDto extends PaginationDto {
   @IsOptional()
-  @IsIn(['cycle_owner'])
-  eligibleFor?: 'cycle_owner';
+  @IsIn(['cycle_owner', 'direct_manager'])
+  eligibleFor?: 'cycle_owner' | 'direct_manager';
 
   @IsOptional()
   @IsUUID()

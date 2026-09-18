@@ -17,6 +17,7 @@ import type { PerformanceCycleContext } from './tracking-context.types';
 import { NotificationsService } from '@/notifications/notifications.service';
 import { ParticipantCandidateQueryDto } from './dto/participant-candidate-query.dto';
 import { ParticipantPreviewDto } from './dto/participant-preview.dto';
+import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 import { assertCycleOperator, cycleOperatorWhere, isGlobalCycleOperator } from './cycle-operator-scope';
 
 const DEADLINE_FIELDS = [
@@ -1139,11 +1140,11 @@ export class CyclesService {
   private async resolveReviewerId(requestedId?: string): Promise<string> {
     const reviewer = requestedId
       ? await this.prisma.user.findFirst({
-        where: { id: requestedId, sysRole: SysRole.hr, deletedAt: null, status: { not: 'resigned' } },
+        where: { id: requestedId, sysRole: SysRole.hr, deletedAt: null, status: { in: CURRENT_WORKER_STATUSES } },
         select: { id: true },
       })
       : await this.prisma.user.findFirst({
-        where: { sysRole: SysRole.hr, deletedAt: null, status: { not: 'resigned' } },
+        where: { sysRole: SysRole.hr, deletedAt: null, status: { in: CURRENT_WORKER_STATUSES } },
         select: { id: true },
         orderBy: { createdAt: 'asc' },
       });
@@ -1216,7 +1217,7 @@ export class CyclesService {
         { sysRole: SysRole.hr_user, hrCapabilities: { has: 'cycle_plan_edit' } },
       ],
       deletedAt: null,
-      status: { not: 'resigned' },
+      status: { in: CURRENT_WORKER_STATUSES },
     };
     const owner = requestedId
       ? await this.prisma.user.findFirst({

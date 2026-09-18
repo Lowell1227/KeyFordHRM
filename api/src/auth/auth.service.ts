@@ -14,6 +14,8 @@ import { findTestAccount, TEST_ACCOUNT_MANIFEST } from './test-accounts';
 import { BusinessCapabilities, BusinessCapabilitiesService } from './business-capabilities.service';
 import { ChangePasswordDto } from './dto/change-password.dto';
 import type { HrCapability } from './hr-capabilities';
+import { EmployeeEffectiveDateService, RESIGNATION_BINDING_DISABLED_REASON } from '../employee-archives/employee-effective-date.service';
+import { CURRENT_WORKER_STATUSES } from '../common/personnel/current-worker';
 
 type SystemPermission = 'standard_user' | 'hr_user' | 'hr_admin' | 'system_admin';
 
@@ -53,6 +55,7 @@ export class AuthService {
     private readonly config: ConfigService,
     private readonly dingtalk: DingtalkService,
     private readonly businessCapabilities: BusinessCapabilitiesService,
+    private readonly effectiveDates?: EmployeeEffectiveDateService,
   ) {}
 
   /** 工号+密码登录。 */
@@ -61,7 +64,7 @@ export class AuthService {
       where: {
         employeeNo: dto.employeeNo,
         deletedAt: null,
-        status: { not: 'resigned' },
+        status: { not: UserStatus.resigned },
       },
       include: { dept: true },
     });
@@ -81,8 +84,14 @@ export class AuthService {
       });
     }
 
-    await this.assertCurrentEmployment(user.id);
-    return this.issueToken(user, user.mustChangePassword);
+    let refreshedUser = user;
+    if (this.effectiveDates) {
+      await this.effectiveDates.refreshUserProjection(user.id);
+      refreshedUser = await this.prisma.user.findUnique({ where: { id: user.id }, include: { dept: true } }) as typeof user;
+    }
+    if (!refreshedUser) throw new UnauthorizedException('账号不存在');
+    await this.assertCurrentEmployment(refreshedUser.id);
+    return this.issueToken(refreshedUser, refreshedUser.mustChangePassword);
   }
 
   /** 钉钉免密登录（结构占位）。 */
@@ -101,7 +110,7 @@ export class AuthService {
       where: {
         employeeNo: { in: TEST_ACCOUNT_MANIFEST.map((account) => account.employeeNo) },
         deletedAt: null,
-        status: { not: 'resigned' },
+        status: { in: CURRENT_WORKER_STATUSES },
         dingtalkId: null,
         dingtalkUnionId: null,
         passwordHash: { not: null },
@@ -151,7 +160,7 @@ export class AuthService {
       where: {
         employeeNo: dto.employeeNo,
         deletedAt: null,
-        status: { not: 'resigned' },
+        status: { in: CURRENT_WORKER_STATUSES },
       },
       include: { dept: true },
     });
@@ -256,7 +265,10 @@ export class AuthService {
       where: {
         provider: ExternalIdentityProvider.dingtalk,
         externalUnionId: unionId,
-        status: ExternalIdentityStatus.enabled,
+        OR: [
+          { status: ExternalIdentityStatus.enabled },
+          { status: ExternalIdentityStatus.disabled, disabledReason: RESIGNATION_BINDING_DISABLED_REASON },
+        ],
         endedAt: null,
         user: { deletedAt: null },
       },
@@ -272,14 +284,29 @@ export class AuthService {
       });
     }
 
-    await this.assertCurrentEmployment(binding.userId);
+    let refreshedBinding = binding;
+    if (this.effectiveDates) {
+      await this.effectiveDates.refreshUserProjection(binding.userId);
+      refreshedBinding = await this.prisma.externalIdentityBinding.findFirst({
+        where: {
+          id: binding.id,
+          status: ExternalIdentityStatus.enabled,
+          endedAt: null,
+        },
+        include: { user: { include: { dept: true } } },
+      }) as typeof binding;
+    }
+    if (!refreshedBinding) {
+      throw new UnauthorizedException({ code: ERROR_CODE.UNAUTHORIZED, message: '账号尚未生效或已停用' });
+    }
+    await this.assertCurrentEmployment(refreshedBinding.userId);
 
     await this.prisma.externalIdentityBinding.update({
-      where: { id: binding.id },
+      where: { id: refreshedBinding.id },
       data: { lastLoginAt: new Date() },
     });
 
-    return binding.user;
+    return refreshedBinding.user;
   }
 
   /** 所有真实登录方式都以员工主数据中的当前有效任职作为准入依据。 */
@@ -290,7 +317,7 @@ export class AuthService {
         userId,
         effectiveFrom: { lte: now },
         OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }],
-        employeeStatus: { not: UserStatus.resigned },
+        employeeStatus: { in: [UserStatus.active, UserStatus.probation] },
       },
       select: { id: true },
     });

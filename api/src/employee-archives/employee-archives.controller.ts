@@ -42,6 +42,15 @@ import {
 import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
 import { buildEmployeeRosterTemplate } from './employee-roster.excel';
 import { PersonnelDiagnosticsService } from './personnel-diagnostics.service';
+import { EmployeeIdentityMatchService } from './employee-identity-match.service';
+import { EmployeeOnboardingService } from './employee-onboarding.service';
+import {
+  CancelEmployeeReentryDto,
+  CreateEmployeeReentryDto,
+  CreateOnboardingIntakeDto,
+  EmployeeIdentityLookupDto,
+  ReviseEmployeeReentryDto,
+} from './dto/employee-onboarding.dto';
 
 @Controller('employee-archives')
 @Roles(SysRole.hr, SysRole.system_admin)
@@ -51,12 +60,62 @@ export class EmployeeArchivesController {
     private readonly imports: EmployeeRosterImportService,
     private readonly reviews: EmployeeDataReviewsService,
     private readonly diagnostics: PersonnelDiagnosticsService,
+    private readonly identityMatch: EmployeeIdentityMatchService,
+    private readonly onboarding: EmployeeOnboardingService,
   ) {}
 
   @Get('diagnostics')
   @HrCapabilities('employee_archive_edit', 'employee_archive_review')
   inspectDiagnostics() {
     return this.diagnostics.inspect();
+  }
+
+  @Post('identity-lookup')
+  @HrCapabilities('employee_archive_edit')
+  lookupIdentity(@Body() input: EmployeeIdentityLookupDto) {
+    return this.identityMatch.lookup(input);
+  }
+
+  @Post('onboarding-intakes')
+  @HrCapabilities('employee_archive_edit')
+  createOnboardingIntake(@Body() input: CreateOnboardingIntakeDto, @CurrentUser() operator: AuthUser) {
+    return this.onboarding.createOnboardingIntake(input, operator.id);
+  }
+
+  @Post(':userId/reentry')
+  @HrCapabilities('employee_archive_edit')
+  createReentry(
+    @Param('userId', new ParseUUIDPipe({ version: '4' })) userId: string,
+    @Body() input: CreateEmployeeReentryDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.onboarding.createReentry(userId, input, operator.id);
+  }
+
+  @Get(':userId/reentry/current')
+  @HrCapabilities('employee_archive_edit')
+  getCurrentReentry(@Param('userId', new ParseUUIDPipe({ version: '4' })) userId: string) {
+    return this.onboarding.getCurrentReentry(userId);
+  }
+
+  @Patch('reentry/:requestId')
+  @HrCapabilities('employee_archive_edit')
+  reviseReentry(
+    @Param('requestId', new ParseUUIDPipe({ version: '4' })) requestId: string,
+    @Body() input: ReviseEmployeeReentryDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.onboarding.reviseReentry(requestId, input, operator.id);
+  }
+
+  @Post('reentry/:requestId/cancel')
+  @HrCapabilities('employee_archive_edit')
+  cancelReentry(
+    @Param('requestId', new ParseUUIDPipe({ version: '4' })) requestId: string,
+    @Body() input: CancelEmployeeReentryDto,
+    @CurrentUser() operator: AuthUser,
+  ) {
+    return this.onboarding.cancelReentry(requestId, input, operator.id);
   }
 
   @Get('reviews/list')

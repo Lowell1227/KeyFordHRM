@@ -15,6 +15,7 @@ import type {
   PositionQueryDto,
   UpdatePositionDto,
 } from './dto/position.dto';
+import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 
 type PositionAction = 'create' | 'update' | 'deactivate';
 
@@ -42,7 +43,7 @@ export class PositionsService {
               where: {
                 deletedAt: null,
                 accountType: AccountType.employee,
-                status: { not: UserStatus.resigned },
+                status: { in: CURRENT_WORKER_STATUSES },
               },
             },
           },
@@ -136,7 +137,7 @@ export class PositionsService {
         positionId: id,
         deletedAt: null,
         accountType: AccountType.employee,
-        status: { not: UserStatus.resigned },
+        status: { in: CURRENT_WORKER_STATUSES },
       },
     });
     const warnings = activeEmployeeCount > 0
@@ -226,7 +227,7 @@ export class PositionsService {
               positionId,
               deletedAt: null,
               accountType: AccountType.employee,
-              status: { not: UserStatus.resigned },
+              status: { in: CURRENT_WORKER_STATUSES },
             },
           });
           if (activeEmployeeCount > 0) {

@@ -10,6 +10,7 @@ import { UpdateDepartmentStructureDto } from './dto/update-department-structure.
 import { CreateDepartmentDto } from './dto/create-department.dto';
 import { MergeDepartmentDto } from './dto/merge-department.dto';
 import type { AuthUser } from '@/common/types/auth.types';
+import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 
 interface DepartmentStructureRecord {
   id: string;
@@ -157,7 +158,7 @@ export class DepartmentsService {
         deptId: { in: deptIds },
         deletedAt: null,
         accountType: AccountType.employee,
-        status: { not: 'resigned' },
+        status: { in: CURRENT_WORKER_STATUSES },
       },
       _count: { _all: true },
     });
@@ -309,7 +310,7 @@ export class DepartmentsService {
       where: {
         deptId: id,
         deletedAt: null,
-        status: { not: 'resigned' },
+        status: { in: CURRENT_WORKER_STATUSES },
       },
     });
 
@@ -1090,7 +1091,7 @@ export class DepartmentsService {
       where: {
         deptId: id,
         deletedAt: null,
-        status: { not: 'resigned' },
+        status: { in: CURRENT_WORKER_STATUSES },
       },
     });
 

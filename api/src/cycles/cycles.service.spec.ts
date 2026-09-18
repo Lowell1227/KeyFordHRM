@@ -235,7 +235,7 @@ describe('CyclesService', () => {
           { sysRole: SysRole.hr_user, hrCapabilities: { has: 'cycle_plan_edit' } },
         ],
         deletedAt: null,
-        status: { not: 'resigned' },
+          status: { in: ['active', 'probation'] },
       },
       select: { id: true },
       orderBy: { createdAt: 'asc' },

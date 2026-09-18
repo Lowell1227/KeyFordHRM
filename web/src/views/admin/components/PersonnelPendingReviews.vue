@@ -209,6 +209,22 @@ function employeeChangeSummary(row: EmployeeDataReview): string {
   const afterProfile = (row.proposedValue.profile ?? {}) as Record<string, unknown>;
   const beforePerformance = (row.baseValue.performance ?? {}) as Record<string, unknown>;
   const afterPerformance = (row.proposedValue.performance ?? {}) as Record<string, unknown>;
+  if (row.intakeType === 'reentry') {
+    return [
+      '再入职',
+      row.employeeNo ? `新工号 ${row.employeeNo}` : null,
+      afterEmployee.position ? `岗位 ${String(afterEmployee.position)}` : null,
+      afterEmployee.effectiveDate ? `生效 ${String(afterEmployee.effectiveDate).slice(0, 10)}` : null,
+    ].filter(Boolean).join(' · ');
+  }
+  if (row.intakeType === 'new_hire') {
+    return [
+      '新增员工',
+      row.employeeNo ? `工号 ${row.employeeNo}` : null,
+      afterEmployee.position ? `岗位 ${String(afterEmployee.position)}` : null,
+      afterEmployee.effectiveFrom ? `生效 ${String(afterEmployee.effectiveFrom).slice(0, 10)}` : null,
+    ].filter(Boolean).join(' · ');
+  }
   const changes: string[] = [];
   const fields: Array<[Record<string, unknown>, Record<string, unknown>, string, string]> = [
     [beforeEmployee, afterEmployee, 'deptId', '部门'],
@@ -228,11 +244,18 @@ function employeeChangeSummary(row: EmployeeDataReview): string {
 }
 
 function employeeChangeType(row: EmployeeDataReview): string {
+  if (row.intakeType === 'reentry') return '再入职';
+  if (row.intakeType === 'new_hire') return '新增员工';
   const profilePending = row.profileReviewStatus === 'pending';
   const performancePending = row.performanceReviewStatus === 'pending';
   if (profilePending && performancePending) return '档案及关系';
   if (performancePending) return '绩效关系';
   return '档案变更';
+}
+
+function reviewWarningText(warning: string | { field: string; message: string }): string {
+  const text = typeof warning === 'string' ? warning : warning.message;
+  return text.includes('仅作提醒') ? text : `${text}，仅作提醒，不影响审核`;
 }
 
 function formatDateTime(value?: string | null): string {
@@ -569,7 +592,7 @@ onMounted(async () => {
                 </span>
               </div>
               <div v-if="(row as EmployeeDataReview).validationWarnings?.length" class="review-warning">
-                {{ (row as EmployeeDataReview).validationWarnings?.map((warning) => warning.includes('仅作提醒') ? warning : `${warning}，仅作提醒，不影响审核`).join('；') }}
+                {{ (row as EmployeeDataReview).validationWarnings?.map(reviewWarningText).join('；') }}
               </div>
             </div>
           </template>

@@ -19,6 +19,8 @@ import type {
   SubmitEmployeeArchiveDraftDto,
 } from './dto/employee-archive.dto';
 import { employmentWarnings, selectEmploymentAt } from './employment-timeline';
+import { EmployeeIdentityMatchService } from './employee-identity-match.service';
+import { EmployeeNumberService } from './employee-number.service';
 
 export interface UpsertEmployeeProfileInput {
   phone?: string | null;
@@ -74,44 +76,25 @@ export class EmployeeArchivesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly config?: ConfigService,
+    private readonly employeeNumbers?: EmployeeNumberService,
+    private readonly identityMatcher?: EmployeeIdentityMatchService,
   ) {}
 
   async createEmployee(input: CreateEmployeeDto, operator: AuthUser) {
+    if (this.identityMatcher && (input.phone?.trim() || input.idNumber?.trim())) {
+      const identity = await this.identityMatcher.lookup({
+        phone: input.phone?.trim() || undefined,
+        idNumber: input.idNumber?.trim() || undefined,
+      });
+      if (identity.outcome === 'identity_match' || identity.outcome === 'conflict') {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '发现已存在员工，请进入原档案处理再入职或资料维护' });
+      }
+      if (identity.outcome === 'phone_candidates' && !input.phoneDuplicateAcknowledged) {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '该手机号与已有员工相同，请确认不是同一人后再继续' });
+      }
+    }
     return this.prisma.$transaction(async (tx) => {
-      const employeeNo = input.employeeNo.trim();
       const name = input.name.trim();
-      const existing = await tx.user.findFirst({
-        where: {
-          OR: [
-            { employeeNo },
-            ...(input.phone?.trim() ? [{ phone: input.phone.trim() }] : []),
-          ],
-          deletedAt: null,
-        },
-        select: { id: true, employeeNo: true, name: true },
-      });
-      if (existing) {
-        throw new ConflictException({
-          code: ERROR_CODE.CONFLICT,
-          message: `疑似已存在员工：${existing.employeeNo ?? '无工号'} · ${existing.name}`,
-        });
-      }
-      const pendingCreate = await tx.employeeDataChangeRequest.findFirst({
-        where: {
-          employeeNo,
-          sourceType: 'manual_employee_create',
-          recordStatus: 'submitted',
-          archivedAt: null,
-          profileReviewStatus: { in: ['pending', 'applying'] },
-        },
-        select: { id: true },
-      });
-      if (pendingCreate) {
-        throw new ConflictException({
-          code: ERROR_CODE.CONFLICT,
-          message: '该工号已有新增员工审核中，请先处理现有申请',
-        });
-      }
       const department = await tx.department.findUnique({
         where: { id: input.deptId },
         select: { id: true, isActive: true },
@@ -134,11 +117,19 @@ export class EmployeeArchivesService {
         warnings.push('任职结束日期早于生效日期');
       }
       const performanceManagerId = input.performanceManagerId ?? null;
+      const securedProfile: Record<string, unknown> = { phone: input.phone?.trim() || null };
+      if (input.idNumber?.trim()) {
+        const secured = this.encryptAndFingerprint(input.idNumber.trim().toUpperCase());
+        securedProfile.idNumberEncrypted = secured.encrypted;
+        securedProfile.idNumberFingerprint = secured.fingerprint;
+      }
       const requestData = {
           userId: null,
-          employeeNo,
+          employeeNo: null,
           employeeName: name,
           sourceType: 'manual_employee_create',
+          intakeType: 'new_hire',
+          onboardingStatus: 'submitted',
           baseValue: this.toJson({
             employee: {},
             profile: {},
@@ -148,7 +139,7 @@ export class EmployeeArchivesService {
           }),
           proposedValue: this.toJson({
             employee: {
-              employeeNo,
+              employeeNo: null,
               name,
               phone: input.phone?.trim() || null,
               company: input.company,
@@ -164,7 +155,7 @@ export class EmployeeArchivesService {
               employeeStatus: input.employeeStatus,
               changeType: 'hire',
             },
-            profile: { phone: input.phone?.trim() || null },
+            profile: securedProfile,
             contracts: [],
             performance: { managerId: performanceManagerId },
           }),
@@ -193,6 +184,19 @@ export class EmployeeArchivesService {
       const request = input.draftId
         ? await tx.employeeDataChangeRequest.update({ where: { id: input.draftId }, data: requestData })
         : await tx.employeeDataChangeRequest.create({ data: requestData });
+      if (!this.employeeNumbers) {
+        throw new BadRequestException({ code: ERROR_CODE.INTERNAL, message: '员工工号服务未就绪' });
+      }
+      const employeeNo = await this.employeeNumbers.reserveNext(tx, request.id);
+      const proposed = requestData.proposedValue as unknown as Record<string, unknown>;
+      const employee = proposed.employee as Record<string, unknown>;
+      const updated = await tx.employeeDataChangeRequest.update({
+        where: { id: request.id },
+        data: {
+          employeeNo,
+          proposedValue: this.toJson({ ...proposed, employee: { ...employee, employeeNo } }),
+        },
+      });
       await tx.auditLog.create({
         data: {
           userId: operator.id,
@@ -202,12 +206,12 @@ export class EmployeeArchivesService {
           newValue: this.toJson({ employeeNo, name, effectiveFrom: input.effectiveFrom, warnings }),
         },
       });
-      return request;
+      return updated;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   async saveEmployeeCreateDraft(input: SaveEmployeeCreateDraftDto, operator: AuthUser) {
-    const employeeNo = input.employeeNo?.trim() || null;
+    const employeeNo = null;
     const employeeName = input.name?.trim() || '未命名员工草稿';
     const proposedValue = this.toJson({
       employee: {
@@ -616,7 +620,12 @@ export class EmployeeArchivesService {
     const baseEmployee = this.employeeReviewData(user, employment);
     const baseProfile = this.profileReviewData(user.employeeProfile);
     const baseContracts = user.employeeContracts.map((contract) => this.contractReviewData(contract));
-    const proposedEmployee = { ...baseEmployee, ...input.employee };
+    const proposedEmployee = {
+      ...baseEmployee,
+      ...input.employee,
+      // 工号由入职/再入职流程生成，档案编辑不得改写当前或历史工号。
+      employeeNo: baseEmployee.employeeNo,
+    };
     const proposedProfile: Record<string, unknown> = { ...baseProfile, ...input.profile };
     this.applySensitiveReplacement(proposedProfile, input.profile, 'idNumber', 'idNumberEncrypted', 'idNumberFingerprint');
     this.applySensitiveReplacement(proposedProfile, input.profile, 'bankAccount', 'bankAccountEncrypted', 'bankAccountFingerprint');

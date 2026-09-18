@@ -455,6 +455,7 @@ export class FixtureFactory {
       'template_indicators',
       'template_dimensions',
       'indicators',
+      'employee_number_assignments',
       'employment_records',
     ];
 

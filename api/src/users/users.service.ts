@@ -17,6 +17,7 @@ import {
 } from '@/auth/business-capabilities.service';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import * as bcrypt from 'bcrypt';
+import { currentWorkerWhere, CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 
 export type SystemPermission = 'standard_user' | 'hr_user' | 'hr_admin' | 'system_admin';
 
@@ -58,6 +59,7 @@ export interface UserListItem {
   entryDate: Date | null;
   dingtalkBindingState: 'unbound' | 'enabled' | 'disabled';
   archivedAt: Date | null;
+  matchedHistoricalEmployeeNo: string | null;
 }
 
 /** 用户详情字段 */
@@ -158,6 +160,10 @@ export class UsersService {
       where.OR = [
         { name: { contains: dto.keyword, mode: 'insensitive' } },
         { employeeNo: { contains: dto.keyword, mode: 'insensitive' } },
+        { employeeNumberAssignments: { some: {
+          employeeNo: { contains: dto.keyword, mode: 'insensitive' },
+          status: 'historical',
+        } } },
       ];
     }
 
@@ -167,10 +173,13 @@ export class UsersService {
       where.AND = [scopeFilter];
     }
     if (dto.eligibleFor === 'cycle_owner') {
-      where.AND = [scopeFilter, { status: { not: UserStatus.resigned }, OR: [
+      where.AND = [scopeFilter, { status: { in: CURRENT_WORKER_STATUSES }, archivedAt: null, OR: [
         { sysRole: SysRole.hr },
         { sysRole: SysRole.hr_user, hrCapabilities: { has: 'cycle_plan_edit' } },
       ] }];
+    }
+    if (dto.eligibleFor === 'direct_manager') {
+      Object.assign(where, currentWorkerWhere, { accountType: AccountType.employee });
     }
 
     const [total, users] = await Promise.all([
@@ -186,6 +195,11 @@ export class UsersService {
             where: { provider: ExternalIdentityProvider.dingtalk, endedAt: null },
             select: { status: true },
             take: 1,
+          },
+          employeeNumberAssignments: {
+            where: { status: 'historical' },
+            select: { employeeNo: true },
+            orderBy: { effectiveFrom: 'desc' },
           },
         },
         orderBy: { createdAt: 'desc' },
@@ -218,6 +232,9 @@ export class UsersService {
       entryDate: u.entryDate,
       dingtalkBindingState: u.externalIdentityBindings[0]?.status ?? 'unbound',
       archivedAt: u.archivedAt,
+      matchedHistoricalEmployeeNo: dto.keyword
+        ? (u.employeeNumberAssignments.find((item) => item.employeeNo.toLowerCase().includes(dto.keyword!.toLowerCase()))?.employeeNo ?? null)
+        : null,
     }));
 
     return paginated(items, total, dto);

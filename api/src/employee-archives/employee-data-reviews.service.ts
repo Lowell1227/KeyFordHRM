@@ -4,6 +4,9 @@ import {
   CompanyCode,
   EmploymentType,
   ExternalIdentityStatus,
+  EmployeeNumberStatus,
+  OnboardingIntakeType,
+  OnboardingStatus,
   Prisma,
   SysRole,
   UserStatus,
@@ -12,6 +15,9 @@ import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
+import { EmployeeOnboardingService } from './employee-onboarding.service';
+import { RESIGNATION_BINDING_DISABLED_REASON } from './employee-effective-date.service';
+import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 
 export type EmployeeReviewScope = 'profile' | 'performance';
 
@@ -38,7 +44,10 @@ export interface EmployeeReviewQuery {
 
 @Injectable()
 export class EmployeeDataReviewsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly onboarding?: EmployeeOnboardingService,
+  ) {}
 
   async findAll(query: EmployeeReviewQuery) {
     const where: Prisma.EmployeeDataChangeRequestWhereInput = {
@@ -103,7 +112,7 @@ export class EmployeeDataReviewsService {
         id: userId,
         deletedAt: null,
         accountType: AccountType.employee,
-        status: { not: UserStatus.resigned },
+        status: { in: CURRENT_WORKER_STATUSES },
       },
       select: {
         id: true,
@@ -132,7 +141,7 @@ export class EmployeeDataReviewsService {
           id: input.managerId,
           deletedAt: null,
           accountType: AccountType.employee,
-          status: { not: UserStatus.resigned },
+          status: { in: CURRENT_WORKER_STATUSES },
         },
         select: { id: true, name: true },
       });
@@ -202,7 +211,7 @@ export class EmployeeDataReviewsService {
           id: managerId,
           deletedAt: null,
           accountType: AccountType.employee,
-          status: { not: UserStatus.resigned },
+          status: { in: CURRENT_WORKER_STATUSES },
         },
         select: { id: true, name: true, deletedAt: true },
       }),
@@ -298,9 +307,51 @@ export class EmployeeDataReviewsService {
 
         let subjectUserId = request.userId;
         if (scope === 'profile') {
-          subjectUserId = await this.applyProfile(tx, request, operator);
+          if (request.intakeType === OnboardingIntakeType.reentry) {
+            if (!this.onboarding || !request.userId) {
+              throw new BadRequestException({ code: ERROR_CODE.INTERNAL, message: '再入职审核服务未就绪' });
+            }
+            await this.onboarding.applyApprovedReentry(tx, request.id, operator.id, new Date());
+            subjectUserId = request.userId;
+          } else {
+            subjectUserId = await this.applyProfile(tx, request, operator);
+            if (request.intakeType === OnboardingIntakeType.new_hire && request.employeeNo) {
+              const employee = this.record(this.record(request.proposedValue).employee);
+              const effectiveFrom = this.requiredDate(employee.effectiveFrom, '入职生效日期不能为空');
+              const pendingEntry = effectiveFrom > this.startOfTodayInShanghai()
+                || request.performanceReviewStatus === 'pending';
+              await tx.employeeNumberAssignment.updateMany({
+                where: {
+                  sourceRequestId: request.id,
+                  employeeNo: request.employeeNo,
+                  status: EmployeeNumberStatus.reserved,
+                },
+                data: {
+                  userId: subjectUserId,
+                  status: pendingEntry ? EmployeeNumberStatus.reserved : EmployeeNumberStatus.current,
+                  effectiveFrom,
+                },
+              });
+              await tx.employeeDataChangeRequest.update({
+                where: { id: request.id },
+                data: { onboardingStatus: pendingEntry ? OnboardingStatus.pending_entry : OnboardingStatus.effective },
+              });
+              if (pendingEntry) {
+                await tx.user.update({ where: { id: subjectUserId }, data: {
+                  status: UserStatus.pending_entry,
+                  sysRole: SysRole.employee,
+                  hrCapabilities: { set: [] },
+                  canViewAll: false,
+                  isAssessorOnly: false,
+                } });
+              }
+            }
+          }
         } else {
           await this.applyPerformanceRelation(tx, request);
+          if (request.intakeType && request.profileReviewStatus === 'approved' && this.onboarding) {
+            await this.onboarding.finalizeApprovedOnboarding(tx, request.id, new Date());
+          }
         }
 
         const now = new Date();
@@ -445,7 +496,10 @@ export class EmployeeDataReviewsService {
   private async applyProfile(
     tx: Prisma.TransactionClient,
     request: {
+      id: string;
       userId: string | null;
+      employeeNo: string | null;
+      intakeType: OnboardingIntakeType | null;
       sourceBatchId: string | null;
       sourceType: string;
       baseValue: Prisma.JsonValue;
@@ -569,7 +623,7 @@ export class EmployeeDataReviewsService {
             name: rosterManagerName,
             deletedAt: null,
             accountType: AccountType.employee,
-            status: { not: UserStatus.resigned },
+            status: { in: CURRENT_WORKER_STATUSES },
           },
           select: { id: true },
           take: 2,
@@ -583,6 +637,7 @@ export class EmployeeDataReviewsService {
 
     const employmentData = {
       userId,
+      employeeNo: request.intakeType ? employeeNo : null,
       company,
       deptId,
       positionId,
@@ -602,6 +657,7 @@ export class EmployeeDataReviewsService {
       reason: '员工档案审核通过',
       sourceType: 'employee_data_review',
       sourceBatchId: request.sourceBatchId,
+      sourceRequestId: request.intakeType ? request.id : null,
       createdById: operator.id,
     };
     const baseEmployee = this.record(this.record(request.baseValue).employee);
@@ -660,7 +716,7 @@ export class EmployeeDataReviewsService {
           status: ExternalIdentityStatus.disabled,
           disabledAt: new Date(),
           disabledById: operator.id,
-          disabledReason: '员工档案审核为离职',
+          disabledReason: RESIGNATION_BINDING_DISABLED_REASON,
         },
       });
     }
@@ -724,7 +780,7 @@ export class EmployeeDataReviewsService {
           name: managerName,
           deletedAt: null,
           accountType: AccountType.employee,
-          status: { not: UserStatus.resigned },
+          status: { in: CURRENT_WORKER_STATUSES },
         },
         select: { id: true },
         take: 2,
@@ -763,7 +819,7 @@ export class EmployeeDataReviewsService {
         id: managerId,
         deletedAt: null,
         accountType: AccountType.employee,
-        status: { not: UserStatus.resigned },
+        status: { in: CURRENT_WORKER_STATUSES },
       },
       select: { id: true, deletedAt: true, directManagerId: true },
     });
@@ -1222,6 +1278,14 @@ export class EmployeeDataReviewsService {
 
   private startOfUtcDay(value: Date): Date {
     return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
+  }
+
+  private startOfTodayInShanghai(at = new Date()): Date {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
+    }).formatToParts(at);
+    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
+    return new Date(`${values.year}-${values.month}-${values.day}T00:00:00.000Z`);
   }
 
   private stringArray(value: Prisma.JsonValue): string[] {

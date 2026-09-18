@@ -37,7 +37,7 @@ export interface EmployeeDataReview {
   profileReviewStatus: EmployeeReviewStatus;
   performanceReviewStatus: EmployeeReviewStatus;
   validationErrors: string[];
-  validationWarnings?: string[];
+  validationWarnings?: Array<string | { field: string; message: string }>;
   baseValue: Record<string, any>;
   proposedValue: Record<string, any>;
   createdBy?: { id: string; name: string; sysRole: string };
@@ -51,6 +51,42 @@ export interface EmployeeDataReview {
   updatedAt: string;
   recordStatus?: 'draft' | 'submitted' | 'archived';
   archivedAt?: string | null;
+  intakeType?: 'new_hire' | 'reentry' | null;
+  onboardingStatus?: 'draft' | 'submitted' | 'pending_entry' | 'effective' | 'cancelled' | null;
+  requestVersion?: number;
+}
+
+export interface EmployeeIdentityCandidate {
+  id: string;
+  maskedName: string;
+  currentEmployeeNo: string | null;
+  matchedHistoricalEmployeeNo: string | null;
+  status: 'active' | 'probation' | 'pending_entry' | 'resigned';
+  archived: boolean;
+  departmentName: string | null;
+  matchBasis: 'id_number' | 'phone';
+  nextAction: 'reentry' | 'view_profile' | 'edit_profile' | 'view_onboarding' | 'confirm_phone';
+}
+
+export interface EmployeeIdentityLookupResult {
+  outcome: 'none' | 'phone_candidates' | 'identity_match' | 'conflict';
+  candidates: EmployeeIdentityCandidate[];
+}
+
+export interface EmployeeReentryBody {
+  company: string;
+  deptId?: string | null;
+  positionId?: string | null;
+  position?: string | null;
+  rosterManagerId?: string | null;
+  performanceManagerId?: string | null;
+  effectiveDate: string;
+  effectiveTo?: string | null;
+  employeeStatus: 'active' | 'probation';
+  employmentType: string;
+  plannedRegularDate?: string | null;
+  probationMonths?: number | null;
+  contractReferences?: Array<{ kind: string; reference: string }>;
 }
 
 export interface EmployeeDataReviewPage {
@@ -94,7 +130,7 @@ export interface EmployeeArchive {
   id: string;
   name: string;
   employeeNo: string | null;
-  status: 'active' | 'probation' | 'resigned';
+  status: 'active' | 'probation' | 'pending_entry' | 'resigned';
   position: string | null;
   entryDate: string | null;
   dept: { id: string; name: string; fullPath: string | null; company: string } | null;
@@ -211,9 +247,10 @@ export interface EmployeeArchive {
 export const employeeArchivesApi = {
   createEmployee(body: {
     draftId?: string;
-    employeeNo: string;
     name: string;
     phone?: string | null;
+    idNumber?: string | null;
+    phoneDuplicateAcknowledged?: boolean;
     company: string;
     deptId: string;
     positionId?: string | null;
@@ -230,9 +267,10 @@ export const employeeArchivesApi = {
 
   saveEmployeeCreateDraft(body: Partial<{
     draftId: string;
-    employeeNo: string;
     name: string;
     phone: string | null;
+    idNumber: string | null;
+    phoneDuplicateAcknowledged: boolean;
     company: string;
     deptId: string;
     positionId: string | null;
@@ -282,6 +320,26 @@ export const employeeArchivesApi = {
     performance: Record<string, unknown>;
   }): Promise<EmployeeDataReview> {
     return http.patch(`/employee-archives/${userId}/draft`, body) as unknown as Promise<EmployeeDataReview>;
+  },
+
+  lookupIdentity(body: { phone?: string; idNumber?: string }): Promise<EmployeeIdentityLookupResult> {
+    return http.post('/employee-archives/identity-lookup', body) as unknown as Promise<EmployeeIdentityLookupResult>;
+  },
+
+  createReentry(userId: string, body: EmployeeReentryBody): Promise<EmployeeDataReview> {
+    return http.post(`/employee-archives/${userId}/reentry`, body) as unknown as Promise<EmployeeDataReview>;
+  },
+
+  getCurrentReentry(userId: string): Promise<EmployeeDataReview | null> {
+    return http.get(`/employee-archives/${userId}/reentry/current`) as unknown as Promise<EmployeeDataReview | null>;
+  },
+
+  reviseReentry(requestId: string, body: EmployeeReentryBody): Promise<EmployeeDataReview> {
+    return http.patch(`/employee-archives/reentry/${requestId}`, body) as unknown as Promise<EmployeeDataReview>;
+  },
+
+  cancelReentry(requestId: string, reason: string): Promise<EmployeeDataReview> {
+    return http.post(`/employee-archives/reentry/${requestId}/cancel`, { reason }) as unknown as Promise<EmployeeDataReview>;
   },
 
   saveArchiveDraft(userId: string, body: {

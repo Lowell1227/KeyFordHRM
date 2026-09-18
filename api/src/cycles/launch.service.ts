@@ -19,6 +19,7 @@ import {
 import { NotificationsService } from '@/notifications/notifications.service';
 import { ExemptService } from './exempt.service';
 import { serializeDecimals } from '@/common/interceptors/response.interceptor';
+import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 import {
   buildPerformanceApproverMap,
   PerformanceApproverSource,
@@ -706,7 +707,7 @@ export class LaunchService {
 
     if (!this.isWorkflowV2(cycle)) {
       const included = await tx.user.findMany({
-        where: { ...scopeWhere, status: { not: 'resigned' } },
+        where: { ...scopeWhere, status: { in: CURRENT_WORKER_STATUSES } },
         select,
       });
       return { included, exclusions: [] };
@@ -1468,7 +1469,7 @@ export class LaunchService {
         id: hrOwnerId,
         sysRole: 'hr',
         deletedAt: null,
-        status: { not: 'resigned' },
+        status: { in: CURRENT_WORKER_STATUSES },
       },
       select: { id: true, name: true },
     });

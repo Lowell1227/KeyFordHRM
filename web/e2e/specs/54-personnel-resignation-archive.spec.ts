@@ -138,6 +138,9 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   await page.route(`**/api/v1/employee-archives/${resignedEmployeeTwo.id}`, (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse({ ...archivedArchive, ...resignedEmployeeTwo })),
   }));
+  await page.route(`**/api/v1/employee-archives/${resignedEmployee.id}/reentry/current`, (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse(null)),
+  }));
   await page.route(`**/api/v1/employee-archives/${activeEmployee.id}/employments`, async (route) => {
     resignationBody = route.request().postDataJSON();
     return route.fulfill({
@@ -186,7 +189,7 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   await expect.poll(() => userQueryUrls.some((url) => (
     new URL(url).searchParams.get('deptId') === activeEmployee.deptId
   ))).toBeTruthy();
-  await expect(categoryTabs.getByRole('tab')).toHaveText(['全部', '在职', '试用期', '已离职', '草稿', '已归档']);
+  await expect(categoryTabs.getByRole('tab')).toHaveText(['全部', '在职', '试用期', '待入职', '已离职', '草稿', '已归档']);
   await expect(categoryTabs.getByRole('tab', { name: '全部' })).toHaveAttribute('aria-selected', 'true');
   await expect.poll(() => userQueryUrls.some((url) => new URL(url).searchParams.get('includeResigned') === 'true')).toBeTruthy();
   await expect(page.getByRole('button', { name: '草稿箱' })).toHaveCount(0);
@@ -228,6 +231,12 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   await categoryTabs.getByRole('tab', { name: '已归档' }).click();
   await expect.poll(() => userQueryUrls.some((url) => new URL(url).searchParams.get('archived') === 'true')).toBeTruthy();
   const archivedRow = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '离职员工' }).filter({ hasNotText: '离职员工二' });
+  await archivedRow.getByRole('button', { name: '办理再入职' }).click();
+  const reentryDrawer = page.getByRole('dialog', { name: '办理再入职' });
+  await expect(reentryDrawer.getByText('再入职将自动生成新工号')).toBeVisible();
+  await expect(reentryDrawer.getByText('花名册直属主管', { exact: true })).toBeVisible();
+  await expect(reentryDrawer.getByText('绩效直属上级', { exact: true })).toBeVisible();
+  await reentryDrawer.getByLabel('关闭此对话框').click();
   await archivedRow.getByRole('button', { name: '查看档案' }).click();
   const archivedDrawer = page.getByRole('dialog', { name: '员工档案' });
   await expect(archivedDrawer.getByRole('button', { name: '编辑档案' })).toHaveCount(0);
@@ -254,6 +263,8 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   const createDrawer = page.getByRole('dialog', { name: '新增员工' });
   await expect(createDrawer.getByRole('button', { name: '保存草稿' })).toBeVisible();
   await expect(createDrawer.getByRole('button', { name: '提交审核' })).toBeVisible();
+  await expect(createDrawer.getByText('员工工号由系统提交时自动生成')).toBeVisible();
+  await expect(createDrawer.getByLabel('工号')).toHaveCount(0);
   await createDrawer.getByLabel('关闭此对话框').click();
 
   await categoryTabs.getByRole('tab', { name: '全部' }).click();

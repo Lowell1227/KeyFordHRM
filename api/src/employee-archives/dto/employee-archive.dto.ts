@@ -27,11 +27,6 @@ export class CreateEmployeeDto {
 
   @IsString()
   @IsNotEmpty()
-  @MaxLength(30)
-  employeeNo!: string;
-
-  @IsString()
-  @IsNotEmpty()
   @MaxLength(50)
   name!: string;
 
@@ -39,6 +34,15 @@ export class CreateEmployeeDto {
   @IsString()
   @MaxLength(20)
   phone?: string | null;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(30)
+  idNumber?: string | null;
+
+  @IsOptional()
+  @IsBoolean()
+  phoneDuplicateAcknowledged?: boolean = false;
 
   @IsEnum(CompanyCode)
   company!: CompanyCode;

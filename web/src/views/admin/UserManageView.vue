@@ -31,6 +31,7 @@ import EmployeeArchiveInlineEditor from './components/EmployeeArchiveInlineEdito
 import DepartmentEditDrawer from './components/DepartmentEditDrawer.vue';
 import DepartmentCreateDrawer from './components/DepartmentCreateDrawer.vue';
 import EmployeeCreateDrawer from './components/EmployeeCreateDrawer.vue';
+import EmployeeReentryDrawer from './components/EmployeeReentryDrawer.vue';
 import EmploymentRecordDrawer from './components/EmploymentRecordDrawer.vue';
 import { formatBusinessIdentityLabel } from '@/components/layout/business-identity';
 import { useAuthStore } from '@/stores/auth.store';
@@ -121,12 +122,14 @@ const systemPermissionLabels: Record<SystemPermission, string> = {
 const statusLabels: Record<UserStatus, string> = {
   active: '在职',
   probation: '试用期',
+  pending_entry: '待入职',
   resigned: '已离职',
 };
 
 const statusTagType: Record<UserStatus, 'success' | 'warning' | 'info'> = {
   active: 'success',
   probation: 'warning',
+  pending_entry: 'warning',
   resigned: 'info',
 };
 
@@ -173,6 +176,7 @@ const employeeCategoryOptions: { label: string; value: EmployeeDirectoryCategory
   { label: '全部', value: 'all' },
   { label: '在职', value: 'active' },
   { label: '试用期', value: 'probation' },
+  { label: '待入职', value: 'pending_entry' },
   { label: '已离职', value: 'resigned' },
   { label: '草稿', value: 'draft' },
   { label: '已归档', value: 'archived' },
@@ -421,7 +425,7 @@ async function loadOrgMembers() {
 async function loadUsers() {
   userLoading.value = true;
   try {
-    const categoryStatus = ['active', 'probation', 'resigned'].includes(employeeCategory.value)
+    const categoryStatus = ['active', 'probation', 'pending_entry', 'resigned'].includes(employeeCategory.value)
       ? employeeCategory.value as UserStatus
       : undefined;
     const res = await usersApi.findAll({
@@ -780,6 +784,8 @@ const departmentEditDrawer = ref({ visible: false, department: null as Departmen
 const departmentCreateDrawer = ref({ visible: false, parent: null as Department | null });
 const employeeCreateDrawerVisible = ref(false);
 const employeeCreateDraft = ref<EmployeeDataReview | null>(null);
+const employeeReentryDrawerVisible = ref(false);
+const employeeReentryEmployee = ref<ManagedUser | null>(null);
 const employmentRecordDrawerVisible = ref(false);
 const employmentRecordDrawerArchive = ref<EmployeeArchive | null>(null);
 const employmentRecordDrawerMode = ref<'default' | 'resignation'>('default');
@@ -818,6 +824,21 @@ function afterEmployeeDraftSaved() {
   if (isDraftCategory.value) void loadDrafts();
 }
 
+function openEmployeeReentry(row: ManagedUser) {
+  employeeReentryEmployee.value = row;
+  employeeReentryDrawerVisible.value = true;
+}
+
+async function openEmployeeReentryById(userId: string) {
+  const user = await usersApi.findOne(userId);
+  openEmployeeReentry(user);
+}
+
+async function openExistingEmployeeById(userId: string) {
+  const user = await usersApi.findOne(userId);
+  await openEmployeeArchive(user);
+}
+
 function afterEmployeeSubmitted() {
   employeeCreateDraft.value = null;
   void Promise.all([loadUsers(), loadDrafts()]);
@@ -829,6 +850,10 @@ function afterEmploymentSubmitted() {
     employmentRecordDrawerArchive.value = null;
     employmentRecordDrawerMode.value = 'default';
   }
+  void loadUsers();
+}
+
+function afterReentrySubmitted() {
   void loadUsers();
 }
 
@@ -1685,7 +1710,7 @@ onBeforeUnmount(() => {
             <el-input
               v-model="userQuery.keyword"
               :prefix-icon="Search"
-              placeholder="搜索姓名或工号"
+              placeholder="搜索姓名、当前工号或历史工号"
               clearable
               class="filter-keyword"
               @keyup.enter="onUserQueryChange"
@@ -1744,6 +1769,7 @@ onBeforeUnmount(() => {
                     <div>
                       <strong>{{ (row as ManagedUser).name }}</strong>
                       <small>{{ (row as ManagedUser).employeeNo || '工号待补充' }}</small>
+                      <small v-if="(row as ManagedUser).matchedHistoricalEmployeeNo" class="historical-match">历史工号命中：{{ (row as ManagedUser).matchedHistoricalEmployeeNo }}</small>
                     </div>
                   </div>
                 </template>
@@ -1794,25 +1820,28 @@ onBeforeUnmount(() => {
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="操作" width="360" fixed="right">
+              <el-table-column label="操作" width="400" fixed="right">
                 <template #default="{ row }">
                   <el-button link type="primary" size="small" @click="openEmployeeArchive(row as ManagedUser)">查看档案</el-button>
-                  <el-button v-if="!userArchiveView" link type="primary" size="small" :icon="Setting" @click="openPersonSettingsDialog(row as ManagedUser)">人员设置</el-button>
+                  <el-button v-if="!userArchiveView && ['active', 'probation'].includes((row as ManagedUser).status)" link type="primary" size="small" :icon="Setting" @click="openPersonSettingsDialog(row as ManagedUser)">人员设置</el-button>
                   <el-button
-                    v-if="canEditArchive && !userArchiveView && (row as ManagedUser).status !== 'resigned'"
+                    v-if="canEditArchive && !userArchiveView && ['active', 'probation'].includes((row as ManagedUser).status)"
                     link
                     type="primary"
                     size="small"
                     @click="openResignation(row as ManagedUser)"
                   >办理离职</el-button>
-                  <el-button v-if="canResetPassword && !userArchiveView" link type="primary" size="small" :icon="Key" @click="resetPassword(row as ManagedUser)">重置密码</el-button>
+                  <el-button v-if="canEditArchive && ((row as ManagedUser).status === 'resigned' || (row as ManagedUser).archivedAt)" link type="primary" size="small" @click="openEmployeeReentry(row as ManagedUser)">办理再入职</el-button>
+                  <el-button v-else-if="canEditArchive && (row as ManagedUser).status === 'pending_entry'" link type="primary" size="small" @click="openEmployeeReentry(row as ManagedUser)">查看入职流程</el-button>
+                  <el-button v-if="canEditArchive && !userArchiveView && (row as ManagedUser).status === 'resigned'" link type="primary" size="small" @click="archiveEmployee(row as ManagedUser)">归档</el-button>
+                  <el-button v-if="canResetPassword && !userArchiveView && ['active', 'probation'].includes((row as ManagedUser).status)" link type="primary" size="small" :icon="Key" @click="resetPassword(row as ManagedUser)">重置密码</el-button>
                 </template>
               </el-table-column>
             </el-table>
           </div>
           <div v-loading="userLoading" class="mobile-result-list roster-mobile-list">
             <MobileResultCard v-for="item in userList" :key="item.id">
-              <template #title>{{ item.name }} · {{ item.employeeNo || '工号待补充' }}</template>
+              <template #title>{{ item.name }} · {{ item.employeeNo || '工号待补充' }}<small v-if="item.matchedHistoricalEmployeeNo"> · 历史工号命中 {{ item.matchedHistoricalEmployeeNo }}</small></template>
               <template #status><el-tag :type="statusTagType[item.status]" size="small">{{ statusLabels[item.status] }}</el-tag></template>
               <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 岗位</span><span class="mobile-result-field__value">{{ item.deptName || '未分配部门' }} · {{ item.position || '未设置' }}</span></div>
               <div class="mobile-result-field"><span class="mobile-result-field__label">绩效上级</span><span class="mobile-result-field__value">{{ item.directManagerName || '未设置' }}</span></div>
@@ -1820,10 +1849,12 @@ onBeforeUnmount(() => {
               <div class="mobile-result-field"><span class="mobile-result-field__label">钉钉登录</span><span class="mobile-result-field__value">{{ dingtalkStateLabels[item.dingtalkBindingState ?? 'unbound'] }}</span></div>
               <template #actions>
                 <el-button link type="primary" @click="openEmployeeArchive(item)">查看档案</el-button>
-                <el-button v-if="!userArchiveView" link type="primary" @click="openPersonSettingsDialog(item)">人员设置</el-button>
-                <el-button v-if="canEditArchive && !userArchiveView && item.status !== 'resigned'" link type="primary" @click="openResignation(item)">办理离职</el-button>
+                <el-button v-if="!userArchiveView && ['active', 'probation'].includes(item.status)" link type="primary" @click="openPersonSettingsDialog(item)">人员设置</el-button>
+                <el-button v-if="canEditArchive && !userArchiveView && ['active', 'probation'].includes(item.status)" link type="primary" @click="openResignation(item)">办理离职</el-button>
+                <el-button v-if="canEditArchive && (item.status === 'resigned' || item.archivedAt)" link type="primary" @click="openEmployeeReentry(item)">办理再入职</el-button>
+                <el-button v-else-if="canEditArchive && item.status === 'pending_entry'" link type="primary" @click="openEmployeeReentry(item)">查看入职流程</el-button>
                 <el-button v-if="canEditArchive && !userArchiveView && item.status === 'resigned'" link type="primary" @click="archiveEmployee(item)">归档</el-button>
-                <el-button v-if="canResetPassword && !userArchiveView" link type="primary" @click="resetPassword(item)">重置密码</el-button>
+                <el-button v-if="canResetPassword && !userArchiveView && ['active', 'probation'].includes(item.status)" link type="primary" @click="resetPassword(item)">重置密码</el-button>
               </template>
             </MobileResultCard>
           </div>
@@ -2274,6 +2305,15 @@ onBeforeUnmount(() => {
       :draft="employeeCreateDraft"
       @saved="afterEmployeeDraftSaved"
       @submitted="afterEmployeeSubmitted"
+      @reentry="openEmployeeReentryById"
+      @existing="openExistingEmployeeById"
+    />
+
+    <EmployeeReentryDrawer
+      v-model="employeeReentryDrawerVisible"
+      :employee="employeeReentryEmployee"
+      :departments="departments"
+      @submitted="afterReentrySubmitted"
     />
 
     <EmploymentRecordDrawer
@@ -3311,6 +3351,10 @@ onBeforeUnmount(() => {
 .person-cell small {
   margin-top: 2px;
   color: #8a94a6;
+}
+
+.person-cell .historical-match {
+  color: #b54708;
 }
 
 .table-pagination {

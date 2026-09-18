@@ -148,6 +148,7 @@ export interface User {
   updatedAt?: string;
   dingtalkBindingState?: 'unbound' | 'enabled' | 'disabled';
   archivedAt?: string | null;
+  matchedHistoricalEmployeeNo?: string | null;
 }
 
 export interface DirectReport {
@@ -164,7 +165,7 @@ export interface DirectReport {
 }
 
 export interface UserQuery {
-  eligibleFor?: 'cycle_owner';
+  eligibleFor?: 'cycle_owner' | 'direct_manager';
   page?: number;
   pageSize?: number;
   deptId?: string;

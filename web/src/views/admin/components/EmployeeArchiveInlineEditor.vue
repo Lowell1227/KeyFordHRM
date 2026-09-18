@@ -274,7 +274,7 @@ defineExpose({ submit, saveDraft, reset, isDirty });
       </div>
       <el-form label-position="top" class="archive-editor-grid">
         <el-form-item label="姓名"><el-input v-model="form.employee.name" /></el-form-item>
-        <el-form-item label="工号"><el-input v-model="form.employee.employeeNo" /></el-form-item>
+        <el-form-item label="当前工号"><el-input v-model="form.employee.employeeNo" disabled /><small class="field-help">工号由系统生成；历史任职工号在档案中保留，不在此处修改。</small></el-form-item>
         <el-form-item label="所属公司">
           <el-select v-model="form.employee.company"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select>
         </el-form-item>

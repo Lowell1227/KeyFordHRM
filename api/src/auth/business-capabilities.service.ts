@@ -1,5 +1,6 @@
 import { PUBLISHED_RESULT_WHERE } from '@/tasks/result-publication';
 import { Injectable } from '@nestjs/common';
+import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 import { SysRole, TaskStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { findDepartmentsByEffectiveApprover } from '../departments/department-relations';
@@ -63,7 +64,7 @@ export class BusinessCapabilitiesService {
           where: {
             directManagerId: user.id,
             deletedAt: null,
-            status: { not: 'resigned' },
+            status: { in: CURRENT_WORKER_STATUSES },
           },
         }),
         this.prisma.department.findMany({
@@ -174,7 +175,7 @@ export class BusinessCapabilitiesService {
         where: {
           directManagerId: { in: uniqueUserIds },
           deletedAt: null,
-          status: { not: 'resigned' },
+          status: { in: CURRENT_WORKER_STATUSES },
         },
         _count: { _all: true },
       }),

@@ -14,7 +14,7 @@ describe('assigning performance specialist', () => {
       { getIdentitySummariesForUsers: jest.fn().mockResolvedValue(new Map()) } as any);
     await service.findAll(Object.assign(new UserQueryDto(), { eligibleFor: 'cycle_owner' }), { id: 'admin', sysRole: 'system_admin' } as any);
     expect(prisma.user.findMany.mock.calls[0][0].where.AND).toEqual([scope, {
-      status: { not: 'resigned' }, OR: [
+      status: { in: ['active', 'probation'] }, archivedAt: null, OR: [
         { sysRole: 'hr' }, { sysRole: 'hr_user', hrCapabilities: { has: 'cycle_plan_edit' } },
       ],
     }]);

@@ -844,16 +844,24 @@ describe('EmployeeArchivesService', () => {
           profileReviewStatus: 'pending',
           performanceReviewStatus: 'not_required',
         }),
+        update: jest.fn().mockResolvedValue({
+          id: '50000000-0000-4000-8000-000000000001',
+          userId: null,
+          employeeNo: '901',
+          employeeName: '新员工',
+          profileReviewStatus: 'pending',
+          performanceReviewStatus: 'not_required',
+        }),
       },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
     const prisma = {
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
-    const service = new EmployeeArchivesService(prisma as any);
+    const numberService = { reserveNext: jest.fn().mockResolvedValue('901') };
+    const service = new EmployeeArchivesService(prisma as any, undefined, numberService as any);
 
     await expect(service.createEmployee({
-      employeeNo: '901',
       name: '新员工',
       phone: '13800000901',
       company: CompanyCode.fuede,
@@ -871,7 +879,7 @@ describe('EmployeeArchivesService', () => {
     expect(tx.employeeDataChangeRequest.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         userId: null,
-        employeeNo: '901',
+        employeeNo: null,
         employeeName: '新员工',
         sourceType: 'manual_employee_create',
         proposedValue: expect.objectContaining({
@@ -883,29 +891,29 @@ describe('EmployeeArchivesService', () => {
         }),
       }),
     });
+    expect(numberService.reserveNext).toHaveBeenCalledWith(tx, '50000000-0000-4000-8000-000000000001');
     expect(userCreate).not.toHaveBeenCalled();
   });
 
-  it('相同工号已有新增员工待审核申请时不重复生成', async () => {
-    const create = jest.fn();
+  it('相同姓名不会被当作重复员工拦截', async () => {
+    const create = jest.fn().mockResolvedValue({ id: 'request-2' });
+    const update = jest.fn().mockResolvedValue({ id: 'request-2', employeeNo: '902', employeeName: '新员工' });
     const tx = {
-      user: { findFirst: jest.fn().mockResolvedValue(null) },
       department: {
         findUnique: jest.fn().mockResolvedValue({ id: '30000000-0000-4000-8000-000000000001', isActive: true }),
       },
       position: { findUnique: jest.fn().mockResolvedValue(null) },
       employeeDataChangeRequest: {
-        findFirst: jest.fn().mockResolvedValue({ id: 'employee-create-pending' }),
-        create,
+        create, update,
       },
-      auditLog: { create: jest.fn() },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
+    const numberService = { reserveNext: jest.fn().mockResolvedValue('902') };
     const service = new EmployeeArchivesService({
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
-    } as any);
+    } as any, undefined, numberService as any);
 
     await expect(service.createEmployee({
-      employeeNo: '901',
       name: '新员工',
       company: CompanyCode.fuede,
       deptId: '30000000-0000-4000-8000-000000000001',
@@ -913,10 +921,9 @@ describe('EmployeeArchivesService', () => {
       effectiveFrom: new Date('2026-09-10T00:00:00.000Z'),
       employmentType: EmploymentType.full_time,
       employeeStatus: UserStatus.probation,
-    }, hrOperator)).rejects.toMatchObject({
-      response: expect.objectContaining({ message: '该工号已有新增员工审核中，请先处理现有申请' }),
-    });
-    expect(create).not.toHaveBeenCalled();
+    }, hrOperator)).resolves.toMatchObject({ employeeNo: '902', employeeName: '新员工' });
+    expect(create).toHaveBeenCalledTimes(1);
+    expect(numberService.reserveNext).toHaveBeenCalledWith(tx, 'request-2');
   });
 
   it('保存员工档案草稿时不进入审核队列', async () => {
