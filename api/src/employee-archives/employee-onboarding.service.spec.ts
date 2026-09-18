@@ -51,6 +51,50 @@ describe('EmployeeOnboardingService', () => {
     expect(tx.user.create).toBeUndefined();
   });
 
+  it('allows reentry when the latest effective record is resigned even if an older active record still overlaps', async () => {
+    const user = {
+      id: 'u1', name: '历史员工', employeeNo: '126', status: UserStatus.resigned,
+      archivedAt: null, employmentHistory: [],
+    };
+    const created = {
+      id: 'r1', userId: user.id, employeeName: user.name, employeeNo: null,
+      intakeType: 'reentry', onboardingStatus: 'submitted', requestVersion: 1,
+      recordStatus: 'submitted', proposedValue: {}, validationWarnings: [],
+      createdAt: new Date(), updatedAt: new Date(),
+    };
+    const updated = { ...created, employeeNo: '358', proposedValue: { employee: { employeeNo: '358' } } };
+    const tx = {
+      user: { findUnique: jest.fn().mockResolvedValue(user) },
+      employmentRecord: {
+        findFirst: jest.fn(async ({ where }: any) => (
+          where.employeeStatus
+            ? { id: 'older-active', employeeStatus: UserStatus.active, effectiveFrom: new Date('2026-09-14') }
+            : { id: 'latest-resigned', employeeStatus: UserStatus.resigned, effectiveFrom: new Date('2026-09-16') }
+        )),
+      },
+      employeeDataChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(null),
+        create: jest.fn().mockResolvedValue(created),
+        update: jest.fn().mockResolvedValue(updated),
+      },
+      department: { findUnique: jest.fn().mockResolvedValue({ id: 'd1', isActive: true }) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    } as any;
+    const prisma = { $transaction: jest.fn((callback) => callback(tx)) } as any;
+    const numberService = { reserveNext: jest.fn().mockResolvedValue('358') } as any;
+    const service = new EmployeeOnboardingService(prisma, numberService, {} as any, {} as any);
+
+    await expect(service.createReentry(user.id, {
+      company: CompanyCode.fuede, deptId: 'd1', effectiveDate: new Date('2026-09-17'),
+      employeeStatus: UserStatus.probation, employmentType: EmploymentType.full_time,
+    }, 'hr1')).resolves.toEqual(expect.objectContaining({ employeeNo: '358' }));
+
+    expect(tx.employmentRecord.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      orderBy: { effectiveFrom: 'desc' },
+      select: { id: true, employeeStatus: true },
+    }));
+  });
+
   it('resets elevated permissions when a future reentry is approved', async () => {
     const request = {
       id: 'r1', userId: 'u1', employeeNo: '358', intakeType: 'reentry', onboardingStatus: 'submitted',

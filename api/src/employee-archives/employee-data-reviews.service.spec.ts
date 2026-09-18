@@ -932,6 +932,61 @@ describe('EmployeeDataReviewsService', () => {
     expect(userDelete).not.toHaveBeenCalled();
   });
 
+  it('审核通过手工离职时结束上一条在职任职记录', async () => {
+    const request = {
+      id: 'review-manual-resignation', userId: 'employee-resigned', employeeNo: '009', employeeName: '离职员工',
+      sourceType: 'manual_employment_change', sourceBatchId: null,
+      profileReviewStatus: 'pending', performanceReviewStatus: 'not_required', validationErrors: [],
+      baseValue: {},
+      proposedValue: {
+        employee: {
+          employeeNo: '009', name: '离职员工', phone: null, company: 'fuede', deptId: 'dept-1',
+          position: '专员', entryDate: '2024-01-01T00:00:00.000Z', leaveDate: '2026-09-16T00:00:00.000Z',
+          effectiveFrom: '2026-09-16T00:00:00.000Z', effectiveTo: null, changeType: 'resignation',
+          employmentType: 'full_time', employeeStatus: 'resigned', managerId: null,
+        },
+        profile: {}, contracts: [], performance: {},
+      },
+    };
+    const employmentUpdate = jest.fn();
+    const employmentCreate = jest.fn();
+    const tx = {
+      employeeDataChangeRequest: {
+        findUnique: jest.fn().mockResolvedValue(request),
+        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
+        update: jest.fn().mockResolvedValue({ ...request, profileReviewStatus: 'approved' }),
+      },
+      user: { update: jest.fn() },
+      employeeProfile: { upsert: jest.fn() },
+      employmentRecord: {
+        findFirst: jest.fn().mockResolvedValue({
+          id: 'employment-current', effectiveFrom: new Date('2024-01-01T00:00:00.000Z'),
+        }),
+        update: employmentUpdate,
+        create: employmentCreate,
+      },
+      employeeContract: { createMany: jest.fn() },
+      externalIdentityBinding: { updateMany: jest.fn() },
+      auditLog: { create: jest.fn() },
+    };
+    const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
+    const service = new EmployeeDataReviewsService(prisma as any);
+
+    const result = await service.approveBatch({ requestIds: [request.id], scopes: ['profile'] }, operator);
+
+    expect(result.failed).toEqual([]);
+    expect(employmentUpdate).toHaveBeenCalledWith({
+      where: { id: 'employment-current' },
+      data: { effectiveTo: new Date('2026-09-15T00:00:00.000Z') },
+    });
+    expect(employmentCreate).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({
+        employeeStatus: 'resigned',
+        effectiveFrom: new Date('2026-09-16T00:00:00.000Z'),
+      }),
+    }));
+  });
+
   it('仅修改基础档案时不重复生成任职历史', async () => {
     const baseEmployee = {
       employeeNo: '001', name: '员工一', phone: '13800000000', company: 'fuede',

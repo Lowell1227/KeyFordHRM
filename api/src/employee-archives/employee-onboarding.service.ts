@@ -60,11 +60,15 @@ export class EmployeeOnboardingService {
           userId,
           effectiveFrom: { lte: today },
           OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }],
-          employeeStatus: { in: [UserStatus.active, UserStatus.probation] },
         },
-        select: { id: true },
+        orderBy: { effectiveFrom: 'desc' },
+        select: { id: true, employeeStatus: true },
       });
-      if (!historicalOnly && currentEmployment) throw new ConflictException('员工已有当前有效任职，不能重复入职');
+      if (!historicalOnly && currentEmployment
+        && (currentEmployment.employeeStatus === UserStatus.active
+          || currentEmployment.employeeStatus === UserStatus.probation)) {
+        throw new ConflictException('员工已有当前有效任职，不能重复入职');
+      }
 
       const open = await tx.employeeDataChangeRequest.findFirst({
         where: { userId, intakeType: { in: [OnboardingIntakeType.new_hire, OnboardingIntakeType.reentry] }, onboardingStatus: { in: unfinishedStatuses } },

@@ -664,12 +664,17 @@ export class EmployeeDataReviewsService {
     const shouldWriteEmployment = !request.userId
       || isManualEmployment
       || this.hasEmploymentChange(baseEmployee, employee);
-    const currentEmployment = request.userId && shouldWriteEmployment && !isManualEmployment
+    const changeType = this.nullableString(employee.changeType);
+    const closesCurrentEmployment = !isManualEmployment
+      || (employeeStatus === UserStatus.resigned && changeType === 'resignation');
+    const employmentReferenceDate = isManualEmployment ? effectiveFrom : today;
+    const currentEmployment = request.userId && shouldWriteEmployment && closesCurrentEmployment
       ? await tx.employmentRecord.findFirst({
         where: {
           userId,
-          effectiveFrom: { lte: today },
-          OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }],
+          effectiveFrom: { lte: employmentReferenceDate },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gte: employmentReferenceDate } }],
+          employeeStatus: { in: [UserStatus.active, UserStatus.probation] },
         },
         orderBy: { effectiveFrom: 'desc' },
         select: { id: true, effectiveFrom: true },
@@ -688,7 +693,7 @@ export class EmployeeDataReviewsService {
       });
       updatedSameDayEmployment = true;
     } else if (currentEmployment) {
-      const yesterday = new Date(today.getTime() - 86_400_000);
+      const yesterday = new Date(employmentReferenceDate.getTime() - 86_400_000);
       await tx.employmentRecord.update({
         where: { id: currentEmployment.id },
         data: { effectiveTo: yesterday },
@@ -700,7 +705,7 @@ export class EmployeeDataReviewsService {
           ...employmentData,
           effectiveFrom,
           effectiveTo,
-          changeType: this.nullableString(employee.changeType) ?? employmentData.changeType,
+          changeType: changeType ?? employmentData.changeType,
         },
       });
     }
