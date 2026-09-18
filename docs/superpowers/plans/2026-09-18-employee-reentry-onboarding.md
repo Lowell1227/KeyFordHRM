@@ -20,7 +20,7 @@
 - 合同缺失、试用期日期不完整、主管缺失、历史日期和钉钉未关联只在字段旁提醒；人员唯一性、工号冲突、并发有效任职和无效引用才阻断。
 - 历史正式工号永不释放给其他员工；被取消且从未生效的预留工号标记为已释放，但自动序列不倒退、不回填空号。
 - 姓名不触发重复检索；完整身份证号指纹精确命中时强制按员工状态分流，完整手机号命中仅提供需 HR 确认的候选，不自动合并。
-- 新员工和选择新工号的再入职申请不允许手工填写工号；提交审核时由 PostgreSQL 序列按现有最大纯数字正式工号加一原子生成。
+- 新员工和所有再入职申请不允许手工填写或选择历史工号；提交审核时由 PostgreSQL 序列按现有最大纯数字正式工号加一原子生成。
 - 招聘来源只能创建入职草稿，不能创建正式员工、任职、组织数据或登录资格；不得按姓名、手机号、邮箱或钉钉组织自动合并员工。
 - 提交、审核、生效和取消必须幂等并保留审计；接口和日志不得暴露完整手机号、证件号、合同地址或钉钉身份明文。
 - 本计划实施期间不改变已启动绩效周期冻结的组织和绩效直属上级快照。
@@ -33,8 +33,8 @@
 - Modify `api/prisma/schema.prisma`: 增加待入职状态、入职申请元数据、任职工号快照和工号占用历史。
 - Create `api/prisma/migrations/20260918120000_employee_reentry_onboarding/migration.sql`: 数据库枚举、列、表、约束、索引和历史工号回填。
 - Modify `api/test/fixtures/fixture-factory.ts`: 按外键顺序清理工号占用历史，避免 E2E 测试残留。
-- Create `api/src/employee-archives/employee-number.service.ts`: 原子生成/预留新工号，并处理同一员工沿用历史工号。
-- Create `api/src/employee-archives/employee-number.service.spec.ts`: 最大自然数初始化、并发唯一、取消不回退和历史工号边界测试。
+- Create `api/src/employee-archives/employee-number.service.ts`: 原子生成并预留新工号。
+- Create `api/src/employee-archives/employee-number.service.spec.ts`: 最大自然数初始化、并发唯一和取消不回退测试。
 - Create `api/src/employee-archives/employee-identity-match.service.ts`: 手机号/身份证号精确身份预检和状态分流。
 - Create `api/src/employee-archives/employee-identity-match.service.spec.ts`: 身份证强匹配、手机号候选、冲突和脱敏测试。
 - Modify `api/src/employee-archives/dto/employee-archive.dto.ts`: 新员工取消手工工号，增加身份证号和手机号重复确认字段。
@@ -445,7 +445,6 @@ git commit -m "feat(personnel): add reentry lifecycle schema"
   - `EmployeeOnboardingService.createOnboardingIntake(input: CreateOnboardingIntakeDto, operatorId: string): Promise<OnboardingIntakeResult>`
   - `EmployeeOnboardingService.hashIntakePayload(input: CreateOnboardingIntakeDto): string`
   - `EmployeeNumberService.reserveNext(tx: Prisma.TransactionClient, sourceRequestId: string, userId?: string): Promise<string>`
-  - `EmployeeNumberService.assertReusableHistorical(tx: Prisma.TransactionClient, userId: string, employeeNo: string): Promise<string>`
   - `EmployeeIdentityMatchService.lookup(input: EmployeeIdentityLookupDto): Promise<EmployeeIdentityLookupResult>`
 
 - [ ] **Step 1: Define the input and output contracts**
@@ -482,14 +481,6 @@ export class ContractReferenceDto {
 }
 
 export class EmployeeReentryFieldsDto {
-  @IsIn(['auto', 'reuse_previous'])
-  employeeNumberMode: 'auto' | 'reuse_previous' = 'auto';
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(30)
-  previousEmployeeNo?: string;
-
   @IsEnum(CompanyCode)
   company!: CompanyCode;
 
@@ -681,16 +672,6 @@ it('reserves the next PostgreSQL sequence number without padding', async () => {
   });
 });
 
-it('accepts only a historical number owned by the same employee', async () => {
-  tx.employeeNumberAssignment.findFirst.mockResolvedValue({
-    userId: 'employee-1', employeeNo: '126', status: 'historical',
-  });
-
-  await expect(
-    service.assertReusableHistorical(tx, 'employee-1', '126'),
-  ).resolves.toBe('126');
-});
-
 it('never decrements the sequence when a reservation is released', async () => {
   await service.releaseReservation(tx, 'request-1', new Date('2026-09-18T08:00:00Z'));
   expect(tx.employeeNumberAssignment.updateMany).toHaveBeenCalledWith(
@@ -743,7 +724,7 @@ it('returns conflict when phone and id number resolve to different users', async
 });
 ```
 
-- [ ] **Step 3: Write failing onboarding tests for reuse, reservation, warnings, idempotency and cancellation**
+- [ ] **Step 3: Write failing onboarding tests for reservation, warnings, idempotency and cancellation**
 
 Create `api/src/employee-archives/employee-onboarding.service.spec.ts`. Mock Prisma methods and include these named tests with concrete assertions:
 
@@ -770,19 +751,6 @@ it('creates a submitted reentry request for the existing user and reserves an au
     resignedArchivedUser.id,
   );
   expect(result.employeeNo).toBe('358');
-});
-
-it('allows the same employee to reuse a selected historical number', async () => {
-  employeeNumberService.assertReusableHistorical.mockResolvedValue('126');
-  const result = await service.createReentry(
-    resignedArchivedUser.id,
-    { ...validReentryInput, employeeNumberMode: 'reuse_previous', previousEmployeeNo: '126' },
-    hrAdmin.id,
-  );
-  expect(employeeNumberService.assertReusableHistorical).toHaveBeenCalledWith(
-    prisma, resignedArchivedUser.id, '126',
-  );
-  expect(result.employeeNo).toBe('126');
 });
 
 it('returns the original intake for an identical source payload', async () => {
@@ -873,18 +841,6 @@ async reserveNext(
   return employeeNo;
 }
 
-async assertReusableHistorical(
-  tx: Prisma.TransactionClient,
-  userId: string,
-  employeeNo: string,
-): Promise<string> {
-  const owned = await tx.employeeNumberAssignment.findFirst({
-    where: { userId, employeeNo, status: EmployeeNumberStatus.historical },
-    select: { employeeNo: true },
-  });
-  if (!owned) throw new ConflictException('该历史工号不属于当前员工，不能沿用');
-  return owned.employeeNo;
-}
 ```
 
 `releaseReservation` changes only a matching `reserved` row to `released` and sets `releasedAt`; it never calls `setval`, deletes history or makes the old number available to another employee. On approval of a new-hire request, attach the existing reservation's nullable `userId` to the newly created `User.id` in the same transaction.
@@ -952,7 +908,7 @@ In one Prisma transaction:
 1. Fetch the existing user including latest employment and archive state.
 2. Compute `historicalOnly = effectiveTo != null && effectiveTo < startOfTodayInShanghai()`. For a current/future reentry, require the user to be resigned or archived and reject any current non-resigned employment. For `historicalOnly`, allow an existing active employee because the record cannot affect current login/projection; retain overlap as a warning unless it would create a second current effective employment. In both modes reject another non-final onboarding request for the same employee.
 3. Verify department, position and manager IDs exist; manager must be `active` or `probation`.
-4. Create the request with `employeeNo=null`, then resolve its number in the same transaction. For `employeeNumberMode='auto'`, call `reserveNext(tx, request.id, user.id)` and update the request/proposal with the returned number. For `reuse_previous`, require `previousEmployeeNo`, call `assertReusableHistorical(tx, user.id, previousEmployeeNo)` and record that exact number without creating a second assignment row. Never accept an arbitrary manually entered number.
+4. Create the request with `employeeNo=null`, then unconditionally call `reserveNext(tx, request.id, user.id)` in the same transaction and update the request/proposal with the returned number. Never accept an arbitrary manually entered number or a historical number selection.
 5. Store original `status`, `archivedAt`, `employeeNo` and latest employment in `baseValue`.
 6. Store the complete normalized input, warnings and payload hash in `proposedValue`.
 7. Set `sourceType='manual_reentry'`, `sourceSystem='manual'` by default, `intakeType='reentry'`, `onboardingStatus='submitted'`, `recordStatus='submitted'`, profile review `pending`, performance review `not_required`.
@@ -1013,7 +969,7 @@ Revision and cancellation each write an audit row in the same transaction using 
 - Throw `ConflictException('来源编号已存在，但本次内容与原草稿不一致')` when it differs.
 - If `intakeType='reentry'` and `existingEmployeeId` is valid, create a `draft` request tied to that employee and return `matched_reentry`.
 - If the external request omits a confirmed employee ID, call the same identity service with complete phone/ID values. Never search by name. Store only masked identity data, match basis and candidate user IDs in a non-sensitive `matchCandidates` summary; never persist or log the raw phone/ID in `proposedValue`. Return `needs_review` with `matchedEmployeeId=null`; even an ID hit requires HR to select the existing employee before a recruitment intake becomes a reentry draft.
-- If `intakeType='new_hire'`, require `employeeNumberMode='auto'`, create an unbound draft (`userId=null`) and return `new`; do not create or reserve the number until HR submits the onboarding draft for review, and do not create `User`, `EmploymentRecord`, binding, password, or organization data at intake time.
+- If `intakeType='new_hire'`, create an unbound draft (`userId=null`) and return `new`; do not create or reserve the number until HR submits the onboarding draft for review, and do not create `User`, `EmploymentRecord`, binding, password, or organization data at intake time.
 - On first creation, write `AuditLog.action='create_onboarding_intake'` with source system/reference, intake type, match status and request ID only. Identical retries do not create another audit row.
 
 Use these masking helpers before constructing `proposedValue`:
@@ -1264,7 +1220,7 @@ describe('14-employee-onboarding', () => {
 
   const auth = () => ({ Authorization: `Bearer ${token}` });
   const validReentry = () => ({
-    employeeNumberMode: 'auto', company: 'fuede', deptId,
+    company: 'fuede', deptId,
     effectiveDate: '2099-10-01', employeeStatus: 'active',
     employmentType: 'full_time', contractReferences: [],
   });
@@ -1485,7 +1441,7 @@ The method receives the transaction opened by `approveBatch`; it must not start 
 1. Re-fetch and lock the request and target employee using the existing raw SQL locking helper used by review claims.
 2. Return the existing state if the request is already `pending_entry`, `effective` or `cancelled` as an idempotent result.
 3. Revalidate no current non-resigned employment and no competing unfinished onboarding request.
-4. Revalidate the number according to `employeeNumberMode`: an automatic number must still have exactly one reservation owned by this request; a reused historical number must still belong to this same employee and must not be current for another employee. Revalidate all referenced organization IDs.
+4. Revalidate that this request still owns exactly one automatically generated reservation and that the number is not occupied by another employee. Revalidate all referenced organization IDs.
 5. Create exactly one `EmploymentRecord` with `employeeNo`, `sourceRequestId`, `changeType='reentry'`, selected employment type/status, dates and manager.
 6. For an already-ended historical interval, mark the number `historical`, retain the employee's current projection, and set the request `effective` only as completed history.
 7. For a future interval, unarchive the employee, set `User.status=pending_entry`, set the approved next employee number, reset elevated permissions, and set the request `onboardingStatus=pending_entry`.
@@ -2077,8 +2033,6 @@ import type { CompanyCode, EmploymentType } from '@/types/enums'
 export type OnboardingStatus = 'draft' | 'submitted' | 'pending_entry' | 'effective' | 'cancelled'
 
 export interface EmployeeReentryPayload {
-  employeeNumberMode: 'auto' | 'reuse_previous'
-  previousEmployeeNo?: string | null
   company: CompanyCode
   deptId?: string | null
   positionId?: string | null
@@ -2227,7 +2181,6 @@ test('shows compact reentry sections, local warnings, flow and cancellation', as
         requestVersion: 1,
         recordStatus: 'applied',
         proposedValue: {
-          employeeNumberMode: 'auto',
           company: 'fuede',
           deptId: null,
           positionId: null,
@@ -2302,23 +2255,7 @@ Required visible structure:
       <h3 id="reentry-fields-title">本次入职</h3>
       <el-form :model="form" label-position="top">
         <el-form-item label="本次工号">
-          <el-radio-group v-model="form.employeeNumberMode">
-            <el-radio value="auto">系统自动生成新工号</el-radio>
-            <el-radio value="reuse_previous">沿用本人历史工号</el-radio>
-          </el-radio-group>
-          <el-select
-            v-if="form.employeeNumberMode === 'reuse_previous'"
-            v-model="form.previousEmployeeNo"
-            placeholder="选择本人历史工号"
-          >
-            <el-option
-              v-for="employeeNo in historicalEmployeeNumbers"
-              :key="employeeNo"
-              :label="employeeNo"
-              :value="employeeNo"
-            />
-          </el-select>
-          <span v-else>提交审核时自动生成</span>
+          <span>提交审核时自动生成新工号</span>
         </el-form-item>
         <el-form-item label="公司">
           <el-select v-model="form.company">
@@ -2639,7 +2576,6 @@ reviews.push({
   validationWarnings: [],
   baseValue: { employee: { status: 'resigned', employeeNo: '126' } },
   proposedValue: {
-    employeeNumberMode: 'auto',
     company: 'fuede',
     deptId: 'dept-hr',
     departmentName: '人事行政部',
@@ -2971,7 +2907,7 @@ Do not call container startup alone a successful release; production is complete
 
 - [ ] Existing resigned/archived employee reuses the same `User.id` and remains one list row.
 - [ ] A new employee number is generated only by the backend sequence at submit time; the browser and HR cannot enter an arbitrary number.
-- [ ] Reentry defaults to a new numeric number, with an explicit option to reuse only that employee's own historical number.
+- [ ] Every reentry receives a newly generated numeric employee number; no API or UI offers historical-number reuse.
 - [ ] The current list/current employment/local login use only the current number; prior official numbers remain occupied, visible/searchable as labelled history and cannot log in.
 - [ ] Name input never triggers duplicate matching; exact ID hard-routes to the existing employee, exact phone shows a confirmable candidate, and conflicting phone/ID matches block submission.
 - [ ] Future-approved application shows `待入职`, cannot log in and is absent from current business scopes.
