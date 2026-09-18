@@ -116,13 +116,29 @@ export class EmployeeArchivesService {
       if (input.effectiveTo && input.effectiveTo < input.effectiveFrom) {
         warnings.push('任职结束日期早于生效日期');
       }
-      const performanceManagerId = input.performanceManagerId ?? null;
-      const securedProfile: Record<string, unknown> = { phone: input.phone?.trim() || null };
-      if (input.idNumber?.trim()) {
-        const secured = this.encryptAndFingerprint(input.idNumber.trim().toUpperCase());
-        securedProfile.idNumberEncrypted = secured.encrypted;
-        securedProfile.idNumberFingerprint = secured.fingerprint;
+      let proposedValue = this.employeeCreateProposedValue(input, position ? {
+        id: position.id,
+        name: position.name,
+        jobFamily: position.jobFamily,
+      } : null);
+      if (input.draftId) {
+        const draft = await tx.employeeDataChangeRequest.findFirst({
+          where: {
+            id: input.draftId,
+            sourceType: 'manual_employee_create',
+            recordStatus: 'draft',
+            archivedAt: null,
+          },
+          select: { id: true, proposedValue: true },
+        });
+        if (!draft) {
+          throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
+        }
+        proposedValue = this.preserveSensitiveProfile(proposedValue, draft.proposedValue);
       }
+      const performanceManagerId = this.nullableString(
+        this.record(proposedValue.performance).managerId,
+      );
       const requestData = {
           userId: null,
           employeeNo: null,
@@ -137,28 +153,7 @@ export class EmployeeArchivesService {
             contracts: [],
             performance: { managerId: null },
           }),
-          proposedValue: this.toJson({
-            employee: {
-              employeeNo: null,
-              name,
-              phone: input.phone?.trim() || null,
-              company: input.company,
-              deptId: input.deptId,
-              positionId: position?.id ?? null,
-              position: position?.name ?? null,
-              jobFamily: position?.jobFamily ?? null,
-              managerId: input.rosterManagerId ?? null,
-              entryDate: input.entryDate,
-              effectiveFrom: input.effectiveFrom,
-              effectiveTo: input.effectiveTo ?? null,
-              employmentType: input.employmentType,
-              employeeStatus: input.employeeStatus,
-              changeType: 'hire',
-            },
-            profile: securedProfile,
-            contracts: [],
-            performance: { managerId: performanceManagerId },
-          }),
+          proposedValue: this.toJson(proposedValue),
           profileReviewStatus: 'pending',
           performanceReviewStatus: performanceManagerId ? 'pending' : 'not_required',
           validationErrors: this.toJson([]),
@@ -167,20 +162,6 @@ export class EmployeeArchivesService {
           recordStatus: 'submitted',
           archivedAt: null,
       } satisfies Prisma.EmployeeDataChangeRequestUncheckedCreateInput;
-      if (input.draftId) {
-        const draft = await tx.employeeDataChangeRequest.findFirst({
-          where: {
-            id: input.draftId,
-            sourceType: 'manual_employee_create',
-            recordStatus: 'draft',
-            archivedAt: null,
-          },
-          select: { id: true },
-        });
-        if (!draft) {
-          throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
-        }
-      }
       const request = input.draftId
         ? await tx.employeeDataChangeRequest.update({ where: { id: input.draftId }, data: requestData })
         : await tx.employeeDataChangeRequest.create({ data: requestData });
@@ -213,43 +194,12 @@ export class EmployeeArchivesService {
   async saveEmployeeCreateDraft(input: SaveEmployeeCreateDraftDto, operator: AuthUser) {
     const employeeNo = null;
     const employeeName = input.name?.trim() || '未命名员工草稿';
-    const proposedValue = this.toJson({
-      employee: {
-        employeeNo,
-        name: input.name?.trim() || null,
-        phone: input.phone?.trim() || null,
-        company: input.company ?? null,
-        deptId: input.deptId ?? null,
-        positionId: input.positionId ?? null,
-        managerId: input.rosterManagerId ?? null,
-        entryDate: input.entryDate ?? null,
-        effectiveFrom: input.effectiveFrom ?? null,
-        effectiveTo: input.effectiveTo ?? null,
-        employmentType: input.employmentType ?? null,
-        employeeStatus: input.employeeStatus ?? null,
-        changeType: 'hire',
-      },
-      profile: { phone: input.phone?.trim() || null },
-      contracts: [],
-      performance: { managerId: input.performanceManagerId ?? null },
-    });
+    let proposed = this.employeeCreateProposedValue(input, null);
+    proposed.draftMeta = {
+      currentStep: input.draftStep ?? 0,
+      completedSteps: [...new Set(input.completedSteps ?? [])].sort((a, b) => a - b),
+    };
     return this.prisma.$transaction(async (tx) => {
-      const data = {
-        userId: null,
-        employeeNo,
-        employeeName,
-        sourceType: 'manual_employee_create',
-        baseValue: this.toJson({ employee: {}, profile: {}, contracts: [], performance: { managerId: null } }),
-        proposedValue,
-        profileReviewStatus: 'pending',
-        performanceReviewStatus: input.performanceManagerId ? 'pending' : 'not_required',
-        validationErrors: this.toJson([]),
-        validationWarnings: this.toJson([]),
-        createdById: operator.id,
-        recordStatus: 'draft',
-        archivedAt: null,
-        rejectedReason: null,
-      } satisfies Prisma.EmployeeDataChangeRequestUncheckedCreateInput;
       if (input.draftId) {
         const draft = await tx.employeeDataChangeRequest.findFirst({
           where: {
@@ -258,26 +208,121 @@ export class EmployeeArchivesService {
             recordStatus: 'draft',
             archivedAt: null,
           },
-          select: { id: true },
+          select: { id: true, proposedValue: true },
         });
         if (!draft) {
           throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
         }
+        proposed = this.preserveSensitiveProfile(proposed, draft.proposedValue);
       }
+      const proposedValue = this.toJson(proposed);
+      const performanceManagerId = this.nullableString(
+        this.record(proposed.performance).managerId,
+      );
+      const data = {
+        userId: null,
+        employeeNo,
+        employeeName,
+        sourceType: 'manual_employee_create',
+        baseValue: this.toJson({ employee: {}, profile: {}, contracts: [], performance: { managerId: null } }),
+        proposedValue,
+        profileReviewStatus: 'pending',
+        performanceReviewStatus: performanceManagerId ? 'pending' : 'not_required',
+        validationErrors: this.toJson([]),
+        validationWarnings: this.toJson([]),
+        createdById: operator.id,
+        recordStatus: 'draft',
+        archivedAt: null,
+        rejectedReason: null,
+      } satisfies Prisma.EmployeeDataChangeRequestUncheckedCreateInput;
       const request = input.draftId
         ? await tx.employeeDataChangeRequest.update({ where: { id: input.draftId }, data })
         : await tx.employeeDataChangeRequest.create({ data });
-      await tx.auditLog.create({
-        data: {
-          userId: operator.id,
-          action: 'save_employee_create_draft',
-          entityType: 'employee_data_change_request',
-          entityId: request.id,
-          newValue: this.toJson({ employeeNo, employeeName }),
-        },
-      });
+      if (!input.draftId || input.saveMode !== 'auto') {
+        await tx.auditLog.create({
+          data: {
+            userId: operator.id,
+            action: input.draftId ? 'save_employee_create_draft' : 'create_employee_create_draft',
+            entityType: 'employee_data_change_request',
+            entityId: request.id,
+            newValue: this.toJson({ employeeNo, employeeName, currentStep: input.draftStep ?? 0 }),
+          },
+        });
+      }
       return request;
     });
+  }
+
+  private employeeCreateProposedValue(
+    input: Partial<CreateEmployeeDto>,
+    resolvedPosition: { id: string; name: string; jobFamily: string | null } | null,
+  ): Record<string, unknown> {
+    const inputEmployee = this.record(input.employee);
+    const employee: Record<string, unknown> = {
+      ...inputEmployee,
+      employeeNo: null,
+      name: input.name?.trim() || this.nullableString(inputEmployee.name),
+      phone: input.phone?.trim() || this.nullableString(inputEmployee.phone),
+      company: input.company ?? inputEmployee.company ?? null,
+      deptId: input.deptId ?? inputEmployee.deptId ?? null,
+      positionId: resolvedPosition?.id ?? input.positionId ?? inputEmployee.positionId ?? null,
+      position: resolvedPosition?.name ?? inputEmployee.position ?? null,
+      jobFamily: resolvedPosition?.jobFamily ?? inputEmployee.jobFamily ?? null,
+      managerId: input.rosterManagerId ?? inputEmployee.managerId ?? null,
+      entryDate: input.entryDate ?? inputEmployee.entryDate ?? null,
+      effectiveFrom: input.effectiveFrom ?? inputEmployee.effectiveFrom ?? null,
+      effectiveTo: input.effectiveTo ?? inputEmployee.effectiveTo ?? null,
+      employmentType: input.employmentType ?? inputEmployee.employmentType ?? null,
+      employeeStatus: input.employeeStatus ?? inputEmployee.employeeStatus ?? null,
+      changeType: 'hire',
+    };
+    const profile: Record<string, unknown> = {
+      ...this.record(input.profile),
+      phone: input.phone?.trim() || this.nullableString(this.record(input.profile).phone),
+    };
+    delete profile.idNumberEncrypted;
+    delete profile.idNumberFingerprint;
+    delete profile.bankAccountEncrypted;
+    delete profile.bankAccountFingerprint;
+    const idNumber = input.idNumber?.trim() || this.nullableString(profile.idNumber);
+    if (idNumber) {
+      const secured = this.encryptAndFingerprint(idNumber.toUpperCase());
+      profile.idNumberEncrypted = secured.encrypted;
+      profile.idNumberFingerprint = secured.fingerprint;
+    }
+    this.applySensitiveReplacement(profile, profile, 'bankAccount', 'bankAccountEncrypted', 'bankAccountFingerprint');
+    delete profile.idNumber;
+    delete profile.bankAccount;
+    const contracts = (input.contracts ?? []).map((contract, index) => {
+      this.assertContractMaterials(contract);
+      return {
+        ...contract,
+        sequence: typeof contract.sequence === 'number' ? contract.sequence : index,
+      };
+    });
+    const inputPerformance = this.record(input.performance);
+    const performance = {
+      ...inputPerformance,
+      managerId: input.performanceManagerId ?? inputPerformance.managerId ?? null,
+    };
+    return { employee, profile, contracts, performance };
+  }
+
+  private preserveSensitiveProfile(
+    proposed: Record<string, unknown>,
+    previousValue: Prisma.JsonValue,
+  ): Record<string, unknown> {
+    const profile = { ...this.record(proposed.profile) };
+    const previousProfile = this.record(this.record(previousValue).profile);
+    for (const key of [
+      'idNumberEncrypted',
+      'idNumberFingerprint',
+      'bankAccountEncrypted',
+      'bankAccountFingerprint',
+    ]) {
+      if (profile[key] == null && previousProfile[key] != null) profile[key] = previousProfile[key];
+    }
+    return { ...proposed, profile };
   }
 
   async listDrafts(query: { page: number; pageSize: number; state: 'draft' | 'archived' }) {
@@ -1214,6 +1259,16 @@ export class EmployeeArchivesService {
       encrypted: Buffer.concat([Buffer.from([1]), iv, tag, ciphertext]),
       fingerprint: createHmac('sha256', key).update(value.toUpperCase()).digest('hex'),
     };
+  }
+
+  private record(value: unknown): Record<string, unknown> {
+    return value && typeof value === 'object' && !Array.isArray(value)
+      ? value as Record<string, unknown>
+      : {};
+  }
+
+  private nullableString(value: unknown): string | null {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
   }
 
   private toJson(value: unknown): Prisma.InputJsonValue {

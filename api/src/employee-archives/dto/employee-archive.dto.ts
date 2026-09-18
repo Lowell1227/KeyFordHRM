@@ -80,6 +80,23 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsUUID('4')
   performanceManagerId?: string | null;
+
+  @IsOptional()
+  @IsObject()
+  employee?: Record<string, unknown>;
+
+  @IsOptional()
+  @IsObject()
+  profile?: Record<string, unknown>;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(20)
+  contracts?: Record<string, unknown>[];
+
+  @IsOptional()
+  @IsObject()
+  performance?: Record<string, unknown>;
 }
 
 export class UpdateEmployeeProfileDto {
@@ -112,7 +129,26 @@ export class SubmitEmployeeArchiveDraftDto {
   performance?: Record<string, unknown>;
 }
 
-export class SaveEmployeeCreateDraftDto extends PartialType(CreateEmployeeDto) {}
+export class SaveEmployeeCreateDraftDto extends PartialType(CreateEmployeeDto) {
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  @Min(0)
+  @Max(6)
+  draftStep?: number;
+
+  @IsOptional()
+  @IsArray()
+  @ArrayMaxSize(7)
+  @IsInt({ each: true })
+  @Min(0, { each: true })
+  @Max(6, { each: true })
+  completedSteps?: number[];
+
+  @IsOptional()
+  @IsIn(['auto', 'manual'])
+  saveMode?: 'auto' | 'manual';
+}
 
 export class EmployeeDraftQueryDto {
   @IsOptional()

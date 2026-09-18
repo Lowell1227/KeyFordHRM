@@ -47,6 +47,7 @@ export default defineConfig({
     '49-performance-specialist.spec.ts',
     '53-prepublication-confirmation.spec.ts',
     '54-personnel-resignation-archive.spec.ts',
+    '58-employee-create-wizard.spec.ts',
   ],
   workers: 1,
 });

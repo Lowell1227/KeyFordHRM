@@ -437,6 +437,8 @@ describe('EmployeeDataReviewsService', () => {
       userId: null,
       employeeNo: 'N-001',
       employeeName: '新员工',
+      sourceType: 'manual_employee_create',
+      intakeType: 'new_hire',
       sourceBatchId: 'batch-1',
       profileReviewStatus: 'pending',
       performanceReviewStatus: 'pending',
@@ -451,6 +453,7 @@ describe('EmployeeDataReviewsService', () => {
           deptId: null,
           position: '项目专员',
           entryDate: '2026-08-01T00:00:00.000Z',
+          effectiveFrom: '2026-08-01T00:00:00.000Z',
           employmentType: 'full_time',
           employeeStatus: 'active',
           managerName: '主管一',
@@ -461,7 +464,17 @@ describe('EmployeeDataReviewsService', () => {
           }],
         },
         profile: { gender: '女' },
-        contracts: [],
+        contracts: [{
+          contractType: 'contract',
+          name: '劳动合同',
+          images: [{
+            name: 'contract.jpg',
+            url: '/storage/download?key=employee-contracts/images/contract.jpg',
+            size: 1024,
+            mimeType: 'image/jpeg',
+          }],
+          attachments: [],
+        }],
         performance: { managerName: '主管一' },
       },
     };
@@ -504,7 +517,12 @@ describe('EmployeeDataReviewsService', () => {
         findFirst: jest.fn().mockResolvedValue(null),
         create: jest.fn().mockResolvedValue({ id: 'department-review-1' }),
       },
-      employeeContract: { createMany: jest.fn().mockResolvedValue({ count: 0 }) },
+      employeeContract: {
+        findMany: jest.fn().mockResolvedValue([]),
+        create: jest.fn().mockResolvedValue({ id: 'contract-new' }),
+        update: jest.fn(),
+      },
+      employeeNumberAssignment: { updateMany: jest.fn().mockResolvedValue({ count: 1 }) },
       auditLog: { create: jest.fn().mockResolvedValue({ id: 'audit-new' }) },
     };
     const prisma = {
@@ -540,6 +558,14 @@ describe('EmployeeDataReviewsService', () => {
         userId: 'employee-new',
         directManagerId: 'manager-1',
         sourceBatchId: 'batch-1',
+      }),
+    });
+    expect(tx.employeeContract.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        userId: 'employee-new',
+        contractType: 'contract',
+        name: '劳动合同',
+        images: [expect.objectContaining({ name: 'contract.jpg' })],
       }),
     });
     expect(tx.department.update).not.toHaveBeenCalled();

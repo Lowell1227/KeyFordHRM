@@ -261,9 +261,10 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
 
   await page.getByRole('button', { name: '新增员工' }).click();
   const createDrawer = page.getByRole('dialog', { name: '新增员工' });
-  await expect(createDrawer.getByRole('button', { name: '保存草稿' })).toBeVisible();
-  await expect(createDrawer.getByRole('button', { name: '提交审核' })).toBeVisible();
-  await expect(createDrawer.getByText('员工工号由系统提交时自动生成')).toBeVisible();
+  await expect(createDrawer.getByRole('button', { name: '保存并退出' })).toBeVisible();
+  await expect(createDrawer.getByRole('button', { name: '下一步' })).toBeVisible();
+  await expect(createDrawer.getByRole('button', { name: '提交审核' })).toHaveCount(0);
+  await expect(createDrawer.getByText('员工工号将在提交审核时自动生成')).toBeVisible();
   await expect(createDrawer.getByLabel('工号')).toHaveCount(0);
   await createDrawer.getByLabel('关闭此对话框').click();
 

@@ -726,7 +726,7 @@ export class EmployeeDataReviewsService {
       });
     }
 
-    if (request.sourceType === 'employee_roster_import' || request.sourceType === 'manual_archive_change') {
+    if (['employee_roster_import', 'manual_archive_change', 'manual_employee_create'].includes(request.sourceType)) {
       const contracts = Array.isArray(proposed.contracts)
         ? proposed.contracts.map((item) => this.record(item))
         : [];
@@ -1140,7 +1140,7 @@ export class EmployeeDataReviewsService {
         confidentialityAgreement: this.nullableString(contract.confidentialityAgreement),
         nonCompeteAgreement: this.nullableString(contract.nonCompeteAgreement),
         portraitAgreement: this.nullableString(contract.portraitAgreement),
-        ...(sourceType === 'manual_archive_change' ? {
+        ...(['manual_archive_change', 'manual_employee_create'].includes(sourceType) ? {
           images: this.materials(contract.images),
           attachments: this.materials(contract.attachments),
         } : {}),

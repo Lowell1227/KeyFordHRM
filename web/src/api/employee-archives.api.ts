@@ -73,6 +73,34 @@ export interface EmployeeIdentityLookupResult {
   candidates: EmployeeIdentityCandidate[];
 }
 
+export interface EmployeeCreatePayload {
+  draftId?: string;
+  name: string;
+  phone?: string | null;
+  idNumber?: string | null;
+  phoneDuplicateAcknowledged?: boolean;
+  company: string;
+  deptId: string;
+  positionId?: string | null;
+  entryDate: string;
+  effectiveFrom: string;
+  effectiveTo?: string | null;
+  employmentType: string;
+  employeeStatus: string;
+  rosterManagerId?: string | null;
+  performanceManagerId?: string | null;
+  employee: Record<string, unknown>;
+  profile: Record<string, unknown>;
+  contracts: Record<string, unknown>[];
+  performance: Record<string, unknown>;
+}
+
+export type EmployeeCreateDraftPayload = Partial<EmployeeCreatePayload> & {
+  draftStep?: number;
+  completedSteps?: number[];
+  saveMode?: 'auto' | 'manual';
+};
+
 export interface EmployeeReentryBody {
   company: string;
   deptId?: string | null;
@@ -245,43 +273,11 @@ export interface EmployeeArchive {
 }
 
 export const employeeArchivesApi = {
-  createEmployee(body: {
-    draftId?: string;
-    name: string;
-    phone?: string | null;
-    idNumber?: string | null;
-    phoneDuplicateAcknowledged?: boolean;
-    company: string;
-    deptId: string;
-    positionId?: string | null;
-    entryDate: string;
-    effectiveFrom: string;
-    effectiveTo?: string | null;
-    employmentType: string;
-    employeeStatus: string;
-    rosterManagerId?: string | null;
-    performanceManagerId?: string | null;
-  }): Promise<EmployeeDataReview> {
+  createEmployee(body: EmployeeCreatePayload): Promise<EmployeeDataReview> {
     return http.post('/employee-archives', body) as unknown as Promise<EmployeeDataReview>;
   },
 
-  saveEmployeeCreateDraft(body: Partial<{
-    draftId: string;
-    name: string;
-    phone: string | null;
-    idNumber: string | null;
-    phoneDuplicateAcknowledged: boolean;
-    company: string;
-    deptId: string;
-    positionId: string | null;
-    entryDate: string;
-    effectiveFrom: string;
-    effectiveTo: string | null;
-    employmentType: string;
-    employeeStatus: string;
-    rosterManagerId: string | null;
-    performanceManagerId: string | null;
-  }>): Promise<EmployeeDataReview> {
+  saveEmployeeCreateDraft(body: EmployeeCreateDraftPayload): Promise<EmployeeDataReview> {
     return http.post('/employee-archives/drafts', body) as unknown as Promise<EmployeeDataReview>;
   },
 
