@@ -25,7 +25,7 @@ export interface EmployeeRosterConfirmResult {
   submitted: number;
 }
 
-export type EmployeeReviewStatus = 'not_required' | 'pending' | 'approved' | 'rejected';
+export type EmployeeReviewStatus = 'not_required' | 'pending' | 'approved' | 'rejected' | 'cancelled';
 export type EmployeeReviewScope = 'profile' | 'performance';
 
 export interface EmployeeDataReview {
@@ -47,6 +47,7 @@ export interface EmployeeDataReview {
   profileReviewedAt?: string | null;
   performanceReviewedAt?: string | null;
   appliedAt?: string | null;
+  cancelledAt?: string | null;
   createdAt: string;
   updatedAt: string;
   recordStatus?: 'draft' | 'submitted' | 'archived';
@@ -54,6 +55,10 @@ export interface EmployeeDataReview {
   intakeType?: 'new_hire' | 'reentry' | null;
   onboardingStatus?: 'draft' | 'submitted' | 'pending_entry' | 'effective' | 'cancelled' | null;
   requestVersion?: number;
+  canResume?: boolean;
+  canCancel?: boolean;
+  user?: { id: string; name: string; employeeNo: string | null; status: string; archivedAt?: string | null; dept?: { name: string } | null; position?: string | null } | null;
+  events?: Array<{ id: string; action: string; createdAt: string; user?: { id: string; name: string } | null; oldValue?: Record<string, any>; newValue?: Record<string, any> }>;
 }
 
 export interface EmployeeIdentityCandidate {
@@ -65,7 +70,8 @@ export interface EmployeeIdentityCandidate {
   archived: boolean;
   departmentName: string | null;
   matchBasis: 'id_number' | 'phone';
-  nextAction: 'reentry' | 'view_profile' | 'edit_profile' | 'view_onboarding' | 'confirm_phone';
+  requestId?: string;
+  nextAction: 'reentry' | 'view_profile' | 'edit_profile' | 'view_onboarding' | 'confirm_phone' | 'view_application';
 }
 
 export interface EmployeeIdentityLookupResult {
@@ -99,6 +105,7 @@ export type EmployeeCreateDraftPayload = Partial<EmployeeCreatePayload> & {
   draftStep?: number;
   completedSteps?: number[];
   saveMode?: 'auto' | 'manual';
+  draftLayoutVersion?: number;
 };
 
 export interface EmployeeReentryBody {
@@ -218,6 +225,9 @@ export interface EmployeeArchive {
   } | null;
   employmentHistory: Array<{
     id: string;
+    sourceRequestId?: string | null;
+    employeeNumberAssignmentId?: string | null;
+    employeeNo?: string | null;
     company: string;
     deptId: string | null;
     positionId?: string | null;
@@ -270,6 +280,16 @@ export interface EmployeeArchive {
     lastLoginAt: string | null;
   } | null;
   latestResignationReview?: EmployeeDataReview | null;
+  changeHistory?: EmployeeDataReview[];
+  employeeNumberAssignments?: Array<{ id: string; employeeNo: string; status: string; assignedAt?: string; endedAt?: string | null; sourceRequestId?: string | null }>;
+  archiveEvents?: Array<{ id: string; action: string; createdAt: string; user?: { name: string } | null }>;
+}
+
+export interface ArchiveBatchResult {
+  archived?: number;
+  restored?: number;
+  succeeded?: Array<{ id: string }>;
+  failed?: Array<{ id: string; reason: string }>;
 }
 
 export const employeeArchivesApi = {
@@ -285,12 +305,32 @@ export const employeeArchivesApi = {
     return http.get('/employee-archives/drafts/list', { params }) as unknown as Promise<EmployeeDraftPage>;
   },
 
-  archiveDrafts(ids: string[]): Promise<{ archived: number }> {
-    return http.post('/employee-archives/drafts/archive', { ids }) as unknown as Promise<{ archived: number }>;
+  archiveDrafts(ids: string[]): Promise<ArchiveBatchResult> {
+    return http.post('/employee-archives/drafts/archive', { ids }) as unknown as Promise<ArchiveBatchResult>;
   },
 
-  archiveEmployees(ids: string[]): Promise<{ archived: number }> {
-    return http.post('/employee-archives/archive', { ids }) as unknown as Promise<{ archived: number }>;
+  archiveEmployees(ids: string[]): Promise<ArchiveBatchResult> {
+    return http.post('/employee-archives/archive', { ids }) as unknown as Promise<ArchiveBatchResult>;
+  },
+
+  restoreEmployees(ids: string[]): Promise<ArchiveBatchResult> {
+    return http.post('/employee-archives/restore', { ids }) as unknown as Promise<ArchiveBatchResult>;
+  },
+
+  restoreDrafts(ids: string[]): Promise<ArchiveBatchResult> {
+    return http.post('/employee-archives/drafts/restore', { ids }) as unknown as Promise<ArchiveBatchResult>;
+  },
+
+  listApplications(params: { page?: number; pageSize?: number; keyword?: string; departmentId?: string } = {}): Promise<EmployeeDataReviewPage> {
+    return http.get('/employee-archives/applications/list', { params }) as unknown as Promise<EmployeeDataReviewPage>;
+  },
+
+  getApplication(requestId: string): Promise<EmployeeDataReview> {
+    return http.get(`/employee-archives/applications/${requestId}`) as unknown as Promise<EmployeeDataReview>;
+  },
+
+  cancelApplication(requestId: string, reason: string): Promise<EmployeeDataReview> {
+    return http.post(`/employee-archives/applications/${requestId}/cancel`, { reason }) as unknown as Promise<EmployeeDataReview>;
   },
 
   getDiagnostics(): Promise<{ blocking: false; total: number; items: Array<{ code: string; label: string; userIds: string[]; detail: string }> }> {
@@ -318,7 +358,7 @@ export const employeeArchivesApi = {
     return http.patch(`/employee-archives/${userId}/draft`, body) as unknown as Promise<EmployeeDataReview>;
   },
 
-  lookupIdentity(body: { phone?: string; idNumber?: string }): Promise<EmployeeIdentityLookupResult> {
+  lookupIdentity(body: { phone?: string; idNumber?: string; excludeRequestId?: string }): Promise<EmployeeIdentityLookupResult> {
     return http.post('/employee-archives/identity-lookup', body) as unknown as Promise<EmployeeIdentityLookupResult>;
   },
 
@@ -330,7 +370,7 @@ export const employeeArchivesApi = {
     return http.get(`/employee-archives/${userId}/reentry/current`) as unknown as Promise<EmployeeDataReview | null>;
   },
 
-  reviseReentry(requestId: string, body: EmployeeReentryBody): Promise<EmployeeDataReview> {
+  reviseReentry(requestId: string, body: EmployeeReentryBody | { performanceOnly: true; performanceManagerId: string | null }): Promise<EmployeeDataReview> {
     return http.patch(`/employee-archives/reentry/${requestId}`, body) as unknown as Promise<EmployeeDataReview>;
   },
 

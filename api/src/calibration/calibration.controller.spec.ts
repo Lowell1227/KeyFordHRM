@@ -7,6 +7,7 @@ import { Prisma } from '@prisma/client';
 import request from 'supertest';
 import { JwtAuthGuard } from '@/common/guards/jwt-auth.guard';
 import { RolesGuard } from '@/common/guards/roles.guard';
+import { AuthService } from '@/auth/auth.service';
 import { CalibrationController, CalibrationCyclesController } from './calibration.controller';
 import { CalibrationService } from './calibration.service';
 
@@ -18,6 +19,11 @@ describe('calibration HTTP authorization', () => {
   const cycle = { id: cycleId, hrOwnerId: ownerId, name: 'Virtual scope',
     ...Object.fromEntries(['A', 'B', 'C', 'D'].map(grade => [`grade${grade}MaxRatio`, new Prisma.Decimal(0.25)])) };
   const prisma: any = {
+    user: { findUnique: jest.fn(async ({ where }: { where: { id: string } }) => ({
+      id: where.id, name: 'Virtual user', employeeNo: where.id, accountType: 'test', status: 'active',
+      archivedAt: null, deletedAt: null, sysRole: 'hr_user', deptId: null,
+      isAssessorOnly: false, canViewAll: false, hrCapabilities: ['cycle_plan_edit'],
+    })) },
     assessmentCycle: { findUnique: jest.fn(async () => cycle), findMany: jest.fn(async () => [cycle]) },
     assessmentTask: { findMany: jest.fn(async () => []), findFirst: jest.fn(async () => ({ id: taskId, employeeId: ownerId })) },
     $transaction: jest.fn(),
@@ -27,7 +33,7 @@ describe('calibration HTTP authorization', () => {
     ['get', `/cycles/${cycleId}/grade-distribution`], ['get', `/cycles/${cycleId}/calibration/tasks/${taskId}`],
     ['post', `/cycles/${cycleId}/calibration/confirm`], ['post', `/cycles/${cycleId}/calibration/reject`],
   ] as const;
-  const token = (id: string) => jwt.sign({ sub: id, name: 'Virtual user', sysRole: 'hr_user', hrCapabilities: ['cycle_plan_edit'] });
+  const token = (id: string) => jwt.sign({ sub: id, employeeNo: id, name: 'Virtual user', sysRole: 'hr_user', hrCapabilities: ['cycle_plan_edit'] });
 
   beforeAll(async () => {
     const module = await Test.createTestingModule({
@@ -35,7 +41,8 @@ describe('calibration HTTP authorization', () => {
       providers: [{ provide: CalibrationService, useValue: new CalibrationService(prisma, {} as any, {} as any) }],
     }).compile();
     app = module.createNestApplication();
-    app.useGlobalGuards(new JwtAuthGuard(new Reflector(), jwt), new RolesGuard(new Reflector()));
+    const auth = new AuthService(prisma, jwt, {} as any, {} as any, {} as any);
+    app.useGlobalGuards(new JwtAuthGuard(new Reflector(), jwt, auth), new RolesGuard(new Reflector()));
     app.useGlobalPipes(new ValidationPipe({ transform: true, whitelist: true }));
     await app.init();
   });

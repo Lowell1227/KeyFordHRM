@@ -20,6 +20,7 @@ import {
   BindDingtalkIdentityDto,
   ArchivePersonnelRecordsDto,
   CreateEmployeeDto,
+  EmployeeApplicationQueryDto,
   CreateEmploymentRecordDto,
   EmployeeDraftQueryDto,
   PreviewEmployeeRosterDto,
@@ -196,13 +197,32 @@ export class EmployeeArchivesController {
     return this.archives.listDrafts(dto);
   }
 
+  @Get('applications/list')
+  @HrCapabilities('employee_archive_edit', 'employee_archive_review')
+  listApplications(@Query() dto: EmployeeApplicationQueryDto) {
+    return this.archives.listApplications(dto);
+  }
+
+  @Get('applications/:id')
+  @HrCapabilities('employee_archive_edit', 'employee_archive_review')
+  getApplication(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
+    return this.archives.getApplication(id);
+  }
+
+  @Post('applications/:id/cancel')
+  @HrCapabilities('employee_archive_edit')
+  cancelApplication(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Body() input: CancelEmployeeReentryDto, @CurrentUser() operator: AuthUser) {
+    return this.archives.cancelApplication(id, input.reason, operator);
+  }
+
   @Post('drafts/archive')
   @HrCapabilities('employee_archive_edit')
   archiveDrafts(
     @Body() dto: ArchivePersonnelRecordsDto,
     @CurrentUser() operator: AuthUser,
   ) {
-    return this.archives.archiveDrafts(dto.ids, operator);
+    return this.archives.batchArchive(dto.ids, operator, 'draft');
   }
 
   @Post('archive')
@@ -211,13 +231,26 @@ export class EmployeeArchivesController {
     @Body() dto: ArchivePersonnelRecordsDto,
     @CurrentUser() operator: AuthUser,
   ) {
-    return this.archives.archiveEmployees(dto.ids, operator);
+    return this.archives.batchArchive(dto.ids, operator, 'employee');
+  }
+
+  @Post('restore')
+  @HrCapabilities('employee_archive_edit')
+  restoreEmployees(@Body() dto: ArchivePersonnelRecordsDto, @CurrentUser() operator: AuthUser) {
+    return this.archives.restoreRecords(dto.ids, operator, 'employee');
+  }
+
+  @Post('drafts/restore')
+  @HrCapabilities('employee_archive_edit')
+  restoreDrafts(@Body() dto: ArchivePersonnelRecordsDto, @CurrentUser() operator: AuthUser) {
+    return this.archives.restoreRecords(dto.ids, operator, 'draft');
   }
 
   @Get(':id')
   @HrCapabilities('employee_archive_edit', 'employee_archive_review')
-  findOne(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
-    return this.archives.findOne(id);
+  async findOne(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
+    const archive = await this.archives.findOne(id);
+    return { ...archive, ...await this.archives.history(id) };
   }
 
   @Patch(':id/profile')

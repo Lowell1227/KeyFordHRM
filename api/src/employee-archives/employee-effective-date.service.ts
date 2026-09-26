@@ -1,7 +1,7 @@
 import { Injectable } from '@nestjs/common';
 import { EmployeeNumberStatus, ExternalIdentityProvider, ExternalIdentityStatus, OnboardingStatus, Prisma, SysRole } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
-import { selectEmploymentAt } from './employment-timeline';
+import { approvedEmploymentSourceWhere, selectEmploymentAt, shanghaiBusinessDate } from './employment-timeline';
 
 export const RESIGNATION_BINDING_DISABLED_REASON = '员工档案审核为离职';
 
@@ -18,13 +18,14 @@ export class EmployeeEffectiveDateService {
     for (const item of dueUsers) {
       if (item.userId) await this.refreshUserProjection(item.userId, at);
     }
-    const effectiveAt = this.shanghaiDate(at);
+    const effectiveAt = shanghaiBusinessDate(at);
     const [users, records, positions] = await Promise.all([
       this.prisma.user.findMany({
-        where: { deletedAt: null, accountType: 'employee' },
-        select: { id: true },
+        where: { deletedAt: null, accountType: 'employee', status: { not: 'pending_entry' } },
+        select: { id: true, status: true },
       }),
       this.prisma.employmentRecord.findMany({
+        where: approvedEmploymentSourceWhere,
         orderBy: [{ userId: 'asc' }, { effectiveFrom: 'desc' }],
       }),
       this.prisma.position.findMany({ select: { id: true, name: true } }),
@@ -37,13 +38,16 @@ export class EmployeeEffectiveDateService {
     }
     const positionNames = new Map(positions.map((position) => [position.id, position.name]));
     let overlaps = 0;
-    const updates: Array<ReturnType<typeof this.prisma.user.update>> = [];
+    let updated = 0;
+    const updates: Prisma.PrismaPromise<unknown>[] = [];
 
     for (const user of users) {
       const selection = selectEmploymentAt(recordsByUser.get(user.id) ?? [], effectiveAt);
       if (!selection.current) continue;
       if (selection.matches.length > 1) overlaps += 1;
       const current = selection.current;
+      if (user.status === 'resigned' && current.employeeStatus !== 'resigned') continue;
+      updated += 1;
       updates.push(this.prisma.user.update({
         where: { id: user.id },
         data: {
@@ -60,10 +64,20 @@ export class EmployeeEffectiveDateService {
           status: current.employeeStatus,
         },
       }));
+      if (current.employeeStatus === 'resigned') {
+        updates.push(this.prisma.externalIdentityBinding.updateMany({ where: {
+          userId: user.id, status: ExternalIdentityStatus.enabled, endedAt: null,
+        }, data: { status: ExternalIdentityStatus.disabled, disabledAt: at, disabledReason: RESIGNATION_BINDING_DISABLED_REASON } }));
+      }
+      if (current.sourceRequestId) {
+        updates.push(this.prisma.employeeDataChangeRequest.updateMany({ where: {
+          id: current.sourceRequestId, profileReviewStatus: 'approved', appliedAt: null,
+        }, data: { appliedAt: at } }));
+      }
     }
 
     if (updates.length > 0) await this.prisma.$transaction(updates);
-    return { checked: users.length, updated: updates.length, overlaps };
+    return { checked: users.length, updated, overlaps };
   }
 
   async refreshUserProjection(userId: string, at = new Date()): Promise<{ activated: boolean; historicalOnly: boolean }> {
@@ -72,10 +86,45 @@ export class EmployeeEffectiveDateService {
       orderBy: { createdAt: 'desc' },
       select: { id: true },
     });
-    if (!request) return { activated: false, historicalOnly: false };
-    return this.prisma.$transaction((tx) => this.activateApprovedOnboarding(tx, request.id, at), {
+    return this.prisma.$transaction(async (tx) => {
+      const result = request ? await this.activateApprovedOnboarding(tx, request.id, at)
+        : { activated: false, historicalOnly: false };
+      if (!result.activated && !result.historicalOnly) await this.refreshCurrentEmployment(tx, userId, at);
+      return result;
+    }, {
       isolationLevel: Prisma.TransactionIsolationLevel.Serializable,
     });
+  }
+
+  private async refreshCurrentEmployment(tx: Prisma.TransactionClient, userId: string, at: Date) {
+    const user = await tx.user.findUnique({ where: { id: userId, deletedAt: null }, select: {
+      id: true, accountType: true, status: true, deptId: true, positionId: true, position: true,
+      entryDate: true, plannedRegularDate: true, actualRegularDate: true, leaveDate: true, employmentType: true,
+    } });
+    if (!user || user.accountType !== 'employee' || user.status === 'pending_entry') return;
+    const records = await tx.employmentRecord.findMany({ where: { userId, ...approvedEmploymentSourceWhere }, orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }] });
+    const current = selectEmploymentAt(records, shanghaiBusinessDate(at)).current;
+    if (!current) return;
+    if (user.status === 'resigned' && current.employeeStatus !== 'resigned') return;
+    const position = current.positionId ? await tx.position.findUnique({ where: { id: current.positionId }, select: { name: true } }) : null;
+    const projection = {
+      deptId: current.deptId, positionId: current.positionId, position: position?.name ?? current.position,
+      entryDate: current.entryDate, plannedRegularDate: current.plannedRegularDate,
+      actualRegularDate: current.actualRegularDate, leaveDate: current.leaveDate,
+      employmentType: current.employmentType, status: current.employeeStatus,
+    };
+    if (Object.entries(projection).some(([key, value]) => JSON.stringify((user as any)[key]) !== JSON.stringify(value))) {
+      await tx.user.update({ where: { id: userId }, data: projection });
+    }
+    if (current.employeeStatus === 'resigned') {
+      await tx.externalIdentityBinding.updateMany({ where: { userId, status: ExternalIdentityStatus.enabled, endedAt: null },
+        data: { status: ExternalIdentityStatus.disabled, disabledAt: at, disabledReason: RESIGNATION_BINDING_DISABLED_REASON } });
+    }
+    if (current.sourceRequestId) {
+      await tx.employeeDataChangeRequest.updateMany({ where: {
+        id: current.sourceRequestId, profileReviewStatus: 'approved', appliedAt: null,
+      }, data: { appliedAt: at } });
+    }
   }
 
   async activateApprovedOnboarding(
@@ -91,15 +140,16 @@ export class EmployeeEffectiveDateService {
       },
     });
     if (!request || !request.userId || request.onboardingStatus === OnboardingStatus.cancelled
-      || request.onboardingStatus === OnboardingStatus.effective) {
+      || request.onboardingStatus === OnboardingStatus.effective || request.profileReviewStatus !== 'approved') {
       return { activated: false, historicalOnly: false };
     }
     const employment = request.employmentRecords[0];
     if (!employment) return { activated: false, historicalOnly: false };
     const proposed = this.record(request.proposedValue);
     const performance = this.record(proposed.performance);
-    const performanceManagerId = typeof performance.managerId === 'string' ? performance.managerId : null;
-    const today = this.shanghaiDate(at);
+    const performanceManagerId = request.performanceReviewStatus === 'approved' && typeof performance.managerId === 'string'
+      ? performance.managerId : null;
+    const today = shanghaiBusinessDate(at);
     if (employment.effectiveFrom > today) return { activated: false, historicalOnly: false };
     const assignment = request.employeeNumbers.find((item) => item.status === EmployeeNumberStatus.reserved)
       ?? request.employeeNumbers.find((item) => item.employeeNo === employment.employeeNo);
@@ -189,14 +239,6 @@ export class EmployeeEffectiveDateService {
       newValue: { userId: request.userId, effectiveFrom: employment.effectiveFrom.toISOString() },
     } });
     return { activated: true, historicalOnly: false };
-  }
-
-  private shanghaiDate(at: Date): Date {
-    const parts = new Intl.DateTimeFormat('en-US', {
-      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
-    }).formatToParts(at);
-    const value = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-    return new Date(`${value.year}-${value.month}-${value.day}T00:00:00.000Z`);
   }
 
   private record(value: unknown): Record<string, unknown> {

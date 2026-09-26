@@ -1,4 +1,4 @@
-import { Type } from 'class-transformer';
+import { Transform, Type } from 'class-transformer';
 import {
   IsBoolean,
   IsDate,
@@ -23,26 +23,30 @@ import {
 import { CompanyCode, EmploymentType, UserStatus } from '@prisma/client';
 import { PartialType } from '@nestjs/mapped-types';
 
+// Forms submit blank controls; treat these as absent, not invalid dates/UUIDs.
+const BlankToNull = () => Transform(({ value, obj, key }) =>
+  typeof obj[key] === 'string' && !obj[key].trim() ? null : value);
+
 class EmployeeCreateDetailsDto {
   @IsOptional() @IsString() @MaxLength(100) position?: string | null;
   @IsOptional() @IsString() @MaxLength(50) jobGrade?: string | null;
   @IsOptional() @IsString() @MaxLength(100) jobFamily?: string | null;
   @IsOptional() @IsString() @MaxLength(100) workLocation?: string | null;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(12) probationMonths?: number | null;
-  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) plannedRegularDate?: string | null;
-  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) actualRegularDate?: string | null;
-  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) leaveDate?: string | null;
+  @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) plannedRegularDate?: string | null;
+  @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) actualRegularDate?: string | null;
+  @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) leaveDate?: string | null;
 }
 
 class EmployeeCreateProfileDto {
   @IsOptional() @IsString() @MaxLength(20) phone?: string | null;
   @IsOptional() @IsString() @MaxLength(30) gender?: string | null;
-  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) birthDate?: string | null;
+  @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) birthDate?: string | null;
   @IsOptional() @IsString() @MaxLength(50) ethnicity?: string | null;
   @IsOptional() @IsString() @MaxLength(50) education?: string | null;
   @IsOptional() @IsString() @MaxLength(100) professionalTitle?: string | null;
   @IsOptional() @IsString() @MaxLength(200) school?: string | null;
-  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) graduationDate?: string | null;
+  @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) graduationDate?: string | null;
   @IsOptional() @IsString() @MaxLength(100) major?: string | null;
   @IsOptional() @IsString() @MaxLength(30) maritalStatus?: string | null;
   @IsOptional() @IsString() @MaxLength(50) childrenStatus?: string | null;
@@ -57,9 +61,9 @@ class EmployeeCreateProfileDto {
   @IsOptional() @IsString() @MaxLength(50) emergencyContactRelation?: string | null;
   @IsOptional() @IsString() @MaxLength(30) emergencyContactPhone?: string | null;
   @IsOptional() @IsString() @MaxLength(50) socialSecurityStatus?: string | null;
-  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) socialSecurityStartDate?: string | null;
+  @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) socialSecurityStartDate?: string | null;
   @IsOptional() @IsString() @MaxLength(50) housingFundStatus?: string | null;
-  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) housingFundStartDate?: string | null;
+  @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) housingFundStartDate?: string | null;
   @IsOptional() @IsString() @MaxLength(100) bankName?: string | null;
   @IsOptional() @IsString() @MaxLength(200) bankBranch?: string | null;
   @IsOptional() @IsString() @MaxLength(50) bankAccount?: string | null;
@@ -76,9 +80,9 @@ class EmployeeCreateContractDto {
   @IsOptional() @IsString() @MaxLength(50) contractType?: string | null;
   @IsOptional() @IsString() @MaxLength(200) name?: string | null;
   @IsOptional() @IsString() @MaxLength(200) signingCompany?: string | null;
-  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) signedAt?: string | null;
-  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) effectiveFrom?: string | null;
-  @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) expiresAt?: string | null;
+  @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) signedAt?: string | null;
+  @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) effectiveFrom?: string | null;
+  @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) expiresAt?: string | null;
   @IsOptional() @IsString() @MaxLength(100) termType?: string | null;
   @IsOptional() @IsString() @MaxLength(200) originalCompany?: string | null;
   @IsOptional() @IsString() @MaxLength(200) newCompany?: string | null;
@@ -104,12 +108,14 @@ class EmployeeCreateContractDto {
 
 class EmployeeCreatePerformanceDto {
   @IsOptional()
+  @BlankToNull()
   @IsUUID('4')
   managerId?: string | null;
 }
 
 export class CreateEmployeeDto {
   @IsOptional()
+  @BlankToNull()
   @IsUUID('4')
   draftId?: string;
 
@@ -135,22 +141,27 @@ export class CreateEmployeeDto {
   @IsEnum(CompanyCode)
   company!: CompanyCode;
 
+  @BlankToNull()
   @IsUUID('4')
   deptId!: string;
 
   @IsOptional()
+  @BlankToNull()
   @IsUUID('4')
   positionId?: string | null;
 
+  @BlankToNull()
   @Type(() => Date)
   @IsDate()
   entryDate!: Date;
 
+  @BlankToNull()
   @Type(() => Date)
   @IsDate()
   effectiveFrom!: Date;
 
   @IsOptional()
+  @BlankToNull()
   @Type(() => Date)
   @IsDate()
   effectiveTo?: Date | null;
@@ -162,10 +173,12 @@ export class CreateEmployeeDto {
   employeeStatus!: UserStatus;
 
   @IsOptional()
+  @BlankToNull()
   @IsUUID('4')
   rosterManagerId?: string | null;
 
   @IsOptional()
+  @BlankToNull()
   @IsUUID('4')
   performanceManagerId?: string | null;
 
@@ -204,6 +217,7 @@ export class UpdateEmployeeProfileDto {
 
 export class SubmitEmployeeArchiveDraftDto {
   @IsOptional()
+  @BlankToNull()
   @IsUUID('4')
   draftId?: string;
 
@@ -223,6 +237,7 @@ export class SubmitEmployeeArchiveDraftDto {
 }
 
 export class SaveEmployeeCreateDraftDto extends PartialType(CreateEmployeeDto) {
+  @IsOptional() @IsInt() @IsIn([2]) draftLayoutVersion?: number;
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -266,27 +281,37 @@ export class ArchivePersonnelRecordsDto {
   @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(100)
+  @BlankToNull()
   @IsUUID('4', { each: true })
   ids!: string[];
+}
+
+export class EmployeeApplicationQueryDto extends EmployeeDraftQueryDto {
+  @IsOptional() @IsString() @MaxLength(100) keyword?: string;
+  @IsOptional() @IsUUID('4') departmentId?: string;
 }
 
 export class SubmitDepartmentAssignmentsDto {
   @IsArray()
   @ArrayMinSize(1)
   @ArrayMaxSize(100)
+  @BlankToNull()
   @IsUUID('4', { each: true })
   userIds!: string[];
 
+  @BlankToNull()
   @IsUUID('4')
   departmentId!: string;
 }
 
 export class CreateEmploymentRecordDto {
+  @BlankToNull()
   @Type(() => Date)
   @IsDate()
   effectiveFrom!: Date;
 
   @IsOptional()
+  @BlankToNull()
   @Type(() => Date)
   @IsDate()
   effectiveTo?: Date | null;
@@ -295,6 +320,7 @@ export class CreateEmploymentRecordDto {
   company!: CompanyCode;
 
   @IsOptional()
+  @BlankToNull()
   @IsUUID()
   deptId?: string | null;
 
@@ -303,6 +329,7 @@ export class CreateEmploymentRecordDto {
   position?: string | null;
 
   @IsOptional()
+  @BlankToNull()
   @IsUUID('4')
   positionId?: string | null;
 
@@ -315,6 +342,7 @@ export class CreateEmploymentRecordDto {
   jobFamily?: string | null;
 
   @IsOptional()
+  @BlankToNull()
   @IsUUID()
   directManagerId?: string | null;
 
@@ -329,21 +357,25 @@ export class CreateEmploymentRecordDto {
   employeeStatus!: UserStatus;
 
   @IsOptional()
+  @BlankToNull()
   @Type(() => Date)
   @IsDate()
   entryDate?: Date | null;
 
   @IsOptional()
+  @BlankToNull()
   @Type(() => Date)
   @IsDate()
   plannedRegularDate?: Date | null;
 
   @IsOptional()
+  @BlankToNull()
   @Type(() => Date)
   @IsDate()
   actualRegularDate?: Date | null;
 
   @IsOptional()
+  @BlankToNull()
   @Type(() => Date)
   @IsDate()
   leaveDate?: Date | null;
@@ -367,6 +399,7 @@ export class CreateEmploymentRecordDto {
   sourceType?: string | null;
 
   @IsOptional()
+  @BlankToNull()
   @IsUUID()
   sourceBatchId?: string | null;
 }

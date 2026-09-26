@@ -19,6 +19,7 @@ import { EmployeeOnboardingService } from './employee-onboarding.service';
 import { RESIGNATION_BINDING_DISABLED_REASON } from './employee-effective-date.service';
 import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 import { employeeDataChangeView } from './employee-data-change-view';
+import { nextBusinessDate, shanghaiBusinessDate } from './employment-timeline';
 
 export type EmployeeReviewScope = 'profile' | 'performance';
 
@@ -178,7 +179,7 @@ export class EmployeeDataReviewsService {
     };
     if (pending) {
       const pendingProposed = this.record(pending.proposedValue);
-      return this.prisma.employeeDataChangeRequest.update({
+      return employeeDataChangeView(await this.prisma.employeeDataChangeRequest.update({
         where: { id: pending.id },
         data: {
           proposedValue: {
@@ -190,9 +191,9 @@ export class EmployeeDataReviewsService {
           createdById: operator.id,
           rejectedReason: null,
         },
-      });
+      }));
     }
-    return this.prisma.employeeDataChangeRequest.create({
+    return employeeDataChangeView(await this.prisma.employeeDataChangeRequest.create({
       data: {
         userId,
         employeeNo: user.employeeNo,
@@ -202,7 +203,7 @@ export class EmployeeDataReviewsService {
         profileReviewStatus: 'not_required',
         performanceReviewStatus: 'pending',
       },
-    });
+    }));
   }
 
   async setPendingPerformanceManager(
@@ -245,7 +246,7 @@ export class EmployeeDataReviewsService {
       ...proposed,
       performance: { managerName: manager.name, managerId },
     };
-    return this.prisma.employeeDataChangeRequest.update({
+    return employeeDataChangeView(await this.prisma.employeeDataChangeRequest.update({
       where: { id: requestId },
       data: {
         proposedValue: updatedProposed as Prisma.InputJsonValue,
@@ -254,7 +255,7 @@ export class EmployeeDataReviewsService {
         rejectedReason: null,
         createdById: operator.id,
       },
-    });
+    }));
   }
 
   async approveBatch(
@@ -275,8 +276,7 @@ export class EmployeeDataReviewsService {
       succeededByRequest.set(requestId, applied);
     };
 
-    const approveScope = async (requestId: string, scope: EmployeeReviewScope): Promise<boolean> => (
-      this.prisma.$transaction(async (tx) => {
+    const approveScope = async (tx: Prisma.TransactionClient, requestId: string, scope: EmployeeReviewScope): Promise<boolean> => {
         const request = await tx.employeeDataChangeRequest.findUnique({ where: { id: requestId } });
         if (!request) {
           throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '审核记录不存在' });
@@ -311,12 +311,17 @@ export class EmployeeDataReviewsService {
           });
         if (claimed.count !== 1) return false;
 
+        const now = new Date();
+
         let subjectUserId = request.userId;
         if (scope === 'profile') {
           if (request.intakeType === OnboardingIntakeType.reentry) {
             if (!this.onboarding || !request.userId) {
               throw new BadRequestException({ code: ERROR_CODE.INTERNAL, message: '再入职审核服务未就绪' });
             }
+            await tx.employeeDataChangeRequest.update({ where: { id: requestId }, data: {
+              profileReviewStatus: 'approved', profileReviewedAt: now, profileReviewedById: operator.id,
+            } });
             await this.onboarding.applyApprovedReentry(tx, request.id, operator.id, new Date());
             subjectUserId = request.userId;
           } else {
@@ -324,8 +329,9 @@ export class EmployeeDataReviewsService {
             if (request.intakeType === OnboardingIntakeType.new_hire && request.employeeNo) {
               const employee = this.record(this.record(request.proposedValue).employee);
               const effectiveFrom = this.requiredDate(employee.effectiveFrom, '入职生效日期不能为空');
-              const pendingEntry = effectiveFrom > this.startOfTodayInShanghai()
-                || request.performanceReviewStatus === 'pending';
+              const historicalOnly = Boolean(this.nullableDate(employee.effectiveTo)
+                && this.nullableDate(employee.effectiveTo)! < shanghaiBusinessDate());
+              const pendingEntry = effectiveFrom > shanghaiBusinessDate();
               await tx.employeeNumberAssignment.updateMany({
                 where: {
                   sourceRequestId: request.id,
@@ -334,7 +340,7 @@ export class EmployeeDataReviewsService {
                 },
                 data: {
                   userId: subjectUserId,
-                  status: pendingEntry ? EmployeeNumberStatus.reserved : EmployeeNumberStatus.current,
+                  status: historicalOnly ? EmployeeNumberStatus.historical : pendingEntry ? EmployeeNumberStatus.reserved : EmployeeNumberStatus.current,
                   effectiveFrom,
                 },
               });
@@ -355,12 +361,14 @@ export class EmployeeDataReviewsService {
           }
         } else {
           await this.applyPerformanceRelation(tx, request);
+          await tx.employeeDataChangeRequest.update({ where: { id: requestId }, data: {
+            performanceReviewStatus: 'approved', performanceReviewedAt: now, performanceReviewedById: operator.id,
+          } });
           if (request.intakeType && request.profileReviewStatus === 'approved' && this.onboarding) {
             await this.onboarding.finalizeApprovedOnboarding(tx, request.id, new Date());
           }
         }
 
-        const now = new Date();
         const updateData: Prisma.EmployeeDataChangeRequestUncheckedUpdateInput = {};
         if (scope === 'profile') {
           updateData.profileReviewStatus = 'approved';
@@ -374,6 +382,12 @@ export class EmployeeDataReviewsService {
           updateData.performanceReviewedById = operator.id;
           if (request.profileReviewStatus !== 'pending') updateData.appliedAt = now;
         }
+        const proposedEmployee = this.record(this.record(request.proposedValue).employee);
+        const lastWorkingDate = this.nullableDate(proposedEmployee.leaveDate);
+        const effectiveDate = proposedEmployee.changeType === 'resignation' && lastWorkingDate
+          ? nextBusinessDate(lastWorkingDate)
+          : this.nullableDate(proposedEmployee.effectiveDate ?? proposedEmployee.effectiveFrom);
+        if (effectiveDate && effectiveDate > shanghaiBusinessDate(now)) updateData.appliedAt = null;
         await tx.employeeDataChangeRequest.update({ where: { id: requestId }, data: updateData });
         if (request.sourceType === 'employee_roster_import' && request.sourceBatchId) {
           await this.completeImportBatchIfReady(tx, request.sourceBatchId);
@@ -388,25 +402,29 @@ export class EmployeeDataReviewsService {
           },
         });
         return true;
-      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
-    );
+    };
 
-    // 先通过基础档案，确保同批次新员工均已建立，再解析绩效关系。
-    for (const scope of ['profile', 'performance'] as EmployeeReviewScope[]) {
-      if (!scopes.includes(scope)) continue;
+    // One request is atomic; independent employees can succeed separately.
+    // Retry unresolved same-batch managers only after another request made progress.
+    {
       let queue = [...requestIds];
       while (queue.length > 0) {
         const deferred: string[] = [];
         let progressed = false;
         for (const requestId of queue) {
           try {
-            if (await approveScope(requestId, scope)) {
-              addSucceeded(requestId, scope);
-              progressed = true;
-            }
+            const applied = await this.prisma.$transaction(async (tx) => {
+              const appliedScopes: EmployeeReviewScope[] = [];
+              for (const scope of ['profile', 'performance'] as EmployeeReviewScope[]) {
+                if (scopes.includes(scope) && await approveScope(tx, requestId, scope)) appliedScopes.push(scope);
+              }
+              return appliedScopes;
+            }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+            for (const scope of applied) addSucceeded(requestId, scope);
+            if (applied.length) progressed = true;
           } catch (error) {
             const message = this.errorMessage(error);
-            if (scope === 'profile' && message.includes('花名册直属主管') && message.includes('无法唯一匹配')) {
+            if (message.includes('花名册直属主管') && message.includes('无法唯一匹配')) {
               deferred.push(requestId);
               continue;
             }
@@ -490,7 +508,7 @@ export class EmployeeDataReviewsService {
               newValue: { reason: reason.trim() },
             },
           });
-        });
+        }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
         result.succeeded.push({ requestId, scopes: ['profile', 'performance'] });
       } catch (error) {
         result.failed.push({ requestId, reason: this.errorMessage(error) });
@@ -562,8 +580,9 @@ export class EmployeeDataReviewsService {
     const leaveDate = this.nullableDate(employee.leaveDate);
     const isManualEmployment = request.sourceType === 'manual_employment_change'
       || request.sourceType === 'manual_employee_create';
-    const today = this.startOfUtcDay(new Date());
-    const effectiveFrom = isManualEmployment
+    const today = shanghaiBusinessDate();
+    const isResignation = employeeStatus === UserStatus.resigned && employee.changeType === 'resignation';
+    const effectiveFrom = isResignation && leaveDate ? nextBusinessDate(leaveDate) : isManualEmployment
       ? this.requiredDate(employee.effectiveFrom, '任职生效日期不能为空')
       : request.userId ? today : entryDate;
     const effectiveTo = isManualEmployment
@@ -573,6 +592,12 @@ export class EmployeeDataReviewsService {
       || (effectiveFrom <= today && (!effectiveTo || effectiveTo >= today));
     if (request.userId) {
       await this.assertProfileBaseStillCurrent(tx, request.userId, request.baseValue, request.proposedValue);
+      if (shouldUpdateUserProjection && employeeStatus !== UserStatus.resigned && request.intakeType !== OnboardingIntakeType.new_hire) {
+        const current = await tx.user.findUnique({ where: { id: request.userId }, select: { status: true } });
+        if (current?.status === UserStatus.resigned) {
+          throw new BadRequestException('已离职员工请办理再入职，不能通过普通档案修改恢复历史工号');
+        }
+      }
     }
 
     const projection = {
@@ -596,6 +621,7 @@ export class EmployeeDataReviewsService {
       : (await tx.user.create({
         data: {
           ...projection,
+          status: shouldUpdateUserProjection ? employeeStatus : effectiveTo && effectiveTo < today ? UserStatus.resigned : UserStatus.pending_entry,
           directManagerId: null,
           passwordHash: initialPasswordHash,
           mustChangePassword: true,
@@ -643,7 +669,7 @@ export class EmployeeDataReviewsService {
 
     const employmentData = {
       userId,
-      employeeNo: request.intakeType ? employeeNo : null,
+      employeeNo,
       company,
       deptId,
       positionId,
@@ -659,11 +685,11 @@ export class EmployeeDataReviewsService {
       actualRegularDate,
       leaveDate,
       probationMonths: typeof employee.probationMonths === 'number' ? employee.probationMonths : null,
-      changeType: request.userId ? 'data_correction' : 'hire',
+      changeType: request.intakeType === OnboardingIntakeType.new_hire ? 'hire' : request.userId ? 'data_correction' : 'hire',
       reason: '员工档案审核通过',
       sourceType: 'employee_data_review',
       sourceBatchId: request.sourceBatchId,
-      sourceRequestId: request.intakeType ? request.id : null,
+      sourceRequestId: request.id,
       createdById: operator.id,
     };
     const baseEmployee = this.record(this.record(request.baseValue).employee);
@@ -683,7 +709,7 @@ export class EmployeeDataReviewsService {
           employeeStatus: { in: [UserStatus.active, UserStatus.probation] },
         },
         orderBy: { effectiveFrom: 'desc' },
-        select: { id: true, effectiveFrom: true },
+        select: { id: true, effectiveFrom: true, effectiveTo: true },
       })
       : null;
     let updatedSameDayEmployment = false;
@@ -700,6 +726,13 @@ export class EmployeeDataReviewsService {
       updatedSameDayEmployment = true;
     } else if (currentEmployment) {
       const yesterday = new Date(employmentReferenceDate.getTime() - 86_400_000);
+      if (effectiveFrom > today) {
+        await tx.auditLog.create({ data: { userId: operator.id,
+          action: 'schedule_employment_interval', entityType: 'employee_data_change_request', entityId: request.id,
+          oldValue: { employmentId: currentEmployment.id, effectiveTo: currentEmployment.effectiveTo?.toISOString() ?? null },
+          newValue: { effectiveTo: yesterday.toISOString() },
+        } });
+      }
       await tx.employmentRecord.update({
         where: { id: currentEmployment.id },
         data: { effectiveTo: yesterday },
@@ -716,7 +749,7 @@ export class EmployeeDataReviewsService {
       });
     }
 
-    if (employeeStatus === UserStatus.resigned) {
+    if (employeeStatus === UserStatus.resigned && shouldUpdateUserProjection) {
       await tx.externalIdentityBinding.updateMany({
         where: {
           userId,
@@ -775,6 +808,8 @@ export class EmployeeDataReviewsService {
       userId: string | null;
       baseValue: Prisma.JsonValue;
       proposedValue: Prisma.JsonValue;
+      intakeType?: OnboardingIntakeType | null;
+      onboardingStatus?: OnboardingStatus | null;
     },
   ): Promise<void> {
     if (!request.userId) {
@@ -782,6 +817,10 @@ export class EmployeeDataReviewsService {
     }
     const proposed = this.record(request.proposedValue);
     const performance = this.record(proposed.performance);
+    const historicalEnd = this.nullableDate(this.record(proposed.employee).effectiveTo);
+    if (request.intakeType && historicalEnd && historicalEnd < shanghaiBusinessDate()) {
+      throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '历史任职不改变当前绩效关系，请在当前档案中另行提交' });
+    }
     const basePerformance = this.record(this.record(request.baseValue).performance);
     let managerId = typeof performance.managerId === 'string' ? performance.managerId : null;
     const managerName = this.nullableString(performance.managerName);
@@ -806,7 +845,8 @@ export class EmployeeDataReviewsService {
       },
     });
     const baseManagerId = this.nullableString(basePerformance.managerId);
-    if ((subject?.directManagerId ?? null) !== baseManagerId) {
+    if ((subject?.directManagerId ?? null) !== baseManagerId
+      && !(request.intakeType && subject?.directManagerId == null)) {
       throw new BadRequestException({
         code: ERROR_CODE.CONFLICT,
         message: '正式绩效直属上级已发生变化，请重新提交审核',
@@ -853,6 +893,7 @@ export class EmployeeDataReviewsService {
       ancestorId = ancestor?.directManagerId ?? null;
     }
 
+    if (request.intakeType && request.onboardingStatus === OnboardingStatus.pending_entry) return;
     await tx.user.update({
       where: { id: request.userId },
       data: { directManagerId: managerId },
@@ -1285,18 +1326,6 @@ export class EmployeeDataReviewsService {
 
   private enumValue<T extends string>(value: unknown, options: T[], fallback: T): T {
     return typeof value === 'string' && options.includes(value as T) ? value as T : fallback;
-  }
-
-  private startOfUtcDay(value: Date): Date {
-    return new Date(Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate()));
-  }
-
-  private startOfTodayInShanghai(at = new Date()): Date {
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
-    }).formatToParts(at);
-    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-    return new Date(`${values.year}-${values.month}-${values.day}T00:00:00.000Z`);
   }
 
   private stringArray(value: Prisma.JsonValue): string[] {

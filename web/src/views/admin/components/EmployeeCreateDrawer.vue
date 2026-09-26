@@ -2,7 +2,7 @@
 import dayjs from 'dayjs';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { Delete, Plus } from '@element-plus/icons-vue';
-import { ElMessage, type UploadRequestOptions } from 'element-plus';
+import { ElMessage, ElMessageBox, type UploadRequestOptions } from 'element-plus';
 import {
   employeeArchivesApi,
   type EmployeeCreateDraftPayload,
@@ -27,9 +27,13 @@ const emit = defineEmits<{
   saved: [];
   reentry: [userId: string];
   existing: [userId: string];
+  application: [requestId: string];
 }>();
 
-const stepTitles = ['身份核验', '任职信息', '管理关系', '个人与教育', '联系与保障', '合同与附件', '预览提交'];
+const stepTitles = ['基本信息', '本次任职', '补充资料', '检查并提交'];
+const supplementGroups = ref<string[]>([]);
+const fieldErrors = reactive<Record<string, string>>({});
+const saveError = ref('');
 const currentStep = ref(0);
 const completedSteps = ref<number[]>([]);
 const draftId = ref<string>();
@@ -136,7 +140,10 @@ function reset() {
   const performance = proposed.performance ?? {};
   const draftMeta = proposed.draftMeta ?? {};
   draftId.value = props.draft?.id;
-  currentStep.value = Math.min(Math.max(Number(draftMeta.currentStep ?? 0), 0), stepTitles.length - 1);
+  const savedStep = Number(draftMeta.currentStep ?? 0);
+  currentStep.value = draftMeta.layoutVersion === 2
+    ? Math.min(Math.max(savedStep, 0), 3)
+    : [0, 1, 1, 2, 2, 2, 3][savedStep] ?? 0;
   completedSteps.value = Array.isArray(draftMeta.completedSteps)
     ? draftMeta.completedSteps.filter((value: unknown) => Number.isInteger(value)).map(Number)
     : [];
@@ -192,6 +199,8 @@ function reset() {
   phoneDuplicateAcknowledged.value = false;
   lastIdentityKey.value = '';
   saveState.value = props.draft ? 'saved' : 'idle';
+  saveError.value = '';
+  Object.keys(fieldErrors).forEach((key) => delete fieldErrors[key]);
   nextTick(() => {
     hydrating.value = false;
     fillPlannedRegularDate();
@@ -204,11 +213,12 @@ watch(() => [form.phone, form.idNumber], () => {
   phoneDuplicateAcknowledged.value = false;
   lastIdentityKey.value = '';
 });
-watch(() => form.positionId, (positionId) => {
+watch(() => form.positionId, (positionId, previousId) => {
   if (hydrating.value) return;
   const position = positions.value.find((item) => item.id === positionId);
-  form.employee.position = position?.name ?? '';
-  form.employee.jobFamily = position?.jobFamily ?? '';
+  const previous = positions.value.find((item) => item.id === previousId);
+  if (!form.employee.position || form.employee.position === previous?.name) form.employee.position = position?.name ?? '';
+  if (!form.employee.jobFamily || form.employee.jobFamily === previous?.jobFamily) form.employee.jobFamily = position?.jobFamily ?? '';
 });
 watch(() => form.entryDate, (entryDate) => {
   if (!entryDate || hydrating.value) return;
@@ -246,9 +256,18 @@ async function lookupIdentity(force = false) {
   if (!force && key === lastIdentityKey.value) return;
   identityLoading.value = true;
   try {
-    identityResult.value = await employeeArchivesApi.lookupIdentity({ phone, idNumber });
+    const previousCandidates = identityResult.value?.candidates.map((item) => item.id).sort().join('|');
+    const result = await employeeArchivesApi.lookupIdentity({ phone, idNumber, excludeRequestId: draftId.value });
+    const sameMatch = key === lastIdentityKey.value
+      && previousCandidates === result.candidates.map((item) => item.id).sort().join('|');
+    identityResult.value = result;
     lastIdentityKey.value = key;
-    phoneDuplicateAcknowledged.value = false;
+    if (!sameMatch) phoneDuplicateAcknowledged.value = false;
+    fieldErrors.identity = '';
+    return true;
+  } catch {
+    fieldErrors.identity = '查重暂未完成，请重试；已填写内容仍保留。';
+    return false;
   } finally {
     identityLoading.value = false;
   }
@@ -256,13 +275,17 @@ async function lookupIdentity(force = false) {
 
 function openCandidate(candidate: EmployeeIdentityCandidate) {
   emit('update:modelValue', false);
-  if (candidate.status === 'resigned' || candidate.archived) emit('reentry', candidate.id);
+  if (candidate.requestId || candidate.nextAction === 'view_application') emit('application', candidate.requestId ?? candidate.id);
+  else if (candidate.status === 'resigned' || candidate.archived) emit('reentry', candidate.id);
   else emit('existing', candidate.id);
 }
 
 function requestBody(): EmployeeCreateDraftPayload {
   const employee = {
     ...form.employee,
+    plannedRegularDate: form.employee.plannedRegularDate || null,
+    actualRegularDate: form.employee.actualRegularDate || null,
+    leaveDate: form.employee.leaveDate || null,
     name: form.name.trim(), phone: normalizedPhone() || null, company: form.company,
     deptId: form.deptId || null, positionId: form.positionId || null,
     managerId: form.rosterManagerId, entryDate: form.entryDate || null,
@@ -271,6 +294,10 @@ function requestBody(): EmployeeCreateDraftPayload {
   };
   const profile = {
     ...form.profile,
+    birthDate: form.profile.birthDate || null,
+    graduationDate: form.profile.graduationDate || null,
+    socialSecurityStartDate: form.profile.socialSecurityStartDate || null,
+    housingFundStartDate: form.profile.housingFundStartDate || null,
     phone: normalizedPhone() || null,
     idNumber: normalizedIdNumber() || '',
     bankAccount: form.profile.bankAccount.trim(),
@@ -279,14 +306,14 @@ function requestBody(): EmployeeCreateDraftPayload {
     draftId: draftId.value,
     name: form.name.trim(), phone: normalizedPhone() || null, idNumber: normalizedIdNumber() || null,
     phoneDuplicateAcknowledged: phoneDuplicateAcknowledged.value,
-    company: form.company, deptId: form.deptId, positionId: form.positionId || null,
-    entryDate: form.entryDate, effectiveFrom: form.effectiveFrom, effectiveTo: form.effectiveTo || null,
+    company: form.company, deptId: form.deptId || undefined, positionId: form.positionId || null,
+    entryDate: form.entryDate || undefined, effectiveFrom: form.effectiveFrom || undefined, effectiveTo: form.effectiveTo || null,
     employmentType: form.employmentType, employeeStatus: form.employeeStatus,
     rosterManagerId: form.rosterManagerId, performanceManagerId: form.performanceManagerId,
     employee, profile,
-    contracts: form.contracts.map(({ __key, ...contract }, index) => ({ ...contract, sequence: index })),
+    contracts: form.contracts.map(({ __key, ...contract }, index) => ({ ...contract, signedAt: contract.signedAt || null, effectiveFrom: contract.effectiveFrom || null, expiresAt: contract.expiresAt || null, sequence: index })),
     performance: { managerId: form.performanceManagerId },
-    draftStep: currentStep.value, completedSteps: completedSteps.value,
+    draftStep: currentStep.value, draftLayoutVersion: 2, completedSteps: completedSteps.value,
   };
 }
 
@@ -311,10 +338,11 @@ async function persistDraft(saveMode: 'auto' | 'manual') {
       const request = await employeeArchivesApi.saveEmployeeCreateDraft({ ...requestBody(), saveMode });
       draftId.value = request.id;
       saveState.value = 'saved';
+      saveError.value = '';
       return true;
     } catch {
       saveState.value = 'error';
-      ElMessage.error('草稿保存失败，请检查网络后重试');
+      saveError.value = '草稿保存失败，输入内容仍保留。请重试保存，或放弃本次未保存内容。';
       return false;
     } finally {
       if (saveMode === 'manual') savingAction.value = null;
@@ -340,10 +368,16 @@ async function saveAndExit() {
 }
 
 async function beforeClose(done: () => void) {
+  if (savingAction.value === 'submit') return;
   if (!form.name.trim()) { done(); return; }
   if (await persistDraft('auto')) {
     emit('saved');
     done();
+  } else {
+    try {
+      await ElMessageBox.confirm('草稿保存失败，关闭会丢失本次未保存内容。', '未保存的内容', { confirmButtonText: '放弃未保存内容', cancelButtonText: '继续填写', type: 'warning' });
+      done();
+    } catch { /* 保留输入 */ }
   }
 }
 
@@ -362,17 +396,21 @@ async function nextStep() {
 }
 
 async function submit() {
+  Object.keys(fieldErrors).forEach((key) => delete fieldErrors[key]);
   if (!form.name.trim() || !form.deptId || !form.entryDate || !form.effectiveFrom) {
     ElMessage.warning(`提交审核前请补充：${['姓名', ...missingForSubmit.value].join('、')}`);
     currentStep.value = form.name.trim() ? 1 : 0;
     return;
   }
-  if ((form.phone.trim() || form.idNumber.trim()) && !canLookupIdentity()) {
-    ElMessage.warning('手机号或身份证号需填写完整后再提交');
+  if (form.phone.trim() && !/^1\d{10}$/.test(normalizedPhone())) fieldErrors.phone = '请填写完整的 11 位手机号';
+  if (form.idNumber.trim() && !/^(?:\d{15}|\d{17}[\dX])$/.test(normalizedIdNumber())) fieldErrors.idNumber = '请填写完整的身份证号，或清空后稍后补充';
+  if (Object.keys(fieldErrors).length) {
     currentStep.value = 0;
     return;
   }
-  if (canLookupIdentity()) await lookupIdentity(true);
+  if (canLookupIdentity()) {
+    if (!(await lookupIdentity(true))) { currentStep.value = 0; return; }
+  }
   if (hasBlockingIdentityMatch.value) {
     ElMessage.warning('已找到现有员工，请从匹配结果进入原档案处理');
     currentStep.value = 0;
@@ -392,6 +430,8 @@ async function submit() {
     ElMessage.success('已提交新增员工，工号已自动生成，HR 管理员审核后生效');
     emit('update:modelValue', false);
     emit('submitted');
+  } catch {
+    saveError.value = '提交未完成，已填写内容仍保留，请核对提示后重试。';
   } finally {
     savingAction.value = null;
   }
@@ -468,6 +508,8 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
         <div class="mobile-step"><strong>{{ currentStep + 1 }}/{{ stepTitles.length }} {{ stepTitles[currentStep] }}</strong></div>
         <span class="save-state" :class="`save-state--${saveState}`">{{ saveStateLabel }}</span>
       </div>
+      <el-alert v-if="draft?.rejectedReason" :title="`已退回：${draft.rejectedReason}`" type="warning" :closable="false" />
+      <el-alert v-if="saveError" :title="saveError" type="error" :closable="false" />
 
       <el-form label-position="top" class="wizard-form">
         <section v-show="currentStep === 0" class="wizard-section">
@@ -475,16 +517,16 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
           <div class="identity-note">员工工号将在提交审核时自动生成</div>
           <div class="form-grid">
             <el-form-item label="姓名"><el-input v-model="form.name" maxlength="50" placeholder="必填，输入后自动保存" /></el-form-item>
-            <el-form-item label="手机号"><el-input v-model="form.phone" maxlength="20" @blur="lookupIdentity()" /></el-form-item>
-            <el-form-item :label="idNumberConfigured ? '身份证号（已保存，留空不变）' : '身份证号'"><el-input v-model="form.idNumber" maxlength="18" show-password @blur="lookupIdentity()" /></el-form-item>
-            <el-form-item label="身份查重"><el-button :loading="identityLoading" :disabled="!canLookupIdentity()" @click="lookupIdentity(true)">检索已有档案</el-button></el-form-item>
+            <el-form-item label="手机号" :error="fieldErrors.phone"><el-input v-model="form.phone" maxlength="20" @blur="lookupIdentity()" /></el-form-item>
+            <el-form-item :label="idNumberConfigured ? '身份证号（已保存，留空不变）' : '身份证号'" :error="fieldErrors.idNumber"><el-input v-model="form.idNumber" maxlength="18" show-password @blur="lookupIdentity()" /></el-form-item>
+            <el-form-item label="身份查重" :error="fieldErrors.identity"><el-button :loading="identityLoading" :disabled="!canLookupIdentity()" @click="lookupIdentity(true)">检索已有档案</el-button></el-form-item>
           </div>
           <div v-if="identityResult?.outcome === 'conflict'" class="identity-result identity-result--danger">手机号与身份证号对应不同员工，请核对后再提交。</div>
           <div v-else-if="identityResult?.candidates.length" class="identity-result">
             <strong>{{ identityResult.outcome === 'identity_match' ? '已找到现有员工档案' : '手机号与以下档案相同' }}</strong>
             <div v-for="candidate in identityResult.candidates" :key="candidate.id" class="identity-candidate">
               <span>{{ candidate.maskedName }} · {{ candidate.currentEmployeeNo || candidate.matchedHistoricalEmployeeNo || '无工号' }} · {{ candidate.departmentName || '未分配部门' }}</span>
-              <el-button link type="primary" @click="openCandidate(candidate)">{{ candidate.status === 'resigned' || candidate.archived ? '办理再入职' : candidate.status === 'pending_entry' ? '查看入职流程' : '打开现有档案' }}</el-button>
+              <el-button link type="primary" @click="openCandidate(candidate)">{{ candidate.requestId || candidate.nextAction === 'view_application' ? '查看原申请' : candidate.status === 'resigned' || candidate.archived ? '办理再入职' : candidate.status === 'pending_entry' ? '查看入职流程' : '打开现有档案' }}</el-button>
             </div>
             <el-checkbox v-if="identityResult.outcome === 'phone_candidates'" v-model="phoneDuplicateAcknowledged">已核对，以上人员均不是本次新增员工</el-checkbox>
           </div>
@@ -512,7 +554,7 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
           </div>
         </section>
 
-        <section v-show="currentStep === 2" class="wizard-section">
+        <section v-show="currentStep === 1" class="wizard-section">
           <div class="section-head"><div><h3>管理关系</h3><p>两类关系用途不同，均可稍后补充并由 HR 审核。</p></div></div>
           <div class="form-grid">
             <el-form-item label="花名册直属主管"><UserSelect v-model="form.rosterManagerId" clearable eligible-for="direct_manager" /><small>仅作为档案中的汇报关系显示。</small></el-form-item>
@@ -520,8 +562,9 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
           </div>
         </section>
 
-        <section v-show="currentStep === 3" class="wizard-section">
-          <div class="section-head"><div><h3>个人与教育</h3><p>非必填信息可先跳过，后续在草稿中继续补充。</p></div></div>
+        <el-collapse v-show="currentStep === 2" v-model="supplementGroups" class="supplement-groups">
+        <el-collapse-item name="personal" title="个人与教育">
+        <section class="wizard-section">
           <div class="form-grid form-grid--3">
             <el-form-item label="性别"><el-select v-model="form.profile.gender" clearable><el-option label="男" value="男" /><el-option label="女" value="女" /></el-select></el-form-item>
             <el-form-item label="出生日期"><el-date-picker v-model="form.profile.birthDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
@@ -539,9 +582,10 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
             <el-form-item label="户籍类型"><el-input v-model="form.profile.householdType" /></el-form-item>
           </div>
         </section>
+        </el-collapse-item>
 
-        <section v-show="currentStep === 4" class="wizard-section">
-          <div class="section-head"><div><h3>联系与保障</h3><p>敏感号码加密保存；续填草稿时留空会保持原值。</p></div></div>
+        <el-collapse-item name="contact" title="联系与保障">
+        <section class="wizard-section">
           <div class="form-grid form-grid--3">
             <el-form-item label="身份证地址" class="span-2"><el-input v-model="form.profile.idAddress" /></el-form-item>
             <el-form-item label="现住址" class="span-2"><el-input v-model="form.profile.currentAddress" /></el-form-item>
@@ -557,8 +601,10 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
             <el-form-item :label="bankAccountConfigured ? '银行卡号（已保存，留空不变）' : '银行卡号'"><el-input v-model="form.profile.bankAccount" type="password" show-password /></el-form-item>
           </div>
         </section>
+        </el-collapse-item>
 
-        <section v-show="currentStep === 5" class="wizard-section">
+        <el-collapse-item name="contracts" title="合同与附件">
+        <section class="wizard-section">
           <div class="section-head contract-toolbar"><div><h3>合同与附件</h3><p>合同可先不录入，后续从草稿继续补充。</p></div><el-button :icon="Plus" @click="addContract">新增合同</el-button></div>
           <div v-for="(contract, index) in form.contracts" :key="contract.__key" class="contract-card">
             <div class="contract-card__head"><strong>合同 {{ index + 1 }}</strong><el-button link type="danger" :icon="Delete" @click="form.contracts.splice(index, 1)">移除</el-button></div>
@@ -583,8 +629,10 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
           </div>
           <el-empty v-if="!form.contracts.length" description="暂无合同，可直接下一步" :image-size="72" />
         </section>
+        </el-collapse-item>
+        </el-collapse>
 
-        <section v-show="currentStep === 6" class="wizard-section">
+        <section v-show="currentStep === 3" class="wizard-section">
           <div class="section-head"><div><h3>预览提交</h3><p>提交后进入 HR 审核；审核通过前不会写入正式员工档案。</p></div></div>
           <el-alert v-if="missingForSubmit.length" :title="`提交前还需补充：${missingForSubmit.join('、')}`" type="warning" :closable="false" show-icon />
           <dl class="preview-grid">
@@ -611,7 +659,7 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
 </template>
 
 <style scoped>
-.wizard-shell { display: grid; gap: 18px; min-height: 560px; }
+.wizard-shell { display: grid; align-content: start; gap: 18px; min-height: 560px; }
 .wizard-head { position: sticky; top: -20px; z-index: 3; padding: 14px 0 12px; background: #fff; border-bottom: 1px solid #eef1f6; }
 .desktop-steps { padding: 0 8px; }
 .mobile-step { display: none; }

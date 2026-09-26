@@ -67,6 +67,7 @@ describe('EmployeeEffectiveDateService', () => {
     };
     const request = {
       id: 'request-1', userId: 'u1', createdById: 'hr1', onboardingStatus: 'pending_entry',
+      profileReviewStatus: 'approved', performanceReviewStatus: 'approved',
       proposedValue: { performance: { managerId: 'performance-manager' } },
       validationWarnings: [], employmentRecords: [employment],
       employeeNumbers: [{ id: 'number-1', employeeNo: '358', status: 'reserved' }],
@@ -91,5 +92,55 @@ describe('EmployeeEffectiveDateService', () => {
       where: { id: 'u1' },
       data: expect.objectContaining({ directManagerId: 'performance-manager', employeeNo: '358' }),
     }));
+  });
+
+  it.each(['pending', 'rejected'])('activates approved employment without adopting %s performance relationship', async (status) => {
+    const request = {
+      id: 'r1', userId: 'u1', createdById: 'hr1', onboardingStatus: 'pending_entry',
+      profileReviewStatus: 'approved', performanceReviewStatus: status,
+      proposedValue: { performance: { managerId: 'unapproved-manager' } },
+      validationWarnings: [], employeeNumbers: [],
+      employmentRecords: [{ effectiveFrom: new Date('2026-09-26'), effectiveTo: null, employeeStatus: 'active', employeeNo: '358' }],
+    };
+    const state: Record<string, unknown> = {};
+    const tx = {
+      employeeDataChangeRequest: { findUnique: async () => request, update: async () => ({}) },
+      employeeNumberAssignment: { updateMany: async () => ({ count: 0 }) },
+      user: { update: async ({ data }: any) => Object.assign(state, data) },
+      externalIdentityBinding: { findMany: async () => [] }, auditLog: { create: async () => ({}) },
+    } as any;
+    const result = await new EmployeeEffectiveDateService({} as any).activateApprovedOnboarding(tx, 'r1', new Date('2026-09-25T16:00:00Z'));
+    expect(result.activated).toBe(true);
+    expect(state.directManagerId).toBeNull();
+  });
+
+  it('does not activate an unapproved profile even with a leftover employment record', async () => {
+    const tx = { employeeDataChangeRequest: { findUnique: async () => ({
+      id: 'r1', userId: 'u1', onboardingStatus: 'submitted', profileReviewStatus: 'pending', performanceReviewStatus: 'approved',
+      employmentRecords: [{ effectiveFrom: new Date('2026-09-01'), effectiveTo: null }], employeeNumbers: [],
+    }) }, user: { update: jest.fn() } } as any;
+    await expect(new EmployeeEffectiveDateService({} as any).activateApprovedOnboarding(tx, 'r1', new Date('2026-09-26')))
+      .resolves.toEqual({ activated: false, historicalOnly: false });
+    expect(tx.user.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['2026-10-08T15:59:59Z', 'active', false],
+    ['2026-10-08T16:00:00Z', 'resigned', true],
+  ])('refreshes ordinary resignation at the Shanghai boundary %s', async (now, expectedStatus, disabled) => {
+    const state: any = { user: { id: 'u1', accountType: 'employee', status: 'active', position: '专员' }, disabled: false };
+    const tx: any = {
+      employeeDataChangeRequest: { findFirst: async () => null },
+      user: { findUnique: async () => state.user, update: async ({ data }: any) => Object.assign(state.user, data) },
+      employmentRecord: { findMany: async () => [
+        { id: 'active', effectiveFrom: new Date('2020-01-01'), effectiveTo: new Date('2026-10-08'), employeeStatus: 'active' },
+        { id: 'resigned', effectiveFrom: new Date('2026-10-09'), effectiveTo: null, employeeStatus: 'resigned', leaveDate: new Date('2026-10-08') },
+      ] },
+      externalIdentityBinding: { updateMany: async () => { state.disabled = true; return { count: 1 }; } },
+    };
+    const prisma: any = { ...tx, $transaction: async (callback: any) => callback(tx) };
+    await new EmployeeEffectiveDateService(prisma).refreshUserProjection('u1', new Date(now));
+    expect(state.user.status).toBe(expectedStatus);
+    expect(state.disabled).toBe(disabled);
   });
 });

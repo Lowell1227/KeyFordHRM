@@ -1,5 +1,6 @@
 import { SysRole } from '@prisma/client';
 import { EmployeeDataReviewsService } from './employee-data-reviews.service';
+import { shanghaiBusinessDate } from './employment-timeline';
 
 const operator = {
   id: 'hr-1',
@@ -982,7 +983,7 @@ describe('EmployeeDataReviewsService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn().mockResolvedValue({ ...request, profileReviewStatus: 'approved' }),
       },
-      user: { update: jest.fn() },
+      user: { update: jest.fn(), findUnique: jest.fn().mockResolvedValue({ status: 'active' }) },
       employeeProfile: { upsert: jest.fn() },
       employmentRecord: {
         findFirst: jest.fn().mockResolvedValue({
@@ -1003,12 +1004,12 @@ describe('EmployeeDataReviewsService', () => {
     expect(result.failed).toEqual([]);
     expect(employmentUpdate).toHaveBeenCalledWith({
       where: { id: 'employment-current' },
-      data: { effectiveTo: new Date('2026-09-15T00:00:00.000Z') },
+      data: { effectiveTo: new Date('2026-09-16T00:00:00.000Z') },
     });
     expect(employmentCreate).toHaveBeenCalledWith(expect.objectContaining({
       data: expect.objectContaining({
         employeeStatus: 'resigned',
-        effectiveFrom: new Date('2026-09-16T00:00:00.000Z'),
+        effectiveFrom: new Date('2026-09-17T00:00:00.000Z'),
       }),
     }));
   });
@@ -1084,8 +1085,7 @@ describe('EmployeeDataReviewsService', () => {
   });
 
   it('同一天再次审核任职变化时更新当天记录而不制造无效日期区间', async () => {
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
+    const today = shanghaiBusinessDate();
     const request = {
       id: 'review-same-day-employment', userId: 'employee-1', sourceType: 'employee_roster_import',
       sourceBatchId: null, profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
@@ -1113,7 +1113,7 @@ describe('EmployeeDataReviewsService', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn().mockResolvedValue({ ...request, profileReviewStatus: 'approved' }),
       },
-      user: { update: jest.fn() },
+      user: { update: jest.fn(), findUnique: jest.fn().mockResolvedValue({ status: 'active' }) },
       employeeProfile: { upsert: jest.fn() },
       employmentRecord: {
         findFirst: jest.fn().mockResolvedValue({ id: 'employment-today', effectiveFrom: today }),

@@ -9,6 +9,6 @@ import { EmployeeArchivesModule } from '@/employee-archives/employee-archives.mo
   imports: [DingtalkModule, EmployeeArchivesModule],
   controllers: [AuthController],
   providers: [AuthService, BusinessCapabilitiesService],
-  exports: [BusinessCapabilitiesService],
+  exports: [AuthService, BusinessCapabilitiesService],
 })
 export class AuthModule {}

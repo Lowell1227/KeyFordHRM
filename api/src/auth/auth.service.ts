@@ -1,12 +1,12 @@
 import { BadRequestException, ForbiddenException, Injectable, NotFoundException, UnauthorizedException } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
 import { ConfigService } from '@nestjs/config';
-import { ExternalIdentityProvider, ExternalIdentityStatus, User, UserStatus } from '@prisma/client';
+import { AccountType, ExternalIdentityProvider, ExternalIdentityStatus, User, UserStatus } from '@prisma/client';
 import * as bcrypt from 'bcrypt';
 import { PrismaService } from '../prisma/prisma.service';
 import { DingtalkService } from '../dingtalk/dingtalk.service';
 import { ERROR_CODE } from '../common/constants/error-codes';
-import { JwtPayload } from '../common/types/auth.types';
+import { AuthUser, JwtPayload } from '../common/types/auth.types';
 import { LocalLoginDto } from './dto/local-login.dto';
 import { DingTalkLoginDto } from './dto/dingtalk-login.dto';
 import { TestLoginDto } from './dto/test-login.dto';
@@ -16,6 +16,7 @@ import { ChangePasswordDto } from './dto/change-password.dto';
 import type { HrCapability } from './hr-capabilities';
 import { EmployeeEffectiveDateService, RESIGNATION_BINDING_DISABLED_REASON } from '../employee-archives/employee-effective-date.service';
 import { CURRENT_WORKER_STATUSES } from '../common/personnel/current-worker';
+import { approvedEmploymentSourceWhere, shanghaiBusinessDate } from '../employee-archives/employment-timeline';
 
 type SystemPermission = 'standard_user' | 'hr_user' | 'hr_admin' | 'system_admin';
 
@@ -85,12 +86,15 @@ export class AuthService {
     }
 
     let refreshedUser = user;
-    if (this.effectiveDates) {
+    if (this.effectiveDates && this.isEmployeeAccount(user)) {
       await this.effectiveDates.refreshUserProjection(user.id);
       refreshedUser = await this.prisma.user.findUnique({ where: { id: user.id }, include: { dept: true } }) as typeof user;
     }
     if (!refreshedUser) throw new UnauthorizedException('账号不存在');
-    await this.assertCurrentEmployment(refreshedUser.id);
+    if (refreshedUser.employeeNo !== dto.employeeNo) {
+      throw new UnauthorizedException({ code: ERROR_CODE.UNAUTHORIZED, message: '请使用当前任职工号登录' });
+    }
+    await this.assertLoginEligibility(refreshedUser);
     return this.issueToken(refreshedUser, refreshedUser.mustChangePassword);
   }
 
@@ -296,10 +300,10 @@ export class AuthService {
         include: { user: { include: { dept: true } } },
       }) as typeof binding;
     }
-    if (!refreshedBinding) {
+    if (!refreshedBinding || refreshedBinding.status !== ExternalIdentityStatus.enabled) {
       throw new UnauthorizedException({ code: ERROR_CODE.UNAUTHORIZED, message: '账号尚未生效或已停用' });
     }
-    await this.assertCurrentEmployment(refreshedBinding.userId);
+    await this.assertLoginEligibility(refreshedBinding.user);
 
     await this.prisma.externalIdentityBinding.update({
       where: { id: refreshedBinding.id },
@@ -310,24 +314,59 @@ export class AuthService {
   }
 
   /** 所有真实登录方式都以员工主数据中的当前有效任职作为准入依据。 */
-  private async assertCurrentEmployment(userId: string): Promise<void> {
-    const now = new Date();
+  private async assertLoginEligibility(user: User, at = new Date()): Promise<void> {
+    if (user.deletedAt || user.archivedAt || !CURRENT_WORKER_STATUSES.includes(user.status)) {
+      throw new UnauthorizedException({ code: ERROR_CODE.UNAUTHORIZED, message: '账号尚未生效或已停用' });
+    }
+    if (!this.isEmployeeAccount(user)) return;
+    const today = shanghaiBusinessDate(at);
     const currentEmployment = await this.prisma.employmentRecord.findFirst({
       where: {
-        userId,
-        effectiveFrom: { lte: now },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gte: now } }],
-        employeeStatus: { in: [UserStatus.active, UserStatus.probation] },
+        userId: user.id,
+        effectiveFrom: { lte: today },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gte: today } }],
+        AND: [approvedEmploymentSourceWhere],
       },
-      select: { id: true },
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+      select: { id: true, employeeStatus: true },
     });
 
-    if (!currentEmployment) {
+    // Do not filter status in SQL: a newer resignation must win over any overlapping old active record.
+    if (!currentEmployment || !CURRENT_WORKER_STATUSES.includes(currentEmployment.employeeStatus)) {
       throw new UnauthorizedException({
         code: ERROR_CODE.UNAUTHORIZED,
         message: '当前无有效任职，无法登录',
       });
     }
+  }
+
+  private isEmployeeAccount(user: Pick<User, 'accountType'>): boolean {
+    return user.accountType !== AccountType.service && user.accountType !== AccountType.test;
+  }
+
+  /** Each protected request rechecks the approved employment state and current permissions. */
+  async validateSession(payload: JwtPayload): Promise<AuthUser> {
+    if (!payload.sub || !Object.prototype.hasOwnProperty.call(payload, 'employeeNo')) {
+      throw new UnauthorizedException({ code: ERROR_CODE.UNAUTHORIZED, message: '登录状态已更新，请重新登录' });
+    }
+    let user = await this.prisma.user.findUnique({ where: { id: payload.sub } });
+    if (!user || user.deletedAt) {
+      throw new UnauthorizedException({ code: ERROR_CODE.UNAUTHORIZED, message: '账号不存在或已停用' });
+    }
+    const at = new Date();
+    if (this.isEmployeeAccount(user) && this.effectiveDates) {
+      await this.effectiveDates.refreshUserProjection(user.id, at);
+      user = await this.prisma.user.findUnique({ where: { id: user.id } });
+    }
+    if (!user || payload.employeeNo !== user.employeeNo) {
+      throw new UnauthorizedException({ code: ERROR_CODE.UNAUTHORIZED, message: '本次任职已变更，请使用当前工号重新登录' });
+    }
+    await this.assertLoginEligibility(user, at);
+    return {
+      id: user.id, name: user.name, sysRole: user.sysRole, deptId: user.deptId,
+      isAssessorOnly: user.isAssessorOnly, canViewAll: user.canViewAll,
+      hrCapabilities: user.hrCapabilities ?? [],
+    };
   }
 
   /** 签发 JWT 并组装登录响应（供本地登录与钉钉登录复用）。 */
@@ -337,6 +376,7 @@ export class AuthService {
   ): Promise<LoginResponse> {
     const payload: JwtPayload = {
       sub: user.id,
+      employeeNo: user.employeeNo,
       name: user.name,
       sysRole: user.sysRole,
       deptId: user.deptId,

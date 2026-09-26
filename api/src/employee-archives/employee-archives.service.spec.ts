@@ -1078,7 +1078,7 @@ describe('EmployeeArchivesService', () => {
           }),
           contracts: [expect.objectContaining({ contractType: 'contract', name: '劳动合同' })],
           performance: { managerId: '20000000-0000-4000-8000-000000000002' },
-          draftMeta: { currentStep: 4, completedSteps: [0, 1, 2, 3] },
+          draftMeta: { currentStep: 4, completedSteps: [0, 1, 2, 3], layoutVersion: 1 },
         }),
       }),
     });
@@ -1124,7 +1124,7 @@ describe('EmployeeArchivesService', () => {
       where: {
         id: 'draft-create-1',
         sourceType: 'manual_employee_create',
-        recordStatus: 'draft',
+        OR: [{ recordStatus: 'draft' }, { profileReviewStatus: 'rejected' }],
         archivedAt: null,
         requestVersion: 3,
       },
@@ -1195,7 +1195,7 @@ describe('EmployeeArchivesService', () => {
       where: {
         id: 'draft-create-1',
         sourceType: 'manual_employee_create',
-        recordStatus: 'draft',
+        OR: [{ recordStatus: 'draft' }, { profileReviewStatus: 'rejected' }],
         archivedAt: null,
         requestVersion: 4,
       },
@@ -1250,6 +1250,7 @@ describe('EmployeeArchivesService', () => {
     } as any, hrOperator)).rejects.toBeInstanceOf(ConflictException);
 
     expect(identityMatcher.lookupStoredIdentity).toHaveBeenCalledWith({
+      excludeRequestId: 'draft-create-1',
       phone: undefined,
       idNumberFingerprint: fingerprint,
     });

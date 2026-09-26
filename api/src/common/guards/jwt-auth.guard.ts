@@ -5,6 +5,7 @@ import { Request } from 'express';
 import { IS_PUBLIC_KEY } from '../decorators/public.decorator';
 import { ERROR_CODE } from '../constants/error-codes';
 import { AuthUser, JwtPayload } from '../types/auth.types';
+import { AuthService } from '../../auth/auth.service';
 
 /**
  * 全局 JWT 鉴权守卫。验证 Authorization: Bearer <token>，解析后挂到 req.user。
@@ -15,6 +16,7 @@ export class JwtAuthGuard implements CanActivate {
   constructor(
     private readonly reflector: Reflector,
     private readonly jwt: JwtService,
+    private readonly auth: AuthService,
   ) {}
 
   async canActivate(context: ExecutionContext): Promise<boolean> {
@@ -32,18 +34,11 @@ export class JwtAuthGuard implements CanActivate {
 
     try {
       const payload = await this.jwt.verifyAsync<JwtPayload>(token);
-      const user: AuthUser = {
-        id: payload.sub,
-        name: payload.name,
-        sysRole: payload.sysRole,
-        deptId: payload.deptId,
-        isAssessorOnly: payload.isAssessorOnly,
-        canViewAll: payload.canViewAll,
-        hrCapabilities: payload.hrCapabilities ?? [],
-      };
+      const user = await this.auth.validateSession(payload);
       (req as Request & { user: AuthUser }).user = user;
       return true;
-    } catch {
+    } catch (error) {
+      if (error instanceof UnauthorizedException) throw error;
       throw new UnauthorizedException({ code: ERROR_CODE.UNAUTHORIZED, message: '令牌无效或已过期' });
     }
   }

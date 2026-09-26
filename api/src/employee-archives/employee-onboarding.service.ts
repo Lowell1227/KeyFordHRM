@@ -13,6 +13,8 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { EmployeeIdentityMatchService } from './employee-identity-match.service';
 import { EmployeeNumberService } from './employee-number.service';
 import { EmployeeEffectiveDateService } from './employee-effective-date.service';
+import { shanghaiBusinessDate } from './employment-timeline';
+import { employeeDataChangeView } from './employee-data-change-view';
 import {
   CancelEmployeeReentryDto,
   CreateEmployeeReentryDto,
@@ -141,13 +143,33 @@ export class EmployeeOnboardingService {
   async reviseReentry(requestId: string, input: ReviseEmployeeReentryDto, operatorId: string) {
     return this.prisma.$transaction(async (tx) => {
       const request = await tx.employeeDataChangeRequest.findUnique({ where: { id: requestId } });
-      if (!request || request.intakeType !== OnboardingIntakeType.reentry) throw new NotFoundException('再入职申请不存在');
-      if (!unfinishedStatuses.includes(request.onboardingStatus!)) throw new ConflictException('该申请当前不能修订');
+      if (!request || !request.intakeType) throw new NotFoundException('入职申请不存在');
+      const performanceOnly = request.profileReviewStatus === 'approved' && request.performanceReviewStatus === 'rejected'
+        && [OnboardingStatus.pending_entry, OnboardingStatus.effective].includes(request.onboardingStatus as any)
+        && (request.intakeType === OnboardingIntakeType.new_hire || request.onboardingStatus === OnboardingStatus.effective || input.performanceOnly === true);
+      if ((input.performanceOnly || request.intakeType === OnboardingIntakeType.new_hire) && !performanceOnly) {
+        throw new ConflictException('该申请不属于可重提的退回绩效关系');
+      }
+      if (!unfinishedStatuses.includes(request.onboardingStatus!) && !performanceOnly) throw new ConflictException('该申请当前不能修订');
       if (!request.userId) throw new ConflictException('再入职申请缺少员工标识');
-      await this.assertReferences(tx, request.userId, input);
+      await this.assertReferences(tx, request.userId, performanceOnly ? { performanceManagerId: input.performanceManagerId } as EmployeeReentryFieldsDto : input);
+      if (performanceOnly && !input.performanceOnly && request.intakeType === OnboardingIntakeType.reentry) {
+        const previous = this.record(this.record(request.proposedValue).employee);
+        const changed = Object.entries(this.normalizedEmployee(input)).some(([key, value]) => {
+          const before = key.includes('Date') || key === 'effectiveTo' ? this.dateOrNull(previous[key]) : previous[key] ?? null;
+          const after = key.includes('Date') || key === 'effectiveTo' ? this.dateOrNull(value) : value ?? null;
+          return this.hashPayload(before) !== this.hashPayload(after);
+        });
+        if (changed) throw new ConflictException('基础档案已生效，本次只可重提退回的绩效关系；任职调整请另办变更');
+      }
+      if (request.onboardingStatus === OnboardingStatus.pending_entry && !performanceOnly) {
+        await this.undoPendingProjection(tx, request);
+      }
       const revisions = Array.isArray(request.revisionHistory) ? request.revisionHistory : [];
       const historicalOnly = Boolean(input.effectiveTo && input.effectiveTo < this.startOfTodayInShanghai());
-      const next = {
+      const next = performanceOnly ? {
+        ...this.record(request.proposedValue), performance: { managerId: input.performanceManagerId ?? null },
+      } : {
         employee: { ...this.normalizedEmployee(input), employeeNo: request.employeeNo },
         performance: { managerId: input.performanceManagerId ?? null },
         contracts: input.contractReferences ?? [],
@@ -157,7 +179,7 @@ export class EmployeeOnboardingService {
         where: { id: requestId },
         data: {
           proposedValue: this.json(next),
-          validationWarnings: this.json(this.buildWarnings(input)),
+          validationWarnings: performanceOnly ? request.validationWarnings ?? [] : this.json(this.buildWarnings(input)),
           requestVersion: { increment: 1 },
           revisionHistory: this.json([...revisions, {
             version: request.requestVersion,
@@ -165,10 +187,10 @@ export class EmployeeOnboardingService {
             validationWarnings: request.validationWarnings,
             revisedAt: new Date().toISOString(), revisedById: operatorId,
           }]),
-          profileReviewStatus: 'pending', profileReviewedById: null, profileReviewedAt: null,
-          performanceReviewStatus: !historicalOnly && input.performanceManagerId ? 'pending' : 'not_required',
+          ...(!performanceOnly ? { profileReviewStatus: 'pending', profileReviewedById: null, profileReviewedAt: null } : {}),
+          performanceReviewStatus: performanceOnly || (!historicalOnly && input.performanceManagerId) ? 'pending' : 'not_required',
           performanceReviewedById: null, performanceReviewedAt: null,
-          rejectedReason: null, recordStatus: 'submitted', onboardingStatus: OnboardingStatus.submitted,
+          rejectedReason: null, recordStatus: 'submitted', onboardingStatus: performanceOnly ? request.onboardingStatus : OnboardingStatus.submitted,
         },
       });
       await tx.auditLog.create({ data: {
@@ -176,27 +198,19 @@ export class EmployeeOnboardingService {
         newValue: this.json({ requestVersion: updated.requestVersion, effectiveDate: input.effectiveDate }),
       } });
       return this.toView(updated);
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   async cancelReentry(requestId: string, input: CancelEmployeeReentryDto, operatorId: string) {
     return this.prisma.$transaction(async (tx) => {
       const request = await tx.employeeDataChangeRequest.findUnique({ where: { id: requestId } });
-      if (!request || request.intakeType !== OnboardingIntakeType.reentry) throw new NotFoundException('再入职申请不存在');
+      if (!request || !request.intakeType) throw new NotFoundException('入职申请不存在');
       if (!request.onboardingStatus || !unfinishedStatuses.includes(request.onboardingStatus)) {
         throw new ConflictException('该申请已经生效或取消，不能再次取消');
       }
       const now = new Date();
       if (request.onboardingStatus === OnboardingStatus.pending_entry) {
-        await tx.employmentRecord.deleteMany({ where: { sourceRequestId: requestId, effectiveFrom: { gt: this.startOfTodayInShanghai() } } });
-        if (request.userId) {
-          const base = this.record(this.record(request.baseValue).employee);
-          await tx.user.update({ where: { id: request.userId }, data: {
-            status: this.userStatus(base.status, UserStatus.resigned),
-            archivedAt: this.dateOrNull(base.archivedAt),
-            employeeNo: this.stringOrNull(base.employeeNo),
-          } });
-        }
+        await this.undoPendingProjection(tx, request);
       }
       await this.employeeNumbers.releaseReservation(tx, requestId, now);
       const updated = await tx.employeeDataChangeRequest.update({ where: { id: requestId }, data: {
@@ -208,12 +222,35 @@ export class EmployeeOnboardingService {
         newValue: this.json({ status: OnboardingStatus.cancelled, reason: input.reason.trim() }),
       } });
       return this.toView(updated);
-    });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+  }
+
+  private async undoPendingProjection(tx: Prisma.TransactionClient, request: any) {
+    const employment = await tx.employmentRecord.findUnique({ where: { sourceRequestId: request.id } });
+    if (employment && employment.effectiveFrom <= shanghaiBusinessDate()) {
+      throw new ConflictException('该任职已到生效日期，请刷新档案后办理更正');
+    }
+    await tx.employmentRecord.deleteMany({ where: { sourceRequestId: request.id, effectiveFrom: { gt: shanghaiBusinessDate() } } });
+    if (!request.userId) return;
+    const base = this.record(this.record(request.baseValue).employee);
+    // Only undo the projection owned by this application, never replay the full old archive.
+    await tx.user.updateMany({ where: {
+      id: request.userId, status: UserStatus.pending_entry, employeeNo: request.employeeNo,
+    }, data: {
+      status: this.userStatus(base.status, UserStatus.resigned),
+      archivedAt: this.dateOrNull(base.archivedAt),
+      employeeNo: this.stringOrNull(base.employeeNo),
+      directManagerId: null,
+    } });
   }
 
   async getCurrentReentry(userId: string): Promise<OnboardingRequestView | null> {
     const request = await this.prisma.employeeDataChangeRequest.findFirst({
-      where: { userId, intakeType: OnboardingIntakeType.reentry, onboardingStatus: { in: unfinishedStatuses } },
+      where: { userId, OR: [
+        { intakeType: OnboardingIntakeType.reentry, onboardingStatus: { in: unfinishedStatuses } },
+        { intakeType: OnboardingIntakeType.reentry, onboardingStatus: OnboardingStatus.effective, performanceReviewStatus: { in: ['pending', 'rejected'] } },
+        { intakeType: OnboardingIntakeType.new_hire, profileReviewStatus: 'approved', performanceReviewStatus: { in: ['pending', 'rejected'] }, onboardingStatus: { in: [OnboardingStatus.pending_entry, OnboardingStatus.effective] } },
+      ] },
       orderBy: { createdAt: 'desc' },
     });
     return request ? this.toView(request) : null;
@@ -328,21 +365,6 @@ export class EmployeeOnboardingService {
         createdById: reviewerId,
       } });
     }
-    if (request.performanceReviewStatus === 'pending') {
-      await tx.user.update({ where: { id: request.userId }, data: {
-        employeeNo: request.employeeNo,
-        status: UserStatus.pending_entry,
-        archivedAt: null,
-        sysRole: SysRole.employee,
-        hrCapabilities: { set: [] },
-        canViewAll: false,
-        isAssessorOnly: false,
-      } });
-      await tx.employeeDataChangeRequest.update({ where: { id: requestId }, data: {
-        onboardingStatus: OnboardingStatus.pending_entry,
-      } });
-      return 'pending_entry';
-    }
     if (historicalOnly) {
       await tx.employeeNumberAssignment.updateMany({ where: { sourceRequestId: requestId }, data: {
         status: EmployeeNumberStatus.historical, effectiveFrom, effectiveTo,
@@ -356,6 +378,7 @@ export class EmployeeOnboardingService {
       await tx.user.update({ where: { id: request.userId }, data: {
         employeeNo: request.employeeNo,
         status: UserStatus.pending_entry, archivedAt: null, sysRole: SysRole.employee,
+        directManagerId: null,
         hrCapabilities: { set: [] }, canViewAll: false, isAssessorOnly: false,
       } });
       await tx.employeeDataChangeRequest.update({ where: { id: requestId }, data: {
@@ -426,11 +449,7 @@ export class EmployeeOnboardingService {
   }
 
   private startOfTodayInShanghai(at = new Date()): Date {
-    const parts = new Intl.DateTimeFormat('en-CA', {
-      timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
-    }).formatToParts(at);
-    const values = Object.fromEntries(parts.map((part) => [part.type, part.value]));
-    return new Date(`${values.year}-${values.month}-${values.day}T00:00:00.000Z`);
+    return shanghaiBusinessDate(at);
   }
 
   private toView(request: any): OnboardingRequestView {
@@ -438,7 +457,15 @@ export class EmployeeOnboardingService {
       id: request.id, userId: request.userId, employeeName: request.employeeName, employeeNo: request.employeeNo,
       intakeType: request.intakeType, onboardingStatus: request.onboardingStatus,
       requestVersion: request.requestVersion, recordStatus: request.recordStatus,
-      proposedValue: this.record(request.proposedValue),
+      profileReviewStatus: request.profileReviewStatus,
+      performanceReviewStatus: request.performanceReviewStatus,
+      rejectedReason: request.rejectedReason ?? null,
+      profileReviewedAt: request.profileReviewedAt ?? null,
+      performanceReviewedAt: request.performanceReviewedAt ?? null,
+      profileReviewedById: request.profileReviewedById ?? null,
+      performanceReviewedById: request.performanceReviewedById ?? null,
+      appliedAt: request.appliedAt ?? null,
+      proposedValue: this.record(employeeDataChangeView(request).proposedValue),
       validationWarnings: Array.isArray(request.validationWarnings) ? request.validationWarnings : [],
       createdAt: request.createdAt, updatedAt: request.updatedAt,
     };

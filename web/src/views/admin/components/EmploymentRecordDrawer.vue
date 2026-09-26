@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import dayjs from 'dayjs';
 import { ElMessage } from 'element-plus';
 import { employeeArchivesApi, type EmployeeArchive, type EmployeeDataReview } from '@/api/employee-archives.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
@@ -26,14 +27,20 @@ const resignationReviewState = computed<'not_submitted' | 'pending' | 'approved'
   if (status === 'rejected') return 'rejected';
   return 'not_submitted';
 });
-const resignationReviewLabel = computed(() => ({
+const resignationDisableDate = computed(() => {
+  const date = String(resignationReview.value?.proposedValue?.employee?.leaveDate || form.leaveDate || '').slice(0, 10);
+  return date ? dayjs(date).add(1, 'day').format('YYYY-MM-DD') : '';
+});
+const resignationEffective = computed(() => Boolean(resignationDisableDate.value) && new Date(`${resignationDisableDate.value}T00:00:00+08:00`).getTime() <= Date.now());
+const resignationReviewLabel = computed(() => resignationReviewState.value === 'approved'
+  ? (resignationEffective.value ? '已离职生效' : '已通过，待离职生效') : ({
   not_submitted: '待提交',
   pending: '待 HR 审核',
   approved: '已通过',
   rejected: '已退回',
 })[resignationReviewState.value]);
 const resignationReviewLocked = computed(() => ['pending', 'approved'].includes(resignationReviewState.value));
-const resignationStepActive = computed(() => ({ not_submitted: 0, pending: 1, rejected: 1, approved: 3 })[resignationReviewState.value]);
+const resignationStepActive = computed(() => ({ not_submitted: 0, pending: 1, rejected: 1, approved: resignationEffective.value ? 3 : 2 })[resignationReviewState.value]);
 const resignationProcessStatus = computed(() => resignationReviewState.value === 'rejected' ? 'error' : 'process');
 const resignationTagType = computed<'info' | 'warning' | 'success' | 'danger'>(() => ({
   not_submitted: 'info',
@@ -61,9 +68,9 @@ const resignationReviewDescription = computed(() => {
   const reviewedAt = formatDateTime(review.profileReviewedAt || review.updatedAt);
   return `${reviewer}${reviewedAt ? ` · ${reviewedAt}` : ''}`;
 });
-const resignationEffectiveDescription = computed(() => resignationReviewState.value === 'approved'
-  ? `最后工作日 ${String((resignationReview.value?.proposedValue.employee as Record<string, unknown> | undefined)?.leaveDate || form.leaveDate || '').slice(0, 10)}`
-  : '审核通过后生效');
+const resignationEffectiveDescription = computed(() => resignationDisableDate.value
+  ? `${resignationDisableDate.value} 00:00（北京时间）停用；提前审核不提前停用`
+  : '最后工作日次日零点停用');
 const overlapWarning = computed(() => {
   const start = String(isResignation.value ? form.leaveDate ?? '' : form.effectiveFrom ?? '').slice(0, 10);
   if (!start) return '';
@@ -94,14 +101,14 @@ function reset() {
     probationMonths: current?.probationMonths ?? null, changeType: 'transfer', reason: '',
   });
   if (isResignation.value) {
-    const today = new Date();
-    const localDate = new Date(today.getTime() - today.getTimezoneOffset() * 60_000).toISOString().slice(0, 10);
+    const localDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+    const proposed = resignationReview.value?.proposedValue?.employee ?? {};
     Object.assign(form, {
-      effectiveFrom: localDate,
-      leaveDate: localDate,
+      effectiveFrom: String(proposed.effectiveFrom || localDate).slice(0, 10),
+      leaveDate: String(proposed.leaveDate || localDate).slice(0, 10),
       employeeStatus: 'resigned',
       changeType: 'resignation',
-      reason: '',
+      reason: proposed.reason ?? '',
     });
   }
 }
@@ -129,7 +136,8 @@ async function submit() {
       : '任职变更已提交审核；历史补录和未来生效记录都不会直接覆盖当前档案');
     if (!isResignation.value) emit('update:modelValue', false);
     emit('submitted');
-  } finally { saving.value = false; }
+  } catch { /* 请求失败保留表单，接口给出可执行原因 */ }
+  finally { saving.value = false; }
 }
 onMounted(async () => { positions.value = await positionsApi.findAll(); });
 </script>
@@ -142,6 +150,7 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
       <el-form-item label="最后工作日">
         <div class="employment-field">
           <el-date-picker v-model="form.leaveDate" type="date" value-format="YYYY-MM-DD" />
+          <span v-if="resignationDisableDate" class="employment-help">{{ resignationDisableDate }} 00:00（北京时间）停用，最后工作日仍可使用系统。</span>
           <span v-if="overlapWarning" class="employment-field__warning">{{ overlapWarning }}</span>
         </div>
       </el-form-item>

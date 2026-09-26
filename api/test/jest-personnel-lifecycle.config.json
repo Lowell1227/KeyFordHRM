@@ -1,0 +1,10 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": ".",
+  "testRegex": "suites/16-personnel-lifecycle\\.e2e-spec\\.ts$",
+  "transform": { "^.+\\.ts$": "ts-jest" },
+  "testEnvironment": "node",
+  "moduleNameMapper": { "^@/(.*)$": "<rootDir>/../src/$1" },
+  "testTimeout": 120000,
+  "maxWorkers": 1
+}

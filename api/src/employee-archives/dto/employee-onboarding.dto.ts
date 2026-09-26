@@ -1,6 +1,7 @@
 import { Type } from 'class-transformer';
 import {
   IsArray,
+  IsBoolean,
   IsDate,
   IsIn,
   IsInt,
@@ -12,6 +13,7 @@ import {
   MaxLength,
   Min,
   ValidateNested,
+  ValidateIf,
 } from 'class-validator';
 import { CompanyCode, EmploymentType, UserStatus } from '@prisma/client';
 
@@ -42,7 +44,13 @@ export class CreateEmployeeReentryDto extends EmployeeReentryFieldsDto {
   @IsOptional() @IsString() @MaxLength(100) sourceReference?: string;
 }
 
-export class ReviseEmployeeReentryDto extends EmployeeReentryFieldsDto {}
+export class ReviseEmployeeReentryDto extends EmployeeReentryFieldsDto {
+  @IsOptional() @IsBoolean() performanceOnly?: boolean;
+  @ValidateIf((input) => input.performanceOnly !== true) company!: CompanyCode;
+  @ValidateIf((input) => input.performanceOnly !== true) effectiveDate!: Date;
+  @ValidateIf((input) => input.performanceOnly !== true) employeeStatus!: UserStatus;
+  @ValidateIf((input) => input.performanceOnly !== true) employmentType!: EmploymentType;
+}
 
 export class CancelEmployeeReentryDto {
   @IsString() @MaxLength(500) reason!: string;
@@ -56,11 +64,13 @@ export class IdentitySnapshotDto {
 }
 
 export class EmployeeIdentityLookupDto {
+  @IsOptional() @IsUUID('4') excludeRequestId?: string;
   @IsOptional() @IsString() @MaxLength(20) phone?: string;
   @IsOptional() @IsString() @MaxLength(30) idNumber?: string;
 }
 
 export type EmployeeIdentityCandidate = {
+  requestId?: string;
   id: string;
   maskedName: string;
   currentEmployeeNo: string | null;
@@ -69,7 +79,7 @@ export type EmployeeIdentityCandidate = {
   archived: boolean;
   departmentName: string | null;
   matchBasis: 'id_number' | 'phone';
-  nextAction: 'reentry' | 'view_profile' | 'edit_profile' | 'view_onboarding' | 'confirm_phone';
+  nextAction: 'reentry' | 'view_profile' | 'edit_profile' | 'view_onboarding' | 'confirm_phone' | 'view_application';
 };
 
 export type EmployeeIdentityLookupResult = {
@@ -95,6 +105,14 @@ export type OnboardingRequestView = {
   requestVersion: number;
   recordStatus: string;
   proposedValue: Record<string, unknown>;
+  profileReviewStatus: string;
+  performanceReviewStatus: string;
+  rejectedReason: string | null;
+  profileReviewedAt: Date | null;
+  performanceReviewedAt: Date | null;
+  profileReviewedById: string | null;
+  performanceReviewedById: string | null;
+  appliedAt: Date | null;
   validationWarnings: Array<{ field: string; message: string }>;
   createdAt: Date;
   updatedAt: Date;

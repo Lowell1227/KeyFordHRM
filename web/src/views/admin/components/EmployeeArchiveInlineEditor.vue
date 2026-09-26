@@ -127,7 +127,7 @@ function reset() {
       images: [...(item.images ?? [])],
       attachments: [...(item.attachments ?? [])],
     }));
-  if (props.draft?.userId === archive.id && props.draft.recordStatus === 'draft') {
+  if (props.draft?.userId === archive.id && (props.draft.recordStatus === 'draft' || props.draft.canResume)) {
     const proposed = props.draft.proposedValue ?? {};
     replaceRecord(form.employee, { ...form.employee, ...(proposed.employee ?? {}) });
     replaceRecord(form.profile, { ...form.profile, ...(proposed.profile ?? {}) });
@@ -320,7 +320,7 @@ defineExpose({ submit, saveDraft, reset, isDirty });
       <div class="editor-section__head"><div><h3>联系与保障</h3><span>敏感号码留空表示保持原值</span></div></div>
       <el-form label-position="top" class="archive-editor-grid">
         <el-form-item label="身份证地址" class="span-2"><el-input v-model="form.profile.idAddress" /></el-form-item>
-        <el-form-item :label="archive?.employeeProfile?.idNumberConfigured ? '身份证号（已保存，留空不变）' : '身份证号'"><el-input v-model="form.profile.idNumber" type="password" show-password /></el-form-item>
+        <el-form-item :label="form.profile.idNumberConfigured || archive?.employeeProfile?.idNumberConfigured ? '身份证号（已保存，留空不变）' : '身份证号'"><el-input v-model="form.profile.idNumber" type="password" show-password /></el-form-item>
         <el-form-item label="现住址" class="span-2"><el-input v-model="form.profile.currentAddress" /></el-form-item>
         <el-form-item label="紧急联系人"><el-input v-model="form.profile.emergencyContactName" /></el-form-item>
         <el-form-item label="与联系人关系"><el-input v-model="form.profile.emergencyContactRelation" /></el-form-item>
@@ -331,7 +331,7 @@ defineExpose({ submit, saveDraft, reset, isDirty });
         <el-form-item label="公积金起始日期"><el-date-picker v-model="form.profile.housingFundStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
         <el-form-item label="开户行"><el-input v-model="form.profile.bankName" /></el-form-item>
         <el-form-item label="开户支行"><el-input v-model="form.profile.bankBranch" /></el-form-item>
-        <el-form-item :label="archive?.employeeProfile?.bankAccountConfigured ? '银行卡号（已保存，留空不变）' : '银行卡号'"><el-input v-model="form.profile.bankAccount" type="password" show-password /></el-form-item>
+        <el-form-item :label="form.profile.bankAccountConfigured || archive?.employeeProfile?.bankAccountConfigured ? '银行卡号（已保存，留空不变）' : '银行卡号'"><el-input v-model="form.profile.bankAccount" type="password" show-password /></el-form-item>
       </el-form>
     </section>
 

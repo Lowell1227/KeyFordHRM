@@ -18,6 +18,7 @@ import {
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import * as bcrypt from 'bcrypt';
 import { currentWorkerWhere, CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
+import { activeApplicationWhere } from '@/employee-archives/employee-data-change-view';
 
 export type SystemPermission = 'standard_user' | 'hr_user' | 'hr_admin' | 'system_admin';
 
@@ -60,6 +61,8 @@ export interface UserListItem {
   dingtalkBindingState: 'unbound' | 'enabled' | 'disabled';
   archivedAt: Date | null;
   matchedHistoricalEmployeeNo: string | null;
+  currentApplications?: Array<{ id: string; sourceType: string; onboardingStatus: string | null;
+    profileReviewStatus: string; performanceReviewStatus: string; updatedAt: Date }>;
 }
 
 /** 用户详情字段 */
@@ -201,6 +204,12 @@ export class UsersService {
             select: { employeeNo: true },
             orderBy: { effectiveFrom: 'desc' },
           },
+          employeeChangeRequests: {
+            where: activeApplicationWhere(),
+            select: { id: true, sourceType: true, onboardingStatus: true, profileReviewStatus: true,
+              performanceReviewStatus: true, updatedAt: true, intakeType: true, appliedAt: true,
+              proposedValue: true }, orderBy: { updatedAt: 'desc' },
+          },
         },
         orderBy: { createdAt: 'desc' },
       }),
@@ -232,6 +241,14 @@ export class UsersService {
       entryDate: u.entryDate,
       dingtalkBindingState: u.externalIdentityBindings[0]?.status ?? 'unbound',
       archivedAt: u.archivedAt,
+      currentApplications: hasHrCapability(viewer, 'employee_archive_edit') || hasHrCapability(viewer, 'employee_archive_review')
+        ? (u.employeeChangeRequests ?? []).map(({ proposedValue, ...request }) => ({ ...request,
+          proposedValue: { employee: {
+            changeType: (proposedValue as any)?.employee?.changeType,
+            employeeStatus: (proposedValue as any)?.employee?.employeeStatus,
+            effectiveFrom: (proposedValue as any)?.employee?.effectiveFrom,
+          } },
+        })) : undefined,
       matchedHistoricalEmployeeNo: dto.keyword
         ? (u.employeeNumberAssignments.find((item) => item.employeeNo.toLowerCase().includes(dto.keyword!.toLowerCase()))?.employeeNo ?? null)
         : null,

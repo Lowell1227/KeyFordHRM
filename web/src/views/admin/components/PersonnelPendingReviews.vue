@@ -187,6 +187,7 @@ function reviewStatusLabel(row: EmployeeDataReview, scope: 'profile' | 'performa
     pending: '待审核',
     approved: '已通过',
     rejected: '已退回',
+    cancelled: '已取消',
   } as Record<EmployeeReviewStatus, string>)[status];
 }
 

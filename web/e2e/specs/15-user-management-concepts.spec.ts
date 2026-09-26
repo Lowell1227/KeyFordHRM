@@ -202,7 +202,7 @@ test('keeps roster filters visible without redundant filter labels', async ({ pa
   await page.goto(`${webBaseUrl}/users`);
 
   const roster = page.locator('.directory-view');
-  const filterInput = roster.getByPlaceholder('搜索姓名或工号');
+  const filterInput = roster.getByPlaceholder('搜索姓名、当前工号或历史工号');
   await expect(filterInput).toBeVisible();
   await expect(roster.getByText('筛选条件', { exact: true })).toHaveCount(0);
   await expect(roster.getByRole('button', { name: /展开筛选|收起筛选/ })).toHaveCount(0);
@@ -614,11 +614,15 @@ test('edits the whole employee archive in place and supports contract row change
     window.getComputedStyle(element).gridTemplateColumns.split(' ').length
   ))).toBe(3);
   const readonlyContract = readonlySection('合同记录').locator('.employee-archive__contract-card').first();
+  await drawer.getByRole('tab', { name: '合同材料' }).click();
+  await expect(drawer.getByRole('heading', { name: '当前合同' })).toBeVisible();
   await expect(readonlyContract).toBeVisible();
   expect(await readonlyContract.locator('.employee-archive__facts > div > span').allTextContents()).toEqual(contractLabels);
-  await expect(drawer.locator('.employee-archive__facts > div').filter({ hasText: '所属公司' }).first()).toContainText('凡思堡');
-  await expect(drawer).toContainText('任职历史');
   await expect(drawer).toContainText('劳动合同');
+  await drawer.getByRole('tab', { name: '任职历史' }).click();
+  await expect(drawer.getByRole('heading', { name: '任职历史', exact: true })).toBeVisible();
+  await drawer.getByRole('tab', { name: '当前档案' }).click();
+  await expect(drawer.locator('.employee-archive__facts > div').filter({ hasText: '所属公司' }).first()).toContainText('凡思堡');
   await expect(drawer).toContainText('仅影响钉钉登录和消息通知，不读取或同步钉钉组织');
   await expect(drawer.getByRole('switch')).toBeChecked();
 
@@ -633,7 +637,7 @@ test('edits the whole employee archive in place and supports contract row change
   const editorSection = (heading: string) => drawer.locator('.editor-section').filter({
     has: page.getByRole('heading', { name: heading, exact: true }),
   });
-  expect(await editorSection('基本与任职').locator('.el-form-item__label').allTextContents()).toEqual(basicLabels);
+  expect(await editorSection('基本与任职').locator('.el-form-item__label').allTextContents()).toEqual(basicLabels.map((label) => label === '工号' ? '当前工号' : label));
   expect(await editorSection('个人与教育').locator('.el-form-item__label').allTextContents()).toEqual(personalLabels);
   expect(await editorSection('联系与保障').locator('.el-form-item__label').allTextContents()).toEqual(contactLabels);
   await expect(drawer.getByRole('textbox', { name: '姓名' })).toHaveValue('余焱玲');

@@ -23,12 +23,13 @@ export class EmployeeIdentityMatchService {
       throw new BadRequestException('请输入完整手机号或身份证号');
     }
 
-    return this.lookupNormalized(phone, idNumber ? this.fingerprint(idNumber) : null);
+    return this.lookupNormalized(phone, idNumber ? this.fingerprint(idNumber) : null, input.excludeRequestId);
   }
 
   async lookupStoredIdentity(input: {
     phone?: string | null;
     idNumberFingerprint?: string | null;
+    excludeRequestId?: string;
   }): Promise<EmployeeIdentityLookupResult> {
     const phone = input.phone ? this.normalizePhone(input.phone) : null;
     const idNumberFingerprint = input.idNumberFingerprint?.trim().toLowerCase() || null;
@@ -38,12 +39,13 @@ export class EmployeeIdentityMatchService {
     if (idNumberFingerprint && !/^[a-f0-9]{64}$/.test(idNumberFingerprint)) {
       throw new BadRequestException('员工身份证指纹格式无效');
     }
-    return this.lookupNormalized(phone, idNumberFingerprint);
+    return this.lookupNormalized(phone, idNumberFingerprint, input.excludeRequestId);
   }
 
   private async lookupNormalized(
     phone: string | null,
     idNumberFingerprint: string | null,
+    excludeRequestId?: string,
   ): Promise<EmployeeIdentityLookupResult> {
     const phoneUsers = phone ? await this.findPhone(phone) : [];
     const idUsers = idNumberFingerprint ? await this.findId(idNumberFingerprint) : [];
@@ -57,9 +59,29 @@ export class EmployeeIdentityMatchService {
     if (idUsers.length > 0) {
       return { outcome: 'identity_match', candidates: idUsers.map((item) => this.toCandidate(item, 'id_number')) };
     }
-    if (phoneUsers.length > 0) {
-      return { outcome: 'phone_candidates', candidates: phoneUsers.map((item) => this.toCandidate(item, 'phone')) };
+    const requests = await this.prisma.employeeDataChangeRequest.findMany({
+      where: { userId: null, sourceType: 'manual_employee_create', archivedAt: null, cancelledAt: null,
+        ...(excludeRequestId ? { id: { not: excludeRequestId } } : {}),
+        OR: [
+          ...(idNumberFingerprint ? [{ proposedValue: { path: ['profile', 'idNumberFingerprint'], equals: idNumberFingerprint } }] : []),
+          ...(phone ? [{ proposedValue: { path: ['employee', 'phone'], equals: phone } }, { proposedValue: { path: ['profile', 'phone'], equals: phone } }] : []),
+        ],
+      }, select: { id: true, employeeName: true, employeeNo: true, proposedValue: true }, take: 10,
+    });
+    const requestCandidates = requests.map((request): EmployeeIdentityCandidate => {
+      const profile = (request.proposedValue as Record<string, any>)?.profile;
+      const exact = Boolean(idNumberFingerprint && profile?.idNumberFingerprint === idNumberFingerprint);
+      return { id: request.id, requestId: request.id, maskedName: this.maskName(request.employeeName),
+        currentEmployeeNo: request.employeeNo, matchedHistoricalEmployeeNo: null, status: 'pending_entry', archived: false,
+        departmentName: null, matchBasis: exact ? 'id_number' : 'phone', nextAction: 'view_application' };
+    });
+    if (requestCandidates.some((candidate) => candidate.matchBasis === 'id_number')) {
+      return { outcome: 'identity_match', candidates: requestCandidates.filter((candidate) => candidate.matchBasis === 'id_number') };
     }
+    if (phoneUsers.length > 0) {
+      return { outcome: 'phone_candidates', candidates: [...phoneUsers.map((item) => this.toCandidate(item, 'phone')), ...requestCandidates] };
+    }
+    if (requestCandidates.length) return { outcome: 'phone_candidates', candidates: requestCandidates };
     return { outcome: 'none', candidates: [] };
   }
 

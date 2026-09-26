@@ -1,10 +1,12 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
+import dayjs from 'dayjs';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   employeeArchivesApi,
   type EmployeeDataReview,
   type EmployeeReentryBody,
+  type EmployeeArchive,
 } from '@/api/employee-archives.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import UserSelect from '@/components/common/UserSelect.vue';
@@ -26,6 +28,8 @@ const saving = ref(false);
 const cancelling = ref(false);
 const currentRequest = ref<EmployeeDataReview | null>(null);
 const positions = ref<PositionRecord[]>([]);
+let savedSnapshot = '';
+const loadError = ref('');
 const form = reactive({
   company: 'fuede', deptId: '', positionId: '',
   rosterManagerId: null as string | null, performanceManagerId: null as string | null,
@@ -48,10 +52,15 @@ function warningMessage(value: unknown): string {
 }
 
 const statusLabel = computed(() => {
+  if (currentRequest.value?.profileReviewStatus === 'rejected' || currentRequest.value?.performanceReviewStatus === 'rejected') return '已退回，待修改';
   const status = currentRequest.value?.onboardingStatus;
   return ({ draft: '草稿', submitted: '待 HR 审核', pending_entry: '已通过，待生效', effective: '已生效', cancelled: '已取消' } as Record<string, string>)[status ?? ''] ?? '未提交';
 });
-const canEdit = computed(() => !currentRequest.value || ['draft', 'submitted'].includes(currentRequest.value.onboardingStatus ?? ''));
+const performanceOnly = computed(() => !!currentRequest.value && ['effective', 'pending_entry'].includes(currentRequest.value.onboardingStatus ?? '')
+  && currentRequest.value.profileReviewStatus === 'approved' && currentRequest.value.performanceReviewStatus === 'rejected');
+const isNewHire = computed(() => currentRequest.value?.intakeType === 'new_hire');
+const canEdit = computed(() => !currentRequest.value || performanceOnly.value
+  || (!isNewHire.value && ['draft', 'submitted', 'pending_entry'].includes(currentRequest.value.onboardingStatus ?? '')));
 const canCancel = computed(() => currentRequest.value && ['draft', 'submitted', 'pending_entry'].includes(currentRequest.value.onboardingStatus ?? ''));
 const flowStep = computed(() => {
   const status = currentRequest.value?.onboardingStatus;
@@ -62,12 +71,13 @@ const flowStep = computed(() => {
   return 0;
 });
 
-function setFormFromRequest(request: EmployeeDataReview | null) {
+function setFormFromRequest(request: EmployeeDataReview | null, archive?: EmployeeArchive) {
   const employee = request?.proposedValue?.employee ?? {};
+  const previous = archive?.currentEmployment ?? archive?.employmentHistory[0];
   Object.assign(form, {
-    company: employee.company ?? 'fuede',
+    company: employee.company ?? previous?.company ?? 'fuede',
     deptId: employee.deptId ?? props.employee?.deptId ?? '',
-    positionId: employee.positionId ?? '',
+    positionId: employee.positionId ?? previous?.positionId ?? '',
     rosterManagerId: employee.managerId ?? null,
     performanceManagerId: request?.proposedValue?.performance?.managerId ?? null,
     effectiveDate: dateValue(employee.effectiveDate),
@@ -77,16 +87,35 @@ function setFormFromRequest(request: EmployeeDataReview | null) {
     plannedRegularDate: dateValue(employee.plannedRegularDate),
     probationMonths: typeof employee.probationMonths === 'number' ? employee.probationMonths : 3,
   });
+  savedSnapshot = JSON.stringify(form);
 }
 
 async function load() {
   if (!props.employee) return;
   loading.value = true;
+  loadError.value = '';
   try {
     currentRequest.value = await employeeArchivesApi.getCurrentReentry(props.employee.id);
-    setFormFromRequest(currentRequest.value);
-  } finally { loading.value = false; }
+    const archive = currentRequest.value ? undefined : await employeeArchivesApi.getArchive(props.employee.id);
+    setFormFromRequest(currentRequest.value, archive);
+  } catch { loadError.value = '申请加载失败，请关闭后重新打开。'; }
+  finally { loading.value = false; }
 }
+
+watch(() => form.effectiveDate, (date, oldDate) => {
+  if (!date || loading.value || form.probationMonths == null) return;
+  if (!form.plannedRegularDate || (oldDate && form.plannedRegularDate === dayjs(oldDate).add(form.probationMonths, 'month').format('YYYY-MM-DD'))) form.plannedRegularDate = dayjs(date).add(form.probationMonths, 'month').format('YYYY-MM-DD');
+});
+
+async function beforeClose(done: () => void) {
+  if (saving.value || cancelling.value) return;
+  if (savedSnapshot && savedSnapshot !== JSON.stringify(form)) {
+    try { await ElMessageBox.confirm('本次填写尚未提交，是否放弃？', '未提交的内容', { confirmButtonText: '放弃并关闭', cancelButtonText: '继续填写' }); }
+    catch { return; }
+  }
+  done();
+}
+function close() { void beforeClose(() => emit('update:modelValue', false)); }
 
 watch(() => props.modelValue, (open) => { if (open) void load(); });
 
@@ -107,19 +136,26 @@ function body(): EmployeeReentryBody {
 }
 
 async function submit() {
-  if (!props.employee || !form.deptId || !form.effectiveDate) {
+  if (currentRequest.value && !performanceOnly.value && currentRequest.value.profileReviewStatus !== 'rejected' && currentRequest.value.performanceReviewStatus !== 'rejected' && savedSnapshot === JSON.stringify(form)) {
+    ElMessage.info('未检测到变更，无需重新提交');
+    return;
+  }
+  if (!props.employee || (!performanceOnly.value && (!form.deptId || !form.effectiveDate))) {
     ElMessage.warning('请填写部门和再入职日期');
     return;
   }
   saving.value = true;
+  const submittingPerformanceOnly = performanceOnly.value;
   try {
     const request = currentRequest.value
-      ? await employeeArchivesApi.reviseReentry(currentRequest.value.id, body())
+      ? await employeeArchivesApi.reviseReentry(currentRequest.value.id, submittingPerformanceOnly ? { performanceOnly: true, performanceManagerId: form.performanceManagerId } : body())
       : await employeeArchivesApi.createReentry(props.employee.id, body());
     currentRequest.value = request;
-    ElMessage.success('再入职申请已提交，HR 管理员审核后按生效日期启用');
+    savedSnapshot = JSON.stringify(form);
+    ElMessage.success(submittingPerformanceOnly ? '绩效关系已重新提交，已审核的任职保持不变' : '再入职申请已提交，HR 管理员审核后按生效日期启用');
     emit('submitted');
-  } finally { saving.value = false; }
+  } catch { /* 请求错误由接口提示，保留填写内容 */ }
+  finally { saving.value = false; }
 }
 
 async function cancelRequest() {
@@ -135,7 +171,7 @@ async function cancelRequest() {
     emit('submitted');
     emit('update:modelValue', false);
   } catch (error) {
-    if (error !== 'cancel' && error !== 'close') throw error;
+    if (error !== 'cancel' && error !== 'close') { /* 请求失败时保留申请 */ }
   } finally { cancelling.value = false; }
 }
 
@@ -143,13 +179,17 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
 </script>
 
 <template>
-  <el-drawer :model-value="modelValue" title="办理再入职" size="min(760px, 100vw)" destroy-on-close @update:model-value="emit('update:modelValue', $event)">
+  <el-drawer :model-value="modelValue" :title="isNewHire ? '修改入职绩效关系' : '办理再入职'" size="min(760px, 100vw)" :before-close="beforeClose" :close-on-click-modal="false" destroy-on-close @update:model-value="emit('update:modelValue', $event)">
     <div v-loading="loading" class="reentry-drawer">
+      <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" />
       <div class="employee-summary">
-        <div><strong>{{ employee?.name }}</strong><span>历史工号 {{ employee?.employeeNo || '无' }}</span></div>
+        <div><strong>{{ employee?.name }}</strong><span>{{ isNewHire ? '工号' : '历史工号' }} {{ employee?.employeeNo || '无' }}</span></div>
         <el-tag v-if="currentRequest" effect="plain">{{ statusLabel }}</el-tag>
       </div>
-      <p class="number-note">再入职将自动生成新工号；历史工号仅保留在档案中，不再用于本次任职或登录。</p>
+      <p v-if="!performanceOnly" class="number-note">再入职将自动生成新工号；历史工号仅保留在档案中，不再用于本次任职或登录。</p>
+      <el-alert v-if="currentRequest?.rejectedReason" :title="`退回原因：${currentRequest.rejectedReason}`" type="warning" :closable="false" />
+      <p v-if="currentRequest?.onboardingStatus === 'pending_entry' && !performanceOnly" class="number-note">修改并重提后，原待生效安排将撤销，重新审核通过后按新日期生效。</p>
+      <p v-if="performanceOnly" class="number-note">任职已审核，本次仅修改被退回的绩效关系，工号与任职安排保持不变。</p>
 
       <section v-if="currentRequest" class="flow-panel">
         <div class="flow-title"><strong>审批流程</strong><span>提交于 {{ formatDateTime(currentRequest.createdAt) }}</span></div>
@@ -162,17 +202,17 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
         <div v-if="currentRequest.employeeNo" class="new-number">本次新工号：<strong>{{ currentRequest.employeeNo }}</strong></div>
       </section>
 
-      <el-form label-position="top" :disabled="!canEdit">
+      <el-form label-position="top" :disabled="!canEdit || loading || !!loadError">
         <div class="form-grid">
-          <el-form-item label="部门"><el-select v-model="form.deptId" filterable><el-option v-for="dept in flatten(departments)" :key="dept.id" :label="dept.fullPath || dept.name" :value="dept.id" /></el-select></el-form-item>
-          <el-form-item label="岗位"><el-select v-model="form.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.name" :value="position.id" /></el-select></el-form-item>
-          <el-form-item label="花名册直属主管"><UserSelect v-model="form.rosterManagerId" clearable eligible-for="direct_manager" :disabled-ids="employee ? [employee.id] : []" /></el-form-item>
+          <el-form-item label="部门"><el-select v-model="form.deptId" :disabled="performanceOnly" filterable><el-option v-for="dept in flatten(departments)" :key="dept.id" :label="dept.fullPath || dept.name" :value="dept.id" /></el-select></el-form-item>
+          <el-form-item label="岗位"><el-select v-model="form.positionId" :disabled="performanceOnly" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.name" :value="position.id" /></el-select></el-form-item>
+          <el-form-item label="花名册直属主管"><UserSelect v-model="form.rosterManagerId" :disabled="performanceOnly" clearable eligible-for="direct_manager" :disabled-ids="employee ? [employee.id] : []" /></el-form-item>
           <el-form-item label="绩效直属上级"><UserSelect v-model="form.performanceManagerId" clearable eligible-for="direct_manager" :disabled-ids="employee ? [employee.id] : []" /></el-form-item>
-          <el-form-item label="用工类型"><el-select v-model="form.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
-          <el-form-item label="再入职日期"><el-date-picker v-model="form.effectiveDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-          <el-form-item label="员工状态"><el-select v-model="form.employeeStatus"><el-option label="试用期" value="probation" /><el-option label="在职" value="active" /></el-select></el-form-item>
-          <el-form-item v-if="form.employeeStatus === 'probation'" label="计划转正日"><el-date-picker v-model="form.plannedRegularDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-          <el-form-item v-if="form.employeeStatus === 'probation'" label="试用期（月）"><el-input-number v-model="form.probationMonths" :min="0" :max="60" /></el-form-item>
+          <el-form-item label="用工类型"><el-select v-model="form.employmentType" :disabled="performanceOnly"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
+          <el-form-item label="再入职日期"><el-date-picker v-model="form.effectiveDate" :disabled="performanceOnly" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+          <el-form-item label="员工状态"><el-select v-model="form.employeeStatus" :disabled="performanceOnly"><el-option label="试用期" value="probation" /><el-option label="在职" value="active" /></el-select></el-form-item>
+          <el-form-item v-if="form.employeeStatus === 'probation'" label="计划转正日"><el-date-picker v-model="form.plannedRegularDate" :disabled="performanceOnly" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+          <el-form-item v-if="form.employeeStatus === 'probation'" label="试用期（月）"><el-input-number v-model="form.probationMonths" :disabled="performanceOnly" :min="0" :max="60" /></el-form-item>
         </div>
       </el-form>
 
@@ -181,9 +221,9 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
       </div>
     </div>
     <template #footer>
-      <el-button @click="emit('update:modelValue', false)">关闭</el-button>
+      <el-button @click="close">关闭</el-button>
       <el-button v-if="canCancel" :loading="cancelling" @click="cancelRequest">取消申请</el-button>
-      <el-button v-if="canEdit" type="primary" :loading="saving" @click="submit">{{ currentRequest ? '更新并重新提交' : '提交审核' }}</el-button>
+      <el-button v-if="canEdit" type="primary" :loading="saving" :disabled="loading || !!loadError" @click="submit">{{ performanceOnly ? '重新提交绩效关系' : currentRequest ? '更新并重新提交' : '提交审核' }}</el-button>
     </template>
   </el-drawer>
 </template>

@@ -189,7 +189,7 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   await expect.poll(() => userQueryUrls.some((url) => (
     new URL(url).searchParams.get('deptId') === activeEmployee.deptId
   ))).toBeTruthy();
-  await expect(categoryTabs.getByRole('tab')).toHaveText(['全部', '在职', '试用期', '待入职', '已离职', '草稿', '已归档']);
+  await expect(categoryTabs.getByRole('tab')).toHaveText(['全部', '在职', '试用期', '待入职', '已离职', '办理中', '草稿', '已归档']);
   await expect(categoryTabs.getByRole('tab', { name: '全部' })).toHaveAttribute('aria-selected', 'true');
   await expect.poll(() => userQueryUrls.some((url) => new URL(url).searchParams.get('includeResigned') === 'true')).toBeTruthy();
   await expect(page.getByRole('button', { name: '草稿箱' })).toHaveCount(0);

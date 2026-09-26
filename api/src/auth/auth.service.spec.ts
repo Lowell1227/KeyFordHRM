@@ -15,6 +15,9 @@ const eligibleUser = {
   name: '测试·周强明',
   sysRole: 'employee',
   status: 'active',
+  accountType: 'employee',
+  archivedAt: null,
+  deletedAt: null,
   dingtalkId: null,
   dingtalkUnionId: null,
   passwordHash: 'hashed',
@@ -27,7 +30,7 @@ const eligibleUser = {
   dept: { name: '测试研发部' },
 };
 
-function createService(enabled: boolean) {
+function createService(enabled: boolean, effectiveDates?: any) {
   const prisma = {
     user: {
       findMany: jest.fn(),
@@ -75,6 +78,7 @@ function createService(enabled: boolean) {
     config as unknown as ConfigService,
     dingtalk as unknown as DingtalkService,
     businessCapabilities as unknown as BusinessCapabilitiesService,
+    effectiveDates,
   );
 
   return { service, prisma, jwt, dingtalk, businessCapabilities };
@@ -167,17 +171,30 @@ describe('AuthService current user capabilities', () => {
 });
 
 describe('AuthService DingTalk identity boundary', () => {
+  it('不能用因离职停用的钉钉关联在未生效前登录', async () => {
+    const { service, prisma, dingtalk } = createService(false);
+    dingtalk.getAuthCodeUnionId.mockResolvedValue('virtual-union');
+    prisma.externalIdentityBinding.findFirst.mockResolvedValue({
+      id: 'binding-disabled', userId: eligibleUser.id, status: 'disabled',
+      disabledReason: '员工档案审核为离职', endedAt: null, user: eligibleUser,
+    });
+    prisma.employmentRecord.findFirst.mockResolvedValue({ id: 'old-record', employeeStatus: 'active' });
+    await expect(service.dingtalkLogin({ authCode: 'virtual-code', loginMode: 'internal' }))
+      .rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
   it('通过已启用的钉钉身份关联登录，并校验当前有效任职', async () => {
     const { service, prisma, dingtalk } = createService(false);
     dingtalk.getAuthCodeUnionId.mockResolvedValue('union-enabled');
     prisma.externalIdentityBinding.findFirst.mockResolvedValue({
       id: 'binding-1',
+      userId: eligibleUser.id,
       provider: 'dingtalk',
       status: 'enabled',
       endedAt: null,
       user: eligibleUser,
     });
-    prisma.employmentRecord.findFirst.mockResolvedValue({ id: 'employment-1' });
+    prisma.employmentRecord.findFirst.mockResolvedValue({ id: 'employment-1', employeeStatus: 'active' });
 
     await expect(service.dingtalkLogin({
       authCode: 'auth-code',
@@ -222,6 +239,40 @@ describe('AuthService DingTalk identity boundary', () => {
 });
 
 describe('AuthService local identity boundary', () => {
+  it('再入职激活换号后，不能用旧工号签发新会话', async () => {
+    const effective = { refreshUserProjection: jest.fn(async () => ({ activated: true })) };
+    const { service, prisma } = createService(false, effective);
+    prisma.user.findFirst.mockResolvedValue(eligibleUser);
+    prisma.user.findUnique.mockResolvedValue({ ...eligibleUser, employeeNo: '301' });
+    prisma.employmentRecord.findFirst.mockResolvedValue({ id: 'new-record', employeeStatus: 'active' });
+    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+    await expect(service.localLogin({ employeeNo: eligibleUser.employeeNo, password: 'virtual-password' }))
+      .rejects.toBeInstanceOf(UnauthorizedException);
+  });
+
+  it('待入职在生效检查通过后，使用本次新工号登录并签发当前权限', async () => {
+    const effective = { refreshUserProjection: jest.fn(async () => ({ activated: true })) };
+    const { service, prisma, jwt } = createService(false, effective);
+    prisma.user.findFirst.mockResolvedValue({ ...eligibleUser, status: 'pending_entry', sysRole: 'hr' });
+    prisma.user.findUnique.mockResolvedValue(eligibleUser);
+    prisma.employmentRecord.findFirst.mockResolvedValue({ id: 'new-record', employeeStatus: 'active' });
+    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+    await expect(service.localLogin({ employeeNo: eligibleUser.employeeNo, password: 'virtual-password' }))
+      .resolves.toMatchObject({ token: 'test-token', user: { sysRole: 'employee' } });
+    expect(jwt.signAsync).toHaveBeenCalledWith(expect.objectContaining({
+      employeeNo: eligibleUser.employeeNo, sysRole: 'employee', hrCapabilities: [],
+    }));
+  });
+
+  it('独立系统服务账号不要求人事任职记录', async () => {
+    const { service, prisma } = createService(false);
+    prisma.user.findFirst.mockResolvedValue({ ...eligibleUser, accountType: 'service' });
+    prisma.employmentRecord.findFirst.mockResolvedValue(null);
+    (bcrypt.compare as jest.Mock).mockResolvedValue(true);
+    await expect(service.localLogin({ employeeNo: eligibleUser.employeeNo, password: 'virtual-password' }))
+      .resolves.toMatchObject({ token: 'test-token' });
+  });
+
   it('工号密码正确但无当前有效任职时拒绝登录', async () => {
     const { service, prisma } = createService(false);
     prisma.user.findFirst.mockResolvedValue(eligibleUser);
@@ -240,7 +291,7 @@ describe('AuthService local identity boundary', () => {
       ...eligibleUser,
       hrCapabilities: ['employee_archive_edit'],
     });
-    prisma.employmentRecord.findFirst.mockResolvedValue({ id: 'employment-1' });
+    prisma.employmentRecord.findFirst.mockResolvedValue({ id: 'employment-1', employeeStatus: 'active' });
     (bcrypt.compare as jest.Mock).mockResolvedValue(true);
 
     await expect(service.localLogin({
@@ -252,6 +303,7 @@ describe('AuthService local identity boundary', () => {
       user: { id: eligibleUser.id },
     });
     expect(jwt.signAsync).toHaveBeenCalledWith(expect.objectContaining({
+      employeeNo: eligibleUser.employeeNo,
       hrCapabilities: ['employee_archive_edit'],
     }));
   });

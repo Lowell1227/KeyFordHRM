@@ -1,5 +1,5 @@
 import { ValidationPipe } from '@nestjs/common';
-import { CreateEmployeeDto } from './employee-archive.dto';
+import { CreateEmployeeDto, SaveEmployeeCreateDraftDto } from './employee-archive.dto';
 
 describe('CreateEmployeeDto', () => {
   const pipe = new ValidationPipe({
@@ -7,6 +7,26 @@ describe('CreateEmployeeDto', () => {
     transform: true,
     forbidNonWhitelisted: false,
     transformOptions: { enableImplicitConversion: true },
+  });
+
+  it('accepts the real name-only wizard draft payload with unfilled optional dates and department', async () => {
+    const result = await pipe.transform({
+      name: '草稿员工', deptId: '', entryDate: '', effectiveFrom: '',
+      employee: { plannedRegularDate: '', actualRegularDate: '', leaveDate: '' },
+      profile: { birthDate: '', graduationDate: '', socialSecurityStartDate: '', housingFundStartDate: '' },
+      contracts: [{ signedAt: '', effectiveFrom: '', expiresAt: '' }],
+    }, { type: 'body', metatype: SaveEmployeeCreateDraftDto });
+    expect(result.deptId).toBeNull();
+    expect(result.entryDate).toBeNull();
+    expect(result.employee.leaveDate).toBeNull();
+  });
+
+  it('allows empty optional dates but still requires employment dates on submission', async () => {
+    const body = { name: '新员工', company: 'fuede', deptId: '30000000-0000-4000-8000-000000000001',
+      entryDate: '2026-09-26', effectiveFrom: '2026-09-26', employmentType: 'full_time',
+      employeeStatus: 'probation', employee: { leaveDate: '', actualRegularDate: '' }, profile: { birthDate: '' } };
+    await expect(pipe.transform(body, { type: 'body', metatype: CreateEmployeeDto })).resolves.toBeDefined();
+    await expect(pipe.transform({ ...body, entryDate: '' }, { type: 'body', metatype: CreateEmployeeDto })).rejects.toThrow();
   });
 
   it('strips nested fields that are outside the employee creation wizard boundary', async () => {
