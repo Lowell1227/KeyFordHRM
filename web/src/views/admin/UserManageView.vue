@@ -1905,12 +1905,17 @@ onBeforeUnmount(() => {
                 fixed="left"
                 :selectable="canSelectEmployeeForArchive"
               />
-              <el-table-column label="人员" min-width="180">
+              <el-table-column label="人员" min-width="200">
                 <template #default="{ row }">
-                  <div class="person-cell">
+                  <div class="person-cell roster-person-cell">
                     <span class="avatar">{{ (row as ManagedUser).name.slice(0, 1) }}</span>
-                    <div>
-                      <strong>{{ (row as ManagedUser).name }}</strong>
+                    <div class="roster-person-details">
+                      <div class="roster-person-heading">
+                        <strong>{{ (row as ManagedUser).name }}</strong>
+                        <el-tag :type="statusTagType[(row as ManagedUser).status]" size="small">
+                          {{ statusLabels[(row as ManagedUser).status] }}
+                        </el-tag>
+                      </div>
                       <small>{{ (row as ManagedUser).employeeNo || '工号待补充' }}</small>
                       <small v-if="(row as ManagedUser).matchedHistoricalEmployeeNo" class="historical-match">历史工号命中：{{ (row as ManagedUser).matchedHistoricalEmployeeNo }}</small>
                     </div>
@@ -1953,13 +1958,6 @@ onBeforeUnmount(() => {
                     effect="plain"
                   >
                     {{ dingtalkStateLabels[(row as ManagedUser).dingtalkBindingState ?? 'unbound'] }}
-                  </el-tag>
-                </template>
-              </el-table-column>
-              <el-table-column label="状态" width="110">
-                <template #default="{ row }">
-                  <el-tag :type="statusTagType[(row as ManagedUser).status]" size="small">
-                    {{ statusLabels[(row as ManagedUser).status] }}
                   </el-tag>
                 </template>
               </el-table-column>
@@ -3510,6 +3508,26 @@ onBeforeUnmount(() => {
 .person-cell strong,
 .person-cell small {
   display: block;
+}
+
+.roster-person-cell .avatar {
+  flex: 0 0 32px;
+}
+
+.roster-person-details {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.roster-person-heading {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 6px;
+}
+
+.roster-person-heading .el-tag {
+  flex: 0 0 auto;
 }
 
 .business-identity-tags {

@@ -16,6 +16,66 @@ const apiResponse = (data: unknown) => ({
 
 const webBaseUrl = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173';
 
+for (const viewport of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 390, height: 844 }]) {
+  test(`shows employment status beside the employee identity at ${viewport.width}px`, async ({ page }, testInfo) => {
+    const cases = [
+      { name: '在职示例', status: 'active', label: '在职' },
+      { name: '试用示例', status: 'probation', label: '试用期' },
+      { name: '待入职长姓名展示示例', status: 'pending_entry', label: '待入职' },
+      { name: '离职示例', status: 'resigned', label: '已离职' },
+    ];
+    const employees = cases.map((item, index) => ({
+      id: `status-employee-${index}`, name: item.name, employeeNo: `00${index + 1}`,
+      deptId: 'dept-hr', deptName: '人事行政部', position: '专员', employmentType: 'full_time',
+      status: item.status, directManagerId: null, directManagerName: null,
+      sysRole: 'employee', systemPermission: 'standard_user', businessIdentities: [],
+      isAssessorOnly: false, canViewAll: false, dingtalkBindingState: 'unbound',
+      archivedAt: null, currentApplications: [],
+    }));
+    await page.addInitScript(() => {
+      localStorage.setItem('token', 'mock-admin-token');
+      localStorage.setItem('expiresAt', String(Date.now() + 600_000));
+    });
+    await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({
+      json: apiResponse(0),
+    }));
+    await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+      json: apiResponse({ id: 'admin-1', name: '测试管理员', sysRole: 'system_admin', canViewAll: true }),
+    }));
+    await page.route('**/api/v1/departments**', (route) => route.fulfill({ json: apiResponse([]) }));
+    await page.route('**/api/v1/users**', (route) => route.fulfill({
+      json: apiResponse({ total: employees.length, page: 1, pageSize: 20, items: employees }),
+    }));
+    await page.setViewportSize(viewport);
+    await page.goto('/users');
+
+    const roster = page.locator('.directory-view');
+    for (const item of cases) {
+      const identity = viewport.width > 768
+        ? roster.locator('.person-cell').filter({ hasText: item.name })
+        : roster.locator('.mobile-result-card__header').filter({ hasText: item.name });
+      const tag = identity.locator('.el-tag');
+      await expect(tag).toHaveText(item.label);
+      await expect(tag).toBeVisible();
+      if (viewport.width > 768) {
+        // The status must be in the initially visible name cell, not behind horizontal scrolling.
+        const bounds = await tag.boundingBox();
+        expect(bounds).not.toBeNull();
+        expect(bounds!.x).toBeGreaterThanOrEqual(0);
+        expect(bounds!.x + bounds!.width).toBeLessThan(viewport.width);
+        const cell = identity.locator('xpath=ancestor::td');
+        const cellBounds = await cell.boundingBox();
+        expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(cellBounds!.x + cellBounds!.width);
+      }
+    }
+    if (viewport.width > 768) {
+      await expect(roster.getByRole('columnheader', { name: '状态', exact: true })).toHaveCount(0);
+    }
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`employment-status-${viewport.width}.png`), fullPage: true, animations: 'disabled' });
+  });
+}
+
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/v1/employee-archives/reviews/list**', (route) => route.fulfill({
     contentType: 'application/json',
