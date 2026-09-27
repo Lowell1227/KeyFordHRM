@@ -22,6 +22,7 @@ describe('parseEmployeeRosterExcel', () => {
       '工号*',
       '所属公司*',
       '一级部门*',
+      '岗位*',
       '花名册直属主管',
     ]));
     expect(workbook.getWorksheet('合同记录')?.getRow(1).values).toEqual(expect.arrayContaining([
