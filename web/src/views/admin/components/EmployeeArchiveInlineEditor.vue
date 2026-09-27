@@ -262,7 +262,7 @@ defineExpose({ submit, saveDraft, reset, isDirty });
 <template>
   <div v-if="editing" class="archive-inline-editor">
     <el-alert
-      title="保存草稿不会进入审核；只有点击提交审核后，才进入人事变更审核。"
+      title="保存草稿不会进入审核；只有点击提交审核后，才会进入人事办理的待我审核。"
       type="info"
       show-icon
       :closable="false"

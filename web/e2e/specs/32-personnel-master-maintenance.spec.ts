@@ -1,11 +1,17 @@
 import { expect, test } from '@playwright/test';
 import { routes } from '../../src/router/routes';
+import { buildNavigation } from '../../src/router/navigation';
 
 const apiResponse = (data: unknown) => ({ code: 0, message: 'success', data, timestamp: Date.now() });
 
-test('personnel master data has four independent routes', () => {
-  expect(routes.filter((route) => ['/users', '/organization', '/positions', '/personnel-change-reviews'].includes(route.path)).map((route) => route.meta?.title))
-    .toEqual(['员工档案', '组织架构', '岗位目录', '人事变更审核']);
+test('personnel master data has one processing workspace and a legacy redirect', () => {
+  expect(routes.filter((route) => ['/users', '/organization', '/positions', '/personnel-processing'].includes(route.path)).map((route) => route.meta?.title))
+    .toEqual(['员工档案', '组织架构', '岗位目录', '人事办理']);
+  expect(routes.find((route) => route.path === '/personnel-change-reviews')?.redirect).toBe('/personnel-processing');
+  const people = buildNavigation(routes, { sysRole: 'hr', canViewAll: false })
+    .find((module) => module.key === 'people');
+  expect(people?.groups.find((group) => group.label === '人员档案')?.items.map((item) => item.label))
+    .toEqual(['员工档案', '组织架构', '岗位目录', '人事办理']);
 });
 
 test('HR can submit a position from the position directory', async ({ page }) => {
@@ -64,6 +70,21 @@ test('HR administrator can review self-submitted department and position changes
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ items: [], total: 0, page: 1, pageSize: 50 })),
   }));
+  await page.route('**/api/v1/employee-archives/applications/list**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ items: [], total: 0, page: 1, pageSize: 100 })),
+  }));
+  await page.route('**/api/v1/departments**', (route) => (
+    route.request().url().includes('/change-requests')
+      ? route.fallback()
+      : route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse([])) })
+  ));
+  await page.route('**/api/v1/users**', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse({ items: [], total: 0, page: 1, pageSize: 20 })),
+  }));
+  await page.route('**/api/v1/positions**', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse([])),
+  }));
   await page.route('**/api/v1/departments/change-requests**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({
@@ -104,7 +125,8 @@ test('HR administrator can review self-submitted department and position changes
     })),
   }));
 
-  await page.goto('/personnel-change-reviews');
+  await page.goto('/personnel-processing');
+  await page.getByRole('tab', { name: '待我审核', exact: true }).click();
   await expect(page.locator('.review-category-section > .desktop-result-table > .review-table')).toHaveCount(2);
   await expect(page.locator('.department-review-card')).toHaveCount(0);
   await page.getByRole('button', { name: '组织架构 1' }).click();

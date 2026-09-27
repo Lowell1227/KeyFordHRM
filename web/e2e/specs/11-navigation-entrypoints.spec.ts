@@ -252,6 +252,7 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
         label: "绩效运营",
         items: [
           "周期与计划",
+          "部门复核",
           "绩效校准",
           "绩效面谈",
           "改进计划",
@@ -261,17 +262,18 @@ test.describe("11-navigation-entrypoints navigation tree", () => {
         ],
       },
       { label: "绩效分析", items: ["绩效报表"] },
-      { label: "绩效设置", items: ["指标库", "考核模板"] },
+      { label: "绩效设置", items: ["考核模板"] },
+      { label: "试用期与转正", items: ["转正管理", "我的转正申请"] },
     ]);
     const people = modules.find((module) => module.key === "people");
     expect(
       people?.groups.map((group) => group.label),
-    ).toEqual(["人员档案", "试用期与转正"]);
+    ).toEqual(["人员档案"]);
     expect(people?.groups[0].items.map((item) => item.label)).toEqual([
       "员工档案",
       "组织架构",
       "岗位目录",
-      "人事变更审核",
+      "人事办理",
     ]);
   });
 

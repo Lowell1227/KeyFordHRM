@@ -169,15 +169,25 @@ export const routes: RouteRecordRaw[] = [
     },
   },
   {
-    path: '/personnel-change-reviews',
-    name: 'PersonnelChangeReviews',
-    component: () => import('@/views/admin/PersonnelReviewView.vue'),
+    path: '/personnel-processing',
+    name: 'PersonnelProcessing',
+    component: () => import('@/views/admin/UserManageView.vue'),
+    props: { mode: 'processing' },
     meta: {
       requiresAuth: true,
-      title: '人事变更审核',
+      title: '人事办理',
       roles: ['hr', 'system_admin'],
-      hrCapabilities: ['employee_archive_review'],
-      navigation: { module: 'people', label: '人事变更审核', order: 40, group: 'people-archive', groupLabel: '人员档案' },
+      hrCapabilities: ['employee_archive_edit', 'employee_archive_review'],
+      navigation: { module: 'people', label: '人事办理', order: 40, group: 'people-archive', groupLabel: '人员档案' },
+    },
+  },
+  {
+    path: '/personnel-change-reviews',
+    redirect: '/personnel-processing',
+    meta: {
+      requiresAuth: true,
+      roles: ['hr', 'system_admin'],
+      hrCapabilities: ['employee_archive_edit', 'employee_archive_review'],
     },
   },
   {

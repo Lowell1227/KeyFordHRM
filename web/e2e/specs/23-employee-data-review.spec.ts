@@ -9,7 +9,7 @@ const apiResponse = (data: unknown) => ({
 
 const webBaseUrl = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173';
 
-test('HR administrator reviews employee and department changes from the independent personnel review menu', async ({ page }) => {
+test('HR administrator reviews employee and department changes from the personnel processing workspace', async ({ page }) => {
   const employee = {
     id: 'employee-1', name: '员工一', employeeNo: '001', deptId: 'dept-1', deptName: '项目中心',
     position: '项目专员', employmentType: 'full_time', status: 'active', directManagerId: 'manager-old',
@@ -92,9 +92,16 @@ test('HR administrator reviews employee and department changes from the independ
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 20, items: [employee] })),
   }));
+  await page.route('**/api/v1/positions**', (route) => route.fulfill({
+    contentType: 'application/json', body: JSON.stringify(apiResponse([])),
+  }));
   await page.route('**/api/v1/employee-archives/reviews/list**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 2, page: 1, pageSize: 20, items: reviews })),
+  }));
+  await page.route('**/api/v1/employee-archives/applications/list**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
   }));
   await page.route('**/api/v1/employee-archives/reviews/approve', async (route) => {
     approveBody = route.request().postDataJSON();
@@ -140,7 +147,9 @@ test('HR administrator reviews employee and department changes from the independ
   });
 
   await page.goto(`${webBaseUrl}/personnel-change-reviews`);
-  await expect(page.getByRole('button', { name: '人事变更审核', exact: true })).toBeVisible();
+  await expect(page).toHaveURL(`${webBaseUrl}/personnel-processing`);
+  await expect(page.getByRole('button', { name: '人事办理', exact: true })).toBeVisible();
+  await page.getByRole('tab', { name: '待我审核', exact: true }).click();
   await expect(page.getByRole('button', { name: /待处理事项/ })).toHaveCount(0);
   await expect(page.locator('.personnel-review-hero')).toHaveCount(0);
 

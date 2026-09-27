@@ -67,6 +67,10 @@ async function setupPersonnelPage(page: Page, options: {
       items: currentDraft ? [currentDraft] : [],
     })),
   }));
+  await page.route('**/api/v1/employee-archives/applications/list**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+  }));
   await page.route('**/api/v1/employee-archives/drafts', async (route) => {
     const body = route.request().postDataJSON() as Record<string, any>;
     draftBodies.push(body);
@@ -105,7 +109,7 @@ async function setupPersonnelPage(page: Page, options: {
 test('新增员工采用四步向导，任职关系同页且补充资料可跳过', async ({ page }) => {
   await setupPersonnelPage(page);
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/users');
+  await page.goto('/personnel-processing');
   await page.getByRole('button', { name: '新增员工' }).click();
 
   const drawer = page.getByRole('dialog', { name: '新增员工' });
@@ -130,7 +134,7 @@ test('缺失的提交信息只在抽屉内汇总并返回对应步骤', async ({
   initialDraft.proposedValue.employee.effectiveFrom = null;
   initialDraft.proposedValue.draftMeta = { layoutVersion: 2, currentStep: 3, completedSteps: [0, 1, 2] };
   await setupPersonnelPage(page, { initialDraft });
-  await page.goto('/users');
+  await page.goto('/personnel-processing');
   await page.getByRole('tab', { name: '草稿', exact: true }).click();
   await page.getByRole('button', { name: '继续编辑' }).click();
 
@@ -153,7 +157,7 @@ test('缺失的提交信息只在抽屉内汇总并返回对应步骤', async ({
 test('输入姓名后静默自动保存并从上次步骤继续填写', async ({ page }) => {
   const state = await setupPersonnelPage(page);
   await page.setViewportSize({ width: 1440, height: 900 });
-  await page.goto('/users');
+  await page.goto('/personnel-processing');
   await page.getByRole('button', { name: '新增员工' }).click();
 
   const drawer = page.getByRole('dialog', { name: '新增员工' });
@@ -200,7 +204,7 @@ test('提交审核会等待正在进行的自动保存完成', async ({ page }) 
     createdAt: '2026-09-18T08:00:00.000Z', updatedAt: '2026-09-18T08:00:00.000Z',
   };
   const state = await setupPersonnelPage(page, { initialDraft, draftDelayMs: 900 });
-  await page.goto('/users');
+  await page.goto('/personnel-processing');
   await page.getByText('草稿', { exact: true }).click();
   await page.getByRole('button', { name: '继续编辑' }).click();
 
@@ -220,7 +224,7 @@ test('提交审核会等待正在进行的自动保存完成', async ({ page }) 
 test('390px 手机宽度下向导保持单列且可继续填写', async ({ page }) => {
   await setupPersonnelPage(page);
   await page.setViewportSize({ width: 390, height: 844 });
-  await page.goto('/users');
+  await page.goto('/personnel-processing');
   await page.getByRole('button', { name: '新增员工' }).click();
 
   const drawer = page.getByRole('dialog', { name: '新增员工' });
@@ -256,7 +260,7 @@ for (const scenario of [
     initialDraft.proposedValue.draftMeta = { ...scenario, completedSteps: [0, 1, 2, 3, 4, 5] };
     const state = await setupPersonnelPage(page, { initialDraft });
     await page.setViewportSize({ width: scenario.width, height: 900 });
-    await page.goto('/users');
+    await page.goto('/personnel-processing');
     await page.getByRole('tab', { name: '草稿', exact: true }).click();
     await page.getByRole('button', { name: '继续编辑' }).click();
 
@@ -288,7 +292,7 @@ for (const savedStep of [0, 2, 3]) {
     const initialDraft = completeDraft();
     initialDraft.proposedValue.draftMeta.currentStep = savedStep;
     await setupPersonnelPage(page, { initialDraft });
-    await page.goto('/users');
+    await page.goto('/personnel-processing');
     await page.getByRole('tab', { name: '草稿', exact: true }).click();
     await page.getByRole('button', { name: '继续编辑' }).click();
     await expect(page.getByRole('dialog', { name: '新增员工' }).locator('.el-step__title.is-process'))
@@ -300,7 +304,7 @@ test('草稿进度：清空已填日期后立即取消完成标记，仍可继�
   const initialDraft = completeDraft();
   initialDraft.proposedValue.draftMeta = { layoutVersion: 2, currentStep: 3, completedSteps: [0, 1, 2] };
   const state = await setupPersonnelPage(page, { initialDraft });
-  await page.goto('/users');
+  await page.goto('/personnel-processing');
   await page.getByRole('tab', { name: '草稿', exact: true }).click();
   await page.getByRole('button', { name: '继续编辑' }).click();
   const drawer = page.getByRole('dialog', { name: '新增员工' });
@@ -318,7 +322,7 @@ test('草稿进度：清空已填日期后立即取消完成标记，仍可继�
 test('手机号同号人工确认在提交强制复查后仍有效，非法证件不能借有效手机号跳过', async ({ page }) => {
   const state = await setupPersonnelPage(page, { initialDraft: completeDraft() });
   await page.route('**/api/v1/employee-archives/identity-lookup', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ outcome: 'phone_candidates', candidates: [{ id: 'other-user', maskedName: '其*', currentEmployeeNo: '999', matchedHistoricalEmployeeNo: null, status: 'active', archived: false, departmentName: '人事部', matchBasis: 'phone', nextAction: 'confirm_phone' }] })) }));
-  await page.goto('/users');
+  await page.goto('/personnel-processing');
   await page.getByRole('tab', { name: '草稿', exact: true }).click();
   await page.getByRole('button', { name: '继续编辑' }).click();
   const drawer = page.getByRole('dialog', { name: '新增员工' });
@@ -344,7 +348,7 @@ test('手机号同号人工确认在提交强制复查后仍有效，非法证�
 test('自动保存失败不会关闭抽屉或丢失输入，可重试保存', async ({ page }) => {
   await setupPersonnelPage(page);
   await page.route('**/api/v1/employee-archives/drafts', (route) => route.fulfill({ status: 503, contentType: 'application/json', body: JSON.stringify({ message: '暂时无法保存' }) }));
-  await page.goto('/users');
+  await page.goto('/personnel-processing');
   await page.getByRole('button', { name: '新增员工' }).click();
   const drawer = page.getByRole('dialog', { name: '新增员工' });
   await drawer.getByLabel('姓名', { exact: true }).fill('保留输入员工');
@@ -361,7 +365,9 @@ test('办理中一人一行，退回申请可从原内容续填，不要求审�
   await page.route('**/api/v1/employee-archives/applications/list**', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ items: [draft], total: 1, page: 1, pageSize: 100 })) }));
   await page.route('**/api/v1/employee-archives/applications/draft-create-1', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(draft)) }));
   await page.setViewportSize({ width: 1024, height: 768 });
-  await page.goto('/users');
+  await page.goto('/personnel-processing');
+  await expect(page.getByRole('tablist', { name: '人事办理分类' }).getByRole('tab')).toHaveText(['办理中', '草稿']);
+  await expect(page.getByRole('tab', { name: '待我审核', exact: true })).toHaveCount(0);
   await page.getByRole('tab', { name: '办理中', exact: true }).click();
   await expect(page.locator('.desktop-result-table .el-table__body tbody > tr')).toHaveCount(1);
   await page.getByRole('button', { name: '查看申请', exact: true }).first().click();
@@ -370,6 +376,24 @@ test('办理中一人一行，退回申请可从原内容续填，不要求审�
   await expect(drawer.getByLabel('姓名', { exact: true })).toHaveValue('测试办理员工');
   await expect(drawer.getByText('已退回：请补充信息')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+});
+
+test('仅审核权限可进入待我审核，但不能新增或编辑草稿', async ({ page }) => {
+  await setupPersonnelPage(page);
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ id: 'review-hr', name: '审核人事', sysRole: 'hr_user', hrCapabilities: ['employee_archive_review'] })),
+  }));
+  await page.route('**/api/v1/employee-archives/reviews/list**', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ items: [], total: 0, page: 1, pageSize: 20 })) }));
+  await page.route('**/api/v1/departments/change-requests**', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ items: [], total: 0, page: 1, pageSize: 20 })) }));
+  await page.route('**/api/v1/positions/change-requests**', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ items: [], total: 0, page: 1, pageSize: 20 })) }));
+
+  await page.goto('/personnel-processing');
+  await expect(page.getByRole('tablist', { name: '人事办理分类' }).getByRole('tab')).toHaveText(['办理中', '待我审核']);
+  await expect(page.getByRole('button', { name: '新增员工', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('tab', { name: '草稿', exact: true })).toHaveCount(0);
+  await page.getByRole('tab', { name: '待我审核', exact: true }).click();
+  await expect(page.getByText('待审核变更', { exact: true })).toBeVisible();
 });
 
 test('归档员工可批量取消归档，当前档案和任职合同变更分区，普通HR不能切换钉钉登录', async ({ page }) => {
@@ -409,7 +433,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 1024, height: 768
   test(`四步抽屉在 ${viewport.width}px 下独立滚动且底部操作可见`, async ({ page }, testInfo) => {
     await setupPersonnelPage(page, { initialDraft: completeDraft() });
     await page.setViewportSize(viewport);
-    await page.goto('/users');
+    await page.goto('/personnel-processing');
     await page.getByRole('tab', { name: '草稿', exact: true }).click();
     await page.getByRole('button', { name: '继续编辑' }).first().click();
     const drawer = page.getByRole('dialog', { name: '新增员工' });
@@ -435,7 +459,7 @@ for (const intakeType of ['reentry', 'new_hire']) test(`${intakeType} 已生效�
   await page.route('**/api/v1/employee-archives/applications/list**', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ items: [request], total: 1, page: 1, pageSize: 100 })) }));
   await page.route('**/api/v1/employee-archives/applications/reentry-request', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(request)) }));
   await page.route('**/api/v1/employee-archives/reentry-user/reentry/current', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(request)) }));
-  await page.goto('/users');
+  await page.goto('/personnel-processing');
   await page.getByRole('tab', { name: '办理中', exact: true }).click();
   await page.locator('.desktop-result-table').getByRole('button', { name: '查看申请', exact: true }).first().click();
   await page.getByRole('dialog', { name: '办理记录', exact: true }).getByRole('button', { name: '修改后重新提交' }).click();

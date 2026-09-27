@@ -125,6 +125,10 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
       body: JSON.stringify(apiResponse({ total: 2, page: 1, pageSize: 20, items: [draft, archivedDraft] })),
     });
   });
+  await page.route('**/api/v1/employee-archives/applications/list**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+  }));
   await page.route('**/api/v1/employee-archives/drafts/restore', async (route) => {
     restoredDraftIds = route.request().postDataJSON().ids;
     return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ restored: 1, succeeded: restoredDraftIds, failed: [] })) });
@@ -196,8 +200,10 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   await expect.poll(() => userQueryUrls.some((url) => (
     new URL(url).searchParams.get('deptId') === activeEmployee.deptId
   ))).toBeTruthy();
-  await expect(categoryTabs.getByRole('tab')).toHaveText(['全部', '在职', '试用期', '待入职', '已离职', '办理中', '草稿', '已归档']);
+  await expect(categoryTabs.getByRole('tab')).toHaveText(['全部', '在职', '试用期', '待入职', '已离职', '已归档']);
   await expect(categoryTabs.getByRole('tab', { name: '全部' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('button', { name: '新增员工', exact: true })).toHaveCount(0);
+  await expect(page.getByRole('columnheader', { name: '办理进度', exact: true })).toHaveCount(0);
   await expect.poll(() => userQueryUrls.some((url) => new URL(url).searchParams.get('includeResigned') === 'true')).toBeTruthy();
   await expect(page.getByRole('button', { name: '草稿箱' })).toHaveCount(0);
   await expect(page.getByRole('button', { name: '归档所选（0）', exact: true })).toHaveCount(0);
@@ -265,7 +271,13 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   await expect(archivedDrawer.getByRole('button', { name: '新增任职记录' })).toHaveCount(0);
   await archivedDrawer.getByLabel('关闭此对话框').click();
 
-  await categoryTabs.getByRole('tab', { name: '草稿' }).click();
+  await page.goto('/personnel-processing');
+  await expect(page.getByRole('heading', { name: '人事办理', exact: true })).toBeVisible();
+  const processingTabs = page.getByRole('tablist', { name: '人事办理分类' });
+  await expect(processingTabs.getByRole('tab')).toHaveText(['办理中', '待我审核', '草稿']);
+  await expect(processingTabs.getByRole('tab', { name: '办理中' })).toHaveAttribute('aria-selected', 'true');
+  await expect(page.getByRole('button', { name: '新增员工', exact: true })).toBeVisible();
+  await processingTabs.getByRole('tab', { name: '草稿' }).click();
   await expect(page.getByRole('dialog', { name: '人事档案草稿' })).toHaveCount(0);
   const draftWorkspace = page.locator('.draft-workspace');
   await expect(draftWorkspace.locator('.desktop-result-table').getByText('草稿员工')).toBeVisible();
@@ -290,7 +302,7 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   await expect(createDrawer.getByLabel('工号')).toHaveCount(0);
   await createDrawer.getByLabel('关闭此对话框').click();
 
-  await categoryTabs.getByRole('tab', { name: '全部' }).click();
+  await page.goto('/users');
   await page.setViewportSize({ width: 1024, height: 768 });
   await expect(page.locator('.desktop-result-table')).toBeVisible();
   await page.setViewportSize({ width: 390, height: 844 });

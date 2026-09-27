@@ -55,7 +55,7 @@ const routes = [
   ['/approval', 'workflow'],
   ['/calibration', 'workflow'],
   ['/publish', 'workflow'],
-  ['/personnel-change-reviews', 'workflow'],
+  ['/personnel-processing', 'workflow'],
   ['/probation-reviews/manage', 'workflow'],
   ['/probation-reviews/manager', 'workflow'],
   ['/probation-reviews/mine', 'workflow'],

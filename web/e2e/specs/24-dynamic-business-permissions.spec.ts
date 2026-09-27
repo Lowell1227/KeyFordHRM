@@ -97,16 +97,19 @@ test('cycle ownership opens only calibration and preserves global HR access', ()
   }
 });
 
-test('personnel change review is visible only to HR reviewers and administrators', () => {
-  const reviewRoute = routes.find((route) => route.path === '/personnel-change-reviews');
-  expect(reviewRoute).toBeTruthy();
-  expect(canAccessRoute(reviewRoute!, {
+test('personnel processing is visible to archive editors, reviewers and administrators', () => {
+  const processingRoute = routes.find((route) => route.path === '/personnel-processing');
+  expect(processingRoute).toBeTruthy();
+  expect(canAccessRoute(processingRoute!, {
     sysRole: 'hr_user', canViewAll: false, hrCapabilities: ['employee_archive_review'],
   })).toBe(true);
-  expect(canAccessRoute(reviewRoute!, {
+  expect(canAccessRoute(processingRoute!, {
     sysRole: 'hr_user', canViewAll: false, hrCapabilities: ['employee_archive_edit'],
+  })).toBe(true);
+  expect(canAccessRoute(processingRoute!, {
+    sysRole: 'hr_user', canViewAll: false, hrCapabilities: ['organization_edit'],
   })).toBe(false);
-  expect(canAccessRoute(reviewRoute!, {
+  expect(canAccessRoute(processingRoute!, {
     sysRole: 'hr', canViewAll: true, hrCapabilities: [],
   })).toBe(true);
 });

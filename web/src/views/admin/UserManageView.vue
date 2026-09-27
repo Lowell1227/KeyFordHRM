@@ -35,6 +35,7 @@ import EmployeeCreateDrawer from './components/EmployeeCreateDrawer.vue';
 import EmployeeReentryDrawer from './components/EmployeeReentryDrawer.vue';
 import EmploymentRecordDrawer from './components/EmploymentRecordDrawer.vue';
 import EmployeeChangeHistory from './components/EmployeeChangeHistory.vue';
+import PersonnelPendingReviews from './components/PersonnelPendingReviews.vue';
 import { applicationProgress, applicationType } from '@/utils/employee-lifecycle';
 import { formatBusinessIdentityLabel } from '@/components/layout/business-identity';
 import { useAuthStore } from '@/stores/auth.store';
@@ -44,7 +45,9 @@ import { formatDate, formatDateTime } from '@/utils/date';
 import { isTopLevelDepartmentLeader } from '@/utils/organization-relations';
 import { formatPersonnelIdentityLabel } from '@/utils/personnel-identity';
 
-const props = withDefaults(defineProps<{ mode?: 'org' | 'users' }>(), { mode: 'users' });
+type PersonnelView = 'org' | 'users' | 'processing';
+
+const props = withDefaults(defineProps<{ mode?: PersonnelView }>(), { mode: 'users' });
 const auth = useAuthStore();
 
 const dingtalkStateLabels = {
@@ -91,8 +94,7 @@ const employmentTypeLabels: Record<string, string> = {
   external: '外部',
 };
 
-const activeView = ref<'org' | 'users'>(props.mode);
-watch(() => props.mode, (mode) => { activeView.value = mode; });
+const activeView = ref<PersonnelView>(props.mode);
 const isSystemAdmin = computed(() => auth.user?.sysRole === 'system_admin');
 const canResetPassword = computed(() => ['hr', 'system_admin'].includes(auth.user?.sysRole ?? ''));
 const hasHrCapability = (capability: HrCapability) => (
@@ -174,7 +176,8 @@ const hrCapabilityOptions: { label: string; value: HrCapability }[] = [
   { label: '转正管理与 HR 审批', value: 'confirmation_manage' },
 ];
 
-type EmployeeDirectoryCategory = 'all' | UserStatus | 'applications' | 'draft' | 'archived';
+type EmployeeDirectoryCategory = 'all' | UserStatus | 'archived';
+type PersonnelProcessingCategory = 'applications' | 'reviews' | 'draft';
 
 const employeeCategoryOptions: { label: string; value: EmployeeDirectoryCategory }[] = [
   { label: '全部', value: 'all' },
@@ -182,9 +185,13 @@ const employeeCategoryOptions: { label: string; value: EmployeeDirectoryCategory
   { label: '试用期', value: 'probation' },
   { label: '待入职', value: 'pending_entry' },
   { label: '已离职', value: 'resigned' },
-  { label: '办理中', value: 'applications' },
-  { label: '草稿', value: 'draft' },
   { label: '已归档', value: 'archived' },
+];
+
+const processingCategoryOptions: { label: string; value: PersonnelProcessingCategory }[] = [
+  { label: '办理中', value: 'applications' },
+  { label: '待我审核', value: 'reviews' },
+  { label: '草稿', value: 'draft' },
 ];
 
 const departments = ref<Department[]>([]);
@@ -239,11 +246,19 @@ const userList = ref<ManagedUser[]>([]);
 const userTotal = ref(0);
 const userLoading = ref(false);
 const employeeCategory = ref<EmployeeDirectoryCategory>('all');
+const processingCategory = ref<PersonnelProcessingCategory>('applications');
 const userArchiveView = computed(() => employeeCategory.value === 'archived');
 const isResignedCategory = computed(() => employeeCategory.value === 'resigned');
-const isDraftCategory = computed(() => employeeCategory.value === 'draft');
-const isApplicationsCategory = computed(() => employeeCategory.value === 'applications');
-const visibleCategoryOptions = computed(() => employeeCategoryOptions.filter((item) => !['draft', 'applications'].includes(item.value) || canViewArchive.value));
+const isDraftCategory = computed(() => activeView.value === 'processing' && processingCategory.value === 'draft');
+const isApplicationsCategory = computed(() => activeView.value === 'processing' && processingCategory.value === 'applications');
+const isReviewsCategory = computed(() => activeView.value === 'processing' && processingCategory.value === 'reviews');
+const visibleProcessingCategoryOptions = computed(() => processingCategoryOptions.filter((item) => (
+  item.value === 'applications'
+    ? canViewArchive.value
+    : item.value === 'reviews'
+      ? canReviewArchive.value
+      : canEditArchive.value
+)));
 const canSelectEmployeesForArchive = computed(() => (
   canEditArchive.value && (isResignedCategory.value || userArchiveView.value)
 ));
@@ -431,7 +446,6 @@ async function loadOrgMembers() {
 }
 
 async function loadUsers() {
-  if (isApplicationsCategory.value) { await loadApplications(); return; }
   userLoading.value = true;
   try {
     const categoryStatus = ['active', 'probation', 'pending_entry', 'resigned'].includes(employeeCategory.value)
@@ -458,12 +472,20 @@ async function changeEmployeeCategory(category: EmployeeDirectoryCategory) {
   employeeCategory.value = category;
   selectedUsers.value = [];
   userQuery.value.page = 1;
+  await loadUsers();
+}
+
+async function changeProcessingCategory(category: PersonnelProcessingCategory) {
+  processingCategory.value = category;
+  userQuery.value.page = 1;
+  if (category === 'applications') {
+    await loadApplications();
+    return;
+  }
   if (category === 'draft') {
     draftDialog.value.page = 1;
     await loadDrafts();
-    return;
   }
-  await loadUsers();
 }
 
 function canSelectEmployeeForArchive(row: ManagedUser) {
@@ -513,7 +535,8 @@ function onDeptSelect(deptId: string) {
 
 function onUserQueryChange() {
   userQuery.value.page = 1;
-  loadUsers();
+  if (isApplicationsCategory.value) loadApplications();
+  else loadUsers();
 }
 
 function resetUserFilters() {
@@ -524,7 +547,8 @@ function resetUserFilters() {
     deptId: undefined,
     sysRole: undefined,
   };
-  loadUsers();
+  if (isApplicationsCategory.value) loadApplications();
+  else loadUsers();
 }
 
 function getFinalApproverRule(dept: Department | null): string {
@@ -609,12 +633,12 @@ function refreshCurrentView() {
     return;
   }
   if (activeView.value === 'users') {
-    if (isDraftCategory.value) loadDrafts();
-    else if (isApplicationsCategory.value) loadApplications();
-    else loadUsers();
+    loadUsers();
     return;
   }
-  loadUsers();
+  if (isDraftCategory.value) loadDrafts();
+  else if (isApplicationsCategory.value) loadApplications();
+  else if (isReviewsCategory.value) reviewWorkspaceKey.value += 1;
 }
 
 const employeeArchiveDrawer = ref({
@@ -834,6 +858,7 @@ const draftDialog = ref({
 const applications = ref<EmployeeDataReview[]>([]);
 const applicationsLoading = ref(false);
 const applicationsError = ref('');
+const reviewWorkspaceKey = ref(0);
 const applicationDetail = ref<EmployeeDataReview | null>(null);
 const applicationDetailVisible = ref(false);
 const applicationSaving = ref(false);
@@ -968,7 +993,7 @@ async function openExistingEmployeeById(userId: string) {
 
 function afterEmployeeSubmitted() {
   employeeCreateDraft.value = null;
-  void Promise.all([loadUsers(), loadDrafts()]);
+  void Promise.all([loadUsers(), loadDrafts(), loadApplications()]);
 }
 
 function afterEmploymentSubmitted() {
@@ -977,11 +1002,11 @@ function afterEmploymentSubmitted() {
     employmentRecordDrawerArchive.value = null;
     employmentRecordDrawerMode.value = 'default';
   }
-  void loadUsers();
+  void Promise.all([loadUsers(), loadApplications()]);
 }
 
 function afterReentrySubmitted() {
-  void loadUsers();
+  void Promise.all([loadUsers(), loadApplications()]);
 }
 
 async function loadDrafts() {
@@ -1561,21 +1586,36 @@ async function confirmRosterImport() {
   }
 }
 
-watch(activeView, (view) => {
-  if (view === 'users') {
-    if (userList.value.length === 0) loadUsers();
+watch(() => props.mode, async (mode) => {
+  activeView.value = mode;
+  if (mode === 'org') {
+    await Promise.all([loadDepartments(), loadUnassignedMemberTotal()]);
+    await loadOrgMembers();
+    return;
+  }
+  if (mode === 'users') {
+    employeeCategory.value = 'all';
+    await loadUsers();
+    return;
+  }
+  if (mode === 'processing') {
+    processingCategory.value = visibleProcessingCategoryOptions.value[0]?.value ?? 'applications';
+    await changeProcessingCategory(processingCategory.value);
   }
 });
 
 function refreshAfterPersonnelReview() {
-  void Promise.all([loadDepartments(), loadUsers(), loadOrgMembers(), loadUnassignedMemberTotal()]);
+  void Promise.all([loadDepartments(), loadUsers(), loadApplications(), loadOrgMembers(), loadUnassignedMemberTotal()]);
 }
 
 onMounted(async () => {
   document.addEventListener('click', closeDepartmentContextMenu);
   window.addEventListener('personnel-data-changed', refreshAfterPersonnelReview);
-  await Promise.all([loadDepartments(), loadUsers(), loadUnassignedMemberTotal()]);
-  await loadOrgMembers();
+  const initialLoads: Promise<unknown>[] = [loadDepartments(), loadUnassignedMemberTotal()];
+  if (activeView.value === 'users') initialLoads.push(loadUsers());
+  if (activeView.value === 'processing') initialLoads.push(changeProcessingCategory(processingCategory.value));
+  await Promise.all(initialLoads);
+  if (activeView.value === 'org') await loadOrgMembers();
 });
 
 onBeforeUnmount(() => {
@@ -1585,21 +1625,20 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <BusinessListPage :variant="activeView === 'org' ? 'split-master' : 'record'" :loading="deptLoading || userLoading" class="user-manage-view">
+  <BusinessListPage :variant="activeView === 'org' ? 'split-master' : activeView === 'processing' ? 'workflow' : 'record'" :loading="deptLoading || userLoading" class="user-manage-view">
     <template #workspace>
     <ChartCard>
       <template #title>
         <div class="page-title">
           <div>
-            <h2>{{ activeView === 'org' ? '组织架构' : '员工档案' }}</h2>
+            <h2>{{ activeView === 'org' ? '组织架构' : activeView === 'processing' ? '人事办理' : '员工档案' }}</h2>
           </div>
           <div class="page-title__actions">
             <template v-if="activeView === 'org'">
               <el-button v-if="canEditOrganization" @click="openDepartmentCreate(null)">新增一级部门</el-button>
               <el-button v-if="canEditOrganization && selectedDept && !selectedOrgIsUnassigned" type="primary" @click="openDepartmentCreate(selectedDept)">新增下级部门</el-button>
             </template>
-            <template v-else>
-              <el-button v-if="canEditArchive && !userArchiveView" type="primary" @click="openEmployeeCreate">新增员工</el-button>
+            <template v-else-if="activeView === 'users'">
               <el-button
                 v-if="canEditArchive && isResignedCategory"
                 :disabled="selectedArchiveCount === 0"
@@ -1608,6 +1647,7 @@ onBeforeUnmount(() => {
               <el-button v-if="canEditArchive && userArchiveView" :disabled="selectedArchiveCount === 0" @click="restoreSelection()">取消归档</el-button>
               <el-button v-if="canEditArchive" :icon="UploadFilled" @click="openRosterImportDialog">导入花名册</el-button>
             </template>
+            <el-button v-else-if="canEditArchive" type="primary" @click="openEmployeeCreate">新增员工</el-button>
             <el-button :icon="Search" @click="refreshCurrentView">刷新</el-button>
           </div>
         </div>
@@ -1798,8 +1838,8 @@ onBeforeUnmount(() => {
         </main>
       </section>
 
-      <section v-else-if="activeView === 'users'" class="directory-view">
-        <QueryFilterPanel v-if="!isDraftCategory" class="roster-filter-panel">
+      <section v-else class="directory-view">
+        <QueryFilterPanel v-if="activeView === 'users' || isApplicationsCategory" class="roster-filter-panel">
           <div class="light-filter">
             <el-input
               v-model="userQuery.keyword"
@@ -1817,7 +1857,7 @@ onBeforeUnmount(() => {
                 :value="dept.id"
               />
             </el-select>
-            <el-select v-if="!isApplicationsCategory" v-model="userQuery.sysRole" placeholder="全部系统权限" clearable>
+            <el-select v-if="activeView === 'users'" v-model="userQuery.sysRole" placeholder="全部系统权限" clearable>
               <el-option v-for="opt in sysRoleOptions" :key="opt.value" :label="opt.label" :value="opt.value" />
             </el-select>
             <el-button type="primary" @click="onUserQueryChange">查询</el-button>
@@ -1825,15 +1865,29 @@ onBeforeUnmount(() => {
           </div>
         </QueryFilterPanel>
 
-        <nav class="employee-category-tabs" role="tablist" aria-label="员工档案分类">
+        <nav v-if="activeView === 'users'" class="employee-category-tabs" role="tablist" aria-label="员工档案分类">
           <button
-            v-for="item in visibleCategoryOptions"
+            v-for="item in employeeCategoryOptions"
             :key="item.value"
             type="button"
             role="tab"
             :class="{ active: employeeCategory === item.value }"
             :aria-selected="employeeCategory === item.value"
             @click="changeEmployeeCategory(item.value)"
+          >
+            {{ item.label }}
+          </button>
+        </nav>
+
+        <nav v-else class="employee-category-tabs" role="tablist" aria-label="人事办理分类">
+          <button
+            v-for="item in visibleProcessingCategoryOptions"
+            :key="item.value"
+            type="button"
+            role="tab"
+            :class="{ active: processingCategory === item.value }"
+            :aria-selected="processingCategory === item.value"
+            @click="changeProcessingCategory(item.value)"
           >
             {{ item.label }}
           </button>
@@ -1857,7 +1911,15 @@ onBeforeUnmount(() => {
           <ListPagination v-model:current-page="userPage" v-model:page-size="userPageSize" :total="applicationGroups.length" :page-sizes="[10, 20, 50, 100]" />
         </template>
 
-        <template v-else-if="!isDraftCategory">
+        <PersonnelPendingReviews
+          v-else-if="isReviewsCategory"
+          :key="reviewWorkspaceKey"
+          :can-review-employee="canReviewArchive"
+          :can-review-department="canReviewDepartmentChanges"
+          :can-review-position="canReviewDepartmentChanges"
+        />
+
+        <template v-else-if="activeView === 'users'">
           <div class="directory-table-region desktop-result-table">
             <el-table
               v-loading="userLoading"
@@ -1930,7 +1992,6 @@ onBeforeUnmount(() => {
                   </el-tag>
                 </template>
               </el-table-column>
-              <el-table-column v-if="canViewArchive" label="办理进度" min-width="170"><template #default="{ row }"><el-button v-for="request in currentApplications(row as ManagedUser)" :key="request.id" link type="primary" @click="openApplication(request.id)">{{ applicationType(request) }} · {{ applicationProgress(request) }}</el-button><span v-if="!currentApplications(row as ManagedUser).length" class="muted-text">—</span></template></el-table-column>
               <el-table-column label="操作" width="400" fixed="right">
                 <template #default="{ row }">
                   <el-button v-if="canViewArchive" link type="primary" size="small" @click="openEmployeeArchive(row as ManagedUser)">查看档案</el-button>
@@ -1960,7 +2021,6 @@ onBeforeUnmount(() => {
               <div class="mobile-result-field"><span class="mobile-result-field__label">绩效上级</span><span class="mobile-result-field__value">{{ item.directManagerName || '未设置' }}</span></div>
               <div class="mobile-result-field"><span class="mobile-result-field__label">系统权限</span><span class="mobile-result-field__value">{{ systemPermissionLabel(item) }}</span></div>
               <div class="mobile-result-field"><span class="mobile-result-field__label">钉钉登录</span><span class="mobile-result-field__value">{{ dingtalkStateLabels[item.dingtalkBindingState ?? 'unbound'] }}</span></div>
-              <div v-if="canViewArchive && currentApplications(item).length" class="mobile-result-field"><span class="mobile-result-field__label">办理进度</span><el-button v-for="request in currentApplications(item)" :key="request.id" link type="primary" @click="openApplication(request.id)">{{ applicationType(request) }} · {{ applicationProgress(request) }}</el-button></div>
               <template #actions>
                 <el-button v-if="canViewArchive" link type="primary" @click="openEmployeeArchive(item)">查看档案</el-button>
                 <el-button v-if="canEditArchive && !userArchiveView && ['active', 'probation'].includes(item.status)" link type="primary" @click="openPersonSettingsDialog(item)">人员设置</el-button>
@@ -2553,7 +2613,7 @@ onBeforeUnmount(() => {
                   <div class="person-settings__tooltip-content">
                     <div class="person-settings__tooltip-line"><strong>作用：</strong>用于目标审核、主管评分和待办归属。</div>
                     <div class="person-settings__tooltip-line"><strong>区别：</strong>与花名册“直属主管”相互独立。</div>
-                    <div class="person-settings__tooltip-line"><strong>审核：</strong>由 HR 管理员在“人事变更审核 → 员工档案”中处理。</div>
+                    <div class="person-settings__tooltip-line"><strong>审核：</strong>由 HR 管理员在“人事办理 → 待我审核”中处理。</div>
                     <div class="person-settings__tooltip-line"><strong>生效：</strong>审核通过前继续使用原关系，不改变岗位或系统权限。</div>
                   </div>
                 </template>
@@ -2577,7 +2637,7 @@ onBeforeUnmount(() => {
           >
             {{ selectedManagerRelationChanged ? '提交后待 HR 审核' : '已生效' }}
           </el-tag>
-          <span v-if="selectedManagerRelationChanged">审核入口：人事变更审核 &gt; 员工档案</span>
+          <span v-if="selectedManagerRelationChanged">审核入口：人事办理 &gt; 待我审核</span>
         </div>
         <el-form-item>
           <template #label>
@@ -2640,6 +2700,7 @@ onBeforeUnmount(() => {
 
 <style scoped>
 .person-settings__role-tip { width: 100%; margin: 4px 0 0; }
+.user-manage-view :deep(.pending-review-workspace) { margin-top: 0; padding: 0; border: 0; border-radius: 0; }
 .page-title {
   display: flex;
   align-items: flex-start;

@@ -77,6 +77,10 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 1024, height: 768
 }
 
 test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/employee-archives/applications/list**', (route) => route.fulfill({
+    contentType: 'application/json',
+    body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
+  }));
   await page.route('**/api/v1/employee-archives/reviews/list**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 20, items: [] })),
@@ -95,7 +99,7 @@ test('uses concise and consistent organization relationship concepts', async () 
     '直属主管',
     '系统权限',
     '最终业务审批人',
-    '人事变更审核',
+    '人事办理',
     '未分配人员',
     '删除',
   ]) {
@@ -484,7 +488,7 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await dialog.getByRole('button', { name: '绩效直属上级说明' }).hover();
   const managerTooltip = page.locator('.el-popper[role="tooltip"]:visible').filter({ hasText: '目标审核、主管评分和待办归属' });
   await expect(managerTooltip.locator('.person-settings__tooltip-line')).toHaveCount(4);
-  await expect(managerTooltip).toContainText('人事变更审核 → 员工档案');
+  await expect(managerTooltip).toContainText('人事办理 → 待我审核');
   await dialog.getByRole('button', { name: '业务职责说明' }).hover();
   const responsibilityTooltip = page.locator('.el-popper[role="tooltip"]:visible').filter({ hasText: '员工是基础人员身份' });
   await expect(responsibilityTooltip.locator('.person-settings__tooltip-line')).toHaveCount(2);
@@ -495,7 +499,7 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await dialog.locator('.el-form-item').filter({ hasText: '绩效直属上级' }).locator('.el-select').click();
   await page.locator('.el-select-dropdown:visible .el-select-dropdown__item').filter({ hasText: '方园' }).click();
   await expect(dialog).toContainText('提交后待 HR 审核');
-  await expect(dialog).toContainText('审核入口：人事变更审核 > 员工档案');
+  await expect(dialog).toContainText('审核入口：人事办理 > 待我审核');
   await expect(dialog.locator('.person-settings__alert')).toHaveCount(0);
   await expect(dialog).not.toContainText('升级为主管');
   await expect(dialog).not.toContainText('主管权限：未开通');
@@ -505,7 +509,8 @@ test('uses one person settings dialog and keeps performance identity separate fr
     managerId: manager.id,
   });
   await expect(page.getByText('待审核变更', { exact: true })).toHaveCount(0);
-  await page.getByRole('button', { name: '人事变更审核', exact: true }).click();
+  await page.getByRole('button', { name: '人事办理', exact: true }).click();
+  await page.getByRole('tab', { name: '待我审核', exact: true }).click();
   await expect(page.getByText('待审核变更', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: /员工档案 1/ })).toBeVisible();
 
