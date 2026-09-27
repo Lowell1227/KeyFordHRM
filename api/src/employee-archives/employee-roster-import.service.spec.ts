@@ -57,6 +57,35 @@ function row(rowNumber: number, employeeNo: string, name: string): ParsedEmploye
 }
 
 describe('EmployeeRosterImportService', () => {
+  it('花名册中的待入职状态映射为数据库待入职状态', async () => {
+    const persistedRows: any[] = [];
+    const prisma = {
+      user: { findMany: jest.fn().mockResolvedValue([]) },
+      department: { findMany: jest.fn().mockResolvedValue([]) },
+      employeeImportBatch: {
+        create: jest.fn().mockResolvedValue({ id: 'batch-pending-entry' }),
+        update: jest.fn(async ({ data }: any) => ({ id: 'batch-pending-entry', ...data })),
+      },
+      employeeImportRow: {
+        createMany: jest.fn(async ({ data }: any) => {
+          persistedRows.push(...data);
+          return { count: data.length };
+        }),
+      },
+    };
+    const service = new EmployeeRosterImportService(prisma as any);
+    const rosterRow = row(2, '001', '待入职员工');
+    rosterRow.employee.employeeStatusText = '待入职';
+
+    await service.createPreviewFromRows(
+      [rosterRow],
+      { mode: 'incremental', fileName: '花名册-V2.xlsx', fileHash: 'hash-pending-entry' },
+      { id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null, isAssessorOnly: false, canViewAll: true },
+    );
+
+    expect(persistedRows[0].normalizedValue.employee.employeeStatus).toBe('pending_entry');
+  });
+
   it('全量预检以花名册生成组织方案，缺少现有部门时不阻断确认', async () => {
     const persistedRows: any[] = [];
     const prisma = {
@@ -500,7 +529,9 @@ describe('EmployeeRosterImportService', () => {
       sequence: 0,
       kind: 'contract',
       name: '劳动合同',
+      signingCompany: '北京孚德',
       signedAt: new Date('2024-01-01T00:00:00.000Z'),
+      effectiveFrom: new Date('2024-01-02T00:00:00.000Z'),
       expiresAt: new Date('2026-12-31T00:00:00.000Z'),
       termText: '3年',
       originalCompany: null,
@@ -575,6 +606,12 @@ describe('EmployeeRosterImportService', () => {
         employeeName: '新员工',
         profileReviewStatus: 'pending',
         performanceReviewStatus: 'pending',
+        proposedValue: expect.objectContaining({
+          contracts: [expect.objectContaining({
+            signingCompany: '北京孚德',
+            effectiveFrom: '2024-01-02T00:00:00.000Z',
+          })],
+        }),
       }),
     });
     expect(tx.user.create).not.toHaveBeenCalled();

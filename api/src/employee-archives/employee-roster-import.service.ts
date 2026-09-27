@@ -355,8 +355,8 @@ export class EmployeeRosterImportService {
         ));
         const proposedContracts = raw.contracts.map((contract) => ({
           ...contract,
-          signingCompany: raw.employee.companyText,
-          effectiveFrom: contract.signedAt,
+          signingCompany: contract.signingCompany ?? raw.employee.companyText,
+          effectiveFrom: contract.effectiveFrom ?? contract.signedAt,
         }));
         const needsProfileReview = !current
           || !this.sameReviewRecord(currentEmployee, proposedEmployee, employeeReviewKeys)
@@ -986,6 +986,7 @@ export class EmployeeRosterImportService {
 
   private mapEmployeeStatus(value: string | null, warnings: string[]): UserStatus {
     if (value?.includes('离职')) return UserStatus.resigned;
+    if (value?.includes('待入职')) return UserStatus.pending_entry;
     if (value?.includes('试用')) return UserStatus.probation;
     if (value && !value.includes('正式') && !value.includes('在职')) {
       warnings.push(`员工状态“${value}”暂按在职处理，请 HR 确认`);
