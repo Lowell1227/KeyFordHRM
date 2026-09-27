@@ -124,6 +124,32 @@ test('新增员工采用四步向导，任职关系同页且补充资料可跳�
   await expect(drawer.getByRole('button', { name: '提交审核' })).toBeVisible();
 });
 
+test('缺失的提交信息只在抽屉内汇总并返回对应步骤', async ({ page }) => {
+  const initialDraft = completeDraft();
+  initialDraft.proposedValue.employee.entryDate = null;
+  initialDraft.proposedValue.employee.effectiveFrom = null;
+  initialDraft.proposedValue.draftMeta = { layoutVersion: 2, currentStep: 3, completedSteps: [0, 1, 2] };
+  await setupPersonnelPage(page, { initialDraft });
+  await page.goto('/users');
+  await page.getByRole('tab', { name: '草稿', exact: true }).click();
+  await page.getByRole('button', { name: '继续编辑' }).click();
+
+  const drawer = page.getByRole('dialog', { name: '新增员工' });
+  const reminder = drawer.getByRole('alert').filter({ hasText: '提交前还需补充' });
+  await expect(drawer.locator('.el-step__title.is-process')).toHaveText('本次任职');
+  await drawer.getByRole('button', { name: '下一步' }).click();
+  await drawer.getByRole('button', { name: '下一步' }).click();
+  await expect(reminder).toHaveCount(1);
+  await expect(reminder).toContainText('提交前还需补充：入职日期、本次记录生效日期');
+
+  await drawer.getByRole('button', { name: '提交审核' }).click();
+
+  await expect(drawer.locator('.el-step__title.is-process')).toHaveText('本次任职');
+  await expect(reminder).toBeVisible();
+  await expect(reminder).toContainText('提交前还需补充：入职日期、本次记录生效日期');
+  await expect(page.locator('.el-message')).toHaveCount(0);
+});
+
 test('输入姓名后静默自动保存并从上次步骤继续填写', async ({ page }) => {
   const state = await setupPersonnelPage(page);
   await page.setViewportSize({ width: 1440, height: 900 });
@@ -216,6 +242,78 @@ function completeDraft() {
     createdAt: '2026-09-26T08:00:00.000Z', updatedAt: '2026-09-26T08:00:00.000Z',
   };
 }
+
+for (const scenario of [
+  { name: '四步草稿', layoutVersion: 2, currentStep: 3, width: 1440 },
+  { name: '历史七步草稿', layoutVersion: 1, currentStep: 6, width: 1024 },
+  { name: '手机草稿', layoutVersion: 2, currentStep: 3, width: 390 },
+]) {
+  test(`草稿进度：${scenario.name}返回缺失任职信息，不把跳过当完成`, async ({ page }, testInfo) => {
+    const initialDraft = completeDraft();
+    initialDraft.proposedValue.employee.deptId = '';
+    initialDraft.proposedValue.employee.entryDate = '';
+    initialDraft.proposedValue.employee.effectiveFrom = '';
+    initialDraft.proposedValue.draftMeta = { ...scenario, completedSteps: [0, 1, 2, 3, 4, 5] };
+    const state = await setupPersonnelPage(page, { initialDraft });
+    await page.setViewportSize({ width: scenario.width, height: 900 });
+    await page.goto('/users');
+    await page.getByRole('tab', { name: '草稿', exact: true }).click();
+    await page.getByRole('button', { name: '继续编辑' }).click();
+
+    const drawer = page.getByRole('dialog', { name: '新增员工' });
+    await expect(drawer.locator('.el-step__title.is-process')).toHaveText('本次任职');
+    await expect(drawer.getByLabel('入职日期', { exact: true })).toHaveValue('');
+    await expect(drawer.getByLabel('姓名', { exact: true })).toHaveValue('测试办理员工');
+    await expect(drawer.locator('.el-step').nth(2)).toContainText('可跳过');
+    if (scenario.width === 390) await expect(drawer.locator('.mobile-step')).toHaveText('2/4 本次任职');
+    await page.screenshot({ path: testInfo.outputPath('resumed-draft.png'), animations: 'disabled' });
+
+    await drawer.getByRole('button', { name: '下一步' }).click();
+    await drawer.getByRole('button', { name: '下一步' }).click();
+    await expect(drawer.locator('.el-step').nth(1).locator('.el-step__title')).not.toHaveClass(/is-success/);
+    await expect(drawer.locator('.el-step').nth(2).locator('.el-step__title')).not.toHaveClass(/is-success/);
+    await expect(drawer.getByRole('alert')).toContainText('提交前还需补充：部门、入职日期、本次记录生效日期');
+    await expect(drawer.getByRole('button', { name: '提交审核' })).toBeVisible();
+    await drawer.getByRole('button', { name: '保存并退出' }).click();
+    await expect(drawer).toHaveCount(0);
+    expect(state.draftBodies.at(-1)).toMatchObject({ name: '测试办理员工', draftStep: 3, completedSteps: [0] });
+    expect(state.createBodies).toHaveLength(0);
+    await page.getByRole('button', { name: '继续编辑' }).click();
+    await expect(page.getByRole('dialog', { name: '新增员工' }).locator('.el-step__title.is-process')).toHaveText('本次任职');
+  });
+}
+
+for (const savedStep of [0, 2, 3]) {
+  test(`草稿进度：必要信息齐全时保留第${savedStep + 1}步`, async ({ page }) => {
+    const initialDraft = completeDraft();
+    initialDraft.proposedValue.draftMeta.currentStep = savedStep;
+    await setupPersonnelPage(page, { initialDraft });
+    await page.goto('/users');
+    await page.getByRole('tab', { name: '草稿', exact: true }).click();
+    await page.getByRole('button', { name: '继续编辑' }).click();
+    await expect(page.getByRole('dialog', { name: '新增员工' }).locator('.el-step__title.is-process'))
+      .toHaveText(['基本信息', '本次任职', '补充资料', '检查并提交'][savedStep]);
+  });
+}
+
+test('草稿进度：清空已填日期后立即取消完成标记，仍可继续和保存', async ({ page }) => {
+  const initialDraft = completeDraft();
+  initialDraft.proposedValue.draftMeta = { layoutVersion: 2, currentStep: 3, completedSteps: [0, 1, 2] };
+  const state = await setupPersonnelPage(page, { initialDraft });
+  await page.goto('/users');
+  await page.getByRole('tab', { name: '草稿', exact: true }).click();
+  await page.getByRole('button', { name: '继续编辑' }).click();
+  const drawer = page.getByRole('dialog', { name: '新增员工' });
+  await expect(drawer.locator('.el-step').nth(1).locator('.el-step__title')).toHaveClass(/is-success/);
+  await drawer.getByRole('button', { name: '上一步' }).click();
+  await drawer.getByRole('button', { name: '上一步' }).click();
+  await drawer.getByLabel('入职日期', { exact: true }).clear();
+  await drawer.getByLabel('入职日期', { exact: true }).press('Enter');
+  await drawer.getByRole('button', { name: '下一步' }).click();
+  await expect(drawer.locator('.el-step').nth(1).locator('.el-step__title')).not.toHaveClass(/is-success/);
+  await drawer.getByRole('button', { name: '保存并退出' }).click();
+  expect(state.draftBodies.at(-1)).toMatchObject({ draftStep: 2, completedSteps: [0] });
+});
 
 test('手机号同号人工确认在提交强制复查后仍有效，非法证件不能借有效手机号跳过', async ({ page }) => {
   const state = await setupPersonnelPage(page, { initialDraft: completeDraft() });

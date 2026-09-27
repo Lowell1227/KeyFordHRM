@@ -35,7 +35,6 @@ const supplementGroups = ref<string[]>([]);
 const fieldErrors = reactive<Record<string, string>>({});
 const saveError = ref('');
 const currentStep = ref(0);
-const completedSteps = ref<number[]>([]);
 const draftId = ref<string>();
 const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
 const savingAction = ref<'draft' | 'submit' | null>(null);
@@ -48,6 +47,7 @@ const hydrating = ref(false);
 const idNumberConfigured = ref(false);
 const bankAccountConfigured = ref(false);
 const plannedRegularDateAuto = ref(true);
+const showSubmitReminder = ref(false);
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let draftSavePromise: Promise<boolean> | null = null;
 
@@ -119,10 +119,23 @@ const saveStateLabel = computed(() => ({
 const selectedDepartment = computed(() => flatten(props.departments).find((item) => item.id === form.deptId));
 const selectedPosition = computed(() => positions.value.find((item) => item.id === form.positionId));
 const missingForSubmit = computed(() => [
-  !form.deptId ? '部门' : '',
-  !form.entryDate ? '入职日期' : '',
-  !form.effectiveFrom ? '生效日期' : '',
-].filter(Boolean));
+  { label: '姓名', step: 0, missing: !form.name.trim() },
+  { label: '部门', step: 1, missing: !form.deptId },
+  { label: '入职日期', step: 1, missing: !form.entryDate },
+  { label: '本次记录生效日期', step: 1, missing: !form.effectiveFrom },
+].filter((item) => item.missing));
+const missingForSubmitLabels = computed(() => missingForSubmit.value.map((item) => item.label));
+// Visiting a step is not completion; optional supplements have no completeness requirement.
+const completedSteps = computed(() => [0, 1].filter((step) => (
+  !missingForSubmit.value.some((item) => item.step === step)
+)));
+
+function stepStatus(step: number) {
+  if (step === currentStep.value) return 'process';
+  if (completedSteps.value.includes(step)) return 'success';
+  if (step === 2 && currentStep.value > step) return 'finish';
+  return 'wait';
+}
 
 function flatten(items: Department[]): Department[] {
   return items.flatMap((item) => [item, ...flatten(item.children ?? [])]);
@@ -140,13 +153,10 @@ function reset() {
   const performance = proposed.performance ?? {};
   const draftMeta = proposed.draftMeta ?? {};
   draftId.value = props.draft?.id;
-  const savedStep = Number(draftMeta.currentStep ?? 0);
-  currentStep.value = draftMeta.layoutVersion === 2
+  const savedStep = Number.isInteger(draftMeta.currentStep) ? Number(draftMeta.currentStep) : 0;
+  const restoredStep = draftMeta.layoutVersion === 2
     ? Math.min(Math.max(savedStep, 0), 3)
     : [0, 1, 1, 2, 2, 2, 3][savedStep] ?? 0;
-  completedSteps.value = Array.isArray(draftMeta.completedSteps)
-    ? draftMeta.completedSteps.filter((value: unknown) => Number.isInteger(value)).map(Number)
-    : [];
   Object.assign(form, {
     name: employee.name ?? '',
     phone: employee.phone ?? profile.phone ?? '',
@@ -195,11 +205,13 @@ function reset() {
     : [];
   idNumberConfigured.value = Boolean(profile.idNumberConfigured);
   bankAccountConfigured.value = Boolean(profile.bankAccountConfigured);
+  currentStep.value = props.draft ? missingForSubmit.value[0]?.step ?? restoredStep : 0;
   identityResult.value = null;
   phoneDuplicateAcknowledged.value = false;
   lastIdentityKey.value = '';
   saveState.value = props.draft ? 'saved' : 'idle';
   saveError.value = '';
+  showSubmitReminder.value = false;
   Object.keys(fieldErrors).forEach((key) => delete fieldErrors[key]);
   nextTick(() => {
     hydrating.value = false;
@@ -229,7 +241,7 @@ watch(() => form.employee.probationMonths, () => {
   if (!hydrating.value) fillPlannedRegularDate();
 });
 watch(form, scheduleAutosave, { deep: true });
-watch([currentStep, completedSteps], scheduleAutosave, { deep: true });
+watch(currentStep, scheduleAutosave);
 
 function fillPlannedRegularDate() {
   if (!plannedRegularDateAuto.value || !form.entryDate || form.employee.probationMonths == null) return;
@@ -390,16 +402,15 @@ async function nextStep() {
     ElMessage.warning('填写姓名后即可继续，其他信息可稍后补充');
     return;
   }
-  if (!completedSteps.value.includes(currentStep.value)) completedSteps.value.push(currentStep.value);
   currentStep.value = Math.min(currentStep.value + 1, stepTitles.length - 1);
   await persistDraft('auto');
 }
 
 async function submit() {
   Object.keys(fieldErrors).forEach((key) => delete fieldErrors[key]);
-  if (!form.name.trim() || !form.deptId || !form.entryDate || !form.effectiveFrom) {
-    ElMessage.warning(`提交审核前请补充：${['姓名', ...missingForSubmit.value].join('、')}`);
-    currentStep.value = form.name.trim() ? 1 : 0;
+  if (missingForSubmit.value.length) {
+    showSubmitReminder.value = true;
+    currentStep.value = missingForSubmit.value[0].step;
     return;
   }
   if (form.phone.trim() && !/^1\d{10}$/.test(normalizedPhone())) fieldErrors.phone = '请填写完整的 11 位手机号';
@@ -502,14 +513,27 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
   >
     <div class="wizard-shell">
       <div class="wizard-head">
-        <el-steps :active="currentStep" align-center finish-status="success" class="desktop-steps">
-          <el-step v-for="title in stepTitles" :key="title" :title="title" />
+        <el-steps :active="currentStep" align-center class="desktop-steps">
+          <el-step
+            v-for="(title, index) in stepTitles"
+            :key="title"
+            :title="title"
+            :status="stepStatus(index)"
+            :description="index === 2 ? '可跳过' : ''"
+          />
         </el-steps>
         <div class="mobile-step"><strong>{{ currentStep + 1 }}/{{ stepTitles.length }} {{ stepTitles[currentStep] }}</strong></div>
         <span class="save-state" :class="`save-state--${saveState}`">{{ saveStateLabel }}</span>
       </div>
       <el-alert v-if="draft?.rejectedReason" :title="`已退回：${draft.rejectedReason}`" type="warning" :closable="false" />
       <el-alert v-if="saveError" :title="saveError" type="error" :closable="false" />
+      <el-alert
+        v-if="missingForSubmit.length && (currentStep === 3 || showSubmitReminder)"
+        :title="`提交前还需补充：${missingForSubmitLabels.join('、')}`"
+        type="warning"
+        :closable="false"
+        show-icon
+      />
 
       <el-form label-position="top" class="wizard-form">
         <section v-show="currentStep === 0" class="wizard-section">
@@ -634,7 +658,6 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
 
         <section v-show="currentStep === 3" class="wizard-section">
           <div class="section-head"><div><h3>预览提交</h3><p>提交后进入 HR 审核；审核通过前不会写入正式员工档案。</p></div></div>
-          <el-alert v-if="missingForSubmit.length" :title="`提交前还需补充：${missingForSubmit.join('、')}`" type="warning" :closable="false" show-icon />
           <dl class="preview-grid">
             <div><dt>姓名</dt><dd>{{ form.name || '未填写' }}</dd></div><div><dt>手机号</dt><dd>{{ form.phone || '未填写' }}</dd></div>
             <div><dt>部门</dt><dd>{{ selectedDepartment?.fullPath || selectedDepartment?.name || '未填写' }}</dd></div><div><dt>岗位</dt><dd>{{ selectedPosition?.name || form.employee.position || '未填写' }}</dd></div>
