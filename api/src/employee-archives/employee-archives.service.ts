@@ -510,10 +510,13 @@ export class EmployeeArchivesService {
     return value.map((item) => this.pickFields(this.record(item), ['name', 'url', 'size', 'mimeType']));
   }
 
-  async listDrafts(query: { page: number; pageSize: number; state: 'draft' | 'archived' }) {
-    const where: Prisma.EmployeeDataChangeRequestWhereInput = query.state === 'archived'
-      ? { recordStatus: 'archived', archivedAt: { not: null } }
-      : { recordStatus: 'draft', archivedAt: null };
+  async listDrafts(query: { page: number; pageSize: number }) {
+    const where: Prisma.EmployeeDataChangeRequestWhereInput = {
+      OR: [
+        { recordStatus: 'draft', archivedAt: null },
+        { recordStatus: 'archived', archivedAt: { not: null } },
+      ],
+    };
     const [items, total] = await Promise.all([
       this.prisma.employeeDataChangeRequest.findMany({
         where,

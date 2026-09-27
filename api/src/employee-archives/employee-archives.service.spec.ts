@@ -1510,6 +1510,34 @@ describe('EmployeeArchivesService', () => {
     expect(tx.user.updateMany).not.toHaveBeenCalled();
   });
 
+  it('草稿列表同时返回当前草稿和历史已归档草稿', async () => {
+    const findMany = jest.fn().mockResolvedValue([]);
+    const count = jest.fn().mockResolvedValue(0);
+    const service = new EmployeeArchivesService({
+      employeeDataChangeRequest: { findMany, count },
+    } as any);
+
+    await expect(service.listDrafts({ page: 1, pageSize: 20 })).resolves.toEqual({
+      items: [], total: 0, page: 1, pageSize: 20,
+    });
+    expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        OR: [
+          { recordStatus: 'draft', archivedAt: null },
+          { recordStatus: 'archived', archivedAt: { not: null } },
+        ],
+      },
+    }));
+    expect(count).toHaveBeenCalledWith({
+      where: {
+        OR: [
+          { recordStatus: 'draft', archivedAt: null },
+          { recordStatus: 'archived', archivedAt: { not: null } },
+        ],
+      },
+    });
+  });
+
   it('草稿由操作员手动归档并保留记录', async () => {
     const updateMany = jest.fn().mockResolvedValue({ count: 1 });
     const deleteMany = jest.fn();

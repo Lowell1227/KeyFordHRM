@@ -271,10 +271,6 @@ export class EmployeeDraftQueryDto {
   @Min(1)
   @Max(100)
   pageSize = 20;
-
-  @IsOptional()
-  @IsIn(['draft', 'archived'])
-  state: 'draft' | 'archived' = 'draft';
 }
 
 export class ArchivePersonnelRecordsDto {

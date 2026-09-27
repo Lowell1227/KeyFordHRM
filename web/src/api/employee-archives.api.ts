@@ -301,7 +301,7 @@ export const employeeArchivesApi = {
     return http.post('/employee-archives/drafts', body) as unknown as Promise<EmployeeDataReview>;
   },
 
-  listDrafts(params: { page?: number; pageSize?: number; state?: 'draft' | 'archived' } = {}): Promise<EmployeeDraftPage> {
+  listDrafts(params: { page?: number; pageSize?: number } = {}): Promise<EmployeeDraftPage> {
     return http.get('/employee-archives/drafts/list', { params }) as unknown as Promise<EmployeeDraftPage>;
   },
 

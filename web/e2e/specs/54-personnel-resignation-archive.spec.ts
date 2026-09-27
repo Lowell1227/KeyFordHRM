@@ -72,7 +72,7 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   };
   let resignationBody: Record<string, unknown> | null = null;
   let archivedEmployeeIds: string[] = [];
-  let archivedDraftIds: string[] = [];
+  let restoredDraftIds: string[] = [];
   const userQueryUrls: string[] = [];
   const draftQueryUrls: string[] = [];
 
@@ -115,15 +115,17 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   await page.route('**/api/v1/employee-archives/drafts/list**', (route) => {
     const url = new URL(route.request().url());
     draftQueryUrls.push(url.toString());
-    const items = url.searchParams.get('state') === 'archived' ? [archivedDraft] : [draft];
     return route.fulfill({
       contentType: 'application/json',
-      body: JSON.stringify(apiResponse({ total: 1, page: 1, pageSize: 20, items })),
+      body: JSON.stringify(apiResponse({ total: 2, page: 1, pageSize: 20, items: [draft, archivedDraft] })),
     });
   });
-  await page.route('**/api/v1/employee-archives/drafts/archive', async (route) => {
-    archivedDraftIds = route.request().postDataJSON().ids;
-    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ archived: 1 })) });
+  await page.route('**/api/v1/employee-archives/drafts/restore', async (route) => {
+    restoredDraftIds = route.request().postDataJSON().ids;
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ restored: 1, succeeded: restoredDraftIds, failed: [] })) });
+  });
+  await page.route('**/api/v1/employee-archives/drafts', (route) => {
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ ...archivedDraft, recordStatus: 'draft', archivedAt: null })) });
   });
   await page.route('**/api/v1/employee-archives/archive', async (route) => {
     archivedEmployeeIds = route.request().postDataJSON().ids;
@@ -247,17 +249,17 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   await expect(page.getByRole('dialog', { name: '人事档案草稿' })).toHaveCount(0);
   const draftWorkspace = page.locator('.draft-workspace');
   await expect(draftWorkspace.locator('.desktop-result-table').getByText('草稿员工')).toBeVisible();
-  await draftWorkspace.locator('.el-table__body-wrapper .el-checkbox').click();
-  await expect(archiveAction).toBeEnabled();
-  await archiveAction.click();
-  const archiveDraftDialog = page.getByRole('dialog', { name: '归档草稿' });
-  await archiveDraftDialog.getByRole('button', { name: '确认归档' }).click();
-  await expect.poll(() => archivedDraftIds).toEqual([draft.id]);
-  await expect(archiveDraftDialog).toBeHidden();
-
-  await draftWorkspace.getByText('已归档草稿', { exact: true }).first().click();
   await expect(draftWorkspace.locator('.desktop-result-table').getByText('已归档草稿')).toBeVisible();
-  await expect.poll(() => draftQueryUrls.some((url) => new URL(url).searchParams.get('state') === 'archived')).toBeTruthy();
+  await expect(draftWorkspace.getByRole('radio', { name: '当前草稿' })).toHaveCount(0);
+  await expect(draftWorkspace.getByRole('radio', { name: '已归档草稿' })).toHaveCount(0);
+  await expect(draftWorkspace.locator('.desktop-result-table .el-checkbox')).toHaveCount(0);
+  await expect(page.locator('.page-title__actions').getByRole('button', { name: '归档', exact: true })).toHaveCount(0);
+  await expect.poll(() => draftQueryUrls.some((url) => new URL(url).searchParams.has('state'))).toBeFalsy();
+  const archivedDraftRow = draftWorkspace.locator('.desktop-result-table .el-table__row').filter({ hasText: '已归档草稿' });
+  await archivedDraftRow.getByRole('button', { name: '继续编辑' }).click();
+  await expect.poll(() => restoredDraftIds).toEqual([archivedDraft.id]);
+  await expect(page.getByRole('dialog', { name: '新增员工' })).toBeVisible();
+  await page.getByRole('dialog', { name: '新增员工' }).getByLabel('关闭此对话框').click();
 
   await page.getByRole('button', { name: '新增员工' }).click();
   const createDrawer = page.getByRole('dialog', { name: '新增员工' });
