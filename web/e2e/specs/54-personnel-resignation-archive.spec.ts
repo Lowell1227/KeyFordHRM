@@ -23,6 +23,11 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
     id: '10000000-0000-4000-8000-000000000003',
     name: '离职员工二',
     employeeNo: '003',
+    currentApplications: [{
+      id: '50000000-0000-4000-8000-000000000098', sourceType: 'manual_employment_change',
+      onboardingStatus: null, profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
+      updatedAt: '2026-09-16T03:00:00.000Z',
+    }],
   };
   const archive = {
     ...activeEmployee,
@@ -129,7 +134,7 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   });
   await page.route('**/api/v1/employee-archives/archive', async (route) => {
     archivedEmployeeIds = route.request().postDataJSON().ids;
-    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ archived: 2 })) });
+    return route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ archived: 1 })) });
   });
   await page.route(`**/api/v1/employee-archives/${activeEmployee.id}`, (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse(archive)),
@@ -198,7 +203,18 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   await expect(page.getByRole('button', { name: '归档所选（0）', exact: true })).toHaveCount(0);
   await expect(page.getByPlaceholder('全部状态')).toHaveCount(0);
   const archiveAction = page.locator('.page-title__actions').getByRole('button', { name: '归档', exact: true });
-  await expect(archiveAction).toBeDisabled();
+  await expect(archiveAction).toHaveCount(0);
+  await expect(page.locator('.desktop-result-table').getByRole('button', { name: '归档', exact: true })).toHaveCount(0);
+  await expect(page.locator('.desktop-result-table .el-table__header .el-checkbox')).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '批量操作', exact: true })).toHaveCount(0);
+  const rosterImportAction = page.locator('.page-title__actions').getByRole('button', { name: '导入花名册', exact: true });
+  await expect(rosterImportAction).toBeVisible();
+  await rosterImportAction.click();
+  const rosterImportDialog = page.getByRole('dialog', { name: '花名册导入预检' });
+  await expect(rosterImportDialog.getByRole('button', { name: '下载花名册模板', exact: true })).toBeVisible();
+  await expect(rosterImportDialog.getByText('员工主档、任职记录和合同记录')).toBeVisible();
+  await expect(rosterImportDialog.getByText('81 列花名册')).toHaveCount(0);
+  await rosterImportDialog.getByLabel('关闭此对话框').click();
 
   const activeRow = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '在职员工' });
   await activeRow.getByRole('button', { name: '办理离职' }).click();
@@ -221,17 +237,21 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
 
   await categoryTabs.getByRole('tab', { name: '已离职' }).click();
   await expect.poll(() => userQueryUrls.some((url) => new URL(url).searchParams.get('status') === 'resigned')).toBeTruthy();
+  await expect(archiveAction).toBeDisabled();
   const resignedRow = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '离职员工' });
   await resignedRow.filter({ hasNotText: '离职员工二' }).locator('.el-checkbox').click();
   const resignedRowTwo = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '离职员工二' });
-  await resignedRowTwo.locator('.el-checkbox').click();
+  await expect(resignedRowTwo.locator('.el-checkbox')).toHaveClass(/is-disabled/);
+  await expect(resignedRowTwo.getByText('完成办理后可归档', { exact: true })).toBeVisible();
   await expect(archiveAction).toBeEnabled();
   await archiveAction.click();
   await page.getByRole('dialog', { name: '归档离职员工' }).getByRole('button', { name: '确认归档' }).click();
-  await expect.poll(() => archivedEmployeeIds).toEqual([resignedEmployee.id, resignedEmployeeTwo.id]);
+  await expect.poll(() => archivedEmployeeIds).toEqual([resignedEmployee.id]);
 
   await categoryTabs.getByRole('tab', { name: '已归档' }).click();
   await expect.poll(() => userQueryUrls.some((url) => new URL(url).searchParams.get('archived') === 'true')).toBeTruthy();
+  await expect(archiveAction).toHaveCount(0);
+  await expect(page.locator('.page-title__actions').getByRole('button', { name: '取消归档', exact: true })).toBeDisabled();
   const archivedRow = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '离职员工' }).filter({ hasNotText: '离职员工二' });
   await archivedRow.getByRole('button', { name: '办理再入职' }).click();
   const reentryDrawer = page.getByRole('dialog', { name: '办理再入职' });

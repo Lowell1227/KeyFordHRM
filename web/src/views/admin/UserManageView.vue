@@ -240,11 +240,12 @@ const userTotal = ref(0);
 const userLoading = ref(false);
 const employeeCategory = ref<EmployeeDirectoryCategory>('all');
 const userArchiveView = computed(() => employeeCategory.value === 'archived');
+const isResignedCategory = computed(() => employeeCategory.value === 'resigned');
 const isDraftCategory = computed(() => employeeCategory.value === 'draft');
 const isApplicationsCategory = computed(() => employeeCategory.value === 'applications');
 const visibleCategoryOptions = computed(() => employeeCategoryOptions.filter((item) => !['draft', 'applications'].includes(item.value) || canViewArchive.value));
 const canSelectEmployeesForArchive = computed(() => (
-  canEditArchive.value && ['all', 'resigned', 'archived'].includes(employeeCategory.value)
+  canEditArchive.value && (isResignedCategory.value || userArchiveView.value)
 ));
 const selectedUsers = ref<ManagedUser[]>([]);
 const userQuery = ref<UserQuery>({
@@ -466,7 +467,15 @@ async function changeEmployeeCategory(category: EmployeeDirectoryCategory) {
 }
 
 function canSelectEmployeeForArchive(row: ManagedUser) {
-  return canSelectEmployeesForArchive.value && (userArchiveView.value ? Boolean(row.archivedAt) : row.status === 'resigned' && !row.archivedAt);
+  return canSelectEmployeesForArchive.value && (userArchiveView.value ? Boolean(row.archivedAt) : canArchiveEmployee(row));
+}
+
+function canArchiveEmployee(row: ManagedUser) {
+  return row.status === 'resigned' && !row.archivedAt && currentApplications(row).length === 0;
+}
+
+function archiveBlockedByApplication(row: ManagedUser) {
+  return isResignedCategory.value && row.status === 'resigned' && currentApplications(row).length > 0;
 }
 
 function onEmployeeSelectionChange(rows: ManagedUser[]) {
@@ -1592,15 +1601,12 @@ onBeforeUnmount(() => {
             <template v-else>
               <el-button v-if="canEditArchive && !userArchiveView" type="primary" @click="openEmployeeCreate">新增员工</el-button>
               <el-button
-                v-if="canEditArchive && !userArchiveView && !isApplicationsCategory && !isDraftCategory"
+                v-if="canEditArchive && isResignedCategory"
                 :disabled="selectedArchiveCount === 0"
                 @click="archiveCurrentSelection"
               >归档</el-button>
               <el-button v-if="canEditArchive && userArchiveView" :disabled="selectedArchiveCount === 0" @click="restoreSelection()">取消归档</el-button>
-              <el-dropdown v-if="canEditArchive" trigger="click" @command="(command: string) => command === 'roster' && openRosterImportDialog()">
-                <el-button>批量操作</el-button>
-                <template #dropdown><el-dropdown-menu><el-dropdown-item command="roster" :icon="UploadFilled">导入花名册</el-dropdown-item></el-dropdown-menu></template>
-              </el-dropdown>
+              <el-button v-if="canEditArchive" :icon="UploadFilled" @click="openRosterImportDialog">导入花名册</el-button>
             </template>
             <el-button :icon="Search" @click="refreshCurrentView">刷新</el-button>
           </div>
@@ -1938,7 +1944,8 @@ onBeforeUnmount(() => {
                   >办理离职</el-button>
                   <el-button v-if="canEditArchive && ((row as ManagedUser).status === 'resigned' || (row as ManagedUser).archivedAt)" link type="primary" size="small" @click="openEmployeeReentry(row as ManagedUser)">办理再入职</el-button>
                   <el-button v-else-if="canEditArchive && (row as ManagedUser).status === 'pending_entry'" link type="primary" size="small" @click="openPendingOnboarding(row as ManagedUser)">查看入职流程</el-button>
-                  <el-button v-if="canEditArchive && !userArchiveView && (row as ManagedUser).status === 'resigned'" link type="primary" size="small" @click="archiveEmployee(row as ManagedUser)">归档</el-button>
+                  <el-button v-if="canEditArchive && isResignedCategory && canArchiveEmployee(row as ManagedUser)" link type="primary" size="small" @click="archiveEmployee(row as ManagedUser)">归档</el-button>
+                  <span v-else-if="canEditArchive && archiveBlockedByApplication(row as ManagedUser)" class="muted-text">完成办理后可归档</span>
                   <el-button v-if="canEditArchive && userArchiveView" link type="primary" size="small" @click="restoreSelection(row.id)">取消归档</el-button>
                   <el-button v-if="canResetPassword && !userArchiveView && ['active', 'probation'].includes((row as ManagedUser).status)" link type="primary" size="small" :icon="Key" @click="resetPassword(row as ManagedUser)">重置密码</el-button>
                 </template>
@@ -1960,7 +1967,8 @@ onBeforeUnmount(() => {
                 <el-button v-if="canEditArchive && !userArchiveView && ['active', 'probation'].includes(item.status)" link type="primary" @click="openResignation(item)">办理离职</el-button>
                 <el-button v-if="canEditArchive && (item.status === 'resigned' || item.archivedAt)" link type="primary" @click="openEmployeeReentry(item)">办理再入职</el-button>
                 <el-button v-else-if="canEditArchive && item.status === 'pending_entry'" link type="primary" @click="openPendingOnboarding(item)">查看入职流程</el-button>
-                <el-button v-if="canEditArchive && !userArchiveView && item.status === 'resigned'" link type="primary" @click="archiveEmployee(item)">归档</el-button>
+                <el-button v-if="canEditArchive && isResignedCategory && canArchiveEmployee(item)" link type="primary" @click="archiveEmployee(item)">归档</el-button>
+                <span v-else-if="canEditArchive && archiveBlockedByApplication(item)" class="muted-text">完成办理后可归档</span>
                 <el-button v-if="canEditArchive && userArchiveView" link type="primary" @click="restoreSelection(item.id)">取消归档</el-button>
                 <el-button v-if="canResetPassword && !userArchiveView && ['active', 'probation'].includes(item.status)" link type="primary" @click="resetPassword(item)">重置密码</el-button>
               </template>
@@ -2305,6 +2313,13 @@ onBeforeUnmount(() => {
         :closable="false"
         class="roster-import__alert"
       />
+      <div class="roster-import__template">
+        <div>
+          <strong>使用最新版花名册模板</strong>
+          <p>模板按员工主档、任职记录和合同记录分表，使用工号关联；旧模板仍可继续上传。</p>
+        </div>
+        <el-button plain type="primary" @click="downloadRosterTemplate">下载花名册模板</el-button>
+      </div>
       <div class="roster-import__mode">
         <strong>导入模式</strong>
         <el-radio-group v-model="rosterImportDialog.mode">
@@ -2327,10 +2342,9 @@ onBeforeUnmount(() => {
         <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
         <div class="el-upload__text">拖拽花名册到此处，或 <em>点击选择</em></div>
         <template #tip>
-          <div class="el-upload__tip">仅支持 .xlsx，最大 10MB；当前模板按 81 列花名册解析。</div>
+          <div class="el-upload__tip">仅支持 .xlsx，最大 10MB；上传后先预检，再确认提交审核。</div>
         </template>
       </el-upload>
-      <el-button plain type="primary" @click="downloadRosterTemplate">下载标准 Excel 模板</el-button>
 
       <div v-if="rosterImportDialog.result" class="roster-preview">
         <div class="roster-preview__head">
@@ -2664,6 +2678,28 @@ onBeforeUnmount(() => {
 
 .roster-import__alert {
   margin-bottom: 18px;
+}
+
+.roster-import__template {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  margin-bottom: 16px;
+  border: 1px solid #d9e2f3;
+  border-radius: 10px;
+  background: #f7f9ff;
+}
+
+.roster-import__template p {
+  margin: 6px 0 0;
+  color: #6f7b91;
+  line-height: 1.6;
+}
+
+.roster-import__template .el-button {
+  flex: 0 0 auto;
 }
 
 .roster-import__mode {
@@ -3924,6 +3960,11 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 768px) {
+  .roster-import__template {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
   .user-manage-view {
     height: auto;
     overflow: visible;
