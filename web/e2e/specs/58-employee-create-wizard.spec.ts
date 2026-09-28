@@ -110,7 +110,7 @@ async function setupPersonnelPage(page: Page, options: {
   return { draftBodies, createBodies, events, getDraft: () => currentDraft };
 }
 
-test('新增员工采用四步向导，任职关系同页且补充资料可跳过', async ({ page }, testInfo) => {
+test('新增员工采用四步向导，补充资料可直接继续且不重复提示', async ({ page }, testInfo) => {
   await setupPersonnelPage(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/personnel-processing');
@@ -121,7 +121,8 @@ test('新增员工采用四步向导，任职关系同页且补充资料可跳�
   await expect(drawer.getByRole('button', { name: '保存并退出' })).toBeVisible();
   await expect(drawer.getByRole('button', { name: '下一步' })).toBeVisible();
   await expect(drawer.getByRole('button', { name: '提交审核' })).toHaveCount(0);
-  await expect(drawer.getByText('员工工号将在提交审核时自动生成')).toBeVisible();
+  await expect(drawer.getByText('姓名即可建立草稿；手机号或身份证号填写完整后才查重。')).toHaveCount(0);
+  await expect(drawer.getByText('员工工号将在提交审核时自动生成')).toHaveCount(0);
   await expect(drawer.getByLabel('提交后流程')).toHaveCount(0);
   await drawer.getByLabel('姓名', { exact: true }).fill('分步员工');
   await drawer.getByRole('button', { name: '下一步' }).click();
@@ -145,6 +146,7 @@ test('新增员工采用四步向导，任职关系同页且补充资料可跳�
   await expect(drawer.getByText('绩效直属上级', { exact: true }).first()).toBeVisible();
   await drawer.getByRole('button', { name: '下一步' }).click();
   await expect(drawer.getByRole('button', { name: '个人与教育' })).toBeVisible();
+  await expect(drawer.getByText('可跳过', { exact: true })).toHaveCount(0);
   await drawer.getByRole('button', { name: '下一步' }).click();
   await expect(drawer.getByRole('button', { name: '提交审核' })).toBeVisible();
 });
@@ -310,7 +312,7 @@ for (const scenario of [
     await expect(drawer.locator('.el-step__title.is-process')).toHaveText('本次任职');
     await expect(drawer.getByLabel('入职日期', { exact: true })).toHaveValue('');
     await expect(drawer.getByLabel('姓名', { exact: true })).toHaveValue('测试办理员工');
-    await expect(drawer.locator('.el-step').nth(2)).toContainText('可跳过');
+    await expect(drawer.locator('.el-step').nth(2)).not.toContainText('可跳过');
     if (scenario.width === 390) await expect(drawer.locator('.mobile-step')).toHaveText('2/4 本次任职');
     await page.screenshot({ path: testInfo.outputPath('resumed-draft.png'), animations: 'disabled' });
 

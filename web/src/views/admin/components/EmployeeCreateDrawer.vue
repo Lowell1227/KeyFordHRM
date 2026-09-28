@@ -531,7 +531,6 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
             :key="title"
             :title="title"
             :status="stepStatus(index)"
-            :description="index === 2 ? '可跳过' : ''"
           />
         </el-steps>
         <div class="mobile-step"><strong>{{ currentStep + 1 }}/{{ stepTitles.length }} {{ stepTitles[currentStep] }}</strong></div>
@@ -549,8 +548,7 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
 
       <el-form label-position="top" class="wizard-form">
         <section v-show="currentStep === 0" class="wizard-section">
-          <div class="section-head"><div><h3>身份核验</h3><p>姓名即可建立草稿；手机号或身份证号填写完整后才查重。</p></div></div>
-          <div class="identity-note">员工工号将在提交审核时自动生成</div>
+          <div class="section-head"><div><h3>身份核验</h3></div></div>
           <div class="form-grid">
             <el-form-item label="姓名"><el-input v-model="form.name" maxlength="50" placeholder="必填，输入后自动保存" /></el-form-item>
             <el-form-item label="手机号" :error="fieldErrors.phone"><el-input v-model="form.phone" maxlength="20" @blur="lookupIdentity()" /></el-form-item>
@@ -708,7 +706,6 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
 .wizard-section { padding: 2px 2px 20px; }
 .section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .section-head h3 { margin: 0 0 5px; font-size: 20px; }.section-head p { margin: 0; color: #667085; font-size: 13px; }
-.identity-note { margin-bottom: 16px; padding: 10px 12px; color: #475467; background: #f8fafc; border-radius: 7px; font-size: 13px; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
 .form-grid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .form-grid :deep(.el-select), .form-grid :deep(.el-date-editor), .form-grid :deep(.el-input-number), .form-grid :deep(.el-tree-select) { width: 100%; }
