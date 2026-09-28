@@ -1538,6 +1538,67 @@ describe('EmployeeArchivesService', () => {
     });
   });
 
+  it('单笔办理详情返回完整的审计事件', async () => {
+    const request = {
+      id: '10000000-0000-4000-8000-000000000099',
+      userId: archiveEditorUser().id,
+      recordStatus: 'submitted',
+      archivedAt: null,
+      cancelledAt: null,
+      profileReviewStatus: 'approved',
+      performanceReviewStatus: 'approved',
+      onboardingStatus: 'pending_entry',
+      baseValue: {},
+      proposedValue: {},
+      createdBy: { id: hrOperator.id, name: hrOperator.name, sysRole: hrOperator.sysRole },
+      profileReviewedBy: { id: hrOperator.id, name: hrOperator.name },
+      performanceReviewedBy: { id: hrOperator.id, name: hrOperator.name },
+    };
+    const events = [{
+      id: 'audit-1',
+      entityId: request.id,
+      action: 'submit_employee_reentry',
+      createdAt: new Date('2026-09-28T07:26:00.000Z'),
+      user: { id: hrOperator.id, name: hrOperator.name },
+      oldValue: null,
+      newValue: {
+        effectiveDate: '2026-09-30',
+        profile: { idNumberEncrypted: 'encrypted-id', bankAccountFingerprint: 'bank-hash' },
+      },
+    }];
+    const findMany = jest.fn().mockResolvedValue(events);
+    const service = new EmployeeArchivesService({
+      employeeDataChangeRequest: { findUnique: jest.fn().mockResolvedValue(request) },
+      auditLog: { findMany },
+      user: { findMany: jest.fn().mockResolvedValue([]) },
+      department: { findMany: jest.fn().mockResolvedValue([]) },
+    } as any);
+
+    const result = await service.getApplication(request.id);
+    expect(result.events).toEqual([{
+      ...events[0],
+      newValue: {
+        effectiveDate: '2026-09-30',
+        profile: { idNumberConfigured: true, bankAccountConfigured: true },
+      },
+    }]);
+    expect(JSON.stringify(result.events)).not.toContain('encrypted-id');
+    expect(JSON.stringify(result.events)).not.toContain('bank-hash');
+    expect(findMany).toHaveBeenCalledWith({
+      where: { entityType: 'employee_data_change_request', entityId: request.id },
+      orderBy: { createdAt: 'asc' },
+      select: {
+        id: true,
+        entityId: true,
+        action: true,
+        createdAt: true,
+        user: { select: { id: true, name: true } },
+        oldValue: true,
+        newValue: true,
+      },
+    });
+  });
+
   it('草稿由操作员手动归档并保留记录', async () => {
     const updateMany = jest.fn().mockResolvedValue({ count: 1 });
     const deleteMany = jest.fn();

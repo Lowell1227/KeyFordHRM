@@ -12,10 +12,16 @@ export function applicationType(request: EmployeeDataReview): string {
 export function applicationProgress(request: EmployeeDataReview): string {
   const approved = [request.profileReviewStatus, request.performanceReviewStatus].includes('approved');
   const rejected = [request.profileReviewStatus, request.performanceReviewStatus].includes('rejected');
-  const pending = [request.profileReviewStatus, request.performanceReviewStatus].includes('pending');
+  const pending = [request.profileReviewStatus, request.performanceReviewStatus]
+    .some((status) => status === 'pending' || status === 'applying');
   const cancelled = request.onboardingStatus === 'cancelled' || request.cancelledAt
     || [request.profileReviewStatus, request.performanceReviewStatus].includes('cancelled');
-  if (cancelled) return approved && request.appliedAt ? '部分已生效，其余已取消' : '已取消';
+  if (request.onboardingStatus === 'cancelled') return '已取消';
+  if (cancelled) {
+    if (!approved) return '已取消';
+    if (request.onboardingStatus === 'pending_entry') return '部分已通过，其余已取消，待入职生效';
+    return '部分已生效，其余已取消';
+  }
   if (request.recordStatus === 'archived') return '已归档';
   if (request.recordStatus === 'draft') return rejected ? '已退回，待修改' : '草稿';
   if (rejected) return approved ? '部分已通过，其余已退回' : '已退回，待修改';

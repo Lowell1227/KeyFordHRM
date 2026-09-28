@@ -25,7 +25,7 @@ export interface EmployeeRosterConfirmResult {
   submitted: number;
 }
 
-export type EmployeeReviewStatus = 'not_required' | 'pending' | 'approved' | 'rejected' | 'cancelled';
+export type EmployeeReviewStatus = 'not_required' | 'pending' | 'applying' | 'approved' | 'rejected' | 'cancelled';
 export type EmployeeReviewScope = 'profile' | 'performance';
 
 export interface EmployeeDataReview {
@@ -58,7 +58,7 @@ export interface EmployeeDataReview {
   canResume?: boolean;
   canCancel?: boolean;
   user?: { id: string; name: string; employeeNo: string | null; status: string; archivedAt?: string | null; dept?: { name: string } | null; position?: string | null } | null;
-  events?: Array<{ id: string; action: string; createdAt: string; user?: { id: string; name: string } | null; oldValue?: Record<string, any>; newValue?: Record<string, any> }>;
+  events?: Array<{ id: string; entityId?: string; action: string; createdAt: string; user?: { id: string; name: string } | null; oldValue?: Record<string, any> | null; newValue?: Record<string, any> | null }>;
 }
 
 export interface EmployeeIdentityCandidate {

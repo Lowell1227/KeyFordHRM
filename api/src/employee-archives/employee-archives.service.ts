@@ -744,13 +744,21 @@ export class EmployeeArchivesService {
   }
 
   async getApplication(id: string) {
-    const request = await this.prisma.employeeDataChangeRequest.findUnique({ where: { id },
-      include: { createdBy: { select: { id: true, name: true, sysRole: true } },
-        profileReviewedBy: { select: { id: true, name: true } }, performanceReviewedBy: { select: { id: true, name: true } } },
-    });
+    const [request, events] = await Promise.all([
+      this.prisma.employeeDataChangeRequest.findUnique({ where: { id },
+        include: { createdBy: { select: { id: true, name: true, sysRole: true } },
+          profileReviewedBy: { select: { id: true, name: true } }, performanceReviewedBy: { select: { id: true, name: true } } },
+      }),
+      this.prisma.auditLog.findMany({
+        where: { entityType: 'employee_data_change_request', entityId: id },
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, entityId: true, action: true, createdAt: true,
+          user: { select: { id: true, name: true } }, oldValue: true, newValue: true },
+      }),
+    ]);
     if (!request) throw new NotFoundException('申请不存在');
     const [enriched] = await this.enrichChangeNames([request]);
-    return { ...employeeDataChangeView(enriched), canResume: this.canResumeApplication(request),
+    return { ...employeeDataChangeView(enriched), events: employeeDataChangeView(events), canResume: this.canResumeApplication(request),
       canCancel: !request.cancelledAt && (request.profileReviewStatus === 'pending' || request.performanceReviewStatus === 'pending'
         || request.profileReviewStatus === 'rejected' || request.performanceReviewStatus === 'rejected'
         || request.onboardingStatus === 'pending_entry' || (request.sourceType === 'manual_employment_change'

@@ -27,6 +27,7 @@ import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
+import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import EmployeeArchiveInlineEditor from './components/EmployeeArchiveInlineEditor.vue';
 import DepartmentEditDrawer from './components/DepartmentEditDrawer.vue';
@@ -34,6 +35,7 @@ import DepartmentCreateDrawer from './components/DepartmentCreateDrawer.vue';
 import EmployeeCreateDrawer from './components/EmployeeCreateDrawer.vue';
 import EmployeeReentryDrawer from './components/EmployeeReentryDrawer.vue';
 import EmploymentRecordDrawer from './components/EmploymentRecordDrawer.vue';
+import EmployeeApplicationDetail from './components/EmployeeApplicationDetail.vue';
 import EmployeeChangeHistory from './components/EmployeeChangeHistory.vue';
 import PersonnelPendingReviews from './components/PersonnelPendingReviews.vue';
 import { applicationProgress, applicationType } from '@/utils/employee-lifecycle';
@@ -891,6 +893,12 @@ async function loadApplications() {
     applications.value = items;
   } catch { applicationsError.value = '办理记录加载失败，请刷新重试。'; }
   finally { applicationsLoading.value = false; }
+}
+
+function applicationEffectiveDate(request: EmployeeDataReview) {
+  const employee = request.proposedValue?.employee ?? {};
+  const value = employee.effectiveDate || employee.effectiveFrom || employee.entryDate || employee.leaveDate;
+  return value ? formatDate(value) : '';
 }
 
 function currentApplications(row: ManagedUser): EmployeeDataReview[] {
@@ -1897,15 +1905,15 @@ onBeforeUnmount(() => {
           <el-alert v-if="applicationsError" :title="applicationsError" type="error" :closable="false" />
           <div class="directory-table-region desktop-result-table">
             <el-table v-loading="applicationsLoading" :data="pagedApplicationGroups" row-key="id" height="100%" class="app-table compact-table" empty-text="暂无办理中的申请">
-              <el-table-column type="expand"><template #default="{ row }"><div class="application-items"><div v-for="request in row.requests" :key="request.id" class="application-item"><span>{{ applicationType(request) }} · {{ applicationProgress(request) }}</span><span>{{ formatDateTime(request.updatedAt) }}</span><el-button link type="primary" @click="openApplication(request.id)">查看申请</el-button></div></div></template></el-table-column>
+              <el-table-column type="expand"><template #default="{ row }"><div class="application-items"><div v-for="request in row.requests" :key="request.id" class="application-item"><span>{{ applicationType(request) }} · {{ applicationProgress(request) }}</span><span>{{ formatDateTime(request.updatedAt) }}</span><el-button link type="primary" @click="openApplication(request.id)">查看办理详情</el-button></div></div></template></el-table-column>
               <el-table-column label="员工" min-width="180"><template #default="{ row }"><strong>{{ row.name }}</strong><small class="application-number">{{ row.employeeNo ? `工号 ${row.employeeNo}` : '尚未建立正式档案' }}</small></template></el-table-column>
               <el-table-column label="办理事项" min-width="200"><template #default="{ row }">{{ [...new Set(row.requests.map((request: EmployeeDataReview) => applicationType(request)))].join('、') }}</template></el-table-column>
               <el-table-column label="办理进度" min-width="200"><template #default="{ row }">{{ [...new Set(row.requests.map((request: EmployeeDataReview) => applicationProgress(request)))].join('；') }}</template></el-table-column>
-              <el-table-column label="操作" width="160" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openApplication(row.requests[0].id)">查看申请</el-button></template></el-table-column>
+              <el-table-column label="操作" width="160" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openApplication(row.requests[0].id)">查看办理详情</el-button></template></el-table-column>
             </el-table>
           </div>
           <div v-loading="applicationsLoading" class="mobile-result-list">
-            <MobileResultCard v-for="group in pagedApplicationGroups" :key="group.id"><template #title>{{ group.name }}</template><template #status>{{ group.employeeNo || '新增申请' }}</template><div v-for="request in group.requests" :key="request.id" class="application-item"><span>{{ applicationType(request) }} · {{ applicationProgress(request) }}</span><el-button link type="primary" @click="openApplication(request.id)">查看申请</el-button></div></MobileResultCard>
+            <MobileResultCard v-for="group in pagedApplicationGroups" :key="group.id"><template #title>{{ group.name }}</template><template #status>{{ group.employeeNo || '新增申请' }}</template><div v-for="request in group.requests" :key="request.id" class="application-item"><span>{{ applicationType(request) }} · {{ applicationProgress(request) }}</span><el-button link type="primary" @click="openApplication(request.id)">查看办理详情</el-button></div></MobileResultCard>
             <el-empty v-if="!applicationsLoading && !applicationGroups.length" description="暂无办理中的申请" />
           </div>
           <ListPagination v-model:current-page="userPage" v-model:page-size="userPageSize" :total="applicationGroups.length" :page-sizes="[10, 20, 50, 100]" />
@@ -2283,7 +2291,7 @@ onBeforeUnmount(() => {
               <el-table-column label="状态" width="90">
                 <template #default="{ row }">{{ statusLabels[row.employeeStatus as UserStatus] }}</template>
               </el-table-column>
-              <el-table-column label="办理记录" width="120"><template #default="{ row }"><el-button v-if="row.sourceRequestId" link type="primary" @click="employeeArchiveDrawer.visible = false; openApplication(row.sourceRequestId)">查看申请</el-button><span v-else class="muted-text">历史导入</span></template></el-table-column>
+              <el-table-column label="办理记录" width="120"><template #default="{ row }"><el-button v-if="row.sourceRequestId" link type="primary" @click="employeeArchiveDrawer.visible = false; openApplication(row.sourceRequestId)">查看办理详情</el-button><span v-else class="muted-text">历史导入</span></template></el-table-column>
             </el-table>
             </el-collapse-item>
             </el-collapse>
@@ -2353,10 +2361,23 @@ onBeforeUnmount(() => {
       </div>
     </el-drawer>
 
-    <el-drawer v-model="applicationDetailVisible" title="办理记录" size="min(760px, 100vw)" :close-on-click-modal="false">
-      <template v-if="applicationDetail"><h3>{{ applicationDetail.employeeName }} · {{ applicationType(applicationDetail) }}</h3><EmployeeChangeHistory :requests="[applicationDetail]" /></template>
+    <BusinessDetailDrawer
+      :model-value="applicationDetailVisible"
+      :title="applicationDetail ? `${applicationType(applicationDetail)}办理详情` : '办理详情'"
+      variant="workflow"
+      :saving="applicationSaving"
+      @update:model-value="applicationDetailVisible = $event"
+    >
+      <template v-if="applicationDetail" #summary>
+        <div class="application-detail-summary">
+          <strong>{{ applicationDetail.employeeName }}<span v-if="applicationDetail.employeeNo"> · 工号 {{ applicationDetail.employeeNo }}</span></strong>
+          <el-tag size="small" effect="plain">{{ applicationProgress(applicationDetail) }}</el-tag>
+          <span v-if="applicationEffectiveDate(applicationDetail)">预计生效：{{ applicationEffectiveDate(applicationDetail) }}</span>
+        </div>
+      </template>
+      <EmployeeApplicationDetail v-if="applicationDetail" :request="applicationDetail" />
       <template #footer><el-button @click="applicationDetailVisible = false">关闭</el-button><el-button v-if="canEditArchive && applicationDetail?.canCancel" :loading="applicationSaving" @click="cancelApplication(applicationDetail)">撤回未生效内容</el-button><el-button v-if="canEditArchive && applicationDetail?.canResume" type="primary" @click="resumeApplication(applicationDetail)">修改后重新提交</el-button></template>
-    </el-drawer>
+    </BusinessDetailDrawer>
 
     <el-dialog
       v-model="rosterImportDialog.visible"
@@ -2701,6 +2722,9 @@ onBeforeUnmount(() => {
 <style scoped>
 .person-settings__role-tip { width: 100%; margin: 4px 0 0; }
 .user-manage-view :deep(.pending-review-workspace) { margin-top: 0; padding: 0; border: 0; border-radius: 0; }
+.application-detail-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.application-detail-summary > span { color: var(--el-text-color-secondary); font-size: 13px; }
+.application-detail-summary strong span { color: var(--el-text-color-regular); font-weight: 600; }
 .page-title {
   display: flex;
   align-items: flex-start;

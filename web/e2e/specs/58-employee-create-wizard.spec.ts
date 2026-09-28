@@ -7,6 +7,10 @@ test('普通档案撤回及部分生效后的撤回呈现明确状态', () => {
   const cancelled = { recordStatus: 'submitted', profileReviewStatus: 'cancelled', performanceReviewStatus: 'not_required', cancelledAt: '2026-09-26T00:00:00Z', proposedValue: {} };
   expect(applicationProgress(cancelled as any)).toBe('已取消');
   expect(applicationProgress({ ...cancelled, profileReviewStatus: 'approved', performanceReviewStatus: 'cancelled', appliedAt: '2026-09-25T00:00:00Z' } as any)).toBe('部分已生效，其余已取消');
+  expect(applicationProgress({ ...cancelled, profileReviewStatus: 'approved', performanceReviewStatus: 'cancelled', cancelledAt: null, appliedAt: null } as any)).toBe('部分已生效，其余已取消');
+  expect(applicationProgress({ ...cancelled, profileReviewStatus: 'approved', performanceReviewStatus: 'cancelled', cancelledAt: null, appliedAt: null, onboardingStatus: 'pending_entry' } as any)).toBe('部分已通过，其余已取消，待入职生效');
+  expect(applicationProgress({ ...cancelled, profileReviewStatus: 'applying', performanceReviewStatus: 'not_required', cancelledAt: null } as any)).toBe('待审核');
+  expect(applicationProgress({ ...cancelled, profileReviewStatus: 'approved', performanceReviewStatus: 'pending', cancelledAt: null, onboardingStatus: 'cancelled' } as any)).toBe('已取消');
 });
 
 const department = {
@@ -370,12 +374,215 @@ test('办理中一人一行，退回申请可从原内容续填，不要求审�
   await expect(page.getByRole('tab', { name: '待我审核', exact: true })).toHaveCount(0);
   await page.getByRole('tab', { name: '办理中', exact: true }).click();
   await expect(page.locator('.desktop-result-table .el-table__body tbody > tr')).toHaveCount(1);
-  await page.getByRole('button', { name: '查看申请', exact: true }).first().click();
+  await page.getByRole('button', { name: '查看办理详情', exact: true }).first().click();
   await page.getByRole('button', { name: '修改后重新提交' }).click();
   const drawer = page.getByRole('dialog', { name: '新增员工' });
   await expect(drawer.getByLabel('姓名', { exact: true })).toHaveValue('测试办理员工');
   await expect(drawer.getByText('已退回：请补充信息')).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+});
+
+for (const viewport of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 390, height: 844 }]) {
+  test(`再入职办理详情在 ${viewport.width}px 下展示任职信息和完整流程`, async ({ page }, testInfo) => {
+    await setupPersonnelPage(page);
+    const request = {
+      ...completeDraft(),
+      id: 'reentry-detail-request',
+      userId: 'reentry-detail-user',
+      employeeNo: '12351',
+      employeeName: '王四',
+      sourceType: 'onboarding_intake',
+      intakeType: 'reentry',
+      recordStatus: 'submitted',
+      onboardingStatus: 'pending_entry',
+      profileReviewStatus: 'approved',
+      performanceReviewStatus: 'approved',
+      profileReviewedAt: '2026-09-28T07:28:00.000Z',
+      performanceReviewedAt: '2026-09-28T07:28:00.000Z',
+      profileReviewedBy: { id: 'hr-1', name: '姚瑶' },
+      performanceReviewedBy: { id: 'hr-1', name: '姚瑶' },
+      createdBy: { id: 'hr-1', name: '姚瑶', sysRole: 'hr' },
+      baseValue: {
+        employee: {
+          status: 'resigned',
+          latestEmployment: { company: 'fuede', departmentName: '原部门', position: '原岗位' },
+        },
+        performance: { managerId: null },
+      },
+      proposedValue: {
+        employee: {
+          company: 'fuede',
+          deptId: department.id,
+          departmentName: '人事部',
+          position: 'HRBP',
+          managerId: 'roster-manager-1',
+          managerName: '李四',
+          employeeStatus: 'probation',
+          employmentType: 'full_time',
+          effectiveDate: '2026-09-30T00:00:00.000Z',
+          probationMonths: 3,
+          plannedRegularDate: '2026-12-30T00:00:00.000Z',
+        },
+        performance: { managerId: 'manager-1', managerName: '张三' },
+        contracts: [{ kind: 'contract', reference: 'REENTRY-2026-001' }],
+      },
+      events: [
+        { id: 'event-submit', action: 'submit_employee_reentry', createdAt: '2026-09-28T07:26:00.000Z', user: { id: 'hr-1', name: '姚瑶' } },
+        { id: 'event-profile', action: 'approve_employee_data_change', createdAt: '2026-09-28T07:28:00.000Z', user: { id: 'hr-1', name: '姚瑶' }, newValue: { scopes: ['profile'] } },
+        { id: 'event-performance', action: 'approve_employee_data_change', createdAt: '2026-09-28T07:28:00.000Z', user: { id: 'hr-1', name: '姚瑶' }, newValue: { scopes: ['performance'] } },
+      ],
+      canCancel: true,
+    };
+    await page.route('**/api/v1/employee-archives/applications/list**', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ items: [request], total: 1, page: 1, pageSize: 100 })) }));
+    await page.route('**/api/v1/employee-archives/applications/reentry-detail-request', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(request)) }));
+    await page.setViewportSize(viewport);
+    await page.goto('/personnel-processing');
+    await page.getByRole('button', { name: '查看办理详情', exact: true }).first().click();
+
+    const drawer = page.getByRole('dialog', { name: '再入职办理详情', exact: true });
+    await expect(drawer.getByRole('combobox', { name: '变更类型' })).toHaveCount(0);
+    await drawer.getByRole('button', { name: /\u518d\u5165\u804c.*2026-09-30/ }).click();
+    await expect(drawer.getByText('本次任职信息', { exact: true })).toBeVisible();
+    await expect(drawer.getByText('未填写', { exact: true })).toHaveCount(0);
+    await expect(drawer.getByText('孚德', { exact: true })).toBeVisible();
+    await expect(drawer.getByText('人事部', { exact: true })).toBeVisible();
+    await expect(drawer.getByText('李四', { exact: true })).toBeVisible();
+    await expect(drawer.getByText('2026-09-30', { exact: true }).first()).toBeVisible();
+    await expect(drawer.getByText('合同材料', { exact: true })).toBeVisible();
+    await expect(drawer.getByText('无 → 合同 · REENTRY-2026-001', { exact: true })).toBeVisible();
+    await expect(drawer.getByTestId('personnel-application-timeline')).toContainText('提交申请');
+    await expect(drawer.getByTestId('personnel-application-timeline')).toContainText('HR 审核');
+    await expect(drawer.getByTestId('personnel-application-timeline')).toContainText('已生效');
+    await expect(drawer.locator('[aria-current="step"]')).toContainText('等待入职生效');
+    expect(await drawer.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
+    await page.screenshot({ path: testInfo.outputPath(`reentry-application-detail-${viewport.width}.png`), fullPage: true });
+  });
+}
+
+test('新增员工办理详情保留补充资料', async ({ page }) => {
+  await setupPersonnelPage(page);
+  const request = {
+    ...completeDraft(),
+    id: 'new-hire-detail-request',
+    userId: null,
+    employeeNo: null,
+    employeeName: '新员工',
+    sourceType: 'manual_employee_create',
+    intakeType: 'new_hire',
+    recordStatus: 'submitted',
+    onboardingStatus: 'submitted',
+    profileReviewStatus: 'pending',
+    performanceReviewStatus: 'not_required',
+    proposedValue: {
+      employee: { company: 'fuede', deptId: department.id, departmentName: '人事部', position: 'HRBP', effectiveDate: '2026-10-08' },
+      profile: { education: '本科', school: '浙江大学' },
+      performance: {},
+      contracts: [],
+    },
+  };
+  await page.route('**/api/v1/employee-archives/applications/list**', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ items: [request], total: 1, page: 1, pageSize: 100 })) }));
+  await page.route('**/api/v1/employee-archives/applications/new-hire-detail-request', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(request)) }));
+  await page.goto('/personnel-processing');
+  await page.getByRole('button', { name: '查看办理详情', exact: true }).click();
+  const drawer = page.getByRole('dialog', { name: '新增员工办理详情', exact: true });
+  await drawer.getByRole('button', { name: /新增员工/ }).click();
+  await expect(drawer.getByText('补充资料', { exact: true })).toBeVisible();
+  await expect(drawer.getByText('本科', { exact: true })).toBeVisible();
+  await expect(drawer.getByText('浙江大学', { exact: true })).toBeVisible();
+});
+
+test('档案修改办理详情保留个人资料和合同差异', async ({ page }) => {
+  await setupPersonnelPage(page);
+  const request = {
+    ...completeDraft(),
+    id: 'archive-change-detail',
+    userId: 'archive-change-user',
+    employeeNo: '10086',
+    employeeName: '档案变更员工',
+    sourceType: 'manual_archive_change',
+    recordStatus: 'submitted',
+    profileReviewStatus: 'pending',
+    performanceReviewStatus: 'not_required',
+    baseValue: { employee: {}, profile: { education: '大专' }, contracts: [] },
+    proposedValue: {
+      employee: {},
+      profile: { education: '本科' },
+      performance: {},
+      contracts: [{ name: '劳动合同', contractType: 'labor_contract', signingCompany: '孵德' }],
+    },
+  };
+  await page.route('**/api/v1/employee-archives/applications/list**', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ items: [request], total: 1, page: 1, pageSize: 100 })) }));
+  await page.route('**/api/v1/employee-archives/applications/archive-change-detail', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(request)) }));
+  await page.goto('/personnel-processing');
+  await page.getByRole('button', { name: '查看办理详情', exact: true }).click();
+  const drawer = page.getByRole('dialog', { name: '档案修改办理详情', exact: true });
+  await drawer.getByRole('button', { name: /档案修改/ }).click();
+  await expect(drawer.getByText('学历', { exact: true })).toBeVisible();
+  await expect(drawer.getByText('大专 → 本科', { exact: true })).toBeVisible();
+  await expect(drawer.getByText('新增合同', { exact: true })).toBeVisible();
+  await expect(drawer.getByText('无 → 劳动合同', { exact: true })).toBeVisible();
+});
+
+test('部分审核取消的办理详情不显示未开始的后续流程', async ({ page }) => {
+  await setupPersonnelPage(page);
+  const request = {
+    ...completeDraft(),
+    id: 'partial-cancelled-detail',
+    userId: 'partial-cancelled-user',
+    employeeNo: '10087',
+    employeeName: '部分生效员工',
+    sourceType: 'manual_archive_change',
+    recordStatus: 'submitted',
+    profileReviewStatus: 'approved',
+    performanceReviewStatus: 'cancelled',
+    cancelledAt: null,
+    appliedAt: null,
+    baseValue: { employee: { position: '专员' }, performance: { managerId: null } },
+    proposedValue: { employee: { position: '高级专员' }, performance: { managerId: 'manager-1', managerName: '张三' } },
+  };
+  await page.route('**/api/v1/employee-archives/applications/list**', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ items: [request], total: 1, page: 1, pageSize: 100 })) }));
+  await page.route('**/api/v1/employee-archives/applications/partial-cancelled-detail', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(request)) }));
+  await page.goto('/personnel-processing');
+  await page.getByRole('button', { name: '查看办理详情', exact: true }).click();
+  const drawer = page.getByRole('dialog', { name: '档案修改办理详情', exact: true });
+  await drawer.getByRole('button', { name: /档案修改/ }).click();
+  await expect(drawer.getByText('部分已生效，其余已取消', { exact: true }).first()).toBeVisible();
+  await expect(drawer.getByTestId('personnel-application-timeline')).toContainText('办理结束');
+  await expect(drawer.getByTestId('personnel-application-timeline')).toContainText('部分内容已生效，其余已取消');
+  await expect(drawer.getByTestId('personnel-application-timeline')).not.toContainText('未开始');
+  await expect(drawer.getByTestId('personnel-application-timeline')).not.toContainText('待后续完成');
+});
+
+test('已撤销待入职投影的再入职申请显示整单取消终态', async ({ page }) => {
+  await setupPersonnelPage(page);
+  const request = {
+    ...completeDraft(),
+    id: 'cancelled-reentry-detail',
+    userId: 'cancelled-reentry-user',
+    employeeNo: '10088',
+    employeeName: '已取消再入职员工',
+    sourceType: 'manual_reentry',
+    intakeType: 'reentry',
+    recordStatus: 'cancelled',
+    onboardingStatus: 'cancelled',
+    profileReviewStatus: 'approved',
+    performanceReviewStatus: 'pending',
+    cancelledAt: '2026-09-29T08:00:00.000Z',
+    baseValue: { employee: { status: 'resigned' } },
+    proposedValue: { employee: { effectiveDate: '2026-10-08' }, performance: { managerId: 'manager-1' }, contracts: [] },
+  };
+  await page.route('**/api/v1/employee-archives/applications/list**', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({ items: [request], total: 1, page: 1, pageSize: 100 })) }));
+  await page.route('**/api/v1/employee-archives/applications/cancelled-reentry-detail', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(request)) }));
+  await page.goto('/personnel-processing');
+  await page.getByRole('button', { name: '查看办理详情', exact: true }).click();
+  const drawer = page.getByRole('dialog', { name: '再入职办理详情', exact: true });
+  await drawer.getByRole('button', { name: /再入职/ }).click();
+  await expect(drawer.getByText('已取消', { exact: true }).first()).toBeVisible();
+  await expect(drawer.getByTestId('personnel-application-timeline')).toContainText('办理结束');
+  await expect(drawer.getByTestId('personnel-application-timeline')).toContainText('已取消，不再生效');
+  await expect(drawer.getByTestId('personnel-application-timeline')).not.toContainText('等待入职生效');
+  await expect(drawer.getByTestId('personnel-application-timeline')).not.toContainText('待后续完成');
 });
 
 test('仅审核权限可进入待我审核，但不能新增或编辑草稿', async ({ page }) => {
@@ -461,8 +668,8 @@ for (const intakeType of ['reentry', 'new_hire']) test(`${intakeType} 已生效�
   await page.route('**/api/v1/employee-archives/reentry-user/reentry/current', (route) => route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse(request)) }));
   await page.goto('/personnel-processing');
   await page.getByRole('tab', { name: '办理中', exact: true }).click();
-  await page.locator('.desktop-result-table').getByRole('button', { name: '查看申请', exact: true }).first().click();
-  await page.getByRole('dialog', { name: '办理记录', exact: true }).getByRole('button', { name: '修改后重新提交' }).click();
+  await page.locator('.desktop-result-table').getByRole('button', { name: '查看办理详情', exact: true }).first().click();
+  await page.getByRole('dialog', { name: `${intakeType === 'new_hire' ? '新增员工' : '再入职'}办理详情`, exact: true }).getByRole('button', { name: '修改后重新提交' }).click();
   const drawer = page.getByRole('dialog', { name: intakeType === 'new_hire' ? '修改入职绩效关系' : '办理再入职', exact: true });
   await expect(drawer.getByRole('button', { name: '重新提交绩效关系' })).toBeVisible();
   await expect(drawer.getByLabel('再入职日期', { exact: true })).toBeDisabled();
