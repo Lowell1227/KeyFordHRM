@@ -400,9 +400,35 @@ describe('employee confirmation draft', () => {
       { ...viewer, id: hrId, sysRole: SysRole.hr });
     expect(prisma.confirmationApplication.findMany).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ AND: expect.arrayContaining([
-        expect.objectContaining({ employee: { is: {} } }),
+        expect.objectContaining({ OR: expect.arrayContaining([{ employee: { is: {} } }]) }),
         expect.objectContaining({ employee: { name: { contains: '张', mode: 'insensitive' } } }),
       ]) }),
+    }));
+  });
+
+  it('includes cross-company applications assigned to an authorized HR viewer', async () => {
+    prisma.confirmationApplication.findMany.mockResolvedValue([]);
+    const companyScope = { dept: { is: { company: 'fuede' } } };
+    dataScope.getConfirmationEmployeeFilter.mockResolvedValueOnce(companyScope);
+
+    await service.findAll(
+      { page: 1, pageSize: 10, skip: 0, take: 10 } as never,
+      { ...viewer, id: managerId, sysRole: SysRole.hr_user, hrCapabilities: ['confirmation_manage'] },
+    );
+
+    expect(prisma.confirmationApplication.findMany).toHaveBeenCalledWith(expect.objectContaining({
+      where: {
+        AND: [{
+          OR: [
+            { employee: { is: companyScope } },
+            {
+              workflowVersion: 2,
+              submissionVersion: { gt: 0 },
+              OR: [{ managerId }, { companyApproverId: managerId }],
+            },
+          ],
+        }],
+      },
     }));
   });
 

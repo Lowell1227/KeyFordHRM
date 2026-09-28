@@ -434,11 +434,23 @@ export class ConfirmationService {
     return { id, status: ConfirmationStatus.submitted };
   }
 
-  /** 转正管理列表覆盖本数据范围的员工草稿和办理记录。 */
+  /** 转正管理列表覆盖本数据范围，以及明确分配给当前用户的办理记录。 */
   async findAll(dto: PaginationDto, viewer: AuthUser): Promise<Paginated<ConfirmationListItem>> {
     this.assertConfirmationManager(viewer);
     const scope = await this.dataScope.getConfirmationEmployeeFilter(viewer);
-    return this.findMany(dto, { employee: { is: scope } }, viewer);
+    return this.findMany(dto, {
+      OR: [
+        { employee: { is: scope } },
+        {
+          workflowVersion: 2,
+          submissionVersion: { gt: 0 },
+          OR: [
+            { managerId: viewer.id },
+            { companyApproverId: viewer.id },
+          ],
+        },
+      ],
+    }, viewer);
   }
 
   /** 直属主管或公司审批人查看分配给本人的全部已提交记录。 */
