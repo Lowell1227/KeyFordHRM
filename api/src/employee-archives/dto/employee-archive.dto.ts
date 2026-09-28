@@ -109,7 +109,7 @@ class EmployeeCreateContractDto {
 class EmployeeCreatePerformanceDto {
   @IsOptional()
   @BlankToNull()
-  @IsUUID('4')
+  @IsUUID(undefined, { message: '绩效直属上级信息无效，请重新选择' })
   managerId?: string | null;
 }
 
@@ -174,12 +174,12 @@ export class CreateEmployeeDto {
 
   @IsOptional()
   @BlankToNull()
-  @IsUUID('4')
+  @IsUUID(undefined, { message: '花名册直属主管信息无效，请重新选择' })
   rosterManagerId?: string | null;
 
   @IsOptional()
   @BlankToNull()
-  @IsUUID('4')
+  @IsUUID(undefined, { message: '绩效直属上级信息无效，请重新选择' })
   performanceManagerId?: string | null;
 
   @IsOptional()

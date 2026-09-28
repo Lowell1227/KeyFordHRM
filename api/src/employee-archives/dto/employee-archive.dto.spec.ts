@@ -56,4 +56,47 @@ describe('CreateEmployeeDto', () => {
       contracts: [{ signedAt: 'not-a-date' }],
     }, { type: 'body', metatype: CreateEmployeeDto })).rejects.toThrow();
   });
+
+  it('accepts valid UUID v5 manager IDs when saving a new-employee draft', async () => {
+    const result = await pipe.transform({
+      name: '草稿员工',
+      rosterManagerId: '886313e1-3b8a-5372-9b90-0c9aee199e5d',
+      performanceManagerId: '21f7f8de-8051-5b89-8680-0195ef798b6a',
+      performance: { managerId: '21f7f8de-8051-5b89-8680-0195ef798b6a' },
+    }, { type: 'body', metatype: SaveEmployeeCreateDraftDto });
+
+    expect(result.rosterManagerId).toBe('886313e1-3b8a-5372-9b90-0c9aee199e5d');
+    expect(result.performanceManagerId).toBe('21f7f8de-8051-5b89-8680-0195ef798b6a');
+    expect(result.performance.managerId).toBe('21f7f8de-8051-5b89-8680-0195ef798b6a');
+  });
+
+  it('accepts valid UUID v5 manager IDs when submitting a new employee', async () => {
+    const result = await pipe.transform({
+      name: '新员工', company: 'fuede', deptId: '30000000-0000-4000-8000-000000000001',
+      entryDate: '2026-09-29', effectiveFrom: '2026-09-29', employmentType: 'full_time',
+      employeeStatus: 'probation', rosterManagerId: '886313e1-3b8a-5372-9b90-0c9aee199e5d',
+      performanceManagerId: '21f7f8de-8051-5b89-8680-0195ef798b6a',
+      performance: { managerId: '21f7f8de-8051-5b89-8680-0195ef798b6a' },
+    }, { type: 'body', metatype: CreateEmployeeDto });
+
+    expect(result.rosterManagerId).toBe('886313e1-3b8a-5372-9b90-0c9aee199e5d');
+    expect(result.performanceManagerId).toBe('21f7f8de-8051-5b89-8680-0195ef798b6a');
+    expect(result.performance.managerId).toBe('21f7f8de-8051-5b89-8680-0195ef798b6a');
+  });
+
+  it.each([
+    [{ rosterManagerId: 'FD300055' }, '花名册直属主管信息无效，请重新选择'],
+    [{ performanceManagerId: 'FD300055' }, '绩效直属上级信息无效，请重新选择'],
+    [{ performance: { managerId: 'FD300055' } }, '绩效直属上级信息无效，请重新选择'],
+  ])('returns a business-facing message for invalid manager input %#', async (managerInput, message) => {
+    const validation = pipe.transform({ name: '草稿员工', ...managerInput }, {
+      type: 'body', metatype: SaveEmployeeCreateDraftDto,
+    });
+    await expect(validation).rejects.toMatchObject({
+      response: { message: [expect.stringContaining(message)] },
+    });
+    await expect(validation).rejects.not.toMatchObject({
+      response: { message: [expect.stringContaining('must be a UUID')] },
+    });
+  });
 });
