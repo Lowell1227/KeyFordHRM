@@ -27,8 +27,12 @@ export class EmployeeReentryFieldsDto {
   @IsOptional() @IsUUID('4') deptId?: string | null;
   @IsOptional() @IsUUID('4') positionId?: string | null;
   @IsOptional() @IsString() @MaxLength(100) position?: string | null;
-  @IsOptional() @IsUUID('4') rosterManagerId?: string | null;
-  @IsOptional() @IsUUID('4') performanceManagerId?: string | null;
+  @IsOptional()
+  @IsUUID(undefined, { message: '花名册直属主管信息无效，请重新选择' })
+  rosterManagerId?: string | null;
+  @IsOptional()
+  @IsUUID(undefined, { message: '绩效直属上级信息无效，请重新选择' })
+  performanceManagerId?: string | null;
   @Type(() => Date) @IsDate() effectiveDate!: Date;
   @IsOptional() @Type(() => Date) @IsDate() effectiveTo?: Date | null;
   @IsIn([UserStatus.active, UserStatus.probation]) employeeStatus!: UserStatus;
