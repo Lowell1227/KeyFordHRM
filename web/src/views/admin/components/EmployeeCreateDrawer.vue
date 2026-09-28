@@ -15,6 +15,7 @@ import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import { uploadApi } from '@/api/upload.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import type { Department } from '@/types/api.types';
+import PersonnelProcessTimeline from './PersonnelProcessTimeline.vue';
 
 const props = defineProps<{
   modelValue: boolean;
@@ -31,7 +32,12 @@ const emit = defineEmits<{
 }>();
 
 const stepTitles = ['基本信息', '本次任职', '补充资料', '检查并提交'];
-const postSubmitStages = ['提交审核', '档案审核', '待入职', '入职生效'];
+const postSubmitStages = [
+  { key: 'submit', title: '提交审核', status: '等待处理', tone: 'waiting' as const },
+  { key: 'review', title: '档案审核', status: '等待处理', tone: 'waiting' as const },
+  { key: 'pending-entry', title: '待入职', status: '等待处理', tone: 'waiting' as const },
+  { key: 'effective', title: '入职生效', status: '等待处理', tone: 'waiting' as const },
+];
 const supplementGroups = ref<string[]>([]);
 const fieldErrors = reactive<Record<string, string>>({});
 const saveError = ref('');
@@ -529,12 +535,6 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
           />
         </el-steps>
         <div class="mobile-step"><strong>{{ currentStep + 1 }}/{{ stepTitles.length }} {{ stepTitles[currentStep] }}</strong></div>
-        <div class="post-submit-flow" aria-label="提交后流程">
-          <span class="post-submit-flow__label">提交后流程</span>
-          <ol>
-            <li v-for="stage in postSubmitStages" :key="stage">{{ stage }}</li>
-          </ol>
-        </div>
         <span class="save-state" :class="`save-state--${saveState}`">{{ saveStateLabel }}</span>
       </div>
       <el-alert v-if="draft?.rejectedReason" :title="`已退回：${draft.rejectedReason}`" type="warning" :closable="false" />
@@ -676,6 +676,13 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
             <div><dt>合同</dt><dd>{{ form.contracts.length }} 份</dd></div><div><dt>工号</dt><dd>审核通过后使用系统生成的新工号</dd></div>
           </dl>
         </section>
+
+        <section class="future-process-section">
+          <div class="section-head">
+            <div><h3>后续办理流程</h3><p>提交后按以下顺序办理，尚未发生的节点统一灰显。</p></div>
+          </div>
+          <PersonnelProcessTimeline :items="postSubmitStages" label="后续办理流程" />
+        </section>
       </el-form>
     </div>
 
@@ -696,11 +703,6 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
 .wizard-head { position: sticky; top: -20px; z-index: 3; padding: 14px 0 12px; background: #fff; border-bottom: 1px solid #eef1f6; }
 .desktop-steps { padding: 0 8px; }
 .mobile-step { display: none; }
-.post-submit-flow { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 12px; color: #667085; font-size: 12px; }
-.post-submit-flow__label { flex: none; color: #344054; font-weight: 600; }
-.post-submit-flow ol { display: flex; align-items: center; gap: 18px; margin: 0; padding: 0; list-style: none; }
-.post-submit-flow li { position: relative; white-space: nowrap; }
-.post-submit-flow li + li::before { position: absolute; left: -12px; color: #b2b9c6; content: '→'; }
 .save-state { display: block; margin-top: 8px; color: #98a2b3; font-size: 12px; text-align: right; }
 .save-state--saving { color: #667085; }.save-state--saved { color: #16a34a; }.save-state--error { color: #dc2626; }
 .wizard-section { padding: 2px 2px 20px; }
@@ -721,10 +723,11 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
 .material-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 7px; background: #f2f4f7; border-radius: 6px; }
 .preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 16px 0 0; border: 1px solid #e5eaf2; border-radius: 10px; overflow: hidden; }
 .preview-grid > div { padding: 14px 16px; border-right: 1px solid #eef1f6; border-bottom: 1px solid #eef1f6; }.preview-grid dt { color: #667085; font-size: 12px; }.preview-grid dd { margin: 5px 0 0; color: #101828; font-weight: 600; }
+.future-process-section { margin-top: 8px; padding: 22px 4px 8px; border-top: 1px solid var(--el-border-color-lighter); }
+.future-process-section .section-head h3 { font-size: 16px; }
 .drawer-footer { display: flex; align-items: center; width: 100%; }.footer-spacer { flex: 1; }
 @media (max-width: 760px) {
   .wizard-shell { min-height: 0; }.desktop-steps { display: none; }.mobile-step { display: block; }.wizard-head { top: -12px; padding-top: 8px; }
-  .post-submit-flow { align-items: flex-start; flex-direction: column; gap: 6px; }.post-submit-flow ol { width: 100%; justify-content: space-between; gap: 10px; font-size: 11px; }.post-submit-flow li + li::before { left: -8px; }
   .form-grid, .form-grid--3, .preview-grid, .contract-materials { grid-template-columns: 1fr; }.span-2 { grid-column: auto; }
   .identity-candidate, .section-head, .contract-toolbar { align-items: flex-start; flex-direction: column; }.drawer-footer { flex-wrap: wrap; gap: 8px; }.drawer-footer .el-button { margin-left: 0; }
 }

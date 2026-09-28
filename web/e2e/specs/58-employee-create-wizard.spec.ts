@@ -110,7 +110,7 @@ async function setupPersonnelPage(page: Page, options: {
   return { draftBodies, createBodies, events, getDraft: () => currentDraft };
 }
 
-test('新增员工采用四步向导，任职关系同页且补充资料可跳过', async ({ page }) => {
+test('新增员工采用四步向导，任职关系同页且补充资料可跳过', async ({ page }, testInfo) => {
   await setupPersonnelPage(page);
   await page.setViewportSize({ width: 1440, height: 900 });
   await page.goto('/personnel-processing');
@@ -122,16 +122,25 @@ test('新增员工采用四步向导，任职关系同页且补充资料可跳�
   await expect(drawer.getByRole('button', { name: '下一步' })).toBeVisible();
   await expect(drawer.getByRole('button', { name: '提交审核' })).toHaveCount(0);
   await expect(drawer.getByText('员工工号将在提交审核时自动生成')).toBeVisible();
-  const futureFlow = drawer.getByLabel('提交后流程');
-  await expect(futureFlow.getByText('提交审核', { exact: true })).toBeVisible();
-  await expect(futureFlow.getByText('档案审核', { exact: true })).toBeVisible();
-  await expect(futureFlow.getByText('待入职', { exact: true })).toBeVisible();
-  await expect(futureFlow.getByText('入职生效', { exact: true })).toBeVisible();
+  await expect(drawer.getByLabel('提交后流程')).toHaveCount(0);
   await drawer.getByLabel('姓名', { exact: true }).fill('分步员工');
   await drawer.getByRole('button', { name: '下一步' }).click();
   await expect(drawer.getByLabel('任职开始', { exact: true })).toBeVisible();
   await expect(drawer.getByLabel('任职结束', { exact: true })).toHaveCount(0);
   await expect(drawer.getByLabel('实际转正日期', { exact: true })).toHaveCount(0);
+  const futureFlow = drawer.getByRole('list', { name: '后续办理流程' });
+  await expect(futureFlow).toBeVisible();
+  await expect(futureFlow.getByRole('listitem')).toHaveCount(4);
+  await expect(futureFlow.getByText('提交审核', { exact: true })).toBeVisible();
+  await expect(futureFlow.getByText('档案审核', { exact: true })).toBeVisible();
+  await expect(futureFlow.getByText('待入职', { exact: true })).toBeVisible();
+  await expect(futureFlow.getByText('入职生效', { exact: true })).toBeVisible();
+  await expect(futureFlow.getByText('等待处理', { exact: true })).toHaveCount(4);
+  await expect(futureFlow.locator('[data-tone="waiting"]')).toHaveCount(4);
+  const flowTop = await futureFlow.evaluate((element) => element.getBoundingClientRect().top);
+  const formBottom = await drawer.locator('.wizard-section:visible').last().evaluate((element) => element.getBoundingClientRect().bottom);
+  expect(flowTop).toBeGreaterThan(formBottom);
+  await futureFlow.screenshot({ path: testInfo.outputPath('new-hire-future-flow.png') });
   await expect(drawer.getByText('花名册直属主管', { exact: true }).first()).toBeVisible();
   await expect(drawer.getByText('绩效直属上级', { exact: true }).first()).toBeVisible();
   await drawer.getByRole('button', { name: '下一步' }).click();
@@ -262,7 +271,7 @@ test('390px 手机宽度下向导保持单列且可继续填写', async ({ page 
   const drawer = page.getByRole('dialog', { name: '新增员工' });
   await expect(drawer.locator('.mobile-step')).toHaveText('1/4 基本信息');
   await expect(drawer.locator('.desktop-steps')).toBeHidden();
-  await expect(drawer.getByLabel('提交后流程')).toBeVisible();
+  await expect(drawer.getByRole('list', { name: '后续办理流程' })).toBeVisible();
   await drawer.getByLabel('姓名').fill('手机端员工');
   await drawer.getByRole('button', { name: '下一步' }).click();
   await expect(drawer.locator('.mobile-step')).toHaveText('2/4 本次任职');
@@ -479,10 +488,22 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 1024, height: 768
     await expect(drawer.getByText('2026-09-30', { exact: true }).first()).toBeVisible();
     await expect(drawer.getByText('合同材料', { exact: true })).toBeVisible();
     await expect(drawer.getByText('无 → 合同 · REENTRY-2026-001', { exact: true })).toBeVisible();
-    await expect(drawer.getByTestId('personnel-application-timeline')).toContainText('提交申请');
-    await expect(drawer.getByTestId('personnel-application-timeline')).toContainText('HR 审核');
-    await expect(drawer.getByTestId('personnel-application-timeline')).toContainText('已生效');
-    await expect(drawer.locator('[aria-current="step"]')).toContainText('等待入职生效');
+    const timeline = drawer.getByTestId('personnel-application-timeline');
+    await expect(timeline).toContainText('提交审核');
+    await expect(timeline).toContainText('档案审核');
+    await expect(timeline).toContainText('待入职');
+    await expect(timeline).toContainText('入职生效');
+    const submitted = timeline.getByRole('listitem').filter({ hasText: '提交审核' });
+    await expect(submitted).toContainText('2026-09-28');
+    await expect(submitted).toContainText('姚瑶');
+    await expect(submitted).toContainText('已提交');
+    const current = timeline.getByRole('listitem').filter({ hasText: '待入职' });
+    await expect(current).toHaveAttribute('data-tone', 'current');
+    await expect(current).toContainText('等待入职日期');
+    const future = timeline.getByRole('listitem').filter({ hasText: '入职生效' });
+    await expect(future).toHaveAttribute('data-tone', 'waiting');
+    await expect(future).toContainText('等待处理');
+    await timeline.screenshot({ path: testInfo.outputPath(`personnel-process-timeline-${viewport.width}.png`) });
     expect(await drawer.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth + 1)).toBe(true);
     await page.screenshot({ path: testInfo.outputPath(`reentry-application-detail-${viewport.width}.png`), fullPage: true });

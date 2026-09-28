@@ -3,6 +3,8 @@ import { computed, ref, watch } from 'vue';
 import type { EmployeeDataReview, EmployeeReviewStatus } from '@/api/employee-archives.api';
 import { applicationProgress, applicationType } from '@/utils/employee-lifecycle';
 import { formatDate, formatDateTime } from '@/utils/date';
+import PersonnelProcessTimeline from './PersonnelProcessTimeline.vue';
+import type { PersonnelProcessStep, PersonnelProcessTone } from './personnel-process-timeline';
 
 const props = defineProps<{ request: EmployeeDataReview }>();
 const expanded = ref<string[]>([]);
@@ -214,8 +216,8 @@ const submittedEvent = computed(() => props.request.events?.find((event) => /sub
 const activatedEvent = computed(() => props.request.events?.find((event) => /activate|effective/.test(event.action)));
 const revisionEvents = computed(() => (props.request.events ?? []).filter((event) => /revise|reject|cancel|withdraw/.test(event.action)));
 
-const timeline = computed(() => {
-  const reviewTone = isFullyCancelled.value || hasRejected.value || hasCancelledReview.value ? 'danger' : hasPending.value ? 'current' : reviewsComplete.value ? 'success' : 'waiting';
+const timeline = computed<PersonnelProcessStep[]>(() => {
+  const reviewTone: PersonnelProcessTone = isFullyCancelled.value || hasRejected.value || hasCancelledReview.value ? 'danger' : hasPending.value ? 'current' : reviewsComplete.value ? 'success' : 'waiting';
   const reviewAction = isFullyCancelled.value
     ? '申请已取消'
     : hasRejected.value
@@ -231,44 +233,54 @@ const timeline = computed(() => {
             : '待办理';
   const nodes = [
     {
-      key: 'submitted', title: '提交申请', tone: 'success', current: false,
+      key: 'submitted', title: isOnboarding.value ? '提交审核' : '提交申请', tone: 'success' as const, current: false,
       time: formatDateTime(submittedEvent.value?.createdAt ?? props.request.createdAt),
-      actor: submittedEvent.value?.user?.name ?? props.request.createdBy?.name ?? '系统', action: '已提交',
+      actor: submittedEvent.value?.user?.name ?? props.request.createdBy?.name ?? '系统', status: '已提交',
     },
     {
-      key: 'review', title: 'HR 审核', tone: reviewTone, current: !hasCancellation.value && (hasPending.value || hasRejected.value),
+      key: 'review', title: '档案审核', tone: reviewTone, current: !hasCancellation.value && (hasPending.value || hasRejected.value),
       time: props.request.performanceReviewedAt || props.request.profileReviewedAt ? formatDateTime(props.request.performanceReviewedAt || props.request.profileReviewedAt!) : '',
-      actor: '', action: reviewAction,
+      actor: props.request.performanceReviewedBy?.name ?? props.request.profileReviewedBy?.name ?? '',
+      status: reviewAction,
+      note: props.request.rejectedReason ? `退回原因：${props.request.rejectedReason}` : '',
+      details: reviewScopes.value.map((scope) => ({
+        key: scope.key,
+        title: scope.label,
+        status: scope.status.label,
+        tone: scope.status.tone,
+        actor: scope.actor,
+        time: scope.time ? formatDateTime(scope.time) : '',
+      })),
     },
   ];
   if (isFullyCancelled.value) {
     return [...nodes, {
-      key: 'closed', title: '办理结束', tone: 'danger', current: false,
+      key: 'closed', title: '办理结束', tone: 'danger' as const, current: false,
       time: props.request.cancelledAt ? formatDateTime(props.request.cancelledAt) : '',
-      actor: '', action: '已取消，不再生效',
+      actor: '', status: '已取消，不再生效',
     }];
   }
   if (isPartiallyCancelled.value && !isOnboarding.value) {
     return [...nodes, {
-      key: 'closed', title: '办理结束', tone: 'danger', current: false,
+      key: 'closed', title: '办理结束', tone: 'danger' as const, current: false,
       time: props.request.cancelledAt ? formatDateTime(props.request.cancelledAt) : '',
-      actor: '', action: '部分内容已生效，其余已取消',
+      actor: '', status: '部分内容已生效，其余已取消',
     }];
   }
   const waitingCurrent = reviewsResolved.value && !isEffective.value;
   return [...nodes,
     {
-      key: 'waiting-effective', title: isOnboarding.value ? '等待入职生效' : '等待变更生效',
+      key: 'waiting-effective', title: isOnboarding.value ? '待入职' : '待变更生效',
       tone: isEffective.value ? 'success' : waitingCurrent ? 'current' : 'waiting',
       current: waitingCurrent,
-      time: effectiveDate.value ? formatDate(String(effectiveDate.value)) : '',
-      actor: '', action: isEffective.value ? '已完成' : waitingCurrent ? '待生效' : '未开始',
+      time: '',
+      actor: '', status: isEffective.value ? '已完成' : waitingCurrent ? (isOnboarding.value ? '等待入职日期' : '等待生效日期') : '等待处理',
     },
     {
-      key: 'effective', title: '已生效', tone: isEffective.value ? 'success' : 'waiting', current: false,
+      key: 'effective', title: isOnboarding.value ? '入职生效' : '变更生效', tone: isEffective.value ? 'success' : 'waiting', current: false,
       time: props.request.appliedAt ? formatDateTime(props.request.appliedAt) : '',
       actor: activatedEvent.value?.user?.name ?? (isEffective.value ? '系统' : ''),
-      action: isEffective.value ? '已生效' : '待后续完成',
+      status: isEffective.value ? '已生效' : '等待处理',
     },
   ];
 });
@@ -320,28 +332,7 @@ function eventLabel(action: string) {
 
         <section class="application-detail__section">
           <h3>办理流程</h3>
-          <ol class="approval-timeline" data-testid="personnel-application-timeline">
-            <li
-              v-for="node in timeline"
-              :key="node.key"
-              class="approval-timeline__item"
-              :class="`is-${node.tone}`"
-              :aria-current="node.current ? 'step' : undefined"
-            >
-              <span class="approval-timeline__dot" aria-hidden="true" />
-              <time v-if="node.time">{{ node.time }}</time>
-              <div class="approval-timeline__title"><strong>{{ node.title }}</strong><span>{{ node.action }}</span></div>
-              <div v-if="node.actor" class="approval-timeline__actor"><span class="approval-timeline__avatar">{{ node.actor.slice(0, 1) }}</span><span>{{ node.actor }}</span></div>
-              <div v-if="node.key === 'review'" class="approval-timeline__scopes">
-                <div v-for="scope in reviewScopes" :key="scope.key">
-                  <span>{{ scope.label }}</span>
-                  <strong :class="`is-${scope.status.tone}`">{{ scope.status.label }}</strong>
-                  <small v-if="scope.actor || scope.time">{{ scope.actor || 'HR' }}<template v-if="scope.time"> · {{ formatDateTime(scope.time) }}</template></small>
-                </div>
-              </div>
-              <p v-if="node.key === 'review' && request.rejectedReason" class="approval-timeline__note">退回原因：{{ request.rejectedReason }}</p>
-            </li>
-          </ol>
+          <PersonnelProcessTimeline :items="timeline" label="办理流程" data-testid="personnel-application-timeline" />
         </section>
 
         <section v-if="revisionEvents.length" class="application-detail__section">
@@ -370,26 +361,6 @@ function eventLabel(action: string) {
 .application-detail__facts dd { margin: 0; overflow-wrap: anywhere; color: var(--el-text-color-primary); font-weight: 600; line-height: 20px; }
 .application-detail__changes > div { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
 .application-detail__changes span { overflow-wrap: anywhere; color: var(--el-text-color-regular); }
-.approval-timeline { margin: 0; padding: 0 0 0 6px; list-style: none; }
-.approval-timeline__item { --node-color: var(--el-border-color); position: relative; padding: 0 0 24px 24px; border-left: 2px solid var(--el-border-color-lighter); }
-.approval-timeline__item:last-child { padding-bottom: 4px; border-left-color: transparent; }
-.approval-timeline__dot { position: absolute; top: 4px; left: -6px; width: 10px; height: 10px; box-sizing: border-box; border: 2px solid var(--node-color); border-radius: 50%; background: var(--el-bg-color); }
-.approval-timeline__item.is-success { --node-color: var(--el-color-success); }
-.approval-timeline__item.is-danger { --node-color: var(--el-color-danger); }
-.approval-timeline__item.is-current { --node-color: var(--el-color-primary); }
-.approval-timeline time { display: block; margin-bottom: 6px; color: var(--el-text-color-secondary); font-size: 12px; }
-.approval-timeline__title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
-.approval-timeline__title > span { color: var(--node-color); font-weight: 600; }
-.approval-timeline__actor { display: flex; align-items: center; gap: 7px; margin-top: 8px; color: var(--el-text-color-regular); font-size: 13px; }
-.approval-timeline__avatar { display: inline-flex; width: 22px; height: 22px; align-items: center; justify-content: center; border-radius: 50%; background: var(--el-fill-color); color: var(--el-text-color-secondary); font-size: 11px; }
-.approval-timeline__scopes { display: grid; gap: 8px; margin-top: 10px; }
-.approval-timeline__scopes > div { display: grid; grid-template-columns: minmax(100px, .5fr) auto minmax(180px, 1fr); gap: 10px; align-items: center; padding: 9px 12px; border-radius: 6px; background: var(--el-fill-color-extra-light); }
-.approval-timeline__scopes small { color: var(--el-text-color-secondary); text-align: right; }
-.approval-timeline__scopes strong.is-success { color: var(--el-color-success); }
-.approval-timeline__scopes strong.is-danger { color: var(--el-color-danger); }
-.approval-timeline__scopes strong.is-current { color: var(--el-color-primary); }
-.approval-timeline__scopes strong.is-neutral { color: var(--el-text-color-secondary); }
-.approval-timeline__note { margin: 10px 0 0; padding: 9px 12px; border-radius: 6px; background: var(--el-color-warning-light-9); color: var(--el-text-color-regular); }
 .application-detail__events { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .application-detail__events li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 9px 12px; border-radius: 6px; background: var(--el-fill-color-extra-light); }
 .application-detail__events span { color: var(--el-text-color-secondary); }
@@ -399,7 +370,5 @@ function eventLabel(action: string) {
   .application-detail__facts > div:nth-last-child(-n + 2) { border-bottom: 1px solid var(--el-border-color-lighter); }
   .application-detail__facts > div:last-child { border-bottom: 0; }
   .application-detail__changes > div { grid-template-columns: 1fr; gap: 4px; }
-  .approval-timeline__scopes > div { grid-template-columns: 1fr auto; }
-  .approval-timeline__scopes small { grid-column: 1 / -1; text-align: left; }
 }
 </style>
