@@ -161,12 +161,12 @@ async function submit() {
 async function cancelRequest() {
   if (!currentRequest.value) return;
   try {
-    const result = await ElMessageBox.prompt('请填写取消原因。', '取消再入职申请', {
+    const result = await ElMessageBox.prompt('取消后，本次入职不会继续生效，申请和办理历史会保留。请填写取消原因。', '取消本次入职', {
       confirmButtonText: '确认取消', cancelButtonText: '返回', inputPattern: /\S{2,}/, inputErrorMessage: '请至少填写 2 个字',
     });
     cancelling.value = true;
     await employeeArchivesApi.cancelReentry(currentRequest.value.id, result.value);
-    ElMessage.success('再入职申请已取消，预留工号不会再次使用');
+    ElMessage.success('本次入职已取消');
     currentRequest.value = null;
     emit('submitted');
     emit('update:modelValue', false);
@@ -222,7 +222,7 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
     </div>
     <template #footer>
       <el-button @click="close">关闭</el-button>
-      <el-button v-if="canCancel" :loading="cancelling" @click="cancelRequest">取消申请</el-button>
+      <el-button v-if="canCancel" :loading="cancelling" @click="cancelRequest">取消本次入职</el-button>
       <el-button v-if="canEdit" type="primary" :loading="saving" :disabled="loading || !!loadError" @click="submit">{{ performanceOnly ? '重新提交绩效关系' : currentRequest ? '更新并重新提交' : '提交审核' }}</el-button>
     </template>
   </el-drawer>

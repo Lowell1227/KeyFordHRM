@@ -512,10 +512,8 @@ export class EmployeeArchivesService {
 
   async listDrafts(query: { page: number; pageSize: number }) {
     const where: Prisma.EmployeeDataChangeRequestWhereInput = {
-      OR: [
-        { recordStatus: 'draft', archivedAt: null },
-        { recordStatus: 'archived', archivedAt: { not: null } },
-      ],
+      recordStatus: 'draft',
+      archivedAt: null,
     };
     const [items, total] = await Promise.all([
       this.prisma.employeeDataChangeRequest.findMany({

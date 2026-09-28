@@ -32,6 +32,7 @@ async function setupPersonnelPage(page: Page, options: {
 } = {}) {
   const draftBodies: Array<Record<string, any>> = [];
   const createBodies: Array<Record<string, any>> = [];
+  const archivedDraftIds: string[] = [];
   const events: string[] = [];
   let currentDraft: Record<string, any> | null = options.initialDraft ?? null;
   await page.addInitScript(() => {
@@ -71,6 +72,16 @@ async function setupPersonnelPage(page: Page, options: {
       items: currentDraft ? [currentDraft] : [],
     })),
   }));
+  await page.route('**/api/v1/employee-archives/drafts/archive', async (route) => {
+    const body = route.request().postDataJSON() as { ids: string[] };
+    archivedDraftIds.push(...body.ids);
+    currentDraft = null;
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify(apiResponse({
+      archived: body.ids.length,
+      succeeded: body.ids.map((id) => ({ id })),
+      failed: [],
+    })) });
+  });
   await page.route('**/api/v1/employee-archives/applications/list**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 0, page: 1, pageSize: 100, items: [] })),
@@ -107,7 +118,7 @@ async function setupPersonnelPage(page: Page, options: {
   await page.route('**/api/v1/employee-archives/diagnostics', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse({ blocking: false, total: 0, items: [] })),
   }));
-  return { draftBodies, createBodies, events, getDraft: () => currentDraft };
+  return { draftBodies, createBodies, archivedDraftIds, events, getDraft: () => currentDraft };
 }
 
 test('新增员工采用四步向导，补充资料可直接继续且不重复提示', async ({ page }, testInfo) => {
@@ -289,6 +300,53 @@ function completeDraft() {
     proposedValue: { employee: { name: '测试办理员工', company: 'fuede', deptId: department.id, entryDate: '2026-10-08', effectiveFrom: '2026-10-08', employmentType: 'full_time', employeeStatus: 'probation' }, profile: {}, contracts: [], performance: { managerId: null }, draftMeta: { layoutVersion: 2, currentStep: 0, completedSteps: [] } },
     createdAt: '2026-09-26T08:00:00.000Z', updatedAt: '2026-09-26T08:00:00.000Z',
   };
+}
+
+for (const viewport of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 390, height: 844 }]) {
+  test(`草稿列表在 ${viewport.width}px 下说明填写情况并可确认删除`, async ({ page }, testInfo) => {
+    const initialDraft = completeDraft();
+    initialDraft.employeeName = '待完善员工';
+    initialDraft.createdBy = { id: 'hr-1', name: '姚瑶', sysRole: 'hr' };
+    initialDraft.proposedValue.employee.deptId = '';
+    initialDraft.proposedValue.employee.entryDate = '';
+    initialDraft.proposedValue.employee.effectiveFrom = '';
+    initialDraft.proposedValue.draftMeta.currentStep = 2;
+    const state = await setupPersonnelPage(page, { initialDraft });
+
+    await page.setViewportSize(viewport);
+    await page.goto('/personnel-processing');
+    await page.getByRole('tab', { name: '草稿', exact: true }).click();
+
+    const list = viewport.width === 390
+      ? page.locator('.draft-workspace .draft-mobile-list')
+      : page.locator('.draft-workspace .desktop-result-table');
+    if (viewport.width !== 390) {
+      await expect(list.getByRole('columnheader')).toHaveText(['草稿', '填写情况', '最后更新', '操作']);
+      await expect(list.getByText('待补充：部门、入职日期、任职开始', { exact: true })).toBeVisible();
+      await expect(list.getByText('创建人：姚瑶', { exact: true })).toBeVisible();
+    } else {
+      await expect(list.getByText('待补充', { exact: true })).toBeVisible();
+      await expect(list.getByText('部门、入职日期、任职开始', { exact: true })).toBeVisible();
+      await expect(list.getByText('创建人', { exact: true })).toBeVisible();
+      await expect(list.getByText('姚瑶', { exact: true })).toBeVisible();
+    }
+    await expect(list.getByText('待完善员工', { exact: true })).toBeVisible();
+    await expect(list.getByText('新增员工', { exact: true })).toBeVisible();
+    await expect(list.getByText('第 3/4 步 · 补充资料', { exact: true })).toBeVisible();
+    await page.screenshot({ path: testInfo.outputPath(`draft-list-${viewport.width}.png`), animations: 'disabled' });
+
+    await list.getByRole('button', { name: '删除', exact: true }).click();
+    const confirm = page.getByRole('dialog', { name: '删除草稿' });
+    await expect(confirm).toContainText('删除后将从草稿列表移除，不影响正式员工档案');
+    await confirm.getByRole('button', { name: '取消', exact: true }).click();
+    await expect(list.getByText('待完善员工', { exact: true })).toBeVisible();
+    expect(state.archivedDraftIds).toEqual([]);
+
+    await list.getByRole('button', { name: '删除', exact: true }).click();
+    await page.getByRole('dialog', { name: '删除草稿' }).getByRole('button', { name: '确认删除' }).click();
+    await expect.poll(() => state.archivedDraftIds).toEqual(['draft-create-1']);
+    await expect(page.getByText('暂无草稿', { exact: true })).toBeVisible();
+  });
 }
 
 for (const scenario of [
@@ -484,6 +542,7 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 1024, height: 768
     await expect(drawer.getByRole('button', { name: /\u518d\u5165\u804c.*2026-09-30/ })).toHaveCount(0);
     await expect(drawer.getByText('已通过，待入职生效', { exact: true })).toHaveCount(1);
     await expect(drawer.getByText('本次任职信息', { exact: true })).toBeVisible();
+    await expect(drawer.getByRole('button', { name: '取消本次入职', exact: true })).toBeVisible();
     await expect(drawer.getByText('未填写', { exact: true })).toHaveCount(0);
     await expect(drawer.getByText('孚德', { exact: true })).toBeVisible();
     await expect(drawer.getByText('人事部', { exact: true })).toBeVisible();
@@ -527,6 +586,7 @@ test('新增员工办理详情保留补充资料', async ({ page }) => {
     onboardingStatus: 'submitted',
     profileReviewStatus: 'pending',
     performanceReviewStatus: 'not_required',
+    canCancel: true,
     proposedValue: {
       employee: { company: 'fuede', deptId: department.id, departmentName: '人事部', position: 'HRBP', effectiveDate: '2026-10-08' },
       profile: { education: '本科', school: '浙江大学' },
@@ -557,6 +617,7 @@ test('档案修改办理详情保留个人资料和合同差异', async ({ page 
     recordStatus: 'submitted',
     profileReviewStatus: 'pending',
     performanceReviewStatus: 'not_required',
+    canCancel: true,
     baseValue: { employee: {}, profile: { education: '大专' }, contracts: [] },
     proposedValue: {
       employee: {},
@@ -570,6 +631,7 @@ test('档案修改办理详情保留个人资料和合同差异', async ({ page 
   await page.goto('/personnel-processing');
   await page.getByRole('button', { name: '查看办理详情', exact: true }).click();
   const drawer = page.getByRole('dialog', { name: '档案修改办理详情', exact: true });
+  await expect(drawer.getByRole('button', { name: '撤回未生效变更', exact: true })).toBeVisible();
   await expect(drawer.getByRole('button', { name: /档案修改/ })).toHaveCount(0);
   await expect(drawer.getByText('学历', { exact: true })).toBeVisible();
   await expect(drawer.getByText('大专 → 本科', { exact: true })).toBeVisible();
@@ -724,6 +786,7 @@ for (const intakeType of ['reentry', 'new_hire']) test(`${intakeType} 已生效�
   await page.locator('.desktop-result-table').getByRole('button', { name: '查看办理详情', exact: true }).first().click();
   await page.getByRole('dialog', { name: `${intakeType === 'new_hire' ? '新增员工' : '再入职'}办理详情`, exact: true }).getByRole('button', { name: '修改后重新提交' }).click();
   const drawer = page.getByRole('dialog', { name: intakeType === 'new_hire' ? '修改入职绩效关系' : '办理再入职', exact: true });
+  await expect(drawer.getByRole('button', { name: '取消本次入职', exact: true })).toHaveCount(0);
   await expect(drawer.getByRole('button', { name: '重新提交绩效关系' })).toBeVisible();
   await expect(drawer.getByLabel('再入职日期', { exact: true })).toBeDisabled();
   await expect(drawer.getByText('绩效直属上级', { exact: true }).locator('..').getByRole('combobox')).toBeEnabled();

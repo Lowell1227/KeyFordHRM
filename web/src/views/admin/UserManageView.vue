@@ -857,6 +857,7 @@ const draftDialog = ref({
   items: [] as EmployeeDataReview[],
   total: 0,
 });
+const draftDeletingId = ref('');
 const applications = ref<EmployeeDataReview[]>([]);
 const applicationsLoading = ref(false);
 const applicationsError = ref('');
@@ -921,14 +922,32 @@ async function resumeApplication(request: EmployeeDataReview) {
 }
 
 async function cancelApplication(request: EmployeeDataReview) {
+  const onboarding = request.intakeType === 'new_hire' || request.intakeType === 'reentry';
   try {
-    const result = await ElMessageBox.prompt('请填写原因，已生效内容不会回退。', '撤回未生效内容', { confirmButtonText: '撤回申请', cancelButtonText: '返回', inputPattern: /\S{2,}/, inputErrorMessage: '请至少填写两个字' });
+    const result = await ElMessageBox.prompt(
+      onboarding
+        ? '取消后，该员工不会按计划入职；申请记录和办理历史会保留。请填写取消原因。'
+        : '请填写撤回原因，已生效内容不会回退。',
+      onboarding ? '取消本次入职' : '撤回未生效变更',
+      {
+        confirmButtonText: onboarding ? '确认取消' : '确认撤回',
+        cancelButtonText: '返回',
+        inputPattern: /\S{2,}/,
+        inputErrorMessage: '请至少填写两个字',
+      },
+    );
     applicationSaving.value = true;
     applicationDetail.value = await employeeArchivesApi.cancelApplication(request.id, result.value);
-    ElMessage.success('未生效内容已撤回');
+    ElMessage.success(onboarding ? '本次入职已取消' : '未生效变更已撤回');
     refreshCurrentView();
   } catch (error) { if (error !== 'cancel' && error !== 'close') { /* API 提示，保持详情 */ } }
   finally { applicationSaving.value = false; }
+}
+
+function cancelApplicationLabel(request: EmployeeDataReview) {
+  return request.intakeType === 'new_hire' || request.intakeType === 'reentry'
+    ? '取消本次入职'
+    : '撤回未生效变更';
 }
 
 function showArchiveResult(result: ArchiveBatchResult, action: string) {
@@ -1037,6 +1056,57 @@ function draftTypeLabel(draft: EmployeeDataReview) {
 
 function draftObjectLabel(draft: EmployeeDataReview) {
   return draft.employeeName || draft.proposedValue?.employee?.name || '未命名员工草稿';
+}
+
+const draftStepTitles = ['基本信息', '本次任职', '补充资料', '检查并提交'];
+const legacyDraftStepMap = [0, 1, 1, 2, 2, 2, 3];
+
+function draftStepIndex(draft: EmployeeDataReview) {
+  const meta = draft.proposedValue?.draftMeta ?? {};
+  const savedStep = Number.isInteger(meta.currentStep) ? Number(meta.currentStep) : 0;
+  const mappedStep = meta.layoutVersion === 2 ? savedStep : (legacyDraftStepMap[savedStep] ?? 0);
+  return Math.max(0, Math.min(mappedStep, draftStepTitles.length - 1));
+}
+
+function draftProgressLabel(draft: EmployeeDataReview) {
+  if (draft.sourceType !== 'manual_employee_create') return '待继续填写';
+  const step = draftStepIndex(draft);
+  return `第 ${step + 1}/4 步 · ${draftStepTitles[step]}`;
+}
+
+function draftMissingLabel(draft: EmployeeDataReview) {
+  if (draft.sourceType !== 'manual_employee_create') return '';
+  const employee = draft.proposedValue?.employee ?? {};
+  const missing = [
+    [employee.name, '姓名'],
+    [employee.deptId, '部门'],
+    [employee.entryDate, '入职日期'],
+    [employee.effectiveFrom, '任职开始'],
+  ].filter(([value]) => !value).map(([, label]) => label);
+  return missing.length ? `待补充：${missing.join('、')}` : '';
+}
+
+async function deleteDraft(draft: EmployeeDataReview) {
+  try {
+    await ElMessageBox.confirm(
+      `确认删除“${draftObjectLabel(draft)}”草稿？删除后将从草稿列表移除，不影响正式员工档案。`,
+      '删除草稿',
+      { confirmButtonText: '确认删除', cancelButtonText: '取消', type: 'warning' },
+    );
+    draftDeletingId.value = draft.id;
+    const result = await employeeArchivesApi.archiveDrafts([draft.id]);
+    if (result.failed?.length) {
+      ElMessage.warning(result.failed[0].reason || '删除失败，请刷新后重试');
+      return;
+    }
+    if (draftDialog.value.items.length === 1 && draftDialog.value.page > 1) draftDialog.value.page -= 1;
+    await loadDrafts();
+    ElMessage.success('草稿已删除');
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') throw error;
+  } finally {
+    draftDeletingId.value = '';
+  }
 }
 
 async function continueDraft(draft: EmployeeDataReview) {
@@ -2055,14 +2125,34 @@ onBeforeUnmount(() => {
               height="100%"
               class="app-table compact-table"
             >
-              <el-table-column type="index" label="序号" width="64" />
-              <el-table-column label="类型" width="120"><template #default="{ row }">{{ draftTypeLabel(row as EmployeeDataReview) }}</template></el-table-column>
-              <el-table-column label="员工" min-width="180"><template #default="{ row }">{{ draftObjectLabel(row as EmployeeDataReview) }}</template></el-table-column>
-              <el-table-column label="保存人" min-width="150"><template #default="{ row }">{{ row.createdBy?.name || '未知' }}</template></el-table-column>
-              <el-table-column label="保存时间" width="180"><template #default="{ row }">{{ formatDateTime(row.updatedAt) }}</template></el-table-column>
-              <el-table-column label="操作" width="140" fixed="right">
+              <el-table-column label="草稿" min-width="160">
+                <template #default="{ row }">
+                  <div class="draft-cell">
+                    <strong>{{ draftObjectLabel(row as EmployeeDataReview) }}</strong>
+                    <el-tag size="small" effect="plain">{{ draftTypeLabel(row as EmployeeDataReview) }}</el-tag>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="填写情况" min-width="260">
+                <template #default="{ row }">
+                  <div class="draft-cell">
+                    <span>{{ draftProgressLabel(row as EmployeeDataReview) }}</span>
+                    <small v-if="draftMissingLabel(row as EmployeeDataReview)">{{ draftMissingLabel(row as EmployeeDataReview) }}</small>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="最后更新" min-width="180">
+                <template #default="{ row }">
+                  <div class="draft-cell">
+                    <span>{{ formatDateTime(row.updatedAt) }}</span>
+                    <small>创建人：{{ row.createdBy?.name || '未知' }}</small>
+                  </div>
+                </template>
+              </el-table-column>
+              <el-table-column label="操作" width="150" fixed="right">
                 <template #default="{ row }">
                   <el-button v-if="canEditArchive" link type="primary" @click="continueDraft(row as EmployeeDataReview)">继续编辑</el-button>
+                  <el-button v-if="canEditArchive" link type="danger" :loading="draftDeletingId === row.id" @click="deleteDraft(row as EmployeeDataReview)">删除</el-button>
                 </template>
               </el-table-column>
             </el-table>
@@ -2073,10 +2163,13 @@ onBeforeUnmount(() => {
                 <span>{{ draftObjectLabel(item) }}</span>
               </template>
               <template #status><el-tag size="small" effect="plain">{{ draftTypeLabel(item) }}</el-tag></template>
-              <div class="mobile-result-field"><span class="mobile-result-field__label">保存人</span><span class="mobile-result-field__value">{{ item.createdBy?.name || '未知' }}</span></div>
-              <div class="mobile-result-field"><span class="mobile-result-field__label">保存时间</span><span class="mobile-result-field__value">{{ formatDateTime(item.updatedAt) }}</span></div>
+              <div class="mobile-result-field"><span class="mobile-result-field__label">填写情况</span><span class="mobile-result-field__value">{{ draftProgressLabel(item) }}</span></div>
+              <div v-if="draftMissingLabel(item)" class="mobile-result-field"><span class="mobile-result-field__label">待补充</span><span class="mobile-result-field__value">{{ draftMissingLabel(item).replace('待补充：', '') }}</span></div>
+              <div class="mobile-result-field"><span class="mobile-result-field__label">最后更新</span><span class="mobile-result-field__value">{{ formatDateTime(item.updatedAt) }}</span></div>
+              <div class="mobile-result-field"><span class="mobile-result-field__label">创建人</span><span class="mobile-result-field__value">{{ item.createdBy?.name || '未知' }}</span></div>
               <template v-if="canEditArchive" #actions>
                 <el-button link type="primary" @click="continueDraft(item)">继续编辑</el-button>
+                <el-button link type="danger" :loading="draftDeletingId === item.id" @click="deleteDraft(item)">删除</el-button>
               </template>
             </MobileResultCard>
           </div>
@@ -2371,7 +2464,7 @@ onBeforeUnmount(() => {
         </div>
       </template>
       <EmployeeApplicationDetail v-if="applicationDetail" :request="applicationDetail" />
-      <template #footer><el-button @click="applicationDetailVisible = false">关闭</el-button><el-button v-if="canEditArchive && applicationDetail?.canCancel" :loading="applicationSaving" @click="cancelApplication(applicationDetail)">撤回未生效内容</el-button><el-button v-if="canEditArchive && applicationDetail?.canResume" type="primary" @click="resumeApplication(applicationDetail)">修改后重新提交</el-button></template>
+      <template #footer><el-button @click="applicationDetailVisible = false">关闭</el-button><el-button v-if="canEditArchive && applicationDetail?.canCancel" :loading="applicationSaving" @click="cancelApplication(applicationDetail)">{{ cancelApplicationLabel(applicationDetail) }}</el-button><el-button v-if="canEditArchive && applicationDetail?.canResume" type="primary" @click="resumeApplication(applicationDetail)">修改后重新提交</el-button></template>
     </BusinessDetailDrawer>
 
     <el-dialog
@@ -3514,6 +3607,22 @@ onBeforeUnmount(() => {
   flex: 1;
   min-height: 0;
   flex-direction: column;
+}
+
+.draft-cell {
+  display: flex;
+  align-items: flex-start;
+  flex-direction: column;
+  gap: 4px;
+  line-height: 1.4;
+}
+
+.draft-cell strong {
+  overflow-wrap: anywhere;
+}
+
+.draft-cell small {
+  color: var(--el-text-color-secondary);
 }
 
 .directory-table-region {

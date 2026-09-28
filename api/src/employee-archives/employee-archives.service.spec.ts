@@ -1510,7 +1510,7 @@ describe('EmployeeArchivesService', () => {
     expect(tx.user.updateMany).not.toHaveBeenCalled();
   });
 
-  it('草稿列表同时返回当前草稿和历史已归档草稿', async () => {
+  it('草稿列表只返回当前草稿，不把已删除草稿重新显示', async () => {
     const findMany = jest.fn().mockResolvedValue([]);
     const count = jest.fn().mockResolvedValue(0);
     const service = new EmployeeArchivesService({
@@ -1521,20 +1521,10 @@ describe('EmployeeArchivesService', () => {
       items: [], total: 0, page: 1, pageSize: 20,
     });
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: {
-        OR: [
-          { recordStatus: 'draft', archivedAt: null },
-          { recordStatus: 'archived', archivedAt: { not: null } },
-        ],
-      },
+      where: { recordStatus: 'draft', archivedAt: null },
     }));
     expect(count).toHaveBeenCalledWith({
-      where: {
-        OR: [
-          { recordStatus: 'draft', archivedAt: null },
-          { recordStatus: 'archived', archivedAt: { not: null } },
-        ],
-      },
+      where: { recordStatus: 'draft', archivedAt: null },
     });
   });
 
