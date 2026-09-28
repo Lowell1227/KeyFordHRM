@@ -122,14 +122,39 @@ test('新增员工采用四步向导，任职关系同页且补充资料可跳�
   await expect(drawer.getByRole('button', { name: '下一步' })).toBeVisible();
   await expect(drawer.getByRole('button', { name: '提交审核' })).toHaveCount(0);
   await expect(drawer.getByText('员工工号将在提交审核时自动生成')).toBeVisible();
+  const futureFlow = drawer.getByLabel('提交后流程');
+  await expect(futureFlow.getByText('提交审核', { exact: true })).toBeVisible();
+  await expect(futureFlow.getByText('档案审核', { exact: true })).toBeVisible();
+  await expect(futureFlow.getByText('待入职', { exact: true })).toBeVisible();
+  await expect(futureFlow.getByText('入职生效', { exact: true })).toBeVisible();
   await drawer.getByLabel('姓名', { exact: true }).fill('分步员工');
   await drawer.getByRole('button', { name: '下一步' }).click();
+  await expect(drawer.getByLabel('任职开始', { exact: true })).toBeVisible();
+  await expect(drawer.getByLabel('任职结束', { exact: true })).toHaveCount(0);
+  await expect(drawer.getByLabel('实际转正日期', { exact: true })).toHaveCount(0);
   await expect(drawer.getByText('花名册直属主管', { exact: true }).first()).toBeVisible();
   await expect(drawer.getByText('绩效直属上级', { exact: true }).first()).toBeVisible();
   await drawer.getByRole('button', { name: '下一步' }).click();
   await expect(drawer.getByRole('button', { name: '个人与教育' })).toBeVisible();
   await drawer.getByRole('button', { name: '下一步' }).click();
   await expect(drawer.getByRole('button', { name: '提交审核' })).toBeVisible();
+});
+
+test('点击新增员工抽屉外部时先保存草稿再收起', async ({ page }) => {
+  const state = await setupPersonnelPage(page);
+  await page.goto('/personnel-processing');
+  await page.getByRole('button', { name: '新增员工' }).click();
+
+  const drawer = page.getByRole('dialog', { name: '新增员工' });
+  await drawer.getByLabel('姓名', { exact: true }).fill('遮罩关闭员工');
+  const overlay = drawer.locator('xpath=ancestor::div[contains(@class, "el-overlay")]').first();
+  await overlay.click({ position: { x: 20, y: 20 } });
+
+  await expect(drawer).toHaveCount(0);
+  await expect.poll(() => state.draftBodies.at(-1)).toMatchObject({
+    name: '遮罩关闭员工',
+    saveMode: 'auto',
+  });
 });
 
 test('缺失的提交信息只在抽屉内汇总并返回对应步骤', async ({ page }) => {
@@ -148,13 +173,13 @@ test('缺失的提交信息只在抽屉内汇总并返回对应步骤', async ({
   await drawer.getByRole('button', { name: '下一步' }).click();
   await drawer.getByRole('button', { name: '下一步' }).click();
   await expect(reminder).toHaveCount(1);
-  await expect(reminder).toContainText('提交前还需补充：入职日期、本次记录生效日期');
+  await expect(reminder).toContainText('提交前还需补充：入职日期、任职开始');
 
   await drawer.getByRole('button', { name: '提交审核' }).click();
 
   await expect(drawer.locator('.el-step__title.is-process')).toHaveText('本次任职');
   await expect(reminder).toBeVisible();
-  await expect(reminder).toContainText('提交前还需补充：入职日期、本次记录生效日期');
+  await expect(reminder).toContainText('提交前还需补充：入职日期、任职开始');
   await expect(page.locator('.el-message')).toHaveCount(0);
 });
 
@@ -187,8 +212,11 @@ test('输入姓名后静默自动保存并从上次步骤继续填写', async ({
   await expect(resumed.locator('.el-step__title.is-process')).toHaveText('本次任职');
   await resumed.getByLabel('入职日期').fill('2026-09-18');
   await resumed.getByLabel('入职日期').press('Enter');
-  await expect(resumed.getByLabel('本次记录生效日期')).toHaveValue('2026-09-18');
+  await expect(resumed.getByLabel('任职开始')).toHaveValue('2026-09-18');
   await expect(resumed.getByLabel('预计转正日期')).toHaveValue('2026-12-18');
+  await resumed.getByLabel('任职开始').fill('2026-09-20');
+  await resumed.getByLabel('任职开始').press('Enter');
+  await expect(resumed.getByLabel('预计转正日期')).toHaveValue('2026-12-20');
 });
 
 test('提交审核会等待正在进行的自动保存完成', async ({ page }) => {
@@ -234,6 +262,7 @@ test('390px 手机宽度下向导保持单列且可继续填写', async ({ page 
   const drawer = page.getByRole('dialog', { name: '新增员工' });
   await expect(drawer.locator('.mobile-step')).toHaveText('1/4 基本信息');
   await expect(drawer.locator('.desktop-steps')).toBeHidden();
+  await expect(drawer.getByLabel('提交后流程')).toBeVisible();
   await drawer.getByLabel('姓名').fill('手机端员工');
   await drawer.getByRole('button', { name: '下一步' }).click();
   await expect(drawer.locator('.mobile-step')).toHaveText('2/4 本次任职');
@@ -280,7 +309,7 @@ for (const scenario of [
     await drawer.getByRole('button', { name: '下一步' }).click();
     await expect(drawer.locator('.el-step').nth(1).locator('.el-step__title')).not.toHaveClass(/is-success/);
     await expect(drawer.locator('.el-step').nth(2).locator('.el-step__title')).not.toHaveClass(/is-success/);
-    await expect(drawer.getByRole('alert')).toContainText('提交前还需补充：部门、入职日期、本次记录生效日期');
+    await expect(drawer.getByRole('alert')).toContainText('提交前还需补充：部门、入职日期、任职开始');
     await expect(drawer.getByRole('button', { name: '提交审核' })).toBeVisible();
     await drawer.getByRole('button', { name: '保存并退出' }).click();
     await expect(drawer).toHaveCount(0);

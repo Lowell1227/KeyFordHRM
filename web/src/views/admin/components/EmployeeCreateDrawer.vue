@@ -31,6 +31,7 @@ const emit = defineEmits<{
 }>();
 
 const stepTitles = ['基本信息', '本次任职', '补充资料', '检查并提交'];
+const postSubmitStages = ['提交审核', '档案审核', '待入职', '入职生效'];
 const supplementGroups = ref<string[]>([]);
 const fieldErrors = reactive<Record<string, string>>({});
 const saveError = ref('');
@@ -122,7 +123,7 @@ const missingForSubmit = computed(() => [
   { label: '姓名', step: 0, missing: !form.name.trim() },
   { label: '部门', step: 1, missing: !form.deptId },
   { label: '入职日期', step: 1, missing: !form.entryDate },
-  { label: '本次记录生效日期', step: 1, missing: !form.effectiveFrom },
+  { label: '任职开始', step: 1, missing: !form.effectiveFrom },
 ].filter((item) => item.missing));
 const missingForSubmitLabels = computed(() => missingForSubmit.value.map((item) => item.label));
 // Visiting a step is not completion; optional supplements have no completeness requirement.
@@ -182,8 +183,9 @@ function reset() {
     actualRegularDate: dateValue(employee.actualRegularDate),
     leaveDate: dateValue(employee.leaveDate),
   });
-  const automaticRegularDate = form.entryDate && form.employee.probationMonths != null
-    ? dayjs(form.entryDate).add(form.employee.probationMonths, 'month').format('YYYY-MM-DD')
+  const probationStartDate = form.effectiveFrom || form.entryDate;
+  const automaticRegularDate = probationStartDate && form.employee.probationMonths != null
+    ? dayjs(probationStartDate).add(form.employee.probationMonths, 'month').format('YYYY-MM-DD')
     : '';
   plannedRegularDateAuto.value = !form.employee.plannedRegularDate
     || form.employee.plannedRegularDate === automaticRegularDate;
@@ -237,6 +239,9 @@ watch(() => form.entryDate, (entryDate) => {
   if (!form.effectiveFrom) form.effectiveFrom = entryDate;
   fillPlannedRegularDate();
 });
+watch(() => form.effectiveFrom, () => {
+  if (!hydrating.value) fillPlannedRegularDate();
+});
 watch(() => form.employee.probationMonths, () => {
   if (!hydrating.value) fillPlannedRegularDate();
 });
@@ -244,8 +249,9 @@ watch(form, scheduleAutosave, { deep: true });
 watch(currentStep, scheduleAutosave);
 
 function fillPlannedRegularDate() {
-  if (!plannedRegularDateAuto.value || !form.entryDate || form.employee.probationMonths == null) return;
-  form.employee.plannedRegularDate = dayjs(form.entryDate).add(form.employee.probationMonths, 'month').format('YYYY-MM-DD');
+  const probationStartDate = form.effectiveFrom || form.entryDate;
+  if (!plannedRegularDateAuto.value || !probationStartDate || form.employee.probationMonths == null) return;
+  form.employee.plannedRegularDate = dayjs(probationStartDate).add(form.employee.probationMonths, 'month').format('YYYY-MM-DD');
 }
 
 function normalizedPhone(): string {
@@ -505,7 +511,7 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
     :model-value="modelValue"
     title="新增员工"
     size="min(960px, 100vw)"
-    :close-on-click-modal="false"
+    :close-on-click-modal="true"
     :before-close="beforeClose"
     destroy-on-close
     class="employee-create-drawer"
@@ -523,6 +529,12 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
           />
         </el-steps>
         <div class="mobile-step"><strong>{{ currentStep + 1 }}/{{ stepTitles.length }} {{ stepTitles[currentStep] }}</strong></div>
+        <div class="post-submit-flow" aria-label="提交后流程">
+          <span class="post-submit-flow__label">提交后流程</span>
+          <ol>
+            <li v-for="stage in postSubmitStages" :key="stage">{{ stage }}</li>
+          </ol>
+        </div>
         <span class="save-state" :class="`save-state--${saveState}`">{{ saveStateLabel }}</span>
       </div>
       <el-alert v-if="draft?.rejectedReason" :title="`已退回：${draft.rejectedReason}`" type="warning" :closable="false" />
@@ -558,7 +570,7 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
         </section>
 
         <section v-show="currentStep === 1" class="wizard-section">
-          <div class="section-head"><div><h3>任职信息</h3><p>选择岗位后自动带入岗位名称和职系；入职日期自动作为生效日期。</p></div></div>
+          <div class="section-head"><div><h3>任职信息</h3><p>选择岗位后自动带入岗位名称和职系；入职日期自动作为任职开始日期。</p></div></div>
           <div class="form-grid form-grid--3">
             <el-form-item label="所属公司"><el-select v-model="form.company"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select></el-form-item>
             <el-form-item label="部门"><el-tree-select v-model="form.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
@@ -570,11 +582,9 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
             <el-form-item label="用工类型"><el-select v-model="form.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
             <el-form-item label="员工状态"><el-select v-model="form.employeeStatus"><el-option label="试用期" value="probation" /><el-option label="在职" value="active" /></el-select></el-form-item>
             <el-form-item label="入职日期"><el-date-picker v-model="form.entryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item label="本次记录生效日期"><el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item label="本次记录结束日期"><el-date-picker v-model="form.effectiveTo" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item label="任职开始"><el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
             <el-form-item label="试用期（月）"><el-input-number v-model="form.employee.probationMonths" :min="0" :max="12" /></el-form-item>
             <el-form-item label="预计转正日期"><el-date-picker v-model="form.employee.plannedRegularDate" type="date" value-format="YYYY-MM-DD" @change="plannedRegularDateAuto = false" /></el-form-item>
-            <el-form-item label="实际转正日期"><el-date-picker v-model="form.employee.actualRegularDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
           </div>
         </section>
 
@@ -661,7 +671,7 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
           <dl class="preview-grid">
             <div><dt>姓名</dt><dd>{{ form.name || '未填写' }}</dd></div><div><dt>手机号</dt><dd>{{ form.phone || '未填写' }}</dd></div>
             <div><dt>部门</dt><dd>{{ selectedDepartment?.fullPath || selectedDepartment?.name || '未填写' }}</dd></div><div><dt>岗位</dt><dd>{{ selectedPosition?.name || form.employee.position || '未填写' }}</dd></div>
-            <div><dt>入职日期</dt><dd>{{ form.entryDate || '未填写' }}</dd></div><div><dt>生效日期</dt><dd>{{ form.effectiveFrom || '未填写' }}</dd></div>
+            <div><dt>入职日期</dt><dd>{{ form.entryDate || '未填写' }}</dd></div><div><dt>任职开始</dt><dd>{{ form.effectiveFrom || '未填写' }}</dd></div>
             <div><dt>花名册直属主管</dt><dd>{{ form.rosterManagerId ? '已设置' : '未设置' }}</dd></div><div><dt>绩效直属上级</dt><dd>{{ form.performanceManagerId ? '已设置' : '未设置' }}</dd></div>
             <div><dt>合同</dt><dd>{{ form.contracts.length }} 份</dd></div><div><dt>工号</dt><dd>审核通过后使用系统生成的新工号</dd></div>
           </dl>
@@ -686,6 +696,11 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
 .wizard-head { position: sticky; top: -20px; z-index: 3; padding: 14px 0 12px; background: #fff; border-bottom: 1px solid #eef1f6; }
 .desktop-steps { padding: 0 8px; }
 .mobile-step { display: none; }
+.post-submit-flow { display: flex; align-items: center; justify-content: center; gap: 12px; margin-top: 12px; color: #667085; font-size: 12px; }
+.post-submit-flow__label { flex: none; color: #344054; font-weight: 600; }
+.post-submit-flow ol { display: flex; align-items: center; gap: 18px; margin: 0; padding: 0; list-style: none; }
+.post-submit-flow li { position: relative; white-space: nowrap; }
+.post-submit-flow li + li::before { position: absolute; left: -12px; color: #b2b9c6; content: '→'; }
 .save-state { display: block; margin-top: 8px; color: #98a2b3; font-size: 12px; text-align: right; }
 .save-state--saving { color: #667085; }.save-state--saved { color: #16a34a; }.save-state--error { color: #dc2626; }
 .wizard-section { padding: 2px 2px 20px; }
@@ -709,6 +724,7 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
 .drawer-footer { display: flex; align-items: center; width: 100%; }.footer-spacer { flex: 1; }
 @media (max-width: 760px) {
   .wizard-shell { min-height: 0; }.desktop-steps { display: none; }.mobile-step { display: block; }.wizard-head { top: -12px; padding-top: 8px; }
+  .post-submit-flow { align-items: flex-start; flex-direction: column; gap: 6px; }.post-submit-flow ol { width: 100%; justify-content: space-between; gap: 10px; font-size: 11px; }.post-submit-flow li + li::before { left: -8px; }
   .form-grid, .form-grid--3, .preview-grid, .contract-materials { grid-template-columns: 1fr; }.span-2 { grid-column: auto; }
   .identity-candidate, .section-head, .contract-toolbar { align-items: flex-start; flex-direction: column; }.drawer-footer { flex-wrap: wrap; gap: 8px; }.drawer-footer .el-button { margin-left: 0; }
 }
