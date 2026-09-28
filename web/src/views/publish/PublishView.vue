@@ -354,7 +354,6 @@ function closeDetail() {
   >
     <template #workspace>
     <ChartCard :padded="true" class="list-page-header-card">
-      <template #title>结果公示</template>
       <PerformanceRecordFilters
         :cycle-id="selectedCycleId"
         v-model:dept-id="deptFilter"

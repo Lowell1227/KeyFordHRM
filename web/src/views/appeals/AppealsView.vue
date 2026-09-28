@@ -118,7 +118,6 @@ async function save() {
 
 <template>
   <BusinessListPage variant="record" :loading="loading">
-    <template #title>申诉记录</template>
     <template #primary-action><el-button type="primary" @click="openDialog()">新增申诉记录</el-button></template>
     <template #filters>
       <PerformanceRecordFilters v-model:cycle-id="filters.cycleId" v-model:dept-id="filters.deptId"

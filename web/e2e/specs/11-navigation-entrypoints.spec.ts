@@ -1,9 +1,6 @@
 import { test, expect, type Page } from "@playwright/test";
 import { buildNavigation } from "../../src/router/navigation";
-import {
-  isPerformanceModulePath,
-  isPerformanceWorkspacePath,
-} from "../../src/router/performance-workspace";
+import { isPerformanceWorkspacePath } from "../../src/router/performance-workspace";
 import {
   navigateNotificationTarget,
   resolveNotificationTarget,
@@ -364,9 +361,7 @@ test.describe("11-navigation-entrypoints navigation active state", () => {
     await expect(dashboard.module("performance")).toBeVisible();
     await expect(dashboard.menuItem("绩效工作台")).toHaveClass(/is-active/);
     await expect(page.locator(".app-main")).toHaveClass(/app-main--workspace/);
-    await expect(page.getByTestId("performance-workspace-title")).toHaveText(
-      "绩效待办",
-    );
+    await expect(page.getByTestId("app-route-title")).toHaveText("绩效工作台");
   });
 
   test("keeps the performance workbench parent active across its three local sections", async ({
@@ -1060,7 +1055,7 @@ test.describe("11-navigation-entrypoints header", () => {
     }
   });
 
-  test("performance workspace keeps one local title and only working header actions", async ({
+  test("performance workspace uses the global route title and only working header actions", async ({
     page,
   }) => {
     await page.goto("/tasks");
@@ -1069,10 +1064,9 @@ test.describe("11-navigation-entrypoints header", () => {
       page.locator(".app-header").getByPlaceholder("搜索"),
     ).toHaveCount(0);
     await expect(page.locator(".app-header .header-action")).toHaveCount(0);
-    await expect(page.getByTestId("performance-workspace-title")).toHaveCount(
-      1,
-    );
-    await expect(page.getByTestId("app-route-title")).toHaveCount(0);
+    await expect(page.getByTestId("performance-workspace-title")).toHaveCount(0);
+    await expect(page.getByTestId("app-route-title")).toHaveText("绩效工作台");
+    await expect(page.locator("h1")).toHaveCount(1);
     await expect(page.getByTestId("app-notifications")).toBeVisible();
     await expect(page.getByTestId("header-user-menu")).toBeVisible();
   });
@@ -1086,10 +1080,8 @@ test.describe("11-navigation-entrypoints header", () => {
       await expect(page.locator(".app-main")).toHaveClass(
         /app-main--workspace/,
       );
-      await expect(page.getByTestId("performance-workspace-title")).toHaveCount(
-        1,
-      );
-      await expect(page.getByTestId("app-route-title")).toHaveCount(0);
+      await expect(page.getByTestId("performance-workspace-title")).toHaveCount(0);
+      await expect(page.getByTestId("app-route-title")).toHaveCount(1);
     }
 
     await page.goto("/tasks/not-a-workspace");
@@ -1100,7 +1092,7 @@ test.describe("11-navigation-entrypoints header", () => {
     await expect(page.getByTestId("performance-workspace-title")).toHaveCount(
       0,
     );
-    await expect(page.getByTestId("app-route-title")).toHaveCount(0);
+    await expect(page.getByTestId("app-route-title")).toHaveText("任务详情");
   });
 
   test("keeps notifications and user menu right-aligned without overlap at 390px", async ({
@@ -1148,42 +1140,36 @@ test.describe("11-navigation-entrypoints header", () => {
 test.describe("11-navigation-entrypoints module header", () => {
   test.use({ storageState: "e2e/auth-state/admin.json" });
 
-  test("classifies every performance entry and detail path for the simplified header", () => {
-    const performanceEntryPaths = routes
-      .filter((route) => route.meta?.navigation?.module === "performance")
-      .map((route) => route.path);
-    const performanceDetailPaths = [
-      "/tasks/task-title-audit",
-      "/tasks/task-title-audit/final-grade",
-      "/improvement-plans/plan-title-audit",
-      "/probation-reviews/review-title-audit",
-      "/confirmation-applications/application-title-audit",
-      "/objectives",
-      "/action-items",
-    ];
-
-    for (const path of [...performanceEntryPaths, ...performanceDetailPaths]) {
-      expect(isPerformanceModulePath(path), path).toBe(true);
-    }
-
-    for (const path of ["/dashboard", "/users", "/system", "/tasks-extra"]) {
-      expect(isPerformanceModulePath(path), path).toBe(false);
-    }
-  });
-
-  test("cycle management keeps only its local business title", async ({ page }) => {
+  test("cycle management keeps only its global route title", async ({ page }) => {
     await page.goto("/cycles");
 
     await expect(page.getByTestId("header-user-menu")).toBeVisible();
-    await expect(page.getByTestId("app-route-title")).toHaveCount(0);
-    await expect(page.locator(".list-page-header-card .chart-card__title")).toHaveText("考核周期管理");
+    await expect(page.getByTestId("app-route-title")).toHaveText("周期与计划");
+    await expect(page.locator(".app-main").getByText("考核周期管理", { exact: true })).toHaveCount(0);
+    await expect(page.locator("h1")).toHaveCount(1);
   });
 
-  test("non-performance pages retain one plain route title", async ({ page }) => {
+  test("non-performance pages retain one global title without a duplicate content heading", async ({ page }) => {
     await page.goto("/users");
 
     await expect(page.getByTestId("app-route-title")).toHaveText("员工档案");
     await expect(page.getByTestId("app-route-title")).toHaveCount(1);
+    await expect(page.getByRole("heading", { name: "员工档案", exact: true })).toHaveCount(1);
+    await expect(page.locator("h1")).toHaveCount(1);
+  });
+
+  test("performance report keeps controls but removes its repeated local page title", async ({ page }) => {
+    await page.goto("/reports");
+
+    await expect(page.getByTestId("app-route-title")).toHaveText("绩效报表");
+    await expect(page.locator(".app-main").getByText("绩效分析", { exact: true })).toHaveCount(0);
+    await expect(page.locator("h1")).toHaveCount(1);
+  });
+
+  test("routed workflow drawer keeps the parent module in the global header", async ({ page }) => {
+    await page.goto("/improvement-plans/title-audit");
+
+    await expect(page.getByTestId("app-route-title")).toHaveText("改进计划");
   });
 });
 

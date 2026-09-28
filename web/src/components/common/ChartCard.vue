@@ -9,8 +9,12 @@ defineProps<{
 
 <template>
   <div class="chart-card">
-    <div v-if="title || $slots.title || $slots.extra" class="chart-card__head">
-      <span class="chart-card__title">
+    <div
+      v-if="title || $slots.title || $slots.extra"
+      class="chart-card__head"
+      :class="{ 'chart-card__head--actions-only': !title && !$slots.title }"
+    >
+      <span v-if="title || $slots.title" class="chart-card__title">
         <slot name="title">{{ title }}</slot>
       </span>
       <div class="chart-card__extra">
@@ -79,6 +83,14 @@ defineProps<{
   align-items: center;
   justify-content: space-between;
   padding: 18px 20px 0;
+}
+
+.chart-card__head--actions-only {
+  justify-content: flex-start;
+}
+
+.chart-card__head--actions-only .chart-card__extra {
+  width: 100%;
 }
 
 .chart-card__title {

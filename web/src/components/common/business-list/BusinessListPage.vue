@@ -23,7 +23,6 @@ withDefaults(defineProps<{
     <slot v-if="$slots.workspace" name="workspace" />
     <template v-else>
       <ChartCard class="list-page-header-card business-list-page__header">
-        <template #title><slot name="title" /></template>
         <template v-if="$slots['primary-action']" #extra><slot name="primary-action" /></template>
         <p v-if="$slots.subtitle" class="business-list-page__subtitle"><slot name="subtitle" /></p>
         <slot name="summary" />

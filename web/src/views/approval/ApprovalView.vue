@@ -430,7 +430,6 @@ function handleBatchReject() {
   <BusinessListPage variant="workflow" :loading="loading" class="approval-view performance-result-page">
     <template #workspace>
     <ChartCard :padded="true" class="list-result-card">
-      <template #title>结果审批</template>
       <PerformanceRecordFilters
         :cycle-id="selectedCycleId"
         v-model:dept-id="deptFilter"

@@ -510,7 +510,6 @@ onMounted(() => {
   <BusinessListPage variant="record" :loading="listLoading" class="template-manage-view">
     <template #workspace>
     <ChartCard class="list-page-header-card">
-      <template #title>考核模板</template>
       <template #extra>
         <el-button
           type="danger"

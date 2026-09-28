@@ -179,7 +179,6 @@ watch(() => [route.name, route.params.id] as const, ([name, id]) => {
   <BusinessListPage variant="workflow" :loading="loading" class="department-review-list performance-result-page">
     <template #workspace>
     <ChartCard :padded="true" class="list-result-card">
-      <template #title>部门复核</template>
       <PerformanceRecordFilters
         v-model:cycle-id="cycleId"
         v-model:dept-id="deptId"

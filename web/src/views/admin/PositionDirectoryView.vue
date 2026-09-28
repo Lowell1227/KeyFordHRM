@@ -68,7 +68,6 @@ onMounted(load);
   <BusinessListPage variant="record" :loading="loading" class="position-directory">
     <template #workspace>
     <ChartCard class="list-page-header-card">
-      <template #title>岗位目录</template>
       <template #extra><el-button type="primary" @click="openCreate">新增岗位</el-button></template>
       <QueryFilterPanel>
         <div class="position-filter"><el-input v-model="keyword" placeholder="搜索岗位或岗位族" clearable @keyup.enter="search" /><el-checkbox v-model="includeInactive" @change="search">含已停用</el-checkbox><el-button type="primary" @click="search">查询</el-button></div>

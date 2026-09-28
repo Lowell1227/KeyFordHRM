@@ -1636,11 +1636,7 @@ onBeforeUnmount(() => {
   <BusinessListPage :variant="activeView === 'org' ? 'split-master' : activeView === 'processing' ? 'workflow' : 'record'" :loading="deptLoading || userLoading" class="user-manage-view">
     <template #workspace>
     <ChartCard>
-      <template #title>
-        <div class="page-title">
-          <div>
-            <h2>{{ activeView === 'org' ? '组织架构' : activeView === 'processing' ? '人事办理' : '员工档案' }}</h2>
-          </div>
+      <template #extra>
           <div class="page-title__actions">
             <template v-if="activeView === 'org'">
               <el-button v-if="canEditOrganization" @click="openDepartmentCreate(null)">新增一级部门</el-button>
@@ -1658,7 +1654,6 @@ onBeforeUnmount(() => {
             <el-button v-else-if="canEditArchive" type="primary" @click="openEmployeeCreate">新增员工</el-button>
             <el-button :icon="Search" @click="refreshCurrentView">刷新</el-button>
           </div>
-        </div>
       </template>
 
       <section v-if="activeView === 'org'" class="org-layout">
@@ -2725,25 +2720,6 @@ onBeforeUnmount(() => {
 .application-detail-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .application-detail-summary > span { color: var(--el-text-color-secondary); font-size: 13px; }
 .application-detail-summary strong span { color: var(--el-text-color-regular); font-weight: 600; }
-.page-title {
-  display: flex;
-  align-items: flex-start;
-  justify-content: space-between;
-  gap: 16px;
-}
-
-.page-title h2 {
-  margin: 0;
-  font-size: 20px;
-  color: #172033;
-}
-
-.page-title p {
-  margin: 6px 0 0;
-  color: #7b8497;
-  font-size: 13px;
-}
-
 .page-title__actions {
   display: flex;
   align-items: center;
@@ -4111,7 +4087,6 @@ onBeforeUnmount(() => {
     scrollbar-gutter: auto;
   }
 
-  .page-title,
   .dept-summary {
     flex-direction: column;
   }

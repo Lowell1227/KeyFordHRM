@@ -32,9 +32,8 @@ const visibleSections = computed(() =>
 </script>
 
 <template>
-  <section class="performance-workspace">
-    <header v-if="showHeader" class="performance-workspace__header">
-      <h1 data-testid="performance-workspace-title">{{ title }}</h1>
+  <section class="performance-workspace" :aria-label="title">
+    <header v-if="showHeader && $slots.toolbar" class="performance-workspace__header">
       <div class="performance-workspace__toolbar">
         <slot name="toolbar" />
       </div>
@@ -89,34 +88,22 @@ const visibleSections = computed(() =>
 }
 
 .performance-workspace__header {
-  min-height: 56px;
+  min-height: 48px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  justify-content: flex-start;
   gap: 16px;
   padding: 0 24px;
   background: #fff;
   border-bottom: 1px solid #e5e8ef;
 }
 
-.performance-workspace__header h1 {
-  min-width: 0;
-  margin: 0;
-  overflow: hidden;
-  color: #172033;
-  font-size: 20px;
-  font-weight: 700;
-  line-height: 1.3;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .performance-workspace__toolbar {
   min-width: 0;
   display: flex;
   align-items: center;
-  justify-content: flex-end;
+  justify-content: flex-start;
   gap: 8px;
 }
 

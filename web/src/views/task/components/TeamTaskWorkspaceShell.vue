@@ -76,7 +76,7 @@ function stageStateLabel(member: TeamTaskListItem): string {
         @click="$emit('back')"
       />
       <div class="team-task-workspace__title">
-        <h1>{{ title }}</h1>
+        <h2>{{ title }}</h2>
         <el-tag v-if="task?.cycleName" size="small" effect="light">{{ task.cycleName }}</el-tag>
       </div>
     </header>
@@ -193,7 +193,7 @@ function stageStateLabel(member: TeamTaskListItem): string {
   gap: 8px;
 }
 
-.team-task-workspace__title h1 {
+.team-task-workspace__title h2 {
   flex-shrink: 0;
   margin: 0;
   color: #172033;

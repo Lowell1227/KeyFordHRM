@@ -125,7 +125,6 @@ function goDetail(id: string) { openDetail(id); }
   <BusinessListPage variant="workflow" :loading="loading" class="improvement-list">
     <template #workspace>
     <ChartCard class="list-page-header-card">
-      <template #title>绩效改进计划</template>
       <template #extra><el-button v-if="eligibleEmployees.length" type="primary" @click="openCreate">新建改进计划</el-button></template>
       <PerformanceRecordFilters v-model:cycle-id="filters.cycleId" v-model:dept-id="filters.deptId"
         v-model:keyword="filters.keyword" :cycles="cycles" :departments="departments" :loading="loading"

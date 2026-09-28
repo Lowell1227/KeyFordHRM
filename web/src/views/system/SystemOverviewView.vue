@@ -91,7 +91,6 @@ const capabilities: CapabilityItem[] = [
     <header class="overview-header">
       <div>
         <p class="eyebrow">全局基础能力</p>
-        <h1>系统能力总览</h1>
         <p class="header-copy">
           集中记录当前已有能力和缺失项，避免后续规划遗漏。本页只展示状态，不提供配置操作。
         </p>
@@ -159,16 +158,9 @@ const capabilities: CapabilityItem[] = [
   font-size: 13px;
 }
 
-h1,
 h2,
 p {
   margin-top: 0;
-}
-
-h1 {
-  margin-bottom: 10px;
-  font-size: 28px;
-  line-height: 1.3;
 }
 
 h2 {

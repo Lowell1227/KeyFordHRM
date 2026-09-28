@@ -388,7 +388,6 @@ async function resetCalibrationFilters() {
   <BusinessListPage variant="workflow" :loading="loading" scrollable class="calibration-view performance-result-page">
     <template #workspace>
     <ChartCard :padded="true">
-      <template #title>绩效校准</template>
       <PerformanceRecordFilters
         :cycle-id="selectedCycleId"
         v-model:dept-id="deptFilter"

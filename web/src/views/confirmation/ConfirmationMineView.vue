@@ -165,8 +165,6 @@ function statusType(status: string): string {
   <BusinessListPage variant="workflow" :loading="loading" class="confirmation-mine">
     <template #workspace>
     <ChartCard class="header-card list-page-header-card">
-      <template #title>我的转正申请</template>
-
       <div class="header-actions">
         <span class="tip">填写工作小结后提交，由直属主管、HR 和公司审批人依次办理。</span>
         <el-button v-if="canStart" type="primary" @click="openCreate">发起转正申请</el-button>

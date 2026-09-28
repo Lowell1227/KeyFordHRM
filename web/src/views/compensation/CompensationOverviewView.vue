@@ -17,7 +17,6 @@ const excludedScope = [
     <header class="overview-hero">
       <div>
         <p class="eyebrow">业务模块规划</p>
-        <h1>薪酬（规划中）</h1>
         <p class="hero-copy">
           该入口用于保留后续建设方向，当前不开发工资核算与发放能力，也不接入或展示任何员工薪资数据。
         </p>
@@ -84,16 +83,9 @@ const excludedScope = [
   font-size: 13px;
 }
 
-h1,
 h2,
 p {
   margin-top: 0;
-}
-
-h1 {
-  margin-bottom: 10px;
-  font-size: 28px;
-  line-height: 1.3;
 }
 
 h2 {

@@ -78,7 +78,8 @@ test.describe('25-menu-information-architecture system capability overview', () 
       await page.goto('/system');
 
       await expect(page).toHaveURL(/\/system$/);
-      await expect(page.getByRole('heading', { name: '系统能力总览' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '系统管理', exact: true })).toBeVisible();
+      await expect(page.getByRole('heading', { name: '系统能力总览', exact: true })).toHaveCount(0);
       await expect(page.getByTestId('system-capability-status')).toHaveCount(12);
       await expect(page.getByText('招聘候选人、面试与 Offer 全流程')).toBeVisible();
       await expect(page.getByText('OA 审批读取与事件订阅')).toBeVisible();

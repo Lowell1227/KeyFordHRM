@@ -433,7 +433,6 @@ onMounted(async () => {
 <template>
   <div class="reports-view page-stack">
     <ChartCard class="header-card">
-      <template #title>绩效分析</template>
       <template #extra>
         <div class="header-tools">
           <el-select

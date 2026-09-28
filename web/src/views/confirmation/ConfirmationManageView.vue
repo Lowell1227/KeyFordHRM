@@ -104,7 +104,6 @@ function handleDetailVisibility(value: boolean) {
 
 <template>
   <BusinessListPage variant="workflow" :loading="loading">
-    <template #title>转正管理</template>
     <template #primary-action>
       <el-button v-if="hasManagementScope && attentionItems.length && !detailOpen" link type="warning" data-testid="confirmation-attention-trigger" @click="attentionOpen = true">待关注 {{ attentionItems.length }} 人</el-button>
     </template>

@@ -1498,7 +1498,7 @@ test.describe('09-performance-workspace tracking behavior', () => {
 
     await page.goto('/action-items');
 
-    await expect(page.getByTestId('performance-workspace-title')).toHaveText('目标跟进');
+    await expect(page.getByTestId('app-route-title')).toHaveText('目标跟进');
     const peoplePanel = page.getByTestId('goal-tracking-people');
     await expect(peoplePanel).toContainText('我');
     await expect(peoplePanel).toContainText('直接上级');

@@ -129,7 +129,7 @@ test('主管从团队绩效待办退出时不再发起无凭证任务查询', as
 
   await page.goto('/tasks?scope=team&stage=goal-review&stageState=pending');
   await expect(page).toHaveURL(/\/tasks/);
-  await expect(page.getByTestId('performance-workspace-title')).toHaveText('绩效待办');
+  await expect(page.getByTestId('app-route-title')).toHaveText('绩效工作台');
 
   await page.getByTestId('header-user-menu').click();
   await page.getByTestId('header-logout').click();

@@ -48,11 +48,6 @@ const statusOptions: ProbationReviewStatus[] = [
   'closed',
 ];
 
-const titleMap: Record<ListMode, string> = {
-  manage: '试用期考核历史',
-  manager: '负责的试用期考核历史',
-  mine: '我的试用期考核历史',
-};
 const detailRouteMap: Record<ListMode, string> = {
   manage: 'ProbationManageDetail',
   manager: 'ProbationManagerDetail',
@@ -149,7 +144,6 @@ function signSummary(row: ProbationReview): string {
   <BusinessListPage variant="workflow" :loading="loading" class="probation-list">
     <template #workspace>
     <ChartCard class="list-page-header-card">
-      <template #title>{{ titleMap[mode] }}</template>
       <template #extra>
         <slot name="header-extra" />
       </template>

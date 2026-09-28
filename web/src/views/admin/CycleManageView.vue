@@ -1640,7 +1640,6 @@ onMounted(() => {
 
     <template v-else>
     <ChartCard class="list-page-header-card">
-      <template #title>考核周期管理</template>
       <template #extra>
         <div class="cycle-header-actions">
           <div

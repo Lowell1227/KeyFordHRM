@@ -251,7 +251,7 @@ watch(() => props.cycle?.id, () => {
         />
         <div>
           <div class="cycle-workspace__title-row">
-            <h1>{{ cycle?.name || '周期详情' }}</h1>
+            <h2>{{ cycle?.name || '周期详情' }}</h2>
             <el-tag
               v-if="cycle"
               :type="cycleBusinessState(cycle).tagType"
@@ -611,7 +611,7 @@ watch(() => props.cycle?.id, () => {
   gap: 10px;
 }
 
-.cycle-workspace__identity h1 {
+.cycle-workspace__identity h2 {
   margin: 0;
   font-size: 21px;
 }
@@ -1073,7 +1073,7 @@ watch(() => props.cycle?.id, () => {
     align-items: flex-start;
   }
 
-  .cycle-workspace__identity h1 {
+  .cycle-workspace__identity h2 {
     font-size: 18px;
   }
 

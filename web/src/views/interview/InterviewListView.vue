@@ -70,7 +70,6 @@ function onSaved() { drawerVisible.value = false; void loadList(); }
   <BusinessListPage variant="record" :loading="loading" class="interview-list">
     <template #workspace>
     <ChartCard class="list-page-header-card">
-      <template #title>绩效面谈台账</template>
       <template #extra><el-button type="primary" @click="openDrawer()">新增面谈记录</el-button></template>
       <PerformanceRecordFilters v-model:cycle-id="filters.cycleId" v-model:dept-id="filters.deptId"
         v-model:keyword="filters.keyword" :cycles="cycles" :departments="departments" :loading="loading"
