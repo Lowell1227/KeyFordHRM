@@ -1,15 +1,11 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed } from 'vue';
 import type { EmployeeDataReview, EmployeeReviewStatus } from '@/api/employee-archives.api';
-import { applicationProgress, applicationType } from '@/utils/employee-lifecycle';
 import { formatDate, formatDateTime } from '@/utils/date';
 import PersonnelProcessTimeline from './PersonnelProcessTimeline.vue';
 import type { PersonnelProcessStep, PersonnelProcessTone } from './personnel-process-timeline';
 
 const props = defineProps<{ request: EmployeeDataReview }>();
-const expanded = ref<string[]>([]);
-
-watch(() => props.request.id, () => { expanded.value = []; });
 
 const companyLabels: Record<string, string> = {
   fuede: '孚德',
@@ -84,8 +80,6 @@ const employee = computed<Record<string, any>>(() => props.request.proposedValue
 const profile = computed<Record<string, any>>(() => props.request.proposedValue?.profile ?? {});
 const performance = computed<Record<string, any>>(() => props.request.proposedValue?.performance ?? {});
 const isOnboarding = computed(() => Boolean(props.request.intakeType || props.request.sourceType === 'manual_employee_create'));
-const effectiveDate = computed(() => employee.value.effectiveDate || employee.value.effectiveFrom || employee.value.entryDate || employee.value.leaveDate || null);
-
 function hasValue(value: unknown) {
   return value !== null && value !== undefined && value !== '';
 }
@@ -295,61 +289,46 @@ function eventLabel(action: string) {
 
 <template>
   <section class="application-detail">
-    <el-collapse v-model="expanded">
-      <el-collapse-item :name="request.id">
-        <template #title>
-          <div class="application-detail__title">
-            <strong>{{ applicationType(request) }}</strong>
-            <span v-if="effectiveDate">{{ formatDate(effectiveDate) }}</span>
-            <el-tag size="small" effect="plain">{{ applicationProgress(request) }}</el-tag>
-          </div>
-        </template>
+    <section class="application-detail__section">
+      <h3>{{ isOnboarding ? '本次任职信息' : '本次变更内容' }}</h3>
+      <dl v-if="isOnboarding && employmentItems.length" class="application-detail__facts">
+        <div v-for="item in employmentItems" :key="item.key"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div>
+      </dl>
+      <div v-else-if="allChangeItems.length" class="application-detail__changes">
+        <div v-for="item in allChangeItems" :key="item.key"><strong>{{ item.label }}</strong><span>{{ item.before }} → {{ item.after }}</span></div>
+      </div>
+      <el-empty v-else description="暂无可展示的变更内容" :image-size="56" />
+    </section>
 
-        <section class="application-detail__section">
-          <h3>{{ isOnboarding ? '本次任职信息' : '本次变更内容' }}</h3>
-          <dl v-if="isOnboarding && employmentItems.length" class="application-detail__facts">
-            <div v-for="item in employmentItems" :key="item.key"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div>
-          </dl>
-          <div v-else-if="allChangeItems.length" class="application-detail__changes">
-            <div v-for="item in allChangeItems" :key="item.key"><strong>{{ item.label }}</strong><span>{{ item.before }} → {{ item.after }}</span></div>
-          </div>
-          <el-empty v-else description="暂无可展示的变更内容" :image-size="56" />
-        </section>
+    <section v-if="isOnboarding && profileItems.length" class="application-detail__section">
+      <h3>补充资料</h3>
+      <dl class="application-detail__facts">
+        <div v-for="item in profileItems" :key="item.key"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div>
+      </dl>
+    </section>
 
-        <section v-if="isOnboarding && profileItems.length" class="application-detail__section">
-          <h3>补充资料</h3>
-          <dl class="application-detail__facts">
-            <div v-for="item in profileItems" :key="item.key"><dt>{{ item.label }}</dt><dd>{{ item.value }}</dd></div>
-          </dl>
-        </section>
+    <section v-if="isOnboarding && contractChangeItems.length" class="application-detail__section">
+      <h3>合同材料</h3>
+      <div class="application-detail__changes">
+        <div v-for="item in contractChangeItems" :key="item.key"><strong>{{ item.label }}</strong><span>{{ item.before }} → {{ item.after }}</span></div>
+      </div>
+    </section>
 
-        <section v-if="isOnboarding && contractChangeItems.length" class="application-detail__section">
-          <h3>合同材料</h3>
-          <div class="application-detail__changes">
-            <div v-for="item in contractChangeItems" :key="item.key"><strong>{{ item.label }}</strong><span>{{ item.before }} → {{ item.after }}</span></div>
-          </div>
-        </section>
+    <section class="application-detail__section">
+      <h3>办理流程</h3>
+      <PersonnelProcessTimeline :items="timeline" label="办理流程" data-testid="personnel-application-timeline" />
+    </section>
 
-        <section class="application-detail__section">
-          <h3>办理流程</h3>
-          <PersonnelProcessTimeline :items="timeline" label="办理流程" data-testid="personnel-application-timeline" />
-        </section>
-
-        <section v-if="revisionEvents.length" class="application-detail__section">
-          <h3>补充办理记录</h3>
-          <ul class="application-detail__events">
-            <li v-for="event in revisionEvents" :key="event.id"><strong>{{ eventLabel(event.action) }}</strong><span>{{ event.user?.name || '系统' }} · {{ formatDateTime(event.createdAt) }}</span></li>
-          </ul>
-        </section>
-      </el-collapse-item>
-    </el-collapse>
+    <section v-if="revisionEvents.length" class="application-detail__section">
+      <h3>补充办理记录</h3>
+      <ul class="application-detail__events">
+        <li v-for="event in revisionEvents" :key="event.id"><strong>{{ eventLabel(event.action) }}</strong><span>{{ event.user?.name || '系统' }} · {{ formatDateTime(event.createdAt) }}</span></li>
+      </ul>
+    </section>
   </section>
 </template>
 
 <style scoped>
-.application-detail__title { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; min-width: 0; padding: 8px 0; }
-.application-detail__title span { color: var(--el-text-color-secondary); }
-.application-detail :deep(.el-collapse-item__header) { height: auto; min-height: 52px; }
 .application-detail__section { padding: 18px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
 .application-detail__section:last-child { border-bottom: 0; }
 .application-detail__section h3 { margin: 0 0 14px; font-size: 15px; }

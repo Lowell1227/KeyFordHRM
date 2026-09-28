@@ -479,7 +479,8 @@ for (const viewport of [{ width: 1440, height: 900 }, { width: 1024, height: 768
 
     const drawer = page.getByRole('dialog', { name: '再入职办理详情', exact: true });
     await expect(drawer.getByRole('combobox', { name: '变更类型' })).toHaveCount(0);
-    await drawer.getByRole('button', { name: /\u518d\u5165\u804c.*2026-09-30/ }).click();
+    await expect(drawer.getByRole('button', { name: /\u518d\u5165\u804c.*2026-09-30/ })).toHaveCount(0);
+    await expect(drawer.getByText('已通过，待入职生效', { exact: true })).toHaveCount(1);
     await expect(drawer.getByText('本次任职信息', { exact: true })).toBeVisible();
     await expect(drawer.getByText('未填写', { exact: true })).toHaveCount(0);
     await expect(drawer.getByText('孚德', { exact: true })).toBeVisible();
@@ -536,7 +537,7 @@ test('新增员工办理详情保留补充资料', async ({ page }) => {
   await page.goto('/personnel-processing');
   await page.getByRole('button', { name: '查看办理详情', exact: true }).click();
   const drawer = page.getByRole('dialog', { name: '新增员工办理详情', exact: true });
-  await drawer.getByRole('button', { name: /新增员工/ }).click();
+  await expect(drawer.getByRole('button', { name: /新增员工/ })).toHaveCount(0);
   await expect(drawer.getByText('补充资料', { exact: true })).toBeVisible();
   await expect(drawer.getByText('本科', { exact: true })).toBeVisible();
   await expect(drawer.getByText('浙江大学', { exact: true })).toBeVisible();
@@ -567,7 +568,7 @@ test('档案修改办理详情保留个人资料和合同差异', async ({ page 
   await page.goto('/personnel-processing');
   await page.getByRole('button', { name: '查看办理详情', exact: true }).click();
   const drawer = page.getByRole('dialog', { name: '档案修改办理详情', exact: true });
-  await drawer.getByRole('button', { name: /档案修改/ }).click();
+  await expect(drawer.getByRole('button', { name: /档案修改/ })).toHaveCount(0);
   await expect(drawer.getByText('学历', { exact: true })).toBeVisible();
   await expect(drawer.getByText('大专 → 本科', { exact: true })).toBeVisible();
   await expect(drawer.getByText('新增合同', { exact: true })).toBeVisible();
@@ -596,7 +597,7 @@ test('部分审核取消的办理详情不显示未开始的后续流程', async
   await page.goto('/personnel-processing');
   await page.getByRole('button', { name: '查看办理详情', exact: true }).click();
   const drawer = page.getByRole('dialog', { name: '档案修改办理详情', exact: true });
-  await drawer.getByRole('button', { name: /档案修改/ }).click();
+  await expect(drawer.getByRole('button', { name: /档案修改/ })).toHaveCount(0);
   await expect(drawer.getByText('部分已生效，其余已取消', { exact: true }).first()).toBeVisible();
   await expect(drawer.getByTestId('personnel-application-timeline')).toContainText('办理结束');
   await expect(drawer.getByTestId('personnel-application-timeline')).toContainText('部分内容已生效，其余已取消');
@@ -627,7 +628,7 @@ test('已撤销待入职投影的再入职申请显示整单取消终态', async
   await page.goto('/personnel-processing');
   await page.getByRole('button', { name: '查看办理详情', exact: true }).click();
   const drawer = page.getByRole('dialog', { name: '再入职办理详情', exact: true });
-  await drawer.getByRole('button', { name: /再入职/ }).click();
+  await expect(drawer.getByRole('button', { name: /再入职/ })).toHaveCount(0);
   await expect(drawer.getByText('已取消', { exact: true }).first()).toBeVisible();
   await expect(drawer.getByTestId('personnel-application-timeline')).toContainText('办理结束');
   await expect(drawer.getByTestId('personnel-application-timeline')).toContainText('已取消，不再生效');
