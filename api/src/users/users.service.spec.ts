@@ -40,6 +40,7 @@ describe('UsersService', () => {
             count: jest.fn().mockResolvedValue(1),
             findMany: jest.fn().mockResolvedValue([user]),
           },
+          employeeDataChangeRequest: { findMany: jest.fn().mockResolvedValue([]) },
         } as any,
         { getVisibleEmployeeFilter: jest.fn().mockResolvedValue({}) } as any,
         {
@@ -144,6 +145,115 @@ describe('UsersService', () => {
         where: expect.objectContaining({ deptId: null }),
       });
       expect(getSubDeptIds).not.toHaveBeenCalled();
+    });
+  });
+
+  describe('archive warnings', () => {
+    const hr = { id: 'hr-1', name: 'HR', sysRole: SysRole.hr_user, hrCapabilities: ['employee_archive_review'],
+      deptId: null, isAssessorOnly: false, canViewAll: false };
+    const query = { page: 1, pageSize: 20, skip: 0, take: 20 } as any;
+    const phoneWarning = { field: 'profile.phone', message: '联系电话待补充', code: 'missing', source: { row: 2 } };
+
+    function setup(formal: Record<string, any> = {}, warnings: Record<string, any>[] = [phoneWarning]) {
+      const user = { id: 'employee-1', employeeNo: '001', name: '测试员工', phone: null, email: null,
+        avatarUrl: null, deptId: 'dept-1', dept: { name: '人事部' }, position: '专员', sysRole: SysRole.employee,
+        hrCapabilities: [], status: UserStatus.active, employmentType: EmploymentType.full_time,
+        directManagerId: null, directManager: null, isAssessorOnly: false, canViewAll: false,
+        entryDate: null, archivedAt: null, externalIdentityBindings: [], employeeNumberAssignments: [],
+        employeeChangeRequests: [{ id: 'pending-1', profileReviewStatus: 'pending', proposedValue: { profile: { phone: '测试草稿' } } }],
+      };
+      const requests: Array<Record<string, any>> = [{ id: 'initial-1', userId: user.id, sourceSystem: 'roster_initialization',
+        profileReviewStatus: 'approved', appliedAt: new Date('2026-09-01'), validationWarnings: warnings,
+        proposedValue: { employee: { companyText: null }, profile: { phone: null } },
+        user: { employeeProfile: { phone: null }, employmentHistory: [{ company: 'fuede', companyText: null }],
+          employeeContracts: [], ...formal },
+      }];
+      const prisma = { user: { count: jest.fn().mockResolvedValue(1), findMany: jest.fn().mockResolvedValue([user]) },
+        employeeDataChangeRequest: { findMany: jest.fn().mockResolvedValue(requests) } };
+      const service = new UsersService(prisma as any,
+        { getVisibleEmployeeFilter: jest.fn().mockResolvedValue({ deptId: 'dept-1' }) } as any,
+        noBusinessIdentities as any);
+      return { service, prisma, user, requests };
+    }
+
+    it('档案审核人员只获得本页已生效初始化问题的安全字段，重复问题合并', async () => {
+      const { service, prisma } = setup({}, [phoneWarning, phoneWarning]);
+      const result = await service.findAll(query, hr);
+      expect(result.items[0]).toHaveProperty('archiveWarnings', [{ field: 'profile.phone', message: '联系电话待补充' }]);
+      expect(prisma.employeeDataChangeRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ userId: { in: ['employee-1'] }, sourceSystem: 'roster_initialization',
+          profileReviewStatus: 'approved', appliedAt: { not: null } }),
+      }));
+      expect(prisma.user.findMany.mock.calls[0][0].where.AND).toEqual([{ deptId: 'dept-1' }]);
+    });
+
+    it('普通员工即使能读名册也不读取或返回档案问题', async () => {
+      const { service, prisma } = setup();
+      const result = await service.findAll(query, { ...hr, sysRole: SysRole.employee, hrCapabilities: [] });
+      expect(result.items[0]).not.toHaveProperty('archiveWarnings');
+      expect(prisma.employeeDataChangeRequest.findMany).not.toHaveBeenCalled();
+    });
+
+    it('待审核提议不能清除历史问题，正式字段填妥后才消除', async () => {
+      const { service, requests } = setup();
+      expect((await service.findAll(query, hr)).items[0]).toHaveProperty('archiveWarnings', [
+        { field: 'profile.phone', message: '联系电话待补充' },
+      ]);
+      requests[0].user.employeeProfile.phone = '已审核测试号码';
+      expect((await service.findAll(query, hr)).items[0]).toHaveProperty('archiveWarnings', []);
+    });
+
+    it('无关字段完善或默认公司枚举不能消除原字段问题', async () => {
+      const { service } = setup({ employeeProfile: { phone: null, education: '本科' } }, [
+        phoneWarning, { field: 'employee.companyText', message: '公司待补充', code: 'missing' },
+        { field: 'contracts.latestSummary', message: '合同摘要待核对', code: 'review' },
+      ]);
+      expect((await service.findAll(query, hr)).items[0]).toHaveProperty('archiveWarnings', [
+        { field: 'profile.phone', message: '联系电话待补充' },
+        { field: 'employee.companyText', message: '公司待补充' },
+        { field: 'contracts.latestSummary', message: '合同摘要待核对' },
+      ]);
+    });
+
+    it('合同问题只随同一合同的对应字段完善而消除', async () => {
+      const { service, requests } = setup({ employeeContracts: [
+        { id: 'contract-1', sequence: 1, signedAt: null, expiresAt: new Date('2028-01-01') },
+        { id: 'contract-2', sequence: 2, signedAt: new Date('2026-01-01') },
+      ] }, [{ field: 'contracts.signedAt', message: '第一次合同签订日期待补充', code: 'invalid_date', contractId: 'contract-1' }]);
+      expect((await service.findAll(query, hr)).items[0]).toHaveProperty('archiveWarnings', [
+        { field: 'contracts.signedAt', message: '第一次合同签订日期待补充' },
+      ]);
+      requests[0].user.employeeContracts[0].signedAt = new Date('2025-01-01');
+      expect((await service.findAll(query, hr)).items[0]).toHaveProperty('archiveWarnings', []);
+    });
+
+    it('证件缺失不因银行卡或待审核证件内容消除，正式证件指纹只消除缺失提示', async () => {
+      const { service, requests, user } = setup({ employeeProfile: { idNumberFingerprint: null, bankAccountFingerprint: 'test-bank-fingerprint' } }, [
+        { field: 'profile.idNumber', message: '身份证号待补充', code: 'missing' },
+        { field: 'profile.idNumber', message: '身份证号待核对', code: 'review' },
+      ]);
+      user.employeeChangeRequests[0].proposedValue.profile = { idNumberFingerprint: 'pending-id-fingerprint' } as any;
+      expect((await service.findAll(query, hr)).items[0]).toHaveProperty('archiveWarnings', [
+        { field: 'profile.idNumber', message: '身份证号待补充' },
+        { field: 'profile.idNumber', message: '身份证号待核对' },
+      ]);
+      requests[0].user.employeeProfile.idNumberFingerprint = 'formal-id-fingerprint';
+      expect((await service.findAll(query, hr)).items[0]).toHaveProperty('archiveWarnings', [
+        { field: 'profile.idNumber', message: '身份证号待核对' },
+      ]);
+    });
+
+    it('花名册主管只随正式任职主管完善而消除，不借用绩效直属上级', async () => {
+      const { service, requests, user } = setup({ employmentHistory: [{ directManagerId: null, jobFamily: '人事' }] }, [
+        { field: 'employee.managerId', message: '花名册直属主管待核对', code: 'missing' },
+        { field: 'employee.jobFamily', message: '职系待补充', code: 'missing' },
+      ]);
+      (user as any).directManagerId = 'performance-manager';
+      expect((await service.findAll(query, hr)).items[0]).toHaveProperty('archiveWarnings', [
+        { field: 'employee.managerId', message: '花名册直属主管待核对' },
+      ]);
+      requests[0].user.employmentHistory[0].directManagerId = 'roster-manager';
+      expect((await service.findAll(query, hr)).items[0]).toHaveProperty('archiveWarnings', []);
     });
   });
 

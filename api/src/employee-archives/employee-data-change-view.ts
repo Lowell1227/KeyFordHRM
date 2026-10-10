@@ -21,6 +21,8 @@ const SENSITIVE_PROFILE_KEYS = new Set([
   'idNumberFingerprint',
   'bankAccountEncrypted',
   'bankAccountFingerprint',
+  'sourceEvidenceEncrypted',
+  'initializationPreviousEncrypted',
 ]);
 
 function sanitizeJson(value: unknown): unknown {

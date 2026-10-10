@@ -149,6 +149,7 @@ export interface User {
   dingtalkBindingState?: 'unbound' | 'enabled' | 'disabled';
   archivedAt?: string | null;
   matchedHistoricalEmployeeNo?: string | null;
+  archiveWarnings?: Array<{ field: string; message: string }>;
 }
 
 export interface DirectReport {

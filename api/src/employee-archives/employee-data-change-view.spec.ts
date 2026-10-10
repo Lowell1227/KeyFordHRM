@@ -19,4 +19,19 @@ describe('employee archive public response', () => {
     expect(result.createdBy).toEqual({ id: 'hr' });
     expect(result.proposedValue.profile).toEqual({ bankAccountConfigured: true });
   });
+
+  it.each([employeeDataChangeView, employeeArchiveView])('keeps initialization evidence ciphertext out of public views', (view) => {
+    const stored = {
+      sourceEvidenceEncrypted: 'source-ciphertext',
+      proposedValue: { employee: { employeeNo: 'SYNTHETIC-1' }, initializationPreviousEncrypted: 'previous-ciphertext' },
+      history: [{ sourceEvidenceEncrypted: 'nested-source', initializationPreviousEncrypted: 'nested-previous', source: { rowNumber: 3 } }],
+    };
+
+    expect(view(stored)).toEqual({
+      proposedValue: { employee: { employeeNo: 'SYNTHETIC-1' } },
+      history: [{ source: { rowNumber: 3 } }],
+    });
+    expect(stored.sourceEvidenceEncrypted).toBe('source-ciphertext');
+    expect(stored.proposedValue.initializationPreviousEncrypted).toBe('previous-ciphertext');
+  });
 });

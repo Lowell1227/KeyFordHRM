@@ -59,6 +59,7 @@ function reset() {
     employeeNo: archive.employeeNo,
     phone: archive.employeeProfile?.phone ?? null,
     company: employment?.company ?? archive.dept?.company ?? 'fuede',
+    companyText: employment?.companyText ?? null,
     deptId: archive.dept?.id ?? null,
     positionId: employment?.positionId ?? null,
     position: archive.position,
@@ -275,7 +276,8 @@ defineExpose({ submit, saveDraft, reset, isDirty });
       <el-form label-position="top" class="archive-editor-grid">
         <el-form-item label="姓名"><el-input v-model="form.employee.name" /></el-form-item>
         <el-form-item label="当前工号"><el-input v-model="form.employee.employeeNo" disabled /><small class="field-help">工号由系统生成；历史任职工号在档案中保留，不在此处修改。</small></el-form-item>
-        <el-form-item label="所属公司">
+        <el-form-item label="所属公司（花名册）"><el-input v-model="form.employee.companyText" maxlength="150" clearable /></el-form-item>
+        <el-form-item label="组织归属">
           <el-select v-model="form.employee.company"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select>
         </el-form-item>
         <el-form-item label="所属部门"><el-tree-select v-model="form.employee.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>

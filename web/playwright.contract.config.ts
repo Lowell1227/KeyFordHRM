@@ -48,6 +48,8 @@ export default defineConfig({
     '53-prepublication-confirmation.spec.ts',
     '54-personnel-resignation-archive.spec.ts',
     '58-employee-create-wizard.spec.ts',
+    '62-employee-company-text.spec.ts',
+    '61-archive-warnings.spec.ts',
   ],
   workers: 1,
 });

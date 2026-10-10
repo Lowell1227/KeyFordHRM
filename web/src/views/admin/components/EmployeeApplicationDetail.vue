@@ -28,7 +28,8 @@ const employmentTypeLabels: Record<string, string> = {
 const fieldLabels: Record<string, string> = {
   name: '姓名',
   phone: '手机号',
-  company: '所属公司',
+  company: '组织归属',
+  companyText: '所属公司（花名册）',
   deptId: '部门',
   position: '岗位',
   jobGrade: '职级',
@@ -98,7 +99,7 @@ function displayValue(key: string, value: unknown, source: Record<string, any>) 
 }
 
 const employmentItems = computed(() => {
-  const keys = ['company', 'deptId', 'position', 'jobGrade', 'jobFamily', 'workLocation', 'employeeStatus', 'status', 'employmentType', 'entryDate', 'effectiveDate', 'effectiveFrom', 'effectiveTo', 'leaveDate', 'managerId', 'probationMonths', 'plannedRegularDate', 'actualRegularDate'];
+  const keys = ['company', 'companyText', 'deptId', 'position', 'jobGrade', 'jobFamily', 'workLocation', 'employeeStatus', 'status', 'employmentType', 'entryDate', 'effectiveDate', 'effectiveFrom', 'effectiveTo', 'leaveDate', 'managerId', 'probationMonths', 'plannedRegularDate', 'actualRegularDate'];
   const seenLabels = new Set<string>();
   const items = keys.flatMap((key) => {
     const value = employee.value[key];

@@ -61,6 +61,7 @@ export interface UserListItem {
   dingtalkBindingState: 'unbound' | 'enabled' | 'disabled';
   archivedAt: Date | null;
   matchedHistoricalEmployeeNo: string | null;
+  archiveWarnings?: Array<{ field: string; message: string }>;
   currentApplications?: Array<{ id: string; sourceType: string; onboardingStatus: string | null;
     profileReviewStatus: string; performanceReviewStatus: string; updatedAt: Date }>;
 }
@@ -218,6 +219,8 @@ export class UsersService {
     const identitiesByUser = await this.businessCapabilities.getIdentitySummariesForUsers(
       users.map((user) => user.id),
     );
+    const canViewArchive = hasHrCapability(viewer, 'employee_archive_edit') || hasHrCapability(viewer, 'employee_archive_review');
+    const archiveWarnings = canViewArchive ? await this.getArchiveWarnings(users) : new Map();
     const items: UserListItem[] = users.map((u) => ({
       id: u.id,
       employeeNo: u.employeeNo,
@@ -241,6 +244,7 @@ export class UsersService {
       entryDate: u.entryDate,
       dingtalkBindingState: u.externalIdentityBindings[0]?.status ?? 'unbound',
       archivedAt: u.archivedAt,
+      ...(canViewArchive ? { archiveWarnings: archiveWarnings.get(u.id) ?? [] } : {}),
       currentApplications: hasHrCapability(viewer, 'employee_archive_edit') || hasHrCapability(viewer, 'employee_archive_review')
         ? (u.employeeChangeRequests ?? []).map(({ proposedValue, ...request }) => ({ ...request,
           proposedValue: { employee: {
@@ -255,6 +259,62 @@ export class UsersService {
     }));
 
     return paginated(items, total, dto);
+  }
+
+  private async getArchiveWarnings(users: Array<{ id: string } & Record<string, unknown>>) {
+    const result = new Map<string, Array<{ field: string; message: string }>>();
+    if (!users.length) return result;
+    const requests = await this.prisma.employeeDataChangeRequest.findMany({
+      where: { userId: { in: users.map((user) => user.id) }, sourceSystem: 'roster_initialization',
+        profileReviewStatus: 'approved', appliedAt: { not: null } },
+      select: { userId: true, validationWarnings: true, user: { select: {
+        employeeProfile: true,
+        employmentHistory: { where: { effectiveFrom: { lte: new Date() } }, orderBy: { effectiveFrom: 'desc' }, take: 1 },
+        employeeContracts: true,
+      } } },
+    });
+    const usersById = new Map(users.map((user) => [user.id, user]));
+    const seen = new Set<string>();
+    for (const request of requests) {
+      if (!request.userId || !Array.isArray(request.validationWarnings)) continue;
+      const profile = request.user?.employeeProfile as Record<string, unknown> | null;
+      const employment = request.user?.employmentHistory[0] as Record<string, unknown> | undefined;
+      const user = usersById.get(request.userId);
+      for (const raw of request.validationWarnings) {
+        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+        const warning = raw as Record<string, unknown>;
+        if (typeof warning.field !== 'string' || typeof warning.message !== 'string') continue;
+        const { field, message } = warning;
+        const key = field.split('.').at(-1)!;
+        let value: unknown;
+        if (field.startsWith('contracts.')) {
+          // Historical contract issues belong to the exact imported contract, never any later contract.
+          const contract = request.user?.employeeContracts.find((item) => item.id === warning.contractId);
+          value = (contract as Record<string, unknown> | undefined)?.[key];
+        } else if (key === 'company' || key === 'companyText') {
+          value = employment?.companyText;
+        } else if (field === 'employee.managerId' || field === 'managerId') {
+          value = employment?.directManagerId;
+        } else if (field.startsWith('profile.')) {
+          value = profile?.[key === 'idNumber' ? 'idNumberFingerprint' : key === 'bankAccount' ? 'bankAccountFingerprint' : key];
+        } else if (field.startsWith('employee.')) {
+          value = employment?.[key] ?? user?.[key];
+        } else {
+          value = profile?.[key] ?? employment?.[key] ?? user?.[key];
+        }
+        const present = value !== null && value !== undefined && (typeof value !== 'string' || value.trim() !== '');
+        if (warning.code === 'missing' && present) continue;
+        if (warning.code === 'invalid_date' && present
+          && (value instanceof Date || typeof value === 'string') && Number.isFinite(new Date(value).getTime())) continue;
+        const identity = JSON.stringify([request.userId, field, message, warning.contractId]);
+        if (seen.has(identity)) continue;
+        seen.add(identity);
+        const warnings = result.get(request.userId) ?? [];
+        warnings.push({ field, message });
+        result.set(request.userId, warnings);
+      }
+    }
+    return result;
   }
 
   /** GET /users/:id — 查询用户详情 */

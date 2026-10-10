@@ -1039,6 +1039,10 @@ export class EmployeeArchivesService {
     operator: AuthUser,
     recordStatus: 'draft' | 'submitted',
   ) {
+    if (input.employee.companyText != null && (typeof input.employee.companyText !== 'string'
+      || input.employee.companyText.length > 150)) {
+      throw new BadRequestException('所属公司须为不超过150字的文字');
+    }
     const user = await client.user.findUnique({
       where: { id: userId, deletedAt: null },
       include: {
@@ -1118,7 +1122,7 @@ export class EmployeeArchivesService {
       ...(input.performance ?? {}),
     };
     const profileChanged = !this.sameReviewRecord(baseEmployee, proposedEmployee, [
-      'employeeNo', 'name', 'phone', 'company', 'deptId', 'positionId', 'position', 'jobGrade',
+      'employeeNo', 'name', 'phone', 'company', 'companyText', 'deptId', 'positionId', 'position', 'jobGrade',
       'jobFamily', 'managerId', 'workLocation', 'employmentType', 'employeeStatus', 'entryDate',
       'plannedRegularDate', 'actualRegularDate', 'leaveDate', 'probationMonths',
     ])
@@ -1484,6 +1488,7 @@ export class EmployeeArchivesService {
       name: user.name,
       phone: phoneOverride !== undefined ? phoneOverride : user.phone,
       company: employment?.company ?? CompanyCode.fuede,
+      companyText: employment?.companyText ?? null,
       deptId: user.deptId ?? employment?.deptId ?? null,
       positionId: user.positionId ?? employment?.positionId ?? null,
       position: user.position ?? employment?.position ?? null,

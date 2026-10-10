@@ -265,6 +265,8 @@ export class EmployeeRosterImportService {
           employeeNo: raw.employee.employeeNo ?? current?.employeeNo ?? null,
           phone: isIncrementalUpdate && raw.profile.phone == null ? current?.phone ?? null : raw.profile.phone,
           company: normalized.company,
+          companyText: isIncrementalUpdate && raw.employee.companyText == null
+            ? currentEmployment?.companyText ?? null : raw.employee.companyText,
           deptId: normalized.deptId ?? (currentDepartmentMatches ? current?.deptId ?? null : null),
           position: isIncrementalUpdate && raw.employee.position == null ? current?.position ?? null : raw.employee.position,
           jobGrade: isIncrementalUpdate && raw.employee.jobGrade == null ? currentEmployment?.jobGrade ?? null : raw.employee.jobGrade,
@@ -295,7 +297,7 @@ export class EmployeeRosterImportService {
             }
             : {}),
         };
-        const parsedProfile = this.profileData(raw.profile);
+        const parsedProfile = this.prepareProfile(raw.profile);
         const currentProfile = this.profileReviewData(current?.employeeProfile);
         const proposedProfile = isIncrementalUpdate
           ? { ...currentProfile, ...this.withoutNullish(parsedProfile) }
@@ -316,6 +318,7 @@ export class EmployeeRosterImportService {
           name: current.name,
           phone: current.phone,
           company: currentEmployment?.company ?? normalized.company,
+          companyText: currentEmployment?.companyText ?? null,
           deptId: current.deptId,
           position: current.position,
           jobGrade: currentEmployment?.jobGrade ?? null,
@@ -331,7 +334,7 @@ export class EmployeeRosterImportService {
           employeeStatus: current.status,
         } : null;
         const employeeReviewKeys = [
-          'employeeNo', 'name', 'phone', 'company', 'deptId', 'position', 'jobGrade', 'jobFamily',
+          'employeeNo', 'name', 'phone', 'company', 'companyText', 'deptId', 'position', 'jobGrade', 'jobFamily',
           'managerName', 'workLocation', 'entryDate', 'plannedRegularDate', 'actualRegularDate',
           'leaveDate', 'probationMonths', 'employmentType', 'employeeStatus',
         ];
@@ -353,16 +356,21 @@ export class EmployeeRosterImportService {
           currentOrganizationLeaders[fullPath]
             !== importRow.matchedUserId
         ));
-        const proposedContracts = raw.contracts.map((contract) => ({
+        const classifiedContracts = raw.contracts.filter((contract) => contract.kind !== 'unclassified');
+        const unclassifiedContracts = raw.contracts.filter((contract) => contract.kind === 'unclassified');
+        const proposedContracts = [...classifiedContracts.map((contract) => ({
           ...contract,
-          signingCompany: contract.signingCompany ?? raw.employee.companyText,
+          signingCompany: contract.signingCompany ?? null,
           effectiveFrom: contract.effectiveFrom ?? contract.signedAt,
-        }));
+        })), ...(unclassifiedContracts.length ? (current?.employeeContracts ?? []).filter((contract) => (
+          !classifiedContracts.some((parsed) => parsed.kind === contract.contractType && parsed.sequence === contract.sequence)
+        )) : [])];
         const needsProfileReview = !current
           || !this.sameReviewRecord(currentEmployee, proposedEmployee, employeeReviewKeys)
           || !this.sameReviewRecord(currentProfile, proposedProfile)
           || !this.sameContractSet(current?.employeeContracts ?? [], proposedContracts)
           || needsLeaderReview
+          || Boolean(raw.warnings?.length)
           || importRow.rowNumber === organizationReviewCarrierRow;
         if (!needsProfileReview && !needsPerformanceReview) continue;
         const validationErrors = !needsPerformanceReview || raw.employee.managerName
@@ -372,6 +380,11 @@ export class EmployeeRosterImportService {
           employee: proposedEmployee,
           profile: proposedProfile,
           contracts: proposedContracts,
+          source: raw.source,
+          ...(raw.sourceFields || unclassifiedContracts.length ? {
+            sourceFileHash: fileHash,
+            sourceEvidenceEncrypted: this.encryptSourceEvidence({ sourceFields: raw.sourceFields ?? {}, unclassifiedContracts }),
+          } : {}),
           performance: approvedPerformanceManagerId
             ? {
               managerId: approvedPerformanceManagerId,
@@ -418,6 +431,7 @@ export class EmployeeRosterImportService {
             profileReviewStatus: needsProfileReview ? 'pending' : 'not_required',
             performanceReviewStatus: needsPerformanceReview ? 'pending' : 'not_required',
             validationErrors: this.toJson(validationErrors),
+            validationWarnings: this.toJson(raw.warnings ?? []),
             createdById: operator.id,
           },
         });
@@ -480,6 +494,7 @@ export class EmployeeRosterImportService {
             name: current.name,
             phone: current.phone,
             company: employment.company,
+            companyText: employment.companyText ?? null,
             deptId: current.deptId,
             position: current.position,
             jobGrade: employment.jobGrade,
@@ -757,7 +772,7 @@ export class EmployeeRosterImportService {
 
     for (const row of rows) {
       const errors: string[] = [];
-      const warnings: string[] = [];
+      const warnings: string[] = (row.warnings ?? []).map((warning) => warning.message);
       const employeeNo = row.employee.employeeNo;
       if (!employeeNo) errors.push('工号不能为空');
       if (!row.employee.name) errors.push('姓名不能为空');
@@ -817,6 +832,8 @@ export class EmployeeRosterImportService {
           },
           profile: this.maskSensitiveProfile(row.profile),
           contracts: row.contracts.map((contract) => ({ ...contract })),
+          source: row.source,
+          parseWarnings: row.warnings,
         }),
         matchedUserId: existing?.id,
         diffs: this.toJson(existing ? [{ field: 'roster', type: 'compare_on_confirmation' }] : []),
@@ -1050,7 +1067,7 @@ export class EmployeeRosterImportService {
     };
   }
 
-  private profileData(profile: ParsedEmployeeRosterRow['profile']) {
+  prepareProfile(profile: ParsedEmployeeRosterRow['profile']) {
     const idNumber = this.encryptAndFingerprint(profile.idNumber);
     const bankAccount = this.encryptAndFingerprint(profile.bankAccount);
     return {
@@ -1085,6 +1102,10 @@ export class EmployeeRosterImportService {
       bankAccountEncrypted: bankAccount?.encrypted,
       bankAccountFingerprint: bankAccount?.fingerprint,
     };
+  }
+
+  encryptSourceEvidence(value: unknown): string {
+    return this.encryptAndFingerprint(JSON.stringify(value))!.encrypted.toString('base64');
   }
 
   private profileReviewData(profile: Record<string, unknown> | null | undefined): Record<string, unknown> {
@@ -1154,7 +1175,7 @@ export class EmployeeRosterImportService {
 
   private sameChangeProposal(left: unknown, right: unknown): boolean {
     const normalize = (value: unknown, key?: string): unknown => {
-      if (key === 'idNumberEncrypted' || key === 'bankAccountEncrypted') return undefined;
+      if (key === 'idNumberEncrypted' || key === 'bankAccountEncrypted' || key === 'sourceEvidenceEncrypted') return undefined;
       if (value === undefined || value === null || value === '') return null;
       if (value instanceof Date) return value.toISOString();
       if (Buffer.isBuffer(value)) return undefined;

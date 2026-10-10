@@ -737,6 +737,7 @@ model EmploymentRecord {
   effectiveFrom      DateTime       @map("effective_from") @db.Date
   effectiveTo        DateTime?      @map("effective_to") @db.Date
   company            CompanyCode
+  companyText        String?        @map("company_text") @db.VarChar(150)
   deptId             String?        @map("dept_id") @db.Uuid
   positionId         String?        @map("position_id") @db.Uuid
   position           String?        @db.VarChar(100)

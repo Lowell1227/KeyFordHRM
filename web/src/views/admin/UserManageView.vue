@@ -2016,6 +2016,16 @@ onBeforeUnmount(() => {
                     <div class="roster-person-details">
                       <div class="roster-person-heading">
                         <strong>{{ (row as ManagedUser).name }}</strong>
+                        <el-popover
+                          v-if="canViewArchive && (row as ManagedUser).archiveWarnings?.length"
+                          :trigger="['hover', 'click']"
+                          :width="300"
+                          popper-class="archive-warnings-popover"
+                        >
+                          <template #reference><el-button class="archive-warning-marker" type="warning" plain size="small">待完善 {{ (row as ManagedUser).archiveWarnings!.length }}项</el-button></template>
+                          <ul class="archive-warning-list"><li v-for="(warning, index) in (row as ManagedUser).archiveWarnings" :key="index">{{ warning.message }}</li></ul>
+                          <el-button link type="primary" @click="openEmployeeArchive(row as ManagedUser)">查看档案</el-button>
+                        </el-popover>
                         <el-tag :type="statusTagType[(row as ManagedUser).status]" size="small">
                           {{ statusLabels[(row as ManagedUser).status] }}
                         </el-tag>
@@ -2088,7 +2098,14 @@ onBeforeUnmount(() => {
           </div>
           <div v-loading="userLoading" class="mobile-result-list roster-mobile-list">
             <MobileResultCard v-for="item in userList" :key="item.id">
-              <template #title><el-checkbox v-if="canSelectEmployeeForArchive(item)" :model-value="selectedUsers.some((row) => row.id === item.id)" @change="selectedUsers = $event ? [...selectedUsers.filter((row) => row.id !== item.id), item] : selectedUsers.filter((row) => row.id !== item.id)">{{ item.name }} · {{ item.employeeNo }}</el-checkbox><span v-else>{{ item.name }} · {{ item.employeeNo || '工号待补充' }}</span><small v-if="item.matchedHistoricalEmployeeNo"> · 历史工号命中 {{ item.matchedHistoricalEmployeeNo }}</small></template>
+              <template #title>
+                <el-checkbox v-if="canSelectEmployeeForArchive(item)" :model-value="selectedUsers.some((row) => row.id === item.id)" @change="selectedUsers = $event ? [...selectedUsers.filter((row) => row.id !== item.id), item] : selectedUsers.filter((row) => row.id !== item.id)">{{ item.name }} · {{ item.employeeNo }}</el-checkbox><span v-else>{{ item.name }} · {{ item.employeeNo || '工号待补充' }}</span><small v-if="item.matchedHistoricalEmployeeNo"> · 历史工号命中 {{ item.matchedHistoricalEmployeeNo }}</small>
+                <el-popover v-if="canViewArchive && item.archiveWarnings?.length" :trigger="['hover', 'click']" :width="300" popper-class="archive-warnings-popover">
+                  <template #reference><el-button class="archive-warning-marker" type="warning" plain size="small">待完善 {{ item.archiveWarnings.length }}项</el-button></template>
+                  <ul class="archive-warning-list"><li v-for="(warning, index) in item.archiveWarnings" :key="index">{{ warning.message }}</li></ul>
+                  <el-button link type="primary" @click="openEmployeeArchive(item)">查看档案</el-button>
+                </el-popover>
+              </template>
               <template #status><el-tag :type="statusTagType[item.status]" size="small">{{ statusLabels[item.status] }}</el-tag></template>
               <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 岗位</span><span class="mobile-result-field__value">{{ item.deptName || '未分配部门' }} · {{ item.position || '未设置' }}</span></div>
               <div class="mobile-result-field"><span class="mobile-result-field__label">绩效上级</span><span class="mobile-result-field__value">{{ item.directManagerName || '未设置' }}</span></div>
@@ -2252,7 +2269,7 @@ onBeforeUnmount(() => {
             <div class="employee-archive__facts">
               <div><span>姓名</span><strong>{{ employeeArchiveDrawer.data.name }}</strong></div>
               <div><span>工号</span><strong>{{ employeeArchiveDrawer.data.employeeNo || '未填写' }}</strong></div>
-              <div><span>所属公司</span><strong>{{ companyLabels[archiveCurrentEmployment?.company || employeeArchiveDrawer.data.dept?.company || ''] || '待确认' }}</strong></div>
+              <div><span>所属公司</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.companyText, '待补充') }}</strong></div>
               <div><span>所属部门</span><strong>{{ employeeArchiveDrawer.data.dept?.fullPath || employeeArchiveDrawer.data.dept?.name || '未设置' }}</strong></div>
               <div><span>岗位</span><strong>{{ employeeArchiveDrawer.data.position || '未设置' }}</strong></div>
               <div><span>职级</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.jobGrade) }}</strong></div>
@@ -3676,6 +3693,21 @@ onBeforeUnmount(() => {
 
 .roster-person-heading .el-tag {
   flex: 0 0 auto;
+}
+
+.archive-warning-marker {
+  height: 22px;
+  padding: 0 6px;
+}
+
+.archive-warning-list {
+  margin: 0 0 8px;
+  padding-left: 18px;
+  overflow-wrap: anywhere;
+}
+
+.archive-warning-list li + li {
+  margin-top: 5px;
 }
 
 .business-identity-tags {

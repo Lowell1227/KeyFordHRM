@@ -1,0 +1,73 @@
+import { expect, test, type Page } from '@playwright/test';
+
+const response = (data: unknown) => ({ code: 0, message: 'success', data, timestamp: Date.now() });
+const employee = {
+  id: 'archive-warning-employee', name: '档案待完善测试员工', employeeNo: 'WARN001',
+  sysRole: 'employee', status: 'active', employmentType: 'full_time',
+  deptName: '人事行政部', position: '人事专员', directManagerName: '直属上级',
+  hrCapabilities: [], businessIdentities: [], isAssessorOnly: false, canViewAll: false,
+  dingtalkBindingState: 'unbound', archivedAt: null,
+  archiveWarnings: [
+    { field: 'profile.phone', message: '联系电话待补充' },
+    { field: 'contracts.signedAt', message: '第一次劳动合同签订日期待核对，请根据合同原件补充完整日期' },
+  ],
+};
+
+async function setup(page: Page, capability = 'employee_archive_review', companyText: string | null = null) {
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'archive-warning-test');
+    localStorage.setItem('expiresAt', String(Date.now() + 600_000));
+  });
+  await page.route('**/api/v1/**', async (route) => {
+    const path = new URL(route.request().url()).pathname;
+    let data: unknown = [];
+    if (path.endsWith('/auth/me')) data = { id: 'hr-warning', name: '档案审核人员', sysRole: 'hr_user',
+      hrCapabilities: [capability], canViewAll: false };
+    else if (path.endsWith('/notifications/unread-count')) data = 0;
+    else if (path.endsWith('/users')) data = { items: [employee], total: 1, page: 1, pageSize: 20 };
+    else if (path.endsWith(`/employee-archives/${employee.id}`)) data = { ...employee,
+      currentEmployment: { company: 'fuede', companyText },
+      employeeProfile: {}, employmentHistory: [], contracts: [], changeHistory: [], archiveEvents: [],
+      dept: { name: '人事行政部' }, dingtalkBinding: null };
+    else if (path.endsWith('/list')) data = { items: [], total: 0, page: 1, pageSize: 20 };
+    await route.fulfill({ contentType: 'application/json', body: JSON.stringify(response(data)) });
+  });
+}
+
+for (const viewport of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 390, height: 844 }]) {
+  test(`${viewport.width}px 档案姓名旁可展开待完善清单并查看原有档案`, async ({ page }, testInfo) => {
+    await page.setViewportSize(viewport);
+    await setup(page);
+    await page.goto('/users');
+    const list = page.locator(viewport.width < 768 ? '.roster-mobile-list' : '.desktop-result-table');
+    await expect(list.getByText(employee.name, { exact: viewport.width >= 768 })).toBeVisible();
+    const marker = list.getByRole('button', { name: '待完善 2项', exact: true });
+    await expect(marker).toBeVisible();
+    if (viewport.width < 768) await marker.click();
+    else await marker.hover();
+    const details = page.locator('.archive-warnings-popover:visible');
+    await expect(details.getByText('联系电话待补充', { exact: true })).toBeVisible();
+    await expect(details.getByText(employee.archiveWarnings[1]!.message, { exact: true })).toBeVisible();
+    await expect(details).toHaveCSS('opacity', '1');
+    await page.screenshot({ path: testInfo.outputPath(`archive-warnings-${viewport.width}.png`), fullPage: true });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
+    await details.getByRole('button', { name: '查看档案', exact: true }).click();
+    await expect(page.getByRole('dialog', { name: '员工档案', exact: true })).toBeVisible();
+    await expect(page.locator('.employee-archive__name')).toContainText(employee.name);
+    await expect(page.getByText('所属公司', { exact: true }).locator('..').locator('strong')).toHaveText('待补充');
+  });
+}
+
+test('只有组织管理权限时不展示档案待完善提示', async ({ page }) => {
+  await setup(page, 'organization_edit');
+  await page.goto('/users');
+  await expect(page.locator('.roster-person-heading').getByText(employee.name)).toBeVisible();
+  await expect(page.getByRole('button', { name: '待完善 2项', exact: true })).toHaveCount(0);
+});
+
+test('档案详情直接显示花名册公司名称', async ({ page }) => {
+  await setup(page, 'employee_archive_review', '花名册公司完整名称');
+  await page.goto('/users');
+  await page.getByRole('button', { name: '查看档案', exact: true }).click();
+  await expect(page.getByText('所属公司', { exact: true }).locator('..').locator('strong')).toHaveText('花名册公司完整名称');
+});

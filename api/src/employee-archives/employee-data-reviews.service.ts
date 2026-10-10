@@ -533,6 +533,9 @@ export class EmployeeDataReviewsService {
   ): Promise<string> {
     const proposed = this.record(request.proposedValue);
     const employee = this.record(proposed.employee);
+    const baseEmployee = this.record(this.record(request.baseValue).employee);
+    const canKeepHistoricalMissing = Boolean(request.userId)
+      && request.sourceType === 'manual_archive_change' && !request.intakeType;
     const name = this.requiredString(employee.name, '姓名不能为空');
     const employeeNo = this.requiredString(employee.employeeNo, '工号不能为空');
     const company = this.enumValue(employee.company, Object.values(CompanyCode), CompanyCode.fuede);
@@ -553,10 +556,11 @@ export class EmployeeDataReviewsService {
     for (const ensurePath of organizationEnsurePaths) {
       await this.ensureReviewedDepartmentPath(tx, ensurePath, company, organizationNodes);
     }
-    if (!deptId) {
+    if (!deptId && !(canKeepHistoricalMissing && baseEmployee.deptId === null && employee.deptId === null)) {
       throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '所属部门不能为空' });
     }
-    const entryDate = this.requiredDate(employee.entryDate, '入职日期不能为空');
+    const entryDate = canKeepHistoricalMissing && baseEmployee.entryDate === null && employee.entryDate === null
+      ? null : this.requiredDate(employee.entryDate, '入职日期不能为空');
     const employmentType = this.enumValue(employee.employmentType, Object.values(EmploymentType), EmploymentType.full_time);
     const employeeStatus = this.enumValue(employee.employeeStatus, Object.values(UserStatus), UserStatus.active);
     const phone = this.nullableString(employee.phone);
@@ -584,7 +588,7 @@ export class EmployeeDataReviewsService {
     const isResignation = employeeStatus === UserStatus.resigned && employee.changeType === 'resignation';
     const effectiveFrom = isResignation && leaveDate ? nextBusinessDate(leaveDate) : isManualEmployment
       ? this.requiredDate(employee.effectiveFrom, '任职生效日期不能为空')
-      : request.userId ? today : entryDate;
+      : request.userId ? today : entryDate!;
     const effectiveTo = isManualEmployment
       ? this.nullableDate(employee.effectiveTo)
       : employeeStatus === UserStatus.resigned ? today : null;
@@ -667,10 +671,18 @@ export class EmployeeDataReviewsService {
       }
     }
 
+    const shouldWriteEmployment = !request.userId
+      || isManualEmployment
+      || this.hasEmploymentChange(baseEmployee, employee);
+    const priorCompany = request.userId && shouldWriteEmployment && employee.companyText === undefined
+      ? await tx.employmentRecord.findFirst({
+        where: { userId }, orderBy: { effectiveFrom: 'desc' }, select: { companyText: true },
+      }) : null;
     const employmentData = {
       userId,
       employeeNo,
       company,
+      companyText: this.nullableString(employee.companyText === undefined ? priorCompany?.companyText : employee.companyText),
       deptId,
       positionId,
       position,
@@ -692,10 +704,6 @@ export class EmployeeDataReviewsService {
       sourceRequestId: request.id,
       createdById: operator.id,
     };
-    const baseEmployee = this.record(this.record(request.baseValue).employee);
-    const shouldWriteEmployment = !request.userId
-      || isManualEmployment
-      || this.hasEmploymentChange(baseEmployee, employee);
     const changeType = this.nullableString(employee.changeType);
     const closesCurrentEmployment = !isManualEmployment
       || (employeeStatus === UserStatus.resigned && changeType === 'resignation');
@@ -937,7 +945,7 @@ export class EmployeeDataReviewsService {
     proposed: Record<string, unknown>,
   ): boolean {
     const keys = [
-      'company', 'deptId', 'positionId', 'position', 'jobGrade', 'jobFamily', 'managerId', 'managerName',
+      'company', 'companyText', 'deptId', 'positionId', 'position', 'jobGrade', 'jobFamily', 'managerId', 'managerName',
       'workLocation', 'employmentType', 'employeeStatus', 'entryDate', 'plannedRegularDate',
       'actualRegularDate', 'leaveDate', 'probationMonths',
     ];
@@ -1115,6 +1123,7 @@ export class EmployeeDataReviewsService {
       name: current.name,
       phone: current.phone,
       company: employment?.company ?? null,
+      companyText: employment?.companyText ?? null,
       deptId: current.deptId,
       positionId: current.positionId ?? employment?.positionId ?? null,
       position: current.position,
@@ -1177,7 +1186,7 @@ export class EmployeeDataReviewsService {
       const contractData = {
         sequence,
         name: this.nullableString(contract.name),
-        signingCompany: this.nullableString(contract.signingCompany ?? employee.companyText),
+        signingCompany: this.nullableString(contract.signingCompany),
         signedAt: this.nullableDate(contract.signedAt),
         effectiveFrom: this.nullableDate(contract.effectiveFrom ?? contract.signedAt),
         expiresAt: this.nullableDate(contract.expiresAt),

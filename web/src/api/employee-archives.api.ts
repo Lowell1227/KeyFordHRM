@@ -176,6 +176,7 @@ export interface EmployeeArchive {
     effectiveFrom: string;
     effectiveTo: string | null;
     company: string;
+    companyText?: string | null;
     deptId: string | null;
     positionId: string | null;
     position: string | null;
@@ -229,6 +230,7 @@ export interface EmployeeArchive {
     employeeNumberAssignmentId?: string | null;
     employeeNo?: string | null;
     company: string;
+    companyText?: string | null;
     deptId: string | null;
     positionId?: string | null;
     position: string | null;

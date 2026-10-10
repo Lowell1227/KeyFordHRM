@@ -16,6 +16,8 @@ export interface ParsedRosterEmployee {
   probationMonths: number | null;
   plannedRegularDate: Date | null;
   actualRegularDate: Date | null;
+  leaveDate?: Date | null;
+  payrollCutoffDate?: Date | null;
 }
 
 export interface ParsedRosterProfile {
@@ -47,11 +49,27 @@ export interface ParsedRosterProfile {
   bankName: string | null;
   bankBranch: string | null;
   bankAccount: string | null;
+  socialSecurityStopDate?: Date | null;
+  housingFundStopDate?: Date | null;
+}
+
+export interface RosterSource {
+  sheetName: string;
+  rowNumber: number;
+  cell?: string;
+}
+
+export interface RosterParseWarning {
+  field: string;
+  message: string;
+  code?: 'missing' | 'invalid_date' | 'review';
+  source?: RosterSource;
+  contractSequence?: number;
 }
 
 export interface ParsedRosterContract {
   sequence: number;
-  kind: 'contract' | 'renewal' | 'transfer';
+  kind: 'contract' | 'renewal' | 'transfer' | 'unclassified';
   name: string | null;
   signingCompany?: string | null;
   signedAt: Date | null;
@@ -63,6 +81,9 @@ export interface ParsedRosterContract {
   confidentialityAgreement: string | null;
   nonCompeteAgreement: string | null;
   portraitAgreement: string | null;
+  isOpenEnded?: boolean;
+  source?: RosterSource;
+  sourceCells?: string[];
 }
 
 export interface ParsedEmployeeRosterRow {
@@ -70,6 +91,10 @@ export interface ParsedEmployeeRosterRow {
   employee: ParsedRosterEmployee;
   profile: ParsedRosterProfile;
   contracts: ParsedRosterContract[];
+  source?: RosterSource;
+  warnings?: RosterParseWarning[];
+  // Raw source evidence may contain personal data. Keep out of logs and public previews.
+  sourceFields?: Record<string, ExcelJS.CellValue>;
 }
 
 const PLACEHOLDERS = new Set(['', '/', '／', '#VALUE!']);
@@ -150,10 +175,186 @@ export async function parseEmployeeRosterExcel(buffer: Buffer): Promise<ParsedEm
   if (workbook.getWorksheet('员工主档') && workbook.getWorksheet('任职记录')) {
     return parseV2Workbook(workbook);
   }
+  const currentSheets = ['在职整理', '离职']
+    .map((name) => workbook.getWorksheet(name))
+    .filter((sheet): sheet is ExcelJS.Worksheet => Boolean(sheet));
+  if (currentSheets.some((sheet) => readText(sheet.getRow(2), 1) === '姓名')) {
+    return parseCurrentRoster(workbook, currentSheets);
+  }
   const worksheet = workbook.worksheets[0];
   if (!worksheet) return [];
 
   return parseLegacyWorksheet(worksheet);
+}
+
+function parseCurrentRoster(workbook: ExcelJS.Workbook, sheets: ExcelJS.Worksheet[]): ParsedEmployeeRosterRow[] {
+  const rows: ParsedEmployeeRosterRow[] = [];
+  for (const sheet of sheets) {
+    const former = sheet.name === '离职';
+    const offset = former ? 4 : 0;
+    const headers: Record<number, string> = {
+      1: '姓名', 2: '工号', 3: '所属公司', 11: '入职时间',
+      [19 + offset]: '手机号', [37 + offset]: '身份证号',
+      [43 + offset]: former ? '社保停缴时间' : '社保起缴时间',
+      [45 + offset]: former ? '公积金停缴时间' : '公积金起缴时间',
+      [48 + offset]: '银行账号', [49 + offset]: '是否打卡', [52 + offset]: '合同名称',
+      [59 + offset]: '最新合同签署时间', [60 + offset]: '最新合同到期时间',
+      [61 + offset]: former ? '合同签署时间' : '首份合同签署时间',
+      [62 + offset]: former ? '合同到期时间' : '首份合同到期时间',
+      [64 + offset]: '合同开始时间', [65 + offset]: '合同结束时间',
+      [75 + offset]: '原合同主体', [76 + offset]: '转签时间',
+      [77 + offset]: '合同到期时间', [78 + offset]: '新主体',
+    };
+    if (former) {
+      headers[12] = '离职时间（算薪截止日）';
+      headers[13] = '离职具体时间（最后工作日）';
+    }
+    for (const [column, expected] of Object.entries(headers)) {
+      if (readText(sheet.getRow(2), Number(column)) !== expected) {
+        throw new Error(`${sheet.name}表头不匹配，请核对第2行${sheet.getColumn(Number(column)).letter}列`);
+      }
+    }
+    sheet.eachRow((row, rowNumber) => {
+      if (rowNumber < 3) return;
+      const name = readText(row, 1);
+      const employeeNo = readText(row, 2);
+      if (!name && !employeeNo) return;
+      const source: RosterSource = { sheetName: sheet.name, rowNumber };
+      const warnings: RosterParseWarning[] = [];
+      const sourceFields: Record<string, ExcelJS.CellValue> = {};
+      row.eachCell((cell, column) => {
+        if (column <= 86) sourceFields[cell.address] = cell.value;
+      });
+      const date = (column: number, field: string, fallback: Date | null = null): Date | null => {
+        const value = parseCurrentDate(unwrapFormula(row.getCell(column).value), Boolean(workbook.properties.date1904)) ?? fallback;
+        if (!value && readText(row, column)) {
+          warnings.push({ field, code: 'invalid_date', message: '日期无法明确识别，保留原值待补充', source: { ...source, cell: row.getCell(column).address } });
+        }
+        return value;
+      };
+      const text = (column: number) => readText(row, column + offset);
+      const profileDate = (column: number, field: string) => date(column + offset, `profile.${field}`);
+      const idNumber = text(37);
+      const parsed: ParsedEmployeeRosterRow = {
+        // Import row keys are global; the original worksheet row stays in source.
+        rowNumber: rows.length + 2,
+        source, warnings, sourceFields,
+        employee: {
+          ...emptyParsedEmployee(name, employeeNo),
+          companyText: readText(row, 3),
+          departmentPath: [4, 5, 6].map((column) => readText(row, column)).filter((value): value is string => Boolean(value)),
+          position: readText(row, 7), jobGrade: readText(row, 8), jobFamily: readText(row, 9),
+          managerName: readText(row, 10), entryDate: date(11, 'employee.entryDate'),
+          workLocation: text(12), employmentTypeText: text(13),
+          employeeStatusText: former ? '已离职' : '在职',
+          probationMonths: readInteger(row, 15 + offset),
+          plannedRegularDate: former ? null : date(16, 'employee.plannedRegularDate'),
+          actualRegularDate: date(17 + offset, 'employee.actualRegularDate'),
+          ...(former ? { leaveDate: date(13, 'employee.leaveDate'), payrollCutoffDate: date(12, 'employee.payrollCutoffDate') } : {}),
+        },
+        profile: {
+          phone: text(19), gender: text(20),
+          birthDate: date(21 + offset, 'profile.birthDate', birthDateFromId(idNumber)),
+          ethnicity: text(24), education: text(25), professionalTitle: text(26), school: text(27),
+          graduationDate: profileDate(28, 'graduationDate'), major: text(29), maritalStatus: text(30),
+          childrenStatus: text(31), childrenCount: readInteger(row, 32 + offset), politicalStatus: text(33),
+          nativePlace: text(34), householdType: text(35), idAddress: text(36), idNumber,
+          currentAddress: text(38), emergencyContactName: text(39), emergencyContactRelation: text(40),
+          emergencyContactPhone: text(41), socialSecurityStatus: text(42),
+          socialSecurityStartDate: former ? null : profileDate(43, 'socialSecurityStartDate'),
+          housingFundStatus: text(44), housingFundStartDate: former ? null : profileDate(45, 'housingFundStartDate'),
+          ...(former ? { socialSecurityStopDate: profileDate(43, 'socialSecurityStopDate'), housingFundStopDate: profileDate(45, 'housingFundStopDate') } : {}),
+          bankName: text(46), bankBranch: text(47), bankAccount: text(48),
+        },
+        contracts: [],
+      };
+      parsed.contracts = parseCurrentContracts(row, former, Boolean(workbook.properties.date1904), source, warnings);
+      rows.push(parsed);
+    });
+  }
+  return rows;
+}
+
+function parseCurrentDate(raw: ExcelJS.CellValue, date1904: boolean): Date | null {
+  if (raw instanceof Date) return Number.isNaN(raw.getTime()) ? null : startOfUtcDay(raw);
+  if (typeof raw === 'number' && Number.isFinite(raw) && raw >= 0) {
+    const epoch = date1904 ? Date.UTC(1904, 0, 1) : Date.UTC(1899, 11, 30);
+    const date = new Date(epoch + Math.floor(raw) * 86_400_000);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+  if (typeof raw !== 'string') return null;
+  const match = /^(\d{4})[./年-](\d{1,2})[./月-](\d{1,2})日?$/.exec(raw.trim());
+  if (!match) return null;
+  const [year, month, day] = match.slice(1).map(Number);
+  const date = new Date(Date.UTC(year, month - 1, day));
+  return date.getUTCFullYear() === year && date.getUTCMonth() === month - 1 && date.getUTCDate() === day ? date : null;
+}
+
+function parseCurrentContracts(
+  row: ExcelJS.Row, former: boolean, date1904: boolean, source: RosterSource, warnings: RosterParseWarning[],
+): ParsedRosterContract[] {
+  const offset = former ? 4 : 0;
+  const text = (column: number) => readText(row, column + offset);
+  const rawDate = (column: number) => parseCurrentDate(unwrapFormula(row.getCell(column + offset).value), date1904);
+  const contracts: ParsedRosterContract[] = [];
+  const common = {
+    name: text(52), confidentialityAgreement: text(53), nonCompeteAgreement: text(54), portraitAgreement: text(55),
+    signingCompany: null, originalCompany: null, newCompany: null,
+  };
+  const add = (
+    kind: ParsedRosterContract['kind'], columns: number[], start: number, end: number | null, term: number | null,
+    original?: number, next?: number,
+  ) => {
+    if (!columns.some((column) => text(column))) return;
+    const cells = columns.map((column) => row.getCell(column + offset).address);
+    const rangeText = [text(start), end ? text(end) : null].find((value) => value && /\d{4}[./-]\d{1,2}[./-]\d{1,2}\s*[-~～至]/.test(value));
+    const ranges = rangeText?.split(/[;；\n]+/).filter((part) => part.trim()).map((part) => {
+      const match = /^\s*(\d{4}[./-]\d{1,2}[./-]\d{1,2})\s*[-~～至]\s*(\d{4}[./-]\d{1,2}[./-]\d{1,2})\s*$/.exec(part);
+      return match ? [parseCurrentDate(match[1], date1904), parseCurrentDate(match[2], date1904)] : [null, null];
+    });
+    const openText = columns.map(text).find((value) => value && /无固定(?:期限)?|不定期/.test(value));
+    for (const dates of ranges ?? [[rawDate(start), end ? rawDate(end) : null]]) {
+      const sequence = contracts.length;
+      const termText = term ? text(term) : null;
+      const contract: ParsedRosterContract = {
+        ...common, sequence, kind,
+        signedAt: kind === 'contract' || kind === 'unclassified' ? dates[0] : null,
+        effectiveFrom: dates[0], expiresAt: dates[1],
+        termText: openText && !termText?.includes('无固定') ? [termText, openText].filter(Boolean).join('；') : termText,
+        originalCompany: original ? text(original) : null, newCompany: next ? text(next) : null,
+        isOpenEnded: Boolean(openText), source, sourceCells: cells,
+      };
+      contracts.push(contract);
+      for (const [field, value, column] of [
+        [kind === 'contract' || kind === 'unclassified' ? 'signedAt' : 'effectiveFrom', dates[0], start],
+        ['expiresAt', dates[1], end ?? start],
+      ] as const) {
+        if (value || (field === 'expiresAt' && openText)) continue;
+        const invalid = Boolean(text(column));
+        warnings.push({
+          field: `contracts.${field}`, code: invalid ? 'invalid_date' : 'missing', contractSequence: sequence,
+          message: invalid ? '合同日期无法明确识别，保留原值待补充' : '合同日期缺失，待补充',
+          source: { ...source, cell: row.getCell(column + offset).address },
+        });
+      }
+    }
+  };
+  add('contract', [61, 62, 63], 61, 62, 63);
+  for (const start of [64, 67, 70]) add('renewal', [start, start + 1, start + 2], start, start + 1, start + 2);
+  add('renewal', [73, 74], 73, null, 74);
+  for (const start of former ? [75, 79] : [75, 79, 83]) {
+    add('transfer', [start, start + 1, start + 2, start + 3], start + 1, start + 2, null, start, start + 3);
+  }
+  const summaryStart = rawDate(59);
+  const summaryEnd = rawDate(60);
+  if (summaryStart && summaryEnd && !contracts.some((contract) =>
+    contract.effectiveFrom?.getTime() === summaryStart.getTime() && contract.expiresAt?.getTime() === summaryEnd.getTime(),
+  )) {
+    add('unclassified', [59, 60], 59, 60, null);
+    warnings.push({ field: 'contracts.kind', code: 'review', contractSequence: contracts.length - 1,
+      message: '最新合同汇总未对应到明确合同记录，合同类型待核实', source });
+  }
+  return contracts;
 }
 
 function parseV2Workbook(workbook: ExcelJS.Workbook): ParsedEmployeeRosterRow[] {

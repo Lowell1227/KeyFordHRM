@@ -56,7 +56,85 @@ function row(rowNumber: number, employeeNo: string, name: string): ParsedEmploye
   };
 }
 
+const hrOperator = { id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null, isAssessorOnly: false, canViewAll: true };
+
+function confirmationFor(parsed: ParsedEmployeeRosterRow) {
+  const current = { employeeNo: '001', name: '员工甲', phone: null, deptId: 'dept-project', position: parsed.employee.position,
+    entryDate: parsed.employee.entryDate, plannedRegularDate: null, actualRegularDate: null, leaveDate: null,
+    employmentType: 'full_time', status: 'active', directManagerId: 'performance-manager', employeeProfile: null,
+    employeeContracts: [] as Record<string, unknown>[],
+    employmentHistory: [{ company: 'fuede', companyText: '原公司', jobGrade: 'P4', jobFamily: '项目管理',
+      directManager: null, workLocation: '杭州', probationMonths: null }],
+  };
+  const tx = {
+    employeeImportBatch: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), update: jest.fn() },
+    employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn(async (value: any) => value.data) },
+    user: { findUnique: jest.fn().mockResolvedValue(current) }, auditLog: { create: jest.fn() },
+  };
+  const service = new EmployeeRosterImportService({
+    employeeImportBatch: { findUnique: jest.fn().mockResolvedValue({
+      id: 'batch-raw', fileHash: 'hash-raw', mode: 'incremental', status: 'ready_to_confirm', summary: {},
+      rows: [{ rowNumber: 2, action: 'update', matchedUserId: 'employee-1', errors: [], normalizedValue: {
+        employee: { company: 'fuede', deptId: 'dept-project', employmentType: 'full_time', employeeStatus: 'active' },
+      } }],
+    }) }, $transaction: async (run: any) => run(tx),
+  } as any, { get: () => 'synthetic-roster-test-key' } as any);
+  return { service, tx, current };
+}
+
 describe('EmployeeRosterImportService', () => {
+  it.each([null, '实际签约公司'])('导入不从员工所属公司推定合同签约公司：%s', async (signingCompany) => {
+    const parsed = row(2, '001', '员工甲');
+    parsed.contracts = [{ sequence: 0, kind: 'contract', name: '劳动合同', signingCompany,
+      signedAt: new Date('2025-01-01'), expiresAt: null, termText: null,
+      originalCompany: null, newCompany: null, confidentialityAgreement: null,
+      nonCompeteAgreement: null, portraitAgreement: null }];
+    const { service, tx } = confirmationFor(parsed);
+    await service.confirmFromRows('batch-raw', [parsed], 'hash-raw', hrOperator);
+    expect(tx.employeeDataChangeRequest.create.mock.calls[0][0].data.proposedValue.contracts[0].signingCompany)
+      .toBe(signingCompany);
+  });
+
+  it.each(['公司原文更正', null])('普通导入比较公司原文，增量空值保留原文：%s', async (companyText) => {
+    const parsed = row(2, '001', '员工甲');
+    parsed.employee.companyText = companyText;
+    const { service, tx } = confirmationFor(parsed);
+    const result = await service.confirmFromRows('batch-raw', [parsed], 'hash-raw', hrOperator);
+    if (companyText === null) {
+      expect(result.submitted).toBe(0);
+    } else {
+      expect(result.submitted).toBe(1);
+      expect(tx.employeeDataChangeRequest.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+        baseValue: expect.objectContaining({ employee: expect.objectContaining({ companyText: '原公司', company: 'fuede' }) }),
+        proposedValue: expect.objectContaining({ employee: expect.objectContaining({ companyText, company: 'fuede' }) }),
+      }) });
+    }
+  });
+
+  it('普通导入将未分类合同留作证据和提醒并保留无法对应的旧合同', async () => {
+    const parsed = row(2, '001', '员工甲');
+    parsed.employee.companyText = '原公司';
+    parsed.source = { sheetName: '在职整理', rowNumber: 3 };
+    parsed.sourceFields = { BG3: '2025-01-01', S3: 'SYNTHETIC-PRIVATE-CELL' };
+    parsed.warnings = [{ field: 'contracts.kind', code: 'review', message: '合同类型待核实', source: parsed.source }];
+    parsed.contracts = [{ sequence: 0, kind: 'unclassified', name: '待核实合同', signedAt: new Date('2025-01-01'),
+      expiresAt: new Date('2026-01-01'), termText: null, originalCompany: null, newCompany: null,
+      confidentialityAgreement: null, nonCompeteAgreement: null, portraitAgreement: null }];
+    const { service, tx, current } = confirmationFor(parsed);
+    current.employeeContracts.push({ id: 'keep-contract', contractType: 'contract', sequence: 0, name: '原合同' });
+    await service.confirmFromRows('batch-raw', [parsed], 'hash-raw', hrOperator);
+    const saved = tx.employeeDataChangeRequest.create.mock.calls[0][0].data;
+    expect(saved.validationWarnings).toEqual(parsed.warnings);
+    expect(saved.proposedValue.contracts).toEqual([expect.objectContaining({ id: 'keep-contract', contractType: 'contract' })]);
+    expect(saved.proposedValue.source).toEqual(parsed.source);
+    expect(saved.proposedValue.sourceEvidenceEncrypted).toEqual(expect.any(String));
+    expect(JSON.stringify(saved)).not.toContain('SYNTHETIC-PRIVATE-CELL');
+    tx.employeeDataChangeRequest.findFirst.mockResolvedValue(saved);
+    tx.employeeDataChangeRequest.create.mockClear();
+    await service.confirmFromRows('batch-raw', [parsed], 'hash-raw', hrOperator);
+    expect(tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
+  });
+
   it('花名册中的待入职状态映射为数据库待入职状态', async () => {
     const persistedRows: any[] = [];
     const prisma = {
@@ -76,6 +154,7 @@ describe('EmployeeRosterImportService', () => {
     const service = new EmployeeRosterImportService(prisma as any);
     const rosterRow = row(2, '001', '待入职员工');
     rosterRow.employee.employeeStatusText = '待入职';
+    rosterRow.warnings = [{ field: 'contracts.kind', code: 'review', message: '合同类型待核实', source: { sheetName: '在职整理', rowNumber: 3 } }];
 
     await service.createPreviewFromRows(
       [rosterRow],
@@ -84,6 +163,8 @@ describe('EmployeeRosterImportService', () => {
     );
 
     expect(persistedRows[0].normalizedValue.employee.employeeStatus).toBe('pending_entry');
+    expect(persistedRows[0].warnings).toContain('合同类型待核实');
+    expect(persistedRows[0].normalizedValue.parseWarnings).toEqual(rosterRow.warnings);
   });
 
   it('全量预检以花名册生成组织方案，缺少现有部门时不阻断确认', async () => {
@@ -693,6 +774,7 @@ describe('EmployeeRosterImportService', () => {
     parsed.employee.managerName = '花名册主管';
     parsed.contracts = [{
       sequence: 0, kind: 'contract', name: '劳动合同',
+      signingCompany: parsed.employee.companyText,
       signedAt: new Date('2024-01-01T00:00:00.000Z'),
       expiresAt: new Date('2026-12-31T00:00:00.000Z'), termText: '3年',
       originalCompany: null, newCompany: null, confidentialityAgreement: '已签',
@@ -724,7 +806,7 @@ describe('EmployeeRosterImportService', () => {
           }],
           dept: { parentId: null, leaderId: null },
           employmentHistory: [{
-            company: 'fuede', jobGrade: 'P4', jobFamily: '项目管理', directManagerId: 'roster-manager',
+            company: 'fuede', companyText: '孚德', jobGrade: 'P4', jobFamily: '项目管理', directManagerId: 'roster-manager',
             directManager: { id: 'roster-manager', name: '花名册主管' }, workLocation: '杭州',
             probationMonths: null, effectiveFrom: today, effectiveTo: null,
           }],

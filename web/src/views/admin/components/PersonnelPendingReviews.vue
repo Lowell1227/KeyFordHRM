@@ -228,6 +228,8 @@ function employeeChangeSummary(row: EmployeeDataReview): string {
   }
   const changes: string[] = [];
   const fields: Array<[Record<string, unknown>, Record<string, unknown>, string, string]> = [
+    [beforeEmployee, afterEmployee, 'company', '组织归属'],
+    [beforeEmployee, afterEmployee, 'companyText', '所属公司（花名册）'],
     [beforeEmployee, afterEmployee, 'deptId', '部门'],
     [beforeEmployee, afterEmployee, 'position', '岗位'],
     [beforeEmployee, afterEmployee, 'employeeStatus', '在职状态'],
