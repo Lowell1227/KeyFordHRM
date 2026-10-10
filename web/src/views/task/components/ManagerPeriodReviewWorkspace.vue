@@ -8,6 +8,7 @@ import PerformanceFormWorkspace from './PerformanceFormWorkspace.vue';
 import PeriodReviewIndicatorContext from './PeriodReviewIndicatorContext.vue';
 import PeriodReviewProgressReference from './PeriodReviewProgressReference.vue';
 import PeriodReviewToolbar from './PeriodReviewToolbar.vue';
+import PeriodReviewAttachments from './PeriodReviewAttachments.vue';
 
 interface ManagerFormItem {
   indicatorVersionItemId: string;
@@ -323,6 +324,13 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
           <em v-if="managerGradeError" data-testid="manager-review-grade-error">{{ managerGradeError }}</em>
         </div>
       </div>
+
+      <PeriodReviewAttachments
+        v-if="detail.period.periodType === 'month'"
+        :period-id="detail.period.id"
+        :attachments="detail.period.attachments ?? []"
+        :editable="false"
+      />
 
       <el-alert
         v-if="!employeeSubmitted"

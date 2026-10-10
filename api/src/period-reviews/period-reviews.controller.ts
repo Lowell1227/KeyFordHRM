@@ -1,4 +1,20 @@
-import { Body, Controller, Get, HttpCode, Param, ParseUUIDPipe, Post, Put, Query } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Delete,
+  Get,
+  HttpCode,
+  Param,
+  ParseUUIDPipe,
+  Post,
+  Put,
+  Query,
+  Res,
+  UploadedFile,
+  UseInterceptors,
+} from '@nestjs/common';
+import { FileInterceptor } from '@nestjs/platform-express';
+import type { Response } from 'express';
 import { SysRole } from '@prisma/client';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { HrCapabilities } from '@/common/decorators/hr-capabilities.decorator';
@@ -47,6 +63,35 @@ export class PeriodReviewsController {
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.service.saveEmployeeDraft(id, dto, viewer);
+  }
+
+  @Post(':id/employee-attachments')
+  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  uploadEmployeeAttachment(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @UploadedFile() file: Express.Multer.File,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.service.uploadEmployeeAttachment(id, file, viewer);
+  }
+
+  @Delete(':id/employee-attachments/:attachmentId')
+  deleteEmployeeAttachment(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('attachmentId', new ParseUUIDPipe({ version: '4' })) attachmentId: string,
+    @CurrentUser() viewer: AuthUser,
+  ) {
+    return this.service.deleteEmployeeAttachment(id, attachmentId, viewer);
+  }
+
+  @Get(':id/attachments/:attachmentId')
+  downloadEmployeeAttachment(
+    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('attachmentId', new ParseUUIDPipe({ version: '4' })) attachmentId: string,
+    @CurrentUser() viewer: AuthUser,
+    @Res() response: Response,
+  ) {
+    return this.service.downloadEmployeeAttachment(id, attachmentId, viewer, response);
   }
 
   @Post(':id/employee-submit')

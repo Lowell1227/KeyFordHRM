@@ -101,6 +101,19 @@ function reviewDetail() {
       managerScoreTotal: null,
       selfGrade: null,
       managerGrade: null,
+      attachments: [{
+        id: '51111111-1111-4111-8111-111111111111',
+        name: '项目验收照片.png',
+        size: 2048,
+        mimeType: 'image/png',
+        uploadedAt: '2027-02-01T08:00:00.000Z',
+      }, {
+        id: '61111111-1111-4111-8111-111111111111',
+        name: '销售成果说明.pdf',
+        size: 4096,
+        mimeType: 'application/pdf',
+        uploadedAt: '2027-02-01T08:05:00.000Z',
+      }],
       draftVersion: 0,
     },
     context: {
@@ -165,6 +178,10 @@ async function mockMonthlyReview(page: Page, requests: Request[]) {
     contentType: 'application/json',
     body: JSON.stringify(apiResponse(reviewDetail())),
   }));
+  await page.route(`**/api/v1/assessment-periods/${periodId}/attachments/51111111-1111-4111-8111-111111111111`, (route) => route.fulfill({
+    contentType: 'image/png',
+    body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZCr8AAAAASUVORK5CYII=', 'base64'),
+  }));
   await page.route(`**/api/v1/assessment-periods/${periodId}/employee-draft`, (route) => {
     requests.push(route.request());
     return route.fulfill({
@@ -207,6 +224,13 @@ test.describe('monthly goal review responsive workspace', () => {
     await expect(page.getByText('2027年1月月度自评', { exact: true })).toBeVisible();
     await expect(page.getByTestId('performance-stage-state')).toHaveText('待处理');
     await expect(page.getByTestId('monthly-review-goal-card')).toHaveCount(3);
+    const attachmentArea = page.getByTestId('period-review-attachments');
+    await expect(attachmentArea).toBeVisible();
+    await expect(attachmentArea).toContainText('本月工作产出附件（选填）');
+    await expect(attachmentArea).toContainText('项目验收照片.png');
+    await expect(attachmentArea).toContainText('销售成果说明.pdf');
+    await expect(attachmentArea.getByRole('img', { name: '项目验收照片.png' })).toBeVisible();
+    await expect(attachmentArea.getByRole('button', { name: '上传附件' })).toBeVisible();
     await expect(page.getByTestId('performance-employee-summary')).toContainText('方园');
     await expect(page.getByTestId('performance-employee-summary')).toContainText('绩效直属上级 王主管');
 
@@ -218,12 +242,15 @@ test.describe('monthly goal review responsive workspace', () => {
     await expect(page.getByRole('tooltip')).toContainText('共3项；2项参与评分，1项零权重不参与评分。是否评分与正常/受阻状态无关。');
     const firstCard = page.getByTestId('monthly-review-goal-card').first();
     const firstCardBox = await firstCard.boundingBox();
+    const attachmentBox = await attachmentArea.boundingBox();
     const actionBox = await page.getByTestId('monthly-review-actions').boundingBox();
     const periodBarBox = await periodBar.boundingBox();
     expect(firstCardBox).not.toBeNull();
+    expect(attachmentBox).not.toBeNull();
     expect(actionBox).not.toBeNull();
     expect(periodBarBox).not.toBeNull();
     expect(firstCardBox!.width).toBeGreaterThan(900);
+    expect(attachmentBox!.y + attachmentBox!.height).toBeLessThanOrEqual(firstCardBox!.y);
     expect(actionBox!.y).toBeGreaterThanOrEqual(periodBarBox!.y);
     expect(actionBox!.y + actionBox!.height).toBeLessThanOrEqual(periodBarBox!.y + periodBarBox!.height + 1);
     await expect(firstCard.getByTestId('period-review-indicator-context')).toContainText('达到目标得 90 分');
@@ -271,6 +298,7 @@ test.describe('monthly goal review responsive workspace', () => {
 
     await expect(page.getByTestId('monthly-review-reference')).toHaveCount(0);
     await expect(page.getByTestId('period-review-indicator-context')).toHaveCount(3);
+    await expect(page.getByTestId('period-review-attachments')).toContainText('项目验收照片.png');
 
     const actionBar = page.getByTestId('monthly-review-actions');
     await expect(actionBar).toHaveCSS('position', 'fixed');
@@ -284,6 +312,47 @@ test.describe('monthly goal review responsive workspace', () => {
     expect(lastCardBox).not.toBeNull();
     expect(actionBox).not.toBeNull();
     expect(scrolledLastCardBox!.y + scrolledLastCardBox!.height).toBeLessThanOrEqual(actionBox!.y);
+  });
+
+  test('uploads and removes whole-month evidence immediately', async ({ page }) => {
+    const attachmentRequests: Request[] = [];
+    await mockMonthlyReview(page, []);
+    await page.route(`**/api/v1/assessment-periods/${periodId}/employee-attachments`, (route) => {
+      attachmentRequests.push(route.request());
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse({
+          id: '71111111-1111-4111-8111-111111111111',
+          name: '新增成果.pdf',
+          size: 9,
+          mimeType: 'application/pdf',
+          uploadedAt: '2027-02-01T09:00:00.000Z',
+        })),
+      });
+    });
+    await page.route(`**/api/v1/assessment-periods/${periodId}/employee-attachments/61111111-1111-4111-8111-111111111111`, (route) => {
+      attachmentRequests.push(route.request());
+      return route.fulfill({
+        contentType: 'application/json',
+        body: JSON.stringify(apiResponse([reviewDetail().period.attachments[0]])),
+      });
+    });
+
+    await page.goto('/tasks/task-monthly-1?stage=self-eval');
+    const area = page.getByTestId('period-review-attachments');
+    await area.getByLabel('选择月度自评附件').setInputFiles({
+      name: '新增成果.pdf',
+      mimeType: 'application/pdf',
+      buffer: Buffer.from('%PDF-1.7'),
+    });
+
+    await expect(area).toContainText('新增成果.pdf');
+    await expect.poll(() => attachmentRequests.filter((request) => request.method() === 'POST').length).toBe(1);
+
+    await area.getByLabel('删除 销售成果说明.pdf').click();
+    await page.getByRole('dialog', { name: '删除附件' }).getByRole('button', { name: '删除附件' }).click();
+    await expect(area).not.toContainText('销售成果说明.pdf');
+    await expect.poll(() => attachmentRequests.filter((request) => request.method() === 'DELETE').length).toBe(1);
   });
 
   test('makes an early monthly self-evaluation submission an explicit confirmation', async ({ page }) => {

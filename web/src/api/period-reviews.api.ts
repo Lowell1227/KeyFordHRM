@@ -10,7 +10,9 @@ import type {
   PeriodMonitoringQuery,
   PeriodMonitoringResult,
   ReopenPeriodReviewBody,
+  PeriodReviewAttachment,
 } from '@/types/api.types';
+import type { AxiosResponse } from 'axios';
 
 export const periodReviewsApi = {
   findCycleMonitoring(
@@ -36,6 +38,29 @@ export const periodReviewsApi = {
     body: SubmitEmployeePeriodReviewBody,
   ): Promise<PeriodReviewActionResult> {
     return http.post(`/assessment-periods/${periodId}/employee-submit`, body) as unknown as Promise<PeriodReviewActionResult>;
+  },
+
+  uploadEmployeeAttachment(periodId: string, file: File): Promise<PeriodReviewAttachment> {
+    const body = new FormData();
+    body.append('file', file);
+    return http.post(
+      `/assessment-periods/${periodId}/employee-attachments`,
+      body,
+    ) as unknown as Promise<PeriodReviewAttachment>;
+  },
+
+  deleteEmployeeAttachment(periodId: string, attachmentId: string): Promise<PeriodReviewAttachment[]> {
+    return http.delete(
+      `/assessment-periods/${periodId}/employee-attachments/${attachmentId}`,
+    ) as unknown as Promise<PeriodReviewAttachment[]>;
+  },
+
+  async downloadAttachment(periodId: string, attachmentId: string): Promise<Blob> {
+    const response = await http.get(
+      `/assessment-periods/${periodId}/attachments/${attachmentId}`,
+      { responseType: 'blob' },
+    ) as unknown as AxiosResponse<Blob>;
+    return response.data;
   },
 
   saveManagerDraft(

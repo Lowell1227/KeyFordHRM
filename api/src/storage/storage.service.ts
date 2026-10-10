@@ -12,7 +12,16 @@ export interface UploadedFileMeta {
   mimeType: string;
 }
 
-export type UploadPurpose = 'general' | 'employee-contract-image' | 'employee-contract-attachment' | 'confirmation-internal';
+export interface StoredFileMeta extends UploadedFileMeta {
+  objectKey: string;
+}
+
+export type UploadPurpose =
+  | 'general'
+  | 'employee-contract-image'
+  | 'employee-contract-attachment'
+  | 'confirmation-internal'
+  | 'performance-review-evidence';
 
 const ALLOWED_MIME_TYPES = new Set([
   'image/jpeg',
@@ -67,6 +76,15 @@ export class StorageService implements OnModuleInit {
 
   /** 上传单个文件到 MinIO，返回可供前端下载的代理 URL。 */
   async uploadFile(file: Express.Multer.File, purpose: UploadPurpose = 'general'): Promise<UploadedFileMeta> {
+    const { objectKey: _objectKey, ...uploaded } = await this.uploadStoredFile(file, purpose);
+    return uploaded;
+  }
+
+  async uploadReviewEvidence(file: Express.Multer.File): Promise<StoredFileMeta> {
+    return this.uploadStoredFile(file, 'performance-review-evidence');
+  }
+
+  private async uploadStoredFile(file: Express.Multer.File, purpose: UploadPurpose): Promise<StoredFileMeta> {
     const safeMimeType = await this.assertFileValid(file, purpose);
 
     const today = new Date().toISOString().slice(0, 10).replace(/-/g, '/');
@@ -74,7 +92,11 @@ export class StorageService implements OnModuleInit {
       ? 'employee-contracts/images'
       : purpose === 'employee-contract-attachment'
         ? 'employee-contracts/attachments'
-        : purpose === 'confirmation-internal' ? 'confirmation-internal' : 'uploads';
+        : purpose === 'confirmation-internal'
+          ? 'confirmation-internal'
+          : purpose === 'performance-review-evidence'
+            ? 'performance-evidence'
+            : 'uploads';
     const safeOriginalName = file.originalname.replace(/[\\/]/g, '_');
     const objectName = `${prefix}/${today}/${randomUUID()}-${safeOriginalName}`;
 
@@ -83,6 +105,7 @@ export class StorageService implements OnModuleInit {
     });
 
     return {
+      objectKey: objectName,
       name: file.originalname,
       url: `/storage/download?key=${encodeURIComponent(objectName)}`,
       size: file.size,
@@ -100,15 +123,24 @@ export class StorageService implements OnModuleInit {
     return this.client.statObject(this.bucket, objectName);
   }
 
+  async removeObject(objectName: string): Promise<void> {
+    await this.client.removeObject(this.bucket, objectName);
+  }
+
   /** 流式返回对象内容到响应。 */
   async pipeDownload(objectName: string, res: any): Promise<void> {
     const stat = await this.client.statObject(this.bucket, objectName);
     const stream = await this.client.getObject(this.bucket, objectName);
 
     const originalName = this.extractOriginalFilename(objectName);
-    res.setHeader('Content-Type', stat.metaData?.['content-type'] ?? 'application/octet-stream');
+    const contentType = stat.metaData?.['content-type'] ?? 'application/octet-stream';
+    res.setHeader('Content-Type', contentType);
     res.setHeader('X-Content-Type-Options', 'nosniff');
-    const disposition = objectName.startsWith('employee-contracts/') || objectName.startsWith('confirmation-internal/') ? 'attachment' : 'inline';
+    const disposition = objectName.startsWith('employee-contracts/')
+      || objectName.startsWith('confirmation-internal/')
+      || (objectName.startsWith('performance-evidence/') && !contentType.startsWith('image/'))
+      ? 'attachment'
+      : 'inline';
     res.setHeader('Content-Disposition', `${disposition}; filename*=UTF-8''${encodeURIComponent(originalName)}`);
     stream.pipe(res);
   }
@@ -163,6 +195,28 @@ export class StorageService implements OnModuleInit {
       const safeMimeType = await this.contractAttachmentMime(file.buffer, ext);
       if (!safeMimeType) {
         throw new BadRequestException({ code: 'PARAM_INVALID', message: '合同附件文件内容与格式不符' });
+      }
+      return safeMimeType;
+    }
+    if (purpose === 'performance-review-evidence') {
+      if (file.size > MAX_FILE_SIZE) {
+        throw new BadRequestException({ code: 'PARAM_INVALID', message: '自评附件单个不能超过 20MB' });
+      }
+      const ext = file.originalname.toLowerCase().slice(file.originalname.lastIndexOf('.'));
+      const imageMimeType = ['.jpg', '.jpeg', '.png'].includes(ext)
+        ? this.contractImageMime(file.buffer, ext)
+        : null;
+      const documentMimeType = ['.pdf', '.doc', '.docx', '.xls', '.xlsx'].includes(ext)
+        ? await this.contractAttachmentMime(file.buffer, ext)
+        : null;
+      const safeMimeType = imageMimeType ?? documentMimeType;
+      if (!safeMimeType) {
+        throw new BadRequestException({
+          code: 'PARAM_INVALID',
+          message: ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx', '.xls', '.xlsx'].includes(ext)
+            ? '自评附件文件内容与格式不符'
+            : '自评附件仅支持 JPG、PNG、PDF、Word、Excel',
+        });
       }
       return safeMimeType;
     }

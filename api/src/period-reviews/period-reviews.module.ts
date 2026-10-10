@@ -4,9 +4,10 @@ import { PeriodReviewsService } from './period-reviews.service';
 import { PeriodAggregationService } from './period-aggregation.service';
 import { TasksModule } from '@/tasks/tasks.module';
 import { PeriodMonitoringService } from './period-monitoring.service';
+import { StorageModule } from '@/storage/storage.module';
 
 @Module({
-  imports: [TasksModule],
+  imports: [TasksModule, StorageModule],
   controllers: [PeriodReviewsController],
   providers: [PeriodReviewsService, PeriodAggregationService, PeriodMonitoringService],
   exports: [PeriodReviewsService, PeriodAggregationService, PeriodMonitoringService],

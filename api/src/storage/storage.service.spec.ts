@@ -5,6 +5,7 @@ import { StorageService } from './storage.service';
 jest.mock('minio', () => ({
   Client: jest.fn().mockImplementation(() => ({
     putObject: jest.fn().mockResolvedValue(undefined),
+    removeObject: jest.fn().mockResolvedValue(undefined),
     bucketExists: jest.fn().mockResolvedValue(true),
   })),
 }));
@@ -123,6 +124,43 @@ describe('StorageService contract material policies', () => {
     )).resolves.toMatchObject({
       mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     });
+  });
+
+  it('月度自评材料只接受图片和业务文档，单个不超过 20MB', async () => {
+    const service = new StorageService(config as any);
+
+    await expect(service.uploadFile(
+      file('动图.gif', 'image/gif', 1024, Buffer.from('GIF89a')),
+      'performance-review-evidence',
+    )).rejects.toMatchObject({ response: expect.objectContaining({ message: '自评附件仅支持 JPG、PNG、PDF、Word、Excel' }) });
+    await expect(service.uploadFile(
+      file('说明.txt', 'text/plain', 1024, Buffer.from('plain text')),
+      'performance-review-evidence',
+    )).rejects.toMatchObject({ response: expect.objectContaining({ message: '自评附件仅支持 JPG、PNG、PDF、Word、Excel' }) });
+    await expect(service.uploadFile(
+      file('成果.pdf', 'application/pdf', 20 * 1024 * 1024 + 1, Buffer.from('%PDF-')),
+      'performance-review-evidence',
+    )).rejects.toMatchObject({ response: expect.objectContaining({ message: '自评附件单个不能超过 20MB' }) });
+  });
+
+  it('合法月度自评材料保存到专用私有目录', async () => {
+    const service = new StorageService(config as any);
+    const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+
+    const result = await service.uploadFile(
+      file('项目验收.png', 'image/png', png.length, png),
+      'performance-review-evidence',
+    );
+
+    expect(result).toMatchObject({ name: '项目验收.png', mimeType: 'image/png' });
+    const client = (Minio.Client as unknown as jest.Mock).mock.results[0].value;
+    expect(client.putObject).toHaveBeenCalledWith(
+      'test-bucket',
+      expect.stringContaining('performance-evidence/'),
+      png,
+      png.length,
+      expect.objectContaining({ 'Content-Type': 'image/png' }),
+    );
   });
 
   it('合同文件下载强制作为附件并禁止 MIME 嗅探', async () => {

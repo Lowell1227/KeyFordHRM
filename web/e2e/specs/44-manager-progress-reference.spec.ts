@@ -28,7 +28,13 @@ async function mockManagerReview(page: Page, options: { empty?: boolean; readonl
     status: options.readonly ? 'completed' : 'manager_scoring',
     selfEvalOpenAt: '2026-08-29T10:00:00.000Z', selfEvalDueAt: '2026-09-09T10:00:00.000Z', managerDueAt: '2026-09-12T10:00:00.000Z',
     employeeSubmittedAt: '2026-09-08T08:30:00.000Z', managerSubmittedAt: options.readonly ? '2026-09-08T09:00:00.000Z' : null,
-    selfScoreTotal: 91, managerScoreTotal: options.readonly ? 86 : null, selfGrade: 'A', managerGrade: 'B', draftVersion: 3,
+    selfScoreTotal: 91, managerScoreTotal: options.readonly ? 86 : null, selfGrade: 'A', managerGrade: 'B',
+    attachments: options.cycle ? [] : [{
+      id: '51111111-1111-4111-8111-111111111111', name: '项目验收照片.png', size: 2048, mimeType: 'image/png', uploadedAt: '2026-09-08T08:00:00.000Z',
+    }, {
+      id: '61111111-1111-4111-8111-111111111111', name: '交付说明.pdf', size: 4096, mimeType: 'application/pdf', uploadedAt: '2026-09-08T08:05:00.000Z',
+    }],
+    draftVersion: 3,
   };
   const detail: PeriodReviewDetail = {
     period,
@@ -51,6 +57,13 @@ async function mockManagerReview(page: Page, options: { empty?: boolean; readonl
   await page.route('**/api/v1/**', async route => {
     const request = route.request();
     const endpoint = new URL(request.url()).pathname;
+    if (endpoint.endsWith(`/assessment-periods/${periodId}/attachments/51111111-1111-4111-8111-111111111111`)) {
+      await route.fulfill({
+        contentType: 'image/png',
+        body: Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAusB9Y9ZCr8AAAAASUVORK5CYII=', 'base64'),
+      });
+      return;
+    }
     let data: unknown = [];
     if (!['GET', 'HEAD'].includes(request.method())) {
       writes.push({ endpoint, method: request.method(), body: request.postDataJSON() });
@@ -92,6 +105,10 @@ for (const width of [1440, 390]) {
     const writes = await mockManagerReview(page);
     const card = page.getByTestId('manager-review-goal-card');
     const reference = card.getByTestId('monthly-progress-reference');
+    const attachmentArea = page.getByTestId('period-review-attachments');
+    await expect(attachmentArea).toContainText('项目验收照片.png');
+    await expect(attachmentArea).toContainText('交付说明.pdf');
+    await expect(attachmentArea.getByRole('button', { name: '上传附件' })).toHaveCount(0);
     const toggle = reference.getByText('本月跟进记录（3条）', { exact: true });
     await expect(toggle).toBeVisible();
     await expect(reference.getByTestId('progress-reference-august-latest')).toBeHidden();

@@ -1206,6 +1206,7 @@ model AssessmentPeriod {
   managerScoreTotal   Decimal?               @map("manager_score_total") @db.Decimal(8, 2)
   selfGrade           PerfGrade?             @map("self_grade")
   managerGrade        PerfGrade?             @map("manager_grade")
+  employeeAttachments Json                   @default("[]") @map("employee_attachments") @db.JsonB
   draftVersion        Int                    @default(0) @map("draft_version")
   noResultReason      String?                @map("no_result_reason") @db.Text
   createdAt           DateTime               @default(now()) @map("created_at") @db.Timestamptz(6)

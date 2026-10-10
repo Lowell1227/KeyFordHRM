@@ -14,6 +14,7 @@ import PeriodReviewIndicatorContext from './PeriodReviewIndicatorContext.vue';
 import PeriodReviewToolbar from './PeriodReviewToolbar.vue';
 import PeriodReviewProgressReferencePanel from './PeriodReviewProgressReference.vue';
 import { summarizePeriodProgress, type PeriodProgressSummary } from './period-progress-summary';
+import PeriodReviewAttachments from './PeriodReviewAttachments.vue';
 
 type RequiredField = 'selfScore';
 
@@ -33,6 +34,7 @@ const loading = ref(false);
 const error = ref('');
 const saving = ref(false);
 const submitting = ref(false);
+const attachmentBusy = ref(false);
 const draftVersion = ref(0);
 const selectedIndex = ref(0);
 const formItems = reactive<ReviewFormItem[]>([]);
@@ -131,6 +133,10 @@ function replaceForm(next: PeriodReviewDetail) {
   for (const key of Object.keys(validationErrors)) delete validationErrors[key];
 }
 
+function updateAttachments(attachments: PeriodReviewDetail['period']['attachments']) {
+  if (detail.value) detail.value.period.attachments = attachments;
+}
+
 async function loadReview() {
   loading.value = true;
   error.value = '';
@@ -155,7 +161,7 @@ function bodyItems(): EmployeePeriodReviewItemBody[] {
 }
 
 function summarizeProgressReference(index: number) {
-  if (!canEdit.value || saving.value || submitting.value || !detail.value) return;
+  if (!canEdit.value || saving.value || submitting.value || attachmentBusy.value || !detail.value) return;
   const item = formItems[index];
   const indicator = detail.value.indicators[index];
   if (!item || !indicator) return;
@@ -181,7 +187,7 @@ function fillProgressSummary(item: ReviewFormItem, summary: PeriodProgressSummar
 function confirmProgressSummary() {
   const preview = summaryPreview.value;
   if (!preview || summaryTooLong.value || preview.periodId !== props.periodId
-    || !canEdit.value || saving.value || submitting.value || !formItems.includes(preview.item)) return;
+    || !canEdit.value || saving.value || submitting.value || attachmentBusy.value || !formItems.includes(preview.item)) return;
   fillProgressSummary(preview.item, preview.summary, preview.content);
   summaryPreview.value = null;
 }
@@ -225,7 +231,7 @@ function validateForSubmit(): boolean {
 }
 
 async function saveDraft() {
-  if (!canEdit.value || saving.value || submitting.value) return;
+  if (!canEdit.value || saving.value || submitting.value || attachmentBusy.value) return;
   saving.value = true;
   try {
     const result = await periodReviewsApi.saveEmployeeDraft(props.periodId, {
@@ -250,7 +256,7 @@ function newIdempotencyKey(): string {
 }
 
 async function submitReview() {
-  if (!canEdit.value || saving.value || submitting.value || !validateForSubmit()) return;
+  if (!canEdit.value || saving.value || submitting.value || attachmentBusy.value || !validateForSubmit()) return;
   const selfGrade = overallGrade.value;
   if (!selfGrade) return;
   if (isEarlySubmission.value) {
@@ -312,8 +318,8 @@ watch(() => props.periodId, () => { summaryPreview.value = null; void loadReview
         actions-test-id="monthly-review-actions"
       >
         <template #actions>
-          <el-button :loading="saving" :disabled="submitting" @mousedown.prevent @click="saveDraft">保存草稿</el-button>
-          <el-button type="primary" :loading="submitting" :disabled="saving" @mousedown.prevent @click="submitReview">
+          <el-button :loading="saving" :disabled="submitting || attachmentBusy" @mousedown.prevent @click="saveDraft">保存草稿</el-button>
+          <el-button type="primary" :loading="submitting" :disabled="saving || attachmentBusy" @mousedown.prevent @click="submitReview">
             {{ submitActionLabel }}
           </el-button>
         </template>
@@ -350,6 +356,15 @@ watch(() => props.periodId, () => { summaryPreview.value = null; void loadReview
         </div>
       </div>
 
+      <PeriodReviewAttachments
+        v-if="detail.period.periodType === 'month'"
+        :period-id="detail.period.id"
+        :attachments="detail.period.attachments ?? []"
+        :editable="canEdit"
+        @update:attachments="updateAttachments"
+        @busy-change="attachmentBusy = $event"
+      />
+
       <PerformanceFormWorkspace
         :show-reference="false"
         workspace-test-id="monthly-review-form-workspace"
@@ -379,7 +394,7 @@ watch(() => props.periodId, () => { summaryPreview.value = null; void loadReview
               <PeriodReviewProgressReferencePanel
                 :indicator="indicator"
                 :period="detail.period"
-                :can-sync="canEdit && !saving && !submitting"
+                :can-sync="canEdit && !saving && !submitting && !attachmentBusy"
                 @summarize="summarizeProgressReference(index)"
               />
 

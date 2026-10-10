@@ -53,6 +53,9 @@ export class StorageController {
     if (objectName.startsWith('confirmation-internal/')) {
       throw new ForbiddenException({ code: 'FORBIDDEN', message: '请从转正申请中下载内部评议附件' });
     }
+    if (objectName.startsWith('performance-evidence/')) {
+      throw new ForbiddenException({ code: 'FORBIDDEN', message: '请从月度自评中查看附件' });
+    }
     if (objectName.startsWith('employee-contracts/')) {
       if (!this.canAccessContractMaterials(operator)) {
         throw new ForbiddenException({ code: 'FORBIDDEN', message: '无权限访问合同材料' });

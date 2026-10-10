@@ -56,4 +56,16 @@ describe('StorageController contract material access', () => {
     )).rejects.toMatchObject({ response: expect.objectContaining({ message: '请从转正申请中下载内部评议附件' }) });
     expect(storage.pipeDownload).not.toHaveBeenCalled();
   });
+
+  it('does not expose monthly review evidence through generic download', async () => {
+    const storage = { pipeDownload: jest.fn() };
+    const controller = new StorageController(storage as any);
+
+    await expect((controller as any).download(
+      'performance-evidence%2F2027%2F02%2Fevidence.png',
+      response(),
+      { id: 'employee-1', sysRole: SysRole.employee, hrCapabilities: [] },
+    )).rejects.toMatchObject({ response: expect.objectContaining({ message: '请从月度自评中查看附件' }) });
+    expect(storage.pipeDownload).not.toHaveBeenCalled();
+  });
 });

@@ -16,6 +16,14 @@ export interface PeriodReviewHistoryItem {
   managerScore: number | null;
 }
 
+export interface PeriodReviewAttachment {
+  id: string;
+  name: string;
+  size: number;
+  mimeType: string;
+  uploadedAt: string;
+}
+
 export interface PeriodReviewDetail {
   period: {
     id: string;
@@ -34,6 +42,7 @@ export interface PeriodReviewDetail {
     managerScoreTotal: number | null;
     selfGrade: PerfGrade | null;
     managerGrade: PerfGrade | null;
+    attachments: PeriodReviewAttachment[];
     draftVersion: number;
   };
   context: {

@@ -74,7 +74,7 @@ describe('Monthly progress references (isolated PostgreSQL)', () => {
     factory = new FixtureFactory(prisma);
     flow = new FlowService(prisma);
     objectives = new ObjectivesService(prisma, new DataScopeService(prisma));
-    reviews = new PeriodReviewsService(prisma, notifications, new PeriodAggregationService(flow), flow);
+    reviews = new PeriodReviewsService(prisma, notifications, new PeriodAggregationService(flow), flow, {} as any);
     const dept = await factory.createDept({ name: 'Virtual monthly reference department' });
     deptId = dept.id;
     const user = await factory.createUser({
@@ -562,7 +562,7 @@ describe('Monthly progress references (isolated PostgreSQL)', () => {
         }, { timeout: 10000, maxWait: 3000 });
       },
     });
-    const submittingReviews = new PeriodReviewsService(submittingPrisma, notifications, new PeriodAggregationService(flow), flow);
+    const submittingReviews = new PeriodReviewsService(submittingPrisma, notifications, new PeriodAggregationService(flow), flow, {} as any);
     const submission = submittingReviews.submitEmployeeReview(period.id, {
       expectedVersion: 0, idempotencyKey: randomUUID(), selfGrade: 'B',
       indicators: [{ indicatorVersionItemId: data.item.id, progress: 60, healthStatus: 'on_track',

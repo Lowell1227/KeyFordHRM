@@ -44,7 +44,7 @@ describe('PeriodReviewsService', () => {
     gradeResult: { updateMany: jest.fn() },
   };
   const prisma = {
-    assessmentPeriod: { findUnique: jest.fn(), findMany: jest.fn() },
+    assessmentPeriod: { findUnique: jest.fn(), findMany: jest.fn(), update: jest.fn() },
     assessmentPeriodReviewRevision: { findUnique: jest.fn() },
     indicatorInstance: { findMany: jest.fn() },
     $transaction: jest.fn(async (handler: (client: typeof tx) => unknown) => handler(tx)),
@@ -52,11 +52,17 @@ describe('PeriodReviewsService', () => {
   const notifications = { create: jest.fn() };
   const aggregation = { refreshTask: jest.fn() };
   const flow = { reopenPeriodTx: jest.fn(), syncCycleStage: jest.fn() };
+  const storage = {
+    uploadReviewEvidence: jest.fn(),
+    removeObject: jest.fn(),
+    pipeDownload: jest.fn(),
+  };
   const service: PeriodReviewsService = new (PeriodReviewsService as any)(
     prisma,
     notifications,
     aggregation,
     flow,
+    storage,
   );
 
   const period = {
@@ -79,6 +85,14 @@ describe('PeriodReviewsService', () => {
     managerScoreTotal: null,
     selfGrade: null,
     managerGrade: null,
+    employeeAttachments: [{
+      id: '23232323-2323-4323-8323-232323232323',
+      objectKey: 'performance-evidence/2027/01/evidence.png',
+      name: '项目验收照片.png',
+      size: 2048,
+      mimeType: 'image/png',
+      uploadedAt: '2027-02-01T08:00:00.000Z',
+    }],
     task: {
       id: 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb',
       cycleId: 'cccccccc-cccc-4ccc-8ccc-cccccccccccc',
@@ -164,13 +178,31 @@ describe('PeriodReviewsService', () => {
     });
     aggregation.refreshTask.mockResolvedValue({ complete: false, score: null, targetStatus: null });
     tx.assessmentPeriod.update.mockResolvedValue({ ...period, draftVersion: 3 });
+    prisma.assessmentPeriod.update.mockResolvedValue(period);
+    storage.uploadReviewEvidence.mockResolvedValue({
+      objectKey: 'performance-evidence/2027/02/new-evidence.png',
+      name: '新增成果.png',
+      size: 1024,
+      mimeType: 'image/png',
+    });
   });
 
   it('returns the page header, frozen goal reference, current draft, history, and alignments', async () => {
     const result = await service.getReview(period.id, employee);
 
     expect(result).toMatchObject({
-      period: { id: period.id, periodKey: '2027-01', draftVersion: 2 },
+      period: {
+        id: period.id,
+        periodKey: '2027-01',
+        draftVersion: 2,
+        attachments: [{
+          id: '23232323-2323-4323-8323-232323232323',
+          name: '项目验收照片.png',
+          size: 2048,
+          mimeType: 'image/png',
+          uploadedAt: '2027-02-01T08:00:00.000Z',
+        }],
+      },
       context: {
         cycleName: '2027 Q1',
         employeeName: '方园',
@@ -193,6 +225,104 @@ describe('PeriodReviewsService', () => {
         history: [{ periodKey: '2026-12', progress: 60, managerScore: 78 }],
       }],
     });
+  });
+
+  it('uploads one whole-month attachment while the employee draft is editable', async () => {
+    const file = { originalname: '新增成果.png', size: 1024 } as Express.Multer.File;
+
+    const result = await service.uploadEmployeeAttachment(period.id, file, employee);
+
+    expect(storage.uploadReviewEvidence).toHaveBeenCalledWith(file);
+    expect(prisma.assessmentPeriod.update).toHaveBeenCalledWith({
+      where: { id: period.id },
+      data: {
+        employeeAttachments: expect.arrayContaining([
+          expect.objectContaining({
+            objectKey: 'performance-evidence/2027/02/new-evidence.png',
+            name: '新增成果.png',
+          }),
+        ]),
+      },
+    });
+    expect(result).toEqual(expect.objectContaining({
+      name: '新增成果.png',
+      size: 1024,
+      mimeType: 'image/png',
+    }));
+    expect(result).not.toHaveProperty('objectKey');
+  });
+
+  it('removes an attachment only while the employee draft is editable', async () => {
+    const result = await service.deleteEmployeeAttachment(
+      period.id,
+      '23232323-2323-4323-8323-232323232323',
+      employee,
+    );
+
+    expect(prisma.assessmentPeriod.update).toHaveBeenCalledWith({
+      where: { id: period.id },
+      data: { employeeAttachments: [] },
+    });
+    expect(storage.removeObject).toHaveBeenCalledWith('performance-evidence/2027/01/evidence.png');
+    expect(result).toEqual([]);
+  });
+
+  it('allows the frozen manager to download submitted evidence but blocks unrelated users', async () => {
+    const response = { setHeader: jest.fn() };
+
+    await service.downloadEmployeeAttachment(
+      period.id,
+      '23232323-2323-4323-8323-232323232323',
+      manager,
+      response,
+    );
+    await expect(service.downloadEmployeeAttachment(
+      period.id,
+      '23232323-2323-4323-8323-232323232323',
+      outsider,
+      response,
+    )).rejects.toBeInstanceOf(ForbiddenException);
+
+    expect(storage.pipeDownload).toHaveBeenCalledWith(
+      'performance-evidence/2027/01/evidence.png',
+      response,
+    );
+  });
+
+  it('locks attachment changes after the employee submits', async () => {
+    prisma.assessmentPeriod.findUnique.mockResolvedValue({
+      ...period,
+      status: 'manager_scoring',
+      employeeSubmittedAt: new Date('2027-02-03T08:00:00.000Z'),
+    });
+
+    await expect(service.uploadEmployeeAttachment(
+      period.id,
+      { originalname: '新增成果.png', size: 1024 } as Express.Multer.File,
+      employee,
+    )).rejects.toBeInstanceOf(ConflictException);
+    expect(storage.uploadReviewEvidence).not.toHaveBeenCalled();
+  });
+
+  it('limits one monthly review to ten attachments', async () => {
+    prisma.assessmentPeriod.findUnique.mockResolvedValue({
+      ...period,
+      employeeAttachments: Array.from({ length: 10 }, (_, index) => ({
+        id: `23232323-2323-4323-8323-${String(index).padStart(12, '0')}`,
+        objectKey: `performance-evidence/2027/01/evidence-${index}.png`,
+        name: `成果-${index}.png`,
+        size: 1024,
+        mimeType: 'image/png',
+        uploadedAt: '2027-02-01T08:00:00.000Z',
+      })),
+    });
+
+    await expect(service.uploadEmployeeAttachment(
+      period.id,
+      { originalname: '第11个附件.png', size: 1024 } as Express.Multer.File,
+      employee,
+    )).rejects.toMatchObject({ response: expect.objectContaining({ message: '本月工作产出附件最多上传 10 个' }) });
+    expect(storage.uploadReviewEvidence).not.toHaveBeenCalled();
   });
 
   it('prefills an untouched month from the latest active progress in the same Shanghai month', async () => {
@@ -529,6 +659,13 @@ describe('PeriodReviewsService', () => {
         idempotencyKey: '13131313-1313-4313-8313-131313131313',
         snapshot: expect.objectContaining({
           selfGrade: 'B',
+          attachments: [{
+            id: '23232323-2323-4323-8323-232323232323',
+            name: '项目验收照片.png',
+            size: 2048,
+            mimeType: 'image/png',
+            uploadedAt: '2027-02-01T08:00:00.000Z',
+          }],
           indicators: [expect.objectContaining({ employeeComment: '完成尾款签署' })],
         }),
       }),

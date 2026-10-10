@@ -11,6 +11,7 @@ import {
   Prisma,
   SysRole,
 } from '@prisma/client';
+import { randomUUID } from 'crypto';
 import { PrismaService } from '@/prisma/prisma.service';
 import { NotificationsService } from '@/notifications/notifications.service';
 import type { AuthUser } from '@/common/types/auth.types';
@@ -26,7 +27,16 @@ import { hasHrCapability } from '@/auth/hr-capabilities';
 import { shanghaiMonthKey } from '@/objectives/goal-tracking-progress';
 import type { ReopenPeriodReviewDto } from './dto/reopen-period-review.dto';
 import { managerPeriodReviewTitle, periodReviewNoun, periodReviewTitle } from './period-review-labels';
-import type { PeriodReviewActionResult, PeriodReviewDetail } from './period-review.types';
+import type {
+  PeriodReviewActionResult,
+  PeriodReviewAttachment,
+  PeriodReviewDetail,
+} from './period-review.types';
+import { StorageService } from '@/storage/storage.service';
+
+interface StoredPeriodReviewAttachment extends PeriodReviewAttachment {
+  objectKey: string;
+}
 
 const periodInclude = {
   task: {
@@ -90,6 +100,7 @@ export class PeriodReviewsService {
     private readonly notifications: NotificationsService,
     private readonly aggregation: PeriodAggregationService,
     private readonly flow: FlowService,
+    private readonly storage: StorageService,
   ) {}
 
   async getReview(periodId: string, viewer: AuthUser): Promise<PeriodReviewDetail> {
@@ -146,6 +157,7 @@ export class PeriodReviewsService {
         managerScoreTotal: this.decimalNumber(period.managerScoreTotal),
         selfGrade: period.selfGrade,
         managerGrade: period.managerGrade,
+        attachments: this.periodAttachments(period.employeeAttachments),
         draftVersion: period.draftVersion,
       },
       context: {
@@ -232,6 +244,79 @@ export class PeriodReviewsService {
     };
   }
 
+  async uploadEmployeeAttachment(
+    periodId: string,
+    file: Express.Multer.File,
+    viewer: AuthUser,
+  ): Promise<PeriodReviewAttachment> {
+    const period = await this.getPeriod(periodId);
+    this.assertEmployeeEditable(period, viewer);
+    const attachments = this.storedPeriodAttachments(period.employeeAttachments);
+    if (attachments.length >= 10) {
+      throw new ConflictException({
+        code: ERROR_CODE.PARAM_INVALID,
+        message: '本月工作产出附件最多上传 10 个',
+      });
+    }
+
+    const uploaded = await this.storage.uploadReviewEvidence(file);
+    const attachment: StoredPeriodReviewAttachment = {
+      id: randomUUID(),
+      objectKey: uploaded.objectKey,
+      name: uploaded.name,
+      size: uploaded.size,
+      mimeType: uploaded.mimeType,
+      uploadedAt: new Date().toISOString(),
+    };
+    try {
+      await this.prisma.assessmentPeriod.update({
+        where: { id: periodId },
+        data: { employeeAttachments: this.storedPeriodAttachmentsJson([...attachments, attachment]) },
+      });
+    } catch (error) {
+      await this.storage.removeObject(uploaded.objectKey).catch(() => undefined);
+      throw error;
+    }
+    return this.publicPeriodAttachment(attachment);
+  }
+
+  async deleteEmployeeAttachment(
+    periodId: string,
+    attachmentId: string,
+    viewer: AuthUser,
+  ): Promise<PeriodReviewAttachment[]> {
+    const period = await this.getPeriod(periodId);
+    this.assertEmployeeEditable(period, viewer);
+    const attachments = this.storedPeriodAttachments(period.employeeAttachments);
+    const attachment = attachments.find((item) => item.id === attachmentId);
+    if (!attachment) {
+      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '附件不存在' });
+    }
+    const remaining = attachments.filter((item) => item.id !== attachmentId);
+    await this.prisma.assessmentPeriod.update({
+      where: { id: periodId },
+      data: { employeeAttachments: this.storedPeriodAttachmentsJson(remaining) },
+    });
+    await this.storage.removeObject(attachment.objectKey);
+    return remaining.map((item) => this.publicPeriodAttachment(item));
+  }
+
+  async downloadEmployeeAttachment(
+    periodId: string,
+    attachmentId: string,
+    viewer: AuthUser,
+    response: unknown,
+  ): Promise<void> {
+    const period = await this.getPeriod(periodId);
+    this.assertCanRead(period, viewer);
+    const attachment = this.storedPeriodAttachments(period.employeeAttachments)
+      .find((item) => item.id === attachmentId);
+    if (!attachment) {
+      throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '附件不存在' });
+    }
+    await this.storage.pipeDownload(attachment.objectKey, response);
+  }
+
   async saveEmployeeDraft(
     periodId: string,
     dto: SaveEmployeePeriodReviewDraftDto,
@@ -304,6 +389,7 @@ export class PeriodReviewsService {
         submittedAt: submittedAt.toISOString(),
         selfScoreTotal,
         selfGrade: dto.selfGrade,
+        attachments: this.periodAttachmentsJson(period.employeeAttachments),
         indicators: dto.indicators.map((item) => ({
           indicatorVersionItemId: item.indicatorVersionItemId,
           progress: item.progress,
@@ -1178,6 +1264,61 @@ export class PeriodReviewsService {
 
   private jsonArray(value: Prisma.JsonValue | null | undefined): unknown[] {
     return Array.isArray(value) ? value : [];
+  }
+
+  private periodAttachments(value: Prisma.JsonValue | null | undefined): PeriodReviewAttachment[] {
+    return this.storedPeriodAttachments(value).map((item) => this.publicPeriodAttachment(item));
+  }
+
+  private periodAttachmentsJson(value: Prisma.JsonValue | null | undefined): Prisma.InputJsonArray {
+    return this.periodAttachments(value).map((attachment) => ({ ...attachment }));
+  }
+
+  private storedPeriodAttachments(value: Prisma.JsonValue | null | undefined): StoredPeriodReviewAttachment[] {
+    if (!Array.isArray(value)) return [];
+    return value.flatMap((item) => {
+      if (
+        item == null
+        || Array.isArray(item)
+        || typeof item !== 'object'
+        || typeof item.id !== 'string'
+        || typeof item.name !== 'string'
+        || typeof item.size !== 'number'
+        || typeof item.mimeType !== 'string'
+        || typeof item.uploadedAt !== 'string'
+        || typeof item.objectKey !== 'string'
+        || !item.objectKey.startsWith('performance-evidence/')
+      ) return [];
+      return [{
+        id: item.id,
+        objectKey: item.objectKey,
+        name: item.name,
+        size: item.size,
+        mimeType: item.mimeType,
+        uploadedAt: item.uploadedAt,
+      }];
+    });
+  }
+
+  private publicPeriodAttachment(attachment: StoredPeriodReviewAttachment): PeriodReviewAttachment {
+    return {
+      id: attachment.id,
+      name: attachment.name,
+      size: attachment.size,
+      mimeType: attachment.mimeType,
+      uploadedAt: attachment.uploadedAt,
+    };
+  }
+
+  private storedPeriodAttachmentsJson(attachments: StoredPeriodReviewAttachment[]): Prisma.InputJsonArray {
+    return attachments.map((attachment) => ({
+      id: attachment.id,
+      objectKey: attachment.objectKey,
+      name: attachment.name,
+      size: attachment.size,
+      mimeType: attachment.mimeType,
+      uploadedAt: attachment.uploadedAt,
+    }));
   }
 
   private attachmentsJson(
