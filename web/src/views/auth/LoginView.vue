@@ -168,19 +168,6 @@ async function onPasswordLogin() {
           {{ dingtalkButtonText }}
         </el-button>
 
-        <a
-          class="manual-link"
-          href="/manual/index.html"
-          target="_blank"
-          rel="noopener noreferrer"
-        >
-          <svg viewBox="0 0 24 24" aria-hidden="true">
-            <path d="M6.5 4.75h8.75A2.75 2.75 0 0 1 18 7.5v11.75H8.75A2.75 2.75 0 0 1 6 16.5V5.25a.5.5 0 0 1 .5-.5Z" />
-            <path d="M6 16.5a2.75 2.75 0 0 1 2.75-2.75H18M9.5 8h5" />
-          </svg>
-          查看系统操作与验收手册
-        </a>
-
         <div class="auth-options">
           <button
             type="button"
@@ -463,36 +450,6 @@ async function onPasswordLogin() {
   box-shadow: 0 12px 24px rgba(22, 119, 255, 0.19);
 }
 
-.manual-link {
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  gap: 7px;
-  width: fit-content;
-  min-height: 40px;
-  margin: 8px auto 0;
-  padding: 8px 4px;
-  color: #53677a;
-  font-size: 13px;
-  text-decoration: none;
-  transition: color 0.2s ease;
-}
-
-.manual-link svg {
-  width: 16px;
-  height: 16px;
-  fill: none;
-  stroke: currentColor;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 1.6;
-}
-
-.manual-link:hover {
-  color: #1677ff;
-}
-
-.manual-link:focus-visible,
 .auth-option:focus-visible {
   outline: 2px solid rgba(22, 119, 255, 0.42);
   outline-offset: 3px;
@@ -689,7 +646,6 @@ async function onPasswordLogin() {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .manual-link,
   .auth-option__arrow,
   .field-reveal-enter-active,
   .field-reveal-leave-active {

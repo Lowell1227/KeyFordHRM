@@ -25,22 +25,12 @@ async function mockPasswordLogin(page: import('@playwright/test').Page) {
   });
 }
 
-test.describe('login manual link', () => {
-  test('operation manual opens in a new tab without leaving the login page', async ({ page }) => {
+test.describe('login and manual visibility', () => {
+  test('does not expose the system manual entry on the login page', async ({ page }) => {
     await page.goto('/login');
 
-    const manualLink = page.getByRole('link', { name: '查看系统操作与验收手册' });
-    await expect(manualLink).toBeVisible();
-    await expect(manualLink).toHaveAttribute('href', '/manual/index.html');
-    await expect(manualLink).toHaveAttribute('target', '_blank');
-
-    const [manualPage] = await Promise.all([
-      page.waitForEvent('popup'),
-      manualLink.click(),
-    ]);
-    await expect(page).toHaveURL(/\/login$/);
-    await expect(manualPage).toHaveURL(/\/manual\/index\.html$/);
-    await expect(manualPage).toHaveTitle('孚德绩效管理系统｜操作与验收手册');
+    await expect(page.getByTestId('login-shell')).toBeVisible();
+    await expect(page.locator('a[href="/manual/index.html"]')).toHaveCount(0);
   });
 
   test('login and manual use the official 2025 brand assets', async ({ page }) => {
