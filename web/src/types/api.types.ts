@@ -75,6 +75,43 @@ export interface AiProviderTestResult {
   configVersion: number;
 }
 
+export interface AiProgressGoal {
+  id: string;
+  title: string;
+  targetValue: string | null;
+  unit: string | null;
+  periodId: string | null;
+  periodKey: string | null;
+}
+
+export interface AiProgressDraft {
+  kind: 'draft';
+  draftId: string;
+  state: 'pending' | 'saved';
+  expiresAt: string;
+  goals: AiProgressGoal[];
+  indicatorId: string | null;
+  periodId: string | null;
+  content: string;
+  actualValue: string | null;
+  healthStatus: GoalTrackingHealthStatus | null;
+  uncertain: boolean;
+  canSave: boolean;
+  targetValue: string | null;
+  unit: string | null;
+  completionPercent: number | null;
+  progress: number | null;
+  saved: GoalTrackingLatestProgress | null;
+}
+
+export interface UpdateAiProgressDraftBody {
+  indicatorId: string;
+  periodId: string | null;
+  content: string;
+  actualValue: string | null;
+  healthStatus: GoalTrackingHealthStatus | null;
+}
+
 /** 分页响应。 */
 export interface Paginated<T> {
   total: number;

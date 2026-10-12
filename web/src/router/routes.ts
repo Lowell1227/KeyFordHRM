@@ -432,6 +432,12 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, title: '目标地图', activeNavigationPath: '/tasks' },
   },
   {
+    path: '/ai-progress/confirm/:draftId',
+    name: 'AiProgressConfirm',
+    component: () => import('@/views/ai-progress/AiProgressConfirmView.vue'),
+    meta: { requiresAuth: true, title: '确认目标进展' },
+  },
+  {
     path: '/action-items',
     name: 'ActionItems',
     component: () => import('@/views/objectives/GoalTrackingView.vue'),
