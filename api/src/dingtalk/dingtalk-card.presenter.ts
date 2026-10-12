@@ -190,7 +190,12 @@ export class DingtalkCardPresenter {
       const data = (await response.json()) as {
         success?: boolean;
         code?: string;
-        result?: Array<{ success?: boolean }>;
+        result?:
+          | boolean
+          | {
+              outTrackId?: string;
+              deliverResults?: Array<{ success?: boolean }>;
+            };
         flowControlledStaffIdList?: string[];
         invalidStaffIdList?: string[];
         filteredStaffIdList?: string[];
@@ -201,11 +206,27 @@ export class DingtalkCardPresenter {
         data.code ||
         data.flowControlledStaffIdList?.length ||
         data.invalidStaffIdList?.length ||
-        data.filteredStaffIdList?.length ||
-        (Array.isArray(data.result) &&
-          data.result.some((item) => item.success === false))
+        data.filteredStaffIdList?.length
       )
         throw new Error();
+      if (path === '/card/instances/createAndDeliver') {
+        const result = data.result;
+        if (
+          data.success !== true ||
+          !result ||
+          typeof result !== 'object' ||
+          result.outTrackId !== (body as { outTrackId: string }).outTrackId ||
+          !Array.isArray(result.deliverResults) ||
+          result.deliverResults.length !== 1 ||
+          result.deliverResults.some((item) => item.success !== true)
+        )
+          throw new Error();
+      } else if (
+        path === '/card/instances' &&
+        (data.success !== true || data.result !== true)
+      ) {
+        throw new Error();
+      }
     } catch {
       throw new ServiceUnavailableException('钉钉消息暂未送达，请稍后重试');
     }

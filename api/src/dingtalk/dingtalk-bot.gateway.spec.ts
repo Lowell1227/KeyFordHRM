@@ -3,11 +3,15 @@ import { ConfigService } from '@nestjs/config';
 import { DingtalkBotGateway } from './dingtalk-bot.gateway';
 import { DingtalkCardPresenter } from './dingtalk-card.presenter';
 import { AiProgressService } from '../ai-progress/ai-progress.service';
+import { DWClient } from 'dingtalk-stream';
 
 const listeners = new Map<string, (event: any) => Promise<void>>();
 const sdk = {
+  connected: false,
   connect: jest.fn(),
+  _connect: jest.fn(),
   disconnect: jest.fn(),
+  removeAllListeners: jest.fn(),
   send: jest.fn(),
   config: { subscriptions: [] },
   registerCallbackListener: jest.fn((topic, handler) =>
@@ -107,6 +111,15 @@ describe('DingTalk Stream progress adapter', () => {
   let fetchMock: jest.SpyInstance;
   beforeEach(() => {
     jest.clearAllMocks();
+    (DWClient as unknown as jest.Mock).mockImplementation(() => sdk);
+    sdk.connected = false;
+    sdk._connect = jest.fn(async () => {
+      sdk.connected = true;
+    });
+    sdk.connect.mockReset().mockImplementation(async () => sdk._connect());
+    sdk.disconnect.mockReset().mockImplementation(() => {
+      sdk.connected = false;
+    });
     listeners.clear();
     env = {
       DINGTALK_BOT_STREAM_ENABLED: 'true',
@@ -163,7 +176,21 @@ describe('DingTalk Stream progress adapter', () => {
       .spyOn(global, 'fetch')
       .mockImplementation(async (url, init) => {
         requests.push({ url, ...init, body: JSON.parse(init!.body as string) });
-        return { ok: true, json: async () => ({ success: true }) } as Response;
+        return {
+          ok: true,
+          json: async () =>
+            String(url).endsWith('createAndDeliver')
+              ? {
+                  success: true,
+                  result: {
+                    outTrackId: draftId,
+                    deliverResults: [{ success: true }],
+                  },
+                }
+              : String(url).endsWith('/card/instances')
+                ? { success: true, result: true }
+                : { processQueryKey: 'query' },
+        } as Response;
       });
     presenter = new DingtalkCardPresenter(
       config,
@@ -182,13 +209,153 @@ describe('DingTalk Stream progress adapter', () => {
   afterEach(() => {
     gateway.onModuleDestroy();
     fetchMock.mockRestore();
+    jest.useRealTimers();
   });
+  const flush = async () => {
+    for (let step = 0; step < 12; step++) await Promise.resolve();
+  };
+  const startGateway = async () => {
+    void gateway.onModuleInit();
+    await flush();
+  };
   const receive = async (event: any) =>
     listeners.get(event.headers.topic)!(event);
 
+  it('does not hold API startup while SDK endpoint discovery is pending', async () => {
+    sdk.connect.mockImplementation(() => new Promise(() => undefined));
+    let ready = false;
+    void Promise.resolve(gateway.onModuleInit()).then(() => {
+      ready = true;
+    });
+    await flush();
+    expect(ready).toBe(true);
+  });
+  it('disables a pending attempt, blocks its late handshake and recovers after it settles', async () => {
+    let endpointReady!: () => void;
+    const endpoint = new Promise<void>((resolve) => {
+      endpointReady = resolve;
+    });
+    const handshake = sdk._connect;
+    sdk.connect.mockImplementationOnce(async () => {
+      await endpoint;
+      await sdk._connect();
+    });
+    await startGateway();
+    ai.getPublicState.mockResolvedValue({
+      botEnabled: false,
+      activeProvider: 'kimi',
+    });
+    await gateway.syncConnection();
+    expect(sdk.disconnect).toHaveBeenCalled();
+    endpointReady();
+    await flush();
+    expect(handshake).not.toHaveBeenCalled();
+    ai.getPublicState.mockResolvedValue({
+      botEnabled: true,
+      activeProvider: 'kimi',
+    });
+    const next = freshClient();
+    (DWClient as unknown as jest.Mock).mockImplementation(() => next);
+    await gateway.syncConnection();
+    await flush();
+    expect(next.connect).toHaveBeenCalledTimes(1);
+  });
+  it('times out an attempt without accumulating uncancellable SDK requests', async () => {
+    jest.useFakeTimers();
+    let endpointReady!: () => void;
+    const endpoint = new Promise<void>((resolve) => {
+      endpointReady = resolve;
+    });
+    const handshake = sdk._connect;
+    sdk.connect.mockImplementationOnce(async () => {
+      await endpoint;
+      await sdk._connect();
+    });
+    await startGateway();
+    await jest.advanceTimersByTimeAsync(10000);
+    expect(sdk.disconnect).toHaveBeenCalled();
+    await gateway.syncConnection();
+    await gateway.syncConnection();
+    expect(DWClient).toHaveBeenCalledTimes(1);
+    endpointReady();
+    await flush();
+    expect(handshake).not.toHaveBeenCalled();
+    const next = freshClient();
+    (DWClient as unknown as jest.Mock).mockImplementation(() => next);
+    await gateway.syncConnection();
+    await flush();
+    expect(next.connected).toBe(true);
+  });
+  it('uses a fresh client after SYSTEM disconnect and ignores old close/callbacks', async () => {
+    await startGateway();
+    const staleCallback = listeners.get(ROBOT)!;
+    sdk.connected = false; // SYSTEM disconnect arrives before this socket closes.
+    const next = freshClient();
+    (DWClient as unknown as jest.Mock).mockImplementation(() => next);
+    await gateway.syncConnection();
+    await flush();
+    expect(sdk.disconnect).toHaveBeenCalled();
+    expect(next.connect).toHaveBeenCalledTimes(1);
+    sdk.connected = false; // The old SDK's eventual close handler.
+    await staleCallback(message());
+    expect(progress.prepare).not.toHaveBeenCalled();
+    await gateway.syncConnection();
+    await flush();
+    expect(DWClient).toHaveBeenCalledTimes(2);
+    expect(next.connected).toBe(true);
+    await receive(message());
+    expect(progress.prepare).toHaveBeenCalledTimes(1);
+  });
+  it('cleans up a handshake that completes after its timeout before allowing recovery', async () => {
+    jest.useFakeTimers();
+    let open!: () => void;
+    sdk._connect.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          open = () => {
+            sdk.connected = true;
+            resolve();
+          };
+        }),
+    );
+    await startGateway();
+    await jest.advanceTimersByTimeAsync(10000);
+    expect(sdk.disconnect).toHaveBeenCalledTimes(1);
+    open();
+    await flush();
+    expect(sdk.disconnect).toHaveBeenCalledTimes(2);
+    expect(sdk.connected).toBe(false);
+    const next = freshClient();
+    (DWClient as unknown as jest.Mock).mockImplementation(() => next);
+    await gateway.syncConnection();
+    await flush();
+    expect(next.connected).toBe(true);
+  });
+  const freshClient = () => {
+    const next: any = {
+      ...sdk,
+      connected: false,
+      config: { subscriptions: [] },
+      disconnect: jest.fn(),
+      removeAllListeners: jest.fn(),
+      send: jest.fn(),
+      registerCallbackListener: jest.fn((topic, handler) =>
+        listeners.set(topic, handler),
+      ),
+    };
+    next._connect = jest.fn(async () => {
+      next.connected = true;
+    });
+    next.connect = jest.fn(async () => next._connect());
+    next.disconnect.mockImplementation(() => {
+      next.connected = false;
+    });
+    return next;
+  };
+
   it('does not start or send when the environment switch is absent', async () => {
     delete env.DINGTALK_BOT_STREAM_ENABLED;
-    await gateway.onModuleInit();
+    await startGateway();
     await presenter.sendPreview(preview, sender);
     expect(sdk.connect).not.toHaveBeenCalled();
     expect(fetchMock).not.toHaveBeenCalled();
@@ -201,7 +368,7 @@ describe('DingTalk Stream progress adapter', () => {
     'DINGTALK_BOT_PREFLIGHT_CONFIRMED',
   ])('fails closed without %s', async (key) => {
     delete env[key];
-    await gateway.onModuleInit();
+    await startGateway();
     expect(sdk.connect).not.toHaveBeenCalled();
   });
   it('does not start without an active tested provider', async () => {
@@ -209,7 +376,7 @@ describe('DingTalk Stream progress adapter', () => {
       botEnabled: true,
       activeProvider: null,
     });
-    await gateway.onModuleInit();
+    await startGateway();
     expect(sdk.connect).not.toHaveBeenCalled();
   });
   it.each([
@@ -221,21 +388,21 @@ describe('DingTalk Stream progress adapter', () => {
   ])(
     'rejects wrong enterprise/application/group/sender %j',
     async (changes) => {
-      await gateway.onModuleInit();
+      await startGateway();
       await receive(message(changes));
       expect(progress.prepare).not.toHaveBeenCalled();
       expect(fetchMock).not.toHaveBeenCalled();
     },
   );
   it('rejects the wrong authenticated application header', async () => {
-    await gateway.onModuleInit();
+    await startGateway();
     const event = message();
     event.headers.appId = 'other';
     await receive(event);
     expect(progress.prepare).not.toHaveBeenCalled();
   });
   it('stops handling and disconnects when the bot is disabled', async () => {
-    await gateway.onModuleInit();
+    await startGateway();
     ai.getPublicState.mockResolvedValue({
       botEnabled: false,
       activeProvider: 'kimi',
@@ -246,7 +413,7 @@ describe('DingTalk Stream progress adapter', () => {
     expect(sdk.disconnect).toHaveBeenCalled();
   });
   it('deduplicates Stream delivery and sends a non-forwardable preview to the authenticated single-chat user', async () => {
-    await gateway.onModuleInit();
+    await startGateway();
     await receive(message());
     await receive(message());
     expect(requests).toHaveLength(1);
@@ -297,7 +464,7 @@ describe('DingTalk Stream progress adapter', () => {
   });
   it('replies to unavailable identities without generating a card', async () => {
     progress.prepare.mockResolvedValue({ kind: 'reply', text: '功能暂未开放' });
-    await gateway.onModuleInit();
+    await startGateway();
     await receive(message());
     expect(requests[0].body).toEqual({
       robotCode: 'app-key',
@@ -310,20 +477,20 @@ describe('DingTalk Stream progress adapter', () => {
     );
   });
   it('does not parse a non-text message or call recognition', async () => {
-    await gateway.onModuleInit();
+    await startGateway();
     await receive(message({ msgtype: 'image' }));
     expect(progress.prepare).not.toHaveBeenCalled();
     expect(requests[0].body.msgKey).toBe('sampleText');
   });
   it('sanitizes recognition errors and gives a manual route', async () => {
     progress.prepare.mockRejectedValue(new Error('secret-provider-error'));
-    await gateway.onModuleInit();
+    await startGateway();
     await receive(message());
     expect(requests[0].body.msgParam).toContain('https://hrm.example');
     expect(JSON.stringify(requests)).not.toContain('secret-provider-error');
   });
   it('does not save forwarded card', async () => {
-    await gateway.onModuleInit();
+    await startGateway();
     await receive(callback({ userId: 'other', spaceId: 'other' }));
     expect(progressUpdate.create).not.toHaveBeenCalled();
     expect(eligibility.resolveIdentity).not.toHaveBeenCalled();
@@ -336,13 +503,13 @@ describe('DingTalk Stream progress adapter', () => {
     { spaceId: undefined },
     { type: 'other' },
   ])('rejects untrusted callback context %j', async (changes) => {
-    await gateway.onModuleInit();
+    await startGateway();
     await receive(callback(changes));
     expect(progressUpdate.create).not.toHaveBeenCalled();
   });
   it('resolves the actual clicker and uses the server conversation before owner-checked save', async () => {
     const save = jest.spyOn(progress, 'saveDraft');
-    await gateway.onModuleInit();
+    await startGateway();
     await receive(callback());
     expect(save).toHaveBeenCalledWith(draftId, 'owner', 'cid');
     expect(eligibility.resolveIdentity).toHaveBeenCalledWith(
@@ -360,13 +527,13 @@ describe('DingTalk Stream progress adapter', () => {
       kind: 'ready',
       viewer: { id: 'other-owner' },
     });
-    await gateway.onModuleInit();
+    await startGateway();
     await receive(callback());
     expect(progressUpdate.create).not.toHaveBeenCalled();
   });
   it('rejects expired drafts without a save', async () => {
     drafts.get.mockResolvedValue(null);
-    await gateway.onModuleInit();
+    await startGateway();
     await receive(callback());
     expect(progressUpdate.create).not.toHaveBeenCalled();
     expect(sdk.send).toHaveBeenLastCalledWith(
@@ -381,13 +548,13 @@ describe('DingTalk Stream progress adapter', () => {
       sender,
       uncertain: true,
     });
-    await gateway.onModuleInit();
+    await startGateway();
     await receive(callback());
     expect(progressUpdate.create).not.toHaveBeenCalled();
   });
   it('preserves committed progress when card refresh fails and reports saved status', async () => {
     fetchMock.mockRejectedValue(new Error('sensitive upstream payload'));
-    await gateway.onModuleInit();
+    await startGateway();
     await receive(callback());
     expect(progressUpdate.create).toHaveBeenCalledTimes(1);
     expect(JSON.stringify(sdk.send.mock.calls)).toContain('已保存');
@@ -402,7 +569,7 @@ describe('DingTalk Stream progress adapter', () => {
       async () => (saved = { id: 'saved' }),
     );
     fetchMock.mockRejectedValueOnce(new Error('temporary'));
-    await gateway.onModuleInit();
+    await startGateway();
     await receive(callback());
     await receive(callback());
     expect(progressUpdate.create).toHaveBeenCalledTimes(1);
@@ -417,7 +584,7 @@ describe('DingTalk Stream progress adapter', () => {
   });
   it('does not trust owner/conversation/action data as the clicker identity', async () => {
     const save = jest.spyOn(progress, 'saveDraft');
-    await gateway.onModuleInit();
+    await startGateway();
     await receive(
       callback({
         content: JSON.stringify({
@@ -442,14 +609,27 @@ describe('DingTalk Stream progress adapter', () => {
     await presenter.sendPreview(preview, sender);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
-  it('treats a nested card delivery failure as an error', async () => {
-    fetchMock.mockResolvedValue({
+  it('rejects actual nested delivery failure, releases its claim and allows retry', async () => {
+    fetchMock.mockResolvedValueOnce({
       ok: true,
-      json: async () => ({ success: true, result: [{ success: false }] }),
+      json: async () => ({
+        success: true,
+        result: { outTrackId: draftId, deliverResults: [{ success: false }] },
+      }),
     } as Response);
     await expect(presenter.sendPreview(preview, sender)).rejects.toThrow(
       '暂未送达',
     );
+    expect(drafts.releaseDelivery).toHaveBeenCalled();
+    await presenter.sendPreview(preview, sender);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+  it('rejects a false boolean update result', async () => {
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ success: true, result: false }),
+    } as Response);
+    await expect(presenter.markSaved(draftId)).rejects.toThrow('暂未送达');
   });
   it.each([
     'flowControlledStaffIdList',
@@ -472,7 +652,7 @@ describe('DingTalk Stream progress adapter', () => {
     jest
       .spyOn(progress, 'saveDraft')
       .mockRejectedValue(new GoneException('草稿已过期，请重新发送进展'));
-    await gateway.onModuleInit();
+    await startGateway();
     await receive(callback());
     expect(JSON.stringify(sdk.send.mock.calls)).toContain('草稿已过期');
   });

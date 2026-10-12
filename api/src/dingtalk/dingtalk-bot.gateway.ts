@@ -27,6 +27,7 @@ import { DingtalkCardPresenter } from './dingtalk-card.presenter';
 export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DingtalkBotGateway.name);
   private client?: DWClient;
+  private pending?: { client: DWClient; timer: NodeJS.Timeout };
   private syncing = false;
   private stopped = false;
 
@@ -38,13 +39,12 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
     private readonly cards: DingtalkCardPresenter,
   ) {}
 
-  async onModuleInit() {
-    await this.syncConnection();
+  onModuleInit() {
+    void this.syncConnection();
   }
   onModuleDestroy() {
     this.stopped = true;
-    this.client?.disconnect();
-    this.client = undefined;
+    this.retire(this.client ?? this.pending?.client);
   }
 
   @Interval(30000)
@@ -52,12 +52,14 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
     if (this.stopped || this.syncing) return;
     this.syncing = true;
     try {
-      if (!(await this.cards.isEnabled())) {
-        this.client?.disconnect();
-        this.client = undefined;
+      if (!(await this.cards.isEnabled()) || this.stopped) {
+        this.retire(this.client ?? this.pending?.client);
         return;
       }
-      if (!this.client) {
+      // The stable SDK cannot cancel endpoint HTTP requests: retain at most one until settlement.
+      if (this.pending || this.client?.connected) return;
+      this.retire(this.client);
+      {
         const client = new DWClient({
           clientId: this.config.get<string>('DINGTALK_APP_KEY')!,
           clientSecret: this.config.get<string>('DINGTALK_APP_SECRET')!,
@@ -67,6 +69,12 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
         // Reconnection is governed by the current enable state; do not subscribe to unrelated EVENTs.
         client.config.autoReconnect = false;
         client.config.subscriptions = [];
+        // connect() calls this public hook after endpoint discovery and resets its disconnect flag.
+        const openSocket = client._connect.bind(client);
+        client._connect = () =>
+          this.client === client && !this.stopped
+            ? openSocket()
+            : Promise.resolve();
         client.registerCallbackListener(TOPIC_ROBOT, (event) =>
           this.onMessage(event, client),
         );
@@ -74,12 +82,43 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
           this.onCard(event, client),
         );
         this.client = client;
+        const timer = setTimeout(() => {
+          this.retire(client);
+          this.logger.warn('钉钉进展助手连接超时');
+        }, 10000);
+        timer.unref();
+        this.pending = { client, timer };
+        void Promise.resolve()
+          .then(() => {
+            if (this.client === client && !this.stopped) return client.connect();
+          })
+          .catch(() => {
+            this.logger.warn('钉钉进展助手连接暂不可用');
+            this.retire(client);
+          })
+          .finally(() => {
+            clearTimeout(timer);
+            if (this.client !== client || this.stopped || !client.connected)
+              this.retire(client);
+            if (this.pending?.client === client) this.pending = undefined;
+          });
       }
-      if (!this.client.connected) await this.client.connect();
     } catch {
       this.logger.warn('钉钉进展助手连接暂不可用');
     } finally {
       this.syncing = false;
+    }
+  }
+
+  private retire(client?: DWClient) {
+    if (!client) return;
+    if (this.client === client) this.client = undefined;
+    if (this.pending?.client === client) clearTimeout(this.pending.timer);
+    client.removeAllListeners();
+    try {
+      client.disconnect();
+    } catch {
+      this.logger.warn('钉钉旧连接关闭暂未完成');
     }
   }
 
@@ -88,6 +127,7 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
     topic: string,
     client: DWClient,
   ) {
+    const enabled = await this.cards.isEnabled();
     return (
       this.client === client &&
       !this.stopped &&
@@ -97,7 +137,7 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
       !!event.headers.messageId?.trim() &&
       typeof event.data === 'string' &&
       event.data.length <= 100000 &&
-      (await this.cards.isEnabled())
+      enabled
     );
   }
 
@@ -228,7 +268,8 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
   }
 
   private ack(client: DWClient, event: DWClientDownStream, result: object) {
-    if (!event.headers?.messageId) return;
+    if (this.client !== client || this.stopped || !event.headers?.messageId)
+      return;
     try {
       client.send(event.headers.messageId, result);
     } catch {
