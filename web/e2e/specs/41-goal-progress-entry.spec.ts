@@ -6,9 +6,11 @@ const progress = (id: string, source = 'active_progress') => ({
   content: `进展说明 ${id}`, updatedAt: '2026-09-08T08:00:00.000Z', attachments: [],
 });
 
-async function setup(page: Page, options: { empty?: boolean; canEdit?: boolean } = {}) {
+async function setup(page: Page, options: { empty?: boolean; canEdit?: boolean; qualitative?: boolean; quantitative?: boolean } = {}) {
   const canEdit = options.canEdit ?? true;
   let updates = options.empty ? [] : [progress('latest'), progress('daily'), progress('monthly', 'monthly_self_evaluation')];
+  if (options.qualitative) updates = [{ ...progress('qualitative'), progress: null, healthStatus: null } as any];
+  if (options.quantitative) updates = [{ ...progress('quantitative'), progress: 100, actualValue: 12, targetValueSnapshot: 10, unitSnapshot: '家', completionPercent: 120 } as any];
   const submitted: unknown[] = [];
   await page.addInitScript(() => {
     localStorage.setItem('token', 'isolated-progress-ui');
@@ -16,7 +18,7 @@ async function setup(page: Page, options: { empty?: boolean; canEdit?: boolean }
   });
   const item = () => ({
     id: 'indicator-1', title: '完成虚拟项目交付', taskId: 'task-1', ownerId: 'employee-1', ownerName: '虚拟员工',
-    cycleId, cycleName: '季度测试计划', status: 'active', progress: updates[0]?.progress ?? 0, weight: 100,
+    cycleId, cycleName: '季度测试计划', status: 'active', progress: updates.length ? updates[0].progress : 0, weight: 100,
     description: '按期完成交付', scoringStandard: '达到既定验收标准', alignedObjectives: [], visibilityScope: 'supervisors',
     dimensionName: '工作目标', latestProgress: updates[0] ?? null,
   });
@@ -50,6 +52,32 @@ async function setup(page: Page, options: { empty?: boolean; canEdit?: boolean }
 }
 
 for (const width of [1440, 390]) {
+  test(`定性进展列表和详情不虚构百分比 ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await setup(page, { qualitative: true });
+    const drawer = page.getByTestId('goal-tracking-detail');
+    await expect(drawer.getByTestId('goal-tracking-current-progress')).toContainText('进展说明 qualitative');
+    await expect(drawer.getByTestId('goal-tracking-current-progress')).not.toContainText('0%');
+    await expect(drawer).not.toContainText('null%');
+    await expect(drawer.getByTestId('goal-tracking-current-progress')).not.toContainText('本月未更新');
+    await drawer.locator('.el-drawer__close-btn').click();
+    await expect(page.locator('main .tracking-goal-card__progress')).toHaveCount(0);
+    await expect(page.getByTestId('goal-tracking-surface')).not.toContainText('null%');
+  });
+
+  test(`量化进展保留实际值和超额完成度 ${width}px`, async ({ page }) => {
+    await page.setViewportSize({ width, height: 900 });
+    await setup(page, { quantitative: true });
+    const current = page.getByTestId('goal-tracking-current-progress');
+    await expect(current).toContainText('120%');
+    await expect(current).toContainText('12 / 10 家');
+    await expect(current).toContainText('超额完成');
+    await page.getByTestId('goal-tracking-detail').locator('.el-drawer__close-btn').click();
+    await expect(page.getByTestId('goal-tracking-surface')).toContainText('120%');
+    const bar = page.locator('main [role="progressbar"]');
+    await expect(bar).toHaveAttribute('aria-valuenow', '100');
+  });
+
   test(`首次进展入口靠近空状态并能完成提交 ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     const submitted = await setup(page, { empty: true });

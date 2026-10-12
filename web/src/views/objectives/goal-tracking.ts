@@ -18,6 +18,15 @@ export function goalTrackingProgressSourceLabel(source: GoalTrackingLatestProgre
   return source === 'monthly_self_evaluation' ? '月度自评' : '日常更新';
 }
 
+export function goalTrackingCompletion(progress: Pick<GoalTrackingLatestProgress, 'progress' | 'completionPercent'>) {
+  return progress.completionPercent ?? progress.progress;
+}
+
+export function goalTrackingActualTarget(progress: GoalTrackingLatestProgress) {
+  if (progress.actualValue == null || progress.targetValueSnapshot == null) return '';
+  return `${progress.actualValue} / ${progress.targetValueSnapshot}${progress.unitSnapshot ? ` ${progress.unitSnapshot}` : ''}`;
+}
+
 type GoalTrackingQuarter = {
   year: number;
   quarter: 1 | 2 | 3 | 4;
@@ -175,7 +184,7 @@ export type GoalTrackingHealthStatus = 'on_track' | 'at_risk' | 'blocked' | 'com
 
 export function goalTrackingStatus(item: {
   status?: ObjectiveStatus;
-  progress: number;
+  progress: number | null;
   healthStatus?: GoalTrackingHealthStatus | null;
 }) {
   if (item.healthStatus === 'on_track') return '正常';
@@ -184,6 +193,7 @@ export function goalTrackingStatus(item: {
   if (item.healthStatus === 'completed') return '已完成';
   if (item.status === 'archived') return '已归档';
   if (item.status === 'draft') return '未开始';
+  if (item.progress == null) return '已更新';
   if (item.progress >= 100) return '已完成';
   if (item.progress > 0) return '进行中';
   return '未开始';

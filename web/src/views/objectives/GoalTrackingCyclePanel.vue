@@ -5,6 +5,8 @@ import type { GoalTrackingResult, PerformanceCycleContext } from '@/types/api.ty
 import {
   formatGoalTrackingContextLabel,
   goalTrackingStatus,
+  goalTrackingCompletion,
+  goalTrackingActualTarget,
   goalTrackingProgressSourceLabel,
   selectTrackingAction,
   type GoalTrackingPerson,
@@ -259,9 +261,10 @@ function scoreLabel(score: number | null, emptyLabel = '不参与评分') {
               </div>
             </header>
             <div class="tracking-goal-card__body">
-              <div class="tracking-goal-card__progress">
-                <div><span>当前完成度</span><strong>{{ item.progress }}%</strong></div>
-                <el-progress :percentage="item.progress" :stroke-width="8" :show-text="false" />
+              <div v-if="item.progress != null" class="tracking-goal-card__progress">
+                <div><span>当前完成度</span><strong>{{ item.latestProgress ? goalTrackingCompletion(item.latestProgress) : item.progress }}%</strong></div>
+                <el-progress :percentage="Math.min(100, item.latestProgress ? goalTrackingCompletion(item.latestProgress) ?? 0 : item.progress)" :stroke-width="8" :show-text="false" />
+                <small v-if="item.latestProgress && goalTrackingActualTarget(item.latestProgress)">{{ goalTrackingActualTarget(item.latestProgress) }}<template v-if="(goalTrackingCompletion(item.latestProgress) ?? 0) > 100"> · 超额完成</template></small>
               </div>
               <div class="tracking-goal-card__latest">
                 <span>最新进展</span>

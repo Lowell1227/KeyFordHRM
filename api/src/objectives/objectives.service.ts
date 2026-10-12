@@ -70,6 +70,10 @@ export interface GoalTrackingLatestProgress {
   title?: string;
   content?: string;
   progress: number | null;
+  actualValue?: number | null;
+  targetValueSnapshot?: number | null;
+  unitSnapshot?: string | null;
+  completionPercent?: number | null;
   healthStatus?: 'on_track' | 'at_risk' | 'blocked' | 'completed' | null;
   attachments?: unknown[];
   createdBy?: string;
@@ -107,7 +111,7 @@ export interface GoalTrackingItem {
   cycleName: string | null;
   priority: number;
   status: ObjectiveStatus;
-  progress: number;
+  progress: number | null;
   weight: number | null;
   latestProgress: GoalTrackingLatestProgress | null;
   latestSelfEvaluation: GoalTrackingSelfEvaluationResult | null;
@@ -137,10 +141,30 @@ export interface GoalTrackingResult {
 
 export interface UpdateIndicatorProgressInput {
   periodId?: string;
-  progress: number;
-  healthStatus: IndicatorProgressHealth;
+  progress: number | null;
+  healthStatus: IndicatorProgressHealth | null;
+  actualValue?: string | null;
+  aiAssisted?: boolean;
+  aiDraftId?: string;
   content: string;
   expectedLatestUpdateAt?: string | null;
+}
+
+function progressValues(record: {
+  progress: number | null;
+  actualValue?: Prisma.Decimal | null;
+  targetValueSnapshot?: Prisma.Decimal | null;
+  unitSnapshot?: string | null;
+}) {
+  const completionPercent = record.actualValue != null && record.targetValueSnapshot?.gt(0)
+    ? record.actualValue.div(record.targetValueSnapshot).mul(100).toDecimalPlaces(2).toNumber()
+    : record.progress;
+  return {
+    actualValue: record.actualValue?.toNumber() ?? null,
+    targetValueSnapshot: record.targetValueSnapshot?.toNumber() ?? null,
+    unitSnapshot: record.unitSnapshot ?? null,
+    completionPercent,
+  };
 }
 
 export interface IndicatorAlignmentTaskContext {
@@ -754,13 +778,14 @@ export class ObjectivesService {
         cycleName: task.cycle.name,
         priority: -indicator.sortOrder,
         status: ObjectiveStatus.active,
-        progress: latest?.progress ?? 0,
+        progress: latest ? latest.progress : 0,
         weight,
         latestProgress: latest
           ? {
               id: latest.id,
               content: latest.content,
               progress: latest.progress,
+              ...progressValues(latest),
               healthStatus: latest.healthStatus,
               attachments: Array.isArray(latest.attachments) ? latest.attachments : [],
               createdBy: latest.creator.id,
@@ -1057,6 +1082,27 @@ export class ObjectivesService {
         WHERE "id" = ${indicatorId}::uuid
         FOR UPDATE
       `;
+      let progress = input.actualValue !== undefined ? null : input.progress;
+      let actualValue: Prisma.Decimal | null = null;
+      let targetValueSnapshot: Prisma.Decimal | null = null;
+      let unitSnapshot: string | null = null;
+      if (input.actualValue != null) {
+        if (typeof input.actualValue !== 'string' || !/^\d{1,8}(\.\d{1,2})?$/.test(input.actualValue)) {
+          throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '实际值须为非负数，最多8位整数和2位小数' });
+        }
+        actualValue = new Prisma.Decimal(input.actualValue);
+        const currentIndicator = await tx.indicatorInstance.findUnique({
+          where: { id: indicatorId }, select: { targetValue: true, unit: true },
+        });
+        if (!currentIndicator) throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '指标已变更，请刷新后重试' });
+        if (currentIndicator.targetValue?.gt(0)) {
+          targetValueSnapshot = currentIndicator.targetValue;
+          unitSnapshot = currentIndicator.unit;
+          progress = Math.min(100, actualValue.div(targetValueSnapshot).mul(100).round().toNumber());
+        } else {
+          progress = null;
+        }
+      }
       const progressUpdates = await tx.indicatorProgressUpdate.findMany({
         where: { indicatorInstanceId: indicatorId },
         orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -1078,8 +1124,11 @@ export class ObjectivesService {
         data: {
           indicatorInstanceId: indicatorId,
           ...(progressPeriodId ? { periodId: progressPeriodId } : {}),
-          progress: input.progress,
+          progress,
           healthStatus: input.healthStatus,
+          ...(input.actualValue !== undefined ? { actualValue, targetValueSnapshot, unitSnapshot } : {}),
+          ...(input.aiAssisted !== undefined ? { aiAssisted: input.aiAssisted } : {}),
+          ...(input.aiDraftId ? { aiDraftId: input.aiDraftId } : {}),
           content: input.content,
           attachments: [],
           createdBy: viewer.id,
@@ -1095,6 +1144,7 @@ export class ObjectivesService {
           oldValue: latest
             ? ({
                 progress: latest.progress,
+                ...progressValues(latest),
                 healthStatus: latest.healthStatus,
                 updatedAt: latest.createdAt.toISOString(),
               } satisfies Prisma.InputJsonObject)
@@ -1103,6 +1153,7 @@ export class ObjectivesService {
             periodId: progressPeriodId,
             businessPeriodKey: progressBusinessPeriodKey(created),
             progress: created.progress,
+            ...progressValues(created),
             healthStatus: created.healthStatus,
             content: created.content,
             attachments: created.attachments,
@@ -1113,6 +1164,7 @@ export class ObjectivesService {
       return {
         id: created.id,
         progress: created.progress,
+        ...progressValues(created),
         healthStatus: created.healthStatus,
         content: created.content,
         attachments: Array.isArray(created.attachments) ? created.attachments : [],
@@ -1316,6 +1368,7 @@ export class ObjectivesService {
       progressUpdates: orderedProgress.map((progress) => ({
         id: progress.id,
         progress: progress.progress,
+        ...progressValues(progress),
         healthStatus: progress.healthStatus,
         content: progress.content,
         attachments: Array.isArray(progress.attachments) ? progress.attachments : [],

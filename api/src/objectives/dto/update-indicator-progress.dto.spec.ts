@@ -9,6 +9,12 @@ describe('UpdateIndicatorProgressDto', () => {
     content: '渠道转化低于预期，已调整投放',
   };
 
+  it.each([undefined, null, -1, 101, 1.5])('preserves legacy required 0..100 integer progress: %s', async progress => {
+    await expect(new ValidationPipe({ transform: true }).transform({ ...validBody, progress }, {
+      type: 'body', metatype: UpdateIndicatorProgressDto,
+    })).rejects.toThrow();
+  });
+
   it('keeps only status, progress, description and concurrency metadata', async () => {
     const dto = await new ValidationPipe({
       whitelist: true,

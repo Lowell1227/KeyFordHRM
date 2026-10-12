@@ -10,7 +10,7 @@ import type {
 } from '@/types/api.types';
 import { buildIndicatorVersionHistory } from './indicator-version-history';
 import { indicatorVisibilitySummary } from '@/views/task/indicator-visibility';
-import { goalTrackingProgressSourceLabel } from './goal-tracking';
+import { goalTrackingProgressSourceLabel, goalTrackingCompletion, goalTrackingActualTarget } from './goal-tracking';
 
 const props = defineProps<{ indicatorId: string }>();
 const emit = defineEmits<{ close: []; updated: [] }>();
@@ -288,8 +288,9 @@ function formatBusinessPeriod(periodKey?: string | null) {
             <time>{{ formatDate(latestProgress.updatedAt) }}</time>
           </div>
           <div class="current-progress__values">
-            <span :data-health="latestProgress.healthStatus">{{ healthLabel(latestProgress.healthStatus) }}</span>
-            <strong>{{ latestProgress.progress == null ? '本月未更新' : `${latestProgress.progress}%` }}</strong>
+            <span v-if="latestProgress.healthStatus || latestProgress.source === 'monthly_self_evaluation'" :data-health="latestProgress.healthStatus">{{ healthLabel(latestProgress.healthStatus) }}</span>
+            <strong v-if="goalTrackingCompletion(latestProgress) != null">{{ goalTrackingCompletion(latestProgress) }}%</strong>
+            <span v-if="goalTrackingActualTarget(latestProgress)">{{ goalTrackingActualTarget(latestProgress) }}<template v-if="(goalTrackingCompletion(latestProgress) ?? 0) > 100"> · 超额完成</template></span>
           </div>
           <p>{{ latestProgress.content || '未填写描述' }}</p>
         </div>
@@ -344,7 +345,7 @@ function formatBusinessPeriod(periodKey?: string | null) {
             </label>
             <div v-else><span>本次归属</span><strong>{{ selectedPeriodLabel }}</strong></div>
             <p v-if="selectedProgress">
-              当前记录：{{ healthLabel(selectedProgress.healthStatus) }} · {{ selectedProgress.progress ?? 0 }}%，来自
+              当前记录：{{ selectedProgress.healthStatus ? healthLabel(selectedProgress.healthStatus) : '已更新' }}<template v-if="goalTrackingCompletion(selectedProgress) != null"> · {{ goalTrackingCompletion(selectedProgress) }}%</template>，来自
               {{ formatBusinessPeriod(selectedProgress.businessPeriodKey) }}{{ progressSourceLabel(selectedProgress) }}
             </p>
             <p v-else>本期尚无进展记录</p>
@@ -397,8 +398,9 @@ function formatBusinessPeriod(periodKey?: string | null) {
                   <span class="goal-progress-timeline__source">{{ progressSourceLabel(progress) }}</span>
                 </div>
                 <div class="goal-progress-timeline__tags">
-                  <span :data-health="progress.healthStatus">{{ healthLabel(progress.healthStatus) }}</span>
-                  <span>{{ progress.progress == null ? '本月未更新' : `${progress.progress}%` }}</span>
+                  <span v-if="progress.healthStatus || progress.source === 'monthly_self_evaluation'" :data-health="progress.healthStatus">{{ healthLabel(progress.healthStatus) }}</span>
+                  <span v-if="goalTrackingCompletion(progress) != null">{{ goalTrackingCompletion(progress) }}%</span>
+                  <span v-if="goalTrackingActualTarget(progress)">{{ goalTrackingActualTarget(progress) }}<template v-if="(goalTrackingCompletion(progress) ?? 0) > 100"> · 超额完成</template></span>
                 </div>
                 <p>{{ progress.content || progress.title || '未填写描述' }}</p>
                 <div v-if="progress.attachments?.length" class="goal-progress-timeline__files">

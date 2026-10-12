@@ -1365,6 +1365,11 @@ model IndicatorProgressUpdate {
   periodReviewRevisionId String?                  @map("period_review_revision_id") @db.Uuid
   progress               Int?                     @db.SmallInt
   healthStatus           IndicatorProgressHealth? @map("health_status")
+  actualValue            Decimal?                 @map("actual_value") @db.Decimal(10, 2)
+  targetValueSnapshot    Decimal?                 @map("target_value_snapshot") @db.Decimal(10, 2)
+  unitSnapshot           String?                  @map("unit_snapshot") @db.VarChar(30)
+  aiAssisted             Boolean                  @default(false) @map("ai_assisted")
+  aiDraftId              String?                  @unique @map("ai_draft_id") @db.Uuid
   content                String                   @db.Text
   attachments            Json                     @default("[]") @db.JsonB
   createdBy              String                   @map("created_by") @db.Uuid

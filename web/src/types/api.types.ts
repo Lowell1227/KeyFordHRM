@@ -2144,6 +2144,10 @@ export interface GoalTrackingLatestProgress {
   title?: string;
   content?: string;
   progress: number | null;
+  actualValue?: number | null;
+  targetValueSnapshot?: number | null;
+  unitSnapshot?: string | null;
+  completionPercent?: number | null;
   healthStatus?: GoalTrackingHealthStatus | null;
   attachments?: Attachment[];
   createdBy?: string;
@@ -2183,7 +2187,7 @@ export interface GoalTrackingItem {
   cycleName: string | null;
   priority: number;
   status: ObjectiveStatus;
-  progress: number;
+  progress: number | null;
   weight: number | null;
   latestProgress: GoalTrackingLatestProgress | null;
   latestSelfEvaluation: GoalTrackingSelfEvaluationResult | null;

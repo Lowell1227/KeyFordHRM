@@ -5,6 +5,8 @@ import {
   GOAL_TRACKING_COLUMNS,
   formatGoalTrackingCycleName,
   goalTrackingStatus,
+  goalTrackingCompletion,
+  goalTrackingActualTarget,
   parseVisibleColumns,
   type GoalTrackingColumn,
   type GoalTrackingPerson,
@@ -178,7 +180,7 @@ function handleCycleChange(event: Event) {
           >
             <span class="tracking-indicators__latest">
               {{ item.latestProgress
-                ? `${item.latestProgress.content || item.latestProgress.title || '已更新进展'} · ${item.latestProgress.progress}%`
+                ? `${item.latestProgress.content || item.latestProgress.title || '已更新进展'}${goalTrackingCompletion(item.latestProgress) == null ? '' : ` · ${goalTrackingCompletion(item.latestProgress)}%`}`
                 : '暂无进展' }}
             </span>
           </div>
@@ -190,7 +192,8 @@ function handleCycleChange(event: Event) {
             }) }}</span>
           </div>
           <div v-if="visibleColumns.includes('progress')" class="goal-indicator-cell" data-label="进展" role="cell" aria-label="进展">
-            <span>{{ item.progress }}%</span>
+            <span v-if="item.progress != null">{{ item.latestProgress ? goalTrackingCompletion(item.latestProgress) : item.progress }}%</span>
+            <small v-if="item.latestProgress && goalTrackingActualTarget(item.latestProgress)">{{ goalTrackingActualTarget(item.latestProgress) }}<template v-if="(goalTrackingCompletion(item.latestProgress) ?? 0) > 100"> · 超额完成</template></small>
           </div>
           <div v-if="visibleColumns.includes('weight')" class="goal-indicator-cell" data-label="权重" role="cell" aria-label="权重">
             <span>{{ item.weight === null ? '--' : `${item.weight}%` }}</span>

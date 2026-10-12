@@ -25,6 +25,14 @@ test('目标确认后该环节显示已完成，但不提前开放自评', () =>
   expect(TASK_STATUS_STAGE.goal_confirmed).not.toBe('self-eval');
 });
 
+test('定性进展不从空百分比推断未开始，历史数值状态保持一致', () => {
+  expect(goalTrackingStatus({ progress: null })).toBe('已更新');
+  expect(goalTrackingStatus({ progress: null, healthStatus: 'blocked' })).toBe('已阻塞');
+  expect(goalTrackingStatus({ progress: 0 })).toBe('未开始');
+  expect(goalTrackingStatus({ progress: 60 })).toBe('进行中');
+  expect(goalTrackingStatus({ progress: 100 })).toBe('已完成');
+});
+
 function makeCycle(
   id: string,
   name: string,

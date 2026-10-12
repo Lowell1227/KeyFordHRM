@@ -349,6 +349,10 @@ describe('ObjectivesService visibility helpers', () => {
           id: 'progress-1',
           content: '首轮方案已经完成评审',
           progress: 45,
+          actualValue: null,
+          targetValueSnapshot: null,
+          unitSnapshot: null,
+          completionPercent: 45,
           healthStatus: 'on_track',
           createdBy: 'manager-1',
           creatorName: 'Manager',
@@ -1013,6 +1017,98 @@ describe('ObjectivesService visibility helpers', () => {
       progress: 45,
       creatorName: viewer.name,
     }));
+  });
+
+  describe('AI progress values', () => {
+    const task = {
+      id: 'task-1', employeeId: viewer.id, status: 'goal_confirmed', isExempt: false,
+      participantDisposition: 'active', indicatorConfirmedAt: new Date('2026-07-02'),
+      closedAt: null, publishedAt: null, selfEvalSubmittedAt: null, periods: [],
+      employee: { id: viewer.id, name: viewer.name },
+      cycle: { id: 'cycle-1', name: 'Q3', workflowVersion: 2, openedAt: new Date('2026-07-01'), closedAt: null, publishedAt: null },
+    };
+    const indicator = {
+      id: 'indicator-1', taskId: task.id, name: '客户拜访', targetValue: new Prisma.Decimal(10), unit: '家',
+      actualValue: null, weight: new Prisma.Decimal(1), dimensionWeight: new Prisma.Decimal(1),
+      sortOrder: 0, task, objectiveAlignments: [], progressUpdates: [],
+    };
+
+    beforeEach(() => {
+      prisma.indicatorInstance.findUnique.mockResolvedValue(indicator);
+      prisma.indicatorProgressUpdate.findMany.mockResolvedValue([]);
+      prisma.indicatorProgressUpdate.create.mockImplementation(async ({ data }) => ({
+        ...data, id: 'progress-ai', createdAt: new Date('2026-09-03T08:00:00Z'),
+        period: null, periodReviewRevisionId: null, creator: { id: viewer.id, name: viewer.name },
+      }));
+      prisma.auditLog.findMany.mockResolvedValue([]);
+    });
+
+    it('preserves legacy DTO while serializing qualitative and 120 percent AI progress', async () => {
+      const result: any = await service.updateIndicatorProgress(indicator.id, {
+        progress: 3, healthStatus: 'on_track', actualValue: '12', content: '完成12家',
+        targetValueSnapshot: '999', completionPercent: 3,
+      } as any, viewer);
+      expect(result.completionPercent).toBe(120);
+      expect(result.progress).toBe(100);
+      expect(result.actualValue).toBe(12);
+      expect(result.targetValueSnapshot).toBe(10);
+      expect(result.unitSnapshot).toBe('家');
+      expect(indicator.actualValue).toBeNull();
+      const qualitative: any = await service.updateIndicatorProgress(indicator.id, {
+        progress: null, healthStatus: null, actualValue: null, content: '方案已评审',
+      } as any, viewer);
+      expect(qualitative.progress).toBeNull();
+      expect(qualitative.completionPercent).toBeNull();
+      expect(qualitative.healthStatus).toBeNull();
+      const records = [qualitative, result].map(record => ({ ...record,
+        createdAt: record.updatedAt, creator: { id: viewer.id, name: viewer.name },
+        actualValue: record.actualValue == null ? null : new Prisma.Decimal(record.actualValue),
+        targetValueSnapshot: record.targetValueSnapshot == null ? null : new Prisma.Decimal(record.targetValueSnapshot),
+      }));
+      prisma.indicatorInstance.findFirst.mockResolvedValue({ ...indicator, progressUpdates: records });
+      const detail = await service.findTrackingIndicator(indicator.id, viewer);
+      expect(detail.actualValue).toBeNull();
+      expect(detail.progressUpdates.map((record: any) => record.completionPercent)).toEqual([null, 120]);
+      prisma.assessmentTask.findUnique.mockResolvedValue({ ...task, indicatorInstances: [{ ...indicator, progressUpdates: [records[0]] }] });
+      const list = await service.findTracking({ ownerId: viewer.id, cycleId: 'cycle-1' }, viewer);
+      expect(list.items[0].progress).toBeNull();
+      expect((list.items[0].latestProgress as any)?.completionPercent).toBeNull();
+    });
+
+    it.each(['-1', 'NaN', 'Infinity', '1.234', '100000000', '1e2', ''])('rejects invalid actual value %s before writing', async actualValue => {
+      await expect(service.updateIndicatorProgress(indicator.id, {
+        progress: null, healthStatus: null, actualValue, content: '已完成',
+      } as any, viewer)).rejects.toBeInstanceOf(BadRequestException);
+      expect(prisma.indicatorProgressUpdate.create).not.toHaveBeenCalled();
+    });
+
+    it('does not trust a suggested percent when the confirmed actual is absent', async () => {
+      const result: any = await service.updateIndicatorProgress(indicator.id, {
+        progress: 99, healthStatus: null, actualValue: null, content: '方案已评审',
+      } as any, viewer);
+      expect(result.progress).toBeNull();
+      expect(result.completionPercent).toBeNull();
+    });
+
+    it('uses the locked current target rather than the earlier baseline', async () => {
+      prisma.indicatorInstance.findUnique.mockResolvedValueOnce(indicator)
+        .mockResolvedValueOnce({ ...indicator, targetValue: new Prisma.Decimal(20), unit: '次' });
+      const result: any = await service.updateIndicatorProgress(indicator.id, {
+        progress: null, healthStatus: null, actualValue: '12', content: '已完成',
+      } as any, viewer);
+      expect(result.completionPercent).toBe(60);
+      expect(result.targetValueSnapshot).toBe(20);
+      expect(result.unitSnapshot).toBe('次');
+    });
+
+    it.each([null, new Prisma.Decimal(0), new Prisma.Decimal(-1)])('does not invent completion without a positive target %s', async targetValue => {
+      prisma.indicatorInstance.findUnique.mockResolvedValue({ ...indicator, targetValue });
+      const result: any = await service.updateIndicatorProgress(indicator.id, {
+        progress: null, healthStatus: null, actualValue: '12', content: '已完成',
+      } as any, viewer);
+      expect(result.progress).toBeNull();
+      expect(result.completionPercent).toBeNull();
+    });
   });
 
   it('rejects another progress update after the current month self evaluation is submitted early', async () => {
