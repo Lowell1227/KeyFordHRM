@@ -1090,6 +1090,14 @@ describe('ObjectivesService visibility helpers', () => {
       expect(result.completionPercent).toBeNull();
     });
 
+    it('discards a suggested percent for AI progress with omitted actual value', async () => {
+      const result = await service.updateIndicatorProgress(indicator.id, {
+        aiAssisted: true, progress: 99, healthStatus: null, content: '方案已评审',
+      }, viewer);
+      expect(result.progress).toBeNull();
+      expect(result.completionPercent).toBeNull();
+    });
+
     it('uses the locked current target rather than the earlier baseline', async () => {
       prisma.indicatorInstance.findUnique.mockResolvedValueOnce(indicator)
         .mockResolvedValueOnce({ ...indicator, targetValue: new Prisma.Decimal(20), unit: '次' });

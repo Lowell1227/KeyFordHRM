@@ -1082,7 +1082,7 @@ export class ObjectivesService {
         WHERE "id" = ${indicatorId}::uuid
         FOR UPDATE
       `;
-      let progress = input.actualValue !== undefined ? null : input.progress;
+      let progress = input.aiAssisted || input.actualValue !== undefined ? null : input.progress;
       let actualValue: Prisma.Decimal | null = null;
       let targetValueSnapshot: Prisma.Decimal | null = null;
       let unitSnapshot: string | null = null;
