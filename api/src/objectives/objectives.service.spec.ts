@@ -6,6 +6,133 @@ import { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ObjectivesService } from './objectives.service';
 
+describe('ObjectivesService bot goal access', () => {
+  const viewer: AuthUser = { id: 'me', name: 'Me', sysRole: SysRole.system_admin, deptId: null, isAssessorOnly: false, canViewAll: true };
+  const cycle = { id: 'cycle', workflowVersion: 2, openedAt: new Date('2026-09-01'), closedAt: null, publishedAt: null };
+  const month = {
+    id: 'oct', periodType: 'monthly', periodKey: '2026-10', sequence: 2,
+    periodStart: new Date('2026-10-01'), periodEnd: new Date('2026-10-31'),
+    status: 'self_eval', employeeSubmittedAt: null, managerSubmittedAt: null, lockedAt: null,
+    indicatorVersion: { items: [{ sourceInstanceId: 'goal' }] },
+  };
+  const task = {
+    id: 'task', employeeId: 'me', isExempt: false, participantDisposition: 'active',
+    indicatorConfirmedAt: new Date('2026-09-01'), closedAt: null, publishedAt: null,
+    cycle, periods: [month],
+    indicatorInstances: [{ id: 'goal', name: 'Visits', targetValue: new Prisma.Decimal(20), unit: '家', taskId: 'task', actualValue: 99 }],
+  };
+  function setup(override = {}) {
+    const prisma = {
+      assessmentCycle: { findMany: jest.fn().mockResolvedValue([cycle]) },
+      assessmentTask: { findMany: jest.fn().mockResolvedValue([{ ...task, ...override }]) },
+    };
+    return { prisma, service: new ObjectivesService(prisma as any, {} as any) };
+  }
+  beforeEach(() => jest.useFakeTimers().setSystemTime(new Date('2026-10-12T04:00:00Z')));
+  afterEach(() => jest.useRealTimers());
+
+  it('distinguishes no active cycle from no participation', async () => {
+    const { service, prisma } = setup();
+    prisma.assessmentCycle.findMany.mockResolvedValue([]);
+    expect(await service.findBotGoalAccess(viewer)).toMatchObject({ kind: 'no_cycle', message: expect.any(String) });
+    expect(prisma.assessmentTask.findMany).not.toHaveBeenCalled();
+    prisma.assessmentCycle.findMany.mockResolvedValue([cycle]);
+    prisma.assessmentTask.findMany.mockResolvedValue([]);
+    expect(await service.findBotGoalAccess(viewer)).toEqual({ kind: 'not_participant', message: '你当前没有可更新的绩效目标。如果你认为自己应参加本期考核，请联系绩效管理员核对参与范围。' });
+  });
+
+  it.each([{ employeeId: 'foreign' }, { isExempt: true }, { participantDisposition: 'cycle_exempt' }])('never exposes foreign or excluded goals even for administrators: %j', async (override) => {
+    const { service } = setup(override);
+    expect(await service.findBotGoalAccess(viewer)).toMatchObject({ kind: 'not_participant' });
+  });
+
+  it.each([
+    [{ indicatorConfirmedAt: null }, 'awaiting_goal_approval'],
+    [{ periods: [{ ...month, lockedAt: new Date() }] }, 'month_locked'],
+    [{ periods: [{ ...month, employeeSubmittedAt: new Date() }] }, 'self_eval_submitted'],
+    [{ periods: [{ ...month, employeeSubmittedAt: new Date(), lockedAt: new Date() }], indicatorConfirmedAt: null }, 'self_eval_submitted'],
+    [{ periods: [{ ...month, managerSubmittedAt: new Date() }] }, 'month_locked'],
+    [{ periods: [{ ...month, status: 'no_result' }] }, 'month_locked'],
+    [{ publishedAt: new Date() }, 'month_locked'],
+    [{ closedAt: new Date() }, 'month_locked'],
+  ])('classifies blocked task state: %j', async (override, kind) => {
+    const { service } = setup(override);
+    expect(await service.findBotGoalAccess(viewer)).toMatchObject({ kind, message: expect.any(String) });
+  });
+
+  it('returns only necessary goal fields and explicitly scopes database queries to self', async () => {
+    const { service, prisma } = setup();
+    expect(await service.findBotGoalAccess(viewer)).toEqual({ kind: 'ready', goals: [
+      { id: 'goal', title: 'Visits', targetValue: '20', unit: '家', periodId: 'oct', periodKey: '2026-10' },
+    ] });
+    expect(prisma.assessmentCycle.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {
+      workflowVersion: 2, openedAt: { not: null }, publishedAt: null, closedAt: null,
+      status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
+    } }));
+    expect(prisma.assessmentTask.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { employeeId: 'me', cycleId: { in: ['cycle'] } } }));
+  });
+
+  it('preserves all writable prior/current month candidates without selecting one', async () => {
+    const { service } = setup({ periods: [
+      { ...month, id: 'sep', periodKey: '2026-09', sequence: 1, periodStart: new Date('2026-09-01'), periodEnd: new Date('2026-09-30') }, month,
+      { ...month, id: 'nov', periodKey: '2026-11', sequence: 3, periodStart: new Date('2026-11-01'), periodEnd: new Date('2026-11-30') },
+    ] });
+    expect(await service.findBotGoalAccess(viewer)).toEqual({ kind: 'ready', goals: [
+      { id: 'goal', title: 'Visits', targetValue: '20', unit: '家', periodId: 'sep', periodKey: '2026-09' },
+      { id: 'goal', title: 'Visits', targetValue: '20', unit: '家', periodId: 'oct', periodKey: '2026-10' },
+    ] });
+  });
+
+  it('omits indicators absent from the month snapshot', async () => {
+    const { service } = setup({ periods: [{ ...month, indicatorVersion: { items: [] } }] });
+    expect(await service.findBotGoalAccess(viewer)).toMatchObject({ kind: 'month_locked' });
+  });
+
+  it('keeps candidates from every eligible cycle rather than selecting the newest cycle', async () => {
+    const { service, prisma } = setup();
+    prisma.assessmentTask.findMany.mockResolvedValue([
+      task,
+      { ...task, id: 'old-task', cycle: { ...cycle, openedAt: new Date('2026-08-01') },
+        indicatorInstances: [{ ...task.indicatorInstances[0], id: 'older-goal' }],
+        periods: [{ ...month, id: 'older-month', indicatorVersion: { items: [{ sourceInstanceId: 'older-goal' }] } }],
+      },
+    ]);
+    expect(await service.findBotGoalAccess(viewer)).toEqual({ kind: 'ready', goals: [
+      { id: 'goal', title: 'Visits', targetValue: '20', unit: '家', periodId: 'oct', periodKey: '2026-10' },
+      { id: 'older-goal', title: 'Visits', targetValue: '20', unit: '家', periodId: 'older-month', periodKey: '2026-10' },
+    ] });
+  });
+
+  it('does not expose a future month when it is the only period', async () => {
+    const { service } = setup({ periods: [{ ...month, id: 'nov', periodKey: '2026-11', periodStart: new Date('2026-11-01') }] });
+    expect(await service.findBotGoalAccess(viewer)).toMatchObject({ kind: 'month_locked' });
+  });
+
+  it('keeps periodless tasks compatible with existing writes', async () => {
+    const { service } = setup({ periods: [], indicatorInstances: [{ ...task.indicatorInstances[0], targetValue: null, unit: null }] });
+    expect(await service.findBotGoalAccess(viewer)).toEqual({ kind: 'ready', goals: [
+      { id: 'goal', title: 'Visits', targetValue: null, unit: null, periodId: null, periodKey: null },
+    ] });
+  });
+
+  it('uses the recent cycle blocked state rather than an old submitted cycle', async () => {
+    const { service, prisma } = setup();
+    prisma.assessmentTask.findMany.mockResolvedValue([
+      { ...task, indicatorConfirmedAt: null },
+      { ...task, id: 'old-task', cycle: { ...cycle, openedAt: new Date('2026-08-01') }, periods: [{ ...month, employeeSubmittedAt: new Date() }] },
+    ]);
+    expect(await service.findBotGoalAccess(viewer)).toMatchObject({ kind: 'awaiting_goal_approval' });
+  });
+
+  it('reports the latest relevant period rather than any old submitted month', async () => {
+    const { service } = setup({ periods: [
+      { ...month, id: 'sep', periodKey: '2026-09', sequence: 1, employeeSubmittedAt: new Date() },
+      { ...month, lockedAt: new Date() },
+    ] });
+    expect(await service.findBotGoalAccess(viewer)).toMatchObject({ kind: 'month_locked' });
+  });
+});
+
 describe('ObjectivesService visibility helpers', () => {
   let service: ObjectivesService;
   let prisma: {

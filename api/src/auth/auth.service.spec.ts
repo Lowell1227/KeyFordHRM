@@ -9,6 +9,31 @@ import * as bcrypt from 'bcrypt';
 
 jest.mock('bcrypt', () => ({ compare: jest.fn(), hash: jest.fn() }));
 
+describe('AuthService reusable eligibility', () => {
+  it.each([null, { employeeStatus: 'resigned' }])('rejects non-current employment without issuing a token: %j', async (record) => {
+    const { service, prisma, jwt } = createService(false);
+    prisma.employmentRecord.findFirst.mockResolvedValue(record);
+    await expect(service.assertLoginEligibility(eligibleUser as any)).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(jwt.signAsync).not.toHaveBeenCalled();
+    expect(prisma.employmentRecord.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ userId: eligibleUser.id, AND: expect.any(Array) }),
+      orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }, { id: 'desc' }],
+    }));
+  });
+
+  it.each(['active', 'probation'])('admits current %s employment', async (employeeStatus) => {
+    const { service, prisma } = createService(false);
+    prisma.employmentRecord.findFirst.mockResolvedValue({ employeeStatus });
+    await expect(service.assertLoginEligibility(eligibleUser as any)).resolves.toBeUndefined();
+  });
+
+  it.each([{ status: 'resigned' }, { archivedAt: new Date() }, { deletedAt: new Date() }])('rejects unusable employee accounts: %j', async (override) => {
+    const { service, prisma } = createService(false);
+    await expect(service.assertLoginEligibility({ ...eligibleUser, ...override } as any)).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(prisma.employmentRecord.findFirst).not.toHaveBeenCalled();
+  });
+});
+
 const eligibleUser = {
   id: 'test-manager-id',
   employeeNo: 'MGR001',

@@ -20,6 +20,7 @@ import { PrismaService } from '@/prisma/prisma.service';
 import { DataScopeService } from '@/common/services/data-scope.service';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
+import { BotGoalAccess, BotGoalCandidate } from './bot-goal-access.types';
 import { paginated, Paginated } from '@/common/dto/pagination.dto';
 import { CreateObjectiveDto } from './dto/create-objective.dto';
 import { UpdateObjectiveDto } from './dto/update-objective.dto';
@@ -1391,6 +1392,74 @@ export class ObjectivesService {
       createdAt: indicator.createdAt,
       updatedAt: indicator.updatedAt,
     };
+  }
+
+  async findBotGoalAccess(viewer: AuthUser): Promise<BotGoalAccess> {
+    const cycles = await this.prisma.assessmentCycle.findMany({
+      where: {
+        workflowVersion: 2, openedAt: { not: null }, publishedAt: null, closedAt: null,
+        status: { notIn: ['draft', 'scheduled', 'launch_blocked'] },
+      },
+      select: { id: true },
+    });
+    if (!cycles.length) return { kind: 'no_cycle', message: '当前没有进行中的考核周期，请等待绩效管理员启动考核。' };
+    const tasks = await this.prisma.assessmentTask.findMany({
+      where: { employeeId: viewer.id, cycleId: { in: cycles.map(cycle => cycle.id) } },
+      orderBy: [{ cycle: { openedAt: 'desc' } }, { id: 'asc' }],
+      select: {
+        employeeId: true, isExempt: true, participantDisposition: true, indicatorConfirmedAt: true,
+        closedAt: true, publishedAt: true,
+        cycle: { select: { workflowVersion: true, openedAt: true, publishedAt: true, closedAt: true } },
+        periods: {
+          orderBy: { sequence: 'asc' },
+          select: {
+            id: true, periodType: true, periodKey: true, periodStart: true, periodEnd: true,
+            status: true, employeeSubmittedAt: true, managerSubmittedAt: true, lockedAt: true,
+            indicatorVersion: { select: { items: { select: { sourceInstanceId: true } } } },
+          },
+        },
+        indicatorInstances: {
+          orderBy: { sortOrder: 'asc' },
+          select: { id: true, name: true, targetValue: true, unit: true },
+        },
+      },
+    });
+    const participating = tasks.filter(task => task.employeeId === viewer.id && !task.isExempt && task.participantDisposition === 'active');
+    if (!participating.length) return {
+      kind: 'not_participant',
+      message: '你当前没有可更新的绩效目标。如果你认为自己应参加本期考核，请联系绩效管理员核对参与范围。',
+    };
+    const goals: BotGoalCandidate[] = [];
+    for (const task of participating) {
+      const monthlyPeriods = task.periods.filter(isMonthlyProgressPeriod);
+      const periods = monthlyPeriods.length ? monthlyPeriods : [currentGoalTrackingPeriod(task.periods)];
+      for (const period of periods) {
+        for (const indicator of task.indicatorInstances) {
+          if (!this.canSubmitActiveProgress(task, viewer, period, indicator.id)) continue;
+          goals.push({
+            id: indicator.id, title: indicator.name, targetValue: indicator.targetValue?.toString() ?? null,
+            unit: indicator.unit, periodId: period && isMonthlyProgressPeriod(period) ? period.id ?? null : null,
+            periodKey: period?.periodKey ?? null,
+          });
+        }
+      }
+    }
+    if (goals.length) return { kind: 'ready', goals };
+
+    const recentTask = participating[0];
+    const today = shanghaiDateKey(new Date());
+    const recentPeriod = [...recentTask.periods].reverse().find(period => period.periodStart.toISOString().slice(0, 10) <= today);
+    if (recentPeriod?.employeeSubmittedAt) return {
+      kind: 'self_eval_submitted', message: '最近考核月份的自评已提交，不能再更新该月份的进展，请到 HRM 查看月度评价。',
+    };
+    if (recentTask.closedAt || recentTask.publishedAt || recentPeriod?.lockedAt || recentPeriod?.managerSubmittedAt
+      || (recentPeriod && ['completed', 'no_result'].includes(recentPeriod.status))) return {
+      kind: 'month_locked', message: '最近考核月份已锁定，不能更新进展，请联系绩效管理员核对月份状态。',
+    };
+    if (!recentTask.indicatorConfirmedAt || !recentTask.indicatorInstances.length) return {
+      kind: 'awaiting_goal_approval', message: '你的绩效目标尚未审核通过，请先在 HRM 完成目标制定与审核。',
+    };
+    return { kind: 'month_locked', message: '当前没有可更新的考核月份，请到 HRM 查看月份开放状态及目标范围。' };
   }
 
   private canSubmitActiveProgress(

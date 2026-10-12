@@ -314,7 +314,7 @@ export class AuthService {
   }
 
   /** 所有真实登录方式都以员工主数据中的当前有效任职作为准入依据。 */
-  private async assertLoginEligibility(user: User, at = new Date()): Promise<void> {
+  async assertLoginEligibility(user: User, at = new Date()): Promise<void> {
     if (user.deletedAt || user.archivedAt || !CURRENT_WORKER_STATUSES.includes(user.status)) {
       throw new UnauthorizedException({ code: ERROR_CODE.UNAUTHORIZED, message: '账号尚未生效或已停用' });
     }
