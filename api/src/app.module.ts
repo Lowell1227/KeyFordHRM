@@ -35,6 +35,7 @@ import { RolesGuard } from './common/guards/roles.guard';
 import { EmployeeArchivesModule } from './employee-archives/employee-archives.module';
 import { PeriodReviewsModule } from './period-reviews/period-reviews.module';
 import { PositionsModule } from './positions/positions.module';
+import { AiProgressModule } from './ai-progress/ai-progress.module';
 
 /**
  * 根模块。
@@ -87,6 +88,7 @@ import { PositionsModule } from './positions/positions.module';
     ActionItemsModule,
     PeriodReviewsModule,
     PositionsModule,
+    AiProgressModule,
   ],
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },

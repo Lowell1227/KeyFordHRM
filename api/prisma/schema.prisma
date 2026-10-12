@@ -1847,6 +1847,20 @@ model Signature {
   @@map("signatures")
 }
 
+model AiProviderCredential {
+  provider      String    @id @db.VarChar(20)
+  encryptedKey  Bytes     @map("encrypted_key")
+  modelId       String    @map("model_id") @db.VarChar(128)
+  region        String?   @db.VarChar(32)
+  workspaceId   String?   @map("workspace_id") @db.VarChar(63)
+  configVersion Int       @default(1) @map("config_version")
+  testedVersion Int?      @map("tested_version")
+  testedAt      DateTime? @map("tested_at") @db.Timestamptz(6)
+  updatedAt     DateTime  @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  @@map("ai_provider_credentials")
+}
+
 model SystemConfig {
   key         String   @id @db.VarChar(100)
   value       Json     @db.JsonB
