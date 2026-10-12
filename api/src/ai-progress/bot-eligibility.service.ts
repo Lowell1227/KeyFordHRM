@@ -4,6 +4,7 @@ import { AccountType, ExternalIdentityProvider, ExternalIdentityStatus } from '@
 import { AuthService } from '../auth/auth.service';
 import { AuthUser } from '../common/types/auth.types';
 import { DingtalkService } from '../dingtalk/dingtalk.service';
+import { DingtalkDeadlineError, withDingtalkDeadline } from '../dingtalk/dingtalk-request-deadline';
 import { BotGoalCandidate } from '../objectives/bot-goal-access.types';
 import { ObjectivesService } from '../objectives/objectives.service';
 import { PrismaService } from '../prisma/prisma.service';
@@ -58,8 +59,11 @@ export class BotEligibilityService {
     if (!binding) {
       let unionId: string;
       try {
-        unionId = (await this.dingtalk.fetchUserDetail(sender.senderStaffId)).unionid;
-      } catch {
+        unionId = (await withDingtalkDeadline(signal =>
+          this.dingtalk.fetchUserDetail(sender.senderStaffId, undefined, signal))).unionid;
+      } catch (error) {
+        if (error instanceof DingtalkDeadlineError)
+          return { kind: 'reply', text: '钉钉身份核对暂不可用，请稍后重试。' };
         return unavailable;
       }
       if (!unionId?.trim()) return unavailable;

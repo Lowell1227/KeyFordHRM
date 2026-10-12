@@ -52,7 +52,9 @@ function formatDate(value: string) {
         </div>
         <div class="progress-reference__status">
           <span :data-health="record.healthStatus">{{ healthLabel(record.healthStatus) }}</span>
-          <b>{{ record.progress == null ? '未填写进度' : `${record.progress}%` }}</b>
+          <span v-if="record.actualValue != null && record.targetValueSnapshot != null">{{ record.actualValue }} / {{ record.targetValueSnapshot }} {{ record.unitSnapshot }}</span>
+          <b>{{ (record.completionPercent ?? record.progress) == null ? '未填写进度' : `${record.completionPercent ?? record.progress}%` }}</b>
+          <span v-if="(record.completionPercent ?? 0) > 100">超额完成</span>
         </div>
         <p>{{ record.content || '未填写描述' }}</p>
       </article>

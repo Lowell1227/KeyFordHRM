@@ -231,7 +231,7 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
       const identity = await this.eligibility.resolveIdentity(sender);
       if (identity.kind !== 'ready')
         throw new ForbiddenException(identity.text);
-      await this.progress.saveDraft(
+      const saved = await this.progress.saveDraft(
         body.outTrackId,
         identity.viewer.id,
         sender.conversationId,
@@ -239,15 +239,11 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
       result = {
         cardUpdateOptions: { updateCardDataByKey: true },
         cardData: {
-          cardParamMap: {
-            state: '已保存',
-            canSave: 'false',
-            editLabel: '查看进展',
-          },
+          cardParamMap: this.cards.savedCardParams(draft, saved),
         },
       };
       try {
-        await this.cards.markSaved(body.outTrackId);
+        await this.cards.markSaved(body.outTrackId, saved);
       } catch {
         this.logger.warn('进展已保存，钉钉卡片刷新暂未完成');
       }

@@ -1530,6 +1530,10 @@ export interface PeriodReviewProgressReference {
   id: string;
   periodKey: string;
   progress: number | null;
+  actualValue?: number | null;
+  targetValueSnapshot?: number | null;
+  unitSnapshot?: string | null;
+  completionPercent?: number | null;
   healthStatus: GoalTrackingHealthStatus | null;
   content: string;
   attachments: unknown[];

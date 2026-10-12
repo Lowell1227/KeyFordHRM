@@ -20,7 +20,7 @@ const references: PeriodReviewProgressReference[] = [
 
 interface WriteRequest { endpoint: string; method: string; body: unknown }
 
-async function mockManagerReview(page: Page, options: { empty?: boolean; readonly?: boolean; cycle?: boolean } = {}) {
+async function mockManagerReview(page: Page, options: { empty?: boolean; readonly?: boolean; cycle?: boolean; records?: PeriodReviewProgressReference[] } = {}) {
   const writes: WriteRequest[] = [];
   const period: PeriodReviewDetail['period'] = {
     id: periodId, taskId, periodKey: options.cycle ? '2026-Q3' : '2026-08', periodType: options.cycle ? 'cycle' : 'month',
@@ -46,7 +46,7 @@ async function mockManagerReview(page: Page, options: { empty?: boolean; readonl
       progress: 75, healthStatus: 'on_track', employeeComment: employeeDescription, selfScore: 91,
       actualValueText: '已完成核心交付', problemReason: null, nextMonthPlan: null, supportNeeded: null, attachments: [],
       managerScore: 86, managerComment: '已保存的上级评价依据', latestProgress: null,
-      progressReferences: options.empty ? [] : references, alignedObjectives: [], history: [],
+      progressReferences: options.empty ? [] : options.records ?? references, alignedObjectives: [], history: [],
     }],
   };
   await page.addInitScript(() => {
@@ -100,6 +100,26 @@ async function screenshot(page: Page, name: string) {
 }
 
 for (const width of [1440, 390]) {
+  test(`manager references preserve 120 percent and qualitative null ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    const records = [{ ...references[2], progress: 100, actualValue: 12, targetValueSnapshot: 10, unitSnapshot: '家', completionPercent: 120 },
+      { ...references[0], progress: null, actualValue: null, targetValueSnapshot: null, unitSnapshot: null, completionPercent: null }];
+    const writes = await mockManagerReview(page, { records });
+    const reference = page.getByTestId('monthly-progress-reference');
+    await reference.getByText('本月跟进记录（2条）', { exact: true }).click();
+    const latest = reference.getByTestId('progress-reference-august-latest');
+    await expect(latest).toContainText('12 / 10 家');
+    await expect(latest).toContainText('120%');
+    await expect(latest).toContainText('超额完成');
+    await reference.getByText('本期其他记录（1）', { exact: true }).click();
+    const qualitative = reference.getByTestId('progress-reference-august-middle');
+    await expect(qualitative).toContainText('未填写进度');
+    await expect(qualitative).not.toContainText('%');
+    await page.screenshot({ path: testInfo.outputPath(`manager-completion-${width}.png`), fullPage: true });
+    expect(writes).toHaveLength(0);
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+  });
+
   test(`主管展开多条跟进参考保留评分草稿及保存协议 ${width}px`, async ({ page }) => {
     await page.setViewportSize({ width, height: 900 });
     const writes = await mockManagerReview(page);

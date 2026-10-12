@@ -560,6 +560,28 @@ describe('DingTalk Stream progress adapter', () => {
     expect(JSON.stringify(sdk.send.mock.calls)).toContain('已保存');
     expect(JSON.stringify(sdk.send.mock.calls)).not.toContain('sensitive');
   });
+  it('uses the saved goal and month even if the callback loaded the draft before a page correction', () => {
+    const otherGoal = { ...goal, id: 'other-goal', title: '更正后的目标', periodId: 'sep', periodKey: '2026-09' };
+    const params = presenter.previewCard({ ...preview, goals: [goal, otherGoal], state: 'saved',
+      saved: { indicatorId: 'other-goal', periodId: 'sep', actualValue: null, targetValueSnapshot: null,
+        unitSnapshot: null, completionPercent: null, content: '已修正', healthStatus: 'completed' } as any }).params;
+    expect(params).toMatchObject({ goal: '更正后的目标', month: '2026-09', content: '已修正', actualValue: '', targetValue: '', completion: '' });
+  });
+  it('projects persisted values into both saved previews and old-card callbacks', async () => {
+    const saved = { id: 'saved', content: '核对后实际9家', actualValue: 9, targetValueSnapshot: 10,
+      unitSnapshot: '家', completionPercent: 90, progress: 90, healthStatus: 'at_risk' };
+    (progress as any).objectives.findAiDraftProgress.mockResolvedValue(saved);
+    const expected = { state: '已保存', content: '核对后实际9家', actualValue: '9', targetValue: '10', unit: '家',
+      healthStatus: '有风险', completion: '90%', canSave: 'false', editLabel: '查看进展' };
+    expect(presenter.previewCard({ ...preview, state: 'saved', saved }).params).toMatchObject(expected);
+    await startGateway();
+    await receive(callback());
+    expect(progressUpdate.create).not.toHaveBeenCalled();
+    expect(requests[0].body.cardData.cardParamMap).toMatchObject(expected);
+    expect(sdk.send).toHaveBeenLastCalledWith('delivery', expect.objectContaining({
+      cardData: { cardParamMap: expect.objectContaining(expected) },
+    }));
+  });
   it('repeated callback after refresh failure returns the committed row without creating another', async () => {
     let saved: any = null;
     (progress as any).objectives.findAiDraftProgress.mockImplementation(
@@ -609,6 +631,53 @@ describe('DingTalk Stream progress adapter', () => {
     await presenter.sendPreview(preview, sender);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+  it('bounds a stalled token lookup, releases its claim, and suppresses a late send', async () => {
+    jest.useFakeTimers();
+    const tokens = (presenter as any).dingtalk;
+    let finish!: (value: string) => void;
+    tokens.getAccessToken.mockImplementationOnce(() => new Promise<string>(resolve => { finish = resolve; }));
+    let outcome: unknown;
+    const pending = presenter.sendPreview(preview, sender).catch(error => { outcome = error; });
+    await jest.advanceTimersByTimeAsync(10001);
+    expect(outcome).toBeInstanceOf(Error);
+    expect((outcome as Error).message).toContain('暂未送达');
+    expect(drafts.releaseDelivery).toHaveBeenCalledTimes(1);
+    await pending;
+    await presenter.sendPreview(preview, sender);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    finish('late-sensitive-token');
+    await flush();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('includes token time and response body time in one card deadline', async () => {
+    jest.useFakeTimers();
+    const tokens = (presenter as any).dingtalk;
+    tokens.getAccessToken.mockImplementationOnce(() => new Promise(resolve => setTimeout(() => resolve('synthetic-token'), 6000)));
+    let requestSignal: AbortSignal | undefined;
+    fetchMock.mockImplementationOnce(async (_url, init) => {
+      requestSignal = init?.signal as AbortSignal;
+      return { ok: true, json: () => new Promise(() => undefined) } as any;
+    });
+    let outcome: unknown;
+    const pending = presenter.sendPreview(preview, sender).catch(error => { outcome = error; });
+    await jest.advanceTimersByTimeAsync(10001);
+    expect(outcome).toBeInstanceOf(Error);
+    expect(requestSignal?.aborted).toBe(true);
+    expect(drafts.releaseDelivery).toHaveBeenCalledTimes(1);
+    await pending;
+  });
+  it('ACKs a committed callback even when card token lookup stalls', async () => {
+    jest.useFakeTimers();
+    await startGateway();
+    (presenter as any).dingtalk.getAccessToken.mockImplementationOnce(() => new Promise(() => undefined));
+    const pending = receive(callback());
+    await jest.advanceTimersByTimeAsync(10001);
+    expect(sdk.send).toHaveBeenLastCalledWith('delivery', expect.objectContaining({
+      cardData: { cardParamMap: expect.objectContaining({ state: '已保存' }) },
+    }));
+    expect(progressUpdate.create).toHaveBeenCalledTimes(1);
+    await pending;
+  });
   it('rejects actual nested delivery failure, releases its claim and allows retry', async () => {
     fetchMock.mockResolvedValueOnce({
       ok: true,
@@ -629,7 +698,7 @@ describe('DingTalk Stream progress adapter', () => {
       ok: true,
       json: async () => ({ success: true, result: false }),
     } as Response);
-    await expect(presenter.markSaved(draftId)).rejects.toThrow('暂未送达');
+    await expect(presenter.markSaved(draftId, { id: 'saved' } as any)).rejects.toThrow('暂未送达');
   });
   it.each([
     'flowControlledStaffIdList',

@@ -74,7 +74,8 @@ export class DingtalkService {
    * 获取 access_token，带内存缓存（有效期 7200s，保留 60s 余量）。
    * 内存缓存进程重启后丢失，可接受。
    */
-  async getAccessToken(): Promise<string> {
+  async getAccessToken(signal?: AbortSignal): Promise<string> {
+    signal?.throwIfAborted();
     this.assertConfigured();
 
     const cacheKey = `${this.appKey}:token`;
@@ -87,13 +88,14 @@ export class DingtalkService {
     url.searchParams.set('appkey', this.appKey!);
     url.searchParams.set('appsecret', this.appSecret!);
 
-    const res = await fetch(url.toString());
+    const res = await fetch(url.toString(), { signal });
     const data = (await res.json()) as {
       errcode?: number;
       errmsg?: string;
       access_token?: string;
       expires_in?: number;
     };
+    signal?.throwIfAborted();
 
     if (!res.ok || data.errcode !== 0 || !data.access_token) {
       throw new Error(`钉钉获取 access_token 失败: ${data.errmsg ?? res.statusText} (${data.errcode ?? res.status})`);
@@ -216,12 +218,14 @@ export class DingtalkService {
   }
 
   /** 获取单个用户详情，用于补齐成员列表未返回的直属主管等字段。 */
-  async fetchUserDetail(userId: string, token?: string): Promise<DingtalkUser> {
-    const accessToken = token ?? (await this.getAccessToken());
+  async fetchUserDetail(userId: string, token?: string, signal?: AbortSignal): Promise<DingtalkUser> {
+    const accessToken = token ?? (await this.getAccessToken(signal));
+    signal?.throwIfAborted();
     const res = await fetch(`https://oapi.dingtalk.com/topapi/v2/user/get?access_token=${accessToken}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ userid: userId, language: 'zh_CN' }),
+      signal,
     });
 
     const data = (await res.json()) as {
@@ -229,6 +233,7 @@ export class DingtalkService {
       errmsg?: string;
       result?: DingtalkUser & { unionId?: string };
     };
+    signal?.throwIfAborted();
 
     if (!res.ok || data.errcode !== 0) {
       throw new Error(`钉钉获取用户详情失败: ${data.errmsg ?? res.statusText} (${data.errcode ?? res.status})`);

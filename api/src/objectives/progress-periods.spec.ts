@@ -104,6 +104,7 @@ describe('employee progress business period selection', () => {
   it('preserves ordinary progress during a whole-cycle period', async () => {
     task.periods = [{ ...period(), id: 'cycle-period', periodType: 'cycle', periodKey: 'cycle',
       periodStart: new Date('2026-07-01'), periodEnd: new Date('2026-09-30') }];
+    storedPeriod = task.periods[0];
     const { periodId, ...dailyInput } = input;
     await expect(service.updateIndicatorProgress('indicator-1', dailyInput, viewer)).resolves.toMatchObject({ businessPeriodKey: '2026-09' });
     expect(db.indicatorProgressUpdate.create.mock.calls[0][0].data).not.toHaveProperty('periodId');

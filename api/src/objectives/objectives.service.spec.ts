@@ -116,6 +116,7 @@ describe('ObjectivesService confirmed AI drafts', () => {
       prisma.assessmentCycle = { findMany: jest.fn().mockResolvedValue([{ id: 'cycle' }]) };
       prisma.assessmentTask = { findMany: jest.fn().mockResolvedValue([currentTask]) };
       prisma.indicatorInstance.findUnique.mockResolvedValue({ ...indicator, task: currentTask });
+      prisma.assessmentPeriod = { findUnique: jest.fn().mockResolvedValue(period) };
 
       expect(await service.findBotGoalAccess(viewer)).toEqual({ kind: 'ready', goals: [{
         id: 'goal', title: '客户拜访', targetValue: '10', unit: '家', periodId: null, periodKey: '2026-Q4',
@@ -129,6 +130,24 @@ describe('ObjectivesService confirmed AI drafts', () => {
         .mockResolvedValue({ ...indicator, task: { ...currentTask, periods: [{ ...period, employeeSubmittedAt: new Date() }] } });
       await expect(save('draft-2')).rejects.toBeInstanceOf(ConflictException);
       expect(await prisma.indicatorProgressUpdate.count()).toBe(1);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('locks and rechecks a cycle period before saving despite its null progress period ID', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-12T04:00:00Z'));
+    try {
+      const { prisma, indicator, save, rows, audits } = setup();
+      const period = { id: 'quarter', taskId: task.id, periodType: 'cycle', periodKey: '2026-Q4',
+        periodStart: new Date('2026-10-01'), periodEnd: new Date('2026-12-31'), status: 'self_eval',
+        employeeSubmittedAt: null, managerSubmittedAt: null, lockedAt: null,
+        indicatorVersion: { items: [{ sourceInstanceId: indicator.id }] } };
+      prisma.indicatorInstance.findUnique.mockResolvedValue({ ...indicator, task: { ...task, periods: [period] } });
+      prisma.assessmentPeriod = { findUnique: jest.fn().mockResolvedValue({ ...period, employeeSubmittedAt: new Date() }) };
+      await expect(save()).rejects.toBeInstanceOf(ConflictException);
+      expect(rows).toHaveLength(0);
+      expect(audits).toHaveLength(0);
+      expect(prisma.$queryRaw.mock.calls[0][0].join('')).toContain('assessment_periods');
+      expect(prisma.$queryRaw.mock.calls[0][1]).toBe('quarter');
     } finally { jest.useRealTimers(); }
   });
 

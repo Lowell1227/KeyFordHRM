@@ -9,7 +9,8 @@ import { AuthService } from '../auth/auth.service';
 import { AiProgressController } from './ai-progress.controller';
 import { AiProgressService } from './ai-progress.service';
 import { ProgressDraftStore } from './progress-draft.store';
-import { BotSender } from './bot-eligibility.service';
+import { BotEligibilityService, BotSender } from './bot-eligibility.service';
+import { DingtalkCardPresenter } from '../dingtalk/dingtalk-card.presenter';
 
 jest.mock('ioredis', () => ({ __esModule: true, default: jest.fn() }));
 import Redis from 'ioredis';
@@ -61,6 +62,28 @@ function setup() {
 }
 
 describe('AiProgressService draft confirmation', () => {
+  it('releases the draft lock after a pending owner-detail revalidation times out without a save', async () => {
+    jest.useFakeTimers();
+    try {
+      const { service, objectives, redis } = setup();
+      const { draftId }: any = await service.prepare('完成12家', sender);
+      const eligibility = new BotEligibilityService(
+        { externalIdentityBinding: { findFirst: async () => null } } as any,
+        new ConfigService({ DINGTALK_CORP_ID: 'corp' }),
+        { getPublicState: async () => ({ botEnabled: true, allowlist: ['owner'] }) } as any,
+        {} as any, { fetchUserDetail: () => new Promise(() => undefined) } as any, objectives as any,
+      );
+      (service as any).eligibility = eligibility;
+      let outcome: unknown;
+      const pending = service.saveDraft(draftId, 'owner').catch(error => { outcome = error; });
+      await jest.advanceTimersByTimeAsync(10001);
+      expect(outcome).toBeInstanceOf(ForbiddenException);
+      expect((outcome as Error).message).toContain('稍后重试');
+      expect(await redis.get(`ai-progress:lock:${draftId}`)).toBeNull();
+      expect(objectives.updateIndicatorProgress).not.toHaveBeenCalled();
+      await pending;
+    } finally { jest.useRealTimers(); }
+  });
   it('prepares only Redis state for 24 hours and deduplicates deliveries without another provider call', async () => {
     const { service, store, entries, provider, objectives, redis } = setup();
     const preview: any = await service.prepare('完成12家', sender);
@@ -196,6 +219,7 @@ describe('Authenticated draft HTTP boundary', () => {
       controllers: [AiProgressController],
       providers: [
         { provide: AiProgressService, useValue: fixture.service },
+        { provide: DingtalkCardPresenter, useValue: { markSaved: jest.fn() } },
         { provide: APP_GUARD, useClass: JwtAuthGuard },
         { provide: JwtService, useValue: { verifyAsync: async (token: string) => ({ sub: token }) } },
         { provide: AuthService, useValue: { validateSession: async (payload: any) => ({ id: payload.sub }) } },

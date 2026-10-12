@@ -1,3 +1,22 @@
+import type { Prisma } from '@prisma/client';
+
+export function progressValues(record: {
+  progress: number | null;
+  actualValue?: Prisma.Decimal | null;
+  targetValueSnapshot?: Prisma.Decimal | null;
+  unitSnapshot?: string | null;
+}) {
+  const completionPercent = record.actualValue != null && record.targetValueSnapshot?.gt(0)
+    ? record.actualValue.div(record.targetValueSnapshot).mul(100).toDecimalPlaces(2).toNumber()
+    : record.progress;
+  return {
+    actualValue: record.actualValue?.toNumber() ?? null,
+    targetValueSnapshot: record.targetValueSnapshot?.toNumber() ?? null,
+    unitSnapshot: record.unitSnapshot ?? null,
+    completionPercent,
+  };
+}
+
 export interface GoalProgressRecord {
   id: string;
   createdAt: Date;

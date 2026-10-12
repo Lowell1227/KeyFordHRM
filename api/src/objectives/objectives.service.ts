@@ -34,6 +34,7 @@ import {
   currentGoalProgress,
   progressBusinessPeriodKey,
   progressSource,
+  progressValues,
   sortGoalProgress,
   type GoalProgressSource,
 } from './goal-tracking-progress';
@@ -147,23 +148,6 @@ export interface UpdateIndicatorProgressInput {
   actualValue?: string | null;
   content: string;
   expectedLatestUpdateAt?: string | null;
-}
-
-function progressValues(record: {
-  progress: number | null;
-  actualValue?: Prisma.Decimal | null;
-  targetValueSnapshot?: Prisma.Decimal | null;
-  unitSnapshot?: string | null;
-}) {
-  const completionPercent = record.actualValue != null && record.targetValueSnapshot?.gt(0)
-    ? record.actualValue.div(record.targetValueSnapshot).mul(100).toDecimalPlaces(2).toNumber()
-    : record.progress;
-  return {
-    actualValue: record.actualValue?.toNumber() ?? null,
-    targetValueSnapshot: record.targetValueSnapshot?.toNumber() ?? null,
-    unitSnapshot: record.unitSnapshot ?? null,
-    completionPercent,
-  };
 }
 
 export interface IndicatorAlignmentTaskContext {
@@ -1062,14 +1046,15 @@ export class ObjectivesService {
 
     try {
       return await this.prisma.$transaction(async (tx) => {
-        // Match monthly submission's lock order: period first, then indicator.
+        // Submission locks the assessment period even when cycle progress stores a null period ID.
+        const assessmentPeriodId = selectedPeriod?.id ?? null;
         const progressPeriodId = selectedPeriod?.id && isMonthlyProgressPeriod(selectedPeriod) ? selectedPeriod.id : null;
-        if (progressPeriodId) {
+        if (assessmentPeriodId) {
           await tx.$queryRaw<Array<{ id: string }>>`
-            SELECT "id" FROM "assessment_periods" WHERE "id" = ${progressPeriodId}::uuid FOR UPDATE
+            SELECT "id" FROM "assessment_periods" WHERE "id" = ${assessmentPeriodId}::uuid FOR UPDATE
           `;
           const freshPeriod = await tx.assessmentPeriod.findUnique({
-            where: { id: progressPeriodId },
+            where: { id: assessmentPeriodId },
             select: {
               id: true, taskId: true, periodType: true, periodKey: true, periodStart: true, periodEnd: true,
               status: true, employeeSubmittedAt: true, managerSubmittedAt: true, lockedAt: true,
@@ -1079,7 +1064,7 @@ export class ObjectivesService {
             },
           });
           const reason = freshPeriod ? progressPeriodBlockReason(freshPeriod, indicatorId) : null;
-          if (!freshPeriod || freshPeriod.taskId !== indicator.task.id || !isMonthlyProgressPeriod(freshPeriod) || reason) {
+          if (!freshPeriod || freshPeriod.taskId !== indicator.task.id || freshPeriod.periodType !== selectedPeriod!.periodType || reason) {
             throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: reason ?? '该月份已不可更新，请刷新后重试' });
           }
         }
@@ -1096,10 +1081,11 @@ export class ObjectivesService {
           });
           if (existing) return this.aiDraftResult(existing, viewer.id, indicatorId);
           const fresh = await tx.indicatorInstance.findUnique(indicatorQuery);
-          const freshSelectedPeriod = progressPeriodId
-            ? fresh?.task.periods.find(period => period.id === progressPeriodId) ?? null
+          const freshSelectedPeriod = assessmentPeriodId
+            ? fresh?.task.periods.find(period => period.id === assessmentPeriodId) ?? null
             : currentGoalTrackingPeriod(fresh?.task.periods);
-          if (!fresh || (!progressPeriodId && freshSelectedPeriod && isMonthlyProgressPeriod(freshSelectedPeriod))
+          if (!fresh || (assessmentPeriodId && !freshSelectedPeriod)
+            || (!progressPeriodId && freshSelectedPeriod && isMonthlyProgressPeriod(freshSelectedPeriod))
             || !this.canSubmitActiveProgress(fresh.task, viewer, freshSelectedPeriod, indicatorId)) {
             throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '目标或考核月份已不可更新，请刷新后重试' });
           }
@@ -1187,6 +1173,8 @@ export class ObjectivesService {
         });
         return {
           id: created.id,
+          indicatorId: created.indicatorInstanceId,
+          periodId: created.periodId,
           progress: created.progress,
           ...progressValues(created),
           healthStatus: created.healthStatus,
@@ -1225,7 +1213,8 @@ export class ObjectivesService {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '只能查看本人保存的进展' });
     }
     return {
-      id: row.id, progress: row.progress, ...progressValues(row), healthStatus: row.healthStatus,
+      id: row.id, indicatorId: row.indicatorInstanceId, periodId: row.periodId,
+      progress: row.progress, ...progressValues(row), healthStatus: row.healthStatus,
       content: row.content, attachments: Array.isArray(row.attachments) ? row.attachments : [],
       createdBy: row.creator.id, creatorName: row.creator.name, updatedAt: row.createdAt,
       businessPeriodKey: progressBusinessPeriodKey(row), source: progressSource(row),

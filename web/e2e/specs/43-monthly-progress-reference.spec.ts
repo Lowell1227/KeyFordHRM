@@ -86,6 +86,24 @@ async function mockApp(page: Page, options: { review?: boolean; readonly?: boole
 }
 
 for (const width of [1440, 390]) {
+  test(`employee references preserve 120 percent and qualitative null ${width}px`, async ({ page }, testInfo) => {
+    await page.setViewportSize({ width, height: 900 });
+    const records = [{ ...references[0], progress: 100, actualValue: 12, targetValueSnapshot: 10, unitSnapshot: '家', completionPercent: 120 },
+      { ...references[1], progress: null as number | null, actualValue: null, targetValueSnapshot: null, unitSnapshot: null, completionPercent: null }];
+    await mockApp(page, { review: true, records: records as typeof references });
+    const reference = page.getByTestId('monthly-progress-reference');
+    const latest = reference.getByTestId('progress-reference-july-latest');
+    await expect(latest).toContainText('12 / 10 家');
+    await expect(latest).toContainText('120%');
+    await expect(latest).toContainText('超额完成');
+    await reference.getByText('本期其他记录（1）', { exact: true }).click();
+    const qualitative = reference.getByTestId('progress-reference-july-older');
+    await expect(qualitative).toContainText('未填写进度');
+    await expect(qualitative).not.toContainText('%');
+    await page.screenshot({ path: testInfo.outputPath(`employee-completion-${width}.png`), fullPage: true });
+    expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(width);
+  });
+
   test(`历史月份补录保留各月草稿并且不替换九月当前进展 ${width}px`, async ({ page }, testInfo) => {
     await page.setViewportSize({ width, height: 900 });
     const writes = await mockApp(page);

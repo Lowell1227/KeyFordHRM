@@ -55,6 +55,8 @@ async function setup(page: Page, role = 'system_admin', options: { stale?: boole
       else if (path.endsWith('/allowlist')) state.allowlist = body.userIds;
       return send(state);
     }
+    if (path === '/users' && new URL(request.url()).searchParams.get('status') === 'probation')
+      return send({ items: [{ id: '22222222-2222-4222-8222-222222222222', name: '试用期员工', employeeNo: 'TEST002', status: 'probation' }], total: 1 });
     if (path === '/users') return send({ items: [{ id: '11111111-1111-4111-8111-111111111111',
       name: '试运行员工的长姓名', employeeNo: 'TEST001', deptName: '长部门名称用于窄屏验证', status: 'active' }], total: 1, page: 1, pageSize: 100 });
     if (path.endsWith('/unread-count')) return send(0);
@@ -62,6 +64,17 @@ async function setup(page: Page, role = 'system_admin', options: { stale?: boole
   });
   return { state, writes, reads: () => configReads };
 }
+
+test('eligible probation employee can be selected for the pilot', async ({ page }) => {
+  const { writes } = await setup(page);
+  await page.goto('/system/ai-services');
+  await page.getByRole('combobox', { name: '试运行人员', exact: true }).fill('试用期');
+  await page.getByRole('option', { name: /试用期员工/ }).click();
+  await page.keyboard.press('Escape');
+  await page.getByRole('button', { name: '保存试运行名单' }).click();
+  await expect(page.getByText('试运行名单已保存', { exact: true })).toBeVisible();
+  expect(writes.find(write => write.path.endsWith('/allowlist'))?.body).toEqual({ userIds: ['22222222-2222-4222-8222-222222222222'] });
+});
 
 for (const [width, height] of [[1440, 900], [1024, 768], [390, 844]]) {
   test(`${width}px admin configures but cannot read stored key`, async ({ page }, testInfo) => {

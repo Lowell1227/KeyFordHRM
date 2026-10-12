@@ -30,6 +30,20 @@ function setup() {
 }
 
 describe('BotEligibilityService', () => {
+  it('bounds a pending identity detail lookup and returns safe temporary feedback', async () => {
+    jest.useFakeTimers();
+    try {
+      const { service, prisma, dingtalk, objectives } = setup();
+      prisma.externalIdentityBinding.findFirst.mockResolvedValue(null);
+      dingtalk.fetchUserDetail.mockImplementationOnce(() => new Promise(() => undefined));
+      let result: unknown;
+      const pending = service.resolve(sender).then(value => { result = value; });
+      await jest.advanceTimersByTimeAsync(10001);
+      expect(result).toMatchObject({ kind: 'reply', text: expect.stringContaining('稍后重试') });
+      expect(objectives.findBotGoalAccess).not.toHaveBeenCalled();
+      await pending;
+    } finally { jest.useRealTimers(); }
+  });
   it('revalidates identity for a saved retry without requiring a writable month', async () => {
     const { service, prisma, objectives } = setup();
     expect(await (service as any).resolveIdentity(sender)).toMatchObject({ kind: 'ready', viewer: { id: user.id } });
@@ -106,7 +120,7 @@ describe('BotEligibilityService', () => {
     const { service, prisma, dingtalk, objectives } = setup();
     prisma.externalIdentityBinding.findFirst.mockResolvedValueOnce(null);
     await service.resolve(sender);
-    expect(dingtalk.fetchUserDetail).toHaveBeenCalledWith('staff');
+    expect(dingtalk.fetchUserDetail).toHaveBeenCalledWith('staff', undefined, expect.any(AbortSignal));
     expect(prisma.externalIdentityBinding.findFirst).toHaveBeenNthCalledWith(2, {
       where: { provider: 'dingtalk', externalUnionId: 'union', endedAt: null }, include: { user: true },
     });

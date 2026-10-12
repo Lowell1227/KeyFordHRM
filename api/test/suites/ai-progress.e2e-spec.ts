@@ -368,6 +368,12 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
     expect(provider.recognize).toHaveBeenCalledTimes(1);
     const saved = await http(data.employee).get(`/ai-progress/drafts/${draftId}`).expect(200);
     expect(saved.body.data).toMatchObject({ state: 'saved', canSave: false, saved: { id: rows[0].id } });
+    for (const user of [data.employee, manager]) {
+      const review = await http(user).get(`/assessment-periods/${data.period.id}/review`).expect(200);
+      expect(review.body.data.indicators[0].progressReferences[0]).toMatchObject({ progress: 100,
+        actualValue: 12, targetValueSnapshot: 10, unitSnapshot: '家', completionPercent: 120 });
+      expect(review.body.data.indicators[0]).toMatchObject({ selfScore: null, managerScore: null });
+    }
   });
 
   it('keeps qualitative completion empty', async () => {
@@ -380,6 +386,53 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
     expect(detail).toMatchObject({ actualValue: null, completionPercent: null, targetValueSnapshot: null, healthStatus: 'completed' });
     const tracking = await http(data.employee).get(`/objectives/tracking/indicators/${data.indicator.id}`).expect(200);
     expect(tracking.body.data.progressUpdates[0]).toMatchObject({ id: detail.id, progress: null, completionPercent: null });
+    for (const user of [data.employee, manager]) {
+      const review = await http(user).get(`/assessment-periods/${data.period.id}/review`).expect(200);
+      expect(review.body.data.indicators[0].progressReferences[0]).toMatchObject({ progress: null,
+        actualValue: null, targetValueSnapshot: null, unitSnapshot: null, completionPercent: null });
+    }
+  });
+
+  it('refreshes an old card from the saved page correction and never creates a second record', async () => {
+    const data = await fixture();
+    const draftId = await prepare(data);
+    expect(outbound[0].body.cardData.cardParamMap).toMatchObject({ actualValue: '12', completion: '120%（超额完成）' });
+    await http(data.employee).patch(`/ai-progress/drafts/${draftId}`).send({ content: '核对后实际9家', actualValue: '9', healthStatus: 'at_risk' }).expect(200);
+    const saved = await http(data.employee).post(`/ai-progress/drafts/${draftId}/save`).expect(201);
+    const expected = { state: '已保存', content: '核对后实际9家', actualValue: '9', targetValue: '10', unit: '家',
+      healthStatus: '有风险', completion: '90%', canSave: 'false', editLabel: '查看进展' };
+    expect(outbound.filter(item => item.url.endsWith('/card/instances')).at(-1)?.body.cardData.cardParamMap).toMatchObject(expected);
+    const click = saveCard(draftId, data.staffId);
+    await receive(click);
+    expect(stream.send).toHaveBeenLastCalledWith(click.headers.messageId, expect.objectContaining({
+      cardData: { cardParamMap: expect.objectContaining(expected) },
+    }));
+    expect(outbound.filter(item => item.url.endsWith('/card/instances')).at(-1)?.body.cardData.cardParamMap).toMatchObject(expected);
+    expect(await prisma.indicatorProgressUpdate.findMany({ where: { aiDraftId: draftId }, select: { id: true } })).toEqual([{ id: saved.body.data.id }]);
+  });
+
+  it('keeps an HTTP save committed when the card update fails', async () => {
+    const data = await fixture();
+    const draftId = await prepare(data);
+    fetchMock.mockRejectedValueOnce(new Error('synthetic transport unavailable'));
+    const saved = await http(data.employee).post(`/ai-progress/drafts/${draftId}/save`).expect(201);
+    expect(await prisma.indicatorProgressUpdate.count({ where: { aiDraftId: draftId } })).toBe(1);
+    const retried = await http(data.employee).post(`/ai-progress/drafts/${draftId}/save`).expect(201);
+    expect(retried.body.data.id).toBe(saved.body.data.id);
+  });
+
+  it('releases the real Redis draft lock when owner-detail lookup stalls and permits a safe retry', async () => {
+    const data = await fixture();
+    const draftId = await prepare(data);
+    await prisma.externalIdentityBinding.updateMany({ where: { userId: data.employee.id }, data: { externalUserId: null } });
+    dingtalk.fetchUserDetail.mockImplementationOnce(() => new Promise(() => undefined));
+    const failed = await http(data.employee).post(`/ai-progress/drafts/${draftId}/save`).expect(403);
+    expect(JSON.stringify(failed.body)).toContain('稍后重试');
+    expect(await redis.get(`ai-progress:lock:${draftId}`)).toBeNull();
+    expect(await prisma.indicatorProgressUpdate.count({ where: { aiDraftId: draftId } })).toBe(0);
+    await prisma.externalIdentityBinding.updateMany({ where: { userId: data.employee.id }, data: { externalUserId: data.staffId } });
+    await http(data.employee).post(`/ai-progress/drafts/${draftId}/save`).expect(201);
+    expect(await prisma.indicatorProgressUpdate.count({ where: { aiDraftId: draftId } })).toBe(1);
   });
 
   it('restricts drafts to their owner while the frozen manager can read saved monthly references', async () => {
@@ -433,8 +486,13 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
     throw new Error('Expected a real PostgreSQL wait on the suite-owned period row');
   }
 
-  it('rejects a confirmed save after waiting for a concurrent month lock', async () => {
+  it.each([
+    { periodType: 'month', submit: false, label: 'month lock' },
+    { periodType: 'month', submit: true, label: 'month submission' },
+    { periodType: 'cycle', submit: true, label: 'cycle submission' },
+  ] as const)('rejects a confirmed save after waiting for concurrent $label', async ({ periodType, submit }) => {
     const data = await fixture();
+    await prisma.assessmentPeriod.update({ where: { id: data.period.id }, data: { periodType } });
     const draftId = await prepare(data);
     const locked = signal();
     const release = signal();
@@ -444,7 +502,9 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
       pid = (await tx.$queryRaw<Array<{ pid: number }>>`SELECT pg_backend_pid() AS pid`)[0].pid;
       locked.resolve();
       await release.promise;
-      await tx.assessmentPeriod.update({ where: { id: data.period.id }, data: { lockedAt: new Date() } });
+      await tx.assessmentPeriod.update({ where: { id: data.period.id }, data: submit
+        ? { employeeSubmittedAt: new Date(), status: 'manager_scoring' }
+        : { lockedAt: new Date() } });
     }, { timeout: 10000 });
     const lockOutcome = locking.catch(error => { locked.resolve(); throw error; });
     let save: Promise<request.Response> | undefined;

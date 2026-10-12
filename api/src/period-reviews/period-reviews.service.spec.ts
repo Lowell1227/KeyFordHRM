@@ -187,6 +187,27 @@ describe('PeriodReviewsService', () => {
     });
   });
 
+  it.each([employee, manager])('preserves quantitative and qualitative daily references for $name without changing review scores', async viewer => {
+    prisma.indicatorInstance.findMany.mockResolvedValue([{
+      id: '12121212-1212-4212-8212-121212121212', objectiveAlignments: [],
+      progressUpdates: [
+        { id: 'quantitative', periodId: period.id, period: { periodKey: period.periodKey }, progress: 100,
+          actualValue: new Prisma.Decimal(12), targetValueSnapshot: new Prisma.Decimal(10), unitSnapshot: '家',
+          healthStatus: 'completed', content: '已拜访12家', attachments: [], createdAt: new Date('2027-01-20T08:00:00Z') },
+        { id: 'qualitative', periodId: period.id, period: { periodKey: period.periodKey }, progress: null,
+          actualValue: null, targetValueSnapshot: null, unitSnapshot: null,
+          healthStatus: 'on_track', content: '方案完成', attachments: [], createdAt: new Date('2027-01-19T08:00:00Z') },
+      ],
+    }]);
+    const result = (await service.getReview(period.id, viewer)).indicators[0];
+    expect(result.progressReferences).toEqual([
+      expect.objectContaining({ id: 'quantitative', progress: 100, actualValue: 12, targetValueSnapshot: 10, unitSnapshot: '家', completionPercent: 120 }),
+      expect.objectContaining({ id: 'qualitative', progress: null, actualValue: null, targetValueSnapshot: null, unitSnapshot: null, completionPercent: null }),
+    ]);
+    expect(result.latestProgress).toMatchObject({ actualValue: 12, targetValueSnapshot: 10, completionPercent: 120 });
+    expect(result).toMatchObject({ progress: 70, selfScore: 82, managerScore: null });
+  });
+
   it('returns the page header, frozen goal reference, current draft, history, and alignments', async () => {
     const result = await service.getReview(period.id, employee);
 

@@ -70,10 +70,11 @@ async function searchUsers(keyword: string) {
   usersLoading.value = true;
   usersError.value = '';
   try {
-    const result = await usersApi.findAll({ keyword, page: 1, pageSize: 100, status: 'active' });
+    const results = await Promise.all((['active', 'probation'] as const).map(status =>
+      usersApi.findAll({ keyword, page: 1, pageSize: 100, status })));
     if (version !== searchVersion) return;
     const chosen = users.value.filter((user) => userIds.value.includes(user.id));
-    users.value = [...chosen, ...result.items.filter((user) => !chosen.some((item) => item.id === user.id))];
+    users.value = [...new Map([...chosen, ...results.flatMap(result => result.items)].map(user => [user.id, user])).values()];
   } catch {
     if (version === searchVersion) usersError.value = '人员读取失败，请重新输入姓名或工号查询。';
   } finally { if (version === searchVersion) usersLoading.value = false; }

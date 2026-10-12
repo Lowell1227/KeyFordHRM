@@ -24,7 +24,7 @@ import type { SubmitManagerPeriodReviewDto } from './dto/submit-manager-period-r
 import { PeriodAggregationService } from './period-aggregation.service';
 import { FlowService } from '@/tasks/flow.service';
 import { hasHrCapability } from '@/auth/hr-capabilities';
-import { shanghaiMonthKey } from '@/objectives/goal-tracking-progress';
+import { progressValues, shanghaiMonthKey } from '@/objectives/goal-tracking-progress';
 import type { ReopenPeriodReviewDto } from './dto/reopen-period-review.dto';
 import { managerPeriodReviewTitle, periodReviewNoun, periodReviewTitle } from './period-review-labels';
 import type {
@@ -76,6 +76,9 @@ const sourceSelect = {
       periodId: true,
       period: { select: { periodKey: true } },
       progress: true,
+      actualValue: true,
+      targetValueSnapshot: true,
+      unitSnapshot: true,
       healthStatus: true,
       content: true,
       attachments: true,
@@ -191,6 +194,7 @@ export class PeriodReviewsService {
           id: update.id,
           periodKey: update.period?.periodKey ?? shanghaiMonthKey(update.createdAt),
           progress: update.progress,
+          ...progressValues(update),
           healthStatus: update.healthStatus,
           content: update.content,
           attachments: this.jsonArray(update.attachments),
@@ -231,6 +235,7 @@ export class PeriodReviewsService {
           managerComment: review?.managerComment ?? null,
           latestProgress: latest ? {
             progress: latest.progress,
+            ...progressValues(latest),
             healthStatus: latest.healthStatus,
             content: latest.content,
             attachments: this.jsonArray(latest.attachments),

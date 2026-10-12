@@ -3,9 +3,16 @@ import { ConfigService } from '@nestjs/config';
 import { randomUUID } from 'crypto';
 import { AiConfigService } from '../ai-progress/ai-config.service';
 import { BotSender } from '../ai-progress/bot-eligibility.service';
-import { ProgressDraftStore } from '../ai-progress/progress-draft.store';
-import { ProgressPreview } from '../ai-progress/recognition.types';
+import {
+  ProgressDraft,
+  ProgressDraftStore,
+} from '../ai-progress/progress-draft.store';
+import {
+  ProgressPreview,
+  SavedProgress,
+} from '../ai-progress/recognition.types';
 import { DingtalkService } from './dingtalk.service';
+import { withDingtalkDeadline } from './dingtalk-request-deadline';
 
 type DraftPreview = Extract<ProgressPreview, { kind: 'draft' }>;
 
@@ -55,15 +62,25 @@ export class DingtalkCardPresenter {
   }
 
   previewCard(preview: DraftPreview) {
+    const saved = preview.saved;
     const goal = preview.goals.find(
       (item) =>
-        item.id === preview.indicatorId && item.periodId === preview.periodId,
+        item.id === (saved?.indicatorId ?? preview.indicatorId) &&
+        item.periodId === (saved ? (saved.periodId ?? null) : preview.periodId),
     );
     const canSave =
       preview.canSave &&
       !preview.uncertain &&
       !!goal &&
       preview.state === 'pending';
+    const content = saved ? saved.content : preview.content;
+    const actualValue = saved ? saved.actualValue : preview.actualValue;
+    const targetValue = saved ? saved.targetValueSnapshot : preview.targetValue;
+    const unit = saved ? saved.unitSnapshot : preview.unit;
+    const healthStatus = saved ? saved.healthStatus : preview.healthStatus;
+    const completion = saved
+      ? saved.completionPercent
+      : preview.completionPercent;
     return {
       actions: canSave
         ? ['修改', '保存进展']
@@ -74,10 +91,10 @@ export class DingtalkCardPresenter {
         state: preview.state === 'saved' ? '已保存' : '待保存进展',
         goal: goal?.title ?? '请选择目标和月份',
         month: goal?.periodKey ?? '',
-        content: preview.content,
-        actualValue: preview.actualValue ?? '',
-        targetValue: preview.targetValue ?? '',
-        unit: preview.unit ?? '',
+        content,
+        actualValue: actualValue == null ? '' : String(actualValue),
+        targetValue: targetValue == null ? '' : String(targetValue),
+        unit: unit ?? '',
         healthStatus:
           (
             {
@@ -86,13 +103,13 @@ export class DingtalkCardPresenter {
               blocked: '受阻',
               completed: '已完成',
             } as Record<string, string>
-          )[preview.healthStatus ?? ''] ?? '',
+          )[healthStatus ?? ''] ?? '',
         completion:
-          preview.completionPercent === null
+          completion == null
             ? ''
-            : `${preview.completionPercent}%${preview.completionPercent > 100 ? '（超额完成）' : ''}`,
+            : `${completion}%${completion > 100 ? '（超额完成）' : ''}`,
         canSave: String(canSave),
-        editLabel: '修改',
+        editLabel: preview.state === 'saved' ? '查看进展' : '修改',
         saveLabel: '保存进展',
         saveAction: 'save',
         editUrl: `${this.config.get<string>('DINGTALK_BOT_HRM_URL')!.replace(/\/$/, '')}/ai-progress/confirm/${encodeURIComponent(preview.draftId)}`,
@@ -132,16 +149,28 @@ export class DingtalkCardPresenter {
     );
   }
 
-  async markSaved(draftId: string) {
+  savedCardParams(draft: ProgressDraft, saved: SavedProgress) {
+    return this.previewCard({
+      ...draft,
+      kind: 'draft',
+      state: 'saved',
+      canSave: false,
+      saved,
+      targetValue: null,
+      unit: null,
+      completionPercent: null,
+      progress: null,
+    }).params;
+  }
+
+  async markSaved(draftId: string, saved: SavedProgress) {
     if (!(await this.isEnabled())) return;
+    const draft = await this.drafts.get(draftId);
+    if (!draft) return;
     await this.request('/card/instances', 'PUT', {
       outTrackId: draftId,
       cardData: {
-        cardParamMap: {
-          state: '已保存',
-          canSave: 'false',
-          editLabel: '查看进展',
-        },
+        cardParamMap: this.savedCardParams(draft, saved),
       },
       cardUpdateOptions: { updateCardDataByKey: true },
     });
@@ -176,57 +205,61 @@ export class DingtalkCardPresenter {
 
   private async request(path: string, method: string, body: object) {
     try {
-      const token = await this.dingtalk.getAccessToken();
-      const response = await fetch(`https://api.dingtalk.com/v1.0${path}`, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-          'x-acs-dingtalk-access-token': token,
-        },
-        body: JSON.stringify(body),
-        signal: AbortSignal.timeout(10000),
-        redirect: 'error',
-      });
-      const data = (await response.json()) as {
-        success?: boolean;
-        code?: string;
-        result?:
-          | boolean
-          | {
-              outTrackId?: string;
-              deliverResults?: Array<{ success?: boolean }>;
-            };
-        flowControlledStaffIdList?: string[];
-        invalidStaffIdList?: string[];
-        filteredStaffIdList?: string[];
-      };
-      if (
-        !response.ok ||
-        data.success === false ||
-        data.code ||
-        data.flowControlledStaffIdList?.length ||
-        data.invalidStaffIdList?.length ||
-        data.filteredStaffIdList?.length
-      )
-        throw new Error();
-      if (path === '/card/instances/createAndDeliver') {
-        const result = data.result;
+      await withDingtalkDeadline(async (signal) => {
+        const token = await this.dingtalk.getAccessToken(signal);
+        signal.throwIfAborted();
+        const response = await fetch(`https://api.dingtalk.com/v1.0${path}`, {
+          method,
+          headers: {
+            'Content-Type': 'application/json',
+            'x-acs-dingtalk-access-token': token,
+          },
+          body: JSON.stringify(body),
+          signal,
+          redirect: 'error',
+        });
+        const data = (await response.json()) as {
+          success?: boolean;
+          code?: string;
+          result?:
+            | boolean
+            | {
+                outTrackId?: string;
+                deliverResults?: Array<{ success?: boolean }>;
+              };
+          flowControlledStaffIdList?: string[];
+          invalidStaffIdList?: string[];
+          filteredStaffIdList?: string[];
+        };
+        signal.throwIfAborted();
         if (
-          data.success !== true ||
-          !result ||
-          typeof result !== 'object' ||
-          result.outTrackId !== (body as { outTrackId: string }).outTrackId ||
-          !Array.isArray(result.deliverResults) ||
-          result.deliverResults.length !== 1 ||
-          result.deliverResults.some((item) => item.success !== true)
+          !response.ok ||
+          data.success === false ||
+          data.code ||
+          data.flowControlledStaffIdList?.length ||
+          data.invalidStaffIdList?.length ||
+          data.filteredStaffIdList?.length
         )
           throw new Error();
-      } else if (
-        path === '/card/instances' &&
-        (data.success !== true || data.result !== true)
-      ) {
-        throw new Error();
-      }
+        if (path === '/card/instances/createAndDeliver') {
+          const result = data.result;
+          if (
+            data.success !== true ||
+            !result ||
+            typeof result !== 'object' ||
+            result.outTrackId !== (body as { outTrackId: string }).outTrackId ||
+            !Array.isArray(result.deliverResults) ||
+            result.deliverResults.length !== 1 ||
+            result.deliverResults.some((item) => item.success !== true)
+          )
+            throw new Error();
+        } else if (
+          path === '/card/instances' &&
+          (data.success !== true || data.result !== true)
+        ) {
+          throw new Error();
+        }
+      });
     } catch {
       throw new ServiceUnavailableException('钉钉消息暂未送达，请稍后重试');
     }

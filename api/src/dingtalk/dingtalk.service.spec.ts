@@ -53,6 +53,14 @@ describe('DingtalkService', () => {
 
     expect(depts).toEqual([{ dept_id: 1001, name: '项目中心', parent_id: 1 }]);
   });
+  it('propagates a caller deadline to token and user-detail fetches', async () => {
+    const controller = new AbortController();
+    fetchMock.mockResolvedValueOnce(mockJsonResponse({ errcode: 0, access_token: 'synthetic-token', expires_in: 7200 }))
+      .mockResolvedValueOnce(mockJsonResponse({ errcode: 0, result: { userid: 'staff', unionid: 'union', name: 'synthetic' } }));
+    await (service.fetchUserDetail as any)('staff', undefined, controller.signal);
+    expect(fetchMock.mock.calls[0][1]?.signal).toBe(controller.signal);
+    expect(fetchMock.mock.calls[1][1]?.signal).toBe(controller.signal);
+  });
 
   it('fetchUserDetail 应返回用户详情中的直属主管', async () => {
     fetchMock
