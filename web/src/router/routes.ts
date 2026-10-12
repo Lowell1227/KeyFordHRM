@@ -224,6 +224,17 @@ export const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/system/ai-services',
+    name: 'AiServiceConfig',
+    component: () => import('@/views/system/AiServiceConfigView.vue'),
+    meta: {
+      requiresAuth: true,
+      title: 'AI 服务配置',
+      roles: ['system_admin'],
+      navigation: { module: 'system', label: 'AI 服务配置', order: 20 },
+    },
+  },
+  {
     path: '/manager/scoring',
     name: 'ManagerScoring',
     redirect: (to) => ({ path: '/tasks', query: { ...to.query, scope: 'team', stage: 'manager-eval' } }),

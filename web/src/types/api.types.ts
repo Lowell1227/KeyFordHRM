@@ -39,6 +39,42 @@ export interface ApiResponse<T> {
   timestamp: number;
 }
 
+export type AiProvider = 'kimi' | 'deepseek' | 'qwen';
+
+export interface AiProviderSummary {
+  provider: AiProvider;
+  configured: boolean;
+  modelId: string | null;
+  region: string | null;
+  workspaceId: string | null;
+  configVersion: number | null;
+  testedVersion: number | null;
+  testedAt: string | null;
+  tested: boolean;
+  active: boolean;
+}
+
+export interface AiConfigState {
+  encryptionReady: boolean;
+  activeProvider: AiProvider | null;
+  botEnabled: boolean;
+  allowlist: string[];
+  providers: AiProviderSummary[];
+}
+
+export interface SaveAiProviderBody {
+  modelId: string;
+  apiKey?: string;
+  region?: string;
+  workspaceId?: string;
+}
+
+export interface AiProviderTestResult {
+  success: boolean;
+  errorCode: string | null;
+  configVersion: number;
+}
+
 /** 分页响应。 */
 export interface Paginated<T> {
   total: number;
