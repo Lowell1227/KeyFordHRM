@@ -14,14 +14,22 @@ const blocked = ref(false);
 const saved = ref(false);
 const dirty = ref(false);
 const reconcileRequired = ref(false);
+const loadedDraftId = ref('');
+let requestGeneration = 0;
+const currentRequest = (id: string, generation: number) =>
+  String(route.params.draftId) === id && generation === requestGeneration;
 const form = reactive({ selection: '', content: '', actualValue: '', healthStatus: '' as GoalTrackingHealthStatus | '' });
 const goalKey = (goal: AiProgressGoal) => JSON.stringify([goal.id, goal.periodId]);
 const goal = computed(() => draft.value?.goals.find(item => goalKey(item) === form.selection));
 const contentError = computed(() => !form.content.trim() ? '请输入进展说明' : form.content.length > 10000 ? '进展说明最多10000字' : '');
 const actualError = computed(() => form.actualValue && !/^\d{1,8}(\.\d{1,2})?$/.test(form.actualValue)
   ? '实际值须为非负数，最多8位整数和2位小数' : '');
-const canSave = computed(() => !!goal.value && !contentError.value && !actualError.value && !loading.value && !saving.value && !blocked.value && !saved.value);
+const canSave = computed(() => loadedDraftId.value === String(route.params.draftId) && !!goal.value
+  && !contentError.value && !actualError.value && !loading.value && !saving.value && !blocked.value && !saved.value);
+const previewTarget = computed(() => saved.value && draft.value?.saved ? draft.value.saved.targetValueSnapshot : goal.value?.targetValue);
+const previewUnit = computed(() => saved.value && draft.value?.saved ? draft.value.saved.unitSnapshot : goal.value?.unit);
 const completion = computed(() => {
+  if (saved.value && draft.value?.saved) return draft.value.saved.completionPercent ?? null;
   if (!goal.value?.targetValue || Number(goal.value.targetValue) <= 0 || !form.actualValue || actualError.value) return null;
   // Both values have two decimal places; integer cents avoid binary rounding at half-percent hundredths.
   const actualCents = Math.round(Number(form.actualValue) * 100);
@@ -45,50 +53,68 @@ function reportError(reason: unknown, reading = false) {
 }
 
 function applyDraft(result: AiProgressDraft) {
-  draft.value = result; saved.value = result.state === 'saved';
+  draft.value = result; loadedDraftId.value = result.draftId; saved.value = result.state === 'saved';
   // An uncertain model match must be explicitly chosen, including a single preselected indicator.
   const selected = result.goals.find(item => item.id === result.indicatorId && item.periodId === result.periodId);
   form.selection = !result.uncertain && selected ? goalKey(selected) : '';
-  form.content = result.content; form.actualValue = result.actualValue ?? ''; form.healthStatus = result.healthStatus ?? '';
+  const persisted = saved.value ? result.saved : null;
+  form.content = persisted?.content ?? result.content;
+  form.actualValue = persisted ? String(persisted.actualValue ?? '') : result.actualValue ?? '';
+  form.healthStatus = persisted ? persisted.healthStatus ?? '' : result.healthStatus ?? '';
   dirty.value = false; reconcileRequired.value = false;
 }
 
 async function load() {
-  loading.value = true; error.value = ''; blocked.value = false; draft.value = null;
+  const id = String(route.params.draftId);
+  const generation = ++requestGeneration;
+  loading.value = true; error.value = ''; blocked.value = false; draft.value = null; loadedDraftId.value = '';
+  saved.value = false; dirty.value = false; saving.value = false; reconcileRequired.value = false;
   try {
-    applyDraft(await aiProgressApi.getDraft(String(route.params.draftId)));
-  } catch (reason) { reportError(reason, true); }
-  finally { loading.value = false; }
+    const result = await aiProgressApi.getDraft(id);
+    if (!currentRequest(id, generation)) return;
+    if (result.draftId !== id) throw new Error('Draft response does not match the requested draft');
+    applyDraft(result);
+  } catch (reason) { if (currentRequest(id, generation)) reportError(reason, true); }
+  finally { if (currentRequest(id, generation)) loading.value = false; }
 }
 
 async function save() {
   if (!canSave.value || !goal.value) return;
+  const id = loadedDraftId.value;
+  const generation = requestGeneration;
   saving.value = true; error.value = '';
   try {
-    const id = String(route.params.draftId);
     if (reconcileRequired.value) {
       const latest = await aiProgressApi.getDraft(id);
+      if (!currentRequest(id, generation)) return;
+      if (latest.draftId !== id) throw new Error('Draft response does not match the requested draft');
       if (latest.state === 'saved') { applyDraft(latest); return; }
     }
     reconcileRequired.value = true;
     const corrected = await aiProgressApi.updateDraft(id, { indicatorId: goal.value.id, periodId: goal.value.periodId,
       content: form.content, actualValue: form.actualValue || null, healthStatus: form.healthStatus || null });
+    if (!currentRequest(id, generation)) return;
+    if (corrected.draftId !== id) throw new Error('Draft response does not match the requested draft');
     if (!corrected.canSave) {
       error.value = '请重新选择目标与考核月份后保存。';
       form.selection = '';
       return;
     }
-    await aiProgressApi.saveDraft(id);
-    saved.value = true; dirty.value = false;
-  } catch (reason) { reportError(reason); }
-  finally { saving.value = false; }
+    const persisted = await aiProgressApi.saveDraft(id);
+    if (!currentRequest(id, generation)) return;
+    const latest = await aiProgressApi.getDraft(id);
+    if (!currentRequest(id, generation)) return;
+    if (latest.draftId !== id) throw new Error('Draft response does not match the requested draft');
+    applyDraft({ ...latest, state: 'saved', saved: persisted });
+  } catch (reason) { if (currentRequest(id, generation)) reportError(reason); }
+  finally { if (currentRequest(id, generation)) saving.value = false; }
 }
 
 function beforeUnload(event: BeforeUnloadEvent) {
   if (dirty.value && !saved.value) event.preventDefault();
 }
 window.addEventListener('beforeunload', beforeUnload);
-onBeforeUnmount(() => window.removeEventListener('beforeunload', beforeUnload));
+onBeforeUnmount(() => { requestGeneration++; window.removeEventListener('beforeunload', beforeUnload); });
 async function confirmLeave() {
   if (saving.value) return false;
   if (!dirty.value || saved.value) return true;
@@ -128,7 +154,7 @@ watch(() => route.params.draftId, load, { immediate: true });
         <div class="fields">
           <el-form-item label="实际值" :error="actualError">
             <el-input v-model="form.actualValue" aria-label="实际值" inputmode="decimal" placeholder="未提供，可留空" maxlength="11">
-              <template v-if="goal?.unit" #append>{{ goal.unit }}</template>
+              <template v-if="previewUnit" #append>{{ previewUnit }}</template>
             </el-input>
           </el-form-item>
           <el-form-item label="进展状态">
@@ -140,9 +166,9 @@ watch(() => route.params.draftId, load, { immediate: true });
       </el-form>
       <div class="preview" aria-label="完成情况预览" aria-live="polite">
         <template v-if="goal">
-          <span v-if="goal.targetValue !== null">目标值：{{ goal.targetValue }} {{ goal.unit }}</span>
+          <span v-if="previewTarget != null">目标值：{{ previewTarget }} {{ previewUnit }}</span>
           <strong v-if="completion !== null">{{ completion }}%</strong>
-          <span v-else>{{ goal.targetValue === null ? '定性目标，无完成率' : '未提供有效实际值或目标值，暂无完成率' }}</span>
+          <span v-else>{{ previewTarget == null ? '定性目标，无完成率' : '未提供有效实际值或目标值，暂无完成率' }}</span>
         </template>
         <span v-else>选择目标与考核月份后显示完成情况</span>
       </div>

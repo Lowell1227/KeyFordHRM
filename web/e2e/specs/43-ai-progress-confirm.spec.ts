@@ -19,7 +19,17 @@ async function setup(page: Page, options: { qualitative?: boolean; uncertain?: b
     actualValue: options.qualitative ? null : '12', healthStatus: null,
     uncertain: options.uncertain ?? true, canSave: options.uncertain === false,
     targetValue: options.qualitative ? null : '10', unit: options.qualitative ? null : '次',
-    completionPercent: options.qualitative ? null : 120, progress: options.qualitative ? null : 100, saved: null };
+    completionPercent: options.qualitative ? null : 120, progress: options.qualitative ? null : 100,
+    saved: null as Record<string, unknown> | null };
+  const persistedResult = () => {
+    const goal = state.goals.find(item => item.id === state.indicatorId && item.periodId === state.periodId);
+    const percent = goal?.targetValue && state.actualValue !== null ? Number(state.actualValue) / Number(goal.targetValue) * 100 : null;
+    return { id: 'saved-progress', content: state.content, actualValue: state.actualValue === null ? null : Number(state.actualValue),
+      targetValueSnapshot: goal?.targetValue ? Number(goal.targetValue) : null, unitSnapshot: goal?.unit ?? null,
+      completionPercent: percent, progress: percent === null ? null : Math.min(100, Math.round(percent)), healthStatus: state.healthStatus,
+      attachments: [], createdBy: 'employee-1', creatorName: '试运行员工', updatedAt: '2026-10-12T00:00:00Z',
+      businessPeriodKey: goal?.periodKey ?? 'cycle', source: 'active_progress' };
+  };
   const writes: Array<{ method: string; body: unknown }> = [];
   let reads = 0, failed = false;
   if (options.authenticated !== false) await page.addInitScript(() => {
@@ -44,10 +54,10 @@ async function setup(page: Page, options: { qualitative?: boolean; uncertain?: b
       }
       if ((options.saveFails || options.lostSave) && !failed) {
         failed = true;
-        if (options.lostSave) state.state = 'saved';
+        if (options.lostSave) { state.state = 'saved'; state.saved = persistedResult(); }
         return send(null, 503);
       }
-      state.state = 'saved'; return send({ id: 'saved-progress' });
+      state.state = 'saved'; state.saved = persistedResult(); return send(state.saved);
     }
     if (path.endsWith('/unread-count')) return send(0);
     return send([]);
@@ -193,4 +203,72 @@ test('leaving after only selecting a goal protects the correction and never save
   await page.getByRole('button', { name: '离开页面', exact: true }).click();
   await expect(page).toHaveURL(location => location.pathname === '/action-items');
   expect(fixture.writes).toHaveLength(0);
+});
+
+for (const staleStatus of [200, 403, 503]) {
+  test(`late draft A response ${staleStatus} cannot replace or block draft B`, async ({ page }) => {
+    const fixture = await setup(page, { uncertain: false });
+    const secondId = '55555555-5555-4555-8555-555555555555';
+    const secondUrl = `/ai-progress/confirm/${secondId}`;
+    let releaseFirst!: () => void;
+    const firstPending = new Promise<void>(resolve => { releaseFirst = resolve; });
+    let markFirstStarted!: () => void;
+    const firstStarted = new Promise<void>(resolve => { markFirstStarted = resolve; });
+    await page.route('**/ai-progress/drafts/*', async route => {
+      if (route.request().method() !== 'GET') return route.fallback();
+      const first = route.request().url().endsWith(draftId);
+      if (first) { markFirstStarted(); await firstPending; }
+      return route.fulfill({ status: first ? staleStatus : 200, contentType: 'application/json',
+        body: JSON.stringify({ code: !first || staleStatus === 200 ? 0 : staleStatus,
+          data: { ...fixture.state, draftId: first ? draftId : secondId, content: first ? '草稿 A 内容' : '草稿 B 内容' }, message: 'synthetic' }) });
+    });
+    await page.goto(url); await firstStarted;
+    await page.evaluate(async destination => {
+      const modulePath = '/src/router/index.ts';
+      const { default: router } = await import(modulePath);
+      await router.push(destination);
+    }, secondUrl);
+    await expect(page.getByRole('textbox', { name: '进展说明' })).toHaveValue('草稿 B 内容');
+    const firstResponse = page.waitForResponse(response => response.request().method() === 'GET' && response.url().endsWith(draftId));
+    releaseFirst(); await (await firstResponse).finished();
+    await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
+    await expect(page.getByRole('textbox', { name: '进展说明' })).toHaveValue('草稿 B 内容');
+    await expect(page.getByRole('alert')).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '保存进展', exact: true })).toBeEnabled();
+    expect(fixture.writes).toHaveLength(0);
+    fixture.state.draftId = secondId;
+    const patch = page.waitForRequest(request => request.method() === 'PATCH' && request.url().endsWith(secondId));
+    await page.getByRole('button', { name: '保存进展', exact: true }).click();
+    expect((await patch).postDataJSON()).toMatchObject({ content: '草稿 B 内容', indicatorId, periodId: october });
+    await expect(page.getByText('进展已保存', { exact: true })).toBeVisible();
+  });
+}
+
+test('POST success displays the authoritative persisted values instead of local corrections', async ({ page }) => {
+  const fixture = await setup(page, { uncertain: false });
+  const persisted = { id: 'saved-other-tab', content: '另一个页面实际保存的内容', actualValue: 8,
+    targetValueSnapshot: 10, unitSnapshot: '次', completionPercent: 80, progress: 80, healthStatus: 'at_risk',
+    attachments: [], createdBy: 'employee-1', creatorName: '试运行员工', updatedAt: '2026-10-12T00:00:00Z',
+    businessPeriodKey: '2026-10', source: 'active_progress' };
+  let savedResponse = false;
+  await page.route('**/ai-progress/drafts/**', async route => {
+    if (route.request().method() === 'POST') {
+      savedResponse = true;
+      return route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify({ code: 0, data: persisted }) });
+    }
+    if (route.request().method() === 'GET' && savedResponse) {
+      return route.fulfill({ status: 200, contentType: 'application/json',
+        body: JSON.stringify({ code: 0, data: { ...fixture.state, state: 'saved', saved: persisted } }) });
+    }
+    return route.fallback();
+  });
+  await page.goto(url);
+  await page.getByRole('textbox', { name: '进展说明' }).fill('本页未落库的更正内容');
+  await page.getByRole('button', { name: '保存进展', exact: true }).click();
+  await expect(page.getByText('进展已保存', { exact: true })).toBeVisible();
+  await expect(page.getByRole('textbox', { name: '进展说明' })).toHaveValue('另一个页面实际保存的内容');
+  await expect(page.getByRole('textbox', { name: '实际值', exact: true })).toHaveValue('8');
+  await expect(page.getByText('80%', { exact: true })).toBeVisible();
+  await expect(page.getByText('有风险', { exact: true }).first()).toBeVisible();
+  await expect(page.getByRole('button', { name: '保存进展', exact: true })).toBeDisabled();
 });
