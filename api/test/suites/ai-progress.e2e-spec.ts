@@ -349,11 +349,18 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
     expect(await redis.ttl(`ai-progress:draft:${draftId}`)).toBeGreaterThan(86380);
     expect(await redis.ttl(`ai-progress:draft:${draftId}`)).toBeLessThanOrEqual(86400);
     await receive(saveCard(draftId, data.staffId));
+    const cardRows = await prisma.indicatorProgressUpdate.findMany({ where: { aiDraftId: draftId } });
+    expect(cardRows).toHaveLength(1);
+    expect(await prisma.auditLog.count({ where: { entityId: data.indicator.id, action: 'progress_update' } })).toBe(1);
     await receive(saveCard(draftId, data.staffId));
+    expect(await prisma.indicatorProgressUpdate.findMany({ where: { aiDraftId: draftId }, select: { id: true } }))
+      .toEqual([{ id: cardRows[0].id }]);
+    expect(await prisma.auditLog.count({ where: { entityId: data.indicator.id, action: 'progress_update' } })).toBe(1);
     const repeated = await http(data.employee).post(`/ai-progress/drafts/${draftId}/save`).expect(201);
     const rows = await prisma.indicatorProgressUpdate.findMany({ where: { aiDraftId: draftId } });
     expect(rows).toHaveLength(1);
-    expect(repeated.body.data).toMatchObject({ id: rows[0].id, progress: 100, actualValue: 12,
+    expect(rows[0].id).toBe(cardRows[0].id);
+    expect(repeated.body.data).toMatchObject({ id: cardRows[0].id, progress: 100, actualValue: 12,
       targetValueSnapshot: 10, completionPercent: 120, unitSnapshot: '家', content: '已拜访12家', source: 'active_progress' });
     expect(rows[0]).toMatchObject({ aiAssisted: true, createdBy: data.employee.id, periodId: data.period.id, periodReviewRevisionId: null });
     expect(await prisma.auditLog.count({ where: { entityId: data.indicator.id, action: 'progress_update' } })).toBe(1);
@@ -479,10 +486,14 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
       await blockingOutcome;
       await card;
     }
+    const cardRows = await prisma.indicatorProgressUpdate.findMany({ where: { aiDraftId: draftId } });
+    expect(cardRows).toHaveLength(1);
+    expect(await prisma.auditLog.count({ where: { entityId: data.indicator.id, action: 'progress_update' } })).toBe(1);
     const retry = await http(data.employee).post(`/ai-progress/drafts/${draftId}/save`).expect(201);
     const rows = await prisma.indicatorProgressUpdate.findMany({ where: { aiDraftId: draftId } });
     expect(rows).toHaveLength(1);
-    expect(retry.body.data.id).toBe(rows[0].id);
+    expect(rows[0].id).toBe(cardRows[0].id);
+    expect(retry.body.data.id).toBe(cardRows[0].id);
     expect(await prisma.auditLog.count({ where: { entityId: data.indicator.id, action: 'progress_update' } })).toBe(1);
   });
 });
