@@ -104,6 +104,67 @@ describe('ObjectivesService confirmed AI drafts', () => {
     expect(await prisma.indicatorProgressUpdate.count()).toBe(0);
   });
 
+  it('saves a ready current cycle-period candidate with a null monthly period ID', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-12T04:00:00Z'));
+    try {
+      const { service, prisma, indicator, save, rows } = setup();
+      const period = { id: 'quarter', taskId: task.id, periodType: 'cycle', periodKey: '2026-Q4',
+        periodStart: new Date('2026-10-01'), periodEnd: new Date('2026-12-31'), status: 'self_eval',
+        employeeSubmittedAt: null, managerSubmittedAt: null, lockedAt: null,
+        indicatorVersion: { items: [{ sourceInstanceId: indicator.id }] } };
+      const currentTask = { ...task, periods: [period], indicatorInstances: [{ ...indicator, name: '客户拜访' }] };
+      prisma.assessmentCycle = { findMany: jest.fn().mockResolvedValue([{ id: 'cycle' }]) };
+      prisma.assessmentTask = { findMany: jest.fn().mockResolvedValue([currentTask]) };
+      prisma.indicatorInstance.findUnique.mockResolvedValue({ ...indicator, task: currentTask });
+
+      expect(await service.findBotGoalAccess(viewer)).toEqual({ kind: 'ready', goals: [{
+        id: 'goal', title: '客户拜访', targetValue: '10', unit: '家', periodId: null, periodKey: '2026-Q4',
+      }] });
+      const saved = await save();
+      expect(saved).toMatchObject({ id: 'saved-1', actualValue: 12, completionPercent: 120 });
+      expect(await prisma.indicatorProgressUpdate.count()).toBe(1);
+      expect(rows[0]).not.toHaveProperty('periodId');
+
+      prisma.indicatorInstance.findUnique.mockResolvedValueOnce({ ...indicator, task: currentTask })
+        .mockResolvedValue({ ...indicator, task: { ...currentTask, periods: [{ ...period, employeeSubmittedAt: new Date() }] } });
+      await expect(save('draft-2')).rejects.toBeInstanceOf(ConflictException);
+      expect(await prisma.indicatorProgressUpdate.count()).toBe(1);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('keeps an explicitly selected older month when rechecking inside an AI save transaction', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-12T04:00:00Z'));
+    try {
+      const { service, prisma, indicator, rows } = setup();
+      const period = { id: 'sep', taskId: task.id, periodType: 'monthly', periodKey: '2026-09',
+        periodStart: new Date('2026-09-01'), periodEnd: new Date('2026-09-30'), status: 'self_eval',
+        employeeSubmittedAt: null, managerSubmittedAt: null, lockedAt: null,
+        indicatorVersion: { items: [{ sourceInstanceId: indicator.id }] } };
+      const current = { ...period, id: 'oct', periodKey: '2026-10', periodStart: new Date('2026-10-01'),
+        periodEnd: new Date('2026-10-31'), employeeSubmittedAt: new Date() };
+      prisma.indicatorInstance.findUnique.mockResolvedValue({ ...indicator, task: { ...task, periods: [period, current] } });
+      prisma.assessmentPeriod = { findUnique: jest.fn().mockResolvedValue(period) };
+      await service.updateIndicatorProgress('goal', { periodId: 'sep', progress: null, healthStatus: null, actualValue: '12', content: '补录九月' }, viewer, { aiDraftId: 'draft-sep', aiAssisted: true });
+      expect(rows[0]).toMatchObject({ periodId: 'sep', content: '补录九月' });
+      expect(await prisma.indicatorProgressUpdate.count()).toBe(1);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('does not silently switch a null-ID AI draft into a newly added monthly period', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-10-12T04:00:00Z'));
+    try {
+      const { prisma, indicator, save } = setup();
+      const period = { id: 'oct', taskId: task.id, periodType: 'monthly', periodKey: '2026-10',
+        periodStart: new Date('2026-10-01'), periodEnd: new Date('2026-10-31'), status: 'self_eval',
+        employeeSubmittedAt: null, managerSubmittedAt: null, lockedAt: null,
+        indicatorVersion: { items: [{ sourceInstanceId: indicator.id }] } };
+      prisma.indicatorInstance.findUnique.mockResolvedValueOnce(indicator)
+        .mockResolvedValue({ ...indicator, task: { ...task, periods: [period] } });
+      await expect(save()).rejects.toBeInstanceOf(ConflictException);
+      expect(await prisma.indicatorProgressUpdate.count()).toBe(0);
+    } finally { jest.useRealTimers(); }
+  });
+
   it.each([{ employeeId: 'other' }, { closedAt: new Date() }, { isExempt: true }])('rechecks actor and task inside the transaction: %j', async override => {
     const { save, prisma, indicator } = setup();
     prisma.indicatorInstance.findUnique.mockResolvedValueOnce(indicator).mockResolvedValue({ ...indicator, task: { ...task, ...override } });

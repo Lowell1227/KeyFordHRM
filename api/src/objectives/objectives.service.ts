@@ -1096,9 +1096,11 @@ export class ObjectivesService {
           });
           if (existing) return this.aiDraftResult(existing, viewer.id, indicatorId);
           const fresh = await tx.indicatorInstance.findUnique(indicatorQuery);
-          if (!fresh || !this.canSubmitActiveProgress(fresh.task, viewer,
-            progressPeriodId ? fresh.task.periods.find(period => period.id === progressPeriodId) ?? null : null,
-            indicatorId)) {
+          const freshSelectedPeriod = progressPeriodId
+            ? fresh?.task.periods.find(period => period.id === progressPeriodId) ?? null
+            : currentGoalTrackingPeriod(fresh?.task.periods);
+          if (!fresh || (!progressPeriodId && freshSelectedPeriod && isMonthlyProgressPeriod(freshSelectedPeriod))
+            || !this.canSubmitActiveProgress(fresh.task, viewer, freshSelectedPeriod, indicatorId)) {
             throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '目标或考核月份已不可更新，请刷新后重试' });
           }
           currentIndicator = fresh;
