@@ -1,6 +1,6 @@
 import { Injectable, UnauthorizedException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { ExternalIdentityProvider, ExternalIdentityStatus } from '@prisma/client';
+import { AccountType, ExternalIdentityProvider, ExternalIdentityStatus } from '@prisma/client';
 import { AuthService } from '../auth/auth.service';
 import { AuthUser } from '../common/types/auth.types';
 import { DingtalkService } from '../dingtalk/dingtalk.service';
@@ -59,6 +59,7 @@ export class BotEligibilityService {
     }
     if (!binding || binding.status !== ExternalIdentityStatus.enabled || binding.endedAt) return unavailable;
     if (!state.allowlist.includes(binding.user.id)) return { kind: 'reply', text: '功能暂未开放' };
+    if (binding.user.accountType !== AccountType.employee) return unavailable;
     try {
       await this.auth.assertLoginEligibility(binding.user);
     } catch (error) {

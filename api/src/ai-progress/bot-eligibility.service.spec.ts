@@ -81,6 +81,20 @@ describe('BotEligibilityService', () => {
     expect(objectives.findBotGoalAccess).not.toHaveBeenCalled();
   });
 
+  it.each(['service', 'test'])('rejects an enabled bound allowlisted %s account before objective access', async (accountType) => {
+    const { service, prisma, objectives } = setup();
+    prisma.externalIdentityBinding.findFirst.mockResolvedValue({
+      id: 'binding', status: 'enabled', endedAt: null, userId: user.id,
+      user: { ...user, accountType },
+    });
+    prisma.employmentRecord.findFirst.mockResolvedValue(null);
+    const result = await service.resolve(sender);
+    expect(objectives.findBotGoalAccess).not.toHaveBeenCalled();
+    expect(result).toEqual({
+      kind: 'reply', text: '账号未开通或已停用，请联系管理员核对钉钉绑定和有效任职。',
+    });
+  });
+
   it('resolves union ID only when no staff-ID binding exists', async () => {
     const { service, prisma, dingtalk, objectives } = setup();
     prisma.externalIdentityBinding.findFirst.mockResolvedValueOnce(null);
