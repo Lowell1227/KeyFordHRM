@@ -5,11 +5,15 @@ import { PrismaModule } from '@/prisma/prisma.module';
 import { AiConfigController } from './ai-config.controller';
 import { AiConfigService } from './ai-config.service';
 import { ProviderClient } from './provider-client';
+import { AiProgressController } from './ai-progress.controller';
+import { AiProgressService } from './ai-progress.service';
+import { ProgressDraftStore } from './progress-draft.store';
+import { BotEligibilityService } from './bot-eligibility.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, ObjectivesModule],
-  controllers: [AiConfigController],
-  providers: [AiConfigService, ProviderClient],
-  exports: [AiConfigService, ProviderClient],
+  controllers: [AiConfigController, AiProgressController],
+  providers: [AiConfigService, ProviderClient, AiProgressService, ProgressDraftStore, BotEligibilityService],
+  exports: [AiConfigService, ProviderClient, AiProgressService, BotEligibilityService],
 })
 export class AiProgressModule {}

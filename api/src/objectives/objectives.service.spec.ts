@@ -6,6 +6,112 @@ import { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
 import { ObjectivesService } from './objectives.service';
 
+describe('ObjectivesService confirmed AI drafts', () => {
+  const viewer: AuthUser = { id: 'owner', name: 'Owner', sysRole: SysRole.employee, deptId: null, isAssessorOnly: false, canViewAll: false };
+  const task = {
+    id: 'task', employeeId: viewer.id, status: 'goal_confirmed', isExempt: false,
+    participantDisposition: 'active', indicatorConfirmedAt: new Date('2026-09-01'),
+    closedAt: null, publishedAt: null, periods: [],
+    cycle: { workflowVersion: 2, openedAt: new Date('2026-09-01'), closedAt: null, publishedAt: null },
+  };
+  function setup() {
+    const rows: any[] = [];
+    const audits: any[] = [];
+    const indicator = { id: 'goal', task: { ...task }, targetValue: new Prisma.Decimal(10), unit: '家', actualValue: null };
+    const prisma: any = {
+      indicatorInstance: { findUnique: jest.fn().mockResolvedValue(indicator), update: jest.fn() },
+      indicatorProgressUpdate: {
+        findUnique: jest.fn(async ({ where }) => rows.find(row => row.aiDraftId === where.aiDraftId) ?? null),
+        findMany: jest.fn(async () => [...rows].reverse()),
+        count: jest.fn(async () => rows.length),
+        create: jest.fn(async ({ data }) => {
+          const row = { ...data, id: `saved-${rows.length + 1}`, createdAt: new Date(), creator: { id: viewer.id, name: viewer.name }, period: null };
+          rows.push(row);
+          return row;
+        }),
+      },
+      auditLog: { create: jest.fn(async ({ data }) => audits.push(data)) },
+      $queryRaw: jest.fn().mockResolvedValue([]),
+      $transaction: jest.fn(async callback => callback(prisma)),
+    };
+    const service = new ObjectivesService(prisma, {} as any);
+    const save = (draftId = 'draft-1', actualValue = '12', content = '完成拜访') => (service.updateIndicatorProgress as any)('goal', {
+      progress: 3, healthStatus: null, actualValue, content,
+    }, viewer, { aiDraftId: draftId, aiAssisted: true });
+    return { service, prisma, indicator, rows, audits, save };
+  }
+
+  it('saves each confirmed draft once', async () => {
+    const { prisma, save, audits } = setup();
+    const saved = await save();
+    const savedAgain = await save();
+    expect(savedAgain.id).toBe(saved.id);
+    expect(await prisma.indicatorProgressUpdate.count()).toBe(1);
+    expect(saved).toMatchObject({ completionPercent: 120, progress: 100, actualValue: 12, targetValueSnapshot: 10 });
+    expect(audits).toHaveLength(1);
+    expect(audits[0].newValue).toMatchObject({ aiDraftId: 'draft-1', aiAssisted: true });
+    expect(prisma.indicatorInstance.update).not.toHaveBeenCalled();
+  });
+
+  it('appends corrections and audited before/after values', async () => {
+    const { save, rows, audits } = setup();
+    await save();
+    await save('draft-2', '11', '更正为11家');
+    expect(rows.map(row => row.actualValue.toNumber())).toEqual([12, 11]);
+    expect(audits[1]).toMatchObject({ oldValue: { actualValue: 12, content: '完成拜访' }, newValue: { actualValue: 11, content: '更正为11家' } });
+  });
+
+  it('returns a committed same-owner retry after the month closes', async () => {
+    const { save, indicator } = setup();
+    const saved = await save();
+    indicator.task.closedAt = new Date() as any;
+    expect((await save()).id).toBe(saved.id);
+  });
+
+  it('rejects another owner reusing the same draft ID', async () => {
+    const { save, rows } = setup();
+    await save();
+    rows[0].createdBy = 'other';
+    await expect(save()).rejects.toBeInstanceOf(ForbiddenException);
+  });
+
+  it('returns the winner of a mapped ai_draft_id unique constraint race', async () => {
+    const { save, prisma, rows } = setup();
+    prisma.indicatorProgressUpdate.create.mockImplementation(async ({ data }) => {
+      rows.push({ ...data, id: 'winner', creator: { id: viewer.id, name: viewer.name }, createdAt: new Date(), period: null });
+      throw new Prisma.PrismaClientKnownRequestError('unique draft', { code: 'P2002', clientVersion: 'fixture', meta: { target: ['ai_draft_id'] } });
+    });
+    expect((await save()).id).toBe('winner');
+    expect(await prisma.indicatorProgressUpdate.count()).toBe(1);
+  });
+
+  it('does not swallow an unrelated unique constraint or audit failure', async () => {
+    const { save, prisma } = setup();
+    const unique = new Prisma.PrismaClientKnownRequestError('other unique', { code: 'P2002', clientVersion: 'fixture', meta: { target: ['id'] } });
+    prisma.indicatorProgressUpdate.create.mockRejectedValueOnce(unique);
+    await expect(save()).rejects.toBe(unique);
+    const auditError = new Error('audit failed');
+    prisma.auditLog.create.mockRejectedValueOnce(auditError);
+    await expect(save()).rejects.toBe(auditError);
+  });
+
+  it('rechecks a month closing after eligibility before creating a formal record', async () => {
+    const { service, prisma, indicator } = setup();
+    const period = { id: 'oct', taskId: 'task', periodType: 'monthly', periodKey: '2026-10', status: 'self_eval', employeeSubmittedAt: null, managerSubmittedAt: null, lockedAt: null, indicatorVersion: { items: [{ sourceInstanceId: 'goal' }] } };
+    prisma.indicatorInstance.findUnique.mockResolvedValue({ ...indicator, task: { ...task, periods: [period] } });
+    prisma.assessmentPeriod = { findUnique: jest.fn().mockResolvedValue({ ...period, lockedAt: new Date() }) };
+    await expect(service.updateIndicatorProgress('goal', { periodId: 'oct', progress: null, healthStatus: null, actualValue: '12', content: '完成' }, viewer, { aiDraftId: 'draft-1', aiAssisted: true })).rejects.toBeInstanceOf(ConflictException);
+    expect(await prisma.indicatorProgressUpdate.count()).toBe(0);
+  });
+
+  it.each([{ employeeId: 'other' }, { closedAt: new Date() }, { isExempt: true }])('rechecks actor and task inside the transaction: %j', async override => {
+    const { save, prisma, indicator } = setup();
+    prisma.indicatorInstance.findUnique.mockResolvedValueOnce(indicator).mockResolvedValue({ ...indicator, task: { ...task, ...override } });
+    await expect(save()).rejects.toThrow();
+    expect(await prisma.indicatorProgressUpdate.count()).toBe(0);
+  });
+});
+
 describe('ObjectivesService bot goal access', () => {
   const viewer: AuthUser = { id: 'me', name: 'Me', sysRole: SysRole.system_admin, deptId: null, isAssessorOnly: false, canViewAll: true };
   const cycle = { id: 'cycle', workflowVersion: 2, openedAt: new Date('2026-09-01'), closedAt: null, publishedAt: null };
@@ -149,7 +255,7 @@ describe('ObjectivesService visibility helpers', () => {
     user: { findMany: jest.Mock; findUnique: jest.Mock };
     assessmentTask: { findUnique: jest.Mock; findMany: jest.Mock };
     indicatorInstance: { findUnique: jest.Mock; findFirst: jest.Mock; findMany: jest.Mock; count: jest.Mock };
-    indicatorProgressUpdate: { findMany: jest.Mock; create: jest.Mock };
+    indicatorProgressUpdate: { findMany: jest.Mock; findUnique: jest.Mock; create: jest.Mock };
     auditLog: { create: jest.Mock; findMany: jest.Mock };
     $queryRaw: jest.Mock;
     $transaction: jest.Mock;
@@ -222,7 +328,7 @@ describe('ObjectivesService visibility helpers', () => {
         findMany: jest.fn(),
         count: jest.fn(),
       },
-      indicatorProgressUpdate: { findMany: jest.fn(), create: jest.fn() },
+      indicatorProgressUpdate: { findMany: jest.fn(), findUnique: jest.fn().mockResolvedValue(null), create: jest.fn() },
       auditLog: { create: jest.fn(), findMany: jest.fn() },
       $queryRaw: jest.fn().mockResolvedValue([]),
       $transaction: jest.fn(async (callback: (tx: unknown) => unknown) => callback(prisma)),
@@ -1219,8 +1325,8 @@ describe('ObjectivesService visibility helpers', () => {
 
     it('discards a suggested percent for AI progress with omitted actual value', async () => {
       const result = await service.updateIndicatorProgress(indicator.id, {
-        aiAssisted: true, progress: 99, healthStatus: null, content: '方案已评审',
-      }, viewer);
+        progress: 99, healthStatus: null, content: '方案已评审',
+      }, viewer, { aiDraftId: 'draft-test', aiAssisted: true });
       expect(result.progress).toBeNull();
       expect(result.completionPercent).toBeNull();
     });

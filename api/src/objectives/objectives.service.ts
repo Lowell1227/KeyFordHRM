@@ -145,8 +145,6 @@ export interface UpdateIndicatorProgressInput {
   progress: number | null;
   healthStatus: IndicatorProgressHealth | null;
   actualValue?: string | null;
-  aiAssisted?: boolean;
-  aiDraftId?: string;
   content: string;
   expectedLatestUpdateAt?: string | null;
 }
@@ -981,8 +979,13 @@ export class ObjectivesService {
     indicatorId: string,
     input: UpdateIndicatorProgressInput,
     viewer: AuthUser,
+    options?: { aiDraftId: string; aiAssisted: true },
   ) {
-    const indicator = await this.prisma.indicatorInstance.findUnique({
+    if (options) {
+      const saved = await this.findAiDraftProgress(options.aiDraftId, viewer.id, indicatorId);
+      if (saved) return saved;
+    }
+    const indicatorQuery = {
       where: { id: indicatorId },
       include: {
         task: {
@@ -1024,7 +1027,8 @@ export class ObjectivesService {
           },
         },
       },
-    });
+    } as const;
+    const indicator = await this.prisma.indicatorInstance.findUnique(indicatorQuery);
     if (!indicator) {
       throw new NotFoundException({
         code: ERROR_CODE.NOT_FOUND,
@@ -1056,126 +1060,174 @@ export class ObjectivesService {
       });
     }
 
-    return this.prisma.$transaction(async (tx) => {
-      // Match monthly submission's lock order: period first, then indicator.
-      const progressPeriodId = selectedPeriod?.id && isMonthlyProgressPeriod(selectedPeriod) ? selectedPeriod.id : null;
-      if (progressPeriodId) {
+    try {
+      return await this.prisma.$transaction(async (tx) => {
+        // Match monthly submission's lock order: period first, then indicator.
+        const progressPeriodId = selectedPeriod?.id && isMonthlyProgressPeriod(selectedPeriod) ? selectedPeriod.id : null;
+        if (progressPeriodId) {
+          await tx.$queryRaw<Array<{ id: string }>>`
+            SELECT "id" FROM "assessment_periods" WHERE "id" = ${progressPeriodId}::uuid FOR UPDATE
+          `;
+          const freshPeriod = await tx.assessmentPeriod.findUnique({
+            where: { id: progressPeriodId },
+            select: {
+              id: true, taskId: true, periodType: true, periodKey: true, periodStart: true, periodEnd: true,
+              status: true, employeeSubmittedAt: true, managerSubmittedAt: true, lockedAt: true,
+              indicatorVersion: {
+                select: { items: { where: { sourceInstanceId: indicatorId }, select: { sourceInstanceId: true } } },
+              },
+            },
+          });
+          const reason = freshPeriod ? progressPeriodBlockReason(freshPeriod, indicatorId) : null;
+          if (!freshPeriod || freshPeriod.taskId !== indicator.task.id || !isMonthlyProgressPeriod(freshPeriod) || reason) {
+            throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: reason ?? '该月份已不可更新，请刷新后重试' });
+          }
+        }
         await tx.$queryRaw<Array<{ id: string }>>`
-          SELECT "id" FROM "assessment_periods" WHERE "id" = ${progressPeriodId}::uuid FOR UPDATE
+          SELECT "id" FROM "indicator_instances"
+          WHERE "id" = ${indicatorId}::uuid
+          FOR UPDATE
         `;
-        const freshPeriod = await tx.assessmentPeriod.findUnique({
-          where: { id: progressPeriodId },
-          select: {
-            id: true, taskId: true, periodType: true, periodKey: true, periodStart: true, periodEnd: true,
-            status: true, employeeSubmittedAt: true, managerSubmittedAt: true, lockedAt: true,
-            indicatorVersion: {
-              select: { items: { where: { sourceInstanceId: indicatorId }, select: { sourceInstanceId: true } } },
+        let currentIndicator = indicator;
+        if (options) {
+          const existing = await tx.indicatorProgressUpdate.findUnique({
+            where: { aiDraftId: options.aiDraftId },
+            include: { creator: { select: { id: true, name: true } }, period: { select: { periodKey: true } } },
+          });
+          if (existing) return this.aiDraftResult(existing, viewer.id, indicatorId);
+          const fresh = await tx.indicatorInstance.findUnique(indicatorQuery);
+          if (!fresh || !this.canSubmitActiveProgress(fresh.task, viewer,
+            progressPeriodId ? fresh.task.periods.find(period => period.id === progressPeriodId) ?? null : null,
+            indicatorId)) {
+            throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '目标或考核月份已不可更新，请刷新后重试' });
+          }
+          currentIndicator = fresh;
+        }
+        let progress = options?.aiAssisted || input.actualValue !== undefined ? null : input.progress;
+        let actualValue: Prisma.Decimal | null = null;
+        let targetValueSnapshot: Prisma.Decimal | null = null;
+        let unitSnapshot: string | null = null;
+        if (input.actualValue != null) {
+          if (typeof input.actualValue !== 'string' || !/^\d{1,8}(\.\d{1,2})?$/.test(input.actualValue)) {
+            throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '实际值须为非负数，最多8位整数和2位小数' });
+          }
+          actualValue = new Prisma.Decimal(input.actualValue);
+          const baseline = options ? currentIndicator : await tx.indicatorInstance.findUnique({
+            where: { id: indicatorId }, select: { targetValue: true, unit: true },
+          });
+          if (!baseline) throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '指标已变更，请刷新后重试' });
+          if (baseline.targetValue?.gt(0)) {
+            targetValueSnapshot = baseline.targetValue;
+            unitSnapshot = baseline.unit;
+            progress = Math.min(100, actualValue.div(targetValueSnapshot).mul(100).round().toNumber());
+          } else {
+            progress = null;
+          }
+        }
+        const progressUpdates = await tx.indicatorProgressUpdate.findMany({
+          where: { indicatorInstanceId: indicatorId },
+          orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+          include: { period: { select: { periodKey: true } } },
+        });
+        const latest = currentGoalProgress(input.periodId
+          ? progressUpdates.filter(update => progressBusinessPeriodKey(update) === selectedPeriod!.periodKey)
+          : progressUpdates);
+        if (input.expectedLatestUpdateAt !== undefined) {
+          const actualLatestUpdateAt = latest?.createdAt.toISOString() ?? null;
+          if (actualLatestUpdateAt !== input.expectedLatestUpdateAt) {
+            throw new ConflictException({
+              code: ERROR_CODE.CONFLICT,
+              message: '进展已被更新，请刷新后重试',
+            });
+          }
+        }
+        const created = await tx.indicatorProgressUpdate.create({
+          data: {
+            indicatorInstanceId: indicatorId,
+            ...(progressPeriodId ? { periodId: progressPeriodId } : {}),
+            progress,
+            healthStatus: input.healthStatus,
+            ...(input.actualValue !== undefined ? { actualValue, targetValueSnapshot, unitSnapshot } : {}),
+            ...(options ? { aiAssisted: true, aiDraftId: options.aiDraftId } : {}),
+            content: input.content,
+            attachments: [],
+            createdBy: viewer.id,
+          },
+          include: { creator: { select: { id: true, name: true } }, period: { select: { periodKey: true } } },
+        });
+        await tx.auditLog.create({
+          data: {
+            userId: viewer.id,
+            action: 'progress_update',
+            entityType: 'indicator_instance',
+            entityId: indicatorId,
+            oldValue: latest
+              ? ({
+                  progress: latest.progress,
+                  ...progressValues(latest),
+                  healthStatus: latest.healthStatus,
+                  ...(options ? { content: latest.content } : {}),
+                  updatedAt: latest.createdAt.toISOString(),
+                } satisfies Prisma.InputJsonObject)
+              : Prisma.JsonNull,
+            newValue: {
+              ...(options ? { aiAssisted: true, aiDraftId: options.aiDraftId } : {}),
+              periodId: progressPeriodId,
+              businessPeriodKey: progressBusinessPeriodKey(created),
+              progress: created.progress,
+              ...progressValues(created),
+              healthStatus: created.healthStatus,
+              content: created.content,
+              attachments: created.attachments,
+              updatedAt: created.createdAt.toISOString(),
             },
           },
         });
-        const reason = freshPeriod ? progressPeriodBlockReason(freshPeriod, indicatorId) : null;
-        if (!freshPeriod || freshPeriod.taskId !== indicator.task.id || !isMonthlyProgressPeriod(freshPeriod) || reason) {
-          throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: reason ?? '该月份已不可更新，请刷新后重试' });
-        }
-      }
-      await tx.$queryRaw<Array<{ id: string }>>`
-        SELECT "id" FROM "indicator_instances"
-        WHERE "id" = ${indicatorId}::uuid
-        FOR UPDATE
-      `;
-      let progress = input.aiAssisted || input.actualValue !== undefined ? null : input.progress;
-      let actualValue: Prisma.Decimal | null = null;
-      let targetValueSnapshot: Prisma.Decimal | null = null;
-      let unitSnapshot: string | null = null;
-      if (input.actualValue != null) {
-        if (typeof input.actualValue !== 'string' || !/^\d{1,8}(\.\d{1,2})?$/.test(input.actualValue)) {
-          throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '实际值须为非负数，最多8位整数和2位小数' });
-        }
-        actualValue = new Prisma.Decimal(input.actualValue);
-        const currentIndicator = await tx.indicatorInstance.findUnique({
-          where: { id: indicatorId }, select: { targetValue: true, unit: true },
-        });
-        if (!currentIndicator) throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '指标已变更，请刷新后重试' });
-        if (currentIndicator.targetValue?.gt(0)) {
-          targetValueSnapshot = currentIndicator.targetValue;
-          unitSnapshot = currentIndicator.unit;
-          progress = Math.min(100, actualValue.div(targetValueSnapshot).mul(100).round().toNumber());
-        } else {
-          progress = null;
-        }
-      }
-      const progressUpdates = await tx.indicatorProgressUpdate.findMany({
-        where: { indicatorInstanceId: indicatorId },
-        orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-        include: { period: { select: { periodKey: true } } },
+        return {
+          id: created.id,
+          progress: created.progress,
+          ...progressValues(created),
+          healthStatus: created.healthStatus,
+          content: created.content,
+          attachments: Array.isArray(created.attachments) ? created.attachments : [],
+          createdBy: created.creator.id,
+          creatorName: created.creator.name,
+          updatedAt: created.createdAt,
+          businessPeriodKey: progressBusinessPeriodKey(created),
+          source: progressSource(created),
+        };
       });
-      const latest = currentGoalProgress(input.periodId
-        ? progressUpdates.filter(update => progressBusinessPeriodKey(update) === selectedPeriod!.periodKey)
-        : progressUpdates);
-      if (input.expectedLatestUpdateAt !== undefined) {
-        const actualLatestUpdateAt = latest?.createdAt.toISOString() ?? null;
-        if (actualLatestUpdateAt !== input.expectedLatestUpdateAt) {
-          throw new ConflictException({
-            code: ERROR_CODE.CONFLICT,
-            message: '进展已被更新，请刷新后重试',
-          });
-        }
+    } catch (error) {
+      if (options && error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002'
+        && Array.isArray(error.meta?.target) && error.meta.target.length === 1
+        && ['aiDraftId', 'ai_draft_id'].includes(error.meta.target[0])) {
+        const saved = await this.findAiDraftProgress(options.aiDraftId, viewer.id, indicatorId);
+        if (saved) return saved;
       }
-      const created = await tx.indicatorProgressUpdate.create({
-        data: {
-          indicatorInstanceId: indicatorId,
-          ...(progressPeriodId ? { periodId: progressPeriodId } : {}),
-          progress,
-          healthStatus: input.healthStatus,
-          ...(input.actualValue !== undefined ? { actualValue, targetValueSnapshot, unitSnapshot } : {}),
-          ...(input.aiAssisted !== undefined ? { aiAssisted: input.aiAssisted } : {}),
-          ...(input.aiDraftId ? { aiDraftId: input.aiDraftId } : {}),
-          content: input.content,
-          attachments: [],
-          createdBy: viewer.id,
-        },
-        include: { creator: { select: { id: true, name: true } }, period: { select: { periodKey: true } } },
-      });
-      await tx.auditLog.create({
-        data: {
-          userId: viewer.id,
-          action: 'progress_update',
-          entityType: 'indicator_instance',
-          entityId: indicatorId,
-          oldValue: latest
-            ? ({
-                progress: latest.progress,
-                ...progressValues(latest),
-                healthStatus: latest.healthStatus,
-                updatedAt: latest.createdAt.toISOString(),
-              } satisfies Prisma.InputJsonObject)
-            : Prisma.JsonNull,
-          newValue: {
-            periodId: progressPeriodId,
-            businessPeriodKey: progressBusinessPeriodKey(created),
-            progress: created.progress,
-            ...progressValues(created),
-            healthStatus: created.healthStatus,
-            content: created.content,
-            attachments: created.attachments,
-            updatedAt: created.createdAt.toISOString(),
-          },
-        },
-      });
-      return {
-        id: created.id,
-        progress: created.progress,
-        ...progressValues(created),
-        healthStatus: created.healthStatus,
-        content: created.content,
-        attachments: Array.isArray(created.attachments) ? created.attachments : [],
-        createdBy: created.creator.id,
-        creatorName: created.creator.name,
-        updatedAt: created.createdAt,
-        businessPeriodKey: progressBusinessPeriodKey(created),
-        source: progressSource(created),
-      };
+      throw error;
+    }
+  }
+
+  async findAiDraftProgress(draftId: string, viewerId: string, indicatorId?: string) {
+    const row = await this.prisma.indicatorProgressUpdate.findUnique({
+      where: { aiDraftId: draftId },
+      include: { creator: { select: { id: true, name: true } }, period: { select: { periodKey: true } } },
     });
+    return row ? this.aiDraftResult(row, viewerId, indicatorId) : null;
+  }
+
+  private aiDraftResult(row: Prisma.IndicatorProgressUpdateGetPayload<{
+    include: { creator: { select: { id: true; name: true } }; period: { select: { periodKey: true } } };
+  }>, viewerId: string, indicatorId?: string) {
+    if (row.createdBy !== viewerId || (indicatorId && row.indicatorInstanceId !== indicatorId)) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '只能查看本人保存的进展' });
+    }
+    return {
+      id: row.id, progress: row.progress, ...progressValues(row), healthStatus: row.healthStatus,
+      content: row.content, attachments: Array.isArray(row.attachments) ? row.attachments : [],
+      createdBy: row.creator.id, creatorName: row.creator.name, updatedAt: row.createdAt,
+      businessPeriodKey: progressBusinessPeriodKey(row), source: progressSource(row),
+    };
   }
 
   async findTrackingIndicator(indicatorId: string, viewer: AuthUser) {

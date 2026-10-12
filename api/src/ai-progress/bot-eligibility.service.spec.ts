@@ -30,6 +30,13 @@ function setup() {
 }
 
 describe('BotEligibilityService', () => {
+  it('revalidates identity for a saved retry without requiring a writable month', async () => {
+    const { service, prisma, objectives } = setup();
+    expect(await (service as any).resolveIdentity(sender)).toMatchObject({ kind: 'ready', viewer: { id: user.id } });
+    expect(objectives.findBotGoalAccess).not.toHaveBeenCalled();
+    prisma.employmentRecord.findFirst.mockResolvedValue(null);
+    expect(await (service as any).resolveIdentity(sender)).toMatchObject({ kind: 'reply' });
+  });
   it('returns no-progress reply without exposing goals', async () => {
     const { service } = setup();
     const result = await service.resolve(sender);

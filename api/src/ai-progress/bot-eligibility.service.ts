@@ -31,6 +31,17 @@ export class BotEligibilityService {
   async resolve(sender: BotSender): Promise<
     { kind: 'ready'; viewer: AuthUser; goals: BotGoalCandidate[] } | { kind: 'reply'; text: string }
   > {
+    const identity = await this.resolveIdentity(sender);
+    if (identity.kind === 'reply') return identity;
+    const access = await this.objectives.findBotGoalAccess(identity.viewer);
+    return access.kind === 'ready'
+      ? { ...identity, goals: access.goals }
+      : { kind: 'reply', text: access.message };
+  }
+
+  async resolveIdentity(sender: BotSender): Promise<
+    { kind: 'ready'; viewer: AuthUser } | { kind: 'reply'; text: string }
+  > {
     const corpId = this.config.get<string>('DINGTALK_CORP_ID');
     if (!corpId || sender.corpId !== corpId || sender.conversationType !== '1'
       || !sender.senderStaffId?.trim() || !sender.conversationId?.trim() || !sender.deliveryId?.trim()) {
@@ -72,9 +83,6 @@ export class BotEligibilityService {
       isAssessorOnly: user.isAssessorOnly, canViewAll: user.canViewAll,
       hrCapabilities: user.hrCapabilities ?? [],
     };
-    const access = await this.objectives.findBotGoalAccess(viewer);
-    return access.kind === 'ready'
-      ? { kind: 'ready', viewer, goals: access.goals }
-      : { kind: 'reply', text: access.message };
+    return { kind: 'ready', viewer };
   }
 }
