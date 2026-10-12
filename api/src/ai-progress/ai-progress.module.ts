@@ -9,11 +9,21 @@ import { AiProgressController } from './ai-progress.controller';
 import { AiProgressService } from './ai-progress.service';
 import { ProgressDraftStore } from './progress-draft.store';
 import { BotEligibilityService } from './bot-eligibility.service';
+import { DingtalkBotGateway } from '../dingtalk/dingtalk-bot.gateway';
+import { DingtalkCardPresenter } from '../dingtalk/dingtalk-card.presenter';
 
 @Module({
   imports: [PrismaModule, AuthModule, ObjectivesModule],
   controllers: [AiConfigController, AiProgressController],
-  providers: [AiConfigService, ProviderClient, AiProgressService, ProgressDraftStore, BotEligibilityService],
+  providers: [
+    AiConfigService,
+    ProviderClient,
+    AiProgressService,
+    ProgressDraftStore,
+    BotEligibilityService,
+    DingtalkBotGateway,
+    DingtalkCardPresenter,
+  ],
   exports: [AiConfigService, ProviderClient, AiProgressService, BotEligibilityService],
 })
 export class AiProgressModule {}
