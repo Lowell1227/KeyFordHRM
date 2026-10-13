@@ -173,8 +173,7 @@ describe('performance lifecycle cards (authorized read projection)', () => {
         kind: 'evaluation',
         params: {
           periodLabel: label,
-          primaryUrl:
-            'https://hrm.example/tasks/task-1?stage=self-eval&periodId=period-sep',
+          primaryUrl: 'https://hrm.example/tasks/task-1/periods/period-sep',
         },
       });
     },
@@ -190,8 +189,8 @@ describe('performance lifecycle cards (authorized read projection)', () => {
     );
     const result = cards(await service.query('我的自评', sender));
     expect(result.map((c) => c.params.primaryUrl)).toEqual([
-      'https://hrm.example/tasks/task-1?stage=self-eval&periodId=sep',
-      'https://hrm.example/tasks/task-1?stage=self-eval&periodId=oct',
+      'https://hrm.example/tasks/task-1/periods/sep',
+      'https://hrm.example/tasks/task-1/periods/oct',
     ]);
   });
   it('does not offer employee editing when the existing period service denies it', async () => {
@@ -231,6 +230,40 @@ describe('performance lifecycle cards (authorized read projection)', () => {
     expect(
       cards(await service.query('我的待办', sender))[0].params.primaryText,
     ).toBe('审批绩效结果');
+    expect(
+      cards(await service.query('我的待办', sender))[0].params.primaryUrl,
+    ).toBe('https://hrm.example/approval?cycleId=cycle-1');
+  });
+  it('opens the cycle-scoped calibration workbench for its actual handler', async () => {
+    task = taskFixture({
+      employeeId: 'colleague',
+      status: 'hr_calibration',
+      workflowContext: {
+        currentHandler: { id: 'owner', nodeType: 'hr' },
+        statusLabel: '待绩效校准',
+      },
+    });
+    expect(
+      cards(await service.query('我的待办', sender))[0].params.primaryUrl,
+    ).toBe('https://hrm.example/calibration?cycleId=cycle-1');
+  });
+  it('opens the existing team manager workspace for legacy scoring', async () => {
+    task = taskFixture({
+      employeeId: 'colleague',
+      managerId: 'owner',
+      status: 'manager_scoring',
+      workflowVersion: 1,
+      managerStageState: 'pending',
+      workflowContext: {
+        currentHandler: { id: 'owner', nodeType: 'manager' },
+        statusLabel: '待主管评估',
+      },
+    });
+    expect(
+      cards(await service.query('我的待办', sender))[0].params.primaryUrl,
+    ).toBe(
+      'https://hrm.example/tasks?scope=team&stage=manager-eval&cycleId=cycle-1&taskId=task-1',
+    );
   });
   it('still offers the assigned manager final-cycle grade after all period work', async () => {
     task = taskFixture({
@@ -364,6 +397,12 @@ describe('performance lifecycle cards (authorized read projection)', () => {
       }),
       permissions: { canEditEmployee: false, canEditManager: true },
     });
+    tasks.findOne.mockRejectedValue(
+      new (require('@nestjs/common').ForbiddenException)(),
+    );
+    prisma.assessmentTask.findMany.mockResolvedValue([
+      { id: task.id, periods: [{ id: 'period-sep' }] },
+    ]);
     expect(
       cards(await service.query('我的待办', sender))[0].params.primaryText,
     ).toBe('填写本期评价');

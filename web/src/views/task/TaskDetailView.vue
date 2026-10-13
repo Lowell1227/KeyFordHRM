@@ -126,8 +126,16 @@ const requestedPerformanceStage = computed<TaskStageKey>(() =>
   asTaskStage(route.query.stage) ?? currentPerformanceStage.value ?? 'goal-setting',
 );
 
+const invalidRequestedPeriod = computed(() => {
+  if (!task.value || requestedPerformanceStage.value !== 'self-eval') return false;
+  const value = route.query.periodId;
+  return value != null && (typeof value !== 'string' || !value
+    || !(task.value.periods ?? []).some(period => period.id === value));
+});
+
 const activePerformancePeriod = computed(() => {
   const current = task.value;
+  if (invalidRequestedPeriod.value) return null;
   if (current?.workflowVersion !== 2 || requestedPerformanceStage.value !== 'self-eval') return null;
   const periods = current.periods ?? [];
   const requestedPeriodId = typeof route.query.periodId === 'string' ? route.query.periodId : '';
@@ -582,8 +590,16 @@ async function handleRemind() {
       >
         <template #main>
           <section class="performance-detail__main">
+          <el-alert
+            v-if="invalidRequestedPeriod"
+            data-testid="performance-period-unavailable"
+            title="该期间不存在或不属于当前绩效任务，请返回绩效工作台选择正确期间。"
+            type="warning"
+            :closable="false"
+            show-icon
+          />
           <DepartmentReviewWorkspace
-            v-if="isDepartmentReviewView"
+            v-else-if="isDepartmentReviewView"
             :task="task"
             :can-review="flowActions.canDeptReview"
             @reviewed="loadDetail"

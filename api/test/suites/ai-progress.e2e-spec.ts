@@ -308,7 +308,7 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
     expect(outbound).toHaveLength(1);
     expect(outbound[0].body).toMatchObject({ cardTemplateId: 'synthetic-evaluation',
       openSpaceId: `dtv1.card//IM_ROBOT.${data.staffId}`, cardData: { cardParamMap: {
-        periodLabel: periodKey, primaryUrl: `https://hrm.example/tasks/${data.task.id}?stage=self-eval&periodId=${data.period.id}`,
+        periodLabel: periodKey, primaryUrl: `https://hrm.example/tasks/${data.task.id}/periods/${data.period.id}`,
       } } });
     expect(await assessmentEvidence(data.task.id)).toEqual(before);
     expect(await prisma.indicatorProgressUpdate.count({ where: { indicatorInstanceId: data.indicator.id } })).toBe(0);
@@ -339,6 +339,42 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
     } } });
     expect(JSON.stringify(outbound)).not.toMatch(/calculatedScore|rawGrade|coefficient|calibratedGrade/);
     expect(provider.recognize).not.toHaveBeenCalled();
+  });
+
+  it('keeps a real employee objection visible as regrading without unmasking result fields', async () => {
+    const data = await fixture();
+    const approvedAt = new Date();
+    await prisma.assessmentTask.update({ where: { id: data.task.id }, data: { status: 'approval', approvedAt } });
+    await prisma.gradeResult.upsert({ where: { taskId: data.task.id },
+      create: { taskId: data.task.id, approvedAt, calculatedScore: 93.17, rawGrade: 'A' },
+      update: { approvedAt, calculatedScore: 93.17, rawGrade: 'A' } });
+    await app.get(TasksService).employeeDisagree(data.task.id, '合成异议原因', data.employee as any);
+    const detail = await app.get(TasksService).findOne(data.task.id, data.employee as any);
+    expect(detail.totalScore).toBeNull();
+    expect(detail.gradeResult).toBeNull();
+    expect(JSON.stringify(detail)).not.toContain('93.17');
+    await receive(message(data.staffId, { text: { content: '我的结果' } }));
+    expect(outbound[0].body).toMatchObject({ cardTemplateId: 'synthetic-result', cardData: { cardParamMap: {
+      stateLabel: '结果重新评定中', primaryText: '查看重评进度',
+    } } });
+    expect(JSON.stringify(outbound)).not.toMatch(/93\.17|rawGrade|合成异议原因/);
+  });
+  it('delivers a frozen period-manager entry without granting full task visibility', async () => {
+    const data = await fixture();
+    await prisma.assessmentTask.update({ where: { id: data.task.id }, data: {
+      managerId: other.id, deptHeadId: other.id, approverId: other.id, status: 'manager_scoring' } });
+    await prisma.assessmentPeriod.update({ where: { id: data.period.id }, data: { status: 'manager_scoring', employeeSubmittedAt: new Date() } });
+    const staffId = `synthetic-period-manager-${sequence}`;
+    await prisma.externalIdentityBinding.create({ data: { userId: manager.id, externalUserId: staffId,
+      externalUnionId: `synthetic-period-union-${sequence}` } });
+    await config.setAllowlist([manager.id], administrator.id);
+    await expect(app.get(TasksService).findOne(data.task.id, manager as any)).rejects.toThrow();
+    const detail = await app.get(PeriodReviewsService).getReview(data.period.id, manager as any);
+    expect(detail.permissions).toMatchObject({ canEditManager: true, viewerRole: 'manager' });
+    await receive(message(staffId, { text: { content: '我的待办' } }));
+    expect(outbound[0].body).toMatchObject({ cardTemplateId: 'synthetic-evaluation', cardData: { cardParamMap: {
+      primaryText: '填写本期评价', primaryUrl: `https://hrm.example/tasks/${data.task.id}/periods/${data.period.id}`,
+    } } });
   });
 
   it.each(['allowlist', 'wrong enterprise', 'group', 'nonparticipant', 'unapproved goal', 'inactive employment'])('rejects out-of-scope before model: %s', async reason => {

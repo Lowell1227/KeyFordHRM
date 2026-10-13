@@ -139,7 +139,11 @@ export class PerformanceCardService {
     }
   }
 
-  private async review(task: TaskDetail, periodId: string, viewer: AuthUser) {
+  private async review(
+    task: Pick<TaskDetail, 'id'>,
+    periodId: string,
+    viewer: AuthUser,
+  ) {
     try {
       const review = await this.periods.getReview(periodId, viewer);
       return review.period.id === periodId && review.period.taskId === task.id
@@ -170,14 +174,43 @@ export class PerformanceCardService {
           { status: 'hr_calibration' },
         ],
       },
-      select: { id: true },
+      select: {
+        id: true,
+        periods: {
+          where: {
+            managerId: viewer.id,
+            status: { in: ['self_eval', 'manager_scoring'] },
+          },
+          select: { id: true },
+        },
+      },
       orderBy: { updatedAt: 'desc' },
       take: 101,
     });
     const cards: PerformanceCard[] = [];
     for (const candidate of candidates.slice(0, 100)) {
       const task = await this.load(candidate.id, viewer);
-      if (!task || task.isExempt) continue;
+      if (!task) {
+        // A period-only manager may read their assigned review, not the full task or other periods.
+        for (const period of candidate.periods ?? []) {
+          const review = await this.review(candidate, period.id, viewer);
+          if (review?.permissions.canEditManager)
+            cards.push(
+              this.evaluation(
+                {
+                  id: candidate.id,
+                  cycleName: review.context.cycleName,
+                  employeeName: review.context.employeeName,
+                },
+                review,
+                'manager',
+              ),
+            );
+        }
+        if (cards.length > 5) break;
+        continue;
+      }
+      if (task.isExempt) continue;
       let periodAction = false;
       if (task.workflowVersion === 2) {
         for (const period of task.periods) {
@@ -259,7 +292,15 @@ export class PerformanceCardService {
             approval: '审批绩效结果',
             appealing: '查看处理事项',
           }[task.status]!;
-          cards.push(this.todo(task, action, 'result'));
+          const card = this.todo(task, action, 'result');
+          if (task.status === 'approval' || task.status === 'hr_calibration') {
+            card.params.primaryUrl = this.url(
+              `/${task.status === 'approval' ? 'approval' : 'calibration'}?${new URLSearchParams({ cycleId: task.cycleId })}`,
+            );
+          }
+          if (task.status === 'dept_review')
+            card.params.primaryUrl += '&returnTo=%2Fdepartment-review';
+          cards.push(card);
         }
       }
       if (cards.length > 5) break;
@@ -355,7 +396,7 @@ export class PerformanceCardService {
   }
 
   private evaluation(
-    task: TaskDetail,
+    task: Pick<TaskDetail, 'id' | 'cycleName' | 'employeeName'>,
     review: PeriodReviewDetail,
     role: 'employee' | 'manager',
   ) {
@@ -389,7 +430,9 @@ export class PerformanceCardService {
               ? '填写周期自评'
               : '填写本月自评'
           : '查看本期自评',
-        primaryUrl: this.taskUrl(task.id, 'self-eval', period.id),
+        primaryUrl: this.url(
+          `/tasks/${encodeURIComponent(task.id)}/periods/${encodeURIComponent(period.id)}`,
+        ),
         submittedLabel: this.date(
           role === 'employee'
             ? period.employeeSubmittedAt
@@ -416,7 +459,16 @@ export class PerformanceCardService {
           ? '填写周期自评'
           : '填写本期评价'
         : '查看本期自评',
-      primaryUrl: this.taskUrl(task.id, 'self-eval'),
+      primaryUrl: employee
+        ? this.taskUrl(task.id, 'self-eval')
+        : this.url(
+            `/tasks?${new URLSearchParams({
+              scope: 'team',
+              stage: 'manager-eval',
+              cycleId: task.cycleId,
+              taskId: task.id,
+            })}`,
+          ),
       submittedLabel: '',
     });
   }

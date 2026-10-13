@@ -13,6 +13,12 @@ export function appealAttribution(data: Prisma.JsonValue) {
     ? { type: 'prepublication_appeal', source: data.source === 'employee' ? 'employee' : 'hr' } : null;
 }
 
+/** Safe state attribution, never the objection reason or a previous result snapshot. */
+export function employeeObjectionAttribution(data: Prisma.JsonValue) {
+  return data && typeof data === 'object' && !Array.isArray(data) && data.type === 'employee_result_objection'
+    ? { type: 'employee_result_objection' } : null;
+}
+
 /** Keep recorded opinions and attribution; do not expose unrelated workflow payloads. */
 export function mapReviewHistory(records: ReviewRecord[] = []) {
   return records.map(record => {

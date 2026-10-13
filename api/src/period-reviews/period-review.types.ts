@@ -54,6 +54,7 @@ export interface PeriodReviewDetail {
     statusLabel: string;
   };
   permissions: {
+    viewerRole?: 'employee' | 'manager' | 'observer';
     canEditEmployee: boolean;
     canEditManager: boolean;
   };

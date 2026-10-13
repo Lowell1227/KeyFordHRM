@@ -172,6 +172,7 @@ export class PeriodReviewsService {
         statusLabel: this.statusLabel(period.status),
       },
       permissions: {
+        viewerRole: period.task.employeeId === viewer.id ? 'employee' : period.managerId === viewer.id ? 'manager' : 'observer',
         canEditEmployee: this.canEditEmployee(period, viewer),
         canEditManager: period.managerId === viewer.id
           && period.status === 'manager_scoring'

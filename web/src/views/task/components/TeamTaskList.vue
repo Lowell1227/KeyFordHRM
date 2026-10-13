@@ -386,7 +386,7 @@ defineExpose<TeamTaskListHandle>({ clearSelection, retainSelection, focusList })
             <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 职位</span><span class="mobile-result-field__value">{{ item.deptName || '-' }} · {{ item.position || '-' }}</span></div>
             <div class="mobile-result-field"><span class="mobile-result-field__label">考核周期</span><span class="mobile-result-field__value">{{ item.cycleName || '-' }}</span></div>
             <div v-if="stage === 'manager-eval'" class="mobile-result-field"><span class="mobile-result-field__label">复盘期间</span><span class="mobile-result-field__value">{{ periodLabel(item) }}</span></div>
-            <template #actions><el-button link type="primary" @click="selectTask(item)">{{ taskActionLabel(item) }}</el-button></template>
+            <template #actions><el-button link type="primary" :aria-label="`${taskActionLabel(item)} ${item.employeeName}`" @click="selectTask(item)">{{ taskActionLabel(item) }}</el-button></template>
           </MobileResultCard>
         </template>
         <template v-else>

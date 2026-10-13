@@ -1598,7 +1598,7 @@ export interface PeriodReviewDetail {
     managerName: string | null;
     statusLabel: string;
   };
-  permissions: { canEditEmployee: boolean; canEditManager: boolean };
+  permissions: { canEditEmployee: boolean; canEditManager: boolean; viewerRole?: 'employee' | 'manager' | 'observer' };
   indicators: PeriodReviewIndicator[];
 }
 

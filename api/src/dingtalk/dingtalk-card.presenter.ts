@@ -166,7 +166,7 @@ export class DingtalkCardPresenter {
         url.username ||
         url.password ||
         url.hash ||
-        !/^\/(tasks(?:\/[^/]+(?:\/final-grade)?)?|improvement-plans(?:\/[^/]+)?)$/.test(
+        !/^\/(tasks(?:\/[^/]+(?:\/final-grade|\/periods\/[^/]+)?)?|approval|calibration|improvement-plans(?:\/[^/]+)?)$/.test(
           url.pathname,
         )
       )

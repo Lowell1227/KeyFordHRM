@@ -33,38 +33,38 @@
 **Files:** Modify `api/src/dingtalk/dingtalk-card.presenter.ts`; test `api/src/dingtalk/dingtalk-bot.gateway.spec.ts`.
 **Interfaces:** Consumes `DraftPreview.saved.indicatorId`; produces unchanged params except saved `editUrl/detailUrl` use `/action-items?indicatorId=...`.
 
-- [ ] Add a failing test asserting a saved corrected indicator URL is durable and pending URL remains `/ai-progress/confirm/:draftId`.
-- [ ] Run `npm test -- --runInBand dingtalk-bot.gateway`; Expected: new URL assertion fails.
-- [ ] Change the common presenter URL once, preserving draft-only paths and saved authoritative values.
-- [ ] Run the same test command; Expected: all pass. Commit task files only.
+- [x] Add a failing test asserting a saved corrected indicator URL is durable and pending URL remains `/ai-progress/confirm/:draftId`.
+- [x] Run `npm test -- --runInBand dingtalk-bot.gateway`; Expected: new URL assertion fails.
+- [x] Change the common presenter URL once, preserving draft-only paths and saved authoritative values.
+- [x] Run the same test command; Expected: all pass. Commit task files only.
 
 ### Task 2: Authorized lifecycle read projections
 
 **Files:** Create `api/src/dingtalk/performance-card.service.ts` and `.spec.ts`; modify `api/src/ai-progress/ai-progress.module.ts`.
 **Interfaces:** `PerformanceCardService.query(text: string, sender: BotSender): Promise<PerformanceCardReply | null>`; `PerformanceCardReply` is `{kind:'reply',text:string}` or `{kind:'cards',cards:PerformanceCard[],text?:string}`; `PerformanceCard` has kind `todo|goal|evaluation|result`, subjectKey, params `Record<string,string>`. Null means unrecognized, routed to progress recognition by Task 3.
 
-- [ ] Test explicit personal goal/evaluation/result intents, identity denied before reads, HR owner-only queries, no fabricated empty-cycle result, monthly/cycle period IDs, period permission flags, final-grade pending, result approval/confirmed/publication/regrade history. Expectations use fixed synthetic task/period data.
-- [ ] Run `npm test -- --runInBand performance-card`; Expected: missing implementation then semantic assertions fail as behaviors are added.
-- [ ] Build projections from authorized existing service details; derive only assigned candidate IDs from Prisma for todo lookup, then re-read and validate current handler and period permissions. Cap chat output and explicitly link the full workbench; do not claim exhaustive absence when capped.
-- [ ] Run the same command; Expected: all pass. Commit task files only.
+- [x] Test explicit personal goal/evaluation/result intents, identity denied before reads, HR owner-only queries, no fabricated empty-cycle result, monthly/cycle period IDs, period permission flags, final-grade pending, result approval/confirmed/publication/regrade history. Expectations use fixed synthetic task/period data.
+- [x] Run `npm test -- --runInBand performance-card`; Expected: missing implementation then semantic assertions fail as behaviors are added.
+- [x] Build projections from authorized existing service details; derive only assigned candidate IDs from Prisma for todo lookup, then re-read and validate current handler and period permissions. Cap chat output and explicitly link the full workbench; do not claim exhaustive absence when capped.
+- [x] Run the same command; Expected: all pass. Commit task files only.
 
 ### Task 3: Stream dispatch and importable template package
 
 **Files:** Modify `dingtalk-bot.gateway.ts`, `dingtalk-card.presenter.ts`, gateway tests, `.env.example`, `docker-compose.yml` as applicable; create `scripts/dingtalk-cards/build-templates.cjs`, `docs/dingtalk/cards/{todo,goal,evaluation,result}.json`, contract tests and README.
 **Interfaces:** Consumes Task 2 query response; produces `DingtalkCardPresenter.sendPerformanceCard(card: PerformanceCard,sender: BotSender)`. Config uses `DINGTALK_BOT_{TODO,GOAL,EVALUATION,RESULT}_TEMPLATE_ID`; progress template unchanged.
 
-- [ ] Test recognized queries bypass the model, unauthorized queries emit only denial, missing template emits safe text with controlled link, transport uses dedicated robot/receiver and supportForward=false, redelivery dedupes by sender/message/card key.
-- [ ] Run `npm test -- --runInBand dingtalk-bot.gateway`; Expected: new dispatch tests fail.
-- [ ] Wire typed query before existing progress.prepare; reuse current deadline/ack and outbound delivery claims. Add native link-only templates, optional fields hidden, strings/primary link bound to projection, no score variables. No new external notification route.
-- [ ] Test generated template contracts by parsing editorData, declared variables, optional visibility and link actions. Run generator twice and compare deterministic output. Expected: four parseable stable templates and all contract/gateway tests pass.
-- [ ] Commit scoped files, no secrets or downloaded QA artifacts.
+- [x] Test recognized queries bypass the model, unauthorized queries emit only denial, missing template emits safe text with controlled link, transport uses dedicated robot/receiver and supportForward=false, redelivery dedupes by sender/message/card key.
+- [x] Run `npm test -- --runInBand dingtalk-bot.gateway`; Expected: new dispatch tests fail.
+- [x] Wire typed query before existing progress.prepare; reuse current deadline/ack and outbound delivery claims. Add native link-only templates, optional fields hidden, strings/primary link bound to projection, no score variables. No new external notification route.
+- [x] Test generated template contracts by parsing editorData, declared variables, optional visibility and link actions. Run generator twice and compare deterministic output. Expected: four parseable stable templates and all contract/gateway tests pass.
+- [x] Commit scoped files, no secrets or downloaded QA artifacts.
 
 ### Task 4: Verification and readiness handoff
 
 **Files:** Update design status, add `docs/dingtalk/cards/README.md` implementation and remaining-gates evidence.
 **Interfaces:** Consumes all previous tasks. No new business behavior.
 
-- [ ] Run `npm test -- --runInBand` and `npm run build` in api; Expected: suite and build pass, list any genuine failures.
-- [ ] Run existing disposable PostgreSQL/Redis AI progress integration; Expected: no regression, no real external endpoints.
-- [ ] Fresh-context review of this slice and branch integration boundaries. Fix important findings with RED/GREEN tests; preserve unrelated work.
-- [ ] Record exact implemented/committed/not-deployed status. Remaining: platform import/IDs/render, event-driven notification adapter and live state refresh, controlled 姚瑶 acceptance, authorized publication.
+- [x] Run `npm test -- --runInBand` and `npm run build` in api; Expected: suite and build pass, list any genuine failures.
+- [x] Run existing disposable PostgreSQL/Redis AI progress integration; Expected: no regression, no real external endpoints.
+- [x] Fresh-context review of this slice and branch integration boundaries. Fix important findings with RED/GREEN tests; preserve unrelated work.
+- [x] Record exact implemented/committed/not-deployed status. Remaining: platform import/IDs/render, event-driven notification adapter and live state refresh, controlled 姚瑶 acceptance, authorized publication.

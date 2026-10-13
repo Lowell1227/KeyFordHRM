@@ -272,6 +272,12 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, title: '任务详情' },
   },
   {
+    path: '/tasks/:id/periods/:periodId',
+    name: 'PeriodReviewEntry',
+    component: () => import('@/views/task/PeriodReviewEntryView.vue'),
+    meta: { requiresAuth: true, title: '本期绩效评价', activeNavigationPath: '/tasks' },
+  },
+  {
     path: '/tasks/:id/final-grade',
     name: 'FinalGrade',
     component: () => import('@/views/task/FinalGradeView.vue'),

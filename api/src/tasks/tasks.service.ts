@@ -1,6 +1,6 @@
 import { canEmployeeViewResult, isResultPublished, ResultPublicationFact } from './result-publication';
 import { buildResultEvidence, maskResultEvidence, RESULT_PERIOD_SELECT, ResultEvidence } from '@/tasks/result-evidence';
-import { appealAttribution } from '@/tasks/review-history';
+import { appealAttribution, employeeObjectionAttribution } from '@/tasks/review-history';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { AssessmentPeriodStatus, AssessmentPeriodType, AssessmentTask, IndicatorInstance, IndicatorVisibilityScope, ObjectiveLevel, Prisma, SysRole, TaskStatus } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
@@ -2348,7 +2348,8 @@ export class TasksService {
     if (!visible.total_score || !visible.grade) {
       masked.flowRecords = masked.flowRecords.map(record =>
         ['manager_score', 'dept_review', 'hr_calibration', 'approval', 'appeal', 'employee_confirm'].includes(record.nodeType)
-          ? { ...record, comment: null, extraData: record.nodeType === 'appeal' ? appealAttribution(record.extraData) : null } : record);
+          ? { ...record, comment: null, extraData: record.nodeType === 'appeal' ? appealAttribution(record.extraData)
+            : record.nodeType === 'employee_confirm' ? employeeObjectionAttribution(record.extraData) : null } : record);
     }
     return masked;
   }
@@ -2368,7 +2369,8 @@ export class TasksService {
     masked.managerEvalSummary = null;
     masked.flowRecords = detail.flowRecords.map(record =>
       ['manager_score', 'dept_review', 'hr_calibration', 'approval', 'appeal', 'employee_confirm'].includes(record.nodeType)
-        ? { ...record, comment: null, extraData: record.nodeType === 'appeal' ? appealAttribution(record.extraData) : null }
+        ? { ...record, comment: null, extraData: record.nodeType === 'appeal' ? appealAttribution(record.extraData)
+          : record.nodeType === 'employee_confirm' ? employeeObjectionAttribution(record.extraData) : null }
         : record);
 
     masked.indicatorInstances = detail.indicatorInstances.map((ind) => ({
