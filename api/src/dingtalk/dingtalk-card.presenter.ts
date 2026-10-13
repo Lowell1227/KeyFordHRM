@@ -11,7 +11,7 @@ import {
   ProgressPreview,
   SavedProgress,
 } from '../ai-progress/recognition.types';
-import { DingtalkService } from './dingtalk.service';
+import { DingtalkBotCredentialsService } from './dingtalk-bot-credentials.service';
 import { withDingtalkDeadline } from './dingtalk-request-deadline';
 
 type DraftPreview = Extract<ProgressPreview, { kind: 'draft' }>;
@@ -21,7 +21,7 @@ export class DingtalkCardPresenter {
   constructor(
     private readonly config: ConfigService,
     private readonly aiConfig: AiConfigService,
-    private readonly dingtalk: DingtalkService,
+    private readonly dingtalkBot: DingtalkBotCredentialsService,
     private readonly drafts: ProgressDraftStore,
   ) {}
 
@@ -32,10 +32,10 @@ export class DingtalkCardPresenter {
     )
       return false;
     for (const key of [
-      'DINGTALK_APP_KEY',
-      'DINGTALK_APP_SECRET',
+      'DINGTALK_BOT_APP_KEY',
+      'DINGTALK_BOT_APP_SECRET',
       'DINGTALK_CORP_ID',
-      'DINGTALK_STREAM_APP_ID',
+      'DINGTALK_BOT_STREAM_APP_ID',
       'DINGTALK_BOT_CARD_TEMPLATE_ID',
     ]) {
       const value = this.config.get<string>(key);
@@ -131,7 +131,7 @@ export class DingtalkCardPresenter {
         imRobotOpenSpaceModel: { supportForward: false },
         imRobotOpenDeliverModel: {
           spaceType: 'IM_ROBOT',
-          robotCode: this.config.get('DINGTALK_APP_KEY'),
+          robotCode: this.config.get('DINGTALK_BOT_APP_KEY'),
         },
       }),
     );
@@ -141,7 +141,7 @@ export class DingtalkCardPresenter {
     if (!(await this.allowedRecipient(sender))) return;
     await this.sendOnce(sender, `reply:${sender.deliveryId}`, () =>
       this.request('/robot/oToMessages/batchSend', 'POST', {
-        robotCode: this.config.get('DINGTALK_APP_KEY'),
+        robotCode: this.config.get('DINGTALK_BOT_APP_KEY'),
         userIds: [sender.senderStaffId],
         msgKey: 'sampleText',
         msgParam: JSON.stringify({ content: text }),
@@ -206,7 +206,7 @@ export class DingtalkCardPresenter {
   private async request(path: string, method: string, body: object) {
     try {
       await withDingtalkDeadline(async (signal) => {
-        const token = await this.dingtalk.getAccessToken(signal);
+        const token = await this.dingtalkBot.getAccessToken(signal);
         signal.throwIfAborted();
         const response = await fetch(`https://api.dingtalk.com/v1.0${path}`, {
           method,

@@ -61,8 +61,8 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
       this.retire(this.client);
       {
         const client = new DWClient({
-          clientId: this.config.get<string>('DINGTALK_APP_KEY')!,
-          clientSecret: this.config.get<string>('DINGTALK_APP_SECRET')!,
+          clientId: this.config.get<string>('DINGTALK_BOT_APP_KEY')!,
+          clientSecret: this.config.get<string>('DINGTALK_BOT_APP_SECRET')!,
           debug: false,
           keepAlive: false,
         });
@@ -133,7 +133,7 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
       !this.stopped &&
       event.type === 'CALLBACK' &&
       event.headers?.topic === topic &&
-      event.headers.appId === this.config.get('DINGTALK_STREAM_APP_ID') &&
+      event.headers.appId === this.config.get('DINGTALK_BOT_STREAM_APP_ID') &&
       !!event.headers.messageId?.trim() &&
       typeof event.data === 'string' &&
       event.data.length <= 100000 &&
@@ -149,7 +149,7 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
       if (
         body.chatbotCorpId !== corp ||
         body.senderCorpId !== corp ||
-        body.robotCode !== this.config.get('DINGTALK_APP_KEY') ||
+        body.robotCode !== this.config.get('DINGTALK_BOT_APP_KEY') ||
         body.conversationType !== '1' ||
         !this.nonempty(body.senderStaffId) ||
         !this.nonempty(body.conversationId) ||

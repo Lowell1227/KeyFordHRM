@@ -15,6 +15,7 @@
 - 员工本人设定目标、上级审核；本期只更新已经确认的本人目标进展，不改目标基线、评分或审核流程。
 - HRM/花名册是人员与任职权威；钉钉只提供身份与消息，不以通讯录、姓名或钉钉组织关系猜测目标权限。
 - 机器人总开关默认关闭；试运行仅受控账号；不主动发送提醒、不向真实员工发送测试消息。
+- DingTalk 试运行机器人使用用户已创建的独立企业内部应用，应用可见范围仅包含已确认的四人；机器人 Stream 与发卡使用独立凭证，HRM 登录仍使用原应用凭证。发卡直接使用已有卡片模板 ID，不要求重建或在平台界面重新关联模板；若 API 明确返回模板不可用或无权限，再按错误检查模板可用性。
 - 未通过名单、身份、有效任职、考核范围和可更新目标校验的消息不调用模型、不生成草稿/卡片、不写正式记录；不提供通用 AI 闲聊。
 - AI Key 只写、服务端加密、独立主密钥；不回显、记录或提交密钥、完整聊天正文、模型原始响应。不使用 Kimi Code 凭据代替 Kimi API 开放平台凭据。
 - 同时只激活一个服务商；失败不自动切换；切换仅影响新消息。服务商 URL 固定在适配器中，管理页不能输入任意 URL。
@@ -119,13 +120,13 @@
 
 ### Task 7: 钉钉 Stream 单聊与互动卡片
 
-**Files:** Create `api/src/dingtalk/dingtalk-bot.gateway.ts`, `api/src/dingtalk/dingtalk-bot.gateway.spec.ts`, `api/src/dingtalk/dingtalk-card.presenter.ts`; modify `api/src/ai-progress/ai-progress.module.ts`, `api/package.json`, `api/package-lock.json`, `.env.example`.
+**Files:** Create `api/src/dingtalk/dingtalk-bot.gateway.ts`, `api/src/dingtalk/dingtalk-bot.gateway.spec.ts`, `api/src/dingtalk/dingtalk-card.presenter.ts`, `api/src/dingtalk/dingtalk-bot-credentials.service.ts` and its spec; modify `api/src/ai-progress/ai-progress.module.ts`, `api/src/dingtalk/dingtalk.module.ts`, `api/test/suites/ai-progress.e2e-spec.ts`, `api/package.json`, `api/package-lock.json`, `.env.example`.
 
-**Interfaces:** Gateway uses the official `dingtalk-stream` Node SDK and existing HRM DingTalk app credentials; starts only if bot config/keys/permissions are present. Message handler accepts configured enterprise/application and one-to-one text only; callback resolves card sender and calls `AiProgressService.saveDraft`, never trusts card ID as authorization. Presenter has `sendPreview`, `sendBusinessReply`, `markSaved`; card shows goal/month, editable actual/target context, “修改” and “保存进展”.
+**Interfaces:** Gateway uses the official `dingtalk-stream` Node SDK and dedicated pilot bot app credentials; starts only if bot config/keys/permissions are present. Message handler accepts configured enterprise/pilot application and one-to-one text only; callback resolves card sender and calls `AiProgressService.saveDraft`, never trusts card ID as authorization. Presenter uses the pilot app token, robot code and existing card template ID; HRM login/identity lookup continues using existing HRM app credentials. Platform-side template/application association is not an API input to card delivery; if DingTalk rejects the existing ID, diagnose the returned template availability/permission error before changing the template. Presenter has `sendPreview`, `sendBusinessReply`, `markSaved`; card shows goal/month, editable actual/target context, “修改” and “保存进展”.
 
 - [ ] **Step 1: Write failing SDK-mocked tests.** Name `does not save forwarded card`; key assertions: `expect(progressUpdate.create).not.toHaveBeenCalled()`, `expect(card.actions).not.toContain('保存进展')` for ambiguous match. Cover wrong enterprise/group/disabled bot, duplicate Stream delivery, expired draft and card-refresh failure.
 - [ ] **Step 2: Run `npm --prefix api test -- --runInBand dingtalk-bot.gateway.spec.ts`.** Expected: FAIL for missing gateway.
-- [ ] **Step 3: Add SDK and adapter**, registering the gateway in `AiProgressModule` and injecting the existing global `DingtalkService` without making `DingtalkModule` depend on AI. Use current official Stream/card protocol verified at implementation time; no webhook/group-bot parallel path. Never enable outbound test delivery by default.
+- [ ] **Step 3: Add SDK and adapter**, registering the gateway in `AiProgressModule` and injecting the separate bot credentials service without making `DingtalkModule` depend on AI. Keep `DingtalkService` for HRM login, identity lookup and notifications. Use current official Stream/card protocol verified at implementation time; no webhook/group-bot parallel path. Never enable outbound test delivery by default.
 - [ ] **Step 4: Rerun focused tests and `npm --prefix api run build`.** Expected: PASS with mocked transport and disabled-by-default startup.
 - [ ] **Step 5: Commit only Task 7 files.**
 

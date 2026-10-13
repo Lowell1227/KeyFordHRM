@@ -30,6 +30,7 @@ import { DataScopeService } from '@/common/services/data-scope.service';
 import { DingtalkBotGateway } from '@/dingtalk/dingtalk-bot.gateway';
 import { DingtalkCardPresenter } from '@/dingtalk/dingtalk-card.presenter';
 import { DingtalkService } from '@/dingtalk/dingtalk.service';
+import { DingtalkBotCredentialsService } from '@/dingtalk/dingtalk-bot-credentials.service';
 import { EmployeeEffectiveDateService } from '@/employee-archives/employee-effective-date.service';
 import { ObjectivesController } from '@/objectives/objectives.controller';
 import { ObjectivesService } from '@/objectives/objectives.service';
@@ -131,8 +132,9 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
     const values: Record<string, string> = {
       REDIS_URL: redisUrl, AI_PROVIDER_ENCRYPTION_KEY: randomBytes(32).toString('base64'),
       DINGTALK_BOT_STREAM_ENABLED: 'true', DINGTALK_BOT_PREFLIGHT_CONFIRMED: 'true',
-      DINGTALK_APP_KEY: 'synthetic-app', DINGTALK_APP_SECRET: 'synthetic-secret',
-      DINGTALK_CORP_ID: 'synthetic-corp', DINGTALK_STREAM_APP_ID: 'synthetic-stream',
+      DINGTALK_APP_KEY: 'synthetic-hrm-app', DINGTALK_APP_SECRET: 'synthetic-hrm-secret',
+      DINGTALK_BOT_APP_KEY: 'synthetic-bot-app', DINGTALK_BOT_APP_SECRET: 'synthetic-bot-secret',
+      DINGTALK_CORP_ID: 'synthetic-corp', DINGTALK_BOT_STREAM_APP_ID: 'synthetic-stream',
       DINGTALK_BOT_CARD_TEMPLATE_ID: 'synthetic-template', DINGTALK_BOT_HRM_URL: 'https://hrm.example',
     };
     // No ConfigModule or .env loading: unlisted keys cannot fall through to live process settings.
@@ -165,6 +167,7 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
       providers: [
         { provide: PrismaService, useValue: prisma }, { provide: ConfigService, useValue: isolatedConfig },
         { provide: JwtService, useValue: jwt }, { provide: DingtalkService, useValue: dingtalk },
+        { provide: DingtalkBotCredentialsService, useValue: { getAccessToken: jest.fn().mockResolvedValue('synthetic-bot-token') } },
         { provide: ProviderClient, useValue: provider },
         { provide: MESSAGE_PUSH_PROVIDER, useValue: { push: async () => ({ channel: 'synthetic' }) } },
         { provide: StorageService, useValue: {} },
@@ -270,7 +273,7 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
   }
   const receive = (event: ReturnType<typeof frame>) => listeners.get(event.headers.topic)!(event);
   const message = (staffId: string, changes = {}, deliveryId = randomUUID()) => frame(ROBOT, {
-    chatbotCorpId: 'synthetic-corp', senderCorpId: 'synthetic-corp', robotCode: 'synthetic-app',
+    chatbotCorpId: 'synthetic-corp', senderCorpId: 'synthetic-corp', robotCode: 'synthetic-bot-app',
     senderStaffId: staffId, conversationType: '1', conversationId: `synthetic-conversation-${staffId}`,
     msgId: deliveryId, msgtype: 'text', text: { content: candidate.content }, ...changes,
   });

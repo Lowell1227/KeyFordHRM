@@ -64,7 +64,7 @@ const preview: any = {
   completionPercent: 120,
   saved: null,
 };
-const frame = (topic: string, body: object, appId = 'stream-app') => ({
+const frame = (topic: string, body: object, appId = 'bot-stream-app') => ({
   type: 'CALLBACK',
   headers: { topic, appId, messageId: 'delivery' },
   data: JSON.stringify(body),
@@ -73,7 +73,7 @@ const message = (changes = {}) =>
   frame(ROBOT, {
     chatbotCorpId: 'corp',
     senderCorpId: 'corp',
-    robotCode: 'app-key',
+    robotCode: 'bot-app-key',
     senderStaffId: 'staff',
     conversationType: '1',
     conversationId: 'cid',
@@ -124,10 +124,10 @@ describe('DingTalk Stream progress adapter', () => {
     env = {
       DINGTALK_BOT_STREAM_ENABLED: 'true',
       DINGTALK_BOT_PREFLIGHT_CONFIRMED: 'true',
-      DINGTALK_APP_KEY: 'app-key',
-      DINGTALK_APP_SECRET: 'fake-secret',
+      DINGTALK_BOT_APP_KEY: 'bot-app-key',
+      DINGTALK_BOT_APP_SECRET: 'fake-bot-secret',
       DINGTALK_CORP_ID: 'corp',
-      DINGTALK_STREAM_APP_ID: 'stream-app',
+      DINGTALK_BOT_STREAM_APP_ID: 'bot-stream-app',
       DINGTALK_BOT_CARD_TEMPLATE_ID: 'template',
       DINGTALK_BOT_HRM_URL: 'https://hrm.example',
     };
@@ -361,15 +361,25 @@ describe('DingTalk Stream progress adapter', () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
   it.each([
-    'DINGTALK_APP_KEY',
-    'DINGTALK_APP_SECRET',
-    'DINGTALK_STREAM_APP_ID',
+    'DINGTALK_BOT_APP_KEY',
+    'DINGTALK_BOT_APP_SECRET',
+    'DINGTALK_BOT_STREAM_APP_ID',
     'DINGTALK_BOT_CARD_TEMPLATE_ID',
     'DINGTALK_BOT_PREFLIGHT_CONFIRMED',
   ])('fails closed without %s', async (key) => {
     delete env[key];
     await startGateway();
     expect(sdk.connect).not.toHaveBeenCalled();
+  });
+  it('uses the dedicated robot application credentials while HRM credentials remain configured', async () => {
+    await startGateway();
+    expect(DWClient).toHaveBeenCalledWith(expect.objectContaining({
+      clientId: 'bot-app-key',
+      clientSecret: 'fake-bot-secret',
+    }));
+    expect(DWClient).not.toHaveBeenCalledWith(expect.objectContaining({
+      clientId: 'app-key',
+    }));
   });
   it('does not start without an active tested provider', async () => {
     ai.getPublicState.mockResolvedValue({
@@ -467,7 +477,7 @@ describe('DingTalk Stream progress adapter', () => {
     await startGateway();
     await receive(message());
     expect(requests[0].body).toEqual({
-      robotCode: 'app-key',
+      robotCode: 'bot-app-key',
       userIds: ['staff'],
       msgKey: 'sampleText',
       msgParam: '{"content":"功能暂未开放"}',
@@ -633,7 +643,7 @@ describe('DingTalk Stream progress adapter', () => {
   });
   it('bounds a stalled token lookup, releases its claim, and suppresses a late send', async () => {
     jest.useFakeTimers();
-    const tokens = (presenter as any).dingtalk;
+    const tokens = (presenter as any).dingtalkBot;
     let finish!: (value: string) => void;
     tokens.getAccessToken.mockImplementationOnce(() => new Promise<string>(resolve => { finish = resolve; }));
     let outcome: unknown;
@@ -651,7 +661,7 @@ describe('DingTalk Stream progress adapter', () => {
   });
   it('includes token time and response body time in one card deadline', async () => {
     jest.useFakeTimers();
-    const tokens = (presenter as any).dingtalk;
+    const tokens = (presenter as any).dingtalkBot;
     tokens.getAccessToken.mockImplementationOnce(() => new Promise(resolve => setTimeout(() => resolve('synthetic-token'), 6000)));
     let requestSignal: AbortSignal | undefined;
     fetchMock.mockImplementationOnce(async (_url, init) => {
@@ -669,7 +679,7 @@ describe('DingTalk Stream progress adapter', () => {
   it('ACKs a committed callback even when card token lookup stalls', async () => {
     jest.useFakeTimers();
     await startGateway();
-    (presenter as any).dingtalk.getAccessToken.mockImplementationOnce(() => new Promise(() => undefined));
+    (presenter as any).dingtalkBot.getAccessToken.mockImplementationOnce(() => new Promise(() => undefined));
     const pending = receive(callback());
     await jest.advanceTimersByTimeAsync(10001);
     expect(sdk.send).toHaveBeenLastCalledWith('delivery', expect.objectContaining({
