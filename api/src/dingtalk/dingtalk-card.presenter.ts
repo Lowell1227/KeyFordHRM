@@ -81,6 +81,10 @@ export class DingtalkCardPresenter {
     const completion = saved
       ? saved.completionPercent
       : preview.completionPercent;
+    const origin = this.config.get<string>('DINGTALK_BOT_HRM_URL')!.replace(/\/$/, '');
+    const detailUrl = preview.state === 'saved'
+      ? `${origin}/action-items?indicatorId=${encodeURIComponent(saved?.indicatorId ?? preview.indicatorId ?? '')}`
+      : `${origin}/ai-progress/confirm/${encodeURIComponent(preview.draftId)}`;
     return {
       actions: canSave
         ? ['修改', '保存进展']
@@ -112,8 +116,8 @@ export class DingtalkCardPresenter {
         editLabel: preview.state === 'saved' ? '查看进展' : '修改',
         saveLabel: '保存进展',
         saveAction: 'save',
-        editUrl: `${this.config.get<string>('DINGTALK_BOT_HRM_URL')!.replace(/\/$/, '')}/ai-progress/confirm/${encodeURIComponent(preview.draftId)}`,
-        detailUrl: `${this.config.get<string>('DINGTALK_BOT_HRM_URL')!.replace(/\/$/, '')}/ai-progress/confirm/${encodeURIComponent(preview.draftId)}`,
+        editUrl: detailUrl,
+        detailUrl,
       },
     };
   }

@@ -577,6 +577,15 @@ describe('DingTalk Stream progress adapter', () => {
         unitSnapshot: null, completionPercent: null, content: '已修正', healthStatus: 'completed' } as any }).params;
     expect(params).toMatchObject({ goal: '更正后的目标', month: '2026-09', content: '已修正', actualValue: '', targetValue: '', completion: '' });
   });
+  it('keeps saved progress reachable after draft expiry using the persisted indicator', () => {
+    const params = presenter.previewCard({ ...preview, state: 'saved', saved: {
+      indicatorId: 'corrected-goal', periodId: 'month', content: '已核对',
+    } as any }).params;
+    expect(params.editUrl).toBe('https://hrm.example/action-items?indicatorId=corrected-goal');
+    expect(params.detailUrl).toBe(params.editUrl);
+    expect(presenter.previewCard(preview).params.editUrl)
+      .toBe(`https://hrm.example/ai-progress/confirm/${draftId}`);
+  });
   it('projects persisted values into both saved previews and old-card callbacks', async () => {
     const saved = { id: 'saved', content: '核对后实际9家', actualValue: 9, targetValueSnapshot: 10,
       unitSnapshot: '家', completionPercent: 90, progress: 90, healthStatus: 'at_risk' };
