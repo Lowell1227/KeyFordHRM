@@ -105,6 +105,7 @@ describe('DingTalk Stream progress adapter', () => {
   let drafts: any;
   let progressUpdate: any;
   let progress: any;
+  let performance: any;
   let presenter: DingtalkCardPresenter;
   let gateway: DingtalkBotGateway;
   let requests: any[];
@@ -183,7 +184,7 @@ describe('DingTalk Stream progress adapter', () => {
               ? {
                   success: true,
                   result: {
-                    outTrackId: draftId,
+                    outTrackId: JSON.parse(init!.body as string).outTrackId,
                     deliverResults: [{ success: true }],
                   },
                 }
@@ -198,12 +199,14 @@ describe('DingTalk Stream progress adapter', () => {
       { getAccessToken: jest.fn().mockResolvedValue('fake-token') } as any,
       drafts,
     );
+    performance = { query: jest.fn().mockResolvedValue(null) };
     gateway = new DingtalkBotGateway(
       config,
       eligibility,
       progress,
       drafts,
       presenter,
+      performance,
     );
   });
   afterEach(() => {
@@ -220,6 +223,84 @@ describe('DingTalk Stream progress adapter', () => {
   };
   const receive = async (event: any) =>
     listeners.get(event.headers.topic)!(event);
+
+  const performanceCard = {
+    kind: "goal",
+    subjectKey: "task:one",
+    params: {
+      cycleLabel: "合成周期",
+      stateLabel: "待制定目标",
+      summary: "请完善本期目标。",
+      primaryText: "制定目标",
+      primaryUrl: "https://hrm.example/tasks/one?stage=goal-setting",
+    },
+  };
+  it("routes explicit performance queries without calling progress recognition and deduplicates their cards", async () => {
+    env.DINGTALK_BOT_GOAL_TEMPLATE_ID = "goal-template";
+    performance.query.mockResolvedValue({
+      kind: "cards",
+      cards: [performanceCard],
+    });
+    await startGateway();
+    await receive(message({ text: { content: "我的目标" } }));
+    await receive(message({ text: { content: "我的目标" } }));
+    expect(progress.prepare).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(1);
+    expect(requests[0].body).toMatchObject({
+      cardTemplateId: "goal-template",
+      cardData: { cardParamMap: performanceCard.params },
+      openSpaceId: "dtv1.card//IM_ROBOT.staff",
+      imRobotOpenSpaceModel: { supportForward: false },
+      imRobotOpenDeliverModel: { robotCode: "bot-app-key" },
+    });
+  });
+  it("uses a safe text entry when the additional template is not configured", async () => {
+    performance.query.mockResolvedValue({
+      kind: "cards",
+      cards: [performanceCard],
+    });
+    await startGateway();
+    await receive(message({ text: { content: "我的目标" } }));
+    expect(progress.prepare).not.toHaveBeenCalled();
+    expect(requests[0].url).toContain("/robot/oToMessages/batchSend");
+    const content = JSON.parse(requests[0].body.msgParam).content;
+    expect(content).toContain(
+      "https://hrm.example/tasks/one?stage=goal-setting",
+    );
+    expect(content).not.toContain("undefined");
+  });
+  it("does not convert a denied query into a model request", async () => {
+    performance.query.mockResolvedValue({
+      kind: "reply",
+      text: "功能暂未开放",
+    });
+    await startGateway();
+    await receive(message({ text: { content: "我的结果" } }));
+    expect(progress.prepare).not.toHaveBeenCalled();
+    expect(JSON.parse(requests[0].body.msgParam).content).toBe("功能暂未开放");
+    expect(requests).toHaveLength(1);
+  });
+  it("does not send a query card with an external link even when passed by an internal caller", async () => {
+    env.DINGTALK_BOT_GOAL_TEMPLATE_ID = "goal-template";
+    performance.query.mockResolvedValue({
+      kind: "cards",
+      cards: [
+        {
+          ...performanceCard,
+          params: {
+            ...performanceCard.params,
+            primaryUrl: "https://evil.example/tasks/one",
+          },
+        },
+      ],
+    });
+    await startGateway();
+    await receive(message({ text: { content: "我的目标" } }));
+    expect(requests.some((r) => r.url.endsWith("createAndDeliver"))).toBe(
+      false,
+    );
+    expect(JSON.stringify(requests)).not.toContain("evil.example");
+  });
 
   it('does not hold API startup while SDK endpoint discovery is pending', async () => {
     sdk.connect.mockImplementation(() => new Promise(() => undefined));

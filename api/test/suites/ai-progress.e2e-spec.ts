@@ -29,6 +29,12 @@ import { ResponseInterceptor } from '@/common/interceptors/response.interceptor'
 import { DataScopeService } from '@/common/services/data-scope.service';
 import { DingtalkBotGateway } from '@/dingtalk/dingtalk-bot.gateway';
 import { DingtalkCardPresenter } from '@/dingtalk/dingtalk-card.presenter';
+import { PerformanceCardService } from '@/dingtalk/performance-card.service';
+import { TasksService } from '@/tasks/tasks.service';
+import { ScoringService } from '@/tasks/scoring.service';
+import { IndicatorVisibilityService } from '@/tasks/indicator-visibility.service';
+import { IndicatorVersionService } from '@/tasks/indicator-version.service';
+import { ImprovementWorkflowService } from '@/improvement-plans/improvement-workflow.service';
 import { DingtalkService } from '@/dingtalk/dingtalk.service';
 import { DingtalkBotCredentialsService } from '@/dingtalk/dingtalk-bot-credentials.service';
 import { EmployeeEffectiveDateService } from '@/employee-archives/employee-effective-date.service';
@@ -136,6 +142,8 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
       DINGTALK_BOT_APP_KEY: 'synthetic-bot-app', DINGTALK_BOT_APP_SECRET: 'synthetic-bot-secret',
       DINGTALK_CORP_ID: 'synthetic-corp', DINGTALK_BOT_STREAM_APP_ID: 'synthetic-stream',
       DINGTALK_BOT_CARD_TEMPLATE_ID: 'synthetic-template', DINGTALK_BOT_HRM_URL: 'https://hrm.example',
+      DINGTALK_BOT_TODO_TEMPLATE_ID: 'synthetic-todo', DINGTALK_BOT_GOAL_TEMPLATE_ID: 'synthetic-goal',
+      DINGTALK_BOT_EVALUATION_TEMPLATE_ID: 'synthetic-evaluation', DINGTALK_BOT_RESULT_TEMPLATE_ID: 'synthetic-result',
     };
     // No ConfigModule or .env loading: unlisted keys cannot fall through to live process settings.
     const isolatedConfig = { get: (key: string, fallback?: string) => values[key] ?? fallback };
@@ -174,6 +182,7 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
         AiConfigService, AiProgressService, ProgressDraftStore, BotEligibilityService,
         AuthService, BusinessCapabilitiesService, EmployeeEffectiveDateService, DataScopeService,
         ObjectivesService, DingtalkCardPresenter, DingtalkBotGateway, FlowService,
+        PerformanceCardService, TasksService, ScoringService, IndicatorVisibilityService, IndicatorVersionService, ImprovementWorkflowService,
         NotificationsService, PeriodReviewsService, PeriodMonitoringService, PeriodAggregationService,
       ],
     }).compile();
@@ -288,6 +297,49 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
     expect(card).toBeDefined();
     return card!.body.outTrackId as string;
   }
+
+  it('queries a real owned period through the Stream adapter without model calls or business writes', async () => {
+    const data = await fixture();
+    const before = await assessmentEvidence(data.task.id);
+    const event = message(data.staffId, { text: { content: '我的自评' } });
+    await receive(event);
+    await receive(event);
+    expect(provider.recognize).not.toHaveBeenCalled();
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0].body).toMatchObject({ cardTemplateId: 'synthetic-evaluation',
+      openSpaceId: `dtv1.card//IM_ROBOT.${data.staffId}`, cardData: { cardParamMap: {
+        periodLabel: periodKey, primaryUrl: `https://hrm.example/tasks/${data.task.id}?stage=self-eval&periodId=${data.period.id}`,
+      } } });
+    expect(await assessmentEvidence(data.task.id)).toEqual(before);
+    expect(await prisma.indicatorProgressUpdate.count({ where: { indicatorInstanceId: data.indicator.id } })).toBe(0);
+  });
+
+  it('keeps personal goal queries owner-only even with a real HR role', async () => {
+    const own = await fixture();
+    const colleague = await fixture();
+    await prisma.user.update({ where: { id: own.employee.id }, data: { sysRole: SysRole.hr } });
+    await config.setAllowlist([own.employee.id], administrator.id);
+    await receive(message(own.staffId, { text: { content: '我的目标' } }));
+    expect(provider.recognize).not.toHaveBeenCalled();
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0].body.cardData.cardParamMap.primaryUrl).toContain(own.task.id);
+    expect(JSON.stringify(outbound)).not.toContain(colleague.task.id);
+  });
+
+  it('keeps unapproved results out of chat and sends an approved confirmation entry without scores', async () => {
+    const data = await fixture();
+    await receive(message(data.staffId, { text: { content: '我的结果' } }));
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0].url).toContain('/robot/oToMessages/batchSend');
+    outbound.length = 0;
+    await prisma.assessmentTask.update({ where: { id: data.task.id }, data: { status: 'approval', approvedAt: new Date() } });
+    await receive(message(data.staffId, { text: { content: '我的结果' } }));
+    expect(outbound[0].body).toMatchObject({ cardTemplateId: 'synthetic-result', cardData: { cardParamMap: {
+      primaryText: '查看并确认结果', primaryUrl: `https://hrm.example/tasks/${data.task.id}?stage=result`,
+    } } });
+    expect(JSON.stringify(outbound)).not.toMatch(/calculatedScore|rawGrade|coefficient|calibratedGrade/);
+    expect(provider.recognize).not.toHaveBeenCalled();
+  });
 
   it.each(['allowlist', 'wrong enterprise', 'group', 'nonparticipant', 'unapproved goal', 'inactive employment'])('rejects out-of-scope before model: %s', async reason => {
     const data = await fixture();

@@ -22,6 +22,7 @@ import {
 } from '../ai-progress/bot-eligibility.service';
 import { ProgressDraftStore } from '../ai-progress/progress-draft.store';
 import { DingtalkCardPresenter } from './dingtalk-card.presenter';
+import { PerformanceCardService } from './performance-card.service';
 
 @Injectable()
 export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
@@ -37,6 +38,7 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
     private readonly progress: AiProgressService,
     private readonly drafts: ProgressDraftStore,
     private readonly cards: DingtalkCardPresenter,
+    private readonly performance: PerformanceCardService,
   ) {}
 
   onModuleInit() {
@@ -175,6 +177,21 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
         return;
       }
       try {
+        const response = await this.performance.query(
+          body.text.content,
+          sender,
+        );
+        if (response) {
+          if (response.kind === "reply")
+            await this.cards.sendBusinessReply(response.text, sender);
+          else {
+            for (const card of response.cards)
+              await this.cards.sendPerformanceCard(card, sender);
+            if (response.text)
+              await this.cards.sendBusinessReply(response.text, sender);
+          }
+          return;
+        }
         const preview = await this.progress.prepare(body.text.content, sender);
         if (preview.kind === 'reply')
           await this.cards.sendBusinessReply(preview.text, sender);

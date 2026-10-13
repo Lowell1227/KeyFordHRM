@@ -1,6 +1,7 @@
 import { Injectable, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { randomUUID } from 'crypto';
+import { createHash, randomUUID } from 'crypto';
+import type { PerformanceCard } from './performance-card.service';
 import { AiConfigService } from '../ai-progress/ai-config.service';
 import { BotSender } from '../ai-progress/bot-eligibility.service';
 import {
@@ -149,6 +150,86 @@ export class DingtalkCardPresenter {
         userIds: [sender.senderStaffId],
         msgKey: 'sampleText',
         msgParam: JSON.stringify({ content: text }),
+      }),
+    );
+  }
+
+  async sendPerformanceCard(card: PerformanceCard, sender: BotSender) {
+    if (!(await this.allowedRecipient(sender))) return;
+    const origin = new URL(this.config.get<string>("DINGTALK_BOT_HRM_URL")!)
+      .origin;
+    for (const key of ["primaryUrl", "secondaryUrl"]) {
+      if (!card.params[key]) continue;
+      const url = new URL(card.params[key]);
+      if (
+        url.origin !== origin ||
+        url.username ||
+        url.password ||
+        url.hash ||
+        !/^\/(tasks(?:\/[^/]+(?:\/final-grade)?)?|improvement-plans(?:\/[^/]+)?)$/.test(
+          url.pathname,
+        )
+      )
+        throw new ServiceUnavailableException(
+          "绩效入口暂不可用，请进入HRM办理",
+        );
+    }
+    const key = createHash("sha256")
+      .update(
+        JSON.stringify([
+          "performance-card-v1",
+          this.config.get("DINGTALK_BOT_APP_KEY"),
+          sender.corpId,
+          sender.senderStaffId,
+          sender.deliveryId,
+          card.kind,
+          card.subjectKey,
+        ]),
+      )
+      .digest("hex");
+    const templateKey = {
+      todo: "DINGTALK_BOT_TODO_TEMPLATE_ID",
+      goal: "DINGTALK_BOT_GOAL_TEMPLATE_ID",
+      evaluation: "DINGTALK_BOT_EVALUATION_TEMPLATE_ID",
+      result: "DINGTALK_BOT_RESULT_TEMPLATE_ID",
+    }[card.kind];
+    const template = this.config.get<string>(templateKey);
+    if (!template?.trim() || template.includes("请填写")) {
+      const title = {
+        todo: "我的绩效待办",
+        goal: "绩效目标",
+        evaluation: "绩效评价",
+        result: "绩效结果",
+      }[card.kind];
+      await this.sendBusinessReply(
+        [
+          title,
+          card.params.cycleLabel,
+          card.params.periodLabel,
+          card.params.stateLabel,
+          card.params.summary,
+          `${card.params.primaryText}：${card.params.primaryUrl}`,
+          "以上为查询时状态，打开页面查看最新进度。",
+        ]
+          .filter(Boolean)
+          .join("\n"),
+        { ...sender, deliveryId: `${sender.deliveryId}:${key}` },
+      );
+      return;
+    }
+    await this.sendOnce(sender, `performance:${key}`, () =>
+      this.request("/card/instances/createAndDeliver", "POST", {
+        cardTemplateId: template,
+        outTrackId: key,
+        cardData: { cardParamMap: card.params },
+        callbackType: "STREAM",
+        userIdType: 1,
+        openSpaceId: `dtv1.card//IM_ROBOT.${sender.senderStaffId}`,
+        imRobotOpenSpaceModel: { supportForward: false },
+        imRobotOpenDeliverModel: {
+          spaceType: "IM_ROBOT",
+          robotCode: this.config.get("DINGTALK_BOT_APP_KEY"),
+        },
       }),
     );
   }
