@@ -8,5 +8,6 @@ import { ImprovementWorkflowService } from './improvement-workflow.service';
   imports: [PrismaModule, DataScopeModule],
   controllers: [ImprovementPlansController],
   providers: [ImprovementWorkflowService],
+  exports: [ImprovementWorkflowService],
 })
 export class ImprovementPlansModule {}

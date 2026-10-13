@@ -11,9 +11,13 @@ import { ProgressDraftStore } from './progress-draft.store';
 import { BotEligibilityService } from './bot-eligibility.service';
 import { DingtalkBotGateway } from '../dingtalk/dingtalk-bot.gateway';
 import { DingtalkCardPresenter } from '../dingtalk/dingtalk-card.presenter';
+import { PerformanceCardService } from '../dingtalk/performance-card.service';
+import { TasksModule } from '../tasks/tasks.module';
+import { PeriodReviewsModule } from '../period-reviews/period-reviews.module';
+import { ImprovementPlansModule } from '../improvement-plans/improvement-plans.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule, ObjectivesModule],
+  imports: [PrismaModule, AuthModule, ObjectivesModule, TasksModule, PeriodReviewsModule, ImprovementPlansModule],
   controllers: [AiConfigController, AiProgressController],
   providers: [
     AiConfigService,
@@ -23,6 +27,7 @@ import { DingtalkCardPresenter } from '../dingtalk/dingtalk-card.presenter';
     BotEligibilityService,
     DingtalkBotGateway,
     DingtalkCardPresenter,
+    PerformanceCardService,
   ],
   exports: [AiConfigService, ProviderClient, AiProgressService, BotEligibilityService],
 })
