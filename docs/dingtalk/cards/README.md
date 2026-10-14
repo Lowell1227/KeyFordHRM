@@ -7,7 +7,8 @@
 - 发布前完成限制 ACL 的数据库备份、断网副本精确恢复、57 项迁移演练与完整 AppModule 启动；原有业务字段摘要未变。只替换 API/Web，PostgreSQL、Redis、MinIO 容器不变；保留原镜像回滚标签，演练容器已清理。
 - 发布后外部健康和页面均为 HTTP 200，未登录配置接口为 401，主资源 SHA256 与容器一致，迁移无失败记录、启动日志无错误。快捷登录、自动通知、Stream 和 preflight 开关均为 false。干净提交归档上的 Web 109 项回归和生产构建通过，未打包主工作区三份无关人事页面修改。
 - 唯一试运行人员已按当前 HRM 账号、有效任职及钉钉绑定核对为姚瑶（312），允许名单只含她，配置操作已审计。独立机器人凭证获取 token 成功；没有发送真实消息，没有更改员工、目标进展或绩效结果。HRM 原登录应用凭证保持不变。
-- 真实联调仍待：管理员在 `/system/ai-services` 录入选定服务商的 API Key、测试并启用；原进展模板 `69ff499a-f107-47a1-bb8c-99359aa64583.schema` 仍为“新创建”，需补充发布授权及关联应用核对；Stream 回调 `headers.appId` 待真实事件核验，不能用平台数值 appId 替换。上述缺项完成前不打开机器人。
+- 随后用户授权发布原进展模板并选定 DeepSeek。原模板 `69ff499a-f107-47a1-bb8c-99359aa64583.schema` 已出现“模板发布成功”确认；应用筛选现场确认它仍归属旧 HRM，新“绩效助手”下仅四张新增模板。本轮未改模板关联或应用权限，不借用旧应用凭证代发；新应用调用原模板的可用性仍待验证。发布截图：`tmp/qa-dingtalk-pilot-20261014/progress-template-published.png`。
+- 真实联调仍待：用户完成 HRM 系统管理员登录，在 `/system/ai-services` 录入 DeepSeek API Key、测试并启用；新应用对原模板的调用核验；Stream 回调 `headers.appId` 真实事件核验，不能用平台数值 appId 替换。线上现场复查仍无任何模型配置，允许名单只含姚瑶，机器人关闭。上述缺项完成前不打开机器人。
 
 发布、备份、回滚及核验文件：`C:\Users\lwei\kayford-releases\7cf205c-dingtalk-pilot`。实际镜像和保护开关由该目录的 `docker-compose.release.yml` 固定；恢复旧应用时使用同目录 `docker-compose.rollback.yml`，只重建 API/Web，保留兼容的增量数据库字段，不用旧备份覆盖上线后的业务写入。真实客户端收发、点击和本人保存验收尚未通过，不得以本次上线代替。
 
