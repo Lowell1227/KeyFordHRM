@@ -386,7 +386,38 @@ describe('AI progress integration (disposable PostgreSQL/Redis, fake external tr
     await receive(message(data.staffId, reason === 'wrong enterprise' ? { senderCorpId: 'foreign' } : reason === 'group' ? { conversationType: '2' } : {}));
     expect(provider.recognize).not.toHaveBeenCalled();
     expect(outbound.filter(item => item.url.endsWith('createAndDeliver'))).toHaveLength(0);
+    if (['allowlist', 'wrong enterprise', 'group', 'inactive employment'].includes(reason)) {
+      expect(outbound).toEqual([]);
+    }
     expect(await prisma.indicatorProgressUpdate.count({ where: { indicatorInstanceId: data.indicator.id } })).toBe(0);
+  });
+
+  it('limits all trial messages to one allowed identity and silently rejects a revoked old card', async () => {
+    const colleague = await fixture();
+    const colleagueDraft = await prepare(colleague);
+    const owner = await fixture(); // Replaces the allowlist with only this synthetic owner.
+    expect((await config.getPublicState()).allowlist).toEqual([owner.employee.id]);
+    outbound.length = 0;
+    recognize.mockClear();
+    stream.send.mockClear();
+    const before = await assessmentEvidence(colleague.task.id);
+    for (const changes of [
+      {}, { msgtype: 'image' }, { text: { content: '' } }, { text: { content: '帮助' } },
+      { text: { content: '我的待办' } }, { text: { content: '我的目标' } },
+      { text: { content: '我的自评' } }, { text: { content: '我的结果' } },
+    ]) await receive(message(colleague.staffId, changes));
+    await receive(saveCard(colleagueDraft, colleague.staffId));
+    await receive(saveCard(randomUUID(), colleague.staffId));
+    await app.get(DingtalkCardPresenter).markSaved(colleagueDraft, { content: '不应发送' } as any);
+    expect(outbound).toEqual([]);
+    expect(stream.send.mock.calls.every(([, result]) => JSON.stringify(result) === '{}')).toBe(true);
+    expect(provider.recognize).not.toHaveBeenCalled();
+    expect(await assessmentEvidence(colleague.task.id)).toEqual(before);
+    expect(await prisma.indicatorProgressUpdate.count({ where: { indicatorInstanceId: colleague.indicator.id } })).toBe(0);
+    await receive(message(owner.staffId, { text: { content: '我的目标' } }));
+    expect(outbound).toHaveLength(1);
+    expect(outbound[0].body.openSpaceId).toBe(`dtv1.card//IM_ROBOT.${owner.staffId}`);
+    expect(JSON.stringify(outbound)).not.toContain(colleague.staffId);
   });
 
   it('enforces admin-only configuration with real JWT roles, encrypted storage and audited changes', async () => {

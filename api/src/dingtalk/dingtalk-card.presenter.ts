@@ -3,7 +3,7 @@ import { ConfigService } from '@nestjs/config';
 import { createHash, randomUUID } from 'crypto';
 import type { PerformanceCard } from './performance-card.service';
 import { AiConfigService } from '../ai-progress/ai-config.service';
-import { BotSender } from '../ai-progress/bot-eligibility.service';
+import { BotEligibilityService, BotSender } from '../ai-progress/bot-eligibility.service';
 import {
   ProgressDraft,
   ProgressDraftStore,
@@ -24,6 +24,7 @@ export class DingtalkCardPresenter {
     private readonly aiConfig: AiConfigService,
     private readonly dingtalkBot: DingtalkBotCredentialsService,
     private readonly drafts: ProgressDraftStore,
+    private readonly eligibility: BotEligibilityService,
   ) {}
 
   async isEnabled() {
@@ -138,7 +139,7 @@ export class DingtalkCardPresenter {
           spaceType: 'IM_ROBOT',
           robotCode: this.config.get('DINGTALK_BOT_APP_KEY'),
         },
-      }),
+      }, sender),
     );
   }
 
@@ -150,7 +151,7 @@ export class DingtalkCardPresenter {
         userIds: [sender.senderStaffId],
         msgKey: 'sampleText',
         msgParam: JSON.stringify({ content: text }),
-      }),
+      }, sender),
     );
   }
 
@@ -230,7 +231,7 @@ export class DingtalkCardPresenter {
           spaceType: "IM_ROBOT",
           robotCode: this.config.get("DINGTALK_BOT_APP_KEY"),
         },
-      }),
+      }, sender),
     );
   }
 
@@ -251,47 +252,50 @@ export class DingtalkCardPresenter {
   async markSaved(draftId: string, saved: SavedProgress) {
     if (!(await this.isEnabled())) return;
     const draft = await this.drafts.get(draftId);
-    if (!draft) return;
+    if (!draft || !(await this.allowedRecipient(draft.sender))) return;
     await this.request('/card/instances', 'PUT', {
       outTrackId: draftId,
       cardData: {
         cardParamMap: this.savedCardParams(draft, saved),
       },
       cardUpdateOptions: { updateCardDataByKey: true },
-    });
+    }, draft.sender);
   }
 
   private async allowedRecipient(sender: BotSender) {
-    return (
-      sender.corpId === this.config.get('DINGTALK_CORP_ID') &&
-      sender.conversationType === '1' &&
-      !!sender.senderStaffId?.trim() &&
-      !!sender.conversationId?.trim() &&
-      (await this.isEnabled())
-    );
+    try {
+      return (await this.isEnabled()) &&
+        (await this.eligibility.resolveIdentity(sender)).kind === 'ready';
+    } catch {
+      // No error tip may bypass recipient admission, including an identity/config outage.
+      return false;
+    }
   }
 
   private async sendOnce(
     sender: BotSender,
     deliveryId: string,
-    send: () => Promise<void>,
+    send: () => Promise<boolean>,
   ) {
     const delivery = { ...sender, deliveryId: `bot-outbound:${deliveryId}` };
     const token = randomUUID();
     // shortcut: a crash before send can suppress this reply for 24h; add a durable outbox if automatic recovery is required.
     if ((await this.drafts.claimDelivery(delivery, token)) !== token) return;
     try {
-      await send();
+      if (!(await send())) await this.drafts.releaseDelivery(delivery, token);
     } catch (error) {
       await this.drafts.releaseDelivery(delivery, token);
       throw error;
     }
   }
 
-  private async request(path: string, method: string, body: object) {
+  private async request(path: string, method: string, body: object, sender: BotSender) {
     try {
-      await withDingtalkDeadline(async (signal) => {
+      return await withDingtalkDeadline(async (signal) => {
         const token = await this.dingtalkBot.getAccessToken(signal);
+        signal.throwIfAborted();
+        // Redis/token waits may outlive an allowlist change. Recheck at the actual dispatch boundary.
+        if (!(await this.allowedRecipient(sender))) return false;
         signal.throwIfAborted();
         const response = await fetch(`https://api.dingtalk.com/v1.0${path}`, {
           method,
@@ -344,6 +348,7 @@ export class DingtalkCardPresenter {
         ) {
           throw new Error();
         }
+        return true;
       });
     } catch {
       throw new ServiceUnavailableException('钉钉消息暂未送达，请稍后重试');

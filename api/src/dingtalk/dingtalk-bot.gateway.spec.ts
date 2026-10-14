@@ -142,6 +142,9 @@ describe('DingTalk Stream progress adapter', () => {
       resolveIdentity: jest
         .fn()
         .mockResolvedValue({ kind: 'ready', viewer: { id: 'owner' } }),
+      resolveRecipient: jest
+        .fn()
+        .mockResolvedValue({ kind: 'ready', viewer: { id: 'owner' } }),
     };
     const claims = new Map();
     drafts = {
@@ -198,6 +201,7 @@ describe('DingTalk Stream progress adapter', () => {
       ai,
       { getAccessToken: jest.fn().mockResolvedValue('fake-token') } as any,
       drafts,
+      eligibility,
     );
     performance = { query: jest.fn().mockResolvedValue(null) };
     gateway = new DingtalkBotGateway(
@@ -235,6 +239,104 @@ describe('DingTalk Stream progress adapter', () => {
       primaryUrl: "https://hrm.example/tasks/one?stage=goal-setting",
     },
   };
+  it.each([
+    ['progress', {}],
+    ['help', { text: { content: '帮助' } }],
+    ['query', { text: { content: '我的目标' } }],
+    ['image', { msgtype: 'image' }],
+    ['empty text', { text: { content: '' } }],
+    ['oversized text', { text: { content: '字'.repeat(10001) } }],
+  ])('silently acknowledges an excluded recipient: %s', async (_label, changes) => {
+    eligibility.resolveIdentity.mockResolvedValue({ kind: 'reply', text: '功能暂未开放' });
+    await startGateway();
+    await receive(message(changes));
+    expect(requests.length).toBe(0);
+    expect(performance.query).not.toHaveBeenCalled();
+    expect(progress.prepare).not.toHaveBeenCalled();
+    expect(sdk.send).toHaveBeenLastCalledWith('delivery', {});
+  });
+  it('fails closed without a fallback message when identity lookup fails', async () => {
+    eligibility.resolveIdentity.mockRejectedValue(new Error('identity unavailable'));
+    await startGateway();
+    await receive(message());
+    expect(requests.length).toBe(0);
+    expect(progress.prepare).not.toHaveBeenCalled();
+    expect(performance.query).not.toHaveBeenCalled();
+    expect(sdk.send).toHaveBeenLastCalledWith('delivery', {});
+  });
+  it.each(['text', 'preview', 'performance', 'refresh'])('blocks direct %s delivery to an excluded recipient', async kind => {
+    eligibility.resolveIdentity.mockResolvedValue({ kind: 'reply', text: '功能暂未开放' });
+    env.DINGTALK_BOT_GOAL_TEMPLATE_ID = 'goal-template';
+    if (kind === 'text') await presenter.sendBusinessReply('提示', sender);
+    if (kind === 'preview') await presenter.sendPreview(preview, sender);
+    if (kind === 'performance') await presenter.sendPerformanceCard(performanceCard as any, sender);
+    if (kind === 'refresh') await presenter.markSaved(draftId, { content: '已保存' } as any);
+    expect(requests.length).toBe(0);
+    expect(drafts.claimDelivery).not.toHaveBeenCalled();
+  });
+  it('rechecks the recipient after a query revokes access, including fallback replies', async () => {
+    performance.query.mockImplementation(async () => {
+      eligibility.resolveIdentity.mockResolvedValue({ kind: 'reply', text: '功能暂未开放' });
+      throw new Error('query unavailable');
+    });
+    await startGateway();
+    await receive(message());
+    expect(performance.query).toHaveBeenCalledTimes(1);
+    expect(requests.length).toBe(0);
+  });
+  it.each(['text', 'preview', 'performance', 'refresh'])('rechecks %s at dispatch after token lookup revokes access', async kind => {
+    env.DINGTALK_BOT_GOAL_TEMPLATE_ID = 'goal-template';
+    const token = (presenter as any).dingtalkBot.getAccessToken;
+    token.mockImplementationOnce(async () => {
+      eligibility.resolveIdentity.mockResolvedValue({ kind: 'reply', text: '功能暂未开放' });
+      return 'fake-token';
+    });
+    const send = async () => {
+      if (kind === 'text') await presenter.sendBusinessReply('提示', sender);
+      if (kind === 'preview') await presenter.sendPreview(preview, sender);
+      if (kind === 'performance') await presenter.sendPerformanceCard(performanceCard as any, sender);
+      if (kind === 'refresh') await presenter.markSaved(draftId, { content: '已保存' } as any);
+    };
+    await send();
+    expect(token).toHaveBeenCalledTimes(1);
+    expect(requests.length).toBe(0);
+    if (kind !== 'refresh') expect(drafts.releaseDelivery).toHaveBeenCalledTimes(1);
+    eligibility.resolveIdentity.mockResolvedValue({ kind: 'ready', viewer: { id: 'owner' } });
+    await send();
+    expect(requests.length).toBe(1);
+  });
+  it('rechecks the global switch after the delivery claim disables the bot', async () => {
+    drafts.claimDelivery.mockImplementationOnce(async (_sender, token) => {
+      env.DINGTALK_BOT_STREAM_ENABLED = 'false';
+      return token;
+    });
+    await presenter.sendBusinessReply('提示', sender);
+    expect(requests.length).toBe(0);
+    expect(drafts.releaseDelivery).toHaveBeenCalledTimes(1);
+  });
+  it.each(['existing', 'expired', 'malformed'])('silently rejects an excluded clicker on a %s card', async kind => {
+    eligibility.resolveIdentity.mockResolvedValue({ kind: 'reply', text: '功能暂未开放' });
+    eligibility.resolveRecipient.mockResolvedValue({ kind: 'reply', text: '功能暂未开放' });
+    if (kind === 'expired') drafts.get.mockResolvedValue(null);
+    await startGateway();
+    await receive(callback(kind === 'malformed' ? { content: '{' } : {}));
+    expect(progressUpdate.create).not.toHaveBeenCalled();
+    expect(drafts.get).not.toHaveBeenCalled();
+    expect(requests.length).toBe(0);
+    expect(sdk.send).toHaveBeenLastCalledWith('delivery', {});
+  });
+  it('suppresses card refresh and callback content when access is revoked during save', async () => {
+    progressUpdate.create.mockImplementation(async () => {
+      eligibility.resolveIdentity.mockResolvedValue({ kind: 'reply', text: '功能暂未开放' });
+      eligibility.resolveRecipient.mockResolvedValue({ kind: 'reply', text: '功能暂未开放' });
+      return { id: 'saved', content: '已保存' };
+    });
+    await startGateway();
+    await receive(callback());
+    expect(progressUpdate.create).toHaveBeenCalledTimes(1);
+    expect(requests.length).toBe(0);
+    expect(sdk.send).toHaveBeenLastCalledWith('delivery', {});
+  });
   it("routes explicit performance queries without calling progress recognition and deduplicates their cards", async () => {
     env.DINGTALK_BOT_GOAL_TEMPLATE_ID = "goal-template";
     performance.query.mockResolvedValue({

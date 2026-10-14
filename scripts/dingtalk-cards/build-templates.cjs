@@ -80,7 +80,7 @@ function buildTemplates() {
       extension: { extendType: 'NORMAL', fileTypeList: [] } };
     return [kind, { editorData: JSON.stringify(editor),
       widgetInfo: `<LinearLayout width="@data{width}" height="match_content" orientation="vertical" cornerRadius="12np" paddingBottom="14np" backgroundColor="${xml("@dtDarkModeAdapter{'#FFFFFF','#1E1E1E'}")}">${widgets.join('')}</LinearLayout>`,
-      type: 'standard', mode: 'card' }];
+      type: 'im', mode: 'card' }];
   }));
 }
 module.exports = { buildTemplates };
@@ -91,5 +91,5 @@ if (require.main === module) {
   for (const [kind, template] of Object.entries(buildTemplates())) {
     fs.writeFileSync(path.join(directory, `${kind}.json`), JSON.stringify(template, null, 2) + '\n');
   }
-  process.stdout.write('Generated four DingTalk standard-card imports. Native import/render verification remains required.\n');
+  process.stdout.write('Generated four DingTalk message-card imports. Native import/render verification remains required.\n');
 }

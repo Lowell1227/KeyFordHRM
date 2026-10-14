@@ -43,9 +43,19 @@ export class BotEligibilityService {
   async resolveIdentity(sender: BotSender): Promise<
     { kind: 'ready'; viewer: AuthUser } | { kind: 'reply'; text: string }
   > {
-    const corpId = this.config.get<string>('DINGTALK_CORP_ID');
-    if (!corpId || sender.corpId !== corpId || sender.conversationType !== '1'
+    if (sender.conversationType !== '1'
       || !sender.senderStaffId?.trim() || !sender.conversationId?.trim() || !sender.deliveryId?.trim()) {
+      return { kind: 'reply', text: '请在本企业的机器人单聊中更新目标进展。' };
+    }
+    return this.resolveRecipient(sender.corpId, sender.senderStaffId);
+  }
+
+  // Card callbacks have a verified user-space, but may no longer have a live draft/cid.
+  async resolveRecipient(corpId: string, staffId: string): Promise<
+    { kind: 'ready'; viewer: AuthUser } | { kind: 'reply'; text: string }
+  > {
+    const expectedCorp = this.config.get<string>('DINGTALK_CORP_ID');
+    if (!expectedCorp || corpId !== expectedCorp || !staffId?.trim()) {
       return { kind: 'reply', text: '请在本企业的机器人单聊中更新目标进展。' };
     }
     const state = await this.aiConfig.getPublicState();
@@ -53,14 +63,14 @@ export class BotEligibilityService {
 
     const unavailable = { kind: 'reply' as const, text: '账号未开通或已停用，请联系管理员核对钉钉绑定和有效任职。' };
     let binding = await this.prisma.externalIdentityBinding.findFirst({
-      where: { provider: ExternalIdentityProvider.dingtalk, externalUserId: sender.senderStaffId, endedAt: null },
+      where: { provider: ExternalIdentityProvider.dingtalk, externalUserId: staffId, endedAt: null },
       include: { user: true },
     });
     if (!binding) {
       let unionId: string;
       try {
         unionId = (await withDingtalkDeadline(signal =>
-          this.dingtalk.fetchUserDetail(sender.senderStaffId, undefined, signal))).unionid;
+          this.dingtalk.fetchUserDetail(staffId, undefined, signal))).unionid;
       } catch (error) {
         if (error instanceof DingtalkDeadlineError)
           return { kind: 'reply', text: '钉钉身份核对暂不可用，请稍后重试。' };

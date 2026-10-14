@@ -165,6 +165,8 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
         conversationType: '1',
         deliveryId: body.msgId,
       };
+      // Admission precedes every user-visible reply, including invalid-input and error tips.
+      if ((await this.eligibility.resolveIdentity(sender)).kind !== 'ready') return;
       if (
         body.msgtype !== 'text' ||
         !this.nonempty(body.text?.content) ||
@@ -211,6 +213,7 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
 
   private async onCard(event: DWClientDownStream, client: DWClient) {
     let result: object = {};
+    let recipient: { corpId: string; staffId: string } | undefined;
     try {
       if (!(await this.validFrame(event, TOPIC_CARD, client))) return;
       const body = JSON.parse(event.data);
@@ -227,6 +230,8 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
         )
       )
         throw new ForbiddenException('请在本人机器人单聊中重新发送进展');
+      if ((await this.eligibility.resolveRecipient(body.corpId, body.userId)).kind !== 'ready') return;
+      recipient = { corpId: body.corpId, staffId: body.userId };
       const content = JSON.parse(body.content);
       if (content?.cardPrivateData?.params?.action !== 'save') return;
       const draft = await this.drafts.get(body.outTrackId);
@@ -276,6 +281,18 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
         userPrivateData: { cardParamMap: { notice: text } },
       };
     } finally {
+      // A protocol ACK is not a message. Only admitted recipients may get card/error content,
+      // and admission must still hold after the save or an expired-draft lookup.
+      if (Object.keys(result).length) {
+        try {
+          if (!recipient || !(await this.cards.isEnabled()) ||
+            (await this.eligibility.resolveRecipient(recipient.corpId, recipient.staffId)).kind !== 'ready') {
+            result = {};
+          }
+        } catch {
+          result = {};
+        }
+      }
       this.ack(client, event, result);
     }
   }

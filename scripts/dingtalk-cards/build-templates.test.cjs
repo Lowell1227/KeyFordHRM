@@ -15,7 +15,8 @@ test('four native imports declare only the backend contract and no sensitive res
   assert.deepEqual(Object.keys(templates), ['todo', 'goal', 'evaluation', 'result']);
   for (const [kind, template] of Object.entries(templates)) {
     const editor = JSON.parse(template.editorData);
-    assert.equal(template.type, 'standard');
+    // The live message-card editor exports type "im" (native export, 2026-10-14).
+    assert.equal(template.type, 'im');
     assert.equal(template.mode, 'card');
     assert.equal(editor.schemaVersion, '3.0.0');
     assert.deepEqual(editor.variableList.map(v => v.name).sort(), contracts[kind].toSorted());
