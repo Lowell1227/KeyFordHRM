@@ -139,7 +139,7 @@ function submit() {
         <div class="section-title"><h3>组织职责</h3><span>与人员档案一致的选择方式</span></div>
         <el-form label-position="top">
           <el-form-item label="部门负责人"><UserSelect v-model="form.leaderId" clearable /></el-form-item>
-          <el-form-item label="最终业务审批人"><UserSelect v-model="form.approverId" clearable /></el-form-item>
+          <el-form-item label="分管领导"><UserSelect v-model="form.approverId" clearable /></el-form-item>
         </el-form>
       </section>
       <section class="impact-card">

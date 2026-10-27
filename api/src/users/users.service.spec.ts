@@ -47,7 +47,7 @@ describe('UsersService', () => {
           getIdentitySummariesForUsers: jest.fn().mockResolvedValue(new Map([
             ['employee-1', [
               { type: 'department_leader', label: '部门负责人', count: 1 },
-              { type: 'performance_approver', label: '最终业务审批人', count: 2 },
+              { type: 'performance_approver', label: '分管领导', count: 2 },
             ]],
           ])),
         } as any,
@@ -64,7 +64,7 @@ describe('UsersService', () => {
         systemPermission: 'standard_user',
         businessIdentities: [
           { type: 'department_leader', label: '部门负责人', count: 1 },
-          { type: 'performance_approver', label: '最终业务审批人', count: 2 },
+          { type: 'performance_approver', label: '分管领导', count: 2 },
         ],
       }));
       expect((service as any).prisma.user.count).toHaveBeenCalledWith({

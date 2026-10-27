@@ -549,7 +549,7 @@ watch(() => props.cycle?.id, () => {
               </el-table-column>
               <el-table-column
                 v-if="isPrelaunch"
-                :label="cycle.workflowVersion === 2 ? '结果审批人' : '最终业务审批人'"
+                :label="cycle.workflowVersion === 2 ? '结果审批人' : '分管领导'"
                 min-width="210"
               >
                 <template #default="{ row }">

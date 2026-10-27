@@ -291,7 +291,7 @@ function departmentChangeSummary(row: DepartmentChangeRequest): string {
     if (beforeName !== afterName) changes.push(`名称：${beforeName} → ${afterName}`);
     if (beforeParent !== afterParent) changes.push(`上级：${String(row.proposedValue.parentName ?? '公司根节点')}`);
     if ((row.baseValue.leaderId ?? null) !== (row.proposedValue.leaderId ?? null)) changes.push('部门负责人');
-    if ((row.baseValue.approverId ?? null) !== (row.proposedValue.approverId ?? null)) changes.push('最终业务审批人');
+    if ((row.baseValue.approverId ?? null) !== (row.proposedValue.approverId ?? null)) changes.push('分管领导');
     return changes.length ? changes.join('；') : `${beforeName} 组织信息调整`;
   }
   if (row.action === 'merge') {

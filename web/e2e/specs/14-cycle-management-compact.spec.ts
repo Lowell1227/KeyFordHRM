@@ -836,7 +836,7 @@ test.describe('compact cycle management list', () => {
     await expect(participantDetails).toContainText('销售部');
     await expect(participantDetails).toContainText('周强');
     await expect(participantDetails.getByRole('columnheader', { name: '部门复核人' })).toBeVisible();
-    await expect(participantDetails.getByRole('columnheader', { name: '最终业务审批人' })).toBeVisible();
+    await expect(participantDetails.getByRole('columnheader', { name: '分管领导' })).toBeVisible();
     await expect(participantDetails).toContainText('员工档案中的绩效直属上级');
     await expect(participantDetails).toContainText('继承销售事业部明确配置');
     await expect(page.getByTestId('participant-filter-all')).toBeVisible();

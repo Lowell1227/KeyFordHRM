@@ -117,10 +117,10 @@ test('personnel processing is visible to archive editors, reviewers and administ
 test('business identity labels stay separate from workload counts', () => {
   expect([
     { type: 'performance_manager' as const, label: '绩效直属上级', count: 3 },
-    { type: 'performance_approver' as const, label: '最终业务审批人', count: 1 },
+    { type: 'performance_approver' as const, label: '分管领导', count: 1 },
   ].map(formatBusinessIdentityLabel)).toEqual([
     '绩效直属上级',
-    '最终业务审批人',
+    '分管领导',
   ]);
 });
 

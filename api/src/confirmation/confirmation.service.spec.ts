@@ -157,7 +157,7 @@ describe('employee confirmation draft', () => {
     prisma.department.findMany.mockResolvedValue([{ id: 'dept-1', name: '人事组', parentId: null,
       leaderId: null, approverId: null, leader: null, approver: null }]);
     await expect(service.submit('33333333-3333-4333-8333-333333333333', viewer))
-      .rejects.toThrow('尚无有效的最终业务审批人');
+      .rejects.toThrow('尚无有效的分管领导');
     expect(prisma.confirmationApplication.updateMany).not.toHaveBeenCalled();
   });
 

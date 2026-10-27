@@ -210,7 +210,7 @@ test.describe('dashboard and reports business clarity', () => {
       canOperatePerformanceApproval: true,
       identities: [
         { type: 'performance_manager', label: '绩效直属上级', count: 1 },
-        { type: 'performance_approver', label: '最终业务审批人', count: 1 },
+        { type: 'performance_approver', label: '分管领导', count: 1 },
       ],
     });
     await page.route('**/api/v1/tasks/mine**', (route) => route.fulfill({
@@ -242,7 +242,7 @@ test.describe('dashboard and reports business clarity', () => {
     await expect(personalCenter).toContainText('标准用户');
     await expect(personalCenter).not.toContainText('当前业务职责');
     await expect(personalCenter).not.toContainText('绩效直属上级');
-    await expect(personalCenter).not.toContainText('最终业务审批人');
+    await expect(personalCenter).not.toContainText('分管领导');
     await page.getByTestId('header-user-menu').click();
     await expect(page.getByText('当前没有进行中的本人任务或团队任务。', { exact: true })).toBeVisible();
     await expect(page.getByTestId('dashboard-cycle-entry')).toHaveCount(0);

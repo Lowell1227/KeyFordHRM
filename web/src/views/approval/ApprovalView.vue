@@ -478,7 +478,7 @@ function handleBatchReject() {
           type="info"
           :closable="false"
           title="当前为全局只读视图"
-          description="你可以查看审批结果，但只有任务指定的最终业务审批人可以通过或退回。"
+          description="你可以查看审批结果，但只有任务指定的分管领导可以通过或退回。"
           show-icon
         />
 

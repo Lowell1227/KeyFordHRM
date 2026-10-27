@@ -33,7 +33,7 @@ describe("DepartmentsService", () => {
     );
   });
 
-  it("返回一级部门负责人直属主管作为最终业务审批人", async () => {
+  it("返回一级部门负责人直属主管作为分管领导", async () => {
     const prisma = {
       department: {
         findMany: jest.fn().mockResolvedValue([

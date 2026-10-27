@@ -1,7 +1,7 @@
 import { buildEffectiveApproverMap, DepartmentRelationRecord } from './department-relations';
 
 describe('buildEffectiveApproverMap', () => {
-  it('一级部门使用部门负责人的直属主管作为最终业务审批人', () => {
+  it('一级部门使用部门负责人的直属主管作为分管领导', () => {
     const departments = [
       {
         id: 'root-dept',
@@ -27,7 +27,7 @@ describe('buildEffectiveApproverMap', () => {
     });
   });
 
-  it('手动设置的最终业务审批人优先于自动匹配', () => {
+  it('手动设置的分管领导优先于自动匹配', () => {
     const departments = [
       {
         id: 'root-dept',

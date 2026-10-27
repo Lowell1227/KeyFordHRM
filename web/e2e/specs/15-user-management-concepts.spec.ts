@@ -98,7 +98,7 @@ test('uses concise and consistent organization relationship concepts', async () 
     '人员设置',
     '直属主管',
     '系统权限',
-    '最终业务审批人',
+    '分管领导',
     '人事办理',
     '未分配人员',
     '删除',
@@ -355,13 +355,17 @@ test('filters direct-manager candidates by employee name', async ({ page }) => {
   });
 
   await page.goto(`${webBaseUrl}/organization`);
-  const approverCard = page.locator('.relation-card').filter({ hasText: '最终业务审批人' });
+  const approverCard = page.locator('.relation-card').filter({ hasText: '分管领导' });
   await expect(approverCard).toContainText('郭志浩');
   await expect(approverCard).toContainText('自动取部门负责人的绩效直属上级');
   await expect(approverCard).toContainText('HR 只负责校准');
   await expect(page.getByRole('button', { name: '编辑', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '设置最终业务审批人' })).toHaveCount(0);
+  await expect(page.getByRole('button', { name: '设置分管领导' })).toHaveCount(0);
   await expect(page.locator('.approver-trail-card')).toHaveCount(0);
+  await page.getByRole('button', { name: '编辑', exact: true }).click();
+  const departmentEditor = page.getByRole('dialog', { name: '编辑部门' });
+  await expect(departmentEditor.getByText('分管领导', { exact: true })).toBeVisible();
+  await departmentEditor.getByRole('button', { name: '取消', exact: true }).click();
   await page.getByRole('button', { name: '人员设置' }).click();
   const dialog = page.getByRole('dialog', { name: '人员设置' });
   await expect(dialog).toBeVisible();

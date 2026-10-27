@@ -966,7 +966,7 @@ describe('LaunchService preflight', () => {
   });
 
   it.each([
-    { workflowVersion: 1, expectedCopy: '最终业务审批人' },
+    { workflowVersion: 1, expectedCopy: '分管领导' },
     { workflowVersion: 2, expectedCopy: '结果审批人' },
   ])('uses workflow v$workflowVersion organization blocker terminology', async ({
     workflowVersion,

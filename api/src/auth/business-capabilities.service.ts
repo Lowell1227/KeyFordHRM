@@ -135,7 +135,7 @@ export class BusinessCapabilitiesService {
     const identities: BusinessIdentity[] = [];
     this.addIdentity(identities, 'performance_manager', '绩效直属上级', managerScopeCount);
     this.addIdentity(identities, 'department_leader', '部门负责人', departmentScopeCount);
-    this.addIdentity(identities, 'performance_approver', '最终业务审批人', approvalScopeCount);
+    this.addIdentity(identities, 'performance_approver', '分管领导', approvalScopeCount);
     this.addIdentity(identities, 'cycle_hr_owner', '本周期 HR 负责人', hrCycleCount);
 
     return {
@@ -244,7 +244,7 @@ export class BusinessCapabilitiesService {
       this.addIdentity(
         identities,
         'performance_approver',
-        '最终业务审批人',
+        '分管领导',
         approvalDepartmentCount + (approverTaskCounts.get(userId) ?? 0),
       );
       this.addIdentity(

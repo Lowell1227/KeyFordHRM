@@ -1402,7 +1402,7 @@ export class LaunchService {
     if (missingApprovers.size > 0) {
       const approverCopy = this.isWorkflowV2(cycle)
         ? '结果审批人'
-        : '最终业务审批人';
+        : '分管领导';
       messages.push(
         `以下部门未设置${approverCopy}，请补齐部门负责人及其直属上级；最高层级可手动设置：${Array.from(missingApprovers).join('、')}`,
       );
@@ -1413,7 +1413,7 @@ export class LaunchService {
     if (selfApprovers.size > 0) {
       const approverCopy = this.isWorkflowV2(cycle)
         ? '结果审批人'
-        : '最终业务审批人';
+        : '分管领导';
       messages.push(`以下员工的${approverCopy}不能是本人：${Array.from(selfApprovers).join('、')}`);
     }
 

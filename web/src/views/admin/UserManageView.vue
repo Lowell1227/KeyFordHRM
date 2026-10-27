@@ -325,7 +325,7 @@ const departmentIssueItems = computed<IssueItem[]>(() =>
       items.push({
         key: `${dept.id}-approver`,
         type: '部门',
-        title: `${dept.name} 未设置最终业务审批人`,
+        title: `${dept.name} 未设置分管领导`,
         detail: '当前部门有在职员工，但没有可自动匹配的业务上级。请补齐部门负责人及其绩效直属上级；最高层级可手动设置。',
         level: 'danger',
         deptId: dept.id,
@@ -1559,7 +1559,7 @@ async function confirmApprover() {
     await departmentsApi.updateApprover(approverDialog.value.deptId, {
       approverId: approverDialog.value.approverId ?? null,
     });
-    ElMessage.success('最终业务审批人已更新');
+    ElMessage.success('分管领导已更新');
     approverDialog.value.visible = false;
     await loadDepartments();
   } catch {
@@ -1822,7 +1822,7 @@ onBeforeUnmount(() => {
               <small>{{ selectedDept.leaderName ? '负责本部门管理和绩效复核' : '未设置将影响部门复核' }}</small>
             </div>
             <div class="relation-card">
-              <span class="relation-card__label">最终业务审批人</span>
+              <span class="relation-card__label">分管领导</span>
               <strong>{{ selectedDept.effectiveApproverName || '未设置' }}</strong>
               <small>{{ getFinalApproverRule(selectedDept) }}</small>
             </div>
@@ -2804,7 +2804,7 @@ onBeforeUnmount(() => {
     </el-dialog>
 
     <el-dialog v-model="leaderDialog.visible" title="设置部门负责人" width="480px" :close-on-click-modal="false" destroy-on-close>
-      <p class="dialog-tip">部门负责人负责本部门管理和绩效复核，也是下级部门最终业务审批人的默认来源。</p>
+      <p class="dialog-tip">部门负责人负责本部门管理和绩效复核，也是下级部门分管领导的默认来源。</p>
       <UserSelect v-model="leaderDialog.leaderId" placeholder="搜索姓名或工号，留空则清空部门负责人" />
       <template #footer>
         <el-button @click="leaderDialog.visible = false">取消</el-button>
@@ -2812,7 +2812,7 @@ onBeforeUnmount(() => {
       </template>
     </el-dialog>
 
-    <el-dialog v-model="approverDialog.visible" title="设置最终业务审批人" width="480px" :close-on-click-modal="false" destroy-on-close>
+    <el-dialog v-model="approverDialog.visible" title="设置分管领导" width="480px" :close-on-click-modal="false" destroy-on-close>
       <p class="dialog-tip">绩效新周期优先采用本部门明确设置的审批人，未设置时向上查找。实际审批人员以发起前检查为准，已启动周期保留原审批关系。</p>
       <UserSelect v-model="approverDialog.approverId" placeholder="搜索姓名或工号，留空则恢复自动匹配" />
       <template #footer>

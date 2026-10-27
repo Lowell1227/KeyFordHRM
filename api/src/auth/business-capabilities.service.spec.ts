@@ -95,7 +95,7 @@ describe('BusinessCapabilitiesService', () => {
       identities: [
         { type: 'performance_manager', label: '绩效直属上级', count: 5 },
         { type: 'department_leader', label: '部门负责人', count: 2 },
-        { type: 'performance_approver', label: '最终业务审批人', count: 5 },
+        { type: 'performance_approver', label: '分管领导', count: 5 },
         { type: 'cycle_hr_owner', label: '本周期 HR 负责人', count: 1 },
       ],
     });
@@ -187,7 +187,7 @@ describe('BusinessCapabilitiesService', () => {
       { type: 'department_leader', label: '部门负责人', count: 1 },
     ]);
     expect(result.get('user-2')).toEqual([
-      { type: 'performance_approver', label: '最终业务审批人', count: 4 },
+      { type: 'performance_approver', label: '分管领导', count: 4 },
     ]);
     expect(prisma.user.count).not.toHaveBeenCalled();
   });

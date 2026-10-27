@@ -346,7 +346,7 @@ export class ConfirmationService {
       approverId: dept.approverId, approverName: dept.approver?.name ?? null,
     }))).get(deptId)?.approverId;
     if (!approverId) {
-      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '所属部门尚无有效的最终业务审批人，请联系 HR 核实组织设置' });
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '所属部门尚无有效的分管领导，请联系 HR 核实组织设置' });
     }
     return approverId;
   }
@@ -384,12 +384,12 @@ export class ConfirmationService {
     }
     const companyApproverId = await this.effectiveCompanyApproverId(employee.deptId);
     if (companyApproverId === app.employeeId) {
-      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '最终业务审批人不能是申请员工本人，请联系 HR 核实组织设置' });
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '分管领导不能是申请员工本人，请联系 HR 核实组织设置' });
     }
     const approver = await this.prisma.user.findUnique({ where: { id: companyApproverId },
       select: { status: true, deletedAt: true } });
     if (!approver || approver.deletedAt || approver.status !== UserStatus.active) {
-      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '最终业务审批人不在职，请联系 HR 核实组织设置' });
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '分管领导不在职，请联系 HR 核实组织设置' });
     }
     await this.prisma.$transaction(async (tx) => {
       const updated = await tx.confirmationApplication.updateMany({
