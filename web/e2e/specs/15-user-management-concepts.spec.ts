@@ -472,7 +472,8 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await page.goto(`${webBaseUrl}/users`);
   await expect(page.getByRole('columnheader', { name: '岗位', exact: true })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: '系统权限', exact: true })).toBeVisible();
-  await expect(page.getByRole('columnheader', { name: '业务职责', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: '直属下属', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: '业务职责', exact: true })).toHaveCount(0);
   await page.getByRole('button', { name: '人员设置' }).click();
   const dialog = page.getByRole('dialog', { name: '人员设置' });
   const summary = dialog.locator('.person-settings__summary');
@@ -521,7 +522,7 @@ test('uses one person settings dialog and keeps performance identity separate fr
   await page.getByRole('button', { name: '员工档案', exact: true }).click();
   await expect(page.getByRole('columnheader', { name: '岗位', exact: true })).toBeVisible();
   await expect(page.getByRole('columnheader', { name: '系统权限', exact: true })).toBeVisible();
-  await expect(page.getByRole('columnheader', { name: '业务职责', exact: true })).toBeVisible();
+  await expect(page.getByRole('columnheader', { name: '直属下属', exact: true })).toBeVisible();
   await page.getByRole('button', { name: '人员设置' }).click();
   const rosterDialog = page.getByRole('dialog', { name: '人员设置' });
   await expect(rosterDialog.locator('.person-settings__summary')).toContainText('人事专员');
@@ -580,6 +581,7 @@ test('edits the whole employee archive in place and supports contract row change
     currentEmployment: {
       id: 'employment-current',
       company: 'fansibao',
+      companyText: '凡思堡',
     },
     employeeContracts: [{
       id: 'contract-1',

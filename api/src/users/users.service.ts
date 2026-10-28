@@ -55,6 +55,7 @@ export interface UserListItem {
   employmentType: EmploymentType;
   directManagerId: string | null;
   directManagerName: string | null;
+  directReportCount: number;
   isAssessorOnly: boolean;
   canViewAll: boolean;
   entryDate: Date | null;
@@ -216,8 +217,17 @@ export class UsersService {
       }),
     ]);
 
-    const identitiesByUser = await this.businessCapabilities.getIdentitySummariesForUsers(
-      users.map((user) => user.id),
+    const userIds = users.map((user) => user.id);
+    const [identitiesByUser, directReportGroups] = await Promise.all([
+      this.businessCapabilities.getIdentitySummariesForUsers(userIds),
+      userIds.length ? this.prisma.user.groupBy({
+        by: ['directManagerId'],
+        where: { ...this.directReportWhere(scopeFilter), directManagerId: { in: userIds } },
+        _count: { _all: true },
+      }) : [],
+    ]);
+    const directReportCounts = new Map<string | null, number>(
+      directReportGroups.map((group) => [group.directManagerId, group._count._all] as const),
     );
     const canViewArchive = hasHrCapability(viewer, 'employee_archive_edit') || hasHrCapability(viewer, 'employee_archive_review');
     const archiveWarnings = canViewArchive ? await this.getArchiveWarnings(users) : new Map();
@@ -239,6 +249,7 @@ export class UsersService {
       employmentType: u.employmentType,
       directManagerId: u.directManagerId,
       directManagerName: u.directManager?.name ?? null,
+      directReportCount: directReportCounts.get(u.id) ?? 0,
       isAssessorOnly: u.isAssessorOnly,
       canViewAll: u.canViewAll,
       entryDate: u.entryDate,
@@ -392,6 +403,14 @@ export class UsersService {
     };
   }
 
+  private directReportWhere(scopeFilter: Prisma.UserWhereInput): Prisma.UserWhereInput {
+    return {
+      ...currentWorkerWhere,
+      accountType: AccountType.employee,
+      ...(Object.keys(scopeFilter).length ? { AND: [scopeFilter] } : {}),
+    };
+  }
+
   /**
    * GET /users/:id/subordinates — 某人的直接下属列表（主管选人用）。
    * 仅本人 / HR / system_admin / canViewAll 可查，避免泄露组织结构。
@@ -412,11 +431,11 @@ export class UsersService {
       });
     }
 
+    const scopeFilter = await this.dataScope.getVisibleEmployeeFilter(viewer);
     const subs = await this.prisma.user.findMany({
       where: {
+        ...this.directReportWhere(scopeFilter),
         directManagerId: managerId,
-        deletedAt: null,
-        status: UserStatus.active,
       },
       select: {
         id: true,

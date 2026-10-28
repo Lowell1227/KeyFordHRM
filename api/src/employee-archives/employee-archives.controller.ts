@@ -9,6 +9,7 @@ import {
   Query,
   StreamableFile,
   UploadedFile,
+  UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -33,6 +34,7 @@ import {
 import { EmployeeArchivesService } from './employee-archives.service';
 import { EmployeeDataReviewsService } from './employee-data-reviews.service';
 import { EmployeeRosterImportService } from './employee-roster-import.service';
+import { EmployeeRosterImportClosedGuard } from './employee-roster-import-closed.guard';
 import {
   ApproveEmployeeDataReviewsDto,
   EmployeeDataReviewQueryDto,
@@ -165,6 +167,7 @@ export class EmployeeArchivesController {
 
   @Get('imports/template')
   @HrCapabilities('employee_archive_edit')
+  @UseGuards(EmployeeRosterImportClosedGuard)
   async downloadImportTemplate() {
     const buffer = await buildEmployeeRosterTemplate();
     return new StreamableFile(buffer, {
@@ -322,6 +325,7 @@ export class EmployeeArchivesController {
 
   @Post('imports/preview')
   @HrCapabilities('employee_archive_edit')
+  @UseGuards(EmployeeRosterImportClosedGuard)
   @UseInterceptors(FileInterceptor('file'))
   previewImport(
     @UploadedFile() file: Express.Multer.File,
@@ -333,6 +337,7 @@ export class EmployeeArchivesController {
 
   @Post('imports/:batchId/confirm')
   @HrCapabilities('employee_archive_edit')
+  @UseGuards(EmployeeRosterImportClosedGuard)
   @UseInterceptors(FileInterceptor('file'))
   confirmImport(
     @Param('batchId', new ParseUUIDPipe({ version: '4' })) batchId: string,
@@ -344,6 +349,7 @@ export class EmployeeArchivesController {
 
   @Get('imports/:batchId')
   @HrCapabilities('employee_archive_edit')
+  @UseGuards(EmployeeRosterImportClosedGuard)
   getImportBatch(@Param('batchId', new ParseUUIDPipe({ version: '4' })) batchId: string) {
     return this.imports.findBatch(batchId);
   }

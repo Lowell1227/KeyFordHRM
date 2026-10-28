@@ -215,6 +215,7 @@ export interface User {
   systemPermission?: SystemPermission;
   hrCapabilities?: HrCapability[];
   businessIdentities?: BusinessIdentity[];
+  directReportCount?: number;
   isAssessorOnly: boolean;
   canViewAll: boolean;
   createdAt?: string;

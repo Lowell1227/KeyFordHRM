@@ -3,6 +3,7 @@ import { PrismaModule } from '@/prisma/prisma.module';
 import { EmployeeArchivesController } from './employee-archives.controller';
 import { EmployeeArchivesService } from './employee-archives.service';
 import { EmployeeRosterImportService } from './employee-roster-import.service';
+import { EmployeeRosterImportClosedGuard } from './employee-roster-import-closed.guard';
 import { EmployeeDataReviewsService } from './employee-data-reviews.service';
 import { EmployeeEffectiveDateService } from './employee-effective-date.service';
 import { PersonnelDiagnosticsService } from './personnel-diagnostics.service';
@@ -16,6 +17,7 @@ import { EmployeeOnboardingService } from './employee-onboarding.service';
   providers: [
     EmployeeArchivesService,
     EmployeeRosterImportService,
+    EmployeeRosterImportClosedGuard,
     EmployeeDataReviewsService,
     EmployeeEffectiveDateService,
     EmployeeNumberService,

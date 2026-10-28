@@ -214,13 +214,8 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   await expect(page.locator('.desktop-result-table .el-table__header .el-checkbox')).toHaveCount(0);
   await expect(page.getByRole('button', { name: '批量操作', exact: true })).toHaveCount(0);
   const rosterImportAction = page.locator('.page-title__actions').getByRole('button', { name: '导入花名册', exact: true });
-  await expect(rosterImportAction).toBeVisible();
-  await rosterImportAction.click();
-  const rosterImportDialog = page.getByRole('dialog', { name: '花名册导入预检' });
-  await expect(rosterImportDialog.getByRole('button', { name: '下载花名册模板', exact: true })).toBeVisible();
-  await expect(rosterImportDialog.getByText('员工主档、任职记录和合同记录')).toBeVisible();
-  await expect(rosterImportDialog.getByText('81 列花名册')).toHaveCount(0);
-  await rosterImportDialog.getByLabel('关闭此对话框').click();
+  await expect(rosterImportAction).toHaveCount(0);
+  await expect(page.getByRole('dialog', { name: '花名册导入预检' })).toHaveCount(0);
 
   const activeRow = page.locator('.desktop-result-table .el-table__row').filter({ hasText: '在职员工' });
   await activeRow.getByRole('button', { name: '办理离职' }).click();
@@ -298,7 +293,7 @@ test('员工分类贴近列表，草稿页内维护，归档动作统一', async
   await expect(createDrawer.getByRole('button', { name: '保存并退出' })).toBeVisible();
   await expect(createDrawer.getByRole('button', { name: '下一步' })).toBeVisible();
   await expect(createDrawer.getByRole('button', { name: '提交审核' })).toHaveCount(0);
-  await expect(createDrawer.getByText('员工工号将在提交审核时自动生成')).toBeVisible();
+  await expect(createDrawer.locator('.el-form-item').filter({ hasText: '姓名' }).locator('input').first()).toBeVisible();
   await expect(createDrawer.getByLabel('工号')).toHaveCount(0);
   await createDrawer.getByLabel('关闭此对话框').click();
 

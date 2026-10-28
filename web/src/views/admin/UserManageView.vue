@@ -1,13 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { ElMessage, ElMessageBox, type UploadFile } from 'element-plus';
+import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   ArrowRight,
   Key,
   QuestionFilled,
   Search,
   Setting,
-  UploadFilled,
   Warning,
 } from '@element-plus/icons-vue';
 import { departmentsApi } from '@/api/departments.api';
@@ -15,9 +14,6 @@ import {
   employeeArchivesApi,
   type EmployeeArchive,
   type EmployeeDataReview,
-  type EmployeeRosterImportRow,
-  type EmployeeRosterImportMode,
-  type EmployeeRosterPreviewResult,
   type ArchiveBatchResult,
 } from '@/api/employee-archives.api';
 import { usersApi } from '@/api/users.api';
@@ -31,6 +27,7 @@ import BusinessDetailDrawer from '@/components/common/business-list/BusinessDeta
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
 import EmployeeArchiveInlineEditor from './components/EmployeeArchiveInlineEditor.vue';
 import DepartmentEditDrawer from './components/DepartmentEditDrawer.vue';
+import DirectReportsPopover from './components/DirectReportsPopover.vue';
 import DepartmentCreateDrawer from './components/DepartmentCreateDrawer.vue';
 import EmployeeCreateDrawer from './components/EmployeeCreateDrawer.vue';
 import EmployeeReentryDrawer from './components/EmployeeReentryDrawer.vue';
@@ -1278,20 +1275,6 @@ async function onDepartmentDrop(draggingNode: any, dropNode: any, type: 'before'
   }
 }
 
-async function downloadRosterTemplate() {
-  try {
-    const blob = await employeeArchivesApi.downloadRosterTemplate();
-    const url = URL.createObjectURL(blob);
-    const anchor = document.createElement('a');
-    anchor.href = url;
-    anchor.download = '员工花名册导入模板.xlsx';
-    anchor.click();
-    URL.revokeObjectURL(url);
-  } catch {
-    ElMessage.error('模板下载失败，请稍后重试');
-  }
-}
-
 async function openContractMaterial(item: Attachment) {
   const blob = await uploadApi.download(item.url);
   const url = URL.createObjectURL(blob);
@@ -1567,103 +1550,6 @@ async function confirmApprover() {
   }
 }
 
-const rosterImportDialog = ref({
-  visible: false,
-  mode: 'full' as EmployeeRosterImportMode,
-  file: null as File | null,
-  loading: false,
-  confirming: false,
-  result: null as EmployeeRosterPreviewResult | null,
-  rows: [] as EmployeeRosterImportRow[],
-});
-
-const rosterIssueRows = computed(() => rosterImportDialog.value.rows
-  .filter((row) => row.errors.length > 0 || row.warnings.length > 0)
-  .sort((left, right) => (
-    Number(right.errors.length > 0) - Number(left.errors.length > 0)
-    || left.rowNumber - right.rowNumber
-  )));
-
-function openRosterImportDialog() {
-  rosterImportDialog.value = {
-    visible: true,
-    mode: 'full',
-    file: null,
-    loading: false,
-    confirming: false,
-    result: null,
-    rows: [],
-  };
-}
-
-function onRosterFileChange(uploadFile: UploadFile) {
-  rosterImportDialog.value.file = uploadFile.raw ?? null;
-  rosterImportDialog.value.result = null;
-  rosterImportDialog.value.rows = [];
-}
-
-function onRosterFileRemove() {
-  rosterImportDialog.value.file = null;
-  rosterImportDialog.value.result = null;
-  rosterImportDialog.value.rows = [];
-}
-
-async function previewRosterImport() {
-  const file = rosterImportDialog.value.file;
-  if (!file) {
-    ElMessage.warning('请先选择花名册文件');
-    return;
-  }
-  rosterImportDialog.value.loading = true;
-  try {
-    const result = await employeeArchivesApi.previewRoster(file, rosterImportDialog.value.mode);
-    rosterImportDialog.value.result = result;
-    const batch = await employeeArchivesApi.getRosterBatch(result.batchId);
-    rosterImportDialog.value.rows = batch.rows;
-    ElMessage.success('预检完成，尚未写入员工正式档案');
-  } catch {
-    rosterImportDialog.value.result = null;
-    rosterImportDialog.value.rows = [];
-  } finally {
-    rosterImportDialog.value.loading = false;
-  }
-}
-
-async function confirmRosterImport() {
-  const { file, result } = rosterImportDialog.value;
-  if (!file || !result?.canConfirm) return;
-  try {
-    const validChangeCount = result.summary.createCount
-      + result.summary.updateCount
-      + (result.summary.blockingErrorCount > 0 ? 0 : result.summary.missingFromFullRosterCount);
-    const skippedText = result.summary.blockingErrorCount > 0
-      ? `；另有 ${result.summary.blockingErrorCount} 行存在问题，本次跳过，不会据此停用缺行员工`
-      : '';
-    await ElMessageBox.confirm(
-      `将暂存 ${result.summary.desiredDepartmentCount} 个组织节点方案，并提交 ${validChangeCount} 条员工变更供 HR 审核${skippedText}。审核通过前，现有正式档案和组织继续生效。`,
-      '确认提交员工变更',
-      { confirmButtonText: '提交审核', cancelButtonText: '返回检查', type: 'warning' },
-    );
-  } catch {
-    return;
-  }
-
-  rosterImportDialog.value.confirming = true;
-  try {
-    const confirmed = await employeeArchivesApi.confirmRoster(result.batchId, file);
-    ElMessage.success(confirmed.submitted > 0
-      ? `已提交 ${confirmed.submitted} 条员工变更，审核通过后生效`
-      : '花名册与正式档案一致，无需重复审核');
-    rosterImportDialog.value.visible = false;
-    activeView.value = 'users';
-    await Promise.all([loadDepartments(), loadUsers()]);
-  } catch {
-    // 由 HTTP 拦截器展示错误
-  } finally {
-    rosterImportDialog.value.confirming = false;
-  }
-}
-
 watch(() => props.mode, async (mode) => {
   activeView.value = mode;
   if (mode === 'org') {
@@ -1719,7 +1605,6 @@ onBeforeUnmount(() => {
                 @click="archiveCurrentSelection"
               >归档</el-button>
               <el-button v-if="canEditArchive && userArchiveView" :disabled="selectedArchiveCount === 0" @click="restoreSelection()">取消归档</el-button>
-              <el-button v-if="canEditArchive" :icon="UploadFilled" @click="openRosterImportDialog">导入花名册</el-button>
             </template>
             <el-button v-else-if="canEditArchive" type="primary" @click="openEmployeeCreate">新增员工</el-button>
             <el-button :icon="Search" @click="refreshCurrentView">刷新</el-button>
@@ -1855,19 +1740,9 @@ onBeforeUnmount(() => {
                 <el-tag v-if="(row as ManagedUser).canViewAll" size="small" type="info" effect="plain">全量只读</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="业务职责" min-width="220">
+            <el-table-column label="直属下属" width="110">
               <template #default="{ row }">
-                <div class="business-identity-tags">
-                  <el-tag size="small" effect="plain">员工</el-tag>
-                  <el-tag
-                    v-for="identity in (row as ManagedUser).businessIdentities"
-                    :key="identity.type"
-                    size="small"
-                    effect="plain"
-                  >
-                    {{ businessIdentityText(identity) }}
-                  </el-tag>
-                </div>
+                <DirectReportsPopover :user-id="row.id" :user-name="row.name" :count="row.directReportCount" />
               </template>
             </el-table-column>
             <el-table-column label="绩效直属上级" min-width="140">
@@ -1898,6 +1773,7 @@ onBeforeUnmount(() => {
               <div class="mobile-result-field"><span class="mobile-result-field__label">岗位</span><span class="mobile-result-field__value">{{ item.position || '未设置' }}</span></div>
               <div class="mobile-result-field"><span class="mobile-result-field__label">绩效上级</span><span class="mobile-result-field__value">{{ item.directManagerName || '未设置' }}</span></div>
               <div class="mobile-result-field"><span class="mobile-result-field__label">系统权限</span><span class="mobile-result-field__value">{{ systemPermissionLabel(item) }}</span></div>
+              <div class="mobile-result-field"><span class="mobile-result-field__label">直属下属</span><span class="mobile-result-field__value"><DirectReportsPopover :user-id="item.id" :user-name="item.name" :count="item.directReportCount" /></span></div>
               <template #actions><el-button v-if="canViewArchive" link type="primary" @click="openEmployeeArchive(item)">查看档案</el-button><el-button v-if="canEditArchive" link type="primary" @click="openPersonSettingsDialog(item)">人员设置</el-button></template>
             </MobileResultCard>
           </div>
@@ -2049,21 +1925,11 @@ onBeforeUnmount(() => {
                   <el-tag v-if="(row as ManagedUser).canViewAll" size="small" type="info" effect="plain">全量只读</el-tag>
                 </template>
               </el-table-column>
-              <el-table-column label="业务职责" min-width="220">
-                <template #default="{ row }">
-                  <div class="business-identity-tags">
-                    <el-tag size="small" effect="plain">员工</el-tag>
-                    <el-tag
-                      v-for="identity in (row as ManagedUser).businessIdentities"
-                      :key="identity.type"
-                      size="small"
-                      effect="plain"
-                    >
-                      {{ businessIdentityText(identity) }}
-                    </el-tag>
-                  </div>
-                </template>
-              </el-table-column>
+              <el-table-column label="直属下属" width="110">
+              <template #default="{ row }">
+                <DirectReportsPopover :user-id="row.id" :user-name="row.name" :count="row.directReportCount" />
+              </template>
+            </el-table-column>
               <el-table-column label="钉钉登录" width="130">
                 <template #default="{ row }">
                   <el-tag
@@ -2110,6 +1976,7 @@ onBeforeUnmount(() => {
               <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 岗位</span><span class="mobile-result-field__value">{{ item.deptName || '未分配部门' }} · {{ item.position || '未设置' }}</span></div>
               <div class="mobile-result-field"><span class="mobile-result-field__label">绩效上级</span><span class="mobile-result-field__value">{{ item.directManagerName || '未设置' }}</span></div>
               <div class="mobile-result-field"><span class="mobile-result-field__label">系统权限</span><span class="mobile-result-field__value">{{ systemPermissionLabel(item) }}</span></div>
+              <div class="mobile-result-field"><span class="mobile-result-field__label">直属下属</span><span class="mobile-result-field__value"><DirectReportsPopover :user-id="item.id" :user-name="item.name" :count="item.directReportCount" /></span></div>
               <div class="mobile-result-field"><span class="mobile-result-field__label">钉钉登录</span><span class="mobile-result-field__value">{{ dingtalkStateLabels[item.dingtalkBindingState ?? 'unbound'] }}</span></div>
               <template #actions>
                 <el-button v-if="canViewArchive" link type="primary" @click="openEmployeeArchive(item)">查看档案</el-button>
@@ -2484,120 +2351,6 @@ onBeforeUnmount(() => {
       <template #footer><el-button @click="applicationDetailVisible = false">关闭</el-button><el-button v-if="canEditArchive && applicationDetail?.canCancel" :loading="applicationSaving" @click="cancelApplication(applicationDetail)">{{ cancelApplicationLabel(applicationDetail) }}</el-button><el-button v-if="canEditArchive && applicationDetail?.canResume" type="primary" @click="resumeApplication(applicationDetail)">修改后重新提交</el-button></template>
     </BusinessDetailDrawer>
 
-    <el-dialog
-      v-model="rosterImportDialog.visible"
-      title="花名册导入预检"
-      width="680px"
-      :close-on-click-modal="false"
-      destroy-on-close
-    >
-      <el-alert
-        title="上传只生成差异预检，不会直接修改员工档案"
-        description="组织、部门、岗位、花名册直属主管和在离职状态均以这份 HRM 花名册为准；不会读取或同步钉钉组织，也不会覆盖已审核的绩效直属上级。"
-        type="info"
-        show-icon
-        :closable="false"
-        class="roster-import__alert"
-      />
-      <div class="roster-import__template">
-        <div>
-          <strong>使用最新版花名册模板</strong>
-          <p>模板按员工主档、任职记录和合同记录分表，使用工号关联；旧模板仍可继续上传。</p>
-        </div>
-        <el-button plain type="primary" @click="downloadRosterTemplate">下载花名册模板</el-button>
-      </div>
-      <div class="roster-import__mode">
-        <strong>导入模式</strong>
-        <el-radio-group v-model="rosterImportDialog.mode">
-          <el-radio-button value="full">全量盘点</el-radio-button>
-          <el-radio-button value="incremental">增量更新</el-radio-button>
-        </el-radio-group>
-        <p v-if="rosterImportDialog.mode === 'full'">文件缺少的在职员工只会进入“疑似离职”清单，不会自动离职。</p>
-        <p v-else>只检查文件中出现的员工；空单元格默认不修改旧值。</p>
-      </div>
-      <el-upload
-        drag
-        action="#"
-        accept=".xlsx"
-        :auto-upload="false"
-        :limit="1"
-        :on-change="onRosterFileChange"
-        :on-remove="onRosterFileRemove"
-        class="roster-import__upload"
-      >
-        <el-icon class="el-icon--upload"><UploadFilled /></el-icon>
-        <div class="el-upload__text">拖拽花名册到此处，或 <em>点击选择</em></div>
-        <template #tip>
-          <div class="el-upload__tip">仅支持 .xlsx，最大 10MB；上传后先预检，再确认提交审核。</div>
-        </template>
-      </el-upload>
-
-      <div v-if="rosterImportDialog.result" class="roster-preview">
-        <div class="roster-preview__head">
-          <div>
-            <strong>预检结果</strong>
-            <small>批次 {{ rosterImportDialog.result.batchId }}</small>
-          </div>
-          <el-tag :type="rosterImportDialog.result.canConfirm ? 'success' : 'danger'">
-            {{ rosterImportDialog.result.canConfirm ? '无阻断项' : '需处理阻断项' }}
-          </el-tag>
-        </div>
-        <div class="roster-preview__grid">
-          <div><span>文件员工</span><strong>{{ rosterImportDialog.result.summary.totalRows }}</strong></div>
-          <div><span>拟新增</span><strong>{{ rosterImportDialog.result.summary.createCount }}</strong></div>
-          <div><span>拟更新</span><strong>{{ rosterImportDialog.result.summary.updateCount }}</strong></div>
-          <div><span>组织节点</span><strong>{{ rosterImportDialog.result.summary.desiredDepartmentCount }}</strong></div>
-          <div class="is-danger"><span>阻断行</span><strong>{{ rosterImportDialog.result.summary.blockingErrorCount }}</strong></div>
-          <div class="is-warning"><span>提醒</span><strong>{{ rosterImportDialog.result.summary.warningCount }}</strong></div>
-          <div><span>将归档离职</span><strong>{{ rosterImportDialog.result.summary.missingFromFullRosterCount }}</strong></div>
-        </div>
-        <div v-if="rosterIssueRows.length" class="roster-preview__issues">
-          <div class="roster-preview__issues-head">
-            <strong>需要核对的行</strong>
-            <small>共 {{ rosterIssueRows.length }} 行，阻断项优先；个人敏感字段不在预检清单中明文展示。</small>
-          </div>
-          <div class="roster-preview__issue-list">
-            <div v-for="row in rosterIssueRows" :key="row.rowNumber" class="roster-preview__issue-row">
-              <div class="roster-preview__issue-person">
-                <strong>第 {{ row.rowNumber }} 行</strong>
-                <span>
-                  {{ row.normalizedValue.employee?.employeeNo || row.normalizedValue.employeeNo || '无工号' }}
-                  · {{ row.normalizedValue.employee?.name || row.normalizedValue.name || '无姓名' }}
-                </span>
-                <small>{{ row.normalizedValue.employee?.departmentPath?.join(' / ') || '未填写部门' }}</small>
-              </div>
-              <div class="roster-preview__issue-tags">
-                <el-tag v-for="error in row.errors" :key="`error-${error}`" type="danger" effect="plain">{{ error }}</el-tag>
-                <el-tag v-for="warning in row.warnings" :key="`warning-${warning}`" type="warning" effect="plain">
-                  {{ warning }}
-                </el-tag>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      <template #footer>
-        <el-button @click="rosterImportDialog.visible = false">关闭</el-button>
-        <el-button
-          type="primary"
-          :loading="rosterImportDialog.loading"
-          :disabled="!rosterImportDialog.file"
-          @click="previewRosterImport"
-        >
-          开始预检
-        </el-button>
-        <el-button
-          v-if="rosterImportDialog.result?.canConfirm"
-          type="success"
-          :loading="rosterImportDialog.confirming"
-          @click="confirmRosterImport"
-        >
-          提交审核
-        </el-button>
-      </template>
-    </el-dialog>
-
     <DepartmentEditDrawer
       v-model="departmentEditDrawer.visible"
       :department="departmentEditDrawer.department"
@@ -2847,46 +2600,6 @@ onBeforeUnmount(() => {
   margin-top: 5px;
 }
 
-.roster-import__alert {
-  margin-bottom: 18px;
-}
-
-.roster-import__template {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 14px 16px;
-  margin-bottom: 16px;
-  border: 1px solid #d9e2f3;
-  border-radius: 10px;
-  background: #f7f9ff;
-}
-
-.roster-import__template p {
-  margin: 6px 0 0;
-  color: #6f7b91;
-  line-height: 1.6;
-}
-
-.roster-import__template .el-button {
-  flex: 0 0 auto;
-}
-
-.roster-import__mode {
-  padding: 14px 16px;
-  margin-bottom: 16px;
-  border: 1px solid #e8edf5;
-  border-radius: 10px;
-  background: #fbfcff;
-}
-
-.roster-import__mode strong {
-  display: block;
-  margin-bottom: 10px;
-  color: #26324b;
-}
-
 :global(.employee-archive-drawer) {
   max-width: 100%;
 }
@@ -3076,134 +2789,6 @@ onBeforeUnmount(() => {
   flex-wrap: wrap;
   gap: 10px;
   color: #667289;
-}
-
-.roster-import__mode p {
-  margin: 10px 0 0;
-  color: #6f7b91;
-  font-size: 13px;
-}
-
-.roster-import__upload {
-  margin-bottom: 18px;
-}
-
-.roster-preview {
-  padding: 16px;
-  border: 1px solid #dfe7f7;
-  border-radius: 10px;
-  background: #f8faff;
-}
-
-.roster-preview__head {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  margin-bottom: 14px;
-}
-
-.roster-preview__head strong,
-.roster-preview__head small {
-  display: block;
-}
-
-.roster-preview__head small {
-  margin-top: 4px;
-  color: #8a94a6;
-}
-
-.roster-preview__grid {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 10px;
-}
-
-.roster-preview__grid > div {
-  padding: 12px;
-  border-radius: 8px;
-  background: #fff;
-}
-
-.roster-preview__grid span,
-.roster-preview__grid strong {
-  display: block;
-}
-
-.roster-preview__grid span {
-  color: #7b8497;
-  font-size: 12px;
-}
-
-.roster-preview__grid strong {
-  margin-top: 6px;
-  color: #26324b;
-  font-size: 22px;
-}
-
-.roster-preview__grid .is-danger strong {
-  color: #e24d4d;
-}
-
-.roster-preview__grid .is-warning strong {
-  color: #d38a0a;
-}
-
-.roster-preview__issues {
-  margin-top: 14px;
-  padding-top: 14px;
-  border-top: 1px solid #dfe7f7;
-}
-
-.roster-preview__issues-head {
-  margin-bottom: 10px;
-}
-
-.roster-preview__issues-head strong,
-.roster-preview__issues-head small {
-  display: block;
-}
-
-.roster-preview__issue-list {
-  max-height: 320px;
-  padding-right: 4px;
-  overflow-y: auto;
-}
-
-.roster-preview__issues-head small {
-  margin-top: 4px;
-  color: #7b8497;
-}
-
-.roster-preview__issue-row {
-  display: grid;
-  grid-template-columns: minmax(150px, 0.7fr) minmax(220px, 1.3fr);
-  gap: 12px;
-  padding: 10px 0;
-  border-top: 1px solid #edf1f7;
-}
-
-.roster-preview__issue-person strong,
-.roster-preview__issue-person span,
-.roster-preview__issue-person small {
-  display: block;
-}
-
-.roster-preview__issue-person span {
-  margin-top: 3px;
-  color: #46536b;
-}
-
-.roster-preview__issue-person small {
-  margin-top: 3px;
-  color: #8a94a6;
-}
-
-.roster-preview__issue-tags {
-  display: flex;
-  flex-wrap: wrap;
-  align-content: flex-start;
-  gap: 6px;
 }
 
 .view-switch {
@@ -4162,10 +3747,6 @@ onBeforeUnmount(() => {
 }
 
 @media (max-width: 768px) {
-  .roster-import__template {
-    align-items: stretch;
-    flex-direction: column;
-  }
 
   .user-manage-view {
     height: auto;
@@ -4238,14 +3819,6 @@ onBeforeUnmount(() => {
 
   .page-title__actions .el-button {
     flex: 1;
-  }
-
-  .roster-preview__grid {
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .roster-preview__issue-row {
-    grid-template-columns: 1fr;
   }
 
   .employee-archive__facts {

@@ -39,6 +39,7 @@ describe('UsersService', () => {
           user: {
             count: jest.fn().mockResolvedValue(1),
             findMany: jest.fn().mockResolvedValue([user]),
+            groupBy: jest.fn().mockResolvedValue([]),
           },
           employeeDataChangeRequest: { findMany: jest.fn().mockResolvedValue([]) },
         } as any,
@@ -146,6 +147,59 @@ describe('UsersService', () => {
       });
       expect(getSubDeptIds).not.toHaveBeenCalled();
     });
+
+    it.each([
+      { label: 'HR全量范围', scope: {} },
+      { label: '受限人员范围', scope: { deptId: { in: ['visible-dept'] } } },
+    ])('按$label一次统计当前页直属下属，未匹配人员返回0', async ({ scope }) => {
+      const managers = ['manager-1', 'manager-2'].map((id) => ({
+        id, employeeNo: null, name: id, phone: null, email: null, avatarUrl: null,
+        deptId: 'manager-dept', dept: { name: '管理部门' }, position: '负责人',
+        sysRole: SysRole.employee, hrCapabilities: [], status: UserStatus.active,
+        employmentType: EmploymentType.full_time, directManagerId: null, directManager: null,
+        isAssessorOnly: false, canViewAll: false, entryDate: null, archivedAt: null,
+        externalIdentityBindings: [], employeeNumberAssignments: [], employeeChangeRequests: [],
+      }));
+      const groupBy = jest.fn().mockResolvedValue([
+        { directManagerId: 'manager-1', _count: { _all: 2 } },
+      ]);
+      const service = new UsersService({ user: {
+        count: jest.fn().mockResolvedValue(2), findMany: jest.fn().mockResolvedValue(managers), groupBy,
+      } } as any, {
+        getVisibleEmployeeFilter: jest.fn().mockResolvedValue(scope),
+        getSubDeptIds: jest.fn().mockResolvedValue(['manager-dept']),
+      } as any, noBusinessIdentities as any);
+
+      const result = await service.findAll({
+        page: 2, pageSize: 2, skip: 2, take: 2, keyword: '负责人', deptId: 'manager-dept',
+      } as any, { id: 'viewer', sysRole: SysRole.employee } as any);
+
+      expect(result.items.map(({ id, directReportCount }) => [id, directReportCount]))
+        .toEqual([['manager-1', 2], ['manager-2', 0]]);
+      expect(groupBy).toHaveBeenCalledTimes(1);
+      expect(groupBy).toHaveBeenCalledWith({
+        by: ['directManagerId'],
+        where: {
+          directManagerId: { in: ['manager-1', 'manager-2'] },
+          deletedAt: null, archivedAt: null, accountType: 'employee',
+          status: { in: ['active', 'probation'] },
+          ...(Object.keys(scope).length ? { AND: [scope] } : {}),
+        },
+        _count: { _all: true },
+      });
+    });
+
+    it('空页不查询直属下属统计', async () => {
+      const groupBy = jest.fn();
+      const service = new UsersService({ user: {
+        count: jest.fn().mockResolvedValue(0), findMany: jest.fn().mockResolvedValue([]), groupBy,
+      } } as any, { getVisibleEmployeeFilter: jest.fn().mockResolvedValue({}) } as any,
+      noBusinessIdentities as any);
+
+      expect((await service.findAll({ page: 1, pageSize: 20 } as any,
+        { id: 'viewer', sysRole: SysRole.employee } as any)).items).toEqual([]);
+      expect(groupBy).not.toHaveBeenCalled();
+    });
   });
 
   describe('archive warnings', () => {
@@ -168,7 +222,8 @@ describe('UsersService', () => {
         user: { employeeProfile: { phone: null }, employmentHistory: [{ company: 'fuede', companyText: null }],
           employeeContracts: [], ...formal },
       }];
-      const prisma = { user: { count: jest.fn().mockResolvedValue(1), findMany: jest.fn().mockResolvedValue([user]) },
+      const prisma = { user: { count: jest.fn().mockResolvedValue(1), findMany: jest.fn().mockResolvedValue([user]),
+        groupBy: jest.fn().mockResolvedValue([]) },
         employeeDataChangeRequest: { findMany: jest.fn().mockResolvedValue(requests) } };
       const service = new UsersService(prisma as any,
         { getVisibleEmployeeFilter: jest.fn().mockResolvedValue({ deptId: 'dept-1' }) } as any,
@@ -387,7 +442,7 @@ describe('UsersService', () => {
       ]);
       const service = new UsersService(
         { user: { findMany } } as any,
-        {} as any,
+        { getVisibleEmployeeFilter: jest.fn().mockResolvedValue({}) } as any,
         noBusinessIdentities as any,
       );
 
@@ -404,7 +459,9 @@ describe('UsersService', () => {
         where: {
           directManagerId: 'manager-1',
           deletedAt: null,
-          status: UserStatus.active,
+          archivedAt: null,
+          accountType: 'employee',
+          status: { in: ['active', 'probation'] },
         },
         select: expect.objectContaining({
           avatarUrl: true,
@@ -421,6 +478,50 @@ describe('UsersService', () => {
           directManagerId: 'manager-1',
         }),
       ]);
+    });
+
+    it.each(['employee_archive_edit', 'employee_archive_review', 'organization_edit'])(
+      '保留%s查看下属资格并叠加人员可见范围', async (capability) => {
+        const scope = { deptId: { in: ['visible-dept'] } };
+        const findMany = jest.fn().mockResolvedValue([]);
+        const service = new UsersService({ user: { findMany } } as any,
+          { getVisibleEmployeeFilter: jest.fn().mockResolvedValue(scope) } as any,
+          noBusinessIdentities as any);
+
+        await expect(service.findSubordinates('other-manager', {
+          id: 'hr-user', sysRole: SysRole.hr_user, hrCapabilities: [capability], canViewAll: false,
+        } as any)).resolves.toEqual([]);
+        expect(findMany).toHaveBeenCalledWith(expect.objectContaining({ where: {
+          directManagerId: 'other-manager', deletedAt: null, archivedAt: null,
+          status: { in: ['active', 'probation'] }, accountType: 'employee', AND: [scope],
+        } }));
+      },
+    );
+
+    it.each([
+      { id: 'manager-1', sysRole: SysRole.employee, canViewAll: false },
+      { id: 'hr', sysRole: SysRole.hr, canViewAll: false },
+      { id: 'admin', sysRole: SysRole.system_admin, canViewAll: false },
+      { id: 'viewer', sysRole: SysRole.employee, canViewAll: true },
+    ])('保留已有$id查看下属资格', async (viewer) => {
+      const service = new UsersService({ user: { findMany: jest.fn().mockResolvedValue([]) } } as any,
+        { getVisibleEmployeeFilter: jest.fn().mockResolvedValue({}) } as any,
+        noBusinessIdentities as any);
+      await expect(service.findSubordinates('manager-1', viewer as any)).resolves.toEqual([]);
+    });
+
+    it('拒绝无关员工和无人员管理能力的HR查询其他人的下属', async () => {
+      const findMany = jest.fn();
+      const service = new UsersService({ user: { findMany } } as any, {} as any,
+        noBusinessIdentities as any);
+      for (const viewer of [
+        { id: 'other', sysRole: SysRole.employee },
+        { id: 'other-hr', sysRole: SysRole.hr_user, hrCapabilities: ['cycle_plan_edit'] },
+      ]) {
+        await expect(service.findSubordinates('manager-1', viewer as any))
+          .rejects.toMatchObject({ response: { code: 4003 } });
+      }
+      expect(findMany).not.toHaveBeenCalled();
     });
   });
 });
