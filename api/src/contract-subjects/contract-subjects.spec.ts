@@ -37,8 +37,10 @@ describe('contract subject directory', () => {
   });
   it.each([
     [SysRole.hr, [], true, true], [SysRole.system_admin, [], true, true],
-    [SysRole.hr_user, ['employee_archive_edit'], true, false],
+    [SysRole.hr_user, ['employee_archive_edit'], true, true],
     [SysRole.hr_user, ['employee_archive_review'], true, false],
+    [SysRole.hr_user, ['organization_edit'], false, false],
+    [SysRole.employee, ['employee_archive_edit'], false, false],
     [SysRole.hr_user, [], false, false], [SysRole.employee, [], false, false],
   ])('enforces read and write permissions for %s / %s', (sysRole, hrCapabilities, canRead, canWrite) => {
     const guard = new RolesGuard(new Reflector());

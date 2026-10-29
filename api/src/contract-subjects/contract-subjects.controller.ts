@@ -15,7 +15,9 @@ export class ContractSubjectsController {
   @HrCapabilities('employee_archive_edit', 'employee_archive_review')
   findAll(@Query() query: ContractSubjectQueryDto) { return this.subjects.findAll(query); }
   @Post()
+  @HrCapabilities('employee_archive_edit')
   create(@Body() input: CreateContractSubjectDto, @CurrentUser() user: AuthUser) { return this.subjects.create(input, user); }
   @Patch(':id')
+  @HrCapabilities('employee_archive_edit')
   update(@Param('id', new ParseUUIDPipe()) id: string, @Body() input: UpdateContractSubjectDto, @CurrentUser() user: AuthUser) { return this.subjects.update(id, input, user); }
 }

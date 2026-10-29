@@ -2,13 +2,14 @@
 import { computed, onMounted, ref } from 'vue';
 import { contractSubjectsApi, type ContractSubject } from '@/api/contract-subjects.api';
 import { useAuthStore } from '@/stores/auth.store';
+import { canMaintainContractSubjects } from '@/utils/business-permissions';
 const props = defineProps<{ modelValue?: string | null; snapshotName?: string | null; disabled?: boolean }>();
 const emit = defineEmits<{ 'update:modelValue': [value: string | null]; 'update:snapshotName': [value: string | null] }>();
 const rows = ref<ContractSubject[]>([]);
 const loading = ref(false);
 const error = ref('');
 const auth = useAuthStore();
-const canMaintain = computed(() => ['hr', 'system_admin'].includes(auth.user?.sysRole ?? ''));
+const canMaintain = computed(() => canMaintainContractSubjects(auth.user));
 const current = computed(() => rows.value.find(row => row.id === props.modelValue));
 const options = computed(() => rows.value.filter(row => row.isActive || row.id === props.modelValue));
 async function load() {
@@ -34,7 +35,7 @@ onMounted(load);
       </el-option>
     </el-select>
     <span v-if="snapshotName" class="subject-note">{{ snapshotName }} · {{ modelValue ? (current && !current.isActive ? '已关联，主体已停用' : '已关联') : '原记录，尚未关联' }}</span>
-    <span v-if="!loading && !error && !rows.some(row => row.isActive)" class="subject-note">暂无启用主体，请联系 HR 管理员维护。</span>
+    <span v-if="!loading && !error && !rows.some(row => row.isActive)" class="subject-note">{{ canMaintain ? '暂无启用主体，可先维护合同主体后刷新。' : '暂无启用主体，请联系有员工档案编辑权限的 HR 维护。' }}</span>
     <span v-if="error" class="subject-error" role="alert">{{ error }}</span>
     <div class="subject-actions"><el-button v-if="snapshotName && !modelValue" link :disabled="disabled" @click="select('')">清空主体</el-button><el-button link type="primary" :disabled="disabled || loading" @click="load">刷新主体</el-button><a v-if="canMaintain && !disabled" href="/contract-subjects" target="_blank" rel="noopener noreferrer">维护主体（新窗口）</a></div>
   </div>
