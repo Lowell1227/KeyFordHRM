@@ -5,6 +5,7 @@ import { ElMessage } from 'element-plus';
 import { employeeArchivesApi, type EmployeeArchive, type EmployeeDataReview } from '@/api/employee-archives.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import UserSelect from '@/components/common/UserSelect.vue';
+import ContractSubjectSelect from '@/components/common/ContractSubjectSelect.vue';
 import type { Department } from '@/types/api.types';
 
 const props = withDefaults(defineProps<{
@@ -92,6 +93,7 @@ function reset() {
   const archive = props.archive; const current = archive?.currentEmployment ?? archive?.employmentHistory[0];
   resignationReview.value = archive?.latestResignationReview ?? null;
   Object.assign(form, {
+    contractSubjectId: current?.contractSubjectId ?? undefined, companyText: current?.companyText ?? null,
     effectiveFrom: '', effectiveTo: null, company: current?.company ?? archive?.dept?.company ?? 'fuede',
     deptId: current?.deptId ?? archive?.dept?.id ?? null, positionId: current?.positionId ?? null,
     directManagerId: archive?.rosterManager?.id ?? null, workLocation: current?.workLocation ?? null,
@@ -157,6 +159,8 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
       <el-form-item label="离职原因" class="span-2"><el-input v-model="form.reason" type="textarea" :rows="3" /></el-form-item>
     </el-form>
     <el-form v-else label-position="top" class="employment-grid">
+      <el-form-item label="所属公司（合同主体）"><ContractSubjectSelect v-model="form.contractSubjectId" v-model:snapshot-name="form.companyText" /></el-form-item>
+      <el-form-item label="组织归属"><el-select v-model="form.company"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select></el-form-item>
       <el-form-item label="变更类型"><el-select v-model="form.changeType"><el-option label="调动" value="transfer" /><el-option label="晋升" value="promotion" /><el-option label="上级变更" value="manager_change" /><el-option label="状态变更" value="status_change" /><el-option label="离职" value="resignation" /><el-option label="返聘" value="rehire" /><el-option label="历史补录" value="data_correction" /></el-select></el-form-item>
       <el-form-item label="生效日期">
         <div class="employment-field">

@@ -2,6 +2,11 @@ import { expect, test } from '@playwright/test';
 
 const apiResponse = (data: unknown) => ({ code: 0, message: 'success', data, timestamp: Date.now() });
 
+// Legacy personnel fixtures have no maintained contract subjects.
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/contract-subjects**', route => route.fulfill({ json: apiResponse([]) }));
+});
+
 test('员工分类贴近列表，草稿页内维护，归档动作统一', async ({ page }) => {
   const activeEmployee = {
     id: '10000000-0000-4000-8000-000000000001', name: '在职员工', employeeNo: '001',

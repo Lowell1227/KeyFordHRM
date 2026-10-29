@@ -1,3 +1,4 @@
+import { ContractSubjectsModule } from './contract-subjects/contract-subjects.module';
 import { Module } from '@nestjs/common';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { ScheduleModule } from '@nestjs/schedule';
@@ -88,6 +89,7 @@ import { AiProgressModule } from './ai-progress/ai-progress.module';
     ActionItemsModule,
     PeriodReviewsModule,
     PositionsModule,
+    ContractSubjectsModule,
     AiProgressModule,
   ],
   providers: [

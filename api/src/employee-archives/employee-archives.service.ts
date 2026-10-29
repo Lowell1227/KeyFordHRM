@@ -1,3 +1,4 @@
+import { normalizeContractSubject, validateContractSubject } from '@/contract-subjects/contract-subject-reference';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -30,6 +31,7 @@ export interface UpsertEmployeeProfileInput {
 }
 
 export interface CreateEmploymentRecordInput {
+  contractSubjectId?: string | null;
   effectiveFrom: Date;
   effectiveTo?: Date | null;
   company: CompanyCode;
@@ -137,6 +139,8 @@ export class EmployeeArchivesService {
         proposedValue = this.preserveSensitiveProfile(proposedValue, draft.proposedValue);
         draftVersion = draft.requestVersion;
       }
+      await this.normalizeSubjectPayload(tx, proposedValue, this.record(savedDraft?.proposedValue));
+      await this.validateSubjectPayload(tx, proposedValue, {});
       await this.assertEmployeeCreateIdentity(
         tx,
         proposedValue,
@@ -242,6 +246,7 @@ export class EmployeeArchivesService {
         proposed = this.preserveSensitiveProfile(proposed, draft.proposedValue);
         draftVersion = draft.requestVersion;
       }
+      await this.normalizeSubjectPayload(tx, proposed, this.record(savedDraft?.proposedValue));
       const proposedValue = this.toJson(proposed);
       const performanceManagerId = this.nullableString(
         this.record(proposed.performance).managerId,
@@ -296,9 +301,10 @@ export class EmployeeArchivesService {
       .replace(/^\+86/, '') || null;
     const inputEmployee = this.pickFields(this.record(input.employee), [
       'position', 'jobGrade', 'jobFamily', 'workLocation', 'probationMonths',
-      'plannedRegularDate', 'actualRegularDate', 'leaveDate',
+      'plannedRegularDate', 'actualRegularDate', 'leaveDate', 'contractSubjectId', 'companyText',
     ]);
     const employee: Record<string, unknown> = {
+      ...inputEmployee,
       employeeNo: null,
       name: input.name?.trim() || null,
       phone,
@@ -351,7 +357,7 @@ export class EmployeeArchivesService {
     delete profile.bankAccount;
     const contracts = (input.contracts ?? []).map((contract, index) => {
       const safeContract = this.pickFields(this.record(contract), [
-        'contractType', 'name', 'signingCompany', 'signedAt', 'effectiveFrom', 'expiresAt',
+        'contractType', 'name', 'signingCompany', 'contractSubjectId', 'signedAt', 'effectiveFrom', 'expiresAt',
         'termType', 'originalCompany', 'newCompany', 'confidentialityAgreement',
         'nonCompeteAgreement', 'portraitAgreement', 'sequence',
       ]);
@@ -369,6 +375,36 @@ export class EmployeeArchivesService {
       managerId: input.performanceManagerId ?? inputPerformance.managerId ?? null,
     };
     return { employee, profile, contracts, performance };
+  }
+
+  private async normalizeSubjectPayload(
+    tx: Prisma.TransactionClient, value: Record<string, unknown>, base: Record<string, unknown>, saved: Record<string, unknown> = {},
+  ) {
+    const employee = this.record(value.employee);
+    const baseEmployee = this.record(base.employee);
+    const savedEmployee = this.record(saved.employee);
+    const previous = employee.contractSubjectId && employee.contractSubjectId === savedEmployee.contractSubjectId
+      ? savedEmployee : baseEmployee;
+    await normalizeContractSubject(tx, employee, previous, 'companyText');
+    if (value.contracts === base.contracts) return;
+    const baseContracts = Array.isArray(base.contracts) ? base.contracts.map((item) => this.record(item)) : [];
+    const savedContracts = Array.isArray(saved.contracts) ? saved.contracts.map((item) => this.record(item)) : [];
+    for (const [index, item] of (Array.isArray(value.contracts) ? value.contracts : []).entries()) {
+      const contract = this.record(item);
+      const old = contract.id ? baseContracts.find((c) => c.id === contract.id) : baseContracts.every((c) => !c.id) ? baseContracts[index] : undefined;
+      const stored = contract.id ? savedContracts.find((c) => c.id === contract.id) : savedContracts[index];
+      await normalizeContractSubject(tx, contract,
+        contract.contractSubjectId && contract.contractSubjectId === stored?.contractSubjectId ? stored : old ?? {}, 'signingCompany');
+    }
+  }
+
+  private async validateSubjectPayload(tx: Prisma.TransactionClient, value: Record<string, unknown>, base: Record<string, unknown>) {
+    await validateContractSubject(tx, this.record(value.employee), this.record(base.employee));
+    const contracts = Array.isArray(base.contracts) ? base.contracts.map((item) => this.record(item)) : [];
+    for (const item of Array.isArray(value.contracts) ? value.contracts : []) {
+      const contract = this.record(item);
+      await validateContractSubject(tx, contract, contracts.find((c) => c.id && c.id === contract.id) ?? {});
+    }
   }
 
   private preserveSensitiveProfile(
@@ -1033,7 +1069,7 @@ export class EmployeeArchivesService {
   }
 
   private async persistArchiveChangeWithClient(
-    client: Pick<Prisma.TransactionClient, 'user' | 'employeeDataChangeRequest'>,
+    client: Pick<Prisma.TransactionClient, 'user' | 'employeeDataChangeRequest'> & Partial<Pick<Prisma.TransactionClient, 'contractSubject'>>,
     userId: string,
     input: SubmitEmployeeArchiveDraftDto,
     operator: AuthUser,
@@ -1117,12 +1153,17 @@ export class EmployeeArchivesService {
         sequence: typeof contract.sequence === 'number' ? contract.sequence : index,
       };
     }) ?? baseContracts;
+    if (input.employee.contractSubjectId === undefined) delete proposedEmployee.contractSubjectId;
+    await this.normalizeSubjectPayload(client as Prisma.TransactionClient, { employee: proposedEmployee, contracts: proposedContracts },
+      { employee: baseEmployee, contracts: baseContracts }, this.record(existing?.proposedValue));
+    if (recordStatus === 'submitted') await this.validateSubjectPayload(client as Prisma.TransactionClient,
+      { employee: proposedEmployee, contracts: proposedContracts }, { employee: baseEmployee, contracts: baseContracts });
     const proposedPerformance = {
       managerId: user.directManagerId,
       ...(input.performance ?? {}),
     };
     const profileChanged = !this.sameReviewRecord(baseEmployee, proposedEmployee, [
-      'employeeNo', 'name', 'phone', 'company', 'companyText', 'deptId', 'positionId', 'position', 'jobGrade',
+      'employeeNo', 'name', 'phone', 'company', 'companyText', 'contractSubjectId', 'deptId', 'positionId', 'position', 'jobGrade',
       'jobFamily', 'managerId', 'workLocation', 'employmentType', 'employeeStatus', 'entryDate',
       'plannedRegularDate', 'actualRegularDate', 'leaveDate', 'probationMonths',
     ])
@@ -1315,6 +1356,7 @@ export class EmployeeArchivesService {
     const proposedEmployee = {
       ...baseEmployee,
       company: input.company,
+      ...(input.contractSubjectId !== undefined ? { contractSubjectId: input.contractSubjectId } : {}),
       deptId: input.deptId ?? null,
       positionId: position?.id ?? null,
       position: position?.name ?? input.position ?? null,
@@ -1333,6 +1375,8 @@ export class EmployeeArchivesService {
       effectiveTo: input.effectiveTo ?? null,
       changeType: input.changeType,
     };
+    if (input.contractSubjectId === undefined) delete proposedEmployee.contractSubjectId;
+    await normalizeContractSubject(this.prisma, proposedEmployee as Record<string, unknown>, baseEmployee, 'companyText');
     const profile = this.profileReviewData(user.employeeProfile);
     return employeeDataChangeView(await this.prisma.employeeDataChangeRequest.create({
       data: {
@@ -1489,6 +1533,7 @@ export class EmployeeArchivesService {
       phone: phoneOverride !== undefined ? phoneOverride : user.phone,
       company: employment?.company ?? CompanyCode.fuede,
       companyText: employment?.companyText ?? null,
+      contractSubjectId: employment?.contractSubjectId ?? null,
       deptId: user.deptId ?? employment?.deptId ?? null,
       positionId: user.positionId ?? employment?.positionId ?? null,
       position: user.position ?? employment?.position ?? null,
@@ -1543,6 +1588,7 @@ export class EmployeeArchivesService {
       sequence: contract.sequence ?? 0,
       name: contract.name ?? null,
       signingCompany: contract.signingCompany ?? null,
+      contractSubjectId: contract.contractSubjectId ?? null,
       signedAt: this.comparableReviewValue(contract.signedAt, 'signedAt'),
       effectiveFrom: this.comparableReviewValue(contract.effectiveFrom, 'effectiveFrom'),
       expiresAt: this.comparableReviewValue(contract.expiresAt, 'expiresAt'),

@@ -28,6 +28,7 @@ for (const { width, companyText } of [1440, 1024, 390].flatMap((width) =>
       const path = new URL(route.request().url()).pathname;
       let data: unknown = [];
       if (path.endsWith('/auth/me')) data = { id: 'admin-1', name: '管理员', sysRole: 'system_admin', canViewAll: true };
+      else if (path.endsWith('/contract-subjects')) data = [{ id: 'new-subject', name: '可单独修改的公司名称', isActive: true }];
       else if (path.endsWith('/notifications/unread-count')) data = 0;
       else if (path.endsWith('/users')) data = { items: [employee], total: 1, page: 1, pageSize: 20 };
       else if (path.endsWith('/departments')) data = [{ id: 'dept-1', name: '项目部', company: 'fuede', children: [] }];
@@ -47,32 +48,34 @@ for (const { width, companyText } of [1440, 1024, 390].flatMap((width) =>
     await page.getByRole('button', { name: '查看档案', exact: true }).click();
     const drawer = page.getByRole('dialog', { name: '员工档案', exact: true });
     await drawer.getByRole('button', { name: '编辑档案', exact: true }).click();
-    const company = drawer.getByRole('textbox', { name: '所属公司（花名册）', exact: true });
-    await expect(company).toHaveValue('杭州花名册公司原文有限公司');
-    await expect(company).toHaveAttribute('maxlength', '150');
-    await company.fill(companyText);
+    const company = drawer.locator('.el-form-item').filter({ has: page.getByText('所属公司（合同主体）', { exact: true }) });
+    await expect(company.getByText('杭州花名册公司原文有限公司 · 原记录，尚未关联')).toBeVisible();
+    if (companyText) {
+      await company.getByRole('combobox').click();
+      await page.getByRole('option', { name: companyText, exact: true }).click();
+    } else await company.getByRole('button', { name: '清空主体', exact: true }).click();
     await expect(drawer.getByRole('combobox', { name: '组织归属', exact: true })).toBeVisible();
     await page.screenshot({ path: testInfo.outputPath(`company-text-${width}.png`), fullPage: true });
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
     await drawer.getByRole('button', { name: '提交审核', exact: true }).click();
-    await expect.poll(() => submitted?.employee.companyText).toBe(companyText);
+    await expect.poll(() => submitted?.employee.companyText).toBe(companyText || null);
     expect(submitted?.employee.company).toBe('fuede');
 
     await page.goto('/personnel-processing');
     await page.getByRole('button', { name: '查看办理详情', exact: true }).click();
     const detail = page.getByRole('dialog', { name: '档案修改办理详情', exact: true });
-    await expect(detail.getByText('所属公司（花名册）', { exact: true })).toBeVisible();
+    await expect(detail.getByText('所属公司（合同主体）', { exact: true })).toBeVisible();
     await expect(detail.getByText(`杭州花名册公司原文有限公司 → ${companyText || '—'}`, { exact: true })).toBeVisible();
     await expect(detail.getByText('组织归属', { exact: true })).toHaveCount(0);
     await detail.getByRole('button', { name: '关闭', exact: true }).click();
     await page.getByRole('tab', { name: '待我审核', exact: true }).click();
-    await expect(page.getByText('所属公司（花名册）', { exact: true }).filter({ visible: true })).toBeVisible();
+    await expect(page.getByText('所属公司（合同主体）', { exact: true }).filter({ visible: true })).toBeVisible();
 
     await page.goto('/users');
     await page.getByRole('button', { name: '查看档案', exact: true }).click();
     await drawer.getByRole('tab', { name: '变更记录', exact: true }).click();
     await drawer.locator('.change-history .el-collapse-item__header').click();
-    await expect(drawer.getByText('所属公司（花名册）', { exact: true })).toBeVisible();
+    await expect(drawer.getByText('所属公司（合同主体）', { exact: true })).toBeVisible();
     await expect(drawer.getByText(`杭州花名册公司原文有限公司 → ${companyText || '未填写'}`, { exact: true })).toBeVisible();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBeTruthy();
   });

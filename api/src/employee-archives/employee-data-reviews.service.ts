@@ -1,3 +1,4 @@
+import { validateContractSubject } from '@/contract-subjects/contract-subject-reference';
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   AccountType,
@@ -674,15 +675,17 @@ export class EmployeeDataReviewsService {
     const shouldWriteEmployment = !request.userId
       || isManualEmployment
       || this.hasEmploymentChange(baseEmployee, employee);
-    const priorCompany = request.userId && shouldWriteEmployment && employee.companyText === undefined
+    await validateContractSubject(tx, employee, baseEmployee);
+    const priorCompany = request.userId && shouldWriteEmployment && (employee.companyText === undefined || employee.contractSubjectId === undefined)
       ? await tx.employmentRecord.findFirst({
-        where: { userId }, orderBy: { effectiveFrom: 'desc' }, select: { companyText: true },
+        where: { userId }, orderBy: { effectiveFrom: 'desc' }, select: { companyText: true, contractSubjectId: true },
       }) : null;
     const employmentData = {
       userId,
       employeeNo,
       company,
-      companyText: this.nullableString(employee.companyText === undefined ? priorCompany?.companyText : employee.companyText),
+      companyText: this.nullableString(employee.companyText === undefined || (employee.contractSubjectId === undefined && priorCompany?.contractSubjectId) ? priorCompany?.companyText : employee.companyText),
+      contractSubjectId: this.nullableString(employee.contractSubjectId === undefined ? priorCompany?.contractSubjectId : employee.contractSubjectId),
       deptId,
       positionId,
       position,
@@ -945,7 +948,7 @@ export class EmployeeDataReviewsService {
     proposed: Record<string, unknown>,
   ): boolean {
     const keys = [
-      'company', 'companyText', 'deptId', 'positionId', 'position', 'jobGrade', 'jobFamily', 'managerId', 'managerName',
+      'company', 'companyText', 'contractSubjectId', 'deptId', 'positionId', 'position', 'jobGrade', 'jobFamily', 'managerId', 'managerName',
       'workLocation', 'employmentType', 'employeeStatus', 'entryDate', 'plannedRegularDate',
       'actualRegularDate', 'leaveDate', 'probationMonths',
     ];
@@ -1094,6 +1097,7 @@ export class EmployeeDataReviewsService {
             sequence: true,
             name: true,
             signingCompany: true,
+            contractSubjectId: true,
             signedAt: true,
             effectiveFrom: true,
             expiresAt: true,
@@ -1124,6 +1128,7 @@ export class EmployeeDataReviewsService {
       phone: current.phone,
       company: employment?.company ?? null,
       companyText: employment?.companyText ?? null,
+      contractSubjectId: employment?.contractSubjectId ?? null,
       deptId: current.deptId,
       positionId: current.positionId ?? employment?.positionId ?? null,
       position: current.position,
@@ -1176,7 +1181,7 @@ export class EmployeeDataReviewsService {
   ): Promise<void> {
     const currentActive = await tx.employeeContract.findMany({
       where: { userId, isActive: true },
-      select: { id: true, contractType: true, sequence: true },
+      select: { id: true, contractType: true, sequence: true, contractSubjectId: true, signingCompany: true },
     });
     const retainedIds = new Set<string>();
     for (const [index, contract] of contracts.entries()) {
@@ -1187,6 +1192,7 @@ export class EmployeeDataReviewsService {
         sequence,
         name: this.nullableString(contract.name),
         signingCompany: this.nullableString(contract.signingCompany),
+        ...(contract.contractSubjectId !== undefined ? { contractSubjectId: this.nullableString(contract.contractSubjectId) } : {}),
         signedAt: this.nullableDate(contract.signedAt),
         effectiveFrom: this.nullableDate(contract.effectiveFrom ?? contract.signedAt),
         expiresAt: this.nullableDate(contract.expiresAt),
@@ -1218,6 +1224,10 @@ export class EmployeeDataReviewsService {
           message: '合同记录已发生变化，请重新提交审核',
         });
       }
+      await validateContractSubject(tx, contract, activeContract ?? {});
+      if (activeContract?.contractSubjectId && (contract.contractSubjectId === undefined || contract.contractSubjectId === activeContract.contractSubjectId)) {
+        contractData.signingCompany = activeContract.signingCompany;
+      }
       if (activeContract) {
         retainedIds.add(activeContract.id);
         await tx.employeeContract.update({
@@ -1245,12 +1255,14 @@ export class EmployeeDataReviewsService {
     right: Record<string, unknown>[],
   ): boolean {
     const compareById = right.length > 0 && right.every((contract) => Boolean(this.nullableString(contract.id)));
+    const compareSubject = right.some((contract) => contract.contractSubjectId !== undefined);
     const normalize = (contract: Record<string, unknown>) => ({
       id: compareById ? this.nullableString(contract.id) : null,
       contractType: this.nullableString(contract.contractType ?? contract.kind) ?? 'contract',
       sequence: typeof contract.sequence === 'number' ? contract.sequence : 0,
       name: this.nullableString(contract.name),
       signingCompany: this.nullableString(contract.signingCompany),
+      ...(compareSubject ? { contractSubjectId: this.nullableString(contract.contractSubjectId) } : {}),
       signedAt: this.comparableValue(contract.signedAt),
       effectiveFrom: this.comparableValue(contract.effectiveFrom),
       expiresAt: this.comparableValue(contract.expiresAt),

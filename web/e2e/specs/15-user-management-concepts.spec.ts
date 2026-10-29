@@ -14,6 +14,11 @@ const apiResponse = (data: unknown) => ({
   timestamp: Date.now(),
 });
 
+// Legacy personnel fixtures have no maintained contract subjects.
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/contract-subjects**', route => route.fulfill({ json: apiResponse([]) }));
+});
+
 const webBaseUrl = process.env.PLAYWRIGHT_BASE_URL ?? 'http://localhost:5173';
 
 for (const viewport of [{ width: 1440, height: 900 }, { width: 1024, height: 768 }, { width: 390, height: 844 }]) {
@@ -708,7 +713,7 @@ test('edits the whole employee archive in place and supports contract row change
   const editorSection = (heading: string) => drawer.locator('.editor-section').filter({
     has: page.getByRole('heading', { name: heading, exact: true }),
   });
-  expect(await editorSection('基本与任职').locator('.el-form-item__label').allTextContents()).toEqual(basicLabels.flatMap((label) => label === '所属公司' ? ['所属公司（花名册）', '组织归属'] : [label === '工号' ? '当前工号' : label]));
+  expect(await editorSection('基本与任职').locator('.el-form-item__label').allTextContents()).toEqual(basicLabels.flatMap((label) => label === '所属公司' ? ['所属公司（合同主体）', '组织归属'] : [label === '工号' ? '当前工号' : label]));
   expect(await editorSection('个人与教育').locator('.el-form-item__label').allTextContents()).toEqual(personalLabels);
   expect(await editorSection('联系与保障').locator('.el-form-item__label').allTextContents()).toEqual(contactLabels);
   await expect(drawer.getByRole('textbox', { name: '姓名' })).toHaveValue('余焱玲');

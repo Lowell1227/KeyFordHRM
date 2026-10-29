@@ -158,6 +158,12 @@ export const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/contract-subjects',
+    name: 'ContractSubjects',
+    component: () => import('@/views/admin/ContractSubjectManageView.vue'),
+    meta: { requiresAuth: true, title: '合同主体维护', roles: ['hr', 'system_admin'], hrCapabilities: ['employee_archive_edit', 'employee_archive_review'], navigation: { module: 'people', label: '合同主体维护', order: 35, group: 'people-archive', groupLabel: '人员档案' } },
+  },
+  {
     path: '/positions',
     name: 'Positions',
     component: () => import('@/views/admin/PositionDirectoryView.vue'),

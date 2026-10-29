@@ -23,6 +23,7 @@ export class ContractReferenceDto {
 }
 
 export class EmployeeReentryFieldsDto {
+  @IsOptional() @IsUUID('4') contractSubjectId?: string | null;
   @IsIn(Object.values(CompanyCode)) company!: CompanyCode;
   @IsOptional() @IsUUID('4') deptId?: string | null;
   @IsOptional() @IsUUID('4') positionId?: string | null;

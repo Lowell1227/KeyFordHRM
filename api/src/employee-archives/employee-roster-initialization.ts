@@ -189,7 +189,9 @@ export async function initializeConfirmedRoster(
         && pair.row.employee.name === row.employee.managerName && pair.userId !== userId) : [];
       const managerId = managerMatches.length === 1 ? managerMatches[0].userId : null;
       if (row.employee.managerName && !managerId) warnings.push({ field: 'employee.managerId', code: 'missing', message: '花名册直属主管待核对' });
-      const employee = { ...row.employee, ...target, companyText: row.employee.companyText,
+      const previousEmployment = old?.employmentHistory[0];
+      const subjectSnapshot = previousEmployment?.contractSubjectId ? { contractSubjectId: previousEmployment.contractSubjectId, companyText: previousEmployment.companyText } : {};
+      const employee = { ...row.employee, ...target, companyText: row.employee.companyText, ...subjectSnapshot,
         employmentType: current.employmentType, employeeStatus: target.status, managerId, effectiveFrom,
       };
       const contracts: Array<Record<string, unknown>> = [];
@@ -236,7 +238,7 @@ export async function initializeConfirmedRoster(
       }, data: { effectiveTo: dayBefore } });
       await tx.employmentRecord.create({ data: {
         userId, employeeNo: target.employeeNo, effectiveFrom, effectiveTo: null, company: target.company,
-        companyText: row.employee.companyText, deptId: target.deptId, positionId: target.positionId,
+        companyText: row.employee.companyText, ...subjectSnapshot, deptId: target.deptId, positionId: target.positionId,
         position: current.position, jobGrade: row.employee.jobGrade, jobFamily: row.employee.jobFamily,
         directManagerId: managerId, workLocation: row.employee.workLocation, employmentType: current.employmentType,
         employeeStatus: target.status, entryDate: row.employee.entryDate, leaveDate: row.employee.leaveDate ?? null,

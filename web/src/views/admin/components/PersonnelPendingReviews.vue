@@ -123,6 +123,7 @@ function contractDetail(contract: Record<string, unknown>): string {
   const attachments = reviewContracts(contract.attachments);
   const items = [
     ['签约公司', contract.signingCompany],
+    ['主体关联', Object.prototype.hasOwnProperty.call(contract, 'contractSubjectId') ? (contract.contractSubjectId ? '已关联' : '尚未关联') : undefined],
     ['签订日期', contract.signedAt],
     ['生效日期', contract.effectiveFrom],
     ['到期日期', contract.expiresAt],
@@ -131,7 +132,7 @@ function contractDetail(contract: Record<string, unknown>): string {
     ['附件', attachments.length ? attachments.map((item) => item.name).filter(Boolean).join('、') : null],
   ].filter((item) => item[1] !== undefined && item[1] !== null && item[1] !== '');
   return items.length
-    ? items.map(([label, value]) => `${label}：${String(value).slice(0, 10)}`).join('；')
+    ? items.map(([label, value]) => `${label}：${String(value)}`).join('；')
     : '未填写合同日期或期限';
 }
 
@@ -229,7 +230,8 @@ function employeeChangeSummary(row: EmployeeDataReview): string {
   const changes: string[] = [];
   const fields: Array<[Record<string, unknown>, Record<string, unknown>, string, string]> = [
     [beforeEmployee, afterEmployee, 'company', '组织归属'],
-    [beforeEmployee, afterEmployee, 'companyText', '所属公司（花名册）'],
+    [beforeEmployee, afterEmployee, 'companyText', '所属公司（合同主体）'],
+    [beforeEmployee, afterEmployee, 'contractSubjectId', '合同主体关联'],
     [beforeEmployee, afterEmployee, 'deptId', '部门'],
     [beforeEmployee, afterEmployee, 'position', '岗位'],
     [beforeEmployee, afterEmployee, 'employeeStatus', '在职状态'],
@@ -237,7 +239,7 @@ function employeeChangeSummary(row: EmployeeDataReview): string {
     [beforeProfile, afterProfile, 'education', '学历'],
   ];
   for (const [before, after, field, label] of fields) {
-    if ((before[field] ?? null) !== (after[field] ?? null)) changes.push(label);
+    if (field in after && (before[field] ?? null) !== (after[field] ?? null)) changes.push(label);
   }
   if ((beforePerformance.managerId ?? null) !== (afterPerformance.managerId ?? null)) changes.push('绩效直属上级');
   const contractKinds = [...new Set(contractDiffs(row).map((item) => item.kind))];

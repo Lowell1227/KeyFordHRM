@@ -1,3 +1,4 @@
+import { normalizeContractSubject, validateContractSubject } from '@/contract-subjects/contract-subject-reference';
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   AccountType,
@@ -81,6 +82,7 @@ export class EmployeeOnboardingService {
 
       const warnings = this.buildWarnings(input);
       const employee = this.normalizedEmployee(input);
+      await normalizeContractSubject(tx, employee, {}, 'companyText');
       const request = await tx.employeeDataChangeRequest.create({
         data: {
           userId,
@@ -175,6 +177,10 @@ export class EmployeeOnboardingService {
         contracts: input.contractReferences ?? [],
         payloadHash: this.hashPayload(input),
       };
+      if (!performanceOnly) {
+        await normalizeContractSubject(tx, next.employee as Record<string, unknown>, this.record(this.record(request.proposedValue).employee), 'companyText');
+        await validateContractSubject(tx, next.employee as Record<string, unknown>, {});
+      }
       const updated = await tx.employeeDataChangeRequest.update({
         where: { id: requestId },
         data: {
@@ -288,6 +294,8 @@ export class EmployeeOnboardingService {
     }
 
     const request = await this.prisma.$transaction(async (tx) => {
+      const employee = this.normalizedEmployee(input);
+      await normalizeContractSubject(tx, employee, {}, 'companyText');
       const created = await tx.employeeDataChangeRequest.create({ data: {
         userId: matchedEmployeeId,
         employeeNo: null,
@@ -305,7 +313,7 @@ export class EmployeeOnboardingService {
             hasIdNumber: Boolean(input.identitySnapshot.idNumber),
           },
           matchCandidates: candidates,
-          employee: this.normalizedEmployee(input),
+          employee,
         }),
         validationErrors: this.json([]), validationWarnings: this.json(this.buildWarnings(input)),
         recordStatus: 'draft', profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
@@ -352,10 +360,12 @@ export class EmployeeOnboardingService {
     } });
     if (!assignment && !existing) throw new ConflictException('自动工号预留不存在或已被占用');
     if (!existing) {
+      await validateContractSubject(tx, employee, {});
       await tx.employmentRecord.create({ data: {
         userId: request.userId, employeeNo: request.employeeNo,
         effectiveFrom, effectiveTo,
         company: employee.company as any,
+        contractSubjectId: this.stringOrNull(employee.contractSubjectId), companyText: this.stringOrNull(employee.companyText),
         deptId: this.stringOrNull(employee.deptId), positionId: this.stringOrNull(employee.positionId),
         position: this.stringOrNull(employee.position), directManagerId: this.stringOrNull(employee.managerId),
         employmentType: employee.employmentType as any, employeeStatus: employee.employeeStatus as any,
@@ -415,6 +425,7 @@ export class EmployeeOnboardingService {
 
   private normalizedEmployee(input: EmployeeReentryFieldsDto) {
     return {
+      ...(input.contractSubjectId !== undefined ? { contractSubjectId: input.contractSubjectId } : {}),
       company: input.company, deptId: input.deptId ?? null, positionId: input.positionId ?? null,
       position: input.position?.trim() || null, managerId: input.rosterManagerId ?? null,
       effectiveDate: input.effectiveDate, effectiveTo: input.effectiveTo ?? null,

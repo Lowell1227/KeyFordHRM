@@ -2136,7 +2136,7 @@ onBeforeUnmount(() => {
             <div class="employee-archive__facts">
               <div><span>姓名</span><strong>{{ employeeArchiveDrawer.data.name }}</strong></div>
               <div><span>工号</span><strong>{{ employeeArchiveDrawer.data.employeeNo || '未填写' }}</strong></div>
-              <div><span>所属公司</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.companyText, '待补充') }}</strong></div>
+              <div><span>所属公司</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.companyText, '待补充') }}</strong><small v-if="archiveCurrentEmployment?.contractSubjectId">已关联合同主体</small><small v-else-if="archiveCurrentEmployment?.companyText">历史名称，尚未关联主体</small></div>
               <div><span>所属部门</span><strong>{{ employeeArchiveDrawer.data.dept?.fullPath || employeeArchiveDrawer.data.dept?.name || '未设置' }}</strong></div>
               <div><span>岗位</span><strong>{{ employeeArchiveDrawer.data.position || '未设置' }}</strong></div>
               <div><span>职级</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.jobGrade) }}</strong></div>
@@ -2257,6 +2257,9 @@ onBeforeUnmount(() => {
               <el-table-column label="部门 / 岗位" min-width="180">
                 <template #default="{ row }">{{ row.dept?.name || '未设置' }} / {{ row.position || '未设置' }}</template>
               </el-table-column>
+              <el-table-column label="所属公司（合同主体）" min-width="200">
+                <template #default="{ row }"><div>{{ row.companyText || '未填写' }}</div><span class="muted-text" v-if="row.companyText">{{ row.contractSubjectId ? '已关联合同主体' : '历史名称，尚未关联主体' }}</span></template>
+              </el-table-column>
               <el-table-column label="变更" width="100">
                 <template #default="{ row }">{{ employmentChangeLabels[row.changeType] || row.changeType }}</template>
               </el-table-column>
@@ -2293,7 +2296,7 @@ onBeforeUnmount(() => {
               <div class="employee-archive__facts">
                 <div><span>类型</span><strong>{{ contractTypeLabels[contract.contractType] || contract.contractType || '未填写' }}</strong></div>
                 <div><span>合同名称</span><strong>{{ contract.name || '未填写' }}</strong></div>
-                <div><span>签约公司</span><strong>{{ contract.signingCompany || '未填写' }}</strong></div>
+                <div><span>签约公司</span><strong>{{ contract.signingCompany || '未填写' }}</strong><small v-if="contract.contractSubjectId">已关联合同主体</small><small v-else-if="contract.signingCompany">历史名称，尚未关联主体</small></div>
                 <div><span>签订日期</span><strong>{{ formatDate(contract.signedAt) }}</strong></div>
                 <div><span>生效日期</span><strong>{{ formatDate(contract.effectiveFrom) }}</strong></div>
                 <div><span>到期日期</span><strong>{{ formatDate(contract.expiresAt) }}</strong></div>
@@ -2745,6 +2748,13 @@ onBeforeUnmount(() => {
   margin-top: 5px;
   overflow-wrap: anywhere;
   color: #2d3850;
+}
+
+.employee-archive__facts small {
+  display: block;
+  margin-top: 4px;
+  color: #8791a4;
+  font-size: 12px;
 }
 
 .employee-archive__facts .span-2 {

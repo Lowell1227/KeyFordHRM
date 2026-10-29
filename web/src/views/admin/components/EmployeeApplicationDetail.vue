@@ -29,7 +29,7 @@ const fieldLabels: Record<string, string> = {
   name: '姓名',
   phone: '手机号',
   company: '组织归属',
-  companyText: '所属公司（花名册）',
+  companyText: '所属公司（合同主体）', contractSubjectId: '合同主体关联',
   deptId: '部门',
   position: '岗位',
   jobGrade: '职级',
@@ -87,6 +87,7 @@ function hasValue(value: unknown) {
 
 function displayValue(key: string, value: unknown, source: Record<string, any>) {
   if (!hasValue(value)) return '—';
+  if (key === 'contractSubjectId') return `${source.companyText || source.signingCompany || '合同主体'} · 已关联`;
   if (key === 'company') return companyLabels[String(value)] ?? String(value);
   if (key === 'employeeStatus' || key === 'status') return employeeStatusLabels[String(value)] ?? String(value);
   if (key === 'employmentType') return employmentTypeLabels[String(value)] ?? String(value);
@@ -99,7 +100,7 @@ function displayValue(key: string, value: unknown, source: Record<string, any>) 
 }
 
 const employmentItems = computed(() => {
-  const keys = ['company', 'companyText', 'deptId', 'position', 'jobGrade', 'jobFamily', 'workLocation', 'employeeStatus', 'status', 'employmentType', 'entryDate', 'effectiveDate', 'effectiveFrom', 'effectiveTo', 'leaveDate', 'managerId', 'probationMonths', 'plannedRegularDate', 'actualRegularDate'];
+  const keys = ['company', 'companyText', 'contractSubjectId', 'deptId', 'position', 'jobGrade', 'jobFamily', 'workLocation', 'employeeStatus', 'status', 'employmentType', 'entryDate', 'effectiveDate', 'effectiveFrom', 'effectiveTo', 'leaveDate', 'managerId', 'probationMonths', 'plannedRegularDate', 'actualRegularDate'];
   const seenLabels = new Set<string>();
   const items = keys.flatMap((key) => {
     const value = employee.value[key];
@@ -129,8 +130,8 @@ const changeItems = computed(() => ['employee', 'profile', 'performance'].flatMa
     return [{
       key: `${section}.${key}`,
       label,
-      before: displayValue(key, before[key], before),
-      after: displayValue(key, after[key], after),
+      before: key === 'contractSubjectId' ? (before[key] ? '原主体关联' : '尚未关联') : displayValue(key, before[key], before),
+      after: key === 'contractSubjectId' ? (after[key] ? '新主体关联' : '尚未关联') : displayValue(key, after[key], after),
     }];
   });
 }));
@@ -139,7 +140,7 @@ const contractChangeItems = computed(() => {
   const before = Array.isArray(props.request.baseValue?.contracts) ? props.request.baseValue.contracts as Record<string, any>[] : [];
   const after = Array.isArray(props.request.proposedValue?.contracts) ? props.request.proposedValue.contracts as Record<string, any>[] : [];
   const labels: Record<string, string> = {
-    name: '名称', contractType: '类型', signingCompany: '签约公司', signedAt: '签订日期',
+    name: '名称', contractType: '类型', signingCompany: '签约公司', contractSubjectId: '合同主体关联', signedAt: '签订日期',
     effectiveFrom: '生效日期', expiresAt: '到期日期', termType: '期限', originalCompany: '原公司',
     newCompany: '新公司', confidentialityAgreement: '保密协议', nonCompeteAgreement: '竞业协议', portraitAgreement: '肖像协议',
   };
@@ -151,11 +152,12 @@ const contractChangeItems = computed(() => {
     const title = String(contract.name || [kind, contract.reference].filter(hasValue).join(' · ') || `合同材料 ${index + 1}`);
     if (!old) {
       result.push({ key: `contract-${index}`, label: '新增合同', before: '无', after: title });
+      result.push({ key: `contract-${index}-subject`, label: `${title} · 签约公司`, before: '—', after: `${contract.signingCompany || '未填写'} · ${contract.contractSubjectId ? '已关联' : '尚未关联'}` });
       return;
     }
     Object.entries(labels).forEach(([key, label]) => {
-      if (JSON.stringify(old[key] ?? null) === JSON.stringify(contract[key] ?? null)) return;
-      result.push({ key: `contract-${index}-${key}`, label: `${title} · ${label}`, before: hasValue(old[key]) ? String(old[key]) : '—', after: hasValue(contract[key]) ? String(contract[key]) : '—' });
+      if (!(key in contract) || JSON.stringify(old[key] ?? null) === JSON.stringify(contract[key] ?? null)) return;
+      result.push({ key: `contract-${index}-${key}`, label: `${title} · ${label}`, before: key === 'contractSubjectId' ? (old[key] ? '原主体关联' : '尚未关联') : hasValue(old[key]) ? String(old[key]) : '—', after: key === 'contractSubjectId' ? (contract[key] ? '新主体关联' : '尚未关联') : hasValue(contract[key]) ? String(contract[key]) : '—' });
     });
     for (const key of ['images', 'attachments']) {
       if (JSON.stringify(old[key] ?? []) === JSON.stringify(contract[key] ?? [])) continue;

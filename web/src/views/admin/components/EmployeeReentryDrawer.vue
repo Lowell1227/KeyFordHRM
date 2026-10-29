@@ -10,6 +10,7 @@ import {
 } from '@/api/employee-archives.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import UserSelect from '@/components/common/UserSelect.vue';
+import ContractSubjectSelect from '@/components/common/ContractSubjectSelect.vue';
 import type { Department, User } from '@/types/api.types';
 import { formatDateTime } from '@/utils/date';
 
@@ -31,6 +32,7 @@ const positions = ref<PositionRecord[]>([]);
 let savedSnapshot = '';
 const loadError = ref('');
 const form = reactive({
+  contractSubjectId: undefined as string | null | undefined, companyText: null as string | null,
   company: 'fuede', deptId: '', positionId: '',
   rosterManagerId: null as string | null, performanceManagerId: null as string | null,
   effectiveDate: '', effectiveTo: '', employeeStatus: 'probation' as 'active' | 'probation',
@@ -75,6 +77,8 @@ function setFormFromRequest(request: EmployeeDataReview | null, archive?: Employ
   const employee = request?.proposedValue?.employee ?? {};
   const previous = archive?.currentEmployment ?? archive?.employmentHistory[0];
   Object.assign(form, {
+    contractSubjectId: employee.contractSubjectId ?? undefined,
+    companyText: employee.companyText ?? null,
     company: employee.company ?? previous?.company ?? 'fuede',
     deptId: employee.deptId ?? props.employee?.deptId ?? '',
     positionId: employee.positionId ?? previous?.positionId ?? '',
@@ -122,6 +126,7 @@ watch(() => props.modelValue, (open) => { if (open) void load(); });
 function body(): EmployeeReentryBody {
   return {
     company: form.company,
+    contractSubjectId: form.contractSubjectId,
     deptId: form.deptId || null,
     positionId: form.positionId || null,
     rosterManagerId: form.rosterManagerId,
@@ -204,6 +209,8 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
 
       <el-form label-position="top" :disabled="!canEdit || loading || !!loadError">
         <div class="form-grid">
+          <el-form-item label="所属公司（合同主体）"><ContractSubjectSelect v-model="form.contractSubjectId" v-model:snapshot-name="form.companyText" :disabled="performanceOnly" /></el-form-item>
+          <el-form-item label="组织归属"><el-select v-model="form.company" :disabled="performanceOnly"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select></el-form-item>
           <el-form-item label="部门"><el-select v-model="form.deptId" :disabled="performanceOnly" filterable><el-option v-for="dept in flatten(departments)" :key="dept.id" :label="dept.fullPath || dept.name" :value="dept.id" /></el-select></el-form-item>
           <el-form-item label="岗位"><el-select v-model="form.positionId" :disabled="performanceOnly" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.name" :value="position.id" /></el-select></el-form-item>
           <el-form-item label="花名册直属主管"><UserSelect v-model="form.rosterManagerId" :disabled="performanceOnly" clearable eligible-for="direct_manager" :disabled-ids="employee ? [employee.id] : []" /></el-form-item>

@@ -3,6 +3,11 @@ import { applicationProgress } from '../../src/utils/employee-lifecycle';
 
 const apiResponse = (data: unknown) => ({ code: 0, message: 'success', data, timestamp: Date.now() });
 
+// Legacy personnel fixtures have no maintained contract subjects.
+test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/contract-subjects**', route => route.fulfill({ json: apiResponse([]) }));
+});
+
 test('普通档案撤回及部分生效后的撤回呈现明确状态', () => {
   const cancelled = { recordStatus: 'submitted', profileReviewStatus: 'cancelled', performanceReviewStatus: 'not_required', cancelledAt: '2026-09-26T00:00:00Z', proposedValue: {} };
   expect(applicationProgress(cancelled as any)).toBe('已取消');

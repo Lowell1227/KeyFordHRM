@@ -5,6 +5,7 @@ import { ElMessage, type UploadRequestOptions } from 'element-plus';
 import type { Department } from '@/types/api.types';
 import type { EmployeeArchive, EmployeeDataReview } from '@/api/employee-archives.api';
 import UserSelect from '@/components/common/UserSelect.vue';
+import ContractSubjectSelect from '@/components/common/ContractSubjectSelect.vue';
 import { uploadApi } from '@/api/upload.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 
@@ -60,6 +61,7 @@ function reset() {
     phone: archive.employeeProfile?.phone ?? null,
     company: employment?.company ?? archive.dept?.company ?? 'fuede',
     companyText: employment?.companyText ?? null,
+    contractSubjectId: employment?.contractSubjectId ?? undefined,
     deptId: archive.dept?.id ?? null,
     positionId: employment?.positionId ?? null,
     position: archive.position,
@@ -116,6 +118,7 @@ function reset() {
       sequence: item.sequence,
       name: item.name,
       signingCompany: item.signingCompany,
+      contractSubjectId: item.contractSubjectId ?? undefined,
       signedAt: dateValue(item.signedAt),
       effectiveFrom: dateValue(item.effectiveFrom),
       expiresAt: dateValue(item.expiresAt),
@@ -131,11 +134,14 @@ function reset() {
   if (props.draft?.userId === archive.id && (props.draft.recordStatus === 'draft' || props.draft.canResume)) {
     const proposed = props.draft.proposedValue ?? {};
     replaceRecord(form.employee, { ...form.employee, ...(proposed.employee ?? {}) });
+    if (form.employee.contractSubjectId == null && !employment?.contractSubjectId) form.employee.contractSubjectId = undefined;
     replaceRecord(form.profile, { ...form.profile, ...(proposed.profile ?? {}) });
     replaceRecord(form.performance, { ...form.performance, ...(proposed.performance ?? {}) });
     if (Array.isArray(proposed.contracts)) {
       form.contracts = proposed.contracts.map((item: Record<string, any>, index: number) => ({
         ...item,
+        ...(!('contractSubjectId' in item) && item.id ? { contractSubjectId: archive.employeeContracts.find(contract => contract.id === item.id)?.contractSubjectId ?? undefined } : {}),
+        ...(item.contractSubjectId == null && !archive.employeeContracts.find(contract => contract.id === item.id)?.contractSubjectId ? { contractSubjectId: undefined } : {}),
         __key: item.id || `draft-${index}`,
       }));
     }
@@ -276,7 +282,7 @@ defineExpose({ submit, saveDraft, reset, isDirty });
       <el-form label-position="top" class="archive-editor-grid">
         <el-form-item label="姓名"><el-input v-model="form.employee.name" /></el-form-item>
         <el-form-item label="当前工号"><el-input v-model="form.employee.employeeNo" disabled /><small class="field-help">工号由系统生成；历史任职工号在档案中保留，不在此处修改。</small></el-form-item>
-        <el-form-item label="所属公司（花名册）"><el-input v-model="form.employee.companyText" maxlength="150" clearable /></el-form-item>
+        <el-form-item label="所属公司（合同主体）"><ContractSubjectSelect v-model="form.employee.contractSubjectId" v-model:snapshot-name="form.employee.companyText" /></el-form-item>
         <el-form-item label="组织归属">
           <el-select v-model="form.employee.company"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select>
         </el-form-item>
@@ -347,7 +353,7 @@ defineExpose({ submit, saveDraft, reset, isDirty });
         <el-form label-position="top" class="archive-editor-grid">
           <el-form-item label="类型"><el-select v-model="contract.contractType"><el-option label="劳动合同" value="contract" /><el-option label="续签" value="renewal" /><el-option label="转签" value="transfer" /></el-select></el-form-item>
           <el-form-item label="合同名称"><el-input v-model="contract.name" /></el-form-item>
-          <el-form-item label="签约公司"><el-input v-model="contract.signingCompany" /></el-form-item>
+          <el-form-item label="签约公司"><ContractSubjectSelect v-model="contract.contractSubjectId" v-model:snapshot-name="contract.signingCompany" /></el-form-item>
           <el-form-item label="签订日期"><el-date-picker v-model="contract.signedAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
           <el-form-item label="生效日期"><el-date-picker v-model="contract.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
           <el-form-item label="到期日期"><el-date-picker v-model="contract.expiresAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>

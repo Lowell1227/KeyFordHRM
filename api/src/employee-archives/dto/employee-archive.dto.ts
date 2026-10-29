@@ -28,6 +28,8 @@ const BlankToNull = () => Transform(({ value, obj, key }) =>
   typeof obj[key] === 'string' && !obj[key].trim() ? null : value);
 
 class EmployeeCreateDetailsDto {
+  @IsOptional() @IsUUID('4') contractSubjectId?: string | null;
+  @IsOptional() @IsString() @MaxLength(150) companyText?: string | null;
   @IsOptional() @IsString() @MaxLength(100) position?: string | null;
   @IsOptional() @IsString() @MaxLength(50) jobGrade?: string | null;
   @IsOptional() @IsString() @MaxLength(100) jobFamily?: string | null;
@@ -77,6 +79,7 @@ class EmployeeContractMaterialDto {
 }
 
 class EmployeeCreateContractDto {
+  @IsOptional() @IsUUID('4') contractSubjectId?: string | null;
   @IsOptional() @IsString() @MaxLength(50) contractType?: string | null;
   @IsOptional() @IsString() @MaxLength(200) name?: string | null;
   @IsOptional() @IsString() @MaxLength(200) signingCompany?: string | null;
@@ -301,6 +304,7 @@ export class SubmitDepartmentAssignmentsDto {
 }
 
 export class CreateEmploymentRecordDto {
+  @IsOptional() @IsUUID('4') contractSubjectId?: string | null;
   @BlankToNull()
   @Type(() => Date)
   @IsDate()

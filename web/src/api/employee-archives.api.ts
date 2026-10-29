@@ -109,6 +109,7 @@ export type EmployeeCreateDraftPayload = Partial<EmployeeCreatePayload> & {
 };
 
 export interface EmployeeReentryBody {
+  contractSubjectId?: string | null;
   company: string;
   deptId?: string | null;
   positionId?: string | null;
@@ -177,6 +178,7 @@ export interface EmployeeArchive {
     effectiveTo: string | null;
     company: string;
     companyText?: string | null;
+    contractSubjectId?: string | null;
     deptId: string | null;
     positionId: string | null;
     position: string | null;
@@ -231,6 +233,7 @@ export interface EmployeeArchive {
     employeeNo?: string | null;
     company: string;
     companyText?: string | null;
+    contractSubjectId?: string | null;
     deptId: string | null;
     positionId?: string | null;
     position: string | null;
@@ -256,6 +259,7 @@ export interface EmployeeArchive {
     contractType: string;
     name: string | null;
     signingCompany: string | null;
+    contractSubjectId?: string | null;
     signedAt: string | null;
     expiresAt: string | null;
     termType: string | null;

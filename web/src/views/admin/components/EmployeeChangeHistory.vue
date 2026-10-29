@@ -9,13 +9,13 @@ const filter = ref('all');
 const types = computed(() => [...new Set(props.requests.map(applicationType))]);
 const items = computed(() => props.requests.filter((item) => filter.value === 'all' || applicationType(item) === filter.value)
   .slice().sort((a, b) => b.createdAt.localeCompare(a.createdAt)));
-const fields: Record<string, string> = { name: '姓名', phone: '手机号', company: '组织归属', companyText: '所属公司（花名册）', deptId: '部门', position: '岗位', jobGrade: '职级', jobFamily: '职系', workLocation: '工作地点', employeeStatus: '任职状态', employmentType: '用工类型', entryDate: '入职日期', effectiveFrom: '生效日期', effectiveDate: '生效日期', effectiveTo: '结束日期', leaveDate: '最后工作日', reason: '原因', managerId: '直属上级', probationMonths: '试用期（月）', plannedRegularDate: '预计转正日期', actualRegularDate: '实际转正日期', gender: '性别', birthDate: '出生日期', ethnicity: '民族', education: '学历', professionalTitle: '职称', school: '毕业院校', graduationDate: '毕业日期', major: '专业', maritalStatus: '婚姻状况', childrenStatus: '子女状况', childrenCount: '子女数量', politicalStatus: '政治面貌', nativePlace: '籍贯', householdType: '户籍类型', idAddress: '身份证地址', currentAddress: '住址', emergencyContactName: '紧急联系人', emergencyContactRelation: '与联系人关系', emergencyContactPhone: '紧急联系电话', socialSecurityStatus: '社保状态', socialSecurityStartDate: '社保起始日期', housingFundStatus: '公积金状态', housingFundStartDate: '公积金起始日期', bankName: '开户行', bankBranch: '开户支行', idNumberConfigured: '身份证', bankAccountConfigured: '银行卡' };
+const fields: Record<string, string> = { name: '姓名', phone: '手机号', company: '组织归属', companyText: '所属公司（合同主体）', contractSubjectId: '合同主体关联', deptId: '部门', position: '岗位', jobGrade: '职级', jobFamily: '职系', workLocation: '工作地点', employeeStatus: '任职状态', employmentType: '用工类型', entryDate: '入职日期', effectiveFrom: '生效日期', effectiveDate: '生效日期', effectiveTo: '结束日期', leaveDate: '最后工作日', reason: '原因', managerId: '直属上级', probationMonths: '试用期（月）', plannedRegularDate: '预计转正日期', actualRegularDate: '实际转正日期', gender: '性别', birthDate: '出生日期', ethnicity: '民族', education: '学历', professionalTitle: '职称', school: '毕业院校', graduationDate: '毕业日期', major: '专业', maritalStatus: '婚姻状况', childrenStatus: '子女状况', childrenCount: '子女数量', politicalStatus: '政治面貌', nativePlace: '籍贯', householdType: '户籍类型', idAddress: '身份证地址', currentAddress: '住址', emergencyContactName: '紧急联系人', emergencyContactRelation: '与联系人关系', emergencyContactPhone: '紧急联系电话', socialSecurityStatus: '社保状态', socialSecurityStartDate: '社保起始日期', housingFundStatus: '公积金状态', housingFundStartDate: '公积金起始日期', bankName: '开户行', bankBranch: '开户支行', idNumberConfigured: '身份证', bankAccountConfigured: '银行卡' };
 function changes(request: EmployeeDataReview) {
   return ['employee', 'profile', 'performance'].flatMap((section) => {
     const before = request.baseValue?.[section] ?? {};
     const after = request.proposedValue?.[section] ?? {};
     return Object.keys(fields).filter((key) => key in after && JSON.stringify(before[key] ?? null) !== JSON.stringify(after[key] ?? null))
-      .map((key) => ({ key: `${section}.${key}`, label: section === 'performance' && key === 'managerId' ? '绩效直属上级' : fields[key], before: display(key, before[key], before), after: display(key, after[key], after) }));
+      .map((key) => ({ key: `${section}.${key}`, label: section === 'performance' && key === 'managerId' ? '绩效直属上级' : fields[key], before: key === 'contractSubjectId' ? (before[key] ? '原主体关联' : '尚未关联') : display(key, before[key], before), after: key === 'contractSubjectId' ? (after[key] ? '新主体关联' : '尚未关联') : display(key, after[key], after) }));
   });
 }
 function display(key: string, value: unknown, source: Record<string, any>) {
@@ -23,6 +23,7 @@ function display(key: string, value: unknown, source: Record<string, any>) {
   if (key.endsWith('Configured')) return value ? '已保存' : '未填写';
   if (key === 'deptId') return source.departmentName || source.deptName || '已设置（历史名称未记录）';
   if (key === 'managerId') return source.managerName || '已设置（历史姓名未记录）';
+  if (key === 'contractSubjectId') return `${source.companyText || source.signingCompany || '合同主体'} · 已关联`;
   if (key.endsWith('Id')) return '已设置';
   if (key === 'phone' || key === 'emergencyContactPhone') return '已保存';
   if (key === 'employeeStatus') return ({ active: '在职', probation: '试用期', pending_entry: '待入职', resigned: '已离职' } as Record<string, string>)[String(value)] ?? String(value);
@@ -35,14 +36,14 @@ function contractChanges(request: EmployeeDataReview) {
   const after = request.proposedValue?.contracts;
   if (!Array.isArray(after)) return [];
   const originals: Record<string, any>[] = Array.isArray(before) ? before : [];
-  const labels: Record<string, string> = { name: '名称', contractType: '类型', signingCompany: '签约公司', signedAt: '签订日期', effectiveFrom: '生效日期', expiresAt: '到期日期', termType: '期限', originalCompany: '原公司', newCompany: '新公司', confidentialityAgreement: '保密协议', nonCompeteAgreement: '竞业协议', portraitAgreement: '肖像协议' };
+  const labels: Record<string, string> = { name: '名称', contractType: '类型', signingCompany: '签约公司', contractSubjectId: '合同主体关联', signedAt: '签订日期', effectiveFrom: '生效日期', expiresAt: '到期日期', termType: '期限', originalCompany: '原公司', newCompany: '新公司', confidentialityAgreement: '保密协议', nonCompeteAgreement: '竞业协议', portraitAgreement: '肖像协议' };
   const result: Array<{ key: string; label: string; before: string; after: string }> = [];
   after.forEach((contract: Record<string, any>, index: number) => {
     const old = contract.id ? originals.find((item) => item.id === contract.id) : undefined;
     const title = String(contract.name || `合同 ${index + 1}`);
     if (!old) { result.push({ key: `contract-${index}`, label: '新增合同', before: '无', after: title }); return; }
     Object.entries(labels).forEach(([key, label]) => {
-      if (JSON.stringify(old[key] ?? null) !== JSON.stringify(contract[key] ?? null)) result.push({ key: `contract-${index}-${key}`, label: `${title} · ${label}`, before: String(old[key] || '未填写'), after: String(contract[key] || '未填写') });
+      if (key in contract && JSON.stringify(old[key] ?? null) !== JSON.stringify(contract[key] ?? null)) result.push({ key: `contract-${index}-${key}`, label: `${title} · ${label}`, before: key === 'contractSubjectId' ? (old[key] ? '原主体关联' : '尚未关联') : String(old[key] || '未填写'), after: key === 'contractSubjectId' ? (contract[key] ? '新主体关联' : '尚未关联') : String(contract[key] || '未填写') });
     });
     for (const key of ['images', 'attachments']) {
       if (JSON.stringify(old[key] ?? []) !== JSON.stringify(contract[key] ?? [])) result.push({ key: `contract-${index}-${key}`, label: `${title} · ${key === 'images' ? '图片' : '附件'}`, before: `${old[key]?.length ?? 0} 份`, after: `${contract[key]?.length ?? 0} 份` });

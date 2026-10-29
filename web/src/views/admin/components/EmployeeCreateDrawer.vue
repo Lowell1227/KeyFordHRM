@@ -14,6 +14,7 @@ import {
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import { uploadApi } from '@/api/upload.api';
 import UserSelect from '@/components/common/UserSelect.vue';
+import ContractSubjectSelect from '@/components/common/ContractSubjectSelect.vue';
 import type { Department } from '@/types/api.types';
 import PersonnelProcessTimeline from './PersonnelProcessTimeline.vue';
 
@@ -74,6 +75,8 @@ const form = reactive({
   rosterManagerId: null as string | null,
   performanceManagerId: null as string | null,
   employee: {
+    contractSubjectId: undefined as string | null | undefined,
+    companyText: null as string | null,
     position: '',
     jobGrade: '',
     jobFamily: '',
@@ -180,6 +183,8 @@ function reset() {
     performanceManagerId: performance.managerId ?? null,
   });
   Object.assign(form.employee, {
+    contractSubjectId: employee.contractSubjectId ?? undefined,
+    companyText: employee.companyText ?? null,
     position: employee.position ?? '',
     jobGrade: employee.jobGrade ?? '',
     jobFamily: employee.jobFamily ?? '',
@@ -209,7 +214,7 @@ function reset() {
     bankBranch: profile.bankBranch ?? '', bankAccount: '',
   });
   form.contracts = Array.isArray(proposed.contracts)
-    ? proposed.contracts.map((item: Record<string, any>, index: number) => ({ ...item, __key: item.id || `draft-${index}` }))
+    ? proposed.contracts.map((item: Record<string, any>, index: number) => ({ ...item, contractSubjectId: item.contractSubjectId ?? undefined, __key: item.id || `draft-${index}` }))
     : [];
   idNumberConfigured.value = Boolean(profile.idNumberConfigured);
   bankAccountConfigured.value = Boolean(profile.bankAccountConfigured);
@@ -570,7 +575,8 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
         <section v-show="currentStep === 1" class="wizard-section">
           <div class="section-head"><div><h3>任职信息</h3><p>选择岗位后自动带入岗位名称和职系；入职日期自动作为任职开始日期。</p></div></div>
           <div class="form-grid form-grid--3">
-            <el-form-item label="所属公司"><el-select v-model="form.company"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select></el-form-item>
+            <el-form-item label="所属公司（合同主体）"><ContractSubjectSelect v-model="form.employee.contractSubjectId" v-model:snapshot-name="form.employee.companyText" /></el-form-item>
+            <el-form-item label="组织归属"><el-select v-model="form.company"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select></el-form-item>
             <el-form-item label="部门"><el-tree-select v-model="form.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
             <el-form-item label="岗位"><el-select v-model="form.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
             <el-form-item label="岗位名称"><el-input v-model="form.employee.position" placeholder="选择岗位后自动带入" /></el-form-item>
@@ -643,7 +649,7 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
             <div class="form-grid form-grid--3">
               <el-form-item label="类型"><el-select v-model="contract.contractType"><el-option label="劳动合同" value="contract" /><el-option label="续签" value="renewal" /><el-option label="转签" value="transfer" /></el-select></el-form-item>
               <el-form-item label="合同名称"><el-input v-model="contract.name" /></el-form-item>
-              <el-form-item label="签约公司"><el-input v-model="contract.signingCompany" /></el-form-item>
+              <el-form-item label="签约公司"><ContractSubjectSelect v-model="contract.contractSubjectId" v-model:snapshot-name="contract.signingCompany" /></el-form-item>
               <el-form-item label="签订日期"><el-date-picker v-model="contract.signedAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
               <el-form-item label="生效日期"><el-date-picker v-model="contract.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
               <el-form-item label="到期日期"><el-date-picker v-model="contract.expiresAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>

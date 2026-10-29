@@ -696,6 +696,17 @@ model EmployeeProfile {
   @@map("employee_profiles")
 }
 
+model ContractSubject {
+  id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name String @unique @db.VarChar(150)
+  isActive Boolean @default(true) @map("is_active")
+  createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+  employments EmploymentRecord[]
+  contracts EmployeeContract[]
+  @@map("contract_subjects")
+}
+
 model EmployeeContract {
   id                       String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   userId                   String    @map("user_id") @db.Uuid
@@ -729,6 +740,10 @@ model EmployeeContract {
   @@index([userId, isActive, expiresAt])
   @@index([sourceBatchId])
   @@map("employee_contracts")
+  contractSubjectId String? @map("contract_subject_id") @db.Uuid
+  contractSubject ContractSubject? @relation(fields: [contractSubjectId], references: [id], onDelete: Restrict)
+  @@index([contractSubjectId])
+
 }
 
 model EmploymentRecord {
@@ -774,6 +789,10 @@ model EmploymentRecord {
   @@index([positionId, effectiveFrom])
   @@index([directManagerId, effectiveFrom])
   @@map("employment_records")
+  contractSubjectId String? @map("contract_subject_id") @db.Uuid
+  contractSubject ContractSubject? @relation(fields: [contractSubjectId], references: [id], onDelete: Restrict)
+  @@index([contractSubjectId])
+
 }
 
 model ExternalIdentityBinding {
