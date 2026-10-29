@@ -100,11 +100,18 @@ describe('Contract subjects real HTTP and PostgreSQL', () => {
     }
     for (const token of [editorToken, reviewerToken]) {
       await app.http.get('/api/v1/contract-subjects').set(authorization(token)).expect(200);
-      await app.http.post('/api/v1/contract-subjects').set(authorization(token)).send({ name: '不可越权创建' }).expect(403);
     }
+    const editorCreated = await app.http.post('/api/v1/contract-subjects').set(authorization(editorToken))
+      .send({ name: `虚拟HR维护主体-${runId}` }).expect(201);
+    await app.http.post('/api/v1/contract-subjects').set(authorization(reviewerToken))
+      .send({ name: '不可越权创建' }).expect(403);
+    await app.http.patch(`/api/v1/contract-subjects/${editorCreated.body.data.id}`).set(authorization(editorToken))
+      .send({ name: `虚拟HR改名主体-${runId}`, isActive: false }).expect(200);
+    await app.http.patch(`/api/v1/contract-subjects/${editorCreated.body.data.id}`).set(authorization(editorToken))
+      .send({ isActive: true }).expect(200);
     const current = await subject('权限');
     await app.http.patch(`/api/v1/contract-subjects/${current.id}`).set(authorization(editorToken))
-      .send({ name: '不可越权改名' }).expect(403);
+      .send({ name: `虚拟HR维护修改-${runId}` }).expect(200);
     await app.http.patch(`/api/v1/contract-subjects/${current.id}`).set(authorization(reviewerToken))
       .send({ isActive: false }).expect(403);
   });

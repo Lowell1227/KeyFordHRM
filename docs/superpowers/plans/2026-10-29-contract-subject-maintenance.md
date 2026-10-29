@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox syntax for tracking.
 
-**Goal:** 为合同主体提供管理员维护入口，并让任职与合同记录通过稳定 ID 共用主体目录。
+**Goal:** 为合同主体提供 HR 维护入口，并让任职与合同记录通过稳定 ID 共用主体目录。
 
 **Architecture:** 增量增加合同主体表与两个可空外键，沿用原名称字段保存快照。复用现有员工草稿、资料审核、任职生效和审计，不更改组织公司枚举、部门或数据范围。
 
@@ -12,7 +12,7 @@
 
 ## Global Constraints
 
-- 主体维护只限 `hr`、`system_admin`；`hr_user` 通过既有员工档案编辑/审核能力查看和选用；员工及无能力用户不可读。
+- 按用户同日补充授权，主体维护复用 `employee_archive_edit`：`hr`、`system_admin` 及获该能力的 `hr_user` 可写；仅审核能力的普通 HR 只读，员工及无能力用户不可读。
 - 历史名称保留；缺失主体字段是未修改，显式 null 是清空；旧草稿不能清空当前关联。
 - 不自动回填主体、不生成法律名称、不更改组织归属、审批关系或冻结绩效数据；不发布、不写生产数据。
 - 仅本任务文件可暂存；保留四个原有未提交文件。main 已安全快进至 `9d132b8`，原有修改已恢复并有 patch/stash 备份。
@@ -32,7 +32,7 @@
 
 **Interfaces:**
 - `ContractSubject { id: UUID, name: string, isActive: boolean, createdAt, updatedAt }`。
-- `GET /contract-subjects?includeInactive=true` 返回数组；默认仅启用。`POST {name}`；`PATCH /:id {name?,isActive?}`。写权限只有管理员，写入与 audit 同事务。
+- `GET /contract-subjects?includeInactive=true` 返回数组；默认仅启用。`POST {name}`；`PATCH /:id {name?,isActive?}`。写权限复用档案编辑能力，写入与 audit 同事务。
 - `EmploymentRecord.contractSubjectId`、`EmployeeContract.contractSubjectId` 为可空外键。名称快照分别沿用 `companyText`、`signingCompany`。
 - 内部引用归一化使用 PrismaService/transaction client；新增或变更关联查库校验启用并取名称，同一已有 ID 保留原快照；避免为无主体的旧请求额外要求 mock delegate。
 
@@ -58,7 +58,7 @@
 **Interfaces:** 消费 Task 1 HTTP 数组接口；选择器 `modelValue?: string|null`、名称快照原文、更新 ID 与名称事件。新关联从服务端目录选择；旧未关联名称保留展示。选择器可刷新主体、可另开维护页且不丢当前表单。
 
 - [x] 读取 business-list-page-standard、record-list 模板和验收清单；用现有公共组件搭建简洁目录。
-- [x] 先写失败 Playwright：管理员新增、改名/启停；普通 HR 只选用；两处选同目录且草稿恢复；旧文字与停用引用保留；1440/1024/390px。
+- [x] 先写失败 Playwright：管理员与有档案编辑能力的普通 HR 维护、仅审核 HR 只读；两处选同目录且草稿恢复；旧文字与停用引用保留；1440/1024/390px。
 - [x] 实现目录路由、权限、字段底部校验；新建员工“所属公司（合同主体）”与原“组织归属”明确区分，合同签约公司共用选择器。
 - [x] 贯通 API 类型、再入职/任职表单、快照显示、仅 ID 变更显示。不要编辑已有脏 `UserManageView.vue`、`DepartmentCreateDrawer.vue`、`23-employee-data-review.spec.ts`。
 - [x] 运行 Playwright、type-check、build，保存截图；针对语义改变更新旧公司文字用例，避免无关用例断言漂移。
@@ -74,3 +74,5 @@
 ## 实施结果（2026-10-29）
 
 API 全量 113 套/1548 项、隔离 HTTP/PostgreSQL 8 项、Web 7 组联合72项及1024×768补验1项通过；前后端构建、Web类型检查通过。独立复核及限定修复复核无剩余阻断项。迁移仅应用于合成隔离库，无生产修改。详细证据见 docs/acceptance/2026-10-29-contract-subject-maintenance.md。
+
+用户随后要求交给 HR 相关人员维护；按 `employee_archive_edit` 复用现有权限，页面和接口同步调整。该轮复验 API 全量 113 套/1550 项、真实 HTTP/隔离数据库 8 项、Web 定向 18 项与前后端构建通过。未新增角色、权限项或修改任何真实人员授权。

@@ -152,6 +152,9 @@ async function setupPersonnelPage(page: Page, options: {
 for (const width of [1440, 390]) {
   test(`shared subjects survive new-hire draft and refresh at ${width}px`, async ({ page }) => {
     const state = await setupPersonnelPage(page);
+    await page.route('**/api/v1/auth/me', route => route.fulfill({ json: response({
+      id: 'hr-1', name: '合成档案HR', sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'],
+    }) }));
     await page.setViewportSize({ width, height: 900 });
     let subjects = [{ id: 'subject-a', name: '合成任职主体有限公司', isActive: true }, { id: 'subject-b', name: '合成合同主体有限公司', isActive: true }];
     await page.route('**/api/v1/contract-subjects**', route => route.fulfill({ json: response(subjects) }));
@@ -184,16 +187,39 @@ for (const width of [1440, 390]) {
   });
 }
 
-test('ordinary HR can read directory without maintenance actions', async ({ page }) => {
+for (const { capability, canMaintain, width } of [
+  { capability: 'employee_archive_edit', canMaintain: true, width: 1440 },
+  { capability: 'employee_archive_edit', canMaintain: true, width: 390 },
+  { capability: 'employee_archive_review', canMaintain: false, width: 1440 },
+]) test(`ordinary HR ${capability} directory actions at ${width}px`, async ({ page }) => {
+  await page.setViewportSize({ width, height: width === 390 ? 844 : 900 });
   await page.addInitScript(() => { localStorage.setItem('token', 'mock'); localStorage.setItem('expiresAt', String(Date.now() + 600000)); });
+  const rows = [{ id: 'a', name: '可选合成主体', isActive: true }];
+  let submittedName = '';
   await page.route('**/api/v1/**', route => {
     const path = new URL(route.request().url()).pathname;
-    return route.fulfill({ json: response(path.endsWith('/auth/me') ? { id: 'ordinary', name: '合成HR', sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] } : path.includes('/contract-subjects') ? [{ id: 'a', name: '可选合成主体', isActive: true }] : 0) });
+    if (path.includes('/contract-subjects') && route.request().method() === 'POST') {
+      submittedName = route.request().postDataJSON().name;
+      rows.push({ id: 'b', name: submittedName, isActive: true });
+    }
+    return route.fulfill({ json: response(path.endsWith('/auth/me') ? { id: 'ordinary', name: '合成HR', sysRole: 'hr_user', hrCapabilities: [capability] } : path.includes('/contract-subjects') ? rows : 0) });
   });
   await page.goto('/contract-subjects');
   await expect(page.getByText('可选合成主体', { exact: true }).filter({ visible: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: '新增主体', exact: true })).toHaveCount(0);
-  await expect(page.getByRole('button', { name: '修改名称', exact: true })).toHaveCount(0);
+  const createButton = page.getByRole('button', { name: '新增主体', exact: true });
+  if (canMaintain) {
+    await expect(page.getByRole('button', { name: '修改名称', exact: true }).filter({ visible: true })).toBeVisible();
+    await expect(page.getByRole('button', { name: '停用', exact: true }).filter({ visible: true })).toBeVisible();
+    await createButton.click();
+    await page.getByRole('dialog').getByRole('textbox', { name: '主体名称' }).fill('普通HR新增合成主体');
+    await page.getByRole('button', { name: '保存主体', exact: true }).click();
+    await expect.poll(() => submittedName).toBe('普通HR新增合成主体');
+    await expect(page.getByText(submittedName, { exact: true }).filter({ visible: true })).toBeVisible();
+  } else {
+    await expect(createButton).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '修改名称', exact: true })).toHaveCount(0);
+    await expect(page.getByRole('button', { name: '停用', exact: true })).toHaveCount(0);
+  }
 });
 
 for (const linked of [false, true]) {
