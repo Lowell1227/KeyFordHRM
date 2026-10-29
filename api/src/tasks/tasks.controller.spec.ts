@@ -24,4 +24,12 @@ describe('TasksController', () => {
     expect(teamTasksService.findAll).toHaveBeenCalledWith(query, viewer);
     expect(result).toEqual({ items: [] });
   });
+  it('forwards employee displayed version to confirmation service', () => {
+    const tasks = {confirmIndicators: jest.fn()};
+    const controller = new TasksController(tasks as any, {} as any);
+    const viewer = {id:'employee'} as AuthUser;
+    controller.confirmIndicators('task', viewer, {expectedUpdatedAt:'2026-10-29T00:00:00.000Z'});
+    expect(tasks.confirmIndicators).toHaveBeenCalledWith('task', viewer, '2026-10-29T00:00:00.000Z');
+  });
+
 });

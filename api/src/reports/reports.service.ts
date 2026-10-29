@@ -482,7 +482,7 @@ export class ReportsService {
     }> = [
       {
         node: 'indicator_setting',
-        statuses: ['indicator_drafting', 'indicator_reviewing', 'indicator_setting', 'indicator_confirming'],
+        statuses: ['indicator_drafting', 'indicator_reviewing', 'indicator_setting', 'indicator_confirming', 'indicator_dept_reviewing', 'indicator_approving'],
         deadlineFor: (status) =>
           status === 'indicator_confirming'
             ? cycle.deadlineIndicatorConfirm

@@ -1,3 +1,5 @@
+import { ConfirmIndicatorsDto } from './dto/confirm-indicators.dto';
+import { ApproveIndicatorsDto } from './dto/approve-indicators.dto';
 import {
   Body,
   Controller,
@@ -107,14 +109,21 @@ export class TasksController {
     return this.tasksService.remindCurrentHandler(id, viewer);
   }
 
+  @Post(':id/indicators/approve')
+  @HttpCode(200)
+  approveIndicators(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @Body() dto: ApproveIndicatorsDto, @CurrentUser() viewer: AuthUser) {
+    return this.tasksService.approveIndicators(id, dto, viewer);
+  }
+
   /** POST /tasks/:id/indicators/confirm — 员工确认指标。 */
   @Post(':id/indicators/confirm')
   @HttpCode(200)
   confirmIndicators(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @CurrentUser() viewer: AuthUser,
+    @Body() dto?: ConfirmIndicatorsDto,
   ) {
-    return this.tasksService.confirmIndicators(id, viewer);
+    return this.tasksService.confirmIndicators(id, viewer, dto?.expectedUpdatedAt);
   }
 
   /** POST /tasks/:id/indicators/reject — 退回指标。 */
@@ -125,7 +134,7 @@ export class TasksController {
     @Body() dto: RejectIndicatorsDto,
     @CurrentUser() viewer: AuthUser,
   ) {
-    return this.tasksService.rejectIndicators(id, dto.comment, viewer);
+    return this.tasksService.rejectIndicators(id, dto.comment, viewer, dto.expectedUpdatedAt);
   }
 
   /** POST /tasks/:id/indicators/withdraw — 员工在主管开始审核前撤回指标。 */

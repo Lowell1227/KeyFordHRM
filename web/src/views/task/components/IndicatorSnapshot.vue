@@ -96,6 +96,7 @@ const props = defineProps<{
   saveLabel?: string;
   submitLabel?: string;
   confirmLabel?: string;
+  confirmMessage?: string;
   rejectLabel?: string;
   splitSaveActions?: boolean;
   selfEvalMode?: boolean;
@@ -1051,9 +1052,9 @@ async function handleSaveAndAdd() {
 async function handleConfirm() {
   try {
     await ElMessageBox.confirm(
-      '确认后指标将锁定并进入自评阶段，是否继续？',
+      props.confirmMessage || '确认后指标将锁定并进入自评阶段，是否继续？',
       '确认指标',
-      { type: 'warning', confirmButtonText: '确认' },
+      { type: 'warning', confirmButtonText: props.confirmMessage ? (props.confirmLabel || '确认指标') : '确认' },
     );
   } catch {
     return;

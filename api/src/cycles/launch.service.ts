@@ -871,6 +871,7 @@ export class LaunchService {
       explicitExemptDeptIds: string[];
       explicitExemptUserIds: string[];
       workflowVersion?: number | null;
+      goalWorkflowVersion?: number | null;
       scoringFrequency?: string | null;
       companyFinalApproverId?: string | null;
     },
@@ -913,6 +914,7 @@ export class LaunchService {
     }).sort((a, b) => a.employeeId.localeCompare(b.employeeId));
 
     const plan = {
+      ...(cycle.goalWorkflowVersion === 2 ? { goalWorkflowVersion: 2 } : {}),
       cycleStartDate: cycle.startDate.toISOString(),
       cycleEndDate: cycle.endDate.toISOString(),
       goalSettingOpenAt: cycle.goalSettingOpenAt?.toISOString() ?? null,

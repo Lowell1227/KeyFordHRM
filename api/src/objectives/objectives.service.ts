@@ -1,3 +1,4 @@
+import { hasApprovedGoalBaseline } from '@/tasks/goal-workflow';
 import {
   BadRequestException,
   ConflictException,
@@ -661,7 +662,7 @@ export class ObjectivesService {
             id: true,
             name: true,
             monthlyFollowUpRequired: true,
-            workflowVersion: true,
+            workflowVersion: true, goalWorkflowVersion: true,
             openedAt: true,
             publishedAt: true,
             closedAt: true,
@@ -979,7 +980,7 @@ export class ObjectivesService {
             status: true,
             isExempt: true,
             participantDisposition: true,
-            indicatorConfirmedAt: true,
+            indicatorConfirmedAt: true, goalApprovedAt: true,
             closedAt: true,
             selfEvalSubmittedAt: true,
             publishedAt: true,
@@ -1002,7 +1003,7 @@ export class ObjectivesService {
             },
             cycle: {
               select: {
-                workflowVersion: true,
+                workflowVersion: true, goalWorkflowVersion: true,
                 openedAt: true,
                 publishedAt: true,
                 closedAt: true,
@@ -1320,7 +1321,7 @@ export class ObjectivesService {
               select: {
                 id: true,
                 name: true,
-                workflowVersion: true,
+                workflowVersion: true, goalWorkflowVersion: true,
                 openedAt: true,
                 publishedAt: true,
                 closedAt: true,
@@ -1450,9 +1451,9 @@ export class ObjectivesService {
       where: { employeeId: viewer.id, cycleId: { in: cycles.map(cycle => cycle.id) } },
       orderBy: [{ cycle: { openedAt: 'desc' } }, { id: 'asc' }],
       select: {
-        employeeId: true, isExempt: true, participantDisposition: true, indicatorConfirmedAt: true,
+        employeeId: true, isExempt: true, participantDisposition: true, indicatorConfirmedAt: true, goalApprovedAt: true,
         closedAt: true, publishedAt: true,
-        cycle: { select: { workflowVersion: true, openedAt: true, publishedAt: true, closedAt: true } },
+        cycle: { select: { workflowVersion: true, goalWorkflowVersion: true, openedAt: true, publishedAt: true, closedAt: true } },
         periods: {
           orderBy: { sequence: 'asc' },
           select: {
@@ -1499,7 +1500,7 @@ export class ObjectivesService {
       || (recentPeriod && ['completed', 'no_result'].includes(recentPeriod.status))) return {
       kind: 'month_locked', message: '最近考核月份已锁定，不能更新进展，请联系绩效管理员核对月份状态。',
     };
-    if (!recentTask.indicatorConfirmedAt || !recentTask.indicatorInstances.length) return {
+    if (!hasApprovedGoalBaseline(recentTask) || !recentTask.indicatorInstances.length) return {
       kind: 'awaiting_goal_approval', message: '你的绩效目标尚未审核通过，请先在 HRM 完成目标制定与审核。',
     };
     return { kind: 'month_locked', message: '当前没有可更新的考核月份，请到 HRM 查看月份开放状态及目标范围。' };
@@ -1511,11 +1512,13 @@ export class ObjectivesService {
       isExempt: boolean;
       participantDisposition: string;
       indicatorConfirmedAt: Date | null;
+      goalApprovedAt?: Date | null;
       closedAt: Date | null;
       publishedAt: Date | null;
       periods?: GoalTrackingPeriodWindow[];
       cycle: {
         workflowVersion: number;
+        goalWorkflowVersion?: number | null;
         openedAt: Date | null;
         publishedAt: Date | null;
         closedAt: Date | null;
@@ -1528,7 +1531,7 @@ export class ObjectivesService {
     const baseEditable = task.employeeId === viewer.id
       && task.cycle.workflowVersion === 2
       && task.cycle.openedAt != null
-      && task.indicatorConfirmedAt != null
+      && hasApprovedGoalBaseline(task)
       && !task.isExempt
       && task.participantDisposition === 'active'
       && task.closedAt == null

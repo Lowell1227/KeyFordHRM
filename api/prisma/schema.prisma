@@ -207,6 +207,8 @@ enum TaskStatus {
   pending
   indicator_drafting
   indicator_reviewing
+  indicator_dept_reviewing
+  indicator_approving
   indicator_setting
   indicator_confirming
   goal_confirmed
@@ -234,6 +236,8 @@ enum PerfGrade {
 }
 
 enum FlowNodeType {
+  indicator_dept_review
+  indicator_approval
   indicator_setting
   indicator_confirm
   self_eval
@@ -1052,6 +1056,7 @@ model AssessmentCycle {
   deadlineAppeal           DateTime?        @map("deadline_appeal") @db.Date
   status                   CycleStatus      @default(draft)
   workflowVersion          Int              @default(1) @map("workflow_version")
+  goalWorkflowVersion      Int              @default(1) @map("goal_workflow_version")
   planVersion              Int              @default(1) @map("plan_version")
   scoringFrequency         ScoringFrequency @default(cycle) @map("scoring_frequency")
   companyFinalApproverId   String?          @map("company_final_approver_id") @db.Uuid
@@ -1139,6 +1144,7 @@ model AssessmentTask {
   participantDisposition ParticipantDisposition @default(active) @map("participant_disposition")
   exemptReason           String?                @map("exempt_reason") @db.Text
   indicatorSetAt         DateTime?              @map("indicator_set_at") @db.Timestamptz(6)
+  goalApprovedAt         DateTime?              @map("goal_approved_at") @db.Timestamptz(6)
   indicatorConfirmedAt   DateTime?              @map("indicator_confirmed_at") @db.Timestamptz(6)
   selfEvalSubmittedAt    DateTime?              @map("self_eval_submitted_at") @db.Timestamptz(6)
   managerScoredAt        DateTime?              @map("manager_scored_at") @db.Timestamptz(6)

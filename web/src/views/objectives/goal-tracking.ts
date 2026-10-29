@@ -111,6 +111,8 @@ export function selectTrackingAction(context: PerformanceCycleContext): Tracking
   if (['pending', 'indicator_drafting', 'indicator_setting'].includes(context.task.status)) {
     return { kind: 'goal-setting', label: '开始制定', taskId: context.task.id };
   }
+  if (context.task.status === 'indicator_dept_reviewing') return { kind: 'waiting', label: '待部门负责人审核目标', taskId: context.task.id };
+  if (context.task.status === 'indicator_approving') return { kind: 'waiting', label: '待分管领导审核目标', taskId: context.task.id };
   if (context.task.status === 'indicator_confirming') {
     return { kind: 'goal-confirmation', label: '确认目标', taskId: context.task.id };
   }

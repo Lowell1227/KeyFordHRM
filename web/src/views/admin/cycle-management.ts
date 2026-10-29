@@ -75,6 +75,8 @@ const GOAL_PREPARATION_STATUSES: TaskStatus[] = [
   'indicator_reviewing',
   'indicator_setting',
   'indicator_confirming',
+  'indicator_dept_reviewing',
+  'indicator_approving',
 ];
 const GOAL_TRACKING_STATUSES: TaskStatus[] = ['goal_confirmed', 'self_eval', 'manager_scoring'];
 const RESULT_ASSESSMENT_STATUSES: TaskStatus[] = ['dept_review', 'hr_calibration', 'approval'];
@@ -140,6 +142,8 @@ function currentTaskAction(cycle: AssessmentCycle, fallback: string): string {
   if (!byStatus) return fallback;
   if ((byStatus.indicator_drafting ?? 0) + (byStatus.indicator_setting ?? 0) + (byStatus.pending ?? 0) > 0) return '目标制定';
   if ((byStatus.indicator_reviewing ?? 0) > 0) return '目标审核';
+  if ((byStatus.indicator_dept_reviewing ?? 0) > 0) return '部门负责人审核目标';
+  if ((byStatus.indicator_approving ?? 0) > 0) return '分管领导审核目标';
   if ((byStatus.indicator_confirming ?? 0) > 0) return '目标确认';
   if ((byStatus.goal_confirmed ?? 0) > 0) return '等待本期开始';
   if ((byStatus.self_eval ?? 0) > 0) return '员工自评';

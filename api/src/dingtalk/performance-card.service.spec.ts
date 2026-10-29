@@ -123,6 +123,8 @@ describe('performance lifecycle cards (authorized read projection)', () => {
   });
   it.each([
     ['indicator_reviewing', '查看已提交目标', 'goal-setting'],
+    ['indicator_dept_reviewing', '查看已提交目标', 'goal-setting'],
+    ['indicator_approving', '查看已提交目标', 'goal-setting'],
     ['indicator_confirming', '查看并确认目标', 'goal-confirmation'],
     ['goal_confirmed', '查看目标', 'goal-setting'],
   ])(

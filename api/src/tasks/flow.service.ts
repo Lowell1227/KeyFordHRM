@@ -138,7 +138,7 @@ export class FlowService {
     const has = (...statuses: TaskStatus[]) => agg.some((g) => statuses.includes(g.status));
 
     if (cycle.status === 'indicator_setting' && has(
-      'pending', 'indicator_drafting', 'indicator_reviewing', 'indicator_setting', 'indicator_confirming',
+      'pending', 'indicator_drafting', 'indicator_reviewing', 'indicator_setting', 'indicator_confirming', 'indicator_dept_reviewing', 'indicator_approving',
     )) return;
 
     let target: CycleStatus | null = null;

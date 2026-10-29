@@ -504,6 +504,7 @@ export interface CycleSchedulePreview {
 }
 
 export interface AssessmentCycle {
+  goalWorkflowVersion?: number;
   canManagePlan?: boolean;
   id: string;
   planVersion: number;
@@ -865,6 +866,8 @@ export interface GradeResult {
 }
 
 export interface AssessmentTask {
+  goalWorkflowVersion?: number;
+  goalApprovedAt?: string | null;
   id: string;
   cycleId: string;
   cycleName?: string;

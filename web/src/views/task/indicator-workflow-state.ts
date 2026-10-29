@@ -45,6 +45,8 @@ export function indicatorTaskStatusLabel(
 ): string {
   if (returned) return '待修改';
   if (status === 'indicator_reviewing') return '待主管审核';
+  if (status === 'indicator_dept_reviewing') return '待部门负责人审核';
+  if (status === 'indicator_approving') return '待分管领导审核';
   if (status === 'indicator_confirming') return '待本人确认';
   if (status === 'indicator_drafting' || status === 'indicator_setting') return '草稿';
   return '已确认';

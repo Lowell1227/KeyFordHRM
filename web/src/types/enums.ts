@@ -32,6 +32,8 @@ export type TaskStatus =
   | 'indicator_drafting'
   | 'indicator_reviewing'
   | 'indicator_setting'
+  | 'indicator_dept_reviewing'
+  | 'indicator_approving'
   | 'indicator_confirming'
   | 'goal_confirmed'
   | 'self_eval'
@@ -66,6 +68,8 @@ export type PerfGrade = 'A' | 'B' | 'C' | 'D';
 
 export type FlowNodeType =
   | 'indicator_setting'
+  | 'indicator_dept_review'
+  | 'indicator_approval'
   | 'indicator_confirm'
   | 'self_eval'
   | 'manager_score'
@@ -156,6 +160,8 @@ export const TASK_STATUS_META: Record<TaskStatus, { label: string; type: string 
   indicator_drafting: { label: '目标制定中', type: 'warning' },
   indicator_reviewing: { label: '待直属上级目标审核', type: 'warning' },
   indicator_setting: { label: '目标制定中', type: 'warning' },
+  indicator_dept_reviewing: { label: '待部门负责人审核目标', type: 'warning' },
+  indicator_approving: { label: '待分管领导审核目标', type: 'warning' },
   indicator_confirming: { label: '待员工确认目标', type: 'warning' },
   goal_confirmed: { label: '目标已确认', type: 'success' },
   self_eval: { label: '员工自评中', type: 'primary' },
@@ -173,7 +179,9 @@ export const TASK_STATUS_META: Record<TaskStatus, { label: string; type: string 
 // 流程节点标签（useTaskFlow 用）
 export const FLOW_NODE_LABELS: Record<FlowNodeType, string> = {
   indicator_setting: '目标制定',
-  indicator_confirm: '目标确认',
+  indicator_confirm: '员工确认目标',
+  indicator_dept_review: '部门负责人审核目标',
+  indicator_approval: '分管领导审核目标',
   self_eval: '员工自评',
   manager_score: '直属上级评分',
   dept_review: '部门复核',

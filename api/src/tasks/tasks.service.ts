@@ -1,3 +1,5 @@
+import { usesFiveStepGoalWorkflow, nextGoalStep, goalNode, getGoalReviewActorId } from './goal-workflow';
+import { ApproveIndicatorsDto } from './dto/approve-indicators.dto';
 import { canEmployeeViewResult, isResultPublished, ResultPublicationFact } from './result-publication';
 import { buildResultEvidence, maskResultEvidence, RESULT_PERIOD_SELECT, ResultEvidence } from '@/tasks/result-evidence';
 import { appealAttribution, employeeObjectionAttribution } from '@/tasks/review-history';
@@ -63,6 +65,9 @@ export interface TaskListItem {
   totalScore: number | null;
   rawGrade: string | null;
   updatedAt: Date;
+  goalWorkflowVersion?: number;
+  goalApprovedAt?: Date | null;
+  indicatorConfirmedAt?: Date | null;
   workflowVersion?: number;
   periods?: Array<{
     id: string;
@@ -89,6 +94,8 @@ export interface TaskDetail extends TaskListItem {
   managerName: string | null;
   deptHeadId: string | null;
   deptHeadName: string | null;
+  approverId: string | null;
+  approverName: string | null;
   periods: Array<{
     id: string;
     periodKey: string;
@@ -504,6 +511,7 @@ export class TasksService {
           select: {
             name: true,
             workflowVersion: true,
+            goalWorkflowVersion: true,
             hrOwnerId: true,
             hrOwner: { select: { id: true, name: true } },
             publishVisibleFields: true,
@@ -599,8 +607,273 @@ export class TasksService {
     return { sent: true, nodeType: target.nodeType };
   }
 
+  private async isNewGoalWorkflow(cycleId: string): Promise<boolean> {
+    const cycle = await this.prisma.assessmentCycle.findUnique({
+      where: { id: cycleId },
+      select: { goalWorkflowVersion: true },
+    });
+    return usesFiveStepGoalWorkflow(cycle?.goalWorkflowVersion);
+  }
+
+  async approveIndicators(
+    id: string,
+    dto: ApproveIndicatorsDto,
+    viewer: AuthUser,
+    batchId?: string,
+  ): Promise<{ id: string; status: TaskStatus }> {
+    const task = await this.getTaskOrThrow(id);
+    if (!(await this.isNewGoalWorkflow(task.cycleId)))
+      throw new ConflictException('此计划请使用原目标审核操作');
+    return this.performGoalAction(
+      task,
+      viewer,
+      'approve',
+      dto.expectedUpdatedAt,
+      dto.comment,
+      batchId,
+    );
+  }
+
+  private async performGoalAction(
+    task: AssessmentTask,
+    viewer: AuthUser,
+    action: 'approve' | 'confirm' | 'reject',
+    expectedUpdatedAt: string,
+    comment?: string,
+    batchId?: string,
+  ): Promise<{ id: string; status: TaskStatus }> {
+    const employeeConfirmation = task.status === 'indicator_confirming';
+    const actorId = employeeConfirmation
+      ? task.employeeId
+      : getGoalReviewActorId(task);
+    if (
+      !actorId ||
+      actorId !== viewer.id ||
+      (!employeeConfirmation && actorId === task.employeeId)
+    )
+      throw new ForbiddenException('仅当前冻结办理人可操作此目标');
+    if (
+      (action === 'confirm' && !employeeConfirmation) ||
+      (action === 'approve' && employeeConfirmation)
+    )
+      throw new ConflictException('当前节点不允许此操作');
+    if (action === 'reject' && !comment?.trim())
+      throw new BadRequestException('请填写退回原因');
+    if (task.status === 'indicator_approving' && !task.indicatorConfirmedAt && action !== 'reject') {
+      throw new ConflictException('员工尚未确认当前目标，请重新走目标确认流程');
+    }
+    assertTaskVersion(task.updatedAt, expectedUpdatedAt);
+    const status = await this.prisma.$transaction(async (tx) => {
+      const claimed = await claimTaskVersion(
+        tx,
+        task.id,
+        expectedUpdatedAt,
+        task.status,
+      );
+      if (action !== 'reject') {
+        const indicators = await tx.indicatorInstance.findMany({
+          where: { taskId: task.id },
+          select: { weight: true },
+        });
+        if (
+          !indicators.length ||
+          Math.abs(
+            indicators.reduce((sum, item) => sum + Number(item.weight), 0) - 1,
+          ) > 0.0001
+        )
+          throw new ConflictException('提交目标前权重合计必须为 100%');
+        return this.advanceGoalTx(tx, task, viewer, claimed, comment, batchId);
+      }
+      const status: TaskStatus =
+        task.status === 'indicator_reviewing' || task.managerId === task.employeeId
+          ? 'indicator_drafting'
+          : 'indicator_reviewing';
+      await tx.assessmentTask.update({
+        where: { id: task.id },
+        data: {
+          status,
+          indicatorConfirmedAt: null,
+          goalApprovedAt: null,
+          updatedAt: claimed,
+        },
+      });
+      await tx.flowRecord.create({
+        data: {
+          taskId: task.id,
+          cycleId: task.cycleId,
+          nodeType: goalNode(task.status),
+          actorId: viewer.id,
+          action: 'reject',
+          comment: comment!.trim(),
+          extraData: {
+            type: 'goal_returned',
+            ...(batchId ? {batchId} : {}),
+            targetStatus: status,
+            invalidatesEmployeeConfirmation: true,
+          },
+        },
+      });
+      await this.flowService.syncCycleStage(tx, task.cycleId);
+      return status;
+    });
+    await this.notifyGoalHandler({ ...task, status }, viewer);
+    return { id: task.id, status };
+  }
+
+  private async advanceGoalTx(
+    tx: Prisma.TransactionClient,
+    task: AssessmentTask,
+    viewer: AuthUser,
+    updatedAt: Date,
+    comment?: string,
+    batchId?: string,
+  ): Promise<TaskStatus> {
+    let next: ReturnType<typeof nextGoalStep>;
+    try {
+      next = nextGoalStep(task, task.status);
+    } catch (error) {
+      throw new ConflictException(
+        error instanceof Error ? error.message : '目标节点异常',
+      );
+    }
+    const cycle = await tx.assessmentCycle.findUnique({
+      where: { id: task.cycleId },
+      select: { selfEvalOpenAt: true, workflowVersion: true },
+    });
+    const now = new Date();
+    const final = next.status === 'goal_confirmed';
+    const status: TaskStatus =
+      final && (!cycle?.selfEvalOpenAt || cycle.selfEvalOpenAt <= now)
+        ? 'self_eval'
+        : next.status;
+    await tx.assessmentTask.update({
+      where: { id: task.id },
+      data: {
+        status,
+        updatedAt,
+        ...(task.status === 'indicator_confirming'
+          ? { indicatorConfirmedAt: now }
+          : {}),
+        ...(['indicator_reviewing', 'indicator_setting'].includes(task.status)
+          ? {
+              indicatorSetAt: now,
+              indicatorConfirmedAt: null,
+              goalApprovedAt: null,
+            }
+          : {}),
+        ...(final ? { goalApprovedAt: now } : {}),
+      },
+    });
+    await tx.flowRecord.create({
+      data: {
+        taskId: task.id,
+        cycleId: task.cycleId,
+        nodeType: goalNode(task.status),
+        actorId: viewer.id,
+        action:
+          task.status === 'indicator_drafting' ||
+          task.status === 'indicator_confirming'
+            ? 'submit'
+            : 'approve',
+        comment,
+        extraData: {
+          type:
+            task.status === 'indicator_drafting'
+              ? 'indicator_employee_submitted'
+              : 'goal_step_approved',
+          goalWorkflowVersion: 2,
+          ...(batchId ? {batchId} : {}),
+          targetStatus: status,
+        },
+      },
+    });
+    for (const skipped of next.skipped)
+      await tx.flowRecord.create({
+        data: {
+          taskId: task.id,
+          cycleId: task.cycleId,
+          nodeType: goalNode(skipped.status),
+          actorId: viewer.id,
+          action: 'approve',
+          extraData: {
+            type: 'goal_node_skipped',
+            ...(batchId ? {batchId} : {}),
+            reason: skipped.reason,
+            assignedActorId: getGoalReviewActorId({
+              ...task,
+              status: skipped.status,
+            }),
+          },
+        },
+      });
+    if (final) {
+      const indicators = await tx.indicatorInstance.findMany({
+        where: { taskId: task.id },
+        include: {
+          visibleDepartments: { select: { departmentId: true } },
+          visibleUsers: { select: { userId: true } },
+          visibilityRules: { select: { scope: true } },
+          objectiveAlignments: { select: { objectiveId: true } },
+          childAlignments: { select: { parentIndicatorId: true } },
+        },
+      });
+      if (indicators.length)
+        await tx.auditLog.createMany({
+          data: indicators.map((indicator) => ({
+            userId: viewer.id,
+            action: 'indicator_baseline_confirmed',
+            entityType: 'indicator_instance',
+            entityId: indicator.id,
+            oldValue: Prisma.JsonNull,
+            newValue: this.buildIndicatorBaseline(indicator),
+          })),
+        });
+      if (cycle?.workflowVersion === 2)
+        await this.indicatorVersionService.activateConfirmedV1(
+          tx,
+          task.id,
+          viewer.id,
+        );
+    }
+    await this.flowService.syncCycleStage(tx, task.cycleId);
+    return status;
+  }
+
+  private async notifyGoalHandler(
+    task: AssessmentTask,
+    viewer: AuthUser,
+  ): Promise<void> {
+    const userId = [
+      'indicator_drafting',
+      'indicator_confirming',
+      'goal_confirmed',
+      'self_eval',
+    ].includes(task.status)
+      ? task.employeeId
+      : getGoalReviewActorId(task);
+    if (!userId) return;
+    try {
+      await this.notificationsService.create({
+        userId,
+        senderId: viewer.id,
+        cycleId: task.cycleId,
+        taskId: task.id,
+        type: 'indicator_setting_notice',
+        title:
+          task.status === 'goal_confirmed' || task.status === 'self_eval'
+            ? '目标已生效'
+            : '目标计划待办理',
+        content: '目标计划状态已更新，请进入目标计划查看并办理。',
+      });
+    } catch (error) {
+      this.logger.warn(
+        `目标状态已更新，通知发送失败: ${error instanceof Error ? error.message : String(error)}`,
+      );
+    }
+  }
+
   /** POST /tasks/:id/indicators/confirm */
-  async confirmIndicators(id: string, viewer: AuthUser): Promise<{ id: string; status: TaskStatus }> {
+  async confirmIndicators(id: string, viewer: AuthUser, expectedUpdatedAt?: string): Promise<{ id: string; status: TaskStatus }> {
     const task = await this.getTaskOrThrow(id);
     this.assertEmployee(task, viewer);
     if (task.status !== 'indicator_confirming') {
@@ -612,8 +885,12 @@ export class TasksService {
 
     const cycle = await this.prisma.assessmentCycle.findUnique({
       where: { id: task.cycleId },
-      select: { selfEvalOpenAt: true, workflowVersion: true },
+      select: { selfEvalOpenAt: true, workflowVersion: true, goalWorkflowVersion: true },
     });
+    if (usesFiveStepGoalWorkflow(cycle?.goalWorkflowVersion)) {
+      if (!expectedUpdatedAt) throw new BadRequestException('请刷新目标计划后重新确认');
+      return this.performGoalAction(task, viewer, 'confirm', expectedUpdatedAt);
+    }
     const now = new Date();
     const targetStatus: TaskStatus = !cycle?.selfEvalOpenAt || cycle.selfEvalOpenAt <= now
       ? 'self_eval'
@@ -705,8 +982,11 @@ export class TasksService {
     id: string,
     comment: string | undefined,
     viewer: AuthUser,
+    expectedUpdatedAt?: string,
+    batchId?: string,
   ): Promise<{ id: string; status: TaskStatus }> {
     const task = await this.getTaskOrThrow(id);
+    if (await this.isNewGoalWorkflow(task.cycleId)) return this.performGoalAction(task, viewer, 'reject', expectedUpdatedAt ?? task.updatedAt.toISOString(), comment, batchId);
     const isEmployee = task.employeeId === viewer.id;
     const isReviewer = task.managerId === viewer.id || viewer.sysRole === SysRole.hr || viewer.sysRole === SysRole.system_admin;
     if (!isEmployee && !isReviewer) {
@@ -789,6 +1069,7 @@ export class TasksService {
         message: '当前状态不允许撤回目标',
       });
     }
+    const newGoalWorkflow = await this.isNewGoalWorkflow(task.cycleId);
     assertTaskVersion(task.updatedAt, dto.expectedUpdatedAt);
 
     const claimedUpdatedAt = await this.prisma.$transaction(async (tx) => {
@@ -814,6 +1095,10 @@ export class TasksService {
           code: ERROR_CODE.CONFLICT,
           message: '未找到可撤回的目标提交记录',
         });
+      }
+      if (newGoalWorkflow) {
+        const returned = await tx.flowRecord.findFirst({where: {taskId: task.id, createdAt: {gt: submission.createdAt}, extraData: {path: ['type'], equals: 'goal_returned'}}, select: {id: true}});
+        if (returned) throw new ConflictException('目标已进入主管调整，请联系主管办理');
       }
       const reviewSaved = await tx.flowRecord.findFirst({
         where: {
@@ -880,6 +1165,8 @@ export class TasksService {
   ): Promise<{ id: string; submittedAt: Date }> {
     const task = await this.getTaskOrThrow(id);
     this.assertEmployee(task, viewer);
+    const newGoalWorkflow = await this.isNewGoalWorkflow(task.cycleId);
+    if (newGoalWorkflow && task.status !== 'indicator_drafting') throw new ConflictException('当前状态不允许保存员工目标草稿');
 
     if (task.status !== 'indicator_drafting' && task.status !== 'indicator_setting') {
       throw new ConflictException({
@@ -907,6 +1194,7 @@ export class TasksService {
     }
 
     const record = await this.prisma.$transaction(async (tx) => {
+      if (newGoalWorkflow) await claimTaskVersion(tx, task.id, task.updatedAt.toISOString(), task.status);
       await this.replaceIndicatorInstances(tx, task.id, validItems);
       await tx.assessmentTask.update({
         where: { id: task.id },
@@ -950,6 +1238,7 @@ export class TasksService {
   /** PUT /tasks/:id/indicators */
   async setIndicators(id: string, dto: SetIndicatorsDto, viewer: AuthUser): Promise<TaskDetail> {
     const task = await this.getTaskOrThrow(id);
+    const newGoalWorkflow = await this.isNewGoalWorkflow(task.cycleId);
     assertTaskVersion(task.updatedAt, dto.expectedUpdatedAt);
     const isEmployee = task.employeeId === viewer.id;
     const isManager = task.managerId === viewer.id;
@@ -958,9 +1247,12 @@ export class TasksService {
     const isDraftStatus = task.status === 'indicator_drafting' || task.status === 'indicator_setting';
     const isReviewStatus = task.status === 'indicator_reviewing' || task.status === 'indicator_setting';
     const actsAsEmployee = isEmployee && isDraftStatus;
-    const actsAsReviewer = (isManager || isAdmin) && isReviewStatus;
+    const actsAsReviewer = ((isManager && (!newGoalWorkflow || !isEmployee)) || (!newGoalWorkflow && isAdmin)) && isReviewStatus;
+    if (newGoalWorkflow && isEmployee && isManager && isReviewStatus && !isDraftStatus) {
+      throw new ForbiddenException('不能审核自己的目标，请退回员工填写环节办理');
+    }
 
-    if (!isEmployee && !isManager && !isAdmin) {
+    if (!isEmployee && !isManager && (newGoalWorkflow || !isAdmin)) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '无权限维护该任务指标' });
     }
     if (!actsAsEmployee && !actsAsReviewer) {
@@ -1025,6 +1317,11 @@ export class TasksService {
         return;
       }
 
+      if (newGoalWorkflow) {
+        await this.advanceGoalTx(tx, task, viewer, claimedUpdatedAt, note);
+        return;
+      }
+
       if (actsAsEmployee) {
         await this.flowService.transitionTx(tx, {
           task,
@@ -1068,6 +1365,10 @@ export class TasksService {
       }
     });
 
+    if (newGoalWorkflow && action === 'submit') {
+      const fresh = await this.getTaskOrThrow(id);
+      await this.notifyGoalHandler(fresh, viewer);
+    }
     if (approvedForEmployeeConfirm) {
       await this.notificationsService.create({
         userId: task.employeeId,
@@ -1102,6 +1403,7 @@ export class TasksService {
   ): Promise<{ id: string; updatedCount: number }> {
     const task = await this.getTaskOrThrow(id);
     this.assertCanEditActualValue(task, viewer);
+    if (await this.isNewGoalWorkflow(task.cycleId) && !task.goalApprovedAt) throw new ConflictException('目标尚未终审生效');
 
     if (!(['self_eval', 'manager_scoring'] as TaskStatus[]).includes(task.status)) {
       throw new ConflictException({
@@ -1129,6 +1431,7 @@ export class TasksService {
   async submitSelfEval(id: string, dto: SubmitSelfEvalDto, viewer: AuthUser): Promise<{ id: string; status: TaskStatus }> {
     const task = await this.getTaskOrThrow(id, { snapshot: { select: { snapshotData: true } } });
     this.assertEmployee(task, viewer);
+    if (await this.isNewGoalWorkflow(task.cycleId) && !task.goalApprovedAt) throw new ConflictException('目标尚未终审生效');
     if (task.status !== 'self_eval') {
       throw new ConflictException({
         code: ERROR_CODE.CONFLICT,
@@ -1985,7 +2288,12 @@ export class TasksService {
       managerName: task.manager?.name ?? null,
       deptHeadId: task.deptHeadId ?? null,
       deptHeadName: task.deptHead?.name ?? null,
+      approverId: task.approverId ?? null,
+      approverName: task.approver?.name ?? null,
       workflowVersion: task.cycle?.workflowVersion ?? 1,
+      goalWorkflowVersion: task.cycle?.goalWorkflowVersion ?? 1,
+      goalApprovedAt: task.goalApprovedAt ?? null,
+      indicatorConfirmedAt: task.indicatorConfirmedAt ?? null,
       managerStageState: getManagerStageState(task),
       periods: (task.periods ?? []).map((period: any) => ({
         id: period.id,
@@ -2171,6 +2479,8 @@ export class TasksService {
       pending: '待开始',
       indicator_drafting: '待制定目标',
       indicator_reviewing: '待主管审核目标',
+      indicator_dept_reviewing: '待部门负责人审核目标',
+      indicator_approving: '待分管领导审核目标',
       indicator_setting: '目标制定中',
       indicator_confirming: '待员工确认目标',
       goal_confirmed: '目标已确认，待自评开放',
@@ -2218,6 +2528,8 @@ export class TasksService {
     const mapping: Partial<Record<TaskStatus, TaskReminderNodeType>> = {
       indicator_drafting: 'employee',
       indicator_reviewing: 'manager',
+      indicator_dept_reviewing: 'deptHead',
+      indicator_approving: 'approver',
       indicator_setting: 'manager',
       indicator_confirming: 'employee',
       self_eval: 'employee',
@@ -2264,7 +2576,7 @@ export class TasksService {
   }
 
   private resolveBusinessStage(status: TaskStatus): TaskWorkflowContext['stage'] {
-    if (['pending', 'indicator_drafting', 'indicator_reviewing', 'indicator_setting', 'indicator_confirming', 'goal_confirmed'].includes(status)) return 'goal_setting';
+    if (['pending', 'indicator_drafting', 'indicator_reviewing', 'indicator_setting', 'indicator_confirming', 'indicator_dept_reviewing', 'indicator_approving', 'goal_confirmed'].includes(status)) return 'goal_setting';
     if (status === 'self_eval') return 'self_eval';
     if (['manager_scoring', 'dept_review', 'hr_calibration', 'approval'].includes(status)) return 'review';
     if (['published', 'appealing'].includes(status)) return 'result';
@@ -2277,6 +2589,8 @@ export class TasksService {
     const deadlines: Partial<Record<TaskStatus, Date | null | undefined>> = {
       indicator_drafting: cycle.deadlineIndicatorSetting,
       indicator_reviewing: cycle.deadlineIndicatorSetting,
+      indicator_dept_reviewing: cycle.deadlineIndicatorSetting,
+      indicator_approving: cycle.deadlineIndicatorConfirm,
       indicator_setting: cycle.deadlineIndicatorSetting,
       indicator_confirming: cycle.deadlineIndicatorConfirm,
       goal_confirmed: cycle.selfEvalOpenAt,

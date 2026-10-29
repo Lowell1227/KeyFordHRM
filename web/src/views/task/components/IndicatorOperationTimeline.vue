@@ -28,7 +28,7 @@ const props = withDefaults(defineProps<{
 });
 
 const expanded = ref(false);
-const indicatorOperationNodeTypes = ['indicator_setting', 'indicator_confirm'];
+const indicatorOperationNodeTypes = ['indicator_setting', 'indicator_dept_review', 'indicator_confirm', 'indicator_approval'];
 
 const operationRecords = computed<OperationRecordView[]>(() => props.records
   .filter((record) => indicatorOperationNodeTypes.includes(String(record.nodeType)))
@@ -71,6 +71,8 @@ function formatOperationRecord(record: FlowRecord): string {
   if (type === 'indicator_review_approved') return `审核通过${countText}`;
   if (type === 'indicator_draft_saved') return `保存草稿${countText}`;
   if (type === 'indicator_employee_confirmed') return `确认目标${countText}`;
+  if (record.nodeType === 'indicator_dept_review' && record.action === 'approve') return '部门负责人审核通过';
+  if (record.nodeType === 'indicator_approval' && record.action === 'approve') return '分管领导审核通过，目标生效';
   if (record.action === 'reject') return '退回指标';
   if (record.action === 'submit' && record.nodeType === 'indicator_confirm') return '确认目标';
   if (record.action === 'submit') return `提交指标${countText}`;

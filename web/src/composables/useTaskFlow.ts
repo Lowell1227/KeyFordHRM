@@ -32,6 +32,8 @@ function statusToNode(task: TaskDetail | null): FlowNodeType {
     case 'indicator_reviewing':
     case 'indicator_setting':
       return 'indicator_setting';
+    case 'indicator_dept_reviewing': return 'indicator_dept_review';
+    case 'indicator_approving': return 'indicator_approval';
     case 'indicator_confirming':
       return 'indicator_confirm';
     case 'goal_confirmed':
@@ -63,9 +65,10 @@ function getNodeStatus(
   node: FlowNodeType,
   currentNode: FlowNodeType,
   task?: TaskDetail | null,
+  sequence: FlowNodeType[] = FLOW_SEQUENCE,
 ): TaskFlowNode['status'] {
-  const currentIndex = FLOW_SEQUENCE.indexOf(currentNode);
-  const nodeIndex = FLOW_SEQUENCE.indexOf(node);
+  const currentIndex = sequence.indexOf(currentNode);
+  const nodeIndex = sequence.indexOf(node);
 
   if (task?.status === 'closed' || task?.status === 'exempted') {
     return nodeIndex <= currentIndex ? 'done' : 'pending';
@@ -100,10 +103,12 @@ export function useTaskFlow(options: UseTaskFlowOptions = {}) {
 
   const flowNodes = computed<TaskFlowNode[]>(() => {
     const t = task.value;
-    return FLOW_SEQUENCE.map((node) => ({
+    const sequence: FlowNodeType[] = (t?.goalWorkflowVersion ?? unref(options.cycle)?.goalWorkflowVersion ?? 1) >= 2
+      ? ['indicator_setting','indicator_dept_review','indicator_confirm','indicator_approval',...FLOW_SEQUENCE.slice(2)] : FLOW_SEQUENCE;
+    return sequence.map((node) => ({
       key: node,
       label: FLOW_NODE_LABELS[node],
-      status: getNodeStatus(node, currentNode.value, t),
+      status: getNodeStatus(node, currentNode.value, t, sequence),
       completedAt: getCompletedAt(t, node),
     }));
   });
@@ -117,7 +122,7 @@ export function useTaskFlow(options: UseTaskFlowOptions = {}) {
     const isAdmin = permission.isAdminLike.value;
 
     return {
-      canSetIndicator: !exempt && (s === 'indicator_reviewing' || s === 'indicator_setting') && (isManager || isAdmin),
+      canSetIndicator: !exempt && (s === 'indicator_reviewing' || s === 'indicator_setting') && ((task.value?.goalWorkflowVersion ?? unref(options.cycle)?.goalWorkflowVersion ?? 1) >= 2 ? isManager && !isSelf : isManager || isAdmin),
       canConfirmIndicator: !exempt && s === 'indicator_confirming' && isSelf,
       canSelfEval: permission.canEditSelfEval.value,
       canManagerScore: permission.canEditManagerScore.value,
@@ -157,6 +162,8 @@ function getCompletedAt(task: TaskDetail | null | undefined, node: FlowNodeType)
   switch (node) {
     case 'indicator_setting':
       return task.indicatorSetAt;
+    case 'indicator_approval':
+      return task.goalApprovedAt ?? undefined;
     case 'indicator_confirm':
       return task.indicatorConfirmedAt;
     case 'self_eval':

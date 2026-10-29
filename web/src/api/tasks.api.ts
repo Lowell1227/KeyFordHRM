@@ -153,14 +153,21 @@ export function createTasksApi(client: TasksApiClient) {
     },
 
     /** POST /tasks/:id/indicators/confirm — 员工确认指标 */
-    confirmIndicators(id: string): Promise<TaskActionResult> {
-      return apiPost(`/tasks/${id}/indicators/confirm`);
+    approveIndicators(id: string, body: { expectedUpdatedAt: string; comment?: string }): Promise<TaskActionResult> {
+      return apiPost(`/tasks/${id}/indicators/approve`, body);
+    },
+
+    confirmIndicators(
+      id: string,
+      body?: { expectedUpdatedAt: string },
+    ): Promise<TaskActionResult> {
+      return apiPost(`/tasks/${id}/indicators/confirm`, body);
     },
 
     /** POST /tasks/:id/indicators/reject — 退回指标 */
     rejectIndicators(
       id: string,
-      body: { comment?: string },
+      body: { comment?: string; expectedUpdatedAt?: string },
     ): Promise<TaskActionResult> {
       return apiPost(`/tasks/${id}/indicators/reject`, body);
     },

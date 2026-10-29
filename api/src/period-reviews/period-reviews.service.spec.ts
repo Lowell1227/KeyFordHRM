@@ -138,6 +138,15 @@ describe('PeriodReviewsService', () => {
     }],
   };
 
+  it('blocks monthly review before final goal approval even with a bound version', async () => {
+    prisma.assessmentPeriod.findUnique.mockResolvedValue({ ...period, task: {
+      ...period.task, indicatorConfirmedAt: new Date(), goalApprovedAt: null,
+      cycle: { ...period.task.cycle, goalWorkflowVersion: 2 },
+    } });
+    await expect(service.getReview(period.id, employee)).rejects.toBeInstanceOf(ConflictException);
+    expect(prisma.indicatorInstance.findMany).not.toHaveBeenCalled();
+  });
+
   beforeEach(() => {
     jest.clearAllMocks();
     prisma.assessmentPeriod.findUnique.mockResolvedValue(period);

@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref, watch } from 'vue';
 import { useRouter } from 'vue-router';
 import { cyclesApi } from '@/api/cycles.api';
+import { goalPlansApi, canMonitorGoals } from '@/api/goal-plans.api';
 import { tasksApi } from '@/api/tasks.api';
 import { improvementPlansApi } from '@/api/improvement-plans.api';
 import { useAuthStore } from '@/stores/auth.store';
@@ -16,6 +17,8 @@ const cycles = ref<AssessmentCycle[]>([]);
 const personalTasks = ref<TaskListItem[]>([]);
 const improvementPending = ref<ImprovementPlan[]>([]);
 const improvementError = ref(false);
+const goalReviewTotal = ref(0);
+const goalReviewError = ref(false);
 const loading = ref(false);
 const personalError = ref(false);
 const cyclesError = ref(false);
@@ -122,7 +125,8 @@ async function loadEntries() {
   cyclesError.value = false;
   loading.value = Boolean(auth.user);
   if (!auth.user) return;
-  await Promise.all([loadPersonalTasks(requestId), loadCycles(requestId),
+  goalReviewTotal.value = 0; goalReviewError.value = false;
+  await Promise.all([goalPlansApi.findAll({scope:'review',page:1,pageSize:1}).then(result => {if(requestId === requestSerial) goalReviewTotal.value=result.total;}).catch(() => {if(requestId === requestSerial)goalReviewError.value=true;}), loadPersonalTasks(requestId), loadCycles(requestId),
     improvementPlansApi.myPending().then((items) => {
       if (requestId === requestSerial) improvementPending.value = items;
     }).catch(() => { if (requestId === requestSerial) improvementError.value = true; }),
@@ -188,6 +192,12 @@ onUnmounted(() => { requestSerial += 1; });
         </select>
       </label>
     </header>
+    <div class="goal-entry-links">
+      <el-button @click="router.push('/tasks?goalView=mine')">我的目标计划</el-button>
+      <el-button @click="router.push('/tasks?goalView=review')">待我审核目标（{{goalReviewTotal}}）</el-button>
+      <el-button v-if="canMonitorGoals(auth.user)" @click="router.push('/tasks?goalView=monitor')">目标计划进度</el-button>
+      <span v-if="goalReviewError" class="task-note">目标审核待办暂时无法加载，请进入列表重试。</span>
+    </div>
     <el-skeleton v-if="loading" :rows="3" animated />
     <template v-else>
       <el-alert v-if="personalError" title="个人任务暂时无法加载，请稍后重试。" type="warning" :closable="false" />
@@ -279,3 +289,5 @@ onUnmounted(() => { requestSerial += 1; });
   .personal-task { align-items: flex-start; flex-direction: column; }
 }
 </style>
+
+<style scoped>.goal-entry-links{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px}.goal-entry-links .el-button{margin-left:0}</style>

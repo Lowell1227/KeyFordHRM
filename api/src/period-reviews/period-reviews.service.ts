@@ -1,3 +1,4 @@
+import { hasApprovedGoalBaseline, usesFiveStepGoalWorkflow } from '@/tasks/goal-workflow';
 import {
   ConflictException,
   ForbiddenException,
@@ -44,7 +45,7 @@ const periodInclude = {
       employee: { select: { id: true, name: true, employeeNo: true } },
       manager: { select: { id: true, name: true } },
       dept: { select: { id: true, name: true } },
-      cycle: { select: { id: true, name: true, notificationMode: true, publishedAt: true } },
+      cycle: { select: { id: true, name: true, notificationMode: true, publishedAt: true, goalWorkflowVersion: true } },
       gradeResult: {
         select: {
           isPublished: true,
@@ -943,7 +944,7 @@ export class PeriodReviewsService {
       include: periodInclude,
     });
     if (!period) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '月度自评任务不存在' });
-    if (!period.indicatorVersion) {
+    if (!period.indicatorVersion || (usesFiveStepGoalWorkflow(period.task.cycle.goalWorkflowVersion) && !hasApprovedGoalBaseline(period.task))) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '本期目标版本尚未确认' });
     }
     return period;

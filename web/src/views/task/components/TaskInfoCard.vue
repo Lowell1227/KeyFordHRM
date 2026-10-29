@@ -34,6 +34,8 @@ const deadlineText = computed(() => {
     case 'indicator_drafting':
     case 'indicator_reviewing':
     case 'indicator_setting':
+    case 'indicator_dept_reviewing':
+    case 'indicator_approving':
     case 'indicator_confirming':
     case 'goal_confirmed':
       value = cycle.deadlineIndicatorConfirm;

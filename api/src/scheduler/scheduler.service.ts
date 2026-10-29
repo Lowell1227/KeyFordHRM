@@ -51,6 +51,11 @@ const REMINDER_NODES: ReminderNodeConfig[] = [
 /** 归档时排除的任务状态。 */
 const CLOSED_TASK_STATUSES: TaskStatus[] = ['closed', 'exempted'];
 
+const APPROVED_GOAL_WHERE: Prisma.AssessmentTaskWhereInput = {
+  OR: [{ cycle: { goalWorkflowVersion: 1 } }, { goalApprovedAt: { not: null } }],
+};
+
+
 /**
  * 定时任务编排服务。
  *
@@ -284,7 +289,7 @@ export class SchedulerService {
     for (const cycle of cycles) {
       await this.prisma.$transaction(async (tx) => {
         await tx.assessmentTask.updateMany({
-          where: { cycleId: cycle.id, status: 'goal_confirmed' },
+          where: { cycleId: cycle.id, status: 'goal_confirmed', ...APPROVED_GOAL_WHERE },
           data: { status: 'self_eval' },
         });
         await tx.assessmentCycle.update({
@@ -303,7 +308,7 @@ export class SchedulerService {
         status: 'unopened',
         indicatorVersionId: { not: null },
         selfEvalOpenAt: { lte: now },
-        task: { cycle: { workflowVersion: 2 } },
+        task: { cycle: { workflowVersion: 2 }, ...APPROVED_GOAL_WHERE },
       },
       select: {
         id: true,
@@ -327,6 +332,7 @@ export class SchedulerService {
             id: period.id,
             status: 'unopened',
             indicatorVersionId: { not: null },
+            task: APPROVED_GOAL_WHERE,
           },
           data: { status: 'self_eval', openedAt: now },
         });

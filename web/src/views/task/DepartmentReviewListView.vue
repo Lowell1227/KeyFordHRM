@@ -45,7 +45,7 @@ const detailOpenedFromList = ref(false);
 let loadSequence = 0;
 let detailSequence = 0;
 const stages = Object.entries(TASK_STATUS_META).filter(([value]) => value !== 'exempted');
-const beforeReview: TaskStatus[] = ['pending', 'indicator_drafting', 'indicator_reviewing', 'indicator_setting', 'indicator_confirming', 'goal_confirmed', 'self_eval', 'manager_scoring'];
+const beforeReview: TaskStatus[] = ['pending', 'indicator_drafting', 'indicator_reviewing', 'indicator_setting', 'indicator_confirming', 'indicator_dept_reviewing', 'indicator_approving', 'goal_confirmed', 'self_eval', 'manager_scoring'];
 const canReview = (item: DepartmentReviewListItem) => item.departmentReview?.canReview ?? item.status === 'dept_review';
 function reviewState(item: DepartmentReviewListItem): { label: string; type: 'warning' | 'success' | 'danger' | 'info' } {
   if (canReview(item)) return { label: '待复核', type: 'warning' };

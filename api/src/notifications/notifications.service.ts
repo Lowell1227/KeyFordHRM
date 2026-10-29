@@ -675,11 +675,11 @@ export class NotificationsService {
       case 'manager':
         return ['indicator_reviewing', 'manager_scoring'];
       case 'deptHead':
-        return ['dept_review'];
+        return ['dept_review', 'indicator_dept_reviewing'];
       case 'hr':
         return ['hr_calibration'];
       case 'approver':
-        return ['approval'];
+        return ['approval', 'indicator_approving'];
       default:
         throw new ConflictException({
           code: ERROR_CODE.PARAM_INVALID,

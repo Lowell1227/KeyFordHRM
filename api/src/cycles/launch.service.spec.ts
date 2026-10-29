@@ -1429,6 +1429,18 @@ describe('LaunchService preflight', () => {
     expect(after.planHash).not.toBe(before.planHash);
   });
 
+  it.each([1, 2])('versions goal launch snapshots without changing legacy hashes for scoring %s', (workflowVersion) => {
+    const build = (goalWorkflowVersion?: number) => (service as any).buildLaunchPlan([], v2Cycle({ workflowVersion, goalWorkflowVersion }), new Map(), 0.33, []);
+    const legacy = build();
+    const explicitLegacy = build(1);
+    const current = build(2);
+    expect(legacy).not.toHaveProperty('goalWorkflowVersion');
+    expect(explicitLegacy).toEqual(legacy);
+    expect((service as any).hashLaunchPlan(explicitLegacy)).toBe((service as any).hashLaunchPlan(legacy));
+    expect(current.goalWorkflowVersion).toBe(2);
+    expect((service as any).hashLaunchPlan(current)).not.toBe((service as any).hashLaunchPlan(legacy));
+  });
+
   it('keeps the legacy plan hash when only approval preview metadata is added', () => {
     const legacyParticipant = {
       employeeId: candidate.id,

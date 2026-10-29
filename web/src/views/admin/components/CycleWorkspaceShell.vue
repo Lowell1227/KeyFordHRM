@@ -1,4 +1,7 @@
 <script setup lang="ts">
+import { useRouter } from 'vue-router';
+import { useAuthStore } from '@/stores/auth.store';
+import { canMonitorGoals } from '@/api/goal-plans.api';
 import { computed, ref, watch } from 'vue';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import dayjs from 'dayjs';
@@ -49,6 +52,8 @@ const emit = defineEmits<{
   'resolve-blocker': [code: string];
 }>();
 
+const router = useRouter();
+const auth = useAuthStore();
 const stages = CYCLE_PHASES;
 const participantFilterOptions = [
   { key: 'all', label: '全部' },
@@ -345,8 +350,11 @@ watch(() => props.cycle?.id, () => {
           </div>
 
           <div v-if="cycle.taskStats && cycleBusinessState(cycle).code === 'goal_preparation'" class="cycle-stat-grid cycle-stat-grid--progress">
-            <div><span>目标完成</span><strong>{{ cycle.taskStats.goalCompleted }}/{{ activeTaskCount }}</strong></div>
+            <div><span>目标已生效</span><strong>{{ cycle.taskStats.goalCompleted }}/{{ activeTaskCount }}</strong></div>
             <div><span>待主管审核</span><strong>{{ cycle.taskStats.pendingManagerReview }}人</strong></div>
+            <div><span>待部门负责人审核</span><strong>{{cycle.taskStats.byStatus.indicator_dept_reviewing || 0}}人</strong></div>
+            <div><span>待分管领导审核</span><strong>{{cycle.taskStats.byStatus.indicator_approving || 0}}人</strong></div>
+            <div v-if="canMonitorGoals(auth.user)"><el-button link type="primary" @click="router.push({path:'/tasks',query:{goalView:'monitor',cycleId:cycle.id}})">查看目标计划进度</el-button></div>
             <div><span>逾期未完成</span><strong :class="{ 'is-danger': cycle.taskStats.overdue > 0 }">{{ cycle.taskStats.overdue }}人</strong></div>
           </div>
         </section>

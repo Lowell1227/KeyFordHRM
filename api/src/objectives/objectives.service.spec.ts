@@ -234,6 +234,7 @@ describe('ObjectivesService bot goal access', () => {
 
   it.each([
     [{ indicatorConfirmedAt: null }, 'awaiting_goal_approval'],
+    [{ cycle: { ...cycle, goalWorkflowVersion: 2 }, goalApprovedAt: null }, 'awaiting_goal_approval'],
     [{ periods: [{ ...month, lockedAt: new Date() }] }, 'month_locked'],
     [{ periods: [{ ...month, employeeSubmittedAt: new Date() }] }, 'self_eval_submitted'],
     [{ periods: [{ ...month, employeeSubmittedAt: new Date(), lockedAt: new Date() }], indicatorConfirmedAt: null }, 'self_eval_submitted'],
@@ -244,6 +245,11 @@ describe('ObjectivesService bot goal access', () => {
   ])('classifies blocked task state: %j', async (override, kind) => {
     const { service } = setup(override);
     expect(await service.findBotGoalAccess(viewer)).toMatchObject({ kind, message: expect.any(String) });
+  });
+
+  it.each([1, 2])('accepts the applicable approved baseline for goal workflow %s', async (goalWorkflowVersion) => {
+    const { service } = setup({ cycle: { ...cycle, goalWorkflowVersion }, goalApprovedAt: goalWorkflowVersion === 2 ? new Date() : null });
+    expect(await service.findBotGoalAccess(viewer)).toMatchObject({ kind: 'ready' });
   });
 
   it('returns only necessary goal fields and explicitly scopes database queries to self', async () => {

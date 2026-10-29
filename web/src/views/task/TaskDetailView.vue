@@ -5,6 +5,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { ArrowLeft } from '@element-plus/icons-vue';
 import { useTaskStore } from '@/stores/task.store';
+import GoalMonitorDetail from './components/GoalMonitorDetail.vue';
 import { tasksApi } from '@/api/tasks.api';
 import { cyclesApi } from '@/api/cycles.api';
 import { useTaskFlow } from '@/composables/useTaskFlow';
@@ -52,6 +53,10 @@ function readGoalSettingMode(): GoalSettingMode {
 const goalSettingMode = ref<GoalSettingMode>(readGoalSettingMode());
 const indicatorSnapshotRef = ref<{ clearSelfEvalDraft: () => void; addGoal: () => void } | null>(null);
 
+const isGoalMonitor = computed(() => route.query.goalView === 'monitor');
+const goalVersion = computed(() => task.value?.goalWorkflowVersion ?? cycle.value?.goalWorkflowVersion ?? 1);
+const goalReviewerId = computed(() => task.value?.status === 'indicator_dept_reviewing' ? task.value.deptHeadId : task.value?.status === 'indicator_approving' ? task.value.approverId : task.value?.status === 'indicator_reviewing' ? task.value.managerId : null);
+const canApproveGoal = computed(() => Boolean(task.value && !task.value.isExempt && goalVersion.value >= 2 && goalReviewerId.value === authStore.user?.id && task.value.employeeId !== authStore.user?.id));
 const task = computed(() => taskStore.detail);
 const loading = computed(() => taskStore.loading || cycleLoading.value);
 const workflowContext = computed(() => {
@@ -230,6 +235,9 @@ const canEditIndicators = computed(() => {
     || requestedPerformanceStage.value !== 'goal-setting'
     || !isCurrentPerformanceStage.value
   ) return false;
+  if (goalVersion.value >= 2) {
+    return t.status === 'indicator_drafting' ? permission.isTaskSelf.value : t.status === 'indicator_reviewing' && permission.isTaskManager.value && !permission.isTaskSelf.value;
+  }
   if (t.status === 'indicator_drafting') {
     return permission.isTaskSelf.value || permission.isAdminLike.value;
   }
@@ -252,6 +260,7 @@ const splitIndicatorSaveActions = computed(() => canEditIndicators.value);
 const canRejectIndicators = computed(() => {
   const t = task.value;
   if (!t || t.isExempt || !isCurrentPerformanceStage.value) return false;
+  if (goalVersion.value >= 2) return canApproveGoal.value || (t.status === 'indicator_confirming' && permission.isTaskSelf.value);
   if (t.status === 'indicator_reviewing') return permission.isTaskManager.value || permission.isAdminLike.value;
   if (t.status === 'indicator_confirming') return permission.isTaskSelf.value;
   return false;
@@ -263,7 +272,7 @@ const canWithdrawIndicators = computed(() => (
   && employeeCanWithdrawIndicators(task.value?.status, task.value?.flowRecords ?? [])
 ));
 const rejectIndicatorLabel = computed(() =>
-  task.value?.status === 'indicator_confirming' ? '退回修改' : '退回员工修改',
+  task.value?.status === 'indicator_confirming' || ['indicator_dept_reviewing','indicator_approving'].includes(task.value?.status ?? '') ? '退回绩效上级修改' : '退回员工修改',
 );
 
 const showResultView = computed(() => {
@@ -289,6 +298,7 @@ async function loadCycle(taskDetail?: TaskDetail | null) {
 }
 
 async function loadDetail() {
+  if (isGoalMonitor.value) return;
   const id = route.params.id as string;
   await taskStore.fetchDetail(id);
   if (taskStore.detail) {
@@ -301,7 +311,7 @@ onMounted(() => {
 });
 
 watch(
-  () => route.params.id,
+  () => [route.params.id, route.query.goalView],
   () => {
     objectionVisible.value = false;
     objectionError.value = '';
@@ -317,13 +327,27 @@ function goBack() {
 }
 
 async function handleConfirmIndicators() {
-  const id = task.value?.id;
-  if (!id) return;
+  const currentTask = task.value;
+  if (!currentTask) return;
+  const isFiveStep = goalVersion.value >= 2;
+  if (isFiveStep && !currentTask.updatedAt) {
+    ElMessage.warning('请刷新目标计划后重新确认');
+    await loadDetail();
+    return;
+  }
   actionLoading.value = true;
   try {
-    await tasksApi.confirmIndicators(id);
-    ElMessage.success('目标确认成功');
+    if (canApproveGoal.value && currentTask.updatedAt) {
+      await tasksApi.approveIndicators(currentTask.id, { expectedUpdatedAt: currentTask.updatedAt });
+    } else {
+      await tasksApi.confirmIndicators(currentTask.id, isFiveStep
+        ? { expectedUpdatedAt: currentTask.updatedAt! } : undefined);
+    }
+    ElMessage.success(isFiveStep ? '已办理，请查看当前目标审批进度' : '目标确认成功');
     await loadDetail();
+  } catch (error) {
+    // HTTP already displays the conflict; refresh the current round before another action.
+    if (isAxiosError(error) && error.response?.status === 409) await loadDetail();
   } finally {
     actionLoading.value = false;
   }
@@ -334,7 +358,7 @@ async function handleRejectIndicators(reason: string) {
   if (!id) return;
   actionLoading.value = true;
   try {
-    await tasksApi.rejectIndicators(id, { comment: reason });
+    await tasksApi.rejectIndicators(id, { comment: reason, expectedUpdatedAt: task.value?.updatedAt });
     ElMessage.success('指标已退回');
     await loadDetail();
   } finally {
@@ -370,6 +394,7 @@ async function handleSaveIndicators(body: Omit<SetIndicatorBody, 'expectedUpdate
     ElMessage.success(
       wasSelf
         ? '指标已提交主管审核'
+        : goalVersion.value >= 2 ? `目标已审核通过，${TASK_STATUS_META[savedTask.status].label}`
         : savedTask.status === 'indicator_confirming' || beforeStatus === 'indicator_reviewing'
           ? '指标已审核通过，等待员工确认'
           : '指标已提交',
@@ -500,7 +525,8 @@ async function handleRemind() {
 </script>
 
 <template>
-  <div
+  <GoalMonitorDetail v-if="isGoalMonitor"/>
+  <div v-else
     v-loading="loading"
     class="performance-detail"
     :class="{ 'has-goal-setting-actions': canEditIndicators }"
@@ -582,6 +608,10 @@ async function handleRemind() {
         title="完成全部月度评分后，需进行整周期结果评定。"
       />
 
+      <el-alert v-if="showGoalSettingReference" data-testid="goal-stage-status" :title="TASK_STATUS_META[task.status].label" type="info" :closable="false">
+        <template v-if="goalVersion >= 2">员工提交 → 绩效上级审核 → 部门负责人审核 → 员工确认 → 分管领导审核 → 目标生效</template>
+      </el-alert>
+      <p v-if="showGoalSettingReference && workflowContext.currentHandler" data-testid="goal-current-handler">当前办理人：{{ workflowContext.currentHandler.name }}</p>
       <PerformanceFormWorkspace
         :show-reference="showGoalSettingReference"
         reference-title="参考信息"
@@ -636,9 +666,10 @@ async function handleRemind() {
             :title="performanceStageCardTitle"
             :instances="task.indicatorInstances"
             :can-edit="canEditIndicators"
-            :can-confirm="requestedPerformanceStage === 'goal-confirmation' && isCurrentPerformanceStage && flowActions.canConfirmIndicator && !canEditIndicators"
+            :can-confirm="canApproveGoal && !canEditIndicators || requestedPerformanceStage === 'goal-confirmation' && isCurrentPerformanceStage && flowActions.canConfirmIndicator && !canEditIndicators"
             :can-reject="canRejectIndicators"
-            confirm-label="确认指标"
+            :confirm-message="goalVersion >= 2 ? (canApproveGoal ? '审核通过后，目标将进入下一审批节点；分管领导终审通过后目标生效。' : '员工确认后仍需分管领导审核，终审通过后目标才会生效。') : undefined"
+            :confirm-label="canApproveGoal ? '目标审核通过' : '确认指标'"
             :reject-label="rejectIndicatorLabel"
             :dept-id="task.deptId"
             :employee-id="task.employeeId"

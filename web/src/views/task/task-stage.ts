@@ -17,6 +17,8 @@ export const TASK_STATUS_STAGE: Record<TaskStatus, TaskStageKey> = {
   indicator_drafting: 'goal-setting',
   indicator_reviewing: 'goal-setting',
   indicator_setting: 'goal-setting',
+  indicator_dept_reviewing: 'goal-setting',
+  indicator_approving: 'goal-confirmation',
   indicator_confirming: 'goal-confirmation',
   goal_confirmed: 'goal-confirmation',
   self_eval: 'self-eval',
@@ -101,6 +103,7 @@ function employeeCanSubmitPeriod(period: AssessmentPeriodSummary): boolean {
 export function getEmployeeActionablePeriod(
   task: EmployeeTaskStageSource,
 ): AssessmentPeriodSummary | undefined {
+  if (['pending','indicator_drafting','indicator_reviewing','indicator_setting','indicator_dept_reviewing','indicator_confirming','indicator_approving'].includes(task.status)) return undefined;
   if (task.workflowVersion !== 2) return undefined;
   return [...(task.periods ?? [])]
     .filter(employeeCanSubmitPeriod)
@@ -217,6 +220,8 @@ export function resolveEmployeeTaskEntry(task: EmployeeTaskStageSource): Employe
   if (resultProcessingStatuses.has(task.status)) {
     return { stage: 'result', label: '结果处理中', actionLabel: '查看进度' };
   }
+  if (task.status === 'indicator_dept_reviewing') return { stage: 'goal-setting', label: '待部门负责人审核目标', actionLabel: '查看目标进度' };
+  if (task.status === 'indicator_approving') return { stage: 'goal-confirmation', label: '待分管领导审核目标', actionLabel: '查看目标进度' };
   const stage = TASK_STATUS_STAGE[task.status];
   const labels: Record<TaskStageKey, Pick<EmployeeTaskEntry, 'label' | 'actionLabel'>> = {
     'goal-setting': { label: '目标制定', actionLabel: '继续制定目标' },

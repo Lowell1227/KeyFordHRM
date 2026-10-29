@@ -281,6 +281,13 @@ describe('FlowService', () => {
   });
 
   describe('syncCycleStage 周期阶段同步', () => {
+    it.each(['indicator_dept_reviewing', 'indicator_approving'])('keeps cycle in goal stage while %s remains', async (status) => {
+      tx.$queryRaw.mockResolvedValue([{status: 'indicator_setting'}]);
+      tx.assessmentTask.groupBy.mockResolvedValue([{status, _count: {_all: 1}}, {status:'self_eval', _count:{_all:1}}]);
+      await service.syncCycleStage(tx as unknown as Prisma.TransactionClient, 'cycle-1');
+      expect(tx.assessmentCycle.updateMany).not.toHaveBeenCalled();
+    });
+
     function mockCycleStatus(status: string | null) {
       tx.$queryRaw.mockResolvedValue(status ? [{ status }] : []);
     }

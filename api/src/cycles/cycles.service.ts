@@ -213,6 +213,7 @@ export class CyclesService {
         goalSettingOpenAt,
         selfEvalOpenAt,
         workflowVersion,
+        goalWorkflowVersion: 2,
         scoringFrequency,
         ...(companyFinalApproverId && {
           companyFinalApprover: { connect: { id: companyFinalApproverId } },
@@ -1286,8 +1287,10 @@ export class CyclesService {
     const unsubmitted = count('pending', 'indicator_drafting');
     const pendingManagerReview = count('indicator_reviewing', 'indicator_setting');
     const pendingEmployeeConfirmation = count('indicator_confirming');
+    const pendingDepartmentReview = count('indicator_dept_reviewing');
+    const pendingLeaderReview = count('indicator_approving');
     const exempted = count('exempted');
-    const goalCompleted = Math.max(0, total - exempted - unsubmitted - pendingManagerReview - pendingEmployeeConfirmation);
+    const goalCompleted = Math.max(0, total - exempted - unsubmitted - pendingManagerReview - pendingEmployeeConfirmation - pendingDepartmentReview - pendingLeaderReview);
     const overdue = (
       cycle.deadlineIndicatorSetting && cycle.deadlineIndicatorSetting < new Date()
         ? unsubmitted + pendingManagerReview
@@ -1303,6 +1306,8 @@ export class CyclesService {
       unsubmitted,
       pendingManagerReview,
       pendingEmployeeConfirmation,
+      pendingDepartmentReview,
+      pendingLeaderReview,
       goalCompleted,
       exempted,
       overdue,
@@ -1376,6 +1381,8 @@ export class CyclesService {
     const actionableStatuses: string[] = [
       'indicator_drafting',
       'indicator_reviewing',
+      'indicator_dept_reviewing',
+      'indicator_approving',
       'indicator_confirming',
       'self_eval',
       'manager_scoring',

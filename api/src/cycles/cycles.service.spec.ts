@@ -129,6 +129,16 @@ describe('CyclesService', () => {
     };
   }
 
+  it('keeps department and leader goal reviews out of completed goal counts', () => {
+    const stats = (service as any).buildTaskStats({}, { indicator_dept_reviewing: 2, indicator_approving: 3, goal_confirmed: 1 });
+    expect(stats).toMatchObject({ pendingDepartmentReview: 2, pendingLeaderReview: 3, goalCompleted: 1, total: 6 });
+  });
+
+  it.each([1, 2] as const)('binds new goal workflow independently of scoring version %s', async (workflowVersion) => {
+    await service.create(quarterlyCycle({ workflowVersion }), creator);
+    expect(prisma.assessmentCycle.create.mock.calls[0][0].data).toMatchObject({ workflowVersion, goalWorkflowVersion: 2 });
+  });
+
   it('allows goal-setting deadlines before the performance period starts', async () => {
     const dto = quarterlyCycle({
       deadlineIndicatorSetting: new Date('2026-12-27T00:00:00.000Z'),

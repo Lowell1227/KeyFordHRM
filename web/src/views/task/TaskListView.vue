@@ -3,6 +3,8 @@ import { computed, nextTick, ref, onMounted, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { Calendar, DocumentChecked, RefreshLeft, Search, UserFilled } from '@element-plus/icons-vue';
+import GoalPlanList from './components/GoalPlanList.vue';
+import { canMonitorGoals, type GoalScope } from '@/api/goal-plans.api';
 import { tasksApi } from '@/api/tasks.api';
 import { cyclesApi } from '@/api/cycles.api';
 import { usersApi } from '@/api/users.api';
@@ -46,6 +48,8 @@ import { formatPerformanceCycleOption, resolvePerformanceCycle } from '@/utils/p
 const router = useRouter();
 const route = useRoute();
 const auth = useAuthStore();
+const goalView = computed(() => ['mine','review','monitor'].includes(String(route.query.goalView)) ? route.query.goalView as GoalScope : null);
+const canMonitor = computed(() => canMonitorGoals(auth.user));
 const workspaceQuery = useTaskWorkspaceQuery();
 
 const list = ref<TaskListItem[]>([]);
@@ -372,6 +376,8 @@ function detailStageState(detail: TaskDetail, stage: TeamTaskStage): TeamStageSt
     'indicator_reviewing',
     'indicator_setting',
     'indicator_confirming',
+    'indicator_dept_reviewing',
+    'indicator_approving',
     'goal_confirmed',
     'self_eval',
   ].includes(detail.status)) return 'not_started';
@@ -947,7 +953,8 @@ function handleManagerEvaluationTaskUpdated(detail: TaskDetail) {
   if (previousStageState && previousStageState !== mapped.stageState) void loadTeam();
 }
 
-onMounted(async () => {
+async function initializeWorkspace() {
+  if (goalView.value) return;
   await Promise.all([
     loadCycles(),
     isManagerCapable.value ? loadTeamRoster() : Promise.resolve(),
@@ -966,7 +973,9 @@ onMounted(async () => {
       isManagerCapable.value ? loadTeamStageSummaries() : Promise.resolve(),
     ]);
   }
-});
+}
+onMounted(initializeWorkspace);
+watch(goalView, (value) => { if (!value) void initializeWorkspace(); });
 
 watch(
   () => ({
@@ -980,7 +989,7 @@ watch(
     page: workspaceQuery.state.value.page,
   }),
   async (current, previous) => {
-    if (!previous || !taskWorkspaceReady) return;
+    if (!previous || !taskWorkspaceReady || goalView.value) return;
     const resolved = resolvePerformanceCycle(cycles.value, current.cycleId);
     const canonicalCycleId = resolved.selectedCycle?.id ?? '';
     selectedCycleId.value = canonicalCycleId;
@@ -1049,7 +1058,14 @@ watch(
 </script>
 
 <template>
-  <PerformanceWorkspace
+  <nav class="goal-plan-navigation" aria-label="目标计划视图">
+    <el-button :type="goalView === 'mine' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=mine')">我的计划</el-button>
+    <el-button :type="goalView === 'review' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=review')">待我审核</el-button>
+    <el-button v-if="canMonitor" :type="goalView === 'monitor' ? 'primary' : 'default'" @click="router.push('/tasks?goalView=monitor')">计划进度</el-button>
+    <el-button v-if="goalView" @click="router.push('/tasks')">绩效待办</el-button>
+  </nav>
+  <GoalPlanList v-if="goalView" :key="goalView" :scope="goalView" :allowed="goalView !== 'monitor' || canMonitor"/>
+  <PerformanceWorkspace v-else
     title="绩效待办"
     active-section="tasks"
     :sections="allowedPerformanceSections"
@@ -1962,3 +1978,5 @@ watch(
 
 }
 </style>
+
+<style scoped>.goal-plan-navigation{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px}.goal-plan-navigation .el-button{margin-left:0}</style>

@@ -1,3 +1,5 @@
+import { TasksService } from './tasks.service';
+import { usesFiveStepGoalWorkflow } from './goal-workflow';
 import {
   BadRequestException,
   ConflictException,
@@ -6,6 +8,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from "@nestjs/common";
 import { randomUUID } from "crypto";
 import {
@@ -129,6 +132,7 @@ export class TeamTasksService {
     private readonly prisma: PrismaService,
     private readonly flowService: FlowService,
     private readonly notificationsService: NotificationsService,
+    @Optional() private readonly tasksService?: TasksService,
   ) {}
 
   async findAll(
@@ -455,6 +459,7 @@ export class TeamTasksService {
         status: true,
         updatedAt: true,
         indicatorInstances: { select: { weight: true } },
+        cycle: {select: {goalWorkflowVersion: true}},
       },
     });
 
@@ -462,6 +467,13 @@ export class TeamTasksService {
       throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: "考核任务不存在" });
     }
 
+    if (usesFiveStepGoalWorkflow(task.cycle?.goalWorkflowVersion)) {
+      if (!this.tasksService) throw new ConflictException('目标审核服务不可用');
+      const result = action === 'approve'
+        ? await this.tasksService.approveIndicators(task.id, {expectedUpdatedAt: taskRef.updatedAt, comment}, viewer, batchId)
+        : await this.tasksService.rejectIndicators(task.id, comment, viewer, taskRef.updatedAt, batchId);
+      return result.status;
+    }
     this.assertCanReview(task, viewer);
     assertTaskVersion(task.updatedAt, taskRef.updatedAt);
     this.assertValidIndicators(task);

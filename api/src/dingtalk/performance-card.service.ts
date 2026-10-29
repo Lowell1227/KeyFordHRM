@@ -103,6 +103,8 @@ export class PerformanceCardService {
             'indicator_setting',
             'indicator_reviewing',
             'indicator_confirming',
+            'indicator_dept_reviewing',
+            'indicator_approving',
             'goal_confirmed',
           ].includes(task.status)
         ) {
@@ -240,6 +242,8 @@ export class PerformanceCardService {
             'indicator_setting',
             'indicator_reviewing',
             'indicator_confirming',
+            'indicator_dept_reviewing',
+            'indicator_approving',
           ].includes(task.status)
         ) {
           cards.push(
@@ -349,13 +353,13 @@ export class PerformanceCardService {
 
   private goal(task: TaskDetail): PerformanceCard {
     const latest = task.flowRecords.find((record) =>
-      ['indicator_setting', 'indicator_confirm'].includes(record.nodeType),
+      ['indicator_setting', 'indicator_confirm', 'indicator_dept_review', 'indicator_approval'].includes(record.nodeType),
     );
     const returned =
       task.status === 'indicator_drafting' && latest?.action === 'reject';
     const editing = task.status === 'indicator_drafting';
     const confirming = task.status === 'indicator_confirming';
-    const reviewing = ['indicator_setting', 'indicator_reviewing'].includes(
+    const reviewing = ['indicator_setting', 'indicator_reviewing', 'indicator_dept_reviewing', 'indicator_approving'].includes(
       task.status,
     );
     return this.card('goal', `task:${task.id}`, {
@@ -367,7 +371,7 @@ export class PerformanceCardService {
           : editing
             ? '待制定目标'
             : reviewing
-              ? '等待上级审核'
+              ? (task.status === 'indicator_dept_reviewing' ? '待部门负责人审核目标' : task.status === 'indicator_approving' ? '待分管领导审核目标' : '等待上级审核')
               : '查看本期目标',
       goalCount: String(task.indicatorInstances.length),
       summary: editing
@@ -375,7 +379,7 @@ export class PerformanceCardService {
         : confirming
           ? '请核对上级审核后的目标。'
           : reviewing
-            ? '等待绩效直属上级制定或审核目标。'
+            ? '目标仍在审核中，通过全部审核后生效。'
             : '请进入本期任务查看正式目标及当前状态。',
       feedbackSummary: returned ? this.short(latest?.comment) : '',
       primaryText: returned
