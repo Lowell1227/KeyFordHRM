@@ -6,6 +6,7 @@ import type { Department } from '@/types/api.types';
 import type { EmployeeArchive, EmployeeDataReview } from '@/api/employee-archives.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import ContractSubjectSelect from '@/components/common/ContractSubjectSelect.vue';
+import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSelect.vue';
 import { uploadApi } from '@/api/upload.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 
@@ -289,10 +290,10 @@ defineExpose({ submit, saveDraft, reset, isDirty });
         <el-form-item label="所属部门"><el-tree-select v-model="form.employee.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
         <el-form-item label="岗位"><el-select v-model="form.employee.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
         <el-form-item label="职级"><el-input v-model="form.employee.jobGrade" /></el-form-item>
-        <el-form-item label="职系"><el-input v-model="form.employee.jobFamily" /></el-form-item>
+          <el-form-item label="职系"><PersonnelReferenceSelect v-model="form.employee.jobFamily" kind="job_family" label="职系" /></el-form-item>
         <el-form-item label="花名册直属主管"><UserSelect v-model="form.employee.managerId" :disabled-ids="archive ? [archive.id] : []" /></el-form-item>
         <el-form-item label="绩效直属上级"><UserSelect v-model="form.performance.managerId" :disabled-ids="archive ? [archive.id] : []" /></el-form-item>
-        <el-form-item label="工作地点"><el-input v-model="form.employee.workLocation" /></el-form-item>
+          <el-form-item label="工作地点"><PersonnelReferenceSelect v-model="form.employee.workLocation" kind="work_location" label="工作地点" /></el-form-item>
         <el-form-item label="用工类型"><el-select v-model="form.employee.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
         <el-form-item label="当前状态"><el-select v-model="form.employee.employeeStatus"><el-option label="在职" value="active" /><el-option label="试用期" value="probation" /><el-option label="已离职" value="resigned" /></el-select></el-form-item>
         <el-form-item label="入职日期"><el-date-picker v-model="form.employee.entryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>

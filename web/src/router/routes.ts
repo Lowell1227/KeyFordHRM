@@ -158,20 +158,25 @@ export const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/basic-data',
+    name: 'BasicData',
+    component: () => import('@/views/admin/BasicDataView.vue'),
+    meta: { requiresAuth: true, title: '基础资料', roles: ['hr', 'system_admin'], hrCapabilities: ['employee_archive_edit', 'employee_archive_review', 'organization_edit'], navigation: { module: 'people', label: '基础资料', order: 30, group: 'people-archive', groupLabel: '人员档案' } },
+  },
+  {
     path: '/contract-subjects',
     name: 'ContractSubjects',
-    component: () => import('@/views/admin/ContractSubjectManageView.vue'),
-    meta: { requiresAuth: true, title: '合同主体维护', roles: ['hr', 'system_admin'], hrCapabilities: ['employee_archive_edit', 'employee_archive_review'], navigation: { module: 'people', label: '合同主体维护', order: 35, group: 'people-archive', groupLabel: '人员档案' } },
+    redirect: to => ({ path: '/basic-data', query: { ...to.query, tab: 'contract-subjects' } }),
+    meta: { requiresAuth: true, title: '合同主体', roles: ['hr', 'system_admin'], hrCapabilities: ['employee_archive_edit', 'employee_archive_review'] },
   },
   {
     path: '/positions',
     name: 'Positions',
-    component: () => import('@/views/admin/PositionDirectoryView.vue'),
+    redirect: to => ({ path: '/basic-data', query: { ...to.query, tab: 'positions' } }),
     meta: {
       requiresAuth: true,
       title: '岗位目录', roles: ['hr', 'system_admin'],
       hrCapabilities: ['organization_edit', 'employee_archive_edit', 'employee_archive_review'],
-      navigation: { module: 'people', label: '岗位目录', order: 30, group: 'people-archive', groupLabel: '人员档案' },
     },
   },
   {

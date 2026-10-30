@@ -38,6 +38,7 @@ import { EmployeeArchivesModule } from './employee-archives/employee-archives.mo
 import { PeriodReviewsModule } from './period-reviews/period-reviews.module';
 import { PositionsModule } from './positions/positions.module';
 import { AiProgressModule } from './ai-progress/ai-progress.module';
+import { PersonnelReferenceDataModule } from './personnel-reference-data/personnel-reference-data.module';
 
 /**
  * 根模块。
@@ -92,6 +93,7 @@ import { AiProgressModule } from './ai-progress/ai-progress.module';
     PeriodReviewsModule,
     PositionsModule,
     ContractSubjectsModule,
+    PersonnelReferenceDataModule,
     AiProgressModule,
   ],
   providers: [

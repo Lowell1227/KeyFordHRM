@@ -19,7 +19,7 @@ export class PositionsController {
   constructor(private readonly positions: PositionsService) {}
 
   @Get()
-  @HrCapabilities('employee_archive_edit', 'employee_archive_review')
+  @HrCapabilities('organization_edit', 'employee_archive_edit', 'employee_archive_review')
   findAll(@Query() query: PositionQueryDto) {
     return this.positions.findAll(query);
   }

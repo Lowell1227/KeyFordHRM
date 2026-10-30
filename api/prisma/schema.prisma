@@ -84,6 +84,13 @@ enum AccountType {
   @@map("account_type")
 }
 
+enum PersonnelReferenceDataKind {
+  work_location
+  job_family
+
+  @@map("personnel_reference_data_kind")
+}
+
 enum SysRole {
   system_admin
   hr
@@ -698,6 +705,18 @@ model EmployeeProfile {
   user User @relation(fields: [userId], references: [id], onDelete: Restrict)
 
   @@map("employee_profiles")
+}
+
+model PersonnelReferenceData {
+  id        String                     @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  kind      PersonnelReferenceDataKind
+  name      String                     @db.VarChar(100)
+  isActive  Boolean                    @default(true) @map("is_active")
+  createdAt DateTime                   @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt DateTime                   @default(now()) @map("updated_at") @db.Timestamptz(6)
+
+  @@unique([kind, name])
+  @@map("personnel_reference_data")
 }
 
 model ContractSubject {

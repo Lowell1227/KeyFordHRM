@@ -16,6 +16,7 @@ const apiResponse = (data: unknown) => ({
 
 // Legacy personnel fixtures have no maintained contract subjects.
 test.beforeEach(async ({ page }) => {
+  await page.route('**/api/v1/personnel-reference-data/**', route => route.fulfill({ json: { code: 0, message: 'success', data: [] } }));
   await page.route('**/api/v1/contract-subjects**', route => route.fulfill({ json: apiResponse([]) }));
 });
 

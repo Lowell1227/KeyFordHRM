@@ -8,7 +8,12 @@ import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
 import BusinessListPage from '@/components/common/business-list/BusinessListPage.vue';
+import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSelect.vue';
+import { useAuthStore } from '@/stores/auth.store';
 
+const auth = useAuthStore();
+const canMaintain = computed(() => auth.user?.sysRole === 'hr' || auth.user?.sysRole === 'system_admin'
+  || (auth.user?.sysRole === 'hr_user' && Boolean(auth.user.hrCapabilities?.includes('organization_edit'))));
 const items = ref<PositionRecord[]>([]);
 const loading = ref(false);
 const keyword = ref('');
@@ -68,32 +73,32 @@ onMounted(load);
   <BusinessListPage variant="record" :loading="loading" class="position-directory">
     <template #workspace>
     <ChartCard class="list-page-header-card">
-      <template #extra><el-button type="primary" @click="openCreate">新增岗位</el-button></template>
+      <template #extra><el-button v-if="canMaintain" type="primary" @click="openCreate">新增岗位</el-button></template>
       <QueryFilterPanel>
-        <div class="position-filter"><el-input v-model="keyword" placeholder="搜索岗位或岗位族" clearable @keyup.enter="search" /><el-checkbox v-model="includeInactive" @change="search">含已停用</el-checkbox><el-button type="primary" @click="search">查询</el-button></div>
+        <div class="position-filter"><el-input v-model="keyword" placeholder="搜索岗位或职系" clearable @keyup.enter="search" /><el-checkbox v-model="includeInactive" @change="search">含已停用</el-checkbox><el-button type="primary" @click="search">查询</el-button></div>
       </QueryFilterPanel>
     </ChartCard>
     <ChartCard :padded="false" class="list-result-card">
       <div class="desktop-result-table">
       <el-table v-loading="loading" :data="pagedItems" height="100%" class="app-table">
-        <el-table-column prop="name" label="岗位名称" min-width="180" /><el-table-column prop="jobFamily" label="岗位族" min-width="180"><template #default="{ row }">{{ row.jobFamily || '未分类' }}</template></el-table-column>
+        <el-table-column prop="name" label="岗位名称" min-width="180" /><el-table-column prop="jobFamily" label="职系" min-width="180"><template #default="{ row }">{{ row.jobFamily || '未分类' }}</template></el-table-column>
         <el-table-column prop="activeEmployeeCount" label="在职人数" width="110" /><el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="row.isActive ? 'success' : 'info'">{{ row.isActive ? '启用' : '已停用' }}</el-tag></template></el-table-column>
-        <el-table-column label="操作" width="160"><template #default="{ row }"><el-button link type="primary" @click="openEdit(row as PositionRecord)">编辑</el-button><el-button v-if="row.isActive" link type="danger" @click="deactivate(row as PositionRecord)">停用</el-button></template></el-table-column>
+        <el-table-column v-if="canMaintain" label="操作" width="160"><template #default="{ row }"><el-button link type="primary" @click="openEdit(row as PositionRecord)">编辑</el-button><el-button v-if="row.isActive" link type="danger" @click="deactivate(row as PositionRecord)">停用</el-button></template></el-table-column>
       </el-table>
       </div>
       <div v-loading="loading" class="mobile-result-list">
         <MobileResultCard v-for="item in pagedItems" :key="item.id">
           <template #title>{{ item.name }}</template>
           <template #status><el-tag :type="item.isActive ? 'success' : 'info'" size="small">{{ item.isActive ? '启用' : '已停用' }}</el-tag></template>
-          <div class="mobile-result-field"><span class="mobile-result-field__label">岗位族</span><span class="mobile-result-field__value">{{ item.jobFamily || '未分类' }}</span></div>
+          <div class="mobile-result-field"><span class="mobile-result-field__label">职系</span><span class="mobile-result-field__value">{{ item.jobFamily || '未分类' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">在职人数</span><span class="mobile-result-field__value">{{ item.activeEmployeeCount }}</span></div>
-          <template #actions><el-button link type="primary" @click="openEdit(item)">编辑</el-button><el-button v-if="item.isActive" link type="danger" @click="deactivate(item)">停用</el-button></template>
+          <template v-if="canMaintain" #actions><el-button link type="primary" @click="openEdit(item)">编辑</el-button><el-button v-if="item.isActive" link type="danger" @click="deactivate(item)">停用</el-button></template>
         </MobileResultCard>
       </div>
       <ListPagination v-model:current-page="page" v-model:page-size="pageSize" :total="items.length" />
     </ChartCard>
     <BusinessDetailDrawer v-model="dialog.visible" :title="dialog.editingId ? '编辑岗位' : '新增岗位'" variant="standard" :saving="dialog.saving">
-      <el-form label-position="top"><el-form-item label="岗位名称"><el-input v-model="dialog.name" /></el-form-item><el-form-item label="岗位族"><el-input v-model="dialog.jobFamily" placeholder="选填，例如销售、供应链、职能" /></el-form-item></el-form>
+      <el-form label-position="top"><el-form-item label="岗位名称"><el-input v-model="dialog.name" /></el-form-item><el-form-item label="职系"><PersonnelReferenceSelect v-model="dialog.jobFamily" kind="job_family" label="职系" /></el-form-item></el-form>
       <template #footer><el-button @click="dialog.visible = false">取消</el-button><el-button type="primary" :loading="dialog.saving" @click="submit">提交审核</el-button></template>
     </BusinessDetailDrawer>
     </template>

@@ -61,6 +61,18 @@ async function setupPersonnelPage(page: Page, options: {
   const createBodies: Array<Record<string, any>> = [];
   const archivedDraftIds: string[] = [];
   const events: string[] = [];
+  const referenceRows: Record<string, Array<Record<string, unknown>>> = {
+    job_family: [{ id: 'family-hr', kind: 'job_family', name: '人力资源', isActive: true }], work_location: [],
+  };
+  await page.route('**/api/v1/personnel-reference-data/**', route => {
+    const kind = new URL(route.request().url()).pathname.split('/').at(-1)!;
+    if (route.request().method() === 'POST') {
+      const row = { id: `reference-${kind}`, kind, name: route.request().postDataJSON().name, isActive: true };
+      referenceRows[kind]!.push(row);
+      return route.fulfill({ json: response(row) });
+    }
+    return route.fulfill({ json: response(referenceRows[kind] ?? []) });
+  });
   let currentDraft: Record<string, any> | null = options.initialDraft ?? null;
   await page.addInitScript(() => {
     localStorage.setItem('token', 'mock-hr-token');
@@ -166,10 +178,22 @@ for (const width of [1440, 390]) {
     const subjectField = drawer.locator('.el-form-item').filter({ has: page.getByText('所属公司（合同主体）', { exact: true }) });
     await subjectField.getByRole('combobox').click();
     await page.getByRole('option', { name: '合成任职主体有限公司' }).click();
-    await expect(subjectField.getByRole('link', { name: '维护主体（新窗口）' })).toHaveAttribute('target', '_blank');
+    await subjectField.getByRole('combobox').click();
+    await expect(page.getByRole('link', { name: '管理合同主体' }).filter({ visible: true })).toHaveAttribute('target', '_blank');
+    await expect(page.getByRole('link', { name: '管理合同主体' }).filter({ visible: true })).toHaveAttribute('href', '/basic-data?tab=contract-subjects');
     subjects = [...subjects, { id: 'subject-c', name: '刚新增的合成主体', isActive: true }];
-    await subjectField.getByRole('button', { name: '刷新主体' }).click();
+    await page.getByRole('button', { name: '刷新选项', exact: true }).filter({ visible: true }).click();
+    await page.keyboard.press('Escape');
     await expect(subjectField.getByText('合成任职主体有限公司 · 已关联')).toBeVisible();
+    await drawer.locator('.el-form-item').filter({ has: page.getByText('职系', { exact: true }) }).getByRole('combobox').click();
+    await page.getByRole('option', { name: '人力资源', exact: true }).click();
+    await drawer.locator('.el-form-item').filter({ has: page.getByText('工作地点', { exact: true }) }).getByRole('combobox').click();
+    await page.getByRole('button', { name: '新增工作地点', exact: true }).click();
+    const quickCreate = page.getByRole('dialog', { name: '新增工作地点', exact: true });
+    await quickCreate.getByRole('textbox', { name: '工作地点名称', exact: true }).fill('合成就近新增办公点');
+    await quickCreate.getByRole('button', { name: '保存并选用', exact: true }).click();
+    await expect(quickCreate).not.toBeVisible();
+    await expect(drawer.getByText('合成就近新增办公点', { exact: true }).filter({ visible: true })).toBeVisible();
     await drawer.getByRole('button', { name: '下一步', exact: true }).click();
     await drawer.getByRole('button', { name: '合同与附件', exact: true }).click();
     await drawer.getByRole('button', { name: '新增合同', exact: true }).click();
@@ -178,6 +202,8 @@ for (const width of [1440, 390]) {
     await page.getByRole('option', { name: '合成合同主体有限公司' }).click();
     await drawer.getByRole('button', { name: '保存并退出', exact: true }).click();
     await expect.poll(() => state.draftBodies.at(-1)?.employee.contractSubjectId).toBe('subject-a');
+    await expect.poll(() => state.draftBodies.at(-1)?.employee.workLocation).toBe('合成就近新增办公点');
+    await expect.poll(() => state.draftBodies.at(-1)?.employee.jobFamily).toBe('人力资源');
     expect(state.draftBodies.at(-1)?.contracts[0].contractSubjectId).toBe('subject-b');
     expect(state.draftBodies.at(-1)?.employee.company).toBe('fuede');
     await page.getByRole('tab', { name: '草稿', exact: true }).click();
@@ -248,7 +274,9 @@ for (const linked of [false, true]) {
     await drawer.getByRole('button', { name: '编辑档案', exact: true }).click();
     const field = drawer.locator('.el-form-item').filter({ has: page.getByText('所属公司（合同主体）', { exact: true }) });
     await expect(field.getByText(linked ? '冻结的任职名称 · 已关联，主体已停用' : '冻结的任职名称 · 原记录，尚未关联')).toBeVisible();
-    await field.getByRole('button', { name: '刷新主体' }).click();
+    await field.getByRole('combobox').click();
+    await page.getByRole('button', { name: '刷新选项', exact: true }).filter({ visible: true }).click();
+    await page.keyboard.press('Escape');
     await drawer.getByLabel('姓名', { exact: true }).fill('合成档案更名');
     await drawer.getByRole('button', { name: '提交审核', exact: true }).click();
     await expect.poll(() => submitted?.employee.name).toBe('合成档案更名');

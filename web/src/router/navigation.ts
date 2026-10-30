@@ -49,7 +49,7 @@ export function canAccessRoute(
   if (hrCapabilities?.length) {
     return Boolean(
       roles?.includes(user.sysRole)
-      || hrCapabilities.some((item) => user.hrCapabilities?.includes(item)),
+      || (user.sysRole === 'hr_user' && hrCapabilities.some((item) => user.hrCapabilities?.includes(item))),
     );
   }
   return !roles || roles.includes(user.sysRole);

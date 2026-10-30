@@ -15,6 +15,7 @@ import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import { uploadApi } from '@/api/upload.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import ContractSubjectSelect from '@/components/common/ContractSubjectSelect.vue';
+import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSelect.vue';
 import type { Department } from '@/types/api.types';
 import PersonnelProcessTimeline from './PersonnelProcessTimeline.vue';
 
@@ -581,8 +582,8 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
             <el-form-item label="岗位"><el-select v-model="form.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
             <el-form-item label="岗位名称"><el-input v-model="form.employee.position" placeholder="选择岗位后自动带入" /></el-form-item>
             <el-form-item label="职级"><el-input v-model="form.employee.jobGrade" /></el-form-item>
-            <el-form-item label="职系"><el-input v-model="form.employee.jobFamily" placeholder="选择岗位后自动带入" /></el-form-item>
-            <el-form-item label="工作地点"><el-input v-model="form.employee.workLocation" /></el-form-item>
+            <el-form-item label="职系"><PersonnelReferenceSelect v-model="form.employee.jobFamily" kind="job_family" label="职系" placeholder="选择岗位后自动带入，也可选择其他职系" /></el-form-item>
+            <el-form-item label="工作地点"><PersonnelReferenceSelect v-model="form.employee.workLocation" kind="work_location" label="工作地点" /></el-form-item>
             <el-form-item label="用工类型"><el-select v-model="form.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
             <el-form-item label="员工状态"><el-select v-model="form.employeeStatus"><el-option label="试用期" value="probation" /><el-option label="在职" value="active" /></el-select></el-form-item>
             <el-form-item label="入职日期"><el-date-picker v-model="form.entryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
