@@ -181,7 +181,12 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
         );
         return;
       }
-      if (body.text.content === '档案测试' || body.text.content === '档案帮助') {
+      const command = body.text.content.trim();
+      if (command.startsWith('档案测试') || command.startsWith('档案帮助')) {
+        if (command !== '档案测试' && command !== '档案帮助') {
+          await this.cards.sendBusinessReply('请仅发送“档案测试”或“档案帮助”，不要附带人员资料；本次试用只提供虚构样例。', sender);
+          return;
+        }
         try {
           // prepare revalidates the single pilot, live capability, gate and binding without writes.
           const preview = await this.archives.prepare(identity.viewer, sender);
@@ -191,7 +196,7 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
           const url = new URL(preview.url, origin.origin);
           if (url.origin !== origin.origin || !url.pathname.startsWith('/archive-assistant/preview/'))
             throw new Error('Invalid preview path');
-          await this.cards.sendBusinessReply(body.text.content === '档案帮助'
+          await this.cards.sendBusinessReply(command === '档案帮助'
             ? '档案助手仅供本人使用虚构样例试用。发送“档案测试”获取预览；预览不会保存，需本人登录HRM后点击“保存待核草稿”。测试草稿不能提交或审批。'
             : `虚构测试资料已准备，尚未保存。请登录本人HRM账号核对，点击“保存待核草稿”后才会接收：${url.href}`, sender);
         } catch {

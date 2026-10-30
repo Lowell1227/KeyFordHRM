@@ -268,6 +268,50 @@ describe('DingTalk Stream progress adapter', () => {
     expect(requests[0].body.userIds).toEqual(['staff']);
     expect(requests[0].body.msgParam).toContain(command === '档案测试' ? 'https://hrm.example/archive-assistant/preview/' : '预览不会保存');
   });
+  it.each([
+    ['  档案测试  ', 'https://hrm.example/archive-assistant/preview/'],
+    ['\n\t档案帮助\r\n', '预览不会保存'],
+  ])('normalizes surrounding whitespace for archive command %j', async (content, expected) => {
+    await startGateway();
+    await receive(message({ text: { content } }));
+    expect(archives.prepare).toHaveBeenCalledWith({ id: 'owner' }, sender);
+    expect(performance.query).not.toHaveBeenCalled();
+    expect(progress.prepare).not.toHaveBeenCalled();
+    expect(progressUpdate.create).not.toHaveBeenCalled();
+    expect(requests[0].body.msgParam).toContain(expected);
+  });
+  it.each([
+    '档案测试 附加资料标记', '档案测试\n附加资料标记', ' 档案测试附加资料标记 ',
+    '档案帮助 附加资料标记', '\t档案帮助\n附加资料标记', '档案帮助附加资料标记',
+  ])('rejects archive command extra material without recognition or echo: %j', async content => {
+    await startGateway();
+    await receive(message({ text: { content } }));
+    expect(archives.prepare).not.toHaveBeenCalled();
+    expect(performance.query).not.toHaveBeenCalled();
+    expect(progress.prepare).not.toHaveBeenCalled();
+    expect(progressUpdate.create).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(1);
+    expect(requests[0].body.userIds).toEqual(['staff']);
+    expect(requests[0].body.msgParam).toContain('请仅发送');
+    expect(JSON.stringify(requests)).not.toContain('附加资料标记');
+  });
+  it('preserves unrelated progress text mentioning archives', async () => {
+    const content = '本月已完成档案整理12份';
+    await startGateway();
+    await receive(message({ text: { content } }));
+    expect(performance.query).toHaveBeenCalledWith(content, sender);
+    expect(progress.prepare).toHaveBeenCalledWith(content, sender);
+    expect(archives.prepare).not.toHaveBeenCalled();
+  });
+  it.each([{ conversationType: '2' }, { senderStaffId: 'excluded' }])('does not reply to excluded archive extra-input sender %j', async changes => {
+    eligibility.resolveIdentity.mockImplementation(async (s: any) => s.senderStaffId === 'excluded' ? { kind: 'reply' } : { kind: 'ready', viewer: { id: 'owner' } });
+    await startGateway();
+    await receive(message({ ...changes, text: { content: '档案测试\n附加资料标记' } }));
+    expect(archives.prepare).not.toHaveBeenCalled();
+    expect(performance.query).not.toHaveBeenCalled();
+    expect(progress.prepare).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(0);
+  });
   it('rechecks outbound archive recipient after prepare revokes admission', async () => {
     archives.prepare.mockImplementation(async () => {
       eligibility.resolveIdentity.mockResolvedValue({ kind: 'reply' });
