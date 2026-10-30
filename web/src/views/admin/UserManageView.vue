@@ -1595,8 +1595,7 @@ onBeforeUnmount(() => {
       <template #extra>
           <div class="page-title__actions">
             <template v-if="activeView === 'org'">
-              <el-button v-if="canEditOrganization" @click="openDepartmentCreate(null)">新增一级部门</el-button>
-              <el-button v-if="canEditOrganization && selectedDept && !selectedOrgIsUnassigned" type="primary" @click="openDepartmentCreate(selectedDept)">新增下级部门</el-button>
+              <el-button v-if="canEditOrganization" type="primary" @click="openDepartmentCreate(selectedOrgIsUnassigned ? null : selectedDept)">新增部门</el-button>
             </template>
             <template v-else-if="activeView === 'users'">
               <el-button
@@ -2365,6 +2364,7 @@ onBeforeUnmount(() => {
     <DepartmentCreateDrawer
       v-model="departmentCreateDrawer.visible"
       :parent="departmentCreateDrawer.parent"
+      :departments="flattenedDepartments"
       @submitted="loadDepartments"
     />
 
@@ -2424,7 +2424,7 @@ onBeforeUnmount(() => {
       @click.stop
     >
       <button type="button" @click="openDepartmentEdit(departmentContextMenu.department!)">编辑</button>
-      <button type="button" @click="openDepartmentCreate(departmentContextMenu.department!)">新增下级部门</button>
+      <button type="button" @click="openDepartmentCreate(departmentContextMenu.department!)">新增部门</button>
       <button type="button" @click="openDepartmentMerge(departmentContextMenu.department!)">合并到…</button>
       <button type="button" class="is-danger" @click="removeDepartment(departmentContextMenu.department!)">停用</button>
     </div>

@@ -316,3 +316,49 @@ test('department context menu uses the full edit drawer and unassigned people ca
     userIds: ['employee-1', 'employee-2'], departmentId: 'dept-1',
   });
 });
+
+test('one department action defaults to the selected parent and can create a top-level department', async ({ page }) => {
+  const departments = [{
+    id: 'dept-1', name: '项目中心', fullPath: '项目中心', parentId: null, company: 'fuede',
+    sortOrder: 1, isActive: true, children: [],
+  }];
+  const submitted: Array<{ name: string; parentId: string | null; company?: string }> = [];
+  await page.addInitScript(() => {
+    localStorage.setItem('token', 'mock-admin-token');
+    localStorage.setItem('expiresAt', String(Date.now() + 600_000));
+  });
+  await page.route('**/api/v1/notifications/unread-count', (route) => route.fulfill({ json: apiResponse(0) }));
+  await page.route('**/api/v1/auth/me', (route) => route.fulfill({ json: apiResponse({
+    id: 'admin-1', name: '系统管理员', sysRole: 'system_admin', canViewAll: true,
+  }) }));
+  await page.route('**/api/v1/positions**', (route) => route.fulfill({ json: apiResponse([]) }));
+  await page.route('**/api/v1/departments**', (route) => {
+    if (route.request().method() === 'POST') {
+      submitted.push(route.request().postDataJSON());
+      return route.fulfill({ json: apiResponse({ id: `change-${submitted.length}`, status: 'pending' }) });
+    }
+    return route.fulfill({ json: apiResponse(departments) });
+  });
+  await page.route('**/api/v1/users**', (route) => route.fulfill({ json: apiResponse({ items: [], total: 0, page: 1, pageSize: 8 }) }));
+
+  await page.goto('/organization');
+  const action = page.locator('.page-title__actions').getByRole('button', { name: '新增部门', exact: true });
+  await expect(action).toHaveCount(1);
+  await action.click();
+  const drawer = page.getByRole('dialog', { name: '新增部门' });
+  const parentField = drawer.locator('.el-form-item').filter({ hasText: '上级部门' });
+  await expect(parentField).toContainText('项目中心');
+  await drawer.getByRole('textbox', { name: '部门名称' }).fill('实施组');
+  await drawer.getByRole('button', { name: '提交审核' }).click();
+  await expect.poll(() => submitted[0]).toEqual({ name: '实施组', parentId: 'dept-1' });
+
+  await page.setViewportSize({ width: 390, height: 844 });
+  await action.click();
+  await expect(drawer.getByRole('button', { name: '提交审核' })).toBeInViewport();
+  await expect.poll(() => drawer.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(true);
+  await parentField.getByRole('combobox').click();
+  await page.locator('.el-select-dropdown:visible').getByText('无（一级部门）', { exact: true }).click();
+  await drawer.getByRole('textbox', { name: '部门名称' }).fill('新事业部');
+  await drawer.getByRole('button', { name: '提交审核' }).click();
+  await expect.poll(() => submitted[1]).toEqual({ name: '新事业部', parentId: null, company: 'fuede' });
+});
