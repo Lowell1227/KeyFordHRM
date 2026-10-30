@@ -93,6 +93,14 @@ export class EmployeeArchivesService {
     if (phone && !/^1\d{10}$/.test(phone)) throw new BadRequestException('请填写完整的手机号，或清空后补充');
     if (idNumber && !/^(?:\d{15}|\d{17}[\dX])$/.test(idNumber)) throw new BadRequestException('请填写完整的身份证号，或清空后补充');
     return this.prisma.$transaction(async (tx) => {
+      const sourceDraft = input.draftId ? await tx.employeeDataChangeRequest.findFirst({
+        where: { id: input.draftId, sourceType: 'manual_employee_create',
+          OR: [{ recordStatus: 'draft' }, { profileReviewStatus: 'rejected' }], archivedAt: null },
+        select: { id: true, proposedValue: true, requestVersion: true, userId: true, employeeNo: true,
+          profileReviewStatus: true, recordStatus: true, revisionHistory: true, rejectedReason: true, updatedAt: true,
+          sourceSystem: true, validationWarnings: true },
+      }) : null;
+      if (sourceDraft?.sourceSystem === 'archive_assistant_pilot') throw new BadRequestException('测试资料仅可保存待核草稿');
       const name = input.name.trim();
       const department = await tx.department.findUnique({
         where: { id: input.deptId },
@@ -123,17 +131,7 @@ export class EmployeeArchivesService {
       let draftVersion: number | null = null;
       let savedDraft: Record<string, any> | null = null;
       if (input.draftId) {
-        const draft = await tx.employeeDataChangeRequest.findFirst({
-          where: {
-            id: input.draftId,
-            sourceType: 'manual_employee_create',
-            OR: [{ recordStatus: 'draft' }, { profileReviewStatus: 'rejected' }],
-            archivedAt: null,
-          },
-          select: { id: true, proposedValue: true, requestVersion: true, userId: true, employeeNo: true,
-            profileReviewStatus: true, recordStatus: true, revisionHistory: true, rejectedReason: true, updatedAt: true,
-            sourceSystem: true, validationWarnings: true },
-        });
+        const draft = sourceDraft;
         if (!draft) {
           throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
         }
@@ -218,6 +216,12 @@ export class EmployeeArchivesService {
   }
 
   async saveEmployeeCreateDraft(input: SaveEmployeeCreateDraftDto, operator: AuthUser) {
+    return this.prisma.$transaction(tx => this.saveEmployeeCreateDraftWithClient(tx, input, operator));
+  }
+
+  /** Internal trusted reception only; source metadata is never accepted by public draft DTOs. */
+  async saveEmployeeCreateDraftWithClient(tx: Prisma.TransactionClient, input: SaveEmployeeCreateDraftDto, operator: AuthUser,
+    source?: { sourceSystem: string; sourceReference: string; validationWarnings: Prisma.InputJsonValue[] }) {
     let employeeNo: string | null = null;
     const employeeName = input.name?.trim() || '未命名员工草稿';
     let proposed = this.employeeCreateProposedValue(input, null);
@@ -226,7 +230,6 @@ export class EmployeeArchivesService {
       currentStep: input.draftStep ?? 0,
       completedSteps: [...new Set(input.completedSteps ?? [])].sort((a, b) => a - b),
     };
-    return this.prisma.$transaction(async (tx) => {
       let draftVersion: number | null = null;
       let savedDraft: Record<string, any> | null = null;
       if (input.draftId) {
@@ -239,12 +242,16 @@ export class EmployeeArchivesService {
           },
           select: { id: true, proposedValue: true, requestVersion: true, userId: true, employeeNo: true,
             profileReviewStatus: true, recordStatus: true, revisionHistory: true, rejectedReason: true, updatedAt: true,
-            sourceSystem: true, validationWarnings: true },
+            sourceSystem: true, validationWarnings: true, baseValue: true },
         });
         if (!draft) {
           throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
         }
         if (draft.userId || draft.profileReviewStatus === 'approved') throw new ConflictException('员工主档已经建立，请在原档案中继续维护');
+        if (draft.sourceSystem === 'archive_assistant_pilot') {
+          const owner = await tx.employeeDataChangeRequest.findUnique({ where: { id: draft.id }, select: { createdById: true } });
+          if (owner?.createdById !== operator.id) throw new ConflictException('请由原接收人维护测试草稿');
+        }
         savedDraft = draft;
         employeeNo = draft.employeeNo ?? null;
         proposed = this.preserveSensitiveProfile(proposed, draft.proposedValue);
@@ -260,12 +267,15 @@ export class EmployeeArchivesService {
         employeeNo,
         employeeName,
         sourceType: 'manual_employee_create',
-        baseValue: this.toJson({ employee: {}, profile: {}, contracts: [], performance: { managerId: null } }),
+        ...(savedDraft?.sourceSystem === 'archive_assistant_pilot' ? {} : {
+          baseValue: this.toJson({ employee: {}, profile: {}, contracts: [], performance: { managerId: null } }),
+        }),
         proposedValue,
         profileReviewStatus: 'pending',
         performanceReviewStatus: performanceManagerId ? 'pending' : 'not_required',
         validationErrors: this.toJson([]),
-        validationWarnings: this.toJson(this.sourceDraftWarnings(savedDraft, [])),
+        validationWarnings: this.toJson(this.sourceDraftWarnings(savedDraft, source?.validationWarnings ?? [])),
+        ...(source ? { sourceSystem: source.sourceSystem, sourceReference: source.sourceReference } : {}),
         createdById: operator.id,
         recordStatus: 'draft',
         archivedAt: null,
@@ -293,7 +303,6 @@ export class EmployeeArchivesService {
         });
       }
       return employeeDataChangeView(request);
-    });
   }
 
   private employeeCreateProposedValue(
@@ -563,6 +572,8 @@ export class EmployeeArchivesService {
     const where: Prisma.EmployeeDataChangeRequestWhereInput = {
       recordStatus: 'draft',
       archivedAt: null,
+      OR: [{ sourceSystem: null }, { sourceSystem: { not: 'archive_assistant_pilot' } },
+        ...(operator ? [{ sourceSystem: 'archive_assistant_pilot', createdById: operator.id }] : [])],
     };
     const [items, total] = await Promise.all([
       this.prisma.employeeDataChangeRequest.findMany({
@@ -800,7 +811,7 @@ export class EmployeeArchivesService {
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
-  async getApplication(id: string) {
+  async getApplication(id: string, operator?: AuthUser) {
     const [request, events] = await Promise.all([
       this.prisma.employeeDataChangeRequest.findUnique({ where: { id },
         include: { createdBy: { select: { id: true, name: true, sysRole: true } },
@@ -814,6 +825,7 @@ export class EmployeeArchivesService {
       }),
     ]);
     if (!request) throw new NotFoundException('申请不存在');
+    if (request.sourceSystem === 'archive_assistant_pilot' && request.createdById !== operator?.id) throw new NotFoundException('申请不存在');
     const [enriched] = await this.enrichChangeNames([request]);
     return { ...employeeDataChangeView(enriched), events: employeeDataChangeView(events), canResume: this.canResumeApplication(request),
       canCancel: !request.cancelledAt && (request.profileReviewStatus === 'pending' || request.performanceReviewStatus === 'pending'

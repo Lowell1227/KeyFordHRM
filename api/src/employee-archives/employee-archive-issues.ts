@@ -10,7 +10,7 @@ export interface ArchiveIssue {
   confirmBlockedReason?: string; fingerprint: string;
   maintenance: { employeeId?: string; requestId: string; draft: boolean };
 }
-export const archiveIssueSourceSystems = ['roster_initialization', 'roster_reconcile_20261030'];
+export const archiveIssueSourceSystems = ['roster_initialization', 'roster_reconcile_20261030', 'archive_assistant_pilot'];
 const object = (value: unknown): RecordValue => value && typeof value === 'object' && !Array.isArray(value) ? value : {};
 const present = (value: unknown): boolean => value != null && (typeof value !== 'string' || value.trim() !== '');
 const sensitive = (field: string) => /phone|idNumber|bankAccount|password|secret|token|encrypted|fingerprint/i.test(field);

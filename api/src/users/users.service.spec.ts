@@ -236,7 +236,7 @@ describe('UsersService', () => {
       const result = await service.findAll(query, hr);
       expect(result.items[0]).toHaveProperty('archiveWarnings', [{ field: 'profile.phone', message: '联系电话待补充' }]);
       expect(prisma.employeeDataChangeRequest.findMany).toHaveBeenCalledWith(expect.objectContaining({
-        where: expect.objectContaining({ userId: { in: ['employee-1'] }, sourceSystem: { in: ['roster_initialization', 'roster_reconcile_20261030'] },
+        where: expect.objectContaining({ userId: { in: ['employee-1'] }, sourceSystem: { in: ['roster_initialization', 'roster_reconcile_20261030', 'archive_assistant_pilot'] },
           profileReviewStatus: 'approved', appliedAt: { not: null } }),
       }));
       expect(prisma.user.findMany.mock.calls[0][0].where.AND).toEqual([{ deptId: 'dept-1' }]);

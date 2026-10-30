@@ -1,4 +1,6 @@
 import { Module } from '@nestjs/common';
+import { ArchiveAssistantController } from './archive-assistant.controller';
+import { ArchiveAssistantService } from './archive-assistant.service';
 import { PrismaModule } from '@/prisma/prisma.module';
 import { EmployeeArchivesController } from './employee-archives.controller';
 import { EmployeeArchivesService } from './employee-archives.service';
@@ -15,8 +17,9 @@ import { EmployeeArchiveIssuesService } from './employee-archive-issues.service'
 
 @Module({
   imports: [PrismaModule],
-  controllers: [EmployeeArchiveIssuesController, EmployeeArchivesController],
+  controllers: [ArchiveAssistantController, EmployeeArchiveIssuesController, EmployeeArchivesController],
   providers: [
+    ArchiveAssistantService,
     EmployeeArchivesService,
     EmployeeRosterImportService,
     EmployeeRosterImportClosedGuard,
@@ -29,6 +32,7 @@ import { EmployeeArchiveIssuesService } from './employee-archive-issues.service'
     EmployeeArchiveIssuesService,
   ],
   exports: [
+    ArchiveAssistantService,
     EmployeeArchivesService,
     EmployeeDataReviewsService,
     EmployeeEffectiveDateService,

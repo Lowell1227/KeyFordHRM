@@ -282,6 +282,7 @@ export class EmployeeDataReviewsService {
         if (!request) {
           throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '审核记录不存在' });
         }
+        if (request.sourceSystem === 'archive_assistant_pilot') throw new BadRequestException('测试资料仅可保存待核草稿');
         if (request.recordStatus === 'draft') {
           throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿尚未提交审核' });
         }

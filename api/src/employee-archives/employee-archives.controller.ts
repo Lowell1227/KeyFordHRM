@@ -208,8 +208,8 @@ export class EmployeeArchivesController {
 
   @Get('applications/:id')
   @HrCapabilities('employee_archive_edit', 'employee_archive_review')
-  getApplication(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
-    return this.archives.getApplication(id);
+  getApplication(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() operator: AuthUser) {
+    return this.archives.getApplication(id, operator);
   }
 
   @Post('applications/:id/cancel')

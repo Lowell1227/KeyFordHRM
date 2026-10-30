@@ -1521,10 +1521,12 @@ describe('EmployeeArchivesService', () => {
       items: [], total: 0, page: 1, pageSize: 20,
     });
     expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
-      where: { recordStatus: 'draft', archivedAt: null },
+      where: expect.objectContaining({ recordStatus: 'draft', archivedAt: null,
+        OR: [{ sourceSystem: null }, { sourceSystem: { not: 'archive_assistant_pilot' } }] }),
     }));
     expect(count).toHaveBeenCalledWith({
-      where: { recordStatus: 'draft', archivedAt: null },
+      where: expect.objectContaining({ recordStatus: 'draft', archivedAt: null,
+        OR: [{ sourceSystem: null }, { sourceSystem: { not: 'archive_assistant_pilot' } }] }),
     });
   });
 

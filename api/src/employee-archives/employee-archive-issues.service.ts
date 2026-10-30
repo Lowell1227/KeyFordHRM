@@ -50,6 +50,7 @@ export class EmployeeArchiveIssuesService {
     this.assertAccess(operator);
     const request = await this.prisma.employeeDataChangeRequest.findUnique({ where: { id: requestId } });
     if (!request || request.archivedAt || request.cancelledAt) throw new NotFoundException('档案问题记录不存在');
+    if (request.sourceSystem === 'archive_assistant_pilot' && request.createdById !== operator.id) throw new NotFoundException('档案问题记录不存在');
     const user = await this.userFacts(this.prisma, request.userId);
     return { items: this.visibleIssues(request, user, operator) };
   }
