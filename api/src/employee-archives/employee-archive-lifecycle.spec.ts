@@ -32,7 +32,8 @@ describe('employee draft and archive lifecycle', () => {
 
   it('reports mixed batch restoration separately without losing successful items', async () => {
     const updateMany = jest.fn().mockResolvedValueOnce({ count: 1 }).mockResolvedValueOnce({ count: 0 });
-    const tx = { employeeDataChangeRequest: { updateMany }, auditLog: { create: jest.fn() } };
+    const findUnique = jest.fn(async ({ where }: any) => ({ id: where.id, sourceSystem: null, createdById: operator.id }));
+    const tx = { employeeDataChangeRequest: { findUnique, updateMany }, auditLog: { create: jest.fn() } };
     const db = { $transaction: (run: any) => run(tx) };
     const result = await new EmployeeArchivesService(db as any).restoreRecords(['d1', 'd2'], operator, 'draft');
     expect(result).toMatchObject({ restored: 1, succeeded: [{ id: 'd1' }], failed: [{ id: 'd2' }] });
