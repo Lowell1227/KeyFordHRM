@@ -449,6 +449,12 @@ export const routes: RouteRecordRaw[] = [
     meta: { requiresAuth: true, title: '目标地图', activeNavigationPath: '/tasks' },
   },
   {
+    path: '/archive-assistant/preview/:sourceReference',
+    name: 'ArchiveAssistantPreview',
+    component: () => import('@/views/employee-archives/ArchiveAssistantPreviewView.vue'),
+    meta: { requiresAuth: true, title: '档案资料预览', roles: ['hr', 'system_admin'], hrCapabilities: ['employee_archive_edit'], activeNavigationPath: '/users' },
+  },
+  {
     path: '/ai-progress/confirm/:draftId',
     name: 'AiProgressConfirm',
     component: () => import('@/views/ai-progress/AiProgressConfirmView.vue'),

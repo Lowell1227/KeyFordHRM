@@ -106,6 +106,7 @@ describe('DingTalk Stream progress adapter', () => {
   let progressUpdate: any;
   let progress: any;
   let performance: any;
+  let archives: any;
   let presenter: DingtalkCardPresenter;
   let gateway: DingtalkBotGateway;
   let requests: any[];
@@ -204,6 +205,7 @@ describe('DingTalk Stream progress adapter', () => {
       eligibility,
     );
     performance = { query: jest.fn().mockResolvedValue(null) };
+    archives = { prepare: jest.fn().mockResolvedValue({ url: '/archive-assistant/preview/event#preview=signed' }) };
     gateway = new DingtalkBotGateway(
       config,
       eligibility,
@@ -211,6 +213,7 @@ describe('DingTalk Stream progress adapter', () => {
       drafts,
       presenter,
       performance,
+      archives,
     );
   });
   afterEach(() => {
@@ -254,6 +257,59 @@ describe('DingTalk Stream progress adapter', () => {
     expect(performance.query).not.toHaveBeenCalled();
     expect(progress.prepare).not.toHaveBeenCalled();
     expect(sdk.send).toHaveBeenLastCalledWith('delivery', {});
+  });
+  it.each(['档案测试', '档案帮助'])('handles exact archive command %s without recognition or writes', async (command) => {
+    await startGateway();
+    await receive(message({ text: { content: command } }));
+    expect(performance.query).not.toHaveBeenCalled();
+    expect(progress.prepare).not.toHaveBeenCalled();
+    expect(progressUpdate.create).not.toHaveBeenCalled();
+    expect(archives.prepare).toHaveBeenCalledWith({ id: 'owner' }, sender);
+    expect(requests[0].body.userIds).toEqual(['staff']);
+    expect(requests[0].body.msgParam).toContain(command === '档案测试' ? 'https://hrm.example/archive-assistant/preview/' : '预览不会保存');
+  });
+  it('rechecks outbound archive recipient after prepare revokes admission', async () => {
+    archives.prepare.mockImplementation(async () => {
+      eligibility.resolveIdentity.mockResolvedValue({ kind: 'reply' });
+      return { url: '/archive-assistant/preview/event#preview=signed' };
+    });
+    await startGateway();
+    await receive(message({ text: { content: '档案测试' } }));
+    expect(requests).toHaveLength(0);
+    expect(progress.prepare).not.toHaveBeenCalled();
+  });
+  it('deduplicates repeated archive command deliveries without saving', async () => {
+    await startGateway();
+    await receive(message({ text: { content: '档案测试' } }));
+    await receive(message({ text: { content: '档案测试' } }));
+    expect(requests).toHaveLength(1);
+    expect(progressUpdate.create).not.toHaveBeenCalled();
+  });
+  it.each(['http://hrm.example', 'https://user:pass@hrm.example', 'https://hrm.example/other', 'https://hrm.example?other'])('refuses an invalid configured HRM origin %s', async origin => {
+    env.DINGTALK_BOT_HRM_URL = origin;
+    // Keep the existing connection test separate from URL validation of archive replies.
+    jest.spyOn(presenter, 'isEnabled').mockResolvedValue(true);
+    await startGateway();
+    const reply = jest.spyOn(presenter, 'sendBusinessReply').mockResolvedValue(undefined);
+    await receive(message({ text: { content: '档案测试' } }));
+    expect(reply).toHaveBeenCalledWith(expect.stringContaining('档案助手试用暂不可用'), sender);
+    expect(progress.prepare).not.toHaveBeenCalled();
+  });
+  it('handles archive admission failure without falling through or leaking details', async () => {
+    archives.prepare.mockRejectedValue(new Error('private-token'));
+    await startGateway();
+    await receive(message({ text: { content: '档案测试' } }));
+    expect(progress.prepare).not.toHaveBeenCalled();
+    expect(performance.query).not.toHaveBeenCalled();
+    expect(JSON.stringify(requests)).toContain('档案助手');
+    expect(JSON.stringify(requests)).not.toContain('private-token');
+  });
+  it.each([{ conversationType: '2' }, { senderStaffId: 'excluded' }])('does not prepare excluded archive sender %j', async changes => {
+    eligibility.resolveIdentity.mockImplementation(async (s: any) => s.senderStaffId === 'excluded' ? { kind: 'reply' } : { kind: 'ready', viewer: { id: 'owner' } });
+    await startGateway();
+    await receive(message({ ...changes, text: { content: '档案测试' } }));
+    expect(archives.prepare).not.toHaveBeenCalled();
+    expect(requests).toHaveLength(0);
   });
   it('fails closed without a fallback message when identity lookup fails', async () => {
     eligibility.resolveIdentity.mockRejectedValue(new Error('identity unavailable'));

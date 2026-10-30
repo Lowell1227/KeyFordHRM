@@ -15,6 +15,7 @@ import {
   TOPIC_CARD,
   TOPIC_ROBOT,
 } from 'dingtalk-stream';
+import { ArchiveAssistantService } from '../employee-archives/archive-assistant.service';
 import { AiProgressService } from '../ai-progress/ai-progress.service';
 import {
   BotEligibilityService,
@@ -39,6 +40,7 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
     private readonly drafts: ProgressDraftStore,
     private readonly cards: DingtalkCardPresenter,
     private readonly performance: PerformanceCardService,
+    private readonly archives: ArchiveAssistantService,
   ) {}
 
   onModuleInit() {
@@ -166,7 +168,8 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
         deliveryId: body.msgId,
       };
       // Admission precedes every user-visible reply, including invalid-input and error tips.
-      if ((await this.eligibility.resolveIdentity(sender)).kind !== 'ready') return;
+      const identity = await this.eligibility.resolveIdentity(sender);
+      if (identity.kind !== 'ready') return;
       if (
         body.msgtype !== 'text' ||
         !this.nonempty(body.text?.content) ||
@@ -176,6 +179,24 @@ export class DingtalkBotGateway implements OnModuleInit, OnModuleDestroy {
           '请发送一条文字进展，最多10000字。',
           sender,
         );
+        return;
+      }
+      if (body.text.content === '档案测试' || body.text.content === '档案帮助') {
+        try {
+          // prepare revalidates the single pilot, live capability, gate and binding without writes.
+          const preview = await this.archives.prepare(identity.viewer, sender);
+          const origin = new URL(this.config.get<string>('DINGTALK_BOT_HRM_URL') ?? '');
+          if (origin.protocol !== 'https:' || origin.username || origin.password || origin.search || origin.hash || origin.pathname !== '/')
+            throw new Error('Invalid HRM origin');
+          const url = new URL(preview.url, origin.origin);
+          if (url.origin !== origin.origin || !url.pathname.startsWith('/archive-assistant/preview/'))
+            throw new Error('Invalid preview path');
+          await this.cards.sendBusinessReply(body.text.content === '档案帮助'
+            ? '档案助手仅供本人使用虚构样例试用。发送“档案测试”获取预览；预览不会保存，需本人登录HRM后点击“保存待核草稿”。测试草稿不能提交或审批。'
+            : `虚构测试资料已准备，尚未保存。请登录本人HRM账号核对，点击“保存待核草稿”后才会接收：${url.href}`, sender);
+        } catch {
+          await this.cards.sendBusinessReply('档案助手试用暂不可用，请核对本人账号及试用权限后重新发送“档案测试”。', sender);
+        }
         return;
       }
       try {

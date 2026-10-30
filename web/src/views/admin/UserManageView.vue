@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue';
+import { useRoute } from 'vue-router';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
   ArrowRight,
@@ -50,6 +51,7 @@ type PersonnelView = 'org' | 'users' | 'processing';
 
 const props = withDefaults(defineProps<{ mode?: PersonnelView }>(), { mode: 'users' });
 const auth = useAuthStore();
+const route = useRoute();
 
 const dingtalkStateLabels = {
   unbound: '未关联',
@@ -918,8 +920,10 @@ function currentApplications(row: ManagedUser): EmployeeDataReview[] {
   return (row as ManagedUser & { currentApplications?: EmployeeDataReview[] }).currentApplications ?? [];
 }
 
-async function openApplication(requestId: string) {
-  applicationDetail.value = await employeeArchivesApi.getApplication(requestId);
+async function openApplication(requestId: string, isCurrent = () => true) {
+  const result = await employeeArchivesApi.getApplication(requestId);
+  if (!isCurrent()) return;
+  applicationDetail.value = result;
   applicationDetailVisible.value = true;
 }
 
@@ -1567,6 +1571,15 @@ async function confirmApprover() {
     // 由 HTTP 拦截器展示错误
   }
 }
+
+watch(() => [route.query.assistantRequestId, canViewArchive.value] as const, ([id, allowed], _previous, onCleanup) => {
+  let current = true;
+  onCleanup(() => { current = false; });
+  if (allowed && typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
+    void openApplication(id, () => current).catch(() => {
+      if (current) ElMessage.error('档案记录暂无法读取，请核对权限后重试。');
+    });
+}, { immediate: true });
 
 watch(() => props.mode, async (mode) => {
   activeView.value = mode;

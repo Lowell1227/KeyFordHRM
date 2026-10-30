@@ -1,3 +1,4 @@
+import { EmployeeArchivesModule } from '../employee-archives/employee-archives.module';
 import { Module } from '@nestjs/common';
 import { AuthModule } from '@/auth/auth.module';
 import { ObjectivesModule } from '@/objectives/objectives.module';
@@ -17,7 +18,7 @@ import { PeriodReviewsModule } from '../period-reviews/period-reviews.module';
 import { ImprovementPlansModule } from '../improvement-plans/improvement-plans.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule, ObjectivesModule, TasksModule, PeriodReviewsModule, ImprovementPlansModule],
+  imports: [EmployeeArchivesModule, PrismaModule, AuthModule, ObjectivesModule, TasksModule, PeriodReviewsModule, ImprovementPlansModule],
   controllers: [AiConfigController, AiProgressController],
   providers: [
     AiConfigService,
