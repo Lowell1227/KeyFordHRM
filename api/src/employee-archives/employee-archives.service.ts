@@ -664,8 +664,11 @@ export class EmployeeArchivesService {
     return this.prisma.$transaction(async (tx) => {
       const drafts = await tx.employeeDataChangeRequest.findMany({
         where: { id: { in: ids }, recordStatus: 'draft', archivedAt: null },
-        select: { id: true, employeeName: true },
+        select: { id: true, employeeName: true, sourceSystem: true, createdById: true },
       });
+      if (drafts.some(draft => draft.sourceSystem === 'archive_assistant_pilot' && draft.createdById !== operator.id)) {
+        throw new NotFoundException('草稿不存在');
+      }
       if (drafts.length !== ids.length) {
         throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '部分草稿已提交或已归档，请刷新后重试' });
       }
@@ -710,6 +713,13 @@ export class EmployeeArchivesService {
     for (const id of new Set(ids)) {
       try {
         await this.prisma.$transaction(async (tx) => {
+          if (kind === 'draft') {
+            const draft = await tx.employeeDataChangeRequest.findUnique({ where: { id }, select: { sourceSystem: true, createdById: true } });
+            if (draft?.sourceSystem === 'archive_assistant_pilot') {
+              if (draft.createdById !== operator.id) throw new NotFoundException('草稿不存在');
+              throw new ConflictException('测试草稿请从机器人重新发起');
+            }
+          }
           const result = kind === 'employee'
             ? await tx.user.updateMany({ where: { id, deletedAt: null, archivedAt: { not: null } }, data: { archivedAt: null } })
             : await tx.employeeDataChangeRequest.updateMany({
@@ -760,11 +770,16 @@ export class EmployeeArchivesService {
   async cancelApplication(id: string, reason: string, operator: AuthUser) {
     const request = await this.prisma.employeeDataChangeRequest.findUnique({ where: { id } });
     if (!request || request.archivedAt) throw new NotFoundException('申请不存在或已归档');
+    if (request.sourceSystem === 'archive_assistant_pilot' && request.createdById !== operator.id) throw new NotFoundException('申请不存在');
     if (request.intakeType && request.onboardingStatus !== 'effective') {
       if (!this.onboarding) throw new BadRequestException('入职服务未就绪');
       return this.onboarding.cancelReentry(id, { reason }, operator.id);
     }
     return this.prisma.$transaction(async (tx) => {
+      if (request.sourceSystem === 'archive_assistant_pilot') {
+        const current = await tx.employeeDataChangeRequest.findUnique({ where: { id }, select: { createdById: true } });
+        if (current?.createdById !== operator.id) throw new NotFoundException('申请不存在');
+      }
       const scheduled = request.sourceType === 'manual_employment_change'
         && request.profileReviewStatus === 'approved' && !request.appliedAt
         ? await tx.employmentRecord.findFirst({ where: { sourceRequestId: id, effectiveFrom: { gt: shanghaiBusinessDate() } } }) : null;

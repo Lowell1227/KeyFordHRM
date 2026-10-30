@@ -19,7 +19,12 @@ function fixture() {
     employmentRecord: { findFirst: jest.fn(async () => ({ employeeStatus: 'active' })) },
     externalIdentityBinding: { findFirst: jest.fn(async () => binding) },
     employeeDataChangeRequest: {
-      findUnique: jest.fn(async ({ where }: any) => rows.find(row => row.sourceReference === where.sourceSystem_sourceReference?.sourceReference) ?? null),
+      findUnique: jest.fn(async ({ where }: any) => rows.find(row => where.id ? row.id === where.id : row.sourceReference === where.sourceSystem_sourceReference?.sourceReference) ?? null),
+      findMany: jest.fn(async ({ where }: any) => rows.filter(row => where.id.in.includes(row.id))),
+      updateMany: jest.fn(async ({ where, data }: any) => {
+        const matches = rows.filter(row => typeof where.id === 'string' ? row.id === where.id : where.id.in.includes(row.id));
+        matches.forEach(row => Object.assign(row, data)); return { count: matches.length };
+      }),
       findFirst: jest.fn(async ({ where }: any) => where.id ? rows.find(row => row.id === where.id) : rows.find(row => row.sourceSystem === where.sourceSystem && row.createdById === where.createdById &&
         (where.baseValue ? row.baseValue?.assistantEvents?.includes(where.baseValue.array_contains[0]) : row.recordStatus === 'draft' && !row.archivedAt && !row.cancelledAt)) ?? null),
       create: jest.fn(async ({ data }: any) => { const row = { id: `request-${rows.length}`, requestVersion: 1, ...data }; rows.push(row); return row; }),
@@ -120,6 +125,39 @@ describe('archive assistant controlled synthetic reception', () => {
     const prisma: any = { employeeDataChangeRequest: { findFirst: jest.fn(async () => ({ sourceSystem: 'archive_assistant_pilot' })) } };
     prisma.$transaction = async (fn: any) => fn(prisma);
     await expect(new EmployeeArchivesService(prisma).createEmployee({ draftId: 'pilot' } as any, viewer)).rejects.toThrow('测试资料仅可保存待核草稿');
+  });
+  it.each(['cancel', 'archive', 'restore'])('refuses foreign HR pilot lifecycle access: %s', async action => {
+    const f = fixture(); await f.service.save(await f.token(), viewer);
+    const id = f.rows[0].id, foreign = { ...viewer, id: 'other-hr' };
+    if (action === 'cancel') await expect(f.archives.cancelApplication(id, 'reason', foreign)).rejects.toThrow('申请不存在');
+    if (action === 'archive') await expect(f.archives.archiveDrafts([id], foreign)).rejects.toThrow('草稿不存在');
+    if (action === 'restore') {
+      f.rows[0].recordStatus = 'archived'; f.rows[0].archivedAt = new Date();
+      expect(await f.archives.restoreRecords([id], foreign, 'draft')).toMatchObject({ restored: 0, failed: [{ id, reason: '草稿不存在' }] });
+    }
+    expect(f.tx.employeeDataChangeRequest.updateMany).not.toHaveBeenCalled();
+    expect(f.tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
+    expect(f.audits).toHaveLength(1);
+  });
+  it('cannot restore archived pilot A after receiving new pilot B', async () => {
+    const f = fixture(); const a = await f.service.save(await f.token(), viewer);
+    await f.archives.archiveDrafts([a.requestId], viewer);
+    const b = await f.service.save(await f.token('new-event'), viewer);
+    expect(b.requestId).not.toBe(a.requestId);
+    const result = await f.archives.restoreRecords([a.requestId], viewer, 'draft');
+    expect(result).toMatchObject({ restored: 0, failed: [{ id: a.requestId, reason: '测试草稿请从机器人重新发起' }] });
+    expect(f.rows.filter(row => row.recordStatus === 'draft' && !row.archivedAt)).toHaveLength(1);
+    expect(f.rows[0].recordStatus).toBe('archived');
+    expect(f.audits).toHaveLength(3);
+  });
+  it('allows owner cancellation and keeps ordinary draft restoration behavior', async () => {
+    const f = fixture(); const saved = await f.service.save(await f.token(), viewer);
+    expect(await f.archives.cancelApplication(saved.requestId, '结束测试', viewer)).toMatchObject({ cancelledById: viewer.id, profileReviewStatus: 'cancelled' });
+    expect(f.audits).toHaveLength(2);
+    f.rows.push({ id: 'ordinary-archived', sourceSystem: null, recordStatus: 'archived', archivedAt: new Date(), createdById: 'other-hr' });
+    expect(await f.archives.restoreRecords(['ordinary-archived'], viewer, 'draft')).toMatchObject({ restored: 1, failed: [] });
+    expect(f.rows[1]).toMatchObject({ recordStatus: 'draft', archivedAt: null });
+    expect(f.audits).toHaveLength(3);
   });
   it('blocks submitted pilot approval before applying either scope', async () => {
     const tx: any = { employeeDataChangeRequest: { findUnique: jest.fn(async () => ({ id: 'pilot', sourceSystem: 'archive_assistant_pilot', recordStatus: 'submitted', profileReviewStatus: 'pending', performanceReviewStatus: 'pending' })) } };
