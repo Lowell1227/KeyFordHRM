@@ -15,12 +15,14 @@ import {
   type EmployeeArchive,
   type EmployeeDataReview,
   type ArchiveBatchResult,
+  type EmployeeArchiveIssue,
 } from '@/api/employee-archives.api';
 import { usersApi } from '@/api/users.api';
 import { uploadApi } from '@/api/upload.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
+import EmployeeArchiveIssues from '@/components/common/EmployeeArchiveIssues.vue';
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import UserSelect from '@/components/common/UserSelect.vue';
 import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
@@ -696,6 +698,19 @@ async function openEmployeeArchive(row: ManagedUser) {
   }
 }
 
+async function maintainArchiveIssue(target: EmployeeArchiveIssue['maintenance'], row?: ManagedUser, draft?: EmployeeDataReview) {
+  if (target.draft) {
+    if (!canEditArchive.value) { await openApplication(target.requestId); return; }
+    const request = draft?.id === target.requestId ? draft : await employeeArchivesApi.getApplication(target.requestId);
+    await continueDraft(request);
+    return;
+  }
+  const employeeId = target.employeeId || row?.id;
+  if (!employeeId) return;
+  await openEmployeeArchive(row?.id === employeeId ? row : { id: employeeId } as ManagedUser);
+  if (canEditArchive.value && employeeArchiveDrawer.value.data && !archiveReadOnly.value) archiveEditing.value = true;
+}
+
 async function submitArchiveDraft(value: {
   draftId?: string;
   employee: Record<string, unknown>;
@@ -1079,6 +1094,9 @@ function draftMissingLabel(draft: EmployeeDataReview) {
     [employee.deptId, '部门'],
     [employee.entryDate, '入职日期'],
     [employee.effectiveFrom, '任职开始'],
+    [employee.company === null ? null : true, '组织归属'],
+    [employee.employmentType === null ? null : true, '用工类型'],
+    [employee.employeeStatus === null ? null : true, '员工状态'],
   ].filter(([value]) => !value).map(([, label]) => label);
   return missing.length ? `待补充：${missing.join('、')}` : '';
 }
@@ -1891,16 +1909,8 @@ onBeforeUnmount(() => {
                     <div class="roster-person-details">
                       <div class="roster-person-heading">
                         <strong>{{ (row as ManagedUser).name }}</strong>
-                        <el-popover
-                          v-if="canViewArchive && (row as ManagedUser).archiveWarnings?.length"
-                          :trigger="['hover', 'click']"
-                          :width="300"
-                          popper-class="archive-warnings-popover"
-                        >
-                          <template #reference><el-button class="archive-warning-marker" type="warning" plain size="small">待完善 {{ (row as ManagedUser).archiveWarnings!.length }}项</el-button></template>
-                          <ul class="archive-warning-list"><li v-for="(warning, index) in (row as ManagedUser).archiveWarnings" :key="index">{{ warning.message }}</li></ul>
-                          <el-button link type="primary" @click="openEmployeeArchive(row as ManagedUser)">查看档案</el-button>
-                        </el-popover>
+                        <EmployeeArchiveIssues v-if="canViewArchive" :employee-id="row.id" :count="(row as ManagedUser).archiveIssueCount ?? (row as ManagedUser).archiveWarnings?.length ?? 0"
+                          @maintain="maintainArchiveIssue($event, row as ManagedUser)" @changed="loadUsers" />
                         <el-tag :type="statusTagType[(row as ManagedUser).status]" size="small">
                           {{ statusLabels[(row as ManagedUser).status] }}
                         </el-tag>
@@ -1965,11 +1975,8 @@ onBeforeUnmount(() => {
             <MobileResultCard v-for="item in userList" :key="item.id">
               <template #title>
                 <el-checkbox v-if="canSelectEmployeeForArchive(item)" :model-value="selectedUsers.some((row) => row.id === item.id)" @change="selectedUsers = $event ? [...selectedUsers.filter((row) => row.id !== item.id), item] : selectedUsers.filter((row) => row.id !== item.id)">{{ item.name }} · {{ item.employeeNo }}</el-checkbox><span v-else>{{ item.name }} · {{ item.employeeNo || '工号待补充' }}</span><small v-if="item.matchedHistoricalEmployeeNo"> · 历史工号命中 {{ item.matchedHistoricalEmployeeNo }}</small>
-                <el-popover v-if="canViewArchive && item.archiveWarnings?.length" :trigger="['hover', 'click']" :width="300" popper-class="archive-warnings-popover">
-                  <template #reference><el-button class="archive-warning-marker" type="warning" plain size="small">待完善 {{ item.archiveWarnings.length }}项</el-button></template>
-                  <ul class="archive-warning-list"><li v-for="(warning, index) in item.archiveWarnings" :key="index">{{ warning.message }}</li></ul>
-                  <el-button link type="primary" @click="openEmployeeArchive(item)">查看档案</el-button>
-                </el-popover>
+                <EmployeeArchiveIssues v-if="canViewArchive" :employee-id="item.id" :count="item.archiveIssueCount ?? item.archiveWarnings?.length ?? 0"
+                  @maintain="maintainArchiveIssue($event, item)" @changed="loadUsers" />
               </template>
               <template #status><el-tag :type="statusTagType[item.status]" size="small">{{ statusLabels[item.status] }}</el-tag></template>
               <div class="mobile-result-field"><span class="mobile-result-field__label">部门 / 岗位</span><span class="mobile-result-field__value">{{ item.deptName || '未分配部门' }} · {{ item.position || '未设置' }}</span></div>
@@ -2013,6 +2020,8 @@ onBeforeUnmount(() => {
                   <div class="draft-cell">
                     <strong>{{ draftObjectLabel(row as EmployeeDataReview) }}</strong>
                     <el-tag size="small" effect="plain">{{ draftTypeLabel(row as EmployeeDataReview) }}</el-tag>
+                    <EmployeeArchiveIssues v-if="canViewArchive" :request-id="row.id" :count="(row as EmployeeDataReview).archiveIssueCount ?? 0"
+                      @maintain="maintainArchiveIssue($event, undefined, row as EmployeeDataReview)" @changed="loadDrafts" />
                   </div>
                 </template>
               </el-table-column>
@@ -2044,6 +2053,8 @@ onBeforeUnmount(() => {
             <MobileResultCard v-for="item in draftDialog.items" :key="item.id">
               <template #title>
                 <span>{{ draftObjectLabel(item) }}</span>
+                <EmployeeArchiveIssues v-if="canViewArchive" :request-id="item.id" :count="item.archiveIssueCount ?? 0"
+                  @maintain="maintainArchiveIssue($event, undefined, item)" @changed="loadDrafts" />
               </template>
               <template #status><el-tag size="small" effect="plain">{{ draftTypeLabel(item) }}</el-tag></template>
               <div class="mobile-result-field"><span class="mobile-result-field__label">填写情况</span><span class="mobile-result-field__value">{{ draftProgressLabel(item) }}</span></div>

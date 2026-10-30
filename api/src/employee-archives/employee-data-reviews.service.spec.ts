@@ -1014,7 +1014,8 @@ describe('EmployeeDataReviewsService', () => {
     }));
   });
 
-  it('仅修改基础档案时不重复生成任职历史', async () => {
+  it.each(['manual_profile_change', 'manual_archive_change', 'employee_roster_import'])(
+    '仅修改基础档案时不重写任职历史和未变合同（%s）', async (sourceType) => {
     const baseEmployee = {
       employeeNo: '001', name: '员工一', phone: '13800000000', company: 'fuede',
       deptId: 'dept-1', position: '专员', jobGrade: 'P3', jobFamily: '运营', managerId: 'roster-manager',
@@ -1028,10 +1029,12 @@ describe('EmployeeDataReviewsService', () => {
       effectiveFrom: '2024-01-02T00:00:00.000Z', expiresAt: '2026-12-31T00:00:00.000Z',
       termType: '3年', originalCompany: null, newCompany: null,
       confidentialityAgreement: null, nonCompeteAgreement: null, portraitAgreement: null,
+      sourceBatchId: 'original-batch', createdById: 'original-creator',
+      createdAt: new Date('2024-01-01'), updatedAt: new Date('2024-02-01'),
     };
     const request = {
       id: 'review-profile-only', userId: 'employee-1', employeeNo: '001', employeeName: '员工一',
-      sourceType: 'manual_profile_change', sourceBatchId: null,
+      sourceType, sourceBatchId: null,
       profileReviewStatus: 'pending', performanceReviewStatus: 'not_required', validationErrors: [],
       baseValue: {
         employee: baseEmployee, profile: { gender: '男' }, contracts: [existingContract],
@@ -1070,7 +1073,9 @@ describe('EmployeeDataReviewsService', () => {
       },
       employeeProfile: { upsert: jest.fn().mockResolvedValue({ id: 'profile-1' }) },
       employmentRecord: { findFirst: jest.fn(), update: jest.fn(), create: employmentCreate },
-      employeeContract: { createMany: jest.fn() },
+      employeeContract: {
+        findMany: jest.fn().mockResolvedValue([existingContract]), update: jest.fn(), create: jest.fn(),
+      },
       auditLog: { create: jest.fn() },
     };
     const prisma = { $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)) };
@@ -1082,6 +1087,8 @@ describe('EmployeeDataReviewsService', () => {
     expect(tx.employeeProfile.upsert).toHaveBeenCalled();
     expect(tx.employmentRecord.findFirst).not.toHaveBeenCalled();
     expect(employmentCreate).not.toHaveBeenCalled();
+    expect(tx.employeeContract.update).not.toHaveBeenCalled();
+    expect(tx.employeeContract.create).not.toHaveBeenCalled();
   });
 
   it('同一天再次审核任职变化时更新当天记录而不制造无效日期区间', async () => {
@@ -1375,6 +1382,89 @@ describe('EmployeeDataReviewsService', () => {
       data: { isActive: false, endedAt: expect.any(Date) },
     });
     expect(tx.employeeContract.create).not.toHaveBeenCalled();
+  });
+
+  describe('合同审核只更新实际变更的业务字段', () => {
+    const current = {
+      id: 'contract-1', userId: 'employee-1', contractType: 'contract', sequence: 0,
+      name: '劳动合同', signingCompany: '原签约公司', contractSubjectId: null,
+      signedAt: new Date('2024-01-01'), effectiveFrom: new Date('2024-01-02'),
+      expiresAt: new Date('2026-12-31'), termType: '3年', originalCompany: null, newCompany: null,
+      confidentialityAgreement: null, nonCompeteAgreement: null, portraitAgreement: null,
+      images: [{ name: '合同.jpg', url: '/storage/image', size: 1024, mimeType: 'image/jpeg' }],
+      attachments: [{ name: '合同.pdf', url: '/storage/file', size: 2048, mimeType: 'application/pdf' }],
+      isActive: true, endedAt: null, sourceBatchId: 'original-batch', createdById: 'original-creator',
+      createdAt: new Date('2024-01-01'), updatedAt: new Date('2024-02-01'),
+    };
+
+    it.each(['nonCompeteAgreement', 'portraitAgreement'])(
+      '协议状态变更仅更新 %s，保留合同原创建来源和其他字段', async (field) => {
+        const update = jest.fn();
+        const tx = { employeeContract: {
+          findMany: jest.fn().mockResolvedValue([{ ...current }]), update, create: jest.fn(),
+        } };
+        const service = new EmployeeDataReviewsService({} as any);
+
+        await (service as any).reconcileRosterContracts(
+          tx, 'employee-1', {}, [{ ...current, [field]: '已签署' }], null, operator, 'manual_archive_change',
+        );
+
+        expect(update).toHaveBeenCalledTimes(1);
+        expect(update).toHaveBeenCalledWith({ where: { id: current.id }, data: { [field]: '已签署' } });
+        expect(tx.employeeContract.create).not.toHaveBeenCalled();
+      },
+    );
+
+    it('只替换合同材料时保留原创建来源、签约主体和日期', async () => {
+      const attachments = [{ name: '补充.pdf', url: '/storage/new-file', size: 4096, mimeType: 'application/pdf' }];
+      const update = jest.fn();
+      const tx = { employeeContract: {
+        findMany: jest.fn().mockResolvedValue([{ ...current }]), update, create: jest.fn(),
+      } };
+      const service = new EmployeeDataReviewsService({} as any);
+
+      await (service as any).reconcileRosterContracts(
+        tx, 'employee-1', {}, [{ ...current, attachments }], 'new-batch', operator, 'manual_archive_change',
+      );
+
+      expect(update).toHaveBeenCalledTimes(1);
+      expect(update).toHaveBeenCalledWith({ where: { id: current.id }, data: { attachments } });
+    });
+
+    it('同一合同在提案中重复出现时以后一次内容为准', async () => {
+      const stored = { ...current };
+      const tx = { employeeContract: {
+        findMany: jest.fn().mockResolvedValue([{ ...current }]),
+        update: jest.fn(async ({ data }: any) => Object.assign(stored, data)),
+        create: jest.fn(),
+      } };
+      const service = new EmployeeDataReviewsService({} as any);
+
+      await (service as any).reconcileRosterContracts(
+        tx, 'employee-1', {}, [{ ...current, name: '更正合同' }, { ...current }], null, operator, 'manual_archive_change',
+      );
+
+      expect(stored.name).toBe('劳动合同');
+      expect(stored.sourceBatchId).toBe('original-batch');
+      expect(stored.createdById).toBe('original-creator');
+    });
+
+    it('花名册省略材料及既有主体时不重写合同或清空关联资料', async () => {
+      const existing = { ...current, contractSubjectId: 'dbf42813-c636-4750-af8e-899df7137635' };
+      const { id, images, attachments, contractSubjectId, ...proposal } = existing;
+      const update = jest.fn();
+      const tx = { employeeContract: {
+        findMany: jest.fn().mockResolvedValue([existing]), update, create: jest.fn(),
+      } };
+      const service = new EmployeeDataReviewsService({} as any);
+
+      await (service as any).reconcileRosterContracts(
+        tx, 'employee-1', {}, [{ ...proposal, signingCompany: null }], 'new-batch', operator, 'employee_roster_import',
+      );
+
+      expect(update).not.toHaveBeenCalled();
+      expect(tx.employeeContract.create).not.toHaveBeenCalled();
+    });
   });
 
   it('合同并发校验覆盖签约公司、生效日期和不可变 ID', () => {

@@ -10,10 +10,12 @@ import { PersonnelDiagnosticsService } from './personnel-diagnostics.service';
 import { EmployeeNumberService } from './employee-number.service';
 import { EmployeeIdentityMatchService } from './employee-identity-match.service';
 import { EmployeeOnboardingService } from './employee-onboarding.service';
+import { EmployeeArchiveIssuesController } from './employee-archive-issues.controller';
+import { EmployeeArchiveIssuesService } from './employee-archive-issues.service';
 
 @Module({
   imports: [PrismaModule],
-  controllers: [EmployeeArchivesController],
+  controllers: [EmployeeArchiveIssuesController, EmployeeArchivesController],
   providers: [
     EmployeeArchivesService,
     EmployeeRosterImportService,
@@ -24,6 +26,7 @@ import { EmployeeOnboardingService } from './employee-onboarding.service';
     EmployeeIdentityMatchService,
     EmployeeOnboardingService,
     PersonnelDiagnosticsService,
+    EmployeeArchiveIssuesService,
   ],
   exports: [
     EmployeeArchivesService,

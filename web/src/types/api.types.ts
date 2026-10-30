@@ -224,6 +224,7 @@ export interface User {
   archivedAt?: string | null;
   matchedHistoricalEmployeeNo?: string | null;
   archiveWarnings?: Array<{ field: string; message: string }>;
+  archiveIssueCount?: number;
 }
 
 export interface DirectReport {

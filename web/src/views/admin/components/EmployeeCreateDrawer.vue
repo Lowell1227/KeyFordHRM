@@ -65,14 +65,14 @@ const form = reactive({
   name: '',
   phone: '',
   idNumber: '',
-  company: 'fuede',
+  company: 'fuede' as string | null,
   deptId: '',
   positionId: '',
   entryDate: '',
   effectiveFrom: '',
   effectiveTo: '',
-  employmentType: 'full_time',
-  employeeStatus: 'probation',
+  employmentType: 'full_time' as string | null,
+  employeeStatus: 'probation' as string | null,
   rosterManagerId: null as string | null,
   performanceManagerId: null as string | null,
   employee: {
@@ -131,9 +131,12 @@ const selectedDepartment = computed(() => flatten(props.departments).find((item)
 const selectedPosition = computed(() => positions.value.find((item) => item.id === form.positionId));
 const missingForSubmit = computed(() => [
   { label: '姓名', step: 0, missing: !form.name.trim() },
+  { label: '组织归属', step: 1, missing: !form.company },
   { label: '部门', step: 1, missing: !form.deptId },
   { label: '入职日期', step: 1, missing: !form.entryDate },
   { label: '任职开始', step: 1, missing: !form.effectiveFrom },
+  { label: '用工类型', step: 1, missing: !form.employmentType },
+  { label: '员工状态', step: 1, missing: !form.employeeStatus },
 ].filter((item) => item.missing));
 const missingForSubmitLabels = computed(() => missingForSubmit.value.map((item) => item.label));
 // Visiting a step is not completion; optional supplements have no completeness requirement.
@@ -172,14 +175,14 @@ function reset() {
     name: employee.name ?? '',
     phone: employee.phone ?? profile.phone ?? '',
     idNumber: '',
-    company: employee.company ?? 'fuede',
+    company: employee.company === null ? null : employee.company ?? 'fuede',
     deptId: employee.deptId ?? '',
     positionId: employee.positionId ?? '',
     entryDate: dateValue(employee.entryDate),
     effectiveFrom: dateValue(employee.effectiveFrom),
     effectiveTo: dateValue(employee.effectiveTo),
-    employmentType: employee.employmentType ?? 'full_time',
-    employeeStatus: employee.employeeStatus ?? 'probation',
+    employmentType: employee.employmentType === null ? null : employee.employmentType ?? 'full_time',
+    employeeStatus: employee.employeeStatus === null ? null : employee.employeeStatus ?? 'probation',
     rosterManagerId: employee.managerId ?? null,
     performanceManagerId: performance.managerId ?? null,
   });
@@ -190,7 +193,7 @@ function reset() {
     jobGrade: employee.jobGrade ?? '',
     jobFamily: employee.jobFamily ?? '',
     workLocation: employee.workLocation ?? '',
-    probationMonths: employee.probationMonths ?? 3,
+    probationMonths: employee.probationMonths === null ? null : employee.probationMonths ?? 3,
     plannedRegularDate: dateValue(employee.plannedRegularDate),
     actualRegularDate: dateValue(employee.actualRegularDate),
     leaveDate: dateValue(employee.leaveDate),
@@ -577,18 +580,18 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
           <div class="section-head"><div><h3>任职信息</h3><p>选择岗位后自动带入岗位名称和职系；入职日期自动作为任职开始日期。</p></div></div>
           <div class="form-grid form-grid--3">
             <el-form-item label="所属公司（合同主体）"><ContractSubjectSelect v-model="form.employee.contractSubjectId" v-model:snapshot-name="form.employee.companyText" /></el-form-item>
-            <el-form-item label="组织归属"><el-select v-model="form.company"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select></el-form-item>
+            <el-form-item label="组织归属" :error="!form.company ? '组织归属待核实，请核实后选择；可先保存草稿。' : ''"><el-select v-model="form.company" aria-label="组织归属" placeholder="待核实后选择"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select></el-form-item>
             <el-form-item label="部门"><el-tree-select v-model="form.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
             <el-form-item label="岗位"><el-select v-model="form.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
             <el-form-item label="岗位名称"><el-input v-model="form.employee.position" placeholder="选择岗位后自动带入" /></el-form-item>
             <el-form-item label="职级"><el-input v-model="form.employee.jobGrade" /></el-form-item>
             <el-form-item label="职系"><PersonnelReferenceSelect v-model="form.employee.jobFamily" kind="job_family" label="职系" placeholder="选择岗位后自动带入，也可选择其他职系" /></el-form-item>
             <el-form-item label="工作地点"><PersonnelReferenceSelect v-model="form.employee.workLocation" kind="work_location" label="工作地点" /></el-form-item>
-            <el-form-item label="用工类型"><el-select v-model="form.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
-            <el-form-item label="员工状态"><el-select v-model="form.employeeStatus"><el-option label="试用期" value="probation" /><el-option label="在职" value="active" /></el-select></el-form-item>
+            <el-form-item label="用工类型" :error="!form.employmentType ? '用工类型待核实，请核实后选择；可先保存草稿。' : ''"><el-select v-model="form.employmentType" placeholder="待核实后选择" aria-label="用工类型"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
+            <el-form-item label="员工状态" :error="!form.employeeStatus ? '员工状态待核实，请核实后选择；可先保存草稿。' : ''"><el-select v-model="form.employeeStatus" placeholder="待核实后选择" aria-label="员工状态"><el-option label="试用期" value="probation" /><el-option label="在职" value="active" /></el-select></el-form-item>
             <el-form-item label="入职日期"><el-date-picker v-model="form.entryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
             <el-form-item label="任职开始"><el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item label="试用期（月）"><el-input-number v-model="form.employee.probationMonths" :min="0" :max="12" /></el-form-item>
+            <el-form-item label="试用期（月）"><el-input-number v-model="form.employee.probationMonths" :min="0" :max="12" /><small v-if="form.employee.probationMonths === null">未提供月数，保持空值，可核实后补充。</small></el-form-item>
             <el-form-item label="预计转正日期"><el-date-picker v-model="form.employee.plannedRegularDate" type="date" value-format="YYYY-MM-DD" @change="plannedRegularDateAuto = false" /></el-form-item>
           </div>
         </section>

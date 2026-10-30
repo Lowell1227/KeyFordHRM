@@ -196,8 +196,8 @@ export class EmployeeArchivesController {
 
   @Get('drafts/list')
   @HrCapabilities('employee_archive_edit')
-  listDrafts(@Query() dto: EmployeeDraftQueryDto) {
-    return this.archives.listDrafts(dto);
+  listDrafts(@Query() dto: EmployeeDraftQueryDto, @CurrentUser() operator: AuthUser) {
+    return this.archives.listDrafts(dto, operator);
   }
 
   @Get('applications/list')

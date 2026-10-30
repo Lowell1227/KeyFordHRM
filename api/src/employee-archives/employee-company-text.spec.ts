@@ -30,7 +30,8 @@ describe('employee company text', () => {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }), update: jest.fn() },
       employeeProfile: { upsert: jest.fn() },
       employmentRecord: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn(), update: jest.fn() },
-      employeeContract: { findMany: jest.fn().mockResolvedValue([{ id: 'contract-1', contractType: 'contract', sequence: 0 }]), update: jest.fn() },
+      employeeContract: { findMany: jest.fn().mockResolvedValue([{ id: 'contract-1', contractType: 'contract', sequence: 0,
+        signingCompany: null, signedAt: null, effectiveFrom: null }]), update: jest.fn() },
       auditLog: { create: jest.fn() },
     };
     const service = new EmployeeDataReviewsService({ $transaction: async (run: any) => run(tx) } as any);
@@ -45,7 +46,10 @@ describe('employee company text', () => {
     expect(tx.user.update).toHaveBeenCalledWith({ where: { id: 'employee-1' }, data: expect.objectContaining({ deptId: null, entryDate: null }) });
     expect(tx.employmentRecord.create).toHaveBeenCalledWith({ data: expect.objectContaining({ companyText: '已补公司', deptId: null, entryDate: null }) });
     expect(tx.employeeProfile.upsert).toHaveBeenCalledWith(expect.objectContaining({ update: { phone: '已审核测试号码' } }));
-    expect(tx.employeeContract.update).toHaveBeenCalledWith({ where: { id: 'contract-1' }, data: expect.objectContaining({ signedAt: new Date('2025-01-01'), signingCompany: null }) });
+    expect(tx.employeeContract.update).toHaveBeenCalledWith({ where: { id: 'contract-1' }, data: {
+      signedAt: new Date('2025-01-01'), effectiveFrom: new Date('2025-01-01'),
+    } });
+    expect(tx.employeeContract.update.mock.calls[0][0].data).not.toHaveProperty('signingCompany');
   });
 
   it.each([

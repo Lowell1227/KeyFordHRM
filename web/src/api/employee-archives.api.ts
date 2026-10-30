@@ -28,6 +28,23 @@ export interface EmployeeRosterConfirmResult {
 export type EmployeeReviewStatus = 'not_required' | 'pending' | 'applying' | 'approved' | 'rejected' | 'cancelled';
 export type EmployeeReviewScope = 'profile' | 'performance';
 
+export interface EmployeeArchiveIssue {
+  id: string;
+  requestId: string;
+  employeeId: string | null;
+  field: string;
+  kind: 'conflict' | 'identity' | 'missing' | 'invalid_date' | 'review';
+  message: string;
+  reason: string;
+  source: { sheetName?: string; rowNumber?: number; cell?: string; value: string | null };
+  current: { value: string | null };
+  status: 'open';
+  canConfirmCurrent: boolean;
+  confirmBlockedReason?: string;
+  fingerprint: string;
+  maintenance: { employeeId?: string; requestId: string; draft: boolean };
+}
+
 export interface EmployeeDataReview {
   id: string;
   userId: string | null;
@@ -38,6 +55,7 @@ export interface EmployeeDataReview {
   performanceReviewStatus: EmployeeReviewStatus;
   validationErrors: string[];
   validationWarnings?: Array<string | { field: string; message: string }>;
+  archiveIssueCount?: number;
   baseValue: Record<string, any>;
   proposedValue: Record<string, any>;
   createdBy?: { id: string; name: string; sysRole: string };
@@ -101,7 +119,10 @@ export interface EmployeeCreatePayload {
   performance: Record<string, unknown>;
 }
 
-export type EmployeeCreateDraftPayload = Partial<EmployeeCreatePayload> & {
+export type EmployeeCreateDraftPayload = Omit<Partial<EmployeeCreatePayload>, 'company' | 'employmentType' | 'employeeStatus'> & {
+  company?: string | null;
+  employmentType?: string | null;
+  employeeStatus?: string | null;
   draftStep?: number;
   completedSteps?: number[];
   saveMode?: 'auto' | 'manual';
@@ -299,6 +320,18 @@ export interface ArchiveBatchResult {
 }
 
 export const employeeArchivesApi = {
+  getEmployeeIssues(employeeId: string): Promise<{ items: EmployeeArchiveIssue[] }> {
+    return http.get(`/employee-archives/issues/employee/${employeeId}`, { skipErrorMessage: true }) as unknown as Promise<{ items: EmployeeArchiveIssue[] }>;
+  },
+
+  getRequestIssues(requestId: string): Promise<{ items: EmployeeArchiveIssue[] }> {
+    return http.get(`/employee-archives/issues/request/${requestId}`, { skipErrorMessage: true }) as unknown as Promise<{ items: EmployeeArchiveIssue[] }>;
+  },
+
+  confirmIssueCurrent(requestId: string, issueId: string, fingerprint: string): Promise<{ confirmed: true; alreadyConfirmed: boolean; issueId: string }> {
+    return http.post(`/employee-archives/issues/${requestId}/${issueId}/confirm-current`, { fingerprint }, { skipErrorMessage: true }) as unknown as Promise<{ confirmed: true; alreadyConfirmed: boolean; issueId: string }>;
+  },
+
   createEmployee(body: EmployeeCreatePayload): Promise<EmployeeDataReview> {
     return http.post('/employee-archives', body) as unknown as Promise<EmployeeDataReview>;
   },

@@ -1181,7 +1181,6 @@ export class EmployeeDataReviewsService {
   ): Promise<void> {
     const currentActive = await tx.employeeContract.findMany({
       where: { userId, isActive: true },
-      select: { id: true, contractType: true, sequence: true, contractSubjectId: true, signingCompany: true },
     });
     const retainedIds = new Set<string>();
     for (const [index, contract] of contracts.entries()) {
@@ -1206,10 +1205,6 @@ export class EmployeeDataReviewsService {
           images: this.materials(contract.images),
           attachments: this.materials(contract.attachments),
         } : {}),
-        sourceBatchId,
-        createdById: operator.id,
-        isActive: true,
-        endedAt: null,
       };
       const activeContract = contractId
         ? currentActive.find((item) => item.id === contractId)
@@ -1230,13 +1225,18 @@ export class EmployeeDataReviewsService {
       }
       if (activeContract) {
         retainedIds.add(activeContract.id);
-        await tx.employeeContract.update({
-          where: { id: activeContract.id },
-          data: contractData,
-        });
+        const current = this.contractComparable(activeContract);
+        const proposed = this.contractComparable({ ...activeContract, ...contractData });
+        const changes = Object.fromEntries(Object.entries(contractData).filter(([key]) => (
+          JSON.stringify(current[key as keyof typeof current]) !== JSON.stringify(proposed[key as keyof typeof proposed])
+        )));
+        if (Object.keys(changes).length > 0) {
+          await tx.employeeContract.update({ where: { id: activeContract.id }, data: changes });
+          Object.assign(activeContract, changes);
+        }
       } else {
         await tx.employeeContract.create({
-          data: { userId, contractType, ...contractData },
+          data: { userId, contractType, ...contractData, sourceBatchId, createdById: operator.id, isActive: true, endedAt: null },
         });
       }
     }
@@ -1250,14 +1250,8 @@ export class EmployeeDataReviewsService {
     }
   }
 
-  private sameContractSet(
-    left: Record<string, unknown>[],
-    right: Record<string, unknown>[],
-  ): boolean {
-    const compareById = right.length > 0 && right.every((contract) => Boolean(this.nullableString(contract.id)));
-    const compareSubject = right.some((contract) => contract.contractSubjectId !== undefined);
-    const normalize = (contract: Record<string, unknown>) => ({
-      id: compareById ? this.nullableString(contract.id) : null,
+  private contractComparable(contract: Record<string, unknown>, compareSubject = true) {
+    return {
       contractType: this.nullableString(contract.contractType ?? contract.kind) ?? 'contract',
       sequence: typeof contract.sequence === 'number' ? contract.sequence : 0,
       name: this.nullableString(contract.name),
@@ -1274,6 +1268,18 @@ export class EmployeeDataReviewsService {
       portraitAgreement: this.nullableString(contract.portraitAgreement),
       images: this.materials(contract.images),
       attachments: this.materials(contract.attachments),
+    };
+  }
+
+  private sameContractSet(
+    left: Record<string, unknown>[],
+    right: Record<string, unknown>[],
+  ): boolean {
+    const compareById = right.length > 0 && right.every((contract) => Boolean(this.nullableString(contract.id)));
+    const compareSubject = right.some((contract) => contract.contractSubjectId !== undefined);
+    const normalize = (contract: Record<string, unknown>) => ({
+      id: compareById ? this.nullableString(contract.id) : null,
+      ...this.contractComparable(contract, compareSubject),
     });
     const sort = (items: Record<string, unknown>[]) => items
       .map(normalize)

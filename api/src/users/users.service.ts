@@ -1,5 +1,7 @@
 import { ForbiddenException, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
+import { archiveIssueSourceSystems, archiveIssueStates } from '@/employee-archives/employee-archive-issues';
+import { approvedEmploymentSourceWhere } from '@/employee-archives/employment-timeline';
 import { AccountType, ExternalIdentityProvider, SysRole, UserStatus, EmploymentType } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { DataScopeService } from '@/common/services/data-scope.service';
@@ -63,6 +65,7 @@ export interface UserListItem {
   archivedAt: Date | null;
   matchedHistoricalEmployeeNo: string | null;
   archiveWarnings?: Array<{ field: string; message: string }>;
+  archiveIssueCount?: number;
   currentApplications?: Array<{ id: string; sourceType: string; onboardingStatus: string | null;
     profileReviewStatus: string; performanceReviewStatus: string; updatedAt: Date }>;
 }
@@ -255,7 +258,7 @@ export class UsersService {
       entryDate: u.entryDate,
       dingtalkBindingState: u.externalIdentityBindings[0]?.status ?? 'unbound',
       archivedAt: u.archivedAt,
-      ...(canViewArchive ? { archiveWarnings: archiveWarnings.get(u.id) ?? [] } : {}),
+      ...(canViewArchive ? { archiveWarnings: archiveWarnings.get(u.id) ?? [], archiveIssueCount: archiveWarnings.get(u.id)?.length ?? 0 } : {}),
       currentApplications: hasHrCapability(viewer, 'employee_archive_edit') || hasHrCapability(viewer, 'employee_archive_review')
         ? (u.employeeChangeRequests ?? []).map(({ proposedValue, ...request }) => ({ ...request,
           proposedValue: { employee: {
@@ -276,11 +279,12 @@ export class UsersService {
     const result = new Map<string, Array<{ field: string; message: string }>>();
     if (!users.length) return result;
     const requests = await this.prisma.employeeDataChangeRequest.findMany({
-      where: { userId: { in: users.map((user) => user.id) }, sourceSystem: 'roster_initialization',
-        profileReviewStatus: 'approved', appliedAt: { not: null } },
-      select: { userId: true, validationWarnings: true, user: { select: {
+      where: { userId: { in: users.map((user) => user.id) }, sourceSystem: { in: archiveIssueSourceSystems },
+        profileReviewStatus: 'approved', appliedAt: { not: null }, archivedAt: null, cancelledAt: null },
+      select: { id: true, userId: true, requestVersion: true, sourceSystem: true, profileReviewStatus: true, appliedAt: true,
+        proposedValue: true, validationWarnings: true, user: { select: {
         employeeProfile: true,
-        employmentHistory: { where: { effectiveFrom: { lte: new Date() } }, orderBy: { effectiveFrom: 'desc' }, take: 1 },
+        employmentHistory: { where: { AND: [approvedEmploymentSourceWhere, { effectiveFrom: { lte: new Date() } }] }, orderBy: { effectiveFrom: 'desc' }, take: 1 },
         employeeContracts: true,
       } } },
     });
@@ -288,36 +292,11 @@ export class UsersService {
     const seen = new Set<string>();
     for (const request of requests) {
       if (!request.userId || !Array.isArray(request.validationWarnings)) continue;
-      const profile = request.user?.employeeProfile as Record<string, unknown> | null;
-      const employment = request.user?.employmentHistory[0] as Record<string, unknown> | undefined;
       const user = usersById.get(request.userId);
-      for (const raw of request.validationWarnings) {
-        if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
-        const warning = raw as Record<string, unknown>;
-        if (typeof warning.field !== 'string' || typeof warning.message !== 'string') continue;
-        const { field, message } = warning;
-        const key = field.split('.').at(-1)!;
-        let value: unknown;
-        if (field.startsWith('contracts.')) {
-          // Historical contract issues belong to the exact imported contract, never any later contract.
-          const contract = request.user?.employeeContracts.find((item) => item.id === warning.contractId);
-          value = (contract as Record<string, unknown> | undefined)?.[key];
-        } else if (key === 'company' || key === 'companyText') {
-          value = employment?.companyText;
-        } else if (field === 'employee.managerId' || field === 'managerId') {
-          value = employment?.directManagerId;
-        } else if (field.startsWith('profile.')) {
-          value = profile?.[key === 'idNumber' ? 'idNumberFingerprint' : key === 'bankAccount' ? 'bankAccountFingerprint' : key];
-        } else if (field.startsWith('employee.')) {
-          value = employment?.[key] ?? user?.[key];
-        } else {
-          value = profile?.[key] ?? employment?.[key] ?? user?.[key];
-        }
-        const present = value !== null && value !== undefined && (typeof value !== 'string' || value.trim() !== '');
-        if (warning.code === 'missing' && present) continue;
-        if (warning.code === 'invalid_date' && present
-          && (value instanceof Date || typeof value === 'string') && Number.isFinite(new Date(value).getTime())) continue;
-        const identity = JSON.stringify([request.userId, field, message, warning.contractId]);
+      for (const { issue, warningIndex } of archiveIssueStates(request, { ...user, ...request.user })) {
+        const warning = request.validationWarnings[warningIndex] as Prisma.JsonObject;
+        const { field, message } = issue;
+        const identity = issue.kind === 'conflict' ? issue.id : JSON.stringify([request.userId, field, message, warning.contractId]);
         if (seen.has(identity)) continue;
         seen.add(identity);
         const warnings = result.get(request.userId) ?? [];

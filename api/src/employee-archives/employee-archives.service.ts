@@ -19,11 +19,13 @@ import type {
   SaveEmployeeCreateDraftDto,
   SubmitEmployeeArchiveDraftDto,
 } from './dto/employee-archive.dto';
-import { employmentWarnings, selectEmploymentAt, shanghaiBusinessDate } from './employment-timeline';
+import { approvedEmploymentSourceWhere, employmentWarnings, selectEmploymentAt, shanghaiBusinessDate } from './employment-timeline';
 import { EmployeeIdentityMatchService } from './employee-identity-match.service';
 import { EmployeeNumberService } from './employee-number.service';
 import { EmployeeOnboardingService } from './employee-onboarding.service';
 import { employeeArchiveView, employeeDataChangeView, activeApplicationWhere } from './employee-data-change-view';
+import { archiveIssueStates } from './employee-archive-issues';
+import { hasHrCapability } from '@/auth/hr-capabilities';
 
 export interface UpsertEmployeeProfileInput {
   phone?: string | null;
@@ -129,7 +131,8 @@ export class EmployeeArchivesService {
             archivedAt: null,
           },
           select: { id: true, proposedValue: true, requestVersion: true, userId: true, employeeNo: true,
-            profileReviewStatus: true, recordStatus: true, revisionHistory: true, rejectedReason: true, updatedAt: true },
+            profileReviewStatus: true, recordStatus: true, revisionHistory: true, rejectedReason: true, updatedAt: true,
+            sourceSystem: true, validationWarnings: true },
         });
         if (!draft) {
           throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
@@ -168,7 +171,7 @@ export class EmployeeArchivesService {
           profileReviewStatus: 'pending',
           performanceReviewStatus: performanceManagerId ? 'pending' : 'not_required',
           validationErrors: this.toJson([]),
-          validationWarnings: this.toJson(warnings),
+          validationWarnings: this.toJson(this.sourceDraftWarnings(savedDraft, warnings)),
           createdById: operator.id,
           recordStatus: 'submitted',
           archivedAt: null,
@@ -235,7 +238,8 @@ export class EmployeeArchivesService {
             archivedAt: null,
           },
           select: { id: true, proposedValue: true, requestVersion: true, userId: true, employeeNo: true,
-            profileReviewStatus: true, recordStatus: true, revisionHistory: true, rejectedReason: true, updatedAt: true },
+            profileReviewStatus: true, recordStatus: true, revisionHistory: true, rejectedReason: true, updatedAt: true,
+            sourceSystem: true, validationWarnings: true },
         });
         if (!draft) {
           throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
@@ -261,7 +265,7 @@ export class EmployeeArchivesService {
         profileReviewStatus: 'pending',
         performanceReviewStatus: performanceManagerId ? 'pending' : 'not_required',
         validationErrors: this.toJson([]),
-        validationWarnings: this.toJson([]),
+        validationWarnings: this.toJson(this.sourceDraftWarnings(savedDraft, [])),
         createdById: operator.id,
         recordStatus: 'draft',
         archivedAt: null,
@@ -421,7 +425,16 @@ export class EmployeeArchivesService {
     ]) {
       if (profile[key] == null && previousProfile[key] != null) profile[key] = previousProfile[key];
     }
-    return { ...proposed, profile };
+    // Source provenance is server-owned and must survive editing a collected draft.
+    return { ...proposed, ...this.pickFields(this.record(previousValue), [
+      'source', 'sourceFileHash', 'sourceEmployeeNo', 'identityCandidateUserId', 'sourceEvidenceEncrypted',
+    ]), profile };
+  }
+
+  private sourceDraftWarnings(previous: Record<string, any> | null, next: unknown[]): unknown[] {
+    if (!previous || !(previous.sourceSystem || this.record(previous.proposedValue).sourceFileHash) || !Array.isArray(previous.validationWarnings)) return next;
+    const combined = [...previous.validationWarnings, ...next];
+    return combined.filter((warning, index) => combined.findIndex(item => JSON.stringify(item) === JSON.stringify(warning)) === index);
   }
 
   private async assertEmployeeCreateIdentity(
@@ -546,7 +559,7 @@ export class EmployeeArchivesService {
     return value.map((item) => this.pickFields(this.record(item), ['name', 'url', 'size', 'mimeType']));
   }
 
-  async listDrafts(query: { page: number; pageSize: number }) {
+  async listDrafts(query: { page: number; pageSize: number }, operator?: AuthUser) {
     const where: Prisma.EmployeeDataChangeRequestWhereInput = {
       recordStatus: 'draft',
       archivedAt: null,
@@ -561,8 +574,18 @@ export class EmployeeArchivesService {
       }),
       this.prisma.employeeDataChangeRequest.count({ where }),
     ]);
+    const canReadIssues = operator && (hasHrCapability(operator, 'employee_archive_edit') || hasHrCapability(operator, 'employee_archive_review'));
+    const issueUsers = canReadIssues ? [...new Set(items.filter(item => item.userId && Array.isArray(item.validationWarnings) && item.validationWarnings.length).map(item => item.userId!))] : [];
+    const facts = issueUsers.length ? await this.prisma.user.findMany({ where: { id: { in: issueUsers }, deletedAt: null },
+      select: { id: true, name: true, employeeNo: true, phone: true, status: true, deptId: true, position: true, entryDate: true, employmentType: true,
+        employeeProfile: true, employeeContracts: true,
+        employmentHistory: { where: approvedEmploymentSourceWhere, orderBy: [{ effectiveFrom: 'desc' }, { createdAt: 'desc' }] } },
+    }) : [];
+    const factsByUser = new Map(facts.map(user => [user.id, user] as const));
     return {
-      items: items.map((item) => employeeDataChangeView(item)),
+      items: items.map((item) => employeeDataChangeView({ ...item,
+        ...(canReadIssues ? { archiveIssueCount: item.userId && !factsByUser.has(item.userId) ? 0 : archiveIssueStates(item, factsByUser.get(item.userId!) ?? null).length } : {}),
+      })),
       total,
       page: query.page,
       pageSize: query.pageSize,
