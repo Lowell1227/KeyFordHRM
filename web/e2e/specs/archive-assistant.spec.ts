@@ -32,11 +32,106 @@ for (const width of [1440, 390]) test(`preview and explicit single save ${width}
   expect(writes).toBe(1);
   await expect(page.getByRole('link', { name: '打开草稿' })).toHaveAttribute('href', saved.url);
 });
-test('captures fragment before login redirect and returns using session token', async ({ page }) => {
+async function mockOAuth(page: Page, callbackQuery = 'code=mock-code') {
+  await page.route('https://login.dingtalk.com/**', route => {
+    const url = new URL(route.request().url());
+    const callback = url.searchParams.get('redirect_uri')!;
+    expect(callback).toBe('http://127.0.0.1:5189/auth/callback');
+    expect(url.searchParams.get('response_type')).toBe('code');
+    expect(url.searchParams.get('scope')).toBe('openid corpid');
+    expect([...url.searchParams.keys()].sort()).toEqual(['client_id', 'corpId', 'redirect_uri', 'response_type', 'scope']);
+    return route.fulfill({ contentType: 'text/html', body: `<script>location.replace(${JSON.stringify(`${callback}?${callbackQuery}`)})</script>` });
+  });
+  await page.route('**/api/v1/auth/dingtalk', route => {
+    expect(route.request().postDataJSON()).toEqual({ authCode: 'mock-code', loginMode: 'oauth' });
+    return route.fulfill({ json: wrap({ token: 'mock', expiresIn: 600, user: { id: 'pilot', name: '测试HR', sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'], businessCapabilities: {} } }) });
+  });
+}
+test('external OAuth automatically returns to captured preview with token only in session/header', async ({ page }) => {
+  const urls: string[] = [];
+  page.on('request', request => urls.push(request.url()));
   await setup(page, false); await page.goto(path + '#preview=signed-token');
   await expect(page).toHaveURL(/\/login\?redirect=/); expect(page.url()).not.toContain('signed-token');
-  await page.evaluate(() => { localStorage.setItem('token', 'mock'); localStorage.setItem('expiresAt', String(Date.now() + 600000)); });
-  await page.goto(path); await expect(page.getByText(preview.employeeName)).toBeVisible();
+  // Register after setup's generic API stub so the actual callback exercises authentication.
+  await mockOAuth(page);
+  const read = page.waitForRequest(request => request.url().endsWith('/assistant/preview'));
+  await page.getByRole('button', { name: '选择钉钉账号/组织登录' }).click();
+  await expect(page).toHaveURL(new RegExp(`${path}$`));
+  await expect(page.getByText(preview.employeeName)).toBeVisible();
+  expect((await read).headers()['x-archive-preview']).toBe('signed-token');
+  expect(urls.every(url => !url.includes('signed-token'))).toBe(true);
+  expect(await page.evaluate(() => sessionStorage.getItem('archive-assistant:oauth-return'))).toBeNull();
+});
+for (const target of [
+  'https://outside.invalid' + path, '//outside.invalid' + path,
+  '/\\outside.invalid' + path, path + '?preview=signed-token',
+  path + '#preview=signed-token', '/archive-assistant/preview/not-a-reference',
+]) test(`OAuth does not retain unsafe archive return ${target}`, async ({ page }) => {
+  await setup(page, false); await mockOAuth(page);
+  await page.goto(`/login?redirect=${encodeURIComponent(target)}`);
+  // An unrelated OAuth attempt also clears an abandoned archive return.
+  await page.evaluate(reference => sessionStorage.setItem('archive-assistant:oauth-return', JSON.stringify({ reference, expiresAt: Date.now() + 60000 })), ref);
+  await page.getByRole('button', { name: '选择钉钉账号/组织登录' }).click();
+  await expect(page).toHaveURL(/\/dashboard$/);
+  expect(await page.evaluate(() => sessionStorage.getItem('archive-assistant:oauth-return'))).toBeNull();
+});
+
+for (const [index, record] of [
+  'malformed-json', JSON.stringify({ reference: '//outside.invalid', expiresAt: Date.now() + 60000 }),
+  JSON.stringify({ reference: ref, expiresAt: 0 }), JSON.stringify({ reference: ref, expiresAt: 9999999999999 }),
+].entries()) test(`callback rejects malformed or expired stored return ${index}`, async ({ page }) => {
+  await setup(page, false); await mockOAuth(page);
+  await page.goto('/login');
+  await page.evaluate(value => sessionStorage.setItem('archive-assistant:oauth-return', value), record);
+  await page.goto('/auth/callback?code=mock-code&redirect=%2Fusers');
+  await expect(page).toHaveURL('/users');
+  expect(await page.evaluate(() => sessionStorage.getItem('archive-assistant:oauth-return'))).toBeNull();
+});
+
+for (const failure of ['missing-code', 'auth-error']) test(`archive OAuth ${failure} preserves safe destination for retry`, async ({ page }) => {
+  await setup(page, false); await mockOAuth(page, failure === 'missing-code' ? '' : 'code=mock-code');
+  if (failure === 'auth-error') await page.route('**/api/v1/auth/dingtalk', route => route.fulfill({ status: 403, json: { message: '账号未开通' } }));
+  await page.goto(path + '#preview=signed-token');
+  await page.getByRole('button', { name: '选择钉钉账号/组织登录' }).click();
+  await expect(page.getByText(failure === 'missing-code' ? '缺少钉钉授权码' : '该钉钉账号尚未同步到系统，请联系 HR 或系统管理员后重试')).toBeVisible();
+  await expect(page).toHaveURL(`/login?redirect=${path}`);
+  expect(await page.evaluate(() => sessionStorage.getItem('archive-assistant:oauth-return'))).toBeNull();
+  expect(await page.evaluate(reference => sessionStorage.getItem(`archive-assistant:${reference}`), ref)).toBe('signed-token');
+});
+
+test('ordinary callback retains query redirect and missing-code fallback', async ({ page }) => {
+  await setup(page, false); await mockOAuth(page);
+  await page.goto('/auth/callback?redirect=%2Fusers');
+  await expect(page).toHaveURL('/login?redirect=/users');
+  await page.goto('/auth/callback?code=mock-code&redirect=%2Fusers');
+  await expect(page).toHaveURL('/users');
+});
+
+test('ordinary callback error retains query redirect', async ({ page }) => {
+  await setup(page, false);
+  await page.route('**/api/v1/auth/dingtalk', route => route.fulfill({ status: 403, json: { message: '账号未开通' } }));
+  await page.goto('/auth/callback?code=mock-code&redirect=%2Fusers');
+  await expect(page).toHaveURL('/login?redirect=/users');
+  await expect(page.getByText('该钉钉账号尚未同步到系统，请联系 HR 或系统管理员后重试')).toBeVisible();
+});
+
+test('ordinary callback rejects external query redirect', async ({ page }) => {
+  await setup(page, false); await mockOAuth(page);
+  await page.goto('/auth/callback?code=mock-code&redirect=https%3A%2F%2Foutside.invalid');
+  await expect(page).toHaveURL(/\/dashboard$/);
+});
+
+test('password login clears abandoned OAuth return and keeps its query destination', async ({ page }) => {
+  await setup(page, false);
+  await page.route('**/api/v1/auth/login', route => route.fulfill({ json: wrap({ token: 'mock', expiresIn: 600, user: { id: 'pilot', sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'], businessCapabilities: {} } }) }));
+  await page.goto('/login?redirect=/users');
+  await page.evaluate(reference => sessionStorage.setItem('archive-assistant:oauth-return', JSON.stringify({ reference, expiresAt: Date.now() + 60000 })), ref);
+  await page.getByTestId('password-login-toggle').click();
+  await page.getByTestId('login-employee-no').fill('mock-user');
+  await page.getByTestId('login-password').fill('mock-password');
+  await page.getByTestId('login-submit').click();
+  await expect(page).toHaveURL('/users');
+  expect(await page.evaluate(() => sessionStorage.getItem('archive-assistant:oauth-return'))).toBeNull();
 });
 for (const status of [400, 403, 409]) test(`inline preview error ${status}`, async ({ page }) => {
   await setup(page);

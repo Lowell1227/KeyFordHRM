@@ -4,6 +4,7 @@ import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores/auth.store';
 import { dingtalkLoginErrorMessage } from '@/utils/dingtalk-login-error';
+import { takeArchiveOAuthReturn } from '@/utils/dingtalk-oauth';
 
 const route = useRoute();
 const router = useRouter();
@@ -17,7 +18,7 @@ function resolveRedirect(value: unknown): string {
 
 onMounted(async () => {
   const authCode = (route.query.authCode as string) || (route.query.code as string);
-  const redirect = resolveRedirect(route.query.redirect);
+  const redirect = takeArchiveOAuthReturn() ?? resolveRedirect(route.query.redirect);
 
   if (!authCode) {
     ElMessage.error('缺少钉钉授权码');

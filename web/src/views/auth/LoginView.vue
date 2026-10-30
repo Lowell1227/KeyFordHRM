@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores/auth.store';
 import { loadDingTalkJsApi } from '@/utils/dingtalk-jsapi';
 import { dingtalkLoginErrorMessage } from '@/utils/dingtalk-login-error';
-import { buildDingTalkOAuthUrl } from '@/utils/dingtalk-oauth';
+import { buildDingTalkOAuthUrl, clearArchiveOAuthReturn, rememberArchiveOAuthReturn } from '@/utils/dingtalk-oauth';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -28,6 +28,7 @@ function isAuthFailure(err: unknown): boolean {
 }
 
 function redirectAfterLogin() {
+  clearArchiveOAuthReturn();
   const target = (route.query.redirect as string) || '/dashboard';
   router.replace(target);
 }
@@ -88,6 +89,7 @@ async function onDingTalkLogin() {
   }
 
   loading.value = true;
+  rememberArchiveOAuthReturn(route.query.redirect);
   window.location.href = buildDingTalkOAuthUrl({
     redirectUri: getDingTalkRedirectUri(),
     appKey: DINGTALK_APP_KEY,
@@ -104,6 +106,7 @@ async function onPasswordLogin() {
   try {
     const passwordChangeRequired = await auth.loginWithPassword(form.employeeNo, form.password);
     if (passwordChangeRequired) {
+      clearArchiveOAuthReturn();
       await router.replace({ name: 'ChangePassword' });
     } else {
       redirectAfterLogin();
