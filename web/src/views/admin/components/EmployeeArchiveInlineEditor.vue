@@ -1,24 +1,30 @@
 <script setup lang="ts">
-import { onMounted, reactive, ref, watch } from 'vue';
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { isAxiosError } from 'axios';
 import { Delete, Plus } from '@element-plus/icons-vue';
 import { ElMessage, type UploadRequestOptions } from 'element-plus';
 import type { Department } from '@/types/api.types';
-import type { EmployeeArchive, EmployeeDataReview } from '@/api/employee-archives.api';
+import { employeeArchivesApi, type EmployeeArchive, type EmployeeDataReview } from '@/api/employee-archives.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import ContractSubjectSelect from '@/components/common/ContractSubjectSelect.vue';
 import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSelect.vue';
 import { uploadApi } from '@/api/upload.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
+import { archiveFieldPath } from '@/utils/employee-archive-fields';
 
 const props = defineProps<{
   editing: boolean;
   archive: EmployeeArchive | null;
   draft?: EmployeeDataReview | null;
   departments: Department[];
+  busy?: boolean;
+  focusField?: string;
 }>();
 
 type ArchiveChangePayload = {
   draftId?: string;
+  expectedVersion?: number;
+  baseVersion?: string;
   employee: Record<string, unknown>;
   profile: Record<string, unknown>;
   contracts: Record<string, unknown>[];
@@ -27,9 +33,22 @@ type ArchiveChangePayload = {
 
 const emit = defineEmits<{
   submit: [value: ArchiveChangePayload];
-  save: [value: ArchiveChangePayload];
+  saved: [value: EmployeeDataReview];
+  busy: [value: boolean];
+  state: [value: 'idle' | 'saving' | 'saved' | 'error'];
 }>();
 const positions = ref<PositionRecord[]>([]);
+const editorElement = ref<HTMLElement>();
+const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
+const saveError = ref('');
+const saveBlocked = ref(false);
+watch(saveState, value => emit('state', value));
+let draftId: string | undefined;
+let draftVersion: number | undefined;
+let generation = 0;
+let hydrating = false;
+let autosaveTimer: ReturnType<typeof setTimeout> | undefined;
+let savePromise: Promise<boolean> | undefined;
 
 const form = reactive({
   employee: {} as Record<string, any>,
@@ -55,6 +74,14 @@ function replaceRecord(target: Record<string, any>, value: Record<string, any>) 
 function reset() {
   const archive = props.archive;
   if (!archive) return;
+  hydrating = true;
+  generation++;
+  clearTimeout(autosaveTimer);
+  draftId = props.draft?.id;
+  draftVersion = props.draft?.requestVersion;
+  saveState.value = props.draft ? 'saved' : 'idle';
+  saveError.value = '';
+  saveBlocked.value = false;
   const employment = archive.currentEmployment ?? archive.employmentHistory[0];
   replaceRecord(form.employee, {
     name: archive.name,
@@ -148,11 +175,16 @@ function reset() {
     }
   }
   initialSnapshot = formSnapshot();
+  void nextTick(() => { hydrating = false; void focusField(props.focusField); });
 }
 
-watch(() => [props.editing, props.archive?.id, props.draft?.id] as const, ([editing]) => {
+watch(() => [props.editing, props.archive?.id] as const, ([editing]) => {
   if (editing) reset();
+  else { generation++; clearTimeout(autosaveTimer); }
 }, { immediate: true });
+watch(() => props.focusField, field => { if (props.editing) void focusField(field); });
+watch(form, () => { if (!hydrating && props.editing && !props.busy && !saveBlocked.value) scheduleAutosave(); }, { deep: true, flush: 'sync' });
+onBeforeUnmount(() => { generation++; clearTimeout(autosaveTimer); });
 onMounted(async () => { positions.value = await positionsApi.findAll(); });
 
 function addContract() {
@@ -234,41 +266,107 @@ async function openUploadedMaterial(item: { name: string; url: string; mimeType?
 }
 
 function changePayload(): ArchiveChangePayload {
-  form.employee.phone = form.profile.phone || null;
   return {
-    draftId: props.draft?.id,
-    employee: { ...form.employee },
+    draftId,
+    expectedVersion: draftId ? draftVersion : undefined,
+    baseVersion: props.archive?.archiveVersion,
+    employee: { ...form.employee, phone: form.profile.phone || null },
     profile: { ...form.profile },
     contracts: form.contracts.map(({ __key, ...item }, index) => ({ ...item, sequence: index })),
     performance: { ...form.performance },
   };
 }
 
-function submit() {
-  if (!isDirty() && !props.draft) {
+async function submit() {
+  clearTimeout(autosaveTimer);
+  const session = generation;
+  if (savePromise && !await savePromise) return;
+  if (session !== generation || !props.editing || props.busy || saveBlocked.value) return;
+  if (!isDirty() && !draftId) {
     ElMessage.info('未检测到变更，无需提交审核');
     return;
   }
   emit('submit', changePayload());
 }
 
-function saveDraft() {
-  if (!isDirty() && !props.draft) {
-    ElMessage.info('未检测到变更，无需保存草稿');
-    return;
+function scheduleAutosave() {
+  clearTimeout(autosaveTimer);
+  if (!isDirty()) return;
+  saveState.value = 'idle';
+  autosaveTimer = setTimeout(() => { void saveDraft(); }, 700);
+}
+
+async function saveDraft(): Promise<boolean> {
+  clearTimeout(autosaveTimer);
+  const session = generation;
+  while (savePromise) {
+    if (!await savePromise) return false;
+    if (session !== generation || !props.editing || props.busy || saveBlocked.value) return false;
   }
-  emit('save', changePayload());
+  if (session !== generation || !props.editing || props.busy || saveBlocked.value) return false;
+  if (!isDirty()) return true;
+  const snapshot = formSnapshot(), payload = changePayload(), userId = props.archive!.id;
+  saveState.value = 'saving';
+  saveError.value = '';
+  emit('busy', true);
+  const promise = (async () => {
+    try {
+      const result = await employeeArchivesApi.saveArchiveDraft(userId, payload);
+      if (session !== generation || !props.editing) return false;
+      draftId = result.id;
+      draftVersion = result.requestVersion;
+      initialSnapshot = snapshot;
+      saveState.value = 'saved';
+      emit('saved', result);
+      return true;
+    } catch (error) {
+      if (session !== generation) return false;
+      saveState.value = 'error';
+      saveBlocked.value = isAxiosError(error) && error.response?.status === 409;
+      saveError.value = saveBlocked.value
+        ? '资料已更新，本次输入已保留。请先留存本次修改，关闭后重新打开最新草稿核对，避免覆盖其他人的修改。'
+        : '草稿保存失败，输入已保留。请重试保存。';
+      return false;
+    } finally {
+      if (session === generation) emit('busy', false);
+    }
+  })();
+  savePromise = promise;
+  const succeeded = await promise;
+  if (savePromise === promise) savePromise = undefined;
+  if (succeeded && session === generation && isDirty()) return saveDraft();
+  return succeeded;
+}
+
+async function focusField(field?: string) {
+  await nextTick();
+  const root = editorElement.value;
+  if (!root || !field) return;
+  root.querySelectorAll('.archive-field--focused').forEach(item => item.classList.remove('archive-field--focused'));
+  const normalized = archiveFieldPath(field);
+  const target = root.querySelector<HTMLElement>(`[data-archive-field="${CSS.escape(normalized)}"]`)
+    ?? (normalized.startsWith('contracts') ? root.querySelector<HTMLElement>('[data-archive-section="contracts"]') : null);
+  if (!target) return;
+  target.classList.add('archive-field--focused');
+  target.scrollIntoView({ block: 'center' });
+  const input = target.querySelector<HTMLElement>('input:not(:disabled),textarea:not(:disabled),button:not(:disabled)');
+  if (input) input.focus({ preventScroll: true });
+  else { target.tabIndex = -1; target.focus({ preventScroll: true }); }
 }
 
 function isDirty() {
   return Boolean(initialSnapshot) && formSnapshot() !== initialSnapshot;
 }
 
-defineExpose({ submit, saveDraft, reset, isDirty });
+defineExpose({ submit, saveDraft, reset, isDirty, focusField,
+  pauseAutosave: () => clearTimeout(autosaveTimer), resumeAutosave: scheduleAutosave });
 </script>
 
 <template>
-  <div v-if="editing" class="archive-inline-editor">
+  <div v-if="editing" ref="editorElement" class="archive-inline-editor">
+    <div class="archive-save-state" role="status" aria-live="polite">{{ saveState === 'saving' ? '正在保存草稿…' : saveState === 'saved' ? '草稿已保存，尚未提交审核' : saveState === 'error' ? '草稿尚未保存' : '修改后自动保存草稿' }}</div>
+    <div v-if="saveError" class="archive-save-error" role="alert">{{ saveError }}<el-button v-if="!saveBlocked" link type="primary" @click="saveDraft">重试保存</el-button></div>
+    <nav class="archive-editor-nav" aria-label="档案分区"><el-button v-for="section in [{ id: 'employment', label: '基本与任职' }, { id: 'personal', label: '个人与教育' }, { id: 'contact', label: '联系与保障' }, { id: 'contracts', label: '合同记录' }]" :key="section.id" link @click="editorElement?.querySelector(`[data-archive-section='${section.id}']`)?.scrollIntoView({ block: 'start' })">{{ section.label }}</el-button></nav>
     <el-alert
       title="保存草稿不会进入审核；只有点击提交审核后，才会进入人事办理的待我审核。"
       type="info"
@@ -276,75 +374,75 @@ defineExpose({ submit, saveDraft, reset, isDirty });
       :closable="false"
     />
 
-    <section class="editor-section">
+    <section class="editor-section" data-archive-section="employment">
       <div class="editor-section__head">
         <div><h3>基本与任职</h3><span>员工身份、当前组织和绩效关系</span></div>
       </div>
       <el-form label-position="top" class="archive-editor-grid">
-        <el-form-item label="姓名"><el-input v-model="form.employee.name" /></el-form-item>
-        <el-form-item label="当前工号"><el-input v-model="form.employee.employeeNo" disabled /><small class="field-help">工号由系统生成；历史任职工号在档案中保留，不在此处修改。</small></el-form-item>
-        <el-form-item label="所属公司（合同主体）"><ContractSubjectSelect v-model="form.employee.contractSubjectId" v-model:snapshot-name="form.employee.companyText" /></el-form-item>
-        <el-form-item label="组织归属">
+        <el-form-item label="姓名" data-archive-field="employee.name"><el-input v-model="form.employee.name" /></el-form-item>
+        <el-form-item label="当前工号" data-archive-field="employee.employeeNo"><el-input v-model="form.employee.employeeNo" disabled /><small class="field-help">工号由系统生成；历史任职工号在档案中保留，不在此处修改。</small></el-form-item>
+        <el-form-item label="所属公司（合同主体）" data-archive-field="employee.companyText"><ContractSubjectSelect v-model="form.employee.contractSubjectId" v-model:snapshot-name="form.employee.companyText" /></el-form-item>
+        <el-form-item label="组织归属" data-archive-field="employee.company">
           <el-select v-model="form.employee.company"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select>
         </el-form-item>
-        <el-form-item label="所属部门"><el-tree-select v-model="form.employee.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
-        <el-form-item label="岗位"><el-select v-model="form.employee.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
-        <el-form-item label="职级"><el-input v-model="form.employee.jobGrade" /></el-form-item>
-          <el-form-item label="职系"><PersonnelReferenceSelect v-model="form.employee.jobFamily" kind="job_family" label="职系" /></el-form-item>
-        <el-form-item label="花名册直属主管"><UserSelect v-model="form.employee.managerId" :disabled-ids="archive ? [archive.id] : []" /></el-form-item>
-        <el-form-item label="绩效直属上级"><UserSelect v-model="form.performance.managerId" :disabled-ids="archive ? [archive.id] : []" /></el-form-item>
-          <el-form-item label="工作地点"><PersonnelReferenceSelect v-model="form.employee.workLocation" kind="work_location" label="工作地点" /></el-form-item>
-        <el-form-item label="用工类型"><el-select v-model="form.employee.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
-        <el-form-item label="当前状态"><el-select v-model="form.employee.employeeStatus"><el-option label="在职" value="active" /><el-option label="试用期" value="probation" /><el-option label="已离职" value="resigned" /></el-select></el-form-item>
-        <el-form-item label="入职日期"><el-date-picker v-model="form.employee.entryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-        <el-form-item label="试用期（月）"><el-input-number v-model="form.employee.probationMonths" :min="0" :max="12" /></el-form-item>
-        <el-form-item label="预计转正日期"><el-date-picker v-model="form.employee.plannedRegularDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-        <el-form-item label="实际转正日期"><el-date-picker v-model="form.employee.actualRegularDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-        <el-form-item label="离职日期"><el-date-picker v-model="form.employee.leaveDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="所属部门" data-archive-field="employee.deptId"><el-tree-select v-model="form.employee.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
+        <el-form-item label="岗位" data-archive-field="employee.positionId"><el-select v-model="form.employee.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
+        <el-form-item label="职级" data-archive-field="employee.jobGrade"><el-input v-model="form.employee.jobGrade" /></el-form-item>
+          <el-form-item label="职系" data-archive-field="employee.jobFamily"><PersonnelReferenceSelect v-model="form.employee.jobFamily" kind="job_family" label="职系" /></el-form-item>
+        <el-form-item label="花名册直属主管" data-archive-field="employee.managerId"><UserSelect v-model="form.employee.managerId" :disabled-ids="archive ? [archive.id] : []" /></el-form-item>
+        <el-form-item label="绩效直属上级" data-archive-field="performance.managerId"><UserSelect v-model="form.performance.managerId" :disabled-ids="archive ? [archive.id] : []" /></el-form-item>
+          <el-form-item label="工作地点" data-archive-field="employee.workLocation"><PersonnelReferenceSelect v-model="form.employee.workLocation" kind="work_location" label="工作地点" /></el-form-item>
+        <el-form-item label="用工类型" data-archive-field="employee.employmentType"><el-select v-model="form.employee.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
+        <el-form-item label="当前状态" data-archive-field="employee.employeeStatus"><el-select v-model="form.employee.employeeStatus"><el-option label="在职" value="active" /><el-option label="试用期" value="probation" /><el-option label="已离职" value="resigned" /></el-select></el-form-item>
+        <el-form-item label="入职日期" data-archive-field="employee.entryDate"><el-date-picker v-model="form.employee.entryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="试用期（月）" data-archive-field="employee.probationMonths"><el-input-number v-model="form.employee.probationMonths" :min="0" :max="12" /></el-form-item>
+        <el-form-item label="预计转正日期" data-archive-field="employee.plannedRegularDate"><el-date-picker v-model="form.employee.plannedRegularDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="实际转正日期" data-archive-field="employee.actualRegularDate"><el-date-picker v-model="form.employee.actualRegularDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="离职日期" data-archive-field="employee.leaveDate"><el-date-picker v-model="form.employee.leaveDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
       </el-form>
     </section>
 
-    <section class="editor-section">
+    <section class="editor-section" data-archive-section="personal">
       <div class="editor-section__head"><div><h3>个人与教育</h3><span>基础身份和教育经历</span></div></div>
       <el-form label-position="top" class="archive-editor-grid">
-        <el-form-item label="手机号"><el-input v-model="form.profile.phone" /></el-form-item>
-        <el-form-item label="性别"><el-select v-model="form.profile.gender" clearable><el-option label="男" value="男" /><el-option label="女" value="女" /></el-select></el-form-item>
-        <el-form-item label="出生日期"><el-date-picker v-model="form.profile.birthDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-        <el-form-item label="民族"><el-input v-model="form.profile.ethnicity" /></el-form-item>
-        <el-form-item label="学历"><el-input v-model="form.profile.education" /></el-form-item>
-        <el-form-item label="职称"><el-input v-model="form.profile.professionalTitle" /></el-form-item>
-        <el-form-item label="毕业院校"><el-input v-model="form.profile.school" /></el-form-item>
-        <el-form-item label="毕业日期"><el-date-picker v-model="form.profile.graduationDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-        <el-form-item label="专业"><el-input v-model="form.profile.major" /></el-form-item>
-        <el-form-item label="婚姻状况"><el-input v-model="form.profile.maritalStatus" /></el-form-item>
+        <el-form-item label="手机号" data-archive-field="profile.phone"><el-input v-model="form.profile.phone" /></el-form-item>
+        <el-form-item label="性别" data-archive-field="profile.gender"><el-select v-model="form.profile.gender" clearable><el-option label="男" value="男" /><el-option label="女" value="女" /></el-select></el-form-item>
+        <el-form-item label="出生日期" data-archive-field="profile.birthDate"><el-date-picker v-model="form.profile.birthDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="民族" data-archive-field="profile.ethnicity"><el-input v-model="form.profile.ethnicity" /></el-form-item>
+        <el-form-item label="学历" data-archive-field="profile.education"><el-input v-model="form.profile.education" /></el-form-item>
+        <el-form-item label="职称" data-archive-field="profile.professionalTitle"><el-input v-model="form.profile.professionalTitle" /></el-form-item>
+        <el-form-item label="毕业院校" data-archive-field="profile.school"><el-input v-model="form.profile.school" /></el-form-item>
+        <el-form-item label="毕业日期" data-archive-field="profile.graduationDate"><el-date-picker v-model="form.profile.graduationDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="专业" data-archive-field="profile.major"><el-input v-model="form.profile.major" /></el-form-item>
+        <el-form-item label="婚姻状况" data-archive-field="profile.maritalStatus"><el-input v-model="form.profile.maritalStatus" /></el-form-item>
         <el-form-item label="子女状况"><el-input v-model="form.profile.childrenStatus" /></el-form-item>
         <el-form-item label="子女数量"><el-input-number v-model="form.profile.childrenCount" :min="0" /></el-form-item>
-        <el-form-item label="政治面貌"><el-input v-model="form.profile.politicalStatus" /></el-form-item>
-        <el-form-item label="籍贯"><el-input v-model="form.profile.nativePlace" /></el-form-item>
-        <el-form-item label="户籍类型"><el-input v-model="form.profile.householdType" /></el-form-item>
+        <el-form-item label="政治面貌" data-archive-field="profile.politicalStatus"><el-input v-model="form.profile.politicalStatus" /></el-form-item>
+        <el-form-item label="籍贯" data-archive-field="profile.nativePlace"><el-input v-model="form.profile.nativePlace" /></el-form-item>
+        <el-form-item label="户籍类型" data-archive-field="profile.householdType"><el-input v-model="form.profile.householdType" /></el-form-item>
       </el-form>
     </section>
 
-    <section class="editor-section">
+    <section class="editor-section" data-archive-section="contact">
       <div class="editor-section__head"><div><h3>联系与保障</h3><span>敏感号码留空表示保持原值</span></div></div>
       <el-form label-position="top" class="archive-editor-grid">
-        <el-form-item label="身份证地址" class="span-2"><el-input v-model="form.profile.idAddress" /></el-form-item>
-        <el-form-item :label="form.profile.idNumberConfigured || archive?.employeeProfile?.idNumberConfigured ? '身份证号（已保存，留空不变）' : '身份证号'"><el-input v-model="form.profile.idNumber" type="password" show-password /></el-form-item>
-        <el-form-item label="现住址" class="span-2"><el-input v-model="form.profile.currentAddress" /></el-form-item>
-        <el-form-item label="紧急联系人"><el-input v-model="form.profile.emergencyContactName" /></el-form-item>
-        <el-form-item label="与联系人关系"><el-input v-model="form.profile.emergencyContactRelation" /></el-form-item>
-        <el-form-item label="紧急联系电话"><el-input v-model="form.profile.emergencyContactPhone" /></el-form-item>
-        <el-form-item label="社保状态"><el-input v-model="form.profile.socialSecurityStatus" /></el-form-item>
-        <el-form-item label="社保起始日期"><el-date-picker v-model="form.profile.socialSecurityStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-        <el-form-item label="公积金状态"><el-input v-model="form.profile.housingFundStatus" /></el-form-item>
-        <el-form-item label="公积金起始日期"><el-date-picker v-model="form.profile.housingFundStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-        <el-form-item label="开户行"><el-input v-model="form.profile.bankName" /></el-form-item>
-        <el-form-item label="开户支行"><el-input v-model="form.profile.bankBranch" /></el-form-item>
-        <el-form-item :label="form.profile.bankAccountConfigured || archive?.employeeProfile?.bankAccountConfigured ? '银行卡号（已保存，留空不变）' : '银行卡号'"><el-input v-model="form.profile.bankAccount" type="password" show-password /></el-form-item>
+        <el-form-item label="身份证地址" data-archive-field="profile.idAddress" class="span-2"><el-input v-model="form.profile.idAddress" /></el-form-item>
+        <el-form-item data-archive-field="profile.idNumber" :label="form.profile.idNumberConfigured || archive?.employeeProfile?.idNumberConfigured ? '身份证号（已保存，留空不变）' : '身份证号'"><el-input v-model="form.profile.idNumber" type="password" show-password /></el-form-item>
+        <el-form-item label="现住址" data-archive-field="profile.currentAddress" class="span-2"><el-input v-model="form.profile.currentAddress" /></el-form-item>
+        <el-form-item label="紧急联系人" data-archive-field="profile.emergencyContactName"><el-input v-model="form.profile.emergencyContactName" /></el-form-item>
+        <el-form-item label="与联系人关系" data-archive-field="profile.emergencyContactRelation"><el-input v-model="form.profile.emergencyContactRelation" /></el-form-item>
+        <el-form-item label="紧急联系电话" data-archive-field="profile.emergencyContactPhone"><el-input v-model="form.profile.emergencyContactPhone" /></el-form-item>
+        <el-form-item label="社保状态" data-archive-field="profile.socialSecurityStatus"><el-input v-model="form.profile.socialSecurityStatus" /></el-form-item>
+        <el-form-item label="社保起始日期" data-archive-field="profile.socialSecurityStartDate"><el-date-picker v-model="form.profile.socialSecurityStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="公积金状态" data-archive-field="profile.housingFundStatus"><el-input v-model="form.profile.housingFundStatus" /></el-form-item>
+        <el-form-item label="公积金起始日期" data-archive-field="profile.housingFundStartDate"><el-date-picker v-model="form.profile.housingFundStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item label="开户行" data-archive-field="profile.bankName"><el-input v-model="form.profile.bankName" /></el-form-item>
+        <el-form-item label="开户支行" data-archive-field="profile.bankBranch"><el-input v-model="form.profile.bankBranch" /></el-form-item>
+        <el-form-item data-archive-field="profile.bankAccount" :label="form.profile.bankAccountConfigured || archive?.employeeProfile?.bankAccountConfigured ? '银行卡号（已保存，留空不变）' : '银行卡号'"><el-input v-model="form.profile.bankAccount" type="password" show-password /></el-form-item>
       </el-form>
     </section>
 
-    <section class="editor-section">
+    <section class="editor-section" data-archive-section="contracts">
       <div class="editor-section__head contract-toolbar">
         <div><h3>合同记录</h3><span>支持新增、修改和移除；审核通过后统一生效</span></div>
         <el-button :icon="Plus" @click="addContract">新增合同</el-button>
@@ -352,18 +450,18 @@ defineExpose({ submit, saveDraft, reset, isDirty });
       <div v-for="(contract, index) in form.contracts" :key="contract.__key" class="contract-card">
         <div class="contract-card__head"><strong>合同 {{ index + 1 }}</strong><el-button link type="danger" :icon="Delete" @click="form.contracts.splice(index, 1)">移除</el-button></div>
         <el-form label-position="top" class="archive-editor-grid">
-          <el-form-item label="类型"><el-select v-model="contract.contractType"><el-option label="劳动合同" value="contract" /><el-option label="续签" value="renewal" /><el-option label="转签" value="transfer" /></el-select></el-form-item>
-          <el-form-item label="合同名称"><el-input v-model="contract.name" /></el-form-item>
-          <el-form-item label="签约公司"><ContractSubjectSelect v-model="contract.contractSubjectId" v-model:snapshot-name="contract.signingCompany" /></el-form-item>
-          <el-form-item label="签订日期"><el-date-picker v-model="contract.signedAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-          <el-form-item label="生效日期"><el-date-picker v-model="contract.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-          <el-form-item label="到期日期"><el-date-picker v-model="contract.expiresAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-          <el-form-item label="期限"><el-input v-model="contract.termType" /></el-form-item>
-          <el-form-item label="原公司"><el-input v-model="contract.originalCompany" /></el-form-item>
-          <el-form-item label="新公司"><el-input v-model="contract.newCompany" /></el-form-item>
-          <el-form-item label="保密协议"><el-input v-model="contract.confidentialityAgreement" /></el-form-item>
-          <el-form-item label="竞业协议"><el-input v-model="contract.nonCompeteAgreement" /></el-form-item>
-          <el-form-item label="肖像协议"><el-input v-model="contract.portraitAgreement" /></el-form-item>
+          <el-form-item label="类型" :data-archive-field="`contracts.${index}.contractType`"><el-select v-model="contract.contractType"><el-option label="劳动合同" value="contract" /><el-option label="续签" value="renewal" /><el-option label="转签" value="transfer" /></el-select></el-form-item>
+          <el-form-item label="合同名称" :data-archive-field="`contracts.${index}.name`"><el-input v-model="contract.name" /></el-form-item>
+          <el-form-item label="签约公司" :data-archive-field="`contracts.${index}.signingCompany`"><ContractSubjectSelect v-model="contract.contractSubjectId" v-model:snapshot-name="contract.signingCompany" /></el-form-item>
+          <el-form-item label="签订日期" :data-archive-field="`contracts.${index}.signedAt`"><el-date-picker v-model="contract.signedAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+          <el-form-item label="生效日期" :data-archive-field="`contracts.${index}.effectiveFrom`"><el-date-picker v-model="contract.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+          <el-form-item label="到期日期" :data-archive-field="`contracts.${index}.expiresAt`"><el-date-picker v-model="contract.expiresAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+          <el-form-item label="期限" :data-archive-field="`contracts.${index}.termType`"><el-input v-model="contract.termType" /></el-form-item>
+          <el-form-item label="原公司" :data-archive-field="`contracts.${index}.originalCompany`"><el-input v-model="contract.originalCompany" /></el-form-item>
+          <el-form-item label="新公司" :data-archive-field="`contracts.${index}.newCompany`"><el-input v-model="contract.newCompany" /></el-form-item>
+          <el-form-item label="保密协议" :data-archive-field="`contracts.${index}.confidentialityAgreement`"><el-input v-model="contract.confidentialityAgreement" /></el-form-item>
+          <el-form-item label="竞业协议" :data-archive-field="`contracts.${index}.nonCompeteAgreement`"><el-input v-model="contract.nonCompeteAgreement" /></el-form-item>
+          <el-form-item label="肖像协议" :data-archive-field="`contracts.${index}.portraitAgreement`"><el-input v-model="contract.portraitAgreement" /></el-form-item>
         </el-form>
         <div class="contract-materials">
           <div class="contract-materials__group">
@@ -398,6 +496,12 @@ defineExpose({ submit, saveDraft, reset, isDirty });
 </template>
 
 <style scoped>
+.archive-save-state { color: var(--el-text-color-secondary); font-size: 13px; }
+.archive-save-error { color: var(--el-color-danger); font-size: 13px; line-height: 1.6; }
+.archive-editor-nav { display: flex; gap: 16px; flex-wrap: wrap; padding: 6px 0; }
+.editor-section { scroll-margin-top: 12px; }
+.archive-field--focused { outline: 2px solid var(--el-color-primary-light-5); outline-offset: 5px; border-radius: 4px; }
+
 .archive-inline-editor { display: grid; gap: 18px; }
 .editor-section { padding: 18px; border: 1px solid #e5eaf2; border-radius: 14px; background: #fff; }
 .editor-section__head, .contract-card__head { display: flex; align-items: center; justify-content: space-between; gap: 16px; }

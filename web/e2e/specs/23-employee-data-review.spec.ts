@@ -95,6 +95,7 @@ test('HR administrator reviews employee and department changes from the personne
   await page.route('**/api/v1/positions**', (route) => route.fulfill({
     contentType: 'application/json', body: JSON.stringify(apiResponse([])),
   }));
+  await page.route('**/api/v1/contract-subjects**', route => route.fulfill({ json: apiResponse([]) }));
   await page.route('**/api/v1/employee-archives/reviews/list**', (route) => route.fulfill({
     contentType: 'application/json',
     body: JSON.stringify(apiResponse({ total: 2, page: 1, pageSize: 20, items: reviews })),
@@ -147,6 +148,7 @@ test('HR administrator reviews employee and department changes from the personne
   });
 
   await page.goto(`${webBaseUrl}/personnel-change-reviews`);
+  await page.getByRole('tab', { name: '待我审核', exact: true }).waitFor({ state: 'visible' });
   await expect(page).toHaveURL(`${webBaseUrl}/personnel-processing`);
   await expect(page.getByRole('button', { name: '人事办理', exact: true })).toBeVisible();
   await page.getByRole('tab', { name: '待我审核', exact: true }).click();
@@ -188,11 +190,13 @@ test('HR administrator reviews employee and department changes from the personne
   await expect(workspace.getByText('无变更', { exact: true })).toHaveCount(0);
   await expect(reviewTables.nth(0).getByText('需补充', { exact: true })).toBeVisible();
   await expect(reviewTables.nth(0).getByText(/合同修改/)).toBeVisible();
-  await workspace.getByRole('button', { name: '查看合同明细' }).click();
-  await expect(workspace.getByText('合同变更明细', { exact: true })).toBeVisible();
-  await expect(workspace.getByText('变更前：签约公司：孚德；签订日期：2024-01-01；生效日期：2024-01-02；到期日期：2026-12-31')).toBeVisible();
-  await expect(workspace.getByText('变更后：签约公司：孚德体育文化；签订日期：2024-01-01；生效日期：2024-02-01；到期日期：2026-12-31')).toBeVisible();
-  await page.getByRole('dialog', { name: '合同变更明细' }).getByRole('button', { name: '关闭', exact: true }).click();
+  await reviewTables.nth(0).getByRole('button', { name: '查看变更明细' }).first().click();
+  const differences = page.getByRole('dialog', { name: '员工变更明细', exact: true });
+  await expect(differences).toBeVisible();
+  await expect(differences.locator('[data-contract-key="contract-1"] [data-change-key="signingCompany"]')).toContainText('孚德体育文化');
+  await expect(differences.locator('[data-contract-key="contract-1"] [data-change-key="effectiveFrom"]')).toContainText('2024-01-02');
+  await expect(differences.locator('[data-contract-key="contract-1"] [data-change-key="effectiveFrom"]')).toContainText('2024-02-01');
+  await differences.getByRole('button', { name: '关闭', exact: true }).click();
 
   const rowChecks = reviewTables.nth(0).locator('.el-table__body-wrapper .el-checkbox');
   await rowChecks.nth(0).click();

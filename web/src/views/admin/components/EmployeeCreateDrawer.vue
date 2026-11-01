@@ -1,5 +1,7 @@
 <script setup lang="ts">
 import dayjs from 'dayjs';
+import { archiveFieldPath } from '@/utils/employee-archive-fields';
+import { isAxiosError } from 'axios';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { Delete, Plus } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox, type UploadRequestOptions } from 'element-plus';
@@ -10,6 +12,7 @@ import {
   type EmployeeDataReview,
   type EmployeeIdentityCandidate,
   type EmployeeIdentityLookupResult,
+  type EmployeeArchiveIssue,
 } from '@/api/employee-archives.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import { uploadApi } from '@/api/upload.api';
@@ -23,6 +26,8 @@ const props = defineProps<{
   modelValue: boolean;
   departments: Department[];
   draft?: EmployeeDataReview | null;
+  issueContext?: EmployeeArchiveIssue | null;
+  nextAvailable?: boolean;
 }>();
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
@@ -31,6 +36,7 @@ const emit = defineEmits<{
   reentry: [userId: string];
   existing: [userId: string];
   application: [requestId: string];
+  next: [];
 }>();
 
 const stepTitles = ['基本信息', '本次任职', '补充资料', '检查并提交'];
@@ -45,6 +51,9 @@ const fieldErrors = reactive<Record<string, string>>({});
 const saveError = ref('');
 const currentStep = ref(0);
 const draftId = ref<string>();
+const draftVersion = ref<number>();
+const saveBlocked = ref(false);
+const wizardElement = ref<HTMLElement>();
 const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
 const savingAction = ref<'draft' | 'submit' | null>(null);
 const identityLoading = ref(false);
@@ -59,6 +68,11 @@ const plannedRegularDateAuto = ref(true);
 const showSubmitReminder = ref(false);
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let draftSavePromise: Promise<boolean> | null = null;
+let generation = 0;
+let lastSavedSnapshot = '';
+function draftSnapshot() {
+  return JSON.stringify({ form, step: currentStep.value, phoneDuplicateAcknowledged: phoneDuplicateAcknowledged.value });
+}
 
 type ContractDraft = Record<string, any> & { __key: string };
 const form = reactive({
@@ -160,6 +174,9 @@ function dateValue(value: unknown): string {
 }
 
 function reset() {
+  generation++;
+  if (autosaveTimer) clearTimeout(autosaveTimer);
+  saveBlocked.value = false;
   hydrating.value = true;
   const proposed = props.draft?.proposedValue ?? {};
   const employee = proposed.employee ?? {};
@@ -167,6 +184,7 @@ function reset() {
   const performance = proposed.performance ?? {};
   const draftMeta = proposed.draftMeta ?? {};
   draftId.value = props.draft?.id;
+  draftVersion.value = props.draft?.requestVersion;
   const savedStep = Number.isInteger(draftMeta.currentStep) ? Number(draftMeta.currentStep) : 0;
   const restoredStep = draftMeta.layoutVersion === 2
     ? Math.min(Math.max(savedStep, 0), 3)
@@ -233,10 +251,16 @@ function reset() {
   nextTick(() => {
     hydrating.value = false;
     fillPlannedRegularDate();
+    lastSavedSnapshot = draftSnapshot();
+    void focusIssue();
   });
 }
 
-watch(() => props.modelValue, (open) => { if (open) reset(); });
+watch(() => [props.modelValue, props.draft?.id] as const, ([open]) => {
+  if (open) reset();
+  else { generation++; if (autosaveTimer) clearTimeout(autosaveTimer); }
+});
+watch(() => props.issueContext, () => { if (props.modelValue) void focusIssue(); });
 watch(() => [form.phone, form.idNumber], () => {
   identityResult.value = null;
   phoneDuplicateAcknowledged.value = false;
@@ -286,11 +310,13 @@ async function lookupIdentity(force = false) {
   const phone = /^1\d{10}$/.test(normalizedPhone()) ? normalizedPhone() : undefined;
   const idNumber = /^(?:\d{15}|\d{17}[\dX])$/.test(normalizedIdNumber()) ? normalizedIdNumber() : undefined;
   const key = `${phone ?? ''}|${idNumber ?? ''}`;
+  const session = generation;
   if (!force && key === lastIdentityKey.value) return;
   identityLoading.value = true;
   try {
     const previousCandidates = identityResult.value?.candidates.map((item) => item.id).sort().join('|');
     const result = await employeeArchivesApi.lookupIdentity({ phone, idNumber, excludeRequestId: draftId.value });
+    if (session !== generation || key !== `${normalizedPhone() || ''}|${normalizedIdNumber() || ''}` || !props.modelValue) return false;
     const sameMatch = key === lastIdentityKey.value
       && previousCandidates === result.candidates.map((item) => item.id).sort().join('|');
     identityResult.value = result;
@@ -299,14 +325,17 @@ async function lookupIdentity(force = false) {
     fieldErrors.identity = '';
     return true;
   } catch {
+    if (session !== generation) return false;
     fieldErrors.identity = '查重暂未完成，请重试；已填写内容仍保留。';
     return false;
   } finally {
-    identityLoading.value = false;
+    if (session === generation) identityLoading.value = false;
   }
 }
 
-function openCandidate(candidate: EmployeeIdentityCandidate) {
+async function openCandidate(candidate: EmployeeIdentityCandidate) {
+  const session = generation;
+  if (!await prepareToLeave() || session !== generation) return;
   emit('update:modelValue', false);
   if (candidate.requestId || candidate.nextAction === 'view_application') emit('application', candidate.requestId ?? candidate.id);
   else if (candidate.status === 'resigned' || candidate.archived) emit('reentry', candidate.id);
@@ -337,6 +366,7 @@ function requestBody(): EmployeeCreateDraftPayload {
   };
   return {
     draftId: draftId.value,
+    expectedVersion: draftId.value ? draftVersion.value : undefined,
     name: form.name.trim(), phone: normalizedPhone() || null, idNumber: normalizedIdNumber() || null,
     phoneDuplicateAcknowledged: phoneDuplicateAcknowledged.value,
     company: form.company, deptId: form.deptId || undefined, positionId: form.positionId || null,
@@ -351,42 +381,53 @@ function requestBody(): EmployeeCreateDraftPayload {
 }
 
 function scheduleAutosave() {
-  if (hydrating.value || savingAction.value === 'submit' || !props.modelValue || !form.name.trim()) return;
+  if (hydrating.value || saveBlocked.value || savingAction.value === 'submit' || !props.modelValue || !form.name.trim()) return;
   if (autosaveTimer) clearTimeout(autosaveTimer);
   saveState.value = 'idle';
   autosaveTimer = setTimeout(() => { void persistDraft('auto'); }, 700);
 }
 
 async function persistDraft(saveMode: 'auto' | 'manual') {
+  const session = generation;
   if (!form.name.trim()) return false;
   if (saveMode === 'auto' && savingAction.value === 'submit') return false;
   if (autosaveTimer) clearTimeout(autosaveTimer);
   autosaveTimer = null;
-  if (draftSavePromise) await draftSavePromise;
+  while (draftSavePromise) {
+    if (!await draftSavePromise) return false;
+    if (session !== generation || !props.modelValue || saveBlocked.value) return false;
+  }
+  if (session !== generation || !props.modelValue || saveBlocked.value) return false;
   if (saveMode === 'auto' && savingAction.value === 'submit') return false;
+  if (draftId.value && lastSavedSnapshot === draftSnapshot()) return true;
+  const snapshot = draftSnapshot();
   saveState.value = 'saving';
   if (saveMode === 'manual') savingAction.value = 'draft';
   const save = (async () => {
     try {
       const request = await employeeArchivesApi.saveEmployeeCreateDraft({ ...requestBody(), saveMode });
+      if (session !== generation || !props.modelValue) return false;
       draftId.value = request.id;
+      draftVersion.value = request.requestVersion;
+      lastSavedSnapshot = snapshot;
       saveState.value = 'saved';
       saveError.value = '';
       return true;
-    } catch {
+    } catch (error) {
+      if (session !== generation) return false;
       saveState.value = 'error';
-      saveError.value = '草稿保存失败，输入内容仍保留。请重试保存，或放弃本次未保存内容。';
+      saveBlocked.value = isAxiosError(error) && error.response?.status === 409;
+      saveError.value = saveBlocked.value ? '资料已更新，本次输入已保留。请先留存修改，再打开最新草稿核对。' : '草稿保存失败，输入内容仍保留。请重试保存，或放弃本次未保存内容。';
       return false;
     } finally {
-      if (saveMode === 'manual') savingAction.value = null;
+      if (session === generation && saveMode === 'manual') savingAction.value = null;
     }
   })();
   draftSavePromise = save;
-  try {
-    return await save;
-  } finally {
-    if (draftSavePromise === save) draftSavePromise = null;
-  }
+  const succeeded = await save;
+  if (draftSavePromise === save) draftSavePromise = null;
+  if (succeeded && session === generation && lastSavedSnapshot !== draftSnapshot()) return persistDraft(saveMode);
+  return succeeded;
 }
 
 async function saveAndExit() {
@@ -401,18 +442,53 @@ async function saveAndExit() {
 }
 
 async function beforeClose(done: () => void) {
-  if (savingAction.value === 'submit') return;
-  if (!form.name.trim()) { done(); return; }
+  if (await prepareToLeave()) done();
+}
+
+async function prepareToLeave(): Promise<boolean> {
+  if (savingAction.value === 'submit') return false;
+  if (!form.name.trim()) {
+    if (lastSavedSnapshot === draftSnapshot()) return true;
+    try {
+      await ElMessageBox.confirm('尚未填写姓名，当前内容无法保存草稿。放弃本次未保存内容？', '未保存的内容', {
+        confirmButtonText: '放弃未保存内容', cancelButtonText: '继续填写', type: 'warning',
+      });
+      return true;
+    } catch { return false; }
+  }
   if (await persistDraft('auto')) {
     emit('saved');
-    done();
+    return true;
   } else {
     try {
       await ElMessageBox.confirm('草稿保存失败，关闭会丢失本次未保存内容。', '未保存的内容', { confirmButtonText: '放弃未保存内容', cancelButtonText: '继续填写', type: 'warning' });
-      done();
-    } catch { /* 保留输入 */ }
+      return true;
+    } catch { return false; }
   }
 }
+
+async function nextDraft() {
+  if (await prepareToLeave()) emit('next');
+}
+
+async function focusIssue() {
+  if (!props.issueContext?.field) return;
+  const field = archiveFieldPath(props.issueContext.field);
+  const key = field.split('.').pop()!;
+  currentStep.value = ['name', 'phone', 'idNumber', 'identity', 'employeeNo'].includes(key) ? 0
+    : field.startsWith('contracts') || field.startsWith('profile') ? 2 : 1;
+  if (currentStep.value === 2) supplementGroups.value = ['personal', 'contact', 'contracts'];
+  await nextTick();
+  const root = wizardElement.value;
+  root?.querySelectorAll('.archive-field--focused').forEach(item => item.classList.remove('archive-field--focused'));
+  const target = root?.querySelector<HTMLElement>(`[data-archive-field="${CSS.escape(field)}"]`)
+    ?? root?.querySelector<HTMLElement>('.wizard-section:not([style*="display: none"])');
+  if (!target) return;
+  target.classList.add('archive-field--focused'); target.scrollIntoView({ block: 'center' });
+  target.querySelector<HTMLElement>('input:not(:disabled),button:not(:disabled)')?.focus({ preventScroll: true });
+}
+
+defineExpose({ prepareToLeave });
 
 function previousStep() {
   if (currentStep.value > 0) currentStep.value -= 1;
@@ -518,7 +594,7 @@ async function openUploadedMaterial(item: { name: string; url: string; mimeType?
 }
 
 onMounted(async () => { positions.value = await positionsApi.findAll(); });
-onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
+onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTimer); });
 </script>
 
 <template>
@@ -530,9 +606,10 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
     :before-close="beforeClose"
     destroy-on-close
     class="employee-create-drawer"
+    @opened="focusIssue"
     @update:model-value="emit('update:modelValue', $event)"
   >
-    <div class="wizard-shell">
+    <div ref="wizardElement" class="wizard-shell">
       <div class="wizard-head">
         <el-steps :active="currentStep" align-center class="desktop-steps">
           <el-step
@@ -545,6 +622,7 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
         <div class="mobile-step"><strong>{{ currentStep + 1 }}/{{ stepTitles.length }} {{ stepTitles[currentStep] }}</strong></div>
         <span class="save-state" :class="`save-state--${saveState}`">{{ saveStateLabel }}</span>
       </div>
+      <aside v-if="issueContext" role="note" aria-label="正在核实事项" class="draft-issue-context"><strong>{{ issueContext.message }}</strong><span>{{ issueContext.reason }}</span><span>原资料：{{ issueContext.source.value ?? '未提供' }} · 当前资料：{{ issueContext.current.value ?? '未提供' }}</span></aside>
       <el-alert v-if="draft?.rejectedReason" :title="`已退回：${draft.rejectedReason}`" type="warning" :closable="false" />
       <el-alert v-if="saveError" :title="saveError" type="error" :closable="false" />
       <el-alert
@@ -559,9 +637,9 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
         <section v-show="currentStep === 0" class="wizard-section">
           <div class="section-head"><div><h3>身份核验</h3></div></div>
           <div class="form-grid">
-            <el-form-item label="姓名"><el-input v-model="form.name" maxlength="50" placeholder="必填，输入后自动保存" /></el-form-item>
-            <el-form-item label="手机号" :error="fieldErrors.phone"><el-input v-model="form.phone" maxlength="20" @blur="lookupIdentity()" /></el-form-item>
-            <el-form-item :label="idNumberConfigured ? '身份证号（已保存，留空不变）' : '身份证号'" :error="fieldErrors.idNumber"><el-input v-model="form.idNumber" maxlength="18" show-password @blur="lookupIdentity()" /></el-form-item>
+            <el-form-item data-archive-field="employee.name" label="姓名"><el-input v-model="form.name" maxlength="50" placeholder="必填，输入后自动保存" /></el-form-item>
+            <el-form-item data-archive-field="profile.phone" label="手机号" :error="fieldErrors.phone"><el-input v-model="form.phone" maxlength="20" @blur="lookupIdentity()" /></el-form-item>
+            <el-form-item data-archive-field="profile.idNumber" :label="idNumberConfigured ? '身份证号（已保存，留空不变）' : '身份证号'" :error="fieldErrors.idNumber"><el-input v-model="form.idNumber" maxlength="18" show-password @blur="lookupIdentity()" /></el-form-item>
             <el-form-item label="身份查重" :error="fieldErrors.identity"><el-button :loading="identityLoading" :disabled="!canLookupIdentity()" @click="lookupIdentity(true)">检索已有档案</el-button></el-form-item>
           </div>
           <div v-if="identityResult?.outcome === 'conflict'" class="identity-result identity-result--danger">手机号与身份证号对应不同员工，请核对后再提交。</div>
@@ -579,28 +657,28 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
         <section v-show="currentStep === 1" class="wizard-section">
           <div class="section-head"><div><h3>任职信息</h3><p>选择岗位后自动带入岗位名称和职系；入职日期自动作为任职开始日期。</p></div></div>
           <div class="form-grid form-grid--3">
-            <el-form-item label="所属公司（合同主体）"><ContractSubjectSelect v-model="form.employee.contractSubjectId" v-model:snapshot-name="form.employee.companyText" /></el-form-item>
-            <el-form-item label="组织归属" :error="!form.company ? '组织归属待核实，请核实后选择；可先保存草稿。' : ''"><el-select v-model="form.company" aria-label="组织归属" placeholder="待核实后选择"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select></el-form-item>
-            <el-form-item label="部门"><el-tree-select v-model="form.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
-            <el-form-item label="岗位"><el-select v-model="form.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
-            <el-form-item label="岗位名称"><el-input v-model="form.employee.position" placeholder="选择岗位后自动带入" /></el-form-item>
-            <el-form-item label="职级"><el-input v-model="form.employee.jobGrade" /></el-form-item>
-            <el-form-item label="职系"><PersonnelReferenceSelect v-model="form.employee.jobFamily" kind="job_family" label="职系" placeholder="选择岗位后自动带入，也可选择其他职系" /></el-form-item>
-            <el-form-item label="工作地点"><PersonnelReferenceSelect v-model="form.employee.workLocation" kind="work_location" label="工作地点" /></el-form-item>
-            <el-form-item label="用工类型" :error="!form.employmentType ? '用工类型待核实，请核实后选择；可先保存草稿。' : ''"><el-select v-model="form.employmentType" placeholder="待核实后选择" aria-label="用工类型"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
-            <el-form-item label="员工状态" :error="!form.employeeStatus ? '员工状态待核实，请核实后选择；可先保存草稿。' : ''"><el-select v-model="form.employeeStatus" placeholder="待核实后选择" aria-label="员工状态"><el-option label="试用期" value="probation" /><el-option label="在职" value="active" /></el-select></el-form-item>
-            <el-form-item label="入职日期"><el-date-picker v-model="form.entryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item label="任职开始"><el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item label="试用期（月）"><el-input-number v-model="form.employee.probationMonths" :min="0" :max="12" /><small v-if="form.employee.probationMonths === null">未提供月数，保持空值，可核实后补充。</small></el-form-item>
-            <el-form-item label="预计转正日期"><el-date-picker v-model="form.employee.plannedRegularDate" type="date" value-format="YYYY-MM-DD" @change="plannedRegularDateAuto = false" /></el-form-item>
+            <el-form-item data-archive-field="employee.companyText" label="所属公司（合同主体）"><ContractSubjectSelect v-model="form.employee.contractSubjectId" v-model:snapshot-name="form.employee.companyText" /></el-form-item>
+            <el-form-item data-archive-field="employee.company" label="组织归属" :error="!form.company ? '组织归属待核实，请核实后选择；可先保存草稿。' : ''"><el-select v-model="form.company" aria-label="组织归属" placeholder="待核实后选择"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select></el-form-item>
+            <el-form-item data-archive-field="employee.deptId" label="部门"><el-tree-select v-model="form.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
+            <el-form-item data-archive-field="employee.positionId" label="岗位"><el-select v-model="form.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
+            <el-form-item data-archive-field="employee.position" label="岗位名称"><el-input v-model="form.employee.position" placeholder="选择岗位后自动带入" /></el-form-item>
+            <el-form-item data-archive-field="employee.jobGrade" label="职级"><el-input v-model="form.employee.jobGrade" /></el-form-item>
+            <el-form-item data-archive-field="employee.jobFamily" label="职系"><PersonnelReferenceSelect v-model="form.employee.jobFamily" kind="job_family" label="职系" placeholder="选择岗位后自动带入，也可选择其他职系" /></el-form-item>
+            <el-form-item data-archive-field="employee.workLocation" label="工作地点"><PersonnelReferenceSelect v-model="form.employee.workLocation" kind="work_location" label="工作地点" /></el-form-item>
+            <el-form-item data-archive-field="employee.employmentType" label="用工类型" :error="!form.employmentType ? '用工类型待核实，请核实后选择；可先保存草稿。' : ''"><el-select v-model="form.employmentType" placeholder="待核实后选择" aria-label="用工类型"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
+            <el-form-item data-archive-field="employee.employeeStatus" label="员工状态" :error="!form.employeeStatus ? '员工状态待核实，请核实后选择；可先保存草稿。' : ''"><el-select v-model="form.employeeStatus" placeholder="待核实后选择" aria-label="员工状态"><el-option label="试用期" value="probation" /><el-option label="在职" value="active" /></el-select></el-form-item>
+            <el-form-item data-archive-field="employee.entryDate" label="入职日期"><el-date-picker v-model="form.entryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item data-archive-field="employee.effectiveFrom" label="任职开始"><el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item data-archive-field="employee.probationMonths" label="试用期（月）"><el-input-number v-model="form.employee.probationMonths" :min="0" :max="12" /><small v-if="form.employee.probationMonths === null">未提供月数，保持空值，可核实后补充。</small></el-form-item>
+            <el-form-item data-archive-field="employee.plannedRegularDate" label="预计转正日期"><el-date-picker v-model="form.employee.plannedRegularDate" type="date" value-format="YYYY-MM-DD" @change="plannedRegularDateAuto = false" /></el-form-item>
           </div>
         </section>
 
         <section v-show="currentStep === 1" class="wizard-section">
           <div class="section-head"><div><h3>管理关系</h3><p>两类关系用途不同，均可稍后补充并由 HR 审核。</p></div></div>
           <div class="form-grid">
-            <el-form-item label="花名册直属主管"><UserSelect v-model="form.rosterManagerId" clearable eligible-for="direct_manager" /><small>仅作为档案中的汇报关系显示。</small></el-form-item>
-            <el-form-item label="绩效直属上级"><UserSelect v-model="form.performanceManagerId" clearable eligible-for="direct_manager" /><small>用于绩效目标审核、评分和待办归属。</small></el-form-item>
+            <el-form-item data-archive-field="employee.managerId" label="花名册直属主管"><UserSelect v-model="form.rosterManagerId" clearable eligible-for="direct_manager" /><small>仅作为档案中的汇报关系显示。</small></el-form-item>
+            <el-form-item data-archive-field="performance.managerId" label="绩效直属上级"><UserSelect v-model="form.performanceManagerId" clearable eligible-for="direct_manager" /><small>用于绩效目标审核、评分和待办归属。</small></el-form-item>
           </div>
         </section>
 
@@ -608,20 +686,20 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
         <el-collapse-item name="personal" title="个人与教育">
         <section class="wizard-section">
           <div class="form-grid form-grid--3">
-            <el-form-item label="性别"><el-select v-model="form.profile.gender" clearable><el-option label="男" value="男" /><el-option label="女" value="女" /></el-select></el-form-item>
-            <el-form-item label="出生日期"><el-date-picker v-model="form.profile.birthDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item label="民族"><el-input v-model="form.profile.ethnicity" /></el-form-item>
-            <el-form-item label="学历"><el-input v-model="form.profile.education" /></el-form-item>
-            <el-form-item label="职称"><el-input v-model="form.profile.professionalTitle" /></el-form-item>
-            <el-form-item label="毕业院校"><el-input v-model="form.profile.school" /></el-form-item>
-            <el-form-item label="毕业日期"><el-date-picker v-model="form.profile.graduationDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item label="专业"><el-input v-model="form.profile.major" /></el-form-item>
-            <el-form-item label="婚姻状况"><el-input v-model="form.profile.maritalStatus" /></el-form-item>
-            <el-form-item label="子女状况"><el-input v-model="form.profile.childrenStatus" /></el-form-item>
-            <el-form-item label="子女数量"><el-input-number v-model="form.profile.childrenCount" :min="0" /></el-form-item>
-            <el-form-item label="政治面貌"><el-input v-model="form.profile.politicalStatus" /></el-form-item>
-            <el-form-item label="籍贯"><el-input v-model="form.profile.nativePlace" /></el-form-item>
-            <el-form-item label="户籍类型"><el-input v-model="form.profile.householdType" /></el-form-item>
+            <el-form-item data-archive-field="profile.gender" label="性别"><el-select v-model="form.profile.gender" clearable><el-option label="男" value="男" /><el-option label="女" value="女" /></el-select></el-form-item>
+            <el-form-item data-archive-field="profile.birthDate" label="出生日期"><el-date-picker v-model="form.profile.birthDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item data-archive-field="profile.ethnicity" label="民族"><el-input v-model="form.profile.ethnicity" /></el-form-item>
+            <el-form-item data-archive-field="profile.education" label="学历"><el-input v-model="form.profile.education" /></el-form-item>
+            <el-form-item data-archive-field="profile.professionalTitle" label="职称"><el-input v-model="form.profile.professionalTitle" /></el-form-item>
+            <el-form-item data-archive-field="profile.school" label="毕业院校"><el-input v-model="form.profile.school" /></el-form-item>
+            <el-form-item data-archive-field="profile.graduationDate" label="毕业日期"><el-date-picker v-model="form.profile.graduationDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item data-archive-field="profile.major" label="专业"><el-input v-model="form.profile.major" /></el-form-item>
+            <el-form-item data-archive-field="profile.maritalStatus" label="婚姻状况"><el-input v-model="form.profile.maritalStatus" /></el-form-item>
+            <el-form-item data-archive-field="profile.childrenStatus" label="子女状况"><el-input v-model="form.profile.childrenStatus" /></el-form-item>
+            <el-form-item data-archive-field="profile.childrenCount" label="子女数量"><el-input-number v-model="form.profile.childrenCount" :min="0" /></el-form-item>
+            <el-form-item data-archive-field="profile.politicalStatus" label="政治面貌"><el-input v-model="form.profile.politicalStatus" /></el-form-item>
+            <el-form-item data-archive-field="profile.nativePlace" label="籍贯"><el-input v-model="form.profile.nativePlace" /></el-form-item>
+            <el-form-item data-archive-field="profile.householdType" label="户籍类型"><el-input v-model="form.profile.householdType" /></el-form-item>
           </div>
         </section>
         </el-collapse-item>
@@ -629,18 +707,18 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
         <el-collapse-item name="contact" title="联系与保障">
         <section class="wizard-section">
           <div class="form-grid form-grid--3">
-            <el-form-item label="身份证地址" class="span-2"><el-input v-model="form.profile.idAddress" /></el-form-item>
-            <el-form-item label="现住址" class="span-2"><el-input v-model="form.profile.currentAddress" /></el-form-item>
-            <el-form-item label="紧急联系人"><el-input v-model="form.profile.emergencyContactName" /></el-form-item>
-            <el-form-item label="与联系人关系"><el-input v-model="form.profile.emergencyContactRelation" /></el-form-item>
-            <el-form-item label="紧急联系电话"><el-input v-model="form.profile.emergencyContactPhone" /></el-form-item>
-            <el-form-item label="社保状态"><el-input v-model="form.profile.socialSecurityStatus" /></el-form-item>
-            <el-form-item label="社保起始日期"><el-date-picker v-model="form.profile.socialSecurityStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item label="公积金状态"><el-input v-model="form.profile.housingFundStatus" /></el-form-item>
-            <el-form-item label="公积金起始日期"><el-date-picker v-model="form.profile.housingFundStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item label="开户行"><el-input v-model="form.profile.bankName" /></el-form-item>
-            <el-form-item label="开户支行"><el-input v-model="form.profile.bankBranch" /></el-form-item>
-            <el-form-item :label="bankAccountConfigured ? '银行卡号（已保存，留空不变）' : '银行卡号'"><el-input v-model="form.profile.bankAccount" type="password" show-password /></el-form-item>
+            <el-form-item data-archive-field="profile.idAddress" label="身份证地址" class="span-2"><el-input v-model="form.profile.idAddress" /></el-form-item>
+            <el-form-item data-archive-field="profile.currentAddress" label="现住址" class="span-2"><el-input v-model="form.profile.currentAddress" /></el-form-item>
+            <el-form-item data-archive-field="profile.emergencyContactName" label="紧急联系人"><el-input v-model="form.profile.emergencyContactName" /></el-form-item>
+            <el-form-item data-archive-field="profile.emergencyContactRelation" label="与联系人关系"><el-input v-model="form.profile.emergencyContactRelation" /></el-form-item>
+            <el-form-item data-archive-field="profile.emergencyContactPhone" label="紧急联系电话"><el-input v-model="form.profile.emergencyContactPhone" /></el-form-item>
+            <el-form-item data-archive-field="profile.socialSecurityStatus" label="社保状态"><el-input v-model="form.profile.socialSecurityStatus" /></el-form-item>
+            <el-form-item data-archive-field="profile.socialSecurityStartDate" label="社保起始日期"><el-date-picker v-model="form.profile.socialSecurityStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item data-archive-field="profile.housingFundStatus" label="公积金状态"><el-input v-model="form.profile.housingFundStatus" /></el-form-item>
+            <el-form-item data-archive-field="profile.housingFundStartDate" label="公积金起始日期"><el-date-picker v-model="form.profile.housingFundStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item data-archive-field="profile.bankName" label="开户行"><el-input v-model="form.profile.bankName" /></el-form-item>
+            <el-form-item data-archive-field="profile.bankBranch" label="开户支行"><el-input v-model="form.profile.bankBranch" /></el-form-item>
+            <el-form-item data-archive-field="profile.bankAccount" :label="bankAccountConfigured ? '银行卡号（已保存，留空不变）' : '银行卡号'"><el-input v-model="form.profile.bankAccount" type="password" show-password /></el-form-item>
           </div>
         </section>
         </el-collapse-item>
@@ -696,6 +774,7 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
 
     <template #footer>
       <div class="drawer-footer">
+        <el-button v-if="nextAvailable" :disabled="savingAction === 'submit'" @click="nextDraft">下一份待核资料</el-button>
         <el-button v-if="currentStep > 0" @click="previousStep">上一步</el-button>
         <span class="footer-spacer" />
         <el-button :loading="savingAction === 'draft'" :disabled="savingAction === 'submit'" @click="saveAndExit">保存并退出</el-button>
@@ -707,6 +786,9 @@ onBeforeUnmount(() => { if (autosaveTimer) clearTimeout(autosaveTimer); });
 </template>
 
 <style scoped>
+.draft-issue-context { display: grid; gap: 5px; padding: 12px; background: var(--el-color-warning-light-9); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
+.archive-field--focused { outline: 2px solid var(--el-color-primary-light-5); outline-offset: 5px; border-radius: 4px; }
+
 .wizard-shell { display: grid; align-content: start; gap: 18px; min-height: 560px; }
 .wizard-head { position: sticky; top: -20px; z-index: 3; padding: 14px 0 12px; background: #fff; border-bottom: 1px solid #eef1f6; }
 .desktop-steps { padding: 0 8px; }

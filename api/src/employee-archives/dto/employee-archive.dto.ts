@@ -122,6 +122,11 @@ export class CreateEmployeeDto {
   @IsUUID('4')
   draftId?: string;
 
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  expectedVersion?: number;
+
   @IsString()
   @IsNotEmpty()
   @MaxLength(50)
@@ -223,6 +228,16 @@ export class SubmitEmployeeArchiveDraftDto {
   @BlankToNull()
   @IsUUID('4')
   draftId?: string;
+
+  @IsOptional()
+  @IsInt()
+  @Min(1)
+  expectedVersion?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(64)
+  baseVersion?: string;
 
   @IsObject()
   employee!: Record<string, unknown>;

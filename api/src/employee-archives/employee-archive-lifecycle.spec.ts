@@ -11,11 +11,11 @@ describe('employee draft and archive lifecycle', () => {
     const existing = { id: 'd', userId: 'u', requestVersion: 1, recordStatus: 'draft', profileReviewStatus: 'pending',
       proposedValue: { profile: { idNumberEncrypted: 'new-cipher', idNumberFingerprint: 'new-hash' } } };
     const update = jest.fn(async ({ data }) => ({ ...existing, ...data }));
-    const db = { user: { findUnique: jest.fn().mockResolvedValue(user) },
+    const db = { $transaction: jest.fn(async callback => callback(db)), user: { findUnique: jest.fn().mockResolvedValue(user) },
       employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(existing), update },
       auditLog: { create: jest.fn() } };
     const result = await new EmployeeArchivesService(db as any).saveArchiveDraft('u', {
-      draftId: 'd', employee: { name: '员工更名' }, profile: { idNumber: '' },
+      draftId: 'd', expectedVersion: 1, employee: { name: '员工更名' }, profile: { idNumber: '' },
     }, operator);
     expect(update.mock.calls[0][0].data.proposedValue.profile.idNumberFingerprint).toBe('new-hash');
     expect(result.proposedValue).not.toHaveProperty('profile.idNumberFingerprint');

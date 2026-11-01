@@ -418,6 +418,7 @@ describe('EmployeeArchivesService', () => {
 
   it('合同图片超过 5 张时拒绝提交档案审核', async () => {
     const prisma = {
+      $transaction: jest.fn(async callback => callback(prisma)),
       user: { findUnique: jest.fn().mockResolvedValue(archiveEditorUser()) },
       employeeDataChangeRequest: { findFirst: jest.fn(), create: jest.fn() },
     };
@@ -430,6 +431,7 @@ describe('EmployeeArchivesService', () => {
     }));
 
     await expect(service.submitDraft(archiveEditorUser().id, {
+      baseVersion: (service as any).archiveVersion(archiveEditorUser()),
       employee: {},
       profile: {},
       contracts: [{ contractType: '劳动合同', images, attachments: [] }],
@@ -441,12 +443,14 @@ describe('EmployeeArchivesService', () => {
 
   it('合同图片或附件超过单文件限制时拒绝提交档案审核', async () => {
     const prisma = {
+      $transaction: jest.fn(async callback => callback(prisma)),
       user: { findUnique: jest.fn().mockResolvedValue(archiveEditorUser()) },
       employeeDataChangeRequest: { findFirst: jest.fn(), create: jest.fn() },
     };
     const service = new EmployeeArchivesService(prisma as any);
 
     await expect(service.submitDraft(archiveEditorUser().id, {
+      baseVersion: (service as any).archiveVersion(archiveEditorUser()),
       employee: {},
       profile: {},
       contracts: [{
@@ -459,6 +463,7 @@ describe('EmployeeArchivesService', () => {
     });
 
     await expect(service.submitDraft(archiveEditorUser().id, {
+      baseVersion: (service as any).archiveVersion(archiveEditorUser()),
       employee: {},
       profile: {},
       contracts: [{
@@ -513,6 +518,7 @@ describe('EmployeeArchivesService', () => {
     const create = jest.fn();
     const update = jest.fn();
     const prisma = {
+      $transaction: jest.fn(async callback => callback(prisma)),
       user: { findUnique: jest.fn().mockResolvedValue(user) },
       employeeDataChangeRequest: {
         findFirst: jest.fn().mockResolvedValue(null),
@@ -523,6 +529,7 @@ describe('EmployeeArchivesService', () => {
     const service = new EmployeeArchivesService(prisma as any);
 
     await expect(service.submitDraft(user.id, {
+      baseVersion: (service as any).archiveVersion(user),
       employee: {
         employeeNo: '001',
         name: '员工甲',
@@ -579,6 +586,7 @@ describe('EmployeeArchivesService', () => {
   it('只修改绩效直属上级时不要求重复审核基础档案', async () => {
     const create = jest.fn().mockResolvedValue({ id: 'performance-only-review' });
     const prisma = {
+      $transaction: jest.fn(async callback => callback(prisma)),
       user: { findUnique: jest.fn().mockResolvedValue(archiveEditorUser()) },
       employeeDataChangeRequest: {
         findFirst: jest.fn().mockResolvedValue(null),
@@ -588,6 +596,7 @@ describe('EmployeeArchivesService', () => {
     const service = new EmployeeArchivesService(prisma as any);
 
     await service.submitDraft(archiveEditorUser().id, {
+      baseVersion: (service as any).archiveVersion(archiveEditorUser()),
       employee: {},
       profile: {},
       performance: { managerId: 'manager-new' },
@@ -605,6 +614,7 @@ describe('EmployeeArchivesService', () => {
     const reviewCreate = jest.fn().mockResolvedValue({ id: 'archive-review', profileReviewStatus: 'pending' });
     const contractUpdate = jest.fn();
     const prisma = {
+      $transaction: jest.fn(async callback => callback(prisma)),
       user: { findUnique: jest.fn().mockResolvedValue(archiveEditorUser()) },
       employeeDataChangeRequest: {
         findFirst: jest.fn().mockResolvedValue(null),
@@ -627,6 +637,7 @@ describe('EmployeeArchivesService', () => {
     }];
 
     await service.submitDraft(archiveEditorUser().id, {
+      baseVersion: (service as any).archiveVersion(archiveEditorUser()),
       employee: {},
       profile: {},
       contracts: [{ contractType: '劳动合同', images, attachments }],
@@ -645,12 +656,14 @@ describe('EmployeeArchivesService', () => {
   it('通用上传目录的文件不能伪装成合同私有材料', async () => {
     const reviewCreate = jest.fn();
     const prisma = {
+      $transaction: jest.fn(async callback => callback(prisma)),
       user: { findUnique: jest.fn().mockResolvedValue(archiveEditorUser()) },
       employeeDataChangeRequest: { findFirst: jest.fn(), create: reviewCreate },
     };
     const service = new EmployeeArchivesService(prisma as any);
 
     await expect(service.submitDraft(archiveEditorUser().id, {
+      baseVersion: (service as any).archiveVersion(archiveEditorUser()),
       employee: {},
       profile: {},
       contracts: [{
@@ -1086,10 +1099,12 @@ describe('EmployeeArchivesService', () => {
   });
 
   it('续填新增员工草稿时空白敏感字段保留已加密内容', async () => {
+    const updatedAt = new Date('2026-11-01T00:00:00Z');
     const update = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'draft-create-1', ...data }));
     const findFirst = jest.fn().mockResolvedValue({
       id: 'draft-create-1',
       requestVersion: 3,
+      updatedAt,
       proposedValue: {
         employee: { name: '草稿员工' },
         profile: {
@@ -1110,6 +1125,7 @@ describe('EmployeeArchivesService', () => {
 
     await service.saveEmployeeCreateDraft({
       draftId: 'draft-create-1',
+      expectedVersion: 3,
       name: '草稿员工',
       profile: { education: '本科', idNumber: '', bankAccount: '' },
       draftStep: 3,
@@ -1127,6 +1143,7 @@ describe('EmployeeArchivesService', () => {
         OR: [{ recordStatus: 'draft' }, { profileReviewStatus: 'rejected' }],
         archivedAt: null,
         requestVersion: 3,
+        updatedAt,
       },
       data: expect.objectContaining({
         requestVersion: { increment: 1 },
@@ -1144,10 +1161,12 @@ describe('EmployeeArchivesService', () => {
   });
 
   it('由草稿提交新增员工时空白敏感字段仍保留已加密内容', async () => {
+    const updatedAt = new Date('2026-11-01T00:00:00Z');
     const findFirst = jest.fn()
       .mockResolvedValueOnce({
         id: 'draft-create-1',
         requestVersion: 4,
+        updatedAt,
         proposedValue: {
           profile: {
             idNumberEncrypted: 'encrypted-id-number',
@@ -1175,6 +1194,7 @@ describe('EmployeeArchivesService', () => {
 
     await service.createEmployee({
       draftId: 'draft-create-1',
+      expectedVersion: 4,
       name: '草稿员工',
       company: CompanyCode.fuede,
       deptId: 'dept-1',
@@ -1198,6 +1218,7 @@ describe('EmployeeArchivesService', () => {
         OR: [{ recordStatus: 'draft' }, { profileReviewStatus: 'rejected' }],
         archivedAt: null,
         requestVersion: 4,
+        updatedAt,
       },
       data: expect.objectContaining({
         requestVersion: { increment: 1 },
@@ -1239,6 +1260,7 @@ describe('EmployeeArchivesService', () => {
 
     await expect(service.createEmployee({
       draftId: 'draft-create-1',
+      expectedVersion: 2,
       name: '草稿员工',
       company: CompanyCode.fuede,
       deptId: 'dept-1',
@@ -1313,7 +1335,7 @@ describe('EmployeeArchivesService', () => {
     } as any);
 
     await expect(service.saveEmployeeCreateDraft({
-      draftId: 'draft-create-1', name: '草稿员工', saveMode: 'auto',
+      draftId: 'draft-create-1', expectedVersion: 5, name: '草稿员工', saveMode: 'auto',
     } as any, hrOperator)).rejects.toBeInstanceOf(ConflictException);
   });
 
@@ -1380,6 +1402,7 @@ describe('EmployeeArchivesService', () => {
       profileReviewStatus: 'pending',
     });
     const prisma = {
+      $transaction: jest.fn(async callback => callback(prisma)),
       user: { findUnique: jest.fn().mockResolvedValue(user) },
       employeeDataChangeRequest: {
         findFirst: jest.fn().mockResolvedValue(null),
@@ -1390,6 +1413,7 @@ describe('EmployeeArchivesService', () => {
     const service = new EmployeeArchivesService(prisma as any);
 
     await service.saveArchiveDraft(user.id, {
+      baseVersion: (service as any).archiveVersion(user),
       employee: { position: '高级专员' },
       profile: {},
       contracts: [],
@@ -1409,6 +1433,7 @@ describe('EmployeeArchivesService', () => {
     const user = { ...archiveEditorUser(), archivedAt: new Date('2026-09-15T00:00:00.000Z') };
     const draftCreate = jest.fn();
     const prisma = {
+      $transaction: jest.fn(async callback => callback(prisma)),
       user: { findUnique: jest.fn().mockResolvedValue(user) },
       employeeDataChangeRequest: {
         findFirst: jest.fn(),

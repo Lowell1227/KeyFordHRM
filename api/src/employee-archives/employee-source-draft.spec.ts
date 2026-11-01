@@ -12,7 +12,7 @@ function fixture() {
       sourceEmployeeNo: null, identityCandidateUserId: 'candidate-1' },
   };
   const tx: any = { employeeDataChangeRequest: { findFirst: jest.fn(async () => draft),
-    update: jest.fn(async ({ data }) => Object.assign(draft, data)) },
+    update: jest.fn(async ({ data }) => Object.assign(draft, data, { requestVersion: data.requestVersion?.increment ? draft.requestVersion + 1 : draft.requestVersion })) },
     department: { findUnique: jest.fn(async () => ({ id: 'department-1', isActive: true })) },
     auditLog: { create: jest.fn() },
   };
@@ -24,7 +24,7 @@ function fixture() {
 describe('source draft preservation', () => {
   it('keeps null lifecycle/company/probation fields and server-owned source/identity warnings after autosave', async () => {
     const { service, draft, warnings, source, numbers } = fixture();
-    const result: any = await service.saveEmployeeCreateDraft({ draftId: draft.id, name: 'Synthetic', company: null,
+    const result: any = await service.saveEmployeeCreateDraft({ draftId: draft.id, expectedVersion: draft.requestVersion, name: 'Synthetic', company: null,
       employmentType: null, employeeStatus: null, employee: { probationMonths: null }, saveMode: 'auto',
       sourceFileHash: 'client-forged', identityCandidateUserId: 'client-forged' } as any, operator);
     expect(result.proposedValue.employee).toMatchObject({ employeeStatus: null, employmentType: null, company: null, probationMonths: null });
@@ -36,7 +36,7 @@ describe('source draft preservation', () => {
 
   it('retains provenance and source warnings when a completed draft is submitted into the normal review flow', async () => {
     const { service, draft, warnings, source, numbers } = fixture();
-    const result: any = await service.createEmployee({ draftId: draft.id, name: 'Synthetic', company: CompanyCode.fuede,
+    const result: any = await service.createEmployee({ draftId: draft.id, expectedVersion: draft.requestVersion, name: 'Synthetic', company: CompanyCode.fuede,
       deptId: 'department-1', entryDate: new Date('2020-01-01'), effectiveFrom: new Date('2020-01-01'),
       employmentType: EmploymentType.full_time, employeeStatus: UserStatus.active }, operator);
     expect(result.proposedValue).toMatchObject({ source, sourceFileHash: 'a'.repeat(64), identityCandidateUserId: 'candidate-1' });
@@ -52,13 +52,13 @@ describe('source draft preservation', () => {
     draft.sourceSystem = 'synthetic_non_file_channel';
     draft.sourceReference = 'synthetic-reference-1';
     delete draft.proposedValue.sourceFileHash;
-    const saved: any = await service.saveEmployeeCreateDraft({ draftId: draft.id, name: 'Synthetic',
+    const saved: any = await service.saveEmployeeCreateDraft({ draftId: draft.id, expectedVersion: draft.requestVersion, name: 'Synthetic',
       company: null, employeeStatus: null, employmentType: null, employee: { probationMonths: null }, saveMode: 'auto',
       sourceSystem: 'client-forged', sourceReference: 'client-forged' } as any, operator);
     expect(saved).toMatchObject({ sourceSystem: 'synthetic_non_file_channel', sourceReference: 'synthetic-reference-1', validationWarnings: warnings });
     expect(saved.proposedValue).toMatchObject({ source, identityCandidateUserId: 'candidate-1' });
     expect(saved.proposedValue).not.toHaveProperty('sourceFileHash');
-    const submitted: any = await service.createEmployee({ draftId: draft.id, name: 'Synthetic', company: CompanyCode.fuede,
+    const submitted: any = await service.createEmployee({ draftId: draft.id, expectedVersion: draft.requestVersion, name: 'Synthetic', company: CompanyCode.fuede,
       deptId: 'department-1', entryDate: new Date('2020-01-01'), effectiveFrom: new Date('2020-01-01'),
       employmentType: EmploymentType.full_time, employeeStatus: UserStatus.active }, operator);
     expect(submitted).toMatchObject({ sourceSystem: 'synthetic_non_file_channel', sourceReference: 'synthetic-reference-1',

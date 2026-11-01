@@ -69,11 +69,13 @@ describe('employee company text', () => {
 
   it.each(['另一家签约公司', null])('submits a company-text-only correction without changing scope: %s', async (companyText) => {
     const create = jest.fn(async ({ data }) => ({ id: 'review-1', ...data }));
-    const service = new EmployeeArchivesService({
+    const prisma = {
+      $transaction: jest.fn(async callback => callback(prisma)),
       user: { findUnique: jest.fn().mockResolvedValue(user()) },
       employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create },
-    } as any);
-    const result = await service.submitDraft('employee-1', { employee: { companyText }, profile: {} }, operator);
+    };
+    const service = new EmployeeArchivesService(prisma as any);
+    const result = await service.submitDraft('employee-1', { baseVersion: (service as any).archiveVersion(user()), employee: { companyText }, profile: {} }, operator);
     expect(result.profileReviewStatus).toBe('pending');
     expect(result.performanceReviewStatus).toBe('not_required');
     expect(result.baseValue).toMatchObject({ employee: { company: 'fuede', companyText: '花名册公司原文' } });
@@ -82,10 +84,12 @@ describe('employee company text', () => {
 
   it.each([42, '甲'.repeat(151)])('rejects invalid company text before saving a draft', async (companyText) => {
     const create = jest.fn();
-    const service = new EmployeeArchivesService({
+    const prisma = {
+      $transaction: jest.fn(async callback => callback(prisma)),
       user: { findUnique: jest.fn().mockResolvedValue(user()) },
       employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create },
-    } as any);
+    };
+    const service = new EmployeeArchivesService(prisma as any);
     await expect(service.submitDraft('employee-1', { employee: { companyText }, profile: {} }, operator))
       .rejects.toThrow('所属公司须为不超过150字的文字');
     expect(create).not.toHaveBeenCalled();

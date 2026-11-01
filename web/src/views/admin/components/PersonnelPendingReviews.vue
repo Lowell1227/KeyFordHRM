@@ -16,6 +16,11 @@ import UserSelect from '@/components/common/UserSelect.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import { positionsApi, type PositionChangeRequest } from '@/api/positions.api';
+import { usersApi } from '@/api/users.api';
+import { contractSubjectsApi } from '@/api/contract-subjects.api';
+import BusinessDetailDrawer from '@/components/common/business-list/BusinessDetailDrawer.vue';
+import EmployeeReviewDifferences from './EmployeeReviewDifferences.vue';
+import { employeeReviewDifferences, type ReviewNames } from './employee-review-differences';
 
 const props = defineProps<{
   canReviewEmployee: boolean;
@@ -61,7 +66,7 @@ const reviewTableColumns = Object.freeze({
   submittedAt: 170,
   actions: 230,
 });
-const contractReviewDialog = ref({
+const employeeReviewDrawer = ref({
   visible: false,
   row: null as EmployeeDataReview | null,
 });
@@ -93,82 +98,31 @@ const showPositionReviews = computed(() => props.canReviewPosition && (
   || (activeCategory.value === 'all' && positionTotal.value > 0)
 ));
 
-type ContractDiff = {
-  key: string;
-  kind: '新增' | '修改' | '移除';
-  title: string;
-  before: string | null;
-  after: string | null;
-};
+const reviewNames = ref<ReviewNames>({});
+const reviewGroups = computed(() => employeeReviewDrawer.value.row
+  ? employeeReviewDifferences(employeeReviewDrawer.value.row, reviewNames.value) : []);
 
-function reviewContracts(value: unknown): Record<string, unknown>[] {
-  return Array.isArray(value)
-    ? value.filter((item): item is Record<string, unknown> => Boolean(item) && typeof item === 'object')
-    : [];
-}
-
-function contractKey(contract: Record<string, unknown>, index: number): string {
-  const id = typeof contract.id === 'string' ? contract.id : null;
-  const type = String(contract.contractType ?? contract.kind ?? 'contract');
-  const sequence = typeof contract.sequence === 'number' ? contract.sequence : index;
-  return id ?? `${type}:${sequence}`;
-}
-
-function contractTitle(contract: Record<string, unknown>, index: number): string {
-  return String(contract.name ?? contract.termType ?? contract.termText ?? `合同 ${index + 1}`);
-}
-
-function contractDetail(contract: Record<string, unknown>): string {
-  const images = reviewContracts(contract.images);
-  const attachments = reviewContracts(contract.attachments);
-  const items = [
-    ['签约公司', contract.signingCompany],
-    ['主体关联', Object.prototype.hasOwnProperty.call(contract, 'contractSubjectId') ? (contract.contractSubjectId ? '已关联' : '尚未关联') : undefined],
-    ['签订日期', contract.signedAt],
-    ['生效日期', contract.effectiveFrom],
-    ['到期日期', contract.expiresAt],
-    ['期限', contract.termType ?? contract.termText],
-    ['图片', images.length ? images.map((item) => item.name).filter(Boolean).join('、') : null],
-    ['附件', attachments.length ? attachments.map((item) => item.name).filter(Boolean).join('、') : null],
-  ].filter((item) => item[1] !== undefined && item[1] !== null && item[1] !== '');
-  return items.length
-    ? items.map(([label, value]) => `${label}：${String(value)}`).join('；')
-    : '未填写合同日期或期限';
-}
-
-function contractDiffs(row: EmployeeDataReview): ContractDiff[] {
-  const before = reviewContracts(row.baseValue.contracts);
-  const after = reviewContracts(row.proposedValue.contracts);
-  const beforeMap = new Map(before.map((item, index) => [contractKey(item, index), { item, index }]));
-  const afterMap = new Map(after.map((item, index) => [contractKey(item, index), { item, index }]));
-  const keys = new Set([...beforeMap.keys(), ...afterMap.keys()]);
-  const result: ContractDiff[] = [];
-  for (const key of keys) {
-    const previous = beforeMap.get(key);
-    const next = afterMap.get(key);
-    if (!previous && next) {
-      result.push({ key, kind: '新增', title: contractTitle(next.item, next.index), before: null, after: contractDetail(next.item) });
-      continue;
-    }
-    if (previous && !next) {
-      result.push({ key, kind: '移除', title: contractTitle(previous.item, previous.index), before: contractDetail(previous.item), after: null });
-      continue;
-    }
-    if (previous && next && JSON.stringify(previous.item) !== JSON.stringify(next.item)) {
-      result.push({
-        key,
-        kind: '修改',
-        title: contractTitle(next.item, next.index),
-        before: contractDetail(previous.item),
-        after: contractDetail(next.item),
-      });
-    }
-  }
-  return result;
-}
-
-function openContractReviewDialog(row: EmployeeDataReview) {
-  contractReviewDialog.value = { visible: true, row };
+async function openEmployeeReview(row: EmployeeDataReview) {
+  employeeReviewDrawer.value = { visible: true, row };
+  reviewNames.value = {};
+  const managers = [...new Set(['baseValue', 'proposedValue'].flatMap(side =>
+    ['employee', 'performance'].map(section => row[side as 'baseValue' | 'proposedValue'][section]?.managerId)
+  ).filter((id): id is string => typeof id === 'string' && Boolean(id)))];
+  await Promise.allSettled([
+    departmentsApi.findAll().then(items => {
+      const names: Record<string, string> = {};
+      function collect(departments: typeof items) {
+        departments.forEach(item => { names[item.id] = item.name; if (item.children?.length) collect(item.children); });
+      }
+      collect(items);
+      reviewNames.value.deptId = names;
+    }),
+    positionsApi.findAll({ includeInactive: true }).then(items => { reviewNames.value.positionId = Object.fromEntries(items.map(item => [item.id, item.name])); }),
+    contractSubjectsApi.findAll(true).then(items => { reviewNames.value.contractSubjectId = Object.fromEntries(items.map(item => [item.id, item.name])); }),
+    ...managers.map(id => usersApi.findOne(id).then(user => {
+      reviewNames.value.managerId = { ...reviewNames.value.managerId, [id]: user.name };
+    })),
+  ]);
 }
 
 function reviewHasPerformanceBlocker(row: EmployeeDataReview): boolean {
@@ -205,47 +159,11 @@ function reviewStatusType(
 }
 
 function employeeChangeSummary(row: EmployeeDataReview): string {
-  const beforeEmployee = (row.baseValue.employee ?? {}) as Record<string, unknown>;
-  const afterEmployee = (row.proposedValue.employee ?? {}) as Record<string, unknown>;
-  const beforeProfile = (row.baseValue.profile ?? {}) as Record<string, unknown>;
-  const afterProfile = (row.proposedValue.profile ?? {}) as Record<string, unknown>;
-  const beforePerformance = (row.baseValue.performance ?? {}) as Record<string, unknown>;
-  const afterPerformance = (row.proposedValue.performance ?? {}) as Record<string, unknown>;
-  if (row.intakeType === 'reentry') {
-    return [
-      '再入职',
-      row.employeeNo ? `新工号 ${row.employeeNo}` : null,
-      afterEmployee.position ? `岗位 ${String(afterEmployee.position)}` : null,
-      afterEmployee.effectiveDate ? `生效 ${String(afterEmployee.effectiveDate).slice(0, 10)}` : null,
-    ].filter(Boolean).join(' · ');
-  }
-  if (row.intakeType === 'new_hire') {
-    return [
-      '新增员工',
-      row.employeeNo ? `工号 ${row.employeeNo}` : null,
-      afterEmployee.position ? `岗位 ${String(afterEmployee.position)}` : null,
-      afterEmployee.effectiveFrom ? `生效 ${String(afterEmployee.effectiveFrom).slice(0, 10)}` : null,
-    ].filter(Boolean).join(' · ');
-  }
-  const changes: string[] = [];
-  const fields: Array<[Record<string, unknown>, Record<string, unknown>, string, string]> = [
-    [beforeEmployee, afterEmployee, 'company', '组织归属'],
-    [beforeEmployee, afterEmployee, 'companyText', '所属公司（合同主体）'],
-    [beforeEmployee, afterEmployee, 'contractSubjectId', '合同主体关联'],
-    [beforeEmployee, afterEmployee, 'deptId', '部门'],
-    [beforeEmployee, afterEmployee, 'position', '岗位'],
-    [beforeEmployee, afterEmployee, 'employeeStatus', '在职状态'],
-    [beforeEmployee, afterEmployee, 'phone', '手机号'],
-    [beforeProfile, afterProfile, 'education', '学历'],
-  ];
-  for (const [before, after, field, label] of fields) {
-    if (field in after && (before[field] ?? null) !== (after[field] ?? null)) changes.push(label);
-  }
-  if ((beforePerformance.managerId ?? null) !== (afterPerformance.managerId ?? null)) changes.push('绩效直属上级');
-  const contractKinds = [...new Set(contractDiffs(row).map((item) => item.kind))];
-  if (contractKinds.length) changes.push(`合同${contractKinds.join('/')}`);
+  const groups = employeeReviewDifferences(row);
+  const changes = [...new Set(groups.flatMap(group => group.kind ? [`合同${group.kind}`] : group.fields.map(field => field.label)))];
   if (reviewHasPerformanceBlocker(row)) changes.push('绩效直属上级待补充');
-  return changes.length ? changes.join('、') : '员工档案信息复核';
+  const intake = row.intakeType === 'reentry' ? '再入职' : row.intakeType === 'new_hire' ? '新增员工' : '';
+  return [intake, changes.join('、')].filter(Boolean).join(' · ') || '员工档案信息复核';
 }
 
 function employeeChangeType(row: EmployeeDataReview): string {
@@ -584,7 +502,7 @@ onMounted(async () => {
             <div class="employee-change-content">
               <div class="employee-change-content__summary">
                 <span>{{ employeeChangeSummary(row as EmployeeDataReview) }}</span>
-                <el-button v-if="contractDiffs(row as EmployeeDataReview).length" link type="primary" @click="openContractReviewDialog(row as EmployeeDataReview)">查看合同明细</el-button>
+                <el-button link type="primary" @click="openEmployeeReview(row as EmployeeDataReview)">查看变更明细</el-button>
               </div>
               <div class="employee-change-content__statuses">
                 <span v-if="(row as EmployeeDataReview).profileReviewStatus !== 'not_required'">
@@ -626,7 +544,7 @@ onMounted(async () => {
           <div class="mobile-result-field"><span class="mobile-result-field__label">提交人</span><span class="mobile-result-field__value">{{ item.createdBy?.name || '系统导入' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">提交时间</span><span class="mobile-result-field__value">{{ formatDateTime(item.createdAt) }}</span></div>
           <template #actions>
-            <el-button v-if="contractDiffs(item).length" link type="primary" @click="openContractReviewDialog(item)">合同明细</el-button>
+            <el-button link type="primary" @click="openEmployeeReview(item)">查看变更明细</el-button>
             <el-button v-if="reviewHasPerformanceBlocker(item)" link type="primary" @click="openManagerDialog(item)">补充上级</el-button>
             <el-button :loading="employeeLoading" @click="rejectEmployee(item)">退回</el-button>
             <el-button type="primary" :loading="employeeLoading" @click="approveEmployee(item)">通过</el-button>
@@ -705,17 +623,11 @@ onMounted(async () => {
 
     <el-empty v-if="activeCategory === 'all' && !allLoading && reviewTotal === 0" description="暂无待审核变更" />
 
-    <el-dialog v-model="contractReviewDialog.visible" title="合同变更明细" width="680px" destroy-on-close>
-      <div v-if="contractReviewDialog.row" class="contract-review-detail">
-        <p class="contract-review-detail__employee">{{ contractReviewDialog.row.employeeName }}</p>
-        <article v-for="change in contractDiffs(contractReviewDialog.row)" :key="change.key" class="contract-review-change">
-          <div><el-tag :type="change.kind === '移除' ? 'danger' : change.kind === '新增' ? 'success' : 'warning'" effect="plain">{{ change.kind }}</el-tag><strong>{{ change.title }}</strong></div>
-          <p v-if="change.before">变更前：{{ change.before }}</p>
-          <p v-if="change.after">变更后：{{ change.after }}</p>
-        </article>
-      </div>
-      <template #footer><el-button @click="contractReviewDialog.visible = false">关闭</el-button></template>
-    </el-dialog>
+    <BusinessDetailDrawer v-model="employeeReviewDrawer.visible" title="员工变更明细" :subtitle="employeeReviewDrawer.row?.employeeName" variant="workflow">
+      <p class="employee-review-note">仅展示本次变更。审核通过前不改变正式档案；需修改时请退回，由提交人继续修改原申请。</p>
+      <EmployeeReviewDifferences :groups="reviewGroups" />
+      <template #footer><el-button @click="employeeReviewDrawer.visible = false">关闭</el-button></template>
+    </BusinessDetailDrawer>
 
     <el-dialog v-model="managerDialog.visible" title="补充绩效直属上级" width="480px" :close-on-click-modal="false" destroy-on-close>
       <p>为 <strong>{{ managerDialog.employeeName }}</strong> 选择系统内绩效直属上级。</p>
@@ -739,12 +651,7 @@ onMounted(async () => {
 .review-category-heading span { min-width: 24px; padding: 1px 8px; border-radius: 999px; background: #eef4ff; color: #3563e9; font-size: 12px; text-align: center; }
 .review-table :deep(.el-table__cell) { padding: 10px 0; vertical-align: middle; }
 .review-table :deep(.cell) { line-height: 22px; }
-.contract-review-detail { padding: 0; }
-.contract-review-detail__employee { padding-bottom: 10px; font-weight: 600; }
-.contract-review-detail > p { margin: 0; color: #667085; }
-.contract-review-change { padding: 10px 0; border-top: 1px solid #eef2f6; }
-.contract-review-change > div { display: flex; align-items: center; gap: 8px; }
-.contract-review-change p { margin: 6px 0 0; color: #475467; font-size: 13px; }
+.employee-review-note { margin: 0 0 18px; color: var(--el-text-color-secondary); font-size: 13px; line-height: 22px; }
 .employee-change-content { display: grid; gap: 6px; }
 .employee-change-content__summary { display: flex; align-items: center; flex-wrap: wrap; gap: 4px 10px; }
 .employee-change-content__statuses { display: flex; flex-wrap: wrap; gap: 6px 12px; color: #667085; font-size: 12px; }

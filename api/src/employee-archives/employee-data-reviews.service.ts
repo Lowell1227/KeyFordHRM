@@ -1183,18 +1183,53 @@ export class EmployeeDataReviewsService {
     const currentActive = await tx.employeeContract.findMany({
       where: { userId, isActive: true },
     });
+    // 同一不可变 ID 仍以后一次提案为准，先确定最终业务键再执行写入。
+    const lastIdIndex = new Map(contracts.map((contract, index) => [this.nullableString(contract.id), index]));
     const retainedIds = new Set<string>();
-    for (const [index, contract] of contracts.entries()) {
+    const businessKeys = new Set<string>();
+    const plans = contracts.flatMap((contract, index) => {
       const contractId = this.nullableString(contract.id);
+      if (contractId && lastIdIndex.get(contractId) !== index) return [];
       const contractType = this.nullableString(contract.kind ?? contract.contractType) ?? 'contract';
       const sequence = typeof contract.sequence === 'number' ? contract.sequence : index;
+      const activeContract = contractId
+        ? currentActive.find((item) => item.id === contractId)
+        : sourceType === 'employee_roster_import' ? currentActive.find((item) => (
+          !retainedIds.has(item.id) && item.contractType === contractType && item.sequence === sequence
+        )) : undefined;
+      if (contractId && !activeContract) {
+        throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '合同记录已发生变化，请重新提交审核' });
+      }
+      const businessKey = this.contractKey(contractType, sequence);
+      if (businessKeys.has(businessKey)) {
+        throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '合同类型和顺序重复，请核对合同记录后重新提交' });
+      }
+      businessKeys.add(businessKey);
+      if (activeContract) retainedIds.add(activeContract.id);
+      return [{ contract, contractType, sequence, activeContract }];
+    });
+    const releasedIds = new Set<string>();
+    const endedAt = new Date();
+    for (const current of currentActive) {
+      const plan = plans.find((item) => item.activeContract?.id === current.id);
+      if (!plan) {
+        await tx.employeeContract.update({ where: { id: current.id }, data: { isActive: false, endedAt } });
+      } else if (plan.contractType !== current.contractType || plan.sequence !== current.sequence) {
+        // 部分唯一索引立即校验；在同一事务中释放待换位的键，再恢复原合同 ID。
+        await tx.employeeContract.update({ where: { id: current.id }, data: { isActive: false } });
+        releasedIds.add(current.id);
+      }
+    }
+    for (const { contract, contractType, sequence, activeContract } of plans) {
       const contractData = {
+        contractType,
         sequence,
         name: this.nullableString(contract.name),
         signingCompany: this.nullableString(contract.signingCompany),
         ...(contract.contractSubjectId !== undefined ? { contractSubjectId: this.nullableString(contract.contractSubjectId) } : {}),
         signedAt: this.nullableDate(contract.signedAt),
-        effectiveFrom: this.nullableDate(contract.effectiveFrom ?? contract.signedAt),
+        effectiveFrom: this.nullableDate(activeContract && contract.effectiveFrom !== undefined
+          ? contract.effectiveFrom : contract.effectiveFrom ?? contract.signedAt),
         expiresAt: this.nullableDate(contract.expiresAt),
         termType: this.nullableString(contract.termText ?? contract.termType),
         originalCompany: this.nullableString(contract.originalCompany),
@@ -1207,47 +1242,26 @@ export class EmployeeDataReviewsService {
           attachments: this.materials(contract.attachments),
         } : {}),
       };
-      const activeContract = contractId
-        ? currentActive.find((item) => item.id === contractId)
-        : sourceType === 'employee_roster_import' ? currentActive.find((item) => (
-          !retainedIds.has(item.id)
-          && item.contractType === contractType
-          && item.sequence === sequence
-        )) : undefined;
-      if (contractId && !activeContract) {
-        throw new BadRequestException({
-          code: ERROR_CODE.CONFLICT,
-          message: '合同记录已发生变化，请重新提交审核',
-        });
-      }
       await validateContractSubject(tx, contract, activeContract ?? {});
       if (activeContract?.contractSubjectId && (contract.contractSubjectId === undefined || contract.contractSubjectId === activeContract.contractSubjectId)) {
         contractData.signingCompany = activeContract.signingCompany;
       }
       if (activeContract) {
-        retainedIds.add(activeContract.id);
         const current = this.contractComparable(activeContract);
         const proposed = this.contractComparable({ ...activeContract, ...contractData });
         const changes = Object.fromEntries(Object.entries(contractData).filter(([key]) => (
           JSON.stringify(current[key as keyof typeof current]) !== JSON.stringify(proposed[key as keyof typeof proposed])
         )));
+        if (releasedIds.has(activeContract.id)) changes.isActive = true;
         if (Object.keys(changes).length > 0) {
           await tx.employeeContract.update({ where: { id: activeContract.id }, data: changes });
           Object.assign(activeContract, changes);
         }
       } else {
         await tx.employeeContract.create({
-          data: { userId, contractType, ...contractData, sourceBatchId, createdById: operator.id, isActive: true, endedAt: null },
+          data: { userId, ...contractData, sourceBatchId, createdById: operator.id, isActive: true, endedAt: null },
         });
       }
-    }
-    const endedAt = new Date();
-    for (const contract of currentActive) {
-      if (retainedIds.has(contract.id)) continue;
-      await tx.employeeContract.update({
-        where: { id: contract.id },
-        data: { isActive: false, endedAt },
-      });
     }
   }
 

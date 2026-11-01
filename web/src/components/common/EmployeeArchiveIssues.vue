@@ -8,7 +8,7 @@ import { useAuthStore } from '@/stores/auth.store';
 const props = defineProps<{ employeeId?: string; requestId?: string; count: number }>();
 const emit = defineEmits<{
   changed: [];
-  maintain: [target: EmployeeArchiveIssue['maintenance']];
+  maintain: [issue: EmployeeArchiveIssue];
 }>();
 const auth = useAuthStore();
 const canView = computed(() => ['hr', 'system_admin'].includes(auth.user?.sysRole ?? '')
@@ -74,7 +74,7 @@ async function confirmCurrent(issue: EmployeeArchiveIssue) {
 function maintain(issue: EmployeeArchiveIssue) {
   if (savingId.value) return;
   open.value = false;
-  emit('maintain', issue.maintenance);
+  emit('maintain', issue);
 }
 function sourcePosition(issue: EmployeeArchiveIssue) {
   return [issue.source.sheetName, issue.source.rowNumber ? `第 ${issue.source.rowNumber} 行` : '', issue.source.cell].filter(Boolean).join(' · ');

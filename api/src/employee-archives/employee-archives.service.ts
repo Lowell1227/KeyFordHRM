@@ -4,6 +4,7 @@ import { BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { createCipheriv, createHash, createHmac, randomBytes } from 'crypto';
 import {
+  AccountType,
   CompanyCode,
   EmploymentType,
   ExternalIdentityProvider,
@@ -26,6 +27,7 @@ import { EmployeeOnboardingService } from './employee-onboarding.service';
 import { employeeArchiveView, employeeDataChangeView, activeApplicationWhere } from './employee-data-change-view';
 import { archiveIssueStates } from './employee-archive-issues';
 import { hasHrCapability } from '@/auth/hr-capabilities';
+import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 
 export interface UpsertEmployeeProfileInput {
   phone?: string | null;
@@ -92,7 +94,7 @@ export class EmployeeArchivesService {
     const idNumber = (input.idNumber || input.profile?.idNumber)?.trim().toUpperCase();
     if (phone && !/^1\d{10}$/.test(phone)) throw new BadRequestException('请填写完整的手机号，或清空后补充');
     if (idNumber && !/^(?:\d{15}|\d{17}[\dX])$/.test(idNumber)) throw new BadRequestException('请填写完整的身份证号，或清空后补充');
-    return this.prisma.$transaction(async (tx) => {
+    return this.withDraftTransaction(async (tx) => {
       const sourceDraft = input.draftId ? await tx.employeeDataChangeRequest.findFirst({
         where: { id: input.draftId, sourceType: 'manual_employee_create',
           OR: [{ recordStatus: 'draft' }, { profileReviewStatus: 'rejected' }], archivedAt: null },
@@ -101,6 +103,7 @@ export class EmployeeArchivesService {
           sourceSystem: true, validationWarnings: true },
       }) : null;
       if (sourceDraft?.sourceSystem === 'archive_assistant_pilot') throw new BadRequestException('测试资料仅可保存待核草稿');
+      if (input.draftId) this.assertDraftVersion(sourceDraft, input.expectedVersion);
       const name = input.name.trim();
       const department = await tx.department.findUnique({
         where: { id: input.deptId },
@@ -181,7 +184,7 @@ export class EmployeeArchivesService {
       } satisfies Prisma.EmployeeDataChangeRequestUncheckedCreateInput;
       let request;
       if (input.draftId && draftVersion !== null) {
-        request = await this.updateEmployeeCreateDraft(tx, input.draftId, draftVersion, {
+        request = await this.updateEmployeeCreateDraft(tx, input.draftId, draftVersion, savedDraft!.updatedAt, {
           ...requestData,
           requestVersion: { increment: 1 },
           revisionHistory: this.revisionSnapshot(savedDraft!),
@@ -212,11 +215,28 @@ export class EmployeeArchivesService {
         },
       });
       return employeeDataChangeView(updated);
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    });
   }
 
   async saveEmployeeCreateDraft(input: SaveEmployeeCreateDraftDto, operator: AuthUser) {
-    return this.prisma.$transaction(tx => this.saveEmployeeCreateDraftWithClient(tx, input, operator));
+    return this.withDraftTransaction(tx => this.saveEmployeeCreateDraftWithClient(tx, input, operator));
+  }
+
+  private async withDraftTransaction<T>(run: (tx: Prisma.TransactionClient) => Promise<T>): Promise<T> {
+    try {
+      return await this.prisma.$transaction(run, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (error) {
+      if (['P2025', 'P2034'].includes(String(this.record(error).code))) {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '资料已变化，请保留当前输入并重新打开最新草稿核对' });
+      }
+      throw error;
+    }
+  }
+
+  private assertDraftVersion(draft: { requestVersion: number } | null, expectedVersion?: number): void {
+    if (!draft || !Number.isInteger(expectedVersion) || expectedVersion !== draft.requestVersion) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '草稿已变化或已提交，请保留当前输入并重新打开最新草稿核对' });
+    }
   }
 
   /** Internal trusted reception only; source metadata is never accepted by public draft DTOs. */
@@ -245,13 +265,14 @@ export class EmployeeArchivesService {
             sourceSystem: true, validationWarnings: true, baseValue: true },
         });
         if (!draft) {
-          throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
+          throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
         }
         if (draft.userId || draft.profileReviewStatus === 'approved') throw new ConflictException('员工主档已经建立，请在原档案中继续维护');
         if (draft.sourceSystem === 'archive_assistant_pilot') {
           const owner = await tx.employeeDataChangeRequest.findUnique({ where: { id: draft.id }, select: { createdById: true } });
           if (owner?.createdById !== operator.id) throw new ConflictException('请由原接收人维护测试草稿');
         }
+        this.assertDraftVersion(draft, input.expectedVersion);
         savedDraft = draft;
         employeeNo = draft.employeeNo ?? null;
         proposed = this.preserveSensitiveProfile(proposed, draft.proposedValue);
@@ -283,7 +304,7 @@ export class EmployeeArchivesService {
       } satisfies Prisma.EmployeeDataChangeRequestUncheckedCreateInput;
       let request;
       if (input.draftId && draftVersion !== null) {
-        request = await this.updateEmployeeCreateDraft(tx, input.draftId, draftVersion, {
+        request = await this.updateEmployeeCreateDraft(tx, input.draftId, draftVersion, savedDraft!.updatedAt, {
           ...data,
           requestVersion: { increment: 1 },
           revisionHistory: this.revisionSnapshot(savedDraft!),
@@ -524,6 +545,7 @@ export class EmployeeArchivesService {
     tx: Prisma.TransactionClient,
     draftId: string,
     requestVersion: number,
+    updatedAt: Date,
     data: Prisma.EmployeeDataChangeRequestUncheckedUpdateInput,
   ) {
     try {
@@ -534,6 +556,7 @@ export class EmployeeArchivesService {
           OR: [{ recordStatus: 'draft' }, { profileReviewStatus: 'rejected' }],
           archivedAt: null,
           requestVersion,
+          updatedAt,
         },
         data,
       });
@@ -910,7 +933,7 @@ export class EmployeeArchivesService {
         id: true, name: true, employeeNo: true, status: true, position: true, positionId: true,
         phone: true, email: true, avatarUrl: true, deptId: true, entryDate: true,
         plannedRegularDate: true, actualRegularDate: true, leaveDate: true,
-        employmentType: true, sysRole: true, hrCapabilities: true, archivedAt: true,
+        employmentType: true, sysRole: true, hrCapabilities: true, archivedAt: true, directManagerId: true,
         createdAt: true, updatedAt: true,
         employeeNumberAssignments: { orderBy: { createdAt: 'desc' } },
         dept: { select: { id: true, name: true, fullPath: true, company: true } },
@@ -1000,6 +1023,7 @@ export class EmployeeArchivesService {
     const currentEmployment = employmentSelection.current;
     return employeeArchiveView({
       ...archive,
+      archiveVersion: this.archiveVersion(archive),
       employeeProfile: archive.employeeProfile ? {
         ...archive.employeeProfile,
         idNumberConfigured: Boolean(archive.employeeProfile.idNumberFingerprint),
@@ -1101,21 +1125,23 @@ export class EmployeeArchivesService {
   }
 
   async submitDraft(userId: string, input: SubmitEmployeeArchiveDraftDto, operator: AuthUser) {
-    return this.persistArchiveChangeWithClient(this.prisma, userId, input, operator, 'submitted');
+    return this.withDraftTransaction(tx => this.persistArchiveChangeWithClient(tx, userId, input, operator, 'submitted'));
   }
 
   async saveArchiveDraft(userId: string, input: SubmitEmployeeArchiveDraftDto, operator: AuthUser) {
-    const request = await this.persistArchiveChangeWithClient(this.prisma, userId, input, operator, 'draft');
-    await this.prisma.auditLog.create({
-      data: {
-        userId: operator.id,
-        action: 'save_employee_archive_draft',
-        entityType: 'employee_data_change_request',
-        entityId: request.id,
-        newValue: this.toJson({ userId }),
-      },
+    return this.withDraftTransaction(async tx => {
+      const request = await this.persistArchiveChangeWithClient(tx, userId, input, operator, 'draft');
+      await tx.auditLog.create({
+        data: {
+          userId: operator.id,
+          action: 'save_employee_archive_draft',
+          entityType: 'employee_data_change_request',
+          entityId: request.id,
+          newValue: this.toJson({ userId }),
+        },
+      });
+      return request;
     });
-    return request;
   }
 
   private async persistArchiveChangeWithClient(
@@ -1124,6 +1150,7 @@ export class EmployeeArchivesService {
     input: SubmitEmployeeArchiveDraftDto,
     operator: AuthUser,
     recordStatus: 'draft' | 'submitted',
+    requireBaseVersion = true,
   ) {
     if (input.employee.companyText != null && (typeof input.employee.companyText !== 'string'
       || input.employee.companyText.length > 150)) {
@@ -1135,7 +1162,6 @@ export class EmployeeArchivesService {
         employeeProfile: true,
         employmentHistory: {
           orderBy: { effectiveFrom: 'desc' },
-          take: 1,
           include: { directManager: { select: { name: true } } },
         },
         employeeContracts: { where: { isActive: true }, orderBy: { sequence: 'asc' } },
@@ -1158,23 +1184,56 @@ export class EmployeeArchivesService {
         : {
           userId,
           sourceType: 'manual_archive_change',
-          recordStatus,
+          recordStatus: { in: ['draft', 'submitted'] },
           archivedAt: null,
           OR: [
-            { profileReviewStatus: 'pending' },
-            { performanceReviewStatus: 'pending' },
+            { recordStatus: 'draft' },
+            { profileReviewStatus: { in: ['pending', 'applying', 'rejected'] } },
+            { performanceReviewStatus: { in: ['pending', 'applying', 'rejected'] } },
           ],
         },
       orderBy: { createdAt: 'desc' },
     });
-    if (input.draftId && !existing) {
-      throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
+    if (input.draftId) {
+      this.assertDraftVersion(existing, input.expectedVersion);
+    } else if (existing) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '员工已有待核草稿或待审申请，请打开原单继续维护' });
+    }
+    if (!input.draftId && requireBaseVersion && input.baseVersion !== this.archiveVersion(user)) {
+      throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '正式档案已发生变化，请保留当前输入并重新核对最新档案' });
     }
 
     const employment = user.employmentHistory[0] ?? null;
     const baseEmployee = this.employeeReviewData(user, employment);
     const baseProfile = this.profileReviewData(user.employeeProfile);
     const baseContracts = user.employeeContracts.map((contract) => this.contractReviewData(contract));
+    const profileApproved = existing?.profileReviewStatus === 'approved';
+    const performanceApproved = existing?.performanceReviewStatus === 'approved';
+    const savedProposal = this.record(existing?.proposedValue);
+    const savedBase = this.record(existing?.baseValue);
+    const originalContracts = Array.isArray(savedBase.contracts) ? savedBase.contracts.map(item => this.record(item)) : [];
+    if (existing) {
+      const profileBase = profileApproved ? savedProposal : savedBase;
+      const savedEmployee = profileApproved
+        ? await this.appliedEmployeeReviewData(client as Prisma.TransactionClient, this.record(profileBase.employee), this.record(savedBase.employee), this.record(savedProposal.performance))
+        : this.record(profileBase.employee);
+      const savedProfile = profileApproved ? this.appliedProfileReviewData(this.record(profileBase.profile)) : this.record(profileBase.profile);
+      const profileKeys = [...new Set([...Object.keys(savedProfile), ...Object.keys(baseProfile)])]
+        .filter(key => !['idNumberEncrypted', 'bankAccountEncrypted'].includes(key));
+      const savedPerformance = { ...this.record((performanceApproved ? savedProposal : savedBase).performance) };
+      if (performanceApproved) savedPerformance.managerId = await this.appliedPerformanceManagerId(client as Prisma.TransactionClient, savedPerformance);
+      const profileExists = profileApproved && typeof savedBase.profileExists === 'boolean'
+        ? savedBase.profileExists || Object.keys(savedProfile).length > 0 : savedBase.profileExists;
+      if (!this.sameReviewRecord(savedEmployee, baseEmployee, Object.keys(savedEmployee).filter(key => key in baseEmployee))
+        || ('profile' in profileBase && !this.sameReviewRecord(savedProfile, baseProfile, profileKeys))
+        || (typeof profileExists === 'boolean' && profileExists !== (user.employeeProfile !== null))
+        || (Array.isArray(profileBase.contracts) && !(profileApproved
+          ? this.sameAppliedContractSet(profileBase.contracts.map(item => this.record(item)), baseContracts, originalContracts)
+          : this.sameContractSet(profileBase.contracts.map(item => this.record(item)), baseContracts)))
+        || !this.sameReviewRecord(savedPerformance, { managerId: user.directManagerId }, Object.keys(savedPerformance).filter(key => key === 'managerId'))) {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '正式档案已发生变化，请保留当前输入并重新核对最新档案' });
+      }
+    }
     const proposedEmployee: Record<string, unknown> = {
       ...baseEmployee,
       ...input.employee,
@@ -1187,7 +1246,7 @@ export class EmployeeArchivesService {
     const safeInputProfile = { ...input.profile };
     for (const key of ['idNumberEncrypted', 'idNumberFingerprint', 'bankAccountEncrypted', 'bankAccountFingerprint',
       'idNumberConfigured', 'bankAccountConfigured']) delete safeInputProfile[key];
-    const storedProfile = this.record(this.record(existing?.proposedValue).profile);
+    const storedProfile = this.record(savedProposal.profile);
     const proposedProfile: Record<string, unknown> = { ...baseProfile, ...safeInputProfile };
     for (const key of ['idNumberEncrypted', 'idNumberFingerprint', 'bankAccountEncrypted', 'bankAccountFingerprint']) {
       if (storedProfile[key] != null) proposedProfile[key] = storedProfile[key];
@@ -1212,14 +1271,21 @@ export class EmployeeArchivesService {
       managerId: user.directManagerId,
       ...(input.performance ?? {}),
     };
-    const profileChanged = !this.sameReviewRecord(baseEmployee, proposedEmployee, [
+    const comparableEmployee = profileApproved
+      ? await this.appliedEmployeeReviewData(client as Prisma.TransactionClient, proposedEmployee, this.record(savedBase.employee), this.record(savedProposal.performance), this.record(savedProposal.employee))
+      : proposedEmployee;
+    const comparableProfile = profileApproved ? this.appliedProfileReviewData(proposedProfile) : proposedProfile;
+    const profileChanged = !this.sameReviewRecord(baseEmployee, comparableEmployee, [
       'employeeNo', 'name', 'phone', 'company', 'companyText', 'contractSubjectId', 'deptId', 'positionId', 'position', 'jobGrade',
       'jobFamily', 'managerId', 'workLocation', 'employmentType', 'employeeStatus', 'entryDate',
       'plannedRegularDate', 'actualRegularDate', 'leaveDate', 'probationMonths',
     ])
-      || !this.sameReviewRecord(baseProfile, proposedProfile)
-      || !this.sameContractSet(baseContracts, proposedContracts);
-    const performanceChanged = (proposedPerformance.managerId ?? null) !== (user.directManagerId ?? null);
+      || !this.sameReviewRecord(baseProfile, comparableProfile, [...new Set([...Object.keys(baseProfile), ...Object.keys(comparableProfile)])]
+        .filter(key => !['idNumberEncrypted', 'bankAccountEncrypted'].includes(key)))
+      || !(profileApproved ? this.sameAppliedContractSet(proposedContracts, baseContracts, originalContracts) : this.sameContractSet(baseContracts, proposedContracts));
+    const performanceManagerId = performanceApproved
+      ? await this.appliedPerformanceManagerId(client as Prisma.TransactionClient, proposedPerformance) : proposedPerformance.managerId ?? null;
+    const performanceChanged = performanceManagerId !== (user.directManagerId ?? null);
     if ((existing?.profileReviewStatus === 'approved' && profileChanged)
       || (existing?.performanceReviewStatus === 'approved' && performanceChanged)) {
       throw new ConflictException('已通过的部分不能在原申请中改写，请从当前档案另行发起更正');
@@ -1232,7 +1298,7 @@ export class EmployeeArchivesService {
     }
 
     const data = {
-      baseValue: this.toJson({
+      baseValue: existing ? existing.baseValue as Prisma.InputJsonValue : this.toJson({
         employee: baseEmployee,
         profile: baseProfile,
         profileExists: user.employeeProfile !== null,
@@ -1240,10 +1306,10 @@ export class EmployeeArchivesService {
         performance: { managerId: user.directManagerId },
       }),
       proposedValue: this.toJson({
-        employee: proposedEmployee,
-        profile: proposedProfile,
-        contracts: proposedContracts,
-        performance: proposedPerformance,
+        employee: profileApproved ? savedProposal.employee : proposedEmployee,
+        profile: profileApproved ? savedProposal.profile : proposedProfile,
+        contracts: profileApproved ? savedProposal.contracts : proposedContracts,
+        performance: performanceApproved ? savedProposal.performance : proposedPerformance,
       }),
       validationErrors: this.toJson([]),
       createdById: operator.id,
@@ -1325,7 +1391,7 @@ export class EmployeeArchivesService {
         await this.persistArchiveChangeWithClient(tx, userId, {
           employee: { deptId: departmentId },
           profile: {},
-        }, operator, 'submitted');
+        }, operator, 'submitted', false);
       }
       return { submitted: changedUserIds.length };
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -1572,6 +1638,19 @@ export class EmployeeArchivesService {
     }
   }
 
+  private archiveVersion(user: Record<string, any>): string {
+    // Version only persisted record identities and timestamps; never hash personal field values.
+    const version = (record: Record<string, any> | null | undefined) => record
+      ? [record.id ?? null, record.updatedAt ?? null] : null;
+    const versions = (records: Record<string, any>[]) => records.map(version)
+      .sort((a, b) => String(a![0]).localeCompare(String(b![0])));
+    return createHash('sha256').update(JSON.stringify({ user: version(user), profile: version(user.employeeProfile),
+      employments: versions(user.employmentHistory ?? []),
+      contracts: versions((user.employeeContracts ?? []).filter(contract => contract.isActive !== false)),
+      managerId: user.directManagerId ?? user.directManager?.id ?? null,
+    })).digest('hex');
+  }
+
   private employeeReviewData(
     user: Record<string, any>,
     employment: Record<string, any> | null,
@@ -1626,6 +1705,100 @@ export class EmployeeArchivesService {
     return keys
       .filter((key) => !ignoredKeys.has(key))
       .every((key) => this.comparableReviewValue(left[key], key) === this.comparableReviewValue(right[key], key));
+  }
+
+  private nullableAppliedDate(value: unknown): Date | null {
+    if (value == null || value === '') return null;
+    const date = value instanceof Date ? value : new Date(String(value));
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  private appliedProfileReviewData(profile: Record<string, unknown>): Record<string, unknown> {
+    const applied = { ...profile };
+    for (const key of ['birthDate', 'graduationDate', 'socialSecurityStartDate', 'housingFundStartDate']) {
+      if (key in applied) applied[key] = this.nullableAppliedDate(applied[key]);
+    }
+    return applied;
+  }
+
+  private async reviewedManagerByName(client: Prisma.TransactionClient, name: string): Promise<string | null> {
+    const candidates = await client.user.findMany({ where: { name, deletedAt: null, accountType: AccountType.employee,
+      status: { in: CURRENT_WORKER_STATUSES } }, select: { id: true }, take: 2 });
+    return candidates.length === 1 ? candidates[0].id : null;
+  }
+
+  private async appliedPerformanceManagerId(client: Prisma.TransactionClient, performance: Record<string, unknown>): Promise<string | null> {
+    const id = typeof performance.managerId === 'string' ? performance.managerId : null;
+    const name = this.nullableString(performance.managerName);
+    return !id && name ? this.reviewedManagerByName(client, name) : id;
+  }
+
+  private async appliedEmployeeReviewData(client: Prisma.TransactionClient, employee: Record<string, unknown>,
+    previous: Record<string, unknown>, performance: Record<string, unknown>, reviewedEmployee = employee): Promise<Record<string, unknown>> {
+    const comparable = (value: unknown) => value == null || value === '' ? 'null' : value instanceof Date ? value.toISOString() : String(value);
+    const writesEmployment = ['company', 'companyText', 'contractSubjectId', 'deptId', 'positionId', 'position', 'jobGrade', 'jobFamily',
+      'managerId', 'managerName', 'workLocation', 'employmentType', 'employeeStatus', 'entryDate', 'plannedRegularDate', 'actualRegularDate', 'leaveDate', 'probationMonths']
+      .some(key => comparable(previous[key]) !== comparable(reviewedEmployee[key]));
+    const employmentOnly = new Set(['company', 'companyText', 'contractSubjectId', 'jobGrade', 'jobFamily', 'managerId', 'workLocation', 'probationMonths']);
+    const applied = { ...employee };
+    for (const key of ['name', 'employeeNo', 'phone', 'deptId', 'positionId', 'position', 'jobGrade', 'jobFamily', 'managerId', 'workLocation', 'companyText', 'contractSubjectId']) {
+      if (key in applied && (writesEmployment || !employmentOnly.has(key))) applied[key] = this.nullableString(applied[key]);
+    }
+    for (const [key, options, fallback] of [
+      ['company', Object.values(CompanyCode), CompanyCode.fuede],
+      ['employmentType', Object.values(EmploymentType), EmploymentType.full_time],
+      ['employeeStatus', Object.values(UserStatus), UserStatus.active],
+    ] as const) {
+      if (key in applied && (writesEmployment || !employmentOnly.has(key)) && !options.includes(applied[key] as never)) applied[key] = fallback;
+    }
+    for (const key of ['entryDate', 'plannedRegularDate', 'actualRegularDate', 'leaveDate']) {
+      if (key in applied) applied[key] = this.nullableAppliedDate(applied[key]);
+    }
+    if (writesEmployment && 'probationMonths' in applied && typeof applied.probationMonths !== 'number') applied.probationMonths = null;
+    if (applied.positionId) {
+      const position = await client.position.findUnique({ where: { id: String(applied.positionId) }, select: { id: true, name: true, jobFamily: true } });
+      if (!position) throw new ConflictException('已通过档案的岗位已变化，请重新核对最新档案');
+      applied.position = position.name;
+      if (writesEmployment) applied.jobFamily = position.jobFamily;
+    }
+    const managerName = this.nullableString(employee.managerName);
+    if (writesEmployment && !applied.managerId && managerName) {
+      const suggestedId = this.nullableString(performance.managerId);
+      applied.managerId = suggestedId && this.nullableString(performance.managerName) === managerName
+        ? suggestedId : await this.reviewedManagerByName(client, managerName);
+    }
+    if (writesEmployment && employee.contractSubjectId === undefined && 'contractSubjectId' in previous) applied.contractSubjectId = previous.contractSubjectId;
+    if (writesEmployment && (employee.companyText === undefined || (employee.contractSubjectId === undefined && previous.contractSubjectId))) {
+      applied.companyText = this.nullableString(previous.companyText);
+    }
+    return applied;
+  }
+
+  private sameAppliedContractSet(proposed: Record<string, unknown>[], current: Record<string, unknown>[], previous: Record<string, unknown>[]): boolean {
+    if (proposed.length !== current.length) return false;
+    const remaining = [...current];
+    return proposed.every((contract, index) => {
+      const id = this.nullableString(contract.id);
+      const contractType = this.nullableString(contract.kind ?? contract.contractType) ?? 'contract';
+      const sequence = typeof contract.sequence === 'number' ? contract.sequence : index;
+      const matches = remaining.filter(item => id ? item.id === id : item.contractType === contractType && item.sequence === sequence);
+      if (matches.length !== 1) return false;
+      const applied = matches[0];
+      const prior = id ? previous.find(item => item.id === id) : undefined;
+      remaining.splice(remaining.indexOf(applied), 1);
+      const normalized = { ...contract, id: applied.id, contractType, sequence,
+        effectiveFrom: id && contract.effectiveFrom !== undefined ? contract.effectiveFrom : contract.effectiveFrom ?? contract.signedAt,
+        termType: this.nullableString(contract.termText ?? contract.termType),
+      };
+      for (const key of ['name', 'signingCompany', 'originalCompany', 'newCompany', 'confidentialityAgreement', 'nonCompeteAgreement', 'portraitAgreement']) {
+        normalized[key] = this.nullableString(contract[key]);
+      }
+      if (contract.contractSubjectId === undefined && prior) normalized['contractSubjectId'] = prior.contractSubjectId;
+      if (prior?.contractSubjectId && (contract.contractSubjectId === undefined || contract.contractSubjectId === prior.contractSubjectId)) {
+        normalized['signingCompany'] = prior.signingCompany ?? null;
+      }
+      return this.sameContractSet([normalized], [applied]);
+    });
   }
 
   private sameContractSet(

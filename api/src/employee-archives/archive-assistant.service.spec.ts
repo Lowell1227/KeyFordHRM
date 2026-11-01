@@ -114,7 +114,7 @@ describe('archive assistant controlled synthetic reception', () => {
     const next = await f.token('another'); await f.service.save(next, viewer);
     const originalSource = f.rows[0].sourceReference;
     f.tx.employeeDataChangeRequest.findUnique.mockImplementation(async ({ where }: any) => where.id ? f.rows.find(row => row.id === where.id) : f.rows.find(row => row.sourceReference === where.sourceSystem_sourceReference?.sourceReference) ?? null);
-    await f.archives.saveEmployeeCreateDraft({ draftId: f.rows[0].id, name: 'edited', employee: { workLocation: 'edited' } } as any, viewer);
+    await f.archives.saveEmployeeCreateDraft({ draftId: f.rows[0].id, expectedVersion: f.rows[0].requestVersion, name: 'edited', employee: { workLocation: 'edited' } } as any, viewer);
     expect(f.rows[0].sourceSystem).toBe('archive_assistant_pilot'); expect(f.rows[0].sourceReference).toBe(originalSource);
     expect(f.rows[0].validationWarnings).toEqual(expect.arrayContaining([expect.objectContaining({ field: 'identity' })]));
     f.rows[0].recordStatus = 'archived'; f.rows[0].archivedAt = new Date();

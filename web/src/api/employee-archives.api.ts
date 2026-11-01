@@ -99,6 +99,7 @@ export interface EmployeeIdentityLookupResult {
 
 export interface EmployeeCreatePayload {
   draftId?: string;
+  expectedVersion?: number;
   name: string;
   phone?: string | null;
   idNumber?: string | null;
@@ -185,6 +186,7 @@ export interface EmployeeRosterImportBatch {
 
 export interface EmployeeArchive {
   id: string;
+  archiveVersion: string;
   name: string;
   employeeNo: string | null;
   status: 'active' | 'probation' | 'pending_entry' | 'resigned';
@@ -389,6 +391,8 @@ export const employeeArchivesApi = {
 
   submitDraft(userId: string, body: {
     draftId?: string;
+    expectedVersion?: number;
+    baseVersion?: string;
     employee: Record<string, unknown>;
     profile: Record<string, unknown>;
     contracts: Record<string, unknown>[];
@@ -419,6 +423,8 @@ export const employeeArchivesApi = {
 
   saveArchiveDraft(userId: string, body: {
     draftId?: string;
+    expectedVersion?: number;
+    baseVersion?: string;
     employee: Record<string, unknown>;
     profile: Record<string, unknown>;
     contracts: Record<string, unknown>[];
