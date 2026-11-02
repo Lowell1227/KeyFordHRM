@@ -47,6 +47,7 @@ import type { SysRole, UserStatus } from '@/types/enums';
 import { formatDate, formatDateTime } from '@/utils/date';
 import { isTopLevelDepartmentLeader } from '@/utils/organization-relations';
 import { formatPersonnelIdentityLabel } from '@/utils/personnel-identity';
+import { employeeContractStatus, formatEmployeeContractDate } from '@/utils/employee-contract-status';
 
 type PersonnelView = 'org' | 'users' | 'processing';
 
@@ -660,7 +661,8 @@ const archiveReadOnly = computed(() => Boolean(employeeArchiveDrawer.value.data?
 const archiveEditing = ref(false);
 const archiveSection = ref('current');
 const contractGroups = computed(() => {
-  const contracts = employeeArchiveDrawer.value.data?.employeeContracts ?? [];
+  const contracts = (employeeArchiveDrawer.value.data?.employeeContracts ?? [])
+    .map(contract => ({ ...contract, dateStatus: employeeContractStatus(contract) }));
   return [
     { name: '当前合同', contracts: contracts.filter((item) => item.isActive !== false) },
     { name: '历史合同', contracts: contracts.filter((item) => item.isActive === false) },
@@ -905,6 +907,9 @@ const employeeReentryEmployee = ref<ManagedUser | null>(null);
 const employmentRecordDrawerVisible = ref(false);
 const employmentRecordDrawerArchive = ref<EmployeeArchive | null>(null);
 const employmentRecordDrawerMode = ref<'default' | 'resignation'>('default');
+const resignationDraft = ref<{ leaveDate: string; reason: string } | null>(null);
+const resignationDepartmentEmployeeId = ref<string | null>(null);
+const refreshingResignationDepartment = ref(false);
 const draftDialog = ref({
   loading: false,
   page: 1,
@@ -1229,14 +1234,56 @@ function archiveCurrentSelection() {
 }
 
 function openEmploymentRecord(archive: EmployeeArchive, mode: 'default' | 'resignation' = 'default') {
+  resignationDraft.value = null;
   employmentRecordDrawerArchive.value = archive;
   employmentRecordDrawerMode.value = mode;
   employmentRecordDrawerVisible.value = true;
 }
 
+function completeResignationDepartment(draft: { leaveDate: string; reason: string }) {
+  if (!canEditArchive.value || !employmentRecordDrawerArchive.value || employmentRecordDrawerArchive.value.archivedAt) return;
+  resignationDraft.value = draft;
+  resignationDepartmentEmployeeId.value = employmentRecordDrawerArchive.value.id;
+  employmentRecordDrawerVisible.value = false;
+}
+
+async function openResignationDepartmentEditor() {
+  const employeeId = resignationDepartmentEmployeeId.value;
+  if (!employeeId) return;
+  const generation = archiveLoadGeneration + 1;
+  await openEmployeeArchive({ id: employeeId } as ManagedUser);
+  if (generation !== archiveLoadGeneration || resignationDepartmentEmployeeId.value !== employeeId) return;
+  if (employeeArchiveDrawer.value.data?.id === employeeId && !archiveReadOnly.value) archiveEditing.value = true;
+  else if (!employeeArchiveDrawer.value.data) ElMessage.warning('档案读取未完成，已保留离职信息，请重试补充部门。');
+}
+
+async function refreshResignationDepartment() {
+  const employeeId = employmentRecordDrawerArchive.value?.id;
+  if (!employeeId || refreshingResignationDepartment.value) return;
+  const generation = archiveLoadGeneration;
+  refreshingResignationDepartment.value = true;
+  try {
+    const archive = await employeeArchivesApi.getArchive(employeeId);
+    if (generation === archiveLoadGeneration && employmentRecordDrawerArchive.value?.id === employeeId) employmentRecordDrawerArchive.value = archive;
+  } catch { ElMessage.warning('部门信息未刷新，已保留离职信息，请稍后重试。'); }
+  finally { refreshingResignationDepartment.value = false; }
+}
+
+async function resumeResignationAfterDepartment() {
+  const employeeId = resignationDepartmentEmployeeId.value;
+  if (!employeeId) return;
+  const generation = archiveLoadGeneration;
+  resignationDepartmentEmployeeId.value = null;
+  await refreshResignationDepartment();
+  if (generation === archiveLoadGeneration && employmentRecordDrawerArchive.value?.id === employeeId
+    && !employeeArchiveDrawer.value.visible && !employmentRecordDrawerVisible.value) employmentRecordDrawerVisible.value = true;
+}
+
 async function openResignation(row: ManagedUser) {
+  const generation = ++archiveLoadGeneration;
   try {
     const archive = await employeeArchivesApi.getArchive(row.id);
+    if (generation !== archiveLoadGeneration) return;
     openEmploymentRecord(archive, 'resignation');
   } catch {
     // 由 HTTP 拦截器展示错误
@@ -2165,6 +2212,7 @@ onBeforeUnmount(() => {
       :close-on-press-escape="!archiveEditSaving && !archiveDraftSaving"
       :before-close="beforeCloseEmployeeArchive"
       @opened="archiveEditorRef?.focusField(archiveIssueContext?.field)"
+      @closed="resumeResignationAfterDepartment"
     >
       <div v-loading="employeeArchiveDrawer.loading" class="employee-archive">
         <template v-if="employeeArchiveDrawer.data">
@@ -2329,7 +2377,8 @@ onBeforeUnmount(() => {
                 <h3>任职历史</h3>
                 <span>支持历史补录和未来生效；重叠只提醒，不覆盖记录</span>
               </div>
-              <el-button v-if="canEditArchive && !archiveReadOnly" @click="openEmploymentRecord(employeeArchiveDrawer.data)">新增任职记录</el-button>
+              <el-button v-if="canEditArchive && !archiveReadOnly" :disabled="Boolean(resignationDepartmentEmployeeId)" @click="openEmploymentRecord(employeeArchiveDrawer.data)">新增任职记录</el-button>
+              <span v-if="resignationDepartmentEmployeeId" class="muted-text">请先返回离职办理，再新增其他任职记录。</span>
             </div>
             <el-tag v-if="employeeArchiveDrawer.data.employmentWarnings?.length" type="warning" effect="plain" size="small">{{ employeeArchiveDrawer.data.employmentWarnings.join('；') }}</el-tag>
             <div class="number-history"><el-tag v-for="number in employeeArchiveDrawer.data.employeeNumberAssignments ?? []" :key="number.id" effect="plain">{{ number.employeeNo }} · {{ number.status === 'current' ? '当前' : number.status === 'reserved' ? '已预留' : number.status === 'cancelled' ? '已取消' : '历史' }}</el-tag></div>
@@ -2361,7 +2410,7 @@ onBeforeUnmount(() => {
             <div class="section-head">
               <div>
                 <h3>合同记录</h3>
-                <span>有效合同与历史合同均保留，花名册移除只停用、不删除</span>
+                <span>当前合同与历史合同均保留；期限按北京时间日期判断</span>
               </div>
             </div>
             <template v-if="employeeArchiveDrawer.data.employeeContracts.length">
@@ -2374,17 +2423,17 @@ onBeforeUnmount(() => {
             >
               <div class="employee-archive__contract-head">
                 <strong>合同 {{ index + 1 }}</strong>
-                <el-tag :type="contract.isActive === false ? 'info' : 'success'" size="small">
-                  {{ contract.isActive === false ? '历史' : '有效' }}
+                <el-tag :type="contract.dateStatus.type" size="small">
+                  {{ contract.dateStatus.label }}
                 </el-tag>
               </div>
               <div class="employee-archive__facts">
                 <div><span>类型</span><strong>{{ contractTypeLabels[contract.contractType] || contract.contractType || '未填写' }}</strong></div>
                 <div><span>合同名称</span><strong>{{ contract.name || '未填写' }}</strong></div>
                 <div><span>签约公司</span><strong>{{ contract.signingCompany || '未填写' }}</strong><small v-if="contract.contractSubjectId">已关联合同主体</small><small v-else-if="contract.signingCompany">历史名称，尚未关联主体</small></div>
-                <div><span>签订日期</span><strong>{{ formatDate(contract.signedAt) }}</strong></div>
-                <div><span>生效日期</span><strong>{{ formatDate(contract.effectiveFrom) }}</strong></div>
-                <div><span>到期日期</span><strong>{{ formatDate(contract.expiresAt) }}</strong></div>
+                <div><span>签订日期</span><strong>{{ formatEmployeeContractDate(contract.signedAt) }}</strong></div>
+                <div><span>生效日期</span><strong>{{ formatEmployeeContractDate(contract.effectiveFrom) }}</strong></div>
+                <div><span>到期日期</span><strong>{{ formatEmployeeContractDate(contract.expiresAt) }}</strong></div>
                 <div><span>期限</span><strong>{{ contract.termType || '未填写' }}</strong></div>
                 <div><span>原公司</span><strong>{{ contract.originalCompany || '未填写' }}</strong></div>
                 <div><span>新公司</span><strong>{{ contract.newCompany || '未填写' }}</strong></div>
@@ -2422,7 +2471,8 @@ onBeforeUnmount(() => {
       <template #footer>
         <div class="archive-edit-footer">
           <div v-if="archiveEditing" class="archive-footer-state" aria-live="polite"><span>{{ archiveSaveState === 'saving' ? '正在保存…' : archiveSaveState === 'saved' ? '草稿已保存' : archiveSaveState === 'error' ? '草稿未保存，请核对提示' : '修改后自动保存' }}</span><el-button link type="primary" :loading="archiveDraftSaving" :disabled="archiveEditSaving" @click="archiveEditorRef?.saveDraft()">保存草稿</el-button></div>
-          <el-button v-if="nextArchivePerson" link :disabled="archiveEditSaving || archiveDraftSaving" @click="openNextArchive">下一位待处理</el-button>
+          <el-button v-if="resignationDepartmentEmployeeId" :disabled="archiveEditSaving || archiveDraftSaving" @click="beforeCloseEmployeeArchive(() => employeeArchiveDrawer.visible = false)">返回离职办理</el-button>
+          <el-button v-else-if="nextArchivePerson" link :disabled="archiveEditSaving || archiveDraftSaving" @click="openNextArchive">下一位待处理</el-button>
           <template v-if="archiveEditing">
             <el-button link :disabled="archiveEditSaving || archiveDraftSaving" @click="cancelArchiveEditing">取消</el-button>
             <el-button :disabled="archiveEditSaving || archiveDraftSaving" @click="saveArchiveAndClose">保存后关闭</el-button>
@@ -2492,7 +2542,13 @@ onBeforeUnmount(() => {
       :archive="employmentRecordDrawerArchive"
       :departments="departments"
       :mode="employmentRecordDrawerMode"
+      :can-edit-archive="canEditArchive"
+      :resignation-draft="resignationDraft"
+      :refreshing-department="refreshingResignationDepartment"
       @submitted="afterEmploymentSubmitted"
+      @complete-department="completeResignationDepartment"
+      @refresh-department="refreshResignationDepartment"
+      @closed="openResignationDepartmentEditor"
     />
 
     <el-dialog v-model="departmentMergeDialog.visible" title="合并部门" width="520px" :close-on-click-modal="false">

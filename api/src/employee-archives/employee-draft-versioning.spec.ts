@@ -102,6 +102,24 @@ describe('employee draft optimistic concurrency', () => {
     expect(f.draft.proposedValue.employee).toEqual(raw);
   });
 
+  it.each([null, 'Directory family'])('resumes an approved location-only change without rewriting its unchanged family (directory family=%s)', async family => {
+    const f = partialApproval('profile');
+    const employee = { name: 'Approved name', positionId: 'position-1', position: 'Directory position',
+      jobFamily: 'Archive family', workLocation: 'New location' };
+    f.draft.baseValue.employee = { ...employee, name: 'Synthetic', workLocation: 'Old location' };
+    Object.assign(f.user, { positionId: 'position-1', position: 'Directory position' });
+    f.user.employmentHistory = [{ jobFamily: 'Archive family', workLocation: 'New location' }];
+    f.tx.position = { findUnique: jest.fn(async () => ({ id: 'position-1', name: 'Directory position', jobFamily: family })) };
+    f.draft.proposedValue.employee = employee;
+    f.input.employee = employee;
+
+    const result = await f.service.submitDraft('employee', f.input, operator);
+
+    expect(result.profileReviewStatus).toBe('approved');
+    expect(result.performanceReviewStatus).toBe('pending');
+    expect(f.draft.proposedValue.employee).toEqual(employee);
+  });
+
   it.each([false, true])('checks the applied directory position rather than the supplied display labels (external change=%s)', async changed => {
     const f = partialApproval('profile');
     const employee = { name: 'Approved name', positionId: 'position-1', position: 'Supplied label', jobFamily: 'Supplied family' };

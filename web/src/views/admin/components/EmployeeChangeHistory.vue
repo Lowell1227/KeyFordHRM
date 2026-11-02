@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import type { EmployeeDataReview } from '@/api/employee-archives.api';
 import { applicationProgress, applicationType } from '@/utils/employee-lifecycle';
 import { formatDate, formatDateTime } from '@/utils/date';
+import { employeeReviewValuesEqual, employeeReviewValueDisplay as display } from './employee-review-differences';
 
 const props = defineProps<{ requests: EmployeeDataReview[] }>();
 const filter = ref('all');
@@ -14,22 +15,9 @@ function changes(request: EmployeeDataReview) {
   return ['employee', 'profile', 'performance'].flatMap((section) => {
     const before = request.baseValue?.[section] ?? {};
     const after = request.proposedValue?.[section] ?? {};
-    return Object.keys(fields).filter((key) => key in after && JSON.stringify(before[key] ?? null) !== JSON.stringify(after[key] ?? null))
+    return Object.keys(fields).filter((key) => key in after && !employeeReviewValuesEqual(key, before[key], after[key]))
       .map((key) => ({ key: `${section}.${key}`, label: section === 'performance' && key === 'managerId' ? '绩效直属上级' : fields[key], before: key === 'contractSubjectId' ? (before[key] ? '原主体关联' : '尚未关联') : display(key, before[key], before), after: key === 'contractSubjectId' ? (after[key] ? '新主体关联' : '尚未关联') : display(key, after[key], after) }));
   });
-}
-function display(key: string, value: unknown, source: Record<string, any>) {
-  if (value == null || value === '') return '未填写';
-  if (key.endsWith('Configured')) return value ? '已保存' : '未填写';
-  if (key === 'deptId') return source.departmentName || source.deptName || '已设置（历史名称未记录）';
-  if (key === 'managerId') return source.managerName || '已设置（历史姓名未记录）';
-  if (key === 'contractSubjectId') return `${source.companyText || source.signingCompany || '合同主体'} · 已关联`;
-  if (key.endsWith('Id')) return '已设置';
-  if (key === 'phone' || key === 'emergencyContactPhone') return '已保存';
-  if (key === 'employeeStatus') return ({ active: '在职', probation: '试用期', pending_entry: '待入职', resigned: '已离职' } as Record<string, string>)[String(value)] ?? String(value);
-  if (key === 'company') return ({ fuede: '孚德', fuede_sports: '孚德体育文化', beijing_fuede: '北京孚德', fansibao: '凡思堡' } as Record<string, string>)[String(value)] ?? String(value);
-  if (key === 'employmentType') return ({ full_time: '全职', part_time: '兼职', rehire: '返聘', external: '外部' } as Record<string, string>)[String(value)] ?? String(value);
-  return String(value);
 }
 function contractChanges(request: EmployeeDataReview) {
   const before = request.baseValue?.contracts;
@@ -43,7 +31,7 @@ function contractChanges(request: EmployeeDataReview) {
     const title = String(contract.name || `合同 ${index + 1}`);
     if (!old) { result.push({ key: `contract-${index}`, label: '新增合同', before: '无', after: title }); return; }
     Object.entries(labels).forEach(([key, label]) => {
-      if (key in contract && JSON.stringify(old[key] ?? null) !== JSON.stringify(contract[key] ?? null)) result.push({ key: `contract-${index}-${key}`, label: `${title} · ${label}`, before: key === 'contractSubjectId' ? (old[key] ? '原主体关联' : '尚未关联') : String(old[key] || '未填写'), after: key === 'contractSubjectId' ? (contract[key] ? '新主体关联' : '尚未关联') : String(contract[key] || '未填写') });
+      if (key in contract && !employeeReviewValuesEqual(key, old[key], contract[key])) result.push({ key: `contract-${index}-${key}`, label: `${title} · ${label}`, before: key === 'contractSubjectId' ? (old[key] ? '原主体关联' : '尚未关联') : display(key, old[key], old), after: key === 'contractSubjectId' ? (contract[key] ? '新主体关联' : '尚未关联') : display(key, contract[key], contract) });
     });
     for (const key of ['images', 'attachments']) {
       if (JSON.stringify(old[key] ?? []) !== JSON.stringify(contract[key] ?? [])) result.push({ key: `contract-${index}-${key}`, label: `${title} · ${key === 'images' ? '图片' : '附件'}`, before: `${old[key]?.length ?? 0} 份`, after: `${contract[key]?.length ?? 0} 份` });

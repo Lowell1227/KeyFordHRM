@@ -1,0 +1,10 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": ".",
+  "testRegex": "personnel-daily-flow/personnel-daily-flow\\.integration\\.spec\\.ts$",
+  "transform": { "^.+\\.ts$": "ts-jest" },
+  "testEnvironment": "node",
+  "moduleNameMapper": { "^@/(.*)$": "<rootDir>/../src/$1" },
+  "testTimeout": 120000,
+  "maxWorkers": 1
+}

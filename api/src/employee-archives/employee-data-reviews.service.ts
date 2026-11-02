@@ -14,6 +14,7 @@ import {
 } from '@prisma/client';
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
+import { hasHrCapability } from '@/auth/hr-capabilities';
 import { PrismaService } from '@/prisma/prisma.service';
 import * as bcrypt from 'bcrypt';
 import { EmployeeOnboardingService } from './employee-onboarding.service';
@@ -464,8 +465,8 @@ export class EmployeeDataReviewsService {
     reason: string,
     operator: AuthUser,
   ): Promise<EmployeeReviewBatchResult> {
-    if (operator.sysRole !== SysRole.hr && operator.sysRole !== SysRole.system_admin) {
-      throw new BadRequestException({ code: ERROR_CODE.FORBIDDEN, message: '仅 HR 管理员可退回人事变更' });
+    if (!hasHrCapability(operator, 'employee_archive_review')) {
+      throw new BadRequestException({ code: ERROR_CODE.FORBIDDEN, message: '无权限退回人事变更' });
     }
     const result: EmployeeReviewBatchResult = { succeeded: [], failed: [] };
     for (const requestId of [...new Set(requestIds)]) {
@@ -579,7 +580,9 @@ export class EmployeeDataReviewsService {
       }
       positionId = positionRecord.id;
       position = positionRecord.name;
-      jobFamily = positionRecord.jobFamily;
+      if (!request.userId || positionId !== this.nullableString(baseEmployee.positionId)) {
+        jobFamily = positionRecord.jobFamily;
+      }
     }
     const plannedRegularDate = this.nullableDate(employee.plannedRegularDate);
     const actualRegularDate = this.nullableDate(employee.actualRegularDate);
@@ -702,7 +705,7 @@ export class EmployeeDataReviewsService {
       leaveDate,
       probationMonths: typeof employee.probationMonths === 'number' ? employee.probationMonths : null,
       changeType: request.intakeType === OnboardingIntakeType.new_hire ? 'hire' : request.userId ? 'data_correction' : 'hire',
-      reason: '员工档案审核通过',
+      reason: isManualEmployment ? this.nullableString(employee.reason) : '员工档案审核通过',
       sourceType: 'employee_data_review',
       sourceBatchId: request.sourceBatchId,
       sourceRequestId: request.id,

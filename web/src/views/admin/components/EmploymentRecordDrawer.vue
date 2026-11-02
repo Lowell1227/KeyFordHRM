@@ -13,8 +13,15 @@ const props = withDefaults(defineProps<{
   archive: EmployeeArchive | null;
   departments: Department[];
   mode?: 'default' | 'resignation';
+  canEditArchive?: boolean;
+  resignationDraft?: { leaveDate: string; reason: string } | null;
+  refreshingDepartment?: boolean;
 }>(), { mode: 'default' });
-const emit = defineEmits<{ 'update:modelValue': [value: boolean]; submitted: [] }>();
+const emit = defineEmits<{
+  'update:modelValue': [value: boolean]; submitted: []; closed: [];
+  'complete-department': [draft: { leaveDate: string; reason: string }];
+  'refresh-department': [];
+}>();
 const positions = ref<PositionRecord[]>([]);
 const saving = ref(false);
 const form = reactive<Record<string, any>>({});
@@ -106,15 +113,23 @@ function reset() {
     const localDate = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
     const proposed = resignationReview.value?.proposedValue?.employee ?? {};
     Object.assign(form, {
+      deptId: archive?.dept?.id ?? null,
       effectiveFrom: String(proposed.effectiveFrom || localDate).slice(0, 10),
       leaveDate: String(proposed.leaveDate || localDate).slice(0, 10),
       employeeStatus: 'resigned',
       changeType: 'resignation',
       reason: proposed.reason ?? '',
     });
+    if (props.resignationDraft && !resignationReviewLocked.value) Object.assign(form, props.resignationDraft);
   }
 }
 watch(() => [props.modelValue, props.mode] as const, ([open]) => { if (open) reset(); });
+watch(() => props.archive, () => {
+  if (!props.modelValue || !isResignation.value) return;
+  const draft = { leaveDate: form.leaveDate, reason: form.reason };
+  reset();
+  if (!resignationReviewLocked.value) Object.assign(form, draft);
+});
 async function submit() {
   if (!props.archive || !form.deptId) { ElMessage.warning('员工档案缺少当前部门，暂不能提交'); return; }
   if (isResignation.value) {
@@ -145,10 +160,20 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
 </script>
 
 <template>
-  <el-drawer :model-value="modelValue" :title="drawerTitle" size="min(720px, 100vw)" destroy-on-close @update:model-value="emit('update:modelValue', $event)">
+  <el-drawer :model-value="modelValue" :title="drawerTitle" size="min(720px, 100vw)" destroy-on-close @update:model-value="emit('update:modelValue', $event)" @closed="emit('closed')">
     <el-form v-if="isResignation" label-position="top" class="employment-grid" :disabled="resignationReviewLocked">
       <el-form-item label="员工"><el-input :model-value="archive?.name" disabled /></el-form-item>
-      <el-form-item label="当前部门"><el-input :model-value="archive?.dept?.fullPath || archive?.dept?.name || '未设置'" disabled /></el-form-item>
+      <el-form-item label="当前部门">
+        <div class="employment-field">
+          <el-input :model-value="archive?.dept?.fullPath || archive?.dept?.name || '未设置'" disabled />
+          <template v-if="!form.deptId && !resignationReviewLocked">
+            <span class="employment-field__warning">当前档案未设置部门，请先补充并审核生效后再提交离职。</span>
+            <el-button v-if="canEditArchive && !archive?.archivedAt" link type="primary" :disabled="refreshingDepartment" @click="emit('complete-department', { leaveDate: form.leaveDate, reason: form.reason })">补充部门</el-button>
+            <span v-else class="employment-help">请联系有档案编辑权限的 HR 补充部门。</span>
+            <el-button link type="primary" :loading="refreshingDepartment" @click="emit('refresh-department')">刷新部门</el-button>
+          </template>
+        </div>
+      </el-form-item>
       <el-form-item label="最后工作日">
         <div class="employment-field">
           <el-date-picker v-model="form.leaveDate" type="date" value-format="YYYY-MM-DD" />

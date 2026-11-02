@@ -41,9 +41,12 @@ function comparable(key: string, value: unknown): string {
   if (key === 'images' || key === 'attachments') return JSON.stringify(records(value).map(item => [item.name, item.url, item.size, item.mimeType]));
   return JSON.stringify(value);
 }
+export function employeeReviewValuesEqual(key: string, before: unknown, after: unknown): boolean {
+  return comparable(key, before) === comparable(key, after);
+}
 function text(value: unknown): string { return typeof value === 'string' || typeof value === 'number' ? String(value) : ''; }
 
-function display(key: string, value: unknown, source: RecordValue, names: ReviewNames): string {
+export function employeeReviewValueDisplay(key: string, value: unknown, source: RecordValue, names: ReviewNames = {}): string {
   if (empty(value) || (key.endsWith('Configured') && !value)) return '未填写';
   if (key === 'phone' || key === 'emergencyContactPhone' || key.endsWith('Configured')) return '已保存';
   if (key === 'deptId') return text(source.departmentName || source.deptName) || names.deptId?.[String(value)] || '已设置（历史名称未记录）';
@@ -60,9 +63,9 @@ function differences(before: RecordValue, after: RecordValue, labels: Record<str
   return Object.entries(labels).flatMap(([key, label]) => {
     if (!(key in after) && !removed) return [];
     const previous = before[key], next = after[key];
-    if (comparable(key, previous) === comparable(key, next)) return [];
+    if (employeeReviewValuesEqual(key, previous, next)) return [];
     return [{ key: `${prefix}${key}`, label, kind: removed ? '移除' : empty(next) || (key.endsWith('Configured') && !next) ? '清空' : empty(previous) || (key.endsWith('Configured') && !previous) ? '新增' : '修改',
-      before: display(key, previous, before, names), after: removed ? '已移除' : display(key, next, after, names) }];
+      before: employeeReviewValueDisplay(key, previous, before, names), after: removed ? '已移除' : employeeReviewValueDisplay(key, next, after, names) }];
   });
 }
 

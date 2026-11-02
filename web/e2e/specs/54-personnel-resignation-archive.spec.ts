@@ -5,6 +5,7 @@ const apiResponse = (data: unknown) => ({ code: 0, message: 'success', data, tim
 // Legacy personnel fixtures have no maintained contract subjects.
 test.beforeEach(async ({ page }) => {
   await page.route('**/api/v1/contract-subjects**', route => route.fulfill({ json: apiResponse([]) }));
+  await page.route('**/api/v1/personnel-reference-data/**', route => route.fulfill({ json: apiResponse([]) }));
 });
 
 test('员工分类贴近列表，草稿页内维护，归档动作统一', async ({ page }) => {

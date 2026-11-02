@@ -1469,15 +1469,17 @@ export class EmployeeArchivesService {
 
     const currentEmployment = user.employmentHistory[0] ?? null;
     const baseEmployee = this.employeeReviewData(user, currentEmployment);
+    const positionChanged = !currentEmployment || (position?.id ?? null) !== this.nullableString(baseEmployee.positionId);
     const proposedEmployee = {
       ...baseEmployee,
       company: input.company,
       ...(input.contractSubjectId !== undefined ? { contractSubjectId: input.contractSubjectId } : {}),
       deptId: input.deptId ?? null,
       positionId: position?.id ?? null,
-      position: position?.name ?? input.position ?? null,
-      jobGrade: input.jobGrade ?? null,
-      jobFamily: position?.jobFamily ?? input.jobFamily ?? null,
+      position: position?.name ?? (input.position !== undefined ? input.position : positionChanged ? null : baseEmployee.position),
+      jobGrade: input.jobGrade !== undefined ? input.jobGrade : baseEmployee.jobGrade,
+      jobFamily: position && positionChanged ? position.jobFamily
+        : input.jobFamily !== undefined ? input.jobFamily : positionChanged ? null : baseEmployee.jobFamily,
       managerId: input.directManagerId ?? null,
       workLocation: input.workLocation ?? null,
       employmentType: input.employmentType,
@@ -1490,6 +1492,7 @@ export class EmployeeArchivesService {
       effectiveFrom: input.effectiveFrom,
       effectiveTo: input.effectiveTo ?? null,
       changeType: input.changeType,
+      reason: input.reason ?? null,
     };
     if (input.contractSubjectId === undefined) delete proposedEmployee.contractSubjectId;
     await normalizeContractSubject(this.prisma, proposedEmployee as Record<string, unknown>, baseEmployee, 'companyText');
@@ -1759,7 +1762,9 @@ export class EmployeeArchivesService {
       const position = await client.position.findUnique({ where: { id: String(applied.positionId) }, select: { id: true, name: true, jobFamily: true } });
       if (!position) throw new ConflictException('已通过档案的岗位已变化，请重新核对最新档案');
       applied.position = position.name;
-      if (writesEmployment) applied.jobFamily = position.jobFamily;
+      if (writesEmployment && this.nullableString(reviewedEmployee.positionId) !== this.nullableString(previous.positionId)) {
+        applied.jobFamily = position.jobFamily;
+      }
     }
     const managerName = this.nullableString(employee.managerName);
     if (writesEmployment && !applied.managerId && managerName) {
