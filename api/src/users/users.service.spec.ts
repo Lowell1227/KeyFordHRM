@@ -524,4 +524,82 @@ describe('UsersService', () => {
       expect(findMany).not.toHaveBeenCalled();
     });
   });
+
+  describe('exportRoster', () => {
+    const hrViewer = {
+      id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null,
+      isAssessorOnly: false, canViewAll: true,
+    };
+    const employee = {
+      id: 'employee-1',
+      employeeNo: '347',
+      name: '冉光建',
+      phone: null,
+      email: null,
+      avatarUrl: null,
+      deptId: 'dept-1',
+      dept: { name: '直播电商部' },
+      position: '运营',
+      sysRole: SysRole.employee,
+      status: UserStatus.active,
+      employmentType: EmploymentType.full_time,
+      directManagerId: null,
+      directManager: { name: '郭志浩' },
+      isAssessorOnly: false,
+      canViewAll: false,
+      entryDate: new Date('2024-01-01T00:00:00.000Z'),
+      externalIdentityBindings: [],
+    };
+
+    function setup(countValue: number) {
+      const count = jest.fn().mockResolvedValue(countValue);
+      const findMany = jest.fn().mockResolvedValue([employee]);
+      const groupBy = jest.fn().mockResolvedValue([{ directManagerId: 'employee-1', _count: { _all: 2 } }]);
+      const auditCreate = jest.fn().mockResolvedValue({});
+      const service = new UsersService(
+        {
+          user: { count, findMany, groupBy },
+          auditLog: { create: auditCreate },
+        } as any,
+        { getVisibleEmployeeFilter: jest.fn().mockResolvedValue({}),
+          getSubDeptIds: jest.fn().mockResolvedValue(['dept-1']) } as any,
+        noBusinessIdentities as any,
+      );
+      return { service, count, findMany, auditCreate };
+    }
+
+    it('按筛选条件导出、写入审计并返回 xlsx 文件名', async () => {
+      const { service, count, findMany, auditCreate } = setup(1);
+      const file = await service.exportRoster({
+        keyword: '冉', deptId: 'dept-1', includeResigned: true,
+      } as any, hrViewer as any);
+      expect(count).toHaveBeenCalledWith({
+        where: expect.objectContaining({
+          accountType: 'employee',
+          deptId: { in: ['dept-1'] },
+        }),
+      });
+      expect(findMany).toHaveBeenCalledWith(expect.objectContaining({
+        where: expect.objectContaining({ deptId: { in: ['dept-1'] } }),
+        take: 5000,
+      }));
+      expect(auditCreate).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          userId: 'hr-1',
+          action: 'export_employee_roster',
+          entityType: 'employee_roster_export',
+        }),
+      });
+      expect(file.options.type).toContain('spreadsheetml');
+      expect(file.options.disposition).toContain("filename*=UTF-8''");
+      expect(file.options.disposition).toContain(encodeURIComponent('花名册-'));
+    });
+
+    it('导出范围超过上限时报错并阻止查询', async () => {
+      const { service, findMany } = setup(5001);
+      await expect(service.exportRoster({} as any, hrViewer as any))
+        .rejects.toBeInstanceOf(Error);
+      expect(findMany).not.toHaveBeenCalled();
+    });
+  });
 });

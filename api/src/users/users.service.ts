@@ -1,4 +1,4 @@
-import { ForbiddenException, Injectable, NotFoundException, BadRequestException } from '@nestjs/common';
+import { BadRequestException, ForbiddenException, Injectable, NotFoundException, StreamableFile } from '@nestjs/common';
 import { Prisma } from '@prisma/client';
 import { archiveIssueSourceSystems, archiveIssueStates } from '@/employee-archives/employee-archive-issues';
 import { approvedEmploymentSourceWhere } from '@/employee-archives/employment-timeline';
@@ -8,6 +8,7 @@ import { DataScopeService } from '@/common/services/data-scope.service';
 import { PaginationDto, paginated, Paginated } from '@/common/dto/pagination.dto';
 import { AuthUser } from '@/common/types/auth.types';
 import { ERROR_CODE } from '@/common/constants/error-codes';
+import { buildRosterWorkbook } from './users.excel';
 import { UserQueryDto } from './dto/user-query.dto';
 import { UpdateManagerDto } from './dto/update-manager.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
@@ -37,6 +38,9 @@ export function toSystemPermission(sysRole: SysRole): SystemPermission {
   if (sysRole === SysRole.hr_user) return 'hr_user';
   return 'standard_user';
 }
+
+/** 花名册单次导出上限，超出需缩小筛选范围。 */
+export const ROSTER_EXPORT_MAX = 5000;
 
 /** 用户列表项字段（参考后端文档 3.2） */
 export interface UserListItem {
@@ -124,8 +128,11 @@ export class UsersService {
     private readonly businessCapabilities: BusinessCapabilitiesService,
   ) {}
 
-  /** GET /users — 查询用户列表 */
-  async findAll(dto: UserQueryDto, viewer: AuthUser): Promise<Paginated<UserListItem>> {
+  /** 构建用户列表查询条件（列表与导出共用，保证所见即所得）。 */
+  private async buildUserListWhere(dto: UserQueryDto, viewer: AuthUser): Promise<{
+    where: Prisma.UserWhereInput;
+    scopeFilter: Prisma.UserWhereInput;
+  }> {
     const where: Prisma.UserWhereInput = {
       deletedAt: null,
       archivedAt: dto.archived ? { not: null } : null,
@@ -189,6 +196,12 @@ export class UsersService {
     if (dto.eligibleFor === 'direct_manager') {
       Object.assign(where, currentWorkerWhere, { accountType: AccountType.employee });
     }
+    return { where, scopeFilter };
+  }
+
+  /** GET /users — 查询用户列表 */
+  async findAll(dto: UserQueryDto, viewer: AuthUser): Promise<Paginated<UserListItem>> {
+    const { where, scopeFilter } = await this.buildUserListWhere(dto, viewer);
 
     const [total, users] = await Promise.all([
       this.prisma.user.count({ where }),
@@ -273,6 +286,81 @@ export class UsersService {
     }));
 
     return paginated(items, total, dto);
+  }
+
+  /** GET /users/export — 按当前筛选导出花名册（Excel，字段与列表一致）。 */
+  async exportRoster(dto: UserQueryDto, viewer: AuthUser): Promise<StreamableFile> {
+    const { where, scopeFilter } = await this.buildUserListWhere(dto, viewer);
+    const total = await this.prisma.user.count({ where });
+    if (total > ROSTER_EXPORT_MAX) {
+      throw new BadRequestException(`导出范围 ${total} 人超过上限 ${ROSTER_EXPORT_MAX}，请缩小筛选范围`);
+    }
+    const users = await this.prisma.user.findMany({
+        where,
+        take: ROSTER_EXPORT_MAX,
+        include: {
+          dept: { select: { name: true } },
+          directManager: { select: { name: true } },
+          externalIdentityBindings: {
+            where: { provider: ExternalIdentityProvider.dingtalk, endedAt: null },
+            select: { status: true },
+            take: 1,
+          },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    const directReportGroups = users.length ? await this.prisma.user.groupBy({
+      by: ['directManagerId'],
+      where: { ...this.directReportWhere(scopeFilter), directManagerId: { in: users.map((user) => user.id) } },
+      _count: { _all: true },
+    }) : [];
+    const directReportCounts = new Map<string | null, number>(
+      directReportGroups.map((group) => [group.directManagerId, group._count._all] as const),
+    );
+    const items: UserListItem[] = users.map((u) => ({
+      id: u.id,
+      employeeNo: u.employeeNo,
+      name: u.name,
+      phone: u.phone,
+      email: u.email,
+      avatarUrl: u.avatarUrl,
+      deptId: u.deptId,
+      deptName: u.dept?.name ?? null,
+      position: u.position,
+      sysRole: u.sysRole,
+      systemPermission: toSystemPermission(u.sysRole),
+      hrCapabilities: u.hrCapabilities,
+      businessIdentities: [],
+      status: u.status,
+      employmentType: u.employmentType,
+      directManagerId: u.directManagerId,
+      directManagerName: u.directManager?.name ?? null,
+      directReportCount: directReportCounts.get(u.id) ?? 0,
+      isAssessorOnly: u.isAssessorOnly,
+      canViewAll: u.canViewAll,
+      entryDate: u.entryDate,
+      dingtalkBindingState: u.externalIdentityBindings[0]?.status ?? 'unbound',
+      archivedAt: u.archivedAt,
+      matchedHistoricalEmployeeNo: null,
+    }));
+    await this.prisma.auditLog.create({ data: {
+      userId: viewer.id,
+      action: 'export_employee_roster',
+      entityType: 'employee_roster_export',
+      newValue: { total, filters: {
+        keyword: dto.keyword ?? null, deptId: dto.deptId ?? null, status: dto.status ?? null,
+        sysRole: dto.sysRole ?? null, archived: dto.archived ?? false,
+        includeResigned: dto.includeResigned ?? false,
+      } },
+    } });
+    const workbook = await buildRosterWorkbook(items);
+    const buffer = await workbook.xlsx.writeBuffer();
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+    const filename = encodeURIComponent(`花名册-${date}.xlsx`);
+    return new StreamableFile(buffer as unknown as Buffer, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+      disposition: `attachment; filename="roster-export.xlsx"; filename*=UTF-8''${filename}`,
+    });
   }
 
   private async getArchiveWarnings(users: Array<{ id: string } & Record<string, unknown>>) {

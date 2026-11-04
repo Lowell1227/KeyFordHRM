@@ -23,6 +23,14 @@ export class UsersController {
     return this.usersService.findAll(dto, viewer);
   }
 
+  /** GET /users/export — 按当前筛选导出花名册 Excel（HR / system_admin） */
+  @Get('export')
+  @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('employee_archive_edit', 'employee_archive_review', 'organization_edit')
+  exportRoster(@Query() dto: UserQueryDto, @CurrentUser() viewer: AuthUser) {
+    return this.usersService.exportRoster(dto, viewer);
+  }
+
   /** GET /users/:id/subordinates — 某人的直接下属（本人 / HR / system_admin / canViewAll） */
   @Get(':id/subordinates')
   findSubordinates(

@@ -43,6 +43,13 @@ export const usersApi = {
     return apiPatch(`/users/${id}/password`, body);
   },
 
+  /** GET /users/export — 按当前筛选导出花名册 Excel（blob） */
+  exportRoster(query: UserQuery): Promise<Blob> {
+    return http
+      .get('/users/export', { params: query as Record<string, unknown>, responseType: 'blob' })
+      .then((res) => (res as { data: Blob }).data);
+  },
+
   /** GET /users/:id/subordinates — 获取下属列表 */
   getSubordinates(id: string): Promise<DirectReport[]> {
     return apiGet(`/users/${id}/subordinates`);

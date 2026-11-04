@@ -20,6 +20,7 @@ import {
   type EmployeeArchiveIssue,
 } from '@/api/employee-archives.api';
 import { usersApi } from '@/api/users.api';
+import { useExport } from '@/composables/useExport';
 import { uploadApi } from '@/api/upload.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
@@ -478,6 +479,26 @@ async function changeEmployeeCategory(category: EmployeeDirectoryCategory) {
   selectedUsers.value = [];
   userQuery.value.page = 1;
   await loadUsers();
+}
+
+const rosterExport = useExport();
+
+/** 花名册导出：与当前列表同一筛选条件，所见即所得。 */
+async function exportRoster() {
+  const categoryStatus = ['active', 'probation', 'pending_entry', 'resigned'].includes(employeeCategory.value)
+    ? employeeCategory.value as UserStatus
+    : undefined;
+  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
+  await rosterExport.download(
+    () => usersApi.exportRoster({
+      ...userQuery.value,
+      status: categoryStatus,
+      archived: userArchiveView.value || undefined,
+      includeResigned: employeeCategory.value === 'all' || undefined,
+      keyword: userQuery.value.keyword || undefined,
+    }),
+    `花名册-${date}.xlsx`,
+  );
 }
 
 async function changeProcessingCategory(category: PersonnelProcessingCategory) {
@@ -1950,6 +1971,11 @@ onBeforeUnmount(() => {
             </el-select>
             <el-button type="primary" @click="onUserQueryChange">查询</el-button>
             <el-button @click="resetUserFilters">重置</el-button>
+            <el-button
+              v-if="activeView === 'users'"
+              :loading="rosterExport.loading.value"
+              @click="exportRoster"
+            >导出花名册</el-button>
           </div>
         </QueryFilterPanel>
 
