@@ -68,9 +68,11 @@ async function handleSubmit() {
   const departmentReview = current.departmentReview;
   const reviewMessage = departmentReview?.combined
     ? '绩效直属上级与部门负责人为同一人，本次提交将合并完成部门复核，保留两个环节的办理记录，随后进入绩效校准。'
-    : departmentReview?.reviewerName
-      ? `提交后由 ${departmentReview.reviewerName} 进行部门复核。`
-      : departmentReview ? '提交后进入部门复核。' : '提交后按任务流程进入下一环节。';
+    : departmentReview?.skippedSelf
+      ? '被考核员工本人即部门负责人，提交后系统自动跳过部门复核并留痕，直接进入绩效校准。'
+      : departmentReview?.reviewerName
+        ? `提交后由 ${departmentReview.reviewerName} 进行部门复核。`
+        : departmentReview ? '提交后进入部门复核。' : '提交后按任务流程进入下一环节。';
   try {
     await ElMessageBox.confirm(
       `提交后 ${current.employeeName} 的整周期最终等级为 ${GRADE_LABELS[grade]}。${reviewMessage}提交后不可直接修改，如被退回可重新评定。`,

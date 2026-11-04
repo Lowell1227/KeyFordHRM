@@ -13,6 +13,7 @@ import { ERROR_CODE } from '@/common/constants/error-codes';
 import { Paginated, paginated } from '@/common/dto/pagination.dto';
 import { ScoringService } from './scoring.service';
 import { FlowService } from './flow.service';
+import { isSelfDepartmentReviewSkipped, shouldSkipDepartmentReview } from './department-review-policy';
 import { TaskQueryDto } from './dto/task-query.dto';
 import { UpdateActualValueDto } from './dto/update-actual-value.dto';
 import { SubmitSelfEvalDto } from './dto/submit-self-eval.dto';
@@ -1640,7 +1641,9 @@ export class TasksService {
       });
     }
 
-    const targetStatus = task.managerId === task.deptHeadId ? 'hr_calibration' : 'dept_review';
+    // 直属上级即部门负责人时合并办理；被考核员工本人即部门负责人时禁止本人复核，均直接到绩效校准。
+    const targetStatus = shouldSkipDepartmentReview(task) ? 'hr_calibration' : 'dept_review';
+    const selfDeptReviewSkipped = isSelfDepartmentReviewSkipped(task);
     const submittedAt = new Date();
 
     await this.prisma.$transaction(async (tx) => {
@@ -1727,6 +1730,9 @@ export class TasksService {
         action: 'submit',
         targetStatus,
         actorId: viewer.id,
+        extraData: selfDeptReviewSkipped
+          ? { type: 'manager_score_submitted', departmentReviewSkipped: 'employee_is_dept_head' }
+          : undefined,
         taskUpdate: { managerScoredAt: submittedAt, updatedAt: claimedUpdatedAt },
       });
     });
@@ -1765,7 +1771,7 @@ export class TasksService {
     const task = await this.getTaskOrThrow(id);
     this.assertManager(task, viewer);
 
-    const directNextStatus = task.managerId === task.deptHeadId ? 'hr_calibration' : 'dept_review';
+    const directNextStatus = shouldSkipDepartmentReview(task) ? 'hr_calibration' : 'dept_review';
     if (task.status !== directNextStatus || !task.managerScoredAt) {
       throw new ConflictException({
         code: ERROR_CODE.CONFLICT,
@@ -2075,6 +2081,9 @@ export class TasksService {
   }
 
   private assertDeptHead(task: AssessmentTask, viewer: AuthUser): void {
+    if (task.employeeId === viewer.id) {
+      throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '被考核员工本人不能进行部门复核' });
+    }
     if (task.deptHeadId !== viewer.id) {
       throw new ForbiddenException({ code: ERROR_CODE.FORBIDDEN, message: '仅部门负责人可操作' });
     }

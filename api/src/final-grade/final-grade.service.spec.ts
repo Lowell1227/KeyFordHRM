@@ -29,10 +29,11 @@ describe('FinalGradeService department review access', () => {
     expect(detail.approvedAt).toEqual(approvedAt);
   });
   it.each([
-    { managerId: 'manager-1', deptHeadId: 'manager-1', deptHead: { name: '虚拟上级' }, expected: { combined: true, reviewerName: '虚拟上级' } },
-    { managerId: 'manager-1', deptHeadId: 'head-1', deptHead: { name: '虚拟复核人' }, expected: { combined: false, reviewerName: '虚拟复核人' } },
-    { managerId: 'manager-1', deptHeadId: null, deptHead: null, expected: { combined: false, reviewerName: null } },
-    { managerId: null, deptHeadId: null, deptHead: null, expected: { combined: false, reviewerName: null } },
+    { managerId: 'manager-1', deptHeadId: 'manager-1', deptHead: { name: '虚拟上级' }, expected: { combined: true, skippedSelf: false, reviewerName: '虚拟上级' } },
+    { managerId: 'manager-1', deptHeadId: 'head-1', deptHead: { name: '虚拟复核人' }, expected: { combined: false, skippedSelf: false, reviewerName: '虚拟复核人' } },
+    { managerId: 'manager-1', deptHeadId: 'employee-1', deptHead: { name: '虚拟员工' }, expected: { combined: false, skippedSelf: true, reviewerName: '虚拟员工' } },
+    { managerId: 'manager-1', deptHeadId: null, deptHead: null, expected: { combined: false, skippedSelf: false, reviewerName: null } },
+    { managerId: null, deptHeadId: null, deptHead: null, expected: { combined: false, skippedSelf: false, reviewerName: null } },
   ])('describes department review from frozen relationships: $managerId / $deptHeadId', async ({ expected, ...relations }) => {
     const detail = await makeService(relations).getFinalGrade(task.id, { ...viewer('admin-1'), sysRole: 'system_admin' });
     expect(detail).toMatchObject({ departmentReview: expected });
@@ -148,6 +149,33 @@ describe('FinalGradeService combined department review', () => {
     expect(JSON.stringify(saved.task.periods)).toBe(fixture.periodsSnapshot);
     expect(saved.task.periods.map(period => period.managerScoreTotal.toNumber())).toEqual([80, 85, 88]);
     expect(saved.task.periods.map(period => period.managerGrade)).toEqual(['B', 'B', 'B']);
+  });
+
+  it('skips department review with an audit record when the employee is the frozen department head', async () => {
+    const fixture = setup({ deptHeadId: 'employee-1' });
+    const result = await fixture.service.submitFinalGrade('task-1', { grade: 'B' }, viewer());
+    expect(result).toEqual({ id: 'task-1', status: 'hr_calibration', grade: 'B' });
+    const saved = fixture.state();
+    expect(saved.records).toHaveLength(2);
+    expect(saved.records[0]).toMatchObject({ nodeType: 'manager_score', action: 'submit', extraData: { type: 'final_grade_submitted', grade: 'B', calculatedScore: 84.33 } });
+    expect(saved.records[1]).toMatchObject({
+      nodeType: 'dept_review', action: 'approve', actorId: 'manager-1',
+      extraData: { type: 'self_department_review_skipped', employeeId: 'employee-1', deptHeadId: 'employee-1' },
+    });
+    expect(saved.records[1].comment).toContain('跳过');
+    expect(saved.task.status).toBe('hr_calibration');
+    expect(saved.task.managerScoredAt).toBeInstanceOf(Date);
+    expect(saved.task.deptReviewedAt).toBeInstanceOf(Date);
+    expect(saved.grade).toMatchObject({ calculatedScore: 84.33, rawGrade: 'B' });
+    expect(JSON.stringify(saved.task.periods)).toBe(fixture.periodsSnapshot);
+  });
+
+  it('keeps the frozen self department head out of the submission even with system-admin identity', async () => {
+    const fixture = setup({ deptHeadId: 'employee-1' });
+    await expect(
+      fixture.service.submitFinalGrade('task-1', { grade: 'A' }, viewer('employee-1', 'system_admin')),
+    ).rejects.toThrow(ForbiddenException);
+    expect(fixture.state()).toMatchObject({ grade: null, records: [], task: { status: 'manager_scoring' } });
   });
 
   it.each([

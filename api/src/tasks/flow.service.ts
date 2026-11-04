@@ -15,7 +15,8 @@ export interface FlowTransition {
  * 状态转换表（后端文档 4.2 FLOW_TRANSITIONS）。
  *
  * manager_scoring → dept_review / hr_calibration 两条分支由调用方根据
- * managerId === deptHeadId 判断后传入目标状态。
+ * department-review-policy 的 shouldSkipDepartmentReview（直属上级即部门
+ * 负责人合并办理，或被考核员工本人即部门负责人自动跳过）判断后传入目标状态。
  */
 export const FLOW_TRANSITIONS: FlowTransition[] = [
   { from: 'indicator_drafting', action: 'submit', to: 'indicator_reviewing', nodeType: 'indicator_setting' },

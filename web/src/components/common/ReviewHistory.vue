@@ -15,9 +15,12 @@ const entries = computed(() => (props.records ?? []).filter(r => nodes[r.nodeTyp
         : data?.type === 'manager_period_review_returned' ? `${typeof data.periodKey === 'string' ? data.periodKey + ' ' : ''}月度评价` : nodes[record.nodeType],
       opinion: data?.type === 'final_grade_submitted' ? (typeof data.comment === 'string' ? data.comment : '') : record.comment,
       actionLabel: data?.type === 'prepublication_appeal' || data?.type === 'employee_result_objection' ? '已提出'
+        : data?.type === 'self_department_review_skipped' ? '已跳过'
         : record.nodeType === 'employee_confirm' && record.action === 'approve' ? '已确认'
         : record.nodeType === 'publish' && record.action === 'approve' ? '已公示' : actions[record.action],
       combined: data?.type === 'combined_department_review',
+      skippedSelf: data?.type === 'self_department_review_skipped'
+        || (data?.type === 'manager_score_submitted' && data?.departmentReviewSkipped === 'employee_is_dept_head'),
     };
   }).sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()));
 const visibleEntries = computed(() => expanded.value ? entries.value : entries.value.slice(0, 3));
@@ -34,6 +37,7 @@ watch(() => props.records, () => { expanded.value = false; });
         <div class="review-history__heading">
           <strong>{{ record.nodeLabel }}</strong>
           <span v-if="record.combined" class="review-history__combined">合并办理</span>
+          <span v-if="record.skippedSelf" class="review-history__combined">被考核员工本人即部门负责人，复核自动跳过</span>
         </div>
         <div class="review-history__meta">
           <span class="review-history__avatar" aria-hidden="true">{{ (record.actorName || '系统').slice(0, 1) }}</span>

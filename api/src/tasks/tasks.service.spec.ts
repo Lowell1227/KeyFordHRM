@@ -1339,6 +1339,64 @@ describe('TasksService', () => {
       );
     });
 
+    it('skips department review straight to HR calibration when the frozen department head is the employee', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...scoringTask(),
+        deptHeadId: 'emp-1',
+      });
+      transactionClient.indicatorInstance.findMany.mockResolvedValue([
+        makeIndicator({ id: 'ind-1' }),
+        makeIndicator({ id: 'ind-2' }),
+      ]);
+
+      const result = await service.submitManagerScore(
+        'task-1',
+        {
+          expectedUpdatedAt: updatedAt.toISOString(),
+          indicators: submittedIndicators,
+          evalSummary: {},
+        },
+        manager(),
+      );
+
+      expect(result).toEqual({ id: 'task-1', status: 'hr_calibration' });
+      expect(flowService.transitionTx).toHaveBeenCalledWith(
+        transactionClient,
+        expect.objectContaining({
+          action: 'submit',
+          targetStatus: 'hr_calibration',
+          extraData: { type: 'manager_score_submitted', departmentReviewSkipped: 'employee_is_dept_head' },
+        }),
+      );
+    });
+
+    it('keeps the combined manager-is-department-head route recordless on submission', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...scoringTask(),
+        deptHeadId: 'mgr-1',
+      });
+      transactionClient.indicatorInstance.findMany.mockResolvedValue([
+        makeIndicator({ id: 'ind-1' }),
+        makeIndicator({ id: 'ind-2' }),
+      ]);
+
+      const result = await service.submitManagerScore(
+        'task-1',
+        {
+          expectedUpdatedAt: updatedAt.toISOString(),
+          indicators: submittedIndicators,
+          evalSummary: {},
+        },
+        manager(),
+      );
+
+      expect(result).toEqual({ id: 'task-1', status: 'hr_calibration' });
+      expect(flowService.transitionTx).toHaveBeenCalledWith(
+        transactionClient,
+        expect.objectContaining({ targetStatus: 'hr_calibration', extraData: undefined }),
+      );
+    });
+
     it('rejects a veto before grading when the task has no veto indicator', async () => {
       const task = scoringTask();
       task.indicatorInstances = task.indicatorInstances.filter((indicator) => indicator.indicatorType !== 'veto');
@@ -1592,6 +1650,25 @@ describe('TasksService', () => {
       expect(prisma.$transaction).not.toHaveBeenCalled();
     });
 
+    it('withdraws from HR calibration when the department review was skipped for a self department head', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...makeTask('hr_calibration'),
+        deptHeadId: 'emp-1',
+        updatedAt,
+        managerScoredAt,
+        deptReviewedAt: null,
+        hrCalibratedAt: null,
+      });
+
+      const result = await service.withdrawManagerScore(
+        'task-1',
+        { expectedUpdatedAt: updatedAt.toISOString() },
+        manager(),
+      );
+
+      expect(result).toEqual(expect.objectContaining({ id: 'task-1', status: 'manager_scoring' }));
+    });
+
     it('rejects withdrawal with a stale task version', async () => {
       prisma.assessmentTask.findUnique.mockResolvedValue(withdrawableTask());
 
@@ -1765,6 +1842,23 @@ describe('TasksService', () => {
           taskUpdate: expect.objectContaining({ updatedAt: expect.any(Date) }),
         }),
       );
+    });
+
+    it('forbids the frozen department head from reviewing their own assessment', async () => {
+      prisma.assessmentTask.findUnique.mockResolvedValue({
+        ...makeTask('dept_review'),
+        deptHeadId: 'emp-1',
+      });
+
+      await expect(
+        service.deptReview(
+          'task-1',
+          { action: 'approve', comment: 'Self review' },
+          makeViewer({ id: 'emp-1', sysRole: SysRole.manager }),
+        ),
+      ).rejects.toThrow(ForbiddenException);
+
+      expect(flowService.transitionTx).not.toHaveBeenCalled();
     });
   });
 

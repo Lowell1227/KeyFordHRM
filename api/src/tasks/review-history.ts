@@ -27,6 +27,9 @@ export function mapReviewHistory(records: ReviewRecord[] = []) {
       ? data.type === 'final_grade_submitted'
         ? { type: data.type, comment: typeof data.comment === 'string' ? data.comment : null }
         : data.type === 'combined_department_review' ? { type: data.type }
+          : data.type === 'self_department_review_skipped' ? { type: data.type }
+          : data.type === 'manager_score_submitted' && typeof data.departmentReviewSkipped === 'string'
+            ? { type: data.type, departmentReviewSkipped: data.departmentReviewSkipped }
           : data.type === 'prepublication_appeal' ? appealAttribution(data)
           : data.type === 'employee_result_objection' ? { type: data.type }
           : data.type === 'manager_period_review_returned'

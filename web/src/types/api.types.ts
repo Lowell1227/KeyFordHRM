@@ -1378,7 +1378,7 @@ export interface FinalGradeDetail {
   resultEvidence?: ResultEvidence;
   flowRecords?: ReviewHistoryRecord[];
   comment?: string | null;
-  departmentReview?: { combined: boolean; reviewerName: string | null };
+  departmentReview?: { combined: boolean; skippedSelf?: boolean; reviewerName: string | null };
   taskId: string;
   cycleId: string;
   cycleName: string;

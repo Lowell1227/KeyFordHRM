@@ -16,6 +16,7 @@ import { claimTaskVersion } from '@/tasks/task-version';
 import { isManagerPeriodComplete } from '@/tasks/team-task-stage';
 import { SubmitFinalGradeDto } from './dto/submit-final-grade.dto';
 import { mapReviewHistory, REVIEW_HISTORY_NODES } from '@/tasks/review-history';
+import { isSelfDepartmentReviewSkipped, shouldSkipDepartmentReview } from '@/tasks/department-review-policy';
 
 /** 月度结果摘要。 */
 export interface FinalGradePeriodItem {
@@ -51,7 +52,7 @@ export interface FinalGradeDetail {
   publishedAt: Date | null;
   managerName: string | null;
   /** 依据任务冻结关系确定本次是否合并部门复核。 */
-  departmentReview: { combined: boolean; reviewerName: string | null };
+  departmentReview: { combined: boolean; skippedSelf: boolean; reviewerName: string | null };
   periods: FinalGradePeriodItem[];
   /** 整周期参考总分（各月上级评分均分，分数与等级无换算关系）。 */
   calculatedScore: number | null;
@@ -71,7 +72,8 @@ export interface FinalGradeDetail {
  *
  * 直属上级在各月评分全部锁定后，参考系统自动均分与各月等级，
  * 独立录入整周期最终等级 A/B/C/D。录入后任务进入部门复核
- * （直属上级即部门负责人时合并办理部门复核，再进入绩效校准）。
+ * （直属上级即部门负责人时合并办理部门复核；被考核员工本人即
+ * 部门负责人时禁止本人复核，系统自动跳过，均再进入绩效校准）。
  */
 @Injectable()
 export class FinalGradeService {
@@ -132,6 +134,7 @@ export class FinalGradeService {
       managerName: task.manager?.name ?? null,
       departmentReview: {
         combined: this.isCombinedDepartmentReview(task),
+        skippedSelf: isSelfDepartmentReviewSkipped(task),
         reviewerName: task.deptHead?.name ?? null,
       },
       periods,
@@ -180,7 +183,8 @@ export class FinalGradeService {
     const comment = dto.comment?.trim() || null;
     const score = Number((total / completePeriods.length).toFixed(2));
     const combinedDepartmentReview = this.isCombinedDepartmentReview(task);
-    const targetStatus = combinedDepartmentReview
+    const selfDepartmentReviewSkipped = !combinedDepartmentReview && isSelfDepartmentReviewSkipped(task);
+    const targetStatus = shouldSkipDepartmentReview(task)
       ? TaskStatus.hr_calibration
       : TaskStatus.dept_review;
 
@@ -225,6 +229,20 @@ export class FinalGradeService {
           extraData: {
             type: 'combined_department_review',
             managerId: task.managerId,
+            deptHeadId: task.deptHeadId,
+          },
+          taskUpdate: { deptReviewedAt: new Date(), updatedAt: claimedUpdatedAt },
+        });
+      } else if (selfDepartmentReviewSkipped) {
+        await this.flowService.transitionTx(tx, {
+          task: { ...task, status: TaskStatus.dept_review },
+          action: 'approve',
+          targetStatus: TaskStatus.hr_calibration,
+          actorId: viewer.id,
+          comment: '被考核员工本人即部门负责人，系统自动跳过部门复核。',
+          extraData: {
+            type: 'self_department_review_skipped',
+            employeeId: task.employeeId,
             deptHeadId: task.deptHeadId,
           },
           taskUpdate: { deptReviewedAt: new Date(), updatedAt: claimedUpdatedAt },
