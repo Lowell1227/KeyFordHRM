@@ -12,7 +12,7 @@ import {
   UseGuards,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { UploadFileInterceptor } from '@/common/upload-file.interceptor';
 import { SysRole } from '@prisma/client';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { Roles } from '@/common/decorators/roles.decorator';
@@ -326,7 +326,7 @@ export class EmployeeArchivesController {
   @Post('imports/preview')
   @HrCapabilities('employee_archive_edit')
   @UseGuards(EmployeeRosterImportClosedGuard)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(UploadFileInterceptor())
   previewImport(
     @UploadedFile() file: Express.Multer.File,
     @Body() dto: PreviewEmployeeRosterDto,
@@ -338,7 +338,7 @@ export class EmployeeArchivesController {
   @Post('imports/:batchId/confirm')
   @HrCapabilities('employee_archive_edit')
   @UseGuards(EmployeeRosterImportClosedGuard)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(UploadFileInterceptor())
   confirmImport(
     @Param('batchId', new ParseUUIDPipe({ version: '4' })) batchId: string,
     @UploadedFile() file: Express.Multer.File,

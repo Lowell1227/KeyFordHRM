@@ -1,5 +1,5 @@
 import { Controller, Get, Post, Put, Body, Query, Param, UseInterceptors, UploadedFile, StreamableFile, ParseUUIDPipe, HttpCode } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { UploadFileInterceptor } from '@/common/upload-file.interceptor';
 import { Roles } from '@/common/decorators/roles.decorator';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
 import { SysRole } from '@prisma/client';
@@ -38,7 +38,7 @@ export class IndicatorsController {
 
   @Post('import')
   @Roles(SysRole.hr, SysRole.system_admin)
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(UploadFileInterceptor())
   @HttpCode(200)
   async import(
     @UploadedFile() file: any,

@@ -9,7 +9,7 @@ import {
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { UploadFileInterceptor } from '@/common/upload-file.interceptor';
 import { Response } from 'express';
 import { StorageService, UploadedFileMeta, UploadPurpose } from './storage.service';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
@@ -23,7 +23,7 @@ export class StorageController {
 
   /** POST /storage/upload — 通用单文件上传，返回可持久访问的下载 URL。 */
   @Post('upload')
-  @UseInterceptors(FileInterceptor('file'))
+  @UseInterceptors(UploadFileInterceptor())
   async upload(
     @UploadedFile() file: Express.Multer.File,
     @Query('purpose') purpose: UploadPurpose = 'general',

@@ -11,7 +11,7 @@ import {
   UploadedFile,
   UseInterceptors,
 } from '@nestjs/common';
-import { FileInterceptor } from '@nestjs/platform-express';
+import { UploadFileInterceptor } from '@/common/upload-file.interceptor';
 import { Response } from 'express';
 import { SysRole } from '@prisma/client';
 import { CurrentUser } from '@/common/decorators/current-user.decorator';
@@ -77,7 +77,7 @@ export class ConfirmationController {
   }
 
   @Post(':id/meeting-attachments')
-  @UseInterceptors(FileInterceptor('file', { limits: { fileSize: 20 * 1024 * 1024 } }))
+  @UseInterceptors(UploadFileInterceptor('file', { fileSize: 20 * 1024 * 1024 }))
   addMeetingAttachment(
     @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
     @UploadedFile() file: Express.Multer.File,
