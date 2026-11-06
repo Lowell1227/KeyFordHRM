@@ -1805,8 +1805,7 @@ function handleAttachmentsChange(attachments: Attachment[]) {
                 type="textarea"
                 :rows="2"
                 placeholder="概括 1-3 项关键成果"
-                maxlength="2000"
-              />
+                maxlength="2000"              />
             </el-form-item>
             <el-form-item label="待改进项">
               <el-input
@@ -1821,7 +1820,7 @@ function handleAttachmentsChange(attachments: Attachment[]) {
           </div>
         </section>
 
-        <details class="summary-group" :open="selfEvalReadonly">
+        <details class="summary-group" open>
           <summary>
             <span>下一阶段（选填）</span>
             <small>目标与需要的支持</small>
@@ -1850,7 +1849,7 @@ function handleAttachmentsChange(attachments: Attachment[]) {
           </div>
         </details>
 
-        <details class="summary-group" :open="selfEvalReadonly">
+        <details class="summary-group" open>
           <summary>
             <span>建议与材料（选填）</span>
             <small>建议反馈与附件</small>
