@@ -811,10 +811,18 @@ async function prepareArchiveLeave(): Promise<boolean> {
   archiveEditorRef.value.pauseAutosave();
   try {
     await ElMessageBox.confirm('当前修改尚未保存，保存草稿后再离开？草稿不会进入审核。', '保留本次修改', {
-      confirmButtonText: '保存后离开', cancelButtonText: '继续编辑', type: 'warning',
+      confirmButtonText: '保存后离开',
+      cancelButtonText: '放弃修改离开',
+      distinguishCancelAndClose: true,
+      type: 'warning',
     });
     return Boolean(await archiveEditorRef.value?.saveDraft());
-  } catch { archiveEditorRef.value?.resumeAutosave(); return false; }
+  } catch (action) {
+    // ElMessageBox 取消与关闭都以 reject 结束：'cancel' 是明确点击“放弃修改离开”，允许关闭；
+    // 'close'（弹窗右上角 X / 遮罩）视为继续编辑。
+    archiveEditorRef.value?.resumeAutosave();
+    return action === 'cancel';
+  }
 }
 
 async function openNextArchive() {
@@ -1002,6 +1010,43 @@ async function resumeApplication(request: EmployeeDataReview) {
     return;
   }
   await continueDraft(request);
+}
+
+/** 办理详情是否处于待审核状态（审核人可直接在抽屉内办理）。 */
+function applicationReviewPending(request: EmployeeDataReview | null): boolean {
+  return Boolean(request && (request.profileReviewStatus === 'pending' || request.performanceReviewStatus === 'pending'));
+}
+
+async function reviewApplicationFromDetail(action: 'approve' | 'reject') {
+  const detail = applicationDetail.value;
+  if (!detail || applicationSaving.value) return;
+  let reason = '';
+  if (action === 'reject') {
+    try {
+      const prompt = await ElMessageBox.prompt('请填写退回原因，提交人可据此重新修改。', '退回员工变更', {
+        confirmButtonText: '确认退回', cancelButtonText: '取消', inputPattern: /\S{2,}/, inputErrorMessage: '请至少填写 2 个字',
+      });
+      reason = prompt.value;
+    } catch { return; }
+  }
+  applicationSaving.value = true;
+  try {
+    const result = action === 'approve'
+      ? await employeeArchivesApi.approveReviews([detail.id], ['profile', 'performance'])
+      : await employeeArchivesApi.rejectReviews([detail.id], reason);
+    if (result.failed.length > 0) {
+      ElMessage.warning(`办理未完成：${result.failed.map(item => item.reason).join('；')}`);
+    } else {
+      ElMessage.success(action === 'approve' ? '审核已通过，变更进入生效处理' : '已退回，提交人可修改后重新提交');
+    }
+    await openApplication(detail.id);
+    refreshCurrentView();
+    window.dispatchEvent(new CustomEvent('personnel-data-changed'));
+  } catch {
+    ElMessage.error('办理未完成，请稍后重试');
+  } finally {
+    applicationSaving.value = false;
+  }
 }
 
 async function cancelApplication(request: EmployeeDataReview) {
@@ -2523,7 +2568,14 @@ onBeforeUnmount(() => {
         </div>
       </template>
       <EmployeeApplicationDetail v-if="applicationDetail" :request="applicationDetail" />
-      <template #footer><el-button @click="applicationDetailVisible = false">关闭</el-button><el-button v-if="canEditArchive && applicationDetail?.canCancel" :loading="applicationSaving" @click="cancelApplication(applicationDetail)">{{ cancelApplicationLabel(applicationDetail) }}</el-button><el-button v-if="canEditArchive && applicationDetail?.canResume" type="primary" @click="resumeApplication(applicationDetail)">修改后重新提交</el-button></template>
+      <template #footer>
+        <el-button @click="applicationDetailVisible = false">关闭</el-button>
+        <template v-if="canReviewArchive && applicationDetail && applicationReviewPending(applicationDetail)">
+          <el-button :loading="applicationSaving" @click="reviewApplicationFromDetail('reject')">退回</el-button>
+          <el-button type="primary" :loading="applicationSaving" @click="reviewApplicationFromDetail('approve')">通过</el-button>
+        </template>
+        <el-button v-if="canEditArchive && applicationDetail?.canCancel" :loading="applicationSaving" @click="cancelApplication(applicationDetail)">{{ cancelApplicationLabel(applicationDetail) }}</el-button><el-button v-if="canEditArchive && applicationDetail?.canResume" type="primary" @click="resumeApplication(applicationDetail)">修改后重新提交</el-button>
+      </template>
     </BusinessDetailDrawer>
 
     <DepartmentEditDrawer
