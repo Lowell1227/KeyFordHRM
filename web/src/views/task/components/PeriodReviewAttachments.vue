@@ -4,11 +4,13 @@ import { ElMessage, ElMessageBox } from 'element-plus';
 import { periodReviewsApi } from '@/api/period-reviews.api';
 import type { PeriodReviewAttachment } from '@/types/api.types';
 
-const props = defineProps<{
+const props = withDefaults(defineProps<{
   periodId: string;
   attachments: PeriodReviewAttachment[];
   editable: boolean;
-}>();
+  /** 期间量词：月度为“本月”，整周期为“本期” */
+  periodNoun?: string;
+}>(), { periodNoun: '本月' });
 const emit = defineEmits<{
   'update:attachments': [attachments: PeriodReviewAttachment[]];
   'busy-change': [busy: boolean];
@@ -72,7 +74,7 @@ async function selectFiles(event: Event) {
   target.value = '';
   if (!files.length || busy.value || !props.editable) return;
   if (files.length > remainingCount.value) {
-    ElMessage.warning(`本月最多上传 10 个附件，还可上传 ${remainingCount.value} 个`);
+    ElMessage.warning(`最多上传 10 个附件，还可上传 ${remainingCount.value} 个`);
     return;
   }
   const invalid = files.map(validateFile).find(Boolean);
@@ -97,7 +99,7 @@ async function removeAttachment(attachment: PeriodReviewAttachment) {
   if (!props.editable || busy.value) return;
   try {
     await ElMessageBox.confirm(
-      `删除“${attachment.name}”后将无法在本月自评中查看。`,
+      `删除“${attachment.name}”后将无法在${props.periodNoun}自评中查看。`,
       '删除附件',
       { type: 'warning', confirmButtonText: '删除附件', cancelButtonText: '保留附件' },
     );
@@ -145,7 +147,7 @@ onBeforeUnmount(() => {
   <section class="period-attachments" data-testid="period-review-attachments">
     <header>
       <div>
-        <h3>本月工作产出附件（选填）</h3>
+        <h3>{{ periodNoun }}工作产出附件（选填）</h3>
         <p>上传主管可能不了解的工作成果。支持 JPG、PNG、PDF、Word、Excel，最多 10 个，单个不超过 20MB。</p>
       </div>
       <div v-if="editable" class="period-attachments__upload">
@@ -154,7 +156,7 @@ onBeforeUnmount(() => {
           type="file"
           multiple
           accept=".jpg,.jpeg,.png,.pdf,.doc,.docx,.xls,.xlsx"
-          aria-label="选择月度自评附件"
+          aria-label="选择自评附件"
           @change="selectFiles"
         >
         <el-button

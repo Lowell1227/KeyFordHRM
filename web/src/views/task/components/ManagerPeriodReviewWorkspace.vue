@@ -326,10 +326,10 @@ watch(() => [props.periodId, props.taskId], loadReview, { immediate: true });
       </div>
 
       <PeriodReviewAttachments
-        v-if="detail.period.periodType === 'month'"
         :period-id="detail.period.id"
         :attachments="detail.period.attachments ?? []"
         :editable="false"
+        :period-noun="detail.period.periodType === 'cycle' ? '本期' : '本月'"
       />
 
       <el-alert

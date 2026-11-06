@@ -357,10 +357,10 @@ watch(() => props.periodId, () => { summaryPreview.value = null; void loadReview
       </div>
 
       <PeriodReviewAttachments
-        v-if="detail.period.periodType === 'month'"
         :period-id="detail.period.id"
         :attachments="detail.period.attachments ?? []"
         :editable="canEdit"
+        :period-noun="periodNoun"
         @update:attachments="updateAttachments"
         @busy-change="attachmentBusy = $event"
       />
