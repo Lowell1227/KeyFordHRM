@@ -429,8 +429,8 @@ export const employeeArchivesApi = {
     profile: Record<string, unknown>;
     contracts: Record<string, unknown>[];
     performance: Record<string, unknown>;
-  }): Promise<EmployeeDataReview> {
-    return http.patch(`/employee-archives/${userId}/draft/save`, body) as unknown as Promise<EmployeeDataReview>;
+  }): Promise<EmployeeDataReview | null> {
+    return http.patch(`/employee-archives/${userId}/draft/save`, body) as unknown as Promise<EmployeeDataReview | null>;
   },
 
   submitDepartmentAssignments(userIds: string[], departmentId: string): Promise<{ submitted: number }> {

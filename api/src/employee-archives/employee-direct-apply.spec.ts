@@ -259,4 +259,73 @@ describe('员工档案免审个人信息字段直改', () => {
       profile: { phone: '13800000000', education: '本科' },
     }, operator)).rejects.toBeInstanceOf(BadRequestException);
   });
+
+  it('保存草稿时与当前档案一致的输入视为幂等空保存，返回空且不写草稿、不记审计', async () => {
+    const user = buildUser();
+    const { service, tx, baseVersion } = buildService(user);
+
+    const result = await service.saveArchiveDraft(user.id, {
+      baseVersion,
+      employee: { jobFamily: '' },
+      profile: { phone: '13800000000', education: '本科' },
+    }, operator);
+
+    expect(result).toBeNull();
+    expect(tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
+    expect(tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
+    expect(tx.auditLog.create).not.toHaveBeenCalled();
+  });
+
+  it('保存草稿无实际变更但已有草稿时返回现有草稿，不改写内容', async () => {
+    const user = buildUser();
+    const profileRow = user.employeeProfile as Record<string, unknown>;
+    const baseProfile = Object.fromEntries(Object.entries(profileRow)
+      .filter(([key]) => !['id', 'userId', 'createdAt', 'updatedAt'].includes(key)));
+    const existingDraft = {
+      id: 'draft-1',
+      userId: user.id,
+      sourceType: 'manual_archive_change',
+      recordStatus: 'draft',
+      profileReviewStatus: 'pending',
+      performanceReviewStatus: 'not_required',
+      requestVersion: 3,
+      baseValue: {
+        employee: { name: '员工甲', phone: '13800000000' },
+        profile: baseProfile,
+        profileExists: true,
+        contracts: [],
+        performance: { managerId: null },
+      },
+      proposedValue: { employee: { name: '员工甲' }, profile: {}, contracts: [], performance: { managerId: null } },
+      createdBy: { id: operator.id, name: operator.name, sysRole: operator.sysRole },
+      createdAt: new Date('2026-11-11T01:00:00.000Z'),
+      updatedAt: new Date('2026-11-11T01:00:00.000Z'),
+      archivedAt: null,
+    };
+    const tx = {
+      user: { findUnique: jest.fn().mockResolvedValue(user), update: jest.fn().mockResolvedValue({}) },
+      employeeDataChangeRequest: {
+        findFirst: jest.fn().mockResolvedValue(existingDraft),
+        create: jest.fn(),
+        update: jest.fn(),
+      },
+      employeeProfile: { upsert: jest.fn().mockResolvedValue({}) },
+      auditLog: { create: jest.fn().mockResolvedValue({}) },
+    };
+    const prisma = { $transaction: jest.fn((run: (client: unknown) => unknown) => run(tx)) };
+    const service = new EmployeeArchivesService(prisma as any);
+    const baseVersion = (service as any).archiveVersion(user);
+
+    const result = await service.saveArchiveDraft(user.id, {
+      draftId: 'draft-1',
+      expectedVersion: 3,
+      baseVersion,
+      employee: { jobFamily: '' },
+      profile: { phone: '13800000000', education: '本科' },
+    }, operator);
+
+    expect(result).not.toBeNull();
+    expect(result!.id).toBe('draft-1');
+    expect(tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
+  });
 });

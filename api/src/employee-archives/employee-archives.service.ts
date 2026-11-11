@@ -1137,7 +1137,9 @@ export class EmployeeArchivesService {
     return this.withDraftTransaction(async tx => {
       const { request } = await this.persistArchiveChangeWithClient(tx, userId, input, operator, 'draft');
       if (!request) {
-        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '草稿未能保存，请重新打开最新档案核对' });
+        // 自动保存可能携带与当前档案归一化后完全一致的值（如清空操作把 null 写成 ''），
+        // 此时视为幂等成功的空保存，不产生草稿、不记审计，由前端保持当前编辑状态。
+        return null;
       }
       await tx.auditLog.create({
         data: {
@@ -1329,6 +1331,11 @@ export class EmployeeArchivesService {
     };
     if (!profileChanged && !performanceChanged) {
       if (directApplied.length === 0) {
+        // 保存草稿时，与当前档案归一化后一致的输入视为幂等空保存：返回现有草稿（或空），
+        // 避免自动保存被 400 打断并反复提示“草稿保存失败”。提交审核仍要求有实际变更。
+        if (recordStatus === 'draft') {
+          return { request: existing ? employeeDataChangeView(existing) : null, directApplied };
+        }
         throw new BadRequestException({
           code: ERROR_CODE.PARAM_INVALID,
           message: '未检测到实际变更，无需提交审核',

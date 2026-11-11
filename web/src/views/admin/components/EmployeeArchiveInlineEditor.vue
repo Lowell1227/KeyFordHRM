@@ -313,6 +313,12 @@ async function saveDraft(): Promise<boolean> {
     try {
       const result = await employeeArchivesApi.saveArchiveDraft(userId, payload);
       if (session !== generation || !props.editing) return false;
+      if (result == null) {
+        // 与当前档案一致，无可保存内容：视为保存成功并保持当前编辑状态，避免误报“草稿保存失败”。
+        initialSnapshot = snapshot;
+        saveState.value = 'idle';
+        return true;
+      }
       draftId = result.id;
       draftVersion = result.requestVersion;
       initialSnapshot = snapshot;

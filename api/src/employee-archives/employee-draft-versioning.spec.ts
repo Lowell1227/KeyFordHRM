@@ -64,7 +64,7 @@ describe('employee draft optimistic concurrency', () => {
     const approvedProposal = JSON.parse(JSON.stringify(f.draft.proposedValue[approvedScope]));
     const { request: result } = await f.service.submitDraft('employee', f.input, operator);
     if (!result) throw new Error('expected review request');
-    expect(result.requestVersion).toBe(4);
+    expect(result!.requestVersion).toBe(4);
     expect(result.profileReviewStatus).toBe(approvedScope === 'profile' ? 'approved' : 'pending');
     expect(result.performanceReviewStatus).toBe(approvedScope === 'performance' ? 'approved' : 'pending');
     expect(f.draft.baseValue).toEqual(originalBase);
@@ -214,7 +214,7 @@ describe('employee draft optimistic concurrency', () => {
     }
     const { request: result } = await f.service.submitDraft('employee', f.input, operator);
     if (!result) throw new Error('expected review request');
-    expect(result.requestVersion).toBe(4);
+    expect(result!.requestVersion).toBe(4);
     expect(f.draft.proposedValue[approvedScope]).toMatchObject(approvedScope === 'profile' ? {} : { managerId: null, managerName: ' Manager ' });
   });
 
@@ -272,7 +272,7 @@ describe('employee draft optimistic concurrency', () => {
     const archive: any = await f.service.findOne('employee');
     const result = await f.service.saveArchiveDraft('employee', { baseVersion: archive.archiveVersion,
       employee: { name: 'New' }, profile: {} } as any, operator);
-    expect(result.requestVersion).toBe(1);
+    expect(result!.requestVersion).toBe(1);
     expect(f.tx.employeeDataChangeRequest.create).toHaveBeenCalledTimes(1);
   });
 
@@ -326,7 +326,7 @@ describe('employee draft optimistic concurrency', () => {
     const originalBase = f.draft.baseValue;
     const result = await f.service.saveArchiveDraft('employee', { draftId: 'draft', expectedVersion: 3,
       employee: { name: 'New' }, profile: {} } as any, operator);
-    expect(result.requestVersion).toBe(4);
+    expect(result!.requestVersion).toBe(4);
     expect(f.draft.baseValue).toEqual(originalBase);
     expect(f.tx.employeeDataChangeRequest.update).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ requestVersion: 3, updatedAt }),
@@ -342,7 +342,7 @@ describe('employee draft optimistic concurrency', () => {
     f.draft.baseValue.profileExists = true;
     const result = await f.service.saveArchiveDraft('employee', { draftId: 'draft', expectedVersion: 3,
       employee: { name: 'New' }, profile: {} } as any, operator);
-    expect(result.requestVersion).toBe(4);
+    expect(result!.requestVersion).toBe(4);
   });
 
   it('rolls back archive draft persistence when its audit fails', async () => {
@@ -365,7 +365,7 @@ describe('employee draft optimistic concurrency', () => {
   it('checks both the version and timestamp when saving a current new-employee draft', async () => {
     const f = fixture('manual_employee_create');
     const result = await f.service.saveEmployeeCreateDraft({ draftId: 'draft', expectedVersion: 3, name: 'New' } as any, operator);
-    expect(result.requestVersion).toBe(4);
+    expect(result!.requestVersion).toBe(4);
     expect(f.tx.employeeDataChangeRequest.update).toHaveBeenCalledWith(expect.objectContaining({
       where: expect.objectContaining({ requestVersion: 3, updatedAt }),
     }));

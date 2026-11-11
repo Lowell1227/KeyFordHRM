@@ -18,7 +18,7 @@ describe('employee draft and archive lifecycle', () => {
       draftId: 'd', expectedVersion: 1, employee: { name: '员工更名' }, profile: { idNumber: '' },
     }, operator);
     expect(update.mock.calls[0][0].data.proposedValue.profile.idNumberFingerprint).toBe('new-hash');
-    expect(result.proposedValue).not.toHaveProperty('profile.idNumberFingerprint');
+    expect(result!.proposedValue).not.toHaveProperty('profile.idNumberFingerprint');
   });
 
   it('restores only archive markers, never employment status, number or binding permissions', async () => {

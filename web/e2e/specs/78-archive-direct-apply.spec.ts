@@ -6,7 +6,8 @@ const employee = { id: 'direct-apply-person', name: '合成直改员工', employ
 const department = { id: 'direct-dept', name: '合成部门', company: 'fuede', children: [] };
 const profile = { phone: '13800000000', education: '本科' };
 
-async function setup(page: Page, draftResponse: () => { request: unknown; directApplied: string[] }) {
+async function setup(page: Page, draftResponse: () => { request: unknown; directApplied: string[] },
+  saveResponse: () => unknown = () => ({ id: 'direct-draft', requestVersion: 1, recordStatus: 'draft' })) {
   const state = { submissions: [] as any[] };
   await page.addInitScript(() => {
     localStorage.setItem('token', 'SYNTHETIC-DIRECT-APPLY-ONLY');
@@ -25,7 +26,7 @@ async function setup(page: Page, draftResponse: () => { request: unknown; direct
       data = { ...employee, archiveVersion: 'direct-version', dept: department, currentEmployment: employment,
         employmentHistory: [employment], employeeProfile: profile, employeeContracts: [], changeHistory: [], latestResignationReview: null };
     } else if (path.endsWith(`/${employee.id}/draft/save`)) {
-      data = { id: 'direct-draft', requestVersion: 1, recordStatus: 'draft' };
+      data = saveResponse();
     } else if (path.endsWith(`/${employee.id}/draft`)) {
       state.submissions.push(route.request().postDataJSON());
       data = draftResponse();
@@ -78,4 +79,13 @@ test('只改需审核字段时维持原提交审核提示', async ({ page }) => 
   await archive.getByRole('button', { name: '提交审核', exact: true }).click();
   await expect(page.getByText('档案变更已提交审核，审核通过后生效', { exact: true })).toBeVisible();
   expect(state.submissions.at(-1)?.employee?.name).toBe('合成直改员工乙');
+});
+
+test('自动保存遇到与当前档案一致的空结果时静默成功，不提示草稿保存失败', async ({ page }) => {
+  await setup(page, () => ({ request: null, directApplied: [] }), () => null);
+  const archive = await openEditorAndEditPhone(page);
+  // 自动保存去抖 700ms，等待请求返回
+  await page.waitForTimeout(2500);
+  await expect(archive.locator('.archive-save-error')).toHaveCount(0);
+  await expect(archive.locator('.archive-save-state')).toContainText('修改后自动保存草稿');
 });
