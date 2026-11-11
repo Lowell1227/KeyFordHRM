@@ -3382,7 +3382,8 @@ onBeforeUnmount(() => {
 
 .light-filter {
   display: grid;
-  grid-template-columns: minmax(260px, 1.5fr) minmax(180px, 1fr) minmax(160px, 1fr) auto auto;
+  /* 员工档案视图有 6 个子项（搜索/部门/系统权限/查询/重置/导出），列数不足会导致导出按钮换行拉伸 */
+  grid-template-columns: minmax(260px, 1.5fr) minmax(180px, 1fr) minmax(160px, 1fr) auto auto auto;
   gap: 12px;
   align-items: center;
   padding: 0;
