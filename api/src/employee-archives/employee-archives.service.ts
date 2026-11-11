@@ -26,6 +26,11 @@ import { EmployeeNumberService } from './employee-number.service';
 import { EmployeeOnboardingService } from './employee-onboarding.service';
 import { employeeArchiveView, employeeDataChangeView, activeApplicationWhere } from './employee-data-change-view';
 import { archiveIssueStates } from './employee-archive-issues';
+import {
+  DIRECT_APPLY_PROFILE_FIELDS,
+  DIRECT_APPLY_PROFILE_FIELD_LABELS,
+  type DirectApplyProfileField,
+} from './direct-apply-profile-fields';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 
@@ -1130,7 +1135,10 @@ export class EmployeeArchivesService {
 
   async saveArchiveDraft(userId: string, input: SubmitEmployeeArchiveDraftDto, operator: AuthUser) {
     return this.withDraftTransaction(async tx => {
-      const request = await this.persistArchiveChangeWithClient(tx, userId, input, operator, 'draft');
+      const { request } = await this.persistArchiveChangeWithClient(tx, userId, input, operator, 'draft');
+      if (!request) {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '草稿未能保存，请重新打开最新档案核对' });
+      }
       await tx.auditLog.create({
         data: {
           userId: operator.id,
@@ -1145,13 +1153,14 @@ export class EmployeeArchivesService {
   }
 
   private async persistArchiveChangeWithClient(
-    client: Pick<Prisma.TransactionClient, 'user' | 'employeeDataChangeRequest'> & Partial<Pick<Prisma.TransactionClient, 'contractSubject'>>,
+    client: Pick<Prisma.TransactionClient, 'user' | 'employeeDataChangeRequest' | 'employeeProfile' | 'auditLog'>
+      & Partial<Pick<Prisma.TransactionClient, 'contractSubject'>>,
     userId: string,
     input: SubmitEmployeeArchiveDraftDto,
     operator: AuthUser,
     recordStatus: 'draft' | 'submitted',
     requireBaseVersion = true,
-  ) {
+  ): Promise<{ request: ReturnType<typeof employeeDataChangeView> | null; directApplied: string[] }> {
     if (input.employee.companyText != null && (typeof input.employee.companyText !== 'string'
       || input.employee.companyText.length > 150)) {
       throw new BadRequestException('所属公司须为不超过150字的文字');
@@ -1201,6 +1210,14 @@ export class EmployeeArchivesService {
     }
     if (!input.draftId && requireBaseVersion && input.baseVersion !== this.archiveVersion(user)) {
       throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '正式档案已发生变化，请保留当前输入并重新核对最新档案' });
+    }
+
+    // 免审个人信息字段（如手机号、学历、紧急联系人）在提交时直接写入正式数据并记审计日志，
+    // 不进入审核队列；直改后内存中的正式档案同步更新，后续 diff 自然只覆盖需审核字段。
+    const directApplied: string[] = [];
+    const directChanges: Record<string, unknown> = {};
+    if (recordStatus === 'submitted') {
+      await this.applyDirectProfileChanges(client, user, input, operator, directApplied, directChanges);
     }
 
     const employment = user.employmentHistory[0] ?? null;
@@ -1290,15 +1307,10 @@ export class EmployeeArchivesService {
       || (existing?.performanceReviewStatus === 'approved' && performanceChanged)) {
       throw new ConflictException('已通过的部分不能在原申请中改写，请从当前档案另行发起更正');
     }
-    if (!profileChanged && !performanceChanged) {
-      throw new BadRequestException({
-        code: ERROR_CODE.PARAM_INVALID,
-        message: '未检测到实际变更，无需提交审核',
-      });
-    }
-
     const data = {
-      baseValue: existing ? existing.baseValue as Prisma.InputJsonValue : this.toJson({
+      baseValue: existing
+        ? this.toJson(this.baseValueWithDirectChanges(existing.baseValue, directChanges))
+        : this.toJson({
         employee: baseEmployee,
         profile: baseProfile,
         profileExists: user.employeeProfile !== null,
@@ -1315,8 +1327,33 @@ export class EmployeeArchivesService {
       createdById: operator.id,
       rejectedReason: null,
     };
+    if (!profileChanged && !performanceChanged) {
+      if (directApplied.length === 0) {
+        throw new BadRequestException({
+          code: ERROR_CODE.PARAM_INVALID,
+          message: '未检测到实际变更，无需提交审核',
+        });
+      }
+      // 仅免审字段发生变化：直改已生效，不生成待审申请；原有草稿保留为草稿以便继续维护。
+      if (existing) {
+        await client.employeeDataChangeRequest.update({
+          where: { id: existing.id, requestVersion: existing.requestVersion, updatedAt: existing.updatedAt },
+          data: {
+            ...data,
+            recordStatus: 'draft',
+            archivedAt: null,
+            profileReviewStatus: existing.profileReviewStatus === 'approved' ? 'approved' : 'not_required',
+            performanceReviewStatus: existing.performanceReviewStatus === 'approved' ? 'approved' : 'not_required',
+            requestVersion: { increment: 1 },
+            revisionHistory: this.revisionSnapshot(existing),
+          },
+        });
+      }
+      return { request: null, directApplied };
+    }
     if (existing) {
-      return employeeDataChangeView(await client.employeeDataChangeRequest.update({
+      return {
+        request: employeeDataChangeView(await client.employeeDataChangeRequest.update({
         where: { id: existing.id, requestVersion: existing.requestVersion, updatedAt: existing.updatedAt },
         data: {
           ...data,
@@ -1327,9 +1364,12 @@ export class EmployeeArchivesService {
           requestVersion: { increment: 1 },
           revisionHistory: this.revisionSnapshot(existing),
         },
-      }));
+      })),
+        directApplied,
+      };
     }
-    return employeeDataChangeView(await client.employeeDataChangeRequest.create({
+    return {
+      request: employeeDataChangeView(await client.employeeDataChangeRequest.create({
       data: {
         userId,
         employeeNo: user.employeeNo,
@@ -1340,7 +1380,9 @@ export class EmployeeArchivesService {
         profileReviewStatus: profileChanged ? 'pending' : 'not_required',
         performanceReviewStatus: performanceChanged ? 'pending' : 'not_required',
       },
-    }));
+    })),
+      directApplied,
+    };
   }
 
   async submitDepartmentAssignments(
@@ -1688,6 +1730,133 @@ export class EmployeeArchivesService {
     return Object.fromEntries(
       Object.entries(profile).filter(([key]) => !['id', 'userId', 'createdAt', 'updatedAt'].includes(key)),
     );
+  }
+
+  /**
+   * 免审个人信息字段直改：写入正式档案、记审计日志，并同步刷新该员工其他在审申请的
+   * base 快照中被直改的字段，避免审批时把本次直改误判为“正式档案已发生变化”。
+   * 仅提交（recordStatus='submitted'）时执行；保存草稿不触碰正式数据。
+   */
+  private async applyDirectProfileChanges(
+    client: Pick<Prisma.TransactionClient, 'user' | 'employeeProfile' | 'auditLog' | 'employeeDataChangeRequest'>,
+    user: { id: string; phone: string | null; employeeProfile: Record<string, unknown> | null },
+    input: SubmitEmployeeArchiveDraftDto,
+    operator: AuthUser,
+    directApplied: string[],
+    directChanges: Record<string, unknown>,
+  ): Promise<void> {
+    const profile = (user.employeeProfile ?? {}) as Record<string, unknown>;
+    const dateFields = new Set(['birthDate', 'graduationDate']);
+    const normalizedInput: Record<string, unknown> = {};
+    for (const key of DIRECT_APPLY_PROFILE_FIELDS) {
+      if (!(key in input.profile)) continue;
+      let next = (input.profile as Record<string, unknown>)[key];
+      // 与审核生效路径（profileUpdate/nullableString/nullableDate）保持一致的归一化。
+      if (key === 'phone') next = this.directApplyString(next);
+      if (dateFields.has(key)) {
+        if (next != null && next !== '' && Number.isNaN((next instanceof Date ? next : new Date(String(next))).getTime())) {
+          throw new BadRequestException({
+            code: ERROR_CODE.PARAM_INVALID,
+            message: `${DIRECT_APPLY_PROFILE_FIELD_LABELS[key as DirectApplyProfileField]}格式无效，请按 YYYY-MM-DD 填写或清空`,
+          });
+        }
+        next = this.directApplyDate(next);
+      }
+      normalizedInput[key] = next ?? null;
+      if (this.comparableReviewValue(profile[key] ?? null, key) === this.comparableReviewValue(next ?? null, key)) continue;
+      directChanges[key] = next ?? null;
+    }
+    // 无论是否产生实际直改，都把免审字段的归一化值写回输入，避免原始值（如带空格手机号）进入审核差异。
+    for (const [key, value] of Object.entries(normalizedInput)) {
+      (input.profile as Record<string, unknown>)[key] = value;
+      if (key === 'phone' && input.employee) input.employee.phone = value;
+    }
+    // 兼容仅通过 employee 段提交手机号的调用方：前端两个段都会带手机号，此处兜底合并。
+    if (!('phone' in directChanges) && input.employee && 'phone' in input.employee) {
+      const next = this.directApplyString(input.employee.phone);
+      if (this.comparableReviewValue(user.phone, 'phone') !== this.comparableReviewValue(next, 'phone')) {
+        directChanges.phone = next;
+      }
+    }
+    if (Object.keys(directChanges).length === 0) return;
+
+    if ('phone' in directChanges) {
+      const phone = directChanges.phone as string | null;
+      await client.user.update({ where: { id: user.id }, data: { phone } });
+      user.phone = phone;
+    }
+    await client.employeeProfile.upsert({
+      where: { userId: user.id },
+      create: { user: { connect: { id: user.id } }, ...directChanges } as Prisma.EmployeeProfileCreateInput,
+      update: directChanges,
+    });
+    user.employeeProfile = { ...profile, ...directChanges };
+
+    const pendingRequests = await client.employeeDataChangeRequest.findMany({
+      where: {
+        userId: user.id,
+        recordStatus: 'submitted',
+        archivedAt: null,
+        OR: [
+          { profileReviewStatus: { in: ['pending', 'applying'] } },
+          { performanceReviewStatus: { in: ['pending', 'applying'] } },
+        ],
+      },
+      select: { id: true, baseValue: true },
+    });
+    for (const pending of pendingRequests) {
+      await client.employeeDataChangeRequest.update({
+        where: { id: pending.id },
+        data: { baseValue: this.toJson(this.baseValueWithDirectChanges(pending.baseValue, directChanges)) },
+      });
+    }
+
+    const changedKeys = Object.keys(directChanges);
+    await client.auditLog.create({
+      data: {
+        userId: operator.id,
+        action: 'employee_profile_direct_update',
+        entityType: 'user',
+        entityId: user.id,
+        oldValue: this.toJson(Object.fromEntries(changedKeys.map(key => [key, this.auditDisplayValue(profile[key] ?? null)]))),
+        newValue: this.toJson(Object.fromEntries(changedKeys.map(key => [key, this.auditDisplayValue(directChanges[key])]))),
+      },
+    });
+    directApplied.push(...changedKeys.map(key => DIRECT_APPLY_PROFILE_FIELD_LABELS[key as DirectApplyProfileField] ?? key));
+  }
+
+  /** 把免审直改后的字段值回填进审核单 base 快照，保持审批基准与正式档案一致。 */
+  private baseValueWithDirectChanges(baseValue: unknown, changes: Record<string, unknown>): Record<string, unknown> {
+    const base = { ...this.record(baseValue) };
+    if (Object.keys(changes).length === 0) return base;
+    if (Object.keys(this.record(base.profile)).length > 0 || base.profile !== undefined) {
+      base.profile = { ...this.record(base.profile), ...changes };
+    }
+    if ('phone' in changes) {
+      const employee = this.record(base.employee);
+      if (Object.keys(employee).length > 0 || base.employee !== undefined) {
+        employee.phone = changes.phone;
+        base.employee = employee;
+      }
+    }
+    return base;
+  }
+
+  private auditDisplayValue(value: unknown): unknown {
+    if (value == null || value === '') return null;
+    if (value instanceof Date) return value.toISOString().slice(0, 10);
+    if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
+    return JSON.stringify(value);
+  }
+
+  private directApplyString(value: unknown): string | null {
+    return typeof value === 'string' && value.trim() ? value.trim() : null;
+  }
+
+  private directApplyDate(value: unknown): Date | null {
+    if (value == null || value === '') return null;
+    const date = value instanceof Date ? value : new Date(String(value));
+    return Number.isNaN(date.getTime()) ? null : date;
   }
 
   private contractReviewData(contract: object): Record<string, unknown> {

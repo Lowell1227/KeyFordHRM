@@ -779,11 +779,20 @@ async function submitArchiveDraft(value: {
   archiveEditSaving.value = true;
   archiveEditAction.value = 'submit';
   try {
-    await employeeArchivesApi.submitDraft(data.id, value);
-    ElMessage.success('档案变更已提交审核，审核通过后生效');
+    const result = await employeeArchivesApi.submitDraft(data.id, value);
+    const applied = result.directApplied ?? [];
+    if (applied.length && result.request) {
+      ElMessage.success(`${applied.join('、')}已直接生效，其余变更已提交审核，审核通过后生效`);
+      archiveNotice.value = `${applied.join('、')}已直接生效，其余变更已提交审核，审核通过后生效`;
+    } else if (applied.length) {
+      ElMessage.success(`${applied.join('、')}已直接生效`);
+      archiveNotice.value = `${applied.join('、')}已直接生效`;
+    } else {
+      ElMessage.success('档案变更已提交审核，审核通过后生效');
+      archiveNotice.value = '已提交审核，审核通过后生效';
+    }
     archiveEditing.value = false;
     activeArchiveDraft.value = null;
-    archiveNotice.value = '已提交审核，审核通过后生效';
     archiveSubmitError.value = '';
     refreshCurrentView();
   } catch (error) {

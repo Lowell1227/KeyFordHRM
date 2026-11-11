@@ -1,4 +1,4 @@
-import { ConflictException } from '@nestjs/common';
+import { BadRequestException, ConflictException } from '@nestjs/common';
 import { CompanyCode, EmploymentType, SysRole, UserStatus } from '@prisma/client';
 import { EmployeeArchivesService } from './employee-archives.service';
 
@@ -17,10 +17,11 @@ function fixture(sourceType = 'manual_archive_change') {
     baseValue: { employee: { name: 'Synthetic' }, profile: {}, profileExists: false, contracts: [], performance: { managerId: null } },
     proposedValue: { employee: { name: 'Saved' }, profile: {} } };
   const tx: any = {
-    user: { findUnique: jest.fn(async () => user) },
+    user: { findUnique: jest.fn(async () => user), update: jest.fn(async () => ({})) },
     department: { findUnique: jest.fn(async () => ({ id: 'department', isActive: true })) },
     employeeDataChangeRequest: {
       findFirst: jest.fn(async () => draft),
+      findMany: jest.fn(async () => []),
       update: jest.fn(async ({ where, data }) => {
         if (where.requestVersion !== undefined && (where.requestVersion !== draft.requestVersion
           || where.updatedAt !== undefined && where.updatedAt !== draft.updatedAt)) throw { code: 'P2025' };
@@ -29,6 +30,7 @@ function fixture(sourceType = 'manual_archive_change') {
       }),
       create: jest.fn(async ({ data }) => ({ id: 'new', requestVersion: 1, ...data })),
     },
+    employeeProfile: { upsert: jest.fn(async () => ({})) },
     auditLog: { create: jest.fn(async () => ({})) },
   };
   const db = { ...tx, $transaction: jest.fn(async (run) => {
@@ -60,7 +62,8 @@ describe('employee draft optimistic concurrency', () => {
     const f = partialApproval(approvedScope);
     const originalBase = JSON.parse(JSON.stringify(f.draft.baseValue));
     const approvedProposal = JSON.parse(JSON.stringify(f.draft.proposedValue[approvedScope]));
-    const result = await f.service.submitDraft('employee', f.input, operator);
+    const { request: result } = await f.service.submitDraft('employee', f.input, operator);
+    if (!result) throw new Error('expected review request');
     expect(result.requestVersion).toBe(4);
     expect(result.profileReviewStatus).toBe(approvedScope === 'profile' ? 'approved' : 'pending');
     expect(result.performanceReviewStatus).toBe(approvedScope === 'performance' ? 'approved' : 'pending');
@@ -77,7 +80,8 @@ describe('employee draft optimistic concurrency', () => {
     f.user.employeeContracts = [{ ...approvedContract, id: 'official-contract', name: null, signingCompany: null,
       signedAt: new Date('2026-01-01'), effectiveFrom: new Date('2026-01-01') }];
     f.input.contracts = [approvedContract];
-    const result = await f.service.submitDraft('employee', f.input, operator);
+    const { request: result } = await f.service.submitDraft('employee', f.input, operator);
+    if (!result) throw new Error('expected review request');
     expect(result.profileReviewStatus).toBe('approved');
     expect(result.performanceReviewStatus).toBe('pending');
     expect(f.draft.proposedValue.contracts).toEqual([approvedContract]);
@@ -97,7 +101,8 @@ describe('employee draft optimistic concurrency', () => {
     f.user.employmentHistory = [employment];
     f.draft.proposedValue.employee = { ...raw };
     f.input.employee = { ...raw };
-    const result = await f.service.submitDraft('employee', f.input, operator);
+    const { request: result } = await f.service.submitDraft('employee', f.input, operator);
+    if (!result) throw new Error('expected review request');
     expect(result.performanceReviewStatus).toBe('pending');
     expect(f.draft.proposedValue.employee).toEqual(raw);
   });
@@ -113,7 +118,8 @@ describe('employee draft optimistic concurrency', () => {
     f.draft.proposedValue.employee = employee;
     f.input.employee = employee;
 
-    const result = await f.service.submitDraft('employee', f.input, operator);
+    const { request: result } = await f.service.submitDraft('employee', f.input, operator);
+    if (!result) throw new Error('expected review request');
 
     expect(result.profileReviewStatus).toBe('approved');
     expect(result.performanceReviewStatus).toBe('pending');
@@ -133,7 +139,7 @@ describe('employee draft optimistic concurrency', () => {
       await expect(f.service.submitDraft('employee', f.input, operator)).rejects.toBeInstanceOf(ConflictException);
       expect(f.tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
     } else {
-      expect((await f.service.submitDraft('employee', f.input, operator)).performanceReviewStatus).toBe('pending');
+      expect((await f.service.submitDraft('employee', f.input, operator)).request?.performanceReviewStatus).toBe('pending');
       expect(f.draft.proposedValue.employee).toEqual(employee);
     }
   });
@@ -149,7 +155,8 @@ describe('employee draft optimistic concurrency', () => {
     f.input.employee = { ...approvedEmployee };
     Object.assign(f.user, { name: 'Approved name', position: 'Directory position' });
     f.tx.position = { findUnique: jest.fn(async () => ({ id: 'position-1', name: 'Directory position', jobFamily: 'New directory family' })) };
-    const result = await f.service.submitDraft('employee', f.input, operator);
+    const { request: result } = await f.service.submitDraft('employee', f.input, operator);
+    if (!result) throw new Error('expected review request');
     expect(result.performanceReviewStatus).toBe('pending');
     expect(f.draft.proposedValue.employee).toEqual(approvedEmployee);
   });
@@ -159,7 +166,7 @@ describe('employee draft optimistic concurrency', () => {
     f.draft.proposedValue.profile = { school: null };
     f.input.profile = { school: null };
     f.user.employeeProfile = { school: null };
-    expect((await f.service.submitDraft('employee', f.input, operator)).performanceReviewStatus).toBe('pending');
+    expect((await f.service.submitDraft('employee', f.input, operator)).request?.performanceReviewStatus).toBe('pending');
     expect(f.draft.baseValue.profileExists).toBe(false);
   });
 
@@ -177,18 +184,20 @@ describe('employee draft optimistic concurrency', () => {
     f.draft.proposedValue.contracts = contracts;
     f.input.employee = employee;
     f.input.contracts = contracts;
-    expect((await f.service.submitDraft('employee', f.input, operator)).performanceReviewStatus).toBe('pending');
+    expect((await f.service.submitDraft('employee', f.input, operator)).request?.performanceReviewStatus).toBe('pending');
     expect(f.draft.proposedValue.employee).toEqual(employee);
     expect(f.draft.proposedValue.contracts).toEqual(contracts);
   });
 
-  it.each([false, true])('keeps profile text literal while normalizing nullable profile dates (external trim=%s)', async changed => {
+  it.each([false, true])('keeps profile text literal while rejecting invalid profile dates at direct apply (external trim=%s)', async changed => {
     const f = partialApproval('profile');
     f.draft.proposedValue.profile = { school: ' College ', birthDate: 'invalid-date' };
     f.input.profile = { ...f.draft.proposedValue.profile };
     f.user.employeeProfile = { school: changed ? 'College' : ' College ', birthDate: null };
-    if (changed) await expect(f.service.submitDraft('employee', f.input, operator)).rejects.toBeInstanceOf(ConflictException);
-    else expect((await f.service.submitDraft('employee', f.input, operator)).performanceReviewStatus).toBe('pending');
+    // 免审字段在提交入口即校验，非法日期不再进入审核管道归一化
+    await expect(f.service.submitDraft('employee', f.input, operator)).rejects.toBeInstanceOf(BadRequestException);
+    expect(f.tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
+    expect(f.tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
   });
 
   it.each(['profile', 'performance'] as const)('resolves an approved %s manager supplied by name using the original lookup rule', async approvedScope => {
@@ -203,7 +212,8 @@ describe('employee draft optimistic concurrency', () => {
       f.draft.proposedValue.performance = { managerId: null, managerName: ' Manager ' };
       f.input.performance = { ...f.draft.proposedValue.performance };
     }
-    const result = await f.service.submitDraft('employee', f.input, operator);
+    const { request: result } = await f.service.submitDraft('employee', f.input, operator);
+    if (!result) throw new Error('expected review request');
     expect(result.requestVersion).toBe(4);
     expect(f.draft.proposedValue[approvedScope]).toMatchObject(approvedScope === 'profile' ? {} : { managerId: null, managerName: ' Manager ' });
   });

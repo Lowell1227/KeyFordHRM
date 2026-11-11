@@ -14,12 +14,14 @@ describe('archive contract subject references', () => {
   };
   it('recognizes an ID-only selection and freezes the server name', async () => {
     const { service, baseVersion } = fixture();
-    const result = await service.submitDraft('user', { baseVersion, employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111', companyText: '伪造名称' }, profile: {} }, operator);
+    const { request: result } = await service.submitDraft('user', { baseVersion, employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111', companyText: '伪造名称' }, profile: {} }, operator);
+    if (!result) throw new Error('expected review request');
     expect(result.proposedValue).toMatchObject({ employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111', companyText: '服务器名称' } });
   });
   it('keeps an existing snapshot despite a supplied replacement name and directory rename', async () => {
     const { service, prisma, baseVersion } = fixture('11111111-1111-4111-8111-111111111111');
-    const result = await service.submitDraft('user', { baseVersion, employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111', companyText: '伪造名称', position: '新岗位' }, profile: {} }, operator);
+    const { request: result } = await service.submitDraft('user', { baseVersion, employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111', companyText: '伪造名称', position: '新岗位' }, profile: {} }, operator);
+    if (!result) throw new Error('expected review request');
     expect(result.proposedValue).toMatchObject({ employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111', companyText: '原名' } });
     expect(prisma.contractSubject.findUnique).not.toHaveBeenCalled();
   });
@@ -30,7 +32,8 @@ describe('archive contract subject references', () => {
   });
   it('explicit null clears reference and snapshot', async () => {
     const { service, baseVersion } = fixture('11111111-1111-4111-8111-111111111111');
-    const result = await service.submitDraft('user', { baseVersion, employee: { contractSubjectId: null }, profile: {} }, operator);
+    const { request: result } = await service.submitDraft('user', { baseVersion, employee: { contractSubjectId: null }, profile: {} }, operator);
+    if (!result) throw new Error('expected review request');
     expect(result.proposedValue).toMatchObject({ employee: { contractSubjectId: null, companyText: null } });
   });
   it('rejects malformed IDs before sending them to the database', async () => {
@@ -41,7 +44,8 @@ describe('archive contract subject references', () => {
   it('recognizes ID-only changes even when the display name is identical', async () => {
     const { service, prisma, baseVersion } = fixture();
     prisma.contractSubject.findUnique.mockResolvedValue({ id: '11111111-1111-4111-8111-111111111111', name: '原名', isActive: true });
-    const result = await service.submitDraft('user', { baseVersion, employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111' }, profile: {} }, operator);
+    const { request: result } = await service.submitDraft('user', { baseVersion, employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111' }, profile: {} }, operator);
+    if (!result) throw new Error('expected review request');
     expect(result.profileReviewStatus).toBe('pending');
   });
   it('retains new employee draft contract snapshots across directory renames', async () => {

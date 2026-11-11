@@ -397,8 +397,8 @@ export const employeeArchivesApi = {
     profile: Record<string, unknown>;
     contracts: Record<string, unknown>[];
     performance: Record<string, unknown>;
-  }): Promise<EmployeeDataReview> {
-    return http.patch(`/employee-archives/${userId}/draft`, body) as unknown as Promise<EmployeeDataReview>;
+  }): Promise<{ request: EmployeeDataReview | null; directApplied: string[] }> {
+    return http.patch(`/employee-archives/${userId}/draft`, body) as unknown as Promise<{ request: EmployeeDataReview | null; directApplied: string[] }>;
   },
 
   lookupIdentity(body: { phone?: string; idNumber?: string; excludeRequestId?: string }): Promise<EmployeeIdentityLookupResult> {

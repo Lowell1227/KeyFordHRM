@@ -75,7 +75,8 @@ describe('employee company text', () => {
       employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create },
     };
     const service = new EmployeeArchivesService(prisma as any);
-    const result = await service.submitDraft('employee-1', { baseVersion: (service as any).archiveVersion(user()), employee: { companyText }, profile: {} }, operator);
+    const { request: result } = await service.submitDraft('employee-1', { baseVersion: (service as any).archiveVersion(user()), employee: { companyText }, profile: {} }, operator);
+    if (!result) throw new Error('expected review request');
     expect(result.profileReviewStatus).toBe('pending');
     expect(result.performanceReviewStatus).toBe('not_required');
     expect(result.baseValue).toMatchObject({ employee: { company: 'fuede', companyText: '花名册公司原文' } });
