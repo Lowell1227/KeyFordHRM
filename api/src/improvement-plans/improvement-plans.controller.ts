@@ -30,41 +30,41 @@ export class ImprovementPlansController {
   }
 
   @Get(':id')
-  findOne(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() viewer: AuthUser) {
+  findOne(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() viewer: AuthUser) {
     return this.service.findOne(id, viewer);
   }
 
   @Patch(':id')
-  update(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  update(@Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateImprovementPlanDto, @CurrentUser() viewer: AuthUser) {
     return this.service.updateDraft(id, dto, viewer);
   }
 
   @Post(':id/submit-goals') @HttpCode(200)
-  submitGoals(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() viewer: AuthUser) {
+  submitGoals(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() viewer: AuthUser) {
     return this.service.submitGoals(id, viewer);
   }
 
   @Post(':id/decide-goals') @HttpCode(200)
-  decideGoals(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  decideGoals(@Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ImprovementGoalDecisionDto, @CurrentUser() viewer: AuthUser) {
     return this.service.decideGoals(id, dto, viewer);
   }
 
   @Post(':id/evaluate') @HttpCode(200)
-  evaluate(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  evaluate(@Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ImprovementEvaluationDto, @CurrentUser() viewer: AuthUser) {
     return this.service.evaluate(id, dto, viewer);
   }
 
   @Post(':id/save-evaluation') @HttpCode(200)
-  saveEvaluation(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  saveEvaluation(@Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ImprovementEvaluationDraftDto, @CurrentUser() viewer: AuthUser) {
     return this.service.saveEvaluation(id, dto, viewer);
   }
 
   @Post(':id/decide-final') @HttpCode(200)
-  decideFinal(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  decideFinal(@Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ImprovementDecisionDto, @CurrentUser() viewer: AuthUser) {
     return this.service.decideFinal(id, dto, viewer);
   }

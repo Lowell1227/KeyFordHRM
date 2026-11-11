@@ -79,7 +79,7 @@ export class ConfirmationController {
   @Post(':id/meeting-attachments')
   @UseInterceptors(UploadFileInterceptor('file', { fileSize: 20 * 1024 * 1024 }))
   addMeetingAttachment(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -88,8 +88,8 @@ export class ConfirmationController {
 
   @Get(':id/meeting-attachments/:attachmentId/download')
   async downloadMeetingAttachment(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
-    @Param('attachmentId', new ParseUUIDPipe({ version: '4' })) attachmentId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('attachmentId', new ParseUUIDPipe()) attachmentId: string,
     @Res() res: Response,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -99,7 +99,7 @@ export class ConfirmationController {
 
   @Put(':id/meeting-date')
   backfillMeetingDate(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: BackfillMeetingDateDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -107,13 +107,13 @@ export class ConfirmationController {
   }
 
   @Get(':id')
-  findOne(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() viewer: AuthUser) {
+  findOne(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() viewer: AuthUser) {
     return this.confirmationService.findOne(id, viewer);
   }
 
   @Put(':id')
   update(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SaveSelfConfirmationDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -121,13 +121,13 @@ export class ConfirmationController {
   }
 
   @Post(':id/submit')
-  submit(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() viewer: AuthUser) {
+  submit(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() viewer: AuthUser) {
     return this.confirmationService.submit(id, viewer);
   }
 
   @Post(':id/return')
   returnForSupplement(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ReturnConfirmationDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -136,7 +136,7 @@ export class ConfirmationController {
 
   @Post(':id/approve')
   approve(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ApproveConfirmationDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -145,7 +145,7 @@ export class ConfirmationController {
 
   @Post(':id/reject')
   reject(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: RejectConfirmationDto,
     @CurrentUser() viewer: AuthUser,
   ) {

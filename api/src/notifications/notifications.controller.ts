@@ -19,7 +19,7 @@ export class NotificationsController {
   }
 
   @Patch(':id/read')
-  markAsRead(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() viewer: AuthUser) {
+  markAsRead(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() viewer: AuthUser) {
     return this.notificationsService.markAsRead(id, viewer.id);
   }
 

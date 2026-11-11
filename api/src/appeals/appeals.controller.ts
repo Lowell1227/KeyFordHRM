@@ -47,14 +47,14 @@ export class AppealsController {
 
   /** GET /appeals/:id — 详情。 */
   @Get(':id')
-  findOne(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() viewer: AuthUser) {
+  findOne(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() viewer: AuthUser) {
     return this.appealsService.findOne(id, viewer);
   }
 
   /** PUT /appeals/:id — 补充或修订台账，不影响绩效任务。 */
   @Put(':id')
   update(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateAppealDto,
     @CurrentUser() viewer: AuthUser,
   ) {

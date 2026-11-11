@@ -25,7 +25,7 @@ export class PublishController {
 
   @Get("publication-records")
   records(
-    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Param("id", new ParseUUIDPipe()) id: string,
     @Query() dto: PublicationRecordsQueryDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -34,8 +34,8 @@ export class PublishController {
 
   @Get("publication-records/:taskId")
   recordDetail(
-    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
-    @Param("taskId", new ParseUUIDPipe({ version: "4" })) taskId: string,
+    @Param("id", new ParseUUIDPipe()) id: string,
+    @Param("taskId", new ParseUUIDPipe()) taskId: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.publishService.getPublicationRecordDetail(id, taskId, viewer);
@@ -45,7 +45,7 @@ export class PublishController {
   @Post("publish")
   @HttpCode(200)
   publish(
-    @Param("id", new ParseUUIDPipe({ version: "4" })) id: string,
+    @Param("id", new ParseUUIDPipe()) id: string,
     @Body() dto: PublishCycleDto,
     @CurrentUser() viewer: AuthUser,
   ) {

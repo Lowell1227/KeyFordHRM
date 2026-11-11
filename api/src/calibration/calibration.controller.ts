@@ -19,7 +19,7 @@ export class CalibrationController {
   /** GET /cycles/:id/calibration — 校准工作台。 */
   @Get('calibration')
   getWorkbench(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Query() query: CalibrationQueryDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -29,7 +29,7 @@ export class CalibrationController {
   /** GET /cycles/:id/grade-distribution — 等级分布（供轮询/刷新）。 */
   @Get('grade-distribution')
   getGradeDistribution(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.calibrationService.getGradeDistribution(id, viewer);
@@ -38,8 +38,8 @@ export class CalibrationController {
   /** GET /cycles/:id/calibration/tasks/:taskId — 个人详情（校准依据）。 */
   @Get('calibration/tasks/:taskId')
   getCandidateDetail(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
-    @Param('taskId', new ParseUUIDPipe({ version: '4' })) taskId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('taskId', new ParseUUIDPipe()) taskId: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.calibrationService.getCandidateDetail(id, taskId, viewer);
@@ -49,7 +49,7 @@ export class CalibrationController {
   @Post('calibration/confirm')
   @HttpCode(200)
   confirm(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ConfirmCalibrationDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -60,7 +60,7 @@ export class CalibrationController {
   @Post('calibration/reject')
   @HttpCode(200)
   reject(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: RejectCalibrationDto,
     @CurrentUser() viewer: AuthUser,
   ) {

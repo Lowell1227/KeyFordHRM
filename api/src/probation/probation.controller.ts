@@ -47,14 +47,14 @@ export class ProbationController {
   }
 
   @Get(':id')
-  findOne(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() viewer: AuthUser) {
+  findOne(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() viewer: AuthUser) {
     return this.probationService.findOne(id, viewer);
   }
 
   @Put(':id')
   @Roles(SysRole.hr, SysRole.system_admin)
   update(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateProbationReviewDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -63,7 +63,7 @@ export class ProbationController {
 
   @Post(':id/self-eval')
   submitSelfEval(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SubmitSelfEvalDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -72,7 +72,7 @@ export class ProbationController {
 
   @Post(':id/manager-score')
   submitManagerScore(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SubmitManagerScoreDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -81,7 +81,7 @@ export class ProbationController {
 
   @Post(':id/close')
   @Roles(SysRole.hr, SysRole.system_admin)
-  close(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() viewer: AuthUser) {
+  close(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() viewer: AuthUser) {
     return this.retired();
   }
 

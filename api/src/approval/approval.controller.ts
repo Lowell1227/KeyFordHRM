@@ -14,7 +14,7 @@ export class ApprovalController {
   /** GET /cycles/:id/approval — 审批人待审批列表。 */
   @Get('approval')
   getApprovalList(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() viewer: AuthUser,
     @Query() query: ApprovalQueryDto,
   ) {
@@ -24,7 +24,7 @@ export class ApprovalController {
   /** GET /cycles/:id/approval/overview — 审批概览（全校准分布只读 + 退回记录）。 */
   @Get('approval/overview')
   getOverview(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.approvalService.getOverview(id, viewer);
@@ -34,7 +34,7 @@ export class ApprovalController {
   @Post('approval')
   @HttpCode(200)
   approveTasks(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: BulkApprovalDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -51,7 +51,7 @@ export class ApprovalTaskController {
   @Post('approval/reject')
   @HttpCode(200)
   rejectTask(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ApprovalRejectDto,
     @CurrentUser() viewer: AuthUser,
   ) {

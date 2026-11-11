@@ -101,7 +101,7 @@ export class ObjectivesController {
 
   @Get(':id')
   findOne(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.objectivesService.findOne(id, viewer);
@@ -117,7 +117,7 @@ export class ObjectivesController {
   /** PATCH /objectives/:id — 更新。 */
   @Patch(':id')
   update(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateObjectiveDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -128,7 +128,7 @@ export class ObjectivesController {
   @Patch(':id/progress')
   @HttpCode(200)
   updateProgress(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateProgressDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -138,7 +138,7 @@ export class ObjectivesController {
   @Post(':id/review/approve')
   @HttpCode(200)
   approveObjective(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ApproveObjectiveDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -154,7 +154,7 @@ export class ObjectivesController {
   @Post(':id/review/request-changes')
   @HttpCode(200)
   requestObjectiveChanges(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: RequestObjectiveChangesDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -170,7 +170,7 @@ export class ObjectivesController {
   /** DELETE /objectives/:id — 删除。 */
   @Delete(':id')
   remove(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.objectivesService.remove(id, viewer);

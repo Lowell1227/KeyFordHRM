@@ -34,7 +34,7 @@ export class UsersController {
   /** GET /users/:id/subordinates — 某人的直接下属（本人 / HR / system_admin / canViewAll） */
   @Get(':id/subordinates')
   findSubordinates(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.usersService.findSubordinates(id, viewer);
@@ -43,7 +43,7 @@ export class UsersController {
   /** GET /users/:id — 查询用户详情（本人 / 直接主管 / HR / system_admin） */
   @Get(':id')
   findOne(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.usersService.findOne(id, viewer);
@@ -53,7 +53,7 @@ export class UsersController {
   @Patch(':id/manager')
   @Roles(SysRole.system_admin, SysRole.hr)
   updateManager(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateManagerDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -64,7 +64,7 @@ export class UsersController {
   @Patch(':id/settings')
   @Roles(SysRole.system_admin, SysRole.hr)
   updateSettings(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateUserSettingsDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -75,7 +75,7 @@ export class UsersController {
   @Patch(':id/role')
   @Roles(SysRole.system_admin)
   updateRole(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateRoleDto,
   ) {
     return this.usersService.updateRole(id, dto);
@@ -85,7 +85,7 @@ export class UsersController {
   @Patch(':id/password')
   @Roles(SysRole.system_admin, SysRole.hr)
   setPassword(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SetPasswordDto,
     @CurrentUser() operator: AuthUser,
   ) {

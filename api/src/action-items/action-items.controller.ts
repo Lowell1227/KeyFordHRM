@@ -35,7 +35,7 @@ export class ActionItemsController {
   /** GET /action-items/tree?objectiveId= — 目标下行动项树。 */
   @Get('tree')
   findTree(
-    @Query('objectiveId', new ParseUUIDPipe({ version: '4' })) objectiveId: string,
+    @Query('objectiveId', new ParseUUIDPipe()) objectiveId: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.service.findTree(objectiveId, viewer);
@@ -44,7 +44,7 @@ export class ActionItemsController {
   /** GET /action-items/:id — 详情。 */
   @Get(':id')
   findOne(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.service.findOne(id, viewer);
@@ -59,7 +59,7 @@ export class ActionItemsController {
   /** PATCH /action-items/:id — 更新。 */
   @Patch(':id')
   update(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateActionItemDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -70,7 +70,7 @@ export class ActionItemsController {
   @Patch(':id/progress')
   @HttpCode(200)
   updateProgress(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateProgressDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -80,7 +80,7 @@ export class ActionItemsController {
   /** DELETE /action-items/:id — 删除。 */
   @Delete(':id')
   remove(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.service.remove(id, viewer);

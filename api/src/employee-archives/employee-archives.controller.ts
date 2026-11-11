@@ -88,7 +88,7 @@ export class EmployeeArchivesController {
   @Post(':userId/reentry')
   @HrCapabilities('employee_archive_edit')
   createReentry(
-    @Param('userId', new ParseUUIDPipe({ version: '4' })) userId: string,
+    @Param('userId', new ParseUUIDPipe()) userId: string,
     @Body() input: CreateEmployeeReentryDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -97,14 +97,14 @@ export class EmployeeArchivesController {
 
   @Get(':userId/reentry/current')
   @HrCapabilities('employee_archive_edit')
-  getCurrentReentry(@Param('userId', new ParseUUIDPipe({ version: '4' })) userId: string) {
+  getCurrentReentry(@Param('userId', new ParseUUIDPipe()) userId: string) {
     return this.onboarding.getCurrentReentry(userId);
   }
 
   @Patch('reentry/:requestId')
   @HrCapabilities('employee_archive_edit')
   reviseReentry(
-    @Param('requestId', new ParseUUIDPipe({ version: '4' })) requestId: string,
+    @Param('requestId', new ParseUUIDPipe()) requestId: string,
     @Body() input: ReviseEmployeeReentryDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -114,7 +114,7 @@ export class EmployeeArchivesController {
   @Post('reentry/:requestId/cancel')
   @HrCapabilities('employee_archive_edit')
   cancelReentry(
-    @Param('requestId', new ParseUUIDPipe({ version: '4' })) requestId: string,
+    @Param('requestId', new ParseUUIDPipe()) requestId: string,
     @Body() input: CancelEmployeeReentryDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -148,7 +148,7 @@ export class EmployeeArchivesController {
   @Patch('reviews/:requestId/performance-manager')
   @HrCapabilities('employee_archive_review')
   setPendingPerformanceManager(
-    @Param('requestId', new ParseUUIDPipe({ version: '4' })) requestId: string,
+    @Param('requestId', new ParseUUIDPipe()) requestId: string,
     @Body() dto: SetPendingPerformanceManagerDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -158,7 +158,7 @@ export class EmployeeArchivesController {
   @Post(':id/performance-manager-review')
   @HrCapabilities('employee_archive_edit')
   proposePerformanceManager(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ProposePerformanceManagerDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -208,13 +208,13 @@ export class EmployeeArchivesController {
 
   @Get('applications/:id')
   @HrCapabilities('employee_archive_edit', 'employee_archive_review')
-  getApplication(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() operator: AuthUser) {
+  getApplication(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() operator: AuthUser) {
     return this.archives.getApplication(id, operator);
   }
 
   @Post('applications/:id/cancel')
   @HrCapabilities('employee_archive_edit')
-  cancelApplication(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+  cancelApplication(@Param('id', new ParseUUIDPipe()) id: string,
     @Body() input: CancelEmployeeReentryDto, @CurrentUser() operator: AuthUser) {
     return this.archives.cancelApplication(id, input.reason, operator);
   }
@@ -251,7 +251,7 @@ export class EmployeeArchivesController {
 
   @Get(':id')
   @HrCapabilities('employee_archive_edit', 'employee_archive_review')
-  async findOne(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string) {
+  async findOne(@Param('id', new ParseUUIDPipe()) id: string) {
     const archive = await this.archives.findOne(id);
     return { ...archive, ...await this.archives.history(id) };
   }
@@ -259,7 +259,7 @@ export class EmployeeArchivesController {
   @Patch(':id/profile')
   @HrCapabilities('employee_archive_edit')
   updateProfile(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateEmployeeProfileDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -269,7 +269,7 @@ export class EmployeeArchivesController {
   @Patch(':id/draft')
   @HrCapabilities('employee_archive_edit')
   submitDraft(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SubmitEmployeeArchiveDraftDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -279,7 +279,7 @@ export class EmployeeArchivesController {
   @Patch(':id/draft/save')
   @HrCapabilities('employee_archive_edit')
   saveArchiveDraft(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SubmitEmployeeArchiveDraftDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -298,7 +298,7 @@ export class EmployeeArchivesController {
   @Post(':id/employments')
   @HrCapabilities('employee_archive_edit')
   createEmployment(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: CreateEmploymentRecordDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -307,7 +307,7 @@ export class EmployeeArchivesController {
 
   @Post(':id/dingtalk-binding')
   bindDingtalk(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: BindDingtalkIdentityDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -316,7 +316,7 @@ export class EmployeeArchivesController {
 
   @Patch(':id/dingtalk-binding')
   setDingtalkState(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SetDingtalkIdentityStateDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -340,7 +340,7 @@ export class EmployeeArchivesController {
   @UseGuards(EmployeeRosterImportClosedGuard)
   @UseInterceptors(UploadFileInterceptor())
   confirmImport(
-    @Param('batchId', new ParseUUIDPipe({ version: '4' })) batchId: string,
+    @Param('batchId', new ParseUUIDPipe()) batchId: string,
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -350,7 +350,7 @@ export class EmployeeArchivesController {
   @Get('imports/:batchId')
   @HrCapabilities('employee_archive_edit')
   @UseGuards(EmployeeRosterImportClosedGuard)
-  getImportBatch(@Param('batchId', new ParseUUIDPipe({ version: '4' })) batchId: string) {
+  getImportBatch(@Param('batchId', new ParseUUIDPipe()) batchId: string) {
     return this.imports.findBatch(batchId);
   }
 }

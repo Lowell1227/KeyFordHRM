@@ -41,7 +41,7 @@ export class PeriodReviewsController {
   @Roles(SysRole.hr, SysRole.system_admin)
   @HrCapabilities('cycle_plan_edit', 'cycle_plan_review')
   findCycleMonitoring(
-    @Param('cycleId', new ParseUUIDPipe({ version: '4' })) cycleId: string,
+    @Param('cycleId', new ParseUUIDPipe()) cycleId: string,
     @Query() query: QueryPeriodMonitoringDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -50,7 +50,7 @@ export class PeriodReviewsController {
 
   @Get(':id/review')
   getReview(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.service.getReview(id, viewer);
@@ -58,7 +58,7 @@ export class PeriodReviewsController {
 
   @Put(':id/employee-draft')
   saveEmployeeDraft(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SaveEmployeePeriodReviewDraftDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -68,7 +68,7 @@ export class PeriodReviewsController {
   @Post(':id/employee-attachments')
   @UseInterceptors(UploadFileInterceptor('file', { fileSize: 20 * 1024 * 1024 }))
   uploadEmployeeAttachment(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @UploadedFile() file: Express.Multer.File,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -77,8 +77,8 @@ export class PeriodReviewsController {
 
   @Delete(':id/employee-attachments/:attachmentId')
   deleteEmployeeAttachment(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
-    @Param('attachmentId', new ParseUUIDPipe({ version: '4' })) attachmentId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('attachmentId', new ParseUUIDPipe()) attachmentId: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.service.deleteEmployeeAttachment(id, attachmentId, viewer);
@@ -86,8 +86,8 @@ export class PeriodReviewsController {
 
   @Get(':id/attachments/:attachmentId')
   downloadEmployeeAttachment(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
-    @Param('attachmentId', new ParseUUIDPipe({ version: '4' })) attachmentId: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
+    @Param('attachmentId', new ParseUUIDPipe()) attachmentId: string,
     @CurrentUser() viewer: AuthUser,
     @Res() response: Response,
   ) {
@@ -97,7 +97,7 @@ export class PeriodReviewsController {
   @Post(':id/employee-submit')
   @HttpCode(200)
   submitEmployeeReview(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SubmitEmployeePeriodReviewDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -106,7 +106,7 @@ export class PeriodReviewsController {
 
   @Put(':id/manager-draft')
   saveManagerDraft(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SaveManagerPeriodReviewDraftDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -116,7 +116,7 @@ export class PeriodReviewsController {
   @Post(':id/manager-return')
   @HttpCode(200)
   returnManagerReview(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ReturnManagerPeriodReviewDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -126,7 +126,7 @@ export class PeriodReviewsController {
   @Post(':id/manager-submit')
   @HttpCode(200)
   submitManagerReview(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SubmitManagerPeriodReviewDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -138,7 +138,7 @@ export class PeriodReviewsController {
   @Roles(SysRole.hr, SysRole.system_admin)
   @HrCapabilities('cycle_plan_edit')
   reopenPeriodReview(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ReopenPeriodReviewDto,
     @CurrentUser() viewer: AuthUser,
   ) {

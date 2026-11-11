@@ -33,7 +33,7 @@ export class PositionsController {
   @Post('change-requests/:requestId/approve')
   @HrCapabilities('employee_archive_review')
   approve(
-    @Param('requestId', new ParseUUIDPipe({ version: '4' })) requestId: string,
+    @Param('requestId', new ParseUUIDPipe()) requestId: string,
     @CurrentUser() operator: AuthUser,
   ) {
     return this.positions.approve(requestId, operator);
@@ -42,7 +42,7 @@ export class PositionsController {
   @Post('change-requests/:requestId/reject')
   @HrCapabilities('employee_archive_review')
   reject(
-    @Param('requestId', new ParseUUIDPipe({ version: '4' })) requestId: string,
+    @Param('requestId', new ParseUUIDPipe()) requestId: string,
     @Body() dto: RejectPositionChangeDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -58,7 +58,7 @@ export class PositionsController {
   @Patch(':id')
   @HrCapabilities('organization_edit')
   update(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdatePositionDto,
     @CurrentUser() operator: AuthUser,
   ) {
@@ -68,7 +68,7 @@ export class PositionsController {
   @Delete(':id')
   @HrCapabilities('organization_edit')
   deactivate(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() operator: AuthUser,
   ) {
     return this.positions.deactivate(id, operator);

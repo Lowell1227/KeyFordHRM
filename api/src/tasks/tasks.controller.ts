@@ -103,7 +103,7 @@ export class TasksController {
   @Post(':id/remind')
   @HttpCode(200)
   remindCurrentHandler(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.tasksService.remindCurrentHandler(id, viewer);
@@ -111,7 +111,7 @@ export class TasksController {
 
   @Post(':id/indicators/approve')
   @HttpCode(200)
-  approveIndicators(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @Body() dto: ApproveIndicatorsDto, @CurrentUser() viewer: AuthUser) {
+  approveIndicators(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: ApproveIndicatorsDto, @CurrentUser() viewer: AuthUser) {
     return this.tasksService.approveIndicators(id, dto, viewer);
   }
 
@@ -119,7 +119,7 @@ export class TasksController {
   @Post(':id/indicators/confirm')
   @HttpCode(200)
   confirmIndicators(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() viewer: AuthUser,
     @Body() dto?: ConfirmIndicatorsDto,
   ) {
@@ -130,7 +130,7 @@ export class TasksController {
   @Post(':id/indicators/reject')
   @HttpCode(200)
   rejectIndicators(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: RejectIndicatorsDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -141,7 +141,7 @@ export class TasksController {
   @Post(':id/indicators/withdraw')
   @HttpCode(200)
   withdrawIndicators(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: WithdrawIndicatorsDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -152,7 +152,7 @@ export class TasksController {
   @Post(':id/indicator-proposal')
   @HttpCode(200)
   submitIndicatorProposal(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SubmitIndicatorProposalDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -162,7 +162,7 @@ export class TasksController {
 
   @Put(':id/indicators')
   setIndicators(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SetIndicatorsDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -172,7 +172,7 @@ export class TasksController {
   /** PUT /tasks/:id/actual-value — 更新实际完成值。 */
   @Put(':id/actual-value')
   updateActualValues(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateActualValueDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -183,7 +183,7 @@ export class TasksController {
   @Post(':id/self-eval')
   @HttpCode(200)
   submitSelfEval(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SubmitSelfEvalDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -193,7 +193,7 @@ export class TasksController {
   /** POST /tasks/:id/manager-score — 主管评分。 */
   @Put(':id/manager-evaluation-draft')
   saveManagerEvaluationDraft(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SaveManagerEvaluationDraftDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -203,7 +203,7 @@ export class TasksController {
   @Post(':id/manager-score/withdraw')
   @HttpCode(200)
   withdrawManagerScore(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: WithdrawManagerScoreDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -213,7 +213,7 @@ export class TasksController {
   @Post(':id/manager-score')
   @HttpCode(200)
   submitManagerScore(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SubmitManagerScoreDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -224,7 +224,7 @@ export class TasksController {
   @Post(':id/dept-review')
   @HttpCode(200)
   deptReview(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: DeptReviewDto,
     @CurrentUser() viewer: AuthUser,
   ) {
@@ -235,7 +235,7 @@ export class TasksController {
   @Post(':id/employee-confirm')
   @HttpCode(200)
   employeeConfirm(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.tasksService.employeeConfirm(id, viewer);
@@ -244,7 +244,7 @@ export class TasksController {
   @Post(':id/employee-disagree')
   @HttpCode(200)
   employeeDisagree(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: EmployeeResultObjectionDto,
     @CurrentUser() viewer: AuthUser,
   ) {

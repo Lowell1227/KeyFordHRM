@@ -29,7 +29,7 @@ export class InterviewsController {
   }
 
   @Get(':id')
-  findOne(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @CurrentUser() viewer: AuthUser) {
+  findOne(@Param('id', new ParseUUIDPipe()) id: string, @CurrentUser() viewer: AuthUser) {
     return this.interviewsService.findOne(id, viewer);
   }
 
@@ -39,7 +39,7 @@ export class InterviewsController {
   }
 
   @Put(':id')
-  update(@Param('id', new ParseUUIDPipe({ version: '4' })) id: string, @Body() dto: UpdateInterviewDto, @CurrentUser() viewer: AuthUser) {
+  update(@Param('id', new ParseUUIDPipe()) id: string, @Body() dto: UpdateInterviewDto, @CurrentUser() viewer: AuthUser) {
     return this.interviewsService.update(id, dto, viewer);
   }
 }

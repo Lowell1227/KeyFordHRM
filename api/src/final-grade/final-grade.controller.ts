@@ -12,7 +12,7 @@ export class FinalGradeController {
   /** GET /tasks/:id/final-grade — 评定页数据。 */
   @Get('final-grade')
   getFinalGrade(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @CurrentUser() viewer: AuthUser,
   ) {
     return this.finalGradeService.getFinalGrade(id, viewer);
@@ -22,7 +22,7 @@ export class FinalGradeController {
   @Post('final-grade')
   @HttpCode(200)
   submitFinalGrade(
-    @Param('id', new ParseUUIDPipe({ version: '4' })) id: string,
+    @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: SubmitFinalGradeDto,
     @CurrentUser() viewer: AuthUser,
   ) {
