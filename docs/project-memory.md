@@ -8,6 +8,15 @@
 
 ## 1. 如何使用本文
 
+### 2026-11-12 人才与入离职已发布（业务待验收）
+
+- 用户明确要求“上线让我试试看”，已将人才库基础依赖、面试邀约、HR确认到岗、入离职入口、档案单提交/自动草稿及固定审核规则纳入功能提交 `a72870bcbef0649cab2525de1a2abba3edc74b49`，提交并推送 `origin/main`；产品仍0.8。下方较早“未提交、未上线”描述保留为历史快照，不能当作当前发布状态。
+- 从干净提交副本 `C:/Users/lwei/kayford-releases/a72870bc-personnel-lifecycle` 构建并只替换 `kayford-deploy` API/Web；原PG/Redis/MinIO保持不动。生产63个迁移完成、0失败，本机/外网健康JSON正常，新入口和人员/人才页面资源哈希与生产容器一致。
+- 发布前备份 `C:/Users/lwei/kayford-backups/personnel-lifecycle-20261112-1740/database.dump` 已成功隔离恢复并演练三个迁移；临时隔离容器已移除。保留旧API/Web镜像 `rollback-personnel-lifecycle-20261112` 及旧发布副本。**新到岗流程产生后不能直接回退不识别确认门槛的旧API，不能整库恢复覆盖后续业务数据。**
+- 新鲜API回归150套/2102项、Web专项27项、API/Web构建均通过。上线后使用已有非员工管理员只读检查五类新接口200、匿名401；外网真实后端Playwright人才/面试页1440和390宽度正常，没有API错误、脚本错误或横向溢出。未重置账号、写入演示数据、修改真实档案或发出真实邀请；不等于钉钉扫码或HR/员工业务验收。
+- `ENABLE_TEST_QUICK_LOGIN=false`、`DINGTALK_INTERVIEW_CALENDAR_ENABLED=false`。受邀信息在站内可试用，腾讯会议由发起人手工创建后粘贴；钉钉日程投递仍需单独配置及真实验收。完整证据和试用路径见 `docs/acceptance/2026-11-12-personnel-lifecycle.md`。
+- 工作区仍有之前的演示种子脚本、旧验收文件及构建声明等未提交内容，已刻意排除。不得把本次功能已发布解读为工作区完全干净或授权清理剩余文件。
+
 ### 2026-11-12 已确认开发范围：人才、面试与入离职
 
 - 用户在完整复述后明确授权开发，设计依据为 `docs/superpowers/specs/2026-11-12-talent-personnel-lifecycle-design.md`，实施计划为 `docs/superpowers/plans/2026-11-12-talent-personnel-lifecycle.md`。本条为需求记忆，不代表已实现、提交、上线或验收；生产发布仍需单独授权。

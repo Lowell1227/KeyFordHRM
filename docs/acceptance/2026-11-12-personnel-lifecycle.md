@@ -1,6 +1,34 @@
 # 人才、面试邀约与入离职技术验收
 
-日期：2026-11-12。此文件记录开发与隔离测试，不是生产发布或业务验收凭证。
+日期：2026-11-12。此文件分别记录开发验证与生产发布；技术检查不代替业务验收。
+
+## 生产发布快照（17:42，北京时间）
+
+- 用户明确授权“上线让我试试看”。功能提交 `a72870bcbef0649cab2525de1a2abba3edc74b49` 已提交并推送 `origin/main`，远端实时查询哈希一致。产品版本仍为 0.8，包版本 0.8.0。
+- 从该提交 `git archive` 创建干净发布副本 `C:/Users/lwei/kayford-releases/a72870bc-personnel-lifecycle`。沿用前一生产副本配置，仅增加固定镜像标签及安全开关覆盖，未混入工作区的演示种子、临时脚本、旧验收产物和生成声明。
+- 构建 API/Web 均通过；发布前重新运行 API 全量 150 套/2102 项、Web 专项 27 项及 Web 生产构建，全部通过。
+- 新备份 `C:/Users/lwei/kayford-backups/personnel-lifecycle-20261112-1740/database.dump`，创建时间 17:35:47，2203462 字节，SHA256 `70797e88cd174ebde76296a528219b27255a0ef979d7bbb33767756389605c90`。备份已在独立、无对外端口的 PostgreSQL 14 容器成功恢复，并用候选 API 镜像完成三个迁移演练；无应用启动或外发。隔离容器及网络已移除。
+- 生产新增 `20261108120000_talent_pool`、`20261112120000_personnel_arrival_confirmation`、`20261112130000_talent_interviews`，完成迁移数从 60 到 63，失败数 0，`prisma migrate status` 为 up to date。发布前没有未完成的历史入职/再入职申请；发布后新到岗标记数仍为 0，没有补造到岗历史。
+- 仅替换 `kayford-deploy` API/Web。API 镜像 `sha256:77138a2e49c4a70ef4ffbcb64cfc68445f19641043e32aaa0fd82c1cb816f65e`，Web 镜像 `sha256:cb546cec47b80f02bcb30af1821e4bbff1b12e9b32954b67fefc98a7be8e3a5f`；两者 revision 均为功能提交。PostgreSQL `3c08c9a07428`、Redis `bf6543b0e16d`、MinIO `e105e90f5286` 容器未替换。
+- 本机与外网 `/api/v1/health` 均为 JSON `code=0/status=ok/db=ok`。外网入口 `index-0sLknR87.js`、人才页 `TalentListView-CqR0AHsa.js`、人员页 `UserManageView-BOX1o7hm.js` 的 SHA256 与线上容器一致。
+- 使用已有非员工管理员的内存短期会话，只读核验人才列表、我发起/参与的面试、入离职申请、待审核接口均 HTTP 200；匿名人才请求 HTTP 401。没有重置密码或修改账号、角色及业务记录。
+- 线上 Playwright：未登录正确跳登录页；已认证人才库/面试邀约在 1440px 和 390px 均正常，API失败数和页面脚本错误数为 0，无页面横向溢出。会话只在进程内存，不保存登录状态、真实员工截图或响应正文。此项不等于钉钉扫码、HR/员工的业务验收。检查脚本首次因旧按钮文案定位失败，按已部署源码文案校正后完整复跑通过，没有改动应用代码。
+- 生产 `ENABLE_TEST_QUICK_LOGIN=false`、`DINGTALK_INTERVIEW_CALENDAR_ENABLED=false`。站内面试记录可试用；腾讯会议仍手工粘贴邀请，真实钉钉日程投递未开通/未验收。
+
+### 回退限制
+
+- 已保留原 API/Web 镜像标签 `kayford-deploy-api:rollback-personnel-lifecycle-20261112` 和 `kayford-deploy-web:rollback-personnel-lifecycle-20261112`，原发布副本 `a6c28e9-personnel-review` 保留。
+- **不能在产生新到岗确认流程后直接回退旧 API**：旧版不认识 `requiresArrivalConfirmation`，可能按日期自动生效。回退前须重新核对新申请/到岗数据；存在新流程时采用保留到岗门槛的兼容修复或前向修复。不能仅凭“迁移为增量”判定行为可回退。
+- 不将整库备份恢复覆盖上线后发生的真实业务数据。Web可独立回退，但仍要核对新旧接口兼容性。
+
+### 业务验收入口
+
+- 人才库 `/talents`：录入人才、邀约面试、多选参与人、粘贴腾讯会议邀请、查看删除影响。
+- 面试邀约 `/talent-interviews`：HR查看“我发起的”，参与人查看“我参与的”；未受邀人员不获得记录或简历权限。
+- 入离职 `/entry-exit`：入职审核后停留待确认到岗，HR显式确认才生效；离职按批准最后工作日结束停用HRM访问。
+- 员工档案：检查单一“提交”、自动暂存与固定审核规则。正式人事数据须由用户明确选择后办理，本次发布没有写入演示人才或员工。
+
+以下为发布之前保留的开发阶段证据，时间状态以本节发布快照为准。
 
 ## 范围与状态
 
