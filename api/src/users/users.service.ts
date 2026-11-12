@@ -8,7 +8,8 @@ import { DataScopeService } from '@/common/services/data-scope.service';
 import { PaginationDto, paginated, Paginated } from '@/common/dto/pagination.dto';
 import { AuthUser } from '@/common/types/auth.types';
 import { ERROR_CODE } from '@/common/constants/error-codes';
-import { buildRosterWorkbook } from './users.excel';
+import { buildRosterWorkbook, parseRosterExportColumns } from './users.excel';
+import { companyTenure } from '@/common/personnel/company-tenure';
 import { UserQueryDto } from './dto/user-query.dto';
 import { UpdateManagerDto } from './dto/update-manager.dto';
 import { UpdateRoleDto } from './dto/update-role.dto';
@@ -65,6 +66,7 @@ export interface UserListItem {
   isAssessorOnly: boolean;
   canViewAll: boolean;
   entryDate: Date | null;
+  companyTenure: string;
   dingtalkBindingState: 'unbound' | 'enabled' | 'disabled';
   archivedAt: Date | null;
   matchedHistoricalEmployeeNo: string | null;
@@ -210,6 +212,10 @@ export class UsersService {
         skip: dto.skip,
         take: dto.take,
         include: {
+          employmentHistory: {
+            where: approvedEmploymentSourceWhere,
+            select: { id: true, effectiveFrom: true, effectiveTo: true, entryDate: true, leaveDate: true, employeeStatus: true },
+          },
           dept: { select: { name: true } },
           directManager: { select: { name: true } },
           externalIdentityBindings: {
@@ -269,6 +275,7 @@ export class UsersService {
       isAssessorOnly: u.isAssessorOnly,
       canViewAll: u.canViewAll,
       entryDate: u.entryDate,
+      companyTenure: companyTenure(u),
       dingtalkBindingState: u.externalIdentityBindings[0]?.status ?? 'unbound',
       archivedAt: u.archivedAt,
       ...(canViewArchive ? { archiveWarnings: archiveWarnings.get(u.id) ?? [], archiveIssueCount: archiveWarnings.get(u.id)?.length ?? 0 } : {}),
@@ -290,6 +297,7 @@ export class UsersService {
 
   /** GET /users/export — 按当前筛选导出花名册（Excel，字段与列表一致）。 */
   async exportRoster(dto: UserQueryDto, viewer: AuthUser): Promise<StreamableFile> {
+    const columns = parseRosterExportColumns(dto.columns);
     const { where, scopeFilter } = await this.buildUserListWhere(dto, viewer);
     const total = await this.prisma.user.count({ where });
     if (total > ROSTER_EXPORT_MAX) {
@@ -299,6 +307,10 @@ export class UsersService {
         where,
         take: ROSTER_EXPORT_MAX,
         include: {
+          employmentHistory: {
+            where: approvedEmploymentSourceWhere,
+            select: { id: true, effectiveFrom: true, effectiveTo: true, entryDate: true, leaveDate: true, employeeStatus: true },
+          },
           dept: { select: { name: true } },
           directManager: { select: { name: true } },
           externalIdentityBindings: {
@@ -339,6 +351,7 @@ export class UsersService {
       isAssessorOnly: u.isAssessorOnly,
       canViewAll: u.canViewAll,
       entryDate: u.entryDate,
+      companyTenure: companyTenure(u),
       dingtalkBindingState: u.externalIdentityBindings[0]?.status ?? 'unbound',
       archivedAt: u.archivedAt,
       matchedHistoricalEmployeeNo: null,
@@ -347,13 +360,15 @@ export class UsersService {
       userId: viewer.id,
       action: 'export_employee_roster',
       entityType: 'employee_roster_export',
-      newValue: { total, filters: {
+      newValue: { total, columns, filters: {
         keyword: dto.keyword ?? null, deptId: dto.deptId ?? null, status: dto.status ?? null,
         sysRole: dto.sysRole ?? null, archived: dto.archived ?? false,
         includeResigned: dto.includeResigned ?? false,
+        employmentType: dto.employmentType ?? null, unassigned: dto.unassigned ?? false,
+        includeTestAccounts: dto.includeTestAccounts ?? false, eligibleFor: dto.eligibleFor ?? null,
       } },
     } });
-    const workbook = await buildRosterWorkbook(items);
+    const workbook = await buildRosterWorkbook(items, columns);
     const buffer = await workbook.xlsx.writeBuffer();
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
     const filename = encodeURIComponent(`花名册-${date}.xlsx`);

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { isAxiosError } from 'axios';
-import { Delete, Plus } from '@element-plus/icons-vue';
+import { Delete, Plus, QuestionFilled } from '@element-plus/icons-vue';
 import { ElMessage, type UploadRequestOptions } from 'element-plus';
 import type { Department } from '@/types/api.types';
 import { employeeArchivesApi, type EmployeeArchive, type EmployeeDataReview } from '@/api/employee-archives.api';
@@ -11,6 +11,7 @@ import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSele
 import { uploadApi } from '@/api/upload.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import { archiveFieldPath } from '@/utils/employee-archive-fields';
+import { contractTitle } from '@/utils/employee-contract-presentation';
 
 const props = defineProps<{
   editing: boolean;
@@ -38,6 +39,8 @@ const emit = defineEmits<{
   state: [value: 'idle' | 'saving' | 'saved' | 'error'];
 }>();
 const positions = ref<PositionRecord[]>([]);
+const fallbackEmployment = computed(() => props.archive && !props.archive.currentEmployment
+  ? props.archive.employmentHistory[0] : null);
 const editorElement = ref<HTMLElement>();
 const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
 const saveError = ref('');
@@ -86,7 +89,7 @@ function reset() {
   replaceRecord(form.employee, {
     name: archive.name,
     employeeNo: archive.employeeNo,
-    phone: archive.employeeProfile?.phone ?? null,
+    phone: archive.employeeProfile?.phone ?? archive.phone ?? null,
     company: employment?.company ?? archive.dept?.company ?? 'fuede',
     companyText: employment?.companyText ?? null,
     contractSubjectId: employment?.contractSubjectId ?? undefined,
@@ -108,7 +111,7 @@ function reset() {
   replaceRecord(form.performance, { managerId: archive.performanceManager?.id ?? null });
   const profile = archive.employeeProfile;
   replaceRecord(form.profile, {
-    phone: profile?.phone ?? null,
+    phone: profile?.phone ?? archive.phone ?? null,
     gender: profile?.gender ?? null,
     birthDate: dateValue(profile?.birthDate),
     ethnicity: profile?.ethnicity ?? null,
@@ -270,10 +273,11 @@ function changePayload(): ArchiveChangePayload {
     draftId,
     expectedVersion: draftId ? draftVersion : undefined,
     baseVersion: props.archive?.archiveVersion,
-    employee: { ...form.employee, phone: form.profile.phone || null },
-    profile: { ...form.profile },
+    employee: { ...form.employee, phone: form.profile.phone || null,
+      positionId: form.employee.positionId ?? null, managerId: form.employee.managerId ?? null },
+    profile: { ...form.profile, phone: form.profile.phone || null, gender: form.profile.gender ?? null },
     contracts: form.contracts.map(({ __key, ...item }, index) => ({ ...item, sequence: index })),
-    performance: { ...form.performance },
+    performance: { ...form.performance, managerId: form.performance.managerId ?? null },
   };
 }
 
@@ -370,19 +374,18 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField,
 
 <template>
   <div v-if="editing" ref="editorElement" class="archive-inline-editor" :inert="busy" :aria-busy="busy">
-    <div class="archive-save-state" role="status" aria-live="polite">{{ saveState === 'saving' ? '正在保存草稿…' : saveState === 'saved' ? '草稿已保存，尚未提交审核' : saveState === 'error' ? '草稿尚未保存' : '修改后自动保存草稿' }}</div>
+    <div class="archive-save-state" role="status" aria-live="polite">{{ saveState === 'saving' ? '正在保存草稿…' : saveState === 'saved' ? '草稿已保存，尚未提交' : saveState === 'error' ? '草稿尚未保存' : '修改后自动保存草稿' }}</div>
     <div v-if="saveError" class="archive-save-error" role="alert">{{ saveError }}<el-button v-if="!saveBlocked" link type="primary" @click="saveDraft">重试保存</el-button></div>
     <nav class="archive-editor-nav" aria-label="档案分区"><el-button v-for="section in [{ id: 'employment', label: '基本与任职' }, { id: 'personal', label: '个人与教育' }, { id: 'contact', label: '联系与保障' }, { id: 'contracts', label: '合同记录' }]" :key="section.id" link @click="editorElement?.querySelector(`[data-archive-section='${section.id}']`)?.scrollIntoView({ block: 'start' })">{{ section.label }}</el-button></nav>
-    <el-alert
-      title="个人信息免审字段在提交后生效，其余变更需审核；草稿不生效。"
-      type="info"
-      show-icon
-      :closable="false"
-    />
-
     <section class="editor-section" data-archive-section="employment">
       <div class="editor-section__head">
         <div><h3>基本与任职</h3><span>员工身份、当前组织和绩效关系</span></div>
+      </div>
+      <div v-if="fallbackEmployment" class="employment-baseline-note">
+        <span>当前无有效任职，以下任职资料沿用最近一次记录（生效日期：{{ dateValue(fallbackEmployment.effectiveFrom) || '待完善' }}）</span>
+        <el-tooltip content="该记录可能尚未生效或已经结束，编辑仅沿用其资料作为基准，不表示它是当前有效任职。提交后仍按既有审核规则处理。" placement="top">
+          <el-icon tabindex="0" aria-label="任职资料来源说明"><QuestionFilled /></el-icon>
+        </el-tooltip>
       </div>
       <el-form label-position="top" class="archive-editor-grid">
         <el-form-item label="姓名" data-archive-field="employee.name"><el-input v-model="form.employee.name" /></el-form-item>
@@ -392,7 +395,7 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField,
           <el-select v-model="form.employee.company"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select>
         </el-form-item>
         <el-form-item label="所属部门" data-archive-field="employee.deptId"><el-tree-select v-model="form.employee.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
-        <el-form-item label="岗位" data-archive-field="employee.positionId"><el-select v-model="form.employee.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
+        <el-form-item label="岗位" data-archive-field="employee.positionId"><el-select v-model="form.employee.positionId" filterable clearable @clear="form.employee.position = null"><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
         <el-form-item label="职级" data-archive-field="employee.jobGrade"><el-input v-model="form.employee.jobGrade" /></el-form-item>
           <el-form-item label="职系" data-archive-field="employee.jobFamily"><PersonnelReferenceSelect v-model="form.employee.jobFamily" kind="job_family" label="职系" /></el-form-item>
         <el-form-item label="花名册直属主管" data-archive-field="employee.managerId"><UserSelect v-model="form.employee.managerId" :disabled-ids="archive ? [archive.id] : []" /></el-form-item>
@@ -454,7 +457,7 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField,
         <el-button :icon="Plus" @click="addContract">新增合同</el-button>
       </div>
       <div v-for="(contract, index) in form.contracts" :key="contract.__key" class="contract-card">
-        <div class="contract-card__head"><strong>合同 {{ index + 1 }}</strong><el-button link type="danger" :icon="Delete" @click="form.contracts.splice(index, 1)">移除</el-button></div>
+        <div class="contract-card__head"><strong>{{ contractTitle(contract) }}</strong><el-button link type="danger" :icon="Delete" @click="form.contracts.splice(index, 1)">移除</el-button></div>
         <el-form label-position="top" class="archive-editor-grid">
           <el-form-item label="类型" :data-archive-field="`contracts.${index}.contractType`"><el-select v-model="contract.contractType"><el-option label="劳动合同" value="contract" /><el-option label="续签" value="renewal" /><el-option label="转签" value="transfer" /></el-select></el-form-item>
           <el-form-item label="合同名称" :data-archive-field="`contracts.${index}.name`"><el-input v-model="contract.name" /></el-form-item>
@@ -463,8 +466,8 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField,
           <el-form-item label="生效日期" :data-archive-field="`contracts.${index}.effectiveFrom`"><el-date-picker v-model="contract.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
           <el-form-item label="到期日期" :data-archive-field="`contracts.${index}.expiresAt`"><el-date-picker v-model="contract.expiresAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
           <el-form-item label="期限" :data-archive-field="`contracts.${index}.termType`"><el-input v-model="contract.termType" /></el-form-item>
-          <el-form-item label="原公司" :data-archive-field="`contracts.${index}.originalCompany`"><el-input v-model="contract.originalCompany" /></el-form-item>
-          <el-form-item label="新公司" :data-archive-field="`contracts.${index}.newCompany`"><el-input v-model="contract.newCompany" /></el-form-item>
+          <el-form-item label="原公司" :data-archive-field="`contracts.${index}.originalCompany`"><ContractSubjectSelect v-model:snapshot-name="contract.originalCompany" name-only /></el-form-item>
+          <el-form-item label="新公司" :data-archive-field="`contracts.${index}.newCompany`"><ContractSubjectSelect v-model:snapshot-name="contract.newCompany" name-only /></el-form-item>
           <el-form-item label="保密协议" :data-archive-field="`contracts.${index}.confidentialityAgreement`"><el-input v-model="contract.confidentialityAgreement" /></el-form-item>
           <el-form-item label="竞业协议" :data-archive-field="`contracts.${index}.nonCompeteAgreement`"><el-input v-model="contract.nonCompeteAgreement" /></el-form-item>
           <el-form-item label="肖像协议" :data-archive-field="`contracts.${index}.portraitAgreement`"><el-input v-model="contract.portraitAgreement" /></el-form-item>
@@ -514,6 +517,7 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField,
 .editor-section__head { margin-bottom: 14px; }
 .editor-section__head h3 { margin: 0 0 4px; font-size: 16px; }
 .editor-section__head span { color: #667085; font-size: 13px; }
+.employment-baseline-note { display: flex; align-items: center; gap: 6px; margin-bottom: 14px; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.6; }
 .archive-editor-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 0 18px; }
 .archive-editor-grid :deep(.el-select), .archive-editor-grid :deep(.el-date-editor), .archive-editor-grid :deep(.el-input-number) { width: 100%; }
 .span-2 { grid-column: span 2; }

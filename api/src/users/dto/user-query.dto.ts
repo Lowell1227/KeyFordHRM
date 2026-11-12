@@ -5,6 +5,10 @@ import { Transform } from 'class-transformer';
 
 export class UserQueryDto extends PaginationDto {
   @IsOptional()
+  @IsString()
+  columns?: string;
+
+  @IsOptional()
   @IsIn(['cycle_owner', 'direct_manager'])
   eligibleFor?: 'cycle_owner' | 'direct_manager';
 

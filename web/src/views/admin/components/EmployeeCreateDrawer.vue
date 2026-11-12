@@ -2,6 +2,7 @@
 import dayjs from 'dayjs';
 import { archiveFieldPath } from '@/utils/employee-archive-fields';
 import { isCancelledNewHireArrival } from '@/utils/employee-lifecycle';
+import { contractTitle } from '@/utils/employee-contract-presentation';
 import { isAxiosError } from 'axios';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { Delete, Plus } from '@element-plus/icons-vue';
@@ -806,7 +807,7 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
         <section class="wizard-section">
           <div class="section-head contract-toolbar"><div><h3>合同与附件</h3><p>合同可先不录入，后续从草稿继续补充。</p></div><el-button :icon="Plus" @click="addContract">新增合同</el-button></div>
           <div v-for="(contract, index) in form.contracts" :key="contract.__key" class="contract-card">
-            <div class="contract-card__head"><strong>合同 {{ index + 1 }}</strong><el-button link type="danger" :icon="Delete" @click="form.contracts.splice(index, 1)">移除</el-button></div>
+            <div class="contract-card__head"><strong>{{ contractTitle(contract) }}</strong><el-button link type="danger" :icon="Delete" @click="form.contracts.splice(index, 1)">移除</el-button></div>
             <div class="form-grid form-grid--3">
               <el-form-item label="类型"><el-select v-model="contract.contractType"><el-option label="劳动合同" value="contract" /><el-option label="续签" value="renewal" /><el-option label="转签" value="transfer" /></el-select></el-form-item>
               <el-form-item label="合同名称"><el-input v-model="contract.name" /></el-form-item>
@@ -815,8 +816,8 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
               <el-form-item label="生效日期"><el-date-picker v-model="contract.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
               <el-form-item label="到期日期"><el-date-picker v-model="contract.expiresAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
               <el-form-item label="期限"><el-input v-model="contract.termType" /></el-form-item>
-              <el-form-item label="原公司"><el-input v-model="contract.originalCompany" /></el-form-item>
-              <el-form-item label="新公司"><el-input v-model="contract.newCompany" /></el-form-item>
+              <el-form-item label="原公司"><ContractSubjectSelect v-model:snapshot-name="contract.originalCompany" name-only /></el-form-item>
+              <el-form-item label="新公司"><ContractSubjectSelect v-model:snapshot-name="contract.newCompany" name-only /></el-form-item>
               <el-form-item label="保密协议"><el-input v-model="contract.confidentialityAgreement" /></el-form-item>
               <el-form-item label="竞业协议"><el-input v-model="contract.nonCompeteAgreement" /></el-form-item>
               <el-form-item label="肖像协议"><el-input v-model="contract.portraitAgreement" /></el-form-item>
@@ -887,6 +888,8 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
 .identity-candidate { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0; }
 .contract-card { margin-top: 14px; padding: 16px; border: 1px solid #dfe5ee; border-radius: 12px; background: #f8fafc; }
 .contract-card__head, .contract-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.contract-card__head { margin-bottom: 10px; }
+.contract-card__head strong { min-width: 0; overflow-wrap: anywhere; }
+.contract-card__head .el-button { flex-shrink: 0; }
 .contract-materials { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }.material-group { display: grid; gap: 8px; padding: 12px; border: 1px dashed #cfd7e6; border-radius: 9px; background: #fff; }.material-group small { color: #667085; }
 .material-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 7px; background: #f2f4f7; border-radius: 6px; }
 .preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 16px 0 0; border: 1px solid #e5eaf2; border-radius: 10px; overflow: hidden; }

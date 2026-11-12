@@ -207,6 +207,7 @@ export interface User {
   position?: string;
   entryDate?: string;
   leaveDate?: string;
+  companyTenure?: string;
   employmentType: EmploymentType;
   status: UserStatus;
   directManagerId?: string | null;

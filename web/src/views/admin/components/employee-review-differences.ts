@@ -1,4 +1,5 @@
 import type { EmployeeDataReview } from '@/api/employee-archives.api';
+import { contractTitle } from '@/utils/employee-contract-presentation';
 
 type RecordValue = Record<string, unknown>;
 export type ReviewNames = Partial<Record<'deptId' | 'positionId' | 'managerId' | 'contractSubjectId', Record<string, string>>>;
@@ -105,10 +106,10 @@ export function employeeReviewDifferences(request: EmployeeDataReview, names: Re
       }
     }
     const fields = differences(previous ?? {}, proposed, contractLabels, names);
-    if (fields.length) groups.push({ key: text(contract.id) || `new-contract-${index}`, title: text(contract.name || previous?.name) || `合同 ${index + 1}`, kind: previous ? '修改' : '新增', fields });
+    if (fields.length) groups.push({ key: text(contract.id) || `new-contract-${index}`, title: contractTitle({ ...previous, ...contract }), kind: previous ? '修改' : '新增', fields });
   });
   before.filter(item => !matched.has(item)).forEach((contract, index) => groups.push({
-    key: text(contract.id) || `removed-contract-${index}`, title: text(contract.name) || `合同 ${index + 1}`, kind: '移除', fields: differences(contract, {}, contractLabels, names, '', true),
+    key: text(contract.id) || `removed-contract-${index}`, title: contractTitle(contract), kind: '移除', fields: differences(contract, {}, contractLabels, names, '', true),
   }));
   return groups;
 }

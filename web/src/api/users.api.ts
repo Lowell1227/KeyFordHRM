@@ -44,10 +44,24 @@ export const usersApi = {
   },
 
   /** GET /users/export — 按当前筛选导出花名册 Excel（blob） */
-  exportRoster(query: UserQuery): Promise<Blob> {
+  exportRoster(query: UserQuery & { columns?: string }): Promise<Blob> {
     return http
       .get('/users/export', { params: query as Record<string, unknown>, responseType: 'blob' })
-      .then((res) => (res as { data: Blob }).data);
+      .then((res) => (res as { data: Blob }).data)
+      .catch(async (error) => {
+        // Axios keeps JSON error bodies as Blob when requesting a spreadsheet.
+        let message = error?.response?.status === 403
+          ? '没有导出员工档案的权限，请联系管理员。'
+          : '导出失败，请检查网络后重试。';
+        try {
+          const body = error?.response?.data instanceof Blob
+            ? JSON.parse(await error.response.data.text())
+            : error?.response?.data;
+          if (typeof body?.message === 'string') message = body.message;
+          else if (Array.isArray(body?.message)) message = body.message.join('；');
+        } catch { /* Keep the readable fallback for non-JSON gateway responses. */ }
+        throw new Error(message);
+      });
   },
 
   /** GET /users/:id/subordinates — 获取下属列表 */

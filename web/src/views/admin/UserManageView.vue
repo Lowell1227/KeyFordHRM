@@ -52,6 +52,7 @@ import { formatDate, formatDateTime } from '@/utils/date';
 import { isTopLevelDepartmentLeader } from '@/utils/organization-relations';
 import { formatPersonnelIdentityLabel } from '@/utils/personnel-identity';
 import { employeeContractStatus, formatEmployeeContractDate } from '@/utils/employee-contract-status';
+import { contractTitle, sortContractsLatestFirst } from '@/utils/employee-contract-presentation';
 
 type PersonnelView = 'org' | 'users' | 'processing';
 
@@ -256,6 +257,9 @@ const selectedOrgIsUnassigned = computed(() => selectedDeptId.value === UNASSIGN
 const userList = ref<ManagedUser[]>([]);
 const userTotal = ref(0);
 const userLoading = ref(false);
+const userLoadError = ref('');
+const appliedUserQuery = ref<UserQuery | null>(null);
+let userLoadGeneration = 0;
 const employeeCategory = ref<EmployeeDirectoryCategory>('all');
 const processingCategory = ref<PersonnelProcessingCategory>('applications');
 const userArchiveView = computed(() => employeeCategory.value === 'archived');
@@ -458,25 +462,37 @@ async function loadOrgMembers() {
 }
 
 async function loadUsers() {
+  const generation = ++userLoadGeneration;
   userLoading.value = true;
+  userLoadError.value = '';
   try {
     const categoryStatus = ['active', 'probation', 'pending_entry', 'resigned'].includes(employeeCategory.value)
       ? employeeCategory.value as UserStatus
       : undefined;
-    const res = await usersApi.findAll({
+    const query: UserQuery = {
       ...userQuery.value,
       status: categoryStatus,
       archived: userArchiveView.value || undefined,
       includeResigned: employeeCategory.value === 'all' || undefined,
-      keyword: userQuery.value.keyword || undefined,
-    });
+      keyword: userQuery.value.keyword?.trim() || undefined,
+    };
+    const res = await usersApi.findAll(query);
+    if (generation !== userLoadGeneration) return;
     userList.value = res.items;
     userTotal.value = res.total;
-  } catch {
+    appliedUserQuery.value = query;
+    selectedUsers.value = [];
+  } catch (error) {
+    if (generation !== userLoadGeneration) return;
     userList.value = [];
     userTotal.value = 0;
+    selectedUsers.value = [];
+    appliedUserQuery.value = null;
+    userLoadError.value = isAxiosError(error) && error.response?.status === 403
+      ? '没有查看员工列表的权限，请联系管理员。'
+      : '员工列表加载失败，请重试。';
   } finally {
-    userLoading.value = false;
+    if (generation === userLoadGeneration) userLoading.value = false;
   }
 }
 
@@ -489,23 +505,57 @@ async function changeEmployeeCategory(category: EmployeeDirectoryCategory) {
 }
 
 const rosterExport = useExport();
+const rosterExportVisible = ref(false);
+const rosterExportError = ref('');
+const rosterExportQuery = ref<UserQuery>({});
+const rosterExportTotal = ref(0);
+const rosterExportScope = ref('');
+const rosterExportFields = [
+  { key: 'employeeNo', label: '工号' },
+  { key: 'name', label: '姓名' },
+  { key: 'status', label: '任职状态' },
+  { key: 'deptName', label: '部门' },
+  { key: 'position', label: '岗位' },
+  { key: 'directManagerName', label: '绩效直属上级' },
+  { key: 'systemPermission', label: '系统权限' },
+  { key: 'directReportCount', label: '直属下属' },
+  { key: 'dingtalkBindingState', label: '钉钉登录' },
+  { key: 'companyTenure', label: '本次司龄' },
+];
+const rosterExportColumns = ref(rosterExportFields.slice(0, 9).map(field => field.key));
+
+function openRosterExport() {
+  if (!appliedUserQuery.value || userLoading.value || userLoadError.value || isApplicationsCategory.value) return;
+  rosterExportQuery.value = { ...appliedUserQuery.value };
+  rosterExportTotal.value = userTotal.value;
+  const query = rosterExportQuery.value;
+  rosterExportScope.value = [
+    query.archived ? '已归档' : query.status ? statusLabels[query.status] : '全部未归档员工',
+    query.deptId ? flattenedDepartments.value.find(dept => dept.id === query.deptId)?.name || '已选部门' : '全部部门',
+    query.sysRole ? roleLabels[query.sysRole] : '全部系统权限',
+    query.keyword ? `关键词：${query.keyword}` : '',
+  ].filter(Boolean).join(' · ');
+  rosterExportError.value = '';
+  rosterExportVisible.value = true;
+}
 
 /** 花名册导出：与当前列表同一筛选条件，所见即所得。 */
 async function exportRoster() {
-  const categoryStatus = ['active', 'probation', 'pending_entry', 'resigned'].includes(employeeCategory.value)
-    ? employeeCategory.value as UserStatus
-    : undefined;
-  const date = new Date().toISOString().slice(0, 10).replace(/-/g, '');
-  await rosterExport.download(
-    () => usersApi.exportRoster({
-      ...userQuery.value,
-      status: categoryStatus,
-      archived: userArchiveView.value || undefined,
-      includeResigned: employeeCategory.value === 'all' || undefined,
-      keyword: userQuery.value.keyword || undefined,
-    }),
-    `花名册-${date}.xlsx`,
-  );
+  if (!rosterExportColumns.value.length || rosterExport.loading.value) return;
+  rosterExportError.value = '';
+  const date = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date()).replace(/-/g, '');
+  try {
+    await rosterExport.download(
+      () => usersApi.exportRoster({
+        ...rosterExportQuery.value,
+        columns: rosterExportFields.filter(field => rosterExportColumns.value.includes(field.key)).map(field => field.key).join(','),
+      }),
+      `花名册-${date}.xlsx`,
+    );
+    rosterExportVisible.value = false;
+  } catch (error) {
+    rosterExportError.value = error instanceof Error ? error.message : '导出失败，请重试。';
+  }
 }
 
 async function changeProcessingCategory(category: PersonnelProcessingCategory, syncRoute = true) {
@@ -690,18 +740,19 @@ const employeeArchiveDrawer = ref({
 });
 const archiveCurrentEmployment = computed(() => (
   employeeArchiveDrawer.value.data?.currentEmployment
-  ?? employeeArchiveDrawer.value.data?.employmentHistory[0]
   ?? null
 ));
 const archiveReadOnly = computed(() => Boolean(employeeArchiveDrawer.value.data?.archivedAt));
 const archiveEditing = ref(false);
 const archiveSection = ref('current');
+const expandedContractGroups = ref<string[]>([]);
 const contractGroups = computed(() => {
-  const contracts = (employeeArchiveDrawer.value.data?.employeeContracts ?? [])
+  const contracts = sortContractsLatestFirst(employeeArchiveDrawer.value.data?.employeeContracts ?? [])
     .map(contract => ({ ...contract, dateStatus: employeeContractStatus(contract) }));
+  const latest = contracts.find(item => item.isActive !== false);
   return [
-    { name: '当前合同', contracts: contracts.filter((item) => item.isActive !== false) },
-    { name: '历史合同', contracts: contracts.filter((item) => item.isActive === false) },
+    { name: '最新合同', contracts: latest ? [latest] : [] },
+    { name: '历史合同', contracts: contracts.filter(item => item !== latest) },
   ].filter((group) => group.contracts.length);
 });
 const employmentGroups = computed(() => {
@@ -721,6 +772,8 @@ const archiveSaveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
 const archiveIssueContext = ref<EmployeeArchiveIssue | null>(null);
 const archiveNotice = ref('');
 const archiveSubmitError = ref('');
+const archiveLoadError = ref('');
+const archiveRequestedPerson = ref<ManagedUser | null>(null);
 const archiveQueue = ref<ManagedUser[]>([]);
 let archiveLoadGeneration = 0;
 const nextArchivePerson = computed(() => {
@@ -742,10 +795,14 @@ async function openEmployeeArchive(row: ManagedUser, keepQueue = false) {
   archiveIssueContext.value = null;
   archiveNotice.value = '';
   archiveSubmitError.value = '';
+  archiveLoadError.value = '';
+  archiveRequestedPerson.value = row;
   archiveDraftSaving.value = false;
   archiveSaveState.value = 'idle';
   archiveSection.value = 'current';
+  expandedContractGroups.value = [];
   employeeArchiveDrawer.value.visible = true;
+  employeeArchiveDrawer.value.dingtalkSaving = false;
   archiveEditing.value = false;
   activeArchiveDraft.value = null;
   employeeArchiveDrawer.value.loading = true;
@@ -756,8 +813,11 @@ async function openEmployeeArchive(row: ManagedUser, keepQueue = false) {
     employeeArchiveDrawer.value.data = archive;
     activeArchiveDraft.value = archive.changeHistory?.find(request => request.sourceType === 'manual_archive_change'
       && (request.recordStatus === 'draft' || request.canResume) && !request.archivedAt) ?? null;
-  } catch {
-    if (generation === archiveLoadGeneration) employeeArchiveDrawer.value.visible = false;
+  } catch (error) {
+    if (generation !== archiveLoadGeneration) return;
+    const status = isAxiosError(error) ? error.response?.status : undefined;
+    archiveLoadError.value = status === 403 ? '没有查看该员工档案的权限，请联系管理员。'
+      : status === 404 ? '员工档案不存在或已不可访问。' : '档案加载失败，请重试。';
   } finally {
     if (generation === archiveLoadGeneration) employeeArchiveDrawer.value.loading = false;
   }
@@ -1612,7 +1672,10 @@ async function openContractMaterial(item: Attachment) {
 
 async function setArchiveDingtalkState(enabled: boolean) {
   const archive = employeeArchiveDrawer.value.data;
-  if (!archive?.dingtalkBinding) return;
+  if (!archive?.dingtalkBinding || employeeArchiveDrawer.value.dingtalkSaving) return;
+  const generation = archiveLoadGeneration;
+  const isCurrentArchive = () => generation === archiveLoadGeneration
+    && employeeArchiveDrawer.value.visible && employeeArchiveDrawer.value.data?.id === archive.id;
 
   let reason: string | undefined;
   if (!enabled) {
@@ -1634,16 +1697,18 @@ async function setArchiveDingtalkState(enabled: boolean) {
     }
   }
 
+  if (!isCurrentArchive()) return;
   employeeArchiveDrawer.value.dingtalkSaving = true;
   try {
     await employeeArchivesApi.setDingtalkState(archive.id, enabled, reason);
-    employeeArchiveDrawer.value.data = await employeeArchivesApi.getArchive(archive.id);
+    const refreshed = await employeeArchivesApi.getArchive(archive.id);
+    if (isCurrentArchive()) employeeArchiveDrawer.value.data = refreshed;
     await loadUsers();
-    ElMessage.success(enabled ? '钉钉登录已启用' : '钉钉登录已停用');
+    ElMessage.success(`${archive.name}的钉钉登录已${enabled ? '启用' : '停用'}`);
   } catch {
     // 由 HTTP 拦截器展示错误
   } finally {
-    employeeArchiveDrawer.value.dingtalkSaving = false;
+    if (isCurrentArchive()) employeeArchiveDrawer.value.dingtalkSaving = false;
   }
 }
 
@@ -1939,6 +2004,8 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   talentPrefillGeneration++;
   applicationLoadGeneration++;
+  userLoadGeneration++;
+  archiveLoadGeneration++;
   document.removeEventListener('click', closeDepartmentContextMenu);
   window.removeEventListener('personnel-data-changed', refreshAfterPersonnelReview);
 });
@@ -2173,9 +2240,10 @@ onBeforeUnmount(() => {
             <el-button type="primary" @click="onUserQueryChange">查询</el-button>
             <el-button @click="resetUserFilters">重置</el-button>
             <el-button
-              v-if="activeView === 'users'"
+              v-if="activeView === 'users' && !isApplicationsCategory"
               :loading="rosterExport.loading.value"
-              @click="exportRoster"
+              :disabled="userLoading || !!userLoadError || !appliedUserQuery"
+              @click="openRosterExport"
             >导出花名册</el-button>
           </div>
         </QueryFilterPanel>
@@ -2237,10 +2305,15 @@ onBeforeUnmount(() => {
         />
 
         <template v-else-if="activeView === 'users'">
+          <div v-if="userLoadError" class="archive-query-error" role="alert">
+            <span>{{ userLoadError }}</span>
+            <el-button link type="primary" @click="loadUsers">重试</el-button>
+          </div>
           <div class="directory-table-region desktop-result-table">
             <el-table
               v-loading="userLoading"
               :data="userList"
+              :empty-text="userLoadError ? '列表暂不可用' : '暂无匹配员工'"
               row-key="id"
               height="100%"
               class="app-table compact-table"
@@ -2431,6 +2504,26 @@ onBeforeUnmount(() => {
 
     </ChartCard>
 
+    <el-dialog v-model="rosterExportVisible" title="导出花名册" width="min(540px, 94vw)"
+      :close-on-click-modal="!rosterExport.loading.value" :close-on-press-escape="!rosterExport.loading.value"
+      :show-close="!rosterExport.loading.value">
+      <p class="roster-export-scope">{{ rosterExportScope }}</p>
+      <p class="roster-export-scope">按已查询条件导出全部 {{ rosterExportTotal }} 名员工，包含其他分页。</p>
+      <div class="roster-export-tools">
+        <strong>选择字段（{{ rosterExportColumns.length }}）</strong>
+        <el-button link type="primary" :disabled="rosterExport.loading.value" @click="rosterExportColumns = rosterExportFields.map(field => field.key)">全选</el-button>
+        <el-button link :disabled="rosterExport.loading.value" @click="rosterExportColumns = []">清空</el-button>
+      </div>
+      <el-checkbox-group v-model="rosterExportColumns" class="roster-export-fields" :disabled="rosterExport.loading.value" aria-label="导出字段">
+        <el-checkbox v-for="field in rosterExportFields" :key="field.key" :value="field.key">{{ field.label }}</el-checkbox>
+      </el-checkbox-group>
+      <el-alert v-if="rosterExportError" :title="rosterExportError" type="error" :closable="false" />
+      <template #footer>
+        <el-button :disabled="rosterExport.loading.value" @click="rosterExportVisible = false">取消</el-button>
+        <el-button type="primary" :loading="rosterExport.loading.value" :disabled="!rosterExportColumns.length" @click="exportRoster">导出 Excel</el-button>
+      </template>
+    </el-dialog>
+
     <el-drawer
       v-model="employeeArchiveDrawer.visible"
       title="员工档案"
@@ -2444,6 +2537,11 @@ onBeforeUnmount(() => {
       @closed="resumeResignationAfterDepartment"
     >
       <div v-loading="employeeArchiveDrawer.loading" class="employee-archive">
+        <div v-if="archiveLoadError" class="archive-query-error" role="alert">
+          <span>{{ archiveLoadError }}</span>
+          <el-button v-if="archiveRequestedPerson" link type="primary" :disabled="employeeArchiveDrawer.loading"
+            @click="openEmployeeArchive(archiveRequestedPerson, true)">重新加载</el-button>
+        </div>
         <template v-if="employeeArchiveDrawer.data">
           <div class="employee-archive__hero">
             <span class="avatar">{{ employeeArchiveDrawer.data.name.slice(0, 1) }}</span>
@@ -2501,6 +2599,7 @@ onBeforeUnmount(() => {
               <div><span>所属公司</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.companyText, '待补充') }}</strong><small v-if="archiveCurrentEmployment?.contractSubjectId">已关联合同主体</small><small v-else-if="archiveCurrentEmployment?.companyText">历史名称，尚未关联主体</small></div>
               <div><span>所属部门</span><strong>{{ employeeArchiveDrawer.data.dept?.fullPath || employeeArchiveDrawer.data.dept?.name || '未设置' }}</strong></div>
               <div><span>岗位</span><strong>{{ employeeArchiveDrawer.data.position || '未设置' }}</strong></div>
+              <div><span>本次司龄 <el-tooltip content="从本次入职日期计算，再入职重新起算。在职截至今天；离职截至最后工作日。" placement="top"><el-icon aria-label="本次司龄说明"><QuestionFilled /></el-icon></el-tooltip></span><strong>{{ employeeArchiveDrawer.data.companyTenure || '待完善' }}</strong></div>
               <div><span>职级</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.jobGrade) }}</strong></div>
               <div><span>职系</span><strong>{{ archiveDisplayValue(archiveCurrentEmployment?.jobFamily) }}</strong></div>
               <div><span>花名册直属主管</span><strong>{{ employeeArchiveDrawer.data.rosterManager?.name || '未设置' }}</strong></div>
@@ -2639,19 +2738,24 @@ onBeforeUnmount(() => {
             <div class="section-head">
               <div>
                 <h3>合同记录</h3>
-                <span>当前合同与历史合同均保留；期限按北京时间日期判断</span>
+                <el-tooltip content="最新合同按签订日期排序，缺失时参考生效日期。最新记录不一定处于合同有效期内。" placement="top"><el-icon aria-label="合同排序说明"><QuestionFilled /></el-icon></el-tooltip>
               </div>
             </div>
             <template v-if="employeeArchiveDrawer.data.employeeContracts.length">
             <section v-for="group in contractGroups" :key="group.name" class="contract-history-group">
-            <h4>{{ group.name }}</h4>
+            <h4 v-if="group.name === '最新合同'">最新合同</h4>
+            <button v-else type="button" class="contract-history-toggle" :aria-expanded="expandedContractGroups.includes(group.name)"
+              @click="expandedContractGroups = expandedContractGroups.includes(group.name) ? [] : [group.name]">
+              历史合同（{{ group.contracts.length }}） · {{ expandedContractGroups.includes(group.name) ? '收起' : '展开' }}
+            </button>
+            <template v-if="group.name === '最新合同' || expandedContractGroups.includes(group.name)">
             <div
-              v-for="(contract, index) in group.contracts"
+              v-for="contract in group.contracts"
               :key="contract.id"
               class="employee-archive__contract-card"
             >
               <div class="employee-archive__contract-head">
-                <strong>合同 {{ index + 1 }}</strong>
+                <strong>{{ contractTitle(contract) }}</strong>
                 <el-tag :type="contract.dateStatus.type" size="small">
                   {{ contract.dateStatus.label }}
                 </el-tag>
@@ -2687,6 +2791,7 @@ onBeforeUnmount(() => {
                 </div>
               </div>
             </div>
+            </template>
             </section>
             </template>
             <el-empty v-else description="暂无合同记录" :image-size="64" />
@@ -2992,6 +3097,50 @@ onBeforeUnmount(() => {
 </template>
 
 <style scoped>
+.archive-query-error {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 12px 16px;
+  color: var(--el-color-danger);
+}
+
+.roster-export-scope {
+  margin: 0 0 12px;
+  color: var(--el-text-color-secondary);
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.roster-export-tools {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.roster-export-tools strong { margin-right: auto; }
+
+.roster-export-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 12px;
+  margin: 12px 0 20px;
+}
+
+.roster-export-fields :deep(.el-checkbox) { margin-right: 0; }
+
+.contract-history-toggle {
+  padding: 10px 0;
+  border: 0;
+  background: transparent;
+  color: var(--el-color-primary);
+  font: inherit;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.employee-archive__contract-head strong { overflow-wrap: anywhere; }
+
 .archive-issue-context { position: sticky; top: 0; z-index: 4; max-height: 150px; overflow-y: auto; display: grid; gap: 5px; padding: 12px 14px; background: var(--el-color-warning-light-9); border-left: 3px solid var(--el-color-warning); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .archive-issue-context small { color: var(--el-text-color-secondary); }
 .archive-footer-state { display: flex; align-items: center; gap: 12px; margin-right: auto; align-self: center; color: var(--el-text-color-secondary); font-size: 12px; }

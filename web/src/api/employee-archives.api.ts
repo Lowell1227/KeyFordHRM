@@ -199,6 +199,8 @@ export interface EmployeeArchive {
   id: string;
   archiveVersion: string;
   name: string;
+  phone?: string | null;
+  companyTenure?: string;
   employeeNo: string | null;
   status: 'active' | 'probation' | 'pending_entry' | 'resigned';
   position: string | null;

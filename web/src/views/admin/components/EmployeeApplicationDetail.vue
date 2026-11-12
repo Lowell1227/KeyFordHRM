@@ -3,6 +3,7 @@ import { computed } from 'vue';
 import type { EmployeeDataReview, EmployeeReviewStatus } from '@/api/employee-archives.api';
 import { formatDate, formatDateTime } from '@/utils/date';
 import { isPendingArrival } from '@/utils/employee-lifecycle';
+import { contractTitle } from '@/utils/employee-contract-presentation';
 import PersonnelProcessTimeline from './PersonnelProcessTimeline.vue';
 import type { PersonnelProcessStep, PersonnelProcessTone } from './personnel-process-timeline';
 
@@ -148,9 +149,7 @@ const contractChangeItems = computed(() => {
   const result: Array<{ key: string; label: string; before: string; after: string }> = [];
   after.forEach((contract, index) => {
     const old = contract.id ? before.find((item) => item.id === contract.id) : undefined;
-    const kind = ({ contract: '合同', attachment: '附件' } as Record<string, string>)[String(contract.kind)]
-      ?? (hasValue(contract.kind) ? String(contract.kind) : '');
-    const title = String(contract.name || [kind, contract.reference].filter(hasValue).join(' · ') || `合同材料 ${index + 1}`);
+    const title = contractTitle(contract);
     if (!old) {
       result.push({ key: `contract-${index}`, label: '新增合同', before: '无', after: title });
       result.push({ key: `contract-${index}-subject`, label: `${title} · 签约公司`, before: '—', after: `${contract.signingCompany || '未填写'} · ${contract.contractSubjectId ? '已关联' : '尚未关联'}` });
@@ -166,7 +165,7 @@ const contractChangeItems = computed(() => {
     }
   });
   before.filter((old) => !after.some((item) => item.id === old.id)).forEach((old, index) => {
-    result.push({ key: `removed-contract-${index}`, label: '移除合同', before: String(old.name || '未命名合同'), after: '已移除' });
+    result.push({ key: `removed-contract-${index}`, label: '移除合同', before: contractTitle(old), after: '已移除' });
   });
   return result;
 });
@@ -352,6 +351,7 @@ function eventLabel(action: string) {
 .application-detail__facts dd { margin: 0; overflow-wrap: anywhere; color: var(--el-text-color-primary); font-weight: 600; line-height: 20px; }
 .application-detail__changes > div { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
 .application-detail__changes span { overflow-wrap: anywhere; color: var(--el-text-color-regular); }
+.application-detail__changes strong { min-width: 0; overflow-wrap: anywhere; }
 .application-detail__events { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
 .application-detail__events li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 9px 12px; border-radius: 6px; background: var(--el-fill-color-extra-light); }
 .application-detail__events span { color: var(--el-text-color-secondary); }

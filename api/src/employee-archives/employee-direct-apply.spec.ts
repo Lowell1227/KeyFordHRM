@@ -322,7 +322,7 @@ describe('员工档案免审个人信息字段直改', () => {
     expect(tx.auditLog.create).not.toHaveBeenCalled();
   });
 
-  it('保存草稿无实际变更但已有草稿时返回现有草稿，不改写内容', async () => {
+  it('将已有草稿改回正式原值时覆盖旧提案并递增版本，不提交审核或改写正式资料', async () => {
     const user = buildUser();
     const profileRow = user.employeeProfile as Record<string, unknown>;
     const baseProfile = Object.fromEntries(Object.entries(profileRow)
@@ -342,7 +342,7 @@ describe('员工档案免审个人信息字段直改', () => {
         contracts: [],
         performance: { managerId: null },
       },
-      proposedValue: { employee: { name: '员工甲' }, profile: {}, contracts: [], performance: { managerId: null } },
+      proposedValue: { employee: { name: '曾暂存的修改' }, profile: {}, contracts: [], performance: { managerId: null } },
       createdBy: { id: operator.id, name: operator.name, sysRole: operator.sysRole },
       createdAt: new Date('2026-11-11T01:00:00.000Z'),
       updatedAt: new Date('2026-11-11T01:00:00.000Z'),
@@ -353,7 +353,11 @@ describe('员工档案免审个人信息字段直改', () => {
       employeeDataChangeRequest: {
         findFirst: jest.fn().mockResolvedValue(existingDraft),
         create: jest.fn(),
-        update: jest.fn(),
+        update: jest.fn(async ({ data }) => {
+          const version = existingDraft.requestVersion;
+          Object.assign(existingDraft, data, { requestVersion: version + data.requestVersion.increment });
+          return existingDraft;
+        }),
       },
       employeeProfile: { upsert: jest.fn().mockResolvedValue({}) },
       auditLog: { create: jest.fn().mockResolvedValue({}) },
@@ -371,7 +375,12 @@ describe('员工档案免审个人信息字段直改', () => {
     }, operator);
 
     expect(result).not.toBeNull();
-    expect(result!.id).toBe('draft-1');
-    expect(tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
+    expect(result).toMatchObject({ id: 'draft-1', requestVersion: 4, recordStatus: 'draft',
+      profileReviewStatus: 'not_required', performanceReviewStatus: 'not_required',
+      proposedValue: { employee: { name: '员工甲' }, profile: { education: '本科' } } });
+    expect(existingDraft.proposedValue.employee.name).toBe('员工甲');
+    expect(tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
+    expect(tx.user.update).not.toHaveBeenCalled();
+    expect(tx.employeeProfile.upsert).not.toHaveBeenCalled();
   });
 });

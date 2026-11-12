@@ -200,6 +200,22 @@ describe('UsersService', () => {
         { id: 'viewer', sysRole: SysRole.employee } as any)).items).toEqual([]);
       expect(groupBy).not.toHaveBeenCalled();
     });
+
+    it('列表返回和导出一致的正式本次司龄，不使用用户投影或调岗生效日', async () => {
+      const user = { id: 'synthetic-employee', name: '虚构员工', status: 'resigned', entryDate: new Date('2000-01-01'),
+        externalIdentityBindings: [], employeeNumberAssignments: [], employeeChangeRequests: [],
+        employmentHistory: [{ id: 'formal', effectiveFrom: new Date('2025-03-02'), effectiveTo: null,
+          entryDate: new Date('2024-01-01'), leaveDate: new Date('2025-03-01'), employeeStatus: 'resigned' }],
+      };
+      const findMany = jest.fn().mockResolvedValue([user]);
+      const service = new UsersService({ user: { count: jest.fn().mockResolvedValue(1), findMany,
+        groupBy: jest.fn().mockResolvedValue([]) } } as any,
+      { getVisibleEmployeeFilter: async () => ({}) } as any, noBusinessIdentities as any);
+      const result = await service.findAll({ page: 1, pageSize: 20, includeResigned: true } as any,
+        { id: 'viewer', sysRole: SysRole.employee } as any);
+      expect(result.items[0].companyTenure).toBe('1年2个月');
+      expect(findMany.mock.calls[0][0].include.employmentHistory.where).toMatchObject({ OR: expect.any(Array) });
+    });
   });
 
   describe('archive warnings', () => {
@@ -600,6 +616,37 @@ describe('UsersService', () => {
       await expect(service.exportRoster({} as any, hrViewer as any))
         .rejects.toBeInstanceOf(Error);
       expect(findMany).not.toHaveBeenCalled();
+    });
+
+    it.each(['', 'name,', 'passwordHash', 'name,name'])('拒绝无效列选择 %s 且不读取人员', async columns => {
+      const { service, count, findMany } = setup(1);
+      await expect(service.exportRoster({ columns } as any, hrViewer as any)).rejects.toThrow();
+      expect(count).not.toHaveBeenCalled();
+      expect(findMany).not.toHaveBeenCalled();
+    });
+
+    it('所选列和全部范围筛选写入审计，并用正式任职生成司龄列', async () => {
+      const { service, findMany, auditCreate } = setup(1);
+      findMany.mockResolvedValue([{ ...employee, status: 'resigned', employmentHistory: [{
+        id: 'employment', effectiveFrom: new Date('2025-03-02'), effectiveTo: null,
+        entryDate: new Date('2024-01-01'), leaveDate: new Date('2025-03-01'), employeeStatus: 'resigned',
+      }] }] as any);
+      const file = await service.exportRoster({ columns: 'companyTenure,name', employmentType: 'full_time',
+        unassigned: true, includeTestAccounts: true, includeResigned: true } as any, hrViewer as any);
+      const ExcelJS = await import('exceljs');
+      const workbook = new ExcelJS.Workbook();
+      const chunks: Buffer[] = [];
+      for await (const chunk of file.getStream()) chunks.push(Buffer.from(chunk));
+      await workbook.xlsx.load(Buffer.concat(chunks) as any);
+      const sheet = workbook.getWorksheet('花名册')!;
+      expect((sheet.getRow(1).values as unknown[]).slice(1)).toEqual(['本次司龄', '姓名']);
+      expect((sheet.getRow(2).values as unknown[]).slice(1)).toEqual(['1年2个月', '冉光建']);
+      expect(auditCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ newValue: {
+        total: 1, columns: ['companyTenure', 'name'], filters: {
+          keyword: null, deptId: null, status: null, sysRole: null, archived: false,
+          includeResigned: true, unassigned: true, includeTestAccounts: true, employmentType: 'full_time', eligibleFor: null,
+        },
+      } }) });
     });
   });
 });

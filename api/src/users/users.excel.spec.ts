@@ -1,6 +1,6 @@
 import { SysRole, UserStatus } from '@prisma/client';
 import { toSystemPermission, UserListItem } from './users.service';
-import { buildRosterWorkbook, rosterSystemPermissionLabel, toRosterExportRows, ROSTER_EXPORT_COLUMNS } from './users.excel';
+import { buildRosterWorkbook, rosterSystemPermissionLabel, toRosterExportRows } from './users.excel';
 
 function item(overrides: Partial<UserListItem> = {}): UserListItem {
   return {
@@ -25,6 +25,7 @@ function item(overrides: Partial<UserListItem> = {}): UserListItem {
     isAssessorOnly: false,
     canViewAll: false,
     entryDate: null,
+    companyTenure: '待完善',
     dingtalkBindingState: 'unbound',
     archivedAt: null,
     matchedHistoricalEmployeeNo: null,
@@ -45,6 +46,7 @@ describe('toRosterExportRows', () => {
       systemPermission: '标准用户',
       directReportCount: 2,
       dingtalkBindingState: '未关联',
+      companyTenure: '待完善',
     });
   });
 
@@ -78,7 +80,7 @@ describe('buildRosterWorkbook', () => {
     expect(sheet).toBeDefined();
     expect(sheet!.rowCount).toBe(3); // header + 2 rows
     const headerValues = (sheet!.getRow(1).values as Array<unknown>).slice(1);
-    expect(headerValues).toEqual(ROSTER_EXPORT_COLUMNS.map((col) => col.header));
+    expect(headerValues).toEqual(['工号', '姓名', '任职状态', '部门', '岗位', '绩效直属上级', '系统权限', '直属下属', '钉钉登录']);
     expect(sheet!.getRow(2).getCell(1).value).toBe('347');
     expect(sheet!.getRow(3).getCell(2).value).toBe('苏萌');
     expect(sheet!.actualRowCount).toBe(3);
@@ -88,5 +90,13 @@ describe('buildRosterWorkbook', () => {
     const workbook = await buildRosterWorkbook([item()]);
     const buffer = await workbook.xlsx.writeBuffer();
     expect(Buffer.byteLength(buffer as ArrayBuffer)).toBeGreaterThan(500);
+  });
+
+  it('exports only selected columns in the requested order, including tenure', async () => {
+    const workbook = await (buildRosterWorkbook as any)([item({ companyTenure: '1年2个月' } as any)], ['companyTenure', 'name']);
+    const sheet = workbook.getWorksheet('花名册')!;
+    expect((sheet.getRow(1).values as unknown[]).slice(1)).toEqual(['本次司龄', '姓名']);
+    expect((sheet.getRow(2).values as unknown[]).slice(1)).toEqual(['1年2个月', '冉光建']);
+    expect(sheet.columnCount).toBe(2);
   });
 });

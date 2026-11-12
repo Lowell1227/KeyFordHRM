@@ -1,4 +1,5 @@
 import * as ExcelJS from 'exceljs';
+import { BadRequestException } from '@nestjs/common';
 import { SystemPermission, UserListItem } from './users.service';
 
 /** 花名册导出列定义（与员工档案页列表字段一致）。 */
@@ -12,7 +13,23 @@ export const ROSTER_EXPORT_COLUMNS = [
   { key: 'systemPermission', header: '系统权限', width: 14 },
   { key: 'directReportCount', header: '直属下属', width: 10 },
   { key: 'dingtalkBindingState', header: '钉钉登录', width: 14 },
+  { key: 'companyTenure', header: '本次司龄', width: 16 },
 ] as const;
+
+export type RosterExportColumnKey = typeof ROSTER_EXPORT_COLUMNS[number]['key'];
+export const DEFAULT_ROSTER_EXPORT_COLUMNS: RosterExportColumnKey[] = ROSTER_EXPORT_COLUMNS
+  .filter(column => column.key !== 'companyTenure').map(column => column.key);
+
+export function parseRosterExportColumns(value?: string): RosterExportColumnKey[] {
+  if (value === undefined) return [...DEFAULT_ROSTER_EXPORT_COLUMNS];
+  if (typeof value !== 'string') throw new BadRequestException('导出字段格式不正确');
+  const keys = value.split(',').map(key => key.trim());
+  const allowed = new Set<string>(ROSTER_EXPORT_COLUMNS.map(column => column.key));
+  if (keys.some(key => !allowed.has(key)) || new Set(keys).size !== keys.length) {
+    throw new BadRequestException('请至少选择一个有效的导出字段，且字段不能重复');
+  }
+  return keys as RosterExportColumnKey[];
+}
 
 const STATUS_LABELS: Record<string, string> = {
   active: '在职',
@@ -58,6 +75,7 @@ export interface RosterExportRow {
   systemPermission: string;
   directReportCount: number;
   dingtalkBindingState: string;
+  companyTenure: string;
 }
 
 export function toRosterExportRows(items: UserListItem[]): RosterExportRow[] {
@@ -71,14 +89,15 @@ export function toRosterExportRows(items: UserListItem[]): RosterExportRow[] {
     systemPermission: rosterSystemPermissionLabel(item),
     directReportCount: item.directReportCount,
     dingtalkBindingState: DINGTALK_LABELS[item.dingtalkBindingState] ?? item.dingtalkBindingState,
+    companyTenure: item.companyTenure,
   }));
 }
 
 /** 构建花名册导出工作簿（单工作表，列与员工档案页列表一致）。 */
-export async function buildRosterWorkbook(items: UserListItem[]): Promise<ExcelJS.Workbook> {
+export async function buildRosterWorkbook(items: UserListItem[], columns: RosterExportColumnKey[] = DEFAULT_ROSTER_EXPORT_COLUMNS): Promise<ExcelJS.Workbook> {
   const workbook = new ExcelJS.Workbook();
   const worksheet = workbook.addWorksheet('花名册');
-  worksheet.columns = ROSTER_EXPORT_COLUMNS.map((col) => ({
+  worksheet.columns = columns.map(key => ROSTER_EXPORT_COLUMNS.find(column => column.key === key)!).map((col) => ({
     header: col.header,
     key: col.key,
     width: col.width,

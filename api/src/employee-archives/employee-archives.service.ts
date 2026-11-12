@@ -1,4 +1,5 @@
 import { normalizeContractSubject, validateContractSubject } from '@/contract-subjects/contract-subject-reference';
+import { companyTenure } from '@/common/personnel/company-tenure';
 import { ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { BadRequestException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
@@ -914,7 +915,8 @@ export class EmployeeArchivesService {
     });
     const enriched = await this.enrichChangeNames(requests);
     return employeeArchiveView({
-      changeHistory: enriched.map((request) => ({ ...request, events: events.filter((event) => event.entityId === request.id) })),
+      changeHistory: enriched.map((request) => ({ ...request, canResume: this.canResumeApplication(request),
+        events: events.filter((event) => event.entityId === request.id) })),
       archiveEvents: events.filter((event) => event.entityId === userId),
     });
   }
@@ -1046,6 +1048,7 @@ export class EmployeeArchivesService {
     const currentEmployment = employmentSelection.current;
     return employeeArchiveView({
       ...archive,
+      companyTenure: companyTenure(archive),
       archiveVersion: this.archiveVersion(archive),
       employeeProfile: archive.employeeProfile ? {
         ...archive.employeeProfile,
@@ -1281,6 +1284,7 @@ export class EmployeeArchivesService {
       // 工号由入职/再入职流程生成，档案编辑不得改写当前或历史工号。
       employeeNo: baseEmployee.employeeNo,
     };
+    if (input.employee.positionId === null && baseEmployee.positionId != null) proposedEmployee.position = null;
     if (user.status === UserStatus.resigned && proposedEmployee.employeeStatus !== UserStatus.resigned) {
       throw new ConflictException('已离职员工请通过“办理再入职”生成新工号，不能直接修改为在职');
     }
@@ -1353,32 +1357,32 @@ export class EmployeeArchivesService {
     };
     if (!profileChanged && !performanceChanged) {
       if (directApplied.length === 0) {
-        // 保存草稿时，与当前档案归一化后一致的输入视为幂等空保存：返回现有草稿（或空），
-        // 避免自动保存被 400 打断并反复提示“草稿保存失败”。提交审核仍要求有实际变更。
-        if (recordStatus === 'draft') {
-          return { request: existing ? employeeDataChangeView(existing) : null, directApplied };
+        if (recordStatus !== 'draft') {
+          throw new BadRequestException({
+            code: ERROR_CODE.PARAM_INVALID,
+            message: '未检测到实际变更，无需提交审核',
+          });
         }
-        throw new BadRequestException({
-          code: ERROR_CODE.PARAM_INVALID,
-          message: '未检测到实际变更，无需提交审核',
-        });
+        if (!existing) return { request: null, directApplied };
+        // Reverting a saved draft still needs to replace its previous proposal below.
+      } else {
+        // Complete the consumed draft so the next edit starts from the new formal baseline.
+        if (existing) {
+          await client.employeeDataChangeRequest.update({
+            where: { id: existing.id, requestVersion: existing.requestVersion, updatedAt: existing.updatedAt },
+            data: {
+              ...data,
+              recordStatus: 'submitted',
+              archivedAt: new Date(),
+              profileReviewStatus: existing.profileReviewStatus === 'approved' ? 'approved' : 'not_required',
+              performanceReviewStatus: existing.performanceReviewStatus === 'approved' ? 'approved' : 'not_required',
+              requestVersion: { increment: 1 },
+              revisionHistory: this.revisionSnapshot(existing),
+            },
+          });
+        }
+        return { request: null, directApplied };
       }
-      // Complete the consumed draft so the next edit starts from the new formal baseline.
-      if (existing) {
-        await client.employeeDataChangeRequest.update({
-          where: { id: existing.id, requestVersion: existing.requestVersion, updatedAt: existing.updatedAt },
-          data: {
-            ...data,
-            recordStatus: 'submitted',
-            archivedAt: new Date(),
-            profileReviewStatus: existing.profileReviewStatus === 'approved' ? 'approved' : 'not_required',
-            performanceReviewStatus: existing.performanceReviewStatus === 'approved' ? 'approved' : 'not_required',
-            requestVersion: { increment: 1 },
-            revisionHistory: this.revisionSnapshot(existing),
-          },
-        });
-      }
-      return { request: null, directApplied };
     }
     if (existing) {
       return {

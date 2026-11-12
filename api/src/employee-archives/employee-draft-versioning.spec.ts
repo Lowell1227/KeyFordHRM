@@ -42,6 +42,79 @@ function fixture(sourceType = 'manual_archive_change') {
 }
 
 describe('employee draft optimistic concurrency', () => {
+  it('includes tenure from the approved employment entry date in archive details', async () => {
+    const f = fixture();
+    f.user.employeeNumberAssignments = [];
+    f.user.employmentHistory = [{ id: 'employment', effectiveFrom: new Date('2026-01-01'), effectiveTo: null,
+      entryDate: new Date('2024-01-01'), leaveDate: null, employeeStatus: 'active' }];
+    f.tx.employeeDataChangeRequest.findFirst.mockResolvedValue(null);
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-12T04:00:00Z'));
+    try {
+      expect(await f.service.findOne('employee')).toMatchObject({ companyTenure: '2年10个月' });
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('persists a saved draft reverted to the formal archive instead of reviving its old proposal', async () => {
+    const f = fixture();
+    const result = await f.service.saveArchiveDraft('employee', {
+      draftId: 'draft', expectedVersion: 3, employee: { name: 'Synthetic' }, profile: {},
+      contracts: [], performance: { managerId: null },
+    }, operator);
+    expect(result).toMatchObject({ requestVersion: 4, recordStatus: 'draft',
+      profileReviewStatus: 'not_required', performanceReviewStatus: 'not_required',
+      proposedValue: { employee: { name: 'Synthetic' } } });
+    expect(f.draft.proposedValue.employee.name).toBe('Synthetic');
+  });
+
+  it('clears the position display together with an explicitly cleared position ID', async () => {
+    const f = fixture();
+    f.tx.employeeDataChangeRequest.findFirst.mockResolvedValue(null);
+    Object.assign(f.user, { positionId: 'old-position', position: 'Original position', directManagerId: 'old-manager' });
+    f.user.employmentHistory = [{ directManagerId: 'old-roster-manager' }];
+    const { request } = await f.service.submitDraft('employee', {
+      baseVersion: (f.service as any).archiveVersion(f.user),
+      employee: { positionId: null, position: 'Original position', managerId: null }, profile: {},
+      performance: { managerId: null },
+    }, operator);
+    expect(request?.proposedValue).toMatchObject({ employee: { positionId: null, position: null, managerId: null },
+      performance: { managerId: null } });
+    expect(f.user).toMatchObject({ positionId: 'old-position', position: 'Original position', directManagerId: 'old-manager' });
+  });
+
+  it('keeps omitted position and manager fields while another field is changed', async () => {
+    const f = fixture();
+    f.tx.employeeDataChangeRequest.findFirst.mockResolvedValue(null);
+    Object.assign(f.user, { positionId: 'old-position', position: 'Original position', directManagerId: 'old-manager' });
+    f.user.employmentHistory = [{ directManagerId: 'old-roster-manager' }];
+    const { request } = await f.service.submitDraft('employee', {
+      baseVersion: (f.service as any).archiveVersion(f.user), employee: { name: 'Changed' }, profile: {},
+    }, operator);
+    expect(request?.proposedValue).toMatchObject({ employee: { positionId: 'old-position', position: 'Original position', managerId: 'old-roster-manager' },
+      performance: { managerId: 'old-manager' } });
+  });
+
+  it('preserves a legacy position name without a directory ID when another field changes', async () => {
+    const f = fixture();
+    f.tx.employeeDataChangeRequest.findFirst.mockResolvedValue(null);
+    Object.assign(f.user, { positionId: null, position: 'Legacy roster position' });
+    const { request } = await f.service.submitDraft('employee', {
+      baseVersion: (f.service as any).archiveVersion(f.user),
+      employee: { name: 'Changed', positionId: null, position: 'Legacy roster position' }, profile: {},
+    }, operator);
+    expect(request?.proposedValue.employee).toMatchObject({ positionId: null, position: 'Legacy roster position' });
+  });
+
+  it('returns resumability in archive history so a rejected application can be reopened with its original ID', async () => {
+    const f = fixture();
+    Object.assign(f.draft, { recordStatus: 'submitted', profileReviewStatus: 'rejected' });
+    f.tx.employeeDataChangeRequest.findMany.mockResolvedValue([f.draft]);
+    (f.db.auditLog as any).findMany = jest.fn(async () => []);
+    const { changeHistory } = await f.service.history('employee');
+    const resumable = changeHistory.find(request => request.sourceType === 'manual_archive_change'
+      && (request.recordStatus === 'draft' || ('canResume' in request && request.canResume)) && !request.archivedAt);
+    expect(resumable).toMatchObject({ id: 'draft', requestVersion: 3, canResume: true });
+  });
+
   function partialApproval(approvedScope: 'profile' | 'performance') {
     const f = fixture();
     f.draft.recordStatus = 'submitted';

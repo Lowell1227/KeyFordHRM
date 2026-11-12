@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import type { EmployeeDataReview } from '@/api/employee-archives.api';
 import { applicationProgress, applicationType } from '@/utils/employee-lifecycle';
 import { formatDate, formatDateTime } from '@/utils/date';
+import { contractTitle } from '@/utils/employee-contract-presentation';
 import { employeeReviewValuesEqual, employeeReviewValueDisplay as display } from './employee-review-differences';
 
 const props = defineProps<{ requests: EmployeeDataReview[] }>();
@@ -28,7 +29,7 @@ function contractChanges(request: EmployeeDataReview) {
   const result: Array<{ key: string; label: string; before: string; after: string }> = [];
   after.forEach((contract: Record<string, any>, index: number) => {
     const old = contract.id ? originals.find((item) => item.id === contract.id) : undefined;
-    const title = String(contract.name || `合同 ${index + 1}`);
+    const title = contractTitle(contract);
     if (!old) { result.push({ key: `contract-${index}`, label: '新增合同', before: '无', after: title }); return; }
     Object.entries(labels).forEach(([key, label]) => {
       if (key in contract && !employeeReviewValuesEqual(key, old[key], contract[key])) result.push({ key: `contract-${index}-${key}`, label: `${title} · ${label}`, before: key === 'contractSubjectId' ? (old[key] ? '原主体关联' : '尚未关联') : display(key, old[key], old), after: key === 'contractSubjectId' ? (contract[key] ? '新主体关联' : '尚未关联') : display(key, contract[key], contract) });
@@ -37,7 +38,7 @@ function contractChanges(request: EmployeeDataReview) {
       if (JSON.stringify(old[key] ?? []) !== JSON.stringify(contract[key] ?? [])) result.push({ key: `contract-${index}-${key}`, label: `${title} · ${key === 'images' ? '图片' : '附件'}`, before: `${old[key]?.length ?? 0} 份`, after: `${contract[key]?.length ?? 0} 份` });
     }
   });
-  originals.filter((old) => !after.some((item: Record<string, any>) => item.id === old.id)).forEach((old, index) => result.push({ key: `removed-contract-${index}`, label: '移除合同', before: String(old.name || '未命名合同'), after: '已移除' }));
+  originals.filter((old) => !after.some((item: Record<string, any>) => item.id === old.id)).forEach((old, index) => result.push({ key: `removed-contract-${index}`, label: '移除合同', before: contractTitle(old), after: '已移除' }));
   return result;
 }
 function eventLabel(action: string) {
