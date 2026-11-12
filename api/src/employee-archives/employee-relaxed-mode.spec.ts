@@ -195,4 +195,16 @@ describe('宽松模式：档案提交后自动审核通过', () => {
     const result = await service.submitDraft(user.id, { baseVersion, employee: { name: '员工乙' }, profile: {} }, operator);
     expect(result).toMatchObject({ reviewOutcome: 'pending' });
   });
+
+  it('仅自动审核调用方明确提交的部分', async () => {
+    const { service, reviews } = buildService(buildUser(), 'relaxed');
+    await service.autoApproveRelaxed(['request-1'], operator, ['performance']);
+    expect(reviews.approveBatch).toHaveBeenLastCalledWith(
+      { requestIds: ['request-1'], scopes: ['performance'] }, operator, { autoApproved: true },
+    );
+    await service.autoApproveRelaxed(['request-1'], operator, ['profile']);
+    expect(reviews.approveBatch).toHaveBeenLastCalledWith(
+      { requestIds: ['request-1'], scopes: ['profile'] }, operator, { autoApproved: true },
+    );
+  });
 });

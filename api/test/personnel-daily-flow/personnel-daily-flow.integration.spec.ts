@@ -399,6 +399,26 @@ describe('Personnel daily flow with real JWT, HTTP and disposable PostgreSQL', (
     expect((await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: pending.id } })).profileReviewStatus).toBe('pending');
   });
 
+  it('does not approve old profile changes when only a performance manager is resubmitted', async () => {
+    await app.http.put('/api/v1/personnel-config/review-mode').set(headers(admin)).send({ mode: 'standard' }).expect(200);
+    const { user } = await fixture();
+    const firstManager = (await fixture()).user;
+    const newManager = (await fixture()).user;
+    const pending = await submit(user.id, { name: '虚拟旧待审姓名' }, { managerId: firstManager.id });
+    await app.http.put('/api/v1/personnel-config/review-mode').set(headers(admin)).send({ mode: 'relaxed' }).expect(200);
+    const result = (await app.http.post(`${root}/${user.id}/performance-manager-review`).set(headers())
+      .send({ managerId: newManager.id }).expect(201)).body.data;
+    expect(result).toMatchObject({ id: pending.id, reviewOutcome: 'approved' });
+    expect(await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: pending.id } }))
+      .toMatchObject({ profileReviewStatus: 'pending', performanceReviewStatus: 'approved' });
+    expect(await app.prisma.user.findUniqueOrThrow({ where: { id: user.id } }))
+      .toMatchObject({ name: user.name, directManagerId: newManager.id });
+    const audits = await app.prisma.auditLog.findMany({ where: { entityId: pending.id, action: 'approve_employee_data_change' } });
+    expect(audits).toHaveLength(1);
+    expect(audits[0].newValue).toMatchObject({ scopes: ['performance'], autoApproved: true });
+    await app.http.put('/api/v1/personnel-config/review-mode').set(headers(admin)).send({ mode: 'standard' }).expect(200);
+  });
+
   const webTest = process.env.PERSONNEL_DAILY_WEB_URL ? it : it.skip;
   webTest('real browser: PC/mobile autosave-submit-reload and administrator mode confirmation', async () => {
     const url = new URL(process.env.PERSONNEL_DAILY_WEB_URL!);

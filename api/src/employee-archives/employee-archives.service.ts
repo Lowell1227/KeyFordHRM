@@ -33,7 +33,7 @@ import {
 } from './direct-apply-profile-fields';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
-import { EmployeeDataReviewsService } from './employee-data-reviews.service';
+import { EmployeeDataReviewsService, EmployeeReviewScope } from './employee-data-reviews.service';
 import { PersonnelConfigService } from '@/personnel-config/personnel-config.service';
 
 export interface UpsertEmployeeProfileInput {
@@ -1145,13 +1145,17 @@ export class EmployeeArchivesService {
    * 宽松模式：提交事务提交后再自动审核通过（approveBatch 自带独立事务，严禁嵌套）。
    * 自动审核失败时不阻断提交结果，申请保留在待审核队列由人工处理，并记录留痕。
    */
-  async autoApproveRelaxed(requestIds: Array<string | null | undefined>, operator: AuthUser): Promise<'approved' | 'pending' | 'not_required'> {
+  async autoApproveRelaxed(
+    requestIds: Array<string | null | undefined>,
+    operator: AuthUser,
+    scopes: EmployeeReviewScope[] = ['profile', 'performance'],
+  ): Promise<'approved' | 'pending' | 'not_required'> {
     const ids = [...new Set(requestIds.filter((id): id is string => typeof id === 'string' && id.length > 0))];
     if (ids.length === 0) return 'not_required';
     if (!this.reviews || !this.personnelConfig) return 'pending';
     try {
       if (await this.personnelConfig.getReviewMode() !== 'relaxed') return 'pending';
-      const result = await this.reviews.approveBatch({ requestIds: ids, scopes: ['profile', 'performance'] }, operator, { autoApproved: true });
+      const result = await this.reviews.approveBatch({ requestIds: ids, scopes }, operator, { autoApproved: true });
       if (!result.failed.length && ids.every(id => result.succeeded.some(item => item.requestId === id))) return 'approved';
     } catch {
       // The submitted request is durable; report pending instead of inviting a duplicate submission.

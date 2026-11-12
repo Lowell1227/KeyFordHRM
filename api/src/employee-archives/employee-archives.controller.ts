@@ -167,7 +167,7 @@ export class EmployeeArchivesController {
     @CurrentUser() operator: AuthUser,
   ) {
     const view = await this.reviews.proposePerformanceManager(id, dto, operator);
-    const reviewOutcome = await this.archives.autoApproveRelaxed([view.id], operator);
+    const reviewOutcome = await this.archives.autoApproveRelaxed([view.id], operator, ['performance']);
     return { ...view, reviewOutcome };
   }
 
@@ -270,7 +270,7 @@ export class EmployeeArchivesController {
     @CurrentUser() operator: AuthUser,
   ) {
     const view = await this.archives.upsertProfile(id, dto, operator);
-    const reviewOutcome = await this.archives.autoApproveRelaxed([view.id], operator);
+    const reviewOutcome = await this.archives.autoApproveRelaxed([view.id], operator, ['profile']);
     return { ...view, reviewOutcome };
   }
 
