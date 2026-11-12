@@ -1,0 +1,51 @@
+# Run through `node scripts/preview.mjs`. Never combine with the production file.
+name: hrm
+services:
+  api:
+    image: ${PREVIEW_API_IMAGE:?Run the preview launcher}
+    working_dir: /app
+    command: ["sh", "-c", "node prisma/preview-guard.cjs && ./node_modules/.bin/prisma generate && ./node_modules/.bin/prisma migrate deploy && ./node_modules/.bin/ts-node prisma/seed-preview.ts && npm run build && node dist/src/main.js"]
+    env_file: .env.preview.local
+    environment:
+      NODE_ENV: development
+      TZ: Asia/Shanghai
+      CHOKIDAR_USEPOLLING: "true"
+    volumes:
+      - ./api:/app
+      - api_modules:/app/node_modules
+      - ./config/preview-empty.env:/app/.env:ro
+    networks: [internal]
+    restart: unless-stopped
+  web:
+    image: ${PREVIEW_WEB_IMAGE:?Run the preview launcher}
+    working_dir: /app
+    command: ["npm", "run", "dev", "--", "--host", "0.0.0.0"]
+    environment:
+      NODE_ENV: development
+      VITE_PREVIEW_MODE: "true"
+      VITE_API_BASE_URL: ""
+      VITE_DEV_PROXY_TARGET: http://api:3000
+      VITE_DINGTALK_APP_KEY: ""
+      VITE_DINGTALK_CORP_ID: ""
+      VITE_DINGTALK_REDIRECT_URI: http://localhost:5173/auth/callback
+      CHOKIDAR_USEPOLLING: "true"
+    ports: ["127.0.0.1:5173:5173"]
+    volumes:
+      - ./web:/app
+      - web_modules:/app/node_modules
+    networks: [internal, external]
+    restart: unless-stopped
+volumes:
+  api_modules:
+    external: true
+    name: ${PREVIEW_API_MODULES:?Run the preview launcher}
+  web_modules:
+    external: true
+    name: ${PREVIEW_WEB_MODULES:?Run the preview launcher}
+networks:
+  internal:
+    external: true
+    name: hrm_internal
+  external:
+    external: true
+    name: hrm_external

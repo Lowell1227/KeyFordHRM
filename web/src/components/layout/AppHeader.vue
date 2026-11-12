@@ -5,6 +5,7 @@ import { ArrowDown } from '@element-plus/icons-vue';
 import { useAuthStore } from '@/stores/auth.store';
 import UserAvatar from '@/components/common/UserAvatar.vue';
 import NotificationBell from './NotificationBell.vue';
+import { isLocalPreview } from '@/utils/preview-mode';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -54,6 +55,7 @@ async function onLogout() {
       <h1 class="page-title" data-testid="app-route-title">
         <span>{{ pageTitle }}</span>
       </h1>
+      <el-tag v-if="isLocalPreview" type="warning" size="small" class="preview-badge" data-testid="preview-badge">预览</el-tag>
     </div>
 
     <div class="app-header__right">
@@ -118,7 +120,10 @@ async function onLogout() {
   display: flex;
   align-items: center;
   min-width: 0;
+  gap: 8px;
 }
+
+.preview-badge { flex-shrink: 0; }
 
 .page-title {
   display: flex;

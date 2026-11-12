@@ -26,7 +26,11 @@ HRM/
 3. **审批权与角色解耦**：审批资格只看 `departments.approver_id`；`sys_role` 仅控菜单可见性；李宏（董事长）`can_view_all=true` 表全量只读，审批权另由 approver_id 决定。
 4. **逻辑缺陷修正**：豁免计算含离职日期（`users.leave_date`）；加/减分维度直加直减不乘维度权重；`published` 态即可申诉；多模板按 applicableUsers > applicableDepts 匹配 snapshot。
 
-## 快速开始（开发，需 Node 20 + Docker Desktop）
+## 本机固定预览
+
+已有开发栈的本机验收入口为 `http://localhost:5173`，使用虚构测试身份和隔离数据。运行 `node scripts/preview.mjs` 启动或更新后端；前端修改自动热更新。详见 [预览说明](docs/development-preview.md)。不要在这台机器上用下方旧开发启动命令覆盖已配置的预览栈。
+
+## 快速开始（新开发环境，需 Node 20 + Docker Desktop）
 
 ```bash
 cp .env.example .env          # 填写各项密钥/密码

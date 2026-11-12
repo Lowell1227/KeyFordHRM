@@ -1,11 +1,13 @@
 <script setup lang="ts">
-import { computed, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import { ElMessage } from 'element-plus';
 import { useAuthStore } from '@/stores/auth.store';
 import { loadDingTalkJsApi } from '@/utils/dingtalk-jsapi';
 import { dingtalkLoginErrorMessage } from '@/utils/dingtalk-login-error';
 import { buildDingTalkOAuthUrl, clearArchiveOAuthReturn, rememberArchiveOAuthReturn } from '@/utils/dingtalk-oauth';
+import { authApi, type TestAccount } from '@/api/auth.api';
+import { isLocalPreview } from '@/utils/preview-mode';
 
 const auth = useAuthStore();
 const router = useRouter();
@@ -19,6 +21,34 @@ const showPasswordForm = ref(false);
 const loading = ref(false);
 const form = reactive({ employeeNo: '', password: '' });
 const formErrors = reactive({ employeeNo: '', password: '' });
+const previewAccounts = ref<TestAccount[]>([]);
+const previewAccount = ref('HR001');
+const previewError = ref('');
+
+onMounted(async () => {
+  if (!isLocalPreview) return;
+  try {
+    const result = await authApi.getTestAccounts();
+    previewAccounts.value = result.enabled ? result.accounts : [];
+    if (!previewAccounts.value.length) previewError.value = '预览账号暂不可用，请检查预览服务';
+  } catch {
+    previewError.value = '预览服务尚未就绪，请稍后重试';
+  }
+});
+
+async function onPreviewLogin() {
+  if (!isLocalPreview || loading.value || !previewAccounts.value.some((item) => item.employeeNo === previewAccount.value)) return;
+  loading.value = true;
+  previewError.value = '';
+  try {
+    await auth.loginWithTestAccount(previewAccount.value);
+    redirectAfterLogin();
+  } catch {
+    previewError.value = '预览登录失败，请检查预览服务后重试';
+  } finally {
+    loading.value = false;
+  }
+}
 
 const DINGTALK_APP_KEY = import.meta.env.VITE_DINGTALK_APP_KEY || 'dinghwbnyktt3oku2jd3';
 const DINGTALK_CORP_ID = import.meta.env.VITE_DINGTALK_CORP_ID || '';
@@ -38,7 +68,7 @@ function getDingTalkRedirectUri() {
 }
 
 async function onDingTalkLogin() {
-  if (loading.value) return;
+  if (isLocalPreview || loading.value) return;
 
   if (isDingTalkEnv.value) {
     if (!DINGTALK_CORP_ID) {
@@ -157,11 +187,20 @@ async function onPasswordLogin() {
 
         <header class="auth-heading">
           <p class="auth-eyebrow">绩效管理系统</p>
-          <h2>欢迎登录</h2>
-          <p>使用企业身份进入你的绩效工作台</p>
+          <h2>{{ isLocalPreview ? '预览系统' : '欢迎登录' }}</h2>
+          <p>{{ isLocalPreview ? '本机预览 · 虚构测试数据' : '使用企业身份进入你的绩效工作台' }}</p>
         </header>
 
+        <el-form v-if="isLocalPreview" aria-label="预览登录" @submit.prevent="onPreviewLogin">
+          <el-form-item label="预览身份" :error="previewError">
+            <el-select v-model="previewAccount" aria-label="预览身份" data-testid="preview-account" style="width: 100%">
+              <el-option v-for="account in previewAccounts" :key="account.employeeNo" :value="account.employeeNo" :label="`${account.name} (${account.employeeNo})`" />
+            </el-select>
+          </el-form-item>
+          <el-button type="primary" class="full" size="large" native-type="submit" :loading="loading" :disabled="!previewAccounts.length" data-testid="preview-login">进入预览</el-button>
+        </el-form>
         <el-button
+          v-else
           type="primary"
           size="large"
           class="dingtalk-btn"
@@ -171,7 +210,7 @@ async function onPasswordLogin() {
           {{ dingtalkButtonText }}
         </el-button>
 
-        <div class="auth-options">
+        <div v-if="!isLocalPreview" class="auth-options">
           <button
             type="button"
             class="auth-option"
@@ -225,7 +264,7 @@ async function onPasswordLogin() {
 
         <p class="security-note">
           <span aria-hidden="true"></span>
-          企业身份认证 · 数据安全保护
+          {{ isLocalPreview ? '仅预览数据 · 不影响正式系统' : '企业身份认证 · 数据安全保护' }}
         </p>
       </div>
     </main>
