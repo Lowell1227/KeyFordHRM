@@ -87,12 +87,14 @@ export class EmployeeArchivesController {
 
   @Post(':userId/reentry')
   @HrCapabilities('employee_archive_edit')
-  createReentry(
+  async createReentry(
     @Param('userId', new ParseUUIDPipe()) userId: string,
     @Body() input: CreateEmployeeReentryDto,
     @CurrentUser() operator: AuthUser,
   ) {
-    return this.onboarding.createReentry(userId, input, operator.id);
+    const view = await this.onboarding.createReentry(userId, input, operator.id);
+    const reviewOutcome = await this.archives.autoApproveRelaxed([view.id], operator);
+    return { ...(reviewOutcome === 'approved' ? await this.archives.getApplication(view.id, operator) : view), reviewOutcome };
   }
 
   @Get(':userId/reentry/current')
@@ -103,12 +105,14 @@ export class EmployeeArchivesController {
 
   @Patch('reentry/:requestId')
   @HrCapabilities('employee_archive_edit')
-  reviseReentry(
+  async reviseReentry(
     @Param('requestId', new ParseUUIDPipe()) requestId: string,
     @Body() input: ReviseEmployeeReentryDto,
     @CurrentUser() operator: AuthUser,
   ) {
-    return this.onboarding.reviseReentry(requestId, input, operator.id);
+    const view = await this.onboarding.reviseReentry(requestId, input, operator.id);
+    const reviewOutcome = await this.archives.autoApproveRelaxed([view.id], operator);
+    return { ...(reviewOutcome === 'approved' ? await this.archives.getApplication(view.id, operator) : view), reviewOutcome };
   }
 
   @Post('reentry/:requestId/cancel')
@@ -157,12 +161,14 @@ export class EmployeeArchivesController {
 
   @Post(':id/performance-manager-review')
   @HrCapabilities('employee_archive_edit')
-  proposePerformanceManager(
+  async proposePerformanceManager(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: ProposePerformanceManagerDto,
     @CurrentUser() operator: AuthUser,
   ) {
-    return this.reviews.proposePerformanceManager(id, dto, operator);
+    const view = await this.reviews.proposePerformanceManager(id, dto, operator);
+    const reviewOutcome = await this.archives.autoApproveRelaxed([view.id], operator);
+    return { ...view, reviewOutcome };
   }
 
   @Get('imports/template')
@@ -258,12 +264,14 @@ export class EmployeeArchivesController {
 
   @Patch(':id/profile')
   @HrCapabilities('employee_archive_edit')
-  updateProfile(
+  async updateProfile(
     @Param('id', new ParseUUIDPipe()) id: string,
     @Body() dto: UpdateEmployeeProfileDto,
     @CurrentUser() operator: AuthUser,
   ) {
-    return this.archives.upsertProfile(id, dto, operator);
+    const view = await this.archives.upsertProfile(id, dto, operator);
+    const reviewOutcome = await this.archives.autoApproveRelaxed([view.id], operator);
+    return { ...view, reviewOutcome };
   }
 
   @Patch(':id/draft')

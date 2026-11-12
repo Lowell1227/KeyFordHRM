@@ -263,6 +263,7 @@ export class EmployeeDataReviewsService {
   async approveBatch(
     input: ApproveEmployeeReviewsInput,
     operator: AuthUser,
+    options?: { autoApproved?: boolean },
   ): Promise<EmployeeReviewBatchResult> {
     const requestIds = [...new Set(input.requestIds)];
     const scopes = [...new Set(input.scopes)];
@@ -401,7 +402,7 @@ export class EmployeeDataReviewsService {
             action: 'approve_employee_data_change',
             entityType: 'employee_data_change_request',
             entityId: requestId,
-            newValue: { scopes: [scope] },
+            newValue: { scopes: [scope], ...(options?.autoApproved ? { autoApproved: true } : {}) },
           },
         });
         return true;

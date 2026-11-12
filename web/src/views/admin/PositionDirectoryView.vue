@@ -57,14 +57,16 @@ async function submit() {
   }
   dialog.saving = true;
   try {
-    if (dialog.editingId) await positionsApi.update(dialog.editingId, body); else await positionsApi.create(body);
-    ElMessage.success('已提交岗位变更，HR 管理员审核后生效'); dialog.visible = false;
+    const result = dialog.editingId ? await positionsApi.update(dialog.editingId, body) : await positionsApi.create(body);
+    ElMessage.success(result.status === 'approved' ? '岗位变更已生效' : '已提交岗位变更，HR 管理员审核后生效'); dialog.visible = false;
+    await load();
   } finally { dialog.saving = false; }
 }
 async function deactivate(row: PositionRecord) {
   await ElMessageBox.confirm(`停用岗位“${row.name}”？在职员工仍使用时可提交，但审核前需先处理替代岗位。`, '停用岗位', { type: 'warning', confirmButtonText: '提交停用' });
-  await positionsApi.deactivate(row.id);
-  ElMessage.success('已提交停用审核');
+  const result = await positionsApi.deactivate(row.id);
+  ElMessage.success(result.status === 'approved' ? '岗位已停用' : '已提交停用审核');
+  await load();
 }
 onMounted(load);
 </script>

@@ -11,6 +11,7 @@ import { CreateDepartmentDto } from './dto/create-department.dto';
 import { MergeDepartmentDto } from './dto/merge-department.dto';
 import type { AuthUser } from '@/common/types/auth.types';
 import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
+import { PersonnelConfigService } from '@/personnel-config/personnel-config.service';
 
 interface DepartmentStructureRecord {
   id: string;
@@ -66,7 +67,10 @@ export interface DepartmentNode {
 
 @Injectable()
 export class DepartmentsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly personnelConfig?: PersonnelConfigService,
+  ) {}
 
   private buildPathMap(departments: DepartmentStructureRecord[]): Map<string, string> {
     const nodes = new Map(departments.map((item) => [item.id, item]));
@@ -597,8 +601,8 @@ export class DepartmentsService {
     return { items, total, page: query.page, pageSize: query.pageSize };
   }
 
-  async approveChange(requestId: string, operator: AuthUser) {
-    this.assertHrAdmin(operator);
+  async approveChange(requestId: string, operator: AuthUser, options?: { autoApproved?: boolean }) {
+    if (!options?.autoApproved) this.assertHrAdmin(operator);
     return this.prisma.$transaction(async (tx) => {
       const request = await tx.departmentChangeRequest.findUnique({ where: { id: requestId } });
       if (!request) {
@@ -642,7 +646,7 @@ export class DepartmentsService {
           entityType: 'department_change_request',
           entityId: requestId,
           oldValue: { status: 'pending', createdById: request.createdById },
-          newValue: { status: 'approved', action: request.action, departmentId: appliedDepartmentId },
+          newValue: { status: 'approved', action: request.action, departmentId: appliedDepartmentId, ...(options?.autoApproved ? { autoApproved: true } : {}) },
         },
       });
       return updated;
@@ -700,7 +704,7 @@ export class DepartmentsService {
     operator: AuthUser,
   ) {
     try {
-      return await this.prisma.$transaction(async (tx) => {
+      const request = await this.prisma.$transaction(async (tx) => {
         if (departmentId) {
           const pending = await tx.departmentChangeRequest.findFirst({
             where: { departmentId, status: { in: ['pending', 'applying'] } },
@@ -751,6 +755,16 @@ export class DepartmentsService {
         });
         return request;
       });
+      // 宽松模式：提交事务提交后再自动审核通过；失败保留在待审核队列由人工处理。
+      try {
+        if (action !== 'merge' && this.personnelConfig && await this.personnelConfig.getReviewMode() === 'relaxed') {
+          await this.approveChange(request.id, operator, { autoApproved: true });
+          return { ...request, status: 'approved', reviewOutcome: 'approved' };
+        }
+      } catch {
+        // The pending request and submit audit remain durable if automatic approval fails.
+      }
+      return { ...request, reviewOutcome: 'pending' };
     } catch (error) {
       if ((error as { code?: string })?.code === 'P2002') {
         throw new BadRequestException({

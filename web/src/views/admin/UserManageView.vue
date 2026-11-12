@@ -20,6 +20,7 @@ import {
   type EmployeeArchiveIssue,
 } from '@/api/employee-archives.api';
 import { usersApi } from '@/api/users.api';
+import { personnelConfigApi, type PersonnelReviewMode } from '@/api/personnel-config.api';
 import { useExport } from '@/composables/useExport';
 import { uploadApi } from '@/api/upload.api';
 import ChartCard from '@/components/common/ChartCard.vue';
@@ -704,6 +705,16 @@ const activeArchiveDraft = ref<EmployeeDataReview | null>(null);
 const archiveEditorRef = ref<InstanceType<typeof EmployeeArchiveInlineEditor> | null>(null);
 const archiveDraftSaving = ref(false);
 const archiveSaveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
+const reviewMode = ref<PersonnelReviewMode>('standard');
+const archiveReviewModeRelaxed = computed(() => reviewMode.value === 'relaxed');
+
+async function loadReviewMode() {
+  try {
+    reviewMode.value = (await personnelConfigApi.getReviewMode()).mode;
+  } catch {
+    // 读取失败保持标准模式默认，避免误判自动生效。
+  }
+}
 const archiveIssueContext = ref<EmployeeArchiveIssue | null>(null);
 const archiveNotice = ref('');
 const archiveSubmitError = ref('');
@@ -781,12 +792,18 @@ async function submitArchiveDraft(value: {
   try {
     const result = await employeeArchivesApi.submitDraft(data.id, value);
     const applied = result.directApplied ?? [];
+    const relaxed = result.reviewOutcome === 'approved';
     if (applied.length && result.request) {
-      ElMessage.success(`${applied.join('、')}已直接生效，其余变更已提交审核，审核通过后生效`);
-      archiveNotice.value = `${applied.join('、')}已直接生效，其余变更已提交审核，审核通过后生效`;
+      ElMessage.success(relaxed
+        ? `${applied.join('、')}已直接生效，其余变更已生效`
+        : `${applied.join('、')}已直接生效，其余变更已提交审核，审核通过后生效`);
+      archiveNotice.value = relaxed ? '变更已生效' : `${applied.join('、')}已直接生效，其余变更已提交审核，审核通过后生效`;
     } else if (applied.length) {
       ElMessage.success(`${applied.join('、')}已直接生效`);
       archiveNotice.value = `${applied.join('、')}已直接生效`;
+    } else if (relaxed) {
+      ElMessage.success('档案变更已生效');
+      archiveNotice.value = '档案变更已生效';
     } else {
       ElMessage.success('档案变更已提交审核，审核通过后生效');
       archiveNotice.value = '已提交审核，审核通过后生效';
@@ -794,6 +811,17 @@ async function submitArchiveDraft(value: {
     archiveEditing.value = false;
     activeArchiveDraft.value = null;
     archiveSubmitError.value = '';
+    // 重新拉取档案详情，查看模式立即展示生效后的最新数据。
+    try {
+      const archive = await employeeArchivesApi.getArchive(data.id);
+      if (employeeArchiveDrawer.value.visible && employeeArchiveDrawer.value.data?.id === data.id && !archiveEditing.value) {
+        employeeArchiveDrawer.value.data = archive;
+        activeArchiveDraft.value = archive.changeHistory?.find(request => request.sourceType === 'manual_archive_change'
+          && (request.recordStatus === 'draft' || request.canResume) && !request.archivedAt) ?? null;
+      }
+    } catch {
+      // 详情刷新失败不阻断提交结果，用户重新打开详情即可看到最新数据。
+    }
     refreshCurrentView();
   } catch (error) {
     archiveSubmitError.value = isAxiosError(error) && error.response?.status === 409
@@ -896,17 +924,18 @@ async function assignUsersToDepartment(userIds: string[], department: Department
   if (!userIds.length || department.id === UNASSIGNED_DEPARTMENT_ID) return;
   try {
     await ElMessageBox.confirm(
-      `确认将 ${userIds.length} 名员工归属到“${department.name}”？提交后由 HR 管理员审核，审核通过前人员仍保留在原位置。`,
+      `将 ${userIds.length} 名员工归属到“${department.name}”？审核通过后更新人员归属，宽松模式下系统自动审核。`,
       '调整人员归属',
       { confirmButtonText: '提交审核', cancelButtonText: '取消', type: 'warning' },
     );
     const result = await employeeArchivesApi.submitDepartmentAssignments(userIds, department.id);
     if (result.submitted > 0) {
-      ElMessage.success(`已提交 ${result.submitted} 条人员归属变更审核`);
+      ElMessage.success(result.reviewOutcome === 'approved' ? `${result.submitted} 条人员归属变更已审核通过` : `已提交 ${result.submitted} 条人员归属变更，仍有申请待人工审核`);
     } else {
       ElMessage.info('所选人员已归属该部门，无需重复提交');
     }
     selectedOrgMembers.value = [];
+    await Promise.all([loadDepartments(), loadOrgMembers(), loadUsers()]);
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') throw error;
   } finally {
@@ -1384,8 +1413,8 @@ async function confirmDepartmentMerge() {
   if (!dialog.source || !dialog.targetId) { ElMessage.warning('请选择合并后的目标部门'); return; }
   dialog.saving = true;
   try {
-    await departmentsApi.merge(dialog.source.id, dialog.targetId);
-    ElMessage.success('部门合并已提交 HR 管理员审核');
+    const result = await departmentsApi.merge(dialog.source.id, dialog.targetId);
+    ElMessage.success(result.status === 'approved' ? '部门合并已审核通过' : '部门合并已提交 HR 管理员审核');
     dialog.visible = false;
     await loadDepartments();
   } finally { dialog.saving = false; }
@@ -1396,8 +1425,8 @@ async function saveDepartment(value: UpdateDepartmentStructureBody) {
   if (!department) return;
   departmentEditDrawer.value.saving = true;
   try {
-    await departmentsApi.updateStructure(department.id, value);
-    ElMessage.success('部门变更已提交 HR 管理员审核');
+    const result = await departmentsApi.updateStructure(department.id, value);
+    ElMessage.success(result.status === 'approved' ? '部门变更已审核通过' : '部门变更已提交 HR 管理员审核');
     departmentEditDrawer.value.visible = false;
     await loadDepartments();
     activeView.value = 'org';
@@ -1431,8 +1460,9 @@ async function removeDepartment(row: Department) {
       '停用部门',
       { confirmButtonText: '提交停用审核', cancelButtonText: '取消', type: 'warning' },
     );
-    await departmentsApi.remove(row.id);
-    ElMessage.success('停用部门申请已提交 HR 管理员审核');
+    const result = await departmentsApi.remove(row.id);
+    ElMessage.success(result.status === 'approved' ? '部门已停用' : '停用部门申请已提交 HR 管理员审核');
+    await loadDepartments();
   } catch (error) {
     if (error !== 'cancel' && error !== 'close') throw error;
   }
@@ -1470,8 +1500,8 @@ async function onDepartmentDrop(draggingNode: any, dropNode: any, type: 'before'
       '调整组织层级',
       { confirmButtonText: '确认调整', cancelButtonText: '取消', type: 'warning' },
     );
-    await departmentsApi.updateStructure(department.id, { parentId });
-    ElMessage.success('组织层级变更已提交 HR 管理员审核');
+    const result = await departmentsApi.updateStructure(department.id, { parentId });
+    ElMessage.success(result.status === 'approved' ? '组织层级变更已审核通过' : '组织层级变更已提交 HR 管理员审核');
     activeView.value = 'org';
   } catch {
     // 取消时重新加载正式结构；接口错误由拦截器展示。
@@ -1650,11 +1680,12 @@ async function confirmPersonSettings() {
       ElMessage.info('没有需要提交的变更');
       return;
     }
-    await Promise.all(actions);
+    const results = await Promise.all(actions);
+    const relationApproved = performanceRelationChanged && results.some((result) => (result as { reviewOutcome?: string } | undefined)?.reviewOutcome === 'approved');
     if (performanceRelationChanged && (systemRoleChanged || hrCapabilitiesChanged)) {
-      ElMessage.success('系统权限已更新；绩效直属上级变更已提交 HR 审核');
+      ElMessage.success(relationApproved ? '系统权限已更新；绩效直属上级变更已审核通过' : '系统权限已更新；绩效直属上级变更已提交 HR 审核');
     } else if (performanceRelationChanged) {
-      ElMessage.success('绩效直属上级变更已提交 HR 审核');
+      ElMessage.success(relationApproved ? '绩效直属上级变更已审核通过' : '绩效直属上级变更已提交 HR 审核');
     } else {
       ElMessage.success('系统权限已更新');
     }
@@ -1790,7 +1821,7 @@ function refreshAfterPersonnelReview() {
 onMounted(async () => {
   document.addEventListener('click', closeDepartmentContextMenu);
   window.addEventListener('personnel-data-changed', refreshAfterPersonnelReview);
-  const initialLoads: Promise<unknown>[] = [loadDepartments(), loadUnassignedMemberTotal()];
+  const initialLoads: Promise<unknown>[] = [loadDepartments(), loadUnassignedMemberTotal(), loadReviewMode()];
   if (activeView.value === 'users') initialLoads.push(loadUsers());
   if (activeView.value === 'processing') initialLoads.push(changeProcessingCategory(processingCategory.value));
   await Promise.all(initialLoads);
@@ -2330,6 +2361,7 @@ onBeforeUnmount(() => {
             :editing="archiveEditing"
             :archive="employeeArchiveDrawer.data"
             :draft="activeArchiveDraft"
+            :review-mode="reviewMode"
             :departments="departments"
             :busy="archiveEditSaving"
             :focus-field="archiveIssueContext?.field"
@@ -2550,13 +2582,18 @@ onBeforeUnmount(() => {
       </div>
       <template #footer>
         <div class="archive-edit-footer">
-          <div v-if="archiveEditing" class="archive-footer-state" aria-live="polite"><span>{{ archiveSaveState === 'saving' ? '正在保存…' : archiveSaveState === 'saved' ? '草稿已保存' : archiveSaveState === 'error' ? '草稿未保存，请核对提示' : '修改后自动保存' }}</span><el-button link type="primary" :loading="archiveDraftSaving" :disabled="archiveEditSaving" @click="archiveEditorRef?.saveDraft()">保存草稿</el-button></div>
+          <div v-if="archiveEditing && !archiveReviewModeRelaxed" class="archive-footer-state" aria-live="polite"><span>{{ archiveSaveState === 'saving' ? '正在保存…' : archiveSaveState === 'saved' ? '草稿已保存' : archiveSaveState === 'error' ? '草稿未保存，请核对提示' : '修改后自动保存' }}</span><el-button link type="primary" :loading="archiveDraftSaving" :disabled="archiveEditSaving" @click="archiveEditorRef?.saveDraft()">保存草稿</el-button></div>
           <el-button v-if="resignationDepartmentEmployeeId" :disabled="archiveEditSaving || archiveDraftSaving" @click="beforeCloseEmployeeArchive(() => employeeArchiveDrawer.visible = false)">返回离职办理</el-button>
           <el-button v-else-if="nextArchivePerson" link :disabled="archiveEditSaving || archiveDraftSaving" @click="openNextArchive">下一位待处理</el-button>
           <template v-if="archiveEditing">
             <el-button link :disabled="archiveEditSaving || archiveDraftSaving" @click="cancelArchiveEditing">取消</el-button>
-            <el-button :disabled="archiveEditSaving || archiveDraftSaving" @click="saveArchiveAndClose">保存后关闭</el-button>
-            <el-button type="primary" :loading="archiveEditSaving" :disabled="archiveDraftSaving" @click="archiveEditorRef?.submit()">提交审核</el-button>
+            <template v-if="archiveReviewModeRelaxed">
+              <el-button type="primary" :loading="archiveEditSaving" :disabled="archiveDraftSaving" @click="archiveEditorRef?.submit()">提交变更</el-button>
+            </template>
+            <template v-else>
+              <el-button :disabled="archiveEditSaving || archiveDraftSaving" @click="saveArchiveAndClose">保存后关闭</el-button>
+              <el-button type="primary" :loading="archiveEditSaving" :disabled="archiveDraftSaving" @click="archiveEditorRef?.submit()">提交审核</el-button>
+            </template>
           </template>
         </div>
       </template>

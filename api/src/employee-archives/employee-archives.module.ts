@@ -14,9 +14,10 @@ import { EmployeeIdentityMatchService } from './employee-identity-match.service'
 import { EmployeeOnboardingService } from './employee-onboarding.service';
 import { EmployeeArchiveIssuesController } from './employee-archive-issues.controller';
 import { EmployeeArchiveIssuesService } from './employee-archive-issues.service';
+import { PersonnelConfigModule } from '@/personnel-config/personnel-config.module';
 
 @Module({
-  imports: [PrismaModule],
+  imports: [PrismaModule, PersonnelConfigModule],
   controllers: [ArchiveAssistantController, EmployeeArchiveIssuesController, EmployeeArchivesController],
   providers: [
     ArchiveAssistantService,

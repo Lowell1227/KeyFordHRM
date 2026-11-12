@@ -157,7 +157,7 @@ async function submit() {
       : await employeeArchivesApi.createReentry(props.employee.id, body());
     currentRequest.value = request;
     savedSnapshot = JSON.stringify(form);
-    ElMessage.success(submittingPerformanceOnly ? '绩效关系已重新提交，已审核的任职保持不变' : '再入职申请已提交，HR 管理员审核后按生效日期启用');
+    ElMessage.success(request.reviewOutcome === 'approved' ? '申请已审核通过，按任职生效日期启用' : submittingPerformanceOnly ? '绩效关系已重新提交，已审核的任职保持不变' : '再入职申请已提交，HR 管理员审核后按生效日期启用');
     emit('submitted');
   } catch { /* 请求错误由接口提示，保留填写内容 */ }
   finally { saving.value = false; }

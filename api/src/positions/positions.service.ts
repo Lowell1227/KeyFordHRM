@@ -16,12 +16,27 @@ import type {
   UpdatePositionDto,
 } from './dto/position.dto';
 import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
+import { PersonnelConfigService } from '@/personnel-config/personnel-config.service';
 
 type PositionAction = 'create' | 'update' | 'deactivate';
 
 @Injectable()
 export class PositionsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly personnelConfig?: PersonnelConfigService,
+  ) {}
+
+  /** 宽松模式：岗位变更申请提交事务提交后再自动审核通过；失败保留在待审核队列由人工处理。 */
+  private async autoApproveRelaxed(requestId: string, operator: AuthUser) {
+    try {
+      if (!this.personnelConfig || await this.personnelConfig.getReviewMode() !== 'relaxed') return false;
+      await this.approve(requestId, operator, { autoApproved: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }
 
   async findAll(query: PositionQueryDto) {
     const keyword = query.keyword?.trim();
@@ -59,7 +74,7 @@ export class PositionsService {
 
   async create(dto: CreatePositionDto, operator: AuthUser) {
     const proposedValue = this.normalized({ ...dto, code: dto.code || `POS-${randomUUID()}` });
-    return this.prisma.$transaction(async (tx) => {
+    const request = await this.prisma.$transaction(async (tx) => {
       const duplicates = await tx.position.findFirst({
         where: {
           OR: [
@@ -107,6 +122,8 @@ export class PositionsService {
       });
       return request;
     }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    const approved = await this.autoApproveRelaxed(request.id, operator);
+    return { ...request, status: approved ? 'approved' : request.status };
   }
 
   async update(id: string, dto: UpdatePositionDto, operator: AuthUser) {
@@ -172,11 +189,11 @@ export class PositionsService {
     return { items, total, page: query.page, pageSize: query.pageSize };
   }
 
-  async approve(requestId: string, operator: AuthUser) {
+  async approve(requestId: string, operator: AuthUser, options?: { autoApproved?: boolean }) {
+    if (!options?.autoApproved) this.assertReviewer(operator);
     return this.prisma.$transaction(async (tx) => {
       const request = await tx.positionChangeRequest.findUnique({ where: { id: requestId } });
       if (!request) throw new NotFoundException({ code: ERROR_CODE.NOT_FOUND, message: '岗位变更不存在' });
-      this.assertReviewer(operator);
       if (request.status !== 'pending') {
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '该岗位变更已处理' });
       }
@@ -257,7 +274,7 @@ export class PositionsService {
           action: 'approve_position_change',
           entityType: 'position_change_request',
           entityId: requestId,
-          newValue: { action: request.action, positionId },
+          newValue: { action: request.action, positionId, ...(options?.autoApproved ? { autoApproved: true } : {}) },
         },
       });
       return result;
@@ -340,7 +357,11 @@ export class PositionsService {
         },
       });
       return request;
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable })
+      .then(async (request) => {
+        const approved = await this.autoApproveRelaxed(request.id, operator);
+        return { ...request, status: approved ? 'approved' : request.status };
+      });
   }
 
   private normalized(dto: { code: string; name: string; jobFamily?: string | null }) {

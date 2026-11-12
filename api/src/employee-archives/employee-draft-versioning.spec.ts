@@ -194,8 +194,8 @@ describe('employee draft optimistic concurrency', () => {
     f.draft.proposedValue.profile = { school: ' College ', birthDate: 'invalid-date' };
     f.input.profile = { ...f.draft.proposedValue.profile };
     f.user.employeeProfile = { school: changed ? 'College' : ' College ', birthDate: null };
-    // 免审字段在提交入口即校验，非法日期不再进入审核管道归一化
-    await expect(f.service.submitDraft('employee', f.input, operator)).rejects.toBeInstanceOf(BadRequestException);
+    // Concurrent formal edits take precedence; otherwise invalid dates fail before any write.
+    await expect(f.service.submitDraft('employee', f.input, operator)).rejects.toBeInstanceOf(changed ? ConflictException : BadRequestException);
     expect(f.tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
     expect(f.tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
   });

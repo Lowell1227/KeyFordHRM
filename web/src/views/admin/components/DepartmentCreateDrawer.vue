@@ -19,12 +19,12 @@ async function submit() {
   if (!form.name.trim()) { ElMessage.warning('请输入部门名称'); return; }
   form.saving = true;
   try {
-    await departmentsApi.create({
+    const result = await departmentsApi.create({
       name: form.name.trim(),
       parentId: form.parentId === ROOT_PARENT ? null : form.parentId,
       company: form.parentId === ROOT_PARENT ? 'fuede' : undefined,
     });
-    ElMessage.success('已提交新增部门，HR 管理员审核后生效');
+    ElMessage.success(result.status === 'approved' ? '新增部门已生效' : '已提交新增部门，HR 管理员审核后生效');
     emit('update:modelValue', false);
     emit('submitted');
   } finally { form.saving = false; }

@@ -727,7 +727,7 @@ describe('EmployeeArchivesService', () => {
       hrOperator,
     );
 
-    expect(result).toEqual({ submitted: 2 });
+    expect(result).toEqual({ submitted: 2, reviewOutcome: 'pending' });
     expect(reviewCreate).toHaveBeenCalledTimes(2);
     expect(reviewCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({

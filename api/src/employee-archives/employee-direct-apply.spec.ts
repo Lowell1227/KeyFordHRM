@@ -131,8 +131,8 @@ describe('员工档案免审个人信息字段直改', () => {
         action: 'employee_profile_direct_update',
         entityType: 'user',
         entityId: user.id,
-        oldValue: expect.objectContaining({ phone: '13800000000', education: '本科' }),
-        newValue: expect.objectContaining({ phone: '13911112222', education: '硕士' }),
+        oldValue: expect.objectContaining({ phone: '138****0000', education: '本科' }),
+        newValue: expect.objectContaining({ phone: '139****2222', education: '硕士' }),
       }),
     }));
   });
@@ -203,7 +203,7 @@ describe('员工档案免审个人信息字段直改', () => {
     expect(createData.profileReviewStatus).toBe('pending');
   });
 
-  it('员工已有在审申请时，直改会同步刷新在审申请 base 快照，避免审批误判漂移', async () => {
+  it('免审更新同时刷新待审单未修改字段的基准和提案，并保留修订版本', async () => {
     const user = buildUser();
     const pending = [{
       id: 'pending-1',
@@ -211,6 +211,10 @@ describe('员工档案免审个人信息字段直改', () => {
         employee: { name: '员工甲', phone: '13800000000' },
         profile: { phone: '13800000000', gender: '男' },
       },
+      proposedValue: { employee: { name: '员工乙', phone: '13800000000' }, profile: { phone: '13800000000', gender: '男' } },
+      requestVersion: 1,
+      recordStatus: 'submitted',
+      updatedAt: new Date('2026-01-01'),
     }];
     const { service, tx, baseVersion } = buildService(user, pending);
 
@@ -222,14 +226,56 @@ describe('员工档案免审个人信息字段直改', () => {
 
     expect(result.request).toBeNull();
     expect(tx.employeeDataChangeRequest.update).toHaveBeenCalledWith(expect.objectContaining({
-      where: { id: 'pending-1' },
-      data: {
+      where: expect.objectContaining({ id: 'pending-1', requestVersion: 1 }),
+      data: expect.objectContaining({
         baseValue: expect.objectContaining({
           employee: expect.objectContaining({ name: '员工甲', phone: '13911112222' }),
           profile: expect.objectContaining({ phone: '13911112222', gender: '男' }),
         }),
-      },
+        proposedValue: expect.objectContaining({ employee: expect.objectContaining({ name: '员工乙', phone: '13911112222' }) }),
+        requestVersion: { increment: 1 },
+        revisionHistory: expect.any(Array),
+      }),
     }));
+  });
+
+  it.each(['2026-02-31', '2026-13-01', '02/01/2026'])('拒绝无效或含糊的日历日期 %s', async birthDate => {
+    const user = buildUser();
+    const { service, tx, baseVersion } = buildService(user);
+    await expect(service.submitDraft(user.id, { baseVersion, employee: {}, profile: { birthDate } }, operator))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(tx.employeeProfile.upsert).not.toHaveBeenCalled();
+  });
+
+  it('已自动保存的纯免审草稿可提交，并归档已完成的草稿', async () => {
+    const user = buildUser();
+    const { service, tx } = buildService(user);
+    const existing = {
+      id: 'draft-1', requestVersion: 1, recordStatus: 'draft', updatedAt: new Date(),
+      profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
+      baseValue: { employee: { name: user.name, phone: user.phone }, profile: (service as any).profileReviewData(user.employeeProfile),
+        profileExists: true, contracts: [], performance: { managerId: null } },
+      proposedValue: {},
+    };
+    tx.employeeDataChangeRequest.findFirst.mockResolvedValue(existing as any);
+    const result = await service.submitDraft(user.id, {
+      draftId: existing.id, expectedVersion: 1, employee: {}, profile: { education: '硕士' },
+    }, operator);
+    expect(result.request).toBeNull();
+    expect(result.directApplied).toEqual(['学历']);
+    expect(tx.employeeDataChangeRequest.update).toHaveBeenCalledWith(expect.objectContaining({
+      data: expect.objectContaining({ archivedAt: expect.any(Date), recordStatus: 'submitted' }),
+    }));
+  });
+
+  it('另一待审单明确修改同一字段时阻止免审更新，不静默覆盖其提案', async () => {
+    const user = buildUser();
+    const { service, baseVersion } = buildService(user, [{
+      id: 'pending-conflict', baseValue: { profile: { education: '本科' } },
+      proposedValue: { profile: { education: '博士' } },
+    } as any]);
+    await expect(service.submitDraft(user.id, { baseVersion, employee: {}, profile: { education: '硕士' } }, operator))
+      .rejects.toMatchObject({ status: 409 });
   });
 
   it('社保状态等中间档字段不直改，仍走审核', async () => {

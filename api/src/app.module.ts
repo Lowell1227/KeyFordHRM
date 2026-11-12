@@ -39,6 +39,7 @@ import { PeriodReviewsModule } from './period-reviews/period-reviews.module';
 import { PositionsModule } from './positions/positions.module';
 import { AiProgressModule } from './ai-progress/ai-progress.module';
 import { PersonnelReferenceDataModule } from './personnel-reference-data/personnel-reference-data.module';
+import { PersonnelConfigModule } from './personnel-config/personnel-config.module';
 
 /**
  * 根模块。
@@ -94,6 +95,7 @@ import { PersonnelReferenceDataModule } from './personnel-reference-data/personn
     PositionsModule,
     ContractSubjectsModule,
     PersonnelReferenceDataModule,
+    PersonnelConfigModule,
     AiProgressModule,
   ],
   providers: [

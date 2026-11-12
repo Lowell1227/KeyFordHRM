@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { isAxiosError } from 'axios';
 import { Delete, Plus } from '@element-plus/icons-vue';
 import { ElMessage, type UploadRequestOptions } from 'element-plus';
@@ -19,6 +19,7 @@ const props = defineProps<{
   departments: Department[];
   busy?: boolean;
   focusField?: string;
+  reviewMode?: 'relaxed' | 'standard';
 }>();
 
 type ArchiveChangePayload = {
@@ -283,11 +284,13 @@ async function submit() {
   if (savePromise && !await savePromise) return;
   if (session !== generation || !props.editing || props.busy || saveBlocked.value) return;
   if (!isDirty() && !draftId) {
-    ElMessage.info('未检测到变更，无需提交审核');
+    ElMessage.info(reviewModeRelaxed.value ? '未检测到变更' : '未检测到变更，无需提交审核');
     return;
   }
   emit('submit', changePayload());
 }
+
+const reviewModeRelaxed = computed(() => props.reviewMode === 'relaxed');
 
 function scheduleAutosave() {
   clearTimeout(autosaveTimer);
@@ -374,7 +377,7 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField,
     <div v-if="saveError" class="archive-save-error" role="alert">{{ saveError }}<el-button v-if="!saveBlocked" link type="primary" @click="saveDraft">重试保存</el-button></div>
     <nav class="archive-editor-nav" aria-label="档案分区"><el-button v-for="section in [{ id: 'employment', label: '基本与任职' }, { id: 'personal', label: '个人与教育' }, { id: 'contact', label: '联系与保障' }, { id: 'contracts', label: '合同记录' }]" :key="section.id" link @click="editorElement?.querySelector(`[data-archive-section='${section.id}']`)?.scrollIntoView({ block: 'start' })">{{ section.label }}</el-button></nav>
     <el-alert
-      title="保存草稿不会进入审核；只有点击提交审核后，才会进入人事办理的待我审核。"
+      :title="reviewModeRelaxed ? '宽松模式：提交后由系统自动审核，未通过校验的申请保留待审。' : '个人信息免审字段在提交后生效，其余变更需审核；草稿不生效。'"
       type="info"
       show-icon
       :closable="false"

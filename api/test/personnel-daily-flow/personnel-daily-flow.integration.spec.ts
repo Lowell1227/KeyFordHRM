@@ -13,6 +13,8 @@ describe('Personnel daily flow with real JWT, HTTP and disposable PostgreSQL', (
   let reviewer: string;
   let employee: string;
   let plainHr: string;
+  let admin: string;
+  let orgEditor: string;
   const runId = randomUUID().slice(0, 8);
   const root = '/api/v1/employee-archives';
   const headers = (token = editor) => ({ Authorization: `Bearer ${token}` });
@@ -41,7 +43,7 @@ describe('Personnel daily flow with real JWT, HTTP and disposable PostgreSQL', (
     app.app.get(SchedulerRegistry).getCronJobs().forEach(job => job.stop());
     expect(await app.prisma.user.count()).toBe(0);
     deptId = (await app.prisma.department.create({ data: { name: `虚拟档案验收部门-${runId}` } })).id;
-    async function actor(sysRole: 'hr_user' | 'employee', hrCapabilities: string[]) {
+    async function actor(sysRole: 'hr_user' | 'employee' | 'system_admin', hrCapabilities: string[]) {
       const user = await app.prisma.user.create({ data: {
         name: `虚拟验收身份-${randomUUID().slice(0, 8)}`, employeeNo: `ACT-${randomUUID().slice(0, 8)}`,
         accountType: 'service', status: 'active', sysRole, hrCapabilities,
@@ -54,6 +56,9 @@ describe('Personnel daily flow with real JWT, HTTP and disposable PostgreSQL', (
     reviewerId = reviewActor.user.id;
     employee = (await actor('employee', ['employee_archive_review'])).token;
     plainHr = (await actor('hr_user', [])).token;
+    admin = (await actor('system_admin', [])).token;
+    orgEditor = (await actor('hr_user', ['organization_edit'])).token;
+    if (process.env.PERSONNEL_DAILY_WEB_URL) await app.app.listen(3307, '127.0.0.1');
   });
   afterAll(async () => {
     if (app) await closeTestApp(app);
@@ -84,7 +89,7 @@ describe('Personnel daily flow with real JWT, HTTP and disposable PostgreSQL', (
     const current = await archive(id);
     return (await app.http.patch(`${root}/${id}/draft`).set(headers()).send({
       baseVersion: current.archiveVersion, employee: changes, profile: {}, performance,
-    }).expect(200)).body.data;
+    }).expect(200)).body.data.request;
   }
   async function approve(id: string) {
     const response = await app.http.post(`${root}/reviews/approve`).set(headers(reviewer))
@@ -114,9 +119,9 @@ describe('Personnel daily flow with real JWT, HTTP and disposable PostgreSQL', (
       draftId: request.id, expectedVersion: partial.requestVersion,
       employee: { workLocation: '虚拟新地点' }, profile: {}, performance: { managerId: manager.id },
     }).expect(200);
-    expect(continued.body.data.proposedValue.employee.jobFamily).toBe('虚拟档案原职系');
-    expect(continued.body.data.profileReviewStatus).toBe('approved');
-    expect(continued.body.data.performanceReviewStatus).toBe('pending');
+    expect(continued.body.data.request.proposedValue.employee.jobFamily).toBe('虚拟档案原职系');
+    expect(continued.body.data.request.profileReviewStatus).toBe('approved');
+    expect(continued.body.data.request.performanceReviewStatus).toBe('pending');
   });
 
   it.each([null, '虚拟人工修订职系'])('applies an explicitly reviewed family with the same position (%s)', async jobFamily => {
@@ -251,7 +256,7 @@ describe('Personnel daily flow with real JWT, HTTP and disposable PostgreSQL', (
       draftId: saved.id, expectedVersion: saved.requestVersion, employee: { deptId }, profile: {},
     }).expect(200)).body.data;
     expect((await archive(user.id)).currentEmployment.deptId).toBeNull();
-    await approve(submitted.id);
+    await approve(submitted.request.id);
     expect((await archive(user.id)).currentEmployment.deptId).toBe(deptId);
     expect((await app.prisma.user.findUniqueOrThrow({ where: { id: user.id } })).deptId).toBe(deptId);
     const leave = (await app.http.post(`${root}/${user.id}/employments`).set(headers())
@@ -268,4 +273,185 @@ describe('Personnel daily flow with real JWT, HTTP and disposable PostgreSQL', (
     expect((await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: leave.id } })).proposedValue)
       .toMatchObject({ employee: { reason: departure.reason } });
   });
+
+  it('submits an autosaved exempt-field draft once and reloads the new formal value', async () => {
+    const { user } = await fixture();
+    const before = await archive(user.id);
+    const input = { baseVersion: before.archiveVersion, employee: {}, profile: { education: '虚拟硕士' } };
+    const saved = (await app.http.patch(`${root}/${user.id}/draft/save`).set(headers()).send(input).expect(200)).body.data;
+    expect((await archive(user.id)).employeeProfile?.education).not.toBe('虚拟硕士');
+    const result = (await app.http.patch(`${root}/${user.id}/draft`).set(headers()).send({
+      ...input, draftId: saved.id, expectedVersion: saved.requestVersion,
+    }).expect(200)).body.data;
+    expect(result).toMatchObject({ request: null, reviewOutcome: 'not_required', directApplied: ['学历'] });
+    expect((await archive(user.id)).employeeProfile.education).toBe('虚拟硕士');
+    expect((await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: saved.id } })).archivedAt).not.toBeNull();
+  });
+
+  it('rebases a pending legacy review so approving it cannot overwrite an exempt edit', async () => {
+    const { user } = await fixture();
+    const pending = (await app.http.patch(`${root}/${user.id}/profile`).set(headers())
+      .send({ gender: '女' }).expect(200)).body.data;
+    const before = await archive(user.id);
+    await app.http.patch(`${root}/${user.id}/draft`).set(headers()).send({
+      baseVersion: before.archiveVersion, employee: {}, profile: { education: '虚拟本科' },
+    }).expect(200);
+    const rebased = await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: pending.id } });
+    expect(rebased.requestVersion).toBe(pending.requestVersion + 1);
+    expect(rebased.proposedValue).toMatchObject({ profile: { education: '虚拟本科', gender: '女' } });
+    expect(rebased.revisionHistory).toEqual(expect.arrayContaining([expect.objectContaining({ version: pending.requestVersion })]));
+    await approve(pending.id);
+    expect((await archive(user.id)).employeeProfile).toMatchObject({ education: '虚拟本科', gender: '女' });
+  });
+
+  it('rolls back formal changes when a pending proposal conflicts and rejects impossible dates', async () => {
+    const { user } = await fixture();
+    await app.http.patch(`${root}/${user.id}/profile`).set(headers()).send({ gender: '女' }).expect(200);
+    const before = await archive(user.id);
+    await app.http.patch(`${root}/${user.id}/draft`).set(headers()).send({
+      baseVersion: before.archiveVersion, employee: {}, profile: { gender: '男', education: '不得写入' },
+    }).expect(409);
+    expect((await archive(user.id)).employeeProfile).toBeNull();
+    await app.http.patch(`${root}/${user.id}/draft`).set(headers()).send({
+      baseVersion: before.archiveVersion, employee: {}, profile: { birthDate: '2035-02-31' },
+    }).expect(400);
+    expect(await app.prisma.auditLog.count({ where: { entityId: user.id, action: 'direct_update_employee_profile' } })).toBe(0);
+  });
+
+  it('only a system administrator can change review mode, and existing pending work stays pending', async () => {
+    const url = '/api/v1/personnel-config/review-mode';
+    await app.http.get(url).expect(401);
+    expect((await app.http.get(url).set(headers()).expect(200)).body.data.mode).toBe('standard');
+    for (const token of [editor, reviewer, employee, plainHr, orgEditor]) {
+      await app.http.put(url).set(headers(token)).send({ mode: 'relaxed' }).expect(403);
+    }
+    await app.http.put(url).set(headers(admin)).send({ mode: 'invalid' }).expect(400);
+    const { user } = await fixture();
+    const pending = await submit(user.id, { name: '虚拟待审姓名' });
+    await app.http.put(url).set(headers(admin)).send({ mode: 'relaxed' }).expect(200);
+    expect((await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: pending.id } })).profileReviewStatus).toBe('pending');
+    expect(await app.prisma.auditLog.findFirst({ where: { action: 'update_personnel_review_mode' } }))
+      .toMatchObject({ oldValue: { mode: 'standard' }, newValue: { key: 'personnel_review_mode', mode: 'relaxed' } });
+  });
+
+  it('relaxed mode uses the real review service and leaves edit-only users unable to approve manually', async () => {
+    const { user } = await fixture();
+    const current = await archive(user.id);
+    const result = (await app.http.patch(`${root}/${user.id}/draft`).set(headers()).send({
+      baseVersion: current.archiveVersion, employee: { name: '虚拟自动审核员工' }, profile: {},
+    }).expect(200)).body.data;
+    expect(result.reviewOutcome).toBe('approved');
+    expect((await archive(user.id)).name).toBe('虚拟自动审核员工');
+    expect((await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: result.request.id } })).profileReviewStatus).toBe('approved');
+    expect((await app.prisma.auditLog.findFirst({ where: { entityId: result.request.id, action: 'approve_employee_data_change' } }))?.newValue)
+      .toMatchObject({ autoApproved: true });
+    await app.http.post(`${root}/reviews/approve`).set(headers()).send({ requestIds: [result.request.id], scopes: ['profile'] }).expect(403);
+    await app.http.patch(`${root}/${user.id}/draft`).set(headers(employee)).send({ employee: {}, profile: {} }).expect(403);
+  });
+
+  it('auto-approves departments and positions, but validation failures remain pending', async () => {
+    const dept = (await app.http.post('/api/v1/departments').set(headers(orgEditor))
+      .send({ name: `虚拟自动部门-${runId}`, company: 'fuede' }).expect(201)).body.data;
+    expect(dept.status).toBe('approved');
+    expect(await app.prisma.department.findFirst({ where: { name: `虚拟自动部门-${runId}` } })).not.toBeNull();
+    const position = (await app.http.post('/api/v1/positions').set(headers(orgEditor))
+      .send({ name: '虚拟自动岗位', code: `AUTO-${runId}` }).expect(201)).body.data;
+    expect(position.status).toBe('approved');
+    const failed = (await app.http.delete(`/api/v1/departments/${deptId}`).set(headers(orgEditor)).expect(200)).body.data;
+    expect(failed.status).toBe('pending');
+    expect((await app.prisma.department.findUniqueOrThrow({ where: { id: deptId } })).isActive).toBe(true);
+  });
+
+  it('auto-approves future employment without prematurely changing current assignment', async () => {
+    const { user, position } = await fixture();
+    const target = await app.prisma.department.create({ data: { name: `虚拟未来部门-${runId}` } });
+    const result = (await app.http.post(`${root}/${user.id}/employments`).set(headers()).send({
+      company: 'fuede', deptId: target.id, positionId: position.id, employmentType: 'full_time',
+      employeeStatus: 'active', changeType: 'transfer', effectiveFrom: '2035-04-01', reason: '虚拟未来调动',
+    }).expect(201)).body.data;
+    expect(result.reviewOutcome).toBe('approved');
+    expect((await app.prisma.user.findUniqueOrThrow({ where: { id: user.id } })).deptId).toBe(deptId);
+    expect(await app.prisma.employmentRecord.findUniqueOrThrow({ where: { sourceRequestId: result.id } }))
+      .toMatchObject({ deptId: target.id, effectiveFrom: new Date('2035-04-01') });
+  });
+
+  it('keeps department merges pending even in relaxed mode', async () => {
+    const source = await app.prisma.department.create({ data: { name: `虚拟合并来源-${runId}` } });
+    const target = await app.prisma.department.create({ data: { name: `虚拟合并目标-${runId}` } });
+    const result = (await app.http.post(`/api/v1/departments/${source.id}/merge`).set(headers(orgEditor))
+      .send({ targetDepartmentId: target.id }).expect(201)).body.data;
+    expect(result).toMatchObject({ status: 'pending', reviewOutcome: 'pending' });
+    expect((await app.prisma.department.findUniqueOrThrow({ where: { id: source.id } })).isActive).toBe(true);
+    expect(await app.prisma.auditLog.count({ where: { entityId: result.id, action: 'approve_department_change' } })).toBe(0);
+  });
+
+  it('auto-approves future onboarding but keeps it pending entry until its effective date', async () => {
+    const result = (await app.http.post(root).set(headers()).send({
+      name: `虚拟未来入职-${runId}`, company: 'fuede', deptId, entryDate: '2035-04-01',
+      effectiveFrom: '2035-04-01', employmentType: 'full_time', employeeStatus: 'active',
+    }).expect(201)).body.data;
+    expect(result.reviewOutcome).toBe('approved');
+    expect(await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: result.id } }))
+      .toMatchObject({ profileReviewStatus: 'approved', onboardingStatus: 'pending_entry' });
+    await app.http.put('/api/v1/personnel-config/review-mode').set(headers(admin)).send({ mode: 'standard' }).expect(200);
+    const { user } = await fixture();
+    const pending = await submit(user.id, { name: '虚拟恢复人工审核' });
+    expect((await app.prisma.employeeDataChangeRequest.findUniqueOrThrow({ where: { id: pending.id } })).profileReviewStatus).toBe('pending');
+  });
+
+  const webTest = process.env.PERSONNEL_DAILY_WEB_URL ? it : it.skip;
+  webTest('real browser: PC/mobile autosave-submit-reload and administrator mode confirmation', async () => {
+    const url = new URL(process.env.PERSONNEL_DAILY_WEB_URL!);
+    if (url.hostname !== '127.0.0.1' || url.port !== '5187') throw new Error('Browser must use the isolated QA web server');
+    const { chromium } = require('../../../web/node_modules/playwright');
+    const { expect: browserExpect } = require('../../../web/node_modules/@playwright/test');
+    const browser = await chromium.launch({ headless: true });
+    try {
+      for (const width of [1440, 1024, 390]) {
+        const { user } = await fixture();
+        const context = await browser.newContext({ viewport: { width, height: width === 390 ? 844 : 900 } });
+        await context.addInitScript((token: string) => localStorage.setItem('token', token), editor);
+        const page = await context.newPage();
+        await page.goto(`${url.origin}/users`);
+        await page.getByPlaceholder('搜索姓名、当前工号或历史工号').fill(user.employeeNo);
+        await page.getByPlaceholder('搜索姓名、当前工号或历史工号').press('Enter');
+        await browserExpect(page.locator('button:visible').filter({ hasText: /^查看档案$/ })).toHaveCount(1);
+        await page.locator('button:visible').filter({ hasText: /^查看档案$/ }).click();
+        const drawer = page.locator('.employee-archive-drawer:visible');
+        await drawer.getByRole('button', { name: '编辑档案', exact: true }).click();
+        const saved = page.waitForResponse((response: any) => response.url().endsWith(`/${user.id}/draft/save`) && response.request().method() === 'PATCH');
+        await drawer.locator('[data-archive-field="profile.education"] input').fill(`虚拟浏览器学历-${width}`);
+        expect((await saved).status()).toBe(200);
+        await browserExpect(drawer.getByRole('button', { name: '提交审核', exact: true })).toBeEnabled();
+        const submitted = page.waitForResponse((response: any) => response.url().endsWith(`/${user.id}/draft`) && response.request().method() === 'PATCH');
+        await drawer.getByRole('button', { name: '提交审核', exact: true }).click();
+        expect((await submitted).status()).toBe(200);
+        await browserExpect(drawer.getByRole('button', { name: '编辑档案', exact: true })).toBeVisible();
+        await browserExpect(drawer.getByText(`虚拟浏览器学历-${width}`, { exact: true })).toBeVisible();
+        expect((await archive(user.id)).employeeProfile.education).toBe(`虚拟浏览器学历-${width}`);
+        const bounds = await drawer.boundingBox();
+        expect(bounds.x).toBeGreaterThanOrEqual(-1);
+        expect(bounds.x + bounds.width).toBeLessThanOrEqual(width + 1);
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+        await page.screenshot({ path: `${process.env.TEMP}/hrm-review-archive-${width}.png` });
+        await context.close();
+      }
+      const context = await browser.newContext({ viewport: { width: 390, height: 844 } });
+      await context.addInitScript((token: string) => localStorage.setItem('token', token), admin);
+      const page = await context.newPage();
+      await page.goto(`${url.origin}/system`);
+      await browserExpect(page.getByText('当前：标准模式（人工审核）', { exact: true })).toBeVisible();
+      await page.locator('.el-radio-button').filter({ hasText: /^宽松模式$/ }).click();
+      await page.getByRole('button', { name: '保持标准模式', exact: true }).click();
+      expect((await app.http.get('/api/v1/personnel-config/review-mode').set(headers()).expect(200)).body.data.mode).toBe('standard');
+      await page.locator('.el-radio-button').filter({ hasText: /^宽松模式$/ }).click();
+      await page.getByRole('button', { name: '开启宽松模式', exact: true }).click();
+      await browserExpect(page.getByText('当前：宽松模式（系统自动审核）', { exact: true })).toBeVisible();
+      await page.locator('.el-radio-button').filter({ hasText: /^标准模式$/ }).click();
+      await browserExpect(page.getByText('当前：标准模式（人工审核）', { exact: true })).toBeVisible();
+      expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);
+      await page.screenshot({ path: `${process.env.TEMP}/hrm-review-mode-mobile.png` });
+      await context.close();
+    } finally { await browser.close(); }
+  }, 180000);
 });

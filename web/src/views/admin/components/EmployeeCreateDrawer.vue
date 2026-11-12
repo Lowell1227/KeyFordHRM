@@ -534,8 +534,8 @@ async function submit() {
   savingAction.value = 'submit';
   try {
     if (draftSavePromise && !(await draftSavePromise)) return;
-    await employeeArchivesApi.createEmployee(requestBody() as EmployeeCreatePayload);
-    ElMessage.success('已提交新增员工，工号已自动生成，HR 管理员审核后生效');
+    const result = await employeeArchivesApi.createEmployee(requestBody() as EmployeeCreatePayload);
+    ElMessage.success(result.reviewOutcome === 'approved' ? '新增员工已审核通过，按任职生效日期生效' : '已提交新增员工，工号已自动生成，HR 管理员审核后生效');
     emit('update:modelValue', false);
     emit('submitted');
   } catch {

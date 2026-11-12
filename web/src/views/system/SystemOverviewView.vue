@@ -1,5 +1,52 @@
 <script setup lang="ts">
+import { computed, onMounted, ref } from 'vue';
+import { ElMessage, ElMessageBox } from 'element-plus';
+import { useAuthStore } from '@/stores/auth.store';
+import { personnelConfigApi, type PersonnelReviewMode } from '@/api/personnel-config.api';
+
 const productVersion = '0.8';
+
+const auth = useAuthStore();
+const isSystemAdmin = computed(() => auth.user?.sysRole === 'system_admin');
+
+const reviewMode = ref<PersonnelReviewMode>('standard');
+const reviewModeLoading = ref(false);
+const reviewModeSaving = ref(false);
+const reviewModeLoaded = ref(false);
+
+async function loadReviewMode() {
+  reviewModeLoading.value = true;
+  reviewModeLoaded.value = false;
+  try {
+    reviewMode.value = (await personnelConfigApi.getReviewMode()).mode;
+    reviewModeLoaded.value = true;
+  } catch {
+    ElMessage.error('审核模式读取失败，请刷新后重试');
+  } finally {
+    reviewModeLoading.value = false;
+  }
+}
+
+async function switchReviewMode(value: PersonnelReviewMode) {
+  if (!reviewModeLoaded.value || reviewModeSaving.value || value === reviewMode.value) return;
+  reviewModeSaving.value = true;
+  try {
+    if (value === 'relaxed') {
+      await ElMessageBox.confirm('开启后，新提交的档案、部门、岗位、入职及再入职申请将由系统自动审核，部门合并仍需人工审核。未来生效的任职仍按日期生效，既有待审单不自动处理，提交权限不变。', '开启宽松审核模式', {
+        confirmButtonText: '开启宽松模式', cancelButtonText: '保持标准模式', type: 'warning',
+      });
+    }
+    await personnelConfigApi.updateReviewMode(value);
+    reviewMode.value = value;
+    ElMessage.success(value === 'relaxed' ? '已开启宽松模式，部门合并仍需人工审核' : '已恢复标准模式，新申请按原规则人工审核');
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') ElMessage.error('审核模式切换失败，请重试');
+  } finally {
+    reviewModeSaving.value = false;
+  }
+}
+
+onMounted(() => { if (isSystemAdmin.value) void loadReviewMode(); });
 
 type CapabilityStatus = 'available' | 'partial' | 'pending' | 'paused';
 
@@ -92,11 +139,33 @@ const capabilities: CapabilityItem[] = [
       <div>
         <p class="eyebrow">全局基础能力</p>
         <p class="header-copy">
-          集中记录当前已有能力和缺失项，避免后续规划遗漏。本页只展示状态，不提供配置操作。
+          集中记录当前已有能力和缺失项，避免后续规划遗漏。除下方“人事审核模式”外，本页只展示状态，不提供其他配置操作。
         </p>
       </div>
-      <span class="read-only-tag">版本 {{ productVersion }} · 只读</span>
+      <span class="read-only-tag">版本 {{ productVersion }}</span>
     </header>
+
+    <section v-if="isSystemAdmin" class="review-mode-panel" aria-label="人事审核模式" data-testid="review-mode-panel">
+      <div class="review-mode-copy">
+        <h2>人事审核模式</h2>
+        <p>
+          宽松模式：档案变更、部门与岗位变更、入职/再入职提交后自动审核，部门合并除外，按生效日期生效；
+          标准模式：组织、任职、合同、证件等敏感变更需人工审核后生效。
+        </p>
+      </div>
+      <div class="review-mode-control" v-loading="reviewModeLoading">
+        <el-radio-group
+          :model-value="reviewMode"
+          :disabled="reviewModeSaving || reviewModeLoading || !reviewModeLoaded"
+          data-testid="review-mode-switch"
+          @update:model-value="value => switchReviewMode(value as PersonnelReviewMode)"
+        >
+          <el-radio-button value="relaxed">宽松模式</el-radio-button>
+          <el-radio-button value="standard">标准模式</el-radio-button>
+        </el-radio-group>
+        <span class="review-mode-current">当前：{{ !reviewModeLoaded ? '尚未读取' : reviewMode === 'relaxed' ? '宽松模式（系统自动审核）' : '标准模式（人工审核）' }}</span>
+      </div>
+    </section>
 
     <section class="capability-panel" aria-label="系统能力状态">
       <div class="panel-heading">
@@ -131,7 +200,8 @@ const capabilities: CapabilityItem[] = [
 }
 
 .overview-header,
-.capability-panel {
+.capability-panel,
+.review-mode-panel {
   border: 1px solid #e4e9f2;
   border-radius: 12px;
   background: #fff;
@@ -192,6 +262,41 @@ h2 {
 .capability-panel {
   margin-top: 18px;
   overflow: hidden;
+}
+
+.review-mode-panel {
+  margin-top: 18px;
+  padding: 20px 30px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  flex-wrap: wrap;
+}
+
+.review-mode-copy h2 {
+  margin: 0 0 6px;
+  font-size: 16px;
+}
+
+.review-mode-copy p {
+  max-width: 720px;
+  margin: 0;
+  color: #68738e;
+  font-size: 13px;
+  line-height: 1.7;
+}
+
+.review-mode-control {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.review-mode-current {
+  color: #68738e;
+  font-size: 12px;
 }
 
 .panel-heading {

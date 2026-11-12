@@ -33,6 +33,8 @@ import {
 } from './direct-apply-profile-fields';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
+import { EmployeeDataReviewsService } from './employee-data-reviews.service';
+import { PersonnelConfigService } from '@/personnel-config/personnel-config.service';
 
 export interface UpsertEmployeeProfileInput {
   phone?: string | null;
@@ -92,6 +94,8 @@ export class EmployeeArchivesService {
     private readonly employeeNumbers?: EmployeeNumberService,
     private readonly identityMatcher?: EmployeeIdentityMatchService,
     private readonly onboarding?: EmployeeOnboardingService,
+    private readonly reviews?: EmployeeDataReviewsService,
+    private readonly personnelConfig?: PersonnelConfigService,
   ) {}
 
   async createEmployee(input: CreateEmployeeDto, operator: AuthUser) {
@@ -99,7 +103,7 @@ export class EmployeeArchivesService {
     const idNumber = (input.idNumber || input.profile?.idNumber)?.trim().toUpperCase();
     if (phone && !/^1\d{10}$/.test(phone)) throw new BadRequestException('请填写完整的手机号，或清空后补充');
     if (idNumber && !/^(?:\d{15}|\d{17}[\dX])$/.test(idNumber)) throw new BadRequestException('请填写完整的身份证号，或清空后补充');
-    return this.withDraftTransaction(async (tx) => {
+    const view = await this.withDraftTransaction(async (tx) => {
       const sourceDraft = input.draftId ? await tx.employeeDataChangeRequest.findFirst({
         where: { id: input.draftId, sourceType: 'manual_employee_create',
           OR: [{ recordStatus: 'draft' }, { profileReviewStatus: 'rejected' }], archivedAt: null },
@@ -221,6 +225,8 @@ export class EmployeeArchivesService {
       });
       return employeeDataChangeView(updated);
     });
+    const reviewOutcome = await this.autoApproveRelaxed([view?.id], operator);
+    return { ...view, reviewOutcome };
   }
 
   async saveEmployeeCreateDraft(input: SaveEmployeeCreateDraftDto, operator: AuthUser) {
@@ -1130,7 +1136,36 @@ export class EmployeeArchivesService {
   }
 
   async submitDraft(userId: string, input: SubmitEmployeeArchiveDraftDto, operator: AuthUser) {
-    return this.withDraftTransaction(tx => this.persistArchiveChangeWithClient(tx, userId, input, operator, 'submitted'));
+    const persisted = await this.withDraftTransaction(tx => this.persistArchiveChangeWithClient(tx, userId, input, operator, 'submitted'));
+    const reviewOutcome = await this.autoApproveRelaxed(persisted.request ? [persisted.request.id] : [], operator);
+    return { ...persisted, reviewOutcome };
+  }
+
+  /**
+   * 宽松模式：提交事务提交后再自动审核通过（approveBatch 自带独立事务，严禁嵌套）。
+   * 自动审核失败时不阻断提交结果，申请保留在待审核队列由人工处理，并记录留痕。
+   */
+  async autoApproveRelaxed(requestIds: Array<string | null | undefined>, operator: AuthUser): Promise<'approved' | 'pending' | 'not_required'> {
+    const ids = [...new Set(requestIds.filter((id): id is string => typeof id === 'string' && id.length > 0))];
+    if (ids.length === 0) return 'not_required';
+    if (!this.reviews || !this.personnelConfig) return 'pending';
+    try {
+      if (await this.personnelConfig.getReviewMode() !== 'relaxed') return 'pending';
+      const result = await this.reviews.approveBatch({ requestIds: ids, scopes: ['profile', 'performance'] }, operator, { autoApproved: true });
+      if (!result.failed.length && ids.every(id => result.succeeded.some(item => item.requestId === id))) return 'approved';
+    } catch {
+      // The submitted request is durable; report pending instead of inviting a duplicate submission.
+    }
+    await this.prisma.auditLog.create({
+        data: {
+          userId: operator.id,
+          action: 'auto_approve_employee_data_change_failed',
+          entityType: 'employee_data_change_request',
+          entityId: ids[0],
+          newValue: this.toJson({ requestIds: ids, outcome: 'pending_manual_review' }),
+        },
+      }).catch(() => undefined);
+    return 'pending';
   }
 
   async saveArchiveDraft(userId: string, input: SubmitEmployeeArchiveDraftDto, operator: AuthUser) {
@@ -1218,13 +1253,9 @@ export class EmployeeArchivesService {
     // 不进入审核队列；直改后内存中的正式档案同步更新，后续 diff 自然只覆盖需审核字段。
     const directApplied: string[] = [];
     const directChanges: Record<string, unknown> = {};
-    if (recordStatus === 'submitted') {
-      await this.applyDirectProfileChanges(client, user, input, operator, directApplied, directChanges);
-    }
-
     const employment = user.employmentHistory[0] ?? null;
-    const baseEmployee = this.employeeReviewData(user, employment);
-    const baseProfile = this.profileReviewData(user.employeeProfile);
+    let baseEmployee = this.employeeReviewData(user, employment);
+    let baseProfile = this.profileReviewData(user.employeeProfile);
     const baseContracts = user.employeeContracts.map((contract) => this.contractReviewData(contract));
     const profileApproved = existing?.profileReviewStatus === 'approved';
     const performanceApproved = existing?.performanceReviewStatus === 'approved';
@@ -1252,6 +1283,12 @@ export class EmployeeArchivesService {
         || !this.sameReviewRecord(savedPerformance, { managerId: user.directManagerId }, Object.keys(savedPerformance).filter(key => key === 'managerId'))) {
         throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '正式档案已发生变化，请保留当前输入并重新核对最新档案' });
       }
+    }
+    // Check the untouched formal baseline before applying this submission's direct changes.
+    if (recordStatus === 'submitted') {
+      await this.applyDirectProfileChanges(client, user, input, operator, directApplied, directChanges);
+      baseEmployee = this.employeeReviewData(user, employment);
+      baseProfile = this.profileReviewData(user.employeeProfile);
     }
     const proposedEmployee: Record<string, unknown> = {
       ...baseEmployee,
@@ -1319,12 +1356,12 @@ export class EmployeeArchivesService {
         contracts: baseContracts,
         performance: { managerId: user.directManagerId },
       }),
-      proposedValue: this.toJson({
+      proposedValue: this.toJson(this.baseValueWithDirectChanges({
         employee: profileApproved ? savedProposal.employee : proposedEmployee,
         profile: profileApproved ? savedProposal.profile : proposedProfile,
         contracts: profileApproved ? savedProposal.contracts : proposedContracts,
         performance: performanceApproved ? savedProposal.performance : proposedPerformance,
-      }),
+      }, directChanges)),
       validationErrors: this.toJson([]),
       createdById: operator.id,
       rejectedReason: null,
@@ -1341,14 +1378,14 @@ export class EmployeeArchivesService {
           message: '未检测到实际变更，无需提交审核',
         });
       }
-      // 仅免审字段发生变化：直改已生效，不生成待审申请；原有草稿保留为草稿以便继续维护。
+      // Complete the consumed draft so the next edit starts from the new formal baseline.
       if (existing) {
         await client.employeeDataChangeRequest.update({
           where: { id: existing.id, requestVersion: existing.requestVersion, updatedAt: existing.updatedAt },
           data: {
             ...data,
-            recordStatus: 'draft',
-            archivedAt: null,
+            recordStatus: 'submitted',
+            archivedAt: new Date(),
             profileReviewStatus: existing.profileReviewStatus === 'approved' ? 'approved' : 'not_required',
             performanceReviewStatus: existing.performanceReviewStatus === 'approved' ? 'approved' : 'not_required',
             requestVersion: { increment: 1 },
@@ -1417,7 +1454,7 @@ export class EmployeeArchivesService {
         throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '部分员工不存在或已停用，请刷新后重试' });
       }
       const changedUserIds = users.filter((user) => user.deptId !== departmentId).map((user) => user.id);
-      if (changedUserIds.length === 0) return { submitted: 0 };
+      if (changedUserIds.length === 0) return { submitted: 0, submittedRequestIds: [] as string[] };
 
       const pendingReviews = await tx.employeeDataChangeRequest.findMany({
         where: {
@@ -1436,14 +1473,19 @@ export class EmployeeArchivesService {
         });
       }
 
+      const submittedRequestIds: string[] = [];
       for (const userId of changedUserIds) {
-        await this.persistArchiveChangeWithClient(tx, userId, {
+        const { request } = await this.persistArchiveChangeWithClient(tx, userId, {
           employee: { deptId: departmentId },
           profile: {},
         }, operator, 'submitted', false);
+        if (request?.id) submittedRequestIds.push(request.id);
       }
-      return { submitted: changedUserIds.length };
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+      return { submitted: changedUserIds.length, submittedRequestIds };
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }).then(async (result) => {
+      const reviewOutcome = await this.autoApproveRelaxed(result.submittedRequestIds, operator);
+      return { submitted: result.submitted, reviewOutcome };
+    });
   }
 
   async createEmploymentRecord(userId: string, input: CreateEmploymentRecordInput, operator: AuthUser) {
@@ -1546,7 +1588,7 @@ export class EmployeeArchivesService {
     if (input.contractSubjectId === undefined) delete proposedEmployee.contractSubjectId;
     await normalizeContractSubject(this.prisma, proposedEmployee as Record<string, unknown>, baseEmployee, 'companyText');
     const profile = this.profileReviewData(user.employeeProfile);
-    return employeeDataChangeView(await this.prisma.employeeDataChangeRequest.create({
+    const view = employeeDataChangeView(await this.prisma.employeeDataChangeRequest.create({
       data: {
         userId,
         employeeNo: user.employeeNo,
@@ -1577,6 +1619,8 @@ export class EmployeeArchivesService {
         profileReviewedBy: { select: { id: true, name: true } },
       },
     }));
+    const reviewOutcome = await this.autoApproveRelaxed([view?.id], operator);
+    return { ...view, reviewOutcome };
   }
 
   async bindDingtalkIdentity(userId: string, input: BindDingtalkIdentityInput, operator: AuthUser) {
@@ -1761,13 +1805,14 @@ export class EmployeeArchivesService {
       // 与审核生效路径（profileUpdate/nullableString/nullableDate）保持一致的归一化。
       if (key === 'phone') next = this.directApplyString(next);
       if (dateFields.has(key)) {
-        if (next != null && next !== '' && Number.isNaN((next instanceof Date ? next : new Date(String(next))).getTime())) {
+        const parsed = this.directApplyDate(next);
+        if (next != null && next !== '' && !parsed) {
           throw new BadRequestException({
             code: ERROR_CODE.PARAM_INVALID,
             message: `${DIRECT_APPLY_PROFILE_FIELD_LABELS[key as DirectApplyProfileField]}格式无效，请按 YYYY-MM-DD 填写或清空`,
           });
         }
-        next = this.directApplyDate(next);
+        next = parsed;
       }
       normalizedInput[key] = next ?? null;
       if (this.comparableReviewValue(profile[key] ?? null, key) === this.comparableReviewValue(next ?? null, key)) continue;
@@ -1809,12 +1854,32 @@ export class EmployeeArchivesService {
           { performanceReviewStatus: { in: ['pending', 'applying'] } },
         ],
       },
-      select: { id: true, baseValue: true },
     });
     for (const pending of pendingRequests) {
+      if (pending.id === input.draftId) continue;
+      const base = this.record(pending.baseValue);
+      const proposed = this.record(pending.proposedValue);
+      for (const [key, value] of Object.entries(directChanges)) {
+        for (const section of key === 'phone' ? ['employee', 'profile'] : ['profile']) {
+          const before = this.record(base[section]);
+          const after = this.record(proposed[section]);
+          if (key in after && this.comparableReviewValue(after[key], key) !== this.comparableReviewValue(before[key], key)
+            && this.comparableReviewValue(after[key], key) !== this.comparableReviewValue(value, key)) {
+            throw new ConflictException('已有待审申请修改了相同个人信息，请先处理原申请后重试');
+          }
+        }
+      }
       await client.employeeDataChangeRequest.update({
-        where: { id: pending.id },
-        data: { baseValue: this.toJson(this.baseValueWithDirectChanges(pending.baseValue, directChanges)) },
+        where: { id: pending.id, requestVersion: pending.requestVersion, updatedAt: pending.updatedAt },
+        data: {
+          baseValue: this.toJson(this.baseValueWithDirectChanges(pending.baseValue, directChanges)),
+          proposedValue: this.toJson(this.baseValueWithDirectChanges(pending.proposedValue, directChanges)),
+          requestVersion: { increment: 1 },
+          revisionHistory: this.toJson([...(Array.isArray(pending.revisionHistory) ? pending.revisionHistory : []), {
+            version: pending.requestVersion, baseValue: pending.baseValue, proposedValue: pending.proposedValue,
+            reason: 'personal_info_direct_update', updatedAt: pending.updatedAt,
+          }]),
+        },
       });
     }
 
@@ -1825,8 +1890,8 @@ export class EmployeeArchivesService {
         action: 'employee_profile_direct_update',
         entityType: 'user',
         entityId: user.id,
-        oldValue: this.toJson(Object.fromEntries(changedKeys.map(key => [key, this.auditDisplayValue(profile[key] ?? null)]))),
-        newValue: this.toJson(Object.fromEntries(changedKeys.map(key => [key, this.auditDisplayValue(directChanges[key])]))),
+        oldValue: this.toJson(Object.fromEntries(changedKeys.map(key => [key, this.auditDisplayValue(profile[key] ?? null, key)]))),
+        newValue: this.toJson(Object.fromEntries(changedKeys.map(key => [key, this.auditDisplayValue(directChanges[key], key)]))),
       },
     });
     directApplied.push(...changedKeys.map(key => DIRECT_APPLY_PROFILE_FIELD_LABELS[key as DirectApplyProfileField] ?? key));
@@ -1836,6 +1901,7 @@ export class EmployeeArchivesService {
   private baseValueWithDirectChanges(baseValue: unknown, changes: Record<string, unknown>): Record<string, unknown> {
     const base = { ...this.record(baseValue) };
     if (Object.keys(changes).length === 0) return base;
+    if ('profileExists' in base) base.profileExists = true;
     if (Object.keys(this.record(base.profile)).length > 0 || base.profile !== undefined) {
       base.profile = { ...this.record(base.profile), ...changes };
     }
@@ -1849,8 +1915,13 @@ export class EmployeeArchivesService {
     return base;
   }
 
-  private auditDisplayValue(value: unknown): unknown {
+  private auditDisplayValue(value: unknown, key: string): unknown {
     if (value == null || value === '') return null;
+    if (['phone', 'emergencyContactPhone'].includes(key)) {
+      const text = String(value);
+      return /^\d{11}$/.test(text) ? `${text.slice(0, 3)}****${text.slice(-4)}` : '[redacted]';
+    }
+    if (['idAddress', 'currentAddress', 'emergencyContactName'].includes(key)) return '[redacted]';
     if (value instanceof Date) return value.toISOString().slice(0, 10);
     if (typeof value === 'string' || typeof value === 'number' || typeof value === 'boolean') return value;
     return JSON.stringify(value);
@@ -1862,8 +1933,12 @@ export class EmployeeArchivesService {
 
   private directApplyDate(value: unknown): Date | null {
     if (value == null || value === '') return null;
-    const date = value instanceof Date ? value : new Date(String(value));
-    return Number.isNaN(date.getTime()) ? null : date;
+    if (value instanceof Date && Number.isNaN(value.getTime())) return null;
+    const text = value instanceof Date ? value.toISOString() : String(value);
+    if (!/^\d{4}-\d{2}-\d{2}(?:T00:00:00(?:\.000)?Z)?$/.test(text)) return null;
+    const day = text.slice(0, 10);
+    const date = new Date(`${day}T00:00:00.000Z`);
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === day ? date : null;
   }
 
   private contractReviewData(contract: object): Record<string, unknown> {

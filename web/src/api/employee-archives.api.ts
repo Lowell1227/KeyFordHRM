@@ -46,6 +46,7 @@ export interface EmployeeArchiveIssue {
 }
 
 export interface EmployeeDataReview {
+  reviewOutcome?: 'approved' | 'pending' | 'not_required';
   id: string;
   userId: string | null;
   employeeNo: string | null;
@@ -397,8 +398,8 @@ export const employeeArchivesApi = {
     profile: Record<string, unknown>;
     contracts: Record<string, unknown>[];
     performance: Record<string, unknown>;
-  }): Promise<{ request: EmployeeDataReview | null; directApplied: string[] }> {
-    return http.patch(`/employee-archives/${userId}/draft`, body) as unknown as Promise<{ request: EmployeeDataReview | null; directApplied: string[] }>;
+  }): Promise<{ request: EmployeeDataReview | null; directApplied: string[]; reviewOutcome?: 'approved' | 'pending' | 'not_required' }> {
+    return http.patch(`/employee-archives/${userId}/draft`, body) as unknown as Promise<{ request: EmployeeDataReview | null; directApplied: string[]; reviewOutcome?: 'approved' | 'pending' | 'not_required' }>;
   },
 
   lookupIdentity(body: { phone?: string; idNumber?: string; excludeRequestId?: string }): Promise<EmployeeIdentityLookupResult> {
@@ -433,7 +434,7 @@ export const employeeArchivesApi = {
     return http.patch(`/employee-archives/${userId}/draft/save`, body) as unknown as Promise<EmployeeDataReview | null>;
   },
 
-  submitDepartmentAssignments(userIds: string[], departmentId: string): Promise<{ submitted: number }> {
+  submitDepartmentAssignments(userIds: string[], departmentId: string): Promise<{ submitted: number; reviewOutcome?: 'approved' | 'pending' | 'not_required' }> {
     return http.post('/employee-archives/department-assignments', {
       userIds,
       departmentId,
