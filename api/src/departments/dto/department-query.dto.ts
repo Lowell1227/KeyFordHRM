@@ -1,11 +1,11 @@
 import { IsOptional, IsBoolean, IsEnum } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { BooleanQuery } from '../../common/dto/boolean-query';
 import { CompanyCode } from '@prisma/client';
 
 export class DepartmentQueryDto {
   @IsOptional()
   @IsBoolean()
-  @Transform(({ value }) => value === 'true' || value === true)
+  @BooleanQuery()
   flat?: boolean;
 
   @IsOptional()
@@ -14,6 +14,6 @@ export class DepartmentQueryDto {
 
   @IsOptional()
   @IsBoolean()
-  @Transform(({ value }) => value === 'true' || value === true)
+  @BooleanQuery()
   isActive?: boolean;
 }

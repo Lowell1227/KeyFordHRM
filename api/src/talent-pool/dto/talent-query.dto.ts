@@ -1,4 +1,5 @@
 import { Transform } from 'class-transformer';
+import { BooleanQuery } from '../../common/dto/boolean-query';
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Min } from 'class-validator';
 import { PaginationDto } from '@/common/dto/pagination.dto';
 import { TALENT_SOURCE_CHANNELS, TALENT_STATUSES, TALENT_TAGS } from '../talent.constants';
@@ -41,13 +42,13 @@ export class TalentQueryDto extends PaginationDto {
 
   /** 仅看待跟进：最新一条非空「下次跟进日期」≤ 今天。 */
   @IsOptional()
-  @Transform(({ value }) => value === 'true' || value === true)
+  @BooleanQuery()
   @IsBoolean()
   dueOnly?: boolean;
 
   /** 超 18 个月未联系：last_follow_up_at 早于 18 个月前，或从未跟进且入库早于 18 个月前。 */
   @IsOptional()
-  @Transform(({ value }) => value === 'true' || value === true)
+  @BooleanQuery()
   @IsBoolean()
   staleOnly?: boolean;
 }

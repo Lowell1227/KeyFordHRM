@@ -1,5 +1,5 @@
 import { IsString, IsOptional, IsEnum, IsBoolean } from 'class-validator';
-import { Transform } from 'class-transformer';
+import { BooleanQuery } from '../../common/dto/boolean-query';
 import { IndicatorType } from '@prisma/client';
 import { PaginationDto } from '@/common/dto/pagination.dto';
 
@@ -22,6 +22,6 @@ export class IndicatorQueryDto extends PaginationDto {
 
   @IsOptional()
   @IsBoolean()
-  @Transform(({ value }) => (value === undefined ? true : value === 'true' || value === true))
+  @BooleanQuery()
   isActive?: boolean = true;
 }

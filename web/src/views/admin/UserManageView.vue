@@ -773,7 +773,8 @@ const archiveIssueContext = ref<EmployeeArchiveIssue | null>(null);
 const archiveNotice = ref('');
 const archiveSubmitError = ref('');
 const archiveLoadError = ref('');
-const archiveRequestedPerson = ref<ManagedUser | null>(null);
+type ArchiveTarget = Pick<ManagedUser, 'id'> & Partial<ManagedUser>;
+const archiveRequestedPerson = ref<ArchiveTarget | null>(null);
 const archiveQueue = ref<ManagedUser[]>([]);
 let archiveLoadGeneration = 0;
 const nextArchivePerson = computed(() => {
@@ -785,7 +786,7 @@ function archiveDisplayValue(value: unknown, emptyText = '未填写') {
   return value === null || value === undefined || value === '' ? emptyText : String(value);
 }
 
-async function openEmployeeArchive(row: ManagedUser, keepQueue = false) {
+async function openEmployeeArchive(row: ArchiveTarget, keepQueue = false) {
   if (!canViewArchive.value) return;
   const generation = ++archiveLoadGeneration;
   if (!keepQueue) {
@@ -915,6 +916,7 @@ async function beforeCloseEmployeeArchive(done: () => void) {
     archiveEditing.value = false;
     archiveLoadGeneration++;
     done();
+    if (route.query.employeeId) void router.replace({ query: { ...route.query, employeeId: undefined } });
   }
 }
 
@@ -928,7 +930,7 @@ async function preparePersonnelLeave() {
 onBeforeRouteLeave(preparePersonnelLeave);
 onBeforeRouteUpdate(async (to, from) => {
   if (applicationSaving.value) return false;
-  if (to.path !== from.path || to.query.talentId !== from.query.talentId) {
+  if (to.path !== from.path || to.query.talentId !== from.query.talentId || to.query.employeeId !== from.query.employeeId) {
     if (!await preparePersonnelLeave()) return false;
     employeeCreateDrawerVisible.value = false;
     employeeReentryDrawerVisible.value = false;
@@ -1036,6 +1038,12 @@ const applicationSaving = ref(false);
 const lifecycleAction = ref({ visible: false, kind: 'resignation' as 'resignation' | 'reentry', userId: undefined as string | undefined, loading: false, error: '' });
 const applicationOpenedFromList = ref(false);
 let applicationLoadGeneration = 0;
+let reentryOpenGeneration = 0;
+watch([
+  employeeCreateDrawerVisible, employeeReentryDrawerVisible, employmentRecordDrawerVisible,
+  applicationDetailVisible, () => employeeArchiveDrawer.value.visible,
+  () => lifecycleAction.value.visible, () => route.fullPath,
+], () => { reentryOpenGeneration++; }, { flush: 'sync' });
 const applicationGroups = computed(() => {
   const groups = new Map<string, { id: string; name: string; employeeNo: string | null; requests: EmployeeDataReview[] }>();
   for (const request of applications.value) {
@@ -1220,6 +1228,12 @@ async function cancelApplication(request: EmployeeDataReview) {
     applicationSaving.value = true;
     applicationDetail.value = await employeeArchivesApi.cancelApplication(request.id, result.value);
     ElMessage.success(onboarding ? '本次入职已取消' : '未生效变更已撤回');
+    // The command response omits cancellation metadata needed by recovery actions.
+    try {
+      await openApplication(request.id, () => applicationDetailVisible.value && applicationDetail.value?.id === request.id, false);
+    } catch {
+      ElMessage.warning('取消已完成，详情刷新失败，请重新打开核对。');
+    }
     refreshCurrentView();
   } catch (error) { if (error !== 'cancel' && error !== 'close') { /* API 提示，保持详情 */ } }
   finally { applicationSaving.value = false; }
@@ -1320,9 +1334,15 @@ async function openPendingOnboarding(row: ManagedUser) {
 }
 
 async function openEmployeeReentryById(userId: string, talentCandidateId?: string) {
-  const user = await usersApi.findOne(userId);
-  openEmployeeReentry(user);
-  reentryTalentCandidateId.value = talentCandidateId;
+  const generation = ++reentryOpenGeneration;
+  try {
+    const user = await usersApi.findOne(userId);
+    if (generation !== reentryOpenGeneration) return;
+    openEmployeeReentry(user);
+    reentryTalentCandidateId.value = talentCandidateId;
+  } catch {
+    if (generation === reentryOpenGeneration) ElMessage.error('暂时无法打开再入职申请，已填写内容保留在草稿中，请重试');
+  }
 }
 
 async function openExistingEmployeeById(userId: string) {
@@ -1953,6 +1973,27 @@ watch(() => [route.query.requestId || route.query.applicationId || route.query.a
     });
 }, { immediate: true });
 
+watch(() => [route.query.employeeId, props.mode, canViewArchive.value] as const, ([id, mode, allowed], previous) => {
+  if (mode !== 'users' || !id || !allowed) {
+    if (previous?.[0]) {
+      archiveLoadGeneration++;
+      employeeArchiveDrawer.value.visible = false;
+      employeeArchiveDrawer.value.data = null;
+    }
+    return;
+  }
+  if (typeof id !== 'string' || !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+    archiveLoadGeneration++;
+    employeeArchiveDrawer.value.data = null;
+    employeeArchiveDrawer.value.loading = false;
+    employeeArchiveDrawer.value.visible = true;
+    archiveRequestedPerson.value = null;
+    archiveLoadError.value = '员工档案链接无效，请重新打开关联档案。';
+    return;
+  }
+  void openEmployeeArchive({ id });
+}, { immediate: true });
+
 watch(() => [route.query.talentId, props.mode, canEditArchive.value], () => { void applyTalentCreatePrefill(); }, { immediate: true });
 
 watch(() => [route.query.tab, props.mode], () => {
@@ -2002,6 +2043,7 @@ onMounted(async () => {
 });
 
 onBeforeUnmount(() => {
+  reentryOpenGeneration++;
   talentPrefillGeneration++;
   applicationLoadGeneration++;
   userLoadGeneration++;
@@ -2030,7 +2072,6 @@ onBeforeUnmount(() => {
             </template>
             <template v-else-if="canEditArchive">
               <el-button type="primary" @click="openEmployeeCreate">办理入职</el-button>
-              <el-button @click="chooseLifecycleEmployee('reentry')">办理再入职</el-button>
               <el-button @click="chooseLifecycleEmployee('resignation')">办理离职</el-button>
             </template>
             <el-button v-if="activeView !== 'processing' && canReviewArchive" @click="router.push({ path: '/entry-exit', query: { tab: 'reviews', category: activeView === 'org' ? 'department' : 'employee' } })">待我审核</el-button>

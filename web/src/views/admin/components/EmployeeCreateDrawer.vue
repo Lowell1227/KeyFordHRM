@@ -21,8 +21,8 @@ import { uploadApi } from '@/api/upload.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import ContractSubjectSelect from '@/components/common/ContractSubjectSelect.vue';
 import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSelect.vue';
-import type { Department } from '@/types/api.types';
-import PersonnelProcessTimeline from './PersonnelProcessTimeline.vue';
+import type { Department, User } from '@/types/api.types';
+import EmployeeReentryNameMatches from './EmployeeReentryNameMatches.vue';
 
 const props = defineProps<{
   modelValue: boolean;
@@ -46,12 +46,6 @@ const emit = defineEmits<{
 }>();
 
 const stepTitles = ['基本信息', '本次任职', '补充资料', '检查并提交'];
-const postSubmitStages = [
-  { key: 'submit', title: '提交审核', status: '等待处理', tone: 'waiting' as const },
-  { key: 'review', title: '档案审核', status: '等待处理', tone: 'waiting' as const },
-  { key: 'pending-entry', title: '确认到岗', status: '等待处理', tone: 'waiting' as const },
-  { key: 'effective', title: '入职生效', status: '等待处理', tone: 'waiting' as const },
-];
 const supplementGroups = ref<string[]>([]);
 const fieldErrors = reactive<Record<string, string>>({});
 const saveError = ref('');
@@ -185,6 +179,7 @@ function reset() {
   if (autosaveTimer) clearTimeout(autosaveTimer);
   saveBlocked.value = false;
   savingAction.value = null;
+  identityLoading.value = false;
   hydrating.value = true;
   const proposed = props.draft?.proposedValue ?? {};
   const employee = proposed.employee ?? {};
@@ -349,7 +344,18 @@ async function lookupIdentity(force = false) {
   }
 }
 
-async function openCandidate(candidate: EmployeeIdentityCandidate) {
+async function openNamedReentryCandidate(user: User) {
+  if (identityLoading.value || savingAction.value) return;
+  const session = generation;
+  identityLoading.value = true;
+  try {
+    await openCandidate({ id: user.id, status: user.status, archived: !!user.archivedAt, nextAction: 'reentry' });
+  } finally {
+    if (session === generation) identityLoading.value = false;
+  }
+}
+
+async function openCandidate(candidate: Pick<EmployeeIdentityCandidate, 'id' | 'status' | 'archived' | 'requestId' | 'nextAction'>) {
   const session = generation;
   if (!await prepareToLeave() || session !== generation) return;
   const talentId = sourceTalentId.value;
@@ -678,7 +684,7 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
 <template>
   <el-drawer
     :model-value="modelValue"
-    title="新增员工"
+    title="办理入职"
     size="min(960px, 100vw)"
     :close-on-click-modal="true"
     :before-close="beforeClose"
@@ -717,11 +723,17 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
         <section v-show="currentStep === 0" class="wizard-section">
           <div class="section-head"><div><h3>身份核验</h3></div></div>
           <div class="form-grid">
-            <el-form-item data-archive-field="employee.name" label="姓名"><el-input v-model="form.name" maxlength="50" placeholder="必填，输入后自动保存" /></el-form-item>
+            <el-form-item data-archive-field="employee.name" label="姓名"><el-input v-model="form.name" maxlength="50" placeholder="输入姓名，可查找离职员工" /></el-form-item>
             <el-form-item data-archive-field="profile.phone" label="手机号" :error="fieldErrors.phone"><el-input v-model="form.phone" maxlength="20" @blur="lookupIdentity()" /></el-form-item>
             <el-form-item data-archive-field="profile.idNumber" :label="idNumberConfigured ? '身份证号（已保存，留空不变）' : '身份证号'" :error="fieldErrors.idNumber"><el-input v-model="form.idNumber" maxlength="18" show-password @blur="lookupIdentity()" /></el-form-item>
             <el-form-item label="身份查重" :error="fieldErrors.identity"><el-button :loading="identityLoading" :disabled="!canLookupIdentity()" @click="lookupIdentity(true)">检索已有档案</el-button></el-form-item>
           </div>
+          <EmployeeReentryNameMatches
+            :name="form.name"
+            :active="modelValue && currentStep === 0"
+            :disabled="savingAction === 'submit' || identityLoading"
+            @select="openNamedReentryCandidate"
+          />
           <div v-if="identityResult?.outcome === 'conflict'" class="identity-result identity-result--danger">手机号与身份证号对应不同员工，请核对后再提交。</div>
           <div v-else-if="identityResult?.candidates.length" class="identity-result">
             <strong>{{ identityResult.outcome === 'identity_match' ? '已找到现有员工档案' : '手机号与以下档案相同' }}</strong>
@@ -833,7 +845,7 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
         </el-collapse>
 
         <section v-show="currentStep === 3" class="wizard-section">
-          <div class="section-head"><div><h3>预览提交</h3><p>提交后进入 HR 审核；审核通过前不会写入正式员工档案。</p></div></div>
+          <div class="section-head"><div><h3>预览提交</h3></div></div>
           <dl class="preview-grid">
             <div><dt>姓名</dt><dd>{{ form.name || '未填写' }}</dd></div><div><dt>手机号</dt><dd>{{ form.phone || '未填写' }}</dd></div>
             <div><dt>部门</dt><dd>{{ selectedDepartment?.fullPath || selectedDepartment?.name || '未填写' }}</dd></div><div><dt>岗位</dt><dd>{{ selectedPosition?.name || form.employee.position || '未填写' }}</dd></div>
@@ -841,13 +853,7 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
             <div><dt>花名册直属主管</dt><dd>{{ form.rosterManagerId ? '已设置' : '未设置' }}</dd></div><div><dt>绩效直属上级</dt><dd>{{ form.performanceManagerId ? '已设置' : '未设置' }}</dd></div>
             <div><dt>合同</dt><dd>{{ form.contracts.length }} 份</dd></div><div><dt>工号</dt><dd>审核通过后使用系统生成的新工号</dd></div>
           </dl>
-        </section>
-
-        <section class="future-process-section">
-          <div class="section-head">
-            <div><h3>后续办理流程</h3><p>提交后按以下顺序办理，尚未发生的节点统一灰显。</p></div>
-          </div>
-          <PersonnelProcessTimeline :items="postSubmitStages" label="后续办理流程" />
+          <p class="submission-process">提交审核 → 审核通过 → 确认到岗 → 入职生效</p>
         </section>
       </el-form>
     </div>
@@ -894,8 +900,7 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
 .material-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 7px; background: #f2f4f7; border-radius: 6px; }
 .preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 16px 0 0; border: 1px solid #e5eaf2; border-radius: 10px; overflow: hidden; }
 .preview-grid > div { padding: 14px 16px; border-right: 1px solid #eef1f6; border-bottom: 1px solid #eef1f6; }.preview-grid dt { color: #667085; font-size: 12px; }.preview-grid dd { margin: 5px 0 0; color: #101828; font-weight: 600; }
-.future-process-section { margin-top: 8px; padding: 22px 4px 8px; border-top: 1px solid var(--el-border-color-lighter); }
-.future-process-section .section-head h3 { font-size: 16px; }
+.submission-process { margin: 16px 0 0; padding-top: 16px; border-top: 1px solid var(--el-border-color-lighter); font-size: 13px; line-height: 1.8; color: var(--el-text-color-secondary); }
 .drawer-footer { display: flex; align-items: center; width: 100%; }.footer-spacer { flex: 1; }
 @media (max-width: 760px) {
   .wizard-shell { min-height: 0; }.desktop-steps { display: none; }.mobile-step { display: block; }.wizard-head { top: -12px; padding-top: 8px; }

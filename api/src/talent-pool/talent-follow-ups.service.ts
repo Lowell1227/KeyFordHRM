@@ -1,6 +1,7 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { Injectable } from '@nestjs/common';
 import { PrismaService } from '@/prisma/prisma.service';
 import type { AuthUser } from '@/common/types/auth.types';
+import { shanghaiBusinessDate } from '@/employee-archives/employment-timeline';
 import { CreateFollowUpDto, parseTalentDate } from './dto/create-follow-up.dto';
 import { TalentsService } from './talents.service';
 
@@ -14,8 +15,8 @@ export class TalentFollowUpsService {
   /** Insert history while advancing last_follow_up_at only when the date is newer. */
   async create(candidateId: string, input: CreateFollowUpDto, operator: AuthUser) {
     await this.talents.findActive(candidateId);
-    const occurredAt = parseTalentDate(input.occurredAt) ?? this.today();
-    const nextFollowUpAt = parseTalentDate(input.nextFollowUpAt);
+    const occurredAt = parseTalentDate(input.occurredAt) ?? shanghaiBusinessDate();
+    const nextFollowUpAt = parseTalentDate(input.nextFollowUpAt, '下次跟进日期');
     return this.prisma.$transaction(async (tx) => {
       const followUp = await tx.talentFollowUp.create({
         data: {
@@ -50,7 +51,4 @@ export class TalentFollowUpsService {
     return rows.map((row) => ({ ...row, createdByName: nameById.get(row.createdById) ?? null }));
   }
 
-  private today(): Date {
-    return new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`);
-  }
 }

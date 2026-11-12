@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, nextTick } from 'vue';
 import { ElMessage } from 'element-plus';
+import { isAxiosError } from 'axios';
 import { talentPoolApi } from '@/api/talent-pool.api';
 import {
   FOLLOW_UP_CHANNELS,
@@ -8,7 +9,7 @@ import {
   type FollowUpChannel,
   type TalentFollowUp,
 } from '@/types/talent.types';
-import { formatDate } from '@/utils/date';
+import { beijingFollowUpToday, formatFollowUpDate, isFollowUpDate } from '@/utils/talent-follow-up-date';
 
 /**
  * 跟进记录时间线（需求 §5.3）：倒序展示日期/方式/内容/记录人，
@@ -31,11 +32,44 @@ const formVisible = ref(false);
 const summaryInput = ref<HTMLTextAreaElement>();
 
 const form = reactive({
-  occurredAt: new Date().toISOString().slice(0, 10),
+  occurredAt: beijingFollowUpToday(),
   channel: 'phone' as FollowUpChannel,
   summary: '',
   nextFollowUpAt: '',
 });
+type DateField = 'occurredAt' | 'nextFollowUpAt';
+const errors = reactive({ occurredAt: '', nextFollowUpAt: '', summary: '' });
+const typedDates = reactive<Partial<Record<DateField, string>>>({});
+
+function captureDateInput(field: DateField, event: Event) {
+  typedDates[field] = (event.target as HTMLInputElement).value;
+}
+
+function validateDate(field: DateField, value = form[field]) {
+  const label = field === 'occurredAt' ? '沟通日期' : '下次跟进日期';
+  errors[field] = (field === 'nextFollowUpAt' && !value) || isFollowUpDate(value)
+    ? '' : `${label}必须是有效日期（YYYY-MM-DD）`;
+  return !errors[field];
+}
+
+function dateChanged(field: DateField) {
+  // Check typed text before the picker can silently roll Feb 31 into March.
+  const value = typedDates[field] ?? form[field];
+  delete typedDates[field];
+  form[field] = validateDate(field, value) ? value || '' : '';
+}
+
+async function finishDateInput(field: DateField) {
+  // Let the picker's change event finish before checking text it did not commit.
+  await nextTick();
+  await nextTick();
+  if (typedDates[field] !== undefined) dateChanged(field);
+}
+
+function clearNextDate() {
+  delete typedDates.nextFollowUpAt;
+  errors.nextFollowUpAt = '';
+}
 
 onMounted(() => {
   void load();
@@ -52,20 +86,25 @@ async function load() {
 
 function startCreate() {
   if (!props.editable) return;
-  form.occurredAt = new Date().toISOString().slice(0, 10);
+  form.occurredAt = beijingFollowUpToday();
   form.channel = 'phone';
   form.summary = '';
   form.nextFollowUpAt = '';
+  Object.assign(errors, { occurredAt: '', nextFollowUpAt: '', summary: '' });
+  delete typedDates.occurredAt;
+  delete typedDates.nextFollowUpAt;
   formVisible.value = true;
-  setTimeout(() => summaryInput.value?.focus(), 50);
+  void nextTick(() => summaryInput.value?.focus());
 }
 
 async function submit() {
-  if (!props.editable) return;
-  if (!form.summary.trim()) {
-    ElMessage.warning('请填写跟进内容');
-    return;
-  }
+  if (!props.editable || saving.value) return;
+  await finishDateInput('occurredAt');
+  await finishDateInput('nextFollowUpAt');
+  const occurredAtValid = !errors.occurredAt && validateDate('occurredAt');
+  const nextDateValid = !errors.nextFollowUpAt && validateDate('nextFollowUpAt');
+  errors.summary = form.summary.trim() ? '' : '请填写跟进内容';
+  if (!occurredAtValid || !nextDateValid || errors.summary) return;
   saving.value = true;
   try {
     await talentPoolApi.addFollowUp(props.candidateId, {
@@ -78,6 +117,12 @@ async function submit() {
     formVisible.value = false;
     await load();
     emit('changed');
+  } catch (error) {
+    const message = isAxiosError(error) ? error.response?.data?.message : error instanceof Error ? error.message : '';
+    if (typeof message === 'string') {
+      if (message.includes('下次跟进日期')) errors.nextFollowUpAt = message;
+      else if (message.includes('沟通日期')) errors.occurredAt = message;
+    }
   } finally {
     saving.value = false;
   }
@@ -91,36 +136,44 @@ async function submit() {
       <el-button v-if="editable" size="small" @click="startCreate">记一条</el-button>
     </div>
 
-    <div v-if="editable && formVisible" class="talent-follow-ups__form">
+    <el-form v-if="editable && formVisible" :model="form" class="talent-follow-ups__form" @submit.prevent="submit">
       <div class="talent-follow-ups__form-row">
-        <el-date-picker v-model="form.occurredAt" type="date" value-format="YYYY-MM-DD" placeholder="跟进日期"
-          :clearable="false" class="talent-follow-ups__date" />
+        <el-form-item prop="occurredAt" :error="errors.occurredAt" @input.capture="captureDateInput('occurredAt', $event)">
+          <el-date-picker v-model="form.occurredAt" type="date" value-format="YYYY-MM-DD" placeholder="跟进日期"
+            :clearable="false" class="talent-follow-ups__date" @change="dateChanged('occurredAt')"
+            @blur="finishDateInput('occurredAt')" />
+        </el-form-item>
         <el-select v-model="form.channel" class="talent-follow-ups__channel">
           <el-option v-for="c in FOLLOW_UP_CHANNELS" :key="c" :label="FOLLOW_UP_CHANNEL_LABELS[c]" :value="c" />
         </el-select>
       </div>
-      <el-input ref="summaryInput" v-model="form.summary" type="textarea" :rows="2" maxlength="500" show-word-limit
-        placeholder="本次沟通要点（必填）" />
+      <el-form-item prop="summary" :error="errors.summary">
+        <el-input ref="summaryInput" v-model="form.summary" type="textarea" :rows="2" maxlength="500" show-word-limit
+          placeholder="本次沟通要点（必填）" @input="errors.summary = ''" />
+      </el-form-item>
       <div class="talent-follow-ups__form-row">
         <span class="talent-follow-ups__next-label">下次跟进</span>
-        <el-date-picker v-model="form.nextFollowUpAt" type="date" value-format="YYYY-MM-DD" placeholder="不设置"
-          clearable class="talent-follow-ups__date" />
+        <el-form-item prop="nextFollowUpAt" :error="errors.nextFollowUpAt" @input.capture="captureDateInput('nextFollowUpAt', $event)">
+          <el-date-picker v-model="form.nextFollowUpAt" type="date" value-format="YYYY-MM-DD" placeholder="不设置"
+            clearable class="talent-follow-ups__date" @change="dateChanged('nextFollowUpAt')" @clear="clearNextDate"
+            @blur="finishDateInput('nextFollowUpAt')" />
+        </el-form-item>
       </div>
       <div class="talent-follow-ups__form-actions">
         <el-button size="small" @click="formVisible = false">取消</el-button>
         <el-button size="small" type="primary" :loading="saving" @click="submit">保存跟进</el-button>
       </div>
-    </div>
+    </el-form>
 
     <el-empty v-if="!loading && !list.length && !formVisible" description="还没有跟进记录" :image-size="60" />
     <el-timeline v-else v-loading="loading" class="talent-follow-ups__timeline">
-      <el-timeline-item v-for="item in list" :key="item.id" :timestamp="formatDate(item.occurredAt)" placement="top">
+      <el-timeline-item v-for="item in list" :key="item.id" :timestamp="formatFollowUpDate(item.occurredAt)" placement="top">
         <div class="talent-follow-ups__item">
           <div class="talent-follow-ups__item-meta">
             <el-tag size="small" effect="plain">{{ FOLLOW_UP_CHANNEL_LABELS[item.channel] }}</el-tag>
             <span class="talent-follow-ups__recorder">{{ item.createdByName ?? '—' }}</span>
             <el-tag v-if="item.nextFollowUpAt" size="small" type="warning" effect="light">
-              下次跟进 {{ formatDate(item.nextFollowUpAt) }}
+              下次跟进 {{ formatFollowUpDate(item.nextFollowUpAt) }}
             </el-tag>
           </div>
           <p class="talent-follow-ups__summary">{{ item.summary }}</p>
@@ -152,13 +205,28 @@ async function submit() {
 }
 .talent-follow-ups__form-row {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 8px;
   flex-wrap: wrap;
+}
+.talent-follow-ups__form :deep(.el-form-item) {
+  margin-bottom: 0;
+  min-width: 0;
+  max-width: 100%;
+}
+.talent-follow-ups__form :deep(.el-form-item__content) {
+  display: block;
+  min-width: 0;
+}
+.talent-follow-ups__form :deep(.el-form-item__error) {
+  position: static;
+  line-height: 18px;
+  max-width: 240px;
 }
 .talent-follow-ups__date { width: 150px; }
 .talent-follow-ups__channel { width: 110px; }
 .talent-follow-ups__next-label {
+  line-height: 32px;
   font-size: 13px;
   color: var(--el-text-color-secondary);
 }

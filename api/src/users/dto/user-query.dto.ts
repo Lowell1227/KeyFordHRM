@@ -1,7 +1,7 @@
 import { IsOptional, IsUUID, IsEnum, IsString, IsBoolean, IsIn } from 'class-validator';
 import { UserStatus, EmploymentType, SysRole } from '@prisma/client';
 import { PaginationDto } from '../../common/dto/pagination.dto';
-import { Transform } from 'class-transformer';
+import { BooleanQuery } from '../../common/dto/boolean-query';
 
 export class UserQueryDto extends PaginationDto {
   @IsOptional()
@@ -34,21 +34,21 @@ export class UserQueryDto extends PaginationDto {
 
   @IsOptional()
   @IsBoolean()
-  @Transform(({ value }) => value === 'true' || value === true)
+  @BooleanQuery()
   includeTestAccounts?: boolean;
 
   @IsOptional()
   @IsBoolean()
-  @Transform(({ value }) => value === 'true' || value === true)
+  @BooleanQuery()
   archived?: boolean;
 
   @IsOptional()
   @IsBoolean()
-  @Transform(({ value }) => value === 'true' || value === true)
+  @BooleanQuery()
   includeResigned?: boolean;
 
   @IsOptional()
   @IsBoolean()
-  @Transform(({ value }) => value === 'true' || value === true)
+  @BooleanQuery()
   unassigned?: boolean;
 }

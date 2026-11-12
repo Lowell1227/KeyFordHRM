@@ -1,29 +1,56 @@
 <script setup lang="ts">
-import { reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox, type FormInstance, type FormRules } from 'element-plus';
 import { Plus, Refresh } from '@element-plus/icons-vue';
 import { talentInterviewsApi } from '@/api/talent-pool.api';
 import { usersApi } from '@/api/users.api';
+import type { User } from '@/types/api.types';
 import { INTERVIEW_STATUS_LABELS, INTERVIEW_SYNC_LABELS, type TalentInterviewView } from '@/types/talent.types';
 import TalentInterviewContent from './TalentInterviewContent.vue';
 import { formatInterviewTime, interviewTimeToIso } from '../interview-time';
+import { extractTencentMeetingLink, safeTencentMeetingLink } from '../interview-meeting-link';
 
 const props = defineProps<{ candidateId: string; editable: boolean; invitationId?: string }>();
 const rows = ref<TalentInterviewView[]>([]), loading = ref(false), busy = ref(false), error = ref('');
 const editing = ref(false), current = ref<TalentInterviewView | null>(null), formRef = ref<FormInstance>();
 const requestId = ref('');
 const opened = ref<string[]>([]);
-const people = ref<Array<{ id: string; name: string; employeeNo?: string | null }>>([]), searching = ref(false);
+type InterviewPerson = Pick<User, 'id' | 'name' | 'employeeNo' | 'status' | 'archivedAt'>;
+const people = ref<InterviewPerson[]>([]), searching = ref(false), checkingParticipants = ref(false);
+const participantNames = ref<Record<string, string>>({}), participantIssues = ref<Record<string, string>>({});
 const form = reactive({ startsAt: '', endsAt: '', participantIds: [] as string[], invitationText: '', meetingUrl: '', note: '' });
+const meetingLinkManual = ref(false);
+const meetingExtraction = ref<ReturnType<typeof extractTencentMeetingLink> | null>(null);
 let generation = 0, searchGeneration = 0;
+const blockedParticipantIds = computed(() => form.participantIds.filter(id => participantIssues.value[id]));
+const selectableParticipantIds = computed({
+  get: () => form.participantIds.filter(id => !participantIssues.value[id]),
+  set: (ids: string[]) => {
+    // Keep unresolved historical participants until HR explicitly removes them.
+    form.participantIds = [...blockedParticipantIds.value, ...ids];
+    for (const person of people.value) if (ids.includes(person.id)) participantNames.value[person.id] = person.name;
+    ++searchGeneration; searching.value = false; checkingParticipants.value = false;
+  },
+});
 
 function meetingValid(value: string) {
-  if (!value.trim()) return true;
-  try {
-    const url = new URL(value.trim());
-    return !/[\s\\\u0000-\u001f\u007f]/.test(value.trim()) && url.protocol === 'https:' && url.hostname === 'meeting.tencent.com'
-      && !url.username && !url.password && (!url.port || url.port === '443');
-  } catch { return false; }
+  return !value.trim() || safeTencentMeetingLink(value) !== null;
+}
+const meetingHint = computed(() => {
+  if (!meetingExtraction.value) return '';
+  const status = meetingExtraction.value.status;
+  const result = status === 'multiple' ? '邀请中识别到多个腾讯会议链接，请核对后手动填写。'
+    : status === 'none' ? '未识别到有效的腾讯会议链接，请核对邀请并手动填写。' : '';
+  if (meetingLinkManual.value) return result + (form.meetingUrl.trim()
+    ? '已保留手动填写的链接，请核对后保存。' : '会议链接已手动清空，请核对是否需要补充。');
+  return result || '已提取腾讯会议链接，请核对后保存。';
+});
+function invitationChanged(value: string) {
+  meetingExtraction.value = extractTencentMeetingLink(value);
+  if (!meetingLinkManual.value) {
+    form.meetingUrl = meetingExtraction.value.status === 'single' ? meetingExtraction.value.url : '';
+    formRef.value?.clearValidate('meetingUrl');
+  }
 }
 const rules: FormRules = {
   startsAt: [{ required: true, message: '请选择开始时间', trigger: 'change' }],
@@ -31,7 +58,9 @@ const rules: FormRules = {
     try { done(interviewTimeToIso(value) > interviewTimeToIso(form.startsAt) ? undefined : new Error('结束时间必须晚于开始时间')); }
     catch { done(new Error('请填写完整、有效的北京时间')); }
   }, trigger: 'change' }],
-  participantIds: [{ type: 'array', required: true, min: 1, message: '请选择内部参与人', trigger: 'change' }],
+  participantIds: [{ type: 'array', required: true, min: 1, message: '请选择内部参与人', trigger: 'change' },
+    { validator: (_rule, _value, done) => done(blockedParticipantIds.value.length || checkingParticipants.value
+      ? new Error('请先处理不可用参与人，核验通过后再保存') : undefined), trigger: 'change' }],
   invitationText: [{ required: true, whitespace: true, message: '请填写会议邀请内容', trigger: 'blur' }],
   meetingUrl: [{ validator: (_rule, value, done) => done(meetingValid(value) ? undefined : new Error('仅支持腾讯会议官方 HTTPS 链接')), trigger: 'blur' }],
 };
@@ -52,39 +81,82 @@ async function load() {
   } catch (cause) { if (token === generation) error.value = failure(cause); }
   finally { if (token === generation) loading.value = false; }
 }
-watch(() => [props.candidateId, props.invitationId], () => { rows.value = []; editing.value = false; void load(); }, { immediate: true });
+function closeEditor() {
+  ++searchGeneration; editing.value = false; searching.value = false; checkingParticipants.value = false;
+}
+watch(() => [props.candidateId, props.invitationId], () => { rows.value = []; closeEditor(); void load(); }, { immediate: true });
+onBeforeUnmount(closeEditor);
 
-async function searchPeople(keyword: string) {
-  const token = ++searchGeneration; searching.value = true;
+function participantIssue(person: InterviewPerson | null) {
+  if (!person) return '状态无法核验，请重新核验或移除';
+  if (person.archivedAt) return '已归档';
+  if (person.status === 'resigned') return '已离职';
+  return ['active', 'probation'].includes(person.status) ? '' : '当前不可用';
+}
+async function searchPeople(keyword?: string): Promise<boolean> {
+  if (!editing.value) return false;
+  const token = ++searchGeneration, selectedIds = [...form.participantIds];
+  checkingParticipants.value = true; searching.value = keyword !== undefined;
   try {
-    const query = { keyword: keyword.trim() || undefined, page: 1, pageSize: 30, archived: false, includeTestAccounts: false };
-    const active = await usersApi.findAll({ ...query, status: 'active' });
-    const probation = await usersApi.findAll({ ...query, status: 'probation' });
-    if (token !== searchGeneration) return;
-    const selected = people.value.filter((person) => form.participantIds.includes(person.id));
-    people.value = [...new Map([...selected, ...active.items, ...probation.items].map((person) => [person.id, person])).values()];
-  } catch (cause) { if (token === searchGeneration) error.value = failure(cause); }
-  finally { if (token === searchGeneration) searching.value = false; }
+    const query = { keyword: keyword?.trim() || undefined, page: 1, pageSize: 30, archived: false, includeTestAccounts: false };
+    const [selected, options] = await Promise.all([
+      Promise.all(selectedIds.map(async id => ({ id, person: await usersApi.findOne(id).catch(() => null) }))),
+      keyword === undefined ? Promise.resolve(people.value) : Promise.all([
+        usersApi.findAll({ ...query, status: 'active' }), usersApi.findAll({ ...query, status: 'probation' }),
+      ]).then(results => results.flatMap(result => result.items)),
+    ]);
+    if (token !== searchGeneration || !editing.value) return false;
+    participantIssues.value = {};
+    const validSelected: InterviewPerson[] = [];
+    for (const { id, person } of selected) {
+      const issue = participantIssue(person);
+      if (issue) participantIssues.value[id] = issue;
+      else if (person) { validSelected.push(person); participantNames.value[id] = person.name; }
+    }
+    // Live per-ID results take precedence over a search page and the old selection cache.
+    people.value = [...new Map([...options.filter(person => !selectedIds.includes(person.id) && !participantIssue(person)),
+      ...validSelected].map(person => [person.id, person])).values()];
+    return !blockedParticipantIds.value.length;
+  } catch (cause) {
+    if (token === searchGeneration && editing.value) {
+      error.value = failure(cause);
+      participantIssues.value = Object.fromEntries(selectedIds.map(id => [id, '状态无法核验，请重新核验或移除']));
+      people.value = [];
+    }
+    return false;
+  } finally { if (token === searchGeneration) { searching.value = false; checkingParticipants.value = false; } }
+}
+function removeParticipant(id: string) {
+  form.participantIds = form.participantIds.filter(selected => selected !== id);
+  delete participantIssues.value[id];
+  void searchPeople();
 }
 function openEditor(row: TalentInterviewView | null) {
   if (!props.editable) return;
+  closeEditor();
   current.value = row; editing.value = true; error.value = '';
   requestId.value = row ? '' : crypto.randomUUID();
+  meetingLinkManual.value = Boolean(row?.meetingUrl);
+  meetingExtraction.value = null;
   Object.assign(form, { startsAt: row ? formatInterviewTime(row.startsAt) : '', endsAt: row ? formatInterviewTime(row.endsAt) : '',
     participantIds: row?.participants?.map((p) => p.userId) ?? [], invitationText: row?.invitationText ?? '',
     meetingUrl: row?.meetingUrl ?? '', note: row?.note ?? '' });
-  people.value = row?.participants?.map((p) => ({ id: p.userId, name: p.userNameSnapshot })) ?? [];
+  people.value = [];
+  participantNames.value = Object.fromEntries((row?.participants ?? []).map(p => [p.userId, p.userNameSnapshot]));
+  participantIssues.value = Object.fromEntries(form.participantIds.map(id => [id, '正在核验当前任职状态']));
   formRef.value?.clearValidate();
+  void searchPeople();
 }
 async function save() {
-  if (!props.editable || busy.value || !await formRef.value?.validate().catch(() => false)) return;
+  if (!props.editable || busy.value || checkingParticipants.value || !await formRef.value?.validate().catch(() => false)) return;
   busy.value = true; error.value = '';
   try {
+    if (!await searchPeople()) { await formRef.value?.validateField('participantIds').catch(() => false); return; }
     const body = { ...form, startsAt: interviewTimeToIso(form.startsAt), endsAt: interviewTimeToIso(form.endsAt),
       participantIds: [...form.participantIds], meetingUrl: form.meetingUrl.trim() || null, note: form.note.trim() || null };
     if (current.value) await talentInterviewsApi.update(current.value.id, { ...body, version: current.value.version });
     else await talentInterviewsApi.create({ ...body, candidateId: props.candidateId, requestId: requestId.value });
-    editing.value = false; ElMessage.success('面试邀约已保存'); await load();
+    closeEditor(); ElMessage.success('面试邀约已保存'); await load();
   } catch (cause) { error.value = failure(cause); }
   finally { busy.value = false; }
 }
@@ -137,14 +209,26 @@ async function action(row: TalentInterviewView, command: 'cancel' | 'complete' |
         <el-form-item label="结束时间（北京时间）" prop="endsAt"><el-date-picker v-model="form.endsAt" type="datetime" value-format="YYYY-MM-DD HH:mm:ss" /></el-form-item>
       </div>
       <el-form-item label="内部参与人" prop="participantIds">
-        <el-select v-model="form.participantIds" multiple filterable remote :remote-method="searchPeople" :loading="searching" :multiple-limit="50" placeholder="搜索姓名或工号" @focus="searchPeople('')">
+        <el-select v-model="selectableParticipantIds" multiple filterable remote :remote-method="searchPeople" :loading="searching || checkingParticipants" :multiple-limit="50 - blockedParticipantIds.length" placeholder="搜索姓名或工号" @focus="searchPeople('')">
           <el-option v-for="person in people" :key="person.id" :value="person.id" :label="[person.name, person.employeeNo].filter(Boolean).join(' · ')" />
         </el-select>
+        <div v-if="blockedParticipantIds.length" role="region" aria-label="待处理参与人" class="interview-panel__participant-issues">
+          <div>以下参与人仍保留在本次邀约中，处理后才能保存。
+            <el-tooltip content="重新核验参与人"><el-button :icon="Refresh" aria-label="重新核验参与人" size="small" :loading="checkingParticipants" @click="searchPeople()" /></el-tooltip>
+          </div>
+          <ul><li v-for="id in blockedParticipantIds" :key="id">
+            <span>{{ participantNames[id] || '历史参与人' }}：{{ participantIssues[id] }}</span>
+            <el-button size="small" type="danger" link :aria-label="`移除参与人 ${participantNames[id] || '历史参与人'}`" @click="removeParticipant(id)">移除</el-button>
+          </li></ul>
+        </div>
       </el-form-item>
-      <el-form-item label="会议邀请内容" prop="invitationText"><el-input v-model="form.invitationText" type="textarea" :rows="5" maxlength="10000" show-word-limit /></el-form-item>
-      <el-form-item label="腾讯会议链接" prop="meetingUrl"><el-input v-model="form.meetingUrl" maxlength="1000" placeholder="https://meeting.tencent.com/..." /></el-form-item>
+      <el-form-item label="会议邀请内容" prop="invitationText"><el-input v-model="form.invitationText" type="textarea" :rows="5" maxlength="10000" show-word-limit @input="invitationChanged" /></el-form-item>
+      <el-form-item label="腾讯会议链接" prop="meetingUrl">
+        <el-input v-model="form.meetingUrl" maxlength="1000" placeholder="https://meeting.tencent.com/..." @input="meetingLinkManual = true" />
+        <p v-if="meetingHint" role="status" class="interview-panel__link-hint">{{ meetingHint }}</p>
+      </el-form-item>
       <el-form-item label="安排备注" prop="note"><el-input v-model="form.note" type="textarea" :rows="2" maxlength="2000" show-word-limit /></el-form-item>
-      <div class="interview-panel__actions"><el-button @click="editing = false">取消编辑</el-button><el-button type="primary" :loading="busy" @click="save">保存邀约</el-button></div>
+      <div class="interview-panel__actions"><el-button @click="closeEditor">取消编辑</el-button><el-button type="primary" :loading="busy" :disabled="checkingParticipants || blockedParticipantIds.length > 0" @click="save">保存邀约</el-button></div>
     </el-form>
     <el-empty v-if="!loading && !rows.length && !editing" description="暂无面试邀约" :image-size="50" />
     <el-collapse v-if="rows.length" v-model="opened" class="interview-panel__list">
@@ -177,5 +261,10 @@ h4 { margin: 0; font-size: 14px; }
 .interview-panel__summary { display: flex; flex-wrap: wrap; gap: 6px 12px; line-height: 1.5; padding: 8px 0; text-align: left; }
 .interview-panel__list :deep(.el-collapse-item__header) { min-height: 48px; height: auto; }
 .interview-panel__note { white-space: pre-wrap; overflow-wrap: anywhere; }
+.interview-panel__link-hint { margin: 6px 0 0; color: var(--el-text-color-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.interview-panel__participant-issues { width: 100%; margin-top: 8px; color: var(--el-color-warning-dark-2); line-height: 1.5; }
+.interview-panel__participant-issues ul { margin: 6px 0 0; padding: 0; list-style: none; }
+.interview-panel__participant-issues li { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 4px 0; }
+.interview-panel__participant-issues span { min-width: 0; overflow-wrap: anywhere; }
 @media (max-width: 768px) { .interview-panel__times { grid-template-columns: minmax(0, 1fr); gap: 0; } }
 </style>

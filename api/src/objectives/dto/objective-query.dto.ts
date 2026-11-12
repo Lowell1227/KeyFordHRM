@@ -1,5 +1,5 @@
-import { Type } from 'class-transformer';
-import { IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
+import { BooleanQuery } from '@/common/dto/boolean-query';
+import { IsBoolean, IsEnum, IsOptional, IsString, IsUUID } from 'class-validator';
 import { ObjectiveLevel, ObjectiveStatus } from '@prisma/client';
 import { PaginationDto } from '@/common/dto/pagination.dto';
 
@@ -35,6 +35,7 @@ export class ObjectiveQueryDto extends PaginationDto {
 
   /** 为真时返回平铺列表；为假（默认）时返回树。 */
   @IsOptional()
-  @Type(() => Boolean)
+  @IsBoolean()
+  @BooleanQuery()
   flat?: boolean;
 }

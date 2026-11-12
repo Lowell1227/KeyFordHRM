@@ -35,7 +35,7 @@ async function mockCreate(page: Page) {
   });
   await page.goto('/personnel-processing');
   await page.getByRole('button', { name: '办理入职', exact: true }).click();
-  return { drafts, otherWrites, drawer: page.getByRole('dialog', { name: '新增员工', exact: true }) };
+  return { drafts, otherWrites, drawer: page.getByRole('dialog', { name: '办理入职', exact: true }) };
 }
 
 for (const width of [1440, 390]) {

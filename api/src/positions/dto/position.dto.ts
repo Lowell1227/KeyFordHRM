@@ -1,4 +1,5 @@
 import { Type } from 'class-transformer';
+import { BooleanQuery } from '../../common/dto/boolean-query';
 import {
   IsBoolean,
   IsIn,
@@ -19,7 +20,7 @@ export class PositionQueryDto {
 
   @IsOptional()
   @IsBoolean()
-  @Type(() => Boolean)
+  @BooleanQuery()
   includeInactive = false;
 }
 

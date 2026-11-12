@@ -8,7 +8,7 @@ import { CreateTemplateDto } from './dto/create-template.dto';
 import { UpdateTemplateDto } from './dto/update-template.dto';
 import { PaginationDto } from '@/common/dto/pagination.dto';
 import { ArrayNotEmpty, IsArray, IsBoolean, IsOptional, IsString, IsUUID } from 'class-validator';
-import { Transform, Type } from 'class-transformer';
+import { BooleanQuery } from '@/common/dto/boolean-query';
 
 class TemplateQueryDto extends PaginationDto {
   @IsOptional()
@@ -17,7 +17,7 @@ class TemplateQueryDto extends PaginationDto {
 
   @IsOptional()
   @IsBoolean()
-  @Transform(({ value }) => (value === undefined ? true : value === 'true' || value === true))
+  @BooleanQuery()
   isActive = true;
 }
 

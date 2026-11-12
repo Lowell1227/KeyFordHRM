@@ -21,7 +21,10 @@ function setup() {
 }
 
 describe('TalentFollowUpsService', () => {
+  afterEach(() => jest.useRealTimers());
+
   it('新增跟进与 last_follow_up_at 回写在同一事务，occurredAt 缺省为今天', async () => {
+    jest.useFakeTimers().setSystemTime(new Date('2026-11-12T17:00:00.000Z'));
     const { prisma, sut } = setup();
     const tx = {
       talentFollowUp: { create: jest.fn().mockResolvedValue({ id: 'fu-1' }) },
@@ -31,7 +34,7 @@ describe('TalentFollowUpsService', () => {
     const result = await sut.create('cand-1', { channel: 'phone', summary: '电话沟通' } as never, HR);
     expect(result).toEqual({ id: 'fu-1' });
     const data = tx.talentFollowUp.create.mock.calls[0][0].data;
-    expect(data.occurredAt).toEqual(new Date(`${new Date().toISOString().slice(0, 10)}T00:00:00.000Z`));
+    expect(data.occurredAt).toEqual(new Date('2026-11-13T00:00:00.000Z'));
     expect(data.nextFollowUpAt).toBeNull();
     expect(tx.talentCandidate.updateMany).toHaveBeenCalledWith({
       where: { id: 'cand-1', deletedAt: null, OR: [{ lastFollowUpAt: null }, { lastFollowUpAt: { lt: data.occurredAt } }] },

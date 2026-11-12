@@ -138,7 +138,7 @@ async function confirmDelete() {
 
 function openEmployeeArchive() {
   if (!detail.value?.convertedUserId) return;
-  void router.push({ path: '/users', query: { keyword: detail.value.name } });
+  void router.push({ path: '/users', query: { employeeId: detail.value.convertedUserId } });
 }
 
 /** Only source ID is handed to onboarding; personal data never enters the URL. */
