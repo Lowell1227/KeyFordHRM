@@ -4,7 +4,23 @@
 
 用户随后补充并明确授权“修改完直接上线”：草稿状态改为“草稿已保存，尚未提交”，删除编辑表单上方的常驻审核说明。只调整文案，不修改现有审核规则。补充修改后 16 项专项页面回归再次全部通过（37.2 秒），Web 类型检查通过；下方尚未发布描述为上一轮本地验证快照，生产结果以随后追加的发布记录为准。
 
-## 状态和范围
+## 生产发布结果
+
+- 用户明确授权“修改完直接上线”。功能提交 `26580d94e55cc91d47fc2ae696c5bfbfe5fda1dc` 已提交并推送 `origin/main`，远端实时哈希一致；产品版本仍为 0.8。
+- 从提交创建干净发布副本 `C:/Users/lwei/kayford-releases/26580d94-archive-quality`，API/Web 镜像构建通过，只替换 `kayford-deploy` 的 API 与 Web。工作区其他任务未提交文件均未带入。
+- 生产 API 镜像 `sha256:4ce745df3d4785419112ce5976b8398ae6928b6537cd4864f94071e64aa8d21b`；Web 镜像 `sha256:c3d7bc1e6966381718709ded371a3e2a847681af0ff3f521487f465206d43697`，两者 revision 均为上述功能提交。
+- PostgreSQL `3c08c9a07428`、Redis `bf6543b0e16d`、MinIO `e105e90f5286` 容器未替换。候选镜像检查迁移 up to date，发布前后均 63 项完成、0 失败；没有新增迁移。
+- 发布前备份 `C:/Users/lwei/kayford-backups/archive-quality-20261112/database.dump`：2,228,204 字节，SHA256 `06ffd7ceccb11790b95073f68da914d74ded4f7f98f0a65e9fd6ad47b3a95187`。`pg_restore -l` 校验通过；本轮没有声称完成整库恢复演练。
+- 回滚基线为此前 `a72870bc` API/Web，标签分别为 `kayford-deploy-api:rollback-archive-quality-20261112`、`kayford-deploy-web:rollback-archive-quality-20261112`；原发布副本保留。回退应用时不得用备份整库覆盖后续业务数据。
+- 本机与外网健康 JSON 均为 `status=ok/db=ok`。外网 `index-DoHRX6zm.js` 与 `UserManageView-eZwI3Y2G.js` 的 SHA256 与容器相同。线上资源有“草稿已保存，尚未提交”，旧文案和整段常驻说明均不存在。
+- 使用已有非员工管理员的内存短期会话，对正式 `/users` 做 1440px / 390px 只读 Playwright 检查：列表和详情司龄字段存在、导出选列可操作、详情及编辑入口正常，旧说明消失；0 请求失败、0 页面/控制台错误、无横向溢出。没有修改输入、提交、下载员工数据、保存身份或真实人员截图；验证主动阻止非 GET 和导出接口，实际阻止计数均 0。
+- 只读脚本首次将页面用于“未分配人数”的辅助查询当作员工主列表，因此空结果中止；修正为等待 `pageSize=20` 的主列表响应后，两种宽度均完整通过。没有因检查脚本失败改动应用数据或代码。
+- 线上抽查的首位员工没有合同，本轮生产脚本未验证真实合同折叠；合同标题/历史折叠已由虚构数据专项页面与单元测试覆盖。真实 HR 提交、审核、导出结果业务验收仍待用户执行。
+- `ENABLE_TEST_QUICK_LOGIN=false`、`DINGTALK_INTERVIEW_CALENDAR_ENABLED=false`，保持生产开关不变。审核规则未因删除说明文案而改变。
+
+以下为发布前本地验证记录，发布状态以上节为准。
+
+## 本地验证时的状态和范围
 
 - 本地基线：`main`，`HEAD` 与本地 `origin/main` 均为 `f4b8fc89fb4c45f21c163a19b4182d0ae18908e9`。
 - 本轮实现及技术验证完成；尚未提交、推送或发布。线上不包含本轮修改。
