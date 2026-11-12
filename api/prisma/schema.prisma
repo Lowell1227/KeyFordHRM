@@ -886,6 +886,11 @@ model EmployeeDataChangeRequest {
   sourceReference         String?               @map("source_reference") @db.VarChar(100)
   intakeType              OnboardingIntakeType? @map("intake_type")
   onboardingStatus        OnboardingStatus?     @map("onboarding_status")
+  requiresArrivalConfirmation Boolean            @default(false) @map("requires_arrival_confirmation")
+  arrivalDate             DateTime?              @map("arrival_date") @db.Date
+  arrivalConfirmedAt      DateTime?              @map("arrival_confirmed_at") @db.Timestamptz(6)
+  arrivalConfirmedById    String?                @map("arrival_confirmed_by_id") @db.Uuid
+  talentCandidateId       String?                @map("talent_candidate_id") @db.Uuid
   requestVersion          Int                   @default(1) @map("request_version")
   revisionHistory         Json                  @default("[]") @map("revision_history") @db.JsonB
   baseValue               Json                  @default("{}") @map("base_value") @db.JsonB
@@ -916,6 +921,7 @@ model EmployeeDataChangeRequest {
   performanceReviewedBy User?                      @relation("EmployeePerformanceReviewedBy", fields: [performanceReviewedById], references: [id], onDelete: SetNull)
   cancelledBy           User?                      @relation("EmployeeChangeCancelledBy", fields: [cancelledById], references: [id], onDelete: SetNull)
   employmentRecords     EmploymentRecord[]         @relation("EmploymentSourceRequest")
+  talentCandidate       TalentCandidate?           @relation(fields: [talentCandidateId], references: [id], onDelete: Restrict)
   employeeNumbers       EmployeeNumberAssignment[]
 
   @@unique([sourceBatchId, sourceRowNumber])
@@ -925,6 +931,7 @@ model EmployeeDataChangeRequest {
   @@index([userId, createdAt(sort: Desc)])
   @@index([recordStatus, createdAt(sort: Desc)])
   @@index([intakeType, onboardingStatus, createdAt(sort: Desc)])
+  @@index([talentCandidateId, onboardingStatus])
   @@map("employee_data_change_requests")
 }
 
@@ -2029,4 +2036,175 @@ model ActionItem {
   @@index([status])
   @@index([createdBy])
   @@map("action_items")
+}
+
+// -----------------------------------------------------------------------------
+// 人才库（MVP，2026-11-08）—— 候选人独立建表，不进入员工主数据
+// 说明：created_by_id / updated_by_id / uploaded_by_id 仅落审计，不建外键
+// （候选人链路不反向依赖 users 表关系，保持模块边界清晰）。
+// CHECK 约束与部分唯一索引在迁移中手写 SQL 补充。
+// -----------------------------------------------------------------------------
+
+model TalentCandidate {
+  id                String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  name              String    @db.VarChar(50)
+  phone             String    @db.VarChar(20)
+  email             String?   @db.VarChar(100)
+  gender            String    @default("unknown") @db.VarChar(10)
+  birthYear         Int?      @map("birth_year")
+  currentCompany    String?   @map("current_company") @db.VarChar(150)
+  currentPosition   String?   @map("current_position") @db.VarChar(100)
+  yearsOfExperience Int?      @map("years_of_experience")
+  education         String?   @db.VarChar(20)
+  school            String?   @db.VarChar(200)
+  major             String?   @db.VarChar(150)
+  expectCity        String?   @map("expect_city") @db.VarChar(100)
+  expectSalaryMin   Int?      @map("expect_salary_min")
+  expectSalaryMax   Int?      @map("expect_salary_max")
+  sourceChannel     String    @map("source_channel") @db.VarChar(20)
+  appliedPosition   String?   @map("applied_position") @db.VarChar(100)
+  status            String    @default("new") @db.VarChar(20)
+  tags              String[]  @default([]) @db.VarChar(20)
+  note              String?   @db.Text
+  lastFollowUpAt    DateTime? @map("last_follow_up_at") @db.Date
+  convertedUserId   String?   @unique @map("converted_user_id") @db.Uuid
+  convertedAt       DateTime? @map("converted_at") @db.Timestamptz(6)
+  createdById       String    @map("created_by_id") @db.Uuid
+  updatedById       String?   @map("updated_by_id") @db.Uuid
+  createdAt         DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt         DateTime  @default(now()) @map("updated_at") @db.Timestamptz(6)
+  deletedAt         DateTime? @map("deleted_at") @db.Timestamptz(6)
+
+  files     TalentResumeFile[]
+  followUps TalentFollowUp[]
+  shares    TalentShare[]
+  onboardingRequests EmployeeDataChangeRequest[]
+  interviews TalentInterview[]
+
+  @@index([status, updatedAt(sort: Desc)])
+  @@index([createdAt(sort: Desc)])
+  @@index([expectSalaryMin])
+  @@index([deletedAt])
+  @@map("talent_candidates")
+}
+
+model TalentResumeFile {
+  id           String   @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId  String   @map("candidate_id") @db.Uuid
+  objectKey    String   @map("object_key") @db.VarChar(500)
+  fileName     String   @map("file_name") @db.VarChar(255)
+  mimeType     String   @map("mime_type") @db.VarChar(100)
+  fileSize     Int      @map("file_size")
+  sortOrder    Int      @default(0) @map("sort_order")
+  uploadedById String   @map("uploaded_by_id") @db.Uuid
+  createdAt    DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  candidate TalentCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId, sortOrder])
+  @@map("talent_resume_files")
+}
+
+model TalentFollowUp {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId    String    @map("candidate_id") @db.Uuid
+  occurredAt     DateTime  @map("occurred_at") @db.Date
+  channel        String    @db.VarChar(20)
+  summary        String    @db.Text
+  nextFollowUpAt DateTime? @map("next_follow_up_at") @db.Date
+  createdById    String    @map("created_by_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  candidate TalentCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId, occurredAt(sort: Desc)])
+  @@map("talent_follow_ups")
+}
+
+model TalentShare {
+  id             String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId    String    @map("candidate_id") @db.Uuid
+  token          String    @unique @db.VarChar(64)
+  recipientIds   String[]  @map("recipient_ids") @db.Uuid
+  includeResume  Boolean   @default(false) @map("include_resume")
+  message        String?   @db.VarChar(100)
+  expiresAt      DateTime  @map("expires_at") @db.Timestamptz(6)
+  revokedAt      DateTime? @map("revoked_at") @db.Timestamptz(6)
+  viewCount      Int       @default(0) @map("view_count")
+  lastViewedAt   DateTime? @map("last_viewed_at") @db.Timestamptz(6)
+  lastViewedById String?   @map("last_viewed_by_id") @db.Uuid
+  createdById    String    @map("created_by_id") @db.Uuid
+  createdAt      DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+
+  candidate TalentCandidate @relation(fields: [candidateId], references: [id], onDelete: Cascade)
+
+  @@index([candidateId, createdAt(sort: Desc)])
+  @@map("talent_shares")
+}
+
+model TalentInterview {
+  id                    String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  candidateId           String    @map("candidate_id") @db.Uuid
+  candidateNameSnapshot String    @map("candidate_name_snapshot") @db.VarChar(50)
+  startsAt              DateTime  @map("starts_at") @db.Timestamptz(6)
+  endsAt                DateTime  @map("ends_at") @db.Timestamptz(6)
+  invitationText        String    @map("invitation_text") @db.Text
+  meetingUrl            String?   @map("meeting_url") @db.VarChar(1000)
+  note                  String?   @db.Text
+  status                String    @default("scheduled") @db.VarChar(20)
+  version               Int       @default(1)
+  syncStatus            String    @default("unconfigured") @map("sync_status") @db.VarChar(20)
+  calendarSyncedVersion Int       @default(0) @map("calendar_synced_version")
+  calendarEventId       String?   @map("calendar_event_id") @db.VarChar(255)
+  externalCalendarId    String?   @map("external_calendar_id") @db.VarChar(255)
+  calendarOrganizerUnionId String? @map("calendar_organizer_union_id") @db.VarChar(255)
+  createdById           String    @map("created_by_id") @db.Uuid
+  updatedById           String?   @map("updated_by_id") @db.Uuid
+  createdAt             DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt             DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  candidate    TalentCandidate             @relation(fields: [candidateId], references: [id], onDelete: Restrict)
+  participants TalentInterviewParticipant[]
+  syncs        TalentInterviewSync[]
+
+  @@index([candidateId, status, startsAt])
+  @@map("talent_interviews")
+}
+
+model TalentInterviewParticipant {
+  interviewId      String @map("interview_id") @db.Uuid
+  userId           String @map("user_id") @db.Uuid
+  userNameSnapshot String @map("user_name_snapshot") @db.VarChar(50)
+
+  interview TalentInterview @relation(fields: [interviewId], references: [id], onDelete: Restrict)
+
+  @@id([interviewId, userId])
+  @@index([userId, interviewId])
+  @@map("talent_interview_participants")
+}
+
+model TalentInterviewSync {
+  id                  String    @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
+  interviewId         String    @map("interview_id") @db.Uuid
+  version             Int
+  operation           String    @db.VarChar(20)
+  status              String    @default("unconfigured") @db.VarChar(20)
+  participantIds      String[]  @map("participant_ids") @db.Uuid
+  attempts            Int       @default(0)
+  calendarEventId     String?   @map("calendar_event_id") @db.VarChar(255)
+  externalCalendarId  String?   @map("external_calendar_id") @db.VarChar(255)
+  calendarOrganizerUnionId String? @map("calendar_organizer_union_id") @db.VarChar(255)
+  errorCode           String?   @map("error_code") @db.VarChar(100)
+  claimToken          String?   @map("claim_token") @db.Uuid
+  claimedAt           DateTime? @map("claimed_at") @db.Timestamptz(6)
+  nextAttemptAt       DateTime? @map("next_attempt_at") @db.Timestamptz(6)
+  completedAt         DateTime? @map("completed_at") @db.Timestamptz(6)
+  createdAt           DateTime  @default(now()) @map("created_at") @db.Timestamptz(6)
+  updatedAt           DateTime  @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
+
+  interview TalentInterview @relation(fields: [interviewId], references: [id], onDelete: Restrict)
+
+  @@unique([interviewId, version])
+  @@index([status, nextAttemptAt])
+  @@map("talent_interview_syncs")
 }

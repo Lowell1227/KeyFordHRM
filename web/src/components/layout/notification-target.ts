@@ -8,6 +8,10 @@ export function resolveNotificationTarget(
   const taskId = notification.taskId;
   const cycleId = notification.cycleId || undefined;
 
+  if (notification.type === 'talent_interview' && typeof notification.extraData?.invitationId === 'string') {
+    return { path: `/talent-interviews/${encodeURIComponent(notification.extraData.invitationId)}` };
+  }
+
   if (notification.type === 'cycle_review_reminder' && cycleId) {
     return { path: '/cycles', query: { group: 'attention', cycleId } };
   }

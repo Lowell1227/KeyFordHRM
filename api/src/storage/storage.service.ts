@@ -21,7 +21,8 @@ export type UploadPurpose =
   | 'employee-contract-image'
   | 'employee-contract-attachment'
   | 'confirmation-internal'
-  | 'performance-review-evidence';
+  | 'performance-review-evidence'
+  | 'talent-resume';
 
 const ALLOWED_MIME_TYPES = new Set([
   'image/jpeg',
@@ -96,7 +97,9 @@ export class StorageService implements OnModuleInit {
           ? 'confirmation-internal'
           : purpose === 'performance-review-evidence'
             ? 'performance-evidence'
-            : 'uploads';
+            : purpose === 'talent-resume'
+              ? 'talent-resume'
+              : 'uploads';
     const safeOriginalName = file.originalname.replace(/[\\/]/g, '_');
     const objectName = `${prefix}/${today}/${randomUUID()}-${safeOriginalName}`;
 
@@ -139,6 +142,7 @@ export class StorageService implements OnModuleInit {
     const disposition = objectName.startsWith('employee-contracts/')
       || objectName.startsWith('confirmation-internal/')
       || (objectName.startsWith('performance-evidence/') && !contentType.startsWith('image/'))
+      || (objectName.startsWith('talent-resume/') && !contentType.startsWith('image/'))
       ? 'attachment'
       : 'inline';
     res.setHeader('Content-Disposition', `${disposition}; filename*=UTF-8''${encodeURIComponent(originalName)}`);
@@ -216,6 +220,28 @@ export class StorageService implements OnModuleInit {
           message: ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx', '.xls', '.xlsx'].includes(ext)
             ? '自评附件文件内容与格式不符'
             : '自评附件仅支持 JPG、PNG、PDF、Word、Excel',
+        });
+      }
+      return safeMimeType;
+    }
+    if (purpose === 'talent-resume') {
+      if (file.size > 10 * 1024 * 1024) {
+        throw new BadRequestException({ code: 'PARAM_INVALID', message: '简历文件单个不能超过 10MB' });
+      }
+      const ext = file.originalname.toLowerCase().slice(file.originalname.lastIndexOf('.'));
+      const imageMimeType = ['.jpg', '.jpeg', '.png'].includes(ext)
+        ? this.contractImageMime(file.buffer, ext)
+        : null;
+      const documentMimeType = ['.pdf', '.doc', '.docx'].includes(ext)
+        ? await this.contractAttachmentMime(file.buffer, ext)
+        : null;
+      const safeMimeType = imageMimeType ?? documentMimeType;
+      if (!safeMimeType) {
+        throw new BadRequestException({
+          code: 'PARAM_INVALID',
+          message: ['.jpg', '.jpeg', '.png', '.pdf', '.doc', '.docx'].includes(ext)
+            ? '简历文件内容与格式不符'
+            : '简历仅支持 PDF、DOC、DOCX、JPG、PNG',
         });
       }
       return safeMimeType;

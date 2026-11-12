@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue';
-import { onBeforeRouteLeave, useRoute } from 'vue-router';
+import { onBeforeRouteLeave, onBeforeRouteUpdate, useRoute, useRouter } from 'vue-router';
 import { isAxiosError } from 'axios';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
@@ -18,9 +18,10 @@ import {
   type EmployeeDataReview,
   type ArchiveBatchResult,
   type EmployeeArchiveIssue,
+  type EmployeeOnboardingResult,
 } from '@/api/employee-archives.api';
 import { usersApi } from '@/api/users.api';
-import { personnelConfigApi, type PersonnelReviewMode } from '@/api/personnel-config.api';
+import { talentPoolApi } from '@/api/talent-pool.api';
 import { useExport } from '@/composables/useExport';
 import { uploadApi } from '@/api/upload.api';
 import ChartCard from '@/components/common/ChartCard.vue';
@@ -39,9 +40,10 @@ import EmployeeCreateDrawer from './components/EmployeeCreateDrawer.vue';
 import EmployeeReentryDrawer from './components/EmployeeReentryDrawer.vue';
 import EmploymentRecordDrawer from './components/EmploymentRecordDrawer.vue';
 import EmployeeApplicationDetail from './components/EmployeeApplicationDetail.vue';
+import EmployeeArrivalConfirmation from './components/EmployeeArrivalConfirmation.vue';
 import EmployeeChangeHistory from './components/EmployeeChangeHistory.vue';
 import PersonnelPendingReviews from './components/PersonnelPendingReviews.vue';
-import { applicationProgress, applicationType } from '@/utils/employee-lifecycle';
+import { applicationProgress, applicationType, archiveSubmissionMessage, canReviseArrivalDate, isCancelledNewHireArrival, isPendingArrival, isPersonnelLifecycleRequest } from '@/utils/employee-lifecycle';
 import { formatBusinessIdentityLabel } from '@/components/layout/business-identity';
 import { useAuthStore } from '@/stores/auth.store';
 import type { Attachment, BusinessIdentity, Department, HrCapability, SystemPermission, UpdateDepartmentStructureBody, User as ManagedUser, UserQuery } from '@/types/api.types';
@@ -56,6 +58,7 @@ type PersonnelView = 'org' | 'users' | 'processing';
 const props = withDefaults(defineProps<{ mode?: PersonnelView }>(), { mode: 'users' });
 const auth = useAuthStore();
 const route = useRoute();
+const router = useRouter();
 
 const dingtalkStateLabels = {
   unbound: '未关联',
@@ -184,7 +187,7 @@ const hrCapabilityOptions: { label: string; value: HrCapability }[] = [
 ];
 
 type EmployeeDirectoryCategory = 'all' | UserStatus | 'archived';
-type PersonnelProcessingCategory = 'applications' | 'reviews' | 'draft';
+type PersonnelProcessingCategory = 'applications' | 'arrivals' | 'reviews' | 'draft';
 
 const employeeCategoryOptions: { label: string; value: EmployeeDirectoryCategory }[] = [
   { label: '全部', value: 'all' },
@@ -197,6 +200,7 @@ const employeeCategoryOptions: { label: string; value: EmployeeDirectoryCategory
 
 const processingCategoryOptions: { label: string; value: PersonnelProcessingCategory }[] = [
   { label: '办理中', value: 'applications' },
+  { label: '待确认到岗', value: 'arrivals' },
   { label: '待我审核', value: 'reviews' },
   { label: '草稿', value: 'draft' },
 ];
@@ -257,10 +261,11 @@ const processingCategory = ref<PersonnelProcessingCategory>('applications');
 const userArchiveView = computed(() => employeeCategory.value === 'archived');
 const isResignedCategory = computed(() => employeeCategory.value === 'resigned');
 const isDraftCategory = computed(() => activeView.value === 'processing' && processingCategory.value === 'draft');
-const isApplicationsCategory = computed(() => activeView.value === 'processing' && processingCategory.value === 'applications');
+const isArchiveApplications = computed(() => activeView.value === 'users' && route.query.tab === 'changes');
+const isApplicationsCategory = computed(() => isArchiveApplications.value || (activeView.value === 'processing' && ['applications', 'arrivals'].includes(processingCategory.value)));
 const isReviewsCategory = computed(() => activeView.value === 'processing' && processingCategory.value === 'reviews');
 const visibleProcessingCategoryOptions = computed(() => processingCategoryOptions.filter((item) => (
-  item.value === 'applications'
+  item.value === 'applications' || item.value === 'arrivals'
     ? canViewArchive.value
     : item.value === 'reviews'
       ? canReviewArchive.value
@@ -476,6 +481,7 @@ async function loadUsers() {
 }
 
 async function changeEmployeeCategory(category: EmployeeDirectoryCategory) {
+  if (route.query.tab === 'changes') await router.replace({ query: { ...route.query, tab: undefined, requestId: undefined, applicationId: undefined, assistantRequestId: undefined } });
   employeeCategory.value = category;
   selectedUsers.value = [];
   userQuery.value.page = 1;
@@ -502,10 +508,14 @@ async function exportRoster() {
   );
 }
 
-async function changeProcessingCategory(category: PersonnelProcessingCategory) {
+async function changeProcessingCategory(category: PersonnelProcessingCategory, syncRoute = true) {
   processingCategory.value = category;
+  if (syncRoute && route.query.tab !== category) {
+    await router.replace({ query: { ...route.query, tab: category, requestId: undefined, assistantRequestId: undefined } });
+    return;
+  }
   userQuery.value.page = 1;
-  if (category === 'applications') {
+  if (category === 'applications' || category === 'arrivals') {
     await loadApplications();
     return;
   }
@@ -655,6 +665,10 @@ async function jumpToIssue(item: IssueItem) {
 }
 
 function refreshCurrentView() {
+  if (isApplicationsCategory.value) {
+    void loadApplications();
+    return;
+  }
   if (activeView.value === 'org') {
     Promise.all([loadDepartments(), loadUnassignedMemberTotal()]).then(() => loadOrgMembers());
     return;
@@ -700,21 +714,10 @@ const employmentGroups = computed(() => {
   return [...groups.values()];
 });
 const archiveEditSaving = ref(false);
-const archiveEditAction = ref<'draft' | 'submit' | null>(null);
 const activeArchiveDraft = ref<EmployeeDataReview | null>(null);
 const archiveEditorRef = ref<InstanceType<typeof EmployeeArchiveInlineEditor> | null>(null);
 const archiveDraftSaving = ref(false);
 const archiveSaveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
-const reviewMode = ref<PersonnelReviewMode>('standard');
-const archiveReviewModeRelaxed = computed(() => reviewMode.value === 'relaxed');
-
-async function loadReviewMode() {
-  try {
-    reviewMode.value = (await personnelConfigApi.getReviewMode()).mode;
-  } catch {
-    // 读取失败保持标准模式默认，避免误判自动生效。
-  }
-}
 const archiveIssueContext = ref<EmployeeArchiveIssue | null>(null);
 const archiveNotice = ref('');
 const archiveSubmitError = ref('');
@@ -786,28 +789,14 @@ async function submitArchiveDraft(value: {
   performance: Record<string, unknown>;
 }) {
   const data = employeeArchiveDrawer.value.data;
-  if (!data) return;
+  if (!data || archiveEditSaving.value) return;
+  const generation = archiveLoadGeneration;
   archiveEditSaving.value = true;
-  archiveEditAction.value = 'submit';
   try {
     const result = await employeeArchivesApi.submitDraft(data.id, value);
-    const applied = result.directApplied ?? [];
-    const relaxed = result.reviewOutcome === 'approved';
-    if (applied.length && result.request) {
-      ElMessage.success(relaxed
-        ? `${applied.join('、')}已直接生效，其余变更已生效`
-        : `${applied.join('、')}已直接生效，其余变更已提交审核，审核通过后生效`);
-      archiveNotice.value = relaxed ? '变更已生效' : `${applied.join('、')}已直接生效，其余变更已提交审核，审核通过后生效`;
-    } else if (applied.length) {
-      ElMessage.success(`${applied.join('、')}已直接生效`);
-      archiveNotice.value = `${applied.join('、')}已直接生效`;
-    } else if (relaxed) {
-      ElMessage.success('档案变更已生效');
-      archiveNotice.value = '档案变更已生效';
-    } else {
-      ElMessage.success('档案变更已提交审核，审核通过后生效');
-      archiveNotice.value = '已提交审核，审核通过后生效';
-    }
+    if (generation !== archiveLoadGeneration) return;
+    archiveNotice.value = archiveSubmissionMessage(result);
+    ElMessage.success(archiveNotice.value);
     archiveEditing.value = false;
     activeArchiveDraft.value = null;
     archiveSubmitError.value = '';
@@ -824,12 +813,12 @@ async function submitArchiveDraft(value: {
     }
     refreshCurrentView();
   } catch (error) {
+    if (generation !== archiveLoadGeneration) return;
     archiveSubmitError.value = isAxiosError(error) && error.response?.status === 409
       ? '资料已更新，本次输入已保留，请重新打开最新资料核对后提交。'
       : '提交未完成，输入已保留，请核对提示后重试。';
   } finally {
-    archiveEditSaving.value = false;
-    archiveEditAction.value = null;
+    if (generation === archiveLoadGeneration) archiveEditSaving.value = false;
   }
 }
 
@@ -837,28 +826,21 @@ function archiveDraftSaved(value: EmployeeDataReview) {
   activeArchiveDraft.value = value;
 }
 
-async function saveArchiveAndClose() {
-  if (archiveEditSaving.value || archiveDraftSaving.value) return;
-  if (await archiveEditorRef.value?.saveDraft()) employeeArchiveDrawer.value.visible = false;
-}
-
 async function prepareArchiveLeave(): Promise<boolean> {
   if (archiveEditSaving.value || archiveDraftSaving.value) return false;
   if (!archiveEditing.value || !archiveEditorRef.value?.isDirty()) return true;
   archiveEditorRef.value.pauseAutosave();
+  if (await archiveEditorRef.value.saveDraft()) return true;
   try {
-    await ElMessageBox.confirm('当前修改尚未保存，保存草稿后再离开？草稿不会进入审核。', '保留本次修改', {
-      confirmButtonText: '保存后离开',
-      cancelButtonText: '放弃修改离开',
-      distinguishCancelAndClose: true,
+    await ElMessageBox.confirm('草稿暂存失败，关闭会丢失本次未保存内容。', '未保存的内容', {
+      confirmButtonText: '放弃未保存内容',
+      cancelButtonText: '继续编辑',
       type: 'warning',
     });
-    return Boolean(await archiveEditorRef.value?.saveDraft());
-  } catch (action) {
-    // ElMessageBox 取消与关闭都以 reject 结束：'cancel' 是明确点击“放弃修改离开”，允许关闭；
-    // 'close'（弹窗右上角 X / 遮罩）视为继续编辑。
+    return true;
+  } catch {
     archiveEditorRef.value?.resumeAutosave();
-    return action === 'cancel';
+    return false;
   }
 }
 
@@ -866,23 +848,6 @@ async function openNextArchive() {
   const next = nextArchivePerson.value;
   if (!next || !await prepareArchiveLeave()) return;
   await openEmployeeArchive(next, true);
-}
-
-async function cancelArchiveEditing() {
-  if (archiveEditSaving.value || archiveDraftSaving.value) return;
-  if (!archiveEditorRef.value?.isDirty()) {
-    archiveEditing.value = false;
-    return;
-  }
-  archiveEditorRef.value.pauseAutosave();
-  try {
-    await ElMessageBox.confirm('当前档案修改尚未保存，确认放弃？', '放弃修改', {
-      confirmButtonText: '放弃修改', cancelButtonText: '继续编辑', type: 'warning',
-    });
-    archiveEditing.value = false;
-  } catch {
-    archiveEditorRef.value?.resumeAutosave();
-  }
 }
 
 async function beforeCloseEmployeeArchive(done: () => void) {
@@ -893,9 +858,23 @@ async function beforeCloseEmployeeArchive(done: () => void) {
   }
 }
 
-onBeforeRouteLeave(async () => {
+async function preparePersonnelLeave() {
+  if (applicationSaving.value) return false;
   if (employeeArchiveDrawer.value.visible && !await prepareArchiveLeave()) return false;
-  if (employeeCreateDrawerVisible.value) return Boolean(await employeeCreateRef.value?.prepareToLeave());
+  if (employeeCreateDrawerVisible.value && !await employeeCreateRef.value?.prepareToLeave()) return false;
+  if (employeeReentryDrawerVisible.value && !await employeeReentryRef.value?.prepareToLeave()) return false;
+  return true;
+}
+onBeforeRouteLeave(preparePersonnelLeave);
+onBeforeRouteUpdate(async (to, from) => {
+  if (applicationSaving.value) return false;
+  if (to.path !== from.path || to.query.talentId !== from.query.talentId) {
+    if (!await preparePersonnelLeave()) return false;
+    employeeCreateDrawerVisible.value = false;
+    employeeReentryDrawerVisible.value = false;
+    employeeArchiveDrawer.value.visible = false;
+    await nextTick();
+  }
   return true;
 });
 
@@ -924,13 +903,13 @@ async function assignUsersToDepartment(userIds: string[], department: Department
   if (!userIds.length || department.id === UNASSIGNED_DEPARTMENT_ID) return;
   try {
     await ElMessageBox.confirm(
-      `将 ${userIds.length} 名员工归属到“${department.name}”？审核通过后更新人员归属，宽松模式下系统自动审核。`,
+      `将 ${userIds.length} 名员工归属到“${department.name}”？审核通过后更新人员归属。`,
       '调整人员归属',
       { confirmButtonText: '提交审核', cancelButtonText: '取消', type: 'warning' },
     );
     const result = await employeeArchivesApi.submitDepartmentAssignments(userIds, department.id);
     if (result.submitted > 0) {
-      ElMessage.success(result.reviewOutcome === 'approved' ? `${result.submitted} 条人员归属变更已审核通过` : `已提交 ${result.submitted} 条人员归属变更，仍有申请待人工审核`);
+      ElMessage.success(`已提交 ${result.submitted} 条人员归属变更，审核通过后生效`);
     } else {
       ElMessage.info('所选人员已归属该部门，无需重复提交');
     }
@@ -970,7 +949,9 @@ const nextCreateDraft = computed(() => {
   return index >= 0 ? createDraftQueue.value[index + 1] : undefined;
 });
 const employeeReentryDrawerVisible = ref(false);
+const employeeReentryRef = ref<InstanceType<typeof EmployeeReentryDrawer> | null>(null);
 const employeeReentryEmployee = ref<ManagedUser | null>(null);
+const reentryTalentCandidateId = ref<string>();
 const employmentRecordDrawerVisible = ref(false);
 const employmentRecordDrawerArchive = ref<EmployeeArchive | null>(null);
 const employmentRecordDrawerMode = ref<'default' | 'resignation'>('default');
@@ -992,9 +973,14 @@ const reviewWorkspaceKey = ref(0);
 const applicationDetail = ref<EmployeeDataReview | null>(null);
 const applicationDetailVisible = ref(false);
 const applicationSaving = ref(false);
+const lifecycleAction = ref({ visible: false, kind: 'resignation' as 'resignation' | 'reentry', userId: undefined as string | undefined, loading: false, error: '' });
+const applicationOpenedFromList = ref(false);
+let applicationLoadGeneration = 0;
 const applicationGroups = computed(() => {
   const groups = new Map<string, { id: string; name: string; employeeNo: string | null; requests: EmployeeDataReview[] }>();
   for (const request of applications.value) {
+    if (isArchiveApplications.value ? isPersonnelLifecycleRequest(request) : !isPersonnelLifecycleRequest(request)) continue;
+    if (!isArchiveApplications.value && processingCategory.value === 'arrivals' && !isPendingArrival(request)) continue;
     const id = request.userId ?? request.id;
     if (!groups.has(id)) groups.set(id, { id, name: request.user?.name ?? request.employeeName, employeeNo: request.user?.employeeNo ?? request.employeeNo, requests: [] });
     groups.get(id)!.requests.push(request);
@@ -1029,18 +1015,84 @@ function applicationEffectiveDate(request: EmployeeDataReview) {
   return value ? formatDate(value) : '';
 }
 
+function applicationActionLabel(request: EmployeeDataReview) {
+  return canReviewArchive.value && isPendingArrival(request) ? '确认到岗' : '查看办理详情';
+}
+
 function currentApplications(row: ManagedUser): EmployeeDataReview[] {
   return (row as ManagedUser & { currentApplications?: EmployeeDataReview[] }).currentApplications ?? [];
 }
 
-async function openApplication(requestId: string, isCurrent = () => true) {
+async function openApplication(requestId: string, isCurrent = () => true, syncRoute = true) {
+  if (syncRoute && employeeArchiveDrawer.value.visible) {
+    if (!await prepareArchiveLeave()) return;
+    archiveEditing.value = false;
+    employeeArchiveDrawer.value.visible = false;
+  }
+  const generation = ++applicationLoadGeneration;
   const result = await employeeArchivesApi.getApplication(requestId);
-  if (!isCurrent()) return;
+  if (!isCurrent() || generation !== applicationLoadGeneration) return;
   applicationDetail.value = result;
   applicationDetailVisible.value = true;
+  if (syncRoute && route.query.requestId !== requestId) {
+    applicationOpenedFromList.value = true;
+    await router.push({ path: isPersonnelLifecycleRequest(result) ? '/entry-exit' : '/users', query: {
+      ...route.query, talentId: undefined, assistantRequestId: undefined, applicationId: undefined,
+      requestId, tab: isPersonnelLifecycleRequest(result) ? route.query.tab === 'arrivals' ? 'arrivals' : 'applications' : 'changes',
+    } });
+  }
+}
+
+function closeApplication() {
+  if (applicationSaving.value) return;
+  applicationDetailVisible.value = false;
+  applicationLoadGeneration++;
+  if (applicationOpenedFromList.value) {
+    applicationOpenedFromList.value = false;
+    router.back();
+  } else if (route.query.requestId || route.query.applicationId || route.query.assistantRequestId) {
+    void router.replace({ query: { ...route.query, requestId: undefined, applicationId: undefined, assistantRequestId: undefined } });
+  }
+}
+
+function chooseLifecycleEmployee(kind: 'resignation' | 'reentry') {
+  lifecycleAction.value = { visible: true, kind, userId: undefined, loading: false, error: '' };
+}
+
+async function startLifecycleAction() {
+  const action = lifecycleAction.value;
+  if (!action.userId || action.loading) return;
+  action.loading = true;
+  action.error = '';
+  try {
+    const user = await usersApi.findOne(action.userId);
+    if (action.kind === 'reentry') {
+      if (user.status !== 'resigned' && !user.archivedAt) { action.error = '请选择已离职人员办理再入职。'; return; }
+      openEmployeeReentry(user);
+    } else {
+      if (!['active', 'probation'].includes(user.status)) { action.error = '仅在职或试用期人员可办理离职。'; return; }
+      const archive = await employeeArchivesApi.getArchive(user.id);
+      openEmploymentRecord(archive, 'resignation');
+    }
+    action.visible = false;
+  } catch { action.error = '人员资料加载失败，请核对后重试。'; }
+  finally { action.loading = false; }
+}
+
+function afterArrivalConfirmed(request: EmployeeOnboardingResult) {
+  if (!applicationDetail.value || applicationDetail.value.id !== request.id) return;
+  applicationDetail.value = { ...applicationDetail.value, ...request, canResume: undefined, canCancel: undefined };
+  void openApplication(request.id, () => applicationDetailVisible.value && applicationDetail.value?.id === request.id, false)
+    .catch(() => { ElMessage.warning('办理已完成，详情刷新失败，请重新打开核对。'); });
+  window.dispatchEvent(new CustomEvent('personnel-data-changed'));
 }
 
 async function resumeApplication(request: EmployeeDataReview) {
+  if (!canEditArchive.value || applicationSaving.value) return;
+  if (canReviseArrivalDate(request) && (request.profileReviewStatus === 'rejected' || isCancelledNewHireArrival(request))) {
+    await openApplication(request.id);
+    return;
+  }
   applicationDetailVisible.value = false;
   if (request.userId && (request.intakeType === 'reentry' || (request.intakeType === 'new_hire' && request.profileReviewStatus === 'approved' && request.performanceReviewStatus === 'rejected'))) { await openEmployeeReentryById(request.userId); return; }
   if (request.sourceType === 'manual_employee_create' && request.profileReviewStatus === 'approved' && request.userId) {
@@ -1075,9 +1127,11 @@ async function reviewApplicationFromDetail(action: 'approve' | 'reject') {
     if (result.failed.length > 0) {
       ElMessage.warning(`办理未完成：${result.failed.map(item => item.reason).join('；')}`);
     } else {
-      ElMessage.success(action === 'approve' ? '审核已通过，变更进入生效处理' : '已退回，提交人可修改后重新提交');
+      ElMessage.success(action === 'approve'
+        ? detail.requiresArrivalConfirmation && detail.onboardingStatus !== 'effective' ? '审核已通过，确认到岗后入职生效' : '审核已通过，变更进入生效处理'
+        : '已退回，提交人可修改后重新提交');
     }
-    await openApplication(detail.id);
+    await openApplication(detail.id, () => true, false);
     refreshCurrentView();
     window.dispatchEvent(new CustomEvent('personnel-data-changed'));
   } catch {
@@ -1088,6 +1142,7 @@ async function reviewApplicationFromDetail(action: 'approve' | 'reject') {
 }
 
 async function cancelApplication(request: EmployeeDataReview) {
+  if (applicationSaving.value) return;
   const onboarding = request.intakeType === 'new_hire' || request.intakeType === 'reentry';
   try {
     const result = await ElMessageBox.prompt(
@@ -1149,10 +1204,32 @@ const orgDragEnabled = ref(false);
 let orgLongPressTimer: ReturnType<typeof setTimeout> | null = null;
 
 function openEmployeeCreate() {
+  talentPrefillGeneration++;
+  talentCreatePrefill.value = null;
   archiveIssueContext.value = null;
   createDraftQueue.value = [];
   employeeCreateDraft.value = null;
   employeeCreateDrawerVisible.value = true;
+}
+
+const talentCreatePrefill = ref<{ id: string; name: string; phone: string } | null>(null);
+const talentPrefillError = ref('');
+let talentPrefillGeneration = 0;
+
+async function applyTalentCreatePrefill() {
+  const generation = ++talentPrefillGeneration;
+  const id = route.query.talentId;
+  talentPrefillError.value = '';
+  if (props.mode !== 'processing' || !canEditArchive.value || typeof id !== 'string' || !id) return;
+  try {
+    const candidate = await talentPoolApi.detail(id);
+    if (generation !== talentPrefillGeneration || route.query.talentId !== id) return;
+    if (employeeCreateDrawerVisible.value) return;
+    openEmployeeCreate();
+    talentCreatePrefill.value = { id: candidate.id, name: candidate.name, phone: candidate.phone };
+  } catch {
+    if (generation === talentPrefillGeneration) talentPrefillError.value = '人才资料无法读取，请核对权限或人才状态后重试。';
+  }
 }
 
 function afterEmployeeDraftSaved() {
@@ -1166,24 +1243,26 @@ function openNextCreateDraft() {
 }
 
 function openEmployeeReentry(row: ManagedUser) {
+  reentryTalentCandidateId.value = undefined;
   employeeReentryEmployee.value = row;
   employeeReentryDrawerVisible.value = true;
 }
 
 async function openPendingOnboarding(row: ManagedUser) {
   let request = currentApplications(row).find((item) => item.intakeType);
+  if (!request) request = await employeeArchivesApi.getCurrentReentry(row.id) ?? undefined;
   if (!request) {
     const archive = await employeeArchivesApi.getArchive(row.id);
     request = archive.changeHistory?.find((item) => item.intakeType && item.onboardingStatus === 'pending_entry');
   }
-  if (request?.intakeType === 'reentry') openEmployeeReentry(row);
-  else if (request) await openApplication(request.id);
+  if (request) await openApplication(request.id);
   else ElMessage.info('未找到待生效申请，请刷新列表后重试');
 }
 
-async function openEmployeeReentryById(userId: string) {
+async function openEmployeeReentryById(userId: string, talentCandidateId?: string) {
   const user = await usersApi.findOne(userId);
   openEmployeeReentry(user);
+  reentryTalentCandidateId.value = talentCandidateId;
 }
 
 async function openExistingEmployeeById(userId: string) {
@@ -1286,6 +1365,11 @@ async function deleteDraft(draft: EmployeeDataReview) {
 }
 
 async function continueDraft(draft: EmployeeDataReview): Promise<boolean> {
+  if (!canEditArchive.value || applicationSaving.value) return false;
+  if (canReviseArrivalDate(draft) && (draft.profileReviewStatus === 'rejected' || isCancelledNewHireArrival(draft))) {
+    await openApplication(draft.id);
+    return true;
+  }
   const generation = ++archiveLoadGeneration;
   if (draft.recordStatus === 'archived' || draft.archivedAt) {
     const result = await employeeArchivesApi.restoreDrafts([draft.id]);
@@ -1680,12 +1764,11 @@ async function confirmPersonSettings() {
       ElMessage.info('没有需要提交的变更');
       return;
     }
-    const results = await Promise.all(actions);
-    const relationApproved = performanceRelationChanged && results.some((result) => (result as { reviewOutcome?: string } | undefined)?.reviewOutcome === 'approved');
+    await Promise.all(actions);
     if (performanceRelationChanged && (systemRoleChanged || hrCapabilitiesChanged)) {
-      ElMessage.success(relationApproved ? '系统权限已更新；绩效直属上级变更已审核通过' : '系统权限已更新；绩效直属上级变更已提交 HR 审核');
+      ElMessage.success('系统权限已更新；绩效直属上级变更已提交 HR 审核');
     } else if (performanceRelationChanged) {
-      ElMessage.success(relationApproved ? '绩效直属上级变更已审核通过' : '绩效直属上级变更已提交 HR 审核');
+      ElMessage.success('绩效直属上级变更已提交 HR 审核');
     } else {
       ElMessage.success('系统权限已更新');
     }
@@ -1787,14 +1870,33 @@ async function confirmApprover() {
   }
 }
 
-watch(() => [route.query.assistantRequestId, canViewArchive.value] as const, ([id, allowed], _previous, onCleanup) => {
+watch(() => [route.query.requestId || route.query.applicationId || route.query.assistantRequestId, canViewArchive.value, route.query.category] as const, ([id, allowed, category], _previous, onCleanup) => {
   let current = true;
   onCleanup(() => { current = false; });
+  if (!id || (route.query.tab === 'reviews' && ['department', 'position'].includes(String(category)))) {
+    applicationLoadGeneration++;
+    applicationDetailVisible.value = false;
+    applicationOpenedFromList.value = false;
+    return;
+  }
   if (allowed && typeof id === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id))
-    void openApplication(id, () => current).catch(() => {
+    void openApplication(id, () => current, false).then(() => {
+      if (!current || !applicationDetail.value || props.mode !== 'processing' || isPersonnelLifecycleRequest(applicationDetail.value)) return;
+      void router.replace({ path: '/users', query: { ...route.query, tab: 'changes', requestId: id } });
+    }).catch(() => {
       if (current) ElMessage.error('档案记录暂无法读取，请核对权限后重试。');
     });
 }, { immediate: true });
+
+watch(() => [route.query.talentId, props.mode, canEditArchive.value], () => { void applyTalentCreatePrefill(); }, { immediate: true });
+
+watch(() => [route.query.tab, props.mode], () => {
+  if (props.mode === 'processing') {
+    const tab = visibleProcessingCategoryOptions.value.find(item => item.value === route.query.tab)?.value
+      ?? visibleProcessingCategoryOptions.value[0]?.value ?? 'applications';
+    void changeProcessingCategory(tab, false);
+  } else if (isArchiveApplications.value) void loadApplications();
+});
 
 watch(() => props.mode, async (mode) => {
   activeView.value = mode;
@@ -1809,8 +1911,9 @@ watch(() => props.mode, async (mode) => {
     return;
   }
   if (mode === 'processing') {
-    processingCategory.value = visibleProcessingCategoryOptions.value[0]?.value ?? 'applications';
-    await changeProcessingCategory(processingCategory.value);
+    processingCategory.value = visibleProcessingCategoryOptions.value.find(item => item.value === route.query.tab)?.value
+      ?? visibleProcessingCategoryOptions.value[0]?.value ?? 'applications';
+    await changeProcessingCategory(processingCategory.value, false);
   }
 });
 
@@ -1821,14 +1924,21 @@ function refreshAfterPersonnelReview() {
 onMounted(async () => {
   document.addEventListener('click', closeDepartmentContextMenu);
   window.addEventListener('personnel-data-changed', refreshAfterPersonnelReview);
-  const initialLoads: Promise<unknown>[] = [loadDepartments(), loadUnassignedMemberTotal(), loadReviewMode()];
+  const initialLoads: Promise<unknown>[] = [loadDepartments(), loadUnassignedMemberTotal()];
   if (activeView.value === 'users') initialLoads.push(loadUsers());
-  if (activeView.value === 'processing') initialLoads.push(changeProcessingCategory(processingCategory.value));
+  if (activeView.value === 'processing') {
+    processingCategory.value = visibleProcessingCategoryOptions.value.find(item => item.value === route.query.tab)?.value
+      ?? visibleProcessingCategoryOptions.value[0]?.value ?? 'applications';
+    initialLoads.push(changeProcessingCategory(processingCategory.value, false));
+  }
+  if (isArchiveApplications.value) initialLoads.push(loadApplications());
   await Promise.all(initialLoads);
   if (activeView.value === 'org') await loadOrgMembers();
 });
 
 onBeforeUnmount(() => {
+  talentPrefillGeneration++;
+  applicationLoadGeneration++;
   document.removeEventListener('click', closeDepartmentContextMenu);
   window.removeEventListener('personnel-data-changed', refreshAfterPersonnelReview);
 });
@@ -1851,7 +1961,12 @@ onBeforeUnmount(() => {
               >归档</el-button>
               <el-button v-if="canEditArchive && userArchiveView" :disabled="selectedArchiveCount === 0" @click="restoreSelection()">取消归档</el-button>
             </template>
-            <el-button v-else-if="canEditArchive" type="primary" @click="openEmployeeCreate">新增员工</el-button>
+            <template v-else-if="canEditArchive">
+              <el-button type="primary" @click="openEmployeeCreate">办理入职</el-button>
+              <el-button @click="chooseLifecycleEmployee('reentry')">办理再入职</el-button>
+              <el-button @click="chooseLifecycleEmployee('resignation')">办理离职</el-button>
+            </template>
+            <el-button v-if="activeView !== 'processing' && canReviewArchive" @click="router.push({ path: '/entry-exit', query: { tab: 'reviews', category: activeView === 'org' ? 'department' : 'employee' } })">待我审核</el-button>
             <el-button :icon="Search" @click="refreshCurrentView">刷新</el-button>
           </div>
       </template>
@@ -2033,6 +2148,7 @@ onBeforeUnmount(() => {
       </section>
 
       <section v-else class="directory-view">
+        <el-alert v-if="talentPrefillError" :title="talentPrefillError" type="error" :closable="false"><el-button link @click="applyTalentCreatePrefill">重试读取</el-button></el-alert>
         <QueryFilterPanel v-if="activeView === 'users' || isApplicationsCategory" class="roster-filter-panel">
           <div class="light-filter">
             <el-input
@@ -2070,15 +2186,16 @@ onBeforeUnmount(() => {
             :key="item.value"
             type="button"
             role="tab"
-            :class="{ active: employeeCategory === item.value }"
-            :aria-selected="employeeCategory === item.value"
+            :class="{ active: !isArchiveApplications && employeeCategory === item.value }"
+            :aria-selected="!isArchiveApplications && employeeCategory === item.value"
             @click="changeEmployeeCategory(item.value)"
           >
             {{ item.label }}
           </button>
+          <button v-if="canViewArchive" type="button" role="tab" :class="{ active: isArchiveApplications }" :aria-selected="isArchiveApplications" @click="router.replace({ query: { tab: 'changes' } })">办理中变更</button>
         </nav>
 
-        <nav v-else class="employee-category-tabs" role="tablist" aria-label="人事办理分类">
+        <nav v-else class="employee-category-tabs" role="tablist" aria-label="入离职分类">
           <button
             v-for="item in visibleProcessingCategoryOptions"
             :key="item.value"
@@ -2096,15 +2213,15 @@ onBeforeUnmount(() => {
           <el-alert v-if="applicationsError" :title="applicationsError" type="error" :closable="false" />
           <div class="directory-table-region desktop-result-table">
             <el-table v-loading="applicationsLoading" :data="pagedApplicationGroups" row-key="id" height="100%" class="app-table compact-table" empty-text="暂无办理中的申请">
-              <el-table-column type="expand"><template #default="{ row }"><div class="application-items"><div v-for="request in row.requests" :key="request.id" class="application-item"><span>{{ applicationType(request) }} · {{ applicationProgress(request) }}</span><span>{{ formatDateTime(request.updatedAt) }}</span><el-button link type="primary" @click="openApplication(request.id)">查看办理详情</el-button></div></div></template></el-table-column>
+              <el-table-column type="expand"><template #default="{ row }"><div class="application-items"><div v-for="request in row.requests" :key="request.id" class="application-item"><span>{{ applicationType(request) }} · {{ applicationProgress(request) }}</span><span>{{ formatDateTime(request.updatedAt) }}</span><el-button link type="primary" @click="openApplication(request.id)">{{ applicationActionLabel(request) }}</el-button></div></div></template></el-table-column>
               <el-table-column label="员工" min-width="180"><template #default="{ row }"><strong>{{ row.name }}</strong><small class="application-number">{{ row.employeeNo ? `工号 ${row.employeeNo}` : '尚未建立正式档案' }}</small></template></el-table-column>
               <el-table-column label="办理事项" min-width="200"><template #default="{ row }">{{ [...new Set(row.requests.map((request: EmployeeDataReview) => applicationType(request)))].join('、') }}</template></el-table-column>
               <el-table-column label="办理进度" min-width="200"><template #default="{ row }">{{ [...new Set(row.requests.map((request: EmployeeDataReview) => applicationProgress(request)))].join('；') }}</template></el-table-column>
-              <el-table-column label="操作" width="160" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openApplication(row.requests[0].id)">查看办理详情</el-button></template></el-table-column>
+              <el-table-column label="操作" width="160" fixed="right"><template #default="{ row }"><el-button link type="primary" @click="openApplication(row.requests[0].id)">{{ applicationActionLabel(row.requests[0]) }}</el-button></template></el-table-column>
             </el-table>
           </div>
           <div v-loading="applicationsLoading" class="mobile-result-list">
-            <MobileResultCard v-for="group in pagedApplicationGroups" :key="group.id"><template #title>{{ group.name }}</template><template #status>{{ group.employeeNo || '新增申请' }}</template><div v-for="request in group.requests" :key="request.id" class="application-item"><span>{{ applicationType(request) }} · {{ applicationProgress(request) }}</span><el-button link type="primary" @click="openApplication(request.id)">查看办理详情</el-button></div></MobileResultCard>
+            <MobileResultCard v-for="group in pagedApplicationGroups" :key="group.id"><template #title>{{ group.name }}</template><template #status>{{ group.employeeNo || '新增申请' }}</template><div v-for="request in group.requests" :key="request.id" class="application-item"><span>{{ applicationType(request) }} · {{ applicationProgress(request) }}</span><el-button link type="primary" @click="openApplication(request.id)">{{ applicationActionLabel(request) }}</el-button></div></MobileResultCard>
             <el-empty v-if="!applicationsLoading && !applicationGroups.length" description="暂无办理中的申请" />
           </div>
           <ListPagination v-model:current-page="userPage" v-model:page-size="userPageSize" :total="applicationGroups.length" :page-sizes="[10, 20, 50, 100]" />
@@ -2116,6 +2233,7 @@ onBeforeUnmount(() => {
           :can-review-employee="canReviewArchive"
           :can-review-department="canReviewDepartmentChanges"
           :can-review-position="canReviewDepartmentChanges"
+          :initial-category="['employee', 'department', 'position'].includes(String(route.query.category)) ? route.query.category as 'employee' | 'department' | 'position' : 'all'"
         />
 
         <template v-else-if="activeView === 'users'">
@@ -2361,7 +2479,6 @@ onBeforeUnmount(() => {
             :editing="archiveEditing"
             :archive="employeeArchiveDrawer.data"
             :draft="activeArchiveDraft"
-            :review-mode="reviewMode"
             :departments="departments"
             :busy="archiveEditSaving"
             :focus-field="archiveIssueContext?.field"
@@ -2582,18 +2699,12 @@ onBeforeUnmount(() => {
       </div>
       <template #footer>
         <div class="archive-edit-footer">
-          <div v-if="archiveEditing && !archiveReviewModeRelaxed" class="archive-footer-state" aria-live="polite"><span>{{ archiveSaveState === 'saving' ? '正在保存…' : archiveSaveState === 'saved' ? '草稿已保存' : archiveSaveState === 'error' ? '草稿未保存，请核对提示' : '修改后自动保存' }}</span><el-button link type="primary" :loading="archiveDraftSaving" :disabled="archiveEditSaving" @click="archiveEditorRef?.saveDraft()">保存草稿</el-button></div>
+          <div v-if="archiveEditing" class="archive-footer-state" aria-live="polite"><span>{{ archiveSaveState === 'saving' ? '正在保存…' : archiveSaveState === 'saved' ? '草稿已保存' : archiveSaveState === 'error' ? '草稿未保存，请核对提示' : '修改后自动保存' }}</span></div>
           <el-button v-if="resignationDepartmentEmployeeId" :disabled="archiveEditSaving || archiveDraftSaving" @click="beforeCloseEmployeeArchive(() => employeeArchiveDrawer.visible = false)">返回离职办理</el-button>
           <el-button v-else-if="nextArchivePerson" link :disabled="archiveEditSaving || archiveDraftSaving" @click="openNextArchive">下一位待处理</el-button>
           <template v-if="archiveEditing">
-            <el-button link :disabled="archiveEditSaving || archiveDraftSaving" @click="cancelArchiveEditing">取消</el-button>
-            <template v-if="archiveReviewModeRelaxed">
-              <el-button type="primary" :loading="archiveEditSaving" :disabled="archiveDraftSaving" @click="archiveEditorRef?.submit()">提交变更</el-button>
-            </template>
-            <template v-else>
-              <el-button :disabled="archiveEditSaving || archiveDraftSaving" @click="saveArchiveAndClose">保存后关闭</el-button>
-              <el-button type="primary" :loading="archiveEditSaving" :disabled="archiveDraftSaving" @click="archiveEditorRef?.submit()">提交审核</el-button>
-            </template>
+            <el-button :disabled="archiveEditSaving || archiveDraftSaving" @click="beforeCloseEmployeeArchive(() => employeeArchiveDrawer.visible = false)">关闭</el-button>
+            <el-button type="primary" :loading="archiveEditSaving" :disabled="archiveDraftSaving" @click="archiveEditorRef?.submit()">提交</el-button>
           </template>
         </div>
       </template>
@@ -2604,7 +2715,7 @@ onBeforeUnmount(() => {
       :title="applicationDetail ? `${applicationType(applicationDetail)}办理详情` : '办理详情'"
       variant="workflow"
       :saving="applicationSaving"
-      @update:model-value="applicationDetailVisible = $event"
+      @update:model-value="!$event && closeApplication()"
     >
       <template v-if="applicationDetail" #summary>
         <div class="application-detail-summary">
@@ -2614,15 +2725,28 @@ onBeforeUnmount(() => {
         </div>
       </template>
       <EmployeeApplicationDetail v-if="applicationDetail" :request="applicationDetail" />
+      <EmployeeArrivalConfirmation v-if="applicationDetail" :key="applicationDetail.id" :request="applicationDetail" :can-confirm="canReviewArchive" :can-edit="canEditArchive" :busy="applicationSaving" @confirmed="afterArrivalConfirmed" @busy="applicationSaving = $event" @refresh="openApplication(applicationDetail.id, undefined, false)" />
       <template #footer>
-        <el-button @click="applicationDetailVisible = false">关闭</el-button>
+        <el-button :disabled="applicationSaving" @click="closeApplication">关闭</el-button>
         <template v-if="canReviewArchive && applicationDetail && applicationReviewPending(applicationDetail)">
           <el-button :loading="applicationSaving" @click="reviewApplicationFromDetail('reject')">退回</el-button>
           <el-button type="primary" :loading="applicationSaving" @click="reviewApplicationFromDetail('approve')">通过</el-button>
         </template>
-        <el-button v-if="canEditArchive && applicationDetail?.canCancel" :loading="applicationSaving" @click="cancelApplication(applicationDetail)">{{ cancelApplicationLabel(applicationDetail) }}</el-button><el-button v-if="canEditArchive && applicationDetail?.canResume" type="primary" @click="resumeApplication(applicationDetail)">修改后重新提交</el-button>
+        <el-button v-if="canEditArchive && applicationDetail?.canCancel" :loading="applicationSaving" @click="cancelApplication(applicationDetail)">{{ cancelApplicationLabel(applicationDetail) }}</el-button><el-button v-if="canEditArchive && applicationDetail?.canResume && !(canReviseArrivalDate(applicationDetail) && (applicationDetail.profileReviewStatus === 'rejected' || isCancelledNewHireArrival(applicationDetail)))" type="primary" @click="resumeApplication(applicationDetail)">修改后重新提交</el-button>
       </template>
     </BusinessDetailDrawer>
+
+    <el-dialog v-model="lifecycleAction.visible" :title="lifecycleAction.kind === 'reentry' ? '选择再入职人员' : '选择离职人员'" width="min(480px, 94vw)" :close-on-click-modal="false" :show-close="!lifecycleAction.loading" :close-on-press-escape="!lifecycleAction.loading">
+      <el-form label-position="top">
+        <el-form-item label="员工" :error="lifecycleAction.error">
+          <UserSelect v-if="lifecycleAction.visible" :key="lifecycleAction.kind" v-model="lifecycleAction.userId" :status="lifecycleAction.kind === 'reentry' ? 'resigned' : undefined" :disabled="lifecycleAction.loading" />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button :disabled="lifecycleAction.loading" @click="lifecycleAction.visible = false">返回</el-button>
+        <el-button type="primary" :loading="lifecycleAction.loading" :disabled="!lifecycleAction.userId" @click="startLifecycleAction">{{ lifecycleAction.kind === 'reentry' ? '办理再入职' : '办理离职' }}</el-button>
+      </template>
+    </el-dialog>
 
     <DepartmentEditDrawer
       v-model="departmentEditDrawer.visible"
@@ -2646,18 +2770,24 @@ onBeforeUnmount(() => {
       :draft="employeeCreateDraft"
       :issue-context="archiveIssueContext"
       :next-available="!!nextCreateDraft"
+      :initial-name="talentCreatePrefill?.name"
+      :initial-phone="talentCreatePrefill?.phone"
+      :talent-candidate-id="talentCreatePrefill?.id"
       @next="openNextCreateDraft"
       @saved="afterEmployeeDraftSaved"
       @submitted="afterEmployeeSubmitted"
       @reentry="openEmployeeReentryById"
       @application="openApplication"
       @existing="openExistingEmployeeById"
+      @update:model-value="!$event && (talentCreatePrefill = null)"
     />
 
     <EmployeeReentryDrawer
+      ref="employeeReentryRef"
       v-model="employeeReentryDrawerVisible"
       :employee="employeeReentryEmployee"
       :departments="departments"
+      :talent-candidate-id="reentryTalentCandidateId"
       @submitted="afterReentrySubmitted"
     />
 

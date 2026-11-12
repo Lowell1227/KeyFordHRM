@@ -1,7 +1,8 @@
 import { SysRole } from '@prisma/client';
+import { ERROR_CODE } from '@/common/constants/error-codes';
 import { PositionsService } from './positions.service';
 
-describe('宽松模式：岗位变更提交后自动审核通过', () => {
+describe('固定审核：历史宽松配置不能自动批准岗位变更', () => {
   const operator = {
     id: '20000000-0000-4000-8000-000000000001',
     name: 'HR',
@@ -33,15 +34,22 @@ describe('宽松模式：岗位变更提交后自动审核通过', () => {
     return { service, prisma, personnelConfig };
   };
 
-  it('宽松模式下新建岗位提交后自动审核通过', async () => {
+  it('旧自动批准参数不能绕过审核权限', async () => {
+    const { service, prisma } = buildService('relaxed');
+    await expect((service as any).approve('r1', { ...operator, sysRole: SysRole.employee }, { autoApproved: true }))
+      .rejects.toMatchObject({ response: { code: ERROR_CODE.FORBIDDEN } });
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('即使历史配置为宽松，新建岗位也保持待审核', async () => {
     const { service } = buildService('relaxed');
     const approveSpy = jest.spyOn(service as any, 'approve').mockResolvedValue({});
 
     const request = await service.create({ name: '新岗位', code: '', jobFamily: '' }, operator);
 
     expect(request.id).toBe('pos-request-1');
-    expect(request.status).toBe('approved');
-    expect(approveSpy).toHaveBeenCalledWith('pos-request-1', operator, { autoApproved: true });
+    expect(request.status).toBe('pending');
+    expect(approveSpy).not.toHaveBeenCalled();
   });
 
   it('标准模式下不自动审核', async () => {

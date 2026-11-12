@@ -22,10 +22,11 @@ describe('PersonnelConfigService 人事审核模式', () => {
     await expect(service.getReviewMode()).resolves.toBe('standard');
   });
 
-  it('读取已配置的宽松模式', async () => {
-    const { prisma } = buildPrisma({ mode: 'relaxed' });
+  it('历史宽松配置不再改变固定审核规则，也不重写历史配置', async () => {
+    const { prisma, systemConfig } = buildPrisma({ mode: 'relaxed' });
     const service = new PersonnelConfigService(prisma as any);
-    await expect(service.getReviewMode()).resolves.toBe('relaxed');
+    await expect(service.getReviewMode()).resolves.toBe('standard');
+    expect(systemConfig.upsert).not.toHaveBeenCalled();
   });
 
   it('配置值异常时回退标准模式', async () => {
@@ -34,18 +35,19 @@ describe('PersonnelConfigService 人事审核模式', () => {
     await expect(service.getReviewMode()).resolves.toBe('standard');
   });
 
-  it('切换模式写入 systemConfig 并记录审计', async () => {
+  it('旧客户端不能重新开启宽松模式', async () => {
     const { prisma, systemConfig, auditLog } = buildPrisma(undefined);
     const service = new PersonnelConfigService(prisma as any);
-    await expect(service.setReviewMode('relaxed', operatorId)).resolves.toEqual({ mode: 'relaxed' });
-    expect(systemConfig.upsert).toHaveBeenCalledWith(expect.objectContaining({
-      where: { key: 'personnel_review_mode' },
-      create: expect.objectContaining({ value: { mode: 'relaxed' } }),
-      update: { value: { mode: 'relaxed' }, updatedBy: operatorId },
-    }));
-    expect(auditLog.create).toHaveBeenCalledWith(expect.objectContaining({
-      data: expect.objectContaining({ action: 'update_personnel_review_mode', userId: operatorId }),
-    }));
-    expect(prisma.$transaction).toHaveBeenCalledTimes(1);
+    await expect(service.setReviewMode('relaxed', operatorId)).rejects.toThrow('宽松审核模式已取消');
+    expect(systemConfig.upsert).not.toHaveBeenCalled();
+    expect(auditLog.create).not.toHaveBeenCalled();
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('旧客户端设置标准规则为幂等兼容操作', async () => {
+    const { prisma, systemConfig } = buildPrisma({ mode: 'relaxed' });
+    const service = new PersonnelConfigService(prisma as any);
+    await expect(service.setReviewMode('standard', operatorId)).resolves.toEqual({ mode: 'standard' });
+    expect(systemConfig.upsert).not.toHaveBeenCalled();
   });
 });

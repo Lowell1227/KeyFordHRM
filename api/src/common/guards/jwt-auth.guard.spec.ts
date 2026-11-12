@@ -89,15 +89,34 @@ describe('JwtAuthGuard live employee authorization', () => {
     } finally { jest.useRealTimers(); }
   });
 
-  it('requires approved, noncancelled sources when querying effective employment', async () => {
+  it('requires approved, noncancelled and arrival-eligible sources when querying effective employment', async () => {
     const { guard, context, prisma } = setup();
     await expect(guard.canActivate(context)).resolves.toBe(true);
     const query = prisma.employmentRecord.findFirst.mock.calls[0][0];
     expect(query.where.AND).toContainEqual({ OR: [
       { sourceRequestId: null },
-      { sourceRequest: { profileReviewStatus: 'approved', onboardingStatus: { not: 'cancelled' } } },
-      { sourceRequest: { profileReviewStatus: 'approved', onboardingStatus: null } },
+      { sourceRequest: { profileReviewStatus: 'approved', onboardingStatus: { not: 'cancelled' },
+        OR: [{ requiresArrivalConfirmation: false }, { arrivalConfirmedAt: { not: null }, onboardingStatus: 'effective' }] } },
+      { sourceRequest: { profileReviewStatus: 'approved', onboardingStatus: null,
+        OR: [{ requiresArrivalConfirmation: false }, { arrivalConfirmedAt: { not: null }, onboardingStatus: 'effective' }] } },
     ] });
+  });
+
+  it('denies an unconfirmed arrival even when a signed session and cached user status say active', async () => {
+    const { guard, context, prisma, request, currentUser, effectiveDates } = setup();
+    // An unconfirmed pending-entry source is filtered out by the employment query.
+    prisma.employmentRecord.findFirst.mockResolvedValue(null);
+    await expect(guard.canActivate(context)).rejects.toBeInstanceOf(UnauthorizedException);
+    expect(currentUser.status).toBe('active');
+    expect(effectiveDates.refreshUserProjection).toHaveBeenCalledWith(currentUser.id, expect.any(Date));
+    const query = prisma.employmentRecord.findFirst.mock.calls[0][0];
+    for (const branch of query.where.AND[0].OR.filter((item: any) => item.sourceRequest)) {
+      expect(branch.sourceRequest.OR).toEqual([
+        { requiresArrivalConfirmation: false },
+        { arrivalConfirmedAt: { not: null }, onboardingStatus: 'effective' },
+      ]);
+    }
+    expect(request.user).toBeUndefined();
   });
 
   it.each(['service', 'test'])('keeps %s accounts outside employee-record requirements', async (accountType) => {

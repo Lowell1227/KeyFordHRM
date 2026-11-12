@@ -1,7 +1,8 @@
 import { SysRole } from '@prisma/client';
+import { ForbiddenException } from '@nestjs/common';
 import { DepartmentsService } from './departments.service';
 
-describe('宽松模式：部门变更提交后自动审核通过', () => {
+describe('固定审核：历史宽松配置不能自动批准部门变更', () => {
   const operator = {
     id: '20000000-0000-4000-8000-000000000001',
     name: 'HR',
@@ -37,15 +38,22 @@ describe('宽松模式：部门变更提交后自动审核通过', () => {
     company: 'fuede' as const,
   };
 
-  it('宽松模式下新建部门提交后自动审核通过', async () => {
+  it('旧自动批准参数不能绕过审核权限', async () => {
+    const { service, prisma } = buildService('relaxed');
+    await expect((service as any).approveChange('r1', { ...operator, sysRole: SysRole.employee }, { autoApproved: true }))
+      .rejects.toBeInstanceOf(ForbiddenException);
+    expect(prisma.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('即使历史配置为宽松，新建部门也保持待审核', async () => {
     const { service } = buildService('relaxed');
     const approveSpy = jest.spyOn(service as any, 'approveChange').mockResolvedValue({});
 
     const request = await service.create(createDto, operator);
 
     expect(request.id).toBe('dept-request-1');
-    expect(request.status).toBe('approved');
-    expect(approveSpy).toHaveBeenCalledWith('dept-request-1', operator, { autoApproved: true });
+    expect(request.status).toBe('pending');
+    expect(approveSpy).not.toHaveBeenCalled();
   });
 
   it('标准模式下不自动审核', async () => {

@@ -4,7 +4,7 @@ import type { AxiosResponse } from 'axios';
 
 export const uploadApi = {
   /** POST /storage/upload — 通用单文件上传。 */
-  upload(file: File, purpose: 'general' | 'employee-contract-image' | 'employee-contract-attachment' = 'general'): Promise<Attachment> {
+  upload(file: File, purpose: 'general' | 'employee-contract-image' | 'employee-contract-attachment' | 'talent-resume' = 'general'): Promise<Attachment> {
     const formData = new FormData();
     formData.append('file', file);
     return http.post('/storage/upload', formData, {

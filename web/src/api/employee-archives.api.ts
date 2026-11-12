@@ -73,6 +73,12 @@ export interface EmployeeDataReview {
   archivedAt?: string | null;
   intakeType?: 'new_hire' | 'reentry' | null;
   onboardingStatus?: 'draft' | 'submitted' | 'pending_entry' | 'effective' | 'cancelled' | null;
+  requiresArrivalConfirmation?: boolean;
+  arrivalDate?: string | null;
+  arrivalConfirmedAt?: string | null;
+  arrivalConfirmedById?: string | null;
+  talentCandidateId?: string | null;
+  talentCandidate?: { id: string; name: string; deletedAt: string | null } | null;
   requestVersion?: number;
   canResume?: boolean;
   canCancel?: boolean;
@@ -93,12 +99,15 @@ export interface EmployeeIdentityCandidate {
   nextAction: 'reentry' | 'view_profile' | 'edit_profile' | 'view_onboarding' | 'confirm_phone' | 'view_application';
 }
 
+export type EmployeeOnboardingResult = Omit<EmployeeDataReview, 'sourceType' | 'baseValue' | 'validationErrors'>;
+
 export interface EmployeeIdentityLookupResult {
   outcome: 'none' | 'phone_candidates' | 'identity_match' | 'conflict';
   candidates: EmployeeIdentityCandidate[];
 }
 
 export interface EmployeeCreatePayload {
+  talentCandidateId?: string;
   draftId?: string;
   expectedVersion?: number;
   name: string;
@@ -132,6 +141,7 @@ export type EmployeeCreateDraftPayload = Omit<Partial<EmployeeCreatePayload>, 'c
 };
 
 export interface EmployeeReentryBody {
+  talentCandidateId?: string;
   contractSubjectId?: string | null;
   company: string;
   deptId?: string | null;
@@ -369,6 +379,14 @@ export const employeeArchivesApi = {
 
   getApplication(requestId: string): Promise<EmployeeDataReview> {
     return http.get(`/employee-archives/applications/${requestId}`) as unknown as Promise<EmployeeDataReview>;
+  },
+
+  confirmArrival(requestId: string, body: { arrivalDate: string; requestVersion: number }): Promise<EmployeeOnboardingResult> {
+    return http.post(`/employee-archives/applications/${requestId}/confirm-arrival`, body, { skipErrorMessage: true }) as unknown as Promise<EmployeeOnboardingResult>;
+  },
+
+  reviseArrivalDate(requestId: string, body: { arrivalDate: string; requestVersion: number }): Promise<EmployeeOnboardingResult> {
+    return http.patch(`/employee-archives/applications/${requestId}/arrival-date`, body, { skipErrorMessage: true }) as unknown as Promise<EmployeeOnboardingResult>;
   },
 
   cancelApplication(requestId: string, reason: string): Promise<EmployeeDataReview> {

@@ -28,6 +28,9 @@ describe('archive review permissions across the route and review service', () =>
   };
   const db = { $transaction: jest.fn(async (run: any) => run(tx)) };
   const service = new EmployeeDataReviewsService(db as any);
+  const onboarding = { confirmArrival: jest.fn(async (_id: string, input: any, operator: AuthUser) => ({
+    id: reviewId, ...input, arrivalConfirmedById: operator.id, onboardingStatus: 'effective',
+  })), reviseArrivalDate: jest.fn(async () => ({ id: reviewId, profileReviewStatus: 'pending' })) };
   const reject = () => request(app.getHttpServer()).post('/employee-archives/reviews/reject')
     .send({ requestIds: [reviewId], reason: '请补充资料' });
 
@@ -40,7 +43,7 @@ describe('archive review permissions across the route and review service', () =>
         { provide: EmployeeDataReviewsService, useValue: service },
         { provide: PersonnelDiagnosticsService, useValue: {} },
         { provide: EmployeeIdentityMatchService, useValue: {} },
-        { provide: EmployeeOnboardingService, useValue: {} },
+        { provide: EmployeeOnboardingService, useValue: onboarding },
       ],
     }).compile();
     app = module.createNestApplication();
@@ -89,6 +92,26 @@ describe('archive review permissions across the route and review service', () =>
     await request(app.getHttpServer()).patch('/employee-archives/22222222-2222-4222-8222-222222222222/profile')
       .send({}).expect(403);
     expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('exposes arrival confirmation to a review-only actor with strict body validation', async () => {
+    const route = `/employee-archives/applications/${reviewId}/confirm-arrival`;
+    await request(app.getHttpServer()).post(route).send({ arrivalDate: '2026-11-10', requestVersion: 2 }).expect(201);
+    expect(onboarding.confirmArrival).toHaveBeenCalledWith(reviewId, expect.objectContaining({ arrivalDate: '2026-11-10', requestVersion: 2 }), actor);
+    await request(app.getHttpServer()).post(route).send({ arrivalDate: '2026-11-10T00:00:00Z', requestVersion: 2 }).expect(400);
+    await request(app.getHttpServer()).post(route).send({ arrivalDate: '2026-11-10' }).expect(400);
+    await request(app.getHttpServer()).post(route).send({ arrivalDate: '2026-11-10', requestVersion: '2' }).expect(400);
+    actor.hrCapabilities = ['employee_archive_edit'];
+    await request(app.getHttpServer()).post(route).send({ arrivalDate: '2026-11-10', requestVersion: 2 }).expect(403);
+    expect(onboarding.confirmArrival).toHaveBeenCalledTimes(1);
+  });
+
+  it('date correction requires edit capability and returns to review', async () => {
+    const route = `/employee-archives/applications/${reviewId}/arrival-date`;
+    await request(app.getHttpServer()).patch(route).send({ arrivalDate: '2026-11-10', requestVersion: 2 }).expect(403);
+    actor.hrCapabilities = ['employee_archive_edit'];
+    await request(app.getHttpServer()).patch(route).send({ arrivalDate: '2026-11-10', requestVersion: 2 }).expect(200);
+    expect(onboarding.reviseArrivalDate).toHaveBeenCalledTimes(1);
   });
 
   it.each([

@@ -117,6 +117,7 @@ class EmployeeCreatePerformanceDto {
 }
 
 export class CreateEmployeeDto {
+  @IsOptional() @IsUUID('4') talentCandidateId?: string;
   @IsOptional()
   @BlankToNull()
   @IsUUID('4')

@@ -7,6 +7,7 @@ import { useAuthStore } from '@/stores/auth.store';
 import { canAccessAppealLedger } from '@/router/navigation';
 import ChartCard from '@/components/common/ChartCard.vue';
 import DashboardTaskEntries from './DashboardTaskEntries.vue';
+import DashboardInterviews from './DashboardInterviews.vue';
 import { getGradeLabel, getGradeStyle } from '@/utils/grade';
 import { resolvePerformanceCycle } from '@/utils/performance-cycle';
 import type { AssessmentCycle, ReportSummary } from '@/types/api.types';
@@ -76,6 +77,10 @@ interface DashboardQuickAction {
 
 const roleQuickActions = computed<DashboardQuickAction[]>(() => {
   const actions: DashboardQuickAction[] = [];
+  if (['hr', 'system_admin'].includes(userRole.value)
+    || (userRole.value === 'hr_user' && auth.user?.hrCapabilities?.includes('employee_archive_review'))) {
+    actions.push({ label: '待我审核', description: '人员资料与入离职申请', path: '/entry-exit?tab=reviews' });
+  }
   if (userRole.value === 'hr' || userRole.value === 'system_admin') {
     actions.push(
       { label: '周期与计划', description: '发起周期、检查节点与参与范围', path: '/cycles' },
@@ -179,6 +184,7 @@ function avatarColor(name: string): string {
     </template>
 
     <DashboardTaskEntries />
+    <DashboardInterviews />
 
     <template v-if="!isEmployee || isDirectManager || roleQuickActions.length">
       <div v-loading="dashboardLoading" class="dashboard-admin">

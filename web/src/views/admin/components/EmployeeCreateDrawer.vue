@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import dayjs from 'dayjs';
 import { archiveFieldPath } from '@/utils/employee-archive-fields';
+import { isCancelledNewHireArrival } from '@/utils/employee-lifecycle';
 import { isAxiosError } from 'axios';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { Delete, Plus } from '@element-plus/icons-vue';
@@ -28,12 +29,16 @@ const props = defineProps<{
   draft?: EmployeeDataReview | null;
   issueContext?: EmployeeArchiveIssue | null;
   nextAvailable?: boolean;
+  /** 从人才库「办理入职」带入的预填姓名/手机（无草稿时生效）。 */
+  initialName?: string;
+  initialPhone?: string;
+  talentCandidateId?: string;
 }>();
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
   submitted: [];
   saved: [];
-  reentry: [userId: string];
+  reentry: [userId: string, talentCandidateId?: string];
   existing: [userId: string];
   application: [requestId: string];
   next: [];
@@ -43,7 +48,7 @@ const stepTitles = ['基本信息', '本次任职', '补充资料', '检查并�
 const postSubmitStages = [
   { key: 'submit', title: '提交审核', status: '等待处理', tone: 'waiting' as const },
   { key: 'review', title: '档案审核', status: '等待处理', tone: 'waiting' as const },
-  { key: 'pending-entry', title: '待入职', status: '等待处理', tone: 'waiting' as const },
+  { key: 'pending-entry', title: '确认到岗', status: '等待处理', tone: 'waiting' as const },
   { key: 'effective', title: '入职生效', status: '等待处理', tone: 'waiting' as const },
 ];
 const supplementGroups = ref<string[]>([]);
@@ -52,10 +57,11 @@ const saveError = ref('');
 const currentStep = ref(0);
 const draftId = ref<string>();
 const draftVersion = ref<number>();
+const sourceTalentId = ref<string>();
 const saveBlocked = ref(false);
 const wizardElement = ref<HTMLElement>();
 const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
-const savingAction = ref<'draft' | 'submit' | null>(null);
+const savingAction = ref<'submit' | null>(null);
 const identityLoading = ref(false);
 const identityResult = ref<EmployeeIdentityLookupResult | null>(null);
 const phoneDuplicateAcknowledged = ref(false);
@@ -71,7 +77,7 @@ let draftSavePromise: Promise<boolean> | null = null;
 let generation = 0;
 let lastSavedSnapshot = '';
 function draftSnapshot() {
-  return JSON.stringify({ form, step: currentStep.value, phoneDuplicateAcknowledged: phoneDuplicateAcknowledged.value });
+  return JSON.stringify({ form, talentCandidateId: sourceTalentId.value, step: currentStep.value, phoneDuplicateAcknowledged: phoneDuplicateAcknowledged.value });
 }
 
 type ContractDraft = Record<string, any> & { __key: string };
@@ -174,9 +180,10 @@ function dateValue(value: unknown): string {
 }
 
 function reset() {
-  generation++;
+  const session = ++generation;
   if (autosaveTimer) clearTimeout(autosaveTimer);
   saveBlocked.value = false;
+  savingAction.value = null;
   hydrating.value = true;
   const proposed = props.draft?.proposedValue ?? {};
   const employee = proposed.employee ?? {};
@@ -185,6 +192,7 @@ function reset() {
   const draftMeta = proposed.draftMeta ?? {};
   draftId.value = props.draft?.id;
   draftVersion.value = props.draft?.requestVersion;
+  sourceTalentId.value = props.draft ? props.draft.talentCandidateId ?? undefined : props.talentCandidateId;
   const savedStep = Number.isInteger(draftMeta.currentStep) ? Number(draftMeta.currentStep) : 0;
   const restoredStep = draftMeta.layoutVersion === 2
     ? Math.min(Math.max(savedStep, 0), 3)
@@ -204,6 +212,11 @@ function reset() {
     rosterManagerId: employee.managerId ?? null,
     performanceManagerId: performance.managerId ?? null,
   });
+  // 人才库「办理入职」带入的预填（仅全新创建时生效，草稿/问题单优先）
+  if (!props.draft) {
+    if (props.initialName) form.name = props.initialName;
+    if (props.initialPhone) form.phone = props.initialPhone;
+  }
   Object.assign(form.employee, {
     contractSubjectId: employee.contractSubjectId ?? undefined,
     companyText: employee.companyText ?? null,
@@ -249,9 +262,11 @@ function reset() {
   showSubmitReminder.value = false;
   Object.keys(fieldErrors).forEach((key) => delete fieldErrors[key]);
   nextTick(() => {
+    if (session !== generation || !props.modelValue) return;
     hydrating.value = false;
     fillPlannedRegularDate();
     lastSavedSnapshot = draftSnapshot();
+    if (!props.draft && sourceTalentId.value) scheduleAutosave();
     void focusIssue();
   });
 }
@@ -336,9 +351,60 @@ async function lookupIdentity(force = false) {
 async function openCandidate(candidate: EmployeeIdentityCandidate) {
   const session = generation;
   if (!await prepareToLeave() || session !== generation) return;
+  const talentId = sourceTalentId.value;
+  if (!candidate.requestId && candidate.status === 'pending_entry' && !candidate.archived) {
+    if (identityLoading.value) return;
+    identityLoading.value = true;
+    let archivedDraftId: string | undefined;
+    let opened = false;
+    try {
+      // Release this replacement draft before the server checks the original talent source.
+      if (talentId && draftId.value) {
+        const id = draftId.value;
+        const result = await employeeArchivesApi.archiveDrafts([id]);
+        if (!result.failed?.length) archivedDraftId = id;
+        if (session !== generation || !props.modelValue) return;
+        if (result.failed?.length) { saveError.value = result.failed[0].reason; return; }
+      }
+      const request = await employeeArchivesApi.getCurrentReentry(candidate.id);
+      if (session !== generation || !props.modelValue) return;
+      if (!request || request.userId !== candidate.id
+        || (request.onboardingStatus === 'cancelled' && !isCancelledNewHireArrival(request))) {
+        saveError.value = '未找到可继续办理的原入职申请，请刷新匹配结果后核对。';
+        return;
+      }
+      opened = true;
+      emit('update:modelValue', false);
+      emit('application', request.id);
+    } catch {
+      if (session === generation && props.modelValue) saveError.value = '原入职申请暂时无法打开，已填写内容仍保留，请重试。';
+    } finally {
+      if (archivedDraftId && !opened) {
+        try {
+          const result = await employeeArchivesApi.restoreDrafts([archivedDraftId]);
+          if (result.failed?.length) throw new Error('Draft restore failed');
+        } catch {
+          if (session === generation && props.modelValue) {
+            saveBlocked.value = true;
+            saveError.value = '本次草稿仍保留在已归档草稿中，请从草稿列表恢复后继续。';
+          }
+        }
+      }
+      if (session === generation) identityLoading.value = false;
+    }
+    return;
+  }
+  if (!candidate.requestId && (candidate.status === 'resigned' || candidate.archived) && talentId && draftId.value) {
+    try {
+      // The selected reentry replaces this unsubmitted new-hire draft; keep it recoverable.
+      const result = await employeeArchivesApi.archiveDrafts([draftId.value]);
+      if (session !== generation) return;
+      if (result.failed?.length) { saveError.value = result.failed[0].reason; return; }
+    } catch { saveError.value = '转入再入职未完成，原草稿已保留，请重试。'; return; }
+  }
   emit('update:modelValue', false);
   if (candidate.requestId || candidate.nextAction === 'view_application') emit('application', candidate.requestId ?? candidate.id);
-  else if (candidate.status === 'resigned' || candidate.archived) emit('reentry', candidate.id);
+  else if (candidate.status === 'resigned' || candidate.archived) emit('reentry', candidate.id, talentId);
   else emit('existing', candidate.id);
 }
 
@@ -365,6 +431,7 @@ function requestBody(): EmployeeCreateDraftPayload {
     bankAccount: form.profile.bankAccount.trim(),
   };
   return {
+    talentCandidateId: sourceTalentId.value,
     draftId: draftId.value,
     expectedVersion: draftId.value ? draftVersion.value : undefined,
     name: form.name.trim(), phone: normalizedPhone() || null, idNumber: normalizedIdNumber() || null,
@@ -384,13 +451,26 @@ function scheduleAutosave() {
   if (hydrating.value || saveBlocked.value || savingAction.value === 'submit' || !props.modelValue || !form.name.trim()) return;
   if (autosaveTimer) clearTimeout(autosaveTimer);
   saveState.value = 'idle';
-  autosaveTimer = setTimeout(() => { void persistDraft('auto'); }, 700);
+  autosaveTimer = setTimeout(() => { void persistDraft(); }, 700);
 }
 
-async function persistDraft(saveMode: 'auto' | 'manual') {
+function openExistingTalentApplication(error: unknown): boolean {
+  if (!sourceTalentId.value || draftId.value || !isAxiosError(error) || error.response?.status !== 409) return false;
+  const applicationId: unknown = error.response.data?.data?.applicationId;
+  if (typeof applicationId !== 'string' || !applicationId.trim()) return false;
+  saveBlocked.value = true;
+  if (autosaveTimer) clearTimeout(autosaveTimer);
+  autosaveTimer = null;
+  generation++;
+  emit('update:modelValue', false);
+  emit('application', applicationId);
+  return true;
+}
+
+async function persistDraft() {
   const session = generation;
   if (!form.name.trim()) return false;
-  if (saveMode === 'auto' && savingAction.value === 'submit') return false;
+  if (savingAction.value === 'submit') return false;
   if (autosaveTimer) clearTimeout(autosaveTimer);
   autosaveTimer = null;
   while (draftSavePromise) {
@@ -398,14 +478,13 @@ async function persistDraft(saveMode: 'auto' | 'manual') {
     if (session !== generation || !props.modelValue || saveBlocked.value) return false;
   }
   if (session !== generation || !props.modelValue || saveBlocked.value) return false;
-  if (saveMode === 'auto' && savingAction.value === 'submit') return false;
+  if (savingAction.value === 'submit') return false;
   if (draftId.value && lastSavedSnapshot === draftSnapshot()) return true;
   const snapshot = draftSnapshot();
   saveState.value = 'saving';
-  if (saveMode === 'manual') savingAction.value = 'draft';
   const save = (async () => {
     try {
-      const request = await employeeArchivesApi.saveEmployeeCreateDraft({ ...requestBody(), saveMode });
+      const request = await employeeArchivesApi.saveEmployeeCreateDraft({ ...requestBody(), saveMode: 'auto' });
       if (session !== generation || !props.modelValue) return false;
       draftId.value = request.id;
       draftVersion.value = request.requestVersion;
@@ -414,31 +493,19 @@ async function persistDraft(saveMode: 'auto' | 'manual') {
       saveError.value = '';
       return true;
     } catch (error) {
-      if (session !== generation) return false;
+      if (session !== generation || !props.modelValue) return false;
+      if (openExistingTalentApplication(error)) return false;
       saveState.value = 'error';
       saveBlocked.value = isAxiosError(error) && error.response?.status === 409;
       saveError.value = saveBlocked.value ? '资料已更新，本次输入已保留。请先留存修改，再打开最新草稿核对。' : '草稿保存失败，输入内容仍保留。请重试保存，或放弃本次未保存内容。';
       return false;
-    } finally {
-      if (session === generation && saveMode === 'manual') savingAction.value = null;
     }
   })();
   draftSavePromise = save;
   const succeeded = await save;
   if (draftSavePromise === save) draftSavePromise = null;
-  if (succeeded && session === generation && lastSavedSnapshot !== draftSnapshot()) return persistDraft(saveMode);
+  if (succeeded && session === generation && lastSavedSnapshot !== draftSnapshot()) return persistDraft();
   return succeeded;
-}
-
-async function saveAndExit() {
-  if (!form.name.trim()) {
-    ElMessage.warning('填写姓名后即可保存草稿');
-    return;
-  }
-  if (await persistDraft('manual')) {
-    emit('saved');
-    emit('update:modelValue', false);
-  }
 }
 
 async function beforeClose(done: () => void) {
@@ -447,6 +514,7 @@ async function beforeClose(done: () => void) {
 
 async function prepareToLeave(): Promise<boolean> {
   if (savingAction.value === 'submit') return false;
+  const session = generation;
   if (!form.name.trim()) {
     if (lastSavedSnapshot === draftSnapshot()) return true;
     try {
@@ -456,7 +524,9 @@ async function prepareToLeave(): Promise<boolean> {
       return true;
     } catch { return false; }
   }
-  if (await persistDraft('auto')) {
+  const saved = await persistDraft();
+  if (session !== generation || !props.modelValue) return false;
+  if (saved) {
     emit('saved');
     return true;
   } else {
@@ -500,10 +570,12 @@ async function nextStep() {
     return;
   }
   currentStep.value = Math.min(currentStep.value + 1, stepTitles.length - 1);
-  await persistDraft('auto');
+  await persistDraft();
 }
 
 async function submit() {
+  if (savingAction.value || saveBlocked.value) return;
+  const session = generation;
   Object.keys(fieldErrors).forEach((key) => delete fieldErrors[key]);
   if (missingForSubmit.value.length) {
     showSubmitReminder.value = true;
@@ -519,6 +591,7 @@ async function submit() {
   if (canLookupIdentity()) {
     if (!(await lookupIdentity(true))) { currentStep.value = 0; return; }
   }
+  if (session !== generation || !props.modelValue) return;
   if (hasBlockingIdentityMatch.value) {
     ElMessage.warning('已找到现有员工，请从匹配结果进入原档案处理');
     currentStep.value = 0;
@@ -534,14 +607,18 @@ async function submit() {
   savingAction.value = 'submit';
   try {
     if (draftSavePromise && !(await draftSavePromise)) return;
-    const result = await employeeArchivesApi.createEmployee(requestBody() as EmployeeCreatePayload);
-    ElMessage.success(result.reviewOutcome === 'approved' ? '新增员工已审核通过，按任职生效日期生效' : '已提交新增员工，工号已自动生成，HR 管理员审核后生效');
+    if (session !== generation || !props.modelValue) return;
+    await employeeArchivesApi.createEmployee(requestBody() as EmployeeCreatePayload);
+    if (session !== generation || !props.modelValue) return;
+    ElMessage.success('入职申请已提交，审核通过并确认到岗后生效');
     emit('update:modelValue', false);
     emit('submitted');
-  } catch {
+  } catch (error) {
+    if (session !== generation || !props.modelValue) return;
+    if (openExistingTalentApplication(error)) return;
     saveError.value = '提交未完成，已填写内容仍保留，请核对提示后重试。';
   } finally {
-    savingAction.value = null;
+    if (session === generation) savingAction.value = null;
   }
 }
 
@@ -624,7 +701,9 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
       </div>
       <aside v-if="issueContext" role="note" aria-label="正在核实事项" class="draft-issue-context"><strong>{{ issueContext.message }}</strong><span>{{ issueContext.reason }}</span><span>原资料：{{ issueContext.source.value ?? '未提供' }} · 当前资料：{{ issueContext.current.value ?? '未提供' }}</span></aside>
       <el-alert v-if="draft?.rejectedReason" :title="`已退回：${draft.rejectedReason}`" type="warning" :closable="false" />
-      <el-alert v-if="saveError" :title="saveError" type="error" :closable="false" />
+      <el-alert v-if="saveError" :title="saveError" type="error" :closable="false">
+        <el-button v-if="saveState === 'error' && !saveBlocked" link :disabled="savingAction === 'submit'" @click="persistDraft">重试暂存</el-button>
+      </el-alert>
       <el-alert
         v-if="missingForSubmit.length && (currentStep === 3 || showSubmitReminder)"
         :title="`提交前还需补充：${missingForSubmitLabels.join('、')}`"
@@ -633,7 +712,7 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
         show-icon
       />
 
-      <el-form label-position="top" class="wizard-form">
+      <el-form label-position="top" class="wizard-form" :disabled="savingAction === 'submit' || identityLoading" :inert="savingAction === 'submit' || identityLoading">
         <section v-show="currentStep === 0" class="wizard-section">
           <div class="section-head"><div><h3>身份核验</h3></div></div>
           <div class="form-grid">
@@ -647,7 +726,7 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
             <strong>{{ identityResult.outcome === 'identity_match' ? '已找到现有员工档案' : '手机号与以下档案相同' }}</strong>
             <div v-for="candidate in identityResult.candidates" :key="candidate.id" class="identity-candidate">
               <span>{{ candidate.maskedName }} · {{ candidate.currentEmployeeNo || candidate.matchedHistoricalEmployeeNo || '无工号' }} · {{ candidate.departmentName || '未分配部门' }}</span>
-              <el-button link type="primary" @click="openCandidate(candidate)">{{ candidate.requestId || candidate.nextAction === 'view_application' ? '查看原申请' : candidate.status === 'resigned' || candidate.archived ? '办理再入职' : candidate.status === 'pending_entry' ? '查看入职流程' : '打开现有档案' }}</el-button>
+              <el-button link type="primary" :disabled="identityLoading" @click="openCandidate(candidate)">{{ candidate.requestId || candidate.nextAction === 'view_application' ? '查看原申请' : candidate.status === 'resigned' || candidate.archived ? '办理再入职' : candidate.status === 'pending_entry' ? '查看入职流程' : '打开现有档案' }}</el-button>
             </div>
             <el-checkbox v-if="identityResult.outcome === 'phone_candidates'" v-model="phoneDuplicateAcknowledged">已核对，以上人员均不是本次新增员工</el-checkbox>
           </div>
@@ -777,9 +856,9 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
         <el-button v-if="nextAvailable" :disabled="savingAction === 'submit'" @click="nextDraft">下一份待核资料</el-button>
         <el-button v-if="currentStep > 0" @click="previousStep">上一步</el-button>
         <span class="footer-spacer" />
-        <el-button :loading="savingAction === 'draft'" :disabled="savingAction === 'submit'" @click="saveAndExit">保存并退出</el-button>
+        <el-button :disabled="savingAction === 'submit'" @click="beforeClose(() => emit('update:modelValue', false))">关闭</el-button>
         <el-button v-if="currentStep < stepTitles.length - 1" type="primary" @click="nextStep">下一步</el-button>
-        <el-button v-else type="primary" :loading="savingAction === 'submit'" :disabled="savingAction === 'draft'" @click="submit">提交审核</el-button>
+        <el-button v-else type="primary" :loading="savingAction === 'submit'" :disabled="saveBlocked" @click="submit">提交</el-button>
       </div>
     </template>
   </el-drawer>

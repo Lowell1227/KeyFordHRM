@@ -24,6 +24,7 @@ import { approvedEmploymentSourceWhere, employmentWarnings, selectEmploymentAt, 
 import { EmployeeIdentityMatchService } from './employee-identity-match.service';
 import { EmployeeNumberService } from './employee-number.service';
 import { EmployeeOnboardingService } from './employee-onboarding.service';
+import { lockTalentSource, resolveTalentSource, talentSourceSelect } from './employee-talent-source';
 import { employeeArchiveView, employeeDataChangeView, activeApplicationWhere } from './employee-data-change-view';
 import { archiveIssueStates } from './employee-archive-issues';
 import {
@@ -33,8 +34,6 @@ import {
 } from './direct-apply-profile-fields';
 import { hasHrCapability } from '@/auth/hr-capabilities';
 import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
-import { EmployeeDataReviewsService, EmployeeReviewScope } from './employee-data-reviews.service';
-import { PersonnelConfigService } from '@/personnel-config/personnel-config.service';
 
 export interface UpsertEmployeeProfileInput {
   phone?: string | null;
@@ -94,8 +93,6 @@ export class EmployeeArchivesService {
     private readonly employeeNumbers?: EmployeeNumberService,
     private readonly identityMatcher?: EmployeeIdentityMatchService,
     private readonly onboarding?: EmployeeOnboardingService,
-    private readonly reviews?: EmployeeDataReviewsService,
-    private readonly personnelConfig?: PersonnelConfigService,
   ) {}
 
   async createEmployee(input: CreateEmployeeDto, operator: AuthUser) {
@@ -109,7 +106,7 @@ export class EmployeeArchivesService {
           OR: [{ recordStatus: 'draft' }, { profileReviewStatus: 'rejected' }], archivedAt: null },
         select: { id: true, proposedValue: true, requestVersion: true, userId: true, employeeNo: true,
           profileReviewStatus: true, recordStatus: true, revisionHistory: true, rejectedReason: true, updatedAt: true,
-          sourceSystem: true, validationWarnings: true },
+          sourceSystem: true, validationWarnings: true, talentCandidateId: true, requiresArrivalConfirmation: true },
       }) : null;
       if (sourceDraft?.sourceSystem === 'archive_assistant_pilot') throw new BadRequestException('测试资料仅可保存待核草稿');
       if (input.draftId) this.assertDraftVersion(sourceDraft, input.expectedVersion);
@@ -153,6 +150,7 @@ export class EmployeeArchivesService {
         draftVersion = draft.requestVersion;
       }
       await this.normalizeSubjectPayload(tx, proposedValue, this.record(savedDraft?.proposedValue));
+      const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, savedDraft as any);
       await this.validateSubjectPayload(tx, proposedValue, {});
       await this.assertEmployeeCreateIdentity(
         tx,
@@ -170,6 +168,9 @@ export class EmployeeArchivesService {
           sourceType: 'manual_employee_create',
           intakeType: 'new_hire',
           onboardingStatus: 'submitted',
+          requiresArrivalConfirmation: !(input.employeeStatus === UserStatus.resigned || (input.effectiveTo && input.effectiveTo < shanghaiBusinessDate()))
+            && (savedDraft?.requiresArrivalConfirmation ?? true),
+          talentCandidateId,
           baseValue: this.toJson({
             employee: {},
             profile: {},
@@ -225,8 +226,7 @@ export class EmployeeArchivesService {
       });
       return employeeDataChangeView(updated);
     });
-    const reviewOutcome = await this.autoApproveRelaxed([view?.id], operator);
-    return { ...view, reviewOutcome };
+    return { ...view, reviewOutcome: 'pending' as const };
   }
 
   async saveEmployeeCreateDraft(input: SaveEmployeeCreateDraftDto, operator: AuthUser) {
@@ -273,7 +273,7 @@ export class EmployeeArchivesService {
           },
           select: { id: true, proposedValue: true, requestVersion: true, userId: true, employeeNo: true,
             profileReviewStatus: true, recordStatus: true, revisionHistory: true, rejectedReason: true, updatedAt: true,
-            sourceSystem: true, validationWarnings: true, baseValue: true },
+            sourceSystem: true, validationWarnings: true, baseValue: true, talentCandidateId: true, requiresArrivalConfirmation: true },
         });
         if (!draft) {
           throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '草稿已提交或已归档，请刷新后重试' });
@@ -290,6 +290,7 @@ export class EmployeeArchivesService {
         draftVersion = draft.requestVersion;
       }
       await this.normalizeSubjectPayload(tx, proposed, this.record(savedDraft?.proposedValue));
+      const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, savedDraft as any);
       const proposedValue = this.toJson(proposed);
       const performanceManagerId = this.nullableString(
         this.record(proposed.performance).managerId,
@@ -299,6 +300,11 @@ export class EmployeeArchivesService {
         employeeNo,
         employeeName,
         sourceType: 'manual_employee_create',
+        ...(source?.sourceSystem === 'archive_assistant_pilot' || savedDraft?.sourceSystem === 'archive_assistant_pilot' ? {} : {
+          intakeType: 'new_hire' as const, onboardingStatus: 'draft' as const,
+          requiresArrivalConfirmation: savedDraft?.requiresArrivalConfirmation ?? true,
+        }),
+        talentCandidateId,
         ...(savedDraft?.sourceSystem === 'archive_assistant_pilot' ? {} : {
           baseValue: this.toJson({ employee: {}, profile: {}, contracts: [], performance: { managerId: null } }),
         }),
@@ -698,13 +704,16 @@ export class EmployeeArchivesService {
     return this.prisma.$transaction(async (tx) => {
       const drafts = await tx.employeeDataChangeRequest.findMany({
         where: { id: { in: ids }, recordStatus: 'draft', archivedAt: null },
-        select: { id: true, employeeName: true, sourceSystem: true, createdById: true },
+        select: { id: true, employeeName: true, sourceSystem: true, createdById: true, talentCandidateId: true },
       });
       if (drafts.some(draft => draft.sourceSystem === 'archive_assistant_pilot' && draft.createdById !== operator.id)) {
         throw new NotFoundException('草稿不存在');
       }
       if (drafts.length !== ids.length) {
         throw new BadRequestException({ code: ERROR_CODE.CONFLICT, message: '部分草稿已提交或已归档，请刷新后重试' });
+      }
+      for (const candidateId of [...new Set(drafts.map(draft => draft.talentCandidateId).filter(Boolean))].sort()) {
+        await lockTalentSource(tx, candidateId);
       }
       const archivedAt = new Date();
       const result = await tx.employeeDataChangeRequest.updateMany({
@@ -748,7 +757,8 @@ export class EmployeeArchivesService {
       try {
         await this.prisma.$transaction(async (tx) => {
           if (kind === 'draft') {
-            const draft = await tx.employeeDataChangeRequest.findUnique({ where: { id }, select: { sourceSystem: true, createdById: true } });
+            const draft = await tx.employeeDataChangeRequest.findUnique({ where: { id }, select: { id: true, sourceSystem: true, createdById: true, talentCandidateId: true } });
+            if (draft?.talentCandidateId) await resolveTalentSource(tx, undefined, draft);
             if (draft?.sourceSystem === 'archive_assistant_pilot') {
               if (draft.createdById !== operator.id) throw new NotFoundException('草稿不存在');
               throw new ConflictException('测试草稿请从机器人重新发起');
@@ -792,7 +802,7 @@ export class EmployeeArchivesService {
     };
     const [items, total] = await Promise.all([
       this.prisma.employeeDataChangeRequest.findMany({ where,
-        include: { createdBy: { select: { id: true, name: true, sysRole: true } },
+        include: { talentCandidate: { select: talentSourceSelect }, createdBy: { select: { id: true, name: true, sysRole: true } },
           user: { select: { id: true, name: true, employeeNo: true, status: true, archivedAt: true, position: true, dept: { select: { id: true, name: true } } } } },
         orderBy: { updatedAt: 'desc' }, skip: (query.page - 1) * query.pageSize, take: query.pageSize,
       }), this.prisma.employeeDataChangeRequest.count({ where }),
@@ -810,6 +820,7 @@ export class EmployeeArchivesService {
       return this.onboarding.cancelReentry(id, { reason }, operator.id);
     }
     return this.prisma.$transaction(async (tx) => {
+      await lockTalentSource(tx, request.talentCandidateId);
       if (request.sourceSystem === 'archive_assistant_pilot') {
         const current = await tx.employeeDataChangeRequest.findUnique({ where: { id }, select: { createdById: true } });
         if (current?.createdById !== operator.id) throw new NotFoundException('申请不存在');
@@ -863,7 +874,7 @@ export class EmployeeArchivesService {
   async getApplication(id: string, operator?: AuthUser) {
     const [request, events] = await Promise.all([
       this.prisma.employeeDataChangeRequest.findUnique({ where: { id },
-        include: { createdBy: { select: { id: true, name: true, sysRole: true } },
+        include: { talentCandidate: { select: talentSourceSelect }, createdBy: { select: { id: true, name: true, sysRole: true } },
           profileReviewedBy: { select: { id: true, name: true } }, performanceReviewedBy: { select: { id: true, name: true } } },
       }),
       this.prisma.auditLog.findMany({
@@ -986,6 +997,7 @@ export class EmployeeArchivesService {
           },
         },
         employmentHistory: {
+          where: approvedEmploymentSourceWhere,
           orderBy: { effectiveFrom: 'desc' },
           include: {
             dept: { select: { id: true, name: true, fullPath: true } },
@@ -1137,39 +1149,8 @@ export class EmployeeArchivesService {
 
   async submitDraft(userId: string, input: SubmitEmployeeArchiveDraftDto, operator: AuthUser) {
     const persisted = await this.withDraftTransaction(tx => this.persistArchiveChangeWithClient(tx, userId, input, operator, 'submitted'));
-    const reviewOutcome = await this.autoApproveRelaxed(persisted.request ? [persisted.request.id] : [], operator);
+    const reviewOutcome = persisted.request ? 'pending' as const : 'not_required' as const;
     return { ...persisted, reviewOutcome };
-  }
-
-  /**
-   * 宽松模式：提交事务提交后再自动审核通过（approveBatch 自带独立事务，严禁嵌套）。
-   * 自动审核失败时不阻断提交结果，申请保留在待审核队列由人工处理，并记录留痕。
-   */
-  async autoApproveRelaxed(
-    requestIds: Array<string | null | undefined>,
-    operator: AuthUser,
-    scopes: EmployeeReviewScope[] = ['profile', 'performance'],
-  ): Promise<'approved' | 'pending' | 'not_required'> {
-    const ids = [...new Set(requestIds.filter((id): id is string => typeof id === 'string' && id.length > 0))];
-    if (ids.length === 0) return 'not_required';
-    if (!this.reviews || !this.personnelConfig) return 'pending';
-    try {
-      if (await this.personnelConfig.getReviewMode() !== 'relaxed') return 'pending';
-      const result = await this.reviews.approveBatch({ requestIds: ids, scopes }, operator, { autoApproved: true });
-      if (!result.failed.length && ids.every(id => result.succeeded.some(item => item.requestId === id))) return 'approved';
-    } catch {
-      // The submitted request is durable; report pending instead of inviting a duplicate submission.
-    }
-    await this.prisma.auditLog.create({
-        data: {
-          userId: operator.id,
-          action: 'auto_approve_employee_data_change_failed',
-          entityType: 'employee_data_change_request',
-          entityId: ids[0],
-          newValue: this.toJson({ requestIds: ids, outcome: 'pending_manual_review' }),
-        },
-      }).catch(() => undefined);
-    return 'pending';
   }
 
   async saveArchiveDraft(userId: string, input: SubmitEmployeeArchiveDraftDto, operator: AuthUser) {
@@ -1486,8 +1467,8 @@ export class EmployeeArchivesService {
         if (request?.id) submittedRequestIds.push(request.id);
       }
       return { submitted: changedUserIds.length, submittedRequestIds };
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }).then(async (result) => {
-      const reviewOutcome = await this.autoApproveRelaxed(result.submittedRequestIds, operator);
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable }).then((result) => {
+      const reviewOutcome = result.submittedRequestIds.length ? 'pending' as const : 'not_required' as const;
       return { submitted: result.submitted, reviewOutcome };
     });
   }
@@ -1623,8 +1604,7 @@ export class EmployeeArchivesService {
         profileReviewedBy: { select: { id: true, name: true } },
       },
     }));
-    const reviewOutcome = await this.autoApproveRelaxed([view?.id], operator);
-    return { ...view, reviewOutcome };
+    return { ...view, reviewOutcome: 'pending' as const };
   }
 
   async bindDingtalkIdentity(userId: string, input: BindDingtalkIdentityInput, operator: AuthUser) {

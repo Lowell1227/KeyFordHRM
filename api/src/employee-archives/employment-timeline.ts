@@ -3,8 +3,10 @@ import { Prisma } from '@prisma/client';
 export const approvedEmploymentSourceWhere: Prisma.EmploymentRecordWhereInput = {
   OR: [
     { sourceRequestId: null },
-    { sourceRequest: { profileReviewStatus: 'approved', onboardingStatus: { not: 'cancelled' } } },
-    { sourceRequest: { profileReviewStatus: 'approved', onboardingStatus: null } },
+    { sourceRequest: { profileReviewStatus: 'approved', onboardingStatus: { not: 'cancelled' },
+      OR: [{ requiresArrivalConfirmation: false }, { arrivalConfirmedAt: { not: null }, onboardingStatus: 'effective' }] } },
+    { sourceRequest: { profileReviewStatus: 'approved', onboardingStatus: null,
+      OR: [{ requiresArrivalConfirmation: false }, { arrivalConfirmedAt: { not: null }, onboardingStatus: 'effective' }] } },
   ],
 };
 

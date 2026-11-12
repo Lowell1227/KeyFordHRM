@@ -49,6 +49,8 @@ import { EmployeeIdentityMatchService } from './employee-identity-match.service'
 import { EmployeeOnboardingService } from './employee-onboarding.service';
 import {
   CancelEmployeeReentryDto,
+  ConfirmEmployeeArrivalDto,
+  ReviseEmployeeArrivalDateDto,
   CreateEmployeeReentryDto,
   CreateOnboardingIntakeDto,
   EmployeeIdentityLookupDto,
@@ -93,8 +95,7 @@ export class EmployeeArchivesController {
     @CurrentUser() operator: AuthUser,
   ) {
     const view = await this.onboarding.createReentry(userId, input, operator.id);
-    const reviewOutcome = await this.archives.autoApproveRelaxed([view.id], operator);
-    return { ...(reviewOutcome === 'approved' ? await this.archives.getApplication(view.id, operator) : view), reviewOutcome };
+    return { ...view, reviewOutcome: 'pending' as const };
   }
 
   @Get(':userId/reentry/current')
@@ -111,8 +112,7 @@ export class EmployeeArchivesController {
     @CurrentUser() operator: AuthUser,
   ) {
     const view = await this.onboarding.reviseReentry(requestId, input, operator.id);
-    const reviewOutcome = await this.archives.autoApproveRelaxed([view.id], operator);
-    return { ...(reviewOutcome === 'approved' ? await this.archives.getApplication(view.id, operator) : view), reviewOutcome };
+    return { ...view, reviewOutcome: 'pending' as const };
   }
 
   @Post('reentry/:requestId/cancel')
@@ -167,8 +167,7 @@ export class EmployeeArchivesController {
     @CurrentUser() operator: AuthUser,
   ) {
     const view = await this.reviews.proposePerformanceManager(id, dto, operator);
-    const reviewOutcome = await this.archives.autoApproveRelaxed([view.id], operator, ['performance']);
-    return { ...view, reviewOutcome };
+    return { ...view, reviewOutcome: 'pending' as const };
   }
 
   @Get('imports/template')
@@ -225,6 +224,20 @@ export class EmployeeArchivesController {
     return this.archives.cancelApplication(id, input.reason, operator);
   }
 
+  @Post('applications/:id/confirm-arrival')
+  @HrCapabilities('employee_archive_review')
+  confirmArrival(@Param('id', new ParseUUIDPipe()) id: string,
+    @Body() input: ConfirmEmployeeArrivalDto, @CurrentUser() operator: AuthUser) {
+    return this.onboarding.confirmArrival(id, input, operator);
+  }
+
+  @Patch('applications/:id/arrival-date')
+  @HrCapabilities('employee_archive_edit')
+  reviseArrivalDate(@Param('id', new ParseUUIDPipe()) id: string,
+    @Body() input: ReviseEmployeeArrivalDateDto, @CurrentUser() operator: AuthUser) {
+    return this.onboarding.reviseArrivalDate(id, input, operator);
+  }
+
   @Post('drafts/archive')
   @HrCapabilities('employee_archive_edit')
   archiveDrafts(
@@ -270,8 +283,7 @@ export class EmployeeArchivesController {
     @CurrentUser() operator: AuthUser,
   ) {
     const view = await this.archives.upsertProfile(id, dto, operator);
-    const reviewOutcome = await this.archives.autoApproveRelaxed([view.id], operator, ['profile']);
-    return { ...view, reviewOutcome };
+    return { ...view, reviewOutcome: 'pending' as const };
   }
 
   @Patch(':id/draft')

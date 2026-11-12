@@ -19,7 +19,6 @@ const props = defineProps<{
   departments: Department[];
   busy?: boolean;
   focusField?: string;
-  reviewMode?: 'relaxed' | 'standard';
 }>();
 
 type ArchiveChangePayload = {
@@ -284,13 +283,11 @@ async function submit() {
   if (savePromise && !await savePromise) return;
   if (session !== generation || !props.editing || props.busy || saveBlocked.value) return;
   if (!isDirty() && !draftId) {
-    ElMessage.info(reviewModeRelaxed.value ? '未检测到变更' : '未检测到变更，无需提交审核');
+    ElMessage.info('未检测到变更，无需提交');
     return;
   }
   emit('submit', changePayload());
 }
-
-const reviewModeRelaxed = computed(() => props.reviewMode === 'relaxed');
 
 function scheduleAutosave() {
   clearTimeout(autosaveTimer);
@@ -372,12 +369,12 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField,
 </script>
 
 <template>
-  <div v-if="editing" ref="editorElement" class="archive-inline-editor">
+  <div v-if="editing" ref="editorElement" class="archive-inline-editor" :inert="busy" :aria-busy="busy">
     <div class="archive-save-state" role="status" aria-live="polite">{{ saveState === 'saving' ? '正在保存草稿…' : saveState === 'saved' ? '草稿已保存，尚未提交审核' : saveState === 'error' ? '草稿尚未保存' : '修改后自动保存草稿' }}</div>
     <div v-if="saveError" class="archive-save-error" role="alert">{{ saveError }}<el-button v-if="!saveBlocked" link type="primary" @click="saveDraft">重试保存</el-button></div>
     <nav class="archive-editor-nav" aria-label="档案分区"><el-button v-for="section in [{ id: 'employment', label: '基本与任职' }, { id: 'personal', label: '个人与教育' }, { id: 'contact', label: '联系与保障' }, { id: 'contracts', label: '合同记录' }]" :key="section.id" link @click="editorElement?.querySelector(`[data-archive-section='${section.id}']`)?.scrollIntoView({ block: 'start' })">{{ section.label }}</el-button></nav>
     <el-alert
-      :title="reviewModeRelaxed ? '宽松模式：提交后由系统自动审核，未通过校验的申请保留待审。' : '个人信息免审字段在提交后生效，其余变更需审核；草稿不生效。'"
+      title="个人信息免审字段在提交后生效，其余变更需审核；草稿不生效。"
       type="info"
       show-icon
       :closable="false"

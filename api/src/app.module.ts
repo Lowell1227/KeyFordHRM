@@ -39,6 +39,7 @@ import { PeriodReviewsModule } from './period-reviews/period-reviews.module';
 import { PositionsModule } from './positions/positions.module';
 import { AiProgressModule } from './ai-progress/ai-progress.module';
 import { PersonnelReferenceDataModule } from './personnel-reference-data/personnel-reference-data.module';
+import { TalentPoolModule } from './talent-pool/talent-pool.module';
 import { PersonnelConfigModule } from './personnel-config/personnel-config.module';
 
 /**
@@ -95,6 +96,7 @@ import { PersonnelConfigModule } from './personnel-config/personnel-config.modul
     PositionsModule,
     ContractSubjectsModule,
     PersonnelReferenceDataModule,
+    TalentPoolModule,
     PersonnelConfigModule,
     AiProgressModule,
   ],

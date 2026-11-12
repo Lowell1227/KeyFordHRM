@@ -146,6 +146,27 @@ export const routes: RouteRecordRaw[] = [
     },
   },
   {
+    path: '/talents',
+    name: 'TalentPool',
+    component: () => import('@/views/talent/TalentListView.vue'),
+    meta: {
+      requiresAuth: true,
+      title: '人才库',
+      roles: ['hr', 'system_admin'],
+      hrCapabilities: ['employee_archive_edit', 'employee_archive_review'],
+      navigation: { module: 'people', label: '人才库', order: 15, group: 'people-archive', groupLabel: '人员档案' },
+    },
+  },
+  {
+    path: '/talents/s/:token',
+    name: 'TalentShared',
+    component: () => import('@/views/talent/TalentSharedView.vue'),
+    meta: {
+      requiresAuth: true,
+      title: '候选人分享',
+    },
+  },
+  {
     path: '/organization',
     name: 'Organization',
     component: () => import('@/views/admin/UserManageView.vue'),
@@ -180,21 +201,38 @@ export const routes: RouteRecordRaw[] = [
     },
   },
   {
-    path: '/personnel-processing',
-    name: 'PersonnelProcessing',
+    path: '/entry-exit',
+    name: 'PersonnelLifecycle',
     component: () => import('@/views/admin/UserManageView.vue'),
     props: { mode: 'processing' },
     meta: {
       requiresAuth: true,
-      title: '人事办理',
+      title: '入离职',
       roles: ['hr', 'system_admin'],
       hrCapabilities: ['employee_archive_edit', 'employee_archive_review'],
-      navigation: { module: 'people', label: '人事办理', order: 40, group: 'people-archive', groupLabel: '人员档案' },
+      navigation: { module: 'people', label: '入离职', order: 40, group: 'people-archive', groupLabel: '人员档案' },
     },
   },
   {
+    path: '/talent-interviews',
+    name: 'TalentInterviews',
+    component: () => import('@/views/talent/TalentInterviewView.vue'),
+    meta: { requiresAuth: true, title: '面试邀约' },
+  },
+  {
+    path: '/talent-interviews/:id',
+    name: 'TalentInterviewDetail',
+    component: () => import('@/views/talent/TalentInterviewView.vue'),
+    meta: { requiresAuth: true, title: '面试邀约' },
+  },
+  {
+    path: '/personnel-processing',
+    name: 'PersonnelProcessing',
+    redirect: to => ({ path: '/entry-exit', query: to.query, hash: to.hash }),
+  },
+  {
     path: '/personnel-change-reviews',
-    redirect: '/personnel-processing',
+    redirect: to => ({ path: '/entry-exit', query: { ...to.query, tab: 'reviews' }, hash: to.hash }),
     meta: {
       requiresAuth: true,
       roles: ['hr', 'system_admin'],

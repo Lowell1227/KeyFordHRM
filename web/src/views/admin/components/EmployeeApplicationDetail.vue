@@ -2,6 +2,7 @@
 import { computed } from 'vue';
 import type { EmployeeDataReview, EmployeeReviewStatus } from '@/api/employee-archives.api';
 import { formatDate, formatDateTime } from '@/utils/date';
+import { isPendingArrival } from '@/utils/employee-lifecycle';
 import PersonnelProcessTimeline from './PersonnelProcessTimeline.vue';
 import type { PersonnelProcessStep, PersonnelProcessTone } from './personnel-process-timeline';
 
@@ -203,14 +204,17 @@ const reviewsComplete = computed(() => [props.request.profileReviewStatus, props
   .every((status) => status === 'approved' || status === 'not_required'));
 const reviewsResolved = computed(() => reviewStatuses.value
   .every((status) => status === 'approved' || status === 'not_required' || status === 'cancelled'));
-const isEffective = computed(() => props.request.onboardingStatus === 'effective' || Boolean(props.request.appliedAt));
+const isEffective = computed(() => props.request.intakeType
+  ? props.request.onboardingStatus === 'effective'
+  : Boolean(props.request.appliedAt));
+const pendingArrival = computed(() => isPendingArrival(props.request));
 const isOnboardingCancelled = computed(() => props.request.onboardingStatus === 'cancelled');
 const hasCancellation = computed(() => props.request.onboardingStatus === 'cancelled' || Boolean(props.request.cancelledAt) || hasCancelledReview.value);
 const isPartiallyCancelled = computed(() => hasCancellation.value && hasApprovedReview.value && !isOnboardingCancelled.value);
 const isFullyCancelled = computed(() => isOnboardingCancelled.value || (hasCancellation.value && !hasApprovedReview.value));
 
 const submittedEvent = computed(() => props.request.events?.find((event) => /submit_employee|submit_.*change/.test(event.action)));
-const activatedEvent = computed(() => props.request.events?.find((event) => /activate|effective/.test(event.action)));
+const activatedEvent = computed(() => props.request.events?.find((event) => /activate|effective|confirm_employee_arrival/.test(event.action)));
 const revisionEvents = computed(() => (props.request.events ?? []).filter((event) => /revise|reject|cancel|withdraw/.test(event.action)));
 
 const timeline = computed<PersonnelProcessStep[]>(() => {
@@ -264,18 +268,18 @@ const timeline = computed<PersonnelProcessStep[]>(() => {
       actor: '', status: '部分内容已生效，其余已取消',
     }];
   }
-  const waitingCurrent = reviewsResolved.value && !isEffective.value;
+  const waitingCurrent = pendingArrival.value || (reviewsResolved.value && !isEffective.value);
   return [...nodes,
     {
-      key: 'waiting-effective', title: isOnboarding.value ? '待入职' : '待变更生效',
+      key: 'waiting-effective', title: isOnboarding.value ? (props.request.requiresArrivalConfirmation ? '确认到岗' : '待入职') : '待变更生效',
       tone: isEffective.value ? 'success' : waitingCurrent ? 'current' : 'waiting',
       current: waitingCurrent,
-      time: '',
-      actor: '', status: isEffective.value ? '已完成' : waitingCurrent ? (isOnboarding.value ? '等待入职日期' : '等待生效日期') : '等待处理',
+      time: props.request.arrivalConfirmedAt ? formatDateTime(props.request.arrivalConfirmedAt) : '',
+      actor: '', status: isEffective.value ? '已完成' : waitingCurrent ? (isOnboarding.value ? (props.request.requiresArrivalConfirmation ? '待 HR 确认到岗' : '等待入职日期') : '等待生效日期') : '等待处理',
     },
     {
       key: 'effective', title: isOnboarding.value ? '入职生效' : '变更生效', tone: isEffective.value ? 'success' : 'waiting', current: false,
-      time: props.request.appliedAt ? formatDateTime(props.request.appliedAt) : '',
+      time: isEffective.value && props.request.appliedAt ? formatDateTime(props.request.appliedAt) : '',
       actor: activatedEvent.value?.user?.name ?? (isEffective.value ? '系统' : ''),
       status: isEffective.value ? '已生效' : '等待处理',
     },
@@ -292,6 +296,11 @@ function eventLabel(action: string) {
 
 <template>
   <section class="application-detail">
+    <section v-if="request.talentCandidateId" class="application-detail__section">
+      <h3>来源人才</h3>
+      <span>{{ request.talentCandidate?.name || '已关联人才' }}</span>
+      <el-tag v-if="request.talentCandidate?.deletedAt" size="small" type="info">来源候选人已删除</el-tag>
+    </section>
     <section class="application-detail__section">
       <h3>{{ isOnboarding ? '本次任职信息' : '本次变更内容' }}</h3>
       <dl v-if="isOnboarding && employmentItems.length" class="application-detail__facts">

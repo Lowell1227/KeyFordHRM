@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { QuestionFilled } from '@element-plus/icons-vue';
 import {
@@ -26,6 +26,7 @@ const props = defineProps<{
   canReviewEmployee: boolean;
   canReviewDepartment: boolean;
   canReviewPosition?: boolean;
+  initialCategory?: 'all' | 'employee' | 'department' | 'position';
 }>();
 
 const emit = defineEmits<{
@@ -38,6 +39,7 @@ function notifyPersonnelChanged() {
 }
 
 const activeCategory = ref<'all' | 'employee' | 'department' | 'position'>('all');
+watch(() => props.initialCategory, category => { activeCategory.value = category ?? 'all'; }, { immediate: true });
 const employeeItems = ref<EmployeeDataReview[]>([]);
 const employeeTotal = ref(0);
 const employeePage = ref(1);

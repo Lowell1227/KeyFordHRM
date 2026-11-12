@@ -12,6 +12,7 @@ import {
   Max,
   MaxLength,
   Min,
+  Matches,
   ValidateNested,
   ValidateIf,
 } from 'class-validator';
@@ -23,6 +24,7 @@ export class ContractReferenceDto {
 }
 
 export class EmployeeReentryFieldsDto {
+  @IsOptional() @IsUUID('4') talentCandidateId?: string;
   @IsOptional() @IsUUID('4') contractSubjectId?: string | null;
   @IsIn(Object.values(CompanyCode)) company!: CompanyCode;
   @IsOptional() @IsUUID('4') deptId?: string | null;
@@ -60,6 +62,13 @@ export class ReviseEmployeeReentryDto extends EmployeeReentryFieldsDto {
 export class CancelEmployeeReentryDto {
   @IsString() @MaxLength(500) reason!: string;
 }
+
+export class ConfirmEmployeeArrivalDto {
+  @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) arrivalDate!: string;
+  @IsInt() @Min(1) requestVersion!: number;
+}
+
+export class ReviseEmployeeArrivalDateDto extends ConfirmEmployeeArrivalDto {}
 
 export class IdentitySnapshotDto {
   @IsString() @MaxLength(50) name!: string;
@@ -108,6 +117,12 @@ export type OnboardingRequestView = {
   intakeType: 'new_hire' | 'reentry' | null;
   onboardingStatus: 'draft' | 'submitted' | 'pending_entry' | 'effective' | 'cancelled' | null;
   requestVersion: number;
+  requiresArrivalConfirmation: boolean;
+  arrivalDate: Date | null;
+  arrivalConfirmedAt: Date | null;
+  arrivalConfirmedById: string | null;
+  talentCandidateId: string | null;
+  talentCandidate: { id: string; name: string; deletedAt: Date | null } | null;
   recordStatus: string;
   proposedValue: Record<string, unknown>;
   profileReviewStatus: string;

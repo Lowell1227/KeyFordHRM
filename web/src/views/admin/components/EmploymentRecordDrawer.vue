@@ -148,7 +148,7 @@ async function submit() {
   try {
     const review = await employeeArchivesApi.createEmployment(props.archive.id, { ...form, positionId: form.positionId || null });
     resignationReview.value = review;
-    ElMessage.success(review.reviewOutcome === 'approved' ? '任职变更已审核通过，按生效日期生效' : isResignation.value
+    ElMessage.success(isResignation.value
       ? '离职申请已提交审核；审核生效后可由操作员手动归档'
       : '任职变更已提交审核；历史补录和未来生效记录都不会直接覆盖当前档案');
     if (!isResignation.value) emit('update:modelValue', false);

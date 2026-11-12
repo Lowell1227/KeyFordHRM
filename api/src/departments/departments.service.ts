@@ -601,8 +601,8 @@ export class DepartmentsService {
     return { items, total, page: query.page, pageSize: query.pageSize };
   }
 
-  async approveChange(requestId: string, operator: AuthUser, options?: { autoApproved?: boolean }) {
-    if (!options?.autoApproved) this.assertHrAdmin(operator);
+  async approveChange(requestId: string, operator: AuthUser) {
+    this.assertHrAdmin(operator);
     return this.prisma.$transaction(async (tx) => {
       const request = await tx.departmentChangeRequest.findUnique({ where: { id: requestId } });
       if (!request) {
@@ -646,7 +646,7 @@ export class DepartmentsService {
           entityType: 'department_change_request',
           entityId: requestId,
           oldValue: { status: 'pending', createdById: request.createdById },
-          newValue: { status: 'approved', action: request.action, departmentId: appliedDepartmentId, ...(options?.autoApproved ? { autoApproved: true } : {}) },
+          newValue: { status: 'approved', action: request.action, departmentId: appliedDepartmentId },
         },
       });
       return updated;
@@ -755,15 +755,6 @@ export class DepartmentsService {
         });
         return request;
       });
-      // 宽松模式：提交事务提交后再自动审核通过；失败保留在待审核队列由人工处理。
-      try {
-        if (action !== 'merge' && this.personnelConfig && await this.personnelConfig.getReviewMode() === 'relaxed') {
-          await this.approveChange(request.id, operator, { autoApproved: true });
-          return { ...request, status: 'approved', reviewOutcome: 'approved' };
-        }
-      } catch {
-        // The pending request and submit audit remain durable if automatic approval fails.
-      }
       return { ...request, reviewOutcome: 'pending' };
     } catch (error) {
       if ((error as { code?: string })?.code === 'P2002') {

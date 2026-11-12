@@ -1,7 +1,7 @@
 import { SysRole, UserStatus, CompanyCode, EmploymentType } from '@prisma/client';
 import { EmployeeArchivesService } from './employee-archives.service';
 
-describe('宽松模式：档案提交后自动审核通过', () => {
+describe('固定审核：历史宽松配置不再自动审核', () => {
   const operator = {
     id: '20000000-0000-4000-8000-000000000001',
     name: 'HR',
@@ -113,14 +113,12 @@ describe('宽松模式：档案提交后自动审核通过', () => {
       undefined,
       undefined,
       undefined,
-      reviews as any,
-      personnelConfig as any,
     );
     const baseVersion = (service as any).archiveVersion(user);
     return { service, tx, prisma, reviews, personnelConfig, baseVersion };
   };
 
-  it('宽松模式下需审核字段的提交在事务提交后自动审核通过（带 autoApproved 标记）', async () => {
+  it('历史宽松模式下需审核字段仍待人工审核', async () => {
     const user = buildUser();
     const { service, reviews, personnelConfig, baseVersion } = buildService(user, 'relaxed');
 
@@ -131,13 +129,9 @@ describe('宽松模式：档案提交后自动审核通过', () => {
     }, operator);
 
     expect(result.request).not.toBeNull();
-    expect(result.reviewOutcome).toBe('approved');
-    expect(personnelConfig.getReviewMode).toHaveBeenCalled();
-    expect(reviews.approveBatch).toHaveBeenCalledWith(
-      { requestIds: [result.request!.id], scopes: ['profile', 'performance'] },
-      operator,
-      { autoApproved: true },
-    );
+    expect(result.reviewOutcome).toBe('pending');
+    expect(personnelConfig.getReviewMode).not.toHaveBeenCalled();
+    expect(reviews.approveBatch).not.toHaveBeenCalled();
   });
 
   it('标准模式或不具备服务依赖时不自动审核', async () => {
@@ -154,7 +148,7 @@ describe('宽松模式：档案提交后自动审核通过', () => {
     expect(reviews.approveBatch).not.toHaveBeenCalled();
   });
 
-  it('宽松模式下自动审核失败不阻断提交结果，并记录失败留痕', async () => {
+  it('不调用自动审核或创建新的自动审核失败审计', async () => {
     const user = buildUser();
     const failingApprove = jest.fn().mockRejectedValue(new Error('审批人范围异常'));
     const { service, prisma, reviews, baseVersion } = buildService(user, 'relaxed', failingApprove);
@@ -166,10 +160,10 @@ describe('宽松模式：档案提交后自动审核通过', () => {
     }, operator);
 
     expect(result.request).not.toBeNull();
-    expect(reviews.approveBatch).toHaveBeenCalled();
+    expect(reviews.approveBatch).not.toHaveBeenCalled();
     expect((prisma.auditLog.create as jest.Mock).mock.calls.some((call) => {
       return (call[0] as { data: { action: string } }).data.action === 'auto_approve_employee_data_change_failed';
-    })).toBe(true);
+    })).toBe(false);
   });
 
   it('宽松模式下仅免审字段直改时无审核单，不触发自动审核', async () => {
@@ -196,15 +190,8 @@ describe('宽松模式：档案提交后自动审核通过', () => {
     expect(result).toMatchObject({ reviewOutcome: 'pending' });
   });
 
-  it('仅自动审核调用方明确提交的部分', async () => {
-    const { service, reviews } = buildService(buildUser(), 'relaxed');
-    await service.autoApproveRelaxed(['request-1'], operator, ['performance']);
-    expect(reviews.approveBatch).toHaveBeenLastCalledWith(
-      { requestIds: ['request-1'], scopes: ['performance'] }, operator, { autoApproved: true },
-    );
-    await service.autoApproveRelaxed(['request-1'], operator, ['profile']);
-    expect(reviews.approveBatch).toHaveBeenLastCalledWith(
-      { requestIds: ['request-1'], scopes: ['profile'] }, operator, { autoApproved: true },
-    );
+  it('移除自动审核入口', () => {
+    const { service } = buildService(buildUser(), 'relaxed');
+    expect((service as any).autoApproveRelaxed).toBeUndefined();
   });
 });

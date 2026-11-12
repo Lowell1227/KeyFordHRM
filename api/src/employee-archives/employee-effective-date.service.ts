@@ -1,7 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import { ConflictException, Injectable } from '@nestjs/common';
 import { EmployeeNumberStatus, ExternalIdentityProvider, ExternalIdentityStatus, OnboardingStatus, Prisma, SysRole } from '@prisma/client';
 import { PrismaService } from '@/prisma/prisma.service';
 import { approvedEmploymentSourceWhere, selectEmploymentAt, shanghaiBusinessDate } from './employment-timeline';
+import { lockTalentSource } from './employee-talent-source';
 
 export const RESIGNATION_BINDING_DISABLED_REASON = '员工档案审核为离职';
 
@@ -143,6 +144,10 @@ export class EmployeeEffectiveDateService {
       || request.onboardingStatus === OnboardingStatus.effective || request.profileReviewStatus !== 'approved') {
       return { activated: false, historicalOnly: false };
     }
+    if (request.cancelledAt || request.archivedAt || (request.requiresArrivalConfirmation && !request.arrivalConfirmedAt)) {
+      return { activated: false, historicalOnly: false };
+    }
+    await lockTalentSource(tx, request.talentCandidateId);
     const employment = request.employmentRecords[0];
     if (!employment) return { activated: false, historicalOnly: false };
     const proposed = this.record(request.proposedValue);
@@ -151,6 +156,10 @@ export class EmployeeEffectiveDateService {
       ? performance.managerId : null;
     const today = shanghaiBusinessDate(at);
     if (employment.effectiveFrom > today) return { activated: false, historicalOnly: false };
+    if (request.requiresArrivalConfirmation && (!request.arrivalDate
+      || request.arrivalDate.getTime() !== employment.effectiveFrom.getTime() || request.arrivalDate > today)) {
+      return { activated: false, historicalOnly: false };
+    }
     const assignment = request.employeeNumbers.find((item) => item.status === EmployeeNumberStatus.reserved)
       ?? request.employeeNumbers.find((item) => item.employeeNo === employment.employeeNo);
     if (employment.effectiveTo && employment.effectiveTo < today) {
@@ -231,8 +240,22 @@ export class EmployeeEffectiveDateService {
       appliedAt: at,
       validationWarnings: warnings as Prisma.InputJsonValue,
     } });
+    if (request.talentCandidateId && request.arrivalConfirmedAt) {
+      const candidate = await tx.talentCandidate.findUnique({ where: { id: request.talentCandidateId },
+        select: { deletedAt: true, convertedUserId: true } });
+      if (candidate && !candidate.deletedAt) {
+        if (candidate.convertedUserId && candidate.convertedUserId !== request.userId) {
+          throw new ConflictException('来源人才已关联其他员工，请核对后再确认到岗');
+        }
+        await tx.talentCandidate.updateMany({ where: { id: request.talentCandidateId, deletedAt: null,
+          OR: [{ convertedUserId: null }, { convertedUserId: request.userId }] }, data: {
+          status: 'hired', convertedUserId: request.userId, convertedAt: at,
+          updatedById: request.arrivalConfirmedById,
+        } });
+      }
+    }
     await tx.auditLog.create({ data: {
-      userId: request.createdById,
+      userId: request.arrivalConfirmedById ?? request.createdById,
       action: 'activate_employee_onboarding',
       entityType: 'employee_data_change_request',
       entityId: requestId,

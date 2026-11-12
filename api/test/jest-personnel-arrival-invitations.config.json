@@ -1,0 +1,10 @@
+{
+  "moduleFileExtensions": ["js", "json", "ts"],
+  "rootDir": ".",
+  "testRegex": "personnel-lifecycle/lifecycle.integration.spec.ts$",
+  "transform": { "^.+\\.(t|j)s$": "ts-jest" },
+  "moduleNameMapper": { "^@/(.*)$": "<rootDir>/../src/$1" },
+  "testEnvironment": "node",
+  "testTimeout": 120000,
+  "maxWorkers": 1
+}

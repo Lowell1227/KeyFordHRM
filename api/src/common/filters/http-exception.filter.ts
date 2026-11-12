@@ -18,6 +18,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     let httpStatus = HttpStatus.INTERNAL_SERVER_ERROR;
     let bizCode: number = ERROR_CODE.INTERNAL;
     let message = '服务器内部错误';
+    let data: unknown = null;
 
     if (exception instanceof HttpException) {
       httpStatus = exception.getStatus();
@@ -30,6 +31,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
         // class-validator 错误 message 为数组，取首条
         message = Array.isArray(r.message) ? String(r.message[0]) : String(r.message ?? exception.message);
         if (typeof r.code === 'number') bizCode = r.code; // 业务自定义码
+        if (r.data !== undefined) data = r.data; // 业务附加数据（如查重 existingId）
       }
     } else if (exception instanceof Error) {
       message = exception.message;
@@ -41,7 +43,7 @@ export class HttpExceptionFilter implements ExceptionFilter {
     res.status(httpStatus).json({
       code: bizCode,
       message,
-      data: null,
+      data,
       timestamp: Date.now(),
     });
   }

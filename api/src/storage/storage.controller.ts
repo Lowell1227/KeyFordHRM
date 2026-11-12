@@ -29,11 +29,14 @@ export class StorageController {
     @Query('purpose') purpose: UploadPurpose = 'general',
     @CurrentUser() operator: AuthUser,
   ): Promise<UploadedFileMeta> {
-    if (!['general', 'employee-contract-image', 'employee-contract-attachment'].includes(purpose)) {
+    if (!['general', 'employee-contract-image', 'employee-contract-attachment', 'talent-resume'].includes(purpose)) {
       throw new BadRequestException({ code: 'PARAM_INVALID', message: '上传用途不正确' });
     }
     if (purpose.startsWith('employee-contract-') && !this.canAccessContractMaterials(operator)) {
       throw new ForbiddenException({ code: 'FORBIDDEN', message: '无权限管理合同材料' });
+    }
+    if (purpose === 'talent-resume' && !this.canAccessTalentPool(operator)) {
+      throw new ForbiddenException({ code: 'FORBIDDEN', message: '无权限管理人才库简历' });
     }
     return this.storageService.uploadFile(file, purpose);
   }
@@ -61,6 +64,11 @@ export class StorageController {
         throw new ForbiddenException({ code: 'FORBIDDEN', message: '无权限访问合同材料' });
       }
     }
+    if (objectName.startsWith('talent-resume/')) {
+      if (!this.canAccessTalentPool(operator)) {
+        throw new ForbiddenException({ code: 'FORBIDDEN', message: '无权限访问人才库简历' });
+      }
+    }
     await this.storageService.pipeDownload(objectName, res);
   }
 
@@ -69,5 +77,10 @@ export class StorageController {
       || operator.sysRole === SysRole.system_admin
       || hasHrCapability(operator, 'employee_archive_edit')
       || hasHrCapability(operator, 'employee_archive_review');
+  }
+
+  /** 人才库权限边界与合同材料一致（需求 §7）：hr/system_admin 或具备档案权限的 hr_user。 */
+  private canAccessTalentPool(operator: AuthUser): boolean {
+    return this.canAccessContractMaterials(operator);
   }
 }
