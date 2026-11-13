@@ -65,3 +65,9 @@
 - Additional confirmed defect: cancellation command omitted metadata needed by recovery UI; refresh full detail after cancellation, desktop/mobile red-to-green, no workflow change.
 - Residual: one early draft autosave anomaly did not recur; preserve its evidence and do not claim it fixed. Third-party delivery and physical-device/business acceptance are pending.
 - No commit/push or production release. Final report: `docs/acceptance/2026-11-12-personnel-acceptance-fixes.md`.
+
+## Authorized Release Update (2026-11-13)
+
+- User explicitly authorized commit and production release. Commit `5247cb5b` pushed to origin/main; exact committed source built once for API/Web and released with backups and rollback images retained.
+- Existing strict validation reused; final image checks and public read-only PC/mobile smoke passed. No schema change, business-data writes or unrelated service restart.
+- Production evidence: `docs/acceptance/2026-11-13-personnel-release.md`. Human business acceptance remains pending.
