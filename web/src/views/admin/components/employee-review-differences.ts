@@ -27,7 +27,7 @@ const enumLabels: Record<string, Record<string, string>> = {
   company: { fuede: '孚德', fuede_sports: '孚德体育文化', beijing_fuede: '北京孚德', fansibao: '凡思堡' },
   employeeStatus: { active: '在职', probation: '试用期', pending_entry: '待入职', resigned: '已离职' },
   employmentType: { full_time: '全职', part_time: '兼职', rehire: '返聘', external: '外部' },
-  contractType: { contract: '合同', attachment: '附件', renewal: '续签合同', transfer: '公司变更协议', unclassified: '待分类合同', confidentiality: '保密协议' },
+  contractType: { contract: '首签', attachment: '附件', renewal: '续签', transfer: '转签', unclassified: '待分类合同', confidentiality: '保密协议' },
   changeType: { hire: '入职', onboarding: '入职', reentry: '再入职', transfer: '调动', resignation: '离职', regularization: '转正', correction: '档案更正' },
 };
 

@@ -7,12 +7,12 @@ export const ROSTER_EXPORT_GROUPS = [
   { key: 'contact', label: '身份与联系' },
   { key: 'insurance', label: '社保公积金' },
   { key: 'bank', label: '银行信息' },
-  { key: 'contract', label: '最新合同' },
+  { key: 'contract', label: '当前合同' },
   { key: 'history', label: '合同历史' },
   { key: 'system', label: '系统信息' },
 ] as const;
 
-/** Order follows the source roster. Additional archive fields are never selected by default. */
+/** Order follows the source roster; current-contract defaults still require archive access. */
 export const ROSTER_EXPORT_COLUMNS = [
   { key: 'name', header: '姓名', group: 'employment', width: 14 },
   { key: 'employeeNo', header: '工号', group: 'employment', width: 14 },
@@ -73,6 +73,7 @@ export const ROSTER_EXPORT_COLUMNS = [
   { key: 'latestEffectiveFrom', header: '生效日期', group: 'contract', width: 14 },
   { key: 'latestExpiresAt', header: '到期日期', group: 'contract', width: 14 },
   { key: 'latestTermType', header: '合同期限', group: 'contract', width: 18 },
+  { key: 'latestContractStatus', header: '合同状态', group: 'contract', width: 16 },
   { key: 'latestOriginalCompany', header: '原公司', group: 'contract', width: 24 },
   { key: 'latestNewCompany', header: '新公司', group: 'contract', width: 24 },
   { key: 'latestConfidentialityAgreement', header: '保密协议', group: 'contract', width: 14 },
@@ -94,16 +95,23 @@ export function canExportArchiveFields(viewer: HrCapabilitySubject): boolean {
   return hasHrCapability(viewer, 'employee_archive_edit') || hasHrCapability(viewer, 'employee_archive_review');
 }
 
+function defaultRosterExportColumns(viewer?: HrCapabilitySubject): RosterExportColumnKey[] {
+  if (!viewer || !canExportArchiveFields(viewer)) return [...DEFAULT_ROSTER_EXPORT_COLUMNS];
+  return ROSTER_EXPORT_COLUMNS.filter(column => DEFAULT_ROSTER_EXPORT_COLUMNS.includes(column.key) || column.group === 'contract')
+    .map(column => column.key);
+}
+
 export function rosterExportFieldGroups(viewer: HrCapabilitySubject) {
   const archiveAccess = canExportArchiveFields(viewer);
+  const defaults = defaultRosterExportColumns(viewer);
   return ROSTER_EXPORT_GROUPS.map(group => ({ ...group,
     fields: ROSTER_EXPORT_COLUMNS.filter(column => column.group === group.key && (archiveAccess || LEGACY_KEYS.has(column.key)))
-      .map(column => ({ key: column.key, label: column.header, defaultSelected: DEFAULT_ROSTER_EXPORT_COLUMNS.includes(column.key) })),
+      .map(column => ({ key: column.key, label: column.header, defaultSelected: defaults.includes(column.key) })),
   })).filter(group => group.fields.length > 0);
 }
 
 export function parseRosterExportColumns(value?: string, viewer?: HrCapabilitySubject): RosterExportColumnKey[] {
-  if (value === undefined) return [...DEFAULT_ROSTER_EXPORT_COLUMNS];
+  if (value === undefined) return defaultRosterExportColumns(viewer);
   if (typeof value !== 'string') throw new BadRequestException('导出字段格式不正确');
   const keys = value.split(',').map(key => key.trim());
   const allowed = new Set<string>(ROSTER_EXPORT_COLUMNS.map(column => column.key));

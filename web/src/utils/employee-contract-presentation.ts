@@ -18,8 +18,16 @@ export function contractTitle(contract: ContractPresentation): string {
 }
 
 export function sortContractsLatestFirst<T extends ContractPresentation>(contracts: readonly T[]): T[] {
-  const businessDate = (contract: T) => date(contract.signedAt) !== '-' ? date(contract.signedAt) : date(contract.effectiveFrom);
+  const businessDate = (contract: T) => date(contract.effectiveFrom) !== '-' ? date(contract.effectiveFrom) : date(contract.signedAt);
   const createdAt = (contract: T) => Date.parse(text(contract.createdAt)) || 0;
-  return [...contracts].sort((left, right) => businessDate(right).localeCompare(businessDate(left))
+  return [...contracts].sort((left, right) => Number(date(right.effectiveFrom) !== '-') - Number(date(left.effectiveFrom) !== '-')
+    || businessDate(right).localeCompare(businessDate(left))
     || createdAt(right) - createdAt(left) || text(right.id).localeCompare(text(left.id)));
+}
+
+export function selectEmployeeContracts<T extends ContractPresentation>(contracts: readonly T[]) {
+  const sorted = sortContractsLatestFirst(contracts);
+  const current = sorted.find(contract => contract.isActive !== false
+    && ['contract', 'renewal', 'transfer'].includes(text(contract.contractType) || text(contract.kind))) ?? null;
+  return { current, history: sorted.filter(contract => contract !== current) };
 }

@@ -19,7 +19,7 @@ export function formatEmployeeContractDate(value?: string | null): string {
 }
 
 export function employeeContractStatus(contract: ContractDates, now = new Date()): ContractStatus {
-  if (contract.isActive === false) return { label: '历史', type: 'info' };
+  if (contract.isActive === false) return { label: '旧版本/已移除', type: 'info' };
   const start = calendarDate(contract.effectiveFrom), end = calendarDate(contract.expiresAt);
   if ((contract.effectiveFrom && !start) || (contract.expiresAt && !end) || (start && end && start > end)) {
     return { label: '日期待核', type: 'warning' };
@@ -28,9 +28,9 @@ export function employeeContractStatus(contract: ContractDates, now = new Date()
     timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit',
   }).format(now);
   if (end && end < today) return { label: '已到期', type: 'danger' };
-  if (start && start > today) return { label: '尚未生效', type: 'info' };
+  if (start && start > today) return { label: '待生效', type: 'info' };
   if (!start) return { label: '期限待补', type: 'warning' };
-  if (end) return { label: '期限内', type: 'success' };
+  if (end) return { label: '正常', type: 'success' };
   if (contract.termType?.includes('无固定期限')) return { label: '无固定期限', type: 'info' };
   return { label: '期限待补', type: 'warning' };
 }

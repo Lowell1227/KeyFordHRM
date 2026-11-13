@@ -4,9 +4,11 @@ import { archiveFieldPath } from '@/utils/employee-archive-fields';
 import { isCancelledNewHireArrival } from '@/utils/employee-lifecycle';
 import { contractTitle } from '@/utils/employee-contract-presentation';
 import { validateOnboardingStep } from '@/utils/onboarding-validation';
+import { validateContractDates } from '@/utils/employee-contract-validation';
+import { useContractUploads } from '@/utils/employee-contract-uploads';
 import { isAxiosError } from 'axios';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
-import { Delete, Plus } from '@element-plus/icons-vue';
+import { Delete, Plus, RefreshRight } from '@element-plus/icons-vue';
 import { ElMessage, ElMessageBox, type UploadRequestOptions } from 'element-plus';
 import {
   employeeArchivesApi,
@@ -21,6 +23,7 @@ import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import { uploadApi } from '@/api/upload.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import ContractSubjectSelect from '@/components/common/ContractSubjectSelect.vue';
+import ContractDateInput from '@/components/common/ContractDateInput.vue';
 import EmployeeCompanySelect from '@/components/common/EmployeeCompanySelect.vue';
 import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSelect.vue';
 import type { Department, User } from '@/types/api.types';
@@ -135,6 +138,10 @@ const form = reactive({
   },
   contracts: [] as ContractDraft[],
 });
+const contractUploads = useContractUploads(contract => props.modelValue && form.contracts.some(item => item === contract));
+const uploadBlocked = contractUploads.blocked;
+const contractDateErrors = computed(() => Object.fromEntries(form.contracts.flatMap((contract, index) =>
+  Object.entries(validateContractDates(contract)).map(([field, error]) => [`contracts.${index}.${field}`, error]))));
 
 const hasBlockingIdentityMatch = computed(() => (
   identityResult.value?.outcome === 'identity_match' || identityResult.value?.outcome === 'conflict'
@@ -175,6 +182,7 @@ function dateValue(value: unknown): string {
 
 function reset() {
   const session = ++generation;
+  contractUploads.clear();
   if (autosaveTimer) clearTimeout(autosaveTimer);
   saveBlocked.value = false;
   checkingStep.value = false;
@@ -272,7 +280,7 @@ function reset() {
 
 watch(() => [props.modelValue, props.draft?.id] as const, ([open]) => {
   if (open) reset();
-  else { generation++; if (autosaveTimer) clearTimeout(autosaveTimer); }
+  else { generation++; contractUploads.clear(); if (autosaveTimer) clearTimeout(autosaveTimer); }
 });
 watch(() => props.issueContext, () => { if (props.modelValue) void focusIssue(); });
 watch(() => [form.phone, form.idNumber], () => {
@@ -603,6 +611,7 @@ async function focusInvalidField(path: string) {
 
 async function validateStep(step: number, recheckIdentity = false): Promise<boolean> {
   const session = generation;
+  if (step === 2 && !await validateUploads()) return false;
   Object.keys(fieldErrors).forEach(key => delete fieldErrors[key]);
   Object.assign(fieldErrors, validateOnboardingStep(validationPayload(), step));
   if (Object.keys(fieldErrors).length) {
@@ -637,6 +646,7 @@ async function nextStep() {
 
 async function submit() {
   if (savingAction.value || saveBlocked.value || checkingStep.value || identityLoading.value) return;
+  if (!await validateUploads()) return;
   const session = generation;
   checkingStep.value = true;
   try {
@@ -651,6 +661,7 @@ async function submit() {
   try {
     if (draftSavePromise && !(await draftSavePromise)) return;
     if (session !== generation || !props.modelValue) return;
+    if (!await validateUploads()) return;
     const request = await employeeArchivesApi.createEmployee(requestBody() as EmployeeCreatePayload);
     if (session !== generation || !props.modelValue) return;
     ElMessage.success('入职申请已提交');
@@ -659,7 +670,17 @@ async function submit() {
   } catch (error) {
     if (session !== generation || !props.modelValue) return;
     if (openExistingTalentApplication(error)) return;
-    saveError.value = '提交未完成，已填写内容仍保留，请核对提示后重试。';
+    const fields = isAxiosError(error) ? error.response?.data?.data?.fieldErrors : undefined;
+    if (fields && typeof fields === 'object' && !Array.isArray(fields)) {
+      for (const [path, value] of Object.entries(fields)) {
+        if (/^contracts(?:\.\d+(?:\.[a-zA-Z]+)?)?$/.test(path) && typeof value === 'string') fieldErrors[path] = value;
+      }
+      const first = Object.keys(fieldErrors).find(path => path.startsWith('contracts'));
+      if (first) { currentStep.value = 2; await focusInvalidField(first); }
+    }
+    const message = isAxiosError(error) ? error.response?.data?.message : '';
+    const detail = Array.isArray(message) ? message.filter(item => typeof item === 'string').join('；') : message;
+    saveError.value = typeof detail === 'string' && detail ? `${detail}。已填写内容仍保留。` : '提交未完成，已填写内容仍保留，请核对提示后重试。';
   } finally {
     if (session === generation) savingAction.value = null;
   }
@@ -674,31 +695,24 @@ function addContract() {
   });
 }
 
-async function uploadContractImage(contract: ContractDraft, options: UploadRequestOptions) {
-  const file = options.file as File;
-  if ((contract.images?.length ?? 0) >= 5) { ElMessage.warning('每份合同最多上传 5 张图片'); return; }
-  if (file.size > 2 * 1024 * 1024) { ElMessage.warning('合同图片单张不能超过 2MB'); return; }
-  const extension = file.name.toLowerCase().slice(file.name.lastIndexOf('.'));
-  if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type) && !['.jpg', '.jpeg', '.png', '.webp'].includes(extension)) {
-    ElMessage.warning('合同图片仅支持 JPG、PNG、WEBP'); return;
-  }
-  const uploaded = await uploadApi.upload(file, 'employee-contract-image');
-  contract.images = [...(contract.images ?? []), uploaded];
-  options.onSuccess(uploaded);
+async function validateUploads(): Promise<boolean> {
+  if (!uploadBlocked.value) return true;
+  currentStep.value = 2;
+  await focusInvalidField('contracts');
+  return false;
 }
 
-async function uploadContractAttachment(contract: ContractDraft, options: UploadRequestOptions) {
-  const file = options.file as File;
-  if ((contract.attachments?.length ?? 0) >= 10) { ElMessage.warning('每份合同最多上传 10 个附件'); return; }
-  if (file.size > 10 * 1024 * 1024) { ElMessage.warning('合同附件单个不能超过 10MB'); return; }
-  const allowed = ['application/pdf', 'application/msword', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
-  const extension = file.name.toLowerCase().slice(file.name.lastIndexOf('.'));
-  if (!allowed.includes(file.type) && !['.pdf', '.doc', '.docx', '.xls', '.xlsx'].includes(extension)) {
-    ElMessage.warning('合同附件仅支持 PDF、Word、Excel'); return;
-  }
-  const uploaded = await uploadApi.upload(file, 'employee-contract-attachment');
-  contract.attachments = [...(contract.attachments ?? []), uploaded];
-  options.onSuccess(uploaded);
+function removeContract(contract: ContractDraft) {
+  contractUploads.cancelContract(contract);
+  form.contracts.splice(form.contracts.indexOf(contract), 1);
+}
+
+function uploadContractImage(contract: ContractDraft, options: UploadRequestOptions) {
+  return contractUploads.start(contract, 'images', options.file);
+}
+
+function uploadContractAttachment(contract: ContractDraft, options: UploadRequestOptions) {
+  return contractUploads.start(contract, 'attachments', options.file);
 }
 
 async function openUploadedMaterial(item: { name: string; url: string; mimeType?: string }) {
@@ -714,7 +728,7 @@ async function openUploadedMaterial(item: { name: string; url: string; mimeType?
 }
 
 onMounted(async () => { positions.value = await positionsApi.findAll(); });
-onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTimer); });
+onBeforeUnmount(() => { generation++; contractUploads.clear(); if (autosaveTimer) clearTimeout(autosaveTimer); });
 </script>
 
 <template>
@@ -856,26 +870,33 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
         <el-collapse-item name="contracts" title="合同与附件" data-archive-field="contracts">
         <section class="wizard-section">
           <p v-if="fieldErrors.contracts" class="field-error" role="alert">{{ fieldErrors.contracts }}</p>
+          <p v-if="uploadBlocked" class="field-error" role="status">{{ contractUploads.message.value }}</p>
           <div class="section-head contract-toolbar"><el-button :icon="Plus" @click="addContract">新增合同</el-button></div>
           <div v-for="(contract, index) in form.contracts" :key="contract.__key" class="contract-card">
-            <div class="contract-card__head"><strong>{{ contractTitle(contract) }}</strong><el-button link type="danger" :icon="Delete" @click="form.contracts.splice(index, 1)">移除</el-button></div>
+            <div class="contract-card__head"><strong>{{ contractTitle(contract) }}</strong><el-button link type="danger" :icon="Delete" @click="removeContract(contract)">移除</el-button></div>
+            <p v-if="fieldErrors[`contracts.${index}`]" :data-archive-field="`contracts.${index}`" class="field-error" role="alert">{{ fieldErrors[`contracts.${index}`] }}</p>
             <div class="form-grid form-grid--3">
-              <el-form-item :data-archive-field="`contracts.${index}.contractType`" :error="fieldErrors[`contracts.${index}.contractType`]" label="类型"><el-select v-model="contract.contractType"><el-option label="劳动合同" value="contract" /><el-option label="续签" value="renewal" /><el-option label="转签" value="transfer" /></el-select></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.contractType`" :error="fieldErrors[`contracts.${index}.contractType`]" label="类型"><el-select v-model="contract.contractType"><el-option label="首签" value="contract" /><el-option label="续签" value="renewal" /><el-option label="转签" value="transfer" /><el-option v-if="contract.contractType && !['contract', 'renewal', 'transfer'].includes(contract.contractType)" :label="contract.contractType" :value="contract.contractType" /></el-select></el-form-item>
               <el-form-item :data-archive-field="`contracts.${index}.name`" :error="fieldErrors[`contracts.${index}.name`]" label="合同名称"><el-input v-model="contract.name" /></el-form-item>
               <el-form-item :data-archive-field="`contracts.${index}.contractSubjectId`" :error="fieldErrors[`contracts.${index}.contractSubjectId`]" label="签约公司"><ContractSubjectSelect v-model="contract.contractSubjectId" v-model:snapshot-name="contract.signingCompany" /></el-form-item>
-              <el-form-item :data-archive-field="`contracts.${index}.signedAt`" :error="fieldErrors[`contracts.${index}.signedAt`]" label="签订日期"><el-date-picker v-model="contract.signedAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-              <el-form-item :data-archive-field="`contracts.${index}.effectiveFrom`" :error="fieldErrors[`contracts.${index}.effectiveFrom`]" label="生效日期"><el-date-picker v-model="contract.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-              <el-form-item :data-archive-field="`contracts.${index}.expiresAt`" :error="fieldErrors[`contracts.${index}.expiresAt`]" label="到期日期"><el-date-picker v-model="contract.expiresAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.signedAt`" :error="contractDateErrors[`contracts.${index}.signedAt`] || fieldErrors[`contracts.${index}.signedAt`]" label="签订日期"><ContractDateInput v-model="contract.signedAt" /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.effectiveFrom`" :error="contractDateErrors[`contracts.${index}.effectiveFrom`] || fieldErrors[`contracts.${index}.effectiveFrom`]" label="生效日期"><ContractDateInput v-model="contract.effectiveFrom" /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.expiresAt`" :error="contractDateErrors[`contracts.${index}.expiresAt`] || fieldErrors[`contracts.${index}.expiresAt`]" label="到期日期"><ContractDateInput v-model="contract.expiresAt" /></el-form-item>
               <el-form-item :data-archive-field="`contracts.${index}.termType`" :error="fieldErrors[`contracts.${index}.termType`]" label="期限"><el-input v-model="contract.termType" /></el-form-item>
-              <el-form-item :data-archive-field="`contracts.${index}.originalCompany`" label="原公司" :error="fieldErrors[`contracts.${index}.originalCompany`]"><ContractSubjectSelect v-model:snapshot-name="contract.originalCompany" name-only /></el-form-item>
-              <el-form-item :data-archive-field="`contracts.${index}.newCompany`" label="新公司" :error="fieldErrors[`contracts.${index}.newCompany`]"><ContractSubjectSelect v-model:snapshot-name="contract.newCompany" name-only /></el-form-item>
+              <el-form-item v-if="contract.contractType === 'transfer' || contract.originalCompany" :data-archive-field="`contracts.${index}.originalCompany`" label="原公司" :error="fieldErrors[`contracts.${index}.originalCompany`]"><ContractSubjectSelect v-model:snapshot-name="contract.originalCompany" name-only /></el-form-item>
+              <el-form-item v-if="contract.contractType === 'transfer' || contract.newCompany" :data-archive-field="`contracts.${index}.newCompany`" label="新公司" :error="fieldErrors[`contracts.${index}.newCompany`]"><ContractSubjectSelect v-model:snapshot-name="contract.newCompany" name-only /></el-form-item>
               <el-form-item :data-archive-field="`contracts.${index}.confidentialityAgreement`" :error="fieldErrors[`contracts.${index}.confidentialityAgreement`]" label="保密协议"><el-input v-model="contract.confidentialityAgreement" /></el-form-item>
               <el-form-item :data-archive-field="`contracts.${index}.nonCompeteAgreement`" :error="fieldErrors[`contracts.${index}.nonCompeteAgreement`]" label="竞业协议"><el-input v-model="contract.nonCompeteAgreement" /></el-form-item>
               <el-form-item :data-archive-field="`contracts.${index}.portraitAgreement`" :error="fieldErrors[`contracts.${index}.portraitAgreement`]" label="肖像协议"><el-input v-model="contract.portraitAgreement" /></el-form-item>
             </div>
             <div class="contract-materials">
-              <div class="material-group"><strong>合同图片</strong><small>最多 5 张，单张不超过 2MB</small><el-upload :show-file-list="false" accept="image/jpeg,image/png,image/webp" :http-request="(options: UploadRequestOptions) => uploadContractImage(contract, options)"><el-button>上传图片</el-button></el-upload><div v-for="(item, itemIndex) in contract.images" :key="item.url" class="material-item"><el-button link type="primary" @click="openUploadedMaterial(item)">{{ item.name }}</el-button><el-button link type="danger" @click="contract.images.splice(itemIndex, 1)">移除</el-button></div></div>
-              <div class="material-group"><strong>合同附件</strong><small>最多 10 个，单个不超过 10MB</small><el-upload :show-file-list="false" accept=".pdf,.doc,.docx,.xls,.xlsx" :http-request="(options: UploadRequestOptions) => uploadContractAttachment(contract, options)"><el-button>上传附件</el-button></el-upload><div v-for="(item, itemIndex) in contract.attachments" :key="item.url" class="material-item"><el-button link type="primary" @click="openUploadedMaterial(item)">{{ item.name }}</el-button><el-button link type="danger" @click="contract.attachments.splice(itemIndex, 1)">移除</el-button></div></div>
+              <div class="material-group"><strong>合同图片</strong><small>最多 5 张，单张不超过 2MB</small><el-upload :disabled="contractUploads.count(contract, 'images') >= 5" :show-file-list="false" accept="image/jpeg,image/png,image/webp" :http-request="(options: UploadRequestOptions) => uploadContractImage(contract, options)"><el-button :disabled="contractUploads.count(contract, 'images') >= 5">上传图片</el-button></el-upload><div v-for="(item, itemIndex) in contract.images" :key="item.url" class="material-item"><el-button link type="primary" @click="openUploadedMaterial(item)">{{ item.name }}</el-button><el-button link type="danger" @click="contract.images.splice(itemIndex, 1)">移除</el-button></div></div>
+              <div class="material-group"><strong>合同附件</strong><small>最多 10 个，单个不超过 10MB</small><el-upload :disabled="contractUploads.count(contract, 'attachments') >= 10" :show-file-list="false" accept=".pdf,.doc,.docx,.xls,.xlsx" :http-request="(options: UploadRequestOptions) => uploadContractAttachment(contract, options)"><el-button :disabled="contractUploads.count(contract, 'attachments') >= 10">上传附件</el-button></el-upload><div v-for="(item, itemIndex) in contract.attachments" :key="item.url" class="material-item"><el-button link type="primary" @click="openUploadedMaterial(item)">{{ item.name }}</el-button><el-button link type="danger" @click="contract.attachments.splice(itemIndex, 1)">移除</el-button></div></div>
+            </div>
+            <div v-for="task in contractUploads.forContract(contract)" :key="task.id" class="contract-upload-task" role="status">
+              <span>{{ task.file.name }}</span><small :class="{ 'field-error': task.status === 'failed' }">{{ task.status === 'uploading' ? '上传中' : task.error }}</small>
+              <el-button v-if="task.status === 'failed'" link type="primary" :icon="RefreshRight" @click="contractUploads.retry(task)">重试</el-button>
+              <el-button link type="danger" :icon="Delete" @click="contractUploads.remove(task)">移除</el-button>
             </div>
           </div>
           <p v-if="!form.contracts.length" class="empty-contracts">暂无合同</p>
@@ -905,7 +926,7 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
         <span class="footer-spacer" />
         <el-button :disabled="savingAction === 'submit'" @click="beforeClose(() => emit('update:modelValue', false))">关闭</el-button>
         <el-button v-if="currentStep < stepTitles.length - 1" type="primary" :loading="checkingStep" :disabled="identityLoading || !!savingAction" @click="nextStep">下一步</el-button>
-        <el-button v-else type="primary" :loading="checkingStep || savingAction === 'submit'" :disabled="saveBlocked || identityLoading" @click="submit">提交</el-button>
+        <el-button v-else type="primary" :loading="checkingStep || savingAction === 'submit'" :disabled="saveBlocked || identityLoading || uploadBlocked" @click="submit">提交</el-button>
       </div>
     </template>
   </el-drawer>
@@ -939,6 +960,8 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
 .contract-card__head, .contract-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.contract-card__head { margin-bottom: 10px; }
 .contract-card__head strong { min-width: 0; overflow-wrap: anywhere; }
 .contract-card__head .el-button { flex-shrink: 0; }
+.contract-upload-task { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 8px; font-size: 13px; }
+.contract-upload-task > span { min-width: 0; overflow-wrap: anywhere; }
 .contract-materials { display: grid; grid-template-columns: 1fr 1fr; gap: 14px; }.material-group { display: grid; gap: 8px; padding: 12px; border: 1px dashed #cfd7e6; border-radius: 9px; background: #fff; }.material-group small { color: #667085; }
 .material-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 5px 7px; background: #f2f4f7; border-radius: 6px; }
 .preview-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); margin: 16px 0 0; border: 1px solid #e5eaf2; border-radius: 10px; overflow: hidden; }

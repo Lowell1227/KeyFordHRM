@@ -1,4 +1,5 @@
 import type { EmployeeCreateDraftPayload } from '@/api/employee-archives.api';
+import { validateContractDates } from '@/utils/employee-contract-validation';
 
 function calendarDay(value: unknown): boolean {
   if (typeof value !== 'string' || !/^(?!0000)\d{4}-\d{2}-\d{2}$/.test(value)) return false;
@@ -53,7 +54,7 @@ export function validateOnboardingStep(input: EmployeeCreateDraftPayload, step: 
         originalCompany: 200, newCompany: 200, confidentialityAgreement: 200, nonCompeteAgreement: 200, portraitAgreement: 200 })) {
         text(`contracts.${index}.${key}`, contract[key], max);
       }
-      for (const key of ['signedAt', 'effectiveFrom', 'expiresAt']) date(`contracts.${index}.${key}`, contract[key]);
+      for (const [key, error] of Object.entries(validateContractDates(contract))) errors[`contracts.${index}.${key}`] = error;
     });
   }
   return errors;

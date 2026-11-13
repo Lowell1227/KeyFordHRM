@@ -336,7 +336,7 @@ describe('EmployeeArchivesService', () => {
       baseVersion: (service as any).archiveVersion(archiveEditorUser()),
       employee: {},
       profile: {},
-      contracts: [{ contractType: '劳动合同', images, attachments: [] }],
+      contracts: [{ contractType: 'contract', images, attachments: [] }],
     }, hrOperator)).rejects.toMatchObject({
       response: expect.objectContaining({ message: '每份合同最多上传 5 张图片' }),
     });
@@ -356,7 +356,7 @@ describe('EmployeeArchivesService', () => {
       employee: {},
       profile: {},
       contracts: [{
-        contractType: '劳动合同',
+        contractType: 'contract',
         images: [{ name: '合同.jpg', url: '/storage/download?key=image', size: 2 * 1024 * 1024 + 1, mimeType: 'image/jpeg' }],
         attachments: [],
       }],
@@ -369,7 +369,7 @@ describe('EmployeeArchivesService', () => {
       employee: {},
       profile: {},
       contracts: [{
-        contractType: '劳动合同',
+        contractType: 'contract',
         images: [],
         attachments: [{ name: '合同.pdf', url: '/storage/download?key=attachment', size: 10 * 1024 * 1024 + 1, mimeType: 'application/pdf' }],
       }],
@@ -571,7 +571,7 @@ describe('EmployeeArchivesService', () => {
       employee: {},
       profile: {},
       contracts: [{
-        contractType: '劳动合同',
+        contractType: 'contract',
         images: [{
           name: '合同.jpg',
           url: '/storage/download?key=uploads%2F2026%2F08%2F28%2Ffake.jpg',

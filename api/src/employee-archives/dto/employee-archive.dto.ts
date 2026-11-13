@@ -250,6 +250,8 @@ export class SubmitEmployeeArchiveDraftDto {
 
   @IsOptional()
   @IsArray()
+  // Record[] reflects as Array; keep each row an object under implicit conversion.
+  @Type(() => Object)
   contracts?: Record<string, unknown>[];
 
   @IsOptional()

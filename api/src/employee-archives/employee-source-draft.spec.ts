@@ -22,6 +22,31 @@ function fixture() {
 }
 
 describe('source draft preservation', () => {
+  it.each([
+    [{ contractType: 'contract', effectiveFrom: '2026-03-01', expiresAt: '2026-02-28' }, 'expiresAt'],
+    [{ contractType: 'unknown-new-type' }, 'contractType'],
+    [{ contractType: 'contract', signedAt: '2026-02-31' }, 'signedAt'],
+  ])('rejects invalid new hire contracts before reserving an employee number: %j', async (contract, field) => {
+    const f = fixture();
+    await expect(f.service.createEmployee({ draftId: f.draft.id, expectedVersion: 1, name: 'Synthetic', company: CompanyCode.fuede,
+      deptId: 'department-1', entryDate: new Date('2026-11-01'), effectiveFrom: new Date('2026-11-01'),
+      employmentType: EmploymentType.full_time, employeeStatus: UserStatus.active, contracts: [contract] }, operator))
+      .rejects.toMatchObject({ response: { code: 4001, data: { fieldErrors: { [`contracts.0.${field}`]: expect.any(String) } } } });
+    expect(f.numbers.reserveNext).not.toHaveBeenCalled();
+    expect(f.tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
+  });
+
+  it('accepts a back-signed new hire contract without bypassing review or arrival', async () => {
+    const f = fixture();
+    const result: any = await f.service.createEmployee({ draftId: f.draft.id, expectedVersion: 1, name: 'Synthetic', company: CompanyCode.fuede,
+      deptId: 'department-1', entryDate: new Date('2026-11-01'), effectiveFrom: new Date('2026-11-01'),
+      employmentType: EmploymentType.full_time, employeeStatus: UserStatus.active,
+      contracts: [{ contractType: 'contract', signedAt: '2026-11-12', effectiveFrom: '2026-08-01' }] }, operator);
+    expect(result).toMatchObject({ reviewOutcome: 'pending', recordStatus: 'submitted', profileReviewStatus: 'pending',
+      requiresArrivalConfirmation: true, userId: null });
+    expect(result.proposedValue.contracts[0]).toMatchObject({ signedAt: '2026-11-12', effectiveFrom: '2026-08-01' });
+  });
+
   it('keeps null lifecycle/company/probation fields and server-owned source/identity warnings after autosave', async () => {
     const { service, draft, warnings, source, numbers } = fixture();
     const result: any = await service.saveEmployeeCreateDraft({ draftId: draft.id, expectedVersion: draft.requestVersion, name: 'Synthetic', company: null,

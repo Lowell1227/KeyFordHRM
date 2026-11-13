@@ -150,6 +150,7 @@ export async function buildRosterWorkbook(items: RosterWorkbookItem[], columns: 
         latestContractType: latest.contractType, latestContractName: latest.name,
         latestSigningCompany: latest.signingCompany, latestSignedAt: latest.signedAt,
         latestEffectiveFrom: latest.effectiveFrom, latestExpiresAt: latest.expiresAt, latestTermType: latest.termType,
+        latestContractStatus: latest.dateStatus,
         latestOriginalCompany: latest.originalCompany, latestNewCompany: latest.newCompany,
         latestConfidentialityAgreement: latest.confidentialityAgreement, latestNonCompeteAgreement: latest.nonCompeteAgreement,
         latestPortraitAgreement: latest.portraitAgreement,

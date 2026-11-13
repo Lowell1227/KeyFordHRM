@@ -29,6 +29,7 @@ import { EmployeeDataReviewsService } from './employee-data-reviews.service';
 import { lockTalentSource, resolveTalentSource, talentSourceSelect } from './employee-talent-source';
 import { employeeArchiveView, employeeDataChangeView, activeApplicationWhere } from './employee-data-change-view';
 import { archiveIssueStates } from './employee-archive-issues';
+import { assertValidContractChanges } from './employee-contract-validation';
 import {
   DIRECT_APPLY_PROFILE_FIELDS,
   DIRECT_APPLY_PROFILE_FIELD_LABELS,
@@ -155,6 +156,7 @@ export class EmployeeArchivesService {
       await this.normalizeSubjectPayload(tx, proposedValue, {}, this.record(savedDraft?.proposedValue));
       const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, savedDraft as any);
       await this.validateSubjectPayload(tx, proposedValue, {});
+      assertValidContractChanges(proposedValue.contracts as Record<string, unknown>[]);
       await this.assertEmployeeCreateIdentity(
         tx,
         proposedValue,
@@ -1218,6 +1220,7 @@ export class EmployeeArchivesService {
     let baseEmployee = this.employeeReviewData(user, employment);
     let baseProfile = this.profileReviewData(user.employeeProfile);
     const baseContracts = user.employeeContracts.map((contract) => this.contractReviewData(contract));
+    if (recordStatus === 'submitted') assertValidContractChanges(input.contracts ?? baseContracts, baseContracts);
     const profileApproved = existing?.profileReviewStatus === 'approved';
     const performanceApproved = existing?.performanceReviewStatus === 'approved';
     const savedProposal = this.record(existing?.proposedValue);

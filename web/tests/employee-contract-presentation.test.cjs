@@ -17,7 +17,8 @@ function loadTs(filename, source = fs.readFileSync(filename, 'utf8'), dependenci
   }).outputText, filename);
   return loaded.exports;
 }
-const { contractTitle, sortContractsLatestFirst } = loadTs(path.resolve(__dirname, '../src/utils/employee-contract-presentation.ts'));
+const { contractTitle, sortContractsLatestFirst, selectEmployeeContracts } = loadTs(path.resolve(__dirname, '../src/utils/employee-contract-presentation.ts'));
+const { employeeContractStatus } = loadTs(path.resolve(__dirname, '../src/utils/employee-contract-status.ts'));
 
 test('contract titles retain their name and signing day when list order changes', () => {
   const contract = { id: 'fixture-contract', name: '研发劳动合同', signedAt: '2026-11-12T00:00:00.000Z', effectiveFrom: '2026-12-01' };
@@ -46,14 +47,43 @@ test('import proposals and formal records share the same Chinese contract type t
   assert.equal(contractTitle({ contractType: 'renewal', kind: 'transfer' }), '续签合同 · 日期待补充');
 });
 
-test('latest presentation sorts by signing day, then effective day when signing is missing', () => {
+test('current presentation sorts by effective day, using signing day only for missing legacy dates', () => {
   const input = [
     { id: 'old', signedAt: '2024-01-01', effectiveFrom: '2028-01-01' },
     { id: 'effective-only', effectiveFrom: '2026-12-01' },
     { id: 'latest', signedAt: '2027-01-01' },
     { id: 'undated' },
   ];
-  assert.deepEqual(sortContractsLatestFirst(input).map(item => item.id), ['latest', 'effective-only', 'old', 'undated']);
+  assert.deepEqual(sortContractsLatestFirst(input).map(item => item.id), ['old', 'effective-only', 'latest', 'undated']);
+});
+
+test('an undated legacy signature cannot displace a transfer with a known effective day', () => {
+  const old = { id: 'old', contractType: 'contract', signedAt: '2026-11-12', effectiveFrom: null };
+  const transfer = { id: 'transfer', contractType: 'transfer', effectiveFrom: '2026-11-01' };
+  assert.equal(selectEmployeeContracts([old, transfer]).current, transfer);
+  assert.equal(selectEmployeeContracts([old]).current, old);
+  assert.equal(employeeContractStatus(old).label, '期限待补');
+});
+
+test('a backdated signature does not put an earlier first contract ahead of its transfer', () => {
+  const input = [
+    { id: 'initial', contractType: 'contract', signedAt: '2026-11-12', effectiveFrom: '2026-08-01' },
+    { id: 'transfer', contractType: 'transfer', signedAt: '2026-11-01', effectiveFrom: '2026-11-01' },
+    { id: 'removed', contractType: 'renewal', effectiveFrom: '2028-01-01', isActive: false },
+    { id: 'material', contractType: 'attachment', effectiveFrom: '2029-01-01' },
+  ];
+  const groups = selectEmployeeContracts(input);
+  assert.equal(groups.current.id, 'transfer');
+  assert.deepEqual(groups.history.map(item => item.id), ['material', 'removed', 'initial']);
+});
+
+test('a pending current contract stays in the same group while only its business-day status changes', () => {
+  const contract = { id: 'future', contractType: 'renewal', effectiveFrom: '2026-12-01', expiresAt: '2029-11-30' };
+  assert.equal(selectEmployeeContracts([contract]).current, contract);
+  assert.equal(employeeContractStatus(contract, new Date('2026-11-30T15:59:59Z')).label, '待生效');
+  assert.equal(employeeContractStatus(contract, new Date('2026-11-30T16:00:00Z')).label, '正常');
+  assert.equal(employeeContractStatus(contract, new Date('2029-11-30T16:00:00Z')).label, '已到期');
+  assert.equal(employeeContractStatus({ ...contract, isActive: false }).label, '旧版本/已移除');
 });
 
 test('same-day records have a deterministic created-at and id order', () => {
@@ -112,9 +142,9 @@ async function mountCompanySelect(t, input) {
 test('company-name fields choose an existing company without adding a subject ID', async t => {
   const { state, events } = await mountCompanySelect(t, { nameOnly: true, snapshotName: '历史公司原文' });
   state.select('现有签约公司');
-  assert.deepEqual(events, [['update:snapshotName', '现有签约公司']]);
+  assert.deepEqual(events, [['update:snapshotName', '现有签约公司'], ['select', { id: 'active-subject', name: '现有签约公司', isActive: true }]]);
   state.select('');
-  assert.deepEqual(events.at(-1), ['update:snapshotName', null]);
+  assert.deepEqual(events.slice(-2), [['update:snapshotName', null], ['select', null]]);
 });
 
 test('company-name selector preserves an inactive current company but cannot newly select it', async t => {
@@ -128,5 +158,5 @@ test('company-name selector preserves an inactive current company but cannot new
 test('signing-company selector still emits the subject ID and frozen name together', async t => {
   const { state, events } = await mountCompanySelect(t, { snapshotName: '历史公司原文' });
   state.select('active-subject');
-  assert.deepEqual(events, [['update:modelValue', 'active-subject'], ['update:snapshotName', '现有签约公司']]);
+  assert.deepEqual(events, [['update:modelValue', 'active-subject'], ['update:snapshotName', '现有签约公司'], ['select', { id: 'active-subject', name: '现有签约公司', isActive: true }]]);
 });

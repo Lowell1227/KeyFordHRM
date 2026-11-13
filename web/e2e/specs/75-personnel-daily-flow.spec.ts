@@ -119,25 +119,25 @@ test('返回离职时正式档案响应晚到，不覆盖后来打开的档案',
 const contractCases = [
   { name: '旧到期日', effectiveFrom: '2025-01-01', expiresAt: '2026-10-25', want: '已到期' },
   { name: '北京时间昨天', effectiveFrom: '2025-01-01', expiresAt: '2026-11-01', want: '已到期' },
-  { name: '到期当天', effectiveFrom: '2025-01-01', expiresAt: '2026-11-02', want: '期限内' },
-  { name: '明日到期', effectiveFrom: '2025-01-01', expiresAt: '2026-11-03', want: '期限内' },
-  { name: '今日开始', effectiveFrom: '2026-11-02', expiresAt: '2027-11-01', want: '期限内' },
-  { name: '未来开始', effectiveFrom: '2026-11-03', expiresAt: '2027-11-01', want: '尚未生效' },
+  { name: '到期当天', effectiveFrom: '2025-01-01', expiresAt: '2026-11-02', want: '正常' },
+  { name: '明日到期', effectiveFrom: '2025-01-01', expiresAt: '2026-11-03', want: '正常' },
+  { name: '今日开始', effectiveFrom: '2026-11-02', expiresAt: '2027-11-01', want: '正常' },
+  { name: '未来开始', effectiveFrom: '2026-11-03', expiresAt: '2027-11-01', want: '待生效' },
   { name: '无固定期限文本', effectiveFrom: '2025-01-01', expiresAt: null, termType: '无固定期限合同', want: '无固定期限' },
   { name: '有到期日优先于期限文本', effectiveFrom: '2025-01-01', expiresAt: '2026-10-25', termType: '无固定期限', want: '已到期' },
-  { name: '真实未来到期日优先', effectiveFrom: '2025-01-01', expiresAt: '2027-10-25', termType: '无固定期限', want: '期限内' },
+  { name: '真实未来到期日优先', effectiveFrom: '2025-01-01', expiresAt: '2027-10-25', termType: '无固定期限', want: '正常' },
   { name: '空生效日仍可判断已到期', effectiveFrom: null, expiresAt: '2026-10-25', want: '已到期' },
   { name: '空到期日', effectiveFrom: '2025-01-01', expiresAt: null, want: '期限待补' },
   { name: '空生效日', effectiveFrom: null, expiresAt: '2027-01-01', want: '期限待补' },
   { name: '全部日期为空', effectiveFrom: null, expiresAt: null, want: '期限待补' },
-  { name: '未来的无固定期限合同', effectiveFrom: '2027-01-01', expiresAt: null, termType: '无固定期限', want: '尚未生效' },
+  { name: '未来的无固定期限合同', effectiveFrom: '2027-01-01', expiresAt: null, termType: '无固定期限', want: '待生效' },
   { name: '日期格式异常', effectiveFrom: '2025-01-01', expiresAt: '2026-2-3', want: '日期待核' },
   { name: '不存在的日期', effectiveFrom: '2025-01-01', expiresAt: '2026-02-30', want: '日期待核' },
   { name: '生效日期异常', effectiveFrom: '待核实', expiresAt: '2027-01-01', want: '日期待核' },
   { name: '无固定期限仍核实异常日期', effectiveFrom: '2025-01-01', expiresAt: '异常', termType: '无固定期限', want: '日期待核' },
-  { name: '日期时间形式', signedAt: '2025-01-02T00:00:00.000Z', effectiveFrom: '2025-01-01T00:00:00.000Z', expiresAt: '2026-11-02T00:00:00.000Z', want: '期限内' },
+  { name: '日期时间形式', signedAt: '2025-01-02T00:00:00.000Z', effectiveFrom: '2025-01-01T00:00:00.000Z', expiresAt: '2026-11-02T00:00:00.000Z', want: '正常' },
   { name: '起止颠倒', effectiveFrom: '2027-01-01', expiresAt: '2026-01-01', want: '日期待核' },
-  { name: '历史保留', isActive: false, effectiveFrom: '2025-01-01', expiresAt: '2027-01-01', want: '历史' },
+  { name: '历史保留', isActive: false, effectiveFrom: '2025-01-01', expiresAt: '2027-01-01', want: '旧版本/已移除' },
 ];
 
 for (const width of [1440, 390]) {
@@ -149,6 +149,8 @@ for (const width of [1440, 390]) {
     await page.getByRole('button', { name: '查看档案', exact: true }).filter({ visible: true }).click();
     const drawer = page.getByRole('dialog', { name: '员工档案', exact: true });
     await drawer.getByRole('tab', { name: '合同材料', exact: true }).click();
+    await expect(drawer.locator('.employee-archive__contract-card').filter({ visible: true })).toHaveCount(1);
+    await drawer.getByRole('button', { name: /历史合同/ }).click();
     for (const contract of contractCases) {
       const card = drawer.locator('.employee-archive__contract-card').filter({ has: page.getByText(contract.name, { exact: true }) });
       await expect(card.locator('.el-tag')).toHaveText(contract.want);

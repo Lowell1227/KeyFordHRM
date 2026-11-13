@@ -3,7 +3,7 @@ import { computed } from 'vue';
 import type { EmployeeDataReview, EmployeeReviewStatus } from '@/api/employee-archives.api';
 import { formatDate, formatDateTime } from '@/utils/date';
 import { isDirectArchiveApplication, isPendingArrival } from '@/utils/employee-lifecycle';
-import { contractTitle } from '@/utils/employee-contract-presentation';
+import { employeeReviewDifferences, employeeReviewValuesEqual } from './employee-review-differences';
 import PersonnelProcessTimeline from './PersonnelProcessTimeline.vue';
 import type { PersonnelProcessStep, PersonnelProcessTone } from './personnel-process-timeline';
 
@@ -140,35 +140,32 @@ const changeItems = computed(() => ['employee', 'profile', 'performance'].flatMa
 }));
 
 const contractChangeItems = computed(() => {
-  const before = Array.isArray(props.request.baseValue?.contracts) ? props.request.baseValue.contracts as Record<string, any>[] : [];
-  const after = Array.isArray(props.request.proposedValue?.contracts) ? props.request.proposedValue.contracts as Record<string, any>[] : [];
-  const labels: Record<string, string> = {
-    name: '名称', contractType: '类型', signingCompany: '签约公司', contractSubjectId: '合同主体关联', signedAt: '签订日期',
-    effectiveFrom: '生效日期', expiresAt: '到期日期', termType: '期限', originalCompany: '原公司',
-    newCompany: '新公司', confidentialityAgreement: '保密协议', nonCompeteAgreement: '竞业协议', portraitAgreement: '肖像协议',
-  };
-  const result: Array<{ key: string; label: string; before: string; after: string }> = [];
-  after.forEach((contract, index) => {
-    const old = contract.id ? before.find((item) => item.id === contract.id) : undefined;
-    const title = contractTitle(contract);
-    if (!old) {
-      result.push({ key: `contract-${index}`, label: '新增合同', before: '无', after: title });
-      result.push({ key: `contract-${index}-subject`, label: `${title} · 签约公司`, before: '—', after: `${contract.signingCompany || '未填写'} · ${contract.contractSubjectId ? '已关联' : '尚未关联'}` });
-      return;
-    }
-    Object.entries(labels).forEach(([key, label]) => {
-      if (!(key in contract) || JSON.stringify(old[key] ?? null) === JSON.stringify(contract[key] ?? null)) return;
-      result.push({ key: `contract-${index}-${key}`, label: `${title} · ${label}`, before: key === 'contractSubjectId' ? (old[key] ? '原主体关联' : '尚未关联') : hasValue(old[key]) ? String(old[key]) : '—', after: key === 'contractSubjectId' ? (contract[key] ? '新主体关联' : '尚未关联') : hasValue(contract[key]) ? String(contract[key]) : '—' });
+  return employeeReviewDifferences(props.request).filter(group => group.kind).flatMap(group => {
+    const fields = group.fields.filter(field => field.key !== 'sequence').flatMap(field => {
+      const key = `contract-${group.key}-${field.key}`, label = `${group.title} · ${field.label}`;
+      if (group.kind === '修改' && ['images', 'attachments'].includes(field.key)) {
+        const before = props.request.baseValue.contracts?.find((item: Record<string, any>) => item.id === group.key);
+        const after = props.request.proposedValue.contracts?.find((item: Record<string, any>) => item.id === group.key);
+        if (before && after) {
+          const oldFiles: Record<string, unknown>[] = before[field.key] ?? [], newFiles: Record<string, unknown>[] = after[field.key] ?? [];
+          const same = (left: Record<string, unknown>, right: Record<string, unknown>) => employeeReviewValuesEqual(field.key, [left], [right]);
+          return [
+            ...oldFiles.filter(item => !newFiles.some(next => same(item, next))).map((item, index) => ({
+              key: `${key}-removed-${index}`, label: `${label} · 移除`, before: String(item.name || '未命名材料'), after: '已移除',
+            })),
+            ...newFiles.filter(item => !oldFiles.some(previous => same(item, previous))).map((item, index) => ({
+              key: `${key}-added-${index}`, label: `${label} · 新增`, before: '无', after: String(item.name || '未命名材料'),
+            })),
+          ];
+        }
+      }
+      return [{ key, label, before: field.before, after: field.after }];
     });
-    for (const key of ['images', 'attachments']) {
-      if (JSON.stringify(old[key] ?? []) === JSON.stringify(contract[key] ?? [])) continue;
-      result.push({ key: `contract-${index}-${key}`, label: `${title} · ${key === 'images' ? '图片' : '附件'}`, before: `${old[key]?.length ?? 0} 份`, after: `${contract[key]?.length ?? 0} 份` });
-    }
+    return group.kind === '修改' ? fields : [{
+      key: `contract-${group.key}`, label: `${group.kind}合同`,
+      before: group.kind === '移除' ? group.title : '无', after: group.kind === '移除' ? '已移除' : group.title,
+    }, ...fields];
   });
-  before.filter((old) => !after.some((item) => item.id === old.id)).forEach((old, index) => {
-    result.push({ key: `removed-contract-${index}`, label: '移除合同', before: contractTitle(old), after: '已移除' });
-  });
-  return result;
 });
 
 const allChangeItems = computed(() => [...changeItems.value, ...contractChangeItems.value]);

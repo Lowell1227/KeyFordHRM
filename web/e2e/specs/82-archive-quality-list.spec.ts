@@ -39,7 +39,7 @@ const rosterModules = [
     { key: 'bankName', label: '开户银行', defaultSelected: false },
     { key: 'bankAccountConfigured', label: '银行卡号已录入', defaultSelected: false },
   ] },
-  { key: 'contracts', label: '最新合同', fields: [
+  { key: 'contracts', label: '当前合同', fields: [
     { key: 'contractName', label: '合同名称', defaultSelected: false },
     { key: 'contractType', label: '合同类型', defaultSelected: false },
     { key: 'signingCompany', label: '签约公司', defaultSelected: false },
@@ -219,7 +219,7 @@ test('导出面板仅显示后端允许的模块和字段', async ({ page }) => 
   const dialog = page.getByRole('dialog', { name: '导出花名册', exact: true });
   await expect(dialog.getByText('姓名', { exact: true })).toBeVisible();
   await expect(dialog.getByRole('checkbox', { name: '手机号', exact: true })).toHaveCount(0);
-  await expect(dialog.getByRole('checkbox', { name: '选择最新合同模块', exact: true })).toHaveCount(0);
+  await expect(dialog.getByRole('checkbox', { name: '选择当前合同模块', exact: true })).toHaveCount(0);
   await dialog.getByRole('button', { name: '全选', exact: true }).click();
   const download = page.waitForEvent('download');
   await dialog.getByRole('button', { name: '导出 Excel', exact: true }).click();
@@ -275,14 +275,14 @@ test('办理中变更不提供与当前内容无关的花名册导出', async ({
   await expect(page.getByRole('button', { name: '导出花名册', exact: true })).toHaveCount(0);
 });
 
-test('最新合同只展开一份，历史可展开，详情不冒用未来任职', async ({ page }) => {
+test('当前合同只展开一份，历史可展开，详情不冒用未来任职', async ({ page }) => {
   await mockPage(page);
   await page.getByRole('button', { name: '查看档案', exact: true }).filter({ visible: true }).first().click();
   const drawer = page.getByRole('dialog', { name: '员工档案', exact: true });
   await expect(drawer.getByText('2年10个月', { exact: true })).toBeVisible();
   await expect(drawer.getByText('未来公司不应显示', { exact: true })).toHaveCount(0);
   await drawer.getByRole('tab', { name: '合同材料', exact: true }).click();
-  await expect(drawer.getByText('最新合同', { exact: true })).toBeVisible();
+  await expect(drawer.getByText('当前合同', { exact: true })).toBeVisible();
   await expect(drawer.locator('.employee-archive__contract-card').filter({ visible: true })).toHaveCount(1);
   await expect(drawer.locator('.employee-archive__contract-head')).toContainText('续签劳动合同');
   await drawer.getByRole('button', { name: /历史合同/ }).click();

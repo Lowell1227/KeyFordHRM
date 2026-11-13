@@ -20,6 +20,10 @@ function evaluate(filename, source, dependencies = {}) {
       return evaluate(target, fs.readFileSync(target, 'utf8'), dependencies);
     }
     if (id.endsWith('.vue') || id.startsWith('@/')) return {};
+    if (id.startsWith('.')) {
+      const target = path.resolve(path.dirname(filename), `${id}.ts`);
+      return evaluate(target, fs.readFileSync(target, 'utf8'), dependencies);
+    }
     return originalRequire(id);
   };
   loaded._compile(ts.transpileModule(source, {
@@ -255,7 +259,8 @@ test('talent submit conflict also opens the existing application', async t => {
   const { state, events } = createDrawer(t, {
     createEmployee: async () => { throw conflict({ applicationId: 'existing-2' }); },
   });
-  Object.assign(state.form, { deptId: 'dept-1', entryDate: '2026-11-12', effectiveFrom: '2026-11-12' });
+  Object.assign(state.form, { company: 'fuede', deptId: 'dept-1', entryDate: '2026-11-12', effectiveFrom: '2026-11-12' });
+  state.form.employee.companyText = 'Fictional company';
   await state.submit();
   assert.deepEqual(events, [['update:modelValue', false], ['application', 'existing-2']]);
 });

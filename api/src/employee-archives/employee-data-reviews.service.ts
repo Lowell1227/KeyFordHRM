@@ -1,4 +1,5 @@
 import { validateContractSubject } from '@/contract-subjects/contract-subject-reference';
+import { assertValidContractChanges } from './employee-contract-validation';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   AccountType,
@@ -1367,6 +1368,9 @@ export class EmployeeDataReviewsService {
       if (activeContract) retainedIds.add(activeContract.id);
       return [{ contract, contractType, sequence, activeContract }];
     });
+    if (['manual_archive_change', 'manual_employee_create'].includes(sourceType)) {
+      assertValidContractChanges(contracts, currentActive);
+    }
     const releasedIds = new Set<string>();
     const endedAt = new Date();
     for (const current of currentActive) {

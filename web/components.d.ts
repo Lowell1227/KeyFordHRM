@@ -12,6 +12,7 @@ declare module 'vue' {
     BusinessDetailDrawer: typeof import('./src/components/common/business-list/BusinessDetailDrawer.vue')['default']
     BusinessListPage: typeof import('./src/components/common/business-list/BusinessListPage.vue')['default']
     ChartCard: typeof import('./src/components/common/ChartCard.vue')['default']
+    ContractDateInput: typeof import('./src/components/common/ContractDateInput.vue')['default']
     ContractSubjectSelect: typeof import('./src/components/common/ContractSubjectSelect.vue')['default']
     DeptResultChart: typeof import('./src/components/charts/DeptResultChart.vue')['default']
     DeptTree: typeof import('./src/components/common/DeptTree.vue')['default']

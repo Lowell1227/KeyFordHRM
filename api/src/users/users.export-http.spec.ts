@@ -63,7 +63,7 @@ describe('roster column selection over HTTP', () => {
   it('offers archive modules only to archive-capable HR and rejects forged archive columns', async () => {
     const full = await request(app.getHttpServer()).get('/users/export-fields').expect(200);
     expect(full.body.map((group: any) => group.label)).toEqual([
-      '基本与任职', '个人与教育', '身份与联系', '社保公积金', '银行信息', '最新合同', '合同历史', '系统信息',
+      '基本与任职', '个人与教育', '身份与联系', '社保公积金', '银行信息', '当前合同', '合同历史', '系统信息',
     ]);
     expect(full.body.flatMap((group: any) => group.fields).some((field: any) => field.key === 'phone')).toBe(true);
     actor = { id: 'synthetic-org-only', sysRole: SysRole.hr_user, hrCapabilities: ['organization_edit'] };

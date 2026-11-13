@@ -1,5 +1,5 @@
 import * as ExcelJS from 'exceljs';
-import { rosterArchiveCells, selectRosterContracts } from './roster-export-data';
+import { rosterArchiveCells, selectRosterContracts, rosterContractDateStatus } from './roster-export-data';
 import { buildRosterWorkbook, RosterWorkbookItem } from './users.excel';
 import { rosterExportFieldGroups, parseRosterExportColumns, DEFAULT_ROSTER_EXPORT_COLUMNS } from './roster-export-catalog';
 
@@ -17,11 +17,58 @@ describe('roster archive export', () => {
   it('returns eight ordered groups without default-selecting additional personal fields', () => {
     const groups = rosterExportFieldGroups({ sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] });
     expect(groups.map(group => group.key)).toEqual(['employment', 'personal', 'contact', 'insurance', 'bank', 'contract', 'history', 'system']);
-    expect(groups.flatMap(group => group.fields).filter(field => field.defaultSelected).map(field => field.key)).toEqual(DEFAULT_ROSTER_EXPORT_COLUMNS);
+    const defaults = groups.flatMap(group => group.fields).filter(field => field.defaultSelected).map(field => field.key);
+    expect(defaults).toEqual(expect.arrayContaining([...DEFAULT_ROSTER_EXPORT_COLUMNS, 'latestContractType', 'latestEffectiveFrom', 'latestContractStatus']));
+    expect(defaults).not.toContain('contractHistory');
     expect(DEFAULT_ROSTER_EXPORT_COLUMNS).toHaveLength(9);
     expect(rosterExportFieldGroups({ sysRole: 'hr_user', hrCapabilities: ['organization_edit'] }).flatMap(group => group.fields)).toHaveLength(10);
     expect(() => parseRosterExportColumns('contractHistory', { sysRole: 'hr_user', hrCapabilities: ['organization_edit'] })).toThrow('权限');
     expect(() => parseRosterExportColumns('bankAccountEncrypted', { sysRole: 'hr' })).toThrow('有效');
+  });
+
+  it('defaults to current contract fields only for archive viewers, keeping organization-only access unchanged', async () => {
+    const hr = { sysRole: 'hr_user', hrCapabilities: ['employee_archive_edit'] };
+    const organization = { sysRole: 'hr_user', hrCapabilities: ['organization_edit'] };
+    const columns = parseRosterExportColumns(undefined, hr);
+    expect(columns).toContain('latestContractType');
+    expect(columns).not.toContain('contractHistory');
+    expect(parseRosterExportColumns(undefined, organization)).toEqual(DEFAULT_ROSTER_EXPORT_COLUMNS);
+    const workbook = await buildRosterWorkbook([employee()], columns);
+    expect(workbook.worksheets.map(sheet => sheet.name)).toEqual(['花名册']);
+  });
+
+  it('selects the later effective transfer rather than a later signature or ancillary material', () => {
+    const contracts = [
+      { id: 'initial', contractType: 'contract', signedAt: day('2026-11-12'), effectiveFrom: day('2026-08-01') },
+      { id: 'transfer', contractType: 'transfer', signedAt: day('2026-11-01'), effectiveFrom: day('2026-11-01') },
+      { id: 'removed', contractType: 'renewal', effectiveFrom: day('2028-01-01'), isActive: false },
+      { id: 'material', contractType: 'attachment', effectiveFrom: day('2029-01-01') },
+    ];
+    expect(selectRosterContracts(contracts).latest?.id).toBe('transfer');
+    expect(selectRosterContracts(contracts).history).toHaveLength(3);
+    expect(selectRosterContracts([{ id: 'future', contractType: 'renewal', effectiveFrom: day('2099-01-01') }]).latest?.id).toBe('future');
+  });
+
+  it('keeps pending current contracts in one group and exports their Shanghai-day status', async () => {
+    const contract = { id: 'pending', contractType: 'renewal', effectiveFrom: day('2026-12-01'), expiresAt: day('2029-11-30') };
+    expect(rosterContractDateStatus(contract, new Date('2026-11-30T15:59:59Z'))).toBe('待生效');
+    expect(rosterContractDateStatus(contract, new Date('2026-11-30T16:00:00Z'))).toBe('正常');
+    expect(rosterContractDateStatus(contract, new Date('2029-11-30T16:00:00Z'))).toBe('已到期');
+    const built = await buildRosterWorkbook([employee({ contracts: [{ ...contract, effectiveFrom: day('2099-01-01'), expiresAt: day('2100-01-01') }] })],
+      ['latestContractType', 'latestContractStatus']);
+    const book = new ExcelJS.Workbook();
+    await book.xlsx.load(await built.xlsx.writeBuffer() as any);
+    expect(book.getWorksheet('花名册')!.getRow(3).values).toEqual([undefined, '续签', '待生效']);
+    expect(book.getWorksheet('历史合同')).toBeUndefined();
+  });
+
+  it('does not let an undated legacy signature displace a dated current transfer in the workbook', async () => {
+    const legacy = { id: 'legacy', contractType: 'contract', signedAt: day('2026-11-12'), effectiveFrom: null };
+    const transfer = { id: 'transfer', contractType: 'transfer', effectiveFrom: day('2026-11-01') };
+    expect(selectRosterContracts([legacy, transfer]).latest).toBe(transfer);
+    expect(selectRosterContracts([legacy]).latest).toBe(legacy);
+    const book = await buildRosterWorkbook([employee({ contracts: [legacy, transfer] })], ['latestContractType', 'latestEffectiveFrom']);
+    expect(book.getWorksheet('花名册')!.getRow(3).values).toEqual([undefined, '转签', day('2026-11-01')]);
   });
 
   it('uses formal employment at the business date and does not select a future record', () => {

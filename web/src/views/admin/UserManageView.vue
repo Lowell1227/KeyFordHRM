@@ -52,7 +52,7 @@ import { formatDate, formatDateTime } from '@/utils/date';
 import { isTopLevelDepartmentLeader } from '@/utils/organization-relations';
 import { formatPersonnelIdentityLabel } from '@/utils/personnel-identity';
 import { employeeContractStatus, formatEmployeeContractDate } from '@/utils/employee-contract-status';
-import { contractTitle, sortContractsLatestFirst } from '@/utils/employee-contract-presentation';
+import { contractTitle, selectEmployeeContracts } from '@/utils/employee-contract-presentation';
 
 type PersonnelView = 'org' | 'users' | 'processing';
 
@@ -93,7 +93,7 @@ const employmentChangeLabels: Record<string, string> = {
 };
 
 const contractTypeLabels: Record<string, string> = {
-  contract: '劳动合同',
+  contract: '首签',
   renewal: '续签',
   transfer: '转签',
 };
@@ -704,12 +704,12 @@ const archiveEditing = ref(false);
 const archiveSection = ref('current');
 const expandedContractGroups = ref<string[]>([]);
 const contractGroups = computed(() => {
-  const contracts = sortContractsLatestFirst(employeeArchiveDrawer.value.data?.employeeContracts ?? [])
+  const contracts = (employeeArchiveDrawer.value.data?.employeeContracts ?? [])
     .map(contract => ({ ...contract, dateStatus: employeeContractStatus(contract) }));
-  const latest = contracts.find(item => item.isActive !== false);
+  const { current, history } = selectEmployeeContracts(contracts);
   return [
-    { name: '最新合同', contracts: latest ? [latest] : [] },
-    { name: '历史合同', contracts: contracts.filter(item => item !== latest) },
+    { name: '当前合同', contracts: current ? [current] : [] },
+    { name: '历史合同', contracts: history },
   ].filter((group) => group.contracts.length);
 });
 const employmentGroups = computed(() => {
@@ -2801,17 +2801,17 @@ onBeforeUnmount(() => {
             <div class="section-head">
               <div>
                 <h3>合同记录</h3>
-                <el-tooltip content="最新合同按签订日期排序，缺失时参考生效日期。最新记录不一定处于合同有效期内。" placement="top"><el-icon aria-label="合同排序说明"><QuestionFilled /></el-icon></el-tooltip>
+                <el-tooltip content="当前合同优先按明确的生效日期选取，未到生效日标记待生效；均缺少生效日期时参考签订日期。" placement="top"><el-icon aria-label="合同排序说明"><QuestionFilled /></el-icon></el-tooltip>
               </div>
             </div>
             <template v-if="employeeArchiveDrawer.data.employeeContracts.length">
             <section v-for="group in contractGroups" :key="group.name" class="contract-history-group">
-            <h4 v-if="group.name === '最新合同'">最新合同</h4>
+            <h4 v-if="group.name === '当前合同'">当前合同</h4>
             <button v-else type="button" class="contract-history-toggle" :aria-expanded="expandedContractGroups.includes(group.name)"
               @click="expandedContractGroups = expandedContractGroups.includes(group.name) ? [] : [group.name]">
               历史合同（{{ group.contracts.length }}） · {{ expandedContractGroups.includes(group.name) ? '收起' : '展开' }}
             </button>
-            <template v-if="group.name === '最新合同' || expandedContractGroups.includes(group.name)">
+            <template v-if="group.name === '当前合同' || expandedContractGroups.includes(group.name)">
             <div
               v-for="contract in group.contracts"
               :key="contract.id"
@@ -2831,8 +2831,8 @@ onBeforeUnmount(() => {
                 <div><span>生效日期</span><strong>{{ formatEmployeeContractDate(contract.effectiveFrom) }}</strong></div>
                 <div><span>到期日期</span><strong>{{ formatEmployeeContractDate(contract.expiresAt) }}</strong></div>
                 <div><span>期限</span><strong>{{ contract.termType || '未填写' }}</strong></div>
-                <div><span>原公司</span><strong>{{ contract.originalCompany || '未填写' }}</strong></div>
-                <div><span>新公司</span><strong>{{ contract.newCompany || '未填写' }}</strong></div>
+                <div v-if="contract.contractType === 'transfer' || contract.originalCompany"><span>原公司</span><strong>{{ contract.originalCompany || '未填写' }}</strong></div>
+                <div v-if="contract.contractType === 'transfer' || contract.newCompany"><span>新公司</span><strong>{{ contract.newCompany || '未填写' }}</strong></div>
                 <div><span>保密协议</span><strong>{{ contract.confidentialityAgreement || '未填写' }}</strong></div>
                 <div><span>竞业协议</span><strong>{{ contract.nonCompeteAgreement || '未填写' }}</strong></div>
                 <div><span>肖像协议</span><strong>{{ contract.portraitAgreement || '未填写' }}</strong></div>

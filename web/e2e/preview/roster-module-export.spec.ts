@@ -228,7 +228,7 @@ for (const width of [1440, 1024, 390]) {
     await expect(basic).toBeChecked({ indeterminate: true });
     await dialog.getByText('基本与任职', { exact: true }).click();
     await expect(dialog.getByRole('checkbox', { name: '姓名', exact: true })).toBeChecked();
-    await dialog.getByText('最新合同', { exact: true }).click();
+    await dialog.getByText('当前合同', { exact: true }).click();
     await dialog.getByText('合同历史', { exact: true }).click();
     await expect(exportButton).toBeInViewport();
     expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)).toBe(true);

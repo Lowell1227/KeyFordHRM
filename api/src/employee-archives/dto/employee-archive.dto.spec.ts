@@ -1,5 +1,32 @@
 import { ValidationPipe } from '@nestjs/common';
-import { CreateEmployeeDto, SaveEmployeeCreateDraftDto } from './employee-archive.dto';
+import { CreateEmployeeDto, SaveEmployeeCreateDraftDto, SubmitEmployeeArchiveDraftDto } from './employee-archive.dto';
+
+describe('SubmitEmployeeArchiveDraftDto with the production validation pipe', () => {
+  const pipe = new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: false,
+    transformOptions: { enableImplicitConversion: true } });
+
+  it('retains contract rows as objects through implicit conversion and JSON persistence', async () => {
+    const body = { employee: {}, profile: {}, contracts: [{ contractType: 'contract', sequence: 0,
+      name: 'Synthetic back-signed contract', signingCompany: 'Synthetic subject', signedAt: '2026-11-12',
+      effectiveFrom: '2025-11-14', expiresAt: '2028-10-14', termType: '', originalCompany: '', newCompany: '',
+      confidentialityAgreement: '', nonCompeteAgreement: '', portraitAgreement: '', images: [], attachments: [],
+      contractSubjectId: '454ff4f9-4d7d-44e8-ba83-1409ccba466e' }] };
+    const dto = await pipe.transform(body, { type: 'body', metatype: SubmitEmployeeArchiveDraftDto });
+    expect(Array.isArray(dto.contracts[0])).toBe(false);
+    expect(JSON.parse(JSON.stringify(dto))).toEqual(body);
+  });
+
+  it('preserves legacy fields, typed material metadata and invalid raw dates for business validation', async () => {
+    const body = { employee: {}, profile: {}, contracts: [{ id: 'legacy-contract', contractType: 'legacy-custom',
+      signedAt: 123, effectiveFrom: null, termType: 'Legacy term', sequence: 7,
+      attachments: [{ name: 'Synthetic.pdf', url: '/storage/synthetic.pdf', size: 42, mimeType: 'application/pdf' }],
+      images: [], sourceCells: ['A1'] }] };
+    const dto = await pipe.transform(body, { type: 'body', metatype: SubmitEmployeeArchiveDraftDto });
+    expect(JSON.parse(JSON.stringify(dto.contracts))).toEqual(body.contracts);
+    expect(dto.contracts[0].signedAt).toBe(123);
+    expect(dto.contracts[0].attachments[0].size).toBe(42);
+  });
+});
 
 describe('CreateEmployeeDto', () => {
   const pipe = new ValidationPipe({

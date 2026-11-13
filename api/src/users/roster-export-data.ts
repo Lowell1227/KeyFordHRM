@@ -55,11 +55,24 @@ const date = (value: unknown): Date | null => value instanceof Date && Number.is
 
 /** Same calendar-date ordering as the archive detail, without treating sequence as chronology. */
 export function selectRosterContracts(contracts: readonly RosterContract[] = []) {
-  const businessDate = (contract: RosterContract) => (date(contract.signedAt) ?? date(contract.effectiveFrom))?.toISOString().slice(0, 10) ?? '-';
-  const sorted = [...contracts].sort((a, b) => businessDate(b).localeCompare(businessDate(a))
+  const businessDate = (contract: RosterContract) => (date(contract.effectiveFrom) ?? date(contract.signedAt))?.toISOString().slice(0, 10) ?? '-';
+  const sorted = [...contracts].sort((a, b) => Number(Boolean(date(b.effectiveFrom))) - Number(Boolean(date(a.effectiveFrom)))
+    || businessDate(b).localeCompare(businessDate(a))
     || (date(b.createdAt)?.getTime() ?? 0) - (date(a.createdAt)?.getTime() ?? 0) || b.id.localeCompare(a.id));
-  const latest = sorted.find(contract => contract.isActive !== false) ?? null;
+  const latest = sorted.find(contract => contract.isActive !== false && ['contract', 'renewal', 'transfer'].includes(contract.contractType)) ?? null;
   return { latest, history: sorted.filter(contract => contract !== latest) };
+}
+
+export function rosterContractDateStatus(contract: RosterContract, at = new Date()): string {
+  if (contract.isActive === false) return '旧版本/已移除';
+  const start = date(contract.effectiveFrom), end = date(contract.expiresAt);
+  if ((contract.effectiveFrom && !start) || (contract.expiresAt && !end) || (start && end && start > end)) return '日期待核';
+  const today = shanghaiBusinessDate(at);
+  if (end && end < today) return '已到期';
+  if (start && start > today) return '待生效';
+  if (!start) return '期限待补';
+  if (end) return '正常';
+  return contract.termType?.includes('无固定期限') ? '无固定期限' : '期限待补';
 }
 
 export function rosterContractCells(contract: RosterContract | null): Record<string, RosterCell> {
@@ -72,6 +85,7 @@ export function rosterContractCells(contract: RosterContract | null): Record<str
     termType: contract.termType ?? '', originalCompany: contract.originalCompany ?? '', newCompany: contract.newCompany ?? '',
     confidentialityAgreement: contract.confidentialityAgreement ?? '', nonCompeteAgreement: contract.nonCompeteAgreement ?? '',
     portraitAgreement: contract.portraitAgreement ?? '', status: contract.isActive === false ? '已停用' : '未停用',
+    dateStatus: rosterContractDateStatus(contract),
   };
 }
 

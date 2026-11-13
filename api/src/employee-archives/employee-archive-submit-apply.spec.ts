@@ -1,8 +1,18 @@
-import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, INestApplication, ValidationPipe } from '@nestjs/common';
+import { Reflector } from '@nestjs/core';
+import { Test } from '@nestjs/testing';
+import request from 'supertest';
+import { RolesGuard } from '@/common/guards/roles.guard';
+import { HttpExceptionFilter } from '@/common/filters/http-exception.filter';
+import { ResponseInterceptor } from '@/common/interceptors/response.interceptor';
 import { AccountType, CompanyCode, EmploymentType, SysRole, UserStatus } from '@prisma/client';
 import { EmployeeArchivesService } from './employee-archives.service';
 import { EmployeeDataReviewsService } from './employee-data-reviews.service';
 import { EmployeeArchivesController } from './employee-archives.controller';
+import { EmployeeRosterImportService } from './employee-roster-import.service';
+import { PersonnelDiagnosticsService } from './personnel-diagnostics.service';
+import { EmployeeIdentityMatchService } from './employee-identity-match.service';
+import { EmployeeOnboardingService } from './employee-onboarding.service';
 
 const editor = { id: 'synthetic-editor', name: 'Synthetic HR', sysRole: SysRole.hr_user,
   hrCapabilities: ['employee_archive_edit'], deptId: null, canViewAll: false, isAssessorOnly: false };
@@ -69,7 +79,169 @@ function setup() {
   return { service, db, tx, user, requests, audits, input };
 }
 
+describe('archive contract HTTP boundary with production implicit conversion', () => {
+  let app: INestApplication;
+  let f: ReturnType<typeof setup>;
+  let actor: typeof editor;
+  const employeeId = '11111111-1111-4111-8111-111111111111';
+  const subjectId = '454ff4f9-4d7d-44e8-ba83-1409ccba466e';
+  const contract = { contractType: 'contract', sequence: 0, name: 'Synthetic back-signed contract',
+    signingCompany: 'Synthetic subject', signedAt: '2026-11-12', effectiveFrom: '2025-11-14', expiresAt: '2028-10-14',
+    termType: '', originalCompany: '', newCompany: '', confidentialityAgreement: '', nonCompeteAgreement: '',
+    portraitAgreement: '', images: [], attachments: [], contractSubjectId: subjectId };
+  const submit = (contracts: unknown[]) => request(app.getHttpServer()).patch(`/employee-archives/${employeeId}/draft`)
+    .send(f.input({}, {}, undefined, contracts));
+
+  beforeEach(async () => {
+    f = setup();
+    f.user.id = employeeId;
+    actor = { ...editor, hrCapabilities: [...editor.hrCapabilities] };
+    f.tx.contractSubject = { findUnique: jest.fn(async () => ({ id: subjectId, name: 'Synthetic subject', isActive: true })) };
+    const module = await Test.createTestingModule({ controllers: [EmployeeArchivesController], providers: [
+      { provide: EmployeeArchivesService, useValue: f.service },
+      { provide: EmployeeRosterImportService, useValue: {} },
+      { provide: EmployeeDataReviewsService, useValue: new EmployeeDataReviewsService(f.db) },
+      { provide: PersonnelDiagnosticsService, useValue: {} },
+      { provide: EmployeeIdentityMatchService, useValue: {} },
+      { provide: EmployeeOnboardingService, useValue: {} },
+    ] }).compile();
+    app = module.createNestApplication();
+    app.use((req: any, _res: any, next: () => void) => { req.user = actor; next(); });
+    app.useGlobalGuards(new RolesGuard(new Reflector()));
+    app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true, forbidNonWhitelisted: false,
+      transformOptions: { enableImplicitConversion: true } }));
+    app.useGlobalFilters(new HttpExceptionFilter());
+    app.useGlobalInterceptors(new ResponseInterceptor());
+    await app.init();
+  });
+  afterEach(async () => { await app?.close(); });
+
+  it('accepts the real UI first-contract payload and applies all contract fields', async () => {
+    const response = await submit([contract]).expect(200);
+    expect(response.body.data.reviewOutcome).toBe('not_required');
+    expect(response.body.data.request.proposedValue.contracts).toEqual([contract]);
+    expect(f.user.employeeContracts).toEqual([expect.objectContaining({ name: contract.name, contractType: 'contract',
+      signingCompany: contract.signingCompany, contractSubjectId: subjectId, signedAt: new Date('2026-11-12'),
+      effectiveFrom: new Date('2025-11-14'), expiresAt: new Date('2028-10-14'), isActive: true })]);
+  });
+
+  it('keeps draft contracts and material objects without applying or serializing them as empty arrays', async () => {
+    const draftContract = { ...contract, signedAt: '2026-02-31', attachments: [{ name: 'Synthetic.pdf',
+      url: '/storage/download?key=employee-contracts%2Fattachments%2Fsynthetic.pdf', size: 42, mimeType: 'application/pdf' }] };
+    const response = await request(app.getHttpServer()).patch(`/employee-archives/${employeeId}/draft/save`)
+      .send(f.input({}, {}, undefined, [draftContract])).expect(200);
+    expect(response.body.data.proposedValue.contracts).toEqual([draftContract]);
+    expect(f.requests[0].proposedValue.contracts).toEqual([draftContract]);
+    expect(f.user.employeeContracts).toEqual([]);
+  });
+
+  it.each([
+    [[{ ...contract, signedAt: '2026-02-31' }], 'contracts.0.signedAt'],
+    [[{ ...contract, signedAt: 123 }], 'contracts.0.signedAt'],
+    [[{ ...contract, expiresAt: '2025-11-13' }], 'contracts.0.expiresAt'],
+    [[{ ...contract, contractType: 'unknown-new-type' }], 'contracts.0.contractType'],
+    [[contract, { ...contract, sequence: 1 }], 'contracts.1.name'],
+    [[[]], 'contracts.0'], [[null], 'contracts.0'], [['invalid-row'], 'contracts.0'],
+  ] as Array<[unknown[], string]>)('retains the business error path after DTO conversion: %j', async (contracts, field) => {
+    const response = await submit(contracts).expect(400);
+    expect(response.body).toMatchObject({ code: 4001, data: { fieldErrors: { [field]: expect.any(String) } } });
+    expect(f.user.employeeContracts).toEqual([]);
+    expect(f.requests).toEqual([]);
+    expect(f.audits).toEqual([]);
+  });
+
+  it('retains legacy duplicate IDs and missing dates during an unrelated HTTP submission', async () => {
+    f.user.employeeContracts = ['legacy-a', 'legacy-b'].map((id, sequence) => ({ id, sequence, contractType: 'legacy-custom',
+      name: 'Same legacy content', signedAt: null, effectiveFrom: null, expiresAt: null, isActive: true, images: [], attachments: [] }));
+    const before = structuredClone(f.user.employeeContracts);
+    await request(app.getHttpServer()).patch(`/employee-archives/${employeeId}/draft`)
+      .send(f.input({ name: 'Updated unrelated name' }, {}, undefined, before)).expect(200);
+    expect(f.user.name).toBe('Updated unrelated name');
+    expect(f.user.employeeContracts).toEqual(before);
+    expect(f.tx.employeeContract.update).not.toHaveBeenCalled();
+    expect(f.tx.employeeContract.create).not.toHaveBeenCalled();
+  });
+
+  it('still denies contract submission without archive editing capability', async () => {
+    actor.hrCapabilities = [];
+    await submit([contract]).expect(403);
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+});
+
 describe('manual archive changes apply at submission', () => {
+  it.each([
+    ['signedAt', '2026-02-31'], ['effectiveFrom', 'not-a-date'], ['expiresAt', '2025-02-29'],
+    ['contractType', 'unknown-new-type'], ['signedAt', 123],
+  ])('rejects invalid contract %s=%s with field errors and no applied changes', async (field, value) => {
+    const f = setup();
+    await expect(f.service.submitDraft('employee', f.input({ name: 'Do not apply' }, {}, undefined,
+      [{ contractType: 'contract', [field]: value }]), editor)).rejects.toMatchObject({
+      response: { code: 4001, data: { fieldErrors: { [`contracts.0.${field}`]: expect.any(String) } } },
+    });
+    expect(f.user.name).toBe('Synthetic employee');
+    expect(f.user.employeeContracts).toEqual([]);
+    expect(f.requests).toEqual([]);
+    expect(f.audits).toEqual([]);
+  });
+
+  it('saves incomplete contract input as a draft but rejects invalid dates on explicit submission', async () => {
+    const f = setup();
+    const input = f.input({}, {}, undefined, [{ contractType: 'contract', signedAt: '2026-02-31' }]);
+    const draft: any = await f.service.saveArchiveDraft('employee', input, editor);
+    expect(draft.proposedValue.contracts[0].signedAt).toBe('2026-02-31');
+    expect(f.user.employeeContracts).toEqual([]);
+    await expect(f.service.submitDraft('employee', { ...input, draftId: draft.id, expectedVersion: draft.requestVersion }, editor))
+      .rejects.toMatchObject({ response: { data: { fieldErrors: { 'contracts.0.signedAt': expect.any(String) } } } });
+  });
+
+  it('does not block unrelated changes on unchanged legacy types, missing dates or reversed historical ranges', async () => {
+    const f = setup();
+    f.user.employeeContracts = [
+      { id: 'legacy', contractType: 'legacy-custom', sequence: 0, name: 'Legacy', signedAt: null,
+        effectiveFrom: null, expiresAt: null, isActive: true, images: [], attachments: [] },
+      { id: 'reversed', contractType: 'contract', sequence: 1, name: 'Historical range', signedAt: null,
+        effectiveFrom: new Date('2024-03-01'), expiresAt: new Date('2024-02-01'), isActive: true, images: [], attachments: [] },
+    ];
+    const before = structuredClone(f.user.employeeContracts);
+    await f.service.submitDraft('employee', f.input({ name: 'Updated unrelated field' }, {}, undefined,
+      JSON.parse(JSON.stringify(before))), editor);
+    expect(f.user.name).toBe('Updated unrelated field');
+    expect(f.user.employeeContracts).toEqual(before);
+    expect(f.tx.employeeContract.update).not.toHaveBeenCalled();
+  });
+
+  it('checks reversed historical dates when the contract itself is materially edited', async () => {
+    const f = setup();
+    const old = { id: 'legacy', contractType: 'contract', sequence: 0, name: 'Legacy', signedAt: null,
+      effectiveFrom: new Date('2024-03-01'), expiresAt: new Date('2024-02-01'), isActive: true };
+    f.user.employeeContracts = [old];
+    await expect(f.service.submitDraft('employee', f.input({}, {}, undefined, [{ ...old, name: 'Changed' }]), editor))
+      .rejects.toMatchObject({ response: { data: { fieldErrors: { 'contracts.0.expiresAt': expect.any(String) } } } });
+    expect(f.user.employeeContracts[0].name).toBe('Legacy');
+  });
+
+  it('preserves unchanged duplicate legacy contracts during an unrelated formal submission', async () => {
+    const f = setup();
+    f.user.employeeContracts = ['legacy-a', 'legacy-b'].map((id, sequence) => ({ id, sequence,
+      contractType: 'legacy-custom', name: 'Same legacy content', signedAt: null, effectiveFrom: null,
+      expiresAt: null, isActive: true, images: [], attachments: [] }));
+    const before = structuredClone(f.user.employeeContracts);
+    const result = await f.service.submitDraft('employee', f.input({ name: 'Unrelated update' }, {}, undefined,
+      JSON.parse(JSON.stringify(before))), editor);
+    expect(result.reviewOutcome).toBe('not_required');
+    expect(f.user.name).toBe('Unrelated update');
+    expect(f.user.employeeContracts).toEqual(before);
+    expect(f.tx.employeeContract.update).not.toHaveBeenCalled();
+    expect(f.tx.employeeContract.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects non-object contract entries using the row field path', async () => {
+    const f = setup();
+    await expect(f.service.submitDraft('employee', f.input({}, {}, undefined, [null]), editor))
+      .rejects.toMatchObject({ response: { code: 4001, data: { fieldErrors: { 'contracts.0': expect.any(String) } } } });
+  });
+
   it.each([null, '', 'invalid-code', 123, false])('rejects explicit invalid company %s before applying an archive edit', async company => {
     const f = setup();
     Object.assign(f.user.employmentHistory[0], { company: 'fansibao', contractSubjectId: '11111111-1111-4111-8111-111111111111', companyText: 'Reviewed subject' });
