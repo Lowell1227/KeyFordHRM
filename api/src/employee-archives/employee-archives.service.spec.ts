@@ -87,124 +87,26 @@ describe('EmployeeArchivesService', () => {
     }));
   });
 
-  it('档案字段修改只生成待审核版本，正式档案在审核前保持不变', async () => {
-    const user = {
-      id: '10000000-0000-4000-8000-000000000001',
-      employeeNo: '001',
-      name: '员工甲',
-      phone: '13800000000',
-      deptId: 'dept-1',
-      position: '专员',
-      entryDate: new Date('2024-01-01T00:00:00.000Z'),
-      plannedRegularDate: null,
-      actualRegularDate: null,
-      leaveDate: null,
-      employmentType: 'full_time',
-      status: 'active',
-      directManagerId: 'performance-manager-1',
-      deletedAt: null,
-      employeeProfile: { gender: '女', phone: '13800000000' },
-      employmentHistory: [{
-        company: 'fuede', deptId: 'dept-1', position: '专员', jobGrade: 'P3', jobFamily: '职能',
-        directManagerId: 'roster-manager-1', workLocation: '杭州', probationMonths: null,
-      }],
-    };
-    const reviewCreate = jest.fn().mockResolvedValue({ id: 'profile-review', profileReviewStatus: 'pending' });
-    const profileUpsert = jest.fn();
-    const userUpdate = jest.fn();
-    const prisma = {
-      user: { findUnique: jest.fn().mockResolvedValue(user) },
-      employeeDataChangeRequest: {
-        findFirst: jest.fn().mockResolvedValue(null),
-        create: reviewCreate,
-      },
-      employeeProfile: { upsert: profileUpsert },
-      $transaction: jest.fn(),
-    };
-    const service = new EmployeeArchivesService(prisma as any);
-    const operator = {
-      id: '20000000-0000-4000-8000-000000000001', name: 'HR', sysRole: SysRole.hr,
-      deptId: null, isAssessorOnly: false, canViewAll: true,
-    };
-
-    const result = await service.upsertProfile(user.id, { phone: '13900000000', gender: '女' }, operator);
-
-    expect(result).toEqual(expect.objectContaining({ id: 'profile-review', profileReviewStatus: 'pending' }));
-    expect(reviewCreate).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        userId: user.id,
-        sourceType: 'manual_profile_change',
-        profileReviewStatus: 'pending',
-        performanceReviewStatus: 'not_required',
-        proposedValue: expect.objectContaining({
-          profile: expect.objectContaining({ phone: '13900000000', gender: '女' }),
-        }),
-      }),
+  it('旧版档案入口复用直接提交规则且只转交明确提供的字段', async () => {
+    const service = new EmployeeArchivesService({} as any);
+    const submit = jest.spyOn(service as any, 'submitArchiveChange').mockResolvedValue({
+      request: null, directApplied: ['手机号'], reviewOutcome: 'not_required',
     });
-    expect(profileUpsert).not.toHaveBeenCalled();
-    expect(userUpdate).not.toHaveBeenCalled();
+    const result = await service.upsertProfile('employee', { phone: '13900000000' }, hrOperator);
+    expect(result).toMatchObject({ reviewOutcome: 'not_required' });
+    expect(submit).toHaveBeenCalledWith('employee', {
+      employee: { phone: '13900000000' }, profile: { phone: '13900000000' },
+    }, hrOperator, false);
   });
 
-  it('同一员工连续修改档案时合并到同一条待审核记录', async () => {
-    const user = {
-      id: '10000000-0000-4000-8000-000000000001', employeeNo: '001', name: '李宏',
-      phone: '18600000000', deptId: 'dept-1', position: '董事长',
-      entryDate: new Date('2001-01-01T00:00:00.000Z'), plannedRegularDate: null,
-      actualRegularDate: null, leaveDate: null, employmentType: 'full_time', status: 'active',
-      directManagerId: null, deletedAt: null, employeeProfile: { phone: '18600000000', gender: '男' },
-      employmentHistory: [{ company: 'fuede', deptId: 'dept-1', position: '董事长', directManagerId: null }],
-    };
-    const pending = { id: 'review-profile', userId: user.id, profileReviewStatus: 'pending' };
-    const reviewUpdate = jest.fn().mockResolvedValue({ ...pending, proposedValue: { profile: { phone: '13700000002' } } });
-    const prisma = {
-      user: { findUnique: jest.fn().mockResolvedValue(user) },
-      employeeDataChangeRequest: {
-        findFirst: jest.fn().mockResolvedValue(pending),
-        update: reviewUpdate,
-      },
-    };
-    const service = new EmployeeArchivesService(prisma as any);
-    const operator = {
-      id: '20000000-0000-4000-8000-000000000001', name: 'HR', sysRole: SysRole.hr,
-      deptId: null, isAssessorOnly: false, canViewAll: true,
-    };
-
-    const result = await service.upsertProfile(user.id, { phone: '13700000002', gender: '男' }, operator);
-
-    expect(result).toEqual(expect.objectContaining({ id: 'review-profile' }));
-    expect(reviewUpdate).toHaveBeenCalledWith({
-      where: { id: 'review-profile' },
-      data: expect.objectContaining({
-        proposedValue: expect.objectContaining({
-          profile: expect.objectContaining({ phone: '13700000002', gender: '男' }),
-        }),
-      }),
+  it('旧版档案入口仅传性别时不清空手机号', async () => {
+    const service = new EmployeeArchivesService({} as any);
+    const submit = jest.spyOn(service as any, 'submitArchiveChange').mockResolvedValue({
+      request: null, directApplied: ['性别'], reviewOutcome: 'not_required',
     });
+    await service.upsertProfile('employee', { gender: '女' }, hrOperator);
+    expect(submit).toHaveBeenCalledWith('employee', { employee: {}, profile: { gender: '女' } }, hrOperator, false);
   });
-
-  it('旧版档案入口提交相同手机号和性别时不生成审核', async () => {
-    const user = {
-      ...archiveEditorUser(),
-      employeeProfile: { phone: '13800000000', gender: '女' },
-    };
-    const create = jest.fn();
-    const update = jest.fn();
-    const prisma = {
-      user: { findUnique: jest.fn().mockResolvedValue(user) },
-      employeeDataChangeRequest: { findFirst: jest.fn(), create, update },
-    };
-    const service = new EmployeeArchivesService(prisma as any);
-
-    await expect(service.upsertProfile(user.id, {
-      phone: '13800000000',
-      gender: '女',
-    }, hrOperator)).rejects.toMatchObject({
-      response: expect.objectContaining({ message: '未检测到实际变更，无需提交审核' }),
-    });
-    expect(create).not.toHaveBeenCalled();
-    expect(update).not.toHaveBeenCalled();
-  });
-
   it('新增任职记录只生成基础档案待审核版本', async () => {
     const user = {
       id: '10000000-0000-4000-8000-000000000001', employeeNo: '001', name: '李宏',
@@ -577,15 +479,16 @@ describe('EmployeeArchivesService', () => {
       }],
       performance: { managerId: null },
     }, hrOperator)).rejects.toMatchObject({
-      response: expect.objectContaining({ message: '未检测到实际变更，无需提交审核' }),
+      response: expect.objectContaining({ message: '未检测到实际变更，无需提交' }),
     });
     expect(create).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
   });
 
-  it('只修改绩效直属上级时不要求重复审核基础档案', async () => {
+  it('绩效关系草稿不标记基础档案变更', async () => {
     const create = jest.fn().mockResolvedValue({ id: 'performance-only-review' });
     const prisma = {
+      auditLog: { create: jest.fn() },
       $transaction: jest.fn(async callback => callback(prisma)),
       user: { findUnique: jest.fn().mockResolvedValue(archiveEditorUser()) },
       employeeDataChangeRequest: {
@@ -595,7 +498,7 @@ describe('EmployeeArchivesService', () => {
     };
     const service = new EmployeeArchivesService(prisma as any);
 
-    await service.submitDraft(archiveEditorUser().id, {
+    await service.saveArchiveDraft(archiveEditorUser().id, {
       baseVersion: (service as any).archiveVersion(archiveEditorUser()),
       employee: {},
       profile: {},
@@ -610,10 +513,11 @@ describe('EmployeeArchivesService', () => {
     });
   });
 
-  it('合法合同材料进入待审核版本且不提前修改正式合同', async () => {
+  it('合法合同材料保存在草稿且不提前修改正式合同', async () => {
     const reviewCreate = jest.fn().mockResolvedValue({ id: 'archive-review', profileReviewStatus: 'pending' });
     const contractUpdate = jest.fn();
     const prisma = {
+      auditLog: { create: jest.fn() },
       $transaction: jest.fn(async callback => callback(prisma)),
       user: { findUnique: jest.fn().mockResolvedValue(archiveEditorUser()) },
       employeeDataChangeRequest: {
@@ -636,7 +540,7 @@ describe('EmployeeArchivesService', () => {
       mimeType: 'application/pdf',
     }];
 
-    await service.submitDraft(archiveEditorUser().id, {
+    await service.saveArchiveDraft(archiveEditorUser().id, {
       baseVersion: (service as any).archiveVersion(archiveEditorUser()),
       employee: {},
       profile: {},
@@ -682,7 +586,7 @@ describe('EmployeeArchivesService', () => {
     expect(reviewCreate).not.toHaveBeenCalled();
   });
 
-  it('批量归属部门为每名员工生成待审核版本且不直接改正式部门', async () => {
+  it('批量归属部门为每名员工创建变更并委托同事务生效', async () => {
     const users = [archiveEditorUser(), {
       ...archiveEditorUser(),
       id: '10000000-0000-4000-8000-000000000002',
@@ -719,7 +623,8 @@ describe('EmployeeArchivesService', () => {
       ...tx,
       $transaction: jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx)),
     };
-    const service = new EmployeeArchivesService(prisma as any);
+    const reviews = { applyArchiveChange: jest.fn(async () => ({})) };
+    const service = new EmployeeArchivesService(prisma as any, undefined, undefined, undefined, undefined, reviews as any);
 
     const result = await service.submitDepartmentAssignments(
       users.map((user) => user.id),
@@ -727,7 +632,7 @@ describe('EmployeeArchivesService', () => {
       hrOperator,
     );
 
-    expect(result).toEqual({ submitted: 2, reviewOutcome: 'pending' });
+    expect(result).toEqual({ submitted: 2, reviewOutcome: 'not_required' });
     expect(reviewCreate).toHaveBeenCalledTimes(2);
     expect(reviewCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -737,7 +642,7 @@ describe('EmployeeArchivesService', () => {
         }),
       }),
     });
-    expect(userUpdate).not.toHaveBeenCalled();
+    expect(reviews.applyArchiveChange).toHaveBeenCalledTimes(2);
     expect(prisma.$transaction).toHaveBeenCalledTimes(1);
   });
 
@@ -822,7 +727,15 @@ describe('EmployeeArchivesService', () => {
       },
     };
     const transaction = jest.fn(async (callback: (client: typeof tx) => unknown) => callback(tx));
-    const service = new EmployeeArchivesService({ ...tx, $transaction: transaction } as any);
+    const applyArchiveChange = jest.fn().mockResolvedValue({ id: 'review-1', appliedAt: new Date() });
+    const service = new EmployeeArchivesService(
+      { ...tx, $transaction: transaction } as any,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      { applyArchiveChange } as any,
+    );
 
     await expect(service.submitDepartmentAssignments(
       users.map((user) => user.id),
@@ -831,6 +744,7 @@ describe('EmployeeArchivesService', () => {
     )).rejects.toThrow('第二张审核单创建失败');
     expect(transaction).toHaveBeenCalledTimes(1);
     expect(reviewCreate).toHaveBeenCalledTimes(2);
+    expect(applyArchiveChange).toHaveBeenCalledWith(tx, 'review-1', hrOperator);
   });
 
   it('手工新增员工只创建待审核申请，审核前不创建正式账号', async () => {

@@ -398,7 +398,7 @@ describe('EmployeeDataReviewsService', () => {
       },
       employeeDataChangeRequest: { findFirst: jest.fn(), create: jest.fn() },
     };
-    const service = new EmployeeDataReviewsService(prisma as any);
+    const service = new EmployeeDataReviewsService({ ...prisma, $transaction: jest.fn(async run => run(prisma)) } as any);
 
     await expect(service.proposePerformanceManager(
       'employee-1',
@@ -419,14 +419,14 @@ describe('EmployeeDataReviewsService', () => {
       },
       employeeDataChangeRequest: { findFirst: jest.fn(), create, update },
     };
-    const service = new EmployeeDataReviewsService(prisma as any);
+    const service = new EmployeeDataReviewsService({ ...prisma, $transaction: jest.fn(async run => run(prisma)) } as any);
 
     await expect(service.proposePerformanceManager(
       'employee-1',
       { managerId: 'manager-1' },
       operator,
     )).rejects.toMatchObject({
-      response: expect.objectContaining({ message: '未检测到实际变更，无需提交审核' }),
+      response: expect.objectContaining({ message: '未检测到实际变更，无需提交' }),
     });
     expect(create).not.toHaveBeenCalled();
     expect(update).not.toHaveBeenCalled();
@@ -580,13 +580,9 @@ describe('EmployeeDataReviewsService', () => {
     });
   });
 
-  it('修改绩效直属上级只生成待审核版本，审核前继续使用原关系', async () => {
-    const requestCreate = jest.fn().mockResolvedValue({
-      id: 'review-manager-change',
-      userId: 'employee-1',
-      profileReviewStatus: 'not_required',
-      performanceReviewStatus: 'pending',
-    });
+  it('修改绩效直属上级在事务内应用关系并记录生效，不伪造人工审核', async () => {
+    const requestCreate = jest.fn(async ({ data }) => ({ id: 'review-manager-change', ...data }));
+    const requestUpdate = jest.fn(async ({ data }) => ({ id: 'review-manager-change', ...data }));
     const userUpdate = jest.fn();
     const prisma = {
       user: {
@@ -602,9 +598,15 @@ describe('EmployeeDataReviewsService', () => {
       employeeDataChangeRequest: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: requestCreate,
+        update: requestUpdate,
       },
+      auditLog: { create: jest.fn() },
+      $transaction: jest.fn(),
     };
+    prisma.$transaction.mockImplementation(async callback => callback(prisma));
     const service = new EmployeeDataReviewsService(prisma as any);
+    // Keep this proposal unit isolated; dedicated application tests cover the real relationship write.
+    const applyRelation = jest.spyOn(service as any, 'applyPerformanceRelation').mockResolvedValue(undefined);
 
     const result = await service.proposePerformanceManager(
       'employee-1',
@@ -614,7 +616,8 @@ describe('EmployeeDataReviewsService', () => {
 
     expect(result).toEqual(expect.objectContaining({
       id: 'review-manager-change',
-      performanceReviewStatus: 'pending',
+      performanceReviewStatus: 'approved',
+      appliedAt: expect.any(Date),
     }));
     expect(requestCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
@@ -625,24 +628,35 @@ describe('EmployeeDataReviewsService', () => {
         baseValue: { performance: { managerId: 'manager-old' } },
         proposedValue: { performance: { managerId: 'manager-new' } },
         profileReviewStatus: 'not_required',
-        performanceReviewStatus: 'pending',
+        performanceReviewStatus: 'applying',
       }),
     });
+    expect(applyRelation).toHaveBeenCalledWith(prisma, expect.objectContaining({
+      id: 'review-manager-change',
+      baseValue: { performance: { managerId: 'manager-old' } },
+      proposedValue: { performance: { managerId: 'manager-new' } },
+    }));
+    expect(requestUpdate).toHaveBeenCalledWith({
+      where: { id: 'review-manager-change' },
+      data: expect.objectContaining({ performanceReviewStatus: 'approved', performanceReviewedAt: null,
+        performanceReviewedById: null, appliedAt: expect.any(Date) }),
+    });
+    expect(prisma.auditLog.create).toHaveBeenCalledWith({ data: expect.objectContaining({
+      action: 'apply_employee_archive_change', entityId: 'review-manager-change',
+    }) });
     expect(userUpdate).not.toHaveBeenCalled();
   });
 
-  it('已有花名册绩效关系待审核时复用原记录而不生成第二条', async () => {
+  it('仅续写人工绩效关系待处理记录，保留旧版本而不生成第二条', async () => {
     const pending = {
-      id: 'review-roster-pending', userId: 'employee-1', sourceType: 'employee_roster_import',
-      baseValue: { employee: { name: '员工一' }, performance: { managerId: null } },
-      proposedValue: {
-        employee: { name: '员工一', deptId: 'dept-1' },
-        profile: { gender: '女' },
-        performance: { managerName: '花名册主管' },
-      },
+      id: 'review-manager-pending', userId: 'employee-1', sourceType: 'manual_performance_relation',
+      requestVersion: 3, updatedAt: new Date('2026-09-01T00:00:00.000Z'),
+      baseValue: { performance: { managerId: null } },
+      proposedValue: { performance: { managerId: 'manager-previous-proposal' } },
+      performanceReviewStatus: 'pending', performanceReviewedById: null, performanceReviewedAt: null,
       validationErrors: ['绩效直属上级待设置'],
     };
-    const update = jest.fn().mockResolvedValue({ ...pending, performanceReviewStatus: 'pending' });
+    const update = jest.fn(async ({ data }) => ({ ...pending, ...data }));
     const create = jest.fn();
     const prisma = {
       user: {
@@ -658,27 +672,38 @@ describe('EmployeeDataReviewsService', () => {
         update,
         create,
       },
+      auditLog: { create: jest.fn() },
+      $transaction: jest.fn(),
     };
+    prisma.$transaction.mockImplementation(async callback => callback(prisma));
     const service = new EmployeeDataReviewsService(prisma as any);
+    const applyRelation = jest.spyOn(service as any, 'applyPerformanceRelation').mockResolvedValue(undefined);
 
-    await service.proposePerformanceManager('employee-1', { managerId: 'manager-new' }, operator);
+    const result = await service.proposePerformanceManager('employee-1', { managerId: 'manager-new' }, operator);
 
     expect(create).not.toHaveBeenCalled();
-    expect(update).toHaveBeenCalledWith({
-      where: { id: pending.id },
+    expect(prisma.employeeDataChangeRequest.findFirst).toHaveBeenCalledWith(expect.objectContaining({
+      where: expect.objectContaining({ sourceType: 'manual_performance_relation' }),
+    }));
+    expect(update).toHaveBeenNthCalledWith(1, {
+      where: { id: pending.id, requestVersion: pending.requestVersion, updatedAt: pending.updatedAt },
       data: expect.objectContaining({
-        proposedValue: {
-          employee: { name: '员工一', deptId: 'dept-1' },
-          profile: { gender: '女' },
-          performance: { managerId: 'manager-new' },
-        },
+        proposedValue: { performance: { managerId: 'manager-new' } },
+        performanceReviewStatus: 'applying',
+        requestVersion: { increment: 1 },
+        revisionHistory: [expect.objectContaining({ version: 3, proposedValue: pending.proposedValue,
+          performanceReviewStatus: 'pending', performanceReviewedById: null, performanceReviewedAt: null })],
         validationErrors: [],
       }),
     });
+    expect(applyRelation).toHaveBeenCalledWith(prisma, expect.objectContaining({
+      id: pending.id, proposedValue: { performance: { managerId: 'manager-new' } },
+    }));
+    expect(result).toEqual(expect.objectContaining({ performanceReviewStatus: 'approved', appliedAt: expect.any(Date) }));
   });
 
-  it('组织最高负责人可以提交清空绩效直属上级的审核', async () => {
-    const requestCreate = jest.fn().mockResolvedValue({ id: 'review-top-leader' });
+  it('组织最高负责人可以清空绩效直属上级并立即生效', async () => {
+    const requestCreate = jest.fn(async ({ data }) => ({ id: 'review-top-leader', ...data }));
     const prisma = {
       user: {
         findUnique: jest.fn().mockResolvedValue({
@@ -689,20 +714,29 @@ describe('EmployeeDataReviewsService', () => {
       employeeDataChangeRequest: {
         findFirst: jest.fn().mockResolvedValue(null),
         create: requestCreate,
+        update: jest.fn(async ({ data }) => ({ id: 'review-top-leader', ...data })),
       },
+      auditLog: { create: jest.fn() },
+      $transaction: jest.fn(),
     };
+    prisma.$transaction.mockImplementation(async callback => callback(prisma));
     const service = new EmployeeDataReviewsService(prisma as any);
+    const applyRelation = jest.spyOn(service as any, 'applyPerformanceRelation').mockResolvedValue(undefined);
 
-    await service.proposePerformanceManager('top-leader', { managerId: null }, operator);
+    const result = await service.proposePerformanceManager('top-leader', { managerId: null }, operator);
 
     expect(requestCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
         userId: 'top-leader',
         baseValue: { performance: { managerId: 'manager-old' } },
         proposedValue: { performance: { managerId: null } },
-        performanceReviewStatus: 'pending',
+        performanceReviewStatus: 'applying',
       }),
     });
+    expect(applyRelation).toHaveBeenCalledWith(prisma, expect.objectContaining({
+      userId: 'top-leader', proposedValue: { performance: { managerId: null } },
+    }));
+    expect(result).toEqual(expect.objectContaining({ performanceReviewStatus: 'approved', appliedAt: expect.any(Date) }));
   });
 
   it('审核通过后允许组织最高负责人的绩效直属上级保持为空', async () => {

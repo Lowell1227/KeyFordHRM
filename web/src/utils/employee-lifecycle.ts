@@ -55,9 +55,18 @@ export function archiveSubmissionMessage(result: { directApplied?: string[]; req
   const applied = result.directApplied ?? [];
   const pending = result.request && [result.request.profileReviewStatus, result.request.performanceReviewStatus]
     .some(status => status === 'pending' || status === 'applying' || status === 'rejected');
+  if (result.request?.sourceType === 'manual_archive_change' && result.request.appliedAt && !pending) return '档案已更新';
+  if (!result.request && applied.length) return '档案已更新';
   if (applied.length) return `${applied.join('、')}已生效${pending ? '；其余变更已提交审核，审核通过后生效' : ''}`;
   if (pending) return '档案变更已提交审核，审核通过后生效';
   return result.request?.appliedAt ? '档案变更已生效' : result.request ? '申请已提交，请查看办理进度' : '未检测到需提交的变更';
+}
+
+export function isDirectArchiveApplication(request: EmployeeDataReview): boolean {
+  return ['manual_archive_change', 'manual_performance_relation'].includes(request.sourceType) && Boolean(request.appliedAt)
+    && [request.profileReviewStatus, request.performanceReviewStatus].every(status => ['approved', 'not_required'].includes(status))
+    && (Boolean(request.events?.some(event => event.action === 'apply_employee_archive_change'))
+      || (!request.profileReviewedAt && !request.performanceReviewedAt && !request.profileReviewedBy && !request.performanceReviewedBy));
 }
 
 export function applicationType(request: EmployeeDataReview): string {

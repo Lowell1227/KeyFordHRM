@@ -167,7 +167,7 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
         <div class="employment-field">
           <el-input :model-value="archive?.dept?.fullPath || archive?.dept?.name || '未设置'" disabled />
           <template v-if="!form.deptId && !resignationReviewLocked">
-            <span class="employment-field__warning">当前档案未设置部门，请先补充并审核生效后再提交离职。</span>
+            <span class="employment-field__warning">当前档案未设置部门，请先在员工档案中补充并提交，再办理离职。</span>
             <el-button v-if="canEditArchive && !archive?.archivedAt" link type="primary" :disabled="refreshingDepartment" @click="emit('complete-department', { leaveDate: form.leaveDate, reason: form.reason })">补充部门</el-button>
             <span v-else class="employment-help">请联系有档案编辑权限的 HR 补充部门。</span>
             <el-button link type="primary" :loading="refreshingDepartment" @click="emit('refresh-department')">刷新部门</el-button>

@@ -22,7 +22,7 @@ import { RESIGNATION_BINDING_DISABLED_REASON } from './employee-effective-date.s
 import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
 import { lockTalentSource } from './employee-talent-source';
 import { employeeDataChangeView } from './employee-data-change-view';
-import { nextBusinessDate, shanghaiBusinessDate } from './employment-timeline';
+import { approvedEmploymentSourceWhere, nextBusinessDate, shanghaiBusinessDate } from './employment-timeline';
 
 export type EmployeeReviewScope = 'profile' | 'performance';
 
@@ -117,10 +117,13 @@ export class EmployeeDataReviewsService {
     input: ProposePerformanceManagerInput,
     operator: AuthUser,
   ) {
-    const user = await this.prisma.user.findUnique({
+    if (!hasHrCapability(operator, 'employee_archive_edit')) throw new ForbiddenException('无权限编辑员工档案');
+    return this.prisma.$transaction(async tx => {
+    const user = await tx.user.findUnique({
       where: {
         id: userId,
         deletedAt: null,
+        archivedAt: null,
         accountType: AccountType.employee,
         status: { in: CURRENT_WORKER_STATUSES },
       },
@@ -142,11 +145,11 @@ export class EmployeeDataReviewsService {
     if ((input.managerId ?? null) === (user.directManagerId ?? null)) {
       throw new BadRequestException({
         code: ERROR_CODE.PARAM_INVALID,
-        message: '未检测到实际变更，无需提交审核',
+        message: '未检测到实际变更，无需提交',
       });
     }
     if (input.managerId) {
-      const manager = await this.prisma.user.findUnique({
+      const manager = await tx.user.findUnique({
         where: {
           id: input.managerId,
           deletedAt: null,
@@ -165,45 +168,39 @@ export class EmployeeDataReviewsService {
       });
     }
 
-    const pending = await this.prisma.employeeDataChangeRequest.findFirst({
-      where: {
-        userId,
-        recordStatus: 'submitted',
-        archivedAt: null,
-        performanceReviewStatus: 'pending',
-      },
-      orderBy: { createdAt: 'desc' },
-    });
-    const data = {
-      baseValue: { performance: { managerId: user.directManagerId } },
-      proposedValue: { performance: { managerId: input.managerId } },
-      validationErrors: [],
-      createdById: operator.id,
-    };
-    if (pending) {
-      const pendingProposed = this.record(pending.proposedValue);
-      return employeeDataChangeView(await this.updatePendingPerformanceRequest(pending, {
-          proposedValue: {
-            ...pendingProposed,
-            performance: { managerId: input.managerId },
-          },
-          validationErrors: this.stringArray(pending.validationErrors)
-            .filter((error) => !error.includes('绩效直属上级')),
-          createdById: operator.id,
-          rejectedReason: null,
-      }));
-    }
-    return employeeDataChangeView(await this.prisma.employeeDataChangeRequest.create({
-      data: {
-        userId,
-        employeeNo: user.employeeNo,
-        employeeName: user.name,
-        sourceType: 'manual_performance_relation',
-        ...data,
-        profileReviewStatus: 'not_required',
-        performanceReviewStatus: 'pending',
-      },
-    }));
+      const pending = await tx.employeeDataChangeRequest.findFirst({ where: {
+        userId, sourceType: 'manual_performance_relation', recordStatus: 'submitted', archivedAt: null,
+        performanceReviewStatus: { in: ['pending', 'applying', 'rejected'] },
+      }, orderBy: { createdAt: 'desc' } });
+      if (pending?.performanceReviewStatus === 'applying') throw new ConflictException('绩效关系正在处理，请刷新后重试');
+      const data = {
+        baseValue: { performance: { managerId: user.directManagerId } },
+        proposedValue: { performance: { managerId: input.managerId } },
+        validationErrors: [], createdById: operator.id, rejectedReason: null,
+        recordStatus: 'submitted', profileReviewStatus: 'not_required', performanceReviewStatus: 'applying',
+      };
+      const request = pending ? await tx.employeeDataChangeRequest.update({
+        where: { id: pending.id, requestVersion: pending.requestVersion, updatedAt: pending.updatedAt }, data: {
+          ...data, requestVersion: { increment: 1 },
+          revisionHistory: [...(Array.isArray(pending.revisionHistory) ? pending.revisionHistory : []), {
+            version: pending.requestVersion, baseValue: pending.baseValue, proposedValue: pending.proposedValue,
+            performanceReviewStatus: pending.performanceReviewStatus,
+            performanceReviewedById: pending.performanceReviewedById,
+            performanceReviewedAt: pending.performanceReviewedAt?.toISOString() ?? null,
+          }] as Prisma.InputJsonValue,
+        },
+      }) : await tx.employeeDataChangeRequest.create({ data: {
+        userId, employeeNo: user.employeeNo, employeeName: user.name, sourceType: 'manual_performance_relation', ...data,
+      } });
+      await this.applyPerformanceRelation(tx, request);
+      const applied = await tx.employeeDataChangeRequest.update({ where: { id: request.id }, data: {
+        performanceReviewStatus: 'approved', performanceReviewedAt: null, performanceReviewedById: null, appliedAt: new Date(),
+      } });
+      await tx.auditLog.create({ data: { userId: operator.id, action: 'apply_employee_archive_change',
+        entityType: 'employee_data_change_request', entityId: request.id, newValue: { scopes: ['performance'] },
+      } });
+      return employeeDataChangeView(applied);
+    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
   }
 
   async setPendingPerformanceManager(
@@ -478,6 +475,75 @@ export class EmployeeDataReviewsService {
     return result;
   }
 
+  /** Apply a submitted archive edit in its caller's transaction, without granting review authority. */
+  async applyArchiveChange(tx: Prisma.TransactionClient, requestId: string, operator: AuthUser) {
+    if (!hasHrCapability(operator, 'employee_archive_edit')) throw new ForbiddenException('无权限编辑员工档案');
+    const request = await tx.employeeDataChangeRequest.findUnique({ where: { id: requestId } });
+    if (!request || request.sourceType !== 'manual_archive_change' || request.intakeType || !request.userId
+      || request.sourceSystem === 'archive_assistant_pilot' || request.archivedAt || request.cancelledAt
+      || request.recordStatus !== 'submitted' || [request.profileReviewStatus, request.performanceReviewStatus].includes('applying')) {
+      throw new ConflictException('该记录不能作为员工档案修改直接生效');
+    }
+    const profileChanged = request.profileReviewStatus === 'pending';
+    const performanceChanged = request.performanceReviewStatus === 'pending';
+    if (!profileChanged && !performanceChanged) throw new ConflictException('档案变更已处理，请重新加载');
+    const employee = this.record(this.record(request.proposedValue).employee);
+    const current = await tx.user.findUnique({ where: { id: request.userId }, select: { status: true, accountType: true, archivedAt: true, deletedAt: true } });
+    if (!current || current.accountType !== AccountType.employee || current.archivedAt || current.deletedAt) throw new ConflictException('该员工档案不可编辑');
+    if (employee.employeeStatus !== current.status
+      && ([UserStatus.resigned, UserStatus.pending_entry] as UserStatus[]).some(status => status === current.status || status === employee.employeeStatus)) {
+      throw new ConflictException('入职、再入职和离职请通过入离职办理入口处理');
+    }
+    await tx.employeeDataChangeRequest.update({
+      where: { id: requestId, requestVersion: request.requestVersion, updatedAt: request.updatedAt },
+      data: { ...(profileChanged ? { profileReviewStatus: 'applying' } : {}),
+        ...(performanceChanged ? { performanceReviewStatus: 'applying' } : {}) },
+    });
+    if (profileChanged) await this.applyProfile(tx, request, operator, true);
+    if (performanceChanged) await this.applyPerformanceRelation(tx, request);
+    if (current.status === UserStatus.pending_entry) await this.syncPendingArrivalArchive(tx, request, operator, profileChanged, performanceChanged);
+    const applied = await tx.employeeDataChangeRequest.update({ where: { id: requestId }, data: {
+      profileReviewStatus: profileChanged ? 'approved' : 'not_required',
+      performanceReviewStatus: performanceChanged ? 'approved' : 'not_required',
+      profileReviewedAt: null, profileReviewedById: null, performanceReviewedAt: null, performanceReviewedById: null,
+      appliedAt: new Date(),
+    } });
+    await tx.auditLog.create({ data: { userId: operator.id, action: 'apply_employee_archive_change',
+      entityType: 'employee_data_change_request', entityId: requestId,
+      newValue: { scopes: [...(profileChanged ? ['profile'] : []), ...(performanceChanged ? ['performance'] : [])] },
+    } });
+    return employeeDataChangeView(applied);
+  }
+
+  private async syncPendingArrivalArchive(tx: Prisma.TransactionClient, archiveRequest: { id: string; userId: string | null; proposedValue: Prisma.JsonValue }, operator: AuthUser, profileChanged: boolean, performanceChanged: boolean) {
+    const request = await tx.employeeDataChangeRequest.findFirst({ where: {
+      userId: archiveRequest.userId, intakeType: { not: null }, requiresArrivalConfirmation: true,
+      onboardingStatus: OnboardingStatus.pending_entry, profileReviewStatus: 'approved',
+      archivedAt: null, cancelledAt: null, arrivalConfirmedAt: null,
+    } });
+    // Legacy pending-entry archives without a live onboarding carrier may still
+    // correct personal/contract data. Employment changes are guarded separately.
+    if (!request) return;
+    const proposed = this.record(request.proposedValue);
+    const archive = this.record(archiveRequest.proposedValue);
+    const protectedFields = ['employeeNo', 'employeeStatus', 'entryDate', 'effectiveFrom', 'effectiveTo', 'effectiveDate', 'leaveDate', 'changeType'];
+    const employee = { ...this.record(proposed.employee), ...Object.fromEntries(Object.entries(this.record(archive.employee))
+      .filter(([key]) => !protectedFields.includes(key))) };
+    const performance = this.record(archive.performance);
+    await tx.employeeDataChangeRequest.update({ where: { id: request.id, requestVersion: request.requestVersion, updatedAt: request.updatedAt }, data: {
+      proposedValue: { ...proposed, ...(profileChanged ? { employee } : {}), ...(performanceChanged ? { performance } : {}) } as Prisma.InputJsonValue,
+      ...(performanceChanged ? { performanceReviewStatus: 'approved', performanceReviewedAt: null, performanceReviewedById: null } : {}),
+      requestVersion: { increment: 1 },
+      revisionHistory: [...(Array.isArray(request.revisionHistory) ? request.revisionHistory : []), {
+        action: 'apply_employee_archive_change', sourceRequestId: archiveRequest.id, version: request.requestVersion,
+        proposedValue: request.proposedValue, performanceReviewStatus: request.performanceReviewStatus,
+        performanceReviewedById: request.performanceReviewedById, performanceReviewedAt: request.performanceReviewedAt?.toISOString() ?? null,
+        profileReviewedById: request.profileReviewedById, profileReviewedAt: request.profileReviewedAt?.toISOString() ?? null,
+        revisedById: operator.id,
+      }] as Prisma.InputJsonValue,
+    } });
+  }
+
   async rejectBatch(
     requestIds: string[],
     reason: string,
@@ -555,6 +621,7 @@ export class EmployeeDataReviewsService {
       proposedValue: Prisma.JsonValue;
     },
     operator: AuthUser,
+    directArchiveEdit = false,
   ): Promise<string> {
     const proposed = this.record(request.proposedValue);
     const employee = this.record(proposed.employee);
@@ -562,7 +629,8 @@ export class EmployeeDataReviewsService {
     const canKeepHistoricalMissing = Boolean(request.userId)
       && request.sourceType === 'manual_archive_change' && !request.intakeType;
     const name = this.requiredString(employee.name, '姓名不能为空');
-    const employeeNo = this.requiredString(employee.employeeNo, '工号不能为空');
+    const employeeNo = directArchiveEdit && employee.employeeStatus === UserStatus.pending_entry
+      ? this.nullableString(employee.employeeNo) : this.requiredString(employee.employeeNo, '工号不能为空');
     const company = this.enumValue(employee.company, Object.values(CompanyCode), CompanyCode.fuede);
     const organizationPath = this.stringArrayValue(employee.organizationPath);
     const organizationNodes = Array.isArray(employee.organizationNodes)
@@ -644,10 +712,10 @@ export class EmployeeDataReviewsService {
       reopenedNewHire = true;
     }
     if (request.userId && !reopenedNewHire) {
-      await this.assertProfileBaseStillCurrent(tx, request.userId, request.baseValue, request.proposedValue);
+      await this.assertProfileBaseStillCurrent(tx, request.userId, request.baseValue, request.proposedValue, directArchiveEdit);
       if (shouldUpdateUserProjection && employeeStatus !== UserStatus.resigned && request.intakeType !== OnboardingIntakeType.new_hire) {
         const current = await tx.user.findUnique({ where: { id: request.userId }, select: { status: true } });
-        if (current?.status === UserStatus.pending_entry) {
+        if (current?.status === UserStatus.pending_entry && !(directArchiveEdit && employeeStatus === UserStatus.pending_entry)) {
           throw new ConflictException('待到岗员工请先完成人事入职申请，不能通过普通任职变更启用');
         }
         if (current?.status === UserStatus.resigned) {
@@ -727,6 +795,18 @@ export class EmployeeDataReviewsService {
     const shouldWriteEmployment = !request.userId
       || isManualEmployment
       || this.hasEmploymentChange(baseEmployee, employee);
+    const pendingArchiveEdit = directArchiveEdit && employeeStatus === UserStatus.pending_entry;
+    if (pendingArchiveEdit && this.nullableDate(baseEmployee.entryDate)?.getTime() !== entryDate?.getTime()) {
+      throw new ConflictException('待到岗员工的入职日期请在原入职申请中修订');
+    }
+    const pendingEmployment = pendingArchiveEdit && shouldWriteEmployment ? await tx.employmentRecord.findFirst({ where: {
+      userId, sourceRequest: { intakeType: { not: null }, requiresArrivalConfirmation: true,
+        onboardingStatus: OnboardingStatus.pending_entry, profileReviewStatus: 'approved',
+        archivedAt: null, cancelledAt: null, arrivalConfirmedAt: null },
+    }, orderBy: { effectiveFrom: 'desc' } }) : null;
+    if (pendingArchiveEdit && shouldWriteEmployment && !pendingEmployment) {
+      throw new ConflictException('待到岗任职已变化，请重新打开原入职申请核对');
+    }
     await validateContractSubject(tx, employee, baseEmployee);
     const priorCompany = request.userId && shouldWriteEmployment && (employee.companyText === undefined || employee.contractSubjectId === undefined)
       ? await tx.employmentRecord.findFirst({
@@ -753,7 +833,7 @@ export class EmployeeDataReviewsService {
       leaveDate,
       probationMonths: typeof employee.probationMonths === 'number' ? employee.probationMonths : null,
       changeType: request.intakeType === OnboardingIntakeType.new_hire ? 'hire' : request.userId ? 'data_correction' : 'hire',
-      reason: isManualEmployment ? this.nullableString(employee.reason) : '员工档案审核通过',
+      reason: isManualEmployment ? this.nullableString(employee.reason) : directArchiveEdit ? '员工档案提交生效' : '员工档案审核通过',
       sourceType: 'employee_data_review',
       sourceBatchId: request.sourceBatchId,
       sourceRequestId: request.id,
@@ -763,7 +843,7 @@ export class EmployeeDataReviewsService {
     const closesCurrentEmployment = !isManualEmployment
       || (employeeStatus === UserStatus.resigned && changeType === 'resignation');
     const employmentReferenceDate = isManualEmployment ? effectiveFrom : today;
-    const currentEmployment = request.userId && shouldWriteEmployment && closesCurrentEmployment
+    const currentEmployment = request.userId && shouldWriteEmployment && closesCurrentEmployment && !pendingArchiveEdit
       ? await tx.employmentRecord.findFirst({
         where: {
           userId,
@@ -776,6 +856,13 @@ export class EmployeeDataReviewsService {
       })
       : null;
     let updatedSameDayEmployment = false;
+    if (pendingEmployment) {
+      const { employeeStatus: _status, employeeNo: _number, sourceRequestId: _source, sourceType: _type,
+        sourceBatchId: _batch, createdById: _creator, changeType: _change, entryDate: _entry,
+        leaveDate: _leave, reason: _reason, ...correction } = employmentData;
+      await tx.employmentRecord.update({ where: { id: pendingEmployment.id }, data: correction });
+      updatedSameDayEmployment = true;
+    }
     if (currentEmployment?.effectiveFrom.getTime() === effectiveFrom.getTime()) {
       await tx.employmentRecord.update({
         where: { id: currentEmployment.id },
@@ -1111,6 +1198,7 @@ export class EmployeeDataReviewsService {
     userId: string,
     baseValue: Prisma.JsonValue,
     proposedValue: Prisma.JsonValue,
+    directArchiveEdit = false,
   ): Promise<void> {
     const base = this.record(baseValue);
     const baseEmployee = this.record(base.employee);
@@ -1164,6 +1252,9 @@ export class EmployeeDataReviewsService {
           },
         },
         employmentHistory: {
+          ...(directArchiveEdit ? { where: { OR: [approvedEmploymentSourceWhere, { sourceRequest: { intakeType: { not: null },
+            requiresArrivalConfirmation: true, onboardingStatus: OnboardingStatus.pending_entry, profileReviewStatus: 'approved',
+            archivedAt: null, cancelledAt: null, arrivalConfirmedAt: null } }] } } : {}),
           orderBy: { effectiveFrom: 'desc' },
           take: 1,
           include: { directManager: { select: { name: true } } },
@@ -1178,24 +1269,24 @@ export class EmployeeDataReviewsService {
       employeeNo: current.employeeNo,
       name: current.name,
       phone: current.phone,
-      company: employment?.company ?? null,
+      company: employment?.company ?? (directArchiveEdit ? CompanyCode.fuede : null),
       companyText: employment?.companyText ?? null,
       contractSubjectId: employment?.contractSubjectId ?? null,
-      deptId: current.deptId,
+      deptId: directArchiveEdit ? current.deptId ?? employment?.deptId ?? null : current.deptId,
       positionId: current.positionId ?? employment?.positionId ?? null,
-      position: current.position,
+      position: directArchiveEdit ? current.position ?? employment?.position ?? null : current.position,
       jobGrade: employment?.jobGrade ?? null,
       jobFamily: employment?.jobFamily ?? null,
       managerId: employment?.directManagerId ?? null,
       managerName: employment?.directManager?.name ?? null,
       workLocation: employment?.workLocation ?? null,
-      entryDate: current.entryDate,
-      plannedRegularDate: current.plannedRegularDate,
-      actualRegularDate: current.actualRegularDate,
-      leaveDate: current.leaveDate,
+      entryDate: directArchiveEdit ? current.entryDate ?? employment?.entryDate ?? null : current.entryDate,
+      plannedRegularDate: directArchiveEdit ? current.plannedRegularDate ?? employment?.plannedRegularDate ?? null : current.plannedRegularDate,
+      actualRegularDate: directArchiveEdit ? current.actualRegularDate ?? employment?.actualRegularDate ?? null : current.actualRegularDate,
+      leaveDate: directArchiveEdit ? current.leaveDate ?? employment?.leaveDate ?? null : current.leaveDate,
       probationMonths: employment?.probationMonths ?? null,
-      employmentType: current.employmentType,
-      employeeStatus: current.status,
+      employmentType: directArchiveEdit ? current.employmentType ?? employment?.employmentType ?? EmploymentType.full_time : current.employmentType,
+      employeeStatus: directArchiveEdit ? current.status ?? employment?.employeeStatus ?? UserStatus.active : current.status,
     };
     const employeeKeys = Object.keys(baseEmployee)
       .filter((key) => ![

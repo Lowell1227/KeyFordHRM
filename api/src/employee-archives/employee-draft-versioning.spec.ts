@@ -71,7 +71,7 @@ describe('employee draft optimistic concurrency', () => {
     f.tx.employeeDataChangeRequest.findFirst.mockResolvedValue(null);
     Object.assign(f.user, { positionId: 'old-position', position: 'Original position', directManagerId: 'old-manager' });
     f.user.employmentHistory = [{ directManagerId: 'old-roster-manager' }];
-    const { request } = await f.service.submitDraft('employee', {
+    const request = await f.service.saveArchiveDraft('employee', {
       baseVersion: (f.service as any).archiveVersion(f.user),
       employee: { positionId: null, position: 'Original position', managerId: null }, profile: {},
       performance: { managerId: null },
@@ -86,7 +86,7 @@ describe('employee draft optimistic concurrency', () => {
     f.tx.employeeDataChangeRequest.findFirst.mockResolvedValue(null);
     Object.assign(f.user, { positionId: 'old-position', position: 'Original position', directManagerId: 'old-manager' });
     f.user.employmentHistory = [{ directManagerId: 'old-roster-manager' }];
-    const { request } = await f.service.submitDraft('employee', {
+    const request = await f.service.saveArchiveDraft('employee', {
       baseVersion: (f.service as any).archiveVersion(f.user), employee: { name: 'Changed' }, profile: {},
     }, operator);
     expect(request?.proposedValue).toMatchObject({ employee: { positionId: 'old-position', position: 'Original position', managerId: 'old-roster-manager' },
@@ -97,7 +97,7 @@ describe('employee draft optimistic concurrency', () => {
     const f = fixture();
     f.tx.employeeDataChangeRequest.findFirst.mockResolvedValue(null);
     Object.assign(f.user, { positionId: null, position: 'Legacy roster position' });
-    const { request } = await f.service.submitDraft('employee', {
+    const request = await f.service.saveArchiveDraft('employee', {
       baseVersion: (f.service as any).archiveVersion(f.user),
       employee: { name: 'Changed', positionId: null, position: 'Legacy roster position' }, profile: {},
     }, operator);
@@ -131,15 +131,15 @@ describe('employee draft optimistic concurrency', () => {
     return { ...f, input };
   }
 
-  it.each(['profile', 'performance'] as const)('resubmits the returned scope while retaining an already approved %s scope', async approvedScope => {
+  it.each(['profile', 'performance'] as const)('saves a new revision while retaining the original approved %s source', async approvedScope => {
     const f = partialApproval(approvedScope);
     const originalBase = JSON.parse(JSON.stringify(f.draft.baseValue));
     const approvedProposal = JSON.parse(JSON.stringify(f.draft.proposedValue[approvedScope]));
-    const { request: result } = await f.service.submitDraft('employee', f.input, operator);
+    const result = await f.service.saveArchiveDraft('employee', f.input, operator);
     if (!result) throw new Error('expected review request');
-    expect(result!.requestVersion).toBe(4);
-    expect(result.profileReviewStatus).toBe(approvedScope === 'profile' ? 'approved' : 'pending');
-    expect(result.performanceReviewStatus).toBe(approvedScope === 'performance' ? 'approved' : 'pending');
+    expect(result!.requestVersion).toBe(1);
+    expect(result.profileReviewStatus).toBe(approvedScope === 'profile' ? 'not_required' : 'pending');
+    expect(result.performanceReviewStatus).toBe(approvedScope === 'performance' ? 'not_required' : 'pending');
     expect(f.draft.baseValue).toEqual(originalBase);
     expect(f.draft.proposedValue[approvedScope]).toEqual(approvedProposal);
     expect(result.proposedValue).toMatchObject({ employee: f.input.employee, performance: f.input.performance });
@@ -153,9 +153,9 @@ describe('employee draft optimistic concurrency', () => {
     f.user.employeeContracts = [{ ...approvedContract, id: 'official-contract', name: null, signingCompany: null,
       signedAt: new Date('2026-01-01'), effectiveFrom: new Date('2026-01-01') }];
     f.input.contracts = [approvedContract];
-    const { request: result } = await f.service.submitDraft('employee', f.input, operator);
+    const result = await f.service.saveArchiveDraft('employee', f.input, operator);
     if (!result) throw new Error('expected review request');
-    expect(result.profileReviewStatus).toBe('approved');
+    expect(result.profileReviewStatus).toBe('not_required');
     expect(result.performanceReviewStatus).toBe('pending');
     expect(f.draft.proposedValue.contracts).toEqual([approvedContract]);
     expect(f.draft.baseValue.contracts).toEqual([]);
@@ -174,7 +174,7 @@ describe('employee draft optimistic concurrency', () => {
     f.user.employmentHistory = [employment];
     f.draft.proposedValue.employee = { ...raw };
     f.input.employee = { ...raw };
-    const { request: result } = await f.service.submitDraft('employee', f.input, operator);
+    const result = await f.service.saveArchiveDraft('employee', f.input, operator);
     if (!result) throw new Error('expected review request');
     expect(result.performanceReviewStatus).toBe('pending');
     expect(f.draft.proposedValue.employee).toEqual(raw);
@@ -191,10 +191,10 @@ describe('employee draft optimistic concurrency', () => {
     f.draft.proposedValue.employee = employee;
     f.input.employee = employee;
 
-    const { request: result } = await f.service.submitDraft('employee', f.input, operator);
+    const result = await f.service.saveArchiveDraft('employee', f.input, operator);
     if (!result) throw new Error('expected review request');
 
-    expect(result.profileReviewStatus).toBe('approved');
+    expect(result.profileReviewStatus).toBe('not_required');
     expect(result.performanceReviewStatus).toBe('pending');
     expect(f.draft.proposedValue.employee).toEqual(employee);
   });
@@ -212,7 +212,7 @@ describe('employee draft optimistic concurrency', () => {
       await expect(f.service.submitDraft('employee', f.input, operator)).rejects.toBeInstanceOf(ConflictException);
       expect(f.tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
     } else {
-      expect((await f.service.submitDraft('employee', f.input, operator)).request?.performanceReviewStatus).toBe('pending');
+      expect((await f.service.saveArchiveDraft('employee', f.input, operator))?.performanceReviewStatus).toBe('pending');
       expect(f.draft.proposedValue.employee).toEqual(employee);
     }
   });
@@ -228,7 +228,7 @@ describe('employee draft optimistic concurrency', () => {
     f.input.employee = { ...approvedEmployee };
     Object.assign(f.user, { name: 'Approved name', position: 'Directory position' });
     f.tx.position = { findUnique: jest.fn(async () => ({ id: 'position-1', name: 'Directory position', jobFamily: 'New directory family' })) };
-    const { request: result } = await f.service.submitDraft('employee', f.input, operator);
+    const result = await f.service.saveArchiveDraft('employee', f.input, operator);
     if (!result) throw new Error('expected review request');
     expect(result.performanceReviewStatus).toBe('pending');
     expect(f.draft.proposedValue.employee).toEqual(approvedEmployee);
@@ -239,7 +239,7 @@ describe('employee draft optimistic concurrency', () => {
     f.draft.proposedValue.profile = { school: null };
     f.input.profile = { school: null };
     f.user.employeeProfile = { school: null };
-    expect((await f.service.submitDraft('employee', f.input, operator)).request?.performanceReviewStatus).toBe('pending');
+    expect((await f.service.saveArchiveDraft('employee', f.input, operator))?.performanceReviewStatus).toBe('pending');
     expect(f.draft.baseValue.profileExists).toBe(false);
   });
 
@@ -257,7 +257,7 @@ describe('employee draft optimistic concurrency', () => {
     f.draft.proposedValue.contracts = contracts;
     f.input.employee = employee;
     f.input.contracts = contracts;
-    expect((await f.service.submitDraft('employee', f.input, operator)).request?.performanceReviewStatus).toBe('pending');
+    expect((await f.service.saveArchiveDraft('employee', f.input, operator))?.performanceReviewStatus).toBe('pending');
     expect(f.draft.proposedValue.employee).toEqual(employee);
     expect(f.draft.proposedValue.contracts).toEqual(contracts);
   });
@@ -269,7 +269,7 @@ describe('employee draft optimistic concurrency', () => {
     f.user.employeeProfile = { school: changed ? 'College' : ' College ', birthDate: null };
     // Concurrent formal edits take precedence; otherwise invalid dates fail before any write.
     await expect(f.service.submitDraft('employee', f.input, operator)).rejects.toBeInstanceOf(changed ? ConflictException : BadRequestException);
-    expect(f.tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
+    expect(f.draft.requestVersion).toBe(3);
     expect(f.tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
   });
 
@@ -285,18 +285,23 @@ describe('employee draft optimistic concurrency', () => {
       f.draft.proposedValue.performance = { managerId: null, managerName: ' Manager ' };
       f.input.performance = { ...f.draft.proposedValue.performance };
     }
-    const { request: result } = await f.service.submitDraft('employee', f.input, operator);
+    const result = await f.service.saveArchiveDraft('employee', f.input, operator);
     if (!result) throw new Error('expected review request');
-    expect(result!.requestVersion).toBe(4);
+    expect(result!.requestVersion).toBe(1);
     expect(f.draft.proposedValue[approvedScope]).toMatchObject(approvedScope === 'profile' ? {} : { managerId: null, managerName: ' Manager ' });
   });
 
-  it.each(['profile', 'performance'] as const)('rejects an attempt to rewrite an already approved %s scope', async approvedScope => {
+  it.each(['profile', 'performance'] as const)('saves corrections to an approved %s scope in a new revision only', async approvedScope => {
     const f = partialApproval(approvedScope);
-    if (approvedScope === 'profile') f.input.employee.name = 'Unauthorized replacement';
-    else f.input.performance.managerId = 'unauthorized-manager';
-    await expect(f.service.submitDraft('employee', f.input, operator)).rejects.toBeInstanceOf(ConflictException);
-    expect(f.tx.employeeDataChangeRequest.update).not.toHaveBeenCalled();
+    if (approvedScope === 'profile') f.input.employee.name = 'Corrected again';
+    else f.input.performance.managerId = 'corrected-manager';
+    const formalName = f.user.name;
+    const formalManager = f.user.directManagerId;
+    const revision = await f.service.saveArchiveDraft('employee', f.input, operator);
+    expect(revision?.id).toBe('new');
+    expect(f.draft[approvedScope + 'ReviewStatus']).toBe('approved');
+    expect(f.user.name).toBe(formalName);
+    expect(f.user.directManagerId).toBe(formalManager);
   });
 
   it.each(['approved profile', 'pending profile', 'approved performance', 'pending performance', 'contract edited', 'contract added', 'contract removed'])('still rejects external changes to %s during partial approval', async change => {

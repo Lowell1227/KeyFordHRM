@@ -167,7 +167,7 @@ export class EmployeeArchivesController {
     @CurrentUser() operator: AuthUser,
   ) {
     const view = await this.reviews.proposePerformanceManager(id, dto, operator);
-    return { ...view, reviewOutcome: 'pending' as const };
+    return { ...view, reviewOutcome: 'not_required' as const };
   }
 
   @Get('imports/template')
@@ -282,8 +282,7 @@ export class EmployeeArchivesController {
     @Body() dto: UpdateEmployeeProfileDto,
     @CurrentUser() operator: AuthUser,
   ) {
-    const view = await this.archives.upsertProfile(id, dto, operator);
-    return { ...view, reviewOutcome: 'pending' as const };
+    return this.archives.upsertProfile(id, dto, operator);
   }
 
   @Patch(':id/draft')

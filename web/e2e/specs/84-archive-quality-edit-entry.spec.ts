@@ -19,11 +19,12 @@ function archiveRequest(recordStatus = 'draft', reviewStatus = 'pending') {
 
 // Same fully intercepted archive/identity/position fixture as spec 83; never contacts a real API.
 async function openArchive(page: Page, initialRequest: ReturnType<typeof archiveRequest> | null = null,
-  profileOverrides: Record<string, unknown> = {}) {
+  profileOverrides: Record<string, unknown> = {}, archiveOverrides: Record<string, unknown> = {}) {
   let currentRequest = initialRequest;
   let rejectSave = false;
   let rejectSubmit = false;
   let rejectArchiveRead = false;
+  let appliedSubmit = false;
   const saved: any[] = [];
   const submitted: any[] = [];
   const writes: string[] = [];
@@ -32,7 +33,7 @@ async function openArchive(page: Page, initialRequest: ReturnType<typeof archive
     entryDate: '2024-01-01', performanceManager: manager, rosterManager: manager,
     employeeProfile: { phone: null, gender: '女', ...profileOverrides },
     currentEmployment: { company: 'fuede', positionId: 'quality-position', directManagerId: manager.id },
-    employmentHistory: [], employeeContracts: [], externalIdentityBindings: [] };
+    employmentHistory: [], employeeContracts: [], externalIdentityBindings: [], ...archiveOverrides };
   await page.addInitScript(() => {
     localStorage.setItem('token', 'quality-mock-token');
     localStorage.setItem('expiresAt', String(Date.now() + 600_000));
@@ -74,7 +75,9 @@ async function openArchive(page: Page, initialRequest: ReturnType<typeof archive
           message: '正式档案已发生变化，请保留当前输入并重新核对最新档案', data: null } });
         return;
       }
-      data = { request: currentRequest, directApplied: [], reviewOutcome: 'pending' };
+      data = appliedSubmit ? { request: { ...currentRequest, sourceType: 'manual_archive_change', appliedAt: new Date().toISOString(),
+        profileReviewStatus: 'approved', performanceReviewStatus: 'approved' }, directApplied: ['岗位', '绩效直属上级'], reviewOutcome: 'not_required' }
+        : { request: currentRequest, directApplied: [], reviewOutcome: 'pending' };
     } else if (path.endsWith('/list')) data = { items: [], total: 0, page: 1, pageSize: 20 };
     await route.fulfill({ json: response(data) });
   });
@@ -87,9 +90,58 @@ async function openArchive(page: Page, initialRequest: ReturnType<typeof archive
     rejectSaves: () => { rejectSave = true; },
     rejectSubmits: () => { rejectSubmit = true; },
     failArchiveReads: (value: boolean) => { rejectArchiveRead = value; },
+    applySubmits: () => { appliedSubmit = true; },
     archiveReadCount: () => reads.filter(path => path === '/employee-archives/quality-employee').length,
   };
 }
+
+test('旧待审核档案可续编并提交直接生效，合同说明与结果不再要求审核', async ({ page }) => {
+  const draft = { ...archiveRequest('submitted'), canResume: true };
+  const fixture = await openArchive(page, draft);
+  fixture.applySubmits();
+  await fixture.drawer.getByRole('button', { name: '编辑档案', exact: true }).click();
+  await expect(fixture.drawer.locator('[data-archive-field="employee.name"] input')).toHaveValue(draft.proposedValue.employee.name);
+  await expect(fixture.drawer.getByText('支持新增、修改和移除；审核通过后统一生效', { exact: true })).toHaveCount(0);
+  await fixture.drawer.getByRole('button', { name: '提交', exact: true }).click();
+  await expect.poll(() => fixture.submitted.length).toBe(1);
+  expect(fixture.submitted[0]).toMatchObject({ draftId: draft.id, expectedVersion: 7 });
+  await expect(page.locator('.el-message--success')).toHaveText('档案已更新');
+});
+
+test('部分已生效旧单编辑沿用正式档案，未生效绩效关系仍显示原提案', async ({ page }) => {
+  const draft = { ...archiveRequest('submitted', 'approved'), canResume: true, performanceReviewStatus: 'pending',
+    proposedValue: { employee: { name: '旧已审核快照姓名' }, profile: {}, contracts: [], performance: { managerId: null } } };
+  const fixture = await openArchive(page, draft);
+  await fixture.drawer.getByRole('button', { name: '编辑档案', exact: true }).click();
+  await expect(fixture.drawer.locator('[data-archive-field="employee.name"] input')).toHaveValue(employee.name);
+  const performance = fixture.drawer.locator('[data-archive-field="performance.managerId"] input');
+  await expect(performance).toHaveValue('');
+  await page.waitForTimeout(1000);
+  expect(fixture.writes).toEqual([]);
+});
+
+test('在职员工档案编辑不能直接改为离职，仍可修改试用状态', async ({ page }) => {
+  const fixture = await openArchive(page);
+  await fixture.drawer.getByRole('button', { name: '编辑档案', exact: true }).click();
+  await fixture.drawer.locator('[data-archive-field="employee.employeeStatus"] .el-select').click();
+  const options = page.getByRole('option');
+  await expect(options.filter({ hasText: '在职' })).toBeVisible();
+  await expect(options.filter({ hasText: '试用期' })).toBeVisible();
+  await expect(options.filter({ hasText: '已离职' })).toHaveCount(0);
+});
+
+test('待到岗编辑沿用原待入职任职资料，日期和状态继续由入职流程维护', async ({ page }) => {
+  const fixture = await openArchive(page, null, {}, { status: 'pending_entry', currentEmployment: null, entryDate: null,
+    pendingEmployment: { company: 'fuede', positionId: 'quality-position', jobGrade: '待到岗职级',
+      directManagerId: manager.id, entryDate: '2026-11-14' } });
+  await fixture.drawer.getByRole('button', { name: '编辑档案', exact: true }).click();
+  await expect(fixture.drawer.locator('[data-archive-field="employee.jobGrade"] input')).toHaveValue('待到岗职级');
+  await expect(fixture.drawer.locator('[data-archive-field="employee.entryDate"] input')).toHaveValue('2026-11-14');
+  await expect(fixture.drawer.locator('[data-archive-field="employee.entryDate"] input')).toBeDisabled();
+  await expect(fixture.drawer.locator('[data-archive-field="employee.employeeStatus"] input')).toBeDisabled();
+  await page.waitForTimeout(1000);
+  expect(fixture.writes).toEqual([]);
+});
 
 async function observeErrorToasts(page: Page) {
   await page.evaluate(() => {
@@ -102,6 +154,19 @@ async function observeErrorToasts(page: Page) {
     }).observe(document.body, { childList: true, subtree: true });
   });
 }
+
+test('没有任职记录的待到岗员工修改资料时保留原用工类型和日期，不凭部门补造任职值', async ({ page }) => {
+  const fixture = await openArchive(page, null, {}, { status: 'pending_entry', currentEmployment: null,
+    employeeNo: null, entryDate: null, rosterManager: null, employmentType: 'part_time',
+    plannedRegularDate: '2026-12-01', actualRegularDate: null, leaveDate: null,
+    dept: { id: 'quality-dept', name: '测试部门', company: 'xiejia', fullPath: null } });
+  await fixture.drawer.getByRole('button', { name: '编辑档案', exact: true }).click();
+  await fixture.drawer.locator('[data-archive-field="employee.name"] input').fill('虚构资料更正');
+  await expect.poll(() => fixture.saved.at(-1)).toMatchObject({ employee: {
+    name: '虚构资料更正', company: 'fuede', employmentType: 'part_time',
+    positionId: 'quality-position', plannedRegularDate: '2026-12-01', entryDate: null,
+  } });
+});
 
 for (const state of ['pending', 'applying']) {
   test(`${state} 原申请存在时编辑入口只提示查看原申请，不启动新单或写请求`, async ({ page }) => {

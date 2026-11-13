@@ -1025,13 +1025,13 @@ async function assignUsersToDepartment(userIds: string[], department: Department
   if (!userIds.length || department.id === UNASSIGNED_DEPARTMENT_ID) return;
   try {
     await ElMessageBox.confirm(
-      `将 ${userIds.length} 名员工归属到“${department.name}”？审核通过后更新人员归属。`,
+      `将 ${userIds.length} 名员工归属到“${department.name}”？提交后立即更新人员归属。`,
       '调整人员归属',
-      { confirmButtonText: '提交审核', cancelButtonText: '取消', type: 'warning' },
+      { confirmButtonText: '提交', cancelButtonText: '取消', type: 'warning' },
     );
     const result = await employeeArchivesApi.submitDepartmentAssignments(userIds, department.id);
     if (result.submitted > 0) {
-      ElMessage.success(`已提交 ${result.submitted} 条人员归属变更，审核通过后生效`);
+      ElMessage.success(`已更新 ${result.submitted} 名员工的部门归属`);
     } else {
       ElMessage.info('所选人员已归属该部门，无需重复提交');
     }
@@ -1921,9 +1921,9 @@ async function confirmPersonSettings() {
     }
     await Promise.all(actions);
     if (performanceRelationChanged && (systemRoleChanged || hrCapabilitiesChanged)) {
-      ElMessage.success('系统权限已更新；绩效直属上级变更已提交 HR 审核');
+      ElMessage.success('系统权限和绩效直属上级已更新');
     } else if (performanceRelationChanged) {
-      ElMessage.success('绩效直属上级变更已提交 HR 审核');
+      ElMessage.success('绩效直属上级已更新');
     } else {
       ElMessage.success('系统权限已更新');
     }
@@ -2676,7 +2676,7 @@ onBeforeUnmount(() => {
           <aside v-if="archiveIssueContext" class="archive-issue-context" role="note" aria-label="正在核实事项">
             <strong>{{ archiveIssueContext.message }}</strong><span>{{ archiveIssueContext.reason }}</span>
             <span>原资料：{{ archiveIssueContext.source.value ?? '未提供' }} · 当前资料：{{ archiveIssueContext.current.value ?? '未提供' }}</span>
-            <small>保存草稿后仍需按原流程提交审核；待确认状态按核实结果更新。</small>
+            <small>草稿暂存不生效，提交后更新档案。</small>
           </aside>
           <el-alert v-if="archiveNotice" :title="archiveNotice" type="success" :closable="false" />
           <el-alert v-if="archiveSubmitError" :title="archiveSubmitError" type="error" :closable="false" />
@@ -2951,7 +2951,7 @@ onBeforeUnmount(() => {
           <el-button :loading="applicationSaving" @click="reviewApplicationFromDetail('reject')">退回</el-button>
           <el-button type="primary" :loading="applicationSaving" @click="reviewApplicationFromDetail('approve')">通过</el-button>
         </template>
-        <el-button v-if="canEditArchive && applicationDetail?.canCancel" :loading="applicationSaving" @click="cancelApplication(applicationDetail)">{{ cancelApplicationLabel(applicationDetail) }}</el-button><el-button v-if="canEditArchive && applicationDetail?.canResume && !(canReviseArrivalDate(applicationDetail) && (applicationDetail.profileReviewStatus === 'rejected' || isCancelledNewHireArrival(applicationDetail)))" type="primary" @click="resumeApplication(applicationDetail)">修改后重新提交</el-button>
+        <el-button v-if="canEditArchive && applicationDetail?.canCancel" :loading="applicationSaving" @click="cancelApplication(applicationDetail)">{{ cancelApplicationLabel(applicationDetail) }}</el-button><el-button v-if="canEditArchive && applicationDetail?.canResume && !(canReviseArrivalDate(applicationDetail) && (applicationDetail.profileReviewStatus === 'rejected' || isCancelledNewHireArrival(applicationDetail)))" type="primary" @click="resumeApplication(applicationDetail)">{{ applicationDetail.sourceType === 'manual_archive_change' ? '继续编辑' : '修改后重新提交' }}</el-button>
       </template>
     </BusinessDetailDrawer>
 
@@ -3033,7 +3033,7 @@ onBeforeUnmount(() => {
     </el-dialog>
 
     <el-dialog v-model="assignmentDialog.visible" title="批量归属部门" width="480px" :close-on-click-modal="false">
-      <p>已选择 <strong>{{ selectedOrgMembers.length }}</strong> 名未分配人员。保存后提交员工档案审核。</p>
+      <p>已选择 <strong>{{ selectedOrgMembers.length }}</strong> 名未分配人员。</p>
       <el-tree-select
         v-model="assignmentDialog.targetDepartmentId"
         :data="departments"
@@ -3044,7 +3044,7 @@ onBeforeUnmount(() => {
         placeholder="请选择目标部门"
         style="width: 100%"
       />
-      <template #footer><el-button @click="assignmentDialog.visible = false">取消</el-button><el-button type="primary" @click="confirmBatchAssignment">提交审核</el-button></template>
+      <template #footer><el-button @click="assignmentDialog.visible = false">取消</el-button><el-button type="primary" @click="confirmBatchAssignment">提交</el-button></template>
     </el-dialog>
 
     <div
@@ -3125,8 +3125,8 @@ onBeforeUnmount(() => {
                   <div class="person-settings__tooltip-content">
                     <div class="person-settings__tooltip-line"><strong>作用：</strong>用于目标审核、主管评分和待办归属。</div>
                     <div class="person-settings__tooltip-line"><strong>区别：</strong>与花名册“直属主管”相互独立。</div>
-                    <div class="person-settings__tooltip-line"><strong>审核：</strong>由 HR 管理员在“人事办理 → 待我审核”中处理。</div>
-                    <div class="person-settings__tooltip-line"><strong>生效：</strong>审核通过前继续使用原关系，不改变岗位或系统权限。</div>
+                    <div class="person-settings__tooltip-line"><strong>生效：</strong>提交后立即更新；已启动考核任务仍使用原来的关系。</div>
+                    <div class="person-settings__tooltip-line"><strong>权限：</strong>不改变岗位或系统权限。</div>
                   </div>
                 </template>
                 <button type="button" class="person-settings__help" aria-label="绩效直属上级说明">
@@ -3147,9 +3147,8 @@ onBeforeUnmount(() => {
             effect="light"
             size="small"
           >
-            {{ selectedManagerRelationChanged ? '提交后待 HR 审核' : '已生效' }}
+            {{ selectedManagerRelationChanged ? '待提交' : '已生效' }}
           </el-tag>
-          <span v-if="selectedManagerRelationChanged">审核入口：人事办理 &gt; 待我审核</span>
         </div>
         <el-form-item>
           <template #label>
@@ -3185,7 +3184,7 @@ onBeforeUnmount(() => {
       </el-form>
       <template #footer>
         <el-button @click="personSettingsDialog.visible = false">取消</el-button>
-        <el-button type="primary" :loading="personSettingsDialog.saving" @click="confirmPersonSettings">{{ selectedManagerRelationChanged ? '提交审核' : '保存权限' }}</el-button>
+        <el-button type="primary" :loading="personSettingsDialog.saving" @click="confirmPersonSettings">{{ selectedManagerRelationChanged ? '提交' : '保存权限' }}</el-button>
       </template>
     </el-dialog>
 

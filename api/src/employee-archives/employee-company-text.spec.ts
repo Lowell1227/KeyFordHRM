@@ -74,10 +74,15 @@ describe('employee company text', () => {
       user: { findUnique: jest.fn().mockResolvedValue(user()) },
       employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create },
     };
-    const service = new EmployeeArchivesService(prisma as any);
+    // Keep company snapshot tests isolated from the separately covered apply transaction.
+    const reviews = { applyArchiveChange: jest.fn(async () => ({ id: 'review-1', ...create.mock.calls.at(-1)![0].data,
+      profileReviewStatus: 'approved', appliedAt: new Date() })) };
+    const service = new EmployeeArchivesService(prisma as any, undefined, undefined, undefined, undefined, reviews as any);
     const { request: result } = await service.submitDraft('employee-1', { baseVersion: (service as any).archiveVersion(user()), employee: { companyText }, profile: {} }, operator);
     if (!result) throw new Error('expected review request');
-    expect(result.profileReviewStatus).toBe('pending');
+    expect(create.mock.calls[0][0].data.profileReviewStatus).toBe('pending');
+    expect(result.profileReviewStatus).toBe('approved');
+    expect(reviews.applyArchiveChange).toHaveBeenCalledWith(prisma, 'review-1', operator);
     expect(result.performanceReviewStatus).toBe('not_required');
     expect(result.baseValue).toMatchObject({ employee: { company: 'fuede', companyText: '花名册公司原文' } });
     expect(result.proposedValue).toMatchObject({ employee: { company: 'fuede', companyText } });

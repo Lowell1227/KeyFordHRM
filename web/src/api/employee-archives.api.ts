@@ -205,9 +205,15 @@ export interface EmployeeArchive {
   status: 'active' | 'probation' | 'pending_entry' | 'resigned';
   position: string | null;
   entryDate: string | null;
+  positionId?: string | null;
+  employmentType?: string | null;
+  plannedRegularDate?: string | null;
+  actualRegularDate?: string | null;
+  leaveDate?: string | null;
   dept: { id: string; name: string; fullPath: string | null; company: string } | null;
   performanceManager: { id: string; name: string; employeeNo: string | null } | null;
   rosterManager: { id: string; name: string; employeeNo: string | null } | null;
+  pendingEmployment?: EmployeeArchive['currentEmployment'];
   currentEmployment: {
     id: string;
     effectiveFrom: string;

@@ -80,6 +80,27 @@ function cancelledArrival(override = {}) {
   });
 }
 
+for (const sourceType of ['manual_archive_change', 'manual_performance_relation']) test(`${sourceType} direct submission shows submit and effective without inventing an HR review`, t => {
+  const { state } = mountSetup(t, 'EmployeeApplicationDetail.vue', { request: {
+    id: 'direct-1', sourceType, recordStatus: 'submitted',
+    profileReviewStatus: 'approved', performanceReviewStatus: 'approved', appliedAt: '2026-11-13T01:00:00Z',
+    createdAt: '2026-11-13T00:00:00Z', baseValue: {}, proposedValue: {},
+    events: [{ id: 'event-1', action: 'apply_employee_archive_change', createdAt: '2026-11-13T01:00:00Z', user: { name: '虚构HR' } }],
+  } });
+  assert.deepEqual(state.timeline.value.map(item => item.title), ['提交', '变更生效']);
+  assert.equal(state.timeline.value.at(-1).actor, '虚构HR');
+});
+
+test('historical manual approval keeps the actual review step', t => {
+  const { state } = mountSetup(t, 'EmployeeApplicationDetail.vue', { request: {
+    id: 'old-1', sourceType: 'manual_archive_change', recordStatus: 'submitted',
+    profileReviewStatus: 'approved', performanceReviewStatus: 'not_required', appliedAt: '2026-11-12T01:00:00Z',
+    profileReviewedAt: '2026-11-12T00:59:00Z', profileReviewedBy: { id: 'old-hr', name: '虚构审核人' },
+    createdAt: '2026-11-12T00:00:00Z', baseValue: {}, proposedValue: {}, events: [],
+  } });
+  assert.equal(state.timeline.value.some(item => item.title === '档案审核'), true);
+});
+
 test('cancelled unarrived new hire resubmits its original date and identity without confirming arrival', async t => {
   const revisions = [];
   const confirmations = [];

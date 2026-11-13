@@ -41,7 +41,7 @@ const emit = defineEmits<{
   reload: [];
 }>();
 const positions = ref<PositionRecord[]>([]);
-const fallbackEmployment = computed(() => props.archive && !props.archive.currentEmployment
+const fallbackEmployment = computed(() => props.archive && !props.archive.currentEmployment && !props.archive.pendingEmployment
   ? props.archive.employmentHistory[0] : null);
 const editorElement = ref<HTMLElement>();
 const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
@@ -89,27 +89,27 @@ function reset() {
   saveState.value = props.draft ? 'saved' : 'idle';
   saveError.value = '';
   saveBlocked.value = false;
-  const employment = archive.currentEmployment ?? archive.employmentHistory[0];
+  const employment = archive.pendingEmployment ?? archive.currentEmployment ?? archive.employmentHistory[0];
   replaceRecord(form.employee, {
     name: archive.name,
     employeeNo: archive.employeeNo,
     phone: archive.employeeProfile?.phone ?? archive.phone ?? null,
-    company: employment?.company ?? archive.dept?.company ?? 'fuede',
+    company: employment?.company ?? 'fuede',
     companyText: employment?.companyText ?? null,
     contractSubjectId: employment?.contractSubjectId ?? undefined,
-    deptId: archive.dept?.id ?? null,
-    positionId: employment?.positionId ?? null,
-    position: archive.position,
+    deptId: archive.dept?.id ?? employment?.deptId ?? null,
+    positionId: archive.positionId ?? employment?.positionId ?? null,
+    position: archive.position ?? employment?.position ?? null,
     jobGrade: employment?.jobGrade ?? null,
     jobFamily: employment?.jobFamily ?? null,
-    managerId: archive.rosterManager?.id ?? null,
+    managerId: employment?.directManagerId ?? archive.rosterManager?.id ?? null,
     workLocation: employment?.workLocation ?? null,
-    employmentType: employment?.employmentType ?? 'full_time',
+    employmentType: archive.employmentType ?? employment?.employmentType ?? 'full_time',
     employeeStatus: archive.status,
-    entryDate: dateValue(archive.entryDate),
-    plannedRegularDate: dateValue(employment?.plannedRegularDate),
-    actualRegularDate: dateValue(employment?.actualRegularDate),
-    leaveDate: dateValue(employment?.leaveDate),
+    entryDate: dateValue(archive.entryDate ?? employment?.entryDate),
+    plannedRegularDate: dateValue(archive.plannedRegularDate ?? employment?.plannedRegularDate),
+    actualRegularDate: dateValue(archive.actualRegularDate ?? employment?.actualRegularDate),
+    leaveDate: dateValue(archive.leaveDate ?? employment?.leaveDate),
     probationMonths: employment?.probationMonths ?? null,
   });
   replaceRecord(form.performance, { managerId: archive.performanceManager?.id ?? null });
@@ -168,11 +168,14 @@ function reset() {
     }));
   if (props.draft?.userId === archive.id && (props.draft.recordStatus === 'draft' || props.draft.canResume)) {
     const proposed = props.draft.proposedValue ?? {};
-    replaceRecord(form.employee, { ...form.employee, ...(proposed.employee ?? {}) });
+    // A partially applied legacy request contains an old snapshot of the applied scope.
+    // Keep the current formal values (and persisted contract IDs) for that scope.
+    const restoreProfile = props.draft.profileReviewStatus !== 'approved';
+    if (restoreProfile) replaceRecord(form.employee, { ...form.employee, ...(proposed.employee ?? {}) });
     if (form.employee.contractSubjectId == null && !employment?.contractSubjectId) form.employee.contractSubjectId = undefined;
-    replaceRecord(form.profile, { ...form.profile, ...(proposed.profile ?? {}) });
-    replaceRecord(form.performance, { ...form.performance, ...(proposed.performance ?? {}) });
-    if (Array.isArray(proposed.contracts)) {
+    if (restoreProfile) replaceRecord(form.profile, { ...form.profile, ...(proposed.profile ?? {}) });
+    if (props.draft.performanceReviewStatus !== 'approved') replaceRecord(form.performance, { ...form.performance, ...(proposed.performance ?? {}) });
+    if (restoreProfile && Array.isArray(proposed.contracts)) {
       form.contracts = proposed.contracts.map((item: Record<string, any>, index: number) => ({
         ...item,
         ...(!('contractSubjectId' in item) && item.id ? { contractSubjectId: archive.employeeContracts.find(contract => contract.id === item.id)?.contractSubjectId ?? undefined } : {}),
@@ -415,7 +418,7 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
       </div>
       <div v-if="fallbackEmployment" class="employment-baseline-note">
         <span>当前无有效任职，以下任职资料沿用最近一次记录（生效日期：{{ dateValue(fallbackEmployment.effectiveFrom) || '待完善' }}）</span>
-        <el-tooltip content="该记录可能尚未生效或已经结束，编辑仅沿用其资料作为基准，不表示它是当前有效任职。提交后仍按既有审核规则处理。" placement="top">
+        <el-tooltip content="该记录可能尚未生效或已经结束，编辑仅沿用其资料作为基准。提交会更新档案资料；入离职仍需单独办理。" placement="top">
           <el-icon tabindex="0" aria-label="任职资料来源说明"><QuestionFilled /></el-icon>
         </el-tooltip>
       </div>
@@ -434,8 +437,8 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
         <el-form-item label="绩效直属上级" data-archive-field="performance.managerId"><UserSelect v-model="form.performance.managerId" :disabled-ids="archive ? [archive.id] : []" /></el-form-item>
           <el-form-item label="工作地点" data-archive-field="employee.workLocation"><PersonnelReferenceSelect v-model="form.employee.workLocation" kind="work_location" label="工作地点" /></el-form-item>
         <el-form-item label="用工类型" data-archive-field="employee.employmentType"><el-select v-model="form.employee.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
-        <el-form-item label="当前状态" data-archive-field="employee.employeeStatus"><el-select v-model="form.employee.employeeStatus"><el-option label="在职" value="active" /><el-option label="试用期" value="probation" /><el-option label="已离职" value="resigned" /></el-select></el-form-item>
-        <el-form-item label="入职日期" data-archive-field="employee.entryDate"><el-date-picker v-model="form.employee.entryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+        <el-form-item data-archive-field="employee.employeeStatus"><template #label>当前状态 <el-tooltip content="入职、再入职和离职请在入离职页面办理；这里可调整在职与试用期状态。" placement="top"><el-icon aria-label="任职状态说明"><QuestionFilled /></el-icon></el-tooltip></template><el-select v-model="form.employee.employeeStatus" :disabled="!['active', 'probation'].includes(archive?.status ?? '')"><template v-if="['active', 'probation'].includes(archive?.status ?? '')"><el-option label="在职" value="active" /><el-option label="试用期" value="probation" /></template><el-option v-else-if="archive?.status === 'resigned'" label="已离职" value="resigned" /><el-option v-else label="待入职" value="pending_entry" /></el-select></el-form-item>
+        <el-form-item label="入职日期" data-archive-field="employee.entryDate"><el-date-picker v-model="form.employee.entryDate" type="date" value-format="YYYY-MM-DD" :disabled="archive?.status === 'pending_entry'" /><small v-if="archive?.status === 'pending_entry'" class="field-help">待到岗员工请在入离职申请中修改到岗日期。</small></el-form-item>
         <el-form-item label="试用期（月）" data-archive-field="employee.probationMonths"><el-input-number v-model="form.employee.probationMonths" :min="0" :max="12" /></el-form-item>
         <el-form-item label="预计转正日期" data-archive-field="employee.plannedRegularDate"><el-date-picker v-model="form.employee.plannedRegularDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
         <el-form-item label="实际转正日期" data-archive-field="employee.actualRegularDate"><el-date-picker v-model="form.employee.actualRegularDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
@@ -485,7 +488,7 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
 
     <section class="editor-section" data-archive-section="contracts">
       <div class="editor-section__head contract-toolbar">
-        <div><h3>合同记录</h3><span>支持新增、修改和移除；审核通过后统一生效</span></div>
+        <div><h3>合同记录</h3><span>支持新增、修改和移除；提交后生效</span></div>
         <el-button :icon="Plus" @click="addContract">新增合同</el-button>
       </div>
       <div v-for="(contract, index) in form.contracts" :key="contract.__key" class="contract-card">

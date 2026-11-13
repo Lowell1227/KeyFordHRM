@@ -8,7 +8,7 @@ describe('employee draft and archive lifecycle', () => {
     const user = { id: 'u', name: '员工', employeeNo: '1', status: 'active', directManagerId: null,
       employeeProfile: { idNumberEncrypted: 'old-cipher', idNumberFingerprint: 'old-hash' },
       employmentHistory: [], employeeContracts: [] };
-    const existing = { id: 'd', userId: 'u', requestVersion: 1, recordStatus: 'draft', profileReviewStatus: 'pending',
+    const existing = { id: 'd', userId: 'u', sourceType: 'manual_archive_change', requestVersion: 1, recordStatus: 'draft', profileReviewStatus: 'pending',
       proposedValue: { profile: { idNumberEncrypted: 'new-cipher', idNumberFingerprint: 'new-hash' } } };
     const update = jest.fn(async ({ data }) => ({ ...existing, ...data }));
     const db = { $transaction: jest.fn(async callback => callback(db)), user: { findUnique: jest.fn().mockResolvedValue(user) },

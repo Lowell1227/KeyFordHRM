@@ -2,7 +2,7 @@
 import { computed } from 'vue';
 import type { EmployeeDataReview, EmployeeReviewStatus } from '@/api/employee-archives.api';
 import { formatDate, formatDateTime } from '@/utils/date';
-import { isPendingArrival } from '@/utils/employee-lifecycle';
+import { isDirectArchiveApplication, isPendingArrival } from '@/utils/employee-lifecycle';
 import { contractTitle } from '@/utils/employee-contract-presentation';
 import PersonnelProcessTimeline from './PersonnelProcessTimeline.vue';
 import type { PersonnelProcessStep, PersonnelProcessTone } from './personnel-process-timeline';
@@ -83,6 +83,7 @@ const employee = computed<Record<string, any>>(() => props.request.proposedValue
 const profile = computed<Record<string, any>>(() => props.request.proposedValue?.profile ?? {});
 const performance = computed<Record<string, any>>(() => props.request.proposedValue?.performance ?? {});
 const isOnboarding = computed(() => Boolean(props.request.intakeType || props.request.sourceType === 'manual_employee_create'));
+const isDirectApplication = computed(() => isDirectArchiveApplication(props.request));
 function hasValue(value: unknown) {
   return value !== null && value !== undefined && value !== '';
 }
@@ -213,10 +214,25 @@ const isPartiallyCancelled = computed(() => hasCancellation.value && hasApproved
 const isFullyCancelled = computed(() => isOnboardingCancelled.value || (hasCancellation.value && !hasApprovedReview.value));
 
 const submittedEvent = computed(() => props.request.events?.find((event) => /submit_employee|submit_.*change/.test(event.action)));
-const activatedEvent = computed(() => props.request.events?.find((event) => /activate|effective|confirm_employee_arrival/.test(event.action)));
-const revisionEvents = computed(() => (props.request.events ?? []).filter((event) => /revise|reject|cancel|withdraw/.test(event.action)));
+const activatedEvent = computed(() => props.request.events?.find((event) => event.action === 'apply_employee_archive_change' || /activate|effective|confirm_employee_arrival/.test(event.action)));
+const revisionEvents = computed(() => (props.request.events ?? []).filter((event) => /revise|reject|cancel|withdraw/.test(event.action) || (isDirectApplication.value && /approve/.test(event.action))));
 
 const timeline = computed<PersonnelProcessStep[]>(() => {
+  if (isDirectApplication.value) {
+    const event = activatedEvent.value;
+    return [
+      {
+        key: 'submitted', title: '提交', tone: 'success', current: false,
+        time: formatDateTime(event?.createdAt ?? submittedEvent.value?.createdAt ?? props.request.createdAt),
+        actor: event?.user?.name ?? submittedEvent.value?.user?.name ?? props.request.createdBy?.name ?? '系统', status: '已提交',
+      },
+      {
+        key: 'effective', title: '变更生效', tone: 'success', current: false,
+        time: formatDateTime(props.request.appliedAt!),
+        actor: event?.user?.name ?? props.request.createdBy?.name ?? '系统', status: '已生效',
+      },
+    ];
+  }
   const reviewTone: PersonnelProcessTone = isFullyCancelled.value || hasRejected.value || hasCancelledReview.value ? 'danger' : hasPending.value ? 'current' : reviewsComplete.value ? 'success' : 'waiting';
   const reviewAction = isFullyCancelled.value
     ? '申请已取消'
@@ -286,6 +302,7 @@ const timeline = computed<PersonnelProcessStep[]>(() => {
 });
 
 function eventLabel(action: string) {
+  if (/approve/.test(action)) return '历史审核通过';
   if (/reject/.test(action)) return '退回申请';
   if (/cancel|withdraw/.test(action)) return '取消申请';
   if (/revise/.test(action)) return '修改并重新提交';

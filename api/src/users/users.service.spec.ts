@@ -365,7 +365,7 @@ describe('UsersService', () => {
           canViewAll: true,
         },
       )).rejects.toMatchObject({
-        response: { code: 4001, message: '绩效直属上级变更必须提交 HR 审核' },
+        response: { code: 4001, message: '请通过员工档案维护绩效直属上级' },
       });
 
       expect(transaction).not.toHaveBeenCalled();
@@ -396,7 +396,7 @@ describe('UsersService', () => {
           deptId: null, isAssessorOnly: false, canViewAll: true,
         },
       )).rejects.toMatchObject({
-        response: { code: 4001, message: '绩效直属上级变更必须提交 HR 审核' },
+        response: { code: 4001, message: '请通过员工档案维护绩效直属上级' },
       });
     });
 

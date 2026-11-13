@@ -1,7 +1,7 @@
 import { SysRole, UserStatus, CompanyCode, EmploymentType } from '@prisma/client';
 import { EmployeeArchivesService } from './employee-archives.service';
 
-describe('固定审核：历史宽松配置不再自动审核', () => {
+describe('档案提交生效不依赖历史宽松配置或全局自动审核', () => {
   const operator = {
     id: '20000000-0000-4000-8000-000000000001',
     name: 'HR',
@@ -105,7 +105,12 @@ describe('固定审核：历史宽松配置不再自动审核', () => {
       $transaction: jest.fn((run: (client: unknown) => unknown) => run(tx)),
       auditLog: { create: jest.fn().mockResolvedValue({}) },
     };
-    const reviews = { approveBatch: approveBatchImpl ?? jest.fn().mockResolvedValue({ succeeded: [{ requestId: 'request-1' }], failed: [] }) };
+    const reviews = {
+      approveBatch: approveBatchImpl ?? jest.fn().mockResolvedValue({ succeeded: [{ requestId: 'request-1' }], failed: [] }),
+      // Proposal tests stay isolated; real apply/rollback is covered in employee-archive-submit-apply.spec.
+      applyArchiveChange: jest.fn(async () => ({ id: 'request-1', ...tx.employeeDataChangeRequest.create.mock.calls.at(-1)![0].data,
+        profileReviewStatus: 'approved', appliedAt: new Date() })),
+    };
     const personnelConfig = { getReviewMode: jest.fn().mockResolvedValue(mode) };
     const service = new EmployeeArchivesService(
       prisma as any,
@@ -113,12 +118,13 @@ describe('固定审核：历史宽松配置不再自动审核', () => {
       undefined,
       undefined,
       undefined,
+      reviews as any,
     );
     const baseVersion = (service as any).archiveVersion(user);
     return { service, tx, prisma, reviews, personnelConfig, baseVersion };
   };
 
-  it('历史宽松模式下需审核字段仍待人工审核', async () => {
+  it('历史宽松配置不影响档案提交立即生效', async () => {
     const user = buildUser();
     const { service, reviews, personnelConfig, baseVersion } = buildService(user, 'relaxed');
 
@@ -129,12 +135,13 @@ describe('固定审核：历史宽松配置不再自动审核', () => {
     }, operator);
 
     expect(result.request).not.toBeNull();
-    expect(result.reviewOutcome).toBe('pending');
+    expect(result.reviewOutcome).toBe('not_required');
+    expect(reviews.applyArchiveChange).toHaveBeenCalledTimes(1);
     expect(personnelConfig.getReviewMode).not.toHaveBeenCalled();
     expect(reviews.approveBatch).not.toHaveBeenCalled();
   });
 
-  it('标准模式或不具备服务依赖时不自动审核', async () => {
+  it('标准配置同样使用限定档案生效入口，不调用全局审批', async () => {
     const user = buildUser();
     const { service, reviews, baseVersion } = buildService(user, 'standard');
 
@@ -145,6 +152,7 @@ describe('固定审核：历史宽松配置不再自动审核', () => {
     }, operator);
 
     expect(result.request).not.toBeNull();
+    expect(reviews.applyArchiveChange).toHaveBeenCalledTimes(1);
     expect(reviews.approveBatch).not.toHaveBeenCalled();
   });
 
@@ -181,13 +189,15 @@ describe('固定审核：历史宽松配置不再自动审核', () => {
     expect(reviews.approveBatch).not.toHaveBeenCalled();
   });
 
-  it('审批失败列表必须返回待人工审核，不能报已生效', async () => {
+  it('旧全局审批失败配置不参与档案提交生效', async () => {
     const user = buildUser();
-    const { service, baseVersion } = buildService(user, 'relaxed', jest.fn().mockResolvedValue({
+    const { service, reviews, baseVersion } = buildService(user, 'relaxed', jest.fn().mockResolvedValue({
       succeeded: [], failed: [{ requestId: 'request-1', reason: '正式档案已变化' }],
     }));
     const result = await service.submitDraft(user.id, { baseVersion, employee: { name: '员工乙' }, profile: {} }, operator);
-    expect(result).toMatchObject({ reviewOutcome: 'pending' });
+    expect(result).toMatchObject({ reviewOutcome: 'not_required' });
+    expect(reviews.approveBatch).not.toHaveBeenCalled();
+    expect(reviews.applyArchiveChange).toHaveBeenCalledTimes(1);
   });
 
   it('移除自动审核入口', () => {

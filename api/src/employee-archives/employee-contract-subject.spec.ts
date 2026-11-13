@@ -8,9 +8,14 @@ describe('archive contract subject references', () => {
       employeeProfile: null, employeeContracts: [], employmentHistory: [{ company: 'fuede', companyText: '原名', contractSubjectId: id }] };
     const prisma = { $transaction: jest.fn(async callback => callback(prisma)), user: { findUnique: jest.fn().mockResolvedValue(current) },
       contractSubject: { findUnique: jest.fn().mockResolvedValue({ id: '11111111-1111-4111-8111-111111111111', name: '服务器名称', isActive: true }) },
-      employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn(async ({ data }) => data) } };
-    const service = new EmployeeArchivesService(prisma as any);
-    return { prisma, service, baseVersion: (service as any).archiveVersion(current) };
+      employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn(async ({ data }) => ({ id: 'request-1', ...data })) } };
+    // These tests own proposal normalization; transaction application has its own dedicated suite.
+    const reviews = { applyArchiveChange: jest.fn(async () => {
+      const data = prisma.employeeDataChangeRequest.create.mock.calls.at(-1)![0].data;
+      return { id: 'request-1', ...data, profileReviewStatus: 'approved', appliedAt: new Date() };
+    }) };
+    const service = new EmployeeArchivesService(prisma as any, undefined, undefined, undefined, undefined, reviews as any);
+    return { prisma, reviews, service, baseVersion: (service as any).archiveVersion(current) };
   };
   it('recognizes an ID-only selection and freezes the server name', async () => {
     const { service, baseVersion } = fixture();
@@ -42,11 +47,13 @@ describe('archive contract subject references', () => {
     expect(prisma.contractSubject.findUnique).not.toHaveBeenCalled();
   });
   it('recognizes ID-only changes even when the display name is identical', async () => {
-    const { service, prisma, baseVersion } = fixture();
+    const { service, prisma, reviews, baseVersion } = fixture();
     prisma.contractSubject.findUnique.mockResolvedValue({ id: '11111111-1111-4111-8111-111111111111', name: '原名', isActive: true });
     const { request: result } = await service.submitDraft('user', { baseVersion, employee: { contractSubjectId: '11111111-1111-4111-8111-111111111111' }, profile: {} }, operator);
     if (!result) throw new Error('expected review request');
-    expect(result.profileReviewStatus).toBe('pending');
+    expect(prisma.employeeDataChangeRequest.create.mock.calls[0][0].data.profileReviewStatus).toBe('pending');
+    expect(result.profileReviewStatus).toBe('approved');
+    expect(reviews.applyArchiveChange).toHaveBeenCalledTimes(1);
   });
   it('retains new employee draft contract snapshots across directory renames', async () => {
     const { service, prisma } = fixture();

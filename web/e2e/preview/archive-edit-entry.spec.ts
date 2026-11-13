@@ -63,7 +63,7 @@ async function snapshot(page: Page, info: TestInfo, name: string) {
   await page.screenshot({ path: info.outputPath(`${name}.png`), fullPage: true, animations: 'disabled', scale: 'css' });
 }
 
-test('real archive editing resumes fresh drafts, keeps concurrent input, and routes pending records safely', async ({ page, context }, info) => {
+test('real archive editing resumes fresh drafts, keeps concurrent input, and resumes historical pending records', async ({ page, context }, info) => {
   expect(info.config.globalSetup).toBeNull();
   expect(info.project.use.baseURL).toBe(origin);
   const viewport = info.project.name === 'mobile' ? { width: 390, height: 844 } : { width: 1440, height: 900 };
@@ -158,7 +158,7 @@ test('real archive editing resumes fresh drafts, keeps concurrent input, and rou
     await drawer.getByRole('button', { name: '关闭', exact: true }).click();
     await secondPage.close(); secondPage = undefined;
 
-    // Fixture-only transition to a historical pending request. No approval or formal employee writes.
+    // Fixture-only transition to a historical pending request. Opening resumes its proposal without applying it.
     fixtureQuery(`
       const employee = await prisma.user.findFirstOrThrow({ where: { id: '${employee.id}', employeeNo: '${employeeNo}' } });
       const updated = await prisma.employeeDataChangeRequest.updateMany({ where: { id: '${draft.id}', userId: employee.id },
@@ -168,15 +168,14 @@ test('real archive editing resumes fresh drafts, keeps concurrent input, and rou
     await openDetail();
     const beforePending = observed.writes.length;
     await drawer.getByRole('button', { name: '编辑档案', exact: true }).click();
-    await expect(drawer.getByText('已有待处理的档案变更', { exact: true })).toBeVisible();
-    await expect(drawer.locator('.archive-inline-editor')).toHaveCount(0);
+    await expect(drawer.getByText('已有待处理的档案变更', { exact: true })).toHaveCount(0);
+    await expect(drawer.locator('.archive-inline-editor')).toBeVisible();
+    await expect(nameField).toHaveValue(latestName);
     await page.waitForTimeout(1000);
     expect(observed.writes.slice(beforePending)).toEqual([]);
     await expect(page.locator('.el-message--error')).toHaveCount(0);
-    await snapshot(page, info, 'pending-record-original-entry');
-    await drawer.getByRole('button', { name: '查看原申请', exact: true }).click();
-    await expect(page.getByRole('dialog', { name: '档案修改办理详情', exact: true })).toBeVisible();
-    await expect(drawer).not.toBeVisible();
+    await snapshot(page, info, 'historical-pending-resumes-edit');
+    expect((await api(page, `/employee-archives/${employee.id}`)).name).toBe(employee.name);
     expect(observed.errors).toEqual([]);
     expect(observed.external).toEqual([]);
     await info.attach('isolated-edit-evidence', { body: JSON.stringify({ employeeNo, ...observed }, null, 2), contentType: 'application/json' });

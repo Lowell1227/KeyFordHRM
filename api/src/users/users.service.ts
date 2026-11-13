@@ -548,7 +548,7 @@ export class UsersService {
     void operator;
     throw new BadRequestException({
       code: ERROR_CODE.PARAM_INVALID,
-      message: '绩效直属上级变更必须提交 HR 审核',
+      message: '请通过员工档案维护绩效直属上级',
     });
   }
 
@@ -557,7 +557,7 @@ export class UsersService {
     if (dto.directManagerId !== undefined || dto.grantManagerRole === true) {
       throw new BadRequestException({
         code: ERROR_CODE.PARAM_INVALID,
-        message: '绩效直属上级变更必须提交 HR 审核',
+        message: '请通过员工档案维护绩效直属上级',
       });
     }
     const targetUser = await this.prisma.user.findUnique({

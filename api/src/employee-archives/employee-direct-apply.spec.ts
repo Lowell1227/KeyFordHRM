@@ -101,9 +101,14 @@ describe('员工档案免审个人信息字段直改', () => {
     const prisma = {
       $transaction: jest.fn((run: (client: unknown) => unknown) => run(tx)),
     };
-    const service = new EmployeeArchivesService(prisma as any);
+    // This suite covers personal-field normalization and proposal persistence, not the apply service.
+    const reviews = { applyArchiveChange: jest.fn(async () => {
+      const data = tx.employeeDataChangeRequest.create.mock.calls.at(-1)![0].data as Record<string, unknown>;
+      return { id: 'request-1', ...data, profileReviewStatus: 'approved', appliedAt: new Date() };
+    }) };
+    const service = new EmployeeArchivesService(prisma as any, undefined, undefined, undefined, undefined, reviews as any);
     const baseVersion = (service as any).archiveVersion(user);
-    return { service, tx, baseVersion };
+    return { service, tx, reviews, baseVersion };
   };
 
   it('只改手机号等免审字段时不生成审核单，直接写入正式档案并记审计日志', async () => {
@@ -181,9 +186,9 @@ describe('员工档案免审个人信息字段直改', () => {
     expect(tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
   });
 
-  it('混合提交时免审字段直改，审核字段照常生成审核单且不含免审字段差异', async () => {
+  it('混合提交保留个人字段直改与其余字段的独立差异，再交给立即生效事务', async () => {
     const user = buildUser();
-    const { service, tx, baseVersion } = buildService(user);
+    const { service, tx, reviews, baseVersion } = buildService(user);
 
     const result = await service.submitDraft(user.id, {
       baseVersion,
@@ -191,7 +196,8 @@ describe('员工档案免审个人信息字段直改', () => {
       profile: { phone: '13911112222' },
     }, operator);
 
-    expect(result.directApplied).toEqual(['手机号']);
+    expect(result.directApplied).toEqual(['手机号', '档案信息']);
+    expect(reviews.applyArchiveChange).toHaveBeenCalledWith(tx, 'request-1', operator);
     expect(result.request).not.toBeNull();
     expect(tx.employeeProfile.upsert).toHaveBeenCalled();
     expect(tx.employeeDataChangeRequest.create).toHaveBeenCalledTimes(1);
@@ -251,7 +257,7 @@ describe('员工档案免审个人信息字段直改', () => {
     const user = buildUser();
     const { service, tx } = buildService(user);
     const existing = {
-      id: 'draft-1', requestVersion: 1, recordStatus: 'draft', updatedAt: new Date(),
+      id: 'draft-1', sourceType: 'manual_archive_change', requestVersion: 1, recordStatus: 'draft', updatedAt: new Date(),
       profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
       baseValue: { employee: { name: user.name, phone: user.phone }, profile: (service as any).profileReviewData(user.employeeProfile),
         profileExists: true, contracts: [], performance: { managerId: null } },
@@ -278,9 +284,9 @@ describe('员工档案免审个人信息字段直改', () => {
       .rejects.toMatchObject({ status: 409 });
   });
 
-  it('社保状态等中间档字段不直改，仍走审核', async () => {
+  it('社保状态保留提案差异并交给立即生效事务', async () => {
     const user = buildUser();
-    const { service, tx, baseVersion } = buildService(user);
+    const { service, tx, reviews, baseVersion } = buildService(user);
 
     const result = await service.submitDraft(user.id, {
       baseVersion,
@@ -288,7 +294,8 @@ describe('员工档案免审个人信息字段直改', () => {
       profile: { socialSecurityStatus: '已缴纳' },
     }, operator);
 
-    expect(result.directApplied).toEqual([]);
+    expect(result.directApplied).toEqual(['档案信息']);
+    expect(reviews.applyArchiveChange).toHaveBeenCalledWith(tx, 'request-1', operator);
     expect(result.request).not.toBeNull();
     expect(tx.employeeProfile.upsert).not.toHaveBeenCalled();
     expect(tx.auditLog.create).not.toHaveBeenCalled();

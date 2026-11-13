@@ -42,6 +42,7 @@ function contractChanges(request: EmployeeDataReview) {
   return result;
 }
 function eventLabel(action: string) {
+  if (action === 'apply_employee_archive_change') return '提交并生效';
   if (/reject/.test(action)) return '退回';
   if (/cancel|withdraw/.test(action)) return '取消 / 撤回';
   if (/approve|review/.test(action)) return '审核';

@@ -77,7 +77,7 @@ test('entry-exit excludes transfers and archive edits without losing resignation
 });
 
 test('submission message separates exempt applied fields from pending review', () => {
-  assert.equal(lifecycle.archiveSubmissionMessage({ directApplied: ['姓名'], request: null }), '姓名已生效');
+  assert.equal(lifecycle.archiveSubmissionMessage({ directApplied: ['姓名'], request: null }), '档案已更新');
   assert.match(lifecycle.archiveSubmissionMessage({ directApplied: ['姓名'], request: { profileReviewStatus: 'pending' } }), /姓名已生效.*其余变更已提交审核/);
   assert.doesNotMatch(lifecycle.archiveSubmissionMessage({ directApplied: [], request: { profileReviewStatus: 'pending' } }), /已生效/);
 });
