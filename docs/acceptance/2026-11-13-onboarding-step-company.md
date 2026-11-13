@@ -5,9 +5,9 @@
 ## 当前状态
 
 - 已实现：API、Web、回归用例及可空公司映射列；保留此前未提交的时间轴、到岗面板、草稿续填与详情跳转改动。
-- 已提交：否。`main = origin/main = 18c5aabc08b22876ddbafbdc5e11a4dcd1772c0c`；本轮没有暂存、提交或推送。
-- 已上线：否。生产 API/Web 仍为 `00721ab3`，容器 ID 分别为 `d4b80ae726f8`、`d9a73252e0ad`，与本轮开始一致。
-- 业务已验收：否，交用户在 [固定预览](http://localhost:5173/entry-exit) 确认，生产发布另等明确授权。
+- 已提交：是。功能提交 `919905ec78a6f21f7eb832ecd949ecbe4cb3810e` 已推送 `origin/main`；其后的发布记录为文档提交，不改变镜像源码版本。
+- 已上线：是。用户授权双角色验证成立后发布；API/Web 最终于 2026-11-13 22:42 完成切换。构建配置纠正、备份、迁移和公网验证见 [发布记录](2026-11-13-onboarding-company-release.md)。
+- 业务已验收：否。隔离预览的真实后端双角色验证及线上只读冒烟已通过，正式 HR 办理、姚瑶审核仍交用户验收。
 
 ## 需求与实现
 
@@ -47,7 +47,7 @@
 - 仅为 `hrm_preview` 做迁移前备份：忽略目录 `test-results/hrm-preview-before-company-mapping.dump`。未复制正式员工资料。
 - 迁移 `20261113160000_contract_subject_internal_company` 只增加 `contract_subjects.internal_company` 可空枚举列，无默认值、无历史更新。
 - `prisma migrate status` 确认预览 64 个迁移已同步；预览健康 JSON 为 `status: ok, db: ok`。
-- 正式发布将同时涉及 API/Web 和此迁移，需另行授权、正式库备份及回滚镜像；不能套用前序“只发布 Web”的结论。
+- 正式发布同时涉及 API/Web 和此迁移，已获得本轮授权并完成正式库备份、回滚镜像保留；不能套用前序“只发布 Web”的结论。
 
 ## 试用步骤
 
