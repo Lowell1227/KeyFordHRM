@@ -78,12 +78,12 @@ describe('buildRosterWorkbook', () => {
     const workbook = await buildRosterWorkbook([item(), item({ id: 'u2', name: '苏萌', employeeNo: '12356' })]);
     const sheet = workbook.getWorksheet('花名册');
     expect(sheet).toBeDefined();
-    expect(sheet!.rowCount).toBe(3); // header + 2 rows
-    const headerValues = (sheet!.getRow(1).values as Array<unknown>).slice(1);
-    expect(headerValues).toEqual(['工号', '姓名', '任职状态', '部门', '岗位', '绩效直属上级', '系统权限', '直属下属', '钉钉登录']);
-    expect(sheet!.getRow(2).getCell(1).value).toBe('347');
-    expect(sheet!.getRow(3).getCell(2).value).toBe('苏萌');
-    expect(sheet!.actualRowCount).toBe(3);
+    expect(sheet!.rowCount).toBe(4); // two header rows + two employees
+    const headerValues = (sheet!.getRow(2).values as Array<unknown>).slice(1);
+    expect(headerValues).toEqual(['姓名', '工号', '部门', '岗位', '绩效直属上级', '任职状态', '系统权限', '直属下属', '钉钉登录']);
+    expect(sheet!.getRow(3).getCell(2).value).toBe('347');
+    expect(sheet!.getRow(4).getCell(1).value).toBe('苏萌');
+    expect(sheet!.actualRowCount).toBe(4);
   });
 
   it('produces a parseable xlsx buffer', async () => {
@@ -95,8 +95,8 @@ describe('buildRosterWorkbook', () => {
   it('exports only selected columns in the requested order, including tenure', async () => {
     const workbook = await (buildRosterWorkbook as any)([item({ companyTenure: '1年2个月' } as any)], ['companyTenure', 'name']);
     const sheet = workbook.getWorksheet('花名册')!;
-    expect((sheet.getRow(1).values as unknown[]).slice(1)).toEqual(['本次司龄', '姓名']);
-    expect((sheet.getRow(2).values as unknown[]).slice(1)).toEqual(['1年2个月', '冉光建']);
+    expect((sheet.getRow(2).values as unknown[]).slice(1)).toEqual(['本次司龄', '姓名']);
+    expect((sheet.getRow(3).values as unknown[]).slice(1)).toEqual(['1年2个月', '冉光建']);
     expect(sheet.columnCount).toBe(2);
   });
 });

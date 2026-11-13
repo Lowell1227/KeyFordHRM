@@ -9,6 +9,12 @@ import type {
   SetPasswordBody,
 } from '@/types/api.types';
 
+export interface RosterExportModule {
+  key: string;
+  label: string;
+  fields: { key: string; label: string; defaultSelected: boolean }[];
+}
+
 function apiGet<T>(url: string, params?: Record<string, unknown>): Promise<T> {
   return http.get(url, { params }) as unknown as Promise<T>;
 }
@@ -18,6 +24,10 @@ function apiPatch<T>(url: string, data?: unknown): Promise<T> {
 }
 
 export const usersApi = {
+  /** 当前操作人可导出的模块和字段。 */
+  rosterExportFields(): Promise<RosterExportModule[]> {
+    return apiGet('/users/export-fields');
+  },
   /** GET /users — 查询用户列表（HR / system_admin） */
   findAll(query: UserQuery): Promise<Paginated<User>> {
     return apiGet('/users', query as Record<string, unknown>);

@@ -31,6 +31,13 @@ export class UsersController {
     return this.usersService.exportRoster(dto, viewer);
   }
 
+  @Get('export-fields')
+  @Roles(SysRole.hr, SysRole.system_admin)
+  @HrCapabilities('employee_archive_edit', 'employee_archive_review', 'organization_edit')
+  exportFields(@CurrentUser() viewer: AuthUser) {
+    return this.usersService.exportFields(viewer);
+  }
+
   /** GET /users/:id/subordinates — 某人的直接下属（本人 / HR / system_admin / canViewAll） */
   @Get(':id/subordinates')
   findSubordinates(

@@ -8,7 +8,9 @@ import { DataScopeService } from '@/common/services/data-scope.service';
 import { PaginationDto, paginated, Paginated } from '@/common/dto/pagination.dto';
 import { AuthUser } from '@/common/types/auth.types';
 import { ERROR_CODE } from '@/common/constants/error-codes';
-import { buildRosterWorkbook, parseRosterExportColumns } from './users.excel';
+import { buildRosterWorkbook, parseRosterExportColumns, RosterWorkbookItem } from './users.excel';
+import { canExportArchiveFields, rosterExportFieldGroups } from './roster-export-catalog';
+import { rosterArchiveCells } from './roster-export-data';
 import { companyTenure } from '@/common/personnel/company-tenure';
 import { UserQueryDto } from './dto/user-query.dto';
 import { UpdateManagerDto } from './dto/update-manager.dto';
@@ -295,9 +297,14 @@ export class UsersService {
     return paginated(items, total, dto);
   }
 
-  /** GET /users/export — 按当前筛选导出花名册（Excel，字段与列表一致）。 */
+  exportFields(viewer: AuthUser) {
+    return rosterExportFieldGroups(viewer);
+  }
+
+  /** GET /users/export — 按当前查询范围和所选模块字段导出花名册。 */
   async exportRoster(dto: UserQueryDto, viewer: AuthUser): Promise<StreamableFile> {
-    const columns = parseRosterExportColumns(dto.columns);
+    const columns = parseRosterExportColumns(dto.columns, viewer);
+    const archiveAccess = canExportArchiveFields(viewer);
     const { where, scopeFilter } = await this.buildUserListWhere(dto, viewer);
     const total = await this.prisma.user.count({ where });
     if (total > ROSTER_EXPORT_MAX) {
@@ -309,9 +316,29 @@ export class UsersService {
         include: {
           employmentHistory: {
             where: approvedEmploymentSourceWhere,
-            select: { id: true, effectiveFrom: true, effectiveTo: true, entryDate: true, leaveDate: true, employeeStatus: true },
+            select: { id: true, effectiveFrom: true, effectiveTo: true, createdAt: true, entryDate: true, leaveDate: true, employeeStatus: true,
+              ...(archiveAccess ? { company: true, companyText: true, jobGrade: true, jobFamily: true, workLocation: true,
+                plannedRegularDate: true, actualRegularDate: true,
+                probationMonths: true, directManager: { select: { name: true } }, contractSubject: { select: { name: true } } } as const : {}),
+            },
           },
-          dept: { select: { name: true } },
+          dept: { select: { name: true, ...(archiveAccess ? { fullPath: true, company: true } as const : {}) } },
+          ...(archiveAccess ? {
+            employeeProfile: { select: {
+              phone: true, gender: true, birthDate: true, ethnicity: true, education: true, professionalTitle: true,
+              school: true, graduationDate: true, major: true, maritalStatus: true, childrenStatus: true, childrenCount: true,
+              politicalStatus: true, nativePlace: true, householdType: true, idAddress: true, idNumberFingerprint: true,
+              currentAddress: true, emergencyContactName: true, emergencyContactRelation: true, emergencyContactPhone: true,
+              socialSecurityStatus: true, socialSecurityStartDate: true, housingFundStatus: true, housingFundStartDate: true,
+              bankName: true, bankBranch: true, bankAccountFingerprint: true,
+            } },
+            employeeContracts: { select: {
+              id: true, sequence: true, contractType: true, name: true, signingCompany: true, signedAt: true, effectiveFrom: true,
+              expiresAt: true, termType: true, originalCompany: true, newCompany: true, confidentialityAgreement: true,
+              nonCompeteAgreement: true, portraitAgreement: true, isActive: true, createdAt: true,
+              contractSubject: { select: { name: true } },
+            } },
+          } as const : {}),
           directManager: { select: { name: true } },
           externalIdentityBindings: {
             where: { provider: ExternalIdentityProvider.dingtalk, endedAt: null },
@@ -329,7 +356,7 @@ export class UsersService {
     const directReportCounts = new Map<string | null, number>(
       directReportGroups.map((group) => [group.directManagerId, group._count._all] as const),
     );
-    const items: UserListItem[] = users.map((u) => ({
+    const items: RosterWorkbookItem[] = users.map((u) => ({
       id: u.id,
       employeeNo: u.employeeNo,
       name: u.name,
@@ -355,13 +382,14 @@ export class UsersService {
       dingtalkBindingState: u.externalIdentityBindings[0]?.status ?? 'unbound',
       archivedAt: u.archivedAt,
       matchedHistoricalEmployeeNo: null,
+      ...(archiveAccess ? { archiveFields: rosterArchiveCells(u), contracts: u.employeeContracts ?? [] } : {}),
     }));
     await this.prisma.auditLog.create({ data: {
       userId: viewer.id,
       action: 'export_employee_roster',
       entityType: 'employee_roster_export',
-      newValue: { total, columns, filters: {
-        keyword: dto.keyword ?? null, deptId: dto.deptId ?? null, status: dto.status ?? null,
+      newValue: { total: items.length, columns, filters: {
+        deptId: dto.deptId ?? null, status: dto.status ?? null,
         sysRole: dto.sysRole ?? null, archived: dto.archived ?? false,
         includeResigned: dto.includeResigned ?? false,
         employmentType: dto.employmentType ?? null, unassigned: dto.unassigned ?? false,

@@ -618,6 +618,35 @@ describe('UsersService', () => {
       expect(findMany).not.toHaveBeenCalled();
     });
 
+    it('ignores pagination while retaining scope filters and does not fetch private relations for organization-only HR', async () => {
+      const { service, findMany, count, auditCreate } = setup(1);
+      await service.exportRoster({ columns: 'name,employeeNo', page: 9, pageSize: 1,
+        status: 'resigned', archived: true, keyword: 'synthetic-query' } as any, {
+        ...hrViewer, sysRole: SysRole.hr_user, hrCapabilities: ['organization_edit'],
+      } as any);
+      const query = findMany.mock.calls[0][0];
+      expect(query).toMatchObject({ where: { status: 'resigned', archivedAt: { not: null } }, take: 5000 });
+      expect(query).not.toHaveProperty('skip');
+      expect(query.include).not.toHaveProperty('employeeProfile');
+      expect(query.include).not.toHaveProperty('employeeContracts');
+      expect(count.mock.calls[0][0].where).toEqual(query.where);
+      expect(auditCreate.mock.calls[0][0].data.newValue).toMatchObject({ total: 1, columns: ['name', 'employeeNo'],
+        filters: { status: 'resigned', archived: true } });
+      expect(auditCreate.mock.calls[0][0].data.newValue.filters).not.toHaveProperty('keyword');
+    });
+
+    it('loads archive relations in one bulk query with no encrypted documents or attachment material', async () => {
+      const { service, findMany } = setup(1);
+      await service.exportRoster({ columns: 'phone,latestContractName,contractHistory' } as any, hrViewer as any);
+      expect(findMany).toHaveBeenCalledTimes(1);
+      const query = findMany.mock.calls[0][0];
+      expect(query.include.employeeProfile.select).toMatchObject({ phone: true, idNumberFingerprint: true });
+      expect(query.include.employeeProfile.select).not.toHaveProperty('idNumberEncrypted');
+      expect(query.include.employeeProfile.select).not.toHaveProperty('bankAccountEncrypted');
+      expect(query.include.employeeContracts.select).not.toHaveProperty('attachments');
+      expect(query.include.employmentHistory.where).toHaveProperty('OR');
+    });
+
     it.each(['', 'name,', 'passwordHash', 'name,name'])('拒绝无效列选择 %s 且不读取人员', async columns => {
       const { service, count, findMany } = setup(1);
       await expect(service.exportRoster({ columns } as any, hrViewer as any)).rejects.toThrow();
@@ -639,14 +668,12 @@ describe('UsersService', () => {
       for await (const chunk of file.getStream()) chunks.push(Buffer.from(chunk));
       await workbook.xlsx.load(Buffer.concat(chunks) as any);
       const sheet = workbook.getWorksheet('花名册')!;
-      expect((sheet.getRow(1).values as unknown[]).slice(1)).toEqual(['本次司龄', '姓名']);
-      expect((sheet.getRow(2).values as unknown[]).slice(1)).toEqual(['1年2个月', '冉光建']);
-      expect(auditCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ newValue: {
-        total: 1, columns: ['companyTenure', 'name'], filters: {
-          keyword: null, deptId: null, status: null, sysRole: null, archived: false,
-          includeResigned: true, unassigned: true, includeTestAccounts: true, employmentType: 'full_time', eligibleFor: null,
-        },
-      } }) });
+      expect((sheet.getRow(2).values as unknown[]).slice(1)).toEqual(['本次司龄', '姓名']);
+      expect((sheet.getRow(3).values as unknown[]).slice(1)).toEqual(['1年2个月', '冉光建']);
+      expect(auditCreate).toHaveBeenCalledWith({ data: expect.objectContaining({ newValue: expect.objectContaining({
+        total: 1, columns: ['companyTenure', 'name'],
+        filters: expect.objectContaining({ unassigned: true, includeResigned: true, employmentType: 'full_time' }),
+      }) }) });
     });
   });
 });

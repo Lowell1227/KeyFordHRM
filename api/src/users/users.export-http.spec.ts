@@ -48,9 +48,8 @@ describe('roster column selection over HTTP', () => {
       }).expect(200);
     const workbook = new ExcelJS.Workbook();
     await workbook.xlsx.load(response.body);
-    expect((workbook.getWorksheet('花名册')!.getRow(1).values as unknown[]).slice(1)).toEqual(['本次司龄', '姓名']);
-    expect(audit.mock.calls[0][0].data.newValue).toMatchObject({ columns: ['companyTenure', 'name'],
-      filters: { unassigned: true, employmentType: 'part_time' } });
+    expect((workbook.getWorksheet('花名册')!.getRow(2).values as unknown[]).slice(1)).toEqual(['本次司龄', '姓名']);
+    expect(audit.mock.calls[0][0].data.newValue).toMatchObject({ columns: ['companyTenure', 'name'], total: 0 });
   });
 
   it('does not grant export access to an employee or HR without personnel capabilities', async () => {
@@ -58,6 +57,19 @@ describe('roster column selection over HTTP', () => {
       actor = { id: 'synthetic-denied', sysRole, hrCapabilities: [] };
       await request(app.getHttpServer()).get('/users/export').query({ columns: 'name' }).expect(403);
     }
+    expect(count).not.toHaveBeenCalled();
+  });
+
+  it('offers archive modules only to archive-capable HR and rejects forged archive columns', async () => {
+    const full = await request(app.getHttpServer()).get('/users/export-fields').expect(200);
+    expect(full.body.map((group: any) => group.label)).toEqual([
+      '基本与任职', '个人与教育', '身份与联系', '社保公积金', '银行信息', '最新合同', '合同历史', '系统信息',
+    ]);
+    expect(full.body.flatMap((group: any) => group.fields).some((field: any) => field.key === 'phone')).toBe(true);
+    actor = { id: 'synthetic-org-only', sysRole: SysRole.hr_user, hrCapabilities: ['organization_edit'] };
+    const limited = await request(app.getHttpServer()).get('/users/export-fields').expect(200);
+    expect(limited.body.flatMap((group: any) => group.fields)).toHaveLength(10);
+    await request(app.getHttpServer()).get('/users/export').query({ columns: 'name,phone' }).expect(403);
     expect(count).not.toHaveBeenCalled();
   });
 });

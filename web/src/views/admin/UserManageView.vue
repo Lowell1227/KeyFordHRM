@@ -22,7 +22,6 @@ import {
 } from '@/api/employee-archives.api';
 import { usersApi } from '@/api/users.api';
 import { talentPoolApi } from '@/api/talent-pool.api';
-import { useExport } from '@/composables/useExport';
 import { uploadApi } from '@/api/upload.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
@@ -35,6 +34,7 @@ import BusinessListPage from '@/components/common/business-list/BusinessListPage
 import EmployeeArchiveInlineEditor from './components/EmployeeArchiveInlineEditor.vue';
 import DepartmentEditDrawer from './components/DepartmentEditDrawer.vue';
 import DirectReportsPopover from './components/DirectReportsPopover.vue';
+import RosterExportDialog from './components/RosterExportDialog.vue';
 import DepartmentCreateDrawer from './components/DepartmentCreateDrawer.vue';
 import EmployeeCreateDrawer from './components/EmployeeCreateDrawer.vue';
 import EmployeeReentryDrawer from './components/EmployeeReentryDrawer.vue';
@@ -504,58 +504,15 @@ async function changeEmployeeCategory(category: EmployeeDirectoryCategory) {
   await loadUsers();
 }
 
-const rosterExport = useExport();
 const rosterExportVisible = ref(false);
-const rosterExportError = ref('');
 const rosterExportQuery = ref<UserQuery>({});
 const rosterExportTotal = ref(0);
-const rosterExportScope = ref('');
-const rosterExportFields = [
-  { key: 'employeeNo', label: '工号' },
-  { key: 'name', label: '姓名' },
-  { key: 'status', label: '任职状态' },
-  { key: 'deptName', label: '部门' },
-  { key: 'position', label: '岗位' },
-  { key: 'directManagerName', label: '绩效直属上级' },
-  { key: 'systemPermission', label: '系统权限' },
-  { key: 'directReportCount', label: '直属下属' },
-  { key: 'dingtalkBindingState', label: '钉钉登录' },
-  { key: 'companyTenure', label: '本次司龄' },
-];
-const rosterExportColumns = ref(rosterExportFields.slice(0, 9).map(field => field.key));
 
 function openRosterExport() {
   if (!appliedUserQuery.value || userLoading.value || userLoadError.value || isApplicationsCategory.value) return;
   rosterExportQuery.value = { ...appliedUserQuery.value };
   rosterExportTotal.value = userTotal.value;
-  const query = rosterExportQuery.value;
-  rosterExportScope.value = [
-    query.archived ? '已归档' : query.status ? statusLabels[query.status] : '全部未归档员工',
-    query.deptId ? flattenedDepartments.value.find(dept => dept.id === query.deptId)?.name || '已选部门' : '全部部门',
-    query.sysRole ? roleLabels[query.sysRole] : '全部系统权限',
-    query.keyword ? `关键词：${query.keyword}` : '',
-  ].filter(Boolean).join(' · ');
-  rosterExportError.value = '';
   rosterExportVisible.value = true;
-}
-
-/** 花名册导出：与当前列表同一筛选条件，所见即所得。 */
-async function exportRoster() {
-  if (!rosterExportColumns.value.length || rosterExport.loading.value) return;
-  rosterExportError.value = '';
-  const date = new Intl.DateTimeFormat('sv-SE', { timeZone: 'Asia/Shanghai' }).format(new Date()).replace(/-/g, '');
-  try {
-    await rosterExport.download(
-      () => usersApi.exportRoster({
-        ...rosterExportQuery.value,
-        columns: rosterExportFields.filter(field => rosterExportColumns.value.includes(field.key)).map(field => field.key).join(','),
-      }),
-      `花名册-${date}.xlsx`,
-    );
-    rosterExportVisible.value = false;
-  } catch (error) {
-    rosterExportError.value = error instanceof Error ? error.message : '导出失败，请重试。';
-  }
 }
 
 async function changeProcessingCategory(category: PersonnelProcessingCategory, syncRoute = true) {
@@ -2352,7 +2309,6 @@ onBeforeUnmount(() => {
             <el-button @click="resetUserFilters">重置</el-button>
             <el-button
               v-if="activeView === 'users' && !isApplicationsCategory"
-              :loading="rosterExport.loading.value"
               :disabled="userLoading || !!userLoadError || !appliedUserQuery"
               @click="openRosterExport"
             >导出花名册</el-button>
@@ -2615,25 +2571,7 @@ onBeforeUnmount(() => {
 
     </ChartCard>
 
-    <el-dialog v-model="rosterExportVisible" title="导出花名册" width="min(540px, 94vw)"
-      :close-on-click-modal="!rosterExport.loading.value" :close-on-press-escape="!rosterExport.loading.value"
-      :show-close="!rosterExport.loading.value">
-      <p class="roster-export-scope">{{ rosterExportScope }}</p>
-      <p class="roster-export-scope">按已查询条件导出全部 {{ rosterExportTotal }} 名员工，包含其他分页。</p>
-      <div class="roster-export-tools">
-        <strong>选择字段（{{ rosterExportColumns.length }}）</strong>
-        <el-button link type="primary" :disabled="rosterExport.loading.value" @click="rosterExportColumns = rosterExportFields.map(field => field.key)">全选</el-button>
-        <el-button link :disabled="rosterExport.loading.value" @click="rosterExportColumns = []">清空</el-button>
-      </div>
-      <el-checkbox-group v-model="rosterExportColumns" class="roster-export-fields" :disabled="rosterExport.loading.value" aria-label="导出字段">
-        <el-checkbox v-for="field in rosterExportFields" :key="field.key" :value="field.key">{{ field.label }}</el-checkbox>
-      </el-checkbox-group>
-      <el-alert v-if="rosterExportError" :title="rosterExportError" type="error" :closable="false" />
-      <template #footer>
-        <el-button :disabled="rosterExport.loading.value" @click="rosterExportVisible = false">取消</el-button>
-        <el-button type="primary" :loading="rosterExport.loading.value" :disabled="!rosterExportColumns.length" @click="exportRoster">导出 Excel</el-button>
-      </template>
-    </el-dialog>
+    <RosterExportDialog v-model="rosterExportVisible" :query="rosterExportQuery" :total="rosterExportTotal" />
 
     <el-drawer
       v-model="employeeArchiveDrawer.visible"
@@ -3217,30 +3155,6 @@ onBeforeUnmount(() => {
   padding: 12px 16px;
   color: var(--el-color-danger);
 }
-
-.roster-export-scope {
-  margin: 0 0 12px;
-  color: var(--el-text-color-secondary);
-  line-height: 1.6;
-  overflow-wrap: anywhere;
-}
-
-.roster-export-tools {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-
-.roster-export-tools strong { margin-right: auto; }
-
-.roster-export-fields {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 12px;
-  margin: 12px 0 20px;
-}
-
-.roster-export-fields :deep(.el-checkbox) { margin-right: 0; }
 
 .contract-history-toggle {
   padding: 10px 0;
