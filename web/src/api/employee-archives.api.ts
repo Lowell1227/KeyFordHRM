@@ -419,7 +419,7 @@ export const employeeArchivesApi = {
     contracts: Record<string, unknown>[];
     performance: Record<string, unknown>;
   }): Promise<{ request: EmployeeDataReview | null; directApplied: string[]; reviewOutcome?: 'approved' | 'pending' | 'not_required' }> {
-    return http.patch(`/employee-archives/${userId}/draft`, body) as unknown as Promise<{ request: EmployeeDataReview | null; directApplied: string[]; reviewOutcome?: 'approved' | 'pending' | 'not_required' }>;
+    return http.patch(`/employee-archives/${userId}/draft`, body, { skipErrorMessage: true }) as unknown as Promise<{ request: EmployeeDataReview | null; directApplied: string[]; reviewOutcome?: 'approved' | 'pending' | 'not_required' }>;
   },
 
   lookupIdentity(body: { phone?: string; idNumber?: string; excludeRequestId?: string }): Promise<EmployeeIdentityLookupResult> {
@@ -451,7 +451,7 @@ export const employeeArchivesApi = {
     contracts: Record<string, unknown>[];
     performance: Record<string, unknown>;
   }): Promise<EmployeeDataReview | null> {
-    return http.patch(`/employee-archives/${userId}/draft/save`, body) as unknown as Promise<EmployeeDataReview | null>;
+    return http.patch(`/employee-archives/${userId}/draft/save`, body, { skipErrorMessage: true }) as unknown as Promise<EmployeeDataReview | null>;
   },
 
   submitDepartmentAssignments(userIds: string[], departmentId: string): Promise<{ submitted: number; reviewOutcome?: 'approved' | 'pending' | 'not_required' }> {

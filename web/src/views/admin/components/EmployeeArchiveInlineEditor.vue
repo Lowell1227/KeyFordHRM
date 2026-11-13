@@ -37,6 +37,8 @@ const emit = defineEmits<{
   saved: [value: EmployeeDataReview];
   busy: [value: boolean];
   state: [value: 'idle' | 'saving' | 'saved' | 'error'];
+  blocked: [value: boolean];
+  reload: [];
 }>();
 const positions = ref<PositionRecord[]>([]);
 const fallbackEmployment = computed(() => props.archive && !props.archive.currentEmployment
@@ -45,6 +47,8 @@ const editorElement = ref<HTMLElement>();
 const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
 const saveError = ref('');
 const saveBlocked = ref(false);
+const failedAction = ref<'save' | 'submit'>('save');
+watch(saveBlocked, value => emit('blocked', value));
 watch(saveState, value => emit('state', value));
 let draftId: string | undefined;
 let draftVersion: number | undefined;
@@ -177,8 +181,15 @@ function reset() {
       }));
     }
   }
-  initialSnapshot = formSnapshot();
-  void nextTick(() => { hydrating = false; void focusField(props.focusField); });
+  initialSnapshot = '';
+  const session = generation;
+  void nextTick(() => {
+    if (session !== generation || !props.editing) return;
+    // Controls can normalize stored numeric values while mounting; that is not an edit.
+    initialSnapshot = formSnapshot();
+    hydrating = false;
+    void focusField(props.focusField);
+  });
 }
 
 watch(() => [props.editing, props.archive?.id] as const, ([editing]) => {
@@ -331,11 +342,7 @@ async function saveDraft(): Promise<boolean> {
       return true;
     } catch (error) {
       if (session !== generation) return false;
-      saveState.value = 'error';
-      saveBlocked.value = isAxiosError(error) && error.response?.status === 409;
-      saveError.value = saveBlocked.value
-        ? '资料已更新，本次输入已保留。请先留存本次修改，关闭后重新打开最新草稿核对，避免覆盖其他人的修改。'
-        : '草稿保存失败，输入已保留。请重试保存。';
+      showWriteError(error);
       return false;
     } finally {
       if (session === generation) emit('busy', false);
@@ -346,6 +353,27 @@ async function saveDraft(): Promise<boolean> {
   if (savePromise === promise) savePromise = undefined;
   if (succeeded && session === generation && isDirty()) return saveDraft();
   return succeeded;
+}
+
+function showWriteError(error: unknown, submitting = false) {
+  clearTimeout(autosaveTimer);
+  failedAction.value = submitting ? 'submit' : 'save';
+  saveState.value = 'error';
+  const status = isAxiosError(error) ? error.response?.status : undefined;
+  saveBlocked.value = status === 409;
+  const message = isAxiosError(error) ? error.response?.data?.message : '';
+  const detail = Array.isArray(message) ? message.filter(item => typeof item === 'string').join('；') : message;
+  saveError.value = saveBlocked.value
+    ? (typeof message === 'string' && message.includes('已有待核草稿或待审申请')
+      ? '已有未完成的档案变更，本次输入已保留。请加载原记录后继续。'
+      : '档案或草稿已更新，本次输入已保留。请加载最新记录后核对。')
+    : status === 403 ? '没有修改该档案的权限，请联系管理员。本次输入已保留。'
+    : status === 400 && typeof detail === 'string' && detail ? `${detail}。本次输入已保留。`
+    : submitting ? '提交未完成，输入已保留，请重试提交。' : '草稿保存失败，输入已保留，请重试保存。';
+}
+
+function showReloadError() {
+  saveError.value = '最新记录暂时读取失败，输入已保留，请重试加载。';
 }
 
 async function focusField(field?: string) {
@@ -368,14 +396,18 @@ function isDirty() {
   return Boolean(initialSnapshot) && formSnapshot() !== initialSnapshot;
 }
 
-defineExpose({ submit, saveDraft, reset, isDirty, focusField,
+defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, showReloadError,
   pauseAutosave: () => clearTimeout(autosaveTimer), resumeAutosave: scheduleAutosave });
 </script>
 
 <template>
   <div v-if="editing" ref="editorElement" class="archive-inline-editor" :inert="busy" :aria-busy="busy">
-    <div class="archive-save-state" role="status" aria-live="polite">{{ saveState === 'saving' ? '正在保存草稿…' : saveState === 'saved' ? '草稿已保存，尚未提交' : saveState === 'error' ? '草稿尚未保存' : '修改后自动保存草稿' }}</div>
-    <div v-if="saveError" class="archive-save-error" role="alert">{{ saveError }}<el-button v-if="!saveBlocked" link type="primary" @click="saveDraft">重试保存</el-button></div>
+    <div v-if="saveError" class="archive-save-error" :class="{ 'archive-save-error--conflict': saveBlocked }" role="alert">
+      <span>{{ saveError }}</span>
+      <el-button v-if="saveBlocked" link type="primary" @click="emit('reload')">重新加载</el-button>
+      <el-button v-else-if="failedAction === 'submit'" link type="primary" @click="submit">重试提交</el-button>
+      <el-button v-else link type="primary" @click="saveDraft">重试保存</el-button>
+    </div>
     <nav class="archive-editor-nav" aria-label="档案分区"><el-button v-for="section in [{ id: 'employment', label: '基本与任职' }, { id: 'personal', label: '个人与教育' }, { id: 'contact', label: '联系与保障' }, { id: 'contracts', label: '合同记录' }]" :key="section.id" link @click="editorElement?.querySelector(`[data-archive-section='${section.id}']`)?.scrollIntoView({ block: 'start' })">{{ section.label }}</el-button></nav>
     <section class="editor-section" data-archive-section="employment">
       <div class="editor-section__head">
@@ -505,8 +537,8 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField,
 </template>
 
 <style scoped>
-.archive-save-state { color: var(--el-text-color-secondary); font-size: 13px; }
-.archive-save-error { color: var(--el-color-danger); font-size: 13px; line-height: 1.6; }
+.archive-save-error { display: flex; align-items: baseline; flex-wrap: wrap; gap: 8px; color: var(--el-color-danger); font-size: 13px; line-height: 1.6; }
+.archive-save-error--conflict { color: var(--el-text-color-regular); }
 .archive-editor-nav { display: flex; gap: 16px; flex-wrap: wrap; padding: 6px 0; }
 .editor-section { scroll-margin-top: 12px; }
 .archive-field--focused { outline: 2px solid var(--el-color-primary-light-5); outline-offset: 5px; border-radius: 4px; }

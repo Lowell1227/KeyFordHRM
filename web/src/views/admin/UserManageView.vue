@@ -769,6 +769,9 @@ const activeArchiveDraft = ref<EmployeeDataReview | null>(null);
 const archiveEditorRef = ref<InstanceType<typeof EmployeeArchiveInlineEditor> | null>(null);
 const archiveDraftSaving = ref(false);
 const archiveSaveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
+const archiveSaveBlocked = ref(false);
+const archiveEntryLoading = ref(false);
+const archivePendingRequest = ref<EmployeeDataReview | null>(null);
 const archiveIssueContext = ref<EmployeeArchiveIssue | null>(null);
 const archiveNotice = ref('');
 const archiveSubmitError = ref('');
@@ -786,6 +789,62 @@ function archiveDisplayValue(value: unknown, emptyText = '未填写') {
   return value === null || value === undefined || value === '' ? emptyText : String(value);
 }
 
+function unfinishedArchiveChange(archive: EmployeeArchive) {
+  return archive.changeHistory?.find(request => request.sourceType === 'manual_archive_change'
+    && !request.archivedAt && ['draft', 'submitted'].includes(request.recordStatus ?? '')
+    && (request.recordStatus === 'draft' || [request.profileReviewStatus, request.performanceReviewStatus]
+      .some(status => ['pending', 'applying', 'rejected'].includes(status)))) ?? null;
+}
+
+async function startArchiveEdit(reload = false) {
+  const current = employeeArchiveDrawer.value.data;
+  if (!current || !canEditArchive.value || archiveReadOnly.value || archiveEntryLoading.value
+    || (archiveEditing.value && !reload)) return;
+  const generation = ++archiveLoadGeneration;
+  archiveEntryLoading.value = true;
+  archiveSubmitError.value = '';
+  try {
+    // Detail may have been open while another HR saved or submitted the original record.
+    const archive = await employeeArchivesApi.getArchive(current.id);
+    if (generation !== archiveLoadGeneration || !employeeArchiveDrawer.value.visible) return;
+    const request = unfinishedArchiveChange(archive);
+    archiveEditing.value = false;
+    await nextTick();
+    if (generation !== archiveLoadGeneration || !employeeArchiveDrawer.value.visible) return;
+    employeeArchiveDrawer.value.data = archive;
+    activeArchiveDraft.value = null;
+    archivePendingRequest.value = null;
+    archiveSaveBlocked.value = false;
+    archiveSaveState.value = 'idle';
+    if (archive.archivedAt) return;
+    if (request && request.recordStatus !== 'draft' && !request.canResume) {
+      archivePendingRequest.value = request;
+      return;
+    }
+    activeArchiveDraft.value = request;
+    archiveEditing.value = true;
+  } catch {
+    if (generation === archiveLoadGeneration) {
+      if (archiveEditing.value) archiveEditorRef.value?.showReloadError();
+      else archiveSubmitError.value = '暂时无法加载最新档案，请重试。';
+    }
+  } finally {
+    if (generation === archiveLoadGeneration) archiveEntryLoading.value = false;
+  }
+}
+
+async function reloadArchiveEdit() {
+  if (archiveEntryLoading.value || archiveDraftSaving.value || archiveEditSaving.value) return;
+  if (archiveEditorRef.value?.isDirty()) {
+    try {
+      await ElMessageBox.confirm('重新加载会替换本次未保存的输入。需要保留的内容，请先复制。', '加载最新记录', {
+        confirmButtonText: '放弃修改并加载', cancelButtonText: '保留当前输入', type: 'warning',
+      });
+    } catch { return; }
+  }
+  await startArchiveEdit(true);
+}
+
 async function openEmployeeArchive(row: ArchiveTarget, keepQueue = false) {
   if (!canViewArchive.value) return;
   const generation = ++archiveLoadGeneration;
@@ -800,6 +859,9 @@ async function openEmployeeArchive(row: ArchiveTarget, keepQueue = false) {
   archiveRequestedPerson.value = row;
   archiveDraftSaving.value = false;
   archiveSaveState.value = 'idle';
+  archiveSaveBlocked.value = false;
+  archiveEntryLoading.value = false;
+  archivePendingRequest.value = null;
   archiveSection.value = 'current';
   expandedContractGroups.value = [];
   employeeArchiveDrawer.value.visible = true;
@@ -837,7 +899,7 @@ async function maintainArchiveIssue(issue: EmployeeArchiveIssue, row?: ManagedUs
   await openEmployeeArchive(row?.id === employeeId ? row : { id: employeeId } as ManagedUser);
   if (!employeeArchiveDrawer.value.visible || employeeArchiveDrawer.value.data?.id !== employeeId) return;
   archiveIssueContext.value = issue;
-  if (canEditArchive.value && employeeArchiveDrawer.value.data && !archiveReadOnly.value) archiveEditing.value = true;
+  await startArchiveEdit();
 }
 
 async function submitArchiveDraft(value: {
@@ -875,9 +937,7 @@ async function submitArchiveDraft(value: {
     refreshCurrentView();
   } catch (error) {
     if (generation !== archiveLoadGeneration) return;
-    archiveSubmitError.value = isAxiosError(error) && error.response?.status === 409
-      ? '资料已更新，本次输入已保留，请重新打开最新资料核对后提交。'
-      : '提交未完成，输入已保留，请核对提示后重试。';
+    archiveEditorRef.value?.showWriteError(error, true);
   } finally {
     if (generation === archiveLoadGeneration) archiveEditSaving.value = false;
   }
@@ -888,7 +948,7 @@ function archiveDraftSaved(value: EmployeeDataReview) {
 }
 
 async function prepareArchiveLeave(): Promise<boolean> {
-  if (archiveEditSaving.value || archiveDraftSaving.value) return false;
+  if (archiveEditSaving.value || archiveDraftSaving.value || archiveEntryLoading.value) return false;
   if (!archiveEditing.value || !archiveEditorRef.value?.isDirty()) return true;
   archiveEditorRef.value.pauseAutosave();
   if (await archiveEditorRef.value.saveDraft()) return true;
@@ -1105,7 +1165,7 @@ async function openApplication(requestId: string, isCurrent = () => true, syncRo
   if (syncRoute && route.query.requestId !== requestId) {
     applicationOpenedFromList.value = true;
     await router.push({ path: isPersonnelLifecycleRequest(result) ? '/entry-exit' : '/users', query: {
-      ...route.query, talentId: undefined, assistantRequestId: undefined, applicationId: undefined,
+      ...route.query, employeeId: undefined, talentId: undefined, assistantRequestId: undefined, applicationId: undefined,
       requestId, tab: isPersonnelLifecycleRequest(result) ? route.query.tab === 'arrivals' ? 'arrivals' : 'applications' : 'changes',
     } });
   }
@@ -1486,7 +1546,17 @@ async function continueDraft(draft: EmployeeDataReview): Promise<boolean> {
     const archive = await employeeArchivesApi.getArchive(draft.userId);
     if (generation !== archiveLoadGeneration) return false;
     employeeArchiveDrawer.value.data = archive;
-    activeArchiveDraft.value = draft;
+    const latest = draft.sourceType === 'manual_archive_change' ? unfinishedArchiveChange(archive) : draft;
+    archivePendingRequest.value = null;
+    archiveSaveBlocked.value = false;
+    archiveEntryLoading.value = false;
+    if (archive.archivedAt) { activeArchiveDraft.value = null; return false; }
+    if (latest && latest.recordStatus !== 'draft' && !latest.canResume) {
+      activeArchiveDraft.value = null;
+      archivePendingRequest.value = latest;
+      return false;
+    }
+    activeArchiveDraft.value = latest;
     archiveEditing.value = true;
     return true;
   } catch {
@@ -1521,7 +1591,7 @@ async function openResignationDepartmentEditor() {
   const generation = archiveLoadGeneration + 1;
   await openEmployeeArchive({ id: employeeId } as ManagedUser);
   if (generation !== archiveLoadGeneration || resignationDepartmentEmployeeId.value !== employeeId) return;
-  if (employeeArchiveDrawer.value.data?.id === employeeId && !archiveReadOnly.value) archiveEditing.value = true;
+  if (employeeArchiveDrawer.value.data?.id === employeeId && !archiveReadOnly.value) await startArchiveEdit();
   else if (!employeeArchiveDrawer.value.data) ElMessage.warning('档案读取未完成，已保留离职信息，请重试补充部门。');
 }
 
@@ -2599,8 +2669,8 @@ onBeforeUnmount(() => {
                 · {{ employeeArchiveDrawer.data.position || '未设置岗位' }}
               </p>
             </div>
-            <div v-if="canEditArchive && !archiveReadOnly && !archiveEditing" class="employee-archive__global-actions">
-              <el-button type="primary" @click="archiveEditing = true">编辑档案</el-button>
+            <div v-if="canEditArchive && !archiveReadOnly && !archiveEditing && !archivePendingRequest" class="employee-archive__global-actions">
+              <el-button type="primary" :loading="archiveEntryLoading" @click="startArchiveEdit()">编辑档案</el-button>
             </div>
           </div>
           <aside v-if="archiveIssueContext" class="archive-issue-context" role="note" aria-label="正在核实事项">
@@ -2610,6 +2680,7 @@ onBeforeUnmount(() => {
           </aside>
           <el-alert v-if="archiveNotice" :title="archiveNotice" type="success" :closable="false" />
           <el-alert v-if="archiveSubmitError" :title="archiveSubmitError" type="error" :closable="false" />
+          <div v-if="archivePendingRequest && !archiveEditing" class="archive-pending-record" role="status"><span>已有待处理的档案变更</span><el-button link type="primary" @click="openApplication(archivePendingRequest.id)">查看原申请</el-button></div>
 
           <el-tabs v-if="!archiveEditing" v-model="archiveSection" class="archive-section-tabs"><el-tab-pane name="current" label="当前档案" /><el-tab-pane name="employment" label="任职历史" /><el-tab-pane name="contracts" label="合同材料" /><el-tab-pane name="changes" label="变更记录" /></el-tabs>
 
@@ -2619,11 +2690,13 @@ onBeforeUnmount(() => {
             :archive="employeeArchiveDrawer.data"
             :draft="activeArchiveDraft"
             :departments="departments"
-            :busy="archiveEditSaving"
+            :busy="archiveEditSaving || archiveEntryLoading"
             :focus-field="archiveIssueContext?.field"
             @saved="archiveDraftSaved"
             @busy="archiveDraftSaving = $event"
             @state="archiveSaveState = $event"
+            @blocked="archiveSaveBlocked = $event"
+            @reload="reloadArchiveEdit"
             @submit="submitArchiveDraft"
           />
 
@@ -2845,12 +2918,12 @@ onBeforeUnmount(() => {
       </div>
       <template #footer>
         <div class="archive-edit-footer">
-          <div v-if="archiveEditing" class="archive-footer-state" aria-live="polite"><span>{{ archiveSaveState === 'saving' ? '正在保存…' : archiveSaveState === 'saved' ? '草稿已保存' : archiveSaveState === 'error' ? '草稿未保存，请核对提示' : '修改后自动保存' }}</span></div>
-          <el-button v-if="resignationDepartmentEmployeeId" :disabled="archiveEditSaving || archiveDraftSaving" @click="beforeCloseEmployeeArchive(() => employeeArchiveDrawer.visible = false)">返回离职办理</el-button>
-          <el-button v-else-if="nextArchivePerson" link :disabled="archiveEditSaving || archiveDraftSaving" @click="openNextArchive">下一位待处理</el-button>
+          <div v-if="archiveEditing && archiveSaveState !== 'error'" class="archive-footer-state" aria-live="polite"><span>{{ archiveSaveState === 'saving' ? '正在保存…' : archiveSaveState === 'saved' ? '草稿已保存，尚未提交' : '修改后自动保存' }}</span></div>
+          <el-button v-if="resignationDepartmentEmployeeId" :disabled="archiveEditSaving || archiveDraftSaving || archiveEntryLoading" @click="beforeCloseEmployeeArchive(() => employeeArchiveDrawer.visible = false)">返回离职办理</el-button>
+          <el-button v-else-if="nextArchivePerson" link :disabled="archiveEditSaving || archiveDraftSaving || archiveEntryLoading" @click="openNextArchive">下一位待处理</el-button>
           <template v-if="archiveEditing">
-            <el-button :disabled="archiveEditSaving || archiveDraftSaving" @click="beforeCloseEmployeeArchive(() => employeeArchiveDrawer.visible = false)">关闭</el-button>
-            <el-button type="primary" :loading="archiveEditSaving" :disabled="archiveDraftSaving" @click="archiveEditorRef?.submit()">提交</el-button>
+            <el-button :disabled="archiveEditSaving || archiveDraftSaving || archiveEntryLoading" @click="beforeCloseEmployeeArchive(() => employeeArchiveDrawer.visible = false)">关闭</el-button>
+            <el-button type="primary" :loading="archiveEditSaving" :disabled="archiveDraftSaving || archiveSaveBlocked || archiveEntryLoading" @click="archiveEditorRef?.submit()">提交</el-button>
           </template>
         </div>
       </template>
@@ -3185,6 +3258,7 @@ onBeforeUnmount(() => {
 .archive-issue-context { position: sticky; top: 0; z-index: 4; max-height: 150px; overflow-y: auto; display: grid; gap: 5px; padding: 12px 14px; background: var(--el-color-warning-light-9); border-left: 3px solid var(--el-color-warning); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .archive-issue-context small { color: var(--el-text-color-secondary); }
 .archive-footer-state { display: flex; align-items: center; gap: 12px; margin-right: auto; align-self: center; color: var(--el-text-color-secondary); font-size: 12px; }
+.archive-pending-record { display: flex; align-items: baseline; flex-wrap: wrap; gap: 12px; margin: 12px 0; color: var(--el-text-color-regular); font-size: 13px; }
 @media (max-width: 768px) { .archive-footer-state { flex-basis: 100%; } }
 .archive-edit-footer { display: flex; justify-content: flex-end; gap: 8px; flex-wrap: wrap; }
 .archive-edit-footer :deep(.el-button + .el-button) { margin-left: 0; }

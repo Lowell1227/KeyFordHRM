@@ -62,7 +62,7 @@ test('explicitly clears nullable relationships and gender in the autosaved wire 
     employee: { positionId: null, position: null, managerId: null },
     performance: { managerId: null }, profile: { gender: null },
   });
-  await expect(drawer.locator('.archive-save-state')).toHaveText('草稿已保存，尚未提交');
+  await expect(drawer.locator('.archive-footer-state')).toHaveText('草稿已保存，尚未提交');
 });
 
 test('preserves a legacy account phone when its profile is missing, while allowing an explicit clear', async ({ page }) => {
