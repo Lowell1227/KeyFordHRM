@@ -104,7 +104,7 @@ function setup(intakeType: 'new_hire' | 'reentry' = 'new_hire') {
     }), create: jest.fn() },
     department: { findUnique: jest.fn(async ({ where }) => ({ id: where.id, isActive: true })) },
     position: { findUnique: jest.fn(async ({ where }) => ({ id: where.id, name: 'Original position', isActive: true })) },
-    contractSubject: { findUnique: jest.fn(async () => ({ id: subjectId, name: 'Synthetic subject', isActive: true })) },
+    contractSubject: { findUnique: jest.fn(async () => ({ id: subjectId, name: 'Synthetic subject', isActive: true, internalCompany: CompanyCode.beijing_fuede })) },
     employeeContract: { findMany: jest.fn(async () => []) },
     employeeProfile: { upsert: jest.fn() },
     talentCandidate: { findUnique: jest.fn(async () => ({ ...candidate })),
@@ -128,6 +128,43 @@ function setup(intakeType: 'new_hire' | 'reentry' = 'new_hire') {
 describe('onboarding revision and cancelled-arrival recovery', () => {
   beforeEach(() => jest.useFakeTimers().setSystemTime(new Date('2026-11-12T03:00:00Z')));
   afterEach(() => jest.useRealTimers());
+
+  it.each(['remapped', 'unmapped', 'inactive'])('keeps the reviewed same-subject company through repeated revisions and approval: %s', async directoryState => {
+    const f = setup('reentry');
+    const frozen = { contractSubjectId: subjectId, company: 'fuede', companyText: 'Reviewed subject' };
+    Object.assign(f.records[0], frozen);
+    // The approved employment, not a stale proposal, owns the company snapshot.
+    Object.assign(f.request.proposedValue.employee, { ...frozen, company: 'fansibao', companyText: 'Stale proposal' });
+    f.tx.contractSubject.findUnique.mockResolvedValue({ id: subjectId, name: 'Renamed subject',
+      isActive: directoryState !== 'inactive', internalCompany: directoryState === 'unmapped' ? null : CompanyCode.beijing_fuede });
+    const input = { contractSubjectId: subjectId, company: CompanyCode.fansibao,
+      deptId: 'd1', position: 'First revision', effectiveDate: new Date('2026-11-11'),
+      employeeStatus: UserStatus.probation, employmentType: EmploymentType.full_time };
+    expect((await f.onboarding.reviseReentry('r1', input, editor.id)).proposedValue.employee).toMatchObject(frozen);
+    expect(f.records).toEqual([]);
+    await f.reviews.rejectBatch(['r1'], 'Synthetic correction', reviewer);
+    expect((await f.onboarding.reviseReentry('r1', { ...input, contractSubjectId: undefined, position: 'Second revision' }, editor.id))
+      .proposedValue.employee).toMatchObject(frozen);
+    expect((await f.approve()).failed).toEqual([]);
+    expect(f.records).toHaveLength(1);
+    expect(f.records[0]).toMatchObject({ ...frozen, position: 'Second revision' });
+    expect(f.tx.contractSubject.findUnique).not.toHaveBeenCalled();
+  });
+
+  it('recomputes only a newly selected subject and still rejects mapping drift on approval', async () => {
+    const f = setup('reentry');
+    const frozen = { contractSubjectId: subjectId, company: 'fuede', companyText: 'Reviewed subject' };
+    Object.assign(f.records[0], frozen);
+    Object.assign(f.request.proposedValue.employee, frozen);
+    const nextId = '33333333-3333-4333-8333-333333333333';
+    const input = { contractSubjectId: nextId, company: CompanyCode.fuede, deptId: 'd1',
+      effectiveDate: new Date('2026-11-11'), employeeStatus: UserStatus.probation, employmentType: EmploymentType.full_time };
+    const revised = await f.onboarding.reviseReentry('r1', input, editor.id);
+    expect(revised.proposedValue.employee).toMatchObject({ contractSubjectId: nextId, company: 'beijing_fuede', companyText: 'Synthetic subject' });
+    f.tx.contractSubject.findUnique.mockResolvedValue({ id: nextId, name: 'Synthetic subject', isActive: true, internalCompany: null });
+    expect((await f.approve()).failed).toEqual([{ requestId: 'r1', reason: expect.stringContaining('内部公司映射') }]);
+    expect(f.records).toEqual([]);
+  });
 
   it('applies all reviewed reentry fields after date revision and return, without replacing the employment identity', async () => {
     const f = setup('reentry');

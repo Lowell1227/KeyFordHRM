@@ -2,7 +2,7 @@ import 'reflect-metadata';
 import { Reflector } from '@nestjs/core';
 import { plainToInstance } from 'class-transformer';
 import { validate } from 'class-validator';
-import { SysRole } from '@prisma/client';
+import { CompanyCode, SysRole } from '@prisma/client';
 import { ContractSubjectsService } from './contract-subjects.service';
 import { ContractSubjectsController } from './contract-subjects.controller';
 import { ContractSubjectQueryDto, CreateContractSubjectDto, UpdateContractSubjectDto } from './contract-subjects.dto';
@@ -10,6 +10,34 @@ import { RolesGuard } from '@/common/guards/roles.guard';
 import { normalizeContractSubject, validateContractSubject } from './contract-subject-reference';
 
 describe('contract subject directory', () => {
+  it.each([CreateContractSubjectDto, UpdateContractSubjectDto])('validates explicit internal company codes in %p', async Dto => {
+    for (const internalCompany of [...Object.values(CompanyCode), null]) {
+      expect(await validate(plainToInstance<UpdateContractSubjectDto, unknown>(Dto, { name: 'Synthetic', internalCompany }))).toEqual([]);
+    }
+    for (const internalCompany of ['guessed-company', '', 1, true]) {
+      expect((await validate(plainToInstance<UpdateContractSubjectDto, unknown>(Dto, { name: 'Synthetic', internalCompany })))
+        .map(error => error.property)).toContain('internalCompany');
+    }
+  });
+  it('persists explicit mappings, preserves omissions, clears with null and audits both values', async () => {
+    let row: any;
+    const audit: any[] = [];
+    const tx = { contractSubject: {
+      create: jest.fn(async ({ data }) => (row = { id: 'subject', isActive: true, internalCompany: null, ...data })),
+      findUnique: jest.fn(async () => ({ ...row })),
+      update: jest.fn(async ({ data }) => (row = { ...row, ...data })),
+    }, auditLog: { create: jest.fn(async ({ data }) => audit.push(data)) } };
+    const service = new ContractSubjectsService({ $transaction: async (run: any) => run(tx) } as any);
+    expect(await service.create({ name: 'Synthetic', internalCompany: 'fansibao' } as any, { id: 'hr' } as any))
+      .toMatchObject({ internalCompany: 'fansibao' });
+    expect(audit.at(-1).newValue).toMatchObject({ internalCompany: 'fansibao' });
+    expect(await service.update('subject', { name: 'Renamed' }, { id: 'hr' } as any)).toMatchObject({ internalCompany: 'fansibao' });
+    await service.update('subject', { internalCompany: 'fuede_sports' } as any, { id: 'hr' } as any);
+    expect(audit.at(-1)).toMatchObject({ oldValue: { internalCompany: 'fansibao' }, newValue: { internalCompany: 'fuede_sports' } });
+    expect(await service.update('subject', { internalCompany: null } as any, { id: 'hr' } as any)).toMatchObject({ internalCompany: null });
+    expect(audit.at(-1)).toMatchObject({ oldValue: { internalCompany: 'fuede_sports' }, newValue: { internalCompany: null } });
+    await expect(service.update('subject', { internalCompany: 'guessed' } as any, { id: 'hr' } as any)).rejects.toThrow();
+  });
   it.each(['false', 'true', 0, 1])('rejects non-boolean write status %s despite implicit conversion', async (isActive) => {
     const input = plainToInstance(UpdateContractSubjectDto, { isActive }, { enableImplicitConversion: true });
     expect((await validate(input)).map((error) => error.property)).toContain('isActive');

@@ -30,8 +30,8 @@ const employmentTypeLabels: Record<string, string> = {
 const fieldLabels: Record<string, string> = {
   name: '姓名',
   phone: '手机号',
-  company: '组织归属',
-  companyText: '所属公司（合同主体）', contractSubjectId: '合同主体关联',
+  company: '所属公司',
+  companyText: '所属公司', contractSubjectId: '合同主体关联',
   deptId: '部门',
   position: '岗位',
   jobGrade: '职级',
@@ -103,7 +103,7 @@ function displayValue(key: string, value: unknown, source: Record<string, any>) 
 }
 
 const employmentItems = computed(() => {
-  const keys = ['company', 'companyText', 'contractSubjectId', 'deptId', 'position', 'jobGrade', 'jobFamily', 'workLocation', 'employeeStatus', 'status', 'employmentType', 'entryDate', 'effectiveDate', 'effectiveFrom', 'effectiveTo', 'leaveDate', 'managerId', 'probationMonths', 'plannedRegularDate', 'actualRegularDate'];
+  const keys = ['companyText', 'company', 'deptId', 'position', 'jobGrade', 'jobFamily', 'workLocation', 'employeeStatus', 'status', 'employmentType', 'entryDate', 'effectiveDate', 'effectiveFrom', 'effectiveTo', 'leaveDate', 'managerId', 'probationMonths', 'plannedRegularDate', 'actualRegularDate'];
   const seenLabels = new Set<string>();
   const items = keys.flatMap((key) => {
     const value = employee.value[key];
@@ -129,7 +129,7 @@ const changeItems = computed(() => ['employee', 'profile', 'performance'].flatMa
   const after = props.request.proposedValue?.[section] ?? {};
   return Object.keys(fieldLabels).flatMap((key) => {
     if (!(key in after) || JSON.stringify(before[key] ?? null) === JSON.stringify(after[key] ?? null)) return [];
-    const label = section === 'performance' && key === 'managerId' ? '绩效直属上级' : fieldLabels[key];
+    const label = section === 'performance' && key === 'managerId' ? '绩效直属上级' : key === 'company' ? '内部公司映射' : fieldLabels[key];
     return [{
       key: `${section}.${key}`,
       label,
@@ -193,7 +193,7 @@ const reviewScopes = computed(() => [
     key: 'performance', label: '绩效关系', status: reviewStatus(props.request.performanceReviewStatus),
     actor: props.request.performanceReviewedBy?.name, time: props.request.performanceReviewedAt,
   },
-]);
+].filter((scope) => !(isOnboarding.value && scope.key === 'performance' && props.request.performanceReviewStatus === 'not_required')));
 
 const reviewStatuses = computed(() => [props.request.profileReviewStatus, props.request.performanceReviewStatus]);
 const hasApprovedReview = computed(() => reviewStatuses.value.includes('approved'));
@@ -215,20 +215,22 @@ const isFullyCancelled = computed(() => isOnboardingCancelled.value || (hasCance
 
 const submittedEvent = computed(() => props.request.events?.find((event) => /submit_employee|submit_.*change/.test(event.action)));
 const activatedEvent = computed(() => props.request.events?.find((event) => event.action === 'apply_employee_archive_change' || /activate|effective|confirm_employee_arrival/.test(event.action)));
-const revisionEvents = computed(() => (props.request.events ?? []).filter((event) => /revise|reject|cancel|withdraw/.test(event.action) || (isDirectApplication.value && /approve/.test(event.action))));
+const arrivalActionStep = computed(() => isOnboardingCancelled.value ? 'closed' : hasRejected.value && !pendingArrival.value ? 'review' : 'waiting-effective');
 
-const timeline = computed<PersonnelProcessStep[]>(() => {
+const processSteps = computed<PersonnelProcessStep[]>(() => {
   if (isDirectApplication.value) {
     const event = activatedEvent.value;
     return [
       {
         key: 'submitted', title: '提交', tone: 'success', current: false,
         time: formatDateTime(event?.createdAt ?? submittedEvent.value?.createdAt ?? props.request.createdAt),
+        occurredAt: event?.createdAt ?? submittedEvent.value?.createdAt ?? props.request.createdAt,
         actor: event?.user?.name ?? submittedEvent.value?.user?.name ?? props.request.createdBy?.name ?? '系统', status: '已提交',
       },
       {
         key: 'effective', title: '变更生效', tone: 'success', current: false,
         time: formatDateTime(props.request.appliedAt!),
+        occurredAt: props.request.appliedAt,
         actor: event?.user?.name ?? props.request.createdBy?.name ?? '系统', status: '已生效',
       },
     ];
@@ -251,11 +253,13 @@ const timeline = computed<PersonnelProcessStep[]>(() => {
     {
       key: 'submitted', title: isOnboarding.value ? '提交审核' : '提交申请', tone: 'success' as const, current: false,
       time: formatDateTime(submittedEvent.value?.createdAt ?? props.request.createdAt),
+      occurredAt: submittedEvent.value?.createdAt ?? props.request.createdAt,
       actor: submittedEvent.value?.user?.name ?? props.request.createdBy?.name ?? '系统', status: '已提交',
     },
     {
       key: 'review', title: '档案审核', tone: reviewTone, current: !hasCancellation.value && (hasPending.value || hasRejected.value),
       time: props.request.performanceReviewedAt || props.request.profileReviewedAt ? formatDateTime(props.request.performanceReviewedAt || props.request.profileReviewedAt!) : '',
+      occurredAt: props.request.performanceReviewedAt || props.request.profileReviewedAt,
       actor: props.request.performanceReviewedBy?.name ?? props.request.profileReviewedBy?.name ?? '',
       status: reviewAction,
       note: props.request.rejectedReason ? `退回原因：${props.request.rejectedReason}` : '',
@@ -273,6 +277,7 @@ const timeline = computed<PersonnelProcessStep[]>(() => {
     return [...nodes, {
       key: 'closed', title: '办理结束', tone: 'danger' as const, current: false,
       time: props.request.cancelledAt ? formatDateTime(props.request.cancelledAt) : '',
+      occurredAt: props.request.cancelledAt,
       actor: '', status: '已取消，不再生效',
     }];
   }
@@ -280,6 +285,7 @@ const timeline = computed<PersonnelProcessStep[]>(() => {
     return [...nodes, {
       key: 'closed', title: '办理结束', tone: 'danger' as const, current: false,
       time: props.request.cancelledAt ? formatDateTime(props.request.cancelledAt) : '',
+      occurredAt: props.request.cancelledAt,
       actor: '', status: '部分内容已生效，其余已取消',
     }];
   }
@@ -290,24 +296,77 @@ const timeline = computed<PersonnelProcessStep[]>(() => {
       tone: isEffective.value ? 'success' : waitingCurrent ? 'current' : 'waiting',
       current: waitingCurrent,
       time: props.request.arrivalConfirmedAt ? formatDateTime(props.request.arrivalConfirmedAt) : '',
+      occurredAt: props.request.arrivalConfirmedAt,
       actor: '', status: isEffective.value ? '已完成' : waitingCurrent ? (isOnboarding.value ? (props.request.requiresArrivalConfirmation ? '待 HR 确认到岗' : '等待入职日期') : '等待生效日期') : '等待处理',
     },
     {
       key: 'effective', title: isOnboarding.value ? '入职生效' : '变更生效', tone: isEffective.value ? 'success' : 'waiting', current: false,
       time: isEffective.value && props.request.appliedAt ? formatDateTime(props.request.appliedAt) : '',
+      occurredAt: isEffective.value ? props.request.appliedAt : null,
       actor: activatedEvent.value?.user?.name ?? (isEffective.value ? '系统' : ''),
       status: isEffective.value ? '已生效' : '等待处理',
     },
   ];
 });
 
-function eventLabel(action: string) {
-  if (/approve/.test(action)) return '历史审核通过';
-  if (/reject/.test(action)) return '退回申请';
-  if (/cancel|withdraw/.test(action)) return '取消申请';
-  if (/revise/.test(action)) return '修改并重新提交';
-  return '更新申请';
-}
+const timeline = computed<PersonnelProcessStep[]>(() => {
+  const history: Array<PersonnelProcessStep & { stage?: string }> = [];
+  const seen = new Set<string>();
+  for (const event of props.request.events ?? []) {
+    if (seen.has(event.id)) continue;
+    seen.add(event.id);
+    const action = event.action;
+    let title = '', status = '已提交', tone: PersonnelProcessTone = 'success', stage: string | undefined;
+    if (/^reopen_/.test(action)) title = '恢复入职并重新提交';
+    else if (action === 'revise_employee_arrival_date') title = '修改到岗日期并重新提交';
+    else if (/^revise_/.test(action)) title = '修改并重新提交';
+    else if (/^reject_/.test(action)) { title = '退回申请'; status = '已退回'; tone = 'danger'; stage = 'review'; }
+    else if (/^(cancel|withdraw)_/.test(action)) { title = '取消申请'; status = event.newValue?.partial ? '部分已取消' : '已取消'; tone = 'danger'; stage = 'closed'; }
+    else if (/^approve_/.test(action)) { title = '档案审核'; status = '已通过'; stage = 'review'; }
+    else if (/^submit_/.test(action)) { title = isDirectApplication.value ? '提交' : isOnboarding.value ? '提交审核' : '提交申请'; stage = 'submitted'; }
+    else if (action === 'confirm_employee_arrival') { title = '确认到岗'; status = '已完成'; stage = 'waiting-effective'; }
+    else if (action === 'activate_employee_onboarding' || action === 'apply_employee_archive_change') {
+      title = isOnboarding.value ? '入职生效' : '变更生效'; status = '已生效'; stage = 'effective';
+    } else continue;
+    const occurredAt = stage === 'waiting-effective' ? props.request.arrivalConfirmedAt || event.createdAt
+      : stage === 'effective' ? props.request.appliedAt || event.createdAt : event.createdAt;
+    const actor = event.user?.name || '系统';
+    const time = formatDateTime(occurredAt);
+    const scopes = Array.isArray(event.newValue?.scopes) ? event.newValue.scopes as string[] : [];
+    history.push({
+      key: `event-${event.id}`, eventId: event.id, eventAction: action, stage,
+      title, status, tone, actor, time, occurredAt,
+      note: typeof event.newValue?.reason === 'string' ? event.newValue.reason : undefined,
+      details: /^approve_/.test(action) ? scopes.filter(scope => ['profile', 'performance'].includes(scope)).map(scope => ({
+        key: scope, title: scope === 'profile' ? '基础档案' : '绩效关系', status, tone, actor, time,
+      })) : undefined,
+    });
+  }
+  // Audit entries retain earlier rounds; current state supplies only missing or pending stages.
+  const pending: PersonnelProcessStep[] = [];
+  const completed: PersonnelProcessStep[] = [...history];
+  for (const step of processSteps.value) {
+    const records = history.filter(event => event.stage === step.key);
+    if (step.current || step.tone === 'waiting') {
+      pending.push({ ...step, occurredAt: null, time: '', actor: '' });
+    } else if (records.length) {
+      records[records.length - 1]!.key = step.key;
+    } else if (step.occurredAt) {
+      completed.push(step);
+    } else {
+      pending.push(step);
+    }
+  }
+  completed.sort((a, b) => {
+    const elapsed = Date.parse(a.occurredAt!) - Date.parse(b.occurredAt!);
+    if (elapsed) return elapsed;
+    // Arrival and activation share one transaction timestamp; retain their business order.
+    if (a.key === 'waiting-effective' && b.key === 'effective') return -1;
+    if (a.key === 'effective' && b.key === 'waiting-effective') return 1;
+    return 0;
+  });
+  return [...completed, ...pending];
+});
 </script>
 
 <template>
@@ -344,14 +403,11 @@ function eventLabel(action: string) {
 
     <section class="application-detail__section">
       <h3>办理流程</h3>
-      <PersonnelProcessTimeline :items="timeline" label="办理流程" data-testid="personnel-application-timeline" />
-    </section>
-
-    <section v-if="revisionEvents.length" class="application-detail__section">
-      <h3>补充办理记录</h3>
-      <ul class="application-detail__events">
-        <li v-for="event in revisionEvents" :key="event.id"><strong>{{ eventLabel(event.action) }}</strong><span>{{ event.user?.name || '系统' }} · {{ formatDateTime(event.createdAt) }}</span></li>
-      </ul>
+      <PersonnelProcessTimeline :items="timeline" label="办理流程" data-testid="personnel-application-timeline">
+        <template #step-action="{ item }">
+          <slot v-if="item.key === arrivalActionStep" name="arrival-action" />
+        </template>
+      </PersonnelProcessTimeline>
     </section>
   </section>
 </template>
@@ -369,9 +425,6 @@ function eventLabel(action: string) {
 .application-detail__changes > div { display: grid; grid-template-columns: 140px minmax(0, 1fr); gap: 12px; padding: 9px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
 .application-detail__changes span { overflow-wrap: anywhere; color: var(--el-text-color-regular); }
 .application-detail__changes strong { min-width: 0; overflow-wrap: anywhere; }
-.application-detail__events { display: grid; gap: 8px; margin: 0; padding: 0; list-style: none; }
-.application-detail__events li { display: flex; flex-wrap: wrap; justify-content: space-between; gap: 8px; padding: 9px 12px; border-radius: 6px; background: var(--el-fill-color-extra-light); }
-.application-detail__events span { color: var(--el-text-color-secondary); }
 @media (max-width: 640px) {
   .application-detail__facts { grid-template-columns: 1fr; }
   .application-detail__facts > div { border-right: 0; }

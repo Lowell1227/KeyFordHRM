@@ -74,6 +74,7 @@ declare module 'vue' {
     ElTreeSelect: typeof import('element-plus/es')['ElTreeSelect']
     ElUpload: typeof import('element-plus/es')['ElUpload']
     EmployeeArchiveIssues: typeof import('./src/components/common/EmployeeArchiveIssues.vue')['default']
+    EmployeeCompanySelect: typeof import('./src/components/common/EmployeeCompanySelect.vue')['default']
     EmptyState: typeof import('./src/components/common/EmptyState.vue')['default']
     FileUpload: typeof import('./src/components/common/FileUpload.vue')['default']
     GradeDistChart: typeof import('./src/components/charts/GradeDistChart.vue')['default']

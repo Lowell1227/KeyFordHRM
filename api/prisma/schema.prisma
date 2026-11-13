@@ -723,6 +723,7 @@ model ContractSubject {
   id String @id @default(dbgenerated("gen_random_uuid()")) @db.Uuid
   name String @unique @db.VarChar(150)
   isActive Boolean @default(true) @map("is_active")
+  internalCompany CompanyCode? @map("internal_company")
   createdAt DateTime @default(now()) @map("created_at") @db.Timestamptz(6)
   updatedAt DateTime @default(now()) @updatedAt @map("updated_at") @db.Timestamptz(6)
   employments EmploymentRecord[]

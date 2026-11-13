@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import dayjs from 'dayjs';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
@@ -10,7 +10,7 @@ import {
 } from '@/api/employee-archives.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import UserSelect from '@/components/common/UserSelect.vue';
-import ContractSubjectSelect from '@/components/common/ContractSubjectSelect.vue';
+import EmployeeCompanySelect from '@/components/common/EmployeeCompanySelect.vue';
 import type { Department, User } from '@/types/api.types';
 import { formatDateTime } from '@/utils/date';
 import { applicationProgress } from '@/utils/employee-lifecycle';
@@ -23,7 +23,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
-  submitted: [];
+  submitted: [requestId?: string];
 }>();
 
 const loading = ref(false);
@@ -34,10 +34,12 @@ const positions = ref<PositionRecord[]>([]);
 let savedSnapshot = '';
 const loadError = ref('');
 const submitError = ref('');
+const submitAttempted = ref(false);
+const formElement = ref<HTMLElement>();
 let generation = 0;
 const form = reactive({
   contractSubjectId: undefined as string | null | undefined, companyText: null as string | null,
-  company: 'fuede', deptId: '', positionId: '',
+  company: null as string | null, deptId: '', positionId: '',
   rosterManagerId: null as string | null, performanceManagerId: null as string | null,
   effectiveDate: '', effectiveTo: '', employeeStatus: 'probation' as 'active' | 'probation',
   employmentType: 'full_time', plannedRegularDate: '', probationMonths: 3 as number | null,
@@ -79,7 +81,7 @@ function setFormFromRequest(request: EmployeeDataReview | null, archive?: Employ
   Object.assign(form, {
     contractSubjectId: employee.contractSubjectId ?? undefined,
     companyText: employee.companyText ?? null,
-    company: employee.company ?? previous?.company ?? 'fuede',
+    company: employee.company ?? previous?.company ?? null,
     deptId: employee.deptId ?? props.employee?.deptId ?? '',
     positionId: employee.positionId ?? previous?.positionId ?? '',
     rosterManagerId: employee.managerId ?? null,
@@ -101,6 +103,7 @@ async function load() {
   loading.value = true;
   loadError.value = '';
   submitError.value = '';
+  submitAttempted.value = false;
   currentRequest.value = null;
   try {
     const request = await employeeArchivesApi.getCurrentReentry(employeeId);
@@ -141,7 +144,7 @@ onBeforeUnmount(() => { generation++; });
 function body(): EmployeeReentryBody {
   return {
     talentCandidateId: currentRequest.value?.talentCandidateId ?? props.talentCandidateId,
-    company: form.company,
+    company: form.company ?? '',
     contractSubjectId: form.contractSubjectId,
     deptId: form.deptId || null,
     positionId: form.positionId || null,
@@ -164,8 +167,13 @@ async function submit() {
     ElMessage.info('未检测到变更，无需重新提交');
     return;
   }
-  if (!props.employee || (!performanceOnly.value && (!form.deptId || !form.effectiveDate))) {
-    ElMessage.warning('请填写部门和再入职日期');
+  if (!props.employee) return;
+  submitAttempted.value = true;
+  if (!performanceOnly.value && (!form.company || !form.deptId || !form.effectiveDate)) {
+    await nextTick();
+    const field = formElement.value?.querySelector<HTMLElement>('.el-form-item.is-error');
+    field?.scrollIntoView({ block: 'center' });
+    field?.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true });
     return;
   }
   saving.value = true;
@@ -178,8 +186,10 @@ async function submit() {
     if (session !== generation) return;
     currentRequest.value = request;
     savedSnapshot = JSON.stringify(form);
-    ElMessage.success(submittingPerformanceOnly ? '绩效关系已重新提交，已审核的任职保持不变' : '再入职申请已提交，审核通过并确认到岗后生效');
-    emit('submitted');
+    ElMessage.success(submittingPerformanceOnly ? '绩效关系已重新提交，已审核的任职保持不变' : '再入职申请已提交');
+    saving.value = false;
+    emit('update:modelValue', false);
+    emit('submitted', request.id);
   } catch { if (session === generation) submitError.value = '提交未完成，填写内容仍保留，请核对提示后重试。'; }
   finally { if (session === generation) saving.value = false; }
 }
@@ -210,14 +220,14 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
 
 <template>
   <el-drawer :model-value="modelValue" :title="isNewHire ? '修改入职绩效关系' : '办理再入职'" size="min(760px, 100vw)" :before-close="beforeClose" :close-on-click-modal="false" destroy-on-close @update:model-value="emit('update:modelValue', $event)">
-    <div v-loading="loading" class="reentry-drawer">
+    <div ref="formElement" v-loading="loading" class="reentry-drawer">
       <el-alert v-if="loadError" :title="loadError" type="error" :closable="false" />
       <el-alert v-if="submitError" :title="submitError" type="error" :closable="false" />
       <div class="employee-summary">
         <div><strong>{{ employee?.name }}</strong><span>{{ isNewHire ? '工号' : '历史工号' }} {{ employee?.employeeNo || '无' }}</span></div>
         <el-tag v-if="currentRequest" effect="plain">{{ statusLabel }}</el-tag>
       </div>
-      <p v-if="!performanceOnly" class="number-note">再入职将自动生成新工号；历史工号仅保留在档案中，不再用于本次任职或登录。</p>
+      <p v-if="!performanceOnly" class="number-note">再入职将自动生成新工号，原档案和任职历史保留；旧工号不再用于登录。</p>
       <el-alert v-if="currentRequest?.rejectedReason" :title="`退回原因：${currentRequest.rejectedReason}`" type="warning" :closable="false" />
       <p v-if="currentRequest?.onboardingStatus === 'pending_entry' && !performanceOnly" class="number-note">修改并重提后，原待生效安排将撤销，重新审核通过并确认到岗后生效。</p>
       <p v-if="performanceOnly" class="number-note">任职已审核，本次仅修改被退回的绩效关系，工号与任职安排保持不变。</p>
@@ -235,14 +245,13 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
 
       <el-form label-position="top" :disabled="!canEdit || loading || saving || cancelling || !!loadError">
         <div class="form-grid">
-          <el-form-item label="所属公司（合同主体）"><ContractSubjectSelect v-model="form.contractSubjectId" v-model:snapshot-name="form.companyText" :disabled="performanceOnly" /></el-form-item>
-          <el-form-item label="组织归属"><el-select v-model="form.company" :disabled="performanceOnly"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select></el-form-item>
-          <el-form-item label="部门"><el-select v-model="form.deptId" :disabled="performanceOnly" filterable><el-option v-for="dept in flatten(departments)" :key="dept.id" :label="dept.fullPath || dept.name" :value="dept.id" /></el-select></el-form-item>
+          <el-form-item label="所属公司" :required="!performanceOnly" :error="submitAttempted && !performanceOnly && !form.company ? '请选择已配置内部公司映射的所属公司' : ''"><EmployeeCompanySelect v-model="form.contractSubjectId" v-model:snapshot-name="form.companyText" v-model:company="form.company" :disabled="performanceOnly" /></el-form-item>
+          <el-form-item label="部门" :required="!performanceOnly" :error="submitAttempted && !performanceOnly && !form.deptId ? '请选择部门' : ''"><el-select v-model="form.deptId" :disabled="performanceOnly" filterable><el-option v-for="dept in flatten(departments)" :key="dept.id" :label="dept.fullPath || dept.name" :value="dept.id" /></el-select></el-form-item>
           <el-form-item label="岗位"><el-select v-model="form.positionId" :disabled="performanceOnly" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.name" :value="position.id" /></el-select></el-form-item>
           <el-form-item label="花名册直属主管"><UserSelect v-model="form.rosterManagerId" :disabled="performanceOnly" clearable eligible-for="direct_manager" :disabled-ids="employee ? [employee.id] : []" /></el-form-item>
           <el-form-item label="绩效直属上级"><UserSelect v-model="form.performanceManagerId" clearable eligible-for="direct_manager" :disabled-ids="employee ? [employee.id] : []" /></el-form-item>
           <el-form-item label="用工类型"><el-select v-model="form.employmentType" :disabled="performanceOnly"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
-          <el-form-item label="再入职日期"><el-date-picker v-model="form.effectiveDate" :disabled="performanceOnly" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+          <el-form-item label="再入职日期" :required="!performanceOnly" :error="submitAttempted && !performanceOnly && !form.effectiveDate ? '请选择再入职日期' : ''"><el-date-picker v-model="form.effectiveDate" :disabled="performanceOnly" type="date" value-format="YYYY-MM-DD" /></el-form-item>
           <el-form-item label="员工状态"><el-select v-model="form.employeeStatus" :disabled="performanceOnly"><el-option label="试用期" value="probation" /><el-option label="在职" value="active" /></el-select></el-form-item>
           <el-form-item v-if="form.employeeStatus === 'probation'" label="计划转正日"><el-date-picker v-model="form.plannedRegularDate" :disabled="performanceOnly" type="date" value-format="YYYY-MM-DD" /></el-form-item>
           <el-form-item v-if="form.employeeStatus === 'probation'" label="试用期（月）"><el-input-number v-model="form.probationMonths" :disabled="performanceOnly" :min="0" :max="60" /></el-form-item>

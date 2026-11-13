@@ -243,6 +243,7 @@ export class EmployeeOnboardingService {
       const warnings = this.buildWarnings(input);
       const employee = this.normalizedEmployee(input);
       await normalizeContractSubject(tx, employee, {}, 'companyText');
+      await validateContractSubject(tx, employee, {}, 'companyText');
       const request = await tx.employeeDataChangeRequest.create({
         data: {
           userId,
@@ -328,9 +329,15 @@ export class EmployeeOnboardingService {
         });
         if (changed) throw new ConflictException('基础档案已生效，本次只可重提退回的绩效关系；任职调整请另办变更');
       }
-      if (request.onboardingStatus === OnboardingStatus.pending_entry && !performanceOnly) {
-        await this.undoPendingProjection(tx, request);
-      }
+      const baseValue = this.record(request.baseValue);
+      const reviewedEmployment = !performanceOnly
+        ? await tx.employmentRecord.findUnique({ where: { sourceRequestId: request.id } }) : null;
+      // Revision may remove the pending projection; retain its reviewed company for later review.
+      const companyBase = reviewedEmployment ? {
+        contractSubjectId: reviewedEmployment.contractSubjectId ?? null,
+        company: reviewedEmployment.company,
+        companyText: reviewedEmployment.companyText ?? null,
+      } : this.record(baseValue.reviewedEmploymentCompany);
       const revisions = Array.isArray(request.revisionHistory) ? request.revisionHistory : [];
       const historicalOnly = Boolean(input.effectiveTo && input.effectiveTo < this.startOfTodayInShanghai());
       const next = performanceOnly ? {
@@ -342,14 +349,18 @@ export class EmployeeOnboardingService {
         payloadHash: this.hashPayload(input),
       };
       if (!performanceOnly) {
-        await normalizeContractSubject(tx, next.employee as Record<string, unknown>, this.record(this.record(request.proposedValue).employee), 'companyText');
-        await validateContractSubject(tx, next.employee as Record<string, unknown>, {});
+        await normalizeContractSubject(tx, next.employee as Record<string, unknown>, this.record(this.record(request.proposedValue).employee), 'companyText', companyBase);
+        await validateContractSubject(tx, next.employee as Record<string, unknown>, companyBase, 'companyText');
+      }
+      if (request.onboardingStatus === OnboardingStatus.pending_entry && !performanceOnly) {
+        await this.undoPendingProjection(tx, request);
       }
       const updated = await tx.employeeDataChangeRequest.update({
         where: { id: requestId },
         include: { talentCandidate: { select: talentSourceSelect } },
         data: {
           ...(input.talentCandidateId ? { talentCandidateId: input.talentCandidateId } : {}),
+          ...(reviewedEmployment ? { baseValue: this.json({ ...baseValue, reviewedEmploymentCompany: companyBase }) } : {}),
           proposedValue: this.json(next),
           validationWarnings: performanceOnly ? request.validationWarnings ?? [] : this.json(this.buildWarnings(input)),
           requestVersion: { increment: 1 },
@@ -551,7 +562,13 @@ export class EmployeeOnboardingService {
     } });
     if (!assignment && !existing) throw new ConflictException('自动工号预留不存在或已被占用');
     if (!existing || (request.requiresArrivalConfirmation && !request.arrivalConfirmedAt)) {
-      await validateContractSubject(tx, employee, {});
+      const companyBase = existing ?? this.record(this.record(request.baseValue).reviewedEmploymentCompany);
+      if (companyBase.contractSubjectId && (employee.contractSubjectId === undefined || employee.contractSubjectId === companyBase.contractSubjectId)) {
+        employee.contractSubjectId = companyBase.contractSubjectId;
+        employee.company = companyBase.company;
+        employee.companyText = companyBase.companyText;
+      }
+      await validateContractSubject(tx, employee, companyBase, 'companyText');
       const employmentData = {
         effectiveFrom, effectiveTo,
         company: employee.company as any,

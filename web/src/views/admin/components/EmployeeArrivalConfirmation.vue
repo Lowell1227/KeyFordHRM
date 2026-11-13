@@ -2,6 +2,7 @@
 import { computed, ref, watch } from 'vue';
 import { isAxiosError } from 'axios';
 import { ElMessage } from 'element-plus';
+import { Back, Check, EditPen, Refresh } from '@element-plus/icons-vue';
 import { employeeArchivesApi, type EmployeeDataReview, type EmployeeOnboardingResult } from '@/api/employee-archives.api';
 import { arrivalConfirmationError, canReviseArrivalDate, isCancelledNewHireArrival, isPendingArrival, reviewedArrivalDate } from '@/utils/employee-lifecycle';
 
@@ -82,7 +83,10 @@ async function confirmArrival() {
 
 <template>
   <section v-if="visible" class="arrival-confirmation" :aria-label="title">
-    <h3>{{ title }}</h3>
+    <header class="arrival-confirmation__header">
+      <h3><el-icon><EditPen /></el-icon>{{ title }}</h3>
+      <span>当前操作</span>
+    </header>
     <el-form label-position="top" @submit.prevent="editingDate ? submitDate() : confirmArrival()">
       <el-form-item v-if="!editingDate" :label="pendingArrival ? '已审核到岗日期（北京时间）' : '申请到岗日期（北京时间）'" :error="error">
         <el-input :model-value="date" readonly :aria-label="pendingArrival ? '已审核到岗日期' : '申请到岗日期'" />
@@ -93,24 +97,31 @@ async function confirmArrival() {
       <p>{{ reopening ? '恢复原入职申请需重新审核，可沿用原到岗日期。' : '日期变更需先修改申请并重新审核。' }}确认到岗前，不启用本次任职和登录权限。</p>
       <div class="arrival-actions">
         <template v-if="editingDate">
-          <el-button :disabled="saving || busy" @click="editingDate = false; error = ''">返回</el-button>
-          <el-button type="primary" :loading="saving" :disabled="busy && !saving" @click="submitDate">{{ reopening ? '重新提交审核' : '提交日期变更' }}</el-button>
+          <el-button :icon="Back" :disabled="saving || busy" @click="editingDate = false; error = ''">返回</el-button>
+          <el-button type="primary" :icon="Check" :loading="saving" :disabled="busy && !saving" @click="submitDate">{{ reopening ? '重新提交审核' : '提交日期变更' }}</el-button>
         </template>
         <template v-else>
-          <el-button v-if="canConfirm && pendingArrival" type="primary" :loading="saving" :disabled="busy && !saving" @click="confirmArrival">确认到岗</el-button>
-          <el-button v-if="canReviseDate" :disabled="saving || busy" @click="editDate">{{ reopening ? '重新办理入职' : '修改到岗日期' }}</el-button>
+          <el-button v-if="canConfirm && pendingArrival" type="primary" :icon="Check" :loading="saving" :disabled="busy && !saving" @click="confirmArrival">确认到岗</el-button>
+          <el-button v-if="canReviseDate" :icon="EditPen" :disabled="saving || busy" @click="editDate">{{ reopening ? '重新办理入职' : '修改到岗日期' }}</el-button>
         </template>
-        <el-button v-if="error" :disabled="saving || busy" @click="emit('refresh')">刷新详情</el-button>
+        <el-button v-if="error" :icon="Refresh" :disabled="saving || busy" @click="emit('refresh')">刷新详情</el-button>
       </div>
     </el-form>
   </section>
 </template>
 
 <style scoped>
-.arrival-confirmation { padding: 16px 0; border-top: 1px solid var(--el-border-color-lighter); }
-.arrival-confirmation h3 { margin: 0 0 12px; font-size: 15px; }
+.arrival-confirmation { margin-top: 14px; padding: 16px; border: 1px solid var(--el-color-primary-light-7); border-left: 3px solid var(--el-color-primary); border-radius: 6px; background: var(--el-color-primary-light-9); }
+.arrival-confirmation__header { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 14px; }
+.arrival-confirmation__header h3 { display: flex; align-items: center; gap: 6px; margin: 0; font-size: 15px; }
+.arrival-confirmation__header > span { color: var(--el-color-primary); font-size: 12px; }
 .arrival-confirmation p { margin: 12px 0; color: var(--el-text-color-secondary); line-height: 1.6; }
 .arrival-confirmation :deep(.el-form-item__error) { position: static; line-height: 1.5; }
+.arrival-confirmation :deep(.el-date-editor) { max-width: 100%; width: 100%; }
 .arrival-actions { display: flex; flex-wrap: wrap; gap: 8px; }
 .arrival-actions :deep(.el-button) { margin-left: 0; }
+@media (max-width: 640px) {
+  .arrival-confirmation { padding: 12px; }
+  .arrival-actions :deep(.el-button) { white-space: normal; height: auto; min-height: 32px; }
+}
 </style>

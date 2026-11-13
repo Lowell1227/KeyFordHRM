@@ -1,4 +1,4 @@
-import { ConflictException, ForbiddenException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException } from '@nestjs/common';
 import { AccountType, CompanyCode, EmploymentType, SysRole, UserStatus } from '@prisma/client';
 import { EmployeeArchivesService } from './employee-archives.service';
 import { EmployeeDataReviewsService } from './employee-data-reviews.service';
@@ -70,6 +70,70 @@ function setup() {
 }
 
 describe('manual archive changes apply at submission', () => {
+  it.each([null, '', 'invalid-code', 123, false])('rejects explicit invalid company %s before applying an archive edit', async company => {
+    const f = setup();
+    Object.assign(f.user.employmentHistory[0], { company: 'fansibao', contractSubjectId: '11111111-1111-4111-8111-111111111111', companyText: 'Reviewed subject' });
+    await expect(f.service.submitDraft('employee', f.input({ contractSubjectId: null, company }, { education: 'Do not apply' }), editor))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(f.user.employmentHistory[0]).toMatchObject({ company: 'fansibao', companyText: 'Reviewed subject' });
+    expect(f.user.employeeProfile).toBeNull();
+    expect(f.requests).toEqual([]);
+  });
+
+  it('preserves an omitted company in a legacy unlinked archive payload', async () => {
+    const f = setup();
+    f.user.employmentHistory[0].company = 'fansibao';
+    await f.service.submitDraft('employee', f.input({ position: 'Revised position' }), editor);
+    expect(f.user.employmentHistory[0]).toMatchObject({ company: 'fansibao', position: 'Revised position' });
+  });
+
+  it.each([
+    { noEmployment: true, applyProfile: false }, { noEmployment: true, applyProfile: true },
+    { noEmployment: false, applyProfile: false }, { noEmployment: false, applyProfile: true },
+  ])('allows unchanged historical null company in full profile payloads: %j', async ({ noEmployment, applyProfile }) => {
+    const f = setup();
+    if (noEmployment) f.user.employmentHistory = [];
+    else delete f.user.employmentHistory[0].company;
+    const employee = { ...(f.service as any).employeeReviewData(f.user, f.user.employmentHistory[0] ?? null), company: null };
+    const profile = { education: 'Master', ...(applyProfile ? { socialSecurityStatus: 'Updated' } : {}) };
+    const result = await f.service.submitDraft('employee', f.input(employee, profile), editor);
+    expect(result.reviewOutcome).toBe('not_required');
+    expect(f.user.employeeProfile).toMatchObject(profile);
+    expect(f.tx.employmentRecord.create).not.toHaveBeenCalled();
+    expect(f.tx.employmentRecord.update).not.toHaveBeenCalled();
+    if (noEmployment) expect(f.user.employmentHistory).toEqual([]);
+    else expect(f.user.employmentHistory[0]).not.toHaveProperty('company');
+  });
+
+  it('derives a null company from a newly selected mapped subject on archive submission', async () => {
+    const f = setup();
+    const id = '11111111-1111-4111-8111-111111111111';
+    f.tx.contractSubject = { findUnique: jest.fn(async () => ({ id, name: 'Selected subject', isActive: true, internalCompany: CompanyCode.fansibao })) };
+    await f.service.submitDraft('employee', f.input({ contractSubjectId: id, company: null }), editor);
+    expect(f.user.employmentHistory[0]).toMatchObject({ contractSubjectId: id, company: 'fansibao', companyText: 'Selected subject' });
+  });
+
+  it.each([null, 'invalid-code'])('rejects invalid stored archive company %s at the apply boundary too', async company => {
+    const f = setup();
+    f.user.employmentHistory[0].company = 'fansibao';
+    const draft: any = await f.service.saveArchiveDraft('employee', f.input({ company, position: 'Do not apply' }), editor);
+    Object.assign(f.requests[0], { recordStatus: 'submitted' });
+    await expect(f.db.$transaction((tx: any) => new EmployeeDataReviewsService(f.db).applyArchiveChange(tx, draft.id, editor)))
+      .rejects.toBeInstanceOf(BadRequestException);
+    expect(f.user.employmentHistory[0]).toMatchObject({ company: 'fansibao', position: 'Analyst' });
+  });
+
+  it.each([true, false])('inherits an omitted stored archive company without defaulting to fuede (base has company: %s)', async baseHasCompany => {
+    const f = setup();
+    f.user.employmentHistory[0].company = 'fansibao';
+    const draft: any = await f.service.saveArchiveDraft('employee', f.input({ position: 'Revised position' }), editor);
+    Object.assign(f.requests[0], { recordStatus: 'submitted' });
+    delete f.requests[0].proposedValue.employee.company;
+    if (!baseHasCompany) delete f.requests[0].baseValue.employee.company;
+    await f.db.$transaction((tx: any) => new EmployeeDataReviewsService(f.db).applyArchiveChange(tx, draft.id, editor));
+    expect(f.user.employmentHistory[0]).toMatchObject({ company: 'fansibao', position: 'Revised position' });
+  });
+
   it('the legacy profile endpoint applies defined fields immediately and never rewrites an existing draft', async () => {
     const f = setup();
     const result = await f.service.upsertProfile('employee', { gender: '女' }, editor);

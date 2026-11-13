@@ -52,6 +52,16 @@ describe('employee company text', () => {
     expect(tx.employeeContract.update.mock.calls[0][0].data).not.toHaveProperty('signingCompany');
   });
 
+  it('retains formal company alongside an inherited subject when approving legacy JSON without subject IDs', async () => {
+    const employment = { company: 'fuede', companyText: '花名册公司原文',
+      contractSubjectId: '11111111-1111-4111-8111-111111111111' };
+    const { tx, approve } = incompleteArchiveReview({ current: { employmentHistory: [employment] },
+      proposed: { company: 'beijing_fuede', position: 'Synthetic position' } });
+    tx.employmentRecord.findFirst.mockImplementation(async ({ select }: any) => select?.companyText ? employment as never : null);
+    expect((await approve()).failed).toEqual([]);
+    expect(tx.employmentRecord.create).toHaveBeenCalledWith({ data: expect.objectContaining(employment) });
+  });
+
   it.each([
     { label: 'existing department cleared', current: { deptId: 'dept-1' }, base: { deptId: 'dept-1' }, proposed: { deptId: null }, reason: '所属部门不能为空' },
     { label: 'existing entry date cleared', current: { entryDate: new Date('2024-01-01') }, base: { entryDate: '2024-01-01' }, proposed: { entryDate: null }, reason: '入职日期不能为空' },

@@ -1367,9 +1367,19 @@ async function openExistingEmployeeById(userId: string) {
   await openEmployeeArchive(user);
 }
 
-function afterEmployeeSubmitted() {
+async function openSubmittedApplication(requestId: string) {
+  try {
+    await openApplication(requestId);
+    applicationOpenedFromList.value = false;
+  } catch {
+    ElMessage.warning('申请已提交，详情暂时无法加载，请在办理中查看。');
+  }
+}
+
+function afterEmployeeSubmitted(requestId: string) {
   employeeCreateDraft.value = null;
   void Promise.all([loadUsers(), loadDrafts(), loadApplications()]);
+  void openSubmittedApplication(requestId);
 }
 
 function afterEmploymentSubmitted() {
@@ -1381,8 +1391,9 @@ function afterEmploymentSubmitted() {
   void Promise.all([loadUsers(), loadApplications()]);
 }
 
-function afterReentrySubmitted() {
+function afterReentrySubmitted(requestId?: string) {
   void Promise.all([loadUsers(), loadApplications()]);
+  if (requestId) void openSubmittedApplication(requestId);
 }
 
 async function loadDrafts() {
@@ -1407,7 +1418,7 @@ function draftObjectLabel(draft: EmployeeDataReview) {
   return draft.employeeName || draft.proposedValue?.employee?.name || '未命名员工草稿';
 }
 
-const draftStepTitles = ['基本信息', '本次任职', '补充资料', '检查并提交'];
+const draftStepTitles = ['基本信息', '本次任职', '档案', '检查并提交'];
 const legacyDraftStepMap = [0, 1, 1, 2, 2, 2, 3];
 
 function draftStepIndex(draft: EmployeeDataReview) {
@@ -1431,7 +1442,7 @@ function draftMissingLabel(draft: EmployeeDataReview) {
     [employee.deptId, '部门'],
     [employee.entryDate, '入职日期'],
     [employee.effectiveFrom, '任职开始'],
-    [employee.company === null ? null : true, '组织归属'],
+    [employee.company && (employee.contractSubjectId || employee.companyText), '所属公司'],
     [employee.employmentType === null ? null : true, '用工类型'],
     [employee.employeeStatus === null ? null : true, '员工状态'],
   ].filter(([value]) => !value).map(([, label]) => label);
@@ -2771,7 +2782,7 @@ onBeforeUnmount(() => {
               <el-table-column label="部门 / 岗位" min-width="180">
                 <template #default="{ row }">{{ row.dept?.name || '未设置' }} / {{ row.position || '未设置' }}</template>
               </el-table-column>
-              <el-table-column label="所属公司（合同主体）" min-width="200">
+              <el-table-column label="所属公司" min-width="200">
                 <template #default="{ row }"><div>{{ row.companyText || '未填写' }}</div><span class="muted-text" v-if="row.companyText">{{ row.contractSubjectId ? '已关联合同主体' : '历史名称，尚未关联主体' }}</span></template>
               </el-table-column>
               <el-table-column label="变更" width="100">
@@ -2881,10 +2892,14 @@ onBeforeUnmount(() => {
           <span v-if="applicationEffectiveDate(applicationDetail)">预计生效：{{ applicationEffectiveDate(applicationDetail) }}</span>
         </div>
       </template>
-      <EmployeeApplicationDetail v-if="applicationDetail" :request="applicationDetail" />
-      <EmployeeArrivalConfirmation v-if="applicationDetail" :key="applicationDetail.id" :request="applicationDetail" :can-confirm="canReviewArchive" :can-edit="canEditArchive" :busy="applicationSaving" @confirmed="afterArrivalConfirmed" @busy="applicationSaving = $event" @refresh="openApplication(applicationDetail.id, undefined, false)" />
+      <EmployeeApplicationDetail v-if="applicationDetail" :request="applicationDetail">
+        <template #arrival-action>
+          <EmployeeArrivalConfirmation :key="applicationDetail.id" :request="applicationDetail" :can-confirm="canReviewArchive" :can-edit="canEditArchive" :busy="applicationSaving" @confirmed="afterArrivalConfirmed" @busy="applicationSaving = $event" @refresh="openApplication(applicationDetail.id, undefined, false)" />
+        </template>
+      </EmployeeApplicationDetail>
       <template #footer>
         <el-button :disabled="applicationSaving" @click="closeApplication">关闭</el-button>
+        <el-button v-if="canViewArchive && applicationDetail?.userId && applicationDetail.onboardingStatus === 'effective'" :disabled="applicationSaving" @click="router.push({ path: '/users', query: { employeeId: applicationDetail.userId } })">查看员工档案</el-button>
         <template v-if="canReviewArchive && applicationDetail && applicationReviewPending(applicationDetail)">
           <el-button :loading="applicationSaving" @click="reviewApplicationFromDetail('reject')">退回</el-button>
           <el-button type="primary" :loading="applicationSaving" @click="reviewApplicationFromDetail('approve')">通过</el-button>

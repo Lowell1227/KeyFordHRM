@@ -631,7 +631,24 @@ export class EmployeeDataReviewsService {
     const name = this.requiredString(employee.name, '姓名不能为空');
     const employeeNo = directArchiveEdit && employee.employeeStatus === UserStatus.pending_entry
       ? this.nullableString(employee.employeeNo) : this.requiredString(employee.employeeNo, '工号不能为空');
-    const company = this.enumValue(employee.company, Object.values(CompanyCode), CompanyCode.fuede);
+    let companyValue = employee.company;
+    if (['manual_archive_change', 'manual_employment_change'].includes(request.sourceType)) {
+      let companyBase = baseEmployee.company;
+      if (companyValue == null && companyBase === undefined && request.userId) {
+        companyBase = (await tx.employmentRecord.findFirst({ where: { userId: request.userId },
+          orderBy: { effectiveFrom: 'desc' }, select: { company: true } }))?.company;
+      }
+      if (companyValue === undefined) {
+        companyValue = companyBase;
+        employee.company = companyValue;
+      }
+      const unchangedHistoricalMissing = canKeepHistoricalMissing && companyValue == null && companyBase == null
+        && !this.hasEmploymentChange(baseEmployee, employee);
+      if (!unchangedHistoricalMissing && !Object.values(CompanyCode).includes(companyValue as CompanyCode)) {
+        throw new BadRequestException('所属公司内部代码无效，请重新选择所属公司');
+      }
+    }
+    const company = this.enumValue(companyValue, Object.values(CompanyCode), CompanyCode.fuede);
     const organizationPath = this.stringArrayValue(employee.organizationPath);
     const organizationNodes = Array.isArray(employee.organizationNodes)
       ? employee.organizationNodes.map((item) => this.record(item))
@@ -711,6 +728,7 @@ export class EmployeeDataReviewsService {
       }
       reopenedNewHire = true;
     }
+    await validateContractSubject(tx, employee, baseEmployee, 'companyText');
     if (request.userId && !reopenedNewHire) {
       await this.assertProfileBaseStillCurrent(tx, request.userId, request.baseValue, request.proposedValue, directArchiveEdit);
       if (shouldUpdateUserProjection && employeeStatus !== UserStatus.resigned && request.intakeType !== OnboardingIntakeType.new_hire) {
@@ -807,15 +825,14 @@ export class EmployeeDataReviewsService {
     if (pendingArchiveEdit && shouldWriteEmployment && !pendingEmployment) {
       throw new ConflictException('待到岗任职已变化，请重新打开原入职申请核对');
     }
-    await validateContractSubject(tx, employee, baseEmployee);
     const priorCompany = request.userId && shouldWriteEmployment && (employee.companyText === undefined || employee.contractSubjectId === undefined)
       ? await tx.employmentRecord.findFirst({
-        where: { userId }, orderBy: { effectiveFrom: 'desc' }, select: { companyText: true, contractSubjectId: true },
+        where: { userId }, orderBy: { effectiveFrom: 'desc' }, select: { company: true, companyText: true, contractSubjectId: true },
       }) : null;
     const employmentData = {
       userId,
       employeeNo,
-      company,
+      company: employee.contractSubjectId === undefined && priorCompany?.contractSubjectId ? priorCompany.company : company,
       companyText: this.nullableString(employee.companyText === undefined || (employee.contractSubjectId === undefined && priorCompany?.contractSubjectId) ? priorCompany?.companyText : employee.companyText),
       contractSubjectId: this.nullableString(employee.contractSubjectId === undefined ? priorCompany?.contractSubjectId : employee.contractSubjectId),
       deptId,
@@ -1269,7 +1286,7 @@ export class EmployeeDataReviewsService {
       employeeNo: current.employeeNo,
       name: current.name,
       phone: current.phone,
-      company: employment?.company ?? (directArchiveEdit ? CompanyCode.fuede : null),
+      company: employment?.company ?? null,
       companyText: employment?.companyText ?? null,
       contractSubjectId: employment?.contractSubjectId ?? null,
       deptId: directArchiveEdit ? current.deptId ?? employment?.deptId ?? null : current.deptId,

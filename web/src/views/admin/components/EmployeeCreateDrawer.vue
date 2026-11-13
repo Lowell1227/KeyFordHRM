@@ -3,6 +3,7 @@ import dayjs from 'dayjs';
 import { archiveFieldPath } from '@/utils/employee-archive-fields';
 import { isCancelledNewHireArrival } from '@/utils/employee-lifecycle';
 import { contractTitle } from '@/utils/employee-contract-presentation';
+import { validateOnboardingStep } from '@/utils/onboarding-validation';
 import { isAxiosError } from 'axios';
 import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { Delete, Plus } from '@element-plus/icons-vue';
@@ -20,6 +21,7 @@ import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import { uploadApi } from '@/api/upload.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import ContractSubjectSelect from '@/components/common/ContractSubjectSelect.vue';
+import EmployeeCompanySelect from '@/components/common/EmployeeCompanySelect.vue';
 import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSelect.vue';
 import type { Department, User } from '@/types/api.types';
 import EmployeeReentryNameMatches from './EmployeeReentryNameMatches.vue';
@@ -37,7 +39,7 @@ const props = defineProps<{
 }>();
 const emit = defineEmits<{
   'update:modelValue': [value: boolean];
-  submitted: [];
+  submitted: [requestId: string];
   saved: [];
   reentry: [userId: string, talentCandidateId?: string];
   existing: [userId: string];
@@ -45,7 +47,9 @@ const emit = defineEmits<{
   next: [];
 }>();
 
-const stepTitles = ['基本信息', '本次任职', '补充资料', '检查并提交'];
+const stepTitles = ['基本信息', '本次任职', '档案', '检查并提交'];
+const checkingStep = ref(false);
+const validatedSteps = ref<number[]>([]);
 const supplementGroups = ref<string[]>([]);
 const fieldErrors = reactive<Record<string, string>>({});
 const saveError = ref('');
@@ -66,7 +70,6 @@ const hydrating = ref(false);
 const idNumberConfigured = ref(false);
 const bankAccountConfigured = ref(false);
 const plannedRegularDateAuto = ref(true);
-const showSubmitReminder = ref(false);
 let autosaveTimer: ReturnType<typeof setTimeout> | null = null;
 let draftSavePromise: Promise<boolean> | null = null;
 let generation = 0;
@@ -80,7 +83,7 @@ const form = reactive({
   name: '',
   phone: '',
   idNumber: '',
-  company: 'fuede' as string | null,
+  company: null as string | null,
   deptId: '',
   positionId: '',
   entryDate: '',
@@ -137,32 +140,28 @@ const hasBlockingIdentityMatch = computed(() => (
   identityResult.value?.outcome === 'identity_match' || identityResult.value?.outcome === 'conflict'
 ));
 const saveStateLabel = computed(() => ({
-  idle: '输入姓名后自动保存',
-  saving: '保存中…',
-  saved: '已保存',
+  idle: form.name.trim() ? '待暂存' : '填写后自动暂存',
+  saving: '草稿保存中…',
+  saved: '草稿已保存',
   error: '保存失败',
 }[saveState.value]));
 const selectedDepartment = computed(() => flatten(props.departments).find((item) => item.id === form.deptId));
 const selectedPosition = computed(() => positions.value.find((item) => item.id === form.positionId));
 const missingForSubmit = computed(() => [
-  { label: '姓名', step: 0, missing: !form.name.trim() },
-  { label: '组织归属', step: 1, missing: !form.company },
-  { label: '部门', step: 1, missing: !form.deptId },
-  { label: '入职日期', step: 1, missing: !form.entryDate },
-  { label: '任职开始', step: 1, missing: !form.effectiveFrom },
-  { label: '用工类型', step: 1, missing: !form.employmentType },
-  { label: '员工状态', step: 1, missing: !form.employeeStatus },
+  { key: 'name', label: '姓名', step: 0, missing: !form.name.trim() },
+  { key: 'companyText', label: '所属公司', step: 1, missing: !form.company || !(form.employee.contractSubjectId || form.employee.companyText) },
+  { key: 'deptId', label: '部门', step: 1, missing: !form.deptId },
+  { key: 'entryDate', label: '入职日期', step: 1, missing: !form.entryDate },
+  { key: 'effectiveFrom', label: '任职开始', step: 1, missing: !form.effectiveFrom },
+  { key: 'employmentType', label: '用工类型', step: 1, missing: !form.employmentType },
+  { key: 'employeeStatus', label: '员工状态', step: 1, missing: !form.employeeStatus },
 ].filter((item) => item.missing));
 const missingForSubmitLabels = computed(() => missingForSubmit.value.map((item) => item.label));
-// Visiting a step is not completion; optional supplements have no completeness requirement.
-const completedSteps = computed(() => [0, 1].filter((step) => (
-  !missingForSubmit.value.some((item) => item.step === step)
-)));
+const completedSteps = computed(() => validatedSteps.value.filter(step => !Object.keys(validateOnboardingStep(validationPayload(), step)).length));
 
 function stepStatus(step: number) {
   if (step === currentStep.value) return 'process';
   if (completedSteps.value.includes(step)) return 'success';
-  if (step === 2 && currentStep.value > step) return 'finish';
   return 'wait';
 }
 
@@ -178,6 +177,8 @@ function reset() {
   const session = ++generation;
   if (autosaveTimer) clearTimeout(autosaveTimer);
   saveBlocked.value = false;
+  checkingStep.value = false;
+  validatedSteps.value = [];
   savingAction.value = null;
   identityLoading.value = false;
   hydrating.value = true;
@@ -193,11 +194,14 @@ function reset() {
   const restoredStep = draftMeta.layoutVersion === 2
     ? Math.min(Math.max(savedStep, 0), 3)
     : [0, 1, 1, 2, 2, 2, 3][savedStep] ?? 0;
+  if (draftMeta.layoutVersion === 2 && Array.isArray(draftMeta.completedSteps)) {
+    validatedSteps.value = draftMeta.completedSteps.filter((step: unknown): step is number => Number.isInteger(step) && Number(step) >= 0 && Number(step) < 3);
+  }
   Object.assign(form, {
     name: employee.name ?? '',
     phone: employee.phone ?? profile.phone ?? '',
     idNumber: '',
-    company: employee.company === null ? null : employee.company ?? 'fuede',
+    company: employee.company ?? null,
     deptId: employee.deptId ?? '',
     positionId: employee.positionId ?? '',
     entryDate: dateValue(employee.entryDate),
@@ -249,13 +253,12 @@ function reset() {
     : [];
   idNumberConfigured.value = Boolean(profile.idNumberConfigured);
   bankAccountConfigured.value = Boolean(profile.bankAccountConfigured);
-  currentStep.value = props.draft ? missingForSubmit.value[0]?.step ?? restoredStep : 0;
+  currentStep.value = props.draft ? restoredStep : 0;
   identityResult.value = null;
   phoneDuplicateAcknowledged.value = false;
   lastIdentityKey.value = '';
   saveState.value = props.draft ? 'saved' : 'idle';
   saveError.value = '';
-  showSubmitReminder.value = false;
   Object.keys(fieldErrors).forEach((key) => delete fieldErrors[key]);
   nextTick(() => {
     if (session !== generation || !props.modelValue) return;
@@ -276,6 +279,7 @@ watch(() => [form.phone, form.idNumber], () => {
   identityResult.value = null;
   phoneDuplicateAcknowledged.value = false;
   lastIdentityKey.value = '';
+  delete fieldErrors.identity;
 });
 watch(() => form.positionId, (positionId, previousId) => {
   if (hydrating.value) return;
@@ -296,6 +300,14 @@ watch(() => form.employee.probationMonths, () => {
   if (!hydrating.value) fillPlannedRegularDate();
 });
 watch(form, scheduleAutosave, { deep: true });
+watch(form, () => {
+  const errors = validateOnboardingStep(validationPayload(), currentStep.value);
+  for (const path of Object.keys(fieldErrors)) {
+    if (path === 'identity') continue;
+    if (errors[path]) fieldErrors[path] = errors[path];
+    else delete fieldErrors[path];
+  }
+}, { deep: true });
 watch(currentStep, scheduleAutosave);
 
 function fillPlannedRegularDate() {
@@ -318,16 +330,22 @@ function canLookupIdentity(): boolean {
 
 async function lookupIdentity(force = false) {
   if (!canLookupIdentity()) return;
+  const session = generation;
+  // A draft already stored by the server must be excluded from its own identity lookup.
+  if (draftSavePromise && !await draftSavePromise) return false;
+  if (session !== generation || !props.modelValue) return false;
   const phone = /^1\d{10}$/.test(normalizedPhone()) ? normalizedPhone() : undefined;
   const idNumber = /^(?:\d{15}|\d{17}[\dX])$/.test(normalizedIdNumber()) ? normalizedIdNumber() : undefined;
-  const key = `${phone ?? ''}|${idNumber ?? ''}`;
-  const session = generation;
-  if (!force && key === lastIdentityKey.value) return;
+  const excludedRequestId = draftId.value;
+  const key = `${phone ?? ''}|${idNumber ?? ''}|${excludedRequestId ?? ''}`;
+  if (!force && key === lastIdentityKey.value && identityResult.value) return true;
   identityLoading.value = true;
   try {
     const previousCandidates = identityResult.value?.candidates.map((item) => item.id).sort().join('|');
-    const result = await employeeArchivesApi.lookupIdentity({ phone, idNumber, excludeRequestId: draftId.value });
-    if (session !== generation || key !== `${normalizedPhone() || ''}|${normalizedIdNumber() || ''}` || !props.modelValue) return false;
+    const result = await employeeArchivesApi.lookupIdentity({ phone, idNumber, excludeRequestId: excludedRequestId });
+    if (session !== generation || !props.modelValue) return false;
+    if (excludedRequestId !== draftId.value) return await lookupIdentity(true);
+    if (key !== `${normalizedPhone() || ''}|${normalizedIdNumber() || ''}|${draftId.value ?? ''}`) return false;
     const sameMatch = key === lastIdentityKey.value
       && previousCandidates === result.candidates.map((item) => item.id).sort().join('|');
     identityResult.value = result;
@@ -415,7 +433,7 @@ async function openCandidate(candidate: Pick<EmployeeIdentityCandidate, 'id' | '
   else emit('existing', candidate.id);
 }
 
-function requestBody(): EmployeeCreateDraftPayload {
+function validationPayload(): EmployeeCreateDraftPayload {
   const employee = {
     ...form.employee,
     plannedRegularDate: form.employee.plannedRegularDate || null,
@@ -450,8 +468,11 @@ function requestBody(): EmployeeCreateDraftPayload {
     employee, profile,
     contracts: form.contracts.map(({ __key, ...contract }, index) => ({ ...contract, signedAt: contract.signedAt || null, effectiveFrom: contract.effectiveFrom || null, expiresAt: contract.expiresAt || null, sequence: index })),
     performance: { managerId: form.performanceManagerId },
-    draftStep: currentStep.value, draftLayoutVersion: 2, completedSteps: completedSteps.value,
   };
+}
+
+function requestBody(): EmployeeCreateDraftPayload {
+  return { ...validationPayload(), draftStep: currentStep.value, draftLayoutVersion: 2, completedSteps: completedSteps.value };
 }
 
 function scheduleAutosave() {
@@ -571,55 +592,70 @@ function previousStep() {
   if (currentStep.value > 0) currentStep.value -= 1;
 }
 
-async function nextStep() {
-  if (currentStep.value === 0 && !form.name.trim()) {
-    ElMessage.warning('填写姓名后即可继续，其他信息可稍后补充');
-    return;
+async function focusInvalidField(path: string) {
+  if (path.startsWith('contracts')) supplementGroups.value = [...new Set([...supplementGroups.value, 'contracts'])];
+  else if (path.startsWith('profile.') && currentStep.value === 2) supplementGroups.value = ['personal', 'contact', ...supplementGroups.value];
+  await nextTick();
+  const field = wizardElement.value?.querySelector<HTMLElement>(`[data-archive-field="${CSS.escape(path)}"]`);
+  field?.scrollIntoView({ block: 'center' });
+  field?.querySelector<HTMLInputElement>('input')?.focus({ preventScroll: true });
+}
+
+async function validateStep(step: number, recheckIdentity = false): Promise<boolean> {
+  const session = generation;
+  Object.keys(fieldErrors).forEach(key => delete fieldErrors[key]);
+  Object.assign(fieldErrors, validateOnboardingStep(validationPayload(), step));
+  if (Object.keys(fieldErrors).length) {
+    currentStep.value = step;
+    await focusInvalidField(Object.keys(fieldErrors)[0]);
+    return false;
   }
-  currentStep.value = Math.min(currentStep.value + 1, stepTitles.length - 1);
-  await persistDraft();
+  if (step === 0) {
+    const identityChecked = !canLookupIdentity() || await lookupIdentity(recheckIdentity);
+    if (session !== generation || !props.modelValue) return false;
+    if (!identityChecked) { currentStep.value = 0; return false; }
+    if (hasBlockingIdentityMatch.value) fieldErrors.identity = '已找到现有员工，请从匹配结果进入原档案处理';
+    else if (identityResult.value?.outcome === 'phone_candidates' && !phoneDuplicateAcknowledged.value) fieldErrors.identity = '请先核对手机号匹配结果';
+    if (fieldErrors.identity) { currentStep.value = 0; await focusInvalidField('identity'); return false; }
+  }
+  if (!validatedSteps.value.includes(step)) validatedSteps.value.push(step);
+  return true;
+}
+
+async function nextStep() {
+  if (checkingStep.value || savingAction.value || identityLoading.value) return;
+  const session = generation;
+  checkingStep.value = true;
+  try {
+    if (!await validateStep(currentStep.value) || session !== generation) return;
+    currentStep.value = Math.min(currentStep.value + 1, stepTitles.length - 1);
+    await persistDraft();
+  } finally {
+    if (session === generation) checkingStep.value = false;
+  }
 }
 
 async function submit() {
-  if (savingAction.value || saveBlocked.value) return;
+  if (savingAction.value || saveBlocked.value || checkingStep.value || identityLoading.value) return;
   const session = generation;
-  Object.keys(fieldErrors).forEach((key) => delete fieldErrors[key]);
-  if (missingForSubmit.value.length) {
-    showSubmitReminder.value = true;
-    currentStep.value = missingForSubmit.value[0].step;
-    return;
-  }
-  if (form.phone.trim() && !/^1\d{10}$/.test(normalizedPhone())) fieldErrors.phone = '请填写完整的 11 位手机号';
-  if (form.idNumber.trim() && !/^(?:\d{15}|\d{17}[\dX])$/.test(normalizedIdNumber())) fieldErrors.idNumber = '请填写完整的身份证号，或清空后稍后补充';
-  if (Object.keys(fieldErrors).length) {
-    currentStep.value = 0;
-    return;
-  }
-  if (canLookupIdentity()) {
-    if (!(await lookupIdentity(true))) { currentStep.value = 0; return; }
+  checkingStep.value = true;
+  try {
+    for (const step of [0, 1, 2]) if (!await validateStep(step, true) || session !== generation) return;
+  } finally {
+    if (session === generation) checkingStep.value = false;
   }
   if (session !== generation || !props.modelValue) return;
-  if (hasBlockingIdentityMatch.value) {
-    ElMessage.warning('已找到现有员工，请从匹配结果进入原档案处理');
-    currentStep.value = 0;
-    return;
-  }
-  if (identityResult.value?.outcome === 'phone_candidates' && !phoneDuplicateAcknowledged.value) {
-    ElMessage.warning('请先确认手机号匹配结果');
-    currentStep.value = 0;
-    return;
-  }
   if (autosaveTimer) clearTimeout(autosaveTimer);
   autosaveTimer = null;
   savingAction.value = 'submit';
   try {
     if (draftSavePromise && !(await draftSavePromise)) return;
     if (session !== generation || !props.modelValue) return;
-    await employeeArchivesApi.createEmployee(requestBody() as EmployeeCreatePayload);
+    const request = await employeeArchivesApi.createEmployee(requestBody() as EmployeeCreatePayload);
     if (session !== generation || !props.modelValue) return;
-    ElMessage.success('入职申请已提交，审核通过并确认到岗后生效');
+    ElMessage.success('入职申请已提交');
     emit('update:modelValue', false);
-    emit('submitted');
+    emit('submitted', request.id);
   } catch (error) {
     if (session !== generation || !props.modelValue) return;
     if (openExistingTalentApplication(error)) return;
@@ -712,7 +748,7 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
         <el-button v-if="saveState === 'error' && !saveBlocked" link :disabled="savingAction === 'submit'" @click="persistDraft">重试暂存</el-button>
       </el-alert>
       <el-alert
-        v-if="missingForSubmit.length && (currentStep === 3 || showSubmitReminder)"
+        v-if="missingForSubmit.length && currentStep === 3"
         :title="`提交前还需补充：${missingForSubmitLabels.join('、')}`"
         type="warning"
         :closable="false"
@@ -723,10 +759,10 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
         <section v-show="currentStep === 0" class="wizard-section">
           <div class="section-head"><div><h3>身份核验</h3></div></div>
           <div class="form-grid">
-            <el-form-item data-archive-field="employee.name" label="姓名"><el-input v-model="form.name" maxlength="50" placeholder="输入姓名，可查找离职员工" /></el-form-item>
-            <el-form-item data-archive-field="profile.phone" label="手机号" :error="fieldErrors.phone"><el-input v-model="form.phone" maxlength="20" @blur="lookupIdentity()" /></el-form-item>
-            <el-form-item data-archive-field="profile.idNumber" :label="idNumberConfigured ? '身份证号（已保存，留空不变）' : '身份证号'" :error="fieldErrors.idNumber"><el-input v-model="form.idNumber" maxlength="18" show-password @blur="lookupIdentity()" /></el-form-item>
-            <el-form-item label="身份查重" :error="fieldErrors.identity"><el-button :loading="identityLoading" :disabled="!canLookupIdentity()" @click="lookupIdentity(true)">检索已有档案</el-button></el-form-item>
+            <el-form-item data-archive-field="employee.name" label="姓名" required :error="fieldErrors['employee.name']"><el-input v-model="form.name" maxlength="50" placeholder="输入姓名，可查找离职员工" /></el-form-item>
+            <el-form-item data-archive-field="profile.phone" label="手机号" :error="fieldErrors['profile.phone']"><el-input v-model="form.phone" maxlength="20" @blur="lookupIdentity()" /></el-form-item>
+            <el-form-item data-archive-field="profile.idNumber" :label="idNumberConfigured ? '身份证号（已保存，留空不变）' : '身份证号'" :error="fieldErrors['profile.idNumber']"><el-input v-model="form.idNumber" maxlength="18" show-password @blur="lookupIdentity()" /></el-form-item>
+            <el-form-item data-archive-field="identity" label="身份查重" :error="fieldErrors.identity"><el-button :loading="identityLoading" :disabled="!canLookupIdentity()" @click="lookupIdentity(true)">检索已有档案</el-button></el-form-item>
           </div>
           <EmployeeReentryNameMatches
             :name="form.name"
@@ -743,34 +779,36 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
             </div>
             <el-checkbox v-if="identityResult.outcome === 'phone_candidates'" v-model="phoneDuplicateAcknowledged">已核对，以上人员均不是本次新增员工</el-checkbox>
           </div>
-          <div v-else-if="identityResult?.outcome === 'none'" class="identity-result identity-result--success">未发现相同手机号或身份证号，可以继续新增。</div>
         </section>
 
         <section v-show="currentStep === 1" class="wizard-section">
-          <div class="section-head"><div><h3>任职信息</h3><p>选择岗位后自动带入岗位名称和职系；入职日期自动作为任职开始日期。</p></div></div>
+          <div class="section-head"><h3>任职信息</h3></div>
           <div class="form-grid form-grid--3">
-            <el-form-item data-archive-field="employee.companyText" label="所属公司（合同主体）"><ContractSubjectSelect v-model="form.employee.contractSubjectId" v-model:snapshot-name="form.employee.companyText" /></el-form-item>
-            <el-form-item data-archive-field="employee.company" label="组织归属" :error="!form.company ? '组织归属待核实，请核实后选择；可先保存草稿。' : ''"><el-select v-model="form.company" aria-label="组织归属" placeholder="待核实后选择"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select></el-form-item>
-            <el-form-item data-archive-field="employee.deptId" label="部门"><el-tree-select v-model="form.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
-            <el-form-item data-archive-field="employee.positionId" label="岗位"><el-select v-model="form.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
-            <el-form-item data-archive-field="employee.position" label="岗位名称"><el-input v-model="form.employee.position" placeholder="选择岗位后自动带入" /></el-form-item>
-            <el-form-item data-archive-field="employee.jobGrade" label="职级"><el-input v-model="form.employee.jobGrade" /></el-form-item>
-            <el-form-item data-archive-field="employee.jobFamily" label="职系"><PersonnelReferenceSelect v-model="form.employee.jobFamily" kind="job_family" label="职系" placeholder="选择岗位后自动带入，也可选择其他职系" /></el-form-item>
-            <el-form-item data-archive-field="employee.workLocation" label="工作地点"><PersonnelReferenceSelect v-model="form.employee.workLocation" kind="work_location" label="工作地点" /></el-form-item>
-            <el-form-item data-archive-field="employee.employmentType" label="用工类型" :error="!form.employmentType ? '用工类型待核实，请核实后选择；可先保存草稿。' : ''"><el-select v-model="form.employmentType" placeholder="待核实后选择" aria-label="用工类型"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
-            <el-form-item data-archive-field="employee.employeeStatus" label="员工状态" :error="!form.employeeStatus ? '员工状态待核实，请核实后选择；可先保存草稿。' : ''"><el-select v-model="form.employeeStatus" placeholder="待核实后选择" aria-label="员工状态"><el-option label="试用期" value="probation" /><el-option label="在职" value="active" /></el-select></el-form-item>
-            <el-form-item data-archive-field="employee.entryDate" label="入职日期"><el-date-picker v-model="form.entryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item data-archive-field="employee.effectiveFrom" label="任职开始"><el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item data-archive-field="employee.probationMonths" label="试用期（月）"><el-input-number v-model="form.employee.probationMonths" :min="0" :max="12" /><small v-if="form.employee.probationMonths === null">未提供月数，保持空值，可核实后补充。</small></el-form-item>
-            <el-form-item data-archive-field="employee.plannedRegularDate" label="预计转正日期"><el-date-picker v-model="form.employee.plannedRegularDate" type="date" value-format="YYYY-MM-DD" @change="plannedRegularDateAuto = false" /></el-form-item>
+            <el-form-item data-archive-field="employee.companyText" label="所属公司" required :error="fieldErrors['employee.companyText']"><EmployeeCompanySelect v-model="form.employee.contractSubjectId" v-model:snapshot-name="form.employee.companyText" v-model:company="form.company" /></el-form-item>
+
+            <el-form-item data-archive-field="employee.deptId" label="部门" required :error="fieldErrors['employee.deptId']"><el-tree-select v-model="form.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
+            <el-form-item data-archive-field="employee.positionId" label="岗位" :error="fieldErrors['employee.positionId']"><el-select v-model="form.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
+            <el-form-item data-archive-field="employee.position" label="岗位名称" :error="fieldErrors['employee.position']"><el-input v-model="form.employee.position" placeholder="选择岗位后自动带入" /></el-form-item>
+            <el-form-item data-archive-field="employee.jobGrade" label="职级" :error="fieldErrors['employee.jobGrade']"><el-input v-model="form.employee.jobGrade" /></el-form-item>
+            <el-form-item data-archive-field="employee.jobFamily" label="职系" :error="fieldErrors['employee.jobFamily']"><PersonnelReferenceSelect v-model="form.employee.jobFamily" kind="job_family" label="职系" placeholder="选择岗位后自动带入，也可选择其他职系" /></el-form-item>
+            <el-form-item data-archive-field="employee.workLocation" label="工作地点" :error="fieldErrors['employee.workLocation']"><PersonnelReferenceSelect v-model="form.employee.workLocation" kind="work_location" label="工作地点" /></el-form-item>
+            <el-form-item data-archive-field="employee.employmentType" label="用工类型" required :error="fieldErrors['employee.employmentType']"><el-select v-model="form.employmentType" placeholder="待核实后选择" aria-label="用工类型"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
+            <el-form-item data-archive-field="employee.employeeStatus" label="员工状态" required :error="fieldErrors['employee.employeeStatus']"><el-select v-model="form.employeeStatus" placeholder="待核实后选择" aria-label="员工状态"><el-option label="试用期" value="probation" /><el-option label="在职" value="active" /></el-select></el-form-item>
+            <el-form-item data-archive-field="employee.entryDate" label="入职日期" required :error="fieldErrors['employee.entryDate']"><el-date-picker v-model="form.entryDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item data-archive-field="employee.effectiveFrom" label="任职开始" required :error="fieldErrors['employee.effectiveFrom']"><el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item v-if="form.effectiveTo || fieldErrors['employee.effectiveTo']" data-archive-field="employee.effectiveTo" label="任职结束" :error="fieldErrors['employee.effectiveTo']"><el-date-picker v-model="form.effectiveTo" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item data-archive-field="employee.probationMonths" label="试用期（月）" :error="fieldErrors['employee.probationMonths']"><el-input-number v-model="form.employee.probationMonths" :min="0" :max="12" /><small v-if="form.employee.probationMonths === null">未提供月数，保持空值，可核实后补充。</small></el-form-item>
+            <el-form-item data-archive-field="employee.plannedRegularDate" label="预计转正日期" :error="fieldErrors['employee.plannedRegularDate']"><el-date-picker v-model="form.employee.plannedRegularDate" type="date" value-format="YYYY-MM-DD" @change="plannedRegularDateAuto = false" /></el-form-item>
+            <el-form-item v-if="form.employee.actualRegularDate || fieldErrors['employee.actualRegularDate']" data-archive-field="employee.actualRegularDate" label="实际转正日期" :error="fieldErrors['employee.actualRegularDate']"><el-date-picker v-model="form.employee.actualRegularDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item v-if="form.employee.leaveDate || fieldErrors['employee.leaveDate']" data-archive-field="employee.leaveDate" label="离职日期" :error="fieldErrors['employee.leaveDate']"><el-date-picker v-model="form.employee.leaveDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
           </div>
         </section>
 
         <section v-show="currentStep === 1" class="wizard-section">
-          <div class="section-head"><div><h3>管理关系</h3><p>两类关系用途不同，均可稍后补充并由 HR 审核。</p></div></div>
+          <div class="section-head"><h3>管理关系</h3></div>
           <div class="form-grid">
-            <el-form-item data-archive-field="employee.managerId" label="花名册直属主管"><UserSelect v-model="form.rosterManagerId" clearable eligible-for="direct_manager" /><small>仅作为档案中的汇报关系显示。</small></el-form-item>
-            <el-form-item data-archive-field="performance.managerId" label="绩效直属上级"><UserSelect v-model="form.performanceManagerId" clearable eligible-for="direct_manager" /><small>用于绩效目标审核、评分和待办归属。</small></el-form-item>
+            <el-form-item data-archive-field="employee.managerId" label="花名册直属主管" :error="fieldErrors['employee.managerId']"><UserSelect v-model="form.rosterManagerId" clearable eligible-for="direct_manager" /><small>仅作为档案中的汇报关系显示。</small></el-form-item>
+            <el-form-item data-archive-field="performance.managerId" label="绩效直属上级" :error="fieldErrors['performance.managerId']"><UserSelect v-model="form.performanceManagerId" clearable eligible-for="direct_manager" /><small>用于绩效目标审核、评分和待办归属。</small></el-form-item>
           </div>
         </section>
 
@@ -778,20 +816,20 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
         <el-collapse-item name="personal" title="个人与教育">
         <section class="wizard-section">
           <div class="form-grid form-grid--3">
-            <el-form-item data-archive-field="profile.gender" label="性别"><el-select v-model="form.profile.gender" clearable><el-option label="男" value="男" /><el-option label="女" value="女" /></el-select></el-form-item>
-            <el-form-item data-archive-field="profile.birthDate" label="出生日期"><el-date-picker v-model="form.profile.birthDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item data-archive-field="profile.ethnicity" label="民族"><el-input v-model="form.profile.ethnicity" /></el-form-item>
-            <el-form-item data-archive-field="profile.education" label="学历"><el-input v-model="form.profile.education" /></el-form-item>
-            <el-form-item data-archive-field="profile.professionalTitle" label="职称"><el-input v-model="form.profile.professionalTitle" /></el-form-item>
-            <el-form-item data-archive-field="profile.school" label="毕业院校"><el-input v-model="form.profile.school" /></el-form-item>
-            <el-form-item data-archive-field="profile.graduationDate" label="毕业日期"><el-date-picker v-model="form.profile.graduationDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item data-archive-field="profile.major" label="专业"><el-input v-model="form.profile.major" /></el-form-item>
-            <el-form-item data-archive-field="profile.maritalStatus" label="婚姻状况"><el-input v-model="form.profile.maritalStatus" /></el-form-item>
-            <el-form-item data-archive-field="profile.childrenStatus" label="子女状况"><el-input v-model="form.profile.childrenStatus" /></el-form-item>
-            <el-form-item data-archive-field="profile.childrenCount" label="子女数量"><el-input-number v-model="form.profile.childrenCount" :min="0" /></el-form-item>
-            <el-form-item data-archive-field="profile.politicalStatus" label="政治面貌"><el-input v-model="form.profile.politicalStatus" /></el-form-item>
-            <el-form-item data-archive-field="profile.nativePlace" label="籍贯"><el-input v-model="form.profile.nativePlace" /></el-form-item>
-            <el-form-item data-archive-field="profile.householdType" label="户籍类型"><el-input v-model="form.profile.householdType" /></el-form-item>
+            <el-form-item data-archive-field="profile.gender" label="性别" :error="fieldErrors['profile.gender']"><el-select v-model="form.profile.gender" clearable><el-option label="男" value="男" /><el-option label="女" value="女" /></el-select></el-form-item>
+            <el-form-item data-archive-field="profile.birthDate" label="出生日期" :error="fieldErrors['profile.birthDate']"><el-date-picker v-model="form.profile.birthDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item data-archive-field="profile.ethnicity" label="民族" :error="fieldErrors['profile.ethnicity']"><el-input v-model="form.profile.ethnicity" /></el-form-item>
+            <el-form-item data-archive-field="profile.education" label="学历" :error="fieldErrors['profile.education']"><el-input v-model="form.profile.education" /></el-form-item>
+            <el-form-item data-archive-field="profile.professionalTitle" label="职称" :error="fieldErrors['profile.professionalTitle']"><el-input v-model="form.profile.professionalTitle" /></el-form-item>
+            <el-form-item data-archive-field="profile.school" label="毕业院校" :error="fieldErrors['profile.school']"><el-input v-model="form.profile.school" /></el-form-item>
+            <el-form-item data-archive-field="profile.graduationDate" label="毕业日期" :error="fieldErrors['profile.graduationDate']"><el-date-picker v-model="form.profile.graduationDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item data-archive-field="profile.major" label="专业" :error="fieldErrors['profile.major']"><el-input v-model="form.profile.major" /></el-form-item>
+            <el-form-item data-archive-field="profile.maritalStatus" label="婚姻状况" :error="fieldErrors['profile.maritalStatus']"><el-input v-model="form.profile.maritalStatus" /></el-form-item>
+            <el-form-item data-archive-field="profile.childrenStatus" label="子女状况" :error="fieldErrors['profile.childrenStatus']"><el-input v-model="form.profile.childrenStatus" /></el-form-item>
+            <el-form-item data-archive-field="profile.childrenCount" label="子女数量" :error="fieldErrors['profile.childrenCount']"><el-input-number v-model="form.profile.childrenCount" :min="0" /></el-form-item>
+            <el-form-item data-archive-field="profile.politicalStatus" label="政治面貌" :error="fieldErrors['profile.politicalStatus']"><el-input v-model="form.profile.politicalStatus" /></el-form-item>
+            <el-form-item data-archive-field="profile.nativePlace" label="籍贯" :error="fieldErrors['profile.nativePlace']"><el-input v-model="form.profile.nativePlace" /></el-form-item>
+            <el-form-item data-archive-field="profile.householdType" label="户籍类型" :error="fieldErrors['profile.householdType']"><el-input v-model="form.profile.householdType" /></el-form-item>
           </div>
         </section>
         </el-collapse-item>
@@ -799,54 +837,56 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
         <el-collapse-item name="contact" title="联系与保障">
         <section class="wizard-section">
           <div class="form-grid form-grid--3">
-            <el-form-item data-archive-field="profile.idAddress" label="身份证地址" class="span-2"><el-input v-model="form.profile.idAddress" /></el-form-item>
-            <el-form-item data-archive-field="profile.currentAddress" label="现住址" class="span-2"><el-input v-model="form.profile.currentAddress" /></el-form-item>
-            <el-form-item data-archive-field="profile.emergencyContactName" label="紧急联系人"><el-input v-model="form.profile.emergencyContactName" /></el-form-item>
-            <el-form-item data-archive-field="profile.emergencyContactRelation" label="与联系人关系"><el-input v-model="form.profile.emergencyContactRelation" /></el-form-item>
-            <el-form-item data-archive-field="profile.emergencyContactPhone" label="紧急联系电话"><el-input v-model="form.profile.emergencyContactPhone" /></el-form-item>
-            <el-form-item data-archive-field="profile.socialSecurityStatus" label="社保状态"><el-input v-model="form.profile.socialSecurityStatus" /></el-form-item>
-            <el-form-item data-archive-field="profile.socialSecurityStartDate" label="社保起始日期"><el-date-picker v-model="form.profile.socialSecurityStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item data-archive-field="profile.housingFundStatus" label="公积金状态"><el-input v-model="form.profile.housingFundStatus" /></el-form-item>
-            <el-form-item data-archive-field="profile.housingFundStartDate" label="公积金起始日期"><el-date-picker v-model="form.profile.housingFundStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item data-archive-field="profile.bankName" label="开户行"><el-input v-model="form.profile.bankName" /></el-form-item>
-            <el-form-item data-archive-field="profile.bankBranch" label="开户支行"><el-input v-model="form.profile.bankBranch" /></el-form-item>
-            <el-form-item data-archive-field="profile.bankAccount" :label="bankAccountConfigured ? '银行卡号（已保存，留空不变）' : '银行卡号'"><el-input v-model="form.profile.bankAccount" type="password" show-password /></el-form-item>
+            <el-form-item data-archive-field="profile.idAddress" label="身份证地址" class="span-2" :error="fieldErrors['profile.idAddress']"><el-input v-model="form.profile.idAddress" /></el-form-item>
+            <el-form-item data-archive-field="profile.currentAddress" label="现住址" class="span-2" :error="fieldErrors['profile.currentAddress']"><el-input v-model="form.profile.currentAddress" /></el-form-item>
+            <el-form-item data-archive-field="profile.emergencyContactName" label="紧急联系人" :error="fieldErrors['profile.emergencyContactName']"><el-input v-model="form.profile.emergencyContactName" /></el-form-item>
+            <el-form-item data-archive-field="profile.emergencyContactRelation" label="与联系人关系" :error="fieldErrors['profile.emergencyContactRelation']"><el-input v-model="form.profile.emergencyContactRelation" /></el-form-item>
+            <el-form-item data-archive-field="profile.emergencyContactPhone" label="紧急联系电话" :error="fieldErrors['profile.emergencyContactPhone']"><el-input v-model="form.profile.emergencyContactPhone" /></el-form-item>
+            <el-form-item data-archive-field="profile.socialSecurityStatus" label="社保状态" :error="fieldErrors['profile.socialSecurityStatus']"><el-input v-model="form.profile.socialSecurityStatus" /></el-form-item>
+            <el-form-item data-archive-field="profile.socialSecurityStartDate" label="社保起始日期" :error="fieldErrors['profile.socialSecurityStartDate']"><el-date-picker v-model="form.profile.socialSecurityStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item data-archive-field="profile.housingFundStatus" label="公积金状态" :error="fieldErrors['profile.housingFundStatus']"><el-input v-model="form.profile.housingFundStatus" /></el-form-item>
+            <el-form-item data-archive-field="profile.housingFundStartDate" label="公积金起始日期" :error="fieldErrors['profile.housingFundStartDate']"><el-date-picker v-model="form.profile.housingFundStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+            <el-form-item data-archive-field="profile.bankName" label="开户行" :error="fieldErrors['profile.bankName']"><el-input v-model="form.profile.bankName" /></el-form-item>
+            <el-form-item data-archive-field="profile.bankBranch" label="开户支行" :error="fieldErrors['profile.bankBranch']"><el-input v-model="form.profile.bankBranch" /></el-form-item>
+            <el-form-item data-archive-field="profile.bankAccount" :label="bankAccountConfigured ? '银行卡号（已保存，留空不变）' : '银行卡号'" :error="fieldErrors['profile.bankAccount']"><el-input v-model="form.profile.bankAccount" type="password" show-password /></el-form-item>
           </div>
         </section>
         </el-collapse-item>
 
-        <el-collapse-item name="contracts" title="合同与附件">
+        <el-collapse-item name="contracts" title="合同与附件" data-archive-field="contracts">
         <section class="wizard-section">
-          <div class="section-head contract-toolbar"><div><h3>合同与附件</h3><p>合同可先不录入，后续从草稿继续补充。</p></div><el-button :icon="Plus" @click="addContract">新增合同</el-button></div>
+          <p v-if="fieldErrors.contracts" class="field-error" role="alert">{{ fieldErrors.contracts }}</p>
+          <div class="section-head contract-toolbar"><el-button :icon="Plus" @click="addContract">新增合同</el-button></div>
           <div v-for="(contract, index) in form.contracts" :key="contract.__key" class="contract-card">
             <div class="contract-card__head"><strong>{{ contractTitle(contract) }}</strong><el-button link type="danger" :icon="Delete" @click="form.contracts.splice(index, 1)">移除</el-button></div>
             <div class="form-grid form-grid--3">
-              <el-form-item label="类型"><el-select v-model="contract.contractType"><el-option label="劳动合同" value="contract" /><el-option label="续签" value="renewal" /><el-option label="转签" value="transfer" /></el-select></el-form-item>
-              <el-form-item label="合同名称"><el-input v-model="contract.name" /></el-form-item>
-              <el-form-item label="签约公司"><ContractSubjectSelect v-model="contract.contractSubjectId" v-model:snapshot-name="contract.signingCompany" /></el-form-item>
-              <el-form-item label="签订日期"><el-date-picker v-model="contract.signedAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-              <el-form-item label="生效日期"><el-date-picker v-model="contract.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-              <el-form-item label="到期日期"><el-date-picker v-model="contract.expiresAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-              <el-form-item label="期限"><el-input v-model="contract.termType" /></el-form-item>
-              <el-form-item label="原公司"><ContractSubjectSelect v-model:snapshot-name="contract.originalCompany" name-only /></el-form-item>
-              <el-form-item label="新公司"><ContractSubjectSelect v-model:snapshot-name="contract.newCompany" name-only /></el-form-item>
-              <el-form-item label="保密协议"><el-input v-model="contract.confidentialityAgreement" /></el-form-item>
-              <el-form-item label="竞业协议"><el-input v-model="contract.nonCompeteAgreement" /></el-form-item>
-              <el-form-item label="肖像协议"><el-input v-model="contract.portraitAgreement" /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.contractType`" :error="fieldErrors[`contracts.${index}.contractType`]" label="类型"><el-select v-model="contract.contractType"><el-option label="劳动合同" value="contract" /><el-option label="续签" value="renewal" /><el-option label="转签" value="transfer" /></el-select></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.name`" :error="fieldErrors[`contracts.${index}.name`]" label="合同名称"><el-input v-model="contract.name" /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.contractSubjectId`" :error="fieldErrors[`contracts.${index}.contractSubjectId`]" label="签约公司"><ContractSubjectSelect v-model="contract.contractSubjectId" v-model:snapshot-name="contract.signingCompany" /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.signedAt`" :error="fieldErrors[`contracts.${index}.signedAt`]" label="签订日期"><el-date-picker v-model="contract.signedAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.effectiveFrom`" :error="fieldErrors[`contracts.${index}.effectiveFrom`]" label="生效日期"><el-date-picker v-model="contract.effectiveFrom" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.expiresAt`" :error="fieldErrors[`contracts.${index}.expiresAt`]" label="到期日期"><el-date-picker v-model="contract.expiresAt" type="date" value-format="YYYY-MM-DD" /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.termType`" :error="fieldErrors[`contracts.${index}.termType`]" label="期限"><el-input v-model="contract.termType" /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.originalCompany`" label="原公司" :error="fieldErrors[`contracts.${index}.originalCompany`]"><ContractSubjectSelect v-model:snapshot-name="contract.originalCompany" name-only /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.newCompany`" label="新公司" :error="fieldErrors[`contracts.${index}.newCompany`]"><ContractSubjectSelect v-model:snapshot-name="contract.newCompany" name-only /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.confidentialityAgreement`" :error="fieldErrors[`contracts.${index}.confidentialityAgreement`]" label="保密协议"><el-input v-model="contract.confidentialityAgreement" /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.nonCompeteAgreement`" :error="fieldErrors[`contracts.${index}.nonCompeteAgreement`]" label="竞业协议"><el-input v-model="contract.nonCompeteAgreement" /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.portraitAgreement`" :error="fieldErrors[`contracts.${index}.portraitAgreement`]" label="肖像协议"><el-input v-model="contract.portraitAgreement" /></el-form-item>
             </div>
             <div class="contract-materials">
               <div class="material-group"><strong>合同图片</strong><small>最多 5 张，单张不超过 2MB</small><el-upload :show-file-list="false" accept="image/jpeg,image/png,image/webp" :http-request="(options: UploadRequestOptions) => uploadContractImage(contract, options)"><el-button>上传图片</el-button></el-upload><div v-for="(item, itemIndex) in contract.images" :key="item.url" class="material-item"><el-button link type="primary" @click="openUploadedMaterial(item)">{{ item.name }}</el-button><el-button link type="danger" @click="contract.images.splice(itemIndex, 1)">移除</el-button></div></div>
               <div class="material-group"><strong>合同附件</strong><small>最多 10 个，单个不超过 10MB</small><el-upload :show-file-list="false" accept=".pdf,.doc,.docx,.xls,.xlsx" :http-request="(options: UploadRequestOptions) => uploadContractAttachment(contract, options)"><el-button>上传附件</el-button></el-upload><div v-for="(item, itemIndex) in contract.attachments" :key="item.url" class="material-item"><el-button link type="primary" @click="openUploadedMaterial(item)">{{ item.name }}</el-button><el-button link type="danger" @click="contract.attachments.splice(itemIndex, 1)">移除</el-button></div></div>
             </div>
           </div>
-          <el-empty v-if="!form.contracts.length" description="暂无合同，可直接下一步" :image-size="72" />
+          <p v-if="!form.contracts.length" class="empty-contracts">暂无合同</p>
         </section>
         </el-collapse-item>
         </el-collapse>
 
         <section v-show="currentStep === 3" class="wizard-section">
-          <div class="section-head"><div><h3>预览提交</h3></div></div>
+          <div class="section-head"><div><h3>检查并提交</h3></div></div>
           <dl class="preview-grid">
+            <div><dt>所属公司</dt><dd>{{ form.employee.companyText || '未填写' }}</dd></div>
             <div><dt>姓名</dt><dd>{{ form.name || '未填写' }}</dd></div><div><dt>手机号</dt><dd>{{ form.phone || '未填写' }}</dd></div>
             <div><dt>部门</dt><dd>{{ selectedDepartment?.fullPath || selectedDepartment?.name || '未填写' }}</dd></div><div><dt>岗位</dt><dd>{{ selectedPosition?.name || form.employee.position || '未填写' }}</dd></div>
             <div><dt>入职日期</dt><dd>{{ form.entryDate || '未填写' }}</dd></div><div><dt>任职开始</dt><dd>{{ form.effectiveFrom || '未填写' }}</dd></div>
@@ -861,11 +901,11 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
     <template #footer>
       <div class="drawer-footer">
         <el-button v-if="nextAvailable" :disabled="savingAction === 'submit'" @click="nextDraft">下一份待核资料</el-button>
-        <el-button v-if="currentStep > 0" @click="previousStep">上一步</el-button>
+        <el-button v-if="currentStep > 0" :disabled="checkingStep || identityLoading || !!savingAction" @click="previousStep">上一步</el-button>
         <span class="footer-spacer" />
         <el-button :disabled="savingAction === 'submit'" @click="beforeClose(() => emit('update:modelValue', false))">关闭</el-button>
-        <el-button v-if="currentStep < stepTitles.length - 1" type="primary" @click="nextStep">下一步</el-button>
-        <el-button v-else type="primary" :loading="savingAction === 'submit'" :disabled="saveBlocked" @click="submit">提交</el-button>
+        <el-button v-if="currentStep < stepTitles.length - 1" type="primary" :loading="checkingStep" :disabled="identityLoading || !!savingAction" @click="nextStep">下一步</el-button>
+        <el-button v-else type="primary" :loading="checkingStep || savingAction === 'submit'" :disabled="saveBlocked || identityLoading" @click="submit">提交</el-button>
       </div>
     </template>
   </el-drawer>
@@ -874,6 +914,8 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
 <style scoped>
 .draft-issue-context { display: grid; gap: 5px; padding: 12px; background: var(--el-color-warning-light-9); font-size: 13px; line-height: 1.6; overflow-wrap: anywhere; }
 .archive-field--focused { outline: 2px solid var(--el-color-primary-light-5); outline-offset: 5px; border-radius: 4px; }
+.field-error { color: var(--el-color-danger); font-size: 12px; }
+.wizard-form :deep(.el-form-item__error) { position: static; line-height: 1.5; }
 
 .wizard-shell { display: grid; align-content: start; gap: 18px; min-height: 560px; }
 .wizard-head { position: sticky; top: -20px; z-index: 3; padding: 14px 0 12px; background: #fff; border-bottom: 1px solid #eef1f6; }
@@ -883,14 +925,15 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
 .save-state--saving { color: #667085; }.save-state--saved { color: #16a34a; }.save-state--error { color: #dc2626; }
 .wizard-section { padding: 2px 2px 20px; }
 .section-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
-.section-head h3 { margin: 0 0 5px; font-size: 20px; }.section-head p { margin: 0; color: #667085; font-size: 13px; }
+.section-head h3 { margin: 0 0 5px; font-size: 16px; }
+.empty-contracts { color: var(--el-text-color-secondary); font-size: 13px; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
 .form-grid--3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .form-grid :deep(.el-select), .form-grid :deep(.el-date-editor), .form-grid :deep(.el-input-number), .form-grid :deep(.el-tree-select) { width: 100%; }
 .form-grid small { display: block; margin-top: 5px; color: #98a2b3; line-height: 1.4; }
 .span-2 { grid-column: span 2; }
 .identity-result { margin: 2px 0 8px; padding: 12px; border: 1px solid #dbe7ff; border-radius: 7px; color: #344054; background: #f7faff; font-size: 13px; }
-.identity-result--danger { color: #b42318; border-color: #fecdca; background: #fffbfa; }.identity-result--success { color: #067647; border-color: #abefc6; background: #f6fef9; }
+.identity-result--danger { color: #b42318; border-color: #fecdca; background: #fffbfa; }
 .identity-candidate { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 8px 0; }
 .contract-card { margin-top: 14px; padding: 16px; border: 1px solid #dfe5ee; border-radius: 12px; background: #f8fafc; }
 .contract-card__head, .contract-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; }.contract-card__head { margin-bottom: 10px; }
@@ -903,7 +946,7 @@ onBeforeUnmount(() => { generation++; if (autosaveTimer) clearTimeout(autosaveTi
 .submission-process { margin: 16px 0 0; padding-top: 16px; border-top: 1px solid var(--el-border-color-lighter); font-size: 13px; line-height: 1.8; color: var(--el-text-color-secondary); }
 .drawer-footer { display: flex; align-items: center; width: 100%; }.footer-spacer { flex: 1; }
 @media (max-width: 760px) {
-  .wizard-shell { min-height: 0; }.desktop-steps { display: none; }.mobile-step { display: block; }.wizard-head { top: -12px; padding-top: 8px; }
+  .wizard-shell { min-height: 0; }.desktop-steps { display: none; }.mobile-step { display: block; }.wizard-head { padding-top: 8px; }
   .form-grid, .form-grid--3, .preview-grid, .contract-materials { grid-template-columns: 1fr; }.span-2 { grid-column: auto; }
   .identity-candidate, .section-head, .contract-toolbar { align-items: flex-start; flex-direction: column; }.drawer-footer { flex-wrap: wrap; gap: 8px; }.drawer-footer .el-button { margin-left: 0; }
 }

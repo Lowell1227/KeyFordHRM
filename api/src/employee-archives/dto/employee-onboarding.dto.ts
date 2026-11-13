@@ -26,6 +26,7 @@ export class ContractReferenceDto {
 export class EmployeeReentryFieldsDto {
   @IsOptional() @IsUUID('4') talentCandidateId?: string;
   @IsOptional() @IsUUID('4') contractSubjectId?: string | null;
+  @ValidateIf(input => input.company != null || !input.contractSubjectId)
   @IsIn(Object.values(CompanyCode)) company!: CompanyCode;
   @IsOptional() @IsUUID('4') deptId?: string | null;
   @IsOptional() @IsUUID('4') positionId?: string | null;
@@ -53,7 +54,7 @@ export class CreateEmployeeReentryDto extends EmployeeReentryFieldsDto {
 
 export class ReviseEmployeeReentryDto extends EmployeeReentryFieldsDto {
   @IsOptional() @IsBoolean() performanceOnly?: boolean;
-  @ValidateIf((input) => input.performanceOnly !== true) company!: CompanyCode;
+  @ValidateIf((input) => input.performanceOnly !== true && (input.company != null || !input.contractSubjectId)) company!: CompanyCode;
   @ValidateIf((input) => input.performanceOnly !== true) effectiveDate!: Date;
   @ValidateIf((input) => input.performanceOnly !== true) employeeStatus!: UserStatus;
   @ValidateIf((input) => input.performanceOnly !== true) employmentType!: EmploymentType;

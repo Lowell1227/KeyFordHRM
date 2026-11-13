@@ -152,7 +152,7 @@ export class EmployeeArchivesService {
         proposedValue = this.preserveSensitiveProfile(proposedValue, draft.proposedValue);
         draftVersion = draft.requestVersion;
       }
-      await this.normalizeSubjectPayload(tx, proposedValue, this.record(savedDraft?.proposedValue));
+      await this.normalizeSubjectPayload(tx, proposedValue, {}, this.record(savedDraft?.proposedValue));
       const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, savedDraft as any);
       await this.validateSubjectPayload(tx, proposedValue, {});
       await this.assertEmployeeCreateIdentity(
@@ -292,7 +292,7 @@ export class EmployeeArchivesService {
         proposed = this.preserveSensitiveProfile(proposed, draft.proposedValue);
         draftVersion = draft.requestVersion;
       }
-      await this.normalizeSubjectPayload(tx, proposed, this.record(savedDraft?.proposedValue));
+      await this.normalizeSubjectPayload(tx, proposed, {}, this.record(savedDraft?.proposedValue));
       const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, savedDraft as any);
       const proposedValue = this.toJson(proposed);
       const performanceManagerId = this.nullableString(
@@ -437,9 +437,10 @@ export class EmployeeArchivesService {
     const employee = this.record(value.employee);
     const baseEmployee = this.record(base.employee);
     const savedEmployee = this.record(saved.employee);
-    const previous = employee.contractSubjectId && employee.contractSubjectId === savedEmployee.contractSubjectId
+    const previous = (employee.contractSubjectId === undefined && !baseEmployee.contractSubjectId)
+      || (employee.contractSubjectId && employee.contractSubjectId === savedEmployee.contractSubjectId)
       ? savedEmployee : baseEmployee;
-    await normalizeContractSubject(tx, employee, previous, 'companyText');
+    await normalizeContractSubject(tx, employee, previous, 'companyText', baseEmployee);
     if (value.contracts === base.contracts) return;
     const baseContracts = Array.isArray(base.contracts) ? base.contracts.map((item) => this.record(item)) : [];
     const savedContracts = Array.isArray(saved.contracts) ? saved.contracts.map((item) => this.record(item)) : [];
@@ -453,7 +454,7 @@ export class EmployeeArchivesService {
   }
 
   private async validateSubjectPayload(tx: Prisma.TransactionClient, value: Record<string, unknown>, base: Record<string, unknown>) {
-    await validateContractSubject(tx, this.record(value.employee), this.record(base.employee));
+    await validateContractSubject(tx, this.record(value.employee), this.record(base.employee), 'companyText');
     const contracts = Array.isArray(base.contracts) ? base.contracts.map((item) => this.record(item)) : [];
     for (const item of Array.isArray(value.contracts) ? value.contracts : []) {
       const contract = this.record(item);
@@ -1147,6 +1148,10 @@ export class EmployeeArchivesService {
     recordStatus: 'draft' | 'submitted',
     requireBaseVersion = true,
   ): Promise<{ request: ReturnType<typeof employeeDataChangeView> | null; directApplied: string[] }> {
+    if (recordStatus === 'submitted' && input.employee.company != null
+      && !Object.values(CompanyCode).includes(input.employee.company as CompanyCode)) {
+      throw new BadRequestException('所属公司内部代码无效，请重新选择所属公司');
+    }
     if (input.employee.companyText != null && (typeof input.employee.companyText !== 'string'
       || input.employee.companyText.length > 150)) {
       throw new BadRequestException('所属公司须为不超过150字的文字');
@@ -1309,6 +1314,9 @@ export class EmployeeArchivesService {
       { employee: baseEmployee, contracts: baseContracts }, this.record(existing?.proposedValue));
     if (recordStatus === 'submitted') await this.validateSubjectPayload(client as Prisma.TransactionClient,
       { employee: proposedEmployee, contracts: proposedContracts }, { employee: baseEmployee, contracts: baseContracts });
+    if (recordStatus === 'submitted' && proposedEmployee.company == null && baseEmployee.company != null) {
+      throw new BadRequestException('所属公司内部代码无效，请重新选择所属公司');
+    }
     const proposedPerformance = {
       managerId: user.directManagerId,
       ...(input.performance && 'managerId' in input.performance ? { managerId: input.performance.managerId } : {}),
@@ -1575,6 +1583,7 @@ export class EmployeeArchivesService {
     };
     if (input.contractSubjectId === undefined) delete proposedEmployee.contractSubjectId;
     await normalizeContractSubject(this.prisma, proposedEmployee as Record<string, unknown>, baseEmployee, 'companyText');
+    await validateContractSubject(this.prisma, proposedEmployee as Record<string, unknown>, baseEmployee, 'companyText');
     const profile = this.profileReviewData(user.employeeProfile);
     const view = employeeDataChangeView(await this.prisma.employeeDataChangeRequest.create({
       data: {
@@ -1743,7 +1752,7 @@ export class EmployeeArchivesService {
       employeeNo: user.employeeNo,
       name: user.name,
       phone: phoneOverride !== undefined ? phoneOverride : user.phone,
-      company: employment?.company ?? CompanyCode.fuede,
+      company: employment?.company ?? null,
       companyText: employment?.companyText ?? null,
       contractSubjectId: employment?.contractSubjectId ?? null,
       deptId: user.deptId ?? employment?.deptId ?? null,

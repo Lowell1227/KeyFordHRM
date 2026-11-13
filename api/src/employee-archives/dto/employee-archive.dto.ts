@@ -19,6 +19,7 @@ import {
   MaxLength,
   Min,
   ValidateNested,
+  ValidateIf,
 } from 'class-validator';
 import { CompanyCode, EmploymentType, UserStatus } from '@prisma/client';
 import { PartialType } from '@nestjs/mapped-types';
@@ -147,6 +148,7 @@ export class CreateEmployeeDto {
   @IsBoolean()
   phoneDuplicateAcknowledged?: boolean = false;
 
+  @ValidateIf(input => input.company != null || !input.employee?.contractSubjectId)
   @IsEnum(CompanyCode)
   company!: CompanyCode;
 
@@ -332,6 +334,7 @@ export class CreateEmploymentRecordDto {
   @IsDate()
   effectiveTo?: Date | null;
 
+  @ValidateIf(input => input.company != null || !input.contractSubjectId)
   @IsEnum(CompanyCode)
   company!: CompanyCode;
 

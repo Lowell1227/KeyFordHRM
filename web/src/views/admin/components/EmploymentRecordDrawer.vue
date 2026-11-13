@@ -5,7 +5,7 @@ import { ElMessage } from 'element-plus';
 import { employeeArchivesApi, type EmployeeArchive, type EmployeeDataReview } from '@/api/employee-archives.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import UserSelect from '@/components/common/UserSelect.vue';
-import ContractSubjectSelect from '@/components/common/ContractSubjectSelect.vue';
+import EmployeeCompanySelect from '@/components/common/EmployeeCompanySelect.vue';
 import type { Department } from '@/types/api.types';
 
 const props = withDefaults(defineProps<{
@@ -25,6 +25,7 @@ const emit = defineEmits<{
 const positions = ref<PositionRecord[]>([]);
 const saving = ref(false);
 const form = reactive<Record<string, any>>({});
+const companyError = ref('');
 const resignationReview = ref<EmployeeDataReview | null>(null);
 const isResignation = computed(() => props.mode === 'resignation');
 const drawerTitle = computed(() => isResignation.value ? '办理离职' : '新增任职记录');
@@ -97,11 +98,12 @@ const overlapWarning = computed(() => {
 });
 function flatten(items: Department[]): Department[] { return items.flatMap((item) => [item, ...flatten(item.children ?? [])]); }
 function reset() {
+  companyError.value = '';
   const archive = props.archive; const current = archive?.currentEmployment ?? archive?.employmentHistory[0];
   resignationReview.value = archive?.latestResignationReview ?? null;
   Object.assign(form, {
     contractSubjectId: current?.contractSubjectId ?? undefined, companyText: current?.companyText ?? null,
-    effectiveFrom: '', effectiveTo: null, company: current?.company ?? archive?.dept?.company ?? 'fuede',
+    effectiveFrom: '', effectiveTo: null, company: current?.company ?? null,
     deptId: current?.deptId ?? archive?.dept?.id ?? null, positionId: current?.positionId ?? null,
     directManagerId: archive?.rosterManager?.id ?? null, workLocation: current?.workLocation ?? null,
     employmentType: current?.employmentType ?? 'full_time', employeeStatus: archive?.status ?? 'active',
@@ -131,6 +133,8 @@ watch(() => props.archive, () => {
   if (!resignationReviewLocked.value) Object.assign(form, draft);
 });
 async function submit() {
+  companyError.value = !isResignation.value && !form.company ? '请选择已配置内部公司映射的所属公司' : '';
+  if (companyError.value) return;
   if (!props.archive || !form.deptId) { ElMessage.warning('员工档案缺少当前部门，暂不能提交'); return; }
   if (isResignation.value) {
     if (!form.leaveDate || !form.reason?.trim()) {
@@ -184,8 +188,7 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
       <el-form-item label="离职原因" class="span-2"><el-input v-model="form.reason" type="textarea" :rows="3" /></el-form-item>
     </el-form>
     <el-form v-else label-position="top" class="employment-grid">
-      <el-form-item label="所属公司（合同主体）"><ContractSubjectSelect v-model="form.contractSubjectId" v-model:snapshot-name="form.companyText" /></el-form-item>
-      <el-form-item label="组织归属"><el-select v-model="form.company"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select></el-form-item>
+      <el-form-item label="所属公司" required :error="companyError"><EmployeeCompanySelect v-model="form.contractSubjectId" v-model:snapshot-name="form.companyText" v-model:company="form.company" @update:company="companyError = ''" /></el-form-item>
       <el-form-item label="变更类型"><el-select v-model="form.changeType"><el-option label="调动" value="transfer" /><el-option label="晋升" value="promotion" /><el-option label="上级变更" value="manager_change" /><el-option label="状态变更" value="status_change" /><el-option label="离职" value="resignation" /><el-option label="返聘" value="rehire" /><el-option label="历史补录" value="data_correction" /></el-select></el-form-item>
       <el-form-item label="生效日期">
         <div class="employment-field">

@@ -3,8 +3,8 @@ import { computed, onBeforeUnmount, onMounted, ref } from 'vue';
 import { contractSubjectsApi, type ContractSubject } from '@/api/contract-subjects.api';
 import { useAuthStore } from '@/stores/auth.store';
 import { canMaintainContractSubjects } from '@/utils/business-permissions';
-const props = defineProps<{ modelValue?: string | null; snapshotName?: string | null; disabled?: boolean; nameOnly?: boolean }>();
-const emit = defineEmits<{ 'update:modelValue': [value: string | null]; 'update:snapshotName': [value: string | null] }>();
+const props = defineProps<{ modelValue?: string | null; snapshotName?: string | null; disabled?: boolean; nameOnly?: boolean; requireCompanyMapping?: boolean; placeholder?: string }>();
+const emit = defineEmits<{ 'update:modelValue': [value: string | null]; 'update:snapshotName': [value: string | null]; select: [subject: ContractSubject | null] }>();
 const rows = ref<ContractSubject[]>([]);
 const loading = ref(false);
 const error = ref('');
@@ -19,26 +19,29 @@ async function load() {
   catch { error.value = '主体加载失败，当前填写内容已保留，请刷新重试。'; }
   finally { loading.value = false; }
 }
-function select(value: string) {
+function select(value?: string) {
   const row = rows.value.find(row => props.nameOnly ? row.name === value : row.id === value);
   if (value && (!row?.isActive || row.id === current.value?.id)) return;
+  if (value && props.requireCompanyMapping && !row?.internalCompany) return;
   if (!props.nameOnly) emit('update:modelValue', value || null);
   emit('update:snapshotName', row?.name ?? null);
+  emit('select', row ?? null);
 }
 onMounted(() => { void load(); window.addEventListener('focus', load); });
 onBeforeUnmount(() => window.removeEventListener('focus', load));
 </script>
 <template>
   <div class="contract-subject-select">
-    <el-select :model-value="(nameOnly ? snapshotName : modelValue) || undefined" :disabled="disabled" :loading="loading" filterable clearable placeholder="选择启用的合同主体" @update:model-value="select" @visible-change="open => open && load()">
+    <el-select :model-value="(nameOnly ? snapshotName : modelValue) || undefined" :disabled="disabled" :loading="loading" filterable clearable :placeholder="placeholder || '选择启用的合同主体'" @update:model-value="select" @visible-change="open => open && load()">
       <el-option v-if="(nameOnly ? snapshotName : modelValue) && !current" :value="nameOnly ? snapshotName! : modelValue!" :label="snapshotName || '原关联主体'" disabled />
-      <el-option v-for="row in options" :key="row.id" :value="nameOnly ? row.name : row.id" :label="!nameOnly && row.id === modelValue && snapshotName ? snapshotName : row.name" :disabled="!row.isActive">
-        <span>{{ row.name }}{{ row.isActive ? '' : '（已停用）' }}</span>
+      <el-option v-for="row in options" :key="row.id" :value="nameOnly ? row.name : row.id" :label="!nameOnly && row.id === modelValue && snapshotName ? snapshotName : row.name" :disabled="!row.isActive || (requireCompanyMapping && !row.internalCompany)">
+        <span>{{ row.name }}{{ row.isActive ? '' : '（已停用）' }}{{ requireCompanyMapping && !row.internalCompany ? '（未配置内部公司映射）' : '' }}</span>
       </el-option>
       <template #footer><div class="subject-actions"><el-button link :disabled="loading" @click="load">刷新选项</el-button><a v-if="canMaintain && !disabled" href="/basic-data?tab=contract-subjects" target="_blank" rel="noopener noreferrer" title="在新标签页管理，当前填写内容会保留">管理合同主体</a></div></template>
     </el-select>
     <span v-if="nameOnly && snapshotName && (!current || !current.isActive)" class="subject-note">{{ snapshotName }} · {{ current ? '原记录主体已停用' : '历史记录，保留原文' }}</span>
     <span v-else-if="!nameOnly && snapshotName" class="subject-note">{{ snapshotName }} · {{ modelValue ? (current && !current.isActive ? '已关联，主体已停用' : '已关联') : '原记录，尚未关联' }}</span>
+    <span v-if="requireCompanyMapping && !loading && current && !current.internalCompany" class="subject-note">当前公司未配置内部公司映射，已有任职代码保持不变；新选公司前请联系 HR 配置。</span>
     <span v-if="!loading && !error && !rows.some(row => row.isActive)" class="subject-note">{{ canMaintain ? '暂无启用主体，可先维护合同主体后刷新。' : '暂无启用主体，请联系有员工档案编辑权限的 HR 维护。' }}</span>
     <span v-if="error" class="subject-error" role="alert">{{ error }}</span>
     <div v-if="error || (snapshotName && !modelValue && !nameOnly)" class="subject-actions"><el-button v-if="snapshotName && !modelValue && !nameOnly" link :disabled="disabled" @click="select('')">清空主体</el-button><el-button v-if="error" link type="primary" :disabled="disabled || loading" @click="load">重新加载</el-button></div>

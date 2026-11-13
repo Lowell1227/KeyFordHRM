@@ -21,10 +21,14 @@ function actorInitial(actor?: string) {
       class="personnel-process-timeline__item"
       :class="`is-${item.tone}`"
       :data-tone="item.tone"
+      :data-step-key="item.key"
+      :data-occurred-at="item.occurredAt || undefined"
+      :data-event-id="item.eventId"
+      :data-event-action="item.eventAction"
       :aria-current="item.current ? 'step' : undefined"
     >
       <span class="personnel-process-timeline__dot" aria-hidden="true" />
-      <time v-if="item.time">{{ item.time }}</time>
+      <time v-if="item.time" :datetime="item.occurredAt || undefined">{{ item.time }}</time>
       <div class="personnel-process-timeline__title">{{ item.title }}</div>
       <div class="personnel-process-timeline__state" :class="`is-${item.tone}`">
         <span v-if="item.actor" class="personnel-process-timeline__avatar">{{ actorInitial(item.actor) }}</span>
@@ -47,6 +51,7 @@ function actorInitial(actor?: string) {
       </div>
 
       <p v-if="item.note" class="personnel-process-timeline__note">{{ item.note }}</p>
+      <slot name="step-action" :item="item" />
     </li>
   </ol>
 </template>
@@ -63,6 +68,8 @@ function actorInitial(actor?: string) {
   position: relative;
   padding: 0 0 24px 26px;
   border-left: 2px solid var(--el-border-color-lighter);
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .personnel-process-timeline__item:last-child {
@@ -107,6 +114,9 @@ function actorInitial(actor?: string) {
 
 .personnel-process-timeline__state {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
+  box-sizing: border-box;
   min-height: 30px;
   align-items: center;
   gap: 6px;
@@ -124,6 +134,7 @@ function actorInitial(actor?: string) {
 
 .personnel-process-timeline__avatar {
   display: inline-flex;
+  flex-shrink: 0;
   width: 20px;
   height: 20px;
   align-items: center;

@@ -7,6 +7,7 @@ import type { Department } from '@/types/api.types';
 import { employeeArchivesApi, type EmployeeArchive, type EmployeeDataReview } from '@/api/employee-archives.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import ContractSubjectSelect from '@/components/common/ContractSubjectSelect.vue';
+import EmployeeCompanySelect from '@/components/common/EmployeeCompanySelect.vue';
 import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSelect.vue';
 import { uploadApi } from '@/api/upload.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
@@ -48,6 +49,7 @@ const saveState = ref<'idle' | 'saving' | 'saved' | 'error'>('idle');
 const saveError = ref('');
 const saveBlocked = ref(false);
 const failedAction = ref<'save' | 'submit'>('save');
+const companyError = ref('');
 watch(saveBlocked, value => emit('blocked', value));
 watch(saveState, value => emit('state', value));
 let draftId: string | undefined;
@@ -89,12 +91,13 @@ function reset() {
   saveState.value = props.draft ? 'saved' : 'idle';
   saveError.value = '';
   saveBlocked.value = false;
+  companyError.value = '';
   const employment = archive.pendingEmployment ?? archive.currentEmployment ?? archive.employmentHistory[0];
   replaceRecord(form.employee, {
     name: archive.name,
     employeeNo: archive.employeeNo,
     phone: archive.employeeProfile?.phone ?? archive.phone ?? null,
-    company: employment?.company ?? 'fuede',
+    company: employment?.company ?? null,
     companyText: employment?.companyText ?? null,
     contractSubjectId: employment?.contractSubjectId ?? undefined,
     deptId: archive.dept?.id ?? employment?.deptId ?? null,
@@ -283,16 +286,26 @@ async function openUploadedMaterial(item: { name: string; url: string; mimeType?
 }
 
 function changePayload(): ArchiveChangePayload {
+  const employee: Record<string, unknown> = { ...form.employee, phone: form.profile.phone || null,
+    positionId: form.employee.positionId ?? null, managerId: form.employee.managerId ?? null };
+  if (unchangedMissingCompany()) delete employee.company;
   return {
     draftId,
     expectedVersion: draftId ? draftVersion : undefined,
     baseVersion: props.archive?.archiveVersion,
-    employee: { ...form.employee, phone: form.profile.phone || null,
-      positionId: form.employee.positionId ?? null, managerId: form.employee.managerId ?? null },
+    employee,
     profile: { ...form.profile, phone: form.profile.phone || null, gender: form.profile.gender ?? null },
     contracts: form.contracts.map(({ __key, ...item }, index) => ({ ...item, sequence: index })),
     performance: { ...form.performance, managerId: form.performance.managerId ?? null },
   };
+}
+
+function unchangedMissingCompany() {
+  const archive = props.archive;
+  const employment = archive?.pendingEmployment ?? archive?.currentEmployment ?? archive?.employmentHistory[0];
+  return !employment?.company && form.employee.company == null
+    && (form.employee.contractSubjectId ?? null) === (employment?.contractSubjectId ?? null)
+    && (form.employee.companyText ?? null) === (employment?.companyText ?? null);
 }
 
 async function submit() {
@@ -302,6 +315,11 @@ async function submit() {
   if (session !== generation || !props.editing || props.busy || saveBlocked.value) return;
   if (!isDirty() && !draftId) {
     ElMessage.info('未检测到变更，无需提交');
+    return;
+  }
+  if (!form.employee.company && !unchangedMissingCompany()) {
+    companyError.value = '请选择已配置内部公司映射的所属公司';
+    await focusField('employee.companyText');
     return;
   }
   emit('submit', changePayload());
@@ -384,7 +402,8 @@ async function focusField(field?: string) {
   const root = editorElement.value;
   if (!root || !field) return;
   root.querySelectorAll('.archive-field--focused').forEach(item => item.classList.remove('archive-field--focused'));
-  const normalized = archiveFieldPath(field);
+  const path = archiveFieldPath(field);
+  const normalized = ['employee.company', 'employee.contractSubjectId'].includes(path) ? 'employee.companyText' : path;
   const target = root.querySelector<HTMLElement>(`[data-archive-field="${CSS.escape(normalized)}"]`)
     ?? (normalized.startsWith('contracts') ? root.querySelector<HTMLElement>('[data-archive-section="contracts"]') : null);
   if (!target) return;
@@ -425,10 +444,7 @@ defineExpose({ submit, saveDraft, reset, isDirty, focusField, showWriteError, sh
       <el-form label-position="top" class="archive-editor-grid">
         <el-form-item label="姓名" data-archive-field="employee.name"><el-input v-model="form.employee.name" /></el-form-item>
         <el-form-item label="当前工号" data-archive-field="employee.employeeNo"><el-input v-model="form.employee.employeeNo" disabled /><small class="field-help">工号由系统生成；历史任职工号在档案中保留，不在此处修改。</small></el-form-item>
-        <el-form-item label="所属公司（合同主体）" data-archive-field="employee.companyText"><ContractSubjectSelect v-model="form.employee.contractSubjectId" v-model:snapshot-name="form.employee.companyText" /></el-form-item>
-        <el-form-item label="组织归属" data-archive-field="employee.company">
-          <el-select v-model="form.employee.company"><el-option label="孚德" value="fuede" /><el-option label="孚德体育文化" value="fuede_sports" /><el-option label="北京孚德" value="beijing_fuede" /><el-option label="凡思堡" value="fansibao" /></el-select>
-        </el-form-item>
+        <el-form-item label="所属公司" data-archive-field="employee.companyText" :error="companyError"><EmployeeCompanySelect v-model="form.employee.contractSubjectId" v-model:snapshot-name="form.employee.companyText" v-model:company="form.employee.company" @update:company="companyError = ''" /></el-form-item>
         <el-form-item label="所属部门" data-archive-field="employee.deptId"><el-tree-select v-model="form.employee.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
         <el-form-item label="岗位" data-archive-field="employee.positionId"><el-select v-model="form.employee.positionId" filterable clearable @clear="form.employee.position = null"><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
         <el-form-item label="职级" data-archive-field="employee.jobGrade"><el-input v-model="form.employee.jobGrade" /></el-form-item>

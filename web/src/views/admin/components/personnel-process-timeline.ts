@@ -19,4 +19,7 @@ export interface PersonnelProcessStep {
   time?: string;
   note?: string;
   details?: PersonnelProcessDetail[];
+  occurredAt?: string | null;
+  eventId?: string;
+  eventAction?: string;
 }
