@@ -718,10 +718,11 @@ Git 提交与远端状态：
 - 周期自评附件上传“消失”根因（2026-11-06 查明）：胡菁懿任务 3e5abc8f（2026 上半年绩效考核，workflow v2，period_type=cycle，状态 self_eval 未提交）。TaskDetailView 在存在 activePerformancePeriod 时优先渲染 EmployeePeriodReviewWorkspace（IndicatorSnapshot 的“自评总结”分支根本不渲染，20ff339 的展开改动对该路径不生效）；而 EmployeePeriodReviewWorkspace 与 ManagerPeriodReviewWorkspace 里 PeriodReviewAttachments 都有 `v-if="periodType === 'month'"`，整周期自评页因此完全没有附件上传。后端上传/删除/下载接口对期间类型无限制（assertEmployeeEditable 只看归属与状态）。修复提交 `6c5052b`：两处去掉 month 闸门，PeriodReviewAttachments 新增 periodNoun（本月/本期）并文案周期化。离线渲染验证（vite+真实组件+mock API）：cycle 期间自评页显示“本期工作产出附件（选填）”与上传按钮。type-check 与生产构建通过。**已上线（2026-11-06，用户明确说“请发布生效”后仅重建 Web，无迁移，回滚基线 `candidate-6c5052b-pre`）**。发布后核验：外部健康 ok、首页 200、新 chunk（EmployeePeriodReviewWorkspace-BBCGhZml.js，附件组件被 rollup 共享进 ManagerPeriodReviewWorkspace-CqPHyfb9.js）含“本期工作产出附件”、web 日志无 ERROR。真人验收待完成：胡菁懿 Ctrl+F5 后在整周期自评页确认附件上传。
 - 待办改进项（2026-11-06 用户拍板记录）：**两代自评 UI 分支收敛**。现状：TaskDetailView 中 IndicatorSnapshot 的 selfEvalMode“自评总结”分支（第一代，v1 任务或无 activePerformancePeriod 时才渲染）与 EmployeePeriodReviewWorkspace（第二代，v2 期间复盘，月度/整周期共用）并存。改进方向（实施前需与用户确认范围）：(1) 梳理并写清两条分支的适用条件，或收敛为单一自评入口；(2) 补 e2e：cycle 期间员工自评页必须显示附件区（本月场景已有覆盖，cycle 无覆盖导致 6c5052b 的问题漏检）；(3) 排查其他“仅月度”残留假设（文案/闸门/校验），统一走 periodNoun 或期间类型自适应。以后做绩效自评相关改动时先确认目标用户数据实际渲染哪条分支，再动手改。
 
-### 2026-11-13：员工档案提交直接生效（已实现、真实预览通过，未提交/上线）
+### 2026-11-13：员工档案提交直接生效（已提交、已上线，真人业务验收待完成）
 
 - 用户明确选择：所有档案可编辑字段提交即生效，包括绩效直属上级；入离职仍走原流程。自动保存继续仅保存草稿，显式提交在同一事务应用档案、合同与关系并留痕。普通 HR 按既有编辑能力办理，不授予审核或系统管理权限。
 - 旧手工档案待审/退回单允许继续编辑；部分已生效单保留原历史并修订未生效部分，不能覆盖已生效资料。兼容 profile 接口、人员设置上级接口及批量部门调整同步采用本规则。无变化不产生正式写入，入离职和到岗确认不被绕过，已启动绩效任务快照不修改。
 - API 全量 2400 项中首次 2398 项通过；两项旧测试适配后所在文件 36 项通过，产品代码未再变化。API/Web 最终构建、Web 单元 88 项、拦截接口的编辑交互 13 项通过。真实隔离预览 7 项通过/5 个预期跳过，检查 1440/1024/390 视口；普通 HR、草稿、旧单、合同、绩效关系、并发、离职和到岗确认均有真实 API 证据。
-- 固定预览为 `http://localhost:5173/users`，选择虚构 HR 进入。本轮仅更新隔离 `hrm` API/Web，原脚本确认生产容器 ID 不变；未修改真实员工数据。当前 main 基线为 `549ca671820873eb246bf13d7d6bcab47e89bb87`，本轮代码未提交/发布，真人业务验收待完成。详细证据见 [验证记录](superpowers/plans/2026-11-13-archive-immediate-submit-verification.md)。
+- 固定预览为 `http://localhost:5173/users`，选择虚构 HR 进入。用户随后明确授权“提交上线”，代码 `5a2447a65a9d7c14547af5bf938304c7c45b1cab` 已推送并于 13:16 发布 API/Web；数据库、Redis、MinIO 容器 ID 不变，63 条迁移完整、无新迁移。线上普通档案/旧待审档案的 PC 与手机尺寸只读编辑检查全部通过，未提交真实员工修改。真人业务验收待完成。详细证据见 [验证记录](superpowers/plans/2026-11-13-archive-immediate-submit-verification.md) 和 [发布记录](acceptance/2026-11-13-archive-immediate-submit-release.md)。
 - 满盘恢复：经授权将约 10.21 GiB 未占用远程桌面诊断 ETL 移到 D 盘保留，未清理 HRM 数据；Docker Desktop 代理异常通过临时官方 CLI/raw socket 通道完成原预览脚本，未重启生产。该措施未修复日志持续增长或代理根因，后续须现场核对。
+- 生产构建容器无法访问 npm 仓库，在线安装已中止。因锁文件/Prisma/构建配置与原生产基线完全一致，API 复用固定原生产镜像依赖重新编译，Web 使用同锁文件的已验证本机依赖和正式构建参数重新构建；候选镜像语法、Nginx 配置及线上版本/资源哈希均通过。保留原 API `5247cb5b`、Web `c8c744ed` 回滚镜像和发布前数据库备份，不恢复整库覆盖后续业务。
