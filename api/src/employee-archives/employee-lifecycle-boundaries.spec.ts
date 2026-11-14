@@ -1,6 +1,7 @@
 import { SysRole } from '@prisma/client';
 import { EmployeeDataReviewsService } from './employee-data-reviews.service';
 import { EmployeeOnboardingService } from './employee-onboarding.service';
+import { EmployeeArchivesService } from './employee-archives.service';
 import { selectEmploymentAt } from './employment-timeline';
 
 const operator = { id: 'hr1', sysRole: SysRole.hr } as any;
@@ -37,6 +38,63 @@ function reviewFixture(request: any) {
 
 describe('employee lifecycle business boundaries', () => {
   afterEach(() => jest.useRealTimers());
+
+  it.each([
+    ['transfer', null], ['resignation', null],
+  ])('rejects a resignation bypass at submission: %s / %s', async (changeType, leaveDate) => {
+    const create = jest.fn();
+    const prisma: any = {
+      user: { findUnique: async () => ({ id: 'u1', status: 'active', employmentHistory: [], employeeProfile: null }) },
+      employeeDataChangeRequest: { findFirst: async () => null, create },
+      employmentRecord: { findMany: async () => [] },
+    };
+    await expect(new EmployeeArchivesService(prisma).createEmploymentRecord('u1', {
+      effectiveFrom: new Date('2026-01-01'), company: 'fuede', deptId: 'd1',
+      employeeStatus: 'resigned', employmentType: 'full_time', changeType, leaveDate,
+    } as any, operator)).rejects.toThrow(/离职|最后工作日/);
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it.each(['transfer', 'resignation'])('rejects malformed legacy pending resignation at approval: %s', async changeType => {
+    const request: any = resignationRequest();
+    request.proposedValue.employee.changeType = changeType;
+    request.proposedValue.employee.leaveDate = null;
+    const fixture = reviewFixture(request);
+    const result = await fixture.service.approveBatch({ requestIds: ['r1'], scopes: ['profile'] }, operator);
+    expect(result.succeeded).toEqual([]);
+    expect(result.failed[0]?.reason).toMatch(/离职|最后工作日/);
+    expect(fixture.state().user.status).toBe('active');
+    expect(fixture.state().disabled).toBe(false);
+    expect(fixture.state().employments).toHaveLength(0);
+    expect(fixture.state().request.profileReviewStatus).toBe('pending');
+  });
+
+  it('allows an ended historical record without changing the current account', async () => {
+    const request: any = resignationRequest();
+    Object.assign(request.proposedValue.employee, {
+      changeType: 'data_correction', leaveDate: null, effectiveFrom: '2020-01-01', effectiveTo: '2020-12-31',
+    });
+    const fixture = reviewFixture(request);
+    const result = await fixture.service.approveBatch({ requestIds: ['r1'], scopes: ['profile'] }, operator);
+    expect(result.failed).toEqual([]);
+    expect(fixture.state().employments).toHaveLength(1);
+    expect(fixture.state().user.status).toBe('active');
+    expect(fixture.state().disabled).toBe(false);
+  });
+
+  it.each(['pending_entry', 'resigned'])('rejects future ordinary employment activation for %s', async status => {
+    const request: any = resignationRequest();
+    Object.assign(request.proposedValue.employee, {
+      changeType: 'transfer', employeeStatus: 'active', leaveDate: null, effectiveFrom: '2099-01-01',
+    });
+    const fixture = reviewFixture(request);
+    fixture.state().user.status = status;
+    const result = await fixture.service.approveBatch({ requestIds: ['r1'], scopes: ['profile'] }, operator);
+    expect(result.succeeded).toEqual([]);
+    expect(result.failed[0]?.reason).toMatch(/到岗|再入职/);
+    expect(fixture.state().employments).toHaveLength(0);
+    expect(fixture.state().user.status).toBe(status);
+  });
 
   it('chooses the later approved record for the same effective day, not random UUID order', () => {
     const effectiveFrom = new Date('2026-03-21');

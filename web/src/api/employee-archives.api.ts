@@ -28,6 +28,26 @@ export interface EmployeeRosterConfirmResult {
 export type EmployeeReviewStatus = 'not_required' | 'pending' | 'applying' | 'approved' | 'rejected' | 'cancelled';
 export type EmployeeReviewScope = 'profile' | 'performance';
 
+export interface EmployeeArchiveEvent {
+  id: string;
+  entityId?: string;
+  action: string;
+  createdAt: string;
+  user?: { id?: string; name: string } | null;
+  oldValue?: Record<string, any> | null;
+  newValue?: Record<string, any> | null;
+  changedFields?: string[];
+}
+
+export interface EmployeeReviewRevision {
+  version: number;
+  proposedValue: Record<string, any>;
+  baseValue?: Record<string, any>;
+  changedFields?: string[];
+  sourceRequestId?: string;
+  action?: string;
+}
+
 export interface EmployeeArchiveIssue {
   id: string;
   requestId: string;
@@ -80,10 +100,12 @@ export interface EmployeeDataReview {
   talentCandidateId?: string | null;
   talentCandidate?: { id: string; name: string; deletedAt: string | null } | null;
   requestVersion?: number;
+  changedFields?: string[];
+  revisionHistory?: EmployeeReviewRevision[];
   canResume?: boolean;
   canCancel?: boolean;
   user?: { id: string; name: string; employeeNo: string | null; status: string; archivedAt?: string | null; dept?: { name: string } | null; position?: string | null } | null;
-  events?: Array<{ id: string; entityId?: string; action: string; createdAt: string; user?: { id: string; name: string } | null; oldValue?: Record<string, any> | null; newValue?: Record<string, any> | null }>;
+  events?: EmployeeArchiveEvent[];
 }
 
 export interface EmployeeIdentityCandidate {
@@ -147,6 +169,7 @@ export interface EmployeeReentryBody {
   deptId?: string | null;
   positionId?: string | null;
   position?: string | null;
+  jobFamily?: string | null;
   rosterManagerId?: string | null;
   performanceManagerId?: string | null;
   effectiveDate: string;
@@ -330,7 +353,7 @@ export interface EmployeeArchive {
   latestResignationReview?: EmployeeDataReview | null;
   changeHistory?: EmployeeDataReview[];
   employeeNumberAssignments?: Array<{ id: string; employeeNo: string; status: string; assignedAt?: string; endedAt?: string | null; sourceRequestId?: string | null }>;
-  archiveEvents?: Array<{ id: string; action: string; createdAt: string; user?: { name: string } | null }>;
+  archiveEvents?: EmployeeArchiveEvent[];
 }
 
 export interface ArchiveBatchResult {

@@ -6,6 +6,7 @@ import {
   CompanyCode,
   EmploymentType,
   ExternalIdentityStatus,
+  EmployeeDataChangeRequest,
   EmployeeNumberStatus,
   OnboardingIntakeType,
   OnboardingStatus,
@@ -21,6 +22,7 @@ import * as bcrypt from 'bcrypt';
 import { EmployeeOnboardingService } from './employee-onboarding.service';
 import { RESIGNATION_BINDING_DISABLED_REASON } from './employee-effective-date.service';
 import { CURRENT_WORKER_STATUSES } from '@/common/personnel/current-worker';
+import { assertManualEmploymentBoundary } from './manual-employment-boundary';
 import { lockTalentSource } from './employee-talent-source';
 import { employeeDataChangeView } from './employee-data-change-view';
 import { approvedEmploymentSourceWhere, nextBusinessDate, shanghaiBusinessDate } from './employment-timeline';
@@ -250,20 +252,38 @@ export class EmployeeDataReviewsService {
           .filter((error) => !error.includes('绩效直属上级')),
         rejectedReason: null,
         createdById: operator.id,
-    }));
+    }, operator.id));
   }
 
   private async updatePendingPerformanceRequest(
-    request: { id: string; requestVersion: number; talentCandidateId: string | null },
+    request: EmployeeDataChangeRequest,
     data: Prisma.EmployeeDataChangeRequestUncheckedUpdateInput,
+    operatorId: string,
   ) {
-    if (!request.talentCandidateId) return this.prisma.employeeDataChangeRequest.update({ where: { id: request.id }, data });
-    return this.prisma.$transaction(async tx => {
-      await lockTalentSource(tx, request.talentCandidateId);
-      return tx.employeeDataChangeRequest.update({ where: { id: request.id, requestVersion: request.requestVersion,
-        performanceReviewStatus: 'pending', cancelledAt: null, archivedAt: null },
-      data: { ...data, requestVersion: { increment: 1 } } });
-    }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    try {
+      return await this.prisma.$transaction(async tx => {
+        await lockTalentSource(tx, request.talentCandidateId);
+        return tx.employeeDataChangeRequest.update({ where: { id: request.id, requestVersion: request.requestVersion,
+          updatedAt: request.updatedAt, performanceReviewStatus: 'pending', cancelledAt: null, archivedAt: null },
+        data: { ...data, requestVersion: { increment: 1 },
+          revisionHistory: [...(Array.isArray(request.revisionHistory) ? request.revisionHistory : []), {
+            version: request.requestVersion, baseValue: request.baseValue, proposedValue: request.proposedValue,
+            validationErrors: request.validationErrors, validationWarnings: request.validationWarnings,
+            profileReviewStatus: request.profileReviewStatus, performanceReviewStatus: request.performanceReviewStatus,
+            rejectedReason: request.rejectedReason,
+            profileReviewedById: request.profileReviewedById, profileReviewedAt: request.profileReviewedAt?.toISOString() ?? null,
+            performanceReviewedById: request.performanceReviewedById, performanceReviewedAt: request.performanceReviewedAt?.toISOString() ?? null,
+            appliedAt: request.appliedAt?.toISOString() ?? null, updatedAt: request.updatedAt.toISOString(),
+            revisedById: operatorId, revisedAt: new Date().toISOString(),
+          }] as Prisma.InputJsonValue,
+        } });
+      }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
+    } catch (error) {
+      if (['P2025', 'P2034'].includes(String(this.record(error).code))) {
+        throw new ConflictException({ code: ERROR_CODE.CONFLICT, message: '申请已被其他操作更新，请刷新后重试' });
+      }
+      throw error;
+    }
   }
 
   async approveBatch(
@@ -417,7 +437,7 @@ export class EmployeeDataReviewsService {
             action: 'approve_employee_data_change',
             entityType: 'employee_data_change_request',
             entityId: requestId,
-            newValue: { scopes: [scope] },
+            newValue: { scopes: [scope], requestVersion: request.requestVersion },
           },
         });
         return true;
@@ -511,7 +531,8 @@ export class EmployeeDataReviewsService {
     } });
     await tx.auditLog.create({ data: { userId: operator.id, action: 'apply_employee_archive_change',
       entityType: 'employee_data_change_request', entityId: requestId,
-      newValue: { scopes: [...(profileChanged ? ['profile'] : []), ...(performanceChanged ? ['performance'] : [])] },
+      newValue: { scopes: [...(profileChanged ? ['profile'] : []), ...(performanceChanged ? ['performance'] : [])],
+        requestVersion: request.requestVersion },
     } });
     return employeeDataChangeView(applied);
   }
@@ -594,7 +615,7 @@ export class EmployeeDataReviewsService {
               action: 'reject_employee_data_change',
               entityType: 'employee_data_change_request',
               entityId: requestId,
-              newValue: { reason: reason.trim() },
+              newValue: { reason: reason.trim(), requestVersion: request.requestVersion },
             },
           });
         }, { isolationLevel: Prisma.TransactionIsolationLevel.Serializable });
@@ -688,7 +709,8 @@ export class EmployeeDataReviewsService {
       }
       positionId = positionRecord.id;
       position = positionRecord.name;
-      if (!request.userId || positionId !== this.nullableString(baseEmployee.positionId)) {
+      if (!request.userId || positionId !== this.nullableString(baseEmployee.positionId)
+        || jobFamily !== this.nullableString(baseEmployee.jobFamily)) {
         jobFamily = positionRecord.jobFamily;
       }
     }
@@ -699,6 +721,11 @@ export class EmployeeDataReviewsService {
       || request.sourceType === 'manual_employee_create';
     const today = shanghaiBusinessDate();
     const isResignation = employeeStatus === UserStatus.resigned && employee.changeType === 'resignation';
+    if (request.sourceType === 'manual_employment_change') {
+      const current = request.userId ? await tx.user.findUnique({ where: { id: request.userId }, select: { status: true } }) : null;
+      assertManualEmploymentBoundary({ employeeStatus, currentStatus: current?.status, changeType: employee.changeType, leaveDate,
+        effectiveTo: this.nullableDate(employee.effectiveTo) });
+    }
     const effectiveFrom = isResignation && leaveDate ? nextBusinessDate(leaveDate) : isManualEmployment
       ? this.requiredDate(employee.effectiveFrom, '任职生效日期不能为空')
       : request.userId ? today : entryDate!;
@@ -859,7 +886,7 @@ export class EmployeeDataReviewsService {
     };
     const changeType = this.nullableString(employee.changeType);
     const closesCurrentEmployment = !isManualEmployment
-      || (employeeStatus === UserStatus.resigned && changeType === 'resignation');
+      || (isResignation && (!effectiveTo || effectiveTo >= today));
     const employmentReferenceDate = isManualEmployment ? effectiveFrom : today;
     const currentEmployment = request.userId && shouldWriteEmployment && closesCurrentEmployment && !pendingArchiveEdit
       ? await tx.employmentRecord.findFirst({

@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, watch } from 'vue';
+import { isAxiosError } from 'axios';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import { personnelReferenceDataApi, type PersonnelReferenceData, type PersonnelReferenceKind } from '@/api/personnel-reference-data.api';
 import { useAuthStore } from '@/stores/auth.store';
@@ -8,10 +9,12 @@ import BusinessListPage from '@/components/common/business-list/BusinessListPage
 import QueryFilterPanel from '@/components/common/QueryFilterPanel.vue';
 import MobileResultCard from '@/components/common/MobileResultCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
+import { personnelReferenceKinds } from '@/utils/personnel-reference-kinds';
 
 const props = defineProps<{ kind: PersonnelReferenceKind; compact?: boolean }>();
 const auth = useAuthStore();
-const label = computed(() => props.kind === 'work_location' ? '工作地点' : '职系');
+const definition = computed(() => personnelReferenceKinds[props.kind]);
+const label = computed(() => definition.value.label);
 const canRead = computed(() => canReadPersonnelReferenceData(auth.user, props.kind));
 const canWrite = computed(() => canWritePersonnelReferenceData(auth.user));
 const rows = ref<PersonnelReferenceData[]>([]);
@@ -60,7 +63,7 @@ function edit(row?: PersonnelReferenceData) {
 async function save() {
   if (!canWrite.value || saving.value) return;
   const value = name.value.trim();
-  if (!value || value.length > 100) { saveError.value = `请填写 1–100 字${label.value}名称`; return; }
+  if (!value || value.length > definition.value.maxLength) { saveError.value = `请填写 1–${definition.value.maxLength} 字${label.value}名称`; return; }
   if (rows.value.some(row => row.name === value && row.id !== selected.value?.id)) {
     saveError.value = `该${label.value}名称已存在，请使用其他名称。`;
     return;
@@ -73,8 +76,9 @@ async function save() {
     dialogOpen.value = false;
     ElMessage.success(`${label.value}已保存`);
     await load();
-  } catch {
-    saveError.value = `${label.value}保存失败，请核对名称或稍后重试；输入已保留。`;
+  } catch (error) {
+    const fieldError = isAxiosError(error) ? error.response?.data?.data?.fieldErrors?.name : undefined;
+    saveError.value = typeof fieldError === 'string' ? fieldError : `${label.value}保存失败，请核对名称或稍后重试；输入已保留。`;
   } finally {
     saving.value = false;
   }
@@ -87,7 +91,7 @@ async function toggle(row: PersonnelReferenceData) {
   try {
     try {
       await ElMessageBox.confirm(row.isActive
-        ? `停用“${row.name}”后不能新选，已有任职和岗位的原值仍保留。`
+        ? `停用“${row.name}”后不再作为选项，已有档案和历史记录的原值仍保留。`
         : `启用“${row.name}”后可在填写${label.value}时选择。`, `${action}${label.value}`, {
         confirmButtonText: `${action}${label.value}`, cancelButtonText: '取消', type: row.isActive ? 'warning' : 'info',
       });
@@ -175,7 +179,7 @@ watch(() => [props.kind, canRead.value], () => { rows.value = []; void load(); }
         :close-on-click-modal="false" :show-close="!saving" :close-on-press-escape="!saving" :before-close="close" @opened="inputRef?.focus()">
         <el-form label-position="top" @submit.prevent="save">
           <el-form-item :label="`${label}名称`" :error="saveError">
-            <el-input ref="inputRef" v-model="name" :aria-label="`${label}名称`" maxlength="100" show-word-limit :disabled="saving" @input="saveError = ''" />
+            <el-input ref="inputRef" v-model="name" :aria-label="`${label}名称`" :maxlength="definition.maxLength" show-word-limit :disabled="saving" @input="saveError = ''" />
           </el-form-item>
         </el-form>
         <template #footer>

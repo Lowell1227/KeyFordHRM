@@ -269,9 +269,12 @@ describe('explicit arrival confirmation', () => {
   });
 
   it('locks a linked candidate before changing a pending performance manager', async () => {
-    const { db, tx } = setup({ talentCandidateId: 't1', performanceReviewStatus: 'pending' });
+    const { db, tx, request } = setup({ talentCandidateId: 't1', performanceReviewStatus: 'pending',
+      updatedAt: new Date('2026-11-12T00:00:00Z') });
     const reviews = new EmployeeDataReviewsService(db);
     await reviews.setPendingPerformanceManager('r1', 'manager', reviewer);
     expect(tx.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(tx.employeeDataChangeRequest.update.mock.invocationCallOrder[0]);
+    expect(request.requestVersion).toBe(3);
+    expect(request.revisionHistory).toEqual([expect.objectContaining({ version: 2, revisedById: reviewer.id })]);
   });
 });

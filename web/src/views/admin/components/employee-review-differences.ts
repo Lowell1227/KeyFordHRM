@@ -1,9 +1,9 @@
-import type { EmployeeDataReview } from '@/api/employee-archives.api';
+import type { EmployeeArchiveEvent, EmployeeDataReview, EmployeeReviewRevision } from '@/api/employee-archives.api';
 import { contractTitle } from '@/utils/employee-contract-presentation';
 
 type RecordValue = Record<string, unknown>;
 export type ReviewNames = Partial<Record<'deptId' | 'positionId' | 'managerId' | 'contractSubjectId', Record<string, string>>>;
-export type ReviewDifference = { key: string; label: string; kind: '新增' | '修改' | '清空' | '移除'; before: string; after: string };
+export type ReviewDifference = { key: string; label: string; kind: '新增' | '修改' | '清空' | '移除' | '未记录'; before: string; after: string };
 export type ReviewDifferenceGroup = { key: string; title: string; kind?: '新增' | '修改' | '移除'; fields: ReviewDifference[] };
 
 // 与申请详情使用相同业务字段；只展示允许公开的字段，不遍历未知或加密信息。
@@ -81,12 +81,25 @@ function managerReference(source: RecordValue): RecordValue {
   return { ...source, managerId: name ? `name:${name}` : null, managerName: name || null };
 }
 
-export function employeeReviewDifferences(request: EmployeeDataReview, names: ReviewNames = {}): ReviewDifferenceGroup[] {
+type ReviewSnapshot = Pick<EmployeeDataReview, 'baseValue' | 'proposedValue' | 'sourceType' | 'changedFields'>;
+
+export function employeeReviewDifferences(request: ReviewSnapshot, names: ReviewNames = {}): ReviewDifferenceGroup[] {
   const groups: ReviewDifferenceGroup[] = [];
   for (const [section, title] of [['employee', '员工任职信息'], ['profile', '员工档案资料'], ['performance', '绩效关系']] as const) {
     const labels = section === 'performance' ? { managerId: '绩效直属上级' } : fieldLabels;
     const before = record(request.baseValue[section]), after = record(request.proposedValue[section]);
     const fields = differences(section === 'profile' ? before : managerReference(before), section === 'profile' ? after : managerReference(after), labels, names, `${section}.`);
+    if (section === 'profile') {
+      for (const [key, label] of [['idNumber', '身份证'], ['bankAccount', '银行卡']] as const) {
+        const configured = `${key}Configured`;
+        if (fields.some(field => field.key === `profile.${configured}`)) continue;
+        const changed = request.changedFields?.includes(`profile.${key}`);
+        if (changed || (request.changedFields === undefined && before[configured] === true && after[configured] === true)) {
+          fields.push({ key: `profile.${configured}`, label, kind: changed ? '修改' : '未记录',
+            before: before[configured] === true ? '已保存' : '未记录', after: changed ? '已更换' : '变更未记录' });
+        }
+      }
+    }
     if (fields.length) groups.push({ key: section, title, fields });
   }
   // 未携带 contracts 表示本申请不涉及合同，不能把缺省当作删除全部。
@@ -112,4 +125,45 @@ export function employeeReviewDifferences(request: EmployeeDataReview, names: Re
     key: text(contract.id) || `removed-contract-${index}`, title: contractTitle(contract), kind: '移除', fields: differences(contract, {}, contractLabels, names, '', true),
   }));
   return groups;
+}
+
+export interface EmployeeEventDifferences {
+  differences: ReviewDifferenceGroup[];
+  differenceStatus?: '已记录' | '未记录';
+  revisionVersion?: number;
+}
+
+function snapshotAt(request: EmployeeDataReview, version: number): EmployeeReviewRevision | undefined {
+  const matches = (request.revisionHistory ?? []).filter(item => item.version === version
+    && (!item.sourceRequestId || item.sourceRequestId === request.id));
+  if (request.requestVersion === version) matches.push({ version, proposedValue: request.proposedValue,
+    baseValue: request.baseValue, changedFields: request.changedFields });
+  // Duplicate or foreign versions are not evidence of which proposal an event used.
+  return matches.length === 1 ? matches[0] : undefined;
+}
+
+export function employeeEventDifferences(event: EmployeeArchiveEvent, request?: EmployeeDataReview): EmployeeEventDifferences {
+  const version = event.newValue?.requestVersion;
+  const versionInfo = Number.isInteger(version) && version > 0 ? { revisionVersion: version } : {};
+  if (event.action === 'employee_profile_direct_update') {
+    const snapshot = (value: unknown) => {
+      const source = record(value);
+      return 'profile' in source || 'employee' in source ? source : { profile: source };
+    };
+    return { ...versionInfo, differenceStatus: event.oldValue && event.newValue ? '已记录' : '未记录',
+      differences: event.oldValue && event.newValue ? employeeReviewDifferences({
+        sourceType: 'manual_archive_change', baseValue: snapshot(event.oldValue), proposedValue: snapshot(event.newValue), changedFields: event.changedFields,
+      }) : [] };
+  }
+  const revision = /^(revise|reopen)_/.test(event.action);
+  if (!revision && !/^(submit|approve|reject)_/.test(event.action) && event.action !== 'apply_employee_archive_change') return { differences: [], ...versionInfo };
+  const missing: EmployeeEventDifferences = { differences: [], differenceStatus: '未记录',
+    ...versionInfo };
+  if (!request || !Number.isInteger(version) || version < 1) return missing;
+  const after = snapshotAt(request, version);
+  const before = revision ? snapshotAt(request, version - 1)?.proposedValue : after?.baseValue;
+  if (!after || !before) return missing;
+  return { differenceStatus: '已记录', revisionVersion: version,
+    differences: employeeReviewDifferences({ sourceType: request.sourceType, baseValue: before, proposedValue: after.proposedValue,
+      changedFields: revision ? event.changedFields : event.changedFields ?? after.changedFields }) };
 }

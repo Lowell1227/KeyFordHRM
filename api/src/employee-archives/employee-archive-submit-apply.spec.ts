@@ -2,6 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, INestApplic
 import { Reflector } from '@nestjs/core';
 import { Test } from '@nestjs/testing';
 import request from 'supertest';
+import { randomUUID } from 'crypto';
 import { RolesGuard } from '@/common/guards/roles.guard';
 import { HttpExceptionFilter } from '@/common/filters/http-exception.filter';
 import { ResponseInterceptor } from '@/common/interceptors/response.interceptor';
@@ -17,7 +18,7 @@ import { EmployeeOnboardingService } from './employee-onboarding.service';
 const editor = { id: 'synthetic-editor', name: 'Synthetic HR', sysRole: SysRole.hr_user,
   hrCapabilities: ['employee_archive_edit'], deptId: null, canViewAll: false, isAssessorOnly: false };
 
-function setup() {
+function setup(config?: any) {
   const employment: any = { id: 'employment', company: CompanyCode.fuede, companyText: null, contractSubjectId: null,
     deptId: 'department', positionId: null, position: 'Analyst', jobGrade: 'P1', jobFamily: 'Operations',
     directManagerId: null, workLocation: 'Office', probationMonths: null, effectiveFrom: new Date('2025-01-01'), effectiveTo: null };
@@ -29,7 +30,14 @@ function setup() {
     employmentHistory: [employment], employeeContracts: [], dept: { parentId: 'parent', leaderId: null } };
   const requests: any[] = [];
   const audits: any[] = [];
+  const referenceOptions = [
+    ...['Changed', 'First', 'Second', 'Draft', 'Must roll back', 'Master', 'Do not apply', 'X'.repeat(50), 'x'.repeat(50)]
+      .map(name => ({ kind: 'education', name, isActive: true })),
+    ...['P2', 'P3'].map(name => ({ kind: 'job_grade', name, isActive: true })),
+  ];
   const tx: any = {
+    personnelReferenceData: { findMany: jest.fn(async ({ where }) => referenceOptions.filter(option =>
+      option.isActive === where.isActive && where.OR.some((query: any) => query.kind === option.kind && query.name === option.name))) },
     user: {
       findUnique: jest.fn(async ({ where }) => where.id === user.id ? user
         : { id: where.id, status: 'active', accountType: 'employee', directManagerId: null, deletedAt: null }),
@@ -72,12 +80,143 @@ function setup() {
       Object.assign(user, snapshot.user); requests.splice(0, requests.length, ...snapshot.requests); audits.splice(0, audits.length, ...snapshot.audits); throw e;
     }
   }) };
-  const service = new EmployeeArchivesService(db);
+  const service = new EmployeeArchivesService(db, config);
   const input = (employee = {}, profile = {}, performance?: any, contracts?: any[]) => ({
     baseVersion: (service as any).archiveVersion(user), employee, profile, ...(performance ? { performance } : {}), ...(contracts ? { contracts } : {}),
   });
   return { service, db, tx, user, requests, audits, input };
 }
+
+describe('N08 formal archive version protection', () => {
+  function versionFixture() {
+    const secret = randomUUID();
+    const f = setup({ get: () => secret });
+    f.user.employeeProfile = { id: 'existing-profile', userId: f.user.id, education: 'Original',
+      phone: null, gender: null, bankName: null, updatedAt: new Date('2026-01-01') };
+    return f;
+  }
+
+  it.each([
+    ['existing profile only', {}, { education: 'Changed' }],
+    ['reviewed profile only', {}, { bankName: 'Synthetic bank' }],
+    ['sensitive bank account', {}, { bankAccount: '6222000000000000' }],
+    ['sensitive identity', {}, { idNumber: '330100199001011234' }],
+    ['employee phone only', { phone: '13800000000' }, {}],
+    ['mixed profile and employee', { name: 'Changed' }, { education: 'Changed' }],
+  ] as Array<[string, Record<string, unknown>, Record<string, unknown>]>)(
+    'advances the formal metadata version for %s and rejects an old base before any second write', async (_name, employee, profile) => {
+      const f = versionFixture();
+      const payload = f.input(employee, profile);
+      const oldUpdatedAt = f.user.updatedAt.getTime();
+      await f.service.submitDraft('employee', payload, editor);
+      expect(f.user.updatedAt.getTime()).toBeGreaterThan(oldUpdatedAt);
+      expect(f.input().baseVersion).not.toBe(payload.baseVersion);
+      const after = structuredClone({ user: f.user, requests: f.requests, audits: f.audits });
+      await expect(f.service.submitDraft('employee', { ...payload, employee: {}, profile: { education: 'Stale overwrite' } }, editor))
+        .rejects.toBeInstanceOf(ConflictException);
+      expect({ user: f.user, requests: f.requests, audits: f.audits }).toEqual(after);
+      expect(f.db.$transaction).toHaveBeenCalledWith(expect.any(Function), { isolationLevel: 'Serializable' });
+    },
+  );
+
+  it('advances the version for a same-ID contract correction without new employment or profile identities', async () => {
+    const f = versionFixture();
+    const contract = { id: 'existing-contract', contractType: 'contract', sequence: 0, name: 'Original contract',
+      signedAt: new Date('2025-01-01'), effectiveFrom: new Date('2025-01-01'), expiresAt: null, isActive: true,
+      updatedAt: new Date('2026-01-01') };
+    f.user.employeeContracts = [contract];
+    const payload = f.input({}, {}, undefined, [{ ...contract, name: 'Corrected contract' }]);
+    await f.service.submitDraft('employee', payload, editor);
+    expect(f.user.employeeContracts[0]).toMatchObject({ id: contract.id, name: 'Corrected contract' });
+    expect(f.tx.employeeContract.create).not.toHaveBeenCalled();
+    expect(f.user.employmentHistory.map((e: any) => e.id)).toEqual(['employment']);
+    expect(f.input().baseVersion).not.toBe(payload.baseVersion);
+    await expect(f.service.submitDraft('employee', { ...payload, contracts: [{ ...contract, name: 'Stale contract' }] }, editor))
+      .rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it('advances monotonically for two real changes in the same millisecond, even after a clock rollback', async () => {
+    const f = versionFixture();
+    const instant = new Date('2026-11-14T00:00:00Z');
+    f.user.updatedAt = instant;
+    jest.useFakeTimers().setSystemTime(instant);
+    try {
+      await f.service.submitDraft('employee', f.input({}, { education: 'First' }), editor);
+      expect(f.user.updatedAt.getTime()).toBe(instant.getTime() + 1);
+      const firstVersion = f.input().baseVersion;
+      jest.setSystemTime(new Date(instant.getTime() - 5000));
+      await f.service.submitDraft('employee', f.input({}, { education: 'Second' }), editor);
+      expect(f.user.updatedAt.getTime()).toBe(instant.getTime() + 2);
+      expect(f.input().baseVersion).not.toBe(firstVersion);
+    } finally { jest.useRealTimers(); }
+  });
+
+  it('keeps same-value submissions and draft saves from advancing the formal version', async () => {
+    const f = versionFixture();
+    const before = f.input().baseVersion;
+    await expect(f.service.submitDraft('employee', f.input({}, { education: ' Original ' }), editor))
+      .rejects.toThrow('未检测到实际变更');
+    expect(f.input().baseVersion).toBe(before);
+    expect(f.tx.user.update).not.toHaveBeenCalled();
+    const draft = await f.service.saveArchiveDraft('employee', f.input({}, { education: 'Draft' }), editor);
+    expect(f.input().baseVersion).toBe(before);
+    expect(f.user.employeeProfile.education).toBe('Original');
+    expect(f.tx.user.update).not.toHaveBeenCalled();
+    await f.service.submitDraft('employee', { employee: {}, profile: { education: 'Draft' },
+      draftId: draft!.id, expectedVersion: draft!.requestVersion }, editor);
+    expect(f.input().baseVersion).not.toBe(before);
+  });
+
+  it('keeps a same-sensitive-value replacement a no-op despite randomized encryption', async () => {
+    const f = versionFixture();
+    await f.service.submitDraft('employee', f.input({}, { bankAccount: '6222000000000000' }), editor);
+    const before = f.input().baseVersion;
+    f.tx.user.update.mockClear();
+    await expect(f.service.submitDraft('employee', f.input({}, { bankAccount: '6222000000000000' }), editor))
+      .rejects.toThrow('未检测到实际变更');
+    expect(f.input().baseVersion).toBe(before);
+    expect(f.tx.user.update).not.toHaveBeenCalled();
+  });
+
+  it('preserves the no-baseVersion legacy profile API while invalidating already-open archive pages', async () => {
+    const f = versionFixture();
+    const payload = f.input({}, { education: 'Stale' });
+    await f.service.upsertProfile('employee', { gender: '女' }, editor);
+    expect(f.input().baseVersion).not.toBe(payload.baseVersion);
+    await expect(f.service.submitDraft('employee', payload, editor)).rejects.toBeInstanceOf(ConflictException);
+  });
+
+  it.each(['profile', 'phone', 'sensitive fingerprint', 'contract', 'manager']) (
+    'rejects draftId submission after another entry changes its saved %s baseline, even with a fresh supplied baseVersion', async section => {
+      const f = versionFixture();
+      f.user.employeeContracts = [{ id: 'contract', contractType: 'contract', sequence: 0, name: 'Original', isActive: true }];
+      const draft = await f.service.saveArchiveDraft('employee', f.input({}, { education: 'Draft' }), editor);
+      if (section === 'profile') f.user.employeeProfile.education = 'Other entry';
+      if (section === 'phone') f.user.phone = '13800000000';
+      if (section === 'sensitive fingerprint') f.user.employeeProfile.bankAccountFingerprint = 'synthetic-other-fingerprint';
+      if (section === 'contract') f.user.employeeContracts[0].name = 'Other entry';
+      if (section === 'manager') f.user.directManagerId = 'other-manager';
+      const before = structuredClone({ user: f.user, requests: f.requests, audits: f.audits });
+      await expect(f.service.submitDraft('employee', { ...f.input({}, { education: 'Draft' }),
+        draftId: draft!.id, expectedVersion: draft!.requestVersion }, editor)).rejects.toBeInstanceOf(ConflictException);
+      expect({ user: f.user, requests: f.requests, audits: f.audits }).toEqual(before);
+    },
+  );
+
+  it('rolls back direct data and audits and returns 409 when the final version write loses serialization', async () => {
+    const f = versionFixture();
+    const before = structuredClone(f.user);
+    f.tx.user.update.mockImplementation(async ({ data }) => {
+      if (data.updatedAt) throw { code: 'P2034' };
+      Object.assign(f.user, data); return f.user;
+    });
+    await expect(f.service.submitDraft('employee', f.input({}, { education: 'Must roll back' }), editor))
+      .rejects.toBeInstanceOf(ConflictException);
+    expect(f.user).toEqual(before);
+    expect(f.requests).toEqual([]);
+    expect(f.audits).toEqual([]);
+  });
+});
 
 describe('archive contract HTTP boundary with production implicit conversion', () => {
   let app: INestApplication;
@@ -115,6 +254,23 @@ describe('archive contract HTTP boundary with production implicit conversion', (
     await app.init();
   });
   afterEach(async () => { await app?.close(); });
+
+  it('F05 returns the field map through the real HTTP filter without converting bad profile types', async () => {
+    const response = await request(app.getHttpServer()).patch(`/employee-archives/${employeeId}/draft`)
+      .send(f.input({}, { education: 'x'.repeat(51), ethnicity: 123 })).expect(400);
+    expect(response.body).toMatchObject({ code: 4001, data: { fieldErrors: {
+      'profile.education': '最多填写 50 个字符', 'profile.ethnicity': expect.any(String),
+    } } });
+    expect(f.tx.employeeProfile.upsert).not.toHaveBeenCalled();
+    expect(f.requests).toEqual([]);
+  });
+
+  it('F05 rejects non-string performance relationships instead of silently clearing them', async () => {
+    const response = await request(app.getHttpServer()).patch(`/employee-archives/${employeeId}/draft`)
+      .send(f.input({}, { education: 'Do not apply' }, { managerId: false })).expect(400);
+    expect(response.body).toMatchObject({ code: 4001, data: { fieldErrors: { 'performance.managerId': expect.any(String) } } });
+    expect(f.tx.employeeProfile.upsert).not.toHaveBeenCalled();
+  });
 
   it('accepts the real UI first-contract payload and applies all contract fields', async () => {
     const response = await submit([contract]).expect(200);
@@ -170,6 +326,115 @@ describe('archive contract HTTP boundary with production implicit conversion', (
 });
 
 describe('manual archive changes apply at submission', () => {
+  it.each(['leading', 'trailing', 'both'])('F05 persists only the validated education length with %s whitespace', async side => {
+    const f = setup();
+    const text = 'X'.repeat(50);
+    const education = `${side !== 'trailing' ? ' ' : ''}${text}${side !== 'leading' ? ' ' : ''}`;
+    await f.service.submitDraft('employee', f.input({}, { education }), editor);
+    expect(f.user.employeeProfile.education).toBe(text);
+    expect(f.tx.employeeProfile.upsert).toHaveBeenCalledWith(expect.objectContaining({ update: { education: text } }));
+    expect(f.audits.find(a => a.action === 'employee_profile_direct_update').newValue.education).toBe(text);
+    f.tx.employeeProfile.upsert.mockClear();
+    await expect(f.service.submitDraft('employee', f.input({}, { education: ` ${text}X ` }), editor))
+      .rejects.toMatchObject({ response: { data: { fieldErrors: { 'profile.education': '最多填写 50 个字符' } } } });
+    expect(f.tx.employeeProfile.upsert).not.toHaveBeenCalled();
+    expect(f.user.employeeProfile.education).toBe(text);
+  });
+
+  it.each([' 2024-02-29 ', ' 2024-02-29T00:00:00.000Z '])('F05 persists normalized dates through both direct and reviewed profile paths: %s', date => {
+    const f = setup();
+    return f.service.submitDraft('employee', f.input({ plannedRegularDate: date },
+      { birthDate: date, socialSecurityStartDate: date }), editor).then(result => {
+      expect(f.user.plannedRegularDate).toEqual(new Date('2024-02-29'));
+      expect(f.user.employeeProfile.birthDate).toEqual(new Date('2024-02-29'));
+      expect(f.user.employeeProfile.socialSecurityStartDate).toEqual(new Date('2024-02-29'));
+      expect(result.request!.proposedValue.employee.plannedRegularDate).toBe('2024-02-29');
+      expect(result.request!.proposedValue.profile.socialSecurityStartDate).toBe('2024-02-29');
+    });
+  });
+
+  it('F05 leaves padded contract proposals unchanged while the existing apply path stores trimmed text', async () => {
+    const f = setup();
+    const name = ` ${'X'.repeat(150)} `;
+    const result = await f.service.submitDraft('employee', f.input({}, {}, undefined,
+      [{ contractType: 'contract', name, signedAt: '2024-02-29' }]), editor);
+    expect(result.request!.proposedValue.contracts[0].name).toBe(name);
+    expect(f.user.employeeContracts[0].name).toBe('X'.repeat(150));
+  });
+
+  it.each([
+    ['profile', 'education', 'x'.repeat(51)], ['profile', 'ethnicity', 'x'.repeat(51)],
+    ['profile', 'education', 123], ['profile', 'gender', 'x'.repeat(21)],
+    ['profile', 'childrenStatus', 'x'.repeat(31)], ['profile', 'childrenCount', 1.5],
+    ['profile', 'childrenCount', false], ['profile', 'childrenCount', 21],
+    ['profile', 'socialSecurityStartDate', '2026-02-30'], ['profile', 'housingFundStartDate', 123],
+    ['employee', 'name', 'x'.repeat(51)], ['employee', 'name', ''],
+    ['employee', 'jobGrade', 'x'.repeat(31)], ['employee', 'probationMonths', 13],
+    ['employee', 'entryDate', '2026-02-30'], ['employee', 'plannedRegularDate', '2025-02-29'],
+    ['employee', 'actualRegularDate', false], ['employee', 'phone', 123],
+  ])('F05 rejects %s.%s before any formal write', async (section, field, value) => {
+    const f = setup();
+    const payload = f.input({ name: 'Do not apply' }, { education: 'Do not apply' });
+    (payload as any)[section][field] = value;
+    await expect(f.service.submitDraft('employee', payload, editor)).rejects.toMatchObject({
+      response: { code: 4001, data: { fieldErrors: { [`${section}.${field}`]: expect.any(String) } } },
+    });
+    expect(f.tx.user.update).not.toHaveBeenCalled();
+    expect(f.tx.employeeProfile.upsert).not.toHaveBeenCalled();
+    expect(f.requests).toEqual([]);
+    expect(f.audits).toEqual([]);
+  });
+
+  it('F05 accepts the 50-character boundary and normalizes nullable blank fields without turning blank counts into zero', async () => {
+    const f = setup();
+    f.user.employeeProfile = { education: 'Old', ethnicity: 'Old', childrenCount: 2, graduationDate: new Date('2024-02-29') };
+    await f.service.submitDraft('employee', f.input({}, { education: 'x'.repeat(50), ethnicity: '', childrenCount: '', graduationDate: '' }), editor);
+    expect(f.user.employeeProfile).toMatchObject({ education: 'x'.repeat(50), ethnicity: null, childrenCount: null, graduationDate: null });
+  });
+
+  it('F05 keeps incomplete and invalid profile input in drafts only', async () => {
+    const f = setup();
+    const payload = f.input({ name: '' }, { education: 'x'.repeat(51), childrenCount: false });
+    const draft: any = await f.service.saveArchiveDraft('employee', payload, editor);
+    expect(draft.proposedValue.profile).toMatchObject(payload.profile);
+    expect(f.user.employeeProfile).toBeNull();
+    await expect(f.service.submitDraft('employee', { ...payload, draftId: draft.id, expectedVersion: draft.requestVersion }, editor))
+      .rejects.toMatchObject({ response: { data: { fieldErrors: { 'profile.education': expect.any(String) } } } });
+  });
+
+  it.each(['Directory family', null])('D01 normalizes attempts to override the same catalog position (family=%s)', async family => {
+    const f = setup();
+    const id = '40000000-0000-4000-8000-000000000001';
+    Object.assign(f.user, { positionId: id, position: 'Catalog position' });
+    Object.assign(f.user.employmentHistory[0], { positionId: id, position: 'Catalog position', jobFamily: 'Historical family' });
+    f.tx.position = { findUnique: jest.fn(async () => ({ id, name: 'Catalog position', jobFamily: family, isActive: true })) };
+    const result = await f.service.submitDraft('employee', f.input({ positionId: id, position: 'Spoofed name', jobFamily: 'Spoofed family' }), editor);
+    expect(result.request?.proposedValue.employee).toMatchObject({ positionId: id, position: 'Catalog position', jobFamily: family });
+    expect(f.user.employmentHistory[0].jobFamily).toBe(family);
+  });
+
+  it('D01 keeps an untouched same-ID family snapshot while another field changes', async () => {
+    const f = setup();
+    const id = '40000000-0000-4000-8000-000000000001';
+    Object.assign(f.user, { positionId: id, position: 'Catalog position' });
+    Object.assign(f.user.employmentHistory[0], { positionId: id, position: 'Catalog position', jobFamily: 'Historical family' });
+    f.tx.position = { findUnique: jest.fn(async () => ({ id, name: 'Catalog position', jobFamily: 'Renamed family', isActive: true })) };
+    const result = await f.service.submitDraft('employee', f.input({ positionId: id, jobFamily: 'Historical family', workLocation: 'New office' }), editor);
+    expect(result.request?.proposedValue.employee.jobFamily).toBe('Historical family');
+    expect(f.user.employmentHistory[0].jobFamily).toBe('Historical family');
+  });
+
+  it('F06 explicitly links a mixed direct update to its persisted submission version', async () => {
+    const f = setup();
+    const result = await f.service.submitDraft('employee', f.input({ name: 'New name' }, { education: 'Master' }), editor);
+    const direct = f.audits.filter(a => a.action === 'employee_profile_direct_update');
+    expect(direct).toHaveLength(1);
+    expect(direct[0]).toMatchObject({ userId: editor.id, entityType: 'user', entityId: 'employee',
+      oldValue: { education: null }, newValue: { education: 'Master', requestId: result.request!.id, requestVersion: 1 } });
+    expect(result.request!.baseValue.profile.education).toBe('Master');
+    expect(result.request!.proposedValue.profile.education).toBe('Master');
+  });
+
   it.each([
     ['signedAt', '2026-02-31'], ['effectiveFrom', 'not-a-date'], ['expiresAt', '2025-02-29'],
     ['contractType', 'unknown-new-type'], ['signedAt', 123],

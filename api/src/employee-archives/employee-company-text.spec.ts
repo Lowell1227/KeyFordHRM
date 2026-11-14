@@ -79,16 +79,19 @@ describe('employee company text', () => {
 
   it.each(['另一家签约公司', null])('submits a company-text-only correction without changing scope: %s', async (companyText) => {
     const create = jest.fn(async ({ data }) => ({ id: 'review-1', ...data }));
+    const current = { ...user(), updatedAt: new Date('2026-01-01') };
+    const originalUpdatedAt = current.updatedAt;
     const prisma = {
       $transaction: jest.fn(async callback => callback(prisma)),
-      user: { findUnique: jest.fn().mockResolvedValue(user()) },
+      user: { findUnique: jest.fn().mockResolvedValue(current),
+        update: jest.fn(async ({ data }) => Object.assign(current, data)) },
       employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create },
     };
     // Keep company snapshot tests isolated from the separately covered apply transaction.
     const reviews = { applyArchiveChange: jest.fn(async () => ({ id: 'review-1', ...create.mock.calls.at(-1)![0].data,
       profileReviewStatus: 'approved', appliedAt: new Date() })) };
     const service = new EmployeeArchivesService(prisma as any, undefined, undefined, undefined, undefined, reviews as any);
-    const { request: result } = await service.submitDraft('employee-1', { baseVersion: (service as any).archiveVersion(user()), employee: { companyText }, profile: {} }, operator);
+    const { request: result } = await service.submitDraft('employee-1', { baseVersion: (service as any).archiveVersion(current), employee: { companyText }, profile: {} }, operator);
     if (!result) throw new Error('expected review request');
     expect(create.mock.calls[0][0].data.profileReviewStatus).toBe('pending');
     expect(result.profileReviewStatus).toBe('approved');
@@ -96,6 +99,7 @@ describe('employee company text', () => {
     expect(result.performanceReviewStatus).toBe('not_required');
     expect(result.baseValue).toMatchObject({ employee: { company: 'fuede', companyText: '花名册公司原文' } });
     expect(result.proposedValue).toMatchObject({ employee: { company: 'fuede', companyText } });
+    expect(current.updatedAt.getTime()).toBeGreaterThan(originalUpdatedAt.getTime());
   });
 
   it.each([42, '甲'.repeat(151)])('rejects invalid company text before saving a draft', async (companyText) => {

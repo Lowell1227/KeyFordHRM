@@ -36,6 +36,17 @@ describe('CreateEmployeeDto', () => {
     transformOptions: { enableImplicitConversion: true },
   });
 
+  it.each([
+    ['employee', 'jobGrade', 30], ['profile', 'gender', 20], ['profile', 'childrenStatus', 30],
+    ['contracts', 'name', 150], ['contracts', 'signingCompany', 150], ['contracts', 'confidentialityAgreement', 50],
+  ])('F05 fits the database column for %s.%s', async (section, key, limit) => {
+    const base = { name: 'Synthetic', company: 'fuede', deptId: '30000000-0000-4000-8000-000000000001',
+      entryDate: '2026-11-14', effectiveFrom: '2026-11-14', employmentType: 'full_time', employeeStatus: 'probation' };
+    const body = (length: number) => ({ ...base, [section]: section === 'contracts' ? [{ [key]: 'x'.repeat(length) }] : { [key]: 'x'.repeat(length) } });
+    await expect(pipe.transform(body(limit), { type: 'body', metatype: CreateEmployeeDto })).resolves.toBeDefined();
+    await expect(pipe.transform(body(limit + 1), { type: 'body', metatype: CreateEmployeeDto })).rejects.toThrow();
+  });
+
   it('accepts the real name-only wizard draft payload with unfilled optional dates and department', async () => {
     const result = await pipe.transform({
       name: '草稿员工', deptId: '', entryDate: '', effectiveFrom: '',

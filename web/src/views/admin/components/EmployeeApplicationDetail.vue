@@ -2,10 +2,11 @@
 import { computed } from 'vue';
 import type { EmployeeDataReview, EmployeeReviewStatus } from '@/api/employee-archives.api';
 import { formatDate, formatDateTime } from '@/utils/date';
-import { isDirectArchiveApplication, isPendingArrival } from '@/utils/employee-lifecycle';
+import { completedDirectProfileEvent, isDirectArchiveApplication, isPendingArrival } from '@/utils/employee-lifecycle';
 import { employeeReviewDifferences, employeeReviewValuesEqual } from './employee-review-differences';
 import PersonnelProcessTimeline from './PersonnelProcessTimeline.vue';
 import type { PersonnelProcessStep, PersonnelProcessTone } from './personnel-process-timeline';
+import { comparePersonnelSteps, personnelEventSteps } from './personnel-process-timeline';
 
 const props = defineProps<{ request: EmployeeDataReview }>();
 
@@ -124,20 +125,7 @@ const profileItems = computed(() => Object.keys(fieldLabels).flatMap((key) => {
   return [{ key, label: fieldLabels[key], value: displayValue(key, value, profile.value) }];
 }));
 
-const changeItems = computed(() => ['employee', 'profile', 'performance'].flatMap((section) => {
-  const before = props.request.baseValue?.[section] ?? {};
-  const after = props.request.proposedValue?.[section] ?? {};
-  return Object.keys(fieldLabels).flatMap((key) => {
-    if (!(key in after) || JSON.stringify(before[key] ?? null) === JSON.stringify(after[key] ?? null)) return [];
-    const label = section === 'performance' && key === 'managerId' ? '绩效直属上级' : key === 'company' ? '内部公司映射' : fieldLabels[key];
-    return [{
-      key: `${section}.${key}`,
-      label,
-      before: key === 'contractSubjectId' ? (before[key] ? '原主体关联' : '尚未关联') : displayValue(key, before[key], before),
-      after: key === 'contractSubjectId' ? (after[key] ? '新主体关联' : '尚未关联') : displayValue(key, after[key], after),
-    }];
-  });
-}));
+const changeItems = computed(() => employeeReviewDifferences(props.request).filter(group => !group.kind).flatMap(group => group.fields));
 
 const contractChangeItems = computed(() => {
   return employeeReviewDifferences(props.request).filter(group => group.kind).flatMap(group => {
@@ -211,24 +199,29 @@ const isPartiallyCancelled = computed(() => hasCancellation.value && hasApproved
 const isFullyCancelled = computed(() => isOnboardingCancelled.value || (hasCancellation.value && !hasApprovedReview.value));
 
 const submittedEvent = computed(() => props.request.events?.find((event) => /submit_employee|submit_.*change/.test(event.action)));
-const activatedEvent = computed(() => props.request.events?.find((event) => event.action === 'apply_employee_archive_change' || /activate|effective|confirm_employee_arrival/.test(event.action)));
+const activatedEvent = computed(() => props.request.events?.find((event) => event.action === 'apply_employee_archive_change' || /activate|effective|confirm_employee_arrival/.test(event.action))
+  ?? completedDirectProfileEvent(props.request));
 const arrivalActionStep = computed(() => isOnboardingCancelled.value ? 'closed' : hasRejected.value && !pendingArrival.value ? 'review' : 'waiting-effective');
 
 const processSteps = computed<PersonnelProcessStep[]>(() => {
   if (isDirectApplication.value) {
     const event = activatedEvent.value;
+    const submission = submittedEvent.value ?? props.request.events?.filter(item => item.action === 'employee_profile_direct_update'
+      && item.newValue?.requestId === props.request.id && Number.isInteger(item.newValue.requestVersion)
+      && item.newValue.requestVersion === event?.newValue?.requestVersion)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt))[0] ?? event;
     return [
       {
         key: 'submitted', title: '提交', tone: 'success', current: false,
-        time: formatDateTime(event?.createdAt ?? submittedEvent.value?.createdAt ?? props.request.createdAt),
-        occurredAt: event?.createdAt ?? submittedEvent.value?.createdAt ?? props.request.createdAt,
-        actor: event?.user?.name ?? submittedEvent.value?.user?.name ?? props.request.createdBy?.name ?? '系统', status: '已提交',
+        time: formatDateTime(submission?.createdAt ?? props.request.createdAt),
+        occurredAt: submission?.createdAt ?? props.request.createdAt,
+        actor: submission?.user?.name ?? props.request.createdBy?.name ?? '未记录', status: '已提交',
       },
       {
         key: 'effective', title: '变更生效', tone: 'success', current: false,
-        time: formatDateTime(props.request.appliedAt!),
-        occurredAt: props.request.appliedAt,
-        actor: event?.user?.name ?? props.request.createdBy?.name ?? '系统', status: '已生效',
+        time: formatDateTime(props.request.appliedAt ?? event?.createdAt ?? ''),
+        occurredAt: props.request.appliedAt ?? event?.createdAt,
+        actor: event?.user?.name ?? '未记录', status: '已生效',
       },
     ];
   }
@@ -251,7 +244,7 @@ const processSteps = computed<PersonnelProcessStep[]>(() => {
       key: 'submitted', title: isOnboarding.value ? '提交审核' : '提交申请', tone: 'success' as const, current: false,
       time: formatDateTime(submittedEvent.value?.createdAt ?? props.request.createdAt),
       occurredAt: submittedEvent.value?.createdAt ?? props.request.createdAt,
-      actor: submittedEvent.value?.user?.name ?? props.request.createdBy?.name ?? '系统', status: '已提交',
+      actor: submittedEvent.value?.user?.name ?? props.request.createdBy?.name ?? '未记录', status: '已提交',
     },
     {
       key: 'review', title: '档案审核', tone: reviewTone, current: !hasCancellation.value && (hasPending.value || hasRejected.value),
@@ -300,45 +293,14 @@ const processSteps = computed<PersonnelProcessStep[]>(() => {
       key: 'effective', title: isOnboarding.value ? '入职生效' : '变更生效', tone: isEffective.value ? 'success' : 'waiting', current: false,
       time: isEffective.value && props.request.appliedAt ? formatDateTime(props.request.appliedAt) : '',
       occurredAt: isEffective.value ? props.request.appliedAt : null,
-      actor: activatedEvent.value?.user?.name ?? (isEffective.value ? '系统' : ''),
+      actor: isEffective.value ? '未记录' : '',
       status: isEffective.value ? '已生效' : '等待处理',
     },
   ];
 });
 
 const timeline = computed<PersonnelProcessStep[]>(() => {
-  const history: Array<PersonnelProcessStep & { stage?: string }> = [];
-  const seen = new Set<string>();
-  for (const event of props.request.events ?? []) {
-    if (seen.has(event.id)) continue;
-    seen.add(event.id);
-    const action = event.action;
-    let title = '', status = '已提交', tone: PersonnelProcessTone = 'success', stage: string | undefined;
-    if (/^reopen_/.test(action)) title = '恢复入职并重新提交';
-    else if (action === 'revise_employee_arrival_date') title = '修改到岗日期并重新提交';
-    else if (/^revise_/.test(action)) title = '修改并重新提交';
-    else if (/^reject_/.test(action)) { title = '退回申请'; status = '已退回'; tone = 'danger'; stage = 'review'; }
-    else if (/^(cancel|withdraw)_/.test(action)) { title = '取消申请'; status = event.newValue?.partial ? '部分已取消' : '已取消'; tone = 'danger'; stage = 'closed'; }
-    else if (/^approve_/.test(action)) { title = '档案审核'; status = '已通过'; stage = 'review'; }
-    else if (/^submit_/.test(action)) { title = isDirectApplication.value ? '提交' : isOnboarding.value ? '提交审核' : '提交申请'; stage = 'submitted'; }
-    else if (action === 'confirm_employee_arrival') { title = '确认到岗'; status = '已完成'; stage = 'waiting-effective'; }
-    else if (action === 'activate_employee_onboarding' || action === 'apply_employee_archive_change') {
-      title = isOnboarding.value ? '入职生效' : '变更生效'; status = '已生效'; stage = 'effective';
-    } else continue;
-    const occurredAt = stage === 'waiting-effective' ? props.request.arrivalConfirmedAt || event.createdAt
-      : stage === 'effective' ? props.request.appliedAt || event.createdAt : event.createdAt;
-    const actor = event.user?.name || '系统';
-    const time = formatDateTime(occurredAt);
-    const scopes = Array.isArray(event.newValue?.scopes) ? event.newValue.scopes as string[] : [];
-    history.push({
-      key: `event-${event.id}`, eventId: event.id, eventAction: action, stage,
-      title, status, tone, actor, time, occurredAt,
-      note: typeof event.newValue?.reason === 'string' ? event.newValue.reason : undefined,
-      details: /^approve_/.test(action) ? scopes.filter(scope => ['profile', 'performance'].includes(scope)).map(scope => ({
-        key: scope, title: scope === 'profile' ? '基础档案' : '绩效关系', status, tone, actor, time,
-      })) : undefined,
-    });
-  }
+  const history = personnelEventSteps(props.request.events ?? [], props.request);
   // Audit entries retain earlier rounds; current state supplies only missing or pending stages.
   const pending: PersonnelProcessStep[] = [];
   const completed: PersonnelProcessStep[] = [...history];
@@ -349,19 +311,12 @@ const timeline = computed<PersonnelProcessStep[]>(() => {
     } else if (records.length) {
       records[records.length - 1]!.key = step.key;
     } else if (step.occurredAt) {
-      completed.push(step);
+      completed.push({ ...step, note: step.note || '状态记录，审计事件未记录' });
     } else {
       pending.push(step);
     }
   }
-  completed.sort((a, b) => {
-    const elapsed = Date.parse(a.occurredAt!) - Date.parse(b.occurredAt!);
-    if (elapsed) return elapsed;
-    // Arrival and activation share one transaction timestamp; retain their business order.
-    if (a.key === 'waiting-effective' && b.key === 'effective') return -1;
-    if (a.key === 'effective' && b.key === 'waiting-effective') return 1;
-    return 0;
-  });
+  completed.sort(comparePersonnelSteps);
   return [...completed, ...pending];
 });
 </script>

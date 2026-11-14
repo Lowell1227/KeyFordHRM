@@ -57,9 +57,9 @@ describe('employee review preserves family outside a requested position change',
     expect(f.current.position).toBe('目录岗位名称');
   });
 
-  it.each([null, '人工修订职系'])('applies the explicitly reviewed family with the same position ID (%s)', async family => {
+  it.each([null, '人工修订职系'])('derives an attempted family override from the directory with the same position ID (%s)', async family => {
     const f = archiveReview(false, '目录职系', family);
     expect((await f.approve()).failed).toEqual([]);
-    expect(f.written[0]).toMatchObject({ positionId: 'original-position', position: '目录岗位名称', jobFamily: family });
+    expect(f.written[0]).toMatchObject({ positionId: 'original-position', position: '目录岗位名称', jobFamily: '目录职系' });
   });
 });

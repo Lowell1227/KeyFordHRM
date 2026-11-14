@@ -69,6 +69,8 @@ const identityResult = ref<EmployeeIdentityLookupResult | null>(null);
 const phoneDuplicateAcknowledged = ref(false);
 const lastIdentityKey = ref('');
 const positions = ref<PositionRecord[]>([]);
+let positionsLoaded = false;
+let positionsLoadPromise: Promise<boolean> | null = null;
 const hydrating = ref(false);
 const idNumberConfigured = ref(false);
 const bankAccountConfigured = ref(false);
@@ -270,6 +272,7 @@ function reset() {
   Object.keys(fieldErrors).forEach((key) => delete fieldErrors[key]);
   nextTick(() => {
     if (session !== generation || !props.modelValue) return;
+    syncDraftPosition();
     hydrating.value = false;
     fillPlannedRegularDate();
     lastSavedSnapshot = draftSnapshot();
@@ -289,12 +292,32 @@ watch(() => [form.phone, form.idNumber], () => {
   lastIdentityKey.value = '';
   delete fieldErrors.identity;
 });
-watch(() => form.positionId, (positionId, previousId) => {
+function syncDraftPosition() {
+  const draft = props.draft;
+  if (!props.modelValue || (draft && (draft.userId || draft.appliedAt || draft.arrivalConfirmedAt
+    || (draft.sourceType !== 'manual_employee_create' && draft.intakeType !== 'new_hire')))) return;
+  const position = selectedPosition.value;
+  if (!position) return;
+  form.employee.position = position.name;
+  form.employee.jobFamily = position.jobFamily ?? '';
+}
+function loadPositions(): Promise<boolean> {
+  if (positionsLoaded) return Promise.resolve(true);
+  if (!positionsLoadPromise) {
+    positionsLoadPromise = positionsApi.findAll().then(items => {
+      positions.value = items;
+      positionsLoaded = true;
+      return true;
+    }).catch(() => false).finally(() => { positionsLoadPromise = null; });
+  }
+  return positionsLoadPromise;
+}
+watch(positions, () => { if (!hydrating.value) syncDraftPosition(); });
+watch(() => form.positionId, (positionId) => {
   if (hydrating.value) return;
   const position = positions.value.find((item) => item.id === positionId);
-  const previous = positions.value.find((item) => item.id === previousId);
-  if (!form.employee.position || form.employee.position === previous?.name) form.employee.position = position?.name ?? '';
-  if (!form.employee.jobFamily || form.employee.jobFamily === previous?.jobFamily) form.employee.jobFamily = position?.jobFamily ?? '';
+  form.employee.position = position?.name ?? '';
+  form.employee.jobFamily = position?.jobFamily ?? '';
 });
 watch(() => form.entryDate, (entryDate) => {
   if (!entryDate || hydrating.value) return;
@@ -650,6 +673,17 @@ async function submit() {
   const session = generation;
   checkingStep.value = true;
   try {
+    if (form.positionId) {
+      const loaded = await loadPositions();
+      if (session !== generation || !props.modelValue) return;
+      if (!loaded) {
+        currentStep.value = 1;
+        fieldErrors['employee.positionId'] = '岗位目录加载失败，请重试提交';
+        await focusInvalidField('employee.positionId');
+        return;
+      }
+      syncDraftPosition();
+    }
     for (const step of [0, 1, 2]) if (!await validateStep(step, true) || session !== generation) return;
   } finally {
     if (session === generation) checkingStep.value = false;
@@ -727,7 +761,7 @@ async function openUploadedMaterial(item: { name: string; url: string; mimeType?
   window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
 }
 
-onMounted(async () => { positions.value = await positionsApi.findAll(); });
+onMounted(() => { void loadPositions(); });
 onBeforeUnmount(() => { generation++; contractUploads.clear(); if (autosaveTimer) clearTimeout(autosaveTimer); });
 </script>
 
@@ -802,9 +836,9 @@ onBeforeUnmount(() => { generation++; contractUploads.clear(); if (autosaveTimer
 
             <el-form-item data-archive-field="employee.deptId" label="部门" required :error="fieldErrors['employee.deptId']"><el-tree-select v-model="form.deptId" :data="departments" node-key="id" :props="{ label: 'name', children: 'children' }" check-strictly filterable /></el-form-item>
             <el-form-item data-archive-field="employee.positionId" label="岗位" :error="fieldErrors['employee.positionId']"><el-select v-model="form.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
-            <el-form-item data-archive-field="employee.position" label="岗位名称" :error="fieldErrors['employee.position']"><el-input v-model="form.employee.position" placeholder="选择岗位后自动带入" /></el-form-item>
-            <el-form-item data-archive-field="employee.jobGrade" label="职级" :error="fieldErrors['employee.jobGrade']"><el-input v-model="form.employee.jobGrade" /></el-form-item>
-            <el-form-item data-archive-field="employee.jobFamily" label="职系" :error="fieldErrors['employee.jobFamily']"><PersonnelReferenceSelect v-model="form.employee.jobFamily" kind="job_family" label="职系" placeholder="选择岗位后自动带入，也可选择其他职系" /></el-form-item>
+            <el-form-item data-archive-field="employee.position" label="岗位名称" :error="fieldErrors['employee.position']"><el-input v-model="form.employee.position" :readonly="Boolean(form.positionId)" placeholder="选择岗位后自动带入" /></el-form-item>
+            <el-form-item data-archive-field="employee.jobGrade" label="职级" :error="fieldErrors['employee.jobGrade']"><PersonnelReferenceSelect v-model="form.employee.jobGrade" kind="job_grade" /></el-form-item>
+            <el-form-item data-archive-field="employee.jobFamily" label="职系" :error="fieldErrors['employee.jobFamily']"><el-input v-if="form.positionId" :model-value="form.employee.jobFamily" readonly /><PersonnelReferenceSelect v-else v-model="form.employee.jobFamily" kind="job_family" label="职系" /></el-form-item>
             <el-form-item data-archive-field="employee.workLocation" label="工作地点" :error="fieldErrors['employee.workLocation']"><PersonnelReferenceSelect v-model="form.employee.workLocation" kind="work_location" label="工作地点" /></el-form-item>
             <el-form-item data-archive-field="employee.employmentType" label="用工类型" required :error="fieldErrors['employee.employmentType']"><el-select v-model="form.employmentType" placeholder="待核实后选择" aria-label="用工类型"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
             <el-form-item data-archive-field="employee.employeeStatus" label="员工状态" required :error="fieldErrors['employee.employeeStatus']"><el-select v-model="form.employeeStatus" placeholder="待核实后选择" aria-label="员工状态"><el-option label="试用期" value="probation" /><el-option label="在职" value="active" /></el-select></el-form-item>
@@ -833,17 +867,17 @@ onBeforeUnmount(() => { generation++; contractUploads.clear(); if (autosaveTimer
             <el-form-item data-archive-field="profile.gender" label="性别" :error="fieldErrors['profile.gender']"><el-select v-model="form.profile.gender" clearable><el-option label="男" value="男" /><el-option label="女" value="女" /></el-select></el-form-item>
             <el-form-item data-archive-field="profile.birthDate" label="出生日期" :error="fieldErrors['profile.birthDate']"><el-date-picker v-model="form.profile.birthDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
             <el-form-item data-archive-field="profile.ethnicity" label="民族" :error="fieldErrors['profile.ethnicity']"><el-input v-model="form.profile.ethnicity" /></el-form-item>
-            <el-form-item data-archive-field="profile.education" label="学历" :error="fieldErrors['profile.education']"><el-input v-model="form.profile.education" /></el-form-item>
+            <el-form-item data-archive-field="profile.education" label="学历" :error="fieldErrors['profile.education']"><PersonnelReferenceSelect v-model="form.profile.education" kind="education" /></el-form-item>
             <el-form-item data-archive-field="profile.professionalTitle" label="职称" :error="fieldErrors['profile.professionalTitle']"><el-input v-model="form.profile.professionalTitle" /></el-form-item>
             <el-form-item data-archive-field="profile.school" label="毕业院校" :error="fieldErrors['profile.school']"><el-input v-model="form.profile.school" /></el-form-item>
             <el-form-item data-archive-field="profile.graduationDate" label="毕业日期" :error="fieldErrors['profile.graduationDate']"><el-date-picker v-model="form.profile.graduationDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
             <el-form-item data-archive-field="profile.major" label="专业" :error="fieldErrors['profile.major']"><el-input v-model="form.profile.major" /></el-form-item>
-            <el-form-item data-archive-field="profile.maritalStatus" label="婚姻状况" :error="fieldErrors['profile.maritalStatus']"><el-input v-model="form.profile.maritalStatus" /></el-form-item>
+            <el-form-item data-archive-field="profile.maritalStatus" label="婚姻状况" :error="fieldErrors['profile.maritalStatus']"><PersonnelReferenceSelect v-model="form.profile.maritalStatus" kind="marital_status" /></el-form-item>
             <el-form-item data-archive-field="profile.childrenStatus" label="子女状况" :error="fieldErrors['profile.childrenStatus']"><el-input v-model="form.profile.childrenStatus" /></el-form-item>
             <el-form-item data-archive-field="profile.childrenCount" label="子女数量" :error="fieldErrors['profile.childrenCount']"><el-input-number v-model="form.profile.childrenCount" :min="0" /></el-form-item>
-            <el-form-item data-archive-field="profile.politicalStatus" label="政治面貌" :error="fieldErrors['profile.politicalStatus']"><el-input v-model="form.profile.politicalStatus" /></el-form-item>
+            <el-form-item data-archive-field="profile.politicalStatus" label="政治面貌" :error="fieldErrors['profile.politicalStatus']"><PersonnelReferenceSelect v-model="form.profile.politicalStatus" kind="political_status" /></el-form-item>
             <el-form-item data-archive-field="profile.nativePlace" label="籍贯" :error="fieldErrors['profile.nativePlace']"><el-input v-model="form.profile.nativePlace" /></el-form-item>
-            <el-form-item data-archive-field="profile.householdType" label="户籍类型" :error="fieldErrors['profile.householdType']"><el-input v-model="form.profile.householdType" /></el-form-item>
+            <el-form-item data-archive-field="profile.householdType" label="户籍类型" :error="fieldErrors['profile.householdType']"><PersonnelReferenceSelect v-model="form.profile.householdType" kind="household_type" /></el-form-item>
           </div>
         </section>
         </el-collapse-item>
@@ -854,13 +888,13 @@ onBeforeUnmount(() => { generation++; contractUploads.clear(); if (autosaveTimer
             <el-form-item data-archive-field="profile.idAddress" label="身份证地址" class="span-2" :error="fieldErrors['profile.idAddress']"><el-input v-model="form.profile.idAddress" /></el-form-item>
             <el-form-item data-archive-field="profile.currentAddress" label="现住址" class="span-2" :error="fieldErrors['profile.currentAddress']"><el-input v-model="form.profile.currentAddress" /></el-form-item>
             <el-form-item data-archive-field="profile.emergencyContactName" label="紧急联系人" :error="fieldErrors['profile.emergencyContactName']"><el-input v-model="form.profile.emergencyContactName" /></el-form-item>
-            <el-form-item data-archive-field="profile.emergencyContactRelation" label="与联系人关系" :error="fieldErrors['profile.emergencyContactRelation']"><el-input v-model="form.profile.emergencyContactRelation" /></el-form-item>
+            <el-form-item data-archive-field="profile.emergencyContactRelation" label="与联系人关系" :error="fieldErrors['profile.emergencyContactRelation']"><PersonnelReferenceSelect v-model="form.profile.emergencyContactRelation" kind="contact_relation" /></el-form-item>
             <el-form-item data-archive-field="profile.emergencyContactPhone" label="紧急联系电话" :error="fieldErrors['profile.emergencyContactPhone']"><el-input v-model="form.profile.emergencyContactPhone" /></el-form-item>
             <el-form-item data-archive-field="profile.socialSecurityStatus" label="社保状态" :error="fieldErrors['profile.socialSecurityStatus']"><el-input v-model="form.profile.socialSecurityStatus" /></el-form-item>
             <el-form-item data-archive-field="profile.socialSecurityStartDate" label="社保起始日期" :error="fieldErrors['profile.socialSecurityStartDate']"><el-date-picker v-model="form.profile.socialSecurityStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
             <el-form-item data-archive-field="profile.housingFundStatus" label="公积金状态" :error="fieldErrors['profile.housingFundStatus']"><el-input v-model="form.profile.housingFundStatus" /></el-form-item>
             <el-form-item data-archive-field="profile.housingFundStartDate" label="公积金起始日期" :error="fieldErrors['profile.housingFundStartDate']"><el-date-picker v-model="form.profile.housingFundStartDate" type="date" value-format="YYYY-MM-DD" /></el-form-item>
-            <el-form-item data-archive-field="profile.bankName" label="开户行" :error="fieldErrors['profile.bankName']"><el-input v-model="form.profile.bankName" /></el-form-item>
+            <el-form-item data-archive-field="profile.bankName" label="开户行" :error="fieldErrors['profile.bankName']"><PersonnelReferenceSelect v-model="form.profile.bankName" kind="bank_name" /></el-form-item>
             <el-form-item data-archive-field="profile.bankBranch" label="开户支行" :error="fieldErrors['profile.bankBranch']"><el-input v-model="form.profile.bankBranch" /></el-form-item>
             <el-form-item data-archive-field="profile.bankAccount" :label="bankAccountConfigured ? '银行卡号（已保存，留空不变）' : '银行卡号'" :error="fieldErrors['profile.bankAccount']"><el-input v-model="form.profile.bankAccount" type="password" show-password /></el-form-item>
           </div>
@@ -877,7 +911,7 @@ onBeforeUnmount(() => { generation++; contractUploads.clear(); if (autosaveTimer
             <p v-if="fieldErrors[`contracts.${index}`]" :data-archive-field="`contracts.${index}`" class="field-error" role="alert">{{ fieldErrors[`contracts.${index}`] }}</p>
             <div class="form-grid form-grid--3">
               <el-form-item :data-archive-field="`contracts.${index}.contractType`" :error="fieldErrors[`contracts.${index}.contractType`]" label="类型"><el-select v-model="contract.contractType"><el-option label="首签" value="contract" /><el-option label="续签" value="renewal" /><el-option label="转签" value="transfer" /><el-option v-if="contract.contractType && !['contract', 'renewal', 'transfer'].includes(contract.contractType)" :label="contract.contractType" :value="contract.contractType" /></el-select></el-form-item>
-              <el-form-item :data-archive-field="`contracts.${index}.name`" :error="fieldErrors[`contracts.${index}.name`]" label="合同名称"><el-input v-model="contract.name" /></el-form-item>
+              <el-form-item :data-archive-field="`contracts.${index}.name`" :error="fieldErrors[`contracts.${index}.name`]" label="合同名称"><PersonnelReferenceSelect v-model="contract.name" kind="contract_name" /></el-form-item>
               <el-form-item :data-archive-field="`contracts.${index}.contractSubjectId`" :error="fieldErrors[`contracts.${index}.contractSubjectId`]" label="签约公司"><ContractSubjectSelect v-model="contract.contractSubjectId" v-model:snapshot-name="contract.signingCompany" /></el-form-item>
               <el-form-item :data-archive-field="`contracts.${index}.signedAt`" :error="contractDateErrors[`contracts.${index}.signedAt`] || fieldErrors[`contracts.${index}.signedAt`]" label="签订日期"><ContractDateInput v-model="contract.signedAt" /></el-form-item>
               <el-form-item :data-archive-field="`contracts.${index}.effectiveFrom`" :error="contractDateErrors[`contracts.${index}.effectiveFrom`] || fieldErrors[`contracts.${index}.effectiveFrom`]" label="生效日期"><ContractDateInput v-model="contract.effectiveFrom" /></el-form-item>

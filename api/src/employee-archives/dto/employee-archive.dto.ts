@@ -16,7 +16,7 @@ import {
   IsString,
   IsUUID,
   Max,
-  MaxLength,
+  MaxLength as ValidatorMaxLength,
   Min,
   ValidateNested,
   ValidateIf,
@@ -24,15 +24,17 @@ import {
 import { CompanyCode, EmploymentType, UserStatus } from '@prisma/client';
 import { PartialType } from '@nestjs/mapped-types';
 
+const MaxLength = (length: number) => ValidatorMaxLength(length, { message: `最多填写 ${length} 个字符` });
+
 // Forms submit blank controls; treat these as absent, not invalid dates/UUIDs.
 const BlankToNull = () => Transform(({ value, obj, key }) =>
   typeof obj[key] === 'string' && !obj[key].trim() ? null : value);
 
-class EmployeeCreateDetailsDto {
+export class EmployeeCreateDetailsDto {
   @IsOptional() @IsUUID('4') contractSubjectId?: string | null;
   @IsOptional() @IsString() @MaxLength(150) companyText?: string | null;
   @IsOptional() @IsString() @MaxLength(100) position?: string | null;
-  @IsOptional() @IsString() @MaxLength(50) jobGrade?: string | null;
+  @IsOptional() @IsString() @MaxLength(30) jobGrade?: string | null;
   @IsOptional() @IsString() @MaxLength(100) jobFamily?: string | null;
   @IsOptional() @IsString() @MaxLength(100) workLocation?: string | null;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(12) probationMonths?: number | null;
@@ -41,9 +43,9 @@ class EmployeeCreateDetailsDto {
   @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) leaveDate?: string | null;
 }
 
-class EmployeeCreateProfileDto {
+export class EmployeeCreateProfileDto {
   @IsOptional() @IsString() @MaxLength(20) phone?: string | null;
-  @IsOptional() @IsString() @MaxLength(30) gender?: string | null;
+  @IsOptional() @IsString() @MaxLength(20) gender?: string | null;
   @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) birthDate?: string | null;
   @IsOptional() @IsString() @MaxLength(50) ethnicity?: string | null;
   @IsOptional() @IsString() @MaxLength(50) education?: string | null;
@@ -52,7 +54,7 @@ class EmployeeCreateProfileDto {
   @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) graduationDate?: string | null;
   @IsOptional() @IsString() @MaxLength(100) major?: string | null;
   @IsOptional() @IsString() @MaxLength(30) maritalStatus?: string | null;
-  @IsOptional() @IsString() @MaxLength(50) childrenStatus?: string | null;
+  @IsOptional() @IsString() @MaxLength(30) childrenStatus?: string | null;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(20) childrenCount?: number | null;
   @IsOptional() @IsString() @MaxLength(50) politicalStatus?: string | null;
   @IsOptional() @IsString() @MaxLength(100) nativePlace?: string | null;
@@ -79,20 +81,20 @@ class EmployeeContractMaterialDto {
   @IsString() @IsNotEmpty() @MaxLength(150) mimeType!: string;
 }
 
-class EmployeeCreateContractDto {
+export class EmployeeCreateContractDto {
   @IsOptional() @IsUUID('4') contractSubjectId?: string | null;
-  @IsOptional() @IsString() @MaxLength(50) contractType?: string | null;
-  @IsOptional() @IsString() @MaxLength(200) name?: string | null;
-  @IsOptional() @IsString() @MaxLength(200) signingCompany?: string | null;
+  @IsOptional() @IsString() @MaxLength(30) contractType?: string | null;
+  @IsOptional() @IsString() @MaxLength(150) name?: string | null;
+  @IsOptional() @IsString() @MaxLength(150) signingCompany?: string | null;
   @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) signedAt?: string | null;
   @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) effectiveFrom?: string | null;
   @BlankToNull() @IsOptional() @IsDateString({ strict: true, strictSeparator: true }) @MaxLength(10) expiresAt?: string | null;
   @IsOptional() @IsString() @MaxLength(100) termType?: string | null;
-  @IsOptional() @IsString() @MaxLength(200) originalCompany?: string | null;
-  @IsOptional() @IsString() @MaxLength(200) newCompany?: string | null;
-  @IsOptional() @IsString() @MaxLength(200) confidentialityAgreement?: string | null;
-  @IsOptional() @IsString() @MaxLength(200) nonCompeteAgreement?: string | null;
-  @IsOptional() @IsString() @MaxLength(200) portraitAgreement?: string | null;
+  @IsOptional() @IsString() @MaxLength(150) originalCompany?: string | null;
+  @IsOptional() @IsString() @MaxLength(150) newCompany?: string | null;
+  @IsOptional() @IsString() @MaxLength(50) confidentialityAgreement?: string | null;
+  @IsOptional() @IsString() @MaxLength(50) nonCompeteAgreement?: string | null;
+  @IsOptional() @IsString() @MaxLength(50) portraitAgreement?: string | null;
   @IsOptional() @Type(() => Number) @IsInt() @Min(0) @Max(100) sequence?: number;
 
   @IsOptional()

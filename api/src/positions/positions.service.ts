@@ -115,13 +115,20 @@ export class PositionsService {
   }
 
   async update(id: string, dto: UpdatePositionDto, operator: AuthUser) {
+    if (dto.activationRequested !== undefined && dto.activationRequested !== true) {
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message: '启用申请仅接受 true，停用请走停用流程' });
+    }
     const position = await this.prisma.position.findUnique({ where: { id } });
     if (!position) throw this.notFound();
-    const proposedValue = this.normalized({
-      code: dto.code ?? position.code,
-      name: dto.name ?? position.name,
-      jobFamily: dto.jobFamily !== undefined ? dto.jobFamily : position.jobFamily,
-    });
+    const proposedValue = {
+      ...this.normalized({
+        code: dto.code ?? position.code,
+        name: dto.name ?? position.name,
+        jobFamily: dto.jobFamily !== undefined ? dto.jobFamily : position.jobFamily,
+      }),
+      isActive: dto.activationRequested === true ? true : position.isActive,
+      ...(dto.activationRequested === true ? { activationRequested: true } : {}),
+    };
     if (proposedValue.code === position.code
       && proposedValue.name === position.name
       && proposedValue.jobFamily === (position.jobFamily ?? null)
@@ -131,7 +138,8 @@ export class PositionsService {
         message: '未检测到实际变更，无需提交审核',
       });
     }
-    return this.createRequest('update', id, position.name, position, proposedValue, [], operator);
+    return this.createRequest('update', id, position.name, position, proposedValue,
+      dto.activationRequested === true ? ['申请启用岗位，审核通过后生效'] : [], operator);
   }
 
   async deactivate(id: string, operator: AuthUser) {
@@ -224,6 +232,8 @@ export class PositionsService {
               code: this.requiredString(proposed.code, '岗位编码不能为空'),
               name: this.requiredString(proposed.name, '岗位名称不能为空'),
               jobFamily: this.nullableString(proposed.jobFamily),
+              // Legacy update proposals defaulted isActive to true without activation intent.
+              isActive: proposed.activationRequested === true ? true : current.isActive,
             },
           });
         } else if (request.action === 'deactivate') {

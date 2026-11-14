@@ -31,6 +31,7 @@ export class EmployeeReentryFieldsDto {
   @IsOptional() @IsUUID('4') deptId?: string | null;
   @IsOptional() @IsUUID('4') positionId?: string | null;
   @IsOptional() @IsString() @MaxLength(100) position?: string | null;
+  @IsOptional() @IsString() @MaxLength(100) jobFamily?: string | null;
   @IsOptional()
   @IsUUID(undefined, { message: '花名册直属主管信息无效，请重新选择' })
   rosterManagerId?: string | null;

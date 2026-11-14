@@ -51,6 +51,21 @@ function actorInitial(actor?: string) {
       </div>
 
       <p v-if="item.note" class="personnel-process-timeline__note">{{ item.note }}</p>
+      <details v-if="item.differenceStatus" class="personnel-process-timeline__differences">
+        <summary>{{ item.revisionVersion ? `版本 ${item.revisionVersion} · ` : '' }}字段差异{{ item.differenceStatus === '未记录' ? '：未记录' : '' }}</summary>
+        <p v-if="item.differenceStatus === '未记录'">历史版本关联或快照未记录</p>
+        <template v-else>
+          <section v-for="group in item.differences" :key="group.key">
+            <h4>{{ group.title }}</h4>
+            <dl>
+              <div v-for="field in group.fields" :key="field.key">
+                <dt>{{ field.label }}</dt><dd>{{ field.before }} → {{ field.after }}</dd>
+              </div>
+            </dl>
+          </section>
+          <p v-if="!item.differences?.length">未发现可展示的字段差异</p>
+        </template>
+      </details>
       <slot name="step-action" :item="item" />
     </li>
   </ol>
@@ -181,8 +196,16 @@ function actorInitial(actor?: string) {
   line-height: 1.6;
 }
 
+.personnel-process-timeline__differences { margin-top: 10px; min-width: 0; font-size: 13px; }
+.personnel-process-timeline__differences summary { cursor: pointer; color: var(--el-color-primary); line-height: 24px; }
+.personnel-process-timeline__differences h4 { margin: 12px 0 4px; font-size: 13px; }
+.personnel-process-timeline__differences dl { margin: 0; }
+.personnel-process-timeline__differences dl > div { display: grid; grid-template-columns: 120px minmax(0, 1fr); gap: 12px; padding: 7px 0; border-bottom: 1px solid var(--el-border-color-lighter); }
+.personnel-process-timeline__differences dd { margin: 0; color: var(--el-text-color-regular); }
+
 @media (max-width: 640px) {
   .personnel-process-timeline__item { padding-left: 22px; }
   .personnel-process-timeline__detail { align-items: flex-start; flex-direction: column; }
+  .personnel-process-timeline__differences dl > div { grid-template-columns: 1fr; gap: 4px; }
 }
 </style>

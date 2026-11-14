@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { ElMessage, ElMessageBox } from 'element-plus';
+import { RefreshRight } from '@element-plus/icons-vue';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import ChartCard from '@/components/common/ChartCard.vue';
 import ListPagination from '@/components/common/ListPagination.vue';
@@ -20,8 +21,10 @@ const keyword = ref('');
 const includeInactive = ref(false);
 const page = ref(1);
 const pageSize = ref(10);
+const activatingId = ref('');
 const dialog = reactive({ visible: false, editingId: '', name: '', jobFamily: '', saving: false });
 let initialPositionSnapshot = '';
+let loadGeneration = 0;
 
 const pagedItems = computed(() => {
   const start = (page.value - 1) * pageSize.value;
@@ -35,12 +38,15 @@ function positionSnapshot(value: { name: string; jobFamily: string | null }) {
 }
 
 async function load() {
+  const generation = ++loadGeneration;
   loading.value = true;
   try {
-    items.value = await positionsApi.findAll({ keyword: keyword.value || undefined, includeInactive: includeInactive.value });
+    const result = await positionsApi.findAll({ keyword: keyword.value || undefined, includeInactive: includeInactive.value });
+    if (generation !== loadGeneration) return;
+    items.value = result;
     page.value = Math.min(page.value, Math.max(1, Math.ceil(items.value.length / pageSize.value)));
   }
-  finally { loading.value = false; }
+  finally { if (generation === loadGeneration) loading.value = false; }
 }
 function search() { page.value = 1; void load(); }
 function openCreate() { initialPositionSnapshot = ''; Object.assign(dialog, { visible: true, editingId: '', name: '', jobFamily: '' }); }
@@ -68,6 +74,20 @@ async function deactivate(row: PositionRecord) {
   ElMessage.success(result.status === 'approved' ? '岗位已停用' : '已提交停用审核');
   await load();
 }
+async function requestActivation(row: PositionRecord) {
+  if (activatingId.value || row.isActive) return;
+  activatingId.value = row.id;
+  try {
+    await ElMessageBox.confirm(`申请启用岗位“${row.name}”？HR 管理员审核通过后生效，员工与历史任职不变。`, '申请启用岗位', {
+      confirmButtonText: '提交启用审核', cancelButtonText: '取消', type: 'warning',
+    });
+    await positionsApi.update(row.id, { activationRequested: true });
+    ElMessage.success('已提交启用审核，审核通过后生效');
+    await load();
+  } catch (error) {
+    if (error !== 'cancel' && error !== 'close') { /* The HTTP interceptor displays request errors. */ }
+  } finally { activatingId.value = ''; }
+}
 onMounted(load);
 </script>
 
@@ -85,7 +105,7 @@ onMounted(load);
       <el-table v-loading="loading" :data="pagedItems" height="100%" class="app-table">
         <el-table-column prop="name" label="岗位名称" min-width="180" /><el-table-column prop="jobFamily" label="职系" min-width="180"><template #default="{ row }">{{ row.jobFamily || '未分类' }}</template></el-table-column>
         <el-table-column prop="activeEmployeeCount" label="在职人数" width="110" /><el-table-column label="状态" width="100"><template #default="{ row }"><el-tag :type="row.isActive ? 'success' : 'info'">{{ row.isActive ? '启用' : '已停用' }}</el-tag></template></el-table-column>
-        <el-table-column v-if="canMaintain" label="操作" width="160"><template #default="{ row }"><el-button link type="primary" @click="openEdit(row as PositionRecord)">编辑</el-button><el-button v-if="row.isActive" link type="danger" @click="deactivate(row as PositionRecord)">停用</el-button></template></el-table-column>
+        <el-table-column v-if="canMaintain" label="操作" width="180"><template #default="{ row }"><el-button link type="primary" @click="openEdit(row as PositionRecord)">编辑</el-button><el-button v-if="row.isActive" link type="danger" @click="deactivate(row as PositionRecord)">停用</el-button><el-button v-else link type="primary" :icon="RefreshRight" :loading="activatingId === row.id" :disabled="!!activatingId" @click="requestActivation(row as PositionRecord)">申请启用</el-button></template></el-table-column>
       </el-table>
       </div>
       <div v-loading="loading" class="mobile-result-list">
@@ -94,7 +114,7 @@ onMounted(load);
           <template #status><el-tag :type="item.isActive ? 'success' : 'info'" size="small">{{ item.isActive ? '启用' : '已停用' }}</el-tag></template>
           <div class="mobile-result-field"><span class="mobile-result-field__label">职系</span><span class="mobile-result-field__value">{{ item.jobFamily || '未分类' }}</span></div>
           <div class="mobile-result-field"><span class="mobile-result-field__label">在职人数</span><span class="mobile-result-field__value">{{ item.activeEmployeeCount }}</span></div>
-          <template v-if="canMaintain" #actions><el-button link type="primary" @click="openEdit(item)">编辑</el-button><el-button v-if="item.isActive" link type="danger" @click="deactivate(item)">停用</el-button></template>
+          <template v-if="canMaintain" #actions><el-button link type="primary" @click="openEdit(item)">编辑</el-button><el-button v-if="item.isActive" link type="danger" @click="deactivate(item)">停用</el-button><el-button v-else link type="primary" :icon="RefreshRight" :loading="activatingId === item.id" :disabled="!!activatingId" @click="requestActivation(item)">申请启用</el-button></template>
         </MobileResultCard>
       </div>
       <ListPagination v-model:current-page="page" v-model:page-size="pageSize" :total="items.length" />

@@ -755,7 +755,7 @@ function unfinishedArchiveChange(archive: EmployeeArchive) {
 
 async function startArchiveEdit(reload = false) {
   const current = employeeArchiveDrawer.value.data;
-  if (!current || !canEditArchive.value || archiveReadOnly.value || archiveEntryLoading.value
+  if (!current || !canEditArchive.value || archiveReadOnly.value || archiveEntryLoading.value || archiveEditSaving.value
     || (archiveEditing.value && !reload)) return;
   const generation = ++archiveLoadGeneration;
   archiveEntryLoading.value = true;
@@ -1382,13 +1382,14 @@ function afterEmployeeSubmitted(requestId: string) {
   void openSubmittedApplication(requestId);
 }
 
-function afterEmploymentSubmitted() {
+function afterEmploymentSubmitted(requestId?: string) {
   if (employmentRecordDrawerMode.value !== 'resignation') {
     employeeArchiveDrawer.value.visible = false;
     employmentRecordDrawerArchive.value = null;
     employmentRecordDrawerMode.value = 'default';
   }
   void Promise.all([loadUsers(), loadApplications()]);
+  if (requestId) void openSubmittedApplication(requestId);
 }
 
 function afterReentrySubmitted(requestId?: string) {
@@ -2619,7 +2620,7 @@ onBeforeUnmount(() => {
               </p>
             </div>
             <div v-if="canEditArchive && !archiveReadOnly && !archiveEditing && !archivePendingRequest" class="employee-archive__global-actions">
-              <el-button type="primary" :loading="archiveEntryLoading" @click="startArchiveEdit()">编辑档案</el-button>
+              <el-button type="primary" :loading="archiveEntryLoading" :disabled="archiveEditSaving" @click="startArchiveEdit()">编辑档案</el-button>
             </div>
           </div>
           <aside v-if="archiveIssueContext" class="archive-issue-context" role="note" aria-label="正在核实事项">
@@ -2860,8 +2861,7 @@ onBeforeUnmount(() => {
             <el-empty v-else description="暂无合同记录" :image-size="64" />
           </section>
           <section v-if="!archiveEditing && archiveSection === 'changes'" class="employee-archive__section">
-            <EmployeeChangeHistory :requests="employeeArchiveDrawer.data.changeHistory ?? []" />
-            <el-collapse v-if="employeeArchiveDrawer.data.archiveEvents?.length"><el-collapse-item title="归档与恢复记录"><el-timeline><el-timeline-item v-for="event in employeeArchiveDrawer.data.archiveEvents" :key="event.id" :timestamp="formatDateTime(event.createdAt)">{{ /restore|unarchive/.test(event.action) ? '取消归档' : '归档' }} · {{ event.user?.name || '系统' }}</el-timeline-item></el-timeline></el-collapse-item></el-collapse>
+            <EmployeeChangeHistory :requests="employeeArchiveDrawer.data.changeHistory ?? []" :events="employeeArchiveDrawer.data.archiveEvents ?? []" />
           </section>
         </template>
       </div>

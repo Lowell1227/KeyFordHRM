@@ -819,12 +819,14 @@ describe('EmployeeDataReviewsService', () => {
   it('HR补充绩效直属上级后清除该条阻断原因', async () => {
     const request = {
       id: 'review-missing-manager',
+      requestVersion: 1, updatedAt: new Date('2026-11-14T00:00:00Z'), baseValue: {}, revisionHistory: [],
       performanceReviewStatus: 'pending',
       proposedValue: { employee: { name: '员工一' }, performance: { managerName: null } },
       validationErrors: ['绩效直属上级待设置', '其他基础档案提醒'],
     };
     const update = jest.fn().mockResolvedValue({ id: request.id, performanceReviewStatus: 'pending' });
     const prisma = {
+      $transaction: jest.fn(async run => run({ employeeDataChangeRequest: { update } })),
       employeeDataChangeRequest: {
         findUnique: jest.fn().mockResolvedValue(request),
         update,
@@ -838,8 +840,12 @@ describe('EmployeeDataReviewsService', () => {
     await service.setPendingPerformanceManager('review-missing-manager', 'manager-1', operator);
 
     expect(update).toHaveBeenCalledWith({
-      where: { id: 'review-missing-manager' },
+      where: { id: 'review-missing-manager', requestVersion: 1, updatedAt: request.updatedAt,
+        performanceReviewStatus: 'pending', cancelledAt: null, archivedAt: null },
       data: {
+        requestVersion: { increment: 1 },
+        revisionHistory: [expect.objectContaining({ version: 1, baseValue: {}, proposedValue: request.proposedValue,
+          revisedById: 'hr-1', updatedAt: request.updatedAt.toISOString() })],
         proposedValue: {
           employee: { name: '员工一' },
           performance: { managerName: '主管一', managerId: 'manager-1' },

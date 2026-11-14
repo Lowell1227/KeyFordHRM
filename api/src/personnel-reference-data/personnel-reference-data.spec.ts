@@ -116,6 +116,14 @@ describe('personnel reference data scope in guard and service', () => {
       for (const [kind, readable] of [
         ['work_location', workRead],
         ['job_family', jobRead],
+        ['job_grade', workRead],
+        ['education', workRead],
+        ['marital_status', workRead],
+        ['political_status', workRead],
+        ['household_type', workRead],
+        ['contact_relation', workRead],
+        ['bank_name', workRead],
+        ['contract_name', workRead],
       ] as const) {
         const service = new PersonnelReferenceDataService({
           personnelReferenceData: { findMany: async () => [] },
@@ -253,6 +261,41 @@ describe('personnel reference data writes', () => {
       }),
     ]);
   });
+  it.each([
+    ['job_grade', 30], ['education', 50], ['marital_status', 30],
+    ['political_status', 50], ['household_type', 50], ['contact_relation', 50],
+    ['bank_name', 100], ['contract_name', 100],
+  ])('enforces the writable field length for %s', async (kind: string, limit: number) => {
+    const name = 'A'.repeat(limit);
+    await expect(service.create(kind, { name: ` ${name} ` }, actor())).resolves.toMatchObject({ kind, name });
+    await expect(service.create(kind, { name: `${name}X` }, actor())).rejects.toThrow(BadRequestException);
+    await expect(service.update(kind, id, { name: `${name}X` }, actor())).rejects.toThrow(BadRequestException);
+    await expect(service.update(kind, id, { isActive: false }, actor())).resolves.toMatchObject({ name, isActive: false });
+    expect(await service.findAll(kind, {}, actor())).toEqual([]);
+    expect(await service.findAll(kind, { includeInactive: true }, actor())).toHaveLength(1);
+  });
+  it.each(['employment_type', 'contract_type', 'sys_role', '__proto__', 'constructor'])('rejects non-directory kind %s', async kind => {
+    await expect(service.findAll(kind, {}, actor())).rejects.toThrow(BadRequestException);
+    expect(rows).toEqual([]);
+  });
+  it.each(['19900000000', '+86 199-0000-0000', '008619900000000', '000000000000000',
+    '000000000000000000', '00000000000000000X', '00000000000000000x'])
+    ('rejects identifier-shaped directory names without echoing the input (case %#)', async name => {
+      rows = [{ ...before, kind: 'political_status' }];
+      for (const operation of [
+        () => service.create('political_status', { name }, actor()),
+        () => service.update('political_status', id, { name }, actor()),
+      ]) {
+        let caught: unknown;
+        try { await operation(); } catch (error) { caught = error; }
+        expect(caught).toBeInstanceOf(BadRequestException);
+        const response = (caught as BadRequestException).getResponse();
+        expect(response).toMatchObject({ data: { fieldErrors: { name: expect.any(String) } } });
+        expect(JSON.stringify(response)).not.toContain(name);
+      }
+      expect(rows).toEqual([{ ...before, kind: 'political_status' }]);
+      expect(audits).toEqual([]);
+    });
   it('updates the requested kind and records before and after snapshots', async () => {
     rows = [before];
     expect(

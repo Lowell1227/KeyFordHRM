@@ -25,6 +25,27 @@ const SENSITIVE_PROFILE_KEYS = new Set([
   'initializationPreviousEncrypted',
 ]);
 
+const SAFE_CHANGED_FIELDS = new Set(['profile.idNumber', 'profile.bankAccount']);
+const asRecord = (value: unknown): Record<string, unknown> =>
+  value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : {};
+
+export function sensitiveChangedFields(before: unknown, after: unknown): string[] {
+  const left = asRecord(asRecord(before).profile);
+  const right = asRecord(asRecord(after).profile);
+  return ['idNumber', 'bankAccount'].filter(field => {
+    const key = `${field}Fingerprint`;
+    // Ciphertext can change without the value changing; only comparable fingerprints prove replacement.
+    return Object.prototype.hasOwnProperty.call(left, key) && Object.prototype.hasOwnProperty.call(right, key)
+      && left[key] !== right[key];
+  }).map(field => `profile.${field}`);
+}
+
+function hasSensitiveComparison(before: unknown, after: unknown): boolean {
+  const left = asRecord(asRecord(before).profile), right = asRecord(asRecord(after).profile);
+  return ['idNumberFingerprint', 'bankAccountFingerprint'].some(key =>
+    Object.prototype.hasOwnProperty.call(left, key) && Object.prototype.hasOwnProperty.call(right, key));
+}
+
 function sanitizeJson(value: unknown): unknown {
   if (value instanceof Date) return value;
   if (Array.isArray(value)) return value.map(sanitizeJson);
@@ -41,8 +62,16 @@ function sanitizeJson(value: unknown): unknown {
 
   for (const [key, item] of Object.entries(source)) {
     if (SENSITIVE_PROFILE_KEYS.has(key)) continue;
+    if (key === 'changedFields') continue;
     result[key] = sanitizeJson(item);
   }
+  const changedFields = [...new Set([
+    ...(Array.isArray(source.changedFields) ? source.changedFields.filter(field => SAFE_CHANGED_FIELDS.has(field)) : []),
+    ...sensitiveChangedFields(source.baseValue, source.proposedValue),
+    ...sensitiveChangedFields(source.oldValue, source.newValue),
+  ])];
+  if (changedFields.length || 'changedFields' in source || hasSensitiveComparison(source.baseValue, source.proposedValue)
+    || hasSensitiveComparison(source.oldValue, source.newValue)) result.changedFields = changedFields;
   if ('idNumberConfigured' in source || 'idNumberEncrypted' in source || 'idNumberFingerprint' in source) {
     result.idNumberConfigured = idNumberConfigured;
   }

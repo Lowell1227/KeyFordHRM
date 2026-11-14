@@ -103,7 +103,8 @@ function setup(intakeType: 'new_hire' | 'reentry' = 'new_hire') {
       if (!matches(user, where)) return { count: 0 }; apply(user, data); return { count: 1 };
     }), create: jest.fn() },
     department: { findUnique: jest.fn(async ({ where }) => ({ id: where.id, isActive: true })) },
-    position: { findUnique: jest.fn(async ({ where }) => ({ id: where.id, name: 'Original position', isActive: true })) },
+    position: { findUnique: jest.fn(async ({ where }) => ({ id: where.id,
+      name: where.id === 'p2' ? 'New position' : 'Original position', jobFamily: null, isActive: true })) },
     contractSubject: { findUnique: jest.fn(async () => ({ id: subjectId, name: 'Synthetic subject', isActive: true, internalCompany: CompanyCode.beijing_fuede })) },
     employeeContract: { findMany: jest.fn(async () => []) },
     employeeProfile: { upsert: jest.fn() },
@@ -128,6 +129,29 @@ function setup(intakeType: 'new_hire' | 'reentry' = 'new_hire') {
 describe('onboarding revision and cancelled-arrival recovery', () => {
   beforeEach(() => jest.useFakeTimers().setSystemTime(new Date('2026-11-12T03:00:00Z')));
   afterEach(() => jest.useRealTimers());
+
+  it('retains both return reasons and their exact version snapshots across resubmission', async () => {
+    const f = setup('reentry');
+    await f.reopen();
+    const input = { company: CompanyCode.fuede, deptId: 'd1', position: 'Round one',
+      effectiveDate: new Date('2026-11-11'), employeeStatus: UserStatus.probation, employmentType: EmploymentType.full_time };
+    const firstVersion = f.request.requestVersion;
+    const firstBase = structuredClone(f.request.baseValue);
+    await f.reviews.rejectBatch(['r1'], 'First correction', reviewer);
+    await f.onboarding.reviseReentry('r1', input, editor.id);
+    const secondVersion = f.request.requestVersion;
+    await f.reviews.rejectBatch(['r1'], 'Second correction', reviewer);
+    await f.onboarding.reviseReentry('r1', { ...input, position: 'Round two' }, editor.id);
+    expect(f.request.revisionHistory.find((item: any) => item.version === firstVersion)).toMatchObject({
+      rejectedReason: 'First correction', baseValue: firstBase,
+    });
+    expect(f.request.revisionHistory.find((item: any) => item.version === secondVersion)).toMatchObject({
+      rejectedReason: 'Second correction', proposedValue: { employee: { position: 'Round one' } },
+    });
+    expect(f.audit.filter(item => item.action === 'reject_employee_data_change').map(item => item.newValue))
+      .toEqual([{ reason: 'First correction', requestVersion: firstVersion },
+        { reason: 'Second correction', requestVersion: secondVersion }]);
+  });
 
   it.each(['remapped', 'unmapped', 'inactive'])('keeps the reviewed same-subject company through repeated revisions and approval: %s', async directoryState => {
     const f = setup('reentry');

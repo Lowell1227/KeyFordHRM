@@ -4,9 +4,10 @@ import { SysRole } from '@prisma/client';
 const operator = { id: 'hr', sysRole: SysRole.hr } as any;
 describe('archive contract subject references', () => {
   const fixture = (id: string | null = null) => {
-    const current = { id: 'user', employeeNo: '001', name: '测试', status: 'active', directManagerId: null,
+    const current = { id: 'user', employeeNo: '001', name: '测试', status: 'active', directManagerId: null, updatedAt: new Date('2026-01-01'),
       employeeProfile: null, employeeContracts: [], employmentHistory: [{ company: 'fuede', companyText: '原名', contractSubjectId: id }] };
-    const prisma = { $transaction: jest.fn(async callback => callback(prisma)), user: { findUnique: jest.fn().mockResolvedValue(current) }, auditLog: { create: jest.fn() },
+    const prisma = { $transaction: jest.fn(async callback => callback(prisma)), user: { findUnique: jest.fn().mockResolvedValue(current),
+      update: jest.fn(async ({ data }) => Object.assign(current, data)) }, auditLog: { create: jest.fn() },
       contractSubject: { findUnique: jest.fn().mockResolvedValue({ id: '11111111-1111-4111-8111-111111111111', name: '服务器名称', isActive: true, internalCompany: 'fansibao' }) },
       employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn(async ({ data }) => ({ id: 'request-1', ...data })) } };
     // These tests own proposal normalization; transaction application has its own dedicated suite.

@@ -6,6 +6,7 @@ import ContractSubjectManageView from './ContractSubjectManageView.vue';
 import PersonnelReferenceManageView from './PersonnelReferenceManageView.vue';
 import PositionDirectoryView from './PositionDirectoryView.vue';
 import { canReadPersonnelReferenceData } from '@/utils/personnel-reference-permissions';
+import { archiveReferenceKinds, personnelReferenceKinds } from '@/utils/personnel-reference-kinds';
 
 const auth = useAuthStore();
 const route = useRoute();
@@ -16,15 +17,19 @@ const choices = [
   { key: 'work-locations', label: '工作地点', component: markRaw(PersonnelReferenceManageView), kind: 'work_location' as const },
   { key: 'job-families', label: '职系', component: markRaw(PersonnelReferenceManageView), kind: 'job_family' as const },
   { key: 'positions', label: '岗位', component: markRaw(PositionDirectoryView), kind: 'job_family' as const },
+  { key: 'education', label: '档案选项', component: markRaw(PersonnelReferenceManageView), kind: 'education' as const },
 ];
 const tabs = computed(() => choices.filter(item => canReadPersonnelReferenceData(auth.user, item.kind)));
-const active = computed(() => tabs.value.find(item => item.key === route.query.tab) ?? tabs.value[0]);
+const archiveOptions = computed(() => archiveReferenceKinds.filter(kind => canReadPersonnelReferenceData(auth.user, kind)));
+const archiveKind = computed(() => archiveOptions.value.find(kind => personnelReferenceKinds[kind].tab === route.query.tab));
+const active = computed(() => tabs.value.find(item => item.key === (archiveKind.value ? 'education' : route.query.tab)) ?? tabs.value[0]);
+const panelKind = computed(() => archiveKind.value ?? active.value?.kind ?? 'work_location');
 watch([() => route.query.tab, () => active.value?.key], () => {
-  const key = active.value?.key;
+  const key = archiveKind.value ? personnelReferenceKinds[archiveKind.value].tab : active.value?.key;
   if (key && route.query.tab !== key) void router.replace({ path: '/basic-data', query: { ...route.query, tab: key } });
 }, { immediate: true });
 async function activate(key: string) {
-  if (active.value?.key !== key) await router.push({ path: '/basic-data', query: { ...route.query, tab: key } });
+  if (route.query.tab !== key) await router.push({ path: '/basic-data', query: { ...route.query, tab: key } });
 }
 async function moveTab(event: KeyboardEvent, index: number) {
   const offset = event.key === 'ArrowRight' ? 1 : event.key === 'ArrowLeft' ? -1 : 0;
@@ -47,8 +52,13 @@ async function moveTab(event: KeyboardEvent, index: number) {
         {{ tab.label }}
       </button>
     </nav>
+    <div v-if="active?.key === 'education'" class="basic-data__category">
+      <el-select :model-value="panelKind" aria-label="资料类别" @update:model-value="kind => activate(personnelReferenceKinds[kind as keyof typeof personnelReferenceKinds].tab)">
+        <el-option v-for="kind in archiveOptions" :key="kind" :label="personnelReferenceKinds[kind].label" :value="kind" />
+      </el-select>
+    </div>
     <div id="basic-data-panel" class="basic-data__panel" role="tabpanel" :aria-labelledby="active ? `basic-data-tab-${active.key}` : undefined">
-      <KeepAlive><component :is="active.component" v-if="active" :key="active.key" :kind="active.kind" :compact="true" /></KeepAlive>
+      <KeepAlive><component :is="active.component" v-if="active" :key="active.key + ':' + panelKind" :kind="panelKind" :compact="true" /></KeepAlive>
       <el-empty v-if="!active" description="暂无可查看的基础资料" />
     </div>
   </section>
@@ -62,5 +72,6 @@ async function moveTab(event: KeyboardEvent, index: number) {
 .basic-data__tabs button:focus-visible { outline: 2px solid var(--el-color-primary); outline-offset: -2px; border-radius: 3px; }
 .basic-data__panel { flex: 1 1 auto; display: flex; min-height: 0; min-width: 0; }
 .basic-data__panel > :deep(*) { width: 100%; min-width: 0; }
+.basic-data__category { flex: 0 0 auto; width: 220px; max-width: 100%; }
 @media (max-width: 768px) { .basic-data { gap: 10px; } .basic-data__tabs { gap: 20px; } .basic-data__tabs button { padding-bottom: 10px; } }
 </style>

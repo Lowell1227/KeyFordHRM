@@ -58,6 +58,10 @@ function row(rowNumber: number, employeeNo: string, name: string): ParsedEmploye
 
 const hrOperator = { id: 'hr-1', name: 'HR', sysRole: SysRole.hr, deptId: null, isAssessorOnly: false, canViewAll: true };
 
+const gradeDirectory = () => ({ findMany: jest.fn(async ({ where }) =>
+  [{ kind: 'job_grade', name: 'P4', isActive: true }].filter(option => option.isActive === where.isActive
+    && where.OR.some((query: any) => query.kind === option.kind && query.name === option.name))) });
+
 function confirmationFor(parsed: ParsedEmployeeRosterRow) {
   const current = { employeeNo: '001', name: '员工甲', phone: null, deptId: 'dept-project', position: parsed.employee.position,
     entryDate: parsed.employee.entryDate, plannedRegularDate: null, actualRegularDate: null, leaveDate: null,
@@ -67,6 +71,7 @@ function confirmationFor(parsed: ParsedEmployeeRosterRow) {
       directManager: null, workLocation: '杭州', probationMonths: null }],
   };
   const tx = {
+    employmentRecord: { findFirst: jest.fn(async () => current.employmentHistory[0]) },
     employeeImportBatch: { updateMany: jest.fn().mockResolvedValue({ count: 1 }), update: jest.fn() },
     employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: jest.fn(async (value: any) => value.data) },
     user: { findUnique: jest.fn().mockResolvedValue(current) }, auditLog: { create: jest.fn() },
@@ -82,7 +87,145 @@ function confirmationFor(parsed: ParsedEmployeeRosterRow) {
   return { service, tx, current };
 }
 
+// Evaluate only the Prisma predicates used by this fixture; dates remain calendar-day labels.
+function matchesReferenceWhere(value: any, where: any): boolean {
+  if (where === null || typeof where !== 'object') return value === where;
+  return Object.entries(where).every(([key, condition]: [string, any]) => {
+    if (key === 'AND') return condition.every((part: any) => matchesReferenceWhere(value, part));
+    if (key === 'OR') return condition.some((part: any) => matchesReferenceWhere(value, part));
+    if (key === 'lte') return value != null && value <= condition;
+    if (key === 'gte') return value != null && value >= condition;
+    if (key === 'not') return !matchesReferenceWhere(value, condition);
+    return value != null && matchesReferenceWhere(value[key], condition);
+  });
+}
+
+describe('roster directory validation uses only formal employment on the Shanghai business date', () => {
+  const scenarios = [
+    { label: 'pending approval cannot exempt an unknown grade', source: { profileReviewStatus: 'pending' }, allowed: false },
+    { label: 'cancelled onboarding cannot exempt an unknown grade', source: { onboardingStatus: 'cancelled' }, allowed: false },
+    { label: 'pending arrival cannot exempt an unknown grade', source: { requiresArrivalConfirmation: true, arrivalConfirmedAt: null, onboardingStatus: 'pending_entry' }, allowed: false },
+    { label: 'approved employment ending today remains a formal baseline', end: '2026-11-14', allowed: true },
+    { label: 'Shanghai next-day employment is active before UTC midnight', now: '2026-11-14T16:30:00Z', start: '2026-11-15', allowed: true },
+    { label: 'approved employment ending yesterday is not a baseline', end: '2026-11-13', allowed: false },
+    { label: 'approved future employment is not a baseline', start: '2026-11-15', allowed: false },
+    { label: 'legacy employment without a request remains a baseline', legacy: true, allowed: true },
+  ];
+  afterEach(() => jest.useRealTimers());
+
+  it.each(scenarios.flatMap(scenario => ['preview', 'confirmation'].map(stage => ({ ...scenario, stage }))))
+    ('$stage: $label', async scenario => {
+    const { stage } = scenario;
+    const item = scenario as typeof scenario & { now?: string; start?: string; end?: string; source?: object; legacy?: boolean };
+    jest.useFakeTimers().setSystemTime(new Date(item.now ?? '2026-11-14T12:00:00Z'));
+    const employment = { userId: 'employee-1', jobGrade: 'Unmaintained', company: 'fuede', companyText: 'Original',
+      jobFamily: 'Original family', effectiveFrom: new Date(`${item.start ?? '2026-01-01'}T00:00:00Z`),
+      effectiveTo: item.end ? new Date(`${item.end}T00:00:00Z`) : null,
+      sourceRequestId: item.legacy ? null : 'request-1', sourceRequest: item.legacy ? null : {
+        profileReviewStatus: 'approved', onboardingStatus: null, requiresArrivalConfirmation: false,
+        arrivalConfirmedAt: null, ...item.source,
+      } };
+    const selectEmployment = (where: any) => matchesReferenceWhere(employment, where) ? [employment] : [];
+    const parsed = row(2, '001', 'Synthetic');
+    parsed.employee.jobGrade = 'Unmaintained';
+    const prisma = {
+      user: { findMany: jest.fn(async ({ select }) => [{ id: 'employee-1', employeeNo: '001', name: 'Synthetic',
+        deptId: 'dept-project', status: 'active', dept: { name: '项目中心', fullPath: '项目中心' },
+        employeeProfile: null, employmentHistory: selectEmployment(select.employmentHistory.where) }]) },
+      department: { findMany: jest.fn().mockResolvedValue([]) },
+      personnelReferenceData: { findMany: jest.fn().mockResolvedValue([]) },
+      employeeImportBatch: { create: jest.fn().mockResolvedValue({ id: 'batch' }), update: jest.fn() },
+      employeeImportRow: { createMany: jest.fn() },
+    };
+    if (stage === 'preview') {
+      const result = await new EmployeeRosterImportService(prisma as any).createPreviewFromRows([parsed],
+        { mode: 'full', fileName: 'synthetic.xlsx', fileHash: 'hash' }, hrOperator);
+      expect(result.canConfirm).toBe(item.allowed);
+      expect(result.summary.blockingErrorCount).toBe(item.allowed ? 0 : 1);
+      return;
+    }
+
+    const { service, tx, current } = confirmationFor(parsed);
+    tx.user.findUnique.mockImplementation(async ({ select }: any) => ({ ...current,
+      employmentHistory: selectEmployment(select.employmentHistory.where) }));
+    Object.assign(tx, { personnelReferenceData: { findMany: jest.fn().mockResolvedValue([]) },
+      employmentRecord: { findFirst: jest.fn(async ({ where }) => selectEmployment(where)[0] ?? null) } });
+    const confirm = service.confirmFromRows('batch-raw', [parsed], 'hash-raw', hrOperator);
+    if (item.allowed) await expect(confirm).resolves.toMatchObject({ submitted: 1 });
+    else {
+      await expect(confirm).rejects.toMatchObject({ response: { data: { fieldErrors: { 'employee.jobGrade': expect.any(String) } } } });
+      expect(tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
+    }
+    expect(tx.user.findUnique.mock.calls[0][0].select.employmentHistory.where).toEqual({
+      effectiveFrom: { lte: new Date() }, OR: [{ effectiveTo: null }, { effectiveTo: { gte: new Date() } }],
+    });
+  });
+});
+
 describe('EmployeeRosterImportService', () => {
+  it('blocks unmaintained directory values in preview without echoing their raw contents', async () => {
+    const persisted: any[] = [];
+    const prisma = {
+      personnelReferenceData: { findMany: jest.fn().mockResolvedValue([]) },
+      user: { findMany: jest.fn().mockResolvedValue([]) },
+      department: { findMany: jest.fn().mockResolvedValue([]) },
+      employeeImportBatch: { create: jest.fn().mockResolvedValue({ id: 'batch' }), update: jest.fn() },
+      employeeImportRow: { createMany: jest.fn(async ({ data }) => persisted.push(...data)) },
+    };
+    const service = new EmployeeRosterImportService(prisma as any);
+    const parsed = row(2, '001', 'Synthetic');
+    parsed.profile.education = 'SYNTHETIC-UNMAINTAINED';
+    const result = await service.createPreviewFromRows([parsed], { mode: 'full', fileName: 'synthetic.xlsx', fileHash: 'hash' }, hrOperator);
+    expect(result).toMatchObject({ canConfirm: false, summary: { blockingErrorCount: 1 } });
+    expect(persisted[0]).toMatchObject({ action: 'blocked', errors: expect.arrayContaining([
+      expect.stringContaining('职级'), expect.stringContaining('学历'),
+    ]) });
+    expect(JSON.stringify(persisted[0].errors)).not.toContain('SYNTHETIC-UNMAINTAINED');
+  });
+
+  it('revalidates directory values on confirmation when an option was disabled after preview', async () => {
+    const parsed = row(2, '001', 'Synthetic');
+    parsed.employee.jobGrade = 'New grade';
+    const { service, tx } = confirmationFor(parsed);
+    Object.assign(tx, { personnelReferenceData: { findMany: jest.fn().mockResolvedValue([]) } });
+    await expect(service.confirmFromRows('batch-raw', [parsed], 'hash-raw', hrOperator))
+      .rejects.toMatchObject({ response: { data: { fieldErrors: { 'employee.jobGrade': expect.any(String) } } } });
+    expect(tx.employeeDataChangeRequest.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps unchanged unmaintained historical options eligible in preview', async () => {
+    const parsed = row(2, '001', 'Synthetic');
+    parsed.profile.education = 'Historical';
+    const persisted: any[] = [];
+    const prisma = {
+      user: { findMany: jest.fn().mockResolvedValue([{ id: 'employee-1', employeeNo: '001', name: 'Synthetic',
+        deptId: 'dept-project', status: 'active', dept: { name: '项目中心', fullPath: '项目中心' },
+        employmentHistory: [{ jobGrade: 'P4' }], employeeProfile: { education: 'Historical' } }]) },
+      department: { findMany: jest.fn().mockResolvedValue([]) },
+      personnelReferenceData: { findMany: jest.fn().mockResolvedValue([]) },
+      employeeImportBatch: { create: jest.fn().mockResolvedValue({ id: 'batch' }), update: jest.fn() },
+      employeeImportRow: { createMany: jest.fn(async ({ data }) => persisted.push(...data)) },
+    };
+    const result = await new EmployeeRosterImportService(prisma as any).createPreviewFromRows([parsed],
+      { mode: 'full', fileName: 'synthetic.xlsx', fileHash: 'hash' }, hrOperator);
+    expect(result).toMatchObject({ canConfirm: true, summary: { blockingErrorCount: 0, updateCount: 1 } });
+    expect(persisted[0].normalizedValue).toMatchObject({ employee: { jobGrade: 'P4' }, profile: { education: 'Historical' } });
+    expect(prisma.personnelReferenceData.findMany).not.toHaveBeenCalled();
+  });
+
+  it('retains unchanged historical grade and profile options during confirmation', async () => {
+    const parsed = row(2, '001', 'Synthetic');
+    parsed.profile.education = 'Historical';
+    const { service, tx, current } = confirmationFor(parsed);
+    Object.assign(current, { employeeProfile: { education: 'Historical' } });
+    const findMany = jest.fn().mockResolvedValue([]);
+    Object.assign(tx, { personnelReferenceData: { findMany } });
+    await expect(service.confirmFromRows('batch-raw', [parsed], 'hash-raw', hrOperator)).resolves.toMatchObject({ submitted: 1 });
+    expect(tx.employeeDataChangeRequest.create.mock.calls[0][0].data.proposedValue)
+      .toMatchObject({ employee: { jobGrade: 'P4' }, profile: { education: 'Historical' } });
+    expect(findMany).not.toHaveBeenCalled();
+  });
+
   it.each([null, '实际签约公司'])('导入不从员工所属公司推定合同签约公司：%s', async (signingCompany) => {
     const parsed = row(2, '001', '员工甲');
     parsed.contracts = [{ sequence: 0, kind: 'contract', name: '劳动合同', signingCompany,
@@ -138,6 +281,7 @@ describe('EmployeeRosterImportService', () => {
   it('花名册中的待入职状态映射为数据库待入职状态', async () => {
     const persistedRows: any[] = [];
     const prisma = {
+      personnelReferenceData: gradeDirectory(),
       user: { findMany: jest.fn().mockResolvedValue([]) },
       department: { findMany: jest.fn().mockResolvedValue([]) },
       employeeImportBatch: {
@@ -170,6 +314,7 @@ describe('EmployeeRosterImportService', () => {
   it('全量预检以花名册生成组织方案，缺少现有部门时不阻断确认', async () => {
     const persistedRows: any[] = [];
     const prisma = {
+      personnelReferenceData: gradeDirectory(),
       user: { findMany: jest.fn().mockResolvedValue([]) },
       department: { findMany: jest.fn().mockResolvedValue([]) },
       employeeImportBatch: {
@@ -207,6 +352,7 @@ describe('EmployeeRosterImportService', () => {
   it('存量员工工号为空时按唯一姓名和部门匹配，避免创建重复人员', async () => {
     const persistedRows: any[] = [];
     const prisma = {
+      personnelReferenceData: gradeDirectory(),
       user: {
         findMany: jest.fn().mockResolvedValue([{
           id: 'legacy-wang', employeeNo: null, name: '王琳', position: '平面设计师',
@@ -247,6 +393,7 @@ describe('EmployeeRosterImportService', () => {
 
   it('同工号姓名变化且账号已绑定钉钉时阻断导入，避免把真实身份换给另一人', async () => {
     const prisma = {
+      personnelReferenceData: gradeDirectory(),
       user: {
         findMany: jest.fn().mockResolvedValue([{
           id: 'bound-user', employeeNo: '001', name: '原姓名', position: '专员',
@@ -277,6 +424,7 @@ describe('EmployeeRosterImportService', () => {
   it('全量预检只保存批次差异，不写员工正式数据，并把文件缺行列为疑似离职', async () => {
     const persistedRows: any[] = [];
     const prisma = {
+      personnelReferenceData: gradeDirectory(),
       user: {
         findMany: jest.fn().mockResolvedValue([
           { id: 'user-001', employeeNo: '001', name: '李宏' },
@@ -348,6 +496,7 @@ describe('EmployeeRosterImportService', () => {
   it('全量预检不把已离职账号再次列为疑似离职', async () => {
     const persistedRows: any[] = [];
     const prisma = {
+      personnelReferenceData: gradeDirectory(),
       user: {
         findMany: jest.fn().mockResolvedValue([
           { id: 'user-001', employeeNo: '001', name: '李宏', deptId: 'dept-project', status: 'active' },
@@ -390,6 +539,7 @@ describe('EmployeeRosterImportService', () => {
 
   it('重复工号是阻断项，不能确认导入', async () => {
     const prisma = {
+      personnelReferenceData: gradeDirectory(),
       user: { findMany: jest.fn().mockResolvedValue([]) },
       department: { findMany: jest.fn().mockResolvedValue([]) },
       employeeImportBatch: {
@@ -414,6 +564,7 @@ describe('EmployeeRosterImportService', () => {
 
   it('组织路径唯一时直接匹配，部门元数据中的公司编码不影响员工公司', async () => {
     const prisma = {
+      personnelReferenceData: gradeDirectory(),
       user: { findMany: jest.fn().mockResolvedValue([]) },
       department: {
         findMany: jest.fn().mockResolvedValue([
@@ -447,6 +598,7 @@ describe('EmployeeRosterImportService', () => {
   it('所属公司为空时不能从合并后的部门元数据反推公司', async () => {
     const persistedRows: any[] = [];
     const prisma = {
+      personnelReferenceData: gradeDirectory(),
       user: { findMany: jest.fn().mockResolvedValue([]) },
       department: {
         findMany: jest.fn().mockResolvedValue([
@@ -489,6 +641,7 @@ describe('EmployeeRosterImportService', () => {
   it('HRM 存在同名部门时，存量员工沿用自己的当前部门并列为提醒', async () => {
     const persistedRows: any[] = [];
     const prisma = {
+      personnelReferenceData: gradeDirectory(),
       user: {
         findMany: jest.fn().mockResolvedValue([
           { id: 'user-001', employeeNo: '001', name: '李宏', deptId: 'dept-current' },
@@ -532,6 +685,7 @@ describe('EmployeeRosterImportService', () => {
 
   it('直属上级无法按花名册或现有工号员工唯一匹配时阻断确认', async () => {
     const prisma = {
+      personnelReferenceData: gradeDirectory(),
       user: { findMany: jest.fn().mockResolvedValue([]) },
       department: {
         findMany: jest.fn().mockResolvedValue([
@@ -564,6 +718,7 @@ describe('EmployeeRosterImportService', () => {
   it('同一花名册中有无效员工时仍允许提交其他有效员工', async () => {
     const persistedRows: any[] = [];
     const prisma = {
+      personnelReferenceData: gradeDirectory(),
       user: { findMany: jest.fn().mockResolvedValue([]) },
       department: { findMany: jest.fn().mockResolvedValue([]) },
       employeeImportBatch: {
@@ -622,6 +777,7 @@ describe('EmployeeRosterImportService', () => {
       portraitAgreement: '已签',
     }];
     const tx = {
+      personnelReferenceData: gradeDirectory(),
       employeeImportBatch: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn().mockResolvedValue({ id: 'batch-3', status: 'pending_review' }),
@@ -711,6 +867,8 @@ describe('EmployeeRosterImportService', () => {
     const reviewCreate = jest.fn().mockResolvedValue({ id: 'review-existing' });
     const officialUserUpdate = jest.fn();
     const tx = {
+      personnelReferenceData: gradeDirectory(),
+      employmentRecord: { findFirst: jest.fn().mockResolvedValue(null) },
       employeeImportBatch: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn().mockResolvedValue({ id: 'batch-existing', status: 'pending_review' }),
@@ -783,6 +941,7 @@ describe('EmployeeRosterImportService', () => {
     const today = new Date('2026-08-24T00:00:00.000Z');
     const reviewCreate = jest.fn();
     const tx = {
+      employmentRecord: { findFirst: jest.fn().mockResolvedValue({ jobGrade: 'P4' }) },
       employeeImportBatch: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn(async ({ data }: any) => ({ id: 'batch-unchanged', ...data })),
@@ -858,6 +1017,7 @@ describe('EmployeeRosterImportService', () => {
       .mockResolvedValueOnce({ id: 'department-create-review' })
       .mockResolvedValueOnce({ id: 'department-delete-review' });
     const tx = {
+      personnelReferenceData: gradeDirectory(),
       employeeImportBatch: {
         updateMany: jest.fn().mockResolvedValue({ count: 1 }),
         update: jest.fn().mockResolvedValue({ id: 'batch-full', status: 'completed' }),

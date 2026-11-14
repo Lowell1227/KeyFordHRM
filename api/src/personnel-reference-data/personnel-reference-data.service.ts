@@ -14,6 +14,8 @@ import {
   UpdatePersonnelReferenceDataDto,
 } from './personnel-reference-data.dto';
 import { assertPersonnelReferenceDataAccess } from './personnel-reference-data.permissions';
+import { PERSONNEL_REFERENCE_RULES } from './personnel-reference-data.rules';
+import { ERROR_CODE } from '@/common/constants/error-codes';
 
 type ReferenceDataSnapshot = Pick<
   PersonnelReferenceData,
@@ -70,8 +72,17 @@ export class PersonnelReferenceDataService {
   ) {
     const kind = assertPersonnelReferenceDataAccess(operator, rawKind, true);
     const name = typeof input.name === 'string' ? input.name.trim() : undefined;
-    if ((!id || input.name !== undefined) && (!name || [...name].length > 100))
-      throw new BadRequestException('基础资料名称须为1至100字');
+    const { maxLength } = PERSONNEL_REFERENCE_RULES[kind];
+    if ((!id || input.name !== undefined) && (!name || [...name].length > maxLength)) {
+      const message = `基础资料名称须为1至${maxLength}字`;
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message, data: { fieldErrors: { name: message } } });
+    }
+    const compactName = name?.replace(/[\s-]/g, '');
+    if (compactName && (/^(?:(?:\+|00)?86)?1\d{10}$/.test(compactName)
+      || /^(?:\d{15}|\d{17}[\dXx])$/.test(compactName))) {
+      const message = '基础资料名称不能使用手机号或身份证号码';
+      throw new BadRequestException({ code: ERROR_CODE.PARAM_INVALID, message, data: { fieldErrors: { name: message } } });
+    }
     if (input.isActive !== undefined && typeof input.isActive !== 'boolean')
       throw new BadRequestException('启用状态无效');
     if (id && input.name === undefined && input.isActive === undefined)

@@ -8,10 +8,7 @@ export function assertPersonnelReferenceDataAccess(
   kind: string,
   write: boolean,
 ): PersonnelReferenceDataKind {
-  if (
-    kind !== PersonnelReferenceDataKind.work_location &&
-    kind !== PersonnelReferenceDataKind.job_family
-  ) {
+  if (!Object.values(PersonnelReferenceDataKind).includes(kind as PersonnelReferenceDataKind)) {
     throw new BadRequestException('基础资料类型无效');
   }
   const canEdit = user && hasHrCapability(user, 'employee_archive_edit');
@@ -23,5 +20,5 @@ export function assertPersonnelReferenceDataAccess(
           hasHrCapability(user, 'organization_edit'))));
   if (!(write ? canEdit : canRead))
     throw new ForbiddenException('无权限执行此操作');
-  return kind;
+  return kind as PersonnelReferenceDataKind;
 }

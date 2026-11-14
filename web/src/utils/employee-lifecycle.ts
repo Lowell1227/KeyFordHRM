@@ -1,4 +1,4 @@
-import type { EmployeeDataReview } from '@/api/employee-archives.api';
+import type { EmployeeArchiveEvent, EmployeeDataReview } from '@/api/employee-archives.api';
 
 function isResignationRequest(request: EmployeeDataReview): boolean {
   const employee = request.proposedValue?.employee;
@@ -63,21 +63,33 @@ export function archiveSubmissionMessage(result: { directApplied?: string[]; req
 }
 
 export function isDirectArchiveApplication(request: EmployeeDataReview): boolean {
+  if (completedDirectProfileEvent(request)) return true;
   return ['manual_archive_change', 'manual_performance_relation'].includes(request.sourceType) && Boolean(request.appliedAt)
     && [request.profileReviewStatus, request.performanceReviewStatus].every(status => ['approved', 'not_required'].includes(status))
     && (Boolean(request.events?.some(event => event.action === 'apply_employee_archive_change'))
       || (!request.profileReviewedAt && !request.performanceReviewedAt && !request.profileReviewedBy && !request.performanceReviewedBy));
 }
 
+export function completedDirectProfileEvent(request: EmployeeDataReview): EmployeeArchiveEvent | undefined {
+  if (request.sourceType !== 'manual_archive_change' || request.recordStatus !== 'submitted'
+    || !request.archivedAt || request.cancelledAt || request.appliedAt
+    || request.profileReviewStatus !== 'not_required' || request.performanceReviewStatus !== 'not_required') return undefined;
+  return request.events?.find(event => event.action === 'employee_profile_direct_update'
+    && event.newValue?.requestId === request.id && Number.isInteger(event.newValue.requestVersion)
+    && event.newValue.requestVersion === request.requestVersion);
+}
+
 export function applicationType(request: EmployeeDataReview): string {
   if (request.intakeType === 'reentry') return '再入职';
   if (request.sourceType === 'manual_employee_create') return '新增员工';
   if (isResignationRequest(request)) return '离职';
-  if (request.profileReviewStatus === 'not_required') return '绩效关系';
+  if (request.sourceType === 'manual_performance_relation'
+    || (request.profileReviewStatus === 'not_required' && request.performanceReviewStatus !== 'not_required')) return '绩效关系';
   return '档案修改';
 }
 
 export function applicationProgress(request: EmployeeDataReview): string {
+  if (completedDirectProfileEvent(request)) return '已生效';
   const approved = [request.profileReviewStatus, request.performanceReviewStatus].includes('approved');
   const rejected = [request.profileReviewStatus, request.performanceReviewStatus].includes('rejected');
   const pending = [request.profileReviewStatus, request.performanceReviewStatus]

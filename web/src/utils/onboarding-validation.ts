@@ -38,11 +38,11 @@ export function validateOnboardingStep(input: EmployeeCreateDraftPayload, step: 
     for (const key of ['plannedRegularDate', 'actualRegularDate', 'leaveDate']) date(`employee.${key}`, employee[key]);
     if (input.effectiveTo && input.effectiveFrom && input.effectiveTo < input.effectiveFrom) errors['employee.effectiveTo'] = '任职结束日期不能早于任职开始日期';
     integer('employee.probationMonths', employee.probationMonths, 12);
-    for (const [key, max] of Object.entries({ companyText: 150, position: 100, jobGrade: 50, jobFamily: 100, workLocation: 100 })) text(`employee.${key}`, employee[key], max);
+    for (const [key, max] of Object.entries({ companyText: 150, position: 100, jobGrade: 30, jobFamily: 100, workLocation: 100 })) text(`employee.${key}`, employee[key], max);
   }
   if (step === 2) {
-    for (const [key, max] of Object.entries({ gender: 30, ethnicity: 50, education: 50, professionalTitle: 100, school: 200, major: 100,
-      maritalStatus: 30, childrenStatus: 50, politicalStatus: 50, nativePlace: 100, householdType: 50, idAddress: 500, currentAddress: 500,
+    for (const [key, max] of Object.entries({ gender: 20, ethnicity: 50, education: 50, professionalTitle: 100, school: 200, major: 100,
+      maritalStatus: 30, childrenStatus: 30, politicalStatus: 50, nativePlace: 100, householdType: 50, idAddress: 500, currentAddress: 500,
       emergencyContactName: 100, emergencyContactRelation: 50, emergencyContactPhone: 30, socialSecurityStatus: 50, housingFundStatus: 50,
       bankName: 100, bankBranch: 200, bankAccount: 50 })) text(`profile.${key}`, profile[key], max);
     integer('profile.childrenCount', profile.childrenCount, 20);
@@ -50,8 +50,8 @@ export function validateOnboardingStep(input: EmployeeCreateDraftPayload, step: 
     const contracts = input.contracts ?? [];
     if (contracts.length > 20) errors.contracts = '最多填写 20 份合同';
     contracts.forEach((contract, index) => {
-      for (const [key, max] of Object.entries({ contractType: 50, name: 200, signingCompany: 200, termType: 100,
-        originalCompany: 200, newCompany: 200, confidentialityAgreement: 200, nonCompeteAgreement: 200, portraitAgreement: 200 })) {
+      for (const [key, max] of Object.entries({ contractType: 30, name: 150, signingCompany: 150, termType: 100,
+        originalCompany: 150, newCompany: 150, confidentialityAgreement: 50, nonCompeteAgreement: 50, portraitAgreement: 50 })) {
         text(`contracts.${index}.${key}`, contract[key], max);
       }
       for (const [key, error] of Object.entries(validateContractDates(contract))) errors[`contracts.${index}.${key}`] = error;

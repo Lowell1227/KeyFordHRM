@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from 'vue';
 import dayjs from 'dayjs';
 import { ElMessage, ElMessageBox } from 'element-plus';
 import {
@@ -11,6 +11,7 @@ import {
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import EmployeeCompanySelect from '@/components/common/EmployeeCompanySelect.vue';
+import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSelect.vue';
 import type { Department, User } from '@/types/api.types';
 import { formatDateTime } from '@/utils/date';
 import { applicationProgress } from '@/utils/employee-lifecycle';
@@ -40,6 +41,7 @@ let generation = 0;
 const form = reactive({
   contractSubjectId: undefined as string | null | undefined, companyText: null as string | null,
   company: null as string | null, deptId: '', positionId: '',
+  position: null as string | null, jobFamily: null as string | null,
   rosterManagerId: null as string | null, performanceManagerId: null as string | null,
   effectiveDate: '', effectiveTo: '', employeeStatus: 'probation' as 'active' | 'probation',
   employmentType: 'full_time', plannedRegularDate: '', probationMonths: 3 as number | null,
@@ -62,6 +64,20 @@ function warningMessage(value: unknown): string {
 const statusLabel = computed(() => currentRequest.value ? applicationProgress(currentRequest.value) : '未提交');
 const performanceOnly = computed(() => !!currentRequest.value && ['effective', 'pending_entry'].includes(currentRequest.value.onboardingStatus ?? '')
   && currentRequest.value.profileReviewStatus === 'approved' && currentRequest.value.performanceReviewStatus === 'rejected');
+const positionOptions = computed(() => {
+  const active = positions.value.filter(position => position.isActive);
+  if (!form.positionId || active.some(position => position.id === form.positionId)) return active;
+  const previous = positions.value.find(position => position.id === form.positionId);
+  return [...active, { id: form.positionId, name: `${form.position || previous?.name || '历史岗位'}（${previous ? '已停用' : '已不可用'}）`, isActive: false }];
+});
+const positionError = computed(() => !performanceOnly.value && form.positionId && !positions.value.some(position => position.id === form.positionId && position.isActive)
+  ? '历史岗位已停用或不可用，请重新选择启用岗位或清空。' : '');
+function changePosition(id?: string | null) {
+  const position = positions.value.find(item => item.id === id);
+  form.positionId = id || '';
+  form.position = position?.name ?? null;
+  form.jobFamily = position?.jobFamily ?? null;
+}
 const isNewHire = computed(() => currentRequest.value?.intakeType === 'new_hire');
 const canEdit = computed(() => !currentRequest.value || performanceOnly.value
   || (!isNewHire.value && ['draft', 'submitted', 'pending_entry'].includes(currentRequest.value.onboardingStatus ?? '')));
@@ -83,7 +99,9 @@ function setFormFromRequest(request: EmployeeDataReview | null, archive?: Employ
     companyText: employee.companyText ?? null,
     company: employee.company ?? previous?.company ?? null,
     deptId: employee.deptId ?? props.employee?.deptId ?? '',
-    positionId: employee.positionId ?? previous?.positionId ?? '',
+    positionId: request ? employee.positionId ?? '' : previous?.positionId ?? '',
+    position: request ? employee.position ?? null : previous?.position ?? props.employee?.position ?? null,
+    jobFamily: request ? employee.jobFamily ?? null : previous?.jobFamily ?? null,
     rosterManagerId: employee.managerId ?? null,
     performanceManagerId: request?.proposedValue?.performance?.managerId ?? null,
     effectiveDate: dateValue(employee.effectiveDate),
@@ -106,9 +124,11 @@ async function load() {
   submitAttempted.value = false;
   currentRequest.value = null;
   try {
+    const availablePositions = await positionsApi.findAll({ includeInactive: true });
     const request = await employeeArchivesApi.getCurrentReentry(employeeId);
     const archive = request ? undefined : await employeeArchivesApi.getArchive(employeeId);
     if (session !== generation) return;
+    positions.value = availablePositions;
     currentRequest.value = request;
     if (props.talentCandidateId && request?.talentCandidateId && props.talentCandidateId !== request.talentCandidateId) {
       loadError.value = '该员工已有其他人才关联的申请，请返回原申请核对。';
@@ -141,13 +161,15 @@ function close() { void beforeClose(() => emit('update:modelValue', false)); }
 watch(() => [props.modelValue, props.employee?.id] as const, ([open]) => { if (open) void load(); else generation++; });
 onBeforeUnmount(() => { generation++; });
 
-function body(): EmployeeReentryBody {
+function body(): EmployeeReentryBody & { jobFamily: string | null } {
   return {
     talentCandidateId: currentRequest.value?.talentCandidateId ?? props.talentCandidateId,
     company: form.company ?? '',
     contractSubjectId: form.contractSubjectId,
     deptId: form.deptId || null,
     positionId: form.positionId || null,
+    position: form.position || null,
+    jobFamily: form.jobFamily || null,
     rosterManagerId: form.rosterManagerId,
     performanceManagerId: form.performanceManagerId,
     effectiveDate: form.effectiveDate,
@@ -169,7 +191,7 @@ async function submit() {
   }
   if (!props.employee) return;
   submitAttempted.value = true;
-  if (!performanceOnly.value && (!form.company || !form.deptId || !form.effectiveDate)) {
+  if (!performanceOnly.value && (!form.company || !form.deptId || !form.effectiveDate || positionError.value)) {
     await nextTick();
     const field = formElement.value?.querySelector<HTMLElement>('.el-form-item.is-error');
     field?.scrollIntoView({ block: 'center' });
@@ -215,7 +237,6 @@ async function cancelRequest() {
   } finally { if (session === generation) cancelling.value = false; }
 }
 
-onMounted(async () => { positions.value = await positionsApi.findAll(); });
 </script>
 
 <template>
@@ -247,7 +268,12 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
         <div class="form-grid">
           <el-form-item label="所属公司" :required="!performanceOnly" :error="submitAttempted && !performanceOnly && !form.company ? '请选择已配置内部公司映射的所属公司' : ''"><EmployeeCompanySelect v-model="form.contractSubjectId" v-model:snapshot-name="form.companyText" v-model:company="form.company" :disabled="performanceOnly" /></el-form-item>
           <el-form-item label="部门" :required="!performanceOnly" :error="submitAttempted && !performanceOnly && !form.deptId ? '请选择部门' : ''"><el-select v-model="form.deptId" :disabled="performanceOnly" filterable><el-option v-for="dept in flatten(departments)" :key="dept.id" :label="dept.fullPath || dept.name" :value="dept.id" /></el-select></el-form-item>
-          <el-form-item label="岗位"><el-select v-model="form.positionId" :disabled="performanceOnly" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.name" :value="position.id" /></el-select></el-form-item>
+          <el-form-item label="岗位" :error="positionError"><el-select v-model="form.positionId" :disabled="performanceOnly" filterable clearable @change="changePosition"><el-option v-for="position in positionOptions" :key="position.id" :label="position.name" :value="position.id" :disabled="!position.isActive" /></el-select></el-form-item>
+          <el-form-item v-if="!form.positionId" label="岗位名称"><el-input v-model="form.position" :disabled="performanceOnly" /></el-form-item>
+          <el-form-item label="职系">
+            <template v-if="form.positionId"><el-input :model-value="form.jobFamily" readonly placeholder="未设置" /><small class="field-help">随岗位只读，特殊情况请先维护岗位目录；历史已存值保留。</small></template>
+            <PersonnelReferenceSelect v-else v-model="form.jobFamily" :disabled="performanceOnly" kind="job_family" label="职系" />
+          </el-form-item>
           <el-form-item label="花名册直属主管"><UserSelect v-model="form.rosterManagerId" :disabled="performanceOnly" clearable eligible-for="direct_manager" :disabled-ids="employee ? [employee.id] : []" /></el-form-item>
           <el-form-item label="绩效直属上级"><UserSelect v-model="form.performanceManagerId" clearable eligible-for="direct_manager" :disabled-ids="employee ? [employee.id] : []" /></el-form-item>
           <el-form-item label="用工类型"><el-select v-model="form.employmentType" :disabled="performanceOnly"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
@@ -280,7 +306,9 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
 .flow-title { display: flex; justify-content: space-between; margin-bottom: 14px; }
 .new-number { margin-top: 12px; color: #344054; text-align: center; font-size: 13px; }
 .form-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 18px; }
+.form-grid :deep(.el-form-item__error) { position: static; flex-basis: 100%; line-height: 1.5; }
 .form-grid :deep(.el-select), .form-grid :deep(.el-date-editor) { width: 100%; }
+.field-help { color: #667085; font-size: 12px; line-height: 1.5; }
 .warning-list { display: flex; flex-direction: column; gap: 4px; margin-top: 8px; color: #b54708; font-size: 12px; }
 @media (max-width: 640px) { .form-grid { grid-template-columns: 1fr; } .employee-summary div, .flow-title { align-items: flex-start; flex-direction: column; gap: 4px; } }
 </style>

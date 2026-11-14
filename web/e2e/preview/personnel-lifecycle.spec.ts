@@ -412,6 +412,16 @@ test('onboarding validates each step and ends on check and submit', async ({ pag
   await expect(drawer.locator('[data-archive-field="employee.effectiveFrom"] .el-form-item__error')).toHaveText('请选择任职开始日期');
   await screenshot(page, info, 'employment-step-errors', drawer);
   await fillEmployment(page, drawer);
+  const positions = await read(page, '/positions') as { id: string; name: string; jobFamily: string | null; isActive: boolean }[];
+  const selectedPosition = positions.find(item => item.isActive);
+  expect(selectedPosition, 'Preview must contain a fictional active position').toBeTruthy();
+  await drawer.locator('[data-archive-field="employee.positionId"] .el-select').click();
+  await page.getByRole('option', { name: selectedPosition!.jobFamily
+    ? `${selectedPosition!.name}（${selectedPosition!.jobFamily}）` : selectedPosition!.name, exact: true }).click();
+  await expect(drawer.locator('[data-archive-field="employee.position"] input')).toHaveAttribute('readonly', '');
+  await expect(drawer.locator('[data-archive-field="employee.position"] input')).toHaveValue(selectedPosition!.name);
+  await expect(drawer.locator('[data-archive-field="employee.jobFamily"] input')).toHaveAttribute('readonly', '');
+  await expect(drawer.locator('[data-archive-field="employee.jobFamily"] input')).toHaveValue(selectedPosition!.jobFamily || '');
   await drawer.getByRole('button', { name: '下一步', exact: true }).click();
   await expect(drawer.locator(info.project.name === 'mobile' ? '.mobile-step' : '.el-step__title.is-process')).toHaveText(info.project.name === 'mobile' ? '3/4 档案' : '档案');
   await drawer.getByRole('button', { name: '个人与教育' }).click();
@@ -433,6 +443,8 @@ test('onboarding validates each step and ends on check and submit', async ({ pag
   const application = (await response.json()).data;
   expect(application.proposedValue.employee.company).toBe('fuede');
   expect(application.proposedValue.employee.companyText).toBe(previewCompany);
+  expect(application.proposedValue.employee.positionId).toBe(selectedPosition!.id);
+  expect(application.proposedValue.employee.jobFamily).toBe(selectedPosition!.jobFamily);
   await expect(page).toHaveURL(new RegExp(`requestId=${application.id}`));
 });
 
@@ -683,6 +695,13 @@ test('direct onboarding resumes its draft and hands off through arrival and arch
   await reentry.getByRole('button', { name: '提交', exact: true }).click();
   await expect(reentry.locator('.el-form-item').filter({ hasText: '再入职日期' }).locator('.el-form-item__error')).toHaveText('请选择再入职日期');
   await fillDate(reentry.getByLabel('再入职日期', { exact: true }), day(0));
+  const reentryPositions = await read(page, '/positions') as { id: string; name: string; jobFamily: string | null; isActive: boolean }[];
+  const reentryPosition = reentryPositions.find(item => item.isActive)!;
+  expect(reentryPosition).toBeTruthy();
+  await reentry.getByLabel('岗位', { exact: true }).click();
+  await page.getByRole('option', { name: reentryPosition.name, exact: true }).click();
+  await expect(reentry.getByLabel('职系', { exact: true })).toHaveAttribute('readonly', '');
+  await expect(reentry.getByLabel('职系', { exact: true })).toHaveValue(reentryPosition.jobFamily || '');
   await reentry.locator('.el-form-item').filter({ hasText: '员工状态' }).locator('.el-select').click();
   await page.getByRole('option', { name: '在职', exact: true }).click();
   const resubmitting = responseFor(page, 'POST', `/employee-archives/${userId}/reentry`);
@@ -691,6 +710,7 @@ test('direct onboarding resumes its draft and hands off through arrival and arch
   expect(reentryResponse.status()).toBe(201);
   const reentryRequest = (await reentryResponse.json()).data;
   expect(reentryRequest.userId).toBe(userId);
+  expect(reentryRequest.proposedValue.employee).toMatchObject({ positionId: reentryPosition.id, jobFamily: reentryPosition.jobFamily });
   await expect(reentry).not.toBeVisible();
   await expect(detail).toContainText(person.name);
   await expect(page).toHaveURL(new RegExp(`requestId=${reentryRequest.id}`));
@@ -704,6 +724,7 @@ test('direct onboarding resumes its draft and hands off through arrival and arch
   const finalArchive = await read(page, `/employee-archives/${userId}`);
   expect(finalArchive.id).toBe(userId);
   expect(finalArchive.status).toBe('active');
+  expect(finalArchive.currentEmployment).toMatchObject({ positionId: reentryPosition.id, position: reentryPosition.name, jobFamily: reentryPosition.jobFamily });
   expect(finalArchive.archivedAt).toBeNull();
   expect(finalArchive.employeeNo).not.toBe(firstArchive.employeeNo);
   expect(finalArchive.employmentHistory.length).toBeGreaterThan(firstArchive.employmentHistory.length);
@@ -827,9 +848,11 @@ test('full UI personnel lifecycle selects active and probation interview partici
   const resignationResponse = await resigned;
   expect(resignationResponse.status()).toBe(201);
   const resignationRequest = (await resignationResponse.json()).data;
-  await expect(resignation).toContainText('待 HR 审核');
-  await screenshot(page, info, 'resignation-submitted', resignation);
-  const resignationReview = await openApplication(page, info, candidate, resignationRequest.id);
+  await expect(resignation).not.toBeVisible();
+  await expect(page).toHaveURL(new RegExp(`requestId=${resignationRequest.id}`));
+  const resignationReview = page.getByRole('dialog', { name: /办理详情$/ });
+  await expect(resignationReview.getByRole('button', { name: '通过', exact: true })).toBeVisible();
+  await screenshot(page, info, 'resignation-submitted', resignationReview);
   await approve(page, resignationReview, resignationRequest.id);
   await expect.poll(async () => (await read(page, `/employee-archives/${userId}`)).status).toBe('resigned');
   await screenshot(page, info, 'resignation-approved', resignationReview);
@@ -858,24 +881,35 @@ test('returned onboarding is revised and resubmitted through its original page',
   const candidate = await createTalent(page, info);
   const application = await onboardFromTalent(page, info, candidate);
   const review = await openApplication(page, info, candidate, application.id);
-  await review.getByRole('button', { name: '退回', exact: true }).click();
-  const prompt = page.getByRole('dialog', { name: '退回员工变更', exact: true });
-  await prompt.getByRole('textbox').fill('虚构退回，补充核验后重新提交');
-  const rejected = responseFor(page, 'POST', '/employee-archives/reviews/reject');
-  await prompt.getByRole('button', { name: '确认退回', exact: true }).click();
-  expect((await rejected).status()).toBe(201);
-  await expect(review).toContainText('已退回');
-  await screenshot(page, info, 'returned-onboarding', review);
-  await review.getByRole('button', { name: '修改后重新提交', exact: true }).click();
-  const resubmitted = await finishOnboarding(page, info, candidate);
-  expect(resubmitted.id).toBe(application.id);
+  const reasons = ['虚构第一次退回，补充核验后重新提交', '虚构第二次退回，复核资料后重新提交'];
+  for (const [index, reason] of reasons.entries()) {
+    await review.getByRole('button', { name: '退回', exact: true }).click();
+    const prompt = page.getByRole('dialog', { name: '退回员工变更', exact: true });
+    await prompt.getByRole('textbox').fill(reason);
+    const rejected = responseFor(page, 'POST', '/employee-archives/reviews/reject');
+    await prompt.getByRole('button', { name: '确认退回', exact: true }).click();
+    expect((await rejected).status()).toBe(201);
+    await expect(review).toContainText('已退回');
+    await screenshot(page, info, `returned-onboarding-${index + 1}`, review);
+    await review.getByRole('button', { name: '修改后重新提交', exact: true }).click();
+    const resubmitted = await finishOnboarding(page, info, candidate);
+    expect(resubmitted.id).toBe(application.id);
+  }
   const persisted = await read(page, `/employee-archives/applications/${application.id}`);
   expect(persisted.profileReviewStatus).toBe('pending');
   expect(persisted.arrivalConfirmedAt).toBeNull();
   const timeline = review.getByTestId('personnel-application-timeline');
   await expect(review.getByRole('heading', { name: '补充办理记录' })).toHaveCount(0);
-  await expect(timeline.getByText('退回申请', { exact: true })).toHaveCount(1);
-  await expect(timeline.getByText('虚构退回，补充核验后重新提交', { exact: true })).toHaveCount(1);
+  await expect(timeline.getByText('退回申请', { exact: true })).toHaveCount(2);
+  for (const reason of reasons) {
+    await expect(timeline.getByText(reason, { exact: true })).toHaveCount(1);
+    expect(persisted.revisionHistory.some((revision: any) => revision.rejectedReason === reason
+      && revision.baseValue && revision.proposedValue)).toBe(true);
+  }
+  const rejectedEvents = persisted.events.filter((event: any) => event.action === 'reject_employee_data_change');
+  expect(rejectedEvents).toHaveLength(2);
+  expect(new Set(rejectedEvents.map((event: any) => event.newValue.requestVersion)).size).toBe(2);
+  await screenshot(page, info, 'two-round-rejection-history', review);
 });
 
 test('arrival actions belong to their step and revisions stay in chronological history', async ({ page }, info) => {
@@ -913,11 +947,25 @@ test('arrival actions belong to their step and revisions stay in chronological h
   await expect(revisions).toHaveCount(2);
   await expect(revisions.first().locator('.personnel-process-timeline__avatar')).toHaveCount(1);
   await expect(revisions.first()).toContainText('修改到岗日期并重新提交');
+  for (const revision of await revisions.all()) {
+    await revision.locator('.personnel-process-timeline__differences summary').click();
+    await expect(revision).not.toContainText('历史版本关联或快照未记录');
+  }
+  await expect(revisions.last()).toContainText(day(-2));
+  await expect(revisions.last()).toContainText(day(-1));
   const audit = await read(page, `/employee-archives/applications/${application.id}`);
   const events = audit.events.filter((event: { action: string }) => ['approve_employee_data_change', 'revise_employee_arrival_date'].includes(event.action));
   expect(events).toHaveLength(5);
-  await expect(timeline.locator('[data-event-id]')).toHaveCount(audit.events.filter((event: { action: string }) => !/draft/.test(event.action)).length);
-  for (const event of events) await expect(timeline.locator(`[data-event-id="${event.id}"]`)).toHaveCount(1);
+  await expect(timeline.locator('[data-event-id]')).toHaveCount(audit.events.length);
+  for (const event of audit.events) {
+    const node = timeline.locator(`[data-event-id="${event.id}"]`);
+    await expect(node).toHaveCount(1);
+    if (/draft/.test(event.action)) {
+      await expect(node).toHaveAttribute('data-tone', 'neutral');
+      await expect(node).toContainText('未提交');
+      await expect(node).not.toContainText('已生效');
+    }
+  }
   const timestamps = await timeline.locator(':scope > li[data-occurred-at]').evaluateAll(nodes => nodes.map(node => Date.parse(node.getAttribute('data-occurred-at')!)));
   expect(timestamps.length).toBeGreaterThanOrEqual(6);
   expect(timestamps.every(Number.isFinite)).toBe(true);

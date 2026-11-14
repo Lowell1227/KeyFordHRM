@@ -3,6 +3,65 @@ import { ConflictException } from '@nestjs/common';
 import { EmployeeArchivesService } from './employee-archives.service';
 
 describe('EmployeeArchivesService', () => {
+  it('D01 compares resumed same-ID family overrides with the applied directory value', async () => {
+    const service = new EmployeeArchivesService({} as any);
+    const position = { id: 'position', name: 'Catalog', jobFamily: null };
+    const tx = { position: { findUnique: jest.fn(async () => position) } };
+    const result = await (service as any).appliedEmployeeReviewData(tx,
+      { positionId: 'position', position: 'Catalog', jobFamily: 'Override' },
+      { positionId: 'position', position: 'Catalog', jobFamily: 'Historical' }, {});
+    expect(result.jobFamily).toBeNull();
+  });
+  it('F09 snapshots the actual base and rejection reason for each submitted revision', () => {
+    const service = new EmployeeArchivesService({} as any);
+    const baseValue = { employee: { name: 'Before revision' } };
+    const revision = (service as any).revisionSnapshot({ recordStatus: 'submitted', requestVersion: 2,
+      baseValue, proposedValue: { employee: { name: 'Returned proposal' } }, rejectedReason: 'Revise the name',
+      profileReviewStatus: 'rejected', revisionHistory: [] });
+    expect(revision).toEqual([expect.objectContaining({ version: 2, baseValue, rejectedReason: 'Revise the name' })]);
+  });
+  it('F06 includes only whitelisted user events and links direct events by explicit requestId, never by time', async () => {
+    const createdAt = new Date('2026-11-14T01:00:00Z');
+    const events = [
+      { id: 'legacy', entityId: 'employee', action: 'employee_profile_direct_update', createdAt, user: null,
+        oldValue: { education: 'Old', phone: '138****0000' }, newValue: { education: 'New', phone: '139****0000' } },
+      { id: 'linked', entityId: 'employee', action: 'employee_profile_direct_update', createdAt, user: { id: 'hr', name: 'HR' },
+        oldValue: { education: 'New' }, newValue: { education: 'Master', requestId: 'request', requestVersion: 2 } },
+    ];
+    const db = { employeeDataChangeRequest: { findMany: jest.fn(async () => [{ id: 'request', baseValue: {}, proposedValue: {} }]) },
+      auditLog: { findMany: jest.fn(async () => events) } };
+    const result = await new EmployeeArchivesService(db as any).history('employee');
+    expect(db.auditLog.findMany).toHaveBeenCalledWith(expect.objectContaining({ where: { OR: expect.arrayContaining([
+      { entityType: 'user', entityId: 'employee', action: { in: ['archive_resigned_employee', 'restore_employee_archive', 'employee_profile_direct_update'] } },
+    ]) } }));
+    expect(result.archiveEvents).toEqual([events[0]]);
+    expect(result.changeHistory[0].events).toEqual([events[1]]);
+    expect(result.archiveEvents[0].user).toBeNull();
+  });
+
+  it('D01 does not fall back to arbitrary family input when a selected catalog position has no family', () => {
+    const service = new EmployeeArchivesService({} as any);
+    const proposed = (service as any).employeeCreateProposedValue({ employee: { position: 'Spoofed', jobFamily: 'Spoofed' } },
+      { id: 'position', name: 'Catalog', jobFamily: null });
+    expect(proposed.employee).toMatchObject({ positionId: 'position', position: 'Catalog', jobFamily: null });
+  });
+
+  it.each(['Catalog family', null])('D01 resolves same-ID family overrides on employment submissions (%s)', async family => {
+    const user = archiveEditorUser();
+    const id = '40000000-0000-4000-8000-000000000001';
+    Object.assign(user, { positionId: id });
+    Object.assign(user.employmentHistory[0], { positionId: id, jobFamily: 'Historical family' });
+    const db = { user: { findUnique: jest.fn(async () => user) },
+      employmentRecord: { findMany: jest.fn(async () => []) },
+      employeeDataChangeRequest: { findFirst: jest.fn(async () => null), create: jest.fn(async ({ data }) => ({ id: 'request', ...data })) },
+      position: { findUnique: jest.fn(async () => ({ id, name: 'Catalog name', jobFamily: family, isActive: true })) } };
+    const result = await new EmployeeArchivesService(db as any).createEmploymentRecord(user.id, {
+      effectiveFrom: new Date('2026-11-14'), company: CompanyCode.fuede, positionId: id, position: 'Override', jobFamily: 'Override',
+      changeType: 'transfer', employmentType: EmploymentType.full_time, employeeStatus: UserStatus.active,
+    }, hrOperator);
+    expect(result.proposedValue).toMatchObject({ employee: { position: 'Catalog name', jobFamily: family } });
+  });
+
   const archiveEditorUser = () => ({
     id: '10000000-0000-4000-8000-000000000001',
     employeeNo: '001',
@@ -834,6 +893,10 @@ describe('EmployeeArchivesService', () => {
     }));
     const tx = {
       $executeRaw: jest.fn(),
+      personnelReferenceData: { findMany: jest.fn(async ({ where }) => [
+        { kind: 'job_grade', name: 'P3', isActive: true }, { kind: 'education', name: '本科', isActive: true },
+      ].filter(option => option.isActive === where.isActive
+        && where.OR.some((query: any) => query.kind === option.kind && query.name === option.name))) },
       department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept-1', isActive: true }) },
       position: { findUnique: jest.fn().mockResolvedValue({ id: 'position-1', name: 'HRBP', jobFamily: '人力资源', isActive: true }) },
       employeeDataChangeRequest: { findFirst: jest.fn().mockResolvedValue(null), create: requestCreate, update: requestUpdate },
@@ -1096,6 +1159,9 @@ describe('EmployeeArchivesService', () => {
       .mockImplementationOnce(({ data }) => Promise.resolve({ id: 'draft-create-1', employeeNo: '903', ...data }));
     const tx = {
       $executeRaw: jest.fn(),
+      personnelReferenceData: { findMany: jest.fn(async ({ where }) =>
+        [{ kind: 'education', name: '本科', isActive: true }].filter(option => option.isActive === where.isActive
+          && where.OR.some((query: any) => query.kind === option.kind && query.name === option.name))) },
       department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept-1', isActive: true }) },
       position: { findUnique: jest.fn().mockResolvedValue(null) },
       employeeDataChangeRequest: { findFirst, update },
@@ -1257,6 +1323,10 @@ describe('EmployeeArchivesService', () => {
     const create = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'request-allowlist', ...data }));
     const update = jest.fn().mockImplementation(({ data }) => Promise.resolve({ id: 'request-allowlist', ...data }));
     const tx = {
+      personnelReferenceData: { findMany: jest.fn(async ({ where }) => [
+        { kind: 'job_grade', name: 'P2', isActive: true }, { kind: 'education', name: '本科', isActive: true },
+      ].filter(option => option.isActive === where.isActive
+        && where.OR.some((query: any) => query.kind === option.kind && query.name === option.name))) },
       department: { findUnique: jest.fn().mockResolvedValue({ id: 'dept-1', isActive: true }) },
       position: { findUnique: jest.fn().mockResolvedValue(null) },
       employeeDataChangeRequest: { create, update },
@@ -1516,7 +1586,11 @@ describe('EmployeeArchivesService', () => {
     expect(JSON.stringify(result.events)).not.toContain('encrypted-id');
     expect(JSON.stringify(result.events)).not.toContain('bank-hash');
     expect(findMany).toHaveBeenCalledWith({
-      where: { entityType: 'employee_data_change_request', entityId: request.id },
+      where: { OR: [
+        { entityType: 'employee_data_change_request', entityId: request.id },
+        { entityType: 'user', entityId: request.userId, action: 'employee_profile_direct_update',
+          newValue: { path: ['requestId'], equals: request.id } },
+      ] },
       orderBy: { createdAt: 'asc' },
       select: {
         id: true,

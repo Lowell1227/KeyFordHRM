@@ -81,6 +81,9 @@ describe('员工档案免审个人信息字段直改', () => {
 
   const buildService = (user: Record<string, unknown>, pendingRequests: Array<{ id: string; baseValue: unknown }> = []) => {
     const tx = {
+      personnelReferenceData: { findMany: jest.fn(async ({ where }) =>
+        [{ kind: 'education', name: '硕士', isActive: true }].filter(option => option.isActive === where.isActive
+          && where.OR.some((query: any) => query.kind === option.kind && query.name === option.name))) },
       user: {
         findUnique: jest.fn().mockResolvedValue(user),
         update: jest.fn().mockResolvedValue({}),

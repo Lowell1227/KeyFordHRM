@@ -1,6 +1,7 @@
 import http from './http';
 
-export type PersonnelReferenceKind = 'work_location' | 'job_family';
+import type { PersonnelReferenceKind } from '@/utils/personnel-reference-kinds';
+export type { PersonnelReferenceKind } from '@/utils/personnel-reference-kinds';
 export interface PersonnelReferenceData {
   id: string;
   kind: PersonnelReferenceKind;

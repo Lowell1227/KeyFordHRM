@@ -87,6 +87,14 @@ enum AccountType {
 enum PersonnelReferenceDataKind {
   work_location
   job_family
+  job_grade
+  education
+  marital_status
+  political_status
+  household_type
+  contact_relation
+  bank_name
+  contract_name
 
   @@map("personnel_reference_data_kind")
 }

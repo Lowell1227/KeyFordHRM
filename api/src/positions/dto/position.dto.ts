@@ -44,6 +44,11 @@ export class CreatePositionDto {
 
 export class UpdatePositionDto {
   @IsOptional()
+  @IsBoolean()
+  @IsIn([true], { message: '启用申请仅接受 true，停用请走停用流程' })
+  activationRequested?: boolean;
+
+  @IsOptional()
   @IsString()
   @MinLength(1)
   @MaxLength(40)

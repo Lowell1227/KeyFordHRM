@@ -29,7 +29,7 @@ export const positionsApi = {
   create(body: { name: string; jobFamily?: string | null }): Promise<PositionChangeRequest> {
     return http.post('/positions', body) as unknown as Promise<PositionChangeRequest>;
   },
-  update(id: string, body: { code?: string; name?: string; jobFamily?: string | null }): Promise<PositionChangeRequest> {
+  update(id: string, body: { code?: string; name?: string; jobFamily?: string | null; activationRequested?: true }): Promise<PositionChangeRequest> {
     return http.patch(`/positions/${id}`, body) as unknown as Promise<PositionChangeRequest>;
   },
   deactivate(id: string): Promise<PositionChangeRequest> {

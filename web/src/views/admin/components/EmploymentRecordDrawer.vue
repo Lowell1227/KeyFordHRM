@@ -1,12 +1,14 @@
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
+import { computed, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import dayjs from 'dayjs';
 import { ElMessage } from 'element-plus';
 import { employeeArchivesApi, type EmployeeArchive, type EmployeeDataReview } from '@/api/employee-archives.api';
 import { positionsApi, type PositionRecord } from '@/api/positions.api';
 import UserSelect from '@/components/common/UserSelect.vue';
 import EmployeeCompanySelect from '@/components/common/EmployeeCompanySelect.vue';
+import PersonnelReferenceSelect from '@/components/common/PersonnelReferenceSelect.vue';
 import type { Department } from '@/types/api.types';
+import { applicationProgress } from '@/utils/employee-lifecycle';
 
 const props = withDefaults(defineProps<{
   modelValue: boolean;
@@ -18,20 +20,39 @@ const props = withDefaults(defineProps<{
   refreshingDepartment?: boolean;
 }>(), { mode: 'default' });
 const emit = defineEmits<{
-  'update:modelValue': [value: boolean]; submitted: []; closed: [];
+  'update:modelValue': [value: boolean]; submitted: [requestId: string]; closed: [];
   'complete-department': [draft: { leaveDate: string; reason: string }];
   'refresh-department': [];
 }>();
 const positions = ref<PositionRecord[]>([]);
 const saving = ref(false);
+let generation = 0;
 const form = reactive<Record<string, any>>({});
+const positionOptions = computed(() => positions.value.filter(position => position.isActive || position.id === form.positionId));
+function changePosition(id?: string | null) {
+  const position = positions.value.find(item => item.id === id);
+  form.positionId = id || null;
+  form.position = position?.name ?? null;
+  form.jobFamily = position?.jobFamily ?? null;
+}
 const companyError = ref('');
+const submitAttempted = ref(false);
 const resignationReview = ref<EmployeeDataReview | null>(null);
 const isResignation = computed(() => props.mode === 'resignation');
+const isHistoricalEmployment = computed(() => {
+  const today = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Shanghai', year: 'numeric', month: '2-digit', day: '2-digit' }).format(new Date());
+  return Boolean(form.effectiveFrom && form.effectiveTo && form.effectiveFrom <= form.effectiveTo && form.effectiveTo < today);
+});
+const employmentStatusError = computed(() => {
+  if (isResignation.value || isHistoricalEmployment.value) return '';
+  if (!['active', 'probation'].includes(props.archive?.status ?? '') || !['active', 'probation'].includes(form.employeeStatus)
+    || ['resignation', 'rehire'].includes(form.changeType)) return '入职、再入职和离职请在入离职页面办理；历史状态仅可补录在已结束的任职区间。';
+  return '';
+});
 const drawerTitle = computed(() => isResignation.value ? '办理离职' : '新增任职记录');
 const resignationReviewState = computed<'not_submitted' | 'pending' | 'approved' | 'rejected'>(() => {
   const status = resignationReview.value?.profileReviewStatus;
-  if (status === 'pending') return 'pending';
+  if (status === 'pending' || status === 'applying') return 'pending';
   if (status === 'approved') return 'approved';
   if (status === 'rejected') return 'rejected';
   return 'not_submitted';
@@ -40,14 +61,9 @@ const resignationDisableDate = computed(() => {
   const date = String(resignationReview.value?.proposedValue?.employee?.leaveDate || form.leaveDate || '').slice(0, 10);
   return date ? dayjs(date).add(1, 'day').format('YYYY-MM-DD') : '';
 });
-const resignationEffective = computed(() => Boolean(resignationDisableDate.value) && new Date(`${resignationDisableDate.value}T00:00:00+08:00`).getTime() <= Date.now());
-const resignationReviewLabel = computed(() => resignationReviewState.value === 'approved'
-  ? (resignationEffective.value ? '已离职生效' : '已通过，待离职生效') : ({
-  not_submitted: '待提交',
-  pending: '待 HR 审核',
-  approved: '已通过',
-  rejected: '已退回',
-})[resignationReviewState.value]);
+const resignationEffective = computed(() => Boolean(resignationReview.value?.appliedAt));
+const resignationReviewLabel = computed(() => resignationEffective.value ? '已生效'
+  : resignationReview.value ? applicationProgress(resignationReview.value) : '待提交');
 const resignationReviewLocked = computed(() => ['pending', 'approved'].includes(resignationReviewState.value));
 const resignationStepActive = computed(() => ({ not_submitted: 0, pending: 1, rejected: 1, approved: resignationEffective.value ? 3 : 2 })[resignationReviewState.value]);
 const resignationProcessStatus = computed(() => resignationReviewState.value === 'rejected' ? 'error' : 'process');
@@ -60,6 +76,7 @@ const resignationTagType = computed<'info' | 'warning' | 'success' | 'danger'>((
 function formatDateTime(value?: string | null): string {
   if (!value) return '';
   return new Intl.DateTimeFormat('zh-CN', {
+    timeZone: 'Asia/Shanghai',
     year: 'numeric', month: '2-digit', day: '2-digit', hour: '2-digit', minute: '2-digit', hour12: false,
   }).format(new Date(value));
 }
@@ -77,8 +94,10 @@ const resignationReviewDescription = computed(() => {
   const reviewedAt = formatDateTime(review.profileReviewedAt || review.updatedAt);
   return `${reviewer}${reviewedAt ? ` · ${reviewedAt}` : ''}`;
 });
-const resignationEffectiveDescription = computed(() => resignationDisableDate.value
-  ? `${resignationDisableDate.value} 00:00（北京时间）停用；提前审核不提前停用`
+const resignationEffectiveDescription = computed(() => resignationReview.value?.appliedAt
+  ? `实际生效：${formatDateTime(resignationReview.value.appliedAt)}（北京时间）`
+  : resignationDisableDate.value
+  ? `预计 ${resignationDisableDate.value} 00:00（北京时间）停用；实际以生效记录为准`
   : '最后工作日次日零点停用');
 const overlapWarning = computed(() => {
   const start = String(isResignation.value ? form.leaveDate ?? '' : form.effectiveFrom ?? '').slice(0, 10);
@@ -99,12 +118,14 @@ const overlapWarning = computed(() => {
 function flatten(items: Department[]): Department[] { return items.flatMap((item) => [item, ...flatten(item.children ?? [])]); }
 function reset() {
   companyError.value = '';
+  submitAttempted.value = false;
   const archive = props.archive; const current = archive?.currentEmployment ?? archive?.employmentHistory[0];
   resignationReview.value = archive?.latestResignationReview ?? null;
   Object.assign(form, {
     contractSubjectId: current?.contractSubjectId ?? undefined, companyText: current?.companyText ?? null,
     effectiveFrom: '', effectiveTo: null, company: current?.company ?? null,
     deptId: current?.deptId ?? archive?.dept?.id ?? null, positionId: current?.positionId ?? null,
+    position: current?.position ?? archive?.position ?? null, jobFamily: current?.jobFamily ?? null,
     directManagerId: archive?.rosterManager?.id ?? null, workLocation: current?.workLocation ?? null,
     employmentType: current?.employmentType ?? 'full_time', employeeStatus: archive?.status ?? 'active',
     entryDate: archive?.entryDate?.slice(0, 10) ?? null, plannedRegularDate: current?.plannedRegularDate?.slice(0, 10) ?? null,
@@ -125,16 +146,22 @@ function reset() {
     if (props.resignationDraft && !resignationReviewLocked.value) Object.assign(form, props.resignationDraft);
   }
 }
-watch(() => [props.modelValue, props.mode] as const, ([open]) => { if (open) reset(); });
-watch(() => props.archive, () => {
-  if (!props.modelValue || !isResignation.value) return;
+watch([() => props.modelValue, () => props.mode, () => props.archive?.id], ([open]) => {
+  generation++;
+  saving.value = false;
+  if (open) reset();
+}, { flush: 'sync' });
+watch(() => props.archive, (archive, previous) => {
+  if (!props.modelValue || !isResignation.value || archive?.id !== previous?.id) return;
   const draft = { leaveDate: form.leaveDate, reason: form.reason };
   reset();
   if (!resignationReviewLocked.value) Object.assign(form, draft);
 });
 async function submit() {
+  if (!props.modelValue || saving.value || (isResignation.value && resignationReviewLocked.value)) return;
+  submitAttempted.value = true;
   companyError.value = !isResignation.value && !form.company ? '请选择已配置内部公司映射的所属公司' : '';
-  if (companyError.value) return;
+  if (companyError.value || employmentStatusError.value) return;
   if (!props.archive || !form.deptId) { ElMessage.warning('员工档案缺少当前部门，暂不能提交'); return; }
   if (isResignation.value) {
     if (!form.leaveDate || !form.reason?.trim()) {
@@ -148,19 +175,28 @@ async function submit() {
     ElMessage.warning('请填写生效日期');
     return;
   }
+  const session = generation;
+  const employeeId = props.archive.id;
+  const isCurrentSession = () => session === generation && props.modelValue && props.archive?.id === employeeId;
   saving.value = true;
   try {
-    const review = await employeeArchivesApi.createEmployment(props.archive.id, { ...form, positionId: form.positionId || null });
+    const review = await employeeArchivesApi.createEmployment(employeeId, { ...form, positionId: form.positionId || null });
+    if (!isCurrentSession()) return;
     resignationReview.value = review;
     ElMessage.success(isResignation.value
       ? '离职申请已提交审核；审核生效后可由操作员手动归档'
       : '任职变更已提交审核；历史补录和未来生效记录都不会直接覆盖当前档案');
-    if (!isResignation.value) emit('update:modelValue', false);
-    emit('submitted');
-  } catch { /* 请求失败保留表单，接口给出可执行原因 */ }
-  finally { saving.value = false; }
+    emit('update:modelValue', false);
+    emit('submitted', review.id);
+  } catch {
+    if (!isCurrentSession()) return;
+    // 请求失败保留当前会话的表单，接口给出可执行原因。
+  } finally {
+    if (isCurrentSession()) saving.value = false;
+  }
 }
-onMounted(async () => { positions.value = await positionsApi.findAll(); });
+onMounted(async () => { positions.value = await positionsApi.findAll({ includeInactive: true }); });
+onBeforeUnmount(() => { generation++; });
 </script>
 
 <template>
@@ -181,7 +217,7 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
       <el-form-item label="最后工作日">
         <div class="employment-field">
           <el-date-picker v-model="form.leaveDate" type="date" value-format="YYYY-MM-DD" />
-          <span v-if="resignationDisableDate" class="employment-help">{{ resignationDisableDate }} 00:00（北京时间）停用，最后工作日仍可使用系统。</span>
+          <span v-if="resignationDisableDate" class="employment-help">预计 {{ resignationDisableDate }} 00:00（北京时间）停用，最后工作日仍可使用系统；实际以生效记录为准。</span>
           <span v-if="overlapWarning" class="employment-field__warning">{{ overlapWarning }}</span>
         </div>
       </el-form-item>
@@ -189,7 +225,7 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
     </el-form>
     <el-form v-else label-position="top" class="employment-grid">
       <el-form-item label="所属公司" required :error="companyError"><EmployeeCompanySelect v-model="form.contractSubjectId" v-model:snapshot-name="form.companyText" v-model:company="form.company" @update:company="companyError = ''" /></el-form-item>
-      <el-form-item label="变更类型"><el-select v-model="form.changeType"><el-option label="调动" value="transfer" /><el-option label="晋升" value="promotion" /><el-option label="上级变更" value="manager_change" /><el-option label="状态变更" value="status_change" /><el-option label="离职" value="resignation" /><el-option label="返聘" value="rehire" /><el-option label="历史补录" value="data_correction" /></el-select></el-form-item>
+      <el-form-item label="变更类型"><el-select v-model="form.changeType"><el-option label="调动" value="transfer" /><el-option label="晋升" value="promotion" /><el-option label="上级变更" value="manager_change" /><el-option label="状态变更" value="status_change" /><el-option v-if="isHistoricalEmployment" label="离职" value="resignation" /><el-option v-if="isHistoricalEmployment" label="返聘" value="rehire" /><el-option label="历史补录" value="data_correction" /></el-select></el-form-item>
       <el-form-item label="生效日期">
         <div class="employment-field">
           <el-date-picker v-model="form.effectiveFrom" type="date" value-format="YYYY-MM-DD" />
@@ -198,9 +234,14 @@ onMounted(async () => { positions.value = await positionsApi.findAll(); });
       </el-form-item>
       <el-form-item label="结束日期"><el-date-picker v-model="form.effectiveTo" type="date" value-format="YYYY-MM-DD" clearable /></el-form-item>
       <el-form-item label="部门"><el-select v-model="form.deptId" filterable><el-option v-for="dept in flatten(departments)" :key="dept.id" :label="dept.fullPath || dept.name" :value="dept.id" /></el-select></el-form-item>
-      <el-form-item label="岗位"><el-select v-model="form.positionId" filterable clearable><el-option v-for="position in positions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" /></el-select></el-form-item>
+      <el-form-item label="岗位"><el-select v-model="form.positionId" filterable clearable @change="changePosition"><el-option v-for="position in positionOptions" :key="position.id" :label="position.jobFamily ? `${position.name}（${position.jobFamily}）` : position.name" :value="position.id" :disabled="!position.isActive" /></el-select></el-form-item>
+      <el-form-item v-if="!form.positionId" label="岗位名称"><el-input v-model="form.position" /></el-form-item>
+      <el-form-item label="职系">
+        <template v-if="form.positionId"><el-input :model-value="form.jobFamily" readonly placeholder="未设置" /><small class="employment-help">随岗位只读，特殊情况请先维护岗位目录；历史已存值保留。</small></template>
+        <PersonnelReferenceSelect v-else v-model="form.jobFamily" kind="job_family" label="职系" />
+      </el-form-item>
       <el-form-item label="花名册直属主管"><UserSelect v-model="form.directManagerId" :disabled-ids="archive ? [archive.id] : []" clearable /></el-form-item>
-      <el-form-item label="员工状态"><el-select v-model="form.employeeStatus"><el-option label="在职" value="active" /><el-option label="试用期" value="probation" /><el-option label="已离职" value="resigned" /></el-select></el-form-item>
+      <el-form-item label="员工状态" :error="submitAttempted ? employmentStatusError : ''"><el-select v-model="form.employeeStatus" :disabled="!isHistoricalEmployment && !['active', 'probation'].includes(archive?.status ?? '')"><el-option label="在职" value="active" /><el-option label="试用期" value="probation" /><el-option v-if="isHistoricalEmployment || form.employeeStatus === 'resigned'" label="已离职" value="resigned" :disabled="!isHistoricalEmployment" /><el-option v-if="form.employeeStatus === 'pending_entry'" label="待入职" value="pending_entry" disabled /></el-select><span class="employment-help">入职、再入职和离职请在入离职页面办理；已结束的任职可补录历史状态。</span></el-form-item>
       <el-form-item label="用工类型"><el-select v-model="form.employmentType"><el-option label="全职" value="full_time" /><el-option label="兼职" value="part_time" /><el-option label="返聘" value="rehire" /><el-option label="外部" value="external" /></el-select></el-form-item>
       <el-form-item label="原因" class="span-2"><el-input v-model="form.reason" type="textarea" :rows="3" /></el-form-item>
     </el-form>

@@ -105,6 +105,191 @@ test('historical manual approval keeps the actual review step', t => {
   assert.equal(state.timeline.value.some(item => item.title === '档案审核'), true);
 });
 
+function historyRequest(overrides = {}) {
+  return {
+    id: 'history-1', sourceType: 'manual_employee_create', intakeType: 'new_hire',
+    recordStatus: 'submitted', onboardingStatus: 'submitted', requestVersion: 3,
+    profileReviewStatus: 'pending', performanceReviewStatus: 'not_required',
+    createdAt: '2026-11-10T01:00:00Z', baseValue: {},
+    proposedValue: { employee: { effectiveFrom: '2026-11-15' } },
+    revisionHistory: [
+      { version: 1, proposedValue: { employee: { effectiveFrom: '2026-11-12' } } },
+      { version: 2, proposedValue: { employee: { effectiveFrom: '2026-11-14' } } },
+    ],
+    events: [
+      { id: 'reject-1', action: 'reject_employee_data_change', createdAt: '2026-11-11T01:00:00Z', newValue: { reason: '第一轮日期需要核对' } },
+      { id: 'revise-2', action: 'revise_employee_arrival_date', createdAt: '2026-11-12T01:00:00Z', newValue: { requestVersion: 2 } },
+      { id: 'reject-2', action: 'reject_employee_data_change', createdAt: '2026-11-12T02:00:00Z', newValue: { reason: '第二轮日期需要核对' } },
+      { id: 'revise-3', action: 'revise_employee_arrival_date', createdAt: '2026-11-13T01:00:00Z', newValue: { requestVersion: 3 } },
+    ],
+    ...overrides,
+  };
+}
+
+test('each resubmission uses its own version snapshots and retains both rejection reasons', t => {
+  const { state } = mountSetup(t, 'EmployeeApplicationDetail.vue', { request: historyRequest() });
+  const timeline = state.timeline.value;
+  for (const [id, before, after] of [['revise-2', '2026-11-12', '2026-11-14'], ['revise-3', '2026-11-14', '2026-11-15']]) {
+    const round = timeline.find(item => item.eventId === id);
+    assert.ok(round.differences?.length, 'each revision must expose its own field differences');
+    assert.deepEqual(round.differences.flatMap(group => group.fields).map(field => [field.key, field.before, field.after]), [
+      ['employee.effectiveFrom', before, after],
+    ]);
+  }
+  assert.deepEqual(timeline.filter(item => item.eventAction === 'reject_employee_data_change').map(item => item.note), [
+    '第一轮日期需要核对', '第二轮日期需要核对',
+  ]);
+  assert.equal(timeline.find(item => item.eventId === 'reject-1').actor, '未记录');
+});
+
+test('revision differences are unknown when an exact version is missing, never borrowed by timestamp', t => {
+  const request = historyRequest();
+  request.revisionHistory = [{ version: 1, proposedValue: { employee: { effectiveFrom: '2026-11-12' } }, revisedAt: request.events[1].createdAt }];
+  const { state } = mountSetup(t, 'EmployeeApplicationDetail.vue', { request });
+  const round = state.timeline.value.find(item => item.eventId === 'revise-2');
+  assert.equal(round.differenceStatus, '未记录');
+  assert.deepEqual(round.differences, []);
+});
+
+test('arrival, resubmission and activation keep deterministic business order for equal timestamps', t => {
+  const time = '2026-11-13T01:00:00Z';
+  const events = [
+    { id: 'z-submit', action: 'submit_employee_create' },
+    { id: 'a-approve', action: 'approve_employee_data_change' },
+    { id: 'b-arrive', action: 'confirm_employee_arrival' },
+    { id: 'c-active', action: 'activate_employee_onboarding' },
+  ].map(event => ({ ...event, createdAt: time }));
+  const request = historyRequest({ events: [...events].reverse(), revisionHistory: [], requiresArrivalConfirmation: true,
+    profileReviewStatus: 'approved', onboardingStatus: 'effective', arrivalConfirmedAt: time, appliedAt: time });
+  const { state, props } = mountSetup(t, 'EmployeeApplicationDetail.vue', { request });
+  assert.deepEqual(state.timeline.value.map(item => item.eventId).filter(Boolean), events.map(event => event.id));
+  props.request.events = events;
+  assert.deepEqual(state.timeline.value.map(item => item.eventId).filter(Boolean), events.map(event => event.id));
+});
+
+test('a repeated event is shown once and an arrival event is not projected into a second activation audit', t => {
+  const time = '2026-11-13T01:00:00Z';
+  const arrival = { id: 'arrival-only', action: 'confirm_employee_arrival', createdAt: time };
+  const { state } = mountSetup(t, 'EmployeeApplicationDetail.vue', { request: historyRequest({
+    events: [arrival, arrival], profileReviewStatus: 'approved', onboardingStatus: 'effective',
+    arrivalConfirmedAt: time, appliedAt: time, requiresArrivalConfirmation: true,
+  }) });
+  assert.equal(state.timeline.value.filter(item => item.eventId === arrival.id).length, 1);
+  assert.equal(state.timeline.value.find(item => item.eventId === arrival.id).title, '确认到岗');
+  assert.equal(state.timeline.value.filter(item => item.key === 'effective')[0]?.actor === '系统', false);
+});
+
+test('archive history uses the same event presentation and keeps unlinked direct edits independent', t => {
+  const direct = { id: 'direct-old', entityId: 'employee-1', action: 'employee_profile_direct_update',
+    createdAt: '2026-11-13T01:00:00Z', user: null, oldValue: { education: '本科' }, newValue: { education: '硕士' } };
+  const request = historyRequest();
+  const archive = mountSetup(t, 'EmployeeChangeHistory.vue', { requests: [request], events: [direct, direct] });
+  assert.equal(archive.state.standaloneEvents?.value.length, 1, 'unlinked direct events must remain independently visible');
+  const event = archive.state.standaloneEvents.value[0];
+  assert.equal(event.actor, '未记录');
+  assert.deepEqual(event.differences.flatMap(group => group.fields).map(field => [field.label, field.before, field.after]), [['学历', '本科', '硕士']]);
+  const detail = mountSetup(t, 'EmployeeApplicationDetail.vue', { request });
+  const archived = archive.state.requestEvents(request);
+  for (const item of archived) {
+    const same = detail.state.timeline.value.find(step => step.eventId === item.eventId);
+    assert.equal(same.title, item.title);
+    assert.equal(same.note, item.note);
+    assert.deepEqual(same.differences, item.differences);
+  }
+});
+
+test('sensitive replacements use explicit safe markers and never expose raw data', t => {
+  const request = historyRequest({ intakeType: null, sourceType: 'manual_archive_change',
+    baseValue: { profile: { idNumberConfigured: true, bankAccountConfigured: true } },
+    proposedValue: { profile: { idNumberConfigured: true, bankAccountConfigured: true, idNumber: 'PRIVATE-ID', bankAccount: 'PRIVATE-BANK' } },
+    changedFields: ['profile.idNumber', 'profile.bankAccount', 'profile.unknown'],
+  });
+  const { state, props } = mountSetup(t, 'EmployeeApplicationDetail.vue', { request });
+  assert.deepEqual(state.allChangeItems.value.map(field => [field.label, field.after]), [['身份证', '已更换'], ['银行卡', '已更换']]);
+  assert.doesNotMatch(JSON.stringify(state.allChangeItems.value), /PRIVATE/);
+  props.request.changedFields = undefined;
+  assert.deepEqual(state.allChangeItems.value.map(field => [field.label, field.after]), [['身份证', '变更未记录'], ['银行卡', '变更未记录']]);
+});
+
+test('review decisions show their exact historical baseline, not the latest proposal', t => {
+  const request = historyRequest();
+  request.revisionHistory[0].baseValue = { employee: { effectiveFrom: '2026-11-11' } };
+  request.events = ['approve_employee_data_change', 'reject_employee_data_change', 'apply_employee_archive_change'].map((action, index) => ({
+    id: `decision-${index}`, action, createdAt: '2026-11-11T01:00:00Z', newValue: { requestVersion: 1, reason: '历史原因' },
+  }));
+  const { state, props } = mountSetup(t, 'EmployeeApplicationDetail.vue', { request });
+  for (const event of state.timeline.value.filter(item => item.eventId)) {
+    assert.equal(event.differenceStatus, '已记录');
+    assert.deepEqual(event.differences.flatMap(group => group.fields).map(field => [field.before, field.after]), [['2026-11-11', '2026-11-12']]);
+  }
+  props.request.events[0].newValue = {};
+  assert.equal(state.timeline.value.find(item => item.eventId === 'decision-0').differenceStatus, '未记录');
+});
+
+test('equal-time rounds sort by explicit version before stage, independent of API event order', t => {
+  const events = [
+    ['submit_employee_create', 1], ['reject_employee_data_change', 1], ['revise_employee_arrival_date', 2],
+    ['reject_employee_data_change', 2], ['revise_employee_arrival_date', 3], ['approve_employee_data_change', 3],
+  ].map(([action, requestVersion], index) => ({ id: `round-${index}`, action, createdAt: '2026-11-13T01:00:00Z', newValue: { requestVersion } }));
+  const { state } = mountSetup(t, 'EmployeeApplicationDetail.vue', { request: historyRequest({ events: [...events].reverse() }) });
+  assert.deepEqual(state.timeline.value.filter(item => item.eventId).map(item => item.eventId), events.map(item => item.id));
+});
+
+test('explicitly unchanged sensitive fields do not claim replacements and foreign snapshots cannot supply a revision', t => {
+  const request = historyRequest({ intakeType: null, sourceType: 'manual_archive_change', changedFields: [],
+    baseValue: { profile: { idNumberConfigured: true } }, proposedValue: { profile: { idNumberConfigured: true } },
+    revisionHistory: [{ version: 1, sourceRequestId: 'another-request', proposedValue: { profile: { education: '本科' } } }],
+  });
+  const { state } = mountSetup(t, 'EmployeeApplicationDetail.vue', { request });
+  assert.deepEqual(state.allChangeItems.value, []);
+  assert.equal(state.timeline.value.find(item => item.eventId === 'revise-2').differenceStatus, '未记录');
+});
+
+test('draft events remain separate around formal actions and do not become duplicate resubmissions', t => {
+  const events = [
+    ['save_employee_create_draft', 'actor-a'], ['save_employee_create_draft', 'actor-a'],
+    ['submit_employee_create', 'actor-a'], ['reject_employee_data_change', 'actor-b'],
+    ['save_employee_create_draft', 'actor-a'], ['revise_employee_arrival_date', 'actor-a'],
+  ].map(([action, actor], index) => ({ id: `draft-${index}`, action,
+    createdAt: `2026-11-13T01:00:0${index}Z`, user: { id: actor, name: actor }, newValue: { requestVersion: index + 1 } }));
+  const { state } = mountSetup(t, 'EmployeeApplicationDetail.vue', { request: historyRequest({ events: [...events, events[5]] }) });
+  assert.deepEqual(state.timeline.value.filter(item => item.eventId).map(item => item.eventId), events.map(item => item.id));
+});
+
+test('a consumed archive draft with only a linked direct update is effective once, not awaiting review', t => {
+  const event = { id: 'direct-only', entityId: 'employee-1', action: 'employee_profile_direct_update', createdAt: '2026-11-13T01:00:00Z',
+    oldValue: { education: '本科' }, newValue: { education: '硕士', requestId: 'history-1', requestVersion: 3 } };
+  const request = historyRequest({ sourceType: 'manual_archive_change', intakeType: null, onboardingStatus: null,
+    profileReviewStatus: 'not_required', performanceReviewStatus: 'not_required', archivedAt: event.createdAt,
+    appliedAt: null, events: [event], baseValue: { profile: { education: '硕士' } }, proposedValue: { profile: { education: '硕士' } } });
+  const lifecycleFile = path.join(root, 'src/utils/employee-lifecycle.ts');
+  const lifecycle = evaluate(lifecycleFile, fs.readFileSync(lifecycleFile, 'utf8'));
+  assert.equal(lifecycle.applicationProgress(request), '已生效');
+  assert.equal(lifecycle.applicationType(request), '档案修改');
+  const { state } = mountSetup(t, 'EmployeeApplicationDetail.vue', { request });
+  assert.deepEqual(state.timeline.value.map(item => item.title), ['提交', '变更生效']);
+  assert.equal(state.timeline.value.filter(item => item.status === '已生效').length, 1);
+  assert.deepEqual(state.timeline.value.at(-1).differences.flatMap(group => group.fields).map(field => field.label), ['学历']);
+  const archive = mountSetup(t, 'EmployeeChangeHistory.vue', { requests: [request], events: [event] });
+  assert.equal(archive.state.standaloneEvents.value.length, 0);
+  assert.equal(archive.state.requestEvents(request).length, 1);
+  assert.notEqual(lifecycle.applicationProgress({ ...request, requestVersion: 4 }), '已生效', 'an older direct update cannot complete a newer request');
+});
+
+test('mixed submission retains direct-change evidence without reporting a second activation', t => {
+  const direct = { id: 'mixed-direct', entityId: 'employee-1', action: 'employee_profile_direct_update', createdAt: '2026-11-13T01:00:00Z',
+    oldValue: { education: '本科' }, newValue: { education: '硕士', requestId: 'history-1', requestVersion: 3 } };
+  const apply = { id: 'mixed-apply', entityId: 'history-1', action: 'apply_employee_archive_change', createdAt: '2026-11-13T01:00:01Z', newValue: { requestVersion: 3 } };
+  const request = historyRequest({ sourceType: 'manual_archive_change', intakeType: null, appliedAt: apply.createdAt,
+    profileReviewStatus: 'approved', events: [direct, apply], baseValue: {}, proposedValue: { employee: { workLocation: '虚构新地点' } } });
+  const { state } = mountSetup(t, 'EmployeeApplicationDetail.vue', { request });
+  assert.equal(state.timeline.value.filter(item => item.status === '已生效').length, 1);
+  assert.equal(state.timeline.value[0].title, '提交');
+  const linked = state.timeline.value.find(item => item.eventId === direct.id);
+  assert.equal(linked.status, '同次提交');
+  assert.deepEqual(linked.differences.flatMap(group => group.fields).map(field => [field.before, field.after]), [['本科', '硕士']]);
+});
+
 test('cancelled unarrived new hire resubmits its original date and identity without confirming arrival', async t => {
   const revisions = [];
   const confirmations = [];

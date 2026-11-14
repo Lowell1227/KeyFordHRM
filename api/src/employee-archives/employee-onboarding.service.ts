@@ -121,6 +121,7 @@ export class EmployeeOnboardingService {
         recordStatus: 'submitted', rejectedReason: null, appliedAt: null, requestVersion: { increment: 1 },
         ...(reopening ? { employeeNo, cancelledAt: null, cancelledById: null, cancelledReason: null } : {}),
         revisionHistory: this.json([...revisions, { version: request.requestVersion, proposedValue: request.proposedValue,
+          baseValue: request.baseValue, rejectedReason: request.rejectedReason,
           revisedById: operator.id, revisedAt: new Date().toISOString(),
           ...(reopening ? { action: 'reopen_cancelled_employee_arrival', cancelledAt: request.cancelledAt,
             cancelledById: request.cancelledById, cancelledReason: request.cancelledReason,
@@ -242,6 +243,7 @@ export class EmployeeOnboardingService {
 
       const warnings = this.buildWarnings(input);
       const employee = this.normalizedEmployee(input);
+      await this.normalizePosition(tx, employee, this.record(user.employmentHistory[0]));
       await normalizeContractSubject(tx, employee, {}, 'companyText');
       await validateContractSubject(tx, employee, {}, 'companyText');
       const request = await tx.employeeDataChangeRequest.create({
@@ -349,6 +351,7 @@ export class EmployeeOnboardingService {
         payloadHash: this.hashPayload(input),
       };
       if (!performanceOnly) {
+        await this.normalizePosition(tx, next.employee as Record<string, unknown>, this.reentryPositionSnapshot(request));
         await normalizeContractSubject(tx, next.employee as Record<string, unknown>, this.record(this.record(request.proposedValue).employee), 'companyText', companyBase);
         await validateContractSubject(tx, next.employee as Record<string, unknown>, companyBase, 'companyText');
       }
@@ -366,6 +369,8 @@ export class EmployeeOnboardingService {
           requestVersion: { increment: 1 },
           revisionHistory: this.json([...revisions, {
             version: request.requestVersion,
+            baseValue: request.baseValue,
+            rejectedReason: request.rejectedReason,
             proposedValue: request.proposedValue,
             validationWarnings: request.validationWarnings,
             revisedAt: new Date().toISOString(), revisedById: operatorId,
@@ -494,6 +499,11 @@ export class EmployeeOnboardingService {
     const request = await this.prisma.$transaction(async (tx) => {
       const talentCandidateId = await resolveTalentSource(tx, input.talentCandidateId, undefined, matchedEmployeeId);
       const employee = this.normalizedEmployee(input);
+      const previousEmployment = matchedEmployeeId ? await tx.employmentRecord.findFirst({
+        where: { userId: matchedEmployeeId }, orderBy: { effectiveFrom: 'desc' },
+        select: { positionId: true, position: true, jobFamily: true },
+      }) : null;
+      await this.normalizePosition(tx, employee, this.record(previousEmployment));
       await normalizeContractSubject(tx, employee, {}, 'companyText');
       const created = await tx.employeeDataChangeRequest.create({ data: {
         userId: matchedEmployeeId,
@@ -551,7 +561,8 @@ export class EmployeeOnboardingService {
     await lockTalentSource(tx, request.talentCandidateId);
     const existing = await tx.employmentRecord.findUnique({ where: { sourceRequestId: requestId } });
     const proposed = this.record(request.proposedValue);
-    const employee = this.record(proposed.employee);
+    const employee = { ...this.record(proposed.employee) };
+    await this.normalizePosition(tx, employee, this.reentryPositionSnapshot(request));
     const effectiveFrom = this.requiredDate(employee.effectiveDate, '再入职日期不能为空');
     const effectiveTo = this.dateOrNull(employee.effectiveTo);
     const today = this.startOfTodayInShanghai(at);
@@ -575,6 +586,7 @@ export class EmployeeOnboardingService {
         contractSubjectId: this.stringOrNull(employee.contractSubjectId), companyText: this.stringOrNull(employee.companyText),
         deptId: this.stringOrNull(employee.deptId), positionId: this.stringOrNull(employee.positionId),
         position: this.stringOrNull(employee.position), directManagerId: this.stringOrNull(employee.managerId),
+        jobFamily: this.stringOrNull(employee.jobFamily),
         employmentType: employee.employmentType as any, employeeStatus: employee.employeeStatus as any,
         entryDate: effectiveFrom, plannedRegularDate: this.dateOrNull(employee.plannedRegularDate),
         probationMonths: typeof employee.probationMonths === 'number' ? employee.probationMonths : null,
@@ -623,10 +635,6 @@ export class EmployeeOnboardingService {
       const dept = await tx.department.findUnique({ where: { id: input.deptId }, select: { id: true, isActive: true } });
       if (!dept?.isActive) throw new BadRequestException('所属部门不存在或已停用');
     }
-    if (input.positionId) {
-      const position = await tx.position.findUnique({ where: { id: input.positionId }, select: { id: true, isActive: true } });
-      if (!position?.isActive) throw new BadRequestException('岗位不存在或已停用');
-    }
     for (const managerId of [input.rosterManagerId, input.performanceManagerId].filter(Boolean) as string[]) {
       if (managerId === userId) throw new BadRequestException('直属上级不能是员工本人');
       const manager = await tx.user.findUnique({ where: {
@@ -637,11 +645,42 @@ export class EmployeeOnboardingService {
     }
   }
 
+  private reentryPositionSnapshot(request: EmployeeDataChangeRequest): Record<string, unknown> {
+    const previous = this.record(this.record(request.proposedValue).employee);
+    const historical = this.record(this.record(this.record(request.baseValue).employee).latestEmployment);
+    // Older requests omitted jobFamily; only a matching position can supply that missing snapshot.
+    return this.stringOrNull(previous.positionId) === this.stringOrNull(historical.positionId)
+      ? { ...historical, ...previous } : previous;
+  }
+
+  private async normalizePosition(
+    tx: Prisma.TransactionClient, employee: Record<string, unknown>, previous: Record<string, unknown>,
+  ): Promise<void> {
+    const id = this.stringOrNull(employee.positionId);
+    const samePosition = id === this.stringOrNull(previous.positionId);
+    const position = id ? await tx.position.findUnique({ where: { id },
+      select: { id: true, name: true, jobFamily: true, isActive: true } }) : null;
+    if (id && !position?.isActive) throw new BadRequestException('岗位不存在或已停用');
+    for (const field of ['position', 'jobFamily'] as const) {
+      const unchanged = employee[field] === undefined
+        || this.stringOrNull(employee[field]) === this.stringOrNull(previous[field]);
+      if (samePosition && unchanged && Object.prototype.hasOwnProperty.call(previous, field)) {
+        employee[field] = previous[field] ?? null;
+      } else if (position) {
+        employee[field] = (field === 'position' ? position.name : position.jobFamily) ?? null;
+      } else {
+        employee[field] = this.stringOrNull(employee[field]);
+      }
+    }
+  }
+
   private normalizedEmployee(input: EmployeeReentryFieldsDto) {
     return {
       ...(input.contractSubjectId !== undefined ? { contractSubjectId: input.contractSubjectId } : {}),
       company: input.company, deptId: input.deptId ?? null, positionId: input.positionId ?? null,
-      position: input.position?.trim() || null, managerId: input.rosterManagerId ?? null,
+      ...(input.position !== undefined ? { position: this.stringOrNull(input.position) } : {}),
+      ...(input.jobFamily !== undefined ? { jobFamily: this.stringOrNull(input.jobFamily) } : {}),
+      managerId: input.rosterManagerId ?? null,
       effectiveDate: input.effectiveDate, effectiveTo: input.effectiveTo ?? null,
       employeeStatus: input.employeeStatus, employmentType: input.employmentType,
       plannedRegularDate: input.plannedRegularDate ?? null, probationMonths: input.probationMonths ?? null,

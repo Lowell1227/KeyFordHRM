@@ -12,7 +12,9 @@ import {
 import { ERROR_CODE } from '@/common/constants/error-codes';
 import { AuthUser } from '@/common/types/auth.types';
 import { PrismaService } from '@/prisma/prisma.service';
+import { personnelReferenceFieldErrors, validatePersonnelReferences } from '@/personnel-reference-data/personnel-reference-validation';
 import { parseEmployeeRosterExcel, ParsedEmployeeRosterRow } from './employee-roster.excel';
+import { approvedEmploymentSourceWhere, shanghaiBusinessDate } from './employment-timeline';
 import {
   buildRosterOrganizationPlan,
   mapRosterCompany,
@@ -47,6 +49,15 @@ interface ExistingRosterUser {
   status: UserStatus;
   dept: { name: string; fullPath: string | null } | null;
   externalIdentityBindings?: Array<{ status: ExternalIdentityStatus }>;
+  employeeProfile?: Record<string, unknown> | null;
+  employmentHistory?: Array<{ jobGrade: string | null }>;
+}
+
+function referenceEmploymentWhere(date: Date): Prisma.EmploymentRecordWhereInput {
+  return { AND: [approvedEmploymentSourceWhere, {
+    effectiveFrom: { lte: date },
+    OR: [{ effectiveTo: null }, { effectiveTo: { gte: date } }],
+  }] };
 }
 
 @Injectable()
@@ -188,6 +199,7 @@ export class EmployeeRosterImportService {
         leaderDepartmentPathsByName.set(node.leaderName, paths);
       }
       let submitted = 0;
+      const referenceDate = shanghaiBusinessDate();
       for (const importRow of actionableRows) {
         const raw = rawByRowNumber.get(importRow.rowNumber)!;
         const normalized = this.normalizedEmployee(importRow.normalizedValue);
@@ -243,6 +255,14 @@ export class EmployeeRosterImportService {
           })
           : null;
         const currentEmployment = current?.employmentHistory?.[0];
+        // Keep the import's existing projection unchanged; only directory exemptions use formal data.
+        const referenceEmployment = current && raw.employee.jobGrade?.trim()
+          ? await tx.employmentRecord.findFirst({
+            where: { userId: importRow.matchedUserId!, ...referenceEmploymentWhere(referenceDate) },
+            orderBy: { effectiveFrom: 'desc' }, select: { jobGrade: true },
+          }) : null;
+        await validatePersonnelReferences(tx, { employee: { ...raw.employee }, profile: { ...raw.profile } },
+          { employee: { jobGrade: referenceEmployment?.jobGrade }, profile: current?.employeeProfile ?? {} });
         const isIncrementalUpdate = batch.mode === 'incremental' && importRow.action === 'update';
         const organizationPath = batch.mode === 'full' ? raw.employee.departmentPath : [];
         const targetFullPath = organizationPath.join(' / ');
@@ -720,6 +740,7 @@ export class EmployeeRosterImportService {
     });
 
     const organizationPlan = source.mode === 'full' ? buildRosterOrganizationPlan(rows) : [];
+    const referenceDate = shanghaiBusinessDate();
     const [existingUsers, departments] = await Promise.all([
       this.prisma.user.findMany({
         where: { deletedAt: null, accountType: AccountType.employee },
@@ -731,6 +752,12 @@ export class EmployeeRosterImportService {
           position: true,
           status: true,
           dept: { select: { name: true, fullPath: true } },
+          employeeProfile: { select: { education: true, maritalStatus: true, politicalStatus: true,
+            householdType: true, emergencyContactRelation: true } },
+          employmentHistory: {
+            where: referenceEmploymentWhere(referenceDate),
+            orderBy: { effectiveFrom: 'desc' }, take: 1, select: { jobGrade: true },
+          },
           externalIdentityBindings: {
             where: { status: ExternalIdentityStatus.enabled, endedAt: null },
             select: { status: true },
@@ -792,6 +819,10 @@ export class EmployeeRosterImportService {
       }
 
       const existing = this.matchExistingEmployee(row, existingByNo, existingUsers, warnings, errors);
+      const referenceErrors = await personnelReferenceFieldErrors(this.prisma,
+        { employee: { ...row.employee }, profile: { ...row.profile } },
+        { employee: { jobGrade: existing?.employmentHistory?.[0]?.jobGrade }, profile: existing?.employeeProfile ?? {} });
+      errors.push(...Object.values(referenceErrors));
       if (existing) matchedUserIds.add(existing.id);
       let company = this.mapCompany(row.employee.companyText, warnings);
       const organizationKey = source.mode === 'full' ? rosterOrganizationKeyForRow(row) : null;
